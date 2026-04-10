@@ -55,8 +55,8 @@ private:
   void publish_emergency();
   void publish_power();
 
-  bool send_arm_command(bool arm);
-  bool send_mode_command(const std::string& mode);
+  void send_arm_command(bool arm);
+  void send_mode_command(const std::string& mode);
 
 private:
   std::mutex mutex_;

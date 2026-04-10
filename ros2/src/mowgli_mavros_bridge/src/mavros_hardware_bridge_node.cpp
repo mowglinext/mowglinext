@@ -7,6 +7,61 @@
 #include <mutex>
 #include <string>
 #include <utility>
+#include <cmath>
+#include <tf2/LinearMath/Quaternion.hpp>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+
+namespace
+{
+
+geometry_msgs::msg::Vector3 ned_to_enu_vector(const geometry_msgs::msg::Vector3& v)
+{
+  geometry_msgs::msg::Vector3 out;
+  out.x = v.y;
+  out.y = v.x;
+  out.z = -v.z;
+  return out;
+}
+
+geometry_msgs::msg::Point ned_to_enu_point(const geometry_msgs::msg::Point& p)
+{
+  geometry_msgs::msg::Point out;
+  out.x = p.y;
+  out.y = p.x;
+  out.z = -p.z;
+  return out;
+}
+
+geometry_msgs::msg::Vector3 frd_to_flu_vector(const geometry_msgs::msg::Vector3& v)
+{
+  geometry_msgs::msg::Vector3 out;
+  out.x = v.x;
+  out.y = -v.y;
+  out.z = -v.z;
+  return out;
+}
+
+geometry_msgs::msg::Quaternion ned_to_enu_frd_to_flu_quaternion(
+    const geometry_msgs::msg::Quaternion& q_in)
+{
+  tf2::Quaternion q_body_to_world;
+  tf2::fromMsg(q_in, q_body_to_world);
+
+  // NED -> ENU
+  tf2::Quaternion q_ned_to_enu;
+  q_ned_to_enu.setRPY(M_PI, 0.0, M_PI_2);
+
+  // FRD -> FLU
+  tf2::Quaternion q_frd_to_flu;
+  q_frd_to_flu.setRPY(M_PI, 0.0, 0.0);
+
+  tf2::Quaternion q_out = q_ned_to_enu * q_body_to_world * q_frd_to_flu;
+  q_out.normalize();
+  return tf2::toMsg(q_out);
+}
+
+}  // namespace
+
 
 namespace mowgli_mavros_bridge
 {
@@ -32,12 +87,15 @@ MavrosHardwareBridgeNode::MavrosHardwareBridgeNode(const rclcpp::NodeOptions& op
 
 void MavrosHardwareBridgeNode::create_publishers()
 {
+  auto sensor_qos = rclcpp::SensorDataQoS();
+
   pub_status_ = create_publisher<mowgli_interfaces::msg::Status>("~/status", 10);
   pub_emergency_ = create_publisher<mowgli_interfaces::msg::Emergency>("~/emergency", 10);
   pub_power_ = create_publisher<mowgli_interfaces::msg::Power>("~/power", 10);
-  pub_imu_ = create_publisher<sensor_msgs::msg::Imu>("~/imu/data_raw", 10);
-  pub_wheel_odom_ = create_publisher<nav_msgs::msg::Odometry>("~/wheel_odom", 10);
-  pub_battery_state_ = create_publisher<sensor_msgs::msg::BatteryState>("/battery_state", 10);
+  pub_imu_ = create_publisher<sensor_msgs::msg::Imu>("~/imu/data_raw", sensor_qos);
+  pub_wheel_odom_ = create_publisher<nav_msgs::msg::Odometry>("~/wheel_odom", sensor_qos);
+  pub_battery_state_ =
+      create_publisher<sensor_msgs::msg::BatteryState>("/battery_state", sensor_qos);
 
   pub_manual_control_ =
       create_publisher<mavros_msgs::msg::ManualControl>("/mavros/manual_control/send", 10);
@@ -45,7 +103,7 @@ void MavrosHardwareBridgeNode::create_publishers()
 
 void MavrosHardwareBridgeNode::create_subscriptions()
 {
-  auto default_qos = rclcpp::QoS(rclcpp::KeepLast(10));
+  auto default_qos = rclcpp::SystemDefaultsQoS();
   auto sensor_qos = rclcpp::SensorDataQoS();
 
   sub_cmd_vel_ = create_subscription<geometry_msgs::msg::Twist>(
@@ -147,8 +205,15 @@ void MavrosHardwareBridgeNode::on_mavros_state(const mavros_msgs::msg::State::Sh
 
 void MavrosHardwareBridgeNode::on_mavros_imu(const sensor_msgs::msg::Imu::SharedPtr msg)
 {
+  sensor_msgs::msg::Imu imu = *msg;
+
+  imu.header.frame_id = "imu_link";
+  imu.orientation = ned_to_enu_frd_to_flu_quaternion(msg->orientation);
+  imu.angular_velocity = frd_to_flu_vector(msg->angular_velocity);
+  imu.linear_acceleration = frd_to_flu_vector(msg->linear_acceleration);
+
   std::lock_guard<std::mutex> lock(mutex_);
-  last_imu_ = *msg;
+  last_imu_ = imu;
 }
 
 void MavrosHardwareBridgeNode::on_mavros_battery(
@@ -161,39 +226,71 @@ void MavrosHardwareBridgeNode::on_mavros_battery(
 
 void MavrosHardwareBridgeNode::on_mavros_odom(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
+  nav_msgs::msg::Odometry odom = *msg;
+
+  odom.header.frame_id = "odom";
+  odom.child_frame_id = "base_link";
+
+  odom.pose.pose.position = ned_to_enu_point(msg->pose.pose.position);
+  odom.pose.pose.orientation = ned_to_enu_frd_to_flu_quaternion(msg->pose.pose.orientation);
+
+  odom.twist.twist.linear = ned_to_enu_vector(msg->twist.twist.linear);
+  odom.twist.twist.angular = frd_to_flu_vector(msg->twist.twist.angular);
+
   std::lock_guard<std::mutex> lock(mutex_);
-  last_odom_ = *msg;
+  last_odom_ = odom;
 }
 
 void MavrosHardwareBridgeNode::on_mower_control(
     const std::shared_ptr<mowgli_interfaces::srv::MowerControl::Request> request,
     std::shared_ptr<mowgli_interfaces::srv::MowerControl::Response> response)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
-  mow_enabled_ = request->mow_enabled;
-  mow_direction_ = request->mow_direction;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    mow_enabled_ = request->mow_enabled;
+    mow_direction_ = request->mow_direction;
+  }
 
-  // TODO: replace with actual Pixhawk output / MAVLink command for blade control.
-  response->success = true;
+  RCLCPP_WARN(
+      get_logger(),
+      "Mower control requested (enabled=%d, direction=%d) but cutting motor mapping on the Pixhawk/ArduPilot is not implemented yet.",
+      request->mow_enabled,
+      request->mow_direction);
+
+  response->success = false;
 }
 
 void MavrosHardwareBridgeNode::on_emergency_stop(
     const std::shared_ptr<mowgli_interfaces::srv::EmergencyStop::Request> request,
     std::shared_ptr<mowgli_interfaces::srv::EmergencyStop::Response> response)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
+  const bool emergency_requested = (request->emergency != 0U);
 
-  if (request->emergency != 0U)
   {
-    emergency_active_ = true;
-    emergency_latched_ = true;
-    emergency_reason_ = "SERVICE_EMERGENCY_STOP";
-    mow_enabled_ = false;
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (emergency_requested)
+    {
+      emergency_active_ = true;
+      emergency_latched_ = true;
+      emergency_reason_ = "SERVICE_EMERGENCY_STOP";
+      mow_enabled_ = false;
+    }
+    else
+    {
+      emergency_active_ = false;
+      emergency_reason_ = "NONE";
+    }
   }
-  else
+
+  if (emergency_requested)
   {
-    emergency_active_ = false;
-    emergency_reason_ = "NONE";
+    // Request a safe autopilot state.
+    // HOLD should stop autonomous motion immediately.
+    // Disarm is also requested, but the exact effect on blade/traction outputs
+    // depends on the Pixhawk/ArduPilot output configuration and must be validated on hardware.
+    send_mode_command("HOLD");
+    send_arm_command(false);
   }
 
   response->success = true;
@@ -260,38 +357,75 @@ void MavrosHardwareBridgeNode::publish_power()
   pub_power_->publish(msg);
 }
 
-bool MavrosHardwareBridgeNode::send_arm_command(bool arm)
+void MavrosHardwareBridgeNode::send_arm_command(bool arm)
 {
   if (!cli_arm_->wait_for_service(1s))
   {
     RCLCPP_WARN(get_logger(), "Arming service not available.");
-    return false;
+    return;
   }
 
   auto req = std::make_shared<mavros_msgs::srv::CommandBool::Request>();
   req->value = arm;
 
-  auto future = cli_arm_->async_send_request(req);
-  const auto result = rclcpp::spin_until_future_complete(get_node_base_interface(), future, 2s);
-
-  return result == rclcpp::FutureReturnCode::SUCCESS && future.get()->success;
+  cli_arm_->async_send_request(
+      req,
+      [this, arm](rclcpp::Client<mavros_msgs::srv::CommandBool>::SharedFuture future)
+      {
+        try
+        {
+          const auto result = future.get();
+          if (result->success)
+          {
+            RCLCPP_INFO(get_logger(), "%s command accepted.", arm ? "Arm" : "Disarm");
+          }
+          else
+          {
+            RCLCPP_WARN(get_logger(), "%s command rejected by MAVROS/Pixhawk.",
+                        arm ? "Arm" : "Disarm");
+          }
+        }
+        catch (const std::exception& e)
+        {
+          RCLCPP_ERROR(get_logger(), "Arm/disarm request failed: %s", e.what());
+        }
+      });
 }
 
-bool MavrosHardwareBridgeNode::send_mode_command(const std::string& mode)
+void MavrosHardwareBridgeNode::send_mode_command(const std::string& mode)
 {
   if (!cli_set_mode_->wait_for_service(1s))
   {
     RCLCPP_WARN(get_logger(), "Set mode service not available.");
-    return false;
+    return;
   }
 
   auto req = std::make_shared<mavros_msgs::srv::SetMode::Request>();
   req->custom_mode = mode;
 
-  auto future = cli_set_mode_->async_send_request(req);
-  const auto result = rclcpp::spin_until_future_complete(get_node_base_interface(), future, 2s);
-
-  return result == rclcpp::FutureReturnCode::SUCCESS && future.get()->mode_sent;
+  cli_set_mode_->async_send_request(
+      req,
+      [this, mode](rclcpp::Client<mavros_msgs::srv::SetMode>::SharedFuture future)
+      {
+        try
+        {
+          const auto result = future.get();
+          if (result->mode_sent)
+          {
+            RCLCPP_INFO(get_logger(), "Mode change to '%s' accepted.", mode.c_str());
+          }
+          else
+          {
+            RCLCPP_WARN(get_logger(), "Mode change to '%s' rejected by MAVROS/Pixhawk.",
+                        mode.c_str());
+          }
+        }
+        catch (const std::exception& e)
+        {
+          RCLCPP_ERROR(get_logger(), "Set mode request failed for '%s': %s",
+                       mode.c_str(), e.what());
+        }
+      });
 }
 
 }  // namespace mowgli_mavros_bridge
