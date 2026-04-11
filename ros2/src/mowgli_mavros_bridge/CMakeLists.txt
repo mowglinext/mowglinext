@@ -16,7 +16,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(mowgli_interfaces REQUIRED)
 find_package(mavros_msgs REQUIRED)
-
+find_package(mavros REQUIRED)
 
 add_executable(mavros_hardware_bridge_node
   src/mavros_hardware_bridge_node.cpp
@@ -37,6 +37,7 @@ ament_target_dependencies(mavros_hardware_bridge_node
   tf2
   tf2_geometry_msgs
   mowgli_interfaces
+  mavros
   mavros_msgs
 )
 

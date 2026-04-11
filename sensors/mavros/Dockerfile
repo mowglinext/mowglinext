@@ -10,8 +10,10 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-kilted-mavros \
+    ros-kilted-mavros-msgs \
     ros-kilted-mavros-extras \
     ros-kilted-rmw-cyclonedds-cpp \
+    wget \
  && rm -rf /var/lib/apt/lists/*
 
 # Install GeographicLib datasets required by MAVROS
