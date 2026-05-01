@@ -1075,6 +1075,299 @@ TEST_F(SegmentSelectorTest, ManualDeadCellIsRespected)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Path C — coverage-cell scenario tests (CoverageCellScenarioTest)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Real-world failure modes the cell-based coverage system has to
+// survive. Each fixture instance is independent so a single failing
+// scenario doesn't poison the others.
+//
+//   A. Boundary mismatch: GUI-recorded polygon includes an
+//      unreachable strip (hedge intrusion). After 3 fail bumps the
+//      hedge cells must be promoted to LAWN_DEAD; the rest of the
+//      area must remain mowable.
+//   B. Mid-row dynamic obstacle: segment stops at obstacle, then
+//      resumes after the obstacle clears.
+//   C. DEAD ↔ LAWN cycle: cells decay back to LAWN with elapsed time.
+//   D. Dock exclusion: NO_GO_ZONE around the dock is skipped.
+//   E. Boustrophedon: full row 0 → segment jumps to row 1.
+//   F. Frontier island: small unmowed pocket surrounded by obstacles
+//      still produces a valid (short) segment.
+//   G. Coverage complete with DEAD residue: DEAD cells don't count
+//      as remaining work.
+
+class CoverageCellScenarioTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    rclcpp::NodeOptions opts;
+    opts.append_parameter_override("resolution", 0.1);
+    opts.append_parameter_override("map_size_x", 8.0);
+    opts.append_parameter_override("map_size_y", 8.0);
+    opts.append_parameter_override("map_frame", "map");
+    opts.append_parameter_override("decay_rate_per_hour", 0.0);
+    opts.append_parameter_override("mower_width", 0.2);
+    opts.append_parameter_override("map_file_path", "");
+    opts.append_parameter_override("publish_rate", 1.0);
+    opts.append_parameter_override("dead_promote_threshold", 3.0);
+    opts.append_parameter_override("dead_decay_rate_per_hour", 0.5);
+    opts.append_parameter_override("dead_unblock_threshold", 1.0);
+
+    std::vector<std::string> names = {"garden"};
+    std::vector<std::string> polys = {"-2,-2;2,-2;2,2;-2,2"};
+    std::vector<bool> nav_flags = {false};
+    opts.append_parameter_override("area_names", names);
+    opts.append_parameter_override("area_polygons", polys);
+    opts.append_parameter_override("area_is_navigation", nav_flags);
+
+    node_ = std::make_shared<mowgli_map::MapServerNode>(opts);
+  }
+  void TearDown() override
+  {
+    node_.reset();
+  }
+
+  void set_classification(double x, double y, mowgli_map::CellType t)
+  {
+    grid_map::Position pos(x, y);
+    grid_map::Index idx;
+    if (!node_->map().getIndex(pos, idx))
+      return;
+    node_->map().at(std::string(mowgli_map::layers::CLASSIFICATION), idx) = static_cast<float>(t);
+  }
+  void fill_progress_inside_polygon()
+  {
+    auto& prog = node_->map()[std::string(mowgli_map::layers::MOW_PROGRESS)];
+    grid_map::Polygon gm_poly;
+    gm_poly.addVertex(grid_map::Position(-2.0, -2.0));
+    gm_poly.addVertex(grid_map::Position(2.0, -2.0));
+    gm_poly.addVertex(grid_map::Position(2.0, 2.0));
+    gm_poly.addVertex(grid_map::Position(-2.0, 2.0));
+    for (grid_map::PolygonIterator it(node_->map(), gm_poly); !it.isPastEnd(); ++it)
+      prog((*it)(0), (*it)(1)) = 1.0F;
+  }
+
+  struct SegOut
+  {
+    double start_x{}, start_y{}, end_x{}, end_y{};
+    int cell_count{};
+    std::string reason;
+    bool is_long_transit{};
+    bool coverage_complete{};
+    bool ok{};
+  };
+  SegOut select(double rx, double ry, double r_yaw = 0.0, double prefer_dir = 0.0)
+  {
+    std::lock_guard<std::mutex> lock(node_->map_mutex());
+    SegOut o;
+    o.ok = node_->find_next_segment_public(0,
+                                           rx,
+                                           ry,
+                                           r_yaw,
+                                           prefer_dir,
+                                           true,
+                                           3.0,
+                                           o.start_x,
+                                           o.start_y,
+                                           o.end_x,
+                                           o.end_y,
+                                           o.cell_count,
+                                           o.reason,
+                                           o.is_long_transit,
+                                           o.coverage_complete);
+    return o;
+  }
+
+  // Mirrors mark_segment_blocked along a horizontal strip, returning
+  // how many cells were promoted to LAWN_DEAD by this call.
+  uint32_t bump_fail_count_along(double x0, double x1, double y)
+  {
+    std::lock_guard<std::mutex> lock(node_->map_mutex());
+    auto& fc = node_->map()[std::string(mowgli_map::layers::FAIL_COUNT)];
+    auto& cls = node_->map()[std::string(mowgli_map::layers::CLASSIFICATION)];
+    const double promote = 3.0;
+    const double dx = x1 - x0;
+    const int n = static_cast<int>(std::ceil(std::fabs(dx) / 0.1));
+    uint32_t promoted = 0;
+    std::set<std::pair<int, int>> bumped;
+    for (int i = 0; i <= n; ++i)
+    {
+      const double t = static_cast<double>(i) / n;
+      grid_map::Position pos(x0 + t * dx, y);
+      grid_map::Index idx;
+      if (!node_->map().getIndex(pos, idx))
+        continue;
+      auto key = std::make_pair(idx(0), idx(1));
+      if (!bumped.insert(key).second)
+        continue;
+      auto t_cell = static_cast<mowgli_map::CellType>(static_cast<int>(cls(idx(0), idx(1))));
+      if (t_cell != mowgli_map::CellType::LAWN && t_cell != mowgli_map::CellType::UNKNOWN &&
+          t_cell != mowgli_map::CellType::LAWN_DEAD)
+        continue;
+      fc(idx(0), idx(1)) += 1.0F;
+      if (fc(idx(0), idx(1)) >= promote && t_cell != mowgli_map::CellType::LAWN_DEAD)
+      {
+        cls(idx(0), idx(1)) = static_cast<float>(mowgli_map::CellType::LAWN_DEAD);
+        ++promoted;
+      }
+    }
+    return promoted;
+  }
+
+  uint32_t count_cells_of_type(mowgli_map::CellType t)
+  {
+    std::lock_guard<std::mutex> lock(node_->map_mutex());
+    const auto& cls = node_->map()[std::string(mowgli_map::layers::CLASSIFICATION)];
+    grid_map::Polygon gm_poly;
+    gm_poly.addVertex(grid_map::Position(-2.0, -2.0));
+    gm_poly.addVertex(grid_map::Position(2.0, -2.0));
+    gm_poly.addVertex(grid_map::Position(2.0, 2.0));
+    gm_poly.addVertex(grid_map::Position(-2.0, 2.0));
+    uint32_t n = 0;
+    for (grid_map::PolygonIterator it(node_->map(), gm_poly); !it.isPastEnd(); ++it)
+      if (static_cast<mowgli_map::CellType>(static_cast<int>(cls((*it)(0), (*it)(1)))) == t)
+        ++n;
+    return n;
+  }
+
+  std::shared_ptr<mowgli_map::MapServerNode> node_;
+};
+
+TEST_F(CoverageCellScenarioTest, BoundaryMismatchPromotesUnreachableEdgeToDead)
+{
+  for (int pass = 0; pass < 3; ++pass)
+    bump_fail_count_along(0.0, 1.9, 1.7);
+
+  EXPECT_GT(count_cells_of_type(mowgli_map::CellType::LAWN_DEAD), 5u)
+      << "After 3 fail bumps the hedge row should be LAWN_DEAD";
+
+  auto o = select(0.0, 0.0);
+  EXPECT_TRUE(o.ok);
+  EXPECT_FALSE(o.coverage_complete);
+  EXPECT_GT(o.cell_count, 0);
+}
+
+TEST_F(CoverageCellScenarioTest, MidRowObstacleStopsThenResumesAfterClear)
+{
+  {
+    std::lock_guard<std::mutex> lock(node_->map_mutex());
+    set_classification(0.5, 0.0, mowgli_map::CellType::OBSTACLE_TEMPORARY);
+  }
+
+  auto stop = select(-1.5, 0.0);
+  EXPECT_TRUE(stop.ok);
+  EXPECT_EQ(stop.reason, "obstacle");
+  EXPECT_LT(stop.end_x, 0.5);
+
+  // Operator removes the obstacle.
+  {
+    std::lock_guard<std::mutex> lock(node_->map_mutex());
+    set_classification(0.5, 0.0, mowgli_map::CellType::LAWN);
+  }
+  for (double x = -1.5; x <= stop.end_x; x += 0.1)
+    node_->mark_mowed(x, 0.0);
+
+  auto resume = select(stop.end_x, 0.0);
+  EXPECT_TRUE(resume.ok);
+  EXPECT_FALSE(resume.coverage_complete);
+  EXPECT_GT(resume.end_x, 0.5);
+}
+
+TEST_F(CoverageCellScenarioTest, DeadCellsDecayBackToLawnOverTime)
+{
+  bump_fail_count_along(0.0, 0.5, 0.0);
+  bump_fail_count_along(0.0, 0.5, 0.0);
+  bump_fail_count_along(0.0, 0.5, 0.0);
+
+  EXPECT_GT(count_cells_of_type(mowgli_map::CellType::LAWN_DEAD), 0u);
+
+  // 5 hours of decay at 0.5/hour = 2.5 → fail_count drops 3.0 → 0.5,
+  // below unblock_threshold=1.0.
+  node_->tick_once(5.0 * 3600.0);
+
+  EXPECT_EQ(count_cells_of_type(mowgli_map::CellType::LAWN_DEAD), 0u);
+}
+
+TEST_F(CoverageCellScenarioTest, DockExclusionIsSkipped)
+{
+  {
+    std::lock_guard<std::mutex> lock(node_->map_mutex());
+    for (double y = -0.2; y <= 0.2; y += 0.1)
+      for (double x = -0.2; x <= 0.2; x += 0.1)
+        set_classification(x, y, mowgli_map::CellType::NO_GO_ZONE);
+  }
+
+  auto o = select(0.0, 0.0);
+  EXPECT_TRUE(o.ok);
+  EXPECT_FALSE(o.coverage_complete);
+  const double start_dist = std::hypot(o.start_x, o.start_y);
+  EXPECT_GT(start_dist, 0.15);
+}
+
+TEST_F(CoverageCellScenarioTest, BoustrophedonJumpsToNextRow)
+{
+  {
+    std::lock_guard<std::mutex> lock(node_->map_mutex());
+    auto& prog = node_->map()[std::string(mowgli_map::layers::MOW_PROGRESS)];
+    for (double x = -1.95; x <= 1.95; x += 0.05)
+    {
+      grid_map::Position pos(x, 0.0);
+      grid_map::Index idx;
+      if (node_->map().getIndex(pos, idx))
+        prog(idx(0), idx(1)) = 1.0F;
+    }
+  }
+
+  auto o = select(1.8, 0.0);
+  EXPECT_TRUE(o.ok);
+  EXPECT_FALSE(o.coverage_complete);
+  // Row 0 (y=0) is fully mowed, so the segment must start on a
+  // different row. The selector snaps to row centrelines at
+  // mower_width spacing, so the next row sits at |y| ≈ row_pitch / 2
+  // (0.05 m). Use 0.03 to absorb floating-point rounding around 0.05.
+  EXPECT_GT(std::fabs(o.start_y), 0.03);
+}
+
+TEST_F(CoverageCellScenarioTest, FrontierIslandSurroundedByObstacles)
+{
+  {
+    std::lock_guard<std::mutex> lock(node_->map_mutex());
+    for (double x = 0.6; x <= 1.4; x += 0.1)
+    {
+      set_classification(x, -0.4, mowgli_map::CellType::OBSTACLE_PERMANENT);
+      set_classification(x, 0.4, mowgli_map::CellType::OBSTACLE_PERMANENT);
+    }
+    for (double y = -0.3; y <= 0.3; y += 0.1)
+    {
+      set_classification(0.6, y, mowgli_map::CellType::OBSTACLE_PERMANENT);
+      set_classification(1.4, y, mowgli_map::CellType::OBSTACLE_PERMANENT);
+    }
+  }
+  auto o = select(1.0, 0.0);
+  EXPECT_TRUE(o.ok);
+  EXPECT_FALSE(o.coverage_complete);
+  EXPECT_GT(o.cell_count, 0);
+}
+
+TEST_F(CoverageCellScenarioTest, CoverageCompleteIgnoresDeadCells)
+{
+  bump_fail_count_along(0.0, 0.4, 0.0);
+  bump_fail_count_along(0.0, 0.4, 0.0);
+  bump_fail_count_along(0.0, 0.4, 0.0);
+  ASSERT_GT(count_cells_of_type(mowgli_map::CellType::LAWN_DEAD), 0u);
+
+  {
+    std::lock_guard<std::mutex> lock(node_->map_mutex());
+    fill_progress_inside_polygon();
+  }
+
+  auto o = select(-1.0, -1.0);
+  EXPECT_TRUE(o.ok);
+  EXPECT_TRUE(o.coverage_complete);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
