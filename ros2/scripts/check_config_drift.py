@@ -55,7 +55,7 @@ RUNTIME = REPO / "install/config/mowgli/mowgli_robot.yaml"
 STRUCTURAL = {
     # Drivetrain
     "wheel_radius", "wheel_width", "wheel_track", "wheel_x_offset",
-    "ticks_per_metre", "ticks_per_revolution",
+    "ticks_per_meter", "ticks_per_revolution",
     # Chassis
     "chassis_length", "chassis_width", "chassis_height",
     "chassis_center_x", "chassis_mass_kg",

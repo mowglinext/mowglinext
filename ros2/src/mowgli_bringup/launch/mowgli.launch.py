@@ -202,7 +202,7 @@ def generate_launch_description() -> LaunchDescription:
             # 0.325 m / 300 ticks/m which silently diverged from the
             # YAML and the URDF (also from the firmware's TICKS_PER_M).
             {"wheel_track": float(robot_params.get("wheel_track", 0.325))},
-            {"ticks_per_metre": float(robot_params.get("ticks_per_metre", 300.0))},
+            {"ticks_per_meter": float(robot_params.get("ticks_per_meter", 300.0))},
         ],
         # The node publishes on ~/topic (e.g. /hardware_bridge/wheel_odom).
         # behavior_tree_node subscribes to /hardware_bridge/status etc.

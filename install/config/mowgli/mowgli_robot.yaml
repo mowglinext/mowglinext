@@ -46,10 +46,10 @@ mowgli:
         wheel_track: 0.325
         wheel_width: 0.04
         wheel_x_offset: 0
-        # ticks_per_metre — consumed by hardware_bridge_node to convert
+        # ticks_per_meter — consumed by hardware_bridge_node to convert
         # raw encoder tick deltas to metres. MUST match the firmware
         # constant TICKS_PER_M in firmware/stm32/ros_usbnode/include/board.h.
-        ticks_per_metre: 300.0
+        ticks_per_meter: 300.0
         ticks_per_revolution: 84
 
         # ── Sensor mounting (relative to base_link / wheel axis) ────

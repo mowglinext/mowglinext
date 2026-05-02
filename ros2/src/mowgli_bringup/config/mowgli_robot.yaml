@@ -36,12 +36,12 @@ mowgli:
     chassis_center_x: 0.18    # chassis geometric centre forward of wheel axis (m)
                                # with chassis_length 0.60 → rear bumper -0.12,
                                # front bumper +0.48
-    # ticks_per_metre is consumed by hardware_bridge_node to convert raw
+    # ticks_per_meter is consumed by hardware_bridge_node to convert raw
     # encoder tick deltas (from the STM32 firmware odom packet) into
     # metres. MUST match the firmware constant TICKS_PER_M in
     # firmware/stm32/ros_usbnode/include/board.h — the firmware sends
     # raw ticks, the bridge does the scaling.
-    ticks_per_metre: 300.0
+    ticks_per_meter: 300.0
     # Informational only — circumference 2π·0.04475 = 0.281 m, so
     # 300 ticks/m × 0.281 m/rev ≈ 84 ticks per revolution. Kept as a
     # cross-check for future wheel-size changes.
