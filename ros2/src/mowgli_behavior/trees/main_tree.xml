@@ -170,6 +170,7 @@
             </Sequence>
           </Fallback>
           <PublishHighLevelStatus state="1" state_name="IDLE_DOCKED"/>
+          <EndSession/>
           <ClearCommand/>
         </Sequence>
 
@@ -502,6 +503,7 @@
                 </Sequence>
               </Fallback>
               <PublishHighLevelStatus state="1" state_name="IDLE_DOCKED"/>
+              <EndSession/>
               <ClearCommand/>
             </Sequence>
           </Fallback>
@@ -513,6 +515,7 @@
           <SaveObstacles/>
           <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
           <PublishHighLevelStatus state="1" state_name="IDLE_DOCKED"/>
+          <EndSession/>
           <ClearCommand/>
         </Sequence>
 
@@ -555,6 +558,7 @@
               </Sequence>
             </ReactiveFallback>
             <PublishHighLevelStatus state="1" state_name="IDLE_DOCKED"/>
+            <EndSession/>
             <ClearCommand/>
           </Sequence>
         </ReactiveSequence>
@@ -604,6 +608,7 @@
             record_rate_hz="2.0"
             is_exclusion_zone="false"/>
           <PublishHighLevelStatus state="1" state_name="RECORDING_COMPLETE"/>
+          <EndSession/>
           <ClearCommand/>
         </ReactiveSequence>
 

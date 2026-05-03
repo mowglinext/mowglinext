@@ -82,11 +82,39 @@ public:
 // ---------------------------------------------------------------------------
 
 /// Resets the current_command in BTContext to 0 (no command), preventing the
-/// BT from re-entering a completed sequence.
+/// BT from re-entering a completed sequence. Safe to call from mid-session
+/// error handlers — does NOT touch session-scoped state.
 class ClearCommand : public BT::SyncActionNode
 {
 public:
   ClearCommand(const std::string& name, const BT::NodeConfig& config)
+      : BT::SyncActionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
+// EndSession
+// ---------------------------------------------------------------------------
+
+/// Resets per-session BTContext flags so the next session starts with a clean
+/// slate — yaw-seed flag, undock bookkeeping, skipped-swath counter. Call only
+/// at confirmed session boundaries (IDLE_DOCKED after MOWING_COMPLETE,
+/// RECORDING_COMPLETE, etc.). Mid-session error handlers must NOT call this:
+/// resetting yaw_seeded_this_session there causes SeedYawFromMotion to re-fire
+/// the 1 m forward drive on the next ReactiveSequence re-tick of UndockOrSkip,
+/// even though the dock_yaw seed is already healthy.
+class EndSession : public BT::SyncActionNode
+{
+public:
+  EndSession(const std::string& name, const BT::NodeConfig& config)
       : BT::SyncActionNode(name, config)
   {
   }
