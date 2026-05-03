@@ -192,7 +192,7 @@ export const MowerStatus = () => {
                     <Space size={4}>
                         <WifiOutlined style={{color: gpsColor, fontSize: 13}}/>
                         <Typography.Text style={{fontSize: 12, color: colors.text, whiteSpace: 'nowrap'}}>
-                            {gpsStatus.label}
+                            {gpsStatus.percent}% · {gpsStatus.label}
                         </Typography.Text>
                     </Space>
                 </Tooltip>
