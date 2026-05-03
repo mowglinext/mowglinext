@@ -36,7 +36,11 @@ services:
     volumes:
       - /dev:/dev
       - mowgli_maps:/ros2_ws/maps
-      - ./docker/config/mowgli:/ros2_ws/config:ro
+      # Read-write so calibrate_imu_yaw_node and map_server's
+      # set_docking_point can splice dock_pose_x/y/yaw, datum_lat/lon,
+      # imu_yaw etc. back into the operator-facing yaml. Other services
+      # (ntrip, mavros bridge) keep :ro since they only read config.
+      - ./docker/config/mowgli:/ros2_ws/config
       - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
     restart: unless-stopped
     logging:

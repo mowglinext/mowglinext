@@ -970,21 +970,21 @@ private:
     publish_vx(0.0);
     (void)drive_ok;
 
-    // Mag phase.
+    // Mag phase. Opt-in only: triggered exclusively by mag_only=true. The
+    // previous "auto-run if /imu/mag_raw has any publisher" gate fired the
+    // 30s figure-8 on every IMU yaw calibration on real hardware (the bridge
+    // always publishes mag_raw), which surprised operators who only wanted
+    // the dock-yaw + IMU pitch/roll drives. The GUI calls calibrate twice
+    // when mag is wanted: once with mag_only=false for the IMU pass, once
+    // with mag_only=true for the figure-8.
     const std::size_t mag_publisher_count = count_publishers("/imu/mag_raw");
-    const bool do_mag_calibration = mag_only || mag_publisher_count > 0;
+    const bool do_mag_calibration = mag_only;
     if (mag_only && mag_publisher_count == 0)
     {
       RCLCPP_WARN(get_logger(),
                   "mag_only requested but no /imu/mag_raw publisher detected "
                   "— running the figure-8 anyway, but the fit will fail with "
                   "'too few samples'.");
-    }
-    else if (!do_mag_calibration)
-    {
-      RCLCPP_INFO(get_logger(),
-                  "No /imu/mag_raw publisher — skipping magnetometer "
-                  "calibration phase.");
     }
 
     if (do_mag_calibration)
