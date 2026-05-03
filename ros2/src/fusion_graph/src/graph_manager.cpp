@@ -230,10 +230,42 @@ TickOutput GraphManager::CreateNodeLocked(double now_s)
   }
 
   // 1. Build the wheel between-factor: relative pose from X_{k-1} to X_k.
-  //    Pose2(dx, dy, dtheta_gyro) — gyro for yaw, wheel for translation.
-  //    If gyro accumulator is zero (no IMU received) fall back to wheel.
-  const double dtheta =
-      std::abs(accum_.dtheta_gyro) > 1e-9 ? accum_.dtheta_gyro : accum_.dtheta_wheel;
+  //    Yaw selection rules:
+  //    a. If the wheel encoder shows the robot stationary AND the gyro
+  //       integrator hasn't seen a meaningful yaw change either, snap
+  //       dtheta to 0 with a tight sigma. This suppresses the residual
+  //       gyro bias (~0.01°/s mean post-hardware_bridge calibration)
+  //       that otherwise accumulates ~0.4°/min of map-frame yaw drift
+  //       while parked at the dock — measured 2026-05-03.
+  //    b. Otherwise, prefer gyro: at speed the differential-drive yaw
+  //       estimate is dominated by encoder slip and the gyro is strictly
+  //       better. The wheel sigma_theta path only fires when no gyro
+  //       sample arrived this tick (pre-cog seed window, IMU restart).
+  const bool wheel_stationary =
+      std::abs(accum_.dx) < params_.stationary_thresh_xy_m &&
+      std::abs(accum_.dy) < params_.stationary_thresh_xy_m &&
+      std::abs(accum_.dtheta_wheel) < params_.stationary_thresh_theta;
+  const bool gyro_stationary =
+      std::abs(accum_.dtheta_gyro) < params_.stationary_thresh_theta;
+
+  double dtheta;
+  double sigma_theta;
+  if (wheel_stationary && gyro_stationary)
+  {
+    dtheta = 0.0;
+    sigma_theta = params_.stationary_sigma_theta;
+  }
+  else if (std::abs(accum_.dtheta_gyro) > 1e-9)
+  {
+    dtheta = accum_.dtheta_gyro;
+    sigma_theta = params_.gyro_sigma_theta;
+  }
+  else
+  {
+    dtheta = accum_.dtheta_wheel;
+    sigma_theta = params_.wheel_sigma_theta;
+  }
+
   const gtsam::Pose2 between(accum_.dx, accum_.dy, dtheta);
 
   const auto k_prev = PoseKey(next_index_ - 1);
@@ -254,9 +286,9 @@ TickOutput GraphManager::CreateNodeLocked(double now_s)
   new_values_.insert(k_curr, X_pred);
 
   // 2. Wheel between-factor.
-  // Use gyro_sigma_theta when gyro contributed, wheel sigma otherwise.
-  const double sigma_theta =
-      std::abs(accum_.dtheta_gyro) > 1e-9 ? params_.gyro_sigma_theta : params_.wheel_sigma_theta;
+  // sigma_theta was already selected above with the same wheel/gyro/
+  // stationary logic that drove dtheta — reuse it here so both halves
+  // of the BetweenFactor stay consistent.
   auto between_noise = MakeDiagonal({
       params_.wheel_sigma_x,
       params_.wheel_sigma_y,

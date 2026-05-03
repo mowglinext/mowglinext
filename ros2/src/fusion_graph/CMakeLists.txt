@@ -141,6 +141,11 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_persistence fusion_graph_core)
 
+  ament_add_gtest(test_stationary_yaw
+    test/test_stationary_yaw.cpp
+  )
+  target_link_libraries(test_stationary_yaw fusion_graph_core)
+
   # Performance benchmarks. Long-running (~30 s on ARM); only meaningful
   # in Release builds. Output is grep-friendly for tracking regressions.
   ament_add_gtest(test_perf

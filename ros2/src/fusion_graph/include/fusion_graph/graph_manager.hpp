@@ -97,6 +97,19 @@ struct GraphParams
   double stationary_motion_thresh_m = 0.02;  // m
   double stationary_motion_thresh_theta = 0.01;  // rad (~0.6°)
   double stationary_node_period_s = 5.0;  // 1 node / 5 s when still
+
+  // Stationary detection (per-node accumulator thresholds). When the wheel
+  // encoder reports motion strictly under both thresholds AND the gyro
+  // integrator has not seen a meaningful yaw change, the BetweenFactor
+  // uses dtheta=0 with stationary_sigma_theta so the gyro bias residual
+  // (~0.01°/s after hardware_bridge calibration) doesn't accumulate into
+  // a measurable yaw drift while parked. Set stationary_thresh_xy_m to a
+  // value smaller than encoder noise per tick, and stationary_thresh_theta
+  // just above the gyro per-tick noise floor; defaults match the LD06 +
+  // the OpenMower encoders on this robot.
+  double stationary_thresh_xy_m = 1.0e-3;  // 1 mm per node tick
+  double stationary_thresh_theta = 2.0e-3;  // 0.11° per node tick (gyro noise floor)
+  double stationary_sigma_theta = 1.0e-3;  // ≈ 0.057° BetweenFactor sigma when stationary
 };
 
 // What goes out to the publisher every tick.

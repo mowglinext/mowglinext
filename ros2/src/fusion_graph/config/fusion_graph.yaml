@@ -24,6 +24,18 @@ fusion_graph_node:
     # encoders see ~5-10 cm of slip per turn).
     gyro_sigma_theta: 0.005     # rad per node
 
+    # Stationary-yaw drift suppressor (added 2026-05-03 — on-robot
+    # measurement showed +0.43°/min map-frame yaw drift while parked
+    # vs -0.03°/min for the EKF that correctly weights wheel.wz over
+    # IMU.wz). When wheel says no motion AND the per-tick gyro delta
+    # is below the per-tick noise floor, the BetweenFactor uses
+    # dtheta=0 with stationary_sigma_theta. Above either threshold,
+    # the standard wheel/gyro path is used and the behaviour matches
+    # the pre-fix code.
+    stationary_thresh_xy_m: 0.001
+    stationary_thresh_theta: 0.002
+    stationary_sigma_theta: 0.001
+
     # ── GPS unary noise floor ──────────────────────────────────────────
     # Below this sigma, NavSatFix.covariance is treated as unrealistic
     # and clamped. RTK-Fixed reports σ ~3 mm; below that is numerical

@@ -65,6 +65,12 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   gp.stationary_motion_thresh_theta =
       declare_parameter<double>("stationary_motion_thresh_theta", 0.01);
   gp.stationary_node_period_s = declare_parameter<double>("stationary_node_period_s", 5.0);
+  gp.stationary_thresh_xy_m =
+      declare_parameter<double>("stationary_thresh_xy_m", 1.0e-3);
+  gp.stationary_thresh_theta =
+      declare_parameter<double>("stationary_thresh_theta", 2.0e-3);
+  gp.stationary_sigma_theta =
+      declare_parameter<double>("stationary_sigma_theta", 1.0e-3);
 
   datum_lat_ = declare_parameter<double>("datum_lat", 0.0);
   datum_lon_ = declare_parameter<double>("datum_lon", 0.0);
