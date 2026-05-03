@@ -164,7 +164,19 @@ private:
     // → 7°/min of yaw drift during mowing). Re-running the cal every N
     // seconds while the robot is stationary on dock keeps the offsets
     // fresh for temperature. Set to 0 to disable.
-    imu_cal_periodic_recal_sec_ = declare_parameter<double>("imu_cal_periodic_recal_sec", 600.0);
+    //
+    // Default lowered 600 → 60 s (2026-05-03): on-robot measurement showed
+    // the WT901 raw gyro_z bias drifted from -3.05°/s (calibration mean)
+    // to -4.36°/s (live) within seconds of completing a calibration —
+    // a 1.3°/s shift well above the gyro's noise floor. The thermal
+    // settling time of the chassis (mower ESC heat soaking the IMU
+    // board) means the calibration captured during a short dock-stop
+    // becomes stale within minutes. 60 s keeps the offset within the
+    // bias's first-order time constant on this robot. Cost is trivial:
+    // the docked-stationary gate (line 460) makes it a no-op when the
+    // robot is moving, and a single recal is ~2.2 s of sample collection
+    // at 91 Hz × 200 samples.
+    imu_cal_periodic_recal_sec_ = declare_parameter<double>("imu_cal_periodic_recal_sec", 60.0);
 
     RCLCPP_INFO(get_logger(),
                 "Parameters: serial_port=%s baud_rate=%d heartbeat_rate=%.1f Hz "
@@ -1455,7 +1467,7 @@ private:
   int imu_cal_samples_{200};
   std::string imu_cal_persist_path_{"/ros2_ws/maps/imu_calibration.txt"};
   double imu_cal_auto_rest_sec_{15.0};
-  double imu_cal_periodic_recal_sec_{600.0};  // 0 disables; default 10 min
+  double imu_cal_periodic_recal_sec_{60.0};  // 0 disables; default 60 s (was 600 — see ctor)
   rclcpp::Time imu_cal_at_rest_since_{};  // default-constructed (nanoseconds=0) = "not at rest yet"
   rclcpp::Time imu_cal_last_completed_{};  // when the last successful cal finished
   bool imu_cal_loaded_from_file_{false};
