@@ -487,4 +487,62 @@ private:
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr client_;
 };
 
+// ---------------------------------------------------------------------------
+// IsObstacleStuck
+// ---------------------------------------------------------------------------
+
+/// Returns SUCCESS when collision_monitor's PolygonStop has been
+/// continuously active for at least min_duration_sec AND we are still
+/// under max_count obstacle-backoffs for this session AND the cooldown
+/// since the previous backoff has elapsed. On success, increments
+/// ctx->obstacle_backoff_count and stamps ctx->last_obstacle_backoff_time
+/// — that is the side effect the StuckBackoff sequence relies on for its
+/// per-session cap and cooldown.
+///
+/// Field problem this solves: collision_monitor's front-stop polygon can
+/// wedge the robot motionless for minutes when LiDAR sees an obstacle.
+/// /cmd_vel_nav stays nonzero (Nav2 wants to move) but /cmd_vel reaches
+/// the motors as zero, so progress_checker eventually escalates to
+/// MarkBlockedAndSkip — which then re-plants the robot on the same
+/// obstacle. This node lets the BT trigger a 0.40 m reverse + costmap
+/// clear when collision_monitor has stopped us for ≥5 s, capped at
+/// max_count attempts/session with a cooldown between firings.
+///
+/// "Stuck" detection is sourced from /collision_monitor_state
+/// (nav2_msgs/CollisionMonitorState). The behavior_tree_node subscribes
+/// and updates ctx->collision_action_type + ctx->collision_stop_since;
+/// this node only consumes those fields. Note that we deliberately do
+/// NOT read /cmd_vel{,_nav} as a fallback heuristic — collision_monitor
+/// publishes its state directly, so the heuristic would just be a noisier
+/// proxy for the same signal.
+///
+/// Input ports:
+///   min_duration_sec (double, default 5.0) — STOP must be active this
+///                                            long before we trip.
+///   max_count        (int,    default 3)   — per-session backoff cap.
+///   cooldown_sec     (double, default 8.0) — min gap between firings.
+class IsObstacleStuck : public BT::ConditionNode
+{
+public:
+  IsObstacleStuck(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {
+        BT::InputPort<double>("min_duration_sec",
+                              5.0,
+                              "Seconds collision_monitor must be in STOP before tripping"),
+        BT::InputPort<int>("max_count", 3, "Per-session cap on obstacle-backoff firings"),
+        BT::InputPort<double>("cooldown_sec",
+                              8.0,
+                              "Minimum gap between obstacle-backoff firings"),
+    };
+  }
+
+  BT::NodeStatus tick() override;
+};
+
 }  // namespace mowgli_behavior

@@ -467,6 +467,33 @@
                             </Sequence>
                           </Fallback>
                         </RetryUntilSuccessful>
+                        <!-- Obstacle wedge recovery. collision_monitor's
+                             PolygonStop can hold the robot motionless for
+                             minutes when LiDAR sees an obstacle inside the
+                             front stop polygon — Nav2 keeps publishing on
+                             /cmd_vel_nav, but /cmd_vel reaches the motors
+                             as zero, so progress_checker only escalates
+                             slowly and MarkBlockedAndSkip then re-plants
+                             the robot on the same obstacle.
+                             When STOP has been continuous for ≥5 s, back
+                             off 0.40 m, clear the local costmap, and let
+                             the outer SegmentLoop fetch a fresh segment
+                             (AlwaysSuccess: don't punish this segment for
+                             an obstacle we just cleared — if the same
+                             wedge persists past max_count/cooldown,
+                             IsObstacleStuck returns FAILURE and the
+                             Fallback advances to MarkBlockedAndSkip). -->
+                        <Sequence name="StuckBackoff">
+                          <IsObstacleStuck min_duration_sec="5.0"
+                                           max_count="3"
+                                           cooldown_sec="8.0"/>
+                          <PublishHighLevelStatus state="2"
+                                                  state_name="OBSTACLE_BACKOFF"/>
+                          <SetMowerEnabled enabled="false"/>
+                          <BackUp backup_dist="0.40" backup_speed="0.15"/>
+                          <ClearCostmap/>
+                          <AlwaysSuccess/>
+                        </Sequence>
                         <!-- Both retry attempts failed. Bump fail_count for
                              the cells along the failed segment (DEAD-promote
                              after 3 consecutive failures), increment skipped

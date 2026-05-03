@@ -35,6 +35,7 @@
 #include "mowgli_interfaces/srv/start_in_area.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav2_msgs/action/undock_robot.hpp"
+#include "nav2_msgs/msg/collision_monitor_state.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/bool.hpp"
@@ -206,6 +207,33 @@ private:
           // RTK fixed (fix_type >= 4) with reasonable accuracy → GPS is fixed.
           context_->gps_is_fixed = (context_->gps_fix_type >= 4) && (msg->position_accuracy < 0.1f);
           context_->gps_quality = std::clamp(1.0f - msg->position_accuracy, 0.0f, 1.0f);
+        });
+
+    // collision_monitor state — used by IsObstacleStuck to detect when
+    // the robot is wedged on an obstacle (PolygonStop active for ≥5 s).
+    // Latched into BTContext so the condition tick is a pure read.
+    collision_monitor_sub_ = create_subscription<nav2_msgs::msg::CollisionMonitorState>(
+        "/collision_monitor_state",
+        10,
+        [this](nav2_msgs::msg::CollisionMonitorState::ConstSharedPtr msg)
+        {
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          const uint8_t prev = context_->collision_action_type;
+          context_->collision_action_type = msg->action_type;
+
+          // Stamp the entry-into-STOP transition so IsObstacleStuck can
+          // measure duration. Clear on exit.
+          if (msg->action_type == nav2_msgs::msg::CollisionMonitorState::STOP)
+          {
+            if (prev != nav2_msgs::msg::CollisionMonitorState::STOP)
+            {
+              context_->collision_stop_since = std::chrono::steady_clock::now();
+            }
+          }
+          else
+          {
+            context_->collision_stop_since = std::chrono::steady_clock::time_point{};
+          }
         });
 
     RCLCPP_DEBUG(get_logger(), "Topic subscribers created");
@@ -450,6 +478,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr boundary_violation_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr lethal_boundary_violation_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::AbsolutePose>::SharedPtr gps_sub_;
+  rclcpp::Subscription<nav2_msgs::msg::CollisionMonitorState>::SharedPtr collision_monitor_sub_;
 
   // Service server
   rclcpp::Service<mowgli_interfaces::srv::HighLevelControl>::SharedPtr high_level_control_srv_;

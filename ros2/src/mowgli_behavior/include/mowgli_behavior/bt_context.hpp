@@ -149,6 +149,29 @@ struct BTContext
   bool undock_start_recorded{false};
 
   // -----------------------------------------------------------------------
+  // Obstacle-stuck recovery (collision_monitor wedging)
+  // -----------------------------------------------------------------------
+
+  /// Latest action_type from /collision_monitor_state
+  /// (nav2_msgs/CollisionMonitorState). 0 = DO_NOTHING, 1 = STOP,
+  /// 2 = SLOWDOWN, 3 = APPROACH, 4 = LIMIT.
+  uint8_t collision_action_type{0};
+
+  /// Time at which collision_monitor first transitioned into STOP and
+  /// has remained in STOP continuously since. Default-constructed value
+  /// flags "not currently in STOP".
+  std::chrono::steady_clock::time_point collision_stop_since{};
+
+  /// Number of obstacle-backoff recoveries already attempted in the
+  /// current session. Reset by EndSession.
+  int obstacle_backoff_count{0};
+
+  /// Time of the most recent obstacle-backoff success-tick. Used to
+  /// enforce a cooldown so we don't re-fire on the same wedge while
+  /// the BackUp + costmap clear is still settling.
+  std::chrono::steady_clock::time_point last_obstacle_backoff_time{};
+
+  // -----------------------------------------------------------------------
   // Per-session flags reset by ClearCommand at session end
   // -----------------------------------------------------------------------
 
