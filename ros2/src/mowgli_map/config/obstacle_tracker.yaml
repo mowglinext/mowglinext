@@ -3,7 +3,10 @@ obstacle_tracker:
     # Garden-tuned: larger clusters required to filter grass/ground noise
     cluster_tolerance: 0.20           # 20cm epsilon (was 15cm)
     min_cluster_points: 5             # need 5 points to form cluster (was 3)
-    persistence_threshold: 60.0       # promote after 60s (was 30s) — avoids transient grass
+    persistence_threshold: 10.0       # promote after 10s — 60s was too long, real obstacles
+                                       # got hit before the tracker promoted them. Grass is
+                                       # already filtered by min_cluster_points=5 and
+                                       # min_obstacle_radius=0.08.
     transient_timeout: 5.0
     min_obstacle_radius: 0.08         # ignore tiny clusters < 8cm (was 5cm)
     max_obstacle_radius: 1.5

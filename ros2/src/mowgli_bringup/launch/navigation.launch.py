@@ -637,6 +637,28 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
+    # Conditional radial-blank filter for the local_costmap obstacle_layer.
+    # Republishes /scan as /scan_costmap, masking returns < 0.70 m only
+    # while is_charging or for 5 s after charging drops — closes the
+    # 0.10–0.65 m blind ring during mowing while keeping the dock
+    # invisible to BackUp's collision check (behavior_server reads
+    # local_costmap/costmap_raw). collision_monitor still polls /scan
+    # unfiltered and stops the robot on real-time contact.
+    costmap_scan_filter = Node(
+        package="mowgli_localization",
+        executable="costmap_scan_filter_node",
+        name="costmap_scan_filter",
+        output="screen",
+        parameters=[
+            {"use_sim_time": use_sim_time,
+             "input_topic": "/scan",
+             "output_topic": "/scan_costmap",
+             "status_topic": "/hardware_bridge/status",
+             "dock_blank_range": 0.70,
+             "post_undock_blank_sec": 5.0},
+        ],
+    )
+
     # ekf_odom_node subscribes to /wheel_odom directly (see
     # robot_localization.yaml). ekf_map_node fuses /gps/pose_cov directly
     # as pose0 (published by navsat_to_absolute_pose_node).
@@ -662,6 +684,7 @@ def generate_launch_description() -> LaunchDescription:
             dock_yaw_to_set_pose,
             cog_to_imu,
             mag_yaw_publisher,
+            costmap_scan_filter,
             wait_for_map_odom_tf,
             nav2_after_tf,
             empty_static_map_pub,

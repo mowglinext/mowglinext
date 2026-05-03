@@ -440,9 +440,14 @@ global_costmap:
           raytrace_max_range: 8.0
           raytrace_min_range: 0.0
           obstacle_max_range: 5.0
-          # Garden-tuned: ignore returns closer than 0.5m to filter grass
-          # tufts and ground clutter near the LiDAR (mounted at ~0.38m fwd).
-          obstacle_min_range: 0.50
+          # Lowered from 0.50 m → 0.10 m so the global costmap sees the
+          # same near-field obstacles as the local costmap. Ground/grass
+          # clutter is filtered by the min_obstacle_height band (0.08 m
+          # floor) now that ground_constraint keeps base_link Z ≈ 0, so
+          # we don't need a radial guard band on top of it. The Smac
+          # planner's keepout_filter handles dock avoidance on the
+          # global side — no need to mask the dock here.
+          obstacle_min_range: 0.10
           inf_is_valid: true
 
       inflation_layer:
@@ -509,10 +514,22 @@ local_costmap:
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        observation_persistence: 0.0
-        observation_sources: scan
-        scan:
-          topic: /scan
+        # Short non-zero persistence (was 0): smooths over the inevitable
+        # 1–2 missing scans during ARM TF jitter so transient obstacles
+        # don't flicker out of the costmap mid-strip. Long persistence
+        # would re-introduce the dock-residue problem post-undock; 2 s
+        # is short enough that costmap_scan_filter's 5 s post-undock
+        # grace window still clears any dock returns before they expire.
+        observation_persistence: 2.0
+        # Subscribe to the conditional /scan_costmap stream from
+        # costmap_scan_filter_node — same scan as /scan but with returns
+        # under dock_blank_range pushed to +inf while is_charging or for
+        # post_undock_blank_sec after charging drops. With that filter
+        # owning the dock-mask logic, obstacle_min_range can drop to a
+        # near-LiDAR floor and the 0.10–0.65 m mowing blind ring closes.
+        observation_sources: scan_filtered
+        scan_filtered:
+          topic: /scan_costmap
           # Same height band as the global obstacle_layer — filter ground
           # hits when the mower pitches on uneven terrain.
           min_obstacle_height: 0.08
@@ -523,25 +540,25 @@ local_costmap:
           raytrace_max_range: 6.0
           raytrace_min_range: 0.0
           obstacle_max_range: 4.0
-          # Blank returns within 0.65m: on this robot the charge port is in
-          # front, so the dock body sits just ahead of base_footprint
-          # (roughly chassis_center_x + chassis_length/2 ≈ 45 cm) when
-          # docked. Whether the robot is approaching forward to dock or
-          # BackUp-ing to undock, the dock structure is always within 65 cm.
-          # Without the blank, it would be marked LETHAL and the BackUp
-          # behavior's collision checker (via behavior_server →
-          # local_costmap/costmap_raw) would abort undock at error 714
-          # "Collision Ahead". 0.65 m covers the dock but still catches
-          # real obstacles (walls/fences always >0.65 m during mowing).
-          # observation_persistence=0 clears dock residue as the robot
-          # drives away, so this doesn't hurt post-undock navigation.
-          obstacle_min_range: 0.65
+          # Lowered from 0.65 m → 0.10 m. The dock-mask is now handled
+          # by costmap_scan_filter_node (charging-state aware), so this
+          # only needs to filter LiDAR self-returns near the housing.
+          # 0.10 m closes the previous 0.10–0.65 m blind ring during
+          # mowing — collision_monitor and Nav2 now agree on what's
+          # in front of the robot.
+          obstacle_min_range: 0.10
           inf_is_valid: true
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0
-        inflation_radius: 0.40
+        # 0.25 m (was 0.40). Now that obstacle_min_range is 0.10 m and
+        # the 0.10–0.65 m ring resolves into real cells, 0.40 m inflation
+        # would slam every nearby obstacle into the strip path and force
+        # FTCController to abort. 0.25 m gives FTCController's
+        # obstacle_lookahead a real cushion without making strips
+        # un-followable when an obstacle is 30–40 cm off the swath.
+        inflation_radius: 0.25
 
 # ---------------------------------------------------------------------------
 # Map server / AMCL (unused — map->odom is published by ekf_map_node
