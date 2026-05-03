@@ -61,6 +61,7 @@ export const restartGps = (api: GuiApi) =>
 export const GPS_RESTART_KEYS = new Set<string>([
     "gps_protocol",
     "gps_port",
+    "gps_baudrate",
     "ntrip_enabled",
     "ntrip_host",
     "ntrip_port",
