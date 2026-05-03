@@ -8,21 +8,33 @@
 //   ekf_odom_node (odom-frame)   yaw drift = -0.033°/min   (correct)
 //   fusion_graph_node (map-frame) yaw drift = +0.43°/min    (~13× worse)
 //
-// The map-frame factor graph was selecting the wheel/gyro yaw delta
-// with a single ternary on |dtheta_gyro| > 1e-9. The residual gyro
-// bias (~0.011°/s mean post-hardware_bridge calibration) integrates
-// to ~0.0011° per node tick and always trips that gate, so every
-// BetweenFactor got the gyro delta even when the wheel encoder
-// unambiguously reported "no motion". iSAM2 then propagated the small
-// biased delta across nodes, giving the observed drift.
+// First iteration (PR #161) gated the suppressor on
+// wheel_stationary AND gyro_stationary. On-robot post-deploy:
+//
+//   fusion_graph_node yaw drift = -4.28°/min (worse than no fix at all)
+//
+// Live IMU /imu/data publishes wz ≈ -0.023 rad/s (-1.32°/s) at rest on
+// this robot — hardware_bridge calibration neutralises the cold bias
+// but not the thermal drift — so |dtheta_gyro| was always ~10× above
+// any sensible stationary_thresh_theta, the AND fell through, and the
+// gyro path ran like before. Worse, the original test used a
+// 0.0002 rad/s bias which masked the AND-gate hiding bug entirely.
+//
+// Second iteration (this file): drop the gyro_stationary check.
+// Encoders cannot slip "into" stationary — when |dx|, |dy|,
+// |dtheta_wheel| are all below thresholds the robot is genuinely
+// parked, so trust the wheel and snap dtheta=0 regardless of gyro
+// noise.
 //
 // These tests pin the post-fix behaviour:
-//   1. With encoders idle and a realistic gyro-bias drift the graph
-//      yaw must stay within ~0.05° over a 60 s parked window (pre-fix
-//      ≈ 0.66°).
+//   1. With encoders idle and a realistic 0.025 rad/s gyro bias (the
+//      live residual order of magnitude) the graph yaw must stay
+//      within ~0.05° over a 60 s parked window. The previous test's
+//      0.0002 rad/s bias did NOT exercise the AND gate; this version
+//      would have failed against the PR #161 code.
 //   2. With matching wheel + gyro rotation the graph still tracks the
-//      input rotation (the stationary path only kicks in when both
-//      sources agree the robot is at rest).
+//      input rotation (the stationary path only kicks in when the
+//      wheel encoder reports no motion).
 
 #include <cmath>
 #include <cstdio>
@@ -59,10 +71,12 @@ fg::GraphParams MakeParams()
 }  // namespace
 
 // ─────────────────────────────────────────────────────────────────────
-// 60 s of stationary operation with a 0.011°/s residual gyro bias
-// (a typical post-calibration value from hardware_bridge_node). The
-// pre-fix code drifted ~0.66°; the suppressor must hold yaw to within
-// 0.05°.
+// 60 s of stationary operation with a 0.025 rad/s (~1.43°/s) residual
+// gyro bias — the order of magnitude actually seen on /imu/data after
+// hardware_bridge calibration on this robot. Crucially this is well
+// above stationary_thresh_theta (2 mrad/tick → 20 mrad/s @ 10 Hz), so
+// any AND-gated suppressor (PR #161) would fail the test. The wheel-
+// only suppressor must hold yaw to within 0.05°.
 // ─────────────────────────────────────────────────────────────────────
 TEST(StationaryYaw, GyroBiasDoesNotDriftMapYaw)
 {
@@ -72,10 +86,12 @@ TEST(StationaryYaw, GyroBiasDoesNotDriftMapYaw)
   const gtsam::Pose2 X0(1.0, 2.0, 0.5);
   gm.Initialize(X0, 0.0);
 
-  // 600 ticks × 0.1 s = 60 s. 0.011°/s ≈ 0.0001920 rad/s gyro bias.
+  // 600 ticks × 0.1 s = 60 s. 0.025 rad/s ≈ 1.43°/s gyro bias —
+  // matches the live residual measured on /imu/data with the robot
+  // parked at the dock.
   constexpr int kTicks = 600;
   constexpr double kDt = 0.1;
-  constexpr double kGyroBias = 0.0001920;  // rad/s, ~0.011°/s
+  constexpr double kGyroBias = 0.025;  // rad/s, ~1.43°/s
 
   for (int i = 0; i < kTicks; ++i)
   {
@@ -96,16 +112,17 @@ TEST(StationaryYaw, GyroBiasDoesNotDriftMapYaw)
               yaw_drift_deg,
               yaw_drift_rad);
 
-  // Hard ceiling: 0.05° over 60 s. Pre-fix value was ~0.66° in the
-  // same setup, so this gives ~13× headroom.
+  // Hard ceiling: 0.05° over 60 s. With the AND-gated PR #161 code
+  // this test would drift ~86° (60 s × 1.43°/s) — orders of magnitude
+  // out — so the bound is a clean regression catch.
   EXPECT_LT(yaw_drift_deg, 0.05);
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Real rotation must still be tracked: the suppressor is only allowed
-// to fire when BOTH the wheel encoders AND the gyro agree the robot
-// is at rest. Drive a 0.5 rad/s rotation for 6 s and verify the graph
-// yaw lands within ~10% of the expected angle.
+// Real rotation must still be tracked: the suppressor only fires when
+// the wheel encoders report no motion. Drive a 0.5 rad/s rotation for
+// 6 s (wheels + gyro both report it) and verify the graph yaw lands
+// within ~10% of the expected angle.
 // ─────────────────────────────────────────────────────────────────────
 TEST(StationaryYaw, RotationStillTracked)
 {

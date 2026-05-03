@@ -231,12 +231,25 @@ TickOutput GraphManager::CreateNodeLocked(double now_s)
 
   // 1. Build the wheel between-factor: relative pose from X_{k-1} to X_k.
   //    Yaw selection rules:
-  //    a. If the wheel encoder shows the robot stationary AND the gyro
-  //       integrator hasn't seen a meaningful yaw change either, snap
-  //       dtheta to 0 with a tight sigma. This suppresses the residual
-  //       gyro bias (~0.01°/s mean post-hardware_bridge calibration)
-  //       that otherwise accumulates ~0.4°/min of map-frame yaw drift
-  //       while parked at the dock — measured 2026-05-03.
+  //    a. Wheel encoder is ground truth when it reads zero. Encoders
+  //       cannot slip "into stationary" — when the per-tick wheel
+  //       accumulator shows no motion (|dx|, |dy|, |dtheta_wheel| all
+  //       under their thresholds), the robot really isn't moving under
+  //       power. Trust the wheel regardless of residual gyro
+  //       bias / noise and snap dtheta to 0 with a tight sigma. The
+  //       previous version of this block also gated on |dtheta_gyro| <
+  //       stationary_thresh_theta, which on this robot's live IMU
+  //       (residual wz ≈ -0.023 rad/s ≈ -1.32°/s after hardware_bridge
+  //       calibration, dominated by thermal drift) was always false —
+  //       the AND fell through to the gyro path and yaw drifted
+  //       -4.28°/min vs the +0.43°/min pre-suppressor baseline.
+  //
+  //       Edge case: a hand-pushed robot has wheels off the ground but
+  //       is physically rotating. We accept the trade-off — a manually
+  //       repositioned robot will lose its yaw estimate, but it is far
+  //       more common to be parked with a noisy gyro than to be hand
+  //       spun, and the next session's GPS-COG fusion + dock_yaw seed
+  //       re-anchor yaw when the robot starts moving again.
   //    b. Otherwise, prefer gyro: at speed the differential-drive yaw
   //       estimate is dominated by encoder slip and the gyro is strictly
   //       better. The wheel sigma_theta path only fires when no gyro
@@ -245,12 +258,10 @@ TickOutput GraphManager::CreateNodeLocked(double now_s)
       std::abs(accum_.dx) < params_.stationary_thresh_xy_m &&
       std::abs(accum_.dy) < params_.stationary_thresh_xy_m &&
       std::abs(accum_.dtheta_wheel) < params_.stationary_thresh_theta;
-  const bool gyro_stationary =
-      std::abs(accum_.dtheta_gyro) < params_.stationary_thresh_theta;
 
   double dtheta;
   double sigma_theta;
-  if (wheel_stationary && gyro_stationary)
+  if (wheel_stationary)
   {
     dtheta = 0.0;
     sigma_theta = params_.stationary_sigma_theta;

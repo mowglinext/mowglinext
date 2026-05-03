@@ -24,14 +24,16 @@ fusion_graph_node:
     # encoders see ~5-10 cm of slip per turn).
     gyro_sigma_theta: 0.005     # rad per node
 
-    # Stationary-yaw drift suppressor (added 2026-05-03 — on-robot
-    # measurement showed +0.43°/min map-frame yaw drift while parked
-    # vs -0.03°/min for the EKF that correctly weights wheel.wz over
-    # IMU.wz). When wheel says no motion AND the per-tick gyro delta
-    # is below the per-tick noise floor, the BetweenFactor uses
-    # dtheta=0 with stationary_sigma_theta. Above either threshold,
-    # the standard wheel/gyro path is used and the behaviour matches
-    # the pre-fix code.
+    # Stationary-yaw drift suppressor (added 2026-05-03, iterated same
+    # day after on-robot measurement showed the AND-gated version drove
+    # yaw -4.28°/min vs +0.43°/min unsuppressed — live IMU residual wz
+    # is ~-1.32°/s, well above any sensible gyro stationary threshold,
+    # so the AND was always false). The gate is now wheel-only: when
+    # the per-tick wheel accumulator (|dx|, |dy|, |dtheta_wheel|) is
+    # under these thresholds, the BetweenFactor uses dtheta=0 with
+    # stationary_sigma_theta regardless of gyro noise. Encoders cannot
+    # slip into stationary, so a zero wheel reading is treated as
+    # ground truth.
     stationary_thresh_xy_m: 0.001
     stationary_thresh_theta: 0.002
     stationary_sigma_theta: 0.001
