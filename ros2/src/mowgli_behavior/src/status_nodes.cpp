@@ -122,13 +122,17 @@ BT::NodeStatus EndSession::tick()
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   RCLCPP_INFO(ctx->node->get_logger(),
               "EndSession: clearing per-session flags "
-              "(yaw_seeded=%s, skipped_swaths=%d, undock_recorded=%s)",
+              "(yaw_seeded=%s, skipped_swaths=%d, undock_recorded=%s, "
+              "obstacle_backoffs=%d)",
               ctx->yaw_seeded_this_session ? "true" : "false",
               ctx->skipped_swaths,
-              ctx->undock_start_recorded ? "true" : "false");
+              ctx->undock_start_recorded ? "true" : "false",
+              ctx->obstacle_backoff_count);
   ctx->yaw_seeded_this_session = false;
   ctx->skipped_swaths = 0;
   ctx->undock_start_recorded = false;
+  ctx->obstacle_backoff_count = 0;
+  ctx->last_obstacle_backoff_time = std::chrono::steady_clock::time_point{};
   return BT::NodeStatus::SUCCESS;
 }
 

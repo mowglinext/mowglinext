@@ -544,4 +544,95 @@ BT::NodeStatus Nav2Active::tick()
   return BT::NodeStatus::FAILURE;
 }
 
+// ---------------------------------------------------------------------------
+// IsObstacleStuck
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus IsObstacleStuck::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  double min_duration_sec = 5.0;
+  if (auto res = getInput<double>("min_duration_sec"))
+  {
+    min_duration_sec = res.value();
+  }
+  int max_count = 3;
+  if (auto res = getInput<int>("max_count"))
+  {
+    max_count = res.value();
+  }
+  double cooldown_sec = 8.0;
+  if (auto res = getInput<double>("cooldown_sec"))
+  {
+    cooldown_sec = res.value();
+  }
+
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+
+  // collision_monitor not in STOP → not stuck.
+  // CollisionMonitorState::STOP == 1.
+  if (ctx->collision_action_type != 1)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  const auto now = std::chrono::steady_clock::now();
+
+  // STOP active but we have no start timestamp yet (subscriber should
+  // always set this when transitioning to STOP — guard anyway).
+  if (ctx->collision_stop_since.time_since_epoch().count() == 0)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  const double stop_age_sec =
+      std::chrono::duration<double>(now - ctx->collision_stop_since).count();
+  if (stop_age_sec < min_duration_sec)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // Per-session attempt cap — let MarkBlockedAndSkip handle persistent
+  // wedges past this point.
+  if (ctx->obstacle_backoff_count >= max_count)
+  {
+    RCLCPP_WARN_THROTTLE(ctx->node->get_logger(),
+                         *ctx->node->get_clock(),
+                         5000,
+                         "IsObstacleStuck: backoff cap reached (%d/%d), "
+                         "deferring to MarkBlockedAndSkip",
+                         ctx->obstacle_backoff_count,
+                         max_count);
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // Cooldown — once we successfully fire, wait this long before allowing
+  // another fire so the BackUp + costmap-clear sequence has time to
+  // settle and we don't double-count one wedge.
+  if (ctx->last_obstacle_backoff_time.time_since_epoch().count() != 0)
+  {
+    const double since_last_sec =
+        std::chrono::duration<double>(now - ctx->last_obstacle_backoff_time).count();
+    if (since_last_sec < cooldown_sec)
+    {
+      return BT::NodeStatus::FAILURE;
+    }
+  }
+
+  // Fire: increment count + stamp time so the cooldown engages even if
+  // the StuckBackoff sequence's BackUp itself fails partway through.
+  ctx->obstacle_backoff_count++;
+  ctx->last_obstacle_backoff_time = now;
+
+  RCLCPP_WARN(ctx->node->get_logger(),
+              "IsObstacleStuck: collision_monitor STOP active for %.1fs — "
+              "triggering obstacle-backoff (%d/%d)",
+              stop_age_sec,
+              ctx->obstacle_backoff_count,
+              max_count);
+
+  return BT::NodeStatus::SUCCESS;
+}
+
 }  // namespace mowgli_behavior

@@ -46,6 +46,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<IsChargingProgressing>("IsChargingProgressing");
   factory.registerNodeType<PreFlightCheck>("PreFlightCheck");
   factory.registerNodeType<Nav2Active>("Nav2Active");
+  factory.registerNodeType<IsObstacleStuck>("IsObstacleStuck");
 
   // Action nodes
   factory.registerNodeType<SetMowerEnabled>("SetMowerEnabled");
