@@ -16,6 +16,15 @@ bt_navigator:
     odom_topic: /odometry/filtered
     bt_loop_duration: 10
     default_server_timeout: 60
+    # Match the with-lidar config: 1s default is too tight, planner_server's
+    # compute_path_to_pose action server isn't always up within 1s of
+    # bt_navigator's Activate transition on ARM cold-boot, which fails the
+    # whole lifecycle bringup ("Action server compute_path_to_pose not
+    # available", error 9001) and leaves bt_navigator inactive — every
+    # subsequent NavigateToPose goal gets "Action server is inactive.
+    # Rejecting the goal", which the BT then converts into a 3-strike
+    # SkipStrip cascade.
+    wait_for_service_timeout: 10000
     # Custom Nav2 BT that adds GoalCheckerSelector (required when multiple
     # goal_checker_plugins are configured in controller_server).
     # Paths are injected by navigation.launch.py via RewrittenYaml — keep empty here.
@@ -281,8 +290,19 @@ local_costmap:
       rolling_window: true
       width: 6
       height: 6
-      # No obstacle_layer — LiDAR is not available.
-      plugins: ["inflation_layer"]
+      # No obstacle_layer — LiDAR is not available. The static_layer
+      # subscribes to the same latched empty OccupancyGrid as the global
+      # costmap; without a current source layer the costmap's current_
+      # flag never goes true and controller_server aborts every
+      # follow_path with "Costmap timed out waiting for update" (107).
+      plugins: ["static_layer", "inflation_layer"]
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        enabled: true
+        map_topic: "/no_lidar_static_map"
+        subscribe_to_updates: false
+        transform_tolerance: 5.0
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
