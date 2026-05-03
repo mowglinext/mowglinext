@@ -61,10 +61,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "imu_x", "imu_y", "imu_z", "imu_yaw", "imu_pitch", "imu_roll",
             "gps_x", "gps_y", "gps_z",
             "use_lidar",
-            // dock_pose_x/y/yaw not editable here. They are persisted in
-            // mowgli_robot.yaml but written by the IMU calibration service
-            // and the "set dock pose" action on the map view, not by
-            // free-form numeric input.
+            "dock_pose_yaw",
         ],
     },
     {
@@ -236,7 +233,18 @@ export const useSettingsManager = () => {
             // Capture which keys were dirty BEFORE we mark them saved, so we
             // can decide whether GPS needs an auto-restart.
             const gpsDirty = dirtyKeysRequireGpsRestart(dirtyKeys);
-            const res = await guiApi.settings.yamlCreate(localValues);
+            // Only send keys the user actually changed. The backend merges
+            // payload over the on-disk YAML, so omitting unchanged keys
+            // preserves anything other processes may have written between
+            // load and save (e.g. dock_pose_x/y from the calibration
+            // service or the map "set dock pose" action).
+            const dirtyPayload: Record<string, any> = {};
+            for (const key of dirtyKeys) {
+                if (key in localValues) {
+                    dirtyPayload[key] = localValues[key];
+                }
+            }
+            const res = await guiApi.settings.yamlCreate(dirtyPayload);
             if (res.error) throw new Error((res.error as any).error);
             setSavedValues({ ...localValues });
             setRestartRequired(true);
@@ -282,7 +290,6 @@ export const useSettingsManager = () => {
     const HIDDEN_FROM_ADVANCED = new Set([
         "dock_pose_x",
         "dock_pose_y",
-        "dock_pose_yaw",
         "slam_mode",
         "map_save_on_dock",
         "map_save_path",

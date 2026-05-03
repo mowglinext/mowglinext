@@ -54,6 +54,13 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const [editMap, setEditMap] = useState<boolean>(false)
     const [features, setFeatures] = useState<Record<string, MowingFeature>>({});
     const [dockPlacementMode, setDockPlacementMode] = useState<boolean>(false);
+    // Track whether the user actually moved the dock during this edit
+    // session. The dock feature is rebuilt from the live /map topic on
+    // every render, and saving without this flag would clobber the
+    // persisted dock pose with a stale value (e.g. when dock_pose was
+    // updated by the calibration service but the /map topic hasn't
+    // re-emitted yet).
+    const [dockDirty, setDockDirty] = useState<boolean>(false);
     const [mapKey, setMapKey] = useState<string>("origin")
     const [useSatellite, setUseSatellite] = useState(true)
     const robotPoseRef = useRef<{ x: number; y: number; heading: number } | null>(null)
@@ -354,6 +361,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         datum,
         notification,
         guiApi,
+        dockDirty,
+        setDockDirty,
     });
 
 
@@ -373,6 +382,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             return {...prev, dock: new DockFeatureBase(coord, heading)};
         });
         setHasUnsavedChanges(true);
+        setDockDirty(true);
     }, [dockPlacementMode, setHasUnsavedChanges]);
 
     const handleDockHeadingChange = useCallback((heading: number) => {
@@ -383,6 +393,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             return {...prev, dock: updated};
         });
         setHasUnsavedChanges(true);
+        setDockDirty(true);
     }, [setHasUnsavedChanges]);
 
     const handleSetDockAtMower = useCallback(() => {
@@ -395,6 +406,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         setFeatures(prev => ({...prev, dock: new DockFeatureBase(coord, pose.heading)}));
         setDockPlacementMode(false);
         setHasUnsavedChanges(true);
+        setDockDirty(true);
         notification.success({message: "Dock set at robot position"});
     }, [offsetX, offsetY, datum, setHasUnsavedChanges, notification]);
 

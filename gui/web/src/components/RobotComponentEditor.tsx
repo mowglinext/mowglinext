@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Card, InputNumber, Modal, Space, Typography, Row, Col, Tooltip, Button, Tag, Statistic } from "antd";
+import { Alert, Card, InputNumber, Modal, Space, Typography, Row, Col, Tooltip, Button, Tag } from "antd";
 import { AimOutlined, CompassOutlined, UndoOutlined } from "@ant-design/icons";
 import { useThemeMode } from "../theme/ThemeContext.tsx";
 import { useIsMobile } from "../hooks/useIsMobile.ts";
@@ -105,14 +105,14 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
     const [rotating, setRotating] = useState<SensorId | null>(null);
     const [hoveredSensor, setHoveredSensor] = useState<SensorId | null>(null);
     const { status: calibrationStatus } = useCalibrationStatus();
-    // Dock yaw lives in mowgli_robot.yaml — written by the IMU
-    // auto-calibration service and the "set dock pose" GUI action.
-    // The user can no longer free-form edit it here; the calibration
-    // backend is the only writer.
+    // Dock yaw lives in mowgli_robot.yaml. It is normally written by the
+    // IMU auto-calibration service and the "set dock pose" GUI action,
+    // but operators can also override it manually here when calibration
+    // is unavailable or wrong.
     const dockCal = calibrationStatus?.dock;
-    const dockYawRad = dockCal?.present && dockCal.dock_pose_yaw_rad != null
+    const dockYawRad = values.dock_pose_yaw ?? (dockCal?.present && dockCal.dock_pose_yaw_rad != null
         ? dockCal.dock_pose_yaw_rad
-        : values.dock_pose_yaw ?? 0;
+        : 0);
     const dockYawSource = "mowgli_robot.yaml";
 
     // Shared IMU yaw + dock pose calibration logic. The same hook backs
@@ -661,12 +661,15 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                     >
                         <Row gutter={[8, 4]} align="middle">
                             <Col span={12}>
-                                <Statistic
-                                    title="Heading (compass)"
+                                <Text type="secondary" style={{ fontSize: 11 }}>Heading (compass)</Text>
+                                <InputNumber
                                     value={roundTo(radToDeg(dockYawRad), 1)}
-                                    suffix="°"
+                                    onChange={(v) => onChange("dock_pose_yaw", roundTo(degToRad(v ?? 0), 4))}
+                                    step={1}
                                     precision={1}
-                                    valueStyle={{ fontSize: 18 }}
+                                    size="small"
+                                    style={{ width: "100%" }}
+                                    addonAfter="°"
                                 />
                             </Col>
                             <Col span={12}>
