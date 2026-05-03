@@ -44,7 +44,9 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         icon: "global",
         description: "GPS datum, NTRIP corrections, protocol",
         keys: [
-            "datum_lat", "datum_lon", "datum_alt", "gps_protocol", "gps_wait_after_undock_sec",
+            "datum_lat", "datum_lon", "datum_alt",
+            "gps_port", "gps_baudrate",
+            "gps_protocol", "gps_wait_after_undock_sec",
             "gps_timeout_sec", "ntrip_enabled", "ntrip_host", "ntrip_port",
             "ntrip_user", "ntrip_password", "ntrip_mountpoint",
         ],
@@ -270,17 +272,24 @@ export const useSettingsManager = () => {
     // dock_pose_x/y/yaw are excluded because they are written by the
     // calibration service and the "set dock pose" GUI action, not by
     // free-form numeric input — even though they live in mowgli_robot.yaml.
-    // slam_mode is excluded because slam_toolbox was removed in the
-    // FusionCore→iSAM2 migration; it survives in old YAMLs as dead config
-    // that would silently mislead anyone who edits it.
-    // removed when fusion_graph took over LiDAR-aware localization; it
-    // survives in old YAMLs as dead config that would silently mislead
-    // anyone who edits it.
+    // slam_mode / map_save_* are leftovers from the slam_toolbox era that
+    // ended with the FusionCore → iSAM2 migration; they survive in old
+    // YAMLs as dead config that would silently mislead anyone who edits
+    // them. gps_antenna_* is the legacy name for what is now gps_x/y/z —
+    // we read/write the new names and hide the old ones so operators don't
+    // edit a key that has no consumer. automatic_mode is OpenMower legacy
+    // only consumed by the migration script, not by ROS2 itself.
     const HIDDEN_FROM_ADVANCED = new Set([
         "dock_pose_x",
         "dock_pose_y",
         "dock_pose_yaw",
         "slam_mode",
+        "map_save_on_dock",
+        "map_save_path",
+        "gps_antenna_x",
+        "gps_antenna_y",
+        "gps_antenna_z",
+        "automatic_mode",
     ]);
     const advancedKeys = useMemo(() => {
         const knownKeys = new Set(

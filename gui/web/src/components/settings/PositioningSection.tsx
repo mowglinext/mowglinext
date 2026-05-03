@@ -87,6 +87,40 @@ export const PositioningSection: React.FC<Props> = ({ values, onChange }) => {
                 </Space>
             </Card>
 
+            {/* Serial link */}
+            <Card size="small" title="GPS Serial Link" style={{ marginBottom: 16 }}>
+                <Form layout="vertical" size="small">
+                    <Row gutter={[16, 0]}>
+                        <Col xs={24} sm={12}>
+                            <Form.Item label="Device Port" tooltip="Serial device path inside the GPS container — udev maps the USB receiver to this path">
+                                <Input
+                                    value={values.gps_port ?? "/dev/gps"}
+                                    onChange={(e) => onChange("gps_port", e.target.value)}
+                                    placeholder="/dev/gps"
+                                />
+                            </Form.Item>
+                        </Col>
+                        <Col xs={24} sm={12}>
+                            <Form.Item label="Baud Rate" tooltip="Serial baud rate. F9P defaults to 460800; LC29H factory-set to 115200.">
+                                <Select
+                                    value={values.gps_baudrate ?? 460800}
+                                    onChange={(v) => onChange("gps_baudrate", v)}
+                                    options={[
+                                        { value: 9600, label: "9600" },
+                                        { value: 38400, label: "38400" },
+                                        { value: 57600, label: "57600" },
+                                        { value: 115200, label: "115200" },
+                                        { value: 230400, label: "230400" },
+                                        { value: 460800, label: "460800" },
+                                        { value: 921600, label: "921600" },
+                                    ]}
+                                />
+                            </Form.Item>
+                        </Col>
+                    </Row>
+                </Form>
+            </Card>
+
             {/* Protocol & Timeouts */}
             <Card size="small" title="Protocol & Timeouts" style={{ marginBottom: 16 }}>
                 <Form layout="vertical" size="small">
