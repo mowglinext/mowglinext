@@ -58,6 +58,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<NavigateInsideBoundary>("NavigateInsideBoundary");
   factory.registerNodeType<BackUp>("BackUp");
   factory.registerNodeType<ClearCommand>("ClearCommand");
+  factory.registerNodeType<EndSession>("EndSession");
   factory.registerNodeType<IncrementSkippedSwaths>("IncrementSkippedSwaths");
   factory.registerNodeType<SaveObstacles>("SaveObstacles");
   factory.registerNodeType<SetNavMode>("SetNavMode");

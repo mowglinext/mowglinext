@@ -103,9 +103,32 @@ BT::NodeStatus ClearCommand::tick()
               "ClearCommand: resetting current_command from %u to 0",
               ctx->current_command);
   ctx->current_command = 0;
-  // Per-session flags reset here so the next session's seeding nodes
-  // actually run instead of short-circuiting on stale state.
+  // Note: session-scoped flags (yaw_seeded_this_session, skipped_swaths) are
+  // intentionally NOT touched here. ClearCommand is invoked from mid-session
+  // error handlers (UndockFailed, RainTimeout, ChargerFailed,
+  // ResumeUndockOrAbort), and resetting yaw_seeded_this_session there caused
+  // SeedYawFromMotion to re-drive 1 m forward on the next ReactiveSequence
+  // re-tick of UndockOrSkip — even when the dock_yaw seed was already healthy.
+  // Use EndSession at the real session boundaries instead.
+  return BT::NodeStatus::SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
+// EndSession
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus EndSession::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "EndSession: clearing per-session flags "
+              "(yaw_seeded=%s, skipped_swaths=%d, undock_recorded=%s)",
+              ctx->yaw_seeded_this_session ? "true" : "false",
+              ctx->skipped_swaths,
+              ctx->undock_start_recorded ? "true" : "false");
   ctx->yaw_seeded_this_session = false;
+  ctx->skipped_swaths = 0;
+  ctx->undock_start_recorded = false;
   return BT::NodeStatus::SUCCESS;
 }
 
