@@ -12,6 +12,7 @@ import {
     Space,
     Statistic,
     Table,
+    Tabs,
     Tag,
     Typography,
 } from "antd";
@@ -1468,20 +1469,51 @@ export const DiagnosticsPage = () => {
         );
     }
 
+    // Desktop: 5 tabs to keep the page from sprawling. Health bar and (when
+    // non-empty) Alerts stay pinned at the top so an oncall operator never
+    // has to dig through tabs to see whether something is on fire.
+    const tabItems = [
+        {
+            key: "system",
+            label: <Space><CloudServerOutlined/> System</Space>,
+            children: <Space direction="vertical" size="middle" style={{width: "100%"}}>
+                {sectionSystem}
+                {sectionRosDiagnostics}
+            </Space>,
+        },
+        {
+            key: "localization",
+            label: <Space><CompassOutlined/> Localization</Space>,
+            children: <Space direction="vertical" size="middle" style={{width: "100%"}}>
+                {sectionLocalization}
+                {sectionFusionGraph}
+                {sectionHeadingSources}
+            </Space>,
+        },
+        {
+            key: "robot",
+            label: <Space><ApiOutlined/> Robot</Space>,
+            children: <Space direction="vertical" size="middle" style={{width: "100%"}}>
+                {sectionBtCoverage}
+                {sectionSensors}
+            </Space>,
+        },
+        {
+            key: "calibration",
+            label: <Space><CompassOutlined/> Calibration</Space>,
+            children: <Space direction="vertical" size="middle" style={{width: "100%"}}>
+                {sectionCrossChecks}
+                {sectionCalibrationStatus}
+            </Space>,
+        },
+    ];
+
     return (
-        <Row gutter={[16, 16]}>
-            <Col span={24}>{healthBar}</Col>
-            {sectionAlerts && <Col span={24}>{sectionAlerts}</Col>}
-            <Col span={24}>{sectionSystem}</Col>
-            <Col span={24}>{sectionLocalization}</Col>
-            {sectionFusionGraph && <Col span={24}>{sectionFusionGraph}</Col>}
-            <Col span={24}>{sectionHeadingSources}</Col>
-            <Col span={24}>{sectionBtCoverage}</Col>
-            <Col span={24}>{sectionCrossChecks}</Col>
-            <Col span={24}>{sectionCalibrationStatus}</Col>
-            <Col span={24}>{sectionSensors}</Col>
-            <Col span={24}>{sectionRosDiagnostics}</Col>
-        </Row>
+        <Space direction="vertical" size="middle" style={{width: "100%"}}>
+            {healthBar}
+            {sectionAlerts}
+            <Tabs defaultActiveKey="system" items={tabItems} size="large"/>
+        </Space>
     );
 };
 
