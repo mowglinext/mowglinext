@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"syscall"
 	"time"
 
 	"os"
@@ -17,6 +18,41 @@ import (
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
+
+// writePreservingPerms writes content to path, preserving the existing
+// file's mode and uid/gid when the file already exists. When the file
+// is being created for the first time, it is written world-writable
+// (0664) so other processes (ROS containers running as a different
+// user) can still update it. The previous behavior would silently
+// rewrite the file as owned by the GUI process with mode 0644, which
+// locked out the calibration service and the line-splice writers in
+// hardware_bridge / map_server.
+func writePreservingPerms(path string, content []byte) error {
+	mode := os.FileMode(0664)
+	var uid, gid int = -1, -1
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			uid = int(stat.Uid)
+			gid = int(stat.Gid)
+		}
+	}
+	if err := os.WriteFile(path, content, mode); err != nil {
+		return err
+	}
+	// os.WriteFile only applies the mode on creation; force it after
+	// every write so an externally-changed mode does not stick.
+	if err := os.Chmod(path, mode); err != nil {
+		return err
+	}
+	if uid >= 0 && gid >= 0 {
+		// Best-effort: chown can fail when the GUI process is not root
+		// (e.g. running directly on the host). In that case the file
+		// was opened in-place so ownership is already preserved.
+		_ = os.Chown(path, uid, gid)
+	}
+	return nil
+}
 
 func SettingsRoutes(r *gin.RouterGroup, dbProvider types.IDBProvider) {
 	GetSettings(r, dbProvider)
@@ -477,7 +513,7 @@ func PostSettings(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRoutes 
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
 		}
-		err = os.WriteFile(string(mowerConfigFile), []byte(fileContent), 0644)
+		err = writePreservingPerms(string(mowerConfigFile), []byte(fileContent))
 		if err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
@@ -714,7 +750,7 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
 		}
-		if err := os.WriteFile(string(configFilePath), []byte(header+string(out)), 0644); err != nil {
+		if err := writePreservingPerms(string(configFilePath), []byte(header+string(out))); err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
 		}

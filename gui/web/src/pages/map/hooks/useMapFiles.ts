@@ -26,6 +26,8 @@ interface UseMapFilesOptions {
     datum: [number, number, number];
     notification: NotificationInstance;
     guiApi: Api<unknown>;
+    dockDirty: boolean;
+    setDockDirty: (v: boolean) => void;
 }
 
 export function useMapFiles({
@@ -40,6 +42,8 @@ export function useMapFiles({
     datum,
     notification,
     guiApi,
+    dockDirty,
+    setDockDirty,
 }: UseMapFilesOptions) {
     async function handleSaveMap() {
         const areas: Record<string, MowgliMapArea[]> = {
@@ -142,9 +146,13 @@ export function useMapFiles({
             });
         }
 
-        // Save dock position from the edited features state (not the stale map object)
+        // Save dock position only when the user actually edited it.
+        // Otherwise the dock feature reflects whatever the /map topic
+        // last published, which can be stale relative to the dock pose
+        // persisted in mowgli_robot.yaml (e.g. just-written by the
+        // calibration service). Saving unconditionally would clobber it.
         const dockFeature = features["dock"];
-        if (dockFeature instanceof DockFeatureBase) {
+        if (dockDirty && dockFeature instanceof DockFeatureBase) {
             const coords = dockFeature.getCoordinates();
             const rosCoords = itranspose(offsetX, offsetY, datum, coords[1], coords[0]);
             const heading = dockFeature.getHeading();
@@ -164,6 +172,7 @@ export function useMapFiles({
                     },
                 },
             });
+            setDockDirty(false);
         }
     }
 
