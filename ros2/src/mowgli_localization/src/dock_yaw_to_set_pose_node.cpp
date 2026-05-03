@@ -42,6 +42,19 @@ public:
     qos_sensor.best_effort();
     qos_sensor.durability_volatile();
 
+    // The set_pose seed fires once (rising edge of is_charging) and the
+    // map-frame localizer has to receive it to bootstrap. With VOLATILE
+    // pub QoS, a subscriber that hasn't finished discovery loses the
+    // message — observed on 2026-05-03 after a force-recreate when
+    // fusion_graph_node started later than dock_yaw_to_set_pose. Use
+    // TRANSIENT_LOCAL with depth-1 so a late-joining subscriber that
+    // also opts in to TRANSIENT_LOCAL gets the last seed automatically.
+    // Subscribers with default VOLATILE QoS keep receiving real-time
+    // publishes as before (TL pub ↔ VOLATILE sub is compatible per DDS).
+    rclcpp::QoS qos_seed(rclcpp::KeepLast(1));
+    qos_seed.reliable();
+    qos_seed.transient_local();
+
     sub_status_ = create_subscription<mowgli_interfaces::msg::Status>(
         "/hardware_bridge/status",
         qos_reliable,
@@ -66,14 +79,14 @@ public:
 
     pub_map_ =
         create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/ekf_map_node/set_pose",
-                                                                        qos_reliable);
+                                                                        qos_seed);
     pub_odom_ =
-        create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/set_pose", qos_reliable);
+        create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/set_pose", qos_seed);
     // Dual-publish to fusion_graph_node: works regardless of which
     // localizer is the active map-frame primary. The unused publisher
     // costs ~zero (no subscribers).
     pub_fg_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
-        "/fusion_graph_node/set_pose", qos_reliable);
+        "/fusion_graph_node/set_pose", qos_seed);
 
     yaw_var_ = declare_parameter<double>("seed_yaw_variance", 0.1);
 

@@ -249,8 +249,21 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   // dual-publishes to /ekf_map_node/set_pose AND to this topic so
   // the dock-yaw seeding works regardless of which localizer is the
   // map-frame primary.
+  //
+  // QoS: TRANSIENT_LOCAL with depth-1, matching dock_yaw_to_set_pose's
+  // publisher. The boot seed is a one-shot rising-edge event; with
+  // VOLATILE either side, a subscriber that hasn't finished discovery
+  // when the message is published silently loses it and the graph
+  // never bootstraps (observed 2026-05-03 after a force-recreate). With
+  // TL on both sides, a late-joining subscriber gets the last seed
+  // pose latched on connect — node bootstraps without manual republish.
+  rclcpp::QoS set_pose_qos(rclcpp::KeepLast(1));
+  set_pose_qos.reliable();
+  set_pose_qos.transient_local();
   sub_set_pose_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
-      "~/set_pose", 1, std::bind(&FusionGraphNode::OnSetPose, this, std::placeholders::_1));
+      "~/set_pose",
+      set_pose_qos,
+      std::bind(&FusionGraphNode::OnSetPose, this, std::placeholders::_1));
 
   // ── Save-graph service ──────────────────────────────────────────
   // Trigger from the GUI / a BT node when transitioning out of
