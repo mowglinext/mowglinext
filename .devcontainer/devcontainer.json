@@ -9,7 +9,7 @@
   // 16-core recommended for ~1x realtime simulation.
   "hostRequirements": {
     "cpus": 8,
-    "memory": "16gb",
+    "memory": "8gb",
     "storage": "64gb"
   },
 
