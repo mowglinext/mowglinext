@@ -144,7 +144,16 @@ BT::NodeStatus ComputeCoveragePath::onStart()
   // F2C 1.2.1. Empty mode strings let the server fall back to the
   // CONSTANT/0.30 m headland and BOUSTROPHEDON route in nav2_params.yaml.
   goal.headland_mode.mode = "";
-  goal.headland_mode.width = 0.30f;
+  // Bumped 0.30 → 0.50: F2C insets the boustrophedon strips by headland
+  // width before generating them, so 0.50 m gives MPPI a 50 cm safety
+  // band between strip endpoints and the polygon perimeter. With 0.30 m
+  // the strips ended right at the boundary and a 0.10 m MPPI tracking
+  // overshoot at strip-end U-turns tipped the robot past the keepout
+  // edge (BoundaryGuard fires, BackUp recovery cycles through, loop).
+  // Cost: a 50 cm border around the polygon isn't mowed by strips
+  // (it'll be picked up by the first headland pass when we re-enable
+  // generate_headland's perimeter run, task #21).
+  goal.headland_mode.width = 0.50f;
 
   goal.swath_mode.objective = "LENGTH";
   goal.swath_mode.mode = "SET_ANGLE";
