@@ -98,11 +98,11 @@ sim: sim-stop
 e2e-test: sim-stop build
 	@echo "Starting simulation + E2E test..."
 	@echo ""
-	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
-	source install/setup.bash && \
-	export DISPLAY=:99 && \
+	source /opt/ros/$(ROS_DISTRO)/setup.bash; \
+	source install/setup.bash; \
+	export DISPLAY=:99; \
 	ros2 launch mowgli_bringup sim_full_system.launch.py \
-	  headless:=true use_rviz:=false &
+	  headless:=true use_rviz:=false & \
 	SIM_PID=$$!; \
 	echo "Simulation PID: $$SIM_PID"; \
 	echo "Waiting 90s for Nav2 to activate..."; \
@@ -118,10 +118,10 @@ e2e-test: sim-stop build
 e2e-test-no-lidar: sim-stop build
 	@echo "Starting no-LiDAR E2E test (GPS-only simulation)..."
 	@echo ""
-	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
-	source install/setup.bash && \
+	source /opt/ros/$(ROS_DISTRO)/setup.bash; \
+	source install/setup.bash; \
 	ros2 launch mowgli_bringup sim_full_system.launch.py \
-	  headless:=true use_rviz:=false &
+	  headless:=true use_rviz:=false & \
 	SIM_PID=$$!; \
 	echo "Simulation PID: $$SIM_PID"; \
 	echo "Waiting 90s for Nav2 to activate..."; \
