@@ -217,22 +217,24 @@ controller_server:
       vy_std: 0.0                   # diff-drive — no lateral
       wz_std: 0.80                  # broad enough to sample up to wz_max=1.5
       vx_max: 0.30
-      # vx_min was -0.20 to allow "brief reverse for diff-drive recovery", but
-      # in practice MPPI exploited that to trace the boustrophedon path
-      # *backwards* along its length: cross-track stayed <50 mm (the path was
-      # being followed perfectly geometrically) while the nearest-path index
-      # walked monotonically downward (2041 → 1378 in 40 s). Reversing along
-      # the path was cheaper than "rotate 90° + drive forward" for the cost
-      # function, so the optimum got stuck in the wrong direction. Forbidding
-      # reverse (vx_min=0) leaves MPPI with rotate-and-go-forward as the only
-      # path-following option, which is what we actually want during
-      # coverage. The dedicated BackUp action (Nav2 behavior_server) is
-      # still used for undock and BoundaryGuard recovery; those don't go
-      # through MPPI.
-      vx_min: 0.0
+      # vx_min: 0.10 (was 0.0 → before that -0.20). With vx_min=0 MPPI was
+      # converging on vx=0 + slow ω: rotating in place was the cost-function
+      # optimum and PreferForward couldn't out-vote it because forward
+      # motion close to a path centerline gave roughly the same trajectory
+      # cost as rotating in place near it. Forcing vx_min > 0 means every
+      # sampled trajectory MUST move forward — the optimum has to commit
+      # to along-path motion. 0.10 m/s sits just above the firmware
+      # PWM-deadband and well below the 0.20 m/s mowing target so MPPI
+      # still has lots of headroom to slow at strip ends.
+      vx_min: 0.10
       wz_max: 1.5
-      ax_max: 0.50
-      ax_min: -0.50
+      # Linear accel doubled (0.50 → 1.0). At 0.50 m/s² and 0.1 s dt MPPI
+      # could only ramp vx by 0.05 m/s per cycle — six full ticks (0.6 s)
+      # to climb from 0 to 0.30 m/s, during which PathFollow/PreferForward
+      # had to compete with the still-low forward cost on near-zero
+      # trajectories. 1.0 m/s² gets to cruise speed in 0.3 s.
+      ax_max: 1.0
+      ax_min: -1.0
       az_max: 2.0
       iteration_count: 1
       # Coverage paths can start far from the robot (F2C path's first
@@ -273,16 +275,16 @@ controller_server:
         cost_power: 1
         cost_weight: 3.0
         threshold_to_consider: 0.5
-      # PreferForwardCritic was bumped to 12 to stop "rotate in place" being
-      # cheapest, but on this robot's tight strip-end U-turns that backfired:
-      # MPPI couldn't commit to a real rotation, instead converging on
-      # vx≈-0.014 m/s + ω≈-0.27 rad/s (slow drift+spin). Drop to 5 — the
-      # rotation_shim now handles big heading errors > angular_dist_threshold,
-      # so MPPI no longer needs heavy forward bias to avoid rotation traps.
+      # PreferForwardCritic bumped back to 10 (was 5). With vx_min=0.10
+      # the rotate-in-place trap from the original 12-weight tuning is
+      # gone (MPPI can't sit at vx=0 anymore), but we still want the
+      # "drive forward along the path" cost to dominate over PathAlign's
+      # cross-track minimisation so the optimiser commits to along-path
+      # progress instead of looping near the path.
       PreferForwardCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
+        cost_weight: 10.0
         threshold_to_consider: 0.5
       ObstaclesCritic:
         enabled: true
