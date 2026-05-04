@@ -97,9 +97,12 @@ class NoLidarE2ETestNode(Node):
             self._on_bt_status,
             reliable_qos,
         )
+        # opennav_coverage publishes the planned per-area path on
+        # /coverage_server/coverage_plan (the old /mowgli/coverage/path
+        # was the cell-strip planner output and no longer exists).
         self.create_subscription(
             Path,
-            "/mowgli/coverage/path",
+            "/coverage_server/coverage_plan",
             self._on_coverage_path,
             reliable_qos,
         )

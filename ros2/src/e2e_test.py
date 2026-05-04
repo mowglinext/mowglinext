@@ -174,9 +174,13 @@ class E2ETestNode(Node):
             self._on_bt_status,
             reliable_qos,
         )
+        # opennav_coverage publishes the planned per-area path on
+        # /coverage_server/coverage_plan (visualizer topic). The old
+        # coverage_planner_node is gone — this is now Fields2Cover output:
+        # one full path per area (headland inset + swaths + transitions).
         self.create_subscription(
             Path,
-            "/coverage_planner_node/coverage_path",
+            "/coverage_server/coverage_plan",
             self._on_coverage_path,
             transient_qos,
         )
