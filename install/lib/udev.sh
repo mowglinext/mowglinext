@@ -95,8 +95,15 @@ build_dynamic_udev_rules() {
   echo "# Mowgli II - dynamic rules from current hardware selection"
   echo "# ========================================================="
 
-  if by_id_path="$(find_serial_by_id "*Mowgli*")"; then
-    emit_by_id_udev_rule "$by_id_path" "mowgli"
+  # Mowgli STM32 board
+  if [ "${HARDWARE_BACKEND:-mowgli}" = "mowgli" ] && [ -n "${MOWGLI_BY_ID:-}" ] && [ -e "${MOWGLI_BY_ID}" ]; then
+    if [ -L "$MOWGLI_BY_ID" ]; then
+      emit_by_id_udev_rule "$MOWGLI_BY_ID" "mowgli"
+    else
+      echo "KERNEL==\"$(basename "$MOWGLI_BY_ID")\", SYMLINK+=\"mowgli\", MODE=\"0666\""
+    fi
+  elif [ "${HARDWARE_BACKEND:-mowgli}" = "mowgli" ] && [ -n "${MOWGLI_PORT:-}" ] && [[ "${MOWGLI_PORT}" == /dev/tty* ]]; then
+    echo "KERNEL==\"$(basename "$MOWGLI_PORT")\", SYMLINK+=\"mowgli\", MODE=\"0666\""
   fi
 
   # MAVROS uses the explicitly selected device. Prefer by-id when selected,
@@ -108,12 +115,20 @@ build_dynamic_udev_rules() {
       echo "KERNEL==\"$(basename "$MAVROS_BY_ID")\", SYMLINK+=\"mavros\", MODE=\"0666\""
     fi
   fi
+  elif [ "${HARDWARE_BACKEND:-mowgli}" = "mavros" ] && [ -n "${MAVROS_PORT:-}" ] && [[ "${MAVROS_PORT}" == /dev/tty* ]]; then
+    echo "KERNEL==\"$(basename "$MAVROS_PORT")\", SYMLINK+=\"mavros\", MODE=\"0666\""
+  fi
 
   # GPS principal
   if [ "${GPS_CONNECTION:-usb}" = "uart" ] && [ -n "${GPS_UART_DEVICE:-}" ]; then
     echo "KERNEL==\"$(basename "$GPS_UART_DEVICE")\", SYMLINK+=\"gps\", MODE=\"0666\""
+
   elif [ -n "${GPS_BY_ID:-}" ] && [ -e "${GPS_BY_ID}" ]; then
     emit_by_id_udev_rule "$GPS_BY_ID" "gps"
+
+  elif [ "${GPS_CONNECTION:-usb}" = "usb" ] && [ -n "${GPS_PORT:-}" ] && [[ "${GPS_PORT}" == /dev/tty* ]]; then
+    echo "KERNEL==\"$(basename "$GPS_PORT")\", SYMLINK+=\"gps\", MODE=\"0666\""
+
   elif [ "${HARDWARE_BACKEND:-mowgli}" != "mavros" ]; then
     case "${GNSS_BACKEND:-gps}" in
       ublox)
@@ -130,11 +145,10 @@ build_dynamic_udev_rules() {
         ;;
     esac
 
-    if [ -n "$by_id_path" ]; then
-      emit_by_id_udev_rule "$by_id_path" "gps"
-    fi
+  if [ -n "$by_id_path" ]; then
+    emit_by_id_udev_rule "$by_id_path" "gps"
   fi
-
+fi
   # GPS debug (miniUART only)
   if [ "${GPS_DEBUG_ENABLED:-false}" = "true" ] && [ -n "${GPS_DEBUG_UART_DEVICE:-}" ]; then
     echo "KERNEL==\"$(basename "$GPS_DEBUG_UART_DEVICE")\", SYMLINK+=\"gps_debug\", MODE=\"0666\""
