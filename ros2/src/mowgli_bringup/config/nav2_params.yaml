@@ -89,13 +89,20 @@ controller_server:
       xy_goal_tolerance: 0.30
       yaw_goal_tolerance: 0.5
 
-    # Coverage goal checker: used by FTC controller. Only checks position,
-    # not velocity. The FTC controller manages its own stopping logic.
+    # Coverage goal checker. Tightened from xy_goal_tolerance=0.5 m + stateful
+    # to a 0.20 m tolerance with stateful=false because the loose stateful
+    # configuration let MPPI shortcut the entire boustrophedon: any moment
+    # the robot brushed within 50 cm of the F2C path's last pose (the NE
+    # corner), the checker latched SUCCESS and FollowPath returned even
+    # though the strips hadn't been traced. Combined with the planned-path
+    # painting bug that meant 93.9% mow_progress reported after a single
+    # diagonal across the polygon. Tight non-stateful tolerance forces MPPI
+    # to actually arrive at the path's tail and dwell there.
     coverage_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.5
+      xy_goal_tolerance: 0.20
       yaw_goal_tolerance: 6.28  # Don't check yaw for coverage paths
-      stateful: true             # succeed once within tolerance, don't re-check
+      stateful: false
 
     # RPP for transit/dock navigation, wrapped in RotationShimController
     # to rotate-in-place toward the path before driving.

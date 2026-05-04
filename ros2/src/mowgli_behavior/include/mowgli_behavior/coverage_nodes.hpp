@@ -74,8 +74,11 @@ private:
 // ---------------------------------------------------------------------------
 // FollowCoveragePath — drive ctx->current_coverage_path with MPPI (single
 // FollowPath goal, blade ON for the whole path; MPPI deviates around dynamic
-// obstacles natively via ObstaclesCritic). On SUCCESS, calls /paint_swath
-// to mark mow_progress along the driven path.
+// obstacles natively via ObstaclesCritic). On SUCCESS, paints mow_progress
+// along the *actual* driven track (sampled by TF lookup at every tick),
+// not the planned path — otherwise an MPPI shortcut from start to a point
+// near the goal-tolerance fires the goal_checker and we'd report 100%
+// coverage despite the robot never having traversed the strips.
 // ---------------------------------------------------------------------------
 
 class FollowCoveragePath : public BT::StatefulActionNode
@@ -100,7 +103,8 @@ public:
 
 private:
   void setBladeEnabled(bool enabled);
-  void paintPath(const nav_msgs::msg::Path& path);
+  void paintTrajectory(const nav_msgs::msg::Path& trajectory);
+  void recordPose();
 
   rclcpp_action::Client<Nav2FollowPath>::SharedPtr follow_client_;
   rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr blade_client_;
@@ -108,6 +112,13 @@ private:
 
   std::shared_future<FollowGoalHandle::SharedPtr> follow_future_;
   FollowGoalHandle::SharedPtr follow_handle_;
+
+  // Driven-track accumulator: every tick we look up the latest
+  // map→base_footprint TF and append the robot's pose if it has moved
+  // > min_pose_step_m_ from the last sample. This is what gets painted
+  // into mow_progress on SUCCESS, instead of the planned path.
+  nav_msgs::msg::Path driven_trajectory_;
+  static constexpr double min_pose_step_m_ = 0.05;
 
   bool goal_sent_{false};
   bool blade_on_{false};

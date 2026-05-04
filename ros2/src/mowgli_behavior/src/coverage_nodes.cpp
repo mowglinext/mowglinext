@@ -338,6 +338,13 @@ BT::NodeStatus FollowCoveragePath::onStart()
   goal_sent_ = false;
   follow_handle_.reset();
 
+  // Reset the driven-track accumulator. Every onRunning tick we'll
+  // append the robot's current pose; on SUCCESS we paint mow_progress
+  // along *that* track, not along the planned path.
+  driven_trajectory_ = nav_msgs::msg::Path();
+  driven_trajectory_.header.frame_id = "map";
+  recordPose();
+
   Nav2FollowPath::Goal goal;
   goal.path = ctx->current_coverage_path;
   goal.controller_id = "FollowCoveragePath";
@@ -370,12 +377,20 @@ BT::NodeStatus FollowCoveragePath::onRunning()
     }
   }
 
+  // Sample the robot's current pose every tick into the driven-track
+  // accumulator (decimated by min_pose_step_m_). This is what we paint
+  // on SUCCESS — not the planned path.
+  recordPose();
+
   const auto status = follow_handle_->get_status();
 
   if (status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED)
   {
-    RCLCPP_INFO(ctx->node->get_logger(), "FollowCoveragePath: complete — painting mow_progress");
-    paintPath(ctx->current_coverage_path);
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "FollowCoveragePath: complete — painting %zu driven poses (planned: %zu)",
+                driven_trajectory_.poses.size(),
+                ctx->current_coverage_path.poses.size());
+    paintTrajectory(driven_trajectory_);
     setBladeEnabled(false);
     follow_handle_.reset();
     return BT::NodeStatus::SUCCESS;
@@ -384,7 +399,12 @@ BT::NodeStatus FollowCoveragePath::onRunning()
   if (status == action_msgs::msg::GoalStatus::STATUS_ABORTED ||
       status == action_msgs::msg::GoalStatus::STATUS_CANCELED)
   {
-    RCLCPP_WARN(ctx->node->get_logger(), "FollowCoveragePath: aborted/canceled");
+    // Even on a partial drive we paint what the robot actually visited so
+    // a re-plan from this state knows which cells are already done.
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowCoveragePath: aborted/canceled — painting %zu driven poses anyway",
+                driven_trajectory_.poses.size());
+    paintTrajectory(driven_trajectory_);
     setBladeEnabled(false);
     follow_handle_.reset();
     return BT::NodeStatus::FAILURE;
@@ -419,10 +439,43 @@ void FollowCoveragePath::setBladeEnabled(bool enabled)
   blade_on_ = enabled;
 }
 
-void FollowCoveragePath::paintPath(const nav_msgs::msg::Path& path)
+void FollowCoveragePath::recordPose()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
-  if (path.poses.empty())
+  geometry_msgs::msg::TransformStamped tf;
+  try
+  {
+    tf = ctx->tf_buffer->lookupTransform(
+        "map", "base_footprint", tf2::TimePointZero, tf2::durationFromSec(0.05));
+  }
+  catch (const tf2::TransformException&)
+  {
+    return;  // skip this tick — TF not ready
+  }
+  const double x = tf.transform.translation.x;
+  const double y = tf.transform.translation.y;
+  if (!driven_trajectory_.poses.empty())
+  {
+    const auto& last = driven_trajectory_.poses.back().pose.position;
+    const double dx = x - last.x;
+    const double dy = y - last.y;
+    if (dx * dx + dy * dy < min_pose_step_m_ * min_pose_step_m_)
+      return;  // didn't move far enough — drop sample
+  }
+  geometry_msgs::msg::PoseStamped ps;
+  ps.header.frame_id = "map";
+  ps.header.stamp = ctx->node->now();
+  ps.pose.position.x = x;
+  ps.pose.position.y = y;
+  ps.pose.position.z = 0.0;
+  ps.pose.orientation = tf.transform.rotation;
+  driven_trajectory_.poses.push_back(ps);
+}
+
+void FollowCoveragePath::paintTrajectory(const nav_msgs::msg::Path& trajectory)
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  if (trajectory.poses.empty())
     return;
   if (!paint_client_)
   {
@@ -436,7 +489,7 @@ void FollowCoveragePath::paintPath(const nav_msgs::msg::Path& path)
     return;
   }
   auto req = std::make_shared<mowgli_interfaces::srv::PaintSwath::Request>();
-  req->swath_path = path;
+  req->swath_path = trajectory;
   paint_client_->async_send_request(req);
 }
 
