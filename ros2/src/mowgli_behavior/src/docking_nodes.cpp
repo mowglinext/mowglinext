@@ -15,8 +15,6 @@
 
 #include "mowgli_behavior/docking_nodes.hpp"
 
-#include "action_msgs/msg/goal_status.hpp"
-
 namespace mowgli_behavior
 {
 
@@ -59,6 +57,7 @@ BT::NodeStatus DockRobot::onStart()
   auto send_goal_options = rclcpp_action::Client<DockAction>::SendGoalOptions{};
   goal_handle_future_ = action_client_->async_send_goal(goal_msg, send_goal_options);
   goal_handle_.reset();
+  result_requested_ = false;
 
   RCLCPP_INFO(ctx->node->get_logger(),
               "DockRobot: goal sent (dock_id='%s', dock_type='%s')",
@@ -86,24 +85,47 @@ BT::NodeStatus DockRobot::onRunning()
     }
   }
 
-  const auto status = goal_handle_->get_status();
-
-  switch (status)
+  // Request the action result asynchronously once. Polling its future
+  // (instead of get_status() alone) gives us the wrapped Result message
+  // on terminal states, which carries error_code + error_msg — the
+  // status enum alone only says "aborted/canceled/succeeded".
+  if (!result_requested_)
   {
-    case action_msgs::msg::GoalStatus::STATUS_SUCCEEDED:
-      RCLCPP_INFO(ctx->node->get_logger(), "DockRobot: docking succeeded");
+    result_future_ = action_client_->async_get_result(goal_handle_);
+    result_requested_ = true;
+  }
+
+  if (result_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+  {
+    return BT::NodeStatus::RUNNING;
+  }
+
+  const auto wrapped = result_future_.get();
+  switch (wrapped.code)
+  {
+    case rclcpp_action::ResultCode::SUCCEEDED:
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "DockRobot: docking succeeded (retries=%u)",
+                  wrapped.result ? wrapped.result->num_retries : 0u);
       return BT::NodeStatus::SUCCESS;
 
-    case action_msgs::msg::GoalStatus::STATUS_ABORTED:
-      RCLCPP_WARN(ctx->node->get_logger(), "DockRobot: docking aborted");
+    case rclcpp_action::ResultCode::ABORTED:
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "DockRobot: docking aborted (error_code=%u, retries=%u, msg='%s')",
+                  wrapped.result ? wrapped.result->error_code : 999u,
+                  wrapped.result ? wrapped.result->num_retries : 0u,
+                  wrapped.result ? wrapped.result->error_msg.c_str() : "");
       return BT::NodeStatus::FAILURE;
 
-    case action_msgs::msg::GoalStatus::STATUS_CANCELED:
+    case rclcpp_action::ResultCode::CANCELED:
       RCLCPP_WARN(ctx->node->get_logger(), "DockRobot: docking canceled");
       return BT::NodeStatus::FAILURE;
 
     default:
-      return BT::NodeStatus::RUNNING;
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "DockRobot: docking ended with unknown ResultCode=%d",
+                  static_cast<int>(wrapped.code));
+      return BT::NodeStatus::FAILURE;
   }
 }
 
@@ -149,6 +171,7 @@ BT::NodeStatus UndockRobot::onStart()
   auto send_goal_options = rclcpp_action::Client<UndockAction>::SendGoalOptions{};
   goal_handle_future_ = action_client_->async_send_goal(goal_msg, send_goal_options);
   goal_handle_.reset();
+  result_requested_ = false;
 
   RCLCPP_INFO(ctx->node->get_logger(),
               "UndockRobot: goal sent (dock_type='%s')",
@@ -175,24 +198,40 @@ BT::NodeStatus UndockRobot::onRunning()
     }
   }
 
-  const auto status = goal_handle_->get_status();
-
-  switch (status)
+  if (!result_requested_)
   {
-    case action_msgs::msg::GoalStatus::STATUS_SUCCEEDED:
+    result_future_ = action_client_->async_get_result(goal_handle_);
+    result_requested_ = true;
+  }
+
+  if (result_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+  {
+    return BT::NodeStatus::RUNNING;
+  }
+
+  const auto wrapped = result_future_.get();
+  switch (wrapped.code)
+  {
+    case rclcpp_action::ResultCode::SUCCEEDED:
       RCLCPP_INFO(ctx->node->get_logger(), "UndockRobot: undocking succeeded");
       return BT::NodeStatus::SUCCESS;
 
-    case action_msgs::msg::GoalStatus::STATUS_ABORTED:
-      RCLCPP_WARN(ctx->node->get_logger(), "UndockRobot: undocking aborted");
+    case rclcpp_action::ResultCode::ABORTED:
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "UndockRobot: undocking aborted (error_code=%u, msg='%s')",
+                  wrapped.result ? wrapped.result->error_code : 999u,
+                  wrapped.result ? wrapped.result->error_msg.c_str() : "");
       return BT::NodeStatus::FAILURE;
 
-    case action_msgs::msg::GoalStatus::STATUS_CANCELED:
+    case rclcpp_action::ResultCode::CANCELED:
       RCLCPP_WARN(ctx->node->get_logger(), "UndockRobot: undocking canceled");
       return BT::NodeStatus::FAILURE;
 
     default:
-      return BT::NodeStatus::RUNNING;
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "UndockRobot: undocking ended with unknown ResultCode=%d",
+                  static_cast<int>(wrapped.code));
+      return BT::NodeStatus::FAILURE;
   }
 }
 

@@ -63,6 +63,8 @@ private:
   rclcpp_action::Client<DockAction>::SharedPtr action_client_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;
+  std::shared_future<GoalHandle::WrappedResult> result_future_;
+  bool result_requested_{false};
 };
 
 // ---------------------------------------------------------------------------
@@ -97,6 +99,8 @@ private:
   rclcpp_action::Client<UndockAction>::SharedPtr action_client_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;
+  std::shared_future<GoalHandle::WrappedResult> result_future_;
+  bool result_requested_{false};
 };
 
 // ---------------------------------------------------------------------------
