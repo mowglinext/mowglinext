@@ -6,7 +6,6 @@ import {
     AbsolutePose,
     LaserScan,
     Map as MapType,
-    MarkerArray,
     ObstacleArray,
     OccupancyGrid,
     Path,
@@ -47,7 +46,7 @@ export function useMapStreams({
     robotPoseRef,
 }: UseMapStreamsOptions) {
     const [map, setMap] = useState<MapType | undefined>(undefined);
-    const [path, setPath] = useState<MarkerArray | undefined>(undefined);
+    const [path, setPath] = useState<Path | undefined>(undefined);
     const [plan, setPlan] = useState<Path | undefined>(undefined);
     const [lidarCollection, setLidarCollection] = useState<GeoJSON.FeatureCollection>({
         type: "FeatureCollection",
@@ -133,7 +132,12 @@ export function useMapStreams({
             console.log({ message: "PATH Stream connected" });
         },
         (e) => {
-            const parse = JSON.parse(e) as MarkerArray;
+            // /FollowCoveragePath/global_plan is nav_msgs/Path. (It used
+            // to be a visualization MarkerArray under the cell-strip
+            // planner, which is why this parser was previously typed as
+            // MarkerArray — the type was a relic that never matched the
+            // wire format after the opennav_coverage migration.)
+            const parse = JSON.parse(e) as Path;
             setPath(parse);
         }
     );
