@@ -244,10 +244,23 @@ controller_server:
       ax_min: -1.0
       az_max: 2.0
       iteration_count: 1
-      # Coverage paths can start far from the robot (F2C path's first
-      # vertex is on the polygon perimeter, not at the dock).
-      prune_distance: 50.0
-      max_robot_pose_search_dist: 50.0
+      # prune_distance: 50 → 2.0. The 50 m value was a workaround for
+      # "Resulting plan has 0 poses" when MPPI's transformPath couldn't
+      # reach the F2C path's first vertex (way outside the local costmap)
+      # — but that's now fixed by ComputeCoveragePath prepending the robot's
+      # current pose to the path. With prune_distance=50 the
+      # transformed_global_plan was the *entire* 3045-pose F2C path, so
+      # PathFollowCritic's offset_from_furthest=5 target landed at the
+      # path's last pose (the NE corner) regardless of where the robot was.
+      # MPPI's optimum: drive in a straight line toward the corner, ignoring
+      # all 300 m of strip in between. With prune_distance=2 m, the local
+      # plan sees ~40 path samples ahead — PathFollow's target is now
+      # always a few metres of along-path progress away, so MPPI commits
+      # to tracking the strip rather than shortcutting to the end.
+      # max_robot_pose_search_dist stays generous so robot pose can be
+      # found even after a brief drift; only prune_distance is tightened.
+      prune_distance: 2.0
+      max_robot_pose_search_dist: 5.0
       transform_tolerance: 0.5
       temperature: 0.3
       gamma: 0.015
