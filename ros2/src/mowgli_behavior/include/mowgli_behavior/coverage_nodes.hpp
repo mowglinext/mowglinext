@@ -62,6 +62,23 @@ public:
   BT::NodeStatus onRunning() override;
   void onHalted() override;
 
+  // ── Hole-filter geometry helpers (public for unit-test access) ───────────
+  // These are pure shoelace / ray-casting / point-segment-distance routines
+  // exposed here so test_coverage_nodes.cpp can verify the filter without
+  // standing up an action server.
+  static double polygonArea(const geometry_msgs::msg::Polygon& p);
+  static bool pointInPolygon(double x, double y, const geometry_msgs::msg::Polygon& p);
+  static double distanceToPolygonBoundary(double x, double y,
+                                          const geometry_msgs::msg::Polygon& p);
+  /// Returns true when @p obs is safe to send to F2C as a hole inside @p field:
+  ///   - has ≥ 3 points and area ≥ @p min_area_m2
+  ///   - every vertex lies inside @p field with ≥ @p min_clearance_m to its
+  ///     boundary (so the hole survives F2C's headland inset)
+  static bool isHoleSafeForF2C(const geometry_msgs::msg::Polygon& obs,
+                               const geometry_msgs::msg::Polygon& field,
+                               double min_area_m2,
+                               double min_clearance_m);
+
 private:
   rclcpp_action::Client<CoverageAction>::SharedPtr action_client_;
   rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr area_client_;

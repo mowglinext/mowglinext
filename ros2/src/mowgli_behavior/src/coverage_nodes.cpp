@@ -169,68 +169,14 @@ BT::NodeStatus ComputeCoveragePath::onStart()
   constexpr std::size_t kMaxF2cHoles = 16;
   const double min_clearance = static_cast<double>(kHeadlandWidth) + kHoleBoundaryClearanceM;
 
-  // Shoelace area + ray-cast point-in-polygon — local helpers so this
-  // node has no extra dependencies (and the polygons are small enough
-  // that Boost.Geometry would be overkill).
-  auto poly_area = [](const geometry_msgs::msg::Polygon& p) {
-    if (p.points.size() < 3) return 0.0;
-    double a = 0.0;
-    const auto& pts = p.points;
-    for (std::size_t i = 0, n = pts.size(); i < n; ++i) {
-      const auto& cur = pts[i];
-      const auto& nxt = pts[(i + 1) % n];
-      a += static_cast<double>(cur.x) * static_cast<double>(nxt.y) -
-           static_cast<double>(nxt.x) * static_cast<double>(cur.y);
-    }
-    return std::abs(a) * 0.5;
-  };
-  auto point_in_poly = [](double x, double y,
-                          const geometry_msgs::msg::Polygon& p) {
-    bool inside = false;
-    const auto& pts = p.points;
-    for (std::size_t i = 0, j = pts.size() - 1, n = pts.size(); i < n; j = i++) {
-      const double xi = pts[i].x, yi = pts[i].y;
-      const double xj = pts[j].x, yj = pts[j].y;
-      const bool intersects = ((yi > y) != (yj > y)) &&
-                              (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi);
-      if (intersects) inside = !inside;
-    }
-    return inside;
-  };
-  auto dist_to_boundary = [](double x, double y,
-                             const geometry_msgs::msg::Polygon& p) {
-    double best = std::numeric_limits<double>::infinity();
-    const auto& pts = p.points;
-    for (std::size_t i = 0, n = pts.size(); i < n; ++i) {
-      const auto& a = pts[i];
-      const auto& b = pts[(i + 1) % n];
-      const double dx = b.x - a.x, dy = b.y - a.y;
-      const double len_sq = dx * dx + dy * dy;
-      double t = len_sq > 0.0 ? ((x - a.x) * dx + (y - a.y) * dy) / len_sq : 0.0;
-      t = std::clamp(t, 0.0, 1.0);
-      const double px = a.x + t * dx, py = a.y + t * dy;
-      const double d = std::hypot(x - px, y - py);
-      if (d < best) best = d;
-    }
-    return best;
-  };
-
   std::size_t filtered_too_small = 0, filtered_outside = 0, filtered_capped = 0;
   for (const auto& obs : area.obstacles)
   {
-    if (obs.points.size() < 3 || poly_area(obs) < kMinHoleAreaM2) {
+    if (obs.points.size() < 3 || polygonArea(obs) < kMinHoleAreaM2) {
       ++filtered_too_small;
       continue;
     }
-    bool all_safe = true;
-    for (const auto& v : obs.points) {
-      if (!point_in_poly(v.x, v.y, area.area) ||
-          dist_to_boundary(v.x, v.y, area.area) < min_clearance) {
-        all_safe = false;
-        break;
-      }
-    }
-    if (!all_safe) {
+    if (!isHoleSafeForF2C(obs, area.area, kMinHoleAreaM2, min_clearance)) {
       ++filtered_outside;
       continue;
     }
@@ -713,6 +659,78 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
 
 void GetNextUnmowedArea::onHalted()
 {
+}
+
+// ===========================================================================
+// ComputeCoveragePath — geometry helpers (static, unit-tested)
+// ===========================================================================
+
+double ComputeCoveragePath::polygonArea(const geometry_msgs::msg::Polygon& p)
+{
+  if (p.points.size() < 3) return 0.0;
+  double a = 0.0;
+  const auto& pts = p.points;
+  for (std::size_t i = 0, n = pts.size(); i < n; ++i) {
+    const auto& cur = pts[i];
+    const auto& nxt = pts[(i + 1) % n];
+    a += static_cast<double>(cur.x) * static_cast<double>(nxt.y) -
+         static_cast<double>(nxt.x) * static_cast<double>(cur.y);
+  }
+  return std::abs(a) * 0.5;
+}
+
+bool ComputeCoveragePath::pointInPolygon(double x, double y,
+                                         const geometry_msgs::msg::Polygon& p)
+{
+  if (p.points.size() < 3) return false;
+  bool inside = false;
+  const auto& pts = p.points;
+  for (std::size_t i = 0, j = pts.size() - 1, n = pts.size(); i < n; j = i++) {
+    const double xi = pts[i].x, yi = pts[i].y;
+    const double xj = pts[j].x, yj = pts[j].y;
+    // 1e-12 guards a horizontal segment from dividing by zero — a vertex
+    // exactly on @y is otherwise ambiguous (this is the standard
+    // "even-odd" point-in-polygon edge case).
+    const bool intersects = ((yi > y) != (yj > y)) &&
+                            (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi);
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+double ComputeCoveragePath::distanceToPolygonBoundary(
+    double x, double y, const geometry_msgs::msg::Polygon& p)
+{
+  if (p.points.empty()) return std::numeric_limits<double>::infinity();
+  double best = std::numeric_limits<double>::infinity();
+  const auto& pts = p.points;
+  for (std::size_t i = 0, n = pts.size(); i < n; ++i) {
+    const auto& a = pts[i];
+    const auto& b = pts[(i + 1) % n];
+    const double dx = b.x - a.x, dy = b.y - a.y;
+    const double len_sq = dx * dx + dy * dy;
+    double t = len_sq > 0.0 ? ((x - a.x) * dx + (y - a.y) * dy) / len_sq : 0.0;
+    t = std::clamp(t, 0.0, 1.0);
+    const double px = a.x + t * dx, py = a.y + t * dy;
+    const double d = std::hypot(x - px, y - py);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+bool ComputeCoveragePath::isHoleSafeForF2C(
+    const geometry_msgs::msg::Polygon& obs,
+    const geometry_msgs::msg::Polygon& field,
+    double min_area_m2,
+    double min_clearance_m)
+{
+  if (obs.points.size() < 3) return false;
+  if (polygonArea(obs) < min_area_m2) return false;
+  for (const auto& v : obs.points) {
+    if (!pointInPolygon(v.x, v.y, field)) return false;
+    if (distanceToPolygonBoundary(v.x, v.y, field) < min_clearance_m) return false;
+  }
+  return true;
 }
 
 }  // namespace mowgli_behavior

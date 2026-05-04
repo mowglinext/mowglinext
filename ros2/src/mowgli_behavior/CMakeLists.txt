@@ -129,6 +129,36 @@ if(BUILD_TESTING)
     tf2_ros
   )
 
+  # ---- test_coverage_nodes ----
+  # Pure-geometry tests for the F2C polygon-hole filter helpers exposed
+  # as static methods on ComputeCoveragePath. Linking just coverage_nodes.cpp
+  # would drag in rclcpp_action / opennav_coverage_msgs / nav2_msgs even
+  # though the helpers don't use them, so we accept the larger link to
+  # keep the source layout simple — tests cost nothing at runtime.
+  ament_add_gtest(test_coverage_nodes
+    test/test_coverage_nodes.cpp
+    src/coverage_nodes.cpp
+  )
+
+  target_include_directories(test_coverage_nodes PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_coverage_nodes
+    rclcpp
+    rclcpp_action
+    geometry_msgs
+    behaviortree_cpp
+    mowgli_interfaces
+    nav_msgs
+    nav2_msgs
+    opennav_coverage_msgs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+  )
+
 endif()
 
 ament_package()
