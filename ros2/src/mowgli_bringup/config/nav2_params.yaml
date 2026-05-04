@@ -217,7 +217,19 @@ controller_server:
       vy_std: 0.0                   # diff-drive — no lateral
       wz_std: 0.80                  # broad enough to sample up to wz_max=1.5
       vx_max: 0.30
-      vx_min: -0.20                 # allow brief reverse for diff-drive recovery
+      # vx_min was -0.20 to allow "brief reverse for diff-drive recovery", but
+      # in practice MPPI exploited that to trace the boustrophedon path
+      # *backwards* along its length: cross-track stayed <50 mm (the path was
+      # being followed perfectly geometrically) while the nearest-path index
+      # walked monotonically downward (2041 → 1378 in 40 s). Reversing along
+      # the path was cheaper than "rotate 90° + drive forward" for the cost
+      # function, so the optimum got stuck in the wrong direction. Forbidding
+      # reverse (vx_min=0) leaves MPPI with rotate-and-go-forward as the only
+      # path-following option, which is what we actually want during
+      # coverage. The dedicated BackUp action (Nav2 behavior_server) is
+      # still used for undock and BoundaryGuard recovery; those don't go
+      # through MPPI.
+      vx_min: 0.0
       wz_max: 1.5
       ax_max: 0.50
       ax_min: -0.50
