@@ -121,8 +121,7 @@ e2e-test-no-lidar: sim-stop build
 	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
 	source install/setup.bash && \
 	ros2 launch mowgli_bringup sim_full_system.launch.py \
-	  headless:=true use_rviz:=false use_lidar:=false \
-	  simulate_gps_degradation:=false &
+	  headless:=true use_rviz:=false &
 	SIM_PID=$$!; \
 	echo "Simulation PID: $$SIM_PID"; \
 	echo "Waiting 90s for Nav2 to activate..."; \
