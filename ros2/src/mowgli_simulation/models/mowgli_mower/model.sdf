@@ -87,9 +87,17 @@
         </imu>
       </sensor>
 
-      <!-- GPS / NavSat sensor -->
+      <!-- GPS / NavSat sensor.
+           Pose must match the URDF's gps_link offset (0.30 m forward, 0.20 m up
+           from base_link) — see mowgli.urdf.xacro gps_x/gps_y/gps_z defaults.
+           If this is left at (0, 0, 0.20), Gazebo publishes lat/lon for the
+           base_link's origin instead of the antenna, while navsat_to_absolute
+           _pose_node still subtracts the URDF lever arm — producing a constant
+           0.30 m back-offset between /gps/pose_cov and ground truth that
+           rotates with the robot's yaw and trips BoundaryGuard at polygon
+           edges. -->
       <sensor name="navsat_sensor" type="navsat">
-        <pose>0 0 0.20 0 0 0</pose>
+        <pose>0.30 0 0.20 0 0 0</pose>
         <always_on>true</always_on>
         <update_rate>5</update_rate>
         <topic>/gps/fix</topic>
