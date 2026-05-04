@@ -30,8 +30,14 @@
          Physics
          ================================================================ -->
     <physics name="default_physics" default="true" type="ode">
+      <!-- Headless dev sim: 0 = no real-time cap; Gazebo runs as fast as
+           physics + sensors allow. Use 1.0 again for timing-sensitive
+           tests (real-time-rate-dependent controller tuning). Nav2's
+           controller_server uses sim_time so it scales naturally; if
+           "Control loop missed its desired rate" warnings start to
+           dominate the log, drop this to 2.0 or 3.0 instead of 0. -->
       <max_step_size>0.001</max_step_size>
-      <real_time_factor>1.0</real_time_factor>
+      <real_time_factor>0</real_time_factor>
       <real_time_update_rate>1000</real_time_update_rate>
       <ode>
         <solver>

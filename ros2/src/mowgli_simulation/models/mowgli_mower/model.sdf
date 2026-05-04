@@ -78,46 +78,9 @@
         <!-- Match the URDF frame for EKF TF lookups -->
         <gz_frame_id>imu_link</gz_frame_id>
         <imu>
-          <angular_velocity>
-            <x>
-              <noise type="gaussian">
-                <mean>0.0</mean><stddev>0.009</stddev>
-                <bias_mean>0.00075</bias_mean><bias_stddev>0.005</bias_stddev>
-              </noise>
-            </x>
-            <y>
-              <noise type="gaussian">
-                <mean>0.0</mean><stddev>0.009</stddev>
-                <bias_mean>0.00075</bias_mean><bias_stddev>0.005</bias_stddev>
-              </noise>
-            </y>
-            <z>
-              <noise type="gaussian">
-                <mean>0.0</mean><stddev>0.009</stddev>
-                <bias_mean>0.00075</bias_mean><bias_stddev>0.005</bias_stddev>
-              </noise>
-            </z>
-          </angular_velocity>
-          <linear_acceleration>
-            <x>
-              <noise type="gaussian">
-                <mean>0.0</mean><stddev>0.021</stddev>
-                <bias_mean>0.1</bias_mean><bias_stddev>0.001</bias_stddev>
-              </noise>
-            </x>
-            <y>
-              <noise type="gaussian">
-                <mean>0.0</mean><stddev>0.021</stddev>
-                <bias_mean>0.1</bias_mean><bias_stddev>0.001</bias_stddev>
-              </noise>
-            </y>
-            <z>
-              <noise type="gaussian">
-                <mean>0.0</mean><stddev>0.021</stddev>
-                <bias_mean>0.1</bias_mean><bias_stddev>0.001</bias_stddev>
-              </noise>
-            </z>
-          </linear_acceleration>
+          <!-- Noiseless: sim_imu_noise.py adds the realistic MEMS noise
+               profile in /imu/data. Keep this stage clean so we have one
+               place to tune (gyro drift, accel walk, etc.). -->
           <orientation_reference_frame>
             <localization>GRAV_UP</localization>
           </orientation_reference_frame>
@@ -133,19 +96,10 @@
         <!-- Match production frame for GPS pose processing -->
         <gz_frame_id>gps_link</gz_frame_id>
         <navsat>
-          <position_sensing>
-            <horizontal>
-              <noise type="gaussian">
-                <!-- RTK-fixed: ~2cm accuracy → ~1.8e-7 degrees -->
-                <mean>0.0</mean><stddev>0.0000002</stddev>
-              </noise>
-            </horizontal>
-            <vertical>
-              <noise type="gaussian">
-                <mean>0.0</mean><stddev>0.05</stddev>
-              </noise>
-            </vertical>
-          </position_sensing>
+          <!-- Noiseless: sim_navsat_rtk_fix.py owns the GPS noise profile
+               (RTK-Fixed = no position noise, σ=3 mm covariance only;
+               RTK-Float / NO_FIX = injected Gaussian noise). Keeping this
+               sensor clean means RTK-Fixed truly has zero position error. -->
         </navsat>
       </sensor>
     </link>

@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>MowgliNext — Headland + Strip + Trajectory Viz</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0f1115; color: #d6dde6; font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+  #app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+  header { padding: 8px 14px; background: #161a22; border-bottom: 1px solid #2a3140; display: flex; gap: 18px; align-items: center; }
+  header h1 { font-size: 14px; font-weight: 500; margin: 0; color: #9bb1d8; }
+  header .stat { font-size: 12px; color: #8a93a3; }
+  header .stat b { color: #d6dde6; font-weight: 500; }
+  header .conn { font-size: 12px; padding: 2px 8px; border-radius: 3px; background: #2c1818; color: #f08080; }
+  header .conn.ok { background: #18341c; color: #6ee7a8; }
+  header button { background: #1f2937; color: #d6dde6; border: 1px solid #2a3140; padding: 4px 10px; font-family: inherit; font-size: 12px; cursor: pointer; border-radius: 3px; }
+  header button:hover { background: #2a3140; }
+  main { position: relative; overflow: hidden; }
+  canvas { display: block; cursor: crosshair; }
+  .legend { position: absolute; right: 14px; top: 14px; background: rgba(22, 26, 34, 0.92); padding: 10px 12px; border: 1px solid #2a3140; border-radius: 4px; font-size: 11px; line-height: 1.7; }
+  .legend .sw { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 6px; border-radius: 1px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>MowgliNext — headland + trajectory</h1>
+    <span class="conn" id="conn">disconnected</span>
+    <span class="stat">pose: <b id="pose">—</b></span>
+    <span class="stat">trajectory: <b id="traj-len">0</b> pts</span>
+    <span class="stat">FTC path: <b id="ftc-len">0</b> pts</span>
+    <span class="stat">Nav2 plan: <b id="nav-len">0</b> pts</span>
+    <span class="stat">phase: <b id="phase">—</b></span>
+    <span style="flex:1"></span>
+    <button id="reset">Reset trajectory</button>
+    <button id="fit">Fit to view</button>
+  </header>
+  <main>
+    <canvas id="cv"></canvas>
+    <div class="legend">
+      <div><span class="sw" style="background:#3a5a7a"></span>area boundary</div>
+      <div><span class="sw" style="background:#1f6b3a"></span>mowed cells</div>
+      <div><span class="sw" style="background:#ec9b3b"></span>robot trajectory</div>
+      <div><span class="sw" style="background:#5fbfff"></span>FTC global plan</div>
+      <div><span class="sw" style="background:#c47de0"></span>Nav2 transit plan</div>
+      <div><span class="sw" style="background:#ff5260"></span>robot</div>
+    </div>
+  </main>
+</div>
+
+<script src="https://static.robotwebtools.org/EventEmitter2/current/eventemitter2.min.js"></script>
+<script src="https://static.robotwebtools.org/roslibjs/current/roslib.min.js"></script>
+<script>
+'use strict';
+
+const ROS_URL = 'ws://localhost:9090';
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const connEl = document.getElementById('conn');
+const poseEl = document.getElementById('pose');
+const trajEl = document.getElementById('traj-len');
+const ftcEl  = document.getElementById('ftc-len');
+const navEl  = document.getElementById('nav-len');
+const phaseEl = document.getElementById('phase');
+
+// View state
+const view = { cx: 0, cy: 0, scale: 40, autoFit: true };
+function resize() {
+  cv.width = cv.parentElement.clientWidth;
+  cv.height = cv.parentElement.clientHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// World → screen
+function w2s(x, y) {
+  return [cv.width / 2 + (x - view.cx) * view.scale,
+          cv.height / 2 - (y - view.cy) * view.scale];  // y up
+}
+
+// Pan / zoom
+let dragging = false, dragX = 0, dragY = 0;
+cv.addEventListener('mousedown', e => { dragging = true; dragX = e.clientX; dragY = e.clientY; view.autoFit = false; });
+cv.addEventListener('mouseup', () => dragging = false);
+cv.addEventListener('mouseleave', () => dragging = false);
+cv.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  view.cx -= (e.clientX - dragX) / view.scale;
+  view.cy += (e.clientY - dragY) / view.scale;
+  dragX = e.clientX; dragY = e.clientY;
+});
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  view.scale *= f;
+  view.autoFit = false;
+}, { passive: false });
+
+document.getElementById('reset').addEventListener('click', () => { trajectory.length = 0; });
+document.getElementById('fit').addEventListener('click', () => { fitToBounds(); });
+
+// State
+let coverageGrid = null;     // OccupancyGrid → drawn as area boundary outline + cells
+let mowGrid = null;          // mow_progress
+let trajectory = [];         // [{x, y, t}]
+let robotPose = null;        // {x, y, yaw}
+let ftcPath = [];            // current FTC global plan poses
+let navPath = [];            // current Nav2 transit plan poses
+let bounds = null;           // {minX, maxX, minY, maxY} computed from coverageGrid
+
+function fitToBounds() {
+  if (!bounds) return;
+  const w = bounds.maxX - bounds.minX;
+  const h = bounds.maxY - bounds.minY;
+  if (w <= 0 || h <= 0) return;
+  const margin = 1.2;
+  view.cx = (bounds.minX + bounds.maxX) / 2;
+  view.cy = (bounds.minY + bounds.maxY) / 2;
+  view.scale = Math.min(cv.width / (w * margin), cv.height / (h * margin));
+  view.autoFit = false;
+}
+
+// ROS
+const ros = new ROSLIB.Ros({ url: ROS_URL });
+ros.on('connection', () => { connEl.textContent = 'connected'; connEl.classList.add('ok'); });
+ros.on('error',      () => { connEl.textContent = 'error';     connEl.classList.remove('ok'); });
+ros.on('close',      () => { connEl.textContent = 'disconnected'; connEl.classList.remove('ok'); setTimeout(() => location.reload(), 2000); });
+
+new ROSLIB.Topic({ ros, name: '/map_server_node/coverage_cells', messageType: 'nav_msgs/msg/OccupancyGrid', throttle_rate: 1000 })
+  .subscribe(msg => {
+    coverageGrid = msg;
+    const w = msg.info.width, h = msg.info.height, r = msg.info.resolution;
+    const ox = msg.info.origin.position.x, oy = msg.info.origin.position.y;
+    bounds = { minX: ox, maxX: ox + w * r, minY: oy, maxY: oy + h * r };
+    if (view.autoFit) fitToBounds();
+  });
+
+new ROSLIB.Topic({ ros, name: '/map_server_node/mow_progress', messageType: 'nav_msgs/msg/OccupancyGrid', throttle_rate: 500 })
+  .subscribe(msg => { mowGrid = msg; });
+
+new ROSLIB.Topic({ ros, name: '/odometry/filtered_map', messageType: 'nav_msgs/msg/Odometry' })
+  .subscribe(msg => {
+    const p = msg.pose.pose.position;
+    const q = msg.pose.pose.orientation;
+    const yaw = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
+    robotPose = { x: p.x, y: p.y, yaw };
+    const last = trajectory[trajectory.length - 1];
+    if (!last || Math.hypot(last.x - p.x, last.y - p.y) > 0.02) {
+      trajectory.push({ x: p.x, y: p.y });
+      if (trajectory.length > 50000) trajectory.shift();
+    }
+  });
+
+new ROSLIB.Topic({ ros, name: '/FollowCoveragePath/global_plan', messageType: 'nav_msgs/msg/Path', throttle_rate: 200 })
+  .subscribe(msg => { ftcPath = msg.poses.map(p => ({ x: p.pose.position.x, y: p.pose.position.y })); });
+
+new ROSLIB.Topic({ ros, name: '/plan', messageType: 'nav_msgs/msg/Path', throttle_rate: 500 })
+  .subscribe(msg => { navPath = msg.poses.map(p => ({ x: p.pose.position.x, y: p.pose.position.y })); });
+
+new ROSLIB.Topic({ ros, name: '/behavior_tree_node/high_level_status', messageType: 'mowgli_interfaces/msg/HighLevelStatus' })
+  .subscribe(msg => { phaseEl.textContent = msg.state_name + (msg.sub_state_name ? ' / ' + msg.sub_state_name : ''); });
+
+// Render
+function drawGrid() {
+  ctx.strokeStyle = '#1a1f2a';
+  ctx.lineWidth = 1;
+  const step = 1; // 1 m grid
+  const [x0, y0] = [view.cx - cv.width / (2 * view.scale), view.cy - cv.height / (2 * view.scale)];
+  const [x1, y1] = [view.cx + cv.width / (2 * view.scale), view.cy + cv.height / (2 * view.scale)];
+  for (let x = Math.floor(x0); x <= Math.ceil(x1); x += step) {
+    const [sx,] = w2s(x, 0); ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, cv.height); ctx.stroke();
+  }
+  for (let y = Math.floor(y0); y <= Math.ceil(y1); y += step) {
+    const [, sy] = w2s(0, y); ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(cv.width, sy); ctx.stroke();
+  }
+}
+
+function drawOccupancyGrid(grid, color) {
+  if (!grid) return;
+  const w = grid.info.width, h = grid.info.height, r = grid.info.resolution;
+  const ox = grid.info.origin.position.x, oy = grid.info.origin.position.y;
+  const data = grid.data;
+  const cellSize = r * view.scale;
+  if (cellSize < 1) return;  // skip when too zoomed-out — too many cells
+  ctx.fillStyle = color;
+  for (let row = 0; row < h; ++row) {
+    for (let col = 0; col < w; ++col) {
+      const v = data[row * w + col];
+      if (v <= 0) continue;
+      const wx = ox + col * r;
+      const wy = oy + row * r;
+      const [sx, sy] = w2s(wx, wy + r);
+      ctx.fillRect(sx, sy, cellSize + 1, cellSize + 1);
+    }
+  }
+}
+
+function drawAreaBoundary() {
+  if (!coverageGrid) return;
+  const g = coverageGrid;
+  const w = g.info.width, h = g.info.height, r = g.info.resolution;
+  const ox = g.info.origin.position.x, oy = g.info.origin.position.y;
+  // Outline as the bounding rectangle of the grid (the polygon itself is
+  // implied by which cells are nonzero; for simplicity we draw the grid
+  // bounding box — a refinement would walk the cell edges).
+  const [x0, y0] = w2s(ox, oy);
+  const [x1, y1] = w2s(ox + w * r, oy + h * r);
+  ctx.strokeStyle = '#3a5a7a';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 4]);
+  ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
+  ctx.setLineDash([]);
+}
+
+function drawPolyline(pts, color, width) {
+  if (pts.length < 2) return;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  const [sx0, sy0] = w2s(pts[0].x, pts[0].y);
+  ctx.moveTo(sx0, sy0);
+  for (let i = 1; i < pts.length; ++i) {
+    const [sx, sy] = w2s(pts[i].x, pts[i].y);
+    ctx.lineTo(sx, sy);
+  }
+  ctx.stroke();
+}
+
+function drawRobot(p) {
+  if (!p) return;
+  const [sx, sy] = w2s(p.x, p.y);
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.rotate(-p.yaw);  // canvas Y is flipped
+  ctx.fillStyle = '#ff5260';
+  ctx.beginPath();
+  ctx.moveTo(12, 0); ctx.lineTo(-8, 7); ctx.lineTo(-8, -7); ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function frame() {
+  ctx.fillStyle = '#0f1115';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  drawGrid();
+  drawOccupancyGrid(mowGrid, 'rgba(31, 107, 58, 0.55)');
+  drawAreaBoundary();
+  drawPolyline(navPath, '#c47de0', 2);
+  drawPolyline(ftcPath, '#5fbfff', 2);
+  drawPolyline(trajectory, '#ec9b3b', 2);
+  drawRobot(robotPose);
+
+  if (robotPose) poseEl.textContent = `(${robotPose.x.toFixed(2)}, ${robotPose.y.toFixed(2)}) yaw=${(robotPose.yaw * 180 / Math.PI).toFixed(0)}°`;
+  trajEl.textContent = trajectory.length;
+  ftcEl.textContent = ftcPath.length;
+  navEl.textContent = navPath.length;
+
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
+</html>

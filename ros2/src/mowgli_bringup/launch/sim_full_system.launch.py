@@ -226,6 +226,19 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
+    # rosbridge_websocket — JSON bridge on :9090 for the lightweight HTML
+    # viewer (tools/headland_viz.html). Foxglove uses binary CBOR which is
+    # too heavy to consume from a vanilla browser page; rosbridge speaks
+    # plain JSON and roslibjs runs in any modern browser. Sim-only — the
+    # production stack uses foxglove exclusively.
+    rosbridge_node = Node(
+        package="rosbridge_server",
+        executable="rosbridge_websocket",
+        name="rosbridge_websocket",
+        output="screen",
+        parameters=[{"use_sim_time": True, "port": 9090}],
+    )
+
     # NOTE: docking_server is launched and lifecycle-managed by Nav2's
     # navigation_launch.py (in the lifecycle_nodes list). Do NOT launch
     # it here — duplicating it exhausts DDS participants and causes
@@ -267,6 +280,42 @@ def generate_launch_description() -> LaunchDescription:
         name="fake_hardware_bridge",
         output="screen",
         parameters=[{"use_sim_time": True}],
+    )
+
+    # ------------------------------------------------------------------
+    # 10b. twist_mux — same config as mowgli.launch.py.
+    #      Real hardware:  twist_mux → /cmd_vel (TwistStamped) → hardware_bridge
+    #      Sim (here):     twist_mux → /cmd_vel_stamped → unstamper → /cmd_vel
+    #                                                                  (Twist) → gz_ros2_bridge
+    #      The intermediate /cmd_vel_stamped exists because Nav2 Kilted speaks
+    #      TwistStamped end-to-end but Gazebo's gz.msgs.Twist has no stamped
+    #      variant, so we strip the header right before the gz bridge.
+    # ------------------------------------------------------------------
+    twist_mux_params = os.path.join(bringup_dir, "config", "twist_mux.yaml")
+    twist_mux_node = Node(
+        package="twist_mux",
+        executable="twist_mux",
+        name="twist_mux",
+        output="screen",
+        parameters=[
+            twist_mux_params,
+            {"use_sim_time": True},
+        ],
+        remappings=[("cmd_vel_out", "/cmd_vel_stamped")],
+    )
+
+    cmd_vel_unstamper_node = Node(
+        package="mowgli_simulation",
+        executable="sim_cmd_vel_unstamp.py",
+        name="sim_cmd_vel_unstamp",
+        output="screen",
+        parameters=[
+            {
+                "use_sim_time": True,
+                "input_topic": "/cmd_vel_stamped",
+                "output_topic": "/cmd_vel",
+            }
+        ],
     )
 
     # ------------------------------------------------------------------
@@ -327,6 +376,30 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ------------------------------------------------------------------
+    # 11.6 Sim wheel-slip injector
+    #     Relays /wheel_odom_raw (Gazebo ground truth) → /wheel_odom and
+    #     periodically inflates twist.linear.x for ~1s every 30s, modelling
+    #     a wheel slip on grass. The dual EKF only fuses /wheel_odom twist
+    #     (not pose), so the slip surfaces as a brief encoder/GPS divergence.
+    # ------------------------------------------------------------------
+    sim_wheel_slip_node = Node(
+        package="mowgli_simulation",
+        executable="sim_wheel_slip.py",
+        name="sim_wheel_slip",
+        output="screen",
+        parameters=[
+            {
+                "use_sim_time": True,
+                "input_topic": "/wheel_odom_raw",
+                "output_topic": "/wheel_odom",
+                "slip_period_s": 30.0,
+                "slip_duration_s": 1.0,
+                "slip_vx_bias": 0.05,
+            }
+        ],
+    )
+
+    # ------------------------------------------------------------------
     # 12. Sim IMU noise injector
     #     Adds gyro/accel bias-random-walk + white noise to Gazebo's
     #     perfect IMU stream (/imu/data_gz from bridge) and republishes
@@ -343,13 +416,16 @@ def generate_launch_description() -> LaunchDescription:
                 "use_sim_time": True,
                 "input_topic": "/imu/data_gz",
                 "output_topic": "/imu/data",
-                # MPU-9250 / LIS6DSL-class MEMS defaults.
-                "gyro_white_std": 0.005,
-                "gyro_bias_walk_std": 1.0e-4,
-                "gyro_bias_init_std": 1.0e-3,
-                "accel_white_std": 0.05,
-                "accel_bias_walk_std": 1.0e-3,
-                "accel_bias_init_std": 0.05,
+                # Tuned for ~1°/min yaw drift after 60 s.
+                # Bias drift over time: σ_bias(t) = walk_std * sqrt(t).
+                # At walk_std = 3e-5 rad/s/√s, σ_bias(60) = 2.32e-4 rad/s
+                # → 0.013°/s → ~0.8°/min.
+                "gyro_white_std": 5.0e-4,
+                "gyro_bias_walk_std": 3.0e-5,
+                "gyro_bias_init_std": 5.0e-5,
+                "accel_white_std": 0.01,
+                "accel_bias_walk_std": 1.0e-4,
+                "accel_bias_init_std": 0.005,
                 "noise_seed": 42,
             }
         ],
@@ -374,7 +450,10 @@ def generate_launch_description() -> LaunchDescription:
             navigation_launch,
             # Individual nodes
             fake_hardware_bridge_node,
+            twist_mux_node,
+            cmd_vel_unstamper_node,
             sim_navsat_rtk_fix_node,
+            sim_wheel_slip_node,
             navsat_converter_node,
             sim_imu_noise_node,
             behavior_tree_node,
@@ -382,5 +461,6 @@ def generate_launch_description() -> LaunchDescription:
             obstacle_tracker_node,
             diagnostics_node,
             foxglove_bridge_node,
+            rosbridge_node,
         ]
     )

@@ -87,6 +87,8 @@ install(
   PROGRAMS
     scripts/sim_imu_noise.py
     scripts/sim_navsat_rtk_fix.py
+    scripts/sim_wheel_slip.py
+    scripts/sim_cmd_vel_unstamp.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

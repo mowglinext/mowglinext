@@ -484,8 +484,15 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   const double dt = (now - last_time_).seconds();
   last_time_ = now;
 
-  // Guard against very large dt on first call or after pauses.
-  const double safe_dt = std::min(dt, 0.5);
+  // Floor at 1 ms so the derivative terms stay finite when this call lands on
+  // the same /clock tick as setPlan() (which itself sets last_time_ = now).
+  // Without the floor, dt = 0 makes (err - last_err) / dt = ±Inf, and the
+  // angular PID's mixed-sign sum +Inf*kd_ang + (-Inf)*kd_lat = NaN propagates
+  // into cmd_vel — controller_server then drops the velocity as invalid and
+  // the goal_checker fires "Reached the goal!" on a strip the robot never
+  // actually drove. Sign-preserving, so reverse driving (lin_speed < 0 when
+  // forward_only=false) is unchanged.
+  const double safe_dt = std::clamp(dt, 1e-3, 0.5);
 
   if (is_crashed_)
   {

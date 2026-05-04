@@ -14,11 +14,16 @@
   gz_type_name: gz.msgs.Twist
   direction: ROS_TO_GZ
 
-- ros_topic_name: /wheel_odom
+- ros_topic_name: /wheel_odom_raw
   gz_topic_name: /odom
   ros_type_name: nav_msgs/msg/Odometry
   gz_type_name: gz.msgs.Odometry
   direction: GZ_TO_ROS
+  # sim_wheel_slip.py relays /wheel_odom_raw → /wheel_odom and injects
+  # ~5 cm/s longitudinal-velocity bias for ~1 s every 30 s. The EKF
+  # only fuses twist (vx, vy) from this topic, so the slip events show
+  # up as transient encoder/GPS divergence the way a real wheel slip
+  # on grass would.
 
 - ros_topic_name: /scan
   gz_topic_name: /scan
