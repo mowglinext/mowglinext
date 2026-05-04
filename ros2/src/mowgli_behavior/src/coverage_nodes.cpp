@@ -15,6 +15,9 @@
 
 #include "mowgli_behavior/coverage_nodes.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <mutex>
 
 #include "action_msgs/msg/goal_status.hpp"
@@ -130,42 +133,121 @@ BT::NodeStatus ComputeCoveragePath::onStart()
     return ring;
   };
 
-  // Field boundary first, holes (interior obstacles) after.
-  goal.polygons.push_back(to_closed_ring(area.area));
-
-  for (const auto& obs_poly : area.obstacles)
-  {
-    if (obs_poly.points.size() < 3)
-      continue;
-    goal.polygons.push_back(to_closed_ring(obs_poly));
-  }
-
   // Match the opennav_coverage demo verbatim — known-working combo on
   // F2C 1.2.1. Empty mode strings let the server fall back to the
   // CONSTANT/0.30 m headland and BOUSTROPHEDON route in nav2_params.yaml.
   goal.headland_mode.mode = "";
-  // Bumped 0.30 → 0.50: F2C insets the boustrophedon strips by headland
-  // width before generating them, so 0.50 m gives MPPI a 50 cm safety
-  // band between strip endpoints and the polygon perimeter. With 0.30 m
-  // the strips ended right at the boundary and a 0.10 m MPPI tracking
-  // overshoot at strip-end U-turns tipped the robot past the keepout
-  // edge (BoundaryGuard fires, BackUp recovery cycles through, loop).
-  // Cost: a 50 cm border around the polygon isn't mowed by strips
-  // (it'll be picked up by the first headland pass when we re-enable
-  // generate_headland's perimeter run, task #21).
-  goal.headland_mode.width = 0.50f;
+  // F2C insets the boustrophedon strips by headland width before
+  // generating them, so 0.50 m gives MPPI a 50 cm safety band between
+  // strip endpoints and the polygon perimeter. With 0.30 m the strips
+  // ended right at the boundary and a 0.10 m MPPI tracking overshoot at
+  // strip-end U-turns tipped the robot past the keepout edge.
+  constexpr float kHeadlandWidth = 0.50f;
+  goal.headland_mode.width = kHeadlandWidth;
 
   goal.swath_mode.objective = "LENGTH";
   goal.swath_mode.mode = "SET_ANGLE";
   goal.swath_mode.best_angle = 0.0f;
   goal.swath_mode.step_angle = 1.7453e-2f;
 
-  // No obstacles in the planning request for now — F2C 1.2.1 hangs on
-  // small fields with interior holes. We'll re-add when persistent
-  // obstacles need polygon-hole replans (task #21). The dock exclusion
-  // zone is handled by the keepout_filter on the costmap, not here.
-  if (goal.polygons.size() > 1)
-    goal.polygons.resize(1);
+  // Field boundary first, holes (interior obstacles) after.
+  goal.polygons.push_back(to_closed_ring(area.area));
+
+  // Re-enable interior obstacles as F2C holes (task #21). F2C 1.2.1 hangs
+  // when a hole touches/escapes the headland-reduced field, so we filter:
+  //   - drop polygons with < 3 unique points or area < MIN_HOLE_AREA_M2
+  //   - require every vertex to lie strictly inside the field, with at
+  //     least (headland_width + 0.20 m) clearance from the boundary —
+  //     guarantees the hole survives F2C's headland inset
+  //   - cap total holes at MAX_F2C_HOLES so a noisy obstacle_tracker
+  //     can't push planning into the seconds
+  // Obstacles outside (or too close to) the boundary are still respected
+  // via the keepout_filter on the costmap; they just don't enter the
+  // F2C plan as holes.
+  constexpr double kMinHoleAreaM2 = 0.04;            // 20 cm × 20 cm
+  constexpr double kHoleBoundaryClearanceM = 0.20;   // extra margin past headland inset
+  constexpr std::size_t kMaxF2cHoles = 16;
+  const double min_clearance = static_cast<double>(kHeadlandWidth) + kHoleBoundaryClearanceM;
+
+  // Shoelace area + ray-cast point-in-polygon — local helpers so this
+  // node has no extra dependencies (and the polygons are small enough
+  // that Boost.Geometry would be overkill).
+  auto poly_area = [](const geometry_msgs::msg::Polygon& p) {
+    if (p.points.size() < 3) return 0.0;
+    double a = 0.0;
+    const auto& pts = p.points;
+    for (std::size_t i = 0, n = pts.size(); i < n; ++i) {
+      const auto& cur = pts[i];
+      const auto& nxt = pts[(i + 1) % n];
+      a += static_cast<double>(cur.x) * static_cast<double>(nxt.y) -
+           static_cast<double>(nxt.x) * static_cast<double>(cur.y);
+    }
+    return std::abs(a) * 0.5;
+  };
+  auto point_in_poly = [](double x, double y,
+                          const geometry_msgs::msg::Polygon& p) {
+    bool inside = false;
+    const auto& pts = p.points;
+    for (std::size_t i = 0, j = pts.size() - 1, n = pts.size(); i < n; j = i++) {
+      const double xi = pts[i].x, yi = pts[i].y;
+      const double xj = pts[j].x, yj = pts[j].y;
+      const bool intersects = ((yi > y) != (yj > y)) &&
+                              (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi);
+      if (intersects) inside = !inside;
+    }
+    return inside;
+  };
+  auto dist_to_boundary = [](double x, double y,
+                             const geometry_msgs::msg::Polygon& p) {
+    double best = std::numeric_limits<double>::infinity();
+    const auto& pts = p.points;
+    for (std::size_t i = 0, n = pts.size(); i < n; ++i) {
+      const auto& a = pts[i];
+      const auto& b = pts[(i + 1) % n];
+      const double dx = b.x - a.x, dy = b.y - a.y;
+      const double len_sq = dx * dx + dy * dy;
+      double t = len_sq > 0.0 ? ((x - a.x) * dx + (y - a.y) * dy) / len_sq : 0.0;
+      t = std::clamp(t, 0.0, 1.0);
+      const double px = a.x + t * dx, py = a.y + t * dy;
+      const double d = std::hypot(x - px, y - py);
+      if (d < best) best = d;
+    }
+    return best;
+  };
+
+  std::size_t filtered_too_small = 0, filtered_outside = 0, filtered_capped = 0;
+  for (const auto& obs : area.obstacles)
+  {
+    if (obs.points.size() < 3 || poly_area(obs) < kMinHoleAreaM2) {
+      ++filtered_too_small;
+      continue;
+    }
+    bool all_safe = true;
+    for (const auto& v : obs.points) {
+      if (!point_in_poly(v.x, v.y, area.area) ||
+          dist_to_boundary(v.x, v.y, area.area) < min_clearance) {
+        all_safe = false;
+        break;
+      }
+    }
+    if (!all_safe) {
+      ++filtered_outside;
+      continue;
+    }
+    if (goal.polygons.size() > kMaxF2cHoles) {
+      ++filtered_capped;
+      continue;
+    }
+    goal.polygons.push_back(to_closed_ring(obs));
+  }
+
+  if (filtered_too_small || filtered_outside || filtered_capped)
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "ComputeCoveragePath: filtered obstacles "
+                "(too_small=%zu, on_or_outside_boundary=%zu, capped=%zu)",
+                filtered_too_small, filtered_outside, filtered_capped);
+  }
 
   goal_handle_.reset();
   result_requested_ = false;
