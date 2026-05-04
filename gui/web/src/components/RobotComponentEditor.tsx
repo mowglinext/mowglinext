@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Card, InputNumber, Modal, Space, Typography, Row, Col, Tooltip, Button, Tag } from "antd";
-import { AimOutlined, CompassOutlined, UndoOutlined } from "@ant-design/icons";
+import { Alert, App, Card, InputNumber, Modal, Space, Typography, Row, Col, Tooltip, Button, Tag } from "antd";
+import { AimOutlined, CompassOutlined, EnvironmentOutlined, UndoOutlined } from "@ant-design/icons";
 import { useThemeMode } from "../theme/ThemeContext.tsx";
 import { useIsMobile } from "../hooks/useIsMobile.ts";
 import { useRobotDescription } from "../hooks/useRobotDescription.ts";
 import { useCalibrationStatus } from "../hooks/useCalibrationStatus.ts";
 import { useImuYawCalibration } from "../hooks/useImuYawCalibration.ts";
+import { usePose } from "../hooks/usePose.ts";
+import { useApi } from "../hooks/useApi.ts";
+import { getQuaternionFromHeading } from "../utils/map.tsx";
 
 const { Text } = Typography;
 
@@ -105,6 +108,38 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
     const [rotating, setRotating] = useState<SensorId | null>(null);
     const [hoveredSensor, setHoveredSensor] = useState<SensorId | null>(null);
     const { status: calibrationStatus } = useCalibrationStatus();
+    const { notification } = App.useApp();
+    const guiApi = useApi();
+    const pose = usePose();
+    const [settingDock, setSettingDock] = useState(false);
+
+    const handleSetDockAtRobot = useCallback(async () => {
+        const px = pose.pose?.pose?.position?.x;
+        const py = pose.pose?.pose?.position?.y;
+        if (px == null || py == null) {
+            notification.warning({ message: "No robot pose available yet" });
+            return;
+        }
+        const heading = values.dock_pose_yaw ?? 0;
+        const q = getQuaternionFromHeading(heading);
+        try {
+            setSettingDock(true);
+            await guiApi.mowglinext.mapDockingCreate({
+                docking_pose: {
+                    orientation: { x: q.x!, y: q.y!, z: q.z!, w: q.w! },
+                    position: { x: px, y: py, z: 0 },
+                },
+            });
+            onChange("dock_pose_x", roundTo(px, 3));
+            onChange("dock_pose_y", roundTo(py, 3));
+            notification.success({ message: "Dock pose set to current robot position" });
+        } catch (e: unknown) {
+            const message = e instanceof Error ? e.message : "Unknown error";
+            notification.error({ message: "Failed to set dock pose", description: message });
+        } finally {
+            setSettingDock(false);
+        }
+    }, [pose, guiApi, notification, onChange, values.dock_pose_yaw]);
     // Dock yaw lives in mowgli_robot.yaml. It is normally written by the
     // IMU auto-calibration service and the "set dock pose" GUI action,
     // but operators can also override it manually here when calibration
@@ -656,6 +691,17 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                 <div style={{ width: 12, height: 12, borderRadius: 2, background: mode === "dark" ? "#666" : "#888" }} />
                                 <span>Dock Heading</span>
                             </Space>
+                        }
+                        extra={
+                            <Tooltip title="Set dock pose to current robot position (writes dock_pose_x/y/yaw to mowgli_robot.yaml)">
+                                <Button
+                                    type="text"
+                                    size="small"
+                                    icon={<EnvironmentOutlined />}
+                                    loading={settingDock}
+                                    onClick={handleSetDockAtRobot}
+                                />
+                            </Tooltip>
                         }
                         style={{ marginBottom: 8, borderLeft: `3px solid ${mode === "dark" ? "#666" : "#888"}` }}
                     >
