@@ -185,6 +185,25 @@ void NavSatToAbsolutePoseNode::on_navsat_fix(sensor_msgs::msg::NavSatFix::ConstS
     return;
   }
 
+  // Auto-seed datum from the first valid fix when the configured datum is
+  // (0, 0). Without this, a misconfigured launch (or sim where the runtime
+  // mowgli_robot.yaml hasn't had datum_lat/lon set) projects the GPS lat/lon
+  // through (lon - 0)*cos(0)*111320 → ENU at UTM scale (10⁶ m), and every
+  // downstream node trying to interpret that pose in a local map frame
+  // breaks (Foxglove shows the polygon at the origin while the robot is
+  // millions of metres away, BoundaryGuard fires constantly, etc.).
+  // cog_to_imu_node already does the same self-seed for its own datum.
+  if (datum_lat_ == 0.0 && datum_lon_ == 0.0)
+  {
+    datum_lat_ = msg->latitude;
+    datum_lon_ = msg->longitude;
+    cos_datum_lat_ = std::cos(datum_lat_ * DEG_TO_RAD);
+    RCLCPP_INFO(get_logger(),
+                "datum self-seeded from first fix: lat=%.8f lon=%.8f",
+                datum_lat_,
+                datum_lon_);
+  }
+
   // Project WGS84 → local ENU.
   double east = 0.0;
   double north = 0.0;
