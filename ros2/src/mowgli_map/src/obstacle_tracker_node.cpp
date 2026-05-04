@@ -1188,6 +1188,35 @@ void ObstacleTrackerNode::merge_overlapping()
         break;  // restart outer loop
     }
   }
+
+  // Post-merge sanity check: drop tracked obstacles whose radius now exceeds
+  // max_obstacle_radius_. associate_clusters rejects oversized clusters at
+  // birth, but merge_overlapping can grow a merged obstacle's hull past the
+  // limit by stitching together two well-formed clusters whose union spans a
+  // larger area. Without this check, the merged blob's `radius` becomes the
+  // merge_dist denominator for the next pass — every nearby cluster within
+  // (radius + radius_b + 0.10) m falls in, producing an avalanche that
+  // engulfs every interior obstacle and the robot's whole mowing track. The
+  // resulting polygon then lands in obstacle_polygons_ → keepout_mask, where
+  // it marks most of the polygon LETHAL and breaks docking with "Start
+  // occupied" / "no valid path" from interior poses.
+  tracked_.erase(std::remove_if(tracked_.begin(),
+                                tracked_.end(),
+                                [this](const TrackedObstacle& obs)
+                                {
+                                  if (obs.radius > max_obstacle_radius_)
+                                  {
+                                    RCLCPP_INFO(get_logger(),
+                                                "Dropping post-merge obstacle #%u: "
+                                                "radius=%.2f m > max=%.2f m",
+                                                obs.id,
+                                                obs.radius,
+                                                max_obstacle_radius_);
+                                    return true;
+                                  }
+                                  return false;
+                                }),
+                 tracked_.end());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

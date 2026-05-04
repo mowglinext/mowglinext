@@ -114,9 +114,30 @@
                  ~0.8m inward, and faces the robot toward the area. This
                  stays at the mowing location instead of driving all the
                  way home, and avoids the RPP-plans-a-reverse-leg behaviour
-                 of DockRobot-based recovery. Two tries before escalating. -->
+                 of DockRobot-based recovery. Two tries before escalating.
+
+                 BackUp first: when the robot drifts ~0.2 m past the polygon
+                 edge during a strip turn, its 0.50 m forward footprint
+                 overlaps the keepout-margin LETHAL zone (margin 0.3 m + the
+                 inflation_layer's 0.10 m inscribed band), and Smac rejects
+                 the recovery start with "Start occupied". Reversing 0.5 m
+                 at low speed (0.10 m/s) typically pulls the robot back
+                 inside the polygon (or at least clears the footprint of
+                 the LETHAL halo) before NavigateToPose runs. BackUp uses
+                 behavior_server which only does a 0.5 s simulate-ahead
+                 check, not a full footprint scan, so it can execute even
+                 from a footprint-occupied start. -->
             <RetryUntilSuccessful num_attempts="2" name="RecoveryRetry">
               <Sequence name="NavigateBackInside">
+                <Fallback name="BackUpBeforeRecovery">
+                  <BackUp backup_dist="0.50" backup_speed="0.10"/>
+                  <!-- BackUp can fail (collision_monitor stops, etc.). Don't
+                       block the recovery flow if it does — fall through to
+                       NavigateInsideBoundary anyway and let Nav2's internal
+                       recovery sub-tree (Spin/ClearLocalCostmap) try. -->
+                  <AlwaysSuccess/>
+                </Fallback>
+                <ClearCostmap/>
                 <NavigateInsideBoundary/>
                 <!-- Succeed only if Nav2 actually put us back inside a
                      defined area. -->
