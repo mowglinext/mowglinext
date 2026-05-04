@@ -25,6 +25,36 @@ body {
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
+.arch-diagram {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  overflow-x: auto;
+  display: flex;
+  justify-content: center;
+}
+
+.arch-diagram .mermaid {
+  width: 100%;
+  min-width: 900px;
+}
+
+.arch-diagram svg {
+  max-width: 100%;
+  height: auto !important;
+  background: transparent !important;
+}
+
+.composer-group.disabled {
+  opacity: 0.45;
+}
+
+.composer-group.disabled .composer-option {
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
 .container {
   max-width: 1100px;
   margin: 0 auto;
