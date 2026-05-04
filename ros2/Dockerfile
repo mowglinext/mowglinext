@@ -85,10 +85,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-kilted-ublox-msgs \
     ros-kilted-nmea-msgs \
     ros-kilted-rtcm-msgs \
-    # MAVROS
-    ros-kilted-mavros \
-    ros-kilted-mavros-msgs \
-    ros-kilted-mavros-extras \
     # tinyxml2 (required at runtime by BehaviorTree.CPP)
     libtinyxml2-dev \
     # Topic tools (relay, throttle — used in simulation for topic remapping)
