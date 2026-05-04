@@ -385,31 +385,6 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         setDockDirty(true);
     }, [dockPlacementMode, setHasUnsavedChanges]);
 
-    const handleDockHeadingChange = useCallback((heading: number) => {
-        setFeatures(prev => {
-            const dock = prev["dock"];
-            if (!(dock instanceof DockFeatureBase)) return prev;
-            const updated = new DockFeatureBase(dock.getCoordinates(), heading);
-            return {...prev, dock: updated};
-        });
-        setHasUnsavedChanges(true);
-        setDockDirty(true);
-    }, [setHasUnsavedChanges]);
-
-    const handleSetDockAtMower = useCallback(() => {
-        const pose = robotPoseRef.current;
-        if (!pose) {
-            notification.warning({message: "No robot position available"});
-            return;
-        }
-        const coord = transpose(offsetX, offsetY, datum, pose.y, pose.x);
-        setFeatures(prev => ({...prev, dock: new DockFeatureBase(coord, pose.heading)}));
-        setDockPlacementMode(false);
-        setHasUnsavedChanges(true);
-        setDockDirty(true);
-        notification.success({message: "Dock set at robot position"});
-    }, [offsetX, offsetY, datum, setHasUnsavedChanges, notification]);
-
     // Mower action callbacks shared between desktop and mobile toolbars
     const mowerActions = useMemo(() => ({
         onStart: mowerAction("high_level_control", {Command: 1}),
@@ -776,7 +751,6 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onSubtract={handleSubtract}
                         onSplit={handleSplit}
                         onPlaceDock={handleDockPlacement}
-                        onSetDockAtMower={handleSetDockAtMower}
                         dockPlacementMode={dockPlacementMode}
                         onSaveMap={handleSaveMap}
                         onUndo={handleUndo}
@@ -819,10 +793,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onSplit={handleSplit}
                         onEditSelectedFeature={handleEditSelectedFeature}
                         onPlaceDock={handleDockPlacement}
-                        onSetDockAtMower={handleSetDockAtMower}
                         dockPlacementMode={dockPlacementMode}
-                        dockHeading={features["dock"] instanceof DockFeatureBase ? (features["dock"] as DockFeatureBase).getHeading() : 0}
-                        onDockHeadingChange={handleDockHeadingChange}
                     />
                 )}
                 {/* Desktop: View mode — bottom glass toolbar */}

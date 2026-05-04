@@ -1,4 +1,4 @@
-import {InputNumber, Tooltip} from "antd";
+import {Tooltip} from "antd";
 import {
     SaveOutlined,
     CloseOutlined,
@@ -12,7 +12,6 @@ import {
     FormOutlined,
     PlusOutlined,
     AimOutlined,
-    EnvironmentOutlined,
 } from "@ant-design/icons";
 import AsyncButton from "../../../components/AsyncButton.tsx";
 import {ShapePickerDropdown} from "./ShapePickerDropdown.tsx";
@@ -37,10 +36,7 @@ interface MapEditorToolbarProps {
     onSplit?: () => void;
     onEditSelectedFeature?: () => void;
     onPlaceDock?: () => void;
-    onSetDockAtMower?: () => void;
     dockPlacementMode?: boolean;
-    dockHeading?: number;
-    onDockHeadingChange?: (heading: number) => void;
 }
 
 interface ToolButtonProps {
@@ -92,7 +88,7 @@ export const MapEditorToolbar = ({
     hasUnsavedChanges, historyIndex, editHistoryLength,
     selectedFeatureCount, onSaveMap, onCancel, onUndo, onRedo,
     onDrawPolygon, onDrawShape, onDrawEmoji, onTrash, onCombine, onSubtract, onSplit, onEditSelectedFeature,
-    onPlaceDock, onSetDockAtMower, dockPlacementMode, dockHeading, onDockHeadingChange,
+    onPlaceDock, dockPlacementMode,
 }: MapEditorToolbarProps) => {
     const {colors} = useThemeMode();
 
@@ -194,25 +190,6 @@ export const MapEditorToolbar = ({
             primary={dockPlacementMode}
             glow={dockPlacementMode}
         />
-        <ToolButton
-            icon={<EnvironmentOutlined/>}
-            tooltip="Set dock at mower position"
-            onClick={onSetDockAtMower}
-        />
-        <Tooltip title="Dock heading (radians)" placement="right">
-            <div style={{padding: '2px 4px'}}>
-                <InputNumber
-                    size="small"
-                    value={dockHeading != null ? Math.round((dockHeading * 180 / Math.PI) * 10) / 10 : 0}
-                    onChange={(val) => onDockHeadingChange?.(((val ?? 0) * Math.PI) / 180)}
-                    step={5}
-                    min={-180}
-                    max={180}
-                    style={{width: 72, fontSize: 11}}
-                    suffix="°"
-                />
-            </div>
-        </Tooltip>
     </div>
     );
 };
