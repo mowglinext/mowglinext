@@ -80,7 +80,7 @@ assert_eq "mavros backend: MAVROS_ENABLED=true"     "true"     "$(env_value "$ma
 
 mavros_services=$(grep -E '^\s+container_name:' "$mavros_repo/docker/docker-compose.yaml" \
   | awk '{print $2}' | sort)
-for required in mowgli-ros2 mowgli-gui mowgli-mavros mowgli-ntrip mowgli-lidar; do
+for required in mowgli-ros2 mowgli-gui mowgli-mavros mowgli-lidar; do
   case "$mavros_services" in
     *"$required"*) pass "mavros backend: service $required present" ;;
     *)             fail "mavros backend: service $required present" ;;
@@ -89,6 +89,10 @@ done
 case "$mavros_services" in
   *mowgli-gps*) fail "mavros backend: NO direct GPS container" "mowgli-gps leaked into mavros compose" ;;
   *)            pass "mavros backend: NO direct GPS container" ;;
+esac
+case "$mavros_services" in
+  *mowgli-ntrip*) fail "mavros backend: NO standalone ntrip sidecar" "mowgli-ntrip leaked into mavros compose" ;;
+  *)              pass "mavros backend: NO standalone ntrip sidecar" ;;
 esac
 
 test_summary

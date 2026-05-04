@@ -1,6 +1,7 @@
 x-ros2-env: &ros2-env
   ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
   RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+  CYCLONEDDS_URI: file:///cyclonedds.xml
   ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
   RCUTILS_COLORIZED_OUTPUT: "1"
   RCUTILS_LOGGING_USE_STDOUT: "1"
@@ -14,6 +15,8 @@ services:
     privileged: true
     volumes:
       - /dev:/dev
+      - ./docker/config/mowgli:/ros2_ws/config:ro
+      - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
     environment:
       <<: *ros2-env
       HARDWARE_BACKEND: ${HARDWARE_BACKEND:-mavros}
@@ -24,21 +27,6 @@ services:
       MAVROS_TGT_SYSTEM: ${MAVROS_TGT_SYSTEM:-1}
       MAVROS_TGT_COMPONENT: ${MAVROS_TGT_COMPONENT:-1}
       MAVROS_AUTOPILOT: ${MAVROS_AUTOPILOT:-ardupilot}
-    restart: unless-stopped
-
-  ntrip:
-    container_name: mowgli-ntrip
-    image: ${MOWGLI_ROS2_IMAGE}
-    network_mode: host
-    ipc: host
-    privileged: true
-    environment:
-      <<: *ros2-env
-    command: >
-      ros2 launch mowgli_ntrip_client mowgli_ntrip_client.launch.py
-    volumes:
-      - ./docker/config/mowgli:/ros2_ws/config:ro
-      - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
     restart: unless-stopped
     logging:
       driver: json-file

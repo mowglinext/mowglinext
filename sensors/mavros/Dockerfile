@@ -25,4 +25,4 @@ RUN chmod +x /ros2_entrypoint.sh
 
 ENTRYPOINT ["/ros2_entrypoint.sh"]
 CMD ["ros2", "launch", "mavros", "px4.launch", \
-     "fcu_url:=/dev/ttyUSB0:921600"]
+     "fcu_url:=/dev/mavros:921600"]

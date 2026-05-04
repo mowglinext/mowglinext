@@ -32,11 +32,14 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import (
     Command,
+    EnvironmentVariable,
     FindExecutable,
     LaunchConfiguration,
     PathJoinSubstitution,
+    PythonExpression,
 )
 from launch_ros.actions import Node
 from launch_ros.descriptions import ParameterValue
@@ -64,11 +67,18 @@ def generate_launch_description() -> LaunchDescription:
         description="Serial port connected to the Mowgli firmware board.",
     )
 
+    hardware_backend_arg = DeclareLaunchArgument(
+        "hardware_backend",
+        default_value=EnvironmentVariable("HARDWARE_BACKEND", default_value="mowgli"),
+        description="Hardware backend: 'mowgli' or 'mavros'.",
+    )
+
     # ------------------------------------------------------------------
     # Resolved substitutions
     # ------------------------------------------------------------------
     use_sim_time = LaunchConfiguration("use_sim_time")
     serial_port = LaunchConfiguration("serial_port")
+    hardware_backend = LaunchConfiguration("hardware_backend")
 
     # ------------------------------------------------------------------
     # Robot config (mowgli_robot.yaml)
@@ -182,7 +192,19 @@ def generate_launch_description() -> LaunchDescription:
         bringup_dir, "config", "hardware_bridge.yaml"
     )
 
-    hardware_bridge_node = Node(
+    hardware_bridge_remappings = [
+        ("~/imu/data_raw", "/imu/data"),
+        ("~/imu/mag_raw", "/imu/mag_raw"),
+        ("~/wheel_odom", "/wheel_odom"),
+        ("~/emergency", "/hardware_bridge/emergency"),
+        ("~/power", "/hardware_bridge/power"),
+        ("~/status", "/hardware_bridge/status"),
+        ("~/cmd_vel", "/cmd_vel"),
+        ("~/dock_heading", "/gnss/heading"),
+    ]
+
+    mowgli_hardware_bridge_node = Node(
+        condition=IfCondition(PythonExpression(["'", hardware_backend, "' == 'mowgli'"])),
         package="mowgli_hardware",
         executable="hardware_bridge_node",
         name="hardware_bridge",
@@ -218,17 +240,12 @@ def generate_launch_description() -> LaunchDescription:
         ],
         # The node publishes on ~/topic (e.g. /hardware_bridge/wheel_odom).
         # behavior_tree_node subscribes to /hardware_bridge/status etc.
-        remappings=[
-            ("~/imu/data_raw", "/imu/data"),
-            ("~/imu/mag_raw", "/imu/mag_raw"),
-            ("~/wheel_odom", "/wheel_odom"),
-            ("~/emergency", "/hardware_bridge/emergency"),
-            ("~/power", "/hardware_bridge/power"),
-            ("~/status", "/hardware_bridge/status"),
-            ("~/cmd_vel", "/cmd_vel"),
-            ("~/dock_heading", "/gnss/heading"),
-        ],
+        remappings=hardware_bridge_remappings,
     )
+
+    # In MAVROS mode, the hardware backend is provided by the external
+    # mowglimavros sidecar over DDS. No internal hardware bridge is started
+    # from the main MowgliNext workspace in that mode.
 
     # 3. twist_mux
     twist_mux_params = os.path.join(bringup_dir, "config", "twist_mux.yaml")
@@ -254,8 +271,9 @@ def generate_launch_description() -> LaunchDescription:
         [
             use_sim_time_arg,
             serial_port_arg,
+            hardware_backend_arg,
             robot_state_publisher_node,
-            hardware_bridge_node,
+            mowgli_hardware_bridge_node,
             twist_mux_node,
         ]
     )

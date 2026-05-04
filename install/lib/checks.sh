@@ -109,7 +109,7 @@ check_containers() {
   local services=(mowgli gui mosquitto)
 
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
-    services+=(mavros ntrip)
+    services+=(mavros)
   else
     case "${GNSS_BACKEND}" in
       gps)     services+=(gps) ;;
@@ -145,7 +145,6 @@ check_containers() {
       gui)          container="mowgli-gui" ;;
       mosquitto)    container="mowgli-mqtt" ;;
       mavros)       container="mowgli-mavros" ;;
-      ntrip)        container="mowgli-ntrip" ;;
       tfluna_front) container="mowgli-tfluna-front" ;;
       tfluna_edge)  container="mowgli-tfluna-edge" ;;
     esac
@@ -277,6 +276,16 @@ check_gps() {
       info "MAVROS global position available"
     fi
 
+    local ntrip_enabled="false"
+    local robot_config="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
+    if [[ -f "$robot_config" ]]; then
+      local yaml_ntrip_enabled
+      yaml_ntrip_enabled="$(grep -E '^[[:space:]]*ntrip_enabled:' "$robot_config" | head -1 | awk '{print tolower($2)}')"
+      if [[ "$yaml_ntrip_enabled" == "true" || "$yaml_ntrip_enabled" == "false" ]]; then
+        ntrip_enabled="$yaml_ntrip_enabled"
+      fi
+    fi
+
     local rtcm_info
     rtcm_info="$(
       docker exec mowgli-ros2 bash -lc \
@@ -285,9 +294,11 @@ check_gps() {
     )"
     if echo "$rtcm_info" | grep -q "Publisher count: [1-9]"; then
       info "RTCM topic has publisher(s)"
-    else
+    elif [[ "$ntrip_enabled" == "true" ]]; then
       warn "No RTCM publisher detected on /rtcm"
-      add_issue "No RTCM publisher on /rtcm in MAVROS mode. Check mowgli-ntrip logs and NTRIP configuration."
+      add_issue "No RTCM publisher on /rtcm in MAVROS mode. Check mowgli-mavros logs and NTRIP configuration."
+    else
+      info "NTRIP disabled in mowgli_robot.yaml — skipping RTCM publisher requirement"
     fi
     return
   fi
