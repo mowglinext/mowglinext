@@ -13,12 +13,24 @@ pick_serial_by_id() {
     done < <(find "$by_id_dir" -maxdepth 1 -type l | sort)
   fi
 
+  echo ""
+
   if [ "${#candidates[@]}" -eq 0 ]; then
-    error "No USB serial device found in $by_id_dir"
-    return 1
+    warn "No USB serial by-id device found in $by_id_dir"
+    warn "Falling back to manual USB serial port selection"
+
+    echo "Enter USB serial device path:"
+    echo "  examples: /dev/ttyACM0, /dev/ttyUSB0, /dev/gps"
+    prompt "$MSG_CHOICE" "${default_device:-/dev/ttyACM0}"
+
+    if [ ! -e "$REPLY" ] && [[ "$REPLY" != /dev/* ]]; then
+      error "Invalid USB serial device path: $REPLY"
+      return 1
+    fi
+
+    return 0
   fi
 
-  echo ""
   info "Detected USB serial device(s):"
   for path in "${candidates[@]}"; do
     if [ -L "$path" ]; then
@@ -28,6 +40,8 @@ pick_serial_by_id() {
     fi
     i=$((i + 1))
   done
+
+  echo "  m) Manual path"
 
   local default_idx=""
   if [ -n "$default_device" ]; then
@@ -41,6 +55,11 @@ pick_serial_by_id() {
 
   prompt "$MSG_CHOICE" "${default_idx:-1}"
   choice="$REPLY"
+
+  if [ "$choice" = "m" ] || [ "$choice" = "M" ]; then
+    prompt "USB serial path" "${default_device:-/dev/ttyACM0}"
+    return 0
+  fi
 
   if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#candidates[@]}" ]; then
     error "Invalid USB serial device selection"
@@ -74,9 +93,15 @@ configure_gps() {
     : "${GPS_DEBUG_PORT:=/dev/gps_debug}"
     : "${GPS_DEBUG_BAUD:=115200}"
 
-    if [[ "${GNSS_BACKEND}" == "unicore" && "${GPS_CONNECTION}" == "usb" && -z "${GPS_BY_ID:-}" ]]; then
-      error "GPS_BY_ID is required for GNSS_BACKEND=unicore with GPS_CONNECTION=usb"
-      return 1
+    if [[ "${GNSS_BACKEND}" == "unicore" && "${GPS_CONNECTION}" == "usb" ]]; then
+      : "${GPS_PORT:=/dev/gps}"
+
+      if [ -n "${GPS_BY_ID:-}" ]; then
+        info "Unicore USB by-id preset: ${GPS_BY_ID}"
+      else
+        warn "Unicore USB selected without GPS_BY_ID preset"
+        warn "Using GPS_PORT=${GPS_PORT}"
+      fi
     fi
 
     info "GNSS backend pre-configured: ${GNSS_BACKEND}"
@@ -144,9 +169,14 @@ configure_gps() {
       1)
         GPS_CONNECTION="usb"
         GPS_UART_DEVICE=""
-        if [ "$GNSS_BACKEND" = "unicore" ]; then
-          pick_serial_by_id "${GPS_BY_ID:-}" || return 1
-          GPS_BY_ID="$REPLY"
+        pick_usb_serial_device "GPS (${GNSS_BACKEND})" "${GPS_PORT:-/dev/ttyACM0}" || return 1
+
+        if [ -n "${USB_SELECTED_BY_ID:-}" ]; then
+          GPS_BY_ID="$USB_SELECTED_BY_ID"
+          GPS_PORT="/dev/gps"
+        else
+          GPS_BY_ID=""
+          GPS_PORT="$USB_SELECTED_PORT"
         fi
         ;;
       2)
