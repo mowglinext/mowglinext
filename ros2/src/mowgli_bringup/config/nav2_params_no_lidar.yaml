@@ -108,30 +108,27 @@ controller_server:
       max_angular_vel: 3.0
       max_robot_pose_search_dist: 2.0
 
-    # MPPI controller for coverage mowing — same configuration as
-    # nav2_params.yaml (see comments there). Without LiDAR there's no
-    # obstacle layer driving ObstaclesCritic; the critic stays enabled
-    # but never sees lethal cells, so it costs nothing.
+    # MPPI for coverage — same as nav2_params.yaml; see that file for
+    # rationale. Without LiDAR the obstacle layer is empty, so
+    # ObstaclesCritic costs nothing — the controller still works.
     FollowCoveragePath:
       plugin: "nav2_mppi_controller::MPPIController"
-      # Same MPPI configuration as nav2_params.yaml. Without LiDAR there's
-      # no obstacle layer feeding ObstaclesCritic; everything still works,
-      # the critic just sees no lethal cells.
       time_steps: 30
       model_dt: 0.1
       batch_size: 2000
-      vx_std: 0.10
+      vx_std: 0.20
       vy_std: 0.0
-      wz_std: 0.30
+      wz_std: 0.40
       vx_max: 0.30
       vx_min: -0.20
-      wz_max: 1.0
-      ax_max: 0.30
-      ax_min: -0.30
-      az_max: 1.5
+      wz_max: 1.5
+      ax_max: 0.50
+      ax_min: -0.50
+      az_max: 2.0
       iteration_count: 1
-      prune_distance: 1.7
-      transform_tolerance: 0.1
+      prune_distance: 50.0
+      max_robot_pose_search_dist: 50.0
+      transform_tolerance: 0.5
       temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"
@@ -164,12 +161,12 @@ controller_server:
       PreferForwardCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
+        cost_weight: 12.0
         threshold_to_consider: 0.5
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 14.0
+        cost_weight: 5.0
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 4
         threshold_to_consider: 0.5
@@ -178,7 +175,7 @@ controller_server:
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
+        cost_weight: 10.0
         offset_from_furthest: 5
         threshold_to_consider: 1.4
       PathAngleCritic:

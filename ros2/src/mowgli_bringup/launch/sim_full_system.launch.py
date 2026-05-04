@@ -340,7 +340,10 @@ def generate_launch_description() -> LaunchDescription:
                 # Realistic mowing scenario: 90 s RTK-Fixed (open sky),
                 # 30 s RTK-Float (light tree cover), 10 s no-fix (dense
                 # canopy / multipath). Set to "" for always-FIXED.
-                "quality_pattern": "90,RTK_FIXED;30,RTK_FLOAT;10,NO_FIX",
+                # Always RTK_FIXED for development. Set the cycle string
+                # back to "90,RTK_FIXED;30,RTK_FLOAT;10,NO_FIX" when
+                # specifically validating RTK-degraded behaviour.
+                "quality_pattern": "",
                 "noise_seed": 42,
             }
         ],

@@ -18,6 +18,9 @@
 #include <mutex>
 
 #include "action_msgs/msg/goal_status.hpp"
+#include "tf2/exceptions.hpp"
+#include "tf2/utils.hpp"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include "opennav_coverage_msgs/msg/coordinate.hpp"
 #include "opennav_coverage_msgs/msg/coordinates.hpp"
 #include "opennav_coverage_msgs/msg/headland_mode.hpp"
@@ -215,14 +218,38 @@ BT::NodeStatus ComputeCoveragePath::onRunning()
     return BT::NodeStatus::FAILURE;
   }
   ctx->current_coverage_path = wrapped.result->nav_path;
-  // Fields2Cover/opennav_coverage leaves per-pose frame_ids empty —
-  // MPPI's path transform needs them populated. Stamp each pose with
-  // map-frame and Time(0) so the TF lookup uses the latest available
-  // transform (otherwise the path's "now" timestamp races ahead of the
-  // TF buffer and every pose hits an extrapolation error → 0 poses).
   if (ctx->current_coverage_path.header.frame_id.empty())
     ctx->current_coverage_path.header.frame_id = "map";
-  ctx->current_coverage_path.header.stamp = rclcpp::Time(0, 0, RCL_ROS_TIME);
+
+  // Prepend the robot's current pose to the coverage path so MPPI starts
+  // tracking from the robot (closest_point = path[0]) instead of jumping
+  // to a random nearest point. MPPI's PathHandler::transformPath breaks
+  // its forward-walk the first time a pose lands outside the local
+  // costmap — for a multi-swath coverage path this typically truncates
+  // to zero poses unless the path begins near the robot.
+  try
+  {
+    auto base_to_map = ctx->tf_buffer->lookupTransform(
+        "map", "base_footprint", tf2::TimePointZero, tf2::durationFromSec(1.0));
+    geometry_msgs::msg::PoseStamped robot_pose;
+    robot_pose.pose.position.x = base_to_map.transform.translation.x;
+    robot_pose.pose.position.y = base_to_map.transform.translation.y;
+    robot_pose.pose.position.z = 0.0;
+    robot_pose.pose.orientation = base_to_map.transform.rotation;
+    ctx->current_coverage_path.poses.insert(
+        ctx->current_coverage_path.poses.begin(), robot_pose);
+  }
+  catch (const tf2::TransformException& ex)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "ComputeCoveragePath: TF map→base_footprint unavailable, sending "
+                "path as-is (%s)", ex.what());
+  }
+
+  // Stamp the path + every pose with the map frame and the current ROS
+  // time. MPPI's transform pipeline interpolates against per-pose stamps
+  // — Time(0) sentinel triggered an empty transformed_global_plan.
+  ctx->current_coverage_path.header.stamp = ctx->node->now();
   for (auto& ps : ctx->current_coverage_path.poses)
   {
     ps.header.frame_id = ctx->current_coverage_path.header.frame_id;

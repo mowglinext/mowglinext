@@ -178,52 +178,58 @@ controller_server:
     #   * Diff-drive motion model with rotate-in-place support — robot can
     #     pivot at a swath end exactly like FTC's PRE_ROTATE used to.
     #   * Path tracking ≤ 1 cm lateral error documented for the configuration
-    #     pattern below (high PathAlign weight, narrow vx_std).
-    # Tuned for opennav_coverage's path style: alternating swath / transition
-    # legs, mostly straight lines with 90° turns at corners. Pair with the
-    # default `coverage_goal_checker` which only checks position.
+    # MPPI controller for coverage mowing. Native ObstaclesCritic gives
+    # in-path obstacle avoidance: the optimizer deviates around dynamic
+    # obstacles (a person walking across the lawn) without aborting the
+    # FollowPath action, then PathAlignCritic pulls the robot back to
+    # the swath once the obstacle clears. This is the whole point of the
+    # opennav_coverage migration — RPP would force "stop & replan" on
+    # every dynamic obstacle, which is what we want to avoid.
+    #
+    # Diagnosed root cause of "MPPI commands ~0 m/s" earlier in this
+    # branch: PathAlign + ObstaclesCritic + ConstraintCritic combined
+    # cost was high enough that the lowest-cost trajectory was "barely
+    # move." Fix path: bias forward motion strongly via PreferForward
+    # weight, lower PathAlign so it doesn't pin the robot to the carrot,
+    # bump PathFollow so we make progress along the path. Local costmap
+    # is 20×20m so the bounds-check in transformPath sees enough of the
+    # 9×6m polygon path to avoid the "Resulting plan has 0 poses" exit.
     FollowCoveragePath:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 30
-      model_dt: 0.1     # match controller_frequency=10Hz period
+      model_dt: 0.1                 # match controller_frequency=10Hz period
       batch_size: 2000
-      vx_std: 0.10              # narrow → tight tracking on swaths
-      vy_std: 0.0               # diff-drive — no lateral motion
-      wz_std: 0.30              # enough to handle in-place rotation
-      vx_max: 0.30              # max mowing speed
-      vx_min: -0.20             # allow reverse for recovery
-      wz_max: 1.0               # angular limit
-      ax_max: 0.30              # acceleration
-      ax_min: -0.30
-      az_max: 1.5
+      vx_std: 0.20                  # wider noise → more candidate forward speeds
+      vy_std: 0.0                   # diff-drive — no lateral
+      wz_std: 0.40                  # generous angular noise for path-aligning
+      vx_max: 0.30
+      vx_min: -0.20                 # allow brief reverse for diff-drive recovery
+      wz_max: 1.5
+      ax_max: 0.50
+      ax_min: -0.50
+      az_max: 2.0
       iteration_count: 1
-      # Coverage paths can start far from the robot's current pose (the
-      # F2C path's first vertex is on the polygon perimeter, not at the
-      # dock). 1.7 m would prune the whole path; 50 m gives MPPI room to
-      # latch onto any starting point on a typical mowing area.
+      # Coverage paths can start far from the robot (F2C path's first
+      # vertex is on the polygon perimeter, not at the dock).
       prune_distance: 50.0
-      # How far along the path to search for the closest pose to the
-      # robot. Default 0 = caps at prune_distance, which is fine. Set
-      # explicitly to keep behavior deterministic when prune_distance
-      # is large.
       max_robot_pose_search_dist: 50.0
-      transform_tolerance: 0.1
+      transform_tolerance: 0.5
       temperature: 0.3
       gamma: 0.015
-      motion_model: "DiffDrive" # robot can turn in place
+      motion_model: "DiffDrive"
       visualize: false
       regenerate_noises: false
       TrajectoryVisualizer:
         trajectory_step: 5
         time_step: 3
       AckermannConstraints:
-        min_turning_r: 0.0      # diff-drive — unused
+        min_turning_r: 0.0
       critics:
         - "ConstraintCritic"
-        - "ObstaclesCritic"          # native obstacle avoidance
+        - "ObstaclesCritic"
         - "GoalCritic"
         - "GoalAngleCritic"
-        - "PathAlignCritic"          # high weight → coverage-tight tracking
+        - "PathAlignCritic"
         - "PathFollowCritic"
         - "PathAngleCritic"
         - "PreferForwardCritic"
@@ -241,35 +247,42 @@ controller_server:
         cost_power: 1
         cost_weight: 3.0
         threshold_to_consider: 0.5
+      # PreferForwardCritic dominant: keep moving forward along the path.
+      # Earlier 5.0 + high PathAlign let MPPI pick "rotate in place" as
+      # the cheapest trajectory.
       PreferForwardCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
+        cost_weight: 12.0
         threshold_to_consider: 0.5
       ObstaclesCritic:
         enabled: true
         cost_power: 1
         repulsion_weight: 1.5
-        critical_weight: 20.0       # strong repulsion from lethal cells
+        critical_weight: 20.0
         consider_footprint: true
         collision_cost: 100000.0
         collision_margin_distance: 0.10
         near_goal_distance: 0.5
-        inflation_radius: 0.40      # match local_costmap inflation
+        inflation_radius: 0.40
         cost_scaling_factor: 10.0
+      # PathAlign reduced from 14 → 5: still pulls the robot toward the
+      # path centerline, but doesn't punish forward progress.
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 14.0           # high → tight coverage swath tracking
+        cost_weight: 5.0
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 4
         threshold_to_consider: 0.5
         offset_from_furthest: 20
         use_path_orientations: false
+      # PathFollow bumped to 10: pulls the robot ALONG the path direction
+      # rather than just toward a single carrot point.
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
+        cost_weight: 10.0
         offset_from_furthest: 5
         threshold_to_consider: 1.4
       PathAngleCritic:
