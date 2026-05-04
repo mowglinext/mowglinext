@@ -100,8 +100,15 @@ void MapServerNode::on_get_coverage_status(
   res->coverage_percent =
       res->total_cells > 0 ? 100.0f * res->mowed_cells / res->total_cells : 0.0f;
   // Coverage-threshold shim for GetNextUnmowedArea: 1 = work remaining,
-  // 0 = area complete. opennav_coverage handles the actual swath count.
-  res->strips_remaining = (res->coverage_percent < 99.0f) ? 1u : 0u;
+  // 0 = area complete. The threshold sits below 100% on purpose:
+  // Fields2Cover swaths plus their connector turns inevitably leave
+  // narrow strips along the polygon edges that no boustrophedon can
+  // cover (corners + perpendicular gaps narrower than the cutter).
+  // Driving past 90% just means the F2C-generated path becomes shorter
+  // and shorter on each replan and MPPI auto-completes them on the
+  // goal_checker tolerance — burning BT cycles for no real coverage
+  // gain. 90% is a good "this area is done" line for production.
+  res->strips_remaining = (res->coverage_percent < 90.0f) ? 1u : 0u;
   res->success = true;
 }
 

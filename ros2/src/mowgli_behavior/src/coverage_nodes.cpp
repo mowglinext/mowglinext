@@ -292,6 +292,37 @@ BT::NodeStatus FollowCoveragePath::onStart()
     return BT::NodeStatus::SUCCESS;
   }
 
+  // Bail when F2C planned a near-trivial path: the robot is near the
+  // last pose, coverage_goal_checker (xy_goal_tolerance 0.5 m) will
+  // fire "Reached the goal" on setPlan and we'd loop forever
+  // (FollowCoveragePath instant-completes → GetNextUnmowedArea finds
+  // remaining cells → ComputeCoveragePath returns the same path with
+  // last-pose still near robot → repeat). Returning FAILURE here lets
+  // the outer AreaLoop advance — combined with the 90% coverage
+  // threshold in GetCoverageStatus this converges cleanly when F2C
+  // can no longer add meaningful coverage.
+  const auto& goal_pose = ctx->current_coverage_path.poses.back().pose.position;
+  try
+  {
+    auto base_to_map = ctx->tf_buffer->lookupTransform(
+        "map", "base_footprint", tf2::TimePointZero, tf2::durationFromSec(0.5));
+    const double dx = goal_pose.x - base_to_map.transform.translation.x;
+    const double dy = goal_pose.y - base_to_map.transform.translation.y;
+    const double dist = std::hypot(dx, dy);
+    if (dist < 0.6)  // ≥ coverage_goal_checker.xy_goal_tolerance + margin
+    {
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "FollowCoveragePath: skipping — goal pose %.2fm from robot "
+                  "(within goal-tolerance, would auto-complete). Area is done.",
+                  dist);
+      return BT::NodeStatus::FAILURE;
+    }
+  }
+  catch (const tf2::TransformException&)
+  {
+    // Best-effort guard; if TF is missing just proceed and let MPPI try.
+  }
+
   if (!follow_client_)
   {
     follow_client_ = rclcpp_action::create_client<Nav2FollowPath>(ctx->node, "/follow_path");
