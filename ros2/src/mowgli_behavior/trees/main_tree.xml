@@ -427,92 +427,21 @@
                 </Sequence>
               </Fallback>
 
-              <!-- Multi-area coverage loop (Path C — cell-based segments).
-                   Outer loop: iterate through all mowing areas.
-                   Inner loop: pick the next short segment, decide whether
-                   to do a transit (blade off) or stay-on, follow it, and
-                   on failure mark the failed cells so the next iteration
-                   skips them.
-                   GetNextUnmowedArea returns FAILURE when all areas are
-                   done. GetNextSegment returns FAILURE when an area's
-                   coverage is complete → next area. -->
+              <!-- Multi-area coverage loop. opennav_coverage plans the full
+                   path (headland + swaths + transitions) for each area in
+                   one shot; MPPI handles dynamic obstacle avoidance during
+                   execution by deviating around them, so there's no inner
+                   segment-recovery loop. mow_progress is painted along the
+                   driven path on FollowCoveragePath success. Persistent
+                   obstacles promoted by obstacle_tracker_node trigger a
+                   replan via the BT's ReplanNeeded condition (handled by
+                   the outer guards). -->
               <Repeat num_cycles="100" name="AreaLoop">
                 <Sequence name="MowOneArea">
                   <GetNextUnmowedArea area_index="{current_area_index}"/>
-                  <Repeat num_cycles="2000" name="SegmentLoop">
-                    <Sequence name="GetAndMowSegment">
-                      <GetNextSegment
-                          area_index="{current_area_index}"
-                          boustrophedon="true"
-                          max_segment_length_m="3.0"/>
-                      <Fallback name="MowOrSkip">
-                        <RetryUntilSuccessful num_attempts="2" name="SegmentRetry">
-                          <Fallback name="ShortOrTransit">
-                            <!-- Short segment: skip transit, blade stays on so
-                                 the robot can flow continuously between
-                                 adjacent cells without spin-up gaps. -->
-                            <Sequence name="ShortPath">
-                              <IsShortSegment/>
-                              <PublishHighLevelStatus state="2" state_name="MOWING"/>
-                              <FollowStrip/>
-                            </Sequence>
-                            <!-- Long transit: blade off, drive to segment
-                                 entry via NavigateToPose, then re-engage. -->
-                            <Sequence name="LongTransit">
-                              <PublishHighLevelStatus state="2" state_name="TRANSIT"/>
-                              <SetMowerEnabled enabled="false"/>
-                              <TransitToStrip/>
-                              <PublishHighLevelStatus state="2" state_name="MOWING"/>
-                              <FollowStrip/>
-                            </Sequence>
-                          </Fallback>
-                        </RetryUntilSuccessful>
-                        <!-- Obstacle wedge recovery. collision_monitor's
-                             PolygonStop can hold the robot motionless for
-                             minutes when LiDAR sees an obstacle inside the
-                             front stop polygon — Nav2 keeps publishing on
-                             /cmd_vel_nav, but /cmd_vel reaches the motors
-                             as zero, so progress_checker only escalates
-                             slowly and MarkBlockedAndSkip then re-plants
-                             the robot on the same obstacle.
-                             When STOP has been continuous for ≥5 s, back
-                             off 0.40 m, clear the local costmap, and let
-                             the outer SegmentLoop fetch a fresh segment
-                             (AlwaysSuccess: don't punish this segment for
-                             an obstacle we just cleared — if the same
-                             wedge persists past max_count/cooldown,
-                             IsObstacleStuck returns FAILURE and the
-                             Fallback advances to MarkBlockedAndSkip). -->
-                        <Sequence name="StuckBackoff">
-                          <IsObstacleStuck min_duration_sec="5.0"
-                                           max_count="3"
-                                           cooldown_sec="8.0"/>
-                          <PublishHighLevelStatus state="2"
-                                                  state_name="OBSTACLE_BACKOFF"/>
-                          <SetMowerEnabled enabled="false"/>
-                          <BackUp backup_dist="0.40" backup_speed="0.15"/>
-                          <ClearCostmap/>
-                          <AlwaysSuccess/>
-                        </Sequence>
-                        <!-- Both retry attempts failed. Bump fail_count for
-                             the cells along the failed segment (DEAD-promote
-                             after 3 consecutive failures), increment skipped
-                             swath counter for the GUI, and let the loop
-                             continue — the next GetNextSegment will pick a
-                             new segment that avoids the blocked cells. -->
-                        <Sequence name="MarkBlockedAndSkip">
-                          <PublishHighLevelStatus state="2" state_name="SKIP_SEGMENT"/>
-                          <SetMowerEnabled enabled="false"/>
-                          <StopMoving/>
-                          <ClearCostmap/>
-                          <MarkSegmentBlocked area_index="{current_area_index}"/>
-                          <IncrementSkippedSwaths/>
-                          <WaitForDuration duration_sec="1.0"/>
-                          <PublishHighLevelStatus state="2" state_name="MOWING"/>
-                        </Sequence>
-                      </Fallback>
-                    </Sequence>
-                  </Repeat>
+                  <PublishHighLevelStatus state="2" state_name="MOWING"/>
+                  <ComputeCoveragePath area_index="{current_area_index}"/>
+                  <FollowCoveragePath area_index="{current_area_index}"/>
                 </Sequence>
               </Repeat>
 

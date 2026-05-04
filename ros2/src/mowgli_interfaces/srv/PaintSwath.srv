@@ -1,0 +1,4 @@
+nav_msgs/Path swath_path
+---
+bool success
+uint32 cells_painted

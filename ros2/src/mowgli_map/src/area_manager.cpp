@@ -489,8 +489,6 @@ void MapServerNode::on_load_map(const std_srvs::srv::Trigger::Request::SharedPtr
     dat.close();
 
     last_decay_time_ = now();
-    strip_layouts_.clear();
-    current_strip_idx_.clear();
 
     res->success = true;
     res->message = "Map loaded from " + map_file_path_;
@@ -513,8 +511,6 @@ void MapServerNode::on_clear_map(const std_srvs::srv::Trigger::Request::SharedPt
   }
   areas_.clear();
   obstacle_polygons_.clear();
-  strip_layouts_.clear();
-  current_strip_idx_.clear();
   docking_pose_set_ = false;
   keepout_filter_info_sent_ = false;
   speed_filter_info_sent_ = false;
@@ -893,8 +889,6 @@ void MapServerNode::load_areas_from_file(const std::string& path)
   // Clear existing areas and reload from file.
   areas_.clear();
   obstacle_polygons_.clear();
-  strip_layouts_.clear();
-  current_strip_idx_.clear();
 
   const int area_count = get_int("area_count", 0);
   for (int i = 0; i < area_count; ++i)

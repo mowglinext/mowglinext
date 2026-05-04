@@ -27,6 +27,7 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>mowgli_interfaces</depend>
+  <depend>opennav_coverage_msgs</depend>
   <depend>rcl_interfaces</depend>
 
 

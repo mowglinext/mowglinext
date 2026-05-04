@@ -23,16 +23,13 @@
 
 #include "behaviortree_cpp/behavior_tree.h"
 #include "behaviortree_cpp/bt_factory.h"
-#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_interfaces/srv/get_coverage_status.hpp"
-#include "mowgli_interfaces/srv/get_next_segment.hpp"
-#include "mowgli_interfaces/srv/get_next_strip.hpp"
-#include "mowgli_interfaces/srv/mark_segment_blocked.hpp"
+#include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
+#include "mowgli_interfaces/srv/paint_swath.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
-#include "nav2_msgs/action/navigate_to_pose.hpp"
-#include "nav_msgs/msg/path.hpp"
+#include "opennav_coverage_msgs/action/compute_coverage_path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 
@@ -40,13 +37,18 @@ namespace mowgli_behavior
 {
 
 // ---------------------------------------------------------------------------
-// GetNextStrip — fetch next unmowed strip from map_server
+// ComputeCoveragePath — call opennav_coverage's /compute_coverage_path action
+// for a single mowing area. Result populates ctx->current_coverage_path with
+// the full nav_msgs/Path (swaths + headland + transitions) ready for MPPI.
 // ---------------------------------------------------------------------------
 
-class GetNextStrip : public BT::StatefulActionNode
+class ComputeCoveragePath : public BT::StatefulActionNode
 {
 public:
-  GetNextStrip(const std::string& name, const BT::NodeConfig& config)
+  using CoverageAction = opennav_coverage_msgs::action::ComputeCoveragePath;
+  using CoverageGoalHandle = rclcpp_action::ClientGoalHandle<CoverageAction>;
+
+  ComputeCoveragePath(const std::string& name, const BT::NodeConfig& config)
       : BT::StatefulActionNode(name, config)
   {
   }
@@ -61,27 +63,35 @@ public:
   void onHalted() override;
 
 private:
-  rclcpp::Client<mowgli_interfaces::srv::GetNextStrip>::SharedPtr client_;
+  rclcpp_action::Client<CoverageAction>::SharedPtr action_client_;
+  rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr area_client_;
+  std::shared_future<CoverageGoalHandle::SharedPtr> goal_future_;
+  CoverageGoalHandle::SharedPtr goal_handle_;
+  std::shared_future<CoverageGoalHandle::WrappedResult> result_future_;
+  bool result_requested_{false};
 };
 
 // ---------------------------------------------------------------------------
-// FollowStrip — follow a strip path with FTCController, blade ON
+// FollowCoveragePath — drive ctx->current_coverage_path with MPPI (single
+// FollowPath goal, blade ON for the whole path; MPPI deviates around dynamic
+// obstacles natively via ObstaclesCritic). On SUCCESS, calls /paint_swath
+// to mark mow_progress along the driven path.
 // ---------------------------------------------------------------------------
 
-class FollowStrip : public BT::StatefulActionNode
+class FollowCoveragePath : public BT::StatefulActionNode
 {
 public:
   using Nav2FollowPath = nav2_msgs::action::FollowPath;
   using FollowGoalHandle = rclcpp_action::ClientGoalHandle<Nav2FollowPath>;
 
-  FollowStrip(const std::string& name, const BT::NodeConfig& config)
+  FollowCoveragePath(const std::string& name, const BT::NodeConfig& config)
       : BT::StatefulActionNode(name, config)
   {
   }
 
   static BT::PortsList providedPorts()
   {
-    return {};
+    return {BT::InputPort<uint32_t>("area_index", 0u, "Mowing area index")};
   }
 
   BT::NodeStatus onStart() override;
@@ -90,188 +100,23 @@ public:
 
 private:
   void setBladeEnabled(bool enabled);
+  void paintPath(const nav_msgs::msg::Path& path);
 
   rclcpp_action::Client<Nav2FollowPath>::SharedPtr follow_client_;
   rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr blade_client_;
+  rclcpp::Client<mowgli_interfaces::srv::PaintSwath>::SharedPtr paint_client_;
+
   std::shared_future<FollowGoalHandle::SharedPtr> follow_future_;
   FollowGoalHandle::SharedPtr follow_handle_;
 
-  // Blade spinup delay — wait before sending path goal
-  static constexpr double kBladeSpinupDelaySec = 1.5;
-  std::chrono::steady_clock::time_point blade_start_time_;
-  bool goal_sent_ = false;
+  bool goal_sent_{false};
+  bool blade_on_{false};
 };
 
 // ---------------------------------------------------------------------------
-// GetNextSegment — Path C: ask map_server for the next short dynamic
-// segment from the robot's pose, ending at the first obstacle / dead
-// cell / boundary / max_length. Replaces GetNextStrip in new BT trees;
-// kept side-by-side during migration.
-// ---------------------------------------------------------------------------
-
-class GetNextSegment : public BT::StatefulActionNode
-{
-public:
-  GetNextSegment(const std::string& name, const BT::NodeConfig& config)
-      : BT::StatefulActionNode(name, config)
-  {
-  }
-
-  static BT::PortsList providedPorts()
-  {
-    return {
-        BT::InputPort<uint32_t>("area_index", 0u, "Mowing area index"),
-        // Coverage row direction. NaN → server auto-computes from
-        // polygon MBR (same as the strip planner does today). Operator
-        // override goes through the GUI's mow_angle_offset_deg.
-        BT::InputPort<double>("prefer_dir_yaw_rad",
-                              std::numeric_limits<double>::quiet_NaN(),
-                              "Preferred mowing row direction (rad). NaN = auto from polygon."),
-        BT::InputPort<bool>("boustrophedon", true, "Alternate row direction for snake pattern"),
-        BT::InputPort<double>("max_segment_length_m",
-                              0.0,
-                              "Max segment length (m). 0 = server default (3.0)."),
-    };
-  }
-
-  BT::NodeStatus onStart() override;
-  BT::NodeStatus onRunning() override;
-  void onHalted() override;
-
-private:
-  rclcpp::Client<mowgli_interfaces::srv::GetNextSegment>::SharedPtr client_;
-  rclcpp::Client<mowgli_interfaces::srv::GetCoverageStatus>::SharedPtr coverage_status_client_;
-};
-
-// ---------------------------------------------------------------------------
-// IsShortSegment — condition: returns SUCCESS when the current segment
-// can be mowed with the blade on (no transit). Reads
-// ctx->current_segment_is_long_transit set by GetNextSegment.
-// ---------------------------------------------------------------------------
-
-class IsShortSegment : public BT::ConditionNode
-{
-public:
-  IsShortSegment(const std::string& name, const BT::NodeConfig& config)
-      : BT::ConditionNode(name, config)
-  {
-  }
-
-  static BT::PortsList providedPorts()
-  {
-    return {};
-  }
-
-  BT::NodeStatus tick() override;
-};
-
-// ---------------------------------------------------------------------------
-// MarkSegmentBlocked — call map_server's ~/mark_segment_blocked with
-// the current segment path so cells along the failed approach get a
-// fail_count tick. After N consecutive failures cells get promoted to
-// LAWN_DEAD and skipped permanently (until decay or manual clear).
-// Should be ticked when FollowSegment / FollowStrip returns FAILURE
-// because of a non-trivial blocker. The node itself returns SUCCESS
-// so the surrounding RetryUntilSuccessful resets cleanly and the
-// next tick can pick a fresh segment.
-// ---------------------------------------------------------------------------
-
-class MarkSegmentBlocked : public BT::StatefulActionNode
-{
-public:
-  MarkSegmentBlocked(const std::string& name, const BT::NodeConfig& config)
-      : BT::StatefulActionNode(name, config)
-  {
-  }
-
-  static BT::PortsList providedPorts()
-  {
-    return {BT::InputPort<uint32_t>("area_index", 0u, "Mowing area index")};
-  }
-
-  BT::NodeStatus onStart() override;
-  BT::NodeStatus onRunning() override;
-  void onHalted() override;
-
-private:
-  rclcpp::Client<mowgli_interfaces::srv::MarkSegmentBlocked>::SharedPtr client_;
-  std::shared_future<mowgli_interfaces::srv::MarkSegmentBlocked::Response::SharedPtr> future_;
-};
-
-// ---------------------------------------------------------------------------
-// TransitToStrip — navigate to strip start using Nav2 navigate_to_pose
-// ---------------------------------------------------------------------------
-
-class TransitToStrip : public BT::StatefulActionNode
-{
-public:
-  using Nav2Navigate = nav2_msgs::action::NavigateToPose;
-  using NavGoalHandle = rclcpp_action::ClientGoalHandle<Nav2Navigate>;
-
-  TransitToStrip(const std::string& name, const BT::NodeConfig& config)
-      : BT::StatefulActionNode(name, config)
-  {
-  }
-
-  static BT::PortsList providedPorts()
-  {
-    return {};
-  }
-
-  BT::NodeStatus onStart() override;
-  BT::NodeStatus onRunning() override;
-  void onHalted() override;
-
-private:
-  rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
-  std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
-  NavGoalHandle::SharedPtr nav_handle_;
-};
-
-// ---------------------------------------------------------------------------
-// DetourAroundObstacle — when FollowStrip aborts on a lookahead-collision,
-// drive a short side-step path through the global planner so the robot
-// physically gets out from in front of the obstacle (a person standing in
-// the strip). The next strip iteration replans from the new pose; the
-// `mow_progress` layer prevents re-cutting already-mowed cells.
-//
-// The detour is a NavigateToPose at (current_pose ⊕ forward·x̂_body
-// + lateral·ŷ_body), routed via SmacPlanner over the local costmap which
-// has the obstacle layer enabled — so the planner naturally curves around
-// the obstruction rather than charging through it.
-// ---------------------------------------------------------------------------
-
-class DetourAroundObstacle : public BT::StatefulActionNode
-{
-public:
-  using Nav2Navigate = nav2_msgs::action::NavigateToPose;
-  using NavGoalHandle = rclcpp_action::ClientGoalHandle<Nav2Navigate>;
-
-  DetourAroundObstacle(const std::string& name, const BT::NodeConfig& config)
-      : BT::StatefulActionNode(name, config)
-  {
-  }
-
-  static BT::PortsList providedPorts()
-  {
-    return {
-        BT::InputPort<double>("forward_m", 0.8, "Forward offset from current pose, body frame"),
-        BT::InputPort<double>("lateral_m", 0.6, "Lateral offset (positive = left), body frame"),
-    };
-  }
-
-  BT::NodeStatus onStart() override;
-  BT::NodeStatus onRunning() override;
-  void onHalted() override;
-
-private:
-  rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
-  std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
-  NavGoalHandle::SharedPtr nav_handle_;
-};
-
-// ---------------------------------------------------------------------------
-// GetNextUnmowedArea — find next area with remaining strips
+// GetNextUnmowedArea — find next area with coverage_percent < 99 %.
+// `strips_remaining` in GetCoverageStatus is now a coverage-threshold shim
+// (1 if work remains, 0 otherwise); existing semantics preserved.
 // ---------------------------------------------------------------------------
 
 class GetNextUnmowedArea : public BT::StatefulActionNode

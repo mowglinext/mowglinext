@@ -214,29 +214,20 @@ struct BTContext
   std::vector<geometry_msgs::msg::Point> visited_waypoints;
 
   // -----------------------------------------------------------------------
-  // Cell-based strip coverage state
+  // opennav_coverage path state
+  //
+  // ComputeCoveragePath fills these from the action result; FollowCoveragePath
+  // sends `current_coverage_path` to MPPI as a single FollowPath goal, then
+  // calls /map_server_node/paint_swath on success to mark mow_progress along
+  // the driven path. `current_path_components` carries swath/transition
+  // metadata for GUI / diagnostics — MPPI itself doesn't need it.
   // -----------------------------------------------------------------------
 
-  /// Current strip / segment path to mow. Populated by GetNextStrip
-  /// (legacy) or GetNextSegment (Path C cell-based coverage), consumed
-  /// by FollowStrip and MarkSegmentBlocked.
-  nav_msgs::msg::Path current_strip_path;
-
-  /// Transit goal to reach strip / segment start (populated by
-  /// GetNextStrip or GetNextSegment, consumed by TransitToStrip).
-  geometry_msgs::msg::PoseStamped current_transit_goal;
-
-  /// Path C: true when the current segment requires transit
-  /// (>~0.5 m gap or large turn) so the BT must disengage the blade
-  /// before the move and re-engage at the start of the next FollowStrip.
-  /// false → blade stays on for a continuous mowing flow between
-  /// adjacent segments. Updated by GetNextSegment; read by the
-  /// IsShortSegment condition node in the BT XML.
-  bool current_segment_is_long_transit{false};
-
-  /// Path C: free-form tag set by GetNextSegment for diagnostics
-  /// ("interior" / "transit" / "complete").
-  std::string current_segment_phase{};
+  nav_msgs::msg::Path current_coverage_path;
+  // PathComponents lives in opennav_coverage_msgs — including the header here
+  // would propagate through every BT translation unit. Forward-declare in
+  // coverage_nodes.cpp instead and reference via shared_ptr if needed; for
+  // now the path itself is enough state for the inner loop.
 
   /// Path C: termination reason returned by the segment selector for
   /// the current segment ("boundary" / "obstacle" / "dead_zone" /

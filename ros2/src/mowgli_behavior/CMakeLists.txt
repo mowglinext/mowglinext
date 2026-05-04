@@ -32,6 +32,7 @@ find_package(action_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(mowgli_interfaces REQUIRED)
+find_package(opennav_coverage_msgs REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 
 
@@ -72,6 +73,7 @@ ament_target_dependencies(behavior_tree_node
   std_msgs
   std_srvs
   mowgli_interfaces
+  opennav_coverage_msgs
   rcl_interfaces
 )
 
@@ -127,33 +129,6 @@ if(BUILD_TESTING)
     tf2_ros
   )
 
-  # ---- test_obstacle_recovery ----
-  # Exercises IsObstacleStuck by ticking it through a minimal BT, with
-  # the BTContext (and its collision_monitor fields) mutated directly to
-  # simulate the subscriber callback in behavior_tree_node.cpp.
-  ament_add_gtest(test_obstacle_recovery
-    test/test_obstacle_recovery.cpp
-    src/condition_nodes.cpp
-  )
-
-  target_include_directories(test_obstacle_recovery PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>
-  )
-
-  ament_target_dependencies(test_obstacle_recovery
-    rclcpp
-    behaviortree_cpp
-    mowgli_interfaces
-    nav2_msgs
-    nav_msgs
-    geometry_msgs
-    std_msgs
-    std_srvs
-    tf2
-    tf2_ros
-    tf2_geometry_msgs
-  )
 endif()
 
 ament_package()

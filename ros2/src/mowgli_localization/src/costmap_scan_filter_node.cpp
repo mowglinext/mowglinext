@@ -15,7 +15,7 @@
 // The side effect was a 0.10–0.65 m blind ring around the robot during
 // mowing: collision_monitor (which polls /scan directly) would zero
 // cmd_vel on a contact, but the local_costmap had no idea anything was
-// there, so FTCController kept commanding forward and Nav2 never
+// there, so the controller kept commanding forward and Nav2 never
 // triggered a recovery. A 414 s PolygonStop wedge was observed on
 // 2026-05-03.
 //

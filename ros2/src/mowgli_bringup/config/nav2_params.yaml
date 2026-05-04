@@ -171,94 +171,115 @@ controller_server:
       # path curvature is under regulated_linear_scaling_min_radius.
       # Already on via use_regulated_linear_velocity_scaling above.
 
-    # Follow-the-Carrot controller for coverage mowing.
-    # PID-based with rotate-in-place state machine — designed for diff-drive.
-    # PRE_ROTATE -> FOLLOWING -> WAITING_FOR_GOAL_APPROACH -> POST_ROTATE
+    # MPPI controller for coverage mowing — replaces the homegrown
+    # FTCController. Key reasons:
+    #   * ObstacleCritic + PathAlignCritic give native steer-around obstacle
+    #     avoidance during execution (no FTC stop-and-abort, no BackUp loop).
+    #   * Diff-drive motion model with rotate-in-place support — robot can
+    #     pivot at a swath end exactly like FTC's PRE_ROTATE used to.
+    #   * Path tracking ≤ 1 cm lateral error documented for the configuration
+    #     pattern below (high PathAlign weight, narrow vx_std).
+    # Tuned for opennav_coverage's path style: alternating swath / transition
+    # legs, mostly straight lines with 90° turns at corners. Pair with the
+    # default `coverage_goal_checker` which only checks position.
     FollowCoveragePath:
-      plugin: "mowgli_nav2_plugins/FTCController"
-      speed_fast: 0.20             # carrot speed when far from path (m/s)
-      speed_fast_threshold: 0.5    # distance threshold for fast/slow (m)
-      speed_fast_threshold_angle: 10.0  # angle threshold for fast (deg)
-      speed_slow: 0.12             # carrot speed when close/turning (m/s)
-      speed_angular: 45.0          # rotation speed for in-place turns (deg/s)
-                                   # Matches OpenMower ftc_local_planner.yaml
-                                   # (45°/s). Previously 60°/s — 33% higher
-                                   # than both OM (45) and mowgli (40), and
-                                   # clipping against max_cmd_vel_ang=1.0 rad/s
-                                   # (60°/s = 1.05 rad/s > cap) → saturation
-                                   # that showed up as erratic tracking.
-      # Carrot acceleration. Was 1.0 m/s² ("higher to overcome grass") which
-      # is 10× the legacy mowgli FTCPlanner (0.1 m/s²) and reaches the 0.20
-      # speed_fast target in 0.2 s instead of 2 s — the operator-visible
-      # "robot lurches forward too fast" symptom. 0.2 m/s² gives a smooth
-      # 1 s ramp without losing grass authority once moving.
-      acceleration: 0.2
-      # PID longitudinal — kp halved to 1.0 (legacy mowgli value). The
-      # previous 2.0 paired with the 1.0 m/s² acceleration produced a
-      # controller that fired hard corrections at every tick.
-      kp_lon: 1.0
-      ki_lon: 0.0
-      kd_lon: 0.0
-      # PID lateral — kp=2.0 matches both legacy mowgli and OM. Re-enable
-      # a moderate kd_lat (1.0, vs legacy 5.0) to damp lateral oscillation
-      # caused by GPS-noise-induced position jitter feeding the lateral
-      # error PID. 5.0 (legacy) was too high for our RTK-σ ~3 mm noise
-      # floor and amplified jitter; 1.0 bleeds off overshoot without
-      # turning the derivative into a noise pump.
-      kp_lat: 2.0
-      ki_lat: 0.0
-      kd_lat: 1.0
-      # PID angular — kp=1.5 (between legacy 1.0 and previous 2.5). The 2.5
-      # value combined with kp_lon=2.0 / accel=1.0 was tuned for a stack
-      # that was visually "too fast"; with the slower carrot ramp it can
-      # come back down. kd kept at 0 — derivative on yaw amplified GPS
-      # measurement noise on 2026-04-24.
-      kp_ang: 1.5
-      ki_ang: 0.0
-      kd_ang: 0.0
-      # Limits — cap angular command at 1.0 rad/s (was 3.0). The UKF
-      # becomes lossy above ~0.5 rad/s because GPS+lever-arm correction
-      # lags the yaw estimate, so commanding 3 rad/s just feeds garbage
-      # into the body-frame lateral state. FTC's PID still hits min
-      # turning radii with 1 rad/s at 0.3 m/s.
-      # Ceilings bumped above the active targets so the FTC PID has
-      # headroom for correction without saturating:
-      #   * speed_fast (target) 0.20 m/s, cap 0.35 → 75% headroom
-      #   * speed_angular 0.79 rad/s (45°/s), cap 1.5 → ~90% headroom
-      # Both reference stacks sit cap ≈ 4–5× target (OM: 1.0/0.4,
-      # mowgli: 0.4/0.3, 3.1/0.79 rad/s). Our previous 0.20/1.0 had
-      # zero headroom — every correction had to first fight its own
-      # ceiling before steering, which looked like "erratic" to the
-      # operator. Smoother still enforces the hard global cap
-      # (0.25 m/s, 0.8 rad/s) so nothing reaches the motors uncapped.
-      max_cmd_vel_speed: 0.30
-      # 2026-04-26: dropped from 1.5 → 0.8 to align with smoother cap. Trace
-      # showed the FTC PID requesting ±1.5 rad/s on 19% of mowing samples,
-      # which the smoother was clipping anyway — but the unclipped PID
-      # output drove a yaw-only mode where the controller chased its own
-      # tail with no forward progress. Capping at the smoother value lets
-      # the PID settle instead of saturating.
-      max_cmd_vel_ang: 0.8
-      max_goal_distance_error: 0.10  # goal reached within 10cm
-      max_goal_angle_error: 15.0     # goal angle tolerance (deg)
-      goal_timeout: 10.0
-      max_follow_distance: 2.0
-      # 2026-04-26: reverted to false after a live test — forward_only=true
-      # broke the FTCController's lateral-error recovery: when the PID overshot
-      # the carrot, vx clamped to 0 instead of reversing to recenter, leaving
-      # only wz to chase a moving carrot → the robot drove in circles. The
-      # F9P RTK lag on direction reversals (1.5 s, ~0.30 m bias) is real but
-      # is not the right thing to fix at the controller layer. Smoothing the
-      # cmd_vel transitions via velocity_smoother accel/decel limits is the
-      # better mitigation; the EKF already handles bounded GPS lag.
-      forward_only: false
-      # Obstacles: check the local_costmap obstacle_layer for the next
-      # `obstacle_lookahead` path poses and abort the strip when one
-      # of them falls on a LETHAL cell. Previously disabled, which let
-      # the robot creep into walls at 30% speed behind collision_monitor.
-      check_obstacles: true
-      obstacle_lookahead: 5
-      obstacle_footprint: true
+      plugin: "nav2_mppi_controller::MPPIController"
+      time_steps: 30
+      model_dt: 0.1     # match controller_frequency=10Hz period
+      batch_size: 2000
+      vx_std: 0.10              # narrow → tight tracking on swaths
+      vy_std: 0.0               # diff-drive — no lateral motion
+      wz_std: 0.30              # enough to handle in-place rotation
+      vx_max: 0.30              # max mowing speed
+      vx_min: -0.20             # allow reverse for recovery
+      wz_max: 1.0               # angular limit
+      ax_max: 0.30              # acceleration
+      ax_min: -0.30
+      az_max: 1.5
+      iteration_count: 1
+      # Coverage paths can start far from the robot's current pose (the
+      # F2C path's first vertex is on the polygon perimeter, not at the
+      # dock). 1.7 m would prune the whole path; 50 m gives MPPI room to
+      # latch onto any starting point on a typical mowing area.
+      prune_distance: 50.0
+      # How far along the path to search for the closest pose to the
+      # robot. Default 0 = caps at prune_distance, which is fine. Set
+      # explicitly to keep behavior deterministic when prune_distance
+      # is large.
+      max_robot_pose_search_dist: 50.0
+      transform_tolerance: 0.1
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: "DiffDrive" # robot can turn in place
+      visualize: false
+      regenerate_noises: false
+      TrajectoryVisualizer:
+        trajectory_step: 5
+        time_step: 3
+      AckermannConstraints:
+        min_turning_r: 0.0      # diff-drive — unused
+      critics:
+        - "ConstraintCritic"
+        - "ObstaclesCritic"          # native obstacle avoidance
+        - "GoalCritic"
+        - "GoalAngleCritic"
+        - "PathAlignCritic"          # high weight → coverage-tight tracking
+        - "PathFollowCritic"
+        - "PathAngleCritic"
+        - "PreferForwardCritic"
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
+      ObstaclesCritic:
+        enabled: true
+        cost_power: 1
+        repulsion_weight: 1.5
+        critical_weight: 20.0       # strong repulsion from lethal cells
+        consider_footprint: true
+        collision_cost: 100000.0
+        collision_margin_distance: 0.10
+        near_goal_distance: 0.5
+        inflation_radius: 0.40      # match local_costmap inflation
+        cost_scaling_factor: 10.0
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0           # high → tight coverage swath tracking
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.2
+        forward_preference: true
 
 # ---------------------------------------------------------------------------
 # Planner server
@@ -495,8 +516,13 @@ local_costmap:
       footprint: "[[0.50, 0.20], [0.50, -0.20], [-0.10, -0.20], [-0.10, 0.20]]"
       resolution: 0.05
       rolling_window: true
-      width: 6
-      height: 6
+      # 20×20m so MPPI's getGlobalPlanConsideringBoundsInCostmapFrame can see
+      # the whole coverage path. With 6×6m a 9m coverage swath landed mostly
+      # outside the local costmap and MPPI returned "Resulting plan has 0
+      # poses". Memory cost: 20m × 20m × (1 / 0.05m)² × ~4 layers × 1B = 6.4
+      # MiB/costmap update — fine on the production hardware.
+      width: 20
+      height: 20
       # keepout_filter removed: it marks boundary as LETHAL in the local
       # costmap which triggers RPP "collision ahead" on swaths near the
       # boundary edge. Boundary enforcement is handled by the coverage
@@ -724,31 +750,47 @@ collision_monitor:
 # via RewrittenYaml.
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
-# Coverage server (legacy opennav_coverage config — kept for reference).
-# Cell-based strip coverage now handles mowing; no external planner needed.
+# Coverage server — opennav_coverage / Fields2Cover backend.
+# ComputeCoveragePath BT node sends a polygon (field + obstacle holes) and
+# gets back a swath/headland/transition path which MPPI then drives.
 # ---------------------------------------------------------------------------
 coverage_server:
   ros__parameters:
     use_sim_time: false
-    # Robot parameters
+    # Robot footprint vs cutter width. operation_width is the swath spacing
+    # (mower cutter ≈ 0.18 m). robot_width is the chassis envelope used by
+    # F2C for headland sizing.
     robot_width: 0.40
     operation_width: 0.18
-    min_turning_radius: 0.01
+    # Diff-drive turns in place; F2C still wants a non-zero turning radius
+    # for the swath connector planner. 0.05 m made F2C v1.2.1's Reeds-Shepp
+    # solver iterate forever on a 9 × 6 m field. 0.30 m matches the demo
+    # config and produces a clean plan in ~0.5 s; MPPI still pivots in
+    # place at swath ends (DiffDrive motion model), so the radius only
+    # affects the connector geometry.
+    min_turning_radius: 0.30
     linear_curv_change: 200.0
-    # Headland
-    default_headland_width: 0.50
+    # Headland: 0.30 m around the boundary (covers chassis half-width +
+    # MPPI tracking margin so the chassis stays inside the polygon).
+    # CONSTANT applies the same width along the whole perimeter.
+    default_headland_width: 0.30
     default_headland_type: "CONSTANT"
-    # Swath generation
+    # Swath generation: LENGTH = pick the angle that minimises total swath
+    # count (best for rectangular polygons). NUMBER would minimise the
+    # number of swaths — usually similar.
     default_swath_type: "LENGTH"
-    default_swath_angle_type: "SET_ANGLE"
-    default_swath_angle: 0.0
+    default_swath_angle_type: "BRUTE_FORCE"
+    default_swath_angle_step: 0.0174533    # 1° resolution
     default_allow_overlap: false
-    # Route ordering
+    # Route order — boustrophedon (snake) keeps adjacent swaths back-to-back
+    # so transitions between them are short.
     default_route_type: "BOUSTROPHEDON"
-    # Path connecting (turns between swaths)
-    default_path_type: "DUBIN"
+    # Connectors: REEDS_SHEPP works well with diff-drive (allows reverse).
+    # DUBIN forbids reverse — wrong for a 0.05 m-radius diff-drive that
+    # often needs to back up to align with the next swath.
+    default_path_type: "REEDS_SHEPP"
     default_path_continuity_type: "CONTINUOUS"
-    # Coordinate system
+    # Coordinates already in map frame from the BT.
     coordinates_in_cartesian_frame: true
 
 lifecycle_manager_navigation:

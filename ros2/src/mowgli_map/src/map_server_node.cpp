@@ -81,9 +81,6 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   soft_boundary_margin_m_ = declare_parameter<double>("soft_boundary_margin_m", 0.10);
   boundary_recovery_offset_m_ = declare_parameter<double>("boundary_recovery_offset_m", 0.8);
   boundary_inner_margin_m_ = declare_parameter<double>("boundary_inner_margin_m", 0.3);
-  strip_boundary_margin_m_ = declare_parameter<double>("strip_boundary_margin_m", 0.5);
-  mow_angle_override_deg_ =
-      declare_parameter<double>("mow_angle_deg", std::numeric_limits<double>::quiet_NaN());
 
   // Dock approach corridor — extends the no-mow zone in front of the dock
   // so coverage strips stop before the 1.5 m straight-line alignment that
@@ -240,31 +237,15 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
         on_load_areas(req, res);
       });
 
-  // ── Strip planner services ──────────────────────────────────────────────
-  get_next_strip_srv_ = create_service<mowgli_interfaces::srv::GetNextStrip>(
-      "~/get_next_strip",
-      [this](const mowgli_interfaces::srv::GetNextStrip::Request::SharedPtr req,
-             mowgli_interfaces::srv::GetNextStrip::Response::SharedPtr res)
+  // ── Coverage services ───────────────────────────────────────────────────
+  // FollowCoveragePath calls paint_swath after a successful run so
+  // mow_progress reflects the cells actually driven.
+  paint_swath_srv_ = create_service<mowgli_interfaces::srv::PaintSwath>(
+      "~/paint_swath",
+      [this](const mowgli_interfaces::srv::PaintSwath::Request::SharedPtr req,
+             mowgli_interfaces::srv::PaintSwath::Response::SharedPtr res)
       {
-        on_get_next_strip(req, res);
-      });
-
-  // Path C cell-based coverage. New service kept side-by-side with
-  // get_next_strip during the migration.
-  get_next_segment_srv_ = create_service<mowgli_interfaces::srv::GetNextSegment>(
-      "~/get_next_segment",
-      [this](const mowgli_interfaces::srv::GetNextSegment::Request::SharedPtr req,
-             mowgli_interfaces::srv::GetNextSegment::Response::SharedPtr res)
-      {
-        on_get_next_segment(req, res);
-      });
-
-  mark_segment_blocked_srv_ = create_service<mowgli_interfaces::srv::MarkSegmentBlocked>(
-      "~/mark_segment_blocked",
-      [this](const mowgli_interfaces::srv::MarkSegmentBlocked::Request::SharedPtr req,
-             mowgli_interfaces::srv::MarkSegmentBlocked::Response::SharedPtr res)
-      {
-        on_mark_segment_blocked(req, res);
+        on_paint_swath(req, res);
       });
 
   clear_dead_cells_srv_ = create_service<std_srvs::srv::Trigger>(

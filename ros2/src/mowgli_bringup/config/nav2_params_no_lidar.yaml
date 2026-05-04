@@ -108,32 +108,87 @@ controller_server:
       max_angular_vel: 3.0
       max_robot_pose_search_dist: 2.0
 
-    # Follow-the-Carrot controller for coverage mowing.
+    # MPPI controller for coverage mowing — same configuration as
+    # nav2_params.yaml (see comments there). Without LiDAR there's no
+    # obstacle layer driving ObstaclesCritic; the critic stays enabled
+    # but never sees lethal cells, so it costs nothing.
     FollowCoveragePath:
-      plugin: "mowgli_nav2_plugins/FTCController"
-      speed_fast: 0.4
-      speed_fast_threshold: 0.5
-      speed_fast_threshold_angle: 10.0
-      speed_slow: 0.15
-      speed_angular: 60.0
-      acceleration: 0.5
-      kp_lon: 2.0
-      ki_lon: 0.0
-      kd_lon: 0.0
-      kp_lat: 2.0
-      ki_lat: 0.0
-      kd_lat: 0.0
-      kp_ang: 2.0
-      ki_ang: 0.0
-      kd_ang: 0.0
-      max_cmd_vel_speed: 0.4
-      max_cmd_vel_ang: 3.0
-      max_goal_distance_error: 0.10
-      max_goal_angle_error: 15.0
-      goal_timeout: 10.0
-      max_follow_distance: 2.0
-      forward_only: false   # 2026-04-26: reverted, broke PID recovery. See nav2_params.yaml.
-      check_obstacles: false
+      plugin: "nav2_mppi_controller::MPPIController"
+      # Same MPPI configuration as nav2_params.yaml. Without LiDAR there's
+      # no obstacle layer feeding ObstaclesCritic; everything still works,
+      # the critic just sees no lethal cells.
+      time_steps: 30
+      model_dt: 0.1
+      batch_size: 2000
+      vx_std: 0.10
+      vy_std: 0.0
+      wz_std: 0.30
+      vx_max: 0.30
+      vx_min: -0.20
+      wz_max: 1.0
+      ax_max: 0.30
+      ax_min: -0.30
+      az_max: 1.5
+      iteration_count: 1
+      prune_distance: 1.7
+      transform_tolerance: 0.1
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: "DiffDrive"
+      visualize: false
+      regenerate_noises: false
+      AckermannConstraints:
+        min_turning_r: 0.0
+      critics:
+        - "ConstraintCritic"
+        - "GoalCritic"
+        - "GoalAngleCritic"
+        - "PathAlignCritic"
+        - "PathFollowCritic"
+        - "PathAngleCritic"
+        - "PreferForwardCritic"
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.2
+        forward_preference: true
 
 # ---------------------------------------------------------------------------
 # Planner server

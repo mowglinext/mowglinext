@@ -39,14 +39,12 @@ set(srv_files
   "srv/MowerControl.srv"
   "srv/SetDockingPoint.srv"
   "srv/TriggerReplan.srv"
-  "srv/GetNextStrip.srv"
-  "srv/GetNextSegment.srv"
-  "srv/MarkSegmentBlocked.srv"
   "srv/GetCoverageStatus.srv"
   "srv/AreaRecording.srv"
   "srv/CalibrateImuYaw.srv"
   "srv/GetRecoveryPoint.srv"
   "srv/StartInArea.srv"
+  "srv/PaintSwath.srv"
 )
 
 # Declare action files

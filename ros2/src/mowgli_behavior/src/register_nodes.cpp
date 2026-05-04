@@ -46,7 +46,6 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<IsChargingProgressing>("IsChargingProgressing");
   factory.registerNodeType<PreFlightCheck>("PreFlightCheck");
   factory.registerNodeType<Nav2Active>("Nav2Active");
-  factory.registerNodeType<IsObstacleStuck>("IsObstacleStuck");
 
   // Action nodes
   factory.registerNodeType<SetMowerEnabled>("SetMowerEnabled");
@@ -72,16 +71,10 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<RecordResumeUndockFailure>("RecordResumeUndockFailure");
   factory.registerNodeType<ResetEmergency>("ResetEmergency");
 
-  // Cell-based coverage nodes (strip-by-strip dynamic coverage)
+  // opennav_coverage-based mowing
   factory.registerNodeType<GetNextUnmowedArea>("GetNextUnmowedArea");
-  factory.registerNodeType<GetNextStrip>("GetNextStrip");
-  factory.registerNodeType<FollowStrip>("FollowStrip");
-  factory.registerNodeType<TransitToStrip>("TransitToStrip");
-  factory.registerNodeType<DetourAroundObstacle>("DetourAroundObstacle");
-  // Path C — cell-based coverage (segment-by-segment dynamic coverage).
-  factory.registerNodeType<GetNextSegment>("GetNextSegment");
-  factory.registerNodeType<IsShortSegment>("IsShortSegment");
-  factory.registerNodeType<MarkSegmentBlocked>("MarkSegmentBlocked");
+  factory.registerNodeType<ComputeCoveragePath>("ComputeCoveragePath");
+  factory.registerNodeType<FollowCoveragePath>("FollowCoveragePath");
 
   // Area recording node
   factory.registerNodeType<RecordArea>("RecordArea");
