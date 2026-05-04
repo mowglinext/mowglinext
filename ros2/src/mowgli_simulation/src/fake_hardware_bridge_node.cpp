@@ -97,9 +97,18 @@ public:
     battery_state_pub_ =
         create_publisher<sensor_msgs::msg::BatteryState>("/battery_state", rclcpp::QoS(10));
 
-    // Subscribe to wheel odometry to determine robot position
+    // Subscribe to map-frame pose so the dock-proximity test compares like-
+    // for-like with dock_x/dock_y (which are map-frame coordinates). The
+    // earlier subscription to /wheel_odom (odom frame) silently broke after
+    // CalibrateHeadingFromUndock re-seeded the map→odom transform: the
+    // robot's odom-frame position no longer matched its map-frame position,
+    // so near_dock stayed false even when the robot was physically docked,
+    // opennav_docking timed out waiting for charge to start, the BT halted
+    // DockRobot, BoundaryGuard's BackUp recovery shoved the robot south by
+    // 0.5 m, and the cycle repeated until the robot ended up outside the
+    // polygon and stuck in "Start occupied".
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-        "/wheel_odom",
+        "/odometry/filtered_map",
         rclcpp::SensorDataQoS(),
         [this](const nav_msgs::msg::Odometry::SharedPtr msg)
         {
