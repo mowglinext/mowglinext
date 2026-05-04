@@ -275,7 +275,7 @@ All dimensions are in **metres**, angles in **radians**, speeds in **m/s**.
 | `wheel_track` | `0.325` | Drive wheel centre-to-centre track width |
 | `wheel_x_offset` | `0.0` | Drive wheel x offset from `base_link` (0 = at wheel axis) |
 | `chassis_center_x` | `0.18` | Chassis geometric centre forward of wheel axis |
-| `ticks_per_revolution` | `84` | Encoder ticks per full wheel revolution (informational only — not used by runtime) |
+| `ticks_per_meter` | `300` | Encoder ticks per full wheel revolution (informational only — not used by runtime) |
 | `caster_radius` | `0.03` | Front caster radius |
 | `blade_radius` | `0.09` | Cutting blade disc radius |
 | `tool_width` | `0.18` | Effective cut width (2 x blade_radius) |

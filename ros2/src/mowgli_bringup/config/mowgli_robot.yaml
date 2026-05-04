@@ -61,7 +61,7 @@ mowgli:
     # Informational only — circumference 2π·0.04475 = 0.281 m, so
     # 300 ticks/m × 0.281 m/rev ≈ 84 ticks per revolution. Kept as a
     # cross-check for future wheel-size changes.
-    ticks_per_revolution: 84
+    ticks_per_meter: 300.0
 
     # Front casters
     caster_radius: 0.03

@@ -78,11 +78,11 @@
           "default": 0.36,
           "description": "Centre-to-centre distance between front casters in metres."
         },
-        "ticks_per_revolution": {
+        "ticks_per_meter": {
           "type": "integer",
-          "title": "Encoder Ticks per Revolution",
+          "title": "Encoder Ticks per Meter",
           "default": 1050,
-          "description": "Encoder ticks per full wheel revolution."
+          "description": "Encoder ticks per metre of wheel travel."
         },
         "tool_width": {
           "type": "number",
