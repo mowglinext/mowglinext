@@ -967,9 +967,16 @@ void MapServerNode::apply_area_classifications()
     }
   }
 
-  // Mark dock exclusion zone as NO_GO_ZONE — no mowing strips planned here.
+  // Mark dock exclusion zone as DOCKING_AREA — coverage planner skips
+  // these cells (they aren't LAWN), but Nav2's keepout filter ignores
+  // DOCKING_AREA so opennav_docking's NavigateToPose to the staging
+  // pose can plan a path THROUGH the corridor. Marking these cells as
+  // NO_GO_ZONE pollutes the keepout mask with LETHAL — the staging
+  // pose itself sits inside the corridor and Smac then refuses to
+  // route there → "Navigation request to staging pose failed".
   if (has_dock_exclusion_ && dock_exclusion_polygon_.points.size() >= 3)
   {
+    const float dock_val = static_cast<float>(CellType::DOCKING_AREA);
     grid_map::Polygon dock_gm;
     for (const auto& pt : dock_exclusion_polygon_.points)
     {
@@ -977,7 +984,7 @@ void MapServerNode::apply_area_classifications()
     }
     for (grid_map::PolygonIterator it(map_, dock_gm); !it.isPastEnd(); ++it)
     {
-      map_.at(std::string(layers::CLASSIFICATION), *it) = no_go_val;
+      map_.at(std::string(layers::CLASSIFICATION), *it) = dock_val;
     }
   }
 }
