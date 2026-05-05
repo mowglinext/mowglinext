@@ -293,7 +293,20 @@ def generate_launch_description() -> LaunchDescription:
     declination_deg = 1.5
     min_horizontal_uT = 5.0
     mag_yaw_variance = 0.0027
+    # Prefer the runtime config in /ros2_ws/config (operator-edited via
+    # GUI on real hardware), fall back to the source-tree template that
+    # ships with the package. Without the fallback, sim deployments
+    # (where /ros2_ws/config/ is empty) silently keep every dock/datum/
+    # speed knob at the hardcoded defaults above — which left
+    # dock_pose_yaw=0.0 on sim runs while mowgli_robot.yaml says 4.17.
+    # The cascading failure: dock_yaw_to_set_pose seeds EKF yaw=0, the
+    # GPS lever-arm correction (rotated by EKF yaw) gets applied with
+    # the wrong angle, /odometry/filtered_map reports base_link 0.45 m
+    # off ground truth, BoundaryGuard fires on a phantom violation.
     runtime_robot_config = "/ros2_ws/config/mowgli_robot.yaml"
+    if not os.path.isfile(runtime_robot_config):
+        runtime_robot_config = os.path.join(
+            bringup_dir, "config", "mowgli_robot.yaml")
     if os.path.isfile(runtime_robot_config):
         with open(runtime_robot_config, "r") as f:
             rt_cfg = yaml.safe_load(f) or {}
