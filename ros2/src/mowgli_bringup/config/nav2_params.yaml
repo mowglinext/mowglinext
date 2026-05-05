@@ -342,13 +342,21 @@ controller_server:
         inflation_radius: 0.40
         cost_scaling_factor: 10.0
       # CostCritic — handles inflated-obstacle gradient (cells with
-      # 0 < cost < lethal). Pulled directly from the GHANSHYAM-13 config.
+      # 0 < cost < lethal). consider_footprint:true would require the
+      # costmap's inflation_radius >= chassis circumscribed_radius
+      # (0.60 m) for the SE2-collision-checking optimization to work;
+      # our local costmap has inflation_radius=0.20 which spams a
+      # 100 Hz [ERROR] computeCircumscribedCost warning AND degrades
+      # planning. Setting consider_footprint:false treats the robot as
+      # a point for the soft-cost gradient — ObstaclesCritic still
+      # does the footprint-based hard collision check, so we keep
+      # safety while not paying the costmap-inflation cost.
       CostCritic:
         enabled: true
         cost_power: 1
         cost_weight: 3.81
         critical_cost: 300.0
-        consider_footprint: true
+        consider_footprint: false
         collision_cost: 1000000.0
         near_goal_distance: 1.0
         trajectory_point_step: 2
