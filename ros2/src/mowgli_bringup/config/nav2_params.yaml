@@ -224,16 +224,23 @@ controller_server:
       vy_std: 0.0                   # diff-drive — no lateral
       wz_std: 0.80                  # broad enough to sample up to wz_max=1.5
       vx_max: 0.30
-      # vx_min: 0.10 (was 0.0 → before that -0.20). With vx_min=0 MPPI was
-      # converging on vx=0 + slow ω: rotating in place was the cost-function
-      # optimum and PreferForward couldn't out-vote it because forward
-      # motion close to a path centerline gave roughly the same trajectory
-      # cost as rotating in place near it. Forcing vx_min > 0 means every
-      # sampled trajectory MUST move forward — the optimum has to commit
-      # to along-path motion. 0.10 m/s sits just above the firmware
-      # PWM-deadband and well below the 0.20 m/s mowing target so MPPI
-      # still has lots of headroom to slow at strip ends.
-      vx_min: 0.10
+      # vx_min: -0.15 (was 0.10). Forcing forward-only sampling worked
+      # for clean strip following but broke at strip-end U-turns:
+      # F2C generates Reeds-Shepp paths with min_turning_radius=0.30
+      # for the boustrophedon connector, and tight 0.18 m strip spacing
+      # forces a C|C maneuver (forward arc + reverse arc). With
+      # vx_min=0.10, MPPI couldn't execute the reverse leg and instead
+      # carved through the U-turn at higher angular velocity, ending up
+      # 0.5 m+ past the polygon boundary (sim #16: 50 of 64 boundary
+      # violations at the west edge during westernmost strip U-turns).
+      # Allowing slight reverse (-0.15 m/s) lets MPPI follow the Reeds-
+      # Shepp path correctly, executing the reverse arc within the
+      # planned U-turn footprint. The PathAlign+use_path_orientations
+      # strip-lock is still in place, so the rotate-in-place trap that
+      # vx_min>=0 originally fixed can't recur — squared PathAlign cost
+      # at large lateral deviations far exceeds the cost of "spinning
+      # near the path centerline".
+      vx_min: -0.15
       wz_max: 1.5
       # Linear accel doubled (0.50 → 1.0). At 0.50 m/s² and 0.1 s dt MPPI
       # could only ramp vx by 0.05 m/s per cycle — six full ticks (0.6 s)
