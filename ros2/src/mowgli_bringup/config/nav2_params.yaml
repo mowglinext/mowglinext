@@ -884,27 +884,15 @@ coverage_server:
     # F2C for headland sizing.
     robot_width: 0.40
     operation_width: 0.18
-    # Diff-drive turns in place; F2C still wants a non-zero turning radius
-    # for the swath connector planner.
-    #
-    # 0.05 m made F2C v1.2.1's Reeds-Shepp solver iterate forever on a
-    # 9 × 6 m field. 0.30 m used to be our value (matched the demo config).
-    # But with strip spacing (operation_width) at 0.18 m, the U-turn
-    # geometry between adjacent strips required a Reeds-Shepp C|C
-    # maneuver (forward arc + reverse arc) — which forced vx_min < 0
-    # to execute, which then opened a cost-function local-min where
-    # MPPI crept backward at U-turn ends instead of progressing
-    # (sim #17 stall).
-    #
-    # 0.10 m: just above the F2C-hang threshold of 0.05 m and roughly
-    # equal to strip_half_width (0.18/2 = 0.09). At this radius F2C
-    # generates simple forward-only Dubins arcs for the U-turn (180°
-    # semicircle of radius 0.10 m, apex extending 0.10 m past strip
-    # endpoint). vx_min can stay at 0.10 (forward-only); MPPI executes
-    # the U-turn cleanly without needing reverse legs. The arc apex
-    # (0.10 m) plus MPPI overshoot (0.20-0.30 m) plus a 0.40 m safety
-    # margin fits inside the headland_width=0.80 budget.
-    min_turning_radius: 0.10
+    # Diff-drive turns in place — F2C only wants a non-zero turning
+    # radius for the swath connector planner; with the path_continuity
+    # set to DISCONTINUOUS (above), the connector becomes a hard corner
+    # between strips that the RotationShim handles via pivot-in-place,
+    # not an arc that MPPI has to track. So a tiny radius is fine —
+    # any value above the F2C v1.2.1 hang threshold (~0.05 m for a
+    # 9×6 m field) works. 0.05 keeps the corners as tight as possible
+    # so MPPI sees nearly-pure-straight strips.
+    min_turning_radius: 0.05
     linear_curv_change: 200.0
     # Headland: 0.30 m around the boundary (covers chassis half-width +
     # MPPI tracking margin so the chassis stays inside the polygon).
@@ -921,11 +909,23 @@ coverage_server:
     # Route order — boustrophedon (snake) keeps adjacent swaths back-to-back
     # so transitions between them are short.
     default_route_type: "BOUSTROPHEDON"
-    # Connectors: REEDS_SHEPP works well with diff-drive (allows reverse).
-    # DUBIN forbids reverse — wrong for a 0.05 m-radius diff-drive that
-    # often needs to back up to align with the next swath.
-    default_path_type: "REEDS_SHEPP"
-    default_path_continuity_type: "CONTINUOUS"
+    # Strip-by-strip mowing with in-place pivots — diff-drive can rotate
+    # at vx=0 with arbitrary wz, so strip transitions are: drive straight
+    # → stop at strip end → pivot 180° → drive straight on next strip.
+    # The RotationShim wrapping MPPI handles the pivot when heading error
+    # exceeds angular_dist_threshold (0.4 rad ≈ 23°); MPPI then drives
+    # the straight strip.
+    #
+    # CONTINUOUS would smooth-blend strips with Reeds-Shepp arcs; the
+    # shim never sees a sharp heading flip and MPPI tries to track the
+    # arcs, which it can't follow precisely (overshoots, sim #20:
+    # 35 BV + 38 BackUps + chaotic candidate trajectories visible in
+    # foxglove). DISCONTINUOUS gives F2C a path with hard corners
+    # between segments — the shim picks up the heading discontinuity
+    # and pivots in place, then MPPI tracks each straight segment
+    # cleanly. This is what "strict strip following" actually requires.
+    default_path_type: "DUBIN"
+    default_path_continuity_type: "DISCONTINUOUS"
     # Coordinates already in map frame from the BT.
     coordinates_in_cartesian_frame: true
 
