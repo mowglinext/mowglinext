@@ -137,12 +137,19 @@ BT::NodeStatus ComputeCoveragePath::onStart()
   // F2C 1.2.1. Empty mode strings let the server fall back to the
   // CONSTANT/0.30 m headland and BOUSTROPHEDON route in nav2_params.yaml.
   goal.headland_mode.mode = "";
-  // F2C insets the boustrophedon strips by headland width before
-  // generating them, so 0.50 m gives MPPI a 50 cm safety band between
-  // strip endpoints and the polygon perimeter. With 0.30 m the strips
-  // ended right at the boundary and a 0.10 m MPPI tracking overshoot at
-  // strip-end U-turns tipped the robot past the keepout edge.
-  constexpr float kHeadlandWidth = 0.50f;
+  // Headland inset budget at the polygon perimeter:
+  //   F2C uses min_turning_radius (0.30 m) for the strip-end U-turn arc
+  //   shape, so the arc apex extends 0.30 m past the strip endpoint
+  //   (perpendicular to the strip). MPPI then overshoots the arc apex
+  //   by ~0.20-0.30 m at cruise speed (observed: robot lands 0.6 m past
+  //   the strip end). Total margin needed = R_turning + MPPI_overshoot
+  //   ≈ 0.50 + 0.30 = 0.80 m. With 0.50 m the U-turn already left no
+  //   margin and the boundary-violation handler fired ~6 times/min.
+  // Cost of 0.80 m: a ~0.30 m unmowed border around the polygon
+  // perimeter. For a 6 × 6 m sim polygon (36 m²) the loss is ~5%; on
+  // real lawns the percentage shrinks. Acceptable trade-off vs the
+  // 90+ BackUp recoveries 0.50 m caused.
+  constexpr float kHeadlandWidth = 0.80f;
   goal.headland_mode.width = kHeadlandWidth;
 
   goal.swath_mode.objective = "LENGTH";
