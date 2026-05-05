@@ -16,6 +16,24 @@ export type RobotGeometry = {
     bladeRadius: number;
 };
 
+export type RobotDescriptionStatus = "pending" | "loaded" | "error";
+
+export interface RobotDescriptionState {
+    status: RobotDescriptionStatus;
+    error: string | null;
+}
+
+// Module-level state shared between useRobotDescription and the dedicated
+// status hook. Listeners are notified whenever the URDF status changes so
+// any number of consumers (geometry + health badge) can react without each
+// opening their own /robot_description subscription.
+let cachedState: RobotDescriptionState = {status: "pending", error: null};
+const stateListeners = new Set<(s: RobotDescriptionState) => void>();
+function setStatus(next: RobotDescriptionState): void {
+    cachedState = next;
+    stateListeners.forEach((l) => l(cachedState));
+}
+
 const DEFAULTS: RobotGeometry = {
     baseLength: 0.54,
     baseWidth: 0.40,
@@ -151,27 +169,38 @@ const parseUrdf = (xml: string): RobotGeometry => {
 /**
  * Subscribe to /robot_description and parse robot geometry from the URDF.
  * Returns DEFAULTS immediately and updates when the URDF is received.
+ *
+ * Status is published on a module-level channel so that
+ * {@link useRobotDescriptionStatus} consumers (e.g. the dashboard health
+ * bar) can render a "URDF: missing" badge instead of the previous silent
+ * fallback to defaults.
  */
 export const useRobotDescription = (): RobotGeometry => {
     const [geometry, setGeometry] = useState<RobotGeometry>(DEFAULTS);
     const receivedRef = useRef(false);
 
     const stream = useWS<string>(
-        () => { /* error */ },
+        () => { /* error — multiplex socket logs its own */ },
         () => { /* info */ },
         (raw) => {
-            if (receivedRef.current) return; // only need the first message
+            if (receivedRef.current) return;
             try {
                 const msg = JSON.parse(raw);
-                // rosbridge delivers std_msgs/String as {"data": "..."}
-                // After snakeToPascal it may be {"Data": "..."} or {"data": "..."}
+                // rosbridge delivers std_msgs/String as {"data": "..."}.
                 const urdfXml: string = msg.Data ?? msg.data ?? "";
-                if (urdfXml.length > 0) {
-                    receivedRef.current = true;
-                    setGeometry(parseUrdf(urdfXml));
+                if (urdfXml.length === 0) {
+                    console.warn("useRobotDescription: empty URDF payload — keeping defaults");
+                    setStatus({status: "error", error: "empty URDF payload"});
+                    return;
                 }
-            } catch {
-                // ignore parse errors
+                receivedRef.current = true;
+                const parsed = parseUrdf(urdfXml);
+                setGeometry(parsed);
+                setStatus({status: "loaded", error: null});
+            } catch (e: unknown) {
+                const message = e instanceof Error ? e.message : String(e);
+                console.warn("useRobotDescription: parse failed", e);
+                setStatus({status: "error", error: message});
             }
         }
     );
@@ -184,6 +213,25 @@ export const useRobotDescription = (): RobotGeometry => {
     }, []);
 
     return geometry;
+};
+
+/**
+ * Snapshot of whether the URDF has been received and parsed successfully.
+ * Used by the dashboard / diagnostics health bar to surface missing or
+ * malformed URDFs that previously failed silently.
+ */
+export const useRobotDescriptionStatus = (): RobotDescriptionState => {
+    const [state, setState] = useState<RobotDescriptionState>(cachedState);
+    useEffect(() => {
+        const listener = (s: RobotDescriptionState) => setState(s);
+        stateListeners.add(listener);
+        // Sync immediately in case the URDF arrived before this hook mounted.
+        setState(cachedState);
+        return () => {
+            stateListeners.delete(listener);
+        };
+    }, []);
+    return state;
 };
 
 export { DEFAULTS as DEFAULT_GEOMETRY };

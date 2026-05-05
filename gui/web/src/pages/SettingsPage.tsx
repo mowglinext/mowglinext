@@ -24,6 +24,7 @@ import { SafetySection } from "../components/settings/SafetySection.tsx";
 import { NavigationSection } from "../components/settings/NavigationSection.tsx";
 import { RainSection } from "../components/settings/RainSection.tsx";
 import { AdvancedSection } from "../components/settings/AdvancedSection.tsx";
+import { SystemSection } from "../components/settings/SystemSection.tsx";
 
 const { Text } = Typography;
 
@@ -87,6 +88,8 @@ export const SettingsPage = () => {
                 return <RainSection values={values} onChange={handleChange} />;
             case "advanced":
                 return <AdvancedSection values={values} advancedKeys={advancedKeys} onChange={handleChange} />;
+            case "system":
+                return <SystemSection />;
             default:
                 return null;
         }

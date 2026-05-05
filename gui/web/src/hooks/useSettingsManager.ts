@@ -15,7 +15,8 @@ export type SettingsSection =
     | "safety"
     | "navigation"
     | "rain"
-    | "advanced";
+    | "advanced"
+    | "system";
 
 export type SectionMeta = {
     id: SettingsSection;
@@ -138,6 +139,14 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         label: "Advanced",
         icon: "code",
         description: "Raw parameters and custom key-value pairs",
+        keys: [],
+    },
+    {
+        id: "system",
+        label: "System",
+        icon: "poweroff",
+        description: "Reboot, shutdown, and host-level diagnostics",
+        // No persisted settings keys — actions only.
         keys: [],
     },
 ];

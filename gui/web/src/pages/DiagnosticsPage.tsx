@@ -49,6 +49,7 @@ import {useSettings} from "../hooks/useSettings.ts";
 import {computeBatteryPercent} from "../utils/battery.ts";
 import {useApi} from "../hooks/useApi.ts";
 import {useFusionGraphDiagnostics} from "../hooks/useFusionGraphDiagnostics.ts";
+import {useRobotDescriptionStatus} from "../hooks/useRobotDescription.ts";
 import {useMowerAction} from "../components/MowerActions.tsx";
 import {AlertOutlined} from "@ant-design/icons";
 
@@ -107,6 +108,7 @@ export const DiagnosticsPage = () => {
     const {imu: cogImu, lastMessageAt: cogLastAt} = useCogHeading();
     const {imu: magImu, lastMessageAt: magLastAt} = useMagYaw();
     const wheelTicks = useWheelTicks();
+    const urdfStatus = useRobotDescriptionStatus();
     const {status: calibrationStatus, refresh: refreshCalibration} = useCalibrationStatus();
 
     // Tick state once a second so the "Live/Stale" tags update even when no
@@ -200,6 +202,22 @@ export const DiagnosticsPage = () => {
                 <HealthBadge
                     label={cpuTemp > 0 ? `CPU: ${cpuTemp.toFixed(1)}°C` : "CPU: --"}
                     color={cpuTemp > 70 ? "error" : cpuTemp > 55 ? "warning" : "success"}
+                />
+                <HealthBadge
+                    label={
+                        urdfStatus.status === "loaded"
+                            ? "URDF: loaded"
+                            : urdfStatus.status === "error"
+                                ? "URDF: error"
+                                : "URDF: missing"
+                    }
+                    color={
+                        urdfStatus.status === "loaded"
+                            ? "success"
+                            : urdfStatus.status === "error"
+                                ? "error"
+                                : "warning"
+                    }
                 />
             </Flex>
         </Card>

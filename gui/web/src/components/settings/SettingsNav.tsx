@@ -7,6 +7,7 @@ import {
     CompassOutlined,
     HomeOutlined,
     NodeIndexOutlined,
+    PoweroffOutlined,
     SafetyOutlined,
     ScissorOutlined,
     ThunderboltOutlined,
@@ -29,6 +30,7 @@ const SECTION_ICONS: Record<string, React.ReactNode> = {
     compass: <CompassOutlined />,
     cloud: <CloudOutlined />,
     code: <CodeOutlined />,
+    poweroff: <PoweroffOutlined />,
 };
 
 type Props = {
