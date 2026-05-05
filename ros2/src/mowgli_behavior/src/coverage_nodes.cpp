@@ -138,18 +138,30 @@ BT::NodeStatus ComputeCoveragePath::onStart()
   // CONSTANT/0.30 m headland and BOUSTROPHEDON route in nav2_params.yaml.
   goal.headland_mode.mode = "";
   // Headland inset budget at the polygon perimeter:
-  //   F2C uses min_turning_radius (0.30 m) for the strip-end U-turn arc
-  //   shape, so the arc apex extends 0.30 m past the strip endpoint
-  //   (perpendicular to the strip). MPPI then overshoots the arc apex
-  //   by ~0.20-0.30 m at cruise speed (observed: robot lands 0.6 m past
-  //   the strip end). Total margin needed = R_turning + MPPI_overshoot
-  //   ≈ 0.50 + 0.30 = 0.80 m. With 0.50 m the U-turn already left no
-  //   margin and the boundary-violation handler fired ~6 times/min.
-  // Cost of 0.80 m: a ~0.30 m unmowed border around the polygon
-  // perimeter. For a 6 × 6 m sim polygon (36 m²) the loss is ~5%; on
-  // real lawns the percentage shrinks. Acceptable trade-off vs the
-  // 90+ BackUp recoveries 0.50 m caused.
-  constexpr float kHeadlandWidth = 0.80f;
+  //   F2C uses min_turning_radius (0.10 m, set in nav2_params.yaml's
+  //   coverage_server) for the strip-end U-turn arc — a forward-only
+  //   Dubins semicircle with apex 0.10 m past strip endpoint. MPPI
+  //   overshoots the arc apex by ~0.70 m at cruise: max turn rate
+  //   (wz_max=1.5) limits the actual achievable turn radius at
+  //   vx=0.20 m/s to ~0.133 m, so the 0.10 m arc gets cut and
+  //   PathFollow drags the trajectory past the apex toward its target
+  //   on the next strip. Total margin = arc_apex + MPPI_overshoot +
+  //   safety = 0.10 + 0.70 + 0.20 = 1.00 m.
+  //
+  // History (this is attempt #6 at this constant):
+  //   0.30 → 0.50 → 0.80: each enough for the planned arc but not
+  //                       MPPI's tracking error
+  //   0.80 + Reeds-Shepp/vx_min=-0.15: creep-reverse local-min stall
+  //   0.80 + Dubins/min_turn=0.10:    sim #19, 28% coverage / 10 min
+  //                                   but 60+ boundary violations
+  //                                   barely past the polygon edge
+  //   1.00 + Dubins (this):           absorbs MPPI's tracking overshoot
+  //                                   without changing any compute
+  //
+  // Cost of 1.00 m: a 0.20 m wider unmowed border per side. For a
+  // 6 × 6 m sim polygon (36 m²) the loss is ~10%; on real lawns the
+  // percentage shrinks substantially.
+  constexpr float kHeadlandWidth = 1.00f;
   goal.headland_mode.width = kHeadlandWidth;
 
   goal.swath_mode.objective = "LENGTH";
