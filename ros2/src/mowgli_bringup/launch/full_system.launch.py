@@ -215,6 +215,11 @@ def generate_launch_description() -> LaunchDescription:
 
     # ------------------------------------------------------------------
     # 4. Map server
+    # The dock pose lives in mowgli_robot.yaml and gates the dock-exclusion
+    # polygon: when (x|y|yaw) != 0, map_server marks the dock + approach
+    # corridor and returns it as an F2C polygon hole on GetMowingArea —
+    # without that, F2C plans strips through the dock and MPPI orbits it
+    # once the LiDAR sees the dock structure.
     # ------------------------------------------------------------------
     map_server_node = Node(
         package="mowgli_map",
@@ -224,6 +229,11 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[
             map_params,
             {"use_sim_time": use_sim_time},
+            {
+                "dock_pose_x": float(robot_params.get("dock_pose_x", 0.0)),
+                "dock_pose_y": float(robot_params.get("dock_pose_y", 0.0)),
+                "dock_pose_yaw": float(robot_params.get("dock_pose_yaw", 0.0)),
+            },
         ],
     )
 
