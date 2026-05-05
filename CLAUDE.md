@@ -13,6 +13,15 @@ This robot has spinning blades. The STM32 firmware is the sole blade safety auth
 - Emergency stop is handled by firmware, not software
 - Flag ANY change that could affect physical behavior as safety-critical in PR reviews
 
+## Target Hardware
+
+| Tier | Board | CPU | RAM |
+|---|---|---|---|
+| **Minimum** | Raspberry Pi 4 | 4× ARM Cortex-A72 @ 1.5 GHz (NEON SIMD) | 4 GB |
+| **Recommended** | Orange Pi 5B | 8× ARM Cortex-A76+A55 @ 2.4 GHz | 8/16 GB |
+
+**Compute-cost rule of thumb for RPi 4**: any tuning that increases MPPI sample × horizon × per-step state-eval cost must keep the per-cycle total under ~100 k state-evals to fit the 10 Hz controller deadline (`controller_frequency: 10.0`). Our default (`time_steps: 30 × batch_size: 2000` = 60 k state-evals/cycle = 600 k/s) is comfortable. Reference configs from x86 platforms (e.g. GHANSHYAM-13's `time_steps: 55 × batch_size: 5000` = 275 k/cycle) **will overrun the deadline on RPi 4** — benchmark on the target board before adopting.
+
 ## Monorepo Layout
 
 | Directory | Language | Build | Description |
