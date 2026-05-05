@@ -113,33 +113,103 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
     const pose = usePose();
     const [settingDock, setSettingDock] = useState(false);
 
-    const handleSetDockAtRobot = useCallback(async () => {
-        const px = pose.pose?.pose?.position?.x;
-        const py = pose.pose?.pose?.position?.y;
-        if (px == null || py == null) {
-            notification.warning({ message: "No robot pose available yet" });
+    // Pull the robot's current map-frame pose. Yaw is the EKF-fused
+    // motion_heading on AbsolutePose. We capture all three (x, y, yaw)
+    // because the operator's mental model when clicking "Set dock from
+    // current pose" is "treat where the robot is sitting right now as the
+    // canonical dock position and orientation".
+    const robotX = pose.pose?.pose?.position?.x;
+    const robotY = pose.pose?.pose?.position?.y;
+    const robotYaw = pose.motion_heading;
+    const poseAvailable = robotX != null && robotY != null && robotYaw != null;
+
+    const writeDockPose = useCallback(
+        async (px: number, py: number, yaw: number) => {
+            const q = getQuaternionFromHeading(yaw);
+            try {
+                setSettingDock(true);
+                await guiApi.mowglinext.mapDockingCreate({
+                    docking_pose: {
+                        orientation: {x: q.x!, y: q.y!, z: q.z!, w: q.w!},
+                        position: {x: px, y: py, z: 0},
+                    },
+                });
+                onChange("dock_pose_x", roundTo(px, 3));
+                onChange("dock_pose_y", roundTo(py, 3));
+                onChange("dock_pose_yaw", roundTo(yaw, 4));
+                notification.success({message: "Dock pose set to current robot position"});
+            } catch (e: unknown) {
+                const message = e instanceof Error ? e.message : "Unknown error";
+                notification.error({message: "Failed to set dock pose", description: message});
+            } finally {
+                setSettingDock(false);
+            }
+        },
+        [guiApi, notification, onChange],
+    );
+
+    // Open a confirmation modal that previews the change and spells out
+    // exactly what gets written. The previous tiny icon-only button buried
+    // this action without a confirm step (#173).
+    const handleSetDockAtRobot = useCallback(() => {
+        if (!poseAvailable) {
+            notification.warning({message: "No robot pose available yet"});
             return;
         }
-        const heading = values.dock_pose_yaw ?? 0;
-        const q = getQuaternionFromHeading(heading);
-        try {
-            setSettingDock(true);
-            await guiApi.mowglinext.mapDockingCreate({
-                docking_pose: {
-                    orientation: { x: q.x!, y: q.y!, z: q.z!, w: q.w! },
-                    position: { x: px, y: py, z: 0 },
-                },
-            });
-            onChange("dock_pose_x", roundTo(px, 3));
-            onChange("dock_pose_y", roundTo(py, 3));
-            notification.success({ message: "Dock pose set to current robot position" });
-        } catch (e: unknown) {
-            const message = e instanceof Error ? e.message : "Unknown error";
-            notification.error({ message: "Failed to set dock pose", description: message });
-        } finally {
-            setSettingDock(false);
-        }
-    }, [pose, guiApi, notification, onChange, values.dock_pose_yaw]);
+        const px = robotX!;
+        const py = robotY!;
+        const yawRad = robotYaw!;
+        const yawDeg = roundTo(radToDeg(yawRad), 1);
+        const savedX = values.dock_pose_x;
+        const savedY = values.dock_pose_y;
+        const savedYawRad = values.dock_pose_yaw;
+        const fmt = (v: any, suffix: string, digits = 3) =>
+            v == null || isNaN(Number(v)) ? "—" : `${roundTo(Number(v), digits)}${suffix}`;
+
+        Modal.confirm({
+            title: (
+                <Space>
+                    <EnvironmentOutlined/>
+                    <span>Set dock pose from current robot position?</span>
+                </Space>
+            ),
+            width: 520,
+            okText: "Set dock pose",
+            okType: "primary",
+            cancelText: "Cancel",
+            content: (
+                <div>
+                    <Typography.Paragraph>
+                        This captures the robot's <strong>x, y AND heading</strong> right now and
+                        writes them to <code>mowgli_robot.yaml</code> as the new dock pose. The
+                        IMU auto-calibration that runs on the next docking will refine the yaw
+                        if it drifts.
+                    </Typography.Paragraph>
+                    <Card size="small" style={{marginBottom: 8}}>
+                        <Row gutter={[8, 4]}>
+                            <Col span={8}><Text type="secondary" style={{fontSize: 11}}>Current robot</Text></Col>
+                            <Col span={5}>x: <strong>{fmt(px, " m")}</strong></Col>
+                            <Col span={5}>y: <strong>{fmt(py, " m")}</strong></Col>
+                            <Col span={6}>yaw: <strong>{yawDeg}°</strong></Col>
+                        </Row>
+                        <Row gutter={[8, 4]} style={{marginTop: 4}}>
+                            <Col span={8}><Text type="secondary" style={{fontSize: 11}}>Saved dock</Text></Col>
+                            <Col span={5}>x: <strong>{fmt(savedX, " m")}</strong></Col>
+                            <Col span={5}>y: <strong>{fmt(savedY, " m")}</strong></Col>
+                            <Col span={6}>yaw:{" "}
+                                <strong>{savedYawRad == null ? "—" : `${roundTo(radToDeg(savedYawRad), 1)}°`}</strong>
+                            </Col>
+                        </Row>
+                    </Card>
+                    <Typography.Paragraph type="secondary" style={{fontSize: 11, marginBottom: 0}}>
+                        Make sure the robot is sitting on the dock and facing the direction it
+                        should approach from. The new pose persists across container restarts.
+                    </Typography.Paragraph>
+                </div>
+            ),
+            onOk: () => writeDockPose(px, py, yawRad),
+        });
+    }, [poseAvailable, robotX, robotY, robotYaw, values.dock_pose_x, values.dock_pose_y, values.dock_pose_yaw, writeDockPose, notification]);
     // Dock yaw lives in mowgli_robot.yaml. It is normally written by the
     // IMU auto-calibration service and the "set dock pose" GUI action,
     // but operators can also override it manually here when calibration
@@ -683,25 +753,16 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                         );
                     })}
 
-                    {/* Dock heading card */}
+                    {/* Dock pose card — heading input, compass widget, and a
+                        prominent "capture from robot" action with a confirmation
+                        modal previewing the change. See #173. */}
                     <Card
                         size="small"
                         title={
                             <Space>
                                 <div style={{ width: 12, height: 12, borderRadius: 2, background: mode === "dark" ? "#666" : "#888" }} />
-                                <span>Dock Heading</span>
+                                <span>Dock Pose</span>
                             </Space>
-                        }
-                        extra={
-                            <Tooltip title="Set dock pose to current robot position (writes dock_pose_x/y/yaw to mowgli_robot.yaml)">
-                                <Button
-                                    type="text"
-                                    size="small"
-                                    icon={<EnvironmentOutlined />}
-                                    loading={settingDock}
-                                    onClick={handleSetDockAtRobot}
-                                />
-                            </Tooltip>
                         }
                         style={{ marginBottom: 8, borderLeft: `3px solid ${mode === "dark" ? "#666" : "#888"}` }}
                     >
@@ -759,11 +820,54 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                 </div>
                             </Col>
                         </Row>
-                        <Typography.Paragraph type="secondary" style={{ fontSize: 10, marginTop: 4, marginBottom: 0 }}>
+                        <Typography.Paragraph type="secondary" style={{ fontSize: 10, marginTop: 4, marginBottom: 8 }}>
                             Auto-captured on first charge by dock_yaw_to_set_pose
                             (source: <code>{dockYawSource}</code>). Re-runs each time the
                             robot returns to the dock — no manual entry needed.
                         </Typography.Paragraph>
+
+                        {/* Capture-from-robot action ─────────────────────── */}
+                        <div
+                            style={{
+                                borderTop: `1px dashed ${mode === "dark" ? "#444" : "#ddd"}`,
+                                paddingTop: 8,
+                                marginTop: 4,
+                            }}
+                        >
+                            <Typography.Text strong style={{ fontSize: 12 }}>
+                                Capture from current robot position
+                            </Typography.Text>
+                            <Typography.Paragraph
+                                type="secondary"
+                                style={{ fontSize: 11, marginTop: 2, marginBottom: 8 }}
+                            >
+                                Park the robot on the dock facing the approach direction, then
+                                click below. Captures <strong>x, y AND yaw</strong> at once —
+                                this is the most reliable way to seed the dock pose for a fresh
+                                map.
+                            </Typography.Paragraph>
+                            <Row gutter={[8, 4]} align="middle">
+                                <Col flex="auto">
+                                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                                        {poseAvailable
+                                            ? `Robot now: x=${roundTo(robotX!, 2)} m, y=${roundTo(robotY!, 2)} m, yaw=${roundTo(radToDeg(robotYaw!), 0)}°`
+                                            : "Waiting for robot pose…"}
+                                    </Typography.Text>
+                                </Col>
+                                <Col flex="none">
+                                    <Button
+                                        type="primary"
+                                        size="small"
+                                        icon={<EnvironmentOutlined />}
+                                        loading={settingDock}
+                                        disabled={!poseAvailable}
+                                        onClick={handleSetDockAtRobot}
+                                    >
+                                        Set dock pose
+                                    </Button>
+                                </Col>
+                            </Row>
+                        </div>
                     </Card>
 
                     <Typography.Paragraph type="secondary" style={{ fontSize: 11, marginTop: 8 }}>
