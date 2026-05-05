@@ -246,8 +246,21 @@ controller_server:
       # uses this pattern with RPP — same idea, different inner controller.
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "nav2_mppi_controller::MPPIController"
-      angular_dist_threshold: 0.4    # > ~23° heading error → rotate first
-      forward_sampling_distance: 0.5
+      # angular_dist_threshold lowered from 0.4 → 0.2 rad (~11°) — the
+      # shim engages MUCH earlier so it pivots in place through F2C's
+      # strip-end U-turn instead of letting MPPI smooth-arc through the
+      # 180° heading change. MPPI's PreferForwardCritic (weight 5) +
+      # PathFollow outweighed reverse samples even with vx_min=-0.15
+      # (sim #40), so we cannot rely on MPPI to track Reeds-Shepp
+      # Z-patterns; the shim handles the U-turn pivot, MPPI handles
+      # the straight-line tracking between U-turns.
+      angular_dist_threshold: 0.2
+      # Lookahead used to pick the path point for heading comparison.
+      # Larger values = the shim looks further ahead and pivots toward
+      # where the path is going next. 0.3 m is half a strip-pitch +
+      # margin; tighter lookahead lets the shim recognise the U-turn
+      # earlier in the strip than the previous 0.5 m would.
+      forward_sampling_distance: 0.3
       rotate_to_heading_angular_vel: 0.85  # matches FollowPath / firmware deadband
       max_angular_accel: 1.0
       simulate_ahead_time: 1.0
