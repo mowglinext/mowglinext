@@ -37,7 +37,8 @@ var topicMap = map[string]topicDef{
 	"fusionRaw":           {"/odometry/filtered_map", "nav_msgs/msg/Odometry"},
 	"btLog":               {"/behavior_tree_log", "nav2_msgs/msg/BehaviorTreeLog"},
 	"imu":                 {"/imu/data", "sensor_msgs/msg/Imu"},
-	"ticks":               {"/wheel_odom", "nav_msgs/msg/Odometry"},
+	"ticks":               {"/wheel_ticks", "mowgli_interfaces/msg/WheelTick"},
+	"wheelOdom":           {"/wheel_odom", "nav_msgs/msg/Odometry"},
 	"map":                 {"", ""},                                                            // virtual – populated via map_server services
 	"path":                {"/FollowCoveragePath/global_plan", "nav_msgs/msg/Path"},            // infrequent event
 	"plan":                {"/plan", "nav_msgs/msg/Path"},                                      // infrequent event
@@ -185,8 +186,7 @@ func NewRosProvider(dbProvider types2.IDBProvider) types2.IRosProvider {
 // topics are forwarded as-is (snake_case JSON from CDR deserialization).
 func (r *RosProvider) initFoxgloveSubscriptions() {
 	adapters := map[string]func([]byte) ([]byte, error){
-		"pose":  adaptPose,
-		"ticks": adaptTicks,
+		"pose": adaptPose,
 	}
 
 	for logicalKey, def := range topicMap {

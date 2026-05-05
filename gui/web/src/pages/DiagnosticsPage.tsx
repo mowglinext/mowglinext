@@ -38,7 +38,7 @@ import {useImu} from "../hooks/useImu.ts";
 import {useCogHeading} from "../hooks/useCogHeading.ts";
 import {useMagYaw} from "../hooks/useMagYaw.ts";
 import {useCalibrationStatus} from "../hooks/useCalibrationStatus.ts";
-import {useWheelTicks} from "../hooks/useWheelTicks.ts";
+import {useWheelOdom} from "../hooks/useWheelOdom.ts";
 import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
 import {useDiagnostics} from "../hooks/useDiagnostics.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
@@ -106,7 +106,7 @@ export const DiagnosticsPage = () => {
     const imu = useImu();
     const {imu: cogImu, lastMessageAt: cogLastAt} = useCogHeading();
     const {imu: magImu, lastMessageAt: magLastAt} = useMagYaw();
-    const wheelTicks = useWheelTicks();
+    const wheelOdom = useWheelOdom();
     const {status: calibrationStatus, refresh: refreshCalibration} = useCalibrationStatus();
 
     // Tick state once a second so the "Live/Stale" tags update even when no
@@ -1272,28 +1272,28 @@ export const DiagnosticsPage = () => {
                         <Col span={12}>
                             <Statistic
                                 title="Linear Vel (m/s)"
-                                value={(wheelTicks as any).linear_velocity_x}
+                                value={wheelOdom.twist?.twist?.linear?.x}
                                 precision={3}
                             />
                         </Col>
                         <Col span={12}>
                             <Statistic
                                 title="Angular Vel (rad/s)"
-                                value={(wheelTicks as any).angular_velocity_z}
+                                value={wheelOdom.twist?.twist?.angular?.z}
                                 precision={3}
                             />
                         </Col>
                         <Col span={12}>
                             <Statistic
                                 title="Pose X (m)"
-                                value={(wheelTicks as any).pose_x}
+                                value={wheelOdom.pose?.pose?.position?.x}
                                 precision={3}
                             />
                         </Col>
                         <Col span={12}>
                             <Statistic
                                 title="Pose Y (m)"
-                                value={(wheelTicks as any).pose_y}
+                                value={wheelOdom.pose?.pose?.position?.y}
                                 precision={3}
                             />
                         </Col>

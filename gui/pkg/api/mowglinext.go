@@ -225,6 +225,8 @@ func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			def, err = subscribe(provider, c, conn, "imu", 100)
 		case "ticks":
 			def, err = subscribe(provider, c, conn, "ticks", 100)
+		case "wheelOdom":
+			def, err = subscribe(provider, c, conn, "wheelOdom", 100)
 		case "map":
 			def, err = subscribe(provider, c, conn, "map", -1)
 		case "path":
