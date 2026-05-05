@@ -125,7 +125,14 @@ controller_server:
       # RPP parameters — tuned for slow differential drive motors
       desired_linear_vel: 0.2
       lookahead_dist: 0.6
-      min_lookahead_dist: 0.3
+      # 0.45 (was 0.3): with use_velocity_scaled_lookahead_dist=true the
+      # lookahead collapses toward this floor whenever regulated speed
+      # scaling kicks in (see regulated_linear_scaling_min_radius below),
+      # which is exactly when curves are tightest. 0.3 m floor produced
+      # left/right hunting on curved transit segments because the carrot
+      # sat barely outside the chassis. 0.45 m gives RPP enough horizon
+      # to converge to the path tangent without chasing every wiggle.
+      min_lookahead_dist: 0.45
       max_lookahead_dist: 1.0
       lookahead_time: 1.5
       # 0.3 s — tight enough that course corrections always use a fresh
@@ -149,7 +156,12 @@ controller_server:
       use_fixed_curvature_lookahead: false
       curvature_lookahead_dist: 0.6
       use_cost_regulated_linear_velocity_scaling: false
-      regulated_linear_scaling_min_radius: 0.9
+      # 0.6 (was 0.9): 0.9 m triggered regulated speed scaling on almost
+      # every non-straight transit segment, which dropped vx to
+      # min_approach_linear_velocity (0.15 m/s — right at the motor
+      # deadband) and made the robot chatter at the deadband edge through
+      # curves. 0.6 m only kicks in for genuinely tight arcs.
+      regulated_linear_scaling_min_radius: 0.6
       # Above motor deadband (PWM_PER_MPS=300 → 0.12 m/s ~ PWM 36).
       regulated_linear_scaling_min_speed: 0.15
       # false: use_rotate_to_heading=true caused pivot oscillation at the
@@ -598,6 +610,18 @@ docking_server:
     # so disabling the docking-internal check doesn't remove safety —
     # it just stops the docking server from refusing to dock at the dock.
     controller.use_collision_detection: false
+    # Graceful-controller velocity envelope. Defaults (v_linear_max ≈ 0.25
+    # m/s, slowdown_radius ≈ 0.25 m) are tuned for larger AMRs and let
+    # the mower hit the dock at near-transit speed: with docking_threshold
+    # 0.05 m the controller only has ~200 ms between "in tolerance" and
+    # contact, so the robot regularly overshoots / bounces off / misses
+    # the cradle. Halving v_linear_max and doubling slowdown_radius gives
+    # a calm ~5 cm/s final approach with plenty of braking distance for
+    # the 10 Hz controller loop to detect charging and stop cleanly.
+    controller.v_linear_min: 0.05
+    controller.v_linear_max: 0.12
+    controller.v_angular_max: 0.5
+    controller.slowdown_radius: 0.5
     # Named dock instances — BT uses dock_id="home_dock"
     dock_plugins: ["simple_charging_dock"]
     docks: ["home_dock"]

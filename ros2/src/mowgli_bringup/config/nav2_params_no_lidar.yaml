@@ -54,10 +54,13 @@ controller_server:
     # updates) so default 1.0s timeout races with the 1-2 Hz costmap update
     # cycle and surfaces as "Costmap timed out waiting for update" error 207.
     costmap_update_timeout: 5.0
-    min_x_velocity_threshold: 0.001
+    # Motor static-friction deadband — see nav2_params.yaml. Anything
+    # below ~0.12 m/s buzzes without moving; zero sub-deadband commands
+    # so the motors don't sit in the buzz zone.
+    min_x_velocity_threshold: 0.08
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 5.0
+    failure_tolerance: 1.0
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker"]
     controller_plugins: ["FollowPath", "FollowCoveragePath"]
@@ -69,9 +72,9 @@ controller_server:
 
     stopped_goal_checker:
       plugin: "nav2_controller::StoppedGoalChecker"
-      trans_stopped_velocity: 0.25
-      xy_goal_tolerance: 0.75
-      yaw_goal_tolerance: 1.0
+      trans_stopped_velocity: 0.10
+      xy_goal_tolerance: 0.30
+      yaw_goal_tolerance: 0.5
 
     coverage_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
@@ -83,56 +86,71 @@ controller_server:
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      angular_dist_threshold: 0.5
+      # Match nav2_params.yaml — see there for full rationale on every
+      # value. The only knob that should differ between LiDAR and no-LiDAR
+      # is use_collision_detection (RPP can't check obstacles without an
+      # obstacle_layer in the local_costmap).
+      angular_dist_threshold: 1.0
       forward_sampling_distance: 0.5
-      rotate_to_heading_angular_vel: 3.0
-      max_angular_accel: 5.0
-      desired_linear_vel: 0.3
+      rotate_to_heading_angular_vel: 0.85
+      max_angular_accel: 1.0
+      desired_linear_vel: 0.2
       lookahead_dist: 0.4
-      min_lookahead_dist: 0.2
+      min_lookahead_dist: 0.35
       max_lookahead_dist: 0.6
       lookahead_time: 1.5
-      transform_tolerance: 2.0
-      use_velocity_scaled_lookahead_dist: false
-      min_approach_linear_velocity: 0.05
+      # 0.3 s — fresh-pose envelope. 2.0 s let RPP pursue lookahead
+      # points on 2-second-old TFs (60 cm of stale-pose error at
+      # 0.3 m/s) and showed up as left/right hunting on curves.
+      transform_tolerance: 0.3
+      use_velocity_scaled_lookahead_dist: true
+      # Above the ~0.12 m/s motor deadband.
+      min_approach_linear_velocity: 0.15
       approach_velocity_scaling_dist: 0.6
+      # No obstacle_layer in the local_costmap → nothing to check against.
       use_collision_detection: false
       use_regulated_linear_velocity_scaling: true
       use_fixed_curvature_lookahead: false
       curvature_lookahead_dist: 0.6
       use_cost_regulated_linear_velocity_scaling: false
-      regulated_linear_scaling_min_radius: 0.9
-      regulated_linear_scaling_min_speed: 0.1
+      regulated_linear_scaling_min_radius: 0.6
+      regulated_linear_scaling_min_speed: 0.15
       use_rotate_to_heading: false
       allow_reversing: false
-      max_angular_vel: 3.0
+      max_angular_vel: 0.8
       max_robot_pose_search_dist: 2.0
 
     # Follow-the-Carrot controller for coverage mowing.
     FollowCoveragePath:
       plugin: "mowgli_nav2_plugins/FTCController"
-      speed_fast: 0.4
+      # Match nav2_params.yaml — see there for full rationale on every
+      # value. check_obstacles=false here since there's no obstacle_layer
+      # in the local_costmap to query.
+      speed_fast: 0.20
       speed_fast_threshold: 0.5
       speed_fast_threshold_angle: 10.0
-      speed_slow: 0.15
-      speed_angular: 60.0
-      acceleration: 0.5
-      kp_lon: 2.0
+      speed_slow: 0.12
+      speed_angular: 45.0
+      acceleration: 0.2
+      kp_lon: 1.0
       ki_lon: 0.0
       kd_lon: 0.0
       kp_lat: 2.0
       ki_lat: 0.0
-      kd_lat: 0.0
-      kp_ang: 2.0
+      # kd_lat=1.0 damps lateral oscillation from GPS-noise jitter feeding
+      # the lateral PID — was 0.0 here, which let small position noise
+      # turn into visible left/right wiggle on coverage strips.
+      kd_lat: 1.0
+      kp_ang: 1.5
       ki_ang: 0.0
       kd_ang: 0.0
-      max_cmd_vel_speed: 0.4
-      max_cmd_vel_ang: 3.0
+      max_cmd_vel_speed: 0.30
+      max_cmd_vel_ang: 0.8
       max_goal_distance_error: 0.10
       max_goal_angle_error: 15.0
       goal_timeout: 10.0
       max_follow_distance: 2.0
-      forward_only: false   # 2026-04-26: reverted, broke PID recovery. See nav2_params.yaml.
+      forward_only: false
       check_obstacles: false
 
 # ---------------------------------------------------------------------------
@@ -200,9 +218,13 @@ behavior_server:
     global_frame: odom
     robot_base_frame: base_footprint
     transform_tolerance: 0.5
-    simulate_ahead_time: 2.0
+    # 0.5s sim-ahead — 2.0s refused every undock by projecting BackUp
+    # through phantom LETHAL cells 30-50 cm behind. See nav2_params.yaml.
+    simulate_ahead_time: 0.5
     max_rotational_vel: 3.0
-    min_rotational_vel: 0.15
+    # 0.85 rad/s ≈ wheel vel 0.14 m/s per wheel (PWM 42 > deadband).
+    # 0.15 floor let Spin behavior dither at sub-deadband ω.
+    min_rotational_vel: 0.85
     rotational_acc_lim: 5.0
     enable_stamped_cmd_vel: true
 
@@ -236,7 +258,9 @@ global_costmap:
       publish_frequency: 2.0
       global_frame: map
       robot_base_frame: base_footprint
-      transform_tolerance: 5.0
+      # 0.5s — 5.0s allowed up to 229° rotation smear at max ω. ARM
+      # scheduler jitter sits ~300 ms; 0.5 still absorbs it.
+      transform_tolerance: 0.5
       footprint: "[[0.50, 0.20], [0.50, -0.20], [-0.10, -0.20], [-0.10, 0.20]]"
       resolution: 0.05
       track_unknown_space: false
@@ -259,12 +283,16 @@ global_costmap:
         enabled: true
         map_topic: "/no_lidar_static_map"
         subscribe_to_updates: false
-        transform_tolerance: 5.0
+        transform_tolerance: 0.5
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.40
+        # cost_scaling_factor 10 + inflation_radius 0.20: 0.40 m inflation
+        # made footprint corners land inside the inflated zone whenever
+        # the robot was within ~0.44 m of the polygon edge → "Start
+        # occupied" planner failures. See nav2_params.yaml.
+        cost_scaling_factor: 10.0
+        inflation_radius: 0.20
 
       keepout_filter:
         plugin: "nav2_costmap_2d::KeepoutFilter"
@@ -285,6 +313,10 @@ local_costmap:
       publish_frequency: 2.0
       global_frame: odom
       robot_base_frame: base_footprint
+      transform_tolerance: 0.5
+      # No obstacle source — without periodic full publishes the costmap
+      # rarely updates and isCurrent() never flips true.
+      always_send_full_costmap: true
       footprint: "[[0.50, 0.20], [0.50, -0.20], [-0.10, -0.20], [-0.10, 0.20]]"
       resolution: 0.05
       rolling_window: true
@@ -302,12 +334,12 @@ local_costmap:
         enabled: true
         map_topic: "/no_lidar_static_map"
         subscribe_to_updates: false
-        transform_tolerance: 5.0
+        transform_tolerance: 0.5
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.40
+        cost_scaling_factor: 10.0
+        inflation_radius: 0.20
 
 # ---------------------------------------------------------------------------
 # Map server / AMCL (unused — map→odom is a static identity, no SLAM backend;
@@ -348,6 +380,14 @@ docking_server:
     fixed_frame: odom
     dock_backwards: false
     dock_prestaging_tolerance: 0.5
+    # Graceful-controller velocity envelope — see nav2_params.yaml for
+    # rationale. Defaults make the mower hit the dock at near-transit
+    # speed; halving v_linear_max + doubling slowdown_radius gives the
+    # 10 Hz loop time to catch the charging signal before overshoot.
+    controller.v_linear_min: 0.05
+    controller.v_linear_max: 0.12
+    controller.v_angular_max: 0.5
+    controller.slowdown_radius: 0.5
     dock_plugins: ["simple_charging_dock"]
     docks: ["home_dock"]
     home_dock:
@@ -375,6 +415,7 @@ docking_server:
 collision_monitor:
   ros__parameters:
     use_sim_time: false
+    enable_stamped_cmd_vel: true
     base_frame_id: base_footprint
     odom_frame_id: odom
     # 2026-04-26: smoother removed; collision_monitor reads directly from
@@ -382,8 +423,10 @@ collision_monitor:
     cmd_vel_in_topic: cmd_vel_nav
     cmd_vel_out_topic: cmd_vel_monitored
     state_topic: collision_monitor_state
-    transform_tolerance: 0.2
-    source_timeout: 1.0
+    transform_tolerance: 0.5
+    # 5s — ARM TF/scan jitter can briefly stall sources; 1s caused
+    # spurious stops on the lidar config and the same applies here.
+    source_timeout: 5.0
     base_shift_correction: true
     stop_pub_timeout: 2.0
     polygons: ["PolygonStop", "FootprintApproach"]
