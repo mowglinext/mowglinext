@@ -23,7 +23,12 @@ bt_navigator:
     # Paths are injected by navigation.launch.py via RewrittenYaml — keep empty here.
     default_nav_to_pose_bt_xml: ""
     default_nav_through_poses_bt_xml: ""
-    # plugin_lib_names: auto-loaded in Kilted — no manual list needed.
+    # Standard nav2_behavior_tree plugins are auto-loaded; we only need to
+    # list 3rd-party plugins so bt_navigator's BehaviorTreeFactory knows
+    # ComputeCoveragePath / CancelCoverage when parsing coverage_bt.xml.
+    plugin_lib_names:
+      - opennav_compute_complete_coverage_action_bt_node
+      - opennav_cancel_complete_coverage_action_bt_node
     enable_stamped_cmd_vel: true
     # Coverage navigator (opennav_coverage_navigator/CoverageNavigator):
     # exposes a /navigate_complete_coverage action that, on goal, runs an
@@ -45,13 +50,17 @@ bt_navigator:
     navigate_through_poses:
       plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
     navigate_complete_coverage:
-      plugin: "opennav_coverage_navigator::CoverageNavigator"
+      plugin: "opennav_coverage_navigator/CoverageNavigator"
     # Path injected by navigation.launch.py at runtime — points to our
     # mowgli_behavior/trees/coverage_bt.xml (a tweaked copy of the
     # opennav_coverage_bt navigate_w_basic_complete_coverage_nav_to_start.xml
     # template with a RecoveryNode added around the final FollowPath).
     default_coverage_bt_xml: ""
-    error_code_names: ["compute_path_error_code", "follow_path_error_code", "compute_coverage_error_code"]
+    # Kilted: error_code_names renamed to error_code_name_prefixes.
+    # bt_navigator scans blackboard for keys whose name starts with one of
+    # these prefixes (e.g. "compute_path_error_code", "compute_coverage_error_code")
+    # to surface the highest-priority error code on action result.
+    error_code_name_prefixes: ["compute_path", "follow_path", "compute_coverage"]
 
 bt_navigator_navigate_through_poses_rclcpp_node:
   ros__parameters:
