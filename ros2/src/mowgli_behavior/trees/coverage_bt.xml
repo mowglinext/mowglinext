@@ -34,19 +34,19 @@
         <!-- Drive to strip[0] before starting MPPI on the coverage plan -->
         <GetPoseFromPath path="{path}" pose="{start_pose}" index="0"/>
         <ComputePathToPose goal="{start_pose}" path="{path_to_start}" planner_id="GridBased" error_code_id="{compute_path_error_code}" error_msg="{compute_path_error_msg}"/>
-        <FollowPath path="{path_to_start}" controller_id="FollowPath" error_code_id="{follow_path_error_code}" error_msg="{follow_path_error_msg}"/>
+        <FollowPath path="{path_to_start}" controller_id="FollowPath" goal_checker_id="stopped_goal_checker" error_code_id="{follow_path_error_code}" error_msg="{follow_path_error_msg}"/>
 
         <!-- Mow the coverage plan with retry/recovery -->
         <RecoveryNode number_of_retries="100" name="CoverageWithRecovery">
           <!-- Primary: MPPI tracking of the F2C plan -->
-          <FollowPath path="{path}" controller_id="FollowCoveragePath" error_code_id="{follow_path_error_code}" error_msg="{follow_path_error_msg}"/>
+          <FollowPath path="{path}" controller_id="FollowCoveragePath" goal_checker_id="coverage_goal_checker" error_code_id="{follow_path_error_code}" error_msg="{follow_path_error_msg}"/>
 
           <!-- Recovery: fallback to RPP, or BackUp + ClearCostmap + Wait -->
           <RoundRobin name="CoverageRecoveryRoundRobin">
             <!-- Try the same coverage path with the transit controller (RPP)
                  as a fallback. RPP stops on obstacles instead of deviating,
                  so this only succeeds when the path is locally clear. -->
-            <FollowPath path="{path}" controller_id="FollowPath" error_code_id="{follow_path_error_code}" error_msg="{follow_path_error_msg}"/>
+            <FollowPath path="{path}" controller_id="FollowPath" goal_checker_id="coverage_goal_checker" error_code_id="{follow_path_error_code}" error_msg="{follow_path_error_msg}"/>
             <Sequence name="BackupAndClear">
               <BackUp backup_dist="0.25" backup_speed="0.05" time_allowance="5"/>
               <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
