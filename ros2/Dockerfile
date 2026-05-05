@@ -157,8 +157,10 @@ COPY src/mowgli_localization/package.xml  src/mowgli_localization/package.xml
 COPY src/mowgli_localization/CMakeLists.txt src/mowgli_localization/CMakeLists.txt
 COPY src/mowgli_map/package.xml           src/mowgli_map/package.xml
 COPY src/mowgli_map/CMakeLists.txt        src/mowgli_map/CMakeLists.txt
-COPY src/mowgli_nav2_plugins/package.xml  src/mowgli_nav2_plugins/package.xml
-COPY src/mowgli_nav2_plugins/CMakeLists.txt src/mowgli_nav2_plugins/CMakeLists.txt
+# mowgli_nav2_plugins (FTCController) was removed in da71b13 when the
+# stack migrated to opennav_coverage + nav2_mppi_controller. Re-adding
+# COPY lines for it would break the build because the directory no
+# longer exists.
 COPY src/mowgli_behavior/package.xml      src/mowgli_behavior/package.xml
 COPY src/mowgli_behavior/CMakeLists.txt   src/mowgli_behavior/CMakeLists.txt
 COPY src/mowgli_monitoring/package.xml    src/mowgli_monitoring/package.xml
