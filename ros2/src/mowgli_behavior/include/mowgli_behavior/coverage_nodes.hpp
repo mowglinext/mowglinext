@@ -29,6 +29,7 @@
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "mowgli_interfaces/srv/paint_swath.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
+#include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "opennav_coverage_msgs/action/compute_coverage_path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -85,6 +86,46 @@ private:
   std::shared_future<CoverageGoalHandle::SharedPtr> goal_future_;
   CoverageGoalHandle::SharedPtr goal_handle_;
   std::shared_future<CoverageGoalHandle::WrappedResult> result_future_;
+  bool result_requested_{false};
+};
+
+// ---------------------------------------------------------------------------
+// NavigateToFirstStripPose — drives the robot to ctx->current_coverage_path
+// .poses[0] (the first F2C strip endpoint) using Nav2's /navigate_to_pose
+// action, BEFORE FollowCoveragePath runs. This matches the upstream
+// GHANSHYAM-13/coverage-path-planning architecture and replaces the prior
+// "prepend robot pose to F2C plan" hack — that hack inserted a non-strip-
+// shaped lead-in segment which confused MPPI's PathHandler closest-point
+// logic and produced the looping driven track captured 2026-05-05.
+// With this node in place, when FollowCoveragePath starts the robot is
+// already at path[0] and MPPI tracks pure strips end-to-end.
+// ---------------------------------------------------------------------------
+
+class NavigateToFirstStripPose : public BT::StatefulActionNode
+{
+public:
+  using NavAction = nav2_msgs::action::NavigateToPose;
+  using NavGoalHandle = rclcpp_action::ClientGoalHandle<NavAction>;
+
+  NavigateToFirstStripPose(const std::string& name, const BT::NodeConfig& config)
+      : BT::StatefulActionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus onStart() override;
+  BT::NodeStatus onRunning() override;
+  void onHalted() override;
+
+private:
+  rclcpp_action::Client<NavAction>::SharedPtr action_client_;
+  std::shared_future<NavGoalHandle::SharedPtr> goal_future_;
+  NavGoalHandle::SharedPtr goal_handle_;
+  std::shared_future<NavGoalHandle::WrappedResult> result_future_;
   bool result_requested_{false};
 };
 

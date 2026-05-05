@@ -74,6 +74,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   // opennav_coverage-based mowing
   factory.registerNodeType<GetNextUnmowedArea>("GetNextUnmowedArea");
   factory.registerNodeType<ComputeCoveragePath>("ComputeCoveragePath");
+  factory.registerNodeType<NavigateToFirstStripPose>("NavigateToFirstStripPose");
   factory.registerNodeType<FollowCoveragePath>("FollowCoveragePath");
 
   // Area recording node

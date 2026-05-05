@@ -277,30 +277,28 @@ BT::NodeStatus ComputeCoveragePath::onRunning()
   if (ctx->current_coverage_path.header.frame_id.empty())
     ctx->current_coverage_path.header.frame_id = "map";
 
-  // Prepend the robot's current pose to the coverage path so MPPI starts
-  // tracking from the robot (closest_point = path[0]) instead of jumping
-  // to a random nearest point. MPPI's PathHandler::transformPath breaks
-  // its forward-walk the first time a pose lands outside the local
-  // costmap — for a multi-swath coverage path this typically truncates
-  // to zero poses unless the path begins near the robot.
-  try
-  {
-    auto base_to_map = ctx->tf_buffer->lookupTransform(
-        "map", "base_footprint", tf2::TimePointZero, tf2::durationFromSec(1.0));
-    geometry_msgs::msg::PoseStamped robot_pose;
-    robot_pose.pose.position.x = base_to_map.transform.translation.x;
-    robot_pose.pose.position.y = base_to_map.transform.translation.y;
-    robot_pose.pose.position.z = 0.0;
-    robot_pose.pose.orientation = base_to_map.transform.rotation;
-    ctx->current_coverage_path.poses.insert(
-        ctx->current_coverage_path.poses.begin(), robot_pose);
-  }
-  catch (const tf2::TransformException& ex)
-  {
-    RCLCPP_WARN(ctx->node->get_logger(),
-                "ComputeCoveragePath: TF map→base_footprint unavailable, sending "
-                "path as-is (%s)", ex.what());
-  }
+  // The F2C coverage_plan goes to MPPI AS-IS. The previous version
+  // prepended the robot's current pose to path[0] under the theory
+  // that MPPI's PathHandler::transformPath would truncate the plan
+  // unless it started near the robot — but this prepended a non-
+  // strip-shaped lead-in segment from (robot_x, robot_y) to
+  // (F2C_first_strip_pose), and MPPI's PathHandler closest-point
+  // logic then got confused alternating between "follow the
+  // lead-in" and "follow the strip", producing the looping /
+  // tangled actual driven track the user observed (mow_progress
+  // captured 2026-05-05 showed loops, not strips).
+  //
+  // The correct architecture (per GHANSHYAM-13/coverage-path-planning):
+  //   1. Compute coverage path (this node)
+  //   2. Drive the robot to the F2C plan's first pose using a
+  //      separate Nav2 goal (NavigateToFirstStripPose BT node, added
+  //      below) — Smac plans, RPP follows
+  //   3. Then run FollowCoveragePath on the unmodified F2C plan
+  //
+  // With the robot already at path[0] when FollowCoveragePath starts,
+  // MPPI's PathHandler's closest-point search lands at index 0 cleanly
+  // and the local plan walks forward through the strips without any
+  // synthetic lead-in confusing it.
 
   // Stamp the path + every pose with the map frame and the current ROS
   // time. MPPI's transform pipeline interpolates against per-pose stamps
@@ -327,6 +325,122 @@ BT::NodeStatus ComputeCoveragePath::onRunning()
 }
 
 void ComputeCoveragePath::onHalted()
+{
+  if (goal_handle_)
+    action_client_->async_cancel_goal(goal_handle_);
+  goal_handle_.reset();
+}
+
+// ===========================================================================
+// NavigateToFirstStripPose — pre-FollowCoveragePath transit to F2C plan[0]
+// ===========================================================================
+
+BT::NodeStatus NavigateToFirstStripPose::onStart()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  if (ctx->current_coverage_path.poses.empty())
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "NavigateToFirstStripPose: empty coverage path — nothing to do");
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  if (!action_client_)
+  {
+    action_client_ = rclcpp_action::create_client<NavAction>(
+        ctx->node, "/navigate_to_pose");
+  }
+  if (!action_client_->wait_for_action_server(std::chrono::seconds(5)))
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "NavigateToFirstStripPose: /navigate_to_pose action not available");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // If we're already within 0.30 m of the first strip pose, skip — the
+  // existing pose is good enough for MPPI to start tracking. This keeps
+  // the second-and-later areas in a multi-area mow from doing a needless
+  // round-trip to a strip endpoint that's already reachable.
+  const auto& target = ctx->current_coverage_path.poses.front().pose.position;
+  try
+  {
+    auto base_to_map = ctx->tf_buffer->lookupTransform(
+        "map", "base_footprint", tf2::TimePointZero, tf2::durationFromSec(0.5));
+    const double dx = target.x - base_to_map.transform.translation.x;
+    const double dy = target.y - base_to_map.transform.translation.y;
+    if (std::hypot(dx, dy) < 0.30)
+    {
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "NavigateToFirstStripPose: already within 0.30 m of strip[0] — skipping");
+      return BT::NodeStatus::SUCCESS;
+    }
+  }
+  catch (const tf2::TransformException&)
+  {
+    // proceed with NavigateToPose if we can't measure
+  }
+
+  NavAction::Goal goal;
+  goal.pose = ctx->current_coverage_path.poses.front();
+  if (goal.pose.header.frame_id.empty())
+    goal.pose.header.frame_id = "map";
+  goal.pose.header.stamp = ctx->node->now();
+
+  goal_handle_.reset();
+  result_requested_ = false;
+  goal_future_ = action_client_->async_send_goal(goal);
+
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "NavigateToFirstStripPose: navigating to F2C strip[0] = (%.2f, %.2f)",
+              goal.pose.pose.position.x, goal.pose.pose.position.y);
+  return BT::NodeStatus::RUNNING;
+}
+
+BT::NodeStatus NavigateToFirstStripPose::onRunning()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  if (!goal_handle_)
+  {
+    if (goal_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+      return BT::NodeStatus::RUNNING;
+    goal_handle_ = goal_future_.get();
+    if (!goal_handle_)
+    {
+      RCLCPP_ERROR(ctx->node->get_logger(),
+                   "NavigateToFirstStripPose: goal rejected by /navigate_to_pose");
+      return BT::NodeStatus::FAILURE;
+    }
+  }
+
+  if (!result_requested_)
+  {
+    result_future_ = action_client_->async_get_result(goal_handle_);
+    result_requested_ = true;
+  }
+
+  if (result_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+    return BT::NodeStatus::RUNNING;
+
+  const auto wrapped = result_future_.get();
+  switch (wrapped.code)
+  {
+    case rclcpp_action::ResultCode::SUCCEEDED:
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "NavigateToFirstStripPose: arrived at strip[0]");
+      return BT::NodeStatus::SUCCESS;
+    case rclcpp_action::ResultCode::ABORTED:
+    case rclcpp_action::ResultCode::CANCELED:
+    default:
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "NavigateToFirstStripPose: nav_to_pose terminated code=%d",
+                  static_cast<int>(wrapped.code));
+      return BT::NodeStatus::FAILURE;
+  }
+}
+
+void NavigateToFirstStripPose::onHalted()
 {
   if (goal_handle_)
     action_client_->async_cancel_goal(goal_handle_);

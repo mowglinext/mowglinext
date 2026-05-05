@@ -470,6 +470,16 @@
                   <GetNextUnmowedArea area_index="{current_area_index}"/>
                   <PublishHighLevelStatus state="2" state_name="MOWING"/>
                   <ComputeCoveragePath area_index="{current_area_index}"/>
+                  <!-- Navigate the robot to the F2C plan's first pose
+                       BEFORE running FollowCoveragePath. This matches the
+                       upstream GHANSHYAM-13/coverage-path-planning BT
+                       structure and replaces our previous "prepend robot
+                       pose to plan" hack — that hack inserted a non-
+                       strip-shaped lead-in that confused MPPI's path
+                       handler and produced loopy driven tracks.
+                       Auto-skips when the robot is already within
+                       0.30 m of strip[0]. -->
+                  <NavigateToFirstStripPose/>
                   <FollowCoveragePath area_index="{current_area_index}"/>
                 </Sequence>
               </Repeat>
