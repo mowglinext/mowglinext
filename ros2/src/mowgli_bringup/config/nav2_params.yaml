@@ -885,20 +885,20 @@ coverage_server:
     robot_width: 0.40
     operation_width: 0.18
     # Diff-drive turns in place — F2C still wants a non-zero turning
-    # radius for the swath connector planner. With strip spacing
-    # (operation_width) at 0.18 m, 0.10 m matches strip half-width
-    # so the U-turn between adjacent strips is a forward-only Dubins
-    # semicircle (apex 0.10 m past strip endpoint). vx_min=0.10 in
-    # MPPI then keeps everything forward-only.
+    # radius for the swath connector planner. 0.30 m is the value used
+    # in sim #20 (best run: 40 % coverage, 35 BV, 1 FollowCoveragePath
+    # complete, dock attempted) — F2C generates a Reeds-Shepp arc with
+    # apex 0.30 m past strip endpoint plus MPPI overshoot ~0.30 m, both
+    # absorbed by the headland_width=1.00 m budget.
     #
-    # Tried 0.05 m (sim #23): U-turn arc apex collapsed to ~0.05 m
-    # past strip endpoint, but MPPI's tracking overshoot is ~0.30 m
-    # at cruise — so the actual robot trajectory crashed into the
-    # polygon boundary even more aggressively. 77 BV + 124 BackUps
-    # in 9 min vs sim #20's 35 BV + 38 BackUps. Smaller radius is
-    # NOT better — it has to be at least strip_half_width to give
-    # the arc + MPPI overshoot enough margin.
-    min_turning_radius: 0.10
+    # Tried 0.05 m (sim #23, 77 BV) and 0.10 m (sim #24, 73 BV): the
+    # tighter radius collapses the arc apex but MPPI's overshoot is
+    # roughly fixed at 0.30 m — robot ends up at the polygon edge on
+    # every U-turn instead of comfortably inside.
+    #
+    # 0.05 m additionally hangs F2C v1.2.1 on a 9 × 6 m field. 0.30 m
+    # is the safe value matching the opennav_coverage demo config.
+    min_turning_radius: 0.30
     linear_curv_change: 200.0
     # Headland: 0.30 m around the boundary (covers chassis half-width +
     # MPPI tracking margin so the chassis stays inside the polygon).
