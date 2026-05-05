@@ -909,23 +909,23 @@ coverage_server:
     # Route order — boustrophedon (snake) keeps adjacent swaths back-to-back
     # so transitions between them are short.
     default_route_type: "BOUSTROPHEDON"
-    # Strip-by-strip mowing with in-place pivots — diff-drive can rotate
-    # at vx=0 with arbitrary wz, so strip transitions are: drive straight
-    # → stop at strip end → pivot 180° → drive straight on next strip.
-    # The RotationShim wrapping MPPI handles the pivot when heading error
-    # exceeds angular_dist_threshold (0.4 rad ≈ 23°); MPPI then drives
-    # the straight strip.
+    # Forward-only Dubins paths with continuous spline blending. The
+    # diff-drive robot can pivot in place, so the RotationShim handles
+    # heading flips at strip ends (when angular error >
+    # angular_dist_threshold=0.4 rad ≈ 23°), pivoting at
+    # rotate_to_heading_angular_vel=0.85 rad/s before letting MPPI
+    # track the strip. With min_turning_radius=0.05 m the smooth
+    # blends between strips are very tight — closer to a sharp
+    # corner than a curved arc — which makes the shim trigger the
+    # pivot reliably.
     #
-    # CONTINUOUS would smooth-blend strips with Reeds-Shepp arcs; the
-    # shim never sees a sharp heading flip and MPPI tries to track the
-    # arcs, which it can't follow precisely (overshoots, sim #20:
-    # 35 BV + 38 BackUps + chaotic candidate trajectories visible in
-    # foxglove). DISCONTINUOUS gives F2C a path with hard corners
-    # between segments — the shim picks up the heading discontinuity
-    # and pivots in place, then MPPI tracks each straight segment
-    # cleanly. This is what "strict strip following" actually requires.
+    # DISCONTINUOUS was tried (sim #22) but produced a Path message
+    # with literal gaps between strips that Nav2's controller_server
+    # couldn't follow — coverage stalled at 0.66 % with 26 BV +
+    # 20 BackUps in 10 minutes. CONTINUOUS keeps the path single-
+    # segment so MPPI's PathHandler can process it normally.
     default_path_type: "DUBIN"
-    default_path_continuity_type: "DISCONTINUOUS"
+    default_path_continuity_type: "CONTINUOUS"
     # Coordinates already in map frame from the BT.
     coordinates_in_cartesian_frame: true
 
