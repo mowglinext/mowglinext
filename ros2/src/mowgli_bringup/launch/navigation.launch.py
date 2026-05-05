@@ -225,6 +225,11 @@ def generate_launch_description() -> LaunchDescription:
         runtime_config if os.path.isfile(runtime_config) else template_config
     )
     footprint_str = ""
+    # Coverage server geometry from the same robot config — single source
+    # of truth in mowgli_robot.yaml. Defaults preserved for environments
+    # that don't ship the file at all (shouldn't happen, but harmless).
+    coverage_robot_width = 0.40
+    coverage_operation_width = 0.18
     if os.path.isfile(robot_config_file):
         with open(robot_config_file, "r") as f:
             rcfg = yaml.safe_load(f) or {}
@@ -243,6 +248,11 @@ def generate_launch_description() -> LaunchDescription:
             f"[{fp_r:.3f}, {-fp_hw:.3f}], "
             f"[{fp_r:.3f}, {fp_hw:.3f}]]"
         )
+        # F2C strip planning: robot_width = chassis envelope, operation_width
+        # = mower cutter (= 2 * blade_radius). chassis_width and tool_width
+        # are the canonical names in mowgli_robot.yaml.
+        coverage_robot_width = cw
+        coverage_operation_width = float(rp.get("tool_width", 0.18))
 
     # Read dock pose and Nav2 speed knobs from the runtime config. Dock
     # pose feeds docking_server's home_dock.pose below. The WGS84 datum
@@ -392,15 +402,17 @@ def generate_launch_description() -> LaunchDescription:
         pc = cs_params.setdefault("progress_checker", {})
         pc["movement_time_allowance"] = progress_timeout_sec
 
-        # coverage_server geometry — read from mowgli_robot.yaml so it's
-        # the single source of truth for the robot's physical config.
+        # coverage_server geometry — read from mowgli_robot.yaml at the
+        # outer scope (coverage_robot_width / coverage_operation_width)
+        # so this works whether the runtime_robot_config docker path or
+        # the template host path is the source.
         # robot_width      <- chassis_width  (full chassis envelope)
         # operation_width  <- tool_width     (mower cutter ≈ 0.18 m)
         # F2C uses these for headland inset sizing and strip spacing.
         cov_params = (doc.setdefault("coverage_server", {})
                          .setdefault("ros__parameters", {}))
-        cov_params["robot_width"] = float(rt_rp.get("chassis_width", 0.40))
-        cov_params["operation_width"] = float(rt_rp.get("tool_width", 0.18))
+        cov_params["robot_width"] = coverage_robot_width
+        cov_params["operation_width"] = coverage_operation_width
 
         # Coverage navigator BT path: bt_navigator's CoverageNavigator
         # plugin reads default_coverage_bt_xml at startup and uses it as
