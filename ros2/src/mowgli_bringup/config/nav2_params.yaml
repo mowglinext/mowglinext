@@ -217,47 +217,30 @@ controller_server:
       max_angular_accel: 1.0
       simulate_ahead_time: 1.0
       # Inner MPPI parameters (loaded under FollowCoveragePath.* by the shim).
-      # time_steps + model_dt set the optimizer's planning HORIZON.
-      # 30 × 0.1 = 3 s was too short to fit a full Reeds-Shepp U-turn
-      # maneuver (decelerate ~1 s + reverse arc ~3 s + accelerate forward
-      # along next strip ~1.5 s ≈ 5-6 s total). With a horizon shorter
-      # than the maneuver, MPPI samples partial trajectories that look
-      # equally costly to "creep slightly backward" — it lands in a
-      # local-min and the robot stalls (sim #17 evidence: 4+ min stuck
-      # at -2.30, 4.03 with cmd_vel_nav≈-0.02 m/s, no boundary
-      # violations because the robot wasn't going anywhere).
-      # 55 × 0.1 = 5.5 s matches GHANSHYAM-13's reference and gives
-      # the optimizer time to see the full U-turn maneuver in its
-      # sampled distribution.
-      time_steps: 55
+      # Sized for the RaspberryPi 4 minimum-target hardware: 4× ARM Cortex-A72
+      # at 1.5 GHz with NEON SIMD. time_steps × batch_size × per-step
+      # state-eval cost has to fit the 100 ms control loop deadline.
+      # 30 × 2000 = 60 k state-evals/cycle = 600 k/s — comfortable on RPi 4.
+      # Bumping to 55 × 5000 (GHANSHYAM-13's values) is 4.6× our budget and
+      # would overrun the deadline on RPi 4 — DO NOT increase without first
+      # benchmarking on the target hardware.
+      time_steps: 30
       model_dt: 0.1                 # match controller_frequency=10Hz period
-      # batch_size 2000 → 5000: with time_steps=55 each trajectory is
-      # 1.83× longer; we need more samples to keep the per-state
-      # density similar. Per-cycle cost goes from 60 k state-evals to
-      # ~275 k — still well under the 100 ms control loop deadline on
-      # this hardware (sim #16 controller_server held 10 Hz steadily).
-      batch_size: 5000
+      batch_size: 2000
       vx_std: 0.20                  # wider noise → more candidate forward speeds
       vy_std: 0.0                   # diff-drive — no lateral
       wz_std: 0.80                  # broad enough to sample up to wz_max=1.5
       vx_max: 0.30
-      # vx_min: -0.15 (was 0.10). Forcing forward-only sampling worked
-      # for clean strip following but broke at strip-end U-turns:
-      # F2C generates Reeds-Shepp paths with min_turning_radius=0.30
-      # for the boustrophedon connector, and tight 0.18 m strip spacing
-      # forces a C|C maneuver (forward arc + reverse arc). With
-      # vx_min=0.10, MPPI couldn't execute the reverse leg and instead
-      # carved through the U-turn at higher angular velocity, ending up
-      # 0.5 m+ past the polygon boundary (sim #16: 50 of 64 boundary
-      # violations at the west edge during westernmost strip U-turns).
-      # Allowing slight reverse (-0.15 m/s) lets MPPI follow the Reeds-
-      # Shepp path correctly, executing the reverse arc within the
-      # planned U-turn footprint. The PathAlign+use_path_orientations
-      # strip-lock is still in place, so the rotate-in-place trap that
-      # vx_min>=0 originally fixed can't recur — squared PathAlign cost
-      # at large lateral deviations far exceeds the cost of "spinning
-      # near the path centerline".
-      vx_min: -0.15
+      # vx_min: 0.10 — forces forward-only sampling. Combined with the
+      # F2C min_turning_radius dropped to ~strip_half_width (so U-turn
+      # arcs become forward-only Dubins shapes, no Reeds-Shepp reverse
+      # leg needed), MPPI doesn't need to sample reverse for normal
+      # mowing. Reverse was tried at -0.15 (sim #17) but introduced a
+      # cost-function local-min at strip-end U-turns where MPPI crept
+      # backward at -0.02 m/s without progressing. Forward-only shape
+      # avoids both the U-turn overshoot (sim #16) and the creep-
+      # reverse stall.
+      vx_min: 0.10
       wz_max: 1.5
       # Linear accel doubled (0.50 → 1.0). At 0.50 m/s² and 0.1 s dt MPPI
       # could only ramp vx by 0.05 m/s per cycle — six full ticks (0.6 s)
@@ -902,12 +885,26 @@ coverage_server:
     robot_width: 0.40
     operation_width: 0.18
     # Diff-drive turns in place; F2C still wants a non-zero turning radius
-    # for the swath connector planner. 0.05 m made F2C v1.2.1's Reeds-Shepp
-    # solver iterate forever on a 9 × 6 m field. 0.30 m matches the demo
-    # config and produces a clean plan in ~0.5 s; MPPI still pivots in
-    # place at swath ends (DiffDrive motion model), so the radius only
-    # affects the connector geometry.
-    min_turning_radius: 0.30
+    # for the swath connector planner.
+    #
+    # 0.05 m made F2C v1.2.1's Reeds-Shepp solver iterate forever on a
+    # 9 × 6 m field. 0.30 m used to be our value (matched the demo config).
+    # But with strip spacing (operation_width) at 0.18 m, the U-turn
+    # geometry between adjacent strips required a Reeds-Shepp C|C
+    # maneuver (forward arc + reverse arc) — which forced vx_min < 0
+    # to execute, which then opened a cost-function local-min where
+    # MPPI crept backward at U-turn ends instead of progressing
+    # (sim #17 stall).
+    #
+    # 0.10 m: just above the F2C-hang threshold of 0.05 m and roughly
+    # equal to strip_half_width (0.18/2 = 0.09). At this radius F2C
+    # generates simple forward-only Dubins arcs for the U-turn (180°
+    # semicircle of radius 0.10 m, apex extending 0.10 m past strip
+    # endpoint). vx_min can stay at 0.10 (forward-only); MPPI executes
+    # the U-turn cleanly without needing reverse legs. The arc apex
+    # (0.10 m) plus MPPI overshoot (0.20-0.30 m) plus a 0.40 m safety
+    # margin fits inside the headland_width=0.80 budget.
+    min_turning_radius: 0.10
     linear_curv_change: 200.0
     # Headland: 0.30 m around the boundary (covers chassis half-width +
     # MPPI tracking margin so the chassis stays inside the polygon).
