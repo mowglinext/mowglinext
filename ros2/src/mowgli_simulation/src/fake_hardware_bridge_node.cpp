@@ -153,6 +153,16 @@ private:
     mowgli_interfaces::msg::Status status;
     status.stamp = now;
     status.mow_enabled = mow_enabled_;
+    // is_charging mirrors near_dock — opennav_docking, dock_yaw_to_set_pose,
+    // BoundaryGuard, calibrate_imu_yaw, and the BT all gate on this.
+    // Was unset (default false) before, which silently broke the EKF
+    // map-yaw seed: dock_yaw_to_set_pose only fires on rising edge of
+    // is_charging, but with is_charging never going true the seed never
+    // fired, EKF stayed at yaw=0 instead of dock_pose_yaw=4.17, the GPS
+    // lever-arm correction got the wrong rotation, and /odometry/filtered_map
+    // reported base_link 0.45 m off Gazebo truth. BoundaryGuard then
+    // false-positive-tripped before any coverage iteration could start.
+    status.is_charging = near_dock;
     status_pub_->publish(status);
 
     mowgli_interfaces::msg::Power power;
