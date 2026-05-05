@@ -47,12 +47,14 @@ GPS_PID=""
 HP_PID=""
 NTRIP_PID=""
 HEALTH_PID=""
+RTCM_BRIDGE_PID=""
 
 cleanup() {
   [ -n "$GPS_PID" ] && kill "$GPS_PID" 2>/dev/null || true
   [ -n "$HP_PID" ] && kill "$HP_PID" 2>/dev/null || true
   [ -n "$NTRIP_PID" ] && kill "$NTRIP_PID" 2>/dev/null || true
   [ -n "$HEALTH_PID" ] && kill "$HEALTH_PID" 2>/dev/null || true
+  [ -n "$RTCM_BRIDGE_PID" ] && kill "$RTCM_BRIDGE_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
@@ -113,11 +115,10 @@ else
   HP_PID=$!
 fi
 
-# Health aggregator — only useful in UBX mode (consumes /ubx_* topics).
-if [ "$GPS_PROTOCOL" != "NMEA" ]; then
-  python3 /gps_health_aggregator.py &
-  HEALTH_PID=$!
-fi
+# Health aggregator — UBX mode reports fix/satellites/RTCM,
+# NMEA mode reports the RTCM forwarding stream only.
+python3 /gps_health_aggregator.py --ros-args -p "protocol:=${GPS_PROTOCOL}" &
+HEALTH_PID=$!
 
 if [ "$NTRIP_ENABLED" = "true" ]; then
   echo "[start_gps.sh] NTRIP enabled: ${NTRIP_HOST}:${NTRIP_PORT}/${NTRIP_MOUNTPOINT}"
@@ -130,6 +131,14 @@ if [ "$NTRIP_ENABLED" = "true" ]; then
     -p "username:=${NTRIP_USER}" \
     -p "password:=${NTRIP_PASSWORD}" &
   NTRIP_PID=$!
+
+  # NMEA receivers (LC29H, BN-220, …) need RTCM3 bytes written into the
+  # serial port. ublox_dgnss handles this internally for UBX, but
+  # nmea_navsat_driver is read-only — bridge the topic to the device.
+  if [ "$GPS_PROTOCOL" = "NMEA" ]; then
+    python3 /rtcm_serial_bridge.py --ros-args -p "device:=${GPS_PORT}" &
+    RTCM_BRIDGE_PID=$!
+  fi
 fi
 
 wait -n || true

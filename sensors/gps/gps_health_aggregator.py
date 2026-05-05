@@ -28,7 +28,13 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from ublox_ubx_msgs.msg import UBXNavStatus, UBXNavSat, UBXRxmRTCM, UBXNavCov
+from rtcm_msgs.msg import Message as RtcmMessage
+
+try:
+    from ublox_ubx_msgs.msg import UBXNavStatus, UBXNavSat, UBXRxmRTCM, UBXNavCov
+    _HAVE_UBX = True
+except ImportError:
+    _HAVE_UBX = False
 
 # Map RTCM "carrSoln" to a label.
 _CARR_SOLN_LABELS = {0: "none", 1: "float", 2: "fixed"}
@@ -51,15 +57,22 @@ class GpsHealthAggregator(Node):
     def __init__(self) -> None:
         super().__init__("gps_health_aggregator")
 
+        self.declare_parameter("protocol", "UBX")
+        self._protocol: str = str(self.get_parameter("protocol").value).upper()
+        self._ubx_enabled = self._protocol == "UBX" and _HAVE_UBX
+
         self._last_status: UBXNavStatus | None = None
         self._last_status_t: float = 0.0
         self._last_sat: UBXNavSat | None = None
         self._last_sat_t: float = 0.0
         self._last_cov: UBXNavCov | None = None
-        # Each entry: (recv_time, msg_type, msg_used, crc_failed)
+        # Each entry: (recv_time, msg_type, msg_used, crc_failed). msg_type and
+        # msg_used are -1 in NMEA mode where the receiver does not echo RTCM
+        # ingestion telemetry — we only know what we forwarded into it.
         self._rtcm: Deque[tuple[float, int, int, bool]] = collections.deque(
             maxlen=512
         )
+        self._rtcm_bytes: int = 0
 
         # ublox_dgnss publishes UBX topics with default QoS (reliable, depth
         # 10). Match it on our side.
@@ -68,15 +81,24 @@ class GpsHealthAggregator(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
         )
-        self.create_subscription(UBXNavStatus, "/ubx_nav_status", self._on_status, qos)
-        self.create_subscription(UBXNavSat, "/ubx_nav_sat", self._on_sat, qos)
-        self.create_subscription(UBXNavCov, "/ubx_nav_cov", self._on_cov, qos)
-        self.create_subscription(UBXRxmRTCM, "/ubx_rxm_rtcm", self._on_rtcm, qos)
+
+        if self._ubx_enabled:
+            self.create_subscription(UBXNavStatus, "/ubx_nav_status", self._on_status, qos)
+            self.create_subscription(UBXNavSat, "/ubx_nav_sat", self._on_sat, qos)
+            self.create_subscription(UBXNavCov, "/ubx_nav_cov", self._on_cov, qos)
+            self.create_subscription(UBXRxmRTCM, "/ubx_rxm_rtcm", self._on_rtcm_ubx, qos)
+        else:
+            # NMEA mode (or UBX msgs unavailable): only the NTRIP/RTCM
+            # diagnostic is meaningful, sourced from the raw NTRIP topic.
+            self.create_subscription(RtcmMessage, "/ntrip_client/rtcm", self._on_rtcm_nmea, 50)
 
         self._pub = self.create_publisher(DiagnosticArray, "/diagnostics", 10)
         self.create_timer(1.0, self._publish)
 
-        self.get_logger().info("gps_health_aggregator running")
+        self.get_logger().info(
+            f"gps_health_aggregator running (protocol={self._protocol}, "
+            f"ubx_enabled={self._ubx_enabled})"
+        )
 
     # ── Subscribers ──────────────────────────────────────────────────
     def _now(self) -> float:
@@ -93,18 +115,35 @@ class GpsHealthAggregator(Node):
     def _on_cov(self, msg: UBXNavCov) -> None:
         self._last_cov = msg
 
-    def _on_rtcm(self, msg: UBXRxmRTCM) -> None:
+    def _on_rtcm_ubx(self, msg: UBXRxmRTCM) -> None:
+        # UBX path: the receiver tells us which RTCM type it ingested and
+        # whether the CRC validated. msg_used == 2 means the frame was
+        # accepted and applied.
         self._rtcm.append(
             (self._now(), int(msg.msg_type), int(msg.msg_used), bool(msg.crc_failed))
         )
+
+    def _on_rtcm_nmea(self, msg: RtcmMessage) -> None:
+        # NMEA path: ntrip_client publishes the raw RTCM3 frame. We only
+        # know it was forwarded — the receiver does not report ingestion.
+        # msg.message is the raw RTCM3 byte stream; msg type is the 12-bit
+        # field starting at bit 24 of the frame (preamble 0xD3 + 6 reserved
+        # bits + 10 length bits + 12 type bits).
+        self._rtcm_bytes += len(msg.message)
+        msg_type = -1
+        if len(msg.message) >= 5:
+            b3, b4 = msg.message[3], msg.message[4]
+            msg_type = ((b3 << 4) | (b4 >> 4)) & 0x0FFF
+        self._rtcm.append((self._now(), msg_type, -1, False))
 
     # ── Publisher ────────────────────────────────────────────────────
     def _publish(self) -> None:
         now = self._now()
         arr = DiagnosticArray()
         arr.header.stamp = self.get_clock().now().to_msg()
-        arr.status.append(self._fix_status(now))
-        arr.status.append(self._sat_status(now))
+        if self._ubx_enabled:
+            arr.status.append(self._fix_status(now))
+            arr.status.append(self._sat_status(now))
         arr.status.append(self._rtcm_status(now))
         self._pub.publish(arr)
 
@@ -230,38 +269,57 @@ class GpsHealthAggregator(Node):
 
         n = len(self._rtcm)
         rate = n / _RTCM_WINDOW_S
-        used_count = sum(1 for _, _, used, _ in self._rtcm if used == 2)
-        crc_fail = sum(1 for _, _, _, crc in self._rtcm if crc)
         types: collections.Counter[int] = collections.Counter(
-            t for _, t, _, _ in self._rtcm
+            t for _, t, _, _ in self._rtcm if t >= 0
         )
         types_str = ", ".join(f"{t}({c})" for t, c in sorted(types.items()))
         last_age = now - self._rtcm[-1][0]
-        used_pct = 100.0 * used_count / n if n else 0.0
 
         s.values = [
             KeyValue(key="msgs_per_sec", value=f"{rate:.1f}"),
-            KeyValue(key="msgs_used_pct", value=f"{used_pct:.0f}"),
             KeyValue(key="age_of_last_corr_s", value=f"{last_age:.1f}"),
-            KeyValue(key="crc_failed_count", value=str(crc_fail)),
             KeyValue(key="types_seen", value=types_str),
         ]
 
-        if last_age > 5.0:
-            s.level = DiagnosticStatus.ERROR
-            s.message = f"corrections stalled ({last_age:.1f} s old)"
-        elif crc_fail >= max(2, n // 4):
-            s.level = DiagnosticStatus.WARN
-            s.message = f"{crc_fail} CRC failures in {n} msgs"
-        elif used_pct < 50.0:
-            s.level = DiagnosticStatus.WARN
-            s.message = f"only {used_pct:.0f}% of corrections accepted"
+        if self._ubx_enabled:
+            used_count = sum(1 for _, _, used, _ in self._rtcm if used == 2)
+            crc_fail = sum(1 for _, _, _, crc in self._rtcm if crc)
+            used_pct = 100.0 * used_count / n if n else 0.0
+            s.values.extend([
+                KeyValue(key="msgs_used_pct", value=f"{used_pct:.0f}"),
+                KeyValue(key="crc_failed_count", value=str(crc_fail)),
+            ])
+
+            if last_age > 5.0:
+                s.level = DiagnosticStatus.ERROR
+                s.message = f"corrections stalled ({last_age:.1f} s old)"
+            elif crc_fail >= max(2, n // 4):
+                s.level = DiagnosticStatus.WARN
+                s.message = f"{crc_fail} CRC failures in {n} msgs"
+            elif used_pct < 50.0:
+                s.level = DiagnosticStatus.WARN
+                s.message = f"only {used_pct:.0f}% of corrections accepted"
+            else:
+                s.level = DiagnosticStatus.OK
+                s.message = (
+                    f"{rate:.1f} msg/s, {used_pct:.0f}% used, "
+                    f"last {last_age:.1f} s ago"
+                )
         else:
-            s.level = DiagnosticStatus.OK
-            s.message = (
-                f"{rate:.1f} msg/s, {used_pct:.0f}% used, "
-                f"last {last_age:.1f} s ago"
-            )
+            # NMEA mode: we only know what we forwarded into the receiver.
+            # The bytes counter and message rate confirm the bridge is
+            # alive; downstream correction quality is observable through
+            # NavSatStatus (FIX/SBAS/GBAS) on /gps/fix.
+            s.values.append(KeyValue(key="bytes_total", value=str(self._rtcm_bytes)))
+            if last_age > 5.0:
+                s.level = DiagnosticStatus.ERROR
+                s.message = f"corrections stalled ({last_age:.1f} s old)"
+            else:
+                s.level = DiagnosticStatus.OK
+                s.message = (
+                    f"{rate:.1f} msg/s forwarded to receiver, "
+                    f"last {last_age:.1f} s ago"
+                )
         return s
 
 
