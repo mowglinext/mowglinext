@@ -214,90 +214,160 @@ controller_server:
       # path curvature is under regulated_linear_scaling_min_radius.
       # Already on via use_regulated_linear_velocity_scaling above.
 
-    # Coverage strip-following controller: RPP, NOT MPPI.
+    # Coverage strip-following controller: MPPI (rotation_shim wrapper).
     #
-    # MPPI was tried for ~30 sim runs as the coverage-leg primary on the
-    # premise that PathAlignCritic + use_path_orientations would lock to
-    # boustrophedon strips while ObstaclesCritic would deviate around
-    # dynamic obstacles natively (no stop-and-replan loop). It does not
-    # work at our geometry, for two structural reasons:
+    # The actual root cause of our previous "MPPI doesn't follow strips"
+    # symptom turned out NOT to be the controller at all — it was that
+    # F2C's headland_width=0.30 m exactly matched min_turning_radius=0.30,
+    # so the planned Reeds-Shepp U-turn arc apex landed flush with the
+    # polygon edge. Any controller (RPP and MPPI both reproduced) would
+    # trip BoundaryGuard within 0.10 m of normal tracking error. With
+    # the headland bumped to 0.55 m (default_headland_width below) the
+    # arc apex now sits 0.25 m inside the polygon — comfortable margin.
     #
-    #   1. operation_width / robot_width = 0.18 / 0.40 = 0.45.
-    #      Adjacent strips sit 0.18 m apart; the chassis is 0.40 m wide,
-    #      so 2-3 strips simultaneously project under the footprint.
-    #      PathAlignCritic's "match path tangent" cost has no clean basin
-    #      — small lateral nudges (±0.05 m, well below MPPI's vy/vx noise
-    #      sigma) flip the lowest-cost path segment to a sibling strip.
-    #      No cost_weight tuning fixes a degenerate basin.
-    #
-    #   2. MPPI's "deviate around obstacles" is wrong for boustrophedon
-    #      coverage anyway: arcing around an obstacle leaves uncovered
-    #      grass on both sides of it along the strip. The correct lawn-
-    #      mower escalation is stop → re-decompose the area with the
-    #      obstacle as a polygon hole → F2C plans A/B sub-strips around
-    #      the obstacle covering both halves → resume RPP. RPP's "stops
-    #      on collision risk" behaviour is exactly the lawn-mower
-    #      semantic, not a regression vs MPPI.
-    #
-    # Reference: upstream opennav_coverage_demo (Steve Macenski's
-    # reference) AND GHANSHYAM-13's REAL-robot yaml both alias
-    # FollowPath -> RPP for the coverage leg. MPPI shows up only as
-    # FollowPath1 inside the coverage_bt.xml RoundRobin recovery branch,
-    # invoked once after the primary RPP run aborts.
-    #
-    # allow_reversing: true — F2C is configured for REEDS_SHEPP path
-    # mode and will plan reverse arcs at strip-end U-turns (our 0.18 m
-    # strip pitch is well below the 2 × 0.30 = 0.60 m forward-only
-    # turning diameter). RPP must follow those reverse legs to avoid
-    # tripping the BT recovery on every strip end.
+    # Restoring MPPI as primary because:
+    #   * F2C path is now followable without boundary trips, so we can
+    #     finally get a clean apples-to-apples read on whether MPPI
+    #     actually drifts between strips at our 0.18 m / 0.40 m geometry.
+    #     Previous "MPPI drifts" runs were all interleaved with the
+    #     boundary-cancellation chaos, which made the visual chaotic.
+    #   * GHANSHYAM-13's last commit (2026-05-02, "MPPI primary, tested
+    #     and working") and the upstream opennav_coverage_demo's MPPI
+    #     critic tunings target this exact use case.
+    #   * MPPI's ObstaclesCritic gives in-path obstacle deviation that
+    #     RPP cannot — the original justification for opennav_coverage.
     FollowCoveragePath:
-      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      # Mowing cruise speed per CLAUDE.md (0.3 max / 0.15 ramp). 0.20 is
-      # a touch slower than transit so the cutter sees each blade of
-      # grass slightly longer; can be raised once strip discipline is
-      # validated.
-      desired_linear_vel: 0.20
-      lookahead_dist: 0.5
-      min_lookahead_dist: 0.3
-      max_lookahead_dist: 0.9
-      lookahead_time: 1.5
-      transform_tolerance: 0.3
-      use_velocity_scaled_lookahead_dist: true
-      # Above the firmware ~PWM 36 (~0.12 m/s) deadband.
-      min_approach_linear_velocity: 0.15
-      approach_velocity_scaling_dist: 0.3
-      # Stop-on-obstacle: with the local costmap's obstacle_layer carrying
-      # LiDAR returns, RPP slows toward 0 when the projected carrot path
-      # would intersect an obstacle within max_allowed_time_to_collision.
-      # The BT's RecoveryNode in coverage_bt.xml then fires (BackUp +
-      # ClearCostmap) and bt_navigator retries; if that doesn't unstick
-      # we'll fall back to the obstacle-promotion + F2C-replan flow at
-      # the application BT level (mowgli_behavior).
-      use_collision_detection: true
-      max_allowed_time_to_collision_up_to_carrot: 1.5
-      use_regulated_linear_velocity_scaling: true
-      use_cost_regulated_linear_velocity_scaling: false
-      use_fixed_curvature_lookahead: false
-      curvature_lookahead_dist: 0.5
-      regulated_linear_scaling_min_radius: 0.6
-      regulated_linear_scaling_min_speed: 0.15
-      # use_rotate_to_heading: true makes RPP pivot in place when the
-      # path's first segment is more than rotate_to_heading_min_angle
-      # (~23°) off the current heading. F2C's REEDS_SHEPP plan changes
-      # direction abruptly at strip-end transitions, and rotating in
-      # place there matches a human mower's behavior far better than
-      # arcing through the headland.
-      use_rotate_to_heading: true
-      rotate_to_heading_min_angle: 0.4
+      # RotationShim wrapping MPPI: at strip-end 180° turns MPPI alone kept
+      # converging on "rotate at 0.1 rad/s + drift" (PreferForward kept
+      # punishing larger ω; bumping wz_std 0.40 → 0.70 didn't help). The
+      # shim handles initial heading errors > angular_dist_threshold by
+      # rotating in place at rotate_to_heading_angular_vel before letting
+      # MPPI take over for the actual path following. FollowPath already
+      # uses this pattern with RPP — same idea, different inner controller.
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "nav2_mppi_controller::MPPIController"
+      angular_dist_threshold: 0.4    # > ~23° heading error → rotate first
+      forward_sampling_distance: 0.5
+      rotate_to_heading_angular_vel: 0.85  # matches FollowPath / firmware deadband
       max_angular_accel: 1.0
-      rotate_to_heading_angular_vel: 0.85
-      max_angular_vel: 0.8
-      # F2C REEDS_SHEPP path includes reverse legs at strip-end U-turns
-      # (our 0.18 m strip pitch < 0.60 m forward-only turning diameter).
-      # RPP must follow those reverse legs.
-      allow_reversing: true
-      max_robot_pose_search_dist: 2.0
-      use_interpolation: true
+      simulate_ahead_time: 1.0
+      # Inner MPPI parameters (loaded under FollowCoveragePath.* by the shim).
+      # Sized for the RaspberryPi 4 minimum-target hardware: 4× ARM Cortex-A72
+      # at 1.5 GHz with NEON SIMD. time_steps × batch_size × per-step
+      # state-eval cost has to fit the 100 ms control loop deadline.
+      # 30 × 2000 = 60 k state-evals/cycle = 600 k/s — comfortable on RPi 4.
+      # Bumping to 55 × 5000 (GHANSHYAM-13's values) is 4.6× our budget and
+      # would overrun the deadline on RPi 4 — DO NOT increase without first
+      # benchmarking on the target hardware.
+      time_steps: 30
+      model_dt: 0.1                 # match controller_frequency=10Hz period
+      batch_size: 2000
+      vx_std: 0.20                  # wider noise → more candidate forward speeds
+      vy_std: 0.0                   # diff-drive — no lateral
+      wz_std: 0.80                  # broad enough to sample up to wz_max=1.5
+      vx_max: 0.30
+      # vx_min: 0.10 — forces forward-only sampling. With REEDS_SHEPP F2C
+      # paths there ARE reverse legs at strip-end U-turns; MPPI handles
+      # them via the rotation_shim's pre-pivot, then MPPI tracks the
+      # already-aligned forward-only segment. Allowing vx_min<0 in MPPI
+      # introduces a creep-reverse local minimum at strip ends (sim #17
+      # documented this).
+      vx_min: 0.10
+      wz_max: 1.5
+      ax_max: 1.0
+      ax_min: -1.0
+      az_max: 2.0
+      iteration_count: 1
+      prune_distance: 2.0
+      max_robot_pose_search_dist: 5.0
+      transform_tolerance: 0.5
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: "DiffDrive"
+      visualize: false
+      regenerate_noises: false
+      TrajectoryVisualizer:
+        trajectory_step: 5
+        time_step: 3
+      AckermannConstraints:
+        min_turning_r: 0.0
+      critics:
+        - "ConstraintCritic"
+        - "ObstaclesCritic"
+        - "CostCritic"
+        - "GoalCritic"
+        - "GoalAngleCritic"
+        - "PathAlignCritic"
+        - "PathFollowCritic"
+        - "PathAngleCritic"
+        - "PreferForwardCritic"
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
+      ObstaclesCritic:
+        enabled: true
+        cost_power: 1
+        repulsion_weight: 1.5
+        critical_weight: 20.0
+        consider_footprint: true
+        collision_cost: 100000.0
+        collision_margin_distance: 0.10
+        near_goal_distance: 0.5
+        inflation_radius: 0.40
+        cost_scaling_factor: 10.0
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.81
+        critical_cost: 300.0
+        consider_footprint: false
+        collision_cost: 1000000.0
+        near_goal_distance: 1.0
+        trajectory_point_step: 2
+      # PathAlignCritic — strip-lock primitive. cost_power=2 (squared),
+      # cost_weight=15, use_path_orientations=true so PathAlignCritic
+      # also penalises heading mismatch with path tangent. Adjacent
+      # boustrophedon strips have OPPOSITE orientations → strip-jumping
+      # is heavily disincentivised. Matches GHANSHYAM-13 last commit.
+      PathAlignCritic:
+        enabled: true
+        cost_power: 2
+        cost_weight: 15.0
+        max_path_occupancy_ratio: 0.06
+        trajectory_point_step: 5
+        threshold_to_consider: 0.6
+        offset_from_furthest: 10
+        use_path_orientations: true
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 2
+        threshold_to_consider: 1.0
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.2
+        offset_from_furthest: 2
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.0
+        forward_preference: true
 
 # ---------------------------------------------------------------------------
 # Planner server
@@ -801,10 +871,25 @@ coverage_server:
     # is the safe value matching the opennav_coverage demo config.
     min_turning_radius: 0.30
     linear_curv_change: 200.0
-    # Headland: 0.30 m around the boundary (covers chassis half-width +
-    # MPPI tracking margin so the chassis stays inside the polygon).
+    # Headland MUST be ≥ min_turning_radius + tracking_error_margin,
+    # otherwise the F2C-planned Reeds-Shepp U-turn arc apex lands flush
+    # with (or past) the polygon edge, BoundaryGuard fires on every
+    # strip-end U-turn, and coverage is impossible regardless of which
+    # controller is following the path. Diagnosed live in sim #35:
+    # F2C path /coverage_server/coverage_plan had min X = -2.996 with
+    # polygon edge at X = -3.000 → 0.004 m of margin → trips on every
+    # tracking error > 4 mm.
+    #
+    # 0.55 = min_turning_radius (0.30) + tracking_error_margin (0.25).
+    # The 0.25 covers chassis half-width (~0.20) + MPPI/RPP overshoot
+    # (~0.05) at strip ends.
+    #
+    # Trade-off: a 0.55 m perimeter ring is no longer covered by strips
+    # (only by headland sweep — F2C `headland_mode: CONSTANT` does the
+    # inset only, perimeter still needs explicit headland-coverage if
+    # blade-on grass is required there).
     # CONSTANT applies the same width along the whole perimeter.
-    default_headland_width: 0.30
+    default_headland_width: 0.55
     default_headland_type: "CONSTANT"
     # Swath generation: LENGTH = pick the angle that minimises total swath
     # count (best for rectangular polygons). NUMBER would minimise the
