@@ -1,5 +1,5 @@
 import {useApi} from "../hooks/useApi.ts";
-import {Card, Col, Divider, Row} from "antd";
+import {App, Card, Col, Divider, Row} from "antd";
 import {PlayCircleOutlined, HomeOutlined, WarningOutlined} from '@ant-design/icons';
 import AsyncButton from "./AsyncButton.tsx";
 import React from "react";
@@ -32,6 +32,49 @@ export const useMowerAction = () => {
 export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> = (props) => {
     const {highLevelStatus} = useHighLevelStatus();
     const mowerAction = useMowerAction()
+    const {modal} = App.useApp();
+
+    // Home from IDLE means the robot is somewhere on the lawn (it's been
+    // undocked) and the operator wants it to drive itself back to the dock.
+    // The BT already accepts COMMAND_HOME from any non-charging state via
+    // the HomeSequence guard in main_tree.xml, but we ask the operator to
+    // confirm because the implied autonomous transit can be surprising
+    // (collision_monitor stays active but the robot will plan a path
+    // across whatever is in front of it).
+    const sendHome = mowerAction("high_level_control", {Command: 2});
+    const onHomeClick = async () => {
+        if (highLevelStatus.state_name === "IDLE") {
+            return new Promise<void>((resolve, reject) => {
+                modal.confirm({
+                    title: "Send robot home?",
+                    content: (
+                        <div>
+                            <p>
+                                The robot will plan a path back to the dock and drive itself there.
+                            </p>
+                            <p style={{marginBottom: 0, color: "rgba(0,0,0,0.55)"}}>
+                                Make sure the area between the robot and the dock is clear and the dock pose
+                                is set correctly.
+                            </p>
+                        </div>
+                    ),
+                    okText: "Send home",
+                    okType: "primary",
+                    cancelText: "Cancel",
+                    onOk: async () => {
+                        try {
+                            await sendHome();
+                            resolve();
+                        } catch (e) {
+                            reject(e);
+                        }
+                    },
+                    onCancel: () => resolve(),
+                });
+            });
+        }
+        return sendHome();
+    };
     const actionMenuItems: {
         key: string,
         label: string,
@@ -148,8 +191,13 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
                                  onAsyncClick={mowerAction("high_level_control", {Command: 1})}
                     >Start</AsyncButton>
                 ) : null}
-                {highLevelStatus.state_name !== "IDLE" && highLevelStatus.state_name !== "IDLE_DOCKED" ? <AsyncButton icon={<HomeOutlined/>} type="primary" key="btnHLC2"
-                                                                           onAsyncClick={mowerAction("high_level_control", {Command: 2})}
+                {/* Home button is hidden only when the robot is already
+                    docked (IDLE_DOCKED). From IDLE we show it so the operator
+                    can recall the robot from anywhere on the lawn — see #175.
+                    The click handler injects a confirmation modal in IDLE
+                    because the autonomous transit is non-trivial. */}
+                {highLevelStatus.state_name !== "IDLE_DOCKED" ? <AsyncButton icon={<HomeOutlined/>} type="primary" key="btnHLC2"
+                                                                           onAsyncClick={onHomeClick}
                 >Home</AsyncButton> : null}
             </Col>
             <Col>
