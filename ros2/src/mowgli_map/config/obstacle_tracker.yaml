@@ -1,16 +1,28 @@
 obstacle_tracker:
   ros__parameters:
-    # Garden-tuned: larger clusters required to filter grass/ground noise
-    cluster_tolerance: 0.20           # 20cm epsilon (was 15cm)
-    min_cluster_points: 5             # need 5 points to form cluster (was 3)
-    persistence_threshold: 10.0       # promote after 10s — 60s was too long, real obstacles
-                                       # got hit before the tracker promoted them. Grass is
-                                       # already filtered by min_cluster_points=5 and
-                                       # min_obstacle_radius=0.08.
+    # Garden-tuned for the opennav_coverage architecture: persistent obstacles
+    # only matter for the NEXT mowing cycle's F2C replan, not for in-flight
+    # avoidance (MPPI's local costmap handles that natively via ObstaclesCritic).
+    # So we can afford a much longer observation window; the goal is to suppress
+    # phantom clusters (grass, ground noise, EKF pose-drift parallax) that show
+    # up briefly under load and would otherwise spam holes into the next plan.
+    cluster_tolerance: 0.20           # 20cm DBSCAN epsilon
+    min_cluster_points: 8             # 8 returns required (was 5) — real
+                                      # obstacles produce hundreds of returns at
+                                      # < 5 m; isolated 5-point noise clusters
+                                      # no longer form
+    persistence_threshold: 60.0       # promote after 60s of stable observation
+                                      # (was 10s). At publish_rate=1 Hz that's
+                                      # 60 expected hits; coverage>=0.6 in
+                                      # promote_persistent then needs >= 36
+                                      # consistent associations — phantom blobs
+                                      # rarely sustain that long
     transient_timeout: 5.0
-    min_obstacle_radius: 0.08         # ignore tiny clusters < 8cm (was 5cm)
+    min_obstacle_radius: 0.12         # ignore clusters < 12cm radius (was 8cm)
+                                      # — tighter floor on what counts as a
+                                      # planning-worthy obstacle
     max_obstacle_radius: 1.5
-    inflation_radius: 0.10            # 10cm expansion (was 15cm)
+    inflation_radius: 0.10
     persistence_file: "/ros2_ws/maps/obstacles.yaml"
     map_frame: "map"
     publish_rate: 1.0

@@ -450,13 +450,21 @@
 
               <!-- Multi-area coverage loop. opennav_coverage plans the full
                    path (headland + swaths + transitions) for each area in
-                   one shot; MPPI handles dynamic obstacle avoidance during
-                   execution by deviating around them, so there's no inner
-                   segment-recovery loop. mow_progress is painted along the
-                   driven path on FollowCoveragePath success. Persistent
-                   obstacles promoted by obstacle_tracker_node trigger a
-                   replan via the BT's ReplanNeeded condition (handled by
-                   the outer guards). -->
+                   one shot; MPPI handles in-flight obstacle avoidance by
+                   deviating around them via ObstaclesCritic, so there's no
+                   inner segment-recovery loop. mow_progress is painted
+                   along the driven track on FollowCoveragePath success.
+                   Replan-on-new-obstacle is handled organically by the loop:
+                   when FollowCoveragePath terminates (success or coverage-
+                   skip) the loop cycles, GetNextUnmowedArea picks up cells
+                   left untouched, and ComputeCoveragePath is called again
+                   with the latest area.obstacles list — by then the robot
+                   has driven a full pass and the obstacle_tracker has had
+                   the full mowing time to settle on persistent shapes.
+                   Mid-cycle replan would thrash MPPI (cancel + new plan +
+                   re-engage) every time obstacle_tracker promotes a new
+                   shape; the implicit end-of-cycle replan is cheaper and
+                   gives F2C a stable view of the field. -->
               <Repeat num_cycles="100" name="AreaLoop">
                 <Sequence name="MowOneArea">
                   <GetNextUnmowedArea area_index="{current_area_index}"/>

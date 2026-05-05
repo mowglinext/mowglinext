@@ -1245,14 +1245,19 @@ void ObstacleTrackerNode::promote_persistent(const rclcpp::Time& now)
                          return true;
                        }
 
-                       // Promote to persistent when age threshold is met and at least 50 %
-                       // of expected observations are present (minimum 3).
+                       // Promote to persistent when the age threshold is met
+                       // AND at least 60% of the expected observations are
+                       // present (was 50%). Combined with the 60 s threshold
+                       // that's 36 consistent associations — phantom clusters
+                       // born of EKF parallax / grass returns rarely sustain
+                       // that long. min_count remains a floor for short
+                       // configurations.
                        if (!obs.persistent && age >= persistence_threshold_)
                        {
                          const double expected = age * publish_rate_;
                          const double coverage =
                              static_cast<double>(obs.observation_count) / std::max(expected, 1.0);
-                         if (coverage >= 0.5 && obs.observation_count >= 3)
+                         if (coverage >= 0.6 && obs.observation_count >= 3)
                          {
                            obs.persistent = true;
                            RCLCPP_INFO(get_logger(),
