@@ -2,13 +2,17 @@ package api
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/cedbossneo/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -169,4 +173,98 @@ func TestSetDockingPointRoute(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	require.Len(t, mock.ServiceCalls, 1)
 	assert.Equal(t, "/map_server_node/set_docking_point", mock.ServiceCalls[0].Service)
+}
+
+// dialMultiplex opens the test server's /multiplex WebSocket. Returns the
+// connection plus a teardown closure that closes both the connection and
+// the test server.
+func dialMultiplex(t *testing.T, server *httptest.Server) *websocket.Conn {
+	t.Helper()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/mowglinext/multiplex"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	return conn
+}
+
+func readMultiplexFrame(t *testing.T, conn *websocket.Conn) (string, []byte) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, raw, err := conn.ReadMessage()
+	require.NoError(t, err)
+	var frame struct {
+		Topic string `json:"topic"`
+		Data  string `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &frame))
+	decoded, err := base64.StdEncoding.DecodeString(frame.Data)
+	require.NoError(t, err)
+	return frame.Topic, decoded
+}
+
+func TestMultiplexRoute_FansOutOnSubscribe(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	server := httptest.NewServer(setupMowgliNextRouter(mock))
+	defer server.Close()
+	conn := dialMultiplex(t, server)
+	defer conn.Close()
+
+	require.NoError(t, conn.WriteJSON(map[string]string{"op": "subscribe", "topic": "highLevelStatus"}))
+	// Give the server's read loop a moment to register the subscription.
+	time.Sleep(50 * time.Millisecond)
+
+	mock.Dispatch("highLevelStatus", []byte(`{"hello":"world"}`))
+
+	topic, payload := readMultiplexFrame(t, conn)
+	assert.Equal(t, "highLevelStatus", topic)
+	assert.JSONEq(t, `{"hello":"world"}`, string(payload))
+}
+
+func TestMultiplexRoute_UnsubscribeStopsDelivery(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	server := httptest.NewServer(setupMowgliNextRouter(mock))
+	defer server.Close()
+	conn := dialMultiplex(t, server)
+	defer conn.Close()
+
+	require.NoError(t, conn.WriteJSON(map[string]string{"op": "subscribe", "topic": "status"}))
+	time.Sleep(50 * time.Millisecond)
+	require.NoError(t, conn.WriteJSON(map[string]string{"op": "unsubscribe", "topic": "status"}))
+	time.Sleep(50 * time.Millisecond)
+
+	mock.Dispatch("status", []byte(`{"x":1}`))
+
+	_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, _, err := conn.ReadMessage()
+	assert.Error(t, err, "no frame should arrive after unsubscribe")
+}
+
+func TestMultiplexRoute_IgnoresUnknownTopic(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	server := httptest.NewServer(setupMowgliNextRouter(mock))
+	defer server.Close()
+	conn := dialMultiplex(t, server)
+	defer conn.Close()
+
+	require.NoError(t, conn.WriteJSON(map[string]string{"op": "subscribe", "topic": "made_up"}))
+	time.Sleep(50 * time.Millisecond)
+
+	mock.Dispatch("made_up", []byte(`x`))
+	_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, _, err := conn.ReadMessage()
+	assert.Error(t, err)
+}
+
+func TestMultiplexRoute_DropsSubscriptionsOnDisconnect(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	server := httptest.NewServer(setupMowgliNextRouter(mock))
+	defer server.Close()
+	conn := dialMultiplex(t, server)
+
+	require.NoError(t, conn.WriteJSON(map[string]string{"op": "subscribe", "topic": "imu"}))
+	time.Sleep(50 * time.Millisecond)
+	_ = conn.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	// Dispatch after the client is gone should be a no-op (no panic).
+	mock.Dispatch("imu", []byte(`{"a":1}`))
 }
