@@ -36,9 +36,16 @@ bt_navigator:
     # so the robot is correctly positioned at strip[0] before MPPI starts
     # tracking. Matches the upstream GHANSHYAM-13/coverage-path-planning
     # architecture.
+    # When you list extra navigators here, EACH one needs its own
+    # plugin: field (otherwise bt_navigator's lifecycle_configure
+    # FATALs with "Can not get 'plugin' param value for <name>").
     navigators: ["navigate_to_pose", "navigate_through_poses", "navigate_complete_coverage"]
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
+    navigate_through_poses:
+      plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
     navigate_complete_coverage:
-      plugin: "opennav_coverage_navigator/CoverageNavigator"
+      plugin: "opennav_coverage_navigator::CoverageNavigator"
     # Path injected by navigation.launch.py at runtime — points to our
     # mowgli_behavior/trees/coverage_bt.xml (a tweaked copy of the
     # opennav_coverage_bt navigate_w_basic_complete_coverage_nav_to_start.xml
