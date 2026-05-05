@@ -96,7 +96,8 @@ COPY ros2_entrypoint.sh /ros2_entrypoint.sh
 COPY start_gps.sh /start_gps.sh
 COPY ublox_dgnss.yaml /ublox_dgnss.yaml
 COPY gps_health_aggregator.py /gps_health_aggregator.py
-RUN chmod +x /ros2_entrypoint.sh /start_gps.sh /gps_health_aggregator.py
+COPY rtcm_serial_bridge.py /rtcm_serial_bridge.py
+RUN chmod +x /ros2_entrypoint.sh /start_gps.sh /gps_health_aggregator.py /rtcm_serial_bridge.py
 
 ENTRYPOINT ["/ros2_entrypoint.sh"]
 CMD ["/start_gps.sh"]
