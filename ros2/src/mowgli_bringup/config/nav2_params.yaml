@@ -266,13 +266,16 @@ controller_server:
       vy_std: 0.0                   # diff-drive — no lateral
       wz_std: 0.80                  # broad enough to sample up to wz_max=1.5
       vx_max: 0.30
-      # vx_min: 0.10 — forces forward-only sampling. With REEDS_SHEPP F2C
-      # paths there ARE reverse legs at strip-end U-turns; MPPI handles
-      # them via the rotation_shim's pre-pivot, then MPPI tracks the
-      # already-aligned forward-only segment. Allowing vx_min<0 in MPPI
-      # introduces a creep-reverse local minimum at strip ends (sim #17
-      # documented this).
-      vx_min: 0.10
+      # vx_min: -0.15 — allow MPPI to sample reverse legs so it can
+      # actually track F2C REEDS_SHEPP Z-pattern U-turns (forward arc +
+      # reverse leg + forward arc) instead of smoothing them into a
+      # wide forward-only arc that overshoots the polygon edge. The
+      # previous concern (sim #17 "creep-reverse local minimum at strip
+      # ends") was diagnosed in a context with a 0.30 m localization
+      # offset that's now fixed (385b425c) — the local minimum was
+      # likely an artifact of the EKF reporting a phantom lateral
+      # error MPPI tried to correct for by reversing.
+      vx_min: -0.15
       wz_max: 1.5
       ax_max: 1.0
       ax_min: -1.0
