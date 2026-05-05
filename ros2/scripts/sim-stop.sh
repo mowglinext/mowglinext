@@ -37,8 +37,14 @@ if [ -n "$GZ_PIDS" ]; then
   sleep 1
 fi
 
-# Kill ALL remaining ROS2 nodes (not just launch) to prevent stale DDS participants
-ROS_PIDS=$(ps -eo pid,args | grep -E '[r]os2|[g]z_ros2|[p]arameter_bridge|[f]oxglove|[e]kf_node|[s]lam_toolbox|[b]ehavior_tree|[c]overage_planner|[m]ap_server|[n]avsat_to_pose|[d]iagnostics|[c]ontroller_server|[p]lanner_server|[b]t_navigator|[c]ollision_monitor|[v]elocity_smoother|[l]ifecycle_manager|[o]pennav_docking|[r]obot_state_publisher|[f]ake_hardware' | awk '{print $1}')
+# Kill ALL remaining ROS2 nodes (not just launch) to prevent stale DDS participants.
+# topic_tools/relay added 2026-05-05: sim_full_system.launch.py spawns two relays
+# (/wheel_odom→/mowgli/hardware/wheel_odom and /imu/data→/mowgli/hardware/imu)
+# which the launch SIGINT handler doesn't always reach, especially after a
+# kill -9 on the parent. Without explicit cleanup they accumulate at ~5-6 % CPU
+# each across restarts; 14 sim launches in one session left 59 orphaned relays
+# and pushed load average to 106, freezing the next sim.
+ROS_PIDS=$(ps -eo pid,args | grep -E '[r]os2|[g]z_ros2|[p]arameter_bridge|[f]oxglove|[e]kf_node|[s]lam_toolbox|[b]ehavior_tree|[c]overage_planner|[m]ap_server|[n]avsat_to_pose|[d]iagnostics|[c]ontroller_server|[p]lanner_server|[b]t_navigator|[c]ollision_monitor|[v]elocity_smoother|[l]ifecycle_manager|[o]pennav_docking|[r]obot_state_publisher|[f]ake_hardware|[t]opic_tools/relay|[c]og_to_imu|[m]ag_yaw|[c]ostmap_scan|[s]im_imu_noise|[s]im_navsat_rtk|[s]im_wheel_slip|[s]im_cmd_vel|[c]alibrate_imu|[l]ocalization_monitor|[w]ait_for_map|[d]ock_yaw_to_set|[o]bstacle_tracker|[w]aypoint_follower|[s]moother_server|[b]ehavior_server' | awk '{print $1}')
 if [ -n "$ROS_PIDS" ]; then
   kill -9 $ROS_PIDS 2>/dev/null || true
   sleep 1
