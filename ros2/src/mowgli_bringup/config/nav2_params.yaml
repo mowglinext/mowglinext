@@ -259,23 +259,17 @@ controller_server:
       # to tracking the strip rather than shortcutting to the end.
       # max_robot_pose_search_dist stays generous so robot pose can be
       # found even after a brief drift; only prune_distance is tightened.
+      # prune_distance + max_robot_pose_search_dist tuned per the
+      # GHANSHYAM-13/coverage-path-planning real-world MPPI+opennav_coverage
+      # config (the only public example on github of this combination).
+      # Their approach: don't tighten max_robot_pose_search_dist (let it
+      # default to ~half costmap); instead lock the robot to the strip via
+      # PathAlignCritic with use_path_orientations=true and cost_power=2.
+      # Adjacent boustrophedon strips have OPPOSITE orientations, so the
+      # path-orientation cost is what makes strip-jumping infeasible —
+      # not the search-radius limiter, which was a less-principled hack.
       prune_distance: 2.0
-      # max_robot_pose_search_dist: 5.0 → 1.0. This is the radius (m)
-      # within which MPPI's PathHandler searches the global plan for the
-      # robot's "current path index". With boustrophedon strips at 0.18 m
-      # spacing and a 5 m search window, a 0.5 m lateral deviation around
-      # an obstacle was enough for the closest-point search to snap onto
-      # an adjacent (parallel) strip — which faces the OPPOSITE direction
-      # in a boustrophedon. MPPI then aligned the trajectory with the
-      # parallel strip's heading, the robot crossed onto it, search snapped
-      # to yet another strip, and the robot orbited around the obstacle
-      # instead of following the original strip and deviating locally.
-      # 1 m search radius keeps the index pinned to the active strip even
-      # under larger deviations — adjacent strips at 0.18 m are still
-      # within reach but the search prefers the ALONG-path neighbour, not
-      # the LATERAL one (because it's measured along path arclength, not
-      # Euclidean distance).
-      max_robot_pose_search_dist: 1.0
+      max_robot_pose_search_dist: 5.0
       transform_tolerance: 0.5
       temperature: 0.3
       gamma: 0.015
@@ -287,9 +281,15 @@ controller_server:
         time_step: 3
       AckermannConstraints:
         min_turning_r: 0.0
+      # CostCritic added (was missing) — penalises trajectory cells with
+      # high costmap cost, complementing ObstaclesCritic which only
+      # handles LETHAL cells. Together they give MPPI a softer gradient
+      # away from inflated obstacle regions before the strict collision
+      # cost kicks in.
       critics:
         - "ConstraintCritic"
         - "ObstaclesCritic"
+        - "CostCritic"
         - "GoalCritic"
         - "GoalAngleCritic"
         - "PathAlignCritic"
@@ -310,54 +310,77 @@ controller_server:
         cost_power: 1
         cost_weight: 3.0
         threshold_to_consider: 0.5
-      # PreferForwardCritic bumped back to 10 (was 5). With vx_min=0.10
-      # the rotate-in-place trap from the original 12-weight tuning is
-      # gone (MPPI can't sit at vx=0 anymore), but we still want the
-      # "drive forward along the path" cost to dominate over PathAlign's
-      # cross-track minimisation so the optimiser commits to along-path
-      # progress instead of looping near the path.
+      # PreferForward dropped 10 → 5: PathAlignCritic (now squared, weight
+      # 15) does the work of keeping the robot moving forward along the
+      # strip; we don't need PreferForward to over-dominate. With vx_min=0.10
+      # already forcing forward sampling, this just trims the cost.
       PreferForwardCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 10.0
+        cost_weight: 5.0
         threshold_to_consider: 0.5
+      # ObstaclesCritic strengthened per the proven config: ~3× repulsion,
+      # +50% critical weight, explicit collision_margin_distance and
+      # cost_scaling_factor. With PathAlign now stronger we can afford
+      # ObstaclesCritic to be more aggressive about pushing the robot
+      # away from obstacles — PathAlign will pull it back to the strip
+      # once the obstacle is behind.
       ObstaclesCritic:
         enabled: true
         cost_power: 1
-        repulsion_weight: 1.5
-        critical_weight: 20.0
+        repulsion_weight: 4.0
+        critical_weight: 30.0
         consider_footprint: true
-        collision_cost: 100000.0
-        collision_margin_distance: 0.10
+        collision_cost: 10000.0
+        collision_margin_distance: 0.30
         near_goal_distance: 0.5
-        inflation_radius: 0.40
+        inflation_radius: 0.55
         cost_scaling_factor: 10.0
-      # PathAlign reduced from 14 → 5: still pulls the robot toward the
-      # path centerline, but doesn't punish forward progress.
-      PathAlignCritic:
+      # CostCritic — handles inflated-obstacle gradient (cells with
+      # 0 < cost < lethal). Pulled directly from the GHANSHYAM-13 config.
+      CostCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
-        max_path_occupancy_ratio: 0.05
-        trajectory_point_step: 4
-        threshold_to_consider: 0.5
-        offset_from_furthest: 20
-        use_path_orientations: false
-      # PathFollow bumped to 10: pulls the robot ALONG the path direction
-      # rather than just toward a single carrot point.
+        cost_weight: 3.81
+        critical_cost: 300.0
+        consider_footprint: true
+        collision_cost: 1000000.0
+        near_goal_distance: 1.0
+        trajectory_point_step: 2
+      # PathAlignCritic — THE strip-lock primitive. cost_power=2 (squared
+      # cost — large deviations punished much harder), cost_weight=15
+      # (3× our prior 5), use_path_orientations=true so the critic also
+      # penalises heading mismatch with the path tangent. Boustrophedon
+      # adjacent strips have opposite orientations → MPPI strongly
+      # disincentivised from snapping onto a parallel strip during
+      # obstacle deviations. This combination is what GHANSHYAM-13's
+      # public config uses to make MPPI track coverage paths cleanly.
+      PathAlignCritic:
+        enabled: true
+        cost_power: 2
+        cost_weight: 15.0
+        max_path_occupancy_ratio: 0.06
+        trajectory_point_step: 5
+        threshold_to_consider: 0.6
+        offset_from_furthest: 10
+        use_path_orientations: true
+      # PathFollow dropped 10 → 5: PathAlign (squared, weight 15) is now
+      # the dominant path-tracking force; PathFollow just keeps the
+      # carrot moving along the path. Tighter offset_from_furthest=2 +
+      # threshold_to_consider=1.0 — the proven values.
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 10.0
-        offset_from_furthest: 5
-        threshold_to_consider: 1.4
+        cost_weight: 5.0
+        offset_from_furthest: 2
+        threshold_to_consider: 1.0
       PathAngleCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 2.0
-        offset_from_furthest: 4
+        cost_weight: 2.2
+        offset_from_furthest: 2
         threshold_to_consider: 0.5
-        max_angle_to_furthest: 1.2
+        max_angle_to_furthest: 1.0
         forward_preference: true
 
 # ---------------------------------------------------------------------------
