@@ -622,33 +622,34 @@ void MapServerNode::on_get_mowing_area(
     const auto& entry = areas_[idx];
     res->area.name = entry.name;
     res->area.area = entry.polygon;
-    // Start with user-defined (static) obstacles from config.
+    // Only USER-DEFINED static obstacles enter F2C. Auto-tracked
+    // obstacles from obstacle_tracker_node are deliberately NOT
+    // included here even when "PERSISTENT" — promotion to a planning
+    // input is reserved for a future GUI flow where the operator
+    // confirms each tracked obstacle. Two reasons:
+    //   1. Auto-promotion creates noise: in clean sim runs even with
+    //      promotion thresholds tightened (60 s, 8 cluster pts),
+    //      transient ground-noise blobs occasionally crossed the
+    //      threshold and entered F2C as polygon holes — F2C re-routed,
+    //      MPPI followed the new route, robot ended up past the
+    //      polygon boundary (sim #14: 9 boundary violations all at
+    //      x=-3 west edge with 0 actual obstacles in that area).
+    //   2. The tracker's job is detection / visualization, not
+    //      planning authority. Real-time avoidance of dynamic
+    //      obstacles is handled by Nav2's obstacle_layer feeding
+    //      MPPI's ObstaclesCritic — that pipeline doesn't need
+    //      persistence to work and doesn't change the F2C plan.
     res->area.obstacles = entry.obstacles;
     res->area.is_navigation_area = entry.is_navigation_area;
-
-    // Also include persistent tracked obstacles from the obstacle tracker
-    // so the coverage planner can avoid them in the initial plan.
     const auto n_static = res->area.obstacles.size();
-    for (const auto& obs_poly : obstacle_polygons_)
-    {
-      if (obs_poly.points.size() >= 3)
-      {
-        res->area.obstacles.push_back(obs_poly);
-      }
-    }
-    const auto n_after_tracked = res->area.obstacles.size();
 
-    // And include the dock-planning hole — the SMALL rectangle covering
-    // only the physical dock structure (NOT the approach corridor). Sent
-    // to F2C so the coverage planner cuts strips around the dock without
-    // the 1.5 m corridor inflating the cut. The full dock_exclusion_polygon_
-    // (including the corridor) is still used for classification-layer
-    // DOCKING_AREA marking + keepout carve-out elsewhere — that's a
-    // docking-staging concern, not a coverage-planning concern. See the
-    // F2C swath capture in the orbital-trap analysis: with the corridor
-    // in the hole, ~5 strips were cut and the headland transitions
-    // between segments confused MPPI; with just the dock structure the
-    // cut shrinks to ~1-2 strips and transitions stay clean.
+    // The dock-planning hole — small rectangle covering only the
+    // physical dock structure (not the approach corridor). Sent to
+    // F2C so the planner cuts strips around the dock without the
+    // 1.5 m corridor inflating the cut. The full dock_exclusion_polygon_
+    // (including the corridor) is still used for the classification
+    // layer + keepout carve-out elsewhere — that's a docking-staging
+    // concern, not a coverage-planning concern.
     if (has_dock_exclusion_ && dock_planning_polygon_.points.size() >= 3)
     {
       res->area.obstacles.push_back(dock_planning_polygon_);
@@ -657,13 +658,12 @@ void MapServerNode::on_get_mowing_area(
     res->success = true;
     RCLCPP_INFO(get_logger(),
                 "GetMowingArea[%u]: area='%s', %zu obstacles "
-                "(%zu static + %zu tracked + %zu dock-exclusion)",
+                "(%zu static + %zu dock-exclusion)",
                 req->index,
                 entry.name.c_str(),
                 res->area.obstacles.size(),
                 n_static,
-                n_after_tracked - n_static,
-                res->area.obstacles.size() - n_after_tracked);
+                res->area.obstacles.size() - n_static);
   }
   else
   {

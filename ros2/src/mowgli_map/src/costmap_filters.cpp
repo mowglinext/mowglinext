@@ -138,35 +138,16 @@ void MapServerNode::publish_keepout_mask()
     }
   }
 
-  // Overlay obstacle polygons: cells inside any obstacle -> 100 (lethal).
-  for (int r = 0; r < nx; ++r)
-  {
-    for (int c = 0; c < ny; ++c)
-    {
-      grid_map::Position pos;
-      const grid_map::Index idx(r, c);
-      if (!map_.getPosition(idx, pos))
-      {
-        continue;
-      }
-
-      geometry_msgs::msg::Point32 pt;
-      pt.x = static_cast<float>(pos.x());
-      pt.y = static_cast<float>(pos.y());
-      pt.z = 0.0F;
-
-      for (const auto& obs : obstacle_polygons_)
-      {
-        if (point_in_polygon(pt, obs))
-        {
-          const int og_col = nx - 1 - r;
-          const int og_row = ny - 1 - c;
-          mask.data[static_cast<std::size_t>(og_row * nx + og_col)] = 100;
-          break;
-        }
-      }
-    }
-  }
+  // (Removed: auto-tracked obstacle polygons no longer overlaid onto the
+  // keepout mask. Same architecture decision as in on_get_mowing_area:
+  // obstacle_tracker is a detection / viz tool whose output is reserved
+  // for a future operator-promotion flow; it does NOT have planning
+  // authority on its own. Real-time avoidance of dynamic obstacles is
+  // handled by Nav2's obstacle_layer feeding MPPI's ObstaclesCritic,
+  // which doesn't need the keepout overlay to work and doesn't suffer
+  // when transient ground-noise blobs flicker. User-defined static
+  // obstacles in entry.obstacles are still painted into NO_GO_ZONE
+  // cells via the classification overlay below.)
 
   // Overlay no-go zones from classification layer.
   const auto& cls = map_[std::string(layers::CLASSIFICATION)];
