@@ -319,22 +319,27 @@ controller_server:
         cost_power: 1
         cost_weight: 5.0
         threshold_to_consider: 0.5
-      # ObstaclesCritic strengthened per the proven config: ~3× repulsion,
-      # +50% critical weight, explicit collision_margin_distance and
-      # cost_scaling_factor. With PathAlign now stronger we can afford
-      # ObstaclesCritic to be more aggressive about pushing the robot
-      # away from obstacles — PathAlign will pull it back to the strip
-      # once the obstacle is behind.
+      # ObstaclesCritic — kept at our prior values, NOT GHANSHYAM-13's
+      # more aggressive ones. Their collision_margin_distance=0.30 +
+      # inflation_radius=0.55 only work when the costmap's inflation
+      # is also ≥ 0.55 (their setup likely matched). Our local_costmap
+      # has inflation_radius=0.20 and our chassis circumscribed_radius
+      # is 0.60 m — copying their obstacle params triggered
+      # 'inflation_radius < circumscribed_radius' errors and the robot
+      # froze (every direction looked too close to an obstacle, so MPPI
+      # couldn't find a low-cost trajectory). The PathAlign improvements
+      # below are the actual strip-lock primitive; we don't need to
+      # match their obstacle tunings to get the benefit.
       ObstaclesCritic:
         enabled: true
         cost_power: 1
-        repulsion_weight: 4.0
-        critical_weight: 30.0
+        repulsion_weight: 1.5
+        critical_weight: 20.0
         consider_footprint: true
-        collision_cost: 10000.0
-        collision_margin_distance: 0.30
+        collision_cost: 100000.0
+        collision_margin_distance: 0.10
         near_goal_distance: 0.5
-        inflation_radius: 0.55
+        inflation_radius: 0.40
         cost_scaling_factor: 10.0
       # CostCritic — handles inflated-obstacle gradient (cells with
       # 0 < cost < lethal). Pulled directly from the GHANSHYAM-13 config.
