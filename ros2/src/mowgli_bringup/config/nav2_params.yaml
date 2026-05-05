@@ -279,16 +279,15 @@ controller_server:
       vy_std: 0.0                   # diff-drive — no lateral
       wz_std: 0.80                  # broad enough to sample up to wz_max=1.5
       vx_max: 0.30
-      # vx_min: -0.15 — allow MPPI to sample reverse legs so it can
-      # actually track F2C REEDS_SHEPP Z-pattern U-turns (forward arc +
-      # reverse leg + forward arc) instead of smoothing them into a
-      # wide forward-only arc that overshoots the polygon edge. The
-      # previous concern (sim #17 "creep-reverse local minimum at strip
-      # ends") was diagnosed in a context with a 0.30 m localization
-      # offset that's now fixed (385b425c) — the local minimum was
-      # likely an artifact of the EKF reporting a phantom lateral
-      # error MPPI tried to correct for by reversing.
-      vx_min: -0.15
+      # vx_min: 0.10 — forward-only sampling. With F2C now configured
+      # for DUBIN (forward-only paths) and min_turning_radius=0.09 m
+      # so the U-turn arc fits the 0.18 m strip pitch as a clean
+      # forward-only semicircle, MPPI never needs to sample reverse.
+      # vx_min<0 was tried in sim #41 (didn't help — MPPI never
+      # reversed even when allowed) and reverts to the safer
+      # forward-only configuration to avoid the creep-reverse local
+      # minimum at strip ends (sim #17 history).
+      vx_min: 0.10
       wz_max: 1.5
       ax_max: 1.0
       ax_min: -1.0
@@ -871,21 +870,22 @@ coverage_server:
     # being absent.
     robot_width: 0.40
     operation_width: 0.18
-    # Diff-drive turns in place — F2C still wants a non-zero turning
-    # radius for the swath connector planner. 0.30 m is the value used
-    # in sim #20 (best run: 40 % coverage, 35 BV, 1 FollowCoveragePath
-    # complete, dock attempted) — F2C generates a Reeds-Shepp arc with
-    # apex 0.30 m past strip endpoint plus MPPI overshoot ~0.30 m, both
-    # absorbed by the headland_width=1.00 m budget.
+    # min_turning_radius set to operation_width/2 so DUBIN forward-only
+    # U-turns (semicircle of diameter 0.18 m) fit cleanly between
+    # adjacent strips. This is the geometric trick that GHANSHYAM-13's
+    # SIM yaml uses (their min_turning_radius=0.125 with
+    # operation_width=0.25 gives the same ratio): F2C plans a tight
+    # forward-only arc that traces the entire U-turn without any
+    # reverse leg, so MPPI doesn't have to handle the discontinuous
+    # forward→reverse transitions in a Reeds-Shepp plan.
     #
-    # Tried 0.05 m (sim #23, 77 BV) and 0.10 m (sim #24, 73 BV): the
-    # tighter radius collapses the arc apex but MPPI's overshoot is
-    # roughly fixed at 0.30 m — robot ends up at the polygon edge on
-    # every U-turn instead of comfortably inside.
-    #
-    # 0.05 m additionally hangs F2C v1.2.1 on a 9 × 6 m field. 0.30 m
-    # is the safe value matching the opennav_coverage demo config.
-    min_turning_radius: 0.30
+    # Diff-drive can pivot in place (true min radius = 0), but F2C
+    # uses min_turning_radius as a kinematic constraint on its arc
+    # planner, not a physical limit. Setting it to ~strip_pitch/2
+    # tells F2C "plan U-turn arcs that fit one strip-pitch wide."
+    # Keep above 0.05 m to avoid the F2C v1.2.1 hang documented in
+    # earlier sim runs (sim #22-24, fields ≥ 9×6 m).
+    min_turning_radius: 0.09
     linear_curv_change: 200.0
     # Headland MUST be ≥ min_turning_radius + tracking_error_margin,
     # otherwise the F2C-planned Reeds-Shepp U-turn arc apex lands flush
@@ -896,9 +896,10 @@ coverage_server:
     # polygon edge at X = -3.000 → 0.004 m of margin → trips on every
     # tracking error > 4 mm.
     #
-    # 0.55 = min_turning_radius (0.30) + tracking_error_margin (0.25).
-    # The 0.25 covers chassis half-width (~0.20) + MPPI/RPP overshoot
-    # (~0.05) at strip ends.
+    # 0.55 = chassis_half_width (0.20) + MPPI overshoot (0.05) +
+    # comfortable extra (0.30). With min_turning_radius now 0.09 m
+    # the U-turn arc apex itself only consumes 0.09 m of headland;
+    # the rest is buffer for controller tracking error.
     #
     # Trade-off: a 0.55 m perimeter ring is no longer covered by strips
     # (only by headland sweep — F2C `headland_mode: CONSTANT` does the
@@ -917,21 +918,24 @@ coverage_server:
     # Route order — boustrophedon (snake) keeps adjacent swaths back-to-back
     # so transitions between them are short.
     default_route_type: "BOUSTROPHEDON"
-    # REEDS_SHEPP allows reverse legs (right for diff-drive); paired
-    # with vx_min=0.10 in MPPI, the robot still drives forward-only
-    # in normal mowing — F2C only uses Reeds-Shepp for the strip-
-    # connector geometry that fits inside the headland. CONTINUOUS
-    # keeps the path single-segment so MPPI's PathHandler can process
-    # it normally.
+    # DUBIN forward-only — paired with min_turning_radius=0.09 the
+    # U-turn at strip ends is a forward-only semicircle of diameter
+    # 0.18 m that fits exactly into the strip pitch. No reverse legs
+    # for the controller to deal with. This is GHANSHYAM-13's SIM
+    # config (DUBIN + min_turning_radius=0.125, operation_width=0.25).
     #
-    # Tried alternative path types in this round:
-    # - DUBIN + CONTINUOUS (sim #23): 13 % coverage, 77 BV — worse
-    #   than REEDS_SHEPP because Dubins arcs are wider for the same
-    #   min_turning_radius.
-    # - DUBIN + DISCONTINUOUS (sim #22): 0.66 % coverage — F2C
-    #   produced a path with literal gaps that Nav2's controller
-    #   couldn't follow at all.
-    default_path_type: "REEDS_SHEPP"
+    # REEDS_SHEPP was used previously (sim #20-#42) when
+    # min_turning_radius=0.30 forced the U-turn diameter (0.60 m) to
+    # exceed the strip pitch (0.18 m), making forward-only impossible.
+    # MPPI then ignored the planned reverse legs and arced through
+    # them — the wide-arc problem.
+    #
+    # The earlier DUBIN attempts (sim #22-23) used min_turning_radius
+    # in the 0.30+ range so the arc was geometrically too wide for
+    # the strip pitch — that test was apples-to-oranges. With the
+    # turning radius now set to half the strip pitch, DUBIN is the
+    # right choice.
+    default_path_type: "DUBIN"
     default_path_continuity_type: "CONTINUOUS"
     # Coordinates already in map frame from the BT.
     coordinates_in_cartesian_frame: true
