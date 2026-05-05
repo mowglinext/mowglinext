@@ -445,30 +445,44 @@ void ObstacleTrackerNode::on_publish_timer()
 
   for (const auto& obs : tracked_)
   {
-    // Publish all obstacles in the ObstacleArray regardless of persistence.
-    mowgli_interfaces::msg::TrackedObstacle out_obs;
-    out_obs.id = obs.id;
-    out_obs.centroid.x = obs.cx;
-    out_obs.centroid.y = obs.cy;
-    out_obs.centroid.z = 0.0;
-    out_obs.radius = obs.radius;
-    out_obs.first_seen = rclcpp::Time(obs.first_seen).operator builtin_interfaces::msg::Time();
-    out_obs.observation_count = obs.observation_count;
-    out_obs.status = obs.persistent ? mowgli_interfaces::msg::TrackedObstacle::PERSISTENT
-                                    : mowgli_interfaces::msg::TrackedObstacle::TRANSIENT;
-
-    // Inflate the hull for the output polygon.
+    // Inflate the hull once — used by both the published ObstacleArray
+    // (only when persistent) and the debug MarkerArray (always, so
+    // transient blobs are visible in foxglove with the green colour).
     const auto inflated = inflate_hull(obs.hull_points, inflation_radius_);
-    for (const auto& [hx, hy] : inflated)
-    {
-      geometry_msgs::msg::Point32 p;
-      p.x = static_cast<float>(hx);
-      p.y = static_cast<float>(hy);
-      p.z = 0.0F;
-      out_obs.polygon.points.push_back(p);
-    }
 
-    obstacle_array.obstacles.push_back(out_obs);
+    // Publish ONLY persistent obstacles in the ObstacleArray. Transient
+    // clusters that haven't crossed the persistence threshold must NOT
+    // enter the load-bearing pipeline: map_server consumes ObstacleArray
+    // and re-emits the polygons via GetMowingArea -> F2C polygon holes.
+    // With transient obstacles in the F2C hole list, F2C replans around
+    // them on every cycle, the route changes shape, and MPPI ends up
+    // driving the robot past the polygon boundary even in a clean sim
+    // with no real obstacles. Sim #14 evidence: 9 boundary violations
+    // all at the west edge x=-3 during strip-mowing, F2C plan
+    // oscillating between 1 hole and 2 holes per replan as transient
+    // ground-noise clusters appeared and disappeared.
+    if (obs.persistent)
+    {
+      mowgli_interfaces::msg::TrackedObstacle out_obs;
+      out_obs.id = obs.id;
+      out_obs.centroid.x = obs.cx;
+      out_obs.centroid.y = obs.cy;
+      out_obs.centroid.z = 0.0;
+      out_obs.radius = obs.radius;
+      out_obs.first_seen =
+          rclcpp::Time(obs.first_seen).operator builtin_interfaces::msg::Time();
+      out_obs.observation_count = obs.observation_count;
+      out_obs.status = mowgli_interfaces::msg::TrackedObstacle::PERSISTENT;
+      for (const auto& [hx, hy] : inflated)
+      {
+        geometry_msgs::msg::Point32 p;
+        p.x = static_cast<float>(hx);
+        p.y = static_cast<float>(hy);
+        p.z = 0.0F;
+        out_obs.polygon.points.push_back(p);
+      }
+      obstacle_array.obstacles.push_back(out_obs);
+    }
 
     // ── Marker: LINE_STRIP for the hull ──────────────────────────────────
     visualization_msgs::msg::Marker hull_marker;
