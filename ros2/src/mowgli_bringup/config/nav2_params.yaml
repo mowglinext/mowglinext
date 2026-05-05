@@ -25,6 +25,26 @@ bt_navigator:
     default_nav_through_poses_bt_xml: ""
     # plugin_lib_names: auto-loaded in Kilted — no manual list needed.
     enable_stamped_cmd_vel: true
+    # Coverage navigator (opennav_coverage_navigator/CoverageNavigator):
+    # exposes a /navigate_complete_coverage action that, on goal, runs an
+    # internal BT (default_coverage_bt_xml below) doing:
+    #   ComputeCoveragePath -> GetPoseFromPath[0] -> ComputePathToPose
+    #     -> FollowPath path_to_start (transit, RPP)
+    #     -> RecoveryNode wrapping FollowPath path (coverage, MPPI)
+    # This replaces our previous in-mowgli_behavior call to /compute_coverage_path
+    # + /follow_path: same controllers, but bt_navigator owns the orchestration
+    # so the robot is correctly positioned at strip[0] before MPPI starts
+    # tracking. Matches the upstream GHANSHYAM-13/coverage-path-planning
+    # architecture.
+    navigators: ["navigate_to_pose", "navigate_through_poses", "navigate_complete_coverage"]
+    navigate_complete_coverage:
+      plugin: "opennav_coverage_navigator/CoverageNavigator"
+    # Path injected by navigation.launch.py at runtime — points to our
+    # mowgli_behavior/trees/coverage_bt.xml (a tweaked copy of the
+    # opennav_coverage_bt navigate_w_basic_complete_coverage_nav_to_start.xml
+    # template with a RecoveryNode added around the final FollowPath).
+    default_coverage_bt_xml: ""
+    error_code_names: ["compute_path_error_code", "follow_path_error_code", "compute_coverage_error_code"]
 
 bt_navigator_navigate_through_poses_rclcpp_node:
   ros__parameters:
@@ -879,9 +899,14 @@ collision_monitor:
 coverage_server:
   ros__parameters:
     use_sim_time: false
-    # Robot footprint vs cutter width. operation_width is the swath spacing
-    # (mower cutter ≈ 0.18 m). robot_width is the chassis envelope used by
-    # F2C for headland sizing.
+    # Robot footprint vs cutter width are INJECTED at launch from
+    # mowgli_robot.yaml — see navigation.launch.py:
+    #   robot_width      <- mowgli_robot.yaml chassis_width  (full chassis)
+    #   operation_width  <- mowgli_robot.yaml tool_width     (cutter)
+    # The values below are placeholder defaults; the launch overrides
+    # them. Keeping them explicit so the file is self-contained when
+    # opened standalone and so YAML parsers don't choke on the keys
+    # being absent.
     robot_width: 0.40
     operation_width: 0.18
     # Diff-drive turns in place — F2C still wants a non-zero turning

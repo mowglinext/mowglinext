@@ -320,6 +320,15 @@ def generate_launch_description() -> LaunchDescription:
         get_package_share_directory("nav2_bt_navigator"),
         "behavior_trees", "navigate_through_poses_w_replanning_and_recovery.xml",
     )
+    # Internal BT for opennav_coverage_navigator/CoverageNavigator: runs
+    # ComputeCoveragePath → GetPoseFromPath[0] → ComputePathToPose →
+    # FollowPath path_to_start (RPP) → RecoveryNode wrapping
+    # FollowPath path (MPPI). bt_navigator activates this tree on each
+    # /navigate_complete_coverage action goal.
+    coverage_bt_xml = os.path.join(
+        get_package_share_directory("mowgli_behavior"),
+        "trees", "coverage_bt.xml",
+    )
 
     # opennav_docking declares home_dock.pose as PARAMETER_DOUBLE_ARRAY (see
     # opennav_docking/utils.hpp::parseDockParams). Nav2's RewrittenYaml can
@@ -382,6 +391,23 @@ def generate_launch_description() -> LaunchDescription:
         # achieve required_movement_radius before declaring no-progress.
         pc = cs_params.setdefault("progress_checker", {})
         pc["movement_time_allowance"] = progress_timeout_sec
+
+        # coverage_server geometry — read from mowgli_robot.yaml so it's
+        # the single source of truth for the robot's physical config.
+        # robot_width      <- chassis_width  (full chassis envelope)
+        # operation_width  <- tool_width     (mower cutter ≈ 0.18 m)
+        # F2C uses these for headland inset sizing and strip spacing.
+        cov_params = (doc.setdefault("coverage_server", {})
+                         .setdefault("ros__parameters", {}))
+        cov_params["robot_width"] = float(rt_rp.get("chassis_width", 0.40))
+        cov_params["operation_width"] = float(rt_rp.get("tool_width", 0.18))
+
+        # Coverage navigator BT path: bt_navigator's CoverageNavigator
+        # plugin reads default_coverage_bt_xml at startup and uses it as
+        # the internal BT every /navigate_complete_coverage goal runs.
+        bt_params = (doc.setdefault("bt_navigator", {})
+                        .setdefault("ros__parameters", {}))
+        bt_params["default_coverage_bt_xml"] = coverage_bt_xml
 
         tmp = tempfile.NamedTemporaryFile(
             mode="w", prefix="mowgli_nav2_", suffix=".yaml", delete=False)

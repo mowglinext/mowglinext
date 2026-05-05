@@ -31,6 +31,7 @@
 #include "nav2_msgs/action/follow_path.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "opennav_coverage_msgs/action/compute_coverage_path.hpp"
+#include "opennav_coverage_msgs/action/navigate_complete_coverage.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 
@@ -179,6 +180,73 @@ private:
   static constexpr double min_pose_step_m_ = 0.05;
 
   bool goal_sent_{false};
+  bool blade_on_{false};
+};
+
+// ---------------------------------------------------------------------------
+// MowAreaWithCoverage — replaces the manual ComputeCoveragePath +
+// NavigateToFirstStripPose + FollowCoveragePath sub-tree with a single
+// /navigate_complete_coverage action goal that bt_navigator handles
+// internally via opennav_coverage_navigator/CoverageNavigator and its
+// coverage_bt.xml. The internal BT does:
+//   ComputeCoveragePath (F2C)
+//   GetPoseFromPath nav_path[0] -> start_pose
+//   ComputePathToPose start_pose -> path_to_start (Smac)
+//   FollowPath path_to_start (RPP transit)
+//   RecoveryNode wrapping FollowPath path (MPPI coverage)
+//
+// This node fetches the area polygon (+ filtered holes) from
+// /map_server_node/get_mowing_area and sends it as the action goal.
+// On SUCCESS the area's mow_progress is painted along the driven track
+// (TF-sampled here every tick during onRunning).
+//
+// We keep separate paint and blade control here because bt_navigator's
+// coverage BT only handles the *navigation*; the mowing-specific
+// blade-on-during-coverage and paint-driven-track-on-completion
+// behaviour stays in the application BT.
+// ---------------------------------------------------------------------------
+
+class MowAreaWithCoverage : public BT::StatefulActionNode
+{
+public:
+  using NavCovAction = opennav_coverage_msgs::action::NavigateCompleteCoverage;
+  using NavCovGoalHandle = rclcpp_action::ClientGoalHandle<NavCovAction>;
+
+  MowAreaWithCoverage(const std::string& name, const BT::NodeConfig& config)
+      : BT::StatefulActionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<uint32_t>("area_index", 0u, "Mowing area index")};
+  }
+
+  BT::NodeStatus onStart() override;
+  BT::NodeStatus onRunning() override;
+  void onHalted() override;
+
+private:
+  void setBladeEnabled(bool enabled);
+  void paintTrajectory(const nav_msgs::msg::Path& trajectory);
+  void recordPose();
+
+  rclcpp_action::Client<NavCovAction>::SharedPtr action_client_;
+  rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr area_client_;
+  rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr blade_client_;
+  rclcpp::Client<mowgli_interfaces::srv::PaintSwath>::SharedPtr paint_client_;
+
+  std::shared_future<NavCovGoalHandle::SharedPtr> goal_future_;
+  NavCovGoalHandle::SharedPtr goal_handle_;
+  std::shared_future<NavCovGoalHandle::WrappedResult> result_future_;
+  bool result_requested_{false};
+
+  // Driven-track accumulator (same role as in FollowCoveragePath): we
+  // sample map→base_footprint at every onRunning tick and paint the
+  // resulting Path on SUCCESS so mow_progress reflects what the robot
+  // actually drove, not what F2C planned.
+  nav_msgs::msg::Path driven_trajectory_;
+  static constexpr double min_pose_step_m_ = 0.05;
   bool blade_on_{false};
 };
 

@@ -465,22 +465,23 @@
                    re-engage) every time obstacle_tracker promotes a new
                    shape; the implicit end-of-cycle replan is cheaper and
                    gives F2C a stable view of the field. -->
+              <!-- One BT node per area: sends a NavigateCompleteCoverage
+                   action goal to bt_navigator (which hosts the coverage
+                   navigator plugin). bt_navigator runs coverage_bt.xml
+                   internally:
+                     ComputeCoveragePath -> GetPoseFromPath[0]
+                       -> ComputePathToPose -> FollowPath path_to_start (RPP)
+                       -> RecoveryNode { FollowPath path (MPPI) | fallback }
+                   This pulls all coverage orchestration out of the
+                   application BT and into bt_navigator's RecoveryNode-
+                   wrapped retry pattern, matching the GHANSHYAM-13
+                   reference architecture. The application BT just owns
+                   the area-loop, blade control, and mow_progress paint. -->
               <Repeat num_cycles="100" name="AreaLoop">
                 <Sequence name="MowOneArea">
                   <GetNextUnmowedArea area_index="{current_area_index}"/>
                   <PublishHighLevelStatus state="2" state_name="MOWING"/>
-                  <ComputeCoveragePath area_index="{current_area_index}"/>
-                  <!-- Navigate the robot to the F2C plan's first pose
-                       BEFORE running FollowCoveragePath. This matches the
-                       upstream GHANSHYAM-13/coverage-path-planning BT
-                       structure and replaces our previous "prepend robot
-                       pose to plan" hack — that hack inserted a non-
-                       strip-shaped lead-in that confused MPPI's path
-                       handler and produced loopy driven tracks.
-                       Auto-skips when the robot is already within
-                       0.30 m of strip[0]. -->
-                  <NavigateToFirstStripPose/>
-                  <FollowCoveragePath area_index="{current_area_index}"/>
+                  <MowAreaWithCoverage area_index="{current_area_index}"/>
                 </Sequence>
               </Repeat>
 

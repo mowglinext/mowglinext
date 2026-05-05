@@ -664,6 +664,277 @@ void FollowCoveragePath::paintTrajectory(const nav_msgs::msg::Path& trajectory)
 }
 
 // ===========================================================================
+// MowAreaWithCoverage — sends a /navigate_complete_coverage goal to
+// bt_navigator, which runs the coverage_bt.xml internally. Blade ON
+// while the action is RUNNING; mow_progress painted along the driven
+// track on SUCCESS.
+// ===========================================================================
+
+BT::NodeStatus MowAreaWithCoverage::onStart()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  uint32_t area_idx = 0;
+  getInput<uint32_t>("area_index", area_idx);
+
+  // Fetch the polygon (+ filtered holes) from map_server.
+  if (!area_client_)
+  {
+    area_client_ = ctx->helper_node->create_client<mowgli_interfaces::srv::GetMowingArea>(
+        "/map_server_node/get_mowing_area");
+  }
+  if (!area_client_->wait_for_service(std::chrono::seconds(3)))
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "MowAreaWithCoverage: get_mowing_area not available");
+    return BT::NodeStatus::FAILURE;
+  }
+  auto req = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
+  req->index = area_idx;
+  auto fut = area_client_->async_send_request(req);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (fut.wait_for(std::chrono::milliseconds(10)) != std::future_status::ready)
+  {
+    if (std::chrono::steady_clock::now() > deadline)
+    {
+      RCLCPP_ERROR(ctx->node->get_logger(),
+                   "MowAreaWithCoverage: get_mowing_area timed out for area %u",
+                   area_idx);
+      return BT::NodeStatus::FAILURE;
+    }
+  }
+  auto resp = fut.get();
+  if (!resp->success)
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "MowAreaWithCoverage: get_mowing_area returned failure for area %u",
+                 area_idx);
+    return BT::NodeStatus::FAILURE;
+  }
+  if (resp->area.is_navigation_area)
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "MowAreaWithCoverage: area %u is navigation-only — skipping",
+                area_idx);
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  if (!action_client_)
+  {
+    action_client_ = rclcpp_action::create_client<NavCovAction>(
+        ctx->node, "/navigate_complete_coverage");
+  }
+  if (!action_client_->wait_for_action_server(std::chrono::seconds(5)))
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "MowAreaWithCoverage: /navigate_complete_coverage action not available");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // Apply the same hole filter we used in the manual ComputeCoveragePath
+  // to ensure F2C 1.2.1 doesn't hang on degenerate holes (size, vertex-
+  // inside-field, boundary clearance).
+  constexpr double kMinHoleAreaM2 = 0.04;
+  constexpr double kHoleBoundaryClearanceM = 0.20;
+  constexpr float kHeadlandWidth = 1.00f;
+  constexpr std::size_t kMaxF2cHoles = 16;
+  const double min_clearance =
+      static_cast<double>(kHeadlandWidth) + kHoleBoundaryClearanceM;
+
+  NavCovAction::Goal goal;
+  goal.frame_id = "map";
+
+  // Outer field polygon — opennav_coverage requires the first polygon
+  // in the goal's polygons[] array to be the field boundary.
+  geometry_msgs::msg::Polygon outer = resp->area.area;
+  // F2C wants the ring closed (first == last); mowgli stores polygons
+  // open. Match the to_closed_ring helper from ComputeCoveragePath.
+  if (!outer.points.empty())
+  {
+    const auto& first = outer.points.front();
+    const auto& last = outer.points.back();
+    if (std::fabs(first.x - last.x) > 1e-6 || std::fabs(first.y - last.y) > 1e-6)
+      outer.points.push_back(first);
+  }
+  goal.polygons.push_back(outer);
+
+  // Inner rings (holes) — same filter pass as the old ComputeCoveragePath.
+  std::size_t filtered_too_small = 0, filtered_outside = 0, filtered_capped = 0;
+  for (const auto& obs : resp->area.obstacles)
+  {
+    if (obs.points.size() < 3 ||
+        ComputeCoveragePath::polygonArea(obs) < kMinHoleAreaM2) {
+      ++filtered_too_small;
+      continue;
+    }
+    if (!ComputeCoveragePath::isHoleSafeForF2C(
+            obs, resp->area.area, kMinHoleAreaM2, min_clearance)) {
+      ++filtered_outside;
+      continue;
+    }
+    if (goal.polygons.size() > kMaxF2cHoles) {
+      ++filtered_capped;
+      continue;
+    }
+    geometry_msgs::msg::Polygon hole = obs;
+    if (!hole.points.empty())
+    {
+      const auto& f = hole.points.front();
+      const auto& l = hole.points.back();
+      if (std::fabs(f.x - l.x) > 1e-6 || std::fabs(f.y - l.y) > 1e-6)
+        hole.points.push_back(f);
+    }
+    goal.polygons.push_back(hole);
+  }
+
+  if (filtered_too_small || filtered_outside || filtered_capped)
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "MowAreaWithCoverage: filtered obstacles "
+                "(too_small=%zu, on_or_outside_boundary=%zu, capped=%zu)",
+                filtered_too_small, filtered_outside, filtered_capped);
+  }
+
+  goal_handle_.reset();
+  result_requested_ = false;
+  goal_future_ = action_client_->async_send_goal(goal);
+
+  // Reset driven-track accumulator and turn the blade on.
+  driven_trajectory_ = nav_msgs::msg::Path();
+  driven_trajectory_.header.frame_id = "map";
+  setBladeEnabled(true);
+  recordPose();
+
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "MowAreaWithCoverage: sent /navigate_complete_coverage goal "
+              "for area %u (%zu vertices, %zu holes)",
+              area_idx, resp->area.area.points.size(), goal.polygons.size() - 1);
+  return BT::NodeStatus::RUNNING;
+}
+
+BT::NodeStatus MowAreaWithCoverage::onRunning()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  if (!goal_handle_)
+  {
+    if (goal_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+      return BT::NodeStatus::RUNNING;
+    goal_handle_ = goal_future_.get();
+    if (!goal_handle_)
+    {
+      RCLCPP_ERROR(ctx->node->get_logger(),
+                   "MowAreaWithCoverage: goal rejected by /navigate_complete_coverage");
+      setBladeEnabled(false);
+      return BT::NodeStatus::FAILURE;
+    }
+  }
+
+  // Sample driven-track every tick.
+  recordPose();
+
+  if (!result_requested_)
+  {
+    result_future_ = action_client_->async_get_result(goal_handle_);
+    result_requested_ = true;
+  }
+  if (result_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+    return BT::NodeStatus::RUNNING;
+
+  const auto wrapped = result_future_.get();
+  switch (wrapped.code)
+  {
+    case rclcpp_action::ResultCode::SUCCEEDED:
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "MowAreaWithCoverage: complete — painting %zu driven poses",
+                  driven_trajectory_.poses.size());
+      paintTrajectory(driven_trajectory_);
+      setBladeEnabled(false);
+      goal_handle_.reset();
+      return BT::NodeStatus::SUCCESS;
+    case rclcpp_action::ResultCode::ABORTED:
+    case rclcpp_action::ResultCode::CANCELED:
+    default:
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "MowAreaWithCoverage: terminated code=%d, error_code=%u — "
+                  "painting %zu driven poses anyway",
+                  static_cast<int>(wrapped.code),
+                  wrapped.result ? wrapped.result->error_code : 0u,
+                  driven_trajectory_.poses.size());
+      paintTrajectory(driven_trajectory_);
+      setBladeEnabled(false);
+      goal_handle_.reset();
+      return BT::NodeStatus::FAILURE;
+  }
+}
+
+void MowAreaWithCoverage::onHalted()
+{
+  if (goal_handle_)
+    action_client_->async_cancel_goal(goal_handle_);
+  goal_handle_.reset();
+  setBladeEnabled(false);
+}
+
+void MowAreaWithCoverage::setBladeEnabled(bool enabled)
+{
+  if (blade_on_ == enabled) return;
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  if (!blade_client_)
+  {
+    blade_client_ = ctx->node->create_client<mowgli_interfaces::srv::MowerControl>(
+        "/hardware_bridge/mower_control");
+  }
+  if (!blade_client_->wait_for_service(std::chrono::milliseconds(200))) return;
+  auto req = std::make_shared<mowgli_interfaces::srv::MowerControl::Request>();
+  req->mow_enabled = enabled ? 1u : 0u;
+  blade_client_->async_send_request(req);
+  blade_on_ = enabled;
+}
+
+void MowAreaWithCoverage::recordPose()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  geometry_msgs::msg::TransformStamped tf;
+  try
+  {
+    tf = ctx->tf_buffer->lookupTransform(
+        "map", "base_footprint", tf2::TimePointZero, tf2::durationFromSec(0.05));
+  }
+  catch (const tf2::TransformException&) { return; }
+  const double x = tf.transform.translation.x;
+  const double y = tf.transform.translation.y;
+  if (!driven_trajectory_.poses.empty())
+  {
+    const auto& last = driven_trajectory_.poses.back().pose.position;
+    const double dx = x - last.x, dy = y - last.y;
+    if (dx * dx + dy * dy < min_pose_step_m_ * min_pose_step_m_) return;
+  }
+  geometry_msgs::msg::PoseStamped ps;
+  ps.header.frame_id = "map";
+  ps.header.stamp = ctx->node->now();
+  ps.pose.position.x = x;
+  ps.pose.position.y = y;
+  ps.pose.position.z = 0.0;
+  ps.pose.orientation = tf.transform.rotation;
+  driven_trajectory_.poses.push_back(ps);
+}
+
+void MowAreaWithCoverage::paintTrajectory(const nav_msgs::msg::Path& trajectory)
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  if (trajectory.poses.empty()) return;
+  if (!paint_client_)
+  {
+    paint_client_ = ctx->node->create_client<mowgli_interfaces::srv::PaintSwath>(
+        "/map_server_node/paint_swath");
+  }
+  if (!paint_client_->wait_for_service(std::chrono::milliseconds(500))) return;
+  auto req = std::make_shared<mowgli_interfaces::srv::PaintSwath::Request>();
+  req->swath_path = trajectory;
+  paint_client_->async_send_request(req);
+}
+
+// ===========================================================================
 // GetNextUnmowedArea — preserved from prior architecture (uses
 // GetCoverageStatus.strips_remaining as a coverage-threshold shim).
 // ===========================================================================

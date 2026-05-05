@@ -1,0 +1,61 @@
+<!--
+  coverage_bt.xml — internal Behavior Tree run by bt_navigator's
+  opennav_coverage_navigator/CoverageNavigator plugin when a
+  /navigate_complete_coverage action goal arrives.
+
+  The mowgli_behavior application BT (main_tree.xml) sends the goal;
+  bt_navigator handles the orchestration here so that:
+
+    1. ComputeCoveragePath calls /compute_coverage_path with the
+       requested polygon (+ holes), receives nav_path from F2C.
+    2. GetPoseFromPath nav_path[0] -> start_pose.
+    3. ComputePathToPose with planner_id="GridBased" (Smac 2D) plans
+       a transit path from the robot's current pose to start_pose.
+    4. FollowPath path_to_start with controller_id="FollowPath" (RPP)
+       drives the robot to the F2C plan's first pose.
+    5. RecoveryNode num_retries=100 wraps a primary FollowPath of the
+       coverage plan (controller_id="FollowCoveragePath" = MPPI), with
+       a fallback RoundRobin: try the same path with FollowPath (RPP)
+       as a back-up controller, then BackUp + ClearCostmap + Wait.
+
+  This pattern (the GHANSHYAM-13/coverage-path-planning architecture
+  copied into mowgli) keeps the F2C plan unmodified all the way to
+  MPPI — no path-prepend hack — and uses bt_navigator's own retry
+  mechanism instead of the outer mowing ReactiveSequence's guards
+  killing the coverage subtree mid-flight.
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RateController hz="0.0000001">  <!-- once per goal -->
+      <Sequence name="CoverWithRecovery">
+        <!-- F2C plan -->
+        <ComputeCoveragePath nav_path="{path}" polygons="{field_polygon}" polygons_frame_id="{polygon_frame_id}" error_code_id="{compute_coverage_error_code}"/>
+
+        <!-- Drive to strip[0] before starting MPPI on the coverage plan -->
+        <GetPoseFromPath path="{path}" pose="{start_pose}" index="0"/>
+        <ComputePathToPose goal="{start_pose}" path="{path_to_start}" planner_id="GridBased" error_code_id="{compute_path_error_code}" error_msg="{compute_path_error_msg}"/>
+        <FollowPath path="{path_to_start}" controller_id="FollowPath" error_code_id="{follow_path_error_code}" error_msg="{follow_path_error_msg}"/>
+
+        <!-- Mow the coverage plan with retry/recovery -->
+        <RecoveryNode number_of_retries="100" name="CoverageWithRecovery">
+          <!-- Primary: MPPI tracking of the F2C plan -->
+          <FollowPath path="{path}" controller_id="FollowCoveragePath" error_code_id="{follow_path_error_code}" error_msg="{follow_path_error_msg}"/>
+
+          <!-- Recovery: fallback to RPP, or BackUp + ClearCostmap + Wait -->
+          <RoundRobin name="CoverageRecoveryRoundRobin">
+            <!-- Try the same coverage path with the transit controller (RPP)
+                 as a fallback. RPP stops on obstacles instead of deviating,
+                 so this only succeeds when the path is locally clear. -->
+            <FollowPath path="{path}" controller_id="FollowPath" error_code_id="{follow_path_error_code}" error_msg="{follow_path_error_msg}"/>
+            <Sequence name="BackupAndClear">
+              <BackUp backup_dist="0.25" backup_speed="0.05" time_allowance="5"/>
+              <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+              <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+            </Sequence>
+            <Wait wait_duration="1.0"/>
+          </RoundRobin>
+        </RecoveryNode>
+      </Sequence>
+    </RateController>
+  </BehaviorTree>
+</root>
