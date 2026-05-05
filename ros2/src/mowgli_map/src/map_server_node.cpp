@@ -84,6 +84,8 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   strip_boundary_margin_m_ = declare_parameter<double>("strip_boundary_margin_m", 0.5);
   mow_angle_override_deg_ =
       declare_parameter<double>("mow_angle_deg", std::numeric_limits<double>::quiet_NaN());
+  mow_angle_offset_deg_ = declare_parameter<double>("mow_angle_offset_deg", 0.0);
+  mow_angle_increment_deg_ = declare_parameter<double>("mow_angle_increment_deg", 0.0);
 
   // Dock approach corridor — extends the no-mow zone in front of the dock
   // so coverage strips stop before the 1.5 m straight-line alignment that
@@ -173,7 +175,10 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   costmap_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
       costmap_topic,
       rclcpp::QoS(1).reliable(),
-      [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg) { on_costmap(std::move(msg)); });
+      [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg)
+      {
+        on_costmap(std::move(msg));
+      });
 
   // ── Services ─────────────────────────────────────────────────────────────
   save_map_srv_ = create_service<std_srvs::srv::Trigger>(

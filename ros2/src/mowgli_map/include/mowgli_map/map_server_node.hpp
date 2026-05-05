@@ -492,6 +492,20 @@ private:
   /// shape via Minimum Bounding Rectangle. 0 = north-south, 90 = east-west.
   double mow_angle_override_deg_{std::numeric_limits<double>::quiet_NaN()};
 
+  /// Constant offset added to the strip angle (degrees). Applied AFTER the
+  /// MBR / override choice. Use to tune the orientation of the swaths
+  /// across the whole garden — for example, a small offset breaks the
+  /// "aliased" tramlines you get when MBR settles on the same long edge
+  /// every session. Default 0.
+  double mow_angle_offset_deg_{0.0};
+
+  /// Per-area increment added to the strip angle (degrees). The angle for
+  /// area_index k is `base + offset + increment * k`. Set to a non-zero
+  /// value to vary the swath direction across multiple mowing areas — the
+  /// classic example is staggering 0°/45°/90° stripes for visual variety
+  /// or to reduce wheel-track ruts. Default 0.
+  double mow_angle_increment_deg_{0.0};
+
   /// Extent of the dock approach corridor along -X in dock local frame (m).
   /// Cells within this rectangle in front of the dock are marked
   /// NO_GO_ZONE so coverage strips stop before the straight-line alignment

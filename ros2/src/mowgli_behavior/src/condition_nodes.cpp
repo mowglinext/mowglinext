@@ -142,6 +142,20 @@ BT::NodeStatus IsBatteryAbove::tick()
 }
 
 // ---------------------------------------------------------------------------
+// IsMowingEnabled
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus IsMowingEnabled::tick()
+{
+  // Default true so a missing blackboard key behaves as "enabled" — that
+  // matches the previous behaviour where mowing_enabled was only present
+  // in mowgli_robot.yaml and ignored.
+  bool enabled = true;
+  config().blackboard->get<bool>("mowing_enabled", enabled);
+  return enabled ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+// ---------------------------------------------------------------------------
 // IsCommand
 // ---------------------------------------------------------------------------
 

@@ -106,8 +106,11 @@ mowgli:
         coverage_xy_tolerance: 0.5
         headland_width: 0.18
         min_turning_radius: 0.3
+        # 0 means "use the planner's MBR auto-angle as-is". Offset is
+        # applied to every area; increment is multiplied by area_index
+        # so multi-area gardens can stagger swath direction.
         mow_angle_increment_deg: 0
-        mow_angle_offset_deg: -1
+        mow_angle_offset_deg: 0
         mower_model: YardForce500
         mowing_speed: 0.2
         outline_offset: 0.05

@@ -488,6 +488,34 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// IsMowingEnabled
+// ---------------------------------------------------------------------------
+
+/// Returns SUCCESS when the operator-facing master mowing toggle
+/// (mowing_enabled in mowgli_robot.yaml) is true. Used as the first gate
+/// inside the COMMAND_START branch so toggling the GUI's "Mowing enabled"
+/// switch off makes the START button a safe no-op (the BT falls through
+/// to the idle branch). Recording, manual mowing, and battery-critical
+/// docking are intentionally NOT gated by this — the operator may still
+/// need to drive the robot or recover from low battery while mowing is
+/// globally disabled.
+class IsMowingEnabled : public BT::ConditionNode
+{
+public:
+  IsMowingEnabled(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
 // IsObstacleStuck
 // ---------------------------------------------------------------------------
 
@@ -536,9 +564,7 @@ public:
                               5.0,
                               "Seconds collision_monitor must be in STOP before tripping"),
         BT::InputPort<int>("max_count", 3, "Per-session cap on obstacle-backoff firings"),
-        BT::InputPort<double>("cooldown_sec",
-                              8.0,
-                              "Minimum gap between obstacle-backoff firings"),
+        BT::InputPort<double>("cooldown_sec", 8.0, "Minimum gap between obstacle-backoff firings"),
     };
   }
 

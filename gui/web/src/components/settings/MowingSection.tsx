@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { Card, Col, Form, InputNumber, Row, Space, Switch, Typography } from "antd";
+import { Alert, Card, Col, Form, InputNumber, Row, Space, Switch, Typography } from "antd";
 import { ScissorOutlined } from "@ant-design/icons";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
 
@@ -251,8 +251,30 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                 </Row>
             </Card>
 
-            {/* Outline passes */}
+            {/* Outline passes — fields persist to mowgli_robot.yaml but the
+                cell-based strip planner does not yet implement a perimeter
+                pass. Tracked under #40 (headland passes). The values below
+                are retained so they're preserved when the feature lands. */}
             <Card size="small" title="Perimeter (Outline)" style={{ marginBottom: 16 }}>
+                <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message="Not yet wired"
+                    description={
+                        <span>
+                            The strip planner currently runs straight fill only — the perimeter
+                            pass logic is tracked under{" "}
+                            <Typography.Link
+                                href="https://github.com/cedbossneo/mowglinext/issues/40"
+                                target="_blank"
+                            >
+                                #40 (headland passes)
+                            </Typography.Link>
+                            . Values you save here are retained for when that issue lands.
+                        </span>
+                    }
+                />
                 <Form layout="vertical" size="small">
                     <Row gutter={[16, 0]}>
                         <Col xs={12} sm={8}>

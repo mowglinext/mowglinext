@@ -147,7 +147,7 @@ void MapServerNode::ensure_strip_layout(size_t area_index)
   }
 
   // ── 1. Determine mow angle ────────────────────────────────────────────────
-  // Auto-compute from polygon MBR or use manual override.
+  // Base angle: auto-compute from polygon MBR or use manual override.
   double mow_angle;
   if (std::isnan(mow_angle_override_deg_))
   {
@@ -157,6 +157,14 @@ void MapServerNode::ensure_strip_layout(size_t area_index)
   {
     mow_angle = mow_angle_override_deg_ * M_PI / 180.0;
   }
+  // Then apply the operator-tunable offset (constant across all areas) and
+  // the per-area increment (multiplied by the area index, so successive
+  // areas can be rotated to break up the cut pattern). Both come from
+  // mowgli_robot.yaml via map_server_node parameters.
+  const double offset_rad = mow_angle_offset_deg_ * M_PI / 180.0;
+  const double increment_rad =
+      mow_angle_increment_deg_ * static_cast<double>(area_index) * M_PI / 180.0;
+  mow_angle += offset_rad + increment_rad;
   layout.mow_angle = mow_angle;
 
   // ── 2. Rotate polygon so optimal strip direction aligns with Y axis ───────

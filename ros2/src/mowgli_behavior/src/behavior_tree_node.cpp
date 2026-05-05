@@ -416,6 +416,12 @@ private:
     blackboard_->set("battery_full_pct", static_cast<float>(battery_full_pct));
     blackboard_->set("battery_critical_voltage", static_cast<float>(battery_critical_voltage));
 
+    // Master mowing toggle (mowgli_robot.yaml). Read by IsMowingEnabled
+    // inside the COMMAND_START branch so the operator can disable mowing
+    // from the GUI without removing the start button or unsetting areas.
+    const bool mowing_enabled = declare_parameter<bool>("mowing_enabled", true);
+    blackboard_->set("mowing_enabled", mowing_enabled);
+
     tree_ = factory_.createTreeFromFile(tree_file, blackboard_);
 
     // Optionally attach a console logger for debugging BT state transitions.

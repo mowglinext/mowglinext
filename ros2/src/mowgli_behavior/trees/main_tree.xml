@@ -179,6 +179,12 @@
              ============================================================ -->
         <Sequence name="MowingSequence">
           <IsCommand command="1"/>
+          <!-- Master mowing toggle (mowgli_robot.yaml: mowing_enabled).
+               When false the BT falls through to IdleSequence so the
+               GUI's "Start" button is a no-op without surprising the
+               operator. Recording, manual mow and battery-critical dock
+               flows are intentionally NOT gated by this. -->
+          <IsMowingEnabled/>
 
           <!-- Wait for Nav2 to be fully active. Polled check: finishes in
                ~50 ms once the four lifecycle_manager_navigation nodes

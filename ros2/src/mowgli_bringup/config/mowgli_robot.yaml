@@ -166,8 +166,12 @@ mowgli:
     outline_passes: 1              # perimeter passes before fill
     outline_overlap: 0.0           # overlap between outline and fill (m)
     outline_offset: 0.05           # inward offset from boundary (m)
-    mow_angle_offset_deg: -1.0    # -1 = auto-detect optimal angle
-    mow_angle_increment_deg: 0.0  # rotate pattern each full pass
+    # Strip pattern: offset is added to the MBR-computed (or override)
+    # angle for every area; increment is added on top per area_index, so
+    # area 0 uses base, area 1 uses base+increment, area 2 base+2*inc, …
+    # Both 0 means "use the planner's auto MBR angle as-is".
+    mow_angle_offset_deg: 0.0
+    mow_angle_increment_deg: 0.0
     headland_width: 0.18           # headland = 1 × tool_width
     path_spacing: 0.18             # = tool_width for full coverage
     min_turning_radius: 0.30       # differential drive can turn tight

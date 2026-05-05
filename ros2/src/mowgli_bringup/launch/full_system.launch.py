@@ -210,6 +210,10 @@ def generate_launch_description() -> LaunchDescription:
             # so they appear on the GUI Settings page.
             {"tick_rate": float(robot_params.get("tick_rate", 10.0))},
             {"bt_debug_logging": bool(robot_params.get("bt_debug_logging", False))},
+            # Master mowing toggle — gates the COMMAND_START branch so
+            # the GUI's "Mowing enabled" switch in Settings → Mowing has
+            # an effect at runtime.
+            {"mowing_enabled": bool(robot_params.get("mowing_enabled", True))},
         ],
     )
 
@@ -224,6 +228,11 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[
             map_params,
             {"use_sim_time": use_sim_time},
+            # Strip-pattern tuning. Combined with the MBR auto-angle (or
+            # the mow_angle_deg override in map_server.yaml) to control
+            # how the planner orients swaths within each mowing area.
+            {"mow_angle_offset_deg": float(robot_params.get("mow_angle_offset_deg", 0.0))},
+            {"mow_angle_increment_deg": float(robot_params.get("mow_angle_increment_deg", 0.0))},
         ],
     )
 
