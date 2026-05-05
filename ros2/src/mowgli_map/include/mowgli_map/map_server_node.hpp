@@ -391,9 +391,22 @@ private:
   geometry_msgs::msg::Pose docking_pose_;
   bool docking_pose_set_{false};
 
-  /// Dock exclusion polygon — cells inside are NO_GO_ZONE (no mowing strips).
+  /// Dock exclusion polygon — full rectangle (dock structure + approach
+  /// corridor). Used to mark cells DOCKING_AREA in the classification
+  /// layer so mow_progress doesn't accumulate there, and to keep the
+  /// keepout mask honest around the corridor.
   geometry_msgs::msg::Polygon dock_exclusion_polygon_;
   bool has_dock_exclusion_{false};
+
+  /// Dock *planning* polygon — small rectangle covering only the
+  /// physical dock structure, NOT the approach corridor. Sent to F2C
+  /// as a polygon hole on GetMowingArea so the coverage planner cuts
+  /// strips around the dock without the corridor inflating the cut.
+  /// Without this split the corridor (1.5 m back × 0.8 m wide) cuts
+  /// 5+ strips into disjoint segments and the boustrophedon
+  /// transitions between segments confuse MPPI's local controller —
+  /// see the orbital-trap analysis in the F2C swath capture.
+  geometry_msgs::msg::Polygon dock_planning_polygon_;
 
   // ── Publishers ────────────────────────────────────────────────────────────
   rclcpp::Publisher<grid_map_msgs::msg::GridMap>::SharedPtr grid_map_pub_;

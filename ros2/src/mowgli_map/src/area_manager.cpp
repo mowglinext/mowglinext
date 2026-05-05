@@ -638,18 +638,20 @@ void MapServerNode::on_get_mowing_area(
     }
     const auto n_after_tracked = res->area.obstacles.size();
 
-    // And include the dock+approach-corridor exclusion when it falls inside
-    // (or close to) this area. Without this, F2C plans strips THROUGH the
-    // dock structure — and as soon as the LiDAR pose is correct enough for
-    // the dock to mark cells in the local costmap, MPPI deviates around it
-    // and the robot ends up orbiting the dock instead of advancing through
-    // the strips. The classification-layer DOCKING_AREA marking elsewhere
-    // is a separate concern (it stops mow_progress from accumulating in the
-    // dock zone) and does NOT propagate to F2C — only the obstacles list
-    // does.
-    if (has_dock_exclusion_ && dock_exclusion_polygon_.points.size() >= 3)
+    // And include the dock-planning hole — the SMALL rectangle covering
+    // only the physical dock structure (NOT the approach corridor). Sent
+    // to F2C so the coverage planner cuts strips around the dock without
+    // the 1.5 m corridor inflating the cut. The full dock_exclusion_polygon_
+    // (including the corridor) is still used for classification-layer
+    // DOCKING_AREA marking + keepout carve-out elsewhere — that's a
+    // docking-staging concern, not a coverage-planning concern. See the
+    // F2C swath capture in the orbital-trap analysis: with the corridor
+    // in the hole, ~5 strips were cut and the headland transitions
+    // between segments confused MPPI; with just the dock structure the
+    // cut shrinks to ~1-2 strips and transitions stay clean.
+    if (has_dock_exclusion_ && dock_planning_polygon_.points.size() >= 3)
     {
-      res->area.obstacles.push_back(dock_exclusion_polygon_);
+      res->area.obstacles.push_back(dock_planning_polygon_);
     }
 
     res->success = true;

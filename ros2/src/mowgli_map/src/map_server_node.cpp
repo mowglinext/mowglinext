@@ -350,49 +350,72 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
     pose_msg.pose = docking_pose_;
     docking_pose_pub_->publish(pose_msg);
 
-    // Store dock exclusion polygon — used to mark dock cells as NO_GO_ZONE
-    // in the classification layer so strips are not planned through the dock
-    // NOR through the straight-line approach corridor that opennav_docking
-    // needs for the final 1.5 m alignment. Rectangle in dock local frame:
-    //   +X (into dock structure): dock_forward (covers robot when docked)
-    //   -X (approach corridor)  : dock_approach_corridor_length_m_
-    //   ±Y                      : dock_approach_corridor_half_width_m_
-    // This is asymmetric — the robot must stay out of the approach lane so
-    // it always reaches staging pose with the correct heading, but we still
-    // cover the dock structure itself.
-    const double dock_forward = 0.45;  // +X extent into dock (was symmetric)
+    // Build TWO polygons in dock-local frame, both rooted at docking_pose_:
+    //
+    //   dock_exclusion_polygon_ : full rectangle (dock + approach corridor).
+    //     Used for the classification-layer DOCKING_AREA mark and the
+    //     keepout-mask carve-out so opennav_docking's NavigateToPose can
+    //     reach the staging pose without the keepout filter blocking it.
+    //
+    //   dock_planning_polygon_  : small rectangle covering only the dock
+    //     structure (no corridor). Sent to F2C as a polygon hole so the
+    //     coverage planner cuts strips around the dock without the
+    //     1.5 m corridor inflating the cut. The corridor is a docking
+    //     concern, not a coverage concern — F2C should plan strips RIGHT
+    //     up to the dock face; opennav_docking handles the final approach.
+    //
+    // Rectangle conventions (dock-local frame):
+    //   +X : into the dock structure (where the robot ends up when docked)
+    //   -X : approach corridor (where the robot enters from)
+    //   ±Y : half-width of dock / corridor
+    const double dock_forward = 0.45;
     const double approach_back = dock_approach_corridor_length_m_;
     const double half_width = dock_approach_corridor_half_width_m_;
+    // Small back-margin behind the physical dock face so F2C's headland
+    // inset doesn't squeeze the planning hole down to a degenerate shape.
+    constexpr double kDockPlanningBack = 0.10;
     const double d_x = docking_pose_.position.x;
     const double d_y = docking_pose_.position.y;
     const double d_yaw = 2.0 * std::atan2(docking_pose_.orientation.z, docking_pose_.orientation.w);
     const double cy = std::cos(d_yaw);
     const double sy = std::sin(d_yaw);
-    const double corners[][2] = {
+
+    auto add_corners = [&](geometry_msgs::msg::Polygon& out,
+                           const double local_corners[][2]) {
+      for (int i = 0; i < 4; ++i) {
+        geometry_msgs::msg::Point32 pt;
+        pt.x = static_cast<float>(d_x + cy * local_corners[i][0] - sy * local_corners[i][1]);
+        pt.y = static_cast<float>(d_y + sy * local_corners[i][0] + cy * local_corners[i][1]);
+        pt.z = 0.0f;
+        out.points.push_back(pt);
+      }
+      out.points.push_back(out.points.front());
+    };
+
+    const double full_corners[4][2] = {
         {dock_forward, half_width},
         {dock_forward, -half_width},
         {-approach_back, -half_width},
         {-approach_back, half_width},
     };
-    for (const auto& c : corners)
-    {
-      geometry_msgs::msg::Point32 pt;
-      pt.x = static_cast<float>(d_x + cy * c[0] - sy * c[1]);
-      pt.y = static_cast<float>(d_y + sy * c[0] + cy * c[1]);
-      pt.z = 0.0f;
-      dock_exclusion_polygon_.points.push_back(pt);
-    }
-    dock_exclusion_polygon_.points.push_back(dock_exclusion_polygon_.points.front());
+    add_corners(dock_exclusion_polygon_, full_corners);
     has_dock_exclusion_ = true;
+
+    const double planning_corners[4][2] = {
+        {dock_forward, half_width},
+        {dock_forward, -half_width},
+        {-kDockPlanningBack, -half_width},
+        {-kDockPlanningBack, half_width},
+    };
+    add_corners(dock_planning_polygon_, planning_corners);
+
     RCLCPP_INFO(get_logger(),
                 "Dock exclusion zone (with approach corridor): pose=(%.2f, %.2f) "
                 "yaw=%.2f, forward=%.2fm, approach=%.2fm, half_width=%.2fm",
-                d_x,
-                d_y,
-                d_yaw,
-                dock_forward,
-                approach_back,
-                half_width);
+                d_x, d_y, d_yaw, dock_forward, approach_back, half_width);
+    RCLCPP_INFO(get_logger(),
+                "Dock planning hole (F2C-only): forward=%.2fm, back=%.2fm, half_width=%.2fm",
+                dock_forward, kDockPlanningBack, half_width);
   }
 
   // ── Publish timer ────────────────────────────────────────────────────────
