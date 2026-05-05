@@ -636,15 +636,32 @@ void MapServerNode::on_get_mowing_area(
         res->area.obstacles.push_back(obs_poly);
       }
     }
+    const auto n_after_tracked = res->area.obstacles.size();
+
+    // And include the dock+approach-corridor exclusion when it falls inside
+    // (or close to) this area. Without this, F2C plans strips THROUGH the
+    // dock structure — and as soon as the LiDAR pose is correct enough for
+    // the dock to mark cells in the local costmap, MPPI deviates around it
+    // and the robot ends up orbiting the dock instead of advancing through
+    // the strips. The classification-layer DOCKING_AREA marking elsewhere
+    // is a separate concern (it stops mow_progress from accumulating in the
+    // dock zone) and does NOT propagate to F2C — only the obstacles list
+    // does.
+    if (has_dock_exclusion_ && dock_exclusion_polygon_.points.size() >= 3)
+    {
+      res->area.obstacles.push_back(dock_exclusion_polygon_);
+    }
 
     res->success = true;
     RCLCPP_INFO(get_logger(),
-                "GetMowingArea[%u]: area='%s', %zu obstacles (%zu static + %zu tracked)",
+                "GetMowingArea[%u]: area='%s', %zu obstacles "
+                "(%zu static + %zu tracked + %zu dock-exclusion)",
                 req->index,
                 entry.name.c_str(),
                 res->area.obstacles.size(),
                 n_static,
-                res->area.obstacles.size() - n_static);
+                n_after_tracked - n_static,
+                res->area.obstacles.size() - n_after_tracked);
   }
   else
   {
