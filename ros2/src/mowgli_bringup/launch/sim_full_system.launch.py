@@ -168,7 +168,17 @@ def generate_launch_description() -> LaunchDescription:
 
     # ------------------------------------------------------------------
     # 1. Gazebo simulation — world + spawned robot + robot_state_publisher
+    #
+    # Spawn yaw is forced to dock_pose_yaw from mowgli_robot.yaml so the
+    # robot's physical orientation in Gazebo matches what the rest of
+    # the stack thinks the dock is facing. With spawn yaw=0 (the default
+    # in simulation.launch.py) and dock_pose_yaw=4.17 in mowgli_robot.yaml,
+    # the IMU yaw seeded on dock and the actual yaw disagree by 4.17 rad,
+    # which poisons the GPS lever-arm correction (rotated by EKF yaw)
+    # and pushes /odometry/filtered_map ~0.30 m off ground truth — exactly
+    # the offset that trips BoundaryGuard at strip-end U-turns.
     # ------------------------------------------------------------------
+    dock_pose_yaw_str = str(float(robot_params.get("dock_pose_yaw", 0.0)))
     simulation_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(simulation_dir, "launch", "simulation.launch.py")
@@ -177,6 +187,7 @@ def generate_launch_description() -> LaunchDescription:
             "world": world,
             "headless": headless,
             "use_rviz": use_rviz,
+            "spawn_yaw": dock_pose_yaw_str,
         }.items(),
     )
 
@@ -280,9 +291,23 @@ def generate_launch_description() -> LaunchDescription:
     # Reads /gps/fix (NavSatFix), converts to ENU using mowgli_robot.yaml's
     # datum, applies the antenna lever-arm with the current EKF yaw, and
     # publishes /gps/pose_cov for the EKF + /gps/absolute_pose for GUI/BT.
-    # ------------------------------------------------------------------
-    datum_lat = float(robot_params.get("datum_lat", 0.0))
-    datum_lon = float(robot_params.get("datum_lon", 0.0))
+    #
+    # In sim we MUST pin the datum to the Gazebo world's <spherical_
+    # coordinates> origin (Munich, 48.137154 / 11.576124 in garden.sdf)
+    # — otherwise the auto-seed in navsat_to_absolute_pose_node fires on
+    # the first /gps/fix arrival and seeds the datum at the *antenna's*
+    # lat/lon (gz publishes /gps/fix at the antenna position, 0.30 m
+    # forward of base_link). That misseats the map frame origin by
+    # 0.30 m relative to Gazebo, so dock_pose=(0,0) in map ends up at
+    # Gazebo (0.30, 0), the polygon (-3..3) lives at Gazebo (-2.7..3.3),
+    # and the F2C plan's strip-end U-turns end up flush with the
+    # polygon edge from the EKF's perspective even though the robot
+    # is physically inside.
+    #
+    # The mowgli_robot.yaml datum is left at 0/0 because real-hardware
+    # deployments set their own datum per-site — this is sim-only.
+    datum_lat = float(robot_params.get("datum_lat", 0.0)) or 48.137154
+    datum_lon = float(robot_params.get("datum_lon", 0.0)) or 11.576124
     navsat_converter_node = Node(
         package="mowgli_localization",
         executable="navsat_to_absolute_pose_node",
