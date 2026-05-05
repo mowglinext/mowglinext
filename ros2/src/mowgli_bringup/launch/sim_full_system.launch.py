@@ -450,10 +450,10 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
-    # 11d. sim_wheel_slip — relays /wheel_odom_raw → /wheel_odom and
-    # periodically inflates twist.linear.x to model encoder/GPS divergence
-    # on grass. The dual EKF only fuses /wheel_odom twist (not pose), so
-    # the slip surfaces as a brief encoder vs GPS / gyro disagreement.
+    # 11d. sim_wheel_slip — relays /wheel_odom_raw → /wheel_odom. NOISE
+    # DISABLED while we validate the localization + controller stack on
+    # a clean signal. Re-enable by bumping slip_vx_bias and slip_duration_s
+    # to model real-world wheel slip on grass.
     sim_wheel_slip_node = Node(
         package="mowgli_simulation",
         executable="sim_wheel_slip.py",
@@ -465,15 +465,19 @@ def generate_launch_description() -> LaunchDescription:
                 "input_topic": "/wheel_odom_raw",
                 "output_topic": "/wheel_odom",
                 "slip_period_s": 30.0,
-                "slip_duration_s": 1.0,
-                "slip_vx_bias": 0.05,
+                "slip_duration_s": 0.0,
+                "slip_vx_bias": 0.0,
             }
         ],
     )
 
-    # 11e. sim_imu_noise — adds bias-random-walk + white noise to the
-    # otherwise-perfect Gazebo IMU stream so the EKF/fusion_graph see
-    # realistic MEMS noise. Tuned for ~1°/min yaw drift at 60 s.
+    # 11e. sim_imu_noise — relays /imu/data_gz → /imu/data. NOISE DISABLED
+    # while we validate the localization + controller stack on a clean
+    # signal. Re-enable by restoring gyro/accel std + bias-walk values.
+    # Reference values (real MEMS, ~0.8°/min yaw drift at 60 s):
+    #   gyro_white_std: 5.0e-4, gyro_bias_walk_std: 3.0e-5,
+    #   gyro_bias_init_std: 5.0e-5, accel_white_std: 0.01,
+    #   accel_bias_walk_std: 1.0e-4, accel_bias_init_std: 0.005
     sim_imu_noise_node = Node(
         package="mowgli_simulation",
         executable="sim_imu_noise.py",
@@ -484,14 +488,12 @@ def generate_launch_description() -> LaunchDescription:
                 "use_sim_time": True,
                 "input_topic": "/imu/data_gz",
                 "output_topic": "/imu/data",
-                # σ_bias(t) = walk_std × √t. At 3e-5 rad/s/√s the bias is
-                # 2.32e-4 rad/s after 60 s ≈ 0.013°/s ≈ 0.8°/min.
-                "gyro_white_std": 5.0e-4,
-                "gyro_bias_walk_std": 3.0e-5,
-                "gyro_bias_init_std": 5.0e-5,
-                "accel_white_std": 0.01,
-                "accel_bias_walk_std": 1.0e-4,
-                "accel_bias_init_std": 0.005,
+                "gyro_white_std": 0.0,
+                "gyro_bias_walk_std": 0.0,
+                "gyro_bias_init_std": 0.0,
+                "accel_white_std": 0.0,
+                "accel_bias_walk_std": 0.0,
+                "accel_bias_init_std": 0.0,
                 "noise_seed": 42,
             }
         ],
