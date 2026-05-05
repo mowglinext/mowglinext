@@ -52,9 +52,30 @@ map_server_node:
 
     # Pre-defined mowing / navigation areas (OpenMower-style).
     # Parallel arrays indexed by position.  Polygon format: "x1,y1;x2,y2;..."
-    # Simulation garden with obstacles for B-RV validation.
+    #
+    # Simulation polygon — sized so the dock at (0, 0, yaw=4.17 rad) sits
+    # at the SW corner of the polygon ("dock at the border", which is the
+    # real-world recording pattern: user drives boundary including the
+    # dock as one of the perimeter vertices).
+    #
+    # With dock_yaw=4.17 the dock FACES SSW and the robot approaches from
+    # NNE — so for the approach to land inside the polygon, the polygon
+    # must extend NNE of the dock. Polygon (0,0)→(6,6) gives a 6 × 6 m
+    # lawn entirely in the NE quadrant relative to the dock.
+    #
+    # The dock_planning_polygon (small, ~0.55 × 0.8 m centred at (0,0))
+    # has all four corners outside the polygon (negative x or y), so the
+    # F2C hole filter in coverage_nodes.cpp rejects it as a hole — F2C
+    # plans a clean boustrophedon with NO holes. The dock_exclusion_polygon
+    # corridor is still applied to the classification layer (no mowing
+    # paint near dock) and keepout (corridor stays clear for staging),
+    # but neither bleeds into the F2C plan as a route-complicating hole.
+    #
+    # Earlier polygon (-7,-3)→(2,3) put the dock at the polygon's
+    # interior, which forced F2C to plan around a hole and produced an
+    # orbital trap MPPI couldn't follow (see /tmp/f2c_capture*.png).
     area_names: ["main_mow"]
-    area_polygons: ["-7.0,-3.0;2.0,-3.0;2.0,3.0;-7.0,3.0"]
+    area_polygons: ["0.0,0.0;6.0,0.0;6.0,6.0;0.0,6.0"]
     area_is_navigation: [false]
     # No pre-defined obstacles — robot detects them via LiDAR at runtime.
     area_obstacles: [""]
