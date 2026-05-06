@@ -136,19 +136,23 @@ private:
     // headland_width). MowHeadlandPerimeter consumes this to mow the
     // perimeter band before the interior swaths, so strip-end transitions
     // happen safely inside the already-mowed headland zone.
-    {
-      rclcpp::QoS qos_planning(rclcpp::KeepLast(1));
-      qos_planning.transient_local();  // catch the message even if BT subscribes late
-      planning_field_sub_ =
-          create_subscription<geometry_msgs::msg::PolygonStamped>(
-              "/coverage_server/planning_field", qos_planning,
-              [this](geometry_msgs::msg::PolygonStamped::ConstSharedPtr msg)
-              {
-                std::lock_guard<std::mutex> lock(context_->context_mutex);
-                context_->current_planning_field = *msg;
-                context_->current_planning_field_valid = true;
-              });
-    }
+    //
+    // QoS must match the publisher (opennav_coverage/visualizer.hpp uses
+    // default volatile QoS). Using transient_local on subscriber side
+    // makes DDS treat the QoS as incompatible and no messages flow —
+    // observed in sim 49 where MowHeadlandPerimeter timed out waiting.
+    // BT node starts at simulation bringup, well before the first
+    // ComputeCoveragePath fires, so volatile captures the publish event
+    // reliably.
+    planning_field_sub_ =
+        create_subscription<geometry_msgs::msg::PolygonStamped>(
+            "/coverage_server/planning_field", rclcpp::QoS(1),
+            [this](geometry_msgs::msg::PolygonStamped::ConstSharedPtr msg)
+            {
+              std::lock_guard<std::mutex> lock(context_->context_mutex);
+              context_->current_planning_field = *msg;
+              context_->current_planning_field_valid = true;
+            });
 
     // Replan / boundary signals from map_server_node
     replan_needed_sub_ =
