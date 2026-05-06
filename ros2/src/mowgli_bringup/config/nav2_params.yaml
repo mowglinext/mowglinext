@@ -254,13 +254,17 @@ controller_server:
       # (sim #40), so we cannot rely on MPPI to track Reeds-Shepp
       # Z-patterns; the shim handles the U-turn pivot, MPPI handles
       # the straight-line tracking between U-turns.
-      angular_dist_threshold: 0.2
+      # 0.1 rad (~6°): the shim re-engages on every controller tick
+      # where the condition is met, not just at goal start. So this
+      # tight threshold gives pivot-in-place behavior at every
+      # strip-end U-turn corner — the human-mower aesthetic ("turn
+      # in place at strip ends") instead of MPPI's smooth-arc U-turn.
+      angular_dist_threshold: 0.1
       # Lookahead used to pick the path point for heading comparison.
-      # Larger values = the shim looks further ahead and pivots toward
-      # where the path is going next. 0.3 m is half a strip-pitch +
-      # margin; tighter lookahead lets the shim recognise the U-turn
-      # earlier in the strip than the previous 0.5 m would.
-      forward_sampling_distance: 0.3
+      # 0.5 m at desired_linear_vel=0.2 m/s = 2.5 s of upcoming path —
+      # enough time for the shim to detect the impending U-turn before
+      # the robot reaches the strip end and start the pivot.
+      forward_sampling_distance: 0.5
       rotate_to_heading_angular_vel: 0.85  # matches FollowPath / firmware deadband
       max_angular_accel: 1.0
       simulate_ahead_time: 1.0
