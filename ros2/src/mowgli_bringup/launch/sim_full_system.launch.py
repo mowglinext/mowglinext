@@ -458,10 +458,14 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
-    # 11d. sim_wheel_slip — relays /wheel_odom_raw → /wheel_odom. NOISE
-    # DISABLED while we validate the localization + controller stack on
-    # a clean signal. Re-enable by bumping slip_vx_bias and slip_duration_s
-    # to model real-world wheel slip on grass.
+    # 11d. sim_wheel_slip — relays /wheel_odom_raw → /wheel_odom and
+    # injects modest wheel slip events (5 cm/s for 1 s every 30 s)
+    # to model real-world encoder/GPS divergence on grass. The EKF
+    # only fuses /wheel_odom twist, so the slip surfaces as a brief
+    # encoder vs GPS / gyro disagreement that the EKF must reconcile.
+    # Re-enabled after the SDF base_link audit fix (commit dd779b2e):
+    # without realistic wheel-odom noise the EKF over-trusts wheel
+    # integration and drifts ~16 cm under motion (sim 44 measurement).
     sim_wheel_slip_node = Node(
         package="mowgli_simulation",
         executable="sim_wheel_slip.py",
@@ -473,19 +477,17 @@ def generate_launch_description() -> LaunchDescription:
                 "input_topic": "/wheel_odom_raw",
                 "output_topic": "/wheel_odom",
                 "slip_period_s": 30.0,
-                "slip_duration_s": 0.0,
-                "slip_vx_bias": 0.0,
+                "slip_duration_s": 1.0,
+                "slip_vx_bias": 0.05,
             }
         ],
     )
 
-    # 11e. sim_imu_noise — relays /imu/data_gz → /imu/data. NOISE DISABLED
-    # while we validate the localization + controller stack on a clean
-    # signal. Re-enable by restoring gyro/accel std + bias-walk values.
-    # Reference values (real MEMS, ~0.8°/min yaw drift at 60 s):
-    #   gyro_white_std: 5.0e-4, gyro_bias_walk_std: 3.0e-5,
-    #   gyro_bias_init_std: 5.0e-5, accel_white_std: 0.01,
-    #   accel_bias_walk_std: 1.0e-4, accel_bias_init_std: 0.005
+    # 11e. sim_imu_noise — adds bias-random-walk + white noise to the
+    # otherwise-perfect Gazebo IMU stream so the EKF/fusion_graph see
+    # realistic MEMS noise. Tuned for ~0.8°/min yaw drift at 60 s.
+    # σ_bias(t) = walk_std × √t, so at gyro_bias_walk_std=3e-5 rad/s/√s
+    # the bias is 2.32e-4 rad/s after 60 s ≈ 0.013°/s ≈ 0.8°/min.
     sim_imu_noise_node = Node(
         package="mowgli_simulation",
         executable="sim_imu_noise.py",
@@ -496,12 +498,12 @@ def generate_launch_description() -> LaunchDescription:
                 "use_sim_time": True,
                 "input_topic": "/imu/data_gz",
                 "output_topic": "/imu/data",
-                "gyro_white_std": 0.0,
-                "gyro_bias_walk_std": 0.0,
-                "gyro_bias_init_std": 0.0,
-                "accel_white_std": 0.0,
-                "accel_bias_walk_std": 0.0,
-                "accel_bias_init_std": 0.0,
+                "gyro_white_std": 5.0e-4,
+                "gyro_bias_walk_std": 3.0e-5,
+                "gyro_bias_init_std": 5.0e-5,
+                "accel_white_std": 0.01,
+                "accel_bias_walk_std": 1.0e-4,
+                "accel_bias_init_std": 0.005,
                 "noise_seed": 42,
             }
         ],
