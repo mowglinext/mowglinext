@@ -481,7 +481,16 @@
                 <Sequence name="MowOneArea">
                   <GetNextUnmowedArea area_index="{current_area_index}"/>
                   <PublishHighLevelStatus state="2" state_name="MOWING"/>
-                  <MowAreaWithCoverage area_index="{current_area_index}"/>
+                  <!-- "Option 2" pivot-in-place coverage:
+                       1. ComputeCoveragePath calls /compute_coverage_path,
+                          stashes both nav_path AND swaths[] in BTContext.
+                       2. NavigateToFirstStripPose drives Smac+RPP to swath[0].start.
+                       3. FollowSwathsWithSpin loops swaths: /spin to align,
+                          /follow_path with a 2-pose mini-path. Discards
+                          F2C's inter-strip turn arcs. -->
+                  <ComputeCoveragePath area_index="{current_area_index}"/>
+                  <NavigateToFirstStripPose/>
+                  <FollowSwathsWithSpin area_index="{current_area_index}"/>
                 </Sequence>
               </Repeat>
 

@@ -125,6 +125,7 @@ if(BUILD_TESTING)
     behaviortree_cpp
     mowgli_interfaces
     nav_msgs
+    opennav_coverage_msgs
     tf2
     tf2_ros
   )

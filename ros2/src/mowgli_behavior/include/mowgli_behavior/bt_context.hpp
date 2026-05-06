@@ -28,6 +28,7 @@
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
 #include "nav_msgs/msg/path.hpp"
+#include "opennav_coverage_msgs/msg/swath.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "tf2_ros/buffer.hpp"
 #include "tf2_ros/transform_listener.hpp"
@@ -224,10 +225,17 @@ struct BTContext
   // -----------------------------------------------------------------------
 
   nav_msgs::msg::Path current_coverage_path;
-  // PathComponents lives in opennav_coverage_msgs — including the header here
-  // would propagate through every BT translation unit. Forward-declare in
-  // coverage_nodes.cpp instead and reference via shared_ptr if needed; for
-  // now the path itself is enough state for the inner loop.
+
+  /// Per-strip endpoints from F2C — the start/end of each boustrophedon
+  /// swath, *without* the inter-strip turn arcs that F2C also generates.
+  /// `FollowSwathsWithSpin` iterates this list, sending /spin to align
+  /// the robot with each strip direction and /follow_path with a
+  /// straight-line mini-path strip[i].start → strip[i].end. This bypasses
+  /// MPPI's smooth U-turn arcs in favour of explicit pivot-in-place
+  /// transitions between strips — the lawn-mower aesthetic the user
+  /// specifically asked for, matching what main-branch FTC achieved
+  /// before the migration to opennav_coverage.
+  std::vector<opennav_coverage_msgs::msg::Swath> current_swaths;
 
   /// Path C: termination reason returned by the segment selector for
   /// the current segment ("boundary" / "obstacle" / "dead_zone" /

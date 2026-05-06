@@ -277,6 +277,15 @@ BT::NodeStatus ComputeCoveragePath::onRunning()
   if (ctx->current_coverage_path.header.frame_id.empty())
     ctx->current_coverage_path.header.frame_id = "map";
 
+  // Stash the per-strip endpoints (swath start/end pairs) separately so
+  // FollowSwathsWithSpin can iterate them without parsing the connected
+  // nav_path. F2C already emits this structured data in the action result
+  // — coverage_path.swaths[] is the ordered list of straight-line strips
+  // and coverage_path.turns[] is the per-transition arc paths we don't
+  // want to follow. Discarding turns gives us pure strip endpoints for
+  // explicit Spin + FollowPath orchestration.
+  ctx->current_swaths = wrapped.result->coverage_path.swaths;
+
   // The F2C coverage_plan goes to MPPI AS-IS. The previous version
   // prepended the robot's current pose to path[0] under the theory
   // that MPPI's PathHandler::transformPath would truncate the plan
@@ -920,6 +929,368 @@ void MowAreaWithCoverage::recordPose()
 }
 
 void MowAreaWithCoverage::paintTrajectory(const nav_msgs::msg::Path& trajectory)
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  if (trajectory.poses.empty()) return;
+  if (!paint_client_)
+  {
+    paint_client_ = ctx->node->create_client<mowgli_interfaces::srv::PaintSwath>(
+        "/map_server_node/paint_swath");
+  }
+  if (!paint_client_->wait_for_service(std::chrono::milliseconds(500))) return;
+  auto req = std::make_shared<mowgli_interfaces::srv::PaintSwath::Request>();
+  req->swath_path = trajectory;
+  paint_client_->async_send_request(req);
+}
+
+// ===========================================================================
+// FollowSwathsWithSpin — pivot-in-place orchestrator over F2C swaths.
+//
+// State machine:
+//   onStart  → SPIN to align with strip[0] heading
+//   SPIN     → on success: FOLLOW
+//   FOLLOW   → on success: NEXT_STRIP
+//   NEXT_STRIP → strip_idx++; if more strips → SPIN, else DONE_OK
+// ===========================================================================
+
+namespace
+{
+double yawFromQuat(const geometry_msgs::msg::Quaternion& q)
+{
+  return std::atan2(2.0 * (q.w * q.z + q.x * q.y),
+                    1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+}
+
+double wrapAngle(double a)
+{
+  while (a > M_PI) a -= 2.0 * M_PI;
+  while (a < -M_PI) a += 2.0 * M_PI;
+  return a;
+}
+}  // namespace
+
+double FollowSwathsWithSpin::swathHeadingRad(std::size_t idx) const
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  const auto& sw = ctx->current_swaths.at(idx);
+  return std::atan2(sw.end.y - sw.start.y, sw.end.x - sw.start.x);
+}
+
+nav_msgs::msg::Path FollowSwathsWithSpin::buildStripPath(std::size_t idx,
+                                                          double heading) const
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  const auto& sw = ctx->current_swaths.at(idx);
+  nav_msgs::msg::Path path;
+  path.header.frame_id = "map";
+  path.header.stamp = ctx->node->now();
+
+  const double qz = std::sin(heading / 2.0);
+  const double qw = std::cos(heading / 2.0);
+
+  geometry_msgs::msg::PoseStamped start;
+  start.header = path.header;
+  start.pose.position.x = sw.start.x;
+  start.pose.position.y = sw.start.y;
+  start.pose.orientation.z = qz;
+  start.pose.orientation.w = qw;
+  path.poses.push_back(start);
+
+  geometry_msgs::msg::PoseStamped end;
+  end.header = path.header;
+  end.pose.position.x = sw.end.x;
+  end.pose.position.y = sw.end.y;
+  end.pose.orientation.z = qz;
+  end.pose.orientation.w = qw;
+  path.poses.push_back(end);
+
+  return path;
+}
+
+BT::NodeStatus FollowSwathsWithSpin::startSpinTo(double target_heading)
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  // Look up current robot yaw via TF.
+  geometry_msgs::msg::TransformStamped tf;
+  try
+  {
+    tf = ctx->tf_buffer->lookupTransform(
+        "map", "base_footprint", tf2::TimePointZero, tf2::durationFromSec(0.2));
+  }
+  catch (const tf2::TransformException& e)
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "FollowSwathsWithSpin: TF lookup failed: %s", e.what());
+    return BT::NodeStatus::FAILURE;
+  }
+  const double current_yaw = yawFromQuat(tf.transform.rotation);
+  const double delta = wrapAngle(target_heading - current_yaw);
+
+  if (!spin_client_)
+  {
+    spin_client_ = rclcpp_action::create_client<SpinAction>(ctx->node, "/spin");
+  }
+  if (!spin_client_->wait_for_action_server(std::chrono::seconds(2)))
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "FollowSwathsWithSpin: /spin action server not available");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  SpinAction::Goal goal;
+  goal.target_yaw = delta;
+  goal.time_allowance = rclcpp::Duration::from_seconds(15.0);
+  spin_handle_.reset();
+  spin_result_requested_ = false;
+  spin_future_ = spin_client_->async_send_goal(goal);
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "FollowSwathsWithSpin: spin strip[%zu] heading %.1f° "
+              "(current yaw %.1f° → delta %.1f°)",
+              strip_idx_, target_heading * 180.0 / M_PI,
+              current_yaw * 180.0 / M_PI, delta * 180.0 / M_PI);
+  return BT::NodeStatus::RUNNING;
+}
+
+BT::NodeStatus FollowSwathsWithSpin::startFollow()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  if (!follow_client_)
+  {
+    follow_client_ = rclcpp_action::create_client<FollowPathAction>(
+        ctx->node, "/follow_path");
+  }
+  if (!follow_client_->wait_for_action_server(std::chrono::seconds(2)))
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "FollowSwathsWithSpin: /follow_path not available");
+    return BT::NodeStatus::FAILURE;
+  }
+  FollowPathAction::Goal goal;
+  goal.path = buildStripPath(strip_idx_, current_strip_heading_);
+  goal.controller_id = "FollowCoveragePath";
+  goal.goal_checker_id = "coverage_goal_checker";
+  follow_handle_.reset();
+  follow_result_requested_ = false;
+  follow_future_ = follow_client_->async_send_goal(goal);
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "FollowSwathsWithSpin: follow strip[%zu] (start=(%.2f,%.2f) "
+              "end=(%.2f,%.2f) heading=%.1f°)",
+              strip_idx_,
+              ctx->current_swaths[strip_idx_].start.x,
+              ctx->current_swaths[strip_idx_].start.y,
+              ctx->current_swaths[strip_idx_].end.x,
+              ctx->current_swaths[strip_idx_].end.y,
+              current_strip_heading_ * 180.0 / M_PI);
+  return BT::NodeStatus::RUNNING;
+}
+
+BT::NodeStatus FollowSwathsWithSpin::onStart()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  uint32_t area_idx = 0;
+  getInput<uint32_t>("area_index", area_idx);
+  area_idx_ = area_idx;
+
+  if (ctx->current_swaths.empty())
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "FollowSwathsWithSpin: ctx->current_swaths empty — did "
+                 "ComputeCoveragePath run first?");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  strip_idx_ = 0;
+  current_strip_heading_ = swathHeadingRad(strip_idx_);
+
+  driven_trajectory_ = nav_msgs::msg::Path();
+  driven_trajectory_.header.frame_id = "map";
+  setBladeEnabled(true);
+  recordPose();
+
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "FollowSwathsWithSpin: starting %zu strips for area %u",
+              ctx->current_swaths.size(), area_idx_);
+
+  state_ = State::SPIN;
+  return startSpinTo(current_strip_heading_);
+}
+
+BT::NodeStatus FollowSwathsWithSpin::onRunning()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  recordPose();
+
+  switch (state_)
+  {
+    case State::SPIN:
+    {
+      if (!spin_handle_)
+      {
+        if (spin_future_.wait_for(std::chrono::milliseconds(0)) !=
+            std::future_status::ready)
+          return BT::NodeStatus::RUNNING;
+        spin_handle_ = spin_future_.get();
+        if (!spin_handle_)
+        {
+          RCLCPP_ERROR(ctx->node->get_logger(),
+                       "FollowSwathsWithSpin: /spin goal rejected");
+          state_ = State::DONE_FAIL;
+          break;
+        }
+      }
+      if (!spin_result_requested_)
+      {
+        spin_result_future_ = spin_client_->async_get_result(spin_handle_);
+        spin_result_requested_ = true;
+      }
+      if (spin_result_future_.wait_for(std::chrono::milliseconds(0)) !=
+          std::future_status::ready)
+        return BT::NodeStatus::RUNNING;
+      const auto wrapped = spin_result_future_.get();
+      if (wrapped.code != rclcpp_action::ResultCode::SUCCEEDED)
+      {
+        RCLCPP_WARN(ctx->node->get_logger(),
+                    "FollowSwathsWithSpin: spin code=%d — proceeding to follow anyway",
+                    static_cast<int>(wrapped.code));
+        // Don't fail on spin imperfection; FollowPath will refine heading.
+      }
+      state_ = State::FOLLOW;
+      const auto status = startFollow();
+      if (status == BT::NodeStatus::FAILURE) state_ = State::DONE_FAIL;
+      break;
+    }
+    case State::FOLLOW:
+    {
+      if (!follow_handle_)
+      {
+        if (follow_future_.wait_for(std::chrono::milliseconds(0)) !=
+            std::future_status::ready)
+          return BT::NodeStatus::RUNNING;
+        follow_handle_ = follow_future_.get();
+        if (!follow_handle_)
+        {
+          RCLCPP_ERROR(ctx->node->get_logger(),
+                       "FollowSwathsWithSpin: /follow_path rejected");
+          state_ = State::DONE_FAIL;
+          break;
+        }
+      }
+      if (!follow_result_requested_)
+      {
+        follow_result_future_ = follow_client_->async_get_result(follow_handle_);
+        follow_result_requested_ = true;
+      }
+      if (follow_result_future_.wait_for(std::chrono::milliseconds(0)) !=
+          std::future_status::ready)
+        return BT::NodeStatus::RUNNING;
+      const auto wrapped = follow_result_future_.get();
+      if (wrapped.code != rclcpp_action::ResultCode::SUCCEEDED)
+      {
+        RCLCPP_WARN(ctx->node->get_logger(),
+                    "FollowSwathsWithSpin: strip[%zu] follow_path code=%d — "
+                    "advancing to next strip anyway",
+                    strip_idx_, static_cast<int>(wrapped.code));
+      }
+      state_ = State::NEXT_STRIP;
+      break;
+    }
+    case State::NEXT_STRIP:
+    {
+      ++strip_idx_;
+      if (strip_idx_ >= ctx->current_swaths.size())
+      {
+        state_ = State::DONE_OK;
+        break;
+      }
+      current_strip_heading_ = swathHeadingRad(strip_idx_);
+      state_ = State::SPIN;
+      const auto status = startSpinTo(current_strip_heading_);
+      if (status == BT::NodeStatus::FAILURE) state_ = State::DONE_FAIL;
+      break;
+    }
+    case State::DONE_OK:
+    case State::DONE_FAIL:
+      break;
+  }
+
+  if (state_ == State::DONE_OK)
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "FollowSwathsWithSpin: complete — %zu strips done, painting "
+                "%zu driven poses", ctx->current_swaths.size(),
+                driven_trajectory_.poses.size());
+    paintTrajectory(driven_trajectory_);
+    setBladeEnabled(false);
+    return BT::NodeStatus::SUCCESS;
+  }
+  if (state_ == State::DONE_FAIL)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowSwathsWithSpin: failed at strip[%zu] — painting %zu "
+                "driven poses anyway", strip_idx_, driven_trajectory_.poses.size());
+    paintTrajectory(driven_trajectory_);
+    setBladeEnabled(false);
+    return BT::NodeStatus::FAILURE;
+  }
+  return BT::NodeStatus::RUNNING;
+}
+
+void FollowSwathsWithSpin::onHalted()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  if (spin_handle_) spin_client_->async_cancel_goal(spin_handle_);
+  if (follow_handle_) follow_client_->async_cancel_goal(follow_handle_);
+  setBladeEnabled(false);
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "FollowSwathsWithSpin: halted at strip[%zu]/%zu", strip_idx_,
+              ctx->current_swaths.size());
+}
+
+void FollowSwathsWithSpin::setBladeEnabled(bool enabled)
+{
+  if (blade_on_ == enabled) return;
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  if (!blade_client_)
+  {
+    blade_client_ = ctx->node->create_client<mowgli_interfaces::srv::MowerControl>(
+        "/hardware_bridge/mower_control");
+  }
+  if (!blade_client_->wait_for_service(std::chrono::milliseconds(200))) return;
+  auto req = std::make_shared<mowgli_interfaces::srv::MowerControl::Request>();
+  req->mow_enabled = enabled ? 1u : 0u;
+  blade_client_->async_send_request(req);
+  blade_on_ = enabled;
+}
+
+void FollowSwathsWithSpin::recordPose()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  geometry_msgs::msg::TransformStamped tf;
+  try
+  {
+    tf = ctx->tf_buffer->lookupTransform(
+        "map", "base_footprint", tf2::TimePointZero, tf2::durationFromSec(0.05));
+  }
+  catch (const tf2::TransformException&) { return; }
+  const double x = tf.transform.translation.x;
+  const double y = tf.transform.translation.y;
+  if (!driven_trajectory_.poses.empty())
+  {
+    const auto& last = driven_trajectory_.poses.back().pose.position;
+    const double dx = x - last.x, dy = y - last.y;
+    if (dx * dx + dy * dy < min_pose_step_m_ * min_pose_step_m_) return;
+  }
+  geometry_msgs::msg::PoseStamped ps;
+  ps.header.frame_id = "map";
+  ps.header.stamp = ctx->node->now();
+  ps.pose.position.x = x;
+  ps.pose.position.y = y;
+  ps.pose.orientation = tf.transform.rotation;
+  driven_trajectory_.poses.push_back(ps);
+}
+
+void FollowSwathsWithSpin::paintTrajectory(const nav_msgs::msg::Path& trajectory)
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   if (trajectory.poses.empty()) return;

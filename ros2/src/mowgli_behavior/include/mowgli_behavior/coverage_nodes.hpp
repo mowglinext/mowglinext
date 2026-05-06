@@ -30,6 +30,7 @@
 #include "mowgli_interfaces/srv/paint_swath.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
+#include "nav2_msgs/action/spin.hpp"
 #include "opennav_coverage_msgs/action/compute_coverage_path.hpp"
 #include "opennav_coverage_msgs/action/navigate_complete_coverage.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -248,6 +249,111 @@ private:
   nav_msgs::msg::Path driven_trajectory_;
   static constexpr double min_pose_step_m_ = 0.05;
   bool blade_on_{false};
+};
+
+// ---------------------------------------------------------------------------
+// FollowSwathsWithSpin — pivot-in-place at strip ends.
+//
+// Iterates ctx->current_swaths (populated by ComputeCoveragePath from
+// F2C's coverage_path.swaths[]). For each strip:
+//
+//   1. /spin — pivot in place to align with the strip's heading (atan2
+//      from start to end). The first strip's spin handles the post-
+//      NavigateToFirstStripPose alignment; subsequent spins are 180°
+//      flips between adjacent boustrophedon strips.
+//   2. /follow_path — follow a 2-pose mini-path (start → end) along
+//      the strip with FollowCoveragePath controller (MPPI). Since the
+//      mini-path is a straight line, MPPI tracks it cleanly without
+//      the wide-arc smoothing it does at strip-end transitions of
+//      F2C's connected nav_path.
+//
+// On SUCCESS, paints the driven track into mow_progress.
+//
+// This node is the "option 2" implementation of the user's pivot-in-
+// place request: F2C still plans the coverage layout, but we discard
+// its inter-strip turn arcs and synthesise explicit pivots ourselves.
+// Mirrors what main-branch FTC achieved before the opennav_coverage
+// migration.
+// ---------------------------------------------------------------------------
+
+class FollowSwathsWithSpin : public BT::StatefulActionNode
+{
+public:
+  using SpinAction = nav2_msgs::action::Spin;
+  using SpinGoalHandle = rclcpp_action::ClientGoalHandle<SpinAction>;
+  using FollowPathAction = nav2_msgs::action::FollowPath;
+  using FollowGoalHandle = rclcpp_action::ClientGoalHandle<FollowPathAction>;
+
+  FollowSwathsWithSpin(const std::string& name, const BT::NodeConfig& config)
+      : BT::StatefulActionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<uint32_t>("area_index", 0u, "Mowing area index — for paint")};
+  }
+
+  BT::NodeStatus onStart() override;
+  BT::NodeStatus onRunning() override;
+  void onHalted() override;
+
+private:
+  enum class State
+  {
+    SPIN,         // /spin pending (aligning to strip[strip_idx_] heading)
+    FOLLOW,       // /follow_path pending (driving along strip[strip_idx_])
+    NEXT_STRIP,   // momentary; advance strip_idx_ then back to SPIN or DONE
+    DONE_OK,
+    DONE_FAIL,
+  };
+
+  void setBladeEnabled(bool enabled);
+  void paintTrajectory(const nav_msgs::msg::Path& trajectory);
+  void recordPose();
+
+  /// Compute the heading the robot should face to drive strip[i].start →
+  /// strip[i].end as a forward straight line.
+  double swathHeadingRad(std::size_t idx) const;
+
+  /// Build a 2-pose nav_msgs/Path for FollowPath: header = map / now,
+  /// poses[0] = swath start at heading h, poses[1] = swath end at h.
+  nav_msgs::msg::Path buildStripPath(std::size_t idx, double heading) const;
+
+  /// Send /spin with target_yaw = delta to align robot with strip
+  /// heading. Returns RUNNING (goal sent) or FAILURE (server unavailable).
+  BT::NodeStatus startSpinTo(double target_heading);
+
+  /// Send /follow_path for strip[strip_idx_]. Returns RUNNING or FAILURE.
+  BT::NodeStatus startFollow();
+
+  rclcpp_action::Client<SpinAction>::SharedPtr spin_client_;
+  rclcpp_action::Client<FollowPathAction>::SharedPtr follow_client_;
+  rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr blade_client_;
+  rclcpp::Client<mowgli_interfaces::srv::PaintSwath>::SharedPtr paint_client_;
+
+  // /spin pending state
+  std::shared_future<SpinGoalHandle::SharedPtr> spin_future_;
+  SpinGoalHandle::SharedPtr spin_handle_;
+  std::shared_future<SpinGoalHandle::WrappedResult> spin_result_future_;
+  bool spin_result_requested_{false};
+
+  // /follow_path pending state
+  std::shared_future<FollowGoalHandle::SharedPtr> follow_future_;
+  FollowGoalHandle::SharedPtr follow_handle_;
+  std::shared_future<FollowGoalHandle::WrappedResult> follow_result_future_;
+  bool follow_result_requested_{false};
+
+  // Iteration state
+  State state_{State::DONE_FAIL};
+  std::size_t strip_idx_{0};
+  double current_strip_heading_{0.0};
+
+  // Driven-track accumulator (same role as in MowAreaWithCoverage).
+  nav_msgs::msg::Path driven_trajectory_;
+  static constexpr double min_pose_step_m_ = 0.05;
+  bool blade_on_{false};
+  uint32_t area_idx_{0};
 };
 
 // ---------------------------------------------------------------------------
