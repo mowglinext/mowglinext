@@ -481,24 +481,28 @@
                 <Sequence name="MowOneArea">
                   <GetNextUnmowedArea area_index="{current_area_index}"/>
                   <PublishHighLevelStatus state="2" state_name="MOWING"/>
-                  <!-- Pivot-in-place coverage with perimeter-first headland:
-                       1. ComputeCoveragePath calls /compute_coverage_path
-                          (also stashes swaths[] and triggers F2C's
-                          /coverage_server/planning_field publication).
-                       2. MowHeadlandPerimeter mows the F2C-published
-                          inset polygon as a closed loop — perimeter
-                          band first, so strip-end transitions in step 4
-                          happen in the already-mowed headland zone with
-                          no boundary-crossing risk.
-                       3. NavigateToFirstStripPose drives Smac+RPP to
-                          swath[0].start (now reached cleanly because
-                          we're inside the mowed perimeter).
-                       4. FollowSwathsWithSpin loops swaths: /spin to
-                          align, /follow_path mini-path. -->
+                  <!-- A/B test of the canonical opennav_coverage pattern
+                       per F2C documentation analysis:
+                         1. ComputeCoveragePath           — F2C plans
+                            (densified at default_turn_point_distance=0.05)
+                         2. MowHeadlandPerimeter          — perimeter pass
+                            (gap in opennav_coverage upstream — F2C has
+                            generateHeadlandSwaths but the wrapper doesn't
+                            emit it, so we still need this)
+                         3. NavigateToFirstStripPose      — transit to
+                            swath[0].start (still useful — gets us inside
+                            the mowed perimeter cleanly)
+                         4. FollowCoveragePath            — drive the entire
+                            F2C nav_path with MPPI in ONE FollowPath goal.
+                            opennav_coverage already densified the path so
+                            PathAlignCritic has dense waypoints; F2C's arcs
+                            stay within the 0.55 m headland buffer.
+                            Replaces FollowSwathsWithSpin's per-strip
+                            /spin + /follow_path loop. -->
                   <ComputeCoveragePath area_index="{current_area_index}"/>
                   <MowHeadlandPerimeter area_index="{current_area_index}"/>
                   <NavigateToFirstStripPose/>
-                  <FollowSwathsWithSpin area_index="{current_area_index}"/>
+                  <FollowCoveragePath area_index="{current_area_index}"/>
                 </Sequence>
               </Repeat>
 
