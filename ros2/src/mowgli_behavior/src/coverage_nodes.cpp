@@ -1307,21 +1307,32 @@ nav_msgs::msg::Path FollowSwathsWithSpin::buildStripPath(std::size_t idx,
   const double qz = std::sin(heading / 2.0);
   const double qw = std::cos(heading / 2.0);
 
-  geometry_msgs::msg::PoseStamped start;
-  start.header = path.header;
-  start.pose.position.x = sw.start.x;
-  start.pose.position.y = sw.start.y;
-  start.pose.orientation.z = qz;
-  start.pose.orientation.w = qw;
-  path.poses.push_back(start);
+  // Interpolate intermediate poses every ~0.10 m so MPPI's PathHandler
+  // has enough waypoints for PathAlignCritic to actually lock onto.
+  // The previous 2-pose path (just start + end) gave PathAlignCritic
+  // only two anchors over a 4.9 m strip — strip-locking force was
+  // effectively zero, MPPI smooth-cost-arced westward and crossed the
+  // polygon edge (sim 50 BV at (-3.01, 1.98) mid strip[0]).
+  // MowHeadlandPerimeter's buildPerimeterPath uses the same step and
+  // tracked the perimeter cleanly, which is the working reference.
+  constexpr double kStepM = 0.10;
+  const double dx = sw.end.x - sw.start.x;
+  const double dy = sw.end.y - sw.start.y;
+  const double L = std::hypot(dx, dy);
+  const std::size_t steps =
+      std::max<std::size_t>(2, static_cast<std::size_t>(std::ceil(L / kStepM)));
 
-  geometry_msgs::msg::PoseStamped end;
-  end.header = path.header;
-  end.pose.position.x = sw.end.x;
-  end.pose.position.y = sw.end.y;
-  end.pose.orientation.z = qz;
-  end.pose.orientation.w = qw;
-  path.poses.push_back(end);
+  for (std::size_t s = 0; s <= steps; ++s)
+  {
+    const double t = static_cast<double>(s) / static_cast<double>(steps);
+    geometry_msgs::msg::PoseStamped p;
+    p.header = path.header;
+    p.pose.position.x = sw.start.x + dx * t;
+    p.pose.position.y = sw.start.y + dy * t;
+    p.pose.orientation.z = qz;
+    p.pose.orientation.w = qw;
+    path.poses.push_back(p);
+  }
 
   return path;
 }
