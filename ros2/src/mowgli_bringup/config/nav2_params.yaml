@@ -237,45 +237,22 @@ controller_server:
     #   * MPPI's ObstaclesCritic gives in-path obstacle deviation that
     #     RPP cannot — the original justification for opennav_coverage.
     FollowCoveragePath:
-      # RotationShim wrapping MPPI: at strip-end 180° turns MPPI alone kept
-      # converging on "rotate at 0.1 rad/s + drift" (PreferForward kept
-      # punishing larger ω; bumping wz_std 0.40 → 0.70 didn't help). The
-      # shim handles initial heading errors > angular_dist_threshold by
-      # rotating in place at rotate_to_heading_angular_vel before letting
-      # MPPI take over for the actual path following. FollowPath already
-      # uses this pattern with RPP — same idea, different inner controller.
-      plugin: "nav2_rotation_shim_controller::RotationShimController"
-      primary_controller: "nav2_mppi_controller::MPPIController"
-      # angular_dist_threshold lowered from 0.4 → 0.2 rad (~11°) — the
-      # shim engages MUCH earlier so it pivots in place through F2C's
-      # strip-end U-turn instead of letting MPPI smooth-arc through the
-      # 180° heading change. MPPI's PreferForwardCritic (weight 5) +
-      # PathFollow outweighed reverse samples even with vx_min=-0.15
-      # (sim #40), so we cannot rely on MPPI to track Reeds-Shepp
-      # Z-patterns; the shim handles the U-turn pivot, MPPI handles
-      # the straight-line tracking between U-turns.
-      # 0.1 rad (~6°): the shim re-engages on every controller tick
-      # where the condition is met, not just at goal start. So this
-      # tight threshold gives pivot-in-place behavior at every
-      # strip-end U-turn corner — the human-mower aesthetic ("turn
-      # in place at strip ends") instead of MPPI's smooth-arc U-turn.
-      angular_dist_threshold: 0.1
-      # Lookahead used to pick the path point for heading comparison.
-      # 0.5 m at desired_linear_vel=0.2 m/s = 2.5 s of upcoming path —
-      # enough time for the shim to detect the impending U-turn before
-      # the robot reaches the strip end and start the pivot.
-      forward_sampling_distance: 0.5
-      rotate_to_heading_angular_vel: 0.85  # matches FollowPath / firmware deadband
-      max_angular_accel: 1.0
-      simulate_ahead_time: 1.0
-      # Inner MPPI parameters (loaded under FollowCoveragePath.* by the shim).
-      # Sized for the RaspberryPi 4 minimum-target hardware: 4× ARM Cortex-A72
-      # at 1.5 GHz with NEON SIMD. time_steps × batch_size × per-step
-      # state-eval cost has to fit the 100 ms control loop deadline.
-      # 30 × 2000 = 60 k state-evals/cycle = 600 k/s — comfortable on RPi 4.
-      # Bumping to 55 × 5000 (GHANSHYAM-13's values) is 4.6× our budget and
-      # would overrun the deadline on RPi 4 — DO NOT increase without first
-      # benchmarking on the target hardware.
+      # Pure MPPI — no rotation_shim wrapper. The shim was tried at two
+      # different angular_dist_threshold settings (sim #45 with 0.2,
+      # sim #46 with 0.1) and neither produced clean pivot-then-go
+      # behavior at strip ends. The shim engages on heading mismatch
+      # but disengages mid-pivot once the threshold is cleared, leaving
+      # MPPI to smooth the rest of the U-turn into an arc. Cleaner to
+      # let MPPI track the F2C path directly and tighten F2C's path
+      # geometry (DISCONTINUOUS Dubins + 0.05 m turn sample distance)
+      # so the U-turn arc is the tightest semicircle F2C can plan.
+      plugin: "nav2_mppi_controller::MPPIController"
+      # MPPI sized for the RaspberryPi 4 minimum-target hardware: 4×
+      # ARM Cortex-A72 at 1.5 GHz with NEON SIMD. time_steps × batch_size
+      # × per-step state-eval cost has to fit the 100 ms control loop
+      # deadline. 30 × 2000 = 60 k state-evals/cycle = 600 k/s —
+      # comfortable on RPi 4. GHANSHYAM-13's 55 × 5000 is 4.6× our
+      # budget and would overrun the deadline on RPi 4.
       time_steps: 30
       model_dt: 0.1                 # match controller_frequency=10Hz period
       batch_size: 2000
@@ -283,21 +260,25 @@ controller_server:
       vy_std: 0.0                   # diff-drive — no lateral
       wz_std: 0.80                  # broad enough to sample up to wz_max=1.5
       vx_max: 0.30
-      # vx_min: 0.10 — forward-only sampling. With F2C now configured
-      # for DUBIN (forward-only paths) and min_turning_radius=0.09 m
-      # so the U-turn arc fits the 0.18 m strip pitch as a clean
-      # forward-only semicircle, MPPI never needs to sample reverse.
-      # vx_min<0 was tried in sim #41 (didn't help — MPPI never
-      # reversed even when allowed) and reverts to the safer
-      # forward-only configuration to avoid the creep-reverse local
-      # minimum at strip ends (sim #17 history).
+      # vx_min: 0.10 — forward-only sampling. F2C is configured for
+      # DUBIN forward-only paths with min_turning_radius=0.09 m so the
+      # U-turn arc fits the 0.18 m strip pitch as a clean forward-only
+      # semicircle. vx_min<0 was tried (sim #41) — MPPI never reversed
+      # even when allowed because PreferForwardCritic + PathFollow
+      # outweighed reverse samples.
       vx_min: 0.10
       wz_max: 1.5
       ax_max: 1.0
       ax_min: -1.0
       az_max: 2.0
       iteration_count: 1
-      prune_distance: 2.0
+      # prune_distance: 0.5 — scaled to GHANSHYAM-13's ratio (their
+      # prune_distance / strip_pitch = 0.7 / 0.25 = 2.8×; ours is
+      # 0.5 / 0.18 = 2.8× same). Larger values let MPPI shortcut to
+      # non-adjacent strips during U-turns; smaller values confine
+      # the sampler to ~3 strips of look-ahead so the next strip is
+      # always the cheapest target.
+      prune_distance: 0.5
       max_robot_pose_search_dist: 5.0
       transform_tolerance: 0.5
       temperature: 0.3
@@ -924,23 +905,24 @@ coverage_server:
     default_route_type: "BOUSTROPHEDON"
     # DUBIN forward-only — paired with min_turning_radius=0.09 the
     # U-turn at strip ends is a forward-only semicircle of diameter
-    # 0.18 m that fits exactly into the strip pitch. No reverse legs
-    # for the controller to deal with. This is GHANSHYAM-13's SIM
-    # config (DUBIN + min_turning_radius=0.125, operation_width=0.25).
+    # 0.18 m that fits exactly into the strip pitch.
     #
-    # REEDS_SHEPP was used previously (sim #20-#42) when
-    # min_turning_radius=0.30 forced the U-turn diameter (0.60 m) to
-    # exceed the strip pitch (0.18 m), making forward-only impossible.
-    # MPPI then ignored the planned reverse legs and arced through
-    # them — the wide-arc problem.
-    #
-    # The earlier DUBIN attempts (sim #22-23) used min_turning_radius
-    # in the 0.30+ range so the arc was geometrically too wide for
-    # the strip pitch — that test was apples-to-oranges. With the
-    # turning radius now set to half the strip pitch, DUBIN is the
-    # right choice.
+    # DISCONTINUOUS uses raw f2c::pp::DubinsCurves — pure circular arcs
+    # with sharp transitions at strip endpoints. CONTINUOUS uses
+    # DubinsCurvesCC which adds clothoid smoothing on either side of
+    # the arc, enlarging the turn footprint and giving MPPI a wider
+    # smoother target to track. The earlier DUBIN+DISCONTINUOUS attempt
+    # (sim #22) failed because min_turning_radius=0.30 made the arc
+    # geometrically too wide; with 0.09 m radius the discontinuous arc
+    # is a clean tight semicircle.
     default_path_type: "DUBIN"
-    default_path_continuity_type: "CONTINUOUS"
+    default_path_continuity_type: "DISCONTINUOUS"
+    # turn_point_distance: spacing between path samples through the
+    # U-turn arc. Default 0.10 m gives ~3 samples on a 0.28 m
+    # semicircle (πr at r=0.09). Tighter 0.05 gives ~6 samples — MPPI
+    # tracks the heading change more faithfully through the turn
+    # instead of seeing it as a "step" in path heading.
+    default_turn_point_distance: 0.05
     # Coordinates already in map frame from the BT.
     coordinates_in_cartesian_frame: true
 
