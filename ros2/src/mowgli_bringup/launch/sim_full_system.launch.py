@@ -397,7 +397,15 @@ def generate_launch_description() -> LaunchDescription:
         executable="fake_hardware_bridge_node",
         name="fake_hardware_bridge",
         output="screen",
-        parameters=[sim_time],
+        parameters=[
+            sim_time,
+            {
+                "dock_x": float(robot_params.get("dock_pose_x", 0.0)),
+                "dock_y": float(robot_params.get("dock_pose_y", 0.0)),
+                "dock_pose_yaw": float(robot_params.get("dock_pose_yaw", 0.0)),
+                "dock_proximity": 0.3,
+            },
+        ],
     )
 
     # 11b. twist_mux + cmd_vel unstamper.

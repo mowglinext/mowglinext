@@ -6,18 +6,26 @@
     x  forward   y  left   z  up
 
   Key geometry (YardForce Classic 500):
-    Base (chassis):  0.54 m long, 0.40 m wide, 0.19 m high, 8.76 kg
-    Drive wheels:    radius 0.04475 m, width 0.04 m, track 0.40 m (rear, x=-0.18)
-    Front casters:   radius 0.03 m, width 0.03 m, track 0.36 m (x=+0.22)
-    Blade disc:      radius 0.09 m, height 0.01 m (beneath chassis)
-    IMU:             at chassis centre, half-height
-    LiDAR:           0.20 m forward, 0.03 m above chassis top
-    GPS:             at chassis centre top (+0.01 m)
+    Base (chassis):  0.60 m long, 0.40 m wide, 0.19 m high, 8.76 kg
+                     centered at chassis_cx=0.18 m forward of base_link
+    Drive wheels:    radius 0.04475 m, width 0.04 m, track 0.325 m (at base_link)
+    Front casters:   radius 0.03 m, track 0.36 m, x=+0.45 (chassis front − caster_radius)
+    Blade disc:      radius 0.09 m, beneath chassis center (x=+0.18)
+    IMU:             at chassis centre (x=+0.18, z=+0.095)
+    LiDAR:           at base_link (x=0, y=+0.024, z=+0.22)
+    GPS:             0.30 m forward of base_link, 0.20 m up
 
-  base_link is placed at wheel-axle height:
+  base_link IS the rear wheel axle (REP-105 + URDF convention):
     z = wheel_radius = 0.04475 m above ground
+    x = 0 (wheels mount here, not behind)
 
-  All joints are relative to base_link unless noted.
+  All sensor offsets in this SDF are body-frame relative to base_link
+  AND match the URDF (mowgli.urdf.xacro) and mowgli_robot.yaml. Any
+  divergence here vs URDF causes phantom sensor motion during in-place
+  rotation (because Gazebo physics rotates the model around base_link
+  but ROS TF places sensors via URDF — if the two disagree, the GPS
+  antenna traces a phantom circle on every U-turn → MPPI fights it
+  with wide compensating arcs → "MPPI loops not strips" symptom).
 -->
 <sdf version="1.9">
   <model name="mowgli_mower">
@@ -28,24 +36,35 @@
          ============================================================== -->
     <link name="base_link">
       <inertial>
+        <!-- Inertial frame at base_link (= wheel axle). Chassis box (mass)
+             is shifted +0.18 m forward via <pose> below; the <inertia>
+             tensor is computed at the chassis CoM (a 0.60×0.40×0.19 box)
+             so SDF parses it correctly. The CoM offset doesn't change
+             the principal moments — Gazebo applies the inertial pose to
+             place the CoM correctly while the principal moments stay box-
+             of-given-dimensions. -->
+        <pose>0.18 0 0.095 0 0 0</pose>
         <mass>8.76</mass>
-        <!-- Box inertia: m/12 * (y^2+z^2), etc. for 0.54×0.40×0.19 -->
+        <!-- Box inertia for 0.60×0.40×0.19 -->
         <inertia>
-          <ixx>0.1459</ixx>  <!-- 8.76/12*(0.40^2+0.19^2) = 0.73*(0.16+0.0361) -->
+          <ixx>0.1459</ixx>  <!-- 8.76/12*(0.40^2+0.19^2) -->
           <ixy>0</ixy>
           <ixz>0</ixz>
-          <iyy>0.2396</iyy>  <!-- 8.76/12*(0.54^2+0.19^2) = 0.73*(0.2916+0.0361) -->
+          <iyy>0.2891</iyy>  <!-- 8.76/12*(0.60^2+0.19^2) -->
           <iyz>0</iyz>
-          <izz>0.3296</izz>  <!-- 8.76/12*(0.54^2+0.40^2) = 0.73*(0.2916+0.16) -->
+          <izz>0.3796</izz>  <!-- 8.76/12*(0.60^2+0.40^2) -->
         </inertia>
       </inertial>
 
       <!-- Chassis visual — green
+           Pose: chassis center at (chassis_cx=0.18, 0, base_height/2=0.095)
+           relative to base_link (= wheel axle). MUST match the URDF
+           chassis link visual at same offset (mowgli.urdf.xacro line 153).
            visibility_flags 0x0001: invisible to LiDAR (mask 0xFFFF0000) -->
       <visual name="chassis_visual">
-        <pose>0 0 0.095 0 0 0</pose>
+        <pose>0.18 0 0.095 0 0 0</pose>
         <geometry>
-          <box><size>0.54 0.40 0.19</size></box>
+          <box><size>0.60 0.40 0.19</size></box>
         </geometry>
         <material>
           <ambient>0.18 0.55 0.18 1</ambient>
@@ -55,11 +74,11 @@
         <visibility_flags>0x0001</visibility_flags>
       </visual>
 
-      <!-- Chassis collision -->
+      <!-- Chassis collision (matches URDF + Nav2 footprint dimensions) -->
       <collision name="chassis_collision">
-        <pose>0 0 0.095 0 0 0</pose>
+        <pose>0.18 0 0.095 0 0 0</pose>
         <geometry>
-          <box><size>0.54 0.40 0.19</size></box>
+          <box><size>0.60 0.40 0.19</size></box>
         </geometry>
         <surface>
           <friction>
@@ -120,11 +139,11 @@
     </link>
 
     <!-- ==============================================================
-         LEFT DRIVE WHEEL (rear)
-         Position: x=-0.18, y=+0.20 (track/2), z=0
+         LEFT DRIVE WHEEL (rear, AT base_link)
+         Position: x=0 (base_link is wheel axle), y=+0.1625 (wheel_track/2 = 0.325/2)
          ============================================================== -->
     <link name="left_wheel">
-      <pose>-0.18 0.20 0 -1.5708 0 0</pose>
+      <pose>0 0.1625 0 -1.5708 0 0</pose>
       <inertial>
         <mass>0.5</mass>
         <!-- Cylinder axis along z (after rotation): ixx=iyy=m/12*(3r^2+h^2), izz=m/2*r^2 -->
@@ -191,7 +210,7 @@
          Position: x=-0.18, y=-0.20 (track/2), z=0
          ============================================================== -->
     <link name="right_wheel">
-      <pose>-0.18 -0.20 0 1.5708 0 0</pose>
+      <pose>0 -0.1625 0 1.5708 0 0</pose>
       <inertial>
         <mass>0.5</mass>
         <inertia>
@@ -254,11 +273,13 @@
 
     <!-- ==============================================================
          FRONT LEFT CASTER WHEEL
-         Position: x=+0.22, y=+0.18 (caster_track/2), z drops to ground
-         z = -(wheel_radius - caster_radius) = -(0.04475 - 0.03) = -0.01475
+         caster_x_offset = chassis_cx + chassis_length/2 - caster_radius
+                         = 0.18 + 0.30 - 0.03 = 0.45 (matches URDF)
+         caster_y = +0.18 (caster_track/2 = 0.36/2)
+         z = -(wheel_radius - caster_radius) = -0.01475
          ============================================================== -->
     <link name="front_left_caster">
-      <pose>0.22 0.18 -0.01475 0 0 0</pose>
+      <pose>0.45 0.18 -0.01475 0 0 0</pose>
       <inertial>
         <mass>0.2</mass>
         <!-- Sphere: I = 2/5 * m * r^2 = 2/5 * 0.2 * 0.03^2 -->
@@ -311,10 +332,10 @@
 
     <!-- ==============================================================
          FRONT RIGHT CASTER WHEEL
-         Position: x=+0.22, y=-0.18 (caster_track/2), z=-0.01475
+         x=+0.45, y=-0.18 (caster_track/2), z=-0.01475
          ============================================================== -->
     <link name="front_right_caster">
-      <pose>0.22 -0.18 -0.01475 0 0 0</pose>
+      <pose>0.45 -0.18 -0.01475 0 0 0</pose>
       <inertial>
         <mass>0.2</mass>
         <inertia>
@@ -366,11 +387,11 @@
 
     <!-- ==============================================================
          BLADE DISC
-         Centred under chassis, just above ground
+         Centred under chassis (x=chassis_cx=0.18), just above ground.
          z = -(wheel_radius) + 0.05 = -0.04475 + 0.05 = 0.00525
          ============================================================== -->
     <link name="blade_link">
-      <pose>0 0 0.00525 0 0 0</pose>
+      <pose>0.18 0 0.00525 0 0 0</pose>
       <inertial>
         <mass>0.3</mass>
         <inertia>
@@ -499,7 +520,7 @@
         name="gz::sim::systems::DiffDrive">
       <left_joint>left_wheel_joint</left_joint>
       <right_joint>right_wheel_joint</right_joint>
-      <wheel_separation>0.40</wheel_separation>
+      <wheel_separation>0.325</wheel_separation>
       <wheel_radius>0.04475</wheel_radius>
       <odom_publish_frequency>50</odom_publish_frequency>
       <topic>/cmd_vel</topic>

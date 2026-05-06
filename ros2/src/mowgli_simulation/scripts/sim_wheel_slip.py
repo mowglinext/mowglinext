@@ -116,10 +116,24 @@ class SimWheelSlip(Node):
 
     def _on_odom(self, msg: Odometry) -> None:
         ros_now_s = self.get_clock().now().nanoseconds * 1e-9
-        out = msg  # nav_msgs/Odometry — we only mutate twist.linear.x
+        out = msg  # nav_msgs/Odometry — we mutate twist.linear.x and covariance
         if self._slip_active(ros_now_s):
             out.twist.twist.linear.x += self._slip_vx_bias
             self._slip_count += 1
+        # Override covariance to match the real hardware_bridge values
+        # (hardware_bridge_node.cpp ~lines 1196-1212). gz-sim diff-drive
+        # publishes default covariance which doesn't enforce the
+        # non-holonomic constraint on vy. Without cov[7]=1e-4, GPS lateral
+        # noise leaks into apparent sideways drift inside the EKF.
+        # Indices: row-major 6×6 — vx=[0], vy=[7], vz=[14], wx=[21], wy=[28], wz=[35].
+        cov = list(out.twist.covariance)
+        cov[0] = 0.01
+        cov[7] = 1e-4
+        cov[14] = 1e6
+        cov[21] = 1e6
+        cov[28] = 1e6
+        cov[35] = 9e-4
+        out.twist.covariance = cov
         self._pub.publish(out)
 
     def _log_stats(self) -> None:

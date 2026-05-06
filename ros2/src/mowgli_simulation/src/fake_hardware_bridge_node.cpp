@@ -42,6 +42,7 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/battery_state.hpp"
+#include "sensor_msgs/msg/imu.hpp"
 
 class FakeHardwareBridgeNode : public rclcpp::Node
 {
@@ -81,9 +82,11 @@ public:
     // Dock position (origin) and proximity threshold
     declare_parameter<double>("dock_x", 0.0);
     declare_parameter<double>("dock_y", 0.0);
+    declare_parameter<double>("dock_pose_yaw", 0.0);
     declare_parameter<double>("dock_proximity", 0.3);
     dock_x_ = get_parameter("dock_x").as_double();
     dock_y_ = get_parameter("dock_y").as_double();
+    dock_yaw_ = get_parameter("dock_pose_yaw").as_double();
     dock_proximity_ = get_parameter("dock_proximity").as_double();
 
     // Publishers
@@ -96,6 +99,12 @@ public:
                                                             rclcpp::QoS(10));
     battery_state_pub_ =
         create_publisher<sensor_msgs::msg::BatteryState>("/battery_state", rclcpp::QoS(10));
+    // Real hardware_bridge publishes ~/dock_heading at 1 Hz while charging
+    // (remapped via mowgli.launch.py to /gnss/heading). Mirror that here so
+    // calibrate_imu_yaw_node and dock_yaw_to_set_pose see the same data
+    // path in sim as on real hardware.
+    dock_heading_pub_ = create_publisher<sensor_msgs::msg::Imu>(
+        "/gnss/heading", rclcpp::QoS(10));
 
     // Subscribe to map-frame pose so the dock-proximity test compares like-
     // for-like with dock_x/dock_y (which are map-frame coordinates). The
@@ -118,8 +127,13 @@ public:
           odom_received_ = true;
         });
 
-    // Publish at 1 Hz
-    timer_ = create_wall_timer(std::chrono::seconds(1),
+    // Publish at 10 Hz to match the real bridge's effective Status emission
+    // rate (firmware aggregates LL packets at ~47 Hz, the BT consumes
+    // Status at its tick_rate=10 Hz). 1 Hz was too slow — the rising
+    // edge of is_charging (which gates the EKF dock-yaw seed,
+    // costmap_scan_filter, calibrate_imu_yaw, etc.) was detected with
+    // up to 1 s latency, racing other startup nodes.
+    timer_ = create_wall_timer(std::chrono::milliseconds(100),
                                [this]()
                                {
                                  publish_fake_data();
@@ -152,18 +166,44 @@ private:
 
     mowgli_interfaces::msg::Status status;
     status.stamp = now;
+    // Field parity with the real hardware_bridge_node so downstream
+    // diagnostics, MQTT bridge, and BT logic see the same picture in sim.
+    status.mower_status = mowgli_interfaces::msg::Status::MOWER_STATUS_OK;
+    status.raspberry_pi_power = true;
+    status.esc_power = !sim_emergency_active_;
+    status.rain_detected = false;
+    status.sound_module_available = false;
+    status.sound_module_busy = false;
+    status.ui_board_available = true;
     status.mow_enabled = mow_enabled_;
+    status.mower_esc_status = 0;
+    status.mower_esc_temperature = 25.0f;
+    status.mower_esc_current = mow_enabled_ ? 0.5f : 0.0f;
+    status.mower_motor_temperature = mow_enabled_ ? 30.0f : 25.0f;
+    status.mower_motor_rpm = mow_enabled_ ? 3000.0f : 0.0f;
     // is_charging mirrors near_dock — opennav_docking, dock_yaw_to_set_pose,
     // BoundaryGuard, calibrate_imu_yaw, and the BT all gate on this.
-    // Was unset (default false) before, which silently broke the EKF
-    // map-yaw seed: dock_yaw_to_set_pose only fires on rising edge of
-    // is_charging, but with is_charging never going true the seed never
-    // fired, EKF stayed at yaw=0 instead of dock_pose_yaw=4.17, the GPS
-    // lever-arm correction got the wrong rotation, and /odometry/filtered_map
-    // reported base_link 0.45 m off Gazebo truth. BoundaryGuard then
-    // false-positive-tripped before any coverage iteration could start.
     status.is_charging = near_dock;
     status_pub_->publish(status);
+
+    // Dock heading: synthetic Imu with quaternion encoding dock_pose_yaw.
+    // The real hardware_bridge publishes this at 1 Hz while charging from
+    // the GPS COG snapshot at the moment of docking. We can publish it
+    // continuously while near_dock — consumers (calibrate_imu_yaw,
+    // dock_yaw_to_set_pose) only read while charging anyway.
+    if (near_dock)
+    {
+      sensor_msgs::msg::Imu heading;
+      heading.header.stamp = now;
+      heading.header.frame_id = "base_link";
+      heading.orientation.w = std::cos(dock_yaw_ / 2.0);
+      heading.orientation.x = 0.0;
+      heading.orientation.y = 0.0;
+      heading.orientation.z = std::sin(dock_yaw_ / 2.0);
+      heading.orientation_covariance[0] = -1.0;  // signal: only orientation valid
+      heading.orientation_covariance[8] = 0.001;
+      dock_heading_pub_->publish(heading);
+    }
 
     mowgli_interfaces::msg::Power power;
     power.stamp = now;
@@ -201,6 +241,7 @@ private:
   rclcpp::Publisher<mowgli_interfaces::msg::Power>::SharedPtr power_pub_;
   rclcpp::Publisher<mowgli_interfaces::msg::Emergency>::SharedPtr emergency_pub_;
   rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr battery_state_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr dock_heading_pub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
@@ -213,6 +254,7 @@ private:
   // Dock position and proximity threshold
   double dock_x_ = 0.0;
   double dock_y_ = 0.0;
+  double dock_yaw_ = 0.0;
   double dock_proximity_ = 0.3;
 };
 
