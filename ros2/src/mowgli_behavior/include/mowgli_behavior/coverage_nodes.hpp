@@ -252,6 +252,73 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// MowHeadlandPerimeter — perimeter sweep along F2C's planning_field.
+//
+// F2C's coverage_server publishes /coverage_server/planning_field once per
+// ComputeCoveragePath call: the inset polygon = field minus headland_width.
+// behavior_tree_node subscribes (transient_local) and stashes the latest
+// message in ctx->current_planning_field.
+//
+// This node:
+//   1. Reads the planning_field polygon from BTContext.
+//   2. Builds a closed-loop nav_msgs/Path tracing the polygon vertices
+//      (with intermediate poses every ~0.1 m so MPPI's PathHandler has
+//      dense waypoints), starting from whichever vertex is closest to
+//      the robot's current pose.
+//   3. Sends /follow_path with controller_id=FollowCoveragePath (MPPI).
+//   4. Paints the driven track on success.
+//
+// Sequenced BEFORE FollowSwathsWithSpin so the perimeter band is mowed
+// first. Strip-end transitions in FollowSwathsWithSpin then happen
+// safely inside the already-mowed headland zone — no boundary risk.
+// ---------------------------------------------------------------------------
+
+class MowHeadlandPerimeter : public BT::StatefulActionNode
+{
+public:
+  using FollowPathAction = nav2_msgs::action::FollowPath;
+  using FollowGoalHandle = rclcpp_action::ClientGoalHandle<FollowPathAction>;
+
+  MowHeadlandPerimeter(const std::string& name, const BT::NodeConfig& config)
+      : BT::StatefulActionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<uint32_t>("area_index", 0u, "Mowing area index")};
+  }
+
+  BT::NodeStatus onStart() override;
+  BT::NodeStatus onRunning() override;
+  void onHalted() override;
+
+private:
+  void setBladeEnabled(bool enabled);
+  void paintTrajectory(const nav_msgs::msg::Path& trajectory);
+  void recordPose();
+
+  rclcpp_action::Client<FollowPathAction>::SharedPtr follow_client_;
+  rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr blade_client_;
+  rclcpp::Client<mowgli_interfaces::srv::PaintSwath>::SharedPtr paint_client_;
+
+  std::shared_future<FollowGoalHandle::SharedPtr> follow_future_;
+  FollowGoalHandle::SharedPtr follow_handle_;
+  std::shared_future<FollowGoalHandle::WrappedResult> result_future_;
+  bool result_requested_{false};
+
+  nav_msgs::msg::Path driven_trajectory_;
+  static constexpr double min_pose_step_m_ = 0.05;
+  bool blade_on_{false};
+
+  // Per-launch wait for planning_field (subscription is transient_local
+  // so it should arrive immediately after ComputeCoveragePath, but the
+  // first time through there can be a small race).
+  std::chrono::steady_clock::time_point wait_start_;
+  bool waiting_for_planning_field_{false};
+};
+
+// ---------------------------------------------------------------------------
 // FollowSwathsWithSpin — pivot-in-place at strip ends.
 //
 // Iterates ctx->current_swaths (populated by ComputeCoveragePath from

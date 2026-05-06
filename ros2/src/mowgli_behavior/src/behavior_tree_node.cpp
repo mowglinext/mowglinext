@@ -24,6 +24,7 @@
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "behaviortree_cpp/behavior_tree.h"
 #include "behaviortree_cpp/loggers/bt_cout_logger.h"
+#include "geometry_msgs/msg/polygon_stamped.hpp"
 #include "mowgli_behavior/action_nodes.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
@@ -129,6 +130,25 @@ private:
                                          (range > 0.01f) ? 100.0f * (clamped - v_min) / range
                                                          : 0.0f;
                                    });
+
+    // F2C planning_field — published by coverage_server every time
+    // ComputeCoveragePath fires. This is the inset polygon (field minus
+    // headland_width). MowHeadlandPerimeter consumes this to mow the
+    // perimeter band before the interior swaths, so strip-end transitions
+    // happen safely inside the already-mowed headland zone.
+    {
+      rclcpp::QoS qos_planning(rclcpp::KeepLast(1));
+      qos_planning.transient_local();  // catch the message even if BT subscribes late
+      planning_field_sub_ =
+          create_subscription<geometry_msgs::msg::PolygonStamped>(
+              "/coverage_server/planning_field", qos_planning,
+              [this](geometry_msgs::msg::PolygonStamped::ConstSharedPtr msg)
+              {
+                std::lock_guard<std::mutex> lock(context_->context_mutex);
+                context_->current_planning_field = *msg;
+                context_->current_planning_field_valid = true;
+              });
+    }
 
     // Replan / boundary signals from map_server_node
     replan_needed_sub_ =
@@ -477,6 +497,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr replan_needed_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr boundary_violation_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr lethal_boundary_violation_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr planning_field_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::AbsolutePose>::SharedPtr gps_sub_;
   rclcpp::Subscription<nav2_msgs::msg::CollisionMonitorState>::SharedPtr collision_monitor_sub_;
 

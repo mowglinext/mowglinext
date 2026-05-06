@@ -481,14 +481,22 @@
                 <Sequence name="MowOneArea">
                   <GetNextUnmowedArea area_index="{current_area_index}"/>
                   <PublishHighLevelStatus state="2" state_name="MOWING"/>
-                  <!-- "Option 2" pivot-in-place coverage:
-                       1. ComputeCoveragePath calls /compute_coverage_path,
-                          stashes both nav_path AND swaths[] in BTContext.
-                       2. NavigateToFirstStripPose drives Smac+RPP to swath[0].start.
-                       3. FollowSwathsWithSpin loops swaths: /spin to align,
-                          /follow_path with a 2-pose mini-path. Discards
-                          F2C's inter-strip turn arcs. -->
+                  <!-- Pivot-in-place coverage with perimeter-first headland:
+                       1. ComputeCoveragePath calls /compute_coverage_path
+                          (also stashes swaths[] and triggers F2C's
+                          /coverage_server/planning_field publication).
+                       2. MowHeadlandPerimeter mows the F2C-published
+                          inset polygon as a closed loop — perimeter
+                          band first, so strip-end transitions in step 4
+                          happen in the already-mowed headland zone with
+                          no boundary-crossing risk.
+                       3. NavigateToFirstStripPose drives Smac+RPP to
+                          swath[0].start (now reached cleanly because
+                          we're inside the mowed perimeter).
+                       4. FollowSwathsWithSpin loops swaths: /spin to
+                          align, /follow_path mini-path. -->
                   <ComputeCoveragePath area_index="{current_area_index}"/>
+                  <MowHeadlandPerimeter area_index="{current_area_index}"/>
                   <NavigateToFirstStripPose/>
                   <FollowSwathsWithSpin area_index="{current_area_index}"/>
                 </Sequence>

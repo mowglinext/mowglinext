@@ -348,10 +348,17 @@ BT::NodeStatus NavigateToFirstStripPose::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
 
-  if (ctx->current_coverage_path.poses.empty())
+  // Prefer the SWATH endpoint over nav_path[0]. F2C's nav_path may
+  // start with a connector arc *before* the first strip — so
+  // nav_path[0] is the start of the lead-in, not the strip start
+  // itself. Sim 48 BV at (-3.01, 1.65): NavigateToFirstStripPose
+  // landed the robot 0.65 m WEST of strip[0] (planned at X=-2.36),
+  // and FollowSwathsWithSpin's MPPI then carved the boundary trying
+  // to recover. Driving to swath[0].start directly avoids this.
+  if (ctx->current_swaths.empty() && ctx->current_coverage_path.poses.empty())
   {
     RCLCPP_WARN(ctx->node->get_logger(),
-                "NavigateToFirstStripPose: empty coverage path — nothing to do");
+                "NavigateToFirstStripPose: no swaths or coverage path — nothing to do");
     return BT::NodeStatus::SUCCESS;
   }
 
@@ -367,17 +374,39 @@ BT::NodeStatus NavigateToFirstStripPose::onStart()
     return BT::NodeStatus::FAILURE;
   }
 
-  // If we're already within 0.30 m of the first strip pose, skip — the
-  // existing pose is good enough for MPPI to start tracking. This keeps
-  // the second-and-later areas in a multi-area mow from doing a needless
-  // round-trip to a strip endpoint that's already reachable.
-  const auto& target = ctx->current_coverage_path.poses.front().pose.position;
+  geometry_msgs::msg::PoseStamped target_pose;
+  target_pose.header.frame_id = "map";
+  target_pose.header.stamp = ctx->node->now();
+
+  if (!ctx->current_swaths.empty())
+  {
+    const auto& sw = ctx->current_swaths.front();
+    target_pose.pose.position.x = sw.start.x;
+    target_pose.pose.position.y = sw.start.y;
+    // Goal yaw = strip[0] heading so NavigateToPose's RPP arrives
+    // already aligned with the strip — the subsequent Spin in
+    // FollowSwathsWithSpin then has near-zero delta and the
+    // FollowPath starts cleanly on the strip line.
+    const double yaw = std::atan2(sw.end.y - sw.start.y,
+                                   sw.end.x - sw.start.x);
+    target_pose.pose.orientation.z = std::sin(yaw / 2.0);
+    target_pose.pose.orientation.w = std::cos(yaw / 2.0);
+  }
+  else
+  {
+    target_pose = ctx->current_coverage_path.poses.front();
+    if (target_pose.header.frame_id.empty())
+      target_pose.header.frame_id = "map";
+    target_pose.header.stamp = ctx->node->now();
+  }
+
+  // Skip if already at target (within 0.30 m) — multi-area mow case.
   try
   {
     auto base_to_map = ctx->tf_buffer->lookupTransform(
         "map", "base_footprint", tf2::TimePointZero, tf2::durationFromSec(0.5));
-    const double dx = target.x - base_to_map.transform.translation.x;
-    const double dy = target.y - base_to_map.transform.translation.y;
+    const double dx = target_pose.pose.position.x - base_to_map.transform.translation.x;
+    const double dy = target_pose.pose.position.y - base_to_map.transform.translation.y;
     if (std::hypot(dx, dy) < 0.30)
     {
       RCLCPP_INFO(ctx->node->get_logger(),
@@ -391,18 +420,15 @@ BT::NodeStatus NavigateToFirstStripPose::onStart()
   }
 
   NavAction::Goal goal;
-  goal.pose = ctx->current_coverage_path.poses.front();
-  if (goal.pose.header.frame_id.empty())
-    goal.pose.header.frame_id = "map";
-  goal.pose.header.stamp = ctx->node->now();
+  goal.pose = target_pose;
 
   goal_handle_.reset();
   result_requested_ = false;
   goal_future_ = action_client_->async_send_goal(goal);
 
   RCLCPP_INFO(ctx->node->get_logger(),
-              "NavigateToFirstStripPose: navigating to F2C strip[0] = (%.2f, %.2f)",
-              goal.pose.pose.position.x, goal.pose.pose.position.y);
+              "NavigateToFirstStripPose: navigating to swath[0].start=(%.2f, %.2f)",
+              target_pose.pose.position.x, target_pose.pose.position.y);
   return BT::NodeStatus::RUNNING;
 }
 
@@ -929,6 +955,299 @@ void MowAreaWithCoverage::recordPose()
 }
 
 void MowAreaWithCoverage::paintTrajectory(const nav_msgs::msg::Path& trajectory)
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  if (trajectory.poses.empty()) return;
+  if (!paint_client_)
+  {
+    paint_client_ = ctx->node->create_client<mowgli_interfaces::srv::PaintSwath>(
+        "/map_server_node/paint_swath");
+  }
+  if (!paint_client_->wait_for_service(std::chrono::milliseconds(500))) return;
+  auto req = std::make_shared<mowgli_interfaces::srv::PaintSwath::Request>();
+  req->swath_path = trajectory;
+  paint_client_->async_send_request(req);
+}
+
+// ===========================================================================
+// MowHeadlandPerimeter — closed-loop perimeter sweep using F2C's
+// /coverage_server/planning_field (inset polygon = field minus
+// headland_width). Mows the perimeter band before strips so strip-end
+// transitions happen inside the already-mowed headland zone.
+// ===========================================================================
+
+namespace
+{
+/// Build a closed-loop nav_msgs/Path tracing @p poly's vertices with
+/// dense intermediate poses every @p step_m so MPPI's PathHandler has
+/// enough waypoints to track each edge. Starting vertex is whichever
+/// is closest to (start_x, start_y); loop returns to that vertex.
+nav_msgs::msg::Path buildPerimeterPath(
+    const geometry_msgs::msg::PolygonStamped& poly,
+    double start_x, double start_y, double step_m,
+    const rclcpp::Time& now_stamp)
+{
+  nav_msgs::msg::Path path;
+  path.header.frame_id = poly.header.frame_id.empty() ? "map" : poly.header.frame_id;
+  path.header.stamp = now_stamp;
+
+  if (poly.polygon.points.size() < 3) return path;
+
+  // Find closest vertex to robot.
+  std::size_t start_idx = 0;
+  double best = std::numeric_limits<double>::max();
+  for (std::size_t i = 0; i < poly.polygon.points.size(); ++i)
+  {
+    const auto& p = poly.polygon.points[i];
+    const double d = std::hypot(p.x - start_x, p.y - start_y);
+    if (d < best) { best = d; start_idx = i; }
+  }
+
+  const std::size_t n = poly.polygon.points.size();
+  // Walk vertices: start_idx, start_idx+1, ..., start_idx (back to start).
+  for (std::size_t k = 0; k <= n; ++k)
+  {
+    const auto& a = poly.polygon.points[(start_idx + k) % n];
+    const auto& b = poly.polygon.points[(start_idx + k + 1) % n];
+    const double dx = b.x - a.x;
+    const double dy = b.y - a.y;
+    const double L = std::hypot(dx, dy);
+    if (L < 1e-6) continue;
+    const double ux = dx / L;
+    const double uy = dy / L;
+    const double yaw = std::atan2(dy, dx);
+    const double qz = std::sin(yaw / 2.0);
+    const double qw = std::cos(yaw / 2.0);
+    const std::size_t steps = std::max<std::size_t>(2,
+        static_cast<std::size_t>(std::ceil(L / step_m)));
+
+    for (std::size_t s = 0; s < steps; ++s)
+    {
+      const double t = static_cast<double>(s) / static_cast<double>(steps);
+      geometry_msgs::msg::PoseStamped ps;
+      ps.header = path.header;
+      ps.pose.position.x = a.x + ux * (L * t);
+      ps.pose.position.y = a.y + uy * (L * t);
+      ps.pose.orientation.z = qz;
+      ps.pose.orientation.w = qw;
+      path.poses.push_back(ps);
+    }
+    // The last vertex of the loop is appended once we exit the for-k.
+    if (k + 1 == n)
+    {
+      geometry_msgs::msg::PoseStamped ps;
+      ps.header = path.header;
+      ps.pose.position.x = b.x;
+      ps.pose.position.y = b.y;
+      ps.pose.orientation.z = qz;
+      ps.pose.orientation.w = qw;
+      path.poses.push_back(ps);
+    }
+  }
+  return path;
+}
+}  // namespace
+
+BT::NodeStatus MowHeadlandPerimeter::onStart()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  // Wait for planning_field if not yet received (transient_local sub
+  // should normally have it immediately after ComputeCoveragePath).
+  if (!ctx->current_planning_field_valid)
+  {
+    waiting_for_planning_field_ = true;
+    wait_start_ = std::chrono::steady_clock::now();
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "MowHeadlandPerimeter: waiting for /coverage_server/planning_field");
+    return BT::NodeStatus::RUNNING;
+  }
+
+  // Build the perimeter path and dispatch FollowPath.
+  geometry_msgs::msg::TransformStamped tf;
+  double rx = 0.0, ry = 0.0;
+  try
+  {
+    tf = ctx->tf_buffer->lookupTransform(
+        "map", "base_footprint", tf2::TimePointZero, tf2::durationFromSec(0.5));
+    rx = tf.transform.translation.x;
+    ry = tf.transform.translation.y;
+  }
+  catch (const tf2::TransformException& e)
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "MowHeadlandPerimeter: TF lookup failed: %s", e.what());
+    return BT::NodeStatus::FAILURE;
+  }
+
+  geometry_msgs::msg::PolygonStamped planning_field;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    planning_field = ctx->current_planning_field;
+  }
+  if (planning_field.polygon.points.size() < 3)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "MowHeadlandPerimeter: planning_field has <3 vertices — skipping");
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  if (!follow_client_)
+  {
+    follow_client_ = rclcpp_action::create_client<FollowPathAction>(
+        ctx->node, "/follow_path");
+  }
+  if (!follow_client_->wait_for_action_server(std::chrono::seconds(5)))
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "MowHeadlandPerimeter: /follow_path not available");
+    return BT::NodeStatus::FAILURE;
+  }
+
+  FollowPathAction::Goal goal;
+  goal.path = buildPerimeterPath(planning_field, rx, ry, 0.10, ctx->node->now());
+  goal.controller_id = "FollowCoveragePath";
+  goal.goal_checker_id = "coverage_goal_checker";
+
+  follow_handle_.reset();
+  result_requested_ = false;
+  follow_future_ = follow_client_->async_send_goal(goal);
+
+  driven_trajectory_ = nav_msgs::msg::Path();
+  driven_trajectory_.header.frame_id = "map";
+  setBladeEnabled(true);
+  recordPose();
+
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "MowHeadlandPerimeter: sent perimeter follow_path with %zu poses "
+              "(%zu polygon vertices, starting near robot at (%.2f, %.2f))",
+              goal.path.poses.size(), planning_field.polygon.points.size(), rx, ry);
+  return BT::NodeStatus::RUNNING;
+}
+
+BT::NodeStatus MowHeadlandPerimeter::onRunning()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  recordPose();
+
+  if (waiting_for_planning_field_)
+  {
+    if (ctx->current_planning_field_valid)
+    {
+      waiting_for_planning_field_ = false;
+      // Re-run the start logic now that we have data.
+      return onStart();
+    }
+    if (std::chrono::steady_clock::now() - wait_start_ > std::chrono::seconds(5))
+    {
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "MowHeadlandPerimeter: timed out waiting for planning_field — skipping");
+      return BT::NodeStatus::SUCCESS;
+    }
+    return BT::NodeStatus::RUNNING;
+  }
+
+  if (!follow_handle_)
+  {
+    if (follow_future_.wait_for(std::chrono::milliseconds(0)) !=
+        std::future_status::ready)
+      return BT::NodeStatus::RUNNING;
+    follow_handle_ = follow_future_.get();
+    if (!follow_handle_)
+    {
+      RCLCPP_ERROR(ctx->node->get_logger(),
+                   "MowHeadlandPerimeter: /follow_path goal rejected");
+      setBladeEnabled(false);
+      paintTrajectory(driven_trajectory_);
+      return BT::NodeStatus::FAILURE;
+    }
+  }
+
+  if (!result_requested_)
+  {
+    result_future_ = follow_client_->async_get_result(follow_handle_);
+    result_requested_ = true;
+  }
+  if (result_future_.wait_for(std::chrono::milliseconds(0)) !=
+      std::future_status::ready)
+    return BT::NodeStatus::RUNNING;
+
+  const auto wrapped = result_future_.get();
+  switch (wrapped.code)
+  {
+    case rclcpp_action::ResultCode::SUCCEEDED:
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "MowHeadlandPerimeter: complete — painting %zu driven poses",
+                  driven_trajectory_.poses.size());
+      paintTrajectory(driven_trajectory_);
+      setBladeEnabled(false);
+      follow_handle_.reset();
+      return BT::NodeStatus::SUCCESS;
+    default:
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "MowHeadlandPerimeter: terminated code=%d — painting %zu driven poses anyway",
+                  static_cast<int>(wrapped.code), driven_trajectory_.poses.size());
+      paintTrajectory(driven_trajectory_);
+      setBladeEnabled(false);
+      follow_handle_.reset();
+      // Don't fail the BT — strips can still proceed.
+      return BT::NodeStatus::SUCCESS;
+  }
+}
+
+void MowHeadlandPerimeter::onHalted()
+{
+  if (follow_handle_)
+  {
+    follow_client_->async_cancel_goal(follow_handle_);
+  }
+  setBladeEnabled(false);
+}
+
+void MowHeadlandPerimeter::setBladeEnabled(bool enabled)
+{
+  if (blade_on_ == enabled) return;
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  if (!blade_client_)
+  {
+    blade_client_ = ctx->node->create_client<mowgli_interfaces::srv::MowerControl>(
+        "/hardware_bridge/mower_control");
+  }
+  if (!blade_client_->wait_for_service(std::chrono::milliseconds(200))) return;
+  auto req = std::make_shared<mowgli_interfaces::srv::MowerControl::Request>();
+  req->mow_enabled = enabled ? 1u : 0u;
+  blade_client_->async_send_request(req);
+  blade_on_ = enabled;
+}
+
+void MowHeadlandPerimeter::recordPose()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  geometry_msgs::msg::TransformStamped tf;
+  try
+  {
+    tf = ctx->tf_buffer->lookupTransform(
+        "map", "base_footprint", tf2::TimePointZero, tf2::durationFromSec(0.05));
+  }
+  catch (const tf2::TransformException&) { return; }
+  const double x = tf.transform.translation.x;
+  const double y = tf.transform.translation.y;
+  if (!driven_trajectory_.poses.empty())
+  {
+    const auto& last = driven_trajectory_.poses.back().pose.position;
+    const double dx = x - last.x, dy = y - last.y;
+    if (dx * dx + dy * dy < min_pose_step_m_ * min_pose_step_m_) return;
+  }
+  geometry_msgs::msg::PoseStamped ps;
+  ps.header.frame_id = "map";
+  ps.header.stamp = ctx->node->now();
+  ps.pose.position.x = x;
+  ps.pose.position.y = y;
+  ps.pose.orientation = tf.transform.rotation;
+  driven_trajectory_.poses.push_back(ps);
+}
+
+void MowHeadlandPerimeter::paintTrajectory(const nav_msgs::msg::Path& trajectory)
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   if (trajectory.poses.empty()) return;

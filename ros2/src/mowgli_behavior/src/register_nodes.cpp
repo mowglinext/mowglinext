@@ -78,6 +78,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<FollowCoveragePath>("FollowCoveragePath");
   factory.registerNodeType<MowAreaWithCoverage>("MowAreaWithCoverage");
   factory.registerNodeType<FollowSwathsWithSpin>("FollowSwathsWithSpin");
+  factory.registerNodeType<MowHeadlandPerimeter>("MowHeadlandPerimeter");
 
   // Area recording node
   factory.registerNodeType<RecordArea>("RecordArea");

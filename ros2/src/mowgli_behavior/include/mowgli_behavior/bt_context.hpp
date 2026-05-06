@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "geometry_msgs/msg/point32.hpp"
+#include "geometry_msgs/msg/polygon_stamped.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
@@ -236,6 +237,16 @@ struct BTContext
   /// specifically asked for, matching what main-branch FTC achieved
   /// before the migration to opennav_coverage.
   std::vector<opennav_coverage_msgs::msg::Swath> current_swaths;
+
+  /// Latest /coverage_server/planning_field message — F2C's inset polygon
+  /// (field minus headland_width). Updated each time
+  /// ComputeCoveragePath fires. `MowHeadlandPerimeter` builds a closed-
+  /// loop path tracing this polygon's vertices and mows it before
+  /// FollowSwathsWithSpin runs, so the perimeter is cleared first and
+  /// strip-end transitions happen safely inside the already-mowed
+  /// headland zone (no boundary risk).
+  geometry_msgs::msg::PolygonStamped current_planning_field;
+  bool current_planning_field_valid{false};
 
   /// Path C: termination reason returned by the segment selector for
   /// the current segment ("boundary" / "obstacle" / "dead_zone" /
