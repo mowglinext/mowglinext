@@ -184,7 +184,7 @@ COPY src/opennav_coverage/opennav_coverage_navigator/CMakeLists.txt src/opennav_
 COPY src/opennav_coverage/opennav_row_coverage/package.xml          src/opennav_coverage/opennav_row_coverage/package.xml
 COPY src/opennav_coverage/opennav_row_coverage/CMakeLists.txt       src/opennav_coverage/opennav_row_coverage/CMakeLists.txt
 COPY src/opennav_coverage/opennav_coverage_demo/package.xml         src/opennav_coverage/opennav_coverage_demo/package.xml
-COPY src/opennav_coverage/opennav_coverage_demo/CMakeLists.txt      src/opennav_coverage/opennav_coverage_demo/CMakeLists.txt
+COPY src/opennav_coverage/opennav_coverage_demo/setup.py            src/opennav_coverage/opennav_coverage_demo/setup.py
 
 # Resolve rosdep dependencies (cached until package.xml changes)
 RUN rosdep update --rosdistro kilted \
