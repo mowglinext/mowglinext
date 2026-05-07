@@ -39,6 +39,35 @@ RUN cd gtsam && mkdir build && cd build && \
  && make -j$(nproc) install
 
 # =============================================================================
+# Stage 0b: fields2cover-builder
+# Builds Fields2Cover 1.2.1 (boustrophedon coverage planning library used by
+# opennav_coverage). Not packaged for ROS Kilted; builds from source. Install
+# lands in /opt/fields2cover; runtime stages COPY across.
+# =============================================================================
+FROM ros:kilted-ros-base AS fields2cover-builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake git \
+      libeigen3-dev libgdal-dev libgeos-dev libtinyxml2-dev libpython3-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+RUN git clone --depth 1 -b v1.2.1 https://github.com/Fields2Cover/Fields2Cover.git
+
+RUN cd Fields2Cover && mkdir build && cd build && \
+    cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/fields2cover \
+        -DBUILD_PYTHON=OFF \
+        -DBUILD_TUTORIALS=OFF \
+        -DBUILD_TESTS=OFF \
+        -DBUILD_DOC=OFF \
+        -DALLOW_PARALLELISATION=OFF \
+ && make -j$(nproc) install
+
+# =============================================================================
 # Stage 1: base
 # Installs all runtime ROS2 dependencies. Both runtime and simulation stages
 # inherit from here, keeping the image lean.
@@ -112,6 +141,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # that GTSAM's exported CMake target references at link time.
     # libboost-* runtime libs are pulled in transitively.
     libmetis-dev \
+    # Fields2Cover runtime + build-time deps. libFields2Cover.so itself
+    # is COPYed from the fields2cover-builder stage below; these are the
+    # system libraries it links against (and that opennav_coverage will
+    # transitively need at compile time too).
+    libgdal-dev libgeos-dev libtinyxml2-dev libeigen3-dev \
     # Utilities
     python3-argcomplete \
  && rm -rf /var/lib/apt/lists/*
@@ -123,6 +157,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=gtsam-builder /opt/gtsam /opt/gtsam
 RUN echo '/opt/gtsam/lib' > /etc/ld.so.conf.d/gtsam.conf && ldconfig
 ENV CMAKE_PREFIX_PATH=/opt/gtsam:${CMAKE_PREFIX_PATH}
+
+# Pull source-built Fields2Cover 1.2.1 into /opt/fields2cover. Same
+# pattern as GTSAM: ldconfig the lib dir, prepend the install prefix
+# to CMAKE_PREFIX_PATH so find_package(Fields2Cover) succeeds when
+# opennav_coverage builds.
+COPY --from=fields2cover-builder /opt/fields2cover /opt/fields2cover
+RUN echo '/opt/fields2cover/lib' > /etc/ld.so.conf.d/fields2cover.conf && ldconfig
+ENV CMAKE_PREFIX_PATH=/opt/fields2cover:${CMAKE_PREFIX_PATH}
 
 # =============================================================================
 # Stage 2: deps
