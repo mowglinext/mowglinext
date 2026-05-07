@@ -49,8 +49,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        with:
-          submodules: true
+
+      - name: Init opennav_coverage submodule only
+        # firmware/stm32/mainboard_firmware/openocd-code is a stale gitlink
+        # without a .gitmodules entry — "submodules: true" in checkout would
+        # fail on it. Init only the path we need for the ROS2 build.
+        run: git submodule update --init --depth 1 ros2/src/opennav_coverage
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
