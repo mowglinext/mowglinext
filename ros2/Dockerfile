@@ -56,7 +56,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /tmp
 RUN git clone --depth 1 -b v1.2.1 https://github.com/Fields2Cover/Fields2Cover.git
 
+# CXXFLAGS via env (not -DCMAKE_CXX_FLAGS) so the flags propagate to
+# CMake FetchContent dependencies — F2C pulls in matplotlib_cpp which
+# uses Py_SetProgramName (deprecated in Python 3.12 → error on GCC 13)
+# and steering_functions, both with their own warning configs.
 RUN cd Fields2Cover && mkdir build && cd build && \
+    export CXXFLAGS="-Wno-error -Wno-deprecated-declarations -Wno-pessimizing-move" && \
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/opt/fields2cover \
@@ -65,7 +70,6 @@ RUN cd Fields2Cover && mkdir build && cd build && \
         -DBUILD_TESTS=OFF \
         -DBUILD_DOC=OFF \
         -DALLOW_PARALLELISATION=OFF \
-        -DCMAKE_CXX_FLAGS="-Wno-error=pessimizing-move -Wno-pessimizing-move -Wno-error" \
  && make -j$(nproc) install
 
 # =============================================================================
