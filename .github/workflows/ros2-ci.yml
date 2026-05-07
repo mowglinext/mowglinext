@@ -41,6 +41,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          submodules: recursive
 
       - name: Setup ROS2 ${{ matrix.ros_distro }}
         uses: ros-tooling/setup-ros@v0.7
@@ -165,6 +166,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Cache pip clang-format
         uses: actions/cache@v4
@@ -195,6 +198,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Install cppcheck
         run: |

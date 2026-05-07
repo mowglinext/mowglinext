@@ -1,0 +1,4 @@
+[submodule "ros2/src/opennav_coverage"]
+	path = ros2/src/opennav_coverage
+	url = https://github.com/open-navigation/opennav_coverage.git
+	branch = kilted
