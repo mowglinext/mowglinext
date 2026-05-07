@@ -352,15 +352,21 @@ private:
   double boundary_inner_margin_m_{0.3};
 
 
-  /// Dock physical body dimensions in dock-local frame (origin = robot's
-  /// body when docked, +X = direction robot faces). Defines the rectangle
-  /// used for both the dock_exclusion_polygon (classification + keepout
-  /// carve-out) and the dock_planning_polygon (F2C polygon hole). No
-  /// approach corridor — that was creating phantom obstacles 1.5 m around
-  /// the dock that blocked all Nav2 motion after undock.
+  /// Dock body — physical structure dimensions in dock-local frame
+  /// (origin = robot's body when docked, +X = direction robot faces).
+  /// Used for the dock_planning_polygon (F2C polygon hole) AND for the
+  /// "front" half of the dock_exclusion_polygon (so the carve-out covers
+  /// the dock structure too).
   double dock_body_forward_m_{0.45};
   double dock_body_back_m_{0.35};
   double dock_body_half_width_m_{0.275};
+  /// Dock corridor — approach lane along -X. Together with the body it
+  /// defines the dock_exclusion_polygon used as a keepout-mask carve-out
+  /// so Smac can plan a path from "robot post-undock outside polygon"
+  /// back into the mowing polygon without crossing the keepout LETHAL
+  /// boundary. Not sent to F2C (that gets the body-only polygon).
+  double dock_corridor_length_m_{1.5};
+  double dock_corridor_half_width_m_{0.40};
 
   // ── State ─────────────────────────────────────────────────────────────────
   grid_map::GridMap map_;

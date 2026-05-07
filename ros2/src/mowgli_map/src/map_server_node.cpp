@@ -82,31 +82,37 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   boundary_recovery_offset_m_ = declare_parameter<double>("boundary_recovery_offset_m", 0.8);
   boundary_inner_margin_m_ = declare_parameter<double>("boundary_inner_margin_m", 0.3);
 
-  // Dock physical body dimensions (no approach corridor). The exclusion
-  // polygon is now the dock structure ONLY — robot needs to be able to
-  // drive freely once it's away from the dock body. Approach corridor
-  // logic was dropped because it created a phantom obstacle 1.5 m around
-  // the dock that prevented Nav2 from planning ANY motion right after
-  // undock (real-robot run 2026-05-07: RPP "collision ahead" 60 s
-  // straight, robot stuck).
+  // Dock geometry — TWO rectangles in dock-local frame (origin = robot's
+  // body when docked, +X = direction robot faces, ±Y = sides):
   //
-  // Geometry in dock-local frame (origin = robot's body when docked,
-  // +X = direction robot faces, ±Y = sides):
-  //   * dock_body_forward_m   — distance from dock_pose to dock front edge
-  //                             (along +X). Default 0.45 m = ~25 cm robot
-  //                             nose half-length + 20 cm dock structure
-  //                             protruding in front of robot's nose.
-  //   * dock_body_back_m      — distance from dock_pose to dock back edge
-  //                             (along -X). Default 0.35 m so total dock
-  //                             length = 0.80 m.
-  //   * dock_body_half_width_m — half-width along ±Y. Default 0.275 m =
-  //                              dock width 0.55 m / 2.
+  //   1. Dock BODY = physical dock structure. Used for:
+  //        * dock_planning_polygon → F2C polygon hole (so coverage strips
+  //          stop at the dock face, not 1.5 m before it).
+  //   2. Dock CORRIDOR = body + approach lane in -X direction. Used for:
+  //        * dock_exclusion_polygon → carve-out in the keepout mask so
+  //          Smac/MPPI can plan a path between "outside polygon at the
+  //          dock" and "inside the mowing polygon" without crossing
+  //          a LETHAL boundary cell. Without this carve-out, Smac
+  //          refuses to plan post-undock because the keepout boundary
+  //          slices the corridor.
+  //
+  // Defaults match the user's hardware:
+  //   body 0.80 m × 0.55 m, with 20 cm of dock structure protruding
+  //   in front of the robot when docked.
   dock_body_forward_m_ =
       declare_parameter<double>("dock_body_forward_m", 0.45);
   dock_body_back_m_ =
       declare_parameter<double>("dock_body_back_m", 0.35);
   dock_body_half_width_m_ =
       declare_parameter<double>("dock_body_half_width_m", 0.275);
+  // Corridor extends from dock_pose along -X (away from dock front) so
+  // Smac can plan a path from "robot post-undock" back into the polygon.
+  // Width is symmetric. Length default 1.5 m matches the prior corridor
+  // value that worked for opennav_docking's approach distance.
+  dock_corridor_length_m_ =
+      declare_parameter<double>("dock_corridor_length_m", 1.5);
+  dock_corridor_half_width_m_ =
+      declare_parameter<double>("dock_corridor_half_width_m", 0.40);
 
   RCLCPP_INFO(get_logger(),
               "MapServerNode: resolution=%.3f m, size=%.1f×%.1f m, frame='%s'",
@@ -366,19 +372,20 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
     pose_msg.pose = docking_pose_;
     docking_pose_pub_->publish(pose_msg);
 
-    // Both polygons (dock_exclusion + dock_planning) are now the SAME:
-    // the physical dock structure, no approach corridor. Identical shape
-    // for classification, keepout carve-out, AND F2C planning hole — the
-    // robot is free to drive in front of the dock as soon as its footprint
-    // clears the 0.55×0.80 m dock body.
-    //
-    // Rectangle in dock-local frame (origin = robot's body when docked):
-    //   +X : forward (into dock structure)
-    //   -X : back (toward approach side)
-    //   ±Y : sides (dock half-width)
-    const double dock_fwd = dock_body_forward_m_;
-    const double dock_bk = dock_body_back_m_;
-    const double half_width = dock_body_half_width_m_;
+    // Two polygons in dock-local frame (origin = robot's body when docked,
+    // +X = direction robot faces):
+    //   - dock_exclusion_polygon : body forward + corridor backward,
+    //     widened to corridor half-width. This is the keepout-mask
+    //     carve-out so Smac can plan paths from "post-undock outside
+    //     polygon" back into the mowing area.
+    //   - dock_planning_polygon : body only — given to F2C as the
+    //     polygon hole so coverage strips stop at the dock face, not
+    //     1.5 m before it.
+    const double body_fwd = dock_body_forward_m_;
+    const double body_bk = dock_body_back_m_;
+    const double body_hw = dock_body_half_width_m_;
+    const double corridor_bk = dock_corridor_length_m_;
+    const double corridor_hw = dock_corridor_half_width_m_;
     const double d_x = docking_pose_.position.x;
     const double d_y = docking_pose_.position.y;
     const double d_yaw = 2.0 * std::atan2(docking_pose_.orientation.z, docking_pose_.orientation.w);
@@ -397,22 +404,34 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
       out.points.push_back(out.points.front());
     };
 
-    const double dock_corners[4][2] = {
-        {dock_fwd, half_width},
-        {dock_fwd, -half_width},
-        {-dock_bk, -half_width},
-        {-dock_bk, half_width},
+    // Exclusion: body front + corridor extending backward at corridor width.
+    // Widen at the dock body too so the polygon is convex and easy to use
+    // for the keepout carve-out (rectangular shape, not a stepped one).
+    const double exclusion_corners[4][2] = {
+        {body_fwd, corridor_hw},
+        {body_fwd, -corridor_hw},
+        {-corridor_bk, -corridor_hw},
+        {-corridor_bk, corridor_hw},
     };
-    add_corners(dock_exclusion_polygon_, dock_corners);
-    add_corners(dock_planning_polygon_, dock_corners);
+    add_corners(dock_exclusion_polygon_, exclusion_corners);
     has_dock_exclusion_ = true;
 
+    // Planning hole: dock body rectangle only (small).
+    const double planning_corners[4][2] = {
+        {body_fwd, body_hw},
+        {body_fwd, -body_hw},
+        {-body_bk, -body_hw},
+        {-body_bk, body_hw},
+    };
+    add_corners(dock_planning_polygon_, planning_corners);
+
     RCLCPP_INFO(get_logger(),
-                "Dock exclusion = dock body only: pose=(%.2f, %.2f) yaw=%.2f, "
-                "forward=%.2fm, back=%.2fm, half_width=%.2fm "
-                "(total %.2fm × %.2fm — no approach corridor)",
-                d_x, d_y, d_yaw, dock_fwd, dock_bk, half_width,
-                dock_fwd + dock_bk, 2.0 * half_width);
+                "Dock exclusion (keepout carve-out): body fwd=%.2fm + "
+                "corridor bk=%.2fm × ±%.2fm wide",
+                body_fwd, corridor_bk, corridor_hw);
+    RCLCPP_INFO(get_logger(),
+                "Dock planning hole (F2C): %.2fm × %.2fm (body only)",
+                body_fwd + body_bk, 2.0 * body_hw);
   }
 
   // ── Publish timer ────────────────────────────────────────────────────────
