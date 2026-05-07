@@ -161,8 +161,12 @@ mowgli:
     # Mowing
     # -----------------------------------------------------------------
     mowing_enabled: true           # enable blade motor during mowing
-    mowing_speed: 0.5              # m/s during coverage paths
-    transit_speed: 0.5             # m/s during point-to-point navigation
+    mowing_speed: 0.15             # m/s during coverage paths (FollowCoveragePath / MPPI)
+    transit_speed: 0.15            # m/s during point-to-point navigation AND strip-tracking
+                                   # (FollowPath / RPP) — the strip controller is RPP since
+                                   # 2026-05-06 to avoid MPPI's diff-drive wobble. Slowed
+                                   # from 0.5 to 0.15 for clean cuts and to keep wheel speeds
+                                   # within firmware deadband headroom.
     outline_passes: 1              # perimeter passes before fill
     outline_overlap: 0.0           # overlap between outline and fill (m)
     outline_offset: 0.05           # inward offset from boundary (m)

@@ -105,7 +105,19 @@ controller_server:
     failure_tolerance: 1.0
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker"]
-    controller_plugins: ["FollowPath", "FollowCoveragePath"]
+    # Controller plugin order — the FIRST plugin is the default when an
+    # action goal is sent with empty controller_id (which is what Nav2's
+    # default NavigateToPose BT does for transit). So:
+    #   - "FollowCoveragePath" (MPPI) is FIRST → default for transit, where
+    #     dynamic obstacle deviation matters and where curves are expected
+    #     anyway (the robot is going TO somewhere, not tracking a strip).
+    #   - "FollowPath" (RPP+RotationShim) is SECOND → explicitly used by
+    #     FollowSwathsWithSpin and MowHeadlandPerimeter via
+    #     goal.controller_id="FollowPath" because RPP gives crisp straight
+    #     strips without MPPI's diff-drive wobble (Nav2 issue #5531).
+    # The names "FollowPath" and "FollowCoveragePath" are historical and
+    # don't reflect this routing — they're just internal IDs.
+    controller_plugins: ["FollowCoveragePath", "FollowPath"]
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
@@ -164,21 +176,36 @@ controller_server:
       # a small margin over the deadband, matching Spin's
       # min_rotational_vel.
       rotate_to_heading_angular_vel: 0.85
-      max_angular_accel: 1.0
+      # Halved from 1.0 — gentler angular ramp suppresses the head-wobble
+      # observed in sim 55 by spreading any heading correction over more
+      # cycles instead of firing it as a sharp delta. At 10 Hz controller
+      # rate, max_angular_accel=0.5 means at most 0.05 rad/s change per
+      # cycle, well within wheel-friction tolerance.
+      max_angular_accel: 0.5
       # RPP parameters — tuned for slow differential drive motors
-      desired_linear_vel: 0.2
-      lookahead_dist: 0.6
-      min_lookahead_dist: 0.3
-      max_lookahead_dist: 1.0
+      # 0.15 m/s — slowed from 0.20 m/s on user feedback that 0.2 was
+      # too fast for clean strip mowing. Above the firmware PWM deadband
+      # (0.12 m/s ≈ PWM 36), so motors don't buzz. Coverage time scales
+      # linearly: each 4.9 m strip now takes ~33 s instead of 25 s, so
+      # full 27-strip coverage moves from ~12 min to ~16 min — still
+      # well within battery for the typical lawn.
+      desired_linear_vel: 0.15
+      # Lookahead tuned to suppress yaw wobble during strip-tracking
+      # (sim 55 showed visible head-shake at 0.3 m short carrot).
+      # Fixed 0.8 m carrot keeps small lateral disturbances (sim_wheel_slip,
+      # mid-strip costmap noise) below the visible-error threshold so RPP
+      # doesn't over-correct. min raised to 0.6 because
+      # use_velocity_scaled_lookahead_dist is now off — was the prior
+      # safety floor; 0.6 m gives the same gentleness at every speed.
+      lookahead_dist: 0.8
+      min_lookahead_dist: 0.6
+      max_lookahead_dist: 1.5
       lookahead_time: 1.5
-      # 0.3 s — tight enough that course corrections always use a fresh
-      # pose. Was 2.0 s, which let RPP pursue lookahead points based on
-      # 2-second-old TFs (60 cm of stale-pose error at 0.3 m/s) and
-      # showed up as "can't correct course fast enough, drives off
-      # boundary". Matches the controller_server tolerance.
       transform_tolerance: 0.3
-      # Larger lookahead = smoother turns, less oscillation
-      use_velocity_scaled_lookahead_dist: true
+      # Off — fixed lookahead_dist=0.8 above. With scaling on, the
+      # lookahead shrank to 0.30 m at 0.20 m/s coverage cruise, which
+      # is the proximate cause of the sim 55 head wobble.
+      use_velocity_scaled_lookahead_dist: false
       # Above the ~0.12 m/s motor deadband, otherwise RPP slows to a buzz
       # that never reaches the goal.
       min_approach_linear_velocity: 0.15
@@ -207,7 +234,13 @@ controller_server:
       # 0.8 rad/s ω cap is safe. At 0.3 m/s linear this gives a minimum
       # turn radius of ~0.375 m — plenty for obstacle avoidance during
       # transit without extra-tight arc constraints.
-      max_angular_vel: 0.8
+      # Capped at 0.5 (was 0.8) for strip-tracking smoothness. RPP only
+      # needs sharp angular corrections during U-turns, but those are
+      # handled by /spin in FollowSwathsWithSpin so RPP itself never has
+      # to do tight steering during strips. 0.5 rad/s × wheel_track 0.325 m
+      # = 0.16 m/s wheel-speed delta, comfortably above the firmware
+      # PWM deadband (0.12 m/s).
+      max_angular_vel: 0.5
       max_robot_pose_search_dist: 2.0
       # Scale linear velocity down when the tracker has high lateral /
       # angular error — drops to min_approach_linear_velocity when the
@@ -329,7 +362,22 @@ controller_server:
         collision_cost: 100000.0
         collision_margin_distance: 0.10
         near_goal_distance: 0.5
-        inflation_radius: 0.40
+        # 0.20 m to MATCH local_costmap.inflation_radius (line 617).
+        # Was 0.40 — twice the costmap, so MPPI saw an obstacle gradient
+        # extending well beyond what the costmap actually inflates,
+        # causing two known failures:
+        #  1. The "wobble" Steve documents in nav2_mppi_controller/README
+        #     "Notes to Users" — MPPI samples slightly-lower-cost
+        #     trajectories that don't exist in the real costmap.
+        #  2. In sim 60 with an obstacle at polygon center, the wider
+        #     ObstaclesCritic envelope made the MPPI fallback (called
+        #     by FollowSwathsWithSpin when RPP aborts on collision)
+        #     unable to find a feasible deviation arc on strips deeply
+        #     inside the obstacle's costmap footprint — strips 11-13
+        #     failed even after MPPI retry. Matching the costmap
+        #     gives MPPI honest cost gradient and more clearance for
+        #     deviation around the actual obstacle.
+        inflation_radius: 0.20
         cost_scaling_factor: 10.0
       CostCritic:
         enabled: true
@@ -436,11 +484,22 @@ behavior_server:
     # (often map→odom jump artefacts or dock residue). 2.0s refused every
     # undock.
     simulate_ahead_time: 0.5
-    max_rotational_vel: 3.0
+    # 1.0 rad/s = wheel speed 0.16 m/s per wheel (well within vx_max=0.30
+    # motor cap). Was 3.0 — required wheel speed 0.49 m/s, which the
+    # motors saturate at vx_max=0.30, leaving Spin's feedback loop seeing
+    # actual ω less than commanded. The control loop then overshoots
+    # trying to compensate, producing the wobbly in-place spin observed
+    # mid sim 56. With cap matched to actuator capability, spin is
+    # closed-loop stable.
+    max_rotational_vel: 1.0
     # 0.85 rad/s ≈ wheel vel 0.14 m/s per wheel (PWM 42 > deadband).
     # Lower floor let Spin behavior dither at sub-deadband ω.
     min_rotational_vel: 0.85
-    rotational_acc_lim: 5.0
+    # Halved from 5.0 — gentler ω ramp gives motors time to track the
+    # commanded velocity. At 1.0 rad/s² and max 1.0 rad/s, Spin reaches
+    # full speed in 1.0 sec instead of 0.2 sec, which the wheels can
+    # actually follow without saturation.
+    rotational_acc_lim: 1.0
 
 # ---------------------------------------------------------------------------
 # Waypoint follower

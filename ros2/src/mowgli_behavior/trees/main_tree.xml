@@ -502,7 +502,7 @@
                   <ComputeCoveragePath area_index="{current_area_index}"/>
                   <MowHeadlandPerimeter area_index="{current_area_index}"/>
                   <NavigateToFirstStripPose/>
-                  <FollowCoveragePath area_index="{current_area_index}"/>
+                  <FollowSwathsWithSpin area_index="{current_area_index}"/>
                 </Sequence>
               </Repeat>
 

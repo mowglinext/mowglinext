@@ -75,8 +75,6 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<GetNextUnmowedArea>("GetNextUnmowedArea");
   factory.registerNodeType<ComputeCoveragePath>("ComputeCoveragePath");
   factory.registerNodeType<NavigateToFirstStripPose>("NavigateToFirstStripPose");
-  factory.registerNodeType<FollowCoveragePath>("FollowCoveragePath");
-  factory.registerNodeType<MowAreaWithCoverage>("MowAreaWithCoverage");
   factory.registerNodeType<FollowSwathsWithSpin>("FollowSwathsWithSpin");
   factory.registerNodeType<MowHeadlandPerimeter>("MowHeadlandPerimeter");
 

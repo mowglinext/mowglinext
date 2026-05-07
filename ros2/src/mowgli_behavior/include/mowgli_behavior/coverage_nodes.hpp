@@ -132,126 +132,6 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// FollowCoveragePath — drive ctx->current_coverage_path with MPPI (single
-// FollowPath goal, blade ON for the whole path; MPPI deviates around dynamic
-// obstacles natively via ObstaclesCritic). On SUCCESS, paints mow_progress
-// along the *actual* driven track (sampled by TF lookup at every tick),
-// not the planned path — otherwise an MPPI shortcut from start to a point
-// near the goal-tolerance fires the goal_checker and we'd report 100%
-// coverage despite the robot never having traversed the strips.
-// ---------------------------------------------------------------------------
-
-class FollowCoveragePath : public BT::StatefulActionNode
-{
-public:
-  using Nav2FollowPath = nav2_msgs::action::FollowPath;
-  using FollowGoalHandle = rclcpp_action::ClientGoalHandle<Nav2FollowPath>;
-
-  FollowCoveragePath(const std::string& name, const BT::NodeConfig& config)
-      : BT::StatefulActionNode(name, config)
-  {
-  }
-
-  static BT::PortsList providedPorts()
-  {
-    return {BT::InputPort<uint32_t>("area_index", 0u, "Mowing area index")};
-  }
-
-  BT::NodeStatus onStart() override;
-  BT::NodeStatus onRunning() override;
-  void onHalted() override;
-
-private:
-  void setBladeEnabled(bool enabled);
-  void paintTrajectory(const nav_msgs::msg::Path& trajectory);
-  void recordPose();
-
-  rclcpp_action::Client<Nav2FollowPath>::SharedPtr follow_client_;
-  rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr blade_client_;
-  rclcpp::Client<mowgli_interfaces::srv::PaintSwath>::SharedPtr paint_client_;
-
-  std::shared_future<FollowGoalHandle::SharedPtr> follow_future_;
-  FollowGoalHandle::SharedPtr follow_handle_;
-
-  // Driven-track accumulator: every tick we look up the latest
-  // map→base_footprint TF and append the robot's pose if it has moved
-  // > min_pose_step_m_ from the last sample. This is what gets painted
-  // into mow_progress on SUCCESS, instead of the planned path.
-  nav_msgs::msg::Path driven_trajectory_;
-  static constexpr double min_pose_step_m_ = 0.05;
-
-  bool goal_sent_{false};
-  bool blade_on_{false};
-};
-
-// ---------------------------------------------------------------------------
-// MowAreaWithCoverage — replaces the manual ComputeCoveragePath +
-// NavigateToFirstStripPose + FollowCoveragePath sub-tree with a single
-// /navigate_complete_coverage action goal that bt_navigator handles
-// internally via opennav_coverage_navigator/CoverageNavigator and its
-// coverage_bt.xml. The internal BT does:
-//   ComputeCoveragePath (F2C)
-//   GetPoseFromPath nav_path[0] -> start_pose
-//   ComputePathToPose start_pose -> path_to_start (Smac)
-//   FollowPath path_to_start (RPP transit)
-//   RecoveryNode wrapping FollowPath path (MPPI coverage)
-//
-// This node fetches the area polygon (+ filtered holes) from
-// /map_server_node/get_mowing_area and sends it as the action goal.
-// On SUCCESS the area's mow_progress is painted along the driven track
-// (TF-sampled here every tick during onRunning).
-//
-// We keep separate paint and blade control here because bt_navigator's
-// coverage BT only handles the *navigation*; the mowing-specific
-// blade-on-during-coverage and paint-driven-track-on-completion
-// behaviour stays in the application BT.
-// ---------------------------------------------------------------------------
-
-class MowAreaWithCoverage : public BT::StatefulActionNode
-{
-public:
-  using NavCovAction = opennav_coverage_msgs::action::NavigateCompleteCoverage;
-  using NavCovGoalHandle = rclcpp_action::ClientGoalHandle<NavCovAction>;
-
-  MowAreaWithCoverage(const std::string& name, const BT::NodeConfig& config)
-      : BT::StatefulActionNode(name, config)
-  {
-  }
-
-  static BT::PortsList providedPorts()
-  {
-    return {BT::InputPort<uint32_t>("area_index", 0u, "Mowing area index")};
-  }
-
-  BT::NodeStatus onStart() override;
-  BT::NodeStatus onRunning() override;
-  void onHalted() override;
-
-private:
-  void setBladeEnabled(bool enabled);
-  void paintTrajectory(const nav_msgs::msg::Path& trajectory);
-  void recordPose();
-
-  rclcpp_action::Client<NavCovAction>::SharedPtr action_client_;
-  rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr area_client_;
-  rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr blade_client_;
-  rclcpp::Client<mowgli_interfaces::srv::PaintSwath>::SharedPtr paint_client_;
-
-  std::shared_future<NavCovGoalHandle::SharedPtr> goal_future_;
-  NavCovGoalHandle::SharedPtr goal_handle_;
-  std::shared_future<NavCovGoalHandle::WrappedResult> result_future_;
-  bool result_requested_{false};
-
-  // Driven-track accumulator (same role as in FollowCoveragePath): we
-  // sample map→base_footprint at every onRunning tick and paint the
-  // resulting Path on SUCCESS so mow_progress reflects what the robot
-  // actually drove, not what F2C planned.
-  nav_msgs::msg::Path driven_trajectory_;
-  static constexpr double min_pose_step_m_ = 0.05;
-  bool blade_on_{false};
-};
-
-// ---------------------------------------------------------------------------
 // MowHeadlandPerimeter — perimeter sweep along F2C's planning_field.
 //
 // F2C's coverage_server publishes /coverage_server/planning_field once per
@@ -350,6 +230,8 @@ public:
   using SpinGoalHandle = rclcpp_action::ClientGoalHandle<SpinAction>;
   using FollowPathAction = nav2_msgs::action::FollowPath;
   using FollowGoalHandle = rclcpp_action::ClientGoalHandle<FollowPathAction>;
+  using NavAction = nav2_msgs::action::NavigateToPose;
+  using NavGoalHandle = rclcpp_action::ClientGoalHandle<NavAction>;
 
   FollowSwathsWithSpin(const std::string& name, const BT::NodeConfig& config)
       : BT::StatefulActionNode(name, config)
@@ -370,6 +252,13 @@ private:
   {
     SPIN,         // /spin pending (aligning to strip[strip_idx_] heading)
     FOLLOW,       // /follow_path pending (driving along strip[strip_idx_])
+    NAV_AROUND,   // /navigate_to_pose pending — Option B obstacle bypass:
+                  // when both RPP and MPPI fail on a strip, route around
+                  // the obstacle to the strip's far end via Smac planner
+                  // so we still mow the un-blocked portion of the strip.
+                  // Permanent obstacles should be operator-flagged and
+                  // fed into F2C as polygon holes; this state handles
+                  // unflagged transient obstacles only.
     NEXT_STRIP,   // momentary; advance strip_idx_ then back to SPIN or DONE
     DONE_OK,
     DONE_FAIL,
@@ -391,11 +280,21 @@ private:
   /// heading. Returns RUNNING (goal sent) or FAILURE (server unavailable).
   BT::NodeStatus startSpinTo(double target_heading);
 
-  /// Send /follow_path for strip[strip_idx_]. Returns RUNNING or FAILURE.
-  BT::NodeStatus startFollow();
+  /// Send /follow_path for strip[strip_idx_] using @p controller_id
+  /// ("FollowPath" = RPP — clean straight tracking, "FollowCoveragePath"
+  /// = MPPI — obstacle-deviating). Returns RUNNING or FAILURE.
+  BT::NodeStatus startFollow(const std::string& controller_id);
+
+  /// Send /navigate_to_pose to strip[strip_idx_].end as the Option B
+  /// obstacle bypass after both RPP and MPPI failed on this strip.
+  /// Smac (the global planner) routes around any costmap-marked
+  /// obstacle in between, MPPI tracks the plan so dynamic deviation
+  /// is preserved. Returns RUNNING or FAILURE.
+  BT::NodeStatus startNavAroundObstacle();
 
   rclcpp_action::Client<SpinAction>::SharedPtr spin_client_;
   rclcpp_action::Client<FollowPathAction>::SharedPtr follow_client_;
+  rclcpp_action::Client<NavAction>::SharedPtr nav_client_;
   rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr blade_client_;
   rclcpp::Client<mowgli_interfaces::srv::PaintSwath>::SharedPtr paint_client_;
 
@@ -411,10 +310,23 @@ private:
   std::shared_future<FollowGoalHandle::WrappedResult> follow_result_future_;
   bool follow_result_requested_{false};
 
+  // /navigate_to_pose pending state (NAV_AROUND, Option B obstacle bypass)
+  std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
+  NavGoalHandle::SharedPtr nav_handle_;
+  std::shared_future<NavGoalHandle::WrappedResult> nav_result_future_;
+  bool nav_result_requested_{false};
+
   // Iteration state
   State state_{State::DONE_FAIL};
   std::size_t strip_idx_{0};
   double current_strip_heading_{0.0};
+  // Hybrid controller fallback: when RPP fails (typically because its
+  // collision-detection found a LiDAR-detected obstacle on the strip
+  // path), retry the SAME strip with MPPI. MPPI's ObstaclesCritic
+  // produces a deviation arc around the obstacle and continues to the
+  // strip end, so the strip area on either side of the obstacle still
+  // gets mowed instead of being skipped.
+  bool mppi_fallback_used_{false};
 
   // Driven-track accumulator (same role as in MowAreaWithCoverage).
   nav_msgs::msg::Path driven_trajectory_;
