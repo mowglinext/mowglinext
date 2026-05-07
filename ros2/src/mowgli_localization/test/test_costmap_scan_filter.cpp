@@ -37,12 +37,11 @@ sensor_msgs::msg::LaserScan filter_scan_for_test(const sensor_msgs::msg::LaserSc
   return out;
 }
 
-struct QuaternionForTest
+struct Vec3ForTest
 {
-  double w{1.0};
   double x{0.0};
   double y{0.0};
-  double z{0.0};
+  double z{1.0};
 };
 
 struct GroundFilterConfigForTest
@@ -55,13 +54,11 @@ struct GroundFilterConfigForTest
 
 void apply_ground_filter_for_test(sensor_msgs::msg::LaserScan& io,
                                   const GroundFilterConfigForTest& cfg,
-                                  const std::optional<QuaternionForTest>& imu_orientation)
+                                  const std::optional<Vec3ForTest>& up_in_imu)
 {
-  if (!cfg.enabled || !imu_orientation.has_value())
+  if (!cfg.enabled || !up_in_imu.has_value())
     return;
-  const auto& q = *imu_orientation;
-  const double k_cos = 2.0 * (q.x * q.z - q.w * q.y);
-  const double k_sin = 2.0 * (q.y * q.z + q.w * q.x);
+  const auto& u = *up_in_imu;
   const float min_z = static_cast<float>(cfg.min_obstacle_z_m);
   const float max_z = static_cast<float>(cfg.max_obstacle_z_m);
   const float inf = std::numeric_limits<float>::infinity();
@@ -73,17 +70,18 @@ void apply_ground_filter_for_test(sensor_msgs::msg::LaserScan& io,
     if (!std::isfinite(r))
       continue;
     const double a = a0 + da * static_cast<double>(i);
-    const double z_dir = k_cos * std::cos(a) + k_sin * std::sin(a);
+    const double z_dir = u.x * std::cos(a) + u.y * std::sin(a);
     const float return_z = static_cast<float>(cfg.lidar_height_m + r * z_dir);
     if (return_z < min_z || return_z > max_z)
       r = inf;
   }
 }
 
-inline QuaternionForTest quat_from_pitch_rad(double pitch_rad)
+/// Build the up-in-IMU vector for a robot pitched `pitch_rad` (positive
+/// = nose-down) at rest. accel = (-g·sin θ, 0, +g·cos θ); up = accel/|g|.
+inline Vec3ForTest up_from_pitch_rad(double pitch_rad)
 {
-  // Pitch-only quaternion: rotation around base_link Y axis.
-  return QuaternionForTest{std::cos(pitch_rad / 2.0), 0.0, std::sin(pitch_rad / 2.0), 0.0};
+  return Vec3ForTest{-std::sin(pitch_rad), 0.0, std::cos(pitch_rad)};
 }
 }  // namespace mowgli_localization
 
@@ -175,9 +173,9 @@ TEST(CostmapScanFilterGround, NoOpWhenDisabled)
   auto in = make_forward_only_scan(2.0f);
   mowgli_localization::GroundFilterConfigForTest cfg{
       false, 0.08, 1.5, 0.22};
-  std::optional<mowgli_localization::QuaternionForTest> q =
-      mowgli_localization::quat_from_pitch_rad(0.30);  // ~17° nose-down
-  mowgli_localization::apply_ground_filter_for_test(in, cfg, q);
+  std::optional<mowgli_localization::Vec3ForTest> u =
+      mowgli_localization::up_from_pitch_rad(0.30);  // ~17° nose-down
+  mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FLOAT_EQ(in.ranges[0], 2.0f);
 }
 
@@ -187,21 +185,21 @@ TEST(CostmapScanFilterGround, NoOpWhenNoImu)
   auto in = make_forward_only_scan(2.0f);
   mowgli_localization::GroundFilterConfigForTest cfg{
       true, 0.08, 1.5, 0.22};
-  std::optional<mowgli_localization::QuaternionForTest> q;  // empty
-  mowgli_localization::apply_ground_filter_for_test(in, cfg, q);
+  std::optional<mowgli_localization::Vec3ForTest> u;  // empty
+  mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FLOAT_EQ(in.ranges[0], 2.0f);
 }
 
 TEST(CostmapScanFilterGround, FlatGroundReturnPassesThroughOnLevelRobot)
 {
-  // Identity quaternion (no tilt). Forward beam at 2 m projects to
-  // Z = 0.22 + 2·0 = 0.22 m, which sits in [0.08, 1.5] → not filtered.
+  // Level robot — up vector is +Z, beam Z component is 0. Forward beam
+  // at 2 m projects to Z = 0.22 + 2·0 = 0.22 m, in [0.08, 1.5] → kept.
   auto in = make_forward_only_scan(2.0f);
   mowgli_localization::GroundFilterConfigForTest cfg{
       true, 0.08, 1.5, 0.22};
-  std::optional<mowgli_localization::QuaternionForTest> q =
-      mowgli_localization::QuaternionForTest{};  // identity
-  mowgli_localization::apply_ground_filter_for_test(in, cfg, q);
+  std::optional<mowgli_localization::Vec3ForTest> u =
+      mowgli_localization::Vec3ForTest{0.0, 0.0, 1.0};  // level
+  mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FLOAT_EQ(in.ranges[0], 2.0f);
 }
 
@@ -214,9 +212,9 @@ TEST(CostmapScanFilterGround, GroundReturnFilteredOnNoseDownSlope)
   mowgli_localization::GroundFilterConfigForTest cfg{
       true, 0.08, 1.5, 0.22};
   const double pitch_rad = 10.0 * M_PI / 180.0;  // nose-down (positive in URDF Y rotation)
-  std::optional<mowgli_localization::QuaternionForTest> q =
-      mowgli_localization::quat_from_pitch_rad(pitch_rad);
-  mowgli_localization::apply_ground_filter_for_test(in, cfg, q);
+  std::optional<mowgli_localization::Vec3ForTest> u =
+      mowgli_localization::up_from_pitch_rad(pitch_rad);
+  mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FALSE(std::isfinite(in.ranges[0]));
 }
 
@@ -228,9 +226,9 @@ TEST(CostmapScanFilterGround, NearObstacleSurvivesNoseDownSlope)
   mowgli_localization::GroundFilterConfigForTest cfg{
       true, 0.08, 1.5, 0.22};
   const double pitch_rad = 10.0 * M_PI / 180.0;
-  std::optional<mowgli_localization::QuaternionForTest> q =
-      mowgli_localization::quat_from_pitch_rad(pitch_rad);
-  mowgli_localization::apply_ground_filter_for_test(in, cfg, q);
+  std::optional<mowgli_localization::Vec3ForTest> u =
+      mowgli_localization::up_from_pitch_rad(pitch_rad);
+  mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FLOAT_EQ(in.ranges[0], 0.5f);
 }
 
@@ -243,9 +241,9 @@ TEST(CostmapScanFilterGround, OverheadReturnFilteredOnLevelRobot)
   auto in = make_forward_only_scan(2.0f);
   mowgli_localization::GroundFilterConfigForTest cfg{
       true, 0.08, 1.5, 1.55};
-  std::optional<mowgli_localization::QuaternionForTest> q =
-      mowgli_localization::QuaternionForTest{};  // identity (level)
-  mowgli_localization::apply_ground_filter_for_test(in, cfg, q);
+  std::optional<mowgli_localization::Vec3ForTest> u =
+      mowgli_localization::Vec3ForTest{0.0, 0.0, 1.0};  // level
+  mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FALSE(std::isfinite(in.ranges[0]));
 }
 
@@ -263,9 +261,9 @@ TEST(CostmapScanFilterGround, NonFiniteRangesUntouched)
   in.range_max = 12.0f;
   mowgli_localization::GroundFilterConfigForTest cfg{
       true, 0.08, 1.5, 0.22};
-  std::optional<mowgli_localization::QuaternionForTest> q =
-      mowgli_localization::quat_from_pitch_rad(0.30);
-  mowgli_localization::apply_ground_filter_for_test(in, cfg, q);
+  std::optional<mowgli_localization::Vec3ForTest> u =
+      mowgli_localization::up_from_pitch_rad(0.30);
+  mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FALSE(std::isfinite(in.ranges[0]));
   EXPECT_TRUE(std::isnan(in.ranges[1]));
 }

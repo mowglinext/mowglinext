@@ -16,7 +16,7 @@
 //      collision_monitor (which polls /scan unfiltered) handles real-time
 //      contact safety.
 //
-//   2. Ground filter (IMU-aware, slope-tolerant)
+//   2. Ground filter (gravity-aware, slope-tolerant)
 //      robot_localization runs in two_d_mode (forces pitch=roll=0 in TF),
 //      so on a sloped garden the LiDAR scan plane is physically tilted
 //      but TF reports it as horizontal. laser_geometry::projectLaser then
@@ -24,16 +24,26 @@
 //      min_obstacle_height filter does nothing — real ground returns at
 //      1–2 m show up as walls and the planner refuses to drive.
 //
-//      Fix: project each beam ourselves using the latest /imu/data
-//      orientation (which carries the actual robot pitch/roll). For each
-//      beam we compute the Z of the return relative to the gravity frame:
-//        return_Z = lidar_height + range · dz
-//        dz       = 2·(qx·qz − qw·qy)·cos α + 2·(qy·qz + qw·qx)·sin α
-//      where α is the beam angle and (qw,qx,qy,qz) is the IMU quaternion.
-//      Returns whose Z falls outside [min_obstacle_z_m, max_obstacle_z_m]
-//      get +inf'd. A 5° pitch at 2 m gives dz ≈ −0.087 → return Z ≈
-//      0.22 − 0.17 = 0.05 m, below the 0.08 m floor → filtered. Real
-//      obstacles whose top sits well above ground keep returns in-band.
+//      Fix: project each beam using the gravity vector measured directly
+//      by /imu/data linear_acceleration (which carries actual robot
+//      pitch/roll). The IMU orientation field on this stack is currently
+//      hardcoded identity by hardware_bridge — accel is the only signal
+//      that knows we're tilted. For each beam at angle α (LIDAR frame
+//      assumed flat-mounted relative to base_link), the Z component of
+//      the beam direction in the gravity-aligned frame is:
+//        z_dir    = (ax·cos α + ay·sin α) / |accel|
+//        return_Z = lidar_height + range · z_dir
+//      where (ax, ay, az) is the latest IMU linear_acceleration. A 10°
+//      nose-down pitch gives ax ≈ −1.7 m/s² → forward beam z_dir ≈ −0.17
+//      → return at 2 m projects to Z ≈ 0.22 − 0.35 = −0.13 m, below the
+//      0.08 m floor → filtered. Real obstacles whose top sits above the
+//      0.08 m floor keep returns in-band.
+//
+//      Outlier guard: if |accel| differs from g by more than
+//      accel_g_tolerance_ms2 (default 3.0 m/s²), the sample is treated
+//      as motion-dominated and the previous low-pass-filtered estimate
+//      is used. The robot mows at ~0.2 m/s with low body acceleration,
+//      so this is rarely needed but protects against bumps.
 //
 //      Falls back to pass-through if no IMU sample within `imu_max_age_s`
 //      so we never silently strip obstacles when localization is sick.
@@ -68,6 +78,7 @@ public:
     max_obstacle_z_m_ = declare_parameter<double>("max_obstacle_z_m", 1.5);
     lidar_height_m_ = declare_parameter<double>("lidar_height_m", 0.22);
     imu_max_age_s_ = declare_parameter<double>("imu_max_age_s", 0.5);
+    accel_g_tolerance_ms2_ = declare_parameter<double>("accel_g_tolerance_ms2", 3.0);
     const std::string input_topic = declare_parameter<std::string>("input_topic", "/scan");
     const std::string output_topic =
         declare_parameter<std::string>("output_topic", "/scan_costmap");
@@ -100,7 +111,9 @@ public:
     RCLCPP_INFO(get_logger(),
                 "costmap_scan_filter started — %s -> %s, dock_blank_range=%.2f m, "
                 "post_undock_blank_sec=%.1f s, ground_filter=%s [Z range %.2f..%.2f m, "
-                "lidar_height=%.2f m, imu_max_age=%.2f s, source %s].",
+                "lidar_height=%.2f m, imu_max_age=%.2f s, accel_g_tol=±%.2f m/s², "
+                "source %s — gravity-vector-based, tolerates hardware_bridge "
+                "publishing identity orientation].",
                 input_topic.c_str(),
                 output_topic.c_str(),
                 dock_blank_range_,
@@ -110,18 +123,21 @@ public:
                 max_obstacle_z_m_,
                 lidar_height_m_,
                 imu_max_age_s_,
+                accel_g_tolerance_ms2_,
                 imu_topic.c_str());
   }
 
+  static constexpr double kGravityMs2 = 9.80665;
+
   // --- Pure logic exposed for unit tests ---------------------------------
 
-  /// Quaternion components in (w, x, y, z) order — matches geometry_msgs.
-  struct Quaternion
+  /// Three-component vector — used for the gravity-aligned "up" direction
+  /// expressed in the IMU/base_link frame.
+  struct Vec3
   {
-    double w{1.0};
     double x{0.0};
     double y{0.0};
-    double z{0.0};
+    double z{1.0};
   };
 
   /// Ground-filter parameters bundled together so the test can call the
@@ -154,31 +170,28 @@ public:
     return out;
   }
 
-  /// Apply the IMU-aware ground filter to @p io in place. For each beam,
-  /// the projected return Z in a gravity-aligned frame is computed using
-  /// the LIDAR scan plane being parallel to base_link XY (flat mount):
+  /// Apply the gravity-aware ground filter to @p io in place. For each
+  /// beam at angle α (LIDAR frame, assumed flat-mounted relative to
+  /// base_link), the Z component of the beam direction in the gravity-
+  /// aligned frame is computed from the IMU's measured "up" unit vector:
   ///
-  ///     z_dir = 2·(qx·qz − qw·qy)·cos α + 2·(qy·qz + qw·qx)·sin α
+  ///     z_dir    = up_in_imu.x · cos α + up_in_imu.y · sin α
   ///     return_Z = lidar_height + range · z_dir
   ///
-  /// where α is the beam angle and (qw,qx,qy,qz) is the IMU quaternion
-  /// of base_link in the gravity-aligned (ENU/NED) frame. Returns whose
-  /// Z is outside [min_obstacle_z_m, max_obstacle_z_m] are pushed to
-  /// +inf so the obstacle_layer ignores them.
+  /// where up_in_imu = accel / |accel| (the gravity reaction direction).
+  /// Returns whose Z is outside [min_obstacle_z_m, max_obstacle_z_m] get
+  /// pushed to +inf so obstacle_layer ignores them.
   ///
-  /// `imu_orientation` is std::nullopt when no fresh IMU sample exists
-  /// (or the filter is disabled). In that case the function is a no-op.
+  /// `up_in_imu` is std::nullopt when no fresh sample exists (or the
+  /// filter is disabled). In that case the function is a no-op — better
+  /// to publish phantom obstacles than to silently strip real ones.
   static void apply_ground_filter(sensor_msgs::msg::LaserScan& io,
                                   const GroundFilterConfig& cfg,
-                                  const std::optional<Quaternion>& imu_orientation)
+                                  const std::optional<Vec3>& up_in_imu)
   {
-    if (!cfg.enabled || !imu_orientation.has_value())
+    if (!cfg.enabled || !up_in_imu.has_value())
       return;
-    const Quaternion q = *imu_orientation;
-    // Per-beam Z direction depends only on (cos α, sin α) once the
-    // quaternion is fixed; precompute the two coefficients.
-    const double k_cos = 2.0 * (q.x * q.z - q.w * q.y);
-    const double k_sin = 2.0 * (q.y * q.z + q.w * q.x);
+    const Vec3& u = *up_in_imu;
     const float min_z = static_cast<float>(cfg.min_obstacle_z_m);
     const float max_z = static_cast<float>(cfg.max_obstacle_z_m);
     const float inf = std::numeric_limits<float>::infinity();
@@ -190,7 +203,7 @@ public:
       if (!std::isfinite(r))
         continue;
       const double a = a0 + da * static_cast<double>(i);
-      const double z_dir = k_cos * std::cos(a) + k_sin * std::sin(a);
+      const double z_dir = u.x * std::cos(a) + u.y * std::sin(a);
       const float return_z = static_cast<float>(cfg.lidar_height_m + r * z_dir);
       if (return_z < min_z || return_z > max_z)
         r = inf;
@@ -215,8 +228,56 @@ private:
 
   void on_imu(const sensor_msgs::msg::Imu& msg)
   {
-    last_imu_orientation_ =
-        Quaternion{msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z};
+    // Use linear_acceleration as the gravity vector. The IMU on this
+    // stack publishes orientation as identity (hardware_bridge does no
+    // attitude estimation), so accel is the only signal that knows the
+    // robot's tilt. Treat as gravity reaction (points UP in IMU frame
+    // when at rest).
+    const double ax = msg.linear_acceleration.x;
+    const double ay = msg.linear_acceleration.y;
+    const double az = msg.linear_acceleration.z;
+    const double mag = std::sqrt(ax * ax + ay * ay + az * az);
+    if (mag < 1e-3)
+      return;  // bogus sample, ignore
+
+    // Outlier guard: at mowing speeds (≤0.3 m/s) the body acceleration
+    // is small, so |accel| stays close to g. A bump or step on a curb
+    // can push it well above. Treat samples outside ±accel_g_tolerance
+    // as motion-dominated and keep the previous low-pass estimate so we
+    // don't briefly trust a tilted-by-impulse reading.
+    const double dev = std::fabs(mag - kGravityMs2);
+    if (last_up_in_imu_.has_value() && dev > accel_g_tolerance_ms2_)
+    {
+      // Reject — keep the latched estimate alive (don't refresh stamp,
+      // so a sustained outlier window will eventually expire via
+      // imu_max_age_s_ and the filter will fall back to pass-through).
+      return;
+    }
+
+    Vec3 up{ax / mag, ay / mag, az / mag};
+    if (!last_up_in_imu_.has_value())
+    {
+      last_up_in_imu_ = up;
+    }
+    else
+    {
+      // 1st-order low-pass (α = 0.2): smooths instantaneous accel jitter
+      // without lagging real tilt changes (mowing speed → tilt changes
+      // over many scan periods anyway).
+      const double a = 0.2;
+      Vec3 prev = *last_up_in_imu_;
+      Vec3 mixed{a * up.x + (1.0 - a) * prev.x,
+                 a * up.y + (1.0 - a) * prev.y,
+                 a * up.z + (1.0 - a) * prev.z};
+      const double mmag = std::sqrt(mixed.x * mixed.x + mixed.y * mixed.y + mixed.z * mixed.z);
+      if (mmag > 1e-6)
+      {
+        mixed.x /= mmag;
+        mixed.y /= mmag;
+        mixed.z /= mmag;
+        last_up_in_imu_ = mixed;
+      }
+    }
     last_imu_stamp_ = now();
   }
 
@@ -228,12 +289,12 @@ private:
     // pass-through so we never silently strip obstacles when localization
     // is sick (better to have phantom ground returns than to blind the
     // costmap entirely).
-    std::optional<Quaternion> imu_q;
+    std::optional<Vec3> up;
     if (enable_ground_filter_ && last_imu_stamp_.nanoseconds() != 0)
     {
       const double age = (now() - last_imu_stamp_).seconds();
       if (age >= 0.0 && age < imu_max_age_s_)
-        imu_q = last_imu_orientation_;
+        up = last_up_in_imu_;
       else
       {
         RCLCPP_WARN_THROTTLE(get_logger(),
@@ -248,7 +309,7 @@ private:
                            min_obstacle_z_m_,
                            max_obstacle_z_m_,
                            lidar_height_m_};
-    apply_ground_filter(out, cfg, imu_q);
+    apply_ground_filter(out, cfg, up);
 
     pub_scan_->publish(out);
   }
@@ -285,6 +346,7 @@ private:
   double max_obstacle_z_m_{1.5};
   double lidar_height_m_{0.22};
   double imu_max_age_s_{0.5};
+  double accel_g_tolerance_ms2_{3.0};
 
   // --- Charging-state machine -------------------------------------------
 
@@ -294,7 +356,9 @@ private:
 
   // --- IMU latch (for ground filter) ------------------------------------
 
-  std::optional<Quaternion> last_imu_orientation_;
+  /// Low-pass-filtered "up" direction in IMU frame, derived from the
+  /// gravity component of linear_acceleration. Empty until first sample.
+  std::optional<Vec3> last_up_in_imu_;
   rclcpp::Time last_imu_stamp_{0, 0, RCL_ROS_TIME};
 };
 
