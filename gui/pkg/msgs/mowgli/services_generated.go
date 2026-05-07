@@ -204,6 +204,19 @@ type MowerControlRes struct {
 	Success                   bool                           `json:"success"`
 }
 
+// PromoteObstacleReq for mowgli_interfaces/srv/PromoteObstacle request.
+type PromoteObstacleReq struct {
+	AreaIndex                 uint32                         `json:"area_index"`
+	ObstacleId                uint32                         `json:"obstacle_id"`
+	Polygon                   geometry.Polygon               `json:"polygon"`
+}
+
+// PromoteObstacleRes for mowgli_interfaces/srv/PromoteObstacle response.
+type PromoteObstacleRes struct {
+	Success                   bool                           `json:"success"`
+	Message                   string                         `json:"message"`
+}
+
 // SetDockingPointReq for mowgli_interfaces/srv/SetDockingPoint request.
 type SetDockingPointReq struct {
 	DockingPose               geometry.Pose                  `json:"docking_pose"`

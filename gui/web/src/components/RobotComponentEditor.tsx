@@ -7,8 +7,6 @@ import { useRobotDescription } from "../hooks/useRobotDescription.ts";
 import { useCalibrationStatus } from "../hooks/useCalibrationStatus.ts";
 import { useImuYawCalibration } from "../hooks/useImuYawCalibration.ts";
 import { usePose } from "../hooks/usePose.ts";
-import { useApi } from "../hooks/useApi.ts";
-import { getQuaternionFromHeading } from "../utils/map.tsx";
 
 const { Text } = Typography;
 
@@ -109,7 +107,6 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
     const [hoveredSensor, setHoveredSensor] = useState<SensorId | null>(null);
     const { status: calibrationStatus } = useCalibrationStatus();
     const { notification } = App.useApp();
-    const guiApi = useApi();
     const pose = usePose();
     const [settingDock, setSettingDock] = useState(false);
 
@@ -125,27 +122,33 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
 
     const writeDockPose = useCallback(
         async (px: number, py: number, yaw: number) => {
-            const q = getQuaternionFromHeading(yaw);
+            // Stage the new dock pose into the form's local state. The
+            // Save button now drives persistence — handleSave in
+            // useSettingsManager persists dock_pose_x/y/yaw to YAML
+            // (alongside any other dirty fields) and then fires
+            // /map_server_node/set_docking_point so map_server picks
+            // up the new value at runtime. Auto-persisting here used
+            // to write the YAML directly via mapDockingCreate, but
+            // that left the GUI's savedValues out of sync with disk
+            // and the Save Settings button never glowed — operators
+            // had no visible signal that the change was committed.
             try {
                 setSettingDock(true);
-                await guiApi.mowglinext.mapDockingCreate({
-                    docking_pose: {
-                        orientation: {x: q.x!, y: q.y!, z: q.z!, w: q.w!},
-                        position: {x: px, y: py, z: 0},
-                    },
-                });
                 onChange("dock_pose_x", roundTo(px, 3));
                 onChange("dock_pose_y", roundTo(py, 3));
                 onChange("dock_pose_yaw", roundTo(yaw, 4));
-                notification.success({message: "Dock pose set to current robot position"});
+                notification.success({
+                    message: "Dock pose staged",
+                    description: "Click Save Settings to persist and refresh map_server.",
+                });
             } catch (e: unknown) {
                 const message = e instanceof Error ? e.message : "Unknown error";
-                notification.error({message: "Failed to set dock pose", description: message});
+                notification.error({message: "Failed to stage dock pose", description: message});
             } finally {
                 setSettingDock(false);
             }
         },
-        [guiApi, notification, onChange],
+        [notification, onChange],
     );
 
     // Open a confirmation modal that previews the change and spells out

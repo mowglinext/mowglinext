@@ -551,6 +551,30 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(200, map[string]interface{}{"message": res.Message})
 				return
 			}
+		case "promote_obstacle":
+			// Convert a transient /obstacle_tracker/obstacles observation
+			// (or a free-form polygon) into a persistent keepout for one
+			// of the mowing areas. After the obstacle-tracker decouple
+			// (#6), this is the only path that mutates obstacle_polygons_;
+			// auto-promotion is gone.
+			var CallReq mowgli.PromoteObstacleReq
+			err = c.BindJSON(&CallReq)
+			if err != nil {
+				return
+			}
+			var promoteRes mowgli.PromoteObstacleRes
+			err = provider.CallService(c.Request.Context(),
+				"/map_server_node/promote_obstacle",
+				&CallReq,
+				&promoteRes,
+				"mowgli_interfaces/srv/PromoteObstacle")
+			if err == nil && !promoteRes.Success {
+				err = errors.New(promoteRes.Message)
+			}
+			if err == nil {
+				c.JSON(200, map[string]interface{}{"message": promoteRes.Message})
+				return
+			}
 		case "fusion_graph_save", "fusion_graph_clear":
 			// Both target std_srvs/Trigger services on fusion_graph_node.
 			type TriggerRes struct {

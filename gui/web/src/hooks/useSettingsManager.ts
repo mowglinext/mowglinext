@@ -3,6 +3,7 @@ import { useApi } from "./useApi.ts";
 import { App } from "antd";
 import { dirtyKeysRequireGpsRestart, restartGps } from "../utils/containers.ts";
 import { useContainerRestart } from "./useContainerRestart.ts";
+import { getQuaternionFromHeading } from "../utils/map.tsx";
 
 export type SettingsSection =
     | "hardware"
@@ -231,8 +232,13 @@ export const useSettingsManager = () => {
         try {
             setSaving(true);
             // Capture which keys were dirty BEFORE we mark them saved, so we
-            // can decide whether GPS needs an auto-restart.
+            // can decide whether GPS needs an auto-restart and whether we
+            // need to refresh map_server's dock pose at runtime.
             const gpsDirty = dirtyKeysRequireGpsRestart(dirtyKeys);
+            const dockDirty =
+                dirtyKeys.has("dock_pose_x") ||
+                dirtyKeys.has("dock_pose_y") ||
+                dirtyKeys.has("dock_pose_yaw");
             // Only send keys the user actually changed. The backend merges
             // payload over the on-disk YAML, so omitting unchanged keys
             // preserves anything other processes may have written between
@@ -261,6 +267,34 @@ export const useSettingsManager = () => {
             // container is still running.
             if (gpsDirty) {
                 await gpsRestart.run(() => restartGps(guiApi));
+            }
+            // Push the new dock pose into map_server at runtime so the
+            // dock body / corridor / exclusion polygons + keepout mask
+            // get rebuilt without a restart. yamlCreate above persisted
+            // dock_pose_* to mowgli_robot.yaml; this call is the
+            // counterpart to the old in-process auto-persist behavior
+            // that lived in RobotComponentEditor's "Set dock pose"
+            // button (was triggering before the user clicked save, so
+            // the save button never glowed).
+            if (dockDirty) {
+                const px = Number(localValues["dock_pose_x"] ?? 0);
+                const py = Number(localValues["dock_pose_y"] ?? 0);
+                const yawRad = Number(localValues["dock_pose_yaw"] ?? 0);
+                const q = getQuaternionFromHeading(yawRad);
+                try {
+                    await guiApi.mowglinext.mapDockingCreate({
+                        docking_pose: {
+                            orientation: {x: q.x!, y: q.y!, z: q.z!, w: q.w!},
+                            position: {x: px, y: py, z: 0},
+                        },
+                    });
+                } catch (e: any) {
+                    notification.warning({
+                        message: "Settings saved, but map_server runtime refresh failed",
+                        description: e?.message ??
+                            "Restart ROS2 (or call /map_server_node/set_docking_point manually) to pick up the new dock pose.",
+                    });
+                }
             }
         } catch (e: any) {
             notification.error({
