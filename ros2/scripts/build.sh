@@ -12,7 +12,7 @@
 # Examples:
 #   ./scripts/build.sh
 #   BUILD_TYPE=Debug ./scripts/build.sh
-#   PACKAGES="mowgli_behavior mowgli_nav2_plugins" ./scripts/build.sh
+#   PACKAGES="mowgli_behavior mowgli_bringup" ./scripts/build.sh
 #
 # NOTE: Make this script executable on the host before use:
 #   chmod +x scripts/build.sh

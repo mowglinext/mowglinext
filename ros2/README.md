@@ -117,7 +117,6 @@ Originally inspired by the [OpenMower](https://github.com/ClemensElflein/open_mo
 | `mowgli_localization` | `wheel_odometry_node` `navsat_to_absolute_pose_node` `localization_monitor_node` | Wheel odometry, GPS absolute pose + `/gps/pose_cov` conversion, localization mode monitor, COG-to-IMU absolute-yaw publisher, magnetometer yaw publisher, dock-yaw auto-capture. robot_localization's `ekf_odom_node`/`ekf_map_node`/`navsat_transform_node` are launched directly from the stock package |
 | `mowgli_behavior` | `behavior_tree_node` | BehaviorTree.CPP v4 executor. Loads `main_tree.xml`. All BT action and condition nodes |
 | `mowgli_map` | `map_server_node` `obstacle_tracker_node` | GridMap with 4 layers, area CRUD services, keepout/speed filter masks, mow progress, strip coverage planner (`~/get_next_strip`, `~/get_coverage_status`). Persistent LiDAR obstacle detection |
-| `mowgli_nav2_plugins` | — | `FTCController` Nav2 controller plugin library loaded by `controller_server` |
 | `mowgli_monitoring` | `diagnostics_node` `mqtt_bridge_node` | Diagnostics aggregator monitoring 8 subsystems at 1 Hz. Optional MQTT bridge |
 | `mowgli_simulation` | `gps_degradation_sim_node` `navsat_to_pose_node` | Gazebo Harmonic worlds, SDF mower model, GPS degradation simulator |
 

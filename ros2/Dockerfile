@@ -157,8 +157,6 @@ COPY src/mowgli_localization/package.xml  src/mowgli_localization/package.xml
 COPY src/mowgli_localization/CMakeLists.txt src/mowgli_localization/CMakeLists.txt
 COPY src/mowgli_map/package.xml           src/mowgli_map/package.xml
 COPY src/mowgli_map/CMakeLists.txt        src/mowgli_map/CMakeLists.txt
-COPY src/mowgli_nav2_plugins/package.xml  src/mowgli_nav2_plugins/package.xml
-COPY src/mowgli_nav2_plugins/CMakeLists.txt src/mowgli_nav2_plugins/CMakeLists.txt
 COPY src/mowgli_behavior/package.xml      src/mowgli_behavior/package.xml
 COPY src/mowgli_behavior/CMakeLists.txt   src/mowgli_behavior/CMakeLists.txt
 COPY src/mowgli_monitoring/package.xml    src/mowgli_monitoring/package.xml
@@ -171,6 +169,22 @@ COPY src/fusion_graph/package.xml         src/fusion_graph/package.xml
 COPY src/fusion_graph/CMakeLists.txt      src/fusion_graph/CMakeLists.txt
 # fusion_graph is the opt-in factor-graph replacement for ekf_map_node;
 # depends on libgtsam-dev installed in the base stage.
+# opennav_coverage — Fields2Cover-backed coverage planning. Vendored in
+# src/opennav_coverage/ as 6 sub-packages. Pre-copy each package.xml so
+# rosdep can resolve their build deps (fields2cover, gtest, etc.) in
+# the cached layer.
+COPY src/opennav_coverage/opennav_coverage_msgs/package.xml         src/opennav_coverage/opennav_coverage_msgs/package.xml
+COPY src/opennav_coverage/opennav_coverage_msgs/CMakeLists.txt      src/opennav_coverage/opennav_coverage_msgs/CMakeLists.txt
+COPY src/opennav_coverage/opennav_coverage/package.xml              src/opennav_coverage/opennav_coverage/package.xml
+COPY src/opennav_coverage/opennav_coverage/CMakeLists.txt           src/opennav_coverage/opennav_coverage/CMakeLists.txt
+COPY src/opennav_coverage/opennav_coverage_bt/package.xml           src/opennav_coverage/opennav_coverage_bt/package.xml
+COPY src/opennav_coverage/opennav_coverage_bt/CMakeLists.txt        src/opennav_coverage/opennav_coverage_bt/CMakeLists.txt
+COPY src/opennav_coverage/opennav_coverage_navigator/package.xml    src/opennav_coverage/opennav_coverage_navigator/package.xml
+COPY src/opennav_coverage/opennav_coverage_navigator/CMakeLists.txt src/opennav_coverage/opennav_coverage_navigator/CMakeLists.txt
+COPY src/opennav_coverage/opennav_row_coverage/package.xml          src/opennav_coverage/opennav_row_coverage/package.xml
+COPY src/opennav_coverage/opennav_row_coverage/CMakeLists.txt       src/opennav_coverage/opennav_row_coverage/CMakeLists.txt
+COPY src/opennav_coverage/opennav_coverage_demo/package.xml         src/opennav_coverage/opennav_coverage_demo/package.xml
+COPY src/opennav_coverage/opennav_coverage_demo/CMakeLists.txt      src/opennav_coverage/opennav_coverage_demo/CMakeLists.txt
 
 # Resolve rosdep dependencies (cached until package.xml changes)
 RUN rosdep update --rosdistro kilted \
