@@ -352,12 +352,15 @@ private:
   double boundary_inner_margin_m_{0.3};
 
 
-  /// Extent of the dock approach corridor along -X in dock local frame (m).
-  /// Cells within this rectangle in front of the dock are marked
-  /// NO_GO_ZONE so coverage strips stop before the straight-line alignment
-  /// corridor that opennav_docking needs for the final approach.
-  double dock_approach_corridor_length_m_{1.5};
-  double dock_approach_corridor_half_width_m_{0.40};
+  /// Dock physical body dimensions in dock-local frame (origin = robot's
+  /// body when docked, +X = direction robot faces). Defines the rectangle
+  /// used for both the dock_exclusion_polygon (classification + keepout
+  /// carve-out) and the dock_planning_polygon (F2C polygon hole). No
+  /// approach corridor — that was creating phantom obstacles 1.5 m around
+  /// the dock that blocked all Nav2 motion after undock.
+  double dock_body_forward_m_{0.45};
+  double dock_body_back_m_{0.35};
+  double dock_body_half_width_m_{0.275};
 
   // ── State ─────────────────────────────────────────────────────────────────
   grid_map::GridMap map_;
