@@ -28,9 +28,12 @@
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "mowgli_interfaces/srv/paint_swath.hpp"
+#include "geometry_msgs/msg/twist_stamped.hpp"
+#include "nav_msgs/msg/odometry.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav2_msgs/action/spin.hpp"
+#include "sensor_msgs/msg/laser_scan.hpp"
 #include "opennav_coverage_msgs/action/compute_coverage_path.hpp"
 #include "opennav_coverage_msgs/action/navigate_complete_coverage.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -199,28 +202,30 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// FollowSwathsWithSpin — pivot-in-place at strip ends.
+// FollowSwathsWithSpin — gyro-locked straight-line strip drive with
+// Roborock-style reactive obstacle avoidance.
 //
-// Iterates ctx->current_swaths (populated by ComputeCoveragePath from
-// F2C's coverage_path.swaths[]). For each strip:
+// For each strip from F2C's coverage_path.swaths[]:
 //
-//   1. /spin — pivot in place to align with the strip's heading (atan2
-//      from start to end). The first strip's spin handles the post-
-//      NavigateToFirstStripPose alignment; subsequent spins are 180°
-//      flips between adjacent boustrophedon strips.
-//   2. /follow_path — follow a 2-pose mini-path (start → end) along
-//      the strip with FollowCoveragePath controller (MPPI). Since the
-//      mini-path is a straight line, MPPI tracks it cleanly without
-//      the wide-arc smoothing it does at strip-end transitions of
-//      F2C's connected nav_path.
+//   1. /spin — pivot to align with the strip's heading (Nav2 behavior_server
+//      Spin action). Sets the heading reference at strip start.
+//   2. DRIVE — direct cmd_vel publishing in a tight loop (no Nav2 controller
+//      in the path-tracking loop):
+//        * Heading PID against the locked yaw_target_odom captured at
+//          strip start. Uses /odom yaw which is drift-free local frame —
+//          GPS jitter on /map can't kick the robot off course.
+//        * LiDAR forward-arc clearance check at every tick. If an obstacle
+//          is within obstacle_threshold_m, swerve to the side with more
+//          clearance (left vs right arc) at reduced speed. When clear,
+//          resume heading PID at full speed.
+//        * Stops when the integrated forward distance from /odom reaches
+//          strip_length, OR a watchdog timeout fires.
+//      This mirrors how a Roborock mows: drive straight, route around
+//      obstacles, continue. The strip ends slightly offset laterally
+//      after avoidance, but the next strip (0.18 m away) covers any
+//      missed area via overlap.
 //
 // On SUCCESS, paints the driven track into mow_progress.
-//
-// This node is the "option 2" implementation of the user's pivot-in-
-// place request: F2C still plans the coverage layout, but we discard
-// its inter-strip turn arcs and synthesise explicit pivots ourselves.
-// Mirrors what main-branch FTC achieved before the opennav_coverage
-// migration.
 // ---------------------------------------------------------------------------
 
 class FollowSwathsWithSpin : public BT::StatefulActionNode
@@ -228,10 +233,6 @@ class FollowSwathsWithSpin : public BT::StatefulActionNode
 public:
   using SpinAction = nav2_msgs::action::Spin;
   using SpinGoalHandle = rclcpp_action::ClientGoalHandle<SpinAction>;
-  using FollowPathAction = nav2_msgs::action::FollowPath;
-  using FollowGoalHandle = rclcpp_action::ClientGoalHandle<FollowPathAction>;
-  using NavAction = nav2_msgs::action::NavigateToPose;
-  using NavGoalHandle = rclcpp_action::ClientGoalHandle<NavAction>;
 
   FollowSwathsWithSpin(const std::string& name, const BT::NodeConfig& config)
       : BT::StatefulActionNode(name, config)
@@ -250,15 +251,8 @@ public:
 private:
   enum class State
   {
-    SPIN,         // /spin pending (aligning to strip[strip_idx_] heading)
-    FOLLOW,       // /follow_path pending (driving along strip[strip_idx_])
-    NAV_AROUND,   // /navigate_to_pose pending — Option B obstacle bypass:
-                  // when both RPP and MPPI fail on a strip, route around
-                  // the obstacle to the strip's far end via Smac planner
-                  // so we still mow the un-blocked portion of the strip.
-                  // Permanent obstacles should be operator-flagged and
-                  // fed into F2C as polygon holes; this state handles
-                  // unflagged transient obstacles only.
+    SPIN,         // /spin pending — aligning to strip[strip_idx_] heading
+    DRIVE,        // gyro-locked + LiDAR-avoid drive forward to strip end
     NEXT_STRIP,   // momentary; advance strip_idx_ then back to SPIN or DONE
     DONE_OK,
     DONE_FAIL,
@@ -272,31 +266,40 @@ private:
   /// strip[i].end as a forward straight line.
   double swathHeadingRad(std::size_t idx) const;
 
-  /// Build a 2-pose nav_msgs/Path for FollowPath: header = map / now,
-  /// poses[0] = swath start at heading h, poses[1] = swath end at h.
-  nav_msgs::msg::Path buildStripPath(std::size_t idx, double heading) const;
+  /// Compute the Euclidean length of strip[i].
+  double swathLengthM(std::size_t idx) const;
 
   /// Send /spin with target_yaw = delta to align robot with strip
   /// heading. Returns RUNNING (goal sent) or FAILURE (server unavailable).
   BT::NodeStatus startSpinTo(double target_heading);
 
-  /// Send /follow_path for strip[strip_idx_] using @p controller_id
-  /// ("FollowPath" = RPP — clean straight tracking, "FollowCoveragePath"
-  /// = MPPI — obstacle-deviating). Returns RUNNING or FAILURE.
-  BT::NodeStatus startFollow(const std::string& controller_id);
+  /// Begin the DRIVE phase: capture initial yaw + position from latest /odom,
+  /// reset distance accumulator. The control loop runs in onRunning while
+  /// state_ == DRIVE.
+  BT::NodeStatus startDrive();
 
-  /// Send /navigate_to_pose to strip[strip_idx_].end as the Option B
-  /// obstacle bypass after both RPP and MPPI failed on this strip.
-  /// Smac (the global planner) routes around any costmap-marked
-  /// obstacle in between, MPPI tracks the plan so dynamic deviation
-  /// is preserved. Returns RUNNING or FAILURE.
-  BT::NodeStatus startNavAroundObstacle();
+  /// One tick of the DRIVE control loop. Reads latest /odom + /scan, computes
+  /// cmd_vel (gyro PID + reactive avoidance), publishes to /cmd_vel_nav.
+  /// Returns RUNNING, or transitions state_ on completion / failure.
+  void tickDrive();
+
+  /// Min /scan range within an angular arc relative to robot forward
+  /// (positive = left). Returns +inf if no valid returns in the arc.
+  double minRangeInArc(double arc_min_rad, double arc_max_rad) const;
 
   rclcpp_action::Client<SpinAction>::SharedPtr spin_client_;
-  rclcpp_action::Client<FollowPathAction>::SharedPtr follow_client_;
-  rclcpp_action::Client<NavAction>::SharedPtr nav_client_;
   rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr blade_client_;
   rclcpp::Client<mowgli_interfaces::srv::PaintSwath>::SharedPtr paint_client_;
+
+  // /cmd_vel publisher — feeds into the existing twist_mux pipeline at the
+  // same topic the controller_server normally publishes on. Since we don't
+  // dispatch to /follow_path, controller_server is dormant and our cmd_vel
+  // is the sole publisher for the strip drive.
+  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_pub_;
+  rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  sensor_msgs::msg::LaserScan::ConstSharedPtr latest_scan_;
+  nav_msgs::msg::Odometry::ConstSharedPtr latest_odom_;
 
   // /spin pending state
   std::shared_future<SpinGoalHandle::SharedPtr> spin_future_;
@@ -304,31 +307,19 @@ private:
   std::shared_future<SpinGoalHandle::WrappedResult> spin_result_future_;
   bool spin_result_requested_{false};
 
-  // /follow_path pending state
-  std::shared_future<FollowGoalHandle::SharedPtr> follow_future_;
-  FollowGoalHandle::SharedPtr follow_handle_;
-  std::shared_future<FollowGoalHandle::WrappedResult> follow_result_future_;
-  bool follow_result_requested_{false};
-
-  // /navigate_to_pose pending state (NAV_AROUND, Option B obstacle bypass)
-  std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
-  NavGoalHandle::SharedPtr nav_handle_;
-  std::shared_future<NavGoalHandle::WrappedResult> nav_result_future_;
-  bool nav_result_requested_{false};
+  // DRIVE state
+  double drive_target_yaw_odom_{0.0};   // yaw at strip start (odom frame, gyro-locked)
+  double drive_start_x_odom_{0.0};
+  double drive_start_y_odom_{0.0};
+  double drive_target_distance_m_{0.0}; // strip length
+  rclcpp::Time drive_start_time_;
 
   // Iteration state
   State state_{State::DONE_FAIL};
   std::size_t strip_idx_{0};
   double current_strip_heading_{0.0};
-  // Hybrid controller fallback: when RPP fails (typically because its
-  // collision-detection found a LiDAR-detected obstacle on the strip
-  // path), retry the SAME strip with MPPI. MPPI's ObstaclesCritic
-  // produces a deviation arc around the obstacle and continues to the
-  // strip end, so the strip area on either side of the obstacle still
-  // gets mowed instead of being skipped.
-  bool mppi_fallback_used_{false};
 
-  // Driven-track accumulator (same role as in MowAreaWithCoverage).
+  // Driven-track accumulator.
   nav_msgs::msg::Path driven_trajectory_;
   static constexpr double min_pose_step_m_ = 0.05;
   bool blade_on_{false};

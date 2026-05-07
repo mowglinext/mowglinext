@@ -28,6 +28,7 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(action_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
@@ -69,6 +70,7 @@ ament_target_dependencies(behavior_tree_node
   nav2_msgs
   nav_msgs
   geometry_msgs
+  sensor_msgs
   action_msgs
   std_msgs
   std_srvs
@@ -122,6 +124,7 @@ if(BUILD_TESTING)
   ament_target_dependencies(test_recording_nodes
     rclcpp
     geometry_msgs
+    sensor_msgs
     behaviortree_cpp
     mowgli_interfaces
     nav_msgs
@@ -150,6 +153,7 @@ if(BUILD_TESTING)
     rclcpp
     rclcpp_action
     geometry_msgs
+    sensor_msgs
     behaviortree_cpp
     mowgli_interfaces
     nav_msgs

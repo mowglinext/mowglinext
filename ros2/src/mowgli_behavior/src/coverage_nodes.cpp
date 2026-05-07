@@ -810,46 +810,11 @@ double FollowSwathsWithSpin::swathHeadingRad(std::size_t idx) const
   return std::atan2(sw.end.y - sw.start.y, sw.end.x - sw.start.x);
 }
 
-nav_msgs::msg::Path FollowSwathsWithSpin::buildStripPath(std::size_t idx,
-                                                          double heading) const
+double FollowSwathsWithSpin::swathLengthM(std::size_t idx) const
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   const auto& sw = ctx->current_swaths.at(idx);
-  nav_msgs::msg::Path path;
-  path.header.frame_id = "map";
-  path.header.stamp = ctx->node->now();
-
-  const double qz = std::sin(heading / 2.0);
-  const double qw = std::cos(heading / 2.0);
-
-  // Interpolate intermediate poses every ~0.10 m so MPPI's PathHandler
-  // has enough waypoints for PathAlignCritic to actually lock onto.
-  // The previous 2-pose path (just start + end) gave PathAlignCritic
-  // only two anchors over a 4.9 m strip — strip-locking force was
-  // effectively zero, MPPI smooth-cost-arced westward and crossed the
-  // polygon edge (sim 50 BV at (-3.01, 1.98) mid strip[0]).
-  // MowHeadlandPerimeter's buildPerimeterPath uses the same step and
-  // tracked the perimeter cleanly, which is the working reference.
-  constexpr double kStepM = 0.10;
-  const double dx = sw.end.x - sw.start.x;
-  const double dy = sw.end.y - sw.start.y;
-  const double L = std::hypot(dx, dy);
-  const std::size_t steps =
-      std::max<std::size_t>(2, static_cast<std::size_t>(std::ceil(L / kStepM)));
-
-  for (std::size_t s = 0; s <= steps; ++s)
-  {
-    const double t = static_cast<double>(s) / static_cast<double>(steps);
-    geometry_msgs::msg::PoseStamped p;
-    p.header = path.header;
-    p.pose.position.x = sw.start.x + dx * t;
-    p.pose.position.y = sw.start.y + dy * t;
-    p.pose.orientation.z = qz;
-    p.pose.orientation.w = qw;
-    path.poses.push_back(p);
-  }
-
-  return path;
+  return std::hypot(sw.end.x - sw.start.x, sw.end.y - sw.start.y);
 }
 
 BT::NodeStatus FollowSwathsWithSpin::startSpinTo(double target_heading)
@@ -897,84 +862,136 @@ BT::NodeStatus FollowSwathsWithSpin::startSpinTo(double target_heading)
   return BT::NodeStatus::RUNNING;
 }
 
-BT::NodeStatus FollowSwathsWithSpin::startFollow(const std::string& controller_id)
+BT::NodeStatus FollowSwathsWithSpin::startDrive()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
-  if (!follow_client_)
-  {
-    follow_client_ = rclcpp_action::create_client<FollowPathAction>(
-        ctx->node, "/follow_path");
-  }
-  if (!follow_client_->wait_for_action_server(std::chrono::seconds(2)))
+
+  if (!latest_odom_)
   {
     RCLCPP_ERROR(ctx->node->get_logger(),
-                 "FollowSwathsWithSpin: /follow_path not available");
+                 "FollowSwathsWithSpin: no /odom message received yet — "
+                 "cannot start strip drive");
     return BT::NodeStatus::FAILURE;
   }
-  FollowPathAction::Goal goal;
-  goal.path = buildStripPath(strip_idx_, current_strip_heading_);
-  // Hybrid controller routing — see method docstring for rationale.
-  // Default path is "FollowPath" (RPP+RotationShim) which produces clean
-  // straight strips. On collision-detection abort the BT retries with
-  // "FollowCoveragePath" (MPPI), whose ObstaclesCritic deviates around
-  // the obstacle so the un-blocked portion of the strip still gets mowed.
-  goal.controller_id = controller_id;
-  goal.goal_checker_id = "coverage_goal_checker";
-  follow_handle_.reset();
-  follow_result_requested_ = false;
-  follow_future_ = follow_client_->async_send_goal(goal);
+
+  // Capture initial yaw + position in odom frame at the moment the spin
+  // ended. Yaw is what we'll PID against (gyro lock — drift-free vs map),
+  // position is the reference for measuring strip travel distance.
+  drive_target_yaw_odom_ = yawFromQuat(latest_odom_->pose.pose.orientation);
+  drive_start_x_odom_ = latest_odom_->pose.pose.position.x;
+  drive_start_y_odom_ = latest_odom_->pose.pose.position.y;
+  drive_target_distance_m_ = swathLengthM(strip_idx_);
+  drive_start_time_ = ctx->node->now();
+
   RCLCPP_INFO(ctx->node->get_logger(),
-              "FollowSwathsWithSpin: follow strip[%zu] via %s "
-              "(start=(%.2f,%.2f) end=(%.2f,%.2f) heading=%.1f°)",
-              strip_idx_,
-              controller_id == "FollowPath" ? "RPP" : "MPPI",
-              ctx->current_swaths[strip_idx_].start.x,
-              ctx->current_swaths[strip_idx_].start.y,
-              ctx->current_swaths[strip_idx_].end.x,
-              ctx->current_swaths[strip_idx_].end.y,
-              current_strip_heading_ * 180.0 / M_PI);
+              "FollowSwathsWithSpin: drive strip[%zu] gyro-lock yaw=%.1f° "
+              "len=%.2fm (start odom=(%.2f,%.2f))",
+              strip_idx_, drive_target_yaw_odom_ * 180.0 / M_PI,
+              drive_target_distance_m_,
+              drive_start_x_odom_, drive_start_y_odom_);
   return BT::NodeStatus::RUNNING;
 }
 
-BT::NodeStatus FollowSwathsWithSpin::startNavAroundObstacle()
+double FollowSwathsWithSpin::minRangeInArc(double arc_min_rad,
+                                            double arc_max_rad) const
+{
+  if (!latest_scan_) return std::numeric_limits<double>::infinity();
+  const auto& s = *latest_scan_;
+  const std::size_t n = s.ranges.size();
+  if (n == 0) return std::numeric_limits<double>::infinity();
+  double best = std::numeric_limits<double>::infinity();
+  for (std::size_t i = 0; i < n; ++i)
+  {
+    const double a = s.angle_min + i * s.angle_increment;
+    if (a < arc_min_rad || a > arc_max_rad) continue;
+    const double r = s.ranges[i];
+    if (!std::isfinite(r) || r < s.range_min || r > s.range_max) continue;
+    if (r < best) best = r;
+  }
+  return best;
+}
+
+void FollowSwathsWithSpin::tickDrive()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
-  if (!nav_client_)
+  if (!latest_odom_) return;  // wait for odom
+
+  // 1. Distance check — strip done?
+  const double dx = latest_odom_->pose.pose.position.x - drive_start_x_odom_;
+  const double dy = latest_odom_->pose.pose.position.y - drive_start_y_odom_;
+  const double traveled = std::hypot(dx, dy);
+  if (traveled >= drive_target_distance_m_)
   {
-    nav_client_ = rclcpp_action::create_client<NavAction>(
-        ctx->node, "/navigate_to_pose");
+    geometry_msgs::msg::TwistStamped stop;
+    stop.header.stamp = ctx->node->now();
+    stop.header.frame_id = "base_link";
+    cmd_vel_pub_->publish(stop);
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "FollowSwathsWithSpin: strip[%zu] complete (traveled %.2fm)",
+                strip_idx_, traveled);
+    state_ = State::NEXT_STRIP;
+    return;
   }
-  if (!nav_client_->wait_for_action_server(std::chrono::seconds(2)))
+
+  // 2. Watchdog — abort the strip if it takes more than 3× nominal time.
+  const double nominal_time = drive_target_distance_m_ / 0.15;  // cruise speed
+  const double elapsed = (ctx->node->now() - drive_start_time_).seconds();
+  if (elapsed > 3.0 * nominal_time + 10.0)
   {
-    RCLCPP_ERROR(ctx->node->get_logger(),
-                 "FollowSwathsWithSpin: /navigate_to_pose not available");
-    return BT::NodeStatus::FAILURE;
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowSwathsWithSpin: strip[%zu] watchdog (%.0fs elapsed, "
+                "traveled %.2fm of %.2fm) — advancing",
+                strip_idx_, elapsed, traveled, drive_target_distance_m_);
+    geometry_msgs::msg::TwistStamped stop;
+    stop.header.stamp = ctx->node->now();
+    stop.header.frame_id = "base_link";
+    cmd_vel_pub_->publish(stop);
+    state_ = State::NEXT_STRIP;
+    return;
   }
-  // Goal pose: strip's end point with strip heading. Smac plans around
-  // any costmap-marked obstacle on the direct line; the default
-  // controller (FollowCoveragePath = MPPI per controller_plugins order
-  // in nav2_params.yaml) tracks the plan with dynamic deviation.
-  const auto& sw = ctx->current_swaths.at(strip_idx_);
-  NavAction::Goal goal;
-  goal.pose.header.frame_id = "map";
-  goal.pose.header.stamp = ctx->node->now();
-  goal.pose.pose.position.x = sw.end.x;
-  goal.pose.pose.position.y = sw.end.y;
-  goal.pose.pose.position.z = 0.0;
-  const double qz = std::sin(current_strip_heading_ / 2.0);
-  const double qw = std::cos(current_strip_heading_ / 2.0);
-  goal.pose.pose.orientation.x = 0.0;
-  goal.pose.pose.orientation.y = 0.0;
-  goal.pose.pose.orientation.z = qz;
-  goal.pose.pose.orientation.w = qw;
-  nav_handle_.reset();
-  nav_result_requested_ = false;
-  nav_future_ = nav_client_->async_send_goal(goal);
-  RCLCPP_WARN(ctx->node->get_logger(),
-              "FollowSwathsWithSpin: strip[%zu] both RPP and MPPI blocked — "
-              "routing around obstacle to strip end (%.2f,%.2f) via Smac",
-              strip_idx_, sw.end.x, sw.end.y);
-  return BT::NodeStatus::RUNNING;
+
+  // 3. LiDAR forward-arc clearance — if blocked, swerve.
+  // Arcs in robot frame: forward = 0 rad, +pi/2 = left, -pi/2 = right.
+  constexpr double kFwdHalfArc = 0.44;     // ±25°
+  constexpr double kSideMin = 0.44;        // 25° (start of side arc)
+  constexpr double kSideMax = 1.57;        // 90°
+  constexpr double kAvoidThreshold = 0.50; // m
+  constexpr double kCruiseSpeed = 0.15;    // m/s
+  constexpr double kAvoidLinear = 0.07;    // m/s while swerving
+  constexpr double kAvoidAngular = 0.5;    // rad/s during swerve
+  constexpr double kHeadingKp = 1.0;       // P-gain on yaw error
+  constexpr double kHeadingMaxAng = 0.4;   // rad/s cap during normal drive
+
+  const double fwd_clear = minRangeInArc(-kFwdHalfArc, +kFwdHalfArc);
+  const double left_clear = minRangeInArc(+kSideMin, +kSideMax);
+  const double right_clear = minRangeInArc(-kSideMax, -kSideMin);
+
+  geometry_msgs::msg::TwistStamped cmd;
+  cmd.header.stamp = ctx->node->now();
+  cmd.header.frame_id = "base_link";
+
+  if (fwd_clear < kAvoidThreshold)
+  {
+    // Obstacle ahead — swerve to the side with more clearance.
+    cmd.twist.linear.x = kAvoidLinear;
+    cmd.twist.angular.z = (left_clear > right_clear) ? +kAvoidAngular
+                                                     : -kAvoidAngular;
+    RCLCPP_DEBUG(ctx->node->get_logger(),
+                 "strip[%zu] AVOID fwd=%.2f L=%.2f R=%.2f → wz=%+.2f",
+                 strip_idx_, fwd_clear, left_clear, right_clear,
+                 cmd.twist.angular.z);
+  }
+  else
+  {
+    // Heading PID against locked odom yaw.
+    const double current_yaw = yawFromQuat(latest_odom_->pose.pose.orientation);
+    const double yaw_err = wrapAngle(drive_target_yaw_odom_ - current_yaw);
+    cmd.twist.linear.x = kCruiseSpeed;
+    cmd.twist.angular.z = std::clamp(kHeadingKp * yaw_err,
+                                     -kHeadingMaxAng, kHeadingMaxAng);
+  }
+
+  cmd_vel_pub_->publish(cmd);
 }
 
 BT::NodeStatus FollowSwathsWithSpin::onStart()
@@ -992,6 +1009,30 @@ BT::NodeStatus FollowSwathsWithSpin::onStart()
     return BT::NodeStatus::FAILURE;
   }
 
+  // Lazy-create the publisher / subscribers on first activation. They
+  // outlive any single strip; reused across strips and across re-entries.
+  if (!cmd_vel_pub_)
+  {
+    cmd_vel_pub_ = ctx->node->create_publisher<geometry_msgs::msg::TwistStamped>(
+        "/cmd_vel_nav", rclcpp::QoS(10));
+  }
+  if (!scan_sub_)
+  {
+    scan_sub_ = ctx->node->create_subscription<sensor_msgs::msg::LaserScan>(
+        "/scan", rclcpp::SensorDataQoS(),
+        [this](sensor_msgs::msg::LaserScan::ConstSharedPtr msg) {
+          latest_scan_ = msg;
+        });
+  }
+  if (!odom_sub_)
+  {
+    odom_sub_ = ctx->node->create_subscription<nav_msgs::msg::Odometry>(
+        "/odometry/filtered", rclcpp::QoS(10),
+        [this](nav_msgs::msg::Odometry::ConstSharedPtr msg) {
+          latest_odom_ = msg;
+        });
+  }
+
   strip_idx_ = 0;
   current_strip_heading_ = swathHeadingRad(strip_idx_);
 
@@ -1001,7 +1042,8 @@ BT::NodeStatus FollowSwathsWithSpin::onStart()
   recordPose();
 
   RCLCPP_INFO(ctx->node->get_logger(),
-              "FollowSwathsWithSpin: starting %zu strips for area %u",
+              "FollowSwathsWithSpin: starting %zu strips for area %u "
+              "(gyro-locked drive + LiDAR-reactive avoidance)",
               ctx->current_swaths.size(), area_idx_);
 
   state_ = State::SPIN;
@@ -1047,130 +1089,22 @@ BT::NodeStatus FollowSwathsWithSpin::onRunning()
                     static_cast<int>(wrapped.code));
         // Don't fail on spin imperfection; FollowPath will refine heading.
       }
-      state_ = State::FOLLOW;
-      mppi_fallback_used_ = false;
-      const auto status = startFollow("FollowPath");
-      if (status == BT::NodeStatus::FAILURE) state_ = State::DONE_FAIL;
-      break;
-    }
-    case State::FOLLOW:
-    {
-      if (!follow_handle_)
+      // Spin done — start the gyro-locked drive for this strip.
+      const auto status = startDrive();
+      if (status == BT::NodeStatus::FAILURE)
       {
-        if (follow_future_.wait_for(std::chrono::milliseconds(0)) !=
-            std::future_status::ready)
-          return BT::NodeStatus::RUNNING;
-        follow_handle_ = follow_future_.get();
-        if (!follow_handle_)
-        {
-          RCLCPP_ERROR(ctx->node->get_logger(),
-                       "FollowSwathsWithSpin: /follow_path rejected");
-          state_ = State::DONE_FAIL;
-          break;
-        }
-      }
-      if (!follow_result_requested_)
-      {
-        follow_result_future_ = follow_client_->async_get_result(follow_handle_);
-        follow_result_requested_ = true;
-      }
-      if (follow_result_future_.wait_for(std::chrono::milliseconds(0)) !=
-          std::future_status::ready)
-        return BT::NodeStatus::RUNNING;
-      const auto wrapped = follow_result_future_.get();
-      if (wrapped.code != rclcpp_action::ResultCode::SUCCEEDED)
-      {
-        if (!mppi_fallback_used_)
-        {
-          // RPP aborted (typically code 6 = NO_VALID_PATH from collision
-          // detection). Retry SAME strip with MPPI — its ObstaclesCritic
-          // produces a deviation arc that mows the un-blocked portion of
-          // the strip on either side of the obstacle. Without this
-          // fallback the strip would be skipped, leaving an unmowed
-          // band the full width of the polygon at the obstacle's strip
-          // index (sim 59 showed strips 13/14 advancing past the
-          // obstacle, leaving a ~0.5 m gap in the lawn).
-          RCLCPP_WARN(ctx->node->get_logger(),
-                      "FollowSwathsWithSpin: strip[%zu] RPP code=%d — "
-                      "retrying with MPPI for obstacle deviation",
-                      strip_idx_, static_cast<int>(wrapped.code));
-          mppi_fallback_used_ = true;
-          // Clear the prior result-future so the next loop tick starts
-          // a fresh wait on the new MPPI goal.
-          follow_handle_.reset();
-          follow_result_requested_ = false;
-          // DWB was A/B-tested as the fallback (sim 63, 2026-05-07) —
-          // failed strip[10] which MPPI succeeded on, took ~80 s per
-          // attempt vs MPPI's ~50 s. The deep-obstacle-strip failure
-          // is geometric (strip line passes through obstacle), not
-          // controller-tuning, so DWB doesn't help. MPPI also has the
-          // benefit of being already used as the transit default — one
-          // less plugin to maintain.
-          const auto retry_status = startFollow("FollowCoveragePath");
-          if (retry_status == BT::NodeStatus::FAILURE)
-            state_ = State::DONE_FAIL;
-          // Stay in State::FOLLOW so we collect the MPPI result on
-          // subsequent ticks.
-          break;
-        }
-        // MPPI also failed → enter Option B: NavigateToPose around the
-        // obstacle to the strip's end. Smac plans the detour, MPPI
-        // tracks. If Smac can't route around (e.g. obstacle blocks the
-        // strip end too), the NAV_AROUND state fails and we advance.
-        RCLCPP_WARN(ctx->node->get_logger(),
-                    "FollowSwathsWithSpin: strip[%zu] MPPI also failed "
-                    "(code=%d) — entering Option B obstacle bypass",
-                    strip_idx_, static_cast<int>(wrapped.code));
-        state_ = State::NAV_AROUND;
-        const auto status = startNavAroundObstacle();
-        if (status == BT::NodeStatus::FAILURE) state_ = State::NEXT_STRIP;
+        state_ = State::DONE_FAIL;
         break;
       }
-      state_ = State::NEXT_STRIP;
+      state_ = State::DRIVE;
       break;
     }
-    case State::NAV_AROUND:
+    case State::DRIVE:
     {
-      if (!nav_handle_)
-      {
-        if (nav_future_.wait_for(std::chrono::milliseconds(0)) !=
-            std::future_status::ready)
-          return BT::NodeStatus::RUNNING;
-        nav_handle_ = nav_future_.get();
-        if (!nav_handle_)
-        {
-          RCLCPP_WARN(ctx->node->get_logger(),
-                      "FollowSwathsWithSpin: nav_around for strip[%zu] "
-                      "rejected — advancing to next strip",
-                      strip_idx_);
-          state_ = State::NEXT_STRIP;
-          break;
-        }
-      }
-      if (!nav_result_requested_)
-      {
-        nav_result_future_ = nav_client_->async_get_result(nav_handle_);
-        nav_result_requested_ = true;
-      }
-      if (nav_result_future_.wait_for(std::chrono::milliseconds(0)) !=
-          std::future_status::ready)
-        return BT::NodeStatus::RUNNING;
-      const auto wrapped = nav_result_future_.get();
-      if (wrapped.code != rclcpp_action::ResultCode::SUCCEEDED)
-      {
-        RCLCPP_WARN(ctx->node->get_logger(),
-                    "FollowSwathsWithSpin: strip[%zu] nav_around failed "
-                    "(code=%d) — advancing to next strip anyway",
-                    strip_idx_, static_cast<int>(wrapped.code));
-      }
-      else
-      {
-        RCLCPP_INFO(ctx->node->get_logger(),
-                    "FollowSwathsWithSpin: strip[%zu] obstacle bypassed — "
-                    "robot at strip end, advancing",
-                    strip_idx_);
-      }
-      state_ = State::NEXT_STRIP;
+      tickDrive();
+      // tickDrive transitions state_ to NEXT_STRIP on completion or
+      // watchdog timeout; otherwise keep RUNNING.
+      if (state_ == State::DRIVE) return BT::NodeStatus::RUNNING;
       break;
     }
     case State::NEXT_STRIP:
@@ -1183,7 +1117,6 @@ BT::NodeStatus FollowSwathsWithSpin::onRunning()
       }
       current_strip_heading_ = swathHeadingRad(strip_idx_);
       state_ = State::SPIN;
-      mppi_fallback_used_ = false;
       const auto status = startSpinTo(current_strip_heading_);
       if (status == BT::NodeStatus::FAILURE) state_ = State::DONE_FAIL;
       break;
@@ -1219,8 +1152,14 @@ void FollowSwathsWithSpin::onHalted()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   if (spin_handle_) spin_client_->async_cancel_goal(spin_handle_);
-  if (follow_handle_) follow_client_->async_cancel_goal(follow_handle_);
-  if (nav_handle_) nav_client_->async_cancel_goal(nav_handle_);
+  // Stop the robot — we're driving via direct cmd_vel, not an action.
+  if (cmd_vel_pub_)
+  {
+    geometry_msgs::msg::TwistStamped stop;
+    stop.header.stamp = ctx->node->now();
+    stop.header.frame_id = "base_link";
+    cmd_vel_pub_->publish(stop);
+  }
   setBladeEnabled(false);
   RCLCPP_INFO(ctx->node->get_logger(),
               "FollowSwathsWithSpin: halted at strip[%zu]/%zu", strip_idx_,
