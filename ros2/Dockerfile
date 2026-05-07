@@ -65,6 +65,7 @@ RUN cd Fields2Cover && mkdir build && cd build && \
         -DBUILD_TESTS=OFF \
         -DBUILD_DOC=OFF \
         -DALLOW_PARALLELISATION=OFF \
+        -DCMAKE_CXX_FLAGS="-Wno-error=pessimizing-move -Wno-pessimizing-move -Wno-error" \
  && make -j$(nproc) install
 
 # =============================================================================
