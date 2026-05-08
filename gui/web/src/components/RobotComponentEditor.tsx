@@ -121,7 +121,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
     const [rotating, setRotating] = useState<SensorId | null>(null);
     const [hoveredSensor, setHoveredSensor] = useState<SensorId | null>(null);
     const { status: calibrationStatus } = useCalibrationStatus();
-    const { notification } = App.useApp();
+    const { notification, modal } = App.useApp();
     const guiApi = useApi();
     const pose = usePose();
     const [settingDock, setSettingDock] = useState(false);
@@ -192,7 +192,14 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
         const fmt = (v: any, suffix: string, digits = 3) =>
             v == null || isNaN(Number(v)) ? "—" : `${roundTo(Number(v), digits)}${suffix}`;
 
-        Modal.confirm({
+        // Use the App-context modal (App.useApp().modal) instead of the
+        // static Modal.confirm — antd v5 deprecated the static API and it
+        // renders without inheriting the ConfigProvider theme, which on
+        // dark mode shows a white modal on white backdrop and looks like
+        // 'click did nothing'. The App-context variant inherits the
+        // current theme tokens, z-index stack, and message portal so the
+        // confirm dialog actually appears.
+        modal.confirm({
             title: (
                 <Space>
                     <EnvironmentOutlined/>
@@ -235,7 +242,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             ),
             onOk: () => writeDockPose(px, py, yawRad),
         });
-    }, [poseAvailable, robotX, robotY, robotYaw, values.dock_pose_x, values.dock_pose_y, values.dock_pose_yaw, writeDockPose, notification]);
+    }, [poseAvailable, robotX, robotY, robotYaw, values.dock_pose_x, values.dock_pose_y, values.dock_pose_yaw, writeDockPose, notification, modal]);
     // Dock yaw lives in mowgli_robot.yaml. It is normally written by the
     // IMU auto-calibration service and the "set dock pose" GUI action,
     // but operators can also override it manually here when calibration
