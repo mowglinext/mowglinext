@@ -22,7 +22,7 @@ from launch_ros.actions import Node
 
 def _read_robot_config() -> dict:
     """Load mowgli_robot.yaml and return the inner mower section."""
-    runtime = "/ros2_ws/config/mowgli/mowgli_robot.yaml"
+    runtime = "/ros2_ws/config/mowgli_robot.yaml"
     fallback = os.path.join(
         get_package_share_directory("mowgli_bringup"),
         "config", "mowgli_robot.yaml",
