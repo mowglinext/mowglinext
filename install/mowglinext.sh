@@ -15,6 +15,7 @@ source "${INSTALL_LIB_DIR}/banner.sh"
 source "${INSTALL_LIB_DIR}/progress.sh"
 source "${INSTALL_LIB_DIR}/motd.sh"
 source "${INSTALL_LIB_DIR}/system.sh"
+source "${INSTALL_LIB_DIR}/platform.sh"
 source "${INSTALL_LIB_DIR}/docker.sh"
 source "${INSTALL_LIB_DIR}/backend_choice.sh"
 source "${INSTALL_LIB_DIR}/udev.sh"
@@ -47,6 +48,8 @@ main() {
   show_banner
   load_locale
   init_install_logs
+  assert_supported_platform || return 1
+  print_platform_summary
 
   if ! $CHECK_ONLY; then
     local TOTAL_STEPS=15

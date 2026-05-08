@@ -2,6 +2,12 @@
 
 generate_rc_local() {
   step "UART serial init (rc.local)"
+
+  if ! platform_supports_pi_uart_overlays; then
+    info "Skipping rc.local UART init on this platform"
+    return 0
+  fi
+
   require_root_for "rc.local"
 
   local rclocal="/etc/rc.local"
