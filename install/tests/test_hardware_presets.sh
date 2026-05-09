@@ -26,6 +26,10 @@ env_value() {
   grep -E "^${key}=" "$repo/docker/.env" | head -1 | cut -d= -f2-
 }
 
+selected_fragments_in_current_run() {
+  printf '%s\n' "${COMPOSE_FILES[@]}" | xargs -n1 basename | sort
+}
+
 setup_sandbox
 install_all_mocks
 
@@ -45,21 +49,20 @@ assert_eq "mowgli backend: HARDWARE_BACKEND=mowgli" "mowgli" "$(env_value "$mowg
 assert_eq "mowgli backend: GNSS_BACKEND=gps"       "gps"    "$(env_value "$mowgli_repo" GNSS_BACKEND)"
 assert_eq "mowgli backend: MAVROS_ENABLED=false"   "false"  "$(env_value "$mowgli_repo" MAVROS_ENABLED)"
 
-mowgli_services=$(grep -E '^\s+container_name:' "$mowgli_repo/docker/docker-compose.yaml" \
-  | awk '{print $2}' | sort)
-for required in mowgli-ros2 mowgli-gui mowgli-gps mowgli-lidar; do
-  case "$mowgli_services" in
-    *"$required"*) pass "mowgli backend: service $required present" ;;
-    *)             fail "mowgli backend: service $required present" ;;
+mowgli_fragments=$(selected_fragments_in_current_run)
+for required in docker-compose.base.yml docker-compose.gui.yml docker-compose.gps.yml docker-compose.lidar-ldlidar.yml; do
+  case "$mowgli_fragments" in
+    *"$required"*) pass "mowgli backend: fragment $required present" ;;
+    *)             fail "mowgli backend: fragment $required present" ;;
   esac
 done
-case "$mowgli_services" in
-  *mowgli-mavros*) fail "mowgli backend: NO mavros service" "mowgli-mavros leaked into compose" ;;
-  *)               pass "mowgli backend: NO mavros service" ;;
+case "$mowgli_fragments" in
+  *docker-compose.mavros.yml*) fail "mowgli backend: NO mavros fragment" "docker-compose.mavros.yml leaked into compose selection" ;;
+  *)                           pass "mowgli backend: NO mavros fragment" ;;
 esac
-case "$mowgli_services" in
-  *mowgli-ntrip*) fail "mowgli backend: NO standalone ntrip sidecar" "mowgli-ntrip leaked into compose" ;;
-  *)              pass "mowgli backend: NO standalone ntrip sidecar" ;;
+case "$mowgli_fragments" in
+  *docker-compose.nmea.yaml*) fail "mowgli backend: NO nmea fragment by default" "unexpected nmea fragment selected" ;;
+  *)                          pass "mowgli backend: NO nmea fragment by default" ;;
 esac
 
 # ── Pixhawk MAVROS backend ────────────────────────────────────────────────
@@ -78,17 +81,20 @@ assert_eq "mavros backend: HARDWARE_BACKEND=mavros" "mavros"   "$(env_value "$ma
 assert_eq "mavros backend: GNSS_BACKEND=disabled"   "disabled" "$(env_value "$mavros_repo" GNSS_BACKEND)"
 assert_eq "mavros backend: MAVROS_ENABLED=true"     "true"     "$(env_value "$mavros_repo" MAVROS_ENABLED)"
 
-mavros_services=$(grep -E '^\s+container_name:' "$mavros_repo/docker/docker-compose.yaml" \
-  | awk '{print $2}' | sort)
-for required in mowgli-ros2 mowgli-gui mowgli-mavros mowgli-ntrip mowgli-lidar; do
-  case "$mavros_services" in
-    *"$required"*) pass "mavros backend: service $required present" ;;
-    *)             fail "mavros backend: service $required present" ;;
+mavros_fragments=$(selected_fragments_in_current_run)
+for required in docker-compose.base.yml docker-compose.gui.yml docker-compose.mavros.yml docker-compose.lidar-ldlidar.yml; do
+  case "$mavros_fragments" in
+    *"$required"*) pass "mavros backend: fragment $required present" ;;
+    *)             fail "mavros backend: fragment $required present" ;;
   esac
 done
-case "$mavros_services" in
-  *mowgli-gps*) fail "mavros backend: NO direct GPS container" "mowgli-gps leaked into mavros compose" ;;
-  *)            pass "mavros backend: NO direct GPS container" ;;
+case "$mavros_fragments" in
+  *docker-compose.gps.yml*|*docker-compose.ublox.yaml*|*docker-compose.unicore.yaml*|*docker-compose.nmea.yaml*)
+    fail "mavros backend: NO direct GNSS fragment" "direct GNSS fragment leaked into mavros compose selection"
+    ;;
+  *)
+    pass "mavros backend: NO direct GNSS fragment"
+    ;;
 esac
 
 test_summary

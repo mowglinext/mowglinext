@@ -79,6 +79,19 @@ else
   fail "--tfluna=midnight fails" "exit=0 unexpectedly"
 fi
 
+# Legacy pseudo-backend nmea must be rejected
+out=$( ( parse_args --gnss=nmea ) 2>&1 )
+ec=$?
+if [ "$ec" -ne 0 ]; then
+  pass "--gnss=nmea fails (exit=$ec)"
+  case "$out" in
+    *"Unknown GNSS backend"*) pass "--gnss=nmea error mentions 'Unknown GNSS backend'" ;;
+    *)                        fail "--gnss=nmea error mentions 'Unknown GNSS backend'" "got: $out" ;;
+  esac
+else
+  fail "--gnss=nmea fails" "exit=0 unexpectedly"
+fi
+
 section "configure_gps rejects invalid GNSS_BACKEND preset"
 
 # Standalone test in a fresh subshell so we don't pollute env

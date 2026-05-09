@@ -28,6 +28,243 @@ GUI_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/mowglinext-gui:${IMAGE_TAG}"
 CHECK_ONLY=false
 CLI_PRESET=false
 
+installer_main_command() {
+  printf 'bash %q' "$REPO_DIR/install/mowglinext.sh"
+}
+
+rerun_check_command() {
+  printf '%s --check' "$(installer_main_command)"
+}
+
+compose_restart_services_for_backend() {
+  local backend="${1:-${HARDWARE_BACKEND:-mowgli}}"
+  local services=()
+
+  if [[ "$backend" == "mavros" ]]; then
+    services+=(mavros ntrip mowgli)
+  else
+    local gnss_backend
+    local gnss_service
+
+    gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
+    if is_supported_gnss_backend "$gnss_backend"; then
+      gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
+      [ -n "$gnss_service" ] && services+=("$gnss_service")
+    fi
+    services+=(mowgli)
+  fi
+
+  printf '%s\n' "${services[@]}"
+}
+
+print_restart_command_for_backend() {
+  local backend="${1:-${HARDWARE_BACKEND:-mowgli}}"
+  local services=()
+  local service
+
+  mapfile -t services < <(compose_restart_services_for_backend "$backend")
+
+  printf 'docker compose -f %q --env-file %q restart' "$FINAL_COMPOSE_FILE" "$FINAL_ENV_FILE"
+  for service in "${services[@]}"; do
+    printf ' %q' "$service"
+  done
+  printf '\n'
+}
+
+range_services_available() {
+  local fragment
+
+  for fragment in \
+    "$COMPOSE_SRC_DIR/docker-compose.tfluna-front.yml" \
+    "$COMPOSE_SRC_DIR/docker-compose.tfluna-edge.yml"
+  do
+    if [ ! -f "$fragment" ]; then
+      return 1
+    fi
+
+    if grep -q 'ghcr.io/\.\.\.' "$fragment" 2>/dev/null; then
+      return 1
+    fi
+  done
+
+  return 0
+}
+
+vesc_service_available() {
+  # Keep VESC disabled during the installer hardening phase until the
+  # runtime/image contract is finalized and tested end-to-end.
+  return 1
+}
+
+feature_is_available() {
+  local feature="${1:-}"
+
+  case "$feature" in
+    range|rangefinders|tfluna|tfluna_front|tfluna_edge)
+      range_services_available
+      ;;
+    vesc)
+      vesc_service_available
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+warn_unavailable_feature_once() {
+  local feature="${1:?warn_unavailable_feature_once: missing feature}"
+  local message="${2:?warn_unavailable_feature_once: missing message}"
+  local flag_name="FEATURE_WARNING_${feature//[^A-Za-z0-9_]/_}"
+
+  if [ "${!flag_name:-false}" = "true" ]; then
+    return 0
+  fi
+
+  warn "$message"
+  printf -v "$flag_name" '%s' "true"
+}
+
+effective_tfluna_front_enabled() {
+  if [[ "${TFLUNA_FRONT_ENABLED:-false}" != "true" ]]; then
+    return 1
+  fi
+
+  if feature_is_available tfluna_front; then
+    return 0
+  fi
+
+  warn_unavailable_feature_once \
+    tfluna \
+    "TF-Luna rangefinder services are not available on this branch yet; requested TF-Luna options will be skipped."
+  return 1
+}
+
+effective_tfluna_edge_enabled() {
+  if [[ "${TFLUNA_EDGE_ENABLED:-false}" != "true" ]]; then
+    return 1
+  fi
+
+  if feature_is_available tfluna_edge; then
+    return 0
+  fi
+
+  warn_unavailable_feature_once \
+    tfluna \
+    "TF-Luna rangefinder services are not available on this branch yet; requested TF-Luna options will be skipped."
+  return 1
+}
+
+effective_vesc_enabled() {
+  if [[ "${ENABLE_VESC:-false}" != "true" ]]; then
+    return 1
+  fi
+
+  if feature_is_available vesc; then
+    return 0
+  fi
+
+  warn_unavailable_feature_once \
+    vesc \
+    "VESC support is not available on this branch yet; the VESC compose fragment will be skipped."
+  return 1
+}
+
+warn_legacy_nmea_backend_once() {
+  if [ "${LEGACY_GNSS_NMEA_WARNING_SHOWN:-false}" = "true" ]; then
+    return 0
+  fi
+
+  warn "Legacy GNSS_BACKEND=nmea detected — normalizing to GNSS_BACKEND=gps with GPS_PROTOCOL=NMEA."
+  LEGACY_GNSS_NMEA_WARNING_SHOWN=true
+}
+
+normalize_gnss_backend() {
+  local backend="${1:-}"
+
+  if [[ "$backend" == "nmea" ]]; then
+    warn_legacy_nmea_backend_once
+    printf 'gps\n'
+    return 0
+  fi
+
+  printf '%s\n' "$backend"
+}
+
+list_supported_gnss_backends() {
+  local backends="gps ublox unicore"
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
+    printf '%s disabled\n' "$backends"
+  else
+    printf '%s\n' "$backends"
+  fi
+}
+
+is_supported_gnss_backend() {
+  local backend="${1:-}"
+
+  case "$backend" in
+    gps|ublox|unicore)
+      return 0
+      ;;
+    disabled)
+      [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]
+      return
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+effective_gnss_backend() {
+  local backend="${1:-${GNSS_BACKEND:-gps}}"
+
+  backend="$(normalize_gnss_backend "$backend")"
+
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
+    printf 'disabled\n'
+    return 0
+  fi
+
+  printf '%s\n' "$backend"
+  is_supported_gnss_backend "$backend"
+}
+
+compose_gnss_service_name() {
+  local backend="${1:-$(effective_gnss_backend)}"
+
+  case "$backend" in
+    gps)
+      printf 'gps\n'
+      ;;
+    ublox)
+      printf 'gnss_ublox\n'
+      ;;
+    unicore)
+      printf 'gnss_unicore\n'
+      ;;
+    disabled)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+compose_gnss_container_name() {
+  local backend="${1:-$(effective_gnss_backend)}"
+  local service_name
+
+  service_name="$(compose_gnss_service_name "$backend" 2>/dev/null || true)"
+  if [ -z "$service_name" ]; then
+    return 0
+  fi
+
+  printf 'mowgli-gps\n'
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -497,13 +734,20 @@ auto_detect_position() {
     return
   fi
 
-  if ! docker inspect -f '{{.State.Status}}' mowgli-ros2 2>/dev/null | grep -q running; then
+  local gnss_backend
+  local gps_container
+  local restart_services=()
+
+  gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
+  gps_container="$(compose_gnss_container_name "$gnss_backend" 2>/dev/null || true)"
+
+  if ! docker_cmd inspect -f '{{.State.Status}}' mowgli-ros2 2>/dev/null | grep -q running; then
     warn "mowgli-ros2 container not running — cannot auto-detect"
     add_issue "Set datum_lat and datum_lon manually in config/mowgli/mowgli_robot.yaml"
     return
   fi
 
-  if ! docker inspect -f '{{.State.Status}}' mowgli-gps 2>/dev/null | grep -q running; then
+  if [ -z "$gps_container" ] || ! docker_cmd inspect -f '{{.State.Status}}' "$gps_container" 2>/dev/null | grep -q running; then
     warn "GPS container not running — cannot auto-detect"
     add_issue "Set datum_lat and datum_lon manually in config/mowgli/mowgli_robot.yaml"
     return
@@ -514,7 +758,7 @@ auto_detect_position() {
   local fix_data="" lat="" lon=""
   local attempt=0
   while [[ $attempt -lt 12 ]]; do
-    fix_data=$(docker exec mowgli-ros2 bash -c "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /gps/fix --once 2>/dev/null" 2>/dev/null || true)
+    fix_data=$(docker_cmd exec mowgli-ros2 bash -c "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /gps/fix --once 2>/dev/null" 2>/dev/null || true)
     lat=$(echo "$fix_data" | grep "latitude:" | awk '{print $2}')
     lon=$(echo "$fix_data" | grep "longitude:" | awk '{print $2}')
 
@@ -535,9 +779,9 @@ auto_detect_position() {
   info "GPS position: $lat, $lon"
 
   local is_charging="false"
-  if docker inspect -f '{{.State.Status}}' mowgli-ros2 2>/dev/null | grep -q running; then
+  if docker_cmd inspect -f '{{.State.Status}}' mowgli-ros2 2>/dev/null | grep -q running; then
     local status_data
-    status_data=$(docker exec mowgli-ros2 bash -c "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /hardware_bridge/status --once 2>/dev/null" 2>/dev/null || true)
+    status_data=$(docker_cmd exec mowgli-ros2 bash -c "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /hardware_bridge/status --once 2>/dev/null" 2>/dev/null || true)
     is_charging=$(echo "$status_data" | grep "is_charging:" | awk '{print $2}')
   fi
 
@@ -561,10 +805,11 @@ auto_detect_position() {
   info "Config updated with auto-detected position"
 
   echo -e "${DIM}Restarting containers with new config...${NC}"
-  docker compose \
+  mapfile -t restart_services < <(compose_restart_services_for_backend)
+  docker_compose_cmd \
     -f "$FINAL_COMPOSE_FILE" \
     --env-file "$FINAL_ENV_FILE" \
-    restart gps mowgli 2>&1 | tail -3
+    restart "${restart_services[@]}" 2>&1 | tail -3
   sleep 10
 }
 

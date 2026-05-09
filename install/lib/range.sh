@@ -7,14 +7,36 @@ configure_rangefinders() {
   TFLUNA_FRONT_UART_RULE=""
   TFLUNA_EDGE_UART_RULE=""
 
+  : "${TFLUNA_FRONT_ENABLED:=false}"
+  : "${TFLUNA_FRONT_PORT:=/dev/tfluna_front}"
+  : "${TFLUNA_FRONT_UART_DEVICE:=/dev/ttyAMA3}"
+  : "${TFLUNA_FRONT_BAUD:=115200}"
+
+  : "${TFLUNA_EDGE_ENABLED:=false}"
+  : "${TFLUNA_EDGE_PORT:=/dev/tfluna_edge}"
+  : "${TFLUNA_EDGE_UART_DEVICE:=/dev/ttyAMA2}"
+  : "${TFLUNA_EDGE_BAUD:=115200}"
+
+  if ! feature_is_available tfluna; then
+    if [[ "${TFLUNA_FRONT_ENABLED:-false}" == "true" || "${TFLUNA_EDGE_ENABLED:-false}" == "true" ]]; then
+      warn_unavailable_feature_once \
+        tfluna \
+        "TF-Luna rangefinder services are not available on this branch yet; disabling TF-Luna options for this run."
+    else
+      info "TF-Luna rangefinder services are currently unavailable on this branch — skipping configuration"
+    fi
+
+    TFLUNA_FRONT_ENABLED="false"
+    TFLUNA_EDGE_ENABLED="false"
+
+    echo ""
+    info "TF-Luna front : enabled=$TFLUNA_FRONT_ENABLED port=$TFLUNA_FRONT_PORT uart=${TFLUNA_FRONT_UART_DEVICE:-none} baud=$TFLUNA_FRONT_BAUD"
+    info "TF-Luna edge  : enabled=$TFLUNA_EDGE_ENABLED port=$TFLUNA_EDGE_PORT uart=${TFLUNA_EDGE_UART_DEVICE:-none} baud=$TFLUNA_EDGE_BAUD"
+    return 0
+  fi
+
   # If preset values exist (from web composer or CLI), skip interactive prompts
   if [[ "${PRESET_LOADED:-false}" == "true" && -n "${TFLUNA_FRONT_ENABLED:-}" ]]; then
-    : "${TFLUNA_FRONT_PORT:=/dev/tfluna_front}"
-    : "${TFLUNA_FRONT_BAUD:=115200}"
-    : "${TFLUNA_EDGE_ENABLED:=false}"
-    : "${TFLUNA_EDGE_PORT:=/dev/tfluna_edge}"
-    : "${TFLUNA_EDGE_BAUD:=115200}"
-
     info "Rangefinders pre-configured (skipping prompts)"
 
     # For enabled sensors, always let user confirm/change the UART port
@@ -29,17 +51,6 @@ configure_rangefinders() {
       TFLUNA_EDGE_UART_DEVICE="$REPLY"
     fi
   else
-    # Defaults based on PCB / GUI-ready
-    : "${TFLUNA_FRONT_ENABLED:=false}"
-    : "${TFLUNA_FRONT_PORT:=/dev/tfluna_front}"
-    : "${TFLUNA_FRONT_UART_DEVICE:=/dev/ttyAMA3}"
-    : "${TFLUNA_FRONT_BAUD:=115200}"
-
-    : "${TFLUNA_EDGE_ENABLED:=false}"
-    : "${TFLUNA_EDGE_PORT:=/dev/tfluna_edge}"
-    : "${TFLUNA_EDGE_UART_DEVICE:=/dev/ttyAMA2}"
-    : "${TFLUNA_EDGE_BAUD:=115200}"
-
     echo ""
     echo "$MSG_TFLUNA_CONFIG"
     echo "  1) $MSG_TFLUNA_NONE"

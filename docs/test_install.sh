@@ -146,9 +146,11 @@ echo "── Flag parsing tests ──"
 
 help_output=$(bash "$INSTALL_SH" --help 2>&1 || true)
 assert_contains "--help shows usage" "Usage:" "$help_output"
+assert_contains "--help shows --backend" "--backend=TYPE" "$help_output"
 assert_contains "--help shows --gps" "--gps=PRESET" "$help_output"
 assert_contains "--help shows --lidar" "--lidar=PRESET" "$help_output"
 assert_contains "--help shows --tfluna" "--tfluna=PRESET" "$help_output"
+assert_not_contains "--help does not advertise gnss=nmea" "nmea (generic NMEA-0183)" "$help_output"
 
 # =============================================================================
 # Test 2: Preset file generation — GPS presets
@@ -164,9 +166,31 @@ test_preset() {
   mkdir -p "$test_dir/install"
 
   # Extract and run just the preset-writing portion
-  local gps_flag="${1:-}"
-  local lidar_flag="${2:-}"
-  local tfluna_flag="${3:-}"
+  local backend_flag="${1:-}"
+  local gnss_flag="${2:-}"
+  local gps_flag="${3:-}"
+  local lidar_flag="${4:-}"
+  local tfluna_flag="${5:-}"
+
+  if [[ -n "$backend_flag" ]]; then
+    case "$backend_flag" in
+      mowgli|mavros)
+        cat >> "$preset_file" <<EOF
+HARDWARE_BACKEND=${backend_flag}
+EOF
+        ;;
+    esac
+  fi
+
+  if [[ -n "$gnss_flag" ]]; then
+    case "$gnss_flag" in
+      gps|ublox|unicore)
+        cat >> "$preset_file" <<EOF
+GNSS_BACKEND=${gnss_flag}
+EOF
+        ;;
+    esac
+  fi
 
   # Write preset based on GPS flag
   if [[ -n "$gps_flag" ]]; then
@@ -346,26 +370,26 @@ EOF
 }
 
 # GPS: UBX via UART (default PCB)
-preset_out=$(test_preset "ubx-uart" "" "")
+preset_out=$(test_preset "" "" "ubx-uart" "" "")
 assert_contains "GPS ubx-uart: connection=uart" "GPS_CONNECTION=uart" "$preset_out"
 assert_contains "GPS ubx-uart: protocol=UBX" "GPS_PROTOCOL=UBX" "$preset_out"
 assert_contains "GPS ubx-uart: baud=460800" "GPS_BAUD=460800" "$preset_out"
 assert_contains "GPS ubx-uart: uart=ttyAMA4" "GPS_UART_DEVICE=/dev/ttyAMA4" "$preset_out"
 
 # GPS: UBX via USB
-preset_out=$(test_preset "ubx-usb" "" "")
+preset_out=$(test_preset "" "" "ubx-usb" "" "")
 assert_contains "GPS ubx-usb: connection=usb" "GPS_CONNECTION=usb" "$preset_out"
 assert_contains "GPS ubx-usb: protocol=UBX" "GPS_PROTOCOL=UBX" "$preset_out"
 assert_contains "GPS ubx-usb: baud=460800" "GPS_BAUD=460800" "$preset_out"
 
 # GPS: NMEA via UART
-preset_out=$(test_preset "nmea-uart" "" "")
+preset_out=$(test_preset "" "" "nmea-uart" "" "")
 assert_contains "GPS nmea-uart: connection=uart" "GPS_CONNECTION=uart" "$preset_out"
 assert_contains "GPS nmea-uart: protocol=NMEA" "GPS_PROTOCOL=NMEA" "$preset_out"
 assert_contains "GPS nmea-uart: baud=115200" "GPS_BAUD=115200" "$preset_out"
 
 # GPS: NMEA via USB
-preset_out=$(test_preset "nmea-usb" "" "")
+preset_out=$(test_preset "" "" "nmea-usb" "" "")
 assert_contains "GPS nmea-usb: connection=usb" "GPS_CONNECTION=usb" "$preset_out"
 assert_contains "GPS nmea-usb: protocol=NMEA" "GPS_PROTOCOL=NMEA" "$preset_out"
 
@@ -376,12 +400,12 @@ echo ""
 echo "── LiDAR preset tests ──"
 
 # LiDAR: none
-preset_out=$(test_preset "" "none" "")
+preset_out=$(test_preset "" "" "" "none" "")
 assert_contains "LiDAR none: disabled" "LIDAR_ENABLED=false" "$preset_out"
 assert_contains "LiDAR none: type=none" "LIDAR_TYPE=none" "$preset_out"
 
 # LiDAR: LDLiDAR via UART
-preset_out=$(test_preset "" "ldlidar-uart" "")
+preset_out=$(test_preset "" "" "" "ldlidar-uart" "")
 assert_contains "LiDAR ldlidar-uart: enabled" "LIDAR_ENABLED=true" "$preset_out"
 assert_contains "LiDAR ldlidar-uart: type" "LIDAR_TYPE=ldlidar" "$preset_out"
 assert_contains "LiDAR ldlidar-uart: model" "LIDAR_MODEL=LDLiDAR_LD19" "$preset_out"
@@ -390,28 +414,28 @@ assert_contains "LiDAR ldlidar-uart: uart device" "LIDAR_UART_DEVICE=/dev/ttyAMA
 assert_contains "LiDAR ldlidar-uart: baud" "LIDAR_BAUD=230400" "$preset_out"
 
 # LiDAR: LDLiDAR via USB
-preset_out=$(test_preset "" "ldlidar-usb" "")
+preset_out=$(test_preset "" "" "" "ldlidar-usb" "")
 assert_contains "LiDAR ldlidar-usb: connection=usb" "LIDAR_CONNECTION=usb" "$preset_out"
 assert_not_contains "LiDAR ldlidar-usb: no uart device" "LIDAR_UART_DEVICE=/dev/ttyAMA5" "$preset_out"
 
 # LiDAR: RPLidar via UART
-preset_out=$(test_preset "" "rplidar-uart" "")
+preset_out=$(test_preset "" "" "" "rplidar-uart" "")
 assert_contains "LiDAR rplidar-uart: type" "LIDAR_TYPE=rplidar" "$preset_out"
 assert_contains "LiDAR rplidar-uart: model" "LIDAR_MODEL=RPLIDAR_A1" "$preset_out"
 assert_contains "LiDAR rplidar-uart: baud=115200" "LIDAR_BAUD=115200" "$preset_out"
 
 # LiDAR: RPLidar via USB
-preset_out=$(test_preset "" "rplidar-usb" "")
+preset_out=$(test_preset "" "" "" "rplidar-usb" "")
 assert_contains "LiDAR rplidar-usb: connection=usb" "LIDAR_CONNECTION=usb" "$preset_out"
 
 # LiDAR: STL27L via UART
-preset_out=$(test_preset "" "stl27l-uart" "")
+preset_out=$(test_preset "" "" "" "stl27l-uart" "")
 assert_contains "LiDAR stl27l-uart: type" "LIDAR_TYPE=stl27l" "$preset_out"
 assert_contains "LiDAR stl27l-uart: model" "LIDAR_MODEL=STL27L" "$preset_out"
 assert_contains "LiDAR stl27l-uart: baud=230400" "LIDAR_BAUD=230400" "$preset_out"
 
 # LiDAR: STL27L via USB
-preset_out=$(test_preset "" "stl27l-usb" "")
+preset_out=$(test_preset "" "" "" "stl27l-usb" "")
 assert_contains "LiDAR stl27l-usb: connection=usb" "LIDAR_CONNECTION=usb" "$preset_out"
 
 # =============================================================================
@@ -421,82 +445,112 @@ echo ""
 echo "── TF-Luna preset tests ──"
 
 # TF-Luna: none
-preset_out=$(test_preset "" "" "none")
+preset_out=$(test_preset "" "" "" "" "none")
 assert_contains "TF-Luna none: front disabled" "TFLUNA_FRONT_ENABLED=false" "$preset_out"
 assert_contains "TF-Luna none: edge disabled" "TFLUNA_EDGE_ENABLED=false" "$preset_out"
 
 # TF-Luna: front only
-preset_out=$(test_preset "" "" "front")
+preset_out=$(test_preset "" "" "" "" "front")
 assert_contains "TF-Luna front: front enabled" "TFLUNA_FRONT_ENABLED=true" "$preset_out"
 assert_contains "TF-Luna front: edge disabled" "TFLUNA_EDGE_ENABLED=false" "$preset_out"
 assert_contains "TF-Luna front: port" "TFLUNA_FRONT_PORT=/dev/tfluna_front" "$preset_out"
 assert_contains "TF-Luna front: uart=ttyAMA3" "TFLUNA_FRONT_UART_DEVICE=/dev/ttyAMA3" "$preset_out"
 
 # TF-Luna: edge only
-preset_out=$(test_preset "" "" "edge")
+preset_out=$(test_preset "" "" "" "" "edge")
 assert_contains "TF-Luna edge: front disabled" "TFLUNA_FRONT_ENABLED=false" "$preset_out"
 assert_contains "TF-Luna edge: edge enabled" "TFLUNA_EDGE_ENABLED=true" "$preset_out"
 assert_contains "TF-Luna edge: port" "TFLUNA_EDGE_PORT=/dev/tfluna_edge" "$preset_out"
 assert_contains "TF-Luna edge: uart=ttyAMA2" "TFLUNA_EDGE_UART_DEVICE=/dev/ttyAMA2" "$preset_out"
 
 # TF-Luna: both
-preset_out=$(test_preset "" "" "both")
+preset_out=$(test_preset "" "" "" "" "both")
 assert_contains "TF-Luna both: front enabled" "TFLUNA_FRONT_ENABLED=true" "$preset_out"
 assert_contains "TF-Luna both: edge enabled" "TFLUNA_EDGE_ENABLED=true" "$preset_out"
 
 # =============================================================================
-# Test 5: Combined presets
+# Test 5: Backend presets
+# =============================================================================
+echo ""
+echo "── Backend preset tests ──"
+
+preset_out=$(test_preset "mowgli" "" "" "" "")
+assert_contains "Backend mowgli preset writes HARDWARE_BACKEND" "HARDWARE_BACKEND=mowgli" "$preset_out"
+
+preset_out=$(test_preset "mavros" "" "" "" "")
+assert_contains "Backend mavros preset writes HARDWARE_BACKEND" "HARDWARE_BACKEND=mavros" "$preset_out"
+
+# =============================================================================
+# Test 6: GNSS presets
+# =============================================================================
+echo ""
+echo "── GNSS preset tests ──"
+
+preset_out=$(test_preset "mowgli" "gps" "ubx-uart" "" "")
+assert_contains "GNSS gps preset writes GNSS_BACKEND" "GNSS_BACKEND=gps" "$preset_out"
+assert_contains "GNSS gps preset keeps GPS protocol" "GPS_PROTOCOL=UBX" "$preset_out"
+assert_contains "GNSS gps preset keeps GPS connection" "GPS_CONNECTION=uart" "$preset_out"
+
+preset_out=$(test_preset "mowgli" "unicore" "" "" "")
+assert_contains "GNSS unicore preset writes GNSS_BACKEND" "GNSS_BACKEND=unicore" "$preset_out"
+assert_not_contains "GNSS unicore preset omits GPS_PROTOCOL" "GPS_PROTOCOL=" "$preset_out"
+assert_not_contains "GNSS unicore preset omits GPS_CONNECTION" "GPS_CONNECTION=" "$preset_out"
+
+# =============================================================================
+# Test 7: Combined presets
 # =============================================================================
 echo ""
 echo "── Combined preset tests ──"
 
-preset_out=$(test_preset "ubx-uart" "ldlidar-uart" "front")
+preset_out=$(test_preset "mowgli" "gps" "ubx-uart" "ldlidar-uart" "front")
 assert_contains "Combined: GPS present" "GPS_CONNECTION=uart" "$preset_out"
+assert_contains "Combined: GNSS present" "GNSS_BACKEND=gps" "$preset_out"
 assert_contains "Combined: LiDAR present" "LIDAR_TYPE=ldlidar" "$preset_out"
 assert_contains "Combined: TF-Luna present" "TFLUNA_FRONT_ENABLED=true" "$preset_out"
+assert_contains "Combined: backend present" "HARDWARE_BACKEND=mowgli" "$preset_out"
 
-preset_out=$(test_preset "nmea-usb" "rplidar-usb" "both")
+preset_out=$(test_preset "mowgli" "gps" "nmea-usb" "rplidar-usb" "both")
 assert_contains "Combined alt: GPS NMEA USB" "GPS_PROTOCOL=NMEA" "$preset_out"
 assert_contains "Combined alt: RPLidar USB" "LIDAR_TYPE=rplidar" "$preset_out"
 assert_contains "Combined alt: both TF-Luna" "TFLUNA_EDGE_ENABLED=true" "$preset_out"
 
 # =============================================================================
-# Test 6: Consistency with existing installer values
+# Test 8: Consistency with existing installer values
 # =============================================================================
 echo ""
 echo "── Consistency with install/lib/*.sh ──"
 
 # Verify our presets match the defaults in the existing install scripts
 # GPS defaults from install/lib/gps.sh
-preset_out=$(test_preset "ubx-uart" "" "")
+preset_out=$(test_preset "" "" "ubx-uart" "" "")
 assert_contains "Matches gps.sh default baud" "GPS_BAUD=460800" "$preset_out"
 assert_contains "Matches gps.sh default uart" "GPS_UART_DEVICE=/dev/ttyAMA4" "$preset_out"
 
 # NMEA baud from install/lib/gps.sh
-preset_out=$(test_preset "nmea-uart" "" "")
+preset_out=$(test_preset "" "" "nmea-uart" "" "")
 assert_contains "Matches gps.sh NMEA baud" "GPS_BAUD=115200" "$preset_out"
 
 # LiDAR defaults from install/lib/lidar.sh
-preset_out=$(test_preset "" "ldlidar-uart" "")
+preset_out=$(test_preset "" "" "" "ldlidar-uart" "")
 assert_contains "Matches lidar.sh default model" "LIDAR_MODEL=LDLiDAR_LD19" "$preset_out"
 assert_contains "Matches lidar.sh default uart" "LIDAR_UART_DEVICE=/dev/ttyAMA5" "$preset_out"
 assert_contains "Matches lidar.sh default baud" "LIDAR_BAUD=230400" "$preset_out"
 
 # RPLidar baud from install/lib/lidar.sh
-preset_out=$(test_preset "" "rplidar-uart" "")
+preset_out=$(test_preset "" "" "" "rplidar-uart" "")
 assert_contains "Matches lidar.sh RPLidar baud" "LIDAR_BAUD=115200" "$preset_out"
 
 # TF-Luna from install/lib/range.sh
-preset_out=$(test_preset "" "" "front")
+preset_out=$(test_preset "" "" "" "" "front")
 assert_contains "Matches range.sh front uart" "TFLUNA_FRONT_UART_DEVICE=/dev/ttyAMA3" "$preset_out"
 assert_contains "Matches range.sh front baud" "TFLUNA_FRONT_BAUD=115200" "$preset_out"
 
-preset_out=$(test_preset "" "" "edge")
+preset_out=$(test_preset "" "" "" "" "edge")
 assert_contains "Matches range.sh edge uart" "TFLUNA_EDGE_UART_DEVICE=/dev/ttyAMA2" "$preset_out"
 assert_contains "Matches range.sh edge baud" "TFLUNA_EDGE_BAUD=115200" "$preset_out"
 
 # =============================================================================
-# Test 7: Script is valid bash
+# Test 9: Script is valid bash
 # =============================================================================
 echo ""
 echo "── Script validity tests ──"

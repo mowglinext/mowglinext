@@ -329,6 +329,10 @@ nav .links a:hover { color: var(--text-heading); text-decoration: none; }
   margin-bottom: 32px;
 }
 
+.composer-group.disabled {
+  opacity: 0.5;
+}
+
 .composer-group h3 {
   color: var(--text-heading);
   font-size: 1.1rem;
@@ -373,6 +377,19 @@ nav .links a:hover { color: var(--text-heading); text-decoration: none; }
   border-color: var(--green);
   background: rgba(34, 197, 94, 0.1);
   box-shadow: 0 0 0 1px var(--green);
+}
+
+.composer-group.disabled .composer-option {
+  pointer-events: none;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.composer-group.disabled .composer-option:hover,
+.composer-group.disabled .composer-option.active {
+  border-color: var(--border);
+  background: var(--bg);
+  box-shadow: none;
 }
 
 .option-icon {

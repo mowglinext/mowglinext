@@ -2,12 +2,12 @@
 # =============================================================================
 # A.4 GPS backend matrix
 #
-# The installer supports three GNSS backends:
+# The installer supports three direct GNSS backends:
 #   gps     — generic legacy GPS container       (docker-compose.gps.yml)
 #   ublox   — u-blox F9P (ublox_dgnss launch)    (docker-compose.ublox.yaml)
 #   unicore — Unicore UM98x (unicore_gnss launch)(docker-compose.unicore.yaml)
-# Each must select the right compose fragment AND propagate the protocol
-# (UBX/NMEA) and connection (USB/UART) into .env.
+# Generic NMEA receivers are modeled as GNSS_BACKEND=gps with
+# GPS_PROTOCOL=NMEA, not as a separate GNSS backend.
 # =============================================================================
 
 set -uo pipefail
@@ -25,8 +25,8 @@ env_value() {
   grep -E "^${2}=" "$1/docker/.env" | head -1 | cut -d= -f2-
 }
 
-services_in() {
-  grep -E '^\s+container_name:' "$1/docker/docker-compose.yaml" | awk '{print $2}' | sort
+selected_fragments_in_current_run() {
+  printf '%s\n' "${COMPOSE_FILES[@]}" | xargs -n1 basename | sort
 }
 
 setup_sandbox
@@ -44,9 +44,9 @@ assert_eq "gps/ubx/uart: GNSS_BACKEND=gps"  "gps"   "$(env_value "$repo" GNSS_BA
 assert_eq "gps/ubx/uart: GPS_PROTOCOL=UBX"  "UBX"   "$(env_value "$repo" GPS_PROTOCOL)"
 assert_eq "gps/ubx/uart: GPS_BAUD=460800"   "460800" "$(env_value "$repo" GPS_BAUD)"
 assert_eq "gps/ubx/uart: GPS_CONNECTION=uart" "uart" "$(env_value "$repo" GPS_CONNECTION)"
-case "$(services_in "$repo")" in
-  *mowgli-gps*) pass "gps/ubx/uart: mowgli-gps service present" ;;
-  *)            fail "gps/ubx/uart: mowgli-gps service present" ;;
+case "$(selected_fragments_in_current_run)" in
+  *docker-compose.gps.yml*) pass "gps/ubx/uart: gps fragment present" ;;
+  *)                        fail "gps/ubx/uart: gps fragment present" ;;
 esac
 
 # ── NMEA over UART (lower baud) ────────────────────────────────────────────
@@ -59,6 +59,15 @@ harness_set_preset gnss=gps gps=nmea-uart lidar=none tfluna=none
 harness_run >/dev/null 2>&1
 assert_eq "nmea/uart: GPS_PROTOCOL=NMEA" "NMEA"   "$(env_value "$repo" GPS_PROTOCOL)"
 assert_eq "nmea/uart: GPS_BAUD=115200"   "115200" "$(env_value "$repo" GPS_BAUD)"
+gps_nmea_fragments=$(selected_fragments_in_current_run)
+case "$gps_nmea_fragments" in
+  *docker-compose.gps.yml*)  pass "nmea/uart: gps fragment present" ;;
+  *)                         fail "nmea/uart: gps fragment present" "got: $gps_nmea_fragments" ;;
+esac
+case "$gps_nmea_fragments" in
+  *docker-compose.nmea.yaml*) fail "nmea/uart: NO dormant nmea fragment" "nmea fragment leaked when protocol NMEA selected on gps backend" ;;
+  *)                          pass "nmea/uart: NO dormant nmea fragment" ;;
+esac
 
 # ── UBX over USB ───────────────────────────────────────────────────────────
 section "gnss=gps protocol=UBX connection=usb"
@@ -86,15 +95,15 @@ harness_set_preset gnss=ublox gps=ubx-uart lidar=none tfluna=none
 if harness_run; then pass "harness_run ublox"; else fail "harness_run ublox"; fi
 assert_eq "ublox: GNSS_BACKEND=ublox" "ublox" "$(env_value "$repo" GNSS_BACKEND)"
 
-# Compose must include gnss_ublox service and NOT the legacy mowgli-gps.
-ublox_services=$(services_in "$repo")
-case "$ublox_services" in
-  *gnss_ublox*) pass "ublox: gnss_ublox service present" ;;
-  *)            fail "ublox: gnss_ublox service present" "got: $ublox_services" ;;
+# Compose selection must include the ublox fragment and exclude the legacy gps fragment.
+ublox_fragments=$(selected_fragments_in_current_run)
+case "$ublox_fragments" in
+  *docker-compose.ublox.yaml*) pass "ublox: ublox fragment present" ;;
+  *)                           fail "ublox: ublox fragment present" "got: $ublox_fragments" ;;
 esac
-case "$ublox_services" in
-  *mowgli-gps*) fail "ublox: NO legacy mowgli-gps service" "legacy gps leaked when ublox selected" ;;
-  *)            pass "ublox: NO legacy mowgli-gps service" ;;
+case "$ublox_fragments" in
+  *docker-compose.gps.yml*) fail "ublox: NO legacy gps fragment" "legacy gps leaked when ublox selected" ;;
+  *)                        pass "ublox: NO legacy gps fragment" ;;
 esac
 
 # ── Unicore UM98x backend ──────────────────────────────────────────────────
@@ -114,14 +123,14 @@ assert_eq "unicore: GNSS_BACKEND=unicore" "unicore" "$(env_value "$repo" GNSS_BA
 # any other baud means the receiver won't talk to the host.
 assert_eq "unicore/uart: GPS_BAUD=460800" "460800" "$(env_value "$repo" GPS_BAUD)"
 
-unicore_services=$(services_in "$repo")
-case "$unicore_services" in
-  *gnss_unicore*) pass "unicore: gnss_unicore service present" ;;
-  *)              fail "unicore: gnss_unicore service present" "got: $unicore_services" ;;
+unicore_fragments=$(selected_fragments_in_current_run)
+case "$unicore_fragments" in
+  *docker-compose.unicore.yaml*) pass "unicore: unicore fragment present" ;;
+  *)                             fail "unicore: unicore fragment present" "got: $unicore_fragments" ;;
 esac
-case "$unicore_services" in
-  *mowgli-gps*) fail "unicore: NO legacy mowgli-gps service" "legacy gps leaked when unicore selected" ;;
-  *)            pass "unicore: NO legacy mowgli-gps service" ;;
+case "$unicore_fragments" in
+  *docker-compose.gps.yml*) fail "unicore: NO legacy gps fragment" "legacy gps leaked when unicore selected" ;;
+  *)                        pass "unicore: NO legacy gps fragment" ;;
 esac
 
 # ── Invalid GNSS backend name should fail ──────────────────────────────────

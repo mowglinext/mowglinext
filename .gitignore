@@ -40,6 +40,7 @@ docker/config/cyclonedds.xml
 docker/config/mqtt/mosquitto.conf
 docker/config/om/mower_config.sh
 install/.preset
+install/.preset.consumed
 install/logs/
 
 # Secrets

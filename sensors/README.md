@@ -13,7 +13,7 @@ Dockerized ROS2 drivers for each supported sensor. Each subdirectory contains a 
 
 ### GPS backend selection
 
-The installer offers four GNSS backends (`GNSS_BACKEND` env): `gps` (legacy UBX), `ublox` (F9P UBX HP + bundled NTRIP), `unicore` (UM98x), `nmea` (this driver). Pick `nmea` for any receiver that emits standard NMEA-0183 sentences (GGA, RMC, GSA, VTG) — Emlid Reach, BN-220, LC29H, NEO-M8N in NMEA mode, etc. Caveats:
+The installer offers three GNSS backends (`GNSS_BACKEND` env): `gps` (legacy container for generic UBX or NMEA receivers), `ublox` (F9P UBX HP + bundled NTRIP), and `unicore` (UM98x). For generic receivers that emit standard NMEA-0183 sentences (GGA, RMC, GSA, VTG) — Emlid Reach, BN-220, LC29H, NEO-M8N in NMEA mode, etc. — use `GNSS_BACKEND=gps` with `GPS_PROTOCOL=NMEA`. Caveats:
 
 - Position covariance is derived from HDOP only, no UBX `position_accuracy`. The map-frame EKF / `fusion_graph` will see a more pessimistic σ than RTK-Fixed implies.
 - RTK still works if the receiver outputs RTK-quality GGA fix-quality codes (4=Fixed, 5=Float), but the project's BT/GUI cannot distinguish Fixed from Float beyond GGA quality.

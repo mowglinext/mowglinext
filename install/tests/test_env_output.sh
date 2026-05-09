@@ -25,7 +25,7 @@ install_all_mocks
 SANDBOX_REPO="$SANDBOX/repo"
 sandbox_repo "$SANDBOX_REPO"
 harness_init "$SANDBOX_REPO"
-harness_set_preset gps=ubx-uart lidar=ldlidar-uart tfluna=front
+harness_set_preset gps=ubx-uart lidar=ldlidar-uart tfluna=none
 
 if ! harness_run; then
   fail "harness_run for default preset" "non-zero exit"
@@ -98,8 +98,8 @@ assert_contains "LIDAR_TYPE=ldlidar (preset)" "LIDAR_TYPE=ldlidar" "$ENV_CONTENT
 assert_contains "LIDAR_BAUD=230400 (preset)" "LIDAR_BAUD=230400" "$ENV_CONTENT"
 assert_contains "HARDWARE_BACKEND=mowgli (default)" "HARDWARE_BACKEND=mowgli" "$ENV_CONTENT"
 assert_contains "GNSS_BACKEND=gps (default)" "GNSS_BACKEND=gps" "$ENV_CONTENT"
-assert_contains "TFLUNA_FRONT_ENABLED=true (preset)" "TFLUNA_FRONT_ENABLED=true" "$ENV_CONTENT"
-assert_contains "TFLUNA_EDGE_ENABLED=false (preset)" "TFLUNA_EDGE_ENABLED=false" "$ENV_CONTENT"
+assert_contains "TFLUNA_FRONT_ENABLED=false (default)" "TFLUNA_FRONT_ENABLED=false" "$ENV_CONTENT"
+assert_contains "TFLUNA_EDGE_ENABLED=false (default)" "TFLUNA_EDGE_ENABLED=false" "$ENV_CONTENT"
 
 section ".env image references point at ghcr.io"
 

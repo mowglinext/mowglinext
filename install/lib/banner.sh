@@ -8,6 +8,10 @@ show_banner() {
   echo ""
 }
 
+print_rerun_command() {
+  echo -e "  ${BOLD}$(rerun_check_command)${NC}"
+}
+
 print_summary() {
   echo ""
   echo -e "${CYAN}${BOLD}══════════════════════════════════════════════${NC}"
@@ -32,7 +36,7 @@ print_summary() {
     done
     echo ""
     echo -e "  ${DIM}Fix these issues, then re-run:${NC}"
-    echo -e "  ${BOLD}./install.sh --check${NC}"
+    print_rerun_command
   fi
 
   echo ""

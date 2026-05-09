@@ -1,5 +1,73 @@
 #!/usr/bin/env bash
 
+container_name_for_service() {
+  local svc="${1:-}"
+
+  case "$svc" in
+    mowgli)       printf 'mowgli-ros2\n' ;;
+    gps)          printf 'mowgli-gps\n' ;;
+    gnss_ublox)   printf 'mowgli-gps\n' ;;
+    gnss_unicore) printf 'mowgli-gps\n' ;;
+    lidar)        printf 'mowgli-lidar\n' ;;
+    gui)          printf 'mowgli-gui\n' ;;
+    mosquitto)    printf 'mowgli-mqtt\n' ;;
+    mavros)       printf 'mowgli-mavros\n' ;;
+    ntrip)        printf 'mowgli-ntrip\n' ;;
+    vesc)         printf 'mowgli-vesc\n' ;;
+    tfluna_front) printf 'mowgli-tfluna-front\n' ;;
+    tfluna_edge)  printf 'mowgli-tfluna-edge\n' ;;
+    *)            return 1 ;;
+  esac
+}
+
+print_logs_command_for_container() {
+  local container="${1:?print_logs_command_for_container: missing container}"
+  local tail_lines="${2:-30}"
+
+  printf 'docker logs %q --tail %q' "$container" "$tail_lines"
+}
+
+expected_runtime_services() {
+  : "${LIDAR_ENABLED:=true}"
+  : "${LIDAR_TYPE:=unknown}"
+  : "${GNSS_BACKEND:=gps}"
+
+  local services=(mowgli gui mosquitto)
+  local gnss_backend
+  local gnss_service
+
+  gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
+
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
+    services+=(mavros ntrip)
+  else
+    if ! is_supported_gnss_backend "$gnss_backend"; then
+      return 1
+    fi
+
+    gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
+    [ -n "$gnss_service" ] && services+=("$gnss_service")
+  fi
+
+  if [[ "${LIDAR_ENABLED}" == "true" && "${LIDAR_TYPE}" != "none" ]]; then
+    services+=(lidar)
+  fi
+
+  if effective_tfluna_front_enabled; then
+    services+=(tfluna_front)
+  fi
+
+  if effective_tfluna_edge_enabled; then
+    services+=(tfluna_edge)
+  fi
+
+  if effective_vesc_enabled; then
+    services+=(vesc)
+  fi
+
+  printf '%s\n' "${services[@]}"
+}
+
 check_devices() {
   step "Check: Hardware devices"
 
@@ -56,10 +124,10 @@ check_devices() {
           if [[ -n "$uart_dev" && ! -e "$uart_dev" ]]; then
             # UART device itself doesn't exist — likely needs reboot for dtoverlay
             warn "$sensor_name: UART device $uart_dev not available yet — reboot required"
-            add_issue "$sensor_name UART $uart_dev not found. Reboot to enable UART overlays, then re-check: sudo reboot"
+            add_issue "$sensor_name UART $uart_dev not found. Reboot to enable UART overlays, then re-check with: $(rerun_check_command)"
           elif [[ -n "$uart_dev" ]]; then
             # UART device exists but symlink missing — udev rule issue
-            add_issue "$sensor_name symlink $dev not found but $uart_dev exists. Check udev rules: cat /etc/udev/rules.d/50-mowgli.rules"
+            add_issue "$sensor_name symlink $dev not found but $uart_dev exists. Check udev rules: cat /etc/udev/rules.d/50-mowgli.rules. Then re-run: $(rerun_check_command)"
             echo -e "       ${DIM}Try: sudo udevadm control --reload-rules && sudo udevadm trigger${NC}"
           else
             add_issue "$sensor_name device $dev not detected. Check connection and docker/.env configuration."
@@ -74,7 +142,7 @@ check_devices() {
     gps_target="$(readlink -f "$GPS_PORT")"
     if [[ "$gps_target" != "$GPS_UART_DEVICE" ]]; then
       warn "GPS symlink mismatch: $GPS_PORT -> $gps_target (expected $GPS_UART_DEVICE)"
-      add_issue "GPS symlink $GPS_PORT points to $gps_target instead of $GPS_UART_DEVICE. Re-run installer or fix udev rules."
+      add_issue "GPS symlink $GPS_PORT points to $gps_target instead of $GPS_UART_DEVICE. Re-run $(installer_main_command) or fix udev rules."
     fi
   fi
 
@@ -85,7 +153,7 @@ check_devices() {
     gps_expected="$(readlink -f "$GPS_BY_ID")"
     if [[ "$gps_target" != "$gps_expected" ]]; then
       warn "GPS symlink mismatch: $GPS_PORT -> $gps_target (expected $gps_expected from $GPS_BY_ID)"
-      add_issue "GPS symlink $GPS_PORT points to $gps_target instead of the selected USB device $GPS_BY_ID. Re-run installer or fix udev rules."
+      add_issue "GPS symlink $GPS_PORT points to $gps_target instead of the selected USB device $GPS_BY_ID. Re-run $(installer_main_command) or fix udev rules."
     fi
   fi
 
@@ -94,7 +162,7 @@ check_devices() {
     lidar_target="$(readlink -f "$LIDAR_PORT")"
     if [[ "$lidar_target" != "$LIDAR_UART_DEVICE" ]]; then
       warn "LiDAR symlink mismatch: $LIDAR_PORT -> $lidar_target (expected $LIDAR_UART_DEVICE)"
-      add_issue "LiDAR symlink $LIDAR_PORT points to $lidar_target instead of $LIDAR_UART_DEVICE. Re-run installer or fix udev rules."
+      add_issue "LiDAR symlink $LIDAR_PORT points to $lidar_target instead of $LIDAR_UART_DEVICE. Re-run $(installer_main_command) or fix udev rules."
     fi
   fi
 }
@@ -102,75 +170,38 @@ check_devices() {
 check_containers() {
   step "Check: Containers"
 
-  : "${LIDAR_ENABLED:=true}"
-  : "${LIDAR_TYPE:=unknown}"
-  : "${GNSS_BACKEND:=gps}"
-
-  local services=(mowgli gui mosquitto)
-
-  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
-    services+=(mavros ntrip)
-  else
-    case "${GNSS_BACKEND}" in
-      gps)     services+=(gps) ;;
-      ublox)   services+=(gnss_ublox) ;;
-      unicore) services+=(gnss_unicore) ;;
-      *)
-        fail "Unknown GNSS_BACKEND=${GNSS_BACKEND}"
-        add_issue "Unknown GNSS_BACKEND=${GNSS_BACKEND}. Re-run installer."
-        ;;
-    esac
-  fi
-
-  if [[ "${LIDAR_ENABLED}" == "true" && "${LIDAR_TYPE}" != "none" ]]; then
-    services+=(lidar)
-  fi
-
-  if [[ "${TFLUNA_FRONT_ENABLED:-false}" == "true" ]]; then
-    services+=(tfluna_front)
-  fi
-
-  if [[ "${TFLUNA_EDGE_ENABLED:-false}" == "true" ]]; then
-    services+=(tfluna_edge)
+  local services=()
+  if ! mapfile -t services < <(expected_runtime_services); then
+    fail "Unknown GNSS_BACKEND=${GNSS_BACKEND}"
+    add_issue "Unknown GNSS_BACKEND=${GNSS_BACKEND}. Re-run $(installer_main_command)."
+    return
   fi
 
   for svc in "${services[@]}"; do
     local container=""
-    case "$svc" in
-      mowgli)       container="mowgli-ros2" ;;
-      gps)          container="mowgli-gps" ;;
-      gnss_ublox)   container="mowgli-gps" ;;
-      gnss_unicore) container="mowgli-gps" ;;
-      lidar)        container="mowgli-lidar" ;;
-      gui)          container="mowgli-gui" ;;
-      mosquitto)    container="mowgli-mqtt" ;;
-      mavros)       container="mowgli-mavros" ;;
-      ntrip)        container="mowgli-ntrip" ;;
-      tfluna_front) container="mowgli-tfluna-front" ;;
-      tfluna_edge)  container="mowgli-tfluna-edge" ;;
-    esac
+    container="$(container_name_for_service "$svc" 2>/dev/null || true)"
 
     local status
-    status="$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "missing")"
+    status="$(docker_cmd inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "missing")"
 
     if [[ "$status" == "running" ]]; then
       local uptime
-      uptime="$(docker inspect -f '{{.State.StartedAt}}' "$container" 2>/dev/null | cut -dT -f2 | cut -d. -f1)"
+      uptime="$(docker_cmd inspect -f '{{.State.StartedAt}}' "$container" 2>/dev/null | cut -dT -f2 | cut -d. -f1)"
       info "$svc ($container) — running since $uptime"
     else
       fail "$svc ($container) — $status"
       if [[ "$status" == "missing" ]]; then
         add_issue "Container $container not found."
       else
-        add_issue "Container $container is $status. Check logs: docker logs $container --tail 30"
+        add_issue "Container $container is $status. Check logs: $(print_logs_command_for_container "$container" 30)"
       fi
     fi
   done
 
-  if docker inspect -f '{{.State.Status}}' mowgli-ros2 2>/dev/null | grep -q running; then
+  if docker_cmd inspect -f '{{.State.Status}}' mowgli-ros2 2>/dev/null | grep -q running; then
     local dead_nodes
     dead_nodes=$(
-      docker logs mowgli-ros2 --tail 200 2>&1 \
+      docker_cmd logs mowgli-ros2 --tail 200 2>&1 \
         | grep -oP "process has died.*cmd '([^']+)'" \
         | grep -oP "(?<=cmd ')[^']+" \
         | xargs -r -I{} basename {} 2>/dev/null \
@@ -182,7 +213,7 @@ check_containers() {
       while read -r node; do
         [[ -n "$node" ]] && echo -e "       ${RED}$node${NC}"
       done <<< "$dead_nodes"
-      add_issue "Some ROS nodes crashed inside mowgli-ros2. Check: docker logs mowgli-ros2 | grep 'process has died'"
+      add_issue "Some ROS nodes crashed inside mowgli-ros2. Check: $(print_logs_command_for_container mowgli-ros2 200) | grep 'process has died'"
     fi
   fi
 }
@@ -190,14 +221,19 @@ check_containers() {
 check_firmware() {
   step "Check: Mowgli firmware"
 
-  if ! docker inspect -f '{{.State.Status}}' mowgli-ros2 2>/dev/null | grep -q running; then
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
+    info "MAVROS backend: skipping direct Mowgli firmware check"
+    return
+  fi
+
+  if ! docker_cmd inspect -f '{{.State.Status}}' mowgli-ros2 2>/dev/null | grep -q running; then
     warn "mowgli-ros2 not running — skipping firmware check"
     return
   fi
 
   local status_data
   status_data="$(
-    docker exec mowgli-ros2 bash -lc \
+    docker_cmd exec mowgli-ros2 bash -lc \
       "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /hardware_bridge/status --once 2>/dev/null" \
       2>/dev/null || echo ""
   )"
@@ -206,7 +242,7 @@ check_firmware() {
     fail "No data on /hardware_bridge/status — hardware bridge cannot communicate with Mowgli board"
     add_issue "Mowgli firmware not responding. Ensure the STM32 is flashed with Mowgli firmware and /dev/mowgli is accessible."
     echo -e "       ${DIM}Flash firmware: https://github.com/cedbossneo/Mowgli${NC}"
-    echo -e "       ${DIM}Check serial: docker logs mowgli-ros2 | grep hardware_bridge${NC}"
+    echo -e "       ${DIM}Check serial: $(print_logs_command_for_container mowgli-ros2 200) | grep hardware_bridge${NC}"
   else
     local mower_status
     mower_status="$(echo "$status_data" | grep "mower_status:" | awk '{print $2}' | head -1)"
@@ -229,44 +265,53 @@ check_gps() {
   step "Check: GPS"
 
   : "${GNSS_BACKEND:=gps}"
+  local gnss_backend
+  local gps_container
+  local gps_protocol="${GPS_PROTOCOL:-UBX}"
+
+  gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
+
+  if [[ "${GNSS_BACKEND:-}" == "nmea" ]]; then
+    gps_protocol="NMEA"
+  fi
 
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
     info "MAVROS backend: GPS is handled through Pixhawk/MAVROS"
 
     local gps_status
-    gps_status="$(docker inspect -f '{{.State.Status}}' mowgli-gps 2>/dev/null || echo "missing")"
+    gps_status="$(docker_cmd inspect -f '{{.State.Status}}' mowgli-gps 2>/dev/null || echo "missing")"
     if [[ "$gps_status" == "running" ]]; then
       fail "mowgli-gps is running in MAVROS mode"
-      add_issue "mowgli-gps must not run when HARDWARE_BACKEND=mavros. Regenerate docker/docker-compose.yaml and restart the stack."
+      add_issue "mowgli-gps must not run when HARDWARE_BACKEND=mavros. Re-run $(installer_main_command) and restart the expected services: $(print_restart_command_for_backend mavros)"
     else
       info "Direct GPS container disabled (${gps_status})"
     fi
 
     local mavros_status
-    mavros_status="$(docker inspect -f '{{.State.Status}}' mowgli-mavros 2>/dev/null || echo "missing")"
+    mavros_status="$(docker_cmd inspect -f '{{.State.Status}}' mowgli-mavros 2>/dev/null || echo "missing")"
     if [[ "$mavros_status" != "running" ]]; then
       fail "mowgli-mavros is ${mavros_status}"
-      add_issue "MAVROS backend selected but mowgli-mavros is not running. Check docker logs mowgli-mavros --tail 50."
+      add_issue "MAVROS backend selected but mowgli-mavros is not running. Check logs: $(print_logs_command_for_container mowgli-mavros 50)"
       return
     fi
     info "MAVROS container running"
 
     local mavros_state
     mavros_state="$(
-      docker exec mowgli-ros2 bash -lc \
+      docker_cmd exec mowgli-ros2 bash -lc \
         "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /mavros/state --once 2>/dev/null" \
         2>/dev/null || echo ""
     )"
     if [[ -z "$mavros_state" ]]; then
       fail "No MAVROS state on /mavros/state"
-      add_issue "MAVROS is running but /mavros/state has no data. Check Pixhawk serial connection, MAVROS_PORT, MAVROS_BAUD, and docker logs mowgli-mavros --tail 50."
+      add_issue "MAVROS is running but /mavros/state has no data. Check Pixhawk serial connection, MAVROS_PORT, MAVROS_BAUD, and logs: $(print_logs_command_for_container mowgli-mavros 50)"
     else
       info "MAVROS state available on /mavros/state"
     fi
 
     local mavros_global
     mavros_global="$(
-      docker exec mowgli-ros2 bash -lc \
+      docker_cmd exec mowgli-ros2 bash -lc \
         "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /mavros/global_position/global --once 2>/dev/null" \
         2>/dev/null || echo ""
     )"
@@ -279,7 +324,7 @@ check_gps() {
 
     local rtcm_info
     rtcm_info="$(
-      docker exec mowgli-ros2 bash -lc \
+      docker_cmd exec mowgli-ros2 bash -lc \
         "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic info /rtcm 2>/dev/null" \
         2>/dev/null || echo ""
     )"
@@ -292,31 +337,33 @@ check_gps() {
     return
   fi
 
-  local gps_container="mowgli-gps"
-  case "${GNSS_BACKEND}" in
-    gps|ublox|unicore) ;;
-    *)
-      fail "Unknown GNSS_BACKEND=${GNSS_BACKEND}"
-      add_issue "Unknown GNSS_BACKEND=${GNSS_BACKEND}. Re-run installer."
-      return
-      ;;
-  esac
+  if ! is_supported_gnss_backend "$gnss_backend"; then
+    fail "Unknown GNSS_BACKEND=${GNSS_BACKEND}"
+    add_issue "Unknown GNSS_BACKEND=${GNSS_BACKEND}. Re-run $(installer_main_command)."
+    return
+  fi
 
-  if ! docker inspect -f '{{.State.Status}}' "$gps_container" 2>/dev/null | grep -q running; then
+  gps_container="$(compose_gnss_container_name "$gnss_backend" 2>/dev/null || true)"
+  if [ -z "$gps_container" ]; then
+    info "Direct GNSS container disabled"
+    return
+  fi
+
+  if ! docker_cmd inspect -f '{{.State.Status}}' "$gps_container" 2>/dev/null | grep -q running; then
     warn "$gps_container not running — skipping GPS check"
     return
   fi
 
   local fix_data
   fix_data="$(
-    docker exec mowgli-ros2 bash -lc \
+    docker_cmd exec mowgli-ros2 bash -lc \
       "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /gps/fix --once 2>/dev/null" \
       2>/dev/null || echo ""
   )"
 
   if [[ -z "$fix_data" ]]; then
     fail "No GPS fix data on /gps/fix"
-    add_issue "GPS not publishing. Check: docker logs $gps_container --tail 30"
+    add_issue "GPS not publishing. Check logs: $(print_logs_command_for_container "$gps_container" 30)"
     return
   fi
 
@@ -344,31 +391,35 @@ check_gps() {
     fail "GPS: No fix (status=$status_val)"
   fi
 
-  if [[ "${GNSS_BACKEND}" != "gps" ]]; then
-    info "GNSS backend ${GNSS_BACKEND}: direct /gps/fix check passed"
+  if [[ "$gnss_backend" != "gps" ]]; then
+    info "GNSS backend ${gnss_backend}: direct /gps/fix check passed"
   fi
 
-  local ntrip_logs
-  ntrip_logs="$(docker logs "$gps_container" --tail 80 2>&1 || true)"
+  if [[ "$gnss_backend" == "gps" && "$gps_protocol" == "NMEA" ]]; then
+    info "GPS protocol NMEA on the generic gps backend: skipping bundled NTRIP check"
+  else
+    local ntrip_logs
+    ntrip_logs="$(docker_cmd logs "$gps_container" --tail 80 2>&1 || true)"
 
-  if echo "$ntrip_logs" | grep -q "Connected to http"; then
-    local ntrip_url
-    ntrip_url="$(echo "$ntrip_logs" | grep -oP "Connected to \K[^ ]+" | tail -1)"
-    info "NTRIP connected: $ntrip_url"
-  elif echo "$ntrip_logs" | grep -q "Unable to connect"; then
-    fail "NTRIP connection failed"
-    add_issue "NTRIP cannot connect. Check ntrip_host and ntrip_mountpoint in docker/config/mowgli/mowgli_robot.yaml"
-  elif echo "$ntrip_logs" | grep -q "Network is unreachable"; then
-    fail "NTRIP: network unreachable"
-    add_issue "No internet connection for NTRIP. Check your network configuration."
-  fi
+    if echo "$ntrip_logs" | grep -q "Connected to http"; then
+      local ntrip_url
+      ntrip_url="$(echo "$ntrip_logs" | grep -oP "Connected to \K[^ ]+" | tail -1)"
+      info "NTRIP connected: $ntrip_url"
+    elif echo "$ntrip_logs" | grep -q "Unable to connect"; then
+      fail "NTRIP connection failed"
+      add_issue "NTRIP cannot connect. Check ntrip_host and ntrip_mountpoint in docker/config/mowgli/mowgli_robot.yaml"
+    elif echo "$ntrip_logs" | grep -q "Network is unreachable"; then
+      fail "NTRIP: network unreachable"
+      add_issue "No internet connection for NTRIP. Check your network configuration."
+    fi
 
-  if echo "$ntrip_logs" | grep -q "Forwarded.*RTCM messages"; then
-    local rtcm_count
-    rtcm_count="$(echo "$ntrip_logs" | grep -oP "Forwarded \K\d+" | tail -1)"
-    info "RTCM bridge: $rtcm_count corrections forwarded to GPS"
-  elif echo "$ntrip_logs" | grep -q "NTRIP enabled: true"; then
-    warn "RTCM bridge not forwarding yet — RTK may take a few minutes to converge"
+    if echo "$ntrip_logs" | grep -q "Forwarded.*RTCM messages"; then
+      local rtcm_count
+      rtcm_count="$(echo "$ntrip_logs" | grep -oP "Forwarded \K\d+" | tail -1)"
+      info "RTCM bridge: $rtcm_count corrections forwarded to GPS"
+    elif echo "$ntrip_logs" | grep -q "NTRIP enabled: true"; then
+      warn "RTCM bridge not forwarding yet — RTK may take a few minutes to converge"
+    fi
   fi
 
   local datum_lat datum_lon
@@ -385,7 +436,7 @@ check_gps() {
         sed -i "s/datum_lat:.*/datum_lat: $lat/" "$yaml_file"
         sed -i "s/datum_lon:.*/datum_lon: $lon/" "$yaml_file"
         info "Datum set to $lat, $lon in $yaml_file"
-        info "Restart mowgli to apply: docker compose -f $FINAL_COMPOSE_FILE --env-file $FINAL_ENV_FILE restart gps mowgli"
+        info "Restart to apply: $(print_restart_command_for_backend)"
       else
         add_issue "Set datum_lat and datum_lon in docker/config/mowgli/mowgli_robot.yaml to your docking station coordinates"
       fi
@@ -412,14 +463,14 @@ check_lidar() {
 
   info "LiDAR config: type=${LIDAR_TYPE} port=${LIDAR_PORT} baud=${LIDAR_BAUD}"
 
-  if ! docker inspect -f '{{.State.Status}}' mowgli-lidar 2>/dev/null | grep -q running; then
+  if ! docker_cmd inspect -f '{{.State.Status}}' mowgli-lidar 2>/dev/null | grep -q running; then
     warn "mowgli-lidar not running — skipping LiDAR check"
     return
   fi
 
   local scan_check
   scan_check="$(
-    docker exec mowgli-ros2 bash -lc \
+    docker_cmd exec mowgli-ros2 bash -lc \
       "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic info /scan 2>/dev/null" \
       2>/dev/null || echo ""
   )"
@@ -431,7 +482,7 @@ check_lidar() {
     info "LiDAR publishing on /scan ($pub_count publisher)"
   else
     fail "No publisher on /scan — LiDAR data not reaching ROS"
-    add_issue "LiDAR not publishing. Check: docker logs mowgli-lidar --tail 20"
+    add_issue "LiDAR not publishing. Check logs: $(print_logs_command_for_container mowgli-lidar 20)"
     echo -e "       ${DIM}Expected serial port: ${LIDAR_PORT}${NC}"
   fi
 }
@@ -443,6 +494,15 @@ check_lidar() {
 
 check_rangefinders() {
   step "Check: Rangefinders"
+
+  if [[ "${TFLUNA_FRONT_ENABLED:-false}" == "true" || "${TFLUNA_EDGE_ENABLED:-false}" == "true" ]]; then
+    if ! feature_is_available tfluna; then
+      warn_unavailable_feature_once \
+        tfluna \
+        "TF-Luna rangefinder services are not available on this branch yet; skipping TF-Luna device checks."
+      return
+    fi
+  fi
 
   if [[ "${TFLUNA_FRONT_ENABLED:-false}" == "true" ]]; then
     if [ -e "${TFLUNA_FRONT_PORT:-/dev/tfluna_front}" ]; then
@@ -466,7 +526,7 @@ check_rangefinders() {
 check_gui() {
   step "Check: GUI & connectivity"
 
-  if ! docker inspect -f '{{.State.Status}}' mowgli-gui 2>/dev/null | grep -q running; then
+  if ! docker_cmd inspect -f '{{.State.Status}}' mowgli-gui 2>/dev/null | grep -q running; then
     fail "mowgli-gui not running"
     add_issue "GUI container not running."
     return
@@ -484,7 +544,7 @@ check_gui() {
 
   local fg_info
   fg_info="$(
-    docker exec mowgli-ros2 bash -lc \
+    docker_cmd exec mowgli-ros2 bash -lc \
       "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && ros2 node list 2>/dev/null" \
       2>/dev/null | grep foxglove_bridge || echo ""
   )"

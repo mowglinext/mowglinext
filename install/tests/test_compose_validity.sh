@@ -4,8 +4,7 @@
 #
 # Validates the merged compose file via `docker compose config -q` and
 # spot-checks that the service blocks the user's preset implies are
-# actually present (mowgli, gui, gps/ublox/unicore, lidar, mavros, ntrip,
-# tfluna_front/edge).
+# actually present (mowgli, gui, gps/ublox/unicore, lidar, mavros, ntrip).
 # =============================================================================
 
 set -uo pipefail
@@ -25,7 +24,7 @@ install_all_mocks
 SANDBOX_REPO="$SANDBOX/repo"
 sandbox_repo "$SANDBOX_REPO"
 harness_init "$SANDBOX_REPO"
-harness_set_preset gps=ubx-uart lidar=ldlidar-uart tfluna=front
+harness_set_preset gps=ubx-uart lidar=ldlidar-uart tfluna=none
 
 if ! harness_run; then
   fail "harness_run" "non-zero exit"
@@ -47,11 +46,11 @@ else
     "$(HOME="$ORIG_HOME" docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" config -q 2>&1 | head -3)"
 fi
 
-section "Required services present (default mowgli + ldlidar + tfluna-front preset)"
+section "Required services present (default mowgli + ldlidar preset)"
 
 CONTAINERS=$(grep -E '^\s+container_name:' "$COMPOSE_FILE" | awk '{print $2}' | sort)
 
-for required in mowgli-ros2 mowgli-gui mowgli-gps mowgli-lidar mowgli-mqtt mowgli-watchtower mowgli-tfluna-front; do
+for required in mowgli-ros2 mowgli-gui mowgli-gps mowgli-lidar mowgli-mqtt mowgli-watchtower; do
   if printf '%s\n' "$CONTAINERS" | grep -qx "$required"; then
     pass "service: $required"
   else
@@ -68,12 +67,14 @@ for forbidden in mowgli-mavros mowgli-ntrip; do
   fi
 done
 
-# Negative: TFLUNA_EDGE_ENABLED=false → no tfluna-edge service
-if printf '%s\n' "$CONTAINERS" | grep -qx "mowgli-tfluna-edge"; then
-  fail "service NOT present: mowgli-tfluna-edge" "should be off when tfluna=front"
-else
-  pass "service NOT present: mowgli-tfluna-edge"
-fi
+# Negative: unsupported optional services must not be emitted
+for forbidden in mowgli-tfluna-front mowgli-tfluna-edge mowgli-vesc; do
+  if printf '%s\n' "$CONTAINERS" | grep -qx "$forbidden"; then
+    fail "service NOT present: $forbidden" "unsupported optional service leaked into compose"
+  else
+    pass "service NOT present: $forbidden"
+  fi
+done
 
 section "Compose env-var expansion does not have unresolved placeholders"
 

@@ -90,6 +90,13 @@ EOF
 
 build_dynamic_udev_rules() {
   local by_id_path
+  local gnss_backend
+  local gps_protocol="${GPS_PROTOCOL:-UBX}"
+
+  gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
+  if [[ "${GNSS_BACKEND:-}" == "nmea" ]]; then
+    gps_protocol="NMEA"
+  fi
 
   echo "# ========================================================="
   echo "# Mowgli II - dynamic rules from current hardware selection"
@@ -110,33 +117,39 @@ build_dynamic_udev_rules() {
   fi
 
   # GPS principal
-  if [ "${GPS_CONNECTION:-usb}" = "uart" ] && [ -n "${GPS_UART_DEVICE:-}" ]; then
-    echo "KERNEL==\"$(basename "$GPS_UART_DEVICE")\", SYMLINK+=\"gps\", MODE=\"0666\""
-  elif [ -n "${GPS_BY_ID:-}" ] && [ -e "${GPS_BY_ID}" ]; then
-    emit_by_id_udev_rule "$GPS_BY_ID" "gps"
-  elif [ "${HARDWARE_BACKEND:-mowgli}" != "mavros" ]; then
-    case "${GNSS_BACKEND:-gps}" in
-      ublox)
-        by_id_path="$(find_serial_by_id "*u-blox*" "*ublox*" || true)"
-        ;;
-      unicore)
-        by_id_path=""
-        ;;
-      gps)
-        by_id_path="$(find_serial_by_id "*u-blox*" "*ublox*" || true)"
-        ;;
-      *)
-        by_id_path=""
-        ;;
-    esac
+  if [ "$gnss_backend" != "disabled" ]; then
+    if [ "${GPS_CONNECTION:-usb}" = "uart" ] && [ -n "${GPS_UART_DEVICE:-}" ]; then
+      echo "KERNEL==\"$(basename "$GPS_UART_DEVICE")\", SYMLINK+=\"gps\", MODE=\"0666\""
+    elif [ -n "${GPS_BY_ID:-}" ] && [ -e "${GPS_BY_ID}" ]; then
+      emit_by_id_udev_rule "$GPS_BY_ID" "gps"
+    elif [ "${HARDWARE_BACKEND:-mowgli}" != "mavros" ]; then
+      case "$gnss_backend" in
+        gps)
+          if [[ "$gps_protocol" != "NMEA" ]]; then
+            by_id_path="$(find_serial_by_id "*u-blox*" "*ublox*" || true)"
+          else
+            by_id_path=""
+          fi
+          ;;
+        ublox)
+          by_id_path="$(find_serial_by_id "*u-blox*" "*ublox*" || true)"
+          ;;
+        unicore)
+          by_id_path=""
+          ;;
+        *)
+          by_id_path=""
+          ;;
+      esac
 
-    if [ -n "$by_id_path" ]; then
-      emit_by_id_udev_rule "$by_id_path" "gps"
+      if [ -n "$by_id_path" ]; then
+        emit_by_id_udev_rule "$by_id_path" "gps"
+      fi
     fi
   fi
 
   # GPS debug (miniUART only)
-  if [ "${GPS_DEBUG_ENABLED:-false}" = "true" ] && [ -n "${GPS_DEBUG_UART_DEVICE:-}" ]; then
+  if [ "$gnss_backend" != "disabled" ] && [ "${GPS_DEBUG_ENABLED:-false}" = "true" ] && [ -n "${GPS_DEBUG_UART_DEVICE:-}" ]; then
     echo "KERNEL==\"$(basename "$GPS_DEBUG_UART_DEVICE")\", SYMLINK+=\"gps_debug\", MODE=\"0666\""
   fi
 
@@ -146,12 +159,12 @@ build_dynamic_udev_rules() {
   fi
 
   # TF-Luna front
-  if [ "${TFLUNA_FRONT_ENABLED:-false}" = "true" ] && [ -n "${TFLUNA_FRONT_UART_DEVICE:-}" ]; then
+  if effective_tfluna_front_enabled && [ -n "${TFLUNA_FRONT_UART_DEVICE:-}" ]; then
     echo "KERNEL==\"$(basename "$TFLUNA_FRONT_UART_DEVICE")\", SYMLINK+=\"tfluna_front\", MODE=\"0666\""
   fi
 
   # TF-Luna edge
-  if [ "${TFLUNA_EDGE_ENABLED:-false}" = "true" ] && [ -n "${TFLUNA_EDGE_UART_DEVICE:-}" ]; then
+  if effective_tfluna_edge_enabled && [ -n "${TFLUNA_EDGE_UART_DEVICE:-}" ]; then
     echo "KERNEL==\"$(basename "$TFLUNA_EDGE_UART_DEVICE")\", SYMLINK+=\"tfluna_edge\", MODE=\"0666\""
   fi
 }
@@ -192,7 +205,7 @@ install_udev_rules() {
   # Verify symlinks were created — UART devices may not exist until reboot
   local needs_reboot=false
 
-  if [ "${GPS_CONNECTION:-usb}" = "uart" ] && [ -n "${GPS_UART_DEVICE:-}" ]; then
+  if [ "$gnss_backend" != "disabled" ] && [ "${GPS_CONNECTION:-usb}" = "uart" ] && [ -n "${GPS_UART_DEVICE:-}" ]; then
     if [ ! -e "$GPS_UART_DEVICE" ]; then
       warn "GPS UART device $GPS_UART_DEVICE does not exist yet (UART overlay needs reboot)"
       needs_reboot=true
@@ -201,7 +214,7 @@ install_udev_rules() {
     else
       info "GPS symlink: ${GPS_PORT:-/dev/gps} -> $(readlink -f "${GPS_PORT:-/dev/gps}")"
     fi
-  elif [ -n "${GPS_BY_ID:-}" ]; then
+  elif [ "$gnss_backend" != "disabled" ] && [ -n "${GPS_BY_ID:-}" ]; then
     if [ ! -e "${GPS_BY_ID}" ]; then
       warn "GPS by-id device ${GPS_BY_ID} does not exist"
     elif [ ! -e "${GPS_PORT:-/dev/gps}" ]; then

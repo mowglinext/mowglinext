@@ -86,6 +86,13 @@ setup_env() {
   # Si MAVROS → GNSS backend désactivé
   if [[ "$HARDWARE_BACKEND" == "mavros" ]]; then
     GNSS_BACKEND="disabled"
+  elif [[ "${GNSS_BACKEND:-gps}" == "nmea" ]]; then
+    warn_legacy_nmea_backend_once
+    GNSS_BACKEND="gps"
+    GPS_PROTOCOL="NMEA"
+  elif ! is_supported_gnss_backend "${GNSS_BACKEND:-gps}"; then
+    warn "Unknown GNSS_BACKEND=${GNSS_BACKEND:-unset} — defaulting to gps"
+    GNSS_BACKEND="gps"
   fi
 
   local enable_mavros="false"

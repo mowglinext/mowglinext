@@ -45,7 +45,8 @@ harness_init() {
         MAVROS_AUTOPILOT MAVROS_ENABLED \
         GPS_UART_RULE GPS_DEBUG_UART_RULE LIDAR_UART_RULE \
         TFLUNA_FRONT_UART_RULE TFLUNA_EDGE_UART_RULE \
-        PRESET_LOADED CLI_PRESET 2>/dev/null || true
+        PRESET_LOADED CLI_PRESET STATE_ACTIVE_PRESET_FILE \
+        STATE_ACTIVE_PRESET_COUNT 2>/dev/null || true
 
   # Force English to keep assertions deterministic across hosts.
   export MOWGLI_LANG=en
@@ -62,6 +63,8 @@ harness_init() {
   source "$lib_dir/i18n.sh"
   # shellcheck source=/dev/null
   source "$lib_dir/config.sh"
+  # shellcheck source=/dev/null
+  source "$lib_dir/state.sh"
   # shellcheck source=/dev/null
   source "$lib_dir/banner.sh"
   # shellcheck source=/dev/null

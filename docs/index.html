@@ -287,8 +287,27 @@
     <!-- ─── Install Composer ──────────────────────────── -->
     <div class="composer">
 
-      <!-- GNSS backend -->
+      <!-- Hardware backend -->
       <div class="composer-group">
+        <h3>Hardware Backend</h3>
+        <p class="composer-hint">`mowgli` stays the stable default. `mavros` is an advanced Pixhawk path and disables the direct GNSS/GPS container selection below.</p>
+        <div class="composer-options" data-group="backend">
+          <button class="composer-option active" data-value="mowgli">
+            <span class="option-icon">🧩</span>
+            <span class="option-label">Mowgli</span>
+            <span class="option-desc">Default stable path — Mowgli STM32 hardware bridge</span>
+          </button>
+          <button class="composer-option" data-value="mavros">
+            <span class="option-icon">🛩️</span>
+            <span class="option-badge">Advanced</span>
+            <span class="option-label">MAVROS</span>
+            <span class="option-desc">Pixhawk via MAVROS — GPS comes from the flight controller</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- GNSS backend -->
+      <div class="composer-group" id="gnss-group">
         <h3>GNSS Backend</h3>
         <p class="composer-hint">Driver selection — picks which sensor container is installed</p>
         <div class="composer-options" data-group="gnss">
@@ -311,9 +330,9 @@
       </div>
 
       <!-- GPS protocol / connection -->
-      <div class="composer-group">
+      <div class="composer-group" id="gps-group">
         <h3>GPS Receiver</h3>
-        <p class="composer-hint">Protocol + wiring. Ignored by the Unicore backend (driver picks its own protocol).</p>
+        <p class="composer-hint" id="gps-group-hint">Protocol + wiring for the selected GNSS path. Unicore completes its real serial device selection inside the installer, so this web preset is omitted there.</p>
         <div class="composer-options" data-group="gps">
           <button class="composer-option active" data-value="ubx-uart">
             <span class="option-icon">📡</span>
@@ -384,9 +403,9 @@
       </div>
 
       <!-- Rangefinders -->
-      <div class="composer-group">
-        <h3>TF-Luna Rangefinders <span class="option-badge">Experimental</span></h3>
-        <p class="composer-hint">Optional — for ground edge detection and front obstacle sensing. Drivers publish raw range today but are not yet wired into collision_monitor or the behavior tree.</p>
+      <div class="composer-group disabled" id="tfluna-group" aria-disabled="true">
+        <h3>TF-Luna Rangefinders <span class="option-badge coming-soon">Unavailable</span></h3>
+        <p class="composer-hint">Temporarily disabled on this branch. The installer keeps TF-Luna support off until the runtime services are production-ready again.</p>
         <div class="composer-options" data-group="tfluna">
           <button class="composer-option active" data-value="none">
             <span class="option-icon">❌</span>
@@ -456,13 +475,56 @@
 <!-- ─── Composer JS ─────────────────────────────────── -->
 <script>
 (function() {
-  var state = { gnss: 'ublox', gps: 'ubx-uart', lidar: 'ldlidar-uart', tfluna: 'none' };
+  var state = { backend: 'mowgli', gnss: 'ublox', gps: 'ubx-uart', lidar: 'ldlidar-uart', tfluna: 'none' };
   var baseUrl = 'https://mowgli.garden/install.sh';
+  var defaultGpsHint = 'Protocol + wiring for the selected GNSS path. Unicore completes its real serial device selection inside the installer, so this web preset is omitted there.';
+  var unicoreGpsHint = 'Unicore port/device selection is completed in the installer. The web composer keeps --gnss=unicore but does not emit a GPS protocol or wiring preset.';
+  var mavrosGpsHint = 'MAVROS uses the flight controller telemetry link. Direct GNSS/GPS container selection is disabled for this backend.';
+
+  function setGroupDisabled(groupId, disabled) {
+    var group = document.getElementById(groupId);
+    if (!group) {
+      return;
+    }
+
+    group.classList.toggle('disabled', disabled);
+    group.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+  }
+
+  function syncComposerUI() {
+    var mavrosSelected = state.backend === 'mavros';
+    var unicoreSelected = state.gnss === 'unicore';
+    var gpsHint = document.getElementById('gps-group-hint');
+
+    setGroupDisabled('gnss-group', mavrosSelected);
+    setGroupDisabled('gps-group', mavrosSelected || unicoreSelected);
+
+    if (!gpsHint) {
+      return;
+    }
+
+    if (mavrosSelected) {
+      gpsHint.textContent = mavrosGpsHint;
+    } else if (unicoreSelected) {
+      gpsHint.textContent = unicoreGpsHint;
+    } else {
+      gpsHint.textContent = defaultGpsHint;
+    }
+  }
 
   function updateCommand() {
+    syncComposerUI();
+
     var parts = ['curl -sSL ' + baseUrl + ' | bash -s --'];
-    parts.push('--gnss=' + state.gnss);
-    parts.push('--gps=' + state.gps);
+    parts.push('--backend=' + state.backend);
+
+    if (state.backend !== 'mavros') {
+      parts.push('--gnss=' + state.gnss);
+      if (state.gnss !== 'unicore') {
+        parts.push('--gps=' + state.gps);
+      }
+    }
+
     parts.push('--lidar=' + state.lidar);
     parts.push('--tfluna=' + state.tfluna);
     document.getElementById('install-command').textContent = parts.join(' \\\n  ');

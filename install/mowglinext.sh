@@ -11,10 +11,12 @@ INSTALL_LIB_DIR="${SCRIPT_DIR}/lib"
 source "${INSTALL_LIB_DIR}/common.sh"
 source "${INSTALL_LIB_DIR}/i18n.sh"
 source "${INSTALL_LIB_DIR}/config.sh"
+source "${INSTALL_LIB_DIR}/state.sh"
 source "${INSTALL_LIB_DIR}/banner.sh"
 source "${INSTALL_LIB_DIR}/progress.sh"
 source "${INSTALL_LIB_DIR}/motd.sh"
 source "${INSTALL_LIB_DIR}/system.sh"
+source "${INSTALL_LIB_DIR}/platform.sh"
 source "${INSTALL_LIB_DIR}/docker.sh"
 source "${INSTALL_LIB_DIR}/backend_choice.sh"
 source "${INSTALL_LIB_DIR}/udev.sh"
@@ -31,12 +33,17 @@ source "${INSTALL_LIB_DIR}/tools.sh"
 
 
 load_preset() {
-  local preset_file="${SCRIPT_DIR}/.preset"
+  local preset_file
+  preset_file="$(preset_file_path)"
   if [ -f "$preset_file" ]; then
     info "Loading hardware preset from web composer"
-    # Source the preset file to set environment variables
-    # shellcheck disable=SC1090
-    source "$preset_file"
+    load_preset_file "$preset_file"
+    if [ "${STATE_ACTIVE_PRESET_COUNT:-0}" -gt 0 ]; then
+      PRESET_LOADED=true
+    else
+      PRESET_LOADED=false
+    fi
+  elif [[ "${CLI_PRESET:-false}" == "true" ]]; then
     PRESET_LOADED=true
   else
     PRESET_LOADED=false
@@ -47,6 +54,12 @@ main() {
   show_banner
   load_locale
   init_install_logs
+  assert_supported_platform || return 1
+  print_platform_summary
+
+  if [ -f "$REPO_DIR/docker/.env" ]; then
+    load_env_defaults_file "$REPO_DIR/docker/.env"
+  fi
 
   if ! $CHECK_ONLY; then
     local TOTAL_STEPS=15
@@ -54,16 +67,9 @@ main() {
     # Language selection, load previous env, then load preset
     select_language
 
-    # Load existing .env for defaults on re-run (preset/CLI flags override)
-  if [ -f "$REPO_DIR/docker/.env" ]; then
-      set -a
-      source "$REPO_DIR/docker/.env"
-      set +a
-      info "Loaded previous configuration from docker/.env"
-      # Image refs are tied to the install script version — never inherit
-      # stale paths from older installs (e.g. mowgli-docker, openmower-gui).
-      unset MOWGLI_ROS2_IMAGE GPS_IMAGE UNICORE_IMAGE LIDAR_IMAGE MAVROS_IMAGE GUI_IMAGE
-  fi
+    # Image refs are tied to the install script version — never inherit
+    # stale paths from older installs (e.g. mowgli-docker, openmower-gui).
+    unset MOWGLI_ROS2_IMAGE GPS_IMAGE UNICORE_IMAGE LIDAR_IMAGE MAVROS_IMAGE NMEA_IMAGE GUI_IMAGE
 
     load_preset
 
@@ -138,6 +144,10 @@ main() {
   check_gui
 
   print_summary
+
+  if ! $CHECK_ONLY; then
+    mark_preset_consumed
+  fi
 }
 
 parse_args "$@"
