@@ -19,6 +19,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <limits>
 #include <vector>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -123,7 +124,18 @@ private:
 
   double lat_error_{0.0};
   double lon_error_{0.0};
+  /// Heading error of the carrot in robot frame, **unwrapped**: kept
+  /// continuous across the ±π discontinuity by tracking the previous
+  /// raw atan2 result and adding the smallest 2π-multiple that
+  /// minimises the per-tick change. This prevents a robot whose
+  /// instantaneous heading offset is ~±π from seeing the proportional
+  /// PID flip sign on every tick (issue #200). The PID still operates
+  /// in the same proportional regime — only the discontinuity is
+  /// removed — so behaviour for small heading errors is unchanged.
   double angle_error_{0.0};
+  /// Previous raw atan2 result, used to detect 2π wraps. NaN means
+  /// "no previous sample" (first tick after setPlan).
+  double angle_error_raw_prev_{std::numeric_limits<double>::quiet_NaN()};
   double last_lat_error_{0.0};
   double last_lon_error_{0.0};
   double last_angle_error_{0.0};

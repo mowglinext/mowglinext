@@ -388,6 +388,10 @@ void FTCController::setPlan(const nav_msgs::msg::Path& path)
   target_lateral_deviation_ = 0.0;
   lateral_deviation_ = 0.0;
 
+  // Reset angle unwrapping state — the new path's first pose orientation
+  // is the new reference; nothing prior to setPlan informs continuity.
+  angle_error_raw_prev_ = std::numeric_limits<double>::quiet_NaN();
+
   global_plan_ = path.poses;
   current_index_ = 0;
   current_progress_ = 0.0;
@@ -951,7 +955,43 @@ void FTCController::update_control_point(double dt)
   // Extract yaw from rotation matrix using atan2 (reliable for 2D, unlike
   // Eigen::eulerAngles which can give ambiguous results near singularities).
   const Eigen::Matrix3d& rot = local_control_point_.rotation();
-  angle_error_ = std::atan2(rot(1, 0), rot(0, 0));
+  const double angle_error_raw = std::atan2(rot(1, 0), rot(0, 0));
+
+  // Unwrap angle_error_ across the ±π discontinuity (issue #200).
+  //
+  // atan2 returns values in (-π, π]. When the carrot's relative yaw is
+  // near ±π, infinitesimal pose changes can flip the raw result from
+  // +π−ε to −π+ε. The proportional PID then commands ω with the
+  // opposite sign, the robot reverses direction, and the next tick
+  // flips back. Result: a robot whose target heading is near opposite
+  // dithers in place instead of converging.
+  //
+  // Fix: maintain a continuous angle_error_ by detecting the wrap and
+  // adding the appropriate 2π-multiple. After this, the PID sees a
+  // smooth signal that increases or decreases monotonically as the
+  // robot rotates toward the target, with no spurious sign flips.
+  //
+  // For small heading errors (well away from ±π) this is a no-op —
+  // angle_error_raw - angle_error_raw_prev_ is small, no wrap detected.
+  if (std::isnan(angle_error_raw_prev_))
+  {
+    // First tick after setPlan: nothing to unwrap against.
+    angle_error_ = angle_error_raw;
+  }
+  else
+  {
+    double delta = angle_error_raw - angle_error_raw_prev_;
+    if (delta > M_PI)
+    {
+      delta -= 2.0 * M_PI;
+    }
+    else if (delta < -M_PI)
+    {
+      delta += 2.0 * M_PI;
+    }
+    angle_error_ += delta;
+  }
+  angle_error_raw_prev_ = angle_error_raw;
 }
 
 // ── PID velocity computation ──────────────────────────────────────────────────
