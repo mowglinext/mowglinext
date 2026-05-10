@@ -67,7 +67,9 @@
   <joint name="base_footprint_to_base_link" type="fixed">
     <parent link="base_footprint"/>
     <child link="base_link"/>
-    <origin xyz="0 0 0.10" rpy="0 0 0"/>
+    <!-- base_link sits at the rear-wheel axis center (per OpenMower
+         convention, matches mowgli_robot.yaml). wheel_radius = 0.093 m. -->
+    <origin xyz="0 0 0.093" rpy="0 0 0"/>
   </joint>
 
   <!-- Left rear drive wheel (physics in .wbt — see comment on base_link). -->
@@ -88,16 +90,11 @@
   <joint name="left_wheel_motor" type="continuous">
     <parent link="base_link"/>
     <child link="left_wheel"/>
-    <!-- Wheel HingeJoint anchor matches the PROTO (robot frame z=0.093,
-         which is base_link frame z=-0.007 because base_link sits at
-         world z=0.10 while the wheel centre sits at world z=0.093 —
-         wheel-bottom flush with the floor at z=0). Phase 2.1 moved
-         wheels out of the floor: previously they were "half-buried"
-         (centre at z=0) which produced 30-45° chassis tip / wheel slip
-         under cmd_vel acceleration. The PROTO follows TurtleBot3Burger's
-         design (wheels and casters share the same ground-contact z) —
-         no penetration impulses, no tip pathology. -->
-    <origin xyz="0 0.1625 -0.007" rpy="0 0 0"/>
+    <!-- Rear-wheel axis IS base_link (per OpenMower convention).
+         Wheel centre at base_link frame z=0; wheel-bottom flush with
+         the floor (radius 0.093 below base_link, base_link at world
+         z=0.093). track = wheel_track = 0.325 → ±0.1625 on Y. -->
+    <origin xyz="0 0.1625 0" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <limit effort="20.0" velocity="100.0"/>
   </joint>
@@ -120,8 +117,8 @@
   <joint name="right_wheel_motor" type="continuous">
     <parent link="base_link"/>
     <child link="right_wheel"/>
-    <!-- See left_wheel_motor for the rationale on z=-0.007. -->
-    <origin xyz="0 -0.1625 -0.007" rpy="0 0 0"/>
+    <!-- See left_wheel_motor — symmetric -Y placement. -->
+    <origin xyz="0 -0.1625 0" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <limit effort="20.0" velocity="100.0"/>
   </joint>
@@ -131,21 +128,29 @@
   <joint name="base_link_to_lidar" type="fixed">
     <parent link="base_link"/>
     <child link="lidar_link"/>
-    <origin xyz="0 0.024 0.12" rpy="0 0 3.1408"/>
+    <!-- LiDAR centred on base_link (x=0, y=0.024 lateral) at +10 cm
+         above the chassis top. chassis_top - base_link = 0.190 m, so
+         z = 0.190 + 0.10 = 0.290. Yaw=π for the back-to-front mount
+         (cable side aft); composes with the .wbt-side rotation to
+         net 0 yaw between base_link and lidar_link. -->
+    <origin xyz="0 0.024 0.290" rpy="0 0 3.1408"/>
   </joint>
 
   <link name="imu_link"/>
   <joint name="base_link_to_imu" type="fixed">
     <parent link="base_link"/>
     <child link="imu_link"/>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <!-- IMU mounted at chassis centre (mowgli_robot.yaml imu_x/y/z). -->
+    <origin xyz="0.18 0 0.095" rpy="0 0 0"/>
   </joint>
 
   <link name="gps_link"/>
   <joint name="base_link_to_gps" type="fixed">
     <parent link="base_link"/>
     <child link="gps_link"/>
-    <origin xyz="0.30 0 0.10" rpy="0 0 0"/>
+    <!-- GPS antenna +30 cm forward of base_link, on the chassis top
+         (gps_x=0.30, chassis_top above base_link = 0.19 m). -->
+    <origin xyz="0.30 0 0.19" rpy="0 0 0"/>
   </joint>
 
   <!-- ── Webots device + plugin wiring ─────────────────────────────── -->

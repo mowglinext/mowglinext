@@ -110,8 +110,14 @@ PROTO MowgliMower [
     synchronization IS synchronization
     children [
       # ── Chassis visual (cosmetic only — physics in boundingObject) ──
+      # YardForce 500 chassis: 0.60 m long × 0.40 m wide × 0.19 m tall
+      # (mowgli_robot.yaml). base_link sits at the rear-wheel axis
+      # (x=0 in robot frame), so the chassis is centred at chassis_center_x
+      # = +0.18 m in front of base_link. Chassis center z =
+      # wheel_radius + chassis_height/2 = 0.093 + 0.095 = 0.188 m above
+      # ground (so the chassis bottom rests at the wheel-axle height).
       Pose {
-        translation 0 0 0.13
+        translation 0.18 0 0.188
         children [
           Shape {
             appearance PBRAppearance {
@@ -119,16 +125,17 @@ PROTO MowgliMower [
               roughness 0.5
               metalness 0.2
             }
-            geometry Box { size 0.30 0.30 0.10 }
+            geometry Box { size 0.60 0.40 0.19 }
           }
         ]
       }
 
       # ── Extension slot (sensors) ─────────────────────────────────────
-      # Lifted to chassis-top so a sensor placed at slot z=0 ends up at
-      # robot z=0.18.
+      # Lifted to chassis-top so a sensor placed at slot (x, y, z) ends
+      # up at robot frame (x, y, 0.283 + z). Chassis top z = 0.188 +
+      # 0.095 = 0.283 m above ground.
       Pose {
-        translation 0 0 0.18
+        translation 0 0 0.283
         children IS extensionSlot
       }
 
@@ -230,51 +237,64 @@ PROTO MowgliMower [
         }
       }
 
-      # ── Single front caster ──────────────────────────────────────────
-      # Real OpenMower has 2 driving wheels at the rear + 2 free-rolling
-      # casters at the front. We simplify to one caster sphere on a
-      # BallJoint (TurtleBot pattern). Front placement keeps the caster
-      # loaded under the static COM (which is at x=0, balanced between
-      # the wheels (x=0) and the caster (x=+0.20)).
-      DEF CASTER_JOINT BallJoint {
-        jointParameters BallJointParameters { anchor 0.20 0 0.04 }
+      # ── Front wheels (two passive swivel casters, YardForce 500) ────
+      # Real YardForce 500 has two free-rolling caster wheels at the
+      # front (radius caster_radius=0.03 m, track caster_track=0.36 m).
+      # They swivel freely (BallJoint = 3-DOF passive) and bear part
+      # of the chassis weight. Placed at +0.30 m forward of base_link
+      # (chassis_center_x + ~0.12).
+      DEF FRONT_LEFT_CASTER BallJoint {
+        jointParameters BallJointParameters { anchor 0.30 0.18 0.03 }
         endPoint Solid {
-          translation 0.20 0 0.04
+          translation 0.30 0.18 0.03
           children [
             Shape {
               appearance PBRAppearance { baseColor 0.05 0.05 0.05 }
-              geometry DEF CASTER_SPHERE Sphere { radius 0.04 subdivision 2 }
+              geometry DEF CASTER_SPHERE Sphere { radius 0.03 subdivision 2 }
             }
           ]
-          name "caster"
+          name "front_left_caster"
           boundingObject USE CASTER_SPHERE
-          physics Physics {
-            density -1
-            mass 0.05
-            centerOfMass [ 0 0 0 ]
-          }
+          physics Physics { density -1 mass 0.05 centerOfMass [ 0 0 0 ] }
+        }
+      }
+      DEF FRONT_RIGHT_CASTER BallJoint {
+        jointParameters BallJointParameters { anchor 0.30 -0.18 0.03 }
+        endPoint Solid {
+          translation 0.30 -0.18 0.03
+          children [
+            Shape {
+              appearance PBRAppearance { baseColor 0.05 0.05 0.05 }
+              geometry USE CASTER_SPHERE
+            }
+          ]
+          name "front_right_caster"
+          boundingObject USE CASTER_SPHERE
+          physics Physics { density -1 mass 0.05 centerOfMass [ 0 0 0 ] }
         }
       }
     ]
 
-    # ── Chassis collision (small, well above the floor) ──────────────────
-    # Bottom at z=0.21, so even ±45° pitch keeps every corner ≥ 0.06 m
-    # off the floor (caster sphere top at z=0.08 < 0.21).
+    # ── Chassis collision (matches the visual chassis box) ────────────────
+    # Centred at (chassis_center_x, 0, 0.188) with size 0.60 × 0.40 × 0.19
+    # — same as the visual. Wheels protrude below the chassis on z so the
+    # chassis itself never touches the ground.
     boundingObject Pose {
-      translation 0.05 0 0.25
+      translation 0.18 0 0.188
       children [
-        Box { size 0.30 0.28 0.08 }
+        Box { size 0.60 0.40 0.19 }
       ]
     }
 
     # ── Mass + COM ────────────────────────────────────────────────────────
-    # COM directly over the wheel axis on x (so static equilibrium pitch
-    # = 0). Z = 0.05 (just below the wheel axis at z=0.093) so gravity
-    # provides a small restoring torque against pitch perturbations.
+    # 8.76 kg total (mowgli_robot.yaml chassis_mass_kg). COM at the
+    # chassis geometric centre (0.18, 0, 0.188): forward of the rear-
+    # wheel axis so the front casters are loaded under static
+    # equilibrium, just like the real YardForce 500.
     physics Physics {
       density -1
       mass 8.76
-      centerOfMass [ 0 0 0.05 ]
+      centerOfMass [ 0.18 0 0.188 ]
     }
   }
 }

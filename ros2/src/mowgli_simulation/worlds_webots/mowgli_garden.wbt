@@ -85,28 +85,21 @@ MowgliMower {
     Gyro { name "gyro" }
     Accelerometer { name "accelerometer" }
 
-    # GPS antenna (front-top of chassis, gps_x=0.30 m in robot config).
+    # GPS antenna at +30 cm forward of base_link, sitting on the
+    # chassis top (slot z=0 ⇒ world z=0.283 after PROTO slot lift).
     GPS {
-      translation 0.30 0 0.10
+      translation 0.30 0 0.0
       name "gps"
     }
 
-    # 360° 2D LiDAR. The slot already lifts +0.18 m (in the PROTO's
-    # extensionSlot Pose); the URDF-side static TF places lidar_link at
-    # base_link z=0.20 — i.e. world z=0.30 once base_link sits at z=0.10
-    # over the wheels. So within the slot we add z=0.12 to land the
-    # device at world z=0.30.
-    #
-    # The URDF-side rotation rpy="0 0 3.1408" (yaw=π) here AND on
-    # base_link_to_lidar in mowgli_webots.urdf compose to a net 0 yaw
-    # between base_link and lidar_link, matching the production setup
-    # where the LiDAR is mounted back-to-front (cable side aft).
-    #
-    # Field set is derived from the canonical 360° 2D Webots model
-    # (RobotisLds01 PROTO that ships with TurtleBot3 Burger), scaled to
-    # our 12 m / 720-ray spec.
+    # 360° 2D LiDAR centred on base_link (lidar_x=0, lidar_y=0.024)
+    # at +10 cm above the chassis top — user spec for the YardForce
+    # 500 mount. Slot is at world z=0.283 (chassis top), so slot
+    # z=0.10 ⇒ world z=0.383. URDF-side rotation rpy="0 0 3.1408"
+    # composes with the rotation here so net lidar_link yaw = 0 in
+    # base_link, matching the production back-to-front cable mount.
     Lidar {
-      translation 0 0.024 0.12
+      translation 0 0.024 0.10
       rotation 0 0 1 3.1408
       name "lidar"
       horizontalResolution 720
