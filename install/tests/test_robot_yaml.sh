@@ -66,8 +66,8 @@ section_count=$(grep -cE '^[[:space:]]+datum_lat:' "$YAML")
 
 # GPS preset propagates
 assert_match "gps_port=/dev/gps" '^[[:space:]]+gps_port:[[:space:]]+"/dev/gps"' "$CONTENT"
-assert_match "gps_baudrate=460800 (UBX preset)" \
-  '^[[:space:]]+gps_baudrate:[[:space:]]+460800' "$CONTENT"
+assert_match "gps_baudrate=921600 (default runtime target)" \
+  '^[[:space:]]+gps_baudrate:[[:space:]]+921600' "$CONTENT"
 
 # NTRIP fields exist
 for ntrip_key in ntrip_enabled ntrip_host ntrip_port ntrip_user ntrip_password ntrip_mountpoint; do

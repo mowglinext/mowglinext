@@ -60,7 +60,7 @@ prompt_or_probe_baud() {
   local port="${1:?prompt_or_probe_baud: missing port}"
   local backend="${2:-gps}"
   local protocol="${3:-UBX}"
-  local default_baud="${4:-460800}"
+  local default_baud="${4:-921600}"
   local mode="${5:-ask}"
   local detected=""
   local choice=""

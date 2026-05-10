@@ -91,7 +91,7 @@ mkdir -p "$test_dir"
 cat > "$test_dir/.preset" <<'EOF'
 GPS_CONNECTION=usb
 GPS_PROTOCOL=UBX
-GPS_BAUD=460800
+GPS_BAUD=921600
 EOF
 # Reset vars
 unset GPS_CONNECTION GPS_PROTOCOL GPS_BAUD 2>/dev/null || true
@@ -100,7 +100,7 @@ load_preset_test "$test_dir"
 assert_eq "With preset file: PRESET_LOADED=true" "true" "$PRESET_LOADED"
 assert_eq "With preset file: GPS_CONNECTION=usb" "usb" "$GPS_CONNECTION"
 assert_eq "With preset file: GPS_PROTOCOL=UBX" "UBX" "$GPS_PROTOCOL"
-assert_eq "With preset file: GPS_BAUD=460800" "460800" "$GPS_BAUD"
+assert_eq "With preset file: GPS_BAUD=921600" "921600" "$GPS_BAUD"
 
 # Test: preset file with all sections
 test_dir="$SANDBOX/full_preset"
@@ -145,7 +145,7 @@ unset GPS_BY_ID GPS_CONNECTION GPS_PROTOCOL GPS_PORT GPS_BAUD GPS_UART_DEVICE GP
 PRESET_LOADED=true
 GPS_CONNECTION=uart
 GPS_PROTOCOL=UBX
-GPS_BAUD=460800
+GPS_BAUD=921600
 GPS_UART_DEVICE=/dev/ttyAMA4
 GPS_DEBUG_ENABLED=false
 configure_gps >/dev/null 2>&1
@@ -159,7 +159,7 @@ unset GPS_BY_ID GPS_CONNECTION GPS_PROTOCOL GPS_PORT GPS_BAUD GPS_UART_DEVICE GP
 PRESET_LOADED=true
 GPS_CONNECTION=usb
 GPS_PROTOCOL=UBX
-GPS_BAUD=460800
+GPS_BAUD=921600
 GPS_UART_DEVICE=
 GPS_DEBUG_ENABLED=false
 configure_gps >/dev/null 2>&1
@@ -170,7 +170,7 @@ unset GPS_BY_ID GPS_CONNECTION GPS_PROTOCOL GPS_PORT GPS_BAUD GPS_UART_DEVICE GP
 PRESET_LOADED=true
 GPS_CONNECTION=uart
 GPS_PROTOCOL=UBX
-GPS_BAUD=460800
+GPS_BAUD=921600
 GPS_UART_DEVICE=/dev/ttyAMA4
 GPS_DEBUG_ENABLED=true
 configure_gps >/dev/null 2>&1
@@ -184,7 +184,7 @@ PRESET_LOADED=true
 GNSS_BACKEND=typo
 GPS_CONNECTION=usb
 GPS_PROTOCOL=UBX
-GPS_BAUD=460800
+GPS_BAUD=921600
 GPS_DEBUG_ENABLED=false
 if configure_gps >/dev/null 2>&1; then
   fail "GPS preset invalid GNSS_BACKEND rejected" "configure_gps unexpectedly succeeded"

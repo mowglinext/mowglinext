@@ -143,7 +143,7 @@ configure_gps() {
       fi
 
       if [ -n "$probe_port" ]; then
-        prompt_or_probe_baud "$probe_port" "${GNSS_BACKEND:-gps}" "${GPS_PROTOCOL:-UBX}" "${GPS_BAUD:-460800}" "auto"
+        prompt_or_probe_baud "$probe_port" "${GNSS_BACKEND:-gps}" "${GPS_PROTOCOL:-UBX}" "${GPS_BAUD:-921600}" "auto"
         GPS_BAUD="$REPLY"
         maybe_upgrade_unicore_baud "$probe_port" "$GPS_BAUD" "auto"
         maybe_upgrade_ublox_baud "$probe_port" "$GPS_BAUD" "auto"
@@ -193,7 +193,8 @@ configure_gps() {
     : "${GPS_CONNECTION:=uart}"
     : "${GPS_PORT:=/dev/gps}"
     : "${GPS_UART_DEVICE:=/dev/ttyAMA4}"
-    : "${GPS_BAUD:=460800}"
+    # GPS_BAUD is the single runtime baud target for the main GNSS receiver.
+    : "${GPS_BAUD:=921600}"
 
     # Debug only on miniUART
     : "${GPS_DEBUG_ENABLED:=false}"
@@ -239,11 +240,11 @@ configure_gps() {
     case "$proto_choice" in
       1)
         GPS_PROTOCOL="UBX"
-        GPS_BAUD="460800"
+        GPS_BAUD="921600"
         ;;
       2)
         GPS_PROTOCOL="NMEA"
-        GPS_BAUD="9600"
+        GPS_BAUD="921600"
         ;;
       *)
         error "$MSG_GPS_INVALID_PROTOCOL"
@@ -252,10 +253,7 @@ configure_gps() {
     esac
 
     local probe_port=""
-    local default_baud="${GPS_BAUD:-460800}"
-    if [ "$GNSS_BACKEND" = "gps" ] && [ "$GPS_PROTOCOL" = "NMEA" ]; then
-      default_baud="9600"
-    fi
+    local default_baud="${GPS_BAUD:-921600}"
 
     if [[ "${GPS_CONNECTION}" == "uart" ]]; then
       probe_port="${GPS_UART_DEVICE:-}"

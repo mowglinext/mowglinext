@@ -42,14 +42,14 @@ harness_set_preset gnss=gps gps=ubx-uart lidar=none tfluna=none
 if harness_run; then pass "harness_run gps/ubx/uart"; else fail "harness_run gps/ubx/uart"; fi
 assert_eq "gps/ubx/uart: GNSS_BACKEND=gps"  "gps"   "$(env_value "$repo" GNSS_BACKEND)"
 assert_eq "gps/ubx/uart: GPS_PROTOCOL=UBX"  "UBX"   "$(env_value "$repo" GPS_PROTOCOL)"
-assert_eq "gps/ubx/uart: GPS_BAUD=460800"   "460800" "$(env_value "$repo" GPS_BAUD)"
+assert_eq "gps/ubx/uart: GPS_BAUD=921600"   "921600" "$(env_value "$repo" GPS_BAUD)"
 assert_eq "gps/ubx/uart: GPS_CONNECTION=uart" "uart" "$(env_value "$repo" GPS_CONNECTION)"
 case "$(selected_fragments_in_current_run)" in
   *docker-compose.gps.yml*) pass "gps/ubx/uart: gps fragment present" ;;
   *)                        fail "gps/ubx/uart: gps fragment present" ;;
 esac
 
-# ── NMEA over UART (lower baud) ────────────────────────────────────────────
+# ── NMEA over UART (same single runtime GPS_BAUD target unless detected otherwise) ──
 section "gnss=gps protocol=NMEA connection=uart"
 
 repo="$SANDBOX/repo_gps_nmea_uart"
@@ -58,7 +58,7 @@ harness_init "$repo"
 harness_set_preset gnss=gps gps=nmea-uart lidar=none tfluna=none
 harness_run >/dev/null 2>&1
 assert_eq "nmea/uart: GPS_PROTOCOL=NMEA" "NMEA"   "$(env_value "$repo" GPS_PROTOCOL)"
-assert_eq "nmea/uart: GPS_BAUD=115200"   "115200" "$(env_value "$repo" GPS_BAUD)"
+assert_eq "nmea/uart: GPS_BAUD=921600"   "921600" "$(env_value "$repo" GPS_BAUD)"
 gps_nmea_fragments=$(selected_fragments_in_current_run)
 case "$gps_nmea_fragments" in
   *docker-compose.gps.yml*)  pass "nmea/uart: gps fragment present" ;;
@@ -118,10 +118,8 @@ GPS_UART_DEVICE=/dev/ttyUSB0
 harness_set_preset gnss=unicore gps=ubx-uart lidar=none tfluna=none
 if harness_run; then pass "harness_run unicore"; else fail "harness_run unicore"; fi
 assert_eq "unicore: GNSS_BACKEND=unicore" "unicore" "$(env_value "$repo" GNSS_BACKEND)"
-# This preset carries an explicit legacy baud, so the installer must preserve
-# it and skip auto-upgrade. Auto-detected Unicore baud can be upgraded to
-# 921600 in the dedicated tests below.
-assert_eq "unicore/uart: GPS_BAUD=460800" "460800" "$(env_value "$repo" GPS_BAUD)"
+# Web/CLI presets no longer bake a backend-specific intermediate baud.
+assert_eq "unicore/uart: GPS_BAUD=921600" "921600" "$(env_value "$repo" GPS_BAUD)"
 
 unicore_fragments=$(selected_fragments_in_current_run)
 case "$unicore_fragments" in

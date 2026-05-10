@@ -146,7 +146,7 @@ harness_init() {
   GNSS_BACKEND="${GNSS_BACKEND:-gps}"
   GPS_CONNECTION="${GPS_CONNECTION:-uart}"
   GPS_PROTOCOL="${GPS_PROTOCOL:-UBX}"
-  GPS_BAUD="${GPS_BAUD:-460800}"
+  GPS_BAUD="${GPS_BAUD:-921600}"
   GPS_UART_DEVICE="${GPS_UART_DEVICE:-/dev/ttyAMA4}"
   GPS_DEBUG_ENABLED="${GPS_DEBUG_ENABLED:-false}"
   LIDAR_ENABLED="${LIDAR_ENABLED:-true}"
@@ -185,8 +185,8 @@ harness_set_preset() {
       gps)
         proto="${val%%-*}"; conn="${val##*-}"
         case "$proto" in
-          ubx)  GPS_PROTOCOL="UBX"; GPS_BAUD="460800" ;;
-          nmea) GPS_PROTOCOL="NMEA"; GPS_BAUD="115200" ;;
+          ubx)  GPS_PROTOCOL="UBX"; unset GPS_BAUD ;;
+          nmea) GPS_PROTOCOL="NMEA"; unset GPS_BAUD ;;
         esac
         case "$conn" in
           usb)  GPS_CONNECTION="usb";  GPS_UART_DEVICE="" ;;

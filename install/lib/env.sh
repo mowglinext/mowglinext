@@ -23,14 +23,18 @@ setup_env() {
   : "${DISABLE_BLUETOOTH:=true}"
   : "${ENABLE_FOXGLOVE:=true}"
 
-  # GPS
+  # Main GNSS receiver
+  # GPS_BAUD is the runtime baud for the main GNSS receiver exposed as /dev/gps.
+  # GPS_BY_ID, GPS_UART_DEVICE, and UNICORE_COM_PORT are installer/support
+  # variables kept for compatibility and installer re-runs; they do not model
+  # separate runtime GPS devices.
   : "${GNSS_BACKEND:=gps}"
   : "${GPS_CONNECTION:=uart}"
   : "${GPS_PROTOCOL:=UBX}"
   : "${GPS_PORT:=/dev/gps}"
   : "${GPS_BY_ID:=}"
   : "${GPS_UART_DEVICE:=/dev/ttyAMA4}"
-  : "${GPS_BAUD:=460800}"
+  : "${GPS_BAUD:=921600}"
   : "${UNICORE_COM_PORT:=COM1}"
 
   : "${GPS_DEBUG_ENABLED:=false}"
