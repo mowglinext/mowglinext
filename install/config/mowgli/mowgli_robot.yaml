@@ -74,7 +74,7 @@ mowgli:
         lidar_yaw: -3.1416
 
         # ── GPS / RTK ───────────────────────────────────────────────
-        gps_baudrate: 460800
+        gps_baudrate: 921600
         gps_port: /dev/gps
         gps_protocol: UBX
         gps_timeout_sec: 5

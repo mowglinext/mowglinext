@@ -18,10 +18,12 @@ services:
       CYCLONEDDS_URI: file:///cyclonedds.xml
       ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
 
+    # GNSS_BACKEND=ublox uses the dedicated USB/libusb u-blox driver.
+    # Serial UBX receivers should use GNSS_BACKEND=gps with GPS_PROTOCOL=UBX.
     command: >
       ros2 launch mowgli_bringup ublox_gnss.launch.py
       ublox_device_family:=${UBLOX_DEVICE_FAMILY:-F9P}
       ublox_frame_id:=gps_link
-      ublox_device_serial_string:=${GPS_PORT:-/dev/gps}
+      ublox_device_serial_string:=${UBLOX_DEVICE_SERIAL_STRING}
 
     restart: unless-stopped

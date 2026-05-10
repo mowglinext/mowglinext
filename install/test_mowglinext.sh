@@ -51,7 +51,24 @@ assert_not_empty() {
 # ── Source common helpers (needed by configure_* functions) ─────────────────
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/i18n.sh"
+source "$SCRIPT_DIR/lib/config.sh"
+source "$SCRIPT_DIR/lib/state.sh"
 load_locale
+
+# Re-apply the test assertions after sourcing installer libs, which redefine
+# pass()/fail() for user-facing status output only.
+pass() {
+  TESTS_PASSED=$((TESTS_PASSED + 1))
+  TESTS_RUN=$((TESTS_RUN + 1))
+  echo -e "  \033[0;32mPASS\033[0m  $1"
+}
+
+fail() {
+  TESTS_FAILED=$((TESTS_FAILED + 1))
+  TESTS_RUN=$((TESTS_RUN + 1))
+  echo -e "  \033[0;31mFAIL\033[0m  $1"
+  [ -n "${2:-}" ] && echo "        $2"
+}
 
 # ���─ Sandbox ────────────────────────────────────────────────────────────────
 SANDBOX=$(mktemp -d)
@@ -89,7 +106,7 @@ mkdir -p "$test_dir"
 cat > "$test_dir/.preset" <<'EOF'
 GPS_CONNECTION=usb
 GPS_PROTOCOL=UBX
-GPS_BAUD=460800
+GPS_BAUD=921600
 EOF
 # Reset vars
 unset GPS_CONNECTION GPS_PROTOCOL GPS_BAUD 2>/dev/null || true
@@ -98,7 +115,7 @@ load_preset_test "$test_dir"
 assert_eq "With preset file: PRESET_LOADED=true" "true" "$PRESET_LOADED"
 assert_eq "With preset file: GPS_CONNECTION=usb" "usb" "$GPS_CONNECTION"
 assert_eq "With preset file: GPS_PROTOCOL=UBX" "UBX" "$GPS_PROTOCOL"
-assert_eq "With preset file: GPS_BAUD=460800" "460800" "$GPS_BAUD"
+assert_eq "With preset file: GPS_BAUD=921600" "921600" "$GPS_BAUD"
 
 # Test: preset file with all sections
 test_dir="$SANDBOX/full_preset"
@@ -130,6 +147,8 @@ assert_eq "Full preset: TFLUNA_EDGE_ENABLED=false" "false" "$TFLUNA_EDGE_ENABLED
 echo ""
 echo "── configure_gps with preset tests ──"
 
+source "$SCRIPT_DIR/lib/serial_probe.sh"
+source "$SCRIPT_DIR/lib/unicore_config.sh"
 source "$SCRIPT_DIR/lib/gps.sh"
 
 pick_uart_port() {
@@ -141,7 +160,7 @@ unset GPS_BY_ID GPS_CONNECTION GPS_PROTOCOL GPS_PORT GPS_BAUD GPS_UART_DEVICE GP
 PRESET_LOADED=true
 GPS_CONNECTION=uart
 GPS_PROTOCOL=UBX
-GPS_BAUD=460800
+GPS_BAUD=921600
 GPS_UART_DEVICE=/dev/ttyAMA4
 GPS_DEBUG_ENABLED=false
 configure_gps >/dev/null 2>&1
@@ -155,7 +174,7 @@ unset GPS_BY_ID GPS_CONNECTION GPS_PROTOCOL GPS_PORT GPS_BAUD GPS_UART_DEVICE GP
 PRESET_LOADED=true
 GPS_CONNECTION=usb
 GPS_PROTOCOL=UBX
-GPS_BAUD=460800
+GPS_BAUD=921600
 GPS_UART_DEVICE=
 GPS_DEBUG_ENABLED=false
 configure_gps >/dev/null 2>&1
@@ -166,7 +185,7 @@ unset GPS_BY_ID GPS_CONNECTION GPS_PROTOCOL GPS_PORT GPS_BAUD GPS_UART_DEVICE GP
 PRESET_LOADED=true
 GPS_CONNECTION=uart
 GPS_PROTOCOL=UBX
-GPS_BAUD=460800
+GPS_BAUD=921600
 GPS_UART_DEVICE=/dev/ttyAMA4
 GPS_DEBUG_ENABLED=true
 configure_gps >/dev/null 2>&1
@@ -180,7 +199,7 @@ PRESET_LOADED=true
 GNSS_BACKEND=typo
 GPS_CONNECTION=usb
 GPS_PROTOCOL=UBX
-GPS_BAUD=460800
+GPS_BAUD=921600
 GPS_DEBUG_ENABLED=false
 if configure_gps >/dev/null 2>&1; then
   fail "GPS preset invalid GNSS_BACKEND rejected" "configure_gps unexpectedly succeeded"
@@ -228,6 +247,7 @@ HARDWARE_BACKEND=mavros
 MAVROS_BY_ID="$SERIAL_BY_ID_DIR/usb-Pixhawk-if00"
 GPS_CONNECTION=usb
 GNSS_BACKEND=ublox
+UBLOX_DEVICE_SERIAL_STRING="ublox-test-serial"
 GPS_BY_ID=""
 udev_rules="$(build_dynamic_udev_rules)"
 case "$udev_rules" in
@@ -243,8 +263,8 @@ HARDWARE_BACKEND=mowgli
 MAVROS_BY_ID=""
 udev_rules="$(build_dynamic_udev_rules)"
 case "$udev_rules" in
-  *'KERNEL=="ttyACM1", SYMLINK+="gps", MODE="0666"'*) pass "udev by-id: u-blox GPS symlink rule" ;;
-  *) fail "udev by-id: u-blox GPS symlink rule" "$udev_rules" ;;
+  *'SYMLINK+="gps"'*) fail "udev by-id: dedicated ublox backend does not create /dev/gps symlink" "$udev_rules" ;;
+  *) pass "udev by-id: dedicated ublox backend does not create /dev/gps symlink" ;;
 esac
 
 GNSS_BACKEND=unicore
@@ -383,9 +403,8 @@ PRESET_LOADED=true
 TFLUNA_FRONT_ENABLED=true
 TFLUNA_EDGE_ENABLED=false
 configure_rangefinders >/dev/null 2>&1
-assert_eq "Range preset front: front rule set" \
-  'KERNEL=="ttyAMA3", SYMLINK+="tfluna_front", MODE="0666"' \
-  "$TFLUNA_FRONT_UART_RULE"
+assert_eq "Range preset front: feature unavailable disables front sensor" "false" "${TFLUNA_FRONT_ENABLED:-}"
+assert_eq "Range preset front: no front rule when unavailable" "" "${TFLUNA_FRONT_UART_RULE:-}"
 assert_eq "Range preset front: no edge rule" "" "${TFLUNA_EDGE_UART_RULE:-}"
 
 # Test: Edge only
@@ -395,9 +414,8 @@ TFLUNA_FRONT_ENABLED=false
 TFLUNA_EDGE_ENABLED=true
 configure_rangefinders >/dev/null 2>&1
 assert_eq "Range preset edge: no front rule" "" "${TFLUNA_FRONT_UART_RULE:-}"
-assert_eq "Range preset edge: edge rule set" \
-  'KERNEL=="ttyAMA2", SYMLINK+="tfluna_edge", MODE="0666"' \
-  "$TFLUNA_EDGE_UART_RULE"
+assert_eq "Range preset edge: feature unavailable disables edge sensor" "false" "${TFLUNA_EDGE_ENABLED:-}"
+assert_eq "Range preset edge: no edge rule when unavailable" "" "${TFLUNA_EDGE_UART_RULE:-}"
 
 # Test: Both
 unset TFLUNA_FRONT_ENABLED TFLUNA_EDGE_ENABLED TFLUNA_FRONT_UART_RULE TFLUNA_EDGE_UART_RULE 2>/dev/null || true
@@ -405,8 +423,10 @@ PRESET_LOADED=true
 TFLUNA_FRONT_ENABLED=true
 TFLUNA_EDGE_ENABLED=true
 configure_rangefinders >/dev/null 2>&1
-assert_not_empty "Range preset both: front rule set" "$TFLUNA_FRONT_UART_RULE"
-assert_not_empty "Range preset both: edge rule set" "$TFLUNA_EDGE_UART_RULE"
+assert_eq "Range preset both: feature unavailable disables front sensor" "false" "${TFLUNA_FRONT_ENABLED:-}"
+assert_eq "Range preset both: feature unavailable disables edge sensor" "false" "${TFLUNA_EDGE_ENABLED:-}"
+assert_eq "Range preset both: no front rule when unavailable" "" "${TFLUNA_FRONT_UART_RULE:-}"
+assert_eq "Range preset both: no edge rule when unavailable" "" "${TFLUNA_EDGE_UART_RULE:-}"
 
 # =============================================================================
 # Test 5: Script syntax validation
@@ -417,6 +437,8 @@ echo "── Script syntax tests ──"
 for script in \
   "$SCRIPT_DIR/mowglinext.sh" \
   "$SCRIPT_DIR/lib/gps.sh" \
+  "$SCRIPT_DIR/lib/serial_probe.sh" \
+  "$SCRIPT_DIR/lib/unicore_config.sh" \
   "$SCRIPT_DIR/lib/lidar.sh" \
   "$SCRIPT_DIR/lib/range.sh" \
   "$SCRIPT_DIR/lib/common.sh" \
@@ -449,14 +471,17 @@ confirm() {
 }
 
 # GPS with preset — should NOT prompt
-unset GNSS_BACKEND GPS_CONNECTION GPS_PROTOCOL GPS_PORT GPS_BAUD GPS_UART_DEVICE GPS_DEBUG_ENABLED GPS_UART_RULE GPS_DEBUG_UART_RULE 2>/dev/null || true
+unset GNSS_BACKEND GPS_CONNECTION GPS_PROTOCOL GPS_PORT GPS_BAUD GPS_UART_DEVICE GPS_DEBUG_ENABLED GPS_UART_RULE GPS_DEBUG_UART_RULE UBLOX_DEVICE_SERIAL_STRING 2>/dev/null || true
 PRESET_LOADED=true
+GNSS_BACKEND=ublox
 GPS_CONNECTION=usb
-GPS_PROTOCOL=NMEA
+GPS_PROTOCOL=UBX
 GPS_BAUD=115200
 GPS_UART_DEVICE=
+UBLOX_DEVICE_SERIAL_STRING=ublox-test-serial
 GPS_DEBUG_ENABLED=false
 configure_gps >/dev/null 2>&1
+assert_eq "GPS preset mode: keeps dedicated ublox serial string" "ublox-test-serial" "$UBLOX_DEVICE_SERIAL_STRING"
 pass "GPS preset mode: no interactive prompts"
 
 # LiDAR with preset — should NOT prompt

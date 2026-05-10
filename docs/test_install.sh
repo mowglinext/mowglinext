@@ -193,7 +193,7 @@ EOF
   fi
 
   # Write preset based on GPS flag
-  if [[ -n "$gps_flag" ]]; then
+  if [[ -n "$gps_flag" && "$gnss_flag" != "ublox" ]]; then
     case "$gps_flag" in
       ubx-usb)
         cat >> "$preset_file" <<'EOF'
@@ -201,7 +201,6 @@ GPS_CONNECTION=usb
 GPS_PROTOCOL=UBX
 GPS_PORT=/dev/gps
 GPS_UART_DEVICE=
-GPS_BAUD=460800
 GPS_DEBUG_ENABLED=false
 EOF
         ;;
@@ -211,7 +210,6 @@ GPS_CONNECTION=uart
 GPS_PROTOCOL=UBX
 GPS_PORT=/dev/gps
 GPS_UART_DEVICE=/dev/ttyAMA4
-GPS_BAUD=460800
 GPS_DEBUG_ENABLED=false
 EOF
         ;;
@@ -221,7 +219,6 @@ GPS_CONNECTION=usb
 GPS_PROTOCOL=NMEA
 GPS_PORT=/dev/gps
 GPS_UART_DEVICE=
-GPS_BAUD=115200
 GPS_DEBUG_ENABLED=false
 EOF
         ;;
@@ -231,11 +228,12 @@ GPS_CONNECTION=uart
 GPS_PROTOCOL=NMEA
 GPS_PORT=/dev/gps
 GPS_UART_DEVICE=/dev/ttyAMA4
-GPS_BAUD=115200
 GPS_DEBUG_ENABLED=false
 EOF
         ;;
     esac
+  elif [[ -n "$gps_flag" && "$gnss_flag" == "ublox" ]]; then
+    :
   fi
 
   # Write preset based on LiDAR flag
@@ -373,25 +371,26 @@ EOF
 preset_out=$(test_preset "" "" "ubx-uart" "" "")
 assert_contains "GPS ubx-uart: connection=uart" "GPS_CONNECTION=uart" "$preset_out"
 assert_contains "GPS ubx-uart: protocol=UBX" "GPS_PROTOCOL=UBX" "$preset_out"
-assert_contains "GPS ubx-uart: baud=460800" "GPS_BAUD=460800" "$preset_out"
+assert_not_contains "GPS ubx-uart: no baked baud" "GPS_BAUD=" "$preset_out"
 assert_contains "GPS ubx-uart: uart=ttyAMA4" "GPS_UART_DEVICE=/dev/ttyAMA4" "$preset_out"
 
 # GPS: UBX via USB
 preset_out=$(test_preset "" "" "ubx-usb" "" "")
 assert_contains "GPS ubx-usb: connection=usb" "GPS_CONNECTION=usb" "$preset_out"
 assert_contains "GPS ubx-usb: protocol=UBX" "GPS_PROTOCOL=UBX" "$preset_out"
-assert_contains "GPS ubx-usb: baud=460800" "GPS_BAUD=460800" "$preset_out"
+assert_not_contains "GPS ubx-usb: no baked baud" "GPS_BAUD=" "$preset_out"
 
 # GPS: NMEA via UART
 preset_out=$(test_preset "" "" "nmea-uart" "" "")
 assert_contains "GPS nmea-uart: connection=uart" "GPS_CONNECTION=uart" "$preset_out"
 assert_contains "GPS nmea-uart: protocol=NMEA" "GPS_PROTOCOL=NMEA" "$preset_out"
-assert_contains "GPS nmea-uart: baud=115200" "GPS_BAUD=115200" "$preset_out"
+assert_not_contains "GPS nmea-uart: no baked baud" "GPS_BAUD=" "$preset_out"
 
 # GPS: NMEA via USB
 preset_out=$(test_preset "" "" "nmea-usb" "" "")
 assert_contains "GPS nmea-usb: connection=usb" "GPS_CONNECTION=usb" "$preset_out"
 assert_contains "GPS nmea-usb: protocol=NMEA" "GPS_PROTOCOL=NMEA" "$preset_out"
+assert_not_contains "GPS nmea-usb: no baked baud" "GPS_BAUD=" "$preset_out"
 
 # =============================================================================
 # Test 3: Preset file generation — LiDAR presets
@@ -496,6 +495,11 @@ assert_contains "GNSS unicore preset writes GNSS_BACKEND" "GNSS_BACKEND=unicore"
 assert_not_contains "GNSS unicore preset omits GPS_PROTOCOL" "GPS_PROTOCOL=" "$preset_out"
 assert_not_contains "GNSS unicore preset omits GPS_CONNECTION" "GPS_CONNECTION=" "$preset_out"
 
+preset_out=$(test_preset "mowgli" "ublox" "ubx-uart" "" "")
+assert_contains "GNSS ublox preset writes GNSS_BACKEND" "GNSS_BACKEND=ublox" "$preset_out"
+assert_not_contains "GNSS ublox preset omits GPS_PROTOCOL" "GPS_PROTOCOL=" "$preset_out"
+assert_not_contains "GNSS ublox preset omits GPS_CONNECTION" "GPS_CONNECTION=" "$preset_out"
+
 # =============================================================================
 # Test 7: Combined presets
 # =============================================================================
@@ -523,12 +527,12 @@ echo "── Consistency with install/lib/*.sh ──"
 # Verify our presets match the defaults in the existing install scripts
 # GPS defaults from install/lib/gps.sh
 preset_out=$(test_preset "" "" "ubx-uart" "" "")
-assert_contains "Matches gps.sh default baud" "GPS_BAUD=460800" "$preset_out"
+assert_not_contains "Matches gps.sh: web preset omits GPS_BAUD" "GPS_BAUD=" "$preset_out"
 assert_contains "Matches gps.sh default uart" "GPS_UART_DEVICE=/dev/ttyAMA4" "$preset_out"
 
-# NMEA baud from install/lib/gps.sh
+# NMEA web presets also omit GPS_BAUD so the installer can detect/preserve it
 preset_out=$(test_preset "" "" "nmea-uart" "" "")
-assert_contains "Matches gps.sh NMEA baud" "GPS_BAUD=115200" "$preset_out"
+assert_not_contains "Matches gps.sh NMEA preset omits GPS_BAUD" "GPS_BAUD=" "$preset_out"
 
 # LiDAR defaults from install/lib/lidar.sh
 preset_out=$(test_preset "" "" "" "ldlidar-uart" "")

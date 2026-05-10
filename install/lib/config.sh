@@ -294,8 +294,8 @@ parse_args() {
         local gps_proto="${gps_spec%%-*}"
         local gps_conn="${gps_spec##*-}"
         case "$gps_proto" in
-          ubx)  GPS_PROTOCOL="UBX";  GPS_BAUD="460800" ;;
-          nmea) GPS_PROTOCOL="NMEA"; GPS_BAUD="115200" ;;
+          ubx)  GPS_PROTOCOL="UBX" ;;
+          nmea) GPS_PROTOCOL="NMEA" ;;
           *)    error "Unknown GPS protocol: $gps_proto (expected ubx or nmea)"; exit 1 ;;
         esac
         case "$gps_conn" in
@@ -634,8 +634,11 @@ write_config() {
 
   : "${GPS_PROTOCOL:=UBX}"
   : "${GPS_PORT:=/dev/gps}"
-  : "${GPS_BAUD:=460800}"
+  : "${GPS_BAUD:=921600}"
 
+  # docker/.env is the installer/compose source of truth. This generated yaml
+  # is the ROS-side runtime config materialised from the current env values.
+  #
   # Seed from the comprehensive template if the runtime yaml doesn't
   # exist yet. We never overwrite an existing file — that would wipe
   # GUI-managed values like chassis dims, IMU calibration, fusion

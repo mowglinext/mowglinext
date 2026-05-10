@@ -479,6 +479,7 @@
   var baseUrl = 'https://mowgli.garden/install.sh';
   var defaultGpsHint = 'Protocol + wiring for the selected GNSS path. Unicore completes its real serial device selection inside the installer, so this web preset is omitted there.';
   var unicoreGpsHint = 'Unicore port/device selection is completed in the installer. The web composer keeps --gnss=unicore but does not emit a GPS protocol or wiring preset.';
+  var ubloxGpsHint = 'Dedicated u-blox backend uses the vendor USB/libusb driver. The installer asks for the receiver USB serial string, so this web GPS preset is omitted there.';
   var mavrosGpsHint = 'MAVROS uses the flight controller telemetry link. Direct GNSS/GPS container selection is disabled for this backend.';
 
   function setGroupDisabled(groupId, disabled) {
@@ -494,10 +495,11 @@
   function syncComposerUI() {
     var mavrosSelected = state.backend === 'mavros';
     var unicoreSelected = state.gnss === 'unicore';
+    var ubloxSelected = state.gnss === 'ublox';
     var gpsHint = document.getElementById('gps-group-hint');
 
     setGroupDisabled('gnss-group', mavrosSelected);
-    setGroupDisabled('gps-group', mavrosSelected || unicoreSelected);
+    setGroupDisabled('gps-group', mavrosSelected || unicoreSelected || ubloxSelected);
 
     if (!gpsHint) {
       return;
@@ -505,6 +507,8 @@
 
     if (mavrosSelected) {
       gpsHint.textContent = mavrosGpsHint;
+    } else if (ubloxSelected) {
+      gpsHint.textContent = ubloxGpsHint;
     } else if (unicoreSelected) {
       gpsHint.textContent = unicoreGpsHint;
     } else {
@@ -520,7 +524,7 @@
 
     if (state.backend !== 'mavros') {
       parts.push('--gnss=' + state.gnss);
-      if (state.gnss !== 'unicore') {
+      if (state.gnss !== 'unicore' && state.gnss !== 'ublox') {
         parts.push('--gps=' + state.gps);
       }
     }

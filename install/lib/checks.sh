@@ -75,14 +75,20 @@ check_devices() {
   : "${LIDAR_PORT:=/dev/lidar}"
   : "${LIDAR_TYPE:=unknown}"
   : "${LIDAR_ENABLED:=true}"
+  : "${UBLOX_DEVICE_SERIAL_STRING:=}"
 
   local devices=()
+  local gnss_backend
+
+  gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
 
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
     devices+=("${MAVROS_PORT:-/dev/mavros}:Pixhawk MAVROS serial")
   else
     devices+=("/dev/mowgli:Mowgli STM32 board")
-    devices+=("${GPS_PORT}:GPS receiver")
+    if [[ "$gnss_backend" != "ublox" ]]; then
+      devices+=("${GPS_PORT}:GPS receiver")
+    fi
   fi
 
   if [[ "${LIDAR_ENABLED}" == "true" && "${LIDAR_TYPE}" != "none" ]]; then
@@ -137,7 +143,16 @@ check_devices() {
     fi
   done
 
-  if [[ "${HARDWARE_BACKEND:-mowgli}" != "mavros" && "${GPS_CONNECTION:-}" == "uart" && -L "${GPS_PORT}" && -n "${GPS_UART_DEVICE:-}" ]]; then
+  if [[ "${HARDWARE_BACKEND:-mowgli}" != "mavros" && "$gnss_backend" == "ublox" ]]; then
+    if [[ -n "${UBLOX_DEVICE_SERIAL_STRING:-}" ]]; then
+      info "u-blox USB serial selector: ${UBLOX_DEVICE_SERIAL_STRING}"
+    else
+      fail "u-blox USB serial selector missing"
+      add_issue "GNSS_BACKEND=ublox requires UBLOX_DEVICE_SERIAL_STRING in docker/.env. Re-run $(installer_main_command) and provide the dedicated u-blox USB serial string."
+    fi
+  fi
+
+  if [[ "${HARDWARE_BACKEND:-mowgli}" != "mavros" && "$gnss_backend" != "ublox" && "${GPS_CONNECTION:-}" == "uart" && -L "${GPS_PORT}" && -n "${GPS_UART_DEVICE:-}" ]]; then
     local gps_target
     gps_target="$(readlink -f "$GPS_PORT")"
     if [[ "$gps_target" != "$GPS_UART_DEVICE" ]]; then
@@ -146,7 +161,7 @@ check_devices() {
     fi
   fi
 
-  if [[ "${HARDWARE_BACKEND:-mowgli}" != "mavros" && "${GPS_CONNECTION:-}" == "usb" && -L "${GPS_PORT}" && -n "${GPS_BY_ID:-}" && -e "${GPS_BY_ID}" ]]; then
+  if [[ "${HARDWARE_BACKEND:-mowgli}" != "mavros" && "$gnss_backend" != "ublox" && "${GPS_CONNECTION:-}" == "usb" && -L "${GPS_PORT}" && -n "${GPS_BY_ID:-}" && -e "${GPS_BY_ID}" ]]; then
     local gps_target
     local gps_expected
     gps_target="$(readlink -f "$GPS_PORT")"
@@ -164,6 +179,57 @@ check_devices() {
       warn "LiDAR symlink mismatch: $LIDAR_PORT -> $lidar_target (expected $LIDAR_UART_DEVICE)"
       add_issue "LiDAR symlink $LIDAR_PORT points to $lidar_target instead of $LIDAR_UART_DEVICE. Re-run $(installer_main_command) or fix udev rules."
     fi
+  fi
+}
+
+yaml_gps_value() {
+  local file="$1"
+  local key="$2"
+  local line value
+
+  line="$(grep -m1 -E "^[[:space:]]+${key}:" "$file" 2>/dev/null || true)"
+  value="${line#*:}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%%#*}"
+  value="${value%"${value##*[![:space:]]}"}"
+  value="${value#\"}"
+  value="${value%\"}"
+  printf '%s\n' "$value"
+}
+
+check_generated_gps_yaml_alignment() {
+  step "Check: Generated GPS YAML"
+
+  local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
+  local yaml_port yaml_baud yaml_protocol
+
+  if [[ ! -f "$yaml_file" ]]; then
+    fail "Generated mowgli_robot.yaml missing"
+    add_issue "Missing $yaml_file. Re-run $(installer_main_command) to regenerate the ROS config from docker/.env."
+    return
+  fi
+
+  yaml_port="$(yaml_gps_value "$yaml_file" gps_port)"
+  yaml_baud="$(yaml_gps_value "$yaml_file" gps_baudrate)"
+  yaml_protocol="$(yaml_gps_value "$yaml_file" gps_protocol)"
+
+  if [[ "$yaml_port" != "${GPS_PORT:-/dev/gps}" ]]; then
+    fail "GPS port diverges between docker/.env and mowgli_robot.yaml"
+    add_issue "docker/.env has GPS_PORT=${GPS_PORT:-/dev/gps} but $yaml_file has gps_port=${yaml_port:-missing}. Re-run $(installer_main_command) to resync."
+  fi
+
+  if [[ "$yaml_baud" != "${GPS_BAUD:-921600}" ]]; then
+    fail "GPS baud diverges between docker/.env and mowgli_robot.yaml"
+    add_issue "docker/.env has GPS_BAUD=${GPS_BAUD:-921600} but $yaml_file has gps_baudrate=${yaml_baud:-missing}. Re-run $(installer_main_command) to resync."
+  fi
+
+  if [[ "$yaml_protocol" != "${GPS_PROTOCOL:-UBX}" ]]; then
+    fail "GPS protocol diverges between docker/.env and mowgli_robot.yaml"
+    add_issue "docker/.env has GPS_PROTOCOL=${GPS_PROTOCOL:-UBX} but $yaml_file has gps_protocol=${yaml_protocol:-missing}. Re-run $(installer_main_command) to resync."
+  fi
+
+  if [[ "$yaml_port" == "${GPS_PORT:-/dev/gps}" && "$yaml_baud" == "${GPS_BAUD:-921600}" && "$yaml_protocol" == "${GPS_PROTOCOL:-UBX}" ]]; then
+    info "docker/.env and mowgli_robot.yaml agree on gps_port/gps_baudrate/gps_protocol"
   fi
 }
 

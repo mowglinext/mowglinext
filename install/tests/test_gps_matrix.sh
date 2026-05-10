@@ -42,14 +42,14 @@ harness_set_preset gnss=gps gps=ubx-uart lidar=none tfluna=none
 if harness_run; then pass "harness_run gps/ubx/uart"; else fail "harness_run gps/ubx/uart"; fi
 assert_eq "gps/ubx/uart: GNSS_BACKEND=gps"  "gps"   "$(env_value "$repo" GNSS_BACKEND)"
 assert_eq "gps/ubx/uart: GPS_PROTOCOL=UBX"  "UBX"   "$(env_value "$repo" GPS_PROTOCOL)"
-assert_eq "gps/ubx/uart: GPS_BAUD=460800"   "460800" "$(env_value "$repo" GPS_BAUD)"
+assert_eq "gps/ubx/uart: GPS_BAUD=921600"   "921600" "$(env_value "$repo" GPS_BAUD)"
 assert_eq "gps/ubx/uart: GPS_CONNECTION=uart" "uart" "$(env_value "$repo" GPS_CONNECTION)"
 case "$(selected_fragments_in_current_run)" in
   *docker-compose.gps.yml*) pass "gps/ubx/uart: gps fragment present" ;;
   *)                        fail "gps/ubx/uart: gps fragment present" ;;
 esac
 
-# ── NMEA over UART (lower baud) ────────────────────────────────────────────
+# ── NMEA over UART (same single runtime GPS_BAUD target unless detected otherwise) ──
 section "gnss=gps protocol=NMEA connection=uart"
 
 repo="$SANDBOX/repo_gps_nmea_uart"
@@ -58,7 +58,7 @@ harness_init "$repo"
 harness_set_preset gnss=gps gps=nmea-uart lidar=none tfluna=none
 harness_run >/dev/null 2>&1
 assert_eq "nmea/uart: GPS_PROTOCOL=NMEA" "NMEA"   "$(env_value "$repo" GPS_PROTOCOL)"
-assert_eq "nmea/uart: GPS_BAUD=115200"   "115200" "$(env_value "$repo" GPS_BAUD)"
+assert_eq "nmea/uart: GPS_BAUD=921600"   "921600" "$(env_value "$repo" GPS_BAUD)"
 gps_nmea_fragments=$(selected_fragments_in_current_run)
 case "$gps_nmea_fragments" in
   *docker-compose.gps.yml*)  pass "nmea/uart: gps fragment present" ;;
@@ -91,9 +91,12 @@ section "gnss=ublox (F9P / ublox_dgnss launch)"
 repo="$SANDBOX/repo_ublox"
 sandbox_repo "$repo"
 harness_init "$repo"
-harness_set_preset gnss=ublox gps=ubx-uart lidar=none tfluna=none
+harness_set_preset gnss=ublox lidar=none tfluna=none
 if harness_run; then pass "harness_run ublox"; else fail "harness_run ublox"; fi
 assert_eq "ublox: GNSS_BACKEND=ublox" "ublox" "$(env_value "$repo" GNSS_BACKEND)"
+assert_eq "ublox: GPS_CONNECTION forced to usb" "usb" "$(env_value "$repo" GPS_CONNECTION)"
+assert_eq "ublox: GPS_PROTOCOL forced to UBX" "UBX" "$(env_value "$repo" GPS_PROTOCOL)"
+assert_eq "ublox: dedicated serial string stored" "ublox-test-serial" "$(env_value "$repo" UBLOX_DEVICE_SERIAL_STRING)"
 
 # Compose selection must include the ublox fragment and exclude the legacy gps fragment.
 ublox_fragments=$(selected_fragments_in_current_run)
@@ -118,10 +121,8 @@ GPS_UART_DEVICE=/dev/ttyUSB0
 harness_set_preset gnss=unicore gps=ubx-uart lidar=none tfluna=none
 if harness_run; then pass "harness_run unicore"; else fail "harness_run unicore"; fi
 assert_eq "unicore: GNSS_BACKEND=unicore" "unicore" "$(env_value "$repo" GNSS_BACKEND)"
-# Unicore UART must run at 460800 — see configure_gps override in
-# install/lib/gps.sh. The PCB-side UART (ttyAMA4) is fixed at this rate;
-# any other baud means the receiver won't talk to the host.
-assert_eq "unicore/uart: GPS_BAUD=460800" "460800" "$(env_value "$repo" GPS_BAUD)"
+# Web/CLI presets no longer bake a backend-specific intermediate baud.
+assert_eq "unicore/uart: GPS_BAUD=921600" "921600" "$(env_value "$repo" GPS_BAUD)"
 
 unicore_fragments=$(selected_fragments_in_current_run)
 case "$unicore_fragments" in
@@ -182,6 +183,223 @@ assert_eq "unicore web preset asks for by-id selection" "true" "$pick_serial_cal
 assert_eq "unicore web preset selects by-id interactively" "$serial_dir/usb-Unicore_UM980" "${GPS_BY_ID:-}"
 assert_eq "unicore web preset keeps backend" "unicore" "${GNSS_BACKEND:-}"
 unset SERIAL_BY_ID_DIR
+
+# ── Explicit GPS_BAUD must remain authoritative ───────────────────────────
+section "explicit GPS_BAUD is not auto-replaced"
+
+repo="$SANDBOX/repo_explicit_baud"
+sandbox_repo "$repo"
+harness_init "$repo"
+
+export PRESET_LOADED=true
+export STATE_ACTIVE_PRESET_COUNT=4
+STATE_PARSED_KEYS=(GNSS_BACKEND GPS_CONNECTION GPS_PROTOCOL GPS_BAUD)
+STATE_PARSED_VALUES=(gps uart NMEA 115200)
+
+GNSS_BACKEND=gps
+GPS_CONNECTION=uart
+GPS_PROTOCOL=NMEA
+GPS_BAUD=115200
+GPS_UART_DEVICE=/dev/ttyAMA4
+
+prompt_or_probe_baud() {
+  fail "explicit GPS_BAUD is not auto-replaced" "prompt_or_probe_baud should not be called"
+  return 1
+}
+
+if configure_gps >/dev/null 2>&1; then
+  pass "explicit GPS_BAUD preset configures GPS"
+else
+  fail "explicit GPS_BAUD preset configures GPS"
+fi
+assert_eq "explicit GPS_BAUD remains unchanged" "115200" "${GPS_BAUD:-}"
+unset -f prompt_or_probe_baud
+
+# ── Generic GPS UBX can upgrade to 921600 when confirmed as u-blox ────────
+section "generic gps UBX auto-detected baud can be upgraded"
+
+repo="$SANDBOX/repo_gps_ubx_upgrade"
+sandbox_repo "$repo"
+harness_init "$repo"
+
+export PRESET_LOADED=true
+export STATE_ACTIVE_PRESET_COUNT=1
+STATE_PARSED_KEYS=(GNSS_BACKEND)
+STATE_PARSED_VALUES=(gps)
+
+GNSS_BACKEND=gps
+unset GPS_CONNECTION GPS_PROTOCOL GPS_BAUD GPS_BY_ID 2>/dev/null || true
+
+prompt_count=0
+prompt() {
+  prompt_count=$((prompt_count + 1))
+  case "$prompt_count" in
+    1) REPLY="2" ;; # connection: UART
+    2) REPLY="1" ;; # protocol: UBX
+    3) REPLY="1" ;; # baud: auto-detect
+    *) REPLY="${2:-}" ;;
+  esac
+}
+serial_probe_baud() {
+  printf '9600\n'
+}
+serial_port_exists() {
+  return 0
+}
+ublox_upgrade_args_file="$SANDBOX/ublox-upgrade-args"
+maybe_upgrade_ublox_baud() {
+  printf '%s\n%s\n%s\n' "$1" "$2" "$3" > "$ublox_upgrade_args_file"
+  GPS_BAUD="921600"
+  return 0
+}
+
+if configure_gps >/dev/null 2>&1; then
+  pass "generic gps UBX auto-detected upgrade configures GPS"
+else
+  fail "generic gps UBX auto-detected upgrade configures GPS"
+fi
+mapfile -t ublox_upgrade_args < "$ublox_upgrade_args_file"
+assert_eq "generic gps UBX upgrade uses selected UART" "/dev/ttyAMA4" "${ublox_upgrade_args[0]:-}"
+assert_eq "generic gps UBX upgrade uses detected baud" "9600" "${ublox_upgrade_args[1]:-}"
+assert_eq "generic gps UBX upgrade keeps auto mode" "ask" "${ublox_upgrade_args[2]:-}"
+assert_eq "generic gps UBX upgrade success writes GPS_BAUD=921600" "921600" "${GPS_BAUD:-}"
+unset -f maybe_upgrade_ublox_baud serial_probe_baud serial_port_exists
+
+# ── Unicore web preset without GPS_BAUD can auto-detect baud ──────────────
+section "unicore web preset auto-detects GPS_BAUD"
+
+repo="$SANDBOX/repo_unicore_web_auto_baud"
+sandbox_repo "$repo"
+harness_init "$repo"
+
+export PRESET_LOADED=true
+export STATE_ACTIVE_PRESET_COUNT=1
+STATE_PARSED_KEYS=(GNSS_BACKEND)
+STATE_PARSED_VALUES=(unicore)
+
+GNSS_BACKEND=unicore
+unset GPS_CONNECTION GPS_PROTOCOL GPS_BAUD GPS_BY_ID 2>/dev/null || true
+
+prompt_count=0
+prompt() {
+  prompt_count=$((prompt_count + 1))
+  case "$prompt_count" in
+    1) REPLY="1" ;; # connection: USB
+    2) REPLY="1" ;; # protocol: UBX
+    *) REPLY="${2:-}" ;;
+  esac
+}
+pick_serial_by_id() {
+  REPLY="$serial_dir/usb-Unicore_UM980"
+}
+probe_args_file="$SANDBOX/unicore-probe-args"
+serial_probe_baud() {
+  printf '%s\n%s\n' "$1" "$2" > "$probe_args_file"
+  printf '921600\n'
+}
+
+if configure_gps >/dev/null 2>&1; then
+  pass "unicore web preset without GPS_BAUD configures GPS"
+else
+  fail "unicore web preset without GPS_BAUD configures GPS"
+fi
+mapfile -t probe_args < "$probe_args_file"
+assert_eq "unicore baud probe uses selected by-id" "$serial_dir/usb-Unicore_UM980" "${probe_args[0]:-}"
+assert_eq "unicore baud probe uses backend" "unicore" "${probe_args[1]:-}"
+assert_eq "unicore web preset writes detected GPS_BAUD" "921600" "${GPS_BAUD:-}"
+
+# ── Unicore detected baud is upgraded to 921600 only after verification ───
+section "unicore auto-detected baud upgrade success"
+
+repo="$SANDBOX/repo_unicore_upgrade_success"
+sandbox_repo "$repo"
+harness_init "$repo"
+
+export PRESET_LOADED=true
+export STATE_ACTIVE_PRESET_COUNT=1
+STATE_PARSED_KEYS=(GNSS_BACKEND)
+STATE_PARSED_VALUES=(unicore)
+
+GNSS_BACKEND=unicore
+unset GPS_CONNECTION GPS_PROTOCOL GPS_BAUD GPS_BY_ID UNICORE_COM_PORT 2>/dev/null || true
+
+prompt_count=0
+prompt() {
+  prompt_count=$((prompt_count + 1))
+  case "$prompt_count" in
+    1) REPLY="1" ;;    # connection: USB
+    2) REPLY="1" ;;    # protocol: UBX
+    3) REPLY="1" ;;    # baud: auto-detect
+    4) REPLY="COM1" ;; # Unicore COM port
+    *) REPLY="${2:-}" ;;
+  esac
+}
+pick_serial_by_id() {
+  REPLY="$serial_dir/usb-Unicore_UM980"
+}
+serial_probe_baud() {
+  printf '460800\n'
+}
+upgrade_args_file="$SANDBOX/unicore-upgrade-success-args"
+configure_unicore_baud_921600() {
+  printf '%s\n%s\n%s\n' "$1" "$2" "$3" > "$upgrade_args_file"
+  return 0
+}
+
+if configure_gps >/dev/null 2>&1; then
+  pass "unicore detected baud upgrade success configures GPS"
+else
+  fail "unicore detected baud upgrade success configures GPS"
+fi
+mapfile -t upgrade_args < "$upgrade_args_file"
+assert_eq "unicore upgrade uses selected by-id" "$serial_dir/usb-Unicore_UM980" "${upgrade_args[0]:-}"
+assert_eq "unicore upgrade uses detected baud" "460800" "${upgrade_args[1]:-}"
+assert_eq "unicore upgrade uses COM1 default" "COM1" "${upgrade_args[2]:-}"
+assert_eq "unicore upgrade success writes GPS_BAUD=921600" "921600" "${GPS_BAUD:-}"
+
+section "unicore auto-detected baud upgrade failure keeps detected baud"
+
+repo="$SANDBOX/repo_unicore_upgrade_failure"
+sandbox_repo "$repo"
+harness_init "$repo"
+
+export PRESET_LOADED=true
+export STATE_ACTIVE_PRESET_COUNT=1
+STATE_PARSED_KEYS=(GNSS_BACKEND)
+STATE_PARSED_VALUES=(unicore)
+
+GNSS_BACKEND=unicore
+unset GPS_CONNECTION GPS_PROTOCOL GPS_BAUD GPS_BY_ID UNICORE_COM_PORT 2>/dev/null || true
+
+prompt_count=0
+prompt() {
+  prompt_count=$((prompt_count + 1))
+  case "$prompt_count" in
+    1) REPLY="1" ;;
+    2) REPLY="1" ;;
+    3) REPLY="1" ;;
+    4) REPLY="COM1" ;;
+    *) REPLY="${2:-}" ;;
+  esac
+}
+pick_serial_by_id() {
+  REPLY="$serial_dir/usb-Unicore_UM980"
+}
+serial_probe_baud() {
+  printf '460800\n'
+}
+configure_unicore_baud_921600() {
+  return 1
+}
+
+if configure_gps >/dev/null 2>&1; then
+  pass "unicore detected baud upgrade failure still configures GPS"
+else
+  fail "unicore detected baud upgrade failure still configures GPS"
+fi
+assert_eq "unicore upgrade failure keeps detected GPS_BAUD" "460800" "${GPS_BAUD:-}"
+
+unset -f configure_unicore_baud_921600 serial_probe_baud
 
 # ── Invalid GNSS backend name should fail ──────────────────────────────────
 section "Invalid gnss backend is rejected"

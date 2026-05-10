@@ -117,7 +117,7 @@ build_dynamic_udev_rules() {
   fi
 
   # GPS principal
-  if [ "$gnss_backend" != "disabled" ]; then
+  if [ "$gnss_backend" != "disabled" ] && [ "$gnss_backend" != "ublox" ]; then
     if [ "${GPS_CONNECTION:-usb}" = "uart" ] && [ -n "${GPS_UART_DEVICE:-}" ]; then
       echo "KERNEL==\"$(basename "$GPS_UART_DEVICE")\", SYMLINK+=\"gps\", MODE=\"0666\""
     elif [ -n "${GPS_BY_ID:-}" ] && [ -e "${GPS_BY_ID}" ]; then
@@ -208,7 +208,7 @@ install_udev_rules() {
 
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
 
-  if [ "$gnss_backend" != "disabled" ] && [ "${GPS_CONNECTION:-usb}" = "uart" ] && [ -n "${GPS_UART_DEVICE:-}" ]; then
+  if [ "$gnss_backend" != "disabled" ] && [ "$gnss_backend" != "ublox" ] && [ "${GPS_CONNECTION:-usb}" = "uart" ] && [ -n "${GPS_UART_DEVICE:-}" ]; then
     if [ ! -e "$GPS_UART_DEVICE" ]; then
       warn "GPS UART device $GPS_UART_DEVICE does not exist yet (UART overlay needs reboot)"
       needs_reboot=true
@@ -217,7 +217,7 @@ install_udev_rules() {
     else
       info "GPS symlink: ${GPS_PORT:-/dev/gps} -> $(readlink -f "${GPS_PORT:-/dev/gps}")"
     fi
-  elif [ "$gnss_backend" != "disabled" ] && [ -n "${GPS_BY_ID:-}" ]; then
+  elif [ "$gnss_backend" != "disabled" ] && [ "$gnss_backend" != "ublox" ] && [ -n "${GPS_BY_ID:-}" ]; then
     if [ ! -e "${GPS_BY_ID}" ]; then
       warn "GPS by-id device ${GPS_BY_ID} does not exist"
     elif [ ! -e "${GPS_PORT:-/dev/gps}" ]; then

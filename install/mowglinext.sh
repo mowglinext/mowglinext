@@ -22,6 +22,9 @@ source "${INSTALL_LIB_DIR}/backend_choice.sh"
 source "${INSTALL_LIB_DIR}/udev.sh"
 source "${INSTALL_LIB_DIR}/deploy.sh"
 source "${INSTALL_LIB_DIR}/env.sh"
+source "${INSTALL_LIB_DIR}/serial_probe.sh"
+source "${INSTALL_LIB_DIR}/unicore_config.sh"
+source "${INSTALL_LIB_DIR}/ublox_config.sh"
 source "${INSTALL_LIB_DIR}/gps.sh"
 source "${INSTALL_LIB_DIR}/lidar.sh"
 source "${INSTALL_LIB_DIR}/range.sh"
@@ -162,6 +165,7 @@ main() {
   echo -e "${CYAN}${BOLD}══ System Health Check ══${NC}"
 
   check_devices
+  check_generated_gps_yaml_alignment
   check_containers
   check_firmware
   check_gps

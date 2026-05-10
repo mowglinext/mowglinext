@@ -49,6 +49,9 @@ REQUIRED_KEYS=(
   GPS_PORT
   GPS_BAUD
   GPS_UART_DEVICE
+  UNICORE_COM_PORT
+  UBLOX_DEVICE_FAMILY
+  UBLOX_DEVICE_SERIAL_STRING
   GPS_DEBUG_ENABLED
   GPS_DEBUG_PORT
   GPS_DEBUG_BAUD
@@ -92,7 +95,7 @@ section ".env values match the requested preset"
 
 ENV_CONTENT="$(cat "$ENV_FILE")"
 assert_contains "GPS_PROTOCOL=UBX (preset)" "GPS_PROTOCOL=UBX" "$ENV_CONTENT"
-assert_contains "GPS_BAUD=460800 (preset)" "GPS_BAUD=460800" "$ENV_CONTENT"
+assert_contains "GPS_BAUD=921600 (runtime target)" "GPS_BAUD=921600" "$ENV_CONTENT"
 assert_contains "GPS_CONNECTION=uart (preset)" "GPS_CONNECTION=uart" "$ENV_CONTENT"
 assert_contains "LIDAR_TYPE=ldlidar (preset)" "LIDAR_TYPE=ldlidar" "$ENV_CONTENT"
 assert_contains "LIDAR_BAUD=230400 (preset)" "LIDAR_BAUD=230400" "$ENV_CONTENT"
@@ -115,7 +118,7 @@ done
 
 section ".env permissions are reasonable"
 
-mode=$(stat -f '%A' "$ENV_FILE" 2>/dev/null || stat -c '%a' "$ENV_FILE" 2>/dev/null)
+mode=$(stat -c '%a' "$ENV_FILE" 2>/dev/null || stat -f '%A' "$ENV_FILE" 2>/dev/null)
 case "$mode" in
   6??|644|640|600) pass ".env permissions ($mode)" ;;
   *)               fail ".env permissions ($mode)" "expected 6xx, got $mode" ;;

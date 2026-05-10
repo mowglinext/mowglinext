@@ -27,8 +27,9 @@ GPS_PROTOCOL=$(parse_yaml gps_protocol)
 GPS_PROTOCOL="${GPS_PROTOCOL:-UBX}"
 GPS_PORT=$(parse_yaml gps_port)
 GPS_PORT="${GPS_PORT:-/dev/gps}"
+# gps_baudrate is the runtime baud for the main GNSS receiver.
 GPS_BAUD=$(parse_yaml gps_baudrate)
-GPS_BAUD="${GPS_BAUD:-460800}"
+GPS_BAUD="${GPS_BAUD:-921600}"
 
 NTRIP_ENABLED=$(parse_yaml ntrip_enabled)
 NTRIP_HOST=$(parse_yaml ntrip_host)

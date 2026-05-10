@@ -111,7 +111,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --backend=TYPE      Hardware backend: mowgli (default), mavros (advanced Pixhawk path)"
       echo "  --gnss=BACKEND     GNSS driver: gps (legacy UBX/NMEA), ublox (F9P), unicore (UM98x)"
       echo "  --gps=PRESET       GPS protocol+wiring: ubx-usb, ubx-uart, nmea-usb, nmea-uart"
-      echo "                     (ignored by --gnss=unicore — driver picks its own protocol)"
+      echo "                     (ignored by --gnss=unicore and --gnss=ublox)"
       echo "  --lidar=PRESET     LiDAR config: none, ldlidar-usb, ldlidar-uart,"
       echo "                     rplidar-usb, rplidar-uart, stl27l-usb, stl27l-uart"
       echo "  --tfluna=PRESET    Rangefinder: none, front, edge, both"
@@ -209,7 +209,7 @@ PRESET
   fi
 
   # ── GPS preset ─────────────────────────────────────────────────────────
-  if [[ -n "$GPS_FLAG" ]]; then
+  if [[ -n "$GPS_FLAG" && "${GNSS_FLAG:-}" != "ublox" ]]; then
     case "$GPS_FLAG" in
       ubx-usb)
         cat >> "$PRESET_FILE" <<'EOF'
@@ -217,7 +217,6 @@ GPS_CONNECTION=usb
 GPS_PROTOCOL=UBX
 GPS_PORT=/dev/gps
 GPS_UART_DEVICE=
-GPS_BAUD=460800
 GPS_DEBUG_ENABLED=false
 EOF
         ;;
@@ -227,7 +226,6 @@ GPS_CONNECTION=uart
 GPS_PROTOCOL=UBX
 GPS_PORT=/dev/gps
 GPS_UART_DEVICE=/dev/ttyAMA4
-GPS_BAUD=460800
 GPS_DEBUG_ENABLED=false
 EOF
         ;;
@@ -237,7 +235,6 @@ GPS_CONNECTION=usb
 GPS_PROTOCOL=NMEA
 GPS_PORT=/dev/gps
 GPS_UART_DEVICE=
-GPS_BAUD=115200
 GPS_DEBUG_ENABLED=false
 EOF
         ;;
@@ -247,7 +244,6 @@ GPS_CONNECTION=uart
 GPS_PROTOCOL=NMEA
 GPS_PORT=/dev/gps
 GPS_UART_DEVICE=/dev/ttyAMA4
-GPS_BAUD=115200
 GPS_DEBUG_ENABLED=false
 EOF
         ;;
@@ -256,6 +252,8 @@ EOF
         ;;
     esac
     info "GPS: $GPS_FLAG"
+  elif [[ -n "$GPS_FLAG" && "${GNSS_FLAG:-}" == "ublox" ]]; then
+    info "GPS preset ignored for GNSS_BACKEND=ublox (dedicated USB/libusb driver)"
   fi
 
   # ── LiDAR preset ──────────────────────────────────────────────────────

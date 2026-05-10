@@ -72,6 +72,8 @@ configure_gps() {
   : "${GNSS_BACKEND:=gps}"
   local gnss_preconfigured=false
   local gps_preconfigured=false
+  local gps_baud_preconfigured=false
+  local ublox_serial_preconfigured=false
 
   if [[ "${GNSS_BACKEND:-}" == "nmea" ]]; then
     warn_legacy_nmea_backend_once
@@ -85,11 +87,15 @@ configure_gps() {
       if preset_key_loaded GPS_CONNECTION && preset_key_loaded GPS_PROTOCOL; then
         gps_preconfigured=true
       fi
+      preset_key_loaded GPS_BAUD && gps_baud_preconfigured=true
+      preset_key_loaded UBLOX_DEVICE_SERIAL_STRING && ublox_serial_preconfigured=true
     else
       [ -n "${GNSS_BACKEND:-}" ] && gnss_preconfigured=true
       if [ -n "${GPS_CONNECTION:-}" ] && [ -n "${GPS_PROTOCOL:-}" ]; then
         gps_preconfigured=true
       fi
+      [ -n "${GPS_BAUD:-}" ] && gps_baud_preconfigured=true
+      [ -n "${UBLOX_DEVICE_SERIAL_STRING:-}" ] && ublox_serial_preconfigured=true
     fi
   fi
 
@@ -113,9 +119,25 @@ configure_gps() {
 
     : "${GPS_PORT:=/dev/gps}"
     : "${GPS_BY_ID:=}"
+    : "${UBLOX_DEVICE_SERIAL_STRING:=}"
     : "${GPS_DEBUG_ENABLED:=false}"
     : "${GPS_DEBUG_PORT:=/dev/gps_debug}"
     : "${GPS_DEBUG_BAUD:=115200}"
+
+    if [[ "${GNSS_BACKEND}" == "ublox" ]]; then
+      if [[ "${GPS_CONNECTION}" != "usb" ]]; then
+        error "GNSS_BACKEND=ublox only supports the dedicated USB/libusb driver. Use GNSS_BACKEND=gps with GPS_PROTOCOL=UBX for UART receivers."
+        return 1
+      fi
+      if [[ "${GPS_PROTOCOL}" != "UBX" ]]; then
+        error "GNSS_BACKEND=ublox requires GPS_PROTOCOL=UBX."
+        return 1
+      fi
+      if [[ "$ublox_serial_preconfigured" != "true" || -z "${UBLOX_DEVICE_SERIAL_STRING:-}" ]]; then
+        error "UBLOX_DEVICE_SERIAL_STRING is required for GNSS_BACKEND=ublox. The dedicated USB/libusb driver does not use GPS_PORT=/dev/gps."
+        return 1
+      fi
+    fi
 
     if [[ "${GNSS_BACKEND}" == "unicore" && "${GPS_CONNECTION}" == "usb" && -z "${GPS_BY_ID:-}" ]]; then
       error "GPS_BY_ID is required for GNSS_BACKEND=unicore with GPS_CONNECTION=usb"
@@ -130,6 +152,23 @@ configure_gps() {
       pick_uart_port "${GPS_UART_DEVICE:-/dev/ttyAMA4}"
       GPS_UART_DEVICE="$REPLY"
     fi
+
+    if [[ "${GNSS_BACKEND}" != "ublox" && "$gps_baud_preconfigured" != "true" ]]; then
+      local probe_port=""
+      if [[ "${GPS_CONNECTION}" == "uart" ]]; then
+        probe_port="${GPS_UART_DEVICE:-}"
+      elif [[ "${GPS_CONNECTION}" == "usb" ]]; then
+        probe_port="${GPS_BY_ID:-${GPS_PORT:-}}"
+      fi
+
+      if [ -n "$probe_port" ]; then
+        prompt_or_probe_baud "$probe_port" "${GNSS_BACKEND:-gps}" "${GPS_PROTOCOL:-UBX}" "${GPS_BAUD:-921600}" "auto"
+        GPS_BAUD="$REPLY"
+        maybe_upgrade_unicore_baud "$probe_port" "$GPS_BAUD" "auto"
+        maybe_upgrade_ublox_baud "$probe_port" "$GPS_BAUD" "auto"
+      fi
+    fi
+
     if [[ "${GPS_DEBUG_ENABLED}" == "true" ]]; then
       pick_uart_port "${GPS_DEBUG_UART_DEVICE:-/dev/ttyS0}"
       GPS_DEBUG_UART_DEVICE="$REPLY"
@@ -173,7 +212,9 @@ configure_gps() {
     : "${GPS_CONNECTION:=uart}"
     : "${GPS_PORT:=/dev/gps}"
     : "${GPS_UART_DEVICE:=/dev/ttyAMA4}"
-    : "${GPS_BAUD:=460800}"
+    : "${UBLOX_DEVICE_SERIAL_STRING:=}"
+    # GPS_BAUD is the single runtime baud target for the main GNSS receiver.
+    : "${GPS_BAUD:=921600}"
 
     # Debug only on miniUART
     : "${GPS_DEBUG_ENABLED:=false}"
@@ -181,63 +222,90 @@ configure_gps() {
     : "${GPS_DEBUG_UART_DEVICE:=/dev/ttyS0}"
     : "${GPS_DEBUG_BAUD:=115200}"
 
-    echo ""
-    echo "$MSG_GPS_CONNECTION"
-    echo "  1) USB"
-    echo "  2) UART"
-    prompt "$MSG_CHOICE" "2"
-    local conn_choice="$REPLY"
+    if [[ "${GNSS_BACKEND}" == "ublox" ]]; then
+      GPS_CONNECTION="usb"
+      GPS_PROTOCOL="UBX"
+      GPS_UART_DEVICE=""
+      GPS_BY_ID=""
+      GPS_BAUD="921600"
 
-    case "$conn_choice" in
-      1)
-        GPS_CONNECTION="usb"
-        GPS_UART_DEVICE=""
-        if [ "$GNSS_BACKEND" = "unicore" ]; then
-          pick_serial_by_id "${GPS_BY_ID:-}" || return 1
-          GPS_BY_ID="$REPLY"
-        fi
-        ;;
-      2)
-        GPS_CONNECTION="uart"
-        GPS_BY_ID=""
-        pick_uart_port "/dev/ttyAMA4"
-        GPS_UART_DEVICE="$REPLY"
-        ;;
-      *)
-        error "$MSG_GPS_INVALID_CONNECTION"
-        return 1
-        ;;
-    esac
-
-    echo ""
-    echo "$MSG_GPS_PROTOCOL"
-    echo "  1) UBX"
-    echo "  2) NMEA"
-    prompt "$MSG_CHOICE" "1"
-    local proto_choice="$REPLY"
-
-    case "$proto_choice" in
-      1)
-        GPS_PROTOCOL="UBX"
-        GPS_BAUD="460800"
-        ;;
-      2)
-        GPS_PROTOCOL="NMEA"
-        GPS_BAUD="9600"
-        ;;
-      *)
-        error "$MSG_GPS_INVALID_PROTOCOL"
-        return 1
-        ;;
-    esac
-
-    # Generic GPS in NMEA mode prompts for baud since NMEA receivers vary
-    # widely (9600 default, 38400/115200 common for higher rates).
-    if [ "$GNSS_BACKEND" = "gps" ] && [ "$GPS_PROTOCOL" = "NMEA" ]; then
       echo ""
-      echo "NMEA baud rate (typical: 9600, 38400, 115200):"
-      prompt "$MSG_CHOICE" "9600"
+      info "GNSS_BACKEND=ublox uses the dedicated USB/libusb u-blox driver."
+      info "UART u-blox receivers should use GNSS_BACKEND=gps with GPS_PROTOCOL=UBX."
+      prompt "u-blox USB serial string?" "${UBLOX_DEVICE_SERIAL_STRING:-}"
+      UBLOX_DEVICE_SERIAL_STRING="$REPLY"
+      if [[ -z "${UBLOX_DEVICE_SERIAL_STRING:-}" ]]; then
+        error "UBLOX_DEVICE_SERIAL_STRING is required for GNSS_BACKEND=ublox"
+        return 1
+      fi
+    else
+      echo ""
+      echo "$MSG_GPS_CONNECTION"
+      echo "  1) USB"
+      echo "  2) UART"
+      prompt "$MSG_CHOICE" "2"
+      local conn_choice="$REPLY"
+
+      case "$conn_choice" in
+        1)
+          GPS_CONNECTION="usb"
+          GPS_UART_DEVICE=""
+          if [ "$GNSS_BACKEND" = "unicore" ]; then
+            pick_serial_by_id "${GPS_BY_ID:-}" || return 1
+            GPS_BY_ID="$REPLY"
+          fi
+          ;;
+        2)
+          GPS_CONNECTION="uart"
+          GPS_BY_ID=""
+          pick_uart_port "/dev/ttyAMA4"
+          GPS_UART_DEVICE="$REPLY"
+          ;;
+        *)
+          error "$MSG_GPS_INVALID_CONNECTION"
+          return 1
+          ;;
+      esac
+
+      echo ""
+      echo "$MSG_GPS_PROTOCOL"
+      echo "  1) UBX"
+      echo "  2) NMEA"
+      prompt "$MSG_CHOICE" "1"
+      local proto_choice="$REPLY"
+
+      case "$proto_choice" in
+        1)
+          GPS_PROTOCOL="UBX"
+          GPS_BAUD="921600"
+          ;;
+        2)
+          GPS_PROTOCOL="NMEA"
+          GPS_BAUD="921600"
+          ;;
+        *)
+          error "$MSG_GPS_INVALID_PROTOCOL"
+          return 1
+          ;;
+      esac
+    fi
+
+    local probe_port=""
+    local default_baud="${GPS_BAUD:-921600}"
+
+    if [[ "${GNSS_BACKEND}" == "ublox" ]]; then
+      probe_port=""
+    elif [[ "${GPS_CONNECTION}" == "uart" ]]; then
+      probe_port="${GPS_UART_DEVICE:-}"
+    elif [[ "${GPS_CONNECTION}" == "usb" ]]; then
+      probe_port="${GPS_BY_ID:-${GPS_PORT:-}}"
+    fi
+
+    if [ -n "$probe_port" ]; then
+      prompt_or_probe_baud "$probe_port" "${GNSS_BACKEND:-gps}" "${GPS_PROTOCOL:-UBX}" "$default_baud" "ask"
       GPS_BAUD="$REPLY"
+      maybe_upgrade_unicore_baud "$probe_port" "$GPS_BAUD" "ask"
+      maybe_upgrade_ublox_baud "$probe_port" "$GPS_BAUD" "ask"
     fi
 
     echo ""
@@ -265,20 +333,10 @@ configure_gps() {
     GPS_DEBUG_UART_RULE="KERNEL==\"${gps_debug_kernel}\", SYMLINK+=\"gps_debug\", MODE=\"0666\""
   fi
 
-  # Unicore UART → 460800. The Mowgli PCB UART path (ttyAMA4) is wired
-  # for 460800 (matches the F9P UBX rate), and the operator is expected
-  # to configure the UM982 receiver to the same speed. The UBX/NMEA
-  # protocol selector above is irrelevant for the Unicore driver — it
-  # speaks Unicore-NMEA extensions natively — so we override whatever
-  # baud the protocol path chose. USB is left alone (CDC-ACM doesn't
-  # care about the configured rate).
-  if [ "${GNSS_BACKEND:-}" = "unicore" ] && [ "${GPS_CONNECTION:-}" = "uart" ]; then
-    GPS_BAUD="460800"
-  fi
-
   echo ""
   info "$MSG_GPS_MAIN : backend=$GNSS_BACKEND connection=$GPS_CONNECTION protocol=$GPS_PROTOCOL port=$GPS_PORT uart=${GPS_UART_DEVICE:-none} baud=$GPS_BAUD"
   [ -n "${GPS_BY_ID:-}" ] && info "GPS USB by-id  : $GPS_BY_ID"
+  [ -n "${UBLOX_DEVICE_SERIAL_STRING:-}" ] && info "u-blox USB serial string : $UBLOX_DEVICE_SERIAL_STRING"
   info "GPS debug     : enabled=$GPS_DEBUG_ENABLED port=$GPS_DEBUG_PORT uart=${GPS_DEBUG_UART_DEVICE:-none} baud=$GPS_DEBUG_BAUD"
 }
 

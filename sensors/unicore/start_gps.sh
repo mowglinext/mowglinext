@@ -69,6 +69,7 @@ GPS_PORT=$(parse_yaml gps_port)
 GPS_PORT="${GPS_PORT:-/dev/gps}"
 GPS_BAUD=$(parse_yaml gps_baudrate)
 GPS_BAUD="${GPS_BAUD:-921600}"
+UNICORE_TARGET_BAUD="${UNICORE_TARGET_BAUD:-921600}"
 
 # Optional one-shot UM98x config blast — sends MODE ROVER + LOG
 # directives via /configure_receiver.sh. SAVECONFIG persists in NVRAM,
@@ -89,8 +90,12 @@ NTRIP_MOUNTPOINT=$(parse_yaml ntrip_mountpoint)
 
 if is_truthy "$UNICORE_AUTO_CONFIGURE"; then
   if [ -x /configure_receiver.sh ]; then
-    /configure_receiver.sh "$GPS_PORT" "$GPS_BAUD" || \
+    if /configure_receiver.sh "$GPS_PORT" "$GPS_BAUD"; then
+      GPS_BAUD="$UNICORE_TARGET_BAUD"
+      echo "[start_gps.sh] Receiver auto-config succeeded; using baud=${GPS_BAUD} for runtime."
+    else
       echo "[start_gps.sh] WARN: receiver auto-config failed — continuing anyway"
+    fi
   else
     echo "[start_gps.sh] WARN: /configure_receiver.sh missing — skipping auto-config"
   fi

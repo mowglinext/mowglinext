@@ -4,7 +4,8 @@
 # Truly generic — works with any receiver that emits standard NMEA over
 # UART or USB-serial (Emlid Reach, BN-220, LC29H, NEO-M8N in NMEA mode,
 # etc.). Distinct from the `gps` backend (UBX) and `ublox` backend
-# (libusb / serial UBX HP). Selected via GNSS_BACKEND=nmea.
+# (libusb / serial UBX HP). Generic NMEA receivers should use
+# GNSS_BACKEND=gps with GPS_PROTOCOL=NMEA.
 #
 # Tradeoffs vs UBX:
 #   * Position covariance derived from HDOP only — no `position_accuracy`,
@@ -34,7 +35,7 @@ services:
     environment:
       <<: *ros2-env
       NMEA_PORT: ${GPS_PORT:-/dev/gps}
-      NMEA_BAUD: ${GPS_BAUD:-9600}
+      NMEA_BAUD: ${GPS_BAUD:-921600}
       NMEA_FRAME_ID: gps_link
     volumes:
       - /dev:/dev

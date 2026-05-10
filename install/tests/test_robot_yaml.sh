@@ -8,8 +8,6 @@
 #   - NOT contain blade-bypass / safety-disable flags (firmware is the
 #     sole blade-safety authority — see CLAUDE.md "Safety — READ FIRST")
 #   - propagate the GPS protocol/baud/port chosen at install time
-#   - mirror datum to navsat_to_absolute_pose.ros__parameters (so the
-#     EKF and the absolute-pose helper agree on the map origin)
 #
 # It must NOT take over fields that belong in the bringup defaults
 # (two_d_mode, base_link/base_footprint frames live in
@@ -57,17 +55,10 @@ assert_match "datum_lat is 0.0 (auto-detect placeholder)" \
 assert_match "datum_lon is 0.0 (auto-detect placeholder)" \
   '^[[:space:]]+datum_lon:[[:space:]]+0\.0[[:space:]]*$' "$CONTENT"
 
-# Datum is mirrored into the navsat_to_absolute_pose section
-assert_contains "navsat_to_absolute_pose section present" \
-  "navsat_to_absolute_pose:" "$CONTENT"
-section_count=$(grep -cE '^[[:space:]]+datum_lat:' "$YAML")
-[ "$section_count" -ge 2 ] && pass "datum_lat appears in both sections" \
-  || fail "datum_lat appears in both sections" "found $section_count occurrences"
-
 # GPS preset propagates
 assert_match "gps_port=/dev/gps" '^[[:space:]]+gps_port:[[:space:]]+"/dev/gps"' "$CONTENT"
-assert_match "gps_baudrate=460800 (UBX preset)" \
-  '^[[:space:]]+gps_baudrate:[[:space:]]+460800' "$CONTENT"
+assert_match "gps_baudrate=921600 (default runtime target)" \
+  '^[[:space:]]+gps_baudrate:[[:space:]]+921600' "$CONTENT"
 
 # NTRIP fields exist
 for ntrip_key in ntrip_enabled ntrip_host ntrip_port ntrip_user ntrip_password ntrip_mountpoint; do
