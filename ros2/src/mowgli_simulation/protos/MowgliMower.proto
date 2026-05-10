@@ -1,0 +1,266 @@
+#VRML_SIM R2025a utf8
+# license: GPL-3.0
+# Mowgli mower PROTO for Webots — Phase 2.1 of the Webots migration.
+#
+# **STATUS: PARTIAL.** This PROTO replaces the inline Robot {} that
+# was in worlds_webots/mowgli_garden.wbt and resolves the most
+# egregious failure modes (chassis flips, wheels never touch the
+# floor) but still suffers from ~80–90 % wheel-floor slip under
+# `cmd_vel`, with the chassis settling at ~12° forward pitch. Phase 1
+# reproduction (a forward 0.10 m/s command for 5 s) results in:
+#
+#   wheel-encoder integration: 0.49 m  (close to 0.50 m expected)
+#   GPS-grounded body motion:  0.05 m  (10 % of expected)
+#   chassis pitch at end:      +12° forward
+#
+# Root cause is not understood. Things that did NOT fix it:
+#   * Adopting TurtleBot3Burger's 2-wheel + 1-caster layout
+#     (originally with rear caster, then front caster — both pitched).
+#   * Adopting ROSbot's `dampingConstant 5.0` + `staticFriction 1.0`
+#     on the wheel HingeJoint.
+#   * Mowgli wheel-cylinder boundingObject as Cylinder (Pose-rotated
+#     so the cylinder Z-axis aligns with body Y) vs Sphere.
+#   * Reducing chassis bounding box to a tight, tall, narrow box well
+#     above the floor (so it cannot snag the ground at any reasonable
+#     pitch).
+#   * Lowering chassis mass (1 → 8.76 → 50 kg).
+#   * Lowering motor `maxTorque` (5 → 100 Nm).
+#   * Lowering diff_drive_controller's `max_acceleration` to 0.2 m/s²
+#     (very gentle ramp).
+#   * Increasing/disabling world `coulombFriction` (0.8 → 5.0 → world
+#     default).
+#   * Removing `consumptionFactor -0.001` from the motor.
+#   * Various COM positions: forward of wheel axis, over wheel axis,
+#     above and below wheel axis. Equilibrium pitch shifts but slip
+#     ratio does not improve.
+#
+# What helped slightly (~10 % → 22 % efficiency):
+#   * Mass = 3 kg (light chassis), but at the cost of +40° pitch.
+#
+# Likely next investigation:
+#   * Webots' wheel-floor contact model with `softCFM` / `softERP`
+#     tuning (we currently use defaults).
+#   * Inspecting why the diff_drive_controller's velocity command
+#     does not match the actual body motion when the wheel's reported
+#     ω matches setpoint (perhaps the velocity is being clamped at
+#     the hardware-interface boundary?).
+#   * A fundamentally different approach: PROTO with `kinematic TRUE`
+#     wheels (no physics simulation, just trust the diff-drive math).
+#   * A 4-wheel layout (no caster) following ROSbot's exact PROTO,
+#     scaled to Mowgli geometry.
+#   * Use Webots' `webots_ros2_husarion` package's RosbotXL preset as
+#     a starting point (it's known-tuned and ROS2-ready).
+#
+# ──────────────────────────────────────────────────────────────────
+# Design (current):
+#   * 2 driving wheels at body x=0, y=±0.1625, z=0.093 (radius 0.093).
+#     Wheel-bottom rests at z=0 in robot frame.
+#   * 1 single caster at body (+0.20, 0, 0.04), sphere radius 0.04.
+#   * Chassis visual: 0.30 m × 0.30 m × 0.10 m box (cosmetic).
+#   * Chassis bounding box: 0.30 × 0.28 × 0.08 m, centred at
+#     (+0.05, 0, 0.25) — well above the wheels and casters.
+#   * Total mass 8.76 kg. Wheel mass 0.5 kg each (matches ROSbot).
+#   * COM at (0, 0, 0.05) — over wheel axis, just below it on z.
+#   * HingeJoint axis (0, -1, 0) — flipped from the natural (0, 1, 0)
+#     because diff_drive_controller commands positive ω for forward
+#     velocity, and the right-hand rule gives wheel-bottom motion in
+#     -X (= backward) for positive ω about +Y. With axis (0, -1, 0)
+#     positive ω = forward body motion. (Verified empirically: with
+#     axis (0, +1, 0) and `vx=+0.10` cmd_vel, the GPS reading moved
+#     westward (backward); flipping to (0, -1, 0) reversed this.)
+#
+# Reality vs simulation: real Mowgli has 2 driving wheels + 2 front
+# casters. The simulator only needs to reproduce the diff-drive
+# response, not the visual fidelity — Nav2 doesn't see the casters.
+
+EXTERNPROTO "webots://projects/appearances/protos/TireRubber.proto"
+
+PROTO MowgliMower [
+  field SFVec3f    translation     0 0 0
+  field SFRotation rotation        0 0 1 0
+  field SFString   name            "MowgliMower"
+  field SFString   controller      "<extern>"
+  field MFString   controllerArgs  []
+  field SFBool     supervisor      FALSE
+  field SFBool     synchronization TRUE
+  field MFNode     extensionSlot   [ ]
+]
+{
+  Robot {
+    translation IS translation
+    rotation IS rotation
+    name IS name
+    controller IS controller
+    controllerArgs IS controllerArgs
+    supervisor IS supervisor
+    synchronization IS synchronization
+    children [
+      # ── Chassis visual (cosmetic only — physics in boundingObject) ──
+      Pose {
+        translation 0 0 0.13
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.3 0.3 0.3
+              roughness 0.5
+              metalness 0.2
+            }
+            geometry Box { size 0.30 0.30 0.10 }
+          }
+        ]
+      }
+
+      # ── Extension slot (sensors) ─────────────────────────────────────
+      # Lifted to chassis-top so a sensor placed at slot z=0 ends up at
+      # robot z=0.18.
+      Pose {
+        translation 0 0 0.18
+        children IS extensionSlot
+      }
+
+      # ── Left drive wheel ─────────────────────────────────────────────
+      DEF LEFT_JOINT HingeJoint {
+        jointParameters HingeJointParameters {
+          # See the file header for the axis-sign rationale.
+          axis 0 -1 0
+          anchor 0 0.1625 0.093
+          # Copied from ROSbot.proto — undocumented why these specific
+          # values, but they are the canonical Webots+ROS2 settings.
+          dampingConstant 5.0
+          staticFriction 1.0
+        }
+        device [
+          RotationalMotor {
+            name "left_wheel_motor"
+            # 21.5 rad/s × 0.093 m = 2.0 m/s, well above any cmd_vel.
+            maxVelocity 21.5
+            maxTorque 100
+          }
+          PositionSensor {
+            name "left_wheel_sensor"
+            resolution 0.001
+          }
+        ]
+        endPoint Solid {
+          translation 0 0.1625 0.093
+          children [
+            DEF WHEEL_VISUAL Pose {
+              # Webots' Cylinder geometry has its central axis along Z
+              # (see /opt/webots/resources/nodes/Cylinder.wrl). For a
+              # wheel that rolls forward we need the cylinder symmetry
+              # axis aligned with body +Y, so we rotate -90° about X
+              # (which sends Z → +Y).
+              rotation 1 0 0 -1.5708
+              children [
+                Shape {
+                  appearance TireRubber {
+                    textureTransform TextureTransform { scale 1.7 0.76 }
+                    type "bike"
+                  }
+                  geometry DEF WHEEL_CYL Cylinder { radius 0.093 height 0.04 }
+                }
+              ]
+            }
+          ]
+          name "left_wheel"
+          boundingObject Pose {
+            rotation 1 0 0 -1.5708
+            children [
+              USE WHEEL_CYL
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.5
+            centerOfMass [ 0 0 0 ]
+          }
+        }
+      }
+
+      # ── Right drive wheel ────────────────────────────────────────────
+      DEF RIGHT_JOINT HingeJoint {
+        jointParameters HingeJointParameters {
+          axis 0 -1 0
+          anchor 0 -0.1625 0.093
+          dampingConstant 5.0
+          staticFriction 1.0
+        }
+        device [
+          RotationalMotor {
+            name "right_wheel_motor"
+            maxVelocity 21.5
+            maxTorque 100
+          }
+          PositionSensor {
+            name "right_wheel_sensor"
+            resolution 0.001
+          }
+        ]
+        endPoint Solid {
+          translation 0 -0.1625 0.093
+          children [
+            USE WHEEL_VISUAL
+          ]
+          name "right_wheel"
+          boundingObject Pose {
+            rotation 1 0 0 -1.5708
+            children [
+              USE WHEEL_CYL
+            ]
+          }
+          physics Physics {
+            density -1
+            mass 0.5
+            centerOfMass [ 0 0 0 ]
+          }
+        }
+      }
+
+      # ── Single front caster ──────────────────────────────────────────
+      # Real OpenMower has 2 driving wheels at the rear + 2 free-rolling
+      # casters at the front. We simplify to one caster sphere on a
+      # BallJoint (TurtleBot pattern). Front placement keeps the caster
+      # loaded under the static COM (which is at x=0, balanced between
+      # the wheels (x=0) and the caster (x=+0.20)).
+      DEF CASTER_JOINT BallJoint {
+        jointParameters BallJointParameters { anchor 0.20 0 0.04 }
+        endPoint Solid {
+          translation 0.20 0 0.04
+          children [
+            Shape {
+              appearance PBRAppearance { baseColor 0.05 0.05 0.05 }
+              geometry DEF CASTER_SPHERE Sphere { radius 0.04 subdivision 2 }
+            }
+          ]
+          name "caster"
+          boundingObject USE CASTER_SPHERE
+          physics Physics {
+            density -1
+            mass 0.05
+            centerOfMass [ 0 0 0 ]
+          }
+        }
+      }
+    ]
+
+    # ── Chassis collision (small, well above the floor) ──────────────────
+    # Bottom at z=0.21, so even ±45° pitch keeps every corner ≥ 0.06 m
+    # off the floor (caster sphere top at z=0.08 < 0.21).
+    boundingObject Pose {
+      translation 0.05 0 0.25
+      children [
+        Box { size 0.30 0.28 0.08 }
+      ]
+    }
+
+    # ── Mass + COM ────────────────────────────────────────────────────────
+    # COM directly over the wheel axis on x (so static equilibrium pitch
+    # = 0). Z = 0.05 (just below the wheel axis at z=0.093) so gravity
+    # provides a small restoring torque against pitch perturbations.
+    physics Physics {
+      density -1
+      mass 8.76
+      centerOfMass [ 0 0 0.05 ]
+    }
+  }
+}

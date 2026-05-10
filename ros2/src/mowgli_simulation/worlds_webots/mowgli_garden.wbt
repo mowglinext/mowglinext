@@ -4,9 +4,11 @@
 # - Flat 20x20 m green plane (the "lawn").
 # - WGS84 GPS reference matches mowgli_robot.yaml datum.
 # - A single static obstacle for runtime-deviation testing.
-# - The Mowgli robot is defined inline (not as a PROTO) so it stays in
-#   the same git tree as the rest of the sim package — no EXTERNPROTO
-#   network fetches at boot.
+# - The Mowgli robot is instantiated from the local PROTO at
+#   protos/MowgliMower.proto (Phase 2.1 — replaces the inline Robot {}
+#   that suffered chassis-tip / wheel-slip pathologies under ODE).
+
+EXTERNPROTO "../protos/MowgliMower.proto"
 
 WorldInfo {
   # 20 ms physics step matches the controller_manager update_rate (50 Hz)
@@ -15,13 +17,6 @@ WorldInfo {
   coordinateSystem "ENU"
   gpsCoordinateSystem "WGS84"
   gpsReference 48.137154 11.576124 0
-  contactProperties [
-    ContactProperties {
-      coulombFriction [ 0.8 ]
-      bounce 0.0
-      softCFM 0.0001
-    }
-  ]
 }
 Viewpoint {
   orientation -0.3 0.3 0.9 1.6
@@ -64,142 +59,37 @@ Solid {
   boundingObject Box { size 0.5 0.5 0.5 }
 }
 
-# Mowgli robot. Geometry mirrors model.sdf (chassis 0.60 x 0.40 x 0.19,
-# rear drive wheels at radius 0.093, track 0.325, two front casters,
-# 8.76 kg total). Sensors: 360° LiDAR, IMU trio (InertialUnit + Gyro +
-# Accelerometer), GPS antenna at the front of the chassis.
-Robot {
-  translation 0 0 0.10
+# Mowgli robot — instantiated from the local PROTO. Wheel-bottom is at
+# robot frame z=0, so the world translation places the chassis at z=0
+# (wheels resting on the floor; the PROTO lifts the chassis visual
+# +0.10 m above the wheel axis).
+#
+# Sensor placements in the extensionSlot mirror the static TF tree
+# published by robot_state_publisher from urdf_webots/mowgli_webots.urdf.
+# The slot is itself lifted +0.10 m by the PROTO so a sensor at slot
+# (x, y, z) ends up at robot frame (x, y, 0.10 + z).
+MowgliMower {
+  translation 0 0 0
   rotation 0 0 1 0
   name "MowgliMower"
   controller "<extern>"
   controllerArgs [ "" ]
   supervisor FALSE
-  children [
-    # Chassis visual + collision.
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.3 0.3 0.3
-        roughness 0.5
-        metalness 0.2
-      }
-      geometry Box { size 0.60 0.40 0.19 }
-    }
-
-    # Left rear drive wheel.
-    HingeJoint {
-      jointParameters HingeJointParameters {
-        axis 0 1 0
-        anchor 0 0.1625 -0.10
-      }
-      device [
-        RotationalMotor {
-          name "left_wheel_motor"
-          maxVelocity 100
-          maxTorque 10
-        }
-        PositionSensor { name "left_wheel_sensor" }
-      ]
-      endPoint Solid {
-        translation 0 0.1625 -0.10
-        rotation 1 0 0 1.5708
-        children [
-          Shape {
-            appearance PBRAppearance {
-              baseColor 0.1 0.1 0.1
-              roughness 0.7
-              metalness 0
-            }
-            geometry Cylinder { radius 0.093 height 0.04 }
-          }
-        ]
-        name "left_wheel"
-        boundingObject Cylinder { radius 0.093 height 0.04 }
-        physics Physics { density -1 mass 0.4 }
-      }
-    }
-
-    # Right rear drive wheel.
-    HingeJoint {
-      jointParameters HingeJointParameters {
-        axis 0 1 0
-        anchor 0 -0.1625 -0.10
-      }
-      device [
-        RotationalMotor {
-          name "right_wheel_motor"
-          maxVelocity 100
-          maxTorque 10
-        }
-        PositionSensor { name "right_wheel_sensor" }
-      ]
-      endPoint Solid {
-        translation 0 -0.1625 -0.10
-        rotation 1 0 0 1.5708
-        children [
-          Shape {
-            appearance PBRAppearance {
-              baseColor 0.1 0.1 0.1
-              roughness 0.7
-              metalness 0
-            }
-            geometry Cylinder { radius 0.093 height 0.04 }
-          }
-        ]
-        name "right_wheel"
-        boundingObject Cylinder { radius 0.093 height 0.04 }
-        physics Physics { density -1 mass 0.4 }
-      }
-    }
-
-    # Two front passive casters (BallJoint -> free-rolling sphere).
-    BallJoint {
-      jointParameters BallJointParameters { anchor 0.18 0.18 -0.13 }
-      endPoint Solid {
-        translation 0.18 0.18 -0.13
-        children [
-          Shape {
-            appearance PBRAppearance { baseColor 0.05 0.05 0.05 }
-            geometry Sphere { radius 0.03 }
-          }
-        ]
-        name "left_caster"
-        boundingObject Sphere { radius 0.03 }
-        physics Physics { density -1 mass 0.05 }
-      }
-    }
-    BallJoint {
-      jointParameters BallJointParameters { anchor 0.18 -0.18 -0.13 }
-      endPoint Solid {
-        translation 0.18 -0.18 -0.13
-        children [
-          Shape {
-            appearance PBRAppearance { baseColor 0.05 0.05 0.05 }
-            geometry Sphere { radius 0.03 }
-          }
-        ]
-        name "right_caster"
-        boundingObject Sphere { radius 0.03 }
-        physics Physics { density -1 mass 0.05 }
-      }
-    }
-
-    # IMU trio (mounted at chassis centre, top — matches imu_x=0.18,
-    # imu_y=0, imu_z=0.095 in mowgli_robot.yaml; here all are at robot
-    # frame so they read base_link orientation directly).
+  extensionSlot [
+    # IMU trio (mounted on chassis top).
     InertialUnit { name "inertial_unit" }
     Gyro { name "gyro" }
     Accelerometer { name "accelerometer" }
 
-    # GPS antenna (front-top of chassis, gps_x=0.3 in robot config).
+    # GPS antenna (front-top of chassis, gps_x=0.30 m in robot config).
     GPS {
-      translation 0.3 0 0.10
+      translation 0.30 0 0.10
       name "gps"
     }
 
-    # 360° 2D LiDAR (mounted at lidar_x=0, lidar_y=0.024, lidar_z=0.22
-    # in robot config — here at z=0.12 above robot origin which sits at
-    # 0.10 m above the floor → 0.22 m above ground).
+    # 360° 2D LiDAR. The slot already lifts +0.10 m; the URDF static TF
+    # places lidar_link at z=0.22 above ground, so within the slot we
+    # add z=0.12 to land on z=0.22 in robot frame.
     Lidar {
       translation 0 0.024 0.12
       rotation 0 0 1 3.1408
@@ -211,10 +101,4 @@ Robot {
       defaultFrequency 10
     }
   ]
-  boundingObject Box { size 0.60 0.40 0.19 }
-  physics Physics {
-    density -1
-    mass 8.76
-    centerOfMass [ 0.05 0 -0.02 ]
-  }
 }

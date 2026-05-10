@@ -60,6 +60,7 @@ install(
     urdf_webots
     launch
     config_webots
+    protos
     rviz
   DESTINATION share/${PROJECT_NAME}
 )

@@ -88,15 +88,18 @@
   <joint name="left_wheel_motor" type="continuous">
     <parent link="base_link"/>
     <child link="left_wheel"/>
-    <!-- Wheel HingeJoint anchor matches the .wbt (-0.10 in robot frame
-         → wheel centre at world z=0, half-buried in the floor). The
-         buried geometry is intentional: ODE clamps the wheel out and
-         the constant upward push pins the chassis against tip-over
-         under cmd_vel acceleration. Phase 1 measured ω_cmd vs
-         ω_measured at <0.01 % error with this layout. -->
-    <origin xyz="0 0.1625 -0.10" rpy="0 0 0"/>
+    <!-- Wheel HingeJoint anchor matches the PROTO (robot frame z=0.093,
+         which is base_link frame z=-0.007 because base_link sits at
+         world z=0.10 while the wheel centre sits at world z=0.093 —
+         wheel-bottom flush with the floor at z=0). Phase 2.1 moved
+         wheels out of the floor: previously they were "half-buried"
+         (centre at z=0) which produced 30-45° chassis tip / wheel slip
+         under cmd_vel acceleration. The PROTO follows TurtleBot3Burger's
+         design (wheels and casters share the same ground-contact z) —
+         no penetration impulses, no tip pathology. -->
+    <origin xyz="0 0.1625 -0.007" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
-    <limit effort="10.0" velocity="100.0"/>
+    <limit effort="20.0" velocity="100.0"/>
   </joint>
 
   <!-- Right rear drive wheel (physics in .wbt — see comment on base_link). -->
@@ -117,10 +120,10 @@
   <joint name="right_wheel_motor" type="continuous">
     <parent link="base_link"/>
     <child link="right_wheel"/>
-    <!-- See left_wheel_motor for the rationale on z=-0.10. -->
-    <origin xyz="0 -0.1625 -0.10" rpy="0 0 0"/>
+    <!-- See left_wheel_motor for the rationale on z=-0.007. -->
+    <origin xyz="0 -0.1625 -0.007" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
-    <limit effort="10.0" velocity="100.0"/>
+    <limit effort="20.0" velocity="100.0"/>
   </joint>
 
   <!-- Sensor frames (static — RSP publishes these directly). -->
