@@ -1033,11 +1033,21 @@ void FTCController::calculate_velocity_commands(double dt,
     ang_speed = std::clamp(ang_speed, -config_.max_cmd_vel_ang, config_.max_cmd_vel_ang);
     cmd_vel.twist.angular.z = ang_speed;
 
-    // Oscillation override in rotation states.
+    // Oscillation override in rotation states. When checkOscillation
+    // detects the command is flapping, saturate the magnitude to escape
+    // the dither — but PRESERVE the sign of the underlying angle_error_
+    // so we rotate the right way. The previous unconditional `+max`
+    // forced CCW even when the robot needed CW (negative angle_error_),
+    // which made the oscillation worse rather than escape it. Sign comes
+    // from angle_error_ (the target the PID is trying to close), not
+    // from the (already noisy) PID output ang_speed — so the override
+    // doesn't get fooled by zero-crossings in the proportional term.
+    // See issue #202.
     const bool is_oscillating = checkOscillation(cmd_vel);
     if (is_oscillating)
     {
-      cmd_vel.twist.angular.z = config_.max_cmd_vel_ang;
+      const double sign = (angle_error_ >= 0.0) ? 1.0 : -1.0;
+      cmd_vel.twist.angular.z = sign * config_.max_cmd_vel_ang;
     }
   }
 
