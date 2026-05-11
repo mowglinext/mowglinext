@@ -65,10 +65,9 @@ services:
     ipc: host
     environment:
       <<: *ros2-env
-    command: >
-      ros2 launch mowgli_bringup sim_full_system.launch.py
-      headless:=true
-      use_rviz:=false
+      DISPLAY: ":99"
+      WEBOTS_MODE: realtime
+    command: /ros2_ws/scripts/start_webots_full_system.sh
     volumes:
       - ./config/cyclonedds.xml:/cyclonedds.xml:ro
       - mowgli_sim_maps:/ros2_ws/maps
@@ -93,10 +92,9 @@ services:
     ipc: host
     environment:
       <<: *ros2-env
-    command: >
-      ros2 launch mowgli_bringup sim_full_system.launch.py
-      headless:=true
-      use_rviz:=false
+      DISPLAY: ":99"
+      WEBOTS_MODE: realtime
+    command: /ros2_ws/scripts/start_webots_full_system.sh
     volumes:
       - ./config/cyclonedds.xml:/cyclonedds.xml:ro
       - mowgli_sim_maps:/ros2_ws/maps
@@ -109,7 +107,11 @@ services:
       - ../ros2/src/mowgli_localization/config:/ros2_ws/install/mowgli_localization/share/mowgli_localization/config
       - ../ros2/src/mowgli_simulation/launch:/ros2_ws/install/mowgli_simulation/share/mowgli_simulation/launch
       - ../ros2/src/mowgli_simulation/worlds:/ros2_ws/install/mowgli_simulation/share/mowgli_simulation/worlds
+      - ../ros2/src/mowgli_simulation/worlds_webots:/ros2_ws/install/mowgli_simulation/share/mowgli_simulation/worlds_webots
+      - ../ros2/src/mowgli_simulation/urdf_webots:/ros2_ws/install/mowgli_simulation/share/mowgli_simulation/urdf_webots
+      - ../ros2/src/mowgli_simulation/protos:/ros2_ws/install/mowgli_simulation/share/mowgli_simulation/protos
       - ../ros2/src/mowgli_simulation/config:/ros2_ws/install/mowgli_simulation/share/mowgli_simulation/config
+      - ../ros2/src/mowgli_simulation/config_webots:/ros2_ws/install/mowgli_simulation/share/mowgli_simulation/config_webots
       # E2E test script
       - ../ros2/src/e2e_test.py:/ros2_ws/src/e2e_test.py
     restart: unless-stopped

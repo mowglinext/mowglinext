@@ -164,6 +164,7 @@ def generate_launch_description() -> LaunchDescription:
             "use_sim_time": "true",
             "use_ekf": "True",
             "use_lidar": use_lidar,
+            "cog_stationary_seed_rate_hz": "0.0",
             # cog_to_imu defaults are fine in sim now that the node
             # self-gates the stationary anchor on |wheel_omega| (won't
             # republish a stale forward-motion yaw while the robot is

@@ -337,8 +337,9 @@ ENV USERNAME=root
 # Copy VNC startup script
 COPY scripts/start_vnc.sh /ros2_ws/scripts/start_vnc.sh
 COPY scripts/start_webots_minimal.sh /ros2_ws/scripts/start_webots_minimal.sh
+COPY scripts/start_webots_full_system.sh /ros2_ws/scripts/start_webots_full_system.sh
 COPY scripts/ros2_cli_wrapper.sh /usr/local/bin/ros2
-RUN chmod +x /ros2_ws/scripts/start_vnc.sh /ros2_ws/scripts/start_webots_minimal.sh /usr/local/bin/ros2
+RUN chmod +x /ros2_ws/scripts/start_vnc.sh /ros2_ws/scripts/start_webots_minimal.sh /ros2_ws/scripts/start_webots_full_system.sh /usr/local/bin/ros2
 
 
 # Copy Foxglove layout for easy import
