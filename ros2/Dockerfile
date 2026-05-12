@@ -213,6 +213,18 @@ ARG BUILD_TYPE=Release
 # Now copy the rest of the source tree
 COPY src/ src/
 
+# Skip every opennav_coverage subpackage except _msgs. The upstream server
+# is pinned to F2C 1.2.1 (no TrapezoidalDecomp / generateHeadlandSwaths /
+# planPathForConnection); we use mowgli_coverage with F2C 2.0 instead, and
+# only need the action types from opennav_coverage_msgs. Marker files
+# aren't tracked in the submodule, so create them here.
+RUN touch \
+      src/opennav_coverage/opennav_coverage/COLCON_IGNORE \
+      src/opennav_coverage/opennav_coverage_bt/COLCON_IGNORE \
+      src/opennav_coverage/opennav_coverage_demo/COLCON_IGNORE \
+      src/opennav_coverage/opennav_coverage_navigator/COLCON_IGNORE \
+      src/opennav_coverage/opennav_row_coverage/COLCON_IGNORE
+
 # Build all packages (mowgli_interfaces is already built and cached)
 RUN /bin/bash -c "\
     source /opt/ros/kilted/setup.bash && \
