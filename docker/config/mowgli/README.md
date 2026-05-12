@@ -7,6 +7,21 @@ The `mowgli_ros2` runtime image reads parameter files from that path at launch.
 Place any customised YAML parameter files here to override the built-in
 defaults without rebuilding the image.
 
+## Git-ignored — your edits are safe
+
+`mowgli_robot.yaml` (and `../cyclonedds.xml`, `../mqtt/mosquitto.conf`,
+`../om/mower_config.sh`) are **git-ignored**. The installer seeds them
+from `install/config/` on first run and patches a small whitelist of
+keys (datum, NTRIP, dock pose, LiDAR flags) on subsequent runs. Any
+other edits you make — through the GUI Settings page or by hand —
+persist across `git pull` and `install/mowglinext.sh` upgrades.
+
+If you ever want to reset to the shipped defaults:
+
+```bash
+cp install/config/mowgli/mowgli_robot.yaml docker/config/mowgli/mowgli_robot.yaml
+```
+
 ## Shipped default
 
 | File | Purpose |

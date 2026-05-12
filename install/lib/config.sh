@@ -22,6 +22,7 @@ LIDAR_LDLIDAR_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/lidar-ldlidar:${IMAGE
 LIDAR_RPLIDAR_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/lidar-rplidar:${IMAGE_TAG}"
 LIDAR_STL27L_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/lidar-stl27l:${IMAGE_TAG}"
 MAVROS_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/mavros:${IMAGE_TAG}"
+NMEA_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/nmea:${IMAGE_TAG}"
 GUI_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/mowglinext-gui:${IMAGE_TAG}"
 
 CHECK_ONLY=false
@@ -184,7 +185,10 @@ interactive_config() {
   step "5/6  Mower configuration"
 
   local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
-  local defaults="$REPO_DIR/docker/config"
+  # Defaults live in install/config/ (versioned templates). The runtime
+  # copies under docker/config/ are git-ignored so user edits survive
+  # `git pull` and the installer's `git reset --hard`.
+  local defaults="$INSTALL_DIR/config"
   mkdir -p "$DOCKER_DIR/config/mowgli"
   mkdir -p "$DOCKER_DIR/config/om"
   mkdir -p "$DOCKER_DIR/config/mqtt"

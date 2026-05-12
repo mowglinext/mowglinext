@@ -38,30 +38,40 @@ mowgli:
         caster_track: 0.36
         chassis_center_x: 0.18
         chassis_height: 0.19
-        chassis_length: 0.54
+        # Physically measured on the actual YardForce 500. Earlier
+        # this template had 0.54 m which silently diverged from the
+        # source template; 0.60 m is the correct value.
+        chassis_length: 0.60
         chassis_mass_kg: 8.76
         chassis_width: 0.4
         tool_width: 0.18
-        wheel_radius: 0.04475
+        # Physical wheel diameter 186 mm → radius 0.093 m. The earlier
+        # 0.04475 m was half the real value and would have miscalibrated
+        # the URDF base_link Z + EKF wheel-twist scaling.
+        wheel_radius: 0.093
         wheel_track: 0.325
         wheel_width: 0.04
         wheel_x_offset: 0
-        # ticks_per_metre — consumed by hardware_bridge_node to convert
-        # raw encoder tick deltas to metres. MUST match the firmware
-        # constant TICKS_PER_M in firmware/stm32/ros_usbnode/include/board.h.
-        ticks_per_metre: 300.0
-        ticks_per_revolution: 84
+        ticks_per_meter: 300.0
 
         # ── Sensor mounting (relative to base_link / wheel axis) ────
         # Defaults are physically measured on a YardForce500 with the
         # standard mowgli antenna/IMU/LiDAR mount. Override on the
         # Settings page if your robot differs.
-        gps_x: 0.173
-        gps_y: -0.004
-        gps_z: 0.2
-        imu_x: 0.187
-        imu_y: -0.195
-        imu_z: 0
+        # GPS antenna mounted 30 cm in front of base_link centre
+        # (top cover, OpenMower convention OM_ANTENNA_OFFSET_X=0.3).
+        # Earlier values 0.173 / -0.004 were a measurement-error
+        # divergence from the source template; aligned now.
+        gps_x: 0.30
+        gps_y: 0.0
+        gps_z: 0.20
+        imu_x: 0.18
+        # IMU is mounted on the chassis longitudinal centreline at half
+        # chassis height. Earlier values (-0.195, 0) placed it 19.5 cm
+        # laterally off-centre and at the wheel-axis plane, which would
+        # leak gravity into yaw integration and break lever-arm correction.
+        imu_y: 0.0
+        imu_z: 0.095
         # imu_pitch / imu_roll / imu_yaw are calibrated per robot —
         # use the GUI's Auto-calibrate button (Diagnostics → IMU yaw
         # calibration). Default 0 means uncalibrated.
@@ -70,7 +80,11 @@ mowgli:
         imu_yaw: 0
         lidar_x: 0
         lidar_y: 0.025
-        lidar_z: 0.1
+        # LD19 sits on the top cover at 0.22 m above the wheel-axis
+        # plane. costmap_scan_filter.chassis_blank_range (0.55) assumes
+        # this height; with the earlier 0.1 the chassis-self-detection
+        # filter would have blanked legitimate ground returns.
+        lidar_z: 0.22
         lidar_yaw: -3.1416
 
         # ── GPS / RTK ───────────────────────────────────────────────
@@ -107,19 +121,32 @@ mowgli:
         undock_speed: 0.15
 
         # ── Mowing pattern ──────────────────────────────────────────
-        coverage_xy_tolerance: 0.5
-        headland_width: 0.18
-        min_turning_radius: 0.3
+        # coverage_xy_tolerance MUST stay below tool_width (0.18 m).
+        # SimpleGoalChecker fires when the robot is within tolerance
+        # of the strip's END pose. Coverage strips are short (<3 m,
+        # often <0.5 m), so any value > strip length lets the
+        # controller declare 'reached' on tick 1 — the BT loops
+        # GetNextSegment forever without moving. The earlier 0.5 was
+        # field-broken (2026-05-08); 0.05 forces real path tracing.
+        coverage_xy_tolerance: 0.05
+        # F2C v2 coverage tuning (mowgli_coverage server). headland_width
+        # = outer perimeter strip mowed first as N concentric rings.
+        # min_turning_radius bounds the Dubins arc radius between
+        # swaths; diff-drive can pivot in place so keep small (~0.05).
+        headland_width: 0.35
+        min_turning_radius: 0.05
         mow_angle_increment_deg: 0
         mow_angle_offset_deg: -1
         mower_model: YardForce500
-        mowing_speed: 0.2
+        # 0.5 m/s during coverage paths and transit. The earlier values
+        # (0.2 / 0.25) were sim-tuned; field operation prefers the
+        # higher rate to finish a session within the battery budget.
+        mowing_speed: 0.5
         outline_offset: 0.05
         outline_overlap: 0
         outline_passes: 1
-        path_spacing: 0.13
         progress_timeout_sec: 60
-        transit_speed: 0.25
+        transit_speed: 0.5
         xy_goal_tolerance: 0.75
         yaw_goal_tolerance: 1
 
@@ -129,16 +156,51 @@ mowgli:
         max_obstacle_avoidance_distance: 2
 
         # ── Safety ──────────────────────────────────────────────────
-        # Lift/tilt emergency is the firmware's job — these flags only
-        # control whether ROS2 should react when the firmware reports
-        # it. Leave false unless you specifically want the BT to do
-        # extra recovery on top of firmware emergency.
-        emergency_stop_on_lift: false
-        emergency_stop_on_tilt: false
-        lift_blade_resume_delay_sec: 1
-        lift_recovery_mode: false
+        # Lift/tilt emergency is enforced by the STM32 firmware
+        # unconditionally (CLAUDE.md invariant 9). The legacy
+        # emergency_stop_on_lift / emergency_stop_on_tilt YAML keys
+        # had no readers in ROS2 — removed 2026-05-12.
         motor_temp_high_c: 80
         motor_temp_low_c: 40
         rain_debounce_sec: 10
         rain_delay_minutes: 30
         rain_mode: 2
+
+        # ── Behavior Tree tuning ────────────────────────────────────
+        # tick_rate: BT tick frequency (Hz). 10 Hz is the default.
+        # bt_debug_logging: emit verbose BT node-tick traces.
+        tick_rate: 10.0
+        bt_debug_logging: false
+
+        # ── IMU calibration (hardware_bridge_node) ──────────────────
+        # Calibration is auto-triggered on dock arrival. These knobs
+        # tune how it samples and persists across container restarts.
+        # imu_cal_samples: number of stationary IMU samples to average
+        # imu_cal_persist_path: where the calibration is stored
+        # imu_cal_auto_rest_sec: stationary detection window before cal
+        # imu_cal_periodic_recal_sec: refresh cal every N s while docked
+        imu_cal_samples: 200
+        imu_cal_persist_path: /ros2_ws/maps/imu_calibration.txt
+        imu_cal_auto_rest_sec: 15.0
+        imu_cal_periodic_recal_sec: 60.0
+
+        # ── Magnetometer fusion (cog_to_imu + mag_yaw_publisher) ────
+        # Default OFF on stock chassis: motor field induces heading-
+        # dependent bias static cal cannot remove. Enable only on a
+        # motor-isolated mag mount.
+        # enable_mag_cal: collect mag samples while RTK-Fixed
+        # mag_calibration_path: persisted hard-iron / soft-iron file
+        # declination_deg: local magnetic declination (France ≈ 1.5°)
+        # min_horizontal_uT: minimum horizontal field for valid yaw
+        # mag_yaw_variance: published yaw covariance (rad²)
+        enable_mag_cal: false
+        mag_calibration_path: /ros2_ws/maps/mag_calibration.yaml
+        declination_deg: 1.5
+        min_horizontal_uT: 5.0
+        mag_yaw_variance: 0.0027
+
+        # ── Dock seeding (dock_yaw_to_set_pose) ─────────────────────
+        # dock_pose_yaw_sigma_rad: noise on the yaw observation when
+        # the EKF is seeded with the dock heading on charge rising
+        # edge. Lower = trust the dock heading more strongly.
+        dock_pose_yaw_sigma_rad: 0.035

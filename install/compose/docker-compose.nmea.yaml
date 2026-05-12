@@ -1,0 +1,47 @@
+# -------------------------------------------------------------------------
+# Generic NMEA-0183 GNSS backend.
+#
+# Truly generic — works with any receiver that emits standard NMEA over
+# UART or USB-serial (Emlid Reach, BN-220, LC29H, NEO-M8N in NMEA mode,
+# etc.). Distinct from the `gps` backend (UBX) and `ublox` backend
+# (libusb / serial UBX HP). Selected via GNSS_BACKEND=nmea.
+#
+# Tradeoffs vs UBX:
+#   * Position covariance derived from HDOP only — no `position_accuracy`,
+#     so map-frame fusion sees a more pessimistic σ than RTK-Fixed implies.
+#   * No carrier-solution flag — RTK Fixed/Float status only inferable
+#     from GGA fix-quality (4 / 5).
+#   * NTRIP/RTCM relay not bundled. Configure NTRIP on the receiver itself
+#     (most modern modules support it), or run a separate sidecar that
+#     writes RTCM bytes back to the same /dev/gps — non-trivial, see
+#     sensors/nmea/Dockerfile header.
+# -------------------------------------------------------------------------
+x-ros2-env: &ros2-env
+  ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+  RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+  ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+  RCUTILS_COLORIZED_OUTPUT: "1"
+  RCUTILS_LOGGING_USE_STDOUT: "1"
+  CYCLONEDDS_URI: file:///cyclonedds.xml
+
+services:
+  gnss_nmea:
+    container_name: mowgli-gps
+    image: ${NMEA_IMAGE}
+    network_mode: host
+    ipc: host
+    privileged: true
+    environment:
+      <<: *ros2-env
+      NMEA_PORT: ${GPS_PORT:-/dev/gps}
+      NMEA_BAUD: ${GPS_BAUD:-9600}
+      NMEA_FRAME_ID: gps_link
+    volumes:
+      - /dev:/dev
+      - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-file: "3"
+        max-size: 5m

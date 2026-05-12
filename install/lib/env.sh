@@ -63,6 +63,7 @@ setup_env() {
   : "${UNICORE_IMAGE:=${UNICORE_IMAGE_DEFAULT}}"
   : "${GUI_IMAGE:=${GUI_IMAGE_DEFAULT}}"
   : "${MAVROS_IMAGE:=${MAVROS_IMAGE_DEFAULT}}"
+  : "${NMEA_IMAGE:=${NMEA_IMAGE_DEFAULT}}"
 
   if [[ -z "${LIDAR_IMAGE:-}" ]]; then
     case "${LIDAR_TYPE:-ldlidar}" in
@@ -135,6 +136,7 @@ setup_env() {
   upsert_env_key "$env_file" "UNICORE_IMAGE" "$UNICORE_IMAGE"
   upsert_env_key "$env_file" "LIDAR_IMAGE" "$LIDAR_IMAGE"
   upsert_env_key "$env_file" "MAVROS_IMAGE" "$MAVROS_IMAGE"
+  upsert_env_key "$env_file" "NMEA_IMAGE" "$NMEA_IMAGE"
   upsert_env_key "$env_file" "GUI_IMAGE" "$GUI_IMAGE"
 
   upsert_env_key "$env_file" "HARDWARE_BACKEND" "$HARDWARE_BACKEND"

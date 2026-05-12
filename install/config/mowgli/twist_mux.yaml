@@ -27,9 +27,16 @@ twist_mux:
         timeout: 0.2      # tighter timeout for safety-critical source
         priority: 100     # highest velocity-source priority
 
-    # Locks completely suppress output when active (regardless of velocity topics).
-    locks:
-      emergency_stop:
-        topic: /emergency_stop
-        timeout: 0.0      # 0 = lock stays engaged until explicitly released
-        priority: 255     # maximum possible – hard stop
+    # No locks — emergency stop is enforced by the STM32 firmware
+    # (CLAUDE.md invariant 9: firmware is the sole safety authority).
+    # An earlier configuration declared an /emergency_stop std_msgs/Bool
+    # lock with priority 255, but no node in the codebase ever published
+    # to that topic — the lock was dead and gave a false sense of
+    # software-side redundancy. Real e-stops travel via the
+    # /hardware_bridge/emergency_stop service which sets the firmware
+    # latch; the firmware then refuses to forward cmd_vel to the
+    # motors. If a software-side mux lock is ever wanted, wire a
+    # publisher in hardware_bridge_node first, then re-add a `locks:`
+    # block. The key is intentionally omitted (not `locks: {}`) because
+    # ROS2 cannot infer the type of an empty YAML mapping at lifecycle
+    # bring-up.

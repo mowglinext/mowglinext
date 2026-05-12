@@ -70,6 +70,92 @@ run_startup_step_live() {
   fi
 }
 
+# Operator-edited runtime files that must survive `git reset --hard`.
+# Paths are relative to $REPO_DIR. Adding to this list automatically
+# protects them across upgrades; the file is git-ignored upstream so
+# the reset would otherwise wipe local edits.
+_runtime_config_paths() {
+  cat <<'EOF'
+docker/config/mowgli/mowgli_robot.yaml
+docker/config/cyclonedds.xml
+docker/config/mqtt/mosquitto.conf
+docker/config/om/mower_config.sh
+docker/.env
+EOF
+}
+
+_stash_runtime_configs() {
+  local stash_dir="$1"
+  local rel
+  while IFS= read -r rel; do
+    [ -z "$rel" ] && continue
+    local src="$REPO_DIR/$rel"
+    if [ -f "$src" ]; then
+      local dst="$stash_dir/$rel"
+      mkdir -p "$(dirname "$dst")"
+      cp -p "$src" "$dst"
+    fi
+  done < <(_runtime_config_paths)
+}
+
+_restore_runtime_configs() {
+  local stash_dir="$1"
+  local rel
+  while IFS= read -r rel; do
+    [ -z "$rel" ] && continue
+    local src="$stash_dir/$rel"
+    local dst="$REPO_DIR/$rel"
+    if [ -f "$src" ] && [ ! -f "$dst" ]; then
+      mkdir -p "$(dirname "$dst")"
+      cp -p "$src" "$dst"
+      info "Restored operator-edited config: $rel"
+    fi
+  done < <(_runtime_config_paths)
+}
+
+# Operator-edited runtime files that must survive `git reset --hard`.
+# Paths are relative to $REPO_DIR. Adding to this list automatically
+# protects them across upgrades; the file is git-ignored upstream so
+# the reset would otherwise wipe local edits.
+_runtime_config_paths() {
+  cat <<'EOF'
+docker/config/mowgli/mowgli_robot.yaml
+docker/config/cyclonedds.xml
+docker/config/mqtt/mosquitto.conf
+docker/config/om/mower_config.sh
+docker/.env
+EOF
+}
+
+_stash_runtime_configs() {
+  local stash_dir="$1"
+  local rel
+  while IFS= read -r rel; do
+    [ -z "$rel" ] && continue
+    local src="$REPO_DIR/$rel"
+    if [ -f "$src" ]; then
+      local dst="$stash_dir/$rel"
+      mkdir -p "$(dirname "$dst")"
+      cp -p "$src" "$dst"
+    fi
+  done < <(_runtime_config_paths)
+}
+
+_restore_runtime_configs() {
+  local stash_dir="$1"
+  local rel
+  while IFS= read -r rel; do
+    [ -z "$rel" ] && continue
+    local src="$stash_dir/$rel"
+    local dst="$REPO_DIR/$rel"
+    if [ -f "$src" ] && [ ! -f "$dst" ]; then
+      mkdir -p "$(dirname "$dst")"
+      cp -p "$src" "$dst"
+      info "Restored operator-edited config: $rel"
+    fi
+  done < <(_runtime_config_paths)
+}
+
 backup_path_if_exists() {
   local path="$1"
   if [ -e "$path" ]; then

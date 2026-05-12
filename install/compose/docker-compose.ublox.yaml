@@ -1,6 +1,6 @@
 services:
   gnss_ublox:
-    container_name: gnss_ublox
+    container_name: mowgli-gps
     image: ${MOWGLI_ROS2_IMAGE}
 
     network_mode: host

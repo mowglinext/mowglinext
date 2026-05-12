@@ -52,3 +52,11 @@ updates:
     labels:
       - "sensors"
       - "chore"
+
+  - package-ecosystem: "docker"
+    directory: "/sensors/nmea"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "sensors"
+      - "chore"

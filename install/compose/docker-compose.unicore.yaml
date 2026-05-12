@@ -32,7 +32,7 @@ x-ros2-env: &ros2-env
 
 services:
   gnss_unicore:
-    container_name: gnss_unicore
+    container_name: mowgli-gps
     image: ${UNICORE_IMAGE}
     network_mode: host
     ipc: host

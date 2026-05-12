@@ -12,7 +12,10 @@ FINAL_COMPOSE_FILE="${FINAL_COMPOSE_FILE:-$DOCKER_DIR/docker-compose.yaml}"
 FINAL_ENV_FILE="${FINAL_ENV_FILE:-$DOCKER_DIR/.env}"
 
 ensure_default_configs() {
-  local defaults="$REPO_DIR/docker/config"
+  # Defaults live in install/config/ (versioned templates). The runtime
+  # copies under docker/config/ are git-ignored so user edits survive
+  # `git pull` and the installer's `git reset --hard`.
+  local defaults="$INSTALL_DIR/config"
 
   if [ ! -d "$defaults" ]; then
     warn "Defaults config directory missing: $defaults"
@@ -57,8 +60,11 @@ build_compose_stack() {
       unicore)
         COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.unicore.yaml")
         ;;
+      nmea)
+        COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.nmea.yaml")
+        ;;
       *)
-        error "Unknown GNSS_BACKEND: ${GNSS_BACKEND:-unset} (expected: gps, ublox, unicore)"
+        error "Unknown GNSS_BACKEND: ${GNSS_BACKEND:-unset} (expected: gps, ublox, unicore, nmea)"
         return 1
         ;;
     esac

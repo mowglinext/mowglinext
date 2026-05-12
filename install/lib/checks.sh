@@ -139,8 +139,8 @@ check_containers() {
     case "$svc" in
       mowgli)       container="mowgli-ros2" ;;
       gps)          container="mowgli-gps" ;;
-      gnss_ublox)   container="gnss_ublox" ;;
-      gnss_unicore) container="gnss_unicore" ;;
+      gnss_ublox)   container="mowgli-gps" ;;
+      gnss_unicore) container="mowgli-gps" ;;
       lidar)        container="mowgli-lidar" ;;
       gui)          container="mowgli-gui" ;;
       mosquitto)    container="mowgli-mqtt" ;;
@@ -292,11 +292,9 @@ check_gps() {
     return
   fi
 
-  local gps_container=""
+  local gps_container="mowgli-gps"
   case "${GNSS_BACKEND}" in
-    gps)     gps_container="mowgli-gps" ;;
-    ublox)   gps_container="gnss_ublox" ;;
-    unicore) gps_container="gnss_unicore" ;;
+    gps|ublox|unicore) ;;
     *)
       fail "Unknown GNSS_BACKEND=${GNSS_BACKEND}"
       add_issue "Unknown GNSS_BACKEND=${GNSS_BACKEND}. Re-run installer."

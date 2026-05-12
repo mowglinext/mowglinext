@@ -1,42 +1,61 @@
 #!/usr/bin/env bash
 
-select_hardware_backend() {
+sselect_hardware_backend() {
   echo ""
   echo "Select hardware backend:"
   echo "  [1] Mowgli STM32 board"
   echo "  [2] Pixhawk via MAVROS"
   echo ""
-  printf "Choice [1-2]: "
+  printf "Choice [1-2] (default: 1): "
   read -r choice
+  choice="${choice:-1}"
 
   case "$choice" in
     1)
       export HARDWARE_BACKEND="mowgli"
       export MAVROS_BY_ID=""
+      export MAVROS_PORT=""
+
       info "Selected backend: Mowgli STM32 board"
+
+      pick_usb_serial_device "Mowgli STM32 board" "${MOWGLI_PORT:-/dev/ttyACM0}" || return 1
+
+      if [ -n "${USB_SELECTED_BY_ID:-}" ]; then
+        export MOWGLI_BY_ID="$USB_SELECTED_BY_ID"
+        export MOWGLI_PORT="/dev/mowgli"
+      else
+        export MOWGLI_BY_ID=""
+        export MOWGLI_PORT="$USB_SELECTED_PORT"
+      fi
+
+      info "Selected Mowgli port: ${MOWGLI_PORT}"
+      [ -n "${MOWGLI_BY_ID:-}" ] && info "Mowgli USB by-id: ${MOWGLI_BY_ID}"
       ;;
+
     2)
       export HARDWARE_BACKEND="mavros"
+      export MOWGLI_BY_ID=""
+      export MOWGLI_PORT=""
+
       info "Selected backend: Pixhawk via MAVROS"
+
       select_mavros_autopilot || return 1
       select_mavros_gcs_mode || return 1
 
-      echo ""
-      warn "Please connect the Pixhawk to a USB port before continuing."
-      warn "The installer will wait a few seconds for the serial device to appear."
-      warn "If the device appears/disappears repeatedly, check the USB cable and power supply."
-      echo ""
+      pick_usb_serial_device "MAVROS / Pixhawk" "${MAVROS_PORT:-/dev/ttyACM0}" || return 1
 
-      if ! wait_for_mavros_device 15 3; then
-        error "No stable Pixhawk serial device detected. Please connect it by USB and try again."
-        return 1
+      if [ -n "${USB_SELECTED_BY_ID:-}" ]; then
+        export MAVROS_BY_ID="$USB_SELECTED_BY_ID"
+        export MAVROS_PORT="/dev/mavros"
+      else
+        export MAVROS_BY_ID=""
+        export MAVROS_PORT="$USB_SELECTED_PORT"
       fi
 
-      if ! detect_mavros_by_id; then
-        error "Unable to detect a valid MAVROS serial device."
-        return 1
-      fi
+      info "Selected MAVROS port: ${MAVROS_PORT}"
+      [ -n "${MAVROS_BY_ID:-}" ] && info "MAVROS USB by-id: ${MAVROS_BY_ID}"
       ;;
+
     *)
       error "Invalid choice"
       return 1
@@ -44,57 +63,15 @@ select_hardware_backend() {
   esac
 }
 
-wait_for_mavros_device() {
-  local timeout="${1:-15}"
-  local stable_required="${2:-3}"
-  local elapsed=0
-  local stable_count=0
-  local found=""
+pick_usb_serial_device "MAVROS / Pixhawk" "/dev/ttyACM0" || return 1
 
-  info "Waiting for Pixhawk serial device to become stable..."
-
-  while [ "$elapsed" -lt "$timeout" ]; do
-    found=""
-
-    # Prefer stable by-id link
-    if [ -d /dev/serial/by-id ]; then
-      found="$(find /dev/serial/by-id -maxdepth 1 -type l \
-        \( -iname '*Pixhawk*' -o -iname '*Holybro*' \) | sort | head -n1)"
-    fi
-
-    # Fallback to ttyACM / ttyUSB
-    if [ -z "$found" ]; then
-      for dev in /dev/ttyACM* /dev/ttyUSB*; do
-        if [ -e "$dev" ]; then
-          found="$dev"
-          break
-        fi
-      done
-    fi
-
-    if [ -n "$found" ]; then
-      stable_count=$((stable_count + 1))
-      info "Detected candidate: $found (${stable_count}/${stable_required})"
-      if [ "$stable_count" -ge "$stable_required" ]; then
-        info "Pixhawk serial device is stable"
-        return 0
-      fi
-    else
-      stable_count=0
-    fi
-
-    sleep 1
-    elapsed=$((elapsed + 1))
-  done
-
-  return 1
-}
-
-detect_mavros_by_id() {
-  local byid_dir="/dev/serial/by-id"
-  local candidates=()
-  local choice=""
-  local i=1
+if [ -n "${USB_SELECTED_BY_ID:-}" ]; then
+  export MAVROS_BY_ID="$USB_SELECTED_BY_ID"
+  export MAVROS_PORT="/dev/mavros"
+else
+  export MAVROS_BY_ID=""
+  export MAVROS_PORT="$USB_SELECTED_PORT"
+fi
 
   if [ -d "$byid_dir" ]; then
     while IFS= read -r path; do

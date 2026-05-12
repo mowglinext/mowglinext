@@ -16,6 +16,7 @@ source "${INSTALL_LIB_DIR}/progress.sh"
 source "${INSTALL_LIB_DIR}/motd.sh"
 source "${INSTALL_LIB_DIR}/system.sh"
 source "${INSTALL_LIB_DIR}/docker.sh"
+source "${INSTALL_LIB_DIR}/usb_devices.sh"
 source "${INSTALL_LIB_DIR}/backend_choice.sh"
 source "${INSTALL_LIB_DIR}/udev.sh"
 source "${INSTALL_LIB_DIR}/deploy.sh"
@@ -49,7 +50,7 @@ main() {
   init_install_logs
 
   if ! $CHECK_ONLY; then
-    local TOTAL_STEPS=15
+    local TOTAL_STEPS=16
 
     # Language selection, load previous env, then load preset
     select_language
@@ -76,40 +77,43 @@ main() {
     progress_run 3 "$TOTAL_STEPS" "Enabling UARTs" \
       'enable_all_platform_uarts && generate_rc_local'
     
-    progress_run_interactive 4 "$TOTAL_STEPS" "Selecting hardware backend" \
+    progress_run_interactive 4 "$TOTAL_STEPS" "Detecting USB devices" \
+      scan_usb_serial_devices
+    
+    progress_run_interactive 5 "$TOTAL_STEPS" "Selecting hardware backend" \
       select_hardware_backend
 
-    progress_run_interactive 5 "$TOTAL_STEPS" "Configuring GPS" \
+    progress_run_interactive 6 "$TOTAL_STEPS" "Configuring GPS" \
       run_gps_configuration_step
 
-    progress_run_interactive 6 "$TOTAL_STEPS" "Configuring LiDAR" \
+    progress_run_interactive 7 "$TOTAL_STEPS" "Configuring LiDAR" \
       run_lidar_configuration_step
 
-    progress_run_interactive 7 "$TOTAL_STEPS" "Configuring rangefinders" \
+    progress_run_interactive 8 "$TOTAL_STEPS" "Configuring rangefinders" \
       run_range_configuration_step
 
-    progress_run_interactive 8 "$TOTAL_STEPS" "Preparing repository" \
+    progress_run_interactive 9 "$TOTAL_STEPS" "Preparing repository" \
       setup_directory
 
-    progress_run 9 "$TOTAL_STEPS" "Migrating runtime files" \
+    progress_run 10 "$TOTAL_STEPS" "Migrating runtime files" \
       'migrate_runtime_paths'
 
-    progress_run 10 "$TOTAL_STEPS" "Writing environment" \
+    progress_run 11 "$TOTAL_STEPS" "Writing environment" \
       'setup_env'
 
-    progress_run 11 "$TOTAL_STEPS" "Installing udev rules" \
+    progress_run 12 "$TOTAL_STEPS" "Installing udev rules" \
       'install_udev_rules'
 
-    progress_run_interactive 12 "$TOTAL_STEPS" "Configuring mower" \
+    progress_run_interactive 13 "$TOTAL_STEPS" "Configuring mower" \
       run_mower_configuration_step
 
-    progress_run_interactive 13 "$TOTAL_STEPS" "Installing optional tools" \
+    progress_run_interactive 14 "$TOTAL_STEPS" "Installing optional tools" \
       install_optional_tools
 
-    progress_run 14 "$TOTAL_STEPS" "Installing MOTD" \
+    progress_run 15 "$TOTAL_STEPS" "Installing MOTD" \
       'install_motd'
 
-    progress_run_live 15 "$TOTAL_STEPS" "Starting containers" \
+    progress_run_live 16 "$TOTAL_STEPS" "Starting containers" \
       run_startup_step_live
 
   else

@@ -22,7 +22,44 @@
 # bit-for-bit; that is what CI uses so contributors get an identical
 # environment.
 # =============================================================================
+# ---------------------------------------------------------------------------
+# Stage 0: gtsam-builder
+# Mirrors ros2/Dockerfile stage 0. Builds GTSAM 4.3a1 from source —
+# the Ubuntu Noble libgtsam-dev (4.2) ships a broken GTSAMConfig.cmake
+# and uses the legacy boost::optional<Matrix&> custom-factor API, and
+# there is no ros-kilted-gtsam package. Source build gives the modern
+# OptionalMatrixType API needed by fusion_graph's GnssLeverArmFactor.
+# ---------------------------------------------------------------------------
 ARG BASE_IMAGE=ros:kilted-ros-base
+
+FROM ros:kilted-ros-base AS gtsam-builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake git \
+      libboost-all-dev libeigen3-dev libmetis-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+RUN git clone --depth 1 -b 4.3a1 https://github.com/borglab/gtsam.git
+
+RUN cd gtsam && mkdir build && cd build && \
+    cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/gtsam \
+        -DGTSAM_BUILD_TESTS=OFF \
+        -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
+        -DGTSAM_BUILD_PYTHON=OFF \
+        -DGTSAM_BUILD_UNSTABLE=OFF \
+        -DGTSAM_USE_SYSTEM_EIGEN=ON \
+        -DGTSAM_USE_SYSTEM_METIS=ON \
+        -DGTSAM_WITH_TBB=OFF \
+        -DGTSAM_WITH_EIGEN_MKL=OFF \
+        -DGTSAM_INSTALL_MATLAB_TOOLBOX=OFF \
+        -DBUILD_SHARED_LIBS=ON \
+ && make -j$(nproc) install
+
 FROM ${BASE_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -95,6 +132,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # ── Runtime deps ──
     libtinyxml2-dev \
     python3-argcomplete \
+    # ── GTSAM runtime deps — libgtsam itself is COPYed from gtsam-builder.
+    #    libmetis-dev provides both libmetis5 runtime and the unversioned
+    #    libmetis.so symlink GTSAM's exported CMake target links against.
+    #    libboost-* runtime libs come in transitively. ──
+    libmetis-dev \
     # ── Developer tools ──
     gdb \
     htop \
@@ -157,17 +199,27 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
  && npm install -g --no-fund --no-audit yarn
 
 # ---------------------------------------------------------------------------
-# 5. rosdep init (needed for resolving deps on first build)
+# 5. Pull source-built GTSAM 4.3a1 into /opt/gtsam, register its lib
+#    directory with ldconfig, and expose the CMake config dir so
+#    find_package(GTSAM) resolves without extra hints. Mirrors
+#    ros2/Dockerfile so the devcontainer matches production exactly.
+# ---------------------------------------------------------------------------
+COPY --from=gtsam-builder /opt/gtsam /opt/gtsam
+RUN echo '/opt/gtsam/lib' > /etc/ld.so.conf.d/gtsam.conf && ldconfig
+ENV CMAKE_PREFIX_PATH=/opt/gtsam:${CMAKE_PREFIX_PATH}
+
+# ---------------------------------------------------------------------------
+# 6. rosdep init (needed for resolving deps on first build)
 # ---------------------------------------------------------------------------
 RUN rosdep update --rosdistro kilted || true
 
 # ---------------------------------------------------------------------------
-# 6. Workspace directory
+# 7. Workspace directory
 # ---------------------------------------------------------------------------
 WORKDIR /ros2_ws
 
 # ---------------------------------------------------------------------------
-# 7. Environment setup — auto-source ROS2 + workspace in every shell
+# 8. Environment setup — auto-source ROS2 + workspace in every shell
 # ---------------------------------------------------------------------------
 RUN echo 'source /opt/ros/kilted/setup.bash' >> /etc/bash.bashrc && \
     echo '[ -f /ros2_ws/install/setup.bash ] && source /ros2_ws/install/setup.bash' >> /etc/bash.bashrc && \
@@ -175,9 +227,9 @@ RUN echo 'source /opt/ros/kilted/setup.bash' >> /etc/bash.bashrc && \
     echo 'export RCUTILS_COLORIZED_OUTPUT=1' >> /etc/bash.bashrc
 
 # ---------------------------------------------------------------------------
-# 8. Cyclone DDS config (localhost-only discovery for containers)
+# 9. Cyclone DDS config (localhost-only discovery for containers)
 # ---------------------------------------------------------------------------
-COPY docker/config/cyclonedds.xml /etc/cyclonedds.xml
+COPY install/config/cyclonedds.xml /etc/cyclonedds.xml
 ENV CYCLONEDDS_URI=file:///etc/cyclonedds.xml
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ENV ROS_DOMAIN_ID=0
