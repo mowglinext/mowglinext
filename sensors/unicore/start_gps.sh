@@ -221,6 +221,7 @@ if unicore_output_has_ascii "$UNICORE_OUTPUT_FORMAT" &&
 fi
 
 echo "[start_gps.sh] Resolved Unicore backend: output=${UNICORE_OUTPUT_FORMAT} binary_transport=${UNICORE_ENABLE_UNICORE_BINARY} binary_nav=${UNICORE_USE_BINARY_NAV} binary_rtk=${UNICORE_USE_BINARY_RTK_DIAG} binary_rtcm=${UNICORE_USE_BINARY_RTCM_DIAG} binary_sat=${UNICORE_USE_BINARY_SATELLITE_DIAG} binary_rf=${UNICORE_USE_BINARY_RF_DIAG} binary_hw=${UNICORE_USE_BINARY_HW_DIAG} binary_jam=${UNICORE_USE_BINARY_JAMMING_DIAG} raw_diag=${UNICORE_ENABLE_RAW_OBSERVATION_DIAG} raw_binary=${UNICORE_USE_BINARY_RAW_OBSERVATIONS}"
+echo "[start_gps.sh] Auto-config uses a per-message UM98x/N4 syntax table (LOG ONTIME, direct period, ONCHANGED) with compatibility fallbacks when needed."
 
 NTRIP_ENABLED=$(parse_yaml ntrip_enabled)
 NTRIP_ENABLED="${NTRIP_ENABLED:-false}"

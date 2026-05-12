@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/configure_receiver.sh"
 
 failures=0
+declare -A MOCK_COMMAND_RESPONSES=()
 
 assert_eq() {
   local label="${1:?assert_eq: missing label}"
@@ -58,6 +59,11 @@ reset_mocks() {
   CURRENT_BAUD=""
   MOCK_MODEL="unknown"
   MOCK_RESPONDING_BAUDS=""
+  LAST_COMMAND=""
+  MOCK_COMMAND_RESPONSES=()
+  UNICORE_ACCEPTED_LOG_COMMANDS=()
+  UNICORE_REJECTED_LOG_COMMANDS=()
+  UNICORE_LOG_COMMAND_SYNTAX_BY_MESSAGE=()
 }
 
 reset_profile_env() {
@@ -108,10 +114,17 @@ query_receiver_identification() {
 send_serial_command() {
   local command="${1:?send_serial_command: missing command}"
 
+  LAST_COMMAND="$command"
   COMMAND_LOG+="${command}"$'\n'
   if [[ "$command" =~ ^CONFIG[[:space:]]+COM1[[:space:]]+([0-9]+)$ ]]; then
     CURRENT_BAUD="${BASH_REMATCH[1]}"
   fi
+}
+
+collect_serial_output() {
+  local _rounds="${1:?collect_serial_output: missing rounds}"
+
+  printf '%s' "${MOCK_COMMAND_RESPONSES[$LAST_COMMAND]-}"
 }
 
 run_scenario() {
@@ -160,6 +173,13 @@ assert_not_contains "normal excludes SATSINFOA" "SATSINFOA" "$NORMAL_LOGS"
 assert_not_contains "normal excludes AGCA" "AGCA" "$NORMAL_LOGS"
 assert_not_contains "normal excludes JAMSTATUSA" "JAMSTATUSA" "$NORMAL_LOGS"
 assert_contains "normal keeps PVTSLNA" "PVTSLNA" "$NORMAL_LOGS"
+assert_contains "normal uses BESTNAVA direct period" $'BESTNAVA 0.2' "$NORMAL_LOGS"
+assert_contains "normal uses GPHPR direct period" $'GPHPR 0.2' "$NORMAL_LOGS"
+assert_contains "normal uses GPHPR2 onchanged" $'GPHPR2 ONCHANGED' "$NORMAL_LOGS"
+assert_contains "normal uses RTKSTATUSA direct period" $'RTKSTATUSA 1' "$NORMAL_LOGS"
+assert_contains "normal uses RTCMSTATUSA onchanged" $'RTCMSTATUSA ONCHANGED' "$NORMAL_LOGS"
+assert_not_contains "normal no LOG BESTNAVA" "LOG BESTNAVA ONTIME" "$NORMAL_LOGS"
+assert_not_contains "normal no LOG GNHPR" "LOG GNHPR ONTIME" "$NORMAL_LOGS"
 assert_not_contains "normal excludes PVTSLNB" "PVTSLNB" "$NORMAL_LOGS"
 
 reset_profile_env
@@ -182,6 +202,9 @@ unicore_apply_profile_defaults
 DEBUG_HYBRID_LOGS="$(build_log_commands)"
 assert_contains "debug hybrid includes PVTSLNA" "PVTSLNA" "$DEBUG_HYBRID_LOGS"
 assert_contains "debug hybrid includes PVTSLNB" "PVTSLNB" "$DEBUG_HYBRID_LOGS"
+assert_contains "debug hybrid uses BESTNAVB direct period" $'BESTNAVB 0.2' "$DEBUG_HYBRID_LOGS"
+assert_contains "debug hybrid uses RTKSTATUSB direct period" $'RTKSTATUSB 1' "$DEBUG_HYBRID_LOGS"
+assert_contains "debug hybrid uses RTCMSTATUSB onchanged" $'RTCMSTATUSB ONCHANGED' "$DEBUG_HYBRID_LOGS"
 assert_contains "debug hybrid includes BESTSATA" "BESTSATA" "$DEBUG_HYBRID_LOGS"
 assert_contains "debug hybrid includes BESTSATB" "BESTSATB" "$DEBUG_HYBRID_LOGS"
 assert_contains "debug hybrid keeps GPGGA" "GPGGA" "$DEBUG_HYBRID_LOGS"
@@ -262,6 +285,53 @@ UNICORE_OUTPUT_FORMAT="broken"
 unicore_apply_profile_defaults
 assert_eq "invalid output format falls back to ascii" "ascii" "$UNICORE_OUTPUT_FORMAT"
 assert_eq "ascii keeps binary transport disabled" "false" "$(unicore_binary_enabled_from_output_format "$UNICORE_OUTPUT_FORMAT")"
+
+assert_eq "BESTNAVA formats as direct period" "BESTNAVA 0.2" "$(unicore_format_log_command "BESTNAVA" "0.2")"
+assert_eq "RTKSTATUSA formats as direct period" "RTKSTATUSA 1" "$(unicore_format_log_command "RTKSTATUSA" "1")"
+assert_eq "RTCMSTATUSA formats as onchanged" "RTCMSTATUSA ONCHANGED" "$(unicore_format_log_command "RTCMSTATUSA" "1")"
+assert_eq "GPHPR formats as direct period" "GPHPR 1" "$(unicore_format_log_command "GPHPR" "1")"
+assert_eq "GPHPR2 formats as onchanged" "GPHPR2 ONCHANGED" "$(unicore_format_log_command "GPHPR2" "1")"
+assert_eq "GPGGA keeps log ontime" "LOG GPGGA ONTIME 0.2" "$(unicore_format_log_command "GPGGA" "0.2")"
+assert_eq "PVTSLNA keeps log ontime" "LOG PVTSLNA ONTIME 0.2" "$(unicore_format_log_command "PVTSLNA" "0.2")"
+
+reset_mocks
+MOCK_COMMAND_RESPONSES["LOG GPGGA ONTIME 0.2"]="<OK"
+if send_log_command_with_fallback "LOG GPGGA ONTIME 0.2"; then
+  rc=0
+else
+  rc=$?
+fi
+assert_eq "first syntax accepted rc" "0" "$rc"
+assert_eq "first syntax accepted command" "LOG GPGGA ONTIME 0.2" "${UNICORE_ACCEPTED_LOG_COMMANDS[GPGGA]:-}"
+assert_eq "first syntax accepted label" "nmea_log_ontime" "${UNICORE_LOG_COMMAND_SYNTAX_BY_MESSAGE[GPGGA]:-}"
+assert_eq "first syntax rejected list empty" "" "${UNICORE_REJECTED_LOG_COMMANDS[GPGGA]:-}"
+assert_eq "first syntax sends one command" "1" "$(printf '%s' "$COMMAND_LOG" | grep -cve '^$')"
+
+reset_mocks
+MOCK_COMMAND_RESPONSES["BESTNAVA 0.2"]="<OK"
+if send_log_command_with_fallback "BESTNAVA 0.2"; then
+  rc=0
+else
+  rc=$?
+fi
+assert_eq "fallback syntax accepted rc" "0" "$rc"
+assert_eq "fallback syntax accepted command" "BESTNAVA 0.2" "${UNICORE_ACCEPTED_LOG_COMMANDS[BESTNAVA]:-}"
+assert_eq "fallback syntax accepted label" "unicore_direct_period" "${UNICORE_LOG_COMMAND_SYNTAX_BY_MESSAGE[BESTNAVA]:-}"
+assert_eq "fallback syntax rejected remembers none" "" "${UNICORE_REJECTED_LOG_COMMANDS[BESTNAVA]:-}"
+assert_contains "fallback syntax command log includes accepted variant" "BESTNAVA 0.2" "$COMMAND_LOG"
+
+reset_mocks
+MOCK_COMMAND_RESPONSES["RTCMSTATUSA ONCHANGED"]="unsupported command"
+MOCK_COMMAND_RESPONSES["RTCMSTATUSA COM1 ONCHANGED"]="unsupported command"
+if send_log_command_with_fallback "RTCMSTATUSA ONCHANGED"; then
+  rc=0
+else
+  rc=$?
+fi
+assert_eq "all syntax rejected rc" "1" "$rc"
+assert_eq "all syntax rejected keeps no accepted command" "" "${UNICORE_ACCEPTED_LOG_COMMANDS[RTCMSTATUSA]:-}"
+assert_contains "all syntax rejected remembers onchanged" "RTCMSTATUSA ONCHANGED" "${UNICORE_REJECTED_LOG_COMMANDS[RTCMSTATUSA]:-}"
+assert_contains "all syntax rejected remembers com_onchanged" "RTCMSTATUSA COM1 ONCHANGED" "${UNICORE_REJECTED_LOG_COMMANDS[RTCMSTATUSA]:-}"
 
 if [ "$failures" -ne 0 ]; then
   echo ""

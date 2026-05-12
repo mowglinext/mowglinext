@@ -12,9 +12,13 @@
 # directives, the receiver outputs only minimal NMEA and the operator
 # sees a single-point fix even though RTCM is being injected.
 #
-# We send commands using the port-agnostic short form
-# (`LOG <msg> ONTIME <rate>`) so the receiver outputs on whichever
-# physical UART the host is connected to.
+# The N4 manual mixes several output syntaxes:
+# - `LOG <msg> ONTIME <period>` for messages like `GPGGA` / `PVTSLNA`
+# - `<msg> <period>` for messages like `BESTNAVA` / `RTKSTATUSA` / `GPHPR`
+# - `<msg> ONCHANGED` for messages like `RTCMSTATUSA` / `GPHPR2`
+# This script therefore uses a per-message syntax table first, then retries a
+# small compatibility matrix only if the receiver answers `PARSING FAILED` or
+# `GRAMMAR ERROR`.
 #
 # Reference: https://github.com/CentipedeRTK/docs-centipedeRTK
 #            (assets/param_files/UM98x/UM980_aog_rover_last_CONFIG.txt)
@@ -52,6 +56,12 @@ UNICORE_ENABLE_RF="${UNICORE_ENABLE_RF:-}"
 UNICORE_ENABLE_JAMMING="${UNICORE_ENABLE_JAMMING:-}"
 UNICORE_ENABLE_HARDWARE="${UNICORE_ENABLE_HARDWARE:-}"
 UNICORE_ENABLE_RAW_OBSERVATIONS="${UNICORE_ENABLE_RAW_OBSERVATIONS:-}"
+UNICORE_LAST_SERIAL_COMMAND="${UNICORE_LAST_SERIAL_COMMAND:-}"
+UNICORE_LAST_COMMAND_RESPONSE="${UNICORE_LAST_COMMAND_RESPONSE:-}"
+
+declare -A UNICORE_ACCEPTED_LOG_COMMANDS=()
+declare -A UNICORE_REJECTED_LOG_COMMANDS=()
+declare -A UNICORE_LOG_COMMAND_SYNTAX_BY_MESSAGE=()
 
 unicore_warn() {
   log "WARN: $*"
@@ -166,25 +176,240 @@ unicore_clamp_min_period() {
   }'
 }
 
-unicore_emit_ascii_only_log() {
-  local message="${1:?unicore_emit_ascii_only_log: missing message}"
-  local period="${2:?unicore_emit_ascii_only_log: missing period}"
+unicore_period_to_rate() {
+  local period="${1:?unicore_period_to_rate: missing period}"
+
+  awk -v period="$period" 'BEGIN {
+    numeric = period + 0.0
+    if (numeric <= 0.0) {
+      print "0"
+    } else {
+      printf("%g\n", 1.0 / numeric)
+    }
+  }'
+}
+
+unicore_parse_log_command() {
+  local command="${1:?unicore_parse_log_command: missing command}"
+  local -a parts=()
+
+  read -r -a parts <<<"$command"
+  if [ "${#parts[@]}" -ge 4 ] && [ "${parts[0]}" = "LOG" ] && [ "${parts[2]}" = "ONTIME" ]; then
+    unicore_is_known_log_message "${parts[1]}" || return 1
+    printf '%s|%s|%s\n' "${parts[1]}" "nmea_log_ontime" "${parts[3]}"
+    return 0
+  fi
+  if [ "${#parts[@]}" -eq 2 ] && [ "${parts[1]}" = "ONCHANGED" ]; then
+    unicore_is_known_log_message "${parts[0]}" || return 1
+    printf '%s|%s|\n' "${parts[0]}" "unicore_onchanged"
+    return 0
+  fi
+  if [ "${#parts[@]}" -eq 2 ]; then
+    unicore_is_known_log_message "${parts[0]}" || return 1
+    printf '%s|%s|%s\n' "${parts[0]}" "unicore_direct_period" "${parts[1]}"
+    return 0
+  fi
+  return 1
+}
+
+unicore_log_command_variants() {
+  local message="${1:?unicore_log_command_variants: missing message}"
+  local syntax="${2:?unicore_log_command_variants: missing syntax}"
+  local period="${3-}"
+  local rate
+  local command
+  local label
+  local -A seen=()
+
+  if [ -n "${UNICORE_ACCEPTED_LOG_COMMANDS[$message]:-}" ]; then
+    command="${UNICORE_ACCEPTED_LOG_COMMANDS[$message]}"
+    label="${UNICORE_LOG_COMMAND_SYNTAX_BY_MESSAGE[$message]:-cached}"
+    printf '%s\t%s\n' "$label" "$command"
+    seen["$command"]=1
+  fi
+
+  case "$syntax" in
+    unicore_onchanged)
+      command="${message} ONCHANGED"
+      if [ -z "${seen[$command]:-}" ]; then
+        printf '%s\t%s\n' "unicore_onchanged" "$command"
+        seen["$command"]=1
+      fi
+      command="${message} ${UNICORE_COM_PORT} ONCHANGED"
+      if [ -z "${seen[$command]:-}" ]; then
+        printf '%s\t%s\n' "com_onchanged" "$command"
+        seen["$command"]=1
+      fi
+      ;;
+    unicore_direct_period)
+      command="${message} ${period}"
+      if [ -z "${seen[$command]:-}" ]; then
+        printf '%s\t%s\n' "unicore_direct_period" "$command"
+        seen["$command"]=1
+      fi
+      command="${message} ONTIME ${period}"
+      if [ -z "${seen[$command]:-}" ]; then
+        printf '%s\t%s\n' "bare_ontime" "$command"
+        seen["$command"]=1
+      fi
+      command="${message} ${UNICORE_COM_PORT} ${period}"
+      if [ -z "${seen[$command]:-}" ]; then
+        printf '%s\t%s\n' "com_period" "$command"
+        seen["$command"]=1
+      fi
+      rate="$(unicore_period_to_rate "$period")"
+      if [ "$rate" != "0" ]; then
+        command="${message} ${UNICORE_COM_PORT} ${rate}"
+        if [ -z "${seen[$command]:-}" ]; then
+          printf '%s\t%s\n' "com_rate" "$command"
+          seen["$command"]=1
+        fi
+      fi
+      command="LOG ${message} ONTIME ${period}"
+      if [ -z "${seen[$command]:-}" ]; then
+        printf '%s\t%s\n' "nmea_log_ontime" "$command"
+        seen["$command"]=1
+      fi
+      ;;
+    *)
+      command="LOG ${message} ONTIME ${period}"
+      if [ -z "${seen[$command]:-}" ]; then
+        printf '%s\t%s\n' "nmea_log_ontime" "$command"
+        seen["$command"]=1
+      fi
+      command="${message} ONTIME ${period}"
+      if [ -z "${seen[$command]:-}" ]; then
+        printf '%s\t%s\n' "bare_ontime" "$command"
+        seen["$command"]=1
+      fi
+      command="${message} ${period}"
+      if [ -z "${seen[$command]:-}" ]; then
+        printf '%s\t%s\n' "bare_period" "$command"
+        seen["$command"]=1
+      fi
+      command="${message} ${UNICORE_COM_PORT} ${period}"
+      if [ -z "${seen[$command]:-}" ]; then
+        printf '%s\t%s\n' "com_period" "$command"
+        seen["$command"]=1
+      fi
+      rate="$(unicore_period_to_rate "$period")"
+      if [ "$rate" != "0" ]; then
+        command="${message} ${UNICORE_COM_PORT} ${rate}"
+        if [ -z "${seen[$command]:-}" ]; then
+          printf '%s\t%s\n' "com_rate" "$command"
+          seen["$command"]=1
+        fi
+      fi
+      ;;
+  esac
+}
+
+unicore_classify_command_response() {
+  local response="${1-}"
+  local collapsed="${response,,}"
+  local compact="${collapsed//[$' \t\r\n']/}"
+
+  if [ -z "$compact" ]; then
+    printf '%s\n' "no_response"
+    return 0
+  fi
+  if [[ "$collapsed" == *"unsupported"* || "$collapsed" == *"parsing failed"* || "$collapsed" == *"grammar error"* ]]; then
+    printf '%s\n' "unsupported"
+    return 0
+  fi
+
+  printf '%s\n' "ok"
+}
+
+unicore_first_response_line() {
+  local response="${1-}"
+
+  printf '%s\n' "${response%%$'\n'*}"
+}
+
+unicore_log_syntax_for_message() {
+  local message="${1:?unicore_log_syntax_for_message: missing message}"
+
+  case "$message" in
+    GPGGA|PVTSLNA|PVTSLNB|BESTSATA|BESTSATB|SATSINFOA|SATSINFOB|AGCA|AGCB|HWSTATUSA|HWSTATUSB|JAMSTATUSA|JAMSTATUSB|FREQJAMSTATUSA|FREQJAMSTATUSB|GPGSV|GLGSV|GAGSV|GBGSV|OBSVMCMPA|OBSVMCMPB)
+      printf '%s\n' "nmea_log_ontime"
+      ;;
+    BESTNAVA|BESTNAVB|RTKSTATUSA|RTKSTATUSB|GPHPR)
+      printf '%s\n' "unicore_direct_period"
+      ;;
+    RTCMSTATUSA|RTCMSTATUSB|GPHPR2)
+      printf '%s\n' "unicore_onchanged"
+      ;;
+    *)
+      printf '%s\n' "nmea_log_ontime"
+      ;;
+  esac
+}
+
+unicore_is_known_log_message() {
+  local message="${1:?unicore_is_known_log_message: missing message}"
+
+  case "$message" in
+    GPGGA|PVTSLNA|PVTSLNB|BESTNAVA|BESTNAVB|GPHPR|GPHPR2|RTKSTATUSA|RTKSTATUSB|RTCMSTATUSA|RTCMSTATUSB|BESTSATA|BESTSATB|SATSINFOA|SATSINFOB|GPGSV|GLGSV|GAGSV|GBGSV|AGCA|AGCB|HWSTATUSA|HWSTATUSB|JAMSTATUSA|JAMSTATUSB|FREQJAMSTATUSA|FREQJAMSTATUSB|OBSVMCMPA|OBSVMCMPB)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+unicore_log_special_output_name() {
+  local message="${1:?unicore_log_special_output_name: missing message}"
+
+  case "$message" in
+    GPHPR) printf '%s\n' "GNHPR" ;;
+    GPHPR2) printf '%s\n' "GNHPR2" ;;
+    *) printf '%s\n' "$message" ;;
+  esac
+}
+
+unicore_format_log_command() {
+  local message="${1:?unicore_format_log_command: missing message}"
+  local period="${2-}"
+  local syntax
+
+  syntax="$(unicore_log_syntax_for_message "$message")"
+  case "$syntax" in
+    nmea_log_ontime)
+      printf '%s\n' "LOG ${message} ONTIME ${period}"
+      ;;
+    unicore_direct_period)
+      printf '%s\n' "${message} ${period}"
+      ;;
+    unicore_onchanged)
+      printf '%s\n' "${message} ONCHANGED"
+      ;;
+    *)
+      printf '%s\n' "LOG ${message} ONTIME ${period}"
+      ;;
+  esac
+}
+
+unicore_emit_ascii_message_log() {
+  local message="${1:?unicore_emit_ascii_message_log: missing message}"
+  local period="${2-}"
 
   if unicore_output_has_ascii "$UNICORE_OUTPUT_FORMAT"; then
-    printf '%s\n' "LOG ${message} ONTIME ${period}"
+    unicore_format_log_command "$message" "$period"
   fi
 }
 
-unicore_emit_paired_log() {
-  local ascii_message="${1:?unicore_emit_paired_log: missing ascii message}"
-  local binary_message="${2:?unicore_emit_paired_log: missing binary message}"
-  local period="${3:?unicore_emit_paired_log: missing period}"
+unicore_emit_paired_message_log() {
+  local ascii_message="${1:?unicore_emit_paired_message_log: missing ascii message}"
+  local binary_message="${2:?unicore_emit_paired_message_log: missing binary message}"
+  local period="${3-}"
 
   if unicore_output_has_ascii "$UNICORE_OUTPUT_FORMAT"; then
-    printf '%s\n' "LOG ${ascii_message} ONTIME ${period}"
+    unicore_format_log_command "$ascii_message" "$period"
   fi
   if unicore_output_has_binary "$UNICORE_OUTPUT_FORMAT"; then
-    printf '%s\n' "LOG ${binary_message} ONTIME ${period}"
+    unicore_format_log_command "$binary_message" "$period"
   fi
 }
 
@@ -356,6 +581,7 @@ drain_serial() {
 send_serial_command() {
   local command="${1:?send_serial_command: missing command}"
 
+  UNICORE_LAST_SERIAL_COMMAND="$command"
   printf '%s\r\n' "$command" >&3
 }
 
@@ -371,6 +597,73 @@ collect_serial_output() {
   done
 
   printf '%s' "$output"
+}
+
+send_serial_command_with_response() {
+  local command="${1:?send_serial_command_with_response: missing command}"
+
+  drain_serial
+  send_serial_command "$command"
+  log "  -> $command"
+  sleep 0.1
+  UNICORE_LAST_COMMAND_RESPONSE="$(collect_serial_output 6)"
+}
+
+send_log_command_with_fallback() {
+  local canonical_command="${1:?send_log_command_with_fallback: missing command}"
+  local parsed message syntax period
+  local -a variants=()
+  local variant label candidate response status
+  local rejected=""
+  local preview=""
+
+  parsed="$(unicore_parse_log_command "$canonical_command" || true)"
+  if [ -z "$parsed" ]; then
+    send_serial_command_with_response "$canonical_command"
+    response="$UNICORE_LAST_COMMAND_RESPONSE"
+    status="$(unicore_classify_command_response "$response")"
+    preview="$(unicore_first_response_line "$response")"
+    [ -n "$preview" ] && log "  <- ${status}: ${preview}"
+    return 0
+  fi
+
+  message="${parsed%%|*}"
+  parsed="${parsed#*|}"
+  syntax="${parsed%%|*}"
+  period="${parsed#*|}"
+  mapfile -t variants < <(unicore_log_command_variants "$message" "$syntax" "$period")
+
+  for variant in "${variants[@]}"; do
+    label="${variant%%$'\t'*}"
+    candidate="${variant#*$'\t'}"
+    send_serial_command_with_response "$candidate"
+    response="$UNICORE_LAST_COMMAND_RESPONSE"
+    status="$(unicore_classify_command_response "$response")"
+    preview="$(unicore_first_response_line "$response")"
+
+    if [ "$status" = "unsupported" ]; then
+      if [ -n "$rejected" ]; then
+        rejected+=" | "
+      fi
+      rejected+="$candidate"
+      log "  <- unsupported via ${label}${preview:+: ${preview}}"
+      continue
+    fi
+
+    UNICORE_ACCEPTED_LOG_COMMANDS["$message"]="$candidate"
+    UNICORE_LOG_COMMAND_SYNTAX_BY_MESSAGE["$message"]="$label"
+    UNICORE_REJECTED_LOG_COMMANDS["$message"]="$rejected"
+    if [ "$candidate" != "$canonical_command" ]; then
+      log "  <- accepted ${message} via ${label}: ${candidate}${preview:+ | ${preview}}"
+    else
+      log "  <- accepted ${message} via ${label}${preview:+: ${preview}}"
+    fi
+    return 0
+  done
+
+  UNICORE_REJECTED_LOG_COMMANDS["$message"]="$rejected"
+  log "WARN: no accepted LOG syntax found for ${message}; attempted: ${rejected:-$canonical_command}"
+  return 1
 }
 
 query_receiver_identification() {
@@ -504,33 +797,34 @@ build_base_config_commands() {
 }
 
 build_log_commands() {
-  unicore_emit_ascii_only_log "GPGGA" "${UNICORE_MAIN_LOG_PERIOD}"
-  unicore_emit_paired_log "PVTSLNA" "PVTSLNB" "${UNICORE_MAIN_LOG_PERIOD}"
-  unicore_emit_paired_log "BESTNAVA" "BESTNAVB" "${UNICORE_BESTNAV_LOG_PERIOD}"
-  unicore_emit_ascii_only_log "GNHPR" "${UNICORE_MAIN_LOG_PERIOD}"
-  unicore_emit_paired_log "RTKSTATUSA" "RTKSTATUSB" "${UNICORE_DIAGNOSTIC_LOG_PERIOD}"
-  unicore_emit_paired_log "RTCMSTATUSA" "RTCMSTATUSB" "${UNICORE_DIAGNOSTIC_LOG_PERIOD}"
+  unicore_emit_ascii_message_log "GPGGA" "${UNICORE_MAIN_LOG_PERIOD}"
+  unicore_emit_paired_message_log "PVTSLNA" "PVTSLNB" "${UNICORE_MAIN_LOG_PERIOD}"
+  unicore_emit_paired_message_log "BESTNAVA" "BESTNAVB" "${UNICORE_BESTNAV_LOG_PERIOD}"
+  unicore_emit_ascii_message_log "GPHPR" "${UNICORE_MAIN_LOG_PERIOD}"
+  unicore_emit_ascii_message_log "GPHPR2"
+  unicore_emit_paired_message_log "RTKSTATUSA" "RTKSTATUSB" "${UNICORE_DIAGNOSTIC_LOG_PERIOD}"
+  unicore_emit_paired_message_log "RTCMSTATUSA" "RTCMSTATUSB" "${UNICORE_DIAGNOSTIC_LOG_PERIOD}"
 
   if unicore_is_truthy "$UNICORE_ENABLE_SATELLITES"; then
-    unicore_emit_paired_log "BESTSATA" "BESTSATB" "${UNICORE_SATELLITE_LOG_PERIOD}"
-    unicore_emit_paired_log "SATSINFOA" "SATSINFOB" "${UNICORE_SATELLITE_LOG_PERIOD}"
-    unicore_emit_ascii_only_log "GPGSV" "${UNICORE_SATELLITE_LOG_PERIOD}"
-    unicore_emit_ascii_only_log "GLGSV" "${UNICORE_SATELLITE_LOG_PERIOD}"
-    unicore_emit_ascii_only_log "GAGSV" "${UNICORE_SATELLITE_LOG_PERIOD}"
-    unicore_emit_ascii_only_log "GBGSV" "${UNICORE_SATELLITE_LOG_PERIOD}"
+    unicore_emit_paired_message_log "BESTSATA" "BESTSATB" "${UNICORE_SATELLITE_LOG_PERIOD}"
+    unicore_emit_paired_message_log "SATSINFOA" "SATSINFOB" "${UNICORE_SATELLITE_LOG_PERIOD}"
+    unicore_emit_ascii_message_log "GPGSV" "${UNICORE_SATELLITE_LOG_PERIOD}"
+    unicore_emit_ascii_message_log "GLGSV" "${UNICORE_SATELLITE_LOG_PERIOD}"
+    unicore_emit_ascii_message_log "GAGSV" "${UNICORE_SATELLITE_LOG_PERIOD}"
+    unicore_emit_ascii_message_log "GBGSV" "${UNICORE_SATELLITE_LOG_PERIOD}"
   fi
 
   if unicore_is_truthy "$UNICORE_ENABLE_RF"; then
-    unicore_emit_paired_log "AGCA" "AGCB" "${UNICORE_RF_LOG_PERIOD}"
+    unicore_emit_paired_message_log "AGCA" "AGCB" "${UNICORE_RF_LOG_PERIOD}"
   fi
 
   if unicore_is_truthy "$UNICORE_ENABLE_HARDWARE"; then
-    unicore_emit_paired_log "HWSTATUSA" "HWSTATUSB" "${UNICORE_RF_LOG_PERIOD}"
+    unicore_emit_paired_message_log "HWSTATUSA" "HWSTATUSB" "${UNICORE_RF_LOG_PERIOD}"
   fi
 
   if unicore_is_truthy "$UNICORE_ENABLE_JAMMING"; then
-    unicore_emit_paired_log "JAMSTATUSA" "JAMSTATUSB" "${UNICORE_RF_LOG_PERIOD}"
-    unicore_emit_paired_log "FREQJAMSTATUSA" "FREQJAMSTATUSB" "${UNICORE_RF_LOG_PERIOD}"
+    unicore_emit_paired_message_log "JAMSTATUSA" "JAMSTATUSB" "${UNICORE_RF_LOG_PERIOD}"
+    unicore_emit_paired_message_log "FREQJAMSTATUSA" "FREQJAMSTATUSB" "${UNICORE_RF_LOG_PERIOD}"
   fi
 
   if unicore_is_truthy "$UNICORE_ENABLE_RAW_OBSERVATIONS" &&
@@ -579,18 +873,32 @@ send_config_batch() {
   shift
   local commands=("$@")
   local command
+  local response
+  local status
+  local preview
+  local batch_rc=0
 
   serial_set_baud "$port" "$TARGET_BAUD"
   open_serial "$port"
   drain_serial
 
   for command in "${commands[@]}"; do
-    send_serial_command "$command"
-    log "  -> $command"
-    sleep 0.2
+    if unicore_parse_log_command "$command" >/dev/null 2>&1; then
+      if ! send_log_command_with_fallback "$command"; then
+        batch_rc=1
+      fi
+      continue
+    fi
+
+    send_serial_command_with_response "$command"
+    response="$UNICORE_LAST_COMMAND_RESPONSE"
+    status="$(unicore_classify_command_response "$response")"
+    preview="$(unicore_first_response_line "$response")"
+    [ -n "$preview" ] && log "  <- ${status}: ${preview}"
   done
 
   close_serial
+  return "$batch_rc"
 }
 
 apply_receiver_configuration() {
@@ -603,6 +911,9 @@ apply_receiver_configuration() {
   local profile_cmds=()
 
   unicore_apply_profile_defaults
+  UNICORE_ACCEPTED_LOG_COMMANDS=()
+  UNICORE_REJECTED_LOG_COMMANDS=()
+  UNICORE_LOG_COMMAND_SYNTAX_BY_MESSAGE=()
 
   if [ "$detected_baud" != "$TARGET_BAUD" ]; then
     log "Switching ${UNICORE_COM_PORT} from ${detected_baud} to ${TARGET_BAUD}..."
@@ -635,7 +946,16 @@ apply_receiver_configuration() {
 
   log "Applying UM98x rover config to ${port} @ ${TARGET_BAUD}..."
   log "Profile=${UNICORE_PROFILE} output=${UNICORE_OUTPUT_FORMAT} main=${UNICORE_MAIN_LOG_PERIOD}s bestnav=${UNICORE_BESTNAV_LOG_PERIOD}s diag=${UNICORE_DIAGNOSTIC_LOG_PERIOD}s sat=${UNICORE_SATELLITE_LOG_PERIOD}s rf=${UNICORE_RF_LOG_PERIOD}s raw=${UNICORE_RAW_LOG_PERIOD}s sat_enabled=$(unicore_bool_string "$UNICORE_ENABLE_SATELLITES") rf_enabled=$(unicore_bool_string "$UNICORE_ENABLE_RF") jam_enabled=$(unicore_bool_string "$UNICORE_ENABLE_JAMMING") raw_enabled=$(unicore_bool_string "$UNICORE_ENABLE_RAW_OBSERVATIONS")"
-  send_config_batch "$port" "${cmds[@]}"
+  if ! send_config_batch "$port" "${cmds[@]}"; then
+    log "WARN: one or more LOG commands could not find an accepted syntax on this firmware."
+  fi
+
+  if [ "${#UNICORE_ACCEPTED_LOG_COMMANDS[@]}" -gt 0 ]; then
+    log "Accepted LOG syntax by message:"
+    for command in "${!UNICORE_ACCEPTED_LOG_COMMANDS[@]}"; do
+      log "  ${command}: ${UNICORE_ACCEPTED_LOG_COMMANDS[$command]} (via ${UNICORE_LOG_COMMAND_SYNTAX_BY_MESSAGE[$command]:-unknown})"
+    done
+  fi
 
   if ! verify_receiver_at_baud "$port" "$TARGET_BAUD"; then
     log "ERROR: receiver stopped responding at ${TARGET_BAUD} before SAVECONFIG." >&2

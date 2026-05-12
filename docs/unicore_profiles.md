@@ -12,7 +12,7 @@ Le profil par défaut est `normal`.
 
 | Profil | Usage recommandé | Sortie recommandée | Logs principaux | Logs avancés |
 | --- | --- | --- | --- | --- |
-| `normal` | runtime Nav2 / production légère | `ascii` | `PVTSLNA`, `GPGGA`, `BESTNAVA`, `GNHPR`, `RTKSTATUSA`, `RTCMSTATUSA` | aucun |
+| `normal` | runtime Nav2 / production légère | `ascii` | `PVTSLNA`, `GPGGA`, `BESTNAVA`, `GPHPR` (sortie souvent `$GNHPR`), `RTKSTATUSA`, `RTCMSTATUSA` | aucun |
 | `debug` | essais terrain / Foxglove | `ascii` par défaut, `hybrid` sur demande | profil `normal` | `BESTSATA`, `SATSINFOA`, `AGCA`, `HWSTATUSA`, `JAMSTATUSA`, `FREQJAMSTATUSA`, `GSV` |
 | `survey` | analyse GNSS avancée | `hybrid` | profil `debug`, mais plus lent | `OBSVMCMPB` optionnel, comparaisons ASCII/binaire |
 | `high_precision` | précision max / tuning RTK | `hybrid` ou `binary` expérimental | profil `debug` | `CONFIG PVTALG MULTI`, `CONFIG RTCMDECAUTO ENABLE`, `CONFIG RTCMPHASERATE POSITIVE`, `CONFIG RTCMCLOCKOFFSET ENABLE`, `OBSVMCMPB` optionnel |
@@ -32,6 +32,7 @@ Notes :
 - `debug` reste en ASCII tant qu’on ne demande pas explicitement `UNICORE_OUTPUT_FORMAT=hybrid` ou `binary`.
 - `OBSVMCMPB` reste désactivé par défaut. Il est destiné au `survey/debug` avancé, pas au runtime Nav2.
 - en `hybrid`, les logs Unicore qui ont une variante binaire sortent en `A+B`; en `binary`, ils sortent en `B` uniquement.
+- la génération des commandes suit maintenant une table N4 par message: `LOG ... ONTIME` pour `GPGGA/PVTSLN`, période directe pour `BESTNAV/RTKSTATUS/GPHPR`, et `ONCHANGED` pour `RTCMSTATUS/GPHPR2`.
 - en `binary`, `start_gps.sh` force les consommateurs ROS binaires nécessaires pour éviter des diagnostics stale ou un `NavSatFix` vide.
 - Les résumés de diagnostics `GPS: raw observations` n’existent que si `UNICORE_ENABLE_RAW_OBSERVATIONS=true` et `UNICORE_OUTPUT_FORMAT=hybrid` ou `binary`.
 - `high_precision` ajoute des commandes dépendantes du firmware N4 ; elles sont volontairement limitées à ce profil.

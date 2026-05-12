@@ -26,6 +26,13 @@ Exemple runtime leger:
   --apply-profile-logs
 ```
 
+Le validateur du driver gere maintenant une table de syntaxe N4 par
+message, avec fallback automatique seulement si le firmware rejette la
+forme canonique:
+- `LOG ... ONTIME` pour `GPGGA` et `PVTSLN`
+- periode directe pour `BESTNAV`, `RTKSTATUS`, `GPHPR`
+- `ONCHANGED` pour `RTCMSTATUS` et `GPHPR2`
+
 Exemple survey hybride:
 
 ```bash
