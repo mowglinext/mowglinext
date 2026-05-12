@@ -94,6 +94,7 @@ func (hc *MqttProvider) subscribeToRos() {
 	hc.subscribeToRosTopic("gps", "mqtt-gps")
 	hc.subscribeToRosTopic("imu", "mqtt-imu")
 	hc.subscribeToRosTopic("ticks", "mqtt-ticks")
+	hc.subscribeToRosTopic("wheelOdom", "mqtt-wheel-odom")
 	hc.subscribeToRosTopic("map", "mqtt-map")
 	hc.subscribeToRosTopic("path", "mqtt-path")
 	hc.subscribeToRosTopic("plan", "mqtt-plan")

@@ -4,11 +4,13 @@ import {useEmergency} from "../hooks/useEmergency.ts";
 import {usePower} from "../hooks/usePower.ts";
 import {useGPS} from "../hooks/useGPS.ts";
 import {useSettings} from "../hooks/useSettings.ts";
-import {AbsolutePoseConstants} from "../types/ros.ts";
 import {computeBatteryPercent} from "../utils/battery.ts";
+import {deriveGpsStatus} from "../utils/gpsStatus.ts";
 import {restartMowgliNext} from "../utils/containers.ts";
-import {App, Badge, Dropdown, Modal, Space, Typography} from "antd";
-import {PoweroffOutlined, ReloadOutlined, DesktopOutlined, WifiOutlined} from "@ant-design/icons"
+import {useContainerRestart} from "../hooks/useContainerRestart.ts";
+import {useMowerAction} from "./MowerActions.tsx";
+import {App, Badge, Button, Dropdown, Modal, Space, Tooltip, Typography} from "antd";
+import {PoweroffOutlined, ReloadOutlined, DesktopOutlined, WifiOutlined, AlertOutlined} from "@ant-design/icons"
 import {stateRenderer} from "./utils.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useApi} from "../hooks/useApi.ts";
@@ -68,18 +70,12 @@ export const MowerStatus = () => {
         undefined
     );
 
-    // GPS quality with fallback
-    const gpsPercent = (() => {
-        if (highLevelStatus.gps_quality_percent != null && highLevelStatus.gps_quality_percent > 0) {
-            return Math.round(highLevelStatus.gps_quality_percent * 100);
-        }
-        if (gps.flags != null) {
-            if (gps.flags & AbsolutePoseConstants.FLAG_GPS_RTK_FIXED) return 100;
-            if (gps.flags & AbsolutePoseConstants.FLAG_GPS_RTK_FLOAT) return 50;
-            if (gps.flags & AbsolutePoseConstants.FLAG_GPS_RTK) return 25;
-        }
-        return 0;
-    })();
+    const gpsStatus = deriveGpsStatus(gps.flags);
+    const gpsColor =
+        gpsStatus.fixType === "RTK_FIX" ? colors.primary :
+        gpsStatus.fixType === "RTK_FLOAT" ? colors.warning :
+        gpsStatus.fixType === "GPS_FIX" ? colors.warning :
+        colors.danger;
 
     const batteryPercent = computeBatteryPercent(
         highLevelStatus.battery_percent, power.v_battery, settings,
@@ -101,14 +97,24 @@ export const MowerStatus = () => {
         ? Math.round(((highLevelStatus.current_path_index ?? 0) / (highLevelStatus.current_path ?? 1)) * 100)
         : null;
 
-    const restartMowgli = async () => {
-        try {
-            await restartMowgliNext(guiApi);
-            notification.success({message: "Mowgli restarted"});
-        } catch (e: any) {
-            notification.error({message: "Failed to restart Mowgli", description: e.message});
-        }
-    };
+    // Long-running: container restart + rosbridge reconnect. Lock the menu
+    // item until ROS2 is reachable again to prevent duplicate-click storms.
+    const mowgliRestart = useContainerRestart({
+        pendingLabel: "Redémarrage Mowgli…",
+        successMessage: "Mowgli redémarré",
+        errorMessage: "Échec du redémarrage Mowgli",
+    });
+    const restartMowgli = () => mowgliRestart.run(() => restartMowgliNext(guiApi));
+
+    // Latched-emergency reset: firmware is the safety authority and only
+    // clears the latch when the physical trigger is no longer asserted, so
+    // this is a fire-and-forget request — surfaced as a global icon button
+    // alongside the status badges so the operator never has to dig into the
+    // dashboard hero card to clear it (issue #149).
+    const mowerAction = useMowerAction();
+    const resetEmergencyAction = mowerAction("emergency", {Emergency: 0});
+    const showResetEmergency =
+        emergencyData.active_emergency || emergencyData.latched_emergency || isEmergency;
 
     const rebootSystem = async () => {
         try {
@@ -143,7 +149,8 @@ export const MowerStatus = () => {
         {
             key: "restart-mowgli",
             icon: <ReloadOutlined/>,
-            label: "Restart Mowgli",
+            label: mowgliRestart.pending ? mowgliRestart.pendingLabel : "Restart Mowgli",
+            disabled: mowgliRestart.pending,
             onClick: () => confirmAction("Restart Mowgli", "This will restart the MowgliNext container.", restartMowgli),
         },
         {type: "divider"},
@@ -181,12 +188,26 @@ export const MowerStatus = () => {
                         {progressPercent !== null ? ` ${progressPercent}%` : ''}
                     </Typography.Text>
                 )}
-                <Space size={4}>
-                    <WifiOutlined style={{color: gpsPercent > 0 ? colors.primary : colors.danger, fontSize: 13}}/>
-                    <Typography.Text style={{fontSize: 12, color: colors.text}}>
-                        {gpsPercent}%
-                    </Typography.Text>
-                </Space>
+                <Tooltip title={`GPS: ${gpsStatus.label}`}>
+                    <Space size={4}>
+                        <WifiOutlined style={{color: gpsColor, fontSize: 13}}/>
+                        <Typography.Text style={{fontSize: 12, color: colors.text, whiteSpace: 'nowrap'}}>
+                            {gpsStatus.percent}% · {gpsStatus.label}
+                        </Typography.Text>
+                    </Space>
+                </Tooltip>
+                {showResetEmergency && (
+                    <Tooltip title="Reset emergency (firmware decides whether the latch clears)">
+                        <Button
+                            danger
+                            size="small"
+                            icon={<AlertOutlined/>}
+                            onClick={resetEmergencyAction}
+                        >
+                            Reset
+                        </Button>
+                    </Tooltip>
+                )}
                 <Dropdown menu={{items: powerMenuItems}} trigger={["click"]} placement="bottomRight">
                     <Space size={4} style={{cursor: "pointer"}}>
                         <PoweroffOutlined style={{

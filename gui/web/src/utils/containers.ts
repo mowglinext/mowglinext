@@ -46,3 +46,32 @@ export const restartGui = (api: GuiApi) =>
 /** Restart the MowgliNext container */
 export const restartMowgliNext = (api: GuiApi) =>
     containerAction(api, { name: "mowglinext", label: { key: "app", value: "mowglinext" } }, "restart");
+
+/** Restart the GPS container (picks up new NTRIP / serial / protocol config) */
+export const restartGps = (api: GuiApi) =>
+    containerAction(api, { name: "gps" }, "restart");
+
+/**
+ * Settings keys whose values are consumed by the GPS docker container
+ * (NTRIP credentials, mountpoint, serial port, protocol). Saving any of
+ * these requires bouncing mowgli-gps to actually apply the change.
+ * Datum lat/lon/alt are read by ROS2 (navsat_to_absolute_pose_node), not
+ * by the GPS container itself, so they are deliberately not in this list.
+ */
+export const GPS_RESTART_KEYS = new Set<string>([
+    "gps_protocol",
+    "gps_port",
+    "gps_baudrate",
+    "ntrip_enabled",
+    "ntrip_host",
+    "ntrip_port",
+    "ntrip_user",
+    "ntrip_password",
+    "ntrip_mountpoint",
+]);
+
+/** True if any dirty key affects the GPS container. */
+export const dirtyKeysRequireGpsRestart = (dirty: Iterable<string>): boolean => {
+    for (const k of dirty) if (GPS_RESTART_KEYS.has(k)) return true;
+    return false;
+};

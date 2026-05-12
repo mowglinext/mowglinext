@@ -26,6 +26,8 @@ interface UseMapFilesOptions {
     datum: [number, number, number];
     notification: NotificationInstance;
     guiApi: Api<unknown>;
+    dockDirty: boolean;
+    setDockDirty: (v: boolean) => void;
 }
 
 export function useMapFiles({
@@ -40,6 +42,8 @@ export function useMapFiles({
     datum,
     notification,
     guiApi,
+    dockDirty,
+    setDockDirty,
 }: UseMapFilesOptions) {
     async function handleSaveMap() {
         const areas: Record<string, MowgliMapArea[]> = {
@@ -142,9 +146,13 @@ export function useMapFiles({
             });
         }
 
-        // Save dock position from the edited features state (not the stale map object)
+        // Save dock position only when the user actually edited it.
+        // Otherwise the dock feature reflects whatever the /map topic
+        // last published, which can be stale relative to the dock pose
+        // persisted in mowgli_robot.yaml (e.g. just-written by the
+        // calibration service). Saving unconditionally would clobber it.
         const dockFeature = features["dock"];
-        if (dockFeature instanceof DockFeatureBase) {
+        if (dockDirty && dockFeature instanceof DockFeatureBase) {
             const coords = dockFeature.getCoordinates();
             const rosCoords = itranspose(offsetX, offsetY, datum, coords[1], coords[0]);
             const heading = dockFeature.getHeading();
@@ -164,6 +172,7 @@ export function useMapFiles({
                     },
                 },
             });
+            setDockDirty(false);
         }
     }
 
@@ -218,6 +227,71 @@ export function useMapFiles({
         a.download = "map.geojson";
         a.click();
         window.URL.revokeObjectURL(url);
+    };
+
+    /**
+     * Pick + parse an OpenMower map.json (or a `.bag` — currently
+     * unsupported, see docs/IMPORT_OPENMOWER_MAP.md §6) and POST it to
+     * /api/import/openmower in **preview mode**. The Go backend returns
+     * an `ImportOpenMowerSummary` which the caller passes to
+     * `setImportPreview` so MapPage can render a confirmation modal.
+     *
+     * The actual write step is intentionally not invoked here — the
+     * server-side `apply: true` path is also stubbed. Once the open
+     * questions in the design doc are resolved we will:
+     *   1. add a confirm button on the modal that re-POSTs with apply=true
+     *   2. on success, refetch /map and clear the unsaved-changes flag
+     */
+    const handleImportOpenMower = (
+        setImportPreview: (preview: ImportOpenMowerSummary | null) => void,
+    ) => {
+        const input = document.createElement("input");
+        input.type = "file";
+        // Accept .json directly. .bag files are caught client-side and
+        // the user is told the path isn't ready yet (matches the
+        // "coming soon" behaviour described in the design doc).
+        input.accept = ".json,.bag,application/json";
+        input.style.display = "none";
+        document.body.appendChild(input);
+        input.addEventListener('change', async (event) => {
+            const file = (event as unknown as ChangeEvent<HTMLInputElement>).target?.files?.[0];
+            if (!file) {
+                return;
+            }
+
+            if (file.name.toLowerCase().endsWith(".bag")) {
+                notification.info({
+                    message: "OpenMower .bag import — coming soon",
+                    description: "Convert your map.bag to map.json on the source robot first (OpenMower 1.x auto-converts at boot), then re-import the .json. See docs/IMPORT_OPENMOWER_MAP.md §6.",
+                });
+                return;
+            }
+
+            try {
+                const text = await file.text();
+                // Parse client-side first so a totally bogus file fails
+                // before we hit the network.
+                JSON.parse(text);
+
+                const res = await fetch("/api/import/openmower", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: text,
+                });
+                if (!res.ok) {
+                    const errBody = await res.text();
+                    throw new Error(`HTTP ${res.status}: ${errBody}`);
+                }
+                const summary = (await res.json()) as ImportOpenMowerSummary;
+                setImportPreview(summary);
+            } catch (e: any) {
+                notification.error({
+                    message: "OpenMower import failed",
+                    description: e?.message ?? String(e),
+                });
+            }
+        });
+        input.click();
     };
 
     const handleUploadGeoJSON = () => {
@@ -296,5 +370,33 @@ export function useMapFiles({
         handleRestoreMap,
         handleDownloadGeoJSON,
         handleUploadGeoJSON,
+        handleImportOpenMower,
     };
+}
+
+/**
+ * Mirror of api.ImportOpenMowerSummary (gui/pkg/api/openmower_import.go).
+ * Kept inline rather than re-generating Api.ts because the importer
+ * route is hand-rolled (not driven by swagger). Once the apply path
+ * goes live this should be promoted to the swagger surface and
+ * re-generated.
+ */
+export interface ImportOpenMowerSummary {
+    mowing_areas: number;
+    navigation_areas: number;
+    obstacles: number;
+    orphan_obstacles: number;
+    dock_pose?: {x: number; y: number; yaw_rad: number} | null;
+    datum_shift_east_m: number;
+    datum_shift_north_m: number;
+    warnings: string[];
+    areas: Array<{
+        name: string;
+        type: string;
+        vertices: number;
+        obstacles: number;
+        is_navigation_area: boolean;
+        approx_area_sqm: number;
+    }>;
+    applied: boolean;
 }

@@ -318,6 +318,16 @@ export function useMapStreams({
                         imageData.data[canvasIdx + 1] = 220;
                         imageData.data[canvasIdx + 2] = 100;
                         imageData.data[canvasIdx + 3] = 140;
+                    } else if (val === 80) {
+                        // LAWN_DEAD: cells the segment selector has given
+                        // up on after repeated failures. Amber so the
+                        // operator can tell them apart from a real
+                        // sensed obstacle (red, 100). Decays back to
+                        // to-mow if the obstacle clears.
+                        imageData.data[canvasIdx] = 230;
+                        imageData.data[canvasIdx + 1] = 160;
+                        imageData.data[canvasIdx + 2] = 50;
+                        imageData.data[canvasIdx + 3] = 150;
                     } else if (val === 100) {
                         // Obstacle: red
                         imageData.data[canvasIdx] = 255;

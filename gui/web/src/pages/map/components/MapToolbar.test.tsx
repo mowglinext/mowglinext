@@ -28,6 +28,7 @@ describe('MapToolbar', () => {
         onBackupMap: vi.fn(),
         onRestoreMap: vi.fn(),
         onDownloadGeoJSON: vi.fn(),
+        onImportOpenMower: vi.fn(),
         onMowArea: vi.fn().mockResolvedValue(undefined),
         onStart: vi.fn().mockResolvedValue(undefined),
         onHome: vi.fn().mockResolvedValue(undefined),

@@ -3,13 +3,13 @@
 //
 // Field names are snake_case to match the JSON from rosbridge.
 
-export type Point = {
+export type Point32 = {
   x?: number;
   y?: number;
   z?: number;
 };
 
-export type Point32 = {
+export type Point = {
   x?: number;
   y?: number;
   z?: number;
@@ -100,6 +100,10 @@ export type LaserScan = {
   intensities?: number[];
 };
 
+export type MarkerArray = {
+  markers?: Marker[];
+};
+
 export type Marker = {
   ns?: string;
   id?: number;
@@ -115,10 +119,6 @@ export type Marker = {
   text?: string;
   mesh_resource?: string;
   mesh_use_embedded_materials?: boolean;
-};
-
-export type MarkerArray = {
-  markers?: Marker[];
 };
 
 export const enum AbsolutePoseConstants {
@@ -154,6 +154,15 @@ export type CoveragePath = {
   path?: Path;
 };
 
+export type Emergency = {
+  stamp?: { sec: number; nanosec: number };
+  active_emergency?: boolean;
+  latched_emergency?: boolean;
+  lift_warning?: boolean;
+  lift_duration_sec?: number;
+  reason?: string;
+};
+
 export const enum ESCStatusConstants {
   ESC_STATUS_DISCONNECTED = 99,
   ESC_STATUS_ERROR = 100,
@@ -169,15 +178,6 @@ export type ESCStatus = {
   rpm?: number;
   temperature_motor?: number;
   temperature_pcb?: number;
-};
-
-export type Emergency = {
-  stamp?: { sec: number; nanosec: number };
-  active_emergency?: boolean;
-  latched_emergency?: boolean;
-  lift_warning?: boolean;
-  lift_duration_sec?: number;
-  reason?: string;
 };
 
 export const enum HighLevelStatusConstants {

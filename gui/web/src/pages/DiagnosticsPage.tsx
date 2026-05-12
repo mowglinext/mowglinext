@@ -12,6 +12,7 @@ import {
     Space,
     Statistic,
     Table,
+    Tabs,
     Tag,
     Typography,
 } from "antd";
@@ -37,7 +38,7 @@ import {useImu} from "../hooks/useImu.ts";
 import {useCogHeading} from "../hooks/useCogHeading.ts";
 import {useMagYaw} from "../hooks/useMagYaw.ts";
 import {useCalibrationStatus} from "../hooks/useCalibrationStatus.ts";
-import {useWheelTicks} from "../hooks/useWheelTicks.ts";
+import {useWheelOdom} from "../hooks/useWheelOdom.ts";
 import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
 import {useDiagnostics} from "../hooks/useDiagnostics.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
@@ -48,6 +49,8 @@ import {useSettings} from "../hooks/useSettings.ts";
 import {computeBatteryPercent} from "../utils/battery.ts";
 import {useApi} from "../hooks/useApi.ts";
 import {useFusionGraphDiagnostics} from "../hooks/useFusionGraphDiagnostics.ts";
+import {useMowerAction} from "../components/MowerActions.tsx";
+import {AlertOutlined} from "@ant-design/icons";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -103,7 +106,7 @@ export const DiagnosticsPage = () => {
     const imu = useImu();
     const {imu: cogImu, lastMessageAt: cogLastAt} = useCogHeading();
     const {imu: magImu, lastMessageAt: magLastAt} = useMagYaw();
-    const wheelTicks = useWheelTicks();
+    const wheelOdom = useWheelOdom();
     const {status: calibrationStatus, refresh: refreshCalibration} = useCalibrationStatus();
 
     // Tick state once a second so the "Live/Stale" tags update even when no
@@ -576,6 +579,8 @@ export const DiagnosticsPage = () => {
 
     const useFusionGraph = String((settings as any)?.use_fusion_graph ?? "false") === "true";
     const guiApi = useApi();
+    const mowerAction = useMowerAction();
+    const resetEmergencyAction = mowerAction("emergency", {Emergency: 0});
     const {stats: fusionStats} = useFusionGraphDiagnostics();
     const [fusionBusy, setFusionBusy] = useState<"save" | "clear" | null>(null);
 
@@ -858,9 +863,30 @@ export const DiagnosticsPage = () => {
                                 }}
                             />
                         </Col>
+                        <Col span={8}>
+                            <Statistic
+                                title="Charge current"
+                                value={power.charge_current}
+                                precision={2}
+                                suffix="A"
+                                valueStyle={{
+                                    color: highLevelStatus.is_charging && (power.charge_current ?? 0) > 0
+                                        ? colors.primary
+                                        : undefined,
+                                }}
+                            />
+                        </Col>
+                        <Col span={8}>
+                            <Statistic
+                                title="Charger voltage"
+                                value={power.v_charge}
+                                precision={2}
+                                suffix="V"
+                            />
+                        </Col>
                     </Row>
                     <div style={{marginTop: 12}}>
-                        <Space>
+                        <Space wrap>
                             <Typography.Text type="secondary" style={{fontSize: 12}}>Emergency</Typography.Text>
                             <Tag color={emergency.active_emergency ? "error" : emergency.latched_emergency ? "warning" : "default"}>
                                 {emergency.active_emergency
@@ -869,6 +895,16 @@ export const DiagnosticsPage = () => {
                                         ? "Latched"
                                         : "Clear"}
                             </Tag>
+                            {(emergency.active_emergency || emergency.latched_emergency) && (
+                                <Button
+                                    danger
+                                    size="small"
+                                    icon={<AlertOutlined/>}
+                                    onClick={resetEmergencyAction}
+                                >
+                                    Reset emergency
+                                </Button>
+                            )}
                         </Space>
                     </div>
                     {btNodeStates.size > 0 && (
@@ -1236,28 +1272,28 @@ export const DiagnosticsPage = () => {
                         <Col span={12}>
                             <Statistic
                                 title="Linear Vel (m/s)"
-                                value={(wheelTicks as any).linear_velocity_x}
+                                value={wheelOdom.twist?.twist?.linear?.x}
                                 precision={3}
                             />
                         </Col>
                         <Col span={12}>
                             <Statistic
                                 title="Angular Vel (rad/s)"
-                                value={(wheelTicks as any).angular_velocity_z}
+                                value={wheelOdom.twist?.twist?.angular?.z}
                                 precision={3}
                             />
                         </Col>
                         <Col span={12}>
                             <Statistic
                                 title="Pose X (m)"
-                                value={(wheelTicks as any).pose_x}
+                                value={wheelOdom.pose?.pose?.position?.x}
                                 precision={3}
                             />
                         </Col>
                         <Col span={12}>
                             <Statistic
                                 title="Pose Y (m)"
-                                value={(wheelTicks as any).pose_y}
+                                value={wheelOdom.pose?.pose?.position?.y}
                                 precision={3}
                             />
                         </Col>
@@ -1433,20 +1469,51 @@ export const DiagnosticsPage = () => {
         );
     }
 
+    // Desktop: 5 tabs to keep the page from sprawling. Health bar and (when
+    // non-empty) Alerts stay pinned at the top so an oncall operator never
+    // has to dig through tabs to see whether something is on fire.
+    const tabItems = [
+        {
+            key: "system",
+            label: <Space><CloudServerOutlined/> System</Space>,
+            children: <Space direction="vertical" size="middle" style={{width: "100%"}}>
+                {sectionSystem}
+                {sectionRosDiagnostics}
+            </Space>,
+        },
+        {
+            key: "localization",
+            label: <Space><CompassOutlined/> Localization</Space>,
+            children: <Space direction="vertical" size="middle" style={{width: "100%"}}>
+                {sectionLocalization}
+                {sectionFusionGraph}
+                {sectionHeadingSources}
+            </Space>,
+        },
+        {
+            key: "robot",
+            label: <Space><ApiOutlined/> Robot</Space>,
+            children: <Space direction="vertical" size="middle" style={{width: "100%"}}>
+                {sectionBtCoverage}
+                {sectionSensors}
+            </Space>,
+        },
+        {
+            key: "calibration",
+            label: <Space><CompassOutlined/> Calibration</Space>,
+            children: <Space direction="vertical" size="middle" style={{width: "100%"}}>
+                {sectionCrossChecks}
+                {sectionCalibrationStatus}
+            </Space>,
+        },
+    ];
+
     return (
-        <Row gutter={[16, 16]}>
-            <Col span={24}>{healthBar}</Col>
-            {sectionAlerts && <Col span={24}>{sectionAlerts}</Col>}
-            <Col span={24}>{sectionSystem}</Col>
-            <Col span={24}>{sectionLocalization}</Col>
-            {sectionFusionGraph && <Col span={24}>{sectionFusionGraph}</Col>}
-            <Col span={24}>{sectionHeadingSources}</Col>
-            <Col span={24}>{sectionBtCoverage}</Col>
-            <Col span={24}>{sectionCrossChecks}</Col>
-            <Col span={24}>{sectionCalibrationStatus}</Col>
-            <Col span={24}>{sectionSensors}</Col>
-            <Col span={24}>{sectionRosDiagnostics}</Col>
-        </Row>
+        <Space direction="vertical" size="middle" style={{width: "100%"}}>
+            {healthBar}
+            {sectionAlerts}
+            <Tabs defaultActiveKey="system" items={tabItems} size="large"/>
+        </Space>
     );
 };
 

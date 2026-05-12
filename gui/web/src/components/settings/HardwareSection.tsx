@@ -124,10 +124,10 @@ export const HardwareSection: React.FC<Props> = ({ values, onChange, onBulkChang
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
-                            <Form.Item label="Encoder Ticks/Rev" tooltip="Encoder ticks per full wheel revolution">
+                            <Form.Item label="Encoder Ticks/Meter" tooltip="Encoder ticks per metre of wheel travel">
                                 <InputNumber
-                                    value={values.ticks_per_revolution}
-                                    onChange={(v) => onChange("ticks_per_revolution", v)}
+                                    value={values.ticks_per_meter}
+                                    onChange={(v) => onChange("ticks_per_meter", v)}
                                     step={1} precision={0} style={{ width: "100%" }}
                                 />
                             </Form.Item>

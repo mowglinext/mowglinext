@@ -78,11 +78,11 @@
           "default": 0.36,
           "description": "Centre-to-centre distance between front casters in metres."
         },
-        "ticks_per_revolution": {
+        "ticks_per_meter": {
           "type": "integer",
-          "title": "Encoder Ticks per Revolution",
+          "title": "Encoder Ticks per Meter",
           "default": 1050,
-          "description": "Encoder ticks per full wheel revolution."
+          "description": "Encoder ticks per metre of wheel travel."
         },
         "tool_width": {
           "type": "number",
@@ -440,18 +440,6 @@
           "title": "Motor Temp Low",
           "default": 40.0,
           "description": "Resume blade below this motor temperature (C)."
-        },
-        "emergency_stop_on_tilt": {
-          "type": "boolean",
-          "title": "Emergency Stop on Tilt",
-          "default": true,
-          "description": "Emergency stop when robot tilts beyond threshold."
-        },
-        "emergency_stop_on_lift": {
-          "type": "boolean",
-          "title": "Emergency Stop on Lift",
-          "default": true,
-          "description": "Emergency stop when robot is lifted."
         },
         "max_obstacle_avoidance_distance": {
           "type": "number",

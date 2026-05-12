@@ -24,55 +24,13 @@ export const SafetySection: React.FC<Props> = ({ values, onChange }) => {
                 style={{ marginBottom: 16 }}
             />
 
-            {/* Emergency stops */}
-            <Card size="small" style={{ marginBottom: 16 }}>
-                <Space direction="vertical" size={16} style={{ width: "100%" }}>
-                    <div>
-                        <Text strong style={{ fontSize: 14 }}>
-                            <SafetyOutlined style={{ marginRight: 6 }} />
-                            Emergency Stop Triggers
-                        </Text>
-                    </div>
-
-                    <div style={{
-                        display: "flex", justifyContent: "space-between", alignItems: "center",
-                        padding: "8px 12px", borderRadius: 8,
-                        background: values.emergency_stop_on_tilt ? colors.primaryBg : colors.bgSubtle,
-                        border: `1px solid ${values.emergency_stop_on_tilt ? colors.primary : colors.borderSubtle}`,
-                    }}>
-                        <div>
-                            <Text strong>Tilt Detection</Text>
-                            <br />
-                            <Text type="secondary" style={{ fontSize: 12 }}>
-                                Emergency stop when robot tilts beyond safe angle
-                            </Text>
-                        </div>
-                        <Switch
-                            checked={values.emergency_stop_on_tilt ?? true}
-                            onChange={(v) => onChange("emergency_stop_on_tilt", v)}
-                        />
-                    </div>
-
-                    <div style={{
-                        display: "flex", justifyContent: "space-between", alignItems: "center",
-                        padding: "8px 12px", borderRadius: 8,
-                        background: values.emergency_stop_on_lift ? colors.primaryBg : colors.bgSubtle,
-                        border: `1px solid ${values.emergency_stop_on_lift ? colors.primary : colors.borderSubtle}`,
-                    }}>
-                        <div>
-                            <Text strong>Lift Detection</Text>
-                            <br />
-                            <Text type="secondary" style={{ fontSize: 12 }}>
-                                Emergency stop when robot is lifted off ground
-                            </Text>
-                        </div>
-                        <Switch
-                            checked={values.emergency_stop_on_lift ?? true}
-                            onChange={(v) => onChange("emergency_stop_on_lift", v)}
-                        />
-                    </div>
-                </Space>
-            </Card>
+            {/* Lift / tilt detection is handled by the STM32 firmware,
+                not by ROS2. The previous emergency_stop_on_lift /
+                emergency_stop_on_tilt switches were UI-only — no node
+                in ROS2 ever read them — so they were removed (audit
+                2026-05-12). The firmware always emergency-stops on
+                lift/tilt when its physical thresholds are tripped;
+                this is not configurable from the GUI. */}
 
             {/* Temperature */}
             <Card size="small" title="Motor Temperature Limits" style={{ marginBottom: 16 }}>

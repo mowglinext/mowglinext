@@ -115,6 +115,31 @@ type GetMowingAreaRes struct {
 	Success                   bool                           `json:"success"`
 }
 
+// GetNextSegmentReq for mowgli_interfaces/srv/GetNextSegment request.
+type GetNextSegmentReq struct {
+	AreaIndex                 uint32                         `json:"area_index"`
+	RobotX                    float64                        `json:"robot_x"`
+	RobotY                    float64                        `json:"robot_y"`
+	RobotYawRad               float64                        `json:"robot_yaw_rad"`
+	PreferDirYawRad           float64                        `json:"prefer_dir_yaw_rad"`
+	Boustrophedon             bool                           `json:"boustrophedon"`
+	MaxSegmentLengthM         float64                        `json:"max_segment_length_m"`
+}
+
+// GetNextSegmentRes for mowgli_interfaces/srv/GetNextSegment response.
+type GetNextSegmentRes struct {
+	Success                   bool                           `json:"success"`
+	CoverageComplete          bool                           `json:"coverage_complete"`
+	SegmentPath               nav.Path                       `json:"segment_path"`
+	TargetCellPose            geometry.PoseStamped           `json:"target_cell_pose"`
+	IsLongTransit             bool                           `json:"is_long_transit"`
+	CoveragePercent           float32                        `json:"coverage_percent"`
+	SegmentsRemainingEstimate uint32                         `json:"segments_remaining_estimate"`
+	DeadCellsCount            uint32                         `json:"dead_cells_count"`
+	Phase                     string                         `json:"phase"`
+	TerminationReason         string                         `json:"termination_reason"`
+}
+
 // GetNextStripReq for mowgli_interfaces/srv/GetNextStrip request.
 type GetNextStripReq struct {
 	AreaIndex                 uint32                         `json:"area_index"`
@@ -145,6 +170,18 @@ type GetRecoveryPointRes struct {
 	DistanceOutside           float64                        `json:"distance_outside"`
 }
 
+// GetRemainingAreaPolygonReq for mowgli_interfaces/srv/GetRemainingAreaPolygon request.
+type GetRemainingAreaPolygonReq struct {
+	AreaId                    uint32                         `json:"area_id"`
+}
+
+// GetRemainingAreaPolygonRes for mowgli_interfaces/srv/GetRemainingAreaPolygon response.
+type GetRemainingAreaPolygonRes struct {
+	Success                   bool                           `json:"success"`
+	Error                     string                         `json:"error"`
+	Pieces                    []mowgli_interfaces/MapArea    `json:"pieces"`
+}
+
 // HighLevelControlReq for mowgli_interfaces/srv/HighLevelControl request.
 type HighLevelControlReq struct {
 	Command                   uint8                          `json:"command"`
@@ -153,6 +190,19 @@ type HighLevelControlReq struct {
 // HighLevelControlRes for mowgli_interfaces/srv/HighLevelControl response.
 type HighLevelControlRes struct {
 	Success                   bool                           `json:"success"`
+}
+
+// MarkSegmentBlockedReq for mowgli_interfaces/srv/MarkSegmentBlocked request.
+type MarkSegmentBlockedReq struct {
+	FailedPath                nav.Path                       `json:"failed_path"`
+	AreaIndex                 uint32                         `json:"area_index"`
+}
+
+// MarkSegmentBlockedRes for mowgli_interfaces/srv/MarkSegmentBlocked response.
+type MarkSegmentBlockedRes struct {
+	Success                   bool                           `json:"success"`
+	CellsMarkedBlocked        uint32                         `json:"cells_marked_blocked"`
+	CellsPromotedDead         uint32                         `json:"cells_promoted_dead"`
 }
 
 // MowerControlReq for mowgli_interfaces/srv/MowerControl request.
@@ -164,6 +214,19 @@ type MowerControlReq struct {
 // MowerControlRes for mowgli_interfaces/srv/MowerControl response.
 type MowerControlRes struct {
 	Success                   bool                           `json:"success"`
+}
+
+// PromoteObstacleReq for mowgli_interfaces/srv/PromoteObstacle request.
+type PromoteObstacleReq struct {
+	AreaIndex                 uint32                         `json:"area_index"`
+	ObstacleId                uint32                         `json:"obstacle_id"`
+	Polygon                   geometry.Polygon               `json:"polygon"`
+}
+
+// PromoteObstacleRes for mowgli_interfaces/srv/PromoteObstacle response.
+type PromoteObstacleRes struct {
+	Success                   bool                           `json:"success"`
+	Message                   string                         `json:"message"`
 }
 
 // SetDockingPointReq for mowgli_interfaces/srv/SetDockingPoint request.

@@ -128,7 +128,10 @@ const StripPreview: React.FC<{ pathSpacing: number; toolWidth: number; headlandW
 };
 
 export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
-    const pathSpacing = values.path_spacing ?? 0.13;
+    // F2C swath spacing == tool_width (Robot::setCovWidth). The
+    // preview shows blade swaths spaced by tool_width — adjacent
+    // strips tile exactly, no overlap or gap.
+    const pathSpacing = values.tool_width ?? 0.18;
     const toolWidth = values.tool_width ?? 0.18;
     const headlandWidth = values.headland_width ?? 0.18;
 
@@ -186,17 +189,7 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                         <Form layout="vertical" size="small">
                             <Row gutter={[16, 0]}>
                                 <Col xs={12}>
-                                    <Form.Item label="Path Spacing" tooltip="Distance between parallel mowing paths">
-                                        <InputNumber
-                                            value={values.path_spacing}
-                                            onChange={(v) => onChange("path_spacing", v)}
-                                            min={0.05} max={0.5} step={0.01} precision={3}
-                                            style={{ width: "100%" }} addonAfter="m"
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={12}>
-                                    <Form.Item label="Headland Width" tooltip="Width of turning area at strip ends">
+                                    <Form.Item label="Headland Width" tooltip="Width of perimeter strip mowed before the inner field (F2C ConstHL inset). Wired to coverage_server.default_headland_width.">
                                         <InputNumber
                                             value={values.headland_width}
                                             onChange={(v) => onChange("headland_width", v)}
@@ -206,11 +199,11 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12}>
-                                    <Form.Item label="Min Turning Radius" tooltip="Minimum radius for turns at headlands">
+                                    <Form.Item label="Min Turning Radius" tooltip="F2C Robot::setMinTurningRadius — bounds the Dubins arc radius between swaths. Diff-drive mowers: keep small (~0.05 m). Wired to coverage_server.min_turning_radius.">
                                         <InputNumber
                                             value={values.min_turning_radius}
                                             onChange={(v) => onChange("min_turning_radius", v)}
-                                            min={0.1} max={1.0} step={0.05} precision={2}
+                                            min={0.05} max={1.0} step={0.05} precision={2}
                                             style={{ width: "100%" }} addonAfter="m"
                                         />
                                     </Form.Item>

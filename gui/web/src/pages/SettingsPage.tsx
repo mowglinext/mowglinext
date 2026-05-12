@@ -7,11 +7,11 @@ import {
     UndoOutlined,
 } from "@ant-design/icons";
 import { useApi } from "../hooks/useApi.ts";
-import { App } from "antd";
 import { useIsMobile } from "../hooks/useIsMobile.ts";
 import { useThemeMode } from "../theme/ThemeContext.tsx";
 import { SettingsSection, useSettingsManager } from "../hooks/useSettingsManager.ts";
 import { restartRos2 } from "../utils/containers.ts";
+import { useContainerRestart } from "../hooks/useContainerRestart.ts";
 import { SettingsNav } from "../components/settings/SettingsNav.tsx";
 import { HardwareSection } from "../components/settings/HardwareSection.tsx";
 import { PositioningSection } from "../components/settings/PositioningSection.tsx";
@@ -29,7 +29,6 @@ const { Text } = Typography;
 
 export const SettingsPage = () => {
     const guiApi = useApi();
-    const { notification } = App.useApp();
     const isMobile = useIsMobile();
     const { colors } = useThemeMode();
     const [activeSection, setActiveSection] = useState<SettingsSection>("hardware");
@@ -52,14 +51,17 @@ export const SettingsPage = () => {
         revert,
     } = useSettingsManager();
 
-    const handleRestartRos2 = useCallback(async () => {
-        try {
-            await restartRos2(guiApi);
-            notification.success({ message: "ROS2 container restarted" });
-        } catch (e: any) {
-            notification.error({ message: "Failed to restart ROS2", description: e.message });
-        }
-    }, [guiApi, notification]);
+    // Long-running: container restart + rosbridge reconnect. Disable button
+    // until ROS2 is reachable again to avoid duplicate-click restart storms.
+    const ros2Restart = useContainerRestart({
+        pendingLabel: "Redémarrage ROS2…",
+        successMessage: "ROS2 redémarré",
+        errorMessage: "Échec du redémarrage ROS2",
+    });
+    const handleRestartRos2 = useCallback(
+        () => ros2Restart.run(() => restartRos2(guiApi)),
+        [ros2Restart, guiApi],
+    );
 
     const renderSection = () => {
         switch (activeSection) {
@@ -129,8 +131,15 @@ export const SettingsPage = () => {
                         showIcon
                         message="Restart required to apply saved changes"
                         action={
-                            <Button size="small" type="primary" icon={<ReloadOutlined />} onClick={handleRestartRos2}>
-                                Restart ROS2
+                            <Button
+                                size="small"
+                                type="primary"
+                                icon={<ReloadOutlined />}
+                                onClick={handleRestartRos2}
+                                loading={ros2Restart.pending}
+                                disabled={ros2Restart.pending}
+                            >
+                                {ros2Restart.pending ? ros2Restart.pendingLabel : "Restart ROS2"}
                             </Button>
                         }
                         style={{ marginBottom: 12 }}
@@ -214,8 +223,14 @@ export const SettingsPage = () => {
                     </Button>
                 )}
                 <div style={{ flex: 1 }} />
-                <Button icon={<ReloadOutlined />} onClick={handleRestartRos2} size="small">
-                    Restart ROS2
+                <Button
+                    icon={<ReloadOutlined />}
+                    onClick={handleRestartRos2}
+                    size="small"
+                    loading={ros2Restart.pending}
+                    disabled={ros2Restart.pending}
+                >
+                    {ros2Restart.pending ? ros2Restart.pendingLabel : "Restart ROS2"}
                 </Button>
             </div>
         </div>

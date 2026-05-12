@@ -49,6 +49,25 @@ func TestUnmarshalROSMessage(t *testing.T) {
 		assert.InDelta(t, 3.14, msg.Value, 0.001)
 	})
 
+	// Regression: the GUI sends ROS-style snake_case ("is_navigation_area")
+	// in the request body. With a naive case-insensitive matcher (no
+	// underscore stripping) this silently dropped the field and every
+	// navigation zone saved by the map editor arrived at ROS2 as a
+	// mowing zone. Locking in snake_case → PascalCase here.
+	t.Run("snake_case JSON to PascalCase struct", func(t *testing.T) {
+		jsonBody := `{"name": "nav-zone", "is_navigation_area": true, "value": 0.5}`
+		reader := io.NopCloser(strings.NewReader(jsonBody))
+
+		var msg TestMsg
+		err := unmarshalROSMessage[*TestMsg](reader, &msg)
+		require.NoError(t, err)
+
+		assert.Equal(t, "nav-zone", msg.Name)
+		assert.True(t, msg.IsNavigationArea,
+			"is_navigation_area must round-trip into IsNavigationArea — "+
+				"the GUI sends snake_case and ROS2 expects this flag preserved")
+	})
+
 	t.Run("PascalCase JSON to PascalCase struct", func(t *testing.T) {
 		jsonBody := `{"Name": "area2", "IsNavigationArea": false, "Value": 1.0}`
 		reader := io.NopCloser(strings.NewReader(jsonBody))

@@ -20,6 +20,7 @@ import {
     ThunderboltOutlined,
     CheckOutlined,
     CloseOutlined,
+    ImportOutlined,
 } from "@ant-design/icons";
 import type {MenuInfo} from "rc-menu/lib/interface";
 import AsyncButton from "../../../components/AsyncButton.tsx";
@@ -43,6 +44,7 @@ interface MapToolbarProps {
     onBackupMap: () => void;
     onRestoreMap: () => void;
     onDownloadGeoJSON: () => void;
+    onImportOpenMower: () => void;
     onMowArea: (key: string) => Promise<void>;
     onStart?: () => Promise<void>;
     onHome?: () => Promise<void>;
@@ -62,7 +64,7 @@ export const MapToolbar = ({
     manualMode, useSatellite, mowingAreas, stateName, emergency,
     onEditMap, onToggleSatellite,
     onManualMode, onStopManualMode,
-    onBackupMap, onRestoreMap, onDownloadGeoJSON,
+    onBackupMap, onRestoreMap, onDownloadGeoJSON, onImportOpenMower,
     onMowArea,
     onStart, onHome, onEmergencyOn, onEmergencyOff,
     onAreaRecording, onMowNextArea, onContinueOrPause,
@@ -101,6 +103,7 @@ export const MapToolbar = ({
         {type: "divider"},
         {key: "backup", icon: <DatabaseOutlined />, label: "Backup Map"},
         {key: "restore", icon: <DatabaseOutlined />, label: "Restore Map"},
+        {key: "importOpenMower", icon: <ImportOutlined />, label: "Import from OpenMower"},
         {type: "divider"},
         {key: "download", icon: <DownloadOutlined />, label: "Download GeoJSON"},
     ];
@@ -118,6 +121,7 @@ export const MapToolbar = ({
             case "bladeOff": safeCall(onBladeOff); break;
             case "backup": onBackupMap(); break;
             case "restore": onRestoreMap(); break;
+            case "importOpenMower": onImportOpenMower(); break;
             case "download": onDownloadGeoJSON(); break;
         }
     };

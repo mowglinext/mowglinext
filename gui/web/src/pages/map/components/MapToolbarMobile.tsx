@@ -27,12 +27,12 @@ import {
     PlusOutlined,
     BorderOutlined,
     AimOutlined,
-    EnvironmentOutlined,
     ForwardOutlined,
     PauseOutlined,
     CaretRightOutlined,
     ThunderboltOutlined,
     CheckOutlined,
+    ImportOutlined,
 } from "@ant-design/icons";
 import type {MenuInfo} from "rc-menu/lib/interface";
 import AsyncButton from "../../../components/AsyncButton.tsx";
@@ -64,6 +64,7 @@ interface MapToolbarMobileProps {
     onRestoreMap: () => void;
     onDownloadGeoJSON: () => void;
     onUploadGeoJSON: () => void;
+    onImportOpenMower: () => void;
     onMowArea: (key: string) => Promise<void>;
     selectedFeatureCount?: number;
     onEditSelectedFeature?: () => void;
@@ -75,7 +76,6 @@ interface MapToolbarMobileProps {
     onSubtract?: () => void;
     onSplit?: () => void;
     onPlaceDock?: () => void;
-    onSetDockAtMower?: () => void;
     dockPlacementMode?: boolean;
     stateName?: string;
     emergency?: boolean;
@@ -98,10 +98,10 @@ export const MapToolbarMobile = ({
     historyIndex, editHistoryLength, mowingAreas,
     onEditMap, onSaveMap, onUndo, onRedo, onToggleSatellite,
     onManualMode, onStopManualMode,
-    onBackupMap, onRestoreMap, onDownloadGeoJSON, onUploadGeoJSON,
+    onBackupMap, onRestoreMap, onDownloadGeoJSON, onUploadGeoJSON, onImportOpenMower,
     onMowArea, selectedFeatureCount = 0, onEditSelectedFeature,
     onDrawPolygon, onDrawShape, onDrawEmoji, onTrash, onCombine, onSubtract, onSplit,
-    onPlaceDock, onSetDockAtMower, dockPlacementMode,
+    onPlaceDock, dockPlacementMode,
     stateName, emergency,
     onStart, onHome, onEmergencyOn, onEmergencyOff,
     onAreaRecording, onMowNextArea, onContinueOrPause,
@@ -162,6 +162,7 @@ export const MapToolbarMobile = ({
         {type: "divider"},
         {key: "backup", icon: <DatabaseOutlined />, label: "Backup Map"},
         {key: "restore", icon: <DatabaseOutlined />, label: "Restore Map"},
+        {key: "importOpenMower", icon: <ImportOutlined />, label: "Import from OpenMower"},
         {type: "divider"},
         {key: "download", icon: <DownloadOutlined />, label: "Download GeoJSON"},
         ...(editMap
@@ -182,6 +183,7 @@ export const MapToolbarMobile = ({
             case "bladeOff": safeCall(onBladeOff); break;
             case "backup": onBackupMap(); break;
             case "restore": onRestoreMap(); break;
+            case "importOpenMower": onImportOpenMower(); break;
             case "download": onDownloadGeoJSON(); break;
             case "upload": onUploadGeoJSON(); break;
         }
@@ -291,11 +293,6 @@ export const MapToolbarMobile = ({
                     type={dockPlacementMode ? "primary" : "default"}
                     onClick={onPlaceDock}
                     aria-label="Place dock"
-                />
-                <Button
-                    icon={<EnvironmentOutlined />}
-                    onClick={onSetDockAtMower}
-                    aria-label="Set dock at mower"
                 />
 
                 <Dropdown
