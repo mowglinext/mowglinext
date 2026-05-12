@@ -54,7 +54,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake git pkg-config \
       libeigen3-dev libgdal-dev libgeos++-dev libgeos-dev libgsl-dev \
-      libtinyxml2-dev libpython3-dev python3-dev \
+      libtinyxml2-dev libpython3-dev python3-dev libtbb-dev \
       ros-kilted-ortools-vendor \
  && rm -rf /var/lib/apt/lists/*
 
@@ -151,7 +151,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # /opt/fields2cover-200/lib. -dev variants are needed because
     # mowgli_coverage's find_package pulls in transitive headers via
     # the exported Fields2Cover CMake target.
-    libgdal-dev libgeos++-dev libtinyxml2-dev \
+    libgdal-dev libgeos++-dev libtinyxml2-dev libtbb12 \
     ros-kilted-ortools-vendor \
     # Utilities
     python3-argcomplete \
