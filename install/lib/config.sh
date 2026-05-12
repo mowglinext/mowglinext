@@ -5,7 +5,12 @@
 
 REPO_URL="https://github.com/cedbossneo/mowglinext.git"
 REPO_BRANCH="main"
-IMAGE_TAG="main"
+# IMAGE_TAG selects which GHCR image channel to pull. "main" = stable
+# (built from the main branch), "dev" = iteration channel (built from
+# dev). Can be overridden from docker/.env, a preset, or `--branch=` on
+# the CLI. recompute_image_defaults() rebuilds the *_IMAGE_DEFAULT vars
+# from the live IMAGE_TAG.
+IMAGE_TAG="${IMAGE_TAG:-main}"
 REPO_DIR="${MOWGLI_HOME:-$HOME/mowglinext}"
 DOCKER_SUBDIR="install"
 INSTALL_DIR="${REPO_DIR}/${DOCKER_SUBDIR}"
@@ -15,15 +20,77 @@ FINAL_COMPOSE_FILE="$DOCKER_DIR/docker-compose.yaml"
 FINAL_ENV_FILE="$DOCKER_DIR/.env"
 UDEV_RULES_FILE="/etc/udev/rules.d/50-mowgli.rules"
 
-MOWGLI_ROS2_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/mowgli-ros2:${IMAGE_TAG}"
-GPS_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/gps:${IMAGE_TAG}"
-UNICORE_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/unicore:${IMAGE_TAG}"
-LIDAR_LDLIDAR_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/lidar-ldlidar:${IMAGE_TAG}"
-LIDAR_RPLIDAR_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/lidar-rplidar:${IMAGE_TAG}"
-LIDAR_STL27L_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/lidar-stl27l:${IMAGE_TAG}"
-MAVROS_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/mavros:${IMAGE_TAG}"
-NMEA_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/nmea:${IMAGE_TAG}"
-GUI_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/mowglinext-gui:${IMAGE_TAG}"
+recompute_image_defaults() {
+  MOWGLI_ROS2_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/mowgli-ros2:${IMAGE_TAG}"
+  GPS_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/gps:${IMAGE_TAG}"
+  UNICORE_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/unicore:${IMAGE_TAG}"
+  LIDAR_LDLIDAR_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/lidar-ldlidar:${IMAGE_TAG}"
+  LIDAR_RPLIDAR_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/lidar-rplidar:${IMAGE_TAG}"
+  LIDAR_STL27L_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/lidar-stl27l:${IMAGE_TAG}"
+  MAVROS_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/mavros:${IMAGE_TAG}"
+  NMEA_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/nmea:${IMAGE_TAG}"
+  GUI_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/mowglinext-gui:${IMAGE_TAG}"
+}
+
+is_valid_image_tag() {
+  case "${1:-}" in
+    main|dev) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+select_image_channel() {
+  # --branch= flag wins. Preset files (web composer) can also pin IMAGE_TAG.
+  if [[ "${IMAGE_CHANNEL_PRESET:-false}" == "true" ]]; then
+    info "Image channel pre-selected: ${IMAGE_TAG}"
+    recompute_image_defaults
+    return 0
+  fi
+
+  if [[ "${PRESET_LOADED:-false}" == "true" ]] \
+    && [ "${STATE_ACTIVE_PRESET_COUNT:-0}" -gt 0 ] \
+    && declare -F preset_key_loaded >/dev/null \
+    && preset_key_loaded IMAGE_TAG; then
+    info "Image channel pre-selected from preset: ${IMAGE_TAG}"
+    recompute_image_defaults
+    return 0
+  fi
+
+  local previous="${IMAGE_TAG:-main}"
+  # If IMAGE_TAG isn't recorded in .env but image refs are, infer the channel
+  # from those — otherwise upgrading users who already pulled :dev would get
+  # silently flipped to :main just because the new key didn't exist yet.
+  if ! is_valid_image_tag "$previous" || [[ "$previous" == "main" && "${GPS_IMAGE:-${MOWGLI_ROS2_IMAGE:-}}" == *":dev" ]]; then
+    if [[ "${GPS_IMAGE:-${MOWGLI_ROS2_IMAGE:-}}" == *":dev" ]]; then
+      previous="dev"
+    else
+      previous="main"
+    fi
+  fi
+
+  echo ""
+  echo -e "${CYAN:-}${BOLD:-}Image channel${NC:-}"
+  echo "  1) main — stable images built from the main branch (default)"
+  echo "  2) dev  — iteration channel built from the dev branch"
+  echo ""
+  local default_choice="1"
+  [[ "$previous" == "dev" ]] && default_choice="2"
+  prompt "Choose" "$default_choice"
+
+  case "$REPLY" in
+    1|main) IMAGE_TAG="main" ;;
+    2|dev)  IMAGE_TAG="dev" ;;
+    *)
+      warn "Invalid choice, keeping ${previous}"
+      IMAGE_TAG="$previous"
+      ;;
+  esac
+
+  info "Image channel: ${IMAGE_TAG}"
+  recompute_image_defaults
+}
+
+recompute_image_defaults
 
 CHECK_ONLY=false
 CLI_PRESET=false
@@ -235,11 +302,12 @@ compose_gnss_service_name() {
   local backend="${1:-$(effective_gnss_backend)}"
 
   case "$backend" in
-    gps)
+    gps|ublox)
+      # ublox merged into the sensors/gps container 2026-05-12. The legacy
+      # libusb-based "gnss_ublox" service was removed because the serial
+      # transport (sensors/gps + start_gps.sh) is the canonical path since
+      # the 2026-04-26 libusb→serial fix (project_gps_serial_transport_fix.md).
       printf 'gps\n'
-      ;;
-    ublox)
-      printf 'gnss_ublox\n'
       ;;
     unicore)
       printf 'gnss_unicore\n'
@@ -273,6 +341,16 @@ parse_args() {
         ;;
       --lang=*)
         MOWGLI_LANG="${1#*=}"
+        ;;
+      --branch=*|--channel=*|--image-tag=*)
+        local tag_spec="${1#*=}"
+        if ! is_valid_image_tag "$tag_spec"; then
+          error "Unknown image channel: $tag_spec (expected main or dev)"
+          exit 1
+        fi
+        IMAGE_TAG="$tag_spec"
+        IMAGE_CHANNEL_PRESET=true
+        recompute_image_defaults
         ;;
       --gnss=*)
         CLI_PRESET=true

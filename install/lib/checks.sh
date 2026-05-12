@@ -86,9 +86,13 @@ check_devices() {
     devices+=("${MAVROS_PORT:-/dev/mavros}:Pixhawk MAVROS serial")
   else
     devices+=("/dev/mowgli:Mowgli STM32 board")
-    if [[ "$gnss_backend" != "ublox" ]]; then
-      devices+=("${GPS_PORT}:GPS receiver")
+    # Prefer the by-id symlink for USB receivers — it's what the container
+    # uses via GPS_DEVICE_PATH and is always created by systemd-udev.
+    local gps_device="${GPS_PORT}"
+    if [[ "${GPS_CONNECTION:-}" == "usb" ]] && [[ -n "${GPS_BY_ID:-}" ]]; then
+      gps_device="${GPS_BY_ID}"
     fi
+    devices+=("${gps_device}:GPS receiver")
   fi
 
   if [[ "${LIDAR_ENABLED}" == "true" && "${LIDAR_TYPE}" != "none" ]]; then
@@ -143,16 +147,7 @@ check_devices() {
     fi
   done
 
-  if [[ "${HARDWARE_BACKEND:-mowgli}" != "mavros" && "$gnss_backend" == "ublox" ]]; then
-    if [[ -n "${UBLOX_DEVICE_SERIAL_STRING:-}" ]]; then
-      info "u-blox USB serial selector: ${UBLOX_DEVICE_SERIAL_STRING}"
-    else
-      fail "u-blox USB serial selector missing"
-      add_issue "GNSS_BACKEND=ublox requires UBLOX_DEVICE_SERIAL_STRING in docker/.env. Re-run $(installer_main_command) and provide the dedicated u-blox USB serial string."
-    fi
-  fi
-
-  if [[ "${HARDWARE_BACKEND:-mowgli}" != "mavros" && "$gnss_backend" != "ublox" && "${GPS_CONNECTION:-}" == "uart" && -L "${GPS_PORT}" && -n "${GPS_UART_DEVICE:-}" ]]; then
+  if [[ "${HARDWARE_BACKEND:-mowgli}" != "mavros" && "${GPS_CONNECTION:-}" == "uart" && -L "${GPS_PORT}" && -n "${GPS_UART_DEVICE:-}" ]]; then
     local gps_target
     gps_target="$(readlink -f "$GPS_PORT")"
     if [[ "$gps_target" != "$GPS_UART_DEVICE" ]]; then
@@ -161,7 +156,7 @@ check_devices() {
     fi
   fi
 
-  if [[ "${HARDWARE_BACKEND:-mowgli}" != "mavros" && "$gnss_backend" != "ublox" && "${GPS_CONNECTION:-}" == "usb" && -L "${GPS_PORT}" && -n "${GPS_BY_ID:-}" && -e "${GPS_BY_ID}" ]]; then
+  if [[ "${HARDWARE_BACKEND:-mowgli}" != "mavros" && "${GPS_CONNECTION:-}" == "usb" && -L "${GPS_PORT}" && -n "${GPS_BY_ID:-}" && -e "${GPS_BY_ID}" && "${GPS_PORT}" != "${GPS_BY_ID}" ]]; then
     local gps_target
     local gps_expected
     gps_target="$(readlink -f "$GPS_PORT")"

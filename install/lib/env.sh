@@ -67,6 +67,17 @@ setup_env() {
   : "${TFLUNA_EDGE_UART_DEVICE:=/dev/ttyAMA2}"
   : "${TFLUNA_EDGE_BAUD:=115200}"
 
+  # Image channel — re-validate IMAGE_TAG (might have been loaded from .env
+  # by load_env_defaults_file or set by --branch=/preset) and rebuild the
+  # *_IMAGE_DEFAULT vars to match. mowglinext.sh unsets all *_IMAGE values
+  # before this step, so the defaults below are what gets written.
+  : "${IMAGE_TAG:=main}"
+  if ! is_valid_image_tag "$IMAGE_TAG"; then
+    warn "Invalid IMAGE_TAG=${IMAGE_TAG} in environment — defaulting to main"
+    IMAGE_TAG="main"
+  fi
+  recompute_image_defaults
+
   # Images — select LiDAR image based on type
   : "${MOWGLI_ROS2_IMAGE:=${MOWGLI_ROS2_IMAGE_DEFAULT}}"
   : "${GPS_IMAGE:=${GPS_IMAGE_DEFAULT}}"
@@ -117,6 +128,7 @@ setup_env() {
   upsert_env_key "$env_file" "MOWER_IP" "$MOWER_IP"
   upsert_env_key "$env_file" "DISABLE_BLUETOOTH" "$DISABLE_BLUETOOTH"
   upsert_env_key "$env_file" "ENABLE_FOXGLOVE" "$ENABLE_FOXGLOVE"
+  upsert_env_key "$env_file" "IMAGE_TAG" "$IMAGE_TAG"
 
   upsert_env_key "$env_file" "GNSS_BACKEND" "$GNSS_BACKEND"
   upsert_env_key "$env_file" "GPS_CONNECTION" "$GPS_CONNECTION"

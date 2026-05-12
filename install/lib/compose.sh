@@ -63,9 +63,6 @@ build_compose_stack() {
       gps)
         COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.gps.yml")
         ;;
-      gnss_ublox)
-        COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.ublox.yaml")
-        ;;
       gnss_unicore)
         COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.unicore.yaml")
         ;;

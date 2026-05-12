@@ -117,22 +117,23 @@ build_dynamic_udev_rules() {
   fi
 
   # GPS principal
-  if [ "$gnss_backend" != "disabled" ] && [ "$gnss_backend" != "ublox" ]; then
+  # The /dev/gps symlink is a *convenience* for manual debugging — the
+  # sensors/gps container talks to the F9P via the /dev/serial/by-id/...
+  # path passed in GPS_DEVICE_PATH (always created by systemd-udev), so
+  # the absence of this rule no longer breaks the container.
+  if [ "$gnss_backend" != "disabled" ]; then
     if [ "${GPS_CONNECTION:-usb}" = "uart" ] && [ -n "${GPS_UART_DEVICE:-}" ]; then
       echo "KERNEL==\"$(basename "$GPS_UART_DEVICE")\", SYMLINK+=\"gps\", MODE=\"0666\""
     elif [ -n "${GPS_BY_ID:-}" ] && [ -e "${GPS_BY_ID}" ]; then
       emit_by_id_udev_rule "$GPS_BY_ID" "gps"
     elif [ "${HARDWARE_BACKEND:-mowgli}" != "mavros" ]; then
       case "$gnss_backend" in
-        gps)
+        gps|ublox)
           if [[ "$gps_protocol" != "NMEA" ]]; then
             by_id_path="$(find_serial_by_id "*u-blox*" "*ublox*" || true)"
           else
             by_id_path=""
           fi
-          ;;
-        ublox)
-          by_id_path="$(find_serial_by_id "*u-blox*" "*ublox*" || true)"
           ;;
         unicore)
           by_id_path=""
@@ -208,7 +209,7 @@ install_udev_rules() {
 
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
 
-  if [ "$gnss_backend" != "disabled" ] && [ "$gnss_backend" != "ublox" ] && [ "${GPS_CONNECTION:-usb}" = "uart" ] && [ -n "${GPS_UART_DEVICE:-}" ]; then
+  if [ "$gnss_backend" != "disabled" ] && [ "${GPS_CONNECTION:-usb}" = "uart" ] && [ -n "${GPS_UART_DEVICE:-}" ]; then
     if [ ! -e "$GPS_UART_DEVICE" ]; then
       warn "GPS UART device $GPS_UART_DEVICE does not exist yet (UART overlay needs reboot)"
       needs_reboot=true
@@ -217,13 +218,16 @@ install_udev_rules() {
     else
       info "GPS symlink: ${GPS_PORT:-/dev/gps} -> $(readlink -f "${GPS_PORT:-/dev/gps}")"
     fi
-  elif [ "$gnss_backend" != "disabled" ] && [ "$gnss_backend" != "ublox" ] && [ -n "${GPS_BY_ID:-}" ]; then
+  elif [ "$gnss_backend" != "disabled" ] && [ -n "${GPS_BY_ID:-}" ]; then
     if [ ! -e "${GPS_BY_ID}" ]; then
       warn "GPS by-id device ${GPS_BY_ID} does not exist"
-    elif [ ! -e "${GPS_PORT:-/dev/gps}" ]; then
-      warn "GPS symlink ${GPS_PORT:-/dev/gps} not created from GPS_BY_ID — check udev rules"
     else
-      info "GPS symlink: ${GPS_PORT:-/dev/gps} -> $(readlink -f "${GPS_PORT:-/dev/gps}")"
+      # /dev/gps udev rule is now optional — start_gps.sh reads the by-id
+      # path directly via GPS_DEVICE_PATH. Just confirm GPS_PORT resolves.
+      info "GPS device: ${GPS_BY_ID} -> $(readlink -f "${GPS_BY_ID}")"
+      if [ -e "${GPS_PORT:-/dev/gps}" ] && [ "${GPS_PORT:-/dev/gps}" != "${GPS_BY_ID}" ]; then
+        info "GPS symlink: ${GPS_PORT:-/dev/gps} -> $(readlink -f "${GPS_PORT:-/dev/gps}")"
+      fi
     fi
   fi
 

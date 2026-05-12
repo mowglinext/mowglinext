@@ -100,6 +100,11 @@ main() {
     # stale paths from older installs (e.g. mowgli-docker, openmower-gui).
     unset MOWGLI_ROS2_IMAGE GPS_IMAGE UNICORE_IMAGE LIDAR_IMAGE MAVROS_IMAGE NMEA_IMAGE GUI_IMAGE
 
+    # Image channel selection (main = stable, dev = iteration). Uses the
+    # previous IMAGE_TAG from .env as the default. Skipped if a preset or
+    # --branch= flag already set it.
+    select_image_channel
+
     progress_run_interactive 1 "$TOTAL_STEPS" "Updating system" \
       run_system_update
 

@@ -124,17 +124,33 @@ configure_gps() {
     : "${GPS_DEBUG_PORT:=/dev/gps_debug}"
     : "${GPS_DEBUG_BAUD:=115200}"
 
+    # For USB connections, prefer the by-id symlink as GPS_PORT — it's always
+    # created by systemd-udev and is what start_gps.sh expects via
+    # GPS_DEVICE_PATH inside the container. /dev/gps would require an extra
+    # udev rule that doesn't fire on every distro.
+    if [[ "${GPS_CONNECTION}" == "usb" ]] && [[ -n "${GPS_BY_ID:-}" ]]; then
+      GPS_PORT="${GPS_BY_ID}"
+    fi
+
     if [[ "${GNSS_BACKEND}" == "ublox" ]]; then
-      if [[ "${GPS_CONNECTION}" != "usb" ]]; then
-        error "GNSS_BACKEND=ublox only supports the dedicated USB/libusb driver. Use GNSS_BACKEND=gps with GPS_PROTOCOL=UBX for UART receivers."
-        return 1
+      # The legacy libusb-only "ublox" backend was merged into the sensors/gps
+      # serial-transport path 2026-05-12 (see compose_gnss_service_name). The
+      # label survives for back-compat with existing presets / .env files, but
+      # at runtime it's equivalent to GNSS_BACKEND=gps with GPS_PROTOCOL=UBX
+      # over USB by-id.
+      GPS_CONNECTION="usb"
+      GPS_PROTOCOL="UBX"
+      # If an older .env still carries UBLOX_DEVICE_SERIAL_STRING pointing at a
+      # /dev/serial/by-id/... path (which is what the migration emitted), use
+      # it to populate GPS_PORT / GPS_BY_ID. Otherwise demand the canonical
+      # GPS_PORT / GPS_BY_ID like the unicore preset.
+      if [[ -z "${GPS_BY_ID:-}" && "${UBLOX_DEVICE_SERIAL_STRING:-}" =~ ^/dev/serial/by-id/ ]]; then
+        GPS_BY_ID="${UBLOX_DEVICE_SERIAL_STRING}"
+        GPS_PORT="${UBLOX_DEVICE_SERIAL_STRING}"
       fi
-      if [[ "${GPS_PROTOCOL}" != "UBX" ]]; then
-        error "GNSS_BACKEND=ublox requires GPS_PROTOCOL=UBX."
-        return 1
-      fi
-      if [[ "$ublox_serial_preconfigured" != "true" || -z "${UBLOX_DEVICE_SERIAL_STRING:-}" ]]; then
-        error "UBLOX_DEVICE_SERIAL_STRING is required for GNSS_BACKEND=ublox. The dedicated USB/libusb driver does not use GPS_PORT=/dev/gps."
+      UBLOX_DEVICE_SERIAL_STRING=""
+      if [[ -z "${GPS_BY_ID:-}" ]]; then
+        error "GPS_BY_ID is required for GNSS_BACKEND=ublox (USB by-id path to the F9P)."
         return 1
       fi
     fi
@@ -153,7 +169,7 @@ configure_gps() {
       GPS_UART_DEVICE="$REPLY"
     fi
 
-    if [[ "${GNSS_BACKEND}" != "ublox" && "$gps_baud_preconfigured" != "true" ]]; then
+    if [[ "$gps_baud_preconfigured" != "true" ]]; then
       local probe_port=""
       if [[ "${GPS_CONNECTION}" == "uart" ]]; then
         probe_port="${GPS_UART_DEVICE:-}"
@@ -223,21 +239,21 @@ configure_gps() {
     : "${GPS_DEBUG_BAUD:=115200}"
 
     if [[ "${GNSS_BACKEND}" == "ublox" ]]; then
+      # ublox now uses the same sensors/gps serial-transport container as
+      # GNSS_BACKEND=gps + GPS_PROTOCOL=UBX over USB by-id (see
+      # compose_gnss_service_name and start_gps.sh:GPS_DEVICE_PATH).
       GPS_CONNECTION="usb"
       GPS_PROTOCOL="UBX"
       GPS_UART_DEVICE=""
-      GPS_BY_ID=""
       GPS_BAUD="921600"
+      UBLOX_DEVICE_SERIAL_STRING=""
 
       echo ""
-      info "GNSS_BACKEND=ublox uses the dedicated USB/libusb u-blox driver."
+      info "GNSS_BACKEND=ublox: dedicated u-blox container, serial transport over USB by-id."
       info "UART u-blox receivers should use GNSS_BACKEND=gps with GPS_PROTOCOL=UBX."
-      prompt "u-blox USB serial string?" "${UBLOX_DEVICE_SERIAL_STRING:-}"
-      UBLOX_DEVICE_SERIAL_STRING="$REPLY"
-      if [[ -z "${UBLOX_DEVICE_SERIAL_STRING:-}" ]]; then
-        error "UBLOX_DEVICE_SERIAL_STRING is required for GNSS_BACKEND=ublox"
-        return 1
-      fi
+      pick_serial_by_id "${GPS_BY_ID:-}" || return 1
+      GPS_BY_ID="$REPLY"
+      GPS_PORT="$GPS_BY_ID"
     else
       echo ""
       echo "$MSG_GPS_CONNECTION"
@@ -250,14 +266,14 @@ configure_gps() {
         1)
           GPS_CONNECTION="usb"
           GPS_UART_DEVICE=""
-          if [ "$GNSS_BACKEND" = "unicore" ]; then
-            pick_serial_by_id "${GPS_BY_ID:-}" || return 1
-            GPS_BY_ID="$REPLY"
-          fi
+          pick_serial_by_id "${GPS_BY_ID:-}" || return 1
+          GPS_BY_ID="$REPLY"
+          GPS_PORT="$GPS_BY_ID"
           ;;
         2)
           GPS_CONNECTION="uart"
           GPS_BY_ID=""
+          GPS_PORT="/dev/gps"
           pick_uart_port "/dev/ttyAMA4"
           GPS_UART_DEVICE="$REPLY"
           ;;

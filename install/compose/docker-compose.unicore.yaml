@@ -40,6 +40,11 @@ services:
     environment:
       <<: *ros2-env
       HARDWARE_BACKEND: ${HARDWARE_BACKEND}
+      # See docker-compose.gps.yml: GPS_DEVICE_PATH lets the container use
+      # /dev/serial/by-id/... directly without relying on the /dev/gps symlink.
+      GPS_DEVICE_PATH: ${GPS_PORT:-/dev/gps}
+      GPS_PROTOCOL: ${GPS_PROTOCOL:-UBX}
+      GPS_BAUD: ${GPS_BAUD:-921600}
     volumes:
       - /dev:/dev
       - ./docker/config/mowgli:/config:ro
