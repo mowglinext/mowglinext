@@ -80,6 +80,7 @@ reset_profile_env() {
   UNICORE_ENABLE_RF=""
   UNICORE_ENABLE_JAMMING=""
   UNICORE_ENABLE_HARDWARE=""
+  UNICORE_ENABLE_GGAH=""
   UNICORE_ENABLE_RAW_OBSERVATIONS=""
 }
 
@@ -293,6 +294,45 @@ assert_eq "GPHPR formats as direct period" "GPHPR 1" "$(unicore_format_log_comma
 assert_eq "GPHPR2 formats as onchanged" "GPHPR2 ONCHANGED" "$(unicore_format_log_command "GPHPR2" "1")"
 assert_eq "GPGGA keeps log ontime" "LOG GPGGA ONTIME 0.2" "$(unicore_format_log_command "GPGGA" "0.2")"
 assert_eq "PVTSLNA keeps log ontime" "LOG PVTSLNA ONTIME 0.2" "$(unicore_format_log_command "PVTSLNA" "0.2")"
+
+reset_profile_env
+UNICORE_PROFILE="debug"
+UNICORE_ENABLE_SATELLITES="true"
+UNICORE_OUTPUT_FORMAT="ascii"
+unicore_apply_profile_defaults
+gsv_schedule="$(build_log_commands)"
+assert_contains "satellite schedule includes GPGSV once" "GPGSV 1" "$gsv_schedule"
+assert_not_contains "satellite schedule drops GLGSV command" "GLGSV" "$gsv_schedule"
+assert_not_contains "satellite schedule drops GAGSV command" "GAGSV" "$gsv_schedule"
+assert_not_contains "satellite schedule drops GBGSV command" "GBGSV" "$gsv_schedule"
+
+reset_profile_env
+UNICORE_PROFILE="runtime"
+UNICORE_OUTPUT_FORMAT="hybrid"
+unicore_apply_profile_defaults
+RUNTIME_LOGS="$(build_log_commands)"
+assert_eq "runtime main log period default" "0.1" "$UNICORE_MAIN_LOG_PERIOD"
+assert_eq "runtime bestnav log period default" "0.1" "$UNICORE_BESTNAV_LOG_PERIOD"
+assert_eq "runtime satellite log period default" "2" "$UNICORE_SATELLITE_LOG_PERIOD"
+assert_eq "runtime rf log period default" "2" "$UNICORE_RF_LOG_PERIOD"
+assert_contains "runtime hybrid includes PVTSLNA" "PVTSLNA" "$RUNTIME_LOGS"
+assert_contains "runtime hybrid includes PVTSLNB" "PVTSLNB" "$RUNTIME_LOGS"
+assert_contains "runtime hybrid includes BESTNAVA 0.1" $'BESTNAVA 0.1' "$RUNTIME_LOGS"
+assert_contains "runtime hybrid includes BESTNAVB 0.1" $'BESTNAVB 0.1' "$RUNTIME_LOGS"
+assert_contains "runtime includes BESTSATA" "BESTSATA" "$RUNTIME_LOGS"
+assert_contains "runtime includes BESTSATB" "BESTSATB" "$RUNTIME_LOGS"
+assert_contains "runtime includes AGCA" "AGCA" "$RUNTIME_LOGS"
+assert_contains "runtime includes AGCB" "AGCB" "$RUNTIME_LOGS"
+assert_not_contains "runtime excludes raw by default" "OBSVMCMP" "$RUNTIME_LOGS"
+assert_not_contains "runtime excludes GPGGAH by default" "GPGGAH" "$RUNTIME_LOGS"
+
+reset_profile_env
+UNICORE_PROFILE="runtime"
+UNICORE_OUTPUT_FORMAT="hybrid"
+UNICORE_ENABLE_GGAH="true"
+unicore_apply_profile_defaults
+RUNTIME_GGAH_LOGS="$(build_log_commands)"
+assert_contains "runtime can enable GPGGAH" "GPGGAH 0.1" "$RUNTIME_GGAH_LOGS"
 
 reset_mocks
 MOCK_COMMAND_RESPONSES["LOG GPGGA ONTIME 0.2"]="<OK"

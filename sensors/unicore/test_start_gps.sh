@@ -111,6 +111,26 @@ assert_contains "survey hybrid enables binary RF diag" "use_binary_rf_diag:=true
 assert_contains "survey hybrid enables binary hardware diag" "use_binary_hw_diag:=true" "$SURVEY_HYBRID_ARGS"
 assert_contains "survey hybrid enables binary jamming diag" "use_binary_jamming_diag:=true" "$SURVEY_HYBRID_ARGS"
 
+RUNTIME_HYBRID_ARGS="$(
+  PATH="$WORKDIR/bin:$PATH" \
+  ROS2_LOG_PATH="$WORKDIR/runtime_hybrid.log" \
+  MOWGLI_CONFIG_PATH="$WORKDIR/mowgli_robot.yaml" \
+  UNICORE_PROFILE="runtime" \
+  UNICORE_OUTPUT_FORMAT="hybrid" \
+  "$SCRIPT_DIR/start_gps.sh" >/dev/null 2>&1 || true
+  cat "$WORKDIR/runtime_hybrid.log"
+)"
+assert_contains "runtime hybrid enables binary transport" "enable_unicore_binary:=true" "$RUNTIME_HYBRID_ARGS"
+assert_contains "runtime hybrid keeps nav on ascii by default" "use_binary_nav:=false" "$RUNTIME_HYBRID_ARGS"
+assert_contains "runtime hybrid enables binary RTK diag" "use_binary_rtk_diag:=true" "$RUNTIME_HYBRID_ARGS"
+assert_contains "runtime hybrid enables binary RTCM diag" "use_binary_rtcm_diag:=true" "$RUNTIME_HYBRID_ARGS"
+assert_contains "runtime hybrid enables binary satellite diag" "use_binary_satellite_diag:=true" "$RUNTIME_HYBRID_ARGS"
+assert_contains "runtime hybrid enables binary RF diag" "use_binary_rf_diag:=true" "$RUNTIME_HYBRID_ARGS"
+assert_contains "runtime hybrid enables binary hardware diag" "use_binary_hw_diag:=true" "$RUNTIME_HYBRID_ARGS"
+assert_contains "runtime hybrid enables binary jamming diag" "use_binary_jamming_diag:=true" "$RUNTIME_HYBRID_ARGS"
+assert_contains "runtime hybrid disables raw observation diag" "enable_raw_observation_diag:=false" "$RUNTIME_HYBRID_ARGS"
+assert_contains "runtime hybrid disables binary raw observations" "use_binary_raw_observations:=false" "$RUNTIME_HYBRID_ARGS"
+
 HIGH_PRECISION_HYBRID_ARGS="$(
   PATH="$WORKDIR/bin:$PATH" \
   ROS2_LOG_PATH="$WORKDIR/high_precision_hybrid.log" \

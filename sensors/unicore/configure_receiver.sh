@@ -55,6 +55,7 @@ UNICORE_ENABLE_SATELLITES="${UNICORE_ENABLE_SATELLITES:-}"
 UNICORE_ENABLE_RF="${UNICORE_ENABLE_RF:-}"
 UNICORE_ENABLE_JAMMING="${UNICORE_ENABLE_JAMMING:-}"
 UNICORE_ENABLE_HARDWARE="${UNICORE_ENABLE_HARDWARE:-}"
+UNICORE_ENABLE_GGAH="${UNICORE_ENABLE_GGAH:-}"
 UNICORE_ENABLE_RAW_OBSERVATIONS="${UNICORE_ENABLE_RAW_OBSERVATIONS:-}"
 UNICORE_LAST_SERIAL_COMMAND="${UNICORE_LAST_SERIAL_COMMAND:-}"
 UNICORE_LAST_COMMAND_RESPONSE="${UNICORE_LAST_COMMAND_RESPONSE:-}"
@@ -92,7 +93,7 @@ unicore_bool_string() {
 
 unicore_normalize_profile() {
   case "${1:-normal}" in
-    normal|debug|survey|high_precision)
+    normal|runtime|debug|survey|high_precision)
       printf '%s\n' "${1:-normal}"
       ;;
     *)
@@ -340,6 +341,9 @@ unicore_log_syntax_for_message() {
     RTCMSTATUSA|RTCMSTATUSB|GPHPR2)
       printf '%s\n' "unicore_onchanged"
       ;;
+    GPGGAH)
+      printf '%s\n' "unicore_direct_period"
+      ;;
     *)
       printf '%s\n' "nmea_log_ontime"
       ;;
@@ -350,7 +354,7 @@ unicore_is_known_log_message() {
   local message="${1:?unicore_is_known_log_message: missing message}"
 
   case "$message" in
-    GPGGA|PVTSLNA|PVTSLNB|BESTNAVA|BESTNAVB|GPHPR|GPHPR2|RTKSTATUSA|RTKSTATUSB|RTCMSTATUSA|RTCMSTATUSB|BESTSATA|BESTSATB|SATSINFOA|SATSINFOB|GPGSV|GLGSV|GAGSV|GBGSV|AGCA|AGCB|HWSTATUSA|HWSTATUSB|JAMSTATUSA|JAMSTATUSB|FREQJAMSTATUSA|FREQJAMSTATUSB|OBSVMCMPA|OBSVMCMPB)
+    GPGGA|GPGGAH|PVTSLNA|PVTSLNB|BESTNAVA|BESTNAVB|GPHPR|GPHPR2|RTKSTATUSA|RTKSTATUSB|RTCMSTATUSA|RTCMSTATUSB|BESTSATA|BESTSATB|SATSINFOA|SATSINFOB|GPGSV|AGCA|AGCB|HWSTATUSA|HWSTATUSB|JAMSTATUSA|JAMSTATUSB|FREQJAMSTATUSA|FREQJAMSTATUSB|OBSVMCMPA|OBSVMCMPB)
       return 0
       ;;
     *)
@@ -424,6 +428,12 @@ unicore_profile_default_binary_consumer() {
   fi
 
   case "$(unicore_normalize_profile "$profile"):$consumer" in
+    runtime:nav)
+      printf '%s\n' "false"
+      ;;
+    runtime:rtk|runtime:satellite|runtime:rtcm|runtime:rf|runtime:hw|runtime:jamming)
+      printf '%s\n' "true"
+      ;;
     survey:nav)
       printf '%s\n' "false"
       ;;
@@ -450,6 +460,12 @@ unicore_profile_default_period() {
     normal:satellite) printf '%s\n' "1" ;;
     normal:rf) printf '%s\n' "1" ;;
     normal:raw) printf '%s\n' "5" ;;
+    runtime:main) printf '%s\n' "0.1" ;;
+    runtime:bestnav) printf '%s\n' "0.1" ;;
+    runtime:diagnostic) printf '%s\n' "1" ;;
+    runtime:satellite) printf '%s\n' "2" ;;
+    runtime:rf) printf '%s\n' "2" ;;
+    runtime:raw) printf '%s\n' "5" ;;
     debug:main) printf '%s\n' "0.2" ;;
     debug:bestnav) printf '%s\n' "0.2" ;;
     debug:diagnostic) printf '%s\n' "1" ;;
@@ -491,6 +507,9 @@ unicore_profile_default_flag() {
     high_precision:satellites|high_precision:rf|high_precision:jamming|high_precision:hardware)
       printf '%s\n' "true"
       ;;
+    runtime:satellites|runtime:rf|runtime:jamming|runtime:hardware)
+      printf '%s\n' "true"
+      ;;
     *)
       return 1
       ;;
@@ -511,6 +530,7 @@ unicore_apply_profile_defaults() {
   UNICORE_ENABLE_JAMMING="${UNICORE_ENABLE_JAMMING:-$(unicore_profile_default_flag "$UNICORE_PROFILE" jamming)}"
   UNICORE_ENABLE_HARDWARE="${UNICORE_ENABLE_HARDWARE:-$(unicore_profile_default_flag "$UNICORE_PROFILE" hardware)}"
   UNICORE_ENABLE_RAW_OBSERVATIONS="${UNICORE_ENABLE_RAW_OBSERVATIONS:-false}"
+  UNICORE_ENABLE_GGAH="${UNICORE_ENABLE_GGAH:-false}"
 
   if unicore_is_truthy "$UNICORE_ENABLE_RAW_OBSERVATIONS" &&
      ! unicore_profile_supports_raw "$UNICORE_PROFILE"; then
@@ -798,6 +818,9 @@ build_base_config_commands() {
 
 build_log_commands() {
   unicore_emit_ascii_message_log "GPGGA" "${UNICORE_MAIN_LOG_PERIOD}"
+  if unicore_is_truthy "${UNICORE_ENABLE_GGAH:-false}"; then
+    unicore_emit_ascii_message_log "GPGGAH" "${UNICORE_MAIN_LOG_PERIOD}"
+  fi
   unicore_emit_paired_message_log "PVTSLNA" "PVTSLNB" "${UNICORE_MAIN_LOG_PERIOD}"
   unicore_emit_paired_message_log "BESTNAVA" "BESTNAVB" "${UNICORE_BESTNAV_LOG_PERIOD}"
   unicore_emit_ascii_message_log "GPHPR" "${UNICORE_MAIN_LOG_PERIOD}"
