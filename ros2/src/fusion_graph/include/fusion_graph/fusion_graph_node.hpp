@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -72,8 +73,14 @@ private:
   // Publish TF map->odom and /odometry/filtered_map.
   void PublishOutputs(const TickOutput& out);
 
+  // Launch GraphManager::Save on a detached worker. No-op if a
+  // previous async save is still running. `reason` is logged.
+  void DispatchAsyncSave(const char* reason);
+
   // ── Members ────────────────────────────────────────────────────────
-  std::unique_ptr<GraphManager> graph_;
+  // shared_ptr (not unique_ptr) so background save / rebase threads
+  // captured by-value keep the GraphManager alive past node teardown.
+  std::shared_ptr<GraphManager> graph_;
   std::unique_ptr<ScanMatcher> scan_matcher_;
   bool use_scan_matching_ = false;
   bool use_magnetometer_ = false;
@@ -203,6 +210,20 @@ private:
   uint64_t scans_received_ = 0;
   uint64_t scan_matches_ok_ = 0;
   uint64_t scan_matches_fail_ = 0;
+
+  // In-flight guards for the async maintenance jobs. Save and rebase
+  // each run in a detached worker so the executor callback returns
+  // immediately; the atomic flag prevents a second worker from
+  // launching while the first is still running. (Save would race on
+  // the output files; rebase is internally guarded too but skipping
+  // here avoids paying the snapshot cost for nothing.)
+  // shared_ptr because a detached worker may outlive the node at
+  // shutdown — the worker captures this shared_ptr by value and
+  // writes false on completion without touching `this`.
+  std::shared_ptr<std::atomic<bool>> save_in_flight_ =
+      std::make_shared<std::atomic<bool>>(false);
+  std::shared_ptr<std::atomic<bool>> rebase_in_flight_ =
+      std::make_shared<std::atomic<bool>>(false);
 };
 
 }  // namespace fusion_graph

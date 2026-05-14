@@ -390,6 +390,23 @@ private:
   int ticks_since_cov_ = 0;
   std::vector<std::pair<uint64_t, uint64_t>> loop_closure_edges_;
 
+  // ── Async-rebase pipeline ───────────────────────────────────────
+  // RebaseISAM2 rebuilds the iSAM2 Bayes tree from scratch with one
+  // PriorFactor per existing variable. For a 50k-node graph that
+  // update() call is ~1 s, and holding mu_ for that long stalls the
+  // tick that publishes map→odom (observed 2026-05-14, caused
+  // DockRobot to abort with `Transform data too old`). The fix is to
+  // do the heavy iSAM2 rebuild OUTSIDE the lock: phase 1 snapshots
+  // current_estimate_ under mu_; phase 2 builds the fresh iSAM2 on
+  // that snapshot without holding mu_; phase 3 takes mu_ briefly to
+  // replay anything Tick() added in the meantime and atomically swap
+  // isam_. Tick() accumulates its post-snapshot factors/values into
+  // rebase_pending_factors_ / rebase_pending_values_ when
+  // rebase_in_progress_ is true.
+  bool rebase_in_progress_ = false;
+  gtsam::NonlinearFactorGraph rebase_pending_factors_;
+  gtsam::Values rebase_pending_values_;
+
   // Scan storage. Map keeps memory bounded by the number of nodes
   // (we never delete; persistence drops everything to disk and a
   // reboot re-loads). Eigen::aligned_allocator is unnecessary for
@@ -402,6 +419,12 @@ private:
   // Internal — actually creates the node and runs iSAM2. Caller must
   // hold mu_.
   TickOutput CreateNodeLocked(double now_s);
+
+  // Internal — wrap isam_.update so any factors/values added while an
+  // async rebase is in progress are also captured in the pending
+  // buffer (replayed onto the fresh iSAM2 before the swap). Caller
+  // must hold mu_.
+  void ApplyIsamUpdateLocked(const gtsam::NonlinearFactorGraph& fg, const gtsam::Values& values);
 };
 
 }  // namespace fusion_graph

@@ -4,6 +4,7 @@
 #include "fusion_graph/fusion_graph_node.hpp"
 
 #include <chrono>
+#include <thread>
 #include <cmath>
 #include <limits>
 
@@ -85,7 +86,7 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   base_frame_ = declare_parameter<std::string>("base_frame", "base_footprint");
   tf_publish_lead_s_ = declare_parameter<double>("tf_publish_lead_s", 0.0);
 
-  graph_ = std::make_unique<GraphManager>(gp);
+  graph_ = std::make_shared<GraphManager>(gp);
 
   // ── Scan matching (optional) ─────────────────────────────────────
   use_scan_matching_ = declare_parameter<bool>("use_scan_matching", false);
@@ -340,25 +341,46 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
                                   std::bind(&FusionGraphNode::OnTimer, this));
 
   // Maintenance timer at 30 s: prune old scans + check if iSAM2
-  // needs to be rebased. Both operations briefly hold the graph
-  // mutex; running off the main tick keeps Tick latency clean.
-  maintenance_timer_ =
-      create_wall_timer(std::chrono::seconds(30),
-                        [this]()
-                        {
-                          if (!graph_->IsInitialized())
-                            return;
-                          graph_->PruneOldScans(scan_retention_nodes_);
-                          const auto stats = graph_->Stats();
-                          if (stats.total_nodes - last_rebase_index_ >= isam2_rebase_every_nodes_)
-                          {
-                            graph_->RebaseISAM2();
-                            last_rebase_index_ = stats.total_nodes;
-                            RCLCPP_INFO(get_logger(),
-                                        "fusion_graph: iSAM2 rebased at node %lu",
-                                        static_cast<unsigned long>(stats.total_nodes));
-                          }
-                        });
+  // needs to be rebased. PruneOldScans is cheap (just erasing old
+  // entries under the lock) and stays inline. The rebase, however,
+  // rebuilds the Bayes tree from ~50k PriorFactors — ~1 s of CPU
+  // that used to block the executor and stall the map→odom TF
+  // (observed 2026-05-14, caused DockRobot to abort with
+  // `Transform data too old`). Dispatch it to a detached worker so
+  // the callback returns immediately; GraphManager::RebaseISAM2
+  // now does the heavy reconstruction outside the graph mutex and
+  // only takes the lock briefly to replay pending factors + swap.
+  maintenance_timer_ = create_wall_timer(
+      std::chrono::seconds(30),
+      [this]()
+      {
+        if (!graph_->IsInitialized())
+          return;
+        graph_->PruneOldScans(scan_retention_nodes_);
+        const auto stats = graph_->Stats();
+        if (stats.total_nodes - last_rebase_index_ < isam2_rebase_every_nodes_)
+          return;
+        bool expected = false;
+        if (!rebase_in_flight_->compare_exchange_strong(expected, true))
+        {
+          // Previous async rebase still running — skip and try again
+          // at the next maintenance tick.
+          return;
+        }
+        // Commit the bookkeeping NOW so the next 30 s maintenance
+        // tick doesn't re-trigger while the worker is still building.
+        last_rebase_index_ = stats.total_nodes;
+        std::thread(
+            [graph = graph_, logger = get_logger(),
+             total = stats.total_nodes, flag = rebase_in_flight_]()
+            {
+              graph->RebaseISAM2();
+              RCLCPP_INFO(logger, "fusion_graph: iSAM2 rebased at node %lu",
+                          static_cast<unsigned long>(total));
+              flag->store(false);
+            })
+            .detach();
+      });
 
   // Diagnostics timer at 1 Hz — coarse, just for the session monitor.
   diag_timer_ =
@@ -766,10 +788,7 @@ void FusionGraphNode::OnHighLevelStatus(mowgli_interfaces::msg::HighLevelStatus:
     if (last_hl_state_ == kRecording && msg->state != kRecording &&
         graph_->IsInitialized())
     {
-      const bool ok = graph_->Save(graph_save_prefix_);
-      RCLCPP_INFO(get_logger(),
-                  "fusion_graph: auto-save on RECORDING exit → %s",
-                  ok ? "ok" : "failed");
+      DispatchAsyncSave("recording-exit");
     }
   }
   last_hl_state_ = msg->state;
@@ -818,14 +837,43 @@ void FusionGraphNode::OnSetPose(geometry_msgs::msg::PoseWithCovarianceStamped::C
               pose.theta());
 }
 
+// Dispatch a Save to a detached worker. Returns true if the worker
+// was launched, false if a previous save is still in flight (in which
+// case the caller's reason for saving — dock arrival / periodic /
+// state transition — gets skipped this round; another opportunity
+// will come along). GraphManager::Save now does its file I/O outside
+// the graph mutex, but the file writes themselves are still serial,
+// so the in-flight guard prevents two writers fighting on the same
+// .graph / .scans / .meta files.
+void FusionGraphNode::DispatchAsyncSave(const char* reason)
+{
+  bool expected = false;
+  if (!save_in_flight_->compare_exchange_strong(expected, true))
+  {
+    RCLCPP_INFO(get_logger(),
+                "fusion_graph: %s save skipped — previous save still in flight",
+                reason);
+    return;
+  }
+  std::thread(
+      [graph = graph_, logger = get_logger(), prefix = graph_save_prefix_,
+       reason = std::string(reason), flag = save_in_flight_]()
+      {
+        const bool ok = graph->Save(prefix);
+        RCLCPP_INFO(logger, "fusion_graph: %s auto-save → %s", reason.c_str(),
+                    ok ? "ok" : "failed");
+        flag->store(false);
+      })
+      .detach();
+}
+
 void FusionGraphNode::OnHardwareStatus(mowgli_interfaces::msg::Status::ConstSharedPtr msg)
 {
   // Rising edge of is_charging = robot just docked.
   if (last_is_charging_valid_ && !last_is_charging_ && msg->is_charging &&
       graph_->IsInitialized())
   {
-    const bool ok = graph_->Save(graph_save_prefix_);
-    RCLCPP_INFO(get_logger(), "fusion_graph: auto-save on dock arrival → %s", ok ? "ok" : "failed");
+    DispatchAsyncSave("dock-arrival");
   }
   last_is_charging_ = msg->is_charging;
   last_is_charging_valid_ = true;
@@ -842,8 +890,7 @@ void FusionGraphNode::OnPeriodicSaveTimer()
     return;
   if (!graph_->IsInitialized())
     return;
-  const bool ok = graph_->Save(graph_save_prefix_);
-  RCLCPP_INFO(get_logger(), "fusion_graph: periodic auto-save → %s", ok ? "ok" : "failed");
+  DispatchAsyncSave("periodic");
 }
 
 void FusionGraphNode::OnTimer()
