@@ -832,9 +832,6 @@ build_log_commands() {
     unicore_emit_paired_message_log "BESTSATA" "BESTSATB" "${UNICORE_SATELLITE_LOG_PERIOD}"
     unicore_emit_paired_message_log "SATSINFOA" "SATSINFOB" "${UNICORE_SATELLITE_LOG_PERIOD}"
     unicore_emit_ascii_message_log "GPGSV" "${UNICORE_SATELLITE_LOG_PERIOD}"
-    unicore_emit_ascii_message_log "GLGSV" "${UNICORE_SATELLITE_LOG_PERIOD}"
-    unicore_emit_ascii_message_log "GAGSV" "${UNICORE_SATELLITE_LOG_PERIOD}"
-    unicore_emit_ascii_message_log "GBGSV" "${UNICORE_SATELLITE_LOG_PERIOD}"
   fi
 
   if unicore_is_truthy "$UNICORE_ENABLE_RF"; then

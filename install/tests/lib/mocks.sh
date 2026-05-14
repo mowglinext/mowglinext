@@ -103,6 +103,54 @@ mock_docker() {
 #!/usr/bin/env bash
 echo "docker \$*" >> "$sandbox/calls.log"
 
+mock_compose_config() {
+  quiet=false
+  files=()
+  while [ "\$#" -gt 0 ]; do
+    case "\$1" in
+      -q)
+        quiet=true
+        shift
+        ;;
+      -f)
+        shift
+        [ "\$#" -gt 0 ] && files+=("\$1")
+        shift
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  [ "\$quiet" = "true" ] && exit 0
+
+  echo "services:"
+  idx=0
+  for file in "\${files[@]}"; do
+    [ -f "\$file" ] || continue
+    while IFS= read -r line; do
+      case "\$line" in
+        *container_name:*)
+          name="\${line#*container_name:}"
+          name="\${name#" \${name%%[![:space:]]*}"}"
+          idx=\$((idx + 1))
+          echo "  mock_service_\$idx:"
+          echo "    container_name: \$name"
+          echo "    environment:"
+          echo "      ENABLE_FOXGLOVE: \"true\""
+          echo "    volumes:"
+          echo "      - type: bind"
+          echo "        source: /dev"
+          echo "        target: /dev"
+          ;;
+      esac
+    done < "\$file"
+  done
+  echo "volumes:"
+  echo "  mowgli_maps: {}"
+}
+
 # Find the compose subcommand (last token that isn't a flag value).
 sub=""
 if [ "\${1:-}" = "compose" ]; then
@@ -120,6 +168,10 @@ if [ "\${1:-}" = "compose" ]; then
       exit 0
       ;;
     config|"")
+      if [ "$real_docker" = "/bin/false" ]; then
+        mock_compose_config "\$@"
+        exit 0
+      fi
       HOME="$real_home" exec "$real_docker" "\$@"
       ;;
   esac
@@ -137,6 +189,9 @@ case "\${1:-}" in
     exit 0
     ;;
   *)
+    if [ "$real_docker" = "/bin/false" ]; then
+      exit 0
+    fi
     HOME="$real_home" exec "$real_docker" "\$@"
     ;;
 esac

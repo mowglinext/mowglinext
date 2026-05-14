@@ -34,6 +34,10 @@ setup_env() {
   : "${GNSS_BACKEND:=gps}"
   : "${GPS_CONNECTION:=uart}"
   : "${GPS_PROTOCOL:=UBX}"
+  local gnss_enable_fix_diagnostics_was_set="true"
+  if [[ -z "${GNSS_ENABLE_FIX_DIAGNOSTICS:-}" ]]; then
+    gnss_enable_fix_diagnostics_was_set="false"
+  fi
   : "${GPS_PORT:=/dev/gps}"
   : "${GPS_BY_ID:=}"
   : "${GPS_UART_DEVICE:=/dev/ttyAMA4}"
@@ -148,6 +152,14 @@ setup_env() {
     GNSS_BACKEND="gps"
   fi
 
+  if [[ "$gnss_enable_fix_diagnostics_was_set" == "false" ]]; then
+    if [[ "${GNSS_BACKEND}" == "gps" && "${GPS_PROTOCOL}" == "NMEA" ]]; then
+      GNSS_ENABLE_FIX_DIAGNOSTICS="true"
+    else
+      GNSS_ENABLE_FIX_DIAGNOSTICS="false"
+    fi
+  fi
+
   local enable_mavros="false"
   if [[ "$HARDWARE_BACKEND" == "mavros" ]]; then
     enable_mavros="true"
@@ -169,6 +181,7 @@ setup_env() {
   upsert_env_key "$env_file" "GPS_BY_ID" "$GPS_BY_ID"
   upsert_env_key "$env_file" "GPS_UART_DEVICE" "$GPS_UART_DEVICE"
   upsert_env_key "$env_file" "GPS_BAUD" "$GPS_BAUD"
+  upsert_env_key "$env_file" "GNSS_ENABLE_FIX_DIAGNOSTICS" "$GNSS_ENABLE_FIX_DIAGNOSTICS"
   upsert_env_key "$env_file" "UBLOX_DEVICE_FAMILY" "$UBLOX_DEVICE_FAMILY"
   upsert_env_key "$env_file" "UBLOX_DEVICE_SERIAL_STRING" "$UBLOX_DEVICE_SERIAL_STRING"
   upsert_env_key "$env_file" "GPS_DEBUG_ENABLED" "$GPS_DEBUG_ENABLED"

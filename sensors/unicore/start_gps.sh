@@ -1,17 +1,17 @@
 #!/bin/bash
 # =============================================================================
-# UM982 GNSS driver startup + NTRIP client
+# Unicore GNSS driver startup + NTRIP client
 #
 # Launches:
-#   1. um982_node         — UM982 GNSS driver and RTCM injector on /dev/gps,
-#                           publishes /gps/fix, /gps/azimuth, /gps/diagnostics
+#   1. unicore_node       — Unicore GNSS driver and RTCM injector on /dev/gps,
+#                           publishes /gps/fix, /gps/azimuth, /diagnostics
 #                           and subscribes to /ntrip_client/rtcm
 #   2. ntrip_client_node  — NTRIP caster client publishing /ntrip_client/rtcm
 #
 # Reads gps_port / gps_baudrate / ntrip_* from /config/mowgli_robot.yaml.
 # Bind-mount docker/config/mowgli to /config (see docker-compose.unicore.yaml).
 #
-# We deliberately do NOT use `ros2 launch mowgli_unicore_gnss
+# We deliberately do NOT use `ros2 launch unicore_gnss
 # um982_launch.py` here: the upstream launch file accepts no arguments and
 # always loads the package-share config/um982.yaml (port=/dev/gps,
 # baudrate=921600, frame_id=gps). Driving the node via `ros2 run` with
@@ -88,6 +88,8 @@ GPS_BAUD="${GPS_BAUD:-921600}"
 UNICORE_TARGET_BAUD="${UNICORE_TARGET_BAUD:-921600}"
 UNICORE_PROFILE="${UNICORE_PROFILE:-normal}"
 UNICORE_OUTPUT_FORMAT="${UNICORE_OUTPUT_FORMAT:-}"
+UNICORE_ROS_PACKAGE="${UNICORE_ROS_PACKAGE:-unicore_gnss}"
+UNICORE_ROS_EXECUTABLE="${UNICORE_ROS_EXECUTABLE:-unicore_node}"
 
 # Optional one-shot UM98x config blast — sends MODE ROVER + LOG
 # directives via /configure_receiver.sh. SAVECONFIG persists in NVRAM,
@@ -244,12 +246,12 @@ if is_truthy "$UNICORE_AUTO_CONFIGURE"; then
   fi
 fi
 
-echo "[start_gps.sh] Launching Unicore UM982 GNSS driver: port=${GPS_PORT} baud=${GPS_BAUD} profile=${UNICORE_PROFILE}"
+echo "[start_gps.sh] Launching Unicore GNSS driver: package=${UNICORE_ROS_PACKAGE} executable=${UNICORE_ROS_EXECUTABLE} port=${GPS_PORT} baud=${GPS_BAUD} profile=${UNICORE_PROFILE}"
 # diagnostics_topic = /diagnostics — the ROS2 standard aggregator topic
 # (matches gps_health_aggregator.py in the ublox path). The GUI's
 # Diagnostics panel reads from /diagnostics; namespacing under
 # /gps/diagnostics would hide the unicore status from the dashboard.
-ros2 run mowgli_unicore_gnss um982_node --ros-args \
+ros2 run "${UNICORE_ROS_PACKAGE}" "${UNICORE_ROS_EXECUTABLE}" --ros-args \
   -p "port:=${GPS_PORT}" \
   -p "baudrate:=${GPS_BAUD}" \
   -p "frame_id:=gps_link" \

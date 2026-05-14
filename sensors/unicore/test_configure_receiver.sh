@@ -301,7 +301,7 @@ UNICORE_ENABLE_SATELLITES="true"
 UNICORE_OUTPUT_FORMAT="ascii"
 unicore_apply_profile_defaults
 gsv_schedule="$(build_log_commands)"
-assert_contains "satellite schedule includes GPGSV once" "GPGSV 1" "$gsv_schedule"
+assert_contains "satellite schedule includes GPGSV once" "LOG GPGSV ONTIME 1" "$gsv_schedule"
 assert_not_contains "satellite schedule drops GLGSV command" "GLGSV" "$gsv_schedule"
 assert_not_contains "satellite schedule drops GAGSV command" "GAGSV" "$gsv_schedule"
 assert_not_contains "satellite schedule drops GBGSV command" "GBGSV" "$gsv_schedule"

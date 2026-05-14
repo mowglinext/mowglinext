@@ -58,6 +58,7 @@ make_fake_ros2
 make_config
 
 NORMAL_ARGS="$(run_profile normal)"
+assert_contains "normal uses default Unicore package/executable" "run unicore_gnss unicore_node" "$NORMAL_ARGS"
 assert_contains "normal disables satellite diagnostics" "enable_satellite_status:=false" "$NORMAL_ARGS"
 assert_contains "normal disables RF diagnostics" "enable_rf_status:=false" "$NORMAL_ARGS"
 assert_contains "normal disables hardware diagnostics" "enable_hw_status:=false" "$NORMAL_ARGS"
@@ -171,6 +172,17 @@ SURVEY_RAW_ARGS="$(
 )"
 assert_contains "survey hybrid raw enables binary raw diagnostics" "enable_raw_observation_diag:=true" "$SURVEY_RAW_ARGS"
 assert_contains "survey hybrid raw uses binary observations" "use_binary_raw_observations:=true" "$SURVEY_RAW_ARGS"
+
+OVERRIDE_ARGS="$(
+  PATH="$WORKDIR/bin:$PATH" \
+  ROS2_LOG_PATH="$WORKDIR/override.log" \
+  MOWGLI_CONFIG_PATH="$WORKDIR/mowgli_robot.yaml" \
+  UNICORE_ROS_PACKAGE="mowgli_unicore_gnss" \
+  UNICORE_ROS_EXECUTABLE="um982_node" \
+  "$SCRIPT_DIR/start_gps.sh" >/dev/null 2>&1 || true
+  cat "$WORKDIR/override.log"
+)"
+assert_contains "compatibility override honors legacy package/executable" "run mowgli_unicore_gnss um982_node" "$OVERRIDE_ARGS"
 
 if [ "$failures" -ne 0 ]; then
   echo ""

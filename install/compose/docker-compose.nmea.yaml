@@ -17,6 +17,10 @@
 #     writes RTCM bytes back to the same /dev/gps — non-trivial, see
 #     sensors/nmea/Dockerfile header.
 # -------------------------------------------------------------------------
+# Common outputs:
+#   /gps/fix            -> sensor_msgs/msg/NavSatFix
+#   /gps/azimuth        -> heading/azimuth if the NMEA driver emits heading
+#   /diagnostics        -> diagnostic_msgs/msg/DiagnosticArray
 x-ros2-env: &ros2-env
   ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
   RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
@@ -37,6 +41,7 @@ services:
       NMEA_PORT: ${GPS_PORT:-/dev/gps}
       NMEA_BAUD: ${GPS_BAUD:-921600}
       NMEA_FRAME_ID: gps_link
+      GNSS_ENABLE_FIX_DIAGNOSTICS: ${GNSS_ENABLE_FIX_DIAGNOSTICS:-true}
     volumes:
       - /dev:/dev
       - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro

@@ -37,12 +37,14 @@ RUN sed -i 's|http://archive.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/u
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
+      ros-kilted-diagnostic-msgs \
       ros-kilted-nmea-navsat-driver \
       ros-kilted-rmw-cyclonedds-cpp
 
 COPY ros2_entrypoint.sh /ros2_entrypoint.sh
 COPY start_nmea.sh /start_nmea.sh
-RUN chmod +x /ros2_entrypoint.sh /start_nmea.sh
+COPY gnss_fix_diagnostics.py /gnss_fix_diagnostics.py
+RUN chmod +x /ros2_entrypoint.sh /start_nmea.sh /gnss_fix_diagnostics.py
 
 ENTRYPOINT ["/ros2_entrypoint.sh"]
 CMD ["/start_nmea.sh"]

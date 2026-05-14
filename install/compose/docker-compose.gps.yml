@@ -1,14 +1,11 @@
   # -------------------------------------------------------------------------
   # GNSS backend slot used by the current default GPS container.
   #
-  # The common GNSS contract for backend-specific compose fragments is:
-  #   /gnss/fix          -> sensor_msgs/msg/NavSatFix
-  #   /gnss/azimuth      -> compass_msgs/msg/Azimuth
-  #   /gnss/diagnostics  -> diagnostic_msgs/msg/DiagnosticArray
-  #
-  # Current compatibility behavior remains unchanged here. This fragment still
-  # points at the existing GPS container while dedicated backend fragments can
-  # converge on the same external /gnss/* interface later.
+  # Common GNSS runtime contract for GUI/localization:
+  #   /gps/fix            -> sensor_msgs/msg/NavSatFix
+  #   /gps/azimuth        -> heading/azimuth when the backend provides it
+  #   /ntrip_client/rtcm  -> RTCM stream input when NTRIP is enabled
+  #   /diagnostics        -> diagnostic_msgs/msg/DiagnosticArray
   # -------------------------------------------------------------------------
 x-ros2-env: &ros2-env
   ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
@@ -43,6 +40,7 @@ services:
       GPS_DEVICE_PATH: ${GPS_PORT:-${UBLOX_DEVICE_SERIAL_STRING:-/dev/gps}}
       GPS_PROTOCOL: ${GPS_PROTOCOL:-UBX}
       GPS_BAUD: ${GPS_BAUD:-921600}
+      GNSS_ENABLE_FIX_DIAGNOSTICS: ${GNSS_ENABLE_FIX_DIAGNOSTICS}
     volumes:
       - /dev:/dev
       - ./docker/config/mowgli:/config:ro

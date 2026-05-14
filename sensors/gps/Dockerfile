@@ -86,6 +86,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
       libusb-1.0-0 \
       libcurl4 \
+      ros-kilted-diagnostic-msgs \
       ros-kilted-rmw-cyclonedds-cpp \
       ros-kilted-rtcm-msgs \
       ros-kilted-nmea-navsat-driver
@@ -96,7 +97,8 @@ COPY ros2_entrypoint.sh /ros2_entrypoint.sh
 COPY start_gps.sh /start_gps.sh
 COPY ublox_dgnss.yaml /ublox_dgnss.yaml
 COPY gps_health_aggregator.py /gps_health_aggregator.py
-RUN chmod +x /ros2_entrypoint.sh /start_gps.sh /gps_health_aggregator.py
+COPY gnss_fix_diagnostics.py /gnss_fix_diagnostics.py
+RUN chmod +x /ros2_entrypoint.sh /start_gps.sh /gps_health_aggregator.py /gnss_fix_diagnostics.py
 
 ENTRYPOINT ["/ros2_entrypoint.sh"]
 CMD ["/start_gps.sh"]

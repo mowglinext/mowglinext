@@ -58,7 +58,6 @@ RUN --mount=type=cache,target=/root/.ccache,sharing=locked \
       --base-paths src/um982_driver/compass_msgs \
                    src/um982_driver/ntrip_client_node \
                    src/um982_driver \
-      --packages-up-to ntrip_client_node mowgli_unicore_gnss \
       --cmake-args \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \

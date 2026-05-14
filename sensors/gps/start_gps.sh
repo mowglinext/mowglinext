@@ -30,6 +30,12 @@ parse_yaml() {
 # inside a shelled-in container where only mowgli_robot.yaml is set.
 GPS_PROTOCOL="${GPS_PROTOCOL:-$(parse_yaml gps_protocol)}"
 GPS_PROTOCOL="${GPS_PROTOCOL:-UBX}"
+if [ -z "${GNSS_ENABLE_FIX_DIAGNOSTICS:-}" ]; then
+  case "$GPS_PROTOCOL" in
+    NMEA) GNSS_ENABLE_FIX_DIAGNOSTICS="true" ;;
+    *)    GNSS_ENABLE_FIX_DIAGNOSTICS="false" ;;
+  esac
+fi
 GPS_PORT="${GPS_DEVICE_PATH:-$(parse_yaml gps_port)}"
 GPS_PORT="${GPS_PORT:-/dev/gps}"
 # gps_baudrate is the runtime baud for the main GNSS receiver.
@@ -49,16 +55,29 @@ source /opt/ros/kilted/setup.bash
 source /opt/ublox_dgnss/setup.bash
 set -u
 
+is_truthy() {
+  case "${1,,}" in
+    true|1|yes|y|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 GPS_PID=""
 HP_PID=""
 NTRIP_PID=""
 HEALTH_PID=""
+FIX_DIAG_PID=""
 
 cleanup() {
   [ -n "$GPS_PID" ] && kill "$GPS_PID" 2>/dev/null || true
   [ -n "$HP_PID" ] && kill "$HP_PID" 2>/dev/null || true
   [ -n "$NTRIP_PID" ] && kill "$NTRIP_PID" 2>/dev/null || true
   [ -n "$HEALTH_PID" ] && kill "$HEALTH_PID" 2>/dev/null || true
+  [ -n "$FIX_DIAG_PID" ] && kill "$FIX_DIAG_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
@@ -70,8 +89,15 @@ if [ "$GPS_PROTOCOL" = "NMEA" ]; then
     -p port:="${GPS_PORT}" \
     -p baud:=${GPS_BAUD} \
     -p frame_id:=gps_link \
-    -r /fix:=/gps/fix &
+    -r /fix:=/gps/fix \
+    -r /vel:=/gps/vel \
+    -r /heading:=/gps/azimuth \
+    -r /time_reference:=/gps/time_reference &
   GPS_PID=$!
+  if is_truthy "$GNSS_ENABLE_FIX_DIAGNOSTICS"; then
+    GNSS_DIAGNOSTIC_BACKEND="nmea" python3 /gnss_fix_diagnostics.py &
+    FIX_DIAG_PID=$!
+  fi
 else
   # ── UBX mode (default) ────────────────────────────────────────────────────
   # u-blox F9P via ublox_dgnss (libusb or serial).
@@ -153,6 +179,10 @@ fi
 if [ "$GPS_PROTOCOL" != "NMEA" ]; then
   python3 /gps_health_aggregator.py &
   HEALTH_PID=$!
+  if is_truthy "$GNSS_ENABLE_FIX_DIAGNOSTICS"; then
+    GNSS_DIAGNOSTIC_BACKEND="ublox" python3 /gnss_fix_diagnostics.py &
+    FIX_DIAG_PID=$!
+  fi
 fi
 
 if [ "$NTRIP_ENABLED" = "true" ]; then
