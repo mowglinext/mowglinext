@@ -11,7 +11,7 @@ ARG UM982_REF=main
 # Bump UM982_SHA to bust the docker layer cache when the fork moves.
 # `git clone --branch` is cacheable per ARG value, so without a SHA
 # pin we rebuild against stale code.
-ARG UM982_SHA=8a0d98aae8f9b2fc98285352dcab2013523e9410
+ARG UM982_SHA=8b9e25e6027039a52f6fc4d6932678b422084ffa
 
 FROM ros:kilted-ros-base AS builder
 
