@@ -29,6 +29,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from rtcm_msgs.msg import Message as RtcmMessage
+from sensor_msgs.msg import NavSatFix, NavSatStatus
 
 try:
     from ublox_ubx_msgs.msg import UBXNavStatus, UBXNavSat, UBXRxmRTCM, UBXNavCov
@@ -66,6 +67,19 @@ class GpsHealthAggregator(Node):
         self._last_sat: UBXNavSat | None = None
         self._last_sat_t: float = 0.0
         self._last_cov: UBXNavCov | None = None
+        # Latched /gps/fix snapshot. Used as the authoritative source for
+        # the human-readable "RTK Fixed" / "RTK Float" message so the
+        # diagnostic stays in lock-step with what downstream consumers
+        # (navsat_to_absolute_pose, fusion_graph, BT, GUI) see. Without
+        # this, gps_health_aggregator reads /ubx_nav_status.carr_soln
+        # directly while the HP NavSatFix node caches carr_soln on its
+        # own NAV-STATUS callback and stamps it onto NavSatFix on the
+        # next NAV-HP-POS — up to ~150 ms of lag — so when carr_soln
+        # flips Float↔Fixed at the RTK boundary the two consumers
+        # disagree and the GUI ends up with /gps/fix saying RTK Fixed
+        # while the diagnostic tile says RTK Float (2026-05-15 report).
+        self._last_navsatfix: NavSatFix | None = None
+        self._last_navsatfix_t: float = 0.0
         # Each entry: (recv_time, msg_type, msg_used, crc_failed). msg_type and
         # msg_used are -1 in NMEA mode where the receiver does not echo RTCM
         # ingestion telemetry — we only know what we forwarded into it.
@@ -87,7 +101,21 @@ class GpsHealthAggregator(Node):
             self.create_subscription(UBXNavSat, "/ubx_nav_sat", self._on_sat, qos)
             self.create_subscription(UBXNavCov, "/ubx_nav_cov", self._on_cov, qos)
             self.create_subscription(UBXRxmRTCM, "/ubx_rxm_rtcm", self._on_rtcm_ubx, qos)
-        else:
+        # /gps/fix is the topic every downstream consumer reads — subscribe
+        # in any protocol mode so the fix-status message stays consistent
+        # with what the rest of the stack sees. SensorDataQoS for the
+        # NavSatFix stream (best-effort, volatile).
+        self.create_subscription(
+            NavSatFix,
+            "/gps/fix",
+            self._on_navsatfix,
+            QoSProfile(
+                depth=10,
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                durability=DurabilityPolicy.VOLATILE,
+            ),
+        )
+        if not self._ubx_enabled:
             # NMEA mode (or UBX msgs unavailable): only the NTRIP/RTCM
             # diagnostic is meaningful, sourced from the raw NTRIP topic.
             self.create_subscription(RtcmMessage, "/ntrip_client/rtcm", self._on_rtcm_nmea, 50)
@@ -114,6 +142,10 @@ class GpsHealthAggregator(Node):
 
     def _on_cov(self, msg: UBXNavCov) -> None:
         self._last_cov = msg
+
+    def _on_navsatfix(self, msg: NavSatFix) -> None:
+        self._last_navsatfix = msg
+        self._last_navsatfix_t = self._now()
 
     def _on_rtcm_ubx(self, msg: UBXRxmRTCM) -> None:
         # UBX path: the receiver tells us which RTCM type it ingested and
@@ -178,18 +210,63 @@ class GpsHealthAggregator(Node):
             KeyValue(key="sigma_xy_mm", value=f"{sigma_xy_mm:.1f}" if sigma_xy_mm >= 0 else "n/a"),
         ]
 
-        if not st.gps_fix_ok:
-            s.level = DiagnosticStatus.ERROR
-            s.message = f"no fix ({fix_label})"
-        elif carr == 2:
-            s.level = DiagnosticStatus.OK
-            s.message = "RTK Fixed"
-        elif carr == 1:
-            s.level = DiagnosticStatus.WARN
-            s.message = "RTK Float — converging, not yet validated"
-        else:
-            s.level = DiagnosticStatus.WARN
-            s.message = f"{fix_label} fix, no RTK"
+        # Source the human-readable message from /gps/fix.status when
+        # available so the diagnostic stays in lock-step with every
+        # downstream consumer (navsat_to_absolute_pose, fusion_graph,
+        # BT, GUI all chain off /gps/fix). Direct UBX-NAV-STATUS reads
+        # here race against the HP NavSatFix node's own NAV-STATUS
+        # callback — it caches carr_soln then stamps it on the next
+        # NAV-HP-POS, ~150 ms of lag — so on RTK-borderline transitions
+        # the two consumers disagree visibly: GUI dashboard shows
+        # "RTK Fixed" from /gps/fix while the diagnostic tile says
+        # "RTK Float" (2026-05-15 report).
+        fix_aligned = False
+        if self._last_navsatfix is not None and (now - self._last_navsatfix_t) < 3.0:
+            sstatus = int(self._last_navsatfix.status.status)
+            if not st.gps_fix_ok:
+                s.level = DiagnosticStatus.ERROR
+                s.message = f"no fix ({fix_label})"
+                fix_aligned = True
+            elif sstatus == NavSatStatus.STATUS_GBAS_FIX:
+                s.level = DiagnosticStatus.OK
+                s.message = "RTK Fixed"
+                fix_aligned = True
+            elif sstatus == NavSatStatus.STATUS_SBAS_FIX:
+                # ublox HP node uses STATUS_SBAS_FIX for both RTK Float
+                # (carr_soln==1) and plain DGPS (diff_soln && no RTK).
+                # Disambiguate via the raw carr_soln we already have.
+                if carr == 1:
+                    s.level = DiagnosticStatus.WARN
+                    s.message = "RTK Float — converging, not yet validated"
+                else:
+                    s.level = DiagnosticStatus.WARN
+                    s.message = f"{fix_label} fix with DGPS corrections, no RTK"
+                fix_aligned = True
+            elif sstatus == NavSatStatus.STATUS_FIX:
+                s.level = DiagnosticStatus.WARN
+                s.message = f"{fix_label} fix, no RTK"
+                fix_aligned = True
+            elif sstatus == NavSatStatus.STATUS_NO_FIX:
+                s.level = DiagnosticStatus.ERROR
+                s.message = f"no fix ({fix_label})"
+                fix_aligned = True
+
+        if not fix_aligned:
+            # Fallback: /gps/fix hasn't been seen recently (driver not
+            # yet up, or NMEA-only path with a non-HP driver). Use the
+            # raw carr_soln from /ubx_nav_status as before.
+            if not st.gps_fix_ok:
+                s.level = DiagnosticStatus.ERROR
+                s.message = f"no fix ({fix_label})"
+            elif carr == 2:
+                s.level = DiagnosticStatus.OK
+                s.message = "RTK Fixed"
+            elif carr == 1:
+                s.level = DiagnosticStatus.WARN
+                s.message = "RTK Float — converging, not yet validated"
+            else:
+                s.level = DiagnosticStatus.WARN
+                s.message = f"{fix_label} fix, no RTK"
         return s
 
     def _sat_status(self, now: float) -> DiagnosticStatus:
