@@ -15,10 +15,18 @@ bt_navigator:
     robot_base_frame: base_footprint
     odom_topic: /odometry/filtered
     bt_loop_duration: 10
-    # 60 ms — Nav2 default is 20 ms (NOT 1.0 s as a previous comment
-    # claimed). 3× the default to absorb ARM scheduler jitter on
-    # blackboard service calls without making timeouts feel sluggish.
-    default_server_timeout: 60
+    # 1000 ms (was 60 ms). The earlier "not sluggish" tuning broke HOME:
+    # IsPathValid (in our custom navigate_to_pose.xml replan-only-if-invalid
+    # tree) calls planner_server's is_path_valid service at 1 Hz; that
+    # service shares planner_server's default mutually-exclusive callback
+    # group with ComputePathToPose + costmap updates, so its response can
+    # easily exceed 60 ms on ARM. The timeout then surfaces as
+    # "is_path_valid service client: async_send_request failed", which
+    # propagates as a BT exception and aborts NavigateToPose →
+    # docking_server's nav-to-staging-pose fails (error 903) → DockRobot
+    # aborts → HOME falls back to IDLE. 1 s only matters when a service is
+    # genuinely broken; healthy responses are single-digit ms either way.
+    default_server_timeout: 1000
     # Default is 1.0 s — observed on ARM that planner_server / controller_server
     # finish lifecycle transition to active before bt_navigator but their
     # action servers (compute_path_to_pose / follow_path) are not fully

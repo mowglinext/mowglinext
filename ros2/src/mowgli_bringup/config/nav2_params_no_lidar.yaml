@@ -15,7 +15,12 @@ bt_navigator:
     robot_base_frame: base_footprint
     odom_topic: /odometry/filtered
     bt_loop_duration: 10
-    default_server_timeout: 60
+    # 1000 ms — see nav2_params.yaml for full rationale. Short version:
+    # IsPathValid in our custom navigate_to_pose.xml times out against
+    # planner_server's is_path_valid service on ARM (60 ms was too tight),
+    # which aborts NavigateToPose and cascades into a DockRobot abort on
+    # HOME, dropping the robot back to IDLE.
+    default_server_timeout: 1000
     # Match the with-lidar config: 1s default is too tight, planner_server's
     # compute_path_to_pose action server isn't always up within 1s of
     # bt_navigator's Activate transition on ARM cold-boot, which fails the
