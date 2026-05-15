@@ -79,7 +79,9 @@ controller_server:
       plugin: "nav2_controller::StoppedGoalChecker"
       trans_stopped_velocity: 0.10
       xy_goal_tolerance: 0.30
-      yaw_goal_tolerance: 0.5
+      # 0.10 rad to match the lidar config — see nav2_params.yaml for
+      # the "en biais" docking rationale.
+      yaw_goal_tolerance: 0.10
 
     coverage_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
@@ -407,7 +409,9 @@ docking_server:
       pose: [0.0, 0.0, 0.0]  # Overridden at launch from dock_pose_x/y/yaw params
     simple_charging_dock:
       plugin: "opennav_docking::SimpleChargingDock"
-      charging_threshold: 0.1
+      # 0.3 A to match the lidar config — see nav2_params.yaml for the
+      # "barely seated" rationale.
+      charging_threshold: 0.3
       docking_threshold: 0.05
       # 1.5 m straight-line approach — see nav2_params.yaml for rationale.
       staging_x_offset: -1.5

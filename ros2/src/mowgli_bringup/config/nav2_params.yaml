@@ -89,7 +89,18 @@ controller_server:
       plugin: "nav2_controller::StoppedGoalChecker"
       trans_stopped_velocity: 0.10
       xy_goal_tolerance: 0.30
-      yaw_goal_tolerance: 0.5
+      # 0.10 rad (≈5.7°), was 0.5 rad (≈28.6°). The loose value let
+      # opennav_docking's NavigateToPose-to-staging-pose phase report
+      # SUCCESS even when FTC had stopped with the chassis 20-25° off
+      # the dock-approach axis. The graceful approach controller then
+      # had to redress while driving forward — "en biais" docking. With
+      # 1.5 m of straight-line approach (staging_x_offset: -1.5) the
+      # robot still misses the cradle if it enters that corridor more
+      # than ~10° off. 0.10 rad forces FTC to keep rotating in place at
+      # the end of NavigateToPose until the heading is close enough to
+      # drive straight into the dock. Slightly longer arrivals on
+      # ordinary transit are an acceptable trade.
+      yaw_goal_tolerance: 0.10
 
     # Coverage strip endpoint validation.
     #
@@ -671,10 +682,16 @@ docking_server:
       # Forward dock approach (matches the YardForce charger contact
       # geometry — robot drives nose-first into the dock).
       dock_direction: "forward"
-      # 0.1 A (default 0.5 A): the YardForce charger sources >0.1 A
-      # almost immediately on contact; 0.5 A would add ~1 s of delay
-      # before is_charging_ flips and the BT considers the dock reached.
-      charging_threshold: 0.1
+      # 0.3 A (was 0.1, default 0.5). 0.1 A flipped is_charging_ at the
+      # first whisker of contact and DockRobot exited before the cradle
+      # was fully seated — the robot ended up barely touching the
+      # contacts, intermittent charging on bumps. 0.3 A requires a more
+      # established current draw, which on the YardForce charger
+      # corresponds to ~0.5 s / ~6 cm of additional forward travel after
+      # first contact — enough to drive the contacts past the spring
+      # detent into a stable seat. 0.5 A added a full ~1 s of delay
+      # (12 cm) which was unnecessary depth.
+      charging_threshold: 0.3
       # Geometric distance (m) from base_link to dock pose for isDocked().
       # RTK-Fixed gives σ ~3 mm, so 0.05 m is a comfortable envelope
       # covering antenna-lever-arm effects and short GPS glitches.
