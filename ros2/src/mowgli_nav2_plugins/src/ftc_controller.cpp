@@ -187,6 +187,7 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.max_lateral_deviation = declare_double("max_lateral_deviation", 1.5);
   config_.deviation_step = declare_double("deviation_step", 0.05);
   config_.deviation_blend_rate = declare_double("deviation_blend_rate", 0.5);
+  config_.obstacle_wait_timeout_s = declare_double("obstacle_wait_timeout_s", 5.0);
 
   // Register parameter-change callback.
   param_cb_handle_ = node->add_on_set_parameters_callback(
@@ -365,6 +366,10 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     else if (key == "deviation_blend_rate")
     {
       config_.deviation_blend_rate = p.as_double();
+    }
+    else if (key == "obstacle_wait_timeout_s")
+    {
+      config_.obstacle_wait_timeout_s = p.as_double();
     }
   }
 
@@ -596,6 +601,14 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   if (config_.enable_obstacle_deviation)
   {
     updateLateralDeviation(safe_dt);
+    // updateLateralDeviation flipped on the wait-before-abort gate (the
+    // costmap is blocked beyond max_lateral_deviation and we're holding
+    // for obstacle_wait_timeout_s). Hold zero velocity until either the
+    // costmap clears or the helper throws on timeout.
+    if (obstacle_waiting_)
+    {
+      return cmd_vel;
+    }
     applyLateralDeviationToCarrot();
   }
   else if (checkCollision(config_.obstacle_lookahead))
@@ -1199,6 +1212,37 @@ bool FTCController::checkCollision(int max_points)
 
 // ── Lateral deviation (skirt obstacles) ───────────────────────────────────────
 
+// Decide whether to stall the controller for `obstacle_wait_timeout_s` or
+// throw and let the BT escalate. Called from updateLateralDeviation when
+// the AVOIDANCE search runs out of headroom inside max_lateral_deviation
+// (both sides blocked at the obstacle pose, OR growDeviationUntilClear
+// exceeded the cap). Returns true if the caller should bail out of
+// updateLateralDeviation for this tick (keeps lateral_deviation_ at its
+// current value, output is zeroed in computeVelocityCommands). Returns
+// false when the timeout has elapsed — caller proceeds as if the throw
+// were direct, EXCEPT we still throw from inside here to consolidate the
+// log message + is_crashed_ latch.
+bool FTCController::waitOrThrowForObstacle(const std::string& reason)
+{
+  if (!obstacle_wait_start_.has_value())
+  {
+    obstacle_wait_start_ = clock_->now();
+    RCLCPP_INFO(logger_,
+                "FTCController: %s — holding zero velocity up to %.1fs for the costmap to clear.",
+                reason.c_str(), config_.obstacle_wait_timeout_s);
+  }
+  const double elapsed = (clock_->now() - obstacle_wait_start_.value()).seconds();
+  if (elapsed > config_.obstacle_wait_timeout_s)
+  {
+    is_crashed_ = true;
+    throw nav2_core::ControllerException(
+        std::string("FTCController: ") + reason + ", aborting strip after " +
+        std::to_string(static_cast<int>(elapsed)) + "s wait.");
+  }
+  obstacle_waiting_ = true;
+  return true;
+}
+
 void FTCController::updateLateralDeviation(double dt)
 {
   // Bail if no costmap or path — tests sometimes run without one of either.
@@ -1236,12 +1280,19 @@ void FTCController::updateLateralDeviation(double dt)
           config_.deviation_step);
       if (target_lateral_deviation_ == 0.0)
       {
-        // Both sides blocked at the obstacle pose — give up, let BT replan.
-        is_crashed_ = true;
-        throw nav2_core::ControllerException(
-            "FTCController: obstacle blocks both sides, cannot skirt.");
+        // Both sides blocked at the obstacle pose. Before bailing, hold a
+        // wait window so transient costmap state (LIDAR noise, a person
+        // crossing the path, inflation around the dock not yet cleared
+        // by post-undock observations) can clear without burning a BT
+        // retry.
+        if (waitOrThrowForObstacle("obstacle blocks both sides, cannot skirt"))
+        {
+          return;
+        }
       }
       is_avoiding_ = true;
+      obstacle_wait_start_.reset();
+      obstacle_waiting_ = false;
       RCLCPP_INFO(logger_,
                   "FTCController: entering AVOIDANCE (target_dev=%.2fm at idx=%d)",
                   target_lateral_deviation_,
@@ -1260,9 +1311,13 @@ void FTCController::updateLateralDeviation(double dt)
 
     if (std::abs(target_lateral_deviation_) > config_.max_lateral_deviation)
     {
-      is_crashed_ = true;
-      throw nav2_core::ControllerException(
-          "FTCController: lateral deviation needed > max_lateral_deviation, aborting strip.");
+      // Same wait-before-abort as the both-sides-blocked case. If the
+      // obstacle is transient, the next tick will pull target_dev back
+      // under the cap and we resume cleanly.
+      if (waitOrThrowForObstacle("lateral deviation needed > max_lateral_deviation"))
+      {
+        return;
+      }
     }
   }
   else if (is_avoiding_)
@@ -1275,6 +1330,15 @@ void FTCController::updateLateralDeviation(double dt)
       is_avoiding_ = false;
       RCLCPP_INFO(logger_, "FTCController: AVOIDANCE complete, back on path.");
     }
+  }
+
+  // Path is now followable inside the deviation cap. Clear any pending
+  // wait state so the next blockage starts its own fresh wait window.
+  if (obstacle_waiting_)
+  {
+    RCLCPP_INFO(logger_, "FTCController: obstacle cleared, resuming after wait.");
+    obstacle_waiting_ = false;
+    obstacle_wait_start_.reset();
   }
 
   // Step 2: slew lateral_deviation_ toward target_lateral_deviation_ at the

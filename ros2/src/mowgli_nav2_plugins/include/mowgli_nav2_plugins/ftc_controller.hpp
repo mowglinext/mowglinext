@@ -18,6 +18,7 @@
 
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <limits>
 #include <vector>
@@ -177,9 +178,31 @@ private:
   /// Apply lateral_deviation_ to current_control_point_ in-place.
   void applyLateralDeviationToCarrot();
 
+  /// Wait-before-abort gate for the AVOIDANCE-out-of-headroom path. Sets
+  /// obstacle_waiting_=true (caller halts) until obstacle_wait_timeout_s
+  /// has elapsed, then throws ControllerException. Returns true while
+  /// still waiting, never returns false on the throw path (the throw
+  /// unwinds the stack instead).
+  bool waitOrThrowForObstacle(const std::string& reason);
+
   bool is_avoiding_{false};
   double target_lateral_deviation_{0.0};
   double lateral_deviation_{0.0};
+
+  // Wait-before-abort window for the two "no path" cases inside
+  // updateLateralDeviation: (a) both sides blocked at the obstacle pose,
+  // (b) the deviation needed to clear exceeds max_lateral_deviation. In
+  // both cases, before this change, FTC threw a ControllerException
+  // immediately — the action server aborted, the BT incremented
+  // RetryUntilSuccessful, and after 5 retries the area was declared
+  // unreachable. Often the blocker was transient (LIDAR noise during
+  // post-undock costmap warmup, a passing person, inflation around the
+  // dock body that hadn't been cleared yet); the abort burned 5 cheap
+  // retries for nothing. We now hold zero velocity for up to
+  // obstacle_wait_timeout_s seconds; if the costmap clears in that
+  // window the controller resumes, otherwise it throws as before.
+  std::optional<rclcpp::Time> obstacle_wait_start_;
+  bool obstacle_waiting_{false};
 
   // ── Oscillation detection ─────────────────────────────────────────────────
 
@@ -280,6 +303,12 @@ private:
     double max_lateral_deviation{1.5};   // m, abort if needed offset exceeds this
     double deviation_step{0.05};         // m, search increment
     double deviation_blend_rate{0.5};    // m/s, slew rate for lateral_deviation_
+    /// Wait-before-abort timeout when the AVOIDANCE search can't fit
+    /// inside max_lateral_deviation (both sides blocked or the needed
+    /// offset exceeds the cap). During the wait the robot stops; if the
+    /// costmap clears before the timeout, the controller resumes. After
+    /// the timeout we throw a ControllerException as before.
+    double obstacle_wait_timeout_s{5.0};
   };
 
   Config config_;
