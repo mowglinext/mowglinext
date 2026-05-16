@@ -75,6 +75,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
 
   // Cell-based coverage nodes (strip-by-strip dynamic coverage)
   factory.registerNodeType<GetNextUnmowedArea>("GetNextUnmowedArea");
+  factory.registerNodeType<IsMowingComplete>("IsMowingComplete");
   factory.registerNodeType<GetNextStrip>("GetNextStrip");
   factory.registerNodeType<FollowStrip>("FollowStrip");
   factory.registerNodeType<TransitToStrip>("TransitToStrip");

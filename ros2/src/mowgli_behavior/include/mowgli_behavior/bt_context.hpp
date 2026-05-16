@@ -91,6 +91,17 @@ struct BTContext
   /// only partially mows. Cleared by EndSession.
   std::set<uint32_t> attempted_areas;
 
+  /// True when GetNextUnmowedArea exits the AreaLoop because every
+  /// area was visited (and either successfully mowed, AreaUnreachable,
+  /// or was nav-only — in any case, no more work to do). False when
+  /// GetNextUnmowedArea returns FAILURE for a genuine error (service
+  /// down, timeout, no areas defined). Used by IsMowingComplete in
+  /// main_tree.xml to pick between MOWING_COMPLETE_DOCKING and
+  /// COVERAGE_FAILED_DOCKING when the AreaLoop exits. Reset at the
+  /// start of GetNextUnmowedArea (so a fresh run starts clean) and by
+  /// EndSession (belt + braces).
+  bool mowing_completed_normally{false};
+
   // -----------------------------------------------------------------------
   // Derived / convenience fields (computed from latest_* messages)
   // -----------------------------------------------------------------------

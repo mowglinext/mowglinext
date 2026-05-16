@@ -42,6 +42,7 @@ const STATE_LABELS: Record<string, string> = {
     CHARGER_FAILED: "Charger Failed",
     NAV_TO_DOCK_FAILED: "Nav Failed",
     COVERAGE_FAILED_DOCKING: "Coverage Failed",
+    MOWING_COMPLETE_DOCKING: "Mowing Complete — Returning to Dock",
 };
 
 export const stateRenderer = (value: string | undefined) => {

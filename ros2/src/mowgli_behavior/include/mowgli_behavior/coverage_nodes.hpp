@@ -276,6 +276,32 @@ private:
 // GetNextUnmowedArea — find next area with remaining strips
 // ---------------------------------------------------------------------------
 
+/// Returns SUCCESS when the AreaLoop has exited because every area was
+/// processed (mowed, AreaUnreachable, or nav-only) — i.e. when
+/// GetNextUnmowedArea raised ctx->mowing_completed_normally. Returns
+/// FAILURE otherwise (genuine error: no areas defined, service down,
+/// timeout). Used in main_tree.xml inside StripCoverageWithRecovery to
+/// choose between MOWING_COMPLETE_DOCKING and the existing
+/// COVERAGE_FAILED_DOCKING path. Without this discriminator, a robot
+/// that mows a small area in 2 perimeter rings (no inner swaths
+/// needed) shows "Coverage failed" in the GUI even though the area
+/// was fully mowed — the BT couldn't tell "done" from "broken".
+class IsMowingComplete : public BT::ConditionNode
+{
+public:
+  IsMowingComplete(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
 class GetNextUnmowedArea : public BT::StatefulActionNode
 {
 public:

@@ -45,6 +45,7 @@ export const MOWER_STATES: Record<string, { label: string; tone: 'info' | 'prima
   // Recovery / transitions
   RESUMING_UNDOCKING:         { label: 'Resuming Undock',    tone: 'primary', friendly: 'Leaving the dock to resume' },
   BOUNDARY_RECOVERY:          { label: 'Boundary Recovery',  tone: 'warning', friendly: 'Recovering after boundary event' },
+  MOWING_COMPLETE_DOCKING:    { label: 'Returning to Dock',  tone: 'success', friendly: 'All areas mowed — returning to dock' },
 
   // Failures / emergencies
   EMERGENCY:                  { label: 'Emergency Stop',     tone: 'danger',  friendly: 'Emergency stop engaged' },

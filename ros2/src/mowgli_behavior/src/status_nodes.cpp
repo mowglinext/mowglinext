@@ -136,6 +136,12 @@ BT::NodeStatus EndSession::tick()
   // Clear the per-session "already planned" set so the next
   // COMMAND_START can plan + mow each area exactly once again.
   ctx->attempted_areas.clear();
+  // The exit-flavour flag is also reset at the top of
+  // GetNextUnmowedArea::onStart, but clear it here too so a session
+  // that ends via dock-on-rain or LOW_BATTERY (without re-entering
+  // GetNextUnmowedArea) doesn't leave the next run starting with a
+  // stale "completed normally" carried over from a prior session.
+  ctx->mowing_completed_normally = false;
   return BT::NodeStatus::SUCCESS;
 }
 

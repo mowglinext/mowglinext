@@ -517,21 +517,54 @@
 
             </ReactiveSequence>
 
-            <!-- Coverage failed — dock gracefully -->
-            <Sequence name="FailedCoverageDock">
-              <SetMowerEnabled enabled="false"/>
-              <PublishHighLevelStatus state="2" state_name="COVERAGE_FAILED_DOCKING"/>
-              <Fallback name="FailedCoverageNavOrStop">
-                <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
-                <Sequence>
-                  <PublishHighLevelStatus state="0" state_name="NAV_TO_DOCK_FAILED"/>
-                  <AlwaysSuccess/>
-                </Sequence>
-              </Fallback>
-              <PublishHighLevelStatus state="1" state_name="IDLE_DOCKED"/>
-              <EndSession/>
-              <ClearCommand/>
-            </Sequence>
+            <!-- AreaLoop just exited with FAILURE. Two reasons it could
+                 do that: (a) every area was processed successfully — the
+                 clean exit, GetNextUnmowedArea raised
+                 ctx->mowing_completed_normally — or (b) a genuine
+                 coverage failure (no areas defined, service down, etc.).
+                 Pick the right banner: IsMowingComplete returns SUCCESS
+                 for (a), so the success-dock branch runs; otherwise the
+                 existing FailedCoverageDock fires. Both branches end
+                 with the same dock + EndSession + ClearCommand tail.
+
+                 Before this split: users with a small area that 2
+                 perimeter rings cover entirely saw "Coverage Failed"
+                 in the GUI right after the rings completed — strips
+                 reported strips_remaining=0, GetNextUnmowedArea
+                 returned FAILURE for "all areas done", and the BT
+                 couldn't tell that apart from a real failure. -->
+            <Fallback name="MowingExitChooser">
+              <Sequence name="MowingCompleteDock">
+                <IsMowingComplete/>
+                <SetMowerEnabled enabled="false"/>
+                <PublishHighLevelStatus state="2" state_name="MOWING_COMPLETE_DOCKING"/>
+                <Fallback name="MowingCompleteNavOrStop">
+                  <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+                  <Sequence>
+                    <PublishHighLevelStatus state="0" state_name="NAV_TO_DOCK_FAILED"/>
+                    <AlwaysSuccess/>
+                  </Sequence>
+                </Fallback>
+                <PublishHighLevelStatus state="1" state_name="IDLE_DOCKED"/>
+                <EndSession/>
+                <ClearCommand/>
+              </Sequence>
+              <!-- Coverage failed — dock gracefully -->
+              <Sequence name="FailedCoverageDock">
+                <SetMowerEnabled enabled="false"/>
+                <PublishHighLevelStatus state="2" state_name="COVERAGE_FAILED_DOCKING"/>
+                <Fallback name="FailedCoverageNavOrStop">
+                  <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+                  <Sequence>
+                    <PublishHighLevelStatus state="0" state_name="NAV_TO_DOCK_FAILED"/>
+                    <AlwaysSuccess/>
+                  </Sequence>
+                </Fallback>
+                <PublishHighLevelStatus state="1" state_name="IDLE_DOCKED"/>
+                <EndSession/>
+                <ClearCommand/>
+              </Sequence>
+            </Fallback>
           </Fallback>
           </ReactiveSequence>
 

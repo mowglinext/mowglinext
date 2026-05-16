@@ -461,6 +461,20 @@ void DetourAroundObstacle::onHalted()
 }
 
 // ===========================================================================
+// IsMowingComplete — discriminator between clean "all areas done" exit
+// and real coverage failure. Reads ctx->mowing_completed_normally,
+// raised by GetNextUnmowedArea on its success-exit paths and cleared
+// by EndSession + at the top of GetNextUnmowedArea::onStart.
+// ===========================================================================
+
+BT::NodeStatus IsMowingComplete::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  return ctx->mowing_completed_normally ? BT::NodeStatus::SUCCESS
+                                        : BT::NodeStatus::FAILURE;
+}
+
+// ===========================================================================
 // GetNextUnmowedArea — iterate areas, find first with strips remaining
 // ===========================================================================
 
@@ -468,6 +482,14 @@ BT::NodeStatus GetNextUnmowedArea::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   auto helper = ctx->helper_node;
+
+  // Default to "failure path" for the AreaLoop exit banner. The
+  // success-exit branches in processResponse() flip this to true so
+  // IsMowingComplete can pick MOWING_COMPLETE_DOCKING instead of
+  // COVERAGE_FAILED_DOCKING when the loop ends. Reset HERE (before the
+  // service-ready check) so a service outage on a fresh run doesn't
+  // carry forward a true flag from a prior successful session.
+  ctx->mowing_completed_normally = false;
 
   if (!client_)
   {
@@ -526,6 +548,10 @@ BT::NodeStatus GetNextUnmowedArea::onStart()
   {
     RCLCPP_INFO(ctx->node->get_logger(),
                 "GetNextUnmowedArea: all areas already attempted this session");
+    // Clean exit: every area in this session has been processed, the
+    // loop just woke back up after a previous attempt. Same outcome
+    // as the natural "all areas complete" exit below.
+    ctx->mowing_completed_normally = true;
     return BT::NodeStatus::FAILURE;
   }
 
@@ -573,12 +599,19 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
                   "GetNextUnmowedArea: no mowing areas defined in map_server "
                   "(first get_coverage_status returned success=false). "
                   "Record an area via the GUI before starting mowing.");
+      // Leave mowing_completed_normally = false: nothing was actually
+      // mowed, the user has no recorded areas. This *is* a setup error.
     }
     else
     {
       RCLCPP_INFO(ctx->node->get_logger(),
                   "GetNextUnmowedArea: all %u area(s) complete",
                   areas_complete_);
+      // Genuine clean exit: we walked the whole list and every area
+      // was either successfully mowed, skipped (AreaUnreachable), or
+      // nav-only. Raise the flag so IsMowingComplete picks
+      // MOWING_COMPLETE_DOCKING instead of COVERAGE_FAILED_DOCKING.
+      ctx->mowing_completed_normally = true;
     }
     return BT::NodeStatus::FAILURE;
   }
@@ -624,6 +657,9 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
     RCLCPP_INFO(ctx->node->get_logger(),
                 "GetNextUnmowedArea: all %u area(s) complete",
                 areas_complete_);
+    // Clean exit: we hit the end of the configured area range and
+    // every area we touched reported strips_remaining=0.
+    ctx->mowing_completed_normally = true;
     return BT::NodeStatus::FAILURE;
   }
 
