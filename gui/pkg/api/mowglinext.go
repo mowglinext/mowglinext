@@ -124,6 +124,41 @@ func ClearMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 	})
 }
 
+// replaceMapInternal is the ROS-side flow shared by the public PUT
+// handler and the OpenMower importer. It does clear_map → add_area×N →
+// save_areas; the wrapping (HTTP body decode / response codes) is the
+// caller's job.
+//
+// The save_areas error is annotated so callers can distinguish a
+// partial-success (areas live but not persisted to disk) from a hard
+// failure earlier in the sequence.
+func replaceMapInternal(ctx context.Context, provider types.IRosProvider, req *mowgli.ReplaceMapReq) error {
+	if req == nil {
+		return errors.New("replaceMapInternal: nil request")
+	}
+	if err := provider.CallService(ctx, "/map_server_node/clear_map", &mowgli.ClearMapReq{}, &mowgli.ClearMapRes{}, "std_srvs/srv/Trigger"); err != nil {
+		return err
+	}
+	for _, element := range req.Areas {
+		// Ensure Obstacles is an empty slice, not nil — the bridge rejects
+		// null for repeated fields ("msg is not a list type").
+		if element.Area.Obstacles == nil {
+			element.Area.Obstacles = []geometry.Polygon{}
+		}
+		areaReq := mowgli.AddMowingAreaReq{
+			Area:             element.Area,
+			IsNavigationArea: element.IsNavigationArea,
+		}
+		if err := provider.CallService(ctx, "/map_server_node/add_area", &areaReq, &mowgli.AddMowingAreaRes{}, "mowgli_interfaces/srv/AddMowingArea"); err != nil {
+			return err
+		}
+	}
+	if err := provider.CallService(ctx, "/map_server_node/save_areas", &mowgli.ClearMapReq{}, &mowgli.ClearMapRes{}, "std_srvs/srv/Trigger"); err != nil {
+		return fmt.Errorf("areas added but save_areas failed: %w", err)
+	}
+	return nil
+}
+
 // ReplaceMapRoute clear the map and insert areas
 //
 // @Summary Delete the current map and replace all areas
@@ -140,44 +175,27 @@ func ReplaceMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 		defer cancel()
 
-		err := provider.CallService(ctx, "/map_server_node/clear_map", &mowgli.ClearMapReq{}, &mowgli.ClearMapRes{}, "std_srvs/srv/Trigger")
-		if err != nil {
-			c.JSON(500, ErrorResponse{Error: err.Error()})
-			return
-		}
-
 		var CallReq mowgli.ReplaceMapReq
-		err = unmarshalROSMessage[*mowgli.ReplaceMapReq](c.Request.Body, &CallReq)
-		if err != nil {
+		if err := unmarshalROSMessage[*mowgli.ReplaceMapReq](c.Request.Body, &CallReq); err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
 		}
-		for _, element := range CallReq.Areas {
-			// Ensure Obstacles is an empty slice, not nil — the bridge
-			// rejects null for repeated fields ("msg is not a list type").
-			if element.Area.Obstacles == nil {
-				element.Area.Obstacles = []geometry.Polygon{}
-			}
-			areaReq := mowgli.AddMowingAreaReq{
-				Area:             element.Area,
-				IsNavigationArea: element.IsNavigationArea,
-			}
-			err = provider.CallService(ctx, "/map_server_node/add_area", &areaReq, &mowgli.AddMowingAreaRes{}, "mowgli_interfaces/srv/AddMowingArea")
-			if err != nil {
-				c.JSON(500, ErrorResponse{Error: err.Error()})
-				return
-			}
-		}
-
-		// Persist areas to disk so they survive container restarts
-		err = provider.CallService(ctx, "/map_server_node/save_areas", &mowgli.ClearMapReq{}, &mowgli.ClearMapRes{}, "std_srvs/srv/Trigger")
-		if err != nil {
-			c.JSON(500, ErrorResponse{Error: fmt.Sprintf("areas added but save_areas failed: %v", err)})
+		if err := replaceMapInternal(ctx, provider, &CallReq); err != nil {
+			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
 		}
-
 		c.JSON(200, OkResponse{})
 	})
+}
+
+// setDockingPointInternal is the ROS-side call shared by the public
+// POST handler and the OpenMower importer. Single service round-trip,
+// no wrapping logic.
+func setDockingPointInternal(ctx context.Context, provider types.IRosProvider, req *mowgli.SetDockingPointReq) error {
+	if req == nil {
+		return errors.New("setDockingPointInternal: nil request")
+	}
+	return provider.CallService(ctx, "/map_server_node/set_docking_point", req, &mowgli.SetDockingPointRes{}, "mowgli_interfaces/srv/SetDockingPoint")
 }
 
 // SetDockingPointRoute set the docking point
@@ -197,16 +215,15 @@ func SetDockingPointRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		defer cancel()
 
 		var CallReq mowgli.SetDockingPointReq
-		err := unmarshalROSMessage[*mowgli.SetDockingPointReq](c.Request.Body, &CallReq)
-		if err != nil {
+		if err := unmarshalROSMessage[*mowgli.SetDockingPointReq](c.Request.Body, &CallReq); err != nil {
+			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
 		}
-		err = provider.CallService(ctx, "/map_server_node/set_docking_point", &CallReq, &mowgli.SetDockingPointRes{}, "mowgli_interfaces/srv/SetDockingPoint")
-		if err != nil {
+		if err := setDockingPointInternal(ctx, provider, &CallReq); err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
-		} else {
-			c.JSON(200, OkResponse{})
+			return
 		}
+		c.JSON(200, OkResponse{})
 	})
 }
 

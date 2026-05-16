@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cedbossneo/mowglinext/pkg/msgs/geometry"
 	"github.com/cedbossneo/mowglinext/pkg/msgs/mowgli"
@@ -499,7 +501,7 @@ func buildMowgliNextPayload(omMap openMowerMap, shiftE, shiftN float64) (*mowgli
 		}
 		dockReq = &mowgli.SetDockingPointReq{
 			DockingPose: geometry.Pose{
-				Position: geometry.Point{X: d.Position.X + shiftE, Y: d.Position.Y + shiftN, Z: 0},
+				Position:    geometry.Point{X: d.Position.X + shiftE, Y: d.Position.Y + shiftN, Z: 0},
 				Orientation: yawToQuaternion(d.Heading),
 			},
 		}
@@ -509,21 +511,40 @@ func buildMowgliNextPayload(omMap openMowerMap, shiftE, shiftN float64) (*mowgli
 	return replaceReq, dockReq
 }
 
-// applyImport is the **stub** write path. It intentionally does NOT
-// call /map_server_node/clear_map / add_area / save_areas /
-// set_docking_point yet — see docs/IMPORT_OPENMOWER_MAP.md §5 for the
-// open questions that gate flipping this on.
+// applyImport runs the live write path: clear_map → add_area×N →
+// save_areas, then (if a dock pose came through) set_docking_point.
 //
-// The signature is wired so the only change needed to go live is to
-// replace the `log` block with the existing ReplaceMapRoute /
-// SetDockingPointRoute logic (or refactor those into shared callable
-// helpers and invoke them here).
+// Replace-mode only. Mirrors the same service sequence used by the
+// HTTP-driven ReplaceMapRoute + SetDockingPointRoute via the shared
+// helpers in mowglinext.go, so the importer and the regular save path
+// can't drift apart on what "save" means. A failure mid-sequence
+// surfaces as a 500 to the caller; areas already written before the
+// failure stay in `map_server_node`'s in-memory state (the same
+// partial-write semantics the HTTP route has — there is no transaction).
 func applyImport(c *gin.Context, rosProvider types.IRosProvider, replaceReq *mowgli.ReplaceMapReq, dockReq *mowgli.SetDockingPointReq) error {
-	// TODO(import): wire to provider.CallService(... clear_map / add_area
-	//               / save_areas / set_docking_point ...). Mirrors the
-	//               flow in ReplaceMapRoute / SetDockingPointRoute.
-	logImportPreview(ImportOpenMowerSummary{}, replaceReq, dockReq)
-	return errors.New("apply path is currently disabled — see docs/IMPORT_OPENMOWER_MAP.md (preview-only)")
+	if rosProvider == nil {
+		return errors.New("apply: no ROS provider")
+	}
+	if replaceReq == nil {
+		return errors.New("apply: nil replace request")
+	}
+	// Reuse the gin request context for cancellation propagation, but
+	// give the whole sequence its own 30 s budget — same envelope as
+	// ReplaceMapRoute's timeout. save_areas does disk IO; add_area on a
+	// large polygon walk can take ~1 s each.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	logImportf("import/openmower applying: %d areas, dock=%v", len(replaceReq.Areas), dockReq != nil)
+	if err := replaceMapInternal(ctx, rosProvider, replaceReq); err != nil {
+		return fmt.Errorf("replace map: %w", err)
+	}
+	if dockReq != nil {
+		if err := setDockingPointInternal(ctx, rosProvider, dockReq); err != nil {
+			return fmt.Errorf("set docking point: %w", err)
+		}
+	}
+	return nil
 }
 
 // logImportPreview emits a structured summary of what the import would

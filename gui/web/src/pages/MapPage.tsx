@@ -59,6 +59,10 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // OpenMower import preview — populated by handleImportOpenMower after
     // the file is uploaded + parsed server-side. Modal renders when set.
     const [importPreview, setImportPreview] = useState<ImportOpenMowerSummary | null>(null);
+    // Verbatim text of the imported map.json. Stashed at preview time so
+    // the apply step can re-POST byte-identical content (the server then
+    // runs the same parse + validate flow before writing).
+    const [importFileText, setImportFileText] = useState<string | null>(null);
     // Track whether the user actually moved the dock during this edit
     // session. The dock feature is rebuilt from the live /map topic on
     // every render, and saving without this flag would clobber the
@@ -425,6 +429,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         handleDownloadGeoJSON,
         handleUploadGeoJSON,
         handleImportOpenMower,
+        handleApplyOpenMowerImport,
     } = useMapFiles({
         features,
         setFeatures,
@@ -850,7 +855,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onRestoreMap={handleRestoreMap}
                         onDownloadGeoJSON={handleDownloadGeoJSON}
                         onUploadGeoJSON={handleUploadGeoJSON}
-                        onImportOpenMower={() => handleImportOpenMower(setImportPreview)}
+                        onImportOpenMower={() => handleImportOpenMower(setImportPreview, setImportFileText)}
                         onMowArea={(key) => {
                             const item = mowingAreas.find(item => item.key == key)
                             return mowerAction("start_in_area", {
@@ -901,7 +906,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             onBackupMap={handleBackupMap}
                             onRestoreMap={handleRestoreMap}
                             onDownloadGeoJSON={handleDownloadGeoJSON}
-                            onImportOpenMower={() => handleImportOpenMower(setImportPreview)}
+                            onImportOpenMower={() => handleImportOpenMower(setImportPreview, setImportFileText)}
                             onMowArea={(key) => {
                                 const item = mowingAreas.find(item => item.key == key)
                                 return mowerAction("start_in_area", {
@@ -945,7 +950,16 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             </div>
             <ImportOpenMowerModal
                 preview={importPreview}
-                onClose={() => setImportPreview(null)}
+                onApply={async () => {
+                    if (!importFileText) {
+                        throw new Error("No imported map text in memory — re-select the file.");
+                    }
+                    await handleApplyOpenMowerImport(importFileText);
+                }}
+                onClose={() => {
+                    setImportPreview(null);
+                    setImportFileText(null);
+                }}
             />
         </div>
     );

@@ -288,7 +288,7 @@ func TestPostImportOpenMower_PreviewReturnsSummary(t *testing.T) {
 	assert.Empty(t, mock.ServiceCalls)
 }
 
-func TestPostImportOpenMower_ApplyIsStubbedOff(t *testing.T) {
+func TestPostImportOpenMower_ApplyCallsClearAddSaveAndDock(t *testing.T) {
 	mock := types.NewMockRosProvider()
 	router := setupImportRouter(mock, nil)
 
@@ -298,11 +298,49 @@ func TestPostImportOpenMower_ApplyIsStubbedOff(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
 
-	// Apply path is intentionally disabled — handler should report 500
-	// with the "preview-only" message rather than silently writing.
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp ImportOpenMowerSummary
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Applied, "applied flag must be true on the success response")
+
+	// Expected sequence: clear_map → add_area (mow) → add_area (nav) →
+	// save_areas → set_docking_point. The fixture has one mow area
+	// (with one obstacle nested) and one nav area, hence two add_area
+	// calls.
+	services := make([]string, 0, len(mock.ServiceCalls))
+	for _, sc := range mock.ServiceCalls {
+		services = append(services, sc.Service)
+	}
+	assert.Equal(t,
+		[]string{
+			"/map_server_node/clear_map",
+			"/map_server_node/add_area",
+			"/map_server_node/add_area",
+			"/map_server_node/save_areas",
+			"/map_server_node/set_docking_point",
+		},
+		services,
+		"unexpected ROS call sequence",
+	)
+}
+
+func TestPostImportOpenMower_ApplyClearMapErrorPropagates(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	mock.ServiceErr = assert.AnError
+	router := setupImportRouter(mock, nil)
+
+	body := []byte(`{"map": ` + sampleOpenMowerMap + `, "apply": true}`)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/import/openmower", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
 	require.Equal(t, http.StatusInternalServerError, w.Code, "body=%s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "preview-only")
-	assert.Empty(t, mock.ServiceCalls, "no ROS calls should have fired")
+	// First service call attempted is clear_map and it must abort the rest.
+	require.NotEmpty(t, mock.ServiceCalls)
+	assert.Equal(t, "/map_server_node/clear_map", mock.ServiceCalls[0].Service)
+	assert.Len(t, mock.ServiceCalls, 1, "no further calls after clear_map failure")
 }
 
 func TestPostImportOpenMower_RejectsBadJSON(t *testing.T) {

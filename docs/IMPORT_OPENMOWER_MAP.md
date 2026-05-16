@@ -1,12 +1,13 @@
 # Importing an OpenMower map into MowgliNext
 
-> **Status: scaffolded preview, write path stubbed.**
-> The Go importer parses + validates and the React UI shows a confirmation
-> modal, but the write step (`/map_server_node/clear_map` → `add_area` →
-> `save_areas` + `set_docking_point`) is intentionally disabled while we
-> work out the open questions in the last section. See
-> `gui/pkg/api/openmower_import.go` and the **Import OpenMower** action
-> wired into `MapPage.tsx`.
+> **Status: live for `map.json`.** Apply runs
+> `/map_server_node/clear_map` → `add_area` ×N → `save_areas` →
+> `set_docking_point`. Triggered from **More menu → Import from
+> OpenMower** on the map page. `.bag` is still designed-only (§6).
+> Implementation: `gui/pkg/api/openmower_import.go::applyImport`
+> (shares `replaceMapInternal` + `setDockingPointInternal` from
+> `mowglinext.go`) and the React modal at
+> `gui/web/src/pages/map/components/ImportOpenMowerModal.tsx`.
 
 This document specifies how a user can take a pre-existing OpenMower
 1.x deployment (one of the many garden setups out there) and bring its
@@ -244,23 +245,17 @@ can decide whether to confirm.
 
 ---
 
-## 5. Open questions / edge cases
+## 5. Decisions taken when flipping the write path live
 
-These are the things to weigh in on before flipping the write path
-live:
-
-1. **Datum mismatch is silent today.** The current scaffold defaults
-   to "same datum" if the user doesn't supply one, which will look
-   correct but plant the entire lawn 100s of metres off in the
-   different-datum case. Options:
-   - (a) make `om_datum_lat`/`om_datum_lon` **required** on the upload;
-     UI prompts for them.
-   - (b) infer from the dock — if both maps have a dock pose, derive
-     the datum offset from the difference between the existing
-     MowgliNext dock pose and the OpenMower one. Heuristic, but no
-     extra UX.
-   - (c) ship as-is and rely on the existing **Map offset** panel.
-   The current scaffold leaves a TODO in `applyDatumShift`.
+1. **Datum mismatch.** Shipped option (c) from the original tradeoffs:
+   no UI for `om_datum_lat`/`om_datum_lon` yet — the preview modal
+   surfaces the computed datum shift loudly ("Datum shift:
+   east=X m, north=Y m") and the per-area approximate-area column.
+   Combined with the **Map offset / bearing** panel as the manual
+   escape hatch, that is enough to catch obvious frame mismatches
+   before the user clicks Apply. If field experience says otherwise,
+   option (a) (require the OpenMower datum on upload) is a small
+   addition.
 
 2. **Dock yaw convention.** Both stacks use `yaw = atan2(north, east)`,
    so the heading is portable. But OpenMower stores the heading as a
@@ -286,16 +281,19 @@ live:
    drafts in OpenMower are almost always half-recorded sessions the
    user abandoned.
 
-6. **Replace vs merge.** The current scaffold previews-only. When the
-   write path goes live, the default action is **replace** (clear all
-   existing MowgliNext areas, write the imported set). A **merge**
-   mode (append OpenMower areas to existing MowgliNext areas) is
-   technically just skipping the `clear_map` call — easy to add but
-   risks duplicate areas.
+6. **Replace vs merge.** Shipped **replace-only**: Apply calls
+   `clear_map` before adding the imported areas, matching the
+   semantics of the regular *Save* button. Merge mode is a one-line
+   change (skip `clear_map`) but is gated on a real use case — the
+   risk of silent duplicate areas wasn't worth the toggle.
 
-7. **Backup before import.** Strongly recommend the GUI auto-trigger
-   the existing `handleBackupMap` to stash the current MowgliNext map
-   before the user confirms an import. Not yet wired.
+7. **Backup before import.** Not auto-triggered. The modal's confirm
+   alert tells the user to use **Backup Map** (already in the same
+   More menu) first if they want a rollback file; we did not wire an
+   automatic browser-side download into the Apply path because
+   producing a sidecar file as a side-effect of clicking Apply is
+   surprising. If incident rate justifies it later, the change is
+   ~5 lines (call `handleBackupMap` from the modal's `onApply`).
 
 ---
 
@@ -358,11 +356,19 @@ path; the UI shows a "coming soon" notification when the user picks a
 ## 7. Files
 
 - `gui/pkg/api/openmower_import.go` — Gin handler, JSON parse,
-  validation, structured preview log. `applyImport()` is stubbed.
+  validation, structured preview log, live `applyImport()` calling the
+  shared write helpers.
+- `gui/pkg/api/mowglinext.go` — `replaceMapInternal` +
+  `setDockingPointInternal` shared between the public PUT/POST
+  endpoints and the importer.
 - `gui/pkg/api/openmower_import_test.go` — fixture-driven parse +
-  validation tests.
-- `gui/web/src/pages/MapPage.tsx` — wires an "Import from OpenMower"
-  action into the More menu.
+  validation tests, plus an apply-path test that asserts the
+  clear_map → add_area×N → save_areas → set_docking_point sequence.
+- `gui/web/src/pages/MapPage.tsx` — stashes the uploaded file text,
+  wires the modal's `onApply` to `handleApplyOpenMowerImport`.
 - `gui/web/src/pages/map/hooks/useMapFiles.ts` — adds
-  `handleImportOpenMower` (file picker + POST + preview modal).
+  `handleImportOpenMower` (preview) + `handleApplyOpenMowerImport`
+  (re-POST with `apply: true`).
+- `gui/web/src/pages/map/components/ImportOpenMowerModal.tsx` —
+  preview + apply UI with loading / error states.
 - `docs/IMPORT_OPENMOWER_MAP.md` — this file.

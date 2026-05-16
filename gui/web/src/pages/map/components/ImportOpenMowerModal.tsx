@@ -1,49 +1,78 @@
+import {useState} from "react";
 import {Alert, Modal, Statistic, Table, Tag, Typography} from "antd";
 import type {ImportOpenMowerSummary} from "../hooks/useMapFiles.ts";
 
 interface ImportOpenMowerModalProps {
     preview: ImportOpenMowerSummary | null;
+    /**
+     * Apply confirmation. The hook re-POSTs the stashed file body with
+     * `apply: true`; this modal owns the loading + error UI but not the
+     * fetch itself. Returning a rejected promise here surfaces the error
+     * inline (we don't auto-close — the user can read the message and
+     * cancel).
+     */
+    onApply: () => Promise<void>;
     onClose: () => void;
 }
 
 /**
  * Confirmation modal shown after an OpenMower map.json has been parsed
  * server-side. Renders a summary of what *would* be written if the
- * user confirmed — but the confirm button is intentionally disabled in
- * this iteration. See docs/IMPORT_OPENMOWER_MAP.md §5 for the open
- * questions gating the write path.
- *
- * When the apply path goes live this component should:
- *   1. enable the OK button
- *   2. on OK, POST again with `apply: true` and the same body the user
- *      already uploaded
- *   3. on success, refetch the map (parent owns this) and close
+ * user confirms, then runs the live write path on Apply via the
+ * `onApply` callback wired from MapPage / useMapFiles.
  */
-export function ImportOpenMowerModal({preview, onClose}: ImportOpenMowerModalProps) {
+export function ImportOpenMowerModal({preview, onApply, onClose}: ImportOpenMowerModalProps) {
     const open = preview !== null;
     const summary = preview;
+    const [applying, setApplying] = useState(false);
+    const [applyError, setApplyError] = useState<string | null>(null);
+
+    const handleOk = async () => {
+        setApplying(true);
+        setApplyError(null);
+        try {
+            await onApply();
+            // Reset local state before the parent clears `preview`, so
+            // the next import session starts clean.
+            setApplying(false);
+            onClose();
+        } catch (e: any) {
+            setApplyError(e?.message ?? String(e));
+            setApplying(false);
+        }
+    };
+
+    const noMowAreas = (summary?.mowing_areas ?? 0) === 0;
 
     return (
         <Modal
-            title="Import OpenMower map — preview"
+            title="Import OpenMower map"
             open={open}
-            onCancel={onClose}
-            // Apply is intentionally disabled until the design-doc open
-            // questions are resolved (datum mismatch, replace-vs-merge,
-            // backup-before-import). Showing the OK button greyed out
-            // makes the "this is a preview, no writes" state obvious.
-            okText="Apply (disabled — preview only)"
-            okButtonProps={{disabled: true}}
-            cancelText="Close"
+            onCancel={() => {
+                if (applying) return;
+                setApplyError(null);
+                onClose();
+            }}
+            onOk={handleOk}
+            okText={applying ? "Applying…" : "Apply (replaces current map)"}
+            okButtonProps={{
+                disabled: applying || noMowAreas,
+                loading: applying,
+                danger: true,
+            }}
+            cancelButtonProps={{disabled: applying}}
+            cancelText="Cancel"
             width={720}
+            maskClosable={!applying}
+            closable={!applying}
         >
             {!summary ? null : (
                 <div style={{display: "flex", flexDirection: "column", gap: 16}}>
                     <Alert
-                        type="info"
+                        type="warning"
                         showIcon
-                        message="Preview only — nothing has been written yet"
-                        description="The MowgliNext write path is not yet enabled for this importer. Review the parsed contents below; close the modal to discard. See docs/IMPORT_OPENMOWER_MAP.md for the open questions blocking the apply step."
+                        message="Apply replaces the current MowgliNext map"
+                        description="Clicking Apply will clear every existing area and dock pose, then write the areas shown below. Use Backup Map from the More menu first if you want a rollback file."
                     />
 
                     <div style={{display: "flex", gap: 32, flexWrap: "wrap"}}>
@@ -73,6 +102,15 @@ export function ImportOpenMowerModal({preview, onClose}: ImportOpenMowerModalPro
                             type="info"
                             message={`Datum shift: (east=${summary.datum_shift_east_m.toFixed(2)} m, north=${summary.datum_shift_north_m.toFixed(2)} m)`}
                             description="OpenMower coordinates were translated to land in the MowgliNext map frame. If this looks wrong, double-check both datums."
+                        />
+                    ) : null}
+
+                    {noMowAreas ? (
+                        <Alert
+                            type="error"
+                            showIcon
+                            message="No mowing areas in this file"
+                            description="MowgliNext requires at least one mow area. Apply is disabled — close this modal and pick a different map.json."
                         />
                     ) : null}
 
@@ -112,6 +150,15 @@ export function ImportOpenMowerModal({preview, onClose}: ImportOpenMowerModalPro
                                     ))}
                                 </ul>
                             }
+                        />
+                    ) : null}
+
+                    {applyError ? (
+                        <Alert
+                            type="error"
+                            showIcon
+                            message="Apply failed"
+                            description={applyError}
                         />
                     ) : null}
                 </div>
