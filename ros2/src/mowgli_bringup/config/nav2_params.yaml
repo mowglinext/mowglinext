@@ -166,9 +166,15 @@ controller_server:
     # raise once we have a session on the bench to profile.
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 40                      # ≈ 2 s horizon at model_dt=0.05
-      model_dt: 0.05
-      batch_size: 1500                    # ARM SoC budget; nav2 default 2000
+      # Field-measured 2026-05-17 (Rockchip RK3588 + Mowgli stack): at
+      # batch_size=1500 + time_steps=40 the control loop ran at 5-19 Hz
+      # instead of the 20 Hz target, and TF extrapolation aborted the
+      # FollowPath action ("Lookup would require extrapolation into the
+      # future"). Cut trajectory count from 1500·40 = 60 k to 800·25 = 20 k
+      # while keeping a comparable 1.5 s horizon (25·0.06 vs 40·0.05).
+      time_steps: 25                      # 1.5 s horizon at model_dt=0.06
+      model_dt: 0.06                      # ≈ control loop tick we can actually hit
+      batch_size: 800                     # 64 % less compute per cycle vs 1500
       vx_std: 0.15
       vy_std: 0.0                         # diff-drive, no lateral
       wz_std: 0.35
@@ -180,7 +186,7 @@ controller_server:
       az_max: 2.0
       iteration_count: 1
       prune_distance: 1.5
-      transform_tolerance: 0.2            # ARM TF jitter envelope
+      transform_tolerance: 0.3            # bumped 0.2→0.3 after ARM extrapolation aborts
       temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"
