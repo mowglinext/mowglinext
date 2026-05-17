@@ -6,13 +6,18 @@
 fusion_graph_node:
   ros__parameters:
     # ── Graph cadence ──────────────────────────────────────────────────
-    # 25 Hz default = HARDWARE-correct cadence: TF map→odom publishes
-    # 5x faster than the 5 Hz controller queries, well within the
-    # 200 ms transform_tolerance. sim_full_system.launch.py overrides
-    # to 50 Hz (0.02) because under sim_time the publish/lookup phase
-    # offset routinely throws ExtrapolationException at lower rates.
+    # 50 Hz default. Earlier 25 Hz (0.04) was technically sufficient for
+    # the 5 Hz controller queries, but the operator could see a 5-10°
+    # yaw lag in the GUI during in-place pivots (gyro_z is 91 Hz on
+    # /imu/data but fusion only republished its absorbed value every
+    # 40 ms, layered with 80-100 ms of rosbridge + WebSocket + render
+    # latency downstream). Bumping the optimiser to 50 Hz halves the
+    # fusion-side contribution to that lag at modest CPU cost (iSAM2
+    # incremental updates are sub-millisecond on this graph size).
+    # If CPU pressure becomes visible (Nav2 controller frequency
+    # tanks, ekf_odom_node misses cycles), drop back to 0.03 (33 Hz).
     # Override key (set by navigation.launch.py): fusion_graph_node_period_s.
-    node_period_s: 0.04
+    node_period_s: 0.02
 
     # ── Wheel between-factor noise ─────────────────────────────────────
     # Per-node sigmas in body frame. wheel_sigma_y << wheel_sigma_x is
