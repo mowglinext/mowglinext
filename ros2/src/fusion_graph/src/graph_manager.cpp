@@ -1127,6 +1127,26 @@ bool GraphManager::Load(const std::string& prefix)
   last_node_time_s_ = std::min(last_t, now_s);
   initialized_ = true;
 
+  // Populate latest_ with the highest-index loaded pose so consumers
+  // (LatestSnapshot, OnSetPose's ForceAnchor path, TF publisher) see
+  // a valid snapshot the instant the load completes. Without this,
+  // OnSetPose treats a freshly-loaded graph as "no latest" and
+  // silently drops the set_pose seed — which on a dock-restart leaves
+  // fusion_graph initialized at wherever the persisted last-session
+  // pose was, ignoring the operator-calibrated dock_pose.
+  // Covariance is unknown at this point (we don't re-run iSAM2's
+  // marginal cov here), so use a loose placeholder; the first Tick()
+  // will compute it properly.
+  if (next_index_ > 0 && HasPoseAt(next_index_ - 1))
+  {
+    TickOutput out;
+    out.pose = PoseAt(next_index_ - 1);
+    out.covariance = Eigen::Matrix3d::Identity() * 0.25;
+    out.node_index = next_index_ - 1;
+    out.timestamp = last_node_time_s_;
+    latest_ = out;
+  }
+
   return true;
 }
 
