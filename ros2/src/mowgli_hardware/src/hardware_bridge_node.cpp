@@ -1236,6 +1236,14 @@ private:
     msg.twist.covariance[28] = 1e6;  // wy - unknown
     msg.twist.covariance[35] = force_zero ? 1e-6 : 9e-4;  // wz variance
 
+    // Snapshot the latest wheel-frame velocity for the cmd_vel closed-loop
+    // deadband compensator below (on_cmd_vel). Update under no lock since
+    // both updater (this thread) and reader (cmd_vel callback) run on the
+    // single rclcpp executor — there is no concurrent access. Fresh every
+    // ~50 ms (kAggregateMs above), which is well below cmd_vel cadence.
+    last_wheel_vx_ = vx;
+    last_wheel_vyaw_ = vyaw;
+
     pub_wheel_odom_->publish(msg);
   }
 
@@ -1312,18 +1320,63 @@ private:
       send_high_level_state();
     }
 
-    // Motor deadband boost: at low |ω| with no linear motion, each wheel
-    // gets PWM ≈ |ω|·L/2·PWM_PER_MPS. With L=0.325 and PWM_PER_MPS=300,
-    // |ω|=0.5 rad/s → PWM 24, well below the firmware deadband (~PWM 40)
-    // → motors buzz and the robot doesn't rotate. Boost sub-threshold pure
-    // rotations to MIN_ROT_VEL so the wheels actually engage. Forward
-    // motion supplies its own PWM via vx, so we only boost when the
-    // robot is essentially stationary in linear.
-    constexpr double kMinRotVel = 0.85;  // rad/s, ≈ wheel 0.14 m/s
-    constexpr double kVxStationaryThreshold = 0.05;
-    if (std::abs(vx) < kVxStationaryThreshold && wz != 0.0 && std::abs(wz) < kMinRotVel)
+    // Closed-loop motor-deadband compensator.
+    //
+    // Background: firmware PWM deadband (~PWM 40) requires |ω| ≥ 0.82 rad/s
+    // for pivots and |vx| ≥ 0.13 m/s for forward motion to overcome static
+    // friction. Sub-deadband commands produce motor buzz but no motion.
+    //
+    // Two prior attempts both failed in different ways:
+    //   * floor-to-0.85 boost (commit 5e62bda2): over-rotates by ~1.5-2×,
+    //     causing FTC and MPPI to issue opposite corrections that the
+    //     boost re-amplifies → "gauche-droite-gauche-droite" oscillation.
+    //   * pulse modulation (PR #221/#223, reverted in #225): time-averages
+    //     the boost into bursty PWM, which destroys MPPI's smooth
+    //     predictive control on FollowPath (transit / dock approach).
+    //
+    // This compensator boosts only when the wheels are actually stalled:
+    // it reads `last_wheel_v(x|yaw)_` (snapshotted from the wheel-odom
+    // publish path above) and only fires when the commanded velocity is
+    // sub-deadband AND the wheels report <kResponseRatio · cmd in actual
+    // motion. When the wheels are responding (even slowly), we pass the
+    // command through unchanged — controllers that have closed the loop
+    // around perception aren't blindsided by a host-side amplifier.
+    //
+    // The first cmd after a controller engages still sees stalled wheels
+    // and gets boosted — that's the intended behavior: it kicks the
+    // motors out of the deadband. Once moving, the closed-loop test
+    // releases the boost.
+    constexpr double kMinRotVel = 0.85;       // rad/s, just above ~PWM 40 deadband
+    constexpr double kMinLinVel = 0.13;       // m/s, just above ~PWM 40 deadband
+    constexpr double kResponseRatio = 0.40;   // wheels considered "responding" at ≥40 % cmd
+    constexpr double kMinCmdToConsider = 0.02;  // ignore floating-point dust on cmd_vel
+
+    const bool sub_db_w = (std::abs(wz) > kMinCmdToConsider && std::abs(wz) < kMinRotVel);
+    const bool sub_db_v = (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < kMinLinVel);
+
+    if (sub_db_w)
     {
-      wz = std::copysign(kMinRotVel, wz);
+      // Wheels respond if observed yaw rate has the same sign as cmd AND
+      // its magnitude is at least kResponseRatio · |wz|. Sign check avoids
+      // boosting a still-decelerating wheel that hasn't reversed yet.
+      const bool wheels_responding =
+        (last_wheel_vyaw_ * wz > 0.0) &&
+        (std::abs(last_wheel_vyaw_) >= kResponseRatio * std::abs(wz));
+      if (!wheels_responding)
+      {
+        wz = std::copysign(kMinRotVel, wz);
+      }
+    }
+
+    if (sub_db_v)
+    {
+      const bool wheels_responding =
+        (last_wheel_vx_ * vx > 0.0) &&
+        (std::abs(last_wheel_vx_) >= kResponseRatio * std::abs(vx));
+      if (!wheels_responding)
+      {
+        vx = std::copysign(kMinLinVel, vx);
+      }
     }
 
     LlCmdVel pkt{};
@@ -1461,6 +1514,12 @@ private:
   int32_t odom_acc_delta_left_{0};
   int32_t odom_acc_delta_right_{0};
   uint32_t odom_acc_dt_ms_{0};
+  // Latest base-frame velocity from the wheel-odom aggregation, snapshotted
+  // for the cmd_vel closed-loop deadband compensator. Single-writer
+  // (wheel-odom path) / single-reader (cmd_vel callback), both on the same
+  // executor — no lock needed.
+  double last_wheel_vx_{0.0};
+  double last_wheel_vyaw_{0.0};
 
   // IMU calibration state (computed while docked and idle, OR when stationary
   // off-dock via auto-cal, OR loaded from the persisted file at boot)
