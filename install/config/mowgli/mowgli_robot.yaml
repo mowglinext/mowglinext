@@ -29,7 +29,11 @@ mowgli:
         battery_critical_voltage: 23
         battery_empty_voltage: 24
         battery_full_percent: 95
-        battery_full_voltage: 28.5
+        # YardForce500 SLA packs top out at ~28.0 V on the dock. Earlier
+        # default of 28.5 V capped the displayed percent at 88.9 % even when
+        # fully charged. Operators with a pack that truly reaches 28.5 V can
+        # override this here.
+        battery_full_voltage: 28.0
         battery_low_percent: 20
 
         # ── Chassis (YardForce500 measured) ─────────────────────────
