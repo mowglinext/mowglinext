@@ -119,11 +119,41 @@ private:
                                      std::lock_guard<std::mutex> lock(context_->context_mutex);
                                      context_->latest_power = *msg;
 
+                                     // Low-pass filter on v_battery before deriving the
+                                     // percent. Motors pull the rail down 0.5–1 V during
+                                     // PWM startup / stiction-overcome transients; without
+                                     // smoothing those dips drove LOW_BATTERY_DOCKING trips
+                                     // while the true SoC was still 30–40 %. ALPHA=0.05 at
+                                     // the topic's ~10 Hz rate gives a ≈2 s time constant —
+                                     // brief spikes are absorbed, real discharge still
+                                     // tracks closely. Bootstrap on the first sane sample
+                                     // (≥10 V floor) so a zero-initialised filter doesn't
+                                     // produce an artificial startup dip; ignore obviously
+                                     // invalid samples (sensor glitch / disconnected pack).
+                                     constexpr float ALPHA = 0.05f;
+                                     constexpr float MIN_VALID_V = 10.0f;
+                                     const float v_raw = msg->v_battery;
+                                     if (v_raw >= MIN_VALID_V)
+                                     {
+                                       if (v_battery_filtered_ < MIN_VALID_V)
+                                       {
+                                         v_battery_filtered_ = v_raw;  // bootstrap
+                                       }
+                                       else
+                                       {
+                                         v_battery_filtered_ =
+                                             ALPHA * v_raw + (1.0f - ALPHA) * v_battery_filtered_;
+                                       }
+                                     }
+                                     const float v_for_pct = (v_battery_filtered_ >= MIN_VALID_V)
+                                                                 ? v_battery_filtered_
+                                                                 : v_raw;
+
                                      // Derive battery_percent from voltage using
                                      // configurable thresholds from ROS parameters.
                                      const float v_max = battery_full_voltage_;
                                      const float v_min = battery_empty_voltage_;
-                                     const float clamped = std::clamp(msg->v_battery, v_min, v_max);
+                                     const float clamped = std::clamp(v_for_pct, v_min, v_max);
                                      const float range = v_max - v_min;
                                      context_->battery_percent =
                                          (range > 0.01f) ? 100.0f * (clamped - v_min) / range
@@ -529,6 +559,9 @@ private:
   // Battery voltage curve parameters
   float battery_full_voltage_{28.5f};
   float battery_empty_voltage_{24.0f};
+  // Running low-pass filter state for v_battery. Below MIN_VALID_V the
+  // filter is treated as un-bootstrapped (first sane sample seeds it).
+  float v_battery_filtered_{0.0f};
 };
 
 }  // namespace mowgli_behavior
