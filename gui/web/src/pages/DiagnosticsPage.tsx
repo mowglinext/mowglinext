@@ -438,10 +438,21 @@ export const DiagnosticsPage = () => {
                                     </Col>
                                 );
                             }
-                            const cnoMean = sat?.mean_cno_db_hz ? parseFloat(sat.mean_cno_db_hz) : null;
+                            // CN0 key differs by GPS backend:
+                            //   ublox aggregator (sensors/gps/gps_health_aggregator.py): mean_cno_db_hz  (since 2026-05-01)
+                            //   unicore_node     (sensors/unicore/...unicore_node.cpp): cn0_mean_db_hz (since 2026-05-13)
+                            // ublox is the established canonical spelling (~12 d older). Try it first;
+                            // fall back to the unicore form so unicore-backed stacks still render
+                            // until unicore_node is renamed to match.
+                            const cnoMeanRaw = sat?.mean_cno_db_hz ?? sat?.cn0_mean_db_hz;
+                            const cnoMean = cnoMeanRaw ? parseFloat(cnoMeanRaw) : null;
                             const cnoOk = cnoMean !== null && cnoMean >= 40;
                             const cnoWarn = cnoMean !== null && cnoMean >= 35 && cnoMean < 40;
-                            const ageS = rtcm?.age_of_last_corr_s ? parseFloat(rtcm.age_of_last_corr_s) : null;
+                            // RTCM-age key also differs by backend:
+                            //   ublox aggregator: age_of_last_corr_s              (canonical, older)
+                            //   unicore_node:     age_of_last_injected_corr_s    (newer, also publishes age_of_last_rtcmstatus_s)
+                            const ageRaw = rtcm?.age_of_last_corr_s ?? rtcm?.age_of_last_injected_corr_s;
+                            const ageS = ageRaw ? parseFloat(ageRaw) : null;
                             const sigmaMm = fix?.sigma_xy_mm && fix.sigma_xy_mm !== "n/a"
                                 ? parseFloat(fix.sigma_xy_mm) : null;
                             return (
