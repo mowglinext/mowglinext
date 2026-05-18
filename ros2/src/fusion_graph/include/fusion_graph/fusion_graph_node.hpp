@@ -15,6 +15,7 @@
 #pragma once
 
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -147,6 +148,32 @@ private:
   // sample. Paired with wheel_dist_since_last_gps_m_; both are
   // reset on every accepted (or wrong-fix-classified) sample.
   double abs_dtheta_since_last_gps_rad_ = 0.0;
+
+  // ── map→odom static anchor ──────────────────────────────────────
+  // The graph publishes one (map-frame) pose per Tick — every
+  // node_period_s when moving, or every stationary_node_period_s
+  // (5 s default) when the chassis appears still. Between Ticks the
+  // snapshot pose is unchanged. If we recomputed T_map_odom on every
+  // OnTimer as out.pose × inv(dr_*[NOW]), the composition
+  //   map→base = T_map_odom × odom→base[NOW]
+  // cancels to out.pose (constant) — the robot looks glued to the
+  // last node pose in viz even while the chassis is genuinely
+  // moving, and teleports the moment a new node lands. Real
+  // hardware no-LiDAR sessions saw 5 s freezes followed by big
+  // jumps as a result.
+  //
+  // The correct map→odom is a constant transform that captures the
+  // map-vs-odom offset at the moment of the last graph node, namely
+  //   T_map_odom = node_pose × inv(dr_at_node)
+  // Re-broadcast at OnTimer rate (so the TF buffer stays fresh) but
+  // recomputed only when a new node lands. Then
+  //   map→base = T_map_odom × odom→base[NOW]
+  // correctly extrapolates the last-node pose through current odom
+  // integration, and /odometry/filtered_map publishes the same
+  // extrapolated pose.
+  gtsam::Pose2 t_map_odom_anchor_{0.0, 0.0, 0.0};
+  uint64_t last_anchored_node_index_ = std::numeric_limits<uint64_t>::max();
+  bool t_map_odom_anchor_valid_ = false;
 
   // Latched seeds for initialization.
   std::optional<gtsam::Vector2> seed_xy_;  // from latest GPS

@@ -858,6 +858,11 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
         // enough to let COG correct it without fighting if the
         // autoloaded yaw is wrong.
         graph_->ForceAnchor(snap->node_index, anchor, 0.005, 5.0 * M_PI / 180.0);
+        // ForceAnchor shifts latest_.pose without bumping node_index;
+        // OnTimer's "node_index changed" check would miss it, leaving
+        // map→odom anchored at the pre-override correction. Force a
+        // refresh so the next OnTimer recomputes against fresh dr_*.
+        t_map_odom_anchor_valid_ = false;
         rtk_autoload_override_done_ = true;
         RCLCPP_WARN(get_logger(),
                     "fusion_graph: RTK-Fixed override of autoloaded pose — "
@@ -988,6 +993,9 @@ void FusionGraphNode::OnScan(sensor_msgs::msg::LaserScan::ConstSharedPtr msg)
       if (snap)
       {
         graph_->ForceAnchor(snap->node_index, best_pose, 0.05, 0.05);
+        // ForceAnchor shifts latest_.pose without bumping node_index;
+        // invalidate the cached map→odom anchor so OnTimer recomputes.
+        t_map_odom_anchor_valid_ = false;
         relocalize_done_ = true;
         RCLCPP_INFO(get_logger(),
                     "fusion_graph: relocalized via scan match "
@@ -1038,6 +1046,10 @@ void FusionGraphNode::OnSetPose(geometry_msgs::msg::PoseWithCovarianceStamped::C
   if (!graph_->IsInitialized())
   {
     graph_->Initialize(pose, this->now().seconds());
+    // Initialize updates latest_ but the map→odom anchor was either
+    // never captured or based on a now-stale init pose; force OnTimer
+    // to recompute it against the new snap.pose + current dr_*.
+    t_map_odom_anchor_valid_ = false;
     RCLCPP_INFO(get_logger(),
                 "fusion_graph: bootstrap init from /set_pose at "
                 "(%.2f, %.2f, %.2f rad)",
@@ -1052,6 +1064,7 @@ void FusionGraphNode::OnSetPose(geometry_msgs::msg::PoseWithCovarianceStamped::C
   if (!snap)
     return;
   graph_->ForceAnchor(snap->node_index, pose, sigma_xy, sigma_theta);
+  t_map_odom_anchor_valid_ = false;  // see comment above
 
   // Suppress the cold-boot scan-match relocalize heuristic. The
   // explicit seed (typically dock_yaw_to_set_pose firing on a
@@ -1161,6 +1174,7 @@ void FusionGraphNode::SeedFromDockPose()
   if (!graph_->IsInitialized())
   {
     graph_->Initialize(pose, this->now().seconds());
+    t_map_odom_anchor_valid_ = false;
     RCLCPP_INFO(get_logger(),
                 "fusion_graph: bootstrap init from dock pose "
                 "(%.2f, %.2f, %.1f°)",
@@ -1174,6 +1188,7 @@ void FusionGraphNode::SeedFromDockPose()
   if (!snap)
     return;
   graph_->ForceAnchor(snap->node_index, pose, sigma_xy, sigma_theta);
+  t_map_odom_anchor_valid_ = false;
   RCLCPP_INFO(get_logger(),
               "fusion_graph: re-anchored at dock (%.2f, %.2f, %.1f°)",
               pose.x(),
@@ -1352,14 +1367,27 @@ void FusionGraphNode::OnTimer()
   // and before the graph has been initialized.
   PublishLocalOdom();
 
-  // Map-frame outputs (map→odom TF + /odometry/filtered_map) are only
-  // published once the graph has a snapshot to read. Re-publishing
-  // from the latest snapshot even when Tick returned nullopt
-  // (stationary throttle, init still pending) keeps the rate at
-  // OnTimer cadence; gating it on node creation drops to 0.2 Hz
-  // during stationary windows and Nav2 starts skipping goals.
+  // Map-frame outputs (map→odom TF + /odometry/filtered_map). Two
+  // jobs here:
+  //   1. When a new node lands, recompute the constant T_map_odom
+  //      anchor — see fusion_graph_node.hpp for the why. This is the
+  //      only point where the anchor can be captured against a fresh
+  //      dr_* (the same OnTimer invocation that just ran Tick); doing
+  //      it later races subsequent OnImu integration.
+  //   2. Re-broadcast TF + /odometry/filtered_map every OnTimer with
+  //      that anchor extrapolated through the current dr_*. Keeping
+  //      the publish rate at OnTimer cadence (vs. only on new-node)
+  //      stops Nav2 from rejecting stale lookups during stationary
+  //      windows.
   if (auto snap = graph_->LatestSnapshot())
   {
+    if (!t_map_odom_anchor_valid_ || snap->node_index != last_anchored_node_index_)
+    {
+      const gtsam::Pose2 dr_at_node(dr_x_, dr_y_, dr_yaw_);
+      t_map_odom_anchor_ = snap->pose.compose(dr_at_node.inverse());
+      last_anchored_node_index_ = snap->node_index;
+      t_map_odom_anchor_valid_ = true;
+    }
     PublishOutputs(*snap);
   }
 }
@@ -1392,6 +1420,7 @@ bool FusionGraphNode::TrySeedInitialPose()
   graph_->Initialize(gtsam::Pose2(seed_xy_->x(), seed_xy_->y(), *seed_yaw_),
                      this->now().seconds(),
                      prior_override);
+  t_map_odom_anchor_valid_ = false;
   RCLCPP_INFO(get_logger(),
               "fusion_graph: initialized at (%.3f, %.3f, %.3f rad)%s",
               seed_xy_->x(),
@@ -1454,15 +1483,26 @@ void FusionGraphNode::PublishLocalOdom()
 
 void FusionGraphNode::PublishOutputs(const TickOutput& out)
 {
+  // Extrapolate the last-node pose through current odom integration
+  // so the published map-frame outputs reflect motion that happened
+  // since the snapshot was taken. Without this, /odometry/filtered_map
+  // and the map→odom TF stay glued to out.pose for up to
+  // stationary_node_period_s (5 s by default) → robot looks frozen
+  // in viz, then teleports when the next Tick lands.
+  const gtsam::Pose2 dr_now(dr_x_, dr_y_, dr_yaw_);
+  const gtsam::Pose2 extrapolated_map_base = t_map_odom_anchor_valid_
+      ? t_map_odom_anchor_.compose(dr_now)
+      : out.pose;
+
   // 1. nav_msgs/Odometry on /odometry/filtered_map.
   nav_msgs::msg::Odometry odom;
   odom.header.stamp = this->now();
   odom.header.frame_id = map_frame_;
   odom.child_frame_id = base_frame_;
-  odom.pose.pose.position.x = out.pose.x();
-  odom.pose.pose.position.y = out.pose.y();
+  odom.pose.pose.position.x = extrapolated_map_base.x();
+  odom.pose.pose.position.y = extrapolated_map_base.y();
   odom.pose.pose.position.z = 0.0;
-  odom.pose.pose.orientation = QuatFromYaw(out.pose.theta());
+  odom.pose.pose.orientation = QuatFromYaw(extrapolated_map_base.theta());
 
   // Pose covariance is 6x6 row-major: x, y, z, roll, pitch, yaw.
   for (auto& v : odom.pose.covariance)
@@ -1496,7 +1536,7 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   sensor_msgs::msg::Imu yaw_msg;
   yaw_msg.header.stamp = odom.header.stamp;
   yaw_msg.header.frame_id = base_frame_;
-  yaw_msg.orientation = QuatFromYaw(out.pose.theta());
+  yaw_msg.orientation = QuatFromYaw(extrapolated_map_base.theta());
   // Roll/pitch covariances marked huge so robot_localization ignores
   // them; only orientation_covariance[8] (yaw variance) is real.
   for (auto& v : yaw_msg.orientation_covariance)
@@ -1519,25 +1559,28 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   if (!primary_mode_)
     return;
 
-  // T_odom_base comes from our own dead-reckoning state (dr_*).
-  // Previously we did tf_buffer_->lookupTransform(odom, base) to read
-  // it back from ekf_odom_node; now fusion_graph owns both TFs, so
-  // there's no listener race and no need to round-trip through tf2.
-  tf2::Transform T_odom_base;
-  T_odom_base.setOrigin(tf2::Vector3(dr_x_, dr_y_, 0.0));
+  // The map→odom TF is the CONSTANT anchor captured at the moment of
+  // the last graph node creation (see fusion_graph_node.hpp). Using
+  // out.pose × inv(dr_now) instead would zero out current odom
+  // motion in the composition map→base = map→odom × odom→base, so
+  // the robot would freeze at the snapshot pose between Ticks.
+  tf2::Transform T_map_odom;
+  if (t_map_odom_anchor_valid_)
   {
-    tf2::Quaternion q_odom_base;
-    q_odom_base.setRPY(0.0, 0.0, dr_yaw_);
-    T_odom_base.setRotation(q_odom_base);
+    T_map_odom.setOrigin(
+        tf2::Vector3(t_map_odom_anchor_.x(), t_map_odom_anchor_.y(), 0.0));
+    tf2::Quaternion q_map_odom;
+    q_map_odom.setRPY(0.0, 0.0, t_map_odom_anchor_.theta());
+    T_map_odom.setRotation(q_map_odom);
   }
-
-  tf2::Transform T_map_base;
-  T_map_base.setOrigin(tf2::Vector3(out.pose.x(), out.pose.y(), 0.0));
-  tf2::Quaternion q;
-  q.setRPY(0.0, 0.0, out.pose.theta());
-  T_map_base.setRotation(q);
-
-  const tf2::Transform T_map_odom = T_map_base * T_odom_base.inverse();
+  else
+  {
+    // Fallback for the brief OnTimer just after init but before the
+    // anchor has been set (caller already gates on LatestSnapshot, so
+    // we shouldn't reach here in practice). Identity is safer than
+    // out.pose × inv(dr_now) — at least the robot doesn't get stuck.
+    T_map_odom.setIdentity();
+  }
 
   geometry_msgs::msg::TransformStamped t_map_odom;
   // Forward-stamp by tf_publish_lead_s_ so Nav2 controller_server /
