@@ -182,6 +182,37 @@ private:
           context_->gps_x = msg->pose.pose.position.x;
           context_->gps_y = msg->pose.pose.position.y;
 
+          // Buffer GPS samples while the undock BackUp is in flight so
+          // CalibrateHeadingFromUndock can fit a line through the whole
+          // trajectory (much tighter yaw than the endpoint-only method).
+          // Drop samples that haven't moved at least 5 cm so a stalled
+          // chassis doesn't bloat the buffer; cap the buffer to
+          // kUndockGpsSamplesCap and drop the oldest on overflow.
+          if (context_->undock_start_recorded)
+          {
+            auto& buf = context_->undock_gps_samples;
+            const double x = context_->gps_x;
+            const double y = context_->gps_y;
+            bool keep = true;
+            if (!buf.empty())
+            {
+              const double dx = x - buf.back().first;
+              const double dy = y - buf.back().second;
+              if ((dx * dx + dy * dy) < (0.05 * 0.05))
+              {
+                keep = false;
+              }
+            }
+            if (keep)
+            {
+              if (buf.size() >= BTContext::kUndockGpsSamplesCap)
+              {
+                buf.erase(buf.begin());
+              }
+              buf.emplace_back(x, y);
+            }
+          }
+
           // Derive fix type from flags:
           //   FLAG_GPS_RTK_FIXED=2 → fix_type 4 (RTK fixed)
           //   FLAG_GPS_RTK_FLOAT=4 → fix_type 5 (RTK float)

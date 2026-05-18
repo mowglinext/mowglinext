@@ -22,6 +22,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "geometry_msgs/msg/point32.hpp"
@@ -155,6 +156,18 @@ struct BTContext
   double undock_start_x{0.0};
   double undock_start_y{0.0};
   bool undock_start_recorded{false};
+
+  /// GPS samples (map-frame x, y) accumulated by the GPS subscriber while
+  /// undock_start_recorded is true. CalibrateHeadingFromUndock fits a line
+  /// through these to derive yaw with ~3× the precision of just using the
+  /// start/end endpoints, then persists the result into mowgli_robot.yaml
+  /// via an angular EMA on dock_pose_yaw.
+  ///
+  /// The subscriber dedups by minimum spacing (0.05 m) so a stationary
+  /// chassis doesn't bloat the buffer. Capacity is capped — entries past
+  /// the cap drop the oldest sample.
+  std::vector<std::pair<double, double>> undock_gps_samples;
+  static constexpr size_t kUndockGpsSamplesCap = 200;
 
   // -----------------------------------------------------------------------
   // Obstacle-stuck recovery (collision_monitor wedging)
