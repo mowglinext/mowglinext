@@ -20,31 +20,29 @@ navigation.launch.py
 Navigation stack launch file for the Mowgli robot mower.
 
 Brings up:
-  1. Map-frame localization — fusion_graph_node (GTSAM iSAM2 factor
-     graph) anchors the robot in the map frame and broadcasts map→odom.
-     Inputs: wheel + IMU + GPS + COG (+ optional LiDAR scan-matching
-     and loop-closure). Replaces the legacy robot_localization
-     ekf_map_node + dock_yaw_to_set_pose combo.
-  2. Local-frame dead reckoning — ekf_odom_node (wheels + gyro →
-     odom→base_footprint, continuous).
-  3. Two helper nodes — cog_to_imu (GPS COG as a continuous absolute-
+  1. Localization — fusion_graph_node (GTSAM iSAM2 factor graph) owns
+     both map→odom AND odom→base_footprint. Map-frame inputs: wheel +
+     IMU + GPS + COG (+ optional LiDAR scan-matching and loop-closure).
+     Local-frame: wheel vx + gyro_z integrated at IMU rate (replaces
+     the standalone robot_localization ekf_odom_node).
+  2. Two helper nodes — cog_to_imu (GPS COG as a continuous absolute-
      yaw observation with adaptive covariance) and mag_yaw_publisher
      (tilt-compensated LIS3MDL magnetometer yaw, gated on
      /ros2_ws/maps/mag_calibration.yaml existing).
-  4. Nav2 bringup — full navigation stack (controllers, planners,
+  3. Nav2 bringup — full navigation stack (controllers, planners,
      recoveries, BT navigator, costmaps, lifecycle).
 
 Architecture (REP-105):
-  map → fusion_graph → odom → (ekf_odom) → base_footprint
-                                          → base_link → sensors
-  fusion_graph_node (GTSAM iSAM2) owns map→odom. It runs WITHOUT
-  LiDAR when use_scan_matching=false AND use_loop_closure=false —
-  the graph is then just a Pose2 backbone with wheel between-factors,
-  gyro between-factors (or preintegrated factors when
-  use_imu_preint=true), and GNSS lever-arm + COG / mag unaries.
-  Enable scan-matching and loop closure on LiDAR-equipped robots.
-  ekf_map_node, slam_toolbox, Kinematic-ICP, and FusionCore have all
-  been removed; see CLAUDE.md "What NOT to Do" for deprecated paths.
+  map → odom → base_footprint → base_link → sensors
+  fusion_graph_node owns both map→odom AND odom→base_footprint.
+  It runs WITHOUT LiDAR when use_scan_matching=false AND
+  use_loop_closure=false — the graph is then just a Pose2 backbone
+  with wheel between-factors, gyro between-factors, and GNSS
+  lever-arm + COG / mag unaries; local-frame DR is still produced
+  from the same wheel + gyro stream.
+  ekf_map_node, ekf_odom_node, slam_toolbox, Kinematic-ICP, and
+  FusionCore have all been removed — see CLAUDE.md "What NOT to Do"
+  for deprecated paths.
 """
 
 import os
@@ -183,16 +181,13 @@ def generate_launch_description() -> LaunchDescription:
     # at lower rates / no lead. On real hardware, forward-stamping the
     # map TF by 100 ms costs 5° of yaw error per pivot at 0.5 rad/s
     # — visible on Foxglove and pushed into FTC's heading PID.
+    # fusion_graph_tf_lead_s is shared by map→odom AND odom→base
+    # publishers inside fusion_graph_node now that ekf_odom is gone.
     # ------------------------------------------------------------------
-    ekf_transform_time_offset_arg = DeclareLaunchArgument(
-        "ekf_transform_time_offset",
-        default_value="0.0",
-        description="robot_localization transform_time_offset for both ekf_odom_node and ekf_map_node. Hardware default 0.0 (no extrapolation). Sim should set 0.1 to absorb sim_time/publish phase jitter.",
-    )
     fusion_graph_tf_lead_arg = DeclareLaunchArgument(
         "fusion_graph_tf_lead_s",
         default_value="0.0",
-        description="fusion_graph map→odom TF forward-stamp (seconds). Hardware default 0.0. Sim should set 0.1.",
+        description="fusion_graph TF forward-stamp (seconds), applied to both map→odom and odom→base_footprint. Hardware default 0.0. Sim should set 0.1.",
     )
     fusion_graph_node_period_arg = DeclareLaunchArgument(
         "fusion_graph_node_period_s",
@@ -209,7 +204,6 @@ def generate_launch_description() -> LaunchDescription:
     use_magnetometer = LaunchConfiguration("use_magnetometer")
     use_scan_matching = LaunchConfiguration("use_scan_matching")
     use_loop_closure = LaunchConfiguration("use_loop_closure")
-    ekf_transform_time_offset = LaunchConfiguration("ekf_transform_time_offset")
     fusion_graph_tf_lead_s = LaunchConfiguration("fusion_graph_tf_lead_s")
     fusion_graph_node_period_s = LaunchConfiguration("fusion_graph_node_period_s")
 
@@ -615,20 +609,14 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ------------------------------------------------------------------
-    # Alternative localization backend: robot_localization
+    # gps_link → gps static alias.
     # ------------------------------------------------------------------
-    # Three nodes. Active only when localization_backend == "robot_localization".
-    # ekf_odom_node         : wheels + IMU gyro → odom → base_footprint TF
-    # navsat_transform_node : /gps/fix + /odometry/filtered → /odometry/gps
-    # ekf_map_node          : wheels + IMU + /odometry/gps → map → odom TF
-    robot_localization_params = os.path.join(
-        bringup_dir, "config", "robot_localization.yaml"
-    )
-
-    # navsat_transform_node looks up a TF from base_footprint to the frame
-    # named in the NavSatFix header. Our URDF calls that frame gps_link,
-    # but the ublox_dgnss driver publishes frame_id=gps. Alias gps_link →
-    # gps as a static identity so the lookup finds a chain.
+    # Historical: navsat_transform_node used to look up a TF from
+    # base_footprint to the NavSatFix header frame. Our URDF calls
+    # that frame gps_link; the ublox_dgnss driver publishes frame_id=gps.
+    # navsat_transform was removed 2026-04-26, but the alias is still
+    # cheap insurance for any third-party tool that walks the frame
+    # tree from gps.
     static_gps_link_alias = Node(
         package="tf2_ros",
         executable="static_transform_publisher",
@@ -642,33 +630,6 @@ def generate_launch_description() -> LaunchDescription:
         ],
         parameters=[{"use_sim_time": use_sim_time}],
     )
-
-    ekf_odom_node = Node(
-        package="robot_localization",
-        executable="ekf_node",
-        name="ekf_odom_node",
-        output="screen",
-        parameters=[
-            robot_localization_params,
-            {"use_sim_time": use_sim_time,
-             "transform_time_offset": ekf_transform_time_offset},
-        ],
-        remappings=[
-            ("odometry/filtered", "/odometry/filtered"),
-        ],
-    )
-
-    # Datum triple [lat, lon, yaw]. yaw stays 0 — our IMU has no
-    # magnetometer so yaw can't be anchored to true north at boot;
-    # robot yaw will align to GPS track after the first straight
-    # motion, and to dock_pose_yaw at dock reset. Datum lat/lon must
-    # match what was used to save areas / dock pose, otherwise saved
-    # coordinates shift.
-    # navsat_transform_node removed 2026-04-26 — its only output (/odometry/gps)
-    # had no subscribers in the active fusion path. /gps/absolute_pose
-    # (from navsat_to_absolute_pose_node) is consumed by the GUI, BT,
-    # and calibration nodes; the localization map-frame backend
-    # consumes /gps/fix directly inside fusion_graph_node.
 
     # fusion_graph_node — GTSAM iSAM2 factor-graph localizer. Always
     # primary (no fallback to ekf_map_node, which was removed alongside
@@ -808,10 +769,6 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
-    # ekf_odom_node subscribes to /wheel_odom directly (see
-    # robot_localization.yaml). ekf_map_node fuses /gps/pose_cov directly
-    # as pose0 (published by navsat_to_absolute_pose_node).
-
     # ------------------------------------------------------------------
     # LaunchDescription
     # ------------------------------------------------------------------
@@ -824,12 +781,12 @@ def generate_launch_description() -> LaunchDescription:
             use_scan_matching_arg,
             use_loop_closure_arg,
             cog_stationary_seed_rate_hz_arg,
-            ekf_transform_time_offset_arg,
             fusion_graph_tf_lead_arg,
             fusion_graph_node_period_arg,
-            # Localization helpers + fusion_graph_node (single map-frame backend)
+            # Localization helpers + fusion_graph_node (single localizer
+            # for both map→odom AND odom→base_footprint; ekf_odom_node
+            # was removed 2026-05-18).
             static_gps_link_alias,
-            ekf_odom_node,
             fusion_graph_launch,
             cog_to_imu,
             mag_yaw_publisher,

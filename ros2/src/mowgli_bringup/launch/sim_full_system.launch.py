@@ -151,10 +151,8 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ------------------------------------------------------------------
-    # 2. Navigation stack — robot_localization (dual EKF), Nav2
-    #    ekf_odom_node publishes odom -> base_footprint; ekf_map_node
-    #    publishes map -> odom. fusion_graph scan-matching is opt-in
-    #    via use_fusion_graph (real-robot only — requires LiDAR on ARM).
+    # 2. Navigation stack — fusion_graph (single localizer for both
+    #    map→odom AND odom→base_footprint) + Nav2.
     # ------------------------------------------------------------------
     navigation_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -177,7 +175,9 @@ def generate_launch_description() -> LaunchDescription:
             # offset routinely throws ExtrapolationException without the
             # lead, and the controller queries align poorly with the
             # 25 Hz TF cadence — restore the sim-tested values here.
-            "ekf_transform_time_offset": "0.1",
+            # fusion_graph_tf_lead_s now also applies to the
+            # odom→base_footprint TF (ekf_odom_node was removed
+            # 2026-05-18; fusion_graph owns both transforms).
             "fusion_graph_tf_lead_s": "0.1",
             "fusion_graph_node_period_s": "0.02",
         }.items(),
@@ -334,16 +334,12 @@ def generate_launch_description() -> LaunchDescription:
     #     Datum matches the simulator world; if you change the sim
     #     world's lat/lon, change these too.
     # ------------------------------------------------------------------
-    sim_localization_params = os.path.join(
-        bringup_dir, "config", "robot_localization.yaml"
-    )
     navsat_converter_node = Node(
         package="mowgli_localization",
         executable="navsat_to_absolute_pose_node",
         name="navsat_to_absolute_pose",
         output="screen",
         parameters=[
-            sim_localization_params,
             {
                 "use_sim_time": True,
                 "datum_lat": 48.137154,

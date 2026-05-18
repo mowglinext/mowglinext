@@ -1225,19 +1225,31 @@ bool GraphManager::Load(const std::string& prefix)
 
   // Populate latest_ with the highest-index loaded pose so consumers
   // (LatestSnapshot, OnSetPose's ForceAnchor path, TF publisher) see
-  // a valid snapshot the instant the load completes. Without this,
-  // OnSetPose treats a freshly-loaded graph as "no latest" and
-  // silently drops the set_pose seed — which on a dock-restart leaves
-  // fusion_graph initialized at wherever the persisted last-session
-  // pose was, ignoring the operator-calibrated dock_pose.
-  // Covariance is unknown at this point (we don't re-run iSAM2's
-  // marginal cov here), so use a loose placeholder; the first Tick()
-  // will compute it properly.
+  // a valid snapshot the instant the load completes. Without this:
+  //   - OnSetPose treats a freshly-loaded graph as "no latest" and
+  //     silently drops the set_pose seed, leaving fusion_graph at the
+  //     persisted last-session pose instead of the operator dock_pose.
+  //   - PublishOutputs short-circuits until Tick() exits stationary
+  //     throttle, leaving Nav2 without a map→odom TF for the whole
+  //     warm-up window. ekf_odom_node used to mask that by publishing
+  //     odom→base independently; with fusion_graph owning both TFs
+  //     now, Nav2 hangs outright on the missing chain.
+  // Try the real marginal covariance once; fall back to a loose
+  // placeholder if isam_ throws (Bayes tree path may not include the
+  // key yet for some edge cases). The first Tick() will overwrite
+  // with a proper cov.
   if (next_index_ > 0 && HasPoseAt(next_index_ - 1))
   {
     TickOutput out;
     out.pose = PoseAt(next_index_ - 1);
-    out.covariance = Eigen::Matrix3d::Identity() * 0.25;
+    try
+    {
+      out.covariance = isam_.marginalCovariance(PoseKey(next_index_ - 1));
+    }
+    catch (const std::exception&)
+    {
+      out.covariance = Eigen::Matrix3d::Identity() * 0.01;
+    }
     out.node_index = next_index_ - 1;
     out.timestamp = last_node_time_s_;
     latest_ = out;

@@ -244,6 +244,11 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
 
   // ── Pubs/subs ─────────────────────────────────────────────────────
   pub_odom_ = create_publisher<nav_msgs::msg::Odometry>("/odometry/filtered_map", 10);
+  // /odometry/filtered + odom→base_footprint TF — replaces ekf_odom_node.
+  // Continuous local-frame dead reckoning (wheel vx + gyro_z), never
+  // sees GPS, never jumps. Nav2's odom_topic in nav2_params.yaml still
+  // points here.
+  pub_local_odom_ = create_publisher<nav_msgs::msg::Odometry>("/odometry/filtered", 10);
 
   // High-rate extrapolated pose (item #15). Off by default — set
   // fast_pose_publish_rate_hz > 0 in yaml to enable. 100 Hz is the
@@ -666,6 +671,10 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
 void FusionGraphNode::OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
 {
   const rclcpp::Time stamp(msg->header.stamp);
+  // Latest forward velocity for the local-frame DR integration in OnImu.
+  // twist.linear.y is non-holonomically locked to 0 by hardware_bridge
+  // (tight vy covariance) — we mirror that by only integrating vx.
+  wheel_vx_ = msg->twist.twist.linear.x;
   if (last_wheel_stamp_)
   {
     double dt = (stamp - *last_wheel_stamp_).seconds();
@@ -695,6 +704,14 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
     if (dt > 0.0 && dt < 1.0)
     {
       graph_->AddGyroDelta(msg->angular_velocity.z, dt);
+      // Local-frame dead reckoning. Yaw integrates the bias-corrected
+      // gyro_z (hardware_bridge subtracts the dock-time IMU bias);
+      // position uses the latest wheel vx with the just-updated yaw.
+      // Sub-cm/sub-° accuracy per IMU sample at typical 91 Hz / 0.5 m/s.
+      const double gz = msg->angular_velocity.z;
+      dr_yaw_ += gz * dt;
+      dr_x_ += wheel_vx_ * std::cos(dr_yaw_) * dt;
+      dr_y_ += wheel_vx_ * std::sin(dr_yaw_) * dt;
     }
   }
   last_imu_stamp_ = stamp;
@@ -1304,13 +1321,18 @@ void FusionGraphNode::OnTimer()
     }
   }
 
-  // Always republish odom + TF from the latest snapshot, even when
-  // Tick returned nullopt (stationary throttle, init still pending,
-  // etc.). Nav2 / BT need a fresh map→odom TF at the OnTimer rate
-  // (10 Hz) — gating publish on node creation drops the rate to 0.2 Hz
-  // during stationary windows, which makes the planner think the
-  // pose is stale and skips goals. Cheap: just composes latest_ with
-  // odom→base_footprint and broadcasts.
+  // Local-frame DR (odom→base_footprint TF + /odometry/filtered) is
+  // always published — it's independent of graph state. Nav2's local
+  // costmap and FTCController need this TF before any GPS fix arrives,
+  // and before the graph has been initialized.
+  PublishLocalOdom();
+
+  // Map-frame outputs (map→odom TF + /odometry/filtered_map) are only
+  // published once the graph has a snapshot to read. Re-publishing
+  // from the latest snapshot even when Tick returned nullopt
+  // (stationary throttle, init still pending) keeps the rate at
+  // OnTimer cadence; gating it on node creation drops to 0.2 Hz
+  // during stationary windows and Nav2 starts skipping goals.
   if (auto snap = graph_->LatestSnapshot())
   {
     PublishOutputs(*snap);
@@ -1352,6 +1374,57 @@ bool FusionGraphNode::TrySeedInitialPose()
               *seed_yaw_,
               seed_xy_rtk_fixed_ ? " [RTK-Fixed seed, σ=5mm prior]" : " [non-Fixed seed]");
   return true;
+}
+
+void FusionGraphNode::PublishLocalOdom()
+{
+  // odom→base_footprint TF + /odometry/filtered from the dead-reckoning
+  // state. Replaces ekf_odom_node. Streams every OnTimer tick so the
+  // local frame is ready before the graph itself initializes (Nav2's
+  // local costmap and FTCController both rely on this TF, and they
+  // can come up before any GPS fix has landed).
+  const rclcpp::Time now = this->now();
+  // Same forward-stamp trick as map→odom: under sim_time, Nav2
+  // lookups can race a few ms ahead of the latest publish. Adding
+  // tf_publish_lead_s_ keeps tf2 in interpolation territory instead
+  // of ExtrapolationException. On real hardware (lead=0) this is a
+  // no-op.
+  const rclcpp::Time stamp = now + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
+
+  const geometry_msgs::msg::Quaternion q_msg = QuatFromYaw(dr_yaw_);
+
+  geometry_msgs::msg::TransformStamped t_odom_base;
+  t_odom_base.header.stamp = stamp;
+  t_odom_base.header.frame_id = odom_frame_;
+  t_odom_base.child_frame_id = base_frame_;
+  t_odom_base.transform.translation.x = dr_x_;
+  t_odom_base.transform.translation.y = dr_y_;
+  t_odom_base.transform.translation.z = 0.0;
+  t_odom_base.transform.rotation = q_msg;
+  tf_broadcaster_->sendTransform(t_odom_base);
+
+  nav_msgs::msg::Odometry odom;
+  odom.header.stamp = now;
+  odom.header.frame_id = odom_frame_;
+  odom.child_frame_id = base_frame_;
+  odom.pose.pose.position.x = dr_x_;
+  odom.pose.pose.position.y = dr_y_;
+  odom.pose.pose.position.z = 0.0;
+  odom.pose.pose.orientation = q_msg;
+  odom.twist.twist.linear.x = wheel_vx_;
+  odom.twist.twist.linear.y = 0.0;
+  // Dead reckoning has unbounded drift — leave pose covariance loose
+  // and let Nav2 trust the graph's /odometry/filtered_map for absolute
+  // positioning. Tight roll/pitch/z so 2D consumers don't see NaN.
+  for (auto& v : odom.pose.covariance)
+    v = 0.0;
+  odom.pose.covariance[0] = 0.05;    // x
+  odom.pose.covariance[7] = 0.05;    // y
+  odom.pose.covariance[14] = 1e-9;   // z
+  odom.pose.covariance[21] = 1e-9;   // roll
+  odom.pose.covariance[28] = 1e-9;   // pitch
+  odom.pose.covariance[35] = 0.02;   // yaw — gyro short-term σ ≈ 0.14 rad
+  pub_local_odom_->publish(odom);
 }
 
 void FusionGraphNode::PublishOutputs(const TickOutput& out)
@@ -1421,29 +1494,17 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   if (!primary_mode_)
     return;
 
-  //    T_odom_base is the local EKF's odom->base_footprint TF.
-  geometry_msgs::msg::TransformStamped t_odom_base;
-  try
-  {
-    t_odom_base = tf_buffer_->lookupTransform(odom_frame_,
-                                              base_frame_,
-                                              tf2::TimePointZero,
-                                              tf2::durationFromSec(0.05));
-  }
-  catch (const tf2::TransformException& ex)
-  {
-    RCLCPP_WARN_THROTTLE(get_logger(),
-                         *get_clock(),
-                         2000,
-                         "fusion_graph: TF %s -> %s not available: %s",
-                         odom_frame_.c_str(),
-                         base_frame_.c_str(),
-                         ex.what());
-    return;
-  }
-
+  // T_odom_base comes from our own dead-reckoning state (dr_*).
+  // Previously we did tf_buffer_->lookupTransform(odom, base) to read
+  // it back from ekf_odom_node; now fusion_graph owns both TFs, so
+  // there's no listener race and no need to round-trip through tf2.
   tf2::Transform T_odom_base;
-  tf2::fromMsg(t_odom_base.transform, T_odom_base);
+  T_odom_base.setOrigin(tf2::Vector3(dr_x_, dr_y_, 0.0));
+  {
+    tf2::Quaternion q_odom_base;
+    q_odom_base.setRPY(0.0, 0.0, dr_yaw_);
+    T_odom_base.setRotation(q_odom_base);
+  }
 
   tf2::Transform T_map_base;
   T_map_base.setOrigin(tf2::Vector3(out.pose.x(), out.pose.y(), 0.0));

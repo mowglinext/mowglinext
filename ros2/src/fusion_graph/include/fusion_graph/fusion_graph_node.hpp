@@ -77,6 +77,10 @@ private:
 
   // Publish TF map->odom and /odometry/filtered_map.
   void PublishOutputs(const TickOutput& out);
+  // Publishes /odometry/filtered + odom→base_footprint TF from the
+  // dead-reckoning state. Called unconditionally from OnTimer so the
+  // local frame keeps streaming even before the graph initializes.
+  void PublishLocalOdom();
 
   // Launch GraphManager::Save on a detached worker. No-op if a
   // previous async save is still running. `reason` is logged.
@@ -116,6 +120,20 @@ private:
   // Most recent wheel timestamp (for accumulator dt).
   std::optional<rclcpp::Time> last_wheel_stamp_;
   std::optional<rclcpp::Time> last_imu_stamp_;
+
+  // ── Local-frame dead reckoning ──────────────────────────────────
+  // odom→base_footprint TF + /odometry/filtered. Wheel vx + gyro_z
+  // integrated at IMU rate (~91 Hz) so the local frame is continuous,
+  // GPS-independent, and never jumps — REP-105 odom invariants.
+  // Replaces the standalone robot_localization ekf_odom_node (which
+  // ran the same wheel+gyro fusion at 25 Hz via a generic EKF). The
+  // non-holonomic constraint is enforced implicitly: only twist.linear.x
+  // is integrated, twist.linear.y is ignored (matches hardware_bridge
+  // which already publishes vy=0 with tight covariance).
+  double dr_x_ = 0.0;
+  double dr_y_ = 0.0;
+  double dr_yaw_ = 0.0;
+  double wheel_vx_ = 0.0;  // latest forward velocity cached from /wheel_odom
 
   // Latched seeds for initialization.
   std::optional<gtsam::Vector2> seed_xy_;  // from latest GPS
@@ -183,6 +201,10 @@ private:
 
   // Publishers.
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;
+  // /odometry/filtered — local-frame dead reckoning (REP-105 odom),
+  // replaces what ekf_odom_node used to publish. Same topic name so
+  // Nav2 / GUI consumers need no rewiring.
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_local_odom_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_fg_yaw_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr pub_diag_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;

@@ -152,7 +152,6 @@ def generate_launch_description() -> LaunchDescription:
     behavior_params = os.path.join(behavior_dir, "config", "behavior_tree.yaml")
     map_params = os.path.join(map_dir, "config", "map_server.yaml")
     nav2_params_file = os.path.join(bringup_dir, "config", "nav2_params.yaml")
-    localization_params = os.path.join(bringup_dir, "config", "robot_localization.yaml")
     monitoring_params = os.path.join(monitoring_dir, "config", "diagnostics.yaml")
     mqtt_params = os.path.join(monitoring_dir, "config", "mqtt_bridge.yaml")
     # Robot-specific config (bind-mounted from mowgli-docker/config/mowgli/)
@@ -269,7 +268,6 @@ def generate_launch_description() -> LaunchDescription:
         name="navsat_to_absolute_pose",
         output="screen",
         parameters=[
-            localization_params,
             {"datum_lat": datum_lat, "datum_lon": datum_lon},
             {"use_sim_time": use_sim_time},
         ],
@@ -284,7 +282,6 @@ def generate_launch_description() -> LaunchDescription:
         name="localization_monitor_node",
         output="screen",
         parameters=[
-            localization_params,
             {"use_sim_time": use_sim_time},
         ],
     )
