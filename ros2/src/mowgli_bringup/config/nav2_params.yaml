@@ -244,13 +244,22 @@ controller_server:
       speed_slow: 0.16    # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
       speed_angular: 45.0
       acceleration: 0.2
+      # FTC PID gains — detuned 2026-05-19 for the wheel-level PI motor
+      # model (b303db22) and production-grade sensor noise. The earlier
+      # kp_lat=2.0/kp_ang=1.5 produced corrections that overshot the
+      # motor-PI's 200 ms ramp-up across the static-friction deadband,
+      # causing FTC to whipsaw the chassis ±100° per sample on coverage
+      # mid-runs. Lower kp_lat and raise kd_lat for more damping; lower
+      # kp_ang so heading corrections stay below the deadband-overshoot
+      # zone until the motor actually moves. Trade-off: tracking lat
+      # error converges slower (~3 s vs ~1 s at 0.5 m/s) but stably.
       kp_lon: 1.0
       ki_lon: 0.0
       kd_lon: 0.0
-      kp_lat: 2.0
+      kp_lat: 1.2
       ki_lat: 0.0
-      kd_lat: 1.0
-      kp_ang: 1.5
+      kd_lat: 1.5
+      kp_ang: 1.0
       ki_ang: 0.0
       kd_ang: 0.0
       max_cmd_vel_speed: 0.30
