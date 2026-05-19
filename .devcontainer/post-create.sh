@@ -14,6 +14,15 @@ source /opt/ros/kilted/setup.bash
 
 cd /ros2_ws
 
+echo "Cleaning stale workspace artifacts..."
+
+# Never let generated colcon artifacts inside src/ be discovered as packages.
+rm -rf src/install src/build src/log
+
+# Fields2Cover is installed as a system CMake dependency in the devcontainer.
+# Do not build a workspace copy if one is present from older tests.
+rm -f src/fields2cover src/Fields2Cover
+
 # ---------------------------------------------------------------------------
 # Symlink ROS2 packages from monorepo into workspace src/
 #
@@ -21,14 +30,25 @@ cd /ros2_ws
 # /ros2_ws/src/mowglinext. We symlink each mowgli_* package into src/
 # so colcon discovers them at the workspace root, plus fusion_graph.
 # ---------------------------------------------------------------------------
+
 echo "Linking ROS2 packages into workspace..."
 
 mkdir -p src
 
 for pkg_dir in src/mowglinext/ros2/src/mowgli_*/; do
+    [ -d "$pkg_dir" ] || continue
     pkg_name=$(basename "$pkg_dir")
     ln -sfn "/ros2_ws/$pkg_dir" "src/$pkg_name"
     echo "  Linked: $pkg_name"
+done
+
+# OpenNav coverage packages.
+for pkg_dir in src/mowglinext/ros2/src/opennav_coverage/*/; do
+    if [ -f "${pkg_dir}/package.xml" ]; then
+        pkg_name=$(basename "$pkg_dir")
+        ln -sfn "/ros2_ws/$pkg_dir" "src/$pkg_name"
+        echo "  Linked: $pkg_name"
+    fi
 done
 
 if [ -d "src/mowglinext/ros2/src/fusion_graph" ]; then
@@ -64,11 +84,11 @@ rosdep install \
 # Build the workspace.
 # ---------------------------------------------------------------------------
 echo "Building workspace (this may take a few minutes on first run)..."
-# unicore_gnss is a stub package.xml under sensors/unicore/ (no
-# CMakeLists in tree — it lives in the GPS Docker image build context).
-# colcon discovers it via the workspace mount and would fail; ignore it.
+
+# unicore_gnss is a stub package.xml under sensors/unicore/ with no CMakeLists.
+# fields2cover is provided as a system dependency, not built as a ROS package.
 colcon build \
-    --packages-ignore unicore_gnss \
+    --packages-ignore unicore_gnss fields2cover \
     --cmake-args \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_TESTING=OFF \

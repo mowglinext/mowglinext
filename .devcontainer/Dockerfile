@@ -86,6 +86,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-kilted-nav2-core \
     ros-kilted-nav2-util \
     ros-kilted-nav2-msgs \
+    ros-kilted-fields2cover \
     # ── DDS (Cyclone is required — FastRTPS has stale shm issues on ARM) ──
     ros-kilted-rmw-cyclonedds-cpp \
     # ── Docking ──
@@ -164,6 +165,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       > /etc/apt/sources.list.d/github-cli.list \
  && apt-get update && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
+
+# Fields2Cover as system CMake dependency for mowgli_coverage.
+RUN git clone --depth 1 --branch v2.0.0 https://github.com/Fields2Cover/Fields2Cover.git /tmp/Fields2Cover && \
+    cmake -S /tmp/Fields2Cover -B /tmp/Fields2Cover/build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/usr/local \
+      -DBUILD_TESTING=OFF && \
+    cmake --build /tmp/Fields2Cover/build -j$(nproc) && \
+    cmake --install /tmp/Fields2Cover/build && \
+    rm -rf /tmp/Fields2Cover && \
+    ldconfig
 
 # ---------------------------------------------------------------------------
 # 2. Python linters + pre-commit (system-wide, PEP 668 override OK inside
