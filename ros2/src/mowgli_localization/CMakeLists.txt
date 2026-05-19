@@ -18,6 +18,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ---------------------------------------------------------------------------
 
 find_package(ament_cmake        REQUIRED)
+find_package(diagnostic_msgs    REQUIRED)
 find_package(rclcpp             REQUIRED)
 find_package(nav_msgs           REQUIRED)
 find_package(geometry_msgs      REQUIRED)
@@ -64,12 +65,15 @@ ament_target_dependencies(wheel_odometry_node
 # ---------------------------------------------------------------------------
 
 add_executable(navsat_to_absolute_pose_node
+  src/gnss_runtime_state_builder.cpp
+  src/gnss_status_adapter.cpp
   src/navsat_to_absolute_pose_node.cpp
 )
 
 target_include_directories(navsat_to_absolute_pose_node PUBLIC ${INCLUDE_DIR})
 
 ament_target_dependencies(navsat_to_absolute_pose_node
+  diagnostic_msgs
   rclcpp
   sensor_msgs
   geometry_msgs
@@ -253,6 +257,31 @@ if(BUILD_TESTING)
   ament_target_dependencies(test_costmap_scan_filter
     sensor_msgs
   )
+
+  ament_add_gtest(test_gnss_status_adapter
+    test/test_gnss_status_adapter.cpp
+    src/gnss_status_adapter.cpp
+  )
+  ament_target_dependencies(test_gnss_status_adapter
+    rclcpp
+    mowgli_interfaces
+  )
+  target_include_directories(test_gnss_status_adapter PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
+  ament_add_gtest(test_gnss_runtime_state_builder
+    test/test_gnss_runtime_state_builder.cpp
+    src/gnss_runtime_state_builder.cpp
+  )
+  ament_target_dependencies(test_gnss_runtime_state_builder
+    diagnostic_msgs
+    rclcpp
+    sensor_msgs
+  )
+  target_include_directories(test_gnss_runtime_state_builder PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
 endif()
 
 # ---------------------------------------------------------------------------
@@ -262,6 +291,7 @@ endif()
 ament_export_include_directories(include)
 ament_export_dependencies(
   rclcpp
+  diagnostic_msgs
   nav_msgs
   geometry_msgs
   sensor_msgs
