@@ -3,7 +3,6 @@ import {useIsMobile} from "../hooks/useIsMobile";
 import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
 import {usePower} from "../hooks/usePower.ts";
 import {useStatus} from "../hooks/useStatus.ts";
-import {useGPS} from "../hooks/useGPS.ts";
 import {useGnssStatus} from "../hooks/useGnssStatus.ts";
 import {useEmergency} from "../hooks/useEmergency.ts";
 import {useSettings} from "../hooks/useSettings.ts";
@@ -25,7 +24,6 @@ function useMowerData() {
   const {highLevelStatus} = useHighLevelStatus();
   const power = usePower();
   const status = useStatus();
-  const gps = useGPS();
   const gnss = useGnssStatus();
   const emergency = useEmergency();
   const {settings} = useSettings();
@@ -37,7 +35,7 @@ function useMowerData() {
     highLevelStatus.battery_percent, power.v_battery, settings,
   );
 
-  const gpsStatus = deriveGpsStatus(gnss, gps.flags);
+  const gpsStatus = deriveGpsStatus(gnss);
 
   const stateName = highLevelStatus.state_name ?? (
     isEmergency ? "EMERGENCY" :

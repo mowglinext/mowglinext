@@ -30,9 +30,7 @@ export function HighLevelStatusComponent() {
     );
 
     // Derive GPS quality from the typed GNSS runtime state.
-    const gpsQuality = (() => {
-        return gnssStatus.quality_percent ?? 0;
-    })();
+    const gpsQuality = gnssStatus.quality_percent;
 
     // Derive state name: prefer highLevelStatus, fall back to basic inference
     const stateName = highLevelStatus.state_name ?? (
@@ -66,9 +64,12 @@ export function HighLevelStatusComponent() {
     return <Row gutter={[16, 16]}>
         <Col lg={6} xs={12}><Statistic title="State" valueStyle={{color: colors.primary}}
                                        value={stateRenderer(stateName)}/></Col>
-        <Col lg={6} xs={12}><Statistic title="GPS" precision={2}
-                                       value={gpsQuality}
-                                       suffix={"%"}/></Col>
+        <Col lg={6} xs={12}>{gpsQuality == null ?
+            <Statistic title="GPS" value="--"/> :
+            <Statistic title="GPS" precision={2}
+                       value={gpsQuality}
+                       suffix={"%"}/>}
+        </Col>
         <Col lg={6} xs={12}><Statistic title="Battery" value={batteryPercent}
                                        formatter={progressFormatter}/></Col>
         <Col lg={6} xs={12}>{isCharging ?

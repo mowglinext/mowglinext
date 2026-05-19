@@ -1,6 +1,7 @@
-import {AbsolutePoseConstants, GnssStatus, GnssStatusConstants} from "../types/ros.ts";
+import {GnssStatus, GnssStatusConstants} from "../types/ros.ts";
 
 export type GpsFixType = "RTK_FIX" | "RTK_FLOAT" | "GPS_FIX" | "NO_FIX";
+export type OptionalGnssBooleanState = "unsupported" | "unknown" | "false" | "true";
 
 export interface GpsStatus {
     fixType: GpsFixType;
@@ -25,29 +26,65 @@ function fromFixType(fixType: number | undefined | null): GpsStatus | null {
     }
 }
 
-function fromAbsolutePoseFlags(flags: number | undefined | null): GpsStatus {
-    const f = flags ?? 0;
-    if (f & AbsolutePoseConstants.FLAG_GPS_RTK_FIXED) {
-        return {fixType: "RTK_FIX", label: "RTK fixed", percent: 100};
-    }
-    if (f & AbsolutePoseConstants.FLAG_GPS_RTK_FLOAT) {
-        return {fixType: "RTK_FLOAT", label: "RTK float", percent: 50};
-    }
-    if (f & AbsolutePoseConstants.FLAG_GPS_RTK) {
-        return {fixType: "GPS_FIX", label: "GPS fix", percent: 25};
-    }
-    return {fixType: "NO_FIX", label: "No GPS", percent: 0};
-}
-
-// Source of truth: GnssStatus from /gps/status. Fall back to the legacy
-// AbsolutePose flags while older publishers are still around.
-export function deriveGpsStatus(
-    gnssStatus: GnssStatus | undefined | null,
-    fallbackFlags?: number | undefined | null,
-): GpsStatus {
+// Source of truth: GnssStatus from /gps/status.
+export function deriveGpsStatus(gnssStatus: GnssStatus | undefined | null): GpsStatus {
     const fromTypedStatus = fromFixType(gnssStatus?.fix_type);
     if (fromTypedStatus) {
         return fromTypedStatus;
     }
-    return fromAbsolutePoseFlags(fallbackFlags);
+    return {fixType: "NO_FIX", label: "No GPS", percent: 0};
+}
+
+export function hasGnssCapability(gnssStatus: GnssStatus | undefined | null, flag: number): boolean {
+    return ((gnssStatus?.capability_flags ?? 0) & flag) !== 0;
+}
+
+export function hasGnssValue(gnssStatus: GnssStatus | undefined | null, flag: number): boolean {
+    return ((gnssStatus?.value_flags ?? 0) & flag) !== 0;
+}
+
+export function readGnssNumber(
+    gnssStatus: GnssStatus | undefined | null,
+    flag: number,
+    value: number | undefined | null,
+): number | undefined {
+    return hasGnssValue(gnssStatus, flag) && value != null ? value : undefined;
+}
+
+export function readGnssBooleanState(
+    gnssStatus: GnssStatus | undefined | null,
+    flag: number,
+    value: boolean | undefined | null,
+): OptionalGnssBooleanState {
+    if (!hasGnssCapability(gnssStatus, flag)) {
+        return "unsupported";
+    }
+    if (!hasGnssValue(gnssStatus, flag) || value == null) {
+        return "unknown";
+    }
+    return value ? "true" : "false";
+}
+
+export function gnssReceiverLabel(gnssStatus: GnssStatus | undefined | null): string {
+    const backend = gnssStatus?.backend?.trim().toLowerCase() ?? "";
+    const vendor = gnssStatus?.receiver_vendor?.trim() ?? "";
+    const model = gnssStatus?.receiver_model?.trim() ?? "";
+
+    if (vendor && model) {
+        return `${vendor} ${model}`;
+    }
+    if (vendor) {
+        return backend === "unicore" ? `${vendor} GNSS` : vendor;
+    }
+
+    switch (backend) {
+        case "nmea":
+            return "Generic GNSS";
+        case "ublox":
+            return "u-blox GNSS";
+        case "unicore":
+            return "Unicore GNSS";
+        default:
+            return "GNSS";
+    }
 }

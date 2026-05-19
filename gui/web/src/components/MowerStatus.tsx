@@ -2,7 +2,6 @@ import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
 import {useStatus} from "../hooks/useStatus.ts";
 import {useEmergency} from "../hooks/useEmergency.ts";
 import {usePower} from "../hooks/usePower.ts";
-import {useGPS} from "../hooks/useGPS.ts";
 import {useGnssStatus} from "../hooks/useGnssStatus.ts";
 import {useSettings} from "../hooks/useSettings.ts";
 import {computeBatteryPercent} from "../utils/battery.ts";
@@ -55,7 +54,6 @@ export const MowerStatus = () => {
     const hwStatus = useStatus();
     const emergencyData = useEmergency();
     const power = usePower();
-    const gps = useGPS();
     const gnss = useGnssStatus();
     const {settings} = useSettings();
     const guiApi = useApi();
@@ -72,7 +70,7 @@ export const MowerStatus = () => {
         undefined
     );
 
-    const gpsStatus = deriveGpsStatus(gnss, gps.flags);
+    const gpsStatus = deriveGpsStatus(gnss);
     const gpsColor =
         gpsStatus.fixType === "RTK_FIX" ? colors.primary :
         gpsStatus.fixType === "RTK_FLOAT" ? colors.warning :

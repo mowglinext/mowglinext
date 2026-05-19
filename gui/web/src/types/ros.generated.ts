@@ -186,30 +186,60 @@ export const enum GnssStatusConstants {
   FIX_TYPE_RTK_FLOAT = 2,
   FIX_TYPE_RTK_FIXED = 3,
   FIX_TYPE_DEAD_RECKONING = 4,
-  CAP_POSITION_ACCURACY = 1,
-  CAP_HEADING = 2,
-  CAP_HEADING_ACCURACY = 4,
-  CAP_SATELLITES_USED = 8,
-  CAP_SATELLITES_VISIBLE = 16,
-  CAP_DIFFERENTIAL_STATUS = 32,
-  CAP_CORRECTION_AGE = 64,
+  RTK_MODE_UNKNOWN = 0,
+  RTK_MODE_NONE = 1,
+  RTK_MODE_FLOAT = 2,
+  RTK_MODE_FIXED = 3,
+  CAP_RTK_MODE = 1,
+  CAP_HDOP = 2,
+  CAP_VDOP = 4,
+  CAP_HORIZONTAL_ACCURACY = 8,
+  CAP_VERTICAL_ACCURACY = 16,
+  CAP_HEADING = 32,
+  CAP_HEADING_ACCURACY = 64,
+  CAP_SATELLITES_USED = 128,
+  CAP_SATELLITES_VISIBLE = 256,
+  CAP_SATELLITES_TRACKED = 512,
+  CAP_DIFFERENTIAL_CORRECTIONS = 1024,
+  CAP_CORRECTIONS_ACTIVE = 2048,
+  CAP_CORRECTION_AGE = 4096,
+  CAP_MEAN_CN0 = 8192,
+  CAP_MAX_CN0 = 16384,
+  CAP_DUAL_ANTENNA_STATUS = 32768,
+  CAP_INTERFERENCE_STATUS = 65536,
+  CAP_JAMMING_STATUS = 131072,
 };
 
 export type GnssStatus = {
   header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  backend?: string;
+  receiver_vendor?: string;
+  receiver_model?: string;
+  receiver_firmware?: string;
   fix_type?: number;
-  has_fix?: boolean;
+  fix_valid?: boolean;
   differential_corrections?: boolean;
   corrections_active?: boolean;
   dead_reckoning?: boolean;
+  rtk_mode?: number;
+  dual_antenna_heading?: boolean;
+  interference_detected?: boolean;
+  jamming_detected?: boolean;
   quality_percent?: number;
   capability_flags?: number;
-  position_accuracy_m?: number;
+  value_flags?: number;
+  hdop?: number;
+  vdop?: number;
+  horizontal_accuracy_m?: number;
+  vertical_accuracy_m?: number;
   heading_deg?: number;
   heading_accuracy_deg?: number;
   satellites_used?: number;
   satellites_visible?: number;
+  satellites_tracked?: number;
   correction_age_s?: number;
+  mean_cn0_db_hz?: number;
+  max_cn0_db_hz?: number;
 };
 
 export const enum HighLevelStatusConstants {
