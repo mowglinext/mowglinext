@@ -133,9 +133,10 @@ BT::NodeStatus EndSession::tick()
   ctx->undock_start_recorded = false;
   ctx->obstacle_backoff_count = 0;
   ctx->last_obstacle_backoff_time = std::chrono::steady_clock::time_point{};
-  // Clear the per-session "already planned" set so the next
-  // COMMAND_START can plan + mow each area exactly once again.
+  // Clear the per-session "already planned" set and attempt counters
+  // so the next COMMAND_START can plan + mow each area afresh.
   ctx->attempted_areas.clear();
+  ctx->area_attempt_count.clear();
   return BT::NodeStatus::SUCCESS;
 }
 

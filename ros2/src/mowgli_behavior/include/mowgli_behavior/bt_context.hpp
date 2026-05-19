@@ -17,6 +17,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -87,10 +88,21 @@ struct BTContext
 
   /// Areas already dispatched to PlanCoverageArea+FollowStrip in the
   /// current session. GetNextUnmowedArea skips any index in this set
-  /// when iterating, so each area gets at most one PlanCoverageArea
-  /// call per session — no replan loops, even if FollowStrip aborts or
-  /// only partially mows. Cleared by EndSession.
+  /// when iterating. An area is added here only after it is genuinely
+  /// exhausted — either because all swaths were mowed, or because the
+  /// per-area attempt counter (area_attempt_count) hit kMaxAreaAttempts.
+  /// Cleared by EndSession.
   std::set<uint32_t> attempted_areas;
+
+  /// Per-area count of times GetNextUnmowedArea has dispatched the
+  /// area in the current session. Incremented on every dispatch (not
+  /// once per session — replans triggered by boundary recovery or
+  /// FollowStrip retry exhaustion all count). When the counter for an
+  /// area reaches kMaxAreaAttempts, GetNextUnmowedArea promotes it
+  /// into attempted_areas and skips it for the remainder of the
+  /// session. Cleared by EndSession.
+  std::map<uint32_t, uint32_t> area_attempt_count;
+  static constexpr uint32_t kMaxAreaAttempts = 5;
 
   // -----------------------------------------------------------------------
   // Derived / convenience fields (computed from latest_* messages)

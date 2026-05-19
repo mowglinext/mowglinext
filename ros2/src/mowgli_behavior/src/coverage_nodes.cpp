@@ -510,10 +510,13 @@ BT::NodeStatus GetNextUnmowedArea::onStart()
     }
   }
 
-  // Skip any area already attempted in this session — each area gets
-  // exactly ONE PlanCoverageArea + FollowStrip per mowing run, no
-  // replan loops. attempted_areas is cleared by EndSession at session
-  // end, so a fresh COMMAND_START sees an empty set and starts over.
+  // Skip any area that has already burned its attempt budget this
+  // session (BTContext::kMaxAreaAttempts dispatches of PlanCoverageArea
+  // + FollowStrip). An area is added to attempted_areas only after
+  // either completing successfully (strips_remaining == 0) or
+  // exhausting its budget — so a single boundary-recovery preemption
+  // does NOT permanently disable the area. attempted_areas is cleared
+  // by EndSession at session end.
   while (current_area_idx_ < max_areas_ &&
          ctx->attempted_areas.count(current_area_idx_) > 0)
   {
@@ -587,19 +590,54 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
 
   if (response->strips_remaining > 0)
   {
+    // Increment the per-area attempt counter. After kMaxAreaAttempts
+    // dispatches, mark the area attempted (gives up) — otherwise let
+    // the area roll over for another PlanCoverageArea + FollowStrip
+    // pass. This is what lets us re-enter an area after a
+    // BoundaryGuard recovery preempts the original FollowStrip
+    // mid-mow: the cached strip_path is gone but mow_progress has
+    // captured everything we mowed before the excursion, so the
+    // re-plan covers only the remaining swaths.
+    auto& n = ctx->area_attempt_count[current_area_idx_];
+    n++;
+    if (n >= BTContext::kMaxAreaAttempts)
+    {
+      ctx->attempted_areas.insert(current_area_idx_);
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "GetNextUnmowedArea: area %u hit max attempts (%u), giving up at %.1f%% "
+                  "with %u strips remaining",
+                  current_area_idx_, n, response->coverage_percent,
+                  response->strips_remaining);
+      // Continue iterating — fall through to "skip" path by advancing
+      // current_area_idx_ and re-running the skip loop logic.
+      current_area_idx_++;
+      while (current_area_idx_ < max_areas_ &&
+             ctx->attempted_areas.count(current_area_idx_) > 0)
+      {
+        current_area_idx_++;
+      }
+      if (current_area_idx_ >= max_areas_)
+      {
+        return BT::NodeStatus::FAILURE;
+      }
+      // Issue the next async request for the next candidate area.
+      auto request = std::make_shared<mowgli_interfaces::srv::GetCoverageStatus::Request>();
+      request->area_index = current_area_idx_;
+      pending_future_.emplace(client_->async_send_request(request));
+      call_start_ = std::chrono::steady_clock::now();
+      return BT::NodeStatus::RUNNING;
+    }
+
     setOutput("area_index", current_area_idx_);
     ctx->current_area = static_cast<int>(current_area_idx_);
-    // Mark this area as attempted so the AreaLoop's next iteration
-    // (after FollowStrip completes or aborts) skips it instead of
-    // re-planning. Each area gets exactly one shot per session.
-    ctx->attempted_areas.insert(current_area_idx_);
 
     RCLCPP_INFO(ctx->node->get_logger(),
                 "GetNextUnmowedArea: area %u has %u strips remaining (%.1f%% done) "
-                "— marking attempted",
+                "— dispatch attempt %u/%u",
                 current_area_idx_,
                 response->strips_remaining,
-                response->coverage_percent);
+                response->coverage_percent,
+                n, BTContext::kMaxAreaAttempts);
     return BT::NodeStatus::SUCCESS;
   }
 
