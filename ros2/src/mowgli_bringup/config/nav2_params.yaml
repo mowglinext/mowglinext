@@ -706,17 +706,17 @@ docking_server:
     # the cradle. Halving v_linear_max and doubling slowdown_radius gives
     # a calm ~5 cm/s final approach with plenty of braking distance for
     # the 10 Hz controller loop to detect charging and stop cleanly.
-    # v_linear_min raised 0.05 → 0.13 to stay above the firmware motor
-    # PWM deadband (~PWM 40 → ~0.13 m/s). Below that the graceful-
-    # controller's smooth slowdown produced cmd_vx values that didn't
-    # actuate the wheels — measured 2026-05-17: robot stuck oscillating
-    # 5-15 cm short of the dock contacts; docking_server timed out
-    # repeatedly. With the floor at 0.13, the closed-loop deadband
-    # compensator in hardware_bridge (PR #228) still kicks in if the
-    # wheels stall, and the controller always asks for at least one
-    # deadband-worth of push.
-    controller.v_linear_min: 0.13
-    controller.v_linear_max: 0.12
+    # v_linear_min raised to 0.16 to stay above the host clamp
+    # (hardware_bridge on_cmd_vel zeroes |vx|<0.15). v_linear_max
+    # raised to 0.22 so the graceful controller has a > min envelope
+    # (the old 0.13/0.12 pair was an off-by-one: min > max made the
+    # controller saturate or refuse motion, which is what caused the
+    # 2026-05-19 sim "Failed to make progress" DockRobot timeout after
+    # 3 min of no motion). Even at the new 0.22 max the dock landing
+    # is soft: slowdown_radius=0.5 m gives the 20 Hz loop ample time
+    # to brake against docking_threshold=0.05 m.
+    controller.v_linear_min: 0.16
+    controller.v_linear_max: 0.22
     controller.v_angular_max: 0.5
     controller.slowdown_radius: 0.5
     # Named dock instances — BT uses dock_id="home_dock"

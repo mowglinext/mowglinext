@@ -447,8 +447,8 @@ docking_server:
     # nav2_params.yaml and stays above the clamp's strict-less-than
     # boundary.
     controller.use_collision_detection: false
-    controller.v_linear_min: 0.13
-    controller.v_linear_max: 0.12
+    controller.v_linear_min: 0.16    # match nav2_params.yaml — ≥ host clamp 0.15
+    controller.v_linear_max: 0.22    # match nav2_params.yaml — must be > min
     controller.v_angular_max: 0.5
     controller.slowdown_radius: 0.5
     dock_plugins: ["simple_charging_dock"]
