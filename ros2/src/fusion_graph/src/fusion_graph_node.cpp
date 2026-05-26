@@ -554,14 +554,6 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
                             std::snprintf(buf, sizeof(buf), "%.4f", stats.wheel_sigma_x_eff);
                             add("wheel_sigma_x_eff", buf);
                           }
-                          // iSAM2 update attempts vs caught failures.
-                          // Non-zero failures = numerical ill-condition caught
-                          // by the graph_manager try/catch; the node stayed
-                          // alive but dropped that batch.
-                          add("isam_update_attempts",
-                              std::to_string(stats.isam_update_attempts));
-                          add("isam_update_failures",
-                              std::to_string(stats.isam_update_failures));
                           if (snap)
                           {
                             char buf[64];
