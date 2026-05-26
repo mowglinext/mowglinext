@@ -554,6 +554,14 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
                             std::snprintf(buf, sizeof(buf), "%.4f", stats.wheel_sigma_x_eff);
                             add("wheel_sigma_x_eff", buf);
                           }
+                          // iSAM2 update attempts vs caught failures.
+                          // Non-zero failures = numerical ill-condition caught
+                          // by the graph_manager try/catch; the node stayed
+                          // alive but dropped that batch.
+                          add("isam_update_attempts",
+                              std::to_string(stats.isam_update_attempts));
+                          add("isam_update_failures",
+                              std::to_string(stats.isam_update_failures));
                           if (snap)
                           {
                             char buf[64];
@@ -1146,11 +1154,29 @@ void FusionGraphNode::OnHardwareStatus(mowgli_interfaces::msg::Status::ConstShar
   // never see a fall→rise of charging unless the robot physically
   // undocks. Pre-init, keep retrying every status callback while
   // docked + GPS-seen so the seed eventually lands once GPS arrives.
+  //
+  // Boot-while-docked race: the graph may already be Initialized by
+  // OnGpsPose before this gate sees gps_seen_once_=true, so the
+  // pre_init_seed_pending check silently expires without ever firing
+  // SeedFromDockPose. Backstop with a one-shot session flag that
+  // catches "docked + GPS now seen + we haven't seeded yet this
+  // dock session". Resets when the robot undocks (true→false on
+  // last_is_charging_) so subsequent dock arrivals re-seed.
   const bool pre_init_seed_pending =
       docked && gps_seen_once_ && !graph_->IsInitialized();
-  if (pre_init_seed_pending || (dock_event && gps_seen_once_))
+  const bool session_seed_pending =
+      docked && gps_seen_once_ && !dock_seeded_this_session_;
+  if (pre_init_seed_pending || session_seed_pending ||
+      (dock_event && gps_seen_once_))
   {
     SeedFromDockPose();
+    dock_seeded_this_session_ = true;
+  }
+  // Undock transition: clear the one-shot so the next dock arrival
+  // can re-seed via the rising-edge path.
+  if (last_is_charging_valid_ && last_is_charging_ && !docked)
+  {
+    dock_seeded_this_session_ = false;
   }
   last_is_charging_ = docked;
   last_is_charging_valid_ = true;

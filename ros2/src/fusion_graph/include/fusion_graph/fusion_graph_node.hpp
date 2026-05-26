@@ -282,6 +282,12 @@ private:
   bool last_hl_state_valid_ = false;
   bool last_is_charging_ = false;
   bool last_is_charging_valid_ = false;
+  // One-shot per dock session: ensures SeedFromDockPose fires exactly
+  // once per docked interval, even when the boot-while-docked race
+  // means neither the rising_edge nor boot_while_docked branches can
+  // catch the moment gps_seen_once_ flips true. Reset on undock so
+  // the next dock arrival re-seeds.
+  bool dock_seeded_this_session_ = false;
 
   // Dock-arrival pose seed (formerly the dock_yaw_to_set_pose node).
   // On the rising edge of is_charging we anchor the graph at the
