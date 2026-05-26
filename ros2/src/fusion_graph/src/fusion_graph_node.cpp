@@ -821,6 +821,35 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   // session, or a slow drift that builds up to >5 cm without a
   // detectable wheel discrepancy).
   const bool rtk_fixed = msg->status.status == sensor_msgs::msg::NavSatStatus::STATUS_GBAS_FIX;
+  // Suppress GPS factors while the robot is on the dock.
+  //
+  // When `is_charging=true`, the operator-calibrated dock_pose (anchored
+  // by SeedFromDockPose with σ≈10 cm) is the authoritative ground truth
+  // on the robot's position. Even RTK-Fixed GPS only matches the dock
+  // pose to 1-3 cm at best — and routinely shifts 5-30 cm across F9P
+  // re-acquisitions on different ambiguity sets between sessions. Every
+  // GnssLeverArmFactor (σ≈5 mm, ~7 Hz) accumulated while docked pulls
+  // the trajectory toward the live GPS measurement and away from
+  // dock_pose, so after a minute or two the EKF has walked off the
+  // anchor by 10-30 cm.
+  //
+  // Robot on dock = stationary chassis with known position; we don't
+  // need GPS to know where it is. Skipping QueueGnss preserves the
+  // dock_pose anchor exactly. When the robot undocks, the next OnGnss
+  // (now with is_charging=false) resumes injecting GPS factors and the
+  // trajectory transitions back to GPS-tracking. seed_xy_ is also
+  // skipped because TrySeedInitialPose should use dock_pose, not GPS,
+  // to bootstrap if the graph somehow becomes uninitialised.
+  if (last_is_charging_valid_ && last_is_charging_)
+  {
+    // Still run TrySeedInitialPose so a not-yet-init graph can pick up
+    // a previously-seen seed (e.g. boot race where status arrived
+    // before any /gps/fix). And run the RTK-Fixed override block below
+    // — which is itself gated on !last_is_charging_ now, so it'll
+    // no-op safely. Just don't add a GPS factor or update seed_xy_.
+    TrySeedInitialPose();
+    return;
+  }
   graph_->QueueGnss(mx, my, sigma, /*robust=*/true);
   seed_xy_ = gtsam::Vector2(mx, my);
   // Latch whether the most recent seed came from RTK-Fixed so the next
