@@ -1316,7 +1316,7 @@ private:
   void on_cmd_vel(geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
   {
     double vx = msg->twist.linear.x;
-    const double wz = msg->twist.angular.z;
+    double wz = msg->twist.angular.z;
 
     // The firmware ignores cmd_vel when mode is IDLE.  When velocity commands
     // arrive (from Nav2 or teleop), ensure the firmware is in AUTONOMOUS mode.
