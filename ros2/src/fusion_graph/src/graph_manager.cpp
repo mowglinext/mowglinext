@@ -354,7 +354,56 @@ TickOutput GraphManager::CreateNodeLocked(double now_s)
     sigma_theta = params_.wheel_sigma_theta;
   }
 
-  const gtsam::Pose2 between(accum_.dx, accum_.dy, dtheta);
+  // Slip veto on (dx, dy).
+  //
+  // The yaw selection above already chooses gyro over wheel encoders
+  // when they disagree, so the BetweenFactor's *rotation* component is
+  // honest. The translation is harder: wheel integration assumes
+  // encoders measure ground-contact distance, which holds on dry
+  // surfaces but breaks down on wet grass and during low-speed pivot
+  // attempts where both drive wheels slip in the same direction. The
+  // chassis IMU sees the whole truth — angular velocity directly, no
+  // wheel-traction assumption — so a wheel-vs-gyro disagreement is
+  // ground truth that the wheel readings are not trustworthy this
+  // tick. Field-observed 2026-05-27: during a stuck dock-rotate
+  // attempt the wheels reported a steady ~0.1 m/s forward velocity
+  // and ~0.3 rad/s rotation, while the gyro saw <0.02 rad/s — the
+  // wheel translation slid the map-frame estimate by 0.6 m in 6 s
+  // even though the chassis hadn't moved, and the controller chased
+  // the drift with more commanded motion, fueling the slip.
+  //
+  // Rule: when |dtheta_wheel - dtheta_gyro| is large enough that the
+  // wheel-reported rotation can't be explained by gyro noise, zero
+  // out the BetweenFactor's translation. The pose still advances in
+  // yaw (from the gyro), and any GPS / scan-matching unary will pull
+  // (x,y) in the right direction; without the veto the wheel
+  // integration carries the pose along the phantom slip path
+  // unopposed. The slip_sigma_xy floor keeps sigma_x/sigma_y tight
+  // enough that GPS still anchors the estimate when available, but
+  // not so loose that one tick of slip can shove the pose by tens of
+  // centimetres.
+  //
+  // Threshold is gated by both the disagreement magnitude AND a
+  // minimum gyro stillness — otherwise the slip detector would fire
+  // every time the gyro updates faster than the wheel encoders, which
+  // happens on every normal turn. The combination "wheels rotating
+  // hard, gyro near zero" is the genuine slip signature.
+  const double wheel_gyro_residual =
+      std::abs(accum_.dtheta_wheel - accum_.dtheta_gyro);
+  const bool slip_detected =
+      wheel_gyro_residual > params_.slip_residual_thresh_rad &&
+      std::abs(accum_.dtheta_gyro) < params_.slip_gyro_max_rad &&
+      std::abs(accum_.dtheta_wheel) > params_.slip_wheel_min_rad;
+  double dx_eff = accum_.dx;
+  double dy_eff = accum_.dy;
+  if (slip_detected)
+  {
+    dx_eff = 0.0;
+    dy_eff = 0.0;
+    ++stats_slip_veto_;
+  }
+
+  const gtsam::Pose2 between(dx_eff, dy_eff, dtheta);
 
   const auto k_prev = PoseKey(next_index_ - 1);
   const auto k_curr = PoseKey(next_index_);

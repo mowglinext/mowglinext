@@ -132,6 +132,24 @@ struct GraphParams
   double pivot_gate_dtheta_rad = 0.012;  // rad per tick
   double pivot_wheel_sigma_x = 0.5;  // m — inflated sigma during pivot
 
+  // Slip-veto thresholds (see Tick() implementation for rationale).
+  // When the wheel-vs-gyro yaw delta disagreement exceeds
+  // slip_residual_thresh_rad AND the gyro itself is below
+  // slip_gyro_max_rad (i.e. the chassis isn't actually rotating much)
+  // AND the wheel claims a non-trivial rotation, the BetweenFactor's
+  // (dx, dy) is zeroed — wheels are skating and their translation is
+  // a fiction. Defaults are tuned for 25 Hz nodes; thresholds are
+  // in *per-tick* radians so the gate scales with node_period_s.
+  //   slip_residual_thresh_rad = 0.01 (≈ 0.57° / tick = 14°/s @ 25 Hz)
+  //   slip_gyro_max_rad        = 0.005 rad / tick (≈ 7°/s) — well
+  //                              under any meaningful in-place pivot.
+  //   slip_wheel_min_rad       = 0.005 rad / tick — wheel must be
+  //                              claiming a non-trivial rotation for
+  //                              the gate to apply.
+  double slip_residual_thresh_rad = 0.01;
+  double slip_gyro_max_rad = 0.005;
+  double slip_wheel_min_rad = 0.005;
+
   // Stationary multi-source gate. The wheel-only gate (above) can be
   // tricked by encoders that report no motion while the robot is
   // hand-pushed / lifted — wheels free in mid-air read 0 ticks even
@@ -611,6 +629,7 @@ private:
   uint64_t stats_icp_rejects_sanity_ = 0;
   uint64_t stats_icp_rejects_divergence_ = 0;
   uint64_t stats_hand_push_ = 0;
+  uint64_t stats_slip_veto_ = 0;
 
   // Adaptive process-noise state.
   // residual_ema_ tracks the EMA-smoothed |dtheta_wheel - dtheta_gyro|
