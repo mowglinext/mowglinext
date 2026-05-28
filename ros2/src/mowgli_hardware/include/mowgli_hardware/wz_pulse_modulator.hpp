@@ -58,7 +58,21 @@ inline constexpr double kWzMinCmdToConsider = 1.0e-3;
 ///   - |wz_cmd| >= deadband                      → wz_cmd unchanged (passthrough)
 ///   - otherwise                                 → ±deadband on the fraction of
 ///     ticks given by duty = |wz_cmd|/deadband, else 0; long-run average == wz_cmd.
-inline double pulse_modulate_wz(double wz_cmd, double deadband, double& accum)
+///
+/// \param burst_remaining  caller-owned counter for the minimum-burst-width
+///                 logic; carries an in-progress burst between ticks.
+/// \param min_burst_ticks  minimum number of CONSECUTIVE ticks a pulse must
+///                 stay ON. A single-tick pulse (50-100 ms) is too short to
+///                 overcome the chassis static friction — measured on-robot
+///                 2026-05-27: a sub-deadband command pulsed one tick at a
+///                 time produced gyro_z ≈ 0 (the robot never rotated, so RPP
+///                 rotate-to-heading stalled and DockRobot failed "no
+///                 progress"). Firing min_burst_ticks consecutive ticks gives
+///                 the motors a sustained burst long enough to actually rotate
+///                 the chassis; the OFF interval is stretched proportionally
+///                 so the long-run average still equals wz_cmd. Must be >= 1.
+inline double pulse_modulate_wz(double wz_cmd, double deadband, double& accum,
+                                int& burst_remaining, int min_burst_ticks)
 {
   const double mag = std::abs(wz_cmd);
 
@@ -67,6 +81,7 @@ inline double pulse_modulate_wz(double wz_cmd, double deadband, double& accum)
   if (mag <= kWzMinCmdToConsider)
   {
     accum = 0.0;
+    burst_remaining = 0;
     return 0.0;
   }
 
@@ -76,24 +91,40 @@ inline double pulse_modulate_wz(double wz_cmd, double deadband, double& accum)
   if (deadband <= 0.0 || mag >= deadband)
   {
     accum = 0.0;
+    burst_remaining = 0;
     return wz_cmd;
   }
 
-  // Sub-deadband: integrate duty and fire when the accumulator crosses 1.0.
   // A direction change must not carry stale phase, so reset when the sign of
-  // the command disagrees with the sign held in the accumulator.
+  // the command disagrees with the sign held in the (signed) accumulator.
   if (accum != 0.0 && std::signbit(accum) != std::signbit(wz_cmd))
   {
     accum = 0.0;
+    burst_remaining = 0;
   }
 
+  const int w = (min_burst_ticks > 1) ? min_burst_ticks : 1;
+
+  // "Debt" model: every tick we owe `duty` more on-ticks; firing pays them
+  // back. Accrue every tick (including burst ticks) so the average is exact.
   const double duty = mag / deadband;  // in (0, 1)
   // Keep the accumulator signed so it doubles as the "last sign" memory.
   accum += std::copysign(duty, wz_cmd);
 
-  if (std::abs(accum) >= 1.0)
+  // Continue an in-progress burst — already paid for when it started.
+  if (burst_remaining > 0)
   {
-    accum -= std::copysign(1.0, wz_cmd);
+    --burst_remaining;
+    return std::copysign(deadband, wz_cmd);
+  }
+
+  // Start a new burst only once we've accrued a full burst's worth of debt,
+  // so each pulse is >= w consecutive ticks. Pay w upfront; over a period of
+  // w/duty ticks that yields w ON-ticks → on-fraction == duty (average exact).
+  if (std::abs(accum) >= static_cast<double>(w))
+  {
+    accum -= std::copysign(static_cast<double>(w), wz_cmd);
+    burst_remaining = w - 1;  // this tick + (w-1) more
     return std::copysign(deadband, wz_cmd);
   }
   return 0.0;

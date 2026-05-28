@@ -143,6 +143,12 @@ private:
     // pulse path (default) and a plain passthrough.
     min_ang_vel_rad_per_s_ = declare_parameter<double>("min_ang_vel_rad_per_s", 0.5);
     wz_pulse_modulation_enabled_ = declare_parameter<bool>("wz_pulse_modulation_enabled", true);
+    // Min consecutive ON-ticks per sub-deadband pulse. 4 ≈ 200 ms @ 20 Hz /
+    // 400 ms @ 10 Hz — long enough to break chassis stiction (a 1-tick pulse
+    // left the robot frozen, 2026-05-27). Tune up if the chassis still won't
+    // start rotating on slow commands.
+    wz_pulse_min_burst_ticks_ =
+        declare_parameter<int>("wz_pulse_min_burst_ticks", 4);
 
     // Dock pose comes solely from mowgli_robot.yaml (declared as ROS
     // parameters above). Calibration and manual GUI adjustments persist
@@ -1393,7 +1399,9 @@ private:
     }
     if (wz_pulse_modulation_enabled_)
     {
-      wz = mowgli_hardware::pulse_modulate_wz(wz, min_ang_vel_rad_per_s_, wz_pulse_accum_);
+      wz = mowgli_hardware::pulse_modulate_wz(
+          wz, min_ang_vel_rad_per_s_, wz_pulse_accum_, wz_pulse_burst_remaining_,
+          wz_pulse_min_burst_ticks_);
     }
 
     LlCmdVel pkt{};
@@ -1511,6 +1519,12 @@ private:
   // resets it on sign flip / return to zero.
   bool wz_pulse_modulation_enabled_{true};
   double wz_pulse_accum_{0.0};
+  // Minimum consecutive ON-ticks per pulse (see wz_pulse_modulator.hpp): a
+  // single-tick pulse can't overcome chassis stiction, so sub-deadband
+  // rotation must come in bursts. burst_remaining_ carries an in-progress
+  // burst between on_cmd_vel calls.
+  int wz_pulse_burst_remaining_{0};
+  int wz_pulse_min_burst_ticks_{4};
   bool mow_enabled_{false};
   bool is_charging_{false};
   uint8_t current_mode_{0};
