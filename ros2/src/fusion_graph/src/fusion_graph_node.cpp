@@ -67,6 +67,8 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   lever_arm_radius_m_ = std::hypot(gp.lever_arm_x, gp.lever_arm_y);
   gp.cov_update_every_n = declare_parameter<int>("cov_update_every_n", 10);
   gp.isam2_relinearize_skip = declare_parameter<int>("isam2_relinearize_skip", 5);
+  gp.max_graph_nodes =
+      static_cast<uint64_t>(declare_parameter<int>("max_graph_nodes", 3000));
   gp.stationary_motion_thresh_m = declare_parameter<double>("stationary_motion_thresh_m", 0.02);
   gp.stationary_motion_thresh_theta =
       declare_parameter<double>("stationary_motion_thresh_theta", 0.01);
@@ -445,8 +447,23 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
         seed_xy_.reset();
         seed_yaw_.reset();
         seed_xy_rtk_fixed_ = false;
+        // Re-zero the dead-reckoning frame. Without this the odom→base
+        // transform keeps whatever offset it had accumulated (observed
+        // 74 m), so map→odom = graph_pose ∘ dr⁻¹ still has the huge
+        // lever arm that amplifies any graph-vs-DR yaw difference into
+        // metres of map-pose jump — i.e. clearing the graph alone does
+        // NOT stop the robot from "sliding". Resetting dr_* collapses
+        // the lever arm to zero so map→odom tracks the fresh graph
+        // directly. The odom→base TF jumps here, but clear_graph is an
+        // explicit operator escape hatch (robot parked), so the local
+        // costmap discontinuity is acceptable and self-heals on the
+        // next costmap clear.
+        dr_x_ = 0.0;
+        dr_y_ = 0.0;
+        dr_yaw_ = 0.0;
+        t_map_odom_anchor_valid_ = false;
         resp->success = true;
-        resp->message = "graph cleared (waiting for re-initialization)";
+        resp->message = "graph cleared + odom re-based (waiting for re-initialization)";
         RCLCPP_WARN(get_logger(), "fusion_graph: %s", resp->message.c_str());
       });
 
@@ -547,6 +564,9 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
                               std::to_string(stats.icp_rejects_divergence));
                           add("stationary_hand_push",
                               std::to_string(stats.stationary_hand_push));
+                          add("slip_veto", std::to_string(stats.slip_veto));
+                          add("live_nodes",
+                              std::to_string(graph_->LiveNodeCount()));
                           // Gyro bias telemetry (item #3).
                           {
                             char buf[32];
@@ -689,6 +709,7 @@ void FusionGraphNode::OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
   // twist.linear.y is non-holonomically locked to 0 by hardware_bridge
   // (tight vy covariance) — we mirror that by only integrating vx.
   wheel_vx_ = msg->twist.twist.linear.x;
+  wheel_wz_ = msg->twist.twist.angular.z;
   if (last_wheel_stamp_)
   {
     double dt = (stamp - *last_wheel_stamp_).seconds();
@@ -724,8 +745,19 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
       // Sub-cm/sub-° accuracy per IMU sample at typical 91 Hz / 0.5 m/s.
       const double gz = msg->angular_velocity.z;
       dr_yaw_ += gz * dt;
-      dr_x_ += wheel_vx_ * std::cos(dr_yaw_) * dt;
-      dr_y_ += wheel_vx_ * std::sin(dr_yaw_) * dt;
+      // Slip veto (see header): if the wheels claim a yaw rate the
+      // gyro doesn't see, the chassis is being skated, not driven —
+      // its forward velocity is phantom. Drop the translation for
+      // this sample; yaw still integrates from the gyro, which is the
+      // honest source during a slipping pivot. Without this the odom
+      // frame accumulates the fictitious forward motion unbounded.
+      const bool dr_slip =
+          std::abs(wheel_wz_ - gz) > dr_slip_wheel_min_rad_per_s_ &&
+          std::abs(gz) < dr_slip_gyro_max_rad_per_s_ &&
+          std::abs(wheel_wz_) > dr_slip_wheel_min_rad_per_s_;
+      const double vx_eff = dr_slip ? 0.0 : wheel_vx_;
+      dr_x_ += vx_eff * std::cos(dr_yaw_) * dt;
+      dr_y_ += vx_eff * std::sin(dr_yaw_) * dt;
       // Accumulate |Δθ| since the last accepted GPS for the wrong-fix
       // gate. A stationary pivot sweeps the GPS antenna by lever_arm
       // × Δθ in the map frame; without this term the gate sees a
@@ -1301,6 +1333,17 @@ void FusionGraphNode::SeedFromDockPose()
                 pose.y(),
                 pose.theta() * 180.0 / M_PI);
   }
+  // Re-base the dead-reckoning frame (fix C). The robot is parked on
+  // the dock, so an odom→base discontinuity here is harmless (Nav2
+  // isn't navigating). Collapsing dr_* to zero bounds the map→odom
+  // lever arm every docking cycle: without it the odom frame keeps
+  // whatever it drifted to during the session (metres), and the next
+  // session starts with that same lever arm amplifying graph-vs-DR
+  // yaw error into map-pose jumps. Anchor is invalidated just below
+  // so the next OnTimer recomputes map→odom against the zeroed dr_*.
+  dr_x_ = 0.0;
+  dr_y_ = 0.0;
+  dr_yaw_ = 0.0;
   t_map_odom_anchor_valid_ = false;
   // Latch the RTK-Fixed override one-shot so it doesn't fire later if
   // the robot undocks mid-session — same rationale as OnSetPose: the

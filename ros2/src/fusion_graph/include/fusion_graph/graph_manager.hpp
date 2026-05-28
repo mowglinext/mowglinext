@@ -89,6 +89,22 @@ struct GraphParams
   // loss for our well-constrained Pose2 graph.
   int isam2_relinearize_skip = 5;
 
+  // Sliding-window cap. RebaseISAM2 keeps only the most recent
+  // `max_graph_nodes` pose nodes; everything older is dropped (its
+  // accumulated constraints were already collapsed into the kept
+  // nodes' priors during the rebase, so dropping them is loss-free
+  // for the current estimate). Without this the graph grew unbounded
+  // — observed 48,000+ nodes after a few sessions, which (a) blew up
+  // iSAM2 marginal-covariance cost and pushed cov_xx to ~1 m, and (b)
+  // kept stale far-away nodes anchoring the trajectory shape. 0 means
+  // "no cap" (legacy behaviour: rebase keeps everything). At the 25 Hz
+  // node rate, 3000 nodes ≈ 2 min of trajectory, which comfortably
+  // covers a single mowing pass; LiDAR loop closures within that
+  // window still function. Combined with isam2_rebase_every_nodes the
+  // live graph oscillates in [max_graph_nodes, max_graph_nodes +
+  // rebase_interval].
+  uint64_t max_graph_nodes = 3000;
+
   // Stationary node-creation throttle. If the per-tick accumulator
   // shows ~zero motion (|dxy| < thresh AND |dtheta| < thresh), skip
   // node creation unless at least `stationary_node_period_s` has
@@ -315,6 +331,7 @@ struct GraphStats
   uint64_t icp_rejects_sanity = 0;   // unphysical delta magnitude
   uint64_t icp_rejects_divergence = 0;  // result far from initial guess
   uint64_t stationary_hand_push = 0;  // wheel stationary but gyro disagrees
+  uint64_t slip_veto = 0;  // ticks where wheel translation was vetoed by gyro
   // Adaptive process-noise telemetry. residual_ema_rad is the
   // current EMA-smoothed |dtheta_wheel - dtheta_gyro| (rad);
   // wheel_sigma_x_eff is the inflated σ_x actually used for the most
@@ -386,6 +403,13 @@ public:
   // Read-only accessors (snapshot of current state).
   std::optional<TickOutput> LatestSnapshot() const;
   GraphStats Stats() const;
+
+  // Count of pose ('x') variables currently live in the iSAM2 graph.
+  // Distinct from GraphStats::total_nodes, which is the monotonic
+  // next-index (never decreases). After a windowed RebaseISAM2 the
+  // live count is capped at max_graph_nodes while total_nodes keeps
+  // climbing. Exposed primarily for the sliding-window unit test.
+  uint64_t LiveNodeCount() const;
 
   // Peek at the current per-tick wheel+gyro accumulator without
   // consuming it (Tick() resets the accumulator atomically). Used by

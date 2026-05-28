@@ -151,6 +151,11 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_slip_pivot fusion_graph_core)
 
+  ament_add_gtest(test_graph_window
+    test/test_graph_window.cpp
+  )
+  target_link_libraries(test_graph_window fusion_graph_core)
+
   ament_add_gtest(test_adaptive_noise
     test/test_adaptive_noise.cpp
   )

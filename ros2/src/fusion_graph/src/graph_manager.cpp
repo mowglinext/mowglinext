@@ -640,6 +640,19 @@ std::optional<TickOutput> GraphManager::LatestSnapshot() const
   return latest_;
 }
 
+uint64_t GraphManager::LiveNodeCount() const
+{
+  std::lock_guard<std::mutex> lock(mu_);
+  const_cast<GraphManager*>(this)->RefreshEstimateLocked();
+  uint64_t n = 0;
+  for (const auto& kv : current_estimate_)
+  {
+    if (gtsam::Symbol(kv.key).chr() == 'x')
+      ++n;
+  }
+  return n;
+}
+
 GraphStats GraphManager::Stats() const
 {
   std::lock_guard<std::mutex> lock(mu_);
@@ -653,6 +666,7 @@ GraphStats GraphManager::Stats() const
   s.icp_rejects_sanity = stats_icp_rejects_sanity_;
   s.icp_rejects_divergence = stats_icp_rejects_divergence_;
   s.stationary_hand_push = stats_hand_push_;
+  s.slip_veto = stats_slip_veto_;
   s.residual_ema_rad = residual_ema_;
   s.wheel_sigma_x_eff = last_wheel_sigma_x_eff_;
   s.gyro_bias_z = gyro_bias_z_;
@@ -856,6 +870,7 @@ void GraphManager::RebaseISAM2()
   // iSAM2 catches up at phase 3.
   gtsam::Values estimate_snapshot;
   int relinearize_skip = 1;
+  uint64_t cutoff_index = 0;
   {
     std::lock_guard<std::mutex> lock(mu_);
     if (rebase_in_progress_)
@@ -868,6 +883,11 @@ void GraphManager::RebaseISAM2()
       return;
     estimate_snapshot = current_estimate_;
     relinearize_skip = params_.isam2_relinearize_skip;
+    // Sliding-window cutoff: drop pose nodes older than this index.
+    // Captured under the lock against the live next_index_ so the
+    // window is measured from the newest node at snapshot time.
+    if (params_.max_graph_nodes > 0 && next_index_ > params_.max_graph_nodes)
+      cutoff_index = next_index_ - params_.max_graph_nodes;
     rebase_in_progress_ = true;
     rebase_pending_factors_.resize(0);
     rebase_pending_values_.clear();
@@ -888,11 +908,20 @@ void GraphManager::RebaseISAM2()
   // RTK + COG noise floors and keeps the rebase non-destructive.
   gtsam::NonlinearFactorGraph fg;
   auto noise = MakeDiagonal({0.05, 0.05, 0.05});
+  gtsam::Values kept_values;
   for (const auto& kv : estimate_snapshot)
   {
+    // Sliding-window drop: skip pose nodes older than the cutoff.
+    // gtsam::Symbol::index() recovers the monotonic node index from
+    // the key. Non-pose keys (if any) fall through the window check
+    // unchanged. cutoff_index == 0 means "keep everything".
+    const gtsam::Symbol s(kv.key);
+    if (cutoff_index > 0 && s.chr() == 'x' && s.index() < cutoff_index)
+      continue;
     fg.add(gtsam::PriorFactor<gtsam::Pose2>(kv.key, kv.value.cast<gtsam::Pose2>(), noise));
+    kept_values.insert(kv.key, kv.value);
   }
-  fresh.update(fg, estimate_snapshot);
+  fresh.update(fg, kept_values);
 
   // Phase 3: replay anything Tick / ForceAnchor / AddLoopClosure
   // added while we were rebuilding, then atomically swap isam_.

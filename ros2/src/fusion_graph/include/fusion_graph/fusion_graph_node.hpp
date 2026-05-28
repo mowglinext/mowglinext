@@ -135,6 +135,24 @@ private:
   double dr_y_ = 0.0;
   double dr_yaw_ = 0.0;
   double wheel_vx_ = 0.0;  // latest forward velocity cached from /wheel_odom
+  double wheel_wz_ = 0.0;  // latest wheel-derived yaw rate (slip-veto cross-check)
+
+  // Dead-reckoning slip veto (mirrors the graph-side slip veto in
+  // graph_manager.cpp, but in rate form because OnImu integrates one
+  // gyro sample at a time). When the wheel encoders claim a yaw rate
+  // the chassis gyro doesn't corroborate — wheels skating on wet
+  // grass during a pivot — the wheel's forward velocity is a fiction
+  // and must NOT accumulate into dr_x_/dr_y_, otherwise the odom
+  // frame drifts metres from the real chassis path (observed
+  // 2026-05-27: odom→base reached 74 m while the robot sat on a ~10 m²
+  // lawn, and the resulting map→odom lever arm amplified graph-vs-DR
+  // yaw differences into 100 m map-pose jumps). Rate thresholds:
+  //   dr_slip_gyro_max_rad_per_s : gyro must read near-still
+  //   dr_slip_wheel_min_rad_per_s: wheel must claim a real yaw rate
+  // The disagreement itself is |wheel_wz_ - gz|, gated by the two
+  // above so a normal coordinated turn (both agree) is never vetoed.
+  double dr_slip_gyro_max_rad_per_s_ = 0.15;
+  double dr_slip_wheel_min_rad_per_s_ = 0.15;
 
   // GPS antenna radial offset from base_link, hypot(lever_arm_x,
   // lever_arm_y). Used by the RTK wrong-fix gate in OnGnss to
