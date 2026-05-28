@@ -109,7 +109,11 @@ def generate_launch_description() -> LaunchDescription:
             "use_magnetometer": use_magnetometer,
             "use_scan_matching": use_scan_matching,
             "use_loop_closure": use_loop_closure,
+            "dock_pose_x": float(cfg.get("dock_pose_x", 0.0) or 0.0),
+            "dock_pose_y": float(cfg.get("dock_pose_y", 0.0) or 0.0),
             "dock_pose_yaw": float(cfg.get("dock_pose_yaw", 0.0) or 0.0),
+            "dock_pose_yaw_sigma_rad": float(
+                cfg.get("dock_pose_yaw_sigma_rad", 0.035) or 0.035),
             "tf_publish_lead_s": tf_publish_lead_s,
             "node_period_s": node_period_s,
         },

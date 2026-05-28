@@ -15,6 +15,7 @@
 #pragma once
 
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -33,6 +34,7 @@
 #include <tf2_ros/transform_listener.h>
 
 #include "fusion_graph/graph_manager.hpp"
+#include "fusion_graph/pose_extrapolator.hpp"
 #include "fusion_graph/scan_matcher.hpp"
 #include <Eigen/Core>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
@@ -59,6 +61,10 @@ private:
   void OnScan(sensor_msgs::msg::LaserScan::ConstSharedPtr msg);
   void OnHighLevelStatus(mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg);
   void OnHardwareStatus(mowgli_interfaces::msg::Status::ConstSharedPtr msg);
+  // Anchor the graph at the operator-calibrated dock pose. Called on
+  // the rising edge of is_charging once GPS has arrived at least once.
+  // Replaces the old dock_yaw_to_set_pose_node behavior.
+  void SeedFromDockPose();
   void OnSetPose(geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr msg);
   void OnTimer();
   void OnPeriodicSaveTimer();
@@ -72,6 +78,10 @@ private:
 
   // Publish TF map->odom and /odometry/filtered_map.
   void PublishOutputs(const TickOutput& out);
+  // Publishes /odometry/filtered + odom→base_footprint TF from the
+  // dead-reckoning state. Called unconditionally from OnTimer so the
+  // local frame keeps streaming even before the graph initializes.
+  void PublishLocalOdom();
 
   // Launch GraphManager::Save on a detached worker. No-op if a
   // previous async save is still running. `reason` is logged.
@@ -102,7 +112,6 @@ private:
   // re-anchor. Below this, the autoloaded pose is trusted and GPS just
   // contributes factors normally.
   double rtk_autoload_override_threshold_m_ = 0.3;
-  double dock_pose_yaw_ = 0.0;
 
   // Latched datum (read from parameters at startup).
   double datum_lat_ = 0.0;
@@ -112,6 +121,77 @@ private:
   // Most recent wheel timestamp (for accumulator dt).
   std::optional<rclcpp::Time> last_wheel_stamp_;
   std::optional<rclcpp::Time> last_imu_stamp_;
+
+  // ── Local-frame dead reckoning ──────────────────────────────────
+  // odom→base_footprint TF + /odometry/filtered. Wheel vx + gyro_z
+  // integrated at IMU rate (~91 Hz) so the local frame is continuous,
+  // GPS-independent, and never jumps — REP-105 odom invariants.
+  // Replaces the standalone robot_localization ekf_odom_node (which
+  // ran the same wheel+gyro fusion at 25 Hz via a generic EKF). The
+  // non-holonomic constraint is enforced implicitly: only twist.linear.x
+  // is integrated, twist.linear.y is ignored (matches hardware_bridge
+  // which already publishes vy=0 with tight covariance).
+  double dr_x_ = 0.0;
+  double dr_y_ = 0.0;
+  double dr_yaw_ = 0.0;
+  double wheel_vx_ = 0.0;  // latest forward velocity cached from /wheel_odom
+  double wheel_wz_ = 0.0;  // latest wheel-derived yaw rate (slip-veto cross-check)
+
+  // Dead-reckoning slip veto (mirrors the graph-side slip veto in
+  // graph_manager.cpp, but in rate form because OnImu integrates one
+  // gyro sample at a time). When the wheel encoders claim a yaw rate
+  // the chassis gyro doesn't corroborate — wheels skating on wet
+  // grass during a pivot — the wheel's forward velocity is a fiction
+  // and must NOT accumulate into dr_x_/dr_y_, otherwise the odom
+  // frame drifts metres from the real chassis path (observed
+  // 2026-05-27: odom→base reached 74 m while the robot sat on a ~10 m²
+  // lawn, and the resulting map→odom lever arm amplified graph-vs-DR
+  // yaw differences into 100 m map-pose jumps). Rate thresholds:
+  //   dr_slip_gyro_max_rad_per_s : gyro must read near-still
+  //   dr_slip_wheel_min_rad_per_s: wheel must claim a real yaw rate
+  // The disagreement itself is |wheel_wz_ - gz|, gated by the two
+  // above so a normal coordinated turn (both agree) is never vetoed.
+  double dr_slip_gyro_max_rad_per_s_ = 0.15;
+  double dr_slip_wheel_min_rad_per_s_ = 0.15;
+
+  // GPS antenna radial offset from base_link, hypot(lever_arm_x,
+  // lever_arm_y). Used by the RTK wrong-fix gate in OnGnss to
+  // predict how much antenna position can shift due to pure body
+  // rotation between two GPS samples, on top of any wheel travel.
+  // NOT used to correct mx/my — the graph's GnssLeverArmFactor
+  // already applies R(yaw)·lever_arm in its residual; the gate
+  // only consults this scalar to relax its threshold.
+  double lever_arm_radius_m_ = 0.0;
+  // |Δθ| (rad) accumulated from gyro_z since the last accepted GPS
+  // sample. Paired with wheel_dist_since_last_gps_m_; both are
+  // reset on every accepted (or wrong-fix-classified) sample.
+  double abs_dtheta_since_last_gps_rad_ = 0.0;
+
+  // ── map→odom static anchor ──────────────────────────────────────
+  // The graph publishes one (map-frame) pose per Tick — every
+  // node_period_s when moving, or every stationary_node_period_s
+  // (5 s default) when the chassis appears still. Between Ticks the
+  // snapshot pose is unchanged. If we recomputed T_map_odom on every
+  // OnTimer as out.pose × inv(dr_*[NOW]), the composition
+  //   map→base = T_map_odom × odom→base[NOW]
+  // cancels to out.pose (constant) — the robot looks glued to the
+  // last node pose in viz even while the chassis is genuinely
+  // moving, and teleports the moment a new node lands. Real
+  // hardware no-LiDAR sessions saw 5 s freezes followed by big
+  // jumps as a result.
+  //
+  // The correct map→odom is a constant transform that captures the
+  // map-vs-odom offset at the moment of the last graph node, namely
+  //   T_map_odom = node_pose × inv(dr_at_node)
+  // Re-broadcast at OnTimer rate (so the TF buffer stays fresh) but
+  // recomputed only when a new node lands. Then
+  //   map→base = T_map_odom × odom→base[NOW]
+  // correctly extrapolates the last-node pose through current odom
+  // integration, and /odometry/filtered_map publishes the same
+  // extrapolated pose.
+  gtsam::Pose2 t_map_odom_anchor_{0.0, 0.0, 0.0};
+  uint64_t last_anchored_node_index_ = std::numeric_limits<uint64_t>::max();
+  bool t_map_odom_anchor_valid_ = false;
 
   // Latched seeds for initialization.
   std::optional<gtsam::Vector2> seed_xy_;  // from latest GPS
@@ -179,9 +259,18 @@ private:
 
   // Publishers.
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;
+  // /odometry/filtered — local-frame dead reckoning (REP-105 odom),
+  // replaces what ekf_odom_node used to publish. Same topic name so
+  // Nav2 / GUI consumers need no rewiring.
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_local_odom_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_fg_yaw_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr pub_diag_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_markers_;
+  // High-rate extrapolated pose (item #15). Same Odometry shape as
+  // /odometry/filtered_map but at 100 Hz, with yaw projected forward
+  // by the latest IMU gyro sample. Position is the unmodified last
+  // fusion-published value. See PoseExtrapolator for the math.
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_fast_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
   // TF for odom->base_footprint (we publish map->odom; need to compose
@@ -193,6 +282,12 @@ private:
   rclcpp::TimerBase::SharedPtr diag_timer_;
   rclcpp::TimerBase::SharedPtr periodic_save_timer_;
   rclcpp::TimerBase::SharedPtr maintenance_timer_;
+  // 100 Hz high-rate pose republisher (item #15). Only runs when
+  // fast_pose_publish_rate_hz_ > 0 in yaml; default off so existing
+  // installs aren't surprised by extra topic traffic.
+  rclcpp::TimerBase::SharedPtr fast_pose_timer_;
+  PoseExtrapolator pose_extrap_;
+  double fast_pose_publish_rate_hz_ = 0.0;
 
   // Memory + compute bounding parameters.
   uint64_t scan_retention_nodes_ = 18000;  // 30 min @ 10 Hz
@@ -205,6 +300,22 @@ private:
   bool last_hl_state_valid_ = false;
   bool last_is_charging_ = false;
   bool last_is_charging_valid_ = false;
+  // One-shot per dock session: ensures SeedFromDockPose fires exactly
+  // once per docked interval, even when the boot-while-docked race
+  // means neither the rising_edge nor boot_while_docked branches can
+  // catch the moment gps_seen_once_ flips true. Reset on undock so
+  // the next dock arrival re-seeds.
+  bool dock_seeded_this_session_ = false;
+
+  // Dock-arrival pose seed (formerly the dock_yaw_to_set_pose node).
+  // On the rising edge of is_charging we anchor the graph at the
+  // operator-calibrated dock pose. The two are deduplicated by
+  // last_is_charging_/last_is_charging_valid_ above.
+  double dock_pose_x_ = 0.0;
+  double dock_pose_y_ = 0.0;
+  double dock_pose_yaw_ = 0.0;
+  double dock_pose_yaw_sigma_rad_ = 0.035;
+  bool gps_seen_once_ = false;  // gate dock seed on at least one GPS arrival
 
   // Per-tick counters for diagnostics.
   uint64_t scans_received_ = 0;

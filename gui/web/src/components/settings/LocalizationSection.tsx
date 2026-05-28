@@ -23,20 +23,13 @@ type Toggle = {
     title: string;
     summary: string;
     detail: string;
-    impliesGraph?: boolean;
 };
 
-const FUSION_TOGGLES: Toggle[] = [
-    {
-        key: "use_fusion_graph",
-        title: "Fusion Graph (iSAM2)",
-        summary: "Use the GTSAM factor-graph localizer for the map frame.",
-        detail:
-            "Replaces ekf_map_node with fusion_graph_node. Same inputs " +
-            "(wheel + IMU + GPS + COG/mag yaw) plus optional LiDAR scan-matching " +
-            "and loop-closure factors. Required to carry the map-frame estimate " +
-            "through multi-minute RTK-Float windows.",
-    },
+// Optional LiDAR factors that live in the same fusion_graph_node now
+// that ekf_map_node is gone. Both default off; turning them on costs a
+// few ms/tick but lets the map-frame estimate ride through multi-minute
+// RTK-Float windows.
+const LIDAR_FACTOR_TOGGLES: Toggle[] = [
     {
         key: "use_scan_matching",
         title: "LiDAR scan matching",
@@ -45,7 +38,6 @@ const FUSION_TOGGLES: Toggle[] = [
             "Each new graph node runs ICP against the previous scan and adds a " +
             "BetweenFactor with the relative motion. Fights GPS dropouts but " +
             "costs ~5 ms/tick at 10 Hz.",
-        impliesGraph: true,
     },
     {
         key: "use_loop_closure",
@@ -55,7 +47,6 @@ const FUSION_TOGGLES: Toggle[] = [
             "Triggers a candidate search around each new node (5 m radius, " +
             "10 min minimum age). Successful loop closures pull drift back to " +
             "the originally-mapped pose, even mid-session.",
-        impliesGraph: true,
     },
 ];
 
@@ -105,7 +96,6 @@ function lidarBadge(diag: LidarDiag | null, lidarEnabled: boolean): {label: stri
 
 export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
     const {colors} = useThemeMode();
-    const fusionOn = asBool(values.use_fusion_graph);
     const lidarEnabled = asBool(values.use_lidar ?? values.lidar_enabled ?? true);
     const {diagnostics} = useDiagnostics();
     const lidarDiag = useMemo(() => pickLidarDiagnostic(diagnostics ?? {}), [diagnostics]);
@@ -117,14 +107,13 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                 type="info"
                 showIcon
                 style={{marginBottom: 16}}
-                message="Map-frame localizer choice"
+                message="Map-frame localizer"
                 description={
                     <span>
-                        With <Text code>use_fusion_graph</Text> off, the legacy{" "}
-                        <Text code>robot_localization</Text> dual-EKF runs as the map-frame fuser.
-                        With it on, the GTSAM iSAM2 factor-graph node takes over — identical
-                        inputs/outputs but adds optional LiDAR factors below. Restart ROS2 after
-                        changing.{" "}
+                        The GTSAM iSAM2 factor graph (<Text code>fusion_graph_node</Text>) is the
+                        sole map-frame fuser — wheel + IMU + GPS + COG yaw, plus the optional
+                        LiDAR factors below. It also publishes the local <Text code>odom→base_footprint</Text>{" "}
+                        TF, so there is no separate <Text code>ekf_odom_node</Text> to configure.{" "}
                         <Link
                             href="https://github.com/cedbossneo/mowglinext/wiki/Architecture#optional-factor-graph-localizer-fusion_graph"
                             target="_blank"
@@ -151,8 +140,8 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                     Always on (when the LiDAR driver is running). The Nav2 costmap
                     obstacle layer and <Text code>collision_monitor</Text> consume{" "}
                     <Text code>/scan</Text> directly to stop the robot before it hits
-                    something — this happens regardless of which map-frame localizer
-                    you choose below.
+                    something — this is independent of the factor-graph LiDAR
+                    options below.
                 </Paragraph>
                 <Paragraph type="secondary" style={{marginTop: 0, marginBottom: 0, fontSize: 11}}>
                     Toggle the LiDAR driver itself in <Text strong>Sensors → use_lidar</Text>.
@@ -177,20 +166,18 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                 }
             >
                 <Paragraph type="secondary" style={{marginTop: 0, marginBottom: 12}}>
-                    Optional. When enabled, the GTSAM factor-graph node consumes{" "}
+                    Optional. When enabled, <Text code>fusion_graph_node</Text> consumes{" "}
                     <Text code>/scan</Text> as scan-matching between-factors and
                     loop-closure factors so the map-frame pose can ride through
-                    multi-minute RTK-Float windows. The two sub-options below only
-                    take effect when <Text code>use_fusion_graph</Text> is on.
+                    multi-minute RTK-Float windows.
                 </Paragraph>
-                {FUSION_TOGGLES.map((t) => {
+                {LIDAR_FACTOR_TOGGLES.map((t) => {
                     const enabled = asBool(values[t.key]);
-                    const inactive = t.impliesGraph && !fusionOn;
                     return (
                         <Card
                             key={t.key}
                             size="small"
-                            style={{marginBottom: 8, opacity: inactive ? 0.55 : 1}}
+                            style={{marginBottom: 8}}
                             styles={{body: {padding: "10px 12px"}}}
                         >
                             <Row align="middle" gutter={[16, 8]} wrap={false}>
@@ -200,7 +187,6 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                                             <NodeIndexOutlined style={{marginRight: 6, color: colors.accent}}/>
                                             {t.title}
                                         </Text>
-                                        {inactive && <Tag>requires use_fusion_graph</Tag>}
                                     </Space>
                                     <Paragraph style={{margin: "4px 0 0", fontSize: 12}}>
                                         {t.summary}
@@ -213,7 +199,6 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                                     <Switch
                                         checked={enabled}
                                         onChange={(v) => onChange(t.key, v)}
-                                        disabled={inactive}
                                     />
                                 </Col>
                             </Row>

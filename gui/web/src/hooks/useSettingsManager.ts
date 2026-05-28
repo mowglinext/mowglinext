@@ -70,7 +70,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         icon: "node-index",
         description: "Map-frame fusion strategy and optional LiDAR factors",
         keys: [
-            "use_fusion_graph", "use_scan_matching", "use_loop_closure",
+            "use_scan_matching", "use_loop_closure",
             "use_magnetometer",
         ],
     },

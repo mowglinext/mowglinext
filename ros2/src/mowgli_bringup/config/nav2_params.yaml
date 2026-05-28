@@ -57,11 +57,12 @@ controller_server:
   ros__parameters:
     use_sim_time: false
     enable_stamped_cmd_vel: true
-    # 10 Hz min: 0.3 m/s × 100 ms = 3 cm of motion between decisions; matches
-    # the 5-10 Hz upstream costmap / GPS refresh. 20 Hz cuts the
-    # perception-to-action loop by half, useful for the FTC PID lateral
-    # corrections at strip endpoints.
-    controller_frequency: 20.0
+    # 10 Hz: 0.3 m/s × 100 ms = 3 cm of motion between decisions, matches
+    # the 5-10 Hz upstream costmap / GPS refresh. Dropped from 20 Hz
+    # because the ARM host was chronically missing the 20 Hz loop rate
+    # (10-25 Hz jittery), which hurts FTC tracking more than the lower
+    # nominal frequency does.
+    controller_frequency: 10.0
     # Top-level transform_tolerance is used by controller_server when
     # transforming the global plan into the costmap frame (separate from
     # each plugin's own transform_tolerance, which only covers the
@@ -72,7 +73,7 @@ controller_server:
     # aborts the action with error_code 102. 0.5 s gives ~12 fusion_graph
     # periods of headroom — well past the worst-case stamp drift we have
     # seen in the field (35-80 ms).
-    transform_tolerance: 0.5
+    controller.transform_tolerance: 0.5
     # 5s vs 0.3s default — ARM scheduler jitter can stall local_costmap
     # updates 2-3s under load; the controller would error out otherwise.
     costmap_update_timeout: 5.0
@@ -194,16 +195,36 @@ controller_server:
       # NavigateToPose typically generates at long-transit endpoints.
       angular_dist_threshold: 0.785
       forward_sampling_distance: 0.5
-      rotate_to_heading_angular_vel: 0.6   # ≥ kMinRotVel so the wheels engage
-      max_angular_accel: 1.0
+      # 0.75 (was 0.6) + accel 2.5 (was 1.0): the in-place pivot used to ramp
+      # 0→0.6 at 1.0 rad/s² (~0.6 s), spending most of the ramp BELOW the
+      # firmware pivot deadband (~0.5 rad/s) so the hardware_bridge closed-loop
+      # wound up then kicked → jerky pivot start (user 2026-05-28; mowing turns
+      # are smooth because FTC uses its own PRE_ROTATE profile, not this ramp).
+      # Snapping to a decisive 0.75 rad/s clears the deadband margin and the
+      # closed-loop holds it smoothly.
+      rotate_to_heading_angular_vel: 0.75
+      max_angular_accel: 2.5
       simulate_ahead_time: 1.0
-      rotate_to_goal_heading: false        # let RPP handle final heading
+      # Terminal pivot. With this false, neither RotationShim (start-of-path
+      # only) nor RPP (mid-path, rotate_to_heading_min_angle: 0.785 rad =
+      # 45°) does anything when the navigation ends with a yaw error in the
+      # band [yaw_goal_tolerance, RPP-threshold] = [5.7°, 45°]. RPP just
+      # holds the carrot at the final pose and outputs near-zero v/ω —
+      # goal_checker keeps waiting for yaw alignment that never happens,
+      # robot is stuck. Especially visible at NavigateToPose-to-staging
+      # handoff in opennav_docking: the staging pose has a fixed heading
+      # along the dock axis, but if RPP arrived 10-30° off (common when
+      # approaching from the side), the docking action just times out.
+      # Setting this true makes RotationShim pivot at the END to match
+      # goal heading. Cost: one ~1 s in-place rotation per nav action,
+      # which the operator barely notices but the docking-server NEEDS.
+      rotate_to_goal_heading: true
       closed_loop: true                    # use wheel odom feedback for pivot completion
 
       # --- RegulatedPurePursuitController (primary) params ---
       transform_tolerance: 0.3            # ARM TF jitter envelope
       desired_linear_vel: 0.30            # transit speed cap (m/s)
-      min_approach_linear_velocity: 0.13  # ≥ firmware ~PWM 40 deadband (≈ 0.13 m/s)
+      min_approach_linear_velocity: 0.16  # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
       approach_velocity_scaling_dist: 0.6
       # Lookahead: velocity-scaled. At 0.30 m/s → 0.45 m, at 0.13 m/s → 0.20 m.
       use_velocity_scaled_lookahead_dist: true
@@ -226,8 +247,11 @@ controller_server:
       # after RotationShim disengages if the path bends mid-trajectory.
       use_rotate_to_heading: true
       rotate_to_heading_min_angle: 0.785
-      rotate_to_heading_angular_vel: 0.6
-      max_angular_accel: 1.0
+      # Match the RotationShim values above (decisive pivot, clear of the
+      # firmware deadband) so RPP's mid-path rotate-to-heading hand-off is
+      # as smooth as the start-of-path pivot.
+      rotate_to_heading_angular_vel: 0.75
+      max_angular_accel: 2.5
       allow_reversing: false
       max_robot_pose_search_dist: 10.0
       use_interpolation: true
@@ -241,33 +265,52 @@ controller_server:
       speed_fast: 0.20
       speed_fast_threshold: 0.5
       speed_fast_threshold_angle: 10.0
-      speed_slow: 0.12
+      speed_slow: 0.16    # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
       speed_angular: 45.0
       acceleration: 0.2
+      # FTC PID gains. 2026-05-19:
+      #   * kp_lat 2.0→1.2, kd_lat 1.0→1.5 — detuned for the wheel-PI
+      #     motor model (b303db22) to stop the chassis whipsawing on
+      #     coverage swaths. Lat error converges in ~3 s vs ~1 s but
+      #     stably.
+      #   * kp_ang held at 1.5 — dropping it to 1.0 made PRE_ROTATE
+      #     pivots never converge: cmd_vel correction stayed below the
+      #     motor-PI deadband-crossing threshold under production IMU
+      #     noise, so the pose never rotated, ang_err stayed at ~180°,
+      #     the robot spun forever and cog_to_imu's straight-line gate
+      #     rejected every sample. Higher kp_ang keeps the pivot
+      #     command above the deadband.
       kp_lon: 1.0
       ki_lon: 0.0
       kd_lon: 0.0
-      kp_lat: 2.0
+      kp_lat: 1.2
       ki_lat: 0.0
-      kd_lat: 1.0
+      kd_lat: 1.5
       kp_ang: 1.5
       ki_ang: 0.0
       kd_ang: 0.0
       max_cmd_vel_speed: 0.30
       max_cmd_vel_ang: 0.8
       # FTC's internal acceptance tolerance for WAITING_FOR_GOAL_APPROACH.
-      # With the F2C v2 server (mowgli_coverage) producing per-sub-cell
-      # paths chained via Dubins connectors, the LAST pose of the
-      # combined path can sit 25-50 cm from where FTC's PID can
-      # converge — the connector geometry biases the final approach
-      # angle and PID can't drive that distance to zero in 10 s.
-      # Bumping to 0.30 m lets WAITING_FOR_GOAL_APPROACH succeed at
-      # the actual converged distance instead of looping FollowStrip
-      # forever. PathProgressGoalChecker still has the progress
-      # gate (>=95% of path indices visited), so a robot that's 30 cm
-      # from the goal but only at 50% progress doesn't false-fire.
-      max_goal_distance_error: 0.30
-      max_goal_angle_error: 15.0
+      # Two compounding effects motivate the loose 0.50 m / 30° envelope:
+      #   1. F2C v2 (mowgli_coverage) chains per-sub-cell paths via Dubins
+      #      connectors; the LAST pose of the combined path can sit
+      #      25-50 cm from where FTC's PID can converge — the connector
+      #      geometry biases the final approach angle and PID can't drive
+      #      that distance to zero in 10 s.
+      #   2. With the firmware wheel-level PI motor model (commit b303db22
+      #      + sim mirror in commit 2e181873), FTC's fine-heading commands
+      #      near the goal can fall sub-deadband and oscillate as the PI
+      #      ramps up/down across the static-friction breakaway. A 15°
+      #      angle tolerance forced FTC to keep issuing sub-deadband wz
+      #      commands until controller_server's progress checker tripped
+      #      its 30 s movement_time_allowance and aborted the action
+      #      ("Failed to make progress" loop, 10 % coverage observed in
+      #      2026-05-19 sim run before BT gave up and called DockRobot).
+      # PathProgressGoalChecker still gates the path-progress >= 95% so
+      # a loose tolerance can't fire mid-traversal.
+      max_goal_distance_error: 0.50
+      max_goal_angle_error: 30.0
       goal_timeout: 10.0
       max_follow_distance: 2.0
       # forward_only=false: FTC may follow path segments in reverse when
@@ -361,7 +404,7 @@ behavior_server:
       plugin: "nav2_behaviors::AssistedTeleop"
     global_frame: odom
     robot_base_frame: base_footprint
-    transform_tolerance: 0.5
+    controller.transform_tolerance: 0.5
     # 0.5s sim-ahead (at 0.15 m/s BackUp ≈ 7.5 cm) catches immediate
     # collisions without aborting on phantom LETHAL cells 30-50 cm behind
     # (often map→odom jump artefacts or dock residue). 2.0s refused every
@@ -664,6 +707,16 @@ docking_server:
   ros__parameters:
     use_sim_time: false
     enable_stamped_cmd_vel: true
+    # TF lookup tolerance — match the other Nav2 servers' 0.5 s envelope.
+    # Field 2026-05-27: at 20 Hz controller_frequency the dock controller
+    # was querying TF a few ms ahead of the latest ekf_odom_node publish
+    # (50 Hz /tf), tripping "Lookup would require extrapolation into the
+    # future" on every approach tick → DockRobot exhausted retries in
+    # seconds with error 905 "Failed to get control". 0.5 s lets the
+    # lookup wait one or two TF publish cycles before giving up. Note
+    # the param name is nested under `controller` — bare
+    # `transform_tolerance` at this level is silently dropped.
+    controller.transform_tolerance: 0.5
     # 10 Hz (was 2 Hz): tighter approach control + faster polling of
     # isDocked()/isCharging() so the robot stops within ~100 ms of the
     # charging signal arriving rather than up to ~500 ms. Not high
@@ -698,18 +751,28 @@ docking_server:
     # so disabling the docking-internal check doesn't remove safety —
     # it just stops the docking server from refusing to dock at the dock.
     controller.use_collision_detection: false
-    # Graceful-controller velocity envelope. Defaults (v_linear_max ≈ 0.25
-    # m/s, slowdown_radius ≈ 0.25 m) are tuned for larger AMRs and let
-    # the mower hit the dock at near-transit speed: with docking_threshold
-    # 0.05 m the controller only has ~200 ms between "in tolerance" and
-    # contact, so the robot regularly overshoots / bounces off / misses
-    # the cradle. Halving v_linear_max and doubling slowdown_radius gives
-    # a calm ~5 cm/s final approach with plenty of braking distance for
-    # the 10 Hz controller loop to detect charging and stop cleanly.
-    controller.v_linear_min: 0.05
-    controller.v_linear_max: 0.12
-    controller.v_angular_max: 0.5
-    controller.slowdown_radius: 0.5
+    # Graceful-controller envelope — kept close to Nav2 upstream defaults
+    # now that the host-side wz pulse-width modulation (hardware_bridge
+    # min_ang_vel_rad_per_s=0.5, duty-cycled so the time-average matches
+    # the commanded rate instead of flooring it up) and the sub-deadband
+    # vx clamp handle the chassis-side deadband cleanly without
+    # over-rotating fine heading corrections. Earlier iterations of this file
+    # bumped k_phi/k_delta 3×, dropped v_linear_max, doubled
+    # slowdown_radius and raised v_angular_max — each fix worked around
+    # the symptom of a different deadband problem, but the combination
+    # made the final dock approach oscillate between "rotate only" and
+    # "translate only" at 20 Hz and never seat the cradle (measured
+    # 2026-05-27 as cmd_vel ping-ponging `x=-0.015 z=0` ↔ `x=0 z=-0.8`).
+    # Reset to upstream defaults except:
+    #   v_linear_min: 0.16 stays — hardware_bridge zeros |vx|<0.15.
+    #   beta/lambda: leave at upstream (0.4 / 2.0) — graceful control-law
+    #     shape, not deadband-related.
+    controller.v_linear_min: 0.16
+    controller.v_linear_max: 0.25
+    controller.v_angular_max: 0.75
+    controller.slowdown_radius: 0.25
+    controller.k_phi: 3.0
+    controller.k_delta: 2.0
     # Named dock instances — BT uses dock_id="home_dock"
     dock_plugins: ["simple_charging_dock"]
     docks: ["home_dock"]
@@ -722,6 +785,18 @@ docking_server:
       # Forward dock approach (matches the YardForce charger contact
       # geometry — robot drives nose-first into the dock).
       dock_direction: "forward"
+      # rotate_to_dock=true requires dock_direction=backward in the
+      # upstream opennav_docking plugin — combining it with the YardForce
+      # nose-first approach throws "Parameter rotate_to_dock is enabled
+      # but dock direction is not backward" at CONFIGURE, which aborts
+      # the whole Nav2 bringup (lifecycle_manager bails on docking_server
+      # → controller/behavior/etc never activate). The pre-rotate would
+      # have addressed sub-deadband stalls at large entry angles, but the
+      # k_phi=10 / v_angular_max=0.8 graceful-controller tuning already
+      # gives enough authority on its own — leave rotate_to_dock=false
+      # until upstream supports it for forward docks (or we migrate the
+      # YardForce charger to a backward approach).
+      rotate_to_dock: false
       # 0.3 A (was 0.1, default 0.5). 0.1 A flipped is_charging_ at the
       # first whisker of contact and DockRobot exited before the cradle
       # was fully seated — the robot ended up barely touching the
@@ -764,7 +839,7 @@ collision_monitor:
     # straight to twist_mux on cmd_vel_monitored.
     cmd_vel_out_topic: cmd_vel_monitored
     state_topic: collision_monitor_state
-    transform_tolerance: 0.5
+    controller.transform_tolerance: 0.5
     # Source timeout: how long before stale sensor data triggers a stop.
     # ARM boards can have TF/scan timing jitter — 5s avoids false stops
     # while still catching genuinely dead sensors.
@@ -900,3 +975,4 @@ lifecycle_manager_navigation:
     use_sim_time: false
     autostart: true
     bond_timeout: 10.0
+# CI trigger marker 1779795185

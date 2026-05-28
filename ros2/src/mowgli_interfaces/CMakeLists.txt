@@ -20,6 +20,7 @@ set(msg_files
   "msg/Power.msg"
   "msg/ESCStatus.msg"
   "msg/HighLevelStatus.msg"
+  "msg/GnssStatus.msg"
   "msg/AbsolutePose.msg"
   "msg/WheelTick.msg"
   "msg/ImuRaw.msg"

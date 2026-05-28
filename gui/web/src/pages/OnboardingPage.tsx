@@ -13,10 +13,10 @@ import { useThemeMode } from "../theme/ThemeContext.tsx";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useSettingsSchema } from "../hooks/useSettingsSchema.ts";
 import { useApi } from "../hooks/useApi.ts";
-import { useGPS } from "../hooks/useGPS.ts";
+import { useGnssStatus } from "../hooks/useGnssStatus.ts";
 import { useCalibrationStatus } from "../hooks/useCalibrationStatus.ts";
 import { useImuYawCalibration } from "../hooks/useImuYawCalibration.ts";
-import { AbsolutePoseConstants as GpsFlags } from "../types/ros.ts";
+import { GnssStatusConstants } from "../types/ros.ts";
 import { CompassOutlined } from "@ant-design/icons";
 import { RobotComponentEditor } from "../components/RobotComponentEditor.tsx";
 import { FlashBoardComponent } from "../components/FlashBoardComponent.tsx";
@@ -363,7 +363,7 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting }) =>
 // minutes of clear-sky time to acquire RTK Fix before the operator is
 // asked to anchor the map. SBAS / RTK-Float datums silently break every
 // later mow, so the "Use current GPS position" button is gated on
-// FLAG_GPS_RTK_FIXED.
+// GnssStatus.FIX_TYPE_RTK_FIXED.
 
 type DatumStepProps = RobotModelStepProps & { gpsRestarting?: boolean };
 
@@ -371,11 +371,11 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting }
     const guiApi = useApi();
     const [datumLoading, setDatumLoading] = useState(false);
 
-    const gps = useGPS();
-    const gpsFlags = gps.flags ?? 0;
-    const isRtkFixed = (gpsFlags & GpsFlags.FLAG_GPS_RTK_FIXED) !== 0;
-    const isRtkFloat = (gpsFlags & GpsFlags.FLAG_GPS_RTK_FLOAT) !== 0;
-    const isPlainFix = (gpsFlags & GpsFlags.FLAG_GPS_RTK) !== 0;
+    const gnssStatus = useGnssStatus();
+    const fixType = gnssStatus.fix_type ?? GnssStatusConstants.FIX_TYPE_NO_FIX;
+    const isRtkFixed = fixType === GnssStatusConstants.FIX_TYPE_RTK_FIXED;
+    const isRtkFloat = fixType === GnssStatusConstants.FIX_TYPE_RTK_FLOAT;
+    const isPlainFix = fixType === GnssStatusConstants.FIX_TYPE_GPS_FIX;
     const fixLabel = isRtkFixed ? "RTK FIX" : isRtkFloat ? "RTK FLOAT" : isPlainFix ? "GPS FIX" : "no fix";
 
     const setDatumFromGps = async () => {

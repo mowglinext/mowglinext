@@ -58,6 +58,11 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   decay_rate_per_hour_ = declare_parameter<double>("decay_rate_per_hour", 0.1);
   tool_width_ = declare_parameter<double>("tool_width", 0.18);
   reachability_period_s_ = declare_parameter<double>("reachability_period_s", 2.0);
+  yaw_convergence_threshold_rad_ =
+      declare_parameter<double>("yaw_convergence_threshold_rad", 0.00873);  // 0.5°
+  yaw_convergence_window_s_ = declare_parameter<double>("yaw_convergence_window_s", 5.0);
+  yaw_convergence_min_samples_ = static_cast<size_t>(
+      declare_parameter<int>("yaw_convergence_min_samples", 20));
   map_file_path_ = declare_parameter<std::string>("map_file_path", "");
   areas_file_path_ = declare_parameter<std::string>("areas_file_path", "");
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
@@ -71,20 +76,20 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   lethal_boundary_margin_m_ = declare_parameter<double>("lethal_boundary_margin_m", 0.5);
   // Soft boundary deadband: distance the robot's BASE_LINK pose must
   // be outside the operator polygon before /boundary_violation fires.
-  // Default 0.20 m = chassis_width / 2 — covers FTC tracking error
-  // during corner traversals (~0.15 m worst case) so the chassis can
-  // briefly graze outside the polygon without triggering recovery.
-  // The blade extends only tool_width / 2 = 0.09 m from base_link, so
-  // even at the worst-case 0.20 m base_link excursion the BLADE TIP
-  // is still inside the polygon (the blade goes "out" only if
-  // base_link is >0.20 m + 0.09 m = 0.29 m past — which already trips
-  // the soft boundary). The lethal margin at 0.50 m is the hard
-  // safety net and bypasses this deadband.
+  // 0.30 m covers FTC tracking error under the wheel-PI motor model
+  // (steady-state ~0.05 m, post-pivot transient up to ~0.20 m) plus
+  // a small slack so the chassis can briefly graze the polygon edge
+  // during corner traversals without ping-ponging into recovery.
+  // The blade extends tool_width / 2 = 0.09 m from base_link, so a
+  // 0.30 m base_link excursion still keeps the BLADE TIP within
+  // 0.39 m of the inside — well clear of the 0.50 m lethal margin,
+  // which is the hard safety net and bypasses this deadband.
   //
-  // Earlier default was 0.10 m which combined with F2C planning to
-  // the polygon edge produced repeated NavigateInsideBoundary aborts
-  // on corner traversals.
-  soft_boundary_margin_m_ = declare_parameter<double>("soft_boundary_margin_m", 0.20);
+  // 0.20 m → 0.30 m (2026-05-19) after the sim run hit 5×
+  // NavigateInsideBoundary recoveries in a single coverage attempt
+  // — every recovery triggered on transient corner-pivot drift of
+  // 0.20-0.30 m, not actual chassis-off-polygon excursions.
+  soft_boundary_margin_m_ = declare_parameter<double>("soft_boundary_margin_m", 0.30);
   // How many consecutive on_odom samples must report the robot outside
   // before /boundary_violation asserts true (filters single-tick EKF
   // jumps). At ~10 Hz odometry, 3 samples ≈ 300 ms — long enough to
@@ -217,6 +222,37 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
       costmap_topic,
       rclcpp::QoS(1).reliable(),
       [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg) { on_costmap(std::move(msg)); });
+
+  // GPS pose-with-covariance feed (from navsat_to_absolute_pose_node), used
+  // only by on_set_docking_point to gate the service on RTK quality. The
+  // service must not pin a dock pose while in RTK-Float (σ ~10-50 cm) or
+  // when the GPS feed is stale.
+  dock_set_gps_accuracy_max_m_ =
+      declare_parameter<double>("dock_set_gps_accuracy_max_m", dock_set_gps_accuracy_max_m_);
+  dock_set_gps_max_age_s_ =
+      declare_parameter<double>("dock_set_gps_max_age_s", dock_set_gps_max_age_s_);
+  dock_set_status_max_age_s_ =
+      declare_parameter<double>("dock_set_status_max_age_s", dock_set_status_max_age_s_);
+  gps_pose_cov_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+      "/gps/pose_cov",
+      rclcpp::SensorDataQoS(),
+      [this](geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr msg)
+      {
+        const double x = msg->pose.pose.position.x;
+        const double y = msg->pose.pose.position.y;
+        const rclcpp::Time t = now();
+        std::lock_guard<std::mutex> lk(last_gps_pose_cov_mutex_);
+        last_gps_pose_cov_ = std::move(msg);
+        last_gps_pose_cov_time_ = t;
+        // Maintain a rolling window for on_set_docking_point's averaged
+        // dock-pose capture (see recent_gps_xy_ in the header).
+        recent_gps_xy_.emplace_back(t, x, y);
+        while (!recent_gps_xy_.empty() &&
+               (t - std::get<0>(recent_gps_xy_.front())).seconds() > dock_set_gps_avg_window_s_)
+        {
+          recent_gps_xy_.pop_front();
+        }
+      });
 
   // ── Services ─────────────────────────────────────────────────────────────
   save_map_srv_ = create_service<std_srvs::srv::Trigger>(
@@ -561,6 +597,8 @@ void MapServerNode::on_occupancy_grid(nav_msgs::msg::OccupancyGrid::ConstSharedP
 void MapServerNode::on_mower_status(mowgli_interfaces::msg::Status::ConstSharedPtr msg)
 {
   mow_blade_enabled_ = msg->mow_enabled;
+  last_is_charging_ = msg->is_charging;
+  last_status_time_ = now();
 }
 
 void MapServerNode::on_odom(nav_msgs::msg::Odometry::ConstSharedPtr /*msg*/)
@@ -568,6 +606,7 @@ void MapServerNode::on_odom(nav_msgs::msg::Odometry::ConstSharedPtr /*msg*/)
   // Use TF for the definitive map-frame robot position.
   // The odom message position may be in odom frame, not map frame.
   double x = 0.0, y = 0.0;
+  double yaw = 0.0;
   if (tf_buffer_)
   {
     try
@@ -575,6 +614,9 @@ void MapServerNode::on_odom(nav_msgs::msg::Odometry::ConstSharedPtr /*msg*/)
       auto tf = tf_buffer_->lookupTransform(map_frame_, "base_footprint", tf2::TimePointZero);
       x = tf.transform.translation.x;
       y = tf.transform.translation.y;
+      // Yaw extraction valid because the EKF runs in two_d_mode (roll/pitch ≈ 0).
+      const auto& q = tf.transform.rotation;
+      yaw = 2.0 * std::atan2(q.z, q.w);
     }
     catch (const tf2::TransformException&)
     {
@@ -584,6 +626,20 @@ void MapServerNode::on_odom(nav_msgs::msg::Odometry::ConstSharedPtr /*msg*/)
   else
   {
     return;
+  }
+
+  // Maintain a rolling window of recent yaws for the docking-set gate.
+  // Read the window length live each tick so `ros2 param set` works.
+  {
+    std::lock_guard<std::mutex> lk(recent_yaws_mutex_);
+    const rclcpp::Time now_t = now();
+    recent_yaws_.emplace_back(now_t, yaw);
+    const rclcpp::Duration window = rclcpp::Duration::from_seconds(
+        get_parameter("yaw_convergence_window_s").as_double());
+    while (!recent_yaws_.empty() && (now_t - recent_yaws_.front().first) > window)
+    {
+      recent_yaws_.pop_front();
+    }
   }
 
   // Latch most recent map-frame position so reachability BFS can use

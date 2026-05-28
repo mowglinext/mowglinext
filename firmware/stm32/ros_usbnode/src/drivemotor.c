@@ -447,19 +447,34 @@ void DRIVEMOTOR_App_Rx(void)
             prev_left_encoder_val = left_encoder_val;  /* sync, not zero */
         }
 
-        /* Encoder register wraps around 0xFFFF; the delta is computed as an
-         * unsigned subtraction (natural wrap handling) provided the wheel
-         * hasn't spun >32768 ticks in one 20 ms sample (~100 m/s — impossible
-         * for a mower).
+        /* Encoder register wraps around 0xFFFF. We compute the delta as a
+         * SIGNED int16 difference — natural wrap handling that works in
+         * BOTH directions, provided the wheel hasn't spun >32767 ticks in
+         * one 20 ms sample (~100 m/s — impossible for a mower).
+         *
+         * Previously this was an unsigned subtraction, which is only correct
+         * for monotonically-increasing forward motion. Any backward motion
+         * (mechanical backlash, motor coast through zero, PI overshoot) made
+         * the encoder briefly count down — e.g. 100 → 91 read as uint16
+         * delta=65527 instead of -9. That uint16 was then multiplied by the
+         * motor direction byte, injecting a ±65,527-tick spike into
+         * left_ticks_signed every time the wheel jittered through zero.
+         * Once the wheel-level PI loop started consuming left_ticks_signed
+         * for feedback, those spikes saturated the PI output and the chassis
+         * spun at full ω while reporting ~0 m motion to the ROS host.
          */
-        const uint16_t left_delta_raw = left_encoder_val - prev_left_encoder_val;
+        const int16_t left_delta_signed = (int16_t)(left_encoder_val - prev_left_encoder_val);
+        const uint16_t left_delta_raw = (left_delta_signed >= 0)
+                                            ? (uint16_t)left_delta_signed
+                                            : (uint16_t)(-left_delta_signed);
         /* Legacy cumulative counter (unsigned-abs) kept for any existing
-         * consumer that still expects monotonic positive ticks. New code
-         * should use left_ticks_signed. */
+         * consumer that still expects monotonic positive ticks. */
         left_encoder_ticks += (uint32_t)left_delta_raw;
-        /* Signed cumulative count — polarity lives in the sign, no need for
-         * a separate direction byte downstream. */
-        left_ticks_signed += (int32_t)left_delta_raw * (int32_t)left_direction;
+        /* Signed cumulative count — the encoder timer here is up-only, so we
+         * still scale by the commanded motor direction. The signed delta cast
+         * above only protects against backward-jitter spikes; for true reverse
+         * motion the direction byte does the polarity flip. */
+        left_ticks_signed += (int32_t)left_delta_signed * (int32_t)left_direction;
         prev_left_encoder_val = left_encoder_val;
         prev_left_wheel_speed_val = left_wheel_speed_val;
         prev_left_direction = left_direction;
@@ -476,9 +491,12 @@ void DRIVEMOTOR_App_Rx(void)
         {
             prev_right_encoder_val = right_encoder_val;  /* sync, not zero */
         }
-        const uint16_t right_delta_raw = right_encoder_val - prev_right_encoder_val;
+        const int16_t right_delta_signed = (int16_t)(right_encoder_val - prev_right_encoder_val);
+        const uint16_t right_delta_raw = (right_delta_signed >= 0)
+                                             ? (uint16_t)right_delta_signed
+                                             : (uint16_t)(-right_delta_signed);
         right_encoder_ticks += (uint32_t)right_delta_raw;
-        right_ticks_signed += (int32_t)right_delta_raw * (int32_t)right_direction;
+        right_ticks_signed += (int32_t)right_delta_signed * (int32_t)right_direction;
         prev_right_encoder_val = right_encoder_val;
         prev_right_wheel_speed_val = right_wheel_speed_val;
         prev_right_direction = right_direction;

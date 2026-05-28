@@ -59,9 +59,11 @@
 
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
+#include "mowgli_hardware/clock_fit.hpp"
 #include "mowgli_hardware/ll_datatypes.hpp"
 #include "mowgli_hardware/packet_handler.hpp"
 #include "mowgli_hardware/serial_port.hpp"
+#include "mowgli_hardware/angular_rate_controller.hpp"
 
 // High-level mode constants — must match HighLevelStatus.msg and the
 // HL_MODE_* defines in firmware/mowgli_protocol.h. Declared locally to
@@ -136,6 +138,18 @@ private:
     // ticks_per_meter matches the firmware-side scaling).
     wheel_track_ = declare_parameter<double>("wheel_track", 0.325);
     ticks_per_meter_ = declare_parameter<double>("ticks_per_meter", 300.0);
+    // Closed-loop angular-rate controller — see angular_rate_controller.hpp.
+    // Gains are gentle by default (USB latency caps them); tune live via
+    // ros2 param set. angular_rate_loop_enabled:=false → plain passthrough.
+    angular_rate_loop_enabled_ = declare_parameter<bool>("angular_rate_loop_enabled", true);
+    angular_rate_params_.kff = declare_parameter<double>("angular_rate_kff", 1.0);
+    angular_rate_params_.kp = declare_parameter<double>("angular_rate_kp", 0.4);
+    angular_rate_params_.ki = declare_parameter<double>("angular_rate_ki", 2.0);
+    angular_rate_params_.max_cmd = declare_parameter<double>("angular_rate_max_cmd", 1.5);
+    angular_rate_params_.integral_max =
+        declare_parameter<double>("angular_rate_integral_max", 1.5);
+    angular_rate_params_.target_lp_tau =
+        declare_parameter<double>("angular_rate_target_lp_tau", 0.2);
 
     // Dock pose comes solely from mowgli_robot.yaml (declared as ROS
     // parameters above). Calibration and manual GUI adjustments persist
@@ -760,7 +774,14 @@ private:
     std::memcpy(&pkt, data, sizeof(LlImu));
 
     auto msg = sensor_msgs::msg::Imu{};
-    msg.header.stamp = now();
+    // Smoothed timestamp from the firmware-host clock fitter.
+    // pkt.dt_millis is the firmware-reported interval since the
+    // previous IMU packet (free of USB jitter); the fitter
+    // accumulates it into a virtual firmware clock and regresses
+    // a linear map to the host clock over the last ~2 s of
+    // packets. Result: published stamps are jitter-free even when
+    // host-side scheduling delays the actual decode by 5-20 ms.
+    msg.header.stamp = imu_clock_fit_.Ingest(pkt.dt_millis, now());
     msg.header.frame_id = "imu_link";
 
     double ax = static_cast<double>(pkt.acceleration_mss[0]);
@@ -924,6 +945,12 @@ private:
     msg.angular_velocity.x = gx;
     msg.angular_velocity.y = gy;
     msg.angular_velocity.z = gz;
+
+    // Latest bias-corrected yaw rate, snapshotted for the closed-loop
+    // angular-rate controller in on_cmd_vel. Single-writer (this IMU path) /
+    // single-reader (cmd_vel callback), both on the one rclcpp executor —
+    // no lock needed. ~90 Hz, well above cmd_vel cadence.
+    latest_gyro_z_ = gz;
 
     // Magnetometer data is ignored — uncalibrated on metal robot chassis,
     // gives ~229° error vs real heading. dock_pose_yaw is set from config
@@ -1162,7 +1189,11 @@ private:
       return;
     }
 
-    const auto stamp = now();
+    // Smoothed timestamp via the clock fitter. We feed it the
+    // aggregated dt_ms (i.e. the total firmware time spanned by the
+    // 5 packets we just folded together), so the fitter's virtual
+    // firmware clock advances in sync with the published rate.
+    const auto stamp = odom_clock_fit_.Ingest(odom_acc_dt_ms_, now());
     const int32_t acc_d_left = odom_acc_delta_left_;
     const int32_t acc_d_right = odom_acc_delta_right_;
     const uint32_t acc_dt_ms = odom_acc_dt_ms_;
@@ -1235,14 +1266,6 @@ private:
     msg.twist.covariance[21] = 1e6;  // wx - unknown
     msg.twist.covariance[28] = 1e6;  // wy - unknown
     msg.twist.covariance[35] = force_zero ? 1e-6 : 9e-4;  // wz variance
-
-    // Snapshot the latest wheel-frame velocity for the cmd_vel closed-loop
-    // deadband compensator below (on_cmd_vel). Update under no lock since
-    // both updater (this thread) and reader (cmd_vel callback) run on the
-    // single rclcpp executor — there is no concurrent access. Fresh every
-    // ~50 ms (kAggregateMs above), which is well below cmd_vel cadence.
-    last_wheel_vx_ = vx;
-    last_wheel_vyaw_ = vyaw;
 
     pub_wheel_odom_->publish(msg);
   }
@@ -1320,63 +1343,64 @@ private:
       send_high_level_state();
     }
 
-    // Closed-loop motor-deadband compensator.
+    // Sub-deadband forward-velocity guard.
     //
-    // Background: firmware PWM deadband (~PWM 40) requires |ω| ≥ 0.82 rad/s
-    // for pivots and |vx| ≥ 0.13 m/s for forward motion to overcome static
-    // friction. Sub-deadband commands produce motor buzz but no motion.
+    // A previous closed-loop deadband compensator BOOSTED sub-deadband
+    // commands to ~0.85 rad/s (or 0.13 m/s) to break through the
+    // firmware's PWM static friction. The boost produced motor pulses
+    // strong enough to register on the gyro but too short to generate
+    // measurable wheel encoder ticks. The wheel between-factor in
+    // fusion_graph then saw "stationary" while the IMU integrated real
+    // rotation, and the wheel/IMU disagreement piled up as
+    // stationary_hand_push spikes and σ_yaw drift during PRE_ROTATE
+    // and headland pivots.
     //
-    // Two prior attempts both failed in different ways:
-    //   * floor-to-0.85 boost (commit 5e62bda2): over-rotates by ~1.5-2×,
-    //     causing FTC and MPPI to issue opposite corrections that the
-    //     boost re-amplifies → "gauche-droite-gauche-droite" oscillation.
-    //   * pulse modulation (PR #221/#223, reverted in #225): time-averages
-    //     the boost into bursty PWM, which destroys MPPI's smooth
-    //     predictive control on FollowPath (transit / dock approach).
+    // New policy: instead of boosting, clamp any |vx| below kMinLinVel
+    // to zero. The firmware can't move the chassis below this threshold
+    // anyway, so commanding a sub-deadband forward velocity only
+    // produced motor buzz and the IMU/wheel mismatch above. Sending 0
+    // makes the IMU see nothing AND the wheels see nothing — the graph
+    // stays consistent. Nav2's closed-loop controllers (FTC, MPPI,
+    // BackUp) will issue above-deadband commands on their own once
+    // they detect lack of progress, provided their slow-speed tunables
+    // are set ≥ kMinLinVel (see nav2_params.yaml's FTC `speed_slow:
+    // 0.16` and RPP's `min_approach_linear_velocity: 0.16` for the
+    // canonical examples).
     //
-    // This compensator boosts only when the wheels are actually stalled:
-    // it reads `last_wheel_v(x|yaw)_` (snapshotted from the wheel-odom
-    // publish path above) and only fires when the commanded velocity is
-    // sub-deadband AND the wheels report <kResponseRatio · cmd in actual
-    // motion. When the wheels are responding (even slowly), we pass the
-    // command through unchanged — controllers that have closed the loop
-    // around perception aren't blindsided by a host-side amplifier.
+    // wz handling — closed-loop angular-rate controller.
     //
-    // The first cmd after a controller engages still sees stalled wheels
-    // and gets boosted — that's the intended behavior: it kicks the
-    // motors out of the deadband. Once moving, the closed-loop test
-    // releases the boost.
-    constexpr double kMinRotVel = 0.85;       // rad/s, just above ~PWM 40 deadband
-    constexpr double kMinLinVel = 0.13;       // m/s, just above ~PWM 40 deadband
-    constexpr double kResponseRatio = 0.40;   // wheels considered "responding" at ≥40 % cmd
-    constexpr double kMinCmdToConsider = 0.02;  // ignore floating-point dust on cmd_vel
-
-    const bool sub_db_w = (std::abs(wz) > kMinCmdToConsider && std::abs(wz) < kMinRotVel);
-    const bool sub_db_v = (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < kMinLinVel);
-
-    if (sub_db_w)
+    // WHY: the firmware PWM→rotation response is nonlinear and load-
+    // dependent (measured 2026-05-27: commanded 0.2/0.3/0.4 rad/s → actual
+    // 0.07/0.22/0.30, i.e. a soft deadband plus a ~0.7-0.75 drifting gain).
+    // Every Nav2 controller assumes commanded ω == actual ω, so the mismatch
+    // surfaced as under-rotation, dock-approach stalls and (when an earlier
+    // fix over-corrected) left/right oscillation. Four open-loop amplitude
+    // hacks (floor 0.85 / pulse / floor 0.5 / pulse+burst) all failed because
+    // none measured the result. compute_angular_rate_cmd() closes the loop on
+    // the gyro so the firmware command is driven until measured == target,
+    // absorbing the deadband + nonlinear gain at every operating point. See
+    // angular_rate_controller.hpp for the full rationale and the history.
+    // Safe now (the closed-loop boost 2a371798 was dropped pre-slip-veto)
+    // because fusion_graph slip-vetoes the transient wheel/IMU mismatch.
+    // Set angular_rate_loop_enabled:=false to fall back to passthrough.
+    //
+    // The sub-deadband |vx| → 0 guard is unchanged (linear has no clean
+    // host-side rate feedback — encoders slip; leave it to Nav2's loops).
+    constexpr double kMinLinVel = 0.15;  // m/s — PWM 40 forward deadband + margin
+    constexpr double kMinCmdToConsider = 1.0e-3;  // ignore floating-point dust
+    if (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < kMinLinVel)
     {
-      // Wheels respond if observed yaw rate has the same sign as cmd AND
-      // its magnitude is at least kResponseRatio · |wz|. Sign check avoids
-      // boosting a still-decelerating wheel that hasn't reversed yet.
-      const bool wheels_responding =
-        (last_wheel_vyaw_ * wz > 0.0) &&
-        (std::abs(last_wheel_vyaw_) >= kResponseRatio * std::abs(wz));
-      if (!wheels_responding)
-      {
-        wz = std::copysign(kMinRotVel, wz);
-      }
+      vx = 0.0;
     }
-
-    if (sub_db_v)
+    if (angular_rate_loop_enabled_)
     {
-      const bool wheels_responding =
-        (last_wheel_vx_ * vx > 0.0) &&
-        (std::abs(last_wheel_vx_) >= kResponseRatio * std::abs(vx));
-      if (!wheels_responding)
-      {
-        vx = std::copysign(kMinLinVel, vx);
-      }
+      const rclcpp::Time now = this->now();
+      const double dt = last_cmd_vel_time_.nanoseconds() > 0
+                            ? (now - last_cmd_vel_time_).seconds()
+                            : 0.0;
+      last_cmd_vel_time_ = now;
+      wz = mowgli_hardware::compute_angular_rate_cmd(
+          wz, latest_gyro_z_, dt, angular_rate_params_, angular_rate_state_);
     }
 
     LlCmdVel pkt{};
@@ -1485,6 +1509,14 @@ private:
   double dock_yaw_{0.0};
   double wheel_track_{0.325};
   double ticks_per_meter_{300.0};
+  // Closed-loop angular-rate controller (on_cmd_vel). Drives the firmware yaw
+  // command from gyro feedback so measured ω tracks the commanded ω across
+  // the firmware's nonlinear PWM curve. See angular_rate_controller.hpp.
+  bool angular_rate_loop_enabled_{true};
+  mowgli_hardware::AngularRateParams angular_rate_params_{};
+  mowgli_hardware::AngularRateState angular_rate_state_{};
+  double latest_gyro_z_{0.0};  ///< bias-corrected gyro_z, from the IMU path.
+  rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
   bool mow_enabled_{false};
   bool is_charging_{false};
   uint8_t current_mode_{0};
@@ -1514,12 +1546,14 @@ private:
   int32_t odom_acc_delta_left_{0};
   int32_t odom_acc_delta_right_{0};
   uint32_t odom_acc_dt_ms_{0};
-  // Latest base-frame velocity from the wheel-odom aggregation, snapshotted
-  // for the cmd_vel closed-loop deadband compensator. Single-writer
-  // (wheel-odom path) / single-reader (cmd_vel callback), both on the same
-  // executor — no lock needed.
-  double last_wheel_vx_{0.0};
-  double last_wheel_vyaw_{0.0};
+
+  // Per-stream clock fitters — one for IMU (50 Hz), one for the
+  // aggregated wheel-odom (20 Hz). Both run independently because
+  // the firmware emits IMU and odometry on separate cadences and
+  // a stall on one channel shouldn't perturb the other's stamp
+  // smoothing.
+  HostFirmwareClockFit imu_clock_fit_;
+  HostFirmwareClockFit odom_clock_fit_;
 
   // IMU calibration state (computed while docked and idle, OR when stationary
   // off-dock via auto-cal, OR loaded from the persisted file at boot)

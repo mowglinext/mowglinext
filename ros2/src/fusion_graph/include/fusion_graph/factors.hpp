@@ -59,6 +59,66 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// GyroPreintFactor
+// ---------------------------------------------------------------------------
+//
+// Ternary factor on (Pose2_prev, Pose2_curr, double_bias_curr) that
+// encodes a gyro-preintegrated yaw delta with a jointly-estimated
+// bias state.
+//
+// Background: GTSAM ships PreintegratedImuMeasurements for the full
+// 3D IMU case (accel + gyro, Pose3 + bias-6D). Our robot is planar
+// with a single useful gyro axis (z), so we implement a stripped-down
+// version: integrate (ω_z - b̂) over the inter-node interval and
+// emit a between-factor on yaw with a bias-correction term.
+//
+// Error:
+//   e = wrap( (θ_curr - θ_prev) - (Δθ_preint - bias_curr · dt_total) )
+//
+// where Δθ_preint = Σ_i (ω_z,i - b̂) · dt_i is the bias-corrected
+// integral computed at preintegration time with the bias estimate b̂
+// from the previous node, and the factor expects the optimiser to
+// settle on `bias_curr · dt_total` ≈ (true bias − b̂) · dt_total as
+// the residual correction.
+//
+// Why a single scalar bias per node instead of a continuous random-walk:
+// a random-walk needs additional BetweenFactor<double> chains plus a
+// process noise tuning step. For our drift timescales (minutes vs
+// graph cadence 20 ms) the per-node bias variable is a stable proxy —
+// successive nodes will share nearly the same bias unless an
+// observation perturbs them, naturally smoothing.
+//
+// Noise model on this factor: σ_yaw = √(N · σ_gyro² · dt²) where N is
+// the number of IMU samples integrated. Caller passes the precomputed
+// preint covariance.
+class GyroPreintFactor : public gtsam::NoiseModelFactor3<gtsam::Pose2, gtsam::Pose2, double>
+{
+public:
+  using This = GyroPreintFactor;
+  using Base = gtsam::NoiseModelFactor3<gtsam::Pose2, gtsam::Pose2, double>;
+
+  GyroPreintFactor(gtsam::Key key_prev,
+                   gtsam::Key key_curr,
+                   gtsam::Key key_bias_curr,
+                   double delta_theta_preint,
+                   double dt_total,
+                   const gtsam::SharedNoiseModel& model);
+
+  gtsam::Vector evaluateError(const gtsam::Pose2& X_prev,
+                              const gtsam::Pose2& X_curr,
+                              const double& bias_curr,
+                              OptMat H1 = nullptr,
+                              OptMat H2 = nullptr,
+                              OptMat H3 = nullptr) const override;
+
+  gtsam::NonlinearFactor::shared_ptr clone() const override;
+
+private:
+  double delta_theta_preint_;
+  double dt_total_;
+};
+
+// ---------------------------------------------------------------------------
 // YawUnaryFactor
 // ---------------------------------------------------------------------------
 //

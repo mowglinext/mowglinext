@@ -112,6 +112,15 @@ MowgliMower {
       minRange 0.10
       maxRange 12.0
       defaultFrequency 10
+      # Production-grade range noise. Webots interprets `noise` as the
+      # Gaussian σ as a fraction of `maxRange`, so 0.002 → σ ≈ 2.4 cm
+      # which lines up with the ±2 to ±3 cm accuracy spec of the
+      # LD06 / LD19 / YDLIDAR X4-class spinning LiDARs the operator
+      # ships with the prod robots. `resolution: 0.01` quantises each
+      # range reading to 1 cm steps, matching the on-wire output of
+      # those drivers (1 cm fixed-point or 1 mm under-rounded to cm).
+      noise 0.002
+      resolution 0.01
     }
   ]
 }

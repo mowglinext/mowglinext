@@ -2,7 +2,7 @@ name: Sensors — GPS
 
 on:
   push:
-    branches: [main, dev, 'feat/**']
+    branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'sensors/gps/**'
       - '.github/workflows/sensors-gps.yml'

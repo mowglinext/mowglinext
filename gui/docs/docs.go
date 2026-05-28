@@ -1188,6 +1188,9 @@ const docTemplate = `{
                 "debugType": {
                     "type": "string"
                 },
+                "directory": {
+                    "type": "string"
+                },
                 "disableEmergency": {
                     "type": "boolean"
                 },

@@ -103,14 +103,19 @@ func (fp *FirmwareProvider) flashMowgli(writer io.Writer, config types.FirmwareC
 		return xerrors.Errorf("error while cloning repository: %w", err)
 	}
 	_, _ = writer.Write([]byte("------> Repository cloned\n"))
+	firmwareDir := config.Directory
+	if firmwareDir == "" {
+		firmwareDir = "firmware"
+	}
+	pioProjectDir := os.TempDir() + "/mowgli/" + firmwareDir + "/stm32/ros_usbnode"
 	//Build board.h
 	_, _ = writer.Write([]byte("------> Building board.h...\n"))
-	boardTemplated, err := fp.buildBoardHeader(os.TempDir()+"/mowgli/firmware/stm32/ros_usbnode/include/board.h.template", config)
+	boardTemplated, err := fp.buildBoardHeader(pioProjectDir+"/include/board.h.template", config)
 	if err != nil {
 		_, _ = writer.Write([]byte("------> Error while building board.h: " + err.Error() + "\n"))
 		return xerrors.Errorf("error while building board.h: %w", err)
 	}
-	err = os.WriteFile(os.TempDir()+"/mowgli/firmware/stm32/ros_usbnode/include/board.h", boardTemplated, 0644)
+	err = os.WriteFile(pioProjectDir+"/include/board.h", boardTemplated, 0644)
 	if err != nil {
 		_, _ = writer.Write([]byte("------> Error while writing board.h: " + err.Error() + "\n"))
 		return xerrors.Errorf("error while writing board.h: %w", err)
@@ -126,7 +131,7 @@ func (fp *FirmwareProvider) flashMowgli(writer io.Writer, config types.FirmwareC
 		pioEnv = "LUV1000RI"
 	}
 	cmd := execabs.Command("/bin/bash", "-c", "platformio run -e "+pioEnv+" -t upload")
-	cmd.Dir = os.TempDir() + "/mowgli/firmware/stm32/ros_usbnode"
+	cmd.Dir = pioProjectDir
 	cmd.Stdout = writer
 	cmd.Stderr = writer
 	err = cmd.Run()

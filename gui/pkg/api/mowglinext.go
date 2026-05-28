@@ -53,7 +53,7 @@ func MowgliNextRoutes(r *gin.RouterGroup, provider types.IRosProvider) {
 // goroutines on bad input.
 func topicSubscribeInterval(topic string) (int, bool) {
 	switch topic {
-	case "gps", "pose", "imu", "ticks", "wheelOdom", "lidar":
+	case "gps", "gnssStatus", "pose", "imu", "ticks", "wheelOdom", "lidar":
 		return 100, true
 	case "fusionRaw", "cogHeading", "magYaw":
 		return 200, true
@@ -232,7 +232,7 @@ func SetDockingPointRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 // @Summary subscribe to a topic
 // @Description subscribe to a topic
 // @Tags mowglinext
-// @Param topic path string true "logical topic key: diagnostics, status, highLevelStatus, gps, pose, imu, ticks, map, path, plan, mowingPath, power, emergency, dockingSensor, lidar"
+// @Param topic path string true "logical topic key: diagnostics, status, highLevelStatus, gps, gnssStatus, pose, imu, ticks, map, path, plan, mowingPath, power, emergency, dockingSensor, lidar"
 // @Router /mowglinext/subscribe/{topic} [get]
 func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 	group.GET("/subscribe/:topic", func(c *gin.Context) {
@@ -254,6 +254,8 @@ func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			def, err = subscribe(provider, c, conn, "highLevelStatus", -1)
 		case "gps":
 			def, err = subscribe(provider, c, conn, "gps", 100)
+		case "gnssStatus":
+			def, err = subscribe(provider, c, conn, "gnssStatus", 100)
 		case "pose":
 			def, err = subscribe(provider, c, conn, "pose", 100)
 		case "fusionRaw":

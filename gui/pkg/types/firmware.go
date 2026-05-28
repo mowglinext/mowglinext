@@ -12,6 +12,7 @@ type FirmwareConfig struct {
 	File                           string  `json:"file"`
 	Repository                     string  `json:"repository"`
 	Branch                         string  `json:"branch"`
+	Directory                      string  `json:"directory"`
 	Version                        string  `json:"version"`
 	BoardType                      string  `json:"boardType"`
 	PanelType                      string  `json:"panelType"`

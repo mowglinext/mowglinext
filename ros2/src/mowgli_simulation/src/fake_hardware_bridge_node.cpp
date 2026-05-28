@@ -39,7 +39,7 @@
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/srv/emergency_stop.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
-#include "nav_msgs/msg/odometry.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/battery_state.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -106,24 +106,26 @@ public:
     dock_heading_pub_ = create_publisher<sensor_msgs::msg::Imu>(
         "/gnss/heading", rclcpp::QoS(10));
 
-    // Subscribe to map-frame pose so the dock-proximity test compares like-
-    // for-like with dock_x/dock_y (which are map-frame coordinates). The
-    // earlier subscription to /wheel_odom (odom frame) silently broke after
-    // CalibrateHeadingFromUndock re-seeded the map→odom transform: the
-    // robot's odom-frame position no longer matched its map-frame position,
-    // so near_dock stayed false even when the robot was physically docked,
-    // opennav_docking timed out waiting for charge to start, the BT halted
-    // DockRobot, BoundaryGuard's BackUp recovery shoved the robot south by
-    // 0.5 m, and the cycle repeated until the robot ended up outside the
-    // polygon and stuck in "Start occupied".
-    odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-        "/odometry/filtered_map",
+    // Subscribe to the sim's GROUND-TRUTH chassis pose, published by
+    // kinematic_drive on /sim/ground_truth_pose. On the real robot
+    // charging is a physical contact signal — true regardless of how
+    // confused the localizer is. We mirror that here: the previous
+    // /odometry/filtered_map subscription gated charging on
+    // fusion_graph's BELIEF of the robot's pose, so when sensor noise
+    // or motor-model deadband caused the graph to drift, fake_hardware
+    // would see the robot "near the dock" mid-session, fire a spurious
+    // rising-edge is_charging, and SeedFromDockPose would re-anchor
+    // the graph at the dock — driving the localizer further off truth.
+    // The ground-truth topic is the kinematic teleport pose, untouched
+    // by anything downstream of the sim itself.
+    odom_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+        "/sim/ground_truth_pose",
         rclcpp::SensorDataQoS(),
-        [this](const nav_msgs::msg::Odometry::SharedPtr msg)
+        [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg)
         {
           std::lock_guard<std::mutex> lock(odom_mutex_);
-          robot_x_ = msg->pose.pose.position.x;
-          robot_y_ = msg->pose.pose.position.y;
+          robot_x_ = msg->pose.position.x;
+          robot_y_ = msg->pose.position.y;
           odom_received_ = true;
         });
 
@@ -242,7 +244,7 @@ private:
   rclcpp::Publisher<mowgli_interfaces::msg::Emergency>::SharedPtr emergency_pub_;
   rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr battery_state_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr dock_heading_pub_;
-  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr odom_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   // Robot position from odometry

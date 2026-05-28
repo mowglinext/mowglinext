@@ -29,10 +29,12 @@ var topicMap = map[string]topicDef{
 	"status":              {"/hardware_bridge/status", "mowgli_interfaces/msg/Status"},
 	"highLevelStatus":     {"/behavior_tree_node/high_level_status", "mowgli_interfaces/msg/HighLevelStatus"},
 	"gps":                 {"/gps/absolute_pose", "mowgli_interfaces/msg/AbsolutePose"},
-	// The robot's global pose comes from the active map-frame localizer:
-	// ekf_map_node by default, or fusion_graph_node when use_fusion_graph
-	// is true. The "fusionRaw" key is retained for legacy symmetry and
-	// points at the same /odometry/filtered_map topic.
+	"gnssStatus":          {"/gps/status", "mowgli_interfaces/msg/GnssStatus"},
+	// The robot's global pose comes from fusion_graph_node, the sole
+	// map-frame localizer. "pose" and "fusionRaw" both point at
+	// /odometry/filtered_map; the duplicate key is kept for backwards
+	// compatibility with older GUI components that subscribed to the
+	// "fusionRaw" channel by name.
 	"pose":                {"/odometry/filtered_map", "nav_msgs/msg/Odometry"},
 	"fusionRaw":           {"/odometry/filtered_map", "nav_msgs/msg/Odometry"},
 	"btLog":               {"/behavior_tree_log", "nav2_msgs/msg/BehaviorTreeLog"},
@@ -51,9 +53,10 @@ var topicMap = map[string]topicDef{
 	"obstacles":           {"/obstacle_tracker/obstacles", "mowgli_interfaces/msg/ObstacleArray"},
 	"robotDescription":    {"/robot_description", "std_msgs/msg/String"},                       // published once
 	"recordingTrajectory": {"/behavior_tree_node/recording_trajectory", "nav_msgs/msg/Path"},   // area recording preview
-	// Synthetic heading sources fused by ekf_map (robot_localization). Both
-	// carry sensor_msgs/Imu with only `orientation` and `orientation_covariance[8]`
-	// populated — see cog_to_imu.py and mag_yaw_publisher.py in mowgli_localization.
+	// Synthetic heading sources fused by fusion_graph_node as yaw unary
+	// factors. Both carry sensor_msgs/Imu with only `orientation` and
+	// `orientation_covariance[8]` populated — see cog_to_imu.py and
+	// mag_yaw_publisher.py in mowgli_localization.
 	"cogHeading":          {"/imu/cog_heading", "sensor_msgs/msg/Imu"},
 	"magYaw":              {"/imu/mag_yaw", "sensor_msgs/msg/Imu"},
 }

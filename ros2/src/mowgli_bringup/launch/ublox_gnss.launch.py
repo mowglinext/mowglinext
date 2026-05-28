@@ -1,4 +1,4 @@
-"""Minimal u-blox GNSS backend bringup for Mowgli V1."""
+"""Minimal u-blox GNSS backend bringup using the shared GNSS adapter path."""
 
 import os
 
@@ -70,19 +70,20 @@ def generate_launch_description() -> LaunchDescription:
         namespace="ublox",
         output="screen",
         parameters=[{"use_sim_time": use_sim_time}],
+        remappings=[("/fix", "/gps/fix")],
     )
 
     gnss_adapter = Node(
         package="mowgli_localization",
-        executable="ublox_gnss_adapter_node",
+        executable="navsat_to_absolute_pose_node",
         name="ublox_gnss_adapter",
         output="screen",
         parameters=[
             params_file,
             {
-                "device_family": device_family,
-                "frame_id_hint": frame_id,
                 "use_sim_time": use_sim_time,
+                "gnss_backend": "ublox",
+                "gps_protocol": "UBX",
             },
         ],
     )

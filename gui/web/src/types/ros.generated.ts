@@ -3,13 +3,13 @@
 //
 // Field names are snake_case to match the JSON from rosbridge.
 
-export type Point32 = {
+export type Point = {
   x?: number;
   y?: number;
   z?: number;
 };
 
-export type Point = {
+export type Point32 = {
   x?: number;
   y?: number;
   z?: number;
@@ -43,6 +43,11 @@ export type Quaternion = {
 export type Twist = {
   linear?: Vector3;
   angular?: Vector3;
+};
+
+export type TwistStamped = {
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  twist?: Twist;
 };
 
 export type TwistWithCovariance = {
@@ -100,10 +105,6 @@ export type LaserScan = {
   intensities?: number[];
 };
 
-export type MarkerArray = {
-  markers?: Marker[];
-};
-
 export type Marker = {
   ns?: string;
   id?: number;
@@ -119,6 +120,10 @@ export type Marker = {
   text?: string;
   mesh_resource?: string;
   mesh_use_embedded_materials?: boolean;
+};
+
+export type MarkerArray = {
+  markers?: Marker[];
 };
 
 export const enum AbsolutePoseConstants {
@@ -154,15 +159,6 @@ export type CoveragePath = {
   path?: Path;
 };
 
-export type Emergency = {
-  stamp?: { sec: number; nanosec: number };
-  active_emergency?: boolean;
-  latched_emergency?: boolean;
-  lift_warning?: boolean;
-  lift_duration_sec?: number;
-  reason?: string;
-};
-
 export const enum ESCStatusConstants {
   ESC_STATUS_DISCONNECTED = 99,
   ESC_STATUS_ERROR = 100,
@@ -178,6 +174,77 @@ export type ESCStatus = {
   rpm?: number;
   temperature_motor?: number;
   temperature_pcb?: number;
+};
+
+export type Emergency = {
+  stamp?: { sec: number; nanosec: number };
+  active_emergency?: boolean;
+  latched_emergency?: boolean;
+  lift_warning?: boolean;
+  lift_duration_sec?: number;
+  reason?: string;
+};
+
+export const enum GnssStatusConstants {
+  FIX_TYPE_NO_FIX = 0,
+  FIX_TYPE_GPS_FIX = 1,
+  FIX_TYPE_RTK_FLOAT = 2,
+  FIX_TYPE_RTK_FIXED = 3,
+  FIX_TYPE_DEAD_RECKONING = 4,
+  RTK_MODE_UNKNOWN = 0,
+  RTK_MODE_NONE = 1,
+  RTK_MODE_FLOAT = 2,
+  RTK_MODE_FIXED = 3,
+  CAP_RTK_MODE = 1,
+  CAP_HDOP = 2,
+  CAP_VDOP = 4,
+  CAP_HORIZONTAL_ACCURACY = 8,
+  CAP_VERTICAL_ACCURACY = 16,
+  CAP_HEADING = 32,
+  CAP_HEADING_ACCURACY = 64,
+  CAP_SATELLITES_USED = 128,
+  CAP_SATELLITES_VISIBLE = 256,
+  CAP_SATELLITES_TRACKED = 512,
+  CAP_DIFFERENTIAL_CORRECTIONS = 1024,
+  CAP_CORRECTIONS_ACTIVE = 2048,
+  CAP_CORRECTION_AGE = 4096,
+  CAP_MEAN_CN0 = 8192,
+  CAP_MAX_CN0 = 16384,
+  CAP_DUAL_ANTENNA_STATUS = 32768,
+  CAP_INTERFERENCE_STATUS = 65536,
+  CAP_JAMMING_STATUS = 131072,
+};
+
+export type GnssStatus = {
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  backend?: string;
+  receiver_vendor?: string;
+  receiver_model?: string;
+  receiver_firmware?: string;
+  fix_type?: number;
+  fix_valid?: boolean;
+  differential_corrections?: boolean;
+  corrections_active?: boolean;
+  dead_reckoning?: boolean;
+  rtk_mode?: number;
+  dual_antenna_heading?: boolean;
+  interference_detected?: boolean;
+  jamming_detected?: boolean;
+  quality_percent?: number;
+  capability_flags?: number;
+  value_flags?: number;
+  hdop?: number;
+  vdop?: number;
+  horizontal_accuracy_m?: number;
+  vertical_accuracy_m?: number;
+  heading_deg?: number;
+  heading_accuracy_deg?: number;
+  satellites_used?: number;
+  satellites_visible?: number;
+  satellites_tracked?: number;
+  correction_age_s?: number;
+  mean_cn0_db_hz?: number;
+  max_cn0_db_hz?: number;
 };
 
 export const enum HighLevelStatusConstants {

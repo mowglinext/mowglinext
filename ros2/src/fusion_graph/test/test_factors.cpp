@@ -12,6 +12,7 @@
 #include <gtsam/linear/NoiseModel.h>
 
 using fusion_graph::GnssLeverArmFactor;
+using fusion_graph::GyroPreintFactor;
 using fusion_graph::WrapAngle;
 using fusion_graph::YawUnaryFactor;
 
@@ -172,4 +173,106 @@ TEST(WrapAngle, BoundsRespected)
   EXPECT_NEAR(WrapAngle(-M_PI), M_PI, 1e-12);  // -π wraps to +π
   EXPECT_NEAR(WrapAngle(2.0 * M_PI), 0.0, 1e-12);
   EXPECT_NEAR(WrapAngle(-1.5 * M_PI), 0.5 * M_PI, 1e-12);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// GyroPreintFactor
+// ─────────────────────────────────────────────────────────────────────
+
+TEST(GyroPreintFactor, ZeroErrorAtTrueValue)
+{
+  // Robot rotated by +0.1 rad over 1 s. Preint with zero bias should
+  // expect Δθ_curr − Δθ_prev = 0.1, residual = 0 when bias_curr = 0.
+  GyroPreintFactor f(gtsam::Symbol('x', 0),
+                     gtsam::Symbol('x', 1),
+                     gtsam::Symbol('b', 1),
+                     /* delta_theta_preint */ 0.10,
+                     /* dt_total */ 1.0,
+                     UnitDiag1());
+  const gtsam::Pose2 X_prev(0.0, 0.0, 0.0);
+  const gtsam::Pose2 X_curr(0.0, 0.0, 0.10);
+  const double bias = 0.0;
+  auto e = f.evaluateError(X_prev, X_curr, bias);
+  EXPECT_NEAR(e[0], 0.0, 1e-12);
+}
+
+TEST(GyroPreintFactor, BiasCancelsCorrectly)
+{
+  // Preint says Δθ_preint = 0.20 over 1 s, but true motion was 0.10.
+  // → factor expects bias_curr · 1.0 = 0.10 (i.e. bias = 0.10 rad/s)
+  // for zero residual.
+  GyroPreintFactor f(gtsam::Symbol('x', 0),
+                     gtsam::Symbol('x', 1),
+                     gtsam::Symbol('b', 1),
+                     /* delta_theta_preint */ 0.20,
+                     /* dt_total */ 1.0,
+                     UnitDiag1());
+  const gtsam::Pose2 X_prev(0.0, 0.0, 0.0);
+  const gtsam::Pose2 X_curr(0.0, 0.0, 0.10);
+
+  // bias = 0 → residual = (0.10 - (0.20 - 0)) = -0.10
+  EXPECT_NEAR(f.evaluateError(X_prev, X_curr, 0.0)[0], -0.10, 1e-12);
+  // bias = 0.10 → residual = (0.10 - (0.20 - 0.10*1.0)) = 0
+  EXPECT_NEAR(f.evaluateError(X_prev, X_curr, 0.10)[0], 0.0, 1e-12);
+}
+
+TEST(GyroPreintFactor, JacobianMatchesNumeric)
+{
+  GyroPreintFactor f(gtsam::Symbol('x', 0),
+                     gtsam::Symbol('x', 1),
+                     gtsam::Symbol('b', 1),
+                     0.15,
+                     0.5,
+                     UnitDiag1());
+  const gtsam::Pose2 X_prev(0.5, 0.2, 0.3);
+  const gtsam::Pose2 X_curr(0.7, 0.1, 0.45);
+  const double bias = 0.02;
+
+  gtsam::Matrix H1_an, H2_an, H3_an;
+  f.evaluateError(X_prev, X_curr, bias, &H1_an, &H2_an, &H3_an);
+
+  const double eps = 1e-6;
+  gtsam::Matrix H1_num(1, 3), H2_num(1, 3), H3_num(1, 1);
+
+  for (int i = 0; i < 3; ++i)
+  {
+    gtsam::Vector3 d_prev = gtsam::Vector3::Zero();
+    d_prev(i) = eps;
+    auto e_plus = f.evaluateError(X_prev.retract(d_prev), X_curr, bias);
+    auto e_minus = f.evaluateError(X_prev.retract(-d_prev), X_curr, bias);
+    H1_num(0, i) = (e_plus[0] - e_minus[0]) / (2.0 * eps);
+
+    gtsam::Vector3 d_curr = gtsam::Vector3::Zero();
+    d_curr(i) = eps;
+    auto e_plus2 = f.evaluateError(X_prev, X_curr.retract(d_curr), bias);
+    auto e_minus2 = f.evaluateError(X_prev, X_curr.retract(-d_curr), bias);
+    H2_num(0, i) = (e_plus2[0] - e_minus2[0]) / (2.0 * eps);
+  }
+  H3_num(0, 0) =
+      (f.evaluateError(X_prev, X_curr, bias + eps)[0] -
+       f.evaluateError(X_prev, X_curr, bias - eps)[0]) /
+      (2.0 * eps);
+
+  for (int j = 0; j < 3; ++j)
+  {
+    EXPECT_NEAR(H1_an(0, j), H1_num(0, j), 1e-4) << "H1[0," << j << "]";
+    EXPECT_NEAR(H2_an(0, j), H2_num(0, j), 1e-4) << "H2[0," << j << "]";
+  }
+  EXPECT_NEAR(H3_an(0, 0), H3_num(0, 0), 1e-4);
+}
+
+TEST(GyroPreintFactor, WrapsAroundPi)
+{
+  // X_prev.theta = π−0.05, X_curr.theta = -π+0.05 → actual Δθ = 0.10
+  // (crosses ±π). Preint = 0.10, bias = 0 → residual must be 0
+  // (NOT 2π − 0.10).
+  GyroPreintFactor f(gtsam::Symbol('x', 0),
+                     gtsam::Symbol('x', 1),
+                     gtsam::Symbol('b', 1),
+                     0.10,
+                     0.1,
+                     UnitDiag1());
+  const gtsam::Pose2 X_prev(0.0, 0.0, M_PI - 0.05);
+  const gtsam::Pose2 X_curr(0.0, 0.0, -M_PI + 0.05);
+  EXPECT_NEAR(f.evaluateError(X_prev, X_curr, 0.0)[0], 0.0, 1e-9);
 }

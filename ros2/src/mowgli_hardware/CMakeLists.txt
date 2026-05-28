@@ -38,6 +38,7 @@ add_library(mowgli_hardware_core STATIC
   src/crc16.cpp
   src/serial_port.cpp
   src/packet_handler.cpp
+  src/clock_fit.cpp
 )
 
 target_include_directories(mowgli_hardware_core
@@ -48,6 +49,12 @@ target_include_directories(mowgli_hardware_core
 
 # serial_port.cpp uses POSIX pthreads indirectly via the OS serial layer.
 target_link_libraries(mowgli_hardware_core pthread)
+
+# clock_fit.cpp needs rclcpp::Time. Promote rclcpp to the static lib's
+# public deps so test executables also pick it up transitively.
+ament_target_dependencies(mowgli_hardware_core
+  rclcpp
+)
 
 # ---------------------------------------------------------------------------
 # Executable: hardware_bridge_node
@@ -123,6 +130,24 @@ if(BUILD_TESTING)
     test/test_protocol.cpp
   )
   target_link_libraries(test_protocol
+    mowgli_hardware_core
+  )
+
+  # ---- test_clock_fit ----
+  ament_add_gtest(test_clock_fit
+    test/test_clock_fit.cpp
+  )
+  target_link_libraries(test_clock_fit
+    mowgli_hardware_core
+  )
+
+  # ---- test_angular_rate_controller ----
+  # angular_rate_controller.hpp is header-only; link mowgli_hardware_core only
+  # for its public include directories (no ROS deps needed — pure function).
+  ament_add_gtest(test_angular_rate_controller
+    test/test_angular_rate_controller.cpp
+  )
+  target_link_libraries(test_angular_rate_controller
     mowgli_hardware_core
   )
 endif()

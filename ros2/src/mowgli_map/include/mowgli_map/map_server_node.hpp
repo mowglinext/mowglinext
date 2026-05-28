@@ -17,11 +17,13 @@
 #define MOWGLI_MAP__MAP_SERVER_NODE_HPP_
 
 #include <cmath>
+#include <deque>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -29,6 +31,7 @@
 #include <geometry_msgs/msg/polygon.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <nav2_msgs/msg/costmap_filter_info.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/odometry.hpp>
@@ -681,6 +684,58 @@ private:
   geometry_msgs::msg::Pose docking_pose_;
   bool docking_pose_set_{false};
 
+  /// Rolling window of recent map→base_footprint yaw samples (radians).
+  /// Pushed by on_odom; consumed by on_set_docking_point to gate the
+  /// service on EKF yaw convergence. After a mowgli-ros2 restart the EKF
+  /// boots at yaw=0 and only converges to the true heading via gyro+wheel
+  /// integration / COG / mag; on a stationary robot with no COG signal
+  /// the convergence can take 30 s+, during which /gps/absolute_pose
+  /// swings by lever_arm·sin(Δyaw) — i.e. hundreds of mm when yaw drifts
+  /// tens of degrees. Persisting a dock pose during that window pins it
+  /// to a wildly wrong location. The gate rejects set_docking_point when
+  /// the recent yaw std exceeds yaw_convergence_threshold_rad_.
+  std::deque<std::pair<rclcpp::Time, double>> recent_yaws_;
+  mutable std::mutex recent_yaws_mutex_;
+  double yaw_convergence_threshold_rad_{0.00873};  ///< 0.5°
+  double yaw_convergence_window_s_{5.0};
+  size_t yaw_convergence_min_samples_{20};
+
+  /// Latest /hardware_bridge/status snapshot. on_set_docking_point requires
+  /// last_is_charging_=true so the operator can't pin a dock pose while the
+  /// robot is parked elsewhere. last_status_time_ guards against stale
+  /// snapshots (e.g. firmware bridge crashed) — the gate rejects when the
+  /// last status is older than dock_set_status_max_age_s_.
+  bool last_is_charging_{false};
+  rclcpp::Time last_status_time_{0, 0, RCL_ROS_TIME};
+
+  /// Latest /gps/pose_cov snapshot. on_set_docking_point requires the
+  /// max(σ_xx, σ_yy) below dock_set_gps_accuracy_max_m_ AND a recent sample
+  /// (< dock_set_gps_max_age_s_). RTK-Fixed reports σ ≈ 3 mm here; Float is
+  /// 10-50 cm.
+  geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr last_gps_pose_cov_;
+  rclcpp::Time last_gps_pose_cov_time_{0, 0, RCL_ROS_TIME};
+  mutable std::mutex last_gps_pose_cov_mutex_;
+
+  /// Rolling window of recent /gps/pose_cov (x, y) map-frame positions, used
+  /// by on_set_docking_point to AVERAGE the docked position. The dock pose
+  /// MUST be captured from the independent GPS-vs-datum projection, NOT the
+  /// fused /odometry/filtered_map: when the robot is charging, fusion_graph
+  /// gauge-resets the fused pose onto the *existing* dock_pose, so capturing
+  /// the fused pose just re-stores the old (possibly wrong) value — a
+  /// calibration that can never correct itself. /gps/pose_cov is the raw
+  /// lever-arm-corrected GPS position and is free of that circularity.
+  /// Averaging over a few seconds beats the ~1-3 cm single-sample RTK jitter
+  /// (the systematic dock_pose error we are fixing was ~5 cm, so an unaveraged
+  /// sample would trade one error for another).
+  std::deque<std::tuple<rclcpp::Time, double, double>> recent_gps_xy_;
+  double dock_set_gps_avg_window_s_{3.0};
+  size_t dock_set_gps_avg_min_samples_{10};
+
+  /// Thresholds for the on_set_docking_point gates beyond yaw convergence.
+  double dock_set_gps_accuracy_max_m_{0.04};   ///< 4 cm
+  double dock_set_gps_max_age_s_{2.0};
+  double dock_set_status_max_age_s_{3.0};
+
   /// Three coupled dock polygons in map frame, all derived from
   /// docking_pose_ + dock_body/corridor parameters. Built once at startup.
   ///   * dock_body_polygon_     — physical dock body (0.80×0.55 m default).
@@ -738,6 +793,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::ObstacleArray>::SharedPtr obstacle_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr gps_pose_cov_sub_;
 
   /// Latest Nav2 costmap (global by default — same frame as map_), guarded
   /// by `costmap_mutex_`. Read on every cell-walker step via

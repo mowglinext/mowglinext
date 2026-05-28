@@ -253,7 +253,7 @@ EOF
     esac
     info "GPS: $GPS_FLAG"
   elif [[ -n "$GPS_FLAG" && "${GNSS_FLAG:-}" == "ublox" ]]; then
-    info "GPS preset ignored for GNSS_BACKEND=ublox (dedicated USB/libusb driver)"
+    info "GPS preset ignored for GNSS_BACKEND=ublox (u-blox USB-by-id runtime)"
   fi
 
   # ── LiDAR preset ──────────────────────────────────────────────────────

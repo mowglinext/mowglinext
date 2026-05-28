@@ -29,6 +29,16 @@ type CoveragePath struct {
 	Path                      nav.Path                       `json:"path"`
 }
 
+// ESCStatus matches mowgli_interfaces/msg/ESCStatus.
+type ESCStatus struct {
+	Status                    uint8                          `json:"status"`
+	Current                   float32                        `json:"current"`
+	Tacho                     uint32                         `json:"tacho"`
+	Rpm                       int16                          `json:"rpm"`
+	TemperatureMotor          float32                        `json:"temperature_motor"`
+	TemperaturePcb            float32                        `json:"temperature_pcb"`
+}
+
 // Emergency matches mowgli_interfaces/msg/Emergency.
 type Emergency struct {
 	Stamp                     geometry.Stamp                 `json:"stamp"`
@@ -39,14 +49,37 @@ type Emergency struct {
 	Reason                    string                         `json:"reason"`
 }
 
-// ESCStatus matches mowgli_interfaces/msg/ESCStatus.
-type ESCStatus struct {
-	Status                    uint8                          `json:"status"`
-	Current                   float32                        `json:"current"`
-	Tacho                     uint32                         `json:"tacho"`
-	Rpm                       int16                          `json:"rpm"`
-	TemperatureMotor          float32                        `json:"temperature_motor"`
-	TemperaturePcb            float32                        `json:"temperature_pcb"`
+// GnssStatus matches mowgli_interfaces/msg/GnssStatus.
+type GnssStatus struct {
+	Header                    geometry.Header                `json:"header"`
+	Backend                   string                         `json:"backend"`
+	ReceiverVendor            string                         `json:"receiver_vendor"`
+	ReceiverModel             string                         `json:"receiver_model"`
+	ReceiverFirmware          string                         `json:"receiver_firmware"`
+	FixType                   uint8                          `json:"fix_type"`
+	FixValid                  bool                           `json:"fix_valid"`
+	DifferentialCorrections   bool                           `json:"differential_corrections"`
+	CorrectionsActive         bool                           `json:"corrections_active"`
+	DeadReckoning             bool                           `json:"dead_reckoning"`
+	RtkMode                   uint8                          `json:"rtk_mode"`
+	DualAntennaHeading        bool                           `json:"dual_antenna_heading"`
+	InterferenceDetected      bool                           `json:"interference_detected"`
+	JammingDetected           bool                           `json:"jamming_detected"`
+	QualityPercent            float32                        `json:"quality_percent"`
+	CapabilityFlags           uint32                         `json:"capability_flags"`
+	ValueFlags                uint32                         `json:"value_flags"`
+	Hdop                      float32                        `json:"hdop"`
+	Vdop                      float32                        `json:"vdop"`
+	HorizontalAccuracyM       float32                        `json:"horizontal_accuracy_m"`
+	VerticalAccuracyM         float32                        `json:"vertical_accuracy_m"`
+	HeadingDeg                float32                        `json:"heading_deg"`
+	HeadingAccuracyDeg        float32                        `json:"heading_accuracy_deg"`
+	SatellitesUsed            uint16                         `json:"satellites_used"`
+	SatellitesVisible         uint16                         `json:"satellites_visible"`
+	SatellitesTracked         uint16                         `json:"satellites_tracked"`
+	CorrectionAgeS            float32                        `json:"correction_age_s"`
+	MeanCn0DbHz               float32                        `json:"mean_cn0_db_hz"`
+	MaxCn0DbHz                float32                        `json:"max_cn0_db_hz"`
 }
 
 // HighLevelStatus matches mowgli_interfaces/msg/HighLevelStatus.

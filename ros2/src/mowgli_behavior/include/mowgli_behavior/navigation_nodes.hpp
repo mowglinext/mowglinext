@@ -240,6 +240,8 @@ class NavigateInsideBoundary : public BT::StatefulActionNode
 public:
   using Nav2Goal = nav2_msgs::action::NavigateToPose;
   using GoalHandle = rclcpp_action::ClientGoalHandle<Nav2Goal>;
+  using BackUpAction = nav2_msgs::action::BackUp;
+  using BackUpGoalHandle = rclcpp_action::ClientGoalHandle<BackUpAction>;
   using RecoverySrv = mowgli_interfaces::srv::GetRecoveryPoint;
   using ClearSrv = nav2_msgs::srv::ClearEntireCostmap;
   using SetParamsResult = std::vector<rcl_interfaces::msg::SetParametersResult>;
@@ -266,6 +268,7 @@ private:
     ClearingCostmap,      // global_costmap/clear_entirely_global_costmap
     WaitingForGoalHandle, // /navigate_to_pose
     WaitingForResult,
+    FallbackBackingUp,    // /backup (open-loop reverse when Smac aborts)
     ReEnablingKeepout,    // global_costmap.set_parameters(keepout_filter.enabled=true)
   };
 
@@ -287,16 +290,28 @@ private:
   // there is nothing to re-enable.
   BT::NodeStatus BeginReEnableKeepout();
 
+  // Fire an open-loop BackUp action (~0.5 m reverse) as a fallback when
+  // Smac aborts the recovery plan. Transitions into FallbackBackingUp.
+  // Used at most once per onStart() to break boundary-edge deadlocks
+  // where the planner refuses to plan from the robot's lethal cell even
+  // after the keepout filter has been disabled.
+  BT::NodeStatus BeginFallbackBackup();
+
   rclcpp::Client<RecoverySrv>::SharedPtr service_client_;
   rclcpp::Client<ClearSrv>::SharedPtr clear_client_;
   rclcpp::AsyncParametersClient::SharedPtr keepout_params_client_;
   rclcpp_action::Client<Nav2Goal>::SharedPtr action_client_;
+  rclcpp_action::Client<BackUpAction>::SharedPtr backup_action_client_;
 
   std::shared_future<RecoverySrv::Response::SharedPtr> service_future_;
   std::shared_future<SetParamsResult> set_param_future_;
   std::shared_future<ClearSrv::Response::SharedPtr> clear_future_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;
+  std::shared_future<BackUpGoalHandle::SharedPtr> backup_goal_handle_future_;
+  BackUpGoalHandle::SharedPtr backup_goal_handle_;
+  std::shared_future<BackUpGoalHandle::WrappedResult> backup_result_future_;
+  bool backup_result_requested_{false};
 
   // Cached recovery target from the map_server, held across the
   // disable-keepout / clear-costmap phases until we actually send the
@@ -310,6 +325,11 @@ private:
   // Set true between DisablingKeepout and ReEnablingKeepout — onHalted
   // checks this to fire the safety re-enable.
   bool keepout_disabled_{false};
+  // True after we've already used the BackUp fallback once this onStart()
+  // cycle. The outer BT (RetryUntilSuccessful num_attempts="2") gives us a
+  // second cycle if needed, so we don't try to chain multiple backups in
+  // one cycle.
+  bool fallback_attempted_{false};
 
   Phase phase_{Phase::WaitingForService};
 };

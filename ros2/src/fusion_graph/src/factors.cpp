@@ -64,6 +64,70 @@ gtsam::NonlinearFactor::shared_ptr GnssLeverArmFactor::clone() const
 }
 
 // ---------------------------------------------------------------------------
+// GyroPreintFactor
+// ---------------------------------------------------------------------------
+
+GyroPreintFactor::GyroPreintFactor(gtsam::Key key_prev,
+                                   gtsam::Key key_curr,
+                                   gtsam::Key key_bias_curr,
+                                   double delta_theta_preint,
+                                   double dt_total,
+                                   const gtsam::SharedNoiseModel& model)
+    : Base(model, key_prev, key_curr, key_bias_curr),
+      delta_theta_preint_(delta_theta_preint),
+      dt_total_(dt_total)
+{
+}
+
+gtsam::Vector GyroPreintFactor::evaluateError(const gtsam::Pose2& X_prev,
+                                              const gtsam::Pose2& X_curr,
+                                              const double& bias_curr,
+                                              OptMat H1,
+                                              OptMat H2,
+                                              OptMat H3) const
+{
+  // Predicted Δθ using current bias estimate:
+  //   pred = preint − bias_curr · dt
+  // Residual on yaw:
+  //   e = wrap( (θ_curr − θ_prev) − pred )
+  const double pred = delta_theta_preint_ - bias_curr * dt_total_;
+  const double dtheta_actual = X_curr.theta() - X_prev.theta();
+  gtsam::Vector1 e;
+  e << WrapAngle(dtheta_actual - pred);
+
+  // Jacobians. The error depends only on the yaw component of each
+  // pose and linearly on bias_curr. Pose2 tangent ordering is
+  // (dx, dy, dtheta).
+  if (H1)
+  {
+    H1->resize(1, 3);
+    (*H1)(0, 0) = 0.0;
+    (*H1)(0, 1) = 0.0;
+    (*H1)(0, 2) = -1.0;  // ∂e/∂θ_prev = -1
+  }
+  if (H2)
+  {
+    H2->resize(1, 3);
+    (*H2)(0, 0) = 0.0;
+    (*H2)(0, 1) = 0.0;
+    (*H2)(0, 2) = +1.0;  // ∂e/∂θ_curr = +1
+  }
+  if (H3)
+  {
+    H3->resize(1, 1);
+    // ∂e/∂bias_curr = ∂/∂b [ −(preint − b·dt) ] = +dt
+    (*H3)(0, 0) = +dt_total_;
+  }
+
+  return e;
+}
+
+gtsam::NonlinearFactor::shared_ptr GyroPreintFactor::clone() const
+{
+  return gtsam::NonlinearFactor::shared_ptr(new GyroPreintFactor(*this));
+}
+
+// ---------------------------------------------------------------------------
 // YawUnaryFactor
 // ---------------------------------------------------------------------------
 

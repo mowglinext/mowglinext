@@ -31,6 +31,7 @@ const SchemaField = createSchemaField({
 type Config = {
     repository: string
     branch: string
+    directory: string
     file: string
     version: string,
     boardType: string,
@@ -63,7 +64,7 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
         validateFirst: true,
         effects: (form) => {
             onFieldValueChange('boardType', (field) => {
-                form.setFieldState('*(panelType,tickPerM,wheelBase,branch,repository,debugType,disableEmergency,maxMps,maxChargeCurrent,limitVoltage150MA,maxChargeVoltage,batChargeCutoffVoltage,oneWheelLiftEmergencyMillis,bothWheelsLiftEmergencyMillis,tiltEmergencyMillis,stopButtonEmergencyMillis,playButtonClearEmergencyMillis,imuOnboardInclinationThreshold,externalImuAcceleration,externalImuAngular,masterJ18,perimeterWire)', (state) => {
+                form.setFieldState('*(panelType,tickPerM,wheelBase,directory,branch,repository,debugType,disableEmergency,maxMps,maxChargeCurrent,limitVoltage150MA,maxChargeVoltage,batChargeCutoffVoltage,oneWheelLiftEmergencyMillis,bothWheelsLiftEmergencyMillis,tiltEmergencyMillis,stopButtonEmergencyMillis,playButtonClearEmergencyMillis,imuOnboardInclinationThreshold,externalImuAcceleration,externalImuAngular,masterJ18,perimeterWire)', (state) => {
                     state.display = field.value !== "BOARD_VERMUT_YARDFORCE500" ? "visible" : "hidden";
                 })
                 form.setFieldState('*(version,file)', (state) => {
@@ -339,6 +340,13 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                         title={"Branch"}
                         default={"main"}
                         x-decorator-props={{tooltip: "Branch to use for firmware"}}
+                        x-component="Input"
+                        x-decorator="FormItem"/></SchemaField>
+                    <SchemaField><SchemaField.String
+                        name={"directory"}
+                        title={"Firmware Directory"}
+                        default={"firmware"}
+                        x-decorator-props={{tooltip: "Path to the firmware directory inside the cloned repository (containing stm32/ros_usbnode)"}}
                         x-component="Input"
                         x-decorator="FormItem"/></SchemaField>
                     <SchemaField><SchemaField.String

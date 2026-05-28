@@ -7,7 +7,8 @@
 #
 # Three diagnostic groups:
 #   * GPS Fix           : carr_soln (none/float/fixed), gps_fix_ok,
-#                         diff_corr, ttff_s, sigma_xy_mm
+#                         diff_corr, ttff_s, sigma_xy_mm, hdop/vdop,
+#                         horizontal/vertical accuracy
 #   * GPS Satellites    : visible / used counts, mean CN0 of used sats,
 #                         CN0 ≥ 40 dB-Hz count (RTK-Fixed signal floor)
 #   * NTRIP/RTCM        : msgs/s, % used, mean age of last correction,
@@ -31,7 +32,7 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from rtcm_msgs.msg import Message as RtcmMessage
 
 try:
-    from ublox_ubx_msgs.msg import UBXNavStatus, UBXNavSat, UBXRxmRTCM, UBXNavCov
+    from ublox_ubx_msgs.msg import UBXNavStatus, UBXNavSat, UBXRxmRTCM, UBXNavCov, UBXNavDOP
     _HAVE_UBX = True
 except ImportError:
     _HAVE_UBX = False
@@ -66,6 +67,7 @@ class GpsHealthAggregator(Node):
         self._last_sat: UBXNavSat | None = None
         self._last_sat_t: float = 0.0
         self._last_cov: UBXNavCov | None = None
+        self._last_dop: UBXNavDOP | None = None
         # Each entry: (recv_time, msg_type, msg_used, crc_failed). msg_type and
         # msg_used are -1 in NMEA mode where the receiver does not echo RTCM
         # ingestion telemetry — we only know what we forwarded into it.
@@ -86,6 +88,7 @@ class GpsHealthAggregator(Node):
             self.create_subscription(UBXNavStatus, "/ubx_nav_status", self._on_status, qos)
             self.create_subscription(UBXNavSat, "/ubx_nav_sat", self._on_sat, qos)
             self.create_subscription(UBXNavCov, "/ubx_nav_cov", self._on_cov, qos)
+            self.create_subscription(UBXNavDOP, "/ubx_nav_dop", self._on_dop, qos)
             self.create_subscription(UBXRxmRTCM, "/ubx_rxm_rtcm", self._on_rtcm_ubx, qos)
         else:
             # NMEA mode (or UBX msgs unavailable): only the NTRIP/RTCM
@@ -114,6 +117,9 @@ class GpsHealthAggregator(Node):
 
     def _on_cov(self, msg: UBXNavCov) -> None:
         self._last_cov = msg
+
+    def _on_dop(self, msg: UBXNavDOP) -> None:
+        self._last_dop = msg
 
     def _on_rtcm_ubx(self, msg: UBXRxmRTCM) -> None:
         # UBX path: the receiver tells us which RTCM type it ingested and
@@ -164,10 +170,21 @@ class GpsHealthAggregator(Node):
         fix_label = _FIX_TYPE_LABELS.get(int(st.gps_fix.fix_type), str(st.gps_fix.fix_type))
 
         sigma_xy_mm = -1.0
+        horizontal_accuracy_m = math.nan
+        vertical_accuracy_m = math.nan
         if self._last_cov is not None:
             cxx = float(self._last_cov.pos_cov_nn)
             cyy = float(self._last_cov.pos_cov_ee)
+            czz = float(self._last_cov.pos_cov_dd)
             sigma_xy_mm = math.sqrt(max(0.0, cxx + cyy)) * 1000.0
+            horizontal_accuracy_m = math.sqrt(max(0.0, (cxx + cyy) / 2.0))
+            vertical_accuracy_m = math.sqrt(max(0.0, czz))
+
+        hdop = math.nan
+        vdop = math.nan
+        if self._last_dop is not None:
+            hdop = float(self._last_dop.h_dop) * 0.01
+            vdop = float(self._last_dop.v_dop) * 0.01
 
         s.values = [
             KeyValue(key="carr_soln", value=carr_label),
@@ -176,6 +193,16 @@ class GpsHealthAggregator(Node):
             KeyValue(key="diff_corr", value=str(bool(st.diff_corr))),
             KeyValue(key="ttff_s", value=f"{st.ttff / 1000.0:.1f}"),
             KeyValue(key="sigma_xy_mm", value=f"{sigma_xy_mm:.1f}" if sigma_xy_mm >= 0 else "n/a"),
+            KeyValue(key="hdop", value=f"{hdop:.2f}" if math.isfinite(hdop) else "n/a"),
+            KeyValue(key="vdop", value=f"{vdop:.2f}" if math.isfinite(vdop) else "n/a"),
+            KeyValue(
+                key="horizontal_accuracy_m",
+                value=f"{horizontal_accuracy_m:.3f}" if math.isfinite(horizontal_accuracy_m) else "n/a",
+            ),
+            KeyValue(
+                key="vertical_accuracy_m",
+                value=f"{vertical_accuracy_m:.3f}" if math.isfinite(vertical_accuracy_m) else "n/a",
+            ),
         ]
 
         if not st.gps_fix_ok:
@@ -207,6 +234,7 @@ class GpsHealthAggregator(Node):
         used_cnos = [int(x.cno) for x in sv_info if x.flags.sv_used]
         used_n = len(used_cnos)
         mean_cno = (sum(used_cnos) / used_n) if used_n else 0.0
+        max_cno = max(used_cnos) if used_cnos else 0
         cno_ge_40 = sum(1 for c in used_cnos if c >= 40)
 
         # Per-constellation breakdown is useful for diagnosing why a
@@ -224,6 +252,7 @@ class GpsHealthAggregator(Node):
             KeyValue(key="visible", value=str(visible)),
             KeyValue(key="used", value=str(used_n)),
             KeyValue(key="mean_cno_db_hz", value=f"{mean_cno:.1f}"),
+            KeyValue(key="max_cno_db_hz", value=f"{max_cno:.1f}"),
             KeyValue(key="cno_ge_40_count", value=str(cno_ge_40)),
             KeyValue(key="constellations_used", value=const_str),
         ]

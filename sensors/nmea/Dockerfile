@@ -13,15 +13,18 @@
 # Publishes (remapped to the project's /gps/ namespace by the launch):
 #   /gps/fix    sensor_msgs/NavSatFix      (lat/lon/alt + HDOP-derived cov)
 #   /gps/vel    geometry_msgs/TwistStamped (from RMC/VTG ground speed+track)
-#   /gps/heading mowgli interop topic — not produced by this driver
+#   no /gps/azimuth output — this generic driver does not publish
+#   compass_msgs/Azimuth-compatible heading data
 #
 # Caveats vs the ublox backend:
 #   * Covariance comes from HDOP only (no UBX position_accuracy), so the
 #     map-frame EKF / fusion_graph see a more pessimistic σ than RTK-Fixed
 #     would imply. RTK still works if the receiver outputs RTK-quality
 #     GGA fix-quality codes (4=Fix, 5=Float).
-#   * No carrier-solution flag → BT/GUI cannot distinguish RTK-Fixed from
-#     Float beyond GGA fix-quality.
+#   * No carrier-solution flag or rich diagnostics stream: the shared
+#     /gps/status runtime builder can publish typed basic GNSS state, but
+#     only from the coarse fix semantics and covariance that
+#     nmea_navsat_driver exposes.
 #   * NTRIP injection is NOT bundled here. If your receiver supports NTRIP
 #     internally (Emlid, most modern modules), configure it on the device.
 #     If you need ROS-side RTCM relay over the same serial port, run a

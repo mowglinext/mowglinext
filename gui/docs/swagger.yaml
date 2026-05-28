@@ -175,6 +175,8 @@ definitions:
         type: string
       debugType:
         type: string
+      directory:
+        type: string
       disableEmergency:
         type: boolean
       externalImuAcceleration:

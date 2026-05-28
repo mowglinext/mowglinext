@@ -41,6 +41,17 @@ void PathProgressGoalChecker::initialize(
   xy_goal_tolerance_ = declare("xy_goal_tolerance", 0.20).as_double();
   yaw_goal_tolerance_ = declare("yaw_goal_tolerance", 0.30).as_double();
   fallback_timeout_s_ = declare("fallback_timeout_s", 5.0).as_double();
+  // Max idx advance per isGoalReached call. Bounds the "find closest
+  // pose forward of max_reached_index_" search so a boustrophedon-
+  // style path that loops back over earlier ground doesn't let the
+  // search jump from idx 114 directly to idx 3175 just because that
+  // point happens to be closer to the robot's current pose. At a
+  // ~5 cm path resolution and ~0.5 m/s max chassis speed, the robot
+  // advances ≤ 10 poses per second; the goal checker is consulted
+  // at ≤ 20 Hz so ≤ 1 pose per call is the physical bound, with
+  // wide safety margin baked into the default.
+  max_idx_advance_per_call_ =
+      static_cast<size_t>(declare("max_idx_advance_per_call", 10).as_int());
 
   // Which controller's republished plan to track. Default matches the
   // FollowCoveragePath FTC slot from nav2_params.yaml. If you have a
@@ -200,11 +211,27 @@ bool PathProgressGoalChecker::isGoalReached(
   }
 
   // Update max-reached index by finding the closest pose to the robot
-  // FORWARD of the previous max (monotonic — never rewinds).
+  // FORWARD of the previous max, BOUNDED by max_idx_advance_per_call_.
+  // The unbounded search (start..n-1) was correct for a one-way path
+  // but broke on F2C boustrophedon coverage paths where the trajectory
+  // loops back near earlier ground — once the robot moved a few cm
+  // through a swath that geographically coincides with a later return
+  // swath, the global-min search found a much-later idx as "closer"
+  // and max_reached_index_ jumped forward by thousands of poses in
+  // one call, instantly satisfying the 95% progress threshold and
+  // declaring the action SUCCEEDED with 0% real coverage.
+  //
+  // The physical bound: the chassis advances ≤ vmax · dt / path_step
+  // poses per call. With vmax = 0.5 m/s, dt = 50 ms (20 Hz controller
+  // loop) and path_step ≈ 5 cm we get ≤ 0.5 poses/call. Cap at
+  // max_idx_advance_per_call_ (default 10) for a safety margin
+  // against tick-rate jitter and shorter-than-expected path steps.
   const size_t start = std::min(max_reached_index_, n - 1);
+  const size_t end_exclusive =
+      std::min(start + max_idx_advance_per_call_ + 1, n);
   double best_d2 = std::numeric_limits<double>::infinity();
   size_t best_idx = max_reached_index_;
-  for (size_t i = start; i < n; ++i)
+  for (size_t i = start; i < end_exclusive; ++i)
   {
     const double dx = path_poses_[i].pose.position.x - query_pose.position.x;
     const double dy = path_poses_[i].pose.position.y - query_pose.position.y;

@@ -151,10 +151,8 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ------------------------------------------------------------------
-    # 2. Navigation stack — robot_localization (dual EKF), Nav2
-    #    ekf_odom_node publishes odom -> base_footprint; ekf_map_node
-    #    publishes map -> odom. fusion_graph scan-matching is opt-in
-    #    via use_fusion_graph (real-robot only — requires LiDAR on ARM).
+    # 2. Navigation stack — fusion_graph (single localizer for both
+    #    map→odom AND odom→base_footprint) + Nav2.
     # ------------------------------------------------------------------
     navigation_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -177,7 +175,9 @@ def generate_launch_description() -> LaunchDescription:
             # offset routinely throws ExtrapolationException without the
             # lead, and the controller queries align poorly with the
             # 25 Hz TF cadence — restore the sim-tested values here.
-            "ekf_transform_time_offset": "0.1",
+            # fusion_graph_tf_lead_s now also applies to the
+            # odom→base_footprint TF (ekf_odom_node was removed
+            # 2026-05-18; fusion_graph owns both transforms).
             "fusion_graph_tf_lead_s": "0.1",
             "fusion_graph_node_period_s": "0.02",
         }.items(),
@@ -334,16 +334,12 @@ def generate_launch_description() -> LaunchDescription:
     #     Datum matches the simulator world; if you change the sim
     #     world's lat/lon, change these too.
     # ------------------------------------------------------------------
-    sim_localization_params = os.path.join(
-        bringup_dir, "config", "robot_localization.yaml"
-    )
     navsat_converter_node = Node(
         package="mowgli_localization",
         executable="navsat_to_absolute_pose_node",
         name="navsat_to_absolute_pose",
         output="screen",
         parameters=[
-            sim_localization_params,
             {
                 "use_sim_time": True,
                 "datum_lat": 48.137154,
@@ -428,29 +424,28 @@ def generate_launch_description() -> LaunchDescription:
                 # map→odom TF never converged.
                 "input_topic": "/imu/data_sim",
                 "output_topic": "/imu/data",
-                # All bias + white noise temporarily zeroed for
-                # fusion_graph debugging — gives a perfect-sensor sim so
-                # we can isolate algorithm behaviour from sensor noise.
-                # Restore the MPU-9250 / LIS6DSL defaults once the
-                # baseline is clean (gyro_white_std=0.005, walk=1e-4,
-                # init=1e-3; accel_white_std=0.05, walk=1e-3,
-                # init=0.05).
-                "gyro_white_std": 0.0,
-                "gyro_bias_walk_std": 0.0,
-                "gyro_bias_init_std": 0.0,
-                "accel_white_std": 0.0,
-                "accel_bias_walk_std": 0.0,
-                "accel_bias_init_std": 0.0,
+                # MEMS / consumer-grade noise matching the production
+                # ICM-45686 / MPU-6050 / LSM6DSL-class IMUs the
+                # firmware drives. Values picked from the conservative
+                # end of each chip's datasheet at the firmware's 100 Hz
+                # bandwidth — see ros2/src/mowgli_simulation/scripts/
+                # sim_imu_noise.py docstring for the model.
+                "gyro_white_std": 0.005,        # rad/s
+                "gyro_bias_walk_std": 1.0e-4,   # rad/s/sqrt(s)
+                "gyro_bias_init_std": 1.0e-3,   # rad/s
+                "accel_white_std": 0.05,        # m/s^2
+                "accel_bias_walk_std": 1.0e-3,  # m/s^2/sqrt(s)
+                "accel_bias_init_std": 0.05,    # m/s^2
                 "noise_seed": 42,
-                # Perfect-IMU sim mode: bypass Webots gyro/accel entirely
-                # and synthesize from /cmd_vel. The Webots IMU is gyro-
-                # noisy by construction (ODE physics leaks angular drift
-                # between kinematic-drive teleport ticks → ~0.03 rad/s
-                # phantom yaw rate even when stationary, which the EKF
-                # accumulates into a 5°/s map-yaw drift). Setting
-                # white/walk noise to 0 was not enough because that
-                # noise comes from /imu/data_sim, not from this node.
-                "synthesize_from_cmd_vel": True,
+                # Use the Webots gyro/accel directly (no cmd_vel
+                # synthesis). The kinematic_drive plugin now runs the
+                # firmware motor model end-to-end (deadband + PI +
+                # saturation), so the Webots-reported chassis motion
+                # IS the achievable-twist post-firmware response. An
+                # IMU synthesized from raw cmd_vel would lie about
+                # sub-deadband stalled rotations and starve the
+                # fusion_graph wheel/gyro consistency checks.
+                "synthesize_from_cmd_vel": False,
                 "cmd_vel_topic": "/cmd_vel",
             }
         ],

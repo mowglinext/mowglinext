@@ -76,6 +76,11 @@ private:
   double xy_goal_tolerance_{0.20};
   double yaw_goal_tolerance_{0.30};
   std::string plan_topic_{};
+  // Bound on the forward search window in isGoalReached. Prevents
+  // boustrophedon paths from letting max_reached_index_ kangaroo past
+  // a loop-back point. Tuned at 10 poses (≥10× the per-call physical
+  // bound at typical chassis speeds) — see the cpp for the calculation.
+  size_t max_idx_advance_per_call_{10};
 
   // State guarded by mutex_ (controller_server may call isGoalReached
   // from one thread while the topic callback fires on another).

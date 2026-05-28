@@ -2,7 +2,7 @@ name: Sensors — Unicore UM982
 
 on:
   push:
-    branches: [main, dev, 'feat/**']
+    branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'sensors/unicore/**'
       - '.github/workflows/sensors-unicore.yml'

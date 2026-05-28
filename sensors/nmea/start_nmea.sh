@@ -31,7 +31,9 @@ if [ ! -e "${NMEA_PORT}" ]; then
 fi
 
 # nmea_serial_driver publishes /fix (NavSatFix), /vel (TwistStamped),
-# /time_reference, /heading. Remap to the project /gps/* namespace.
+# /time_reference, /heading. Remap only the project-supported /gps/*
+# topics here; generic NMEA heading is not exposed as /gps/azimuth because
+# it is not a compass_msgs/Azimuth stream.
 exec ros2 run nmea_navsat_driver nmea_serial_driver --ros-args \
   -p port:="${NMEA_PORT}" \
   -p baud:="${NMEA_BAUD}" \
@@ -40,5 +42,4 @@ exec ros2 run nmea_navsat_driver nmea_serial_driver --ros-args \
   -p time_ref_source:="${NMEA_FRAME_ID}" \
   -r /fix:=/gps/fix \
   -r /vel:=/gps/vel \
-  -r /heading:=/gps/heading \
   -r /time_reference:=/gps/time_reference

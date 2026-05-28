@@ -4,7 +4,7 @@ Ces profils pilotent à la fois :
 
 - les `LOG` activés sur le récepteur via `sensors/unicore/configure_receiver.sh`
 - les diagnostics ROS 2 activés par `sensors/unicore/start_gps.sh`
-- les backends ASCII / hybride / binaire exposés par `UM982Driver`
+- les backends ASCII / hybride / binaire exposés par le driver Unicore GNSS (`UM982Driver`)
 
 Le profil par défaut est `normal`.
 
@@ -39,7 +39,7 @@ Notes :
 
 ## Mapping `.env` vers ROS
 
-`start_gps.sh` mappe directement ces variables vers les paramètres du nœud `um982_node` :
+`start_gps.sh` mappe directement ces variables vers les paramètres du nœud `unicore_node` :
 
 - `UNICORE_ENABLE_UNICORE_BINARY` -> `enable_unicore_binary`
 - `UNICORE_USE_BINARY_NAV` -> `use_binary_nav`

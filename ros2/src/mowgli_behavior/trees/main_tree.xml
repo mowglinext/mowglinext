@@ -460,10 +460,18 @@
                   <Fallback name="MowOrSkipArea">
                     <Sequence name="PlanThenFollow">
                       <PublishHighLevelStatus state="2" state_name="PLANNING"/>
+                      <!-- headland_width_m=0.30 (was 0.20) insets the
+                           F2C path 0.30 m from the operator polygon
+                           edge. With wheel-PI motor model + production
+                           IMU noise the post-pivot lateral drift can
+                           hit 0.20 m; planning at 0.20 m inset pushed
+                           the chassis center over the line on most
+                           swath-end pivots and triggered boundary
+                           recovery. 0.30 m gives a working margin. -->
                       <PlanCoverageArea
                           area_index="{current_area_index}"
                           operation_width_m="0.20"
-                          headland_width_m="0.20"/>
+                          headland_width_m="0.30"/>
                       <RetryUntilSuccessful num_attempts="5" name="FollowStripRetry">
                         <Fallback name="MowOrRecover">
                         <Sequence name="MowPath">

@@ -143,7 +143,7 @@
           "type": "boolean",
           "title": "Enable LiDAR",
           "default": true,
-          "description": "Enable LiDAR and fusion_graph scan-matching (when use_fusion_graph is on). Disable for non-LiDAR builds."
+          "description": "Enable LiDAR. Scan-matching and loop-closure factors in fusion_graph_node are opt-in (use_scan_matching, use_loop_closure). Disable for non-LiDAR builds."
         },
         "lidar_x": {
           "type": "number",
@@ -173,7 +173,7 @@
           "type": "number",
           "title": "GPS Antenna Offset X",
           "default": 0.3,
-          "description": "Body-frame forward offset of GPS antenna from base_footprint (metres). Used by navsat_transform (robot_localization) for lever-arm correction."
+          "description": "Body-frame forward offset of GPS antenna from base_footprint (metres). Used by fusion_graph_node's GnssLeverArmFactor to subtract the antenna lever-arm from each /gps/fix sample."
         },
         "gps_y": {
           "type": "number",
@@ -208,7 +208,7 @@
         "datum_alt": {
           "type": "number",
           "title": "Datum Altitude",
-          "description": "Map origin altitude (WGS84 ellipsoidal, metres) — site-specific; no default. Used by navsat_transform (robot_localization) as the altitude reference."
+          "description": "Map origin altitude (WGS84 ellipsoidal, metres) — site-specific; no default. Used as the altitude reference when converting GPS fixes to the local map frame."
         },
         "gps_protocol": {
           "type": "string",
@@ -296,6 +296,12 @@
           "title": "Dock Approach Distance",
           "default": 1.0,
           "description": "Staging point distance in front of dock (metres)."
+        },
+        "dock_approach_overshoot": {
+          "type": "number",
+          "title": "Dock Approach Overshoot",
+          "default": 0.05,
+          "description": "Forward overshoot (metres) applied to the dock target along its yaw axis. opennav_docking drives toward dock_pose + overshoot * forward and stops at docking_threshold, putting firm contact on the cradle. 0 disables the shift."
         },
         "dock_max_retries": {
           "type": "integer",
@@ -488,7 +494,7 @@
           "title": "SLAM Mode",
           "enum": ["lifelong", "mapping", "localization"],
           "default": "lifelong",
-          "description": "Legacy SLAM toolbox operating mode. Unused — robot_localization (dual-EKF) is the primary localizer and there is no SLAM backend. Kept for config backward compatibility."
+          "description": "Legacy SLAM toolbox operating mode. Unused — fusion_graph_node (GTSAM iSAM2) is the primary localizer and slam_toolbox is no longer part of the stack. Kept for config backward compatibility."
         },
         "map_save_on_dock": {
           "type": "boolean",

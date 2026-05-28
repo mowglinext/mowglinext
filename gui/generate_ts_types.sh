@@ -61,6 +61,10 @@ cat > "$STD_MSGS/geometry_msgs/Twist.msg" <<'MSG'
 Vector3 linear
 Vector3 angular
 MSG
+cat > "$STD_MSGS/geometry_msgs/TwistStamped.msg" <<'MSG'
+std_msgs/Header header
+Twist twist
+MSG
 cat > "$STD_MSGS/geometry_msgs/TwistWithCovariance.msg" <<'MSG'
 Twist twist
 float64[36] covariance

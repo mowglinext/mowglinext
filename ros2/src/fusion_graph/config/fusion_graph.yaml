@@ -44,7 +44,23 @@ fusion_graph_node:
     # ground truth.
     stationary_thresh_xy_m: 0.001
     stationary_thresh_theta: 0.002
-    stationary_sigma_theta: 0.001
+    # 2026-05-27: relax 0.001 → 0.01 rad. The original tight value gave
+    # the wheel between-factor's yaw component a precision of 1e6, which
+    # — combined with the wheel non-holo σ_y=0.005m (precision 4e4) and
+    # tight GPS lever-arm factors (σ~3-5mm → precision 4e4-1e5) during
+    # the slow-pivot phase of docking — pushed iSAM2's Cholesky onto
+    # a near-singular information matrix and triggered
+    # IndeterminantLinearSystemException. The crash was reliably
+    # reproducible during DockRobot's rotate-to-dock alignment, where
+    # the wheel reports "stationary" (snap dθ=0 with this σ) while the
+    # gyro between-factor wants a non-zero dθ from chassis vibration
+    # under sub-deadband motor PWM. 0.01 rad gives Cholesky two extra
+    # orders of magnitude of conditioning slack while still pinning yaw
+    # tighter than the gyro alone (gyro_sigma_theta=0.005 rad). Cost:
+    # ~×3 yaw drift over a long idle window (still under 1°/min).
+    # If LiDAR is enabled, scan_between factors break the wheel-only
+    # constraint colinearity and this relaxation can be tightened again.
+    stationary_sigma_theta: 0.01
 
     # ── Pivot-mode wheel-translation downweight ───────────────────────
     # When |per-tick gyro dtheta| exceeds pivot_gate_dtheta_rad, the
@@ -70,6 +86,64 @@ fusion_graph_node:
     # the typical post-cal gyro residual (~0.02-0.03 rad/s) and below
     # any meaningful manual rotation.
     stationary_gyro_thresh_rad_per_s: 0.10
+
+    # ── Slip veto (wheel translation rejected when gyro contradicts) ─
+    # See graph_manager.cpp Tick() for the full rationale. The triple
+    # gate fires when the wheels claim rotation that the chassis gyro
+    # doesn't see — on wet grass the drive wheels can spin in unison,
+    # producing encoder readings that say "I moved forward and turned"
+    # while the chassis sits still. Treat the wheel (dx, dy) as a lie
+    # in that case; the gyro still feeds the yaw and GPS / scans pull
+    # (x, y). All three thresholds are *per-tick* radians so they
+    # scale with node_period_s automatically.
+    slip_residual_thresh_rad: 0.01    # |wheel_dθ − gyro_dθ| limit (≈14°/s @25 Hz)
+    slip_gyro_max_rad: 0.005          # gyro must read near-still
+    slip_wheel_min_rad: 0.005         # wheel must claim non-trivial rotation
+
+    # ── Sliding-window cap on the factor graph ───────────────────────
+    # RebaseISAM2 keeps only the most-recent max_graph_nodes pose nodes
+    # and drops the rest (their constraints were already folded into the
+    # kept priors, so the current estimate is unchanged). Without the
+    # cap the graph grew unbounded — 48,000+ nodes were observed in the
+    # field, which inflated marginal-covariance cost until cov_xx hit
+    # ~1 m and the map→odom estimate started jumping metres while the
+    # robot sat still. 3000 nodes ≈ 2 min @ 25 Hz, enough for a full
+    # mowing pass and any LiDAR loop closures within that window. Set
+    # to 0 to restore the legacy keep-everything behaviour.
+    max_graph_nodes: 3000
+
+    # ── Online gyro bias estimation (item #3, pragmatic) ─────────────
+    # During wheel-only stationary windows, EMA-update an estimate of
+    # gyro_z bias and subtract it from raw samples before integration.
+    # Captures thermal drift over a session without a graph schema
+    # change. Set to false to use only the offline bias from
+    # hardware_bridge_node's docking calibration.
+    gyro_bias_estimation_enabled: true
+    gyro_bias_ema_tau_s: 30.0
+    gyro_bias_max_sample_rad_per_s: 0.10
+
+    # ── Full IMU preintegration (joint bias optim, item #3 final) ────
+    # When true, replaces the EMA bias path with a per-node bias
+    # variable in the graph and a GyroPreintFactor on each pose pair.
+    # iSAM2 jointly optimises trajectory + bias. Higher quality yaw
+    # tracking (especially during long motion windows where the EMA
+    # path can't update) at the cost of more graph state.
+    # Default false until field-validated; flip to true to opt in.
+    use_imu_preint: false
+    gyro_noise_density_rad_per_s: 0.015
+    gyro_bias_rw_rad_per_s: 0.001
+    gyro_bias_prior_sigma_rad_per_s: 0.05
+
+    # ── Adaptive process noise on wheel σ_x ────────────────────────────
+    # Inflates wheel_sigma_x when the |dtheta_wheel - dtheta_gyro|
+    # residual EMA exceeds the floor. Slip on wet grass / slope causes
+    # encoders to over-report distance — without inflation the
+    # iSAM2 wheel between-factor pins the trajectory to that bogus
+    # delta until a GPS observation pulls it back. Set gain to 0 to
+    # disable. See GraphParams comments for sizing details.
+    adaptive_noise_enabled_gain: 10.0
+    adaptive_noise_ema_tau_s: 0.5
+    adaptive_noise_residual_floor_rad: 0.005
 
     # ── RTK wrong-fix detection ───────────────────────────────────────
     # F9P occasionally re-solves carrier-phase ambiguity on a different
@@ -120,6 +194,16 @@ fusion_graph_node:
     map_frame: map
     odom_frame: odom
     base_frame: base_footprint
+
+    # ── High-rate extrapolated pose (item #15) ────────────────────────
+    # When > 0, fusion_graph_node publishes /odometry/filtered_map_fast
+    # at this rate (Hz), with yaw projected forward from the latest
+    # iSAM2-published pose using the most recent IMU gyro_z sample.
+    # Off by default (0) — opt in from yaml when display latency is
+    # the bottleneck (e.g. operator GUI during pivots). Consumers that
+    # need precise pose for control should keep using
+    # /odometry/filtered_map at 50 Hz.
+    fast_pose_publish_rate_hz: 0.0
 
     # ── TF publish lead time ──────────────────────────────────────────
     # Default 0.0 = HARDWARE-correct (no forward extrapolation).

@@ -249,7 +249,7 @@ configure_gps() {
       UBLOX_DEVICE_SERIAL_STRING=""
 
       echo ""
-      info "GNSS_BACKEND=ublox: dedicated u-blox container, serial transport over USB by-id."
+      info "GNSS_BACKEND=ublox: shared GPS container, u-blox USB-by-id runtime."
       info "UART u-blox receivers should use GNSS_BACKEND=gps with GPS_PROTOCOL=UBX."
       pick_serial_by_id "${GPS_BY_ID:-}" || return 1
       GPS_BY_ID="$REPLY"

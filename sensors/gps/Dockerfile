@@ -22,19 +22,21 @@
 FROM ros:kilted-ros-base AS builder
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG UBLOX_DGNSS_REF=fix/serial-reconnect-on-eio
+ARG UBLOX_DGNSS_REF=fix/hp-fix-stale-status-cov
 # Bump UBLOX_DGNSS_SHA to the current branch tip to bust the docker
 # layer cache when upstream moves. `git clone --branch` accepts only
 # branch/tag names so we clone shallow then checkout the pinned SHA;
 # the SHA also ensures cache-from doesn't reuse a stale layer when
 # the branch moves under us (which is what we hit on 2026-04-26).
-# Currently riding the fix/serial-reconnect-on-eio branch (PR
-# cedbossneo/ublox_dgnss#1) so the driver reopens the CDC ACM FD
-# when the F9P briefly disconnects from USB and re-enumerates on a
-# different ttyACM minor — without this we ended up stuck spamming
-# "RTCM write failed: serial write errno=5" until docker restart.
-# Switch back to feat/serial-transport once #1 lands.
-ARG UBLOX_DGNSS_SHA=80dd8db96e1e72d083a983305ef39b27fd74dd6f
+# Currently riding fix/hp-fix-stale-status-cov (PR cedbossneo/ublox_dgnss#2),
+# which is fix/serial-reconnect-on-eio (#1, CDC ACM FD reopen on EIO) +
+# a per-epoch h_acc fallback in ublox_nav_sat_fix_hp_node so /gps/fix no
+# longer publishes positions with status/covariance from a different
+# epoch. Measured loss on the prior branch: NAV-STATUS ~57 %, NAV-COV
+# ~80 % at 7 Hz nav rate, which silently published Float positions with
+# stale Fixed status during cycle slips. Switch back to the parent
+# branches once #1 and #2 land.
+ARG UBLOX_DGNSS_SHA=5e1d0cf1e8ec0e2638c44a59f57d15f5dd04c9af
 # cedbossneo fork (itself a fork of privatedocs000/ublox_dgnss). Layered
 # customisations over upstream:
 #   * privatedocs000 base — RTK-Fixed detection via UBX-NAV-STATUS.carr_soln:

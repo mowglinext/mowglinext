@@ -70,12 +70,55 @@
 /* ---------------------------------------------------------------------------
  * Drive motor control state
  * ---------------------------------------------------------------------------*/
-/* Signed per-wheel PWM commands. Positive = forward, negative = reverse,
- * 0 = stop. Replaces the old (unsigned magnitude, direction bit) pair so
- * "stop" has exactly one representation on each wheel.
- * Written from USB ISR packet handlers, read from motors_handler() in main loop. */
-static volatile int16_t left_pwm_signed  = 0;
-static volatile int16_t right_pwm_signed = 0;
+/* Target wheel velocities written by on_cmd_vel (ISR context) and read by
+ * motors_handler() at MOTORS_NBT_TIME_MS cadence. Replaces the previous
+ * "ISR writes PWM directly" path so motors_handler can run a wheel-level
+ * PI loop using encoder feedback instead of forwarding an open-loop
+ * cmd_vel × PWM_PER_MPS mapping. */
+static volatile float left_target_mps  = 0.0f;
+static volatile float right_target_mps = 0.0f;
+
+/* PWM ultimately sent to the PAC5210. Output of the PI loop in motors_handler;
+ * legacy globals kept under the same names so the snapshot+watchdog logic
+ * downstream is unchanged. */
+static int16_t left_pwm_signed  = 0;
+static int16_t right_pwm_signed = 0;
+
+/* ---------------------------------------------------------------------------
+ * Wheel-level PI controller
+ * ---------------------------------------------------------------------------
+ * Brushed-DC motors driven by the PAC5210 have a hard static-friction
+ * deadband (~PWM 40). Open-loop cmd_vel × PWM_PER_MPS produces PWM=2 for
+ * a 0.05 m/s target — well below deadband, motors buzz, the chassis
+ * doesn't move. We can't fix the motor physics but we CAN bridge the
+ * deadband with closed-loop feedback: while the target says "move" and
+ * the encoder says "stalled", the PI integrator ramps PWM up until the
+ * motor breaks free, then settles around whatever PWM keeps the wheel
+ * at target speed.
+ *
+ * Run at MOTORS_NBT_TIME_MS = 20 ms (50 Hz). Encoder feedback comes from
+ * left_ticks_signed / right_ticks_signed (signed cumulative ticks
+ * maintained by drivemotor.c, already direction-aware).
+ *
+ * Output = feedforward (target × PWM_PER_MPS, preserves the open-loop
+ * behaviour above deadband) + Kp × error + integral_pwm. The integral is
+ * stored pre-multiplied by Ki for trivial anti-windup.
+ *
+ * Set USE_WHEEL_PI to 0 to fall back to open-loop forwarding for
+ * debugging / hardware bring-up. */
+#define USE_WHEEL_PI         1
+#define WHEEL_PI_KP_PWM_PER_MPS    30.0f   /* proportional gain */
+#define WHEEL_PI_KI_PWM_PER_MPS_S 5000.0f /* integral gain (50 PWM in ~0.2 s when err=0.05 m/s) */
+#define WHEEL_PI_INT_MAX_PWM     100.0f   /* anti-windup clamp on the integral term */
+#define WHEEL_PI_DT_S            (MOTORS_NBT_TIME_MS / 1000.0f)
+#define WHEEL_PI_TICKS_PER_M    300.0f    /* must match mowgli_robot.yaml: ticks_per_meter */
+
+static float left_pi_int_pwm  = 0.0f;
+static float right_pi_int_pwm = 0.0f;
+static int32_t prev_left_ticks_signed_pi  = 0;
+static int32_t prev_right_ticks_signed_pi = 0;
+static float prev_left_target_mps  = 0.0f;
+static float prev_right_target_mps = 0.0f;
 
 /* ---------------------------------------------------------------------------
  * Blade motor control state
@@ -180,12 +223,12 @@ static void on_cmd_vel(const uint8_t *data, size_t len)
     if (right_mps >  MAX_MPS) right_mps =  MAX_MPS;
     if (right_mps < -MAX_MPS) right_mps = -MAX_MPS;
 
-    /* Convert to signed PWM in one step. Sign is preserved end-to-end; the
-     * signed PWM carries both magnitude and direction. Deadband compensation
-     * happens inside DRIVEMOTOR_SetSpeedSigned() when it runs at the fixed
-     * motor-control cadence. */
-    left_pwm_signed  = (int16_t)(left_mps  * PWM_PER_MPS);
-    right_pwm_signed = (int16_t)(right_mps * PWM_PER_MPS);
+    /* Hand the target wheel velocities to the PI loop in motors_handler.
+     * The mapping to PWM (feedforward + closed-loop correction) lives
+     * there now so the integrator can bridge the static-friction
+     * deadband on sub-deadband commands. */
+    left_target_mps  = left_mps;
+    right_target_mps = right_mps;
 }
 
 static void on_hl_state(const uint8_t *data, size_t len)
@@ -233,7 +276,7 @@ static void on_hl_state(const uint8_t *data, size_t len)
         PANEL_Set_LED(PANEL_LED_6H, PANEL_LED_OFF);
         PANEL_Set_LED(PANEL_LED_8H, PANEL_LED_OFF);
         main_eOpenmowerStatus = OPENMOWER_STATUS_IDLE;
-        left_pwm_signed = right_pwm_signed = 0;
+        left_target_mps = right_target_mps = 0.0f;
         blade_on_off = target_blade_on_off = 0;
         break;
     }
@@ -309,8 +352,8 @@ extern "C" void motors_handler()
     if (NBT_handler(&motors_nbt)) {
         /* Snapshot ISR-written variables under interrupt lock */
         __disable_irq();
-        int16_t  snap_left_pwm     = left_pwm_signed;
-        int16_t  snap_right_pwm    = right_pwm_signed;
+        float    snap_left_target  = left_target_mps;
+        float    snap_right_target = right_target_mps;
         uint8_t  snap_target_blade = target_blade_on_off;
         uint32_t snap_heartbeat    = last_heartbeat_tick;
         uint32_t snap_cmd_vel      = last_cmd_vel_tick;
@@ -318,23 +361,115 @@ extern "C" void motors_handler()
 
         blade_on_off = snap_target_blade;
 
+        /* --- decide effective target ---
+         * Emergency or cmd_vel watchdog timeout overrides to a hard stop.
+         * Otherwise the snapshot value drives the PI loop below. */
+        bool hard_stop = false;
         if (Emergency_State()) {
-            DRIVEMOTOR_SetSpeedSigned(0, 0);
+            hard_stop = true;
             blade_on_off = 0;
         } else {
             const uint32_t cmd_vel_age_ms = HAL_GetTick() - snap_cmd_vel;
-
             if (cmd_vel_age_ms > 200u) {
                 /* Command-vel watchdog: zero motors if the host hasn't
                  * sent a twist in 200 ms (Pi hang, USB glitch, etc). */
-                DRIVEMOTOR_SetSpeedSigned(0, 0);
-            } else {
-                DRIVEMOTOR_SetSpeedSigned(snap_left_pwm, snap_right_pwm);
+                hard_stop = true;
             }
-
             if (cmd_vel_age_ms > 25000u) {
                 blade_on_off = 0;
             }
+        }
+
+        const float l_target = hard_stop ? 0.0f : snap_left_target;
+        const float r_target = hard_stop ? 0.0f : snap_right_target;
+
+#if USE_WHEEL_PI
+        /* Wheel-level PI loop.
+         *
+         * Reads the signed cumulative encoder count maintained by
+         * drivemotor.c, derives actual_mps over the 20 ms loop
+         * period, computes a feedforward + PI PWM. The integrator
+         * is what bridges the static-friction deadband: while the
+         * target says "move 0.05 m/s" and the encoder says "0",
+         * Ki × error × dt accumulates until the PWM crosses the
+         * deadband (~40), the motor breaks free, the wheel starts
+         * counting ticks, error drops, and the integrator settles
+         * at whatever PWM keeps that wheel at target speed.
+         *
+         * Read left_ticks_signed/right_ticks_signed directly (these are
+         * 32-bit and updated from the drivemotor rx-decode path —
+         * not strictly atomic, but a torn read here costs at most
+         * one 20 ms loop of incorrect velocity, then converges). */
+        const int32_t cur_left_ticks  = left_ticks_signed;
+        const int32_t cur_right_ticks = right_ticks_signed;
+        const int32_t dleft_ticks  = cur_left_ticks  - prev_left_ticks_signed_pi;
+        const int32_t dright_ticks = cur_right_ticks - prev_right_ticks_signed_pi;
+        prev_left_ticks_signed_pi  = cur_left_ticks;
+        prev_right_ticks_signed_pi = cur_right_ticks;
+
+        const float l_actual_mps =
+            ((float)dleft_ticks)  / WHEEL_PI_TICKS_PER_M / WHEEL_PI_DT_S;
+        const float r_actual_mps =
+            ((float)dright_ticks) / WHEEL_PI_TICKS_PER_M / WHEEL_PI_DT_S;
+
+        const float l_err = l_target - l_actual_mps;
+        const float r_err = r_target - r_actual_mps;
+
+        /* Reset the integral on direction reversal or stop-to-go
+         * transitions. Without this the integral built up while
+         * decelerating would drive the motor backwards as soon as
+         * the chassis stopped, causing micro-oscillations. */
+        const bool l_target_sign_changed =
+            (l_target * prev_left_target_mps  < 0.0f) ||
+            (l_target == 0.0f && prev_left_target_mps  != 0.0f) ||
+            hard_stop;
+        const bool r_target_sign_changed =
+            (r_target * prev_right_target_mps < 0.0f) ||
+            (r_target == 0.0f && prev_right_target_mps != 0.0f) ||
+            hard_stop;
+        if (l_target_sign_changed) left_pi_int_pwm  = 0.0f;
+        if (r_target_sign_changed) right_pi_int_pwm = 0.0f;
+        prev_left_target_mps  = l_target;
+        prev_right_target_mps = r_target;
+
+        /* Integrate error with anti-windup clamp on the PWM-equivalent
+         * accumulator. */
+        left_pi_int_pwm  += WHEEL_PI_KI_PWM_PER_MPS_S * l_err * WHEEL_PI_DT_S;
+        right_pi_int_pwm += WHEEL_PI_KI_PWM_PER_MPS_S * r_err * WHEEL_PI_DT_S;
+        if (left_pi_int_pwm  >  WHEEL_PI_INT_MAX_PWM) left_pi_int_pwm  =  WHEEL_PI_INT_MAX_PWM;
+        if (left_pi_int_pwm  < -WHEEL_PI_INT_MAX_PWM) left_pi_int_pwm  = -WHEEL_PI_INT_MAX_PWM;
+        if (right_pi_int_pwm >  WHEEL_PI_INT_MAX_PWM) right_pi_int_pwm =  WHEEL_PI_INT_MAX_PWM;
+        if (right_pi_int_pwm < -WHEEL_PI_INT_MAX_PWM) right_pi_int_pwm = -WHEEL_PI_INT_MAX_PWM;
+
+        /* Feedforward + proportional + integrator. Sign carried through. */
+        const float l_pwm_f = l_target * PWM_PER_MPS
+                            + WHEEL_PI_KP_PWM_PER_MPS * l_err
+                            + left_pi_int_pwm;
+        const float r_pwm_f = r_target * PWM_PER_MPS
+                            + WHEEL_PI_KP_PWM_PER_MPS * r_err
+                            + right_pi_int_pwm;
+
+        /* When the target is exactly zero AND we're not braking from a
+         * larger speed, force PWM to zero outright — avoids the residual
+         * "hum" from a non-zero integral applied to a stopped wheel. */
+        left_pwm_signed  = (l_target == 0.0f && fabsf(l_actual_mps) < 0.02f)
+                          ? 0
+                          : (int16_t)l_pwm_f;
+        right_pwm_signed = (r_target == 0.0f && fabsf(r_actual_mps) < 0.02f)
+                          ? 0
+                          : (int16_t)r_pwm_f;
+#else
+        /* Open-loop fallback for bring-up / regression A/B. Replicates the
+         * pre-PI mapping exactly: PWM = target × PWM_PER_MPS, no encoder
+         * feedback, no integrator. */
+        left_pwm_signed  = (int16_t)(l_target * PWM_PER_MPS);
+        right_pwm_signed = (int16_t)(r_target * PWM_PER_MPS);
+#endif
+
+        if (hard_stop) {
+            DRIVEMOTOR_SetSpeedSigned(0, 0);
+        } else {
+            DRIVEMOTOR_SetSpeedSigned(left_pwm_signed, right_pwm_signed);
         }
 
         // Heartbeat watchdog: if no heartbeat for HEARTBEAT_TIMEOUT_MS, emergency stop

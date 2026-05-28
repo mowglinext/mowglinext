@@ -187,7 +187,9 @@ harness_set_preset() {
           GPS_CONNECTION="usb"
           GPS_PROTOCOL="UBX"
           GPS_UART_DEVICE=""
-          UBLOX_DEVICE_SERIAL_STRING="${UBLOX_DEVICE_SERIAL_STRING:-ublox-test-serial}"
+          GPS_BY_ID="${GPS_BY_ID:-/dev/serial/by-id/ublox-test-serial}"
+          GPS_PORT="${GPS_BY_ID}"
+          UBLOX_DEVICE_SERIAL_STRING="${UBLOX_DEVICE_SERIAL_STRING:-}"
         fi
         ;;
       gps)

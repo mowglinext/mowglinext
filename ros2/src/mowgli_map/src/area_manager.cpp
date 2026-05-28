@@ -24,6 +24,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <set>
 #include <sstream>
@@ -671,8 +672,190 @@ void MapServerNode::on_set_docking_point(
     const mowgli_interfaces::srv::SetDockingPoint::Request::SharedPtr req,
     mowgli_interfaces::srv::SetDockingPoint::Response::SharedPtr res)
 {
-  docking_pose_ = req->docking_pose;
+  // Sequence of gates protecting dock_pose accuracy. The operator forces
+  // the EKF to dock_pose at boot via the fusion_graph gauge reset, so a
+  // bad calibration leaks straight into the map-frame anchor for every
+  // subsequent session. Reject unless ALL conditions hold:
+  //   (1) firmware reports is_charging=true (robot physically on dock)
+  //   (2) GPS sample fresh and σ(xy) ≤ dock_set_gps_accuracy_max_m_
+  //   (3) EKF yaw converged on the recent rolling window
+  //
+  // (1) — is_charging gate. Refuse if the last /hardware_bridge/status was
+  // not charging or is older than dock_set_status_max_age_s_.
+  {
+    const double max_age =
+        get_parameter("dock_set_status_max_age_s").as_double();
+    const double status_age =
+        (last_status_time_.nanoseconds() == 0)
+            ? std::numeric_limits<double>::infinity()
+            : (now() - last_status_time_).seconds();
+    if (status_age > max_age || !last_is_charging_)
+    {
+      res->success = false;
+      RCLCPP_WARN(get_logger(),
+                  "set_docking_point rejected: robot not detected on dock "
+                  "(is_charging=%s, status_age=%.1fs, max=%.1fs). "
+                  "Drive onto the dock and wait for the firmware to report "
+                  "charging before retrying.",
+                  last_is_charging_ ? "true" : "false",
+                  status_age,
+                  max_age);
+      return;
+    }
+  }
+
+  // (2) — GPS accuracy gate. RTK-Fixed reports σ ≈ 3 mm; RTK-Float is
+  // 10-50 cm. Reject when σ(xx) or σ(yy) breaches the threshold, or when
+  // /gps/pose_cov is stale (driver dead, USB unplugged, datum unset).
+  {
+    const double max_acc =
+        get_parameter("dock_set_gps_accuracy_max_m").as_double();
+    const double max_age = get_parameter("dock_set_gps_max_age_s").as_double();
+    geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr gps_snap;
+    rclcpp::Time gps_time{0, 0, RCL_ROS_TIME};
+    {
+      std::lock_guard<std::mutex> lk(last_gps_pose_cov_mutex_);
+      gps_snap = last_gps_pose_cov_;
+      gps_time = last_gps_pose_cov_time_;
+    }
+    if (!gps_snap)
+    {
+      res->success = false;
+      RCLCPP_WARN(get_logger(),
+                  "set_docking_point rejected: no /gps/pose_cov sample yet "
+                  "(navsat_to_absolute_pose_node not running, or no GPS fix).");
+      return;
+    }
+    const double gps_age = (now() - gps_time).seconds();
+    if (gps_age > max_age)
+    {
+      res->success = false;
+      RCLCPP_WARN(get_logger(),
+                  "set_docking_point rejected: /gps/pose_cov stale "
+                  "(age %.2fs > %.2fs). Wait for the GPS feed to refresh.",
+                  gps_age,
+                  max_age);
+      return;
+    }
+    const double sigma_xx = std::sqrt(std::max(gps_snap->pose.covariance[0], 0.0));
+    const double sigma_yy = std::sqrt(std::max(gps_snap->pose.covariance[7], 0.0));
+    const double sigma_max = std::max(sigma_xx, sigma_yy);
+    if (sigma_max > max_acc)
+    {
+      res->success = false;
+      RCLCPP_WARN(get_logger(),
+                  "set_docking_point rejected: GPS not accurate enough "
+                  "(σ_max=%.3f m > %.3f m). Achieve RTK-Fixed before retrying.",
+                  sigma_max,
+                  max_acc);
+      return;
+    }
+  }
+
+  // (3) — Yaw convergence gate. Pinning a dock pose during EKF startup
+  // transient writes a wildly wrong heading (and therefore a wrong base
+  // position via the lever-arm projection on /gps/absolute_pose). The
+  // operator should drive the robot forward briefly to lock in COG yaw,
+  // then retry, or wait for mag/COG to settle the EKF naturally.
+  //
+  // Read thresholds live each call so `ros2 param set` works without a
+  // node restart — the constructor-cached values were stuck at startup.
+  const double threshold_rad =
+      get_parameter("yaw_convergence_threshold_rad").as_double();
+  const double window_s = get_parameter("yaw_convergence_window_s").as_double();
+  const auto min_samples = static_cast<size_t>(
+      get_parameter("yaw_convergence_min_samples").as_int());
+  {
+    std::lock_guard<std::mutex> lk(recent_yaws_mutex_);
+    if (recent_yaws_.size() < min_samples)
+    {
+      res->success = false;
+      RCLCPP_WARN(get_logger(),
+                  "set_docking_point rejected: only %zu yaw samples in the last %.1f s "
+                  "(need >= %zu). Wait for the EKF to receive more updates.",
+                  recent_yaws_.size(),
+                  window_s,
+                  min_samples);
+      return;
+    }
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    for (const auto& [t, y] : recent_yaws_)
+    {
+      sum += y;
+      sum_sq += y * y;
+    }
+    const double n = static_cast<double>(recent_yaws_.size());
+    const double mean = sum / n;
+    const double var = (sum_sq / n) - (mean * mean);
+    const double std_dev = std::sqrt(std::max(var, 0.0));
+    if (std_dev > threshold_rad)
+    {
+      res->success = false;
+      RCLCPP_WARN(get_logger(),
+                  "set_docking_point rejected: EKF yaw not converged "
+                  "(std %.3f° > threshold %.3f° over %.1f s, %zu samples). "
+                  "Drive the robot 1 m forward to anchor heading from COG, then retry.",
+                  std_dev * 180.0 / M_PI,
+                  threshold_rad * 180.0 / M_PI,
+                  window_s,
+                  recent_yaws_.size());
+      return;
+    }
+  }
+
+  // Capture the dock POSITION from the averaged independent GPS projection
+  // (/gps/pose_cov, GPS-vs-datum + lever-arm), NOT from req->docking_pose
+  // (which the GUI fills from the fused /odometry/filtered_map). While the
+  // robot is charging, fusion_graph gauge-resets the fused pose onto the
+  // EXISTING dock_pose, so capturing the fused position would just re-store
+  // the old value — a calibration that can never correct a stale dock_pose.
+  // The GPS projection is free of that circularity. Yaw still comes from the
+  // request (single-antenna GPS gives no heading; the yaw-convergence gate
+  // above validated it). Averaging kills the ~1-3 cm single-sample RTK jitter.
+  double gps_x_mean = 0.0;
+  double gps_y_mean = 0.0;
+  {
+    std::lock_guard<std::mutex> lk(last_gps_pose_cov_mutex_);
+    if (recent_gps_xy_.size() < dock_set_gps_avg_min_samples_)
+    {
+      res->success = false;
+      RCLCPP_WARN(get_logger(),
+                  "set_docking_point rejected: only %zu GPS samples in the last "
+                  "%.1f s (need >= %zu) to average the dock position. Wait for "
+                  "more /gps/pose_cov updates.",
+                  recent_gps_xy_.size(),
+                  dock_set_gps_avg_window_s_,
+                  dock_set_gps_avg_min_samples_);
+      return;
+    }
+    for (const auto& [t, x, y] : recent_gps_xy_)
+    {
+      (void)t;
+      gps_x_mean += x;
+      gps_y_mean += y;
+    }
+    const double n = static_cast<double>(recent_gps_xy_.size());
+    gps_x_mean /= n;
+    gps_y_mean /= n;
+  }
+
+  docking_pose_ = req->docking_pose;           // yaw / orientation from request
+  docking_pose_.position.x = gps_x_mean;       // position from independent GPS
+  docking_pose_.position.y = gps_y_mean;
+  docking_pose_.position.z = 0.0;
   docking_pose_set_ = true;
+
+  RCLCPP_INFO(get_logger(),
+              "Docking point captured from averaged GPS: (%.3f, %.3f) over %zu "
+              "samples; request fused position was (%.3f, %.3f) — Δ=(%.3f, %.3f) m",
+              gps_x_mean,
+              gps_y_mean,
+              recent_gps_xy_.size(),
+              req->docking_pose.position.x,
+              req->docking_pose.position.y,
+              req->docking_pose.position.x - gps_x_mean,
+              req->docking_pose.position.y - gps_y_mean);
 
   // Publish the docking pose for other nodes (e.g., behavior tree).
   geometry_msgs::msg::PoseStamped pose_msg;

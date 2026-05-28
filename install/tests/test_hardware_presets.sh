@@ -89,7 +89,7 @@ for required in docker-compose.base.yml docker-compose.gui.yml docker-compose.ma
   esac
 done
 case "$mavros_fragments" in
-  *docker-compose.gps.yml*|*docker-compose.ublox.yaml*|*docker-compose.unicore.yaml*|*docker-compose.nmea.yaml*)
+  *docker-compose.gps.yml*|*docker-compose.unicore.yaml*|*docker-compose.nmea.yaml*)
     fail "mavros backend: NO direct GNSS fragment" "direct GNSS fragment leaked into mavros compose selection"
     ;;
   *)

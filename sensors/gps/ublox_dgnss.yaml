@@ -128,15 +128,36 @@ ublox_dgnss:
 
     # UBX messages on USB. Value = output every N nav epochs (0 = off).
     # At 7 Hz, "1" = ~7 msg/s, "7" = ~1 msg/s.
+    #
+    # F9P USB tx-buffer pressure: at 7 Hz with all per-epoch messages
+    # on AND NAV-SAT/NAV-SIG at 1 Hz, the receiver drops the tail of
+    # its per-epoch output sequence. Measured loss:
+    #   NAV-HPPOSLLH ~0 % | NAV-PVT ~0 %
+    #   NAV-STATUS ~57 % | NAV-COV ~80 %
+    # which made the HP NavSatFix node publish /gps/fix with a status
+    # and covariance from a different epoch than the position — bad in
+    # general, and during a brief Fixed→Float→Fixed cycle slip it
+    # silently labels Float positions as Fixed.
+    #
+    # Two-sided fix applied:
+    #   1. cedbossneo/ublox_dgnss#2 makes the HP node derive status
+    #      and a diagonal covariance from per-epoch h_acc/v_acc when
+    #      the cached NAV-STATUS / NAV-COV iTOW does not match.
+    #   2. Bandwidth budget below: drop NAV-PVT (not consumed in this
+    #      project; the same data lives in HPPOSLLH+VELNED), disable
+    #      NAV-SIG (not consumed), and slow NAV-SAT from 1 Hz to
+    #      ~0.5 Hz (2 s — gps_health_aggregator has a 5 s freshness
+    #      timeout on /ubx_nav_sat, so we keep generous headroom).
+    #      Together this gets STATUS and COV back to 7 Hz at source.
     CFG_MSGOUT_UBX_NAV_HPPOSLLH_USB: 1   # high-precision LLH — needed by HP NavSatFix node
     CFG_MSGOUT_UBX_NAV_STATUS_USB: 1     # fix type + carrSoln/diffSoln diagnostics
     CFG_MSGOUT_UBX_NAV_COV_USB: 1        # covariance → NavSatFix.position_covariance
-    CFG_MSGOUT_UBX_NAV_PVT_USB: 1
-    CFG_MSGOUT_UBX_NAV_VELNED_USB: 1
+    CFG_MSGOUT_UBX_NAV_PVT_USB: 0        # nothing consumes /ubx_nav_pvt in mowglinext
+    CFG_MSGOUT_UBX_NAV_VELNED_USB: 1     # → cog_to_imu_node /imu/cog_heading (CRITICAL)
     CFG_MSGOUT_UBX_NAV_RELPOSNED_USB: 0  # 0 unless moving-base / dual-antenna
     CFG_MSGOUT_UBX_RXM_RTCM_USB: 1       # correction ingestion counter — NTRIP debug
-    CFG_MSGOUT_UBX_NAV_SIG_USB: 7        # per-signal CN0/quality, ~1 Hz — multipath diagnostics
-    CFG_MSGOUT_UBX_NAV_SAT_USB: 7        # per-satellite info, ~1 Hz — sky-view diagnostics
+    CFG_MSGOUT_UBX_NAV_SIG_USB: 0        # not consumed; freed for NAV-STATUS/COV
+    CFG_MSGOUT_UBX_NAV_SAT_USB: 14       # ~0.5 Hz, kept for /gps/health sky-view diag
 
     # Silence UBX-MON messages on USB — the driver doesn't have parsers
     # for them and logs "ubx class: 0x0a id: 0xNN unknown ... doing

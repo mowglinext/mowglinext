@@ -89,6 +89,22 @@ struct GraphParams
   // loss for our well-constrained Pose2 graph.
   int isam2_relinearize_skip = 5;
 
+  // Sliding-window cap. RebaseISAM2 keeps only the most recent
+  // `max_graph_nodes` pose nodes; everything older is dropped (its
+  // accumulated constraints were already collapsed into the kept
+  // nodes' priors during the rebase, so dropping them is loss-free
+  // for the current estimate). Without this the graph grew unbounded
+  // — observed 48,000+ nodes after a few sessions, which (a) blew up
+  // iSAM2 marginal-covariance cost and pushed cov_xx to ~1 m, and (b)
+  // kept stale far-away nodes anchoring the trajectory shape. 0 means
+  // "no cap" (legacy behaviour: rebase keeps everything). At the 25 Hz
+  // node rate, 3000 nodes ≈ 2 min of trajectory, which comfortably
+  // covers a single mowing pass; LiDAR loop closures within that
+  // window still function. Combined with isam2_rebase_every_nodes the
+  // live graph oscillates in [max_graph_nodes, max_graph_nodes +
+  // rebase_interval].
+  uint64_t max_graph_nodes = 3000;
+
   // Stationary node-creation throttle. If the per-tick accumulator
   // shows ~zero motion (|dxy| < thresh AND |dtheta| < thresh), skip
   // node creation unless at least `stationary_node_period_s` has
@@ -132,6 +148,24 @@ struct GraphParams
   double pivot_gate_dtheta_rad = 0.012;  // rad per tick
   double pivot_wheel_sigma_x = 0.5;  // m — inflated sigma during pivot
 
+  // Slip-veto thresholds (see Tick() implementation for rationale).
+  // When the wheel-vs-gyro yaw delta disagreement exceeds
+  // slip_residual_thresh_rad AND the gyro itself is below
+  // slip_gyro_max_rad (i.e. the chassis isn't actually rotating much)
+  // AND the wheel claims a non-trivial rotation, the BetweenFactor's
+  // (dx, dy) is zeroed — wheels are skating and their translation is
+  // a fiction. Defaults are tuned for 25 Hz nodes; thresholds are
+  // in *per-tick* radians so the gate scales with node_period_s.
+  //   slip_residual_thresh_rad = 0.01 (≈ 0.57° / tick = 14°/s @ 25 Hz)
+  //   slip_gyro_max_rad        = 0.005 rad / tick (≈ 7°/s) — well
+  //                              under any meaningful in-place pivot.
+  //   slip_wheel_min_rad       = 0.005 rad / tick — wheel must be
+  //                              claiming a non-trivial rotation for
+  //                              the gate to apply.
+  double slip_residual_thresh_rad = 0.01;
+  double slip_gyro_max_rad = 0.005;
+  double slip_wheel_min_rad = 0.005;
+
   // Stationary multi-source gate. The wheel-only gate (above) can be
   // tricked by encoders that report no motion while the robot is
   // hand-pushed / lifted — wheels free in mid-air read 0 ticks even
@@ -147,6 +181,103 @@ struct GraphParams
   // (robot rotated but treated as stationary); down if encoder noise
   // produces residual gyro samples on a truly parked robot.
   double stationary_gyro_thresh_rad_per_s = 0.10;
+
+  // Full IMU preintegration with joint bias optimisation.
+  //
+  // When true, AddGyroDelta accumulates Σω·dt AND Σ(dt²·σ_gyro²) for
+  // the variance, and CreateNodeLocked emits a ternary
+  // GyroPreintFactor(X_prev, X_curr, bias_curr) along with a
+  // random-walk BetweenFactor<double> on bias_{prev}→bias_{curr}.
+  // The optimiser then solves for the trajectory AND the bias
+  // jointly — same machinery GTSAM ships for the full Pose3 case,
+  // tailored here to our planar Pose2 graph.
+  //
+  // When false (default), the existing pragmatic EMA bias estimator
+  // remains active and the per-node BetweenFactor<Pose2> carries
+  // yaw constraints as before.
+  //
+  // Set use_imu_preint=true in mowgli_robot.yaml to opt in. Keep
+  // false until field-tested — the EMA path is well-validated and
+  // the preint factor is new code.
+  bool use_imu_preint = false;
+  // Per-sample gyro_z noise sigma (rad/s). Used to propagate
+  // covariance through the preintegration: σ²_preint = Σ (dt² · σ²).
+  // Datasheet for the IMU on this robot gives ~0.01-0.02 rad/s noise
+  // density; bias drift is handled separately by the bias state.
+  double gyro_noise_density_rad_per_s = 0.015;
+  // Bias random-walk noise (rad/s per √s). The bias state at node k
+  // is constrained by a BetweenFactor<double>(bias_{k-1}, bias_k, 0,
+  // σ = bias_rw · √dt). 0.001 rad/s/√s ≈ 0.06°/s per minute drift
+  // tolerance — consistent with measured thermal drift on the WT901.
+  double gyro_bias_rw_rad_per_s = 0.001;
+  // Initial prior on the bias variable at graph start. Loose enough
+  // that the first few observations dominate, tight enough to keep
+  // iSAM2 well-conditioned. 0.05 rad/s ≈ 3°/s.
+  double gyro_bias_prior_sigma_rad_per_s = 0.05;
+
+  // Online gyro bias estimation (item #3, pragmatic variant).
+  // hardware_bridge_node calibrates the gyro bias once at boot
+  // (20 s window while docked) but the residual drifts with
+  // temperature over the session — measured 0.025 rad/s after
+  // 30 min of mowing on this robot. Without continuous re-estimation
+  // the gyro between-factor accumulates the drift directly into the
+  // graph's yaw estimate (8.5°/min @ 0.025 rad/s).
+  //
+  // Mechanism: when the wheel-only stationary gate fires (robot is
+  // genuinely parked, encoders flat), EMA-update an estimate of the
+  // gyro_z bias from the raw samples observed. The bias is then
+  // SUBTRACTED from gyro samples in AddGyroDelta before integration
+  // into the graph. When moving, the bias estimate is frozen.
+  //
+  // This is the pragmatic version of full IMU preintegration:
+  // captures the dominant slow-drift bias term without requiring a
+  // graph schema change (no bias state in the iSAM2 variables, just
+  // a side-channel running EMA in graph_manager). Full preintegration
+  // would let GTSAM optimise the bias jointly with the trajectory,
+  // but on this robot the bias variation timescale (minutes) is much
+  // slower than the graph optimisation cadence (20 ms) — the EMA
+  // captures the same effect with two orders of magnitude less code.
+  //
+  // Set gyro_bias_estimation_enabled=false to disable entirely.
+  bool gyro_bias_estimation_enabled = true;
+  // EMA time constant for the bias estimate. 30 s = a few minutes of
+  // stationary time to fully converge from a cold thermal state.
+  double gyro_bias_ema_tau_s = 30.0;
+  // Reject samples with |gyro_z| above this as "real motion despite
+  // wheels saying stationary" — hand-pushed / lifted-spinning case.
+  // Aligned with stationary_gyro_thresh_rad_per_s but kept separate
+  // so the two gates can be tuned independently.
+  double gyro_bias_max_sample_rad_per_s = 0.10;
+
+  // Adaptive process-noise inflation on wheel σ_x.
+  //
+  // Diff-drive encoders report a body-frame translation per tick. If
+  // one wheel slips (wet grass, slope, blade-jam recoil) the encoder
+  // and the chassis disagree, but iSAM2 still treats the wheel
+  // between-factor with the configured σ_x. The mismatch shows up as a
+  // residual: dtheta_wheel ≠ dtheta_gyro when the angular motion was
+  // identical, and the linear-axis equivalent (which we cannot observe
+  // directly without an absolute sensor) is correlated with that yaw
+  // residual on a diff-drive. We use |dtheta_wheel - dtheta_gyro| as a
+  // proxy and inflate wheel_sigma_x when it exceeds a threshold.
+  //
+  // EMA-smoothed over recent ticks to avoid single-tick noise tripping
+  // it; reverts to base sigma when residual decays. Disabled by setting
+  // adaptive_noise_gain to 0.
+  //
+  // Gain interpretation: σ_x_eff = wheel_sigma_x + adaptive_noise_gain *
+  // residual_ema. Default 10 (m per rad), tuned so a 0.1 rad slip event
+  // (~6°) inflates σ_x from 0.05 to 1.05 m — effectively releases the X
+  // constraint, similar to pivot_wheel_sigma_x.
+  double adaptive_noise_enabled_gain = 10.0;
+  // EMA time constant (seconds). 0.5 s = the residual settles within a
+  // few ticks of slip onset; smaller values track faster but pick up
+  // single-tick gyro noise.
+  double adaptive_noise_ema_tau_s = 0.5;
+  // Floor below which residual EMA is treated as zero (no inflation).
+  // 0.005 rad sits at the typical gyro noise floor — anything below
+  // this is dominated by sensor jitter, not real slip.
+  double adaptive_noise_residual_floor_rad = 0.005;
 
   // ICP scan-match quality gates. Result is dropped if any of these
   // fail. Defaults are conservative — drop a few good matches in the
@@ -200,6 +331,18 @@ struct GraphStats
   uint64_t icp_rejects_sanity = 0;   // unphysical delta magnitude
   uint64_t icp_rejects_divergence = 0;  // result far from initial guess
   uint64_t stationary_hand_push = 0;  // wheel stationary but gyro disagrees
+  uint64_t slip_veto = 0;  // ticks where wheel translation was vetoed by gyro
+  // Adaptive process-noise telemetry. residual_ema_rad is the
+  // current EMA-smoothed |dtheta_wheel - dtheta_gyro| (rad);
+  // wheel_sigma_x_eff is the inflated σ_x actually used for the most
+  // recent wheel between-factor.
+  double residual_ema_rad = 0.0;
+  double wheel_sigma_x_eff = 0.0;
+  // Gyro bias telemetry. gyro_bias_z is the current estimate (rad/s)
+  // that AddGyroDelta subtracts from raw samples; gyro_bias_updates
+  // is the count of stationary samples that have contributed.
+  double gyro_bias_z = 0.0;
+  uint64_t gyro_bias_updates = 0;
 };
 
 class GraphManager
@@ -260,6 +403,13 @@ public:
   // Read-only accessors (snapshot of current state).
   std::optional<TickOutput> LatestSnapshot() const;
   GraphStats Stats() const;
+
+  // Count of pose ('x') variables currently live in the iSAM2 graph.
+  // Distinct from GraphStats::total_nodes, which is the monotonic
+  // next-index (never decreases). After a windowed RebaseISAM2 the
+  // live count is capped at max_graph_nodes while total_nodes keeps
+  // climbing. Exposed primarily for the sliding-window unit test.
+  uint64_t LiveNodeCount() const;
 
   // Peek at the current per-tick wheel+gyro accumulator without
   // consuming it (Tick() resets the accumulator atomically). Used by
@@ -348,6 +498,24 @@ public:
   // estimates and the variable set are preserved.
   void RebaseISAM2();
 
+  // Rigid-transform the entire trajectory by `correction` (applied as
+  // X_k_new = correction * X_k for every Pose2 node). Relative
+  // constraints between nodes (wheel between-factors, gyro between-
+  // factors, scan_between, loop closures) are gauge-invariant under
+  // this transform, so the graph topology and all LiDAR-derived
+  // structure is preserved. The optimized solution is rebuilt with
+  // priors at the shifted poses.
+  //
+  // Used at dock arrival when the latest node has accumulated drift
+  // vs the operator-calibrated dock_pose: a "gauge reset" that snaps
+  // the absolute frame so X_latest lands exactly on dock_pose,
+  // without losing the persisted LiDAR scans / loop-closure structure
+  // (which is what a Reset() would throw away). The latest node also
+  // receives a tighter prior (5 mm / 0.3°) so future GPS factors take
+  // longer to drift it back off the dock anchor.
+  void RigidTransformAll(const gtsam::Pose2& correction, double latest_node_sigma_xy = 0.005,
+                         double latest_node_sigma_theta = 0.005);
+
   // Add a loop-closure between-factor between two existing nodes.
   // delta is the relative Pose2 such that X_curr = X_prev * delta.
   // Triggers an iSAM2 update + returns the refreshed marginal pose
@@ -399,6 +567,13 @@ private:
     // robot is being externally rotated (hand-pushed / lifted off
     // the ground) so don't snap dθ to 0.
     double max_abs_gyro_rad_per_s = 0.0;
+    // IMU preintegration state (used when params_.use_imu_preint).
+    // gyro_dt_total separately from dt_total because IMU may publish
+    // at a different rate than wheel odom — we want strictly the
+    // integrated gyro time horizon.
+    double gyro_preint_dtheta = 0.0;
+    double gyro_preint_dt = 0.0;
+    double gyro_preint_variance = 0.0;  // Σ(dt_i² · σ_gyro²)
     void Reset()
     {
       *this = Accumulator{};
@@ -478,6 +653,33 @@ private:
   uint64_t stats_icp_rejects_sanity_ = 0;
   uint64_t stats_icp_rejects_divergence_ = 0;
   uint64_t stats_hand_push_ = 0;
+  uint64_t stats_slip_veto_ = 0;
+
+  // Adaptive process-noise state.
+  // residual_ema_ tracks the EMA-smoothed |dtheta_wheel - dtheta_gyro|
+  // residual across ticks. Each Tick() updates it and reads back the
+  // current σ_x inflation. Exposed via Stats() for diagnostics.
+  double residual_ema_ = 0.0;
+  double last_wheel_sigma_x_eff_ = 0.0;
+
+  // Gyro bias estimation state (item #3 pragmatic). bias_ is the
+  // current EMA-smoothed bias estimate (rad/s) subtracted from
+  // incoming gyro samples in AddGyroDelta. bias_n_updates_ tracks
+  // how many stationary samples have contributed — useful as a
+  // diagnostic signal (bias converges in tens to hundreds of
+  // samples depending on EMA τ and IMU rate).
+  double gyro_bias_z_ = 0.0;
+  uint64_t gyro_bias_updates_ = 0;
+
+  // When use_imu_preint is true, this holds the latest optimised
+  // bias value from iSAM2 (refreshed at every node creation). Used
+  // as the linearisation point for the next preintegration window.
+  double current_bias_estimate_ = 0.0;
+  // Snapshot of "is the wheel-only stationary check currently
+  // holding". Updated at each Tick from accum_ before the reset;
+  // read by AddGyroDelta to gate EMA updates. Single-writer (Tick)
+  // / single-reader (AddGyroDelta), both under mu_.
+  bool wheel_stationary_now_ = false;
 
   // ── Async-rebase pipeline ───────────────────────────────────────
   // RebaseISAM2 rebuilds the iSAM2 Bayes tree from scratch with one

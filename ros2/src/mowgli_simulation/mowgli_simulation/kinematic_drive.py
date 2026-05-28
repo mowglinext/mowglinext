@@ -114,7 +114,7 @@ import math
 import time
 
 import rclpy
-from geometry_msgs.msg import TwistStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped
 
 
 class KinematicDrive:
@@ -128,6 +128,31 @@ class KinematicDrive:
     # so the operator can sanity-check the geometry against the YAML.
     WHEEL_SEPARATION = 0.325  # m, track between left and right wheels
     WHEEL_RADIUS = 0.093      # m
+
+    # ── Firmware motor-model constraints ───────────────────────────────
+    # The real firmware turns cmd_vel into per-wheel PWM via diff-drive
+    # kinematics, runs a wheel-level PI to bridge the static-friction
+    # deadband, and saturates to a ±255 PAC5210 magnitude. Without
+    # mirroring the same model here, the sim accepts ANY sub-deadband
+    # cmd_vel as instantly-tracked motion — useful early on but
+    # actively misleading once controllers + planners are tuned
+    # against the firmware's actual response. Mirror the firmware so
+    # PRE_ROTATE pivots, fine heading corrections, sub-0.15 m/s
+    # approaches, and the PI integrator's deadband breakthrough all
+    # behave in the sim the way they would on the real chassis.
+    #
+    # Values mirror firmware/stm32/ros_usbnode/{include/board.h,
+    # src/ros/ros_custom/cpp_main.cpp}. Keep them in lockstep — if
+    # the firmware gains change, change them here too.
+    FIRMWARE_MAX_MPS              = 0.5
+    FIRMWARE_PWM_PER_MPS          = 300.0
+    FIRMWARE_PWM_MAX              = 255.0
+    FIRMWARE_DEADBAND_PWM_STATIC  = 40.0   # PWM needed to break static friction from rest
+    FIRMWARE_DEADBAND_PWM_KINETIC = 30.0   # lower threshold once moving (hysteresis)
+    FIRMWARE_PI_KP_PWM_PER_MPS    = 30.0
+    FIRMWARE_PI_KI_PWM_PER_MPS_S  = 5000.0
+    FIRMWARE_PI_INT_MAX_PWM       = 100.0
+    FIRMWARE_PI_HOLD_THRESH_MPS   = 0.02   # actual<this AND target==0 → force PWM=0
 
     # Topic the rest of the stack uses for the post-mux velocity command.
     DEFAULT_CMD_VEL_TOPIC = "/cmd_vel"
@@ -217,11 +242,33 @@ class KinematicDrive:
             TwistStamped, topic, self.__cmd_vel_callback, 1
         )
 
+        # Ground-truth pose publisher. The kinematic teleport pose
+        # (self.__x, self.__y, self.__yaw) is the sim's authoritative
+        # chassis location — untouched by sensor noise, fusion_graph
+        # belief drift, or RTK wrong-fix gating. fake_hardware reads
+        # this for charging detection (mirrors the real robot's
+        # physical-contact charging signal — not a pose-estimate
+        # derivation that could lie when the localizer is wobbling).
+        self.__gt_pose_pub = self.__node.create_publisher(
+            PoseStamped, "/sim/ground_truth_pose", 10
+        )
+
         # Latest commanded velocity. Default to zero so the robot is at
         # rest until the first cmd_vel arrives.
         self.__target_vx = 0.0
         self.__target_wz = 0.0
         self.__last_cmd_time_s = -1.0
+
+        # Firmware motor-model state. Mirrors the wheel-level PI loop in
+        # firmware/.../cpp_main.cpp::motors_handler so sub-deadband
+        # commands stall (briefly) and the PI integrator pushes through
+        # static friction exactly as the real chassis does.
+        self.__left_actual_mps  = 0.0
+        self.__right_actual_mps = 0.0
+        self.__left_pi_int_pwm  = 0.0
+        self.__right_pi_int_pwm = 0.0
+        self.__prev_left_target_mps  = 0.0
+        self.__prev_right_target_mps = 0.0
 
         # Reset physics ONCE at boot so any settling-impulse buildup
         # from the world load is cleared before we start teleporting.
@@ -242,6 +289,122 @@ class KinematicDrive:
         # Wall-clock timestamp — see CMD_VEL_TIMEOUT_S docstring for why.
         self.__last_cmd_time_s = time.monotonic()
 
+    def __simulate_firmware_motor_model(self, cmd_vx: float, cmd_wz: float):
+        """Project a (cmd_vx, cmd_wz) twist through the same wheel-level
+        pipeline the real firmware applies, return the achievable body
+        twist for this sim step.
+
+        The pipeline (mirroring firmware/.../cpp_main.cpp::on_cmd_vel +
+        motors_handler):
+
+          1. Differential-drive kinematics:
+               left_target  = cmd_vx − cmd_wz · WHEEL_SEPARATION / 2
+               right_target = cmd_vx + cmd_wz · WHEEL_SEPARATION / 2
+
+          2. Saturate each side to ±FIRMWARE_MAX_MPS.
+
+          3. Reset the PI integrator on direction reversal /
+             stop-to-go / target=0 transitions so wind-up doesn't
+             drive the wheel backwards as it decelerates.
+
+          4. PI loop in PWM space (Kp · err + integrator clamped to
+             ±FIRMWARE_PI_INT_MAX_PWM). Output PWM =
+             feedforward (target · PWM_PER_MPS) + Kp · err + ∫.
+
+          5. Saturate effective PWM to ±FIRMWARE_PWM_MAX.
+
+          6. Static / kinetic deadband: a stalled wheel needs
+             |PWM| ≥ FIRMWARE_DEADBAND_PWM_STATIC to break free;
+             a moving wheel keeps rolling down to
+             FIRMWARE_DEADBAND_PWM_KINETIC. Below either threshold
+             the wheel reports zero velocity, exactly like the real
+             motor + PAC5210.
+
+          7. Force PWM = 0 when target=0 AND |actual| < hold
+             threshold — avoids the residual integral hum on a
+             stopped wheel.
+
+          8. Reconstruct (achievable_vx, achievable_wz) from the
+             actual per-wheel velocities and hand back to the
+             kinematic integrator. The chassis will therefore
+             only move when the firmware would actually have made
+             it move.
+        """
+        dt = self.__dt_s
+        half_track = self.WHEEL_SEPARATION * 0.5
+
+        # 1. Per-wheel targets via diff-drive inverse kinematics.
+        left_target  = cmd_vx - cmd_wz * half_track
+        right_target = cmd_vx + cmd_wz * half_track
+
+        # 2. Saturate.
+        left_target  = max(-self.FIRMWARE_MAX_MPS, min(self.FIRMWARE_MAX_MPS, left_target))
+        right_target = max(-self.FIRMWARE_MAX_MPS, min(self.FIRMWARE_MAX_MPS, right_target))
+
+        # 3. Integrator resets on sign flip or stop-to-go.
+        def _need_reset(target, prev):
+            return (target * prev < 0.0) or (target == 0.0 and prev != 0.0)
+
+        if _need_reset(left_target, self.__prev_left_target_mps):
+            self.__left_pi_int_pwm = 0.0
+        if _need_reset(right_target, self.__prev_right_target_mps):
+            self.__right_pi_int_pwm = 0.0
+        self.__prev_left_target_mps  = left_target
+        self.__prev_right_target_mps = right_target
+
+        # 4. PI loop in PWM space.
+        left_err  = left_target  - self.__left_actual_mps
+        right_err = right_target - self.__right_actual_mps
+
+        self.__left_pi_int_pwm  += self.FIRMWARE_PI_KI_PWM_PER_MPS_S * left_err  * dt
+        self.__right_pi_int_pwm += self.FIRMWARE_PI_KI_PWM_PER_MPS_S * right_err * dt
+        self.__left_pi_int_pwm  = max(-self.FIRMWARE_PI_INT_MAX_PWM,
+                                       min(self.FIRMWARE_PI_INT_MAX_PWM,
+                                           self.__left_pi_int_pwm))
+        self.__right_pi_int_pwm = max(-self.FIRMWARE_PI_INT_MAX_PWM,
+                                       min(self.FIRMWARE_PI_INT_MAX_PWM,
+                                           self.__right_pi_int_pwm))
+
+        left_pwm  = (left_target  * self.FIRMWARE_PWM_PER_MPS
+                     + self.FIRMWARE_PI_KP_PWM_PER_MPS * left_err
+                     + self.__left_pi_int_pwm)
+        right_pwm = (right_target * self.FIRMWARE_PWM_PER_MPS
+                     + self.FIRMWARE_PI_KP_PWM_PER_MPS * right_err
+                     + self.__right_pi_int_pwm)
+
+        # 5. Hard-clip to PAC5210 magnitude.
+        left_pwm  = max(-self.FIRMWARE_PWM_MAX, min(self.FIRMWARE_PWM_MAX, left_pwm))
+        right_pwm = max(-self.FIRMWARE_PWM_MAX, min(self.FIRMWARE_PWM_MAX, right_pwm))
+
+        # 7. Force-zero on a stopped wheel with target=0 (cuts residual hum).
+        if left_target == 0.0 and abs(self.__left_actual_mps) < self.FIRMWARE_PI_HOLD_THRESH_MPS:
+            left_pwm  = 0.0
+        if right_target == 0.0 and abs(self.__right_actual_mps) < self.FIRMWARE_PI_HOLD_THRESH_MPS:
+            right_pwm = 0.0
+
+        # 6. Deadband + hysteresis: a stalled wheel needs static-friction
+        #    breakaway PWM; a moving wheel keeps rolling down to the
+        #    kinetic threshold. Above either threshold the PAC5210 +
+        #    motor track linearly (a reasonable first-order model).
+        def _wheel_motor(pwm, prev_actual):
+            if prev_actual == 0.0:
+                if abs(pwm) < self.FIRMWARE_DEADBAND_PWM_STATIC:
+                    return 0.0
+            else:
+                if abs(pwm) < self.FIRMWARE_DEADBAND_PWM_KINETIC:
+                    return 0.0
+            return pwm / self.FIRMWARE_PWM_PER_MPS
+
+        self.__left_actual_mps  = _wheel_motor(left_pwm,  self.__left_actual_mps)
+        self.__right_actual_mps = _wheel_motor(right_pwm, self.__right_actual_mps)
+
+        # 8. Re-derive the achievable body twist from the actual
+        #    per-wheel velocities. Identical formula to firmware's
+        #    forward kinematics on /wheel_odom.
+        achievable_vx = 0.5 * (self.__left_actual_mps + self.__right_actual_mps)
+        achievable_wz = (self.__right_actual_mps - self.__left_actual_mps) / self.WHEEL_SEPARATION
+        return achievable_vx, achievable_wz
+
     def step(self):
         # The driver also calls robot.step() — we must NOT call it here
         # or the simulator will double-step.
@@ -255,11 +418,22 @@ class KinematicDrive:
             self.__last_cmd_time_s < 0
             or (wall_now - self.__last_cmd_time_s) > self.CMD_VEL_TIMEOUT_S
         ):
-            vx = 0.0
-            wz = 0.0
+            cmd_vx = 0.0
+            cmd_wz = 0.0
         else:
-            vx = self.__target_vx
-            wz = self.__target_wz
+            cmd_vx = self.__target_vx
+            cmd_wz = self.__target_wz
+
+        # ── Firmware motor model ─────────────────────────────────────
+        # Run the cmd_vel through the same chain the real firmware
+        # does so the chassis only moves when the firmware's PI loop
+        # would actually push PWM above the motor's static-friction
+        # deadband. Sub-deadband commands stall briefly while the
+        # integrator builds; pure pivots <~0.6 rad/s (per-wheel
+        # mps <~0.1 m/s = PWM 30) get filtered by the kinetic
+        # hysteresis once moving; large step inputs saturate the
+        # integrator at INT_MAX_PWM in ~40 ms.
+        vx, wz = self.__simulate_firmware_motor_model(cmd_vx, cmd_wz)
 
         # ── Diff-drive integration (body frame → world frame) ─────────
         # Use mid-point yaw for slightly better arc accuracy at high ω.
@@ -278,6 +452,19 @@ class KinematicDrive:
         # motion. (Future: ride a heightmap by reading z from a lookup.)
         self.__translation_field.setSFVec3f([self.__x, self.__y, self.__z])
         self.__rotation_field.setSFRotation([0.0, 0.0, 1.0, self.__yaw])
+
+        # Publish ground-truth pose. Same step as the teleport so any
+        # subscriber sees the chassis at the position the sim is
+        # actually rendering.
+        gt = PoseStamped()
+        gt.header.stamp = self.__node.get_clock().now().to_msg()
+        gt.header.frame_id = "map"
+        gt.pose.position.x = self.__x
+        gt.pose.position.y = self.__y
+        gt.pose.position.z = self.__z
+        gt.pose.orientation.z = math.sin(self.__yaw * 0.5)
+        gt.pose.orientation.w = math.cos(self.__yaw * 0.5)
+        self.__gt_pose_pub.publish(gt)
 
         # Set the chassis ODE velocity to match the commanded body
         # motion each tick.

@@ -1,4 +1,4 @@
-# UM982 Live Validate
+# Unicore GNSS Live Validate
 
 Le validateur live UM98x/Unicore n'est plus maintenu dans MowgliNext.
 

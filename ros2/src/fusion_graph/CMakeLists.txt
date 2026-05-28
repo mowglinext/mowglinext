@@ -146,6 +146,36 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_stationary_yaw fusion_graph_core)
 
+  ament_add_gtest(test_slip_pivot
+    test/test_slip_pivot.cpp
+  )
+  target_link_libraries(test_slip_pivot fusion_graph_core)
+
+  ament_add_gtest(test_graph_window
+    test/test_graph_window.cpp
+  )
+  target_link_libraries(test_graph_window fusion_graph_core)
+
+  ament_add_gtest(test_adaptive_noise
+    test/test_adaptive_noise.cpp
+  )
+  target_link_libraries(test_adaptive_noise fusion_graph_core)
+
+  ament_add_gtest(test_pose_extrapolator
+    test/test_pose_extrapolator.cpp
+  )
+  target_link_libraries(test_pose_extrapolator fusion_graph_core)
+
+  ament_add_gtest(test_loop_closure_robust
+    test/test_loop_closure_robust.cpp
+  )
+  target_link_libraries(test_loop_closure_robust fusion_graph_core)
+
+  ament_add_gtest(test_gyro_bias
+    test/test_gyro_bias.cpp
+  )
+  target_link_libraries(test_gyro_bias fusion_graph_core)
+
   # Performance benchmarks. Long-running (~30 s on ARM); only meaningful
   # in Release builds. Output is grep-friendly for tracking regressions.
   ament_add_gtest(test_perf

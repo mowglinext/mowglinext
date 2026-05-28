@@ -6,7 +6,11 @@
 #
 # The launch file injects DEVICE_FAMILY / DEVICE_SERIAL_STRING / FRAME_ID
 # dynamically from docker-compose and launch arguments. docker/.env is the
-# installer/compose source of truth; this generated ROS config stays minimal.
+# installer/compose source of truth.
+#
+# ublox_gnss_adapter reuses the common navsat_to_absolute_pose_node so
+# /gps/status and /gps/absolute_pose follow the same shared adapter path as
+# every other backend. Datum defaults stay explicit here for standalone bringup.
 ublox_dgnss:
   ros__parameters: {}
 
@@ -14,4 +18,9 @@ ublox_nav_sat_fix_hp:
   ros__parameters: {}
 
 ublox_gnss_adapter:
-  ros__parameters: {}
+  ros__parameters:
+    datum_lat: 0.0
+    datum_lon: 0.0
+    gnss_backend: ublox
+    gps_protocol: UBX
+    gnss_diagnostics_timeout_sec: 5.0

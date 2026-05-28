@@ -1,10 +1,10 @@
 #!/bin/bash
 # =============================================================================
-# UM982 GNSS driver startup + NTRIP client
+# Unicore GNSS driver startup + NTRIP client
 #
 # Launches:
-#   1. um982_node         — UM982 GNSS driver and RTCM injector on /dev/gps,
-#                           publishes /gps/fix, /gps/azimuth, /gps/diagnostics
+#   1. unicore_node       — Unicore GNSS driver and RTCM injector on /dev/gps,
+#                           publishes /gps/fix, /gps/azimuth, /diagnostics
 #                           and subscribes to /ntrip_client/rtcm
 #   2. ntrip_client_node  — NTRIP caster client publishing /ntrip_client/rtcm
 #
@@ -12,8 +12,8 @@
 # Bind-mount docker/config/mowgli to /config (see docker-compose.unicore.yaml).
 #
 # We deliberately do NOT use `ros2 launch mowgli_unicore_gnss
-# um982_launch.py` here: the upstream launch file accepts no arguments and
-# always loads the package-share config/um982.yaml (port=/dev/gps,
+# unicore_launch.py` here: the upstream launch file accepts no arguments and
+# always loads the package-share config/unicore.yaml (port=/dev/gps,
 # baudrate=921600, frame_id=gps). Driving the node via `ros2 run` with
 # explicit -p overrides is the only way to honour the operator's
 # gps_baudrate from mowgli_robot.yaml.

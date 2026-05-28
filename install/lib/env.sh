@@ -29,8 +29,9 @@ setup_env() {
   # variables kept for compatibility and installer re-runs; they do not model
   # separate runtime GPS devices.
   #
-  # Dedicated GNSS_BACKEND=ublox uses the vendor USB/libusb driver and selects
-  # the receiver via UBLOX_DEVICE_SERIAL_STRING instead of /dev/gps.
+  # GNSS_BACKEND=ublox now reuses the shared sensors/gps container and selects
+  # the receiver via GPS_BY_ID / GPS_PORT. UBLOX_DEVICE_SERIAL_STRING remains
+  # as a compatibility key for older .env migrations only.
   : "${GNSS_BACKEND:=gps}"
   : "${GPS_CONNECTION:=uart}"
   : "${GPS_PROTOCOL:=UBX}"

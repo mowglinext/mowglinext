@@ -2,13 +2,14 @@
   # GNSS backend slot used by the current default GPS container.
   #
   # The common GNSS contract for backend-specific compose fragments is:
-  #   /gnss/fix          -> sensor_msgs/msg/NavSatFix
-  #   /gnss/azimuth      -> compass_msgs/msg/Azimuth
-  #   /gnss/diagnostics  -> diagnostic_msgs/msg/DiagnosticArray
+  #   /gps/fix           -> sensor_msgs/msg/NavSatFix
+  #   /gps/azimuth       -> compass_msgs/msg/Azimuth
+  #   /gps/status        -> mowgli_interfaces/msg/GnssStatus
+  #   /diagnostics       -> diagnostic_msgs/msg/DiagnosticArray
   #
   # Current compatibility behavior remains unchanged here. This fragment still
   # points at the existing GPS container while dedicated backend fragments can
-  # converge on the same external /gnss/* interface later.
+  # converge on the same external /gps/* interface later.
   # -------------------------------------------------------------------------
 x-ros2-env: &ros2-env
   ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}

@@ -17,11 +17,13 @@
 
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "geometry_msgs/msg/point32.hpp"
@@ -86,10 +88,21 @@ struct BTContext
 
   /// Areas already dispatched to PlanCoverageArea+FollowStrip in the
   /// current session. GetNextUnmowedArea skips any index in this set
-  /// when iterating, so each area gets at most one PlanCoverageArea
-  /// call per session — no replan loops, even if FollowStrip aborts or
-  /// only partially mows. Cleared by EndSession.
+  /// when iterating. An area is added here only after it is genuinely
+  /// exhausted — either because all swaths were mowed, or because the
+  /// per-area attempt counter (area_attempt_count) hit kMaxAreaAttempts.
+  /// Cleared by EndSession.
   std::set<uint32_t> attempted_areas;
+
+  /// Per-area count of times GetNextUnmowedArea has dispatched the
+  /// area in the current session. Incremented on every dispatch (not
+  /// once per session — replans triggered by boundary recovery or
+  /// FollowStrip retry exhaustion all count). When the counter for an
+  /// area reaches kMaxAreaAttempts, GetNextUnmowedArea promotes it
+  /// into attempted_areas and skips it for the remainder of the
+  /// session. Cleared by EndSession.
+  std::map<uint32_t, uint32_t> area_attempt_count;
+  static constexpr uint32_t kMaxAreaAttempts = 5;
 
   // -----------------------------------------------------------------------
   // Derived / convenience fields (computed from latest_* messages)
@@ -155,6 +168,18 @@ struct BTContext
   double undock_start_x{0.0};
   double undock_start_y{0.0};
   bool undock_start_recorded{false};
+
+  /// GPS samples (map-frame x, y) accumulated by the GPS subscriber while
+  /// undock_start_recorded is true. CalibrateHeadingFromUndock fits a line
+  /// through these to derive yaw with ~3× the precision of just using the
+  /// start/end endpoints, then persists the result into mowgli_robot.yaml
+  /// via an angular EMA on dock_pose_yaw.
+  ///
+  /// The subscriber dedups by minimum spacing (0.05 m) so a stationary
+  /// chassis doesn't bloat the buffer. Capacity is capped — entries past
+  /// the cap drop the oldest sample.
+  std::vector<std::pair<double, double>> undock_gps_samples;
+  static constexpr size_t kUndockGpsSamplesCap = 200;
 
   // -----------------------------------------------------------------------
   // Obstacle-stuck recovery (collision_monitor wedging)

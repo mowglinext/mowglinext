@@ -2,7 +2,7 @@ name: Sensors — LiDAR STL27L
 
 on:
   push:
-    branches: [main, dev, 'feat/**']
+    branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'sensors/lidar-stl27l/**'
       - '.github/workflows/sensors-lidar-stl27l.yml'

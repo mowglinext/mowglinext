@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------------
-# Unicore UM98x GNSS backend.
+# Unicore GNSS backend.
 #
 # Mirrors the docker-compose.gps.yml fragment so all GNSS backends share
 # the same shape:
@@ -9,7 +9,7 @@
 #   * /config mount points at docker/config/mowgli (NOT .../mowgli) so
 #     start_gps.sh can read /config/mowgli_robot.yaml directly
 #   * dedicated UNICORE_IMAGE — the unicore container is built from a
-#     separate Dockerfile (sensors/unicore) with the UM982 driver +
+#     separate Dockerfile (sensors/unicore) with the Unicore GNSS driver +
 #     ntrip_client, not the main mowgli-ros2 image
 #   * x-ros2-env anchor + cyclonedds.xml so MaxAutoParticipantIndex=500
 #     applies (same as the gps + ublox fragments)

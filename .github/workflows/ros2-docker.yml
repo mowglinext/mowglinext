@@ -2,7 +2,7 @@ name: ROS2 — Docker
 
 on:
   push:
-    branches: [main, dev, 'feat/**']
+    branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     tags:
       - "v*.*.*"
     paths:

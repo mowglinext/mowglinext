@@ -9,6 +9,7 @@ import { useImuYawCalibration } from "../hooks/useImuYawCalibration.ts";
 import { useApi } from "../hooks/useApi.ts";
 import { getQuaternionFromHeading } from "../utils/map.tsx";
 import { usePose } from "../hooks/usePose.ts";
+import { useStatus } from "../hooks/useStatus.ts";
 
 const { Text } = Typography;
 
@@ -124,6 +125,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
     const { notification, modal } = App.useApp();
     const guiApi = useApi();
     const pose = usePose();
+    const hwStatus = useStatus();
     const [settingDock, setSettingDock] = useState(false);
 
     // Pull the robot's current map-frame pose. Yaw is the EKF-fused
@@ -135,6 +137,16 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
     const robotY = pose.pose?.pose?.position?.y;
     const robotYaw = pose.motion_heading;
     const poseAvailable = robotX != null && robotY != null && robotYaw != null;
+    // Require physical charging contact when calibrating the dock pose.
+    // Without this guard, operators sometimes clicked "Set dock pose"
+    // while the robot was close-but-not-charging (visually parked on the
+    // dock, but the contacts hadn't seated). The stored dock_pose then
+    // pointed to that off-contact location, and every subsequent
+    // re-docking aimed there — robot stopping 1-3 cm short of the
+    // charging cradle on every run. By gating the action on
+    // is_charging=true we guarantee the captured pose is the exact
+    // physical contact point, removing one source of dock-approach drift.
+    const isCharging = !!hwStatus.is_charging;
 
     const writeDockPose = useCallback(
         async (px: number, py: number, yaw: number) => {
@@ -895,16 +907,27 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                     </Typography.Text>
                                 </Col>
                                 <Col flex="none">
-                                    <Button
-                                        type="primary"
-                                        size="small"
-                                        icon={<EnvironmentOutlined />}
-                                        loading={settingDock}
-                                        disabled={!poseAvailable}
-                                        onClick={handleSetDockAtRobot}
+                                    <Tooltip
+                                        title={!isCharging
+                                            ? "Place robot on dock with charging contacts engaged before setting the reference pose"
+                                            : !poseAvailable
+                                                ? "Waiting for robot pose"
+                                                : "Capture the robot's current pose as the canonical dock reference"}
                                     >
-                                        Set dock pose
-                                    </Button>
+                                        {/* span wrapper lets the Tooltip target a disabled Button */}
+                                        <span>
+                                            <Button
+                                                type="primary"
+                                                size="small"
+                                                icon={<EnvironmentOutlined />}
+                                                loading={settingDock}
+                                                disabled={!poseAvailable || !isCharging}
+                                                onClick={handleSetDockAtRobot}
+                                            >
+                                                Set dock pose
+                                            </Button>
+                                        </span>
+                                    </Tooltip>
                                 </Col>
                             </Row>
                         </div>

@@ -121,13 +121,52 @@ void GraphManager::AddGyroDelta(double wz, double dt)
   if (dt <= 0.0)
     return;
   std::lock_guard<std::mutex> lock(mu_);
-  accum_.dtheta_gyro += wz * dt;
-  // Track the running maximum so the stationary multi-source gate
-  // can distinguish "wheels still + robot truly still" (small gyro)
-  // from "wheels still + robot externally rotated" (large gyro).
-  const double abs_wz = std::abs(wz);
-  if (abs_wz > accum_.max_abs_gyro_rad_per_s)
-    accum_.max_abs_gyro_rad_per_s = abs_wz;
+
+  // Track the running maximum on the RAW sample for the multi-source
+  // stationary gate (item #1). Done before bias subtraction so a
+  // drifty bias can't mask a real manual rotation.
+  const double abs_wz_raw = std::abs(wz);
+  if (abs_wz_raw > accum_.max_abs_gyro_rad_per_s)
+    accum_.max_abs_gyro_rad_per_s = abs_wz_raw;
+
+  // Online gyro bias estimation (item #3, pragmatic). When the last
+  // Tick() flagged the wheel-only stationary state AND this sample
+  // is plausibly bias-only (magnitude under the manual-rotation
+  // threshold), EMA-update the bias estimate.
+  if (params_.gyro_bias_estimation_enabled && wheel_stationary_now_ &&
+      abs_wz_raw < params_.gyro_bias_max_sample_rad_per_s)
+  {
+    const double tau = std::max(params_.gyro_bias_ema_tau_s, 1.0e-3);
+    const double alpha = dt / (tau + dt);
+    gyro_bias_z_ = (1.0 - alpha) * gyro_bias_z_ + alpha * wz;
+    ++gyro_bias_updates_;
+  }
+
+  // Subtract the current bias estimate before integration. First few
+  // seconds use bias=0 (offline cal from hardware_bridge has removed
+  // the cold bias); EMA refines as temperature drifts.
+  //
+  // When use_imu_preint is true, we DON'T pre-subtract the EMA bias —
+  // the graph's bias variable absorbs the residual via the
+  // GyroPreintFactor. We still apply the latest bias_estimate_at_node
+  // (stored in current_bias_estimate_) so the integrated ω is in the
+  // right ballpark for iSAM2's linearisation point.
+  const double bias_correction =
+      params_.use_imu_preint ? current_bias_estimate_
+      : (params_.gyro_bias_estimation_enabled ? gyro_bias_z_ : 0.0);
+  const double wz_corrected = wz - bias_correction;
+  accum_.dtheta_gyro += wz_corrected * dt;
+
+  // Preintegration accumulation. Variance propagates as
+  // Σ(dt² · σ_gyro²) — this is the noise on the integrated ω, not on
+  // ω itself. Independent of which bias correction is applied above.
+  if (params_.use_imu_preint)
+  {
+    accum_.gyro_preint_dtheta += wz_corrected * dt;
+    accum_.gyro_preint_dt += dt;
+    const double sigma = params_.gyro_noise_density_rad_per_s;
+    accum_.gyro_preint_variance += dt * dt * sigma * sigma;
+  }
 }
 
 void GraphManager::QueueGnss(double x, double y, double sigma_xy, bool robust)
@@ -175,6 +214,19 @@ void GraphManager::Initialize(const gtsam::Pose2& X0,
   auto k0 = PoseKey(0);
   new_values_.insert(k0, X0);
   new_factors_.add(gtsam::PriorFactor<gtsam::Pose2>(k0, X0, prior_noise));
+
+  // When IMU preintegration is on, seed the bias state at 0 with a
+  // loose prior. iSAM2 refines it from the very first preint factor.
+  if (params_.use_imu_preint)
+  {
+    using gtsam::Symbol;
+    auto k_bias0 = Symbol('b', 0);
+    new_values_.insert(k_bias0, 0.0);
+    auto bias_prior_noise = gtsam::noiseModel::Diagonal::Sigmas(
+        gtsam::Vector1(params_.gyro_bias_prior_sigma_rad_per_s));
+    new_factors_.add(
+        gtsam::PriorFactor<double>(k_bias0, 0.0, bias_prior_noise));
+  }
 
   isam_.update(new_factors_, new_values_);
   estimate_dirty_ = true;
@@ -264,6 +316,11 @@ TickOutput GraphManager::CreateNodeLocked(double now_s)
       std::abs(accum_.dx) < params_.stationary_thresh_xy_m &&
       std::abs(accum_.dy) < params_.stationary_thresh_xy_m &&
       std::abs(accum_.dtheta_wheel) < params_.stationary_thresh_theta;
+  // Publish to AddGyroDelta so it can decide whether to EMA-update
+  // the bias estimate from incoming samples. wheel_stationary_now_
+  // stays at the latest tick's value until the next tick, so the
+  // bias EMA sees the right gate state across many IMU samples.
+  wheel_stationary_now_ = wheel_stationary;
   // Multi-source confirmation: if the wheel claims stationary but the
   // gyro reports a rotation rate above the residual-bias floor, the
   // robot is being externally rotated (hand-pushed off the dock,
@@ -297,7 +354,56 @@ TickOutput GraphManager::CreateNodeLocked(double now_s)
     sigma_theta = params_.wheel_sigma_theta;
   }
 
-  const gtsam::Pose2 between(accum_.dx, accum_.dy, dtheta);
+  // Slip veto on (dx, dy).
+  //
+  // The yaw selection above already chooses gyro over wheel encoders
+  // when they disagree, so the BetweenFactor's *rotation* component is
+  // honest. The translation is harder: wheel integration assumes
+  // encoders measure ground-contact distance, which holds on dry
+  // surfaces but breaks down on wet grass and during low-speed pivot
+  // attempts where both drive wheels slip in the same direction. The
+  // chassis IMU sees the whole truth — angular velocity directly, no
+  // wheel-traction assumption — so a wheel-vs-gyro disagreement is
+  // ground truth that the wheel readings are not trustworthy this
+  // tick. Field-observed 2026-05-27: during a stuck dock-rotate
+  // attempt the wheels reported a steady ~0.1 m/s forward velocity
+  // and ~0.3 rad/s rotation, while the gyro saw <0.02 rad/s — the
+  // wheel translation slid the map-frame estimate by 0.6 m in 6 s
+  // even though the chassis hadn't moved, and the controller chased
+  // the drift with more commanded motion, fueling the slip.
+  //
+  // Rule: when |dtheta_wheel - dtheta_gyro| is large enough that the
+  // wheel-reported rotation can't be explained by gyro noise, zero
+  // out the BetweenFactor's translation. The pose still advances in
+  // yaw (from the gyro), and any GPS / scan-matching unary will pull
+  // (x,y) in the right direction; without the veto the wheel
+  // integration carries the pose along the phantom slip path
+  // unopposed. The slip_sigma_xy floor keeps sigma_x/sigma_y tight
+  // enough that GPS still anchors the estimate when available, but
+  // not so loose that one tick of slip can shove the pose by tens of
+  // centimetres.
+  //
+  // Threshold is gated by both the disagreement magnitude AND a
+  // minimum gyro stillness — otherwise the slip detector would fire
+  // every time the gyro updates faster than the wheel encoders, which
+  // happens on every normal turn. The combination "wheels rotating
+  // hard, gyro near zero" is the genuine slip signature.
+  const double wheel_gyro_residual =
+      std::abs(accum_.dtheta_wheel - accum_.dtheta_gyro);
+  const bool slip_detected =
+      wheel_gyro_residual > params_.slip_residual_thresh_rad &&
+      std::abs(accum_.dtheta_gyro) < params_.slip_gyro_max_rad &&
+      std::abs(accum_.dtheta_wheel) > params_.slip_wheel_min_rad;
+  double dx_eff = accum_.dx;
+  double dy_eff = accum_.dy;
+  if (slip_detected)
+  {
+    dx_eff = 0.0;
+    dy_eff = 0.0;
+    ++stats_slip_veto_;
+  }
+
+  const gtsam::Pose2 between(dx_eff, dy_eff, dtheta);
 
   const auto k_prev = PoseKey(next_index_ - 1);
   const auto k_curr = PoseKey(next_index_);
@@ -326,16 +432,96 @@ TickOutput GraphManager::CreateNodeLocked(double now_s)
   // comment) so swap to a loose sigma and let GPS / scan-matching
   // constrain XY. Gating on the gyro (not wheel-derived) dtheta
   // avoids feedback from the same encoder that's misreporting.
-  const double wheel_sigma_x_eff =
+  double wheel_sigma_x_eff =
       std::abs(accum_.dtheta_gyro) > params_.pivot_gate_dtheta_rad
           ? params_.pivot_wheel_sigma_x
           : params_.wheel_sigma_x;
+
+  // Adaptive σ_x inflation from wheel↔gyro residual EMA. Skipped
+  // entirely when adaptive_noise_enabled_gain == 0 (the parameter
+  // defaults to 10 but yaml can disable). Pivot mode already
+  // inflates σ_x to params_.pivot_wheel_sigma_x; in that case the
+  // adaptive term layers on top, but the floor (pivot sigma) is
+  // typically much larger than any residual-driven contribution
+  // so the practical effect is negligible during pivots.
+  if (params_.adaptive_noise_enabled_gain > 0.0)
+  {
+    // |wheel↔gyro residual| this tick. We compare the per-tick yaw
+    // deltas (not the rate) so the noise scales naturally with
+    // node_period_s: longer ticks = more accumulated slip = larger
+    // residual = larger inflation.
+    const double residual = std::abs(accum_.dtheta_wheel - accum_.dtheta_gyro);
+
+    // EMA in continuous time: α = dt / (τ + dt). dt_total here is the
+    // wall time we've been accumulating wheel/gyro samples; safe
+    // approximation of node_period_s when the inputs are arriving on
+    // schedule. Falls back to one full step when dt_total is 0 (rare —
+    // happens on the very first tick before any wheel sample).
+    const double dt = (accum_.dt_total > 0.0) ? accum_.dt_total : params_.node_period_s;
+    const double tau = std::max(params_.adaptive_noise_ema_tau_s, 1.0e-3);
+    const double alpha = dt / (tau + dt);
+    residual_ema_ = (1.0 - alpha) * residual_ema_ + alpha * residual;
+
+    // Floor: anything below this is sensor jitter, not slip.
+    const double net_residual =
+        std::max(0.0, residual_ema_ - params_.adaptive_noise_residual_floor_rad);
+    wheel_sigma_x_eff += params_.adaptive_noise_enabled_gain * net_residual;
+  }
+  last_wheel_sigma_x_eff_ = wheel_sigma_x_eff;
+
+  // When IMU preintegration is active, the GyroPreintFactor below
+  // owns the yaw constraint with a tight statistically-grounded
+  // sigma. The wheel between-factor still carries xy translation but
+  // we inflate its sigma_theta so it doesn't fight the preint factor.
+  if (params_.use_imu_preint)
+  {
+    sigma_theta = 0.5;  // very loose — preint dominates yaw
+  }
+
   auto between_noise = MakeDiagonal({
       wheel_sigma_x_eff,
       params_.wheel_sigma_y,
       sigma_theta,
   });
   new_factors_.add(gtsam::BetweenFactor<gtsam::Pose2>(k_prev, k_curr, between, between_noise));
+
+  // ── IMU preintegration: ternary GyroPreintFactor + bias RW ──────
+  // The preint factor adds a yaw constraint that depends on the
+  // jointly-optimised bias variable, and the random-walk between-
+  // factor links consecutive bias variables so iSAM2 can propagate
+  // bias estimates through the trajectory.
+  if (params_.use_imu_preint && accum_.gyro_preint_dt > 0.0)
+  {
+    using gtsam::Symbol;
+    const auto k_bias_prev = Symbol('b', next_index_ - 1);
+    const auto k_bias_curr = Symbol('b', next_index_);
+
+    // Insert the new bias variable initialised at the current best
+    // estimate. iSAM2 will refine it on the next update.
+    new_values_.insert(k_bias_curr, current_bias_estimate_);
+
+    // Preint factor noise: sigma = √variance. Floor at a small value
+    // to avoid a singular constraint when dt is tiny.
+    const double sigma_preint =
+        std::max(std::sqrt(accum_.gyro_preint_variance), 1e-4);
+    auto preint_noise = gtsam::noiseModel::Diagonal::Sigmas(
+        gtsam::Vector1(sigma_preint));
+    new_factors_.add(GyroPreintFactor(k_prev,
+                                       k_curr,
+                                       k_bias_curr,
+                                       accum_.gyro_preint_dtheta,
+                                       accum_.gyro_preint_dt,
+                                       preint_noise));
+
+    // Bias random-walk between: bias_{k} = bias_{k-1} + N(0, σ_rw·√dt)
+    const double sigma_bias_rw =
+        params_.gyro_bias_rw_rad_per_s * std::sqrt(accum_.gyro_preint_dt);
+    auto bias_rw_noise = gtsam::noiseModel::Diagonal::Sigmas(
+        gtsam::Vector1(std::max(sigma_bias_rw, 1e-6)));
+    new_factors_.add(
+        gtsam::BetweenFactor<double>(k_bias_prev, k_bias_curr, 0.0,
+                                     bias_rw_noise));
+  }
 
   // 3. Queued unary factors. Wrap in Huber when caller flagged the
   // measurement as outlier-prone (RTK-Float / single fix on GPS;
@@ -385,6 +571,23 @@ TickOutput GraphManager::CreateNodeLocked(double now_s)
   estimate_dirty_ = true;
   new_factors_.resize(0);
   new_values_.clear();
+
+  // 4b. Refresh the bias linearisation point from the new estimate
+  //     when IMU preint is active. AddGyroDelta will subtract this
+  //     from incoming samples until the next node creation.
+  if (params_.use_imu_preint)
+  {
+    try
+    {
+      const auto k_bias = gtsam::Symbol('b', next_index_);
+      current_bias_estimate_ = isam_.calculateEstimate<double>(k_bias);
+    }
+    catch (const std::exception&)
+    {
+      // Keep the previous estimate if iSAM2 hasn't materialised this
+      // variable yet (shouldn't happen — we just inserted it).
+    }
+  }
 
   // 5. Marginal covariance — throttled. marginalCovariance is O(node
   //    count) on the Bayes tree path and dominates CPU once the graph
@@ -437,6 +640,19 @@ std::optional<TickOutput> GraphManager::LatestSnapshot() const
   return latest_;
 }
 
+uint64_t GraphManager::LiveNodeCount() const
+{
+  std::lock_guard<std::mutex> lock(mu_);
+  const_cast<GraphManager*>(this)->RefreshEstimateLocked();
+  uint64_t n = 0;
+  for (const auto& kv : current_estimate_)
+  {
+    if (gtsam::Symbol(kv.key).chr() == 'x')
+      ++n;
+  }
+  return n;
+}
+
 GraphStats GraphManager::Stats() const
 {
   std::lock_guard<std::mutex> lock(mu_);
@@ -450,6 +666,11 @@ GraphStats GraphManager::Stats() const
   s.icp_rejects_sanity = stats_icp_rejects_sanity_;
   s.icp_rejects_divergence = stats_icp_rejects_divergence_;
   s.stationary_hand_push = stats_hand_push_;
+  s.slip_veto = stats_slip_veto_;
+  s.residual_ema_rad = residual_ema_;
+  s.wheel_sigma_x_eff = last_wheel_sigma_x_eff_;
+  s.gyro_bias_z = gyro_bias_z_;
+  s.gyro_bias_updates = gyro_bias_updates_;
   return s;
 }
 
@@ -649,6 +870,7 @@ void GraphManager::RebaseISAM2()
   // iSAM2 catches up at phase 3.
   gtsam::Values estimate_snapshot;
   int relinearize_skip = 1;
+  uint64_t cutoff_index = 0;
   {
     std::lock_guard<std::mutex> lock(mu_);
     if (rebase_in_progress_)
@@ -661,6 +883,11 @@ void GraphManager::RebaseISAM2()
       return;
     estimate_snapshot = current_estimate_;
     relinearize_skip = params_.isam2_relinearize_skip;
+    // Sliding-window cutoff: drop pose nodes older than this index.
+    // Captured under the lock against the live next_index_ so the
+    // window is measured from the newest node at snapshot time.
+    if (params_.max_graph_nodes > 0 && next_index_ > params_.max_graph_nodes)
+      cutoff_index = next_index_ - params_.max_graph_nodes;
     rebase_in_progress_ = true;
     rebase_pending_factors_.resize(0);
     rebase_pending_values_.clear();
@@ -681,11 +908,20 @@ void GraphManager::RebaseISAM2()
   // RTK + COG noise floors and keeps the rebase non-destructive.
   gtsam::NonlinearFactorGraph fg;
   auto noise = MakeDiagonal({0.05, 0.05, 0.05});
+  gtsam::Values kept_values;
   for (const auto& kv : estimate_snapshot)
   {
+    // Sliding-window drop: skip pose nodes older than the cutoff.
+    // gtsam::Symbol::index() recovers the monotonic node index from
+    // the key. Non-pose keys (if any) fall through the window check
+    // unchanged. cutoff_index == 0 means "keep everything".
+    const gtsam::Symbol s(kv.key);
+    if (cutoff_index > 0 && s.chr() == 'x' && s.index() < cutoff_index)
+      continue;
     fg.add(gtsam::PriorFactor<gtsam::Pose2>(kv.key, kv.value.cast<gtsam::Pose2>(), noise));
+    kept_values.insert(kv.key, kv.value);
   }
-  fresh.update(fg, estimate_snapshot);
+  fresh.update(fg, kept_values);
 
   // Phase 3: replay anything Tick / ForceAnchor / AddLoopClosure
   // added while we were rebuilding, then atomically swap isam_.
@@ -729,6 +965,77 @@ void GraphManager::ApplyIsamUpdateLocked(const gtsam::NonlinearFactorGraph& fg,
   }
 }
 
+void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
+                                     double latest_node_sigma_xy,
+                                     double latest_node_sigma_theta)
+{
+  std::lock_guard<std::mutex> lock(mu_);
+
+  // Refresh the cached estimate so we have every variable.
+  RefreshEstimateLocked();
+  if (current_estimate_.empty())
+    return;
+
+  // Apply correction to every Pose2 node. Non-pose variables (e.g.
+  // gyro bias) are gauge-invariant — copy them through unchanged.
+  gtsam::Values transformed;
+  uint64_t latest_idx_local = (next_index_ > 0) ? next_index_ - 1 : 0;
+  auto latest_key = PoseKey(latest_idx_local);
+  for (const auto& kv : current_estimate_)
+  {
+    gtsam::Symbol s(kv.key);
+    if (s.chr() == 'x')
+    {
+      const gtsam::Pose2 X_old = kv.value.cast<gtsam::Pose2>();
+      const gtsam::Pose2 X_new = correction * X_old;
+      transformed.insert(kv.key, X_new);
+    }
+    else
+    {
+      transformed.insert(kv.key, kv.value);
+    }
+  }
+
+  // Build a fresh iSAM2 with priors at the shifted poses. Loose σ
+  // (5 cm / 3°) on the older nodes so future loop closures can still
+  // refine them; tight σ on the latest node so the dock anchor isn't
+  // washed out by the next stream of GPS factors when the robot
+  // undocks.
+  gtsam::ISAM2Params p;
+  p.optimizationParams = gtsam::ISAM2GaussNewtonParams(0.001);
+  p.relinearizeThreshold = 0.05;
+  p.relinearizeSkip = std::max(1, params_.isam2_relinearize_skip);
+  gtsam::ISAM2 fresh(p);
+
+  gtsam::NonlinearFactorGraph fg;
+  auto loose_noise = MakeDiagonal({0.05, 0.05, 0.05});
+  auto tight_noise = MakeDiagonal(
+      {std::max(latest_node_sigma_xy, 1.0e-4),
+       std::max(latest_node_sigma_xy, 1.0e-4),
+       std::max(latest_node_sigma_theta, 1.0e-4)});
+  for (const auto& kv : transformed)
+  {
+    gtsam::Symbol s(kv.key);
+    if (s.chr() != 'x')
+      continue;
+    const auto noise = (kv.key == latest_key) ? tight_noise : loose_noise;
+    fg.add(
+        gtsam::PriorFactor<gtsam::Pose2>(kv.key, kv.value.cast<gtsam::Pose2>(), noise));
+  }
+  fresh.update(fg, transformed);
+  isam_ = std::move(fresh);
+  estimate_dirty_ = true;
+  // Loop-closure edges collapsed into priors during the rebuild.
+  loop_closure_edges_.clear();
+
+  // Update the latched latest_ snapshot so the next PublishOutputs
+  // sees the transformed pose instead of the pre-transform one.
+  if (latest_)
+  {
+    latest_->pose = correction * latest_->pose;
+  }
+}
+
 void GraphManager::AddLoopClosure(uint64_t prev_index,
                                   uint64_t curr_index,
                                   const gtsam::Pose2& delta,
@@ -746,9 +1053,30 @@ void GraphManager::AddLoopClosure(uint64_t prev_index,
   auto k_prev = PoseKey(prev_index);
   auto k_curr = PoseKey(curr_index);
 
-  auto noise = MakeDiagonal({sigma_xy, sigma_xy, sigma_theta});
+  // Robust noise model on loop-closure between-factors (item #11).
+  // Wraps the diagonal Gaussian in a Dynamic Covariance Scaling
+  // (DCS) m-estimator. DCS smoothly downweights an LC whose
+  // residual exceeds ~k·σ instead of letting a single bad LC
+  // anchor the entire trajectory to a wrong place — even with the
+  // upstream ICP guards (PR #233) and rmse acceptance gate, a
+  // degenerate match can still squeak through on symmetric
+  // outdoor scenery. DCS keeps inliers fully efficient (factor
+  // weight ≈ 1 when residual is below k·σ) and decays the weight
+  // quadratically beyond. Cheaper than PCM and well-validated in
+  // the SLAM literature (Agarwal et al., "Robust Map Optimization
+  // using Dynamic Covariance Scaling", ICRA 2013).
+  //
+  // DCS shape parameter Φ (kDcsPhi): residuals below √Φ are
+  // unaffected; above, the loss switches from quadratic to
+  // sub-quadratic. Φ = 1 is the classic value — equivalent to
+  // saying "an LC residual of 1 σ is borderline acceptable".
+  auto base_noise = MakeDiagonal({sigma_xy, sigma_xy, sigma_theta});
+  constexpr double kDcsPhi = 1.0;
+  auto robust_noise = gtsam::noiseModel::Robust::Create(
+      gtsam::noiseModel::mEstimator::DCS::Create(kDcsPhi), base_noise);
+
   gtsam::NonlinearFactorGraph fg;
-  fg.add(gtsam::BetweenFactor<gtsam::Pose2>(k_prev, k_curr, delta, noise));
+  fg.add(gtsam::BetweenFactor<gtsam::Pose2>(k_prev, k_curr, delta, robust_noise));
 
   ApplyIsamUpdateLocked(fg, gtsam::Values());
   estimate_dirty_ = true;
@@ -1043,6 +1371,38 @@ bool GraphManager::Load(const std::string& prefix)
       std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
   last_node_time_s_ = std::min(last_t, now_s);
   initialized_ = true;
+
+  // Populate latest_ with the highest-index loaded pose so consumers
+  // (LatestSnapshot, OnSetPose's ForceAnchor path, TF publisher) see
+  // a valid snapshot the instant the load completes. Without this:
+  //   - OnSetPose treats a freshly-loaded graph as "no latest" and
+  //     silently drops the set_pose seed, leaving fusion_graph at the
+  //     persisted last-session pose instead of the operator dock_pose.
+  //   - PublishOutputs short-circuits until Tick() exits stationary
+  //     throttle, leaving Nav2 without a map→odom TF for the whole
+  //     warm-up window. ekf_odom_node used to mask that by publishing
+  //     odom→base independently; with fusion_graph owning both TFs
+  //     now, Nav2 hangs outright on the missing chain.
+  // Try the real marginal covariance once; fall back to a loose
+  // placeholder if isam_ throws (Bayes tree path may not include the
+  // key yet for some edge cases). The first Tick() will overwrite
+  // with a proper cov.
+  if (next_index_ > 0 && HasPoseAt(next_index_ - 1))
+  {
+    TickOutput out;
+    out.pose = PoseAt(next_index_ - 1);
+    try
+    {
+      out.covariance = isam_.marginalCovariance(PoseKey(next_index_ - 1));
+    }
+    catch (const std::exception&)
+    {
+      out.covariance = Eigen::Matrix3d::Identity() * 0.01;
+    }
+    out.node_index = next_index_ - 1;
+    out.timestamp = last_node_time_s_;
+    latest_ = out;
+  }
 
   return true;
 }

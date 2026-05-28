@@ -75,6 +75,48 @@ RUN . /opt/ros/kilted/setup.sh && \
  && make -j$(nproc) install
 
 # =============================================================================
+# Stage 0c: ublox-msgs-builder
+# Builds ONLY the ublox_ubx_msgs + ublox_ubx_interfaces interface packages
+# from the cedbossneo/ublox_dgnss fork. The GPS driver runs in the separate
+# sensors/gps image and publishes ~25 /ubx_* topics typed with
+# ublox_ubx_msgs/* and ublox_dgnss services typed with ublox_ubx_interfaces/*.
+# foxglove_bridge in THIS image introspects every topic/service on the graph
+# and was logging one "package not found" error per topic on every reconnect
+# because the schemas weren't installed here. We only need the .msg/.srv
+# typesupport for schema resolution, NOT the driver node — so build just the
+# two interface packages with --packages-up-to (pulls in nothing else; both
+# depend only on builtin_interfaces/std_msgs/rosidl, present in the base).
+#
+# The pinned ref MUST stay identical to sensors/gps/Dockerfile's
+# UBLOX_DGNSS_REF/SHA — a schema mismatch between what the driver publishes
+# and what foxglove loads here would be worse than the current log spam.
+# Bump both Dockerfiles together when the fork moves.
+# =============================================================================
+FROM ros:kilted-ros-base AS ublox-msgs-builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG UBLOX_DGNSS_REF=fix/hp-fix-stale-status-cov
+ARG UBLOX_DGNSS_SHA=5e1d0cf1e8ec0e2638c44a59f57d15f5dd04c9af
+ARG UBLOX_DGNSS_URL=https://github.com/cedbossneo/ublox_dgnss.git
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake git \
+      python3-colcon-common-extensions \
+      ros-kilted-rosidl-default-generators \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /ws/src
+RUN git clone --branch ${UBLOX_DGNSS_REF} ${UBLOX_DGNSS_URL} ublox_dgnss \
+ && cd ublox_dgnss && git checkout ${UBLOX_DGNSS_SHA}
+
+WORKDIR /ws
+RUN . /opt/ros/kilted/setup.sh \
+ && colcon build --merge-install \
+      --packages-up-to ublox_ubx_msgs ublox_ubx_interfaces \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -Wno-dev \
+ && rm -rf /ws/build /ws/log /ws/src
+
+# =============================================================================
 # Stage 1: base
 # Installs all runtime ROS2 dependencies. Both runtime and simulation stages
 # inherit from here, keeping the image lean.
@@ -316,6 +358,14 @@ RUN reallib=$(find /usr/lib -name 'libtinyxml2.so.*.*.*' | head -1) && \
 
 # Pull compiled install tree from the build stage
 COPY --from=build /ros2_ws/install/ install/
+
+# Pull the ublox_ubx_msgs + ublox_ubx_interfaces typesupport built from the
+# cedbossneo/ublox_dgnss fork (see ublox-msgs-builder stage). The GPS driver
+# runs in the separate sensors/gps image, so these message/service packages
+# aren't otherwise present here — without them foxglove_bridge logs one
+# "package not found" schema error per /ubx_* topic + ublox_dgnss service on
+# every client reconnect. Sourced by ros2_entrypoint.sh as a ROS overlay.
+COPY --from=ublox-msgs-builder /ws/install /opt/ublox_msgs
 
 # Copy all launch files and config from every package
 COPY src/mowgli_bringup/launch/    /ros2_ws/install/mowgli_bringup/share/mowgli_bringup/launch/

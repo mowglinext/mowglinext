@@ -120,6 +120,7 @@ export interface TypesFirmwareConfig {
   bothWheelsLiftEmergencyMillis?: number;
   branch?: string;
   debugType?: string;
+  directory?: string;
   disableEmergency?: boolean;
   externalImuAcceleration?: boolean;
   externalImuAngular?: boolean;
