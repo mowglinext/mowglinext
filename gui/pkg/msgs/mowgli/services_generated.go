@@ -232,6 +232,7 @@ type PromoteObstacleRes struct {
 // SetDockingPointReq for mowgli_interfaces/srv/SetDockingPoint request.
 type SetDockingPointReq struct {
 	DockingPose               geometry.Pose                  `json:"docking_pose"`
+	UseGpsPosition            bool                           `json:"use_gps_position"`
 }
 
 // SetDockingPointRes for mowgli_interfaces/srv/SetDockingPoint response.

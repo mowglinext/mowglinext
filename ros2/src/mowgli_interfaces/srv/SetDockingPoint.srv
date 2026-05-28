@@ -1,3 +1,17 @@
+# Set the dock pose.
+#
+# use_gps_position selects how the POSITION is captured:
+#   true  — ignore docking_pose.position and capture the dock position from
+#           the averaged independent GPS projection (/gps/pose_cov, GPS-vs-
+#           datum + lever-arm). Used by the "capture current robot position"
+#           button when the robot is physically seated on the dock: the fused
+#           pose is gauge-reset onto the existing dock_pose while charging, so
+#           capturing it would be circular — the GPS projection is not.
+#   false — use docking_pose.position as given (manual map-drag / settings
+#           edit, where the operator specifies the location directly).
+# docking_pose.orientation (yaw) is always taken from the request; single-
+# antenna GPS gives no heading, and the yaw-convergence gate validates it.
 geometry_msgs/Pose docking_pose
+bool use_gps_position
 ---
 bool success

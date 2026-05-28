@@ -112,6 +112,7 @@ export interface MowgliReplaceMapReq {
 
 export interface MowgliSetDockingPointReq {
   docking_pose?: GeometryPose;
+  use_gps_position?: boolean;
 }
 
 export interface TypesFirmwareConfig {

@@ -804,58 +804,71 @@ void MapServerNode::on_set_docking_point(
     }
   }
 
-  // Capture the dock POSITION from the averaged independent GPS projection
-  // (/gps/pose_cov, GPS-vs-datum + lever-arm), NOT from req->docking_pose
-  // (which the GUI fills from the fused /odometry/filtered_map). While the
-  // robot is charging, fusion_graph gauge-resets the fused pose onto the
-  // EXISTING dock_pose, so capturing the fused position would just re-store
-  // the old value — a calibration that can never correct a stale dock_pose.
-  // The GPS projection is free of that circularity. Yaw still comes from the
-  // request (single-antenna GPS gives no heading; the yaw-convergence gate
-  // above validated it). Averaging kills the ~1-3 cm single-sample RTK jitter.
-  double gps_x_mean = 0.0;
-  double gps_y_mean = 0.0;
+  // Position capture mode, selected by req->use_gps_position:
+  //   true  — "capture current robot position": the robot is physically
+  //           seated on the dock, so take the dock POSITION from the averaged
+  //           independent GPS projection (/gps/pose_cov, GPS-vs-datum +
+  //           lever-arm), NOT from req->docking_pose (which the GUI fills from
+  //           the fused /odometry/filtered_map). While charging, fusion_graph
+  //           gauge-resets the fused pose onto the EXISTING dock_pose, so
+  //           capturing it would just re-store the old value — a calibration
+  //           that can never correct a stale dock_pose. The GPS projection is
+  //           free of that circularity; averaging kills the ~1-3 cm RTK jitter.
+  //   false — manual map-drag / settings edit: the operator specified the
+  //           location directly, so use req->docking_pose.position as given.
+  // Yaw always comes from the request (single-antenna GPS gives no heading;
+  // the yaw-convergence gate above validated it).
+  docking_pose_ = req->docking_pose;  // yaw/orientation (and position if !gps)
+  if (req->use_gps_position)
   {
-    std::lock_guard<std::mutex> lk(last_gps_pose_cov_mutex_);
-    if (recent_gps_xy_.size() < dock_set_gps_avg_min_samples_)
+    double gps_x_mean = 0.0;
+    double gps_y_mean = 0.0;
     {
-      res->success = false;
-      RCLCPP_WARN(get_logger(),
-                  "set_docking_point rejected: only %zu GPS samples in the last "
-                  "%.1f s (need >= %zu) to average the dock position. Wait for "
-                  "more /gps/pose_cov updates.",
-                  recent_gps_xy_.size(),
-                  dock_set_gps_avg_window_s_,
-                  dock_set_gps_avg_min_samples_);
-      return;
+      std::lock_guard<std::mutex> lk(last_gps_pose_cov_mutex_);
+      if (recent_gps_xy_.size() < dock_set_gps_avg_min_samples_)
+      {
+        res->success = false;
+        RCLCPP_WARN(get_logger(),
+                    "set_docking_point rejected: only %zu GPS samples in the last "
+                    "%.1f s (need >= %zu) to average the dock position. Wait for "
+                    "more /gps/pose_cov updates.",
+                    recent_gps_xy_.size(),
+                    dock_set_gps_avg_window_s_,
+                    dock_set_gps_avg_min_samples_);
+        return;
+      }
+      for (const auto& [t, x, y] : recent_gps_xy_)
+      {
+        (void)t;
+        gps_x_mean += x;
+        gps_y_mean += y;
+      }
+      const double n = static_cast<double>(recent_gps_xy_.size());
+      gps_x_mean /= n;
+      gps_y_mean /= n;
     }
-    for (const auto& [t, x, y] : recent_gps_xy_)
-    {
-      (void)t;
-      gps_x_mean += x;
-      gps_y_mean += y;
-    }
-    const double n = static_cast<double>(recent_gps_xy_.size());
-    gps_x_mean /= n;
-    gps_y_mean /= n;
+    docking_pose_.position.x = gps_x_mean;
+    docking_pose_.position.y = gps_y_mean;
+    docking_pose_.position.z = 0.0;
+    RCLCPP_INFO(get_logger(),
+                "Docking point captured from averaged GPS: (%.3f, %.3f) over %zu "
+                "samples; request fused position was (%.3f, %.3f) — Δ=(%.3f, %.3f) m",
+                gps_x_mean,
+                gps_y_mean,
+                recent_gps_xy_.size(),
+                req->docking_pose.position.x,
+                req->docking_pose.position.y,
+                req->docking_pose.position.x - gps_x_mean,
+                req->docking_pose.position.y - gps_y_mean);
   }
-
-  docking_pose_ = req->docking_pose;           // yaw / orientation from request
-  docking_pose_.position.x = gps_x_mean;       // position from independent GPS
-  docking_pose_.position.y = gps_y_mean;
-  docking_pose_.position.z = 0.0;
+  else
+  {
+    RCLCPP_INFO(get_logger(),
+                "Docking point set from request position (manual): (%.3f, %.3f)",
+                docking_pose_.position.x,
+                docking_pose_.position.y);
+  }
   docking_pose_set_ = true;
-
-  RCLCPP_INFO(get_logger(),
-              "Docking point captured from averaged GPS: (%.3f, %.3f) over %zu "
-              "samples; request fused position was (%.3f, %.3f) — Δ=(%.3f, %.3f) m",
-              gps_x_mean,
-              gps_y_mean,
-              recent_gps_xy_.size(),
-              req->docking_pose.position.x,
-              req->docking_pose.position.y,
-              req->docking_pose.position.x - gps_x_mean,
-              req->docking_pose.position.y - gps_y_mean);
 
   // Publish the docking pose for other nodes (e.g., behavior tree).
   geometry_msgs::msg::PoseStamped pose_msg;

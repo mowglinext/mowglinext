@@ -171,6 +171,9 @@ export function useMapFiles({
                         z: 0,
                     },
                 },
+                // Manual map-drag: use the dragged coordinates as-is (operator
+                // placed the dock marker explicitly — do NOT override with GPS).
+                use_gps_position: false,
             });
             setDockDirty(false);
         }

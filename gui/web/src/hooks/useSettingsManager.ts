@@ -288,6 +288,9 @@ export const useSettingsManager = () => {
                             orientation: {x: q.x!, y: q.y!, z: q.z!, w: q.w!},
                             position: {x: px, y: py, z: 0},
                         },
+                        // Manual settings edit: use the typed dock_pose_x/y as-is
+                        // (operator entered the value explicitly — no GPS override).
+                        use_gps_position: false,
                     });
                 } catch (e: any) {
                     notification.warning({

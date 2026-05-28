@@ -150,15 +150,19 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
 
     const writeDockPose = useCallback(
         async (px: number, py: number, yaw: number) => {
-            // Persist immediately so map_server rebuilds the dock body /
-            // corridor / exclusion polygons + keepout mask now (the dock
-            // indicator on the map page only moves once /map re-emits with
-            // the new pose, and that only happens after set_docking_point
-            // mutates map_server's state). After the API call lands,
-            // also push the new values into the form's local state so
-            // the Settings page reflects the change without needing a
-            // manual reload — no extra Save click required because the
-            // persistence already happened.
+            // "Capture current robot position": the robot is physically on the
+            // dock. use_gps_position=true tells map_server to capture the dock
+            // POSITION from the averaged independent GPS projection, NOT the px/py
+            // we send (which come from the fused pose — gauge-reset onto the old
+            // dock_pose while charging, so it would be circular). Yaw is taken
+            // from our quaternion (single-antenna GPS gives no heading).
+            //
+            // Because the stored position is the GPS one (not our px/py), we must
+            // NOT optimistically push px/py into the form — that was the bug: it
+            // showed the fused value and a later Settings "Save" would overwrite
+            // the GPS value. Instead, after the service persists, read the actual
+            // stored dock pose back from /calibration/status (which reads
+            // mowgli_robot.yaml) and reflect THAT in the form.
             const q = getQuaternionFromHeading(yaw);
             try {
                 setSettingDock(true);
@@ -167,14 +171,32 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                         orientation: {x: q.x!, y: q.y!, z: q.z!, w: q.w!},
                         position: {x: px, y: py, z: 0},
                     },
+                    use_gps_position: true,
                 });
-                onChange("dock_pose_x", roundTo(px, 3));
-                onChange("dock_pose_y", roundTo(py, 3));
-                onChange("dock_pose_yaw", roundTo(yaw, 4));
+                // Read back the value the service actually stored (GPS-averaged),
+                // not the fused px/py we sent.
+                let storedX = px;
+                let storedY = py;
+                let storedYaw = yaw;
+                try {
+                    const resp = await guiApi.request<{
+                        dock?: {dock_pose_x?: number; dock_pose_y?: number; dock_pose_yaw_rad?: number};
+                    }>({path: "/calibration/status", method: "GET", format: "json"});
+                    const d = resp.data?.dock;
+                    if (d?.dock_pose_x != null) storedX = d.dock_pose_x;
+                    if (d?.dock_pose_y != null) storedY = d.dock_pose_y;
+                    if (d?.dock_pose_yaw_rad != null) storedYaw = d.dock_pose_yaw_rad;
+                } catch {
+                    // Read-back failed; fall back to the sent values for the form.
+                    // The service still persisted the GPS value to yaml.
+                }
+                onChange("dock_pose_x", roundTo(storedX, 3));
+                onChange("dock_pose_y", roundTo(storedY, 3));
+                onChange("dock_pose_yaw", roundTo(storedYaw, 4));
                 notification.success({
-                    message: "Dock pose set",
+                    message: "Dock pose set (from GPS)",
                     description:
-                        "Persisted to mowgli_robot.yaml and map_server refreshed. The dock indicator on the map will jump to the new pose on the next /map publish.",
+                        "Captured the dock position from the averaged GPS fix and persisted to mowgli_robot.yaml. The map indicator jumps to the new pose on the next /map publish.",
                 });
             } catch (e: unknown) {
                 const message = e instanceof Error ? e.message : "Unknown error";
