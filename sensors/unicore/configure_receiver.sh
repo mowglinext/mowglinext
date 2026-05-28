@@ -844,14 +844,21 @@ query_receiver_identification() {
 
   # `VERSION` is the documented query command; `VERSIONA` is a compatible
   # fallback on receivers that accept the log/message name directly.
+  #
+  # Use a generous line budget: a receiver that is already streaming
+  # (binary/NMEA) at the probe baud can flood the buffer with many lines
+  # before the #VERSIONA reply arrives, and a 10-line window was small
+  # enough to miss it — which surfaced as "model could not be identified"
+  # and skipped the entire config on otherwise-healthy UM98x units.
   send_serial_command "VERSION"
   sleep 0.1
-  response="$(collect_serial_output 10)"
+  response="$(collect_serial_output 30)"
 
-  if [[ "$response" != *"UM980"* && "$response" != *"UM982"* && "$response" != *"#VERSIONA"* ]]; then
+  if [[ "$response" != *"UM980"* && "$response" != *"UM981"* &&
+        "$response" != *"UM982"* && "$response" != *"#VERSIONA"* ]]; then
     send_serial_command "VERSIONA"
     sleep 0.1
-    response+=$(collect_serial_output 10)
+    response+=$(collect_serial_output 30)
   fi
 
   printf '%s' "$response"
@@ -862,6 +869,8 @@ model_from_response() {
 
   if [[ "$response" == *"UM980"* ]]; then
     printf '%s\n' "UM980"
+  elif [[ "$response" == *"UM981"* ]]; then
+    printf '%s\n' "UM981"
   elif [[ "$response" == *"UM982"* ]]; then
     printf '%s\n' "UM982"
   else
@@ -936,16 +945,25 @@ signalgroup_for_model() {
 
   case "$model" in
     UM980) printf '%s\n' "CONFIG SIGNALGROUP 2" ;;
-    UM982) printf '%s\n' "CONFIG SIGNALGROUP 3 6" ;;
+    UM981|UM982) printf '%s\n' "CONFIG SIGNALGROUP 3 6" ;;
     *) return 1 ;;
   esac
 }
 
 build_base_config_commands() {
   local model="${1:?build_base_config_commands: missing model}"
-  local signalgroup
+  local signalgroup=""
 
-  signalgroup="$(signalgroup_for_model "$model")" || return 1
+  # SIGNALGROUP is the ONLY model-specific command. When the model can't be
+  # identified, fall through with an empty signalgroup so the rest of the
+  # (model-independent) rover config still applies — matching the Python
+  # reference (tools/unicore_live_validate.py). Gating the whole batch on
+  # model detection was the regression that left unidentified UM98x
+  # receivers in their default, non-RTK state with every diagnostic stale.
+  if ! signalgroup="$(signalgroup_for_model "$model")"; then
+    signalgroup=""
+    unicore_warn "receiver model '${model}' is unknown or unmapped; skipping SIGNALGROUP (set UNICORE_SIGNALGROUP_OVERRIDE to force one, e.g. 'CONFIG SIGNALGROUP 2' for UM980)."
+  fi
 
   printf '%s\n' \
     "MODE ROVER SURVEY MOW" \
@@ -953,8 +971,11 @@ build_base_config_commands() {
     "CONFIG RTK TIMEOUT 10" \
     "CONFIG RTK RELIABILITY 3 1" \
     "CONFIG DGPS TIMEOUT 600" \
-    "CONFIG UNDULATION AUTO" \
-    "${signalgroup}" \
+    "CONFIG UNDULATION AUTO"
+  if [ -n "$signalgroup" ]; then
+    printf '%s\n' "${signalgroup}"
+  fi
+  printf '%s\n' \
     "CONFIG SBAS DISABLE" \
     "CONFIG AGNSS DISABLE" \
     "CONFIG PPS DISABLE" \
@@ -1154,9 +1175,12 @@ main() {
   detected_model="${detection#*|}"
 
   if [ "$detected_model" = "unknown" ]; then
-    log "WARN: receiver model could not be identified from VERSION response." >&2
-    log "WARN: no SIGNALGROUP will be applied and SAVECONFIG is skipped." >&2
-    return 1
+    log "WARN: receiver model could not be identified from VERSION response."
+    if [ -n "$UNICORE_SIGNALGROUP_OVERRIDE" ]; then
+      log "WARN: proceeding with config; SIGNALGROUP forced via UNICORE_SIGNALGROUP_OVERRIDE='${UNICORE_SIGNALGROUP_OVERRIDE}'."
+    else
+      log "WARN: proceeding with model-independent rover config; SIGNALGROUP skipped (set UNICORE_SIGNALGROUP_OVERRIDE, e.g. 'CONFIG SIGNALGROUP 2' for UM980, to force one)."
+    fi
   fi
 
   apply_receiver_configuration "$port" "$detected_baud" "$detected_model"

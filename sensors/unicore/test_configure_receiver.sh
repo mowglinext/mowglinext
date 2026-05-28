@@ -161,9 +161,20 @@ run_scenario "UM982 already at 921600" "921600" "UM982" "921600" "0"
 assert_contains "UM982 uses SIGNALGROUP 3 6" "CONFIG SIGNALGROUP 3 6" "$COMMAND_LOG"
 assert_eq "UM982 does not resend baud config" "" "$(printf '%s' "$COMMAND_LOG" | grep -F "CONFIG COM1 921600" || true)"
 
-run_scenario "Unknown model is rejected" "115200" "unknown" "115200" "1"
-assert_eq "Unknown model skips saveconfig" "" "$(printf '%s' "$COMMAND_LOG" | grep -F "SAVECONFIG" || true)"
-assert_eq "Unknown model skips signalgroup" "" "$(printf '%s' "$COMMAND_LOG" | grep -F "CONFIG SIGNALGROUP" || true)"
+# An unidentified model must NOT abort the whole config: SIGNALGROUP is the
+# only model-specific command, so the model-independent rover config (MODE
+# ROVER, RTK timeouts, masks, LOG schedule) + SAVECONFIG still apply. Gating
+# everything on detection left healthy UM98x receivers stuck in their default
+# non-RTK state with every diagnostic stale.
+run_scenario "Unknown model still applies base config" "921600" "unknown" "921600" "0"
+assert_contains "Unknown model applies MODE ROVER" "MODE ROVER" "$COMMAND_LOG"
+assert_contains "Unknown model still saves config" "SAVECONFIG" "$COMMAND_LOG"
+assert_eq "Unknown model skips signalgroup without override" "" "$(printf '%s' "$COMMAND_LOG" | grep -F "CONFIG SIGNALGROUP" || true)"
+
+UNICORE_SIGNALGROUP_OVERRIDE="CONFIG SIGNALGROUP 2"
+run_scenario "Unknown model honours signalgroup override" "921600" "unknown" "921600" "0"
+assert_contains "Override forces signalgroup despite unknown model" "CONFIG SIGNALGROUP 2" "$COMMAND_LOG"
+UNICORE_SIGNALGROUP_OVERRIDE=""
 
 reset_profile_env
 UNICORE_PROFILE="normal"
