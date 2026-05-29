@@ -613,6 +613,22 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(200, map[string]interface{}{"message": res.Message})
 				return
 			}
+		case "reboot_board":
+			// Reboot the STM32 board (NVIC_SystemReset) — recovers a wedged
+			// firmware state (e.g. the IMU emitting NaN) without a power-cycle.
+			type TriggerRes struct {
+				Success bool   `json:"success"`
+				Message string `json:"message"`
+			}
+			var res TriggerRes
+			err = provider.CallService(c.Request.Context(), "/hardware_bridge/reboot_board", &struct{}{}, &res, "std_srvs/srv/Trigger")
+			if err == nil && !res.Success {
+				err = errors.New(res.Message)
+			}
+			if err == nil {
+				c.JSON(200, map[string]interface{}{"message": res.Message})
+				return
+			}
 		default:
 			err = errors.New("unknown command")
 		}

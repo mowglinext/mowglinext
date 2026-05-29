@@ -113,6 +113,7 @@ export const MowerStatus = () => {
     // dashboard hero card to clear it (issue #149).
     const mowerAction = useMowerAction();
     const resetEmergencyAction = mowerAction("emergency", {Emergency: 0});
+    const rebootBoardAction = mowerAction("reboot_board", {});
     const showResetEmergency =
         emergencyData.active_emergency || emergencyData.latched_emergency || isEmergency;
 
@@ -152,6 +153,15 @@ export const MowerStatus = () => {
             label: mowgliRestart.pending ? mowgliRestart.pendingLabel : "Restart Mowgli",
             disabled: mowgliRestart.pending,
             onClick: () => confirmAction("Restart Mowgli", "This will restart the MowgliNext container.", restartMowgli),
+        },
+        {
+            key: "reboot-board",
+            icon: <ReloadOutlined/>,
+            label: "Reboot Board (STM32)",
+            onClick: () => confirmAction(
+                "Reboot Board (STM32)",
+                "Resets the STM32 firmware (NVIC_SystemReset). Use to recover a wedged board — e.g. the IMU reporting NaN. Motors/blade stop during the ~1 s reset.",
+                rebootBoardAction),
         },
         {type: "divider"},
         {
