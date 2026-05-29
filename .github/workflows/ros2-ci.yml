@@ -164,6 +164,18 @@ jobs:
           restore-keys: |
             rosdep-${{ matrix.ros_distro }}-
 
+      # Only opennav_coverage_msgs (the action types) is used from the
+      # opennav_coverage submodule; the upstream server subpackages are pinned
+      # to F2C 1.2.1 and must NOT be built (they #include fields2cover.h from
+      # the v1 install). The Docker image drops the same COLCON_IGNORE markers
+      # (Dockerfile stage); mirror that here or opennav_coverage fails the build.
+      - name: COLCON_IGNORE upstream opennav_coverage subpackages
+        run: |
+          for p in opennav_coverage opennav_coverage_bt opennav_coverage_demo \
+                   opennav_coverage_navigator opennav_row_coverage; do
+            touch "src/opennav_coverage/$p/COLCON_IGNORE" 2>/dev/null || true
+          done
+
       - name: Install rosdep dependencies
         run: |
           source /opt/ros/${{ matrix.ros_distro }}/setup.bash
