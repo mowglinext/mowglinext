@@ -173,13 +173,35 @@ void MapServerNode::on_get_remaining_area_polygon(
         best = &notched[ni];
       }
     }
-    // Replace the outer ring with the notched one, preserving any holes
-    // already punched (operator obstacles processed earlier).
+    if (notched.size() > 1)
+    {
+      // The notch pinched the area into multiple pieces; we keep only the
+      // largest. Log it so a future dock geometry that splits off a
+      // genuinely-reachable lobe is observable rather than silent.
+      RCLCPP_WARN(get_logger(),
+                  "remaining_polygon: exclusion split the area into %zu pieces; "
+                  "keeping the largest (%.2f m²).",
+                  notched.size(), bg::area(*best));
+    }
+    // Replace the outer ring with the notched one, then re-attach the holes
+    // punched earlier — but ONLY those still strictly inside the new outer.
+    // The notch may have removed or split off the region a previous hole sat
+    // in; re-adding such a hole would make the polygon non-simple again (the
+    // exact INTERNAL_F2C_ERROR this function exists to avoid).
     auto saved_inners = original.inners();
     original = *best;
+    BgPolygon new_outer;
+    new_outer.outer() = original.outer();
+    bg::correct(new_outer);
     for (auto& ir : saved_inners)
     {
-      original.inners().push_back(std::move(ir));
+      BgPolygon hole;
+      hole.outer().assign(ir.begin(), ir.end());
+      bg::correct(hole);
+      if (bg::within(hole, new_outer))
+      {
+        original.inners().push_back(std::move(ir));
+      }
     }
   };
 
