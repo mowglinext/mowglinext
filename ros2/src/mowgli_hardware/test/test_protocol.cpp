@@ -79,6 +79,11 @@ TEST(ProtocolSizes, CmdVelPacketSize)
   EXPECT_EQ(sizeof(LlCmdVel), 11u);
 }
 
+TEST(ProtocolSizes, RebootPacketSize)
+{
+  EXPECT_EQ(sizeof(LlReboot), 4u);  // type(1) + magic(1) + crc(2)
+}
+
 // ---------------------------------------------------------------------------
 // Packet ID consistency (ll_datatypes.hpp enum matches mowgli_protocol.h)
 // ---------------------------------------------------------------------------
@@ -94,6 +99,8 @@ TEST(ProtocolIds, PacketIdValues)
   EXPECT_EQ(PACKET_ID_LL_HEARTBEAT, 0x42);
   EXPECT_EQ(PACKET_ID_LL_HIGH_LEVEL_STATE, 0x43);
   EXPECT_EQ(PACKET_ID_LL_CMD_VEL, 0x50);
+  EXPECT_EQ(PACKET_ID_LL_CMD_BLADE, 0x51);
+  EXPECT_EQ(PACKET_ID_LL_REBOOT, 0x52);
 }
 
 // ---------------------------------------------------------------------------

@@ -82,6 +82,12 @@ extern "C" {
 /** Blade motor control packet (on/off + direction). */
 #define PKT_ID_CMD_BLADE   0x51u
 
+/** Reboot request (Host -> Firmware). Triggers NVIC_SystemReset when the
+ *  payload magic byte matches PKT_REBOOT_MAGIC — recovers a wedged board
+ *  (e.g. IMU emitting NaN) without a manual power-cycle. */
+#define PKT_ID_REBOOT      0x52u
+#define PKT_REBOOT_MAGIC   0xB0u
+
 /* ---------------------------------------------------------------------------
  * status_bitmask bit definitions  (pkt_status_t::status_bitmask)
  * ---------------------------------------------------------------------------*/
@@ -282,6 +288,20 @@ typedef struct {
     uint8_t  blade_dir; /**< 0=normal, 1=reverse */
     uint16_t crc;       /**< CRC-16 CCITT over preceding bytes */
 } pkt_cmd_blade_t;
+
+/**
+ * @brief Reboot request packet — Host -> Firmware (PKT_ID_REBOOT = 0x52).
+ *
+ * Triggers NVIC_SystemReset, but only when magic == PKT_REBOOT_MAGIC, so a
+ * corrupt/misframed packet cannot accidentally reset the board.
+ *
+ * Wire size: 4 bytes.
+ */
+typedef struct {
+    uint8_t  type;   /**< PKT_ID_REBOOT */
+    uint8_t  magic;  /**< Must equal PKT_REBOOT_MAGIC (0xB0) */
+    uint16_t crc;    /**< CRC-16 CCITT over preceding bytes */
+} pkt_reboot_t;
 
 /**
  * @brief Blade motor status packet — Firmware -> Host (PKT_ID_BLADE_STATUS = 0x05).

@@ -51,7 +51,13 @@ enum PacketId : uint8_t
   PACKET_ID_LL_CMD_VEL = 0x50,  ///< Pi → STM32: velocity command (extension)
   PACKET_ID_LL_BLADE_STATUS = 0x05,  ///< STM32 → Pi: blade motor status
   PACKET_ID_LL_CMD_BLADE = 0x51,  ///< Pi → STM32: blade motor control
+  PACKET_ID_LL_REBOOT = 0x52,  ///< Pi → STM32: reboot the board (NVIC_SystemReset)
 };
+
+/// Magic byte in LlReboot — a dedicated reboot packet plus this confirmation
+/// byte prevents a corrupt/misframed packet from accidentally rebooting the
+/// board (the consequence is a full firmware restart).
+static constexpr uint8_t kLlRebootMagic = 0xB0;
 
 // ---------------------------------------------------------------------------
 // Status bitmask constants (ll_status::status_bitmask)
@@ -196,6 +202,19 @@ struct LlCmdBlade
   uint8_t type;  ///< Must equal PACKET_ID_LL_CMD_BLADE
   uint8_t blade_on;  ///< 1=start, 0=stop
   uint8_t blade_dir;  ///< 0=normal, 1=reverse
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+
+/**
+ * @brief Reboot request sent by the Pi (PACKET_ID_LL_REBOOT = 0x52).
+ * The firmware reboots (NVIC_SystemReset) only when magic == kLlRebootMagic.
+ * Used to recover the board from a wedged state (e.g. the IMU emitting NaN)
+ * without a manual power-cycle.
+ */
+struct LlReboot
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_REBOOT
+  uint8_t magic;  ///< Must equal kLlRebootMagic (0xB0)
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
 

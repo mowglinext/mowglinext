@@ -274,6 +274,16 @@ private:
         {
           on_emergency_stop(req, res);
         });
+
+    // Reboot the STM32 board (NVIC_SystemReset). Recovers a wedged firmware
+    // state — e.g. the IMU emitting NaN — without a manual power-cycle.
+    srv_reboot_board_ = create_service<std_srvs::srv::Trigger>(
+        "~/reboot_board",
+        [this](const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+               std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+        {
+          on_reboot_board(req, res);
+        });
   }
 
   void open_serial_port()
@@ -1309,6 +1319,32 @@ private:
     send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt), sizeof(LlCmdBlade) - sizeof(uint16_t));
   }
 
+  void send_reboot_command()
+  {
+    LlReboot pkt{};
+    pkt.type = PACKET_ID_LL_REBOOT;
+    pkt.magic = kLlRebootMagic;
+    send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt), sizeof(LlReboot) - sizeof(uint16_t));
+  }
+
+  void on_reboot_board(const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                       std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+  {
+    if (!serial_ || !serial_->is_open())
+    {
+      res->success = false;
+      res->message = "serial port not open";
+      return;
+    }
+    RCLCPP_WARN(get_logger(), "reboot_board: sending NVIC_SystemReset request to STM32.");
+    // Fire twice — a single packet lost to USB jitter shouldn't silently
+    // no-op a deliberate recovery action.
+    send_reboot_command();
+    send_reboot_command();
+    res->success = true;
+    res->message = "reboot request sent; board will reset within ~1 s";
+  }
+
   void handle_blade_status(const uint8_t* data, std::size_t len)
   {
     if (len < sizeof(LlBladeStatus))
@@ -1469,6 +1505,7 @@ private:
 
   rclcpp::Service<mowgli_interfaces::srv::MowerControl>::SharedPtr srv_mower_control_;
   rclcpp::Service<mowgli_interfaces::srv::EmergencyStop>::SharedPtr srv_emergency_stop_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_reboot_board_;
 
   rclcpp::TimerBase::SharedPtr timer_read_;
   rclcpp::TimerBase::SharedPtr timer_heartbeat_;

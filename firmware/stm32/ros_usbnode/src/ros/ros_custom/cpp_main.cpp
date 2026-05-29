@@ -295,6 +295,21 @@ static void on_cmd_blade(const uint8_t *data, size_t len)
     blade_direction = pkt->blade_dir;
 }
 
+/* Host -> Firmware reboot request. Sets reboot_flag so chatter_handler issues
+ * NVIC_SystemReset on its next tick (lets the current packet/ISR unwind first).
+ * Gated on the magic byte so a corrupt/misframed packet can't reset the board. */
+static void on_reboot(const uint8_t *data, size_t len)
+{
+    if (len < sizeof(pkt_reboot_t) - 2u) {
+        return;
+    }
+    const pkt_reboot_t *pkt = (const pkt_reboot_t *)data;
+    if (pkt->magic == PKT_REBOOT_MAGIC) {
+        debug_printf("reboot requested by host\r\n");
+        reboot_flag = true;
+    }
+}
+
 /* on_hl_state blade LED feedback (moved out of on_hl_state for clarity) */
 static void update_blade_led(void)
 {
@@ -717,6 +732,7 @@ extern "C" void init_ROS()
     mowgli_comms_register_handler(PKT_ID_CMD_VEL,   on_cmd_vel);
     mowgli_comms_register_handler(PKT_ID_HL_STATE,  on_hl_state);
     mowgli_comms_register_handler(PKT_ID_CMD_BLADE, on_cmd_blade);
+    mowgli_comms_register_handler(PKT_ID_REBOOT,    on_reboot);
 
     // Initialise timers
     NBT_init(&led_nbt,     LED_NBT_TIME_MS);
