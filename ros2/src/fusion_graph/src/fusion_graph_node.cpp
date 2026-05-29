@@ -187,6 +187,9 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   cog_flip_recovery_enabled_ = declare_parameter<bool>("cog_flip_recovery_enabled", true);
   cog_flip_threshold_rad_ = declare_parameter<double>("cog_flip_threshold_rad", 2.618);
   cog_flip_consecutive_n_ = declare_parameter<int>("cog_flip_consecutive_n", 3);
+  cog_flip_require_rtk_ = declare_parameter<bool>("cog_flip_require_rtk", true);
+  cog_flip_min_interval_s_ = declare_parameter<double>("cog_flip_min_interval_s", 10.0);
+  cog_flip_consistency_rad_ = declare_parameter<double>("cog_flip_consistency_rad", 0.52);
 
   // ── Magnetometer (off by default) ───────────────────────────────
   // Motors near the chassis induce a heading-dependent bias on the
@@ -1011,15 +1014,43 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
   // it faces backwards.
   if (cog_flip_recovery_enabled_ && graph_->IsInitialized())
   {
+    // Only trust the COG for a flip recovery when it is GPS-grounded
+    // (RTK-Fixed fresh). With cog_to_imu's straight-baseline gate the COGs
+    // that arrive are already clean; requiring RTK-Fixed avoids snapping the
+    // yaw onto a Float-era COG.
+    const bool rtk_fresh =
+        !cog_flip_require_rtk_ ||
+        (last_rtk_fixed_stamp_ &&
+         (this->now() - *last_rtk_fixed_stamp_).seconds() < scan_yield_timeout_s_);
     auto snap = graph_->LatestSnapshot();
-    if (snap)
+    if (!rtk_fresh || !snap)
+    {
+      cog_flip_count_ = 0;
+      cog_flip_prev_yaw_.reset();
+    }
+    else
     {
       const double d = yaw - snap->pose.theta();
       const double err = std::fabs(std::atan2(std::sin(d), std::cos(d)));
       if (err > cog_flip_threshold_rad_)
       {
-        if (++cog_flip_count_ >= cog_flip_consecutive_n_)
+        // Consecutive flipped COGs must agree WITH EACH OTHER, else the COG
+        // is jittering and snapping to it would amplify rather than fix.
+        bool consistent = true;
+        if (cog_flip_prev_yaw_)
         {
+          const double dd = yaw - *cog_flip_prev_yaw_;
+          consistent =
+              std::fabs(std::atan2(std::sin(dd), std::cos(dd))) < cog_flip_consistency_rad_;
+        }
+        cog_flip_count_ = consistent ? (cog_flip_count_ + 1) : 1;
+        cog_flip_prev_yaw_ = yaw;
+        const bool rate_ok =
+            !last_flip_recovery_stamp_ ||
+            (this->now() - *last_flip_recovery_stamp_).seconds() > cog_flip_min_interval_s_;
+        if (cog_flip_count_ >= cog_flip_consecutive_n_ && rate_ok)
+        {
+          last_flip_recovery_stamp_ = this->now();
           const gtsam::Pose2 anchor(snap->pose.x(), snap->pose.y(), yaw);
           // Tight yaw (1°) — we are deliberately overriding the flipped
           // estimate with the physics-grounded COG heading. Keep xy at its
@@ -1050,6 +1081,7 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
       else
       {
         cog_flip_count_ = 0;
+        cog_flip_prev_yaw_.reset();
       }
     }
   }

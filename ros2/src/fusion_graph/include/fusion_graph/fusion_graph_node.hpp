@@ -214,6 +214,16 @@ private:
   int cog_flip_consecutive_n_ = 3;
   int cog_flip_count_ = 0;
   uint64_t cog_flip_recoveries_ = 0;  // diagnostic counter
+  // Robustness gates so the recovery is a reliable safety net, not an
+  // amplifier (it fired repeatedly on garbage COG during an FTC oscillation,
+  // field 2026-05-29): require RTK-Fixed fresh (COG GPS-grounded), require the
+  // consecutive flipped COGs to agree WITH EACH OTHER (so a jittering COG
+  // can't drive it), and rate-limit re-fires.
+  bool cog_flip_require_rtk_ = true;
+  double cog_flip_min_interval_s_ = 10.0;
+  double cog_flip_consistency_rad_ = 0.52;  // ~30°
+  std::optional<double> cog_flip_prev_yaw_;
+  std::optional<rclcpp::Time> last_flip_recovery_stamp_;
   // True when seed_xy_ was set from an RTK-Fixed fix (carr_soln=2).
   // Drives the prior sigma at Initialize: tight (sub-cm) when set,
   // configured default (cm-decimetre) otherwise. Without this the
