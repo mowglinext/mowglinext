@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -291,6 +293,28 @@ func TestGetSettingsSchema_NoUpstreamNoLocal(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
+func TestLocalSettingsSchema_AllowsUnicoreProtocol(t *testing.T) {
+	resetSchemaCache()
+
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+
+	schemaPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "asserts", "mower_config.schema.json")
+	content, err := os.ReadFile(schemaPath)
+	require.NoError(t, err)
+
+	var schema map[string]any
+	require.NoError(t, json.Unmarshal(content, &schema))
+
+	props := schema["properties"].(map[string]any)
+	important := props["important_settings"].(map[string]any)
+	importantProps := important["properties"].(map[string]any)
+	gpsProtocol := importantProps["gps_protocol"].(map[string]any)
+	enumValues := gpsProtocol["enum"].([]any)
+
+	assert.Contains(t, enumValues, "UNICORE")
+}
+
 func TestApplyMowgliOverlay(t *testing.T) {
 	schema := map[string]any{
 		"type": "object",
@@ -489,6 +513,38 @@ func TestPostSettingsYAML_MergesExisting(t *testing.T) {
 	assert.Contains(t, string(content), "OM_EXISTING")
 	assert.Contains(t, string(content), "keep_me")
 	assert.Contains(t, string(content), "99.999")
+}
+
+func TestPostSettingsYAML_PreservesExistingUnicoreProtocolWhenPayloadOmitsIt(t *testing.T) {
+	yamlFile := createTempYAMLFile(t, `mowgli:
+  ros__parameters:
+    gps_protocol: UNICORE
+    gps_port: /dev/serial/by-id/usb-Unicore_UM980
+    gps_baudrate: 921600
+    gps_timeout_sec: 5
+`)
+
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+
+	router := setupSettingsRouter(db)
+
+	payload := map[string]any{
+		"gps_timeout_sec": 12,
+	}
+	body, _ := json.Marshal(payload)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/yaml", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	content, err := os.ReadFile(yamlFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "gps_protocol: UNICORE")
+	assert.Contains(t, string(content), "gps_timeout_sec: 12")
 }
 
 func TestPostSettingsYAML_InvalidJSON(t *testing.T) {

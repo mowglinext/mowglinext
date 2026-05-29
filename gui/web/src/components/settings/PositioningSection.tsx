@@ -3,18 +3,32 @@ import { Alert, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space,
 import { GlobalOutlined, WifiOutlined } from "@ant-design/icons";
 import { useApi } from "../../hooks/useApi.ts";
 import { App } from "antd";
+import type { GnssCrossCheck } from "../../hooks/useDiagnosticsSnapshot.ts";
+import { GnssRuntimeSummary } from "../GnssRuntimeSummary.tsx";
+import {
+    EDITABLE_PROTOCOL_OPTIONS,
+    isRuntimeUnicore,
+    resolveDisplayedGpsBaud,
+    resolveDisplayedGpsPort,
+    resolveDisplayedGpsProtocol,
+} from "../../utils/gnssRuntime.ts";
 
 const { Text, Paragraph } = Typography;
 
 type Props = {
     values: Record<string, any>;
     onChange: (key: string, value: any) => void;
+    runtimeGnss?: GnssCrossCheck | null;
 };
 
-export const PositioningSection: React.FC<Props> = ({ values, onChange }) => {
+export const PositioningSection: React.FC<Props> = ({ values, onChange, runtimeGnss }) => {
     const guiApi = useApi();
     const { notification } = App.useApp();
     const [datumLoading, setDatumLoading] = useState(false);
+    const runtimeUnicore = isRuntimeUnicore(runtimeGnss);
+    const displayedProtocol = resolveDisplayedGpsProtocol(values.gps_protocol, runtimeGnss);
+    const displayedPort = resolveDisplayedGpsPort(values.gps_port, runtimeGnss);
+    const displayedBaud = resolveDisplayedGpsBaud(values.gps_baudrate, runtimeGnss);
 
     const setDatumFromGps = async () => {
         setDatumLoading(true);
@@ -88,22 +102,33 @@ export const PositioningSection: React.FC<Props> = ({ values, onChange }) => {
             </Card>
 
             {/* Serial link */}
+            <GnssRuntimeSummary gnss={runtimeGnss} />
+
             <Card size="small" title="GPS Serial Link" style={{ marginBottom: 16 }}>
                 <Form layout="vertical" size="small">
                     <Row gutter={[16, 0]}>
                         <Col xs={24} sm={12}>
-                            <Form.Item label="Device Port" tooltip="Serial device path inside the GPS container — udev maps the USB receiver to this path">
+                            <Form.Item
+                                label="Device Port"
+                                tooltip="Serial device path inside the GPS container — udev maps the USB receiver to this path"
+                                extra={runtimeUnicore ? "Runtime-managed by the active Unicore backend." : undefined}
+                            >
                                 <Input
-                                    value={values.gps_port ?? "/dev/gps"}
+                                    value={displayedPort}
                                     onChange={(e) => onChange("gps_port", e.target.value)}
                                     placeholder="/dev/gps"
+                                    disabled={runtimeUnicore}
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={24} sm={12}>
-                            <Form.Item label="Baud Rate" tooltip="Serial baud rate. F9P defaults to 460800; LC29H factory-set to 115200.">
+                            <Form.Item
+                                label="Baud Rate"
+                                tooltip="Serial baud rate. F9P defaults to 460800; LC29H factory-set to 115200."
+                                extra={runtimeUnicore ? "Runtime-managed by the active Unicore backend." : undefined}
+                            >
                                 <Select
-                                    value={values.gps_baudrate ?? 460800}
+                                    value={displayedBaud}
                                     onChange={(v) => onChange("gps_baudrate", v)}
                                     options={[
                                         { value: 9600, label: "9600" },
@@ -114,6 +139,7 @@ export const PositioningSection: React.FC<Props> = ({ values, onChange }) => {
                                         { value: 460800, label: "460800" },
                                         { value: 921600, label: "921600" },
                                     ]}
+                                    disabled={runtimeUnicore}
                                 />
                             </Form.Item>
                         </Col>
@@ -126,14 +152,18 @@ export const PositioningSection: React.FC<Props> = ({ values, onChange }) => {
                 <Form layout="vertical" size="small">
                     <Row gutter={[16, 0]}>
                         <Col xs={12} sm={8}>
-                            <Form.Item label="GPS Protocol" tooltip="UBX for u-blox receivers, NMEA for generic">
+                            <Form.Item
+                                label="GPS Protocol"
+                                tooltip="UBX for u-blox receivers, NMEA for generic, UNICORE for the dedicated Unicore driver."
+                                extra={runtimeUnicore ? "UNICORE is selected by the installer/runtime for this mower." : undefined}
+                            >
                                 <Select
-                                    value={values.gps_protocol ?? "UBX"}
+                                    value={displayedProtocol}
                                     onChange={(v) => onChange("gps_protocol", v)}
-                                    options={[
-                                        { value: "UBX", label: "UBX (u-blox)" },
-                                        { value: "NMEA", label: "NMEA (generic)" },
-                                    ]}
+                                    options={runtimeUnicore
+                                        ? [{ value: "UNICORE", label: "UNICORE (Unicore UM96x/UM98x driver)" }]
+                                        : [...EDITABLE_PROTOCOL_OPTIONS]}
+                                    disabled={runtimeUnicore}
                                 />
                             </Form.Item>
                         </Col>

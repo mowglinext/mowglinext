@@ -28,6 +28,15 @@ import {
     GPS_RESTART_KEYS,
 } from "../utils/containers.ts";
 import { useContainerRestart } from "../hooks/useContainerRestart.ts";
+import { useDiagnosticsSnapshot, type GnssCrossCheck } from "../hooks/useDiagnosticsSnapshot.ts";
+import { GnssRuntimeSummary } from "../components/GnssRuntimeSummary.tsx";
+import {
+    EDITABLE_PROTOCOL_OPTIONS,
+    isRuntimeUnicore,
+    resolveDisplayedGpsPort,
+    resolveDisplayedGpsProtocol,
+    sanitizeYamlGnssValues,
+} from "../utils/gnssRuntime.ts";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -216,10 +225,13 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
 
 // ── GPS Configuration step (receiver + NTRIP, no datum) ─────────────────
 
-type GpsStepProps = RobotModelStepProps & { gpsRestarting?: boolean };
+type GpsStepProps = RobotModelStepProps & { gpsRestarting?: boolean; runtimeGnss?: GnssCrossCheck | null };
 
-const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting }) => {
+const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, runtimeGnss }) => {
     const ntripEnabled = values.ntrip_enabled ?? true;
+    const runtimeUnicore = isRuntimeUnicore(runtimeGnss);
+    const displayedProtocol = resolveDisplayedGpsProtocol(values.gps_protocol, runtimeGnss);
+    const displayedPort = resolveDisplayedGpsPort(values.gps_port, runtimeGnss);
 
     return (
         <div style={{ maxWidth: 640, margin: "0 auto" }}>
@@ -242,26 +254,35 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting }) =>
                 />
             )}
 
+            <GnssRuntimeSummary gnss={runtimeGnss} title="Runtime GNSS Driver" />
+
             <Card size="small" title={<Space><WifiOutlined /> GPS Receiver</Space>} style={{ marginBottom: 16 }}>
                 <Form layout="vertical">
                     <Row gutter={16}>
                         <Col xs={12}>
-                            <Form.Item label="Protocol">
+                            <Form.Item
+                                label="Protocol"
+                                extra={runtimeUnicore ? "UNICORE is selected by the installer/runtime for this mower." : undefined}
+                            >
                                 <Select
-                                    value={values.gps_protocol ?? "UBX"}
+                                    value={displayedProtocol}
                                     onChange={(v) => onChange("gps_protocol", v)}
-                                    options={[
-                                        { label: "UBX (u-blox)", value: "UBX" },
-                                        { label: "NMEA", value: "NMEA" },
-                                    ]}
+                                    options={runtimeUnicore
+                                        ? [{ label: "UNICORE (Unicore UM96x/UM98x driver)", value: "UNICORE" }]
+                                        : [...EDITABLE_PROTOCOL_OPTIONS]}
+                                    disabled={runtimeUnicore}
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={12}>
-                            <Form.Item label="Serial Port">
+                            <Form.Item
+                                label="Serial Port"
+                                extra={runtimeUnicore ? "Runtime-managed by the active Unicore backend." : undefined}
+                            >
                                 <Input
-                                    value={values.gps_port ?? "/dev/gps"}
+                                    value={displayedPort}
                                     onChange={(e) => onChange("gps_port", e.target.value)}
+                                    disabled={runtimeUnicore}
                                 />
                             </Form.Item>
                         </Col>
@@ -874,6 +895,7 @@ const OnboardingWizard: React.FC = () => {
     const isMobile = useIsMobile();
     const { values: savedValues, saveValues, loading } = useSettingsSchema();
     const guiApi = useApi();
+    const { snapshot } = useDiagnosticsSnapshot();
     const [currentStep, setCurrentStep] = useState(0);
     const [localValues, setLocalValues] = useState<Record<string, any>>({});
     const [saving, setSaving] = useState(false);
@@ -884,6 +906,7 @@ const OnboardingWizard: React.FC = () => {
         skipReadinessProbe: true,
     });
     const gpsRestarting = gpsRestart.pending;
+    const runtimeGnss = snapshot?.cross_checks?.gnss ?? null;
     // Snapshot of saved GPS-related values at the time the user enters
     // step 2 — used to detect whether the GPS container needs an auto-
     // restart when leaving the step.
@@ -933,7 +956,7 @@ const OnboardingWizard: React.FC = () => {
             (currentStep >= 3 && currentStep <= STEP_DATUM);
         if (isConfigStep) {
             setSaving(true);
-            await saveValues(localValues);
+            await saveValues(sanitizeYamlGnssValues(localValues, runtimeGnss));
             setSaving(false);
         }
         // Leaving the GPS step: if any GPS/NTRIP/serial field actually
@@ -992,7 +1015,7 @@ const OnboardingWizard: React.FC = () => {
                 {currentStep === 0 && <WelcomeStep onNext={handleNext} />}
                 {currentStep === 1 && <RobotModelStep values={localValues} onChange={handleChange} />}
                 {currentStep === 2 && <FirmwareStep onNext={handleNext} />}
-                {currentStep === 3 && <GpsStep values={localValues} onChange={handleChange} gpsRestarting={gpsRestarting} />}
+                {currentStep === 3 && <GpsStep values={localValues} onChange={handleChange} gpsRestarting={gpsRestarting} runtimeGnss={runtimeGnss} />}
                 {currentStep === 4 && <SensorStep values={localValues} onChange={handleChange} />}
                 {currentStep === 5 && <ImuYawStep values={localValues} onChange={handleChange} />}
                 {currentStep === 6 && <DatumStep values={localValues} onChange={handleChange} gpsRestarting={gpsRestarting} />}

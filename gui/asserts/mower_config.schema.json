@@ -213,7 +213,7 @@
         "gps_protocol": {
           "type": "string",
           "title": "GPS Protocol",
-          "enum": ["UBX", "NMEA"],
+          "enum": ["UBX", "NMEA", "UNICORE"],
           "default": "UBX",
           "description": "Protocol used by your GPS receiver."
         },

@@ -5,6 +5,8 @@ import { dirtyKeysRequireGpsRestart, restartGps } from "../utils/containers.ts";
 import { useContainerRestart } from "./useContainerRestart.ts";
 import { getQuaternionFromHeading } from "../utils/map.tsx";
 
+type SaveTransform = (payload: Record<string, any>) => Record<string, any>;
+
 export type SettingsSection =
     | "hardware"
     | "positioning"
@@ -144,7 +146,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
     },
 ];
 
-export const useSettingsManager = () => {
+export const useSettingsManager = (saveTransform?: SaveTransform) => {
     const guiApi = useApi();
     const { notification } = App.useApp();
     const [savedValues, setSavedValues] = useState<Record<string, any>>({});
@@ -251,9 +253,12 @@ export const useSettingsManager = () => {
                     dirtyPayload[key] = localValues[key];
                 }
             }
-            const res = await guiApi.settings.yamlCreate(dirtyPayload);
+            const payloadToSave = saveTransform ? saveTransform(dirtyPayload) : dirtyPayload;
+            const res = await guiApi.settings.yamlCreate(payloadToSave);
             if (res.error) throw new Error((res.error as any).error);
-            setSavedValues({ ...localValues });
+            const persistedValues = { ...localValues, ...payloadToSave };
+            setSavedValues(persistedValues);
+            setLocalValues(persistedValues);
             setRestartRequired(true);
             notification.success({
                 message: "Settings saved",
@@ -305,7 +310,7 @@ export const useSettingsManager = () => {
         } finally {
             setSaving(false);
         }
-    }, [localValues, dirtyKeys, guiApi, notification, gpsRestart]);
+    }, [localValues, dirtyKeys, guiApi, notification, gpsRestart, saveTransform]);
 
     const revert = useCallback(() => {
         setLocalValues({ ...savedValues });

@@ -24,6 +24,8 @@ import { SafetySection } from "../components/settings/SafetySection.tsx";
 import { NavigationSection } from "../components/settings/NavigationSection.tsx";
 import { RainSection } from "../components/settings/RainSection.tsx";
 import { AdvancedSection } from "../components/settings/AdvancedSection.tsx";
+import { useDiagnosticsSnapshot } from "../hooks/useDiagnosticsSnapshot.ts";
+import { sanitizeYamlGnssValues } from "../utils/gnssRuntime.ts";
 
 const { Text } = Typography;
 
@@ -32,7 +34,12 @@ export const SettingsPage = () => {
     const isMobile = useIsMobile();
     const { colors } = useThemeMode();
     const [activeSection, setActiveSection] = useState<SettingsSection>("hardware");
-
+    const { snapshot } = useDiagnosticsSnapshot();
+    const runtimeGnss = snapshot?.cross_checks?.gnss ?? null;
+    const sanitizeGnssPayload = useCallback(
+        (payload: Record<string, any>) => sanitizeYamlGnssValues(payload, runtimeGnss),
+        [runtimeGnss],
+    );
     const {
         sections,
         values,
@@ -49,7 +56,7 @@ export const SettingsPage = () => {
         isSectionDirty,
         save,
         revert,
-    } = useSettingsManager();
+    } = useSettingsManager(sanitizeGnssPayload);
 
     // Long-running: container restart + rosbridge reconnect. Disable button
     // until ROS2 is reachable again to avoid duplicate-click restart storms.
@@ -68,7 +75,7 @@ export const SettingsPage = () => {
             case "hardware":
                 return <HardwareSection values={values} onChange={handleChange} onBulkChange={handleBulkChange} />;
             case "positioning":
-                return <PositioningSection values={values} onChange={handleChange} />;
+                return <PositioningSection values={values} onChange={handleChange} runtimeGnss={runtimeGnss} />;
             case "sensors":
                 return <SensorsSection values={values} onChange={handleChange} />;
             case "localization":
