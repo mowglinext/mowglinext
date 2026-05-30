@@ -15,12 +15,6 @@
           type="text/css">
     <title>MowgliNext</title>
 <style>
-    /* Hide Beamer's default floating selector everywhere -- the in-app
-       NotificationBell in the header is the dedicated notification surface
-       and Beamer's bottom-right red badge competes with it visually. The
-       Beamer script is still loaded and can be invoked programmatically via
-       Beamer.show() if a changelog entry-point is needed in the future. */
-    .beamer_defaultBeamerSelector { display: none !important; }
     body {
         margin: 0;
         padding: 0;
@@ -42,11 +36,5 @@
 <body>
 <div id="root"></div>
 <script type="module" src="/src/main.tsx"></script>
-<script>
-    var beamer_config = {
-        product_id: 'dRSYRRqK59491',
-    };
-</script>
-<script type="text/javascript" src="https://app.getbeamer.com/js/beamer-embed.js" defer="defer"></script>
 </body>
 </html>
