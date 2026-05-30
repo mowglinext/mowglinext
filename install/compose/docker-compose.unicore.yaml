@@ -99,6 +99,8 @@ services:
       - /dev:/dev
       - ./docker/config/mowgli:/config:ro
       - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
+      # Persistent state for Unicore first-run reset marker.
+      # TODO: move to a dedicated mowgli_state volume.
       - mowgli_maps:/state
 
     restart: unless-stopped
