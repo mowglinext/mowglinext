@@ -11,10 +11,13 @@ interface DashTileProps {
   accent?: string;
   hint?: string;
   trail?: number[];
+  /** Optional domain-specific glyph (battery, gps bars, tach, thermometer);
+   *  takes precedence over `trail` when provided. */
+  visual?: ReactNode;
   compact?: boolean;
 }
 
-export function DashTile({icon, label, value, unit, accent, hint, trail, compact}: DashTileProps) {
+export function DashTile({icon, label, value, unit, accent, hint, trail, visual, compact}: DashTileProps) {
   const {colors} = useThemeMode();
   const tileAccent = accent ?? colors.accent;
   return (
@@ -39,12 +42,12 @@ export function DashTile({icon, label, value, unit, accent, hint, trail, compact
         </div>
         {unit && <div style={{fontSize: compact ? 11 : 13, color: colors.textDim, fontWeight: 500}}>{unit}</div>}
       </div>
-      {trail && (
+      {visual ?? (trail && (
         <Sparkline
           data={trail} width={compact ? 120 : 160} height={compact ? 18 : 22}
           stroke={tileAccent} fill={`${tileAccent}22`} strokeWidth={1.8}
         />
-      )}
+      ))}
       {hint && <div style={{fontSize: compact ? 10 : 11, color: colors.textMuted}}>{hint}</div>}
     </DashCard>
   );

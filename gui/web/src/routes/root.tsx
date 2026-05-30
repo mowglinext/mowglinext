@@ -1,7 +1,9 @@
 import {Outlet, useMatches, useNavigate} from "react-router-dom";
 import {Layout} from "antd";
 import React, {useCallback, useEffect, useState} from "react";
+import {AnimatePresence, motion} from "framer-motion";
 import {MowerStatus} from "../components/MowerStatus.tsx";
+import {LiveStatusStrip} from "../components/LiveStatusStrip.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {useIOSInstallPrompt} from "../hooks/useIOSInstallPrompt";
 import {IOSInstallBanner} from "../components/IOSInstallBanner.tsx";
@@ -54,14 +56,33 @@ const pageSubtitles: Record<string, string> = {
   '/statistics': 'Lifetime data',
 };
 
+const PIN_STORAGE_KEY = 'mowglinext-sidebar-pinned';
+
+function getInitialPinned(): boolean {
+  try {
+    const stored = localStorage.getItem(PIN_STORAGE_KEY);
+    if (stored === 'true' || stored === 'false') return stored === 'true';
+  } catch { /* ignore */ }
+  // Default to collapsed -- users opt in to pinning via the toggle once the
+  // sidebar is open. Avoids surprising layout changes for existing users and
+  // keeps the test harness's default-collapsed assertion intact.
+  return false;
+}
+
 export default function Root() {
   const {mode, toggleMode, colors} = useThemeMode();
   const route = useMatches();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [railExpanded, setRailExpanded] = useState(false);
+  const [pinned, setPinned] = useState(getInitialPinned);
+  const [hovering, setHovering] = useState(false);
+  const railExpanded = pinned || hovering;
   const {showPrompt: showInstallPrompt, dismiss: dismissInstallPrompt} = useIOSInstallPrompt();
+
+  useEffect(() => {
+    try { localStorage.setItem(PIN_STORAGE_KEY, pinned ? 'true' : 'false'); } catch { /* ignore */ }
+  }, [pinned]);
 
   const [configChecked, setConfigChecked] = useState(false);
   useEffect(() => {
@@ -104,6 +125,7 @@ export default function Root() {
         overflow: 'hidden',
         fontFamily: FONT,
       }}>
+        <LiveStatusStrip/>
         {/* Mobile Header */}
         <header style={{
           display: 'flex',
@@ -213,7 +235,17 @@ export default function Root() {
 
         {/* Content */}
         <main style={{flex: 1, overflow: 'auto', padding: '8px 12px 0', minHeight: 0}}>
-          <Outlet/>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={currentPath}
+              initial={{opacity: 0, y: 8}}
+              animate={{opacity: 1, y: 0}}
+              exit={{opacity: 0, y: -4}}
+              transition={{duration: 0.18, ease: 'easeOut'}}
+            >
+              <Outlet/>
+            </motion.div>
+          </AnimatePresence>
         </main>
 
         {/* Bottom Tab Bar */}
@@ -272,8 +304,8 @@ export default function Root() {
       overflow: 'hidden', fontFamily: FONT,
     }}>
       <nav
-        onMouseEnter={() => setRailExpanded(true)}
-        onMouseLeave={() => setRailExpanded(false)}
+        onMouseEnter={() => setHovering(true)}
+        onMouseLeave={() => setHovering(false)}
         style={{
           width: railExpanded ? 200 : 60,
           minWidth: railExpanded ? 200 : 60,
@@ -308,12 +340,32 @@ export default function Root() {
             <IconMower size={18}/>
           </div>
           {railExpanded && (
-            <span style={{
-              fontSize: 18, fontWeight: 700, color: colors.text, whiteSpace: 'nowrap',
-              fontFamily: FONT,
-            }}>
-              Mowgli<span style={{color: colors.accent}}>Next</span>
-            </span>
+            <>
+              <span style={{
+                fontSize: 18, fontWeight: 700, color: colors.text, whiteSpace: 'nowrap',
+                fontFamily: FONT, flex: 1,
+              }}>
+                Mowgli<span style={{color: colors.accent}}>Next</span>
+              </span>
+              <button
+                onClick={() => setPinned(p => !p)}
+                aria-label={pinned ? 'Unpin sidebar' : 'Pin sidebar'}
+                title={pinned ? 'Unpin sidebar' : 'Pin sidebar'}
+                style={{
+                  background: 'transparent', border: 'none', cursor: 'pointer',
+                  padding: 4, color: pinned ? colors.accent : colors.textMuted,
+                  display: 'flex', alignItems: 'center',
+                }}
+              >
+                <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  {pinned ? (
+                    <path d="M12 17v5M9 10.5V3h6v7.5l3 3.5H6l3-3.5z"/>
+                  ) : (
+                    <path d="M12 17v5M9 10.5V3h6v7.5l3 3.5H6l3-3.5zM3 3l18 18"/>
+                  )}
+                </svg>
+              </button>
+            </>
           )}
         </div>
 
@@ -400,6 +452,7 @@ export default function Root() {
 
       {/* Main content */}
       <div style={{flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', minWidth: 0}}>
+        <LiveStatusStrip/>
         <Layout.Header style={{
           display: 'flex',
           alignItems: 'center',
@@ -428,7 +481,17 @@ export default function Root() {
           <MowerStatus/>
         </Layout.Header>
         <main style={{flex: 1, padding: '20px 24px 0', overflow: 'auto', minHeight: 0, background: colors.bgBase}}>
-          <Outlet/>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={currentPath}
+              initial={{opacity: 0, y: 6}}
+              animate={{opacity: 1, y: 0}}
+              exit={{opacity: 0, y: -4}}
+              transition={{duration: 0.18, ease: 'easeOut'}}
+            >
+              <Outlet/>
+            </motion.div>
+          </AnimatePresence>
         </main>
       </div>
     </div>

@@ -6,14 +6,16 @@ import {useStatus} from "../hooks/useStatus.ts";
 import {useGnssStatus} from "../hooks/useGnssStatus.ts";
 import {useEmergency} from "../hooks/useEmergency.ts";
 import {useSettings} from "../hooks/useSettings.ts";
+import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
 import {useMowerAction} from "../components/MowerActions.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {computeBatteryPercent} from "../utils/battery.ts";
 import {deriveGpsStatus} from "../utils/gpsStatus.ts";
 import {
-  HeroCard, DashTile, DashCard,
+  HeroCard, DashTile, DashCard, Bar,
   IconBattery, IconSignal, IconBlades, IconThermo, IconSchedule, IconDiag,
-  useTrail, KEYFRAMES_CSS,
+  BatteryGlyph, GpsBars, BladeTach, DualThermo,
+  KEYFRAMES_CSS,
 } from "../components/dashboard";
 import {ImuComponent} from "../components/ImuComponent.tsx";
 import {GpsComponent} from "../components/GpsComponent.tsx";
@@ -79,11 +81,15 @@ export const MowgliNextPage = () => {
   const {colors} = useThemeMode();
   const mowerAction = useMowerAction();
   const data = useMowerData();
+  const {snapshot} = useDiagnosticsSnapshot();
+  const coverage = snapshot?.coverage ?? [];
+  const lifetimeCoverage = coverage.length > 0
+    ? coverage.reduce((acc, a) => acc + a.coverage_percent, 0) / coverage.length
+    : 0;
 
-  const batteryTrail = useTrail(data.battery, 32);
-  const gpsTrail = useTrail(data.gps, 32);
-  const rpmTrail = useTrail(data.rpm, 32);
-  const tempTrail = useTrail(data.motorTemp, 32);
+  // Tiles use domain glyphs (battery shape, GPS bars, tach, thermometer) so we
+  // no longer keep generic time-series trails for them. The visuals derive
+  // directly from the live values below.
 
   const heroActions = {
     onStart: mowerAction("high_level_control", {Command: 1}),
@@ -165,25 +171,29 @@ export const MowgliNextPage = () => {
       <style>{KEYFRAMES_CSS}</style>
       <HeroCard data={heroData} {...heroActions}/>
 
-      {/* At-a-glance tiles */}
+      {/* At-a-glance tiles -- domain glyphs per metric */}
       <div style={{display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12}}>
         <DashTile icon={<IconBattery size={16}/>} label="Battery"
                value={Math.round(data.battery)} unit="%"
-               accent={colors.accent} trail={batteryTrail}
+               accent={colors.accent}
+               visual={<BatteryGlyph percent={data.battery} charging={data.charging} color={colors.accent}/>}
                hint={data.charging ? 'charging' : `${data.vBattery.toFixed(1)} V`}/>
         <DashTile icon={<IconSignal size={16}/>} label="GPS"
                value={Math.round(data.gps)} unit="%"
-               accent={colors.sky} trail={gpsTrail}
+               accent={colors.sky}
+               visual={<GpsBars percent={data.gps} ok={data.gps >= 80} color={colors.sky}/>}
                hint={gpsHint}/>
         <DashTile icon={<IconBlades size={16}/>} label="Blades"
                value={data.rpm > 0 ? Math.round(data.rpm) : 'off'}
                unit={data.rpm > 0 ? 'rpm' : ''}
-               accent={colors.amber} trail={rpmTrail}
+               accent={colors.amber}
+               visual={<BladeTach rpm={data.rpm} color={colors.amber}/>}
                hint={`${data.current.toFixed(1)}A draw`}/>
         <DashTile icon={<IconThermo size={16}/>} label="Motor"
                value={data.motorTemp.toFixed(0)} unit="C"
                accent={data.motorTemp > 50 ? colors.amber : colors.accent}
-               trail={tempTrail}
+               visual={<DualThermo motorC={data.motorTemp} escC={data.escTemp}
+                                   color={data.motorTemp > 50 ? colors.amber : colors.accent}/>}
                hint={`ESC ${data.escTemp.toFixed(0)} C`}/>
       </div>
 
@@ -197,7 +207,7 @@ export const MowgliNextPage = () => {
               {new Date().toLocaleDateString(undefined, {weekday: 'long'})}
             </div>
           </div>
-          <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 16}}>
+          <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14}}>
             <div>
               <div style={{fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em'}}>
                 {data.areaPct.toFixed(0)}<span style={{fontSize: 13, color: colors.textDim, marginLeft: 3}}>%</span>
@@ -206,11 +216,35 @@ export const MowgliNextPage = () => {
             </div>
             <div>
               <div style={{fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em'}}>
-                {data.currentArea ? '1' : '0'}<span style={{fontSize: 13, color: colors.textDim, marginLeft: 3}}>zones</span>
+                {lifetimeCoverage.toFixed(0)}<span style={{fontSize: 13, color: colors.textDim, marginLeft: 3}}>%</span>
               </div>
-              <div style={{fontSize: 11, color: colors.textDim, marginTop: 2}}>active today</div>
+              <div style={{fontSize: 11, color: colors.textDim, marginTop: 2}}>cells mowed</div>
             </div>
           </div>
+          {coverage.length > 0 ? (
+            <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+              {coverage.map(area => (
+                <div key={area.area_index}>
+                  <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4}}>
+                    <span style={{color: colors.text, fontWeight: 500}}>Area {area.area_index + 1}</span>
+                    <span style={{color: colors.textDim}}>
+                      {area.mowed_cells}/{area.total_cells} cells · {area.coverage_percent.toFixed(0)}%
+                    </span>
+                  </div>
+                  <Bar
+                    value={area.coverage_percent}
+                    color={data.currentArea === `Area ${area.area_index + 1}` ? colors.accent : colors.sky}
+                    track={`${colors.textMuted}20`}
+                    height={5}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{fontSize: 12, color: colors.textDim, lineHeight: 1.5, paddingTop: 4}}>
+              No zones mowed yet. Record an area on the Map and tap Start.
+            </div>
+          )}
         </DashCard>
 
         {/* Next up */}

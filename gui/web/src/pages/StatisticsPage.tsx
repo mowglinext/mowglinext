@@ -5,6 +5,7 @@ import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {DashCard, Bar} from "../components/dashboard";
+import {YearOfLawn} from "../components/YearOfLawn.tsx";
 
 interface MowingSession {
   id: string;
@@ -176,6 +177,11 @@ export const StatisticsPage = () => {
           </DashCard>
         ))}
       </div>
+
+      {/* Year of lawn -- contribution-style heatmap of mowing distance */}
+      <DashCard>
+        <YearOfLawn sessions={sessions}/>
+      </DashCard>
 
       {/* Weekly chart */}
       <DashCard>

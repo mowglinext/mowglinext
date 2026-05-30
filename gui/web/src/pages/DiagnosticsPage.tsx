@@ -57,6 +57,8 @@ import {computeBatteryPercent} from "../utils/battery.ts";
 import {useApi} from "../hooks/useApi.ts";
 import {useFusionGraphDiagnostics} from "../hooks/useFusionGraphDiagnostics.ts";
 import {useMowerAction} from "../components/MowerActions.tsx";
+import {BTStateGraph} from "../components/BTStateGraph.tsx";
+import {RobotAnatomy} from "../components/RobotAnatomy.tsx";
 import {GnssStatusConstants} from "../types/ros.ts";
 import {AlertOutlined} from "@ant-design/icons";
 
@@ -233,8 +235,34 @@ export const DiagnosticsPage = () => {
         },
     ];
 
+    const anatomyGps = deriveGpsStatus(gnssStatus);
+    // Yaw from quaternion (Z-axis). pose comes from /odometry/filtered_map.
+    const ori = pose?.pose?.pose?.orientation;
+    const yawDeg = ori
+        ? (Math.atan2(2 * (ori.w * ori.z + ori.x * ori.y), 1 - 2 * (ori.y * ori.y + ori.z * ori.z)) * 180) / Math.PI
+        : 0;
+    const anatomyInputs = {
+        batteryPct: batteryPercent,
+        vBattery: power.v_battery ?? 0,
+        motorTempC: status.mower_motor_temperature ?? 0,
+        escTempC: status.mower_esc_temperature ?? 0,
+        gpsLabel: anatomyGps.label,
+        gpsOk: anatomyGps.percent >= 50,
+        imuYawDeg: yawDeg,
+        imuOk: imu != null && imu.angular_velocity != null,
+        lidarOk: true,
+        wheelLeftRpm: 0,
+        wheelRightRpm: 0,
+        bladeOn: (status.mower_motor_rpm ?? 0) > 0,
+        rain: status.rain_detected ?? false,
+        dockCharging: status.is_charging ?? false,
+    };
+
     const sectionSystem = (
         <Row gutter={[12, 12]}>
+            <Col span={24}>
+                <RobotAnatomy inputs={anatomyInputs}/>
+            </Col>
             <Col span={24}>
                 <Card
                     title={<Space><CloudServerOutlined/> Containers</Space>}
@@ -827,6 +855,9 @@ export const DiagnosticsPage = () => {
 
     const sectionBtCoverage = (
         <Row gutter={[12, 12]}>
+            <Col xs={24}>
+                <BTStateGraph current={highLevelStatus.state_name}/>
+            </Col>
             <Col xs={24} lg={12}>
                 <Card title={<Space><ApiOutlined/> BT State</Space>} size="small">
                     <Space direction="vertical" style={{width: "100%"}}>

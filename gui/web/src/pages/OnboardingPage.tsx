@@ -966,17 +966,21 @@ const OnboardingWizard: React.FC = () => {
 
     return (
         <Row gutter={[0, isMobile ? 12 : 20]}>
-            {/* Steps indicator */}
+            {/* Steps indicator -- labelPlacement="vertical" stacks the title under
+                the icon, which prevents the horizontal text-overflow ellipsis
+                that was clipping titles like "Calibration" to "Calib" on
+                narrower viewports. */}
             <Col span={24}>
                 <Steps
                     current={currentStep}
                     size={isMobile ? "small" : "default"}
                     responsive={false}
+                    labelPlacement="vertical"
                     items={STEP_TITLES.map((title, i) => ({
                         title: isMobile ? undefined : title,
                         icon: STEP_ICONS[i],
                     }))}
-                    style={{ maxWidth: 700, margin: "0 auto" }}
+                    style={{ maxWidth: 880, margin: "0 auto" }}
                 />
             </Col>
 

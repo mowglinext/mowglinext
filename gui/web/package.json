@@ -23,6 +23,7 @@
     "@turf/difference": "^7.3.4",
     "@turf/union": "^7.3.4",
     "antd": "^5.29.3",
+    "framer-motion": "^12.40.0",
     "localforage": "^1.10.0",
     "mapbox-gl": "^3.20.0",
     "match-sorter": "^8.2.0",
