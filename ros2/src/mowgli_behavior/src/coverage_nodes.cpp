@@ -1058,6 +1058,7 @@ BT::NodeStatus PlanCoverageArea::onStart()
   accumulated_path_ = nav_msgs::msg::Path{};
   accumulated_path_.header.frame_id = "map";
   accumulated_path_.header.stamp = ctx->node->get_clock()->now();
+  have_first_coverage_pose_ = false;
   goal_handle_.reset();
   phase_start_ = std::chrono::steady_clock::now();
 
@@ -1174,14 +1175,22 @@ BT::NodeStatus PlanCoverageArea::onRunning()
       {
         return BT::NodeStatus::FAILURE;
       }
-      // Expose the coverage path's first pose as the transit goal so an
-      // obstacle-aware TransitToStrip (Nav2 global planner) can route the
-      // robot AROUND obstacles to the start of the remaining region before
-      // FollowStrip mows it. On a re-plan pass the remaining region can sit
-      // behind a large obstacle the FTC follower cannot reach in a straight
-      // carrot line; Smac + the global obstacle_layer drives around it.
-      ctx->current_transit_goal = accumulated_path_.poses.front();
-      ctx->current_transit_goal.header = accumulated_path_.header;
+      // Transit goal = the real F2C mowing start (AFTER the costmap-blind
+      // straight transit prefix), so an obstacle-aware TransitToStrip (Nav2
+      // Smac + global obstacle_layer) routes the robot AROUND obstacles to
+      // the coverage start and FTC's closest-pose resync skips the prefix —
+      // instead of FTC dragging the robot along the 8 m straight prefix that
+      // ignores the costmap. Fall back to the path front only if we never
+      // captured an F2C start (no piece produced poses).
+      if (have_first_coverage_pose_)
+      {
+        ctx->current_transit_goal = first_coverage_pose_;
+      }
+      else
+      {
+        ctx->current_transit_goal = accumulated_path_.poses.front();
+        ctx->current_transit_goal.header = accumulated_path_.header;
+      }
       return BT::NodeStatus::SUCCESS;
     }
 
@@ -1360,6 +1369,15 @@ BT::NodeStatus PlanCoverageArea::onRunning()
       const bool is_first_piece = accumulated_path_.poses.empty();
       if (!piece_path.poses.empty())
       {
+        // Capture the FIRST piece's F2C start (the real mowing start, before
+        // we prepend the straight transit prefix below) as the obstacle-aware
+        // TransitToStrip goal.
+        if (is_first_piece && !have_first_coverage_pose_)
+        {
+          first_coverage_pose_ = piece_path.poses.front();
+          first_coverage_pose_.header = piece_path.header;
+          have_first_coverage_pose_ = true;
+        }
         double rx = 0.0, ry = 0.0;
         bool have_origin = false;
         if (is_first_piece)

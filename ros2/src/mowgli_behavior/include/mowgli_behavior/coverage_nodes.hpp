@@ -386,6 +386,13 @@ private:
   size_t pieces_succeeded_{0};
   size_t pieces_failed_{0};
   nav_msgs::msg::Path accumulated_path_;
+  /// First pose of the FIRST piece's F2C swath path (the real mowing start,
+  /// AFTER the robot→F2C straight transit prefix). Used as the obstacle-aware
+  /// TransitToStrip goal so the robot drives to the coverage start AROUND
+  /// obstacles instead of FTC dragging it there along the costmap-blind
+  /// straight prefix.
+  geometry_msgs::msg::PoseStamped first_coverage_pose_;
+  bool have_first_coverage_pose_{false};
   Phase phase_{Phase::QueryRemaining};
   std::chrono::steady_clock::time_point phase_start_;
 };
