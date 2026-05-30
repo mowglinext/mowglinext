@@ -105,21 +105,21 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
         }}>
           Robot anatomy
         </div>
-        <svg viewBox="0 0 320 240" width="100%" style={{display: 'block', maxHeight: 260}}>
+        <svg viewBox="0 0 320 270" width="100%" style={{display: 'block', maxHeight: 290}}>
           {/* chassis */}
           <rect
             x={70} y={60} width={180} height={150} rx={28}
             fill={colors.bgCard} stroke={colors.border} strokeWidth={1.5}
           />
 
-          {/* dock pad — drawn behind chassis */}
+          {/* dock pad -- drawn behind chassis */}
           <rect
-            x={130} y={216} width={60} height={18} rx={4}
+            x={130} y={238} width={60} height={18} rx={4}
             fill={fill('dock')} stroke={stroke('dock')} strokeWidth={sw('dock')}
             onMouseEnter={handleEnter('dock')} onMouseLeave={handleLeave}
             style={{cursor: 'pointer'}}
           />
-          <text x={160} y={228} textAnchor="middle" fontSize={9} fill={colors.text}>Dock</text>
+          <text x={160} y={250} textAnchor="middle" fontSize={9} fill={colors.text}>Dock</text>
 
           {/* GPS antenna (top-center) */}
           <g onMouseEnter={handleEnter('gps')} onMouseLeave={handleLeave} style={{cursor: 'pointer'}}>

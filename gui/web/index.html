@@ -15,9 +15,12 @@
           type="text/css">
     <title>MowgliNext</title>
 <style>
-    @media (max-width: 767px) {
-        .beamer_defaultBeamerSelector { display: none !important; }
-    }
+    /* Hide Beamer's default floating selector everywhere -- the in-app
+       NotificationBell in the header is the dedicated notification surface
+       and Beamer's bottom-right red badge competes with it visually. The
+       Beamer script is still loaded and can be invoked programmatically via
+       Beamer.show() if a changelog entry-point is needed in the future. */
+    .beamer_defaultBeamerSelector { display: none !important; }
     body {
         margin: 0;
         padding: 0;

@@ -36,14 +36,24 @@ function bboxFromPolygons(polys: Point2D[][], pad = 0.5): {x0: number; y0: numbe
 
 const keyframes = `
 @keyframes liveDotPulse {
-  0%, 100% { transform: scale(1); opacity: 0.85; }
-  50% { transform: scale(1.5); opacity: 0; }
+  0% { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(2.4); opacity: 0; }
 }
 @keyframes liveLawnShimmer {
-  0%, 100% { opacity: 0.06; }
-  50% { opacity: 0.14; }
+  0%, 100% { opacity: 0.05; }
+  50% { opacity: 0.13; }
+}
+@keyframes liveDotIdle {
+  0%, 100% { transform: scale(1); opacity: 0.35; }
+  50% { transform: scale(1.25); opacity: 0.55; }
 }
 `;
+
+function prettifyAreaName(raw: string | undefined, index: number): string {
+  if (!raw) return `Area ${index + 1}`;
+  if (/^(recorded_)?area[_\s-]?\d+$/i.test(raw)) return `Area ${index + 1}`;
+  return raw;
+}
 
 interface LiveMowgliWidgetProps {
     /** Render in a more compact layout (e.g. for mobile). */
@@ -163,30 +173,50 @@ export function LiveMowgliWidget({compact, moving, activeAreaIndex}: LiveMowgliW
                 <rect width={svgW} height={svgH} fill="url(#lawnVignette)"
                       style={{animation: moving ? 'liveLawnShimmer 3.2s ease-in-out infinite' : 'none'}}/>
 
+                {/* lawn stripe pattern applied to polygons */}
+                <defs>
+                    <pattern id="lawnStripes" width={6} height={6} patternUnits="userSpaceOnUse"
+                             patternTransform="rotate(45)">
+                        <rect width={6} height={6} fill={`${colors.accent}10`}/>
+                        <line x1={0} y1={0} x2={0} y2={6} stroke={`${colors.accent}22`} strokeWidth={1}/>
+                    </pattern>
+                </defs>
+
                 {/* polygons */}
                 {polygons.map(({poly, coverage, index, name}) => {
                     const isActive = index === activeAreaIndex;
                     const path = poly.map((p, i) => `${i === 0 ? 'M' : 'L'} ${toX(p.x)} ${toY(p.y)}`).join(' ') + ' Z';
                     const cx = poly.reduce((s, p) => s + toX(p.x), 0) / poly.length;
                     const cy = poly.reduce((s, p) => s + toY(p.y), 0) / poly.length;
+                    const displayName = prettifyAreaName(name, index);
                     return (
                         <g key={index}>
                             <path d={path}
-                                  fill={isActive ? `${colors.accent}28` : `${colors.accent}14`}
-                                  stroke={isActive ? colors.accent : `${colors.accent}88`}
-                                  strokeWidth={isActive ? 2 : 1.2}/>
-                            {coverage > 0 && (
-                                <text x={cx} y={cy} textAnchor="middle"
+                                  fill="url(#lawnStripes)"
+                                  stroke={isActive ? colors.accent : `${colors.accent}aa`}
+                                  strokeWidth={isActive ? 2 : 1.4}/>
+                            {isActive && (
+                                <path d={path}
+                                      fill={`${colors.accent}14`}
+                                      stroke="none"/>
+                            )}
+                            <text x={cx} y={cy - 4} textAnchor="middle"
+                                  fontSize={10} fontWeight={700}
+                                  letterSpacing={0.5}
+                                  fill={colors.text}>
+                                {displayName.toUpperCase()}
+                            </text>
+                            {coverage > 0 ? (
+                                <text x={cx} y={cy + 10} textAnchor="middle"
                                       fontSize={11} fontWeight={700}
                                       fill={colors.accent}>
                                     {coverage.toFixed(0)}%
                                 </text>
-                            )}
-                            {name && (
-                                <text x={cx} y={cy + 13} textAnchor="middle"
+                            ) : (
+                                <text x={cx} y={cy + 10} textAnchor="middle"
                                       fontSize={9}
-                                      fill={colors.textDim}>
-                                    {name}
+                                      fill={colors.textMuted}>
+                                    not mowed yet
                                 </text>
                             )}
                         </g>
@@ -207,16 +237,22 @@ export function LiveMowgliWidget({compact, moving, activeAreaIndex}: LiveMowgliW
                 {/* robot */}
                 {robot && (
                     <g transform={`translate(${toX(robot.x)} ${toY(robot.y)})`}>
-                        {/* halo */}
-                        <circle r={14} fill={colors.accent} opacity={0.18}
-                                style={{animation: moving ? 'liveDotPulse 1.6s ease-out infinite' : 'none'}}/>
+                        {/* outer halo -- pulses while moving, gentle breath while idle */}
+                        <circle r={moving ? 8 : 10}
+                                fill={colors.accent}
+                                style={{
+                                    animation: moving
+                                        ? 'liveDotPulse 1.8s ease-out infinite'
+                                        : 'liveDotIdle 3.2s ease-in-out infinite',
+                                    transformOrigin: '0 0',
+                                }}/>
                         {/* heading wedge */}
                         <g transform={`rotate(${-(robotYaw * 180) / Math.PI - 90})`}>
-                            <path d="M 0 -14 L -4 -2 L 4 -2 Z"
-                                  fill={colors.accent} opacity={0.55}/>
+                            <path d="M 0 -16 L -5 -3 L 5 -3 Z"
+                                  fill={colors.accent} opacity={0.65}/>
                         </g>
-                        <circle r={5} fill={colors.accent}/>
-                        <circle r={2} fill="#fff" opacity={0.95}/>
+                        <circle r={6} fill={colors.bgCard} stroke={colors.accent} strokeWidth={1.5}/>
+                        <circle r={3} fill={colors.accent}/>
                     </g>
                 )}
 

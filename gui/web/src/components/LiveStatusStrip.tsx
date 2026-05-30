@@ -33,7 +33,7 @@ interface LiveStatusStripProps {
   height?: number;
 }
 
-export function LiveStatusStrip({height = 3}: LiveStatusStripProps) {
+export function LiveStatusStrip({height = 2}: LiveStatusStripProps) {
   const {colors} = useThemeMode();
   const {highLevelStatus} = useHighLevelStatus();
   const emergency = useEmergency();

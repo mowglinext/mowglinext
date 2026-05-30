@@ -104,7 +104,9 @@ export default function Root() {
     if (configChecked) return;
     (async () => {
       try {
-        const base = import.meta.env.DEV ? 'http://localhost:4006' : '';
+        const base = import.meta.env.DEV
+          ? `http://${(import.meta.env.VITE_API_HOST as string | undefined) ?? 'localhost:4006'}`
+          : '';
         const res = await fetch(`${base}/api/settings/status`);
         const data = await res.json();
         if (!data.onboarding_completed && currentPath !== '/onboarding') {
@@ -260,6 +262,7 @@ export default function Root() {
               animate={{opacity: 1, y: 0}}
               exit={{opacity: 0, y: -4}}
               transition={{duration: 0.18, ease: 'easeOut'}}
+              style={{height: '100%'}}
             >
               <Outlet/>
             </motion.div>
@@ -481,8 +484,10 @@ export default function Root() {
           borderBottom: `1px solid ${colors.border}`,
           height: 56,
           lineHeight: 'normal',
-          overflow: 'hidden',
+          overflow: 'visible',
           flexShrink: 0,
+          position: 'relative',
+          zIndex: 20,
         }}>
           <div>
             <div style={{
@@ -509,6 +514,7 @@ export default function Root() {
               animate={{opacity: 1, y: 0}}
               exit={{opacity: 0, y: -4}}
               transition={{duration: 0.18, ease: 'easeOut'}}
+              style={{height: '100%'}}
             >
               <Outlet/>
             </motion.div>

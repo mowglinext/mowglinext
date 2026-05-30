@@ -12,7 +12,9 @@ import { App } from "antd";
 const waitForRos2 = (timeoutMs: number): Promise<boolean> =>
     new Promise((resolve) => {
         const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-        const host = import.meta.env.DEV ? "localhost:4006" : window.location.host;
+        const host = import.meta.env.DEV
+            ? ((import.meta.env.VITE_API_HOST as string | undefined) ?? "localhost:4006")
+            : window.location.host;
         const url = `${protocol}://${host}/api/mowglinext/subscribe/highLevelStatus`;
 
         let settled = false;

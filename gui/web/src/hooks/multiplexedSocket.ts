@@ -165,7 +165,9 @@ let singleton: MultiplexedSocket | null = null;
 function multiplexUrl(): string {
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     if (import.meta.env.DEV) {
-        return `${protocol}://localhost:4006/api/mowglinext/multiplex`;
+        // VITE_API_HOST=10.69.4.198:4006 points the dev WS at a remote backend.
+        const host = (import.meta.env.VITE_API_HOST as string | undefined) ?? 'localhost:4006';
+        return `${protocol}://${host}/api/mowglinext/multiplex`;
     }
     return `${protocol}://${window.location.host}/api/mowglinext/multiplex`;
 }
