@@ -7,6 +7,7 @@ import {useGnssStatus} from "../hooks/useGnssStatus.ts";
 import {useEmergency} from "../hooks/useEmergency.ts";
 import {useSettings} from "../hooks/useSettings.ts";
 import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
+import {LiveMowgliWidget} from "../components/LiveMowgliWidget.tsx";
 import {useMowerAction} from "../components/MowerActions.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {computeBatteryPercent} from "../utils/battery.ts";
@@ -121,6 +122,8 @@ export const MowgliNextPage = () => {
       <div style={{display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 8}}>
         <style>{KEYFRAMES_CSS}</style>
         <HeroCard data={heroData} compact {...heroActions}/>
+        <LiveMowgliWidget compact moving={data.state === 'MOWING' || data.state === 'TRANSIT' || data.state === 'MANUAL_MOWING'}
+                          activeAreaIndex={highLevelStatusAreaIndex(data.currentArea)}/>
 
         <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10}}>
           <DashTile compact icon={<IconBattery size={12}/>} label="Battery"
@@ -170,6 +173,10 @@ export const MowgliNextPage = () => {
     <div style={{display: 'flex', flexDirection: 'column', gap: 16}}>
       <style>{KEYFRAMES_CSS}</style>
       <HeroCard data={heroData} {...heroActions}/>
+
+      {/* Live lawn -- area polygons + dock + robot pose */}
+      <LiveMowgliWidget moving={data.state === 'MOWING' || data.state === 'TRANSIT' || data.state === 'MANUAL_MOWING'}
+                        activeAreaIndex={highLevelStatusAreaIndex(data.currentArea)}/>
 
       {/* At-a-glance tiles -- domain glyphs per metric */}
       <div style={{display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12}}>
@@ -310,5 +317,13 @@ export const MowgliNextPage = () => {
     </div>
   );
 };
+
+function highLevelStatusAreaIndex(currentArea: string | undefined): number | undefined {
+  if (!currentArea) return undefined;
+  const match = /(\d+)/.exec(currentArea);
+  if (!match) return undefined;
+  // currentArea is 1-based; polygon index is 0-based.
+  return parseInt(match[1], 10) - 1;
+}
 
 export default MowgliNextPage;

@@ -116,7 +116,8 @@ export function BTStateGraph({current}: BTStateGraphProps) {
       background: colors.bgElevated,
       borderRadius: 12,
       padding: '12px 12px 16px',
-      overflow: 'auto',
+      overflowX: 'auto',
+      WebkitOverflowScrolling: 'touch',
     }}>
       <style>{keyframes}</style>
       <div style={{

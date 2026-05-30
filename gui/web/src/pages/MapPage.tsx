@@ -72,6 +72,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const [dockDirty, setDockDirty] = useState<boolean>(false);
     const [mapKey, setMapKey] = useState<string>("origin")
     const [useSatellite, setUseSatellite] = useState(true)
+    const [pitched, setPitched] = useState(false)
+    const togglePitch = useCallback(() => {
+        setPitched(prev => {
+            const next = !prev;
+            const m = mapInstanceRef.current;
+            if (m) m.easeTo({pitch: next ? 50 : 0, duration: 600});
+            return next;
+        });
+    }, [])
     const robotPoseRef = useRef<{ x: number; y: number; heading: number } | null>(null)
     const mapInstanceRef = useRef<MapboxMap | null>(null)
     const drawRef = useRef<import('@mapbox/mapbox-gl-draw').default | null>(null);
@@ -899,6 +908,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             mowingAreas={mowingAreas}
                             stateName={highLevelStatus.highLevelStatus.state_name}
                             emergency={highLevelStatus.highLevelStatus.emergency}
+                            pitched={pitched}
+                            onTogglePitch={togglePitch}
                             onEditMap={handleEditMap}
                             onToggleSatellite={() => setUseSatellite(!useSatellite)}
                             onManualMode={handleManualMode}

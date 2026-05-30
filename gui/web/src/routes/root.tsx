@@ -4,6 +4,11 @@ import React, {useCallback, useEffect, useState} from "react";
 import {AnimatePresence, motion} from "framer-motion";
 import {MowerStatus} from "../components/MowerStatus.tsx";
 import {LiveStatusStrip} from "../components/LiveStatusStrip.tsx";
+import {NotificationBell} from "../components/NotificationBell.tsx";
+import {useAutoNotifications} from "../hooks/useNotificationCenter.tsx";
+import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
+import {useEmergency} from "../hooks/useEmergency.ts";
+import {useStatus} from "../hooks/useStatus.ts";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {useIOSInstallPrompt} from "../hooks/useIOSInstallPrompt";
 import {IOSInstallBanner} from "../components/IOSInstallBanner.tsx";
@@ -83,6 +88,16 @@ export default function Root() {
   useEffect(() => {
     try { localStorage.setItem(PIN_STORAGE_KEY, pinned ? 'true' : 'false'); } catch { /* ignore */ }
   }, [pinned]);
+
+  const {highLevelStatus} = useHighLevelStatus();
+  const emergency = useEmergency();
+  const hwStatus = useStatus();
+  useAutoNotifications({
+    emergencyActive: highLevelStatus.emergency ?? emergency.active_emergency ?? false,
+    emergencyLatched: emergency.latched_emergency ?? false,
+    rainDetected: hwStatus.rain_detected ?? false,
+    state: highLevelStatus.state_name,
+  });
 
   const [configChecked, setConfigChecked] = useState(false);
   useEffect(() => {
@@ -164,7 +179,10 @@ export default function Root() {
               )}
             </div>
           </div>
-          <MowerStatus/>
+          <div style={{display: 'flex', alignItems: 'center', gap: 4}}>
+            <NotificationBell/>
+            <MowerStatus/>
+          </div>
         </header>
 
         {/* Slide-over Backdrop */}
@@ -478,7 +496,10 @@ export default function Root() {
               <div style={{fontSize: 12, color: colors.textMuted}}>{pageSubtitle}</div>
             )}
           </div>
-          <MowerStatus/>
+          <div style={{display: 'flex', alignItems: 'center', gap: 4}}>
+            <NotificationBell/>
+            <MowerStatus/>
+          </div>
         </Layout.Header>
         <main style={{flex: 1, padding: '20px 24px 0', overflow: 'auto', minHeight: 0, background: colors.bgBase}}>
           <AnimatePresence mode="wait">

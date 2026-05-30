@@ -46,6 +46,8 @@ interface MapToolbarProps {
     onDownloadGeoJSON: () => void;
     onImportOpenMower: () => void;
     onMowArea: (key: string) => Promise<void>;
+    pitched?: boolean;
+    onTogglePitch?: () => void;
     onStart?: () => Promise<void>;
     onHome?: () => Promise<void>;
     onEmergencyOn?: () => Promise<void>;
@@ -65,7 +67,7 @@ export const MapToolbar = ({
     onEditMap, onToggleSatellite,
     onManualMode, onStopManualMode,
     onBackupMap, onRestoreMap, onDownloadGeoJSON, onImportOpenMower,
-    onMowArea,
+    onMowArea, pitched, onTogglePitch,
     onStart, onHome, onEmergencyOn, onEmergencyOff,
     onAreaRecording, onMowNextArea, onContinueOrPause,
     onBladeForward, onBladeBackward, onBladeOff,
@@ -87,6 +89,9 @@ export const MapToolbar = ({
 
     const moreMenuItems: MenuProps["items"] = [
         {key: "satellite", icon: <GlobalOutlined />, label: useSatellite ? "Dark map" : "Satellite"},
+        ...(onTogglePitch
+            ? [{key: "pitch", icon: <GlobalOutlined />, label: pitched ? "Flatten map" : "Tilt 3D view"} satisfies NonNullable<MenuProps["items"]>[number]]
+            : []),
         {type: "divider"},
         {key: "areaRecording", icon: <AimOutlined />, label: "Area Recording"},
         {key: "mowNext", icon: <ForwardOutlined />, label: "Mow Next Area"},
@@ -111,6 +116,7 @@ export const MapToolbar = ({
     const handleMoreClick: MenuProps["onClick"] = ({key}: MenuInfo) => {
         switch (key) {
             case "satellite": onToggleSatellite(); break;
+            case "pitch": onTogglePitch?.(); break;
             case "manual": safeCall(() => onManualMode()); break;
             case "stopManual": safeCall(() => onStopManualMode()); break;
             case "areaRecording": safeCall(onAreaRecording); break;

@@ -24,6 +24,7 @@ import { SafetySection } from "../components/settings/SafetySection.tsx";
 import { NavigationSection } from "../components/settings/NavigationSection.tsx";
 import { RainSection } from "../components/settings/RainSection.tsx";
 import { AdvancedSection } from "../components/settings/AdvancedSection.tsx";
+import { SettingsPreview } from "../components/settings/SettingsPreview.tsx";
 
 const { Text } = Typography;
 
@@ -189,6 +190,17 @@ export const SettingsPage = () => {
 
                     {renderSection()}
                 </div>
+
+                {/* Live preview rail (desktop only) */}
+                {!isMobile && (
+                    <div style={{
+                        width: 260, flexShrink: 0,
+                        padding: "0 16px 120px 0",
+                        overflowY: "auto",
+                    }}>
+                        <SettingsPreview values={values} section={activeSection}/>
+                    </div>
+                )}
             </div>
 
             {/* Fixed save bar */}

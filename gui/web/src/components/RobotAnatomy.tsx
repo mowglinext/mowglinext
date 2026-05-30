@@ -89,10 +89,15 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
   const handleLeave = () => setHover(null);
 
   return (
-    <div style={{
+    <div className="mn-anatomy" style={{
       display: 'grid', gridTemplateColumns: '1fr minmax(200px, 240px)', gap: 14,
       background: colors.bgElevated, borderRadius: 12, padding: 14,
     }}>
+      <style>{`
+        @media (max-width: 640px) {
+          .mn-anatomy { grid-template-columns: 1fr !important; }
+        }
+      `}</style>
       <div>
         <div style={{
           fontSize: 11, color: colors.textMuted, letterSpacing: '0.08em',

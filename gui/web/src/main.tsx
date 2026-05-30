@@ -5,6 +5,7 @@ import Root from "./routes/root.tsx";
 import {App, ConfigProvider, theme} from "antd";
 import {Spinner} from "./components/Spinner.tsx";
 import {ThemeProvider, useThemeMode} from "./theme/ThemeContext.tsx";
+import {NotificationCenterProvider} from "./hooks/useNotificationCenter.tsx";
 
 // Lazy-load each page so the first paint only ships the shell + the route
 // the user actually opens. Everything else streams in on demand.
@@ -97,9 +98,11 @@ function ThemedApp() {
             },
         }}>
             <App style={{height: "100%"}}>
-                <React.Suspense fallback={<Spinner/>}>
-                    <RouterProvider router={router}/>
-                </React.Suspense>
+                <NotificationCenterProvider>
+                    <React.Suspense fallback={<Spinner/>}>
+                        <RouterProvider router={router}/>
+                    </React.Suspense>
+                </NotificationCenterProvider>
             </App>
         </ConfigProvider>
     );
