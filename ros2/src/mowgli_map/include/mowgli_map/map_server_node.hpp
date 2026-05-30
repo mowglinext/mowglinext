@@ -452,6 +452,14 @@ private:
                               uint32_t& mowed,
                               uint32_t& obstacle_cells) const;
 
+  /// Count LAWN cells in an area: `total_lawn` = all reachable mowable cells
+  /// (classification == LAWN, i.e. excludes LAWN_DEAD/NO_GO/obstacle/UNKNOWN),
+  /// `unmowed_lawn` = those with mow_progress < 0.3. Used as the real-coverage
+  /// half of the area-completion test (paired with the strip layout). The
+  /// blade never reaches every edge cell, so completion is a high FRACTION of
+  /// reachable LAWN, not zero unmowed cells. Caller must hold map_mutex_.
+  void count_lawn_cells(size_t area_index, uint32_t& total_lawn, uint32_t& unmowed_lawn) const;
+
   // ── Path C cell-based coverage ────────────────────────────────────────────
 
   /// Result of a single segment selection.

@@ -633,6 +633,42 @@ void MapServerNode::on_get_next_strip(
               remaining);
 }
 
+void MapServerNode::count_lawn_cells(size_t area_index,
+                                     uint32_t& total_lawn,
+                                     uint32_t& unmowed_lawn) const
+{
+  total_lawn = 0;
+  unmowed_lawn = 0;
+  if (area_index >= areas_.size())
+    return;
+
+  const auto& area = areas_[area_index];
+  const auto& progress_layer = map_[std::string(layers::MOW_PROGRESS)];
+  const auto& class_layer = map_[std::string(layers::CLASSIFICATION)];
+
+  for (grid_map::GridMapIterator it(map_); !it.isPastEnd(); ++it)
+  {
+    grid_map::Position pos;
+    map_.getPosition(*it, pos);
+
+    geometry_msgs::msg::Point32 pt;
+    pt.x = static_cast<float>(pos.x());
+    pt.y = static_cast<float>(pos.y());
+    if (!point_in_polygon(pt, area.polygon))
+      continue;
+
+    // Only plain LAWN is mowable work. LAWN_DEAD (unreachable, per the
+    // reachability BFS), NO_GO_ZONE, obstacles and UNKNOWN are excluded.
+    const auto cell_type = static_cast<CellType>(static_cast<int>(class_layer((*it)(0), (*it)(1))));
+    if (cell_type != CellType::LAWN)
+      continue;
+
+    total_lawn++;
+    if (progress_layer((*it)(0), (*it)(1)) < 0.3f)
+      unmowed_lawn++;
+  }
+}
+
 void MapServerNode::on_get_coverage_status(
     const mowgli_interfaces::srv::GetCoverageStatus::Request::SharedPtr req,
     mowgli_interfaces::srv::GetCoverageStatus::Response::SharedPtr res)
@@ -665,17 +701,42 @@ void MapServerNode::on_get_coverage_status(
   res->coverage_percent =
       res->total_cells > 0 ? 100.0f * res->mowed_cells / res->total_cells : 0.0f;
 
-  // Count remaining strips
+  // Area-completion = remaining work that GetNextUnmowedArea keys on
+  // (strips_remaining > 0 → keep planning). Two signals are combined so we
+  // neither dock early nor never dock:
+  //   (1) STRIPS: the planned coverage passes. is_strip_mowed's DEFAULT 0.2
+  //       threshold flagged a strip "mowed" at 20 % centerline coverage, so
+  //       the count drained to 0 at ~50 % real coverage and the robot docked
+  //       at ~30 % mowed (field 2026-05-30). Use a realistic 0.85 threshold.
+  //   (2) CELLS: actual reachable-LAWN coverage. The blade never reaches
+  //       every edge cell, so completion is a high FRACTION of reachable
+  //       LAWN (>= kCoverageDoneFrac), not zero unmowed cells.
+  // The area is complete only when BOTH say done. The no-progress guard in
+  // GetNextUnmowedArea retires a genuinely-stuck remainder, so requiring
+  // both can never loop forever.
   ensure_strip_layout(req->area_index);
-  res->strips_remaining = 0;
+  uint32_t strips_unmowed = 0;
   if (req->area_index < strip_layouts_.size())
   {
     for (const auto& s : strip_layouts_[req->area_index].strips)
     {
-      if (!is_strip_mowed(s))
-        res->strips_remaining++;
+      if (!is_strip_mowed(s, 0.85))
+        strips_unmowed++;
     }
   }
+
+  uint32_t total_lawn = 0, unmowed_lawn = 0;
+  count_lawn_cells(req->area_index, total_lawn, unmowed_lawn);
+  constexpr float kCoverageDoneFrac = 0.90f;  // accept the last ~10 % of edges
+  const bool cells_done =
+      total_lawn == 0 ||
+      unmowed_lawn <= static_cast<uint32_t>((1.0f - kCoverageDoneFrac) * total_lawn);
+
+  const bool area_complete = (strips_unmowed == 0) && cells_done;
+  // Report a positive count while not complete (GetNextUnmowedArea only tests
+  // > 0). Prefer the strip count; fall back to 1 when strips read done but
+  // cells do not yet (a region the strip centerlines clipped but didn't cover).
+  res->strips_remaining = area_complete ? 0u : (strips_unmowed > 0u ? strips_unmowed : 1u);
 
   res->success = true;
 }
