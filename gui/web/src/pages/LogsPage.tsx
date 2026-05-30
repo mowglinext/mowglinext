@@ -270,9 +270,10 @@ export const LogsPage = () => {
                 onScroll={handleScroll}
                 style={{
                     flex: 1, minHeight: 0, overflow: 'auto', borderRadius: 12,
-                    background: colors.bgCard, padding: '4px 0',
+                    background: colors.bgCard, padding: '6px 0',
                     fontFamily: '"JetBrains Mono", "SF Mono", ui-monospace, monospace',
-                    fontSize: 12, lineHeight: 1.6,
+                    fontSize: 12, lineHeight: 1.7,
+                    border: `1px solid ${colors.borderSubtle}`,
                 }}
             >
                 {filtered.length === 0 && (
@@ -286,8 +287,8 @@ export const LogsPage = () => {
                         <div
                             key={line.id}
                             style={{
-                                padding: '2px 12px 2px 10px',
-                                borderLeft: `2px solid ${line.severity === 'OTHER' ? 'transparent' : accent}`,
+                                padding: '3px 14px 3px 12px',
+                                borderLeft: `3px solid ${line.severity === 'OTHER' ? 'transparent' : accent}`,
                                 background: line.severity === 'ERROR'
                                     ? `${colors.danger}0d`
                                     : line.severity === 'WARN'
@@ -300,9 +301,10 @@ export const LogsPage = () => {
                             {line.severity !== 'OTHER' && (
                                 <span style={{
                                     color: accent, fontWeight: 700,
-                                    marginRight: 8, fontSize: 10, letterSpacing: '0.04em',
+                                    marginRight: 10, fontSize: 10, letterSpacing: '0.06em',
+                                    display: 'inline-block', minWidth: 38,
                                 }}>
-                                    {line.severity.padEnd(5, ' ')}
+                                    {line.severity}
                                 </span>
                             )}
                             <span>{line.plain}</span>

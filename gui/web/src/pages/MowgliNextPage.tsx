@@ -228,30 +228,53 @@ export const MowgliNextPage = () => {
               <div style={{fontSize: 11, color: colors.textDim, marginTop: 2}}>cells mowed</div>
             </div>
           </div>
-          {coverage.length > 0 ? (
-            <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
-              {coverage.map(area => (
-                <div key={area.area_index}>
-                  <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4}}>
-                    <span style={{color: colors.text, fontWeight: 500}}>Area {area.area_index + 1}</span>
-                    <span style={{color: colors.textDim}}>
-                      {area.mowed_cells}/{area.total_cells} cells · {area.coverage_percent.toFixed(0)}%
-                    </span>
-                  </div>
-                  <Bar
-                    value={area.coverage_percent}
-                    color={data.currentArea === `Area ${area.area_index + 1}` ? colors.accent : colors.sky}
-                    track={`${colors.textMuted}20`}
-                    height={5}
-                  />
+          {(() => {
+            // Filter out empty areas (total_cells == 0) -- they're either
+            // freshly-recorded with no coverage grid yet or removed; either
+            // way they shouldn't render as "100% of zero".
+            const renderable = coverage.filter(a => (a.total_cells ?? 0) > 0);
+            if (renderable.length === 0) {
+              return (
+                <div style={{fontSize: 12, color: colors.textDim, lineHeight: 1.5, paddingTop: 4}}>
+                  No zones mowed yet. Record an area on the Map and tap Start.
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{fontSize: 12, color: colors.textDim, lineHeight: 1.5, paddingTop: 4}}>
-              No zones mowed yet. Record an area on the Map and tap Start.
-            </div>
-          )}
+              );
+            }
+            return (
+              <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
+                {renderable.map(area => {
+                  const pct = area.coverage_percent ?? 0;
+                  const isActive = data.currentArea === `Area ${area.area_index + 1}`;
+                  return (
+                    <div key={area.area_index}>
+                      <div style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                        fontSize: 11, marginBottom: 5,
+                      }}>
+                        <span style={{
+                          color: colors.text, fontWeight: 600,
+                          letterSpacing: '0.04em', textTransform: 'uppercase' as const,
+                        }}>
+                          Area {area.area_index + 1}
+                        </span>
+                        <span style={{color: colors.textDim, fontVariantNumeric: 'tabular-nums'}}>
+                          <span style={{fontWeight: 700, color: colors.text}}>{pct.toFixed(0)}%</span>
+                          <span style={{margin: '0 5px', color: colors.textMuted}}>·</span>
+                          {area.mowed_cells.toLocaleString()}/{area.total_cells.toLocaleString()}
+                        </span>
+                      </div>
+                      <Bar
+                        value={pct}
+                        color={isActive ? colors.accent : colors.sky}
+                        track={`${colors.textMuted}1f`}
+                        height={6}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </DashCard>
 
         {/* Next up */}

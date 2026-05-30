@@ -36,19 +36,25 @@ const { Title, Text, Paragraph } = Typography;
 const WelcomeStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
     const { colors } = useThemeMode();
     return (
-        <div style={{ textAlign: "center", maxWidth: 600, margin: "0 auto", padding: "24px 0" }}>
+        <div style={{ textAlign: "center", maxWidth: 640, margin: "0 auto", padding: "32px 0" }}>
             <div style={{
-                width: 80, height: 80, borderRadius: "50%",
-                background: colors.primaryBg, display: "flex",
+                width: 96, height: 96, borderRadius: 28,
+                background: `linear-gradient(135deg, ${colors.accent}, ${colors.accent}99)`,
+                boxShadow: `0 12px 32px ${colors.accent}33`,
+                display: "flex",
                 alignItems: "center", justifyContent: "center",
-                margin: "0 auto 24px",
+                margin: "0 auto 28px",
+                color: "#fff",
             }}>
-                <RocketOutlined style={{ fontSize: 36, color: colors.primary }} />
+                <RocketOutlined style={{ fontSize: 42 }} />
             </div>
-            <Title level={2} style={{ marginBottom: 8 }}>Welcome to Mowgli</Title>
-            <Paragraph type="secondary" style={{ fontSize: 16, marginBottom: 32 }}>
-                Let's set up your robot mower in a few simple steps.
-                You can always change these settings later.
+            <Title level={2} style={{ marginBottom: 10, letterSpacing: "-0.02em" }}>
+                Let's meet your Mowgli.
+            </Title>
+            <Paragraph type="secondary" style={{ fontSize: 16, marginBottom: 36, lineHeight: 1.6 }}>
+                A few short steps and you're ready to mow. Nothing here is set in
+                stone -- you can always change these settings later from the
+                Settings page.
             </Paragraph>
 
             <Row gutter={[16, 16]} style={{ textAlign: "left", marginBottom: 32 }}>
