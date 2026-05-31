@@ -1404,8 +1404,13 @@ BT::NodeStatus PlanCoverageArea::onRunning()
             RCLCPP_INFO(ctx->node->get_logger(),
                         "PlanCoverageArea: piece %zu inter-piece transit %d "
                         "poses from (%.2f,%.2f) to F2C start (%.2f,%.2f), %.2fm",
-                        current_piece_, n_steps, rx, ry,
-                        first_pose.x, first_pose.y, tlen);
+                        current_piece_,
+                        n_steps,
+                        rx,
+                        ry,
+                        first_pose.x,
+                        first_pose.y,
+                        tlen);
           }
         }
       }
