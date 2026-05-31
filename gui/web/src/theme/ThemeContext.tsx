@@ -25,7 +25,7 @@ export function ThemeProvider({children}: {children: React.ReactNode}) {
         setColors(mode);
         document.documentElement.style.background = colors.bgBase;
         document.body.style.background = colors.bgBase;
-        document.body.style.fontFamily = "'Geist', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif";
+        document.body.style.fontFamily = "'Satoshi', 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif";
         document.documentElement.style.colorScheme = 'dark';
         const meta = document.querySelector('meta[name="theme-color"]');
         if (meta) meta.setAttribute('content', colors.bgBase);

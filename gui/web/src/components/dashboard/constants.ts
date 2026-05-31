@@ -1,10 +1,9 @@
-// Typography commitments -- Mowgli is a field-survey instrument, so we lean
-// editorial-serif for display moments + a warm technical sans for body. The
-// monospace stays JetBrains Mono for raw telemetry. Avoid the generic
-// Inter/Roboto/system-sans look.
-export const FONT = "'Geist', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif";
+// Typography commitments -- Mowgli is premium tech-garden hardware. Satoshi
+// for the warm sans body + UI, Instrument Serif kept as accent for hero
+// moments, Space Grotesk for tabular telemetry numerals.
+export const FONT = "'Satoshi', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif";
 export const DISPLAY_FONT = "'Instrument Serif', 'Iowan Old Style', Georgia, serif";
-export const MONO_FONT = "'JetBrains Mono', 'Geist Mono', ui-monospace, monospace";
+export const MONO_FONT = "'Space Grotesk', 'JetBrains Mono', ui-monospace, monospace";
 
 // Every state_name listed here must match a string emitted by main_tree.xml
 // (grep PublishHighLevelStatus). 'tone' drives the HeroCard palette:
@@ -115,7 +114,7 @@ export const KEYFRAMES_CSS = `
 
 /* AntD upgrades -- pull the framework into the editorial system. */
 .ant-statistic-title {
-  font-family: 'Geist', sans-serif !important;
+  font-family: 'Satoshi', 'Inter', sans-serif !important;
   font-size: 11px !important;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -132,12 +131,12 @@ export const KEYFRAMES_CSS = `
   font-size: 0.55em;
   margin-left: 4px;
   vertical-align: 0.25em;
-  font-family: 'Geist Mono', monospace !important;
+  font-family: 'Space Grotesk', monospace !important;
   text-transform: lowercase;
 }
 .ant-card-head-title,
 .ant-collapse-header-text {
-  font-family: 'Geist', sans-serif;
+  font-family: 'Satoshi', 'Inter', sans-serif;
   font-weight: 600;
   letter-spacing: -0.005em;
 }
@@ -149,11 +148,11 @@ export const KEYFRAMES_CSS = `
   letter-spacing: -0.015em !important;
 }
 .ant-tabs-tab-btn {
-  font-family: 'Geist', sans-serif;
+  font-family: 'Satoshi', 'Inter', sans-serif;
   font-weight: 500;
 }
 .ant-table-thead > tr > th {
-  font-family: 'Geist', sans-serif !important;
+  font-family: 'Satoshi', 'Inter', sans-serif !important;
   font-size: 11px !important;
   letter-spacing: 0.06em;
   text-transform: uppercase;

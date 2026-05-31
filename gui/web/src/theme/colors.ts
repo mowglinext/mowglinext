@@ -90,42 +90,43 @@ const LIGHT: ColorTokens = {
   textMuted: 'rgba(20, 22, 20, 0.40)',
 };
 
-// Mowgli dark palette -- forest floor at dusk. Moss-green dominant, ember
-// amber accent for warnings + dock, the rest is paper/charcoal so the
-// editorial type can carry the surface.
+// Mowgli dark palette -- premium "tech-garden" tokens shared with the
+// /concept prototype. Deep emerald canvas, lime hero accent, aurora-
+// cyan secondary, ember amber for warnings, rose for danger. Paper-warm
+// ink so the editorial type sits on the surface like print.
 const DARK: ColorTokens = {
-  bgBase: '#0B100D',           // deep moss-charcoal
-  bgCard: '#161C18',
-  bgElevated: '#1B221E',
-  bgSubtle: '#11171393',
-  primary: '#5EE3A0',          // pale mint that pops against the dark
-  primaryLight: '#7CECB3',
-  primaryDark: '#3FC983',
-  primaryBg: 'rgba(94, 227, 160, 0.10)',
-  accent: '#5EE3A0',
+  bgBase: '#02110D',           // puits émeraude
+  bgCard: '#0B1814',
+  bgElevated: '#101F19',
+  bgSubtle: '#061812',
+  primary: '#7CFFB2',          // lime hero
+  primaryLight: '#A3FFCB',
+  primaryDark: '#45D688',
+  primaryBg: 'rgba(124, 255, 178, 0.10)',
+  accent: '#7CFFB2',
   accentAmber: '#F3A85C',
-  danger: '#F26565',
-  dangerBg: 'rgba(242, 101, 101, 0.14)',
+  danger: '#FF6B7A',
+  dangerBg: 'rgba(255, 107, 122, 0.14)',
   warning: '#F3A85C',
-  info: '#8FB8FF',
-  success: '#5EE3A0',
-  text: '#F4F1EA',             // paper-warm, not pure white
-  textSecondary: 'rgba(244, 241, 234, 0.62)',
-  muted: 'rgba(244, 241, 234, 0.42)',
-  border: 'rgba(244, 241, 234, 0.06)',
-  borderSubtle: 'rgba(244, 241, 234, 0.035)',
-  glassBackground: 'rgba(22, 28, 24, 0.78)',
-  glassBorder: '1px solid rgba(244, 241, 234, 0.08)',
-  glassShadow: '0 12px 40px rgba(0, 0, 0, 0.55)',
+  info: '#45D6E8',             // aurora cyan
+  success: '#7CFFB2',
+  text: '#ECFFF4',             // papier-vert chaud
+  textSecondary: 'rgba(236, 255, 244, 0.66)',
+  muted: 'rgba(236, 255, 244, 0.42)',
+  border: 'rgba(236, 255, 244, 0.07)',
+  borderSubtle: 'rgba(236, 255, 244, 0.04)',
+  glassBackground: 'rgba(11, 24, 20, 0.78)',
+  glassBorder: '1px solid rgba(236, 255, 244, 0.08)',
+  glassShadow: '0 24px 60px -20px rgba(0, 0, 0, 0.7), 0 4px 16px -4px rgba(0, 0, 0, 0.4)',
 
-  panel: '#161C18',
-  panelHi: '#1B221E',
-  accentSoft: 'rgba(94, 227, 160, 0.10)',
-  sky: '#8FB8FF',
-  skySoft: 'rgba(143, 184, 255, 0.12)',
+  panel: '#0B1814',
+  panelHi: '#101F19',
+  accentSoft: 'rgba(124, 255, 178, 0.10)',
+  sky: '#45D6E8',
+  skySoft: 'rgba(69, 214, 232, 0.12)',
   amber: '#F3A85C',
   amberSoft: 'rgba(243, 168, 92, 0.14)',
-  pink: '#E8839C',
+  pink: '#FF6B7A',
   textDim: 'rgba(244, 241, 234, 0.62)',
   textMuted: 'rgba(244, 241, 234, 0.40)',
 };

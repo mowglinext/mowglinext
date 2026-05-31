@@ -1,7 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import {createHashRouter, RouterProvider,} from "react-router-dom";
-import Root from "./routes/root.tsx";
+import AppShell from "./components/AppShell.tsx";
 import {App, ConfigProvider, theme} from "antd";
 import {Spinner} from "./components/Spinner.tsx";
 import {ThemeProvider, useThemeMode} from "./theme/ThemeContext.tsx";
@@ -28,7 +28,7 @@ const router = createHashRouter([
     },
     {
         path: "/",
-        element: <Root/>,
+        element: <AppShell/>,
         children: [
             {
                 element: <SettingsPage/>,
@@ -84,8 +84,8 @@ function ThemedApp() {
                 colorText: colors.text,
                 colorTextSecondary: colors.textSecondary,
                 borderRadius: 12,
-                fontFamily: '"Geist", -apple-system, BlinkMacSystemFont, sans-serif',
-                fontFamilyCode: '"JetBrains Mono", "Geist Mono", ui-monospace, monospace',
+                fontFamily: '"Satoshi", "Inter", -apple-system, BlinkMacSystemFont, sans-serif',
+                fontFamilyCode: '"Space Grotesk", "JetBrains Mono", ui-monospace, monospace',
             },
             components: {
                 Card: {
