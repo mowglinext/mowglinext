@@ -28,10 +28,20 @@
 //      by /imu/data linear_acceleration (which carries actual robot
 //      pitch/roll). The IMU orientation field on this stack is currently
 //      hardcoded identity by hardware_bridge — accel is the only signal
-//      that knows we're tilted. For each beam at angle α (LIDAR frame
-//      assumed flat-mounted relative to base_link), the Z component of
-//      the beam direction in the gravity-aligned frame is:
-//        z_dir    = (ax·cos α + ay·sin α) / |accel|
+//      that knows we're tilted. The gravity ("up") vector lives in the
+//      IMU/base_link frame, but a beam's index angle α is in the LIDAR
+//      frame, which on this robot is yaw-mounted ~π (180°-rotated) from
+//      base_link (mowgli_robot.yaml lidar_yaw). So α must be rotated into
+//      the base/IMU frame before projecting onto gravity, via the
+//      lidar_mount_yaw param (= lidar_yaw − imu_yaw): a beam at LIDAR
+//      angle α points along base bearing ψ = α + lidar_mount_yaw. Skipping
+//      this rotation flips the front/back sign on a pitched robot — the
+//      forward ground returns (LIDAR α≈π on this mount) get a POSITIVE
+//      z_dir and survive as phantom obstacles, while the empty sky-side
+//      beams get "filtered". On flat ground (ux,uy≈0) the error is
+//      invisible, which is why it only bites on a sloped garden.
+//        ψ        = α + lidar_mount_yaw
+//        z_dir    = (ax·cos ψ + ay·sin ψ) / |accel|
 //        return_Z = lidar_height + range · z_dir
 //      where (ax, ay, az) is the latest IMU linear_acceleration. A 10°
 //      nose-down pitch gives ax ≈ −1.7 m/s² → forward beam z_dir ≈ −0.17
@@ -83,6 +93,12 @@ public:
     min_obstacle_z_m_ = declare_parameter<double>("min_obstacle_z_m", 0.08);
     max_obstacle_z_m_ = declare_parameter<double>("max_obstacle_z_m", 1.5);
     lidar_height_m_ = declare_parameter<double>("lidar_height_m", 0.22);
+    // Yaw of the LIDAR frame relative to the IMU/base_link frame
+    // (= lidar_yaw − imu_yaw from mowgli_robot.yaml). Needed to rotate a
+    // beam's index angle into the gravity frame before the ground
+    // projection. Default 0 keeps the old (flat-mount) behaviour; the
+    // launch passes the real ~π value for the 180°-rotated mount.
+    lidar_mount_yaw_ = declare_parameter<double>("lidar_mount_yaw", 0.0);
     imu_max_age_s_ = declare_parameter<double>("imu_max_age_s", 0.5);
     accel_g_tolerance_ms2_ = declare_parameter<double>("accel_g_tolerance_ms2", 3.0);
     const std::string input_topic = declare_parameter<std::string>("input_topic", "/scan");
@@ -118,7 +134,8 @@ public:
                 "costmap_scan_filter started — %s -> %s, chassis_blank_range=%.2f m, "
                 "dock_blank_range=%.2f m, post_undock_blank_sec=%.1f s, "
                 "ground_filter=%s [Z range %.2f..%.2f m, lidar_height=%.2f m, "
-                "imu_max_age=%.2f s, accel_g_tol=±%.2f m/s², source %s].",
+                "lidar_mount_yaw=%.3f rad, imu_max_age=%.2f s, "
+                "accel_g_tol=±%.2f m/s², source %s].",
                 input_topic.c_str(),
                 output_topic.c_str(),
                 chassis_blank_range_,
@@ -128,6 +145,7 @@ public:
                 min_obstacle_z_m_,
                 max_obstacle_z_m_,
                 lidar_height_m_,
+                lidar_mount_yaw_,
                 imu_max_age_s_,
                 accel_g_tolerance_ms2_,
                 imu_topic.c_str());
@@ -154,6 +172,9 @@ public:
     double min_obstacle_z_m{0.08};
     double max_obstacle_z_m{1.5};
     double lidar_height_m{0.22};
+    /// Yaw of the LIDAR frame relative to base_link/IMU (rad). A beam at
+    /// LIDAR index angle α points along base bearing α + lidar_mount_yaw.
+    double lidar_mount_yaw{0.0};
   };
 
   /// Apply the radial blank to a copy of @p in. Returns the result.
@@ -177,11 +198,12 @@ public:
   }
 
   /// Apply the gravity-aware ground filter to @p io in place. For each
-  /// beam at angle α (LIDAR frame, assumed flat-mounted relative to
-  /// base_link), the Z component of the beam direction in the gravity-
-  /// aligned frame is computed from the IMU's measured "up" unit vector:
+  /// beam at LIDAR index angle α, rotate into the base/IMU frame by the
+  /// LIDAR mount yaw (ψ = α + lidar_mount_yaw) before projecting onto the
+  /// IMU's measured "up" unit vector:
   ///
-  ///     z_dir    = up_in_imu.x · cos α + up_in_imu.y · sin α
+  ///     ψ        = α + cfg.lidar_mount_yaw
+  ///     z_dir    = up_in_imu.x · cos ψ + up_in_imu.y · sin ψ
   ///     return_Z = lidar_height + range · z_dir
   ///
   /// where up_in_imu = accel / |accel| (the gravity reaction direction).
@@ -208,8 +230,8 @@ public:
       float& r = io.ranges[i];
       if (!std::isfinite(r))
         continue;
-      const double a = a0 + da * static_cast<double>(i);
-      const double z_dir = u.x * std::cos(a) + u.y * std::sin(a);
+      const double psi = a0 + da * static_cast<double>(i) + cfg.lidar_mount_yaw;
+      const double z_dir = u.x * std::cos(psi) + u.y * std::sin(psi);
       const float return_z = static_cast<float>(cfg.lidar_height_m + r * z_dir);
       if (return_z < min_z || return_z > max_z)
         r = inf;
@@ -322,7 +344,8 @@ private:
     GroundFilterConfig cfg{enable_ground_filter_,
                            min_obstacle_z_m_,
                            max_obstacle_z_m_,
-                           lidar_height_m_};
+                           lidar_height_m_,
+                           lidar_mount_yaw_};
     apply_ground_filter(out, cfg, up);
 
     pub_scan_->publish(out);
@@ -360,6 +383,7 @@ private:
   double min_obstacle_z_m_{0.08};
   double max_obstacle_z_m_{1.5};
   double lidar_height_m_{0.22};
+  double lidar_mount_yaw_{0.0};
   double imu_max_age_s_{0.5};
   double accel_g_tolerance_ms2_{3.0};
 

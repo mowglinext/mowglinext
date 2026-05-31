@@ -535,31 +535,28 @@ global_costmap:
         enabled: true
         # No persistence: heading drift causes wall duplicates
         observation_persistence: 0.0
-        observation_sources: scan
-        scan:
-          topic: /scan
-          # LaserScan is projected to 3D via laser_geometry then filtered by
-          # map-frame Z. With ground_constraint keeping base_link Z ≈ 0,
-          # lidar is at +0.22 m. Any scan return at Z below 0.08 m is
-          # either ground (on a pitched/rolling robot whose scan plane tilts
-          # downward) or below the mower skirt and irrelevant. Above 1.5 m
-          # is overhead (tree canopy, umbrellas) the mower won't hit.
-          # Previously 200 m which was a workaround for old Z-drift bug;
-          # now fixed by the ground constraint so we can filter properly.
-          # 2D LaserScan rays sit at lidar_link.z (≈0.22 m); after TF to
-          # the costmap frame each point's Z ≈ lidar height on level
-          # ground. min_obstacle_height: 0.12 rejects returns whose Z has
-          # dropped toward ground level — which happens when the mower
-          # pitches/rolls on uneven garden terrain and the forward rays
-          # tilt down into the lawn. At 0.0 those ground hits were marked
-          # as phantom lethal obstacles, blocking the planner mid-swath
-          # and walling off the dock approach (controller_server "Failed
-          # to make progress"). The real 0.22 m scan plane stays well
-          # inside [0.12, 1.5] so genuine obstacles are still marked.
-          # NOTE: this does NOT reduce collision safety — collision_monitor
-          # polls raw /scan in 2D (height-agnostic) and still stops the
-          # robot on any real return; min_obstacle_height only governs what
-          # the PLANNER routes around.
+        observation_sources: scan_filtered
+        scan_filtered:
+          topic: /scan_costmap
+          # Subscribe to the IMU-tilt-filtered /scan_costmap stream from
+          # costmap_scan_filter_node — NOT raw /scan. This is the local
+          # twin of the global costmap's source, and it matters: the
+          # min_obstacle_height band below CANNOT filter tilt-induced
+          # ground hits on its own. robot_localization runs in two_d_mode,
+          # which forces pitch=roll=0 in TF, so a 2D LaserScan always
+          # projects to ~lidar_z (0.22 m) regardless of the real chassis
+          # tilt — every ground return on a slope sails through the
+          # [0.12, 1.5] band and lands as a phantom lethal obstacle (a
+          # tiny pivot on uneven garden terrain was enough to paint
+          # them, driving FTC obstacle-deviation into left-right flap and
+          # controller_server "Failed to make progress"). costmap_scan_filter
+          # does the actual tilt rejection using the IMU gravity vector and
+          # the LIDAR mount yaw, so the planner only sees real obstacles.
+          # The height band is kept as a cheap belt-and-suspenders for the
+          # level case. NOTE: this does NOT reduce collision safety —
+          # collision_monitor reads /scan_costmap in 2D (height-agnostic)
+          # and still stops on any real return; min_obstacle_height only
+          # governs what the PLANNER routes around.
           min_obstacle_height: 0.12
           max_obstacle_height: 1.5
           clearing: true

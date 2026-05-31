@@ -50,6 +50,7 @@ struct GroundFilterConfigForTest
   double min_obstacle_z_m{0.08};
   double max_obstacle_z_m{1.5};
   double lidar_height_m{0.22};
+  double lidar_mount_yaw{0.0};
 };
 
 void apply_ground_filter_for_test(sensor_msgs::msg::LaserScan& io,
@@ -69,8 +70,8 @@ void apply_ground_filter_for_test(sensor_msgs::msg::LaserScan& io,
     float& r = io.ranges[i];
     if (!std::isfinite(r))
       continue;
-    const double a = a0 + da * static_cast<double>(i);
-    const double z_dir = u.x * std::cos(a) + u.y * std::sin(a);
+    const double psi = a0 + da * static_cast<double>(i) + cfg.lidar_mount_yaw;
+    const double z_dir = u.x * std::cos(psi) + u.y * std::sin(psi);
     const float return_z = static_cast<float>(cfg.lidar_height_m + r * z_dir);
     if (return_z < min_z || return_z > max_z)
       r = inf;
@@ -245,6 +246,68 @@ TEST(CostmapScanFilterGround, OverheadReturnFilteredOnLevelRobot)
       mowgli_localization::Vec3ForTest{0.0, 0.0, 1.0};  // level
   mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FALSE(std::isfinite(in.ranges[0]));
+}
+
+namespace
+{
+// Single beam at an explicit LIDAR-frame angle α. Lets the mount-yaw
+// tests place a return on the forward/rear half of the LIDAR ring.
+sensor_msgs::msg::LaserScan make_single_beam_at(float alpha_rad, float range_m)
+{
+  sensor_msgs::msg::LaserScan s;
+  s.angle_min = alpha_rad;
+  s.angle_max = alpha_rad;
+  s.angle_increment = 0.0f;
+  s.range_min = 0.05f;
+  s.range_max = 12.0f;
+  s.ranges = {range_m};
+  return s;
+}
+}  // namespace
+
+TEST(CostmapScanFilterGround, MountYawPiFiltersForwardGroundReturn)
+{
+  // 180°-rotated LIDAR mount (lidar_mount_yaw = π): the beam pointing
+  // FORWARD in the robot/base frame sits at LIDAR angle α = π. On a 10°
+  // nose-down slope that forward ground return at 2 m must be filtered.
+  // ψ = π + π ≡ 0 → z_dir = u.x = -sin(10°) → Z = 0.22 - 0.35 < 0.08.
+  const double pitch_rad = 10.0 * M_PI / 180.0;
+  auto in = make_single_beam_at(static_cast<float>(M_PI), 2.0f);
+  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 0.22, M_PI};
+  auto u = mowgli_localization::up_from_pitch_rad(pitch_rad);
+  mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
+  EXPECT_FALSE(std::isfinite(in.ranges[0]));
+}
+
+TEST(CostmapScanFilterGround, MountYawPiKeepsRearBeam)
+{
+  // Same π mount + nose-down: the beam at LIDAR α = 0 points to the REAR
+  // in base, which tilts UP on a nose-down robot, so a 2 m return there
+  // is not ground. ψ = 0 + π = π → z_dir = -u.x = +sin(10°) → Z rises,
+  // stays in band → kept.
+  const double pitch_rad = 10.0 * M_PI / 180.0;
+  auto in = make_single_beam_at(0.0f, 2.0f);
+  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 0.22, M_PI};
+  auto u = mowgli_localization::up_from_pitch_rad(pitch_rad);
+  mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
+  EXPECT_FLOAT_EQ(in.ranges[0], 2.0f);
+}
+
+TEST(CostmapScanFilterGround, UnaccountedMountYawInvertsFilter)
+{
+  // Regression guard: with the mount yaw left at 0 (the old bug) on a
+  // π-mounted robot, the forward ground return at LIDAR α = π is NOT
+  // filtered — ψ = π → z_dir = -u.x = +sin(10°) → Z rises above the
+  // floor → phantom obstacle survives. This is exactly the slope failure
+  // the lidar_mount_yaw plumbing fixes; the assertion documents the
+  // wrong behaviour so a future refactor can't silently reintroduce it.
+  const double pitch_rad = 10.0 * M_PI / 180.0;
+  auto in = make_single_beam_at(static_cast<float>(M_PI), 2.0f);
+  // mount yaw NOT applied (the old bug)
+  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 0.22, 0.0};
+  auto u = mowgli_localization::up_from_pitch_rad(pitch_rad);
+  mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
+  EXPECT_FLOAT_EQ(in.ranges[0], 2.0f);  // bug: ground return survives
 }
 
 TEST(CostmapScanFilterGround, NonFiniteRangesUntouched)
