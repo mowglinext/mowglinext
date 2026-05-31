@@ -273,8 +273,7 @@ TEST(CostmapScanFilterGround, MountYawPiFiltersForwardGroundReturn)
   // ψ = π + π ≡ 0 → z_dir = u.x = -sin(10°) → Z = 0.22 - 0.35 < 0.08.
   const double pitch_rad = 10.0 * M_PI / 180.0;
   auto in = make_single_beam_at(static_cast<float>(M_PI), 2.0f);
-  mowgli_localization::GroundFilterConfigForTest cfg{
-      true, 0.08, 1.5, 0.22, M_PI};
+  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 0.22, M_PI};
   auto u = mowgli_localization::up_from_pitch_rad(pitch_rad);
   mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FALSE(std::isfinite(in.ranges[0]));
@@ -288,8 +287,7 @@ TEST(CostmapScanFilterGround, MountYawPiKeepsRearBeam)
   // stays in band → kept.
   const double pitch_rad = 10.0 * M_PI / 180.0;
   auto in = make_single_beam_at(0.0f, 2.0f);
-  mowgli_localization::GroundFilterConfigForTest cfg{
-      true, 0.08, 1.5, 0.22, M_PI};
+  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 0.22, M_PI};
   auto u = mowgli_localization::up_from_pitch_rad(pitch_rad);
   mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FLOAT_EQ(in.ranges[0], 2.0f);
@@ -305,8 +303,8 @@ TEST(CostmapScanFilterGround, UnaccountedMountYawInvertsFilter)
   // wrong behaviour so a future refactor can't silently reintroduce it.
   const double pitch_rad = 10.0 * M_PI / 180.0;
   auto in = make_single_beam_at(static_cast<float>(M_PI), 2.0f);
-  mowgli_localization::GroundFilterConfigForTest cfg{
-      true, 0.08, 1.5, 0.22, 0.0};  // mount yaw NOT applied
+  // mount yaw NOT applied (the old bug)
+  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 0.22, 0.0};
   auto u = mowgli_localization::up_from_pitch_rad(pitch_rad);
   mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FLOAT_EQ(in.ranges[0], 2.0f);  // bug: ground return survives
