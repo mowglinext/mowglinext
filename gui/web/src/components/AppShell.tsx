@@ -66,6 +66,15 @@ export function AppShell() {
   const currentPath = route.length > 1 ? route[1].pathname : '/mowglinext';
   const meta = PAGE_META[currentPath] ?? {title: 'MowgliNext'};
 
+  // Empty path -> dashboard. Without this `/` renders the shell with an
+  // empty Outlet, which looks broken (the previous Root had this redirect
+  // and we lost it in the AppShell rewrite).
+  useEffect(() => {
+    if (route.length === 1 && route[0].pathname === '/') {
+      navigate({pathname: '/mowglinext'}, {replace: true});
+    }
+  }, [route, navigate]);
+
   // Onboarding gate (kept from the previous Root)
   const [configChecked, setConfigChecked] = useState(false);
   useEffect(() => {

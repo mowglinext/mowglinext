@@ -95,6 +95,7 @@ export const MowgliNextPage = () => {
   const isMobile = useIsMobile();
   const mowerAction = useMowerAction();
   const data = useMowerData();
+  const {settings} = useSettings();
   const {snapshot} = useDiagnosticsSnapshot();
   const map = useMowingMap();
   const odom = useFusionOdom();
@@ -142,8 +143,21 @@ export const MowgliNextPage = () => {
     data.state === "RETURNING_HOME" ? "returning" :
     data.isMoving ? "playing" : "idle";
 
-  const remainingMin = totalArea > 0 && data.isMoving
-    ? Math.max(1, Math.round((totalArea - todayMowedM2) * 0.01))
+  // ── ETA estimate ──
+  //
+  // remaining_cells × cell_size² = remaining m². Mowing rate = tool_width
+  // × forward_speed [m²/s]. Use live linear velocity when available, else
+  // fall back to the nominal cruise speed.
+  const cellResolutionM = 0.05;            // map_server publishes the grid at 5 cm
+  const remainingCells = Math.max(0, totalArea - todayMowedM2);
+  const remainingM2 = remainingCells * cellResolutionM * cellResolutionM;
+  const toolWidthM = (settings?.tool_width as number | undefined) ?? 0.18;
+  const liveVel = Math.abs(odom?.twist?.twist?.linear?.x ?? 0);
+  const nominalSpeed = 0.35;               // typical OpenMower cruise
+  const speedMs = liveVel > 0.05 ? liveVel : nominalSpeed;
+  const rateM2PerSec = toolWidthM * speedMs;
+  const remainingMin = data.isMoving && rateM2PerSec > 0 && remainingCells > 0
+    ? Math.max(1, Math.round(remainingM2 / rateM2PerSec / 60))
     : 0;
 
   const headline = data.isMoving && remainingMin > 0
