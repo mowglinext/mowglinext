@@ -1,0 +1,69 @@
+/* MowgliNext — premium concept tokens.
+   Tech-garden aesthetic: deep emerald canvas, liquid-glass surfaces,
+   lime/aurora accents, soft luminous borders. */
+
+[data-concept] {
+  /* surfaces */
+  --bg-deep:       #02110D;
+  --bg-canvas:     #061812;
+  --bg-card:       rgba(255, 255, 255, 0.045);
+  --bg-elevated:   rgba(255, 255, 255, 0.07);
+  --bg-pressed:    rgba(255, 255, 255, 0.10);
+
+  /* borders */
+  --border-soft:   rgba(255, 255, 255, 0.08);
+  --border-sharp:  rgba(255, 255, 255, 0.14);
+  --border-glow:   rgba(124, 255, 178, 0.22);
+
+  /* accents */
+  --lime:          #7CFFB2;
+  --mint:          #45D688;
+  --emerald:       #2BAA66;
+  --emerald-deep:  #167A48;
+  --aurora-cyan:   #45D6E8;
+  --aurora-violet: #6B7FFF;
+  --amber:         #F3A85C;
+  --rose:          #FF6B7A;
+
+  /* ink */
+  --ink:           #ECFFF4;
+  --ink-2:         rgba(236, 255, 244, 0.66);
+  --ink-3:         rgba(236, 255, 244, 0.42);
+  --ink-4:         rgba(236, 255, 244, 0.24);
+
+  /* gradients */
+  --grad-primary:  linear-gradient(135deg, #7CFFB2 0%, #45D688 45%, #2BAA66 100%);
+  --grad-mint:     linear-gradient(135deg, #45D688 0%, #2BAA66 100%);
+  --grad-aurora:
+    radial-gradient(circle at 22% 18%, rgba(69, 214, 232, 0.22) 0%, transparent 42%),
+    radial-gradient(circle at 78% 78%, rgba(124, 255, 178, 0.26) 0%, transparent 46%),
+    radial-gradient(circle at 50% 50%, rgba(107, 127, 255, 0.06) 0%, transparent 60%);
+  --grad-card:     linear-gradient(140deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.015));
+  --grad-edge:     linear-gradient(140deg, rgba(124, 255, 178, 0.4) 0%, rgba(124, 255, 178, 0) 35%, rgba(255, 255, 255, 0) 65%, rgba(69, 214, 232, 0.18) 100%);
+
+  /* elevation */
+  --shadow-card:
+    0 24px 60px -20px rgba(0, 0, 0, 0.7),
+    0 4px 16px -4px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --shadow-glow-lime:
+    0 0 60px rgba(124, 255, 178, 0.18),
+    0 0 0 1px rgba(124, 255, 178, 0.2);
+
+  /* type */
+  --font-display:  'Satoshi', 'Inter', sans-serif;
+  --font-body:     'Satoshi', 'Inter', sans-serif;
+  --font-mono:     'Space Grotesk', 'JetBrains Mono', monospace;
+
+  /* radii */
+  --radius-xs:     8px;
+  --radius-sm:     12px;
+  --radius-md:     18px;
+  --radius-lg:     24px;
+  --radius-xl:     32px;
+  --radius-pill:   999px;
+
+  /* easings */
+  --ease-out:      cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-snap:     cubic-bezier(0.32, 0.72, 0, 1);
+}

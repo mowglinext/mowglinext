@@ -17,8 +17,15 @@ const OnboardingPage   = React.lazy(() => import("./pages/OnboardingPage.tsx"));
 const SchedulePage     = React.lazy(() => import("./pages/SchedulePage.tsx"));
 const DiagnosticsPage  = React.lazy(() => import("./pages/DiagnosticsPage.tsx"));
 const StatisticsPage   = React.lazy(() => import("./pages/StatisticsPage.tsx"));
+const ConceptRoot      = React.lazy(() => import("./concept/ConceptRoot.tsx"));
 
 const router = createHashRouter([
+    {
+        // Standalone premium concept -- lives outside the AntD chrome so
+        // its tokens + CSS don't fight with the operator app.
+        path: "/concept",
+        element: <ConceptRoot/>,
+    },
     {
         path: "/",
         element: <Root/>,
