@@ -40,6 +40,8 @@ import {useCogHeading} from "../hooks/useCogHeading.ts";
 import {useMagYaw} from "../hooks/useMagYaw.ts";
 import {useCalibrationStatus} from "../hooks/useCalibrationStatus.ts";
 import {useWheelOdom} from "../hooks/useWheelOdom.ts";
+import {useWheelTicks} from "../hooks/useWheelTicks.ts";
+import {useWheelRpm} from "../hooks/useWheelRpm.ts";
 import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
 import {useDiagnostics} from "../hooks/useDiagnostics.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
@@ -118,6 +120,7 @@ export const DiagnosticsPage = () => {
     const {imu: cogImu, lastMessageAt: cogLastAt} = useCogHeading();
     const {imu: magImu, lastMessageAt: magLastAt} = useMagYaw();
     const wheelOdom = useWheelOdom();
+    const wheelTicks = useWheelTicks();
     const {status: calibrationStatus, refresh: refreshCalibration} = useCalibrationStatus();
 
     // Tick state once a second so the "Live/Stale" tags update even when no
@@ -130,6 +133,7 @@ export const DiagnosticsPage = () => {
     const {snapshot, loading, refresh} = useDiagnosticsSnapshot();
     const {diagnostics} = useDiagnostics();
     const {settings} = useSettings();
+    const wheelRpm = useWheelRpm({wheelRadiusM: settings?.wheel_radius ?? 0.04475});
 
     // ── derived values ───────────────────────────────────────────────────────
 
@@ -1339,6 +1343,51 @@ export const DiagnosticsPage = () => {
                             />
                         </Col>
                     </Row>
+                </Card>
+            </Col>
+            <Col span={24}>
+                <Card title="Per-Wheel Encoders" size="small">
+                    <Row gutter={[12, 12]}>
+                        {[
+                            {label: 'Front Left',  rpm: wheelRpm.fl, ticks: wheelTicks.wheel_ticks_fl, dir: wheelTicks.wheel_direction_fl, validMask: 1},
+                            {label: 'Front Right', rpm: wheelRpm.fr, ticks: wheelTicks.wheel_ticks_fr, dir: wheelTicks.wheel_direction_fr, validMask: 2},
+                            {label: 'Rear Left',   rpm: wheelRpm.rl, ticks: wheelTicks.wheel_ticks_rl, dir: wheelTicks.wheel_direction_rl, validMask: 4},
+                            {label: 'Rear Right',  rpm: wheelRpm.rr, ticks: wheelTicks.wheel_ticks_rr, dir: wheelTicks.wheel_direction_rr, validMask: 8},
+                        ].map(w => {
+                            const valid = ((wheelTicks.valid_wheels ?? 0) & w.validMask) !== 0;
+                            return (
+                                <Col key={w.label} xs={12} md={6}>
+                                    <Statistic
+                                        title={w.label}
+                                        value={valid ? w.rpm : undefined}
+                                        precision={0}
+                                        suffix="rpm"
+                                        valueStyle={{
+                                            color: !valid ? colors.muted :
+                                                   Math.abs(w.rpm) > 5 ? colors.success : undefined,
+                                        }}
+                                    />
+                                    <Typography.Text type="secondary" style={{fontSize: 11}}>
+                                        {valid ? (
+                                            <>
+                                                {(w.ticks ?? 0).toLocaleString()} ticks · {w.dir === 1 ? '↑ forward' : '↓ reverse'}
+                                            </>
+                                        ) : (
+                                            'no encoder reading'
+                                        )}
+                                    </Typography.Text>
+                                </Col>
+                            );
+                        })}
+                    </Row>
+                    {wheelTicks.wheel_tick_factor != null && (
+                        <Typography.Paragraph type="secondary" style={{fontSize: 11, marginTop: 12, marginBottom: 0}}>
+                            Tick factor: <Typography.Text code>{wheelTicks.wheel_tick_factor.toFixed(2)}</Typography.Text> ticks/m at the wheel.
+                            Body omega from L/R diff: <Typography.Text code>{wheelRpm.bodyOmega.toFixed(3)}</Typography.Text> rad/s.
+                            <br/>
+                            Per-wheel motor temperatures + currents are not exposed by the firmware; only the blade motor reports those (see Hardware Status below).
+                        </Typography.Paragraph>
+                    )}
                 </Card>
             </Col>
             <Col span={24}>

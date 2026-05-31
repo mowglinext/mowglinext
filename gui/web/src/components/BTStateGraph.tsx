@@ -96,9 +96,13 @@ const keyframes = `
 const NODE_W = 86;
 const NODE_H = 28;
 
+// Cycle order used to highlight the path the robot has already passed through.
+const CYCLE_ORDER = ['IDLE_DOCKED', 'UNDOCKING', 'TRANSIT', 'MOWING', 'RETURNING_HOME', 'DOCKING', 'CHARGING'];
+
 export function BTStateGraph({current}: BTStateGraphProps) {
   const {colors} = useThemeMode();
   const activeKey = nodeFor(current);
+  const activeCycleIdx = activeKey ? CYCLE_ORDER.indexOf(activeKey) : -1;
 
   const groupColor = (group: Node['group']): string => {
     switch (group) {
@@ -106,6 +110,19 @@ export function BTStateGraph({current}: BTStateGraphProps) {
       case 'manual': return colors.sky;
       case 'fault': return colors.amber;
     }
+  };
+
+  /** True if this cycle node sits before-or-at the active state. */
+  const isPast = (key: string): boolean => {
+    const idx = CYCLE_ORDER.indexOf(key);
+    return idx >= 0 && idx <= activeCycleIdx;
+  };
+  /** True for cycle edges whose `to` node is before-or-at the active state. */
+  const isEdgePast = (toKey: string, fromKey: string): boolean => {
+    const fromCycle = CYCLE_ORDER.indexOf(fromKey);
+    const toCycle = CYCLE_ORDER.indexOf(toKey);
+    if (fromCycle < 0 || toCycle < 0) return false;
+    return toCycle <= activeCycleIdx;
   };
 
   return (
@@ -121,10 +138,37 @@ export function BTStateGraph({current}: BTStateGraphProps) {
     }}>
       <style>{keyframes}</style>
       <div style={{
-        fontSize: 11, color: colors.textMuted, letterSpacing: '0.08em',
-        textTransform: 'uppercase' as const, marginBottom: 10,
+        display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+        marginBottom: 10,
       }}>
-        Behavior tree state
+        <div style={{
+          fontSize: 11, color: colors.textMuted, letterSpacing: '0.08em',
+          textTransform: 'uppercase' as const,
+        }}>
+          Behavior tree state
+        </div>
+        {current && (
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 8,
+            padding: '4px 10px 4px 8px',
+            background: `${colors.accent}14`,
+            border: `1px solid ${colors.accent}50`,
+            borderRadius: 999,
+          }}>
+            <span style={{
+              width: 8, height: 8, borderRadius: 4,
+              background: colors.accent,
+              boxShadow: `0 0 8px ${colors.accent}`,
+              animation: 'btStatePulse 1.8s ease-in-out infinite',
+            }}/>
+            <span style={{
+              fontSize: 11, fontWeight: 700, color: colors.accent,
+              letterSpacing: '0.04em',
+            }}>
+              {current}
+            </span>
+          </div>
+        )}
       </div>
       <svg viewBox="0 0 800 180" width="100%" height={180} style={{display: 'block', minWidth: 760}}>
         {/* edges */}
@@ -155,15 +199,17 @@ export function BTStateGraph({current}: BTStateGraphProps) {
               />
             );
           }
+          const past = isEdgePast(to.key, from.key);
+          const lit = isActive || past;
           return (
             <line
               key={i}
               x1={startX} y1={startY}
               x2={endX} y2={endY}
-              stroke={isActive ? groupColor(to.group) : colors.border}
-              strokeWidth={isActive ? 2 : 1}
-              opacity={isActive ? 1 : 0.5}
-              markerEnd={isActive ? 'url(#bt-arrow-active)' : 'url(#bt-arrow)'}
+              stroke={lit ? groupColor(to.group) : colors.border}
+              strokeWidth={isActive ? 2.5 : past ? 1.6 : 1}
+              opacity={isActive ? 1 : past ? 0.85 : 0.45}
+              markerEnd={lit ? 'url(#bt-arrow-active)' : 'url(#bt-arrow)'}
             />
           );
         })}
@@ -181,27 +227,40 @@ export function BTStateGraph({current}: BTStateGraphProps) {
         {/* nodes */}
         {NODES.map(n => {
           const isActive = activeKey === n.key;
+          const past = isPast(n.key);
           const accent = groupColor(n.group);
           return (
             <g key={n.key} transform={`translate(${n.x - NODE_W / 2}, ${n.y})`}>
               {isActive && (
-                <rect
-                  x={-4} y={-4}
-                  width={NODE_W + 8} height={NODE_H + 8}
-                  rx={10}
-                  fill="none"
-                  stroke={accent}
-                  strokeWidth={2}
-                  style={{
-                    transformOrigin: `${NODE_W / 2 + 4}px ${NODE_H / 2 + 4}px`,
-                    animation: 'btStatePulse 1.8s ease-in-out infinite',
-                  }}
-                />
+                <>
+                  {/* outer halo -- gentle glow that doesn't compete with the
+                      pulse ring */}
+                  <rect
+                    x={-10} y={-10}
+                    width={NODE_W + 20} height={NODE_H + 20}
+                    rx={14}
+                    fill={accent}
+                    opacity={0.18}
+                    style={{filter: `blur(8px)`}}
+                  />
+                  <rect
+                    x={-4} y={-4}
+                    width={NODE_W + 8} height={NODE_H + 8}
+                    rx={10}
+                    fill="none"
+                    stroke={accent}
+                    strokeWidth={2}
+                    style={{
+                      transformOrigin: `${NODE_W / 2 + 4}px ${NODE_H / 2 + 4}px`,
+                      animation: 'btStatePulse 1.8s ease-in-out infinite',
+                    }}
+                  />
+                </>
               )}
               <rect
                 width={NODE_W} height={NODE_H} rx={6}
-                fill={isActive ? `${accent}24` : colors.bgCard}
-                stroke={isActive ? accent : colors.border}
+                fill={isActive ? `${accent}28` : past ? `${accent}10` : colors.bgCard}
+                stroke={isActive ? accent : past ? `${accent}55` : colors.border}
                 strokeWidth={isActive ? 1.5 : 1}
               />
               <text
@@ -209,8 +268,8 @@ export function BTStateGraph({current}: BTStateGraphProps) {
                 textAnchor="middle"
                 fontFamily="inherit"
                 fontSize={11}
-                fontWeight={isActive ? 700 : 500}
-                fill={isActive ? accent : colors.text}
+                fontWeight={isActive ? 700 : past ? 600 : 500}
+                fill={isActive ? accent : past ? colors.text : colors.textSecondary}
               >
                 {n.label}
               </text>
