@@ -228,10 +228,21 @@ def generate_launch_description() -> LaunchDescription:
         runtime_config if os.path.isfile(runtime_config) else template_config
     )
     footprint_str = ""
+    # LIDAR mount geometry for the costmap_scan_filter ground filter.
+    # lidar_height = lidar_z (above base_link); lidar_mount_yaw rotates a
+    # beam's index angle into the IMU/base frame before the gravity
+    # projection (the LIDAR is ~π-mounted on this chassis, so omitting it
+    # inverts the front/back ground-filter sign on a slope). imu_yaw is
+    # subtracted because the gravity "up" vector is expressed in the IMU
+    # frame; it is 0 on this stack but kept general.
+    lidar_height_m = 0.22
+    lidar_mount_yaw = 0.0
     if os.path.isfile(robot_config_file):
         with open(robot_config_file, "r") as f:
             rcfg = yaml.safe_load(f) or {}
         rp = rcfg.get("mowgli", {}).get("ros__parameters", {})
+        lidar_height_m = float(rp.get("lidar_z", lidar_height_m))
+        lidar_mount_yaw = float(rp.get("lidar_yaw", 0.0)) - float(rp.get("imu_yaw", 0.0))
         cl = float(rp.get("chassis_length", 0.54))
         cw = float(rp.get("chassis_width", 0.40))
         ccx = float(rp.get("chassis_center_x", 0.18))
@@ -778,7 +789,13 @@ def generate_launch_description() -> LaunchDescription:
              # tighten if real-obstacle sensitivity is critical.
              "chassis_blank_range": 0.55,
              "dock_blank_range": 0.70,
-             "post_undock_blank_sec": 5.0},
+             "post_undock_blank_sec": 5.0,
+             # Ground-filter geometry from mowgli_robot.yaml. lidar_mount_yaw
+             # (~π on the 180°-rotated mount) is essential — without it the
+             # gravity projection's front/back sign inverts on a slope and
+             # forward ground returns survive as phantom obstacles.
+             "lidar_height_m": lidar_height_m,
+             "lidar_mount_yaw": lidar_mount_yaw},
         ],
     )
 
