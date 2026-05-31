@@ -149,12 +149,12 @@ export function LiveMowgliWidget({compact, moving, activeAreaIndex}: LiveMowgliW
                     }}>
                         Lawn view
                     </div>
-                    <div style={{
-                        fontSize: compact ? 15 : 17, color: colors.text, fontWeight: 600,
-                        marginTop: 2, letterSpacing: '-0.01em',
+                    <div className="mn-display" style={{
+                        fontSize: compact ? 22 : 28, color: colors.text,
+                        marginTop: 4, lineHeight: 1.1,
                     }}>
                         {hasData
-                            ? `${robotLabel}${headlineArea ? ` · ${prettifyAreaName(headlineArea.name, headlineArea.index)}` : ''}`
+                            ? <>{robotLabel}{headlineArea ? <> · <em>{prettifyAreaName(headlineArea.name, headlineArea.index)}</em></> : null}</>
                             : 'No areas recorded yet'}
                     </div>
                 </div>
@@ -167,11 +167,14 @@ export function LiveMowgliWidget({compact, moving, activeAreaIndex}: LiveMowgliW
                         }}>
                             Coverage
                         </div>
-                        <div style={{
-                            fontSize: compact ? 17 : 20, color: colors.accent, fontWeight: 700,
-                            marginTop: 2, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.02em',
+                        <div className="mn-num" style={{
+                            fontSize: compact ? 24 : 32, color: colors.accent,
+                            marginTop: 4, lineHeight: 1,
                         }}>
-                            {avgCoverage.toFixed(0)}%
+                            {avgCoverage.toFixed(0)}<span style={{
+                                fontSize: 12, fontFamily: "'Geist Mono', monospace",
+                                color: colors.textMuted, marginLeft: 2,
+                            }}>%</span>
                         </div>
                     </div>
                 )}

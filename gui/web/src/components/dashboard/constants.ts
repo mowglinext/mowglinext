@@ -1,5 +1,10 @@
-export const FONT = "'Manrope', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif";
-export const MONO_FONT = "'JetBrains Mono', monospace";
+// Typography commitments -- Mowgli is a field-survey instrument, so we lean
+// editorial-serif for display moments + a warm technical sans for body. The
+// monospace stays JetBrains Mono for raw telemetry. Avoid the generic
+// Inter/Roboto/system-sans look.
+export const FONT = "'Geist', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif";
+export const DISPLAY_FONT = "'Instrument Serif', 'Iowan Old Style', Georgia, serif";
+export const MONO_FONT = "'JetBrains Mono', 'Geist Mono', ui-monospace, monospace";
 
 // Every state_name listed here must match a string emitted by main_tree.xml
 // (grep PublishHighLevelStatus). 'tone' drives the HeroCard palette:
@@ -74,6 +79,10 @@ export const KEYFRAMES_CSS = `
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(0.85); }
 }
+@keyframes mn-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 @media (prefers-reduced-motion: no-preference) {
   @keyframes mn-bounds-glow {
     0%, 100% { box-shadow: 0 0 0 0 rgba(255,107,107,0.7), inset 0 0 0 1px rgba(255,107,107,0.6); }
@@ -88,4 +97,27 @@ export const KEYFRAMES_CSS = `
 .mn-btn { transition: background .12s, border-color .12s, transform .08s; }
 .mn-btn:hover { transform: translateY(-1px); }
 .mn-btn:active { transform: translateY(0); }
+
+/* Editorial display family for big numbers + hero headlines.
+   .mn-display reads like a survey instrument readout. */
+.mn-display {
+  font-family: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+}
+.mn-display em { font-style: italic; }
+.mn-num {
+  font-family: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* Staggered page entrance: children with [data-stagger] animate in
+   sequence on initial mount. Combine with --stagger-index from JS. */
+.mn-stagger > [data-stagger] {
+  opacity: 0;
+  animation: mn-rise 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--stagger-index, 0) * 60ms + 80ms);
+}
 `;

@@ -199,12 +199,12 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
         <div style={{fontSize: 10, color: colors.textMuted, letterSpacing: '0.06em', textTransform: 'uppercase'}}>
           {hover ? 'Inspecting' : 'Hover a part'}
         </div>
-        <div style={{fontSize: 16, fontWeight: 700, color: colors.text, marginTop: 4}}>
+        <div className="mn-display" style={{fontSize: 24, color: colors.text, marginTop: 4, lineHeight: 1.1}}>
           {info.label}
         </div>
-        <div style={{
-          fontSize: 13, color: info.ok ? colors.accent : colors.amber,
-          fontWeight: 600, marginTop: 6,
+        <div className="mn-num" style={{
+          fontSize: 20, color: info.ok ? colors.accent : colors.amber,
+          marginTop: 8, lineHeight: 1,
         }}>
           {info.value}
         </div>

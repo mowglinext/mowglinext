@@ -170,16 +170,20 @@ export const MowgliNextPage = () => {
 
   // Desktop
   return (
-    <div style={{display: 'flex', flexDirection: 'column', gap: 16}}>
+    <div className="mn-stagger" style={{display: 'flex', flexDirection: 'column', gap: 16}}>
       <style>{KEYFRAMES_CSS}</style>
-      <HeroCard data={heroData} {...heroActions}/>
+      <div data-stagger style={{['--stagger-index' as string]: 0}}>
+        <HeroCard data={heroData} {...heroActions}/>
+      </div>
 
       {/* Live lawn -- area polygons + dock + robot pose */}
-      <LiveMowgliWidget moving={data.state === 'MOWING' || data.state === 'TRANSIT' || data.state === 'MANUAL_MOWING'}
-                        activeAreaIndex={highLevelStatusAreaIndex(data.currentArea)}/>
+      <div data-stagger style={{['--stagger-index' as string]: 1}}>
+        <LiveMowgliWidget moving={data.state === 'MOWING' || data.state === 'TRANSIT' || data.state === 'MANUAL_MOWING'}
+                          activeAreaIndex={highLevelStatusAreaIndex(data.currentArea)}/>
+      </div>
 
       {/* At-a-glance tiles -- domain glyphs per metric */}
-      <div style={{display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12}}>
+      <div data-stagger style={{['--stagger-index' as string]: 2, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12}}>
         <DashTile icon={<IconBattery size={16}/>} label="Battery"
                value={Math.round(data.battery)} unit="%"
                accent={colors.accent}
@@ -205,7 +209,7 @@ export const MowgliNextPage = () => {
       </div>
 
       {/* Bottom row: today + next up + health */}
-      <div style={{display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: 14}}>
+      <div data-stagger style={{['--stagger-index' as string]: 3, display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: 14}}>
         {/* Today's work */}
         <DashCard>
           <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14}}>
@@ -216,13 +220,13 @@ export const MowgliNextPage = () => {
           </div>
           <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14}}>
             <div>
-              <div style={{fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em'}}>
+              <div className="mn-num" style={{fontSize: 38, lineHeight: 1}}>
                 {data.areaPct.toFixed(0)}<span style={{fontSize: 13, color: colors.textDim, marginLeft: 3}}>%</span>
               </div>
               <div style={{fontSize: 11, color: colors.textDim, marginTop: 2}}>zone progress</div>
             </div>
             <div>
-              <div style={{fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em'}}>
+              <div className="mn-num" style={{fontSize: 38, lineHeight: 1}}>
                 {lifetimeCoverage.toFixed(0)}<span style={{fontSize: 13, color: colors.textDim, marginLeft: 3}}>%</span>
               </div>
               <div style={{fontSize: 11, color: colors.textDim, marginTop: 2}}>cells mowed</div>

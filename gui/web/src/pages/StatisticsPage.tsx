@@ -175,16 +175,18 @@ export const StatisticsPage = () => {
               {s.label}
             </div>
             <div style={{position: 'relative', display: 'flex', alignItems: 'baseline', gap: 4}}>
-              <div style={{
-                fontSize: isMobile ? 32 : 42, fontWeight: 700, color: s.color,
-                letterSpacing: '-0.035em', lineHeight: 1, fontVariantNumeric: 'tabular-nums',
+              <div className="mn-num" style={{
+                fontSize: isMobile ? 44 : 60, color: s.color,
+                lineHeight: 1,
               }}>
                 {s.value}
               </div>
               {s.unit && (
                 <div style={{
-                  fontSize: 15, color: colors.textDim, fontWeight: 600,
-                  marginLeft: 2,
+                  fontSize: 14, color: colors.textDim, fontWeight: 500,
+                  marginLeft: 4,
+                  fontFamily: "'Geist Mono', 'JetBrains Mono', monospace",
+                  textTransform: 'lowercase' as const, letterSpacing: '0.04em',
                 }}>{s.unit}</div>
               )}
             </div>

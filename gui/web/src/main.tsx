@@ -60,11 +60,11 @@ const router = createHashRouter([
 ]);
 
 function ThemedApp() {
-    const {mode, colors} = useThemeMode();
+    const {colors} = useThemeMode();
 
     return (
         <ConfigProvider theme={{
-            algorithm: mode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
+            algorithm: theme.darkAlgorithm,
             token: {
                 colorPrimary: colors.primary,
                 colorSuccess: colors.success,
@@ -77,12 +77,12 @@ function ThemedApp() {
                 colorText: colors.text,
                 colorTextSecondary: colors.textSecondary,
                 borderRadius: 12,
-                fontFamily: '"DM Sans", "DM Sans Variable", sans-serif',
-                fontFamilyCode: '"DM Mono", monospace',
+                fontFamily: '"Geist", -apple-system, BlinkMacSystemFont, sans-serif',
+                fontFamilyCode: '"JetBrains Mono", "Geist Mono", ui-monospace, monospace',
             },
             components: {
                 Card: {
-                    colorBorderSecondary: mode === 'dark' ? 'transparent' : colors.border,
+                    colorBorderSecondary: 'transparent',
                 },
                 Button: {
                     borderRadius: 8,

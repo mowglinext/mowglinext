@@ -40,16 +40,19 @@ const WelcomeStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
             <div style={{
                 width: 96, height: 96, borderRadius: 28,
                 background: `linear-gradient(135deg, ${colors.accent}, ${colors.accent}99)`,
-                boxShadow: `0 12px 32px ${colors.accent}33`,
+                boxShadow: `0 12px 32px ${colors.accent}33, inset 0 0 0 1px ${colors.accent}55`,
                 display: "flex",
                 alignItems: "center", justifyContent: "center",
                 margin: "0 auto 28px",
-                color: "#fff",
+                color: "#0a1a10",
             }}>
                 <RocketOutlined style={{ fontSize: 42 }} />
             </div>
-            <Title level={2} style={{ marginBottom: 10, letterSpacing: "-0.02em" }}>
-                Let's meet your Mowgli.
+            <Title level={2} className="mn-display" style={{
+                marginBottom: 10, letterSpacing: "-0.01em",
+                fontSize: 42, fontWeight: 400, lineHeight: 1.05,
+            }}>
+                Let's meet your <em>Mowgli</em>.
             </Title>
             <Paragraph type="secondary" style={{ fontSize: 16, marginBottom: 36, lineHeight: 1.6 }}>
                 A few short steps and you're ready to mow. Nothing here is set in

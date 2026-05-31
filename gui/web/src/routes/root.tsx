@@ -15,7 +15,7 @@ import {IOSInstallBanner} from "../components/IOSInstallBanner.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {
   IconMower, IconMap, IconSchedule, IconStats, IconLogs, IconDiag,
-  IconGear, IconRocket, IconBulb, FONT,
+  IconGear, IconRocket, FONT,
 } from "../components/dashboard";
 
 interface NavItem {
@@ -75,7 +75,7 @@ function getInitialPinned(): boolean {
 }
 
 export default function Root() {
-  const {mode, toggleMode, colors} = useThemeMode();
+  const {colors} = useThemeMode();
   const route = useMatches();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -173,7 +173,7 @@ export default function Root() {
               )}
             </button>
             <div>
-              <div style={{fontSize: 18, fontWeight: 700, color: colors.text, letterSpacing: '-0.02em', lineHeight: 1.2}}>
+              <div className="mn-display" style={{fontSize: 22, color: colors.text, letterSpacing: '-0.01em', lineHeight: 1.1}}>
                 {pageTitle}
               </div>
               {pageSubtitle && (
@@ -235,21 +235,6 @@ export default function Root() {
                 </button>
               );
             })}
-            <button
-              onClick={toggleMode}
-              aria-label="Toggle theme"
-              style={{
-                display: 'flex', alignItems: 'center', gap: 12,
-                width: '100%', padding: '12px 20px',
-                background: 'none', border: 'none',
-                borderLeft: '3px solid transparent',
-                color: colors.text, fontSize: 15,
-                cursor: 'pointer', fontFamily: FONT,
-              }}
-            >
-              <span style={{display: 'flex', alignItems: 'center'}}><IconBulb size={20}/></span>
-              {mode === 'dark' ? 'Light' : 'Dark'}
-            </button>
           </div>
         </nav>
 
@@ -362,11 +347,11 @@ export default function Root() {
           </div>
           {railExpanded && (
             <>
-              <span style={{
-                fontSize: 18, fontWeight: 700, color: colors.text, whiteSpace: 'nowrap',
-                fontFamily: FONT, flex: 1,
+              <span className="mn-display" style={{
+                fontSize: 26, color: colors.text, whiteSpace: 'nowrap',
+                flex: 1, lineHeight: 1, letterSpacing: '-0.01em',
               }}>
-                Mowgli<span style={{color: colors.accent}}>Next</span>
+                Mowgli<em style={{color: colors.accent}}>Next</em>
               </span>
               <button
                 onClick={() => setPinned(p => !p)}
@@ -437,38 +422,6 @@ export default function Root() {
           })}
         </div>
 
-        {/* Theme toggle */}
-        <div style={{padding: '8px 0', borderTop: `1px solid ${colors.borderSubtle}`, flexShrink: 0}}>
-          <button
-            onClick={toggleMode}
-            aria-label="Toggle theme"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
-              width: '100%',
-              padding: '10px 0',
-              paddingLeft: railExpanded ? 16 : 0,
-              justifyContent: railExpanded ? 'flex-start' : 'center',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: colors.text,
-              fontSize: 14,
-              fontFamily: FONT,
-              overflow: 'hidden',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            <span style={{
-              flexShrink: 0, width: 28, display: 'inline-flex',
-              alignItems: 'center', justifyContent: 'center',
-            }}>
-              <IconBulb size={20}/>
-            </span>
-            {railExpanded && <span>{mode === 'dark' ? 'Light' : 'Dark'}</span>}
-          </button>
-        </div>
       </nav>
 
       {/* Main content */}
@@ -490,9 +443,9 @@ export default function Root() {
           zIndex: 20,
         }}>
           <div>
-            <div style={{
-              fontSize: 18, fontWeight: 700, color: colors.text,
-              letterSpacing: '-0.02em',
+            <div className="mn-display" style={{
+              fontSize: 24, color: colors.text,
+              letterSpacing: '-0.01em', lineHeight: 1.1,
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
             }}>
               {pageTitle}

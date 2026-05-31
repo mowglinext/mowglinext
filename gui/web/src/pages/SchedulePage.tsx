@@ -347,9 +347,12 @@ export const SchedulePage = () => {
       {/* Sub-cards */}
       <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14}}>
         <DashCard>
-          <div style={{fontSize: 13, fontWeight: 600, marginBottom: 12}}>This week</div>
-          <div style={{display: 'flex', alignItems: 'baseline', gap: 6}}>
-            <div style={{fontSize: 28, fontWeight: 700, letterSpacing: '-0.02em'}}>{activeCount}</div>
+          <div style={{
+            fontSize: 11, color: colors.textMuted, marginBottom: 14,
+            letterSpacing: '0.08em', textTransform: 'uppercase' as const, fontWeight: 600,
+          }}>This week</div>
+          <div style={{display: 'flex', alignItems: 'baseline', gap: 8}}>
+            <div className="mn-num" style={{fontSize: 46, lineHeight: 1, color: colors.text}}>{activeCount}</div>
             <div style={{fontSize: 12, color: colors.textDim}}>active schedules</div>
           </div>
           <div style={{display: 'flex', gap: 4, marginTop: 12}}>

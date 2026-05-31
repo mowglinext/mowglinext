@@ -8,5 +8,5 @@ export {Bar} from "./Bar.tsx";
 export {HeroCard} from "./HeroCard.tsx";
 export {useTrail} from "./useTrail.ts";
 export {BatteryGlyph, GpsBars, BladeTach, DualThermo} from "./DomainVisuals.tsx";
-export {MOWER_STATES, fmt, KEYFRAMES_CSS, FONT, MONO_FONT} from "./constants.ts";
+export {MOWER_STATES, fmt, KEYFRAMES_CSS, FONT, DISPLAY_FONT, MONO_FONT} from "./constants.ts";
 export * from "./Icons.tsx";

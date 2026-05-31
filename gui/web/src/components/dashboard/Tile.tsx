@@ -48,15 +48,17 @@ export function DashTile({icon, label, value, unit, accent, hint, trail, visual,
         }}>{label}</div>
       </div>
       <div style={{display: 'flex', alignItems: 'baseline', gap: 4, position: 'relative'}}>
-        <div style={{
-          fontSize: compact ? 22 : 32, fontWeight: 700, color: colors.text,
-          letterSpacing: '-0.03em', lineHeight: 1,
+        <div className="mn-num" style={{
+          fontSize: compact ? 30 : 44, color: colors.text,
+          lineHeight: 1,
         }}>
           {value}
         </div>
         {unit && (
           <div style={{
-            fontSize: compact ? 12 : 14, color: colors.textDim, fontWeight: 600,
+            fontSize: compact ? 12 : 14, color: colors.textDim, fontWeight: 500,
+            fontFamily: "'Geist Mono', 'JetBrains Mono', monospace",
+            textTransform: 'lowercase' as const, letterSpacing: '0.04em',
           }}>{unit}</div>
         )}
       </div>
