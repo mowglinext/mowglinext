@@ -93,6 +93,23 @@ export const KEYFRAMES_CSS = `
   }
 }
 .mn-card-hover:hover { transform: translateY(-1px); }
+
+/* Luminous edge accent on every glass card -- the visual signature of the
+   tech-garden language. Single gradient stroke applied via mask-composite
+   so only the top-left quadrant lights up. */
+.mn-glass-card { position: relative; }
+.mn-glass-card::before {
+  content: '';
+  position: absolute; inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(140deg, rgba(124,255,178,0.32) 0%, rgba(124,255,178,0) 32%, rgba(255,255,255,0) 62%, rgba(69,214,232,0.18) 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  pointer-events: none;
+}
+
 .mn-btn { transition: background .12s, border-color .12s, transform .08s; }
 .mn-btn:hover { transform: translateY(-1px); }
 .mn-btn:active { transform: translateY(0); }
