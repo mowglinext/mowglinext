@@ -181,10 +181,17 @@ export const SettingsPage = () => {
                 }}>
                     {/* Section header */}
                     {currentSectionMeta && (
-                        <div style={{ marginBottom: 16 }}>
-                            <Text strong style={{ fontSize: 16 }}>{currentSectionMeta.label}</Text>
-                            <br />
-                            <Text type="secondary" style={{ fontSize: 12 }}>{currentSectionMeta.description}</Text>
+                        <div style={{ marginBottom: 20 }}>
+                            <div className="mn-display" style={{
+                                fontSize: 28, color: colors.text, lineHeight: 1.1, letterSpacing: '-0.01em',
+                            }}>
+                                {currentSectionMeta.label}
+                            </div>
+                            <div style={{
+                                fontSize: 12, color: colors.textDim, marginTop: 4,
+                            }}>
+                                {currentSectionMeta.description}
+                            </div>
                         </div>
                     )}
 

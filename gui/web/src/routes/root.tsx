@@ -15,7 +15,7 @@ import {IOSInstallBanner} from "../components/IOSInstallBanner.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {
   IconMower, IconMap, IconSchedule, IconStats, IconLogs, IconDiag,
-  IconGear, IconRocket, FONT,
+  IconGear, IconRocket, FONT, KEYFRAMES_CSS,
 } from "../components/dashboard";
 
 interface NavItem {
@@ -142,6 +142,7 @@ export default function Root() {
         overflow: 'hidden',
         fontFamily: FONT,
       }}>
+        <style>{KEYFRAMES_CSS}</style>
         <LiveStatusStrip/>
         {/* Mobile Header */}
         <header style={{
@@ -309,6 +310,7 @@ export default function Root() {
       display: 'flex', height: '100%', minHeight: '100%', maxHeight: '100%',
       overflow: 'hidden', fontFamily: FONT,
     }}>
+      <style>{KEYFRAMES_CSS}</style>
       <nav
         onMouseEnter={() => setHovering(true)}
         onMouseLeave={() => setHovering(false)}

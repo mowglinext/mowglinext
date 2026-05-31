@@ -113,6 +113,53 @@ export const KEYFRAMES_CSS = `
   letter-spacing: -0.02em;
 }
 
+/* AntD upgrades -- pull the framework into the editorial system. */
+.ant-statistic-title {
+  font-family: 'Geist', sans-serif !important;
+  font-size: 11px !important;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600 !important;
+}
+.ant-statistic-content-value,
+.ant-statistic-content-prefix,
+.ant-statistic-content-suffix {
+  font-family: 'Instrument Serif', 'Iowan Old Style', Georgia, serif !important;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.015em;
+}
+.ant-statistic-content-suffix {
+  font-size: 0.55em;
+  margin-left: 4px;
+  vertical-align: 0.25em;
+  font-family: 'Geist Mono', monospace !important;
+  text-transform: lowercase;
+}
+.ant-card-head-title,
+.ant-collapse-header-text {
+  font-family: 'Geist', sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+.ant-typography h1,
+.ant-typography h2,
+.ant-typography h3 {
+  font-family: 'Instrument Serif', Georgia, serif !important;
+  font-weight: 400 !important;
+  letter-spacing: -0.015em !important;
+}
+.ant-tabs-tab-btn {
+  font-family: 'Geist', sans-serif;
+  font-weight: 500;
+}
+.ant-table-thead > tr > th {
+  font-family: 'Geist', sans-serif !important;
+  font-size: 11px !important;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600 !important;
+}
+
 /* Staggered page entrance: children with [data-stagger] animate in
    sequence on initial mount. Combine with --stagger-index from JS. */
 .mn-stagger > [data-stagger] {
