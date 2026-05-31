@@ -184,11 +184,13 @@ function PrimaryActionHero({running, onToggle}: {running: boolean; onToggle: () 
           >
             <span aria-hidden style={{
               position: "absolute", inset: 0,
-              background: "linear-gradient(115deg, transparent 25%, rgba(255,255,255,0.5) 50%, transparent 75%)",
+              borderRadius: "inherit",
+              background: "linear-gradient(115deg, transparent 25%, rgba(255,255,255,0.45) 50%, transparent 75%)",
               mixBlendMode: "overlay",
-              opacity: 0.6,
+              opacity: 0.55,
               transform: "translateX(-100%)",
               animation: "concept-shine 3.6s var(--ease-out) infinite",
+              pointerEvents: "none",
             }}/>
             <motion.div
               key={running ? "p" : "r"}

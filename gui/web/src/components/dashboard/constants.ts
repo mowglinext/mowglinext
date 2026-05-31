@@ -176,6 +176,106 @@ export const KEYFRAMES_CSS = `
   font-weight: 600 !important;
 }
 
+/* AntD buttons -- ensure healthy horizontal padding (some places use
+   small/icon buttons and the new font-weight + uppercase tracking can
+   push text edge-to-edge if padding is too tight). */
+.ant-btn {
+  padding-inline: 16px !important;
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+}
+.ant-btn-sm { padding-inline: 12px !important; }
+.ant-btn-lg { padding-inline: 22px !important; }
+.ant-btn-icon-only { padding-inline: 0 !important; }
+
+/* AntD primary button -- lime gradient + dark ink so it matches the
+   concept's hero Play. Default buttons get a glass treatment. */
+.ant-btn-primary {
+  background: linear-gradient(135deg, #7CFFB2 0%, #45D688 55%, #2BAA66 100%) !important;
+  border: none !important;
+  color: #02110D !important;
+  font-weight: 700 !important;
+  box-shadow: 0 8px 24px -10px rgba(124, 255, 178, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.35) !important;
+  transition: transform 0.12s ease, box-shadow 0.12s ease !important;
+}
+.ant-btn-primary:hover,
+.ant-btn-primary:focus {
+  background: linear-gradient(135deg, #A3FFCB 0%, #5EE3A0 55%, #45D688 100%) !important;
+  box-shadow: 0 10px 28px -8px rgba(124, 255, 178, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.42) !important;
+  transform: translateY(-1px);
+  color: #02110D !important;
+}
+.ant-btn-primary:active { transform: translateY(0); }
+
+.ant-btn-default {
+  background: rgba(255, 255, 255, 0.045) !important;
+  border: 1px solid rgba(236, 255, 244, 0.10) !important;
+  color: #ECFFF4 !important;
+  backdrop-filter: blur(12px);
+  font-weight: 600 !important;
+}
+.ant-btn-default:hover,
+.ant-btn-default:focus {
+  background: rgba(255, 255, 255, 0.075) !important;
+  border-color: rgba(124, 255, 178, 0.35) !important;
+  color: #ECFFF4 !important;
+}
+
+.ant-btn-dangerous {
+  background: rgba(255, 107, 122, 0.12) !important;
+  border: 1px solid rgba(255, 107, 122, 0.4) !important;
+  color: #FF6B7A !important;
+  font-weight: 600 !important;
+}
+.ant-btn-dangerous:hover,
+.ant-btn-dangerous:focus {
+  background: rgba(255, 107, 122, 0.18) !important;
+  border-color: rgba(255, 107, 122, 0.6) !important;
+  color: #FF6B7A !important;
+}
+
+/* AntD Steps -- pull the stepper into the concept palette. */
+.ant-steps-item-process .ant-steps-item-icon {
+  background: linear-gradient(135deg, #7CFFB2, #2BAA66) !important;
+  border-color: transparent !important;
+  box-shadow: 0 8px 22px -8px rgba(124, 255, 178, 0.5);
+}
+.ant-steps-item-process .ant-steps-item-icon > .ant-steps-icon { color: #02110D !important; }
+.ant-steps-item-finish .ant-steps-item-icon {
+  background: rgba(124, 255, 178, 0.16) !important;
+  border-color: rgba(124, 255, 178, 0.5) !important;
+}
+.ant-steps-item-finish .ant-steps-item-icon > .ant-steps-icon { color: #7CFFB2 !important; }
+.ant-steps-item-wait .ant-steps-item-icon {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border-color: rgba(236, 255, 244, 0.14) !important;
+}
+.ant-steps-item-title { color: #ECFFF4 !important; }
+.ant-steps-item-process > .ant-steps-item-container > .ant-steps-item-content > .ant-steps-item-title {
+  color: #7CFFB2 !important;
+}
+.ant-steps-item-tail::after { background: rgba(236, 255, 244, 0.10) !important; }
+.ant-steps-item-finish > .ant-steps-item-container > .ant-steps-item-tail::after {
+  background: linear-gradient(90deg, #7CFFB2, #45D688) !important;
+}
+
+/* AntD Switch -- lime when on. */
+.ant-switch-checked {
+  background: linear-gradient(135deg, #7CFFB2, #2BAA66) !important;
+}
+.ant-switch-checked:hover {
+  background: linear-gradient(135deg, #A3FFCB, #45D688) !important;
+}
+
+/* AntD Tag glow tweaks */
+.ant-tag {
+  border-radius: 999px !important;
+  padding: 2px 10px !important;
+  font-weight: 600 !important;
+  border-width: 1px !important;
+}
+
 /* Staggered page entrance: children with [data-stagger] animate in
    sequence on initial mount. Combine with --stagger-index from JS. */
 .mn-stagger > [data-stagger] {

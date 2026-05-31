@@ -50,15 +50,19 @@ export function ActionCluster({phase, onStart, onPause, onHome, onStop}: ActionC
           overflow: "hidden",
         }}
       >
-        {/* inner shine sweep on hover -- pure CSS animation toggled by class
-            wouldn't work for framer-motion press; using a pseudo via inline */}
+        {/* inner shine sweep -- clip to the circle by inheriting the parent's
+            border-radius (overflow:hidden on the framer-motion button is
+            unreliable because the press transform creates a new stacking
+            context). */}
         <span aria-hidden style={{
           position: "absolute", inset: 0,
-          background: "linear-gradient(115deg, transparent 25%, rgba(255,255,255,0.5) 50%, transparent 75%)",
+          borderRadius: "inherit",
+          background: "linear-gradient(115deg, transparent 25%, rgba(255,255,255,0.45) 50%, transparent 75%)",
           mixBlendMode: "overlay",
-          opacity: 0.6,
+          opacity: 0.55,
           transform: "translateX(-100%)",
           animation: "concept-shine 3.6s var(--ease-out) infinite",
+          pointerEvents: "none",
         }}/>
         <motion.div
           key={primaryPlaying ? "pause" : "play"}
