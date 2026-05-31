@@ -5,6 +5,7 @@ import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {DashCard, Bar} from "../components/dashboard";
+import {YearOfLawn} from "../components/YearOfLawn.tsx";
 
 interface MowingSession {
   id: string;
@@ -151,7 +152,7 @@ export const StatisticsPage = () => {
 
   return (
     <div style={{display: 'flex', flexDirection: 'column', gap: 16, paddingBottom: 8}}>
-      {/* Hero stats */}
+      {/* Hero stats -- accent watermark per metric, no border to feel lighter */}
       <div style={{display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 12}}>
         {[
           {label: 'Total distance', value: formatDistance(stats?.total_distance_m ?? 0), unit: formatDistanceUnit(stats?.total_distance_m ?? 0), hint: 'since install', color: colors.accent},
@@ -159,23 +160,47 @@ export const StatisticsPage = () => {
           {label: 'Completion rate', value: `${completionRate}`, unit: '%', hint: `${stats?.completed ?? 0} completed`, color: colors.amber},
           {label: 'Runs completed', value: `${stats?.total_sessions ?? 0}`, unit: '', hint: `avg ${Math.round(stats?.avg_coverage_pct ?? 0)}% coverage`, color: colors.accent},
         ].map(s => (
-          <DashCard key={s.label} padding={18}>
+          <DashCard key={s.label} padding={isMobile ? 16 : 20}
+                    style={{position: 'relative', overflow: 'hidden'}}>
+            <div aria-hidden style={{
+              position: 'absolute', top: -28, right: -28, width: 110, height: 110, borderRadius: 110,
+              background: `radial-gradient(circle, ${s.color}24 0%, transparent 70%)`,
+              pointerEvents: 'none',
+            }}/>
             <div style={{
-              fontSize: 11, color: colors.textDim,
-              letterSpacing: '0.08em', textTransform: 'uppercase' as const, marginBottom: 8,
+              position: 'relative', fontSize: 11, color: colors.textDim,
+              letterSpacing: '0.08em', textTransform: 'uppercase' as const, marginBottom: 10,
+              fontWeight: 600,
             }}>
               {s.label}
             </div>
-            <div style={{display: 'flex', alignItems: 'baseline', gap: 4}}>
-              <div style={{fontSize: isMobile ? 28 : 36, fontWeight: 700, color: s.color, letterSpacing: '-0.03em', lineHeight: 1}}>
+            <div style={{position: 'relative', display: 'flex', alignItems: 'baseline', gap: 4}}>
+              <div className="mn-num" style={{
+                fontSize: isMobile ? 44 : 60, color: s.color,
+                lineHeight: 1,
+              }}>
                 {s.value}
               </div>
-              {s.unit && <div style={{fontSize: 14, color: colors.textDim, fontWeight: 600}}>{s.unit}</div>}
+              {s.unit && (
+                <div style={{
+                  fontSize: 14, color: colors.textDim, fontWeight: 500,
+                  marginLeft: 4,
+                  fontFamily: "'Geist Mono', 'JetBrains Mono', monospace",
+                  textTransform: 'lowercase' as const, letterSpacing: '0.04em',
+                }}>{s.unit}</div>
+              )}
             </div>
-            <div style={{fontSize: 11, color: colors.textMuted, marginTop: 6}}>{s.hint}</div>
+            <div style={{
+              position: 'relative', fontSize: 11, color: colors.textMuted, marginTop: 8, fontWeight: 500,
+            }}>{s.hint}</div>
           </DashCard>
         ))}
       </div>
+
+      {/* Year of lawn -- contribution-style heatmap of mowing distance */}
+      <DashCard>
+        <YearOfLawn sessions={sessions}/>
+      </DashCard>
 
       {/* Weekly chart */}
       <DashCard>

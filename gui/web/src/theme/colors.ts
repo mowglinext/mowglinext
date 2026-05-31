@@ -90,41 +90,45 @@ const LIGHT: ColorTokens = {
   textMuted: 'rgba(20, 22, 20, 0.40)',
 };
 
+// Mowgli dark palette -- premium "tech-garden" tokens shared with the
+// /concept prototype. Deep emerald canvas, lime hero accent, aurora-
+// cyan secondary, ember amber for warnings, rose for danger. Paper-warm
+// ink so the editorial type sits on the surface like print.
 const DARK: ColorTokens = {
-  bgBase: '#0F1210',
-  bgCard: '#1A201C',
-  bgElevated: '#1F2721',
-  bgSubtle: '#151A17',
-  primary: '#3EE084',
-  primaryLight: '#52E897',
-  primaryDark: '#2FC56E',
-  primaryBg: 'rgba(62, 224, 132, 0.12)',
-  accent: '#3EE084',
-  accentAmber: '#FFC567',
-  danger: '#FF6B6B',
-  dangerBg: 'rgba(255, 107, 107, 0.14)',
-  warning: '#FFC567',
-  info: '#7BC6FF',
-  success: '#3EE084',
-  text: '#ECF3EE',
-  textSecondary: 'rgba(236, 243, 238, 0.60)',
-  muted: 'rgba(236, 243, 238, 0.40)',
-  border: 'rgba(255, 255, 255, 0.07)',
-  borderSubtle: 'rgba(255, 255, 255, 0.04)',
-  glassBackground: 'rgba(26, 32, 28, 0.75)',
-  glassBorder: '1px solid rgba(255, 255, 255, 0.08)',
-  glassShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+  bgBase: '#02110D',           // puits émeraude
+  bgCard: '#0B1814',
+  bgElevated: '#101F19',
+  bgSubtle: '#061812',
+  primary: '#7CFFB2',          // lime hero
+  primaryLight: '#A3FFCB',
+  primaryDark: '#45D688',
+  primaryBg: 'rgba(124, 255, 178, 0.10)',
+  accent: '#7CFFB2',
+  accentAmber: '#F3A85C',
+  danger: '#FF6B7A',
+  dangerBg: 'rgba(255, 107, 122, 0.14)',
+  warning: '#F3A85C',
+  info: '#45D6E8',             // aurora cyan
+  success: '#7CFFB2',
+  text: '#ECFFF4',             // papier-vert chaud
+  textSecondary: 'rgba(236, 255, 244, 0.66)',
+  muted: 'rgba(236, 255, 244, 0.42)',
+  border: 'rgba(236, 255, 244, 0.07)',
+  borderSubtle: 'rgba(236, 255, 244, 0.04)',
+  glassBackground: 'rgba(11, 24, 20, 0.78)',
+  glassBorder: '1px solid rgba(236, 255, 244, 0.08)',
+  glassShadow: '0 24px 60px -20px rgba(0, 0, 0, 0.7), 0 4px 16px -4px rgba(0, 0, 0, 0.4)',
 
-  panel: '#1A201C',
-  panelHi: '#1F2721',
-  accentSoft: 'rgba(62, 224, 132, 0.12)',
-  sky: '#7BC6FF',
-  skySoft: 'rgba(123, 198, 255, 0.14)',
-  amber: '#FFC567',
-  amberSoft: 'rgba(255, 197, 103, 0.14)',
-  pink: '#FF8AA8',
-  textDim: 'rgba(236, 243, 238, 0.60)',
-  textMuted: 'rgba(236, 243, 238, 0.38)',
+  panel: '#0B1814',
+  panelHi: '#101F19',
+  accentSoft: 'rgba(124, 255, 178, 0.10)',
+  sky: '#45D6E8',
+  skySoft: 'rgba(69, 214, 232, 0.12)',
+  amber: '#F3A85C',
+  amberSoft: 'rgba(243, 168, 92, 0.14)',
+  pink: '#FF6B7A',
+  textDim: 'rgba(244, 241, 234, 0.62)',
+  textMuted: 'rgba(244, 241, 234, 0.40)',
 };
 
 export function getColors(mode: ThemeMode): ColorTokens {

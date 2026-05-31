@@ -414,8 +414,8 @@
         "battery_full_voltage": {
           "type": "number",
           "title": "Full Voltage",
-          "default": 28.5,
-          "description": "Voltage at which battery is considered full."
+          "default": 28.0,
+          "description": "Voltage at which battery is considered full. Default 28.0 matches YardForce500 SLA packs on the dock; raise if your pack genuinely reaches a higher resting voltage."
         },
         "battery_empty_voltage": {
           "type": "number",

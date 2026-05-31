@@ -24,6 +24,7 @@ import { SafetySection } from "../components/settings/SafetySection.tsx";
 import { NavigationSection } from "../components/settings/NavigationSection.tsx";
 import { RainSection } from "../components/settings/RainSection.tsx";
 import { AdvancedSection } from "../components/settings/AdvancedSection.tsx";
+import { SettingsPreview } from "../components/settings/SettingsPreview.tsx";
 
 const { Text } = Typography;
 
@@ -180,15 +181,33 @@ export const SettingsPage = () => {
                 }}>
                     {/* Section header */}
                     {currentSectionMeta && (
-                        <div style={{ marginBottom: 16 }}>
-                            <Text strong style={{ fontSize: 16 }}>{currentSectionMeta.label}</Text>
-                            <br />
-                            <Text type="secondary" style={{ fontSize: 12 }}>{currentSectionMeta.description}</Text>
+                        <div style={{ marginBottom: 20 }}>
+                            <div className="mn-display" style={{
+                                fontSize: 28, color: colors.text, lineHeight: 1.1, letterSpacing: '-0.01em',
+                            }}>
+                                {currentSectionMeta.label}
+                            </div>
+                            <div style={{
+                                fontSize: 12, color: colors.textDim, marginTop: 4,
+                            }}>
+                                {currentSectionMeta.description}
+                            </div>
                         </div>
                     )}
 
                     {renderSection()}
                 </div>
+
+                {/* Live preview rail (desktop only) */}
+                {!isMobile && (
+                    <div style={{
+                        width: 260, flexShrink: 0,
+                        padding: "0 16px 120px 0",
+                        overflowY: "auto",
+                    }}>
+                        <SettingsPreview values={values} section={activeSection}/>
+                    </div>
+                )}
             </div>
 
             {/* Fixed save bar */}

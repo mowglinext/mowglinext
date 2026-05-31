@@ -1,27 +1,31 @@
 <!DOCTYPE html>
-<html lang="en" style="background: #FFFFFF;">
+<html lang="en" style="background: #0F1210; color-scheme: dark;">
 <head>
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
     <meta name="apple-mobile-web-app-capable" content="yes"/>
-    <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
-    <meta name="theme-color" content="#FFFFFF"/>
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+    <meta name="theme-color" content="#0F1210"/>
     <link rel="preconnect" href="https://fonts.googleapis.com"/>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+    <!-- Typography stack: editorial serif (Instrument Serif) for display
+         numbers and headlines, technical sans (Geist) for body + labels,
+         JetBrains Mono for data + code. Avoids the generic Inter/Roboto
+         look in favour of something that reads like a garden survey log. -->
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300..800&family=Geist+Mono:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+    <!-- Satoshi via Fontshare for the /concept prototype. -->
+    <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700,900&display=swap" rel="stylesheet"/>
     <link rel="manifest" href="/manifest.json"/>
     <link href="https://api.mapbox.com/mapbox-gl-js/v2.6.1/mapbox-gl.css" rel="stylesheet">
     <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.3.0/mapbox-gl-draw.css"
           type="text/css">
     <title>MowgliNext</title>
 <style>
-    @media (max-width: 767px) {
-        .beamer_defaultBeamerSelector { display: none !important; }
-    }
     body {
         margin: 0;
         padding: 0;
-        background: #FFFFFF;
+        background: #0F1210;
+        color: #ECF3EE;
         height: 100vh;
         height: 100dvh;
         overflow: hidden;
@@ -39,11 +43,5 @@
 <body>
 <div id="root"></div>
 <script type="module" src="/src/main.tsx"></script>
-<script>
-    var beamer_config = {
-        product_id: 'dRSYRRqK59491',
-    };
-</script>
-<script type="text/javascript" src="https://app.getbeamer.com/js/beamer-embed.js" defer="defer"></script>
 </body>
 </html>

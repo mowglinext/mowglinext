@@ -1,6 +1,8 @@
 /** Default battery voltage thresholds — must match mower_config.schema.json */
 export const BATTERY_DEFAULTS = {
-    fullVoltage: 28.5,
+    // YardForce500 SLA packs top out around 28.0 V at the dock; the old
+    // 28.5 V default capped the displayed percent at 88.9 % even when full.
+    fullVoltage: 28.0,
     emptyVoltage: 24.0,
     criticalVoltage: 23.0,
 } as const;

@@ -72,6 +72,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const [dockDirty, setDockDirty] = useState<boolean>(false);
     const [mapKey, setMapKey] = useState<string>("origin")
     const [useSatellite, setUseSatellite] = useState(true)
+    const [pitched, setPitched] = useState(false)
+    const togglePitch = useCallback(() => {
+        setPitched(prev => {
+            const next = !prev;
+            const m = mapInstanceRef.current;
+            if (m) m.easeTo({pitch: next ? 50 : 0, duration: 600});
+            return next;
+        });
+    }, [])
     const robotPoseRef = useRef<{ x: number; y: number; heading: number } | null>(null)
     const mapInstanceRef = useRef<MapboxMap | null>(null)
     const drawRef = useRef<import('@mapbox/mapbox-gl-draw').default | null>(null);
@@ -645,7 +654,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     }
 
     return (
-        <div style={{height: isMobile ? 'calc(100% + 8px)' : 'calc(100% + 10px)', margin: isMobile ? '-8px -8px 0' : '-10px -24px 0', width: isMobile ? 'calc(100% + 16px)' : 'calc(100% + 48px)'}}>
+        <div style={{
+            // Full-bleed the map across the AppShell's main padding.
+            // Desktop main padding is 24px top / 32px horizontal / 48px bottom.
+            // Mobile main padding is 12px top / 14px horizontal / 110px bottom.
+            position: 'relative',
+            height: isMobile ? 'calc(100% + 122px)' : 'calc(100% + 72px)',
+            width:  isMobile ? 'calc(100% + 28px)'  : 'calc(100% + 64px)',
+            margin: isMobile ? '-12px -14px -110px' : '-24px -32px -48px',
+        }}>
             <NewAreaModal
                 open={modalOpen}
                 areaType={newAreaType}
@@ -899,6 +916,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             mowingAreas={mowingAreas}
                             stateName={highLevelStatus.highLevelStatus.state_name}
                             emergency={highLevelStatus.highLevelStatus.emergency}
+                            pitched={pitched}
+                            onTogglePitch={togglePitch}
                             onEditMap={handleEditMap}
                             onToggleSatellite={() => setUseSatellite(!useSatellite)}
                             onManualMode={handleManualMode}

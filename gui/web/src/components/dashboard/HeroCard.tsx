@@ -6,6 +6,7 @@ import {RadialGauge} from "./RadialGauge.tsx";
 import {Bar} from "./Bar.tsx";
 import {IconAlert, IconHome, IconPlay, IconPause, IconBolt, IconBattery, IconMower, IconRain, IconSignal} from "./Icons.tsx";
 import {fmt} from "./constants.ts";
+import {TopographicBackdrop} from "../TopographicBackdrop.tsx";
 
 interface MowerData {
   state: string;
@@ -59,7 +60,7 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
             }}>
               Mower needs you
             </div>
-            <div style={{fontSize: compact ? 17 : 22, fontWeight: 700, color: colors.text, marginTop: 4, letterSpacing: '-0.02em'}}>
+            <div className="mn-display" style={{fontSize: compact ? 24 : 34, color: colors.text, marginTop: 6, lineHeight: 1.05}}>
               {state === 'BOUNDARY_EMERGENCY_STOP' ? 'Crossed the boundary' : 'Emergency stop'}
             </div>
             <div style={{fontSize: compact ? 13 : 14, color: colors.textDim, marginTop: 6, lineHeight: 1.5}}>
@@ -104,7 +105,7 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
           {compact ? (
             <div style={{display: 'flex', alignItems: 'center', gap: 14, width: '100%'}}>
               <RadialGauge value={data.battery} size={gaugeSize} thickness={8} color={colors.accent} track="rgba(255,255,255,0.08)">
-                <div style={{fontSize: 22, fontWeight: 700, color: colors.text}}>{Math.round(data.battery)}%</div>
+                <div className="mn-num" style={{fontSize: 32, color: colors.text, lineHeight: 1}}>{Math.round(data.battery)}<span style={{fontSize: 14, color: colors.textDim, fontFamily: 'Geist Mono, monospace', textTransform: 'lowercase', marginLeft: 2}}>%</span></div>
               </RadialGauge>
               <div style={{flex: 1}}>
                 <div style={{
@@ -113,7 +114,7 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
                 }}>
                   <IconBolt size={10}/> CHARGING
                 </div>
-                <div style={{fontSize: 20, fontWeight: 700, color: colors.text, marginTop: 4, letterSpacing: '-0.02em'}}>
+                <div style={{fontSize: 20, color: colors.text, marginTop: 6}}>
                   ~{etaMin} min left
                 </div>
                 <div style={{fontSize: 13, color: colors.textDim, marginTop: 4}}>
@@ -140,7 +141,7 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
                 }}>
                   Topping up
                 </div>
-                <div style={{fontSize: 28, fontWeight: 700, color: colors.text, marginTop: 4, letterSpacing: '-0.02em'}}>
+                <div style={{fontSize: 28, color: colors.text, marginTop: 6}}>
                   Back to full in ~{etaMin} min
                 </div>
                 <div style={{fontSize: 14, color: colors.textDim, marginTop: 6, lineHeight: 1.5}}>
@@ -188,7 +189,7 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
             }}>
               Paused -- rain detected
             </div>
-            <div style={{fontSize: compact ? 20 : 26, fontWeight: 700, letterSpacing: '-0.02em', marginTop: 4, color: colors.text}}>
+            <div className="mn-display" style={{fontSize: compact ? 24 : 34, marginTop: 6, lineHeight: 1.1, color: colors.text}}>
               Waiting out the weather
             </div>
             <div style={{fontSize: compact ? 13 : 14, color: colors.textDim, marginTop: 6, lineHeight: 1.5}}>
@@ -230,7 +231,7 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
             }}>
               Running low
             </div>
-            <div style={{fontSize: compact ? 20 : 26, fontWeight: 700, letterSpacing: '-0.02em', marginTop: 4, color: colors.text}}>
+            <div className="mn-display" style={{fontSize: compact ? 24 : 34, marginTop: 6, lineHeight: 1.1, color: colors.text}}>
               Heading to dock -- {Math.round(data.battery)}%
             </div>
             <div style={{fontSize: compact ? 13 : 14, color: colors.textDim, marginTop: 6, lineHeight: 1.5}}>
@@ -282,9 +283,9 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
               <IconSignal size={12}/> {data.gps.toFixed(0)}%
             </div>
           </div>
-          <div style={{
-            fontSize: compact ? 20 : 28, fontWeight: 700, color: colors.text,
-            marginTop: compact ? 8 : 10, letterSpacing: '-0.02em', lineHeight: 1.15,
+          <div className="mn-display" style={{
+            fontSize: compact ? 26 : 38, color: colors.text,
+            marginTop: compact ? 10 : 12, lineHeight: 1.05,
           }}>
             {headline}
           </div>
@@ -324,15 +325,18 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
   // for the robot to ignore.
   const idleOffDock = state === 'IDLE';
   return (
-    <DashCard padding={compact ? 16 : 22} style={{
-      background: `linear-gradient(135deg, rgba(123,198,255,0.14), rgba(62,224,132,0.06))`,
+    <DashCard padding={compact ? 16 : 26} style={{
+      position: 'relative', overflow: 'hidden',
+      background: `linear-gradient(135deg, ${colors.bgCard}, ${colors.bgElevated})`,
       border: `1px solid ${colors.border}`,
     }}>
+      <TopographicBackdrop intensity={0.09} rotate={-12}/>
       <div style={{
+        position: 'relative',
         display: 'flex',
         flexDirection: compact ? 'column' : 'row',
         alignItems: compact ? 'flex-start' : 'center',
-        gap: compact ? 14 : 22,
+        gap: compact ? 14 : 24,
       }}>
         <div style={{display: 'flex', alignItems: 'center', gap: 14}}>
           <div style={{
@@ -350,8 +354,8 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
               }}>
                 {idleOffDock ? 'Mowgli is parked' : 'Mowgli is ready'}
               </div>
-              <div style={{fontSize: 20, fontWeight: 700, color: colors.text, marginTop: 2, letterSpacing: '-0.02em'}}>
-                {idleOffDock ? `Out on the lawn at ${Math.round(data.battery)}%` : `All rested at ${Math.round(data.battery)}%`}
+              <div className="mn-display" style={{fontSize: 26, color: colors.text, marginTop: 4, lineHeight: 1.05}}>
+                {idleOffDock ? <>Out on the lawn at <em>{Math.round(data.battery)}%</em></> : <>All rested at <em>{Math.round(data.battery)}%</em></>}
               </div>
             </div>
           )}
@@ -364,8 +368,8 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
             }}>
               {idleOffDock ? 'Mowgli is parked' : 'Mowgli is ready'}
             </div>
-            <div style={{fontSize: 26, fontWeight: 700, color: colors.text, marginTop: 4, letterSpacing: '-0.02em'}}>
-              {idleOffDock ? `Out on the lawn at ${Math.round(data.battery)}%` : `All rested at ${Math.round(data.battery)}%`}
+            <div className="mn-display" style={{fontSize: 38, color: colors.text, marginTop: 8, lineHeight: 1.05}}>
+              {idleOffDock ? <>Out on the lawn at <em>{Math.round(data.battery)}%</em></> : <>All rested at <em>{Math.round(data.battery)}%</em></>}
             </div>
             <div style={{fontSize: 14, color: colors.textDim, marginTop: 6}}>
               {idleOffDock

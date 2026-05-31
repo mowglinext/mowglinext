@@ -1,10 +1,11 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import {createHashRouter, RouterProvider,} from "react-router-dom";
-import Root from "./routes/root.tsx";
+import AppShell from "./components/AppShell.tsx";
 import {App, ConfigProvider, theme} from "antd";
 import {Spinner} from "./components/Spinner.tsx";
 import {ThemeProvider, useThemeMode} from "./theme/ThemeContext.tsx";
+import {NotificationCenterProvider} from "./hooks/useNotificationCenter.tsx";
 
 // Lazy-load each page so the first paint only ships the shell + the route
 // the user actually opens. Everything else streams in on demand.
@@ -16,11 +17,18 @@ const OnboardingPage   = React.lazy(() => import("./pages/OnboardingPage.tsx"));
 const SchedulePage     = React.lazy(() => import("./pages/SchedulePage.tsx"));
 const DiagnosticsPage  = React.lazy(() => import("./pages/DiagnosticsPage.tsx"));
 const StatisticsPage   = React.lazy(() => import("./pages/StatisticsPage.tsx"));
+const ConceptRoot      = React.lazy(() => import("./concept/ConceptRoot.tsx"));
 
 const router = createHashRouter([
     {
+        // Standalone premium concept -- lives outside the AntD chrome so
+        // its tokens + CSS don't fight with the operator app.
+        path: "/concept",
+        element: <ConceptRoot/>,
+    },
+    {
         path: "/",
-        element: <Root/>,
+        element: <AppShell/>,
         children: [
             {
                 element: <SettingsPage/>,
@@ -59,11 +67,11 @@ const router = createHashRouter([
 ]);
 
 function ThemedApp() {
-    const {mode, colors} = useThemeMode();
+    const {colors} = useThemeMode();
 
     return (
         <ConfigProvider theme={{
-            algorithm: mode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
+            algorithm: theme.darkAlgorithm,
             token: {
                 colorPrimary: colors.primary,
                 colorSuccess: colors.success,
@@ -76,15 +84,27 @@ function ThemedApp() {
                 colorText: colors.text,
                 colorTextSecondary: colors.textSecondary,
                 borderRadius: 12,
-                fontFamily: '"DM Sans", "DM Sans Variable", sans-serif',
-                fontFamilyCode: '"DM Mono", monospace',
+                fontFamily: '"Satoshi", "Inter", -apple-system, BlinkMacSystemFont, sans-serif',
+                fontFamilyCode: '"Space Grotesk", "JetBrains Mono", ui-monospace, monospace',
             },
             components: {
                 Card: {
-                    colorBorderSecondary: mode === 'dark' ? 'transparent' : colors.border,
+                    colorBorderSecondary: 'transparent',
                 },
                 Button: {
-                    borderRadius: 8,
+                    borderRadius: 10,
+                    controlHeight: 38,
+                    controlHeightSM: 30,
+                    fontWeight: 600,
+                    primaryShadow: '0 8px 24px -10px rgba(124, 255, 178, 0.55)',
+                    defaultBg: 'rgba(255, 255, 255, 0.04)',
+                    defaultBorderColor: 'rgba(236, 255, 244, 0.10)',
+                    defaultColor: colors.text,
+                    colorPrimaryHover: colors.primaryLight,
+                    colorPrimaryActive: colors.primaryDark,
+                    colorPrimaryTextHover: '#02110D',
+                    colorTextLightSolid: '#02110D',
+                    dangerShadow: '0 8px 24px -10px rgba(255, 107, 122, 0.45)',
                 },
                 Input: {
                     colorBgContainer: colors.bgElevated,
@@ -97,9 +117,11 @@ function ThemedApp() {
             },
         }}>
             <App style={{height: "100%"}}>
-                <React.Suspense fallback={<Spinner/>}>
-                    <RouterProvider router={router}/>
-                </React.Suspense>
+                <NotificationCenterProvider>
+                    <React.Suspense fallback={<Spinner/>}>
+                        <RouterProvider router={router}/>
+                    </React.Suspense>
+                </NotificationCenterProvider>
             </App>
         </ConfigProvider>
     );

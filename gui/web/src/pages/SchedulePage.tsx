@@ -73,12 +73,12 @@ export const SchedulePage = () => {
     fetchSchedules();
   }, [fetchSchedules]);
 
-  const handleCreate = async () => {
+  const handleCreate = async (body?: Partial<Schedule>) => {
     setLoading(true);
     try {
       await guiApi.request({
         path: "/schedules", method: "POST",
-        body: {area: 0, time: "09:00", daysOfWeek: [1, 2, 3, 4, 5], enabled: false},
+        body: {area: 0, time: "09:00", daysOfWeek: [1, 2, 3, 4, 5], enabled: false, ...body},
         format: "json",
       });
       await fetchSchedules();
@@ -88,6 +88,65 @@ export const SchedulePage = () => {
       setLoading(false);
     }
   };
+
+  const STARTER_TEMPLATES: { name: string; subtitle: string; body: Partial<Schedule>; icon: string }[] = [
+    {
+      name: "Weekend warrior",
+      subtitle: "Saturdays at 10:00",
+      body: {time: "10:00", daysOfWeek: [6]},
+      icon: "sun",
+    },
+    {
+      name: "Stealth runs",
+      subtitle: "Mon · Wed · Fri at 06:00",
+      body: {time: "06:00", daysOfWeek: [1, 3, 5]},
+      icon: "moon",
+    },
+    {
+      name: "Daily quick mow",
+      subtitle: "Every day at 08:00",
+      body: {time: "08:00", daysOfWeek: [0, 1, 2, 3, 4, 5, 6]},
+      icon: "calendar",
+    },
+  ];
+
+  const templateAccents = [colors.accent, colors.sky, colors.amber, colors.pink];
+  const templateCards = (
+    <div style={{display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, 1fr)', gap: 10}}>
+      {STARTER_TEMPLATES.map((tpl, i) => {
+        const color = templateAccents[i % templateAccents.length];
+        return (
+          <button
+            key={tpl.name}
+            onClick={() => handleCreate(tpl.body)}
+            disabled={loading}
+            style={{
+              textAlign: 'left',
+              background: `${color}10`,
+              border: `1px solid ${color}40`,
+              borderRadius: 10,
+              padding: '12px 14px',
+              cursor: loading ? 'wait' : 'pointer',
+              transition: 'transform 0.15s, border-color 0.15s',
+              fontFamily: FONT,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.borderColor = color; }}
+            onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.borderColor = `${color}40`; }}
+          >
+            <div style={{fontSize: 11, color, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase'}}>
+              {tpl.icon === 'sun' ? 'Weekly' : tpl.icon === 'moon' ? 'Off-hours' : 'Every day'}
+            </div>
+            <div style={{fontSize: 14, fontWeight: 700, color: colors.text, marginTop: 4}}>
+              {tpl.name}
+            </div>
+            <div style={{fontSize: 12, color: colors.textDim, marginTop: 4}}>
+              {tpl.subtitle}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
 
   const handleUpdate = async (sched: Schedule) => {
     try {
@@ -221,12 +280,20 @@ export const SchedulePage = () => {
     return (
       <div style={{display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 8}}>
         <div style={{display: 'flex', justifyContent: 'flex-end'}}>
-          <ActionButton primary icon={<IconPlus size={14}/>} label="New run" onClick={handleCreate} disabled={loading}/>
+          <ActionButton primary icon={<IconPlus size={14}/>} label="New run" onClick={() => handleCreate()} disabled={loading}/>
         </div>
         {schedules.length === 0 && (
-          <DashCard style={{textAlign: 'center', padding: 32, color: colors.textSecondary}}>
-            No schedules configured yet.
-          </DashCard>
+          <>
+            <DashCard style={{padding: 18}}>
+              <div style={{fontSize: 14, fontWeight: 700, marginBottom: 6}}>
+                Pick a starter
+              </div>
+              <div style={{fontSize: 12, color: colors.textDim, marginBottom: 12}}>
+                One tap to create a schedule. Tune the days, time and area afterwards.
+              </div>
+              {templateCards}
+            </DashCard>
+          </>
         )}
         {schedules.map((s, i) => scheduleCard(s, i))}
       </div>
@@ -280,9 +347,12 @@ export const SchedulePage = () => {
       {/* Sub-cards */}
       <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14}}>
         <DashCard>
-          <div style={{fontSize: 13, fontWeight: 600, marginBottom: 12}}>This week</div>
-          <div style={{display: 'flex', alignItems: 'baseline', gap: 6}}>
-            <div style={{fontSize: 28, fontWeight: 700, letterSpacing: '-0.02em'}}>{activeCount}</div>
+          <div style={{
+            fontSize: 11, color: colors.textMuted, marginBottom: 14,
+            letterSpacing: '0.08em', textTransform: 'uppercase' as const, fontWeight: 600,
+          }}>This week</div>
+          <div style={{display: 'flex', alignItems: 'baseline', gap: 8}}>
+            <div className="mn-num" style={{fontSize: 46, lineHeight: 1, color: colors.text}}>{activeCount}</div>
             <div style={{fontSize: 12, color: colors.textDim}}>active schedules</div>
           </div>
           <div style={{display: 'flex', gap: 4, marginTop: 12}}>
@@ -308,12 +378,12 @@ export const SchedulePage = () => {
           <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12}}>
             <div style={{fontSize: 13, fontWeight: 600}}>Schedules</div>
             <ActionButton primary icon={<IconPlus size={14}/>} label="New run"
-                     onClick={handleCreate} disabled={loading}
+                     onClick={() => handleCreate()} disabled={loading}
                      style={{padding: '8px 14px', fontSize: 12}}/>
           </div>
           <div style={{fontSize: 13, color: colors.textDim, lineHeight: 1.6}}>
             {schedules.length === 0
-              ? 'No schedules yet. Create one to automate mowing.'
+              ? 'No schedules yet. Pick a starter below or create a custom run.'
               : `${schedules.length} schedule${schedules.length > 1 ? 's' : ''} configured.`}
           </div>
         </DashCard>
@@ -345,6 +415,21 @@ export const SchedulePage = () => {
           ))}
         </DashCard>
       </div>
+
+      {/* Starter templates (empty state) */}
+      {schedules.length === 0 && (
+        <DashCard>
+          <div style={{display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12}}>
+            <div>
+              <div style={{fontSize: 14, fontWeight: 700}}>Pick a starter</div>
+              <div style={{fontSize: 12, color: colors.textDim, marginTop: 2}}>
+                One click to create a schedule. Tune the days, time and area afterwards.
+              </div>
+            </div>
+          </div>
+          {templateCards}
+        </DashCard>
+      )}
 
       {/* Detailed schedule cards */}
       {schedules.length > 0 && (

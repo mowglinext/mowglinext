@@ -95,7 +95,8 @@ export const useWS = <T>(
         pubFirstRef.current = true;
         const protocol = window.location.protocol === "https:" ? "wss" : "ws";
         if (import.meta.env.DEV) {
-            setPubUri(`${protocol}://localhost:4006${uri}`);
+            const host = (import.meta.env.VITE_API_HOST as string | undefined) ?? 'localhost:4006';
+            setPubUri(`${protocol}://${host}${uri}`);
         } else {
             setPubUri(`${protocol}://${window.location.host}${uri}`);
         }

@@ -1,5 +1,9 @@
-export const FONT = "'Manrope', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif";
-export const MONO_FONT = "'JetBrains Mono', monospace";
+// Typography commitments -- Mowgli is premium tech-garden hardware. Satoshi
+// for the warm sans body + UI, Instrument Serif kept as accent for hero
+// moments, Space Grotesk for tabular telemetry numerals.
+export const FONT = "'Satoshi', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif";
+export const DISPLAY_FONT = "'Instrument Serif', 'Iowan Old Style', Georgia, serif";
+export const MONO_FONT = "'Space Grotesk', 'JetBrains Mono', ui-monospace, monospace";
 
 // Every state_name listed here must match a string emitted by main_tree.xml
 // (grep PublishHighLevelStatus). 'tone' drives the HeroCard palette:
@@ -74,6 +78,10 @@ export const KEYFRAMES_CSS = `
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(0.85); }
 }
+@keyframes mn-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 @media (prefers-reduced-motion: no-preference) {
   @keyframes mn-bounds-glow {
     0%, 100% { box-shadow: 0 0 0 0 rgba(255,107,107,0.7), inset 0 0 0 1px rgba(255,107,107,0.6); }
@@ -85,7 +93,194 @@ export const KEYFRAMES_CSS = `
   }
 }
 .mn-card-hover:hover { transform: translateY(-1px); }
+
+/* Luminous edge accent on every glass card -- the visual signature of the
+   tech-garden language. Single gradient stroke applied via mask-composite
+   so only the top-left quadrant lights up. */
+.mn-glass-card { position: relative; }
+.mn-glass-card::before {
+  content: '';
+  position: absolute; inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(140deg, rgba(124,255,178,0.32) 0%, rgba(124,255,178,0) 32%, rgba(255,255,255,0) 62%, rgba(69,214,232,0.18) 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  pointer-events: none;
+}
+
 .mn-btn { transition: background .12s, border-color .12s, transform .08s; }
 .mn-btn:hover { transform: translateY(-1px); }
 .mn-btn:active { transform: translateY(0); }
+
+/* Editorial display family for big numbers + hero headlines.
+   .mn-display reads like a survey instrument readout. */
+.mn-display {
+  font-family: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+}
+.mn-display em { font-style: italic; }
+.mn-num {
+  font-family: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* AntD upgrades -- pull the framework into the editorial system. */
+.ant-statistic-title {
+  font-family: 'Satoshi', 'Inter', sans-serif !important;
+  font-size: 11px !important;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600 !important;
+}
+.ant-statistic-content-value,
+.ant-statistic-content-prefix,
+.ant-statistic-content-suffix {
+  font-family: 'Instrument Serif', 'Iowan Old Style', Georgia, serif !important;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.015em;
+}
+.ant-statistic-content-suffix {
+  font-size: 0.55em;
+  margin-left: 4px;
+  vertical-align: 0.25em;
+  font-family: 'Space Grotesk', monospace !important;
+  text-transform: lowercase;
+}
+.ant-card-head-title,
+.ant-collapse-header-text {
+  font-family: 'Satoshi', 'Inter', sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+.ant-typography h1,
+.ant-typography h2,
+.ant-typography h3 {
+  font-family: 'Instrument Serif', Georgia, serif !important;
+  font-weight: 400 !important;
+  letter-spacing: -0.015em !important;
+}
+.ant-tabs-tab-btn {
+  font-family: 'Satoshi', 'Inter', sans-serif;
+  font-weight: 500;
+}
+.ant-table-thead > tr > th {
+  font-family: 'Satoshi', 'Inter', sans-serif !important;
+  font-size: 11px !important;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600 !important;
+}
+
+/* AntD buttons -- ensure healthy horizontal padding (some places use
+   small/icon buttons and the new font-weight + uppercase tracking can
+   push text edge-to-edge if padding is too tight). */
+.ant-btn {
+  padding-inline: 16px !important;
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+}
+.ant-btn-sm { padding-inline: 12px !important; }
+.ant-btn-lg { padding-inline: 22px !important; }
+.ant-btn-icon-only { padding-inline: 0 !important; }
+
+/* AntD primary button -- lime gradient + dark ink so it matches the
+   concept's hero Play. Default buttons get a glass treatment. */
+.ant-btn-primary {
+  background: linear-gradient(135deg, #7CFFB2 0%, #45D688 55%, #2BAA66 100%) !important;
+  border: none !important;
+  color: #02110D !important;
+  font-weight: 700 !important;
+  box-shadow: 0 8px 24px -10px rgba(124, 255, 178, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.35) !important;
+  transition: transform 0.12s ease, box-shadow 0.12s ease !important;
+}
+.ant-btn-primary:hover,
+.ant-btn-primary:focus {
+  background: linear-gradient(135deg, #A3FFCB 0%, #5EE3A0 55%, #45D688 100%) !important;
+  box-shadow: 0 10px 28px -8px rgba(124, 255, 178, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.42) !important;
+  transform: translateY(-1px);
+  color: #02110D !important;
+}
+.ant-btn-primary:active { transform: translateY(0); }
+
+.ant-btn-default {
+  background: rgba(255, 255, 255, 0.045) !important;
+  border: 1px solid rgba(236, 255, 244, 0.10) !important;
+  color: #ECFFF4 !important;
+  backdrop-filter: blur(12px);
+  font-weight: 600 !important;
+}
+.ant-btn-default:hover,
+.ant-btn-default:focus {
+  background: rgba(255, 255, 255, 0.075) !important;
+  border-color: rgba(124, 255, 178, 0.35) !important;
+  color: #ECFFF4 !important;
+}
+
+.ant-btn-dangerous {
+  background: rgba(255, 107, 122, 0.12) !important;
+  border: 1px solid rgba(255, 107, 122, 0.4) !important;
+  color: #FF6B7A !important;
+  font-weight: 600 !important;
+}
+.ant-btn-dangerous:hover,
+.ant-btn-dangerous:focus {
+  background: rgba(255, 107, 122, 0.18) !important;
+  border-color: rgba(255, 107, 122, 0.6) !important;
+  color: #FF6B7A !important;
+}
+
+/* AntD Steps -- pull the stepper into the concept palette. */
+.ant-steps-item-process .ant-steps-item-icon {
+  background: linear-gradient(135deg, #7CFFB2, #2BAA66) !important;
+  border-color: transparent !important;
+  box-shadow: 0 8px 22px -8px rgba(124, 255, 178, 0.5);
+}
+.ant-steps-item-process .ant-steps-item-icon > .ant-steps-icon { color: #02110D !important; }
+.ant-steps-item-finish .ant-steps-item-icon {
+  background: rgba(124, 255, 178, 0.16) !important;
+  border-color: rgba(124, 255, 178, 0.5) !important;
+}
+.ant-steps-item-finish .ant-steps-item-icon > .ant-steps-icon { color: #7CFFB2 !important; }
+.ant-steps-item-wait .ant-steps-item-icon {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border-color: rgba(236, 255, 244, 0.14) !important;
+}
+.ant-steps-item-title { color: #ECFFF4 !important; }
+.ant-steps-item-process > .ant-steps-item-container > .ant-steps-item-content > .ant-steps-item-title {
+  color: #7CFFB2 !important;
+}
+.ant-steps-item-tail::after { background: rgba(236, 255, 244, 0.10) !important; }
+.ant-steps-item-finish > .ant-steps-item-container > .ant-steps-item-tail::after {
+  background: linear-gradient(90deg, #7CFFB2, #45D688) !important;
+}
+
+/* AntD Switch -- lime when on. */
+.ant-switch-checked {
+  background: linear-gradient(135deg, #7CFFB2, #2BAA66) !important;
+}
+.ant-switch-checked:hover {
+  background: linear-gradient(135deg, #A3FFCB, #45D688) !important;
+}
+
+/* AntD Tag glow tweaks */
+.ant-tag {
+  border-radius: 999px !important;
+  padding: 2px 10px !important;
+  font-weight: 600 !important;
+  border-width: 1px !important;
+}
+
+/* Staggered page entrance: children with [data-stagger] animate in
+   sequence on initial mount. Combine with --stagger-index from JS. */
+.mn-stagger > [data-stagger] {
+  opacity: 0;
+  animation: mn-rise 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--stagger-index, 0) * 60ms + 80ms);
+}
 `;

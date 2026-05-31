@@ -36,19 +36,28 @@ const { Title, Text, Paragraph } = Typography;
 const WelcomeStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
     const { colors } = useThemeMode();
     return (
-        <div style={{ textAlign: "center", maxWidth: 600, margin: "0 auto", padding: "24px 0" }}>
+        <div style={{ textAlign: "center", maxWidth: 640, margin: "0 auto", padding: "32px 0" }}>
             <div style={{
-                width: 80, height: 80, borderRadius: "50%",
-                background: colors.primaryBg, display: "flex",
+                width: 96, height: 96, borderRadius: 28,
+                background: `linear-gradient(135deg, ${colors.accent}, ${colors.accent}99)`,
+                boxShadow: `0 12px 32px ${colors.accent}33, inset 0 0 0 1px ${colors.accent}55`,
+                display: "flex",
                 alignItems: "center", justifyContent: "center",
-                margin: "0 auto 24px",
+                margin: "0 auto 28px",
+                color: "#0a1a10",
             }}>
-                <RocketOutlined style={{ fontSize: 36, color: colors.primary }} />
+                <RocketOutlined style={{ fontSize: 42 }} />
             </div>
-            <Title level={2} style={{ marginBottom: 8 }}>Welcome to Mowgli</Title>
-            <Paragraph type="secondary" style={{ fontSize: 16, marginBottom: 32 }}>
-                Let's set up your robot mower in a few simple steps.
-                You can always change these settings later.
+            <Title level={2} className="mn-display" style={{
+                marginBottom: 10, letterSpacing: "-0.01em",
+                fontSize: 42, fontWeight: 400, lineHeight: 1.05,
+            }}>
+                Let's meet your <em>Mowgli</em>.
+            </Title>
+            <Paragraph type="secondary" style={{ fontSize: 16, marginBottom: 36, lineHeight: 1.6 }}>
+                A few short steps and you're ready to mow. Nothing here is set in
+                stone -- you can always change these settings later from the
+                Settings page.
             </Paragraph>
 
             <Row gutter={[16, 16]} style={{ textAlign: "left", marginBottom: 32 }}>
@@ -740,7 +749,9 @@ const CompleteStep: React.FC = () => {
             setRestarting(true);
             try {
                 // Mark onboarding done in DB so we don't redirect again
-                const base = import.meta.env.DEV ? 'http://localhost:4006' : '';
+                const base = import.meta.env.DEV
+                    ? `http://${(import.meta.env.VITE_API_HOST as string | undefined) ?? 'localhost:4006'}`
+                    : '';
                 await fetch(`${base}/api/settings/status`, { method: 'POST' });
 
                 // Restart ROS2 container first (picks up new mowgli_robot.yaml)
@@ -966,17 +977,21 @@ const OnboardingWizard: React.FC = () => {
 
     return (
         <Row gutter={[0, isMobile ? 12 : 20]}>
-            {/* Steps indicator */}
+            {/* Steps indicator -- labelPlacement="vertical" stacks the title under
+                the icon, which prevents the horizontal text-overflow ellipsis
+                that was clipping titles like "Calibration" to "Calib" on
+                narrower viewports. */}
             <Col span={24}>
                 <Steps
                     current={currentStep}
                     size={isMobile ? "small" : "default"}
                     responsive={false}
+                    labelPlacement="vertical"
                     items={STEP_TITLES.map((title, i) => ({
                         title: isMobile ? undefined : title,
                         icon: STEP_ICONS[i],
                     }))}
-                    style={{ maxWidth: 700, margin: "0 auto" }}
+                    style={{ maxWidth: 880, margin: "0 auto" }}
                 />
             </Col>
 

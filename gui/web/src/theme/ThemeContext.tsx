@@ -1,4 +1,4 @@
-import {createContext, useCallback, useContext, useEffect, useState} from "react";
+import {createContext, useCallback, useContext, useEffect} from "react";
 import type {ThemeMode} from "./colors.ts";
 import {getColors, setColors} from "./colors.ts";
 
@@ -14,34 +14,24 @@ const ThemeContext = createContext<ThemeContextValue>({
     colors: getColors('light'),
 });
 
-const STORAGE_KEY = 'mowglinext-theme-mode';
-
-function getInitialMode(): ThemeMode {
-    try {
-        const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored === 'light' || stored === 'dark') return stored;
-    } catch { /* ignore */ }
-    return 'light';
-}
-
+// Mowgli is dark-mode-only. The light tokens stay in `colors.ts` for now in
+// case we ever revisit, but the provider is hard-locked to dark and the
+// toggleMode is a no-op (kept so existing call sites don't break).
 export function ThemeProvider({children}: {children: React.ReactNode}) {
-    const [mode, setMode] = useState<ThemeMode>(getInitialMode);
-
+    const mode: ThemeMode = 'dark';
     const colors = getColors(mode);
 
     useEffect(() => {
         setColors(mode);
-        try { localStorage.setItem(STORAGE_KEY, mode); } catch { /* ignore */ }
         document.documentElement.style.background = colors.bgBase;
         document.body.style.background = colors.bgBase;
-        document.body.style.fontFamily = "'Manrope', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif";
+        document.body.style.fontFamily = "'Satoshi', 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif";
+        document.documentElement.style.colorScheme = 'dark';
         const meta = document.querySelector('meta[name="theme-color"]');
         if (meta) meta.setAttribute('content', colors.bgBase);
     }, [mode, colors.bgBase]);
 
-    const toggleMode = useCallback(() => {
-        setMode(prev => prev === 'light' ? 'dark' : 'light');
-    }, []);
+    const toggleMode = useCallback(() => { /* dark-only */ }, []);
 
     return (
         <ThemeContext.Provider value={{mode, toggleMode, colors}}>
