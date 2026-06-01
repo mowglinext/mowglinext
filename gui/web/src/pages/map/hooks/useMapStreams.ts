@@ -21,6 +21,90 @@ import {
 } from "../../../types/map.ts";
 import { drawLine, drawRobotFootprint, transpose } from "../../../utils/map.tsx";
 
+type CoverageCellsImage = {
+    url: string;
+    coordinates: [[number, number], [number, number], [number, number], [number, number]];
+};
+
+// Rasterize an OccupancyGrid to a Mapbox image source. This is the single most
+// expensive per-message operation in the map view (allocates a width×height
+// canvas, loops every cell, then PNG+base64-encodes the whole thing via
+// toDataURL) — 50-300 ms on a big map. It is intentionally a free function so
+// it captures nothing and is only ever invoked from a coalesced rAF (never on
+// the WebSocket message handler), so a burst of grids can't stall the pump.
+function renderCoverageCells(
+    grid: OccupancyGrid,
+    offsetX: number,
+    offsetY: number,
+    datum: [number, number, number],
+    setCoverageCellsImage: (v: CoverageCellsImage | null) => void,
+) {
+    const width = grid.info.width ?? 0;
+    const height = grid.info.height ?? 0;
+    const resolution = grid.info.resolution ?? 0.1;
+    const originX = grid.info.origin?.position?.x ?? 0;
+    const originY = grid.info.origin?.position?.y ?? 0;
+    if (width === 0 || height === 0) return;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const imageData = ctx.createImageData(width, height);
+    for (let row = 0; row < height; row++) {
+        for (let col = 0; col < width; col++) {
+            // OccupancyGrid row 0 = bottom, canvas row 0 = top -> flip vertically
+            const gridIdx = row * width + col;
+            const canvasIdx = ((height - 1 - row) * width + col) * 4;
+            const val = grid.data[gridIdx];
+
+            if (val === 60) {
+                // To-mow: light green
+                imageData.data[canvasIdx] = 100;
+                imageData.data[canvasIdx + 1] = 220;
+                imageData.data[canvasIdx + 2] = 100;
+                imageData.data[canvasIdx + 3] = 140;
+            } else if (val === 80) {
+                // LAWN_DEAD: amber so the operator can tell it apart from a real
+                // sensed obstacle (red, 100). Decays back to to-mow if cleared.
+                imageData.data[canvasIdx] = 230;
+                imageData.data[canvasIdx + 1] = 160;
+                imageData.data[canvasIdx + 2] = 50;
+                imageData.data[canvasIdx + 3] = 150;
+            } else if (val === 100) {
+                // Obstacle: red
+                imageData.data[canvasIdx] = 255;
+                imageData.data[canvasIdx + 1] = 60;
+                imageData.data[canvasIdx + 2] = 60;
+                imageData.data[canvasIdx + 3] = 160;
+            } else {
+                // 0 (mowed), -1 (unknown), anything else: transparent
+                imageData.data[canvasIdx] = 0;
+                imageData.data[canvasIdx + 1] = 0;
+                imageData.data[canvasIdx + 2] = 0;
+                imageData.data[canvasIdx + 3] = 0;
+            }
+        }
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    const gridWidth = width * resolution;
+    const gridHeight = height * resolution;
+
+    // Mapbox image source coordinates: [top-left, top-right, bottom-right, bottom-left]
+    const topLeft = transpose(offsetX, offsetY, datum, originY + gridHeight, originX) as [number, number];
+    const topRight = transpose(offsetX, offsetY, datum, originY + gridHeight, originX + gridWidth) as [number, number];
+    const bottomRight = transpose(offsetX, offsetY, datum, originY, originX + gridWidth) as [number, number];
+    const bottomLeft = transpose(offsetX, offsetY, datum, originY, originX) as [number, number];
+
+    setCoverageCellsImage({
+        url: canvas.toDataURL(),
+        coordinates: [topLeft, topRight, bottomRight, bottomLeft],
+    });
+}
+
 interface UseMapStreamsOptions {
     editMap: boolean;
     settings: Record<string, string>;
@@ -54,10 +138,14 @@ export function useMapStreams({
         features: [],
     });
     const [dynamicObstacles, setDynamicObstacles] = useState<TrackedObstacle[]>([]);
-    const [coverageCellsImage, setCoverageCellsImage] = useState<{
-        url: string;
-        coordinates: [[number, number], [number, number], [number, number], [number, number]];
-    } | null>(null);
+    const [coverageCellsImage, setCoverageCellsImage] = useState<CoverageCellsImage | null>(null);
+
+    // Coalescing buffer for coverage-cell rasterization: the latest grid waits
+    // here and is rendered once per animation frame (see coverageCellsStream).
+    const coveragePendingRef = React.useRef<
+        { grid: OccupancyGrid; offsetX: number; offsetY: number; datum: [number, number, number] } | null
+    >(null);
+    const coverageRafRef = React.useRef<number | null>(null);
 
     const highLevelStatus = useHighLevelStatus();
 
@@ -288,77 +376,28 @@ export function useMapStreams({
         (e) => {
             const grid = JSON.parse(e) as OccupancyGrid;
             if (!grid.info || !grid.data) return;
+            if ((grid.info.width ?? 0) === 0 || (grid.info.height ?? 0) === 0) return;
 
-            const width = grid.info.width ?? 0;
-            const height = grid.info.height ?? 0;
-            const resolution = grid.info.resolution ?? 0.1;
-            const originX = grid.info.origin?.position?.x ?? 0;
-            const originY = grid.info.origin?.position?.y ?? 0;
-
-            if (width === 0 || height === 0) return;
-
-            // Render OccupancyGrid to a canvas image
-            const canvas = document.createElement("canvas");
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext("2d");
-            if (!ctx) return;
-
-            const imageData = ctx.createImageData(width, height);
-            for (let row = 0; row < height; row++) {
-                for (let col = 0; col < width; col++) {
-                    // OccupancyGrid row 0 = bottom, canvas row 0 = top -> flip vertically
-                    const gridIdx = row * width + col;
-                    const canvasIdx = ((height - 1 - row) * width + col) * 4;
-                    const val = grid.data[gridIdx];
-
-                    if (val === 60) {
-                        // To-mow: light green
-                        imageData.data[canvasIdx] = 100;
-                        imageData.data[canvasIdx + 1] = 220;
-                        imageData.data[canvasIdx + 2] = 100;
-                        imageData.data[canvasIdx + 3] = 140;
-                    } else if (val === 80) {
-                        // LAWN_DEAD: cells the segment selector has given
-                        // up on after repeated failures. Amber so the
-                        // operator can tell them apart from a real
-                        // sensed obstacle (red, 100). Decays back to
-                        // to-mow if the obstacle clears.
-                        imageData.data[canvasIdx] = 230;
-                        imageData.data[canvasIdx + 1] = 160;
-                        imageData.data[canvasIdx + 2] = 50;
-                        imageData.data[canvasIdx + 3] = 150;
-                    } else if (val === 100) {
-                        // Obstacle: red
-                        imageData.data[canvasIdx] = 255;
-                        imageData.data[canvasIdx + 1] = 60;
-                        imageData.data[canvasIdx + 2] = 60;
-                        imageData.data[canvasIdx + 3] = 160;
-                    } else {
-                        // 0 (mowed), -1 (unknown), anything else: transparent
-                        imageData.data[canvasIdx] = 0;
-                        imageData.data[canvasIdx + 1] = 0;
-                        imageData.data[canvasIdx + 2] = 0;
-                        imageData.data[canvasIdx + 3] = 0;
-                    }
-                }
+            // Stash the latest grid and rasterize at most once per animation
+            // frame. Parsing is cheap; the canvas raster + toDataURL is not, so
+            // doing it here (on the WS message handler) would block pose/lidar
+            // frames behind it and stutter — or crash — the map on a big grid.
+            coveragePendingRef.current = { grid, offsetX, offsetY, datum };
+            if (coverageRafRef.current == null) {
+                coverageRafRef.current = requestAnimationFrame(() => {
+                    coverageRafRef.current = null;
+                    const pending = coveragePendingRef.current;
+                    coveragePendingRef.current = null;
+                    if (!pending) return;
+                    renderCoverageCells(
+                        pending.grid,
+                        pending.offsetX,
+                        pending.offsetY,
+                        pending.datum,
+                        setCoverageCellsImage,
+                    );
+                });
             }
-            ctx.putImageData(imageData, 0, 0);
-
-            // Compute geographic bounds: origin is bottom-left corner of the grid
-            const gridWidth = width * resolution;
-            const gridHeight = height * resolution;
-
-            // Mapbox image source coordinates: [top-left, top-right, bottom-right, bottom-left]
-            const topLeft = transpose(offsetX, offsetY, datum, originY + gridHeight, originX) as [number, number];
-            const topRight = transpose(offsetX, offsetY, datum, originY + gridHeight, originX + gridWidth) as [number, number];
-            const bottomRight = transpose(offsetX, offsetY, datum, originY, originX + gridWidth) as [number, number];
-            const bottomLeft = transpose(offsetX, offsetY, datum, originY, originX) as [number, number];
-
-            setCoverageCellsImage({
-                url: canvas.toDataURL(),
-                coordinates: [topLeft, topRight, bottomRight, bottomLeft],
-            });
         }
     );
 
@@ -430,7 +469,12 @@ export function useMapStreams({
         });
     }, [highLevelStatus.highLevelStatus.state_name]);
 
-    // Restart all streams on settings change
+    // Start streams once the datum is available. Keyed on the datum values
+    // ONLY — not the whole `settings` object. The previous `[settings]`
+    // dependency re-ran on every settings-object identity change (each poll /
+    // partial merge creates a new object), tearing down and re-subscribing all
+    // eight streams each time. That re-subscribe storm churned the backend
+    // RosSubscribers and left components briefly without data ("stale").
     useEffect(() => {
         if (
             settings["datum_lon"] == undefined ||
@@ -446,7 +490,8 @@ export function useMapStreams({
         lidarStream.start("/api/mowglinext/subscribe/lidar");
         obstaclesStream.start("/api/mowglinext/subscribe/obstacles");
         coverageCellsStream.start("/api/mowglinext/subscribe/coverageCells");
-    }, [settings]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [settings["datum_lon"], settings["datum_lat"]]);
 
     // Cleanup all streams on unmount
     useEffect(() => {
@@ -461,6 +506,10 @@ export function useMapStreams({
             coverageCellsStream.stop();
             recordingTrajectoryStream.stop();
             highLevelStatus.stop();
+            if (coverageRafRef.current != null) {
+                cancelAnimationFrame(coverageRafRef.current);
+                coverageRafRef.current = null;
+            }
         };
     }, []);
 

@@ -14,7 +14,7 @@ func TestRosSubscriber_PublishAndReceive(t *testing.T) {
 	var mu sync.Mutex
 	done := make(chan struct{})
 
-	sub := NewRosSubscriber("/test/topic", "test-id", func(msg []byte) {
+	sub := NewRosSubscriber("/test/topic", "test-id", 0, func(msg []byte) {
 		mu.Lock()
 		defer mu.Unlock()
 		received = msg
@@ -40,7 +40,7 @@ func TestRosSubscriber_LastMessageWins(t *testing.T) {
 	callCount := 0
 	done := make(chan struct{}, 10)
 
-	sub := NewRosSubscriber("/test/topic", "test-id", func(msg []byte) {
+	sub := NewRosSubscriber("/test/topic", "test-id", 0, func(msg []byte) {
 		mu.Lock()
 		defer mu.Unlock()
 		received = msg
@@ -71,7 +71,7 @@ func TestRosSubscriber_LastMessageWins(t *testing.T) {
 }
 
 func TestRosSubscriber_Close(t *testing.T) {
-	sub := NewRosSubscriber("/test/topic", "test-id", func(msg []byte) {})
+	sub := NewRosSubscriber("/test/topic", "test-id", 0, func(msg []byte) {})
 
 	// Close should not panic
 	require.NotPanics(t, func() {
@@ -80,7 +80,7 @@ func TestRosSubscriber_Close(t *testing.T) {
 }
 
 func TestRosSubscriber_Fields(t *testing.T) {
-	sub := NewRosSubscriber("/my/topic", "my-id", func(msg []byte) {})
+	sub := NewRosSubscriber("/my/topic", "my-id", 0, func(msg []byte) {})
 	defer sub.Close()
 
 	assert.Equal(t, "/my/topic", sub.Topic)
@@ -91,7 +91,7 @@ func TestRosSubscriber_NilMessageNoCallback(t *testing.T) {
 	callCount := 0
 	var mu sync.Mutex
 
-	sub := NewRosSubscriber("/test/topic", "test-id", func(msg []byte) {
+	sub := NewRosSubscriber("/test/topic", "test-id", 0, func(msg []byte) {
 		mu.Lock()
 		defer mu.Unlock()
 		callCount++

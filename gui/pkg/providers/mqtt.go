@@ -102,7 +102,7 @@ func (hc *MqttProvider) subscribeToRos() {
 }
 
 func (hc *MqttProvider) subscribeToRosTopic(topic string, id string) {
-	err := hc.rosProvider.Subscribe(topic, id, func(msg []byte) {
+	err := hc.rosProvider.Subscribe(topic, id, 0, func(msg []byte) {
 		time.Sleep(500 * time.Millisecond)
 		err := hc.server.Publish(hc.prefix+"/"+topic, msg, true, 0)
 		if err != nil {

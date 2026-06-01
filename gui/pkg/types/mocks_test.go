@@ -65,7 +65,7 @@ func TestMockRosProvider_SubscribeAndDispatch(t *testing.T) {
 	mock := NewMockRosProvider()
 
 	var received []byte
-	err := mock.Subscribe("status", "sub1", func(msg []byte) {
+	err := mock.Subscribe("status", "sub1", 0, func(msg []byte) {
 		received = msg
 	})
 	require.NoError(t, err)
@@ -78,7 +78,7 @@ func TestMockRosProvider_UnSubscribe(t *testing.T) {
 	mock := NewMockRosProvider()
 
 	callCount := 0
-	err := mock.Subscribe("status", "sub1", func(msg []byte) {
+	err := mock.Subscribe("status", "sub1", 0, func(msg []byte) {
 		callCount++
 	})
 	require.NoError(t, err)
@@ -93,8 +93,8 @@ func TestMockRosProvider_MultipleSubscribers(t *testing.T) {
 	mock := NewMockRosProvider()
 
 	var received1, received2 []byte
-	mock.Subscribe("map", "sub1", func(msg []byte) { received1 = msg })
-	mock.Subscribe("map", "sub2", func(msg []byte) { received2 = msg })
+	mock.Subscribe("map", "sub1", 0, func(msg []byte) { received1 = msg })
+	mock.Subscribe("map", "sub2", 0, func(msg []byte) { received2 = msg })
 
 	mock.Dispatch("map", []byte("broadcast"))
 

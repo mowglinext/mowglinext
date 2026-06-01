@@ -75,28 +75,39 @@ type RosSubscriber struct {
 	mtx         sync.Mutex
 	cb          func(msg []byte)
 	nextMessage []byte
+	interval    time.Duration // min spacing between deliveries; 0 = unthrottled
 	close       chan struct{}
+	wake        chan struct{} // buffered(1) new-message signal
 }
 
-// NewRosSubscriber creates and starts a RosSubscriber. The caller must eventually
-// call Close to release the background goroutine.
-func NewRosSubscriber(topic, id string, cb func(msg []byte)) *RosSubscriber {
+// NewRosSubscriber creates and starts a RosSubscriber. interval is the minimum
+// time between deliveries to cb; messages arriving faster are coalesced so cb
+// always receives the latest value. The caller must eventually call Close to
+// release the background goroutine.
+func NewRosSubscriber(topic, id string, interval time.Duration, cb func(msg []byte)) *RosSubscriber {
 	r := &RosSubscriber{
-		Topic: topic,
-		Id:    id,
-		cb:    cb,
-		close: make(chan struct{}),
+		Topic:    topic,
+		Id:       id,
+		cb:       cb,
+		interval: interval,
+		close:    make(chan struct{}),
+		wake:     make(chan struct{}, 1),
 	}
 	go r.run()
 	return r
 }
 
-// Publish stores msg as the next message to be delivered. If a previous message
-// has not yet been consumed it is silently overwritten (drop-oldest semantics).
+// Publish stores msg as the next message to be delivered and signals the
+// delivery loop. If a previous message has not yet been consumed it is silently
+// overwritten (coalesce to latest). Never blocks.
 func (r *RosSubscriber) Publish(msg []byte) {
 	r.mtx.Lock()
 	r.nextMessage = msg
 	r.mtx.Unlock()
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
 }
 
 // Close stops the background goroutine. It is safe to call from any goroutine.
@@ -104,13 +115,27 @@ func (r *RosSubscriber) Close() {
 	close(r.close)
 }
 
-// run is the delivery loop. It polls the mailbox at 100 ms intervals when idle.
+// run is the delivery loop. It is event-driven (no idle polling) and enforces
+// the throttle interval between deliveries WITHOUT blocking the publisher: the
+// wait happens here, on the subscriber's own goroutine, and the mailbox keeps
+// only the latest message so the delivered value is always fresh.
 func (r *RosSubscriber) run() {
+	var lastDeliver time.Time
 	for {
 		select {
 		case <-r.close:
 			return
-		default:
+		case <-r.wake:
+		}
+
+		if r.interval > 0 {
+			if wait := r.interval - time.Since(lastDeliver); wait > 0 {
+				select {
+				case <-r.close:
+					return
+				case <-time.After(wait):
+				}
+			}
 		}
 
 		r.mtx.Lock()
@@ -120,8 +145,7 @@ func (r *RosSubscriber) run() {
 
 		if msg != nil {
 			r.cb(msg)
-		} else {
-			time.Sleep(100 * time.Millisecond)
+			lastDeliver = time.Now()
 		}
 	}
 }
@@ -166,6 +190,25 @@ type RosProvider struct {
 // forwarded as-is (snake_case JSON from CDR deserialization).
 var foxgloveAdapters = map[string]func([]byte) ([]byte, error){
 	"pose": adaptPose,
+}
+
+// upstreamDecimationMs caps the rate at which high-frequency topics are
+// deserialized from the foxglove bridge. The GUI throttles these to ~10 Hz
+// downstream anyway (topicSubscribeInterval), so deserializing /imu at 100 Hz
+// or /scan at 40 Hz on the read pump is wasted CPU. 80 ms (~12.5 Hz) stays just
+// above the 100 ms downstream throttle so no visible frame is lost. Topics not
+// listed here are deserialized at their native rate.
+var upstreamDecimationMs = map[string]int{
+	"imu":        80,
+	"lidar":      80,
+	"pose":       80,
+	"fusionRaw":  80,
+	"wheelOdom":  80,
+	"ticks":      80,
+	"gps":        80,
+	"gnssStatus": 80,
+	"cogHeading": 150,
+	"magYaw":     150,
 }
 
 // NewRosProvider constructs a RosProvider, reads the foxglove URL from the
@@ -229,7 +272,11 @@ func (r *RosProvider) ensureFoxgloveSubscribed(logicalKey string) {
 		}
 	}
 
-	if err := r.client.Subscribe(def.ROS2Topic, def.MsgType, "gui-"+key, cb); err != nil {
+	var subOpts []int
+	if dec, ok := upstreamDecimationMs[key]; ok {
+		subOpts = append(subOpts, dec)
+	}
+	if err := r.client.Subscribe(def.ROS2Topic, def.MsgType, "gui-"+key, cb, subOpts...); err != nil {
 		logrus.Errorf("RosProvider: subscribe %s (%s): %v", def.ROS2Topic, key, err)
 		return
 	}
@@ -421,7 +468,7 @@ func (r *RosProvider) CallService(ctx context.Context, service string, req any, 
 // key. If a message was already received for this key, cb is invoked
 // immediately with the cached value. The first listener for a non-virtual
 // topic also triggers the upstream foxglove_bridge subscription.
-func (r *RosProvider) Subscribe(topic string, id string, cb func(msg []byte)) error {
+func (r *RosProvider) Subscribe(topic string, id string, intervalMs int, cb func(msg []byte)) error {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
 
@@ -429,7 +476,8 @@ func (r *RosProvider) Subscribe(topic string, id string, cb func(msg []byte)) er
 		r.subscribers[topic] = make(map[string]*RosSubscriber)
 	}
 	if _, exists := r.subscribers[topic][id]; !exists {
-		r.subscribers[topic][id] = NewRosSubscriber(topic, id, cb)
+		interval := time.Duration(intervalMs) * time.Millisecond
+		r.subscribers[topic][id] = NewRosSubscriber(topic, id, interval, cb)
 	}
 
 	// Subscribe upstream on first listener for this logical key. Safe to call

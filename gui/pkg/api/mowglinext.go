@@ -20,9 +20,15 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// wsWriteTimeout bounds a single WebSocket write. A frozen/slow client must not
+// block a delivery goroutine forever; on timeout the connection is closed.
+const wsWriteTimeout = 5 * time.Second
+
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
+	ReadBufferSize: 1024,
+	// Larger write buffer so big frames (OccupancyGrid, /scan) aren't chopped
+	// into many tiny TCP writes.
+	WriteBufferSize: 32 * 1024,
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		if origin == "" {
@@ -55,12 +61,17 @@ func topicSubscribeInterval(topic string) (int, bool) {
 	switch topic {
 	case "gps", "gnssStatus", "pose", "imu", "ticks", "wheelOdom", "lidar":
 		return 100, true
-	case "fusionRaw", "cogHeading", "magYaw":
+	case "fusionRaw", "cogHeading", "magYaw", "obstacles":
 		return 200, true
+	case "coverageCells":
+		// Big OccupancyGrid; the frontend re-rasterizes it to a canvas image on
+		// every message. It changes slowly (mow progress), so 1 Hz is plenty
+		// and keeps the heavy per-message canvas work off the render loop.
+		return 1000, true
 	case "diagnostics", "status", "highLevelStatus", "btLog", "map",
 		"path", "plan", "power", "emergency", "dockingSensor",
-		"robotDescription", "coverageCells", "recordingTrajectory",
-		"obstacles", "fusionDiag":
+		"robotDescription", "recordingTrajectory",
+		"fusionDiag":
 		return -1, true
 	default:
 		return -1, false
@@ -391,7 +402,16 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			}
 			writeMu.Lock()
 			defer writeMu.Unlock()
-			_ = conn.WriteMessage(websocket.TextMessage, payload)
+			// Bound every write: a frozen browser tab must NOT block this
+			// goroutine indefinitely, because all topics share one conn + one
+			// writeMu — one stuck write would otherwise freeze every
+			// subscription on this tab (the "stale components" symptom). On
+			// timeout/error, close the conn so the read loop unblocks and the
+			// deferred cleanup releases all subscriptions.
+			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+				_ = conn.Close()
+			}
 		}
 
 		subscribeTopic := func(topic string) {
@@ -409,10 +429,10 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			state[topic] = &subState{id: id}
 			stateMu.Unlock()
 
-			err := provider.Subscribe(topic, id, func(msg []byte) {
-				if interval > 0 {
-					time.Sleep(time.Duration(interval) * time.Millisecond)
-				}
+			// Throttling is enforced inside the RosSubscriber (coalescing,
+			// non-blocking) — NOT with a time.Sleep here, which used to block
+			// the per-topic delivery goroutine.
+			err := provider.Subscribe(topic, id, interval, func(msg []byte) {
 				writeFrame(topic, msg)
 			})
 			if err != nil {
@@ -480,25 +500,28 @@ func subscribe(provider types.IRosProvider, c *gin.Context, conn *websocket.Conn
 	id := uuid.Generate()
 	uidString := id.String()
 	var writeMu sync.Mutex
-	err := provider.Subscribe(topic, uidString, func(msg []byte) {
-		if interval > 0 {
-			time.Sleep(time.Duration(interval) * time.Millisecond)
-		}
+	// Throttle is enforced inside the RosSubscriber (coalescing, non-blocking).
+	err := provider.Subscribe(topic, uidString, interval, func(msg []byte) {
 		writeMu.Lock()
 		defer writeMu.Unlock()
+		// Bound the write so a slow client can't wedge the delivery goroutine.
+		_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 		writer, err := conn.NextWriter(websocket.TextMessage)
 		if err != nil {
 			c.Error(err)
+			_ = conn.Close()
 			return
 		}
 		_, err = writer.Write([]byte(base64.StdEncoding.EncodeToString(msg)))
 		if err != nil {
 			c.Error(err)
+			_ = conn.Close()
 			return
 		}
 		err = writer.Close()
 		if err != nil {
 			c.Error(err)
+			_ = conn.Close()
 			return
 		}
 	},

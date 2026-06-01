@@ -53,7 +53,7 @@ func NewSchedulerProvider(rosProvider types.IRosProvider, dbProvider types.IDBPr
 // scheduler can perform pre-flight safety checks without an extra service call.
 func (s *SchedulerProvider) subscribeToStatus() {
 	// highLevelStatus — tracks robot operational state (idle/autonomous/recording)
-	if err := s.rosProvider.Subscribe("highLevelStatus", "scheduler-hls", func(msg []byte) {
+	if err := s.rosProvider.Subscribe("highLevelStatus", "scheduler-hls", 0, func(msg []byte) {
 		var hls mowgli.HighLevelStatus
 		if err := json.Unmarshal(msg, &hls); err != nil {
 			// Fallback: try to find the state field by either name variant.
@@ -77,7 +77,7 @@ func (s *SchedulerProvider) subscribeToStatus() {
 	}
 
 	// emergency — safety-critical, no throttle on this topic
-	if err := s.rosProvider.Subscribe("emergency", "scheduler-emg", func(msg []byte) {
+	if err := s.rosProvider.Subscribe("emergency", "scheduler-emg", 0, func(msg []byte) {
 		var emg mowgli.Emergency
 		if err := json.Unmarshal(msg, &emg); err != nil {
 			var raw map[string]json.RawMessage

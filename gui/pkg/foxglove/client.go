@@ -25,6 +25,17 @@ type subscriberEntry struct {
 	callback func(json.RawMessage)
 }
 
+// topicDecimator rate-limits a topic's inbound frames BEFORE the (expensive)
+// CDR→JSON deserialization. High-rate topics (/imu ~100 Hz, /scan ~40 Hz) are
+// deserialized and marshalled on the read-pump goroutine for every frame; with
+// the GUI only consuming ~10 Hz the surplus is pure wasted CPU. Dropping the
+// surplus frame at the wire keeps the read pump responsive. lastNano is updated
+// with atomics so handleMessageData can throttle while holding only chanMu.RLock.
+type topicDecimator struct {
+	intervalNano int64 // minimum spacing between dispatched frames; 0 = unlimited
+	lastNano     atomic.Int64
+}
+
 // channelState holds the parsed schema and subscription info for a channel.
 type channelState struct {
 	def    channelDef
@@ -72,6 +83,12 @@ type Client struct {
 	// subscribers maps topic name → ordered list of (id, callback) pairs.
 	subscribers map[string][]subscriberEntry
 	subMu       sync.RWMutex
+
+	// decimators maps topic name → *topicDecimator (upstream rate cap applied
+	// before CDR deserialization). Populated lazily from Subscribe's optional
+	// decimation argument. sync.Map: written rarely (once per topic), read on
+	// every inbound frame.
+	decimators sync.Map
 
 	// pendingTopics tracks topics that should be subscribed once the channel
 	// is advertised by the server.
@@ -187,7 +204,15 @@ func (c *Client) Close() error {
 // Subscribe registers cb to receive every message published on topic.
 // id is a caller-supplied identifier for deduplication. msgType is ignored
 // (foxglove_bridge provides type info); it is accepted for API compatibility.
+// An optional first opt is the upstream decimation interval in milliseconds:
+// inbound frames closer together than this are dropped before deserialization.
 func (c *Client) Subscribe(topic, msgType, id string, cb func(json.RawMessage), opts ...int) error {
+	if len(opts) > 0 && opts[0] > 0 {
+		c.decimators.Store(topic, &topicDecimator{
+			intervalNano: int64(opts[0]) * int64(time.Millisecond),
+		})
+	}
+
 	c.subMu.Lock()
 	defer c.subMu.Unlock()
 
@@ -699,6 +724,21 @@ func (c *Client) handleMessageData(data []byte) {
 		return
 	}
 
+	// Upstream decimation: drop this frame BEFORE the costly CDR→JSON when the
+	// topic is rate-capped and the previous frame was dispatched too recently.
+	// Keeps the read pump off the floor on /imu, /scan, etc.
+	if d, ok := c.decimators.Load(topic); ok {
+		dec := d.(*topicDecimator)
+		if dec.intervalNano > 0 {
+			now := time.Now().UnixNano()
+			last := dec.lastNano.Load()
+			if now-last < dec.intervalNano {
+				return
+			}
+			dec.lastNano.Store(now)
+		}
+	}
+
 	// Deserialize CDR → JSON.
 	result, err := DeserializeCDR(payload, ch.schema)
 	if err != nil {
@@ -723,9 +763,13 @@ func (c *Client) dispatchToSubscribers(topic string, msg json.RawMessage) {
 	copy(entries, c.subscribers[topic])
 	c.subMu.RUnlock()
 
+	// Dispatch synchronously on the read-pump goroutine. The GUI's callback is
+	// a non-blocking mailbox publish (RosSubscriber.Publish), so this cannot
+	// stall the pump, and it preserves message order + avoids spawning a
+	// goroutine per frame (which, at /scan + /imu rates with several
+	// subscribers, churned the scheduler and reordered fan-out).
 	for _, e := range entries {
-		cb := e.callback
-		go cb(msg)
+		e.callback(msg)
 	}
 }
 

@@ -93,7 +93,7 @@ func (hc *HomeKitProvider) launchServer(as *accessory.A) {
 }
 
 func (hc *HomeKitProvider) subscribeToRos() {
-	hc.rosProvider.Subscribe("highLevelStatus", "ha-status", func(msg []byte) {
+	hc.rosProvider.Subscribe("highLevelStatus", "ha-status", 0, func(msg []byte) {
 		var status mowgli.HighLevelStatus
 		err := json.Unmarshal(msg, &status)
 		if err != nil {

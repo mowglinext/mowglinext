@@ -19,7 +19,11 @@ type IRosProvider interface {
 	// subscribers do not block others. If a message was already received for
 	// this topic, cb is called immediately with the last cached message.
 	// Multiple callers may register distinct ids for the same logical key.
-	Subscribe(topic string, id string, cb func(msg []byte)) error
+	// intervalMs throttles delivery to cb: messages arriving faster are
+	// coalesced and the latest is delivered at most once per interval (0 =
+	// unthrottled). The throttle wait happens on the subscriber's own
+	// goroutine, never blocking the publisher.
+	Subscribe(topic string, id string, intervalMs int, cb func(msg []byte)) error
 
 	// UnSubscribe removes the subscriber identified by (topic, id) and stops
 	// its goroutine. It is a no-op when the subscriber does not exist.

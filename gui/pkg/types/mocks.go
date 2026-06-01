@@ -83,7 +83,7 @@ func (m *MockRosProvider) CallService(_ context.Context, service string, req any
 	return m.ServiceErr
 }
 
-func (m *MockRosProvider) Subscribe(topic string, id string, cb func(msg []byte)) error {
+func (m *MockRosProvider) Subscribe(topic string, id string, intervalMs int, cb func(msg []byte)) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.SubscribeErr != nil {
