@@ -1,4 +1,5 @@
 import {Quaternion} from "../types/ros.ts";
+import type {RobotGeometry} from "../hooks/useRobotDescription.ts";
 
 export const earth = 6371008.8;  // radius of the earth in meters
 export const pi = Math.PI;
@@ -49,6 +50,49 @@ export function drawRobotFootprint(
         const ry = posY + fx * sin + fy * cos;
         return transpose(offsetX, offsetY, datum, ry, rx);
     });
+}
+
+/**
+ * Robot silhouette polygons in [lon, lat], derived from the URDF geometry
+ * (/robot_description) so the map robot matches the sensors-page model exactly
+ * — chassis box + the two drive wheels + the blade disc — instead of a plain
+ * settings-sized rectangle. base_link is at the rear wheel axis, so the chassis
+ * is offset forward by chassisCenterX; wheels sit at wheelXOffset / ±wheelTrack/2.
+ * All points are in the local base_link frame, rotated by heading and projected.
+ */
+export function drawRobotSilhouette(
+    offsetX: number, offsetY: number, datum: [number, number, number],
+    posY: number, posX: number, heading: number, g: RobotGeometry,
+): { chassis: [number, number][]; wheelL: [number, number][]; wheelR: [number, number][]; blade: [number, number][] } {
+    const cos = Math.cos(heading);
+    const sin = Math.sin(heading);
+    // Local (forward x, left y) -> map [lon, lat].
+    const pt = (fx: number, fy: number): [number, number] => {
+        const rx = posX + fx * cos - fy * sin;
+        const ry = posY + fx * sin + fy * cos;
+        return transpose(offsetX, offsetY, datum, ry, rx);
+    };
+    // Axis-aligned (in robot frame) rectangle centred at (xc, yc), half-extents hx/hy.
+    const rect = (xc: number, yc: number, hx: number, hy: number): [number, number][] => [
+        pt(xc - hx, yc - hy),
+        pt(xc + hx, yc - hy),
+        pt(xc + hx, yc + hy),
+        pt(xc - hx, yc + hy),
+        pt(xc - hx, yc - hy),
+    ];
+
+    const chassis = rect(g.chassisCenterX, 0, g.baseLength / 2, g.baseWidth / 2);
+    const wheelL = rect(g.wheelXOffset, g.wheelTrack / 2, g.wheelRadius, g.wheelWidth / 2);
+    const wheelR = rect(g.wheelXOffset, -g.wheelTrack / 2, g.wheelRadius, g.wheelWidth / 2);
+
+    const blade: [number, number][] = [];
+    const N = 20;
+    for (let i = 0; i <= N; i++) {
+        const a = (2 * Math.PI * i) / N;
+        blade.push(pt(g.chassisCenterX + g.bladeRadius * Math.cos(a), g.bladeRadius * Math.sin(a)));
+    }
+
+    return { chassis, wheelL, wheelR, blade };
 }
 
 /**

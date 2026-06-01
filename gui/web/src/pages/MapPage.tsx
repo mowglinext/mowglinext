@@ -606,8 +606,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         <Layer type={"fill"} id={"mower-footprint-fill"}
                             filter={['==', ['get', 'feature_type'], 'mower-footprint']}
                             paint={{
-                                'fill-color': '#00a6ff',
-                                'fill-opacity': 0.35,
+                                'fill-color': ['get', 'color'],
+                                'fill-opacity': 0.55,
                             }}/>
                         <Layer type={"line"} id={"mower-footprint-outline"}
                             filter={['==', ['get', 'feature_type'], 'mower-footprint']}
@@ -777,8 +777,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         <Layer type={"fill"} id={"mower-footprint-fill"}
                             filter={['==', ['get', 'feature_type'], 'mower-footprint']}
                             paint={{
-                                'fill-color': '#00a6ff',
-                                'fill-opacity': 0.35,
+                                'fill-color': ['get', 'color'],
+                                'fill-opacity': 0.55,
                             }}/>
                         <Layer type={"line"} id={"mower-footprint-outline"}
                             filter={['==', ['get', 'feature_type'], 'mower-footprint']}

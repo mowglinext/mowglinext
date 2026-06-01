@@ -15,10 +15,11 @@ import {
     LineFeatureBase,
     MowingFeature,
     MowerFeatureBase,
-    MowerFootprintFeature,
+    RobotPartFeature,
     PathFeature,
 } from "../../../types/map.ts";
-import { drawLine, drawRobotFootprint, transpose } from "../../../utils/map.tsx";
+import { drawLine, drawRobotSilhouette, transpose } from "../../../utils/map.tsx";
+import { useRobotDescription } from "../../../hooks/useRobotDescription.ts";
 
 type CoverageCellsImage = {
     url: string;
@@ -149,6 +150,10 @@ export function useMapStreams({
 
     const highLevelStatus = useHighLevelStatus();
 
+    // Robot geometry from the /robot_description URDF — single source of truth
+    // for the on-map robot shape, so it matches the sensors-page model.
+    const robot = useRobotDescription();
+
     const poseStream = useWS<string>(
         () => {
             console.log({ message: "Pose Stream closed" });
@@ -175,18 +180,18 @@ export function useMapStreams({
                 const posX = pose.pose?.pose?.position?.x!!;
                 const posY = pose.pose?.pose?.position?.y!!;
                 const line = drawLine(offsetX, offsetY, datum, posY, posX, orientation);
-                // Robot footprint from config (chassis dimensions)
-                const ccx = parseFloat(settings["chassis_center_x"] ?? "0.18");
-                const cl = parseFloat(settings["chassis_length"] ?? "0.54");
-                const cw = parseFloat(settings["chassis_width"] ?? "0.40");
-                const footprintRing = drawRobotFootprint(
-                    offsetX, offsetY, datum, posY, posX, orientation,
-                    ccx + cl / 2, ccx - cl / 2, cw / 2
+                // URDF-derived robot silhouette (chassis + drive wheels + blade)
+                // so the map robot matches the sensors-page model exactly.
+                const sil = drawRobotSilhouette(
+                    offsetX, offsetY, datum, posY, posX, orientation, robot
                 );
                 return {
                     ...oldFeatures,
                     mower: new MowerFeatureBase(mower_lonlat),
-                    ["mower-footprint"]: new MowerFootprintFeature(footprintRing),
+                    ["mower-footprint"]: new RobotPartFeature("mower-footprint", sil.chassis, "#00a6ff"),
+                    ["mower-wheel-l"]: new RobotPartFeature("mower-wheel-l", sil.wheelL, "#0b2e3f"),
+                    ["mower-wheel-r"]: new RobotPartFeature("mower-wheel-r", sil.wheelR, "#0b2e3f"),
+                    ["mower-blade"]: new RobotPartFeature("mower-blade", sil.blade, "#ff6b6b"),
                     ["mower-heading"]: new LineFeatureBase(
                         "mower-heading",
                         [mower_lonlat, line],

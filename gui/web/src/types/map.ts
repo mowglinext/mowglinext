@@ -92,6 +92,19 @@ export class MowerFootprintFeature extends MowingFeature implements Feature<Poly
     }
 }
 
+// One piece of the URDF-derived robot silhouette (chassis / wheel / blade).
+// All parts share feature_type 'mower-footprint' so they reuse the existing
+// fill + outline map layers; `color` is per-part (data-driven fill) so the
+// wheels and blade read distinctly from the chassis.
+export class RobotPartFeature extends MowingFeature implements Feature<Polygon> {
+    declare geometry: Polygon;
+    constructor(id: string, ring: Position[], color: string) {
+        super(id);
+        this.geometry = { type: 'Polygon', coordinates: [ring] };
+        this.properties = { color, feature_type: 'mower-footprint' };
+    }
+}
+
 export class DockFeatureBase extends PointFeatureBase  {
     declare properties: {
         color: string;
