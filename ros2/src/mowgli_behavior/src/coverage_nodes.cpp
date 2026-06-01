@@ -1294,11 +1294,16 @@ BT::NodeStatus PlanCoverageArea::onRunning()
   {
     if (result_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
     {
-      // F2C planning can take seconds on large fields; allow 30 s.
-      if (std::chrono::steady_clock::now() - phase_start_ > std::chrono::seconds(30))
+      // Backstop only. With the mowed-hole simplification (remaining_polygon)
+      // and the sub-cell area floor (coverage_server), a piece now plans in a
+      // few seconds even on a heavily mowed-out resume field. The old 30 s,
+      // multiplied by ~17 resume pieces × 5 retries, froze the robot for
+      // minutes when F2C choked on a staircased hole (field 2026-06-01). 12 s
+      // still clears any legitimately large single piece.
+      if (std::chrono::steady_clock::now() - phase_start_ > std::chrono::seconds(12))
       {
         RCLCPP_WARN(ctx->node->get_logger(),
-                    "PlanCoverageArea: piece %zu result timeout (30s) — skipping",
+                    "PlanCoverageArea: piece %zu result timeout (12s) — skipping",
                     current_piece_);
         pieces_failed_++;
         current_piece_++;

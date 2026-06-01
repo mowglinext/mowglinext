@@ -308,7 +308,7 @@ void MapServerNode::on_get_remaining_area_polygon(
         continue;
       }
       BgPolygon simple_orig;
-      bg::simplify(sub, simple_orig, 0.02);
+      bg::simplify(sub, simple_orig, 0.08);
       if (simple_orig.outer().size() < 4)
       {
         simple_orig = sub;
@@ -416,12 +416,17 @@ void MapServerNode::on_get_remaining_area_polygon(
     }
 
     // Collapse the 0.05 m staircase the mow_progress difference leaves on
-    // the boundary (400-600 near-collinear vertices) into a clean ring.
-    // 0.02 m tolerance is well under one cell so the real shape is kept;
-    // a denser ring inflates F2C planning cost and risks GEOS degeneracies.
-    // Fall back to the raw piece if simplification collapses it.
+    // the outer ring AND the mowed-region holes (each a 100-800 vertex
+    // raster boundary). The tolerance MUST exceed one cell (0.05 m) to
+    // actually remove the staircase: at the old 0.02 m it sat *under* the
+    // cell pitch and kept ~all the steps, so a resume piece arrived at F2C
+    // with a 682-pt outer + 114-pt hole, which TrapezoidalDecomp exploded
+    // into 224 sub-cells → 94 s to plan one piece (field 2026-06-01).
+    // 0.08 m clears the steps while staying well inside the chassis/headland
+    // inset, so the real mowable shape is unchanged. Fall back to the raw
+    // piece if simplification collapses it.
     BgPolygon simple_piece;
-    bg::simplify(bg_piece, simple_piece, 0.02);
+    bg::simplify(bg_piece, simple_piece, 0.08);
     if (simple_piece.outer().size() < 4)
     {
       simple_piece = bg_piece;

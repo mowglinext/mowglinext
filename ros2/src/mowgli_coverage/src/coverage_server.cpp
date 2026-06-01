@@ -47,8 +47,7 @@ nav2_util::CallbackReturn CoverageServer::on_configure(
       declare_parameter<double>("chassis_safety_inset", 0.0);
   num_headland_passes_ =
       declare_parameter<int>("num_headland_passes", 0);
-  min_subcell_area_m2_ =
-      declare_parameter<double>("min_subcell_area_m2", 0.065);
+  min_subcell_area_m2_ = declare_parameter<double>("min_subcell_area_m2", 0.25);
 
   // The legacy server exposed a handful of mode strings (DUBIN /
   // DUBIN_CC / REEDS_SHEPP, BOUSTROPHEDON / SNAKE, BRUTE_FORCE,
@@ -473,13 +472,19 @@ void CoverageServer::computeCoveragePath()
       if (check_cancel()) return;
 
       const auto sub_cell = planning_cells.getGeometry(i);
-      // Drop sub-cells that can't fit a single swath. F2C v2's
-      // TrapezoidalDecomp can split a hole-bearing polygon into
-      // dozens of slivers along the densified ConstHL output (we
-      // saw 98 sub-cells from one 0.8x0.8 m hole in a 9x6 m field).
-      // Each tiny sliver adds a Dubins connector but no usable
-      // coverage. Threshold = 2 × cov_width² = 0.065 m² with
-      // tool_width = 0.18.
+      // Drop sub-cells that can't fit a single useful swath BEFORE the
+      // costly BruteForce below (generateBestSwaths is ~0.3-0.6 s on each
+      // sub-cell even when it ultimately yields zero swaths). F2C v2's
+      // TrapezoidalDecomp splits a hole-bearing polygon into dozens of
+      // slivers along the densified ConstHL output — a resume plan on a
+      // mowed-out field produced 224 sub-cells, ~170 of them 0.07-0.28 m²,
+      // each burning a full BruteForce for no coverage → 94 s per piece
+      // (field 2026-06-01). These slivers never produce a swath, so screen
+      // them on area here. The simplify-the-mowed-hole fix in
+      // remaining_polygon keeps the sub-cell COUNT sane; this floor keeps
+      // the per-sub-cell COST off the staircase remnants. 0.25 m² ≈ a
+      // 0.18 m swath × 1.4 m — anything smaller can't tile. Tunable via the
+      // min_subcell_area_m2 param.
       if (sub_cell.area() < min_subcell_area_m2_)
       {
         ++skipped_tiny;

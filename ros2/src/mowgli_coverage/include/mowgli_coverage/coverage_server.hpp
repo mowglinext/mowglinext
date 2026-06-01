@@ -92,11 +92,12 @@ private:
   // 2-3 rings, or conversely to add an extra ring on a sloppy edge.
   int num_headland_passes_{0};
   // Drop sub-cells from TrapezoidalDecomp whose area is smaller
-  // than this threshold (m²). With tool_width = 0.18 a sub-cell
-  // under ~ 2 × tool_width² = 0.065 m² can't fit a single swath
-  // anyway, and the F2C path planning adds a Dubins connector for
-  // each one — capping the cost of degenerate splits.
-  double min_subcell_area_m2_{0.065};
+  // than this threshold (m²). A sub-cell under ~0.25 m² (≈ a 0.18 m
+  // swath × 1.4 m) can't tile a useful swath, and screening it here
+  // skips the costly per-sub-cell BruteForce on the staircase slivers
+  // a resume plan leaves behind — see the rationale in coverage_server's
+  // sub-cell loop (94 s/piece regression fixed 2026-06-01).
+  double min_subcell_area_m2_{0.25};
 };
 
 }  // namespace mowgli_coverage
