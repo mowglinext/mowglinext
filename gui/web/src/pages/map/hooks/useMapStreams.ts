@@ -39,6 +39,7 @@ function renderCoverageCells(
     datum: [number, number, number],
     setCoverageCellsImage: (v: CoverageCellsImage | null) => void,
 ) {
+    if (!grid.info || !grid.data) return;
     const width = grid.info.width ?? 0;
     const height = grid.info.height ?? 0;
     const resolution = grid.info.resolution ?? 0.1;
