@@ -3,7 +3,7 @@ import {useApi} from "../hooks/useApi.ts";
 import {App} from "antd";
 import turfArea from "@turf/area";
 import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
-import {MapArea, Marker} from "../types/ros.ts";
+import {MapArea} from "../types/ros.ts";
 import DrawControl from "../components/DrawControl.tsx";
 import Map, {Layer, Source} from 'react-map-gl/mapbox';
 import type {Map as MapboxMap} from 'mapbox-gl';
@@ -224,18 +224,17 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             const dock_lonlat = transpose(offsetX, offsetY, datum, map?.dock_y!!, map?.dock_x!!)
             newFeatures["dock"] = new DockFeatureBase(dock_lonlat, map?.dock_heading ?? 0);
         }
-        if (path?.markers) {
-            Object.values<Marker>(path.markers).filter((f) => {
-                return f.type == 4 && f.action == 0
-            }).forEach((marker, index) => {
-                const line: Position[] = marker.points?.map(point => {
-                    return transpose(offsetX, offsetY, datum, point.y!!, point.x!!)
-                }) ?? []
-
-                const feature = new PathFeature("path-" + index.toString(), line, `rgba(${(marker.color?.r ?? 0) * 255}, ${(marker.color?.g ?? 0) * 255}, ${(marker.color?.b ?? 0) * 255}, ${(marker.color?.a ?? 1) * 255})`);
+        if (path?.poses) {
+            // Coverage plan: the F2C swaths the robot is about to mow
+            // (/controller_server/FollowCoveragePath/global_plan, a nav_msgs/Path).
+            // Rendered green so it reads distinctly from the transit plan below.
+            const coordinates: Position[] = path.poses.map((pose) => {
+                return transpose(offsetX, offsetY, datum, pose.pose?.position?.y!, pose.pose?.position?.x!)
+            });
+            if (coordinates.length > 1) {
+                const feature = new PathFeature("coverage-path", coordinates, "rgba(80, 200, 120, 0.9)", 2);
                 newFeatures[feature.id] = feature
-
-            })
+            }
         }
         if (plan?.poses) {
             const coordinates = plan.poses.map((pose) => {

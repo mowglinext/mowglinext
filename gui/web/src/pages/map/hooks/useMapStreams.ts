@@ -6,7 +6,6 @@ import {
     AbsolutePose,
     LaserScan,
     Map as MapType,
-    MarkerArray,
     ObstacleArray,
     OccupancyGrid,
     Path,
@@ -132,7 +131,7 @@ export function useMapStreams({
     robotPoseRef,
 }: UseMapStreamsOptions) {
     const [map, setMap] = useState<MapType | undefined>(undefined);
-    const [path, setPath] = useState<MarkerArray | undefined>(undefined);
+    const [path, setPath] = useState<Path | undefined>(undefined);
     const [plan, setPlan] = useState<Path | undefined>(undefined);
     const [lidarCollection, setLidarCollection] = useState<GeoJSON.FeatureCollection>({
         type: "FeatureCollection",
@@ -222,7 +221,7 @@ export function useMapStreams({
             console.log({ message: "PATH Stream connected" });
         },
         (e) => {
-            const parse = JSON.parse(e) as MarkerArray;
+            const parse = JSON.parse(e) as Path;
             setPath(parse);
         }
     );

@@ -85,8 +85,9 @@ type MowingSession struct {
 	CoveragePercent float32 `json:"coverage_percent"`
 	StripsCompleted uint32  `json:"strips_completed"`
 	StripsSkipped   uint32  `json:"strips_skipped"`
-	DistanceMeters  float64 `json:"distance_meters"`
-	Status          string  `json:"status"` // "completed", "aborted", "error"
+	DistanceMeters  float64  `json:"distance_meters"`
+	Status          string   `json:"status"` // "completed", "aborted", "error"
+	RechargePauses  int      `json:"recharge_pauses"` // recharge pauses during the session
 	Errors          []string `json:"errors"`
 }
 

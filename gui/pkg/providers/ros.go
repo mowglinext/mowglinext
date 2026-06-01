@@ -42,7 +42,7 @@ var topicMap = map[string]topicDef{
 	"ticks":               {"/wheel_ticks", "mowgli_interfaces/msg/WheelTick"},
 	"wheelOdom":           {"/wheel_odom", "nav_msgs/msg/Odometry"},
 	"map":                 {"", ""},                                                            // virtual – populated via map_server services
-	"path":                {"/FollowCoveragePath/global_plan", "nav_msgs/msg/Path"},            // infrequent event
+	"path":                {"/controller_server/FollowCoveragePath/global_plan", "nav_msgs/msg/Path"}, // coverage plan
 	"plan":                {"/plan", "nav_msgs/msg/Path"},                                      // infrequent event
 	"coverageCells":       {"/map_server_node/coverage_cells", "nav_msgs/msg/OccupancyGrid"},   // large message
 	"power":               {"/hardware_bridge/power", "mowgli_interfaces/msg/Power"},

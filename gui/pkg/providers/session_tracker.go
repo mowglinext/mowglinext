@@ -22,6 +22,7 @@ type MowingSessionRecord struct {
 	StripsSkipped   uint32   `json:"strips_skipped"`
 	DistanceMeters  float64  `json:"distance_meters"`
 	Status          string   `json:"status"`
+	RechargePauses  int      `json:"recharge_pauses"`
 	Errors          []string `json:"errors"`
 }
 
@@ -33,6 +34,12 @@ type SessionTracker struct {
 	currentState string
 	sessionStart time.Time
 	inSession    bool
+	// paused is set while the robot has docked to recharge mid-session and the
+	// BT is expected to auto-resume mowing once topped up. A paused session is
+	// kept OPEN (not finalized) so a recharge no longer produces a spurious
+	// "aborted" record. pauseCount tallies the recharge cycles for the record.
+	paused     bool
+	pauseCount int
 }
 
 const sessionsDBKey = "mowing.sessions"
@@ -70,14 +77,38 @@ func (s *SessionTracker) OnHighLevelStatus(msg []byte) {
 	// Start session
 	if isMowing && !s.inSession {
 		s.inSession = true
+		s.paused = false
+		s.pauseCount = 0
 		s.sessionStart = time.Now().UTC()
 		log.Printf("SessionTracker: mowing session started (state=%s)", status.StateName)
+		return
+	}
+
+	// Resume after a recharge pause: mowing came back on the SAME session.
+	if isMowing && s.inSession && s.paused {
+		s.paused = false
+		log.Printf("SessionTracker: mowing session resumed after recharge")
+		return
+	}
+
+	// Pause for recharge: the robot docked to charge mid-session (low battery)
+	// and the BT auto-resumes once topped up. Keep the session OPEN instead of
+	// finalizing it as "aborted" — the recharge is a pause, not an end. A
+	// genuine end-of-mow that happens to charge (prevState MOWING_COMPLETE) is
+	// excluded so it still finalizes as "completed" below.
+	if s.inSession && !isMowing && status.StateName == "CHARGING" && prevState != "MOWING_COMPLETE" {
+		if !s.paused {
+			s.paused = true
+			s.pauseCount++
+			log.Printf("SessionTracker: mowing session paused for recharge (pause #%d)", s.pauseCount)
+		}
 		return
 	}
 
 	// End session
 	if s.inSession && !isMowing && !wasMowing {
 		s.inSession = false
+		s.paused = false
 		endTime := time.Now().UTC()
 		duration := endTime.Sub(s.sessionStart).Seconds()
 
@@ -97,13 +128,14 @@ func (s *SessionTracker) OnHighLevelStatus(msg []byte) {
 		}
 
 		session := MowingSessionRecord{
-			ID:          fmt.Sprintf("%d", s.sessionStart.UnixMilli()),
-			StartTime:   s.sessionStart.Format(time.RFC3339),
-			EndTime:     endTime.Format(time.RFC3339),
-			DurationSec: duration,
-			AreaIndex:   status.Area,
-			Status:      sessionStatus,
-			Errors:      []string{},
+			ID:             fmt.Sprintf("%d", s.sessionStart.UnixMilli()),
+			StartTime:      s.sessionStart.Format(time.RFC3339),
+			EndTime:        endTime.Format(time.RFC3339),
+			DurationSec:    duration,
+			AreaIndex:      status.Area,
+			Status:         sessionStatus,
+			RechargePauses: s.pauseCount,
+			Errors:         []string{},
 		}
 
 		if status.Emergency {

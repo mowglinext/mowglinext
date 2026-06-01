@@ -18,6 +18,7 @@ interface MowingSession {
   strips_skipped: number;
   distance_meters: number;
   status: "completed" | "aborted" | "error";
+  recharge_pauses?: number;
   errors: string[];
 }
 
@@ -143,9 +144,16 @@ export const StatisticsPage = () => {
     },
     ...(!isMobile ? [{
       title: "Status", dataIndex: "status", key: "status",
-      render: (v: string) => {
+      render: (v: string, record: MowingSession) => {
         const c = v === "completed" ? "success" : v === "aborted" ? "warning" : "error";
-        return <Tag color={c}>{v ?? "--"}</Tag>;
+        return (
+          <span style={{display: 'inline-flex', gap: 6, alignItems: 'center'}}>
+            <Tag color={c}>{v ?? "--"}</Tag>
+            {record.recharge_pauses ? (
+              <Tag color="processing">⏸ {record.recharge_pauses}× recharge</Tag>
+            ) : null}
+          </span>
+        );
       },
     }] : []),
   ];
