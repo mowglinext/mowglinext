@@ -22,6 +22,10 @@ static float icm45686_deg_per_lsb = 250.0f / 32768.0f; /* default for 250 dps */
 static icm45686_accel_fs_sel_t icm45686_accel_fs = ICM45686_ACCEL_FS_SEL_2_G;
 static icm45686_gyro_fs_sel_t icm45686_gyro_fs = ICM45686_GYRO_FS_SEL_250_DPS;
 
+/* I2C address the device actually answered on; resolved by ICM45686_TestDevice()
+ * (probes ICM45686_ADDRESS then ICM45686_ADDRESS_ALT). Used by Init/reads. */
+static uint8_t icm45686_addr = ICM45686_ADDRESS;
+
 /* Registers used by the simple init sequence (from vendor regmap excerpts) */
 #define ICM45686_REG_MISC2         0x7F
 #define ICM45686_REG_PWR_MGMT0     0x10
@@ -32,19 +36,23 @@ static icm45686_gyro_fs_sel_t icm45686_gyro_fs = ICM45686_GYRO_FS_SEL_250_DPS;
 
 uint8_t ICM45686_TestDevice(void)
 {
-  uint8_t val;
-  val = SW_I2C_UTIL_Read(ICM45686_ADDRESS, ICM45686_WHO_AM_I);
-  if (val == ICM45686_WHO_AM_I_ID) {
-    debug_printf("    > [ICM-45686] - WHO_AM_I=0x%02x (OK)\r\n", val);
-    return 1;
+  const uint8_t candidates[2] = { ICM45686_ADDRESS, ICM45686_ADDRESS_ALT };
+  for (uint8_t i = 0; i < 2; i++) {
+    uint8_t val = SW_I2C_UTIL_Read(candidates[i], ICM45686_WHO_AM_I);
+    if (val == ICM45686_WHO_AM_I_ID) {
+      icm45686_addr = candidates[i];
+      debug_printf("    > [ICM-45686] - WHO_AM_I=0x%02x (OK) at I2C addr=0x%02x\r\n", val, icm45686_addr);
+      return 1;
+    }
+    debug_printf("    > [ICM-45686] - probe at I2C addr=0x%02x got 0x%02x\r\n", candidates[i], val);
   }
-  debug_printf("    > [ICM-45686] - Error probing for ICM45686 at I2C addr=0x%02x, got 0x%02x\r\n", ICM45686_ADDRESS, val);
+  debug_printf("    > [ICM-45686] - Error: not found at 0x%02x or 0x%02x\r\n", ICM45686_ADDRESS, ICM45686_ADDRESS_ALT);
   return 0;
 }
 
 void ICM45686_Init(void)
 {
-  uint8_t who = SW_I2C_UTIL_Read(ICM45686_ADDRESS, ICM45686_WHO_AM_I);
+  uint8_t who = SW_I2C_UTIL_Read(icm45686_addr, ICM45686_WHO_AM_I);
   if (who != ICM45686_WHO_AM_I_ID) {
     debug_printf(" * ICM-45686 not found during init (who=0x%02x)\r\n", who);
     return;
@@ -53,14 +61,14 @@ void ICM45686_Init(void)
   debug_printf(" * ICM-45686 init: WHO_AM_I=0x%02x\r\n", who);
 
   /* Soft reset: write soft reset bit in REG_MISC2 (vendor regmap indicates soft reset at REG_MISC2 bit) */
-  SW_I2C_UTIL_WRITE(ICM45686_ADDRESS, ICM45686_REG_MISC2, 0x02);
+  SW_I2C_UTIL_WRITE(icm45686_addr, ICM45686_REG_MISC2, 0x02);
   /* Short delay for reset to complete */
   TIMER__Wait_us(2000);
 
   /* Set power management: enable accelerometer and gyro in low-noise mode per datasheet.
    * Writing 0x0F enables both accel and gyro low-noise default mode (vendor datasheet).
    */
-  SW_I2C_UTIL_WRITE(ICM45686_ADDRESS, ICM45686_REG_PWR_MGMT0, ICM45686_PWR_MGMT0_ACCEL_GYRO_LOW_NOISE);
+  SW_I2C_UTIL_WRITE(icm45686_addr, ICM45686_REG_PWR_MGMT0, ICM45686_PWR_MGMT0_ACCEL_GYRO_LOW_NOISE);
 
   /* Configure accelerometer and gyro:
    * - accel FSR: +/-2g, ODR: 100Hz
@@ -68,8 +76,8 @@ void ICM45686_Init(void)
    */
   uint8_t accel_cfg = ICM45686_ACCEL_CONFIG0_VALUE(ICM45686_ACCEL_FS_SEL_2_G, ICM45686_ACCEL_ODR_100HZ);
   uint8_t gyro_cfg  = ICM45686_GYRO_CONFIG0_VALUE(ICM45686_GYRO_FS_SEL_250_DPS, ICM45686_GYRO_ODR_100HZ);
-  SW_I2C_UTIL_WRITE(ICM45686_ADDRESS, ICM45686_REG_ACCEL_CONFIG0, accel_cfg);
-  SW_I2C_UTIL_WRITE(ICM45686_ADDRESS, ICM45686_REG_GYRO_CONFIG0, gyro_cfg);
+  SW_I2C_UTIL_WRITE(icm45686_addr, ICM45686_REG_ACCEL_CONFIG0, accel_cfg);
+  SW_I2C_UTIL_WRITE(icm45686_addr, ICM45686_REG_GYRO_CONFIG0, gyro_cfg);
 
   /* record selected FS and compute scale factors (LSB -> physical units)
    * Accelerometer: assume 16-bit output, so LSB_per_g = 16384 / (FS/2) ???
@@ -115,7 +123,7 @@ void ICM45686_ReadAccelerometerRaw(float *x, float *y, float *z)
 {
     uint8_t accel_xyz[6];
 
-    SW_I2C_UTIL_Read_Multi(ICM45686_ADDRESS, ICM45686_ACCEL_XOUT_H, 6, (uint8_t*)&accel_xyz);
+    SW_I2C_UTIL_Read_Multi(icm45686_addr, ICM45686_ACCEL_XOUT_H, 6, (uint8_t*)&accel_xyz);
 
   {
     // default is little-endian, combine bytes
@@ -131,7 +139,7 @@ void ICM45686_ReadAccelerometerRaw(float *x, float *y, float *z)
 void ICM45686_ReadGyroRaw(float *x, float *y, float *z)
 {
     uint8_t gyro_xyz[6];
-    SW_I2C_UTIL_Read_Multi(ICM45686_ADDRESS, ICM45686_GYRO_XOUT_H, 6, (uint8_t*)&gyro_xyz);
+    SW_I2C_UTIL_Read_Multi(icm45686_addr, ICM45686_GYRO_XOUT_H, 6, (uint8_t*)&gyro_xyz);
 
   {
     // default is little-endian, combine bytes
