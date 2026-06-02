@@ -12,9 +12,15 @@ extern "C" {
  * the existing MPU6050 driver
  */
 
-/* I2C address (typical default) */
+/* I2C address. The ICM-45686 address LSB is set by the AD0/MISO pin:
+ * AD0 low -> 0x68 (primary), AD0 high -> 0x69 (alternate). Some breakouts
+ * strap AD0 high, so ICM45686_TestDevice() probes both addresses. */
 #ifndef ICM45686_ADDRESS
 #define ICM45686_ADDRESS 0x68
+#endif
+
+#ifndef ICM45686_ADDRESS_ALT
+#define ICM45686_ADDRESS_ALT 0x69
 #endif
 
 /* Register addresses (from TDK/InvenSense ICM456xx driver)
