@@ -48,10 +48,11 @@ enum PacketId : uint8_t
   PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP = 0x12,  ///< Bidirectional: config response
   PACKET_ID_LL_HEARTBEAT = 0x42,  ///< Pi → STM32: heartbeat
   PACKET_ID_LL_HIGH_LEVEL_STATE = 0x43,  ///< Pi → STM32: high-level state
-  PACKET_ID_LL_CMD_VEL = 0x50,  ///< Pi → STM32: velocity command (extension)
+  PACKET_ID_LL_CMD_VEL = 0x50,  ///< Pi → STM32: velocity command (DEPRECATED, see CMD_PWM)
   PACKET_ID_LL_BLADE_STATUS = 0x05,  ///< STM32 → Pi: blade motor status
   PACKET_ID_LL_CMD_BLADE = 0x51,  ///< Pi → STM32: blade motor control
   PACKET_ID_LL_REBOOT = 0x52,  ///< Pi → STM32: reboot the board (NVIC_SystemReset)
+  PACKET_ID_LL_CMD_PWM = 0x53,  ///< Pi → STM32: raw per-wheel signed PWM
 };
 
 /// Magic byte in LlReboot — a dedicated reboot packet plus this confirmation
@@ -195,6 +196,23 @@ struct LlCmdVel
 };
 
 /**
+ * @brief Raw per-wheel PWM command sent by the Pi (PACKET_ID_LL_CMD_PWM = 0x53).
+ *
+ * Replaces LlCmdVel as the motion command in protocol v2: the differential-drive
+ * split and the closed-loop wheel-velocity PI now run on the host (see
+ * wheel_rate_controller.hpp). Signed PWM per wheel — positive forward, negative
+ * reverse, 0 stop. The firmware saturates to ±255 and applies it directly while
+ * still enforcing its safety layer (cmd watchdog, emergency, IDLE gate).
+ */
+struct LlCmdPwm
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_CMD_PWM
+  int16_t left_pwm;  ///< Signed left-wheel PWM (+forward, -reverse, 0 stop)
+  int16_t right_pwm;  ///< Signed right-wheel PWM (+forward, -reverse, 0 stop)
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+
+/**
  * @brief Blade motor control packet sent by the Pi (PACKET_ID_LL_CMD_BLADE = 0x51).
  */
 struct LlCmdBlade
@@ -245,6 +263,7 @@ static_assert(sizeof(LlOdometry) == 17u, "LlOdometry layout mismatch");
 static_assert(sizeof(LlHeartbeat) == 5u, "LlHeartbeat layout mismatch");
 static_assert(sizeof(LlHighLevelState) == 5u, "LlHighLevelState layout mismatch");
 static_assert(sizeof(LlCmdVel) == 11u, "LlCmdVel layout mismatch");
+static_assert(sizeof(LlCmdPwm) == 7u, "LlCmdPwm layout mismatch");
 static_assert(sizeof(LlCmdBlade) == 5u, "LlCmdBlade layout mismatch");
 static_assert(sizeof(LlBladeStatus) == 16u, "LlBladeStatus layout mismatch");
 

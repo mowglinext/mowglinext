@@ -33,7 +33,9 @@ extern "C" {
  * Protocol version — increment when wire format changes incompatibly.
  * ---------------------------------------------------------------------------*/
 
-#define MOWGLI_PROTOCOL_VERSION  1u
+/* v2: per-wheel velocity PI moved from firmware to the host. The host now
+ *     sends raw signed per-wheel PWM (PKT_ID_CMD_PWM); CMD_VEL is deprecated. */
+#define MOWGLI_PROTOCOL_VERSION  2u
 
 /* ---------------------------------------------------------------------------
  * Packet IDs
@@ -76,11 +78,17 @@ extern "C" {
 /** High-level state packet (mode + GPS quality). */
 #define PKT_ID_HL_STATE    0x43u
 
-/** Velocity command packet (forward + angular velocity). */
+/** Velocity command packet (forward + angular velocity). DEPRECATED in v2:
+ *  the per-wheel PI now lives on the host, which sends PKT_ID_CMD_PWM instead.
+ *  The id stays reserved and the struct documented for protocol history. */
 #define PKT_ID_CMD_VEL     0x50u
 
 /** Blade motor control packet (on/off + direction). */
 #define PKT_ID_CMD_BLADE   0x51u
+
+/** Raw per-wheel signed PWM command (pkt_cmd_pwm_t). Host owns the diff-drive
+ *  split and the wheel-velocity PI; the firmware applies this PWM directly. */
+#define PKT_ID_CMD_PWM     0x53u
 
 /** Reboot request (Host -> Firmware). Triggers NVIC_SystemReset when the
  *  payload magic byte matches PKT_REBOOT_MAGIC — recovers a wedged board
@@ -276,6 +284,24 @@ typedef struct {
 } pkt_cmd_vel_t;
 
 /**
+ * @brief Raw per-wheel PWM command — Host -> Firmware (PKT_ID_CMD_PWM = 0x53).
+ *
+ * Signed PWM per wheel: positive = forward, negative = reverse, 0 = stop. The
+ * host owns the differential-drive split and the closed-loop wheel-velocity PI
+ * (see wheel_rate_controller.hpp on the ROS 2 side); the firmware saturates to
+ * +/-255 and applies it directly via DRIVEMOTOR_SetSpeedSigned. The firmware
+ * still enforces its safety layer (cmd watchdog, emergency, IDLE gate) on top.
+ *
+ * Wire size: 7 bytes (must match sizeof(LlCmdPwm) in ll_datatypes.hpp).
+ */
+typedef struct {
+    uint8_t  type;      /**< PKT_ID_CMD_PWM */
+    int16_t  left_pwm;  /**< Signed left-wheel PWM (+forward, -reverse, 0 stop) */
+    int16_t  right_pwm; /**< Signed right-wheel PWM (+forward, -reverse, 0 stop) */
+    uint16_t crc;       /**< CRC-16 CCITT over preceding bytes */
+} pkt_cmd_pwm_t;
+
+/**
  * @brief Blade motor control packet — Host -> Firmware (PKT_ID_CMD_BLADE = 0x51).
  *
  * Commands the blade motor on/off and direction.
@@ -368,6 +394,7 @@ _Static_assert(sizeof(pkt_odometry_t)  == 17u, "pkt_odometry_t layout unexpected
 _Static_assert(sizeof(pkt_heartbeat_t) ==  5u, "pkt_heartbeat_t layout unexpected");
 _Static_assert(sizeof(pkt_hl_state_t)  ==  5u, "pkt_hl_state_t layout unexpected");
 _Static_assert(sizeof(pkt_cmd_vel_t)   == 11u, "pkt_cmd_vel_t layout unexpected");
+_Static_assert(sizeof(pkt_cmd_pwm_t)   ==  7u, "pkt_cmd_pwm_t layout unexpected");
 #endif
 
 #ifdef __cplusplus

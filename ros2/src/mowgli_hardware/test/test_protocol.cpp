@@ -84,6 +84,11 @@ TEST(ProtocolSizes, RebootPacketSize)
   EXPECT_EQ(sizeof(LlReboot), 4u);  // type(1) + magic(1) + crc(2)
 }
 
+TEST(ProtocolSizes, CmdPwmPacketSize)
+{
+  EXPECT_EQ(sizeof(LlCmdPwm), 7u);  // type(1) + left_pwm(2) + right_pwm(2) + crc(2)
+}
+
 // ---------------------------------------------------------------------------
 // Packet ID consistency (ll_datatypes.hpp enum matches mowgli_protocol.h)
 // ---------------------------------------------------------------------------
@@ -101,6 +106,7 @@ TEST(ProtocolIds, PacketIdValues)
   EXPECT_EQ(PACKET_ID_LL_CMD_VEL, 0x50);
   EXPECT_EQ(PACKET_ID_LL_CMD_BLADE, 0x51);
   EXPECT_EQ(PACKET_ID_LL_REBOOT, 0x52);
+  EXPECT_EQ(PACKET_ID_LL_CMD_PWM, 0x53);
 }
 
 // ---------------------------------------------------------------------------
@@ -280,6 +286,16 @@ TEST(ProtocolRoundtrip, CmdVelPacket)
   pkt.type = PACKET_ID_LL_CMD_VEL;
   pkt.linear_x = 0.35f;
   pkt.angular_z = -0.15f;
+
+  roundtrip_struct(pkt);
+}
+
+TEST(ProtocolRoundtrip, CmdPwmPacket)
+{
+  LlCmdPwm pkt{};
+  pkt.type = PACKET_ID_LL_CMD_PWM;
+  pkt.left_pwm = 175;    // forward
+  pkt.right_pwm = -120;  // reverse
 
   roundtrip_struct(pkt);
 }

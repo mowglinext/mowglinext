@@ -150,6 +150,16 @@ if(BUILD_TESTING)
   target_link_libraries(test_angular_rate_controller
     mowgli_hardware_core
   )
+
+  # ---- test_wheel_rate_controller ----
+  # wheel_rate_controller.hpp is header-only (pure function); link
+  # mowgli_hardware_core only for its public include directories.
+  ament_add_gtest(test_wheel_rate_controller
+    test/test_wheel_rate_controller.cpp
+  )
+  target_link_libraries(test_wheel_rate_controller
+    mowgli_hardware_core
+  )
 endif()
 
 # ---------------------------------------------------------------------------

@@ -15,3 +15,34 @@ hardware_bridge:
     # curve — the residual bias stays elevated. 20 s puts us past the Allan
     # minimum for the WT901, giving ~√5 ≈ 2.2× tighter gyro/accel offsets.
     imu_cal_samples: 1000
+
+    # --- Per-wheel velocity PI + online feedforward calibration ---
+    # Host-side replacement for the wheel PI that used to live in STM32
+    # firmware (protocol v2). Runs on the firmware's per-packet wheel velocity
+    # (~47 Hz) and emits raw signed PWM (CMD_PWM). Gains are gentle because the
+    # loop now eats the USB round-trip latency (~50-90 ms); the learned
+    # feedforward carries the steady state. See wheel_rate_controller.hpp.
+    max_wheel_mps: 0.5            # per-wheel speed clamp (was firmware MAX_MPS)
+    wheel_pi_kp: 30.0            # proportional gain (PWM per m/s of error)
+    wheel_pi_ki: 2500.0          # integral gain (PWM per m/s of error per second)
+    wheel_pi_max_pwm: 255.0      # output clamp (PAC5210 8-bit magnitude)
+    wheel_pi_integral_max: 150.0 # anti-windup clamp on the integral (PWM)
+
+    # Online auto-calibration: learn per-wheel feedforward (kff = PWM/(m/s),
+    # deadband = break-free PWM) from the PI integrator's steady state during
+    # normal driving. Passive — never commands motion. Suppressed while
+    # charging/docked. Persisted to wheel_cal_persist_path. Set
+    # wheel_cal_enabled:false to freeze the feedforward at the seeds.
+    wheel_cal_enabled: true
+    wheel_cal_learn_rate: 0.02   # EMA step for kff/deadband (small = slow, stable)
+    wheel_cal_kff_init: 300.0    # seed PWM per m/s (matches firmware PWM_PER_MPS)
+    wheel_cal_deadband_init: 40.0  # seed break-free PWM (brushed-DC static friction)
+    wheel_cal_kff_min: 100.0
+    wheel_cal_kff_max: 600.0
+    wheel_cal_deadband_min: 0.0
+    wheel_cal_deadband_max: 120.0
+    wheel_cal_learn_v_min: 0.12  # only fit kff at/above this target speed (m/s)
+    wheel_cal_err_tol: 0.03      # |error| ≤ this (m/s) counts as steady
+    wheel_cal_settle_s: 0.5      # error must stay steady this long before adapting
+    wheel_cal_save_period_s: 300.0  # periodic checkpoint while operating (s); 0 disables
+    wheel_cal_persist_path: "/ros2_ws/maps/wheel_calibration.txt"
