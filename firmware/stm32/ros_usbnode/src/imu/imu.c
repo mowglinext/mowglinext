@@ -145,20 +145,20 @@ while (imuReadAccelerometerRaw == NULL && ((HAL_GetTick() - l_u32Timestamp) < 20
     }
   #endif
 
+  #ifndef DISABLE_ICM45686
+    if ((!imuReadGyroRaw || !imuReadAccelerometerRaw) && ICM45686_TestDevice()) {
+      ICM45686_Init();
+      imuReadAccelerometerRaw=ICM45686_ReadAccelerometerRaw;
+      imuReadGyroRaw=ICM45686_ReadGyroRaw;
+    }
+  #endif
+
   HAL_Delay(20);
 }
 
 if(imuReadAccelerometerRaw == NULL){
   chirp(10);
 }
-
-#ifndef DISABLE_ICM45686
-  if ((!imuReadGyroRaw || !imuReadAccelerometerRaw) && ICM45686_TestDevice()) {
-    ICM45686_Init();
-    imuReadAccelerometerRaw=ICM45686_ReadAccelerometerRaw;
-    imuReadGyroRaw=ICM45686_ReadGyroRaw;
-  }
-#endif
 
   /* Magnetometer: try LIS3MDL (separate chip on Pololu boards) if no
    * mag was set by the accel/gyro IMU driver (e.g. WT901 has built-in mag,
