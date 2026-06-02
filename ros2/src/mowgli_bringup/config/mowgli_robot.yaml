@@ -194,10 +194,24 @@ mowgli:
     # -----------------------------------------------------------------
     dock_pose_x: 0.0              # dock position in map frame (set per-site)
     dock_pose_y: 0.0
-    dock_pose_yaw: 4.17            # measured with phone compass (239°)
+    # dock_pose_yaw MUST be a map-frame ENU yaw (rad) — opennav_docking
+    # consumes it directly as the dock heading. Set it via the GUI
+    # "Set Docking Point" button (robot seated on dock, charging,
+    # RTK-Fixed, yaw converged) or the undock GPS-trajectory calibration;
+    # both write the correct ENU value. A correctly-seated robot's
+    # /odometry/filtered_map yaw equals this. NOTE: 4.17 below is a stale
+    # hand-entered phone-compass seed (239°) — NOT a valid ENU yaw;
+    # recalibrate per-site before relying on docking.
+    dock_pose_yaw: 4.17
     undock_distance: 1.5           # reverse distance when undocking (m)
     undock_speed: 0.16             # reverse speed (m/s) — above kMinLinVel=0.15 host clamp
-    dock_approach_distance: 1.0    # distance to staging pose in front of dock
+    # Distance (m) to the staging pose behind the dock — the final
+    # straight-in approach runway. Injected as opennav_docking
+    # simple_charging_dock.staging_x_offset = -dock_approach_distance
+    # (navigation.launch.py). 1.5 m field-validated 2026-06 as a clean,
+    # calm approach; longer runways (2.5) felt needlessly fast and bought
+    # nothing once the dock pose is correctly pinned.
+    dock_approach_distance: 1.5
     # Overshoot (m) applied to dock_pose in the body forward direction
     # when configuring opennav_docking's home_dock target. The robot
     # then aims at (dock_pose + overshoot) instead of dock_pose itself;

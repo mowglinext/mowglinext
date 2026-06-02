@@ -963,8 +963,9 @@ private:
     latest_gyro_z_ = gz;
 
     // Magnetometer data is ignored — uncalibrated on metal robot chassis,
-    // gives ~229° error vs real heading. dock_pose_yaw is set from config
-    // (user measures with phone compass).
+    // gives ~229° error vs real heading. dock_pose_yaw is a map-frame ENU
+    // yaw, set by the GUI "Set Docking Point" calibration or the undock
+    // GPS-trajectory fit (NOT a phone-compass heading).
 
     // Write resolved dock pose to file for SLAM initialization.
     // On fresh map start, navigation.launch.py reads this file to set
@@ -1065,8 +1066,14 @@ private:
     // (remapped to /gnss/heading in launch). dock_yaw_to_set_pose
     // consumes it and seeds both EKFs via their set_pose services.
     // The orientation quaternion is heading in ENU.
-    // dock_yaw_ is compass heading; convert to ENU: yaw_enu = pi/2 - compass
-    const double enu_yaw = M_PI / 2.0 - dock_yaw_;
+    // dock_yaw_ (= dock_pose_yaw) is ALREADY a map-frame ENU yaw: it is
+    // written that way by the GUI set_docking_point service
+    // (area_manager.cpp) and the undock GPS-trajectory calibration
+    // (calibration_nodes.cpp), and consumed as ENU directly by
+    // opennav_docking's home_dock pose. Use it verbatim — the old
+    // `pi/2 - dock_yaw_` compass→ENU conversion was wrong (it double-
+    // rotated this seed relative to every other consumer/writer).
+    const double enu_yaw = dock_yaw_;
 
     // During the anchor window after a charging transition, publish with
     // σ=π so dock_yaw_to_set_pose accepts the first heading update as a
