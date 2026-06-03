@@ -59,6 +59,25 @@
   <xacro:arg name="caster_track"     default="0.36"/>
   <xacro:arg name="blade_radius"     default="0.09"/>
 
+  <!-- ros2_control hardware interface (real STM32 drive base). The motor path
+       is diff_drive_controller → pid_controller ×2 → MowgliSystemInterface,
+       which owns the COBS serial link. These args are injected by the launch
+       from mowgli_robot.yaml. use_ros2_control:=false drops the block (e.g.
+       when only TF/visualisation is wanted). -->
+  <xacro:arg name="use_ros2_control"     default="true"/>
+  <xacro:arg name="serial_port"          default="/dev/mowgli"/>
+  <xacro:arg name="baud_rate"            default="115200"/>
+  <xacro:arg name="ticks_per_meter"      default="220.0"/>
+  <xacro:arg name="wheel_meas_filter_tau" default="0.12"/>
+  <xacro:arg name="pwm_per_mps"          default="300.0"/>
+  <xacro:arg name="deadband_pwm"         default="40.0"/>
+  <xacro:arg name="max_pwm"              default="255.0"/>
+  <xacro:arg name="dock_pose_x"          default="0.0"/>
+  <xacro:arg name="dock_pose_y"          default="0.0"/>
+  <xacro:arg name="dock_pose_yaw"        default="0.0"/>
+  <xacro:arg name="imu_cal_samples"      default="1000"/>
+  <xacro:arg name="lift_recovery_mode"   default="false"/>
+
   <!-- ================================================================
        Properties (resolved from args — all shape from config)
        ================================================================ -->
@@ -397,6 +416,46 @@
     <!-- Mounted on top front of chassis — position configurable via xacro args -->
     <origin xyz="$(arg lidar_x) $(arg lidar_y) $(arg lidar_z)" rpy="0 0 $(arg lidar_yaw)"/>
   </joint>
+
+  <!-- ================================================================
+       ros2_control hardware interface (real STM32 drive base)
+       ================================================================ -->
+  <xacro:if value="$(arg use_ros2_control)">
+    <ros2_control name="MowgliDriveBase" type="system">
+      <hardware>
+        <plugin>mowgli_hardware/MowgliSystemInterface</plugin>
+        <!-- Serial link -->
+        <param name="serial_port">$(arg serial_port)</param>
+        <param name="baud_rate">$(arg baud_rate)</param>
+        <param name="serial_rx_timeout_s">2.0</param>
+        <!-- Tick→metre scale (sole ground scale) + joint-angle conversion -->
+        <param name="ticks_per_meter">$(arg ticks_per_meter)</param>
+        <param name="wheel_radius">$(arg wheel_radius)</param>
+        <param name="wheel_track">$(arg wheel_track)</param>
+        <param name="wheel_meas_filter_tau">$(arg wheel_meas_filter_tau)</param>
+        <!-- velocity (m/s) → PWM feedforward (inverts the firmware deadband) -->
+        <param name="pwm_per_mps">$(arg pwm_per_mps)</param>
+        <param name="deadband_pwm">$(arg deadband_pwm)</param>
+        <param name="max_pwm">$(arg max_pwm)</param>
+        <!-- Comms-core node params (dock pose, IMU calibration) -->
+        <param name="dock_pose_x">$(arg dock_pose_x)</param>
+        <param name="dock_pose_y">$(arg dock_pose_y)</param>
+        <param name="dock_pose_yaw">$(arg dock_pose_yaw)</param>
+        <param name="imu_cal_samples">$(arg imu_cal_samples)</param>
+        <param name="lift_recovery_mode">$(arg lift_recovery_mode)</param>
+      </hardware>
+      <joint name="left_wheel_joint">
+        <command_interface name="velocity"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+      <joint name="right_wheel_joint">
+        <command_interface name="velocity"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+    </ros2_control>
+  </xacro:if>
 
   <!-- ================================================================
        Gazebo simulation

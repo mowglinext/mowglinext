@@ -1,0 +1,14 @@
+<library path="mowgli_system_interface">
+  <class
+    name="mowgli_hardware/MowgliSystemInterface"
+    type="mowgli_hardware::MowgliSystemInterface"
+    base_class_type="hardware_interface::SystemInterface">
+    <description>
+      ros2_control SystemInterface for the Mowgli STM32 drive base. Owns the
+      COBS/CRC16 serial link (embedding the HardwareBridgeNode comms core),
+      exposes the two drive wheels as velocity-commanded joints, and inverts the
+      firmware PWM deadband in a static feedforward. Pair with a chained
+      pid_controller (per-wheel velocity loop) under a diff_drive_controller.
+    </description>
+  </class>
+</library>

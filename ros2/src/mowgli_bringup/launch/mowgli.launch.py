@@ -22,7 +22,11 @@ Main bringup launch file for the Mowgli robot mower (physical hardware).
 Brings up:
   1. robot_state_publisher  – processes URDF/xacro and publishes /robot_description
                               plus static TF from URDF fixed joints.
-  2. hardware_bridge        – serial bridge to the Mowgli firmware board.
+  2. controller_manager     – ros2_control stack: MowgliSystemInterface plugin
+                              (owns the STM32 serial link + embeds the comms
+                              core) driven by chained diff_drive + per-wheel pid
+                              controllers (replaces the old hardware_bridge_node
+                              + hand-rolled wheel-PI / gyro loop).
   3. twist_mux              – priority-based cmd_vel multiplexer.
 """
 
@@ -31,7 +35,8 @@ import os
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, RegisterEventHandler
+from launch.event_handlers import OnProcessExit
 from launch.substitutions import (
     Command,
     FindExecutable,
@@ -156,6 +161,21 @@ def generate_launch_description() -> LaunchDescription:
             " gps_x:=", gps_x,
             " gps_y:=", gps_y,
             " gps_z:=", gps_z,
+            # --- ros2_control hardware interface (real STM32 drive base) ---
+            " use_ros2_control:=true",
+            " serial_port:=", serial_port,
+            " baud_rate:=", str(robot_params.get("baud_rate", 115200)),
+            " ticks_per_meter:=", str(robot_params.get("ticks_per_meter", 220.0)),
+            " wheel_meas_filter_tau:=", str(robot_params.get("wheel_meas_filter_tau", 0.12)),
+            " pwm_per_mps:=", str(robot_params.get("pwm_per_mps", 300.0)),
+            " deadband_pwm:=", str(robot_params.get("deadband_pwm", 40.0)),
+            " max_pwm:=", str(robot_params.get("max_pwm", 255.0)),
+            " dock_pose_x:=", str(robot_params.get("dock_pose_x", 0.0)),
+            " dock_pose_y:=", str(robot_params.get("dock_pose_y", 0.0)),
+            " dock_pose_yaw:=", str(robot_params.get("dock_pose_yaw", 0.0)),
+            " imu_cal_samples:=", str(robot_params.get("imu_cal_samples", 1000)),
+            " lift_recovery_mode:=",
+            "true" if bool(robot_params.get("lift_recovery_mode", False)) else "false",
         ]
     )
 
@@ -177,58 +197,70 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
-    # 2. hardware_bridge
-    hardware_bridge_params = os.path.join(
-        bringup_dir, "config", "hardware_bridge.yaml"
-    )
+    # 2. ros2_control controller_manager (owns the STM32 serial link via the
+    #    MowgliSystemInterface plugin embedded in the robot_description, plus the
+    #    chained diff_drive + per-wheel pid controllers). This REPLACES the old
+    #    standalone hardware_bridge_node + its hand-rolled wheel-PI / gyro loop.
+    #    The comms core (IMU, status, emergency, blade, dock-heading, /wheel_odom,
+    #    …) still runs — it is embedded inside the plugin and applies the same
+    #    topic remaps it used standalone (set in MowgliSystemInterface).
+    controllers_yaml = os.path.join(bringup_dir, "config", "mowgli_controllers.yaml")
 
-    hardware_bridge_node = Node(
-        package="mowgli_hardware",
-        executable="hardware_bridge_node",
-        name="hardware_bridge",
+    controller_manager_node = Node(
+        package="controller_manager",
+        executable="ros2_control_node",
+        name="controller_manager",
         output="screen",
         parameters=[
-            hardware_bridge_params,
-            # Allow command-line override of the serial port.
-            {"serial_port": serial_port},
+            robot_description,
+            controllers_yaml,
             {"use_sim_time": use_sim_time},
-            # Pass dock pose from robot config for dock position anchoring
-            {"dock_pose_x": float(robot_params.get("dock_pose_x", 0.0))},
-            {"dock_pose_y": float(robot_params.get("dock_pose_y", 0.0))},
-            {"dock_pose_yaw": float(robot_params.get("dock_pose_yaw", 0.0))},
-            {"imu_yaw": float(robot_params.get("imu_yaw", 0.0))},
-            # Wheel odometry kinematics — single source of truth in
-            # mowgli_robot.yaml. Hardware bridge previously hardcoded
-            # 0.325 m / 300 ticks/m which silently diverged from the
-            # YAML and the URDF (also from the firmware's TICKS_PER_M).
-            {"wheel_track": float(robot_params.get("wheel_track", 0.325))},
-            {"ticks_per_meter": float(robot_params.get("ticks_per_meter", 300.0))},
-            # IMU calibration tuning (operator-tunable via the GUI).
-            {"imu_cal_samples": int(robot_params.get("imu_cal_samples", 200))},
-            {"imu_cal_persist_path": str(robot_params.get(
-                "imu_cal_persist_path", "/ros2_ws/maps/imu_calibration.txt"))},
-            {"imu_cal_auto_rest_sec": float(robot_params.get(
-                "imu_cal_auto_rest_sec", 15.0))},
-            {"imu_cal_periodic_recal_sec": float(robot_params.get(
-                "imu_cal_periodic_recal_sec", 60.0))},
-            # Lift / blade safety tuning.
-            {"lift_recovery_mode": bool(robot_params.get("lift_recovery_mode", False))},
-            {"lift_blade_resume_delay_sec": float(robot_params.get(
-                "lift_blade_resume_delay_sec", 1.0))},
+            # diff_drive_controller's wheel_radius MUST equal the plugin's (the
+            # radian value cancels in the odom/velocity path only if they agree;
+            # ticks_per_meter sets the true ground scale). Inject both from the
+            # SAME mowgli_robot.yaml values the URDF/plugin use so they can never
+            # diverge — overrides the placeholders in mowgli_controllers.yaml.
+            {"diff_drive_controller.wheel_radius": wheel_radius},
+            {"diff_drive_controller.wheel_separation": wheel_track},
         ],
-        # The node publishes on ~/topic (e.g. /hardware_bridge/wheel_odom).
-        # behavior_tree_node subscribes to /hardware_bridge/status etc.
-        remappings=[
-            ("~/imu/data_raw", "/imu/data"),
-            ("~/imu/mag_raw", "/imu/mag_raw"),
-            ("~/wheel_odom", "/wheel_odom"),
-            ("~/wheel_ticks", "/wheel_ticks"),
-            ("~/emergency", "/hardware_bridge/emergency"),
-            ("~/power", "/hardware_bridge/power"),
-            ("~/status", "/hardware_bridge/status"),
-            ("~/cmd_vel", "/cmd_vel"),
-            ("~/dock_heading", "/gnss/heading"),
+    )
+
+    # Spawners. joint_state_broadcaster + the two per-wheel PID controllers come
+    # up first; diff_drive_controller is chained ON TOP of the PID controllers'
+    # reference interfaces, so it must be activated only after they exist.
+    jsb_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["joint_state_broadcaster", "-c", "/controller_manager"],
+        output="screen",
+    )
+    pid_left_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["pid_controller_left_wheel", "-c", "/controller_manager"],
+        output="screen",
+    )
+    pid_right_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["pid_controller_right_wheel", "-c", "/controller_manager"],
+        output="screen",
+    )
+    diff_drive_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=[
+            "diff_drive_controller",
+            "-c", "/controller_manager",
+            # Consume twist_mux's /cmd_vel (TwistStamped).
+            "--controller-ros-args", "-r ~/cmd_vel:=/cmd_vel",
         ],
+        output="screen",
+    )
+    # Activate diff_drive only after BOTH per-wheel PID controllers are up, so
+    # its chained reference interfaces are available.
+    diff_drive_after_pids = RegisterEventHandler(
+        OnProcessExit(target_action=pid_right_spawner, on_exit=[diff_drive_spawner])
     )
 
     # 3. twist_mux
@@ -256,7 +288,11 @@ def generate_launch_description() -> LaunchDescription:
             use_sim_time_arg,
             serial_port_arg,
             robot_state_publisher_node,
-            hardware_bridge_node,
+            controller_manager_node,
+            jsb_spawner,
+            pid_left_spawner,
+            pid_right_spawner,
+            diff_drive_after_pids,
             twist_mux_node,
         ]
     )

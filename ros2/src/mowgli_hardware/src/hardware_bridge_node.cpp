@@ -16,35 +16,41 @@
 // SPDX-License-Identifier: GPL-3.0
 /**
  * @file hardware_bridge_node.cpp
- * @brief ROS2 node: serial bridge between the STM32 firmware and the rest of
- *        the Mowgli ROS2 stack.
+ * @brief STM32 serial-comms core for the Mowgli ROS2 stack.
  *
- * The node communicates with the STM32 over USB-serial using the COBS-framed,
- * CRC-16-protected packet protocol defined in ll_datatypes.hpp.
+ * Communicates with the STM32 over USB-serial using the COBS-framed,
+ * CRC-16-protected packet protocol in ll_datatypes.hpp. Owns the serial link
+ * and every NON-motor responsibility; the motor-control path (cmd_vel → wheel
+ * velocity → PWM) was migrated to ros2_control (diff_drive_controller + chained
+ * pid_controller). This node now only RELAYS the per-wheel PWM the hardware
+ * plugin computes (BridgeComms::set_wheel_pwm) and exposes the per-wheel joint
+ * state the controllers read (BridgeComms::wheel_state). It is embedded inside
+ * MowgliSystemInterface (the ros2_control plugin) — there is no standalone
+ * executable; the controller_manager process owns the serial link. See
+ * bridge_comms.hpp.
  *
  * Published topics (relative to node namespace):
  *   ~/status        mowgli_interfaces/msg/Status
  *   ~/emergency     mowgli_interfaces/msg/Emergency
  *   ~/power         mowgli_interfaces/msg/Power
  *   ~/imu/data_raw  sensor_msgs/msg/Imu
- *   ~/wheel_odom    nav_msgs/msg/Odometry
+ *   ~/wheel_odom    nav_msgs/msg/Odometry  (force-zeroed on dock; non-holo covariances)
+ *   ~/wheel_ticks   mowgli_interfaces/msg/WheelTick
  *   ~/dock_heading  sensor_msgs/msg/Imu  (dock yaw while charging, remapped → /gnss/heading)
  *   /battery_state  sensor_msgs/msg/BatteryState  (for opennav_docking)
  *
  * Subscribed topics:
- *   ~/cmd_vel      geometry_msgs/msg/TwistStamped  → diff-drive split + per-wheel
- *                  velocity PI → LlCmdPwm (raw PWM) packets to STM32
+ *   /behavior_tree_node/high_level_status  → firmware HL-mode mirror
  *
  * Services:
  *   ~/mower_control  mowgli_interfaces/srv/MowerControl
  *   ~/emergency_stop mowgli_interfaces/srv/EmergencyStop
+ *   ~/reboot_board   std_srvs/srv/Trigger
  *
- * Parameters:
- *   serial_port      (string,  default "/dev/mowgli")
- *   baud_rate        (int,     default 115200)
- *   heartbeat_rate   (double,  default 4.0 Hz  → 250 ms period)
- *   publish_rate     (double,  default 100.0 Hz → 10 ms period)
- *   high_level_rate  (double,  default 2.0 Hz   → 500 ms period)
+ * Key parameters: serial_port, baud_rate, heartbeat_rate, publish_rate,
+ *   high_level_rate, wheel_track, ticks_per_meter, wheel_radius,
+ *   wheel_meas_filter_tau, imu_cal_*, dock_pose_*. Supplied by the plugin from
+ *   the URDF <ros2_control><hardware> block via NodeOptions parameter overrides.
  */
 
 #include <algorithm>
@@ -59,14 +65,13 @@
 #include <string>
 #include <vector>
 
-#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
-#include "geometry_msgs/msg/twist_stamped.hpp"
+#include <mutex>
+
+#include "mowgli_hardware/bridge_comms.hpp"
 #include "mowgli_hardware/clock_fit.hpp"
 #include "mowgli_hardware/ll_datatypes.hpp"
 #include "mowgli_hardware/packet_handler.hpp"
 #include "mowgli_hardware/serial_port.hpp"
-#include "mowgli_hardware/angular_rate_controller.hpp"
-#include "mowgli_hardware/wheel_rate_controller.hpp"
 
 // High-level mode constants — must match HighLevelStatus.msg and the
 // HL_MODE_* defines in firmware/mowgli_protocol.h. Declared locally to
@@ -96,7 +101,17 @@ namespace mowgli_hardware
 
 using namespace std::chrono_literals;
 
-class HardwareBridgeNode : public rclcpp::Node
+// HardwareBridgeNode — the STM32 serial comms core. Owns the serial link and
+// every non-motor responsibility (IMU + calibration, status/power/battery,
+// blade, emergency + heartbeat, high-level-state mirror, charging detection,
+// dock-heading, wheel_ticks, reboot, and /wheel_odom). The motor-control path
+// (cmd_vel → wheel velocity → PWM) was migrated to ros2_control
+// (diff_drive_controller + chained pid_controller); this node now only RELAYS
+// the per-wheel PWM that the hardware plugin computes, and exposes the per-wheel
+// joint state the controllers read. It implements BridgeComms so the plugin
+// (MowgliSystemInterface) can embed and drive it; the standalone executable is
+// gone (the controller_manager owns the serial link now).
+class HardwareBridgeNode : public rclcpp::Node, public BridgeComms
 {
 public:
   explicit HardwareBridgeNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions())
@@ -110,15 +125,33 @@ public:
     create_timers();
     // Must run after declare_parameters — reads imu_cal_persist_path_. Runs
     // before any IMU packet arrives because the serial port callbacks are
-    // dispatched by the executor from main(), not from the constructor.
+    // dispatched by the plugin's executor thread, not from the constructor.
     load_persisted_imu_calibration();
-    // Likewise seed the per-wheel feedforward (kff/deadband) from disk so a
-    // previously-calibrated robot starts calibrated; otherwise it learns from
-    // the param seeds during the first driving.
-    load_persisted_wheel_calibration();
   }
 
   ~HardwareBridgeNode() override = default;
+
+  // --- BridgeComms (called from the controller_manager thread) ---------------
+  WheelJointState wheel_state() const override
+  {
+    std::lock_guard<std::mutex> lk(motor_mtx_);
+    return joint_state_;
+  }
+
+  void set_wheel_pwm(double left_pwm, double right_pwm) override
+  {
+    std::lock_guard<std::mutex> lk(motor_mtx_);
+    cmd_pwm_l_ = left_pwm;
+    cmd_pwm_r_ = right_pwm;
+    cmd_pwm_time_ = now();
+  }
+
+  double wheel_radius() const override { return wheel_radius_; }
+
+  rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_base() override
+  {
+    return get_node_base_interface();
+  }
 
 private:
   // ---------------------------------------------------------------------------
@@ -155,71 +188,22 @@ private:
     // ticks_per_meter matches the firmware-side scaling).
     wheel_track_ = declare_parameter<double>("wheel_track", 0.325);
     ticks_per_meter_ = declare_parameter<double>("ticks_per_meter", 300.0);
-    // Closed-loop angular-rate controller — see angular_rate_controller.hpp.
-    // Gains are gentle by default (USB latency caps them); tune live via
-    // ros2 param set. angular_rate_loop_enabled:=false → plain passthrough.
-    angular_rate_loop_enabled_ = declare_parameter<bool>("angular_rate_loop_enabled", true);
-    angular_rate_params_.kff = declare_parameter<double>("angular_rate_kff", 1.0);
-    angular_rate_params_.kp = declare_parameter<double>("angular_rate_kp", 0.4);
-    angular_rate_params_.ki = declare_parameter<double>("angular_rate_ki", 2.0);
-    angular_rate_params_.max_cmd = declare_parameter<double>("angular_rate_max_cmd", 1.5);
-    angular_rate_params_.integral_max =
-        declare_parameter<double>("angular_rate_integral_max", 1.5);
-    angular_rate_params_.target_lp_tau =
-        declare_parameter<double>("angular_rate_target_lp_tau", 0.2);
-
-    // Per-wheel velocity PI + online feedforward calibration. This is the
-    // host-side replacement for the wheel PI that used to live in the STM32
-    // firmware (protocol v2). It runs in handle_odometry on the firmware's
-    // per-packet wheel velocity and emits raw signed PWM (CMD_PWM). Gains are
-    // gentle because the loop now eats USB round-trip latency; the learned
-    // feedforward (kff/deadband) carries the steady state. See
-    // wheel_rate_controller.hpp. Set wheel_cal_enabled:=false to freeze the
-    // feedforward at the seed values.
-    max_wheel_mps_ = declare_parameter<double>("max_wheel_mps", 0.5);
-    // Sub-deadband forward-velocity floor (|vx| below this → 0). 0 disables.
-    // Lowered from the old hard 0.15 to 0.05: on-robot RTK staircase (2026-06)
-    // showed the host wheel PI bridges the deadband and moves smoothly down to
-    // ~0.05 m/s (0.04 cmd); below ~0.03 it stick-slips, ≤0.02 stalls.
-    min_linear_vel_ = declare_parameter<double>("min_linear_vel", 0.05);
-    wheel_params_.kp = declare_parameter<double>("wheel_pi_kp", 30.0);
-    wheel_params_.ki = declare_parameter<double>("wheel_pi_ki", 600.0);
-    wheel_params_.max_pwm = declare_parameter<double>("wheel_pi_max_pwm", 255.0);
-    wheel_params_.integral_max = declare_parameter<double>("wheel_pi_integral_max", 60.0);
-    // Low-pass time constant (s) for the measured wheel velocity fed to the PI.
-    // At mowing speed (~0.18 m/s) the firmware emits only ~1 encoder tick per
-    // packet, so the per-packet velocity is quantised to ~0.15 m/s steps — nearly
-    // the size of the target. Feeding that raw to the loop makes the integrator
-    // settle into a quantisation limit-cycle at a biased speed (~+14% over
-    // commanded, and insensitive to ticks_per_meter — observed 2026-06-03). A
-    // short EMA averages several ticks together so the loop sees the true mean and
-    // converges to the commanded speed. Only conditions the CONTROL input (not
-    // /wheel_odom). ≤0 disables (raw per-packet velocity). Kept small so the added
-    // feedback lag stays well under the integral's time scale.
+    // Wheel radius (m) — used only to convert the tick-derived ground distance
+    // into a joint angle (rad) for the ros2_control state interfaces, and back
+    // (velocity rad/s → m/s) in the plugin's feedforward. The value CANCELS in
+    // the odom path (tick→rad divides by it, rad→linear multiplies by it), so
+    // ticks_per_meter remains the sole true ground scale; what matters is that
+    // this matches the diff_drive_controller's wheel_radius. Mirrors the URDF.
+    wheel_radius_ = declare_parameter<double>("wheel_radius", 0.0925);
+    // Low-pass time constant (s) for the measured wheel velocity exposed as the
+    // joint VELOCITY state interface. At mowing speed the firmware emits only
+    // ~1 encoder tick per packet, so the per-packet velocity is quantised to
+    // ~0.15 m/s steps; feeding that raw to the pid_controller makes it sit in a
+    // quantisation limit-cycle at a biased speed (observed 2026-06-03). A short
+    // EMA averages several packets so the loop sees the true mean. Mean-
+    // preserving, so /wheel_odom (computed from the raw tick aggregate below) is
+    // unaffected. ≤0 disables (raw per-packet velocity).
     wheel_meas_filter_tau_ = declare_parameter<double>("wheel_meas_filter_tau", 0.12);
-    // LINEAR acceleration limit (m/s²). Slew-limits the forward velocity vx
-    // BEFORE the diff-drive split (in run_wheel_pi_and_send) — taming linear
-    // over-acceleration WITHOUT slowing rotation. The rotational component (wz)
-    // is applied to the wheel differential un-slewed so the gyro angular-rate
-    // loop stays responsive (a per-wheel slew limiter caused violent yaw
-    // oscillation, 2026-06). Emergency/watchdog stops reset the ramp. ≤0 disables.
-    linear_accel_limit_mps2_ = declare_parameter<double>("linear_accel_limit_mps2", 0.5);
-    wheel_cal_enabled_ = declare_parameter<bool>("wheel_cal_enabled", true);
-    wheel_params_.learn_rate = declare_parameter<double>("wheel_cal_learn_rate", 0.015);
-    wheel_params_.kff_init = declare_parameter<double>("wheel_cal_kff_init", 300.0);
-    wheel_params_.deadband_init = declare_parameter<double>("wheel_cal_deadband_init", 40.0);
-    wheel_params_.kff_min = declare_parameter<double>("wheel_cal_kff_min", 100.0);
-    wheel_params_.kff_max = declare_parameter<double>("wheel_cal_kff_max", 600.0);
-    wheel_params_.deadband_min = declare_parameter<double>("wheel_cal_deadband_min", 0.0);
-    wheel_params_.deadband_max = declare_parameter<double>("wheel_cal_deadband_max", 120.0);
-    wheel_params_.learn_v_min = declare_parameter<double>("wheel_cal_learn_v_min", 0.12);
-    wheel_params_.err_tol = declare_parameter<double>("wheel_cal_err_tol", 0.03);
-    wheel_params_.settle_s = declare_parameter<double>("wheel_cal_settle_s", 0.5);
-    wheel_params_.learn_integral_frac =
-        declare_parameter<double>("wheel_cal_learn_integral_frac", 0.8);
-    wheel_cal_save_period_s_ = declare_parameter<double>("wheel_cal_save_period_s", 300.0);
-    wheel_cal_persist_path_ =
-        declare_parameter<std::string>("wheel_cal_persist_path", "/ros2_ws/maps/wheel_calibration.txt");
 
     // Dock pose comes solely from mowgli_robot.yaml (declared as ROS
     // parameters above). Calibration and manual GUI adjustments persist
@@ -309,16 +293,13 @@ private:
 
   void create_subscribers()
   {
-    sub_cmd_vel_ = create_subscription<geometry_msgs::msg::TwistStamped>(
-        "~/cmd_vel",
-        rclcpp::SystemDefaultsQoS(),
-        [this](geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
-        {
-          on_cmd_vel(msg);
-        });
+    // cmd_vel is no longer consumed here — the motor-control path moved to
+    // ros2_control (diff_drive_controller + chained pid_controller). This node
+    // only relays the per-wheel PWM the hardware plugin computes (set_wheel_pwm)
+    // and publishes the per-wheel joint state the controllers read.
 
     // Mirror the behavior tree's high-level state to the firmware so it
-    // knows when to accept cmd_vel (mode != IDLE).
+    // knows when to accept motor commands (mode != IDLE).
     sub_hl_status_ = create_subscription<mowgli_interfaces::msg::HighLevelStatus>(
         "/behavior_tree_node/high_level_status",
         rclcpp::QoS(10),
@@ -580,13 +561,6 @@ private:
                     "Charging transition: dock_heading anchor window "
                     "(%.1fs) opened.",
                     kChargingAnchorWindowSec);
-        // Checkpoint the wheel feedforward learned during the session just
-        // ended — arriving on the dock is a natural, safe save point (mirrors
-        // the IMU cal trigger). Skipped if calibration is disabled.
-        if (wheel_cal_enabled_)
-        {
-          persist_wheel_calibration();
-        }
       }
 
       // Start IMU calibration when charging and not already calibrating.
@@ -1069,12 +1043,6 @@ private:
     msg.angular_velocity.y = gy;
     msg.angular_velocity.z = gz;
 
-    // Latest bias-corrected yaw rate, snapshotted for the closed-loop
-    // angular-rate controller in on_cmd_vel. Single-writer (this IMU path) /
-    // single-reader (cmd_vel callback), both on the one rclcpp executor —
-    // no lock needed. ~90 Hz, well above cmd_vel cadence.
-    latest_gyro_z_ = gz;
-
     // Magnetometer data is ignored — uncalibrated on metal robot chassis,
     // gives ~229° error vs real heading. dock_pose_yaw is a map-frame ENU
     // yaw, set by the GUI "Set Docking Point" calibration or the undock
@@ -1235,78 +1203,32 @@ private:
                 pkt.press_duration);
   }
 
-  // Per-wheel closed-loop velocity → raw PWM. Called once per firmware odom
-  // packet. See wheel_rate_controller.hpp for the controller; this method owns
-  // the safety overrides, the CMD_PWM emit, and the calibration checkpoints.
-  // measured_l/r: host-computed per-wheel velocity (m/s) from the raw tick
-  // delta scaled by ticks_per_meter_ — see handle_odometry. dt: firmware
-  // hardware-accurate interval (s). The host param is the single source of the
-  // tick→metre scale (the firmware's own velocity_mm_s is not used).
-  void run_wheel_pi_and_send(double measured_l, double measured_r, double dt)
+  // Relay the per-wheel PWM the hardware plugin computed (set_wheel_pwm) to the
+  // firmware, once per firmware odom packet (~47 Hz). The closed-loop velocity
+  // control now lives in ros2_control (diff_drive_controller + pid_controller);
+  // this method only owns the host-side safety overrides that mirror the
+  // firmware backstops: the emergency latch and a 200 ms command-watchdog (the
+  // controller_manager quiet / deactivated / host stalled). On a hard stop we
+  // send 0 PWM immediately; the firmware ALSO hard-stops after 200 ms with no
+  // CMD_PWM as an independent backstop. Runs on the executor thread (the sole
+  // serial writer); the command words are read under motor_mtx_.
+  void send_motor_command()
   {
-    // Host-side safety overrides mirroring the firmware backstops: emergency
-    // latch + a 200 ms command watchdog (Nav2 quiet / teleop released / host
-    // stalled). On a hard stop we command 0 PWM IMMEDIATELY and reset the
-    // controller runtime, so the slew limiter never slows a safety stop and no
-    // stale integral/ramp carries across it. The firmware ALSO hard-stops after
-    // 200 ms with no CMD_PWM as an independent backstop.
-    const double cmd_age = last_wheel_cmd_time_.nanoseconds() > 0
-                               ? (now() - last_wheel_cmd_time_).seconds()
-                               : 1.0;
+    double pwm_l, pwm_r;
+    rclcpp::Time cmd_time;
+    {
+      std::lock_guard<std::mutex> lk(motor_mtx_);
+      pwm_l = cmd_pwm_l_;
+      pwm_r = cmd_pwm_r_;
+      cmd_time = cmd_pwm_time_;
+    }
+    const double cmd_age = cmd_time.nanoseconds() > 0 ? (now() - cmd_time).seconds() : 1.0;
     if (emergency_active_ || cmd_age > 0.2)
     {
-      mowgli_hardware::reset_wheel_runtime(wheel_left_);
-      mowgli_hardware::reset_wheel_runtime(wheel_right_);
-      vx_ramped_ = 0.0;  // next motion ramps from rest; never slows a safety stop
-      send_wheel_pwm(0.0, 0.0);
-      return;
+      pwm_l = 0.0;
+      pwm_r = 0.0;
     }
-
-    // Slew-limit the LINEAR velocity only (at the wheel-loop rate, using the
-    // firmware-accurate per-packet dt). The rotational command (target_wz_) is
-    // applied to the differential un-slewed, so a commanded turn produces an
-    // immediate differential — keeping the outer gyro angular-rate loop
-    // responsive. This is the fix for the cascaded-loop yaw oscillation: the
-    // old per-wheel slew limiter lagged the differential and the gyro loop wound
-    // up and thrashed. Linear over-acceleration is still bounded by ramping vx.
-    if (linear_accel_limit_mps2_ > 0.0 && dt > 0.0 && dt < 1.0)
-    {
-      const double max_step = linear_accel_limit_mps2_ * dt;
-      vx_ramped_ += std::clamp(target_vx_ - vx_ramped_, -max_step, max_step);
-    }
-    else
-    {
-      vx_ramped_ = target_vx_;
-    }
-
-    // Diff-drive split: ramped linear ∓ un-slewed rotational, then per-wheel clamp.
-    const double half_track = wheel_track_ * 0.5;
-    double l_target = std::clamp(vx_ramped_ - target_wz_ * half_track, -max_wheel_mps_, max_wheel_mps_);
-    double r_target = std::clamp(vx_ramped_ + target_wz_ * half_track, -max_wheel_mps_, max_wheel_mps_);
-
-    // Learn only when safe and meaningful — never while charging / mechanically
-    // docked (no real motion to learn from). Respects the no-autonomous-motion
-    // and dock-safety constraints: calibration is passive, never commands motion.
-    wheel_params_.adapt_enabled = wheel_cal_enabled_ && !is_charging_;
-
-    const double pwm_l = mowgli_hardware::compute_wheel_pwm(
-        l_target, measured_l, dt, wheel_params_, wheel_left_);
-    const double pwm_r = mowgli_hardware::compute_wheel_pwm(
-        r_target, measured_r, dt, wheel_params_, wheel_right_);
     send_wheel_pwm(pwm_l, pwm_r);
-
-    // Periodic checkpoint of the learned feedforward while operating (the dock
-    // transition saves too). Skipped while charging — nothing new is learned.
-    if (wheel_cal_enabled_ && !is_charging_ && wheel_cal_save_period_s_ > 0.0)
-    {
-      const double since_save = wheel_cal_last_saved_.nanoseconds() > 0
-                                    ? (now() - wheel_cal_last_saved_).seconds()
-                                    : wheel_cal_save_period_s_;
-      if (since_save >= wheel_cal_save_period_s_)
-      {
-        persist_wheel_calibration();
-      }
-    }
   }
 
   // Emit one CMD_PWM packet, clamped to the PAC5210 ±255 range.
@@ -1317,85 +1239,6 @@ private:
     out.left_pwm = static_cast<int16_t>(std::lround(std::clamp(pwm_l, -255.0, 255.0)));
     out.right_pwm = static_cast<int16_t>(std::lround(std::clamp(pwm_r, -255.0, 255.0)));
     send_raw_packet(reinterpret_cast<const uint8_t*>(&out), sizeof(LlCmdPwm) - sizeof(uint16_t));
-  }
-
-  // Persist the learned per-wheel feedforward (kff/deadband). Mirrors the IMU
-  // calibration file: plain text, versioned header, human-inspectable.
-  void persist_wheel_calibration()
-  {
-    std::ofstream f(wheel_cal_persist_path_, std::ios::trunc);
-    if (!f.is_open())
-    {
-      RCLCPP_WARN(get_logger(),
-                  "Could not open %s for write — wheel cal NOT persisted.",
-                  wheel_cal_persist_path_.c_str());
-      return;
-    }
-    f << "# mowgli_wheel_calibration_v1\n";
-    f << std::fixed;
-    f.precision(4);
-    f << static_cast<int64_t>(std::time(nullptr)) << "\n";
-    f << wheel_left_.kff << " " << wheel_left_.deadband << "\n";
-    f << wheel_right_.kff << " " << wheel_right_.deadband << "\n";
-    f.close();
-    wheel_cal_last_saved_ = now();
-    RCLCPP_INFO(get_logger(),
-                "Persisted wheel calibration to %s (L kff=%.1f db=%.1f, R kff=%.1f db=%.1f).",
-                wheel_cal_persist_path_.c_str(),
-                wheel_left_.kff,
-                wheel_left_.deadband,
-                wheel_right_.kff,
-                wheel_right_.deadband);
-  }
-
-  // Seed the per-wheel feedforward from the persisted file. A loaded kff is
-  // always ≥ kff_min (>0), which suppresses the lazy param-seed in
-  // compute_wheel_pwm so the loaded values take effect.
-  void load_persisted_wheel_calibration()
-  {
-    std::ifstream f(wheel_cal_persist_path_);
-    if (!f.is_open())
-    {
-      RCLCPP_INFO(get_logger(),
-                  "No persisted wheel calibration at %s — starting from seeds "
-                  "(kff=%.0f, deadband=%.0f) and learning online.",
-                  wheel_cal_persist_path_.c_str(),
-                  wheel_params_.kff_init,
-                  wheel_params_.deadband_init);
-      return;
-    }
-    std::string header;
-    std::getline(f, header);
-    if (header != "# mowgli_wheel_calibration_v1")
-    {
-      RCLCPP_WARN(get_logger(),
-                  "Persisted wheel cal header mismatch (got '%s') — ignoring.",
-                  header.c_str());
-      return;
-    }
-    int64_t ts = 0;
-    double lkff = 0.0, ldb = 0.0, rkff = 0.0, rdb = 0.0;
-    if (!(f >> ts) || !(f >> lkff >> ldb) || !(f >> rkff >> rdb))
-    {
-      RCLCPP_WARN(get_logger(), "Persisted wheel cal parse failed — ignoring.");
-      return;
-    }
-    // Clamp to the configured bounds so a corrupt file can't poison the loop.
-    wheel_left_.kff = std::clamp(lkff, wheel_params_.kff_min, wheel_params_.kff_max);
-    wheel_left_.deadband = std::clamp(ldb, wheel_params_.deadband_min, wheel_params_.deadband_max);
-    wheel_right_.kff = std::clamp(rkff, wheel_params_.kff_min, wheel_params_.kff_max);
-    wheel_right_.deadband = std::clamp(rdb, wheel_params_.deadband_min, wheel_params_.deadband_max);
-    const double age_hours =
-        (static_cast<double>(std::time(nullptr)) - static_cast<double>(ts)) / 3600.0;
-    RCLCPP_INFO(get_logger(),
-                "Loaded wheel calibration from %s (%.1f h old): "
-                "L kff=%.1f db=%.1f, R kff=%.1f db=%.1f.",
-                wheel_cal_persist_path_.c_str(),
-                age_hours,
-                wheel_left_.kff,
-                wheel_left_.deadband,
-                wheel_right_.kff,
-                wheel_right_.deadband);
   }
 
   void handle_odometry(const uint8_t* data, std::size_t len)
@@ -1460,34 +1303,47 @@ private:
       d_right = 0;
     }
 
-    // ----- Per-wheel velocity PI → CMD_PWM (every firmware packet, ~47 Hz) -----
-    // Measured wheel velocity is computed HERE on the host from the raw tick
-    // delta and the firmware's hardware-accurate dt, scaled by ticks_per_meter_.
-    // The host param is therefore the single source of the tick→metre scale for
-    // BOTH this control loop AND /wheel_odom — the firmware's own velocity_mm_s
-    // (scaled by board.h TICKS_PER_M) is no longer used, so no reflash is needed
-    // to recalibrate the scale.
+    // ----- ros2_control joint state + PWM relay (every firmware packet, ~47 Hz) ---
+    // Update the per-wheel joint state the hardware plugin exposes to the
+    // controllers, and relay the plugin's latest PWM command to the firmware.
+    // Wheel velocity is computed HERE on the host from the raw tick delta and
+    // the firmware's hardware-accurate dt scaled by ticks_per_meter_ (the sole
+    // tick→metre ground scale), then converted to joint units (rad, rad/s) via
+    // wheel_radius_. The radian value cancels in the diff_drive_controller odom
+    // path, so only ticks_per_meter sets the true scale; what matters is that
+    // wheel_radius_ matches the controller's.
     const double odom_dt_sec = static_cast<double>(pkt.dt_millis) / 1000.0;
-    if (odom_dt_sec > 1.0e-4 && ticks_per_meter_ > 0.0)
+    if (odom_dt_sec > 1.0e-4 && ticks_per_meter_ > 0.0 && wheel_radius_ > 0.0)
     {
       const double meas_l = (static_cast<double>(d_left) / ticks_per_meter_) / odom_dt_sec;
       const double meas_r = (static_cast<double>(d_right) / ticks_per_meter_) / odom_dt_sec;
-      // De-quantise the measured velocity for the control loop with a short EMA
-      // (see wheel_meas_filter_tau_). At ~1 tick/packet the raw per-packet velocity
-      // is too coarse for the integrator to resolve the target; averaging several
-      // packets recovers the true mean. Conditions ONLY the loop input — the raw
-      // tick deltas still feed /wheel_odom unchanged below.
-      double ctrl_l = meas_l;
-      double ctrl_r = meas_r;
+      // De-quantise the velocity exposed as the joint VELOCITY state with a
+      // short EMA (see wheel_meas_filter_tau_). At ~1 tick/packet the raw
+      // per-packet velocity is too coarse for the pid_controller to resolve the
+      // target; averaging several packets recovers the true mean. Mean-
+      // preserving, so the raw-tick /wheel_odom aggregate below is unaffected.
+      double vel_l_mps = meas_l;
+      double vel_r_mps = meas_r;
       if (wheel_meas_filter_tau_ > 0.0)
       {
         const double alpha = std::clamp(odom_dt_sec / wheel_meas_filter_tau_, 0.0, 1.0);
         meas_l_filt_ += alpha * (meas_l - meas_l_filt_);
         meas_r_filt_ += alpha * (meas_r - meas_r_filt_);
-        ctrl_l = meas_l_filt_;
-        ctrl_r = meas_r_filt_;
+        vel_l_mps = meas_l_filt_;
+        vel_r_mps = meas_r_filt_;
       }
-      run_wheel_pi_and_send(ctrl_l, ctrl_r, odom_dt_sec);
+      // Cumulative wheel angle (rad) and angular velocity (rad/s) for read().
+      {
+        std::lock_guard<std::mutex> lk(motor_mtx_);
+        joint_state_.position_rad[0] +=
+            (static_cast<double>(d_left) / ticks_per_meter_) / wheel_radius_;
+        joint_state_.position_rad[1] +=
+            (static_cast<double>(d_right) / ticks_per_meter_) / wheel_radius_;
+        joint_state_.velocity_rads[0] = vel_l_mps / wheel_radius_;
+        joint_state_.velocity_rads[1] = vel_r_mps / wheel_radius_;
+      }
+      // Relay the plugin's latest per-wheel PWM (with safety overrides).
+      send_motor_command();
     }
 
     // ----- Per-wheel WheelTick (diagnostics: GUI "Per-Wheel Encoders") -----
@@ -1711,95 +1567,6 @@ private:
   }
 
   // ---------------------------------------------------------------------------
-  // cmd_vel subscriber
-  // ---------------------------------------------------------------------------
-
-  void on_cmd_vel(geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
-  {
-    double vx = msg->twist.linear.x;
-    double wz = msg->twist.angular.z;
-
-    // The firmware ignores cmd_vel when mode is IDLE.  When velocity commands
-    // arrive (from Nav2 or teleop), ensure the firmware is in AUTONOMOUS mode.
-    if (current_mode_ == 0u && (vx != 0.0 || wz != 0.0))
-    {
-      current_mode_ = 1u;  // AUTONOMOUS
-      send_high_level_state();
-    }
-
-    // Sub-deadband forward-velocity guard.
-    //
-    // A previous closed-loop deadband compensator BOOSTED sub-deadband
-    // commands to ~0.85 rad/s (or 0.13 m/s) to break through the
-    // firmware's PWM static friction. The boost produced motor pulses
-    // strong enough to register on the gyro but too short to generate
-    // measurable wheel encoder ticks. The wheel between-factor in
-    // fusion_graph then saw "stationary" while the IMU integrated real
-    // rotation, and the wheel/IMU disagreement piled up as
-    // stationary_hand_push spikes and σ_yaw drift during PRE_ROTATE
-    // and headland pivots.
-    //
-    // New policy: instead of boosting, clamp any |vx| below kMinLinVel
-    // to zero. The firmware can't move the chassis below this threshold
-    // anyway, so commanding a sub-deadband forward velocity only
-    // produced motor buzz and the IMU/wheel mismatch above. Sending 0
-    // makes the IMU see nothing AND the wheels see nothing — the graph
-    // stays consistent. Nav2's closed-loop controllers (FTC, MPPI,
-    // BackUp) will issue above-deadband commands on their own once
-    // they detect lack of progress, provided their slow-speed tunables
-    // are set ≥ kMinLinVel (see nav2_params.yaml's FTC `speed_slow:
-    // 0.16` and RPP's `min_approach_linear_velocity: 0.16` for the
-    // canonical examples).
-    //
-    // wz handling — closed-loop angular-rate controller.
-    //
-    // WHY: the firmware PWM→rotation response is nonlinear and load-
-    // dependent (measured 2026-05-27: commanded 0.2/0.3/0.4 rad/s → actual
-    // 0.07/0.22/0.30, i.e. a soft deadband plus a ~0.7-0.75 drifting gain).
-    // Every Nav2 controller assumes commanded ω == actual ω, so the mismatch
-    // surfaced as under-rotation, dock-approach stalls and (when an earlier
-    // fix over-corrected) left/right oscillation. Four open-loop amplitude
-    // hacks (floor 0.85 / pulse / floor 0.5 / pulse+burst) all failed because
-    // none measured the result. compute_angular_rate_cmd() closes the loop on
-    // the gyro so the firmware command is driven until measured == target,
-    // absorbing the deadband + nonlinear gain at every operating point. See
-    // angular_rate_controller.hpp for the full rationale and the history.
-    // Safe now (the closed-loop boost 2a371798 was dropped pre-slip-veto)
-    // because fusion_graph slip-vetoes the transient wheel/IMU mismatch.
-    // Set angular_rate_loop_enabled:=false to fall back to passthrough.
-    //
-    // The sub-deadband |vx| → 0 guard is unchanged (linear has no clean
-    // host-side rate feedback — encoders slip; leave it to Nav2's loops).
-    // Sub-deadband forward-velocity floor, now a parameter (min_linear_vel).
-    // Historically a hard 0.15 because the firmware open-loop couldn't move
-    // below it; with the host wheel-velocity PI bridging the deadband this can
-    // be lowered (down to the encoder-quantization limit). Set to 0 to disable.
-    constexpr double kMinCmdToConsider = 1.0e-3;  // ignore floating-point dust
-    if (min_linear_vel_ > 0.0 && std::abs(vx) > kMinCmdToConsider && std::abs(vx) < min_linear_vel_)
-    {
-      vx = 0.0;
-    }
-    if (angular_rate_loop_enabled_)
-    {
-      const rclcpp::Time now = this->now();
-      const double dt = last_cmd_vel_time_.nanoseconds() > 0
-                            ? (now - last_cmd_vel_time_).seconds()
-                            : 0.0;
-      last_cmd_vel_time_ = now;
-      wz = mowgli_hardware::compute_angular_rate_cmd(
-          wz, latest_gyro_z_, dt, angular_rate_params_, angular_rate_state_);
-    }
-
-    // Store the (gyro-corrected) linear + angular targets. The diff-drive split
-    // happens in run_wheel_pi_and_send, where vx is slew-limited but wz is not —
-    // so rotation stays responsive for the gyro loop. We do not send a motion
-    // packet here.
-    target_vx_ = vx;
-    target_wz_ = wz;
-    last_wheel_cmd_time_ = this->now();
-  }
-
-  // ---------------------------------------------------------------------------
   // Service handlers
   // ---------------------------------------------------------------------------
 
@@ -1859,7 +1626,6 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr pub_battery_state_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_dock_heading_;
 
-  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr sub_cmd_vel_;
   rclcpp::Subscription<mowgli_interfaces::msg::HighLevelStatus>::SharedPtr sub_hl_status_;
 
   rclcpp::Service<mowgli_interfaces::srv::MowerControl>::SharedPtr srv_mower_control_;
@@ -1908,37 +1674,22 @@ private:
   double dock_yaw_{0.0};
   double wheel_track_{0.325};
   double ticks_per_meter_{300.0};
-  // Closed-loop angular-rate controller (on_cmd_vel). Drives the firmware yaw
-  // command from gyro feedback so measured ω tracks the commanded ω across
-  // the firmware's nonlinear PWM curve. See angular_rate_controller.hpp.
-  bool angular_rate_loop_enabled_{true};
-  mowgli_hardware::AngularRateParams angular_rate_params_{};
-  mowgli_hardware::AngularRateState angular_rate_state_{};
-  double latest_gyro_z_{0.0};  ///< bias-corrected gyro_z, from the IMU path.
-  rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
+  double wheel_radius_{0.0925};  ///< tick→radian conversion; matches diff_drive_controller.
+  double wheel_meas_filter_tau_{0.12};  ///< EMA τ (s) de-quantising the joint VELOCITY state; 0 disables.
+  double meas_l_filt_{0.0};  ///< EMA state for the left wheel velocity (m/s).
+  double meas_r_filt_{0.0};  ///< EMA state for the right wheel velocity (m/s).
 
-  // Per-wheel velocity PI + online feedforward calibration (handle_odometry).
-  // Host-side replacement for the firmware wheel PI. on_cmd_vel sets the linear
-  // + angular targets (gyro-corrected); run_wheel_pi_and_send slew-limits vx,
-  // splits (un-slewed wz), and the PI turns each wheel target into CMD_PWM using
-  // the firmware's per-packet wheel velocity feedback. See wheel_rate_controller.hpp.
-  mowgli_hardware::WheelRateParams wheel_params_{};
-  mowgli_hardware::WheelRateState wheel_left_{};
-  mowgli_hardware::WheelRateState wheel_right_{};
-  double target_vx_{0.0};   ///< commanded forward velocity (gyro-corrected, post sub-deadband guard).
-  double target_wz_{0.0};   ///< commanded yaw rate (gyro-corrected); NOT slew-limited.
-  double vx_ramped_{0.0};   ///< slew-limited vx fed to the diff-drive split.
-  double linear_accel_limit_mps2_{0.5};
-  double max_wheel_mps_{0.5};
-  double min_linear_vel_{0.05};  ///< sub-deadband forward-vx floor (0 disables).
-  double wheel_meas_filter_tau_{0.12};  ///< EMA τ (s) de-quantising the loop's measured velocity; 0 disables.
-  double meas_l_filt_{0.0};  ///< EMA state for the left wheel control-input velocity.
-  double meas_r_filt_{0.0};  ///< EMA state for the right wheel control-input velocity.
-  bool wheel_cal_enabled_{true};
-  double wheel_cal_save_period_s_{300.0};
-  std::string wheel_cal_persist_path_{"/ros2_ws/maps/wheel_calibration.txt"};
-  rclcpp::Time last_wheel_cmd_time_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time wheel_cal_last_saved_{0, 0, RCL_ROS_TIME};
+  // Shared with the ros2_control plugin (MowgliSystemInterface), which runs
+  // read()/write() on the controller_manager thread while this node runs on the
+  // plugin's executor thread. motor_mtx_ guards these words; the serial port
+  // itself is touched only from the executor thread (send_motor_command), so
+  // there is no serial write race.
+  mutable std::mutex motor_mtx_;
+  WheelJointState joint_state_;                 ///< latest per-wheel angle + velocity (read())
+  double cmd_pwm_l_{0.0};                        ///< per-wheel PWM from write()
+  double cmd_pwm_r_{0.0};
+  rclcpp::Time cmd_pwm_time_{0, 0, RCL_ROS_TIME};  ///< stamp of the last set_wheel_pwm (watchdog)
+
   bool mow_enabled_{false};
   bool is_charging_{false};
   uint8_t current_mode_{0};
@@ -2001,16 +1752,15 @@ private:
   bool dock_pose_written_{false};
 };
 
-}  // namespace mowgli_hardware
-
 // ---------------------------------------------------------------------------
-// main
+// BridgeComms factory — the ros2_control plugin (MowgliSystemInterface) calls
+// this to construct and embed the comms node. There is no standalone main()
+// anymore: the controller_manager process owns the STM32 serial link.
 // ---------------------------------------------------------------------------
 
-int main(int argc, char** argv)
+std::shared_ptr<BridgeComms> create_bridge_comms(const rclcpp::NodeOptions& options)
 {
-  rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<mowgli_hardware::HardwareBridgeNode>());
-  rclcpp::shutdown();
-  return 0;
+  return std::make_shared<HardwareBridgeNode>(options);
 }
+
+}  // namespace mowgli_hardware

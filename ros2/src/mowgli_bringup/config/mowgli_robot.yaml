@@ -51,6 +51,18 @@ mowgli:
     # were all polluted by it). NOTE 2: never calibrate from /wheel_odom's mean
     # velocity — same quantisation makes its short-window mean read ~10% high.
     ticks_per_meter: 220.0
+    # --- ros2_control drive-base tunables (MowgliSystemInterface, injected into
+    #     the URDF <ros2_control> block + diff_drive/pid by mowgli.launch.py) ---
+    baud_rate: 115200
+    # velocity (m/s) → PWM feedforward that inverts the firmware's PWM curve so
+    # the chained pid_controller's integrator carries almost nothing. Seeds from
+    # the firmware PWM_PER_MPS (300) + measured break-free deadband (40).
+    pwm_per_mps: 300.0
+    deadband_pwm: 40.0
+    max_pwm: 255.0
+    # EMA τ (s) de-quantising the joint VELOCITY state fed to the pid_controller
+    # (~1 tick/packet at mowing speed → coarse). Mean-preserving; 0 disables.
+    wheel_meas_filter_tau: 0.12
     # Behavior tree tuning (consumed by behavior_tree_node)
     tick_rate: 10.0
     bt_debug_logging: false

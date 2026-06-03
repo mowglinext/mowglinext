@@ -1,0 +1,117 @@
+# ros2_control controller stack for the Mowgli STM32 drive base.
+#
+# Chained pattern (the standard ros2_control diffbot layout, ros2_control_demos
+# example_16): diff_drive_controller → pid_controller ×2 → MowgliSystemInterface.
+#   * diff_drive_controller turns cmd_vel (TwistStamped) into per-wheel velocity
+#     references and feeds them to the two pid_controllers' reference interfaces.
+#   * each pid_controller closes the velocity loop on the wheel's encoder
+#     velocity and writes a (trimmed) velocity command to the hardware.
+#   * MowgliSystemInterface converts that commanded velocity to a raw PWM via a
+#     static feedforward (slope + firmware deadband) and relays it to the STM32.
+#
+# This replaces the old hand-rolled host wheel-PI + gyro angular-rate loop. The
+# gyro loop is gone — the per-wheel velocity loop absorbs the nonlinear PWM
+# curve and the localizer (fusion_graph) owns heading.
+#
+# NOTE: gains are conservative starting points. They need on-robot tuning (a
+# pivot + straight-line run) — see the migration notes. Motion validation was
+# deferred (robot must not move during the migration).
+controller_manager:
+  ros__parameters:
+    # 50 Hz read()/write() — matches the ~47 Hz firmware odom-packet cadence so
+    # CMD_PWM is refreshed every packet and stays well inside the firmware's
+    # 200 ms command watchdog.
+    update_rate: 50
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    pid_controller_left_wheel:
+      type: pid_controller/PidController
+
+    pid_controller_right_wheel:
+      type: pid_controller/PidController
+
+    diff_drive_controller:
+      type: diff_drive_controller/DiffDriveController
+
+# --- Per-wheel velocity PID (chained, downstream of diff_drive) --------------
+pid_controller_left_wheel:
+  ros__parameters:
+    dof_names: ["left_wheel_joint"]
+    command_interface: velocity
+    reference_and_state_interfaces: ["velocity"]
+    gains:
+      left_wheel_joint:
+        p: 0.3
+        i: 1.0
+        d: 0.0
+        i_clamp_max: 5.0
+        i_clamp_min: -5.0
+        antiwindup: true
+        # The hardware feedforward already inverts the plant, so the loop only
+        # trims; pass the reference velocity through (gain 1.0) plus PID.
+        feedforward_gain: 1.0
+
+pid_controller_right_wheel:
+  ros__parameters:
+    dof_names: ["right_wheel_joint"]
+    command_interface: velocity
+    reference_and_state_interfaces: ["velocity"]
+    gains:
+      right_wheel_joint:
+        p: 0.3
+        i: 1.0
+        d: 0.0
+        i_clamp_max: 5.0
+        i_clamp_min: -5.0
+        antiwindup: true
+        feedforward_gain: 1.0
+
+# --- Differential-drive kinematics (upstream) -------------------------------
+diff_drive_controller:
+  ros__parameters:
+    # Chain into the PID controllers' exported reference interfaces, not the
+    # hardware joints directly (the <controller>/<joint> naming is the chain).
+    left_wheel_names: ["pid_controller_left_wheel/left_wheel_joint"]
+    right_wheel_names: ["pid_controller_right_wheel/right_wheel_joint"]
+
+    # Kinematics — wheel_radius must match MowgliSystemInterface's (the radian
+    # value cancels in odom; ticks_per_meter in the plugin sets the true scale).
+    # Both are overridden from mowgli_robot.yaml in the launch.
+    wheel_separation: 0.325
+    wheel_radius: 0.0925
+    wheel_separation_multiplier: 1.0
+    left_wheel_radius_multiplier: 1.0
+    right_wheel_radius_multiplier: 1.0
+
+    # Velocity feedback for the controller's own odometry (we don't use its TF —
+    # fusion_graph owns map→odom AND odom→base_footprint, so enable_odom_tf MUST
+    # be false; /wheel_odom keeps coming from the comms core with its
+    # force-zero-on-charging + non-holonomic covariances).
+    position_feedback: false
+    open_loop: false
+    enable_odom_tf: false
+    odom_frame_id: odom
+    base_frame_id: base_footprint
+    publish_rate: 50.0
+    pose_covariance_diagonal: [0.001, 0.001, 1.0e6, 1.0e6, 1.0e6, 0.03]
+    twist_covariance_diagonal: [0.01, 1.0e-4, 1.0e6, 1.0e6, 1.0e6, 9.0e-4]
+
+    cmd_vel_timeout: 0.5
+    publish_limited_velocity: false
+
+    # Limits mirror the old node's: 0.5 m/s linear, 0.5 m/s² accel (was
+    # linear_accel_limit_mps2), 1.5 rad/s angular.
+    linear.x.has_velocity_limits: true
+    linear.x.max_velocity: 0.5
+    linear.x.min_velocity: -0.5
+    linear.x.has_acceleration_limits: true
+    linear.x.max_acceleration: 0.5
+    linear.x.min_acceleration: -0.5
+    angular.z.has_velocity_limits: true
+    angular.z.max_velocity: 1.5
+    angular.z.min_velocity: -1.5
+    angular.z.has_acceleration_limits: true
+    angular.z.max_acceleration: 3.0
+    angular.z.min_acceleration: -3.0

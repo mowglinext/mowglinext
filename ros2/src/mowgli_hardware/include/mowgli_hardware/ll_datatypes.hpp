@@ -199,10 +199,12 @@ struct LlCmdVel
  * @brief Raw per-wheel PWM command sent by the Pi (PACKET_ID_LL_CMD_PWM = 0x53).
  *
  * Replaces LlCmdVel as the motion command in protocol v2: the differential-drive
- * split and the closed-loop wheel-velocity PI now run on the host (see
- * wheel_rate_controller.hpp). Signed PWM per wheel — positive forward, negative
- * reverse, 0 stop. The firmware saturates to ±255 and applies it directly while
- * still enforcing its safety layer (cmd watchdog, emergency, IDLE gate).
+ * split and the closed-loop wheel-velocity loop now run on the host in
+ * ros2_control (diff_drive_controller + chained pid_controller), and
+ * MowgliSystemInterface inverts the firmware deadband (velocity_pwm.hpp) to this
+ * raw PWM. Signed PWM per wheel — positive forward, negative reverse, 0 stop.
+ * The firmware saturates to ±255 and applies it directly while still enforcing
+ * its safety layer (cmd watchdog, emergency, IDLE gate).
  */
 struct LlCmdPwm
 {
