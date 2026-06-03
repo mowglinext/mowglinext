@@ -35,6 +35,16 @@ hardware_bridge:
     wheel_pi_ki: 600.0           # integral gain (gentle — host loop has USB dead time)
     wheel_pi_max_pwm: 255.0      # output clamp (PAC5210 8-bit magnitude)
     wheel_pi_integral_max: 60.0  # anti-windup clamp on the integral (PWM)
+    # De-quantising EMA time constant (s) for the measured wheel velocity fed to
+    # the PI. At mowing speed the firmware emits only ~1 encoder tick/packet, so
+    # the raw per-packet velocity is quantised to ~0.15 m/s steps — the integrator
+    # then sits in a quantisation limit-cycle at a biased speed (~+14% over
+    # commanded) that ignores ticks_per_meter entirely. This EMA averages several
+    # packets so the loop tracks the true mean (at 0.25 m/s real tracked commanded
+    # to ~+1%). Conditions ONLY the control input — /wheel_odom uses the raw ticks.
+    # 0 disables. Keep small so the added feedback lag stays under the integral's
+    # time scale; raising it improves low-speed accuracy at the cost of response.
+    wheel_meas_filter_tau: 0.12
     # LINEAR acceleration limit (m/s²). Slew-limits forward vx before the
     # diff-drive split — tames linear over-acceleration WITHOUT slowing rotation
     # (the angular/wz command is applied to the wheel differential un-slewed so

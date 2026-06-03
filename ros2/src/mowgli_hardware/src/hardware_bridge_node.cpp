@@ -1293,26 +1293,6 @@ private:
         l_target, measured_l, dt, wheel_params_, wheel_left_);
     const double pwm_r = mowgli_hardware::compute_wheel_pwm(
         r_target, measured_r, dt, wheel_params_, wheel_right_);
-
-    // [DIAG 2026-06-03] throttled per-wheel loop state for speed-accuracy tuning.
-    // Shows whether the integrator nulls the steady error (measured→target) or is
-    // frozen/saturated, and how the output splits between feedforward and integral.
-    // Remove once the steady-state offset is understood.
-    if (std::abs(l_target) > 0.05 || std::abs(r_target) > 0.05)
-    {
-      const double ff_l = wheel_left_.kff * l_target +
-                          (l_target > 0 ? 1.0 : (l_target < 0 ? -1.0 : 0.0)) * wheel_left_.deadband;
-      const double ff_r = wheel_right_.kff * r_target +
-                          (r_target > 0 ? 1.0 : (r_target < 0 ? -1.0 : 0.0)) * wheel_right_.deadband;
-      RCLCPP_INFO_THROTTLE(
-          get_logger(), *get_clock(), 400,
-          "WPI L tgt=%.3f meas=%.3f err=%+.3f ff=%.0f int=%+.1f pwm=%.0f settle=%.2f | "
-          "R tgt=%.3f meas=%.3f err=%+.3f ff=%.0f int=%+.1f pwm=%.0f",
-          l_target, measured_l, l_target - measured_l, ff_l, wheel_left_.integral, pwm_l,
-          wheel_left_.settle_timer, r_target, measured_r, r_target - measured_r, ff_r,
-          wheel_right_.integral, pwm_r);
-    }
-
     send_wheel_pwm(pwm_l, pwm_r);
 
     // Periodic checkpoint of the learned feedforward while operating (the dock
