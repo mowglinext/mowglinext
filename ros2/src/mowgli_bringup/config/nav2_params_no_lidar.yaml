@@ -144,7 +144,7 @@ controller_server:
       # --- RegulatedPurePursuitController (primary) params ---
       transform_tolerance: 0.3
       desired_linear_vel: 0.30
-      min_approach_linear_velocity: 0.16   # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
+      min_approach_linear_velocity: 0.08   # ≥ min_linear_vel=0.05 host floor (lowered from 0.16)
       approach_velocity_scaling_dist: 0.6
       use_velocity_scaled_lookahead_dist: true
       lookahead_time: 1.5
@@ -152,7 +152,7 @@ controller_server:
       max_lookahead_dist: 0.90
       use_regulated_linear_velocity_scaling: true
       regulated_linear_scaling_min_radius: 0.9
-      regulated_linear_scaling_min_speed: 0.20
+      regulated_linear_scaling_min_speed: 0.12
       use_cost_regulated_linear_velocity_scaling: false
       use_collision_detection: false       # no obstacle_layer without LiDAR
       max_allowed_time_to_collision_up_to_carrot: 1.0
@@ -173,7 +173,7 @@ controller_server:
       speed_fast: 0.20
       speed_fast_threshold: 0.5
       speed_fast_threshold_angle: 10.0
-      speed_slow: 0.16    # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
+      speed_slow: 0.08    # ≥ min_linear_vel=0.05 host floor (lowered from 0.16)
       speed_angular: 45.0
       acceleration: 0.2
       # Match nav2_params.yaml — see there for the wheel-PI motor-model

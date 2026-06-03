@@ -89,16 +89,25 @@ struct WheelRateParams
   double kff_init = 300.0;       ///< PWM per m/s. Matches the firmware PWM_PER_MPS seed.
   double deadband_init = 40.0;   ///< break-free PWM seed (brushed-DC static friction).
 
-  // --- online calibration ---
+  // --- online calibration (kff slope only; deadband is NOT learned) ---
   bool adapt_enabled = true;     ///< master enable; caller also gates on !charging etc.
-  double learn_rate = 0.015;     ///< EMA step for kff / deadband updates (small = slow, stable).
+  double learn_rate = 0.015;     ///< EMA step for the kff update (small = slow, stable).
   double learn_v_min = 0.12;     ///< only fit kff when |target| ≥ this (avoids low-speed mis-attribution).
   double err_tol = 0.03;         ///< |error| must be ≤ this (m/s) to count as "steady".
   double settle_s = 0.5;         ///< error must stay steady this long before adapting.
-  double move_eps = 0.01;        ///< |measured| crossing this (m/s) marks motion onset (deadband capture).
+  double move_eps = 0.01;        ///< |measured| below this counts as "not moving".
+  // Only learn while the integrator is NOT near its clamp. A near-saturated
+  // integral means the loop is fighting hard (slip / oscillation / actuator
+  // saturation) — not a clean steady state — so folding it into kff would
+  // mis-learn (see the 2026-06 runaway). 0.8 blocks the top 20% (saturation)
+  // while still allowing normal feedforward mismatches to be learned. Fraction
+  // of integral_max.
+  double learn_integral_frac = 0.8;
   // Bounds keep a bad learning episode from driving the feedforward to nonsense.
   double kff_min = 100.0;
   double kff_max = 600.0;
+  // deadband is no longer learned online (it ran away to its clamp); these
+  // bounds only clamp the seeded / persisted value on load.
   double deadband_min = 0.0;
   double deadband_max = 120.0;
 };
@@ -219,27 +228,27 @@ inline double compute_wheel_pwm(double target_mps, double measured_mps, double d
     st.integral = std::clamp(st.integral, -p.integral_max, p.integral_max);
   }
 
-  // ----- online feedforward calibration -----
+  // ----- online feedforward calibration (kff slope only) -----
+  // REDESIGNED 2026-06 after the previous version mis-learned catastrophically:
+  // it captured the "break-free PWM" from |output| at every motion onset, which
+  // latched onto the LARGE output produced during the angular oscillation/slip
+  // and ratcheted the deadband to its clamp (120) on both wheels → massive
+  // over-drive and over-speed. Two changes make it robust:
+  //   1. NO online deadband learning at all — deadband stays at the seeded /
+  //      persisted value (a constant offset the integral trims around). Only
+  //      the slope kff is learned.
+  //   2. Learn ONLY from a *clean* steady state: error settled for settle_s,
+  //      above a min speed, the target not changing, AND the integrator small
+  //      (well within its clamp). A large integral means the loop is fighting
+  //      (bad ff, slip, oscillation) — not a trustworthy sample to fold in.
   if (p.adapt_enabled)
   {
     const bool moving = std::abs(measured_mps) >= p.move_eps;
 
-    // Deadband capture at motion onset: the |output| at the instant the wheel
-    // breaks free from rest is a direct read of the static-friction PWM.
-    const bool onset = moving && std::abs(st.last_measured) < p.move_eps;
-    if (onset)
-    {
-      const double breakfree = std::abs(out);
-      st.deadband += p.learn_rate * (breakfree - st.deadband);
-      st.deadband = std::clamp(st.deadband, p.deadband_min, p.deadband_max);
-    }
-
-    // Steady-state tracking gate: only learn after the error has stayed small
-    // for settle_s, so the integral folded below reflects the true feedforward
-    // error rather than a transient. (The integrator is frozen while the target
-    // is changing, so by the time this gate is satisfied the integral is the
-    // genuine steady-state correction.)
-    if (std::abs(error) <= p.err_tol && std::abs(tgt) >= p.learn_v_min && moving)
+    // Steady-state gate. target_changing already excludes ramps/steps; require
+    // small error, a meaningful speed, and actual motion.
+    if (!target_changing && std::abs(error) <= p.err_tol && std::abs(tgt) >= p.learn_v_min &&
+        moving)
     {
       st.settle_timer += dt_eff;
     }
@@ -248,13 +257,15 @@ inline double compute_wheel_pwm(double target_mps, double measured_mps, double d
       st.settle_timer = 0.0;
     }
 
-    // Cruise slope fit, holding the learned deadband. persistent = the part of
-    // the command that must be held at steady state (output minus the
-    // transient proportional term). Fit kff so feedforward reproduces it, then
-    // UNLOAD the integral by the same amount → bump-less, integral → ~0.
-    if (st.settle_timer >= p.settle_s)
+    // Cruise slope fit — ONLY from a clean steady state (settled AND integral
+    // well within its clamp). persistent = ff + integral (output minus the
+    // transient P term) = the PWM truly needed. Fit kff to reproduce it holding
+    // the fixed deadband, then unload the (already small) integral → bump-less.
+    const bool clean_steady = st.settle_timer >= p.settle_s &&
+                              std::abs(st.integral) < p.learn_integral_frac * p.integral_max;
+    if (clean_steady)
     {
-      const double persistent = out - prop;  // ≈ ff + integral at steady state
+      const double persistent = out - prop;
       const double desired_kff = (std::abs(persistent) - st.deadband) / std::abs(tgt);
       st.kff += p.learn_rate * (desired_kff - st.kff);
       st.kff = std::clamp(st.kff, p.kff_min, p.kff_max);

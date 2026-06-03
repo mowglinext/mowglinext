@@ -224,18 +224,19 @@ controller_server:
       # --- RegulatedPurePursuitController (primary) params ---
       transform_tolerance: 0.3            # ARM TF jitter envelope
       desired_linear_vel: 0.30            # transit speed cap (m/s)
-      min_approach_linear_velocity: 0.16  # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
+      min_approach_linear_velocity: 0.08  # ≥ min_linear_vel=0.05 host floor; lets RPP creep slower into the goal
       approach_velocity_scaling_dist: 0.6
       # Lookahead: velocity-scaled. At 0.30 m/s → 0.45 m, at 0.13 m/s → 0.20 m.
       use_velocity_scaled_lookahead_dist: true
       lookahead_time: 1.5
       min_lookahead_dist: 0.30            # short-radius near goal
       max_lookahead_dist: 0.90
-      # Curvature-based slowdown: when steering radius < 0.9 m, drop to
-      # min 0.20 m/s. Keeps tight turns controllable without stalling.
+      # Curvature-based slowdown: when steering radius < 0.9 m, drop toward
+      # this min. Lowered 0.20→0.12 now the host floor is 0.05 — tight turns can
+      # go slower without the loop stalling (host PI bridges the deadband).
       use_regulated_linear_velocity_scaling: true
       regulated_linear_scaling_min_radius: 0.9
-      regulated_linear_scaling_min_speed: 0.20
+      regulated_linear_scaling_min_speed: 0.12
       use_cost_regulated_linear_velocity_scaling: false
       # Collision sim: project the carrot forward, abort if the path
       # to the carrot hits an obstacle. 1.0 s look-ahead at 0.3 m/s
@@ -265,7 +266,7 @@ controller_server:
       speed_fast: 0.20
       speed_fast_threshold: 0.5
       speed_fast_threshold_angle: 10.0
-      speed_slow: 0.16    # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
+      speed_slow: 0.08    # ≥ min_linear_vel=0.05 host floor (lowered from 0.16)
       speed_angular: 45.0
       acceleration: 0.2
       # FTC PID gains. 2026-05-19:

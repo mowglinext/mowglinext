@@ -283,3 +283,30 @@ TEST(WheelRateController, SaturationAntiWindupBleeds)
   }
   EXPECT_DOUBLE_EQ(pwm_after, 0.0);
 }
+
+// REDESIGN: the deadband is NEVER learned online (that runaway latched it to
+// the clamp during oscillation). After driving against a plant with a higher
+// break-free than the seed, the deadband must stay exactly at the seed.
+TEST(WheelRateController, DeadbandNotLearnedOnline)
+{
+  mh::WheelRateParams p;  // adapt on
+  mh::WheelRateState st{};
+  settle(0.30, 380.0, 70.0, p, st, 3000);  // plant break-free 70 vs seed 40
+  EXPECT_DOUBLE_EQ(st.deadband, p.deadband_init) << "deadband must not be learned online";
+}
+
+// REDESIGN: kff learning is gated off while the integrator is large (near its
+// clamp) — a struggling/oscillating loop, not a clean steady state. Here the
+// plant is trackable but needs an integral above learn_integral_frac×max, so
+// kff must NOT move even though the error settles.
+TEST(WheelRateController, LearningGatedWhenIntegralLarge)
+{
+  mh::WheelRateParams p;  // ki=600, integral_max=60, learn_integral_frac=0.8 → gate at 48
+  mh::WheelRateState st{};
+  // Plant needs ~186 PWM at 0.3 (seed ff=130 → integral settles ~56 > 48 gate),
+  // but 56 < 60 clamp so the loop still tracks.
+  const double measured = settle(0.30, 420.0, 60.0, p, st, 3000);
+  EXPECT_NEAR(measured, 0.30, 0.02) << "should still track via the standing integral";
+  EXPECT_GT(std::abs(st.integral), 0.8 * p.integral_max) << "integral is in the gated region";
+  EXPECT_NEAR(st.kff, p.kff_init, 5.0) << "kff must NOT learn from a large-integral (struggling) state";
+}

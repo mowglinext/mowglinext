@@ -177,6 +177,11 @@ private:
     // wheel_rate_controller.hpp. Set wheel_cal_enabled:=false to freeze the
     // feedforward at the seed values.
     max_wheel_mps_ = declare_parameter<double>("max_wheel_mps", 0.5);
+    // Sub-deadband forward-velocity floor (|vx| below this → 0). 0 disables.
+    // Lowered from the old hard 0.15 to 0.05: on-robot RTK staircase (2026-06)
+    // showed the host wheel PI bridges the deadband and moves smoothly down to
+    // ~0.05 m/s (0.04 cmd); below ~0.03 it stick-slips, ≤0.02 stalls.
+    min_linear_vel_ = declare_parameter<double>("min_linear_vel", 0.05);
     wheel_params_.kp = declare_parameter<double>("wheel_pi_kp", 30.0);
     wheel_params_.ki = declare_parameter<double>("wheel_pi_ki", 600.0);
     wheel_params_.max_pwm = declare_parameter<double>("wheel_pi_max_pwm", 255.0);
@@ -199,6 +204,8 @@ private:
     wheel_params_.learn_v_min = declare_parameter<double>("wheel_cal_learn_v_min", 0.12);
     wheel_params_.err_tol = declare_parameter<double>("wheel_cal_err_tol", 0.03);
     wheel_params_.settle_s = declare_parameter<double>("wheel_cal_settle_s", 0.5);
+    wheel_params_.learn_integral_frac =
+        declare_parameter<double>("wheel_cal_learn_integral_frac", 0.8);
     wheel_cal_save_period_s_ = declare_parameter<double>("wheel_cal_save_period_s", 300.0);
     wheel_cal_persist_path_ =
         declare_parameter<std::string>("wheel_cal_persist_path", "/ros2_ws/maps/wheel_calibration.txt");
@@ -1220,12 +1227,12 @@ private:
   // Per-wheel closed-loop velocity → raw PWM. Called once per firmware odom
   // packet. See wheel_rate_controller.hpp for the controller; this method owns
   // the safety overrides, the CMD_PWM emit, and the calibration checkpoints.
-  void run_wheel_pi_and_send(const LlOdometry& pkt)
+  // measured_l/r: host-computed per-wheel velocity (m/s) from the raw tick
+  // delta scaled by ticks_per_meter_ — see handle_odometry. dt: firmware
+  // hardware-accurate interval (s). The host param is the single source of the
+  // tick→metre scale (the firmware's own velocity_mm_s is not used).
+  void run_wheel_pi_and_send(double measured_l, double measured_r, double dt)
   {
-    const double measured_l = static_cast<double>(pkt.left_velocity_mm_s) / 1000.0;
-    const double measured_r = static_cast<double>(pkt.right_velocity_mm_s) / 1000.0;
-    const double dt = static_cast<double>(pkt.dt_millis) / 1000.0;
-
     // Host-side safety overrides mirroring the firmware backstops: emergency
     // latch + a 200 ms command watchdog (Nav2 quiet / teleop released / host
     // stalled). On a hard stop we command 0 PWM IMMEDIATELY and reset the
@@ -1275,6 +1282,26 @@ private:
         l_target, measured_l, dt, wheel_params_, wheel_left_);
     const double pwm_r = mowgli_hardware::compute_wheel_pwm(
         r_target, measured_r, dt, wheel_params_, wheel_right_);
+
+    // [DIAG 2026-06-03] throttled per-wheel loop state for speed-accuracy tuning.
+    // Shows whether the integrator nulls the steady error (measured→target) or is
+    // frozen/saturated, and how the output splits between feedforward and integral.
+    // Remove once the steady-state offset is understood.
+    if (std::abs(l_target) > 0.05 || std::abs(r_target) > 0.05)
+    {
+      const double ff_l = wheel_left_.kff * l_target +
+                          (l_target > 0 ? 1.0 : (l_target < 0 ? -1.0 : 0.0)) * wheel_left_.deadband;
+      const double ff_r = wheel_right_.kff * r_target +
+                          (r_target > 0 ? 1.0 : (r_target < 0 ? -1.0 : 0.0)) * wheel_right_.deadband;
+      RCLCPP_INFO_THROTTLE(
+          get_logger(), *get_clock(), 400,
+          "WPI L tgt=%.3f meas=%.3f err=%+.3f ff=%.0f int=%+.1f pwm=%.0f settle=%.2f | "
+          "R tgt=%.3f meas=%.3f err=%+.3f ff=%.0f int=%+.1f pwm=%.0f",
+          l_target, measured_l, l_target - measured_l, ff_l, wheel_left_.integral, pwm_l,
+          wheel_left_.settle_timer, r_target, measured_r, r_target - measured_r, ff_r,
+          wheel_right_.integral, pwm_r);
+    }
+
     send_wheel_pwm(pwm_l, pwm_r);
 
     // Periodic checkpoint of the learned feedforward while operating (the dock
@@ -1391,12 +1418,6 @@ private:
     LlOdometry pkt{};
     std::memcpy(&pkt, data, sizeof(LlOdometry));
 
-    // Per-wheel velocity PI → CMD_PWM. Runs on every firmware packet (~47 Hz)
-    // using the firmware's hardware-timer wheel velocity — the freshest
-    // feedback available. This replaces the in-firmware wheel PI; the firmware
-    // now applies whatever PWM we send (subject to its own safety watchdog).
-    run_wheel_pi_and_send(pkt);
-
     // Signed tick deltas since last firmware packet (polarity = direction).
     int32_t d_left = pkt.left_ticks - prev_left_ticks_;
     int32_t d_right = pkt.right_ticks - prev_right_ticks_;
@@ -1446,6 +1467,21 @@ private:
                            kTickSpikeLimit);
       d_left = 0;
       d_right = 0;
+    }
+
+    // ----- Per-wheel velocity PI → CMD_PWM (every firmware packet, ~47 Hz) -----
+    // Measured wheel velocity is computed HERE on the host from the raw tick
+    // delta and the firmware's hardware-accurate dt, scaled by ticks_per_meter_.
+    // The host param is therefore the single source of the tick→metre scale for
+    // BOTH this control loop AND /wheel_odom — the firmware's own velocity_mm_s
+    // (scaled by board.h TICKS_PER_M) is no longer used, so no reflash is needed
+    // to recalibrate the scale.
+    const double odom_dt_sec = static_cast<double>(pkt.dt_millis) / 1000.0;
+    if (odom_dt_sec > 1.0e-4 && ticks_per_meter_ > 0.0)
+    {
+      const double meas_l = (static_cast<double>(d_left) / ticks_per_meter_) / odom_dt_sec;
+      const double meas_r = (static_cast<double>(d_right) / ticks_per_meter_) / odom_dt_sec;
+      run_wheel_pi_and_send(meas_l, meas_r, odom_dt_sec);
     }
 
     // ----- Per-wheel WheelTick (diagnostics: GUI "Per-Wheel Encoders") -----
@@ -1728,9 +1764,12 @@ private:
     //
     // The sub-deadband |vx| → 0 guard is unchanged (linear has no clean
     // host-side rate feedback — encoders slip; leave it to Nav2's loops).
-    constexpr double kMinLinVel = 0.15;  // m/s — PWM 40 forward deadband + margin
+    // Sub-deadband forward-velocity floor, now a parameter (min_linear_vel).
+    // Historically a hard 0.15 because the firmware open-loop couldn't move
+    // below it; with the host wheel-velocity PI bridging the deadband this can
+    // be lowered (down to the encoder-quantization limit). Set to 0 to disable.
     constexpr double kMinCmdToConsider = 1.0e-3;  // ignore floating-point dust
-    if (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < kMinLinVel)
+    if (min_linear_vel_ > 0.0 && std::abs(vx) > kMinCmdToConsider && std::abs(vx) < min_linear_vel_)
     {
       vx = 0.0;
     }
@@ -1885,6 +1924,7 @@ private:
   double vx_ramped_{0.0};   ///< slew-limited vx fed to the diff-drive split.
   double linear_accel_limit_mps2_{0.5};
   double max_wheel_mps_{0.5};
+  double min_linear_vel_{0.05};  ///< sub-deadband forward-vx floor (0 disables).
   bool wheel_cal_enabled_{true};
   double wheel_cal_save_period_s_{300.0};
   std::string wheel_cal_persist_path_{"/ros2_ws/maps/wheel_calibration.txt"};

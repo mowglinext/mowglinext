@@ -36,12 +36,19 @@ mowgli:
     chassis_center_x: 0.18    # chassis geometric centre forward of wheel axis (m)
                                # with chassis_length 0.60 → rear bumper -0.12,
                                # front bumper +0.48
-    # ticks_per_meter is consumed by hardware_bridge_node to convert raw
-    # encoder tick deltas (from the STM32 firmware odom packet) into
-    # metres. MUST match the firmware constant TICKS_PER_M in
-    # firmware/stm32/ros_usbnode/include/board.h — the firmware sends
-    # raw ticks, the bridge does the scaling.
-    ticks_per_meter: 300.0
+    # ticks_per_meter is the SINGLE SOURCE of the encoder tick→metre scale.
+    # hardware_bridge_node computes the measured wheel velocity (for the wheel
+    # PI) AND /wheel_odom from the raw tick deltas using this value, so the
+    # firmware's board.h TICKS_PER_M no longer needs to match (no reflash to
+    # recalibrate). Calibrated 2026-06-03 against RTK-GPS. The host wheel PI holds
+    # the encoder velocity at the commanded target (verified by per-wheel
+    # instrumentation), so the right scale is commanded-target / measured-GPS-speed:
+    # at cmd 0.18, GPS read 0.201 fwd -> tpm 245, 0.21 rev -> tpm ~229 (reverse
+    # slips ~7% more per tick). Mowing is forward-dominant, so centre on forward.
+    # NOTE: do NOT calibrate from /wheel_odom's mean velocity — at these speeds the
+    # firmware emits ~1 tick/packet, so per-sample velocity is quantised to ~0.15
+    # m/s steps and its short-window mean reads ~7% high, over-estimating tpm.
+    ticks_per_meter: 245.0
     # Behavior tree tuning (consumed by behavior_tree_node)
     tick_rate: 10.0
     bt_debug_logging: false
@@ -209,7 +216,7 @@ mowgli:
     # recalibrate per-site before relying on docking.
     dock_pose_yaw: 4.17
     undock_distance: 1.5           # reverse distance when undocking (m)
-    undock_speed: 0.16             # reverse speed (m/s) — above kMinLinVel=0.15 host clamp
+    undock_speed: 0.12             # reverse speed (m/s) off the dock — above min_linear_vel=0.05 floor
     # Distance (m) to the staging pose behind the dock — the final
     # straight-in approach runway. Injected as opennav_docking
     # simple_charging_dock.staging_x_offset = -dock_approach_distance

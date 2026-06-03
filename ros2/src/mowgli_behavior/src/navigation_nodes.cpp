@@ -660,19 +660,32 @@ BT::NodeStatus NavigateInsideBoundary::BeginFallbackBackup()
     return BeginReEnableKeepout();
   }
 
-  // Fixed conservative reverse: 0.5 m at 0.16 m/s (matches v_linear_min so
-  // the wheel-PI envelope can actually drive it through the static-friction
-  // deadband). Generous time_allowance so slow motors don't trip the
+  // Conservative reverse to get back inside the boundary: 0.5 m at the
+  // configurable reverse speed (undock_speed from mowgli_robot.yaml, default
+  // 0.12 m/s — above the min_linear_vel floor; the host wheel PI bridges the
+  // static-friction deadband). Not hardcoded so it tracks the robot's tuned
+  // slow-reverse speed. Generous time_allowance so slow motors don't trip the
   // behavior's own watchdog.
   constexpr double kBackupDist = 0.5;
-  constexpr double kBackupSpeed = 0.16;
+  double backup_speed = 0.12;
+  try
+  {
+    backup_speed = config().blackboard->get<double>("undock_speed");
+  }
+  catch (...)
+  {
+  }
+  if (backup_speed < 1.0e-3)
+  {
+    backup_speed = 0.12;
+  }
 
   BackUpAction::Goal goal_msg;
   goal_msg.target.x = -kBackupDist;
   goal_msg.target.y = 0.0;
   goal_msg.target.z = 0.0;
-  goal_msg.speed = kBackupSpeed;
-  goal_msg.time_allowance = rclcpp::Duration::from_seconds(kBackupDist / kBackupSpeed * 3.0);
+  goal_msg.speed = backup_speed;
+  goal_msg.time_allowance = rclcpp::Duration::from_seconds(kBackupDist / backup_speed * 3.0);
 
   backup_goal_handle_future_ = backup_action_client_->async_send_goal(goal_msg);
   backup_goal_handle_.reset();
@@ -681,7 +694,7 @@ BT::NodeStatus NavigateInsideBoundary::BeginFallbackBackup()
 
   RCLCPP_INFO(ctx->node->get_logger(),
               "NavigateInsideBoundary: fallback backup goal sent (%.2f m @ %.2f m/s)",
-              kBackupDist, kBackupSpeed);
+              kBackupDist, backup_speed);
   return BT::NodeStatus::RUNNING;
 }
 
@@ -730,7 +743,7 @@ BT::NodeStatus BackUp::onStart()
   }
 
   double dist = 0.5;
-  double speed = 0.15;
+  double speed = 0.12;  // fallback; undock path overrides via {undock_speed}
   getInput("backup_dist", dist);
   getInput("backup_speed", speed);
 

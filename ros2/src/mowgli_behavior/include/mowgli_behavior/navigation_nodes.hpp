@@ -153,7 +153,8 @@ private:
 ///
 /// Input ports:
 ///   backup_dist  (double, default "0.5") – distance to reverse in metres.
-///   backup_speed (double, default "0.15") – reverse speed in m/s.
+///   backup_speed (double, default "0.12") – reverse speed in m/s (undock path
+///                overrides via {undock_speed}).
 class BackUp : public BT::StatefulActionNode
 {
 public:
@@ -168,7 +169,7 @@ public:
   static BT::PortsList providedPorts()
   {
     return {BT::InputPort<double>("backup_dist", 0.5, "Distance to reverse (m)"),
-            BT::InputPort<double>("backup_speed", 0.15, "Reverse speed (m/s)")};
+            BT::InputPort<double>("backup_speed", 0.12, "Reverse speed (m/s)")};
   }
 
   BT::NodeStatus onStart() override;
