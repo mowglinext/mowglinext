@@ -59,30 +59,31 @@ namespace mowgli_hardware
 struct WheelRateParams
 {
   // --- closed-loop gains ---
-  // The loop runs on the host and eats the USB round-trip dead time (~50-90 ms,
-  // i.e. 2.5-4.5 packet periods at 47 Hz). Dead time caps the usable integral
-  // gain: a large ki keeps winding on a stale "still too slow" error during the
-  // dead time and then overshoots ("over-acceleration", observed on-robot
-  // 2026-06). The defaults below are deliberately gentle, and the dominant
-  // anti-overshoot mechanism is the TARGET ACCELERATION LIMIT (max_accel_mps2):
-  // by ramping the setpoint, the error stays small so the integral never winds
-  // up through the dead time in the first place. The learned feedforward
-  // carries the steady state, so the feedback term stays small.
+  // This per-wheel velocity loop must stay RESPONSIVE. The gyro angular-rate
+  // controller (the outer loop, in the node) drives the wheel differential to
+  // hit a target yaw rate and was tuned against a fast inner loop. If this loop
+  // lags (e.g. a per-wheel slew limiter), the outer loop winds up and the
+  // chassis oscillates violently — observed on-robot 2026-06 (gyro swung ±1.7
+  // rad/s on a ±0.6 command, slipping and spiking localizer covariance). So
+  // there is NO per-wheel slew limit here: feedforward + P respond to a stepped
+  // target immediately. Linear over-acceleration is instead tamed UPSTREAM by
+  // slew-limiting the LINEAR vx in the node (before the diff-drive split), which
+  // does not slow rotation. Dead time (~50-90 ms USB round-trip) still caps the
+  // integral gain, so ki is gentle and the integrator is frozen while the target
+  // is actively changing (see target_settle_eps) to avoid winding on the lag.
   double kp = 30.0;          ///< proportional gain (PWM per m/s of error).
   double ki = 600.0;         ///< integral gain (PWM per m/s of error per second).
   double max_pwm = 255.0;    ///< output clamp (PAC5210 8-bit magnitude) + anti-windup ceiling.
   double integral_max = 60.0;   ///< |integral term| clamp (PWM) — anti-windup.
   double min_target = 1.0e-3;   ///< |target| below this → output 0, reset state.
   double zero_speed_eps = 0.02;  ///< |measured| below this counts as "stopped" (m/s).
-  // Target acceleration limit (m/s² per wheel). The commanded target is slew-
-  // limited toward the requested value at this rate before it reaches the PI,
-  // so a Nav2/teleop step does NOT produce a step setpoint (which is what
-  // maximises the dead-time integral wind-up and the lurch). For a ≤0.5 m/s
-  // mower this is invisible to path tracking and removes the over-acceleration.
-  // ≤0 disables the limiter (passthrough). NOTE: emergency / cmd-watchdog stops
-  // bypass this entirely (the node hard-resets the controller), so the limiter
-  // never slows a safety stop — it only bounds normal accel/decel.
-  double max_accel_mps2 = 0.5;
+  // Freeze the integrator while the commanded target is changing by more than
+  // this per call (a node-level linear ramp, or a rotational step): during a
+  // transient the tracking error is mostly the expected dead-time lag, and
+  // integrating it would wind up and overshoot. ff + P handle the transient
+  // (keeping the loop responsive); the integrator only trims the residual — and
+  // bridges the static-friction deadband — once the target is steady. ≤0 → always integrate.
+  double target_settle_eps = 0.005;
 
   // --- feedforward seed (refined online; persisted by the node) ---
   double kff_init = 300.0;       ///< PWM per m/s. Matches the firmware PWM_PER_MPS seed.
@@ -106,8 +107,7 @@ struct WheelRateState
 {
   // Closed-loop state.
   double integral = 0.0;        ///< accumulated (error·dt)·ki, in PWM units.
-  double last_target = 0.0;     ///< for sign-flip / stop detection (uses the ramped target).
-  double ramped_target = 0.0;   ///< slew-limited setpoint actually fed to the PI.
+  double last_target = 0.0;     ///< previous commanded target (sign-flip + change detection).
 
   // Learned, persisted feedforward. Seeded from params on first use (kff==0
   // sentinel means "not initialised yet").
@@ -119,15 +119,13 @@ struct WheelRateState
   double last_measured = 0.0;   ///< previous measured speed (motion-onset edge detection).
 };
 
-/// Reset the runtime (integrator, slew, settle) WITHOUT touching the learned
+/// Reset the runtime (integrator, settle) WITHOUT touching the learned
 /// feedforward (kff/deadband). The node calls this on a hard stop (emergency /
-/// cmd watchdog) so the next command ramps from rest and no stale integral or
-/// ramped setpoint carries across the stop.
+/// cmd watchdog) so no stale integral carries across the stop.
 inline void reset_wheel_runtime(WheelRateState& st)
 {
   st.integral = 0.0;
   st.last_target = 0.0;
-  st.ramped_target = 0.0;
   st.settle_timer = 0.0;
 }
 
@@ -159,37 +157,26 @@ inline double compute_wheel_pwm(double target_mps, double measured_mps, double d
 
   const double dt_eff = (dt > 0.0 && dt < 1.0) ? dt : 0.02;
 
-  // Slew-limit the commanded target toward the requested value (bounds the
-  // commanded acceleration). This is the primary defence against the
-  // over-acceleration: feeding the PI a ramped setpoint keeps the tracking
-  // error small, so the integrator can't wind up through the USB dead time.
-  if (p.max_accel_mps2 > 0.0)
-  {
-    const double max_step = p.max_accel_mps2 * dt_eff;
-    st.ramped_target += std::clamp(target_mps - st.ramped_target, -max_step, max_step);
-  }
-  else
-  {
-    st.ramped_target = target_mps;
-  }
-
-  // Explicit stop: both the requested AND the ramped target are ~0. Reset the
-  // loop and command 0 (avoids a stopped-wheel hum from a residual integral,
-  // same rule the firmware loop used). While the ramp is still bleeding down
-  // toward a zero request we keep controlling so the stop is a smooth decel.
-  if (std::abs(target_mps) <= p.min_target && std::abs(st.ramped_target) <= p.min_target)
+  // Explicit stop: target ~0. Reset the loop and command 0 (avoids a
+  // stopped-wheel hum from a residual integral, same rule the firmware loop
+  // used). The linear ramp lives upstream in the node, so a stop arrives here
+  // as target ≈ 0 directly.
+  if (std::abs(target_mps) <= p.min_target)
   {
     st.integral = 0.0;
     st.last_target = 0.0;
-    st.ramped_target = 0.0;
     st.settle_timer = 0.0;
     st.last_measured = measured_mps;
     return 0.0;
   }
 
-  // From here the *ramped* target is the effective setpoint for everything
-  // (error, sign-flip reset, feedforward, learning).
-  const double tgt = st.ramped_target;
+  const double tgt = target_mps;
+
+  // Is the commanded target actively changing (a node-level linear ramp, or a
+  // rotational step)? Gates the integrator below. Evaluated before last_target
+  // is updated. ≤0 eps disables the freeze (always integrate).
+  const bool target_changing =
+      p.target_settle_eps > 0.0 && std::abs(tgt - st.last_target) > p.target_settle_eps;
 
   // Direction reversal / stop-to-go: a stale integral from the opposite sign
   // would fight the new command. Drop it.
@@ -203,15 +190,14 @@ inline double compute_wheel_pwm(double target_mps, double measured_mps, double d
   const double error = tgt - measured_mps;
   const double sgn = detail::wheel_sign(tgt);
 
-  // Integrate (pre-scaled to PWM) with anti-windup clamp — but ONLY when the
-  // setpoint has finished ramping. While the slew limiter is still moving the
-  // target, the tracking "error" is mostly the expected dead-time lag of a
-  // moving setpoint; integrating it would wind the integrator up over the whole
-  // ramp and overshoot once the target is reached (the over-acceleration). So
-  // during the ramp we let feedforward + the proportional term do the work, and
-  // only let the integrator trim the residual once we're at steady cruise.
-  const bool ramping = std::abs(target_mps - st.ramped_target) > p.min_target;
-  if (!ramping)
+  // Integrate (pre-scaled to PWM) with anti-windup clamp — but NOT while the
+  // commanded target is actively changing. During a ramp/step the tracking
+  // error is dominated by the expected dead-time lag; integrating it winds up
+  // and overshoots. ff + P (below) respond to the change immediately, so the
+  // loop stays responsive (critical for the outer gyro loop); the integrator
+  // only trims the residual once the target is steady — and bridges the
+  // static-friction deadband when a steady low target leaves the wheel stalled.
+  if (!target_changing)
   {
     st.integral += p.ki * error * dt_eff;
     st.integral = std::clamp(st.integral, -p.integral_max, p.integral_max);
@@ -248,10 +234,11 @@ inline double compute_wheel_pwm(double target_mps, double measured_mps, double d
       st.deadband = std::clamp(st.deadband, p.deadband_min, p.deadband_max);
     }
 
-    // Steady-state tracking gate. Because the target is slew-limited, "error
-    // small for settle_s" is now a trustworthy steady-state signal (it is no
-    // longer satisfied transiently mid-overshoot), so the integral folded below
-    // reflects the true feedforward error rather than a dead-time wind-up.
+    // Steady-state tracking gate: only learn after the error has stayed small
+    // for settle_s, so the integral folded below reflects the true feedforward
+    // error rather than a transient. (The integrator is frozen while the target
+    // is changing, so by the time this gate is satisfied the integral is the
+    // genuine steady-state correction.)
     if (std::abs(error) <= p.err_tol && std::abs(tgt) >= p.learn_v_min && moving)
     {
       st.settle_timer += dt_eff;

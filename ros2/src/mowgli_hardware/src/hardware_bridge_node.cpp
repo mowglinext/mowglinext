@@ -181,11 +181,13 @@ private:
     wheel_params_.ki = declare_parameter<double>("wheel_pi_ki", 600.0);
     wheel_params_.max_pwm = declare_parameter<double>("wheel_pi_max_pwm", 255.0);
     wheel_params_.integral_max = declare_parameter<double>("wheel_pi_integral_max", 60.0);
-    // Target acceleration limit (m/s² per wheel) — the primary defence against
-    // the over-acceleration / lurch: it slew-limits the setpoint so the PI
-    // never winds up through the USB dead time. Emergency/watchdog stops bypass
-    // it (the controller is hard-reset). See wheel_rate_controller.hpp.
-    wheel_params_.max_accel_mps2 = declare_parameter<double>("wheel_accel_limit_mps2", 0.5);
+    // LINEAR acceleration limit (m/s²). Slew-limits the forward velocity vx
+    // BEFORE the diff-drive split (in run_wheel_pi_and_send) — taming linear
+    // over-acceleration WITHOUT slowing rotation. The rotational component (wz)
+    // is applied to the wheel differential un-slewed so the gyro angular-rate
+    // loop stays responsive (a per-wheel slew limiter caused violent yaw
+    // oscillation, 2026-06). Emergency/watchdog stops reset the ramp. ≤0 disables.
+    linear_accel_limit_mps2_ = declare_parameter<double>("linear_accel_limit_mps2", 0.5);
     wheel_cal_enabled_ = declare_parameter<bool>("wheel_cal_enabled", true);
     wheel_params_.learn_rate = declare_parameter<double>("wheel_cal_learn_rate", 0.015);
     wheel_params_.kff_init = declare_parameter<double>("wheel_cal_kff_init", 300.0);
@@ -1237,9 +1239,32 @@ private:
     {
       mowgli_hardware::reset_wheel_runtime(wheel_left_);
       mowgli_hardware::reset_wheel_runtime(wheel_right_);
+      vx_ramped_ = 0.0;  // next motion ramps from rest; never slows a safety stop
       send_wheel_pwm(0.0, 0.0);
       return;
     }
+
+    // Slew-limit the LINEAR velocity only (at the wheel-loop rate, using the
+    // firmware-accurate per-packet dt). The rotational command (target_wz_) is
+    // applied to the differential un-slewed, so a commanded turn produces an
+    // immediate differential — keeping the outer gyro angular-rate loop
+    // responsive. This is the fix for the cascaded-loop yaw oscillation: the
+    // old per-wheel slew limiter lagged the differential and the gyro loop wound
+    // up and thrashed. Linear over-acceleration is still bounded by ramping vx.
+    if (linear_accel_limit_mps2_ > 0.0 && dt > 0.0 && dt < 1.0)
+    {
+      const double max_step = linear_accel_limit_mps2_ * dt;
+      vx_ramped_ += std::clamp(target_vx_ - vx_ramped_, -max_step, max_step);
+    }
+    else
+    {
+      vx_ramped_ = target_vx_;
+    }
+
+    // Diff-drive split: ramped linear ∓ un-slewed rotational, then per-wheel clamp.
+    const double half_track = wheel_track_ * 0.5;
+    double l_target = std::clamp(vx_ramped_ - target_wz_ * half_track, -max_wheel_mps_, max_wheel_mps_);
+    double r_target = std::clamp(vx_ramped_ + target_wz_ * half_track, -max_wheel_mps_, max_wheel_mps_);
 
     // Learn only when safe and meaningful — never while charging / mechanically
     // docked (no real motion to learn from). Respects the no-autonomous-motion
@@ -1247,9 +1272,9 @@ private:
     wheel_params_.adapt_enabled = wheel_cal_enabled_ && !is_charging_;
 
     const double pwm_l = mowgli_hardware::compute_wheel_pwm(
-        left_target_mps_, measured_l, dt, wheel_params_, wheel_left_);
+        l_target, measured_l, dt, wheel_params_, wheel_left_);
     const double pwm_r = mowgli_hardware::compute_wheel_pwm(
-        right_target_mps_, measured_r, dt, wheel_params_, wheel_right_);
+        r_target, measured_r, dt, wheel_params_, wheel_right_);
     send_wheel_pwm(pwm_l, pwm_r);
 
     // Periodic checkpoint of the learned feedforward while operating (the dock
@@ -1720,17 +1745,12 @@ private:
           wz, latest_gyro_z_, dt, angular_rate_params_, angular_rate_state_);
     }
 
-    // Differential-drive inverse kinematics → per-wheel target speeds. This is
-    // the only place the split happens now (it used to be in the firmware).
-    // The per-wheel velocity PI in handle_odometry consumes these targets and
-    // emits the actual PWM; we do not send a motion packet here. wheel_track_
-    // is the centre-to-centre drive-wheel distance.
-    double l_target = vx - wz * wheel_track_ * 0.5;
-    double r_target = vx + wz * wheel_track_ * 0.5;
-    l_target = std::clamp(l_target, -max_wheel_mps_, max_wheel_mps_);
-    r_target = std::clamp(r_target, -max_wheel_mps_, max_wheel_mps_);
-    left_target_mps_ = l_target;
-    right_target_mps_ = r_target;
+    // Store the (gyro-corrected) linear + angular targets. The diff-drive split
+    // happens in run_wheel_pi_and_send, where vx is slew-limited but wz is not —
+    // so rotation stays responsive for the gyro loop. We do not send a motion
+    // packet here.
+    target_vx_ = vx;
+    target_wz_ = wz;
     last_wheel_cmd_time_ = this->now();
   }
 
@@ -1853,15 +1873,17 @@ private:
   rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
 
   // Per-wheel velocity PI + online feedforward calibration (handle_odometry).
-  // Host-side replacement for the firmware wheel PI. on_cmd_vel sets the
-  // targets (diff-drive split of the gyro-corrected twist); the PI turns them
-  // into CMD_PWM using the firmware's per-packet wheel velocity feedback.
-  // See wheel_rate_controller.hpp.
+  // Host-side replacement for the firmware wheel PI. on_cmd_vel sets the linear
+  // + angular targets (gyro-corrected); run_wheel_pi_and_send slew-limits vx,
+  // splits (un-slewed wz), and the PI turns each wheel target into CMD_PWM using
+  // the firmware's per-packet wheel velocity feedback. See wheel_rate_controller.hpp.
   mowgli_hardware::WheelRateParams wheel_params_{};
   mowgli_hardware::WheelRateState wheel_left_{};
   mowgli_hardware::WheelRateState wheel_right_{};
-  double left_target_mps_{0.0};
-  double right_target_mps_{0.0};
+  double target_vx_{0.0};   ///< commanded forward velocity (gyro-corrected, post sub-deadband guard).
+  double target_wz_{0.0};   ///< commanded yaw rate (gyro-corrected); NOT slew-limited.
+  double vx_ramped_{0.0};   ///< slew-limited vx fed to the diff-drive split.
+  double linear_accel_limit_mps2_{0.5};
   double max_wheel_mps_{0.5};
   bool wheel_cal_enabled_{true};
   double wheel_cal_save_period_s_{300.0};

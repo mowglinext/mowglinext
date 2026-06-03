@@ -219,48 +219,43 @@ TEST(WheelRateController, SeedsFeedforwardFromParamsOnFirstCall)
   EXPECT_DOUBLE_EQ(st.deadband, 33.0);
 }
 
-// THE OVER-ACCELERATION FIX: against a drivetrain WITH transport delay (the USB
-// round-trip), the velocity must NOT overshoot the target. This is the
-// regression that the on-robot test surfaced — an aggressive integrator winds
-// up through the dead time and lurches past target. With the slew-limited
-// setpoint + gentle gains the measured velocity rises smoothly to target with
-// no meaningful overshoot.
-TEST(WheelRateController, NoOvershootUnderDeadTime)
+// THE OVER-ACCELERATION FIX: the linear setpoint is slew-limited UPSTREAM (in
+// the node), so the controller receives a RAMPED target. With the integrator
+// frozen while the target is changing, ff+P track the ramp and the velocity
+// does NOT overshoot under transport delay. (Feeding the controller a raw STEP
+// would overshoot — that's why the node ramps vx; see RespondsImmediatelyToStep
+// for why the controller itself must stay un-slewed for rotation.)
+TEST(WheelRateController, NoOvershootUnderDeadTime_RampedTarget)
 {
-  mh::WheelRateParams p;  // defaults: slew on (0.5 m/s²), ki=600
+  mh::WheelRateParams p;  // defaults: ki=600, freeze-on-change
   mh::WheelRateState st{};
   DelayPlant plant(4 /* ~84 ms dead time */, 300.0, 40.0);
-  const double target = 0.30;
-  double measured = 0.0;
-  double peak = 0.0;
+  const double final_target = 0.30, accel = 0.5;  // node's vx slew
+  double target = 0.0, measured = 0.0, peak = 0.0;
   for (int i = 0; i < 1500; ++i)
   {
+    target = std::min(final_target, target + accel * kDt);  // external linear ramp
     measured = plant.step(mh::compute_wheel_pwm(target, measured, kDt, p, st));
     peak = std::max(peak, measured);
   }
-  EXPECT_NEAR(measured, target, 0.02) << "did not settle on target";
-  // No more than 10% overshoot of a 0.3 m/s target despite the dead time.
-  EXPECT_LE(peak, target + 0.03) << "velocity overshot to " << peak << " (over-acceleration)";
+  EXPECT_NEAR(measured, final_target, 0.02) << "did not settle on target";
+  EXPECT_LE(peak, final_target + 0.03) << "velocity overshot to " << peak << " (over-acceleration)";
 }
 
-// The target acceleration limiter must bound how fast the commanded velocity
-// rises: from rest, after one tick the ramped setpoint can have moved at most
-// max_accel*dt, so the early PWM is far below the steady-state PWM.
-TEST(WheelRateController, SlewLimitsCommandedAcceleration)
+// RESPONSIVENESS (the angular-stability fix): the controller has NO internal
+// slew, so a stepped target produces an immediate feedforward output. This is
+// what keeps the outer gyro angular-rate loop stable — a per-wheel slew limiter
+// here lagged the differential and made the gyro loop wind up and oscillate.
+TEST(WheelRateController, RespondsImmediatelyToStep)
 {
   mh::WheelRateParams p;
   p.adapt_enabled = false;
   mh::WheelRateState st{};
-  // One tick toward a 0.5 m/s target: ramped target ≈ 0.5*0.021 = 0.0105 m/s.
-  mh::compute_wheel_pwm(0.50, 0.0, kDt, p, st);
-  EXPECT_NEAR(st.ramped_target, p.max_accel_mps2 * kDt, 1e-6);
-  EXPECT_LT(st.ramped_target, 0.05) << "setpoint stepped instead of ramping";
-  // Disabling the limiter makes the setpoint jump to the full target at once.
-  mh::WheelRateParams p_nolimit = p;
-  p_nolimit.max_accel_mps2 = 0.0;
-  mh::WheelRateState st2{};
-  mh::compute_wheel_pwm(0.50, 0.0, kDt, p_nolimit, st2);
-  EXPECT_DOUBLE_EQ(st2.ramped_target, 0.50);
+  // First call, step 0 → 0.20: ff alone = kff*0.2 + deadband = 300*0.2 + 40 = 100.
+  const double out = mh::compute_wheel_pwm(0.20, 0.0, kDt, p, st);
+  EXPECT_GE(std::abs(out), 90.0)
+      << "controller did not respond immediately to a step (out=" << out << ") — an internal "
+         "slew would re-introduce the gyro-loop oscillation";
 }
 
 // Back-calculation anti-windup: while the output is saturated the integral must
