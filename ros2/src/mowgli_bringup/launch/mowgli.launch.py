@@ -210,7 +210,7 @@ def generate_launch_description() -> LaunchDescription:
             {"imu_cal_auto_rest_sec": float(robot_params.get(
                 "imu_cal_auto_rest_sec", 15.0))},
             {"imu_cal_periodic_recal_sec": float(robot_params.get(
-                "imu_cal_periodic_recal_sec", 600.0))},
+                "imu_cal_periodic_recal_sec", 60.0))},
             # Lift / blade safety tuning.
             {"lift_recovery_mode": bool(robot_params.get("lift_recovery_mode", False))},
             {"lift_blade_resume_delay_sec": float(robot_params.get(

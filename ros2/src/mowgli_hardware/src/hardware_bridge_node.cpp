@@ -168,11 +168,16 @@ private:
     // feedforward at the seed values.
     max_wheel_mps_ = declare_parameter<double>("max_wheel_mps", 0.5);
     wheel_params_.kp = declare_parameter<double>("wheel_pi_kp", 30.0);
-    wheel_params_.ki = declare_parameter<double>("wheel_pi_ki", 2500.0);
+    wheel_params_.ki = declare_parameter<double>("wheel_pi_ki", 600.0);
     wheel_params_.max_pwm = declare_parameter<double>("wheel_pi_max_pwm", 255.0);
-    wheel_params_.integral_max = declare_parameter<double>("wheel_pi_integral_max", 150.0);
+    wheel_params_.integral_max = declare_parameter<double>("wheel_pi_integral_max", 60.0);
+    // Target acceleration limit (m/s² per wheel) — the primary defence against
+    // the over-acceleration / lurch: it slew-limits the setpoint so the PI
+    // never winds up through the USB dead time. Emergency/watchdog stops bypass
+    // it (the controller is hard-reset). See wheel_rate_controller.hpp.
+    wheel_params_.max_accel_mps2 = declare_parameter<double>("wheel_accel_limit_mps2", 0.5);
     wheel_cal_enabled_ = declare_parameter<bool>("wheel_cal_enabled", true);
-    wheel_params_.learn_rate = declare_parameter<double>("wheel_cal_learn_rate", 0.02);
+    wheel_params_.learn_rate = declare_parameter<double>("wheel_cal_learn_rate", 0.015);
     wheel_params_.kff_init = declare_parameter<double>("wheel_cal_kff_init", 300.0);
     wheel_params_.deadband_init = declare_parameter<double>("wheel_cal_deadband_init", 40.0);
     wheel_params_.kff_min = declare_parameter<double>("wheel_cal_kff_min", 100.0);
@@ -1174,18 +1179,20 @@ private:
     const double dt = static_cast<double>(pkt.dt_millis) / 1000.0;
 
     // Host-side safety overrides mirroring the firmware backstops: emergency
-    // latch + a 200 ms command watchdog (Nav2 quiet / teleop released). The
-    // firmware ALSO hard-stops after 200 ms with no CMD_PWM, so a host crash is
-    // still covered even though we stop commanding motion here first.
-    double tgt_l = left_target_mps_;
-    double tgt_r = right_target_mps_;
+    // latch + a 200 ms command watchdog (Nav2 quiet / teleop released / host
+    // stalled). On a hard stop we command 0 PWM IMMEDIATELY and reset the
+    // controller runtime, so the slew limiter never slows a safety stop and no
+    // stale integral/ramp carries across it. The firmware ALSO hard-stops after
+    // 200 ms with no CMD_PWM as an independent backstop.
     const double cmd_age = last_wheel_cmd_time_.nanoseconds() > 0
                                ? (now() - last_wheel_cmd_time_).seconds()
                                : 1.0;
     if (emergency_active_ || cmd_age > 0.2)
     {
-      tgt_l = 0.0;
-      tgt_r = 0.0;
+      mowgli_hardware::reset_wheel_runtime(wheel_left_);
+      mowgli_hardware::reset_wheel_runtime(wheel_right_);
+      send_wheel_pwm(0.0, 0.0);
+      return;
     }
 
     // Learn only when safe and meaningful — never while charging / mechanically
@@ -1193,16 +1200,11 @@ private:
     // and dock-safety constraints: calibration is passive, never commands motion.
     wheel_params_.adapt_enabled = wheel_cal_enabled_ && !is_charging_;
 
-    const double pwm_l =
-        mowgli_hardware::compute_wheel_pwm(tgt_l, measured_l, dt, wheel_params_, wheel_left_);
-    const double pwm_r =
-        mowgli_hardware::compute_wheel_pwm(tgt_r, measured_r, dt, wheel_params_, wheel_right_);
-
-    LlCmdPwm out{};
-    out.type = PACKET_ID_LL_CMD_PWM;
-    out.left_pwm = static_cast<int16_t>(std::lround(std::clamp(pwm_l, -255.0, 255.0)));
-    out.right_pwm = static_cast<int16_t>(std::lround(std::clamp(pwm_r, -255.0, 255.0)));
-    send_raw_packet(reinterpret_cast<const uint8_t*>(&out), sizeof(LlCmdPwm) - sizeof(uint16_t));
+    const double pwm_l = mowgli_hardware::compute_wheel_pwm(
+        left_target_mps_, measured_l, dt, wheel_params_, wheel_left_);
+    const double pwm_r = mowgli_hardware::compute_wheel_pwm(
+        right_target_mps_, measured_r, dt, wheel_params_, wheel_right_);
+    send_wheel_pwm(pwm_l, pwm_r);
 
     // Periodic checkpoint of the learned feedforward while operating (the dock
     // transition saves too). Skipped while charging — nothing new is learned.
@@ -1216,6 +1218,16 @@ private:
         persist_wheel_calibration();
       }
     }
+  }
+
+  // Emit one CMD_PWM packet, clamped to the PAC5210 ±255 range.
+  void send_wheel_pwm(double pwm_l, double pwm_r)
+  {
+    LlCmdPwm out{};
+    out.type = PACKET_ID_LL_CMD_PWM;
+    out.left_pwm = static_cast<int16_t>(std::lround(std::clamp(pwm_l, -255.0, 255.0)));
+    out.right_pwm = static_cast<int16_t>(std::lround(std::clamp(pwm_r, -255.0, 255.0)));
+    send_raw_packet(reinterpret_cast<const uint8_t*>(&out), sizeof(LlCmdPwm) - sizeof(uint16_t));
   }
 
   // Persist the learned per-wheel feedforward (kff/deadband). Mirrors the IMU
@@ -1423,7 +1435,12 @@ private:
     auto msg = nav_msgs::msg::Odometry{};
     msg.header.stamp = stamp;
     msg.header.frame_id = "odom";
-    msg.child_frame_id = "base_link";
+    // REP-105: the body twist is expressed in the Nav2/localization robot frame,
+    // which is base_footprint (invariant #2). base_link→base_footprint is a pure
+    // static translation so the numeric vx/vyaw are unchanged either way, but the
+    // label must name the frame the consumers (fusion_graph wheel factor,
+    // cog_to_imu) actually integrate against.
+    msg.child_frame_id = "base_footprint";
 
     // Force zero whenever the dock contacts are live. Charging current
     // proves the robot is mechanically anchored to the dock — the motors

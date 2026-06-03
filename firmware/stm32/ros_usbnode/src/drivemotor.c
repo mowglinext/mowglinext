@@ -75,7 +75,9 @@ DMA_HandleTypeDef hdma_usart2_rx;
 DMA_HandleTypeDef hdma_usart2_tx;
 
 static DRIVEMOTOR_STATE_e drivemotor_eState = DRIVEMOTOR_INIT_1;
-static rx_status_e drivemotors_eRxFlag = RX_WAIT;
+/* volatile: set in the USART RX-complete ISR (DRIVEMOTOR_ReceiveIT) and polled
+ * in the main loop (DRIVEMOTOR_App_Rx) — must not be cached across contexts. */
+static volatile rx_status_e drivemotors_eRxFlag = RX_WAIT;
 
 static DRIVEMOTORS_data_t drivemotor_psReceivedData = {0};
 static uint8_t drivemotor_pu8RqstMessage[DRIVEMOTOR_LENGTH_RQST_MSG] = {0x55, 0xaa, 0x08, 0x10, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -282,6 +284,14 @@ void DRIVEMOTOR_App_10ms(void)
         }
 
         /* todo add also accelerometer detection*/
+        /* NOTE: inert on current boards — HALLSTOP_*_Sense() return 0 unless
+         * OPTION_BUMPER==1 (board.h sets it to 0 on every variant). If bumpers
+         * are ever enabled: the host protocol never sets DOCKING/UNDOCKING
+         * (on_hl_state maps only to MOWING/RECORD/IDLE), so a bumper hit always
+         * takes the MOWING branch below and drives both wheels backward for 2 s
+         * — autonomous motion that bypasses the host wheel PI and the CMD_PWM
+         * watchdog. Before enabling bumpers, either have the host send the
+         * docking modes or gate this reverse behind the emergency/IDLE checks. */
         if ((HALLSTOP_Left_Sense() || HALLSTOP_Right_Sense()) && (left_dir_req || right_dir_req))
         {
 

@@ -24,9 +24,13 @@ hardware_bridge:
     # feedforward carries the steady state. See wheel_rate_controller.hpp.
     max_wheel_mps: 0.5            # per-wheel speed clamp (was firmware MAX_MPS)
     wheel_pi_kp: 30.0            # proportional gain (PWM per m/s of error)
-    wheel_pi_ki: 2500.0          # integral gain (PWM per m/s of error per second)
+    wheel_pi_ki: 600.0           # integral gain (gentle — host loop has USB dead time)
     wheel_pi_max_pwm: 255.0      # output clamp (PAC5210 8-bit magnitude)
-    wheel_pi_integral_max: 150.0 # anti-windup clamp on the integral (PWM)
+    wheel_pi_integral_max: 60.0  # anti-windup clamp on the integral (PWM)
+    # Target acceleration limit (m/s² per wheel). Slew-limits the setpoint so the
+    # PI never winds up through the USB dead time → no over-acceleration/lurch.
+    # Emergency/watchdog stops bypass this (controller is hard-reset). 0 disables.
+    wheel_accel_limit_mps2: 0.5
 
     # Online auto-calibration: learn per-wheel feedforward (kff = PWM/(m/s),
     # deadband = break-free PWM) from the PI integrator's steady state during
@@ -34,7 +38,7 @@ hardware_bridge:
     # charging/docked. Persisted to wheel_cal_persist_path. Set
     # wheel_cal_enabled:false to freeze the feedforward at the seeds.
     wheel_cal_enabled: true
-    wheel_cal_learn_rate: 0.02   # EMA step for kff/deadband (small = slow, stable)
+    wheel_cal_learn_rate: 0.015  # EMA step for kff/deadband (small = slow, stable)
     wheel_cal_kff_init: 300.0    # seed PWM per m/s (matches firmware PWM_PER_MPS)
     wheel_cal_deadband_init: 40.0  # seed break-free PWM (brushed-DC static friction)
     wheel_cal_kff_min: 100.0

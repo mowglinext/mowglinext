@@ -1742,7 +1742,14 @@ void FusionGraphNode::PublishLocalOdom()
   t_odom_base.transform.translation.y = dr_y_;
   t_odom_base.transform.translation.z = 0.0;
   t_odom_base.transform.rotation = q_msg;
-  tf_broadcaster_->sendTransform(t_odom_base);
+  // Only the PRIMARY localizer may own odom→base_footprint — same single-
+  // publisher rule as map→odom below. In observer mode (A/B against another
+  // odom source) we still publish /odometry/filtered for comparison but must
+  // NOT broadcast the TF, or two nodes would fight over the same transform.
+  if (primary_mode_)
+  {
+    tf_broadcaster_->sendTransform(t_odom_base);
+  }
 
   nav_msgs::msg::Odometry odom;
   odom.header.stamp = now;

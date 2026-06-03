@@ -49,7 +49,12 @@ mowgli:
     imu_cal_samples: 200
     imu_cal_persist_path: /ros2_ws/maps/imu_calibration.txt
     imu_cal_auto_rest_sec: 15.0
-    imu_cal_periodic_recal_sec: 600.0
+    # 60 s, NOT 600: the WT901 gyro_z bias drifts ~1.3°/s within seconds of a
+    # cal completing (chassis ESC heat soaking the IMU), so a 600 s interval
+    # leaves the offset stale for ~10 min → measurable yaw-integration drift
+    # during mowing. The node default and CLAUDE.md both specify 60 s; this
+    # YAML override must match or it silently re-breaks the thermal-drift fix.
+    imu_cal_periodic_recal_sec: 60.0
     # Magnetometer fusion (consumed by cog_to_imu_node + mag_yaw_publisher_node)
     enable_mag_cal: false
     mag_calibration_path: /ros2_ws/maps/mag_calibration.yaml

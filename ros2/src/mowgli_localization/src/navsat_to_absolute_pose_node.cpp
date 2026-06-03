@@ -96,6 +96,10 @@ void NavSatToAbsolutePoseNode::declare_parameters()
   datum_lat_ = declare_parameter<double>("datum_lat", 0.0);
   datum_lon_ = declare_parameter<double>("datum_lon", 0.0);
 
+  // Heading-from-COG yaw uncertainty (rad). Was a hardcoded member documented
+  // as tunable; now actually a declared parameter (default 3° = 0.0524 rad).
+  lever_arm_yaw_sigma_ = declare_parameter<double>("lever_arm_yaw_sigma", 0.0524);
+
   // Defensive guards on /gps/pose_cov — see header for rationale.
   pos_accuracy_inflation_threshold_m_ =
       declare_parameter<double>("pos_accuracy_inflation_threshold_m", 0.025);
@@ -229,9 +233,14 @@ void NavSatToAbsolutePoseNode::on_navsat_fix(sensor_msgs::msg::NavSatFix::ConstS
   double north = 0.0;
   wgs84_to_enu(msg->latitude, msg->longitude, east, north);
 
-  // Build AbsolutePose.
+  // Build AbsolutePose. Stamp with the GPS fix time, not wall-clock now(), so
+  // the pose isn't tagged with the GPS pipeline latency (which misassociates it
+  // in time downstream). Fall back to now() only if the driver left the stamp
+  // unset (sec==0 && nanosec==0).
   AbsPose out;
-  out.header.stamp = now();
+  out.header.stamp = (msg->header.stamp.sec != 0 || msg->header.stamp.nanosec != 0)
+                         ? rclcpp::Time(msg->header.stamp)
+                         : now();
   out.header.frame_id = "map";
   out.source = AbsPose::SOURCE_GPS;
 

@@ -63,8 +63,9 @@ void DRIVEMOTOR_App_Rx(void);
 void DRIVEMOTOR_ReceiveIT(void);
 /**
  * Preferred API — signed PWM per wheel. Positive = forward, negative =
- * reverse, 0 = stop. Applies motor static-friction deadband compensation
- * internally (see PWM_DEADBAND in drivemotor.c).
+ * reverse, 0 = stop. Pure passthrough: the value is saturated to ±255 and
+ * sent to the PAC5210 as-is (no host-side deadband compensation — the host
+ * wheel-velocity PI owns feedforward/deadband now; see wheel_rate_controller).
  */
 void DRIVEMOTOR_SetSpeedSigned(int16_t left_pwm_signed, int16_t right_pwm_signed);
 

@@ -11,6 +11,7 @@
 // into the feedforward so the integral unloads to ~0.
 
 #include <cmath>
+#include <deque>
 
 #include "mowgli_hardware/wheel_rate_controller.hpp"
 #include <gtest/gtest.h>
@@ -58,6 +59,35 @@ double settle(double target, double kff_phys, double db_phys, const mh::WheelRat
   return measured;
 }
 
+// Drivetrain WITH transport delay: a PWM commanded now only affects the
+// measured velocity `delay_ticks` later. This models the host↔STM32 USB
+// round-trip that makes an aggressive integrator overshoot — the exact
+// condition the slew limiter + gentle gains are meant to tame.
+class DelayPlant
+{
+public:
+  DelayPlant(int delay_ticks, double kff_phys, double db_phys)
+      : delay_(delay_ticks), kff_(kff_phys), db_(db_phys)
+  {
+  }
+  double step(double pwm)
+  {
+    buf_.push_back(pwm);
+    double applied = 0.0;
+    if (static_cast<int>(buf_.size()) > delay_)
+    {
+      applied = buf_.front();
+      buf_.pop_front();
+    }
+    return sim_wheel_velocity(applied, kff_, db_);
+  }
+
+private:
+  int delay_;
+  double kff_, db_;
+  std::deque<double> buf_;
+};
+
 }  // namespace
 
 // Closed-loop convergence: even with the feedforward seed matching the plant,
@@ -74,18 +104,19 @@ TEST(WheelRateController, ConvergesAcrossSpeedRange)
   }
 }
 
-// Deadband bridging: with the feedforward DELIBERATELY undershooting (no
-// feedforward deadband, low slope) and adaptation OFF, the integrator alone
-// must ramp the PWM past the plant's static friction and hold the target — the
-// exact property the firmware integrator used to provide.
+// Deadband bridging: with the feedforward carrying the slope but NO deadband
+// term (deadband_init=0) and adaptation OFF, the integrator alone must ramp the
+// PWM past the plant's static friction and hold the target — the exact property
+// the firmware integrator used to provide. The 40-PWM bridge fits inside the
+// (now smaller) integral_max=60 clamp.
 TEST(WheelRateController, IntegratorBridgesDeadband)
 {
   mh::WheelRateParams p;
   p.adapt_enabled = false;
-  p.kff_init = 150.0;     // half the true slope
-  p.deadband_init = 0.0;  // no feedforward deadband at all
+  p.kff_init = 300.0;     // correct slope
+  p.deadband_init = 0.0;  // no feedforward deadband — integrator must supply it
   mh::WheelRateState st{};
-  const double measured = settle(0.20, 300.0, 40.0, p, st, 800);
+  const double measured = settle(0.20, 300.0, 40.0, p, st, 1500);
   EXPECT_NEAR(measured, 0.20, 0.01) << "integrator failed to bridge deadband (got " << measured
                                     << ")";
 }
@@ -129,19 +160,21 @@ TEST(WheelRateController, NoAdaptationWhenDisabled)
 }
 
 // Direction reversal must drop the opposite-direction integral and settle on
-// the new (negative) target.
+// the new (negative) target. Uses a plant that needs MORE pwm than the seed
+// feedforward supplies, so the integral is meaningfully nonzero (and would
+// fight the reversal if it were not dropped).
 TEST(WheelRateController, SignFlipDropsStaleIntegral)
 {
   mh::WheelRateParams p;
   p.adapt_enabled = false;  // isolate the PI behaviour from learning
   mh::WheelRateState st{};
-  double measured = settle(0.30, 300.0, 40.0, p, st, 300);
-  EXPECT_GT(st.integral, -1.0);  // wound up non-negative for a forward target
-  for (int i = 0; i < 600; ++i)
+  double measured = settle(0.30, 380.0, 55.0, p, st, 800);
+  EXPECT_GT(st.integral, 5.0);  // wound clearly positive for a forward target
+  for (int i = 0; i < 1200; ++i)
   {
-    measured = sim_wheel_velocity(mh::compute_wheel_pwm(-0.30, measured, kDt, p, st), 300.0, 40.0);
+    measured = sim_wheel_velocity(mh::compute_wheel_pwm(-0.30, measured, kDt, p, st), 380.0, 55.0);
   }
-  EXPECT_LE(st.integral, 0.0);
+  EXPECT_LT(st.integral, -5.0);  // flipped sign — no stale positive integral
   EXPECT_NEAR(measured, -0.30, 0.01);
 }
 
@@ -184,4 +217,74 @@ TEST(WheelRateController, SeedsFeedforwardFromParamsOnFirstCall)
   mh::compute_wheel_pwm(0.20, 0.0, kDt, p, st);
   EXPECT_DOUBLE_EQ(st.kff, 275.0);
   EXPECT_DOUBLE_EQ(st.deadband, 33.0);
+}
+
+// THE OVER-ACCELERATION FIX: against a drivetrain WITH transport delay (the USB
+// round-trip), the velocity must NOT overshoot the target. This is the
+// regression that the on-robot test surfaced — an aggressive integrator winds
+// up through the dead time and lurches past target. With the slew-limited
+// setpoint + gentle gains the measured velocity rises smoothly to target with
+// no meaningful overshoot.
+TEST(WheelRateController, NoOvershootUnderDeadTime)
+{
+  mh::WheelRateParams p;  // defaults: slew on (0.5 m/s²), ki=600
+  mh::WheelRateState st{};
+  DelayPlant plant(4 /* ~84 ms dead time */, 300.0, 40.0);
+  const double target = 0.30;
+  double measured = 0.0;
+  double peak = 0.0;
+  for (int i = 0; i < 1500; ++i)
+  {
+    measured = plant.step(mh::compute_wheel_pwm(target, measured, kDt, p, st));
+    peak = std::max(peak, measured);
+  }
+  EXPECT_NEAR(measured, target, 0.02) << "did not settle on target";
+  // No more than 10% overshoot of a 0.3 m/s target despite the dead time.
+  EXPECT_LE(peak, target + 0.03) << "velocity overshot to " << peak << " (over-acceleration)";
+}
+
+// The target acceleration limiter must bound how fast the commanded velocity
+// rises: from rest, after one tick the ramped setpoint can have moved at most
+// max_accel*dt, so the early PWM is far below the steady-state PWM.
+TEST(WheelRateController, SlewLimitsCommandedAcceleration)
+{
+  mh::WheelRateParams p;
+  p.adapt_enabled = false;
+  mh::WheelRateState st{};
+  // One tick toward a 0.5 m/s target: ramped target ≈ 0.5*0.021 = 0.0105 m/s.
+  mh::compute_wheel_pwm(0.50, 0.0, kDt, p, st);
+  EXPECT_NEAR(st.ramped_target, p.max_accel_mps2 * kDt, 1e-6);
+  EXPECT_LT(st.ramped_target, 0.05) << "setpoint stepped instead of ramping";
+  // Disabling the limiter makes the setpoint jump to the full target at once.
+  mh::WheelRateParams p_nolimit = p;
+  p_nolimit.max_accel_mps2 = 0.0;
+  mh::WheelRateState st2{};
+  mh::compute_wheel_pwm(0.50, 0.0, kDt, p_nolimit, st2);
+  EXPECT_DOUBLE_EQ(st2.ramped_target, 0.50);
+}
+
+// Back-calculation anti-windup: while the output is saturated the integral must
+// stay bounded, and once the demand drops the integral must NOT still be pinned
+// at its ceiling (it was bled by the un-applied excess), so there is no
+// post-saturation lurch.
+TEST(WheelRateController, SaturationAntiWindupBleeds)
+{
+  mh::WheelRateParams p;
+  p.adapt_enabled = false;
+  mh::WheelRateState st{};
+  // Very weak plant: needs far more PWM than ±255 → sustained saturation.
+  for (int i = 0; i < 1000; ++i)
+  {
+    const double pwm = mh::compute_wheel_pwm(0.40, 0.0, kDt, p, st);
+    EXPECT_LE(std::abs(pwm), p.max_pwm + 1e-9);
+  }
+  EXPECT_LE(std::abs(st.integral), p.integral_max + 1e-9);
+  // Now command a stop: the loop must return to 0 promptly, not stay saturated
+  // from a pinned integral.
+  double pwm_after = 1.0;
+  for (int i = 0; i < 100; ++i)
+  {
+    pwm_after = mh::compute_wheel_pwm(0.0, 0.0, kDt, p, st);
+  }
+  EXPECT_DOUBLE_EQ(pwm_after, 0.0);
 }

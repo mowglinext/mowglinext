@@ -90,7 +90,10 @@ void chirp(uint8_t count);
 extern uint16_t  chargecontrol_pwm_val;
 extern uint8_t   chargecontrol_is_charging;
 extern uint8_t do_chirp;
-extern openmower_status_e main_eOpenmowerStatus;
+/* volatile: written from the USB-CDC packet ISR (on_hl_state / on_cmd_pwm) and
+ * read from the main loop (motors_handler, drivemotor) — the compiler must not
+ * cache it across those contexts. */
+extern volatile openmower_status_e main_eOpenmowerStatus;
 
 // uart statistics
 extern uint16_t cnt_uart4_overrun;      // master

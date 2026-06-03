@@ -379,11 +379,11 @@ typedef struct {
  *   pkt_cmd_vel_t:
  *     type(1) + linear_x(4) + angular_z(4) + crc(2) = 11
  *
- * NOTE: The static_assert() values in ll_datatypes.hpp (36 and 40 for
- * LlStatus and LlImu respectively) appear to be incorrect — the field-by-
- * field sums above yield 38 and 41. The struct layouts here are the
- * authoritative wire-format definition; the ll_datatypes.hpp assert values
- * should be corrected to match.
+ *   pkt_cmd_pwm_t:
+ *     type(1) + left_pwm(2) + right_pwm(2) + crc(2) = 7
+ *
+ * These sizes match the static_assert() values on the ROS 2 side
+ * (ll_datatypes.hpp): LlStatus=38, LlImu=41, etc. Keep both ends in sync.
  * ---------------------------------------------------------------------------*/
 
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)

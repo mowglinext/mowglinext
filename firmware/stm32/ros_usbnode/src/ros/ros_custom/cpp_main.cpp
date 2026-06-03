@@ -86,7 +86,8 @@ static volatile int16_t right_pwm_signed = 0;
  * ---------------------------------------------------------------------------*/
 static volatile uint8_t target_blade_on_off = 0;
 static uint8_t blade_on_off        = 0;
-static uint8_t blade_direction     = 0;
+/* volatile: written from the on_cmd_blade ISR, read in motors_handler. */
+static volatile uint8_t blade_direction = 0;
 
 /* ---------------------------------------------------------------------------
  * cmd_vel timeout tracking (replaces ros::Time)
@@ -323,6 +324,7 @@ extern "C" void motors_handler()
         int16_t  snap_left_pwm     = left_pwm_signed;
         int16_t  snap_right_pwm    = right_pwm_signed;
         uint8_t  snap_target_blade = target_blade_on_off;
+        uint8_t  snap_blade_dir    = blade_direction;
         uint32_t snap_heartbeat    = last_heartbeat_tick;
         uint32_t snap_cmd_vel      = last_cmd_vel_tick;
         __enable_irq();
@@ -330,13 +332,21 @@ extern "C" void motors_handler()
         blade_on_off = snap_target_blade;
 
         /* --- safety overrides ---
-         * Emergency or cmd watchdog timeout forces a hard stop. Otherwise the
-         * host-computed PWM (already through the host-side wheel-velocity PI)
-         * is forwarded to the PAC5210 verbatim. */
+         * Emergency, IDLE mode, or cmd watchdog timeout force a hard stop.
+         * Otherwise the host-computed PWM (already through the host-side
+         * wheel-velocity PI) is forwarded to the PAC5210 verbatim.
+         *
+         * The IDLE check is re-asserted HERE — not only in on_cmd_pwm /
+         * on_hl_state — so the "never drive the wheels while idle/docked"
+         * guarantee holds in the one place that actually drives the motors,
+         * independent of the relative arrival order of CMD_PWM and HL_STATE
+         * packets. main_eOpenmowerStatus is volatile (see main.h). */
         bool hard_stop = false;
         if (Emergency_State()) {
             hard_stop = true;
             blade_on_off = 0;
+        } else if (main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE) {
+            hard_stop = true;
         } else {
             const uint32_t cmd_vel_age_ms = HAL_GetTick() - snap_cmd_vel;
             if (cmd_vel_age_ms > 200u) {
@@ -362,7 +372,7 @@ extern "C" void motors_handler()
             Emergency_SetState(1);
         }
 
-        BLADEMOTOR_Set(blade_on_off, blade_direction);
+        BLADEMOTOR_Set(blade_on_off, snap_blade_dir);
     }
 }
 
@@ -614,10 +624,4 @@ extern "C" void init_ROS()
     last_odom_tick      = HAL_GetTick();
     last_heartbeat_tick = 0;
     last_cmd_vel_tick   = 0;
-}
-
-float clamp(float d, float min, float max)
-{
-    const float t = d < min ? min : d;
-    return t > max ? max : t;
 }

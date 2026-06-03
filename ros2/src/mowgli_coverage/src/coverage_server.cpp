@@ -62,9 +62,11 @@ nav2_util::CallbackReturn CoverageServer::on_configure(
                                  "DISCONTINUOUS");
   declare_parameter<bool>("coordinates_in_cartesian_frame", true);
 
-  // Action server with default-ish timeouts (matches upstream).
-  double action_server_result_timeout = 10.0;
-  declare_parameter<double>("action_server_result_timeout", 10.0);
+  // Action server result timeout. Keep this >= the BT client's per-piece wait
+  // (PlanCoverageArea, 12 s): if the server expires the result first the
+  // client's goal handle is invalidated underneath it. 15 s clears the client.
+  double action_server_result_timeout = 15.0;
+  declare_parameter<double>("action_server_result_timeout", 15.0);
   get_parameter("action_server_result_timeout", action_server_result_timeout);
   rcl_action_server_options_t server_options =
       rcl_action_server_get_default_options();

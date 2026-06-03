@@ -84,6 +84,11 @@ static uint8_t s_rx_buf[MOWGLI_COMMS_RX_BUF_SIZE];
 /** Number of valid bytes currently in s_rx_buf. */
 static size_t  s_rx_write;
 
+/** Set when the accumulator overflowed mid-frame: the current frame is corrupt
+ * (we dropped bytes), so discard everything until the next delimiter resyncs
+ * the stream rather than process a truncated/mis-framed buffer. */
+static uint8_t s_rx_discard;
+
 /** Decode scratch buffer (stack-sized equivalent on the heap). */
 static uint8_t s_decode_buf[MAX_RAW_PKT_SIZE];
 
@@ -114,10 +119,21 @@ static void process_frame(const uint8_t *frame, size_t frame_len)
         return;
     }
 
-    /* COBS-decode into scratch buffer. */
-    size_t decoded_len = cobs_decode(frame, frame_len, s_decode_buf);
+    /* Sanity bound: a valid frame for our largest packet is at most
+     * MAX_ENC_PKT_SIZE encoded bytes. Anything longer is framing garbage (e.g.
+     * a dropped delimiter concatenating noise); reject it before decoding so it
+     * can never feed an oversized buffer into the decoder. */
+    if (frame_len > MAX_ENC_PKT_SIZE) {
+        ++s_crc_error_count;
+        return;
+    }
+
+    /* COBS-decode into scratch buffer. The explicit out_cap is the hard guard
+     * against a decode overrunning s_decode_buf (and corrupting the handler
+     * table that follows it in memory). */
+    size_t decoded_len = cobs_decode(frame, frame_len, s_decode_buf, sizeof(s_decode_buf));
     if (decoded_len == 0u) {
-        /* Malformed COBS — count as CRC error for simplicity. */
+        /* Malformed / oversized COBS — count as CRC error for simplicity. */
         ++s_crc_error_count;
         return;
     }
@@ -165,6 +181,7 @@ void mowgli_comms_init(void)
 {
     memset(s_rx_buf, 0, sizeof(s_rx_buf));
     s_rx_write = 0u;
+    s_rx_discard = 0u;
 
     memset(s_handlers, 0, sizeof(s_handlers));
     s_handler_count = 0u;
@@ -180,21 +197,31 @@ void mowgli_comms_process_rx(const uint8_t *data, size_t len)
 
         if (byte == FRAME_DELIM) {
             /*
-             * Delimiter found. Everything in s_rx_buf[0 .. s_rx_write-1]
-             * is the COBS payload of a complete frame (may be empty for a
-             * leading delimiter at startup or after a previous frame).
+             * Delimiter found. If the previous frame overflowed the
+             * accumulator we dropped bytes from it, so it is corrupt — discard
+             * it and resync on this delimiter instead of processing a
+             * truncated frame. Otherwise s_rx_buf[0 .. s_rx_write-1] is the
+             * COBS payload of a complete frame (may be empty for a leading
+             * delimiter at startup or after a previous frame).
              */
-            process_frame(s_rx_buf, s_rx_write);
+            if (!s_rx_discard) {
+                process_frame(s_rx_buf, s_rx_write);
+            }
 
-            /* Compact: reset the write pointer so the buffer is reused. */
+            /* Compact: reset the write pointer so the buffer is reused, and
+             * clear the discard latch — the stream is resynced. */
             s_rx_write = 0u;
+            s_rx_discard = 0u;
         } else {
             /* Non-delimiter byte: append to accumulation buffer. */
             if (s_rx_write < MOWGLI_COMMS_RX_BUF_SIZE) {
                 s_rx_buf[s_rx_write++] = byte;
             } else {
-                /* Buffer full — drop the byte and record the overflow. */
+                /* Buffer full — drop the byte, record the overflow, and mark
+                 * the in-progress frame for discard so we don't process a
+                 * mangled buffer at the next delimiter. */
                 ++s_rx_overflow_count;
+                s_rx_discard = 1u;
             }
         }
     }

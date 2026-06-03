@@ -590,6 +590,12 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
     areas_.push_back(std::move(entry));
   }
   resize_map_to_areas();
+  // resize_map_to_areas() reallocates the grid and resets every layer
+  // (CLASSIFICATION → UNKNOWN), discarding the LAWN/NO_GO cells stamped above.
+  // Re-stamp from the full area list — exactly as on_load_areas does — or a
+  // freshly recorded area reads 0 LAWN cells, which breaks completion gating,
+  // the GUI coverage overlay, and the cell-based strip fallback.
+  apply_area_classifications();
   masks_dirty_ = true;
 
   RCLCPP_INFO(get_logger(),

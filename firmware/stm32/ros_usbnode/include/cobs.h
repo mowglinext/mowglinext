@@ -61,17 +61,18 @@ size_t cobs_encode(const uint8_t *input, size_t len, uint8_t *output);
  * @p input must not contain any 0x00 bytes; the caller must strip frame
  * delimiters before calling this function.
  *
- * @p output must be at least @p len bytes (decoded data is never larger
- * than the encoded form).
- *
  * @p input and @p output must not overlap.
  *
  * @param input   COBS-encoded data without delimiters. Must not be NULL.
  * @param len     Number of encoded bytes. Must be >= 1.
  * @param output  Destination buffer. Must not be NULL.
- * @return Number of decoded bytes written, or 0 if the input is malformed.
+ * @param out_cap Capacity of @p output in bytes. Decoding stops and returns 0
+ *                if the decoded data would exceed this — a hard bound that
+ *                prevents a long/garbage frame from overrunning @p output.
+ * @return Number of decoded bytes written, or 0 if the input is malformed
+ *         or would exceed @p out_cap.
  */
-size_t cobs_decode(const uint8_t *input, size_t len, uint8_t *output);
+size_t cobs_decode(const uint8_t *input, size_t len, uint8_t *output, size_t out_cap);
 
 #ifdef __cplusplus
 } /* extern "C" */

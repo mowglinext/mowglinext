@@ -82,7 +82,7 @@ size_t cobs_encode(const uint8_t *input, size_t len, uint8_t *output)
  * cobs_decode
  * --------------------------------------------------------------------------*/
 
-size_t cobs_decode(const uint8_t *input, size_t len, uint8_t *output)
+size_t cobs_decode(const uint8_t *input, size_t len, uint8_t *output, size_t out_cap)
 {
     size_t read = 0u;
     size_t write = 0u;
@@ -102,6 +102,15 @@ size_t cobs_decode(const uint8_t *input, size_t len, uint8_t *output)
             return 0u;
         }
 
+        /* Output-buffer bound: refuse to write past the caller's buffer. A
+         * frame that decodes to more than out_cap bytes cannot be a valid
+         * packet (the largest is far smaller), so treat it as malformed rather
+         * than overrun the destination. This is the hard guard against a long
+         * mis-framed/garbage run corrupting memory past `output`. */
+        if (write + copy_count > out_cap) {
+            return 0u;
+        }
+
         for (size_t i = 0u; i < copy_count; ++i) {
             output[write++] = input[read++];
         }
@@ -111,6 +120,9 @@ size_t cobs_decode(const uint8_t *input, size_t len, uint8_t *output)
          * zero), and we have not consumed all input yet, emit a decoded zero.
          */
         if (code != 0xFFu && read < len) {
+            if (write >= out_cap) {
+                return 0u;
+            }
             output[write++] = 0x00u;
         }
     }

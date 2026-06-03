@@ -46,8 +46,18 @@ rclcpp::Time HostFirmwareClockFit::Ingest(uint32_t pkt_dt_millis, const rclcpp::
   // a slope drift of e.g. 1.0001e6 ns/ms over 1 hour of firmware time
   // (3.6e6 ms) shifts the stamp by ~360 ms — still well below typical
   // tf transform_tolerance and absorbed gracefully downstream.
-  const int64_t fitted_ns =
+  int64_t fitted_ns =
       static_cast<int64_t>(slope_ * static_cast<double>(fw_clock_ms_) + offset_);
+
+  // Never stamp in the future. A slightly-fast firmware clock (slope > 1e6) can
+  // push the fitted stamp ahead of host_now; a future-stamped sensor message
+  // then raises tf2 ExtrapolationException in Nav2/localization lookups. A
+  // sensor stamp in the (recent) past is always safe, so clamp to host_now.
+  const int64_t host_ns_now = host_now.nanoseconds();
+  if (fitted_ns > host_ns_now)
+  {
+    fitted_ns = host_ns_now;
+  }
   return rclcpp::Time(fitted_ns, host_now.get_clock_type());
 }
 
