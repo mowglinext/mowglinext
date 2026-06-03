@@ -222,6 +222,7 @@ def generate_launch_description() -> LaunchDescription:
             ("~/imu/data_raw", "/imu/data"),
             ("~/imu/mag_raw", "/imu/mag_raw"),
             ("~/wheel_odom", "/wheel_odom"),
+            ("~/wheel_ticks", "/wheel_ticks"),
             ("~/emergency", "/hardware_bridge/emergency"),
             ("~/power", "/hardware_bridge/power"),
             ("~/status", "/hardware_bridge/status"),
