@@ -14,8 +14,8 @@ using mowgli_hardware::velocity_to_pwm;
 
 namespace
 {
-constexpr double kSlope = 300.0;     // pwm_per_mps
-constexpr double kDeadband = 40.0;   // break-free PWM
+constexpr double kSlope = 300.0;  // pwm_per_mps
+constexpr double kDeadband = 40.0;  // break-free PWM
 constexpr double kMaxPwm = 255.0;
 constexpr double kEps = 5.0e-3;
 }  // namespace
@@ -44,7 +44,8 @@ TEST(VelocityToPwm, OddSymmetry)
 {
   const double v = 0.23;
   EXPECT_NEAR(velocity_to_pwm(v, kSlope, kDeadband, kMaxPwm, kEps),
-              -velocity_to_pwm(-v, kSlope, kDeadband, kMaxPwm, kEps), 1e-9);
+              -velocity_to_pwm(-v, kSlope, kDeadband, kMaxPwm, kEps),
+              1e-9);
 }
 
 TEST(VelocityToPwm, ClampsToMax)

@@ -60,12 +60,11 @@
 #include <ctime>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
-
-#include <mutex>
 
 #include "mowgli_hardware/bridge_comms.hpp"
 #include "mowgli_hardware/clock_fit.hpp"
@@ -146,7 +145,10 @@ public:
     cmd_pwm_time_ = now();
   }
 
-  double wheel_radius() const override { return wheel_radius_; }
+  double wheel_radius() const override
+  {
+    return wheel_radius_;
+  }
 
   rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_base() override
   {
@@ -439,7 +441,9 @@ private:
         // Hard read error (e.g. the USB CDC device was removed/re-enumerated by
         // a firmware flash or board reboot): the fd is dead. Close now so the
         // next tick reopens and re-resolves /dev/mowgli to the live device.
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+        RCLCPP_WARN_THROTTLE(get_logger(),
+                             *get_clock(),
+                             2000,
                              "Serial read error — closing port to reconnect.");
         serial_->close();
         return;
@@ -1675,7 +1679,8 @@ private:
   double wheel_track_{0.325};
   double ticks_per_meter_{300.0};
   double wheel_radius_{0.0925};  ///< tick→radian conversion; matches diff_drive_controller.
-  double wheel_meas_filter_tau_{0.12};  ///< EMA τ (s) de-quantising the joint VELOCITY state; 0 disables.
+  double wheel_meas_filter_tau_{
+      0.12};  ///< EMA τ (s) de-quantising the joint VELOCITY state; 0 disables.
   double meas_l_filt_{0.0};  ///< EMA state for the left wheel velocity (m/s).
   double meas_r_filt_{0.0};  ///< EMA state for the right wheel velocity (m/s).
 
@@ -1685,8 +1690,8 @@ private:
   // itself is touched only from the executor thread (send_motor_command), so
   // there is no serial write race.
   mutable std::mutex motor_mtx_;
-  WheelJointState joint_state_;                 ///< latest per-wheel angle + velocity (read())
-  double cmd_pwm_l_{0.0};                        ///< per-wheel PWM from write()
+  WheelJointState joint_state_;  ///< latest per-wheel angle + velocity (read())
+  double cmd_pwm_l_{0.0};  ///< per-wheel PWM from write()
   double cmd_pwm_r_{0.0};
   rclcpp::Time cmd_pwm_time_{0, 0, RCL_ROS_TIME};  ///< stamp of the last set_wheel_pwm (watchdog)
 

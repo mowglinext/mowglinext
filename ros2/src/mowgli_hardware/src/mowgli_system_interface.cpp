@@ -22,13 +22,15 @@ bool has_param(const std::unordered_map<std::string, std::string>& p, const std:
 {
   return p.find(k) != p.end();
 }
-double param_double(const std::unordered_map<std::string, std::string>& p, const std::string& k,
+double param_double(const std::unordered_map<std::string, std::string>& p,
+                    const std::string& k,
                     double def)
 {
   auto it = p.find(k);
   return it == p.end() ? def : std::stod(it->second);
 }
-std::string param_string(const std::unordered_map<std::string, std::string>& p, const std::string& k,
+std::string param_string(const std::unordered_map<std::string, std::string>& p,
+                         const std::string& k,
                          const std::string& def)
 {
   auto it = p.find(k);
@@ -48,7 +50,9 @@ hardware_interface::CallbackReturn MowgliSystemInterface::on_init(
   if (info_.joints.size() != kNumWheels)
   {
     RCLCPP_FATAL(rclcpp::get_logger(kLogger),
-                 "Expected %zu wheel joints, got %zu.", kNumWheels, info_.joints.size());
+                 "Expected %zu wheel joints, got %zu.",
+                 kNumWheels,
+                 info_.joints.size());
     return hardware_interface::CallbackReturn::ERROR;
   }
 
@@ -74,7 +78,8 @@ hardware_interface::CallbackReturn MowgliSystemInterface::on_init(
     RCLCPP_WARN(rclcpp::get_logger(kLogger),
                 "Could not infer left/right from joint names — using URDF order "
                 "(%s=left, %s=right).",
-                info_.joints[0].name.c_str(), info_.joints[1].name.c_str());
+                info_.joints[0].name.c_str(),
+                info_.joints[1].name.c_str());
   }
   joint_names_[0] = info_.joints[static_cast<std::size_t>(left_idx)].name;
   joint_names_[1] = info_.joints[static_cast<std::size_t>(right_idx)].name;
@@ -90,8 +95,12 @@ hardware_interface::CallbackReturn MowgliSystemInterface::on_init(
   RCLCPP_INFO(rclcpp::get_logger(kLogger),
               "Initialised: joints [%s, %s], wheel_radius=%.4f, "
               "feedforward pwm_per_mps=%.1f deadband=%.1f max=%.0f.",
-              joint_names_[0].c_str(), joint_names_[1].c_str(), wheel_radius_, pwm_per_mps_,
-              deadband_pwm_, max_pwm_);
+              joint_names_[0].c_str(),
+              joint_names_[1].c_str(),
+              wheel_radius_,
+              pwm_per_mps_,
+              deadband_pwm_,
+              max_pwm_);
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -105,20 +114,30 @@ hardware_interface::CallbackReturn MowgliSystemInterface::on_configure(
   // standalone launch used to apply, and parameter overrides from the URDF.
   std::vector<std::string> args = {
       "--ros-args",
-      "-r", "__node:=hardware_bridge",
-      "-r", "~/imu/data_raw:=/imu/data",
-      "-r", "~/mag_raw:=/imu/mag_raw",
-      "-r", "~/wheel_odom:=/wheel_odom",
-      "-r", "~/wheel_ticks:=/wheel_ticks",
-      "-r", "~/dock_heading:=/gnss/heading",
+      "-r",
+      "__node:=hardware_bridge",
+      "-r",
+      "~/imu/data_raw:=/imu/data",
+      "-r",
+      "~/mag_raw:=/imu/mag_raw",
+      "-r",
+      "~/wheel_odom:=/wheel_odom",
+      "-r",
+      "~/wheel_ticks:=/wheel_ticks",
+      "-r",
+      "~/dock_heading:=/gnss/heading",
   };
 
   std::vector<rclcpp::Parameter> overrides;
-  auto push_d = [&](const char* k) {
-    if (has_param(hp, k)) overrides.emplace_back(k, param_double(hp, k, 0.0));
+  auto push_d = [&](const char* k)
+  {
+    if (has_param(hp, k))
+      overrides.emplace_back(k, param_double(hp, k, 0.0));
   };
-  auto push_s = [&](const char* k) {
-    if (has_param(hp, k)) overrides.emplace_back(k, param_string(hp, k, ""));
+  auto push_s = [&](const char* k)
+  {
+    if (has_param(hp, k))
+      overrides.emplace_back(k, param_string(hp, k, ""));
   };
   push_s("serial_port");
   if (has_param(hp, "baud_rate"))
@@ -163,7 +182,8 @@ hardware_interface::CallbackReturn MowgliSystemInterface::on_configure(
   // matters). If the URDF set wheel_radius the node got the same override.
   wheel_radius_ = comms_->wheel_radius();
 
-  RCLCPP_INFO(rclcpp::get_logger(kLogger), "Configured: STM32 comms node created and added to executor.");
+  RCLCPP_INFO(rclcpp::get_logger(kLogger),
+              "Configured: STM32 comms node created and added to executor.");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -179,7 +199,11 @@ hardware_interface::CallbackReturn MowgliSystemInterface::on_activate(
     comms_->set_wheel_pwm(0.0, 0.0);
   }
   executor_running_ = true;
-  executor_thread_ = std::thread([this]() { executor_->spin(); });
+  executor_thread_ = std::thread(
+      [this]()
+      {
+        executor_->spin();
+      });
   RCLCPP_INFO(rclcpp::get_logger(kLogger), "Activated: comms executor spinning.");
   return hardware_interface::CallbackReturn::SUCCESS;
 }

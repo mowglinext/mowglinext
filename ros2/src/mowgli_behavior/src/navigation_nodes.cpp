@@ -694,7 +694,8 @@ BT::NodeStatus NavigateInsideBoundary::BeginFallbackBackup()
 
   RCLCPP_INFO(ctx->node->get_logger(),
               "NavigateInsideBoundary: fallback backup goal sent (%.2f m @ %.2f m/s)",
-              kBackupDist, backup_speed);
+              kBackupDist,
+              backup_speed);
   return BT::NodeStatus::RUNNING;
 }
 

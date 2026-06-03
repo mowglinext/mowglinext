@@ -22,8 +22,8 @@ namespace mowgli_hardware
 /// Map a signed wheel speed (m/s) to a signed PWM, clamped to ±max_pwm. Below
 /// v_eps (and for non-finite input, e.g. an unready controller) returns 0 so a
 /// stopped/uninitialised wheel doesn't buzz against the deadband.
-inline double velocity_to_pwm(double v_mps, double pwm_per_mps, double deadband_pwm, double max_pwm,
-                              double v_eps)
+inline double velocity_to_pwm(
+    double v_mps, double pwm_per_mps, double deadband_pwm, double max_pwm, double v_eps)
 {
   if (!std::isfinite(v_mps) || std::abs(v_mps) < v_eps)
   {

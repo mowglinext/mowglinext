@@ -294,7 +294,7 @@ TEST(ProtocolRoundtrip, CmdPwmPacket)
 {
   LlCmdPwm pkt{};
   pkt.type = PACKET_ID_LL_CMD_PWM;
-  pkt.left_pwm = 175;    // forward
+  pkt.left_pwm = 175;  // forward
   pkt.right_pwm = -120;  // reverse
 
   roundtrip_struct(pkt);
