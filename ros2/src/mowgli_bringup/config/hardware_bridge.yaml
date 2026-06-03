@@ -3,6 +3,10 @@ hardware_bridge:
     serial_port: "/dev/mowgli"
     baud_rate: 115200
     heartbeat_rate: 4.0   # Hz – keep-alive messages sent to firmware
+    # Serial-link RX watchdog: reopen the port if no STM32 bytes arrive for this
+    # long (auto-reconnect after a firmware flash / board reboot / USB
+    # re-enumeration, which otherwise leaves the bridge writing to a dead fd).
+    serial_rx_timeout_s: 2.0
     publish_rate: 100.0   # Hz – sensor read tick. Actual /imu/data rate
                           # is capped by the firmware packet rate (~47 Hz);
                           # 100 Hz tick ensures every available packet is

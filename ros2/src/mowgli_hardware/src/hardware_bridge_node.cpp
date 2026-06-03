@@ -130,6 +130,15 @@ private:
     baud_rate_ = declare_parameter<int>("baud_rate", 115200);
     heartbeat_rate_ = declare_parameter<double>("heartbeat_rate", 4.0);
     publish_rate_ = declare_parameter<double>("publish_rate", 100.0);
+    // Serial-link watchdog: if no bytes arrive for this long while the port is
+    // open, treat the link as dead and reopen it. The STM32 streams status
+    // (~4 Hz) + odom (~20 Hz) + IMU (~50-100 Hz) continuously whenever it is
+    // running, so a multi-second RX gap means the USB endpoint went away —
+    // e.g. a firmware flash or board reboot re-enumerated the CDC device. The
+    // OS leaves the stale fd "open" (reads just return nothing), so without
+    // this the bridge would sit forever writing into a dead fd. Reopening
+    // re-resolves /dev/mowgli to the new ttyACM.
+    serial_rx_timeout_s_ = declare_parameter<double>("serial_rx_timeout_s", 2.0);
     high_level_rate_ = declare_parameter<double>("high_level_rate", 2.0);
     dock_x_ = declare_parameter<double>("dock_pose_x", 0.0);
     dock_y_ = declare_parameter<double>("dock_pose_y", 0.0);
@@ -351,6 +360,9 @@ private:
                   serial_port_path_.c_str(),
                   baud_rate_);
     }
+    // Seed the RX watchdog so a freshly-(re)opened port gets a full grace
+    // window before the no-data check can fire.
+    last_serial_rx_time_ = now();
   }
 
   void create_timers()
@@ -395,14 +407,16 @@ private:
 
   void read_serial_tick()
   {
-    // If the port was never opened or was closed due to an error, attempt to
-    // (re)open it.
+    // If the port was never opened or was closed due to an error / dead-link
+    // watchdog, attempt to (re)open it. open() re-resolves the device path, so
+    // this picks up a new ttyACM after a USB re-enumeration.
     if (!serial_->is_open())
     {
       if (!serial_->open())
       {
         return;  // Still not open; will retry next tick.
       }
+      last_serial_rx_time_ = now();
       RCLCPP_INFO(get_logger(), "Serial port re-opened successfully.");
     }
 
@@ -413,11 +427,37 @@ private:
     while (true)
     {
       const ssize_t n = serial_->read(buf, kReadBufSize);
-      if (n <= 0)
+      if (n < 0)
       {
-        break;
+        // Hard read error (e.g. the USB CDC device was removed/re-enumerated by
+        // a firmware flash or board reboot): the fd is dead. Close now so the
+        // next tick reopens and re-resolves /dev/mowgli to the live device.
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                             "Serial read error — closing port to reconnect.");
+        serial_->close();
+        return;
+      }
+      if (n == 0)
+      {
+        break;  // No more data available this tick.
       }
       packet_handler_.feed(buf, static_cast<std::size_t>(n));
+      last_serial_rx_time_ = now();
+    }
+
+    // Dead-link watchdog: the STM32 streams continuously whenever it is up, so
+    // a multi-second RX gap on an "open" port means the endpoint vanished (a
+    // re-enumeration that left the fd nominally open but mute). Close it so the
+    // next tick reopens and reconnects — this is what makes a firmware flash or
+    // board reboot self-heal instead of wedging the bridge.
+    if (serial_rx_timeout_s_ > 0.0 &&
+        (now() - last_serial_rx_time_).seconds() > serial_rx_timeout_s_)
+    {
+      RCLCPP_WARN(get_logger(),
+                  "No serial data for %.1f s — reopening %s to reconnect to the STM32.",
+                  serial_rx_timeout_s_,
+                  serial_port_path_.c_str());
+      serial_->close();
     }
   }
 
@@ -1731,6 +1771,9 @@ private:
   int baud_rate_{115200};
   double heartbeat_rate_{4.0};
   double publish_rate_{100.0};
+  // Serial-link RX watchdog (auto-reconnect on flash / board reboot / unplug).
+  double serial_rx_timeout_s_{2.0};
+  rclcpp::Time last_serial_rx_time_{0, 0, RCL_ROS_TIME};
   double high_level_rate_{2.0};
 
   std::unique_ptr<SerialPort> serial_;
