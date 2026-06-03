@@ -128,6 +128,13 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
             await fetchEventSource(`/api/setup/flashBoard`, {
                 method: "POST",
                 keepalive: false,
+                // Keep the stream open when the tab is backgrounded / loses
+                // focus. Without this, fetch-event-source closes the connection
+                // on `visibilitychange` (hidden) and RE-OPENS it on return —
+                // and "re-open" re-sends this POST, which makes the backend
+                // start a whole new flash (git clone + platformio build) from
+                // scratch instead of continuing the one in progress.
+                openWhenHidden: true,
                 body: JSON.stringify(values),
                 headers: {
                     Accept: "text/event-stream",
@@ -159,6 +166,11 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                 onerror(err) {
                     setIsFlashing(false);
                     setFlashError(err.toString());
+                    // Re-throw to stop fetch-event-source's automatic retry.
+                    // Otherwise the library re-POSTs on any stream error and
+                    // relaunches the flash; we surface the error in the UI and
+                    // let the user retry deliberately instead.
+                    throw err;
                 },
             });
         } catch (e: any) {
