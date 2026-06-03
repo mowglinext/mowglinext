@@ -141,6 +141,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-kilted-nav2-velocity-smoother \
     # Motion control
     ros-kilted-twist-mux \
+    # ros2_control drive base — controller_manager + the chained diff_drive +
+    # per-wheel pid + joint_state_broadcaster controllers that drive the
+    # MowgliSystemInterface plugin (mowgli_hardware). Runtime exec_deps of
+    # mowgli_hardware; listed explicitly here because the runtime image installs
+    # this curated list rather than resolving exec_depends via rosdep.
+    ros-kilted-controller-manager \
+    ros-kilted-diff-drive-controller \
+    ros-kilted-joint-state-broadcaster \
+    ros-kilted-pid-controller \
     # Behavior trees
     ros-kilted-behaviortree-cpp \
     # Robot description / TF
