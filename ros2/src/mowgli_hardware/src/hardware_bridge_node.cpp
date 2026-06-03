@@ -80,6 +80,7 @@ static constexpr uint8_t HL_MODE_MANUAL_MOWING = 4u;  ///< Manual teleop with bl
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
+#include "mowgli_interfaces/msg/wheel_tick.hpp"
 #include "mowgli_interfaces/srv/emergency_stop.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -267,6 +268,11 @@ private:
     pub_mag_raw_ =
         create_publisher<sensor_msgs::msg::MagneticField>("~/imu/mag_raw", rclcpp::QoS(10));
     pub_wheel_odom_ = create_publisher<nav_msgs::msg::Odometry>("~/wheel_odom", rclcpp::QoS(10));
+    // Per-wheel encoder ticks (diagnostics — GUI "Per-Wheel Encoders" panel).
+    // 2-wheel diff-drive maps to RL/RR only. Remapped to /wheel_ticks in the
+    // launch file (the GUI bridge subscribes to /wheel_ticks).
+    pub_wheel_ticks_ =
+        create_publisher<mowgli_interfaces::msg::WheelTick>("~/wheel_ticks", rclcpp::QoS(10));
     pub_battery_state_ =
         create_publisher<sensor_msgs::msg::BatteryState>("/battery_state", rclcpp::QoS(10));
     // Dock heading: publish dock_yaw at 1 Hz while charging so
@@ -1417,6 +1423,36 @@ private:
       d_right = 0;
     }
 
+    // ----- Per-wheel WheelTick (diagnostics: GUI "Per-Wheel Encoders") -----
+    // Published every firmware packet (~47 Hz). The mower is 2-wheel diff-drive,
+    // so only the Rear-Left / Rear-Right slots are valid (left→RL, right→RR,
+    // matching the wheel_odometry_node convention); Front-L/R stay invalid.
+    // WheelTick wants MONOTONIC-up magnitude counts plus a direction byte
+    // (consumers do (cur-prev)*sign(direction)), whereas the firmware sends
+    // signed cumulative ticks — so accumulate |delta| and derive the direction
+    // from the delta sign (holding the last direction through a zero delta).
+    wheel_ticks_mag_left_ += static_cast<uint32_t>(std::abs(d_left));
+    wheel_ticks_mag_right_ += static_cast<uint32_t>(std::abs(d_right));
+    if (d_left > 0)
+      wheel_dir_left_ = 1u;
+    else if (d_left < 0)
+      wheel_dir_left_ = 0u;
+    if (d_right > 0)
+      wheel_dir_right_ = 1u;
+    else if (d_right < 0)
+      wheel_dir_right_ = 0u;
+
+    mowgli_interfaces::msg::WheelTick wt{};
+    wt.stamp = now();
+    wt.wheel_tick_factor = static_cast<uint32_t>(std::lround(ticks_per_meter_));
+    wt.valid_wheels = mowgli_interfaces::msg::WheelTick::WHEEL_VALID_RL |
+                      mowgli_interfaces::msg::WheelTick::WHEEL_VALID_RR;
+    wt.wheel_direction_rl = wheel_dir_left_;
+    wt.wheel_ticks_rl = wheel_ticks_mag_left_;
+    wt.wheel_direction_rr = wheel_dir_right_;
+    wt.wheel_ticks_rr = wheel_ticks_mag_right_;
+    pub_wheel_ticks_->publish(wt);
+
     // ----- Aggregate firmware packets into ~10 Hz wheel_odom publishes -----
     // Firmware packets arrive at ~47 Hz (every ~21 ms). At slow speeds this
     // gives only 0-3 ticks per window, so single-tick encoder noise (1 tick
@@ -1748,6 +1784,13 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_imu_;
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr pub_mag_raw_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_wheel_odom_;
+  rclcpp::Publisher<mowgli_interfaces::msg::WheelTick>::SharedPtr pub_wheel_ticks_;
+  // Per-wheel cumulative-magnitude tick counters + last direction (for WheelTick;
+  // see handle_odometry). Magnitude is monotonic-up; direction is 1=fwd/0=rev.
+  uint32_t wheel_ticks_mag_left_{0};
+  uint32_t wheel_ticks_mag_right_{0};
+  uint8_t wheel_dir_left_{1};
+  uint8_t wheel_dir_right_{1};
   rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr pub_battery_state_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_dock_heading_;
 
