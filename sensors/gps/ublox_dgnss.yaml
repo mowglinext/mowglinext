@@ -152,7 +152,11 @@ ublox_dgnss:
     CFG_MSGOUT_UBX_NAV_HPPOSLLH_USB: 1   # high-precision LLH — needed by HP NavSatFix node
     CFG_MSGOUT_UBX_NAV_STATUS_USB: 1     # fix type + carrSoln/diffSoln diagnostics
     CFG_MSGOUT_UBX_NAV_COV_USB: 1        # covariance → NavSatFix.position_covariance
-    CFG_MSGOUT_UBX_NAV_PVT_USB: 0        # nothing consumes /ubx_nav_pvt in mowglinext
+    CFG_MSGOUT_UBX_NAV_PVT_USB: 1        # fix + numSv fallback for gps_health_aggregator
+                                         # (some genuine F9P units silently never emit
+                                         #  NAV-STATUS/NAV-SAT even when enabled+ACK'd;
+                                         #  NAV-PVT carries fixType/carrSoln/numSv so the
+                                         #  health diags still work — see aggregator)
     CFG_MSGOUT_UBX_NAV_VELNED_USB: 1     # → cog_to_imu_node /imu/cog_heading (CRITICAL)
     CFG_MSGOUT_UBX_NAV_RELPOSNED_USB: 0  # 0 unless moving-base / dual-antenna
     CFG_MSGOUT_UBX_RXM_RTCM_USB: 1       # correction ingestion counter — NTRIP debug
