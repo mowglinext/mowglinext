@@ -41,14 +41,16 @@ mowgli:
     # PI) AND /wheel_odom from the raw tick deltas using this value, so the
     # firmware's board.h TICKS_PER_M no longer needs to match (no reflash to
     # recalibrate). Calibrated 2026-06-03 against RTK-GPS. The host wheel PI holds
-    # the encoder velocity at the commanded target (verified by per-wheel
-    # instrumentation), so the right scale is commanded-target / measured-GPS-speed:
-    # at cmd 0.18, GPS read 0.201 fwd -> tpm 245, 0.21 rev -> tpm ~229 (reverse
-    # slips ~7% more per tick). Mowing is forward-dominant, so centre on forward.
-    # NOTE: do NOT calibrate from /wheel_odom's mean velocity — at these speeds the
-    # firmware emits ~1 tick/packet, so per-sample velocity is quantised to ~0.15
-    # m/s steps and its short-window mean reads ~7% high, over-estimating tpm.
-    ticks_per_meter: 245.0
+    # the (EMA-de-quantised) encoder velocity at the commanded target — verified by
+    # per-wheel instrumentation — so the scale is commanded-target / GPS-speed:
+    # at cmd 0.18 with wheel_meas_filter_tau on, GPS read 0.200 fwd -> tpm ~220
+    # (reverse slips ~5% more per tick). Mowing is forward-dominant, so centre on
+    # forward. NOTE 1: this only became meaningful AFTER the measured-velocity EMA
+    # (wheel_meas_filter_tau) — at ~1 tick/packet the un-filtered loop sits in a
+    # quantisation limit-cycle that ignores tpm entirely (earlier 245/260/274 reads
+    # were all polluted by it). NOTE 2: never calibrate from /wheel_odom's mean
+    # velocity — same quantisation makes its short-window mean read ~10% high.
+    ticks_per_meter: 220.0
     # Behavior tree tuning (consumed by behavior_tree_node)
     tick_rate: 10.0
     bt_debug_logging: false

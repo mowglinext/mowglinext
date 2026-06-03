@@ -186,6 +186,17 @@ private:
     wheel_params_.ki = declare_parameter<double>("wheel_pi_ki", 600.0);
     wheel_params_.max_pwm = declare_parameter<double>("wheel_pi_max_pwm", 255.0);
     wheel_params_.integral_max = declare_parameter<double>("wheel_pi_integral_max", 60.0);
+    // Low-pass time constant (s) for the measured wheel velocity fed to the PI.
+    // At mowing speed (~0.18 m/s) the firmware emits only ~1 encoder tick per
+    // packet, so the per-packet velocity is quantised to ~0.15 m/s steps — nearly
+    // the size of the target. Feeding that raw to the loop makes the integrator
+    // settle into a quantisation limit-cycle at a biased speed (~+14% over
+    // commanded, and insensitive to ticks_per_meter — observed 2026-06-03). A
+    // short EMA averages several ticks together so the loop sees the true mean and
+    // converges to the commanded speed. Only conditions the CONTROL input (not
+    // /wheel_odom). ≤0 disables (raw per-packet velocity). Kept small so the added
+    // feedback lag stays well under the integral's time scale.
+    wheel_meas_filter_tau_ = declare_parameter<double>("wheel_meas_filter_tau", 0.12);
     // LINEAR acceleration limit (m/s²). Slew-limits the forward velocity vx
     // BEFORE the diff-drive split (in run_wheel_pi_and_send) — taming linear
     // over-acceleration WITHOUT slowing rotation. The rotational component (wz)
@@ -1481,7 +1492,22 @@ private:
     {
       const double meas_l = (static_cast<double>(d_left) / ticks_per_meter_) / odom_dt_sec;
       const double meas_r = (static_cast<double>(d_right) / ticks_per_meter_) / odom_dt_sec;
-      run_wheel_pi_and_send(meas_l, meas_r, odom_dt_sec);
+      // De-quantise the measured velocity for the control loop with a short EMA
+      // (see wheel_meas_filter_tau_). At ~1 tick/packet the raw per-packet velocity
+      // is too coarse for the integrator to resolve the target; averaging several
+      // packets recovers the true mean. Conditions ONLY the loop input — the raw
+      // tick deltas still feed /wheel_odom unchanged below.
+      double ctrl_l = meas_l;
+      double ctrl_r = meas_r;
+      if (wheel_meas_filter_tau_ > 0.0)
+      {
+        const double alpha = std::clamp(odom_dt_sec / wheel_meas_filter_tau_, 0.0, 1.0);
+        meas_l_filt_ += alpha * (meas_l - meas_l_filt_);
+        meas_r_filt_ += alpha * (meas_r - meas_r_filt_);
+        ctrl_l = meas_l_filt_;
+        ctrl_r = meas_r_filt_;
+      }
+      run_wheel_pi_and_send(ctrl_l, ctrl_r, odom_dt_sec);
     }
 
     // ----- Per-wheel WheelTick (diagnostics: GUI "Per-Wheel Encoders") -----
@@ -1925,6 +1951,9 @@ private:
   double linear_accel_limit_mps2_{0.5};
   double max_wheel_mps_{0.5};
   double min_linear_vel_{0.05};  ///< sub-deadband forward-vx floor (0 disables).
+  double wheel_meas_filter_tau_{0.12};  ///< EMA τ (s) de-quantising the loop's measured velocity; 0 disables.
+  double meas_l_filt_{0.0};  ///< EMA state for the left wheel control-input velocity.
+  double meas_r_filt_{0.0};  ///< EMA state for the right wheel control-input velocity.
   bool wheel_cal_enabled_{true};
   double wheel_cal_save_period_s_{300.0};
   std::string wheel_cal_persist_path_{"/ros2_ws/maps/wheel_calibration.txt"};
