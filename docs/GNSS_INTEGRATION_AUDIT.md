@@ -65,6 +65,27 @@ This document records the current GNSS integration state of MowgliNext while Uni
   - Remains required until Universal GNSS replaces the vendor-specific path.
 - In preferred Universal mode, these vendor-specific runtimes are intentionally not started by compose anymore, but the code stays in-tree as a validated migration fallback.
 
+## Legacy GNSS Removal Plan
+
+| Reference | Classification | Universal-mode isolation evidence | Removal readiness |
+|-----------|----------------|-----------------------------------|-------------------|
+| `sensors/gps/` | Legacy fallback only | `GNSS_STACK=universal` does not add `docker-compose.gps.yml`; `test_compose_validity.sh` rejects `sensors/gps`, `gps_health_aggregator.py`, `rtcm_serial_bridge.py`, `nmea_navsat_driver`, and `ublox_dgnss_node` in generated universal compose. | Pending until `GNSS_STACK=legacy` is removed. |
+| `sensors/unicore/` | Legacy fallback only | `GNSS_STACK=universal` does not add `docker-compose.unicore.yaml`; compose tests reject `sensors/unicore` and `gnss_unicore` in generated universal compose. | Pending until the legacy UM98x fallback and live validation scripts are retired. |
+| `sensors/nmea/` | Removable now | No universal compose or launch path references the standalone NMEA sidecar; generic NMEA now routes through Universal GNSS or the legacy shared GPS fallback. | Already removed in the current cleanup set. |
+| `install/compose/docker-compose.gps.yml` | Legacy fallback only | Added only when `GNSS_STACK=legacy` and backend resolves to `gps`; installer matrix tests reject it for universal presets. | Pending until legacy fallback compose is removed. |
+| `install/compose/docker-compose.unicore.yaml` | Legacy fallback only | Added only when `GNSS_STACK=legacy` and backend resolves to `unicore`; installer matrix tests reject it for universal presets. | Pending until legacy fallback compose is removed. |
+| `install/compose/docker-compose.nmea.yaml` | Removable now | No supported backend maps to this fragment; NMEA is not a separate universal sidecar. | Already removed in the current cleanup set. |
+| `GNSS_BACKEND` | Still required | Installer, env parsing, checks, compatibility presets, and legacy compose mapping still consume it. | Keep until preset migration and `GNSS_STACK=legacy` removal are complete. |
+| `GPS_*` env keys | Still required | Installer tests cover USB by-id selection, UART fallback, baud probing, udev rules, and legacy compose compatibility. Universal launch also uses `GPS_BY_ID`/`GPS_PORT` as fallback inputs when the new `GNSS_SERIAL_*` keys are absent. | Keep until older `.env` files and udev helpers no longer need compatibility. |
+| `gnss_runtime_state_builder.cpp` | Legacy fallback only | `navsat_to_absolute_pose_node` uses it only when `publish_gnss_status=true`; universal launch/tests set this false and assert no local `/gps/status` publisher or `/diagnostics` parser subscription. | Pending until legacy Mowgli-local `/gps/status` reconstruction is removed. |
+| `rtcm_serial_bridge.py` | Legacy fallback only | Started only by `sensors/gps/start_gps.sh` for NMEA RTCM injection; universal compose tests reject the script name in generated universal compose. | Keep while `sensors/gps` remains a legacy fallback. |
+| `gps_health_aggregator.py` | Legacy fallback only | Started only by `sensors/gps/start_gps.sh`; universal compose tests reject the script name in generated universal compose. | Keep while `sensors/gps` remains a legacy fallback. |
+| `nmea_navsat_driver` | Legacy fallback only | Invoked only by `sensors/gps/start_gps.sh` when `GPS_PROTOCOL=NMEA`; universal compose tests reject it in generated universal compose. | Keep while legacy generic NMEA fallback remains. |
+| `ublox_dgnss_node` | Legacy fallback only | Invoked only by `sensors/gps/start_gps.sh` when `GPS_PROTOCOL=UBX`; universal compose tests reject it in generated universal compose. | Keep while legacy u-blox fallback remains. |
+| Unicore-specific startup scripts | Legacy fallback only | `sensors/unicore/start_gps.sh` and `configure_receiver.sh` are reached only via the legacy Unicore compose fragment or direct validation scripts. | Keep until Universal GNSS fully replaces Unicore fallback operations and live validation helpers. |
+
+No additional source files are safe to delete at this milestone because every remaining legacy runtime path is still reachable through `GNSS_STACK=legacy`, installer recovery checks, or focused tests.
+
 ### ROS2 and GUI
 
 - `mowgli_localization/navsat_to_absolute_pose_node`

@@ -75,6 +75,21 @@ Legacy-only status path
 - Prefer `/dev/serial/by-id` when it is available. If it is missing in the runtime, confirm the live device through `/sys/class/tty/*/../manufacturer` and `/sys/class/tty/*/../product` only as a diagnostic fallback before wiring `GNSS_SERIAL_DEVICE`.
 - Be cautious with raw `/dev/tty*` enumeration in containers: stale device nodes can persist even when the live sysfs mapping has changed.
 
+### Legacy GNSS Removal Plan
+
+| Item | Classification | Next action |
+|------|----------------|-------------|
+| `sensors/gps/` | Legacy fallback only | Keep until `GNSS_STACK=legacy` and old u-blox/NMEA recovery paths are retired. |
+| `sensors/unicore/` | Legacy fallback only | Keep until UM98x legacy fallback and validation scripts are retired. |
+| `sensors/nmea/` | Removable now | Removed; standalone NMEA now has no active runtime path. |
+| `gnss_runtime_state_builder.cpp` | Legacy fallback only | Keep while Mowgli-local `/gps/status` reconstruction remains test-covered. |
+| `gps_health_aggregator.py` | Legacy fallback only | Keep with `sensors/gps/start_gps.sh`. |
+| `rtcm_serial_bridge.py` | Legacy fallback only | Keep with legacy NMEA RTCM injection. |
+| `nmea_navsat_driver` | Legacy fallback only | Keep only as a dependency of the legacy shared GPS runtime. |
+| `ublox_dgnss_node` | Legacy fallback only | Keep only as a dependency of the legacy shared GPS runtime. |
+
+Universal mode is isolated from those paths by compose generation and launch tests: no legacy GNSS container is emitted, and the local `/gps/status` parser is disabled when `GNSS_STATUS_SOURCE=universal`.
+
 ## LiDAR
 
 LiDAR support remains installer-selected through dedicated compose fragments.
