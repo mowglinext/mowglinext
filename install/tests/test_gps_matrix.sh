@@ -88,7 +88,9 @@ harness_init "$repo"
 harness_set_preset gnss=gps gps=ubx-usb lidar=none tfluna=none
 harness_run >/dev/null 2>&1
 assert_eq "ubx/usb: GPS_CONNECTION=usb" "usb" "$(env_value "$repo" GPS_CONNECTION)"
-assert_eq "ubx/usb: GNSS_SERIAL_DEVICE follows selected USB device" "/dev/gps" "$(env_value "$repo" GNSS_SERIAL_DEVICE)"
+assert_eq "ubx/usb: GPS_BY_ID captured from stable USB selection" "/dev/serial/by-id/usb-stub" "$(env_value "$repo" GPS_BY_ID)"
+assert_eq "ubx/usb: GPS_PORT follows selected USB by-id" "/dev/serial/by-id/usb-stub" "$(env_value "$repo" GPS_PORT)"
+assert_eq "ubx/usb: GNSS_SERIAL_DEVICE follows selected USB by-id" "/dev/serial/by-id/usb-stub" "$(env_value "$repo" GNSS_SERIAL_DEVICE)"
 # NOTE: env.sh::setup_env runs `: "${GPS_UART_DEVICE:=/dev/ttyAMA4}"` —
 # the := expansion replaces empty values with the default, so the .env
 # always has GPS_UART_DEVICE set. With GPS_CONNECTION=usb the compose

@@ -38,6 +38,7 @@ This document records the current GNSS integration state of MowgliNext while Uni
 
 - `.devcontainer/devcontainer.json` now binds the reference repository host path into `/workspaces/universal-gnss`.
 - `/workspaces/universal-gnss` is now visible inside the devcontainer and contains the mounted reference repository.
+- The devcontainer now also bind-mounts the host `/dev` tree at `/host-dev`, and `.devcontainer/post-start.sh` re-links `/dev/serial/by-id` inside the container when the host provides those stable udev symlinks.
 - `.devcontainer/post-create.sh` now reuses `ros2/scripts/sync_workspace_packages.sh` so the same package-linking logic is used for post-create, ad-hoc builds, tests, and dev simulation boots.
 - Workspace linking now exposes only `gnss_ros2` as `universal_gnss_ros2` from the external repository at this milestone. The low-level Universal GNSS libraries remain sibling CMake subdirectories of that ROS package instead of separate colcon packages here.
 - The devcontainer now requests `--privileged` so a rebuilt local container can see attached GNSS USB/UART hardware for validation.
@@ -142,14 +143,14 @@ ArduPilot USB device was removed from the setup.
 
 Sanitized commands used:
 
-- `ros2 launch mowgli_bringup universal_gnss.launch.py receiver_family:=ublox serial_device:=/dev/ttyACM0 serial_baud:=921600 ntrip_enabled:=true caster_host:=<host> caster_port:=2101 mountpoint:=<mountpoint> username:=<username> password:=<redacted> status_topic:=/gps/status fix_topic:=/gps/fix diagnostics_topic:=/diagnostics rtcm_topic:=/rtcm`
-- `ros2 launch mowgli_bringup universal_gnss.launch.py receiver_family:=unicore serial_device:=/dev/ttyUSB0 serial_baud:=921600 ntrip_enabled:=true caster_host:=<host> caster_port:=2101 mountpoint:=<mountpoint> username:=<username> password:=<redacted> status_topic:=/gps/status fix_topic:=/gps/fix diagnostics_topic:=/diagnostics rtcm_topic:=/rtcm`
+- `ros2 launch mowgli_bringup universal_gnss.launch.py receiver_family:=ublox serial_device:=/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00 serial_baud:=921600 ntrip_enabled:=true caster_host:=<host> caster_port:=2101 mountpoint:=<mountpoint> username:=<username> password:=<redacted> status_topic:=/gps/status fix_topic:=/gps/fix diagnostics_topic:=/diagnostics rtcm_topic:=/rtcm`
+- `ros2 launch mowgli_bringup universal_gnss.launch.py receiver_family:=unicore serial_device:=/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0 serial_baud:=921600 ntrip_enabled:=true caster_host:=<host> caster_port:=2101 mountpoint:=<mountpoint> username:=<username> password:=<redacted> status_topic:=/gps/status fix_topic:=/gps/fix diagnostics_topic:=/diagnostics rtcm_topic:=/rtcm`
 - `bash install/tests/test_compose_validity.sh`
 
 Observed device reality in the validation container:
 
-- `/dev/serial/by-id` was still unavailable in this devcontainer, so stable
-  by-id selection could not be used here.
+- The preferred stable identifiers are `/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00` for the F9P and `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` for the UM982.
+- Milestone 6 adds a host `/dev` bind plus a post-start helper so rebuilt devcontainers can re-expose `/dev/serial/by-id` directly when the host provides it.
 - The live F9P was correctly exposed as `/dev/ttyACM0` and identified via sysfs
   as `u-blox GNSS receiver`.
 - The live UM982 was correctly exposed in sysfs as `ttyUSB0` (`1a86:7523`,
@@ -244,7 +245,7 @@ Results:
 
 ## Next Small Steps
 
-1. Expose working `/dev/serial/by-id` symlinks inside the runtime and prefer them in installer/operator flows so stale `/dev/tty*` nodes cannot mislead hardware validation.
+1. Confirm the rebuilt devcontainer/runtime sees the host `/dev/serial/by-id` entries on target boards and keep raw tty/sysfs checks as a diagnostic fallback only.
 2. Decide whether the current typed correction visibility is sufficient for the Unicore migration or whether a dedicated ROS projection for `RTCMSTATUSA`-equivalent detail is still needed before deleting the old Unicore path.
 3. Decide whether to keep the temporary GUI JSON adapter or promote `universal_gnss_ros2/msg/GnssStatus` into a first-class shared interface after more field validation.
 4. Decide whether to collapse the remaining installer aliases (`GNSS_BACKEND`, `GPS_*`) after enough migration runway has passed for older deployments.

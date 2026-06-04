@@ -62,13 +62,16 @@ docker exec mowgli-ros2 cat /ros2_ws/install/mowgli_bringup/share/mowgli_bringup
 
 ## Note on GPS device
 
-If your GPS receiver appears as `/dev/ttyUSB1` (or `/dev/gps` via udev) rather
-than the default, add a `devices` override in a `docker-compose.override.yaml`:
+Prefer wiring Universal GNSS to the stable `/dev/serial/by-id/...` path for
+your receiver. Use a raw `ttyUSB*` or `ttyACM*` node only as a temporary
+diagnostic fallback when by-id is unavailable.
+
+If you need a manual `devices` override, point it at the by-id path:
 
 ```yaml
 services:
   mowgli:
     devices:
       - /dev/mowgli:/dev/mowgli
-      - /dev/ttyUSB1:/dev/gps
+      - /dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00:/dev/gps
 ```

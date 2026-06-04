@@ -40,15 +40,18 @@ Set `mower_model` in `config/mowgli/mowgli_robot.yaml` to one of:
 
 ### Sensors and serial devices
 
-| Device | Required symlink | Default host port | USB IDs (for udev) |
+| Device | Preferred stable path | Compatibility symlink | USB IDs (for udev) |
 |---|---|---|---|
 | Mowgli STM32 board | `/dev/mowgli` | USB-CDC | `product=="Mowgli"` |
-| u-blox ZED-F9P (simpleRTK2B) | `/dev/gps` | USB-CDC | VID `1546` PID `01a9` |
-| u-blox RTK1010Board (ESP USB-CDC) | `/dev/gps` | USB-CDC | VID `303a` PID `4001` |
+| u-blox ZED-F9P (simpleRTK2B) | `/dev/serial/by-id/...` | `/dev/gps` | VID `1546` PID `01a9` |
+| u-blox RTK1010Board (ESP USB-CDC) | `/dev/serial/by-id/...` | `/dev/gps` | VID `303a` PID `4001` |
 | LDRobot LD19 LiDAR | `/dev/ttyS1` (hardware UART) | UART | — |
 
 The LiDAR connects to a hardware UART on the compute board, not USB. Set
 `LIDAR_PORT` in `.env` if your board exposes it differently.
+
+For Universal GNSS, prefer the stable `/dev/serial/by-id/...` receiver path in
+`.env` and let `/dev/gps` remain a compatibility symlink only.
 
 ---
 
@@ -161,9 +164,10 @@ Copy `.env.example` to `.env` and edit. All keys and their defaults:
 | `LIDAR_IMAGE` | `ghcr.io/cedbossneo/mowgli-docker/lidar:v3` | LD19 LiDAR driver |
 | `GUI_IMAGE` | `ghcr.io/cedbossneo/openmower-gui:v3` | OpenMower GUI |
 
-The GPS host device defaults to `/dev/ttyACM1` if `GPS_PORT` is not set
-(see the `devices` mapping in `docker-compose.yaml`). Add `GPS_PORT` to
-`.env` if your receiver appears on a different node.
+For Universal GNSS, set `GNSS_SERIAL_DEVICE=/dev/serial/by-id/...` and keep
+`GPS_PORT` aligned with the same by-id path when you need the legacy
+compatibility keys. Use raw `ttyACM*` or `ttyUSB*` paths only as a temporary
+diagnostic fallback when `/dev/serial/by-id` is unavailable.
 
 ### `mowgli_robot.yaml` key parameters
 

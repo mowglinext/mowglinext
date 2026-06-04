@@ -126,6 +126,16 @@ configure_gps() {
     : "${GPS_DEBUG_PORT:=/dev/gps_debug}"
     : "${GPS_DEBUG_BAUD:=115200}"
 
+    # USB presets should still resolve to a stable by-id path before the
+    # Universal GNSS env contract is written. Falling back to /dev/gps or a
+    # raw tty node hides the operator-facing device choice that we want to
+    # preserve across re-enumeration.
+    if [[ "${GPS_CONNECTION}" == "usb" ]] && [[ -z "${GPS_BY_ID:-}" ]]; then
+      pick_serial_by_id "${GPS_BY_ID:-}" || return 1
+      GPS_BY_ID="$REPLY"
+      GPS_PORT="${GPS_BY_ID}"
+    fi
+
     # For USB connections, prefer the by-id symlink as GPS_PORT — it's always
     # created by systemd-udev and is what start_gps.sh expects via
     # GPS_DEVICE_PATH inside the container. /dev/gps would require an extra

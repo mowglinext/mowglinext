@@ -44,7 +44,7 @@ Preferred env contract:
 - `GNSS_STACK=universal`
 - `GNSS_RECEIVER_FAMILY=auto|ublox|unicore|nmea`
 - `GNSS_TRANSPORT=serial`
-- `GNSS_SERIAL_DEVICE=/dev/...`
+- `GNSS_SERIAL_DEVICE=/dev/serial/by-id/...`
 - `GNSS_SERIAL_BAUD=921600`
 - `GNSS_NTRIP_ENABLED=true|false`
 - `GNSS_NTRIP_HOST`, `GNSS_NTRIP_PORT`, `GNSS_NTRIP_MOUNTPOINT`
@@ -67,16 +67,18 @@ Recommended validation/default baud for advanced profiles is `921600`.
 Latest live validation on June 4, 2026:
 
 - Universal GNSS was validated successfully on a live u-blox F9P and a live Unicore UM982 at `921600`.
-- The corrected receiver paths in that session were `/dev/ttyACM0` for the F9P and `/dev/ttyUSB0` for the UM982.
+- The preferred stable receiver paths are `/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00` for the F9P and `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` for the UM982.
+- The corrected raw tty mappings in that session were `/dev/ttyACM0` for the F9P and `/dev/ttyUSB0` for the UM982.
 - The generated universal compose stayed free of `mowgli-gps`, `gnss_unicore`, and standalone GNSS sidecars.
 - The F9P stayed in RTK float during the sampled NTRIP window.
 - The UM982 accepted corrections, exposed correction age through typed status, and intermittently promoted into RTK float during the sampled window.
 - The current Unicore limitation is not device access anymore; it is that `RTCMSTATUSA` still has no dedicated ROS projection beyond the generic correction diagnostics.
+- The devcontainer now mounts the host `/dev` tree at `/host-dev` and re-exposes `/dev/serial/by-id` inside the container when the host provides it.
 
 ## Troubleshooting
 
-- No `/gps/fix`: confirm the selected serial device exists inside the runtime and the receiver baud matches the installer-generated `.env`.
-- Wrong receiver path: inspect `/dev/serial/by-id` first. If that is unavailable, confirm the actual USB device identity through `/sys/class/tty/*/../manufacturer` and `/sys/class/tty/*/../product` before assuming `ttyACM0` or `ttyUSB0`.
+- No `/gps/fix`: confirm the selected `/dev/serial/by-id/...` device exists inside the runtime and the receiver baud matches the installer-generated `.env`.
+- Wrong receiver path: inspect `/dev/serial/by-id` first and wire `GNSS_SERIAL_DEVICE` to that stable symlink. If by-id is unavailable, use `/sys/class/tty/*/../manufacturer` and `/sys/class/tty/*/../product` only as a diagnostic fallback before touching raw `ttyACM*` or `ttyUSB*`.
 - Stale `/dev/tty*` entries in a container can survive old hardware layouts. When `/dev` and `/sys/class/tty` disagree, trust the live sysfs mapping rather than the stale node list.
 - No RTK corrections: confirm NTRIP settings in `docker/.env` and `docker/config/mowgli/mowgli_robot.yaml`, then check `/rtcm` and `/diagnostics`.
 - No direct GNSS container in compose: this is expected in `GNSS_STACK=universal`; Universal GNSS now runs inside `mowgli-ros2`.
