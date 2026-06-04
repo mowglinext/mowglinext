@@ -137,20 +137,116 @@ Receiver
 
 ### Hardware Validation
 
-Hardware validation is currently blocked in this devcontainer:
+Corrected real hardware validation was re-run on June 4, 2026 after the extra
+ArduPilot USB device was removed from the setup.
 
-- `/dev/ttyACM0` not present
-- `/dev/ttyUSB0` not present
-- `/dev/serial/by-id` not present
-- `/dev/bus/usb` not present
-- `docker` CLI not available in the container
+Sanitized commands used:
 
-That means serial, USB, live NTRIP, RTCM injection, and runtime compose validation could not be executed from this environment.
+- `ros2 launch mowgli_bringup universal_gnss.launch.py receiver_family:=ublox serial_device:=/dev/ttyACM0 serial_baud:=921600 ntrip_enabled:=true caster_host:=<host> caster_port:=2101 mountpoint:=<mountpoint> username:=<username> password:=<redacted> status_topic:=/gps/status fix_topic:=/gps/fix diagnostics_topic:=/diagnostics rtcm_topic:=/rtcm`
+- `ros2 launch mowgli_bringup universal_gnss.launch.py receiver_family:=unicore serial_device:=/dev/ttyUSB0 serial_baud:=921600 ntrip_enabled:=true caster_host:=<host> caster_port:=2101 mountpoint:=<mountpoint> username:=<username> password:=<redacted> status_topic:=/gps/status fix_topic:=/gps/fix diagnostics_topic:=/diagnostics rtcm_topic:=/rtcm`
+- `bash install/tests/test_compose_validity.sh`
+
+Observed device reality in the validation container:
+
+- `/dev/serial/by-id` was still unavailable in this devcontainer, so stable
+  by-id selection could not be used here.
+- The live F9P was correctly exposed as `/dev/ttyACM0` and identified via sysfs
+  as `u-blox GNSS receiver`.
+- The live UM982 was correctly exposed in sysfs as `ttyUSB0` (`1a86:7523`,
+  `USB Serial`) and validated as `/dev/ttyUSB0`.
+- Stale `/dev/ttyACM1` and `/dev/ttyACM2` nodes could still exist in `/dev`
+  without matching live sysfs entries, so direct `/dev/tty*` assumptions remain
+  less reliable than by-id paths.
+
+F9P result:
+
+- Receiver family: `ublox`
+- Device path: `/dev/ttyACM0`
+- Configured baud: `921600`
+- Universal GNSS topics were live:
+  - `/gps/fix`
+  - `/gps/status`
+  - `/diagnostics`
+  - `/rtcm`
+- `/gps/status` had exactly one publisher and it was `universal_gnss_receiver`.
+- Live NTRIP succeeded against the local caster without writing credentials into
+  the repository or validation notes.
+- Receiver-side RTCM activity was confirmed through diagnostics:
+  - `forwarded_frame_count=557`
+  - `receiver_rtcm_messages_seen=557`
+  - `receiver_rtcm_messages_used=557`
+  - `receiver_rtcm_messages_not_used=0`
+  - `receiver_rtcm_crc_failed=0`
+  - `receiver_last_message_type=1127`
+- NTRIP-side RTCM forwarding was also active:
+  - `published_frame_count=557`
+  - `last_message_type=1127`
+- `/gps/fix` and `/gps/status` both reported a live position fix.
+- RTK mode stayed at `rtk_mode=2` (`FLOAT`) throughout the sampled 20-second
+  status window.
+- RTK fixed was not observed during this validation session.
+
+UM982 result:
+
+- Receiver family: `unicore`
+- Device path: `/dev/ttyUSB0`
+- Configured baud: `921600`
+- Universal GNSS topics were live:
+  - `/gps/fix`
+  - `/gps/status`
+  - `/diagnostics`
+  - `/rtcm`
+- `/gps/status` had exactly one publisher and it was `universal_gnss_receiver`.
+- Live NTRIP succeeded against the same local caster.
+- Correction delivery was visible through the typed Universal GNSS path:
+  - `correction_available=true`
+  - `forwarded_frame_count=312`
+  - `published_frame_count=312`
+  - `last_message_type=1127`
+  - `correction_age_s` sampled between roughly `0.4` and `1.3`
+- `/gps/status` mostly reported `fix_type=2`, `rtk_mode=1` (plain fix / no RTK)
+  but did intermittently promote to `fix_type=3`, `rtk_mode=2` (`RTK FLOAT`)
+  during the sampled 20-second window.
+- Post-session wire sampling confirmed live Unicore correction-state records:
+  - `BESTNAVA` and `PVTSLNA` switched to `PSRDIFF`
+  - `RTKSTATUSA` was present on the raw stream
+- `RTCMSTATUSA` was not observed in the sampled raw output windows.
+- Current Universal GNSS behavior matches the upstream runtime mapping:
+  - `RTKSTATUSA` meaning is surfaced through typed `/gps/status`
+  - `RTCMSTATUSA` is parsed semantically but is not projected into a dedicated
+    ROS status field yet
+  - the current equivalent correction visibility therefore comes from `/rtcm`,
+    `correction_age_s`, `correction_available`, and `RTCM forwarding active`
+    diagnostics instead of a literal `RTCMSTATUSA` field
+
+Compose/runtime validation from the same milestone:
+
+- Installer-side universal compose validation passed and the generated
+  universal stack omitted `mowgli-gps`, `gnss_unicore`, and standalone GNSS
+  sidecars.
+- A direct `docker compose up` check could not be run in this devcontainer because the Docker CLI is not available here.
+
+Requested regression suite executed after live validation:
+
+- `bash install/tests/test_env_output.sh`
+- `bash install/tests/test_gps_matrix.sh`
+- `bash install/tests/test_compose_validity.sh`
+- `PACKAGES="mowgli_interfaces mowgli_localization universal_gnss_ros2 mowgli_bringup" ros2/scripts/build.sh`
+- `PACKAGES="mowgli_localization universal_gnss_ros2 mowgli_bringup" ros2/scripts/test.sh`
+- `cd gui && go test ./pkg/providers -run 'TestAdaptGnssStatus' -count=1`
+
+Results:
+
+- Installer tests passed.
+- Focused ROS2 build passed.
+- Focused ROS2 tests passed with `160 tests, 0 errors, 0 failures, 23 skipped`.
+- GUI provider GNSS adapter test passed.
 
 ## Next Small Steps
 
-1. Validate the new `mowgli_bringup` Universal GNSS wrapper on real hardware with `use_universal_gnss:=true`, `GNSS_STATUS_SOURCE=universal`, and the real serial/NTRIP paths.
-2. Decide whether to keep the temporary GUI JSON adapter or promote `universal_gnss_ros2/msg/GnssStatus` into a first-class shared interface after field validation.
-3. Decide whether to collapse the remaining installer aliases (`GNSS_BACKEND`, `GPS_*`) after enough migration runway has passed for older deployments.
-4. Replace the remaining vendor-specific runtime split (`sensors/gps` vs `sensors/unicore`) with one GNSS service once Universal GNSS owns both receivers.
-5. Remove `gnss_runtime_state_builder.cpp` and the old diagnostics-driven status path only after the replacement is validated on hardware.
+1. Expose working `/dev/serial/by-id` symlinks inside the runtime and prefer them in installer/operator flows so stale `/dev/tty*` nodes cannot mislead hardware validation.
+2. Decide whether the current typed correction visibility is sufficient for the Unicore migration or whether a dedicated ROS projection for `RTCMSTATUSA`-equivalent detail is still needed before deleting the old Unicore path.
+3. Decide whether to keep the temporary GUI JSON adapter or promote `universal_gnss_ros2/msg/GnssStatus` into a first-class shared interface after more field validation.
+4. Decide whether to collapse the remaining installer aliases (`GNSS_BACKEND`, `GPS_*`) after enough migration runway has passed for older deployments.
+5. Replace the remaining vendor-specific runtime split (`sensors/gps` vs `sensors/unicore`) with one GNSS service once Universal GNSS owns both receivers.
+6. Remove `gnss_runtime_state_builder.cpp` and the old diagnostics-driven status path only after the replacement is validated on both u-blox and Unicore hardware and after a real compose-up check is completed outside this Docker-less devcontainer.
