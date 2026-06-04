@@ -23,37 +23,13 @@ rm -rf src/install src/build src/log
 # Do not build a workspace copy if one is present from older tests.
 rm -f src/fields2cover src/Fields2Cover
 
-# ---------------------------------------------------------------------------
-# Symlink ROS2 packages from monorepo into workspace src/
-#
-# The workspace is /ros2_ws, the monorepo is bind-mounted at
-# /ros2_ws/src/mowglinext. We symlink each mowgli_* package into src/
-# so colcon discovers them at the workspace root, plus fusion_graph.
-# ---------------------------------------------------------------------------
+SYNC_WORKSPACE_SCRIPT="/ros2_ws/src/mowglinext/ros2/scripts/sync_workspace_packages.sh"
+"${SYNC_WORKSPACE_SCRIPT}"
+mapfile -t BUILD_PATHS < <("${SYNC_WORKSPACE_SCRIPT}" --print-base-paths)
 
-echo "Linking ROS2 packages into workspace..."
-
-mkdir -p src
-
-for pkg_dir in src/mowglinext/ros2/src/mowgli_*/; do
-    [ -d "$pkg_dir" ] || continue
-    pkg_name=$(basename "$pkg_dir")
-    ln -sfn "/ros2_ws/$pkg_dir" "src/$pkg_name"
-    echo "  Linked: $pkg_name"
-done
-
-# OpenNav coverage packages.
-for pkg_dir in src/mowglinext/ros2/src/opennav_coverage/*/; do
-    if [ -f "${pkg_dir}/package.xml" ]; then
-        pkg_name=$(basename "$pkg_dir")
-        ln -sfn "/ros2_ws/$pkg_dir" "src/$pkg_name"
-        echo "  Linked: $pkg_name"
-    fi
-done
-
-if [ -d "src/mowglinext/ros2/src/fusion_graph" ]; then
-    ln -sfn "/ros2_ws/src/mowglinext/ros2/src/fusion_graph" "src/fusion_graph"
-    echo "  Linked: fusion_graph"
+if [ "${#BUILD_PATHS[@]}" -eq 0 ]; then
+    echo "No ROS2 package roots were linked into /ros2_ws/src."
+    exit 1
 fi
 
 # ---------------------------------------------------------------------------
@@ -85,10 +61,10 @@ rosdep install \
 # ---------------------------------------------------------------------------
 echo "Building workspace (this may take a few minutes on first run)..."
 
-# unicore_gnss is a stub package.xml under sensors/unicore/ with no CMakeLists.
-# fields2cover is provided as a system dependency, not built as a ROS package.
+# Build only the symlinked package roots so nested package.xml files under the
+# monorepo tree do not leak into discovery.
 colcon build \
-    --packages-ignore unicore_gnss fields2cover \
+    --base-paths "${BUILD_PATHS[@]}" \
     --cmake-args \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_TESTING=OFF \

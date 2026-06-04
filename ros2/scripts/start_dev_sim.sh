@@ -8,26 +8,28 @@
 # Usage (via docker compose):
 #   docker compose up dev-sim
 # =============================================================================
-set -e
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 VNC_PORT="${VNC_PORT:-5901}"
 NOVNC_PORT="${NOVNC_PORT:-6080}"
 VNC_RESOLUTION="${VNC_RESOLUTION:-1280x720}"
 
+set +u
 source /opt/ros/kilted/setup.bash
+set -u
 
 # ---- Build workspace if install tree is empty or stale ----------------------
 if [ ! -f /ros2_ws/install/setup.bash ]; then
     echo "=== First run: building full workspace from mounted sources ==="
-    cd /ros2_ws
-    colcon build \
-        --cmake-args -DCMAKE_BUILD_TYPE=Release \
-        --parallel-workers "$(nproc)" \
-        --event-handlers console_cohesion+
+    BUILD_TYPE=Release "${SCRIPT_DIR}/build.sh"
     echo "=== Build complete ==="
 fi
 
+set +u
 source /ros2_ws/install/setup.bash
+set -u
 
 # ---- Start VNC server -------------------------------------------------------
 echo "=== Starting VNC server on :1 (${VNC_RESOLUTION}) ==="

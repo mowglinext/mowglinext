@@ -1,92 +1,47 @@
 # Deployment
 
-Docker Compose deployment for MowgliNext.
+MowgliNext is deployed through an installer-generated compose stack written to `docker/docker-compose.yaml`.
 
-## Deployment Modes
+## Compose Generation
 
-### Standard (All-in-One)
+The installer selects fragments from `install/compose/` based on hardware choices:
 
-All services on one board:
+- `docker-compose.base.yml`
+- `docker-compose.gui.yml`
+- one GNSS fragment:
+  - `docker-compose.gps.yml` for the shared GPS service
+  - `docker-compose.unicore.yaml` for the UM98x path
+- optional LiDAR / MAVROS / TF-Luna fragments
 
-```bash
-cd docker
-docker compose up -d
+## Runtime Services
+
+| Container | Purpose |
+|-----------|---------|
+| `mowgli-ros2` | Main ROS2 stack, localization, Nav2, behavior tree, API |
+| `mowgli-gps` | GNSS runtime selected by the installer |
+| `mowgli-lidar` | LiDAR runtime when enabled |
+| `mowgli-gui` | Web UI |
+| `mowgli-mqtt` | MQTT broker |
+| `mowgli-watchtower` | Image updates |
+
+## GNSS Deployment Shape
+
+```text
+GNSS_BACKEND=gps
+  -> install/compose/docker-compose.gps.yml
+  -> sensors/gps/start_gps.sh
+
+GNSS_BACKEND=unicore
+  -> install/compose/docker-compose.unicore.yaml
+  -> sensors/unicore/start_gps.sh
 ```
 
-Services: `mowgli` (ROS2 full stack), `gps`, `lidar`, `gui`, `mosquitto`, `watchtower`
+`GNSS_BACKEND=ublox` is still accepted as a compatibility preset, but it resolves onto the shared GPS service instead of a separate container.
 
-### Simulation
-
-For testing without hardware — see the [Simulation](Simulation) page for full details:
-
-```bash
-cd docker
-
-# Headless (CI / automated testing)
-docker compose -f docker-compose.simulation.yaml up simulation
-
-# Development with live config mounts
-docker compose -f docker-compose.simulation.yaml up dev-sim
-
-# GUI via noVNC browser
-docker compose -f docker-compose.simulation.yaml up simulation-gui
-```
-
-## Container Architecture
-
-| Container | Image | Purpose |
-|-----------|-------|---------|
-| `mowgli` | `mowgli-ros2` | Full ROS2 stack (Nav2, SLAM, BT, coverage) |
-| `mowgli-gps` | `sensors/gps` | u-blox driver + NTRIP RTK |
-| `mowgli-lidar` | `sensors/lidar` | LD19 LiDAR driver |
-| `gui` | `openmower-gui` | Web interface (Go + React) |
-| `mosquitto` | `eclipse-mosquitto` | MQTT broker |
-| `watchtower` | `containrrr/watchtower` | Auto-updates (GUI image) |
-
-## DDS Configuration
-
-All ROS2 containers use **Cyclone DDS** with shared config and localhost-only discovery:
-
-```xml
-<!-- docker/config/cyclonedds.xml -->
-<CycloneDDS>
-  <Domain id="any">
-    <General>
-      <Interfaces>
-        <NetworkInterface autodetermine="true"/>
-      </Interfaces>
-    </General>
-    <Discovery>
-      <MaxAutoParticipantIndex>120</MaxAutoParticipantIndex>
-    </Discovery>
-  </Domain>
-</CycloneDDS>
-```
-
-All containers share this environment for DDS:
-
-```yaml
-ROS_DOMAIN_ID: 0
-RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
-CYCLONEDDS_URI: file:///cyclonedds.xml
-ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
-```
-
-## Updating
-
-Images auto-update via Watchtower, or manually:
-
-```bash
-docker compose pull
-docker compose up -d
-```
+`GNSS_STATUS_SOURCE=universal` hands the typed `/gps/status` topic over to Universal GNSS while Mowgli keeps `/gps/absolute_pose` and `/gps/pose_cov` for downstream localization consumers.
 
 ## Troubleshooting
 
-See the [full troubleshooting section](https://github.com/cedbossneo/mowglinext/blob/main/docker/README.md#troubleshooting) in the Docker README.
-
-Common issues:
-- **DDS discovery fails** — check `ROS_DOMAIN_ID` matches across containers
-- **GPS no fix** — verify NTRIP credentials and serial device
-- **LiDAR no /scan** — check UART baud rate and device path
-- **Nav2 timeout** — increase startup delay for ARM boards
+- No `/gps/fix`: confirm the selected device path exists inside the runtime and the receiver baud matches the installer-generated `.env`.
+- No RTK corrections: confirm NTRIP settings in `docker/config/mowgli/mowgli_robot.yaml`, then check `/ntrip_client/rtcm` and `/diagnostics`.
+- Wrong compose shape: regenerate with the installer and inspect `docker/docker-compose.yaml` plus `docker/.env`.

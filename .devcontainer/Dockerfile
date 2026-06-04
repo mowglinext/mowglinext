@@ -110,6 +110,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # ── Diagnostics ──
     ros-kilted-diagnostic-msgs \
     ros-kilted-diagnostic-updater \
+    ros-kilted-rclcpp-components \
+    ros-kilted-rclcpp-lifecycle \
     # ── Bridges ──
     ros-kilted-foxglove-bridge \
     ros-kilted-rosbridge-suite \
@@ -117,6 +119,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-kilted-ublox-msgs \
     ros-kilted-nmea-msgs \
     ros-kilted-rtcm-msgs \
+    ros-kilted-geometry-msgs \
+    ros-kilted-nav-msgs \
+    ros-kilted-sensor-msgs \
+    ros-kilted-std-msgs \
     # ── Gazebo Harmonic (headless simulation) ──
     ros-kilted-ros-gz-sim \
     ros-kilted-ros-gz-bridge \
@@ -130,6 +136,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     git \
+    libcurl4-openssl-dev \
+    libusb-1.0-0-dev \
     # ── Runtime deps ──
     libtinyxml2-dev \
     python3-argcomplete \

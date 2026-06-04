@@ -47,32 +47,16 @@ help:
 # ─── Build ─────────────────────────────────────────────────────────────────────
 
 build:
-	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
-	colcon build \
-	  --cmake-args \
-	    -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
-	  --parallel-workers $$(nproc) \
-	  --symlink-install \
-	  --event-handlers console_cohesion+
+	BUILD_TYPE=$(BUILD_TYPE) ./scripts/build.sh
 
 build-debug:
 	$(MAKE) build BUILD_TYPE=Debug
 
 build-pkg:
-	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
-	source install/setup.bash 2>/dev/null; \
-	colcon build \
-	  --packages-select $(PKG) \
-	  --cmake-args \
-	    -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
-	  --parallel-workers $$(nproc) \
-	  --symlink-install
+	PACKAGES="$(PKG)" BUILD_TYPE=$(BUILD_TYPE) ./scripts/build.sh
 
 test:
-	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
-	source install/setup.bash && \
-	colcon test --return-code-on-test-failure && \
-	colcon test-result --verbose
+	./scripts/test.sh
 
 clean:
 	rm -rf build/ install/ log/

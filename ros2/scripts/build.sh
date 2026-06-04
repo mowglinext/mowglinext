@@ -17,16 +17,27 @@
 # NOTE: Make this script executable on the host before use:
 #   chmod +x scripts/build.sh
 # =============================================================================
-set -e
+set -euo pipefail
 
 WORKSPACE=/ros2_ws
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 PARALLEL_WORKERS=$(nproc)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SYNC_WORKSPACE_SCRIPT="${SCRIPT_DIR}/sync_workspace_packages.sh"
 
 cd "${WORKSPACE}"
 
 # shellcheck source=/opt/ros/kilted/setup.bash
+set +u
 source /opt/ros/${ROS_DISTRO:-kilted}/setup.bash
+set -u
+
+mapfile -t BUILD_PATHS < <("${SYNC_WORKSPACE_SCRIPT}" --print-base-paths)
+
+if [ "${#BUILD_PATHS[@]}" -eq 0 ]; then
+    echo "ERROR: No ROS2 package roots were linked into ${WORKSPACE}/src." >&2
+    exit 1
+fi
 
 echo "======================================================="
 echo " Mowgli ROS2 workspace build"
@@ -42,14 +53,18 @@ echo "======================================================="
 if [ -n "${PACKAGES}" ]; then
     # shellcheck disable=SC2086
     colcon build \
+        --base-paths "${BUILD_PATHS[@]}" \
         --packages-select ${PACKAGES} \
         --cmake-args -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
         --parallel-workers "${PARALLEL_WORKERS}" \
+        --symlink-install \
         --event-handlers console_cohesion+
 else
     colcon build \
+        --base-paths "${BUILD_PATHS[@]}" \
         --cmake-args -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
         --parallel-workers "${PARALLEL_WORKERS}" \
+        --symlink-install \
         --event-handlers console_cohesion+
 fi
 

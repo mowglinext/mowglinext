@@ -16,6 +16,14 @@
   // Mount the repo at /ros2_ws/src (ROS2 workspace convention)
   "workspaceMount": "source=${localWorkspaceFolder},target=/ros2_ws/src/mowglinext,type=bind",
   "workspaceFolder": "/ros2_ws/src/mowglinext",
+  // Local robot bringup expects direct access to USB/UART receivers after a
+  // devcontainer rebuild on the host machine.
+  "runArgs": [
+    "--privileged"
+  ],
+  "mounts": [
+    "source=/home/pepeuch/Documents/vscode/tondeuse/universal-gnss,target=/workspaces/universal-gnss,type=bind"
+  ],
 
   // Forward ports for visualization and debugging
   "forwardPorts": [
@@ -46,7 +54,8 @@
     "ROS_DOMAIN_ID": "0",
     "ROS_AUTOMATIC_DISCOVERY_RANGE": "LOCALHOST",
     "RCUTILS_COLORIZED_OUTPUT": "1",
-    "RCUTILS_LOGGING_USE_STDOUT": "1"
+    "RCUTILS_LOGGING_USE_STDOUT": "1",
+    "UNIVERSAL_GNSS_PATH": "/workspaces/universal-gnss"
   },
 
   // VS Code extensions for ROS2 + GUI + firmware development
