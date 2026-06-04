@@ -84,7 +84,9 @@ Latest live validation on June 4, 2026:
 | `GPS_*` compatibility keys | Still required | USB by-id selection, UART fallback, baud probing, udev rules, and legacy compose fragments still consume them. |
 | `install/compose/docker-compose.gps.yml` | Legacy fallback only | Remove only after shared GPS legacy fallback is retired. |
 | `install/compose/docker-compose.unicore.yaml` | Legacy fallback only | Remove only after UM98x legacy fallback is retired. |
-| `install/compose/docker-compose.nmea.yaml` | Removable now | Removed; no backend maps to a standalone NMEA fragment. |
+| `install/compose/docker-compose.nmea.yaml` | Removed | Removed in Milestone 8; no backend maps to a standalone NMEA fragment. |
+| `NMEA_IMAGE` | Removed | No longer written to `.env`; NMEA is not a separate sidecar image. |
+| `ublox_gnss.launch.py` / `ublox_gnss.yaml` | Removed | Superseded by Universal GNSS and the retained shared GPS legacy fallback. |
 | `mowgli-gps` direct GNSS container | Legacy fallback only | Keep only for `GNSS_STACK=legacy`; universal compose tests reject it. |
 | `gnss_unicore` service | Legacy fallback only | Keep only for `GNSS_STACK=legacy`; universal compose tests reject it. |
 | Universal GNSS inside `mowgli-ros2` | Still required | This is the preferred production path. |

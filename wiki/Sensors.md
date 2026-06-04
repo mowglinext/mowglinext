@@ -47,8 +47,8 @@ Legacy-only status path
 - The UM982 mostly stayed in a plain fix state but did intermittently promote into RTK float while corrections were active.
 - Raw UM982 output after the NTRIP session showed `PSRDIFF` position solutions and `RTKSTATUSA` records on the wire.
 - `RTCMSTATUSA` was not observed in the sampled raw output windows, and Universal GNSS still treats it as semantic-only rather than a dedicated ROS status field.
-- The old standalone NMEA container path has been removed. NMEA now routes through Universal GNSS by default and through `sensors/gps/start_gps.sh` only in `GNSS_STACK=legacy`.
-- The old standalone `ublox_gnss.launch.py` bringup has been removed.
+- The old standalone NMEA container path was removed in Milestone 8. NMEA now routes through Universal GNSS by default and through `sensors/gps/start_gps.sh` only in `GNSS_STACK=legacy`.
+- The old standalone `ublox_gnss.launch.py` bringup and `ublox_gnss.yaml` config were removed in Milestone 8.
 - `GNSS_STATUS_SOURCE=universal` disables the Mowgli-local `/gps/status` publisher and skips the local `/diagnostics` GNSS parser subscription.
 - In universal mode, Universal GNSS owns `/gps/fix`, `/gps/status`, `/diagnostics`, and `/rtcm`.
 - The GUI/backend still consumes `/gps/status` through the existing Mowgli schema, but that shape is now produced by a thin backend adapter in universal mode instead of new frontend vendor parsing.
@@ -64,7 +64,9 @@ Legacy-only status path
 |------|----------------|-------------|
 | `sensors/gps/` | Legacy fallback only | Keep until `GNSS_STACK=legacy` and old u-blox/NMEA recovery paths are retired. |
 | `sensors/unicore/` | Legacy fallback only | Keep until UM98x legacy fallback and validation scripts are retired. |
-| `sensors/nmea/` | Removable now | Removed; standalone NMEA now has no active runtime path. |
+| `sensors/nmea/` | Removed | Removed in Milestone 8; standalone NMEA now has no active runtime path. |
+| `sensors/gps/serial_ublox_driver.py` | Removed | Removed in Milestone 8; the legacy u-blox fallback uses `ublox_dgnss_node` from `sensors/gps/start_gps.sh`. |
+| `ublox_gnss.launch.py` / `ublox_gnss.yaml` | Removed | Removed in Milestone 8; Universal GNSS uses `universal_gnss.launch.py`, and legacy fallback uses the shared GPS container. |
 | `gnss_runtime_state_builder.cpp` | Legacy fallback only | Keep while Mowgli-local `/gps/status` reconstruction remains test-covered. |
 | `gps_health_aggregator.py` | Legacy fallback only | Keep with `sensors/gps/start_gps.sh`. |
 | `rtcm_serial_bridge.py` | Legacy fallback only | Keep with legacy NMEA RTCM injection. |

@@ -50,7 +50,7 @@ This document records the current GNSS integration state of MowgliNext while Uni
 - `GNSS_STACK=legacy` still selects the old direct GNSS fragments:
   - `install/compose/docker-compose.gps.yml` for `gps` and `ublox`
   - `install/compose/docker-compose.unicore.yaml` for `unicore`
-- The dormant standalone NMEA compose fragment has been removed in this cleanup step.
+- The dormant standalone NMEA compose fragment was removed during the Milestone 8 targeted cleanup.
 
 ### Runtime Stacks
 
@@ -71,10 +71,10 @@ This document records the current GNSS integration state of MowgliNext while Uni
 |-----------|----------------|-----------------------------------|-------------------|
 | `sensors/gps/` | Legacy fallback only | `GNSS_STACK=universal` does not add `docker-compose.gps.yml`; `test_compose_validity.sh` rejects `sensors/gps`, `gps_health_aggregator.py`, `rtcm_serial_bridge.py`, `nmea_navsat_driver`, and `ublox_dgnss_node` in generated universal compose. | Pending until `GNSS_STACK=legacy` is removed. |
 | `sensors/unicore/` | Legacy fallback only | `GNSS_STACK=universal` does not add `docker-compose.unicore.yaml`; compose tests reject `sensors/unicore` and `gnss_unicore` in generated universal compose. | Pending until the legacy UM98x fallback and live validation scripts are retired. |
-| `sensors/nmea/` | Removable now | No universal compose or launch path references the standalone NMEA sidecar; generic NMEA now routes through Universal GNSS or the legacy shared GPS fallback. | Already removed in the current cleanup set. |
+| `sensors/nmea/` | Removed | No universal compose or launch path references the standalone NMEA sidecar; generic NMEA now routes through Universal GNSS or the legacy shared GPS fallback. | Removed in Milestone 8. |
 | `install/compose/docker-compose.gps.yml` | Legacy fallback only | Added only when `GNSS_STACK=legacy` and backend resolves to `gps`; installer matrix tests reject it for universal presets. | Pending until legacy fallback compose is removed. |
 | `install/compose/docker-compose.unicore.yaml` | Legacy fallback only | Added only when `GNSS_STACK=legacy` and backend resolves to `unicore`; installer matrix tests reject it for universal presets. | Pending until legacy fallback compose is removed. |
-| `install/compose/docker-compose.nmea.yaml` | Removable now | No supported backend maps to this fragment; NMEA is not a separate universal sidecar. | Already removed in the current cleanup set. |
+| `install/compose/docker-compose.nmea.yaml` | Removed | No supported backend maps to this fragment; NMEA is not a separate universal sidecar. | Removed in Milestone 8. |
 | `GNSS_BACKEND` | Still required | Installer, env parsing, checks, compatibility presets, and legacy compose mapping still consume it. | Keep until preset migration and `GNSS_STACK=legacy` removal are complete. |
 | `GPS_*` env keys | Still required | Installer tests cover USB by-id selection, UART fallback, baud probing, udev rules, and legacy compose compatibility. Universal launch also uses `GPS_BY_ID`/`GPS_PORT` as fallback inputs when the new `GNSS_SERIAL_*` keys are absent. | Keep until older `.env` files and udev helpers no longer need compatibility. |
 | `gnss_runtime_state_builder.cpp` | Legacy fallback only | `navsat_to_absolute_pose_node` uses it only when `publish_gnss_status=true`; universal launch/tests set this false and assert no local `/gps/status` publisher or `/diagnostics` parser subscription. | Pending until legacy Mowgli-local `/gps/status` reconstruction is removed. |
@@ -105,7 +105,7 @@ No additional source files are safe to delete at this milestone because every re
 
 ## Low-Risk Cleanup Applied
 
-The following clearly obsolete paths were removed:
+The following clearly obsolete paths were removed by the targeted legacy GNSS cleanup:
 
 - `install/compose/docker-compose.nmea.yaml`
 - `sensors/nmea/`
@@ -115,7 +115,13 @@ The following clearly obsolete paths were removed:
 - `install/tests/test_ublox_runtime.sh`
 - `NMEA_IMAGE` is no longer written into `docker/.env`
 
-These removals reduce dead GNSS surface area without changing the active runtime graph.
+Verification notes for those removals:
+
+- `GNSS_STACK=universal` runs Universal GNSS inside `mowgli-ros2` and does not reference any of the removed files.
+- `GNSS_STACK=legacy` still routes through `install/compose/docker-compose.gps.yml` or `install/compose/docker-compose.unicore.yaml`; it does not require the standalone NMEA sidecar or the old dedicated u-blox bringup.
+- The shared GPS legacy fallback uses `sensors/gps/start_gps.sh`, `ublox_dgnss_node`, `nmea_navsat_driver`, `gps_health_aggregator.py`, and `rtcm_serial_bridge.py`; those retained files remain intentionally in-tree.
+
+These removals reduce dead GNSS surface area without changing either the preferred Universal runtime graph or the retained legacy fallback graph.
 
 ## Target Architecture
 
