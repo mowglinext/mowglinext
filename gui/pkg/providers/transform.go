@@ -44,12 +44,12 @@ type rawVector3 struct {
 }
 
 type rawPose struct {
-	Position    rawPoint     `json:"position"`
+	Position    rawPoint      `json:"position"`
 	Orientation rawQuaternion `json:"orientation"`
 }
 
 type rawPoseWithCovariance struct {
-	Pose       rawPose    `json:"pose"`
+	Pose       rawPose     `json:"pose"`
 	Covariance [36]float64 `json:"covariance"`
 }
 
@@ -64,26 +64,102 @@ type rawTwistWithCovariance struct {
 }
 
 type rawNavSatStatus struct {
-	Status  int8  `json:"status"`
+	Status  int8   `json:"status"`
 	Service uint16 `json:"service"`
 }
 
 type rawNavSatFix struct {
-	Header             rawHeader       `json:"header"`
-	Status             rawNavSatStatus `json:"status"`
-	Latitude           float64         `json:"latitude"`
-	Longitude          float64         `json:"longitude"`
-	Altitude           float64         `json:"altitude"`
-	PositionCovariance [9]float64      `json:"position_covariance"`
-	PositionCovarianceType uint8       `json:"position_covariance_type"`
+	Header                 rawHeader       `json:"header"`
+	Status                 rawNavSatStatus `json:"status"`
+	Latitude               float64         `json:"latitude"`
+	Longitude              float64         `json:"longitude"`
+	Altitude               float64         `json:"altitude"`
+	PositionCovariance     [9]float64      `json:"position_covariance"`
+	PositionCovarianceType uint8           `json:"position_covariance_type"`
 }
 
 type rawOdometry struct {
-	Header          rawHeader             `json:"header"`
-	ChildFrameId    string                `json:"child_frame_id"`
-	Pose            rawPoseWithCovariance `json:"pose"`
-	Twist           rawTwistWithCovariance `json:"twist"`
+	Header       rawHeader              `json:"header"`
+	ChildFrameId string                 `json:"child_frame_id"`
+	Pose         rawPoseWithCovariance  `json:"pose"`
+	Twist        rawTwistWithCovariance `json:"twist"`
 }
+
+type rawUniversalGnssStatus struct {
+	Stamp                rawStamp `json:"stamp"`
+	FixValid             bool     `json:"fix_valid"`
+	FixType              uint8    `json:"fix_type"`
+	RtkMode              uint8    `json:"rtk_mode"`
+	CapabilityFlags      uint32   `json:"capability_flags"`
+	ValueFlags           uint32   `json:"value_flags"`
+	HorizontalAccuracyM  float32  `json:"horizontal_accuracy_m"`
+	VerticalAccuracyM    float32  `json:"vertical_accuracy_m"`
+	Hdop                 float32  `json:"hdop"`
+	Vdop                 float32  `json:"vdop"`
+	SatellitesUsed       uint16   `json:"satellites_used"`
+	SatellitesVisible    uint16   `json:"satellites_visible"`
+	SatellitesTracked    uint16   `json:"satellites_tracked"`
+	MeanCn0DbHz          float32  `json:"mean_cn0_db_hz"`
+	MaxCn0DbHz           float32  `json:"max_cn0_db_hz"`
+	CorrectionAgeS       float32  `json:"correction_age_s"`
+	HeadingDeg           float32  `json:"heading_deg"`
+	DualAntennaHeading   bool     `json:"dual_antenna_heading"`
+	InterferenceDetected bool     `json:"interference_detected"`
+	JammingDetected      bool     `json:"jamming_detected"`
+}
+
+const (
+	mowgliFixTypeNoFix          = 0
+	mowgliFixTypeGPSFix         = 1
+	mowgliFixTypeRTKFloat       = 2
+	mowgliFixTypeRTKFixed       = 3
+	mowgliFixTypeDeadReckoning  = 4
+	mowgliRtkModeUnknown        = 0
+	mowgliRtkModeNone           = 1
+	mowgliRtkModeFloat          = 2
+	mowgliRtkModeFixed          = 3
+	mowgliCapRtkMode            = 1
+	mowgliCapHdop               = 2
+	mowgliCapVdop               = 4
+	mowgliCapHorizontalAccuracy = 8
+	mowgliCapVerticalAccuracy   = 16
+	mowgliCapHeading            = 32
+	mowgliCapSatellitesUsed     = 128
+	mowgliCapSatellitesVisible  = 256
+	mowgliCapSatellitesTracked  = 512
+	mowgliCapCorrectionAge      = 4096
+	mowgliCapMeanCn0            = 8192
+	mowgliCapMaxCn0             = 16384
+	mowgliCapDualAntennaStatus  = 32768
+	mowgliCapInterferenceStatus = 65536
+	mowgliCapJammingStatus      = 131072
+
+	universalFixTypeUnknown        = 0
+	universalFixTypeNoFix          = 1
+	universalFixTypeFix            = 2
+	universalFixTypeRTKFloat       = 3
+	universalFixTypeRTKFixed       = 4
+	universalFixTypeDeadReckoning  = 5
+	universalRtkModeUnknown        = 0
+	universalRtkModeNone           = 1
+	universalRtkModeFloat          = 2
+	universalRtkModeFixed          = 3
+	universalCapRtkMode            = 1
+	universalCapHorizontalAccuracy = 2
+	universalCapVerticalAccuracy   = 4
+	universalCapHdop               = 8
+	universalCapVdop               = 16
+	universalCapSatellitesUsed     = 32
+	universalCapSatellitesVisible  = 64
+	universalCapSatellitesTracked  = 128
+	universalCapMeanCn0            = 256
+	universalCapMaxCn0             = 512
+	universalCapCorrectionAge      = 1024
+	universalCapHeading            = 2048
+	universalCapDualAntennaHeading = 4096
+	universalCapInterferenceState  = 8192
+	universalCapJammingState       = 16384
+)
 
 // ---------------------------------------------------------------------------
 // NavSatStatus → AbsolutePose Flags mapping (bitmask:
@@ -182,3 +258,152 @@ func adaptPose(raw []byte) ([]byte, error) {
 	return json.Marshal(pose)
 }
 
+func adaptGnssStatus(raw []byte) ([]byte, error) {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, err
+	}
+
+	if _, ok := envelope["header"]; ok {
+		return raw, nil
+	}
+	if _, ok := envelope["stamp"]; !ok {
+		return raw, nil
+	}
+
+	var status rawUniversalGnssStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return nil, err
+	}
+
+	fixType := mapUniversalGnssFixType(status.FixType)
+	adapted := mowgli.GnssStatus{
+		Header: geometry.Header{
+			Stamp: geometry.Stamp{
+				Sec:     status.Stamp.Sec,
+				Nanosec: status.Stamp.Nanosec,
+			},
+		},
+		Backend:              "universal",
+		FixType:              fixType,
+		FixValid:             status.FixValid,
+		DeadReckoning:        fixType == mowgliFixTypeDeadReckoning,
+		RtkMode:              mapUniversalGnssRtkMode(status.RtkMode),
+		QualityPercent:       qualityPercentForFixType(fixType),
+		CapabilityFlags:      mapUniversalGnssCapabilityFlags(status.CapabilityFlags),
+		ValueFlags:           mapUniversalGnssCapabilityFlags(status.ValueFlags),
+		Hdop:                 status.Hdop,
+		Vdop:                 status.Vdop,
+		HorizontalAccuracyM:  status.HorizontalAccuracyM,
+		VerticalAccuracyM:    status.VerticalAccuracyM,
+		HeadingDeg:           status.HeadingDeg,
+		SatellitesUsed:       status.SatellitesUsed,
+		SatellitesVisible:    status.SatellitesVisible,
+		SatellitesTracked:    status.SatellitesTracked,
+		CorrectionAgeS:       status.CorrectionAgeS,
+		MeanCn0DbHz:          status.MeanCn0DbHz,
+		MaxCn0DbHz:           status.MaxCn0DbHz,
+		DualAntennaHeading:   status.DualAntennaHeading,
+		InterferenceDetected: status.InterferenceDetected,
+		JammingDetected:      status.JammingDetected,
+	}
+
+	return json.Marshal(adapted)
+}
+
+func mapUniversalGnssFixType(fixType uint8) uint8 {
+	switch fixType {
+	case universalFixTypeFix:
+		return mowgliFixTypeGPSFix
+	case universalFixTypeRTKFloat:
+		return mowgliFixTypeRTKFloat
+	case universalFixTypeRTKFixed:
+		return mowgliFixTypeRTKFixed
+	case universalFixTypeDeadReckoning:
+		return mowgliFixTypeDeadReckoning
+	case universalFixTypeUnknown, universalFixTypeNoFix:
+		fallthrough
+	default:
+		return mowgliFixTypeNoFix
+	}
+}
+
+func mapUniversalGnssRtkMode(rtkMode uint8) uint8 {
+	switch rtkMode {
+	case universalRtkModeNone:
+		return mowgliRtkModeNone
+	case universalRtkModeFloat:
+		return mowgliRtkModeFloat
+	case universalRtkModeFixed:
+		return mowgliRtkModeFixed
+	case universalRtkModeUnknown:
+		fallthrough
+	default:
+		return mowgliRtkModeUnknown
+	}
+}
+
+func qualityPercentForFixType(fixType uint8) float32 {
+	switch fixType {
+	case mowgliFixTypeRTKFixed:
+		return 100.0
+	case mowgliFixTypeRTKFloat:
+		return 50.0
+	case mowgliFixTypeGPSFix:
+		return 25.0
+	case mowgliFixTypeDeadReckoning:
+		return 10.0
+	default:
+		return 0.0
+	}
+}
+
+func mapUniversalGnssCapabilityFlags(flags uint32) uint32 {
+	var mapped uint32
+	if flags&universalCapRtkMode != 0 {
+		mapped |= mowgliCapRtkMode
+	}
+	if flags&universalCapHorizontalAccuracy != 0 {
+		mapped |= mowgliCapHorizontalAccuracy
+	}
+	if flags&universalCapVerticalAccuracy != 0 {
+		mapped |= mowgliCapVerticalAccuracy
+	}
+	if flags&universalCapHdop != 0 {
+		mapped |= mowgliCapHdop
+	}
+	if flags&universalCapVdop != 0 {
+		mapped |= mowgliCapVdop
+	}
+	if flags&universalCapSatellitesUsed != 0 {
+		mapped |= mowgliCapSatellitesUsed
+	}
+	if flags&universalCapSatellitesVisible != 0 {
+		mapped |= mowgliCapSatellitesVisible
+	}
+	if flags&universalCapSatellitesTracked != 0 {
+		mapped |= mowgliCapSatellitesTracked
+	}
+	if flags&universalCapMeanCn0 != 0 {
+		mapped |= mowgliCapMeanCn0
+	}
+	if flags&universalCapMaxCn0 != 0 {
+		mapped |= mowgliCapMaxCn0
+	}
+	if flags&universalCapCorrectionAge != 0 {
+		mapped |= mowgliCapCorrectionAge
+	}
+	if flags&universalCapHeading != 0 {
+		mapped |= mowgliCapHeading
+	}
+	if flags&universalCapDualAntennaHeading != 0 {
+		mapped |= mowgliCapDualAntennaStatus
+	}
+	if flags&universalCapInterferenceState != 0 {
+		mapped |= mowgliCapInterferenceStatus
+	}
+	if flags&universalCapJammingState != 0 {
+		mapped |= mowgliCapJammingStatus
+	}
+	return mapped
+}

@@ -17,8 +17,8 @@ import (
 // The frontend and internal routes always use logical keys; the ROS2 topic name
 // is only used when sending the foxglove subscribe op.
 type topicDef struct {
-	ROS2Topic  string
-	MsgType    string
+	ROS2Topic string
+	MsgType   string
 }
 
 // topicMap maps logical keys (used by SubscriberRoute and internal code) to
@@ -26,10 +26,10 @@ type topicDef struct {
 // Virtual topics (map) have an empty MsgType and are never sent to
 // foxglove_bridge; they are populated by internal logic instead.
 var topicMap = map[string]topicDef{
-	"status":              {"/hardware_bridge/status", "mowgli_interfaces/msg/Status"},
-	"highLevelStatus":     {"/behavior_tree_node/high_level_status", "mowgli_interfaces/msg/HighLevelStatus"},
-	"gps":                 {"/gps/absolute_pose", "mowgli_interfaces/msg/AbsolutePose"},
-	"gnssStatus":          {"/gps/status", "mowgli_interfaces/msg/GnssStatus"},
+	"status":          {"/hardware_bridge/status", "mowgli_interfaces/msg/Status"},
+	"highLevelStatus": {"/behavior_tree_node/high_level_status", "mowgli_interfaces/msg/HighLevelStatus"},
+	"gps":             {"/gps/absolute_pose", "mowgli_interfaces/msg/AbsolutePose"},
+	"gnssStatus":      {"/gps/status", "mowgli_interfaces/msg/GnssStatus"},
 	// The robot's global pose comes from fusion_graph_node, the sole
 	// map-frame localizer. "pose" and "fusionRaw" both point at
 	// /odometry/filtered_map; the duplicate key is kept for backwards
@@ -41,24 +41,24 @@ var topicMap = map[string]topicDef{
 	"imu":                 {"/imu/data", "sensor_msgs/msg/Imu"},
 	"ticks":               {"/wheel_ticks", "mowgli_interfaces/msg/WheelTick"},
 	"wheelOdom":           {"/wheel_odom", "nav_msgs/msg/Odometry"},
-	"map":                 {"", ""},                                                            // virtual – populated via map_server services
+	"map":                 {"", ""},                                                                   // virtual – populated via map_server services
 	"path":                {"/controller_server/FollowCoveragePath/global_plan", "nav_msgs/msg/Path"}, // coverage plan
-	"plan":                {"/plan", "nav_msgs/msg/Path"},                                      // infrequent event
-	"coverageCells":       {"/map_server_node/coverage_cells", "nav_msgs/msg/OccupancyGrid"},   // large message
+	"plan":                {"/plan", "nav_msgs/msg/Path"},                                             // infrequent event
+	"coverageCells":       {"/map_server_node/coverage_cells", "nav_msgs/msg/OccupancyGrid"},          // large message
 	"power":               {"/hardware_bridge/power", "mowgli_interfaces/msg/Power"},
-	"emergency":           {"/hardware_bridge/emergency", "mowgli_interfaces/msg/Emergency"},   // safety-critical
-	"lidar":               {"/scan", "sensor_msgs/msg/LaserScan"},                              // large message
+	"emergency":           {"/hardware_bridge/emergency", "mowgli_interfaces/msg/Emergency"}, // safety-critical
+	"lidar":               {"/scan", "sensor_msgs/msg/LaserScan"},                            // large message
 	"diagnostics":         {"/diagnostics", "diagnostic_msgs/msg/DiagnosticArray"},
 	"fusionDiag":          {"/fusion_graph/diagnostics", "diagnostic_msgs/msg/DiagnosticArray"},
 	"obstacles":           {"/obstacle_tracker/obstacles", "mowgli_interfaces/msg/ObstacleArray"},
-	"robotDescription":    {"/robot_description", "std_msgs/msg/String"},                       // published once
-	"recordingTrajectory": {"/behavior_tree_node/recording_trajectory", "nav_msgs/msg/Path"},   // area recording preview
+	"robotDescription":    {"/robot_description", "std_msgs/msg/String"},                     // published once
+	"recordingTrajectory": {"/behavior_tree_node/recording_trajectory", "nav_msgs/msg/Path"}, // area recording preview
 	// Synthetic heading sources fused by fusion_graph_node as yaw unary
 	// factors. Both carry sensor_msgs/Imu with only `orientation` and
 	// `orientation_covariance[8]` populated — see cog_to_imu.py and
 	// mag_yaw_publisher.py in mowgli_localization.
-	"cogHeading":          {"/imu/cog_heading", "sensor_msgs/msg/Imu"},
-	"magYaw":              {"/imu/mag_yaw", "sensor_msgs/msg/Imu"},
+	"cogHeading": {"/imu/cog_heading", "sensor_msgs/msg/Imu"},
+	"magYaw":     {"/imu/mag_yaw", "sensor_msgs/msg/Imu"},
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +189,8 @@ type RosProvider struct {
 // the foxglove client and the fanOut. Topics absent from this map are
 // forwarded as-is (snake_case JSON from CDR deserialization).
 var foxgloveAdapters = map[string]func([]byte) ([]byte, error){
-	"pose": adaptPose,
+	"gnssStatus": adaptGnssStatus,
+	"pose":       adaptPose,
 }
 
 // upstreamDecimationMs caps the rate at which high-frequency topics are
@@ -326,7 +327,7 @@ func (r *RosProvider) fanOut(logicalKey string, msg []byte) {
 func (r *RosProvider) initDockPoseSubscription() {
 	type rawPoseStamped struct {
 		Pose struct {
-			Position    struct{ X, Y, Z float64 } `json:"position"`
+			Position    struct{ X, Y, Z float64 }    `json:"position"`
 			Orientation struct{ X, Y, Z, W float64 } `json:"orientation"`
 		} `json:"pose"`
 	}
@@ -441,7 +442,6 @@ func (r *RosProvider) pollMap() {
 
 	r.fanOut("map", data)
 }
-
 
 // ---------------------------------------------------------------------------
 // IRosProvider implementation
