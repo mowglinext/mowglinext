@@ -119,6 +119,24 @@ struct MosquittoMqttClient::Impl
                   "MQTT connected to %s:%d",
                   self->config.host.c_str(),
                   self->config.port);
+      // (Re)issue all subscriptions on every successful connect. subscribe()
+      // is called once at node construction — before the async mosquitto
+      // connect completes — and the client uses clean_session=true, so the
+      // broker drops subscription state on every (re)connect. Without
+      // re-subscribing here the MQTT->ROS command path never received a
+      // message. Safe to call from the connect callback (mosquitto loop ctx).
+      std::lock_guard<std::mutex> lock(self->callbacks_mutex);
+      for (const auto& [topic, _cb] : self->callbacks)
+      {
+        const int sub_rc = mosquitto_subscribe(self->mosq, nullptr, topic.c_str(), 1 /* QoS */);
+        if (sub_rc != MOSQ_ERR_SUCCESS)
+        {
+          RCLCPP_WARN(self->logger,
+                      "MQTT re-subscribe on '%s' failed: %s",
+                      topic.c_str(),
+                      mosquitto_strerror(sub_rc));
+        }
+      }
     }
     else
     {
@@ -174,6 +192,26 @@ MosquittoMqttClient::MosquittoMqttClient(Config config, rclcpp::Logger logger)
   {
     RCLCPP_ERROR(logger, "Failed to create mosquitto instance.");
     return;
+  }
+
+  if (impl_->config.use_ssl)
+  {
+    // Apply TLS against the system CA store. use_ssl was parsed into the
+    // config but never applied, so connections were always plaintext despite
+    // the setting. (For a self-signed broker, add a ca_cert path param and
+    // pass it as the cafile argument here.)
+    const int tls_rc =
+        mosquitto_tls_set(impl_->mosq, nullptr, "/etc/ssl/certs", nullptr, nullptr, nullptr);
+    if (tls_rc != MOSQ_ERR_SUCCESS)
+    {
+      RCLCPP_ERROR(logger,
+                   "mosquitto_tls_set failed (%d) — MQTT would connect in plaintext; aborting.",
+                   tls_rc);
+    }
+    else
+    {
+      RCLCPP_INFO(logger, "MQTT TLS enabled (system CA store).");
+    }
   }
 
   if (!impl_->config.username.empty())

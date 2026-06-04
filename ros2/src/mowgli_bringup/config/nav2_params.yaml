@@ -958,13 +958,14 @@ collision_monitor:
       enabled: true
 
 # ---------------------------------------------------------------------------
-# Coverage server (opennav_coverage / Fields2Cover backend)
+# Coverage server (mowgli_coverage, Fields2Cover 2.0 backend)
 # Plans the F2C path on demand via /compute_coverage_path action when
-# the BT's PlanCoverageArea node ticks. operation_width must match the
-# real mower cut width (YardForce 500 = 0.20 m). headland_width is
-# overridable per-request via the BT port headland_width_m. The
-# RPATH on libopennav_coverage_core.so already points to
-# /opt/fields2cover-121/lib so no LD_LIBRARY_PATH is required.
+# the BT's PlanCoverageArea node ticks. operation_width is INJECTED at
+# launch from mowgli_robot.yaml.tool_width (see below) — do not rely on
+# the static value here. headland_width is overridable per-request via
+# the BT port headland_width_m. mowgli_coverage links F2C 2.0 at
+# /opt/fields2cover-200 via an explicit INSTALL_RPATH; the upstream
+# opennav_coverage server (pinned to F2C 1.2.1) is COLCON_IGNORE'd.
 # ---------------------------------------------------------------------------
 coverage_server:
   ros__parameters:
@@ -978,15 +979,13 @@ coverage_server:
     # from the per-site config so the F2C swath spacing always
     # matches the actual blade cutting width.
     operation_width: 0.18
-    # Differential-drive YardForce 500 rotates in place — set the turning
-    # radius to a value smaller than the swath spacing so F2C never
-    # generates a Dubin loop that exceeds the headland inset. Combined
-    # with default_path_continuity_type=DISCONTINUOUS below, F2C emits
-    # straight swath segments separated by sharp orientation changes,
-    # which FTCController handles via PRE_ROTATE between segments. A
-    # CONTINUOUS Dubin path here drives outside the polygon at every
-    # swath end (turning radius > headland width).
+    # Skid-steer rotates in place — keep the turning radius below the swath
+    # spacing so F2C never generates a Dubin loop that exceeds the headland
+    # inset. With min_turning_radius=0.05 the continuous-curvature Dubins arcs
+    # stay tiny, so swath-to-swath turns are effectively in-place pivots that
+    # FTCController handles via PRE_ROTATE.
     min_turning_radius: 0.05
+    # Max change of curvature for the CC-Dubins planner (Robot::setMaxDiffCurv).
     linear_curv_change: 200.0
     coordinates_in_cartesian_frame: true
     default_allow_overlap: false
@@ -994,6 +993,10 @@ coverage_server:
     default_swath_type: "LENGTH"
     default_route_type: "BOUSTROPHEDON"
     default_path_type: "DUBIN"
+    # NOTE: mowgli_coverage hardcodes DubinsCurvesCC (continuous-curvature) and
+    # does NOT read default_path_continuity_type — it is inert. Do not assume
+    # DISCONTINUOUS produces straight segments: the server always plans CC
+    # Dubins (kept effectively in-place via the small min_turning_radius).
     default_path_continuity_type: "DISCONTINUOUS"
 
 # ---------------------------------------------------------------------------
