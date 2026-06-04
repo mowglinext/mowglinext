@@ -2,12 +2,12 @@
 # =============================================================================
 # A.4 GPS backend matrix
 #
-# The installer supports three direct GNSS backends:
-#   gps     — generic legacy GPS container       (docker-compose.gps.yml)
-#   ublox   — u-blox F9P (ublox_dgnss launch)    (docker-compose.gps.yml)
-#   unicore — Unicore UM98x (unicore_gnss launch)(docker-compose.unicore.yaml)
-# Generic NMEA receivers are modeled as GNSS_BACKEND=gps with
-# GPS_PROTOCOL=NMEA, not as a separate GNSS backend.
+# Universal GNSS is now the preferred runtime for all direct GNSS modes:
+#   gps     — Universal GNSS auto / shared serial path
+#   ublox   — Universal GNSS with a u-blox receiver family preset
+#   unicore — Universal GNSS with a Unicore receiver family preset
+#   legacy  — old direct GNSS container path kept only as a migration fallback
+# Generic NMEA receivers are modeled as GNSS_BACKEND=gps with GPS_PROTOCOL=NMEA.
 # =============================================================================
 
 set -uo pipefail
@@ -32,7 +32,7 @@ selected_fragments_in_current_run() {
 setup_sandbox
 install_all_mocks
 
-# ── Default GPS backend: legacy "gps" container, UBX over UART ────────────
+# ── Default shared GPS backend, UBX over UART ──────────────────────────────
 section "gnss=gps protocol=UBX connection=uart"
 
 repo="$SANDBOX/repo_gps_ubx_uart"
@@ -41,12 +41,20 @@ harness_init "$repo"
 harness_set_preset gnss=gps gps=ubx-uart lidar=none tfluna=none
 if harness_run; then pass "harness_run gps/ubx/uart"; else fail "harness_run gps/ubx/uart"; fi
 assert_eq "gps/ubx/uart: GNSS_BACKEND=gps"  "gps"   "$(env_value "$repo" GNSS_BACKEND)"
+assert_eq "gps/ubx/uart: GNSS_STACK=universal" "universal" "$(env_value "$repo" GNSS_STACK)"
+assert_eq "gps/ubx/uart: GNSS_STATUS_SOURCE=universal" "universal" "$(env_value "$repo" GNSS_STATUS_SOURCE)"
+assert_eq "gps/ubx/uart: GNSS_RECEIVER_FAMILY=auto" "auto" "$(env_value "$repo" GNSS_RECEIVER_FAMILY)"
 assert_eq "gps/ubx/uart: GPS_PROTOCOL=UBX"  "UBX"   "$(env_value "$repo" GPS_PROTOCOL)"
 assert_eq "gps/ubx/uart: GPS_BAUD=921600"   "921600" "$(env_value "$repo" GPS_BAUD)"
 assert_eq "gps/ubx/uart: GPS_CONNECTION=uart" "uart" "$(env_value "$repo" GPS_CONNECTION)"
+assert_eq "gps/ubx/uart: GNSS_SERIAL_DEVICE follows UART" "/dev/ttyAMA4" "$(env_value "$repo" GNSS_SERIAL_DEVICE)"
 case "$(selected_fragments_in_current_run)" in
-  *docker-compose.gps.yml*) pass "gps/ubx/uart: gps fragment present" ;;
-  *)                        fail "gps/ubx/uart: gps fragment present" ;;
+  *docker-compose.gps.yml*|*docker-compose.unicore.yaml*)
+    fail "gps/ubx/uart: NO legacy GNSS fragment in universal mode"
+    ;;
+  *)
+    pass "gps/ubx/uart: NO legacy GNSS fragment in universal mode"
+    ;;
 esac
 
 # ── NMEA over UART (same single runtime GPS_BAUD target unless detected otherwise) ──
@@ -57,16 +65,18 @@ sandbox_repo "$repo"
 harness_init "$repo"
 harness_set_preset gnss=gps gps=nmea-uart lidar=none tfluna=none
 harness_run >/dev/null 2>&1
+assert_eq "nmea/uart: GNSS_STACK=universal" "universal" "$(env_value "$repo" GNSS_STACK)"
+assert_eq "nmea/uart: GNSS_RECEIVER_FAMILY=nmea" "nmea" "$(env_value "$repo" GNSS_RECEIVER_FAMILY)"
 assert_eq "nmea/uart: GPS_PROTOCOL=NMEA" "NMEA"   "$(env_value "$repo" GPS_PROTOCOL)"
 assert_eq "nmea/uart: GPS_BAUD=921600"   "921600" "$(env_value "$repo" GPS_BAUD)"
 gps_nmea_fragments=$(selected_fragments_in_current_run)
 case "$gps_nmea_fragments" in
-  *docker-compose.gps.yml*)  pass "nmea/uart: gps fragment present" ;;
-  *)                         fail "nmea/uart: gps fragment present" "got: $gps_nmea_fragments" ;;
-esac
-case "$gps_nmea_fragments" in
-  *docker-compose.nmea.yaml*) fail "nmea/uart: NO dormant nmea fragment" "nmea fragment leaked when protocol NMEA selected on gps backend" ;;
-  *)                          pass "nmea/uart: NO dormant nmea fragment" ;;
+  *docker-compose.gps.yml*|*docker-compose.unicore.yaml*)
+    fail "nmea/uart: NO legacy GNSS fragment in universal mode" "got: $gps_nmea_fragments"
+    ;;
+  *)
+    pass "nmea/uart: NO legacy GNSS fragment in universal mode"
+    ;;
 esac
 
 # ── UBX over USB ───────────────────────────────────────────────────────────
@@ -78,6 +88,7 @@ harness_init "$repo"
 harness_set_preset gnss=gps gps=ubx-usb lidar=none tfluna=none
 harness_run >/dev/null 2>&1
 assert_eq "ubx/usb: GPS_CONNECTION=usb" "usb" "$(env_value "$repo" GPS_CONNECTION)"
+assert_eq "ubx/usb: GNSS_SERIAL_DEVICE follows selected USB device" "/dev/gps" "$(env_value "$repo" GNSS_SERIAL_DEVICE)"
 # NOTE: env.sh::setup_env runs `: "${GPS_UART_DEVICE:=/dev/ttyAMA4}"` —
 # the := expansion replaces empty values with the default, so the .env
 # always has GPS_UART_DEVICE set. With GPS_CONNECTION=usb the compose
@@ -85,8 +96,8 @@ assert_eq "ubx/usb: GPS_CONNECTION=usb" "usb" "$(env_value "$repo" GPS_CONNECTIO
 # important invariant is that no UART udev rule is generated for USB.
 assert_eq "ubx/usb: no UART udev rule (GPS_UART_RULE empty)" "" "${GPS_UART_RULE:-}"
 
-# ── u-blox F9P backend (ublox_dgnss) ───────────────────────────────────────
-section "gnss=ublox (F9P / ublox_dgnss launch)"
+# ── u-blox compatibility preset on the shared gps service ──────────────────
+section "gnss=ublox (F9P compatibility preset)"
 
 repo="$SANDBOX/repo_ublox"
 sandbox_repo "$repo"
@@ -94,16 +105,23 @@ harness_init "$repo"
 harness_set_preset gnss=ublox lidar=none tfluna=none
 if harness_run; then pass "harness_run ublox"; else fail "harness_run ublox"; fi
 assert_eq "ublox: GNSS_BACKEND=ublox" "ublox" "$(env_value "$repo" GNSS_BACKEND)"
+assert_eq "ublox: GNSS_STACK=universal" "universal" "$(env_value "$repo" GNSS_STACK)"
+assert_eq "ublox: GNSS_RECEIVER_FAMILY=ublox" "ublox" "$(env_value "$repo" GNSS_RECEIVER_FAMILY)"
 assert_eq "ublox: GPS_CONNECTION forced to usb" "usb" "$(env_value "$repo" GPS_CONNECTION)"
 assert_eq "ublox: GPS_PROTOCOL forced to UBX" "UBX" "$(env_value "$repo" GPS_PROTOCOL)"
 assert_eq "ublox: selected USB by-id stored" "/dev/serial/by-id/ublox-test-serial" "$(env_value "$repo" GPS_BY_ID)"
 assert_eq "ublox: GPS_PORT follows selected by-id" "/dev/serial/by-id/ublox-test-serial" "$(env_value "$repo" GPS_PORT)"
+assert_eq "ublox: GNSS_SERIAL_DEVICE follows selected by-id" "/dev/serial/by-id/ublox-test-serial" "$(env_value "$repo" GNSS_SERIAL_DEVICE)"
 
-# Compose selection reuses the shared gps fragment for the dedicated u-blox runtime.
+# Compose stays on the main mowgli-ros2 stack in universal mode.
 ublox_fragments=$(selected_fragments_in_current_run)
 case "$ublox_fragments" in
-  *docker-compose.gps.yml*) pass "ublox: shared gps fragment present" ;;
-  *)                        fail "ublox: shared gps fragment present" "got: $ublox_fragments" ;;
+  *docker-compose.gps.yml*|*docker-compose.unicore.yaml*)
+    fail "ublox: NO legacy GNSS fragment in universal mode" "got: $ublox_fragments"
+    ;;
+  *)
+    pass "ublox: NO legacy GNSS fragment in universal mode"
+    ;;
 esac
 
 # ── Unicore UM98x backend ──────────────────────────────────────────────────
@@ -118,17 +136,37 @@ GPS_UART_DEVICE=/dev/ttyUSB0
 harness_set_preset gnss=unicore gps=ubx-uart lidar=none tfluna=none
 if harness_run; then pass "harness_run unicore"; else fail "harness_run unicore"; fi
 assert_eq "unicore: GNSS_BACKEND=unicore" "unicore" "$(env_value "$repo" GNSS_BACKEND)"
+assert_eq "unicore: GNSS_STACK=universal" "universal" "$(env_value "$repo" GNSS_STACK)"
+assert_eq "unicore: GNSS_RECEIVER_FAMILY=unicore" "unicore" "$(env_value "$repo" GNSS_RECEIVER_FAMILY)"
 # Web/CLI presets no longer bake a backend-specific intermediate baud.
 assert_eq "unicore/uart: GPS_BAUD=921600" "921600" "$(env_value "$repo" GPS_BAUD)"
+assert_eq "unicore/uart: GNSS_SERIAL_DEVICE follows UART" "/dev/ttyUSB0" "$(env_value "$repo" GNSS_SERIAL_DEVICE)"
 
 unicore_fragments=$(selected_fragments_in_current_run)
 case "$unicore_fragments" in
-  *docker-compose.unicore.yaml*) pass "unicore: unicore fragment present" ;;
-  *)                             fail "unicore: unicore fragment present" "got: $unicore_fragments" ;;
+  *docker-compose.gps.yml*|*docker-compose.unicore.yaml*)
+    fail "unicore: NO legacy GNSS fragment in universal mode" "got: $unicore_fragments"
+    ;;
+  *)
+    pass "unicore: NO legacy GNSS fragment in universal mode"
+    ;;
 esac
-case "$unicore_fragments" in
-  *docker-compose.gps.yml*) fail "unicore: NO legacy gps fragment" "legacy gps leaked when unicore selected" ;;
-  *)                        pass "unicore: NO legacy gps fragment" ;;
+
+# ── Explicit legacy fallback keeps the old direct GNSS container path ──────
+section "gnss=legacy keeps the old direct GNSS runtime"
+
+repo="$SANDBOX/repo_legacy"
+sandbox_repo "$repo"
+harness_init "$repo"
+harness_set_preset gnss=legacy gps=ubx-uart lidar=none tfluna=none
+if harness_run; then pass "harness_run legacy"; else fail "harness_run legacy"; fi
+assert_eq "legacy: GNSS_BACKEND=gps" "gps" "$(env_value "$repo" GNSS_BACKEND)"
+assert_eq "legacy: GNSS_STACK=legacy" "legacy" "$(env_value "$repo" GNSS_STACK)"
+assert_eq "legacy: GNSS_STATUS_SOURCE=mowgli_local" "mowgli_local" "$(env_value "$repo" GNSS_STATUS_SOURCE)"
+legacy_fragments=$(selected_fragments_in_current_run)
+case "$legacy_fragments" in
+  *docker-compose.gps.yml*) pass "legacy: gps fragment present" ;;
+  *)                        fail "legacy: gps fragment present" "got: $legacy_fragments" ;;
 esac
 
 # ── Web composer Unicore preset must not reuse stale GPS USB defaults ─────

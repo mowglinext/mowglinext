@@ -309,22 +309,28 @@
       <!-- GNSS backend -->
       <div class="composer-group" id="gnss-group">
         <h3>GNSS Backend</h3>
-        <p class="composer-hint">Driver selection — picks which sensor container is installed</p>
+        <p class="composer-hint">Universal GNSS is the preferred stack. Pick a receiver family preset, or keep the legacy fallback only during migration.</p>
         <div class="composer-options" data-group="gnss">
           <button class="composer-option active" data-value="ublox">
             <span class="option-icon">🛰️</span>
-            <span class="option-label">u-blox</span>
-            <span class="option-desc">ZED-F9P / F9R via ublox_dgnss + NTRIP</span>
+            <span class="option-label">Universal u-blox</span>
+            <span class="option-desc">Preferred preset for ZED-F9P / F9R on the Universal GNSS stack</span>
           </button>
           <button class="composer-option" data-value="unicore">
             <span class="option-icon">🛰️</span>
-            <span class="option-label">Unicore</span>
-            <span class="option-desc">UM98x dual-antenna GNSS (heading + RTK)</span>
+            <span class="option-label">Universal Unicore</span>
+            <span class="option-desc">Preferred preset for UM98x dual-antenna GNSS (heading + RTK)</span>
           </button>
-          <button class="composer-option" data-value="gps">
+          <button class="composer-option" data-value="auto">
             <span class="option-icon">📟</span>
-            <span class="option-label">Generic / Legacy</span>
-            <span class="option-desc">Any UBX or NMEA receiver via the legacy gps container</span>
+            <span class="option-label">Universal Auto</span>
+            <span class="option-desc">Generic serial receiver path for UBX or NMEA on Universal GNSS</span>
+          </button>
+          <button class="composer-option" data-value="legacy">
+            <span class="option-icon">🧯</span>
+            <span class="option-badge">Fallback</span>
+            <span class="option-label">Legacy Fallback</span>
+            <span class="option-desc">Old direct GNSS container path kept only for migration</span>
           </button>
         </div>
       </div>
@@ -332,7 +338,7 @@
       <!-- GPS protocol / connection -->
       <div class="composer-group" id="gps-group">
         <h3>GPS Receiver</h3>
-        <p class="composer-hint" id="gps-group-hint">Protocol + wiring for the selected GNSS path. Unicore completes its real serial device selection inside the installer, so this web preset is omitted there.</p>
+        <p class="composer-hint" id="gps-group-hint">Protocol + wiring for the selected GNSS path. Universal GNSS keeps `serial` transport for both UART and USB receivers.</p>
         <div class="composer-options" data-group="gps">
           <button class="composer-option active" data-value="ubx-uart">
             <span class="option-icon">📡</span>
@@ -496,9 +502,10 @@
 (function() {
   var state = { backend: 'mowgli', gnss: 'ublox', gps: 'ubx-uart', lidar: 'ldlidar-uart', tfluna: 'none', channel: 'main' };
   var baseUrl = 'https://mowgli.garden/install.sh';
-  var defaultGpsHint = 'Protocol + wiring for the selected GNSS path. Unicore completes its real serial device selection inside the installer, so this web preset is omitted there.';
-  var unicoreGpsHint = 'Unicore port/device selection is completed in the installer. The web composer keeps --gnss=unicore but does not emit a GPS protocol or wiring preset.';
-  var ubloxGpsHint = 'Dedicated u-blox backend uses the vendor USB/libusb driver. The installer asks for the receiver USB serial string, so this web GPS preset is omitted there.';
+  var defaultGpsHint = 'Protocol + wiring for the selected GNSS path. Universal GNSS keeps serial transport for both UART and USB receivers.';
+  var unicoreGpsHint = 'Universal Unicore keeps its real serial device selection inside the installer. The web composer keeps --gnss=unicore but does not emit a GPS protocol or wiring preset.';
+  var ubloxGpsHint = 'Universal u-blox asks for the receiver USB by-id device inside the installer, so this web GPS preset is omitted there.';
+  var legacyGpsHint = 'Legacy fallback keeps the old direct GNSS container path. Use it only while migrating older deployments.';
   var mavrosGpsHint = 'MAVROS uses the flight controller telemetry link. Direct GNSS/GPS container selection is disabled for this backend.';
 
   function setGroupDisabled(groupId, disabled) {
@@ -515,6 +522,7 @@
     var mavrosSelected = state.backend === 'mavros';
     var unicoreSelected = state.gnss === 'unicore';
     var ubloxSelected = state.gnss === 'ublox';
+    var legacySelected = state.gnss === 'legacy';
     var gpsHint = document.getElementById('gps-group-hint');
 
     setGroupDisabled('gnss-group', mavrosSelected);
@@ -530,6 +538,8 @@
       gpsHint.textContent = ubloxGpsHint;
     } else if (unicoreSelected) {
       gpsHint.textContent = unicoreGpsHint;
+    } else if (legacySelected) {
+      gpsHint.textContent = legacyGpsHint;
     } else {
       gpsHint.textContent = defaultGpsHint;
     }

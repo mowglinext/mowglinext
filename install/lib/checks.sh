@@ -34,9 +34,11 @@ expected_runtime_services() {
 
   local services=(mowgli gui mosquitto)
   local gnss_backend
+  local gnss_stack
   local gnss_service
 
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
+  gnss_stack="$(effective_gnss_stack 2>/dev/null || true)"
 
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
     services+=(mavros ntrip)
@@ -45,8 +47,10 @@ expected_runtime_services() {
       return 1
     fi
 
-    gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
-    [ -n "$gnss_service" ] && services+=("$gnss_service")
+    if [[ "$gnss_stack" == "legacy" ]]; then
+      gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
+      [ -n "$gnss_service" ] && services+=("$gnss_service")
+    fi
   fi
 
   if [[ "${LIDAR_ENABLED}" == "true" && "${LIDAR_TYPE}" != "none" ]]; then
@@ -327,10 +331,12 @@ check_gps() {
 
   : "${GNSS_BACKEND:=gps}"
   local gnss_backend
+  local gnss_stack
   local gps_container
   local gps_protocol="${GPS_PROTOCOL:-UBX}"
 
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
+  gnss_stack="$(effective_gnss_stack 2>/dev/null || true)"
 
   if [[ "${GNSS_BACKEND:-}" == "nmea" ]]; then
     gps_protocol="NMEA"
@@ -404,15 +410,26 @@ check_gps() {
     return
   fi
 
-  gps_container="$(compose_gnss_container_name "$gnss_backend" 2>/dev/null || true)"
-  if [ -z "$gps_container" ]; then
-    info "Direct GNSS container disabled"
-    return
-  fi
+  if [[ "$gnss_stack" == "universal" ]]; then
+    local direct_gps_status
+    direct_gps_status="$(docker_cmd inspect -f '{{.State.Status}}' mowgli-gps 2>/dev/null || echo "missing")"
+    if [[ "$direct_gps_status" == "running" ]]; then
+      fail "mowgli-gps is running while GNSS_STACK=universal"
+      add_issue "Universal GNSS selected but the legacy mowgli-gps container is still running. Re-run $(installer_main_command) and restart: $(print_restart_command_for_backend)"
+    else
+      info "Universal GNSS mode: direct GPS container disabled (${direct_gps_status})"
+    fi
+  else
+    gps_container="$(compose_gnss_container_name "$gnss_backend" 2>/dev/null || true)"
+    if [ -z "$gps_container" ]; then
+      info "Direct GNSS container disabled"
+      return
+    fi
 
-  if ! docker_cmd inspect -f '{{.State.Status}}' "$gps_container" 2>/dev/null | grep -q running; then
-    warn "$gps_container not running — skipping GPS check"
-    return
+    if ! docker_cmd inspect -f '{{.State.Status}}' "$gps_container" 2>/dev/null | grep -q running; then
+      warn "$gps_container not running — skipping GPS check"
+      return
+    fi
   fi
 
   local fix_data
@@ -424,7 +441,11 @@ check_gps() {
 
   if [[ -z "$fix_data" ]]; then
     fail "No GPS fix data on /gps/fix"
-    add_issue "GPS not publishing. Check logs: $(print_logs_command_for_container "$gps_container" 30)"
+    if [[ "$gnss_stack" == "universal" ]]; then
+      add_issue "Universal GNSS is not publishing /gps/fix inside mowgli-ros2. Check logs: $(print_logs_command_for_container mowgli-ros2 80)"
+    else
+      add_issue "GPS not publishing. Check logs: $(print_logs_command_for_container "$gps_container" 30)"
+    fi
     return
   fi
 
@@ -452,11 +473,28 @@ check_gps() {
     fail "GPS: No fix (status=$status_val)"
   fi
 
-  if [[ "$gnss_backend" != "gps" ]]; then
+  if [[ "$gnss_stack" == "universal" ]]; then
+    info "Universal GNSS mode: /gps/fix is reaching mowgli-ros2"
+  elif [[ "$gnss_backend" != "gps" ]]; then
     info "GNSS backend ${gnss_backend}: direct /gps/fix check passed"
   fi
 
-  if [[ "$gnss_backend" == "gps" && "$gps_protocol" == "NMEA" ]]; then
+  if [[ "$gnss_stack" == "universal" ]]; then
+    if [[ "${GNSS_NTRIP_ENABLED:-false}" == "true" ]]; then
+      local rtcm_info
+      rtcm_info="$(
+        docker_cmd exec mowgli-ros2 bash -lc \
+          "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic info /rtcm 2>/dev/null" \
+          2>/dev/null || echo ""
+      )"
+      if echo "$rtcm_info" | grep -q "Publisher count: [1-9]"; then
+        info "Universal GNSS NTRIP: RTCM topic has publisher(s)"
+      else
+        warn "Universal GNSS NTRIP enabled but no RTCM publisher detected on /rtcm"
+        add_issue "GNSS_NTRIP_ENABLED=true but /rtcm has no publishers. Check the Universal GNSS nodes inside mowgli-ros2 and the NTRIP settings in docker/config/mowgli/mowgli_robot.yaml."
+      fi
+    fi
+  elif [[ "$gnss_backend" == "gps" && "$gps_protocol" == "NMEA" ]]; then
     info "GPS protocol NMEA on the generic gps backend: skipping bundled NTRIP check"
   else
     local ntrip_logs

@@ -6,12 +6,25 @@ This document records the current GNSS integration state of MowgliNext while Uni
 
 ### Installer and Environment
 
-- `install/lib/gps.sh` still exposes three operator choices: `gps`, `ublox`, `unicore`.
+- `install/lib/gps.sh` now prefers Universal GNSS and exposes Universal-first operator choices, while keeping a legacy fallback path available for migration.
 - `GNSS_BACKEND=ublox` is no longer a distinct runtime. It is a compatibility alias that resolves to the shared GPS container with a USB by-id selection.
-- `GNSS_STATUS_SOURCE` now controls who owns the typed `/gps/status` topic:
-  - `mowgli_local` keeps the existing `navsat_to_absolute_pose_node` adapter active.
-  - `universal` disables the Mowgli-local `/gps/status` publisher so Universal GNSS can become the sole typed status source.
-- `docker/.env` remains the source of truth for runtime GNSS wiring:
+- `GNSS_STATUS_SOURCE=universal` and `GNSS_STACK=universal` are now the preferred defaults for direct GNSS deployments.
+- `GNSS_STATUS_SOURCE` still controls who owns the typed `/gps/status` topic:
+  - `mowgli_local` keeps the existing `navsat_to_absolute_pose_node` adapter active for the legacy fallback stack.
+  - `universal` disables the Mowgli-local `/gps/status` publisher so Universal GNSS becomes the sole typed status source.
+- `docker/.env` remains the source of truth for runtime GNSS wiring and now writes both the preferred Universal contract and the legacy compatibility keys:
+  - `GNSS_STACK`
+  - `GNSS_RECEIVER_FAMILY`
+  - `GNSS_TRANSPORT`
+  - `GNSS_SERIAL_DEVICE`
+  - `GNSS_SERIAL_BAUD`
+  - `GNSS_NTRIP_ENABLED`
+  - `GNSS_NTRIP_HOST`
+  - `GNSS_NTRIP_PORT`
+  - `GNSS_NTRIP_MOUNTPOINT`
+  - `GNSS_NTRIP_USERNAME`
+  - `GNSS_NTRIP_PASSWORD`
+  - plus legacy compatibility keys:
   - `GNSS_BACKEND`
   - `GNSS_STATUS_SOURCE`
   - `GPS_CONNECTION`
@@ -31,8 +44,11 @@ This document records the current GNSS integration state of MowgliNext while Uni
 
 ### Compose Generation
 
-- `install/lib/compose.sh` already converges `gps` and `ublox` onto `install/compose/docker-compose.gps.yml`.
-- `unicore` still uses its own compose fragment and image.
+- `install/lib/compose.sh` now treats Universal GNSS as the default stack for Mowgli hardware.
+- In `GNSS_STACK=universal`, no direct GNSS compose fragment is added; the Universal receiver and NTRIP nodes run inside `mowgli-ros2` through `mowgli_bringup`.
+- `GNSS_STACK=legacy` still selects the old direct GNSS fragments:
+  - `install/compose/docker-compose.gps.yml` for `gps` and `ublox`
+  - `install/compose/docker-compose.unicore.yaml` for `unicore`
 - The dormant standalone NMEA compose fragment has been removed in this cleanup step.
 
 ### Runtime Stacks
@@ -46,6 +62,7 @@ This document records the current GNSS integration state of MowgliNext while Uni
 - `sensors/unicore/start_gps.sh`
   - Still carries UM98x-specific receiver configuration and runtime tuning.
   - Remains required until Universal GNSS replaces the vendor-specific path.
+- In preferred Universal mode, these vendor-specific runtimes are intentionally not started by compose anymore, but the code stays in-tree as a validated migration fallback.
 
 ### ROS2 and GUI
 
@@ -134,6 +151,6 @@ That means serial, USB, live NTRIP, RTCM injection, and runtime compose validati
 
 1. Validate the new `mowgli_bringup` Universal GNSS wrapper on real hardware with `use_universal_gnss:=true`, `GNSS_STATUS_SOURCE=universal`, and the real serial/NTRIP paths.
 2. Decide whether to keep the temporary GUI JSON adapter or promote `universal_gnss_ros2/msg/GnssStatus` into a first-class shared interface after field validation.
-3. Collapse installer choices so `ublox` is treated as a legacy preset only, not a first-class backend.
+3. Decide whether to collapse the remaining installer aliases (`GNSS_BACKEND`, `GPS_*`) after enough migration runway has passed for older deployments.
 4. Replace the remaining vendor-specific runtime split (`sensors/gps` vs `sensors/unicore`) with one GNSS service once Universal GNSS owns both receivers.
 5. Remove `gnss_runtime_state_builder.cpp` and the old diagnostics-driven status path only after the replacement is validated on hardware.

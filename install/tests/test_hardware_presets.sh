@@ -47,22 +47,24 @@ else
 fi
 assert_eq "mowgli backend: HARDWARE_BACKEND=mowgli" "mowgli" "$(env_value "$mowgli_repo" HARDWARE_BACKEND)"
 assert_eq "mowgli backend: GNSS_BACKEND=gps"       "gps"    "$(env_value "$mowgli_repo" GNSS_BACKEND)"
+assert_eq "mowgli backend: GNSS_STACK=universal"   "universal" "$(env_value "$mowgli_repo" GNSS_STACK)"
+assert_eq "mowgli backend: GNSS_STATUS_SOURCE=universal" "universal" "$(env_value "$mowgli_repo" GNSS_STATUS_SOURCE)"
 assert_eq "mowgli backend: MAVROS_ENABLED=false"   "false"  "$(env_value "$mowgli_repo" MAVROS_ENABLED)"
 
 mowgli_fragments=$(selected_fragments_in_current_run)
-for required in docker-compose.base.yml docker-compose.gui.yml docker-compose.gps.yml docker-compose.lidar-ldlidar.yml; do
+for required in docker-compose.base.yml docker-compose.gui.yml docker-compose.lidar-ldlidar.yml; do
   case "$mowgli_fragments" in
     *"$required"*) pass "mowgli backend: fragment $required present" ;;
     *)             fail "mowgli backend: fragment $required present" ;;
   esac
 done
 case "$mowgli_fragments" in
-  *docker-compose.mavros.yml*) fail "mowgli backend: NO mavros fragment" "docker-compose.mavros.yml leaked into compose selection" ;;
-  *)                           pass "mowgli backend: NO mavros fragment" ;;
-esac
-case "$mowgli_fragments" in
-  *docker-compose.nmea.yaml*) fail "mowgli backend: NO nmea fragment by default" "unexpected nmea fragment selected" ;;
-  *)                          pass "mowgli backend: NO nmea fragment by default" ;;
+  *docker-compose.gps.yml*|*docker-compose.unicore.yaml*|*docker-compose.mavros.yml*)
+    fail "mowgli backend: NO legacy or mavros GNSS fragment by default" "unexpected GNSS fragment selected"
+    ;;
+  *)
+    pass "mowgli backend: NO legacy or mavros GNSS fragment by default"
+    ;;
 esac
 
 # ── Pixhawk MAVROS backend ────────────────────────────────────────────────
@@ -79,6 +81,7 @@ else
 fi
 assert_eq "mavros backend: HARDWARE_BACKEND=mavros" "mavros"   "$(env_value "$mavros_repo" HARDWARE_BACKEND)"
 assert_eq "mavros backend: GNSS_BACKEND=disabled"   "disabled" "$(env_value "$mavros_repo" GNSS_BACKEND)"
+assert_eq "mavros backend: GNSS_STACK=disabled"     "disabled" "$(env_value "$mavros_repo" GNSS_STACK)"
 assert_eq "mavros backend: MAVROS_ENABLED=true"     "true"     "$(env_value "$mavros_repo" MAVROS_ENABLED)"
 
 mavros_fragments=$(selected_fragments_in_current_run)

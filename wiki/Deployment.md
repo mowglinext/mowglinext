@@ -8,7 +8,7 @@ The installer selects fragments from `install/compose/` based on hardware choice
 
 - `docker-compose.base.yml`
 - `docker-compose.gui.yml`
-- one GNSS fragment:
+- in `GNSS_STACK=legacy`, one GNSS fragment:
   - `docker-compose.gps.yml` for the shared GPS service
   - `docker-compose.unicore.yaml` for the UM98x path
 - optional LiDAR / MAVROS / TF-Luna fragments
@@ -18,7 +18,7 @@ The installer selects fragments from `install/compose/` based on hardware choice
 | Container | Purpose |
 |-----------|---------|
 | `mowgli-ros2` | Main ROS2 stack, localization, Nav2, behavior tree, API |
-| `mowgli-gps` | GNSS runtime selected by the installer |
+| `mowgli-gps` | Legacy fallback GNSS runtime only when `GNSS_STACK=legacy` |
 | `mowgli-lidar` | LiDAR runtime when enabled |
 | `mowgli-gui` | Web UI |
 | `mowgli-mqtt` | MQTT broker |
@@ -27,16 +27,32 @@ The installer selects fragments from `install/compose/` based on hardware choice
 ## GNSS Deployment Shape
 
 ```text
-GNSS_BACKEND=gps
-  -> install/compose/docker-compose.gps.yml
-  -> sensors/gps/start_gps.sh
+GNSS_STACK=universal
+  -> install/compose/docker-compose.base.yml
+  -> mowgli-ros2
+  -> mowgli_bringup/universal_gnss.launch.py
+  -> universal_gnss_ros2 receiver_node + ntrip_node
 
-GNSS_BACKEND=unicore
-  -> install/compose/docker-compose.unicore.yaml
-  -> sensors/unicore/start_gps.sh
+GNSS_STACK=legacy
+  -> install/compose/docker-compose.gps.yml or docker-compose.unicore.yaml
+  -> sensors/gps/start_gps.sh or sensors/unicore/start_gps.sh
 ```
 
-`GNSS_BACKEND=ublox` is still accepted as a compatibility preset, but it resolves onto the shared GPS service instead of a separate container.
+Preferred env contract:
+
+- `GNSS_STATUS_SOURCE=universal`
+- `GNSS_STACK=universal`
+- `GNSS_RECEIVER_FAMILY=auto|ublox|unicore|nmea`
+- `GNSS_TRANSPORT=serial`
+- `GNSS_SERIAL_DEVICE=/dev/...`
+- `GNSS_SERIAL_BAUD=921600`
+- `GNSS_NTRIP_ENABLED=true|false`
+- `GNSS_NTRIP_HOST`, `GNSS_NTRIP_PORT`, `GNSS_NTRIP_MOUNTPOINT`
+- `GNSS_NTRIP_USERNAME`, `GNSS_NTRIP_PASSWORD`
+
+Legacy compatibility keys (`GNSS_BACKEND`, `GPS_*`) are still written so older installer logic, udev helpers, and fallback compose fragments keep working during migration.
+
+`GNSS_BACKEND=ublox` is still accepted as a compatibility preset, but it resolves onto the preferred Universal GNSS stack unless `GNSS_STACK=legacy` is selected explicitly.
 
 `GNSS_STATUS_SOURCE=universal` hands `/gps/status`, `/diagnostics`, and `/rtcm` over to Universal GNSS while Mowgli keeps `/gps/absolute_pose` and `/gps/pose_cov` for downstream localization consumers.
 
@@ -46,8 +62,11 @@ In that universal mode:
 - the GUI backend mechanically normalizes Universal GNSS status onto the existing frontend JSON contract
 - the old Mowgli-local status publisher remains available only for legacy `GNSS_STATUS_SOURCE` values
 
+Recommended validation/default baud for advanced profiles is `921600`.
+
 ## Troubleshooting
 
-- No `/gps/fix`: confirm the selected device path exists inside the runtime and the receiver baud matches the installer-generated `.env`.
-- No RTK corrections: confirm NTRIP settings in `docker/config/mowgli/mowgli_robot.yaml`, then check `/rtcm` and `/diagnostics`.
+- No `/gps/fix`: confirm the selected serial device exists inside the runtime and the receiver baud matches the installer-generated `.env`.
+- No RTK corrections: confirm NTRIP settings in `docker/.env` and `docker/config/mowgli/mowgli_robot.yaml`, then check `/rtcm` and `/diagnostics`.
+- No direct GNSS container in compose: this is expected in `GNSS_STACK=universal`; Universal GNSS now runs inside `mowgli-ros2`.
 - Wrong compose shape: regenerate with the installer and inspect `docker/docker-compose.yaml` plus `docker/.env`.

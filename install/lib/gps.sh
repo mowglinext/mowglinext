@@ -70,6 +70,8 @@ configure_gps() {
   GPS_UART_RULE=""
   GPS_DEBUG_UART_RULE=""
   : "${GNSS_BACKEND:=gps}"
+  : "${GNSS_STATUS_SOURCE:=$(default_gnss_status_source)}"
+  : "${GNSS_STACK:=$(default_gnss_stack)}"
   local gnss_preconfigured=false
   local gps_preconfigured=false
   local gps_baud_preconfigured=false
@@ -199,22 +201,41 @@ configure_gps() {
       info "GNSS backend pre-configured: ${GNSS_BACKEND}"
     else
       echo ""
-      echo "Select GNSS backend:"
-      echo "  1) Generic GPS (legacy container, UBX or NMEA)"
-      echo "  2) u-blox (F9P, UBX HP + NTRIP bundled)"
-      echo "  3) Unicore (UM98x)"
-      prompt "$MSG_CHOICE" "1"
+      echo "Select GNSS runtime:"
+      echo "  1) Universal GNSS (auto / generic serial receiver)"
+      echo "  2) Universal GNSS (u-blox / F9P preset)"
+      echo "  3) Universal GNSS (Unicore / UM98x)"
+      echo "  4) Universal GNSS (NMEA receiver)"
+      echo "  5) Legacy fallback (migration only)"
+      prompt "$MSG_CHOICE" "2"
       local gnss_choice="$REPLY"
 
       case "$gnss_choice" in
         1)
+          GNSS_STACK="universal"
+          GNSS_STATUS_SOURCE="universal"
           GNSS_BACKEND="gps"
           ;;
         2)
+          GNSS_STACK="universal"
+          GNSS_STATUS_SOURCE="universal"
           GNSS_BACKEND="ublox"
           ;;
         3)
+          GNSS_STACK="universal"
+          GNSS_STATUS_SOURCE="universal"
           GNSS_BACKEND="unicore"
+          ;;
+        4)
+          GNSS_STACK="universal"
+          GNSS_STATUS_SOURCE="universal"
+          GNSS_BACKEND="gps"
+          GPS_PROTOCOL="NMEA"
+          ;;
+        5)
+          GNSS_STACK="legacy"
+          GNSS_STATUS_SOURCE="mowgli_local"
+          GNSS_BACKEND="gps"
           ;;
         *)
           error "Invalid GNSS backend choice"

@@ -27,7 +27,7 @@ fail() {
 
 assert_contains() {
   local label="$1" needle="$2" haystack="$3"
-  if echo "$haystack" | grep -qF -- "$needle"; then
+  if grep -qF -- "$needle" <<<"$haystack"; then
     pass "$label"
   else
     fail "$label" "expected to contain '$needle'"
@@ -36,7 +36,7 @@ assert_contains() {
 
 assert_not_contains() {
   local label="$1" needle="$2" haystack="$3"
-  if ! echo "$haystack" | grep -qF -- "$needle"; then
+  if ! grep -qF -- "$needle" <<<"$haystack"; then
     pass "$label"
   else
     fail "$label" "expected NOT to contain '$needle'"
@@ -55,14 +55,18 @@ assert_contains "backend state defaults to mowgli" "var state = { backend: 'mowg
 assert_contains "backend flag is generated" "parts.push('--backend=' + state.backend);" "$html"
 assert_contains "mavros skips gnss/gps flags" "if (state.backend !== 'mavros') {" "$html"
 assert_contains "gnss flag generation still exists" "parts.push('--gnss=' + state.gnss);" "$html"
-assert_contains "unicore skips gps flag generation" "if (state.gnss !== 'unicore') {" "$html"
+assert_contains "unicore and ublox skip gps flag generation" "if (state.gnss !== 'unicore' && state.gnss !== 'ublox') {" "$html"
 assert_contains "gps flag generation still exists" "parts.push('--gps=' + state.gps);" "$html"
 assert_contains "gnss group has stable id" 'id="gnss-group"' "$html"
 assert_contains "gps group has stable id" 'id="gps-group"' "$html"
 assert_contains "gps hint has stable id" 'id="gps-group-hint"' "$html"
-assert_contains "unicore installer handoff is explicit" "Unicore port/device selection is completed in the installer." "$html"
+assert_contains "auto gnss option exists" 'data-value="auto"' "$html"
+assert_contains "legacy gnss option exists" 'data-value="legacy"' "$html"
+assert_contains "unicore installer handoff is explicit" "Universal Unicore keeps its real serial device selection inside the installer." "$html"
+assert_contains "ublox hint documents installer by-id selection" "Universal u-blox asks for the receiver USB by-id device inside the installer" "$html"
+assert_contains "legacy fallback hint exists" "Legacy fallback keeps the old direct GNSS container path." "$html"
 assert_contains "mavros disables gnss group" "setGroupDisabled('gnss-group', mavrosSelected);" "$html"
-assert_contains "unicore disables gps group" "setGroupDisabled('gps-group', mavrosSelected || unicoreSelected);" "$html"
+assert_contains "unicore and ublox disable gps group" "setGroupDisabled('gps-group', mavrosSelected || unicoreSelected || ubloxSelected);" "$html"
 assert_contains "tfluna group is disabled in ui" 'id="tfluna-group" aria-disabled="true"' "$html"
 assert_contains "tfluna unavailability is explicit" "Temporarily disabled on this branch" "$html"
 assert_not_contains "web composer never emits gnss=nmea" "--gnss=nmea" "$html"

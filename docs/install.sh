@@ -109,9 +109,10 @@ while [[ $# -gt 0 ]]; do
       echo ""
       echo "Options:"
       echo "  --backend=TYPE      Hardware backend: mowgli (default), mavros (advanced Pixhawk path)"
-      echo "  --gnss=BACKEND     GNSS driver: gps (legacy UBX/NMEA), ublox (F9P), unicore (UM98x)"
+      echo "  --gnss=BACKEND     GNSS path: auto/gps (Universal GNSS auto), ublox (Universal F9P preset),"
+      echo "                     unicore (Universal UM98x preset), legacy (migration fallback)"
       echo "  --gps=PRESET       GPS protocol+wiring: ubx-usb, ubx-uart, nmea-usb, nmea-uart"
-      echo "                     (ignored by --gnss=unicore and --gnss=ublox)"
+      echo "                     (ignored by --gnss=unicore and the ublox compatibility preset)"
       echo "  --lidar=PRESET     LiDAR config: none, ldlidar-usb, ldlidar-uart,"
       echo "                     rplidar-usb, rplidar-uart, stl27l-usb, stl27l-uart"
       echo "  --tfluna=PRESET    Rangefinder: none, front, edge, both"
@@ -198,14 +199,65 @@ PRESET
   # ── GNSS backend preset ────────────────────────────────────────────────
   if [[ -n "$GNSS_FLAG" ]]; then
     case "$GNSS_FLAG" in
-      gps|ublox|unicore)
-        echo "GNSS_BACKEND=${GNSS_FLAG}" >> "$PRESET_FILE"
-        info "GNSS backend: $GNSS_FLAG"
+      auto|gps)
+        cat >> "$PRESET_FILE" <<'EOF'
+GNSS_BACKEND=gps
+GNSS_STATUS_SOURCE=universal
+GNSS_STACK=universal
+GNSS_RECEIVER_FAMILY=auto
+GNSS_TRANSPORT=serial
+GNSS_SERIAL_BAUD=921600
+EOF
+        info "GNSS backend: universal auto"
+        ;;
+      ublox)
+        cat >> "$PRESET_FILE" <<'EOF'
+GNSS_BACKEND=ublox
+GNSS_STATUS_SOURCE=universal
+GNSS_STACK=universal
+GNSS_RECEIVER_FAMILY=ublox
+GNSS_TRANSPORT=serial
+GNSS_SERIAL_BAUD=921600
+EOF
+        info "GNSS backend: universal ublox"
+        ;;
+      unicore)
+        cat >> "$PRESET_FILE" <<'EOF'
+GNSS_BACKEND=unicore
+GNSS_STATUS_SOURCE=universal
+GNSS_STACK=universal
+GNSS_RECEIVER_FAMILY=unicore
+GNSS_TRANSPORT=serial
+GNSS_SERIAL_BAUD=921600
+EOF
+        info "GNSS backend: universal unicore"
+        ;;
+      legacy)
+        cat >> "$PRESET_FILE" <<'EOF'
+GNSS_BACKEND=gps
+GNSS_STATUS_SOURCE=mowgli_local
+GNSS_STACK=legacy
+GNSS_RECEIVER_FAMILY=auto
+GNSS_TRANSPORT=serial
+GNSS_SERIAL_BAUD=921600
+EOF
+        info "GNSS backend: legacy fallback"
         ;;
       *)
-        warn "Unknown GNSS backend: $GNSS_FLAG (expected gps|ublox|unicore) — will ask interactively"
+        warn "Unknown GNSS backend: $GNSS_FLAG (expected auto|gps|ublox|unicore|legacy) — will ask interactively"
         ;;
     esac
+  fi
+
+  # Keep the preferred Universal GNSS status source explicit for normal
+  # Mowgli installs even when no GNSS preset was selected.
+  if [[ "${BACKEND_FLAG:-mowgli}" == "mowgli" && -z "$GNSS_FLAG" ]]; then
+    cat >> "$PRESET_FILE" <<'EOF'
+GNSS_STATUS_SOURCE=universal
+GNSS_STACK=universal
+GNSS_TRANSPORT=serial
+GNSS_SERIAL_BAUD=921600
+EOF
   fi
 
   # ── GPS preset ─────────────────────────────────────────────────────────
@@ -236,6 +288,7 @@ GPS_PROTOCOL=NMEA
 GPS_PORT=/dev/gps
 GPS_UART_DEVICE=
 GPS_DEBUG_ENABLED=false
+GNSS_RECEIVER_FAMILY=nmea
 EOF
         ;;
       nmea-uart)
@@ -245,6 +298,7 @@ GPS_PROTOCOL=NMEA
 GPS_PORT=/dev/gps
 GPS_UART_DEVICE=/dev/ttyAMA4
 GPS_DEBUG_ENABLED=false
+GNSS_RECEIVER_FAMILY=nmea
 EOF
         ;;
       *)
@@ -253,7 +307,7 @@ EOF
     esac
     info "GPS: $GPS_FLAG"
   elif [[ -n "$GPS_FLAG" && "${GNSS_FLAG:-}" == "ublox" ]]; then
-    info "GPS preset ignored for GNSS_BACKEND=ublox (u-blox USB-by-id runtime)"
+    info "GPS preset ignored for GNSS_BACKEND=ublox (Universal GNSS uses the selected USB by-id device)"
   fi
 
   # ── LiDAR preset ──────────────────────────────────────────────────────

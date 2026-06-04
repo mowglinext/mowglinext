@@ -44,6 +44,18 @@ REQUIRED_KEYS=(
   DISABLE_BLUETOOTH
   ENABLE_FOXGLOVE
   GNSS_BACKEND
+  GNSS_STATUS_SOURCE
+  GNSS_STACK
+  GNSS_RECEIVER_FAMILY
+  GNSS_TRANSPORT
+  GNSS_SERIAL_DEVICE
+  GNSS_SERIAL_BAUD
+  GNSS_NTRIP_ENABLED
+  GNSS_NTRIP_HOST
+  GNSS_NTRIP_PORT
+  GNSS_NTRIP_MOUNTPOINT
+  GNSS_NTRIP_USERNAME
+  GNSS_NTRIP_PASSWORD
   GPS_CONNECTION
   GPS_PROTOCOL
   GPS_PORT
@@ -97,12 +109,33 @@ ENV_CONTENT="$(cat "$ENV_FILE")"
 assert_contains "GPS_PROTOCOL=UBX (preset)" "GPS_PROTOCOL=UBX" "$ENV_CONTENT"
 assert_contains "GPS_BAUD=921600 (runtime target)" "GPS_BAUD=921600" "$ENV_CONTENT"
 assert_contains "GPS_CONNECTION=uart (preset)" "GPS_CONNECTION=uart" "$ENV_CONTENT"
+assert_contains "GNSS_STACK=universal (default)" "GNSS_STACK=universal" "$ENV_CONTENT"
+assert_contains "GNSS_RECEIVER_FAMILY=auto (default)" "GNSS_RECEIVER_FAMILY=auto" "$ENV_CONTENT"
+assert_contains "GNSS_TRANSPORT=serial (default)" "GNSS_TRANSPORT=serial" "$ENV_CONTENT"
+assert_contains "GNSS_SERIAL_DEVICE=/dev/ttyAMA4 (derived)" "GNSS_SERIAL_DEVICE=/dev/ttyAMA4" "$ENV_CONTENT"
+assert_contains "GNSS_SERIAL_BAUD=921600 (derived)" "GNSS_SERIAL_BAUD=921600" "$ENV_CONTENT"
 assert_contains "LIDAR_TYPE=ldlidar (preset)" "LIDAR_TYPE=ldlidar" "$ENV_CONTENT"
 assert_contains "LIDAR_BAUD=230400 (preset)" "LIDAR_BAUD=230400" "$ENV_CONTENT"
 assert_contains "HARDWARE_BACKEND=mowgli (default)" "HARDWARE_BACKEND=mowgli" "$ENV_CONTENT"
 assert_contains "GNSS_BACKEND=gps (default)" "GNSS_BACKEND=gps" "$ENV_CONTENT"
+assert_contains "GNSS_STATUS_SOURCE=universal (default)" "GNSS_STATUS_SOURCE=universal" "$ENV_CONTENT"
 assert_contains "TFLUNA_FRONT_ENABLED=false (default)" "TFLUNA_FRONT_ENABLED=false" "$ENV_CONTENT"
 assert_contains "TFLUNA_EDGE_ENABLED=false (default)" "TFLUNA_EDGE_ENABLED=false" "$ENV_CONTENT"
+
+section "NTRIP env is written without leaking secrets to logs"
+
+repo_ntrip="$SANDBOX/repo_ntrip"
+sandbox_repo "$repo_ntrip"
+harness_init "$repo_ntrip"
+harness_set_preset gnss=ublox lidar=none tfluna=none \
+  ntrip=true ntrip_host=rtk.local ntrip_port=2102 \
+  ntrip_user=operator ntrip_password=super-secret ntrip_mountpoint=FIELD1
+
+ntrip_setup_output="$(setup_env 2>&1)"
+ntrip_env="$(cat "$repo_ntrip/docker/.env")"
+assert_contains "NTRIP host written to env" "GNSS_NTRIP_HOST=rtk.local" "$ntrip_env"
+assert_contains "NTRIP password written to env" "GNSS_NTRIP_PASSWORD=super-secret" "$ntrip_env"
+assert_not_contains "NTRIP password not echoed in setup_env logs" "super-secret" "$ntrip_setup_output"
 
 section ".env image references point at ghcr.io"
 

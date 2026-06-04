@@ -31,7 +31,11 @@ harness_init() {
   # Clear any state leaked from a previous harness_init in the same
   # shell so the matrix tests in test_gps_matrix.sh / test_lidar_matrix.sh
   # don't carry GPS_UART_DEVICE etc. from one preset into the next.
-  unset GNSS_BACKEND GPS_CONNECTION GPS_PROTOCOL GPS_PORT GPS_BAUD \
+  unset GNSS_BACKEND GNSS_STATUS_SOURCE GNSS_STACK GNSS_RECEIVER_FAMILY \
+        GNSS_TRANSPORT GNSS_SERIAL_DEVICE GNSS_SERIAL_BAUD \
+        GNSS_NTRIP_ENABLED GNSS_NTRIP_HOST GNSS_NTRIP_PORT \
+        GNSS_NTRIP_MOUNTPOINT GNSS_NTRIP_USERNAME GNSS_NTRIP_PASSWORD \
+        GPS_CONNECTION GPS_PROTOCOL GPS_PORT GPS_BAUD \
         GPS_UART_DEVICE GPS_BY_ID GPS_DEBUG_ENABLED GPS_DEBUG_PORT \
         GPS_DEBUG_UART_DEVICE GPS_DEBUG_BAUD \
         UNICORE_COM_PORT UNICORE_TARGET_BAUD \
@@ -145,6 +149,10 @@ harness_init() {
   # Defaults for backend selection — overridden by harness_set_preset().
   HARDWARE_BACKEND="${HARDWARE_BACKEND:-mowgli}"
   GNSS_BACKEND="${GNSS_BACKEND:-gps}"
+  GNSS_STATUS_SOURCE="${GNSS_STATUS_SOURCE:-universal}"
+  GNSS_STACK="${GNSS_STACK:-universal}"
+  GNSS_RECEIVER_FAMILY="${GNSS_RECEIVER_FAMILY:-auto}"
+  GNSS_TRANSPORT="${GNSS_TRANSPORT:-serial}"
   GPS_CONNECTION="${GPS_CONNECTION:-uart}"
   GPS_PROTOCOL="${GPS_PROTOCOL:-UBX}"
   GPS_BAUD="${GPS_BAUD:-921600}"
@@ -182,21 +190,47 @@ harness_set_preset() {
         fi
         ;;
       gnss)
-        GNSS_BACKEND="$val"
-        if [ "$val" = "ublox" ]; then
-          GPS_CONNECTION="usb"
-          GPS_PROTOCOL="UBX"
-          GPS_UART_DEVICE=""
-          GPS_BY_ID="${GPS_BY_ID:-/dev/serial/by-id/ublox-test-serial}"
-          GPS_PORT="${GPS_BY_ID}"
-          UBLOX_DEVICE_SERIAL_STRING="${UBLOX_DEVICE_SERIAL_STRING:-}"
-        fi
+        case "$val" in
+          legacy)
+            GNSS_STACK="legacy"
+            GNSS_STATUS_SOURCE="mowgli_local"
+            GNSS_BACKEND="${GNSS_BACKEND:-gps}"
+            GNSS_RECEIVER_FAMILY="${GNSS_RECEIVER_FAMILY:-auto}"
+            ;;
+          gps|auto)
+            GNSS_STACK="universal"
+            GNSS_STATUS_SOURCE="universal"
+            GNSS_BACKEND="gps"
+            GNSS_RECEIVER_FAMILY="auto"
+            ;;
+          ublox)
+            GNSS_STACK="universal"
+            GNSS_STATUS_SOURCE="universal"
+            GNSS_BACKEND="ublox"
+            GNSS_RECEIVER_FAMILY="ublox"
+            GPS_CONNECTION="usb"
+            GPS_PROTOCOL="UBX"
+            GPS_UART_DEVICE=""
+            GPS_BY_ID="${GPS_BY_ID:-/dev/serial/by-id/ublox-test-serial}"
+            GPS_PORT="${GPS_BY_ID}"
+            UBLOX_DEVICE_SERIAL_STRING="${UBLOX_DEVICE_SERIAL_STRING:-}"
+            ;;
+          unicore)
+            GNSS_STACK="universal"
+            GNSS_STATUS_SOURCE="universal"
+            GNSS_BACKEND="unicore"
+            GNSS_RECEIVER_FAMILY="unicore"
+            ;;
+          *)
+            GNSS_BACKEND="$val"
+            ;;
+        esac
         ;;
       gps)
         proto="${val%%-*}"; conn="${val##*-}"
         case "$proto" in
-          ubx)  GPS_PROTOCOL="UBX"; unset GPS_BAUD ;;
-          nmea) GPS_PROTOCOL="NMEA"; unset GPS_BAUD ;;
+          ubx)  GPS_PROTOCOL="UBX"; GNSS_RECEIVER_FAMILY="${GNSS_RECEIVER_FAMILY:-auto}"; unset GPS_BAUD ;;
+          nmea) GPS_PROTOCOL="NMEA"; GNSS_RECEIVER_FAMILY="nmea"; unset GPS_BAUD ;;
         esac
         case "$conn" in
           usb)  GPS_CONNECTION="usb";  GPS_UART_DEVICE="" ;;
@@ -246,6 +280,11 @@ harness_set_preset() {
       datum_lat) CONFIG_DATUM_LAT="$val" ;;
       datum_lon) CONFIG_DATUM_LON="$val" ;;
       ntrip)     CONFIG_NTRIP_ENABLED="$val" ;;
+      ntrip_host) CONFIG_NTRIP_HOST="$val" ;;
+      ntrip_port) CONFIG_NTRIP_PORT="$val" ;;
+      ntrip_user) CONFIG_NTRIP_USER="$val" ;;
+      ntrip_password) CONFIG_NTRIP_PASSWORD="$val" ;;
+      ntrip_mountpoint) CONFIG_NTRIP_MOUNTPOINT="$val" ;;
     esac
   done
 }

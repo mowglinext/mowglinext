@@ -28,6 +28,43 @@ def test_universal_wrapper_keeps_legacy_status_topic_outside_universal_mode(monk
     assert launch_module._default_status_topic() == "/status"
 
 
+def test_universal_wrapper_prefers_new_env_contract(monkeypatch) -> None:
+    launch_module = _load_module("universal_gnss.launch.py", "universal_gnss_launch_env")
+    monkeypatch.setenv("GNSS_RECEIVER_FAMILY", "unicore")
+    monkeypatch.setenv("GNSS_SERIAL_DEVICE", "/dev/ttyUSB0")
+    monkeypatch.setenv("GNSS_SERIAL_BAUD", "921600")
+    monkeypatch.setenv("GNSS_TRANSPORT", "serial")
+    monkeypatch.setenv("GNSS_NTRIP_ENABLED", "true")
+    monkeypatch.setenv("GNSS_NTRIP_HOST", "rtk.local")
+    monkeypatch.setenv("GNSS_NTRIP_PORT", "2102")
+    monkeypatch.setenv("GNSS_NTRIP_MOUNTPOINT", "FIELD1")
+    monkeypatch.setenv("GNSS_NTRIP_USERNAME", "operator")
+    monkeypatch.setenv("GNSS_NTRIP_PASSWORD", "secret")
+
+    robot_params = {
+        "gps_protocol": "UBX",
+        "gps_port": "/dev/gps",
+        "gps_baudrate": 460800,
+        "ntrip_enabled": False,
+        "ntrip_host": "yaml-host",
+        "ntrip_port": 2101,
+        "ntrip_mountpoint": "YAML",
+        "ntrip_user": "yaml-user",
+        "ntrip_password": "yaml-password",
+    }
+
+    assert launch_module._default_receiver_family(robot_params) == "unicore"
+    assert launch_module._default_serial_device(robot_params) == "/dev/ttyUSB0"
+    assert launch_module._default_serial_baud(robot_params) == "921600"
+    assert launch_module._default_transport() == "serial"
+    assert launch_module._default_ntrip_enabled(robot_params) == "true"
+    assert launch_module._default_ntrip_host(robot_params) == "rtk.local"
+    assert launch_module._default_ntrip_port(robot_params) == "2102"
+    assert launch_module._default_ntrip_mountpoint(robot_params) == "FIELD1"
+    assert launch_module._default_ntrip_username(robot_params) == "operator"
+    assert launch_module._default_ntrip_password(robot_params) == "secret"
+
+
 def test_full_system_disables_local_status_when_universal_selected() -> None:
     launch_module = _load_module("full_system.launch.py", "full_system_launch")
     assert launch_module._local_gnss_status_enabled("mowgli_local") is True

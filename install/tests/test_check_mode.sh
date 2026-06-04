@@ -51,12 +51,20 @@ check_cmd="$(rerun_check_command)"
 assert_contains "rerun_check_command points to install/mowglinext.sh --check" "install/mowglinext.sh --check" "$check_cmd"
 
 restart_gps="$(compose_restart_services_for_backend | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
-assert_eq "restart services for legacy gps" "gps mowgli" "$restart_gps"
+assert_eq "restart services for universal gnss" "mowgli" "$restart_gps"
 
 GNSS_BACKEND="gps"
+GNSS_STACK="legacy"
+GNSS_STATUS_SOURCE="mowgli_local"
+restart_legacy="$(compose_restart_services_for_backend | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+assert_eq "restart services for legacy gps" "gps mowgli" "$restart_legacy"
+
+GNSS_BACKEND="gps"
+GNSS_STACK="universal"
+GNSS_STATUS_SOURCE="universal"
 GPS_PROTOCOL="NMEA"
 restart_nmea="$(compose_restart_services_for_backend | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
-assert_eq "restart services for gps+nmea" "gps mowgli" "$restart_nmea"
+assert_eq "restart services for universal gps+nmea" "mowgli" "$restart_nmea"
 
 HARDWARE_BACKEND="mavros"
 GNSS_BACKEND="disabled"
@@ -70,14 +78,21 @@ sandbox_repo "$repo_mowgli"
 harness_init "$repo_mowgli"
 harness_set_preset backend=mowgli gnss=gps gps=ubx-uart lidar=ldlidar-uart tfluna=none
 harness_run >/dev/null 2>&1
-assert_runtime_check_case "mowgli gps" "$repo_mowgli" "gps (mowgli-gps)" "mavros (mowgli-mavros)"
+assert_runtime_check_case "mowgli gps" "$repo_mowgli" "mowgli (mowgli-ros2)" "gps (mowgli-gps)"
 
 repo_nmea="$SANDBOX/repo_nmea"
 sandbox_repo "$repo_nmea"
 harness_init "$repo_nmea"
 harness_set_preset backend=mowgli gnss=gps gps=nmea-uart lidar=ldlidar-uart tfluna=none
 harness_run >/dev/null 2>&1
-assert_runtime_check_case "mowgli gps+nmea" "$repo_nmea" "gps (mowgli-gps)" "mavros (mowgli-mavros)"
+assert_runtime_check_case "mowgli gps+nmea" "$repo_nmea" "mowgli (mowgli-ros2)" "gps (mowgli-gps)"
+
+repo_legacy="$SANDBOX/repo_legacy"
+sandbox_repo "$repo_legacy"
+harness_init "$repo_legacy"
+harness_set_preset backend=mowgli gnss=legacy gps=ubx-uart lidar=ldlidar-uart tfluna=none
+harness_run >/dev/null 2>&1
+assert_runtime_check_case "mowgli legacy fallback" "$repo_legacy" "gps (mowgli-gps)" "mavros (mowgli-mavros)"
 
 repo_mavros="$SANDBOX/repo_mavros"
 sandbox_repo "$repo_mavros"

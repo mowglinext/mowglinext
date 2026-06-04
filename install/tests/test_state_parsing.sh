@@ -36,22 +36,26 @@ section "valid preset parsing"
 cat > "$SANDBOX_REPO/install/.preset" <<'EOF'
 # Composer preset
 HARDWARE_BACKEND=mavros
+GNSS_STACK=legacy
 GPS_CONNECTION=usb
 GPS_PROTOCOL="UBX"
 GPS_BAUD=460800
+GNSS_SERIAL_BAUD=921600
 LIDAR_MODEL=
 EOF
 
-unset HARDWARE_BACKEND GPS_CONNECTION GPS_PROTOCOL GPS_BAUD LIDAR_MODEL 2>/dev/null || true
+unset HARDWARE_BACKEND GNSS_STACK GPS_CONNECTION GPS_PROTOCOL GPS_BAUD GNSS_SERIAL_BAUD LIDAR_MODEL 2>/dev/null || true
 STATE_ACTIVE_PRESET_FILE=""
 STATE_ACTIVE_PRESET_COUNT=0
 load_preset_file "$SANDBOX_REPO/install/.preset"
 assert_eq "preset loads HARDWARE_BACKEND" "mavros" "${HARDWARE_BACKEND:-}"
+assert_eq "preset loads GNSS_STACK" "legacy" "${GNSS_STACK:-}"
 assert_eq "preset loads GPS_CONNECTION" "usb" "${GPS_CONNECTION:-}"
 assert_eq "preset strips matching quotes" "UBX" "${GPS_PROTOCOL:-}"
 assert_eq "preset keeps numeric text" "460800" "${GPS_BAUD:-}"
+assert_eq "preset loads GNSS_SERIAL_BAUD" "921600" "${GNSS_SERIAL_BAUD:-}"
 assert_eq "preset preserves empty values" "" "${LIDAR_MODEL-__unset__}"
-assert_eq "preset count tracks loaded keys" "5" "${STATE_ACTIVE_PRESET_COUNT:-0}"
+assert_eq "preset count tracks loaded keys" "7" "${STATE_ACTIVE_PRESET_COUNT:-0}"
 
 section "invalid preset lines are ignored"
 
@@ -88,18 +92,24 @@ cat > "$SANDBOX_REPO/docker/.env" <<'EOF'
 # Existing runtime config
 export GPS_PROTOCOL=NMEA
 
+GNSS_STATUS_SOURCE=universal
+GNSS_STACK=universal
+GNSS_RECEIVER_FAMILY=nmea
 GPS_BAUD=115200
 LIDAR_MODEL=""
 UNKNOWN_TEST_KEY=surprise
 EOF
 
-unset GPS_PROTOCOL GPS_BAUD LIDAR_MODEL UNKNOWN_TEST_KEY 2>/dev/null || true
+unset GPS_PROTOCOL GNSS_STATUS_SOURCE GNSS_STACK GNSS_RECEIVER_FAMILY GPS_BAUD LIDAR_MODEL UNKNOWN_TEST_KEY 2>/dev/null || true
 env_output_file="$SANDBOX/env-load.out"
 load_env_defaults_file "$SANDBOX_REPO/docker/.env" >"$env_output_file" 2>&1
 env_output="$(cat "$env_output_file")"
 assert_contains ".env comments ignored and file loads" "Loaded previous configuration" "$env_output"
 assert_contains "unknown key warning preserved" "Ignoring unknown installer key 'UNKNOWN_TEST_KEY'" "$env_output"
 assert_eq ".env export compatibility preserved" "NMEA" "${GPS_PROTOCOL:-}"
+assert_eq ".env GNSS status source preserved" "universal" "${GNSS_STATUS_SOURCE:-}"
+assert_eq ".env GNSS stack preserved" "universal" "${GNSS_STACK:-}"
+assert_eq ".env GNSS receiver family preserved" "nmea" "${GNSS_RECEIVER_FAMILY:-}"
 assert_eq ".env numeric text preserved" "115200" "${GPS_BAUD:-}"
 assert_eq ".env quoted empty value preserved" "" "${LIDAR_MODEL-__unset__}"
 
@@ -148,6 +158,7 @@ MOWER_IP=10.0.0.161
 DISABLE_BLUETOOTH=true
 ENABLE_FOXGLOVE=true
 GNSS_BACKEND=gps
+GNSS_STATUS_SOURCE=mowgli_local
 GPS_CONNECTION=uart
 GPS_PROTOCOL=UBX
 GPS_PORT=/dev/gps
@@ -197,5 +208,6 @@ assert_eq "historical .env keeps MAVROS_GCS_URL" "udp-b://@255.255.255.255:14550
 assert_eq "historical .env keeps GUI_IMAGE" "ghcr.io/cedbossneo/mowglinext/mowglinext-gui:main" "${GUI_IMAGE:-}"
 assert_eq "historical .env keeps HARDWARE_BACKEND" "mowgli" "${HARDWARE_BACKEND:-}"
 assert_eq "historical .env keeps GPS_CONNECTION" "uart" "${GPS_CONNECTION:-}"
+assert_eq "historical .env keeps GNSS_STATUS_SOURCE" "mowgli_local" "${GNSS_STATUS_SOURCE:-}"
 
 test_summary
