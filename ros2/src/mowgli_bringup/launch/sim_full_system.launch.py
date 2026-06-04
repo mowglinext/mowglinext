@@ -160,7 +160,6 @@ def generate_launch_description() -> LaunchDescription:
         ),
         launch_arguments={
             "use_sim_time": "true",
-            "use_ekf": "True",
             "use_lidar": use_lidar,
             # cog_to_imu defaults are fine in sim now that the node
             # self-gates the stationary anchor on |wheel_omega| (won't

@@ -27,6 +27,7 @@ counts the same /ntrip_client/rtcm topic for diagnostics.
 from __future__ import annotations
 
 import os
+import select
 import time
 
 import rclpy
@@ -73,24 +74,57 @@ class RtcmSerialBridge(Node):
                 time.sleep(1.0)
         raise RuntimeError(f"could not open {self.device_path} for write")
 
+    def _try_reopen(self) -> bool:
+        """Single non-blocking open attempt for the hot path. Never sleeps,
+        never raises — returns True on success so _on_rtcm can proceed, False
+        to drop the frame and retry on the next one."""
+        try:
+            self.fd = os.open(
+                self.device_path, os.O_WRONLY | os.O_NONBLOCK | os.O_NOCTTY
+            )
+            self.get_logger().info(f"reopened {self.device_path} for RTCM write")
+            return True
+        except OSError:
+            return False
+
     def _on_rtcm(self, msg: RtcmMessage) -> None:
         if self.fd is None:
-            return
+            # Single non-blocking reopen attempt (NOT the 20×1s blocking
+            # _open_device — that would stall the executor for up to 20 s
+            # inside this subscription callback and raise on failure, killing
+            # the node). If it fails we just drop this frame and retry next.
+            if not self._try_reopen():
+                return
         data = bytes(msg.message)
         try:
-            n = os.write(self.fd, data)
-            self.bytes_written += n
+            # Write the WHOLE frame: os.write may do a partial write on a
+            # non-blocking fd, and a truncated RTCM3 frame corrupts the
+            # correction stream (the receiver discards it). Loop over the
+            # remainder, waiting briefly for writability; drop the frame only
+            # if it can't be flushed within a bounded budget.
+            view = memoryview(data)
+            sent = 0
+            deadline = time.time() + 0.2  # 200 ms budget per frame
+            while sent < len(data):
+                try:
+                    sent += os.write(self.fd, view[sent:])
+                except BlockingIOError:
+                    if time.time() >= deadline:
+                        self.get_logger().warn(
+                            f"serial write stalled — dropping RTCM frame "
+                            f"({sent}/{len(data)} bytes flushed)"
+                        )
+                        break
+                    select.select([], [self.fd], [], 0.02)
+            self.bytes_written += sent
             self.msgs_written += 1
-        except BlockingIOError:
-            self.get_logger().warn("serial write would block — RTCM frame dropped")
         except OSError as e:
-            self.get_logger().error(f"serial write: {e} — reopening device")
+            self.get_logger().error(f"serial write: {e} — will reopen on next frame")
             try:
                 os.close(self.fd)
             except OSError:
                 pass
             self.fd = None
-            self._open_device()
             return
 
         now = time.time()

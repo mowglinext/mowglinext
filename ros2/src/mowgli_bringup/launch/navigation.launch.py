@@ -138,11 +138,6 @@ def generate_launch_description() -> LaunchDescription:
         description="Use simulation (Gazebo) clock when true.",
     )
 
-    use_ekf_arg = DeclareLaunchArgument(
-        "use_ekf",
-        default_value="True",
-        description="Run the robot_localization dual EKF. Set to False in simulation where Gazebo provides the odom TF directly.",
-    )
 
     use_lidar_arg = DeclareLaunchArgument(
         "use_lidar",
@@ -201,7 +196,6 @@ def generate_launch_description() -> LaunchDescription:
     # Resolved substitutions
     # ------------------------------------------------------------------
     use_sim_time = LaunchConfiguration("use_sim_time")
-    use_ekf = LaunchConfiguration("use_ekf")
     use_lidar = LaunchConfiguration("use_lidar")
     use_magnetometer = LaunchConfiguration("use_magnetometer")
     use_scan_matching = LaunchConfiguration("use_scan_matching")
@@ -331,6 +325,13 @@ def generate_launch_description() -> LaunchDescription:
     # the dock-instance namespace the plugin never reads, so the slider was
     # orphan and the static -1.5 m governed. See issue #192.)
     dock_approach_distance = 1.5
+    # Extra inward shift of the home-dock pose (metres). MUST have a module-
+    # level default: it is read unconditionally in _inject_dock_pose_and_speeds,
+    # but was previously assigned only inside the `if runtime yaml exists` block
+    # below — so a fresh checkout / CI run with no
+    # /ros2_ws/config/mowgli_robot.yaml raised NameError and aborted the whole
+    # navigation launch.
+    dock_approach_overshoot = 0.05
     # SimpleChargingDock charging-current threshold (amps). 0.3 is the
     # production default (see nav2_params.yaml for the "0.1 stops too
     # early, 0.5 over-presses" rationale). Operator-overridable via
@@ -808,7 +809,6 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             use_sim_time_arg,
-            use_ekf_arg,
             use_lidar_arg,
             use_magnetometer_arg,
             use_scan_matching_arg,
