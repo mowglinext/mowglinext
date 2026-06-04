@@ -38,10 +38,16 @@ GNSS_BACKEND=unicore
 
 `GNSS_BACKEND=ublox` is still accepted as a compatibility preset, but it resolves onto the shared GPS service instead of a separate container.
 
-`GNSS_STATUS_SOURCE=universal` hands the typed `/gps/status` topic over to Universal GNSS while Mowgli keeps `/gps/absolute_pose` and `/gps/pose_cov` for downstream localization consumers.
+`GNSS_STATUS_SOURCE=universal` hands `/gps/status`, `/diagnostics`, and `/rtcm` over to Universal GNSS while Mowgli keeps `/gps/absolute_pose` and `/gps/pose_cov` for downstream localization consumers.
+
+In that universal mode:
+
+- `navsat_to_absolute_pose_node` no longer subscribes to `/diagnostics` for GNSS status reconstruction
+- the GUI backend mechanically normalizes Universal GNSS status onto the existing frontend JSON contract
+- the old Mowgli-local status publisher remains available only for legacy `GNSS_STATUS_SOURCE` values
 
 ## Troubleshooting
 
 - No `/gps/fix`: confirm the selected device path exists inside the runtime and the receiver baud matches the installer-generated `.env`.
-- No RTK corrections: confirm NTRIP settings in `docker/config/mowgli/mowgli_robot.yaml`, then check `/ntrip_client/rtcm` and `/diagnostics`.
+- No RTK corrections: confirm NTRIP settings in `docker/config/mowgli/mowgli_robot.yaml`, then check `/rtcm` and `/diagnostics`.
 - Wrong compose shape: regenerate with the installer and inspect `docker/docker-compose.yaml` plus `docker/.env`.

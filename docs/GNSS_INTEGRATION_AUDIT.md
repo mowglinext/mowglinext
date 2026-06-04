@@ -53,10 +53,16 @@ This document records the current GNSS integration state of MowgliNext while Uni
   - Always publishes `/gps/absolute_pose` and `/gps/pose_cov`.
   - Publishes `/gps/status` only when `publish_gnss_status=true`.
   - Builds `/gps/status` from `NavSatFix` plus parsed `/diagnostics` only in that local-adapter mode.
+  - Does not subscribe to `/diagnostics` at all when `publish_gnss_status=false`.
 - `gnss_runtime_state_builder.cpp`
   - Is the current Mowgli-local GNSS parser/adapter layer.
   - Contains backend-specific diagnostic parsing for u-blox and Unicore.
-- GUI code reads only the typed `/gps/status` topic, which is already the right integration seam.
+- `mowgli_bringup`
+  - Keeps the local parser path enabled only for legacy `GNSS_STATUS_SOURCE` values.
+  - Leaves `/gps/status` entirely to Universal GNSS when `GNSS_STATUS_SOURCE=universal`.
+- GUI/backend code still reads only the typed `/gps/status` topic.
+  - In legacy mode that payload is already `mowgli_interfaces/msg/GnssStatus`.
+  - In universal mode the backend now performs a temporary mechanical JSON adapter from `universal_gnss_ros2/msg/GnssStatus` into the existing Mowgli GUI schema without parsing vendor strings or diagnostics text.
 
 ## Low-Risk Cleanup Applied
 
@@ -107,6 +113,10 @@ Receiver
 - `full_system.launch.py` now has a `use_universal_gnss` launch arg and includes the wrapper when enabled. The default flips on only when `GNSS_STATUS_SOURCE=universal` and GNSS is not disabled, keeping the current legacy compose path stable until runtime validation switches over.
 - `ros2/scripts/build.sh` now defaults `PACKAGES` builds to `--packages-up-to`, so launch packages like `mowgli_bringup` pull in their required workspace deps during milestone validation. Exact legacy behavior remains available with `PACKAGES_MODE=select`.
 - The milestone validation command `PACKAGES="mowgli_interfaces mowgli_localization universal_gnss_ros2 mowgli_bringup" ros2/scripts/build.sh` now succeeds in this devcontainer after aligning `Fields2Cover` discovery between `mowgli_coverage` and the dev image.
+- Regression coverage now verifies:
+  - legacy mode still advertises and publishes the Mowgli-local `/gps/status`
+  - universal mode keeps `/gps/absolute_pose` and `/gps/pose_cov` alive while suppressing the local `/gps/status` publisher and `/diagnostics` parser subscription
+  - bringup launch helpers keep the Universal GNSS `/gps/status` remap and local-parser switch aligned
 
 ### Hardware Validation
 
@@ -123,7 +133,7 @@ That means serial, USB, live NTRIP, RTCM injection, and runtime compose validati
 ## Next Small Steps
 
 1. Validate the new `mowgli_bringup` Universal GNSS wrapper on real hardware with `use_universal_gnss:=true`, `GNSS_STATUS_SOURCE=universal`, and the real serial/NTRIP paths.
-2. Replace `mowgli_localization` diagnostic parsing with Universal GNSS-native status/messages where available.
-3. Adapt GUI/backend consumers to the Universal GNSS-derived typed status path.
-4. Collapse installer choices so `ublox` is treated as a legacy preset only, not a first-class backend.
-5. Replace the remaining vendor-specific runtime split (`sensors/gps` vs `sensors/unicore`) with one GNSS service once Universal GNSS owns both receivers.
+2. Decide whether to keep the temporary GUI JSON adapter or promote `universal_gnss_ros2/msg/GnssStatus` into a first-class shared interface after field validation.
+3. Collapse installer choices so `ublox` is treated as a legacy preset only, not a first-class backend.
+4. Replace the remaining vendor-specific runtime split (`sensors/gps` vs `sensors/unicore`) with one GNSS service once Universal GNSS owns both receivers.
+5. Remove `gnss_runtime_state_builder.cpp` and the old diagnostics-driven status path only after the replacement is validated on hardware.

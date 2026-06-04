@@ -43,6 +43,12 @@ if(BUILD_TESTING)
   add_launch_test(test/test_nodes_startup.launch.py
     TIMEOUT 60
   )
+  add_launch_test(test/test_navsat_status_legacy.launch.py
+    TIMEOUT 45
+  )
+  add_launch_test(test/test_navsat_status_universal.launch.py
+    TIMEOUT 45
+  )
 
   # Static config-validation tests for nav2_params.yaml. Cheap (no nodes
   # spun up) and they guard against regressions like the 2026-05-08
@@ -51,6 +57,9 @@ if(BUILD_TESTING)
   # never moved.
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_nav2_params test/test_nav2_params.py
+    TIMEOUT 30
+  )
+  ament_add_pytest_test(test_gnss_launch_config test/test_gnss_launch_config.py
     TIMEOUT 30
   )
 
