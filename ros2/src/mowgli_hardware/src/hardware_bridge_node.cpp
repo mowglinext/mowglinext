@@ -398,7 +398,9 @@ private:
         // Hard read error (e.g. the USB CDC device was removed/re-enumerated by
         // a firmware flash or board reboot): the fd is dead. Close now so the
         // next tick reopens and re-resolves /dev/mowgli to the live device.
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+        RCLCPP_WARN_THROTTLE(get_logger(),
+                             *get_clock(),
+                             2000,
                              "Serial read error — closing port to reconnect.");
         serial_->close();
         return;
