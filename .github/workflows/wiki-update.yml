@@ -23,7 +23,10 @@ concurrency:
 jobs:
   suggest:
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.draft == false &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -70,9 +73,6 @@ jobs:
             Grep
 
       - name: Commit wiki updates to PR branch
-        # Fork PRs: the workflow runs but cannot push back to the contributor's fork.
-        # Wiki suggestions are visible in the job log; the maintainer can apply them manually.
-        if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
