@@ -68,6 +68,7 @@
 
 #include "mowgli_hardware/bridge_comms.hpp"
 #include "mowgli_hardware/clock_fit.hpp"
+#include "mowgli_hardware/motor_speed_velocity.hpp"
 #include "mowgli_hardware/ll_datatypes.hpp"
 #include "mowgli_hardware/packet_handler.hpp"
 #include "mowgli_hardware/serial_port.hpp"
@@ -206,6 +207,17 @@ private:
     // preserving, so /wheel_odom (computed from the raw tick aggregate below) is
     // unaffected. ≤0 disables (raw per-packet velocity).
     wheel_meas_filter_tau_ = declare_parameter<double>("wheel_meas_filter_tau", 0.12);
+    // Tier-1 low-lag velocity source. When true, the joint VELOCITY state fed to
+    // the pid_controller comes from the firmware's odom velocity_mm_s field —
+    // which (with the matching firmware) carries the PAC5210's OWN smooth speed
+    // reading, auto-scaled here against the tick rate — INSTEAD of the
+    // EMA-de-quantised tick velocity. This removes the ~0.12 s EMA dead time
+    // that dominated the loop. Requires the firmware that reports motor speed in
+    // velocity_mm_s; DEFAULT false so older firmware (which puts tick-velocity
+    // there) is unaffected. Falls back to the EMA per-wheel until the scale
+    // calibrates and while the scaled value looks implausible.
+    use_motor_speed_velocity_ = declare_parameter<bool>("use_motor_speed_velocity", false);
+    motor_speed_scale_alpha_ = declare_parameter<double>("motor_speed_scale_alpha", 0.02);
 
     // Dock pose comes solely from mowgli_robot.yaml (declared as ROS
     // parameters above). Calibration and manual GUI adjustments persist
@@ -1336,6 +1348,16 @@ private:
         vel_l_mps = meas_l_filt_;
         vel_r_mps = meas_r_filt_;
       }
+      // Tier-1: prefer the firmware's smooth motor-controller speed (auto-scaled
+      // to m/s against the tick rate), which has none of the EMA lag. Opt-in;
+      // falls back to the EMA value above per-wheel until the scale calibrates.
+      if (use_motor_speed_velocity_)
+      {
+        vel_l_mps = motor_speed_velocity(meas_l, vel_l_mps, pkt.left_velocity_mm_s,
+                                         motor_speed_scale_[0], motor_speed_scale_alpha_);
+        vel_r_mps = motor_speed_velocity(meas_r, vel_r_mps, pkt.right_velocity_mm_s,
+                                         motor_speed_scale_[1], motor_speed_scale_alpha_);
+      }
       // Cumulative wheel angle (rad) and angular velocity (rad/s) for read().
       {
         std::lock_guard<std::mutex> lk(motor_mtx_);
@@ -1683,6 +1705,9 @@ private:
       0.12};  ///< EMA τ (s) de-quantising the joint VELOCITY state; 0 disables.
   double meas_l_filt_{0.0};  ///< EMA state for the left wheel velocity (m/s).
   double meas_r_filt_{0.0};  ///< EMA state for the right wheel velocity (m/s).
+  bool use_motor_speed_velocity_{false};   ///< Tier-1: firmware motor-controller speed (auto-scaled) as joint velocity.
+  double motor_speed_scale_alpha_{0.02};   ///< EMA step for the motor-speed→m/s scale calibration.
+  double motor_speed_scale_[2]{0.0, 0.0};  ///< per-wheel m/s per motor-speed-unit (0 = uncalibrated).
 
   // Shared with the ros2_control plugin (MowgliSystemInterface), which runs
   // read()/write() on the controller_manager thread while this node runs on the

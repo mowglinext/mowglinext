@@ -162,6 +162,10 @@ hardware_interface::CallbackReturn MowgliSystemInterface::on_configure(
   if (has_param(hp, "lift_recovery_mode"))
     overrides.emplace_back("lift_recovery_mode",
                            param_string(hp, "lift_recovery_mode", "false") == "true");
+  if (has_param(hp, "use_motor_speed_velocity"))
+    overrides.emplace_back("use_motor_speed_velocity",
+                           param_string(hp, "use_motor_speed_velocity", "false") == "true");
+  push_d("motor_speed_scale_alpha");
 
   rclcpp::NodeOptions options;
   options.arguments(args);

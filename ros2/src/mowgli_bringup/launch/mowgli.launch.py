@@ -176,6 +176,9 @@ def generate_launch_description() -> LaunchDescription:
             " imu_cal_samples:=", str(robot_params.get("imu_cal_samples", 1000)),
             " lift_recovery_mode:=",
             "true" if bool(robot_params.get("lift_recovery_mode", False)) else "false",
+            " use_motor_speed_velocity:=",
+            "true" if bool(robot_params.get("use_motor_speed_velocity", False)) else "false",
+            " motor_speed_scale_alpha:=", str(robot_params.get("motor_speed_scale_alpha", 0.02)),
         ]
     )
 

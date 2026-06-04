@@ -77,6 +77,12 @@
   <xacro:arg name="dock_pose_yaw"        default="0.0"/>
   <xacro:arg name="imu_cal_samples"      default="1000"/>
   <xacro:arg name="lift_recovery_mode"   default="false"/>
+  <!-- Tier-1 low-lag velocity: use the PAC5210's own (smooth) speed reading,
+       auto-scaled, as the control velocity instead of the EMA-de-quantised tick
+       velocity. Requires the firmware that reports motor speed in velocity_mm_s.
+       Default false (older firmware unaffected). -->
+  <xacro:arg name="use_motor_speed_velocity" default="false"/>
+  <xacro:arg name="motor_speed_scale_alpha"  default="0.02"/>
 
   <!-- ================================================================
        Properties (resolved from args — all shape from config)
@@ -443,6 +449,8 @@
         <param name="dock_pose_yaw">$(arg dock_pose_yaw)</param>
         <param name="imu_cal_samples">$(arg imu_cal_samples)</param>
         <param name="lift_recovery_mode">$(arg lift_recovery_mode)</param>
+        <param name="use_motor_speed_velocity">$(arg use_motor_speed_velocity)</param>
+        <param name="motor_speed_scale_alpha">$(arg motor_speed_scale_alpha)</param>
       </hardware>
       <joint name="left_wheel_joint">
         <command_interface name="velocity"/>

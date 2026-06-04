@@ -18,10 +18,13 @@
 # deferred (robot must not move during the migration).
 controller_manager:
   ros__parameters:
-    # 50 Hz read()/write() — matches the ~47 Hz firmware odom-packet cadence so
-    # CMD_PWM is refreshed every packet and stays well inside the firmware's
-    # 200 ms command watchdog.
-    update_rate: 50
+    # 100 Hz read()/write() (was 50). Halves the host-side sampling latency in
+    # the closed-loop wheel-velocity path (each read/write cycle adds up to one
+    # period of dead time). The Pi handles 100 Hz for this small loop fine, and
+    # CMD_PWM stays well inside the firmware's 200 ms command watchdog. Pairs
+    # with the firmware odom-rate bump + the velocity-estimate fix (Tier 1/3) so
+    # the loop isn't bottlenecked on either side.
+    update_rate: 100
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster

@@ -149,8 +149,8 @@ struct LlOdometry
   uint16_t dt_millis;  ///< Firmware-measured interval since last packet [ms]
   int32_t left_ticks;  ///< Signed cumulative left encoder ticks
   int32_t right_ticks;  ///< Signed cumulative right encoder ticks
-  int16_t left_velocity_mm_s;  ///< Signed left wheel velocity [mm/s]
-  int16_t right_velocity_mm_s;  ///< Signed right wheel velocity [mm/s]
+  int16_t left_velocity_mm_s;  ///< Signed left motor-controller speed (PAC5210 units; host auto-scales to m/s — see motor_speed_velocity.hpp). Name kept for wire compat.
+  int16_t right_velocity_mm_s;  ///< Signed right motor-controller speed (PAC5210 units; host auto-scales to m/s). Name kept for wire compat.
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
 

@@ -157,6 +157,11 @@ if(BUILD_TESTING)
   # only for its public include directories.
   ament_add_gtest(test_velocity_pwm test/test_velocity_pwm.cpp)
   target_link_libraries(test_velocity_pwm mowgli_hardware_core)
+
+  # ---- test_motor_speed_velocity ----
+  # motor_speed_velocity.hpp is header-only (pure auto-scale function).
+  ament_add_gtest(test_motor_speed_velocity test/test_motor_speed_velocity.cpp)
+  target_link_libraries(test_motor_speed_velocity mowgli_hardware_core)
 endif()
 
 # ---------------------------------------------------------------------------

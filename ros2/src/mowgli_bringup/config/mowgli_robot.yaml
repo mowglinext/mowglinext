@@ -62,7 +62,17 @@ mowgli:
     max_pwm: 255.0
     # EMA τ (s) de-quantising the joint VELOCITY state fed to the pid_controller
     # (~1 tick/packet at mowing speed → coarse). Mean-preserving; 0 disables.
+    # Only used as the fallback when use_motor_speed_velocity is false.
     wheel_meas_filter_tau: 0.12
+    # Tier-1 low-lag velocity: use the PAC5210's own smooth speed reading
+    # (auto-scaled against the tick rate) as the control velocity instead of the
+    # EMA-de-quantised tick velocity — removes the ~0.12 s EMA dead time that
+    # caps the wheel-velocity loop. REQUIRES the firmware that reports motor
+    # speed in the odom velocity_mm_s field; keep false until that's flashed +
+    # verified on-robot. The host auto-calibrates the scale during the first
+    # drive and falls back to the EMA until it does.
+    use_motor_speed_velocity: false
+    motor_speed_scale_alpha: 0.02
     # Behavior tree tuning (consumed by behavior_tree_node)
     tick_rate: 10.0
     bt_debug_logging: false

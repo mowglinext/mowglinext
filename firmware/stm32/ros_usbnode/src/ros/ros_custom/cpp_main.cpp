@@ -427,59 +427,43 @@ extern "C" void ultrasonic_handler(void)
 /* ---------------------------------------------------------------------------
  * Wheel ticks handler — called from DRIVEMOTOR_App_Rx() every 20 ms.
  *
- * Builds the odometry packet from signed cumulative ticks. Per-wheel
- * velocity is computed here (not on the Pi) because the firmware has the
- * hardware-timer-accurate dt. All four quantities in the packet are
- * signed; the host doesn't need a direction byte or to re-sign anything.
+ * Builds the odometry packet from signed cumulative ticks PLUS the
+ * motor-controller's own signed per-wheel speed reading (p_s16{Left,Right}Speed
+ * = direction * PAC5210 u8_speed). Velocity is NO LONGER a firmware tick-delta
+ * value — the PAC5210 speed is forwarded in velocity_mm_s and the host
+ * auto-scales it to m/s (smoother than ~1 tick/packet; see the inline comment
+ * below). All quantities are signed; the host needs no direction byte.
  * ---------------------------------------------------------------------------*/
 extern "C" void wheelTicks_handler(
     int32_t  p_s32LeftTicksSigned,
     int32_t  p_s32RightTicksSigned,
-    int16_t  p_s16LeftSpeed,   /* currently unused — reserved for future telemetry */
+    int16_t  p_s16LeftSpeed,   /* PAC5210 signed speed → forwarded in velocity_mm_s (host scales) */
     int16_t  p_s16RightSpeed)
 {
-    (void)p_s16LeftSpeed;
-    (void)p_s16RightSpeed;
-
-    static int32_t prev_left_ticks  = 0;
-    static int32_t prev_right_ticks = 0;
-
     const uint32_t now_tick = HAL_GetTick();
     const uint16_t dt_ms    = (uint16_t)(now_tick - last_odom_tick);
     last_odom_tick = now_tick;
-
-    const int32_t delta_left  = p_s32LeftTicksSigned  - prev_left_ticks;
-    const int32_t delta_right = p_s32RightTicksSigned - prev_right_ticks;
-    prev_left_ticks  = p_s32LeftTicksSigned;
-    prev_right_ticks = p_s32RightTicksSigned;
-
-    /* Velocity: mm/s = (delta_ticks / TICKS_PER_M) * (1000 / dt_ms) * 1000
-     *                = delta_ticks * 1e6 / (TICKS_PER_M * dt_ms).
-     * TICKS_PER_M is 300, so the constant numerator (300 * dt_ms) stays
-     * comfortably inside int32 for any realistic dt. We still cast to
-     * int64 for the mul to be safe on large tick deltas.                  */
-    int16_t left_v_mm_s  = 0;
-    int16_t right_v_mm_s = 0;
-    if (dt_ms > 0)
-    {
-        const int64_t denom = (int64_t)TICKS_PER_M * (int64_t)dt_ms;
-        int64_t v_l = ((int64_t)delta_left  * 1000000LL) / denom;
-        int64_t v_r = ((int64_t)delta_right * 1000000LL) / denom;
-        if (v_l >  32767) v_l =  32767;
-        if (v_l < -32768) v_l = -32768;
-        if (v_r >  32767) v_r =  32767;
-        if (v_r < -32768) v_r = -32768;
-        left_v_mm_s  = (int16_t)v_l;
-        right_v_mm_s = (int16_t)v_r;
-    }
 
     pkt_odometry_t odom;
     odom.type                 = PKT_ID_ODOMETRY;
     odom.dt_millis            = dt_ms;
     odom.left_ticks           = p_s32LeftTicksSigned;
     odom.right_ticks          = p_s32RightTicksSigned;
-    odom.left_velocity_mm_s   = left_v_mm_s;
-    odom.right_velocity_mm_s  = right_v_mm_s;
+    /* velocity_mm_s now carries the MOTOR-CONTROLLER's own signed speed reading
+     * (p_s16{Left,Right}Speed = direction * PAC5210 u8_speed), NOT a tick-delta
+     * velocity. WHY: at mowing speed the encoder yields only ~1 tick per 20 ms
+     * packet, so a tick-delta velocity quantises to ~0.15 m/s steps — the host
+     * had to mask that with a 0.12 s EMA whose lag dominated the closed-loop
+     * wheel-velocity dead time. The PAC5210 measures speed internally (its own
+     * fast commutation loop), far smoother than 1 tick/packet. The host
+     * AUTO-SCALES this against the tick rate (host-owns-scale preserved —
+     * ticks_per_meter still sets the true ground scale) when
+     * wheel_velocity_source:=motor_speed, feeding the pid_controller WITHOUT the
+     * EMA. Position + /wheel_odom still derive from the cumulative signed ticks
+     * above, unchanged. The host falls back to tick-delta+EMA if the scaled
+     * value looks implausible, so flashing this is non-breaking. */
+    odom.left_velocity_mm_s   = p_s16LeftSpeed;
+    odom.right_velocity_mm_s  = p_s16RightSpeed;
 
     mowgli_comms_send_odometry(&odom);
 }

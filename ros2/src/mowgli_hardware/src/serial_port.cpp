@@ -24,6 +24,9 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include <linux/serial.h>
+#include <sys/ioctl.h>
+
 namespace mowgli_hardware
 {
 
@@ -126,6 +129,21 @@ bool SerialPort::open()
     ::close(fd_);
     fd_ = -1;
     return false;
+  }
+
+  // ---- Low-latency RX (cdc_acm) ----
+  // Ask the driver to deliver received bytes to userspace IMMEDIATELY instead
+  // of batching them on a kernel work-queue tick. This shaves several ms off
+  // the read path, which matters for the closed-loop wheel-velocity control
+  // dead time (the loop reacts to STM32 odometry packets). Best-effort: not all
+  // drivers honour ASYNC_LOW_LATENCY, so failures are ignored.
+  struct serial_struct ser
+  {
+  };
+  if (::ioctl(fd_, TIOCGSERIAL, &ser) == 0)
+  {
+    ser.flags |= ASYNC_LOW_LATENCY;
+    ::ioctl(fd_, TIOCSSERIAL, &ser);
   }
 
   // Flush any stale data from the kernel buffers.

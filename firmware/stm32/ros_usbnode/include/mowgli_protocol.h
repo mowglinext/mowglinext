@@ -210,9 +210,12 @@ typedef struct {
  * Sent every 20 ms when the drive motor controller responds with encoder data.
  *
  * Signed, self-contained representation: the encoder tick counters are
- * signed cumulative counts (polarity = direction), and per-wheel velocity
- * is computed firmware-side using the hardware-timer-accurate dt so the
- * host doesn't have to divide by a jittery USB-arrival interval.
+ * signed cumulative counts (polarity = direction). The *_velocity_mm_s fields
+ * carry the MOTOR-CONTROLLER's own signed speed reading (PAC5210 internal
+ * speed-register units), NOT a tick-delta mm/s velocity — the host auto-scales
+ * them to m/s against the tick rate (smoother than ~1 tick/packet; see
+ * wheelTicks_handler + the host's motor_speed_velocity.hpp). Field names keep
+ * the *_mm_s suffix for wire-format compatibility.
  *
  * Wire size: 17 bytes (must match sizeof(LlOdometry) in ll_datatypes.hpp).
  */
@@ -221,8 +224,8 @@ typedef struct {
     uint16_t dt_millis;            /**< Firmware-measured interval since last packet [ms] */
     int32_t  left_ticks;           /**< Signed cumulative left encoder ticks */
     int32_t  right_ticks;          /**< Signed cumulative right encoder ticks */
-    int16_t  left_velocity_mm_s;   /**< Signed left wheel velocity [mm/s] */
-    int16_t  right_velocity_mm_s;  /**< Signed right wheel velocity [mm/s] */
+    int16_t  left_velocity_mm_s;   /**< Signed left motor-controller speed (PAC5210 units; host scales to m/s) */
+    int16_t  right_velocity_mm_s;  /**< Signed right motor-controller speed (PAC5210 units; host scales to m/s) */
     uint16_t crc;                  /**< CRC-16 CCITT over preceding bytes */
 } pkt_odometry_t;
 

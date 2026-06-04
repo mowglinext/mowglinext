@@ -214,8 +214,9 @@ extern "C"
    * @brief Wheel odometry packet — Firmware -> Host (PKT_ID_ODOMETRY = 0x04).
    *
    * Sent every 20 ms when the drive motor controller responds with encoder data.
-   * Ticks are signed (polarity encodes direction); per-wheel velocity is
-   * firmware-computed using the hardware-timer dt.
+   * Ticks are signed (polarity encodes direction). *_velocity_mm_s carry the
+   * MOTOR-CONTROLLER's own signed speed reading (PAC5210 units), NOT a tick-delta
+   * mm/s velocity; the host auto-scales to m/s. Names keep *_mm_s for wire compat.
    *
    * Wire size: 17 bytes (must match sizeof(LlOdometry) in ll_datatypes.hpp).
    */
@@ -225,8 +226,8 @@ extern "C"
     uint16_t dt_millis; /**< Firmware-measured interval since last packet [ms] */
     int32_t left_ticks; /**< Signed cumulative left encoder ticks */
     int32_t right_ticks; /**< Signed cumulative right encoder ticks */
-    int16_t left_velocity_mm_s; /**< Signed left wheel velocity [mm/s] */
-    int16_t right_velocity_mm_s; /**< Signed right wheel velocity [mm/s] */
+    int16_t left_velocity_mm_s; /**< Signed left motor-controller speed (PAC5210 units; host scales to m/s) */
+    int16_t right_velocity_mm_s; /**< Signed right motor-controller speed (PAC5210 units; host scales to m/s) */
     uint16_t crc; /**< CRC-16 CCITT over preceding bytes */
   } pkt_odometry_t;
 
