@@ -31,7 +31,7 @@ def test_universal_wrapper_keeps_legacy_status_topic_outside_universal_mode(monk
 def test_universal_wrapper_prefers_new_env_contract(monkeypatch) -> None:
     launch_module = _load_module("universal_gnss.launch.py", "universal_gnss_launch_env")
     monkeypatch.setenv("GNSS_RECEIVER_FAMILY", "unicore")
-    monkeypatch.setenv("GNSS_SERIAL_DEVICE", "/dev/ttyUSB0")
+    monkeypatch.setenv("GNSS_SERIAL_DEVICE", "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0")
     monkeypatch.setenv("GNSS_SERIAL_BAUD", "921600")
     monkeypatch.setenv("GNSS_TRANSPORT", "serial")
     monkeypatch.setenv("GNSS_NTRIP_ENABLED", "true")
@@ -54,7 +54,10 @@ def test_universal_wrapper_prefers_new_env_contract(monkeypatch) -> None:
     }
 
     assert launch_module._default_receiver_family(robot_params) == "unicore"
-    assert launch_module._default_serial_device(robot_params) == "/dev/ttyUSB0"
+    assert (
+        launch_module._default_serial_device(robot_params)
+        == "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+    )
     assert launch_module._default_serial_baud(robot_params) == "921600"
     assert launch_module._default_transport() == "serial"
     assert launch_module._default_ntrip_enabled(robot_params) == "true"
@@ -63,6 +66,20 @@ def test_universal_wrapper_prefers_new_env_contract(monkeypatch) -> None:
     assert launch_module._default_ntrip_mountpoint(robot_params) == "FIELD1"
     assert launch_module._default_ntrip_username(robot_params) == "operator"
     assert launch_module._default_ntrip_password(robot_params) == "secret"
+
+
+def test_universal_wrapper_prefers_gps_by_id_for_usb_fallback(monkeypatch) -> None:
+    launch_module = _load_module("universal_gnss.launch.py", "universal_gnss_launch_usb_fallback")
+    monkeypatch.delenv("GNSS_SERIAL_DEVICE", raising=False)
+    monkeypatch.setenv("GPS_CONNECTION", "usb")
+    monkeypatch.setenv("GPS_BY_ID", "/dev/serial/by-id/usb-u-blox_GNSS_receiver-if00")
+    monkeypatch.setenv("GPS_PORT", "/dev/gps")
+
+    robot_params = {
+        "gps_port": "/dev/gps",
+    }
+
+    assert launch_module._default_serial_device(robot_params) == "/dev/serial/by-id/usb-u-blox_GNSS_receiver-if00"
 
 
 def test_full_system_disables_local_status_when_universal_selected() -> None:

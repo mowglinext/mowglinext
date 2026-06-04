@@ -22,6 +22,7 @@
     "--privileged"
   ],
   "mounts": [
+    "source=/dev,target=/host-dev,type=bind,readonly",
     "source=/home/pepeuch/Documents/vscode/tondeuse/universal-gnss,target=/workspaces/universal-gnss,type=bind"
   ],
 
@@ -46,6 +47,7 @@
 
   // Build the ROS2 workspace after container creation
   "postCreateCommand": ".devcontainer/post-create.sh",
+  "postStartCommand": ".devcontainer/post-start.sh",
 
   // Environment
   "containerEnv": {

@@ -338,7 +338,7 @@
       <!-- GPS protocol / connection -->
       <div class="composer-group" id="gps-group">
         <h3>GPS Receiver</h3>
-        <p class="composer-hint" id="gps-group-hint">Protocol + wiring for the selected GNSS path. Universal GNSS keeps `serial` transport for both UART and USB receivers.</p>
+        <p class="composer-hint" id="gps-group-hint">Protocol + wiring for the selected GNSS path. Universal GNSS keeps `serial` transport for both UART and USB receivers, and USB presets now resolve onto stable `/dev/serial/by-id/...` device paths during install.</p>
         <div class="composer-options" data-group="gps">
           <button class="composer-option active" data-value="ubx-uart">
             <span class="option-icon">📡</span>

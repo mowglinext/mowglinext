@@ -122,6 +122,21 @@ assert_contains "GNSS_STATUS_SOURCE=universal (default)" "GNSS_STATUS_SOURCE=uni
 assert_contains "TFLUNA_FRONT_ENABLED=false (default)" "TFLUNA_FRONT_ENABLED=false" "$ENV_CONTENT"
 assert_contains "TFLUNA_EDGE_ENABLED=false (default)" "TFLUNA_EDGE_ENABLED=false" "$ENV_CONTENT"
 
+section "Universal USB presets keep GNSS_SERIAL_DEVICE on a by-id path"
+
+repo_usb="$SANDBOX/repo_usb"
+sandbox_repo "$repo_usb"
+harness_init "$repo_usb"
+harness_set_preset gnss=ublox lidar=none tfluna=none
+
+if ! harness_run; then
+  fail "harness_run for USB GNSS preset" "non-zero exit"
+else
+  usb_env="$(cat "$repo_usb/docker/.env")"
+  assert_contains "USB preset writes GPS_BY_ID" "GPS_BY_ID=/dev/serial/by-id/ublox-test-serial" "$usb_env"
+  assert_contains "USB preset writes GNSS_SERIAL_DEVICE by-id" "GNSS_SERIAL_DEVICE=/dev/serial/by-id/ublox-test-serial" "$usb_env"
+fi
+
 section "NTRIP env is written without leaking secrets to logs"
 
 repo_ntrip="$SANDBOX/repo_ntrip"
