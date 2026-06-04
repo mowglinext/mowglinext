@@ -30,7 +30,7 @@
   <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend>
   <exec_depend>nav2_waypoint_follower</exec_depend>
-  <exec_depend>opennav_coverage</exec_depend>
+  <exec_depend>mowgli_coverage</exec_depend>
 
   <!-- Localization -->
   <exec_depend>robot_localization</exec_depend>
@@ -52,6 +52,7 @@
   <exec_depend>mowgli_map</exec_depend>
   <exec_depend>mowgli_localization</exec_depend>
   <exec_depend>mowgli_monitoring</exec_depend>
+  <exec_depend>universal_gnss_ros2</exec_depend>
 
   <!-- GUI bridge (optional at runtime, declared for rosdep resolution) -->
   <exec_depend>foxglove_bridge</exec_depend>

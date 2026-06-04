@@ -7,7 +7,10 @@
 #
 # Environment variables (all optional):
 #   BUILD_TYPE   — CMake build type (default: Release)
-#   PACKAGES     — Space-separated list of packages to build (default: all)
+#   PACKAGES      — Space-separated list of packages to build (default: all)
+#   PACKAGES_MODE — "up-to" (default) builds selected packages plus any
+#                   required workspace deps; "select" keeps the legacy exact
+#                   package selection behavior
 #
 # Examples:
 #   ./scripts/build.sh
@@ -44,21 +47,42 @@ echo " Mowgli ROS2 workspace build"
 echo " Build type  : ${BUILD_TYPE}"
 echo " Workers     : ${PARALLEL_WORKERS}"
 echo " Workspace   : ${WORKSPACE}"
+PACKAGES_MODE="${PACKAGES_MODE:-up-to}"
+
 if [ -n "${PACKAGES}" ]; then
     echo " Packages    : ${PACKAGES}"
+    echo " Package mode: ${PACKAGES_MODE}"
 fi
 echo "======================================================="
 
 # Build selected packages or the entire workspace
 if [ -n "${PACKAGES}" ]; then
-    # shellcheck disable=SC2086
-    colcon build \
-        --base-paths "${BUILD_PATHS[@]}" \
-        --packages-select ${PACKAGES} \
-        --cmake-args -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-        --parallel-workers "${PARALLEL_WORKERS}" \
-        --symlink-install \
-        --event-handlers console_cohesion+
+    case "${PACKAGES_MODE}" in
+        up-to)
+            # shellcheck disable=SC2086
+            colcon build \
+                --base-paths "${BUILD_PATHS[@]}" \
+                --packages-up-to ${PACKAGES} \
+                --cmake-args -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+                --parallel-workers "${PARALLEL_WORKERS}" \
+                --symlink-install \
+                --event-handlers console_cohesion+
+            ;;
+        select)
+            # shellcheck disable=SC2086
+            colcon build \
+                --base-paths "${BUILD_PATHS[@]}" \
+                --packages-select ${PACKAGES} \
+                --cmake-args -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+                --parallel-workers "${PARALLEL_WORKERS}" \
+                --symlink-install \
+                --event-handlers console_cohesion+
+            ;;
+        *)
+            echo "ERROR: Unsupported PACKAGES_MODE=${PACKAGES_MODE}. Use 'up-to' or 'select'." >&2
+            exit 1
+            ;;
+    esac
 else
     colcon build \
         --base-paths "${BUILD_PATHS[@]}" \

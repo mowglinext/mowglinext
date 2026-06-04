@@ -103,8 +103,10 @@ Receiver
 ### Workspace Build
 
 - `universal_gnss_ros2` is now intended to build from the MowgliNext workspace using the standard `ros2/scripts/build.sh`, `ros2/scripts/test.sh`, `ros2/Makefile`, and `.devcontainer/post-create.sh` entrypoints.
-- `mowgli_interfaces` and `mowgli_localization` still build successfully after the GNSS handoff changes.
-- A broader `colcon build --packages-up-to mowgli_bringup` is currently blocked by an unrelated `opennav_coverage` vs `Fields2Cover` API mismatch already present in this workspace.
+- `mowgli_bringup/launch/universal_gnss.launch.py` now wraps `universal_gnss_ros2` receiver/NTRIP nodes with defaults sourced from the existing GNSS env contract plus `mowgli_robot.yaml`.
+- `full_system.launch.py` now has a `use_universal_gnss` launch arg and includes the wrapper when enabled. The default flips on only when `GNSS_STATUS_SOURCE=universal` and GNSS is not disabled, keeping the current legacy compose path stable until runtime validation switches over.
+- `ros2/scripts/build.sh` now defaults `PACKAGES` builds to `--packages-up-to`, so launch packages like `mowgli_bringup` pull in their required workspace deps during milestone validation. Exact legacy behavior remains available with `PACKAGES_MODE=select`.
+- The milestone validation command `PACKAGES="mowgli_interfaces mowgli_localization universal_gnss_ros2 mowgli_bringup" ros2/scripts/build.sh` now succeeds in this devcontainer after aligning `Fields2Cover` discovery between `mowgli_coverage` and the dev image.
 
 ### Hardware Validation
 
@@ -120,8 +122,8 @@ That means serial, USB, live NTRIP, RTCM injection, and runtime compose validati
 
 ## Next Small Steps
 
-1. Wire `universal_gnss_ros2` receiver and NTRIP launch/config into `mowgli_bringup`.
-2. Switch typed `/gps/status` ownership to Universal GNSS-backed status while keeping the legacy parser in place until replacement is validated.
-3. Replace `mowgli_localization` diagnostic parsing with Universal GNSS-native status/messages where available.
+1. Validate the new `mowgli_bringup` Universal GNSS wrapper on real hardware with `use_universal_gnss:=true`, `GNSS_STATUS_SOURCE=universal`, and the real serial/NTRIP paths.
+2. Replace `mowgli_localization` diagnostic parsing with Universal GNSS-native status/messages where available.
+3. Adapt GUI/backend consumers to the Universal GNSS-derived typed status path.
 4. Collapse installer choices so `ublox` is treated as a legacy preset only, not a first-class backend.
 5. Replace the remaining vendor-specific runtime split (`sensors/gps` vs `sensors/unicore`) with one GNSS service once Universal GNSS owns both receivers.

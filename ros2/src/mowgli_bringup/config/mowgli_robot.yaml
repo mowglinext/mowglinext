@@ -139,6 +139,8 @@ mowgli:
     # -----------------------------------------------------------------
     # GPS / Positioning
     # -----------------------------------------------------------------
+    gps_baudrate: 921600
+    gps_port: "/dev/gps"
     gps_protocol: "UBX"
     datum_lat: 0.0             # map origin latitude  (set per-site)
     datum_lon: 0.0             # map origin longitude (set per-site)
