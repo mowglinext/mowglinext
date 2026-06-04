@@ -61,16 +61,18 @@ func (hc *HomeKitProvider) launchServer(as *accessory.A) {
 	log2.Debug.Enable()
 	// Create the hap server.
 	server, err := hap.NewServer(hc.db, as)
+	if err != nil {
+		// NewServer returns (nil, err) on store failures — must check before
+		// touching server, otherwise the next line nil-derefs. (Previously the
+		// err was shadowed by the db.Get below and silently lost.)
+		log.Panic(err)
+	}
 	server.Addr = ":8000"
 	pinCode, err := hc.db.Get("system.homekit.pincode")
 	if err != nil {
 		log.Panic(err)
 	}
 	server.Pin = string(pinCode)
-	if err != nil {
-		// stop if an error happens
-		log.Panic(err)
-	}
 
 	// Setup a listener for interrupts and SIGTERM signals
 	// to stop the server.

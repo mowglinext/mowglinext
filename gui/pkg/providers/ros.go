@@ -313,10 +313,13 @@ func (r *RosProvider) fanOut(logicalKey string, msg []byte) {
 	for _, sub := range r.subscribers[logicalKey] {
 		sub.Publish(msg)
 	}
-	// Track mowing sessions from high-level status transitions
+	// Track mowing sessions from high-level status transitions. Enqueue to the
+	// tracker's single-consumer goroutine so transitions are applied in arrival
+	// order (a goroutine-per-message could reorder rapid MOWING->CHARGING->IDLE
+	// bursts and corrupt the session state machine).
 	if logicalKey == "highLevelStatus" && r.sessionTracker != nil {
 		msgCopy := append([]byte(nil), msg...)
-		go r.sessionTracker.OnHighLevelStatus(msgCopy)
+		r.sessionTracker.Enqueue(msgCopy)
 	}
 }
 

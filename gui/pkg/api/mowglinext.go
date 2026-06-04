@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
+	"net/url"
 	"sync"
 	"time"
 
@@ -34,9 +34,16 @@ var upgrader = websocket.Upgrader{
 		if origin == "" {
 			return true // non-browser clients
 		}
-		// Allow same-host connections
-		host := r.Host
-		return strings.Contains(origin, host)
+		// Compare the parsed Origin HOST to the request Host exactly.
+		// strings.Contains was exploitable: a page served from e.g.
+		// "http://mower.local.evil.com" contains the host substring
+		// "mower.local" and would pass, enabling cross-site WebSocket
+		// hijacking against an API that has no auth layer.
+		u, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		return u.Host == r.Host
 	},
 }
 
@@ -97,6 +104,9 @@ func AddMapAreaRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		var CallReq mowgli.AddMowingAreaReq
 		err := unmarshalROSMessage[*mowgli.AddMowingAreaReq](c.Request.Body, &CallReq)
 		if err != nil {
+			// Return 400 (was a bare return → silent HTTP 200 with empty body,
+			// so the GUI believed the area was added when it was dropped).
+			c.JSON(400, ErrorResponse{Error: err.Error()})
 			return
 		}
 		if CallReq.Area.Obstacles == nil {
