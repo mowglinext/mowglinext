@@ -75,6 +75,22 @@ Latest live validation on June 4, 2026:
 - The current Unicore limitation is not device access anymore; it is that `RTCMSTATUSA` still has no dedicated ROS projection beyond the generic correction diagnostics.
 - The devcontainer now mounts the host `/dev` tree at `/host-dev` and re-exposes `/dev/serial/by-id` inside the container when the host provides it.
 
+## Legacy GNSS Removal Plan
+
+| Deployment path | Classification | Blocker before removal |
+|-----------------|----------------|------------------------|
+| `GNSS_STACK=legacy` | Legacy fallback only | Must remain available for migration and recovery in this milestone. |
+| `GNSS_BACKEND` | Still required | Installer presets, check mode, compose mapping, and older `.env` files still depend on it. |
+| `GPS_*` compatibility keys | Still required | USB by-id selection, UART fallback, baud probing, udev rules, and legacy compose fragments still consume them. |
+| `install/compose/docker-compose.gps.yml` | Legacy fallback only | Remove only after shared GPS legacy fallback is retired. |
+| `install/compose/docker-compose.unicore.yaml` | Legacy fallback only | Remove only after UM98x legacy fallback is retired. |
+| `install/compose/docker-compose.nmea.yaml` | Removable now | Removed; no backend maps to a standalone NMEA fragment. |
+| `mowgli-gps` direct GNSS container | Legacy fallback only | Keep only for `GNSS_STACK=legacy`; universal compose tests reject it. |
+| `gnss_unicore` service | Legacy fallback only | Keep only for `GNSS_STACK=legacy`; universal compose tests reject it. |
+| Universal GNSS inside `mowgli-ros2` | Still required | This is the preferred production path. |
+
+Current removal boundary: universal deployments must continue to generate only the main `mowgli-ros2` GNSS path, while legacy deployments must still be able to select the old direct GNSS container until the final fallback-removal milestone.
+
 ## Troubleshooting
 
 - No `/gps/fix`: confirm the selected `/dev/serial/by-id/...` device exists inside the runtime and the receiver baud matches the installer-generated `.env`.

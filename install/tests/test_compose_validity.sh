@@ -82,6 +82,25 @@ for forbidden in mowgli-gps mowgli-mavros mowgli-ntrip; do
   fi
 done
 
+section "Universal GNSS compose excludes legacy GNSS runtime paths"
+
+for forbidden in \
+  "sensors/gps" \
+  "sensors/unicore" \
+  "docker-compose.gps.yml" \
+  "docker-compose.unicore.yaml" \
+  "gnss_unicore" \
+  "gps_health_aggregator.py" \
+  "rtcm_serial_bridge.py" \
+  "nmea_navsat_driver" \
+  "ublox_dgnss_node"; do
+  if grep -q "$forbidden" "$COMPOSE_FILE"; then
+    fail "legacy GNSS runtime absent: $forbidden" "found in generated universal compose"
+  else
+    pass "legacy GNSS runtime absent: $forbidden"
+  fi
+done
+
 # Negative: unsupported optional services must not be emitted
 for forbidden in mowgli-tfluna-front mowgli-tfluna-edge mowgli-vesc; do
   if printf '%s\n' "$CONTAINERS" | grep -qx "$forbidden"; then
