@@ -21,11 +21,10 @@
 #include <utility>
 
 #include <fcntl.h>
-#include <termios.h>
-#include <unistd.h>
-
 #include <linux/serial.h>
 #include <sys/ioctl.h>
+#include <termios.h>
+#include <unistd.h>
 
 namespace mowgli_hardware
 {

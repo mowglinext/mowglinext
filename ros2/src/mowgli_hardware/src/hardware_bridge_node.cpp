@@ -68,8 +68,8 @@
 
 #include "mowgli_hardware/bridge_comms.hpp"
 #include "mowgli_hardware/clock_fit.hpp"
-#include "mowgli_hardware/motor_speed_velocity.hpp"
 #include "mowgli_hardware/ll_datatypes.hpp"
+#include "mowgli_hardware/motor_speed_velocity.hpp"
 #include "mowgli_hardware/packet_handler.hpp"
 #include "mowgli_hardware/serial_port.hpp"
 
@@ -1353,10 +1353,16 @@ private:
       // falls back to the EMA value above per-wheel until the scale calibrates.
       if (use_motor_speed_velocity_)
       {
-        vel_l_mps = motor_speed_velocity(meas_l, vel_l_mps, pkt.left_velocity_mm_s,
-                                         motor_speed_scale_[0], motor_speed_scale_alpha_);
-        vel_r_mps = motor_speed_velocity(meas_r, vel_r_mps, pkt.right_velocity_mm_s,
-                                         motor_speed_scale_[1], motor_speed_scale_alpha_);
+        vel_l_mps = motor_speed_velocity(meas_l,
+                                         vel_l_mps,
+                                         pkt.left_velocity_mm_s,
+                                         motor_speed_scale_[0],
+                                         motor_speed_scale_alpha_);
+        vel_r_mps = motor_speed_velocity(meas_r,
+                                         vel_r_mps,
+                                         pkt.right_velocity_mm_s,
+                                         motor_speed_scale_[1],
+                                         motor_speed_scale_alpha_);
       }
       // Cumulative wheel angle (rad) and angular velocity (rad/s) for read().
       {
@@ -1705,9 +1711,11 @@ private:
       0.12};  ///< EMA τ (s) de-quantising the joint VELOCITY state; 0 disables.
   double meas_l_filt_{0.0};  ///< EMA state for the left wheel velocity (m/s).
   double meas_r_filt_{0.0};  ///< EMA state for the right wheel velocity (m/s).
-  bool use_motor_speed_velocity_{false};   ///< Tier-1: firmware motor-controller speed (auto-scaled) as joint velocity.
-  double motor_speed_scale_alpha_{0.02};   ///< EMA step for the motor-speed→m/s scale calibration.
-  double motor_speed_scale_[2]{0.0, 0.0};  ///< per-wheel m/s per motor-speed-unit (0 = uncalibrated).
+  bool use_motor_speed_velocity_{
+      false};  ///< Tier-1: firmware motor-controller speed (auto-scaled) as joint velocity.
+  double motor_speed_scale_alpha_{0.02};  ///< EMA step for the motor-speed→m/s scale calibration.
+  double motor_speed_scale_[2]{0.0,
+                               0.0};  ///< per-wheel m/s per motor-speed-unit (0 = uncalibrated).
 
   // Shared with the ros2_control plugin (MowgliSystemInterface), which runs
   // read()/write() on the controller_manager thread while this node runs on the

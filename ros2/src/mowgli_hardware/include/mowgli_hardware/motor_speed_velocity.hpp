@@ -27,14 +27,17 @@
 namespace mowgli_hardware
 {
 
-/// \param meas_mps        tick-derived wheel velocity this packet (m/s, signed) — accurate mean, quantised.
-/// \param fallback_mps    velocity to return until the scale calibrates (the EMA'd tick velocity).
-/// \param motor_speed_units  firmware-forwarded signed motor-controller speed (PAC5210 units).
-/// \param scale           in/out: learned m/s per speed-unit (0 = uncalibrated; caller-owned, per wheel).
-/// \param scale_alpha     EMA step for the scale update (small = slow, stable).
-/// \return smooth velocity (m/s) once calibrated, else \p fallback_mps.
-inline double motor_speed_velocity(double meas_mps, double fallback_mps, int16_t motor_speed_units,
-                                   double& scale, double scale_alpha)
+/// \param meas_mps        tick-derived wheel velocity this packet (m/s, signed) — accurate mean,
+/// quantised. \param fallback_mps    velocity to return until the scale calibrates (the EMA'd tick
+/// velocity). \param motor_speed_units  firmware-forwarded signed motor-controller speed (PAC5210
+/// units). \param scale           in/out: learned m/s per speed-unit (0 = uncalibrated;
+/// caller-owned, per wheel). \param scale_alpha     EMA step for the scale update (small = slow,
+/// stable). \return smooth velocity (m/s) once calibrated, else \p fallback_mps.
+inline double motor_speed_velocity(double meas_mps,
+                                   double fallback_mps,
+                                   int16_t motor_speed_units,
+                                   double& scale,
+                                   double scale_alpha)
 {
   // Calibrate only on clean, sign-agreeing, above-deadband samples — a stalled
   // / near-zero / direction-transient sample would corrupt the scale.

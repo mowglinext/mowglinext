@@ -226,8 +226,10 @@ extern "C"
     uint16_t dt_millis; /**< Firmware-measured interval since last packet [ms] */
     int32_t left_ticks; /**< Signed cumulative left encoder ticks */
     int32_t right_ticks; /**< Signed cumulative right encoder ticks */
-    int16_t left_velocity_mm_s; /**< Signed left motor-controller speed (PAC5210 units; host scales to m/s) */
-    int16_t right_velocity_mm_s; /**< Signed right motor-controller speed (PAC5210 units; host scales to m/s) */
+    int16_t left_velocity_mm_s; /**< Signed left motor-controller speed (PAC5210 units; host scales
+                                   to m/s) */
+    int16_t right_velocity_mm_s; /**< Signed right motor-controller speed (PAC5210 units; host
+                                    scales to m/s) */
     uint16_t crc; /**< CRC-16 CCITT over preceding bytes */
   } pkt_odometry_t;
 

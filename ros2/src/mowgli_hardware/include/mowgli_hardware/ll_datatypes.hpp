@@ -139,9 +139,10 @@ struct LlUiEvent
  * Sent every 20 ms when the drive motor controller responds with encoder data.
  *
  * Signed end-to-end: left_ticks/right_ticks carry direction in their sign
- * (no separate direction byte). Per-wheel velocity is computed on the
- * firmware side using the hardware-timer dt, so the host consumes it
- * directly without dividing by a jittery packet-arrival interval.
+ * (no separate direction byte). The *_velocity_mm_s fields carry the
+ * MOTOR-CONTROLLER's own signed speed reading (PAC5210 units), NOT a tick-delta
+ * mm/s velocity — the host auto-scales them to m/s against the tick rate (see
+ * motor_speed_velocity.hpp). Names keep *_mm_s for wire-format compatibility.
  */
 struct LlOdometry
 {
@@ -149,8 +150,11 @@ struct LlOdometry
   uint16_t dt_millis;  ///< Firmware-measured interval since last packet [ms]
   int32_t left_ticks;  ///< Signed cumulative left encoder ticks
   int32_t right_ticks;  ///< Signed cumulative right encoder ticks
-  int16_t left_velocity_mm_s;  ///< Signed left motor-controller speed (PAC5210 units; host auto-scales to m/s — see motor_speed_velocity.hpp). Name kept for wire compat.
-  int16_t right_velocity_mm_s;  ///< Signed right motor-controller speed (PAC5210 units; host auto-scales to m/s). Name kept for wire compat.
+  int16_t
+      left_velocity_mm_s;  ///< Signed left motor-controller speed (PAC5210 units; host auto-scales
+                           ///< to m/s — see motor_speed_velocity.hpp). Name kept for wire compat.
+  int16_t right_velocity_mm_s;  ///< Signed right motor-controller speed (PAC5210 units; host
+                                ///< auto-scales to m/s). Name kept for wire compat.
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
 
