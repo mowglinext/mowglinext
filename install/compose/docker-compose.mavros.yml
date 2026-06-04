@@ -15,6 +15,7 @@ services:
     privileged: true
     volumes:
       - /dev:/dev
+      - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
     environment:
       <<: *ros2-env
       HARDWARE_BACKEND: ${HARDWARE_BACKEND:-mavros}

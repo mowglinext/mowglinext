@@ -81,7 +81,7 @@
         "ticks_per_meter": {
           "type": "integer",
           "title": "Encoder Ticks per Meter",
-          "default": 220,
+          "default": 300,
           "description": "Encoder ticks per metre of wheel travel."
         },
         "tool_width": {
