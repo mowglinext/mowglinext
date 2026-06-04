@@ -2,9 +2,13 @@ name: Firmware CI
 
 on:
   push:
-    branches: [main]
+    # Build-check feature branches too (the GUI flashes firmware FROM the branch
+    # source via `platformio run`, so a branch must compile before it can be
+    # flashed). Mirrors ros2-ci.yml's branch set.
+    branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'firmware/**'
+      - '.github/workflows/firmware-ci.yml'
   pull_request:
     paths:
       - 'firmware/**'
