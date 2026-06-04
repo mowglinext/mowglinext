@@ -20,13 +20,12 @@ find_package(geometry_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(opennav_coverage_msgs REQUIRED)
 
-# Fields2Cover 2.0.0 is built and installed at /opt/fields2cover-200 by the
-# project Dockerfile / host bootstrap. Pin the find_package PATHS so we
-# don't accidentally pull /opt/fields2cover-121 (which is the legacy v1
-# install kept around while we migrate). When the v1.2.1 install is
-# removed and v2 is the only one on the system, the PATHS hint can drop.
+# Fields2Cover 2.0.0 is installed at /opt/fields2cover-200 in the runtime
+# image. Older devcontainers may still have the same v2 install under
+# /usr/local, so search both known prefixes while continuing to avoid the
+# legacy v1.2.1 install.
 find_package(Fields2Cover 2.0.0 REQUIRED
-  PATHS /opt/fields2cover-200
+  PATHS /opt/fields2cover-200 /usr/local
   NO_DEFAULT_PATH)
 
 add_library(${PROJECT_NAME}_core SHARED

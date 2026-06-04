@@ -178,10 +178,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN git clone --depth 1 --branch v2.0.0 https://github.com/Fields2Cover/Fields2Cover.git /tmp/Fields2Cover && \
     cmake -S /tmp/Fields2Cover -B /tmp/Fields2Cover/build \
       -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_INSTALL_PREFIX=/usr/local \
+      -DCMAKE_INSTALL_PREFIX=/opt/fields2cover-200 \
       -DBUILD_TESTING=OFF && \
     cmake --build /tmp/Fields2Cover/build -j$(nproc) && \
     cmake --install /tmp/Fields2Cover/build && \
+    echo '/opt/fields2cover-200/lib' > /etc/ld.so.conf.d/fields2cover-200.conf && \
     rm -rf /tmp/Fields2Cover && \
     ldconfig
 
