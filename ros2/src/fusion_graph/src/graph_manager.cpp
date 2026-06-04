@@ -253,6 +253,14 @@ std::optional<TickOutput> GraphManager::Tick(double now_s)
   std::lock_guard<std::mutex> lock(mu_);
   if (!initialized_)
     return std::nullopt;
+  // Self-heal a last_node_time_s_ parked in the FUTURE relative to the tick
+  // clock. Load() clamps the restored timestamp to system_clock (wall time),
+  // but Tick() is driven by the node clock — under use_sim_time those differ
+  // by ~1.79e9 s, so the gate below would never fire and node creation would
+  // freeze for the whole sim. Snapping down to now_s resumes the cadence and
+  // is clock-source-agnostic (no-op on real hardware where they agree).
+  if (last_node_time_s_ > now_s)
+    last_node_time_s_ = now_s;
   if (now_s - last_node_time_s_ < params_.node_period_s)
     return std::nullopt;
 

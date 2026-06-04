@@ -116,13 +116,9 @@ class PrecisionMonitorNode(Node):
             self._on_scan,
             _SENSOR_QOS,
         )
-        # SLAM scan-match visualisation — PointCloud2, best-effort.
-        self.create_subscription(
-            PointCloud2,
-            "/slam_toolbox/scan_visualization",
-            self._on_slam_scan,
-            _SENSOR_QOS,
-        )
+        # NOTE: the /slam_toolbox/scan_visualization subscription was removed —
+        # slam_toolbox is gone (fusion_graph is the sole localizer) and nothing
+        # publishes that PointCloud2 topic anymore.
         self.create_subscription(
             OccupancyGrid,
             "/map",
