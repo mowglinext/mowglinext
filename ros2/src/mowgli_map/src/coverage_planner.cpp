@@ -1235,7 +1235,7 @@ bool MapServerNode::find_next_segment(size_t area_index,
   // ── 4. Pick a start point on the current row ────────────────────────
   // Snap robot u to the nearest grid step, then march in dir until we
   // find an unmowed cell (we may have just driven over mowed cells).
-  const double row_v = static_cast<double>(current_row) * row_pitch;
+  double row_v = static_cast<double>(current_row) * row_pitch;
   double walk_u = std::round(r_u / step) * step;
   bool found_start = false;
   double start_x = robot_x;
@@ -1306,8 +1306,14 @@ bool MapServerNode::find_next_segment(size_t area_index,
     out_seg.is_long_transit = std::sqrt(best_dist2) > 0.5;
     // Recompute direction for this row (boustrophedon snake).
     dir = boustrophedon && (best_row & 1L) ? -1.0 : 1.0;
-    // Reset walk position to the chosen cell's u coordinate.
+    // Reset walk position AND the row coordinate to the chosen cell. row_v
+    // MUST move to best_row's centreline — otherwise step 6 walks along the
+    // ORIGINAL current_row while start_x/start_y sit on best_row, so the very
+    // first stepped cell is off-row and reads as blocked/mowed, collapsing
+    // the segment to start==end (zero cells) and forcing the zero-progress
+    // re-query churn.
     project_to_basis(B, best_pos.x(), best_pos.y(), walk_u, r_v);
+    row_v = static_cast<double>(best_row) * row_pitch;
   }
 
   out_seg.start_x = start_x;

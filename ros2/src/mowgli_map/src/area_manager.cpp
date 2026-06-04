@@ -454,7 +454,8 @@ void MapServerNode::on_load_map(const std_srvs::srv::Trigger::Request::SharedPtr
     map_ = grid_map::GridMap({std::string(layers::OCCUPANCY),
                               std::string(layers::CLASSIFICATION),
                               std::string(layers::MOW_PROGRESS),
-                              std::string(layers::CONFIDENCE)});
+                              std::string(layers::CONFIDENCE),
+                              std::string(layers::FAIL_COUNT)});
 
     map_.setFrameId(map_frame_);
     map_.setGeometry(grid_map::Length(map_size_x_, map_size_y_),
@@ -471,6 +472,11 @@ void MapServerNode::on_load_map(const std_srvs::srv::Trigger::Request::SharedPtr
     auto& cls = map_[std::string(layers::CLASSIFICATION)];
     auto& prog = map_[std::string(layers::MOW_PROGRESS)];
     auto& conf = map_[std::string(layers::CONFIDENCE)];
+    // FAIL_COUNT is not persisted in the saved grid (4 floats/cell); seed it
+    // to its default so the layer exists and is finite. Without adding it to
+    // the GridMap above, a later map_[FAIL_COUNT] access (e.g. on clear)
+    // throws std::out_of_range.
+    map_[std::string(layers::FAIL_COUNT)].setConstant(defaults::FAIL_COUNT);
 
     const int actual_rows = map_.getSize()(0);
     const int actual_cols = map_.getSize()(1);
@@ -516,6 +522,10 @@ void MapServerNode::on_clear_map(const std_srvs::srv::Trigger::Request::SharedPt
   obstacle_polygons_.clear();
   strip_layouts_.clear();
   current_strip_idx_.clear();
+  // Drop the per-area headland one-shot so a re-recorded area mows its
+  // perimeter ring again (the set is keyed by area index, which is reused
+  // after a clear).
+  headland_emitted_areas_.clear();
   docking_pose_set_ = false;
   keepout_filter_info_sent_ = false;
   speed_filter_info_sent_ = false;
@@ -589,6 +599,10 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
     std::lock_guard<std::mutex> lock(map_mutex_);
     areas_.push_back(std::move(entry));
   }
+  // A newly added / re-recorded area shifts the area-index space; drop the
+  // headland one-shot set so every area re-emits its perimeter ring on the
+  // next coverage pass (matches the "reset by area edits" contract).
+  headland_emitted_areas_.clear();
   resize_map_to_areas();
   // resize_map_to_areas() reallocates the grid and resets every layer
   // (CLASSIFICATION → UNKNOWN), discarding the LAWN/NO_GO cells stamped above.
