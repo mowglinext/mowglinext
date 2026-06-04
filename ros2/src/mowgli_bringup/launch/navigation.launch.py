@@ -81,6 +81,7 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     _runtime_cfg_path = "/ros2_ws/config/mowgli_robot.yaml"
     _early_use_lidar = "true"
+    _lidar_from_yaml = False
     _early_use_magnetometer = "false"
     _early_use_scan_matching = "false"
     _early_use_loop_closure = "false"
@@ -95,6 +96,7 @@ def generate_launch_description() -> LaunchDescription:
             # don't break.
             if "lidar_enabled" in _rp:
                 _early_use_lidar = "true" if bool(_rp["lidar_enabled"]) else "false"
+                _lidar_from_yaml = True
             _early_use_magnetometer = "true" if bool(
                 _rp.get("use_magnetometer", False)) else "false"
             _early_use_scan_matching = "true" if bool(
@@ -104,15 +106,15 @@ def generate_launch_description() -> LaunchDescription:
         except yaml.YAMLError:
             pass
 
-    # LIDAR_ENABLED env var overrides the yaml (back-compat with the
-    # installer's .env workflow). Recognised values for "off": false,
-    # 0, no. Anything else (including unset) keeps the yaml-derived
-    # default.
-    _env_lidar = os.environ.get("LIDAR_ENABLED", "").strip().lower()
-    if _env_lidar in ("false", "0", "no"):
-        _early_use_lidar = "false"
-    elif _env_lidar in ("true", "1", "yes"):
-        _early_use_lidar = "true"
+    # LIDAR_ENABLED env var is a FALLBACK ONLY — it applies only when the yaml
+    # does NOT set lidar_enabled. The GUI-managed yaml is authoritative when
+    # present (a stale installer .env must never override the user's config).
+    if not _lidar_from_yaml:
+        _env_lidar = os.environ.get("LIDAR_ENABLED", "").strip().lower()
+        if _env_lidar in ("false", "0", "no"):
+            _early_use_lidar = "false"
+        elif _env_lidar in ("true", "1", "yes"):
+            _early_use_lidar = "true"
 
     # ------------------------------------------------------------------
     # Loop-closure gating
