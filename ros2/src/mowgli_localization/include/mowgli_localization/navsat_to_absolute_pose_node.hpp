@@ -19,21 +19,24 @@
  * @brief Converts sensor_msgs/NavSatFix → mowgli_interfaces/AbsolutePose.
  *
  * Bridges generic ROS2 GNSS fixes into the Mowgli AbsolutePose message
- * and the unified /gps/status runtime topic.
+ * and, when enabled, the unified /gps/status runtime topic.
  *
  * Performs WGS84 → local ENU projection using a configurable datum origin.
- * The shared /gps/status topic is published by first building an internal
- * GnssRuntimeState from the incoming NavSatFix, then converting that state
- * through the common GnssStatus adapter. Structured GNSS diagnostics enrich
- * that runtime state when a backend provides them.
+ * The local /gps/status publisher is optional so Universal GNSS can take
+ * over the typed status path without a parallel Mowgli parser running in
+ * the same graph. When the local publisher is enabled, the node first builds
+ * an internal GnssRuntimeState from the incoming NavSatFix, then converts
+ * that state through the common GnssStatus adapter. Structured GNSS
+ * diagnostics enrich that runtime state when a backend provides them.
  *
  * Subscribed topics:
  *   /gps/fix   sensor_msgs/msg/NavSatFix
- *   /diagnostics diagnostic_msgs/msg/DiagnosticArray (GNSS-only enrichment)
+ *   /diagnostics diagnostic_msgs/msg/DiagnosticArray (GNSS-only enrichment,
+ *                only when local /gps/status publishing is enabled)
  *
  * Published topics:
  *   /gps/absolute_pose    mowgli_interfaces/msg/AbsolutePose
- *   /gps/status           mowgli_interfaces/msg/GnssStatus
+ *   /gps/status           mowgli_interfaces/msg/GnssStatus (optional)
  */
 
 #pragma once
@@ -89,6 +92,7 @@ private:
   double cos_datum_lat_{1.0};  ///< Precomputed cos(datum_lat) for projection
   std::string gnss_backend_name_{};
   std::string gps_protocol_{};
+  bool publish_gnss_status_{true};
   double gnss_diagnostics_timeout_sec_{5.0};
   GnssBackendKind gnss_backend_{GnssBackendKind::kUnknown};
 
