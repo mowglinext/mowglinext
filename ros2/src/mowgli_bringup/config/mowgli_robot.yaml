@@ -167,8 +167,8 @@ mowgli:
     # Mowing
     # -----------------------------------------------------------------
     mowing_enabled: true           # enable blade motor during mowing
-    mowing_speed: 0.5              # m/s during coverage paths
-    transit_speed: 0.5             # m/s during point-to-point navigation
+    mowing_speed: 0.2              # m/s during coverage paths (field-validated comfortable cut speed)
+    transit_speed: 0.25            # m/s during point-to-point navigation (→ RPP desired_linear_vel)
     outline_passes: 1              # perimeter passes before fill
     outline_overlap: 0.0           # overlap between outline and fill (m)
     outline_offset: 0.05           # inward offset from boundary (m)
