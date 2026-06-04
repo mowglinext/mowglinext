@@ -142,7 +142,7 @@ assert_file_not_exists "consumed preset not created early" "$SANDBOX_REPO/instal
 
 section "historical .env compatibility"
 
-cat > "$SANDBOX_REPO/docker/.env" <<'EOF'
+cat > "$SANDBOX_REPO/docker/.env" <<EOF
 ROS_DOMAIN_ID=0
 MOWER_IP=10.0.0.161
 DISABLE_BLUETOOTH=true
@@ -173,13 +173,13 @@ TFLUNA_EDGE_ENABLED=false
 TFLUNA_EDGE_PORT=/dev/tfluna_edge
 TFLUNA_EDGE_UART_DEVICE=/dev/ttyAMA2
 TFLUNA_EDGE_BAUD=115200
-MOWGLI_ROS2_IMAGE=ghcr.io/cedbossneo/mowglinext/mowgli-ros2:main
-GPS_IMAGE=ghcr.io/cedbossneo/mowglinext/gps:main
-UNICORE_IMAGE=ghcr.io/cedbossneo/mowglinext/unicore:main
-LIDAR_IMAGE=ghcr.io/cedbossneo/mowglinext/lidar-ldlidar:main
-MAVROS_IMAGE=ghcr.io/cedbossneo/mowglinext/mavros:main
-NMEA_IMAGE=ghcr.io/cedbossneo/mowglinext/nmea:main
-GUI_IMAGE=ghcr.io/cedbossneo/mowglinext/mowglinext-gui:main
+MOWGLI_ROS2_IMAGE=${MOWGLI_ROS2_IMAGE_DEFAULT}
+GPS_IMAGE=${GPS_IMAGE_DEFAULT}
+UNICORE_IMAGE=${UNICORE_IMAGE_DEFAULT}
+LIDAR_IMAGE=${LIDAR_LDLIDAR_IMAGE_DEFAULT}
+MAVROS_IMAGE=${MAVROS_IMAGE_DEFAULT}
+NMEA_IMAGE=${NMEA_IMAGE_DEFAULT}
+GUI_IMAGE=${GUI_IMAGE_DEFAULT}
 HARDWARE_BACKEND=mowgli
 MAVROS_ENABLED=false
 MAVROS_BY_ID=
@@ -194,7 +194,7 @@ EOF
 unset MAVROS_GCS_URL GUI_IMAGE HARDWARE_BACKEND GPS_CONNECTION 2>/dev/null || true
 assert_exit_zero "historical .env loads cleanly" load_env_defaults_file "$SANDBOX_REPO/docker/.env"
 assert_eq "historical .env keeps MAVROS_GCS_URL" "udp-b://@255.255.255.255:14550" "${MAVROS_GCS_URL:-}"
-assert_eq "historical .env keeps GUI_IMAGE" "ghcr.io/cedbossneo/mowglinext/mowglinext-gui:main" "${GUI_IMAGE:-}"
+assert_eq "historical .env keeps GUI_IMAGE" "${GUI_IMAGE_DEFAULT}" "${GUI_IMAGE:-}"
 assert_eq "historical .env keeps HARDWARE_BACKEND" "mowgli" "${HARDWARE_BACKEND:-}"
 assert_eq "historical .env keeps GPS_CONNECTION" "uart" "${GPS_CONNECTION:-}"
 

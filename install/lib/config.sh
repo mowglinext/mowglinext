@@ -4,6 +4,15 @@
 # ── Global configuration ────────────────────────────────────────────────────
 
 REPO_URL="https://github.com/cedbossneo/mowglinext.git"
+
+# Fork-local override (gitignored). Create install/lib/config.local.sh to
+# point at your own fork without touching tracked files:
+#   REPO_URL="https://github.com/<you>/mowglinext.git"
+_config_local="${BASH_SOURCE[0]%/*}/config.local.sh"
+# shellcheck source=/dev/null
+[[ -f "$_config_local" ]] && source "$_config_local"
+unset _config_local
+
 REPO_BRANCH="main"
 # IMAGE_TAG selects which GHCR image channel to pull. "main" = stable
 # (built from the main branch), "dev" = iteration channel (built from
@@ -20,16 +29,27 @@ FINAL_COMPOSE_FILE="$DOCKER_DIR/docker-compose.yaml"
 FINAL_ENV_FILE="$DOCKER_DIR/.env"
 UDEV_RULES_FILE="/etc/udev/rules.d/50-mowgli.rules"
 
+# Derive the GHCR image prefix from REPO_URL so forks automatically point
+# at their own registry namespace. Strips the trailing .git and extracts
+# the owner/repo path from the GitHub URL.
+_ghcr_prefix() {
+  local path="${REPO_URL%.git}"
+  path="${path##*github.com/}"
+  printf 'ghcr.io/%s' "$path"
+}
+
 recompute_image_defaults() {
-  MOWGLI_ROS2_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/mowgli-ros2:${IMAGE_TAG}"
-  GPS_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/gps:${IMAGE_TAG}"
-  UNICORE_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/unicore:${IMAGE_TAG}"
-  LIDAR_LDLIDAR_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/lidar-ldlidar:${IMAGE_TAG}"
-  LIDAR_RPLIDAR_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/lidar-rplidar:${IMAGE_TAG}"
-  LIDAR_STL27L_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/lidar-stl27l:${IMAGE_TAG}"
-  MAVROS_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/mavros:${IMAGE_TAG}"
-  NMEA_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/nmea:${IMAGE_TAG}"
-  GUI_IMAGE_DEFAULT="ghcr.io/cedbossneo/mowglinext/mowglinext-gui:${IMAGE_TAG}"
+  local prefix
+  prefix="$(_ghcr_prefix)"
+  MOWGLI_ROS2_IMAGE_DEFAULT="${prefix}/mowgli-ros2:${IMAGE_TAG}"
+  GPS_IMAGE_DEFAULT="${prefix}/gps:${IMAGE_TAG}"
+  UNICORE_IMAGE_DEFAULT="${prefix}/unicore:${IMAGE_TAG}"
+  LIDAR_LDLIDAR_IMAGE_DEFAULT="${prefix}/lidar-ldlidar:${IMAGE_TAG}"
+  LIDAR_RPLIDAR_IMAGE_DEFAULT="${prefix}/lidar-rplidar:${IMAGE_TAG}"
+  LIDAR_STL27L_IMAGE_DEFAULT="${prefix}/lidar-stl27l:${IMAGE_TAG}"
+  MAVROS_IMAGE_DEFAULT="${prefix}/mavros:${IMAGE_TAG}"
+  NMEA_IMAGE_DEFAULT="${prefix}/nmea:${IMAGE_TAG}"
+  GUI_IMAGE_DEFAULT="${prefix}/mowglinext-gui:${IMAGE_TAG}"
 }
 
 is_valid_image_tag() {

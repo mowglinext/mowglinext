@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Fork-local installer override — copy this file to config.local.sh and
+# fill in your fork's GitHub URL. config.local.sh is gitignored so it
+# never conflicts with upstream updates.
+#
+# Usage:
+#   cp install/lib/config.local.sh.example install/lib/config.local.sh
+#   # edit config.local.sh to set your fork URL
+#
+# Effect: the installer and its test suite will default all Docker image
+# references to ghcr.io/<your-org>/<your-repo>/... instead of the upstream
+# ghcr.io/cedbossneo/mowglinext/... registry.
+
+REPO_URL="https://github.com/<your-org>/mowglinext.git"
