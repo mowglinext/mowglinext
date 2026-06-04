@@ -369,6 +369,10 @@ Coverage strip planning is handled by `map_server_node`. Mowing parameters are c
 
 ## Building
 
+The devcontainer post-create hook prepares the ROS2 workspace and links package
+roots, but it does not build the full workspace by default. That keeps optional
+full-stack coverage dependencies from blocking container startup.
+
 ### Prerequisites
 
 - ROS2 Kilted on Ubuntu 24.04
@@ -402,13 +406,26 @@ colcon test-result --verbose
 ### Makefile Shortcuts
 
 ```bash
-make build           # colcon build (Release)
+make build-dev       # focused dev set: interfaces, localization, GNSS, bringup
+make build-full      # full linked workspace
+make build           # alias for build-full
 make build-debug     # colcon build (Debug)
 make test            # colcon test + test-result
 make clean           # remove build/ install/ log/
 make format          # clang-format all C++ files in-place
 make format-check    # verify formatting without modifying files
 make lint            # cppcheck + cpplint
+```
+
+The upstream `opennav_coverage` submodule is linked as
+`opennav_coverage_msgs` by default for action definitions. Its server, BT,
+demo, navigator, and row-coverage packages are optional full-stack packages and
+require Fields2Cover to be installed. To include them in local package linking
+and builds, run:
+
+```bash
+INCLUDE_OPENNAV_COVERAGE_STACK=1 ./scripts/sync_workspace_packages.sh
+INCLUDE_OPENNAV_COVERAGE_STACK=1 ./scripts/build.sh
 ```
 
 ---

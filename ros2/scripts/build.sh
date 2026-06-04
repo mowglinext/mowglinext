@@ -24,6 +24,7 @@ set -euo pipefail
 
 WORKSPACE=/ros2_ws
 BUILD_TYPE="${BUILD_TYPE:-Release}"
+PACKAGES="${PACKAGES:-}"
 PARALLEL_WORKERS=$(nproc)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SYNC_WORKSPACE_SCRIPT="${SCRIPT_DIR}/sync_workspace_packages.sh"
