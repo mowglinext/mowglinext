@@ -211,6 +211,13 @@ def generate_launch_description() -> LaunchDescription:
             # the {undock_speed} blackboard reference in main_tree.xml.
             # See issue #191.
             {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
+            # transit_speed / mowing_speed flow into SetNavMode, which sets
+            # them on the live controllers (FollowPath.desired_linear_vel for
+            # the RPP transit controller, FollowCoveragePath.speed_fast for the
+            # FTC coverage controller) per nav mode. Without these the BT used
+            # hardcoded 0.5/0.25 and the configured speeds never took effect.
+            {"transit_speed": float(robot_params.get("transit_speed", 0.25))},
+            {"mowing_speed": float(robot_params.get("mowing_speed", 0.2))},
         ],
     )
 

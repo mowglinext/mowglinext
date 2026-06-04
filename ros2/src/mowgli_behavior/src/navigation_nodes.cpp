@@ -15,6 +15,7 @@
 
 #include "mowgli_behavior/navigation_nodes.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
@@ -847,27 +848,35 @@ BT::NodeStatus SetNavMode::tick()
     return BT::NodeStatus::SUCCESS;
   }
 
-  std::vector<rclcpp::Parameter> params;
-  if (mode == "precise")
-  {
-    params = {
-        rclcpp::Parameter("FollowCoveragePath.desired_linear_vel", 0.5),
-        rclcpp::Parameter("FollowPath.desired_linear_vel", 0.5),
-    };
-  }
-  else
-  {
-    // degraded: half speed
-    params = {
-        rclcpp::Parameter("FollowCoveragePath.desired_linear_vel", 0.25),
-        rclcpp::Parameter("FollowPath.desired_linear_vel", 0.25),
-    };
-  }
+  // Apply the operator-configured speeds (from mowgli_robot.yaml via
+  // behavior_tree_node → BTContext), NOT hardcoded magic numbers. We set the
+  // knob each controller actually reads: FollowPath is RPP (via RotationShim),
+  // whose speed knob is desired_linear_vel; FollowCoveragePath is FTC, whose
+  // knob is speed_fast (it ignores desired_linear_vel — setting that was a
+  // long-standing no-op that left coverage speed unconfigurable here).
+  //
+  // "degraded" (Float-quality GPS) runs at half the configured speed, floored
+  // at the host min-drive clamp: hardware_bridge zeroes |vx| < kMinLinVel
+  // (0.15 m/s), so a half-speed below that would stall the robot entirely.
+  constexpr double kMinDriveSpeed = 0.15;
+  const double transit =
+      (mode == "precise") ? ctx->transit_speed : std::max(0.5 * ctx->transit_speed, kMinDriveSpeed);
+  const double mowing =
+      (mode == "precise") ? ctx->mowing_speed : std::max(0.5 * ctx->mowing_speed, kMinDriveSpeed);
+
+  const std::vector<rclcpp::Parameter> params = {
+      rclcpp::Parameter("FollowPath.desired_linear_vel", transit),
+      rclcpp::Parameter("FollowCoveragePath.speed_fast", mowing),
+  };
 
   param_client->set_parameters(params);
   ctx->current_nav_mode = mode;
 
-  RCLCPP_INFO(ctx->node->get_logger(), "SetNavMode: mode set to '%s'", mode.c_str());
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "SetNavMode: mode '%s' — transit %.2f m/s, mowing %.2f m/s",
+              mode.c_str(),
+              transit,
+              mowing);
   return BT::NodeStatus::SUCCESS;
 }
 

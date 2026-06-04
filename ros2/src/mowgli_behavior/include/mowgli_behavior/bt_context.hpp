@@ -156,6 +156,15 @@ struct BTContext
   /// Current navigation mode: "precise" or "degraded"
   std::string current_nav_mode{"precise"};
 
+  /// Operator-configured drive speeds (m/s), sourced from mowgli_robot.yaml
+  /// by behavior_tree_node and applied to the live controllers by SetNavMode:
+  /// transit_speed → FollowPath.desired_linear_vel (RPP transit), mowing_speed
+  /// → FollowCoveragePath.speed_fast (FTC coverage). Defaults match the shipped
+  /// template; SetNavMode halves them in "degraded" mode (floored at the host
+  /// min-drive clamp).
+  double transit_speed{0.25};
+  double mowing_speed{0.2};
+
   /// True if it was raining when the current mowing session started.
   /// Set by WasRainingAtStart, checked by IsNewRain.
   bool raining_at_mow_start{false};
