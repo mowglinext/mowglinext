@@ -73,6 +73,7 @@ void LocalizationMonitorNode::declare_parameters()
   gps_timeout_ = declare_parameter<double>("gps_timeout", 2.0);
   pose_timeout_ = declare_parameter<double>("pose_timeout", 0.5);
   publish_rate_ = declare_parameter<double>("publish_rate", 10.0);
+  mode_debounce_sec_ = declare_parameter<double>("mode_debounce_sec", 1.0);
 }
 
 void LocalizationMonitorNode::create_publishers()
@@ -145,25 +146,42 @@ void LocalizationMonitorNode::on_absolute_pose(
 
 void LocalizationMonitorNode::on_publish_timer()
 {
-  static LocalizationMode prev_mode = LocalizationMode::DEAD_RECKONING;
+  const LocalizationMode instant = evaluate_mode();
 
-  const LocalizationMode mode = evaluate_mode();
-
-  if (mode != prev_mode)
+  // Hysteresis (mode_debounce_sec_): only commit a changed mode once the new
+  // value has persisted continuously for the debounce window. This filters the
+  // spurious per-epoch RTK Fixed<->Float flicker (the receiver's carrSoln can
+  // toggle every epoch during motion while position σ stays sub-cm) so the
+  // published localization mode — and anything gating on it — does not flap.
+  // mode_debounce_sec_ <= 0 disables the hysteresis (commit immediately).
+  const rclcpp::Time now = this->now();
+  if (instant == stable_mode_)
   {
+    // Back to the committed mode — cancel any pending change.
+    pending_mode_ = stable_mode_;
+  }
+  else if (instant != pending_mode_)
+  {
+    // New candidate — start its dwell timer.
+    pending_mode_ = instant;
+    pending_since_ = now;
+  }
+  else if (mode_debounce_sec_ <= 0.0 || (now - pending_since_).seconds() >= mode_debounce_sec_)
+  {
+    // Candidate has dwelled long enough — commit it.
     RCLCPP_INFO(get_logger(),
                 "Localization mode change: %s → %s",
-                mode_to_string(prev_mode).c_str(),
-                mode_to_string(mode).c_str());
-    prev_mode = mode;
+                mode_to_string(stable_mode_).c_str(),
+                mode_to_string(instant).c_str());
+    stable_mode_ = instant;
   }
 
   std_msgs::msg::String mode_msg;
-  mode_msg.data = mode_to_string(mode);
+  mode_msg.data = mode_to_string(stable_mode_);
   mode_pub_->publish(mode_msg);
 
   std_msgs::msg::Int32 id_msg;
-  id_msg.data = static_cast<int32_t>(mode);
+  id_msg.data = static_cast<int32_t>(stable_mode_);
   mode_id_pub_->publish(id_msg);
 }
 

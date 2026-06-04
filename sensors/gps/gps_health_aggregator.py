@@ -17,6 +17,15 @@
 #
 # Levels follow standard convention: OK = green, WARN = "still float /
 # weak signal", ERROR = no fix, no RTCM, or CRC-failing stream.
+#
+# NAV-PVT fallback: the Fix and Satellites diagnostics prefer UBX-NAV-STATUS
+# and UBX-NAV-SAT (richest: ttff, per-satellite CN0, constellation split).
+# But some genuine ZED-F9P units silently never emit those two messages even
+# when CFG-MSGOUT-*-USB is set and the VALSET is ACK'd, while NAV-PVT streams
+# fine. NAV-PVT carries fixType, carrSoln, gnssFixOk, diffSoln, numSv and
+# h/v accuracy + pDOP — enough to keep both diagnostics alive (minus the
+# per-satellite CN0 detail). So when STATUS/SAT are stale we fall back to
+# NAV-PVT instead of erroring.
 
 from __future__ import annotations
 
@@ -32,7 +41,9 @@ from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from rtcm_msgs.msg import Message as RtcmMessage
 
 try:
-    from ublox_ubx_msgs.msg import UBXNavStatus, UBXNavSat, UBXRxmRTCM, UBXNavCov, UBXNavDOP
+    from ublox_ubx_msgs.msg import (
+        UBXNavStatus, UBXNavSat, UBXRxmRTCM, UBXNavCov, UBXNavDOP, UBXNavPVT,
+    )
     _HAVE_UBX = True
 except ImportError:
     _HAVE_UBX = False
@@ -68,6 +79,10 @@ class GpsHealthAggregator(Node):
         self._last_sat_t: float = 0.0
         self._last_cov: UBXNavCov | None = None
         self._last_dop: UBXNavDOP | None = None
+        # NAV-PVT is the fallback source for fix + satellite-count when a
+        # receiver doesn't emit NAV-STATUS / NAV-SAT (see module header).
+        self._last_pvt: UBXNavPVT | None = None
+        self._last_pvt_t: float = 0.0
         # Each entry: (recv_time, msg_type, msg_used, crc_failed). msg_type and
         # msg_used are -1 in NMEA mode where the receiver does not echo RTCM
         # ingestion telemetry — we only know what we forwarded into it.
@@ -89,6 +104,7 @@ class GpsHealthAggregator(Node):
             self.create_subscription(UBXNavSat, "/ubx_nav_sat", self._on_sat, qos)
             self.create_subscription(UBXNavCov, "/ubx_nav_cov", self._on_cov, qos)
             self.create_subscription(UBXNavDOP, "/ubx_nav_dop", self._on_dop, qos)
+            self.create_subscription(UBXNavPVT, "/ubx_nav_pvt", self._on_pvt, qos)
             self.create_subscription(UBXRxmRTCM, "/ubx_rxm_rtcm", self._on_rtcm_ubx, qos)
         else:
             # NMEA mode (or UBX msgs unavailable): only the NTRIP/RTCM
@@ -120,6 +136,10 @@ class GpsHealthAggregator(Node):
 
     def _on_dop(self, msg: UBXNavDOP) -> None:
         self._last_dop = msg
+
+    def _on_pvt(self, msg: UBXNavPVT) -> None:
+        self._last_pvt = msg
+        self._last_pvt_t = self._now()
 
     def _on_rtcm_ubx(self, msg: UBXRxmRTCM) -> None:
         # UBX path: the receiver tells us which RTCM type it ingested and
@@ -159,16 +179,39 @@ class GpsHealthAggregator(Node):
         s.name = "GPS: fix"
         s.hardware_id = "ublox_f9p"
 
-        if self._last_status is None or now - self._last_status_t > 5.0:
+        status_fresh = (
+            self._last_status is not None and now - self._last_status_t <= 5.0
+        )
+        pvt_fresh = self._last_pvt is not None and now - self._last_pvt_t <= 5.0
+
+        # Prefer NAV-STATUS (it additionally carries ttff); fall back to
+        # NAV-PVT, which has the same fix / carrier-solution fields.
+        if status_fresh:
+            st = self._last_status
+            source = "nav-status"
+            carr = int(st.carr_soln.status)
+            fix_type = int(st.gps_fix.fix_type)
+            gps_fix_ok = bool(st.gps_fix_ok)
+            diff = bool(st.diff_corr)
+            ttff_s = st.ttff / 1000.0
+        elif pvt_fresh:
+            pvt = self._last_pvt
+            source = "nav-pvt"
+            carr = int(pvt.carr_soln.status)
+            fix_type = int(pvt.gps_fix.fix_type)
+            gps_fix_ok = bool(pvt.gnss_fix_ok)
+            diff = bool(pvt.diff_soln)
+            ttff_s = math.nan
+        else:
             s.level = DiagnosticStatus.ERROR
-            s.message = "no UBX-NAV-STATUS in 5 s — driver dead?"
+            s.message = "no UBX-NAV-STATUS or UBX-NAV-PVT in 5 s — driver dead?"
             return s
 
-        st = self._last_status
-        carr = int(st.carr_soln.status)
         carr_label = _CARR_SOLN_LABELS.get(carr, f"unknown({carr})")
-        fix_label = _FIX_TYPE_LABELS.get(int(st.gps_fix.fix_type), str(st.gps_fix.fix_type))
+        fix_label = _FIX_TYPE_LABELS.get(fix_type, str(fix_type))
 
+        # Accuracy: prefer the full covariance (NAV-COV); else use NAV-PVT's
+        # scalar h/v accuracy estimates (sigma_xy is unavailable from PVT).
         sigma_xy_mm = -1.0
         horizontal_accuracy_m = math.nan
         vertical_accuracy_m = math.nan
@@ -179,22 +222,29 @@ class GpsHealthAggregator(Node):
             sigma_xy_mm = math.sqrt(max(0.0, cxx + cyy)) * 1000.0
             horizontal_accuracy_m = math.sqrt(max(0.0, (cxx + cyy) / 2.0))
             vertical_accuracy_m = math.sqrt(max(0.0, czz))
+        elif pvt_fresh:
+            horizontal_accuracy_m = self._last_pvt.h_acc / 1000.0
+            vertical_accuracy_m = self._last_pvt.v_acc / 1000.0
 
+        # DOP: prefer NAV-DOP (separate h/v); else NAV-PVT's single pDOP.
         hdop = math.nan
         vdop = math.nan
         if self._last_dop is not None:
             hdop = float(self._last_dop.h_dop) * 0.01
             vdop = float(self._last_dop.v_dop) * 0.01
+        pdop = float(self._last_pvt.p_dop) * 0.01 if pvt_fresh else math.nan
 
         s.values = [
+            KeyValue(key="source", value=source),
             KeyValue(key="carr_soln", value=carr_label),
             KeyValue(key="fix_type", value=fix_label),
-            KeyValue(key="gps_fix_ok", value=str(bool(st.gps_fix_ok))),
-            KeyValue(key="diff_corr", value=str(bool(st.diff_corr))),
-            KeyValue(key="ttff_s", value=f"{st.ttff / 1000.0:.1f}"),
+            KeyValue(key="gps_fix_ok", value=str(gps_fix_ok)),
+            KeyValue(key="diff_corr", value=str(diff)),
+            KeyValue(key="ttff_s", value=f"{ttff_s:.1f}" if math.isfinite(ttff_s) else "n/a"),
             KeyValue(key="sigma_xy_mm", value=f"{sigma_xy_mm:.1f}" if sigma_xy_mm >= 0 else "n/a"),
             KeyValue(key="hdop", value=f"{hdop:.2f}" if math.isfinite(hdop) else "n/a"),
             KeyValue(key="vdop", value=f"{vdop:.2f}" if math.isfinite(vdop) else "n/a"),
+            KeyValue(key="pdop", value=f"{pdop:.2f}" if math.isfinite(pdop) else "n/a"),
             KeyValue(
                 key="horizontal_accuracy_m",
                 value=f"{horizontal_accuracy_m:.3f}" if math.isfinite(horizontal_accuracy_m) else "n/a",
@@ -205,7 +255,7 @@ class GpsHealthAggregator(Node):
             ),
         ]
 
-        if not st.gps_fix_ok:
+        if not gps_fix_ok:
             s.level = DiagnosticStatus.ERROR
             s.message = f"no fix ({fix_label})"
         elif carr == 2:
@@ -225,9 +275,8 @@ class GpsHealthAggregator(Node):
         s.hardware_id = "ublox_f9p"
 
         if self._last_sat is None or now - self._last_sat_t > 5.0:
-            s.level = DiagnosticStatus.ERROR
-            s.message = "no UBX-NAV-SAT in 5 s"
-            return s
+            # No per-satellite NAV-SAT — fall back to NAV-PVT's used count.
+            return self._sat_status_from_pvt(now, s)
 
         sv_info = self._last_sat.sv_info
         visible = len(sv_info)
@@ -249,6 +298,7 @@ class GpsHealthAggregator(Node):
         )
 
         s.values = [
+            KeyValue(key="source", value="nav-sat"),
             KeyValue(key="visible", value=str(visible)),
             KeyValue(key="used", value=str(used_n)),
             KeyValue(key="mean_cno_db_hz", value=f"{mean_cno:.1f}"),
@@ -276,6 +326,34 @@ class GpsHealthAggregator(Node):
                 f"{used_n} sats used, mean CN0 {mean_cno:.0f} dB-Hz, "
                 f"{cno_ge_40} ≥40"
             )
+        return s
+
+    def _sat_status_from_pvt(self, now: float, s: DiagnosticStatus) -> DiagnosticStatus:
+        """Fallback when NAV-SAT isn't emitted: NAV-PVT gives only the count
+        of satellites used in the solution — no per-satellite CN0 / sky view."""
+        if self._last_pvt is None or now - self._last_pvt_t > 5.0:
+            s.level = DiagnosticStatus.ERROR
+            s.message = "no UBX-NAV-SAT or UBX-NAV-PVT in 5 s"
+            return s
+
+        used_n = int(self._last_pvt.num_sv)
+        s.values = [
+            KeyValue(key="source", value="nav-pvt"),
+            KeyValue(key="used", value=str(used_n)),
+            KeyValue(key="note", value="CN0 / sky-view unavailable (NAV-SAT not emitted)"),
+        ]
+
+        # Same used-count thresholds as the NAV-SAT path; CN0-based WARNs
+        # can't be evaluated without per-satellite data.
+        if used_n < 4:
+            s.level = DiagnosticStatus.ERROR
+            s.message = f"only {used_n} sats used"
+        elif used_n < 6:
+            s.level = DiagnosticStatus.WARN
+            s.message = f"{used_n} sats used — marginal"
+        else:
+            s.level = DiagnosticStatus.OK
+            s.message = f"{used_n} sats used"
         return s
 
     def _rtcm_status(self, now: float) -> DiagnosticStatus:

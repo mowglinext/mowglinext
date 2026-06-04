@@ -25,6 +25,8 @@ config/
 
 There is **no** `slam_toolbox.yaml` or `kiss_icp.yaml`. robot_localization (the default dual-EKF localizer) is tuned through `robot_localization.yaml`. LiDAR scan-matching and loop-closure are handled by `fusion_graph` (opt-in — see [§5](#5-fusion_graph)).
 
+Whether the LiDAR-aware stack (`nav2_params.yaml`) or the GPS-only stack (`nav2_params_no_lidar.yaml`) is loaded is decided by the **`lidar_enabled`** key in `mowgli_robot.yaml`, which is **authoritative**. The `LIDAR_ENABLED` environment variable (set by the installer `.env`) is only a **fallback** — it applies solely when `lidar_enabled` is absent from the yaml, so a stale installer `.env` can never override the user's GUI-managed config. A CLI/compose `use_lidar:=` override still wins for one-off runs.
+
 The opt-in **fusion_graph** localizer (GTSAM iSAM2 — see [§7](#7-fusion_graph)) does **not** have a separate config file: its knobs are declared as ros2 parameters on `fusion_graph_node` and the high-level switches (`use_fusion_graph`, `use_scan_matching`, `use_loop_closure`, `use_magnetometer`) live in `mowgli_robot.yaml`. The Settings page exposes them under the *Localization* section.
 
 All YAML files use the ROS2 `ros__parameters` namespace convention. Parameters can be overridden via command-line:
@@ -211,6 +213,22 @@ hardware_bridge:
 - **Payload:** Current high-level mode (idle/mowing/docking/recording) and GPS RTK quality
 - **Purpose:** Firmware uses this for telemetry, sound notifications, LED feedback
 - **Tuning:** Lower rate OK (2 Hz sufficient for informational updates)
+
+#### `angular_rate_loop_enabled` / `angular_rate_kp` / `angular_rate_ki`
+
+- **Type:** bool / double / double
+- **Defaults:** `true` / `0.4` / `2.0` (node defaults; **sourced from
+  `mowgli_robot.yaml`** and injected at launch by `mowgli.launch.py`, so they
+  are operator-tunable from the GUI config without editing `hardware_bridge.yaml`)
+- **Description:** Host-side gyro angular-rate PI on `wz`. When enabled,
+  `hardware_bridge` closes a yaw-rate loop on the IMU gyro before forwarding the
+  twist to firmware. When disabled (`angular_rate_loop_enabled: false`), `wz`
+  passes through untouched and the firmware per-wheel velocity PID owns all wheel
+  control.
+- **Note:** The host loop can ring in yaw (rotation overshoot). On this robot it
+  is disabled (`angular_rate_loop_enabled: false`) — the firmware velocity loop
+  handles wheel tracking. The default keeps the prior (enabled) behaviour so sim
+  and other configs are unchanged.
 
 ### Typical Configurations
 

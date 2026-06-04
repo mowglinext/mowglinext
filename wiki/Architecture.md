@@ -309,7 +309,13 @@ ROS2 ecosystem
 **SerialPort (serial_port.cpp/.hpp)**
 - Low-level serial port abstraction
 - Non-blocking read/write
-- Automatic reconnection on error
+- Auto-reconnect on firmware flash / board reboot / USB re-enumeration: a
+  dead-link RX watchdog (`serial_rx_timeout_s`, default 2 s) closes a port that
+  is nominally open but no longer delivering bytes (or returns a hard read
+  error), so the next read tick reopens it and re-resolves `/dev/mowgli` to the
+  live `ttyACM`. The STM32 streams status/odom/IMU continuously, so a
+  multi-second RX gap unambiguously means the endpoint went away. Self-heals
+  without a manual container restart.
 - Configurable baud rate (115200 default)
 
 **PacketHandler (packet_handler.cpp/.hpp)**
@@ -325,6 +331,10 @@ ROS2 ecosystem
 - Timer-based read loop (100 Hz default)
 - Heartbeat transmission (4 Hz default)
 - High-level state updates (2 Hz default, GPS quality + mode)
+- Publishes `WheelTick` on `~/wheel_ticks` (→ `/wheel_ticks`), once per firmware
+  packet (~47 Hz), for the GUI "Per-Wheel Encoders" panel. The 2-wheel
+  diff-drive maps left→RL, right→RR (`valid_wheels = RL|RR`); Front L/R remain
+  invalid so the panel correctly shows "no encoder reading" for them.
 
 #### Wire Protocol: COBS + CRC-16
 
@@ -626,7 +636,15 @@ navsat_to_absolute_pose:
 
 **Outputs:**
 - `/localization/status` (diagnostic_msgs/DiagnosticStatus)
-- `/localization/mode` (std_msgs/String, for debug/logging)
+- `/mowgli/localization/mode` (std_msgs/String, latched, for debug/logging)
+- `/mowgli/localization/mode_id` (std_msgs/Int32, latched, numeric mode)
+
+**Mode debounce (`mode_debounce_sec`, default 1.0 s):** the published mode is
+hysteretic — a changed mode must persist continuously for the debounce window
+before it is committed and published. This filters the per-epoch RTK
+Fixed↔Float flicker (an F9P's `carrSoln` can toggle every epoch under motion
+while position σ stays sub-cm), so the mode — and anything gating on it — does
+not flap. Set `mode_debounce_sec: 0` to commit immediately.
 
 **Degradation Modes (5 levels):**
 
@@ -645,6 +663,7 @@ localization_monitor:
     odom_stale_timeout_sec: 2.0
     gps_timeout_sec: 10.0
     max_acceptable_fusion_variance: 0.25   # m² for position
+    mode_debounce_sec: 1.0                 # hysteresis on published mode (0 = off)
 ```
 
 #### 3d. robot_localization Diagnostics Integration

@@ -798,6 +798,11 @@ docking_server:
     controller.v_linear_max: 0.25
     controller.v_angular_max: 0.75
     controller.slowdown_radius: 0.25
+    # Graceful smooth-control-law gains — upstream documented defaults.
+    # (Diagnosed 2026-06: the "15 cm right" seat was a mis-pinned dock pose,
+    # not a controller deficiency — the fused seated pose matched the target
+    # within ~1 cm at stock gains, so there's no reason to deviate from the
+    # documented k_phi 3.0 / k_delta 2.0.)
     controller.k_phi: 3.0
     controller.k_delta: 2.0
     # Named dock instances — BT uses dock_id="home_dock"

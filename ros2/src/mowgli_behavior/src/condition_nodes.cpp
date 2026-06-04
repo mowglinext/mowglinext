@@ -158,7 +158,16 @@ BT::NodeStatus IsCommand::tick()
     return BT::NodeStatus::FAILURE;
   }
 
-  return ctx->current_command == res.value() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  // Lock the read: current_command is written by the HighLevelControl service
+  // handler under context_mutex. The single default callback group serialises
+  // tick and service today, but lock here too so the read is correct
+  // regardless of executor/callback-group changes (matches RecordArea).
+  uint8_t current;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    current = ctx->current_command;
+  }
+  return current == res.value() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 // ---------------------------------------------------------------------------
@@ -399,8 +408,10 @@ BT::NodeStatus PreFlightCheck::tick()
   }
   if (static_cast<int>(fix_type) < min_gps_fix_type)
   {
-    const char* names[] = {"no-fix", "auto", "DGPS", "?", "RTK-fix", "RTK-float"};
-    const char* current = (fix_type < 6) ? names[fix_type] : "?";
+    // Indices match the quality-monotonic encoding in behavior_tree_node.cpp:
+    // 0=no-fix, 2=DGPS, 3=RTK-float, 4=RTK-fix (1 unused/"auto").
+    const char* names[] = {"no-fix", "auto", "DGPS", "RTK-float", "RTK-fix"};
+    const char* current = (fix_type < 5) ? names[fix_type] : "?";
     char buf[80];
     snprintf(buf, sizeof(buf), "gps_fix=%s (%u, need >=%d)", current, fix_type, min_gps_fix_type);
     failures.emplace_back(buf);

@@ -430,8 +430,21 @@ void ApplyUbloxDiagnostics(GnssRuntimeState& state, const GnssDiagnosticSnapshot
   {
     state.correction_age_s = *corr_age;
   }
-  if (const auto corrections_active = CorrectionsActiveFromTransport(corr_age, msgs_per_sec);
-      corrections_active.has_value())
+  // corrections_active should answer "is the solution being RTK-corrected right
+  // now", not "did an RTCM byte arrive in the last transport tick". The carrier
+  // solution is the authoritative answer: an F9P cannot report Fixed/Float
+  // without corrections actually being applied. The raw transport metric
+  // (age_of_last_corr_s / msgs_per_sec) is bursty per-epoch and read false on
+  // ~29/33 samples while the receiver was solidly Fixed at ~4 mm — using it
+  // alone made corrections_active (and the GUI/diagnostics that key off it)
+  // flap. So treat a Fixed/Float carrier solution as corrections-active, and
+  // fall back to the transport freshness only when the solution is not RTK.
+  if (state.rtk_mode == GnssRtkMode::kFixed || state.rtk_mode == GnssRtkMode::kFloat)
+  {
+    state.corrections_active = true;
+  }
+  else if (const auto corrections_active = CorrectionsActiveFromTransport(corr_age, msgs_per_sec);
+           corrections_active.has_value())
   {
     state.corrections_active = *corrections_active;
   }

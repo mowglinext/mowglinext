@@ -77,6 +77,7 @@ static constexpr uint8_t HL_MODE_MANUAL_MOWING = 4u;  ///< Manual teleop with bl
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
+#include "mowgli_interfaces/msg/wheel_tick.hpp"
 #include "mowgli_interfaces/srv/emergency_stop.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -123,6 +124,15 @@ private:
     baud_rate_ = declare_parameter<int>("baud_rate", 115200);
     heartbeat_rate_ = declare_parameter<double>("heartbeat_rate", 4.0);
     publish_rate_ = declare_parameter<double>("publish_rate", 100.0);
+    // Serial-link watchdog: if no bytes arrive for this long while the port is
+    // open, treat the link as dead and reopen it. The STM32 streams status
+    // (~4 Hz) + odom (~20 Hz) + IMU (~50-100 Hz) continuously whenever it is
+    // running, so a multi-second RX gap means the USB endpoint went away —
+    // e.g. a firmware flash or board reboot re-enumerated the CDC device. The
+    // OS leaves the stale fd "open" (reads just return nothing), so without
+    // this the bridge would sit forever writing into a dead fd. Reopening
+    // re-resolves /dev/mowgli to the new ttyACM.
+    serial_rx_timeout_s_ = declare_parameter<double>("serial_rx_timeout_s", 2.0);
     high_level_rate_ = declare_parameter<double>("high_level_rate", 2.0);
     dock_x_ = declare_parameter<double>("dock_pose_x", 0.0);
     dock_y_ = declare_parameter<double>("dock_pose_y", 0.0);
@@ -218,6 +228,11 @@ private:
     pub_mag_raw_ =
         create_publisher<sensor_msgs::msg::MagneticField>("~/imu/mag_raw", rclcpp::QoS(10));
     pub_wheel_odom_ = create_publisher<nav_msgs::msg::Odometry>("~/wheel_odom", rclcpp::QoS(10));
+    // Per-wheel encoder ticks (diagnostics — GUI "Per-Wheel Encoders" panel).
+    // 2-wheel diff-drive maps to RL/RR only. Remapped to /wheel_ticks in the
+    // launch file (the GUI bridge subscribes to /wheel_ticks).
+    pub_wheel_ticks_ =
+        create_publisher<mowgli_interfaces::msg::WheelTick>("~/wheel_ticks", rclcpp::QoS(10));
     pub_battery_state_ =
         create_publisher<sensor_msgs::msg::BatteryState>("/battery_state", rclcpp::QoS(10));
     // Dock heading: publish dock_yaw at 1 Hz while charging so
@@ -311,6 +326,9 @@ private:
                   serial_port_path_.c_str(),
                   baud_rate_);
     }
+    // Seed the RX watchdog so a freshly-(re)opened port gets a full grace
+    // window before the no-data check can fire.
+    last_serial_rx_time_ = now();
   }
 
   void create_timers()
@@ -355,14 +373,16 @@ private:
 
   void read_serial_tick()
   {
-    // If the port was never opened or was closed due to an error, attempt to
-    // (re)open it.
+    // If the port was never opened or was closed due to an error / dead-link
+    // watchdog, attempt to (re)open it. open() re-resolves the device path, so
+    // this picks up a new ttyACM after a USB re-enumeration.
     if (!serial_->is_open())
     {
       if (!serial_->open())
       {
         return;  // Still not open; will retry next tick.
       }
+      last_serial_rx_time_ = now();
       RCLCPP_INFO(get_logger(), "Serial port re-opened successfully.");
     }
 
@@ -373,11 +393,39 @@ private:
     while (true)
     {
       const ssize_t n = serial_->read(buf, kReadBufSize);
-      if (n <= 0)
+      if (n < 0)
       {
-        break;
+        // Hard read error (e.g. the USB CDC device was removed/re-enumerated by
+        // a firmware flash or board reboot): the fd is dead. Close now so the
+        // next tick reopens and re-resolves /dev/mowgli to the live device.
+        RCLCPP_WARN_THROTTLE(get_logger(),
+                             *get_clock(),
+                             2000,
+                             "Serial read error — closing port to reconnect.");
+        serial_->close();
+        return;
+      }
+      if (n == 0)
+      {
+        break;  // No more data available this tick.
       }
       packet_handler_.feed(buf, static_cast<std::size_t>(n));
+      last_serial_rx_time_ = now();
+    }
+
+    // Dead-link watchdog: the STM32 streams continuously whenever it is up, so
+    // a multi-second RX gap on an "open" port means the endpoint vanished (a
+    // re-enumeration that left the fd nominally open but mute). Close it so the
+    // next tick reopens and reconnects — this is what makes a firmware flash or
+    // board reboot self-heal instead of wedging the bridge.
+    if (serial_rx_timeout_s_ > 0.0 &&
+        (now() - last_serial_rx_time_).seconds() > serial_rx_timeout_s_)
+    {
+      RCLCPP_WARN(get_logger(),
+                  "No serial data for %.1f s — reopening %s to reconnect to the STM32.",
+                  serial_rx_timeout_s_,
+                  serial_port_path_.c_str());
+      serial_->close();
     }
   }
 
@@ -963,8 +1011,9 @@ private:
     latest_gyro_z_ = gz;
 
     // Magnetometer data is ignored — uncalibrated on metal robot chassis,
-    // gives ~229° error vs real heading. dock_pose_yaw is set from config
-    // (user measures with phone compass).
+    // gives ~229° error vs real heading. dock_pose_yaw is a map-frame ENU
+    // yaw, set by the GUI "Set Docking Point" calibration or the undock
+    // GPS-trajectory fit (NOT a phone-compass heading).
 
     // Write resolved dock pose to file for SLAM initialization.
     // On fresh map start, navigation.launch.py reads this file to set
@@ -1065,8 +1114,14 @@ private:
     // (remapped to /gnss/heading in launch). dock_yaw_to_set_pose
     // consumes it and seeds both EKFs via their set_pose services.
     // The orientation quaternion is heading in ENU.
-    // dock_yaw_ is compass heading; convert to ENU: yaw_enu = pi/2 - compass
-    const double enu_yaw = M_PI / 2.0 - dock_yaw_;
+    // dock_yaw_ (= dock_pose_yaw) is ALREADY a map-frame ENU yaw: it is
+    // written that way by the GUI set_docking_point service
+    // (area_manager.cpp) and the undock GPS-trajectory calibration
+    // (calibration_nodes.cpp), and consumed as ENU directly by
+    // opennav_docking's home_dock pose. Use it verbatim — the old
+    // `pi/2 - dock_yaw_` compass→ENU conversion was wrong (it double-
+    // rotated this seed relative to every other consumer/writer).
+    const double enu_yaw = dock_yaw_;
 
     // During the anchor window after a charging transition, publish with
     // σ=π so dock_yaw_to_set_pose accepts the first heading update as a
@@ -1176,6 +1231,36 @@ private:
       d_left = 0;
       d_right = 0;
     }
+
+    // ----- Per-wheel WheelTick (diagnostics: GUI "Per-Wheel Encoders") -----
+    // Published every firmware packet (~47 Hz). The mower is 2-wheel diff-drive,
+    // so only the Rear-Left / Rear-Right slots are valid (left→RL, right→RR,
+    // matching the wheel_odometry_node convention); Front-L/R stay invalid.
+    // WheelTick wants MONOTONIC-up magnitude counts plus a direction byte
+    // (consumers do (cur-prev)*sign(direction)), whereas the firmware sends
+    // signed cumulative ticks — so accumulate |delta| and derive the direction
+    // from the delta sign (holding the last direction through a zero delta).
+    wheel_ticks_mag_left_ += static_cast<uint32_t>(std::abs(d_left));
+    wheel_ticks_mag_right_ += static_cast<uint32_t>(std::abs(d_right));
+    if (d_left > 0)
+      wheel_dir_left_ = 1u;
+    else if (d_left < 0)
+      wheel_dir_left_ = 0u;
+    if (d_right > 0)
+      wheel_dir_right_ = 1u;
+    else if (d_right < 0)
+      wheel_dir_right_ = 0u;
+
+    mowgli_interfaces::msg::WheelTick wt{};
+    wt.stamp = now();
+    wt.wheel_tick_factor = static_cast<uint32_t>(std::lround(ticks_per_meter_));
+    wt.valid_wheels = mowgli_interfaces::msg::WheelTick::WHEEL_VALID_RL |
+                      mowgli_interfaces::msg::WheelTick::WHEEL_VALID_RR;
+    wt.wheel_direction_rl = wheel_dir_left_;
+    wt.wheel_ticks_rl = wheel_ticks_mag_left_;
+    wt.wheel_direction_rr = wheel_dir_right_;
+    wt.wheel_ticks_rr = wheel_ticks_mag_right_;
+    pub_wheel_ticks_->publish(wt);
 
     // ----- Aggregate firmware packets into ~10 Hz wheel_odom publishes -----
     // Firmware packets arrive at ~47 Hz (every ~21 ms). At slow speeds this
@@ -1497,6 +1582,13 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_imu_;
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr pub_mag_raw_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_wheel_odom_;
+  rclcpp::Publisher<mowgli_interfaces::msg::WheelTick>::SharedPtr pub_wheel_ticks_;
+  // Per-wheel cumulative-magnitude tick counters + last direction (for WheelTick;
+  // see handle_odometry). Magnitude is monotonic-up; direction is 1=fwd/0=rev.
+  uint32_t wheel_ticks_mag_left_{0};
+  uint32_t wheel_ticks_mag_right_{0};
+  uint8_t wheel_dir_left_{1};
+  uint8_t wheel_dir_right_{1};
   rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr pub_battery_state_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_dock_heading_;
 
@@ -1520,6 +1612,9 @@ private:
   int baud_rate_{115200};
   double heartbeat_rate_{4.0};
   double publish_rate_{100.0};
+  // Serial-link RX watchdog (auto-reconnect on flash / board reboot / unplug).
+  double serial_rx_timeout_s_{2.0};
+  rclcpp::Time last_serial_rx_time_{0, 0, RCL_ROS_TIME};
   double high_level_rate_{2.0};
 
   std::unique_ptr<SerialPort> serial_;

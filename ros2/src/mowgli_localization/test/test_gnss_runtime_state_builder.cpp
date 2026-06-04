@@ -141,6 +141,52 @@ TEST(GnssRuntimeStateBuilderTest, EnrichesUbloxStateFromStructuredDiagnostics)
   EXPECT_FLOAT_EQ(*state.correction_age_s, 0.4f);
 }
 
+TEST(GnssRuntimeStateBuilderTest,
+     UbloxFixedCarrierSolutionKeepsCorrectionsActiveDespiteStaleTransport)
+{
+  // Real-robot regression: while the F9P is solidly RTK-Fixed at ~4 mm, the
+  // transport-side RTCM metric (msgs_per_sec / age_of_last_corr_s) is bursty
+  // per-epoch and frequently reads "no recent byte" even though corrections are
+  // clearly being applied (you cannot be Fixed without them). corrections_active
+  // must follow the carrier solution, not the bursty transport flag, or the GUI
+  // and diagnostics flap Fixed<->no-corrections every second.
+  sensor_msgs::msg::NavSatFix fix;
+  fix.header.stamp = MakeRosStamp(12);
+  fix.status.status = sensor_msgs::msg::NavSatStatus::STATUS_FIX;
+
+  auto state = BuildGnssRuntimeStateFromFix(fix, GnssBackendKind::kUblox);
+  const auto snapshot = BuildGnssDiagnosticSnapshot(MakeArray({
+      MakeDiag("GPS: fix", {{"gps_fix_ok", "True"}, {"carr_soln", "fixed"}}),
+      MakeDiag("GPS: NTRIP/RTCM", {{"msgs_per_sec", "0.0"}, {"age_of_last_corr_s", "8.0"}}),
+  }));
+
+  EnrichGnssRuntimeStateFromDiagnostics(state, GnssBackendKind::kUblox, snapshot, 5.0);
+  ASSERT_TRUE(state.rtk_mode.has_value());
+  EXPECT_EQ(*state.rtk_mode, GnssRtkMode::kFixed);
+  ASSERT_TRUE(state.corrections_active.has_value());
+  EXPECT_TRUE(*state.corrections_active);
+}
+
+TEST(GnssRuntimeStateBuilderTest, UbloxNonRtkStillUsesTransportFreshnessForCorrectionsActive)
+{
+  // When the carrier solution is not RTK (carr_soln "none"), corrections_active
+  // must fall back to the transport metric — a stale transport then correctly
+  // reports corrections inactive.
+  sensor_msgs::msg::NavSatFix fix;
+  fix.header.stamp = MakeRosStamp(12);
+  fix.status.status = sensor_msgs::msg::NavSatStatus::STATUS_FIX;
+
+  auto state = BuildGnssRuntimeStateFromFix(fix, GnssBackendKind::kUblox);
+  const auto snapshot = BuildGnssDiagnosticSnapshot(MakeArray({
+      MakeDiag("GPS: fix", {{"gps_fix_ok", "True"}, {"carr_soln", "none"}}),
+      MakeDiag("GPS: NTRIP/RTCM", {{"msgs_per_sec", "0.0"}, {"age_of_last_corr_s", "8.0"}}),
+  }));
+
+  EnrichGnssRuntimeStateFromDiagnostics(state, GnssBackendKind::kUblox, snapshot, 5.0);
+  ASSERT_TRUE(state.corrections_active.has_value());
+  EXPECT_FALSE(*state.corrections_active);
+}
+
 TEST(GnssRuntimeStateBuilderTest, RejectsDiagnosticsThatAreNewerThanFixOrTooStale)
 {
   sensor_msgs::msg::NavSatFix fix;

@@ -517,7 +517,12 @@ private:
     anchor_wheel_sign_ = wheel_sign;
     abs_dtheta_since_anchor_ = 0.0;  // next baseline starts fresh
 
-    publish_imu(now(), yaw, yaw_var);
+    // Stamp the heading with the GPS fix time, not wall-clock now(). The COG
+    // yaw is derived from this fix's position; stamping it with arrival time
+    // bakes in the GPS pipeline latency (~100-200 ms), which misassociates the
+    // measurement with a later graph node during turns. msg.header.stamp is the
+    // fix epoch.
+    publish_imu(rclcpp::Time(msg.header.stamp), yaw, yaw_var);
 
     const double mono_now = static_cast<double>(get_clock()->now().nanoseconds()) * 1e-9;
     latched_yaw_ = LatchedYaw{mono_now, yaw, yaw_var};

@@ -27,6 +27,16 @@ ensure_default_configs() {
   mkdir -p "$DOCKER_DIR/config/om"
   mkdir -p "$DOCKER_DIR/config/db"
 
+  # A prior `compose up` with the host path missing makes Docker create a
+  # *directory* at a bind-mounted file path. The `[ ! -f ]` guards below stay
+  # true for a directory and `cp src dir/` would copy *into* it, leaving the
+  # broken empty-dir mount in place (container fails with "not a directory",
+  # or — for cyclonedds.xml — DDS silently ignores the unreadable URI and
+  # falls back to defaults). Recover here so any entrypoint that brings up the
+  # stack self-heals, not just the full installer's migrate_runtime_paths.
+  fix_path_type_conflict "$DOCKER_DIR/config/mqtt/mosquitto.conf" "file"
+  fix_path_type_conflict "$DOCKER_DIR/config/cyclonedds.xml" "file"
+
   if [ ! -f "$DOCKER_DIR/config/mqtt/mosquitto.conf" ]; then
     cp "$defaults/mqtt/mosquitto.conf" "$DOCKER_DIR/config/mqtt/mosquitto.conf"
     info "Created default mosquitto.conf"

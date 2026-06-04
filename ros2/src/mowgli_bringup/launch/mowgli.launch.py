@@ -215,6 +215,16 @@ def generate_launch_description() -> LaunchDescription:
             {"lift_recovery_mode": bool(robot_params.get("lift_recovery_mode", False))},
             {"lift_blade_resume_delay_sec": float(robot_params.get(
                 "lift_blade_resume_delay_sec", 1.0))},
+            # Gyro angular-rate loop — now operator-tunable via the GUI config
+            # (was only in hardware_bridge.yaml / the node default). Set
+            # angular_rate_loop_enabled:false in mowgli_robot.yaml for plain wz
+            # passthrough (the firmware per-wheel velocity PID then owns wheel
+            # control) when the loop oscillates in yaw. Default keeps the prior
+            # behaviour (enabled) so sim / other configs are unchanged.
+            {"angular_rate_loop_enabled": bool(robot_params.get(
+                "angular_rate_loop_enabled", True))},
+            {"angular_rate_kp": float(robot_params.get("angular_rate_kp", 0.4))},
+            {"angular_rate_ki": float(robot_params.get("angular_rate_ki", 2.0))},
         ],
         # The node publishes on ~/topic (e.g. /hardware_bridge/wheel_odom).
         # behavior_tree_node subscribes to /hardware_bridge/status etc.
@@ -222,6 +232,7 @@ def generate_launch_description() -> LaunchDescription:
             ("~/imu/data_raw", "/imu/data"),
             ("~/imu/mag_raw", "/imu/mag_raw"),
             ("~/wheel_odom", "/wheel_odom"),
+            ("~/wheel_ticks", "/wheel_ticks"),
             ("~/emergency", "/hardware_bridge/emergency"),
             ("~/power", "/hardware_bridge/power"),
             ("~/status", "/hardware_bridge/status"),

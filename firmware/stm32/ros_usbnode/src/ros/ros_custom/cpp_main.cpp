@@ -28,6 +28,7 @@
 #include "emergency.h"
 #include "drivemotor.h"
 #include "blademotor.h"
+#include "pid.hpp"
 #include "ultrasonic_sensor.h"
 #include "stm32f_board_hal.h"
 #include "nbt.h"
@@ -113,8 +114,12 @@ static int16_t right_pwm_signed = 0;
 #define WHEEL_PI_DT_S            (MOTORS_NBT_TIME_MS / 1000.0f)
 #define WHEEL_PI_TICKS_PER_M    300.0f    /* must match mowgli_robot.yaml: ticks_per_meter */
 
-static float left_pi_int_pwm  = 0.0f;
-static float right_pi_int_pwm = 0.0f;
+/* Per-wheel velocity PI — battle-tested PX4 PID core (pid.hpp). Gains/limits
+ * set once in init_ROS(). The integrator (kept inside the PID object) is what
+ * bridges the static-friction deadband; output is the closed-loop PWM trim
+ * added to the open-loop feedforward below. */
+static PID left_wheel_pid;
+static PID right_wheel_pid;
 static int32_t prev_left_ticks_signed_pi  = 0;
 static int32_t prev_right_ticks_signed_pi = 0;
 static float prev_left_target_mps  = 0.0f;
@@ -427,13 +432,9 @@ extern "C" void motors_handler()
         const float r_actual_mps =
             ((float)dright_ticks) / WHEEL_PI_TICKS_PER_M / WHEEL_PI_DT_S;
 
-        const float l_err = l_target - l_actual_mps;
-        const float r_err = r_target - r_actual_mps;
-
-        /* Reset the integral on direction reversal or stop-to-go
-         * transitions. Without this the integral built up while
-         * decelerating would drive the motor backwards as soon as
-         * the chassis stopped, causing micro-oscillations. */
+        /* Reset the integrator on direction reversal / stop-to-go / hard-stop.
+         * Without this the integral built up while decelerating would drive the
+         * motor backwards as soon as the chassis stopped (micro-oscillation). */
         const bool l_target_sign_changed =
             (l_target * prev_left_target_mps  < 0.0f) ||
             (l_target == 0.0f && prev_left_target_mps  != 0.0f) ||
@@ -442,27 +443,47 @@ extern "C" void motors_handler()
             (r_target * prev_right_target_mps < 0.0f) ||
             (r_target == 0.0f && prev_right_target_mps != 0.0f) ||
             hard_stop;
-        if (l_target_sign_changed) left_pi_int_pwm  = 0.0f;
-        if (r_target_sign_changed) right_pi_int_pwm = 0.0f;
+        if (l_target_sign_changed) {
+            left_wheel_pid.resetIntegral();
+            left_wheel_pid.resetDerivative();
+        }
+        if (r_target_sign_changed) {
+            right_wheel_pid.resetIntegral();
+            right_wheel_pid.resetDerivative();
+        }
         prev_left_target_mps  = l_target;
         prev_right_target_mps = r_target;
 
-        /* Integrate error with anti-windup clamp on the PWM-equivalent
-         * accumulator. */
-        left_pi_int_pwm  += WHEEL_PI_KI_PWM_PER_MPS_S * l_err * WHEEL_PI_DT_S;
-        right_pi_int_pwm += WHEEL_PI_KI_PWM_PER_MPS_S * r_err * WHEEL_PI_DT_S;
-        if (left_pi_int_pwm  >  WHEEL_PI_INT_MAX_PWM) left_pi_int_pwm  =  WHEEL_PI_INT_MAX_PWM;
-        if (left_pi_int_pwm  < -WHEEL_PI_INT_MAX_PWM) left_pi_int_pwm  = -WHEEL_PI_INT_MAX_PWM;
-        if (right_pi_int_pwm >  WHEEL_PI_INT_MAX_PWM) right_pi_int_pwm =  WHEEL_PI_INT_MAX_PWM;
-        if (right_pi_int_pwm < -WHEEL_PI_INT_MAX_PWM) right_pi_int_pwm = -WHEEL_PI_INT_MAX_PWM;
+        /* Conditional-integration anti-windup, DIRECTION-AWARE: freeze the
+         * integrator only in the direction that would worsen an already-
+         * saturated output; always allow it to unwind OUT of saturation. Keying
+         * on the error sign (not just the saturation bit) avoids a one-
+         * directional integral latch — e.g. on overspeed (err < 0) while the
+         * output is railed high, the integrator must still be able to wind down
+         * to cut PWM. *_pwm_signed is the previous cycle's total (feedforward +
+         * trim), saturated by DRIVEMOTOR_SetSpeedSigned at ±255. This sits on
+         * top of the PID's own ±100 integral-magnitude clamp. */
+        const float l_err = l_target - l_actual_mps;
+        const float r_err = r_target - r_actual_mps;
+        const bool l_update_integral =
+            !((left_pwm_signed >= 255 && l_err > 0.0f) || (left_pwm_signed <= -255 && l_err < 0.0f));
+        const bool r_update_integral =
+            !((right_pwm_signed >= 255 && r_err > 0.0f) || (right_pwm_signed <= -255 && r_err < 0.0f));
 
-        /* Feedforward + proportional + integrator. Sign carried through. */
-        const float l_pwm_f = l_target * PWM_PER_MPS
-                            + WHEEL_PI_KP_PWM_PER_MPS * l_err
-                            + left_pi_int_pwm;
-        const float r_pwm_f = r_target * PWM_PER_MPS
-                            + WHEEL_PI_KP_PWM_PER_MPS * r_err
-                            + right_pi_int_pwm;
+        /* Closed-loop PI trim (Kp·err + integrator; D gain = 0). The PID
+         * computes error = setpoint − feedback internally and integrates AFTER
+         * forming the output (PX4 form), so a fresh integral increment reaches
+         * the actuator one 50 Hz cycle later than the old integrate-before form
+         * — steady-state identical, ~20 ms transient shift (immaterial here). */
+        left_wheel_pid.setSetpoint(l_target);
+        right_wheel_pid.setSetpoint(r_target);
+        const float l_trim = left_wheel_pid.update(l_actual_mps, WHEEL_PI_DT_S, l_update_integral);
+        const float r_trim = right_wheel_pid.update(r_actual_mps, WHEEL_PI_DT_S, r_update_integral);
+
+        /* Open-loop feedforward (deadband-bridge, preserves the above-deadband
+         * mapping) + closed-loop PI trim. Sign carried through. */
+        const float l_pwm_f = l_target * PWM_PER_MPS + l_trim;
+        const float r_pwm_f = r_target * PWM_PER_MPS + r_trim;
 
         /* When the target is exactly zero AND we're not braking from a
          * larger speed, force PWM to zero outright — avoids the residual
@@ -741,6 +762,20 @@ extern "C" void init_ROS()
     NBT_init(&imu_nbt,     IMU_NBT_TIME_MS);
     NBT_init(&motors_nbt,  MOTORS_NBT_TIME_MS);
     NBT_init(&blade_nbt,   BLADE_NBT_TIME_MS);
+
+#if USE_WHEEL_PI
+    // Per-wheel velocity PI gains/limits (vendored PX4 PID, pid.hpp). D=0 — no
+    // derivative on a velocity loop. Gains/limits are in PWM units, matching the
+    // hand-rolled loop they replace (Kp·err + integrator, integral clamp ±100,
+    // output clamp ±255). The PID adds derivative-on-measurement (unused at D=0)
+    // and conditional-integration anti-windup.
+    left_wheel_pid.setGains(WHEEL_PI_KP_PWM_PER_MPS, WHEEL_PI_KI_PWM_PER_MPS_S, 0.0f);
+    left_wheel_pid.setIntegralLimit(WHEEL_PI_INT_MAX_PWM);
+    left_wheel_pid.setOutputLimit(255.0f);
+    right_wheel_pid.setGains(WHEEL_PI_KP_PWM_PER_MPS, WHEEL_PI_KI_PWM_PER_MPS_S, 0.0f);
+    right_wheel_pid.setIntegralLimit(WHEEL_PI_INT_MAX_PWM);
+    right_wheel_pid.setOutputLimit(255.0f);
+#endif
 
     last_odom_tick      = HAL_GetTick();
     last_heartbeat_tick = 0;

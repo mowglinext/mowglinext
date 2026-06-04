@@ -1,7 +1,7 @@
 name: Suggest Wiki Updates
 
 on:
-  pull_request:
+  pull_request_target:
     branches: [main]
     types: [opened, synchronize]
     paths-ignore:
@@ -23,12 +23,15 @@ concurrency:
 jobs:
   suggest:
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.draft == false &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.head_ref }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 50
 
       - name: Generate wiki updates
@@ -72,6 +75,7 @@ jobs:
       - name: Commit wiki updates to PR branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard wiki/)" ]; then
             echo "No wiki updates needed"
@@ -82,4 +86,4 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add wiki/
           git commit -m "docs: update wiki for PR changes"
-          git push
+          git push origin "HEAD:refs/heads/$HEAD_REF"

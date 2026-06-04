@@ -138,7 +138,7 @@ controller_server:
       rotate_to_heading_angular_vel: 0.75  # decisive pivot, clear of deadband — see nav2_params.yaml
       max_angular_accel: 2.5
       simulate_ahead_time: 1.0
-      rotate_to_goal_heading: false        # let RPP handle final heading
+      rotate_to_goal_heading: true         # terminal pivot to match goal heading — needed for the opennav_docking NavigateToPose→staging handoff (see nav2_params.yaml)
       closed_loop: true                    # use wheel odom feedback for pivot completion
 
       # --- RegulatedPurePursuitController (primary) params ---
@@ -456,6 +456,9 @@ docking_server:
     controller.v_linear_max: 0.25
     controller.v_angular_max: 0.75
     controller.slowdown_radius: 0.25
+    # Graceful smooth-control-law gains — upstream documented defaults
+    # (match nav2_params.yaml; the "15 cm" seat was a mis-pinned dock, not
+    # a controller issue — stock gains converge within ~1 cm).
     controller.k_phi: 3.0
     controller.k_delta: 2.0
     dock_plugins: ["simple_charging_dock"]

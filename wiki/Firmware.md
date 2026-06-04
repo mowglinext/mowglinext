@@ -24,6 +24,52 @@ This guide explains how to adapt the Mowgli STM32 firmware to communicate with t
 - **Simple:** No ROS message format dependencies on firmware side
 - **Portable:** Works with any serial port, no ROS middleware required
 
+> **Note on this guide:** The code below is a generic, pseudocode-level
+> migration walkthrough and does **not** match the symbol names or packet
+> layout of the live firmware (which uses COBS handler callbacks such as
+> `on_cmd_vel` / `motors_handler`, a `pkt_cmd_vel_t` carrying `vx`/`wz`, and a
+> 2-wheel encoder/status path — not a 4-wheel `LlStatus` / `handle_cmd_vel`
+> scheme). For the authoritative motor-control behaviour, read the
+> [Drive Motor Control](#drive-motor-control--per-wheel-velocity-pi) section
+> below, then the actual source in
+> `firmware/stm32/ros_usbnode/src/ros/ros_custom/cpp_main.cpp`.
+
+## Drive Motor Control — Per-Wheel Velocity PI
+
+The host sends a single `CMD_VEL` packet (`vx`, `wz`); the **firmware** owns the
+diff-drive split and the per-wheel velocity loop. A host-side velocity loop over
+the USB round-trip was tried and abandoned — it was fragile across the USB
+dead-time — so the loop lives in firmware where local encoder feedback is fast.
+
+**Source:** `firmware/stm32/ros_usbnode/src/ros/ros_custom/cpp_main.cpp`
+(`on_cmd_vel`, `motors_handler`, `init_ROS`) and the vendored PX4 PID core in
+`firmware/stm32/ros_usbnode/include/pid.hpp`.
+
+- **Inverse kinematics:** `on_cmd_vel` converts (`vx`, `wz`) to per-wheel target
+  speeds (`vx ± wz·WHEEL_BASE/2`), clamps them to `±MAX_MPS`, and hands them to
+  `motors_handler`.
+- **Loop:** `motors_handler` runs at `MOTORS_NBT_TIME_MS` = 20 ms (50 Hz). Per
+  wheel it derives the actual speed from the signed cumulative encoder count
+  (`left/right_ticks_signed`, 300 ticks/m) over the 20 ms period.
+- **Controller:** a vendored PX4 `PID` (BSD-3, header-only `pid.hpp`,
+  derivative-on-measurement, NaN/inf guards) runs as a **PI** loop: P =
+  `WHEEL_PI_KP` (30), I = `WHEEL_PI_KI` (5000), **D = 0**, integral clamp ±100,
+  output clamp ±255 PWM.
+- **Feedforward:** the PI trim is added on top of an open-loop feedforward
+  `target_mps × PWM_PER_MPS` (300). The integrator bridges the brushed-DC
+  static-friction deadband (~PWM 40) on sub-deadband commands, where open-loop
+  alone leaves the motor buzzing without moving.
+- **Anti-windup (direction-aware conditional integration):** the integrator is
+  frozen only in the direction that would worsen an already-railed ±255 output;
+  it is always allowed to unwind out of saturation (keyed on the error sign, not
+  just the saturation bit).
+- **Resets / safety:** the integrator is reset on target sign-flip, stop-to-go,
+  and hard-stop (emergency or cmd_vel watchdog); a stopped wheel is forced to PWM
+  0 to kill residual hum. Set `USE_WHEEL_PI 0` to fall back to open-loop
+  forwarding for bring-up.
+
+Field-validated on the robot: linear speed tracked ~0.85–1.03 of commanded.
+
 ## Files Overview
 
 ### Firmware Directory Structure

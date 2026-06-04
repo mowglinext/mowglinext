@@ -137,7 +137,10 @@ nano config/mowgli/mowgli_robot.yaml
 
 Key settings to change:
 - `datum_lat` / `datum_long` — your GPS reference point
-- `dock_pose_x` / `dock_pose_y` / `dock_pose_yaw` — dock position
+- `dock_pose_x` / `dock_pose_y` / `dock_pose_yaw` — dock position. `dock_pose_yaw`
+  is a **map-frame ENU heading in radians** (not a phone-compass bearing); it is
+  normally captured automatically by "Set Docking Point" / undock calibration
+  rather than hand-entered.
 - `ntrip_host` / `ntrip_user` / `ntrip_password` — RTK correction source
 
 ### 4. Launch

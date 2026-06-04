@@ -101,7 +101,10 @@ mowgli:
         # dock_pose is captured by the GUI's IMU yaw calibration
         # (which docks first) or the manual "Set dock to current pose"
         # action — both write back here via line-splice updates.
-        dock_approach_distance: 1
+        # Approach distance = the final straight-in runway (injected as
+        # opennav_docking simple_charging_dock.staging_x_offset). 1.5 m is
+        # a clean, calm approach once the dock pose is correctly pinned.
+        dock_approach_distance: 1.5
         dock_max_retries: 3
         dock_pose_x: 0
         dock_pose_y: 0

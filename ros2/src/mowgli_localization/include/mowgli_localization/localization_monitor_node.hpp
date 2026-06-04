@@ -118,6 +118,12 @@ private:
   double gps_timeout_{2.0};
   double pose_timeout_{0.5};
   double publish_rate_{10.0};
+  /// Hysteresis: a changed localization mode must persist at least this long
+  /// before it is committed/published. Filters the spurious per-epoch RTK
+  /// Fixed<->Float flicker (the receiver's carrSoln can toggle every epoch
+  /// during motion while the position stays sub-cm), which otherwise flaps
+  /// the published mode. 0 disables the debounce.
+  double mode_debounce_sec_{1.0};
 
   // ---------------------------------------------------------------------------
   // Source state
@@ -129,6 +135,14 @@ private:
   bool gps_rtk_active_{false};
   /// True when fixed (vs. float).
   bool gps_rtk_fixed_{false};
+
+  // ---------------------------------------------------------------------------
+  // Debounce state (committed mode published; a differing instantaneous mode
+  // must persist >= mode_debounce_sec_ before it is committed).
+  // ---------------------------------------------------------------------------
+  LocalizationMode stable_mode_{LocalizationMode::DEAD_RECKONING};
+  LocalizationMode pending_mode_{LocalizationMode::DEAD_RECKONING};
+  rclcpp::Time pending_since_{0, 0, RCL_ROS_TIME};
 
   // ---------------------------------------------------------------------------
   // ROS handles

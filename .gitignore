@@ -42,6 +42,8 @@ docker/config/om/mower_config.sh
 install/.preset
 install/.preset.consumed
 install/logs/
+# Fork-local installer override — set REPO_URL to point at your fork's registry.
+install/lib/config.local.sh
 
 # Secrets
 *.pem

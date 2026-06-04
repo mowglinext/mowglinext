@@ -81,6 +81,7 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     _runtime_cfg_path = "/ros2_ws/config/mowgli_robot.yaml"
     _early_use_lidar = "true"
+    _lidar_from_yaml = False
     _early_use_magnetometer = "false"
     _early_use_scan_matching = "false"
     _early_use_loop_closure = "false"
@@ -95,6 +96,7 @@ def generate_launch_description() -> LaunchDescription:
             # don't break.
             if "lidar_enabled" in _rp:
                 _early_use_lidar = "true" if bool(_rp["lidar_enabled"]) else "false"
+                _lidar_from_yaml = True
             _early_use_magnetometer = "true" if bool(
                 _rp.get("use_magnetometer", False)) else "false"
             _early_use_scan_matching = "true" if bool(
@@ -104,15 +106,15 @@ def generate_launch_description() -> LaunchDescription:
         except yaml.YAMLError:
             pass
 
-    # LIDAR_ENABLED env var overrides the yaml (back-compat with the
-    # installer's .env workflow). Recognised values for "off": false,
-    # 0, no. Anything else (including unset) keeps the yaml-derived
-    # default.
-    _env_lidar = os.environ.get("LIDAR_ENABLED", "").strip().lower()
-    if _env_lidar in ("false", "0", "no"):
-        _early_use_lidar = "false"
-    elif _env_lidar in ("true", "1", "yes"):
-        _early_use_lidar = "true"
+    # LIDAR_ENABLED env var is a FALLBACK ONLY — it applies only when the yaml
+    # does NOT set lidar_enabled. The GUI-managed yaml is authoritative when
+    # present (a stale installer .env must never override the user's config).
+    if not _lidar_from_yaml:
+        _env_lidar = os.environ.get("LIDAR_ENABLED", "").strip().lower()
+        if _env_lidar in ("false", "0", "no"):
+            _early_use_lidar = "false"
+        elif _env_lidar in ("true", "1", "yes"):
+            _early_use_lidar = "true"
 
     # ------------------------------------------------------------------
     # Loop-closure gating
@@ -323,11 +325,11 @@ def generate_launch_description() -> LaunchDescription:
     chassis_safety_inset = None
     # Dock approach distance: how far behind the dock the opennav_docking
     # staging pose sits. Edited as `dock_approach_distance` in the GUI
-    # (positive metres), injected here as the negative-X
-    # `home_dock.staging_x_offset` consumed by docking_server. The yaml
-    # value was orphan before this — editing the slider produced no
-    # operational change because docking_server kept its hardcoded
-    # -1.5 m default. See issue #192.
+    # (positive metres), injected below as the negative-X
+    # `simple_charging_dock.staging_x_offset` consumed by the dock plugin.
+    # (Until 2026-06 it was injected into `home_dock.staging_x_offset`,
+    # the dock-instance namespace the plugin never reads, so the slider was
+    # orphan and the static -1.5 m governed. See issue #192.)
     dock_approach_distance = 1.5
     # SimpleChargingDock charging-current threshold (amps). 0.3 is the
     # production default (see nav2_params.yaml for the "0.1 stops too
@@ -463,15 +465,6 @@ def generate_launch_description() -> LaunchDescription:
             dock_pose_y + dock_approach_overshoot * _sin_yaw,
             dock_pose_yaw,
         ]
-        # Staging pose offset along the dock's X axis (negative = behind
-        # the dock, the side the robot approaches from). yaml exposes
-        # dock_approach_distance as a positive metres knob in the GUI;
-        # opennav_docking expects the same value negative. Wiring the
-        # two replaces the previously-orphan dock_approach_distance —
-        # the GUI slider now drives the actual staging point. See
-        # issue #192.
-        home_dock["staging_x_offset"] = -float(dock_approach_distance)
-
         # SimpleChargingDock plugin params — charging-current threshold
         # is operator-tunable so the static nav2_params.yaml value can be
         # overridden per-site from mowgli_robot.yaml + GUI.
@@ -479,6 +472,16 @@ def generate_launch_description() -> LaunchDescription:
                   .setdefault("ros__parameters", {})
                   .setdefault("simple_charging_dock", {}))
         scd["charging_threshold"] = dock_charging_threshold
+        # Staging pose offset along the dock's X axis (negative = behind
+        # the dock, the side the robot approaches from). yaml exposes
+        # dock_approach_distance as a positive metres knob in the GUI;
+        # opennav_docking expects the same value negative. This MUST live
+        # under the simple_charging_dock plugin namespace — the plugin reads
+        # `<plugin_name>.staging_x_offset`; writing it under `home_dock`
+        # (the dock-instance namespace, which only carries type/frame/pose)
+        # was silently ignored, leaving the static nav2_params.yaml value
+        # to govern and orphaning the GUI knob. See issue #192.
+        scd["staging_x_offset"] = -float(dock_approach_distance)
 
         # FollowPath (transit controller = RPP via RotationShim).
         fp = (doc.setdefault("controller_server", {})
