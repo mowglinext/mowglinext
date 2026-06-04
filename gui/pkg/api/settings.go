@@ -727,9 +727,15 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 			nodeMappings = extractNodeMappings(schema)
 		}
 
-		// Merge payload on top
+		// Merge payload on top. A null value is an explicit delete request
+		// (from the Advanced "Remove parameter" action) — drop the key so it
+		// is removed from the YAML rather than written back as "key: null".
 		for key, value := range payload {
-			existing[key] = value
+			if value == nil {
+				delete(existing, key)
+			} else {
+				existing[key] = value
+			}
 		}
 
 		// Nest back into ROS2 YAML structure

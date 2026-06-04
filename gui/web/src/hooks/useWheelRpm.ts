@@ -70,10 +70,13 @@ export function useWheelRpm({wheelRadiusM = 0.105}: UseWheelRpmOptions = {}): Wh
           rr: toRpm(dRR),
           bodyOmega: 0,
         };
-        // approx body omega from L/R wheel delta (assume track ~0.32 m)
+        // approx body omega from L/R wheel delta (assume track ~0.32 m).
+        // Use the DRIVEN rear wheels only: Mowgli is rear-axle drive and the
+        // front wheels are unencoded casters whose tick counters stay 0.
+        // Averaging (fl+rl)/2 folded that constant 0 in and halved bodyOmega.
         const track = 0.32;
-        const leftAvg  = (newRpm.fl + newRpm.rl) / 2 * circumference / 60;
-        const rightAvg = (newRpm.fr + newRpm.rr) / 2 * circumference / 60;
+        const leftAvg  = newRpm.rl * circumference / 60;
+        const rightAvg = newRpm.rr * circumference / 60;
         newRpm.bodyOmega = (rightAvg - leftAvg) / track;
         setRpm(newRpm);
       }

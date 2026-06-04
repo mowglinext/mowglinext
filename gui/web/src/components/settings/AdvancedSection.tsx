@@ -28,8 +28,12 @@ export const AdvancedSection: React.FC<Props> = ({ values, advancedKeys, onChang
     };
 
     const handleDelete = (key: string) => {
-        // Set to undefined to remove from payload
-        onChange(key, undefined);
+        // Send an explicit null so the key survives JSON.stringify and reaches
+        // the backend, which deletes null-valued keys from the YAML. Using
+        // undefined here made JSON.stringify drop the key entirely, so the
+        // backend's merge preserved the on-disk value and the delete was a
+        // silent no-op.
+        onChange(key, null);
     };
 
     const handleValueChange = (key: string, val: string) => {

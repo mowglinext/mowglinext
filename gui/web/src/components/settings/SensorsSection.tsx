@@ -11,14 +11,15 @@ type Props = {
 };
 
 export const SensorsSection: React.FC<Props> = ({ values, onChange }) => {
-    // LiDAR drives use_fusion_graph: factor-graph scan-matching is the only
-    // reason to keep fusion_graph on, and ekf_map_node is the right default
-    // when no LiDAR is mounted. Operators can still override use_fusion_graph
-    // independently from the Localization tab (e.g. to use the graph without
-    // scan factors), but the defaults stay sensible.
+    // fusion_graph is the sole localizer and always runs (the use_fusion_graph
+    // launch flag was removed), so the LiDAR toggle drives the scan-factor
+    // gates that ARE consumed by fusion_graph.launch.py: use_scan_matching and
+    // use_loop_closure. With no LiDAR there are no scans to match, so both are
+    // forced off. Operators can still fine-tune them in the Localization tab.
     const handleLidarToggle = (enabled: boolean) => {
         onChange("lidar_enabled", enabled);
-        onChange("use_fusion_graph", enabled);
+        onChange("use_scan_matching", enabled);
+        onChange("use_loop_closure", enabled);
     };
 
     return (
@@ -33,9 +34,9 @@ export const SensorsSection: React.FC<Props> = ({ values, onChange }) => {
                         </Text>
                         <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
                             Enable if your robot has a LiDAR. Also flips
-                            {" "}<Text code>use_fusion_graph</Text> so scan-matching factors and
-                            loop-closure are active. Override that default in the Localization tab
-                            if you want a graph without LiDAR (rare).
+                            {" "}<Text code>use_scan_matching</Text> and{" "}
+                            <Text code>use_loop_closure</Text> so the factor graph fuses LiDAR
+                            scans. Fine-tune those in the Localization tab.
                         </Paragraph>
                     </div>
                     <Switch

@@ -186,7 +186,9 @@ export const MowgliNextPage = () => {
 
   const actions = {
     onStart: mowerAction("high_level_control", {Command: 1}),
-    onPause: mowerAction("mower_logic", {Config: {Bools: [{Name: "manual_pause_mowing", Value: true}]}}),
+    // No pause command exists (mower_logic/manual_pause_mowing returned 500);
+    // "pause" maps to HOME (stop + dock), same as onHome.
+    onPause: mowerAction("high_level_control", {Command: 2}),
     onHome: mowerAction("high_level_control", {Command: 2}),
     onStop: mowerAction("emergency", {Emergency: 1}),
   };
