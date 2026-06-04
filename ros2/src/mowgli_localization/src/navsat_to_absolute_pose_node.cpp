@@ -31,11 +31,11 @@
  *   STATUS_GBAS_FIX         → FLAG_GPS_RTK_FIXED
  *   covariance_type UNKNOWN → FLAG_GPS_DEAD_RECKONING
  *
- * /gps/status follows a separate shared path:
+ * /gps/status can follow a separate shared path:
  *   NavSatFix -> GnssRuntimeState -> mowgli_interfaces/msg/GnssStatus
  *
- * Backend-specific adapters may later populate GnssRuntimeState more richly
- * than a plain NavSatFix stream can express.
+ * Universal GNSS is expected to own that typed status path once integrated.
+ * Until then, this node can still publish the legacy Mowgli-local status.
  */
 
 #include "mowgli_localization/navsat_to_absolute_pose_node.hpp"
@@ -85,6 +85,15 @@ NavSatToAbsolutePoseNode::NavSatToAbsolutePoseNode(const rclcpp::NodeOptions& op
               "NavSatToAbsolutePoseNode started — datum: [%.7f, %.7f]",
               datum_lat_,
               datum_lon_);
+  if (publish_gnss_status_)
+  {
+    RCLCPP_INFO(get_logger(), "Publishing local /gps/status from NavSatFix + diagnostics.");
+  }
+  else
+  {
+    RCLCPP_INFO(get_logger(),
+                "Local /gps/status publisher disabled; expecting external typed GNSS status.");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +115,7 @@ void NavSatToAbsolutePoseNode::declare_parameters()
 
   gnss_backend_name_ = declare_parameter<std::string>("gnss_backend", "");
   gps_protocol_ = declare_parameter<std::string>("gps_protocol", "");
+  publish_gnss_status_ = declare_parameter<bool>("publish_gnss_status", true);
   gnss_diagnostics_timeout_sec_ = declare_parameter<double>("gnss_diagnostics_timeout_sec", 5.0);
   gnss_backend_ = ResolveGnssBackend(gnss_backend_name_, gps_protocol_);
 }
@@ -114,8 +124,11 @@ void NavSatToAbsolutePoseNode::create_publishers()
 {
   pose_pub_ =
       create_publisher<mowgli_interfaces::msg::AbsolutePose>("/gps/absolute_pose", rclcpp::QoS(10));
-  gnss_status_pub_ =
-      create_publisher<mowgli_interfaces::msg::GnssStatus>("/gps/status", rclcpp::QoS(10));
+  if (publish_gnss_status_)
+  {
+    gnss_status_pub_ =
+        create_publisher<mowgli_interfaces::msg::GnssStatus>("/gps/status", rclcpp::QoS(10));
+  }
   // robot_localization-compatible twin: standard PoseWithCovarianceStamped
   // so ekf_map can subscribe as pose0 input. Published on every fix update
   // in on_navsat_fix alongside the AbsolutePose message.
@@ -132,13 +145,16 @@ void NavSatToAbsolutePoseNode::create_subscribers()
       {
         on_navsat_fix(msg);
       });
-  diagnostics_sub_ = create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
-      "/diagnostics",
-      rclcpp::QoS(10),
-      [this](diagnostic_msgs::msg::DiagnosticArray::ConstSharedPtr msg)
-      {
-        on_diagnostics(msg);
-      });
+  if (publish_gnss_status_)
+  {
+    diagnostics_sub_ = create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
+        "/diagnostics",
+        rclcpp::QoS(10),
+        [this](diagnostic_msgs::msg::DiagnosticArray::ConstSharedPtr msg)
+        {
+          on_diagnostics(msg);
+        });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -201,18 +217,21 @@ void NavSatToAbsolutePoseNode::on_navsat_fix(sensor_msgs::msg::NavSatFix::ConstS
   // Store latest fix for set_datum service.
   last_fix_ = *msg;
   has_fix_ = true;
-  GnssRuntimeState gnss_state = BuildGnssRuntimeStateFromFix(*msg, gnss_backend_);
-  std::optional<GnssDiagnosticSnapshot> diagnostics_snapshot;
+  if (publish_gnss_status_)
   {
-    const std::lock_guard<std::mutex> lock(gnss_diagnostics_mutex_);
-    diagnostics_snapshot = gnss_diagnostics_snapshot_;
+    GnssRuntimeState gnss_state = BuildGnssRuntimeStateFromFix(*msg, gnss_backend_);
+    std::optional<GnssDiagnosticSnapshot> diagnostics_snapshot;
+    {
+      const std::lock_guard<std::mutex> lock(gnss_diagnostics_mutex_);
+      diagnostics_snapshot = gnss_diagnostics_snapshot_;
+    }
+    if (diagnostics_snapshot.has_value())
+    {
+      EnrichGnssRuntimeStateFromDiagnostics(
+          gnss_state, gnss_backend_, *diagnostics_snapshot, gnss_diagnostics_timeout_sec_);
+    }
+    gnss_status_pub_->publish(ToGnssStatusMessage(gnss_state));
   }
-  if (diagnostics_snapshot.has_value())
-  {
-    EnrichGnssRuntimeStateFromDiagnostics(
-        gnss_state, gnss_backend_, *diagnostics_snapshot, gnss_diagnostics_timeout_sec_);
-  }
-  gnss_status_pub_->publish(ToGnssStatusMessage(gnss_state));
 
   using AbsPose = mowgli_interfaces::msg::AbsolutePose;
   using NavSat = sensor_msgs::msg::NavSatFix;

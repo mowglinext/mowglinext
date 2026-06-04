@@ -2,8 +2,9 @@
 """Forward NTRIP RTCM3 corrections to a serial GPS receiver.
 
 The ntrip_client_node publishes parsed RTCM3 frames on /ntrip_client/rtcm
-(rtcm_msgs/Message). The UBX path (serial_ublox_driver.py) consumes that
-topic directly because it owns the serial port. The NMEA path uses
+(rtcm_msgs/Message). The shared `sensors/gps/start_gps.sh` UBX path lets
+the vendor driver inject RTCM internally because it owns the serial port.
+The NMEA path uses
 nmea_navsat_driver, which is read-only — it never writes RTCM back into
 the receiver. Without this bridge an LC29H or similar NMEA-capable RTK
 receiver gets a fix but stays at autonomous accuracy, even with NTRIP
