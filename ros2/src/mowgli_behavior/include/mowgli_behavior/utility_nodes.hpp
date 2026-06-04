@@ -105,9 +105,10 @@ private:
 ///
 /// Input ports:
 ///   timeout_sec    (double, default 20.0) – max wait before proceeding.
-///   min_fix_type   (int,    default 2)    – BTContext gps_fix_type threshold:
-///                                           0=no/autonomous, 2=DGPS/SBAS,
-///                                           4=RTK Fixed, 5=RTK Float.
+///   min_fix_type   (int,    default 2)    – BTContext gps_fix_type threshold
+///                                           (quality-monotonic, higher=better):
+///                                           0=no fix, 2=DGPS/SBAS,
+///                                           3=RTK Float, 4=RTK Fixed.
 class WaitForGpsFix : public BT::StatefulActionNode
 {
 public:

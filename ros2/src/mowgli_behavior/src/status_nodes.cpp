@@ -137,6 +137,13 @@ BT::NodeStatus EndSession::tick()
   // so the next COMMAND_START can plan + mow each area afresh.
   ctx->attempted_areas.clear();
   ctx->area_attempt_count.clear();
+  // Also clear the per-area coverage high-water mark (documented in
+  // bt_context.hpp as "Cleared by EndSession"). Leaking it across sessions
+  // makes the next session's first GetNextUnmowedArea dispatch compute
+  // made_progress against last session's mark, so a freshly resumable area
+  // (coverage reset / re-mow) is wrongly judged "no progress" and pushed
+  // toward premature give-up at kMaxAreaAttempts.
+  ctx->area_last_coverage.clear();
   return BT::NodeStatus::SUCCESS;
 }
 
