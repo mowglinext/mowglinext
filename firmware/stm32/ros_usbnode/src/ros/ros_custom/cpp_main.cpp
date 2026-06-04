@@ -296,7 +296,16 @@ static void on_cmd_blade(const uint8_t *data, size_t len)
     }
 
     const pkt_cmd_blade_t *pkt = (const pkt_cmd_blade_t *)data;
-    target_blade_on_off = pkt->blade_on;
+    /* Defense-in-depth: never arm the blade target while IDLE/docked. The
+     * authoritative gate is in motors_handler (which zeroes blade_on_off in
+     * IDLE every tick), but refusing to latch the target here keeps state
+     * consistent and avoids an instantaneous spin-up on the IDLE→MOWING edge.
+     * blade_dir is still accepted so direction is correct once mowing starts. */
+    if (main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE) {
+        target_blade_on_off = 0;
+    } else {
+        target_blade_on_off = pkt->blade_on;
+    }
     blade_direction = pkt->blade_dir;
 }
 
@@ -386,6 +395,17 @@ extern "C" void motors_handler()
          * Otherwise the snapshot value drives the PI loop below. */
         bool hard_stop = false;
         if (Emergency_State()) {
+            hard_stop = true;
+            blade_on_off = 0;
+        } else if (main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE) {
+            /* Re-assert the IDLE gate HERE — in the one place that actually
+             * drives the wheels AND the blade — so the "never move / never
+             * spin the blade while idle/docked" guarantee holds regardless of
+             * the relative arrival order of CMD_PWM, CMD_BLADE and HL_STATE.
+             * on_hl_state zeroes the targets when the IDLE packet arrives, but
+             * a CMD_BLADE(on=1) arriving AFTER it would otherwise re-arm the
+             * blade with no gate (on_cmd_blade is fire-and-forget). Firmware is
+             * the sole blade safety authority. */
             hard_stop = true;
             blade_on_off = 0;
         } else {
