@@ -2,15 +2,20 @@
 # =============================================================================
 # post-create.sh — Runs after the devcontainer is created.
 #
-# Symlinks the monorepo's ROS2 packages into the workspace, resolves
-# dependencies, and builds the full workspace.
+# Symlinks the monorepo's ROS2 packages into the workspace and resolves
+# dependencies. It intentionally does not build the full workspace by default:
+# optional coverage packages need Fields2Cover and should not block opening the
+# devcontainer.
 # =============================================================================
-set -e
+set -euo pipefail
 
 echo "=== MowgliNext: Setting up ROS2 workspace ==="
 
 # Source ROS2
+# shellcheck source=/opt/ros/kilted/setup.bash
+set +u
 source /opt/ros/kilted/setup.bash
+set -u
 
 cd /ros2_ws
 
@@ -19,8 +24,8 @@ echo "Cleaning stale workspace artifacts..."
 # Never let generated colcon artifacts inside src/ be discovered as packages.
 rm -rf src/install src/build src/log
 
-# Fields2Cover is installed as a system CMake dependency in the devcontainer.
-# Do not build a workspace copy if one is present from older tests.
+# Fields2Cover is an optional/full-stack CMake dependency. Do not build a
+# workspace copy if one is present from older tests.
 rm -f src/fields2cover src/Fields2Cover
 
 SYNC_WORKSPACE_SCRIPT="/ros2_ws/src/mowglinext/ros2/scripts/sync_workspace_packages.sh"
@@ -40,7 +45,7 @@ fi
 ARCH=$(uname -m)
 if [ "$ARCH" != "aarch64" ] && [ "$ARCH" != "arm64" ]; then
     echo ""
-    echo "⚠  Dev container arch is ${ARCH} (not ARM)."
+    echo "WARNING: Dev container arch is ${ARCH} (not ARM)."
     echo "   ROS2 / GUI / sim build fine; firmware (pio run) won't match the"
     echo "   real robot without a cross-compile step."
     echo ""
@@ -51,30 +56,31 @@ fi
 # ---------------------------------------------------------------------------
 echo "Resolving rosdep dependencies..."
 rosdep install \
-    --from-paths src \
+    --from-paths "${BUILD_PATHS[@]}" \
     --ignore-src \
     --rosdistro kilted \
     -y || true
 
 # ---------------------------------------------------------------------------
-# Build the workspace.
+# Optional focused development build.
 # ---------------------------------------------------------------------------
-echo "Building workspace (this may take a few minutes on first run)..."
+DEV_PACKAGES="${DEV_PACKAGES:-mowgli_interfaces mowgli_localization universal_gnss_ros2 mowgli_bringup}"
+MOWGLI_POST_CREATE_BUILD="${MOWGLI_POST_CREATE_BUILD:-0}"
 
-# Build only the symlinked package roots so nested package.xml files under the
-# monorepo tree do not leak into discovery.
-colcon build \
-    --base-paths "${BUILD_PATHS[@]}" \
-    --cmake-args \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DBUILD_TESTING=OFF \
-    --parallel-workers "$(nproc)" \
-    --symlink-install \
-    --event-handlers console_cohesion+
+if [ "${MOWGLI_POST_CREATE_BUILD}" = "1" ]; then
+    echo "Building focused development package set..."
+    echo "  ${DEV_PACKAGES}"
 
-# Source the built workspace
-# shellcheck disable=SC1091
-source install/setup.bash
+    PACKAGES="${DEV_PACKAGES}" BUILD_TYPE=Release \
+        /ros2_ws/src/mowglinext/ros2/scripts/build.sh
+
+    # Source the built workspace
+    # shellcheck disable=SC1091
+    source install/setup.bash
+else
+    echo "Skipping ROS2 build during post-create."
+    echo "Set MOWGLI_POST_CREATE_BUILD=1 to build the focused development set during container creation."
+fi
 
 # ---------------------------------------------------------------------------
 # Optional: install pre-commit hooks if the repo has a config (no-op today).
@@ -89,7 +95,8 @@ echo ""
 echo "Quick start (from ros2/ directory):"
 echo "  make sim          # Launch headless simulation (Foxglove ws://localhost:8765)"
 echo "  make e2e-test     # Run E2E validation (sim must be running)"
-echo "  make build        # Rebuild after code changes"
+echo "  make build-dev    # Build the focused dev package set"
+echo "  make build-full   # Build the full linked workspace"
 echo "  make format       # Format C++ code"
 echo "  make help         # Show all targets"
 echo ""

@@ -8,6 +8,12 @@
 # Usage:
 #   ./scripts/sync_workspace_packages.sh
 #   ./scripts/sync_workspace_packages.sh --print-base-paths
+#
+# Environment:
+#   INCLUDE_OPENNAV_COVERAGE_STACK=1
+#     Link every package from the upstream opennav_coverage submodule. By
+#     default only opennav_coverage_msgs is linked because the server packages
+#     are optional full-stack dependencies and require Fields2Cover.
 # =============================================================================
 set -euo pipefail
 
@@ -16,6 +22,7 @@ MONOREPO_ROOT="${MONOREPO_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/ros2_ws}"
 WORKSPACE_SRC="${WORKSPACE_ROOT}/src"
 UNIVERSAL_GNSS_PATH="${UNIVERSAL_GNSS_PATH:-/workspaces/universal-gnss}"
+INCLUDE_OPENNAV_COVERAGE_STACK="${INCLUDE_OPENNAV_COVERAGE_STACK:-0}"
 PRINT_BASE_PATHS="${1:-}"
 
 if [ "${PRINT_BASE_PATHS}" != "" ] && [ "${PRINT_BASE_PATHS}" != "--print-base-paths" ]; then
@@ -59,6 +66,16 @@ link_workspace_package() {
     log "  Linked: ${link_name}"
 }
 
+unlink_workspace_symlink() {
+    local link_name="${1:?unlink_workspace_symlink: missing link name}"
+    local link_path="${WORKSPACE_SRC}/${link_name}"
+
+    if [ -L "${link_path}" ]; then
+        rm -f "${link_path}"
+        log "  Unlinked: ${link_name}"
+    fi
+}
+
 mkdir -p "${WORKSPACE_SRC}"
 
 BUILD_PATHS=()
@@ -73,12 +90,31 @@ for pkg_dir in "${MONOREPO_ROOT}"/ros2/src/mowgli_*/; do
     link_workspace_package "${pkg_dir}" "${pkg_name}"
 done
 
-for pkg_dir in "${MONOREPO_ROOT}"/ros2/src/opennav_coverage/*/; do
-    if [ -f "${pkg_dir}/package.xml" ]; then
-        pkg_name="$(basename "${pkg_dir}")"
-        link_workspace_package "${pkg_dir}" "${pkg_name}"
-    fi
-done
+opennav_msgs_dir="${MONOREPO_ROOT}/ros2/src/opennav_coverage/opennav_coverage_msgs"
+if [ -f "${opennav_msgs_dir}/package.xml" ]; then
+    link_workspace_package "${opennav_msgs_dir}" "opennav_coverage_msgs"
+fi
+
+if [ "${INCLUDE_OPENNAV_COVERAGE_STACK}" = "1" ]; then
+    for pkg_dir in "${MONOREPO_ROOT}"/ros2/src/opennav_coverage/*/; do
+        if [ -f "${pkg_dir}/package.xml" ]; then
+            pkg_name="$(basename "${pkg_dir}")"
+            [ "${pkg_name}" = "opennav_coverage_msgs" ] && continue
+            link_workspace_package "${pkg_dir}" "${pkg_name}"
+        fi
+    done
+else
+    for pkg_name in \
+        opennav_coverage \
+        opennav_coverage_bt \
+        opennav_coverage_demo \
+        opennav_coverage_navigator \
+        opennav_row_coverage
+    do
+        unlink_workspace_symlink "${pkg_name}"
+    done
+    log "  Skipped: opennav_coverage full stack (set INCLUDE_OPENNAV_COVERAGE_STACK=1 to link it)"
+fi
 
 if [ -d "${MONOREPO_ROOT}/ros2/src/fusion_graph" ]; then
     link_workspace_package "${MONOREPO_ROOT}/ros2/src/fusion_graph" "fusion_graph"

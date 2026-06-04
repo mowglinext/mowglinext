@@ -6,9 +6,10 @@ DOCKER_IMAGE  ?= mowgli-ros2
 DOCKER_TAG    ?= latest
 ROBOT_HOST    ?= mowgli.local
 ROBOT_USER    ?= pi
+DEV_PACKAGES  ?= mowgli_interfaces mowgli_localization universal_gnss_ros2 mowgli_bringup
 
 
-.PHONY: help build build-debug build-pkg test clean \
+.PHONY: help build build-dev build-full build-debug build-pkg test clean \
         sim sim-stop e2e-test e2e-test-no-lidar \
         docker docker-sim \
         lint format format-check \
@@ -20,7 +21,9 @@ help:
 	@echo "Mowgli ROS2 Build System (devcontainer)"
 	@echo ""
 	@echo "Build:"
-	@echo "  build              Build all packages (Release)"
+	@echo "  build-dev          Build focused development packages"
+	@echo "  build-full         Build the full linked workspace (Release)"
+	@echo "  build              Alias for build-full"
 	@echo "  build-debug        Build with Debug symbols"
 	@echo "  build-pkg PKG=x    Build a single package"
 	@echo "  test               Run all unit tests"
@@ -47,6 +50,12 @@ help:
 # ─── Build ─────────────────────────────────────────────────────────────────────
 
 build:
+	$(MAKE) build-full
+
+build-dev:
+	PACKAGES="$(DEV_PACKAGES)" BUILD_TYPE=$(BUILD_TYPE) ./scripts/build.sh
+
+build-full:
 	BUILD_TYPE=$(BUILD_TYPE) ./scripts/build.sh
 
 build-debug:
