@@ -85,6 +85,16 @@ jobs:
           provenance: true
           sbom: true
 
+      - name: Smoke test runtime image
+        run: |
+          image="${{ env.IMAGE_NAME }}${{ matrix.suffix }}@${{ steps.build.outputs.digest }}"
+          docker run --rm "$image" bash -lc '
+            set -euo pipefail
+            ros2 pkg list | grep -x universal_gnss_ros2
+            ros2 launch mowgli_bringup universal_gnss.launch.py --show-args \
+              > /tmp/universal_gnss_show_args.txt
+          '
+
       - name: Export digest
         run: |
           mkdir -p /tmp/digests

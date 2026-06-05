@@ -28,6 +28,11 @@ rm -rf src/install src/build src/log
 # workspace copy if one is present from older tests.
 rm -f src/fields2cover src/Fields2Cover
 
+if git -C /ros2_ws/src/mowglinext rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Ensuring git submodules are present..."
+    git -C /ros2_ws/src/mowglinext submodule update --init --recursive
+fi
+
 SYNC_WORKSPACE_SCRIPT="/ros2_ws/src/mowglinext/ros2/scripts/sync_workspace_packages.sh"
 "${SYNC_WORKSPACE_SCRIPT}"
 mapfile -t BUILD_PATHS < <("${SYNC_WORKSPACE_SCRIPT}" --print-base-paths)
@@ -57,9 +62,9 @@ fi
 echo "Resolving rosdep dependencies..."
 ROSDEP_SKIP_KEYS=()
 
-# universal_gnss_ros2 is an external workspace package when the GNSS repo is
-# mounted into the devcontainer. If that mount is absent, keep rosdep from
-# trying to resolve it as a system package.
+# universal_gnss_ros2 normally comes from the vendored submodule linked by
+# sync_workspace_packages.sh. If that submodule or an override checkout is
+# absent, keep rosdep from trying to resolve it as a system package.
 if [ ! -f "/ros2_ws/src/universal_gnss_ros2/package.xml" ]; then
     ROSDEP_SKIP_KEYS+=(universal_gnss_ros2)
 fi

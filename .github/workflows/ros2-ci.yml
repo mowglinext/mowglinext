@@ -192,15 +192,11 @@ jobs:
           # skip-keys:
           # - the opennav_coverage server subpackages are intentionally not
           #   part of this CI build (only opennav_coverage_msgs is used)
-          # - universal_gnss_ros2 is a real workspace package in devcontainer
-          #   builds, but this CI job does not check out the external GNSS
-          #   repository that provides it, so rosdep must not treat it like a
-          #   system dependency
           rosdep install \
             --from-paths src \
             --ignore-src \
             --rosdistro ${{ matrix.ros_distro }} \
-            --skip-keys "opennav_coverage opennav_coverage_bt opennav_coverage_demo opennav_coverage_navigator opennav_row_coverage universal_gnss_ros2" \
+            --skip-keys "opennav_coverage opennav_coverage_bt opennav_coverage_demo opennav_coverage_navigator opennav_row_coverage" \
             -y
 
       - name: Cache colcon workspace
@@ -230,6 +226,14 @@ jobs:
             --return-code-on-test-failure \
             --event-handlers console_cohesion+
           colcon test-result --verbose
+
+      - name: Validate Universal GNSS package wiring
+        run: |
+          source /opt/ros/${{ matrix.ros_distro }}/setup.bash
+          source install/setup.bash
+          ros2 pkg list | grep -x universal_gnss_ros2
+          ros2 launch mowgli_bringup universal_gnss.launch.py --show-args \
+            > /tmp/universal_gnss_show_args.txt
 
       - name: Upload test results
         if: always()

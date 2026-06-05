@@ -14,6 +14,11 @@
 #     Link every package from the upstream opennav_coverage submodule. By
 #     default only opennav_coverage_msgs is linked because the server packages
 #     are optional full-stack dependencies and require Fields2Cover.
+#   UNIVERSAL_GNSS_PATH=/path/to/universal-gnss
+#     Optional override for the Universal GNSS repo root. By default the
+#     vendored ros2/src/external/universal-gnss submodule is used; the legacy
+#     /workspaces/universal-gnss mount remains a fallback for local GNSS
+#     development outside this monorepo.
 # =============================================================================
 set -euo pipefail
 
@@ -21,7 +26,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MONOREPO_ROOT="${MONOREPO_ROOT:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/ros2_ws}"
 WORKSPACE_SRC="${WORKSPACE_ROOT}/src"
-UNIVERSAL_GNSS_PATH="${UNIVERSAL_GNSS_PATH:-/workspaces/universal-gnss}"
+UNIVERSAL_GNSS_PATH="${UNIVERSAL_GNSS_PATH:-}"
+VENDORED_UNIVERSAL_GNSS_PATH="${MONOREPO_ROOT}/ros2/src/external/universal-gnss"
+LEGACY_MOUNTED_UNIVERSAL_GNSS_PATH="/workspaces/universal-gnss"
 INCLUDE_OPENNAV_COVERAGE_STACK="${INCLUDE_OPENNAV_COVERAGE_STACK:-0}"
 PRINT_BASE_PATHS="${1:-}"
 
@@ -43,6 +50,35 @@ log() {
 
 warn() {
     echo "$@" >&2
+}
+
+find_universal_gnss_repo() {
+    local candidate
+    local -a candidates=()
+
+    if [ -n "${UNIVERSAL_GNSS_PATH}" ]; then
+        candidates+=("${UNIVERSAL_GNSS_PATH}")
+    fi
+
+    candidates+=(
+        "${VENDORED_UNIVERSAL_GNSS_PATH}"
+        "${LEGACY_MOUNTED_UNIVERSAL_GNSS_PATH}"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        [ -n "${candidate}" ] || continue
+
+        if [ -f "${candidate}/gnss_ros2/package.xml" ]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+
+        if [ -d "${candidate}" ]; then
+            warn "Universal GNSS source candidate exists at ${candidate}, but gnss_ros2/package.xml was not found."
+        fi
+    done
+
+    return 1
 }
 
 package_name_from_xml() {
@@ -120,10 +156,9 @@ if [ -d "${MONOREPO_ROOT}/ros2/src/fusion_graph" ]; then
     link_workspace_package "${MONOREPO_ROOT}/ros2/src/fusion_graph" "fusion_graph"
 fi
 
-universal_gnss_ros2_dir="${UNIVERSAL_GNSS_PATH}/gnss_ros2"
-universal_gnss_ros2_xml="${universal_gnss_ros2_dir}/package.xml"
-
-if [ -f "${universal_gnss_ros2_xml}" ]; then
+if universal_gnss_repo="$(find_universal_gnss_repo)"; then
+    universal_gnss_ros2_dir="${universal_gnss_repo}/gnss_ros2"
+    universal_gnss_ros2_xml="${universal_gnss_ros2_dir}/package.xml"
     universal_pkg_name="$(package_name_from_xml "${universal_gnss_ros2_xml}")"
     if [ "${universal_pkg_name}" != "universal_gnss_ros2" ]; then
         warn "Universal GNSS package name mismatch at ${universal_gnss_ros2_xml}: ${universal_pkg_name}"
@@ -131,10 +166,8 @@ if [ -f "${universal_gnss_ros2_xml}" ]; then
     fi
 
     link_workspace_package "${universal_gnss_ros2_dir}" "${universal_pkg_name}"
-elif [ -d "${UNIVERSAL_GNSS_PATH}" ]; then
-    warn "Universal GNSS source is mounted at ${UNIVERSAL_GNSS_PATH}, but gnss_ros2/package.xml was not found."
 else
-    warn "Universal GNSS source not mounted at ${UNIVERSAL_GNSS_PATH}."
+    warn "Universal GNSS source not found. Checked vendored submodule at ${VENDORED_UNIVERSAL_GNSS_PATH} and fallback mount at ${LEGACY_MOUNTED_UNIVERSAL_GNSS_PATH}${UNIVERSAL_GNSS_PATH:+, plus UNIVERSAL_GNSS_PATH=${UNIVERSAL_GNSS_PATH}}."
 fi
 
 shopt -u nullglob

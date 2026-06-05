@@ -2,3 +2,6 @@
 	path = ros2/src/opennav_coverage
 	url = https://github.com/open-navigation/opennav_coverage.git
 	branch = main
+[submodule "ros2/src/external/universal-gnss"]
+	path = ros2/src/external/universal-gnss
+	url = https://github.com/pepeuch/universal-gnss.git

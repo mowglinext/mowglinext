@@ -33,8 +33,8 @@ This document records the current GNSS integration state of MowgliNext now that 
 
 ### Devcontainer and Workspace
 
-- `.devcontainer/devcontainer.json` now binds the reference repository host path into `/workspaces/universal-gnss`.
-- `/workspaces/universal-gnss` is now visible inside the devcontainer and contains the mounted reference repository.
+- The `universal-gnss` source now lives in-tree as the `ros2/src/external/universal-gnss` git submodule, so devcontainers and Docker builds share the same pinned GNSS source.
+- `UNIVERSAL_GNSS_PATH=/path/to/universal-gnss` remains available as an override for local upstream GNSS development, with `/workspaces/universal-gnss` kept as a fallback convention.
 - The devcontainer now also bind-mounts the host `/dev` tree at `/host-dev`, and `.devcontainer/post-start.sh` re-links `/dev/serial/by-id` inside the container when the host provides those stable udev symlinks.
 - `.devcontainer/post-create.sh` now reuses `ros2/scripts/sync_workspace_packages.sh` so the same package-linking logic is used for post-create, ad-hoc builds, tests, and dev simulation boots.
 - Workspace linking now exposes only `gnss_ros2` as `universal_gnss_ros2` from the external repository at this milestone. The low-level Universal GNSS libraries remain sibling CMake subdirectories of that ROS package instead of separate colcon packages here.
@@ -143,8 +143,8 @@ Receiver
 
 ### Source Integration
 
-- The reference `universal-gnss` repository is available at `/workspaces/universal-gnss`.
-- `ros2/scripts/sync_workspace_packages.sh` links `universal_gnss_ros2` into `/ros2_ws/src`, making it visible to normal workspace builds without vendoring the external repository into MowgliNext.
+- The reference `universal-gnss` repository is vendored at `ros2/src/external/universal-gnss` as a pinned git submodule.
+- `ros2/scripts/sync_workspace_packages.sh` links `universal_gnss_ros2` into `/ros2_ws/src`, preferring the vendored submodule and falling back to `UNIVERSAL_GNSS_PATH` or `/workspaces/universal-gnss` only when explicitly needed.
 - The current Mowgli-local parser in `gnss_runtime_state_builder.cpp` still remains in place for the next milestone, but the real Universal GNSS ROS package can now be built from the same workspace.
 
 ### Workspace Build

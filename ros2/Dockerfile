@@ -269,6 +269,11 @@ COPY src/mowgli_coverage/CMakeLists.txt   src/mowgli_coverage/CMakeLists.txt
 # consumed by mowgli_coverage). Pulled by checkout submodules: recursive.
 COPY src/opennav_coverage/opennav_coverage_msgs/package.xml    src/opennav_coverage/opennav_coverage_msgs/package.xml
 COPY src/opennav_coverage/opennav_coverage_msgs/CMakeLists.txt src/opennav_coverage/opennav_coverage_msgs/CMakeLists.txt
+# universal-gnss is vendored as a git submodule under ros2/src/external.
+# gnss_ros2 is the only colcon package; its sibling gnss_* libraries are
+# plain CMake subdirectories pulled in at build time from the same repo root.
+COPY src/external/universal-gnss/gnss_ros2/package.xml    src/external/universal-gnss/gnss_ros2/package.xml
+COPY src/external/universal-gnss/gnss_ros2/CMakeLists.txt src/external/universal-gnss/gnss_ros2/CMakeLists.txt
 
 # Resolve rosdep dependencies (cached until package.xml changes)
 RUN rosdep update --rosdistro kilted \
@@ -276,7 +281,6 @@ RUN rosdep update --rosdistro kilted \
       --from-paths src \
       --ignore-src \
       --rosdistro kilted \
-      --skip-keys "universal_gnss_ros2" \
       -y \
  || true
 
