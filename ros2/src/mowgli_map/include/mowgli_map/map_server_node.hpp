@@ -797,6 +797,16 @@ private:
   nav_msgs::msg::OccupancyGrid cached_speed_mask_;
   bool masks_dirty_{true};
 
+  /// Republish gating for the data topics (~/grid_map, ~/mow_progress,
+  /// ~/coverage_cells). Set whenever a contributing layer actually changes —
+  /// MOW_PROGRESS/CONFIDENCE (mark_cells_mowed, active decay) or OCCUPANCY
+  /// (on_occupancy_grid). CLASSIFICATION + area/obstacle membership changes are
+  /// already tracked by masks_dirty_. When neither is set the publish timer
+  /// skips the full rebuild, which is what an idle/docked robot does every tick.
+  /// The publishers use transient_local QoS so late subscribers still latch the
+  /// most recent value despite publish-on-change.
+  bool content_dirty_{true};
+
   // Replan and boundary violation publishers
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr replan_needed_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr boundary_violation_pub_;

@@ -166,10 +166,17 @@ void MapServerNode::apply_decay(double elapsed_seconds)
   // toward 0 so a long-idle session re-mows when restarted.
   if (decay_rate_per_hour_ > 0.0)
   {
-    const double decay_per_second = decay_rate_per_hour_ / 3600.0;
-    const float decay = static_cast<float>(decay_per_second * elapsed_seconds);
     auto& prog = map_[std::string(layers::MOW_PROGRESS)];
-    prog = (prog.array() - decay).max(0.0F).matrix();
+    // Early-out when nothing has been mowed yet (e.g. idle on the dock): there
+    // is no progress to decay, so skip the full-grid pass and leave the data
+    // topics un-dirtied so the publish timer can skip its rebuild entirely.
+    if (prog.maxCoeff() > 0.0F)
+    {
+      const double decay_per_second = decay_rate_per_hour_ / 3600.0;
+      const float decay = static_cast<float>(decay_per_second * elapsed_seconds);
+      prog = (prog.array() - decay).max(0.0F).matrix();
+      content_dirty_ = true;
+    }
   }
 
   // DEAD-cell decay was deleted in the topological-reachability redesign
@@ -189,6 +196,7 @@ void MapServerNode::mark_cells_mowed(double x, double y)
     map_.at(std::string(layers::MOW_PROGRESS), *it) = 1.0F;
     map_.at(std::string(layers::CONFIDENCE), *it) += 1.0F;
   }
+  content_dirty_ = true;
 }
 
 bool MapServerNode::point_in_polygon(const geometry_msgs::msg::Point32& pt,
