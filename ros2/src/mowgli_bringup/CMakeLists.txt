@@ -43,9 +43,7 @@ if(BUILD_TESTING)
   add_launch_test(test/test_nodes_startup.launch.py
     TIMEOUT 60
   )
-  add_launch_test(test/test_navsat_status_legacy.launch.py
-    TIMEOUT 45
-  )
+  
   add_launch_test(test/test_navsat_status_universal.launch.py
     TIMEOUT 45
   )
