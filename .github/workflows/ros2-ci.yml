@@ -230,17 +230,19 @@ jobs:
       - name: Validate Universal GNSS package wiring
         working-directory: .
         run: |
-          set -euo pipefail
+          set -eo pipefail
           pwd
           ls -la
           find / -name setup.bash 2>/dev/null | grep install || true
           find / -type d -name install 2>/dev/null | head -50 || true
+          set +u
           source /opt/ros/${{ matrix.ros_distro }}/setup.bash
+          source "${GITHUB_WORKSPACE}/ros2/install/setup.bash"
+          set -u
           # This CI job runs on the GitHub-hosted runner checkout under
           # $GITHUB_WORKSPACE, not inside the devcontainer/runtime image where
           # /ros2_ws exists. colcon build runs from the ros2/ subdirectory and
           # writes its overlay to ros2/install.
-          source "${GITHUB_WORKSPACE}/ros2/install/setup.bash"
           ros2 pkg list | grep -x universal_gnss_ros2
           ros2 pkg prefix universal_gnss_ros2
           ros2 launch mowgli_bringup universal_gnss.launch.py --show-args \
