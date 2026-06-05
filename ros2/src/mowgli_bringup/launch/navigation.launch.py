@@ -331,6 +331,7 @@ def generate_launch_description() -> LaunchDescription:
     # the dock-instance namespace the plugin never reads, so the slider was
     # orphan and the static -1.5 m governed. See issue #192.)
     dock_approach_distance = 1.5
+    dock_approach_overshoot = 0.05
     # SimpleChargingDock charging-current threshold (amps). 0.3 is the
     # production default (see nav2_params.yaml for the "0.1 stops too
     # early, 0.5 over-presses" rationale). Operator-overridable via
