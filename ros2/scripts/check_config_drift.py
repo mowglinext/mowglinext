@@ -75,6 +75,7 @@ USER_OVERRIDE = {
     "dock_pose_x", "dock_pose_y", "dock_pose_yaw",
     "imu_pitch", "imu_roll", "imu_yaw", "imu_x", "imu_y", "imu_z",
     "gps_antenna_x", "gps_antenna_y", "gps_x", "gps_y", "gps_z",
+    "gnss_receiver_family", "gnss_serial_device", "gnss_serial_baud",
     "gps_port", "gps_baudrate", "gps_protocol", "gps_timeout_sec",
     "gps_wait_after_undock_sec",
     "ntrip_enabled", "ntrip_host", "ntrip_port",

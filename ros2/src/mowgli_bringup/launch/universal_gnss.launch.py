@@ -83,13 +83,19 @@ def _env_or_robot_param(name: str, robot_params: dict, robot_key: str, default: 
 
 
 def _normalized_status_source() -> str:
-    return os.environ.get("GNSS_STATUS_SOURCE", "mowgli_local").strip().lower()
+    return os.environ.get("GNSS_STATUS_SOURCE", "universal").strip().lower()
 
 
 def _default_receiver_family(robot_params: dict) -> str:
     receiver_family = _normalize_text(os.environ.get("GNSS_RECEIVER_FAMILY"), "")
     if receiver_family:
         return receiver_family.lower()
+
+    yaml_receiver_family = _normalize_text(
+        robot_params.get("gnss_receiver_family"), ""
+    )
+    if yaml_receiver_family:
+        return yaml_receiver_family.lower()
 
     backend = _normalize_text(os.environ.get("GNSS_BACKEND"), "gps").lower()
     protocol = _normalize_text(
@@ -110,6 +116,10 @@ def _default_serial_device(robot_params: dict) -> str:
     if serial_device:
         return serial_device
 
+    yaml_serial_device = _normalize_text(robot_params.get("gnss_serial_device"), "")
+    if yaml_serial_device:
+        return yaml_serial_device
+
     gps_connection = _normalize_text(os.environ.get("GPS_CONNECTION"), "uart").lower()
     gps_by_id = _normalize_text(os.environ.get("GPS_BY_ID"), "")
     gps_port = _normalize_text(
@@ -122,6 +132,10 @@ def _default_serial_device(robot_params: dict) -> str:
 
 
 def _default_serial_baud(robot_params: dict) -> str:
+    yaml_serial_baud = _normalize_text(robot_params.get("gnss_serial_baud"), "")
+    if yaml_serial_baud:
+        return _env_or_default("GNSS_SERIAL_BAUD", yaml_serial_baud)
+
     return _env_or_default(
         "GNSS_SERIAL_BAUD",
         _normalize_text(os.environ.get("GPS_BAUD"), str(robot_params.get("gps_baudrate", 921600))),
@@ -141,7 +155,7 @@ def _default_ntrip_gga_enabled(robot_params: dict) -> str:
 
 
 def _default_status_topic() -> str:
-    return "/gps/status" if _normalized_status_source() == "universal" else "/status"
+    return "/gps/status"
 
 
 def _default_transport() -> str:

@@ -22,10 +22,10 @@ def test_universal_wrapper_uses_gps_status_topic_in_universal_mode(monkeypatch) 
     assert launch_module._default_status_topic() == "/gps/status"
 
 
-def test_universal_wrapper_keeps_legacy_status_topic_outside_universal_mode(monkeypatch) -> None:
-    launch_module = _load_module("universal_gnss.launch.py", "universal_gnss_launch_legacy")
+def test_universal_wrapper_keeps_gps_status_topic_when_legacy_env_lingers(monkeypatch) -> None:
+    launch_module = _load_module("universal_gnss.launch.py", "universal_gnss_launch_status")
     monkeypatch.setenv("GNSS_STATUS_SOURCE", "mowgli_local")
-    assert launch_module._default_status_topic() == "/status"
+    assert launch_module._default_status_topic() == "/gps/status"
 
 
 def test_universal_wrapper_prefers_new_env_contract(monkeypatch) -> None:
@@ -68,6 +68,25 @@ def test_universal_wrapper_prefers_new_env_contract(monkeypatch) -> None:
     assert launch_module._default_ntrip_password(robot_params) == "secret"
 
 
+def test_universal_wrapper_uses_yaml_gnss_keys_when_env_is_missing(monkeypatch) -> None:
+    launch_module = _load_module("universal_gnss.launch.py", "universal_gnss_launch_yaml")
+    monkeypatch.delenv("GNSS_RECEIVER_FAMILY", raising=False)
+    monkeypatch.delenv("GNSS_SERIAL_DEVICE", raising=False)
+    monkeypatch.delenv("GNSS_SERIAL_BAUD", raising=False)
+
+    robot_params = {
+        "gnss_receiver_family": "nmea",
+        "gnss_serial_device": "/dev/serial/by-id/usb-gnss",
+        "gnss_serial_baud": 115200,
+        "gps_port": "/dev/gps",
+        "gps_baudrate": 921600,
+    }
+
+    assert launch_module._default_receiver_family(robot_params) == "nmea"
+    assert launch_module._default_serial_device(robot_params) == "/dev/serial/by-id/usb-gnss"
+    assert launch_module._default_serial_baud(robot_params) == "115200"
+
+
 def test_universal_wrapper_prefers_gps_by_id_for_usb_fallback(monkeypatch) -> None:
     launch_module = _load_module("universal_gnss.launch.py", "universal_gnss_launch_usb_fallback")
     monkeypatch.delenv("GNSS_SERIAL_DEVICE", raising=False)
@@ -84,7 +103,7 @@ def test_universal_wrapper_prefers_gps_by_id_for_usb_fallback(monkeypatch) -> No
 
 def test_full_system_disables_local_status_when_universal_selected() -> None:
     launch_module = _load_module("full_system.launch.py", "full_system_launch")
-    assert launch_module._local_gnss_status_enabled("mowgli_local") is True
+    assert launch_module._local_gnss_status_enabled("mowgli_local") is False
     assert launch_module._local_gnss_status_enabled("universal") is False
     assert launch_module._local_gnss_status_enabled("external") is False
     assert launch_module._local_gnss_status_enabled("off") is False
@@ -92,5 +111,5 @@ def test_full_system_disables_local_status_when_universal_selected() -> None:
 
 def test_sim_full_system_matches_runtime_status_switch() -> None:
     launch_module = _load_module("sim_full_system.launch.py", "sim_full_system_launch")
-    assert launch_module._local_gnss_status_enabled("gps") is True
+    assert launch_module._local_gnss_status_enabled("gps") is False
     assert launch_module._local_gnss_status_enabled("universal") is False

@@ -18,6 +18,7 @@ import { useCalibrationStatus } from "../hooks/useCalibrationStatus.ts";
 import { useImuYawCalibration } from "../hooks/useImuYawCalibration.ts";
 import { GnssStatusConstants } from "../types/ros.ts";
 import { CompassOutlined } from "@ant-design/icons";
+import { deriveGpsStatus, gnssReceiverLabel } from "../utils/gpsStatus.ts";
 import { RobotComponentEditor } from "../components/RobotComponentEditor.tsx";
 import { FlashBoardComponent } from "../components/FlashBoardComponent.tsx";
 import { MOWER_MODELS } from "../constants/mowerModels.ts";
@@ -228,49 +229,84 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
 type GpsStepProps = RobotModelStepProps & { gpsRestarting?: boolean };
 
 const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting }) => {
+    const gnssStatus = useGnssStatus();
+    const gpsStatus = deriveGpsStatus(gnssStatus);
+    const detectedReceiver = gnssReceiverLabel(gnssStatus);
     const ntripEnabled = values.ntrip_enabled ?? true;
+    const gnssAlertType: "success" | "warning" | "info" = gpsStatus.fixType === "RTK_FIX"
+        ? "success"
+        : gpsStatus.fixType === "NO_FIX"
+            ? "warning"
+            : "info";
 
     return (
         <div style={{ maxWidth: 640, margin: "0 auto" }}>
             <Title level={4}>
-                <GlobalOutlined /> GPS Configuration
+                <GlobalOutlined /> Universal GNSS Configuration
             </Title>
             <Paragraph type="secondary">
-                Configure how the robot talks to its GPS receiver and (optionally) where it pulls RTK corrections
-                from. The map origin (datum) is set later — once this step is saved and the receiver has had a
-                moment to acquire an RTK fix, the Datum step will let you anchor the map at your dock.
+                Configure the Universal GNSS serial link and, optionally, where it pulls RTK corrections from.
+                The map origin (datum) is set later — once this step is saved and the receiver has had a moment
+                to acquire an RTK fix, the Datum step will let you anchor the map at your dock.
             </Paragraph>
 
             {gpsRestarting && (
                 <Alert
                     type="info"
                     showIcon
-                    message="GPS container is restarting to apply your NTRIP / serial settings"
+                    message="GNSS receiver is restarting to apply your serial and NTRIP settings"
                     description="Wait ~10–30 s for RTK Fix to come back before setting the datum."
                     style={{ marginBottom: 12 }}
                 />
             )}
 
-            <Card size="small" title={<Space><WifiOutlined /> GPS Receiver</Space>} style={{ marginBottom: 16 }}>
+            <Alert
+                type={gnssAlertType}
+                showIcon
+                message={`Detected receiver: ${detectedReceiver}`}
+                description={`Live GNSS status: ${gpsStatus.label}. Auto receiver family is the right default for most installs.`}
+                style={{ marginBottom: 12 }}
+            />
+
+            <Card size="small" title={<Space><WifiOutlined /> Universal GNSS Receiver</Space>} style={{ marginBottom: 16 }}>
                 <Form layout="vertical">
                     <Row gutter={16}>
                         <Col xs={12}>
-                            <Form.Item label="Protocol">
+                            <Form.Item label="Receiver Family">
                                 <Select
-                                    value={values.gps_protocol ?? "UBX"}
-                                    onChange={(v) => onChange("gps_protocol", v)}
+                                    value={values.gnss_receiver_family ?? "auto"}
+                                    onChange={(v) => onChange("gnss_receiver_family", v)}
                                     options={[
-                                        { label: "UBX (u-blox)", value: "UBX" },
-                                        { label: "NMEA", value: "NMEA" },
+                                        { label: "Auto", value: "auto" },
+                                        { label: "u-blox", value: "ublox" },
+                                        { label: "Unicore", value: "unicore" },
+                                        { label: "NMEA", value: "nmea" },
                                     ]}
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={12}>
-                            <Form.Item label="Serial Port">
+                            <Form.Item label="Serial Device">
                                 <Input
-                                    value={values.gps_port ?? "/dev/gps"}
-                                    onChange={(e) => onChange("gps_port", e.target.value)}
+                                    value={values.gnss_serial_device ?? "/dev/ttyAMA4"}
+                                    onChange={(e) => onChange("gnss_serial_device", e.target.value)}
+                                    placeholder="/dev/serial/by-id/..."
+                                />
+                            </Form.Item>
+                        </Col>
+                        <Col xs={12}>
+                            <Form.Item label="Baud">
+                                <Select
+                                    value={values.gnss_serial_baud ?? 921600}
+                                    onChange={(v) => onChange("gnss_serial_baud", v)}
+                                    options={[
+                                        { label: "9600", value: 9600 },
+                                        { label: "38400", value: 38400 },
+                                        { label: "57600", value: 57600 },
+                                        { label: "115200", value: 115200 },
+                                        { label: "230400", value: 230400 },
+                                        { label: "921600", value: 921600 },
+                                    ]}
                                 />
                             </Form.Item>
                         </Col>
@@ -359,7 +395,7 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting }) =>
                 type="info"
                 showIcon
                 message="Save & Continue to start the receiver"
-                description="The GPS daemon picks up these settings when the configuration is saved. Acquiring an RTK fix can take 30 s to a few minutes — by the time you reach the Datum step it should be ready."
+                description="The Universal GNSS runtime picks up these settings when the configuration is saved. Acquiring an RTK fix can take 30 s to a few minutes — by the time you reach the Datum step it should be ready."
                 style={{ marginTop: 8 }}
             />
         </div>

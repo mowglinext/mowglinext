@@ -57,8 +57,7 @@ from launch_ros.actions import Node
 
 
 def _local_gnss_status_enabled(status_source: str) -> bool:
-    normalized = str(status_source).strip().lower()
-    return normalized not in ("universal", "external", "disabled", "false", "0", "off")
+    return False
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -339,8 +338,6 @@ def generate_launch_description() -> LaunchDescription:
     #     Datum matches the simulator world; if you change the sim
     #     world's lat/lon, change these too.
     # ------------------------------------------------------------------
-    gnss_status_source = os.environ.get("GNSS_STATUS_SOURCE", "mowgli_local").strip().lower()
-    publish_gnss_status = _local_gnss_status_enabled(gnss_status_source)
     navsat_converter_node = Node(
         package="mowgli_localization",
         executable="navsat_to_absolute_pose_node",
@@ -351,7 +348,7 @@ def generate_launch_description() -> LaunchDescription:
                 "use_sim_time": True,
                 "datum_lat": 48.137154,
                 "datum_lon": 11.576124,
-                "publish_gnss_status": publish_gnss_status,
+                "publish_gnss_status": False,
             },
         ],
     )

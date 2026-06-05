@@ -300,7 +300,10 @@ All sensor positions drive both the URDF (TF frames) and the Nav2 footprint poly
 |-----------|---------|-------------|
 | `datum_lat` | `0.0` | Map origin latitude — **set per site** |
 | `datum_lon` | `0.0` | Map origin longitude — **set per site** |
-| `gps_protocol` | `"UBX"` | GPS receiver protocol |
+| `gnss_receiver_family` | `"auto"` | Universal GNSS receiver family |
+| `gnss_serial_device` | `"/dev/ttyAMA4"` | Universal GNSS serial device |
+| `gnss_serial_baud` | `921600` | Universal GNSS serial baud |
+| `gps_protocol` | `"UBX"` | Legacy compatibility mirror derived from `gnss_receiver_family` |
 | `gps_wait_after_undock_sec` | `10.0` | Wait for RTK fix after undocking |
 | `ntrip_enabled` | `false` | Enable NTRIP RTK correction stream |
 | `ntrip_host` | `""` | NTRIP caster hostname |

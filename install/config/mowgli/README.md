@@ -11,7 +11,7 @@ defaults without rebuilding the image.
 
 | File | Purpose |
 |------|---------|
-| `mowgli_robot.yaml` | **Site-specific overrides** — GPS datum, NTRIP, dock pose, battery, mowing speed. Edit this first. |
+| `mowgli_robot.yaml` | **Site-specific overrides** — Universal GNSS serial settings, datum, NTRIP, dock pose, battery, mowing speed. Edit this first. |
 
 ## Additional overrideable files
 
@@ -29,7 +29,7 @@ The launch files in `mowgli_bringup` check for the presence of files under
 
 ## Quick start
 
-1. Edit `mowgli_robot.yaml` — set your GPS datum, NTRIP, and dock pose
+1. Edit `mowgli_robot.yaml` — set your Universal GNSS serial device, datum, NTRIP, and dock pose
 2. Restart: `docker compose restart mowgli`
 3. For advanced tuning, copy more files from the image:
 

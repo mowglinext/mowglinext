@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -306,6 +307,172 @@ func coerceValue(value string, schemaType string) any {
 		}
 	}
 	return value
+}
+
+func stringValue(value any, defaultValue string) string {
+	if value == nil {
+		return defaultValue
+	}
+	text := strings.TrimSpace(fmt.Sprintf("%v", value))
+	if text == "" || text == "<nil>" {
+		return defaultValue
+	}
+	return text
+}
+
+func normalizeGnssReceiverFamily(value any) string {
+	switch strings.ToLower(stringValue(value, "auto")) {
+	case "", "auto":
+		return "auto"
+	case "u-blox", "ublox":
+		return "ublox"
+	case "unicore":
+		return "unicore"
+	case "nmea":
+		return "nmea"
+	default:
+		return strings.ToLower(stringValue(value, "auto"))
+	}
+}
+
+func gnssConnectionFromDevice(serialDevice string) string {
+	switch {
+	case strings.HasPrefix(serialDevice, "/dev/serial/by-id/"),
+		strings.HasPrefix(serialDevice, "/dev/ttyUSB"),
+		strings.HasPrefix(serialDevice, "/dev/ttyACM"):
+		return "usb"
+	case strings.HasPrefix(serialDevice, "/dev/ttyAMA"),
+		strings.HasPrefix(serialDevice, "/dev/ttyS"),
+		strings.HasPrefix(serialDevice, "/dev/ttyTHS"),
+		strings.HasPrefix(serialDevice, "/dev/ttyHS"):
+		return "uart"
+	default:
+		return "uart"
+	}
+}
+
+func gnssCompatFromFlat(flat map[string]any) map[string]string {
+	receiverFamily := normalizeGnssReceiverFamily(flat["gnss_receiver_family"])
+	serialDevice := stringValue(flat["gnss_serial_device"], "")
+	if serialDevice == "" || serialDevice == "/dev/gps" {
+		serialDevice = stringValue(flat["gps_port"], "/dev/ttyAMA4")
+		if serialDevice == "/dev/gps" {
+			serialDevice = "/dev/ttyAMA4"
+		}
+	}
+	serialBaud := stringValue(flat["gnss_serial_baud"], "")
+	if serialBaud == "" {
+		serialBaud = stringValue(flat["gps_baudrate"], "921600")
+	}
+
+	connection := gnssConnectionFromDevice(serialDevice)
+	gpsProtocol := "UBX"
+	gnssBackend := "gps"
+	if receiverFamily == "nmea" {
+		gpsProtocol = "NMEA"
+	}
+	if receiverFamily == "unicore" {
+		gnssBackend = "unicore"
+	}
+
+	gpsPort := serialDevice
+	gpsByID := ""
+	gpsUartDevice := ""
+	ubloxSerial := ""
+	if connection == "usb" {
+		gpsByID = serialDevice
+		ubloxSerial = serialDevice
+	} else {
+		gpsPort = "/dev/gps"
+		gpsUartDevice = serialDevice
+	}
+
+	return map[string]string{
+		"GNSS_STACK":           "universal",
+		"GNSS_STATUS_SOURCE":   "universal",
+		"GNSS_RECEIVER_FAMILY": receiverFamily,
+		"GNSS_TRANSPORT":       "serial",
+		"GNSS_SERIAL_DEVICE":   serialDevice,
+		"GNSS_SERIAL_BAUD":     serialBaud,
+		"GNSS_BACKEND":         gnssBackend,
+		"GPS_CONNECTION":       connection,
+		"GPS_PROTOCOL":         gpsProtocol,
+		"GPS_PORT":             gpsPort,
+		"GPS_BY_ID":            gpsByID,
+		"GPS_UART_DEVICE":      gpsUartDevice,
+		"GPS_BAUD":             serialBaud,
+		"UBLOX_DEVICE_SERIAL_STRING": ubloxSerial,
+	}
+}
+
+func applyUniversalGnssCompatibility(flat map[string]any) map[string]string {
+	compat := gnssCompatFromFlat(flat)
+
+	flat["gnss_receiver_family"] = compat["GNSS_RECEIVER_FAMILY"]
+	flat["gnss_serial_device"] = compat["GNSS_SERIAL_DEVICE"]
+	if baud, err := strconv.Atoi(compat["GNSS_SERIAL_BAUD"]); err == nil {
+		flat["gnss_serial_baud"] = baud
+		flat["gps_baudrate"] = baud
+	} else {
+		flat["gnss_serial_baud"] = compat["GNSS_SERIAL_BAUD"]
+		flat["gps_baudrate"] = compat["GNSS_SERIAL_BAUD"]
+	}
+	flat["gps_protocol"] = compat["GPS_PROTOCOL"]
+	flat["gps_port"] = compat["GPS_PORT"]
+
+	return compat
+}
+
+func writeRuntimeEnvFile(path string, updates map[string]string) error {
+	var content string
+	if file, err := os.ReadFile(path); err == nil {
+		content = string(file)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	lines := []string{}
+	if content != "" {
+		lines = strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	} else {
+		lines = []string{}
+	}
+
+	seen := map[string]bool{}
+	for idx, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		eq := strings.IndexByte(line, '=')
+		if eq <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:eq])
+		value, ok := updates[key]
+		if !ok {
+			continue
+		}
+		lines[idx] = fmt.Sprintf("%s=%s", key, value)
+		seen[key] = true
+	}
+
+	keys := make([]string, 0, len(updates))
+	for key := range updates {
+		if !seen[key] {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		lines = append(lines, fmt.Sprintf("%s=%s", key, updates[key]))
+	}
+
+	out := strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return writePreservingPerms(path, []byte(out))
 }
 
 // applyMowgliOverlay modifies the settings schema to add Mowgli-specific
@@ -731,6 +898,7 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		for key, value := range payload {
 			existing[key] = value
 		}
+		gnssEnvUpdates := applyUniversalGnssCompatibility(existing)
 
 		// Nest back into ROS2 YAML structure
 		nested := nestToROS2YAML(existing, nodeMappings, existingYAML)
@@ -753,6 +921,14 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		if err := writePreservingPerms(string(configFilePath), []byte(header+string(out))); err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
+		}
+
+		envFilePath, err := dbProvider.Get("system.mower.runtimeEnvFile")
+		if err == nil && len(envFilePath) > 0 {
+			if err := writeRuntimeEnvFile(string(envFilePath), gnssEnvUpdates); err != nil {
+				c.JSON(500, ErrorResponse{Error: "failed to update runtime env: " + err.Error()})
+				return
+			}
 		}
 
 		log.Printf("Saved mowgli_robot.yaml (%d bytes)", len(out)+len(header))

@@ -47,18 +47,21 @@ export const restartGui = (api: GuiApi) =>
 export const restartMowgliNext = (api: GuiApi) =>
     containerAction(api, { name: "mowglinext", label: { key: "app", value: "mowglinext" } }, "restart");
 
-/** Restart the GPS container (picks up new NTRIP / serial / protocol config) */
+/** Restart the GNSS receiver container (picks up new NTRIP / serial config) */
 export const restartGps = (api: GuiApi) =>
     containerAction(api, { name: "gps" }, "restart");
 
 /**
- * Settings keys whose values are consumed by the GPS docker container
- * (NTRIP credentials, mountpoint, serial port, protocol). Saving any of
- * these requires bouncing mowgli-gps to actually apply the change.
+ * Settings keys whose values are consumed by the GNSS receiver container
+ * (NTRIP credentials, mountpoint, serial path, receiver family). Saving any
+ * of these requires bouncing mowgli-gps to actually apply the change.
  * Datum lat/lon/alt are read by ROS2 (navsat_to_absolute_pose_node), not
  * by the GPS container itself, so they are deliberately not in this list.
  */
 export const GPS_RESTART_KEYS = new Set<string>([
+    "gnss_receiver_family",
+    "gnss_serial_device",
+    "gnss_serial_baud",
     "gps_protocol",
     "gps_port",
     "gps_baudrate",

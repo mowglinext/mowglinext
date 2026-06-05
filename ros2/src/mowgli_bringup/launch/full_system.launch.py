@@ -49,8 +49,7 @@ from launch_ros.actions import Node
 
 
 def _local_gnss_status_enabled(status_source: str) -> bool:
-    normalized = str(status_source).strip().lower()
-    return normalized not in ("universal", "external", "disabled", "false", "0", "off")
+    return False
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -89,14 +88,11 @@ def generate_launch_description() -> LaunchDescription:
     elif _env_lidar in ("true", "1", "yes"):
         _early_use_lidar = "true"
 
-    _early_gnss_backend = os.environ.get("GNSS_BACKEND", "gps").strip().lower()
-    _early_gnss_status_source = (
-        os.environ.get("GNSS_STATUS_SOURCE", "mowgli_local").strip().lower()
-    )
+    _early_gnss_stack = os.environ.get("GNSS_STACK", "universal").strip().lower()
+    _early_hardware_backend = os.environ.get("HARDWARE_BACKEND", "mowgli").strip().lower()
     _early_use_universal_gnss = (
         "true"
-        if _early_gnss_status_source == "universal"
-        and _early_gnss_backend != "disabled"
+        if _early_hardware_backend != "mavros" and _early_gnss_stack != "disabled"
         else "false"
     )
 
@@ -148,7 +144,7 @@ def generate_launch_description() -> LaunchDescription:
     use_universal_gnss_arg = DeclareLaunchArgument(
         "use_universal_gnss",
         default_value=_early_use_universal_gnss,
-        description="Launch the Universal GNSS receiver and NTRIP wrapper from mowgli_bringup. Defaults on when GNSS_STATUS_SOURCE=universal and GNSS_BACKEND is not disabled.",
+        description="Launch the Universal GNSS receiver and NTRIP wrapper from mowgli_bringup. Defaults on for direct-GNSS Mowgli deployments.",
     )
 
     # use_fusion_graph and use_magnetometer are NOT declared here —
@@ -311,8 +307,6 @@ def generate_launch_description() -> LaunchDescription:
     datum_lon = float(robot_params.get("datum_lon", 0.0))
     gnss_backend = os.environ.get("GNSS_BACKEND", "gps")
     gps_protocol = os.environ.get("GPS_PROTOCOL", "UBX")
-    gnss_status_source = os.environ.get("GNSS_STATUS_SOURCE", "mowgli_local").strip().lower()
-    publish_gnss_status = _local_gnss_status_enabled(gnss_status_source)
     navsat_converter_node = Node(
         package="mowgli_localization",
         executable="navsat_to_absolute_pose_node",
@@ -324,7 +318,7 @@ def generate_launch_description() -> LaunchDescription:
                 "datum_lon": datum_lon,
                 "gnss_backend": gnss_backend,
                 "gps_protocol": gps_protocol,
-                "publish_gnss_status": publish_gnss_status,
+                "publish_gnss_status": False,
             },
             {"use_sim_time": use_sim_time},
         ],

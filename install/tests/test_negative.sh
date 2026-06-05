@@ -57,6 +57,18 @@ else
   fail "--gps=ubx-blue fails" "exit=0 unexpectedly"
 fi
 
+out=$( ( parse_args --gnss-connection=blue ) 2>&1 )
+ec=$?
+if [ "$ec" -ne 0 ]; then
+  pass "--gnss-connection=blue fails (exit=$ec)"
+  case "$out" in
+    *"Unknown GNSS connection"*) pass "--gnss-connection error mentions 'Unknown GNSS connection'" ;;
+    *)                           fail "--gnss-connection error mentions 'Unknown GNSS connection'" "got: $out" ;;
+  esac
+else
+  fail "--gnss-connection=blue fails" "exit=0 unexpectedly"
+fi
+
 # Bad LiDAR preset
 out=$( ( parse_args --lidar=mythical-laser ) 2>&1 )
 ec=$?
@@ -92,26 +104,6 @@ else
   fail "--gnss=nmea fails" "exit=0 unexpectedly"
 fi
 
-section "configure_gps rejects invalid GNSS_BACKEND preset"
-
-# Standalone test in a fresh subshell so we don't pollute env
-( harness_init "$SANDBOX_REPO" >/dev/null 2>&1
-  PRESET_LOADED=true
-  GNSS_BACKEND=quantumgps
-  GPS_CONNECTION=usb GPS_PROTOCOL=UBX GPS_BAUD=460800 GPS_DEBUG_ENABLED=false
-  if configure_gps >/dev/null 2>&1; then
-    exit 0
-  else
-    exit 1
-  fi
-)
-ec=$?
-if [ "$ec" -ne 0 ]; then
-  pass "configure_gps rejects GNSS_BACKEND=quantumgps"
-else
-  fail "configure_gps rejects GNSS_BACKEND=quantumgps" "exit=0 unexpectedly"
-fi
-
 section "build_compose_stack rejects invalid GNSS_BACKEND"
 
 repo_bad="$SANDBOX/repo_bad_compose"
@@ -136,7 +128,7 @@ section "Bootstrap script (docs/install.sh) rejects unknown args gracefully"
 help_out=$(bash "$BOOTSTRAP_SH" --help 2>&1)
 help_ec=$?
 assert_eq "bootstrap --help exits 0" "0" "$help_ec"
-assert_contains "bootstrap --help advertises --gps" "--gps=PRESET" "$help_out"
+assert_contains "bootstrap --help advertises --gnss-connection" "--gnss-connection" "$help_out"
 
 # Syntax check the bootstrap and main installer
 assert_exit_zero "bash -n on docs/install.sh"        bash -n "$BOOTSTRAP_SH"

@@ -210,12 +210,31 @@
           "title": "Datum Altitude",
           "description": "Map origin altitude (WGS84 ellipsoidal, metres) — site-specific; no default. Used as the altitude reference when converting GPS fixes to the local map frame."
         },
+        "gnss_receiver_family": {
+          "type": "string",
+          "title": "Receiver Family",
+          "enum": ["auto", "ublox", "unicore", "nmea"],
+          "default": "auto",
+          "description": "Universal GNSS receiver family. Auto is recommended unless you know you need a specific parser."
+        },
+        "gnss_serial_device": {
+          "type": "string",
+          "title": "Serial Device",
+          "default": "/dev/ttyAMA4",
+          "description": "Receiver serial device. Prefer /dev/serial/by-id/... for USB receivers."
+        },
+        "gnss_serial_baud": {
+          "type": "integer",
+          "title": "Serial Baud",
+          "default": 921600,
+          "description": "Receiver serial baud rate. 921600 is the recommended runtime default."
+        },
         "gps_protocol": {
           "type": "string",
-          "title": "GPS Protocol",
+          "title": "Legacy GPS Protocol",
           "enum": ["UBX", "NMEA"],
           "default": "UBX",
-          "description": "Protocol used by your GPS receiver."
+          "description": "Compatibility mirror derived from the Universal GNSS receiver family."
         },
         "gps_wait_after_undock_sec": {
           "type": "number",

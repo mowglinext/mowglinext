@@ -1,17 +1,14 @@
 # GNSS Integration Audit
 
-This document records the current GNSS integration state of MowgliNext while Universal GNSS is being promoted to the official stack.
+This document records the current GNSS integration state of MowgliNext now that Universal GNSS is the only official direct-GNSS stack.
 
 ## Current State
 
 ### Installer and Environment
 
-- `install/lib/gps.sh` now prefers Universal GNSS and exposes Universal-first operator choices, while keeping a legacy fallback path available for migration.
-- `GNSS_BACKEND=ublox` is no longer a distinct runtime. It is a compatibility alias that resolves to the shared GPS container with a USB by-id selection.
-- `GNSS_STATUS_SOURCE=universal` and `GNSS_STACK=universal` are now the preferred defaults for direct GNSS deployments.
-- `GNSS_STATUS_SOURCE` still controls who owns the typed `/gps/status` topic:
-  - `mowgli_local` keeps the existing `navsat_to_absolute_pose_node` adapter active for the legacy fallback stack.
-  - `universal` disables the Mowgli-local `/gps/status` publisher so Universal GNSS becomes the sole typed status source.
+- `install/lib/gps.sh` now configures only the Universal GNSS serial contract for direct GNSS deployments.
+- `GNSS_BACKEND`, `GPS_PROTOCOL`, and the rest of `GPS_*` remain compatibility outputs only; they are no longer presented as supported operator choices.
+- `GNSS_STATUS_SOURCE=universal` and `GNSS_STACK=universal` are the direct-GNSS defaults, and `/gps/status` is now always owned by Universal GNSS on that path.
 - `docker/.env` remains the source of truth for runtime GNSS wiring and now writes both the preferred Universal contract and the legacy compatibility keys:
   - `GNSS_STACK`
   - `GNSS_RECEIVER_FAMILY`
@@ -45,11 +42,11 @@ This document records the current GNSS integration state of MowgliNext while Uni
 
 ### Compose Generation
 
-- `install/lib/compose.sh` now treats Universal GNSS as the default stack for Mowgli hardware.
+- `install/lib/compose.sh` now treats Universal GNSS as the default and only user-facing direct GNSS stack for Mowgli hardware.
 - In `GNSS_STACK=universal`, no direct GNSS compose fragment is added; the Universal receiver and NTRIP nodes run inside `mowgli-ros2` through `mowgli_bringup`.
-- `GNSS_STACK=legacy` still selects the old direct GNSS fragments:
-  - `install/compose/docker-compose.gps.yml` for `gps` and `ublox`
-  - `install/compose/docker-compose.unicore.yaml` for `unicore`
+- The legacy direct GNSS fragments remain in-tree only as internal fallback paths:
+  - `install/compose/docker-compose.gps.yml` for shared legacy GPS recovery
+  - `install/compose/docker-compose.unicore.yaml` for legacy UM98x recovery
 - The dormant standalone NMEA compose fragment was removed during the Milestone 8 targeted cleanup.
 
 ### Runtime Stacks
@@ -97,11 +94,10 @@ No additional source files are safe to delete at this milestone because every re
   - Is the current Mowgli-local GNSS parser/adapter layer.
   - Contains backend-specific diagnostic parsing for u-blox and Unicore.
 - `mowgli_bringup`
-  - Keeps the local parser path enabled only for legacy `GNSS_STATUS_SOURCE` values.
-  - Leaves `/gps/status` entirely to Universal GNSS when `GNSS_STATUS_SOURCE=universal`.
-- GUI/backend code still reads only the typed `/gps/status` topic.
-  - In legacy mode that payload is already `mowgli_interfaces/msg/GnssStatus`.
-  - In universal mode the backend now performs a temporary mechanical JSON adapter from `universal_gnss_ros2/msg/GnssStatus` into the existing Mowgli GUI schema without parsing vendor strings or diagnostics text.
+  - Always launches Universal GNSS for direct GNSS deployments.
+  - Keeps the local `/gps/status` publisher disabled so Universal GNSS remains the sole typed status source.
+- GUI/backend code still reads the typed `/gps/status` topic.
+  - The backend now also mirrors Universal GNSS settings back into `docker/.env` so GUI edits update both the YAML and the live runtime contract.
 
 ## Low-Risk Cleanup Applied
 
@@ -155,7 +151,7 @@ Receiver
 
 - `universal_gnss_ros2` is now intended to build from the MowgliNext workspace using the standard `ros2/scripts/build.sh`, `ros2/scripts/test.sh`, `ros2/Makefile`, and `.devcontainer/post-create.sh` entrypoints.
 - `mowgli_bringup/launch/universal_gnss.launch.py` now wraps `universal_gnss_ros2` receiver/NTRIP nodes with defaults sourced from the existing GNSS env contract plus `mowgli_robot.yaml`.
-- `full_system.launch.py` now has a `use_universal_gnss` launch arg and includes the wrapper when enabled. The default flips on only when `GNSS_STATUS_SOURCE=universal` and GNSS is not disabled, keeping the current legacy compose path stable until runtime validation switches over.
+- `full_system.launch.py` now has a `use_universal_gnss` launch arg and includes the wrapper by default for direct GNSS deployments; only MAVROS / disabled GNSS paths skip it.
 - `ros2/scripts/build.sh` now defaults `PACKAGES` builds to `--packages-up-to`, so launch packages like `mowgli_bringup` pull in their required workspace deps during milestone validation. Exact legacy behavior remains available with `PACKAGES_MODE=select`.
 - The milestone validation command `PACKAGES="mowgli_interfaces mowgli_localization universal_gnss_ros2 mowgli_bringup" ros2/scripts/build.sh` now succeeds in this devcontainer after aligning `Fields2Cover` discovery between `mowgli_coverage` and the dev image.
 - Regression coverage now verifies:

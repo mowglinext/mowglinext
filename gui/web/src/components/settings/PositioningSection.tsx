@@ -3,6 +3,8 @@ import { Alert, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space,
 import { GlobalOutlined, WifiOutlined } from "@ant-design/icons";
 import { useApi } from "../../hooks/useApi.ts";
 import { App } from "antd";
+import { useGnssStatus } from "../../hooks/useGnssStatus.ts";
+import { deriveGpsStatus, gnssReceiverLabel } from "../../utils/gpsStatus.ts";
 
 const { Text, Paragraph } = Typography;
 
@@ -15,6 +17,14 @@ export const PositioningSection: React.FC<Props> = ({ values, onChange }) => {
     const guiApi = useApi();
     const { notification } = App.useApp();
     const [datumLoading, setDatumLoading] = useState(false);
+    const gnssStatus = useGnssStatus();
+    const gpsStatus = deriveGpsStatus(gnssStatus);
+    const detectedReceiver = gnssReceiverLabel(gnssStatus);
+    const statusType: "success" | "warning" | "info" = gpsStatus.fixType === "RTK_FIX"
+        ? "success"
+        : gpsStatus.fixType === "NO_FIX"
+            ? "warning"
+            : "info";
 
     const setDatumFromGps = async () => {
         setDatumLoading(true);
@@ -87,31 +97,51 @@ export const PositioningSection: React.FC<Props> = ({ values, onChange }) => {
                 </Space>
             </Card>
 
-            {/* Serial link */}
-            <Card size="small" title="GPS Serial Link" style={{ marginBottom: 16 }}>
+            <Alert
+                showIcon
+                type={statusType}
+                style={{ marginBottom: 16 }}
+                message={`Detected receiver: ${detectedReceiver}`}
+                description={`Live Universal GNSS status: ${gpsStatus.label}. Prefer Auto unless you need a specific parser family.`}
+            />
+
+            <Card size="small" title="Universal GNSS Receiver" style={{ marginBottom: 16 }}>
                 <Form layout="vertical" size="small">
                     <Row gutter={[16, 0]}>
-                        <Col xs={24} sm={12}>
-                            <Form.Item label="Device Port" tooltip="Serial device path inside the GPS container — udev maps the USB receiver to this path">
-                                <Input
-                                    value={values.gps_port ?? "/dev/gps"}
-                                    onChange={(e) => onChange("gps_port", e.target.value)}
-                                    placeholder="/dev/gps"
+                        <Col xs={24} sm={8}>
+                            <Form.Item label="Receiver Family" tooltip="Auto is recommended. Pick a specific family only when the receiver needs a fixed parser path.">
+                                <Select
+                                    value={values.gnss_receiver_family ?? "auto"}
+                                    onChange={(v) => onChange("gnss_receiver_family", v)}
+                                    options={[
+                                        { value: "auto", label: "Auto" },
+                                        { value: "ublox", label: "u-blox" },
+                                        { value: "unicore", label: "Unicore" },
+                                        { value: "nmea", label: "NMEA" },
+                                    ]}
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={24} sm={12}>
-                            <Form.Item label="Baud Rate" tooltip="Serial baud rate. F9P defaults to 460800; LC29H factory-set to 115200.">
+                            <Form.Item label="Serial Device" tooltip="Prefer /dev/serial/by-id/... for USB receivers. Use the UART device path directly for onboard serial.">
+                                <Input
+                                    value={values.gnss_serial_device ?? "/dev/ttyAMA4"}
+                                    onChange={(e) => onChange("gnss_serial_device", e.target.value)}
+                                    placeholder="/dev/serial/by-id/..."
+                                />
+                            </Form.Item>
+                        </Col>
+                        <Col xs={24} sm={4}>
+                            <Form.Item label="Baud" tooltip="Universal GNSS runtime baud. 921600 is the recommended default.">
                                 <Select
-                                    value={values.gps_baudrate ?? 460800}
-                                    onChange={(v) => onChange("gps_baudrate", v)}
+                                    value={values.gnss_serial_baud ?? 921600}
+                                    onChange={(v) => onChange("gnss_serial_baud", v)}
                                     options={[
                                         { value: 9600, label: "9600" },
                                         { value: 38400, label: "38400" },
                                         { value: 57600, label: "57600" },
                                         { value: 115200, label: "115200" },
                                         { value: 230400, label: "230400" },
-                                        { value: 460800, label: "460800" },
                                         { value: 921600, label: "921600" },
                                     ]}
                                 />
@@ -121,22 +151,9 @@ export const PositioningSection: React.FC<Props> = ({ values, onChange }) => {
                 </Form>
             </Card>
 
-            {/* Protocol & Timeouts */}
-            <Card size="small" title="Protocol & Timeouts" style={{ marginBottom: 16 }}>
+            <Card size="small" title="Fix Monitoring" style={{ marginBottom: 16 }}>
                 <Form layout="vertical" size="small">
                     <Row gutter={[16, 0]}>
-                        <Col xs={12} sm={8}>
-                            <Form.Item label="GPS Protocol" tooltip="UBX for u-blox receivers, NMEA for generic">
-                                <Select
-                                    value={values.gps_protocol ?? "UBX"}
-                                    onChange={(v) => onChange("gps_protocol", v)}
-                                    options={[
-                                        { value: "UBX", label: "UBX (u-blox)" },
-                                        { value: "NMEA", label: "NMEA (generic)" },
-                                    ]}
-                                />
-                            </Form.Item>
-                        </Col>
                         <Col xs={12} sm={8}>
                             <Form.Item label="Wait After Undock" tooltip="Seconds to wait for RTK fix after undocking">
                                 <InputNumber

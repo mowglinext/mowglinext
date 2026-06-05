@@ -387,7 +387,12 @@ func TestApplyMowgliOverlay_AlreadyHasMowgli(t *testing.T) {
 }
 
 func TestGetSettingsYAML_Success(t *testing.T) {
-	yamlFile := createTempYAMLFile(t, "OM_DATUM_LAT: 48.123\nOM_USE_NTRIP: true\n")
+	yamlFile := createTempYAMLFile(t, `mowgli:
+  ros__parameters:
+    datum_lat: 48.123
+    ntrip_enabled: true
+    gnss_receiver_family: auto
+`)
 
 	db := types.NewMockDBProvider()
 	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
@@ -403,8 +408,9 @@ func TestGetSettingsYAML_Success(t *testing.T) {
 	var result map[string]any
 	err := json.Unmarshal(w.Body.Bytes(), &result)
 	require.NoError(t, err)
-	assert.Equal(t, 48.123, result["OM_DATUM_LAT"])
-	assert.Equal(t, true, result["OM_USE_NTRIP"])
+	assert.Equal(t, 48.123, result["datum_lat"])
+	assert.Equal(t, true, result["ntrip_enabled"])
+	assert.Equal(t, "auto", result["gnss_receiver_family"])
 }
 
 func TestGetSettingsYAML_FileNotExist_ReturnsEmpty(t *testing.T) {
@@ -422,7 +428,7 @@ func TestGetSettingsYAML_FileNotExist_ReturnsEmpty(t *testing.T) {
 	var result map[string]any
 	err := json.Unmarshal(w.Body.Bytes(), &result)
 	require.NoError(t, err)
-	assert.Empty(t, result)
+	assert.Equal(t, "auto", result["gnss_receiver_family"])
 }
 
 func TestGetSettingsYAML_NoConfigKey(t *testing.T) {
@@ -439,15 +445,20 @@ func TestGetSettingsYAML_NoConfigKey(t *testing.T) {
 
 func TestPostSettingsYAML_NewFile(t *testing.T) {
 	yamlFile := createTempYAMLFile(t, "")
+	envFile := createTempConfigFile(t, "ROS_DOMAIN_ID=0\n")
 
 	db := types.NewMockDBProvider()
 	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
 
 	router := setupSettingsRouter(db)
 
 	payload := map[string]any{
-		"OM_DATUM_LAT": 48.999,
-		"OM_USE_NTRIP": true,
+		"datum_lat":             48.999,
+		"ntrip_enabled":         true,
+		"gnss_receiver_family":  "unicore",
+		"gnss_serial_device":    "/dev/serial/by-id/usb-gnss",
+		"gnss_serial_baud":      921600,
 	}
 	body, _ := json.Marshal(payload)
 
@@ -460,20 +471,42 @@ func TestPostSettingsYAML_NewFile(t *testing.T) {
 
 	content, err := os.ReadFile(yamlFile)
 	require.NoError(t, err)
-	assert.Contains(t, string(content), "OM_DATUM_LAT")
-	assert.Contains(t, string(content), "OM_USE_NTRIP")
+	assert.Contains(t, string(content), "datum_lat: 48.999")
+	assert.Contains(t, string(content), "ntrip_enabled: true")
+	assert.Contains(t, string(content), "gnss_receiver_family: unicore")
+	assert.Contains(t, string(content), "gnss_serial_device: /dev/serial/by-id/usb-gnss")
+	assert.Contains(t, string(content), "gps_protocol: UBX")
+	assert.Contains(t, string(content), "gps_port: /dev/serial/by-id/usb-gnss")
+
+	envContent, err := os.ReadFile(envFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(envContent), "GNSS_RECEIVER_FAMILY=unicore")
+	assert.Contains(t, string(envContent), "GNSS_SERIAL_DEVICE=/dev/serial/by-id/usb-gnss")
+	assert.Contains(t, string(envContent), "GNSS_SERIAL_BAUD=921600")
+	assert.Contains(t, string(envContent), "GPS_PROTOCOL=UBX")
+	assert.Contains(t, string(envContent), "GPS_BY_ID=/dev/serial/by-id/usb-gnss")
 }
 
 func TestPostSettingsYAML_MergesExisting(t *testing.T) {
-	yamlFile := createTempYAMLFile(t, "OM_EXISTING: keep_me\nOM_DATUM_LAT: 48.123\n")
+	yamlFile := createTempYAMLFile(t, `mowgli:
+  ros__parameters:
+    datum_lat: 48.123
+    gnss_receiver_family: auto
+    extra_existing: keep_me
+`)
+	envFile := createTempConfigFile(t, "")
 
 	db := types.NewMockDBProvider()
 	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
 
 	router := setupSettingsRouter(db)
 
 	payload := map[string]any{
-		"OM_DATUM_LAT": 99.999,
+		"datum_lat":            99.999,
+		"gnss_receiver_family": "nmea",
+		"gnss_serial_device":   "/dev/serial/by-id/usb-test",
+		"gnss_serial_baud":     115200,
 	}
 	body, _ := json.Marshal(payload)
 
@@ -486,9 +519,12 @@ func TestPostSettingsYAML_MergesExisting(t *testing.T) {
 
 	content, err := os.ReadFile(yamlFile)
 	require.NoError(t, err)
-	assert.Contains(t, string(content), "OM_EXISTING")
+	assert.Contains(t, string(content), "extra_existing")
 	assert.Contains(t, string(content), "keep_me")
 	assert.Contains(t, string(content), "99.999")
+	assert.Contains(t, string(content), "gnss_receiver_family: nmea")
+	assert.Contains(t, string(content), "gps_protocol: NMEA")
+	assert.Contains(t, string(content), "gps_port: /dev/serial/by-id/usb-test")
 }
 
 func TestPostSettingsYAML_InvalidJSON(t *testing.T) {

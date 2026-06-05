@@ -75,6 +75,7 @@ sync_gnss_env_contract_values() {
   GNSS_TRANSPORT="$(gnss_transport_from_state)"
   GNSS_SERIAL_DEVICE="$(gnss_serial_device_from_state)"
   GNSS_SERIAL_BAUD="$(gnss_serial_baud_from_state)"
+  sync_legacy_gps_compat_from_gnss
 
   : "${GNSS_NTRIP_ENABLED:=${CONFIG_NTRIP_ENABLED:-false}}"
   : "${GNSS_NTRIP_HOST:=${CONFIG_NTRIP_HOST:-}}"
@@ -131,7 +132,7 @@ setup_env() {
   : "${GPS_BAUD:=921600}"
   : "${UBLOX_DEVICE_FAMILY:=F9P}"
   : "${UBLOX_DEVICE_SERIAL_STRING:=}"
-  : "${GNSS_RECEIVER_FAMILY:=}"
+  : "${GNSS_RECEIVER_FAMILY:=auto}"
   : "${GNSS_TRANSPORT:=serial}"
   : "${GNSS_SERIAL_DEVICE:=}"
   : "${GNSS_SERIAL_BAUD:=}"
@@ -243,6 +244,7 @@ setup_env() {
     warn_legacy_nmea_backend_once
     GNSS_BACKEND="gps"
     GPS_PROTOCOL="NMEA"
+    GNSS_RECEIVER_FAMILY="nmea"
   elif ! is_supported_gnss_backend "${GNSS_BACKEND:-gps}"; then
     warn "Unknown GNSS_BACKEND=${GNSS_BACKEND:-unset} — defaulting to gps"
     GNSS_BACKEND="gps"

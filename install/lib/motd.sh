@@ -77,6 +77,9 @@ MOWER_IP=\$(get_env_value MOWER_IP)
 GPS_PORT=\$(get_env_value GPS_PORT)
 GPS_BAUD=\$(get_env_value GPS_BAUD)
 GPS_PROTOCOL=\$(get_env_value GPS_PROTOCOL)
+GNSS_RECEIVER_FAMILY=\$(get_env_value GNSS_RECEIVER_FAMILY)
+GNSS_SERIAL_DEVICE=\$(get_env_value GNSS_SERIAL_DEVICE)
+GNSS_SERIAL_BAUD=\$(get_env_value GNSS_SERIAL_BAUD)
 GPS_DEBUG_ENABLED=\$(get_env_value GPS_DEBUG_ENABLED)
 GPS_DEBUG_PORT=\$(get_env_value GPS_DEBUG_PORT)
 GPS_DEBUG_BAUD=\$(get_env_value GPS_DEBUG_BAUD)
@@ -107,7 +110,8 @@ echo ""
 echo -e "\${BOLD}Mowgli config\${NC}"
 echo "  ROS_DOMAIN : \${ROS_DOMAIN_ID:-${motd_not_set}}"
 echo "  MOWER_IP   : \${MOWER_IP:-${motd_not_set}}"
-echo "  GPS        : \${GPS_PORT:-${motd_not_set}} @ \${GPS_BAUD:-?} (\${GPS_PROTOCOL:-?})"
+echo "  GNSS       : \${GNSS_SERIAL_DEVICE:-${motd_not_set}} @ \${GNSS_SERIAL_BAUD:-?} (\${GNSS_RECEIVER_FAMILY:-auto})"
+echo "  GPS compat : \${GPS_PORT:-${motd_not_set}} @ \${GPS_BAUD:-?} (\${GPS_PROTOCOL:-?})"
 if [ "\${GPS_DEBUG_ENABLED:-false}" = "true" ]; then
   echo "  GPS debug  : \${GPS_DEBUG_PORT:-${motd_not_set}} @ \${GPS_DEBUG_BAUD:-?}"
 fi

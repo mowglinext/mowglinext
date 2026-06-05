@@ -11,7 +11,7 @@ MowgliNext currently exposes one GNSS contract to the rest of the system:
 - `/gps/status` — typed GNSS status consumed by the GUI and backend
 - `/diagnostics` — receiver + transport diagnostics
 
-The current backends are:
+The remaining fallback implementations are:
 
 | Backend | Directory | Current role |
 |---------|-----------|--------------|
@@ -53,8 +53,9 @@ Legacy-only status path
 
 ### Notes
 
-- Universal GNSS is the preferred stack and is launched from `mowgli-ros2` through `mowgli_bringup/universal_gnss.launch.py`.
+- Universal GNSS is the only official direct-GNSS stack and is launched from `mowgli-ros2` through `mowgli_bringup/universal_gnss.launch.py`.
 - The installer now writes a preferred Universal GNSS env contract: `GNSS_STACK`, `GNSS_RECEIVER_FAMILY`, `GNSS_TRANSPORT`, `GNSS_SERIAL_DEVICE`, `GNSS_SERIAL_BAUD`, and `GNSS_NTRIP_*`.
+- Installer and GUI flows now treat `GNSS_*` as the user-facing truth. `GNSS_BACKEND` and `GPS_*` remain compatibility mirrors for legacy tooling only.
 - For USB receivers, `GNSS_SERIAL_DEVICE` should normally be a stable `/dev/serial/by-id/...` path rather than a raw `ttyACM*` or `ttyUSB*` node.
 - `921600` is the recommended validation baud for advanced u-blox and Unicore profiles.
 - Corrected field validation on June 4, 2026 confirmed the Universal GNSS path on both a live u-blox F9P and a live Unicore UM982 with `/gps/fix`, `/gps/status`, `/diagnostics`, and `/rtcm` active in universal mode.
@@ -66,8 +67,8 @@ Legacy-only status path
 - `RTCMSTATUSA` was not observed in the sampled raw output windows, and Universal GNSS still treats it as semantic-only rather than a dedicated ROS status field.
 - The old standalone NMEA container path was removed in Milestone 8. NMEA now routes through Universal GNSS by default and through `sensors/gps/start_gps.sh` only in `GNSS_STACK=legacy`.
 - The old standalone `ublox_gnss.launch.py` bringup and `ublox_gnss.yaml` config were removed in Milestone 8.
-- `GNSS_STATUS_SOURCE=universal` disables the Mowgli-local `/gps/status` publisher and skips the local `/diagnostics` GNSS parser subscription.
-- In universal mode, Universal GNSS owns `/gps/fix`, `/gps/status`, `/diagnostics`, and `/rtcm`.
+- In the supported runtime path, Universal GNSS owns `/gps/fix`, `/gps/status`, `/diagnostics`, and `/rtcm`.
+- The local Mowgli `/gps/status` reconstruction path stays disabled in that supported runtime path.
 - The GUI/backend still consumes `/gps/status` through the existing Mowgli schema, but that shape is now produced by a thin backend adapter in universal mode instead of new frontend vendor parsing.
 - `sensors/gps`, `sensors/unicore`, and `gnss_runtime_state_builder.cpp` still remain for the legacy fallback path until field validation is complete.
 - Do not commit real `GNSS_NTRIP_PASSWORD` values or copy them into docs/logs.

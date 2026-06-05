@@ -50,17 +50,15 @@ Preferred env contract:
 - `GNSS_NTRIP_HOST`, `GNSS_NTRIP_PORT`, `GNSS_NTRIP_MOUNTPOINT`
 - `GNSS_NTRIP_USERNAME`, `GNSS_NTRIP_PASSWORD`
 
-Legacy compatibility keys (`GNSS_BACKEND`, `GPS_*`) are still written so older installer logic, udev helpers, and fallback compose fragments keep working during migration.
+Legacy compatibility keys (`GNSS_BACKEND`, `GPS_*`) are still written so older installer logic, udev helpers, and fallback compose fragments keep working during migration, but they are no longer user-facing supported choices.
 
-`GNSS_BACKEND=ublox` is still accepted as a compatibility preset, but it resolves onto the preferred Universal GNSS stack unless `GNSS_STACK=legacy` is selected explicitly.
-
-`GNSS_STATUS_SOURCE=universal` hands `/gps/status`, `/diagnostics`, and `/rtcm` over to Universal GNSS while Mowgli keeps `/gps/absolute_pose` and `/gps/pose_cov` for downstream localization consumers.
+Universal GNSS owns `/gps/status`, `/diagnostics`, and `/rtcm` while Mowgli keeps `/gps/absolute_pose` and `/gps/pose_cov` for downstream localization consumers.
 
 In that universal mode:
 
 - `navsat_to_absolute_pose_node` no longer subscribes to `/diagnostics` for GNSS status reconstruction
 - the GUI backend mechanically normalizes Universal GNSS status onto the existing frontend JSON contract
-- the old Mowgli-local status publisher remains available only for legacy `GNSS_STATUS_SOURCE` values
+- the old Mowgli-local status publisher stays disabled on the supported direct-GNSS path
 
 Recommended validation/default baud for advanced profiles is `921600`.
 

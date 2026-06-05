@@ -128,7 +128,7 @@ main() {
     progress_run_interactive 4 "$TOTAL_STEPS" "Selecting hardware backend" \
       select_hardware_backend
 
-    progress_run_interactive 5 "$TOTAL_STEPS" "Configuring GPS" \
+    progress_run_interactive 5 "$TOTAL_STEPS" "Configuring Universal GNSS" \
       run_gps_configuration_step
 
     progress_run_interactive 6 "$TOTAL_STEPS" "Configuring LiDAR" \

@@ -334,6 +334,83 @@ normalize_gnss_stack() {
   esac
 }
 
+normalize_gnss_receiver_family() {
+  local receiver_family="${1:-}"
+
+  case "${receiver_family,,}" in
+    ""|auto)
+      printf 'auto\n'
+      ;;
+    u-blox|ublox)
+      printf 'ublox\n'
+      ;;
+    unicore|nmea)
+      printf '%s\n' "${receiver_family,,}"
+      ;;
+    *)
+      printf '%s\n' "${receiver_family,,}"
+      ;;
+  esac
+}
+
+gnss_receiver_family_to_gps_protocol() {
+  local receiver_family
+  receiver_family="$(normalize_gnss_receiver_family "${1:-${GNSS_RECEIVER_FAMILY:-auto}}")"
+
+  case "$receiver_family" in
+    nmea)
+      printf 'NMEA\n'
+      ;;
+    *)
+      printf 'UBX\n'
+      ;;
+  esac
+}
+
+gnss_receiver_family_to_compat_backend() {
+  local receiver_family
+  receiver_family="$(normalize_gnss_receiver_family "${1:-${GNSS_RECEIVER_FAMILY:-auto}}")"
+
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
+    printf 'disabled\n'
+    return 0
+  fi
+
+  case "$receiver_family" in
+    unicore)
+      printf 'unicore\n'
+      ;;
+    *)
+      printf 'gps\n'
+      ;;
+  esac
+}
+
+gnss_connection_from_serial_device() {
+  local serial_device="${1:-${GNSS_SERIAL_DEVICE:-}}"
+  local current_connection="${GPS_CONNECTION:-}"
+
+  if [[ -n "$serial_device" ]]; then
+    case "$serial_device" in
+      /dev/serial/by-id/*|/dev/ttyACM*|/dev/ttyUSB*)
+        printf 'usb\n'
+        return 0
+        ;;
+      /dev/ttyAMA*|/dev/ttyS*|/dev/ttyTHS*|/dev/ttyHS*)
+        printf 'uart\n'
+        return 0
+        ;;
+    esac
+  fi
+
+  if [[ -n "$current_connection" ]]; then
+    printf '%s\n' "${current_connection,,}"
+    return 0
+  fi
+
+  printf 'uart\n'
+}
+
 list_supported_gnss_backends() {
   local backends="gps ublox unicore"
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
@@ -477,6 +554,36 @@ gnss_serial_baud_from_state() {
   printf '%s\n' "${GNSS_SERIAL_BAUD:-${GPS_BAUD:-921600}}"
 }
 
+sync_legacy_gps_compat_from_gnss() {
+  local receiver_family serial_device connection serial_baud
+
+  receiver_family="$(normalize_gnss_receiver_family "${GNSS_RECEIVER_FAMILY:-auto}")"
+  serial_device="${GNSS_SERIAL_DEVICE:-$(gnss_serial_device_from_state)}"
+  serial_baud="${GNSS_SERIAL_BAUD:-$(gnss_serial_baud_from_state)}"
+  connection="$(gnss_connection_from_serial_device "$serial_device")"
+
+  GNSS_RECEIVER_FAMILY="$receiver_family"
+  GNSS_SERIAL_DEVICE="$serial_device"
+  GNSS_SERIAL_BAUD="$serial_baud"
+  GNSS_TRANSPORT="${GNSS_TRANSPORT:-serial}"
+  GNSS_BACKEND="$(gnss_receiver_family_to_compat_backend "$receiver_family")"
+  GPS_CONNECTION="$connection"
+  GPS_PROTOCOL="$(gnss_receiver_family_to_gps_protocol "$receiver_family")"
+  GPS_BAUD="$serial_baud"
+
+  if [[ "$connection" == "usb" ]]; then
+    GPS_BY_ID="$serial_device"
+    GPS_PORT="$serial_device"
+    GPS_UART_DEVICE=""
+    UBLOX_DEVICE_SERIAL_STRING="$serial_device"
+  else
+    GPS_BY_ID=""
+    GPS_PORT="/dev/gps"
+    GPS_UART_DEVICE="$serial_device"
+    UBLOX_DEVICE_SERIAL_STRING=""
+  fi
+}
+
 compose_gnss_service_name() {
   local backend="${1:-$(effective_gnss_backend)}"
 
@@ -541,10 +648,17 @@ parse_args() {
             GNSS_BACKEND="gps"
             GNSS_RECEIVER_FAMILY="auto"
             ;;
-          gps|ublox|unicore)
+          gps)
             GNSS_STACK="${GNSS_STACK:-universal}"
             GNSS_STATUS_SOURCE="${GNSS_STATUS_SOURCE:-universal}"
-            GNSS_BACKEND="$gnss_spec"
+            GNSS_BACKEND="gps"
+            GNSS_RECEIVER_FAMILY="auto"
+            ;;
+          ublox|unicore)
+            GNSS_STACK="${GNSS_STACK:-universal}"
+            GNSS_STATUS_SOURCE="${GNSS_STATUS_SOURCE:-universal}"
+            GNSS_RECEIVER_FAMILY="$gnss_spec"
+            GNSS_BACKEND="$(gnss_receiver_family_to_compat_backend "$gnss_spec")"
             ;;
           legacy)
             GNSS_STACK="legacy"
@@ -557,6 +671,58 @@ parse_args() {
             ;;
         esac
         ;;
+      --gnss-connection=*)
+        CLI_PRESET=true
+        case "${1#*=}" in
+          usb|USB)
+            GPS_CONNECTION="usb"
+            ;;
+          uart|UART)
+            GPS_CONNECTION="uart"
+            ;;
+          *)
+            error "Unknown GNSS connection: ${1#*=} (expected usb or uart)"
+            exit 1
+            ;;
+        esac
+        ;;
+      --gnss-device=*)
+        CLI_PRESET=true
+        GNSS_SERIAL_DEVICE="${1#*=}"
+        ;;
+      --gnss-baud=*)
+        CLI_PRESET=true
+        local gnss_baud_spec="${1#*=}"
+        case "$gnss_baud_spec" in
+          auto)
+            GNSS_SERIAL_BAUD=""
+            GPS_BAUD=""
+            ;;
+          ''|*[!0-9]*)
+            error "Unknown GNSS baud: $gnss_baud_spec (expected auto or a numeric baud rate)"
+            exit 1
+            ;;
+          *)
+            GNSS_SERIAL_BAUD="$gnss_baud_spec"
+            GPS_BAUD="$gnss_baud_spec"
+            ;;
+        esac
+        ;;
+      --gnss-receiver-family=*)
+        CLI_PRESET=true
+        local receiver_family_spec
+        receiver_family_spec="$(normalize_gnss_receiver_family "${1#*=}")"
+        case "$receiver_family_spec" in
+          auto|ublox|unicore|nmea)
+            GNSS_RECEIVER_FAMILY="$receiver_family_spec"
+            GNSS_BACKEND="$(gnss_receiver_family_to_compat_backend "$receiver_family_spec")"
+            ;;
+          *)
+            error "Unknown GNSS receiver family: ${1#*=} (expected auto|ublox|unicore|nmea)"
+            exit 1
+            ;;
+        esac
+        ;;
       --gps=*)
         CLI_PRESET=true
         local gps_spec="${1#*=}"
@@ -564,8 +730,14 @@ parse_args() {
         local gps_proto="${gps_spec%%-*}"
         local gps_conn="${gps_spec##*-}"
         case "$gps_proto" in
-          ubx)  GPS_PROTOCOL="UBX" ;;
-          nmea) GPS_PROTOCOL="NMEA" ;;
+          ubx)
+            GPS_PROTOCOL="UBX"
+            GNSS_RECEIVER_FAMILY="${GNSS_RECEIVER_FAMILY:-auto}"
+            ;;
+          nmea)
+            GPS_PROTOCOL="NMEA"
+            GNSS_RECEIVER_FAMILY="nmea"
+            ;;
           *)    error "Unknown GPS protocol: $gps_proto (expected ubx or nmea)"; exit 1 ;;
         esac
         case "$gps_conn" in
@@ -903,9 +1075,10 @@ write_config() {
   local template="$INSTALL_DIR/config/mowgli/mowgli_robot.yaml"
   local env_file="${FINAL_ENV_FILE:-$DOCKER_DIR/.env}"
 
-  : "${GPS_PROTOCOL:=UBX}"
-  : "${GPS_PORT:=/dev/gps}"
-  : "${GPS_BAUD:=921600}"
+  : "${GNSS_RECEIVER_FAMILY:=auto}"
+  : "${GNSS_SERIAL_DEVICE:=${GPS_UART_DEVICE:-/dev/ttyAMA4}}"
+  : "${GNSS_SERIAL_BAUD:=${GPS_BAUD:-921600}}"
+  sync_legacy_gps_compat_from_gnss
 
   # docker/.env is the installer/compose source of truth. This generated yaml
   # is the ROS-side runtime config materialised from the current env values.
@@ -933,6 +1106,9 @@ EOF
   # Patch in only the keys the installer is responsible for.
   _yaml_patch_key "$yaml_file" datum_lat       "$CONFIG_DATUM_LAT"
   _yaml_patch_key "$yaml_file" datum_lon       "$CONFIG_DATUM_LON"
+  _yaml_patch_key "$yaml_file" gnss_receiver_family "\"$GNSS_RECEIVER_FAMILY\""
+  _yaml_patch_key "$yaml_file" gnss_serial_device "\"$GNSS_SERIAL_DEVICE\""
+  _yaml_patch_key "$yaml_file" gnss_serial_baud "$GNSS_SERIAL_BAUD"
   _yaml_patch_key "$yaml_file" gps_port        "\"$GPS_PORT\""
   _yaml_patch_key "$yaml_file" gps_baudrate    "$GPS_BAUD"
   _yaml_patch_key "$yaml_file" gps_protocol    "$GPS_PROTOCOL"

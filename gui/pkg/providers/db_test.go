@@ -143,6 +143,7 @@ func TestDBProvider_DefaultValues(t *testing.T) {
 		{"system.api.webDirectory", "/app/web"},
 		{"system.map.enabled", "false"},
 		{"system.mower.configFile", "/config/mower_config.sh"},
+		{"system.mower.runtimeEnvFile", "/runtime_config/.env"},
 		{"system.ros.nodeName", "mowglinext"},
 		{"system.ros.nodeHost", "localhost"},
 		{"system.mqtt.enabled", "false"},
