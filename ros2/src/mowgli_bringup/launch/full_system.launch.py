@@ -359,8 +359,8 @@ def generate_launch_description() -> LaunchDescription:
             {
                 "port": foxglove_port,
                 "address": "0.0.0.0",
-                "send_buffer_limit": 10000000,
-                "num_threads": 0,
+                "send_buffer_limit": 1000000,
+                "num_threads": 2,
                 "capabilities": [
                     "clientPublish",
                     "services",
@@ -374,6 +374,21 @@ def generate_launch_description() -> LaunchDescription:
     # navigation_launch.py (in the lifecycle_nodes list). Do NOT launch
     # it here — duplicating it exhausts DDS participants and causes
     # lifecycle conflicts.
+
+    # ------------------------------------------------------------------
+    # 12. cmd_vel WebSocket relay — low-latency manual mowing control
+    # ------------------------------------------------------------------
+    # Accepts TwistStamped JSON on port 8766 and publishes directly to
+    # /cmd_vel_teleop via rclpy, bypassing foxglove_bridge's JSON→CDR
+    # conversion overhead and the shared-connection head-of-line blocking
+    # with subscription data. The Go GUI's PublisherRoute connects here
+    # instead of going through foxglove_bridge for manual mowing.
+    cmd_vel_relay_node = Node(
+        package="mowgli_bringup",
+        executable="cmd_vel_ws_relay.py",
+        name="cmd_vel_ws_relay",
+        output="screen",
+    )
 
     # ------------------------------------------------------------------
     # 13. Obstacle tracker — persistent LiDAR obstacle detection
@@ -440,6 +455,7 @@ def generate_launch_description() -> LaunchDescription:
             diagnostics_node,
             mqtt_bridge_node,
             foxglove_bridge_node,
+            cmd_vel_relay_node,
             # Dock heading is published by hardware_bridge at 1 Hz while
             # charging (~/dock_heading → /gnss/heading via mowgli.launch.py
             # remapping). No separate launch action needed.
