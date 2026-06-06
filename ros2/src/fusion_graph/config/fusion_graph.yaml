@@ -210,8 +210,13 @@ fusion_graph_node:
     # sim_full_system.launch.py overrides to 0.1 because under
     # sim_time, Nav2 controller lookups would otherwise fall 1-3 ms
     # ahead of the latest publish and throw ExtrapolationException,
-    # freezing cmd_vel publication. On real hardware, 100 ms of lead
-    # costs ~5° of yaw error per pivot at 0.5 rad/s — visible in
-    # Foxglove and pushed into FTC's heading PID. Override key
+    # freezing cmd_vel publication. On real hardware the same race
+    # occurs during RotationShimController PRE_ROTATE: both the RSC
+    # and fusion_graph run at 10 Hz with no phase alignment, so the
+    # controller's clock regularly lands 10-50 ms ahead of the latest
+    # TF stamp and throws ExtrapolationException, collapsing cmd_vel
+    # throughput to ~2 Hz and stalling PRE_ROTATE indefinitely.
+    # 50 ms lead: max yaw artifact = 0.05 s × 0.75 rad/s ≈ 1.4°,
+    # well within FTC's heading PID correction range. Override key
     # (set by navigation.launch.py): fusion_graph_tf_lead_s.
-    tf_publish_lead_s: 0.0
+    tf_publish_lead_s: 0.05
