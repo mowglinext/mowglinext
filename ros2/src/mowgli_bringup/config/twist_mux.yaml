@@ -19,7 +19,7 @@ twist_mux:
 
       teleop:
         topic: /cmd_vel_teleop
-        timeout: 1.0
+        timeout: 0.5
         priority: 20      # operator override always beats navigation
 
       emergency:
