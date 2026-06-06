@@ -56,7 +56,8 @@
 
   // Claude Code CLI
   "features": {
-    "ghcr.io/anthropics/devcontainer-features/claude-code:latest": {}
+    "ghcr.io/anthropics/devcontainer-features/claude-code:latest": {},
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
   },
 
   // Build the ROS2 workspace after container creation
@@ -78,6 +79,7 @@
     "vscode": {
       "extensions": [
         "openai.chatgpt",
+        "ms-azuretools.vscode-docker",
         "ms-iot.vscode-ros",
         "ms-vscode.cpptools",
         "ms-vscode.cmake-tools",

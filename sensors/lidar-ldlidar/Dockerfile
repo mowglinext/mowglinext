@@ -50,7 +50,8 @@ WORKDIR /ros2_ws/src
 RUN git clone --depth 1 --branch ${LDLIDAR_REF} \
       https://github.com/Myzhar/ldrobot-lidar-ros2.git \
  && cd ldrobot-lidar-ros2 \
- && git checkout ${LDLIDAR_SHA}
+ && git checkout ${LDLIDAR_SHA} \
+ && git submodule update --init --recursive
 
 # Upstream CMakeLists has a FATAL_ERROR when the ROS distro isn't humble
 # or jazzy. Downgrade every FATAL_ERROR to WARNING in the driver's cmake
