@@ -85,6 +85,7 @@ def generate_launch_description() -> LaunchDescription:
     _early_use_magnetometer = "false"
     _early_use_scan_matching = "false"
     _early_use_loop_closure = "false"
+    _early_fusion_graph_period = "0.04"
     if os.path.isfile(_runtime_cfg_path):
         try:
             with open(_runtime_cfg_path, "r") as _f:
@@ -103,6 +104,8 @@ def generate_launch_description() -> LaunchDescription:
                 _rp.get("use_scan_matching", False)) else "false"
             _early_use_loop_closure = "true" if bool(
                 _rp.get("use_loop_closure", False)) else "false"
+            _early_fusion_graph_period = str(
+                float(_rp.get("fusion_graph_node_period_s", 0.04)))
         except yaml.YAMLError:
             pass
 
@@ -193,8 +196,8 @@ def generate_launch_description() -> LaunchDescription:
     )
     fusion_graph_node_period_arg = DeclareLaunchArgument(
         "fusion_graph_node_period_s",
-        default_value="0.04",
-        description="fusion_graph factor-graph node cadence (seconds). Hardware default 0.04 = 25 Hz (5x faster than 5 Hz controller queries, sustainable on Pi). Sim default 0.02 = 50 Hz to absorb sim_time TF gaps.",
+        default_value=_early_fusion_graph_period,
+        description="fusion_graph factor-graph node cadence (seconds). Default read from mowgli_robot.yaml; hardware fallback 0.04 = 25 Hz, recommended 0.1 = 10 Hz on Pi. Sim default 0.02 = 50 Hz.",
     )
 
     # ------------------------------------------------------------------
