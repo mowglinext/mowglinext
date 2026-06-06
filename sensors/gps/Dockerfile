@@ -113,7 +113,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /ws/src
 COPY ros2/src/mowgli_interfaces /ws/src/mowgli_interfaces
-COPY ros2/src/external/universal-gnss /ws/src/external/universal-gnss
+COPY ros2/src/external/universal-gnss/gnss_ros2 /ws/src/gnss_ros2
+COPY ros2/src/external/universal-gnss/gnss_core /ws/src/gnss_core
+COPY ros2/src/external/universal-gnss/gnss_protocols /ws/src/gnss_protocols
+COPY ros2/src/external/universal-gnss/gnss_transport /ws/src/gnss_transport
+COPY ros2/src/external/universal-gnss/gnss_driver /ws/src/gnss_driver
+COPY ros2/src/external/universal-gnss/gnss_ntrip /ws/src/gnss_ntrip
 
 WORKDIR /ws
 RUN . /opt/ros/kilted/setup.sh \

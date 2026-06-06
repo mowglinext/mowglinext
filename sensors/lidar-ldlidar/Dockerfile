@@ -19,7 +19,8 @@
 FROM ros:kilted-ros-base AS build
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG LDLIDAR_REF=devel
+ARG LDLIDAR_REF=v0.3.0
+ARG LDLIDAR_SHA=4ee53a8b176037cf418a54b25007075bb2b1d3a0
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -47,7 +48,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /ros2_ws/src
 RUN git clone --depth 1 --branch ${LDLIDAR_REF} \
-      https://github.com/Myzhar/ldrobot-lidar-ros2.git
+      https://github.com/Myzhar/ldrobot-lidar-ros2.git \
+ && cd ldrobot-lidar-ros2 \
+ && git checkout ${LDLIDAR_SHA}
 
 # Upstream CMakeLists has a FATAL_ERROR when the ROS distro isn't humble
 # or jazzy. Downgrade every FATAL_ERROR to WARNING in the driver's cmake
