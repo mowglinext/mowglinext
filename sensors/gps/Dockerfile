@@ -1,21 +1,23 @@
 # syntax=docker/dockerfile:1.7
 # =============================================================================
-# u-blox ZED-F9P driver (cedbossneo/ublox_dgnss feat/serial-transport)
-# + NTRIP client
+# GPS sidecar image.
 #
-# Built from source — ublox_dgnss is not in the kilted apt index.
-# Default transport is "serial" (kernel CDC ACM at /dev/ttyACM1); the
-# upstream libusb path introduced ~3.5 s pipeline lag and was replaced
-# 2026-04-26 (see sensors/gps/ublox_dgnss.yaml). Bundles its own NTRIP
-# client so RTCM gets injected over the same channel correctly.
+# Transitional default:
+#   keeps the current ublox_dgnss + nmea_navsat_driver runtime path so the
+#   existing robot behavior stays unchanged until the runtime flip lands.
 #
-# Publishes:
-#   /fix                    sensor_msgs/NavSatFix (high-precision)
-#   /ubx_nav_hpposllh       ublox_ubx_msgs — 0.1mm lat/lon/alt
-#   /ubx_nav_status         — fix type, flags, diffSoln, carrSoln
-#   /ubx_rxm_rtcm           — RTCM correction ingestion counter
+# Future runtime already bundled here:
+#   universal_gnss_ros2 + mowgli_interfaces overlay + a small topic bridge so
+#   this same image can become the single GNSS sidecar in a later PR.
 #
-# Config read from /config/mowgli_robot.yaml (bind-mounted).
+# IMPORTANT: this Dockerfile now expects the MONOREPO ROOT as its build
+# context:
+#
+#   docker build -t mowgli-gps -f sensors/gps/Dockerfile .
+#
+# because the Universal GNSS prep path copies:
+#   - ros2/src/external/universal-gnss/
+#   - ros2/src/mowgli_interfaces/
 # =============================================================================
 
 # ─── Builder ────────────────────────────────────────────────────────────────
@@ -82,6 +84,44 @@ RUN . /opt/ros/kilted/setup.sh \
                    -Wno-dev \
  && rm -rf /ws/build /ws/log /ws/src
 
+# ─── Builder: Universal GNSS prep overlay ───────────────────────────────────
+FROM ros:kilted-ros-base AS universal-builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      cmake \
+      python3-colcon-common-extensions \
+      ros-kilted-ament-cmake \
+      ros-kilted-diagnostic-msgs \
+      ros-kilted-geometry-msgs \
+      ros-kilted-launch \
+      ros-kilted-launch-ros \
+      ros-kilted-nav-msgs \
+      ros-kilted-rclcpp \
+      ros-kilted-rclpy \
+      ros-kilted-rosidl-default-generators \
+      ros-kilted-rosidl-default-runtime \
+      ros-kilted-rtcm-msgs \
+      ros-kilted-sensor-msgs \
+      ros-kilted-std-msgs
+
+WORKDIR /ws/src
+COPY ros2/src/mowgli_interfaces /ws/src/mowgli_interfaces
+COPY ros2/src/external/universal-gnss /ws/src/external/universal-gnss
+
+WORKDIR /ws
+RUN . /opt/ros/kilted/setup.sh \
+ && colcon build --merge-install \
+      --packages-select mowgli_interfaces universal_gnss_ros2 \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -Wno-dev \
+ && rm -rf /ws/build /ws/log /ws/src
+
 # ─── Runtime ────────────────────────────────────────────────────────────────
 FROM ros:kilted-ros-base
 
@@ -94,18 +134,28 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
       libusb-1.0-0 \
       libcurl4 \
+      ros-kilted-diagnostic-msgs \
       ros-kilted-rmw-cyclonedds-cpp \
+      ros-kilted-rclpy \
+      ros-kilted-rosidl-default-runtime \
       ros-kilted-rtcm-msgs \
       ros-kilted-nmea-navsat-driver
 
 COPY --from=builder /ws/install /opt/ublox_dgnss
+COPY --from=universal-builder /ws/install /opt/gnss_sidecar
 
-COPY ros2_entrypoint.sh /ros2_entrypoint.sh
-COPY start_gps.sh /start_gps.sh
-COPY ublox_dgnss.yaml /ublox_dgnss.yaml
-COPY gps_health_aggregator.py /gps_health_aggregator.py
-COPY rtcm_serial_bridge.py /rtcm_serial_bridge.py
-RUN chmod +x /ros2_entrypoint.sh /start_gps.sh /gps_health_aggregator.py /rtcm_serial_bridge.py
+COPY sensors/gps/ros2_entrypoint.sh /ros2_entrypoint.sh
+COPY sensors/gps/start_gps.sh /start_gps.sh
+COPY sensors/gps/ublox_dgnss.yaml /ublox_dgnss.yaml
+COPY sensors/gps/gps_health_aggregator.py /gps_health_aggregator.py
+COPY sensors/gps/rtcm_serial_bridge.py /rtcm_serial_bridge.py
+COPY sensors/gps/universal_gnss_topic_bridge.py /universal_gnss_topic_bridge.py
+RUN chmod +x \
+      /ros2_entrypoint.sh \
+      /start_gps.sh \
+      /gps_health_aggregator.py \
+      /rtcm_serial_bridge.py \
+      /universal_gnss_topic_bridge.py
 
 ENTRYPOINT ["/ros2_entrypoint.sh"]
 CMD ["/start_gps.sh"]

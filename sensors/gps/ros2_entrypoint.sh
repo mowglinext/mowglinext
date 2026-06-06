@@ -8,6 +8,9 @@ source /opt/ros/kilted/setup.bash
 if [ -f /opt/ublox_dgnss/setup.bash ]; then
   source /opt/ublox_dgnss/setup.bash
 fi
+if [ -f /opt/gnss_sidecar/setup.bash ]; then
+  source /opt/gnss_sidecar/setup.bash
+fi
 set -u
 
 exec "$@"

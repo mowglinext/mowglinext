@@ -38,6 +38,9 @@ Images are built automatically by the CI workflow (`.github/workflows/docker.yml
 To build locally:
 
 ```bash
-docker build -t mowgli-gps sensors/gps/
+docker build -t mowgli-gps -f sensors/gps/Dockerfile .
 docker build -t mowgli-lidar --target runtime sensors/lidar/
 ```
+
+The `gps` image now expects the monorepo root as its Docker build context so it
+can bundle the vendored Universal GNSS prep overlay from `ros2/src/`.
