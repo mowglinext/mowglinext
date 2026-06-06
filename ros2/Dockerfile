@@ -197,6 +197,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-kilted-ortools-vendor \
     # Utilities
     python3-argcomplete \
+    # WebSocket server for cmd_vel_ws_relay (manual mowing low-latency path)
+    python3-websockets \
  && rm -rf /var/lib/apt/lists/*
 
 # Pull source-built GTSAM 4.3a1 into /opt/gtsam, register its lib
