@@ -27,6 +27,10 @@ import websockets
 import websockets.exceptions
 
 _RELAY_PORT = 8766
+# Velocity clamps applied before publishing — defense-in-depth so a
+# malformed or hostile frame can't command extreme motor speeds.
+_MAX_LINEAR_MPS = 2.0
+_MAX_ANGULAR_RAD_S = 5.0
 
 
 class CmdVelRelayNode(Node):
@@ -45,13 +49,17 @@ class CmdVelRelayNode(Node):
         t = d.get("twist", {})
         lin = t.get("linear", {})
         ang = t.get("angular", {})
+
+        def clamp(v: float, limit: float) -> float:
+            return max(-limit, min(limit, v))
+
         msg = TwistStamped()
-        msg.twist.linear.x = float(lin.get("x", 0.0))
-        msg.twist.linear.y = float(lin.get("y", 0.0))
-        msg.twist.linear.z = float(lin.get("z", 0.0))
-        msg.twist.angular.x = float(ang.get("x", 0.0))
-        msg.twist.angular.y = float(ang.get("y", 0.0))
-        msg.twist.angular.z = float(ang.get("z", 0.0))
+        msg.twist.linear.x = clamp(float(lin.get("x", 0.0)), _MAX_LINEAR_MPS)
+        msg.twist.linear.y = clamp(float(lin.get("y", 0.0)), _MAX_LINEAR_MPS)
+        msg.twist.linear.z = clamp(float(lin.get("z", 0.0)), _MAX_LINEAR_MPS)
+        msg.twist.angular.x = clamp(float(ang.get("x", 0.0)), _MAX_ANGULAR_RAD_S)
+        msg.twist.angular.y = clamp(float(ang.get("y", 0.0)), _MAX_ANGULAR_RAD_S)
+        msg.twist.angular.z = clamp(float(ang.get("z", 0.0)), _MAX_ANGULAR_RAD_S)
         self._pub.publish(msg)
 
 
@@ -80,7 +88,7 @@ async def _serve() -> None:
     # relay does not send periodic frames that could delay publish writes.
     async with websockets.serve(
         _ws_handler,
-        "0.0.0.0",
+        "127.0.0.1",
         _RELAY_PORT,
         ping_interval=None,
         max_size=65536,
