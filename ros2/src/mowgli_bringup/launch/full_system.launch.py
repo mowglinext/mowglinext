@@ -207,10 +207,11 @@ def generate_launch_description() -> LaunchDescription:
             # so they appear on the GUI Settings page.
             {"tick_rate": float(robot_params.get("tick_rate", 10.0))},
             {"bt_debug_logging": bool(robot_params.get("bt_debug_logging", False))},
-            # undock_speed is consumed by the BackUp BT instances via
-            # the {undock_speed} blackboard reference in main_tree.xml.
-            # See issue #191.
+            # undock_speed / undock_distance are consumed by the BackUp BT
+            # instances via {undock_speed} / {undock_distance} blackboard
+            # references in main_tree.xml. See issue #191.
             {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
+            {"undock_distance": float(robot_params.get("undock_distance", 1.0))},
             # transit_speed / mowing_speed flow into SetNavMode, which sets
             # them on the live controllers (FollowPath.desired_linear_vel for
             # the RPP transit controller, FollowCoveragePath.speed_fast for the
