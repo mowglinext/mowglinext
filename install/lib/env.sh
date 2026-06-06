@@ -210,8 +210,8 @@ setup_env() {
   : "${TFLUNA_EDGE_UART_DEVICE:=/dev/ttyAMA2}"
   : "${TFLUNA_EDGE_BAUD:=115200}"
 
-  # Image channel — re-validate IMAGE_TAG (might have been loaded from .env
-  # by load_env_defaults_file or set by --branch=/preset) and rebuild the
+  # Image tag — re-validate IMAGE_TAG (might have been loaded from .env
+  # by load_env_defaults_file or set by --image-tag=/preset) and rebuild the
   # *_IMAGE_DEFAULT vars to match. mowglinext.sh unsets all *_IMAGE values
   # before this step, so the defaults below are what gets written.
   : "${IMAGE_TAG:=main}"

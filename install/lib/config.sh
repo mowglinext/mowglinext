@@ -13,12 +13,12 @@ _config_local="${BASH_SOURCE[0]%/*}/config.local.sh"
 [[ -f "$_config_local" ]] && source "$_config_local"
 unset _config_local
 
-REPO_BRANCH="main"
-# IMAGE_TAG selects which GHCR image channel to pull. "main" = stable
-# (built from the main branch), "dev" = iteration channel (built from
-# dev). Can be overridden from docker/.env, a preset, or `--branch=` on
-# the CLI. recompute_image_defaults() rebuilds the *_IMAGE_DEFAULT vars
-# from the live IMAGE_TAG.
+REPO_BRANCH="${REPO_BRANCH:-}"
+# IMAGE_TAG selects which GHCR image tag to pull. "main" = stable,
+# "dev" = integration, and feature branches can use custom tags such as
+# "feat-universal-gnss-integration". Can be overridden from docker/.env,
+# a preset, or `--image-tag=` on the CLI. recompute_image_defaults()
+# rebuilds the *_IMAGE_DEFAULT vars from the live IMAGE_TAG.
 IMAGE_TAG="${IMAGE_TAG:-main}"
 REPO_DIR="${MOWGLI_HOME:-$HOME/mowglinext}"
 DOCKER_SUBDIR="install"
@@ -52,17 +52,158 @@ recompute_image_defaults() {
   GUI_IMAGE_DEFAULT="${prefix}/mowglinext-gui:${IMAGE_TAG}"
 }
 
-is_valid_image_tag() {
+is_release_image_channel() {
   case "${1:-}" in
     main|dev) return 0 ;;
     *) return 1 ;;
   esac
 }
 
+sanitize_image_tag() {
+  local raw="${1:-}"
+
+  raw="${raw#refs/heads/}"
+  raw="${raw#origin/}"
+  raw="${raw,,}"
+  raw="$(printf '%s' "$raw" | sed -E 's/[^a-z0-9_.-]+/-/g; s/^[.-]+//; s/[.-]+$//; s/-+/-/g')"
+  raw="${raw:0:128}"
+  raw="$(printf '%s' "$raw" | sed -E 's/^[.-]+//; s/[.-]+$//')"
+  [ -n "$raw" ] || raw="current"
+
+  printf '%s\n' "$raw"
+}
+
+is_valid_image_tag() {
+  [[ "${1:-}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]
+}
+
+current_repo_branch_name() {
+  local repo_dir="${1:-$REPO_DIR}"
+
+  [ -d "$repo_dir/.git" ] || return 1
+  git -C "$repo_dir" symbolic-ref --quiet --short HEAD 2>/dev/null
+}
+
+default_repo_branch_name() {
+  current_repo_branch_name "$REPO_DIR" 2>/dev/null || printf 'main\n'
+}
+
+normalize_repo_branch_name() {
+  local raw="${1:-}"
+
+  raw="${raw#refs/heads/}"
+  raw="${raw#origin/}"
+  printf '%s\n' "$raw"
+}
+
+resolve_repo_branch_spec() {
+  local spec="${1:-}"
+  local current_branch
+
+  case "$spec" in
+    ""|current|current-branch|current_branch|keep)
+      current_branch="$(current_repo_branch_name "$REPO_DIR" 2>/dev/null || true)"
+      [ -n "$current_branch" ] || return 1
+      printf '%s\n' "$current_branch"
+      return 0
+      ;;
+  esac
+
+  spec="$(normalize_repo_branch_name "$spec")"
+  [ -n "$spec" ] || return 1
+  printf '%s\n' "$spec"
+}
+
+resolve_image_tag_spec() {
+  local spec="${1:-}"
+  local current_branch
+
+  case "$spec" in
+    ""|current|current-branch|current_branch)
+      current_branch="$(current_repo_branch_name "$REPO_DIR" 2>/dev/null || true)"
+      [ -n "$current_branch" ] || return 1
+      printf '%s\n' "$(sanitize_image_tag "$current_branch")"
+      return 0
+      ;;
+  esac
+
+  if is_valid_image_tag "$spec"; then
+    printf '%s\n' "$spec"
+    return 0
+  fi
+
+  spec="$(sanitize_image_tag "$spec")"
+  if is_valid_image_tag "$spec"; then
+    printf '%s\n' "$spec"
+    return 0
+  fi
+
+  return 1
+}
+
+if [[ -z "${REPO_BRANCH:-}" ]]; then
+  REPO_BRANCH="$(default_repo_branch_name)"
+fi
+
+select_repo_branch() {
+  if [[ "${REPO_BRANCH_PRESET:-false}" == "true" ]]; then
+    info "Repository branch pre-selected: ${REPO_BRANCH}"
+    return 0
+  fi
+
+  if [ ! -d "$REPO_DIR/.git" ]; then
+    return 0
+  fi
+
+  local current_branch current_ref previous requested_branch
+  current_branch="$(current_repo_branch_name "$REPO_DIR" 2>/dev/null || true)"
+  current_ref="$(repo_current_ref "$REPO_DIR" 2>/dev/null || true)"
+  previous="${REPO_BRANCH:-${current_branch:-main}}"
+
+  echo ""
+  echo -e "${CYAN:-}${BOLD:-}Repository branch${NC:-}"
+  if [[ -n "$current_branch" ]]; then
+    echo "  1) keep current checkout — ${current_branch} (default)"
+  else
+    echo "  1) keep current checkout — detached HEAD (${current_ref}) (default)"
+  fi
+  echo "  2) main"
+  echo "  3) dev"
+  echo "  4) custom branch"
+  echo ""
+  prompt "Choose" "1"
+
+  case "$REPLY" in
+    1|keep|current)
+      REPO_BRANCH="${current_branch:-$previous}"
+      ;;
+    2|main)
+      REPO_BRANCH="main"
+      ;;
+    3|dev)
+      REPO_BRANCH="dev"
+      ;;
+    4|custom)
+      prompt "Repository branch" "$previous"
+      requested_branch="${REPLY:-$previous}"
+      if ! REPO_BRANCH="$(resolve_repo_branch_spec "$requested_branch")"; then
+        warn "Invalid repository branch '$requested_branch', keeping ${previous}"
+        REPO_BRANCH="$previous"
+      fi
+      ;;
+    *)
+      warn "Invalid choice, keeping ${previous}"
+      REPO_BRANCH="$previous"
+      ;;
+  esac
+
+  info "Repository branch: ${REPO_BRANCH}"
+}
+
 select_image_channel() {
-  # --branch= flag wins. Preset files (web composer) can also pin IMAGE_TAG.
+  # --image-tag= flag wins. Preset files (web composer) can also pin IMAGE_TAG.
   if [[ "${IMAGE_CHANNEL_PRESET:-false}" == "true" ]]; then
-    info "Image channel pre-selected: ${IMAGE_TAG}"
+    info "Image tag pre-selected: ${IMAGE_TAG}"
     recompute_image_defaults
     return 0
   fi
@@ -71,12 +212,14 @@ select_image_channel() {
     && [ "${STATE_ACTIVE_PRESET_COUNT:-0}" -gt 0 ] \
     && declare -F preset_key_loaded >/dev/null \
     && preset_key_loaded IMAGE_TAG; then
-    info "Image channel pre-selected from preset: ${IMAGE_TAG}"
+    info "Image tag pre-selected from preset: ${IMAGE_TAG}"
     recompute_image_defaults
     return 0
   fi
 
   local previous="${IMAGE_TAG:-main}"
+  local current_branch=""
+  local current_branch_tag=""
   # If IMAGE_TAG isn't recorded in .env but image refs are, infer the channel
   # from those — otherwise upgrading users who already pulled :dev would get
   # silently flipped to :main just because the new key didn't exist yet.
@@ -88,25 +231,61 @@ select_image_channel() {
     fi
   fi
 
+  current_branch="$(current_repo_branch_name "$REPO_DIR" 2>/dev/null || true)"
+  if [[ -n "$current_branch" && "$current_branch" != "main" && "$current_branch" != "dev" ]]; then
+    current_branch_tag="$(sanitize_image_tag "$current_branch")"
+  fi
+
+  if [[ -n "$current_branch_tag" ]] && { is_release_image_channel "$previous" || [[ -z "$previous" ]]; }; then
+    previous="$current_branch_tag"
+  fi
+
   echo ""
-  echo -e "${CYAN:-}${BOLD:-}Image channel${NC:-}"
-  echo "  1) main — stable images built from the main branch (default)"
-  echo "  2) dev  — iteration channel built from the dev branch"
+  echo -e "${CYAN:-}${BOLD:-}Image tag${NC:-}"
+  echo "  1) main — stable published images"
+  echo "  2) dev  — integration images"
+  if [[ -n "$current_branch_tag" ]]; then
+    echo "  3) current branch / custom tag — keep checkout ${current_branch} (default tag: ${current_branch_tag})"
+  else
+    echo "  3) custom tag — keep the current checkout and choose an explicit image tag"
+  fi
   echo ""
   local default_choice="1"
   [[ "$previous" == "dev" ]] && default_choice="2"
+  if ! is_release_image_channel "$previous"; then
+    default_choice="3"
+  fi
   prompt "Choose" "$default_choice"
 
   case "$REPLY" in
     1|main) IMAGE_TAG="main" ;;
     2|dev)  IMAGE_TAG="dev" ;;
+    3|current|custom)
+      local custom_default="$previous"
+      local requested_tag
+
+      if is_release_image_channel "$custom_default"; then
+        custom_default="${current_branch_tag:-$custom_default}"
+      fi
+      [ -n "$custom_default" ] || custom_default="main"
+
+      prompt "Image tag" "$custom_default"
+      requested_tag="${REPLY:-$custom_default}"
+      if ! IMAGE_TAG="$(resolve_image_tag_spec "$requested_tag")"; then
+        warn "Invalid image tag '$requested_tag', keeping ${previous}"
+        IMAGE_TAG="$previous"
+      fi
+      ;;
     *)
       warn "Invalid choice, keeping ${previous}"
       IMAGE_TAG="$previous"
       ;;
   esac
 
-  info "Image channel: ${IMAGE_TAG}"
+  info "Image tag: ${IMAGE_TAG}"
+  if [[ -n "$current_branch" && "$current_branch" != "$IMAGE_TAG" ]]; then
+    info "Repository checkout stays on ${current_branch}; only container images use tag ${IMAGE_TAG}."
+  fi
   recompute_image_defaults
 }
 
@@ -637,13 +816,27 @@ parse_args() {
       --lang=*)
         MOWGLI_LANG="${1#*=}"
         ;;
-      --branch=*|--channel=*|--image-tag=*)
-        local tag_spec="${1#*=}"
-        if ! is_valid_image_tag "$tag_spec"; then
-          error "Unknown image channel: $tag_spec (expected main or dev)"
+      --branch=*)
+        local branch_spec="${1#*=}"
+        if ! REPO_BRANCH="$(resolve_repo_branch_spec "$branch_spec")"; then
+          error "Unknown repository branch: $branch_spec"
           exit 1
         fi
-        IMAGE_TAG="$tag_spec"
+        REPO_BRANCH_PRESET=true
+        ;;
+      --channel=*|--image-tag=*)
+        local tag_spec="${1#*=}"
+        if [[ "$1" == --channel=* ]]; then
+          warn "--channel is deprecated; use --image-tag=<main|dev>."
+          if ! is_release_image_channel "$tag_spec"; then
+            error "Unknown image channel: $tag_spec (expected main or dev)"
+            exit 1
+          fi
+        fi
+        if ! IMAGE_TAG="$(resolve_image_tag_spec "$tag_spec")"; then
+          error "Unknown image tag: $tag_spec (expected main, dev, current, or a custom Docker tag)"
+          exit 1
+        fi
         IMAGE_CHANNEL_PRESET=true
         recompute_image_defaults
         ;;

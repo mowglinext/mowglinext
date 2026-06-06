@@ -104,6 +104,30 @@ else
   fail "--gnss=nmea fails" "exit=0 unexpectedly"
 fi
 
+out=$( ( parse_args --image-tag=feat/universal-gnss-integration; printf 'IMAGE_TAG=%s\n' "$IMAGE_TAG" ) 2>&1 )
+ec=$?
+if [ "$ec" -eq 0 ]; then
+  pass "--image-tag feature branch syntax is accepted"
+  case "$out" in
+    *"IMAGE_TAG=feat-universal-gnss-integration"*) pass "--image-tag sanitizes branch-style refs" ;;
+    *)                                             fail "--image-tag sanitizes branch-style refs" "got: $out" ;;
+  esac
+else
+  fail "--image-tag feature branch syntax is accepted" "exit=$ec"
+fi
+
+out=$( ( parse_args --branch=feat/universal-gnss-integration; printf 'REPO_BRANCH=%s\n' "$REPO_BRANCH" ) 2>&1 )
+ec=$?
+if [ "$ec" -eq 0 ]; then
+  pass "--branch feature branch syntax is accepted"
+  case "$out" in
+    *"REPO_BRANCH=feat/universal-gnss-integration"*) pass "--branch keeps the git branch name intact" ;;
+    *)                                               fail "--branch keeps the git branch name intact" "got: $out" ;;
+  esac
+else
+  fail "--branch feature branch syntax is accepted" "exit=$ec"
+fi
+
 section "build_compose_stack rejects invalid GNSS_BACKEND"
 
 repo_bad="$SANDBOX/repo_bad_compose"
@@ -129,6 +153,7 @@ help_out=$(bash "$BOOTSTRAP_SH" --help 2>&1)
 help_ec=$?
 assert_eq "bootstrap --help exits 0" "0" "$help_ec"
 assert_contains "bootstrap --help advertises --gnss-connection" "--gnss-connection" "$help_out"
+assert_contains "bootstrap --help advertises --image-tag" "--image-tag" "$help_out"
 
 # Syntax check the bootstrap and main installer
 assert_exit_zero "bash -n on docs/install.sh"        bash -n "$BOOTSTRAP_SH"

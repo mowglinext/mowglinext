@@ -43,6 +43,7 @@ REQUIRED_KEYS=(
   MOWER_IP
   DISABLE_BLUETOOTH
   ENABLE_FOXGLOVE
+  IMAGE_TAG
   GNSS_BACKEND
   GNSS_STATUS_SOURCE
   GNSS_STACK
@@ -108,6 +109,7 @@ section ".env values match the requested preset"
 
 ENV_CONTENT="$(cat "$ENV_FILE")"
 assert_contains "GPS_PROTOCOL=UBX (preset)" "GPS_PROTOCOL=UBX" "$ENV_CONTENT"
+assert_contains "IMAGE_TAG=main (default)" "IMAGE_TAG=main" "$ENV_CONTENT"
 assert_contains "GPS_BAUD=921600 (runtime target)" "GPS_BAUD=921600" "$ENV_CONTENT"
 assert_contains "GPS_CONNECTION=uart (preset)" "GPS_CONNECTION=uart" "$ENV_CONTENT"
 assert_contains "GPS_RUNTIME_MODE=universal (derived)" "GPS_RUNTIME_MODE=universal" "$ENV_CONTENT"
@@ -137,6 +139,23 @@ else
   usb_env="$(cat "$repo_usb/docker/.env")"
   assert_contains "USB preset writes GPS_BY_ID" "GPS_BY_ID=/dev/serial/by-id/ublox-test-serial" "$usb_env"
   assert_contains "USB preset writes GNSS_SERIAL_DEVICE by-id" "GNSS_SERIAL_DEVICE=/dev/serial/by-id/ublox-test-serial" "$usb_env"
+fi
+
+section "Custom feature image tags persist into docker/.env"
+
+repo_feature="$SANDBOX/repo_feature"
+sandbox_repo "$repo_feature"
+harness_init "$repo_feature"
+IMAGE_TAG="feat-universal-gnss-integration"
+harness_set_preset gps=ubx-uart lidar=none tfluna=none
+
+if ! harness_run; then
+  fail "harness_run for custom feature image tag" "non-zero exit"
+else
+  feature_env="$(cat "$repo_feature/docker/.env")"
+  assert_contains "custom IMAGE_TAG written" "IMAGE_TAG=feat-universal-gnss-integration" "$feature_env"
+  assert_contains "custom GPS image tag written" "GPS_IMAGE=ghcr.io/cedbossneo/mowglinext/gps:feat-universal-gnss-integration" "$feature_env"
+  assert_contains "custom mowgli-ros2 image tag written" "MOWGLI_ROS2_IMAGE=ghcr.io/cedbossneo/mowglinext/mowgli-ros2:feat-universal-gnss-integration" "$feature_env"
 fi
 
 section "NTRIP env is written without leaking secrets to logs"

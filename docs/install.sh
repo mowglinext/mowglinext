@@ -91,6 +91,7 @@ GNSS_CONNECTION_FLAG=""
 LIDAR_FLAG=""
 TFLUNA_FLAG=""
 BACKEND_FLAG=""
+IMAGE_TAG_FLAG=""
 
 REPO_URL="https://github.com/cedbossneo/mowglinext.git"
 REPO_BRANCH="main"
@@ -106,6 +107,7 @@ while [[ $# -gt 0 ]]; do
     --lidar=*)   LIDAR_FLAG="${1#--lidar=}"; shift ;;
     --tfluna=*)  TFLUNA_FLAG="${1#--tfluna=}"; shift ;;
     --branch=*)  REPO_BRANCH="${1#--branch=}"; shift ;;
+    --image-tag=*) IMAGE_TAG_FLAG="${1#--image-tag=}"; shift ;;
     --help|-h)
       echo "Usage: curl -sSL https://mowgli.garden/install.sh | bash -s -- [OPTIONS]"
       echo ""
@@ -117,6 +119,7 @@ while [[ $# -gt 0 ]]; do
       echo "                     rplidar-usb, rplidar-uart, stl27l-usb, stl27l-uart"
       echo "  --tfluna=PRESET    Rangefinder: none, front, edge, both"
       echo "  --branch=BRANCH    Git branch (default: main)"
+      echo "  --image-tag=TAG    Container image tag/channel for the installer"
       echo ""
       echo "Without flags, the full interactive installer runs."
       exit 0
@@ -474,12 +477,9 @@ fi
 
 chmod +x "$INSTALLER"
 
-# Forward the chosen channel to the installer so it skips the image-channel
-# prompt and stays consistent with the branch we just cloned.
 INSTALLER_ARGS=()
-if [[ "$REPO_BRANCH" == "main" || "$REPO_BRANCH" == "dev" ]]; then
-  INSTALLER_ARGS+=("--branch=$REPO_BRANCH")
-fi
+INSTALLER_ARGS+=("--branch=$REPO_BRANCH")
+[[ -n "$IMAGE_TAG_FLAG" ]] && INSTALLER_ARGS+=("--image-tag=$IMAGE_TAG_FLAG")
 
 echo ""
 if $HAS_PRESET; then
@@ -492,7 +492,7 @@ echo ""
 # Reattach stdin to the controlling terminal — when invoked as
 # `curl ... | bash`, stdin is the pipe and `read` prompts in the
 # interactive installer would otherwise return immediately.
-if [ -e /dev/tty ]; then
+if tty -s && [ -r /dev/tty ]; then
   exec bash "$INSTALLER" "${INSTALLER_ARGS[@]+"${INSTALLER_ARGS[@]}"}" </dev/tty
 else
   warn "No /dev/tty available — interactive prompts may not work."
