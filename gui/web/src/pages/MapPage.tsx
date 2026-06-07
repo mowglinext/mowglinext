@@ -88,10 +88,19 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // Only include editable polygon features for DrawControl — exclude mower,
     // paths, and other display-only features so that frequent pose updates don't
     // trigger DrawControl to deleteAll() + re-add, which wipes out selection state.
-    const drawableFeatures = useMemo(
-        () => Object.values(features).filter(f => f instanceof MowingFeatureBase),
-        [features]
-    );
+    // Stable ref ensures the array identity only changes when mowing areas actually
+    // change, not on every pose update, preventing DrawControl sync timer thrashing.
+    const prevMowingRef = useRef<GeoJSON.Feature[]>([]);
+    const drawableFeatures = useMemo(() => {
+        const next = Object.values(features).filter(f => f instanceof MowingFeatureBase) as GeoJSON.Feature[];
+        const prev = prevMowingRef.current;
+        const unchanged =
+            next.length === prev.length &&
+            next.every((f, i) => f.id === prev[i]?.id && JSON.stringify(f.geometry) === JSON.stringify(prev[i]?.geometry));
+        if (unchanged) return prev;
+        prevMowingRef.current = next;
+        return next;
+    }, [features]);
 
     // Extracted hooks
     const {offsetX, offsetY, handleOffsetX, handleOffsetY} = useMapOffset({config, setConfig, notification});
@@ -153,6 +162,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
 
     const {map, setMap, path, plan, lidarCollection, coverageCellsImage, highLevelStatus, joyStream, dynamicObstacles} = useMapStreams({
         editMap,
+        isMobile,
         settings,
         offsetX,
         offsetY,
@@ -851,6 +861,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     onFinishRecording={mowerActions.onRecordFinish}
                     onCancelRecording={mowerActions.onRecordCancel}
                     onHome={mowerActions.onHome}
+                    bottomOffset={isMobile ? 82 : 30}
                 />
                 {isMobile && (
                     <MapToolbarMobile

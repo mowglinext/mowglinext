@@ -11,12 +11,13 @@ interface JoystickOverlayProps {
     onFinishRecording?: () => Promise<void>;
     onCancelRecording?: () => Promise<void>;
     onHome?: () => Promise<void>;
+    bottomOffset?: number;
 }
 
-export const JoystickOverlay = ({visible, isRecording, onMove, onStop, onFinishRecording, onCancelRecording, onHome}: JoystickOverlayProps) => {
+export const JoystickOverlay = ({visible, isRecording, onMove, onStop, onFinishRecording, onCancelRecording, onHome, bottomOffset = 30}: JoystickOverlayProps) => {
     if (!visible) return null;
     return (
-        <div style={{position: "absolute", bottom: 30, right: 30, zIndex: 100, display: 'flex', alignItems: 'flex-end', gap: 12}}>
+        <div style={{position: "absolute", bottom: bottomOffset, right: 30, zIndex: 100, display: 'flex', alignItems: 'flex-end', gap: 12}}>
             {isRecording && (
                 <div style={{
                     display: 'flex',

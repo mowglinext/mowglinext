@@ -151,11 +151,6 @@ export const MapToolbarMobile = ({
         {key: "mowNext", icon: <ForwardOutlined />, label: "Mow Next Area"},
         {key: "continueOrPause", icon: isIdle ? <CaretRightOutlined /> : <PauseOutlined />, label: isIdle ? "Continue" : "Pause"},
         {type: "divider"},
-        ...(manualMode
-            ? [{key: "stopManual", icon: <StopOutlined />, label: "Stop Manual Mowing", danger: true} satisfies NonNullable<MenuProps["items"]>[number]]
-            : [{key: "manual", icon: <ControlOutlined />, label: "Manual Mowing"} satisfies NonNullable<MenuProps["items"]>[number]]
-        ),
-        {type: "divider"},
         {key: "bladeForward", icon: <ThunderboltOutlined />, label: "Blade Forward"},
         {key: "bladeBackward", icon: <ThunderboltOutlined />, label: "Blade Backward"},
         {key: "bladeOff", icon: <ThunderboltOutlined />, label: "Blade Off", danger: true},
@@ -176,8 +171,6 @@ export const MapToolbarMobile = ({
             case "areaRecording": safeCall(onAreaRecording); break;
             case "mowNext": safeCall(onMowNextArea); break;
             case "continueOrPause": safeCall(onContinueOrPause); break;
-            case "manual": safeCall(() => onManualMode()); break;
-            case "stopManual": safeCall(() => onStopManualMode()); break;
             case "bladeForward": safeCall(onBladeForward); break;
             case "bladeBackward": safeCall(onBladeBackward); break;
             case "bladeOff": safeCall(onBladeOff); break;
@@ -375,6 +368,13 @@ export const MapToolbarMobile = ({
                     Mow
                 </Button>
             </Dropdown>
+
+            <AsyncButton
+                danger={manualMode}
+                icon={manualMode ? <StopOutlined /> : <ControlOutlined />}
+                onAsyncClick={manualMode ? onStopManualMode : onManualMode}
+                aria-label={manualMode ? "Stop Manual Mowing" : "Manual Mowing"}
+            />
 
             <Dropdown
                 menu={{items: dataMenuItems, onClick: handleMoreClick}}
