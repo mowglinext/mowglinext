@@ -478,7 +478,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     });
 
 
-    const {manualMode, handleManualMode, handleStopManualMode, handleJoyMove, handleJoyStop} = useManualMode({mowerAction, joyStream});
+    const {manualMode, handleManualMode, handleStopManualMode, handleJoyMove, handleJoyStop} = useManualMode({mowerAction, joyStream, stateName: highLevelStatus.highLevelStatus.state_name});
 
     const handleDockPlacement = useCallback(() => {
         setDockPlacementMode(true);
