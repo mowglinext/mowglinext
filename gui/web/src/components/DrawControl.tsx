@@ -88,6 +88,10 @@ export default function DrawControl(props: DrawControlProps) {
     useEffect(() => {
         if (!mp || !features) return;
         clearTimeout(syncTimerRef.current);
+        // Use 300ms instead of 0ms: on mobile the Mapbox GL map may still be
+        // initialising tiles/layers when React StrictMode or a mapKey remount
+        // fires this effect, and a 0ms flush races against the GL context setup.
+        // 300ms outlasts the GL bootstrap without noticeably delaying first paint.
         syncTimerRef.current = setTimeout(() => {
             const key = JSON.stringify(features.map(f => [f.id, f.geometry]));
             if (key === prevFeaturesKeyRef.current && mp.getAll().features.length > 0) return;
@@ -96,7 +100,7 @@ export default function DrawControl(props: DrawControlProps) {
             features.forEach((f) => {
                 mp.add(f);
             });
-        }, 0);
+        }, 300);
         return () => clearTimeout(syncTimerRef.current);
     }, [mp, features]);
     useEffect(() => {
