@@ -313,6 +313,8 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             {"use_sim_time": use_sim_time},
+            {"undock_distance": float(robot_params.get("undock_distance", 2.0))},
+            {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
         ],
     )
 

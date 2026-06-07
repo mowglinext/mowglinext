@@ -203,10 +203,12 @@ public:
   static constexpr int N_CYCLES = 3;
 
   // --- Dock yaw ---
-  static constexpr double DOCK_UNDOCK_SPEED = 0.15;
-  static constexpr double DOCK_UNDOCK_DISTANCE_M = 2.0;
+  // Default speed/distance are conservative fallbacks; the actual values are
+  // read from the `undock_speed` / `undock_distance` ROS parameters so the
+  // calibration drive matches what the operator configured for normal undocks.
+  static constexpr double DOCK_UNDOCK_SPEED_DEFAULT = 0.15;
+  static constexpr double DOCK_UNDOCK_DISTANCE_DEFAULT_M = 2.0;
   static constexpr double DOCK_UNDOCK_TIMEOUT_SEC = 25.0;
-  static constexpr double DOCK_UNDOCK_MIN_DISPLACEMENT = 0.8;
   // Runtime mowgli_robot.yaml — bind-mounted, persists across redeploys.
   // Calibration writes the dock pose back here so the same file the launch
   // system reads at startup also carries the latest measured values.
@@ -280,10 +282,16 @@ public:
         rclcpp::ServicesQoS(),
         cb_group_);
 
+    dock_undock_distance_ =
+        declare_parameter<double>("undock_distance", DOCK_UNDOCK_DISTANCE_DEFAULT_M);
+    dock_undock_speed_ = declare_parameter<double>("undock_speed", DOCK_UNDOCK_SPEED_DEFAULT);
+
     RCLCPP_INFO(get_logger(),
-                "IMU yaw calibration node ready. Ensure robot is undocked with "
-                "~1 m of clear space in front and behind, then call "
-                "~/calibrate.");
+                "IMU yaw calibration node ready. Dock undock: %.2f m @ %.2f m/s. "
+                "Ensure robot is undocked with ~1 m of clear space in front and "
+                "behind, then call ~/calibrate.",
+                dock_undock_distance_,
+                dock_undock_speed_);
   }
 
 private:
@@ -521,11 +529,18 @@ private:
     const double x0 = latest_gps_x_;
     const double y0 = latest_gps_y_;
 
+    // Minimum displacement threshold: 75 % of the configured target so a
+    // short undock_distance (e.g. 0.8 m) does not make the check trivially
+    // impossible due to GPS noise near the dock. Capped at 0.8 m.
+    const double min_displacement =
+        std::min(0.8, dock_undock_distance_ * 0.75);
+
     RCLCPP_INFO(get_logger(),
                 "RTK-Fixed acquired. Reversing at %+.2f m/s target %.1f m "
-                "(timeout %.0f s) — start pos=(%+.3f, %+.3f).",
-                DOCK_UNDOCK_SPEED,
-                DOCK_UNDOCK_DISTANCE_M,
+                "(min %.2f m, timeout %.0f s) — start pos=(%+.3f, %+.3f).",
+                dock_undock_speed_,
+                dock_undock_distance_,
+                min_displacement,
                 DOCK_UNDOCK_TIMEOUT_SEC,
                 x0,
                 y0);
@@ -541,13 +556,13 @@ private:
         RCLCPP_ERROR(get_logger(), "Emergency during dock undock — aborting.");
         return std::nullopt;
       }
-      publish_vx(-DOCK_UNDOCK_SPEED);
+      publish_vx(-dock_undock_speed_);
       if (gps_have_)
       {
         const double dx = latest_gps_x_ - x0;
         const double dy = latest_gps_y_ - y0;
         displacement = std::hypot(dx, dy);
-        if (displacement >= DOCK_UNDOCK_DISTANCE_M)
+        if (displacement >= dock_undock_distance_)
           break;
       }
       sleep_for(period);
@@ -570,14 +585,14 @@ private:
     const double dy = y1 - y0;
     displacement = std::hypot(dx, dy);
 
-    if (displacement < DOCK_UNDOCK_MIN_DISPLACEMENT)
+    if (displacement < min_displacement)
     {
       RCLCPP_ERROR(get_logger(),
                    "Only %.3f m of GPS displacement after reverse "
-                   "(need ≥ %.1f m). Wheels probably slipped on the dock "
+                   "(need ≥ %.2f m). Wheels probably slipped on the dock "
                    "ramp. Aborting.",
                    displacement,
-                   DOCK_UNDOCK_MIN_DISPLACEMENT);
+                   min_displacement);
       return std::nullopt;
     }
 
@@ -593,7 +608,7 @@ private:
     result.undock_displacement_m = displacement;
     result.yaw_sigma_rad = sigma_yaw_rad;
     result.yaw_sigma_deg = sigma_yaw_rad * 180.0 / M_PI;
-    result.speed_ms = DOCK_UNDOCK_SPEED;
+    result.speed_ms = dock_undock_speed_;
 
     if (!update_dock_pose_in_robot_yaml(MOWGLI_ROBOT_YAML_PATH,
                                         result.dock_pose_x,
@@ -1420,6 +1435,9 @@ private:
   }
 
   // ── State ───────────────────────────────────────────────────────────
+  double dock_undock_distance_{DOCK_UNDOCK_DISTANCE_DEFAULT_M};
+  double dock_undock_speed_{DOCK_UNDOCK_SPEED_DEFAULT};
+
   rclcpp::CallbackGroup::SharedPtr cb_group_;
   rclcpp::QoS imu_qos_{rclcpp::KeepLast(50)};
   rclcpp::QoS odom_qos_{rclcpp::KeepLast(50)};
