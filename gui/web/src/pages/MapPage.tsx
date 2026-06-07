@@ -861,7 +861,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     onFinishRecording={mowerActions.onRecordFinish}
                     onCancelRecording={mowerActions.onRecordCancel}
                     onHome={mowerActions.onHome}
-                    bottomOffset={isMobile ? 82 : 30}
+                    bottomOffset={isMobile ? 172 : 30}
                 />
                 {isMobile && (
                     <MapToolbarMobile
