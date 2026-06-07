@@ -179,20 +179,28 @@ def generate_launch_description() -> LaunchDescription:
 
     # ------------------------------------------------------------------
     # TF forward-stamp / fusion_graph cadence — sim vs hardware.
-    # Defaults are the HARDWARE-correct values (no forward extrapolation,
-    # 25 Hz factor-graph). sim_full_system.launch.py overrides these to
-    # the sim-friendly values (0.1 s lead, 50 Hz) where the sim_time
-    # phase offset between publish and lookup forces ExtrapolationException
-    # at lower rates / no lead. On real hardware, forward-stamping the
-    # map TF by 100 ms costs 5° of yaw error per pivot at 0.5 rad/s
-    # — visible on Foxglove and pushed into FTC's heading PID.
+    # Hardware default is 0.05 s lead / 25 Hz factor-graph.
+    # sim_full_system.launch.py overrides to the sim values (0.1 s lead,
+    # 50 Hz) where the sim_time phase offset between publish and lookup
+    # is larger. The lead is REQUIRED on real hardware too (commit
+    # 8c04a2db): Nav2 controller_server requests map→base_footprint at
+    # clock()->now() at 10 Hz with no phase alignment to fusion_graph's
+    # 10 Hz TF publish, so with 0 lead the lookup regularly lands
+    # 10-50 ms ahead of the latest stamp and throws
+    # ExtrapolationException every tick — cmd_vel collapses to ~2-5 Hz
+    # of mostly-zero commands and the robot twitches/pivots in place
+    # instead of following the path. 50 ms lead costs at most
+    # 0.05 × 0.75 rad/s ≈ 1.4° of apparent yaw during pivots, well
+    # within the heading PIDs' correction range. This launch arg
+    # OVERRIDES fusion_graph.yaml's tf_publish_lead_s, so its default
+    # must stay in sync with the YAML (0.05).
     # fusion_graph_tf_lead_s is shared by map→odom AND odom→base
     # publishers inside fusion_graph_node now that ekf_odom is gone.
     # ------------------------------------------------------------------
     fusion_graph_tf_lead_arg = DeclareLaunchArgument(
         "fusion_graph_tf_lead_s",
-        default_value="0.0",
-        description="fusion_graph TF forward-stamp (seconds), applied to both map→odom and odom→base_footprint. Hardware default 0.0. Sim should set 0.1.",
+        default_value="0.05",
+        description="fusion_graph TF forward-stamp (seconds), applied to both map→odom and odom→base_footprint. Hardware default 0.05 (avoids Nav2 ExtrapolationException race). Sim should set 0.1.",
     )
     fusion_graph_node_period_arg = DeclareLaunchArgument(
         "fusion_graph_node_period_s",
