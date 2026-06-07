@@ -114,7 +114,7 @@ export const MapToolbarMobile = ({
 
     const toolbarStyle: React.CSSProperties = {
         position: "absolute",
-        bottom: 12,
+        bottom: 86,
         left: 12,
         right: 12,
         zIndex: 10,
