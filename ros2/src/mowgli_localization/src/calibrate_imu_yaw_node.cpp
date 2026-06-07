@@ -532,8 +532,7 @@ private:
     // Minimum displacement threshold: 75 % of the configured target so a
     // short undock_distance (e.g. 0.8 m) does not make the check trivially
     // impossible due to GPS noise near the dock. Capped at 0.8 m.
-    const double min_displacement =
-        std::min(0.8, dock_undock_distance_ * 0.75);
+    const double min_displacement = std::min(0.8, dock_undock_distance_ * 0.75);
 
     RCLCPP_INFO(get_logger(),
                 "RTK-Fixed acquired. Reversing at %+.2f m/s target %.1f m "
