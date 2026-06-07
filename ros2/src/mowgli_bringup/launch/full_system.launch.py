@@ -52,6 +52,12 @@ def _local_gnss_status_enabled(status_source: str) -> bool:
 
 
 def generate_launch_description() -> LaunchDescription:
+    # Keep sidecar-internal GNSS transport/status channels out of Foxglove.
+    # This covers the current hidden topic prefix plus older visible names.
+    internal_gnss_topic_whitelist = (
+        r"^(?!/(?:_gps_internal|gps_internal|universal_gnss)(?:/.*)?$).*"
+    )
+
     # ------------------------------------------------------------------
     # Package directories
     # ------------------------------------------------------------------
@@ -352,8 +358,9 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # 10. Foxglove Bridge — WebSocket bridge for GUI and Foxglove Studio
     # ------------------------------------------------------------------
-    # No topic/service whitelists — all topics are available for Foxglove
-    # Studio debugging. The GUI backend throttles subscriptions on its side.
+    # Expose the public graph broadly, but keep sidecar-internal GNSS
+    # transport/status topics out of Foxglove so they do not leak into the
+    # GUI contract or trigger schema-resolution noise.
     foxglove_bridge_node = Node(
         condition=IfCondition(enable_foxglove),
         package="foxglove_bridge",
@@ -366,6 +373,8 @@ def generate_launch_description() -> LaunchDescription:
                 "address": "0.0.0.0",
                 "send_buffer_limit": 10000000,
                 "num_threads": 0,
+                "topic_whitelist": [internal_gnss_topic_whitelist],
+                "client_topic_whitelist": [internal_gnss_topic_whitelist],
                 "capabilities": [
                     "clientPublish",
                     "services",

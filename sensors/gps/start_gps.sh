@@ -369,8 +369,10 @@ start_universal_runtime() {
     exit 1
   fi
 
-  local internal_status_topic="/gps_internal/universal/status"
-  local internal_rtcm_topic="/gps_internal/universal/rtcm"
+  # Hidden ROS topics keep the sidecar's internal Universal GNSS transport
+  # off the public graph while remaining consumable by the local bridge.
+  local internal_status_topic="/_gps_internal/universal/status"
+  local internal_rtcm_topic="/_gps_internal/universal/rtcm"
   local receiver_family
   local transport
   local serial_device

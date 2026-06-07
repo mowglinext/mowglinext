@@ -81,9 +81,9 @@ class UniversalGnssTopicBridge(Node):
         self.declare_parameter("backend", "universal")
         self.declare_parameter("receiver_family", "auto")
         self.declare_parameter("frame_id", "gps_link")
-        self.declare_parameter("input_status_topic", "/gps_internal/universal/status")
+        self.declare_parameter("input_status_topic", "/_gps_internal/universal/status")
         self.declare_parameter("output_status_topic", "/gps/status")
-        self.declare_parameter("input_rtcm_topic", "/gps_internal/universal/rtcm")
+        self.declare_parameter("input_rtcm_topic", "/_gps_internal/universal/rtcm")
         self.declare_parameter("output_rtcm_topic", "/rtcm")
 
         self._backend = str(self.get_parameter("backend").value)
