@@ -797,6 +797,24 @@ private:
   nav_msgs::msg::OccupancyGrid cached_speed_mask_;
   bool masks_dirty_{true};
 
+  /// Cached OccupancyGrids for ~/mow_progress and ~/coverage_cells.
+  /// Recomputed inside the dirty block (same gate as ~/grid_map); published
+  /// every timer tick so a GUI page-reload always gets current data.
+  /// (foxglove_bridge subscribes volatile and does not relay transient_local
+  /// latches to WebSocket clients — publish-on-change would leave the map
+  /// blank after a reload while the robot is idle.)
+  nav_msgs::msg::OccupancyGrid cached_mow_progress_;
+  nav_msgs::msg::OccupancyGrid cached_coverage_cells_;
+
+  /// Gating flag for data-topic recomputation. Set whenever MOW_PROGRESS/
+  /// CONFIDENCE (mark_cells_mowed, active decay) or OCCUPANCY (on_occupancy_grid)
+  /// actually changes. When set, the publish timer rebuilds ~/grid_map
+  /// (GridMapRosConverter::toMessage — expensive) and refreshes
+  /// cached_mow_progress_ / cached_coverage_cells_ (coverage_cells_to_occupancy_grid
+  /// is O(cells × polygons)). The cached OccupancyGrids are then published every
+  /// tick regardless, keeping the GUI current without the per-tick recompute cost.
+  bool content_dirty_{true};
+
   // Replan and boundary violation publishers
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr replan_needed_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr boundary_violation_pub_;

@@ -421,16 +421,17 @@ private:
     blackboard_->set("dock_pose", dock_pose);
     blackboard_->set("undock_pose", undock_pose);
 
-    // Undock reverse speed, sourced from mowgli_robot.yaml.undock_speed
-    // and consumed by the BackUp BT instances in main_tree.xml via the
-    // {undock_speed} blackboard reference. Previously the speed was
-    // hardcoded as a string attribute in three undock-flow BackUps,
-    // which kept the yaml value orphan — editing the GUI slider did
-    // nothing. Recovery-side BackUps (e.g. OBSTACLE_BACKOFF) intentionally
-    // stay hardcoded; they are not "undocking" so they should not move
-    // when the operator tunes undock speed. See issue #191.
+    // Undock reverse speed and distance, sourced from mowgli_robot.yaml and
+    // consumed by the BackUp BT instances in main_tree.xml via the
+    // {undock_speed} / {undock_distance} blackboard references. Previously
+    // both were hardcoded in the BT XML, so editing the YAML had no effect.
+    // Recovery-side BackUps (e.g. OBSTACLE_BACKOFF) intentionally stay
+    // hardcoded; they are not undocking and must not shift when the operator
+    // tunes undock distance. See issue #191.
     const double undock_speed = declare_parameter<double>("undock_speed", 0.15);
     blackboard_->set("undock_speed", undock_speed);
+    const double undock_distance = declare_parameter<double>("undock_distance", 1.0);
+    blackboard_->set("undock_distance", undock_distance);
 
     // Transit / mowing speeds, sourced from mowgli_robot.yaml and applied to
     // the live controllers by SetNavMode (FollowPath.desired_linear_vel for the

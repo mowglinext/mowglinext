@@ -157,10 +157,19 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   // ── Initialise map ───────────────────────────────────────────────────────
   init_map();
   last_decay_time_ = now();
+  cached_mow_progress_ = mow_progress_to_occupancy_grid();
+  cached_coverage_cells_ = coverage_cells_to_occupancy_grid();
 
   // ── Publishers ───────────────────────────────────────────────────────────
-  grid_map_pub_ = create_publisher<grid_map_msgs::msg::GridMap>("~/grid_map", rclcpp::QoS(1));
+  // grid_map: transient_local so Nav2 costmap_filter still receives the last
+  // value after a restart; gated behind masks_dirty_/content_dirty_.
+  grid_map_pub_ =
+      create_publisher<grid_map_msgs::msg::GridMap>("~/grid_map", rclcpp::QoS(1).transient_local());
 
+  // coverage_cells / mow_progress: volatile, published every timer tick from
+  // a cached message (recomputed only when dirty). foxglove_bridge subscribes
+  // volatile — transient_local latches are not relayed to WebSocket clients,
+  // which would leave the GUI map blank after a page reload while idle.
   mow_progress_pub_ =
       create_publisher<nav_msgs::msg::OccupancyGrid>("~/mow_progress", rclcpp::QoS(1));
 
@@ -570,6 +579,8 @@ void MapServerNode::on_occupancy_grid(nav_msgs::msg::OccupancyGrid::ConstSharedP
   const float ox = static_cast<float>(info.origin.position.x) + res * 0.5F;
   const float oy = static_cast<float>(info.origin.position.y) + res * 0.5F;
 
+  auto& occupancy = map_[std::string(layers::OCCUPANCY)];
+  bool changed = false;
   for (uint32_t row = 0; row < info.height; ++row)
   {
     for (uint32_t col = 0; col < info.width; ++col)
@@ -589,8 +600,20 @@ void MapServerNode::on_occupancy_grid(nav_msgs::msg::OccupancyGrid::ConstSharedP
         continue;
       }
 
-      map_.at(std::string(layers::OCCUPANCY), idx) = (cell_val > 50) ? 1.0F : 0.0F;
+      const float new_val = (cell_val > 50) ? 1.0F : 0.0F;
+      float& dst = occupancy(idx(0), idx(1));
+      if (dst != new_val)
+      {
+        dst = new_val;
+        changed = true;
+      }
     }
+  }
+
+  // Republish ~/grid_map only when the OCCUPANCY layer actually moved.
+  if (changed)
+  {
+    content_dirty_ = true;
   }
 }
 
@@ -813,13 +836,24 @@ void MapServerNode::on_publish_timer()
 
   {
     std::lock_guard<std::mutex> lock(map_mutex_);
-    apply_decay(elapsed);
+    apply_decay(elapsed);  // sets content_dirty_ only when it actually decays
 
-    auto grid_map_msg = grid_map::GridMapRosConverter::toMessage(map_);
-    grid_map_pub_->publish(std::move(grid_map_msg));
+    // Rebuild all data-topic payloads only when a contributing layer changed.
+    // grid_map serialization (toMessage) and coverage_cells_to_occupancy_grid
+    // (O(cells × polygons)) are both expensive; gate them together.
+    if (masks_dirty_ || content_dirty_)
+    {
+      auto grid_map_msg = grid_map::GridMapRosConverter::toMessage(map_);
+      grid_map_pub_->publish(std::move(grid_map_msg));
+      cached_mow_progress_ = mow_progress_to_occupancy_grid();
+      cached_coverage_cells_ = coverage_cells_to_occupancy_grid();
+      content_dirty_ = false;
+    }
 
-    mow_progress_pub_->publish(mow_progress_to_occupancy_grid());
-    coverage_cells_pub_->publish(coverage_cells_to_occupancy_grid());
+    // Always publish from the cached OccupancyGrids so a GUI page-reload gets
+    // current data (foxglove_bridge does not relay transient_local latches).
+    mow_progress_pub_->publish(cached_mow_progress_);
+    coverage_cells_pub_->publish(cached_coverage_cells_);
 
     // Only publish masks when something changed. The publishers use
     // transient_local QoS so late subscribers (e.g. costmap_filter)

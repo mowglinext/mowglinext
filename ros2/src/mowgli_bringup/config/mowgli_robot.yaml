@@ -203,7 +203,7 @@ mowgli:
     # hand-entered phone-compass seed (239°) — NOT a valid ENU yaw;
     # recalibrate per-site before relying on docking.
     dock_pose_yaw: 4.17
-    undock_distance: 1.5           # reverse distance when undocking (m)
+    undock_distance: 1.0           # reverse distance when undocking (m); must be > 0.5 m for CalibrateHeadingFromUndock
     undock_speed: 0.16             # reverse speed (m/s) — above kMinLinVel=0.15 host clamp
     # Distance (m) to the staging pose behind the dock — the final
     # straight-in approach runway. Injected as opennav_docking

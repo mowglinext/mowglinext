@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { Map as MapboxMap } from "mapbox-gl";
 import { useWS } from "../../../hooks/useWS.ts";
 import { useHighLevelStatus } from "../../../hooks/useHighLevelStatus.ts";
@@ -108,6 +108,7 @@ function renderCoverageCells(
 
 interface UseMapStreamsOptions {
     editMap: boolean;
+    isMobile: boolean;
     settings: Record<string, string>;
     offsetX: number;
     offsetY: number;
@@ -121,6 +122,7 @@ interface UseMapStreamsOptions {
 
 export function useMapStreams({
     editMap,
+    isMobile,
     settings,
     offsetX,
     offsetY,
@@ -147,6 +149,12 @@ export function useMapStreams({
         { grid: OccupancyGrid; offsetX: number; offsetY: number; datum: [number, number, number] } | null
     >(null);
     const coverageRafRef = React.useRef<number | null>(null);
+
+    // rAF coalescing for pose updates: compute features synchronously (so
+    // robotPoseRef is always current for lidar), but flush to React state at
+    // most once per animation frame to avoid saturating the renderer.
+    const latestPoseFeaturesRef = useRef<Record<string, MowingFeature> | null>(null);
+    const poseRafRef = useRef<number | undefined>(undefined);
 
     const highLevelStatus = useHighLevelStatus();
 
@@ -175,31 +183,32 @@ export function useMapStreams({
                 y: pose.pose?.pose?.position?.y ?? 0,
                 heading: pose.motion_heading ?? 0,
             };
-            setFeatures((oldFeatures) => {
-                const orientation = pose.motion_heading!!;
-                const posX = pose.pose?.pose?.position?.x!!;
-                const posY = pose.pose?.pose?.position?.y!!;
-                const line = drawLine(offsetX, offsetY, datum, posY, posX, orientation);
-                // URDF-derived robot silhouette (chassis + drive wheels + blade)
-                // so the map robot matches the sensors-page model exactly.
-                const sil = drawRobotSilhouette(
-                    offsetX, offsetY, datum, posY, posX, orientation, robot
-                );
-                return {
-                    ...oldFeatures,
-                    mower: new MowerFeatureBase(mower_lonlat),
-                    ["mower-footprint"]: new RobotPartFeature("mower-footprint", sil.chassis, "#00a6ff"),
-                    ["mower-wheel-l"]: new RobotPartFeature("mower-wheel-l", sil.wheelL, "#0b2e3f"),
-                    ["mower-wheel-r"]: new RobotPartFeature("mower-wheel-r", sil.wheelR, "#0b2e3f"),
-                    ["mower-blade"]: new RobotPartFeature("mower-blade", sil.blade, "#ff6b6b"),
-                    ["mower-heading"]: new LineFeatureBase(
-                        "mower-heading",
-                        [mower_lonlat, line],
-                        "#ff0000",
-                        "heading"
-                    ),
-                };
-            });
+
+            // Compute the feature objects synchronously so robotPoseRef is
+            // always current for concurrent lidar projection, but defer the
+            // React state update to a single rAF flush.
+            const orientation = pose.motion_heading!!;
+            const posX = pose.pose?.pose?.position?.x!!;
+            const posY = pose.pose?.pose?.position?.y!!;
+            const line = drawLine(offsetX, offsetY, datum, posY, posX, orientation);
+            const sil = drawRobotSilhouette(offsetX, offsetY, datum, posY, posX, orientation, robot);
+            latestPoseFeaturesRef.current = {
+                mower: new MowerFeatureBase(mower_lonlat),
+                ["mower-footprint"]: new RobotPartFeature("mower-footprint", sil.chassis, "#00a6ff"),
+                ["mower-wheel-l"]: new RobotPartFeature("mower-wheel-l", sil.wheelL, "#0b2e3f"),
+                ["mower-wheel-r"]: new RobotPartFeature("mower-wheel-r", sil.wheelR, "#0b2e3f"),
+                ["mower-blade"]: new RobotPartFeature("mower-blade", sil.blade, "#ff6b6b"),
+                ["mower-heading"]: new LineFeatureBase("mower-heading", [mower_lonlat, line], "#ff0000", "heading"),
+            };
+
+            if (!poseRafRef.current) {
+                poseRafRef.current = requestAnimationFrame(() => {
+                    poseRafRef.current = undefined;
+                    const latest = latestPoseFeaturesRef.current;
+                    if (!latest) return;
+                    setFeatures((old) => ({ ...old, ...latest }));
+                });
+            }
         }
     );
 
@@ -445,7 +454,7 @@ export function useMapStreams({
             mapStream.start("/api/mowglinext/subscribe/map");
             pathStream.start("/api/mowglinext/subscribe/path");
             planStream.start("/api/mowglinext/subscribe/plan");
-            lidarStream.start("/api/mowglinext/subscribe/lidar");
+            if (!isMobile) lidarStream.start("/api/mowglinext/subscribe/lidar");
             obstaclesStream.start("/api/mowglinext/subscribe/obstacles");
             coverageCellsStream.start("/api/mowglinext/subscribe/coverageCells");
         }
@@ -492,7 +501,7 @@ export function useMapStreams({
         mapStream.start("/api/mowglinext/subscribe/map");
         pathStream.start("/api/mowglinext/subscribe/path");
         planStream.start("/api/mowglinext/subscribe/plan");
-        lidarStream.start("/api/mowglinext/subscribe/lidar");
+        if (!isMobile) lidarStream.start("/api/mowglinext/subscribe/lidar");
         obstaclesStream.start("/api/mowglinext/subscribe/obstacles");
         coverageCellsStream.start("/api/mowglinext/subscribe/coverageCells");
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -511,6 +520,10 @@ export function useMapStreams({
             coverageCellsStream.stop();
             recordingTrajectoryStream.stop();
             highLevelStatus.stop();
+            if (poseRafRef.current !== undefined) {
+                cancelAnimationFrame(poseRafRef.current);
+                poseRafRef.current = undefined;
+            }
             if (coverageRafRef.current != null) {
                 cancelAnimationFrame(coverageRafRef.current);
                 coverageRafRef.current = null;
