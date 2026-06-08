@@ -46,7 +46,7 @@ Originally inspired by the [OpenMower](https://github.com/ClemensElflein/open_mo
         |                  |                   |
  +------v------+  +--------v--------+   +------v---------------------+
  |  map_server |                        |          Nav2 Kilted         |
- |  GridMap    |                        |  FollowPath (RPP+Rotation)  |
+ |  GridMap    |                        |  FollowPath (FTC)           |
  |  keepout/   |                        |  FollowCoveragePath (FTC)   |
  |  speed masks|                        |  SmacPlanner2D              |
  |  mow_progres|                        |  collision_monitor          |
@@ -95,7 +95,7 @@ Originally inspired by the [OpenMower](https://github.com/ClemensElflein/open_mo
 - **RTK GPS localization** — UBX protocol. RTK Fixed gives σ ~3 mm. `ekf_map_node` honors the NavSatFix covariance directly and converges to fix precision without per-fix-type σ floors or outlier gating.
 - **BehaviorTree.CPP v4 mission executor** — reactive guards for emergency, boundary, rain, and battery. Automatic rain-stop-dock-wait-resume cycle. Battery-aware dock-charge-undock-resume cycle.
 - **Persistent obstacle tracking** — `obstacle_tracker_node` promotes LiDAR detections to persistent after age and observation thresholds. Obstacles are reflected in Nav2 costmaps for dynamic avoidance during strip transit and mowing.
-- **Nav2 Kilted** — SmacPlanner2D global planner, RegulatedPurePursuit for transit, FTCController for coverage strips, RotationShimController, `docking_server` (opennav_docking), `collision_monitor`.
+- **Nav2 Kilted** — SmacPlannerHybrid (Hybrid-A*) global planner, FTCController for both transit (`FollowPath`) and coverage strips (`FollowCoveragePath`), `docking_server` (opennav_docking), `collision_monitor`.
 - **FTCController Nav2 plugin** — Follow-the-Carrot controller with 3-axis PID for coverage strip following. Provides <10mm lateral accuracy on swaths.
 - **Mow progress tracking** — `map_server_node` GridMap layer marks cells as mowed with time-based decay. Visualised as OccupancyGrid.
 - **Keepout and speed zone masks** — `map_server_node` publishes Nav2 costmap filter masks for mowing boundaries and perimeter speed limits.

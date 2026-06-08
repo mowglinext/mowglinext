@@ -1,7 +1,11 @@
 # Nav2 parameters for Mowgli outdoor robot mower.
-# Controller:   FollowPath (transit) = RotationShimController + RegulatedPure-
-#               PursuitController (RPP). FollowCoveragePath (strips) =
-#               mowgli_nav2_plugins/FTCController (Follow-The-Carrot PID).
+# Controller:   FollowPath (transit/dock-approach) AND FollowCoveragePath
+#               (strips) both = mowgli_nav2_plugins/FTCController (Follow-The-
+#               Carrot PID), with separate gains per slot. This mirrors the
+#               ROS1 "v2" stack, which used FTC for transit + coverage +
+#               docking (feat/v2-control-cascade, 2026-06-08). RotationShim+RPP
+#               was removed from FollowPath because it could not fine-pivot on
+#               this robot's deadband-limited motors.
 # Planner:      nav2_smac_planner/SmacPlannerHybrid (Hybrid-A*, x/y/θ, Reeds-
 #               Shepp by default — forward-feasible arcs, no in-place pivot).
 # Coverage:     cell-based strip planner in mowgli_map (not nav2_coverage).
@@ -185,84 +189,102 @@ controller_server:
     # Coverage stays on FTC — RPP's lookahead-carrot tracking doesn't
     # hold the < 10 mm lateral precision needed for the swath spacing
     # to tile correctly.
+    # FollowPath — transit / dock-approach-to-staging / return-home / undock
+    # recovery.
+    #
+    # CHANGED 2026-06-08 (feat/v2-control-cascade): was RotationShimController +
+    # RegulatedPurePursuitController. On this robot RPP could not fine-pivot
+    # (motor static-friction deadband → bang-bang rotation), so
+    # use_rotate_to_heading was disabled and RPP only arced — leaving a
+    # yaw-alignment gap at goals. Most visible at the opennav_docking staging
+    # pose: arriving 10-30° off the dock axis stalled the dock approach
+    # ("en biais" docking, action timeouts).
+    #
+    # We now run the same FTCController as coverage (Follow-The-Carrot) here.
+    # This is the controller the ROS1 "v2" stack used for transit AND docking,
+    # and it rotated/docked reliably. FTC advances a smooth, rate-limited carrot
+    # along the (Hybrid-A*) path and PID-tracks it: PRE_ROTATE aligns to the
+    # path-start heading in place, FOLLOWING arcs the path, POST_ROTATE aligns
+    # to the goal heading. The smooth REFERENCE (not the raw error) is what
+    # keeps commanded ω gentle, vs RPP's heading hunting. NOTE: gains below are
+    # v2-derived starting points and need field validation on this robot — see
+    # docs/plan and the per-key comments.
+    #
+    # Obstacle avoidance is unchanged at the global layer (SmacPlannerHybrid +
+    # global_costmap obstacle_layer + keepout) and preserved at the local layer
+    # by FTC's own obstacle deviation (below) — so this swap keeps the
+    # obstacle-avoidance-capable transit planner.
     FollowPath:
-      plugin: "nav2_rotation_shim_controller::RotationShimController"
-      primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      plugin: "mowgli_nav2_plugins/FTCController"
 
-      # --- RotationShim params ---
-      # 0.785 rad (45°) — under this, hand straight to RPP. Above, pivot
-      # in place first. Matches the threshold that opennav_docking's
-      # NavigateToPose typically generates at long-transit endpoints.
-      angular_dist_threshold: 0.785
-      forward_sampling_distance: 0.5
-      # 0.75 (was 0.6) + accel 2.5 (was 1.0): the in-place pivot used to ramp
-      # 0→0.6 at 1.0 rad/s² (~0.6 s), spending most of the ramp BELOW the
-      # firmware pivot deadband (~0.5 rad/s) so the hardware_bridge closed-loop
-      # wound up then kicked → jerky pivot start (user 2026-05-28; mowing turns
-      # are smooth because FTC uses its own PRE_ROTATE profile, not this ramp).
-      # Snapping to a decisive 0.75 rad/s clears the deadband margin and the
-      # closed-loop holds it smoothly.
-      rotate_to_heading_angular_vel: 0.75
-      max_angular_accel: 2.5
-      simulate_ahead_time: 1.0
-      # Terminal pivot. With this false, neither RotationShim (start-of-path
-      # only) nor RPP (mid-path, rotate_to_heading_min_angle: 0.785 rad =
-      # 45°) does anything when the navigation ends with a yaw error in the
-      # band [yaw_goal_tolerance, RPP-threshold] = [5.7°, 45°]. RPP just
-      # holds the carrot at the final pose and outputs near-zero v/ω —
-      # goal_checker keeps waiting for yaw alignment that never happens,
-      # robot is stuck. Especially visible at NavigateToPose-to-staging
-      # handoff in opennav_docking: the staging pose has a fixed heading
-      # along the dock axis, but if RPP arrived 10-30° off (common when
-      # approaching from the side), the docking action just times out.
-      # Setting this true makes RotationShim pivot at the END to match
-      # goal heading. Cost: one ~1 s in-place rotation per nav action,
-      # which the operator barely notices but the docking-server NEEDS.
-      rotate_to_goal_heading: true
-      closed_loop: true                    # use wheel odom feedback for pivot completion
+      # Carrot advance rates (the smooth reference generator).
+      speed_fast: 0.30                 # transit cruise (m/s)
+      speed_fast_threshold: 1.0        # straight-ahead distance to allow cruise (m)
+      speed_fast_threshold_angle: 20.0
+      speed_slow: 0.16                 # ≥ min_lin_vel host clamp (0.15)
+      speed_angular: 45.0              # in-place carrot rotate rate (deg/s) — v2 transit value
+      acceleration: 0.2                # carrot accel ramp — smooths cmd_vel
 
-      # --- RegulatedPurePursuitController (primary) params ---
-      transform_tolerance: 0.3            # ARM TF jitter envelope
-      desired_linear_vel: 0.30            # transit speed cap (m/s)
-      min_approach_linear_velocity: 0.16  # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
-      approach_velocity_scaling_dist: 0.6
-      # Lookahead: velocity-scaled. At 0.30 m/s → 0.45 m, at 0.13 m/s → 0.20 m.
-      use_velocity_scaled_lookahead_dist: true
-      lookahead_time: 1.5
-      min_lookahead_dist: 0.50            # steadier carrot — less heading jitter on the coarse-rotation robot
-      max_lookahead_dist: 0.90
-      # Curvature-based slowdown: when steering radius < 0.9 m, drop to
-      # min 0.20 m/s. Keeps tight turns controllable without stalling.
-      use_regulated_linear_velocity_scaling: true
-      regulated_linear_scaling_min_radius: 0.9
-      regulated_linear_scaling_min_speed: 0.20
-      use_cost_regulated_linear_velocity_scaling: false
-      # Collision sim: project the carrot forward, abort if the path
-      # to the carrot hits an obstacle. 1.0 s look-ahead at 0.3 m/s
-      # = 30 cm projected; collision_monitor handles the close-range case.
-      use_collision_detection: true
-      max_allowed_time_to_collision_up_to_carrot: 1.0
-      # FALSE: this robot cannot fine-pivot in place (motor static-friction
-      # deadband -> bang-bang rotation). With rotate-to-heading enabled, RPP
-      # pivot-locked at vx=0 and hunted instead of progressing. Disabled, RPP
-      # follows the (Hybrid-A*, kinematically-feasible) path by ARCING —
-      # forward velocity + curvature. Validated on the robot 2026-06-08.
-      # RotationShim still handles the one-time large initial pivot.
-      use_rotate_to_heading: false
-      rotate_to_heading_min_angle: 0.785
-      # Match the RotationShim values above (decisive pivot, clear of the
-      # firmware deadband) so RPP's mid-path rotate-to-heading hand-off is
-      # as smooth as the start-of-path pivot.
-      rotate_to_heading_angular_vel: 0.75
-      max_angular_accel: 2.5
-      allow_reversing: false
-      max_robot_pose_search_dist: 10.0
-      use_interpolation: true
+      # PID. ROTATION gains follow v2 transit (yaw precision is the target
+      # complaint). LATERAL gains start MODERATE: v2 used kp_lat 25.0 which is
+      # very aggressive and un-validated against this robot's localization +
+      # ~50-90 ms USB latency, so begin gentle and let field tuning raise them.
+      kp_lon: 1.0
+      ki_lon: 0.0
+      kd_lon: 0.0
+      kp_lat: 3.0
+      ki_lat: 0.0
+      kd_lat: 0.5
+      kp_ang: 3.0                      # v2 transit value (coverage uses 1.5)
+      ki_ang: 0.0
+      ki_ang_max: 62.0
+      kd_ang: 0.1                      # v2 transit value
 
-    # FollowCoveragePath — strip following. Same FTC plugin, same params as
-    # FollowPath (single source of truth). The two slots exist for future
-    # divergence (e.g. tighter lateral PID for strips), not because the
-    # controller differs today.
+      max_cmd_vel_speed: 0.30
+      max_cmd_vel_ang: 1.5             # rad/s pivot ceiling (host gyro loop tracks it)
+      max_follow_distance: 1.0
+      # Honor reverse segments the SmacPlannerHybrid (REEDS_SHEPP) planner may
+      # emit. v2 used forward_only:true with its own planner; here false avoids
+      # FTC stalling on a planned reverse arc. Flip to true if the planner is
+      # switched to DUBIN (forward-only).
+      forward_only: false
+
+      # GOAL ACCEPTANCE — MUST be tighter than the stopped_goal_checker
+      # (xy 0.30 m, yaw 0.10 rad) bound to this action, or FTC stops at its
+      # own tolerance while the external checker keeps waiting and the action
+      # hangs — the exact stall RPP hit at the staging pose. FTC POST_ROTATE
+      # drives yaw to within this; the host gyro angular-rate loop helps it
+      # cross the firmware deadband at small heading errors. If the coarse
+      # robot can't hold 5° in the field, loosen this AND the goal checker
+      # together (keep FTC ≤ checker).
+      max_goal_distance_error: 0.25    # ≤ checker xy 0.30 m
+      max_goal_angle_error: 5.0        # deg (~0.087 rad) < checker 0.10 rad
+      goal_timeout: 20.0
+
+      # Local obstacle avoidance — complements the global Hybrid-A* plan. FTC
+      # reads the controller_server local costmap, projects the footprint along
+      # the carrot, and deviates laterally around obstacles the global plan
+      # didn't capture (replaces RPP's use_collision_detection).
+      check_obstacles: true
+      obstacle_footprint: true
+      obstacle_lookahead: 5
+      enable_obstacle_deviation: true
+      max_lateral_deviation: 1.5
+      min_lateral_deviation: 0.30
+      deviation_step: 0.05
+      deviation_blend_rate: 0.5
+      obstacle_wait_timeout_s: 5.0
+
+      oscillation_recovery: true
+      oscillation_v_eps: 0.05
+      oscillation_omega_eps: 0.05
+      oscillation_recovery_min_duration: 5.0
+
+    # FollowCoveragePath — strip following. Same FTCController plugin as
+    # FollowPath, but its OWN gains: coverage is detuned for swath tiling
+    # (kp_lat 1.2 / kp_ang 1.5, see below), while FollowPath uses the more
+    # aggressive v2 transit rotation gains. Both slots are FTC since
+    # feat/v2-control-cascade; keep their params independent.
     FollowCoveragePath:
       plugin: "mowgli_nav2_plugins/FTCController"
       speed_fast: 0.20

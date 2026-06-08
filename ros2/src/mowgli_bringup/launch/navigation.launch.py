@@ -282,8 +282,8 @@ def generate_launch_description() -> LaunchDescription:
     # them before — they were orphan params — so editing them looked like
     # it should do something but didn't. Load here and inject into the
     # Nav2 YAMLs (controller + docking) alongside the dock pose.
-    #   transit_speed    → FollowPath.desired_linear_vel + max_speed_xy
-    #   mowing_speed     → FollowCoveragePath.max_speed_xy
+    #   transit_speed    → FollowPath.speed_fast + max_cmd_vel_speed (FTC)
+    #   mowing_speed     → FollowCoveragePath.speed_fast (FTC)
     #   undock_speed     → behavior_tree_node param of the same name,
     #                      pushed onto the BT blackboard at startup and
     #                      read by undock-flow BackUp instances via
@@ -495,11 +495,15 @@ def generate_launch_description() -> LaunchDescription:
         # to govern and orphaning the GUI knob. See issue #192.
         scd["staging_x_offset"] = -float(dock_approach_distance)
 
-        # FollowPath (transit controller = RPP via RotationShim).
+        # FollowPath (transit controller = FTCController since
+        # feat/v2-control-cascade). FTC's cruise knob is speed_fast (NOT RPP's
+        # desired_linear_vel, which FTC ignores); max_cmd_vel_speed is the hard
+        # cap, so set both or the cap silently clamps the per-site transit_speed.
         fp = (doc.setdefault("controller_server", {})
                  .setdefault("ros__parameters", {})
                  .setdefault("FollowPath", {}))
-        fp["desired_linear_vel"] = transit_speed
+        fp["speed_fast"] = transit_speed
+        fp["max_cmd_vel_speed"] = transit_speed
 
         # FollowCoveragePath (FTC: coverage strip controller). Its speed
         # knob is speed_fast; mowing_speed overrides it.
