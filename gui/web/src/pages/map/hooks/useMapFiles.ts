@@ -28,6 +28,10 @@ interface UseMapFilesOptions {
     guiApi: Api<unknown>;
     dockDirty: boolean;
     setDockDirty: (v: boolean) => void;
+    // Builds the editable feature set (areas, obstacles, dock) from a Map
+    // message. Needed by handleRestoreMap because the MapPage effect that
+    // normally does this is intentionally skipped while editMap is true.
+    buildFeaturesFromMap: (m: MapType) => Record<string, MowingFeature>;
 }
 
 export function useMapFiles({
@@ -44,6 +48,7 @@ export function useMapFiles({
     guiApi,
     dockDirty,
     setDockDirty,
+    buildFeaturesFromMap,
 }: UseMapFilesOptions) {
     async function handleSaveMap() {
         const areas: Record<string, MowgliMapArea[]> = {
@@ -209,6 +214,13 @@ export function useMapFiles({
                 const parts = content.split(",");
                 const newMap = JSON.parse(atob(parts[1])) as MapType;
                 setMap(newMap);
+                // The MapPage effect that turns a Map into editable features
+                // skips while editMap is true (set just above), so build them
+                // here — otherwise handleSaveMap would persist the stale
+                // features and the restored map would be silently discarded.
+                setFeatures(buildFeaturesFromMap(newMap));
+                setHasUnsavedChanges(true);
+                setDockDirty(true);
             });
             reader.readAsDataURL(file);
         });

@@ -3,7 +3,7 @@ import {useApi} from "../hooks/useApi.ts";
 import {App} from "antd";
 import turfArea from "@turf/area";
 import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
-import {MapArea} from "../types/ros.ts";
+import {MapArea, Map as MapType} from "../types/ros.ts";
 import DrawControl from "../components/DrawControl.tsx";
 import Map, {Layer, Source} from 'react-map-gl/mapbox';
 import type {Map as MapboxMap} from 'mapbox-gl';
@@ -427,8 +427,19 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         }, {} as Record<string, MowingFeatureBase>);
     }
 
-  
-
+    // Build the full editable feature set (areas, obstacles and dock) from a
+    // Map message. The stream-driven effect above does the same thing but is
+    // skipped while editMap is true, so map restore (which enters edit mode)
+    // calls this directly to populate the features it will save.
+    function buildFeaturesFromMap(m: MapType): Record<string, MowingFeature> {
+        const newFeatures: Record<string, MowingFeature> = {
+            ...buildFeatures(m.working_area ?? [], "area"),
+            ...buildFeatures(m.navigation_areas ?? [], "navigation"),
+        };
+        const dockLonLat = transpose(offsetX, offsetY, datum, m.dock_y ?? 0, m.dock_x ?? 0);
+        newFeatures["dock"] = new DockFeatureBase(dockLonLat, m.dock_heading ?? 0);
+        return newFeatures;
+    }
 
     const {
         handleSaveMap,
@@ -453,6 +464,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         guiApi,
         dockDirty,
         setDockDirty,
+        buildFeaturesFromMap,
     });
 
 
