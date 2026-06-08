@@ -160,6 +160,15 @@ private:
         declare_parameter<double>("angular_rate_integral_max", 1.5);
     angular_rate_params_.target_lp_tau =
         declare_parameter<double>("angular_rate_target_lp_tau", 0.2);
+    // Sub-deadband linear-velocity clamp (m/s): commands with
+    // 0 < |vx| < min_lin_vel are zeroed in on_cmd_vel, because a sub-PWM-40
+    // forward command only buzzes the motor open-loop. Default 0.15. With the
+    // firmware closed-loop wheel PI active, LOWER this (e.g. 0.04) to let a
+    // controller creep below the deadband for precise docking — the PI's
+    // integral ramps PWM until the wheel breaks static friction, turning a
+    // slow command into a slow creep rather than buzz. Runtime-tunable
+    // (ros2 param set), so docking creep can be tuned without a rebuild.
+    min_lin_vel_ = declare_parameter<double>("min_lin_vel", 0.15);
 
     // Dock pose comes solely from mowgli_robot.yaml (declared as ROS
     // parameters above). Calibration and manual GUI adjustments persist
@@ -1507,9 +1516,12 @@ private:
     //
     // The sub-deadband |vx| → 0 guard is unchanged (linear has no clean
     // host-side rate feedback — encoders slip; leave it to Nav2's loops).
-    constexpr double kMinLinVel = 0.15;  // m/s — PWM 40 forward deadband + margin
+    // kMinLinVel is now the runtime `min_lin_vel` parameter (default 0.15) —
+    // lower it to let the firmware closed-loop wheel-PI creep sub-deadband for
+    // precise docking (see ctor). Transit is unaffected: RPP/coverage command
+    // >= 0.16 anyway, so the clamp only bites the slow dock-approach tail.
     constexpr double kMinCmdToConsider = 1.0e-3;  // ignore floating-point dust
-    if (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < kMinLinVel)
+    if (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < min_lin_vel_)
     {
       vx = 0.0;
     }
@@ -1645,6 +1657,7 @@ private:
   // command from gyro feedback so measured ω tracks the commanded ω across
   // the firmware's nonlinear PWM curve. See angular_rate_controller.hpp.
   bool angular_rate_loop_enabled_{true};
+  double min_lin_vel_{0.15};  ///< sub-deadband |vx| clamp (m/s); see ctor + on_cmd_vel.
   mowgli_hardware::AngularRateParams angular_rate_params_{};
   mowgli_hardware::AngularRateState angular_rate_state_{};
   double latest_gyro_z_{0.0};  ///< bias-corrected gyro_z, from the IMU path.
