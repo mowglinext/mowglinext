@@ -483,9 +483,9 @@ docking_server:
     # Match nav2_params.yaml — upstream defaults except v_linear_min
     # (stays at 0.16 for the host clamp at 0.15).
     controller.v_linear_min: 0.16
-    controller.v_linear_max: 0.25
+    controller.v_linear_max: 0.20    # lowered 0.25->0.20: gentler dock approach, less deadband-coast overshoot
     controller.v_angular_max: 0.75
-    controller.slowdown_radius: 0.25
+    controller.slowdown_radius: 0.45  # raised 0.25->0.45: brake earlier so it reaches the 0.16 floor sooner -> less terminal momentum
     # Graceful smooth-control-law gains — upstream documented defaults
     # (match nav2_params.yaml; the "15 cm" seat was a mis-pinned dock, not
     # a controller issue — stock gains converge within ~1 cm).

@@ -821,9 +821,9 @@ docking_server:
     #   beta/lambda: leave at upstream (0.4 / 2.0) — graceful control-law
     #     shape, not deadband-related.
     controller.v_linear_min: 0.16
-    controller.v_linear_max: 0.25
+    controller.v_linear_max: 0.20    # lowered 0.25->0.20: gentler dock approach, less deadband-coast overshoot
     controller.v_angular_max: 0.75
-    controller.slowdown_radius: 0.25
+    controller.slowdown_radius: 0.45  # raised 0.25->0.45: brake earlier so it reaches the 0.16 floor sooner -> less terminal momentum
     # Graceful smooth-control-law gains — upstream documented defaults.
     # (Diagnosed 2026-06: the "15 cm right" seat was a mis-pinned dock pose,
     # not a controller deficiency — the fused seated pose matched the target
