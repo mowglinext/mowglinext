@@ -720,7 +720,11 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   // broadcasts TF, so the thread only exists in primary mode.
   if (primary_mode_ && tf_broadcast_rate_hz_ > 0.0)
   {
-    tf_thread_ = std::thread([this]() { TfBroadcastLoop(); });
+    tf_thread_ = std::thread(
+        [this]()
+        {
+          TfBroadcastLoop();
+        });
     RCLCPP_INFO(get_logger(),
                 "fusion_graph: dedicated TF broadcast thread at %.1f Hz "
                 "(lead %.3f s)",
@@ -1963,8 +1967,7 @@ void FusionGraphNode::TfBroadcastLoop()
       anchor = t_map_odom_anchor_;
     }
 
-    const rclcpp::Time stamp =
-        this->now() + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
+    const rclcpp::Time stamp = this->now() + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
 
     std::vector<geometry_msgs::msg::TransformStamped> transforms;
     transforms.reserve(2);
