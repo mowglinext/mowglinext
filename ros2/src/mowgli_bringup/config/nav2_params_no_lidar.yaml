@@ -209,21 +209,44 @@ planner_server:
     planner_plugins: ["GridBased"]
 
     GridBased:
-      plugin: "nav2_smac_planner::SmacPlanner2D"
-      tolerance: 0.50
+      # Hybrid-A* (x, y, θ) kinematic planner — see nav2_params.yaml for the
+      # full rationale. Produces forward-feasible arcs so the robot never needs
+      # the in-place fine-pivot the motor static-friction deadband can't do.
+      # Must stay in sync with nav2_params.yaml's GridBased (this no-lidar
+      # variant is what the robot actually loads when LIDAR_ENABLED=false).
+      plugin: "nav2_smac_planner::SmacPlannerHybrid"
+      tolerance: 0.25                       # m — goal xy search tolerance
       downsample_costmap: false
-      downsampling_factor: 2     # match nav2_params.yaml
-      allow_unknown: false
-      max_iterations: 100000     # match nav2_params.yaml (1M was an old experiment)
+      downsampling_factor: 1
+      allow_unknown: true
+      max_iterations: 1000000
       max_on_approach_iterations: 1000
-      max_planning_time: 3.5
-      cost_travel_multiplier: 2.0
-      use_final_approach_orientation: false
+      max_planning_time: 3.5                # ARM budget (matches old 2D planner)
+      # Parametric motion model — switch here:
+      #   "REEDS_SHEPP" (default): may insert reverse segments to reorient in
+      #                            tight spots; "DUBIN": forward-only arcs.
+      motion_model_for_search: "REEDS_SHEPP"
+      angle_quantization_bins: 72
+      analytic_expansion_ratio: 3.5
+      analytic_expansion_max_length: 3.0
+      # = chassis_width / 2 (URDF chassis_width 0.40 m). Non-zero radius forbids
+      # in-place pivots, forcing the planner to emit forward (or reverse) arcs.
+      minimum_turning_radius: 0.20
+      reverse_penalty: 2.0                  # discourage (but allow) reverse, R-S only
+      change_penalty: 0.0
+      non_straight_penalty: 1.2
+      cost_penalty: 2.0
+      retrospective_penalty: 0.015
+      lookup_table_size: 20.0
+      cache_obstacle_heuristic: false
+      smooth_path: true
       smoother:
         max_iterations: 1000
         w_smooth: 0.3
         w_data: 0.2
         tolerance: 1.0e-10
+        do_refinement: true
+        refinement_num: 2
 
 # ---------------------------------------------------------------------------
 # Smoother server
