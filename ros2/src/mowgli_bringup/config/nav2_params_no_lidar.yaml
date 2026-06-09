@@ -95,10 +95,12 @@ controller_server:
     stopped_goal_checker:
       plugin: "nav2_controller::StoppedGoalChecker"
       trans_stopped_velocity: 0.10
-      xy_goal_tolerance: 0.30
-      # 0.10 rad to match the lidar config — see nav2_params.yaml for
-      # the "en biais" docking rationale.
-      yaw_goal_tolerance: 0.10
+      # Usually overridden at launch from mowgli_robot.yaml; static defaults
+      # must satisfy FTC FollowPath tolerances ≤ these (see nav2_params.yaml).
+      xy_goal_tolerance: 0.20
+      # 0.25 rad — loose enough the coarse robot settles without POST_ROTATE
+      # hunting (field 2026-06-09); see nav2_params.yaml.
+      yaw_goal_tolerance: 0.25
 
     coverage_goal_checker:
       # PathProgressGoalChecker (mowgli plugin) — fires when the robot
@@ -130,29 +132,31 @@ controller_server:
       speed_fast_threshold: 1.0
       speed_fast_threshold_angle: 20.0
       speed_slow: 0.16                 # ≥ min_lin_vel host clamp (0.15)
-      speed_angular: 45.0
+      speed_angular: 35.0              # 45→35 smoother pivot (field 2026-06-09)
       acceleration: 0.2
 
+      # Field-tuned 2026-06-09 (this is the ACTIVE config — robot runs no-LiDAR).
+      # See nav2_params.yaml FollowPath for the rationale on each value.
       kp_lon: 1.0
       ki_lon: 0.0
       kd_lon: 0.0
-      kp_lat: 3.0
+      kp_lat: 1.2
       ki_lat: 0.0
-      kd_lat: 0.5
-      kp_ang: 3.0
+      kd_lat: 1.5
+      kp_ang: 1.5
       ki_ang: 0.0
       ki_ang_max: 62.0
       kd_ang: 0.1
 
       max_cmd_vel_speed: 0.30
-      max_cmd_vel_ang: 1.5
-      max_follow_distance: 1.0
+      max_cmd_vel_ang: 1.0
+      max_follow_distance: 1.5         # DOMINANT anti-weave lever (1.0→1.5 halved cross-track)
       forward_only: false
 
-      # MUST be tighter than the stopped_goal_checker (xy 0.30, yaw 0.10 rad)
-      # — see nav2_params.yaml FollowPath for why.
-      max_goal_distance_error: 0.25
-      max_goal_angle_error: 5.0
+      # MUST stay ≤ the stopped_goal_checker (xy 0.20, yaw 0.25 rad)
+      # — see nav2_params.yaml FollowPath. 12° avoids end-of-path yaw hunting.
+      max_goal_distance_error: 0.10
+      max_goal_angle_error: 12.0
       goal_timeout: 20.0
 
       # No obstacle_layer without LiDAR — disable obstacle handling entirely.
@@ -229,9 +233,9 @@ planner_server:
       angle_quantization_bins: 72
       analytic_expansion_ratio: 3.5
       analytic_expansion_max_length: 3.0
-      # = chassis_width / 2 (URDF chassis_width 0.40 m). Non-zero radius forbids
-      # in-place pivots, forcing the planner to emit forward (or reverse) arcs.
-      minimum_turning_radius: 0.20
+      # ≥ half the REAL robot width (0.424 m → 0.212 m). 0.20 used the wrong
+      # 0.40 m width; 0.22 complies with the measured geometry.
+      minimum_turning_radius: 0.22
       reverse_penalty: 2.0                  # discourage (but allow) reverse, R-S only
       change_penalty: 0.0
       non_straight_penalty: 1.2

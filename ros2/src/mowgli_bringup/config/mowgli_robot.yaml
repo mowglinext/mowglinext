@@ -267,7 +267,10 @@ mowgli:
     # report SUCCESS with the chassis 25-40° off the goal yaw, which
     # made opennav_docking attack the cradle "en biais" (sideways). 0.10
     # rad (≈5.7°) forces a final in-place pivot before the dock approach.
-    xy_goal_tolerance: 0.30        # metres — acceptable goal position error
-    yaw_goal_tolerance: 0.10       # radians — acceptable heading error
+    xy_goal_tolerance: 0.20        # metres — acceptable goal position error
+    yaw_goal_tolerance: 0.25       # radians (~14°) — loose enough the coarse
+                                   # robot settles without POST_ROTATE hunting
+                                   # (field 2026-06-09); must be ≥ FTC FollowPath
+                                   # max_goal_angle_error (12° = 0.21 rad)
     coverage_xy_tolerance: 0.10    # metres — for coverage waypoints
     progress_timeout_sec: 60.0     # seconds without progress before recovery

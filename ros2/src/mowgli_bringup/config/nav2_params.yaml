@@ -111,19 +111,17 @@ controller_server:
     stopped_goal_checker:
       plugin: "nav2_controller::StoppedGoalChecker"
       trans_stopped_velocity: 0.10
-      xy_goal_tolerance: 0.30
-      # 0.10 rad (≈5.7°), was 0.5 rad (≈28.6°). The loose value let
-      # opennav_docking's NavigateToPose-to-staging-pose phase report
-      # SUCCESS even when FTC had stopped with the chassis 20-25° off
-      # the dock-approach axis. The graceful approach controller then
-      # had to redress while driving forward — "en biais" docking. With
-      # 1.5 m of straight-line approach (staging_x_offset: -1.5) the
-      # robot still misses the cradle if it enters that corridor more
-      # than ~10° off. 0.10 rad forces FTC to keep rotating in place at
-      # the end of NavigateToPose until the heading is close enough to
-      # drive straight into the dock. Slightly longer arrivals on
-      # ordinary transit are an acceptable trade.
-      yaw_goal_tolerance: 0.10
+      # NOTE: these are usually OVERRIDDEN at launch from mowgli_robot.yaml
+      # (xy_goal_tolerance / yaw_goal_tolerance). The static values here are the
+      # default and MUST satisfy FTC FollowPath max_goal_distance_error ≤ xy and
+      # radians(max_goal_angle_error) ≤ yaw, else the action hangs (see
+      # test_followpath_goal_tolerance_tighter_than_checker).
+      xy_goal_tolerance: 0.20
+      # 0.25 rad (≈14°). Tightened from the old 0.5/1.0 rad band-aids but kept
+      # loose enough that the coarse deadband-limited robot can settle without
+      # POST_ROTATE hunting in place at the goal (field 2026-06-09). Docking
+      # precision is handled separately by the dock approach, not this checker.
+      yaw_goal_tolerance: 0.25
 
     # Coverage strip endpoint validation.
     #
@@ -222,43 +220,45 @@ controller_server:
       speed_fast_threshold: 1.0        # straight-ahead distance to allow cruise (m)
       speed_fast_threshold_angle: 20.0
       speed_slow: 0.16                 # ≥ min_lin_vel host clamp (0.15)
-      speed_angular: 45.0              # in-place carrot rotate rate (deg/s) — v2 transit value
+      speed_angular: 35.0              # in-place carrot rotate rate (deg/s) — 45→35 for smoother pivots (field 2026-06-09)
       acceleration: 0.2                # carrot accel ramp — smooths cmd_vel
 
-      # PID. ROTATION gains follow v2 transit (yaw precision is the target
-      # complaint). LATERAL gains start MODERATE: v2 used kp_lat 25.0 which is
-      # very aggressive and un-validated against this robot's localization +
-      # ~50-90 ms USB latency, so begin gentle and let field tuning raise them.
+      # PID — field-tuned 2026-06-09 on the real robot. The lateral gain barely
+      # moved the weave; the dominant anti-weave lever turned out to be
+      # max_follow_distance (below). These match the coverage FTC gains, which
+      # are stable on this hardware.
       kp_lon: 1.0
       ki_lon: 0.0
       kd_lon: 0.0
-      kp_lat: 3.0
+      kp_lat: 1.2
       ki_lat: 0.0
-      kd_lat: 0.5
-      kp_ang: 3.0                      # v2 transit value (coverage uses 1.5)
+      kd_lat: 1.5
+      kp_ang: 1.5
       ki_ang: 0.0
       ki_ang_max: 62.0
-      kd_ang: 0.1                      # v2 transit value
+      kd_ang: 0.1
 
       max_cmd_vel_speed: 0.30
-      max_cmd_vel_ang: 1.5             # rad/s pivot ceiling (host gyro loop tracks it)
-      max_follow_distance: 1.0
+      max_cmd_vel_ang: 1.0             # rad/s pivot ceiling — 1.5→1.0: gentler, still clears the deadband
+      # max_follow_distance (lookahead) is the DOMINANT anti-weave lever: 1.0→1.5
+      # roughly halved straight-line cross-track (±0.30→±0.16 m, field 2026-06-09).
+      # 2.0 gave no further gain and risks corner-cutting.
+      max_follow_distance: 1.5
       # Honor reverse segments the SmacPlannerHybrid (REEDS_SHEPP) planner may
       # emit. v2 used forward_only:true with its own planner; here false avoids
       # FTC stalling on a planned reverse arc. Flip to true if the planner is
       # switched to DUBIN (forward-only).
       forward_only: false
 
-      # GOAL ACCEPTANCE — MUST be tighter than the stopped_goal_checker
-      # (xy 0.30 m, yaw 0.10 rad) bound to this action, or FTC stops at its
-      # own tolerance while the external checker keeps waiting and the action
-      # hangs — the exact stall RPP hit at the staging pose. FTC POST_ROTATE
-      # drives yaw to within this; the host gyro angular-rate loop helps it
-      # cross the firmware deadband at small heading errors. If the coarse
-      # robot can't hold 5° in the field, loosen this AND the goal checker
-      # together (keep FTC ≤ checker).
-      max_goal_distance_error: 0.25    # ≤ checker xy 0.30 m
-      max_goal_angle_error: 5.0        # deg (~0.087 rad) < checker 0.10 rad
+      # GOAL ACCEPTANCE — MUST stay ≤ the stopped_goal_checker tolerances
+      # (xy 0.20 m, yaw 0.25 rad) bound to this action, or FTC stops at its own
+      # tolerance while the external checker waits and the action hangs.
+      # max_goal_angle_error was 5°, which the coarse deadband-limited robot
+      # cannot hit — POST_ROTATE hunted/spun in place at the goal (field
+      # 2026-06-09). 12° lets it settle. max_goal_distance_error 0.10 reaches
+      # the endpoint (0.25 stopped ~25 cm short, which the operator noticed).
+      max_goal_distance_error: 0.10    # ≤ checker xy 0.20 m
+      max_goal_angle_error: 12.0       # deg (0.21 rad) ≤ checker yaw 0.25 rad
       goal_timeout: 20.0
 
       # Local obstacle avoidance — complements the global Hybrid-A* plan. FTC
@@ -411,9 +411,11 @@ planner_server:
       angle_quantization_bins: 72
       analytic_expansion_ratio: 3.5
       analytic_expansion_max_length: 3.0
-      # = chassis_width / 2 (URDF chassis_width 0.40 m). Non-zero radius forbids
-      # in-place pivots, forcing the planner to emit forward (or reverse) arcs.
-      minimum_turning_radius: 0.20
+      # ≥ half the REAL robot width (0.424 m → 0.212 m), so the planner emits
+      # arcs the robot can roll through on its wheels rather than near-in-place
+      # pivots. Was 0.20 (derived from the wrong 0.40 m width); 0.22 complies
+      # with the measured geometry. Non-zero radius forbids in-place pivots.
+      minimum_turning_radius: 0.22
       reverse_penalty: 2.0                  # discourage (but allow) reverse, R-S only
       change_penalty: 0.0
       non_straight_penalty: 1.2
