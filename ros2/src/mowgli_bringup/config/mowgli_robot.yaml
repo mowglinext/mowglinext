@@ -27,15 +27,24 @@ mowgli:
     chassis_mass_kg: 8.76
 
     # Drive wheels (rear)
-    wheel_radius: 0.04475
+    wheel_radius: 0.1          # 0.2 m diameter drive wheels (measured). Was
+                               # 0.04475 (an 8.9 cm wheel) — wrong. URDF-only on
+                               # the real robot (odometry uses ticks_per_meter
+                               # directly), but it sets base_link height + sensor
+                               # z, so keep it physical.
     wheel_width: 0.04
     wheel_track: 0.325         # centre-to-centre (from OpenMower).
                                # Read by hardware_bridge_node and URDF.
                                # MUST match firmware physical assumption.
     wheel_x_offset: 0.0       # drive wheels at base_link (wheel axis centre)
-    chassis_center_x: 0.18    # chassis geometric centre forward of wheel axis (m)
-                               # with chassis_length 0.60 → rear bumper -0.12,
-                               # front bumper +0.48
+    # Real chassis: 573 × 424 × 248 mm (measured). These were absent here, so
+    # the URDF + navigation.launch.py footprint builder fell back to 0.54 × 0.40.
+    chassis_length: 0.573
+    chassis_width: 0.424
+    chassis_height: 0.248
+    # Drive-wheel axis sits ~0.10 m in front of the rear face, so the geometric
+    # centre is 0.573/2 − 0.10 ≈ 0.187 m forward of the wheel axis (base_link).
+    chassis_center_x: 0.187   # → rear face −0.10 m, front face +0.473 m
     # ticks_per_meter is consumed by hardware_bridge_node to convert raw
     # encoder tick deltas (from the STM32 firmware odom packet) into
     # metres. MUST match the firmware constant TICKS_PER_M in
@@ -58,10 +67,14 @@ mowgli:
     mag_yaw_variance: 0.0027
     # Dock seeding (consumed by dock_yaw_to_set_pose)
     dock_pose_yaw_sigma_rad: 0.035
-    # Informational only — circumference 2π·0.04475 = 0.281 m, so
-    # 300 ticks/m × 0.281 m/rev ≈ 84 ticks per revolution. Kept as a
-    # cross-check for future wheel-size changes.
-    ticks_per_revolution: 84
+    # Informational only — circumference 2π·0.1 = 0.628 m, so
+    # 300 ticks/m × 0.628 m/rev ≈ 188 ticks per revolution. Kept as a
+    # cross-check for future wheel-size changes. NOTE: ticks_per_meter=300
+    # is empirically ~correct (wheel-integrated distance ≈ RTK distance on a
+    # 2026-06-08 transit); a dedicated straight-line calibration drive will
+    # refine it. It is NOT 1600 (that is v2's firmware tick convention; this
+    # firmware reports a different raw count).
+    ticks_per_revolution: 188
 
     # Front casters
     caster_radius: 0.03
@@ -83,15 +96,18 @@ mowgli:
     lidar_z: 0.22              # vertical offset (m)
     lidar_yaw: 3.1408          # heading offset (rad) — ~π for 180°-rotated mount
 
-    # IMU mounting (relative to base_link = wheel axis centre)
-    imu_x: 0.18                # forward offset from wheel axis (m)
+    # IMU mounting (relative to base_link = wheel axis centre).
+    # Measured: IMU sits over the rotation centre (mid drive-wheel axle),
+    # ~0.2 m above ground. base_link is at the axle (0.1 m above ground for
+    # 0.2 m wheels), so vertical offset = 0.2 − 0.1 = 0.1 m.
+    imu_x: 0.0                 # at the rotation centre / wheel axis (m)
     imu_y: 0.0                 # lateral offset (m)
-    imu_z: 0.095               # vertical offset (m) — base_height / 2
+    imu_z: 0.1                 # 0.2 m above ground − 0.1 m axle height
     imu_yaw: 0.0               # heading offset (rad) — if IMU is rotated
 
     # GPS antenna mounting (relative to base_link = wheel axis centre)
-    # From OpenMower: OM_ANTENNA_OFFSET_X=0.3 (antenna on front top cover)
-    gps_x: 0.3                 # forward offset from wheel axis (m)
+    # Measured on this robot: antenna ~0.32 m forward of the wheel axis.
+    gps_x: 0.32                # forward offset from wheel axis (m)
     gps_y: 0.0                 # lateral offset (m)
     gps_z: 0.20                # vertical offset (m) — top of chassis + antenna
 
