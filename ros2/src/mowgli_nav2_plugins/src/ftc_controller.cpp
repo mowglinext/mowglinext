@@ -152,6 +152,9 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.ki_ang_max = declare_double("ki_ang_max", 10.0);
   config_.kd_ang = declare_double("kd_ang", 0.0);
 
+  // Derivative low-pass time constant (s); 0 = raw derivative (prior behaviour).
+  config_.derivative_filter_tau = declare_double("derivative_filter_tau", 0.0);
+
   // Robot limits
   config_.max_cmd_vel_speed = declare_double("max_cmd_vel_speed", 2.0);
   config_.max_cmd_vel_ang = declare_double("max_cmd_vel_ang", 2.0);
@@ -285,6 +288,10 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     else if (key == "kd_ang")
     {
       config_.kd_ang = p.as_double();
+    }
+    else if (key == "derivative_filter_tau")
+    {
+      config_.derivative_filter_tau = p.as_double();
     }
     else if (key == "max_cmd_vel_speed")
     {
@@ -458,6 +465,9 @@ void FTCController::setPlan(const nav_msgs::msg::Path& path)
   last_lat_error_ = 0.0;
   last_lon_error_ = 0.0;
   last_angle_error_ = 0.0;
+  d_lat_filt_ = 0.0;
+  d_lon_filt_ = 0.0;
+  d_angle_filt_ = 0.0;
 
   nav_msgs::msg::Path pub_path;
 
@@ -660,8 +670,7 @@ FTCController::PlannerState FTCController::update_planner_state()
       // overshoots and oscillates during PRE_ROTATE — staying gated on
       // it would keep PRE_ROTATE alive forever even after the robot is
       // physically aligned with the carrot.
-      const double angle_wrapped =
-          std::atan2(std::sin(angle_error_), std::cos(angle_error_));
+      const double angle_wrapped = std::atan2(std::sin(angle_error_), std::cos(angle_error_));
       if (std::abs(angle_wrapped) * (180.0 / M_PI) < config_.max_goal_angle_error)
       {
         RCLCPP_INFO(logger_, "FTCController: PRE_ROTATE done, starting FOLLOWING.");
@@ -748,11 +757,11 @@ FTCController::PlannerState FTCController::update_planner_state()
         // → next strip). Without it the FTC would silently sit in FINISHED
         // emitting zero velocity, leaving the action open while the goal
         // checker waits for a tolerance the robot will never meet.
-        RCLCPP_WARN(
-            logger_,
-            "FTCController: timeout in WAITING_FOR_GOAL_APPROACH (dist=%.3fm > "
-            "max_goal_distance_error=%.3fm); aborting strip.",
-            distance, config_.max_goal_distance_error);
+        RCLCPP_WARN(logger_,
+                    "FTCController: timeout in WAITING_FOR_GOAL_APPROACH (dist=%.3fm > "
+                    "max_goal_distance_error=%.3fm); aborting strip.",
+                    distance,
+                    config_.max_goal_distance_error);
         is_crashed_ = true;
         return PlannerState::FINISHED;
       }
@@ -1040,14 +1049,32 @@ void FTCController::calculate_velocity_commands(double dt,
   i_lat_error_ = std::clamp(i_lat_error_, -config_.ki_lat_max, config_.ki_lat_max);
   i_angle_error_ = std::clamp(i_angle_error_, -config_.ki_ang_max, config_.ki_ang_max);
 
-  // Derivative terms.
-  const double d_lat = (lat_error_ - last_lat_error_) / dt;
-  const double d_lon = (lon_error_ - last_lon_error_) / dt;
-  const double d_angle = (angle_error_ - last_angle_error_) / dt;
+  // Derivative terms (raw backward finite difference).
+  double d_lat = (lat_error_ - last_lat_error_) / dt;
+  double d_lon = (lon_error_ - last_lon_error_) / dt;
+  double d_angle = (angle_error_ - last_angle_error_) / dt;
 
   last_lat_error_ = lat_error_;
   last_lon_error_ = lon_error_;
   last_angle_error_ = angle_error_;
+
+  // Optional first-order low-pass on the derivative (derivative-on-measurement
+  // filtering). The raw finite difference amplifies the high-frequency jitter
+  // in the 10 Hz fused-pose feedback; kd_lat then pumps it into the angular
+  // command as a ~1.5 Hz steering limit cycle ("hunting") on transit. Filtering
+  // the derivative lets kd_lat stay high enough for tight cross-track tracking
+  // without the chatter. tau = 0 keeps the raw derivative (prior behaviour);
+  // alpha = dt / (tau + dt) is the standard discrete one-pole coefficient.
+  if (config_.derivative_filter_tau > 0.0)
+  {
+    const double alpha = dt / (config_.derivative_filter_tau + dt);
+    d_lat_filt_ += alpha * (d_lat - d_lat_filt_);
+    d_lon_filt_ += alpha * (d_lon - d_lon_filt_);
+    d_angle_filt_ += alpha * (d_angle - d_angle_filt_);
+    d_lat = d_lat_filt_;
+    d_lon = d_lon_filt_;
+    d_angle = d_angle_filt_;
+  }
 
   // ── Linear velocity (FOLLOWING only) ──────────────────────────────────────
 
@@ -1099,8 +1126,7 @@ void FTCController::calculate_velocity_commands(double dt,
     // setPlan exceeds π: kp_ang × (-3π) saturates angular cmd at the
     // wrong sign, so the robot keeps spinning the wrong way and the
     // accumulator drifts further away from zero each tick.
-    const double angle_for_pid =
-        std::atan2(std::sin(angle_error_), std::cos(angle_error_));
+    const double angle_for_pid = std::atan2(std::sin(angle_error_), std::cos(angle_error_));
     double ang_speed =
         angle_for_pid * config_.kp_ang + i_angle_error_ * config_.ki_ang + d_angle * config_.kd_ang;
 
@@ -1234,15 +1260,16 @@ bool FTCController::waitOrThrowForObstacle(const std::string& reason)
     obstacle_wait_start_ = clock_->now();
     RCLCPP_INFO(logger_,
                 "FTCController: %s — holding zero velocity up to %.1fs for the costmap to clear.",
-                reason.c_str(), config_.obstacle_wait_timeout_s);
+                reason.c_str(),
+                config_.obstacle_wait_timeout_s);
   }
   const double elapsed = (clock_->now() - obstacle_wait_start_.value()).seconds();
   if (elapsed > config_.obstacle_wait_timeout_s)
   {
     is_crashed_ = true;
-    throw nav2_core::ControllerException(
-        std::string("FTCController: ") + reason + ", aborting strip after " +
-        std::to_string(static_cast<int>(elapsed)) + "s wait.");
+    throw nav2_core::ControllerException(std::string("FTCController: ") + reason +
+                                         ", aborting strip after " +
+                                         std::to_string(static_cast<int>(elapsed)) + "s wait.");
   }
   obstacle_waiting_ = true;
   return true;
@@ -1256,8 +1283,8 @@ void FTCController::updateLateralDeviation(double dt)
     return;
   }
 
-  const std::size_t start_idx = std::min(static_cast<std::size_t>(current_index_),
-                                         global_plan_.size() - 1);
+  const std::size_t start_idx =
+      std::min(static_cast<std::size_t>(current_index_), global_plan_.size() - 1);
 
   // The decision to STOP avoiding must be gated on whether the NOMINAL path
   // (zero deviation) is clear within the lookahead — i.e. has the robot
@@ -1294,19 +1321,21 @@ void FTCController::updateLateralDeviation(double dt)
     // reduce it toward the path here, which is what stopped the flap.
     if (!is_avoiding_)
     {
-      const int obs_idx = ObstacleDeviation::findFirstObstacleIndex(
-          *costmap_map_, global_plan_, start_idx, config_.obstacle_lookahead);
+      const int obs_idx = ObstacleDeviation::findFirstObstacleIndex(*costmap_map_,
+                                                                    global_plan_,
+                                                                    start_idx,
+                                                                    config_.obstacle_lookahead);
       if (obs_idx < 0)
       {
         // Footprint collision but no path-pose hit (e.g. inflated cell next
         // to robot from a transient scan return) — nothing to deviate around.
         return;
       }
-      target_lateral_deviation_ = ObstacleDeviation::chooseDeviationSide(
-          *costmap_map_,
-          global_plan_[static_cast<std::size_t>(obs_idx)],
-          config_.max_lateral_deviation,
-          config_.deviation_step);
+      target_lateral_deviation_ =
+          ObstacleDeviation::chooseDeviationSide(*costmap_map_,
+                                                 global_plan_[static_cast<std::size_t>(obs_idx)],
+                                                 config_.max_lateral_deviation,
+                                                 config_.deviation_step);
       if (target_lateral_deviation_ == 0.0)
       {
         // Both sides blocked at the obstacle pose. Before bailing, hold a
