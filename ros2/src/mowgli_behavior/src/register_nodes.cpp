@@ -69,6 +69,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<CalibrateHeadingFromUndock>("CalibrateHeadingFromUndock");
   factory.registerNodeType<SeedYawFromMotion>("SeedYawFromMotion");
   factory.registerNodeType<DockRobot>("DockRobot");
+  factory.registerNodeType<DockApproach>("DockApproach");
   factory.registerNodeType<UndockRobot>("UndockRobot");
   factory.registerNodeType<RecordResumeUndockFailure>("RecordResumeUndockFailure");
   factory.registerNodeType<ResetEmergency>("ResetEmergency");

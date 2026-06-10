@@ -212,6 +212,12 @@ def generate_launch_description() -> LaunchDescription:
             # references in main_tree.xml. See issue #191.
             {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
             {"undock_distance": float(robot_params.get("undock_distance", 1.0))},
+            # Dock pose scalars (mowgli_robot.yaml single source of truth) so
+            # DockApproach can plan the staging pose + dock-aligned approach
+            # tail. Same values map_server / hardware_bridge already receive.
+            {"dock_pose_x": float(robot_params.get("dock_pose_x", 0.0))},
+            {"dock_pose_y": float(robot_params.get("dock_pose_y", 0.0))},
+            {"dock_pose_yaw": float(robot_params.get("dock_pose_yaw", 0.0))},
             # transit_speed / mowing_speed flow into SetNavMode, which sets
             # them on the live controllers (FollowPath.desired_linear_vel for
             # the RPP transit controller, FollowCoveragePath.speed_fast for the
