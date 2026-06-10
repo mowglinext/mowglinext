@@ -117,11 +117,12 @@ controller_server:
       # radians(max_goal_angle_error) ≤ yaw, else the action hangs (see
       # test_followpath_goal_tolerance_tighter_than_checker).
       xy_goal_tolerance: 0.20
-      # 0.25 rad (≈14°). Tightened from the old 0.5/1.0 rad band-aids but kept
-      # loose enough that the coarse deadband-limited robot can settle without
-      # POST_ROTATE hunting in place at the goal (field 2026-06-09). Docking
-      # precision is handled separately by the dock approach, not this checker.
-      yaw_goal_tolerance: 0.25
+      # 0.30 rad (≈17°). Relaxed a bit from 0.25 (2026-06-10) so transit
+      # waypoints accept a looser heading and FTC stops POST_ROTATE-fighting the
+      # goal yaw; must stay ≥ FollowPath max_goal_angle_error (15° = 0.262 rad).
+      # Docking precision is handled separately by the dock approach, not this
+      # checker, so the small relax does not loosen the seat.
+      yaw_goal_tolerance: 0.30
 
     # Coverage strip endpoint validation.
     #
@@ -254,21 +255,21 @@ controller_server:
       # roughly halved straight-line cross-track (±0.30→±0.16 m, field 2026-06-09).
       # 2.0 gave no further gain and risks corner-cutting.
       max_follow_distance: 1.5
-      # Honor reverse segments the SmacPlannerHybrid (REEDS_SHEPP) planner may
-      # emit. v2 used forward_only:true with its own planner; here false avoids
-      # FTC stalling on a planned reverse arc. Flip to true if the planner is
-      # switched to DUBIN (forward-only).
-      forward_only: false
+      # forward_only:true now the Smac planner is DUBIN (forward-only): there are
+      # no planned reverse arcs for FTC to honor, the REEDS_SHEPP end-cusp is
+      # gone, and this matches v2's forward-only cascade. (Was false to honor
+      # REEDS_SHEPP reverse segments; flipped with the DUBIN switch 2026-06-10.)
+      forward_only: true
 
       # GOAL ACCEPTANCE — MUST stay ≤ the stopped_goal_checker tolerances
-      # (xy 0.20 m, yaw 0.25 rad) bound to this action, or FTC stops at its own
+      # (xy 0.20 m, yaw 0.30 rad) bound to this action, or FTC stops at its own
       # tolerance while the external checker waits and the action hangs.
       # max_goal_angle_error was 5°, which the coarse deadband-limited robot
       # cannot hit — POST_ROTATE hunted/spun in place at the goal (field
-      # 2026-06-09). 12° lets it settle. max_goal_distance_error 0.10 reaches
-      # the endpoint (0.25 stopped ~25 cm short, which the operator noticed).
+      # 2026-06-09). 12° let it settle; 15° (2026-06-10) relaxes waypoint yaw a
+      # bit more. max_goal_distance_error 0.10 reaches the endpoint.
       max_goal_distance_error: 0.10    # ≤ checker xy 0.20 m
-      max_goal_angle_error: 12.0       # deg (0.21 rad) ≤ checker yaw 0.25 rad
+      max_goal_angle_error: 15.0       # deg (0.262 rad) ≤ checker yaw 0.30 rad
       goal_timeout: 20.0
 
       # Local obstacle avoidance — complements the global Hybrid-A* plan. FTC
@@ -415,9 +416,12 @@ planner_server:
       max_on_approach_iterations: 1000
       max_planning_time: 3.5                # ARM budget (matches old 2D planner)
       # Parametric motion model — switch here:
-      #   "REEDS_SHEPP" (default): may insert reverse segments to reorient in
-      #                            tight spots; "DUBIN": forward-only arcs.
-      motion_model_for_search: "REEDS_SHEPP"
+      #   "REEDS_SHEPP": may insert reverse segments to reorient — caused a "short
+      #                  reverse leg toward the outside of the final turn" cusp at
+      #                  goals (field 2026-06-10) that left the robot off-pose.
+      #   "DUBIN" (current): forward-only arcs, no reverse cusp; pairs with
+      #                  FollowPath forward_only:true. Matches v2 (forward-only).
+      motion_model_for_search: "DUBIN"
       angle_quantization_bins: 72
       analytic_expansion_ratio: 3.5
       analytic_expansion_max_length: 3.0

@@ -98,9 +98,10 @@ controller_server:
       # Usually overridden at launch from mowgli_robot.yaml; static defaults
       # must satisfy FTC FollowPath tolerances ≤ these (see nav2_params.yaml).
       xy_goal_tolerance: 0.20
-      # 0.25 rad — loose enough the coarse robot settles without POST_ROTATE
-      # hunting (field 2026-06-09); see nav2_params.yaml.
-      yaw_goal_tolerance: 0.25
+      # 0.30 rad (was 0.25) — relaxed a bit (2026-06-10) so transit waypoints
+      # accept a looser heading; must stay ≥ FollowPath max_goal_angle_error
+      # (15° = 0.262 rad). Usually overridden at launch from mowgli_robot.yaml.
+      yaw_goal_tolerance: 0.30
 
     coverage_goal_checker:
       # PathProgressGoalChecker (mowgli plugin) — fires when the robot
@@ -157,12 +158,15 @@ controller_server:
       max_cmd_vel_speed: 0.30
       max_cmd_vel_ang: 1.0
       max_follow_distance: 1.5         # DOMINANT anti-weave lever (1.0→1.5 halved cross-track)
-      forward_only: false
+      # true now the Smac planner is DUBIN (forward-only) — no planned reverse
+      # arcs for FTC to honor, and matches v2's forward-only cascade.
+      forward_only: true
 
-      # MUST stay ≤ the stopped_goal_checker (xy 0.20, yaw 0.25 rad)
-      # — see nav2_params.yaml FollowPath. 12° avoids end-of-path yaw hunting.
+      # MUST stay ≤ the stopped_goal_checker (xy 0.20, yaw 0.30 rad)
+      # — see nav2_params.yaml FollowPath. 15° (was 12°) relaxes waypoint-yaw a
+      # bit so FTC stops POST_ROTATE-fighting the heading at transit goals.
       max_goal_distance_error: 0.10
-      max_goal_angle_error: 12.0
+      max_goal_angle_error: 15.0
       goal_timeout: 20.0
 
       # No obstacle_layer without LiDAR — disable obstacle handling entirely.
@@ -233,9 +237,13 @@ planner_server:
       max_on_approach_iterations: 1000
       max_planning_time: 3.5                # ARM budget (matches old 2D planner)
       # Parametric motion model — switch here:
-      #   "REEDS_SHEPP" (default): may insert reverse segments to reorient in
-      #                            tight spots; "DUBIN": forward-only arcs.
-      motion_model_for_search: "REEDS_SHEPP"
+      #   "REEDS_SHEPP": may insert reverse segments to reorient in tight spots —
+      #                  produced a "short reverse leg toward the outside of the
+      #                  final turn" cusp at goals (field 2026-06-10), which left
+      #                  the robot off-pose and tripped FollowPath aborts.
+      #   "DUBIN" (current): forward-only arcs, no reverse cusp. v2 was forward-
+      #                  only too. Pairs with FollowPath forward_only:true below.
+      motion_model_for_search: "DUBIN"
       angle_quantization_bins: 72
       analytic_expansion_ratio: 3.5
       analytic_expansion_max_length: 3.0
