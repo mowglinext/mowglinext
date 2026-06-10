@@ -147,6 +147,12 @@ controller_server:
       ki_ang: 0.0
       ki_ang_max: 62.0
       kd_ang: 0.1
+      # Low-pass the PID derivative to kill the ~1.5 Hz transit "hunting" the
+      # raw derivative + kd_lat=1.5 produced on noisy 10 Hz pose feedback.
+      # See nav2_params.yaml for the A/B rationale. This no-lidar config is the
+      # one actually loaded when lidar_enabled:false (the real robot), so the
+      # param MUST live here too. fc ≈ 0.8 Hz at 0.2 s. Validate on Smac paths.
+      derivative_filter_tau: 0.2
 
       max_cmd_vel_speed: 0.30
       max_cmd_vel_ang: 1.0
