@@ -124,9 +124,12 @@ const (
 	mowgliCapHorizontalAccuracy = 8
 	mowgliCapVerticalAccuracy   = 16
 	mowgliCapHeading            = 32
+	mowgliCapHeadingAccuracy    = 64
 	mowgliCapSatellitesUsed     = 128
 	mowgliCapSatellitesVisible  = 256
 	mowgliCapSatellitesTracked  = 512
+	mowgliCapDiffCorrections    = 1024
+	mowgliCapCorrectionsActive  = 2048
 	mowgliCapCorrectionAge      = 4096
 	mowgliCapMeanCn0            = 8192
 	mowgliCapMaxCn0             = 16384
@@ -268,7 +271,12 @@ func adaptGnssStatus(raw []byte) ([]byte, error) {
 	}
 
 	if _, ok := envelope["header"]; ok {
-		return raw, nil
+		var status map[string]interface{}
+		if err := json.Unmarshal(raw, &status); err != nil {
+			return nil, err
+		}
+		normalizePublicGnssStatus(status, envelope)
+		return json.Marshal(status)
 	}
 	if _, ok := envelope["stamp"]; !ok {
 		return raw, nil
@@ -312,6 +320,35 @@ func adaptGnssStatus(raw []byte) ([]byte, error) {
 	}
 
 	return json.Marshal(adapted)
+}
+
+func normalizePublicGnssStatus(status map[string]interface{}, envelope map[string]json.RawMessage) {
+	if status == nil {
+		return
+	}
+
+	capabilityFlags := uint32(0)
+	if raw, ok := status["capability_flags"].(float64); ok && raw >= 0 {
+		capabilityFlags = uint32(raw)
+	}
+	valueFlags := uint32(0)
+	if raw, ok := status["value_flags"].(float64); ok && raw >= 0 {
+		valueFlags = uint32(raw)
+	}
+
+	// /gps/status is the public contract. When these booleans are present in the
+	// sample, false is a real value and must not be downgraded to "unavailable"
+	// just because an upstream adapter forgot to advertise the capability bits.
+	if _, ok := envelope["differential_corrections"]; ok {
+		capabilityFlags |= mowgliCapDiffCorrections
+		valueFlags |= mowgliCapDiffCorrections
+	}
+	if _, ok := envelope["corrections_active"]; ok {
+		capabilityFlags |= mowgliCapCorrectionsActive
+		valueFlags |= mowgliCapCorrectionsActive
+	}
+	status["capability_flags"] = capabilityFlags
+	status["value_flags"] = valueFlags
 }
 
 func mapUniversalGnssFixType(fixType uint8) uint8 {

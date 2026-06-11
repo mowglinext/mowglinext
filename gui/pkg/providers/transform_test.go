@@ -38,6 +38,8 @@ func TestAdaptGnssStatusPassesThroughLegacyPayload(t *testing.T) {
 		"backend":"ublox",
 		"fix_type":3,
 		"fix_valid":true,
+		"differential_corrections":false,
+		"corrections_active":false,
 		"quality_percent":100,
 		"capability_flags":10,
 		"value_flags":8
@@ -45,7 +47,15 @@ func TestAdaptGnssStatusPassesThroughLegacyPayload(t *testing.T) {
 
 	adapted, err := adaptGnssStatus(raw)
 	require.NoError(t, err)
-	assert.JSONEq(t, string(raw), string(adapted))
+
+	var status mowgli.GnssStatus
+	require.NoError(t, json.Unmarshal(adapted, &status))
+	assert.Equal(t, "ublox", status.Backend)
+	assert.True(t, status.FixValid)
+	assert.False(t, status.DifferentialCorrections)
+	assert.False(t, status.CorrectionsActive)
+	assert.Equal(t, uint32(10|mowgliCapDiffCorrections|mowgliCapCorrectionsActive), status.CapabilityFlags)
+	assert.Equal(t, uint32(8|mowgliCapDiffCorrections|mowgliCapCorrectionsActive), status.ValueFlags)
 }
 
 func TestAdaptGnssStatusMapsUniversalPayloadToMowgliShape(t *testing.T) {

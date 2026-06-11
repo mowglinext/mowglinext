@@ -49,6 +49,7 @@ import {useIsMobile} from "../hooks/useIsMobile";
 import {
     deriveGpsStatus,
     gnssReceiverLabel,
+    gnssRtkModeLabel,
     hasGnssCapability,
     readGnssBooleanState,
     readGnssNumber,
@@ -145,6 +146,7 @@ export const DiagnosticsPage = () => {
     const gpsFix = useMemo(() => deriveGpsStatus(gnssStatus), [gnssStatus]);
     const gpsFixType = gpsFix.label;
     const gpsReceiver = gnssReceiverLabel(gnssStatus);
+    const gpsRtkMode = gnssRtkModeLabel(gnssStatus);
 
     const orientation = pose.pose?.pose?.orientation;
     const qx = orientation?.x ?? 0;
@@ -532,7 +534,7 @@ export const DiagnosticsPage = () => {
                         </Col>
                         <Col span={12}>
                             <Statistic
-                                title="Accuracy (m)"
+                                title="Horizontal accuracy (m)"
                                 value={gpsAccuracy}
                                 precision={3}
                                 valueStyle={
@@ -547,7 +549,8 @@ export const DiagnosticsPage = () => {
                             <Descriptions size="small" column={2}>
                                 <Descriptions.Item label="Receiver">{gpsReceiver}</Descriptions.Item>
                                 <Descriptions.Item label="Backend">{gnssStatus.backend || "unknown"}</Descriptions.Item>
-                                <Descriptions.Item label="Differential fix">{formatOptionalBool(differentialState)}</Descriptions.Item>
+                                <Descriptions.Item label="RTK mode">{gpsRtkMode ?? "Unknown"}</Descriptions.Item>
+                                <Descriptions.Item label="Differential corrections">{formatOptionalBool(differentialState)}</Descriptions.Item>
                                 <Descriptions.Item label="Corrections active">{formatOptionalBool(correctionsState)}</Descriptions.Item>
                                 {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_DUAL_ANTENNA_STATUS) && (
                                     <Descriptions.Item label="Dual-antenna heading">

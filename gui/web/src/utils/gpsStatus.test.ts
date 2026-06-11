@@ -3,6 +3,7 @@ import {GnssStatusConstants, type GnssStatus} from '../types/ros.ts';
 import {
     deriveGpsStatus,
     deriveGnssStatusFromDiagnostics,
+    gnssRtkModeLabel,
     gnssReceiverLabel,
     hasTypedGnssStatusSample,
     hasGnssCapability,
@@ -23,6 +24,32 @@ describe('deriveGpsStatus', () => {
 
     it('maps plain GPS fix status', () => {
         const status: GnssStatus = {fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX};
+        expect(deriveGpsStatus(status)).toEqual({
+            fixType: 'GPS_FIX',
+            label: 'GPS fix',
+            percent: 25,
+        });
+    });
+
+    it('prefers fix_valid=false over stale fix_type values', () => {
+        const status: GnssStatus = {
+            fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX,
+            fix_valid: false,
+        };
+
+        expect(deriveGpsStatus(status)).toEqual({
+            fixType: 'NO_FIX',
+            label: 'No GPS',
+            percent: 0,
+        });
+    });
+
+    it('does not show no-fix when fix_valid=true but fix_type is missing or stale', () => {
+        const status: GnssStatus = {
+            fix_type: GnssStatusConstants.FIX_TYPE_NO_FIX,
+            fix_valid: true,
+        };
+
         expect(deriveGpsStatus(status)).toEqual({
             fixType: 'GPS_FIX',
             label: 'GPS fix',
@@ -116,9 +143,16 @@ describe('deriveGpsStatus', () => {
         )).toBe('unsupported');
     });
 
+    it('maps RTK mode labels from the public enum values', () => {
+        expect(gnssRtkModeLabel({rtk_mode: GnssStatusConstants.RTK_MODE_NONE})).toBe('None');
+        expect(gnssRtkModeLabel({rtk_mode: GnssStatusConstants.RTK_MODE_FLOAT})).toBe('Float');
+        expect(gnssRtkModeLabel({rtk_mode: GnssStatusConstants.RTK_MODE_FIXED})).toBe('Fixed');
+        expect(gnssRtkModeLabel({rtk_mode: GnssStatusConstants.RTK_MODE_UNKNOWN})).toBe('Unknown');
+    });
+
     it('formats user-facing receiver labels without leaking backend ids', () => {
-        expect(gnssReceiverLabel({backend: 'unicore', receiver_vendor: 'Unicore'})).toBe('Unicore GNSS');
-        expect(gnssReceiverLabel({backend: 'ublox', receiver_vendor: 'u-blox'})).toBe('u-blox GNSS');
+        expect(gnssReceiverLabel({backend: 'unicore', receiver_vendor: 'Unicore'})).toBe('Unicore');
+        expect(gnssReceiverLabel({backend: 'ublox', receiver_vendor: 'u-blox'})).toBe('u-blox');
         expect(gnssReceiverLabel({receiver_model: 'F9P'})).toBe('F9P');
         expect(gnssReceiverLabel({backend: 'nmea'})).toBe('GNSS');
     });

@@ -9,6 +9,8 @@ export interface GpsStatus {
     percent: number;
 }
 
+export type GnssRtkModeLabel = "Unknown" | "None" | "Float" | "Fixed";
+
 export interface DiagnosticStatusLike {
     name?: string;
     hardware_id?: string;
@@ -39,11 +41,35 @@ function fromFixType(fixType: number | undefined | null): GpsStatus | null {
 
 // Source of truth: GnssStatus from /gps/status.
 export function deriveGpsStatus(gnssStatus: GnssStatus | undefined | null): GpsStatus {
+    if (gnssStatus?.fix_valid === false) {
+        return {fixType: "NO_FIX", label: "No GPS", percent: 0};
+    }
+
     const fromTypedStatus = fromFixType(gnssStatus?.fix_type);
-    if (fromTypedStatus) {
+    if (fromTypedStatus && (fromTypedStatus.fixType !== "NO_FIX" || gnssStatus?.fix_valid !== true)) {
         return fromTypedStatus;
     }
+
+    if (gnssStatus?.fix_valid === true) {
+        return {fixType: "GPS_FIX", label: "GPS fix", percent: 25};
+    }
+
     return {fixType: "NO_FIX", label: "No GPS", percent: 0};
+}
+
+export function gnssRtkModeLabel(gnssStatus: GnssStatus | undefined | null): GnssRtkModeLabel | undefined {
+    switch (gnssStatus?.rtk_mode) {
+        case GnssStatusConstants.RTK_MODE_NONE:
+            return "None";
+        case GnssStatusConstants.RTK_MODE_FLOAT:
+            return "Float";
+        case GnssStatusConstants.RTK_MODE_FIXED:
+            return "Fixed";
+        case GnssStatusConstants.RTK_MODE_UNKNOWN:
+            return "Unknown";
+        default:
+            return undefined;
+    }
 }
 
 export function hasTypedGnssStatusSample(gnssStatus: GnssStatus | undefined | null): boolean {
@@ -176,7 +202,7 @@ export function gnssReceiverLabel(gnssStatus: GnssStatus | undefined | null): st
         return model;
     }
     if (vendor) {
-        return `${vendor} GNSS`;
+        return vendor;
     }
 
     return "GNSS";
