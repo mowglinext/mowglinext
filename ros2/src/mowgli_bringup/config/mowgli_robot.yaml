@@ -142,10 +142,6 @@ mowgli:
     gnss_receiver_family: "auto"
     gnss_serial_device: "/dev/ttyAMA4"
     gnss_serial_baud: 921600
-    # Legacy compatibility mirrors for older nodes / tooling.
-    gps_baudrate: 921600
-    gps_port: "/dev/gps"
-    gps_protocol: "UBX"
     datum_lat: 0.0             # map origin latitude  (set per-site)
     datum_lon: 0.0             # map origin longitude (set per-site)
     gps_wait_after_undock_sec: 10.0   # wait for RTK fix after undocking

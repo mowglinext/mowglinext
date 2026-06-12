@@ -11,7 +11,7 @@ import launch_testing
 import launch_testing.actions
 import pytest
 import rclpy
-from mowgli_interfaces.msg import AbsolutePose, GnssStatus
+from mowgli_interfaces.msg import AbsolutePose
 from rclpy.executors import SingleThreadedExecutor
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 
@@ -47,9 +47,6 @@ def generate_test_description():
                 "use_sim_time": False,
                 "datum_lat": 48.137154,
                 "datum_lon": 11.576124,
-                "publish_gnss_status": False,
-                "gps_protocol": "UBX",
-                "gnss_backend": "ublox",
             }
         ],
     )
@@ -92,7 +89,7 @@ class TestNavSatUniversalStatus(unittest.TestCase):
                 return
         self.fail(message)
 
-    def test_local_status_path_is_disabled_but_pose_outputs_remain(self) -> None:
+    def test_pose_outputs_remain_without_local_gnss_status_path(self) -> None:
         self._spin_until(
             lambda: self.node.count_publishers("/gps/absolute_pose") == 1
             and self.node.count_publishers("/gps/pose_cov") == 1,
@@ -104,22 +101,14 @@ class TestNavSatUniversalStatus(unittest.TestCase):
 
     def test_fix_still_updates_absolute_pose_without_local_status_publish(self) -> None:
         absolute_pose = []
-        gnss_status = []
         pose_sub = self.node.create_subscription(
             AbsolutePose,
             "/gps/absolute_pose",
             lambda msg: absolute_pose.append(msg),
             10,
         )
-        status_sub = self.node.create_subscription(
-            GnssStatus,
-            "/gps/status",
-            lambda msg: gnss_status.append(msg),
-            10,
-        )
         fix_pub = self.node.create_publisher(NavSatFix, "/gps/fix", 10)
         self.addCleanup(self.node.destroy_subscription, pose_sub)
-        self.addCleanup(self.node.destroy_subscription, status_sub)
         self.addCleanup(self.node.destroy_publisher, fix_pub)
 
         self._spin_until(
@@ -136,7 +125,6 @@ class TestNavSatUniversalStatus(unittest.TestCase):
             message="navsat node stopped publishing /gps/absolute_pose in universal mode",
         )
         self._spin_for(1.0)
-        self.assertEqual(len(gnss_status), 0)
         self.assertEqual(self.node.count_publishers("/gps/status"), 0)
 
 

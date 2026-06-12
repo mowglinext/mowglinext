@@ -25,7 +25,7 @@ Brings up all subsystems:
   3. Behavior tree node      — mowgli_behavior
   4. Map server              — mowgli_map
   5. Wheel odometry          — mowgli_localization
-  6. NavSat converter        — mowgli_localization (/gps/absolute_pose, optional /gps/status, /gps/pose_cov)
+  6. NavSat converter        — mowgli_localization (/gps/absolute_pose, /gps/pose_cov)
   7. Localization monitor    — mowgli_localization
   8. Diagnostics             — mowgli_monitoring
   9. MQTT bridge (optional)  — mowgli_monitoring
@@ -45,10 +45,6 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-
-
-def _local_gnss_status_enabled(status_source: str) -> bool:
-    return False
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -272,16 +268,13 @@ def generate_launch_description() -> LaunchDescription:
     # publisher for /wheel_odom. Keep the source in the package for now
     # (disabled) and rely on hardware_bridge alone.
     # ------------------------------------------------------------------
-    # 6a. NavSat adapter for legacy AbsolutePose + optional typed GNSS status
+    # 6a. NavSat adapter for legacy AbsolutePose-compatible consumers.
     # navsat_transform_node takes /gps/fix directly for the EKF pipeline;
     # this node keeps /gps/absolute_pose for legacy consumers and emits
-    # /gps/pose_cov for ekf_map_node fusion. /gps/status stays disabled
-    # here because the external GNSS sidecar owns the typed status path.
+    # /gps/pose_cov for ekf_map_node fusion. Universal GNSS owns /gps/status.
     # ------------------------------------------------------------------
     datum_lat = float(robot_params.get("datum_lat", 0.0))
     datum_lon = float(robot_params.get("datum_lon", 0.0))
-    gnss_backend = os.environ.get("GNSS_BACKEND", "gps")
-    gps_protocol = os.environ.get("GPS_PROTOCOL", "UBX")
     navsat_converter_node = Node(
         package="mowgli_localization",
         executable="navsat_to_absolute_pose_node",
@@ -291,9 +284,6 @@ def generate_launch_description() -> LaunchDescription:
             {
                 "datum_lat": datum_lat,
                 "datum_lon": datum_lon,
-                "gnss_backend": gnss_backend,
-                "gps_protocol": gps_protocol,
-                "publish_gnss_status": False,
             },
             {"use_sim_time": use_sim_time},
         ],

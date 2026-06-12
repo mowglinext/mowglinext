@@ -625,12 +625,10 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # gps_link → gps static alias.
     # ------------------------------------------------------------------
-    # Historical: navsat_transform_node used to look up a TF from
-    # base_footprint to the NavSatFix header frame. Our URDF calls
-    # that frame gps_link; the ublox_dgnss driver publishes frame_id=gps.
-    # navsat_transform was removed 2026-04-26, but the alias is still
-    # cheap insurance for any third-party tool that walks the frame
-    # tree from gps.
+    # Historical: some GNSS producers publish NavSatFix in frame_id=gps while
+    # the URDF names the antenna frame gps_link. navsat_transform was removed
+    # 2026-04-26, but keeping the alias is still cheap insurance for third-
+    # party tools that walk the frame tree from gps.
     static_gps_link_alias = Node(
         package="tf2_ros",
         executable="static_transform_publisher",

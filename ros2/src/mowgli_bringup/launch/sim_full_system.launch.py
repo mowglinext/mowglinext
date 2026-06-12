@@ -56,10 +56,6 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def _local_gnss_status_enabled(status_source: str) -> bool:
-    return False
-
-
 def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # Package directories
@@ -348,7 +344,6 @@ def generate_launch_description() -> LaunchDescription:
                 "use_sim_time": True,
                 "datum_lat": 48.137154,
                 "datum_lon": 11.576124,
-                "publish_gnss_status": False,
             },
         ],
     )

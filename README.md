@@ -23,12 +23,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cedbossneo/mowglinext/stargazers">
-    <img src="https://img.shields.io/github/stars/cedbossneo/mowglinext?style=social" alt="Stars">
-  </a>
-  <a href="https://github.com/cedbossneo/mowglinext/network/members">
-    <img src="https://img.shields.io/github/forks/cedbossneo/mowglinext?style=social" alt="Forks">
-  </a>
   <img src="https://img.shields.io/badge/stability-beta-orange" alt="Beta">
   <img src="https://img.shields.io/badge/license-GPLv3%20%2B%20Commercial-green" alt="License">
 

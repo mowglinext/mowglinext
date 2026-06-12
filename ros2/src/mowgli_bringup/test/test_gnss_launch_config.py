@@ -18,6 +18,11 @@ def _load_module(filename: str, module_name: str):
     return module
 
 
+def _read_launch_source(filename: str) -> str:
+    here = Path(__file__).resolve().parent
+    return (here.parent / "launch" / filename).read_text()
+
+
 def test_full_system_show_args_no_longer_exposes_internal_universal_toggle() -> None:
     launch_module = _load_module("full_system.launch.py", "full_system_launch_args")
     launch_description = launch_module.generate_launch_description()
@@ -44,15 +49,13 @@ def test_full_system_no_longer_includes_internal_universal_launch() -> None:
     assert all(not location.endswith("universal_gnss.launch.py") for location in included_locations)
 
 
-def test_full_system_disables_local_status_when_universal_selected() -> None:
-    launch_module = _load_module("full_system.launch.py", "full_system_launch")
-    assert launch_module._local_gnss_status_enabled("mowgli_local") is False
-    assert launch_module._local_gnss_status_enabled("universal") is False
-    assert launch_module._local_gnss_status_enabled("external") is False
-    assert launch_module._local_gnss_status_enabled("off") is False
+def test_full_system_no_longer_passes_legacy_gnss_status_params() -> None:
+    launch_source = _read_launch_source("full_system.launch.py")
+    assert "publish_" "gnss_status" not in launch_source
+    assert "gnss_" "backend" not in launch_source
+    assert "gps_" "protocol" not in launch_source
 
 
-def test_sim_full_system_matches_runtime_status_switch() -> None:
-    launch_module = _load_module("sim_full_system.launch.py", "sim_full_system_launch")
-    assert launch_module._local_gnss_status_enabled("gps") is False
-    assert launch_module._local_gnss_status_enabled("universal") is False
+def test_sim_full_system_no_longer_passes_legacy_gnss_status_params() -> None:
+    launch_source = _read_launch_source("sim_full_system.launch.py")
+    assert "publish_" "gnss_status" not in launch_source
