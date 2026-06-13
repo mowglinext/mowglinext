@@ -42,13 +42,25 @@ COPY ros2/src/external/universal-gnss/gnss_transport /ws/src/gnss_transport
 COPY ros2/src/external/universal-gnss/gnss_driver /ws/src/gnss_driver
 COPY ros2/src/external/universal-gnss/gnss_ntrip /ws/src/gnss_ntrip
 COPY ros2/src/external/universal-gnss/gnss_tools /ws/src/gnss_tools
+COPY ros2/src/external/universal-gnss/CMakeLists.txt /ws/gnss_tools_root/CMakeLists.txt
 
 WORKDIR /ws
 RUN . /opt/ros/kilted/setup.sh \
  && colcon build --merge-install \
       --packages-select mowgli_interfaces universal_gnss_ros2 \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -Wno-dev \
- && rm -rf /ws/build /ws/log /ws/src
+ && ln -s /ws/src/gnss_core /ws/gnss_tools_root/gnss_core \
+ && ln -s /ws/src/gnss_protocols /ws/gnss_tools_root/gnss_protocols \
+ && ln -s /ws/src/gnss_driver /ws/gnss_tools_root/gnss_driver \
+ && ln -s /ws/src/gnss_transport /ws/gnss_tools_root/gnss_transport \
+ && ln -s /ws/src/gnss_ntrip /ws/gnss_tools_root/gnss_ntrip \
+ && ln -s /ws/src/gnss_tools /ws/gnss_tools_root/gnss_tools \
+ && cmake -S /ws/gnss_tools_root -B /ws/gnss_tools_build \
+      -DBUILD_TESTING=OFF \
+      -DUNIVERSAL_GNSS_BUILD_ROS2=OFF \
+ && cmake --build /ws/gnss_tools_build -j"$(nproc)" \
+ && cmake --install /ws/gnss_tools_build --prefix /ws/install \
+ && rm -rf /ws/build /ws/log /ws/gnss_tools_build /ws/gnss_tools_root /ws/src
 
 FROM ros:kilted-ros-base
 
@@ -66,6 +78,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       ros-kilted-rtcm-msgs
 
 COPY --from=builder /ws/install /opt/gnss_sidecar
+
+ENV PATH="/opt/gnss_sidecar/bin:${PATH}"
 
 COPY sensors/gps/ros2_entrypoint.sh /ros2_entrypoint.sh
 COPY sensors/gps/start_gps.sh /start_gps.sh
