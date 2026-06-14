@@ -30,7 +30,33 @@ describe('deriveGpsStatus', () => {
             percent: 25,
         });
     });
+    it('prefers RTK fixed mode over plain GPS fix type', () => {
+        const status: GnssStatus = {
+            fix_valid: true,
+            fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX,
+            rtk_mode: GnssStatusConstants.RTK_MODE_FIXED,
+        };
 
+        expect(deriveGpsStatus(status)).toEqual({
+            fixType: 'RTK_FIX',
+            label: 'RTK fixed',
+            percent: 100,
+        });
+    });
+
+    it('prefers RTK float mode over plain GPS fix type', () => {
+        const status: GnssStatus = {
+            fix_valid: true,
+            fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX,
+            rtk_mode: GnssStatusConstants.RTK_MODE_FLOAT,
+        };
+
+        expect(deriveGpsStatus(status)).toEqual({
+            fixType: 'RTK_FLOAT',
+            label: 'RTK float',
+            percent: 50,
+        });
+    });
     it('prefers fix_valid=false over stale fix_type values', () => {
         const status: GnssStatus = {
             fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX,

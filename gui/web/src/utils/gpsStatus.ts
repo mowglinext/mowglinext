@@ -45,6 +45,14 @@ export function deriveGpsStatus(gnssStatus: GnssStatus | undefined | null): GpsS
         return {fixType: "NO_FIX", label: "No GPS", percent: 0};
     }
 
+    if (gnssStatus?.rtk_mode === GnssStatusConstants.RTK_MODE_FIXED) {
+        return {fixType: "RTK_FIX", label: "RTK fixed", percent: 100};
+    }
+
+    if (gnssStatus?.rtk_mode === GnssStatusConstants.RTK_MODE_FLOAT) {
+        return {fixType: "RTK_FLOAT", label: "RTK float", percent: 50};
+    }
+
     const fromTypedStatus = fromFixType(gnssStatus?.fix_type);
     if (fromTypedStatus && (fromTypedStatus.fixType !== "NO_FIX" || gnssStatus?.fix_valid !== true)) {
         return fromTypedStatus;
