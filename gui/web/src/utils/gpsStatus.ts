@@ -80,7 +80,7 @@ export function hasTypedGnssStatusSample(gnssStatus: GnssStatus | undefined | nu
         (gnssStatus?.receiver_model?.trim().length ?? 0) > 0;
 }
 
-function diagnosticsValueMap(entry: DiagnosticStatusLike | undefined): Record<string, string> {
+export function diagnosticsValueMap(entry: DiagnosticStatusLike | undefined): Record<string, string> {
     const out: Record<string, string> = {};
     for (const item of entry?.values ?? []) {
         const key = item.key?.trim();
@@ -92,7 +92,7 @@ function diagnosticsValueMap(entry: DiagnosticStatusLike | undefined): Record<st
     return out;
 }
 
-function parseDiagnosticBool(value: string | undefined): boolean | undefined {
+export function parseDiagnosticBool(value: string | undefined): boolean | undefined {
     if (!value) {
         return undefined;
     }
@@ -125,12 +125,18 @@ function navSatFixStatusToGnssFixType(fixStatus: number | undefined): number | u
     }
 }
 
+export function findDiagnosticStatusByName(
+    diagnostics: DiagnosticArrayLike | undefined | null,
+    name: string,
+): DiagnosticStatusLike | undefined {
+    return (diagnostics?.status ?? []).find((entry) => entry.name === name);
+}
+
 export function deriveGnssStatusFromDiagnostics(
     diagnostics: DiagnosticArrayLike | undefined | null,
 ): GnssStatus | undefined {
-    const entries = diagnostics?.status ?? [];
-    const summary = entries.find((entry) => entry.name === "universal_gnss/summary");
-    const gps = entries.find((entry) => entry.name === "GPS");
+    const summary = findDiagnosticStatusByName(diagnostics, "universal_gnss/summary");
+    const gps = findDiagnosticStatusByName(diagnostics, "GPS");
     if (!summary && !gps) {
         return undefined;
     }

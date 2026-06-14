@@ -363,6 +363,69 @@ func normalizeGnssReceiverFamily(value any) string {
 	}
 }
 
+func normalizeGnssProfile(value any) string {
+	switch strings.ToLower(strings.ReplaceAll(stringValue(value, "runtime_only"), "-", "_")) {
+	case "", "runtime_only", "balanced", "power_saving":
+		return "runtime_only"
+	case "high_precision", "survey", "rover_high_precision":
+		return "rover_high_precision"
+	case "debug", "rover_high_precision_debug":
+		return "rover_high_precision_debug"
+	case "factory_reset":
+		return "factory_reset"
+	default:
+		return "runtime_only"
+	}
+}
+
+func normalizeGnssSignalProfile(value any) string {
+	switch strings.ToLower(strings.ReplaceAll(stringValue(value, "balanced"), "-", "_")) {
+	case "", "balanced":
+		return "balanced"
+	case "minimal":
+		return "minimal"
+	case "ppp_optimized", "high_precision":
+		return "high_precision"
+	case "all_signals":
+		return "all_signals"
+	case "custom":
+		return "custom"
+	default:
+		return "balanced"
+	}
+}
+
+func normalizeGnssProfileRate(value any) string {
+	switch stringValue(value, "5") {
+	case "1", "5", "7", "10":
+		return stringValue(value, "5")
+	default:
+		return "5"
+	}
+}
+
+func normalizeGnssSignalGroup(value any) string {
+	fields := strings.Fields(stringValue(value, ""))
+	return strings.Join(fields, " ")
+}
+
+func firstValue(flat map[string]any, keys ...string) any {
+	for _, key := range keys {
+		value, ok := flat[key]
+		if !ok || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			if strings.TrimSpace(typed) == "" {
+				continue
+			}
+		}
+		return value
+	}
+	return nil
+}
+
 func gnssConnectionFromDevice(serialDevice string) string {
 	switch {
 	case strings.HasPrefix(serialDevice, "/dev/serial/by-id/"),
@@ -383,7 +446,10 @@ func gnssCompatFromFlat(flat map[string]any) map[string]string {
 	receiverFamily := normalizeGnssReceiverFamily(flat["gnss_receiver_family"])
 	serialDevice := stringValue(flat["gnss_serial_device"], "/dev/ttyAMA4")
 	serialBaud := stringValue(flat["gnss_serial_baud"], "921600")
-
+	configBaud := stringValue(firstValue(flat, "gnss_config_baud", "gnss_serial_baud"), serialBaud)
+	profile := normalizeGnssProfile(flat["gnss_profile"])
+	signalProfile := normalizeGnssSignalProfile(flat["gnss_signal_profile"])
+	profileRateHz := normalizeGnssProfileRate(firstValue(flat, "gnss_profile_rate_hz", "gnss_rate_hz"))
 	ntripMountpoint := stringValue(flat["ntrip_mountpoint"], "NEAR")
 	ntripGGAEnabled := "false"
 	if strings.HasPrefix(strings.ToLower(ntripMountpoint), "near") {
@@ -397,6 +463,10 @@ func gnssCompatFromFlat(flat map[string]any) map[string]string {
 		"GNSS_TRANSPORT":       "serial",
 		"GNSS_SERIAL_DEVICE":   serialDevice,
 		"GNSS_SERIAL_BAUD":     serialBaud,
+		"GNSS_CONFIG_BAUD":     configBaud,
+		"GNSS_PROFILE":         profile,
+		"GNSS_SIGNAL_PROFILE":  signalProfile,
+		"GNSS_PROFILE_RATE_HZ": profileRateHz,
 		"GNSS_BACKEND":         "universal",
 		"GNSS_NTRIP_ENABLED":   boolStringValue(flat["ntrip_enabled"], true),
 		"GNSS_NTRIP_HOST":      stringValue(flat["ntrip_host"], "crtk.net"),
@@ -420,6 +490,20 @@ func applyUniversalGnssCompatibility(flat map[string]any) map[string]string {
 	} else {
 		flat["gnss_serial_baud"] = compat["GNSS_SERIAL_BAUD"]
 	}
+	if configBaud, err := strconv.Atoi(compat["GNSS_CONFIG_BAUD"]); err == nil {
+		flat["gnss_config_baud"] = configBaud
+	} else {
+		flat["gnss_config_baud"] = compat["GNSS_CONFIG_BAUD"]
+	}
+	flat["gnss_profile"] = compat["GNSS_PROFILE"]
+	flat["gnss_signal_profile"] = compat["GNSS_SIGNAL_PROFILE"]
+	if rateHz, err := strconv.Atoi(compat["GNSS_PROFILE_RATE_HZ"]); err == nil {
+		flat["gnss_profile_rate_hz"] = rateHz
+	} else {
+		flat["gnss_profile_rate_hz"] = compat["GNSS_PROFILE_RATE_HZ"]
+	}
+	flat["gnss_signal_group"] = normalizeGnssSignalGroup(flat["gnss_signal_group"])
+	delete(flat, "gnss_rate_hz")
 
 	return compat
 }
@@ -880,6 +964,8 @@ func GetSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRout
 				}
 			}
 		}
+
+		applyUniversalGnssCompatibility(flat)
 
 		c.JSON(200, flat)
 	})

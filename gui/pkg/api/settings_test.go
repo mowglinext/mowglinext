@@ -429,6 +429,10 @@ func TestGetSettingsYAML_FileNotExist_ReturnsEmpty(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &result)
 	require.NoError(t, err)
 	assert.Equal(t, "auto", result["gnss_receiver_family"])
+	assert.Equal(t, "runtime_only", result["gnss_profile"])
+	assert.Equal(t, "balanced", result["gnss_signal_profile"])
+	assert.Equal(t, float64(5), result["gnss_profile_rate_hz"])
+	assert.Equal(t, float64(921600), result["gnss_config_baud"])
 }
 
 func TestGetSettingsYAML_NoConfigKey(t *testing.T) {
@@ -459,6 +463,12 @@ func TestPostSettingsYAML_NewFile(t *testing.T) {
 		"gnss_receiver_family":  "unicore",
 		"gnss_serial_device":    "/dev/serial/by-id/usb-gnss",
 		"gnss_serial_baud":      921600,
+		"gnss_config_baud":      460800,
+		"gnss_profile":          "rover_high_precision",
+		"gnss_signal_profile":   "all_signals",
+		"gnss_profile_rate_hz":  5,
+		"gnss_signal_group":     "3 6",
+		"gnss_unicore_pvt_algorithm": "MULTI",
 	}
 	body, _ := json.Marshal(payload)
 
@@ -476,6 +486,12 @@ func TestPostSettingsYAML_NewFile(t *testing.T) {
 	assert.Contains(t, string(content), "gnss_receiver_family: unicore")
 	assert.Contains(t, string(content), "gnss_serial_device: /dev/serial/by-id/usb-gnss")
 	assert.Contains(t, string(content), "gnss_serial_baud: 921600")
+	assert.Contains(t, string(content), "gnss_config_baud: 460800")
+	assert.Contains(t, string(content), "gnss_profile: rover_high_precision")
+	assert.Contains(t, string(content), "gnss_signal_profile: all_signals")
+	assert.Contains(t, string(content), "gnss_profile_rate_hz: 5")
+	assert.Contains(t, string(content), "gnss_signal_group: 3 6")
+	assert.Contains(t, string(content), "gnss_unicore_pvt_algorithm: MULTI")
 
 	envContent, err := os.ReadFile(envFile)
 	require.NoError(t, err)
@@ -484,8 +500,13 @@ func TestPostSettingsYAML_NewFile(t *testing.T) {
 	assert.Contains(t, string(envContent), "GNSS_RECEIVER_FAMILY=unicore")
 	assert.Contains(t, string(envContent), "GNSS_SERIAL_DEVICE=/dev/serial/by-id/usb-gnss")
 	assert.Contains(t, string(envContent), "GNSS_SERIAL_BAUD=921600")
+	assert.Contains(t, string(envContent), "GNSS_CONFIG_BAUD=460800")
+	assert.Contains(t, string(envContent), "GNSS_PROFILE=rover_high_precision")
+	assert.Contains(t, string(envContent), "GNSS_SIGNAL_PROFILE=all_signals")
+	assert.Contains(t, string(envContent), "GNSS_PROFILE_RATE_HZ=5")
 	assert.Contains(t, string(envContent), "GNSS_BACKEND=universal")
 	assert.Contains(t, string(envContent), "GNSS_NTRIP_ENABLED=true")
+	assert.NotContains(t, string(envContent), "GNSS_SIGNAL_GROUP=3 6")
 	assert.NotContains(t, string(envContent), legacyProtocol)
 	assert.NotContains(t, string(envContent), legacyByID)
 }
@@ -528,6 +549,34 @@ func TestPostSettingsYAML_MergesExisting(t *testing.T) {
 	assert.Contains(t, string(content), "gnss_receiver_family: nmea")
 	assert.Contains(t, string(content), "gnss_serial_device: /dev/serial/by-id/usb-test")
 	assert.Contains(t, string(content), "gnss_serial_baud: 115200")
+}
+
+func TestApplyUniversalGnssCompatibility_NormalizesProfileKeys(t *testing.T) {
+	flat := map[string]any{
+		"gnss_receiver_family":  "unicore",
+		"gnss_serial_device":    "/dev/ttyUSB0",
+		"gnss_serial_baud":      460800,
+		"gnss_profile":          "debug",
+		"gnss_signal_profile":   "ppp-optimized",
+		"gnss_rate_hz":          7,
+		"gnss_signal_group":     "  3   6  ",
+		"ntrip_enabled":         true,
+		"ntrip_mountpoint":      "NEAR",
+	}
+
+	compat := applyUniversalGnssCompatibility(flat)
+
+	assert.Equal(t, "rover_high_precision_debug", compat["GNSS_PROFILE"])
+	assert.Equal(t, "high_precision", compat["GNSS_SIGNAL_PROFILE"])
+	assert.Equal(t, "7", compat["GNSS_PROFILE_RATE_HZ"])
+	assert.Equal(t, "460800", compat["GNSS_CONFIG_BAUD"])
+	assert.Equal(t, "rover_high_precision_debug", flat["gnss_profile"])
+	assert.Equal(t, "high_precision", flat["gnss_signal_profile"])
+	assert.Equal(t, 7, flat["gnss_profile_rate_hz"])
+	assert.Equal(t, 460800, flat["gnss_config_baud"])
+	assert.Equal(t, "3 6", flat["gnss_signal_group"])
+	_, hasLegacyRate := flat["gnss_rate_hz"]
+	assert.False(t, hasLegacyRate)
 }
 
 func TestPostSettingsYAMLPurgesLegacyRuntimeEnvKeys(t *testing.T) {

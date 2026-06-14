@@ -47,6 +47,10 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         keys: [
             "datum_lat", "datum_lon", "datum_alt",
             "gnss_receiver_family", "gnss_serial_device", "gnss_serial_baud",
+            "gnss_config_baud", "gnss_profile", "gnss_signal_profile",
+            "gnss_profile_rate_hz", "gnss_signal_group",
+            "gnss_unicore_pvt_algorithm", "gnss_unicore_rtk_reliability",
+            "gnss_unicore_rtk_timeout_s", "gnss_unicore_dgps_timeout_s",
             "gps_wait_after_undock_sec",
             "gps_timeout_sec", "ntrip_enabled", "ntrip_host", "ntrip_port",
             "ntrip_user", "ntrip_password", "ntrip_mountpoint",
@@ -229,17 +233,26 @@ export const useSettingsManager = () => {
         [dirtyKeys]
     );
 
-    const save = useCallback(async () => {
+    const persistSettings = useCallback(async (options?: { forceGpsRestart?: boolean }) => {
         try {
             setSaving(true);
+            const forceGpsRestart = options?.forceGpsRestart ?? false;
             // Capture which keys were dirty BEFORE we mark them saved, so we
             // can decide whether GPS needs an auto-restart and whether we
             // need to refresh map_server's dock pose at runtime.
             const gpsDirty = dirtyKeysRequireGpsRestart(dirtyKeys);
+            const shouldRestartGps = forceGpsRestart || gpsDirty;
             const dockDirty =
                 dirtyKeys.has("dock_pose_x") ||
                 dirtyKeys.has("dock_pose_y") ||
                 dirtyKeys.has("dock_pose_yaw");
+            const hasDirtyChanges = dirtyKeys.size > 0;
+            if (!hasDirtyChanges && !shouldRestartGps) {
+                notification.info({
+                    message: "No changes to save",
+                });
+                return;
+            }
             // Only send keys the user actually changed. The backend merges
             // payload over the on-disk YAML, so omitting unchanged keys
             // preserves anything other processes may have written between
@@ -251,22 +264,28 @@ export const useSettingsManager = () => {
                     dirtyPayload[key] = localValues[key];
                 }
             }
-            const res = await guiApi.settings.yamlCreate(dirtyPayload);
-            if (res.error) throw new Error((res.error as any).error);
-            setSavedValues({ ...localValues });
-            setRestartRequired(true);
-            notification.success({
-                message: "Settings saved",
-                description: gpsDirty
-                    ? "Restarting GPS to apply NTRIP/serial changes. Restart ROS2 to apply other changes."
-                    : "Restart ROS2 to apply changes.",
-            });
+            if (hasDirtyChanges) {
+                const res = await guiApi.settings.yamlCreate(dirtyPayload);
+                if (res.error) throw new Error((res.error as any).error);
+                setSavedValues({ ...localValues });
+                setRestartRequired(true);
+                notification.success({
+                    message: "Settings saved",
+                    description: shouldRestartGps
+                        ? "Restarting GPS to apply GNSS changes. Restart ROS2 to apply other saved changes."
+                        : "Restart ROS2 to apply changes.",
+                });
+            } else if (shouldRestartGps) {
+                notification.info({
+                    message: "Restarting GPS with current settings",
+                });
+            }
             // Auto-restart the GPS container when GPS/NTRIP fields changed —
             // ROS2 keeps running, the user just sees RTCM stop briefly. This
             // unblocks the "Set Datum from current GPS" path in onboarding,
             // which silently fails when the old (un-credentialled) GPS
             // container is still running.
-            if (gpsDirty) {
+            if (shouldRestartGps) {
                 await gpsRestart.run(() => restartGps(guiApi));
             }
             // Push the new dock pose into map_server at runtime so the
@@ -277,7 +296,7 @@ export const useSettingsManager = () => {
             // that lived in RobotComponentEditor's "Set dock pose"
             // button (was triggering before the user clicked save, so
             // the save button never glowed).
-            if (dockDirty) {
+            if (hasDirtyChanges && dockDirty) {
                 const px = Number(localValues["dock_pose_x"] ?? 0);
                 const py = Number(localValues["dock_pose_y"] ?? 0);
                 const yawRad = Number(localValues["dock_pose_yaw"] ?? 0);
@@ -309,6 +328,14 @@ export const useSettingsManager = () => {
             setSaving(false);
         }
     }, [localValues, dirtyKeys, guiApi, notification, gpsRestart]);
+
+    const save = useCallback(async () => {
+        await persistSettings();
+    }, [persistSettings]);
+
+    const saveAndRestartGps = useCallback(async () => {
+        await persistSettings({ forceGpsRestart: true });
+    }, [persistSettings]);
 
     const revert = useCallback(() => {
         setLocalValues({ ...savedValues });
@@ -376,6 +403,7 @@ export const useSettingsManager = () => {
         isSectionDirty,
         matchesSearch,
         save,
+        saveAndRestartGps,
         revert,
     };
 };

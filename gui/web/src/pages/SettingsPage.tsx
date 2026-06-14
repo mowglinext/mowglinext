@@ -49,7 +49,9 @@ export const SettingsPage = () => {
         handleBulkChange,
         isSectionDirty,
         save,
+        saveAndRestartGps,
         revert,
+        gpsRestarting,
     } = useSettingsManager();
 
     // Long-running: container restart + rosbridge reconnect. Disable button
@@ -69,7 +71,17 @@ export const SettingsPage = () => {
             case "hardware":
                 return <HardwareSection values={values} onChange={handleChange} onBulkChange={handleBulkChange} />;
             case "positioning":
-                return <PositioningSection values={values} onChange={handleChange} />;
+                return (
+                    <PositioningSection
+                        values={values}
+                        onChange={handleChange}
+                        isDirty={isDirty}
+                        saving={saving}
+                        gpsRestarting={gpsRestarting}
+                        onSave={save}
+                        onSaveAndRestartGps={saveAndRestartGps}
+                    />
+                );
             case "sensors":
                 return <SensorsSection values={values} onChange={handleChange} />;
             case "localization":

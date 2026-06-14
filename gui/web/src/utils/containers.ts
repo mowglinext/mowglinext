@@ -52,11 +52,11 @@ export const restartGps = (api: GuiApi) =>
     containerAction(api, { name: "gps" }, "restart");
 
 /**
- * Settings keys whose values are consumed by the GNSS receiver container
- * (NTRIP credentials, mountpoint, serial path, receiver family). Saving any
- * of these requires bouncing mowgli-gps to actually apply the change.
- * Datum lat/lon/alt are read by ROS2 (navsat_to_absolute_pose_node), not
- * by the GPS container itself, so they are deliberately not in this list.
+ * Settings keys whose values are consumed directly by the GNSS receiver
+ * container today. Profile translation/apply is not wired yet, so the
+ * vendor-neutral profile/signal/expert keys are intentionally excluded:
+ * saving those persists intent, but only serial/NTRIP/runtime transport
+ * changes require an immediate mowgli-gps restart.
  */
 export const GPS_RESTART_KEYS = new Set<string>([
     "gnss_receiver_family",

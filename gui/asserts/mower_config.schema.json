@@ -229,6 +229,58 @@
           "default": 921600,
           "description": "Receiver serial baud rate. 921600 is the recommended runtime default."
         },
+        "gnss_profile": {
+          "type": "string",
+          "title": "Receiver Profile",
+          "enum": ["runtime_only", "rover_high_precision", "rover_high_precision_debug", "factory_reset"],
+          "default": "runtime_only",
+          "description": "Vendor-neutral Universal GNSS receiver profile id to persist for this robot."
+        },
+        "gnss_signal_profile": {
+          "type": "string",
+          "title": "Signal Profile",
+          "enum": ["minimal", "balanced", "high_precision", "all_signals", "custom"],
+          "default": "balanced",
+          "description": "Vendor-neutral constellation/signal profile used by the future backend translator. Custom is reserved for future profile-file or raw-command workflows."
+        },
+        "gnss_profile_rate_hz": {
+          "type": "integer",
+          "title": "Position Rate",
+          "enum": [1, 5, 7, 10],
+          "default": 5,
+          "description": "Requested Universal GNSS receiver update/output rate in Hz."
+        },
+        "gnss_config_baud": {
+          "type": "integer",
+          "title": "Configured Receiver Baud",
+          "default": 921600,
+          "description": "Persisted target baud for future receiver-side profile application."
+        },
+        "gnss_signal_group": {
+          "type": "string",
+          "title": "Raw Signal Group",
+          "description": "Vendor-specific expert override. For Unicore UM982 the recommended raw value is 3 6."
+        },
+        "gnss_unicore_pvt_algorithm": {
+          "type": "string",
+          "title": "Unicore PVT Algorithm",
+          "description": "Optional Unicore-specific expert override, for example MULTI."
+        },
+        "gnss_unicore_rtk_reliability": {
+          "type": "string",
+          "title": "Unicore RTK Reliability",
+          "description": "Optional Unicore-specific expert override for RTK reliability behavior."
+        },
+        "gnss_unicore_rtk_timeout_s": {
+          "type": "integer",
+          "title": "Unicore RTK Timeout",
+          "description": "Optional Unicore-specific expert override in seconds."
+        },
+        "gnss_unicore_dgps_timeout_s": {
+          "type": "integer",
+          "title": "Unicore DGPS Timeout",
+          "description": "Optional Unicore-specific expert override in seconds."
+        },
         "gps_wait_after_undock_sec": {
           "type": "number",
           "title": "GPS Wait After Undock",
