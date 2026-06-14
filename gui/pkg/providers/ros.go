@@ -166,7 +166,8 @@ func (r *RosSubscriber) run() {
 // and /wheel_odom no longer chew CPU when the browser is closed and the
 // optional MQTT/HomeKit providers are disabled.
 type RosProvider struct {
-	client *foxglove.Client
+	client       *foxglove.Client
+	cmdVelRelay  *cmdVelRelayClient
 
 	mtx                sync.Mutex
 	subscribers        map[string]map[string]*RosSubscriber // logicalKey -> id -> subscriber
@@ -224,8 +225,11 @@ func NewRosProvider(dbProvider types2.IDBProvider) types2.IRosProvider {
 		foxgloveURL = string(url)
 	}
 
+	cmdVelRelayURL := "ws://localhost:8766"
+
 	r := &RosProvider{
 		client:             foxglove.NewClient(foxgloveURL),
+		cmdVelRelay:        newCmdVelRelayClient(cmdVelRelayURL),
 		subscribers:        make(map[string]map[string]*RosSubscriber),
 		lastMessage:        make(map[string][]byte),
 		foxgloveSubscribed: make(map[string]bool),
@@ -515,7 +519,15 @@ func (r *RosProvider) UnSubscribe(topic string, id string) {
 	}
 }
 
-// Publish sends msg to the named ROS2 topic via foxglove_bridge.
+// Publish sends msg to the named ROS2 topic. For /cmd_vel_teleop the relay
+// client (port 8766) is preferred over foxglove_bridge: it delivers JSON
+// directly to rclpy without JSON→CDR conversion overhead or the shared-
+// connection head-of-line blocking that causes manual mowing lag. If the
+// relay is not yet connected (e.g., early startup), it falls back to
+// foxglove_bridge so the first manual commands still reach the robot.
 func (r *RosProvider) Publish(topic string, msgType string, msg interface{}) error {
+	if topic == "/cmd_vel_teleop" && r.cmdVelRelay.Connected() {
+		return r.cmdVelRelay.Send(msg)
+	}
 	return r.client.Publish(topic, msg, msgType)
 }

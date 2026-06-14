@@ -213,10 +213,11 @@ def generate_launch_description() -> LaunchDescription:
             # so they appear on the GUI Settings page.
             {"tick_rate": float(robot_params.get("tick_rate", 10.0))},
             {"bt_debug_logging": bool(robot_params.get("bt_debug_logging", False))},
-            # undock_speed is consumed by the BackUp BT instances via
-            # the {undock_speed} blackboard reference in main_tree.xml.
-            # See issue #191.
+            # undock_speed / undock_distance are consumed by the BackUp BT
+            # instances via {undock_speed} / {undock_distance} blackboard
+            # references in main_tree.xml. See issue #191.
             {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
+            {"undock_distance": float(robot_params.get("undock_distance", 1.0))},
             # transit_speed / mowing_speed flow into SetNavMode, which sets
             # them on the live controllers (FollowPath.desired_linear_vel for
             # the RPP transit controller, FollowCoveragePath.speed_fast for the
@@ -313,6 +314,8 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             {"use_sim_time": use_sim_time},
+            {"undock_distance": float(robot_params.get("undock_distance", 2.0))},
+            {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
         ],
     )
 
@@ -362,7 +365,7 @@ def generate_launch_description() -> LaunchDescription:
                 "port": foxglove_port,
                 "address": "0.0.0.0",
                 "send_buffer_limit": 10000000,
-                "num_threads": 0,
+                "num_threads": 2,
                 "topic_whitelist": [internal_gnss_topic_whitelist],
                 "client_topic_whitelist": [internal_gnss_topic_whitelist],
                 "capabilities": [
@@ -378,6 +381,21 @@ def generate_launch_description() -> LaunchDescription:
     # navigation_launch.py (in the lifecycle_nodes list). Do NOT launch
     # it here — duplicating it exhausts DDS participants and causes
     # lifecycle conflicts.
+
+    # ------------------------------------------------------------------
+    # 12. cmd_vel WebSocket relay — low-latency manual mowing control
+    # ------------------------------------------------------------------
+    # Accepts TwistStamped JSON on port 8766 and publishes directly to
+    # /cmd_vel_teleop via rclpy, bypassing foxglove_bridge's JSON→CDR
+    # conversion overhead and the shared-connection head-of-line blocking
+    # with subscription data. The Go GUI's PublisherRoute connects here
+    # instead of going through foxglove_bridge for manual mowing.
+    cmd_vel_relay_node = Node(
+        package="mowgli_bringup",
+        executable="cmd_vel_ws_relay.py",
+        name="cmd_vel_ws_relay",
+        output="screen",
+    )
 
     # ------------------------------------------------------------------
     # 13. Obstacle tracker — persistent LiDAR obstacle detection
@@ -444,6 +462,7 @@ def generate_launch_description() -> LaunchDescription:
             diagnostics_node,
             mqtt_bridge_node,
             foxglove_bridge_node,
+            cmd_vel_relay_node,
             # Dock heading is published by hardware_bridge at 1 Hz while
             # charging (~/dock_heading → /gnss/heading via mowgli.launch.py
             # remapping). No separate launch action needed.

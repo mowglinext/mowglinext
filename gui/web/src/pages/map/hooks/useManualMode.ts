@@ -14,10 +14,15 @@ const MAX_ANGULAR_RAD_S = 0.6;
 interface UseManualModeOptions {
     mowerAction: (action: string, params: Record<string, unknown>) => () => Promise<void>;
     joyStream: { sendJsonMessage: (msg: unknown) => void; start: (uri: string) => void };
+    stateName?: string;
 }
 
-export function useManualMode({mowerAction, joyStream}: UseManualModeOptions) {
-    const [manualMode, setManualMode] = useState(false);
+export function useManualMode({mowerAction, joyStream, stateName}: UseManualModeOptions) {
+    const [manualMode, setManualMode] = useState(() => stateName === "MANUAL_MOWING");
+
+    useEffect(() => {
+        setManualMode(stateName === "MANUAL_MOWING");
+    }, [stateName]);
     const lastTwistRef = useRef<TwistStamped | null>(null);
     const joyIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
     const bladeIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);

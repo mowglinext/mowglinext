@@ -1907,6 +1907,33 @@ void MapServerNode::recompute_reachability_for_area(size_t area_index)
     }
     else if (!reached && (t == CellType::LAWN || t == CellType::UNKNOWN))
     {
+      // Don't mark this cell DEAD if it also belongs to another mowing area.
+      // Two areas whose polygons overlap share boundary cells; this area's BFS
+      // seed may not reach them, but another area's BFS will — the robot can
+      // access them via that area. Without this guard the two BFS passes
+      // oscillate: area A marks the cell DEAD, area B restores it to LAWN,
+      // and each flip sets masks_dirty_, triggering keepout-mask republication
+      // and a full coverage_cells rebuild every 2 s while idle.
+      grid_map::Position pos;
+      if (map_.getPosition(idx, pos))
+      {
+        geometry_msgs::msg::Point32 pt;
+        pt.x = static_cast<float>(pos.x());
+        pt.y = static_cast<float>(pos.y());
+        bool in_other_area = false;
+        for (size_t j = 0; j < areas_.size(); ++j)
+        {
+          if (j == area_index || areas_[j].is_navigation_area)
+            continue;
+          if (point_in_polygon(pt, areas_[j].polygon))
+          {
+            in_other_area = true;
+            break;
+          }
+        }
+        if (in_other_area)
+          continue;
+      }
       cls(idx(0), idx(1)) = static_cast<float>(CellType::LAWN_DEAD);
       ++flipped_dead;
     }

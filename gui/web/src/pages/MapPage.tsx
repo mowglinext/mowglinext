@@ -3,7 +3,7 @@ import {useApi} from "../hooks/useApi.ts";
 import {App} from "antd";
 import turfArea from "@turf/area";
 import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
-import {MapArea} from "../types/ros.ts";
+import {MapArea, Map as MapType} from "../types/ros.ts";
 import DrawControl from "../components/DrawControl.tsx";
 import Map, {Layer, Source} from 'react-map-gl/mapbox';
 import type {Map as MapboxMap} from 'mapbox-gl';
@@ -88,10 +88,19 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // Only include editable polygon features for DrawControl — exclude mower,
     // paths, and other display-only features so that frequent pose updates don't
     // trigger DrawControl to deleteAll() + re-add, which wipes out selection state.
-    const drawableFeatures = useMemo(
-        () => Object.values(features).filter(f => f instanceof MowingFeatureBase),
-        [features]
-    );
+    // Stable ref ensures the array identity only changes when mowing areas actually
+    // change, not on every pose update, preventing DrawControl sync timer thrashing.
+    const prevMowingRef = useRef<GeoJSON.Feature[]>([]);
+    const drawableFeatures = useMemo(() => {
+        const next = Object.values(features).filter(f => f instanceof MowingFeatureBase) as GeoJSON.Feature[];
+        const prev = prevMowingRef.current;
+        const unchanged =
+            next.length === prev.length &&
+            next.every((f, i) => f.id === prev[i]?.id && JSON.stringify(f.geometry) === JSON.stringify(prev[i]?.geometry));
+        if (unchanged) return prev;
+        prevMowingRef.current = next;
+        return next;
+    }, [features]);
 
     // Extracted hooks
     const {offsetX, offsetY, handleOffsetX, handleOffsetY} = useMapOffset({config, setConfig, notification});
@@ -153,6 +162,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
 
     const {map, setMap, path, plan, lidarCollection, coverageCellsImage, highLevelStatus, joyStream, dynamicObstacles} = useMapStreams({
         editMap,
+        isMobile,
         settings,
         offsetX,
         offsetY,
@@ -427,8 +437,19 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         }, {} as Record<string, MowingFeatureBase>);
     }
 
-  
-
+    // Build the full editable feature set (areas, obstacles and dock) from a
+    // Map message. The stream-driven effect above does the same thing but is
+    // skipped while editMap is true, so map restore (which enters edit mode)
+    // calls this directly to populate the features it will save.
+    function buildFeaturesFromMap(m: MapType): Record<string, MowingFeature> {
+        const newFeatures: Record<string, MowingFeature> = {
+            ...buildFeatures(m.working_area ?? [], "area"),
+            ...buildFeatures(m.navigation_areas ?? [], "navigation"),
+        };
+        const dockLonLat = transpose(offsetX, offsetY, datum, m.dock_y ?? 0, m.dock_x ?? 0);
+        newFeatures["dock"] = new DockFeatureBase(dockLonLat, m.dock_heading ?? 0);
+        return newFeatures;
+    }
 
     const {
         handleSaveMap,
@@ -453,10 +474,11 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         guiApi,
         dockDirty,
         setDockDirty,
+        buildFeaturesFromMap,
     });
 
 
-    const {manualMode, handleManualMode, handleStopManualMode, handleJoyMove, handleJoyStop} = useManualMode({mowerAction, joyStream});
+    const {manualMode, handleManualMode, handleStopManualMode, handleJoyMove, handleJoyStop} = useManualMode({mowerAction, joyStream, stateName: highLevelStatus.highLevelStatus.state_name});
 
     const handleDockPlacement = useCallback(() => {
         setDockPlacementMode(true);
@@ -839,6 +861,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     onFinishRecording={mowerActions.onRecordFinish}
                     onCancelRecording={mowerActions.onRecordCancel}
                     onHome={mowerActions.onHome}
+                    bottomOffset={isMobile ? 172 : 30}
                 />
                 {isMobile && (
                     <MapToolbarMobile

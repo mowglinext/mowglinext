@@ -205,6 +205,14 @@ export const MapToolbar = ({
                 Mow area
             </AsyncDropDownButton>
 
+            <AsyncButton
+                danger={manualMode}
+                icon={manualMode ? <StopOutlined /> : <ControlOutlined />}
+                onAsyncClick={manualMode ? onStopManualMode : onManualMode}
+            >
+                {manualMode ? "Stop Manual" : "Manual Mow"}
+            </AsyncButton>
+
             <Dropdown
                 menu={{items: moreMenuItems, onClick: handleMoreClick}}
                 trigger={["click"]}

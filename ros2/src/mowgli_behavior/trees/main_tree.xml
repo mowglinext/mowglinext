@@ -266,17 +266,17 @@
                    a geometric distance to the dock pose that is fragile
                    when RTK drifts briefly near the metal canopy. BackUp is
                    deterministic — reverse at the given speed for the
-                   given distance. 1 m gives RTK ~5 s × 0.2 m/s of clean
-                   displacement for CalibrateHeadingFromUndock to resolve
-                   the initial heading accurately. -->
-              <BackUp backup_dist="1.0" backup_speed="{undock_speed}"/>
+                   given distance. undock_distance must be > 0.5 m so
+                   CalibrateHeadingFromUndock has enough GPS displacement
+                   to resolve the initial heading accurately. -->
+              <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
               <!-- Wait for RTK Fixed after undock. The dock often has a
                    metal canopy that attenuates GPS; once the robot is 2 m
                    out the F9P should re-acquire quickly. Timeout proceeds
                    anyway at degraded precision rather than freeze. -->
               <WaitForGpsFix timeout_sec="20.0" min_fix_type="4"/>
-              <!-- Refine the EKF yaw from the 1 m of GPS-verified backward
-                   motion: heading = atan2(-dy, -dx). Sync, no extra motion.
+              <!-- Refine the EKF yaw from GPS-verified backward motion:
+                   heading = atan2(-dy, -dx). Sync, no extra motion.
                    Fails UndockSequence if GPS barely moved (robot stuck on
                    dock) so the BT retries the whole undock. -->
               <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
@@ -369,7 +369,7 @@
                        uses geometric distance to dock pose which fails with
                        RTK drift near the dock canopy. BackUp reliably reverses
                        off the dock via Nav2 behavior_server. -->
-                        <BackUp backup_dist="1.5" backup_speed="{undock_speed}"/>
+                        <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
                         <Sequence>
                           <RecordResumeUndockFailure/>
                           <ClearCommand/>
@@ -419,7 +419,7 @@
                    uses geometric distance to dock pose which fails with
                    RTK drift near the dock canopy. BackUp reliably reverses
                    off the dock via Nav2 behavior_server. -->
-              <BackUp backup_dist="1.5" backup_speed="{undock_speed}"/>
+              <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
                     <Sequence>
                       <RecordResumeUndockFailure/>
                       <ClearCommand/>

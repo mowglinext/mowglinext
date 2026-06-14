@@ -24,6 +24,7 @@ install(
   PROGRAMS
     scripts/wait_for_tf.py
     scripts/empty_static_map_pub.py
+    scripts/cmd_vel_ws_relay.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
