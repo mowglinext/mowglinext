@@ -12,8 +12,9 @@ RUN yarn && yarn build
 FROM ubuntu:22.04 AS deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl python3 python3-pip python3-venv \
-    git build-essential unzip wget \
+    git build-essential unzip wget file \
     stlink-tools libusb-1.0-0 \
+    gcc-arm-none-eabi binutils-arm-none-eabi \
  && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL https://raw.githubusercontent.com/platformio/platformio-core-installer/master/get-platformio.py -o get-platformio.py &&    python3 get-platformio.py
 RUN mkdir -p /usr/local/bin \
