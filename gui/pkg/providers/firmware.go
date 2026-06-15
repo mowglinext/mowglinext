@@ -130,7 +130,7 @@ func (fp *FirmwareProvider) flashMowgli(writer io.Writer, config types.FirmwareC
 	case "BOARD_LUV1000RI":
 		pioEnv = "LUV1000RI"
 	}
-	cmd := execabs.Command("/bin/bash", "-c", "platformio run -e "+pioEnv+" -t upload")
+	cmd := execabs.Command("/bin/bash", "-c", "platformio run -e "+pioEnv+" -t upload -j1")
 	cmd.Dir = pioProjectDir
 	cmd.Stdout = writer
 	cmd.Stderr = writer
