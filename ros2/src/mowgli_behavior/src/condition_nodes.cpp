@@ -431,19 +431,22 @@ BT::NodeStatus PreFlightCheck::tick()
   }
 
   // ── 5. Mowing area defined ───────────────────────────────────────────────
+  // Probe map_server with get_mowing_area(index=0): success=false means no
+  // areas are defined (the cell-based get_coverage_status was removed with the
+  // coverage-cell mechanism; get_mowing_area is the kept readiness probe).
   if (!coverage_client_)
   {
-    coverage_client_ = ctx->helper_node->create_client<mowgli_interfaces::srv::GetCoverageStatus>(
-        "/map_server_node/get_coverage_status");
+    coverage_client_ = ctx->helper_node->create_client<mowgli_interfaces::srv::GetMowingArea>(
+        "/map_server_node/get_mowing_area");
   }
   if (!coverage_client_->service_is_ready())
   {
-    failures.emplace_back("coverage-service-unavailable");
+    failures.emplace_back("map-area-service-unavailable");
   }
   else
   {
-    auto req = std::make_shared<mowgli_interfaces::srv::GetCoverageStatus::Request>();
-    req->area_index = 0;
+    auto req = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
+    req->index = 0;
     auto future = coverage_client_->async_send_request(req);
     auto start = std::chrono::steady_clock::now();
     bool ready = false;
@@ -457,7 +460,7 @@ BT::NodeStatus PreFlightCheck::tick()
     }
     if (!ready)
     {
-      failures.emplace_back("coverage-query-timeout");
+      failures.emplace_back("map-area-query-timeout");
     }
     else
     {

@@ -1,12 +1,18 @@
-# Nav2 parameters for Mowgli outdoor robot mower.
-# Controller:   mowgli_nav2_plugins/FTCController (Follow-The-Carrot PID
-#               with three decoupled channels + obstacle-skirting via
-#               lateral carrot deviation). Used for both FollowPath
-#               (transit) and FollowCoveragePath (strips).
+# Nav2 parameters for Mowgli outdoor robot mower — SHARED BASE.
+#
+# This file holds everything COMMON to the LiDAR and no-LiDAR variants. It is
+# NOT loaded alone: navigation.launch.py deep-merges it with exactly one
+# overlay — nav2_params_lidar.yaml or nav2_params_no_lidar.yaml — chosen by the
+# use_lidar arg. The overlays carry ONLY genuine differences (costmap obstacle
+# vs static layers, scan-based vs pass-through collision_monitor, FollowPath
+# collision detection). Edit shared params HERE so the two variants cannot
+# drift; edit variant-specific params in the matching overlay.
+#
+# Controller:   FollowPath           = RotationShim + RegulatedPurePursuit (transit)
+#               FollowCoveragePath   = RotationShim + MPPI on the continuous
+#                                      CC-Dubins coverage path (Follow-the-Carrot retired)
 # Planner:      nav2_smac_planner/SmacPlanner2D.
-# Coverage:     cell-based strip planner in mowgli_map (not nav2_coverage).
-# Costmaps:     outdoor operation with LiDAR /scan (filtered via
-#               costmap_scan_filter_node into /scan_costmap).
+# Coverage:     F2C v2 path from mowgli_coverage, followed by MPPI.
 
 bt_navigator:
   ros__parameters:
@@ -182,9 +188,9 @@ controller_server:
     #   * Both accept any plan length, including 2-pose direct lines
     #     (RPP samples by distance, not pose index).
     #
-    # Coverage stays on FTC — RPP's lookahead-carrot tracking doesn't
-    # hold the < 10 mm lateral precision needed for the swath spacing
-    # to tile correctly.
+    # Transit uses RPP (this slot); the coverage slot (FollowCoveragePath)
+    # uses MPPI — RPP's lookahead-carrot tracking doesn't hold the < 10 mm
+    # lateral precision the swath tiling needs.
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
@@ -237,10 +243,6 @@ controller_server:
       regulated_linear_scaling_min_radius: 0.9
       regulated_linear_scaling_min_speed: 0.20
       use_cost_regulated_linear_velocity_scaling: false
-      # Collision sim: project the carrot forward, abort if the path
-      # to the carrot hits an obstacle. 1.0 s look-ahead at 0.3 m/s
-      # = 30 cm projected; collision_monitor handles the close-range case.
-      use_collision_detection: true
       max_allowed_time_to_collision_up_to_carrot: 1.0
       # In-place rotation toward heading at large yaw error — RPP's own
       # rotate-to-heading hand-off complements RotationShim, kicking in
@@ -256,106 +258,191 @@ controller_server:
       max_robot_pose_search_dist: 10.0
       use_interpolation: true
 
-    # FollowCoveragePath — strip following. Same FTC plugin, same params as
-    # FollowPath (single source of truth). The two slots exist for future
-    # divergence (e.g. tighter lateral PID for strips), not because the
-    # controller differs today.
+    # ── Coverage controller: RotationShim + MPPI on the CONTINUOUS full path ─
+    # FollowStrip now feeds the WHOLE F2C route as one continuous (CC-Dubins)
+    # goal — no per-swath feeding, no in-place U-turn pivots. MPPI tracks the
+    # route; PathAlign with use_path_orientations=true keeps it off the
+    # anti-parallel return swath. RotationShim wraps MPPI only to do ONE crisp
+    # in-place pivot to the path-START heading after transit, then hands off for
+    # the rest (it does not re-engage at the U-turn arcs).
+    #
+    # HARD LESSON (closed_loop, see the block below): closed_loop=true reads ~0
+    # odom ω during a sub-deadband pivot and pins the ramp at one accel step
+    # (0.25 rad/s) — the pivot never clears the firmware deadband and every
+    # coverage goal stalled on "Failed to make progress". closed_loop=false
+    # (open-loop ramp to rotate_to_heading_angular_vel) is REQUIRED here; the
+    # hardware_bridge gyro angular-rate loop is the responsive inner loop that
+    # makes the open-loop assumption valid. The forward drive also depends on
+    # the hardware_bridge min_linear_vel=0.05 clamp (was a hardcoded 0.15).
+    # (FTC was retired as the coverage controller; its old config lives only
+    # in git history.)
     FollowCoveragePath:
-      plugin: "mowgli_nav2_plugins/FTCController"
-      speed_fast: 0.20
-      speed_fast_threshold: 0.5
-      speed_fast_threshold_angle: 10.0
-      speed_slow: 0.16    # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
-      speed_angular: 45.0
-      acceleration: 0.2
-      # FTC PID gains. 2026-05-19:
-      #   * kp_lat 2.0→1.2, kd_lat 1.0→1.5 — detuned for the wheel-PI
-      #     motor model (b303db22) to stop the chassis whipsawing on
-      #     coverage swaths. Lat error converges in ~3 s vs ~1 s but
-      #     stably.
-      #   * kp_ang held at 1.5 — dropping it to 1.0 made PRE_ROTATE
-      #     pivots never converge: cmd_vel correction stayed below the
-      #     motor-PI deadband-crossing threshold under production IMU
-      #     noise, so the pose never rotated, ang_err stayed at ~180°,
-      #     the robot spun forever and cog_to_imu's straight-line gate
-      #     rejected every sample. Higher kp_ang keeps the pivot
-      #     command above the deadband.
-      kp_lon: 1.0
-      ki_lon: 0.0
-      kd_lon: 0.0
-      kp_lat: 1.2
-      ki_lat: 0.0
-      kd_lat: 1.5
-      kp_ang: 1.5
-      ki_ang: 0.0
-      kd_ang: 0.0
-      max_cmd_vel_speed: 0.30
-      max_cmd_vel_ang: 0.8
-      # FTC's internal acceptance tolerance for WAITING_FOR_GOAL_APPROACH.
-      # Two compounding effects motivate the loose 0.50 m / 30° envelope:
-      #   1. F2C v2 (mowgli_coverage) chains per-sub-cell paths via Dubins
-      #      connectors; the LAST pose of the combined path can sit
-      #      25-50 cm from where FTC's PID can converge — the connector
-      #      geometry biases the final approach angle and PID can't drive
-      #      that distance to zero in 10 s.
-      #   2. With the firmware wheel-level PI motor model (commit b303db22
-      #      + sim mirror in commit 2e181873), FTC's fine-heading commands
-      #      near the goal can fall sub-deadband and oscillate as the PI
-      #      ramps up/down across the static-friction breakaway. A 15°
-      #      angle tolerance forced FTC to keep issuing sub-deadband wz
-      #      commands until controller_server's progress checker tripped
-      #      its 30 s movement_time_allowance and aborted the action
-      #      ("Failed to make progress" loop, 10 % coverage observed in
-      #      2026-05-19 sim run before BT gave up and called DockRobot).
-      # PathProgressGoalChecker still gates the path-progress >= 95% so
-      # a loose tolerance can't fire mid-traversal.
-      max_goal_distance_error: 0.50
-      max_goal_angle_error: 30.0
-      goal_timeout: 10.0
-      max_follow_distance: 2.0
-      # forward_only=false: FTC may follow path segments in reverse when
-      # the carrot is behind the robot (typical at strip-end U-turns).
-      # Tried forward_only=true to fix reverse-into-obstacle (session
-      # 2026-05-11-with-obstacle) but it deadlocked in a ±180° PRE_ROTATE
-      # pirouette whenever the carrot landed near directly behind the
-      # robot — sign of the rotation error flipped every tick, cmd_wz
-      # alternated -0.8 / +0.8, robot stuck spinning (session
-      # 2026-05-11-obstacle-realtime-fwd-only at t≈815s, yaw oscillated
-      # +81°→-77°→+99° in 6s). The earlier obstacle penetration was a
-      # Webots kinematic_drive artifact (teleports through solids
-      # without collision force), not a real navigation gap that
-      # forward_only would prevent.
-      forward_only: false
-      check_obstacles: true
-      # 30 points ≈ 1.5 m of path lookahead at the F2C 0.05 m sampling.
-      # Was 5 (=25 cm) which left FTC almost no warning before it had to
-      # deviate; the robot would graze obstacles with 5–10 cm offsets
-      # instead of properly skirting them. 1.5 m gives ~7 s of reaction
-      # time at the 0.20 m/s mowing speed.
-      obstacle_lookahead: 30
-      obstacle_footprint: true
-      enable_obstacle_deviation: true
-      max_lateral_deviation: 1.5
-      deviation_step: 0.05
-      deviation_blend_rate: 0.5
-      # Minimum committed offset once AVOIDANCE engages. growDeviation only
-      # checks the path CENTERLINE per pose, so in principle a one-step
-      # (0.05 m) offset can "clear" the line while the 0.40 m chassis still
-      # overlaps the obstacle, which argued for a half_width-ish floor.
-      # BUT field test 2026-05-29 showed 0.30 here is a net regression:
-      # growDeviationUntilClear requires ALL 30 lookahead poses (1.5 m) to
-      # clear at a SINGLE offset, so flooring the search start to 0.30 m on
-      # a strip running near an area boundary pushes a downstream pose into
-      # the boundary, no offset ≤ max clears the whole window, and EVERY
-      # strip aborts at idx=0 → area gave up at 0.3 % (vs 39 % with no
-      # floor). The clear_at_zero AVOIDANCE-exit gate (see
-      # updateLateralDeviation) is what actually fixed the sub-deadband
-      # left-right flap; the body-clearance floor was over-engineering that
-      # over the full lookahead does more harm than good. Disabled (0.0)
-      # until a footprint-aware (not full-lookahead-offset) clearance check
-      # replaces it. Runtime-tunable via the param if a specific site needs
-      # a small floor.
-      min_lateral_deviation: 0.0
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "nav2_mppi_controller::MPPIController"
+      # RotationShim does ONE crisp pivot to the path-start heading after
+      # transit, then hands the whole CONTINUOUS route to MPPI — it does NOT
+      # re-engage at the CC-Dubins U-turn arcs (those stay with MPPI, since
+      # setPlan fires once for the single full-path goal).
+      # closed_loop MUST stay false: on this deadband chassis closed_loop=true
+      # reads ~0 odom ω during the sub-deadband pivot and pins the ramp at one
+      # accel step (0.25 rad/s), so the pivot never clears the firmware deadband.
+      angular_dist_threshold: 0.30          # >17° off at the start → in-place pivot first
+      angular_disengage_threshold: 0.10     # rotate to <5.7° before handing to MPPI (< engage)
+      forward_sampling_distance: 0.5
+      rotate_to_heading_angular_vel: 1.5    # crisp swath-entry/U-turn pivot. 1.0 took ~3.1 s per pivot.
+                                            # REVERTED 2.0→1.5 (2026-06-13): 87c5a009 bumped this (with wz_std
+                                            # and wz_max) on 2026-06-12 and the robot stopped following the
+                                            # swath lines (over-aggressive angular). 1.5 is the proven value
+                                            # from the 2026-06-09 config that tracked cleanly.
+                                            # closed_loop:false ramp still required on this deadband chassis.
+      max_angular_accel: 2.5
+      simulate_ahead_time: 1.0
+      rotate_to_goal_heading: false         # end heading handled by MPPI GoalAngleCritic
+      closed_loop: false                    # open-loop ramp — REQUIRED on a deadband chassis
+      # MPPI primary controller.
+      time_steps: 36
+      model_dt: 0.1                          # = 1/controller_frequency (10 Hz)
+      batch_size: 1000
+      vx_std: 0.15                           # ~75% of vx band — compromise. Physics suggested 0.10 (~50%) for
+                                             # least chatter on straights, but 0.10 left too little exploration
+                                             # to recover a large lateral overshoot at a U-turn (MPPI stalled
+                                             # vx=0 at ~0.47 m off-line → FollowStrip abort/retry, 2026-06-07).
+                                             # 0.15 keeps straights clean while restoring recovery authority.
+                                             # (Was 0.20 = 100% of vx_max → over-explored, dither.)
+      vy_std: 0.0                            # diff-drive: no lateral DOF
+      wz_std: 0.315                          # physics: ~21% of the 1.5 wz band. REVERTED 0.45→0.315
+                                             # (2026-06-13): 87c5a009 bumped it to 0.45 on 2026-06-12 and the
+                                             # robot stopped following the swath lines — too much angular
+                                             # exploration makes MPPI sample big turns on a straight swath and
+                                             # the robot weaves ("c'est n'importe quoi"). 0.315 is the proven
+                                             # 2026-06-09 value. THE tracking regression — do not re-raise.
+      vx_max: 0.20                           # coverage mow speed
+      vx_min: 0.0                            # FORWARD-ONLY (2026-06-13). On the continuous joined coverage path,
+                                             # allowing reverse made MPPI BACK UP to follow the sharp ~180°
+                                             # swath reversals (cusps) instead of turning around — the operator's
+                                             # "marches arrière". Forbidding reverse forces a forward turn-around.
+                                             # This only works PAIRED with enforce_path_inversion=true below: the
+                                             # path handler crops the plan at each cusp so MPPI never sees the
+                                             # doubling-back (which, forward-only, used to stall it). Field run
+                                             # 2026-06-13 with both = acceptable. (The old fear that forward-only
+                                             # stalls at boundary U-turns was the keepout-cost-wall case; the
+                                             # local costmap carries no keepout, so it does not apply here.)
+      vy_max: 0.0
+      wz_max: 1.5                            # the host gyro PI clamps |wz| at angular_rate_max_cmd=1.5, and at
+                                             # mowing speed 2*(MAX_MPS-vx)/track caps the no-wheel-clip rate
+                                             # near there anyway. REVERTED 2.0→1.5 (2026-06-13): 87c5a009 bumped
+                                             # it to 2.0 on 2026-06-12 — unreachable past the clamp and it broke
+                                             # line-following. 1.5 is the proven 2026-06-09 value.
+      ax_max: 1.0                            # ref 3.0; 0.3 was too low to reach vx_max within the horizon
+      ax_min: -1.0
+      ay_max: 0.0                            # diff-drive: no lateral DOF
+      ay_min: 0.0
+      az_max: 2.5                            # matches RotationShim max_angular_accel
+      iteration_count: 1
+      # FALSE (2026-06-13). The BT joins all F2C segments into ONE continuous
+      # path with ~180° reversals (swath U-turns, outer→inner ring doubling-back).
+      # We initially set this true to CROP the path at each reversal — but the
+      # real root cause was the upstream MPPI bug #5925: findPathFurthestReachedPoint
+      # jumped onto the reversal's return leg (Euclidean nearest-point on a curve),
+      # making MPPI cut/abandon the turn. With nav2 PR #6055 backported (arc-length
+      # path progress, in the vendored nav2_mppi_controller), MPPI tracks straight
+      # THROUGH the reversals (rounds them forward), so cropping is unnecessary and
+      # counter-productive (it stalled the rings run at the ring→ring crop). Keep
+      # OFF. If the backport is ever lost (image rebuild without the patch), MPPI
+      # will corner-cut at reversals again — re-vendor the patch, don't flip this.
+      enforce_path_inversion: false
+      prune_distance: 1.0
+      max_robot_pose_search_dist: 1.5        # CRITICAL for dense coverage: bound the closest-pose search to
+                                             # 1.5 m ALONG THE PATH (arc-length, not euclidean). Default ~6 m
+                                             # spanned the U-turn into a neighbour swath, so a >0.18 m obstacle
+                                             # deviation snapped MPPI onto the wrong (physically-near but
+                                             # arc-length-distant) line. 1.5 m keeps tracking progress-local:
+                                             # mid-swath the neighbour is metres away in path length (excluded),
+                                             # near a swath end the F2C U-turn curve (<1 m) is still in-window
+                                             # so the transition stays smooth. No per-swath feeding needed.
+      transform_tolerance: 0.3               # ARM TF jitter envelope
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: "DiffDrive"
+      diff_drive:
+        plugin: "mppi::DiffDriveMotionModel"
+      visualize: false
+      regenerate_noises: true
+      TrajectoryVisualizer:
+        trajectory_step: 5
+        time_step: 3
+      AckermannConstraints:
+        min_turning_r: 0.0
+      critics: ["ConstraintCritic", "CostCritic", "GoalCritic", "GoalAngleCritic",
+                "PathFollowCritic", "PathAlignCritic", "PathAngleCritic",
+                "PreferForwardCritic", "VelocityDeadbandCritic"]
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:                               # converge to each swath's END pose
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.7              # = our ~0.72 m prediction horizon (36*0.1*0.20 m/s).
+                                                # ref 1.4 assumes a 0.5 m/s robot; at 1.4 m every swath
+                                                # shorter than 1.4 m was GoalCritic-dominated from pose 0
+                                                # (robot beelines to the swath end instead of tracking it)
+      GoalAngleCritic:                          # square up to the swath-end heading
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      VelocityDeadbandCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 35.0
+        deadband_velocities: [0.15, 0.0, 0.0]   # firmware vx breakaway ≈ 0.15 m/s
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        near_collision_cost: 253
+        critical_cost: 300.0
+        consider_footprint: true
+        collision_cost: 1000000.0
+        near_goal_distance: 0.5
+        trajectory_point_step: 2
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        offset_from_furthest: 5
+        threshold_to_consider: 0.7              # = prediction horizon, pairs with GoalCritic handoff (ref)
+      PathAlignCritic:                          # tight swath tracking (the <10 mm goal)
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        offset_from_furthest: 7                  # ref 20 = 2.0 m of path, but trajectories only project
+                                                 # ~0.72 m at 0.20 m/s → PathAlign never engaged. ~7 pts
+                                                 # (≈0.7 m) re-arms the <10 mm swath-tracking near each start
+        use_path_orientations: true
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.0
+        mode: 0
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0                      # Nav2 default. Both extremes were tried 2026-06-07 and BOTH hurt:
+                                              # 5 occasionally lets MPPI drive a long reverse at a U-turn, but 15
+                                              # over-penalised reverse and STALLED the robot at corners. Net:
+                                              # the reverse-vs-stall balance at U-turns is NOT a PreferForward
+                                              # tuning problem — keep the default; the real lever is turn
+                                              # authority (wz_max) / path-window, evaluated separately.
+        threshold_to_consider: 0.5
 
 # ---------------------------------------------------------------------------
 # Planner server
@@ -452,7 +539,7 @@ waypoint_follower:
       waypoint_pause_duration: 200
 
 # velocity_smoother removed 2026-04-26 — caps live in the controllers
-# (FTC max_cmd_vel_speed/ang, RPP desired_linear_vel) and the firmware
+# (RPP desired_linear_vel, MPPI vx_max/wz_max) and the firmware
 # deadband; an extra ramp layer here only added latency and confused
 # tuning. cmd_vel pipeline now skips this hop.
 
@@ -518,63 +605,25 @@ global_costmap:
       # Smac needs for strip-to-strip transit.
       width: 20
       height: 20
-      # keepout_filter makes the polygon boundary visible to the Smac planner
-      # so transit paths never exit the mowing area. `keepout_nav_margin_` in
-      # map_server_node (default 1.5m) leaves a free band outside the polygon
-      # edges so the dock and transit corridor aren't blocked. The standalone
-      # /boundary_violation topic remains as a last-resort tripwire for
-      # localization faults. Local costmap stays filter-free so Nav2 local
-      # recoveries (spin, backup) still function near edges.
-      # inflation_layer is listed AFTER keepout so keepout lethals don't get
-      # inflated outward, which would bleed into the free margin and block
-      # the dock.
-      plugins: ["obstacle_layer", "keepout_filter", "inflation_layer"]
-
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: true
-        # No persistence: heading drift causes wall duplicates
-        observation_persistence: 0.0
-        observation_sources: scan_filtered
-        scan_filtered:
-          topic: /scan_costmap
-          # Subscribe to the IMU-tilt-filtered /scan_costmap stream from
-          # costmap_scan_filter_node — NOT raw /scan. This is the local
-          # twin of the global costmap's source, and it matters: the
-          # min_obstacle_height band below CANNOT filter tilt-induced
-          # ground hits on its own. robot_localization runs in two_d_mode,
-          # which forces pitch=roll=0 in TF, so a 2D LaserScan always
-          # projects to ~lidar_z (0.22 m) regardless of the real chassis
-          # tilt — every ground return on a slope sails through the
-          # [0.12, 1.5] band and lands as a phantom lethal obstacle (a
-          # tiny pivot on uneven garden terrain was enough to paint
-          # them, driving FTC obstacle-deviation into left-right flap and
-          # controller_server "Failed to make progress"). costmap_scan_filter
-          # does the actual tilt rejection using the IMU gravity vector and
-          # the LIDAR mount yaw, so the planner only sees real obstacles.
-          # The height band is kept as a cheap belt-and-suspenders for the
-          # level case. NOTE: this does NOT reduce collision safety —
-          # collision_monitor reads /scan_costmap in 2D (height-agnostic)
-          # and still stops on any real return; min_obstacle_height only
-          # governs what the PLANNER routes around.
-          min_obstacle_height: 0.12
-          max_obstacle_height: 1.5
-          clearing: true
-          marking: true
-          data_type: "LaserScan"
-          raytrace_max_range: 8.0
-          raytrace_min_range: 0.0
-          obstacle_max_range: 5.0
-          # Lowered from 0.50 m → 0.10 m so the global costmap sees the
-          # same near-field obstacles as the local costmap. Ground/grass
-          # clutter is filtered by the min_obstacle_height band (0.08 m
-          # floor) now that ground_constraint keeps base_link Z ≈ 0, so
-          # we don't need a radial guard band on top of it. The Smac
-          # planner's keepout_filter handles dock avoidance on the
-          # global side — no need to mask the dock here.
-          obstacle_min_range: 0.10
-          inf_is_valid: true
-
+      # keepout_filter makes the area boundary visible to the Smac planner so
+      # transit paths never exit the authorised zone. The mask map_server_node
+      # publishes is now the INVERSE/hard-boundary one: every cell outside the
+      # union of ALL areas — mowing AND navigation — is LETHAL (100), inside is
+      # FREE (0), area obstacle holes are LETHAL. The operator draws navigation
+      # areas as the transit/dock corridors, so the dock + approach fall inside
+      # an allowed (free) region; the dock corridor is also explicitly carved
+      # back to free in map_server. enforce_boundary_margin_m (default 0.25 m)
+      # leaves a small free slack outside each edge for RTK drift; disable the
+      # whole hard boundary via map_server lethal_outside_areas:=false if a
+      # site has no navigation area over the dock (legacy wide keepout_nav_margin
+      # free band). The standalone /boundary_violation topic remains as a
+      # last-resort tripwire for localization faults. Local costmap stays
+      # filter-free (see local_costmap below) so coverage swaths near the edge
+      # don't trip MPPI/RPP "collision ahead" and Nav2 local recoveries (spin,
+      # backup) still function near edges.
+      # inflation_layer is listed AFTER keepout so keepout lethals are inflated
+      # by inflation_radius (0.20 m) only — wall 0.25 m outside the centre line
+      # → ~0.05 m bite inside it, clear of the swath centres.
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0
@@ -624,9 +673,9 @@ local_costmap:
       footprint: "[[0.50, 0.20], [0.50, -0.20], [-0.10, -0.20], [-0.10, 0.20]]"
       resolution: 0.05
       rolling_window: true
-      # 12×12 m local costmap. The 13 m headland walk plus FTC's
-      # ~2 m max_follow_distance means the robot's lookahead window
-      # routinely sits 3-5 m from base_footprint; a 6 m costmap
+      # 12×12 m local costmap. The 13 m headland walk plus the controller's
+      # ~2 m lookahead window means the robot's lookahead routinely sits
+      # 3-5 m from base_footprint; a 6 m costmap
       # truncated the obstacle signal mid-strip (planner replans
       # blind, controller hits unfiltered LiDAR returns). 12 m gives
       # ~6 m radius around base_footprint, enough for any one strip
@@ -639,75 +688,25 @@ local_costmap:
       # planner (swaths stay within the polygon) and the collision_monitor
       # (real LiDAR obstacles only). Speed filter also removed as it depends
       # on the same mask infrastructure.
-      # Obstacle layer ENABLED so FTCController's obstacle lookahead
-      # (check_obstacles=true, obstacle_lookahead=5) can avoid LiDAR-seen
-      # obstacles on coverage paths. Collision_monitor alone (PolygonSlow
-      # at 30%) was letting the robot creep into walls during FollowStrip.
-      # observation_persistence=0 keeps the dock cleared when the robot
-      # drives away from it, so it doesn't block BackUp on the next cycle.
-      plugins: ["obstacle_layer", "inflation_layer"]
-
-      obstacle_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
-        enabled: true
-        # Short non-zero persistence (was 0): smooths over the inevitable
-        # 1–2 missing scans during ARM TF jitter so transient obstacles
-        # don't flicker out of the costmap mid-strip. Long persistence
-        # would re-introduce the dock-residue problem post-undock; 2 s
-        # is short enough that costmap_scan_filter's 5 s post-undock
-        # grace window still clears any dock returns before they expire.
-        observation_persistence: 2.0
-        # Subscribe to the conditional /scan_costmap stream from
-        # costmap_scan_filter_node — same scan as /scan but with returns
-        # under dock_blank_range pushed to +inf while is_charging or for
-        # post_undock_blank_sec after charging drops. With that filter
-        # owning the dock-mask logic, obstacle_min_range can drop to a
-        # near-LiDAR floor and the 0.10–0.65 m mowing blind ring closes.
-        observation_sources: scan_filtered
-        scan_filtered:
-          topic: /scan_costmap
-          # Same height band as the global obstacle_layer — filter ground
-          # hits when the mower pitches on uneven terrain.
-          # 2D LaserScan rays sit at lidar_link.z (≈0.22 m); after TF to
-          # the costmap frame each point's Z ≈ lidar height on level
-          # ground. min_obstacle_height: 0.12 rejects returns whose Z has
-          # dropped toward ground level — which happens when the mower
-          # pitches/rolls on uneven garden terrain and the forward rays
-          # tilt down into the lawn. At 0.0 those ground hits were marked
-          # as phantom lethal obstacles, blocking the planner mid-swath
-          # and walling off the dock approach (controller_server "Failed
-          # to make progress"). The real 0.22 m scan plane stays well
-          # inside [0.12, 1.5] so genuine obstacles are still marked.
-          # NOTE: this does NOT reduce collision safety — collision_monitor
-          # polls raw /scan in 2D (height-agnostic) and still stops the
-          # robot on any real return; min_obstacle_height only governs what
-          # the PLANNER routes around.
-          min_obstacle_height: 0.12
-          max_obstacle_height: 1.5
-          clearing: true
-          marking: true
-          data_type: "LaserScan"
-          raytrace_max_range: 6.0
-          raytrace_min_range: 0.0
-          obstacle_max_range: 4.0
-          # Lowered from 0.65 m → 0.10 m. The dock-mask is now handled
-          # by costmap_scan_filter_node (charging-state aware), so this
-          # only needs to filter LiDAR self-returns near the housing.
-          # 0.10 m closes the previous 0.10–0.65 m blind ring during
-          # mowing — collision_monitor and Nav2 now agree on what's
-          # in front of the robot.
-          obstacle_min_range: 0.10
-          inf_is_valid: true
-
+      # (The source layer — obstacle_layer with LiDAR, static_layer without —
+      # plus the plugins list are added by the variant overlay.)
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 10.0
-        # 0.30 m matches the global costmap inflation. FTC reads
-        # inflation cells via checkCollision() / obstacle_lookahead
-        # — only LETHAL (cost ≥ 253) cells trigger lateral deviation,
-        # so a moderate inflation gradient is informational rather
-        # than action-forcing.
-        inflation_radius: 0.30
+        # 3.5 (was 10.0): a gentle, WIDE cost gradient is what lets MPPI deviate
+        # SMOOTHLY around an obstacle — it starts easing aside ~0.5 m out and
+        # rides the gradient, instead of seeing a near-binary lethal cell and
+        # jerking at the last moment. (factor 10 decayed to ~0 within ~0.1 m, so
+        # even a wide radius had no usable slope.)
+        cost_scaling_factor: 3.5
+        # 0.60 m (was 0.10). 0.10 gave MPPI no potential field around obstacles
+        # → late, sharp, hesitant avoidance. 0.60 m also sits ABOVE the chassis
+        # circumscribed radius (~0.572 m), which clears the "inflation radius is
+        # smaller than circumscribed radius" error — restoring MPPI CostCritic's
+        # potential-field fast path (no full-footprint check = less ARM CPU).
+        # SAFE for boundary U-turns: the LOCAL costmap carries NO keepout layer
+        # (boundary enforcement is the planner + collision_monitor), so this
+        # inflates only real LiDAR obstacles, not the boundary edge.
+        inflation_radius: 0.60
 
 # ---------------------------------------------------------------------------
 # Map server / AMCL (unused — map->odom is published by ekf_map_node
@@ -766,7 +765,13 @@ docking_server:
     # simple_charging_dock below. Keep dock_backwards: false here only as
     # an explicit guard — top-level dock_direction is silently ignored.
     dock_backwards: false
-    dock_prestaging_tolerance: 0.5
+    # 0.4 (was 0.5): how close to the staging pose the nav-to-staging phase must
+    # get before the dock approach begins. Tighter = the robot starts the
+    # straight-line approach better aligned, so there is less cross-track for the
+    # graceful controller to redress over the 1.5 m runway → a squarer, more
+    # precise final seat. Kept >= RPP's reachable staging accuracy so the
+    # nav-to-staging phase doesn't retry.
+    dock_prestaging_tolerance: 0.4
     # Disable the docking controller's internal collision check. It
     # projects the dock-approach trajectory through the local_costmap
     # and aborts if any cell exceeds dock_collision_threshold — but the
@@ -791,19 +796,49 @@ docking_server:
     # "translate only" at 20 Hz and never seat the cradle (measured
     # 2026-05-27 as cmd_vel ping-ponging `x=-0.015 z=0` ↔ `x=0 z=-0.8`).
     # Reset to upstream defaults except:
-    #   v_linear_min: 0.16 stays — hardware_bridge zeros |vx|<0.15.
+    #   v_linear_min: 0.16 stays — hardware_bridge zeros |vx|<0.15, so the
+    #     crawl-in floor MUST be above the deadband or the final approach is
+    #     zeroed and the robot stops short of the cradle. (Regressed to 0.10 /
+    #     v_linear_max 0.15 — both at/below the deadband — 2026-06; restored
+    #     2026-06-08 and re-synced with nav2_params_no_lidar.yaml. v_linear_max
+    #     must stay > v_linear_min.)
     #   beta/lambda: leave at upstream (0.4 / 2.0) — graceful control-law
     #     shape, not deadband-related.
     controller.v_linear_min: 0.16
-    controller.v_linear_max: 0.25
-    controller.v_angular_max: 0.75
-    controller.slowdown_radius: 0.25
+    # 0.18 (was 0.25): the final drive into the cradle at 0.25 m/s was too fast
+    # for a gentle seat (operator 2026-06-12). Dropped to 0.18 — just above the
+    # 0.16 deadband floor (must stay > v_linear_min) — so the contacts close
+    # slowly. The slowdown_radius profile (below) eases it down to v_linear_min.
+    controller.v_linear_max: 0.18
+    # 0.85 (was 0.75): the graceful law's steering curvature is -1/r·(…), so it
+    # grows as the robot nears the dock (r→0) and is then capped by
+    # v_angular_max. Raising the cap lets the controller actually execute the
+    # final cross-track correction at crawl speed instead of saturating and
+    # arriving slightly off-axis. Kept modest — the host-side wz pulse-width
+    # modulation handles the chassis deadband, so this no longer over-rotates
+    # fine corrections the way the old k_phi/k_delta 3× bumps did.
+    controller.v_angular_max: 0.85
+    # 0.45 (was 0.25): within slowdown_radius the linear speed scales down to
+    # v_linear_min (v = v_linear_max·r/slowdown_radius, clamped). A larger
+    # radius means the robot reaches crawl speed ~20 cm sooner, giving the
+    # closed-loop graceful controller far more low-speed distance to null any
+    # residual cross-track BEFORE the contacts touch — i.e. it keeps correcting
+    # the final trajectory all the way in rather than committing to the last
+    # straight at 0.15 m/s. This is a velocity-profile change only (no gain
+    # surgery), so it can't reintroduce the rotate↔translate oscillation.
+    controller.slowdown_radius: 0.55   # 0.55 (was 0.45, 2026-06-12): start easing to v_linear_min ~10 cm
+                                       # sooner so the slower 0.18 m/s approach has even more low-speed
+                                       # distance to null residual cross-track before the contacts touch.
     # Graceful smooth-control-law gains — upstream documented defaults.
-    # (Diagnosed 2026-06: the "15 cm right" seat was a mis-pinned dock pose,
-    # not a controller deficiency — the fused seated pose matched the target
-    # within ~1 cm at stock gains, so there's no reason to deviate from the
-    # documented k_phi 3.0 / k_delta 2.0.)
-    controller.k_phi: 3.0
+    # 2026-06-08 field-measured the final approach (logged /cmd_vel_docking +
+    # fused/GPS cross-track): omega stayed ~0 the WHOLE approach while cross-track
+    # GREW 6 -> 22 cm at a 7.5 deg off-axis heading — the controller squares up
+    # parallel and drives straight in without nulling the lateral offset (seats
+    # ~20 cm off, no contact, abort). fused == GPS to ~1 cm, so it is NOT
+    # localization / a mis-pinned dock pose (supersedes the earlier note). k_delta
+    # was too strong vs k_phi (1.33:1); raised to ~4:1 so the controller actually
+    # steers back onto the centerline. Back k_phi down if it weaves/oscillates.
+    controller.k_phi: 5.0
     controller.k_delta: 2.0
     # Named dock instances — BT uses dock_id="home_dock"
     dock_plugins: ["simple_charging_dock"]
@@ -851,6 +886,16 @@ docking_server:
       # at an angle ("en biais"). 1.5 m gives the graceful approach
       # controller room to converge before contact.
       staging_x_offset: -1.5
+      # GPS-derived dock detection. Static default is false (legacy approach:
+      # the dock target is the static map-frame home_dock.pose snapshotted once
+      # into odom via map→odom at dockRobot() start — which is exactly what
+      # breaks when fusion_graph reloads a corrupt map→odom). navigation.launch.py
+      # FLIPS this to true (and zeroes external_detection_translation_*/rotation_*
+      # + sets external_detection_timeout/filter_coef) when
+      # use_gps_dock_detection is on, and launches gps_dock_detection_node to
+      # feed /docking_server/detected_dock_pose from RTK-Fixed /gps/absolute_pose
+      # in odom. Keep false here so disabling the feature restores the legacy
+      # path cleanly.
       use_external_detection_pose: false
       use_battery_status: true
       battery_topic: "/battery_state"
@@ -878,123 +923,50 @@ collision_monitor:
     source_timeout: 5.0
     base_shift_correction: true
     stop_pub_timeout: 2.0
-    # PolygonStop is intentionally DISABLED. Two-layer safety story:
-    #
-    #   (a) FTCController's `enable_obstacle_deviation` + `obstacle_lookahead=30`
-    #       (~1.5 m of path) re-routes the robot AROUND LiDAR-seen obstacles
-    #       *while* it follows the F2C path. The fallback is a soft slowdown
-    #       via PolygonSlow below.
-    #
-    #   (b) The STM32 firmware is the sole emergency-stop authority
-    #       (CLAUDE.md invariant 9). Lift, tilt, blade-jam, bumper, e-stop —
-    #       all of them route through firmware and bypass /cmd_vel entirely.
-    #
-    # PolygonStop kept firing whenever an obstacle we had ALREADY steered
-    # around was still inside the chassis +5 cm box (it lingers there for a
-    # few seconds after passing). That permanently froze cmd_vel and forced
-    # PRE_ROTATE timeouts. Re-enabling PolygonStop here would require a
-    # forward-only polygon (rear half ignored) AND a tighter min_points
-    # threshold — out of scope until we get LiDAR-based fall detection
-    # ready. Audit 2026-05-12 flagged this and accepted the trade-off; see
-    # CLAUDE.md "Architecture Invariants" for the safety layering.
-    #
-    # The PolygonStop *definition* below is retained as documentation of
-    # the intended chassis-relative polygon — it just isn't in the active
-    # polygons list.
-    polygons: ["PolygonSlow"]
-    PolygonStop:
-      type: "polygon"
-      # INSIDE the chassis on Y (chassis half-width 0.20, polygon at
-      # ±0.18) so any LiDAR return from our own chassis edge falls
-      # OUTSIDE the polygon and doesn't trip a stop. Forward extent
-      # still well past the chassis front (chassis front edge at
-      # base_link +0.48). Coords are
-      # [forward_left, forward_right, rear_right, rear_left] in
-      # base_footprint frame.
-      # NOTE: this loses some real-obstacle protection vs. the
-      # production "chassis + 5 cm" target (originally ±0.25). The
-      # right long-term fix is a chassis-blank filter on /scan,
-      # tracked separately.
-      points: "[[0.55, 0.18], [0.55, -0.18], [-0.15, -0.18], [-0.15, 0.18]]"
-      action_type: "stop"
-      # 8 points: tight enough that a single stray return doesn't trip
-      # a stop, loose enough that a real obstacle (legs, dock) reliably
-      # does. Tuned vs the LD19's 7 Hz × ~455-bin sweep.
-      min_points: 8
-      visualize: true
-      polygon_pub_topic: "polygon_stop"
-      enabled: true
-    PolygonSlow:
-      type: "polygon"
-      # Chassis + 15 cm — slow to 30% when obstacle is close
-      points: "[[0.65, 0.35], [0.65, -0.35], [-0.25, -0.35], [-0.25, 0.35]]"
-      action_type: "slowdown"
-      slowdown_ratio: 0.3
-      # 12 points: the dock structure sits near the polygon boundary
-      # when charging, causing rapid slow/normal flapping at 10 Hz.
-      # Higher min_points adds hysteresis against that edge noise.
-      min_points: 12
-      visualize: true
-      polygon_pub_topic: "polygon_slow"
-      enabled: true
-    observation_sources: ["scan"]
-    scan:
-      type: "scan"
-      # Read the FILTERED scan (chassis self-returns blanked,
-      # dock structure blanked while charging) so collision_monitor
-      # never sees the robot's own chassis as an obstacle. The raw
-      # /scan is still available for slam / debugging.
-      topic: /scan_costmap
-      # Disable the height filter (-1.0 / 5.0). The previous setting
-      # (min_height: 0.20) was a no-op for a 2D LiDAR — every scan
-      # point lands at exactly lidar_z in base frame, so the filter
-      # is tout-ou-rien depending on whether lidar_z exceeds
-      # min_height. With lidar_z=0.10 on this robot, min_height=0.20
-      # rejected every point and collision_monitor saw nothing during
-      # mowing. The polygon zones already do the spatial filtering;
-      # the lidar plane itself is the relevant z, not a filter band.
-      min_height: -1.0
-      max_height: 5.0
-      enabled: true
+    # The active `polygons`, the polygon definitions, and `observation_sources`
+    # are variant-specific and live in the overlay (LiDAR: PolygonSlow soft
+    # slowdown on /scan_costmap; no-LiDAR: pass-through with scan disabled).
+    # Common note: PolygonStop is intentionally NOT in the active set — it kept
+    # firing on obstacles already steered-around lingering in the chassis box,
+    # freezing cmd_vel. The STM32 firmware remains the sole emergency-stop
+    # authority (CLAUDE.md invariant 9); collision_monitor is the soft layer.
 
 # ---------------------------------------------------------------------------
-# Coverage server (opennav_coverage / Fields2Cover backend)
-# Plans the F2C path on demand via /compute_coverage_path action when
-# the BT's PlanCoverageArea node ticks. operation_width must match the
-# real mower cut width (YardForce 500 = 0.20 m). headland_width is
-# overridable per-request via the BT port headland_width_m. The
-# RPATH on libopennav_coverage_core.so already points to
-# /opt/fields2cover-121/lib so no LD_LIBRARY_PATH is required.
+# Coverage server (mowgli_coverage, Fields2Cover v3 backend)
+# Serves mowgli_interfaces/action/PlanCoverage (`plan_coverage`) when the
+# BT's PlanCoverageArea node ticks. Returns EXPLICIT ordered segments —
+# concentric headland rings + straight serpentine swaths — with NO turn
+# planning: the diff-drive pivots in place between segments (RotationShim),
+# MPPI tracks each straight swath / smooth ring. operation_width and the
+# other geometry knobs are INJECTED at launch from mowgli_robot.yaml — do
+# not rely on the static values here.
 # ---------------------------------------------------------------------------
 coverage_server:
   ros__parameters:
     use_sim_time: false
+    # robot_width is the PHYSICAL chassis width — INJECTED at launch from
+    # mowgli_robot.yaml.chassis_width via navigation.launch.py. Semantic-only
+    # (the geometry is driven by operation_width + the explicit insets), but a
+    # wrong value is a trap for anything that later reads it.
+    robot_width: 0.40
+    # operation_width is the swath SPACING (F2C cov_width). INJECTED at launch
+    # as tool_width − swath_overlap (navigation.launch.py), so adjacent swaths
+    # slightly OVERLAP. The value below is the node default for isolated
+    # runs / tests; keep it = default tool_width (0.18) − swath_overlap (0.02).
+    operation_width: 0.16
+    # Headland band width (m) — the planner mows ceil(headland_width /
+    # operation_width) concentric perimeter rings (min 1) before the straight
+    # swaths, unless num_headland_passes (>0) forces a count. INJECTED at
+    # launch from mowgli_robot.yaml.headland_width.
     default_headland_width: 0.20
-    robot_width: 0.20
-    # operation_width is INJECTED at launch from
-    # mowgli_robot.yaml.tool_width via navigation.launch.py
-    # (_inject_dock_pose_and_speeds). The value below is just the
-    # node default for isolated runs / tests; production value comes
-    # from the per-site config so the F2C swath spacing always
-    # matches the actual blade cutting width.
-    operation_width: 0.18
-    # Differential-drive YardForce 500 rotates in place — set the turning
-    # radius to a value smaller than the swath spacing so F2C never
-    # generates a Dubin loop that exceeds the headland inset. Combined
-    # with default_path_continuity_type=DISCONTINUOUS below, F2C emits
-    # straight swath segments separated by sharp orientation changes,
-    # which FTCController handles via PRE_ROTATE between segments. A
-    # CONTINUOUS Dubin path here drives outside the polygon at every
-    # swath end (turning radius > headland width).
-    min_turning_radius: 0.05
-    linear_curv_change: 200.0
-    coordinates_in_cartesian_frame: true
-    default_allow_overlap: false
-    default_swath_angle_type: "BRUTE_FORCE"
-    default_swath_type: "LENGTH"
-    default_route_type: "BOUSTROPHEDON"
-    default_path_type: "DUBIN"
-    default_path_continuity_type: "DISCONTINUOUS"
+    num_headland_passes: 0
+    # chassis_safety_inset: polygon pull-back applied before all planning so
+    # the chassis cannot cross the boundary under tracking error. INJECTED at
+    # launch (operator override or chassis_width/2); read LIVE per plan.
+    chassis_safety_inset: 0.0
+    # Drop straight swaths shorter than this (m) — a sliver clip from a
+    # concave notch isn't worth an in-place pivot. Read LIVE per plan.
+    min_swath_length: 0.15
 
 # ---------------------------------------------------------------------------
 # Lifecycle manager

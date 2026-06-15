@@ -14,6 +14,7 @@ import { restartRos2 } from "../utils/containers.ts";
 import { useContainerRestart } from "../hooks/useContainerRestart.ts";
 import { SettingsNav } from "../components/settings/SettingsNav.tsx";
 import { HardwareSection } from "../components/settings/HardwareSection.tsx";
+import { NtripSection } from "../components/settings/NtripSection.tsx";
 import { PositioningSection } from "../components/settings/PositioningSection.tsx";
 import { SensorsSection } from "../components/settings/SensorsSection.tsx";
 import { LocalizationSection } from "../components/settings/LocalizationSection.tsx";
@@ -71,6 +72,8 @@ export const SettingsPage = () => {
         switch (activeSection) {
             case "hardware":
                 return <HardwareSection values={values} onChange={handleChange} onBulkChange={handleBulkChange} />;
+            case "ntrip":
+                return <NtripSection values={values} onChange={handleChange} />;
             case "positioning":
                 return (
                     <PositioningSection
@@ -193,7 +196,9 @@ export const SettingsPage = () => {
                 <div style={{
                     flex: 1,
                     overflowY: "auto",
-                    padding: isMobile ? "0 12px 120px" : "0 24px 120px 16px",
+                    // Extra bottom space on mobile so content scrolls clear of the
+                    // fixed save bar (~92px) + bottom nav stacked below it.
+                    padding: isMobile ? "0 12px 180px" : "0 24px 120px 16px",
                     minHeight: 0,
                 }}>
                     {/* Section header */}
@@ -230,13 +235,15 @@ export const SettingsPage = () => {
             {/* Fixed save bar */}
             <div style={{
                 position: "fixed",
-                bottom: isMobile ? "calc(56px + env(safe-area-inset-bottom, 0px))" : 0,
+                // Sit above the floating bottom-nav (~85px tall + safe-area) so the
+                // Save bar doesn't collide with / hide behind the nav on mobile.
+                bottom: isMobile ? "calc(env(safe-area-inset-bottom, 0px) + 92px)" : 0,
                 left: isMobile ? 0 : undefined,
                 right: 0,
                 padding: "10px 16px",
                 background: colors.bgCard,
                 borderTop: `1px solid ${colors.border}`,
-                zIndex: 50,
+                zIndex: 51,
                 display: "flex",
                 alignItems: "center",
                 gap: 8,

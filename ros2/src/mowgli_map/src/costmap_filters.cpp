@@ -42,8 +42,8 @@ void MapServerNode::publish_keepout_mask()
   // OccupancyGrid: width = X cells, height = Y cells.
   //   col=0 → X_min (at origin.x), row=0 → Y_min (at origin.y).
   // Both flip + swap roles: the OccupancyGrid's (row, col) is the grid_map's
-  //   (cols - 1 - c, nx - 1 - r) mapping [mow_progress_to_occupancy_grid
-  //   pattern]. Previously this publisher had the dimensions swapped —
+  //   (cols - 1 - c, nx - 1 - r) mapping (see the grid_map → OccupancyGrid
+  //   convention note in CLAUDE.md). Previously this publisher had the dimensions swapped —
   //   width/height set from the wrong grid_map axis — so every cell's
   //   value landed at a 90°-rotated position, marking interior polygon
   //   cells as lethal and breaking Smac planning with "Start occupied".
@@ -64,10 +64,22 @@ void MapServerNode::publish_keepout_mask()
   mask.data.resize(static_cast<std::size_t>(nx * ny), 100);  // default: keepout
 
   // A cell inside ANY area (mowing or navigation) is free (0).
-  // A cell outside all areas but within keepout_nav_margin_ of any area
+  // A cell outside all areas but within `outside_free_margin` of any area
   // polygon edge is also free (0) — this prevents "Start occupied" when
   // the robot is near the boundary.
   // Cells beyond the margin stay 100 (keepout/lethal).
+  //
+  // outside_free_margin selects the boundary policy:
+  //   * lethal_outside_areas_ = true  (default, operator intent): use the
+  //     small enforce_boundary_margin_m_ (~robot radius). Everything beyond
+  //     that slack is LETHAL, so the planner never routes outside the union
+  //     of areas and MPPI never steers the robot out of the authorised zone
+  //     (fixes the 0.32 m concave-boundary excursion). The dock corridor
+  //     carve-out below still keeps a non-lethal transit/docking lane.
+  //   * lethal_outside_areas_ = false: legacy behaviour — the wider
+  //     keepout_nav_margin_ free band is honoured.
+  const double outside_free_margin =
+      lethal_outside_areas_ ? enforce_boundary_margin_m_ : keepout_nav_margin_;
   for (int r = 0; r < nx; ++r)
   {
     for (int c = 0; c < ny; ++c)
@@ -110,12 +122,12 @@ void MapServerNode::publish_keepout_mask()
           // edge of B. We want the nearest edge distance overall.
           continue;
         }
-        if (!within_outside_margin && keepout_nav_margin_ > 0.0)
+        if (!within_outside_margin && outside_free_margin > 0.0)
         {
           double dist = point_to_polygon_distance(static_cast<double>(pt.x),
                                                   static_cast<double>(pt.y),
                                                   area.polygon);
-          if (dist <= keepout_nav_margin_)
+          if (dist <= outside_free_margin)
           {
             within_outside_margin = true;
           }

@@ -306,6 +306,13 @@ func (r *cdrReader) readField(f schemaField) (interface{}, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Guard against a corrupt/hostile length triggering a huge make().
+		// Every element consumes at least one byte on the wire, so the count
+		// can never exceed the bytes remaining in the buffer.
+		if int(length) > len(r.data)-r.offset {
+			return nil, fmt.Errorf("cdr: dynamic array length %d exceeds %d remaining bytes",
+				length, len(r.data)-r.offset)
+		}
 		return r.readArray(f, int(length))
 	default:
 		return nil, fmt.Errorf("unknown field kind %d", f.Kind)

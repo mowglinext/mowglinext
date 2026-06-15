@@ -70,13 +70,6 @@ namespace layers
 {
 constexpr std::string_view OCCUPANCY = "occupancy";
 constexpr std::string_view CLASSIFICATION = "classification";
-constexpr std::string_view MOW_PROGRESS = "mow_progress";
-constexpr std::string_view CONFIDENCE = "confidence";
-/// Per-cell consecutive-failure counter used by the segment-based
-/// coverage selector. Incremented when FollowSegment marks a cell
-/// blocked; reset to 0 on successful mow. When > dead_promote_threshold
-/// the cell is promoted to CellType::LAWN_DEAD.
-constexpr std::string_view FAIL_COUNT = "fail_count";
 }  // namespace layers
 
 /// Default values written when a layer is initialised or cleared.
@@ -84,9 +77,6 @@ namespace defaults
 {
 constexpr float OCCUPANCY = 0.0F;  ///< free space
 constexpr float CLASSIFICATION = 0.0F;  ///< CellType::UNKNOWN
-constexpr float MOW_PROGRESS = 0.0F;  ///< unmowed
-constexpr float CONFIDENCE = 0.0F;  ///< no observations
-constexpr float FAIL_COUNT = 0.0F;  ///< no failures recorded
 }  // namespace defaults
 
 }  // namespace mowgli_map

@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cedbossneo/mowglinext/pkg/msgs/mowgli"
 	"github.com/cedbossneo/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
@@ -117,6 +116,7 @@ func DiagnosticsRoutes(r *gin.RouterGroup, dockerProvider types.IDockerProvider,
 	// Mowing sessions
 	group.GET("/sessions", getSessions(dbProvider))
 	group.POST("/sessions", postSession(dbProvider))
+	group.DELETE("/sessions", deleteSessions(dbProvider))
 	group.GET("/sessions/stats", getSessionStats(dbProvider))
 }
 
@@ -160,25 +160,7 @@ func getDiagnosticsSnapshot(dockerProvider types.IDockerProvider, rosProvider ty
 			}
 		}
 
-		// --- Coverage (areas 0..19) ---
-		for i := uint32(0); i < 20; i++ {
-			req := mowgli.GetCoverageStatusReq{AreaIndex: i}
-			var res mowgli.GetCoverageStatusRes
-			if err := rosProvider.CallService(ctx, "/map_server_node/get_coverage_status", &req, &res, "mowgli_interfaces/srv/GetCoverageStatus"); err != nil {
-				break
-			}
-			if !res.Success {
-				break
-			}
-			snapshot.Coverage = append(snapshot.Coverage, AreaCoverageInfo{
-				AreaIndex:       i,
-				CoveragePercent: res.CoveragePercent,
-				TotalCells:      res.TotalCells,
-				MowedCells:      res.MowedCells,
-				ObstacleCells:   res.ObstacleCells,
-				StripsRemaining: res.StripsRemaining,
-			})
-		}
+		// Per-area coverage % is no longer tracked (cell grid removed; swath-based coverage TBD).
 
 		// --- Cross-checks ---
 		snapshot.CrossChecks = buildCrossChecks(dbProvider)
@@ -340,6 +322,18 @@ func postSession(dbProvider types.IDBProvider) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"ok": true, "id": session.ID})
+	}
+}
+
+// deleteSessions clears all recorded mowing sessions. Idempotent: clearing an
+// already-empty history succeeds.
+func deleteSessions(dbProvider types.IDBProvider) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if err := dbProvider.Delete(sessionsDBKey); err != nil {
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "Failed to clear sessions: " + err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
 	}
 }
 

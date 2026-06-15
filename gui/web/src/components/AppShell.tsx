@@ -3,6 +3,7 @@ import {Outlet, useMatches, useNavigate} from "react-router-dom";
 import {AnimatePresence, motion, LayoutGroup} from "framer-motion";
 import {
   Home, Map as MapIcon, Calendar, Compass, Settings, Terminal, Rocket, Activity,
+  MoreHorizontal, X, SlidersHorizontal,
 } from "lucide-react";
 
 import {MowerStatus} from "./MowerStatus.tsx";
@@ -42,6 +43,7 @@ const NAV: NavItem[] = [
   {key: '/diagnostics', label: 'Diagnostic',  shortLabel: 'Diag',      icon: Activity, showInBottom: true},
   {key: '/statistics',  label: 'Stats',                                icon: Compass,  showInBottom: false},
   {key: '/settings',    label: 'Réglages',                             icon: Settings, showInBottom: false},
+  {key: '/parameters',  label: 'Paramètres',                           icon: SlidersHorizontal, showInBottom: false},
   {key: '/logs',        label: 'Logs',                                 icon: Terminal, showInBottom: false},
   {key: '/onboarding',  label: 'Onboarding',                           icon: Rocket,   showInBottom: false},
 ];
@@ -53,6 +55,7 @@ const PAGE_META: Record<string, {title: string; subtitle?: string}> = {
   '/diagnostics': {title: 'Diagnostic',     subtitle: 'Capteurs et état système'},
   '/statistics':  {title: 'Statistiques',   subtitle: 'Historique long terme'},
   '/settings':    {title: 'Réglages',       subtitle: 'Configuration robot'},
+  '/parameters':  {title: 'Paramètres',     subtitle: 'Réglage ROS2 en direct'},
   '/logs':        {title: 'Logs',           subtitle: 'Sortie des conteneurs'},
   '/onboarding':  {title: 'Onboarding'},
 };
@@ -105,8 +108,11 @@ export function AppShell() {
     state: highLevelStatus.state_name,
   });
 
-  // Bottom-nav items
+  // Bottom-nav items: the primary destinations live in the bar; the rest are
+  // reachable through a "More" overflow sheet so nothing is unreachable on mobile.
   const bottomItems = useMemo(() => NAV.filter(n => n.showInBottom), []);
+  const overflowItems = useMemo(() => NAV.filter(n => !n.showInBottom), []);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   if (isMobile) {
     return (
@@ -156,10 +162,20 @@ export function AppShell() {
           <AnimatedOutlet currentPath={currentPath}/>
         </main>
 
+        <MobileMoreSheet
+          open={moreOpen}
+          items={overflowItems}
+          activePath={currentPath}
+          onClose={() => setMoreOpen(false)}
+          onNavigate={(k) => { setMoreOpen(false); navigate({pathname: k}); }}
+        />
+
         <MobileBottomNav
           items={bottomItems}
           activePath={currentPath}
           onNavigate={(k) => navigate({pathname: k})}
+          onMore={() => setMoreOpen(true)}
+          moreActive={overflowItems.some(n => n.key === currentPath) || moreOpen}
         />
       </div>
     );
@@ -262,6 +278,8 @@ interface RailProps {
   items: NavItem[];
   activePath: string;
   onNavigate: (k: string) => void;
+  onMore?: () => void;
+  moreActive?: boolean;
 }
 
 function DesktopSideRail({items, activePath, onNavigate}: RailProps) {
@@ -347,7 +365,36 @@ function DesktopSideRail({items, activePath, onNavigate}: RailProps) {
 }
 
 // ─── Mobile bottom nav ───
-function MobileBottomNav({items, activePath, onNavigate}: RailProps) {
+const bottomNavBtnStyle = (isActive: boolean): React.CSSProperties => ({
+  position: 'relative',
+  display: 'flex', flexDirection: 'column',
+  alignItems: 'center', justifyContent: 'center', gap: 2,
+  padding: '10px 4px 8px',
+  borderRadius: 999,
+  background: 'transparent', border: 'none', cursor: 'pointer',
+  color: isActive ? '#02110D' : 'rgba(236, 255, 244, 0.66)',
+  fontSize: 10, fontWeight: 600,
+  letterSpacing: '0.02em',
+  zIndex: 1,
+  transition: 'color 0.15s',
+});
+
+const bottomNavPill = (
+  <motion.span
+    layoutId="app-bottom-pill"
+    style={{
+      position: 'absolute', inset: 0,
+      background: 'linear-gradient(135deg, #7CFFB2 0%, #45D688 50%, #2BAA66 100%)',
+      borderRadius: 999,
+      boxShadow: '0 6px 20px -6px rgba(124, 255, 178, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.3)',
+      zIndex: -1,
+    }}
+    transition={{type: 'spring', stiffness: 380, damping: 32}}
+  />
+);
+
+function MobileBottomNav({items, activePath, onNavigate, onMore, moreActive}: RailProps) {
+  const columns = items.length + (onMore ? 1 : 0);
   return (
     <nav style={{
       position: 'fixed', left: 0, right: 0, bottom: 0,
@@ -361,7 +408,7 @@ function MobileBottomNav({items, activePath, onNavigate}: RailProps) {
       <LayoutGroup>
         <div style={{
           display: 'grid',
-          gridTemplateColumns: `repeat(${items.length}, 1fr)`,
+          gridTemplateColumns: `repeat(${columns}, 1fr)`,
           gap: 2, padding: 6,
           background: 'rgba(255, 255, 255, 0.04)',
           border: '1px solid rgba(236, 255, 244, 0.08)',
@@ -371,45 +418,88 @@ function MobileBottomNav({items, activePath, onNavigate}: RailProps) {
           {items.map(({key, label, shortLabel, icon: Icon}) => {
             const isActive = key === activePath;
             return (
-              <button
-                key={key}
-                onClick={() => onNavigate(key)}
-                aria-label={label}
-                style={{
-                  position: 'relative',
-                  display: 'flex', flexDirection: 'column',
-                  alignItems: 'center', justifyContent: 'center', gap: 2,
-                  padding: '10px 4px 8px',
-                  borderRadius: 999,
-                  background: 'transparent', border: 'none', cursor: 'pointer',
-                  color: isActive ? '#02110D' : 'rgba(236, 255, 244, 0.66)',
-                  fontSize: 10, fontWeight: 600,
-                  letterSpacing: '0.02em',
-                  zIndex: 1,
-                  transition: 'color 0.15s',
-                }}
-              >
-                {isActive && (
-                  <motion.span
-                    layoutId="app-bottom-pill"
-                    style={{
-                      position: 'absolute', inset: 0,
-                      background: 'linear-gradient(135deg, #7CFFB2 0%, #45D688 50%, #2BAA66 100%)',
-                      borderRadius: 999,
-                      boxShadow: '0 6px 20px -6px rgba(124, 255, 178, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.3)',
-                      zIndex: -1,
-                    }}
-                    transition={{type: 'spring', stiffness: 380, damping: 32}}
-                  />
-                )}
+              <button key={key} onClick={() => onNavigate(key)} aria-label={label} style={bottomNavBtnStyle(isActive)}>
+                {isActive && bottomNavPill}
                 <Icon size={18} strokeWidth={isActive ? 2.4 : 2}/>
                 <span>{shortLabel ?? label}</span>
               </button>
             );
           })}
+          {onMore && (
+            <button onClick={onMore} aria-label="More" style={bottomNavBtnStyle(!!moreActive)}>
+              {moreActive && bottomNavPill}
+              <MoreHorizontal size={18} strokeWidth={moreActive ? 2.4 : 2}/>
+              <span>Plus</span>
+            </button>
+          )}
         </div>
       </LayoutGroup>
     </nav>
+  );
+}
+
+// ─── Mobile "More" overflow sheet ───
+interface MoreSheetProps {
+  open: boolean;
+  items: NavItem[];
+  activePath: string;
+  onClose: () => void;
+  onNavigate: (k: string) => void;
+}
+
+function MobileMoreSheet({open, items, activePath, onClose, onNavigate}: MoreSheetProps) {
+  return (
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div
+            initial={{opacity: 0}} animate={{opacity: 1}} exit={{opacity: 0}}
+            onClick={onClose}
+            style={{position: 'fixed', inset: 0, background: 'rgba(2, 17, 13, 0.6)', zIndex: 60}}
+          />
+          <motion.div
+            initial={{y: '100%'}} animate={{y: 0}} exit={{y: '100%'}}
+            transition={{type: 'spring', stiffness: 420, damping: 38}}
+            style={{
+              position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 61,
+              padding: '14px 14px calc(env(safe-area-inset-bottom, 0px) + 18px)',
+              background: 'rgba(6, 24, 18, 0.97)',
+              backdropFilter: 'blur(24px) saturate(140%)',
+              borderTop: '1px solid rgba(236, 255, 244, 0.1)',
+              borderRadius: '20px 20px 0 0',
+            }}
+          >
+            <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12}}>
+              <span style={{fontSize: 13, fontWeight: 600, color: 'rgba(236, 255, 244, 0.66)'}}>Plus</span>
+              <button onClick={onClose} aria-label="Fermer" style={{
+                background: 'transparent', border: 'none', cursor: 'pointer', color: 'rgba(236, 255, 244, 0.66)',
+                display: 'flex', padding: 4,
+              }}>
+                <X size={20}/>
+              </button>
+            </div>
+            <div style={{display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10}}>
+              {items.map(({key, label, icon: Icon}) => {
+                const isActive = key === activePath;
+                return (
+                  <button key={key} onClick={() => onNavigate(key)} style={{
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    padding: '14px 16px', borderRadius: 14, cursor: 'pointer',
+                    background: isActive ? 'rgba(124, 255, 178, 0.14)' : 'rgba(255, 255, 255, 0.04)',
+                    border: `1px solid ${isActive ? 'rgba(124, 255, 178, 0.4)' : 'rgba(236, 255, 244, 0.08)'}`,
+                    color: isActive ? '#7CFFB2' : 'rgba(236, 255, 244, 0.82)',
+                    fontSize: 14, fontWeight: 600,
+                  }}>
+                    <Icon size={20}/>
+                    <span>{label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
   );
 }
 

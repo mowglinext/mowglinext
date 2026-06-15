@@ -164,6 +164,8 @@ mowgli:
     battery_full_percent: 95.0     # resume mowing above this %
     battery_low_percent: 20.0      # start docking
     battery_critical_percent: 10.0 # emergency dock
+    battery_critical_recovery_percent: 30.0 # leave critical-battery state once charged above this %
+                                            # (hysteresis upper bound; must be > battery_critical_percent)
 
     # -----------------------------------------------------------------
     # Mowing
@@ -176,20 +178,45 @@ mowgli:
     outline_offset: 0.05           # inward offset from boundary (m)
     mow_angle_offset_deg: -1.0    # -1 = auto-detect optimal angle
     mow_angle_increment_deg: 0.0  # rotate pattern each full pass
-    headland_width: 0.18           # headland = 1 × tool_width
+    headland_width: 0.18           # headland = 1 × tool_width. NOTE: currently INERT — the
+                                   # coverage BT (PlanCoverageArea) derives the F2C headland from
+                                   # chassis_width (ring_inset = 0.5*chassis_width + 0.05, then
+                                   # headland = ring_inset + 0.5*op_w ≈ 0.35) and sends it in the
+                                   # action goal, which overrides coverage_server.default_headland_width.
+                                   # To change the effective headland, change chassis_width or the
+                                   # derivation in coverage_nodes.cpp — not this key.
     # num_headland_passes: 0 = auto (= ceil(headland_width / tool_width)).
     # >0 forces exactly that many concentric perimeter rings, e.g. 1 for a
     # single perimeter pass, 2 for double, regardless of headland_width.
     num_headland_passes: 0
-    # chassis_safety_inset: planning-time pull-back of the polygon edge
-    # before F2C generates swaths/headlands. Commented out so the
-    # navigation launch defaults it to chassis_width / 2 (= 0.20 m here),
-    # which keeps the chassis edge inside the operator polygon even under
-    # perfect FTC tracking. Override with an explicit metres value here
-    # to bias more (hard fences) or less (open lawn).
-    # chassis_safety_inset: 0.20
-    path_spacing: 0.18             # = tool_width for full coverage
-    min_turning_radius: 0.05       # skid-steer pivots in place; large values force wide F2C U-turns
+    # chassis_safety_inset: planning-time pull-back of the polygon edge before
+    # the headland rings/swaths are generated, so the OUTERMOST mowed ring sits
+    # (chassis_safety_inset + op_width/2) inside the boundary. This is the
+    # robot's margin for tracking error: too small and the veering drivetrain
+    # crosses the boundary during the outer ring, tripping the soft BoundaryGuard
+    # which HALTS and restarts coverage (field 2026-06-12: 0.08 m → robot 0.39 m
+    # out of bounds, coverage never advanced past the outer ring). 0.15 m keeps
+    # the chassis centre clear with room for the ~0.1–0.2 m lateral tracking
+    # error on this base, at the cost of a ~0.23 m uncut perimeter band. Lower it
+    # toward 0.08 only once tracking is confirmed tight; raise it near hard
+    # fences. Read LIVE by coverage_server (ros2-param-set-tunable).
+    chassis_safety_inset: 0.15
+    # path_spacing: DEPRECATED / informational — no ROS2 node reads it. F2C swath
+    # spacing is driven by tool_width (coverage_server.operation_width); a separate
+    # spacing value re-opens the swath-gap bug, so this only mirrors tool_width.
+    path_spacing: 0.18             # = tool_width (informational only)
+    # swath_overlap: F2C swath spacing = tool_width − swath_overlap, so adjacent
+    # swaths overlap by this much. Covers the headland↔swath seam + BruteForce
+    # edge margins (harness: 95 % → 100 % on the 9×6 m field). tool_width (the
+    # map_server stamp radius) is unchanged. 0 = swaths exactly tool_width apart.
+    swath_overlap: 0.02
+    # min_turning_radius: CC-Dubins arc radius F2C plans between swaths. Coverage
+    # runs CONTINUOUS arcs, so this is LIVE. Two-sided: too small → MPPI
+    # reverse-sweeps the tight forward arc; too large → the Ω-turn bulges OUTSIDE
+    # the polygon at the swath ends (R=0.35 left the area by ~0.8 m, then got
+    # clipped into ragged turns). 0.15 m keeps every turn fully in-bounds
+    # (harness: 0 cm bulge) and stays MPPI-trackable. Keep within [0.10, 0.50].
+    min_turning_radius: 0.15
 
     # -----------------------------------------------------------------
     # Docking
@@ -229,6 +256,18 @@ mowgli:
     # the cradle reached. 0.3 = solid contact past the spring detent on
     # the YardForce charger; lower stops short, higher over-presses.
     dock_charging_threshold: 0.3
+    # Approach the dock off RTK-Fixed /gps/absolute_pose instead of the
+    # fusion_graph map→odom TF. fusion_graph can reload CORRUPT after a
+    # dock-arrival graph save (yaw flips, a metre-scale jump), which sends the
+    # robot ~2 m off the cradle and times the docking action out. With this on,
+    # gps_dock_detection_node publishes the true dock contact pose (GPS + the
+    # calibrated dock_pose_*, expressed in the continuous odom frame — never via
+    # map→odom) on /docking_server/detected_dock_pose, and opennav_docking's
+    # SimpleChargingDock tracks THAT (use_external_detection_pose). Set false to
+    # use the legacy graph-TF approach — e.g. at cradles where GPS only Floats
+    # (the GPS detection requires RTK-Fixed; on Float it holds the last good
+    # fix, and only the legacy path is GPS-independent).
+    use_gps_dock_detection: true
 
     # -----------------------------------------------------------------
     # Rain
@@ -255,5 +294,5 @@ mowgli:
     # rad (≈5.7°) forces a final in-place pivot before the dock approach.
     xy_goal_tolerance: 0.30        # metres — acceptable goal position error
     yaw_goal_tolerance: 0.10       # radians — acceptable heading error
-    coverage_xy_tolerance: 0.10    # metres — for coverage waypoints
+    coverage_xy_tolerance: 0.25    # metres — per-swath goal (progress-gated, loose xy OK)
     progress_timeout_sec: 60.0     # seconds without progress before recovery

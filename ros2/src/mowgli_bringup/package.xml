@@ -25,6 +25,10 @@
   <exec_depend>nav2_planner</exec_depend>
   <exec_depend>nav2_behaviors</exec_depend>
   <exec_depend>nav2_regulated_pure_pursuit_controller</exec_depend>
+  <!-- MPPI: coverage controller (FollowCoveragePath slot). RotationShim
+       (nav2_rotation_shim_controller, pulled in via nav2_controller) wraps it
+       for swath-start in-place pivots. -->
+  <exec_depend>nav2_mppi_controller</exec_depend>
   <exec_depend>nav2_smac_planner</exec_depend>
   <exec_depend>nav2_costmap_2d</exec_depend>
   <exec_depend>nav2_map_server</exec_depend>
@@ -32,15 +36,11 @@
   <exec_depend>nav2_waypoint_follower</exec_depend>
   <exec_depend>mowgli_coverage</exec_depend>
 
-  <!-- Localization -->
-  <exec_depend>robot_localization</exec_depend>
-  <!-- slam_toolbox was the RTK-fallback LiDAR localizer; removed in
-       favor of fusion_graph (planned) — see docs/HANDOFF_FUSION_GRAPH.md.
-       Kinematic-ICP source under ros2/src/kinematic_icp is retained for
-       revertability but the launch + helper scripts are gone. -->
-
-  <!-- LiDAR-aware localization is provided by fusion_graph (opt-in via
-       use_fusion_graph). -->
+  <!-- Localization is provided by fusion_graph (GTSAM iSAM2), the sole
+       map+odom localizer. The robot_localization dual-EKF, slam_toolbox, and
+       Kinematic-ICP were all removed (their source dirs no longer exist) —
+       do not re-add a robot_localization exec_depend. -->
+  <exec_depend>fusion_graph</exec_depend>
 
   <!-- Velocity multiplexing -->
   <exec_depend>twist_mux</exec_depend>

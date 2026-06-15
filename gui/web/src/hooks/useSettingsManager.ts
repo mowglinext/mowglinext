@@ -7,6 +7,7 @@ import { getQuaternionFromHeading } from "../utils/map.tsx";
 
 export type SettingsSection =
     | "hardware"
+    | "ntrip"
     | "positioning"
     | "sensors"
     | "localization"
@@ -40,10 +41,20 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         ],
     },
     {
+        id: "ntrip",
+        label: "NTRIP Corrections",
+        icon: "wifi",
+        description: "RTK correction network and base station — set this before GPS",
+        keys: [
+            "ntrip_enabled", "ntrip_host", "ntrip_port",
+            "ntrip_user", "ntrip_password", "ntrip_mountpoint",
+        ],
+    },
+    {
         id: "positioning",
         label: "GPS & Positioning",
         icon: "global",
-        description: "Universal GNSS receiver, datum, and NTRIP corrections",
+        description: "Universal GNSS receiver and map datum",
         keys: [
             "datum_lat", "datum_lon", "datum_alt",
             "gnss_receiver_family", "gnss_serial_device", "gnss_serial_baud",
@@ -51,9 +62,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "gnss_profile_rate_hz", "gnss_signal_group",
             "gnss_unicore_pvt_algorithm", "gnss_unicore_rtk_reliability",
             "gnss_unicore_rtk_timeout_s", "gnss_unicore_dgps_timeout_s",
-            "gps_wait_after_undock_sec",
-            "gps_timeout_sec", "ntrip_enabled", "ntrip_host", "ntrip_port",
-            "ntrip_user", "ntrip_password", "ntrip_mountpoint",
+            "gps_wait_after_undock_sec", "gps_timeout_sec",
         ],
     },
     {
@@ -82,10 +91,14 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         id: "mowing",
         label: "Mowing",
         icon: "scissor",
-        description: "Speed, path spacing, angle, and outline settings",
+        description: "Speed, swath/headland, angle, and outline settings",
         keys: [
+            // NOTE: path_spacing intentionally omitted — it is a dead knob. F2C
+            // swath spacing = tool_width (coverage_server.operation_width); a
+            // separate spacing value re-opens the swath-gap bug. The preview and
+            // tool_width (Geometry section) are the real controls.
             "mowing_enabled", "mowing_speed", "transit_speed", "outline_passes",
-            "outline_offset", "outline_overlap", "path_spacing", "headland_width",
+            "outline_offset", "outline_overlap", "headland_width",
             "num_headland_passes", "chassis_safety_inset",
             "min_turning_radius", "mow_angle_offset_deg", "mow_angle_increment_deg",
         ],
@@ -109,6 +122,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         keys: [
             "battery_full_voltage", "battery_empty_voltage", "battery_critical_voltage",
             "battery_full_percent", "battery_low_percent", "battery_critical_percent",
+            "battery_critical_recovery_percent",
         ],
     },
     {

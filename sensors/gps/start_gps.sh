@@ -18,7 +18,11 @@ if [ ! -f "$CONFIG" ]; then
 fi
 
 parse_yaml() {
-  grep -E "^\s+${1}:" "$CONFIG" | head -1 | sed 's/.*:\s*//' | tr -d '"' | tr -d "'"
+  # Tolerate a missing key: under `set -euo pipefail` a non-matching grep makes
+  # the pipeline exit non-zero, and a bare `NTRIP_HOST=$(parse_yaml ...)`
+  # assignment then aborts the whole script BEFORE the `${VAR:-default}`
+  # fallbacks below can apply. `|| true` keeps it returning empty + exit 0.
+  { grep -E "^\s+${1}:" "$CONFIG" | head -1 | sed 's/.*:\s*//' | tr -d '"' | tr -d "'"; } || true
 }
 
 normalize_lower() {

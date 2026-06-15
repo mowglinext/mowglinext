@@ -2,6 +2,14 @@ package types
 
 import "context"
 
+// RosParameter is a single ROS2 parameter as surfaced to the GUI. Value holds
+// the raw JSON value (number / bool / string / array).
+type RosParameter struct {
+	Name  string `json:"name"`
+	Value any    `json:"value"`
+	Type  string `json:"type,omitempty"`
+}
+
 // IRosProvider is the abstraction layer for all ROS2 communication.
 // The implementation uses a foxglove WebSocket client connecting to
 // foxglove_bridge; callers should never depend on goroslib or any ROS1
@@ -32,4 +40,12 @@ type IRosProvider interface {
 	// Publish sends msg to the named ROS2 topic via foxglove_bridge.
 	// msgType is the ROS2 message type string (e.g. "geometry_msgs/msg/Twist").
 	Publish(topic string, msgType string, msg interface{}) error
+
+	// GetParameters returns parameters from the bridge. A nil/empty names slice
+	// requests every parameter every node exposes.
+	GetParameters(ctx context.Context, names []string) ([]RosParameter, error)
+
+	// SetParameters updates parameters live on their owning nodes and returns the
+	// values the bridge echoes back.
+	SetParameters(ctx context.Context, params []RosParameter) ([]RosParameter, error)
 }

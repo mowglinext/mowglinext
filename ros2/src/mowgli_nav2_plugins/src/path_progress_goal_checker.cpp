@@ -52,6 +52,10 @@ void PathProgressGoalChecker::initialize(
   // wide safety margin baked into the default.
   max_idx_advance_per_call_ =
       static_cast<size_t>(declare("max_idx_advance_per_call", 10).as_int());
+  // Short paths (<= this many poses) complete on proximity, not progress —
+  // per-swath DISCONTINUOUS coverage feeds short swaths + tiny turn-connectors
+  // that the 95%-progress gate can't reliably register (stall). See header.
+  short_path_poses_ = static_cast<size_t>(declare("short_path_poses", 10).as_int());
 
   // Which controller's republished plan to track. Default matches the
   // FollowCoveragePath FTC slot from nav2_params.yaml. If you have a
@@ -191,11 +195,14 @@ bool PathProgressGoalChecker::isGoalReached(
 
   // Path arrived — fall through to the normal progress check.
 
-  // Single-pose path: a degenerate trivial case that would divide by
-  // zero in the (n-1) progress denominator. Treat as "always
-  // reached" once the robot is within tolerance.
+  // Short path: a single-pose path would divide by zero in the (n-1)
+  // progress denominator, and a few-pose path (a per-swath mow segment or a
+  // tiny turn-connector under DISCONTINUOUS coverage) is too short for the
+  // monotonic-progress gate to register reliably — it hangs at <95% forever and
+  // stalls the swath sequence. For n <= short_path_poses_ treat as "reached"
+  // once the robot is within xy+yaw tolerance of the goal pose.
   const size_t n = path_poses_.size();
-  if (n <= 1)
+  if (n <= short_path_poses_)
   {
     const double dx = query_pose.position.x - goal_pose.position.x;
     const double dy = query_pose.position.y - goal_pose.position.y;

@@ -10,7 +10,9 @@ type Props = {
     onChange: (key: string, value: any) => void;
 };
 
-/** Mini SVG preview showing strip pattern based on path_spacing and tool_width */
+/** Mini SVG preview showing the strip pattern. Spacing == tool_width (F2C
+ * swath spacing = coverage_server.operation_width = tool_width); there is no
+ * separate path_spacing knob (it was a dead param). */
 const StripPreview: React.FC<{ pathSpacing: number; toolWidth: number; headlandWidth: number }> = ({
     pathSpacing,
     toolWidth,
@@ -219,11 +221,11 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12}>
-                                    <Form.Item label="Min Turning Radius" tooltip="F2C Robot::setMinTurningRadius — bounds the Dubins arc radius between swaths. Diff-drive mowers: keep small (~0.05 m). Wired to coverage_server.min_turning_radius.">
+                                    <Form.Item label="Min Turning Radius" tooltip="F2C Robot::setMinTurningRadius — bounds the CC-Dubins arc radius between swaths. Coverage runs CONTINUOUS arcs, so this must be wide enough for MPPI to TRACK the turnaround: too small (~0.05 m) is a near-cusp the controller hitches on; ~0.12 m is a gentle Ω-turn that fits the headland band. Wired to coverage_server.min_turning_radius.">
                                         <InputNumber
                                             value={values.min_turning_radius}
                                             onChange={(v) => onChange("min_turning_radius", v)}
-                                            min={0.05} max={1.0} step={0.05} precision={2}
+                                            min={0.05} max={1.0} step={0.01} precision={2}
                                             style={{ width: "100%" }} addonAfter="m"
                                         />
                                     </Form.Item>

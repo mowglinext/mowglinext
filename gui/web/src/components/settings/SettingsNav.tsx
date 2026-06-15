@@ -12,6 +12,7 @@ import {
     ThunderboltOutlined,
     ToolOutlined,
     GlobalOutlined,
+    WifiOutlined,
 } from "@ant-design/icons";
 import { useIsMobile } from "../../hooks/useIsMobile.ts";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
@@ -20,6 +21,7 @@ import { SettingsSection, SectionMeta } from "../../hooks/useSettingsManager.ts"
 const SECTION_ICONS: Record<string, React.ReactNode> = {
     tool: <ToolOutlined />,
     global: <GlobalOutlined />,
+    wifi: <WifiOutlined />,
     aim: <AimOutlined />,
     "node-index": <NodeIndexOutlined />,
     scissor: <ScissorOutlined />,

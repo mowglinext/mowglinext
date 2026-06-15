@@ -148,6 +148,25 @@ private:
     // ticks_per_meter matches the firmware-side scaling).
     wheel_track_ = declare_parameter<double>("wheel_track", 0.325);
     ticks_per_meter_ = declare_parameter<double>("ticks_per_meter", 300.0);
+    // Sub-deadband forward-velocity clamp threshold (see min_linear_vel_).
+    // Default 0.05 (was a hardcoded 0.15) — the PX4 PID firmware can track
+    // slow setpoints now. Live-tunable via the callback below.
+    min_linear_vel_ = declare_parameter<double>("min_linear_vel", 0.05);
+    min_lin_vel_cb_handle_ = add_on_set_parameters_callback(
+        [this](const std::vector<rclcpp::Parameter>& params)
+        {
+          rcl_interfaces::msg::SetParametersResult result;
+          result.successful = true;
+          for (const auto& p : params)
+          {
+            if (p.get_name() == "min_linear_vel" &&
+                p.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE)
+            {
+              min_linear_vel_ = p.as_double();
+            }
+          }
+          return result;
+        });
     // Closed-loop angular-rate controller — see angular_rate_controller.hpp.
     // Gains are gentle by default (USB latency caps them); tune live via
     // ros2 param set. angular_rate_loop_enabled:=false → plain passthrough.
@@ -1476,17 +1495,18 @@ private:
     // stationary_hand_push spikes and σ_yaw drift during PRE_ROTATE
     // and headland pivots.
     //
-    // New policy: instead of boosting, clamp any |vx| below kMinLinVel
-    // to zero. The firmware can't move the chassis below this threshold
-    // anyway, so commanding a sub-deadband forward velocity only
-    // produced motor buzz and the IMU/wheel mismatch above. Sending 0
-    // makes the IMU see nothing AND the wheels see nothing — the graph
-    // stays consistent. Nav2's closed-loop controllers (FTC, MPPI,
-    // BackUp) will issue above-deadband commands on their own once
-    // they detect lack of progress, provided their slow-speed tunables
-    // are set ≥ kMinLinVel (see nav2_params.yaml's FTC `speed_slow:
-    // 0.16` and RPP's `min_approach_linear_velocity: 0.16` for the
-    // canonical examples).
+    // Policy: clamp any |vx| below min_linear_vel_ to zero. This was a
+    // hardcoded 0.15 m/s written for the old hand-rolled wheel-PI, whose
+    // PWM static friction couldn't move the chassis below ~0.15 — so
+    // commanding a sub-deadband forward velocity only produced motor buzz
+    // and a wheel/IMU mismatch (the boost approach pulsed the motors enough
+    // for the gyro to see rotation but too little for encoder ticks).
+    // Now the vendored PX4 PID firmware tracks slow setpoints, so the
+    // threshold is a runtime PARAM defaulting to 0.05: MPPI's regulated
+    // slow-creep (frequently < 0.15 near goals / on alignment) reaches the
+    // wheels and drives smoothly instead of a 0↔0.15 stop-go. Set
+    // min_linear_vel:=0.0 to disable the guard entirely, or raise it back
+    // toward 0.15 if a given chassis still can't execute slow forward.
     //
     // wz handling — closed-loop angular-rate controller.
     //
@@ -1507,9 +1527,8 @@ private:
     //
     // The sub-deadband |vx| → 0 guard is unchanged (linear has no clean
     // host-side rate feedback — encoders slip; leave it to Nav2's loops).
-    constexpr double kMinLinVel = 0.15;  // m/s — PWM 40 forward deadband + margin
     constexpr double kMinCmdToConsider = 1.0e-3;  // ignore floating-point dust
-    if (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < kMinLinVel)
+    if (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < min_linear_vel_)
     {
       vx = 0.0;
     }
@@ -1641,6 +1660,14 @@ private:
   double dock_yaw_{0.0};
   double wheel_track_{0.325};
   double ticks_per_meter_{300.0};
+  // Host-side sub-deadband forward-velocity clamp (on_cmd_vel): any |vx| below
+  // this is zeroed before reaching the firmware. Lowered from the legacy 0.15
+  // (hand-rolled wheel-PI breakaway) to 0.05 now the vendored PX4 PID can track
+  // slow setpoints — lets MPPI's regulated slow-creep actually drive instead of
+  // a 0↔0.15 stop-go. Runtime-tunable (add_on_set_parameters_callback) for live
+  // field iteration without a rebuild.
+  double min_linear_vel_{0.05};
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr min_lin_vel_cb_handle_;
   // Closed-loop angular-rate controller (on_cmd_vel). Drives the firmware yaw
   // command from gyro feedback so measured ω tracks the commanded ω across
   // the firmware's nonlinear PWM curve. See angular_rate_controller.hpp.

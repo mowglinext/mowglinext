@@ -62,6 +62,10 @@ type MockRosProvider struct {
 	ServiceErr   error
 	PublishErr   error
 	SubscribeErr error
+	// Parameters returned by GetParameters; SetParams records set calls.
+	Parameters   []RosParameter
+	ParamErr     error
+	SetParams    [][]RosParameter
 }
 
 type ServiceCall struct {
@@ -106,6 +110,25 @@ func (m *MockRosProvider) UnSubscribe(topic string, id string) {
 
 func (m *MockRosProvider) Publish(_ string, _ string, _ interface{}) error {
 	return m.PublishErr
+}
+
+func (m *MockRosProvider) GetParameters(_ context.Context, _ []string) ([]RosParameter, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ParamErr != nil {
+		return nil, m.ParamErr
+	}
+	return m.Parameters, nil
+}
+
+func (m *MockRosProvider) SetParameters(_ context.Context, params []RosParameter) ([]RosParameter, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ParamErr != nil {
+		return nil, m.ParamErr
+	}
+	m.SetParams = append(m.SetParams, params)
+	return params, nil
 }
 
 // Dispatch simulates delivering a message to all subscribers of a logical topic key.

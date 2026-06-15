@@ -69,7 +69,7 @@ BT::NodeStatus RecordArea::onRunning()
 
   // Check for finish command (COMMAND_RECORD_FINISH=5)
   {
-    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    std::unique_lock<std::mutex> lock(ctx->context_mutex);
     if (ctx->current_command == 5)
     {
       RCLCPP_INFO(ctx->node->get_logger(),
@@ -131,9 +131,15 @@ BT::NodeStatus RecordArea::onRunning()
                   simplified.size(),
                   area);
 
-      // Save the area
-      bool saved = save_area(simplified, is_exclusion);
+      // Reset the command under the lock, then RELEASE context_mutex before
+      // the (up to ~15 s: 5 s wait_for_service + 10 s future poll) blocking
+      // add_area service call. Holding the mutex across that call stalled the
+      // status/command callbacks for the whole save. trajectory_ is only
+      // touched on this tick thread, so it needs no lock.
       ctx->current_command = 0;
+      lock.unlock();
+
+      bool saved = save_area(simplified, is_exclusion);
       trajectory_.clear();
 
       // Publish empty trajectory to clear preview

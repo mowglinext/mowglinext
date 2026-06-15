@@ -232,11 +232,7 @@ void MapServerNode::init_map()
 {
   std::lock_guard<std::mutex> lock(map_mutex_);
 
-  map_ = grid_map::GridMap({std::string(layers::OCCUPANCY),
-                            std::string(layers::CLASSIFICATION),
-                            std::string(layers::MOW_PROGRESS),
-                            std::string(layers::CONFIDENCE),
-                            std::string(layers::FAIL_COUNT)});
+  map_ = grid_map::GridMap({std::string(layers::OCCUPANCY), std::string(layers::CLASSIFICATION)});
 
   map_.setFrameId(map_frame_);
   map_.setGeometry(grid_map::Length(map_size_x_, map_size_y_),
@@ -245,9 +241,10 @@ void MapServerNode::init_map()
 
   map_[std::string(layers::OCCUPANCY)].setConstant(defaults::OCCUPANCY);
   map_[std::string(layers::CLASSIFICATION)].setConstant(defaults::CLASSIFICATION);
-  map_[std::string(layers::MOW_PROGRESS)].setConstant(defaults::MOW_PROGRESS);
-  map_[std::string(layers::CONFIDENCE)].setConstant(defaults::CONFIDENCE);
-  map_[std::string(layers::FAIL_COUNT)].setConstant(defaults::FAIL_COUNT);
+
+  // Drop any accumulated mowed-progress overlay: a fresh map (startup or a map
+  // delete) means coverage starts over. stamp_mow_progress lazily recreates it.
+  mow_progress_map_ = grid_map::GridMap();
 
   RCLCPP_DEBUG(get_logger(),
                "Grid map created: %zu×%zu cells",
@@ -303,9 +300,6 @@ void MapServerNode::resize_map_to_areas()
 
   map_[std::string(layers::OCCUPANCY)].setConstant(defaults::OCCUPANCY);
   map_[std::string(layers::CLASSIFICATION)].setConstant(defaults::CLASSIFICATION);
-  map_[std::string(layers::MOW_PROGRESS)].setConstant(defaults::MOW_PROGRESS);
-  map_[std::string(layers::CONFIDENCE)].setConstant(defaults::CONFIDENCE);
-  map_[std::string(layers::FAIL_COUNT)].setConstant(defaults::FAIL_COUNT);
 
   masks_dirty_ = true;
 
@@ -361,14 +355,12 @@ void MapServerNode::on_save_map(const std_srvs::srv::Trigger::Request::SharedPtr
 
     const auto& occ = map_[std::string(layers::OCCUPANCY)];
     const auto& cls = map_[std::string(layers::CLASSIFICATION)];
-    const auto& prog = map_[std::string(layers::MOW_PROGRESS)];
-    const auto& conf = map_[std::string(layers::CONFIDENCE)];
 
     for (int r = 0; r < rows; ++r)
     {
       for (int c = 0; c < cols; ++c)
       {
-        float vals[4] = {occ(r, c), cls(r, c), prog(r, c), conf(r, c)};
+        float vals[2] = {occ(r, c), cls(r, c)};
         dat.write(reinterpret_cast<const char*>(vals), sizeof(vals));
       }
     }
@@ -451,10 +443,7 @@ void MapServerNode::on_load_map(const std_srvs::srv::Trigger::Request::SharedPtr
     map_size_y_ = sy;
     map_frame_ = frame_loaded;
 
-    map_ = grid_map::GridMap({std::string(layers::OCCUPANCY),
-                              std::string(layers::CLASSIFICATION),
-                              std::string(layers::MOW_PROGRESS),
-                              std::string(layers::CONFIDENCE)});
+    map_ = grid_map::GridMap({std::string(layers::OCCUPANCY), std::string(layers::CLASSIFICATION)});
 
     map_.setFrameId(map_frame_);
     map_.setGeometry(grid_map::Length(map_size_x_, map_size_y_),
@@ -469,8 +458,6 @@ void MapServerNode::on_load_map(const std_srvs::srv::Trigger::Request::SharedPtr
 
     auto& occ = map_[std::string(layers::OCCUPANCY)];
     auto& cls = map_[std::string(layers::CLASSIFICATION)];
-    auto& prog = map_[std::string(layers::MOW_PROGRESS)];
-    auto& conf = map_[std::string(layers::CONFIDENCE)];
 
     const int actual_rows = map_.getSize()(0);
     const int actual_cols = map_.getSize()(1);
@@ -479,19 +466,13 @@ void MapServerNode::on_load_map(const std_srvs::srv::Trigger::Request::SharedPtr
     {
       for (int c = 0; c < actual_cols && c < cols_loaded; ++c)
       {
-        float vals[4] = {};
+        float vals[2] = {};
         dat.read(reinterpret_cast<char*>(vals), sizeof(vals));
         occ(r, c) = vals[0];
         cls(r, c) = vals[1];
-        prog(r, c) = vals[2];
-        conf(r, c) = vals[3];
       }
     }
     dat.close();
-
-    last_decay_time_ = now();
-    strip_layouts_.clear();
-    current_strip_idx_.clear();
 
     res->success = true;
     res->message = "Map loaded from " + map_file_path_;
@@ -514,8 +495,6 @@ void MapServerNode::on_clear_map(const std_srvs::srv::Trigger::Request::SharedPt
   }
   areas_.clear();
   obstacle_polygons_.clear();
-  strip_layouts_.clear();
-  current_strip_idx_.clear();
   docking_pose_set_ = false;
   keepout_filter_info_sent_ = false;
   speed_filter_info_sent_ = false;
@@ -592,9 +571,8 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
   resize_map_to_areas();
   // resize_map_to_areas() reallocates the grid and resets every layer
   // (CLASSIFICATION → UNKNOWN), discarding the LAWN/NO_GO cells stamped above.
-  // Re-stamp from the full area list — exactly as on_load_areas does — or a
-  // freshly recorded area reads 0 LAWN cells, which breaks completion gating,
-  // the GUI coverage overlay, and the cell-based strip fallback.
+  // Re-stamp from the full area list — exactly as on_load_areas does — so the
+  // keepout/speed costmap filters see the correct classification.
   apply_area_classifications();
   masks_dirty_ = true;
 
@@ -670,9 +648,6 @@ void MapServerNode::clear_map_layers()
 {
   map_[std::string(layers::OCCUPANCY)].setConstant(defaults::OCCUPANCY);
   map_[std::string(layers::CLASSIFICATION)].setConstant(defaults::CLASSIFICATION);
-  map_[std::string(layers::MOW_PROGRESS)].setConstant(defaults::MOW_PROGRESS);
-  map_[std::string(layers::CONFIDENCE)].setConstant(defaults::CONFIDENCE);
-  map_[std::string(layers::FAIL_COUNT)].setConstant(defaults::FAIL_COUNT);
 }
 void MapServerNode::on_set_docking_point(
     const mowgli_interfaces::srv::SetDockingPoint::Request::SharedPtr req,
@@ -689,12 +664,10 @@ void MapServerNode::on_set_docking_point(
   // (1) — is_charging gate. Refuse if the last /hardware_bridge/status was
   // not charging or is older than dock_set_status_max_age_s_.
   {
-    const double max_age =
-        get_parameter("dock_set_status_max_age_s").as_double();
-    const double status_age =
-        (last_status_time_.nanoseconds() == 0)
-            ? std::numeric_limits<double>::infinity()
-            : (now() - last_status_time_).seconds();
+    const double max_age = get_parameter("dock_set_status_max_age_s").as_double();
+    const double status_age = (last_status_time_.nanoseconds() == 0)
+                                  ? std::numeric_limits<double>::infinity()
+                                  : (now() - last_status_time_).seconds();
     if (status_age > max_age || !last_is_charging_)
     {
       res->success = false;
@@ -714,8 +687,7 @@ void MapServerNode::on_set_docking_point(
   // 10-50 cm. Reject when σ(xx) or σ(yy) breaches the threshold, or when
   // /gps/pose_cov is stale (driver dead, USB unplugged, datum unset).
   {
-    const double max_acc =
-        get_parameter("dock_set_gps_accuracy_max_m").as_double();
+    const double max_acc = get_parameter("dock_set_gps_accuracy_max_m").as_double();
     const double max_age = get_parameter("dock_set_gps_max_age_s").as_double();
     geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr gps_snap;
     rclcpp::Time gps_time{0, 0, RCL_ROS_TIME};
@@ -766,11 +738,10 @@ void MapServerNode::on_set_docking_point(
   //
   // Read thresholds live each call so `ros2 param set` works without a
   // node restart — the constructor-cached values were stuck at startup.
-  const double threshold_rad =
-      get_parameter("yaw_convergence_threshold_rad").as_double();
+  const double threshold_rad = get_parameter("yaw_convergence_threshold_rad").as_double();
   const double window_s = get_parameter("yaw_convergence_window_s").as_double();
-  const auto min_samples = static_cast<size_t>(
-      get_parameter("yaw_convergence_min_samples").as_int());
+  const auto min_samples =
+      static_cast<size_t>(get_parameter("yaw_convergence_min_samples").as_int());
   {
     std::lock_guard<std::mutex> lk(recent_yaws_mutex_);
     if (recent_yaws_.size() < min_samples)
@@ -1042,7 +1013,8 @@ void MapServerNode::on_promote_obstacle(
   }
 
   res->success = true;
-  res->message = "obstacle promoted to permanent keepout for area " + std::to_string(req->area_index);
+  res->message =
+      "obstacle promoted to permanent keepout for area " + std::to_string(req->area_index);
   RCLCPP_INFO(get_logger(),
               "promote_obstacle: appended polygon (%zu points) to area %u",
               poly.points.size(),
@@ -1162,8 +1134,6 @@ void MapServerNode::load_areas_from_file(const std::string& path)
   // Clear existing areas and reload from file.
   areas_.clear();
   obstacle_polygons_.clear();
-  strip_layouts_.clear();
-  current_strip_idx_.clear();
 
   const int area_count = get_int("area_count", 0);
   for (int i = 0; i < area_count; ++i)
@@ -1283,18 +1253,6 @@ void MapServerNode::apply_area_classifications()
     }
   }
 }
-void MapServerNode::tick_once(double elapsed_seconds)
-{
-  std::lock_guard<std::mutex> lock(map_mutex_);
-  apply_decay(elapsed_seconds);
-}
-
-void MapServerNode::mark_mowed(double x, double y)
-{
-  std::lock_guard<std::mutex> lock(map_mutex_);
-  mark_cells_mowed(x, y);
-}
-
 void MapServerNode::add_area_for_test(
     const mowgli_interfaces::srv::AddMowingArea::Request::SharedPtr req,
     mowgli_interfaces::srv::AddMowingArea::Response::SharedPtr res)

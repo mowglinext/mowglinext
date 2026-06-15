@@ -185,6 +185,31 @@ add_executable(scan_deskew_node
 ament_target_dependencies(scan_deskew_node
   rclcpp
   sensor_msgs
+  nav_msgs
+)
+
+# ---------------------------------------------------------------------------
+# Executable: gps_dock_detection_node — publishes a GPS-derived dock detection
+# (PoseStamped on detected_dock_pose, in the odom fixed_frame) so
+# opennav_docking can approach the cradle off RTK-Fixed GPS instead of the
+# corruptible map→odom factor-graph TF. See the source header for the full
+# data flow + RTK-Float fallback rationale.
+# ---------------------------------------------------------------------------
+
+add_executable(gps_dock_detection_node
+  src/gps_dock_detection_node.cpp
+)
+
+target_include_directories(gps_dock_detection_node PUBLIC ${INCLUDE_DIR})
+
+ament_target_dependencies(gps_dock_detection_node
+  rclcpp
+  geometry_msgs
+  sensor_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  mowgli_interfaces
 )
 
 # ---------------------------------------------------------------------------
@@ -206,6 +231,7 @@ install(
     calibrate_imu_yaw_node
     costmap_scan_filter_node
     scan_deskew_node
+    gps_dock_detection_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}

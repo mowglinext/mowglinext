@@ -3,7 +3,6 @@ package mowgli
 
 import (
 	"github.com/cedbossneo/mowglinext/pkg/msgs/geometry"
-	"github.com/cedbossneo/mowglinext/pkg/msgs/nav"
 )
 
 // AddMowingAreaReq for mowgli_interfaces/srv/AddMowingArea request.
@@ -89,21 +88,6 @@ type EmergencyStopRes struct {
 	Success                   bool                           `json:"success"`
 }
 
-// GetCoverageStatusReq for mowgli_interfaces/srv/GetCoverageStatus request.
-type GetCoverageStatusReq struct {
-	AreaIndex                 uint32                         `json:"area_index"`
-}
-
-// GetCoverageStatusRes for mowgli_interfaces/srv/GetCoverageStatus response.
-type GetCoverageStatusRes struct {
-	Success                   bool                           `json:"success"`
-	CoveragePercent           float32                        `json:"coverage_percent"`
-	TotalCells                uint32                         `json:"total_cells"`
-	MowedCells                uint32                         `json:"mowed_cells"`
-	ObstacleCells             uint32                         `json:"obstacle_cells"`
-	StripsRemaining           uint32                         `json:"strips_remaining"`
-}
-
 // GetMowingAreaReq for mowgli_interfaces/srv/GetMowingArea request.
 type GetMowingAreaReq struct {
 	Index                     uint32                         `json:"index"`
@@ -113,50 +97,6 @@ type GetMowingAreaReq struct {
 type GetMowingAreaRes struct {
 	Area                      MapArea                        `json:"area"`
 	Success                   bool                           `json:"success"`
-}
-
-// GetNextSegmentReq for mowgli_interfaces/srv/GetNextSegment request.
-type GetNextSegmentReq struct {
-	AreaIndex                 uint32                         `json:"area_index"`
-	RobotX                    float64                        `json:"robot_x"`
-	RobotY                    float64                        `json:"robot_y"`
-	RobotYawRad               float64                        `json:"robot_yaw_rad"`
-	PreferDirYawRad           float64                        `json:"prefer_dir_yaw_rad"`
-	Boustrophedon             bool                           `json:"boustrophedon"`
-	MaxSegmentLengthM         float64                        `json:"max_segment_length_m"`
-}
-
-// GetNextSegmentRes for mowgli_interfaces/srv/GetNextSegment response.
-type GetNextSegmentRes struct {
-	Success                   bool                           `json:"success"`
-	CoverageComplete          bool                           `json:"coverage_complete"`
-	SegmentPath               nav.Path                       `json:"segment_path"`
-	TargetCellPose            geometry.PoseStamped           `json:"target_cell_pose"`
-	IsLongTransit             bool                           `json:"is_long_transit"`
-	CoveragePercent           float32                        `json:"coverage_percent"`
-	SegmentsRemainingEstimate uint32                         `json:"segments_remaining_estimate"`
-	DeadCellsCount            uint32                         `json:"dead_cells_count"`
-	Phase                     string                         `json:"phase"`
-	TerminationReason         string                         `json:"termination_reason"`
-}
-
-// GetNextStripReq for mowgli_interfaces/srv/GetNextStrip request.
-type GetNextStripReq struct {
-	AreaIndex                 uint32                         `json:"area_index"`
-	RobotX                    float64                        `json:"robot_x"`
-	RobotY                    float64                        `json:"robot_y"`
-	PreferHeadland            bool                           `json:"prefer_headland"`
-}
-
-// GetNextStripRes for mowgli_interfaces/srv/GetNextStrip response.
-type GetNextStripRes struct {
-	Success                   bool                           `json:"success"`
-	CoverageComplete          bool                           `json:"coverage_complete"`
-	StripPath                 nav.Path                       `json:"strip_path"`
-	TransitGoal               geometry.PoseStamped           `json:"transit_goal"`
-	CoveragePercent           float32                        `json:"coverage_percent"`
-	StripsRemaining           uint32                         `json:"strips_remaining"`
-	Phase                     string                         `json:"phase"`
 }
 
 // GetRecoveryPointReq for mowgli_interfaces/srv/GetRecoveryPoint request (empty).
@@ -170,18 +110,6 @@ type GetRecoveryPointRes struct {
 	DistanceOutside           float64                        `json:"distance_outside"`
 }
 
-// GetRemainingAreaPolygonReq for mowgli_interfaces/srv/GetRemainingAreaPolygon request.
-type GetRemainingAreaPolygonReq struct {
-	AreaId                    uint32                         `json:"area_id"`
-}
-
-// GetRemainingAreaPolygonRes for mowgli_interfaces/srv/GetRemainingAreaPolygon response.
-type GetRemainingAreaPolygonRes struct {
-	Success                   bool                           `json:"success"`
-	Error                     string                         `json:"error"`
-	Pieces                    []MapArea                      `json:"pieces"`
-}
-
 // HighLevelControlReq for mowgli_interfaces/srv/HighLevelControl request.
 type HighLevelControlReq struct {
 	Command                   uint8                          `json:"command"`
@@ -190,19 +118,6 @@ type HighLevelControlReq struct {
 // HighLevelControlRes for mowgli_interfaces/srv/HighLevelControl response.
 type HighLevelControlRes struct {
 	Success                   bool                           `json:"success"`
-}
-
-// MarkSegmentBlockedReq for mowgli_interfaces/srv/MarkSegmentBlocked request.
-type MarkSegmentBlockedReq struct {
-	FailedPath                nav.Path                       `json:"failed_path"`
-	AreaIndex                 uint32                         `json:"area_index"`
-}
-
-// MarkSegmentBlockedRes for mowgli_interfaces/srv/MarkSegmentBlocked response.
-type MarkSegmentBlockedRes struct {
-	Success                   bool                           `json:"success"`
-	CellsMarkedBlocked        uint32                         `json:"cells_marked_blocked"`
-	CellsPromotedDead         uint32                         `json:"cells_promoted_dead"`
 }
 
 // MowerControlReq for mowgli_interfaces/srv/MowerControl request.

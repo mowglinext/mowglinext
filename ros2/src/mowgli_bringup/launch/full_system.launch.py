@@ -71,6 +71,7 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     _runtime_cfg_path = "/ros2_ws/config/mowgli_robot.yaml"
     _early_use_lidar = "true"
+    _yaml_set_lidar = False
     if os.path.isfile(_runtime_cfg_path):
         try:
             with open(_runtime_cfg_path, "r") as _f:
@@ -78,16 +79,22 @@ def generate_launch_description() -> LaunchDescription:
             _rp = _cfg.get("mowgli", {}).get("ros__parameters", {})
             if "lidar_enabled" in _rp:
                 _early_use_lidar = "true" if bool(_rp["lidar_enabled"]) else "false"
+                _yaml_set_lidar = True
         except yaml.YAMLError:
             pass
 
-    # LIDAR_ENABLED env var overrides the yaml (back-compat with the
-    # installer's .env workflow).
-    _env_lidar = os.environ.get("LIDAR_ENABLED", "").strip().lower()
-    if _env_lidar in ("false", "0", "no"):
-        _early_use_lidar = "false"
-    elif _env_lidar in ("true", "1", "yes"):
-        _early_use_lidar = "true"
+    # mowgli_robot.yaml is the source of truth. The LIDAR_ENABLED env var
+    # (installer / compose .env) is a FALLBACK ONLY — it applies when the
+    # runtime yaml does NOT specify lidar_enabled (fresh install before the GUI
+    # has written one). When the yaml DOES set lidar_enabled, it WINS: a
+    # deliberate operator/GUI toggle must not be silently overridden by a stale
+    # .env (the .env said false while the GUI had re-enabled lidar — confusing).
+    if not _yaml_set_lidar:
+        _env_lidar = os.environ.get("LIDAR_ENABLED", "").strip().lower()
+        if _env_lidar in ("false", "0", "no"):
+            _early_use_lidar = "false"
+        elif _env_lidar in ("true", "1", "yes"):
+            _early_use_lidar = "true"
 
     # ------------------------------------------------------------------
     # Declared arguments
@@ -157,7 +164,8 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     behavior_params = os.path.join(behavior_dir, "config", "behavior_tree.yaml")
     map_params = os.path.join(map_dir, "config", "map_server.yaml")
-    nav2_params_file = os.path.join(bringup_dir, "config", "nav2_params.yaml")
+    # (Nav2 params are owned by navigation.launch.py, which deep-merges
+    # nav2_params_base.yaml + the lidar/no-lidar overlay; nothing here loads them.)
     monitoring_params = os.path.join(monitoring_dir, "config", "diagnostics.yaml")
     mqtt_params = os.path.join(monitoring_dir, "config", "mqtt_bridge.yaml")
     # Robot-specific config (bind-mounted from mowgli-docker/config/mowgli/)
@@ -220,11 +228,31 @@ def generate_launch_description() -> LaunchDescription:
             {"undock_distance": float(robot_params.get("undock_distance", 1.0))},
             # transit_speed / mowing_speed flow into SetNavMode, which sets
             # them on the live controllers (FollowPath.desired_linear_vel for
-            # the RPP transit controller, FollowCoveragePath.speed_fast for the
-            # FTC coverage controller) per nav mode. Without these the BT used
+            # the RPP transit controller, FollowCoveragePath.vx_max for the
+            # MPPI coverage controller) per nav mode. Without these the BT used
             # hardcoded 0.5/0.25 and the configured speeds never took effect.
             {"transit_speed": float(robot_params.get("transit_speed", 0.25))},
             {"mowing_speed": float(robot_params.get("mowing_speed", 0.2))},
+            # Battery thresholds — operator-tunable in mowgli_robot.yaml and
+            # surfaced on the GUI Settings page. Forwarded here under the C++
+            # parameter names the behavior node declares (behavior_tree.yaml
+            # uses *_pct aliases that do NOT match those names, so without
+            # this passthrough the node silently runs its compiled defaults).
+            # battery_critical_recovery_percent is the HYSTERESIS upper bound
+            # the critical-battery handler uses to return to IDLE after a
+            # recharge; it must exceed battery_critical_percent (the node
+            # clamps it if not).
+            {"battery_full_voltage": float(robot_params.get("battery_full_voltage", 28.0))},
+            {"battery_empty_voltage": float(robot_params.get("battery_empty_voltage", 24.0))},
+            {"battery_critical_voltage": float(robot_params.get("battery_critical_voltage", 0.0))},
+            {"battery_low_percent": float(robot_params.get("battery_low_percent", 20.0))},
+            {"battery_critical_percent": float(robot_params.get("battery_critical_percent", 10.0))},
+            {"battery_full_percent": float(robot_params.get("battery_full_percent", 95.0))},
+            {
+                "battery_critical_recovery_percent": float(
+                    robot_params.get("battery_critical_recovery_percent", 30.0)
+                )
+            },
         ],
     )
 
@@ -255,8 +283,29 @@ def generate_launch_description() -> LaunchDescription:
             # around discrete obstacles uses the correct robot footprint
             # and the wall-vs-obstacle threshold operators tune per site.
             {"chassis_width": float(robot_params.get("chassis_width", 0.40))},
+            # Mirror the chassis_safety_inset coverage_server gets from
+            # navigation.launch.py (operator override, else chassis_width/2).
+            # The BT no longer pre-gates polygon size (the coverage server
+            # reports too-small fields itself), but other BT consumers (bypass
+            # arcs) still read this.
+            {"chassis_safety_inset": float(
+                robot_params.get(
+                    "chassis_safety_inset",
+                    float(robot_params.get("chassis_width", 0.40)) / 2.0))},
             {"max_obstacle_avoidance_distance":
                 float(robot_params.get("max_obstacle_avoidance_distance", 2.0))},
+            # Hard area-boundary enforcement (operator intent: "lethal area
+            # where there is no navigation or mowing area"). When true (default)
+            # the keepout mask marks every cell outside the union of all areas
+            # as LETHAL so the planner never routes out and MPPI never steers
+            # out. Operator-tunable from mowgli_robot.yaml / GUI; set false only
+            # if the dock/transit corridor is NOT covered by a navigation area
+            # (otherwise the hard boundary would strand docking). The free slack
+            # left outside each edge for RTK drift is enforce_boundary_margin_m.
+            {"lethal_outside_areas": bool(
+                robot_params.get("lethal_outside_areas", True))},
+            {"enforce_boundary_margin_m": float(
+                robot_params.get("enforce_boundary_margin_m", 0.25))},
         ],
     )
 
@@ -372,6 +421,11 @@ def generate_launch_description() -> LaunchDescription:
                     "clientPublish",
                     "services",
                     "connectionGraph",
+                    # Allow Foxglove Studio to read AND set ROS parameters live
+                    # (e.g. tuning controller_server / coverage critics in the
+                    # field). param_whitelist (default '.*') gates which params.
+                    "parameters",
+                    "parametersSubscribe",
                 ],
             },
         ],

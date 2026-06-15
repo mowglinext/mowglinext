@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
+	"net/url"
 	"sync"
 	"time"
 
@@ -34,9 +34,16 @@ var upgrader = websocket.Upgrader{
 		if origin == "" {
 			return true // non-browser clients
 		}
-		// Allow same-host connections
-		host := r.Host
-		return strings.Contains(origin, host)
+		// Compare the parsed Origin HOST to the request Host exactly.
+		// strings.Contains was exploitable: a page served from e.g.
+		// "http://mower.local.evil.com" contains the host substring
+		// "mower.local" and would pass, enabling cross-site WebSocket
+		// hijacking against an API that has no auth layer.
+		u, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		return u.Host == r.Host
 	},
 }
 
@@ -63,11 +70,8 @@ func topicSubscribeInterval(topic string) (int, bool) {
 		return 100, true
 	case "fusionRaw", "cogHeading", "magYaw", "obstacles":
 		return 200, true
-	case "coverageCells":
-		// Big OccupancyGrid; the frontend re-rasterizes it to a canvas image on
-		// every message. It changes slowly (mow progress), so 1 Hz is plenty
-		// and keeps the heavy per-message canvas work off the render loop.
-		return 1000, true
+	case "mowProgress":
+		return 500, true // large OccupancyGrid — throttle hard
 	case "diagnostics", "status", "highLevelStatus", "btLog", "map",
 		"path", "plan", "power", "emergency", "dockingSensor",
 		"robotDescription", "recordingTrajectory",
@@ -97,6 +101,9 @@ func AddMapAreaRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		var CallReq mowgli.AddMowingAreaReq
 		err := unmarshalROSMessage[*mowgli.AddMowingAreaReq](c.Request.Body, &CallReq)
 		if err != nil {
+			// Return 400 (was a bare return → silent HTTP 200 with empty body,
+			// so the GUI believed the area was added when it was dropped).
+			c.JSON(400, ErrorResponse{Error: err.Error()})
 			return
 		}
 		if CallReq.Area.Obstacles == nil {
@@ -293,10 +300,10 @@ func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			def, err = subscribe(provider, c, conn, "dockingSensor", -1)
 		case "lidar":
 			def, err = subscribe(provider, c, conn, "lidar", 100)
+		case "mowProgress":
+			def, err = subscribe(provider, c, conn, "mowProgress", 500)
 		case "robotDescription":
 			def, err = subscribe(provider, c, conn, "robotDescription", -1)
-		case "coverageCells":
-			def, err = subscribe(provider, c, conn, "coverageCells", -1)
 		case "recordingTrajectory":
 			def, err = subscribe(provider, c, conn, "recordingTrajectory", -1)
 		case "obstacles":

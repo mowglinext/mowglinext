@@ -27,16 +27,12 @@
 #include "behaviortree_cpp/bt_factory.h"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "mowgli_behavior/bt_context.hpp"
-#include "mowgli_interfaces/srv/get_coverage_status.hpp"
-#include "mowgli_interfaces/srv/get_next_segment.hpp"
-#include "mowgli_interfaces/srv/get_next_strip.hpp"
-#include "mowgli_interfaces/srv/get_remaining_area_polygon.hpp"
-#include "mowgli_interfaces/srv/mark_segment_blocked.hpp"
+#include "mowgli_interfaces/action/plan_coverage.hpp"
+#include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav_msgs/msg/path.hpp"
-#include "opennav_coverage_msgs/action/compute_coverage_path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 
@@ -44,32 +40,19 @@ namespace mowgli_behavior
 {
 
 // ---------------------------------------------------------------------------
-// GetNextStrip — fetch next unmowed strip from map_server
-// ---------------------------------------------------------------------------
-
-class GetNextStrip : public BT::StatefulActionNode
-{
-public:
-  GetNextStrip(const std::string& name, const BT::NodeConfig& config)
-      : BT::StatefulActionNode(name, config)
-  {
-  }
-
-  static BT::PortsList providedPorts()
-  {
-    return {BT::InputPort<uint32_t>("area_index", 0u, "Mowing area index")};
-  }
-
-  BT::NodeStatus onStart() override;
-  BT::NodeStatus onRunning() override;
-  void onHalted() override;
-
-private:
-  rclcpp::Client<mowgli_interfaces::srv::GetNextStrip>::SharedPtr client_;
-};
-
-// ---------------------------------------------------------------------------
-// FollowStrip — follow a strip path with FTCController, blade ON
+// FollowStrip — execute the planned coverage segments, blade ON.
+//
+// Consumes ctx->current_strip_segments (EXPLICIT ordered segments from the
+// coverage server: headland rings first, then straight serpentine swaths) and
+// dispatches ONE segment per FollowCoveragePath goal. RotationShim pivots in
+// place to the segment-start heading; MPPI tracks the straight swath / smooth
+// ring; the PathProgressGoalChecker fires at the segment end.
+//
+// When the next segment's start is far from the robot (resume mid-list, a
+// skipped segment, or a concave field whose serpentine hops across a notch),
+// the node first runs a NavigateToPose transit to the segment start —
+// boundary-aware (global costmap keepout) instead of letting MPPI cut
+// cross-country.
 // ---------------------------------------------------------------------------
 
 class FollowStrip : public BT::StatefulActionNode
@@ -77,6 +60,8 @@ class FollowStrip : public BT::StatefulActionNode
 public:
   using Nav2FollowPath = nav2_msgs::action::FollowPath;
   using FollowGoalHandle = rclcpp_action::ClientGoalHandle<Nav2FollowPath>;
+  using Nav2Navigate = nav2_msgs::action::NavigateToPose;
+  using NavGoalHandle = rclcpp_action::ClientGoalHandle<Nav2Navigate>;
 
   FollowStrip(const std::string& name, const BT::NodeConfig& config)
       : BT::StatefulActionNode(name, config)
@@ -94,112 +79,52 @@ public:
 
 private:
   void setBladeEnabled(bool enabled);
+  // Dispatch swaths_[swath_idx_]: if the robot is farther than
+  // kSegmentTransitGap from the segment start, first run a NavigateToPose
+  // transit (sets transit_active_); otherwise send the FollowPath goal
+  // directly. Returns false only if a client is missing.
+  bool sendCurrentSwath(const std::shared_ptr<BTContext>& ctx);
+  // Send the FollowPath goal for the current segment (no gap check).
+  bool sendFollowGoal(const std::shared_ptr<BTContext>& ctx);
+  // Robot distance to the current segment's first pose (TF map→base_footprint);
+  // returns a large value if TF is unavailable (forces the safe transit path).
+  double distanceToSegmentStart(const std::shared_ptr<BTContext>& ctx) const;
 
   rclcpp_action::Client<Nav2FollowPath>::SharedPtr follow_client_;
+  rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
   rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr blade_client_;
+  // Mirrors the active segment onto the coverage controller's global_plan
+  // topic so the PathProgressGoalChecker (coverage_goal_checker) can track
+  // per-pose progress (MPPI/RotationShim does not republish the plan).
+  // Latched (transient_local) so a late-subscribing goal checker still
+  // receives the current segment.
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr coverage_plan_pub_;
   std::shared_future<FollowGoalHandle::SharedPtr> follow_future_;
   FollowGoalHandle::SharedPtr follow_handle_;
+  // Inter-segment transit (NavigateToPose) state.
+  std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
+  NavGoalHandle::SharedPtr nav_handle_;
+  bool transit_active_ = false;
 
-  // Blade spinup delay — wait before sending path goal
+  // The explicit segments being executed (copied from
+  // ctx->current_strip_segments in onStart).
+  std::vector<nav_msgs::msg::Path> swaths_;
+  std::size_t swath_idx_ = 0;
+  std::size_t swaths_skipped_ = 0;
+  bool swath_goal_sent_ = false;
+  // Area being mowed (from ctx->current_area) — keys the swath-completion
+  // tracking in BTContext so a resume/re-plan skips already-mowed segments.
+  uint32_t area_idx_ = 0;
+
+  // Start an explicit transit when the segment start is farther than this.
+  // Below it, RotationShim+MPPI close the gap themselves (adjacent swaths are
+  // one op_width ≈ 0.16 m apart).
+  static constexpr double kSegmentTransitGap = 0.6;
+
+  // Blade spinup delay — wait before sending the FIRST segment goal
   static constexpr double kBladeSpinupDelaySec = 1.5;
   std::chrono::steady_clock::time_point blade_start_time_;
   bool goal_sent_ = false;
-};
-
-// ---------------------------------------------------------------------------
-// GetNextSegment — Path C: ask map_server for the next short dynamic
-// segment from the robot's pose, ending at the first obstacle / dead
-// cell / boundary / max_length. Replaces GetNextStrip in new BT trees;
-// kept side-by-side during migration.
-// ---------------------------------------------------------------------------
-
-class GetNextSegment : public BT::StatefulActionNode
-{
-public:
-  GetNextSegment(const std::string& name, const BT::NodeConfig& config)
-      : BT::StatefulActionNode(name, config)
-  {
-  }
-
-  static BT::PortsList providedPorts()
-  {
-    return {
-        BT::InputPort<uint32_t>("area_index", 0u, "Mowing area index"),
-        // Coverage row direction. NaN → server auto-computes from
-        // polygon MBR (same as the strip planner does today). Operator
-        // override goes through the GUI's mow_angle_offset_deg.
-        BT::InputPort<double>("prefer_dir_yaw_rad",
-                              std::numeric_limits<double>::quiet_NaN(),
-                              "Preferred mowing row direction (rad). NaN = auto from polygon."),
-        BT::InputPort<bool>("boustrophedon", true, "Alternate row direction for snake pattern"),
-        BT::InputPort<double>("max_segment_length_m",
-                              0.0,
-                              "Max segment length (m). 0 = server default (3.0)."),
-    };
-  }
-
-  BT::NodeStatus onStart() override;
-  BT::NodeStatus onRunning() override;
-  void onHalted() override;
-
-private:
-  rclcpp::Client<mowgli_interfaces::srv::GetNextSegment>::SharedPtr client_;
-  rclcpp::Client<mowgli_interfaces::srv::GetCoverageStatus>::SharedPtr coverage_status_client_;
-};
-
-// ---------------------------------------------------------------------------
-// IsShortSegment — condition: returns SUCCESS when the current segment
-// can be mowed with the blade on (no transit). Reads
-// ctx->current_segment_is_long_transit set by GetNextSegment.
-// ---------------------------------------------------------------------------
-
-class IsShortSegment : public BT::ConditionNode
-{
-public:
-  IsShortSegment(const std::string& name, const BT::NodeConfig& config)
-      : BT::ConditionNode(name, config)
-  {
-  }
-
-  static BT::PortsList providedPorts()
-  {
-    return {};
-  }
-
-  BT::NodeStatus tick() override;
-};
-
-// ---------------------------------------------------------------------------
-// MarkSegmentBlocked — call map_server's ~/mark_segment_blocked with
-// the current segment path so cells along the failed approach get a
-// fail_count tick. After N consecutive failures cells get promoted to
-// LAWN_DEAD and skipped permanently (until decay or manual clear).
-// Should be ticked when FollowSegment / FollowStrip returns FAILURE
-// because of a non-trivial blocker. The node itself returns SUCCESS
-// so the surrounding RetryUntilSuccessful resets cleanly and the
-// next tick can pick a fresh segment.
-// ---------------------------------------------------------------------------
-
-class MarkSegmentBlocked : public BT::StatefulActionNode
-{
-public:
-  MarkSegmentBlocked(const std::string& name, const BT::NodeConfig& config)
-      : BT::StatefulActionNode(name, config)
-  {
-  }
-
-  static BT::PortsList providedPorts()
-  {
-    return {BT::InputPort<uint32_t>("area_index", 0u, "Mowing area index")};
-  }
-
-  BT::NodeStatus onStart() override;
-  BT::NodeStatus onRunning() override;
-  void onHalted() override;
-
-private:
-  rclcpp::Client<mowgli_interfaces::srv::MarkSegmentBlocked>::SharedPtr client_;
-  std::shared_future<mowgli_interfaces::srv::MarkSegmentBlocked::Response::SharedPtr> future_;
 };
 
 // ---------------------------------------------------------------------------
@@ -304,8 +229,15 @@ private:
   /// if more areas need to be checked (launches next async call internally).
   BT::NodeStatus processResponse();
 
-  rclcpp::Client<mowgli_interfaces::srv::GetCoverageStatus>::SharedPtr client_;
-  std::optional<rclcpp::Client<mowgli_interfaces::srv::GetCoverageStatus>::FutureAndRequestId>
+  /// Advance current_area_idx_ past completed/attempted areas and fire the
+  /// next existence probe. Returns RUNNING (probe in flight) or FAILURE.
+  BT::NodeStatus advanceAndProbe();
+
+  // Existence probe: GetMowingArea(index).success is false once index passes
+  // the last defined area. Area completion is tracked in-memory via the
+  // swath-completion model (ctx->completed_areas), not the removed cell grid.
+  rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr client_;
+  std::optional<rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::FutureAndRequestId>
       pending_future_;
   std::chrono::steady_clock::time_point call_start_;
   uint32_t current_area_idx_{0};
@@ -315,24 +247,24 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// PlanCoverageArea — opennav_coverage migration. Calls map_server's
-// ~/get_remaining_area_polygon to get the unmowed portion of an area as a
-// list of MapArea pieces (outer + holes), then asks opennav_coverage's
-// /compute_coverage_path action to build a full F2C path (headland +
-// boustrophedon swaths + Dubin turns) for each piece, and concatenates
-// the resulting nav_msgs/Path segments into ctx->current_strip_path. The
-// existing FollowStrip node then feeds that path to FTCController.
+// PlanCoverageArea — calls map_server's ~/get_mowing_area for the area's
+// polygon (outer + obstacle holes), then asks mowgli_coverage's
+// /plan_coverage action for the EXPLICIT segment list (headland rings +
+// straight serpentine swaths — no turn geometry). Stores the segments in
+// ctx->current_strip_segments (and the concatenated path in
+// ctx->current_strip_path for the GUI); FollowStrip executes them one
+// FollowCoveragePath goal at a time.
 //
-// Replaces the GetNextSegment/GetNextStrip per-strip loop. Plans the
-// whole area in one shot at each (re)start; on resume the
-// "remaining area" call already excludes the already-mowed cells.
+// Plans the whole area in one shot at each (re)start; resume is swath-based
+// (FollowStrip skips segment indices already in ctx->area_completed_swaths —
+// the plan is deterministic for a fixed polygon + params).
 // ---------------------------------------------------------------------------
 
 class PlanCoverageArea : public BT::StatefulActionNode
 {
 public:
-  using ComputeCoveragePath = opennav_coverage_msgs::action::ComputeCoveragePath;
-  using ComputeGoalHandle = rclcpp_action::ClientGoalHandle<ComputeCoveragePath>;
+  using PlanCoverage = mowgli_interfaces::action::PlanCoverage;
+  using PlanGoalHandle = rclcpp_action::ClientGoalHandle<PlanCoverage>;
 
   PlanCoverageArea(const std::string& name, const BT::NodeConfig& config)
       : BT::StatefulActionNode(name, config)
@@ -343,10 +275,6 @@ public:
   {
     return {
         BT::InputPort<uint32_t>("area_index", 0u, "Mowing area index"),
-        BT::InputPort<double>("operation_width_m", 0.20,
-                              "F2C operation width (mower cut width, m)"),
-        BT::InputPort<double>("headland_width_m", 0.20,
-                              "F2C constant-width headland (m)"),
     };
   }
 
@@ -358,41 +286,33 @@ private:
   enum class Phase
   {
     QueryRemaining,
-    PlanNextPiece,
+    Dispatch,
     WaitingForGoal,
     WaitingForResult,
-    Done,
   };
 
-  /// Build a ComputeCoveragePath::Goal from one MapArea piece. Polygons
-  /// list is [outer, hole0, hole1, ...]. Modes: CONSTANT headland,
-  /// BRUTE_FORCE/LENGTH swath, BOUSTROPHEDON route, DUBIN/DISCONTINUOUS path.
-  ComputeCoveragePath::Goal buildGoal(
-      const mowgli_interfaces::msg::MapArea& piece,
-      double operation_width,
-      double headland_width) const;
+  /// Build a PlanCoverage::Goal from the area polygon. The coverage
+  /// geometry (operation_width, headland, insets) lives in the coverage
+  /// server's parameters (injected at launch from mowgli_robot.yaml).
+  PlanCoverage::Goal buildGoal(const mowgli_interfaces::msg::MapArea& area) const;
 
-  rclcpp::Client<mowgli_interfaces::srv::GetRemainingAreaPolygon>::SharedPtr srv_client_;
-  std::optional<rclcpp::Client<
-      mowgli_interfaces::srv::GetRemainingAreaPolygon>::FutureAndRequestId> srv_future_;
+  rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr srv_client_;
+  std::optional<rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::FutureAndRequestId>
+      srv_future_;
 
-  rclcpp_action::Client<ComputeCoveragePath>::SharedPtr action_client_;
-  std::shared_future<ComputeGoalHandle::SharedPtr> goal_future_;
-  ComputeGoalHandle::SharedPtr goal_handle_;
-  std::shared_future<ComputeGoalHandle::WrappedResult> result_future_;
+  rclcpp_action::Client<PlanCoverage>::SharedPtr action_client_;
+  std::shared_future<PlanGoalHandle::SharedPtr> goal_future_;
+  PlanGoalHandle::SharedPtr goal_handle_;
+  std::shared_future<PlanGoalHandle::WrappedResult> result_future_;
 
-  std::vector<mowgli_interfaces::msg::MapArea> pieces_;
-  size_t current_piece_{0};
-  size_t pieces_succeeded_{0};
-  size_t pieces_failed_{0};
-  nav_msgs::msg::Path accumulated_path_;
-  /// First pose of the FIRST piece's F2C swath path (the real mowing start,
-  /// AFTER the robot→F2C straight transit prefix). Used as the obstacle-aware
-  /// TransitToStrip goal so the robot drives to the coverage start AROUND
-  /// obstacles instead of FTC dragging it there along the costmap-blind
-  /// straight prefix.
-  geometry_msgs::msg::PoseStamped first_coverage_pose_;
-  bool have_first_coverage_pose_{false};
+  mowgli_interfaces::msg::MapArea area_;
+  // Publishes the FULL plan (concatenation of all segments) for visualisation.
+  // FollowStrip feeds the coverage controller one segment at a time (and
+  // republishes only that segment on FollowCoveragePath/global_plan for the
+  // goal checker), so without this the operator/GUI could only ever see a
+  // single segment. Latched (transient_local) so a late GUI subscriber still
+  // gets the whole plan for the current area.
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr full_plan_pub_;
   Phase phase_{Phase::QueryRemaining};
   std::chrono::steady_clock::time_point phase_start_;
 };

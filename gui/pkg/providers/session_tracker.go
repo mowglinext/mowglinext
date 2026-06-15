@@ -40,14 +40,48 @@ type SessionTracker struct {
 	// "aborted" record. pauseCount tallies the recharge cycles for the record.
 	paused     bool
 	pauseCount int
+	// queue serializes status messages through a single consumer goroutine so
+	// the start/pause/resume/end state machine is applied in arrival order.
+	// Previously fanOut spawned a goroutine per message (go OnHighLevelStatus),
+	// which the scheduler could run out of order — corrupting inSession/paused/
+	// pauseCount on rapid MOWING->CHARGING->IDLE bursts.
+	queue chan []byte
 }
 
 const sessionsDBKey = "mowing.sessions"
 
-// NewSessionTracker creates a tracker. Call Track() on each status update.
+// minSessionDurationSec is the floor below which a session is treated as noise
+// and NOT recorded. Rapid AUTONOMOUS->IDLE flips at startup or on an immediate
+// abort used to spawn hundreds of 0-second "aborted" rows that polluted the
+// statistics history. A genuine mow (even a quickly-aborted one) runs longer
+// than this; emergencies are still recorded regardless of duration below.
+const minSessionDurationSec = 20.0
+
+// NewSessionTracker creates a tracker. Feed status messages via Enqueue().
 func NewSessionTracker(dbProvider types.IDBProvider) *SessionTracker {
-	return &SessionTracker{
+	s := &SessionTracker{
 		dbProvider: dbProvider,
+		queue:      make(chan []byte, 256),
+	}
+	go s.run()
+	return s
+}
+
+// Enqueue hands a raw status message to the ordered consumer. Non-blocking: if
+// the buffer is full (consumer wedged on a slow DB write) the message is
+// dropped with a warning rather than stalling the caller's fanOut path.
+func (s *SessionTracker) Enqueue(msg []byte) {
+	select {
+	case s.queue <- msg:
+	default:
+		log.Printf("SessionTracker: status queue full, dropping message")
+	}
+}
+
+// run drains the queue in FIFO order on a single goroutine.
+func (s *SessionTracker) run() {
+	for msg := range s.queue {
+		s.OnHighLevelStatus(msg)
 	}
 }
 
@@ -111,6 +145,13 @@ func (s *SessionTracker) OnHighLevelStatus(msg []byte) {
 		s.paused = false
 		endTime := time.Now().UTC()
 		duration := endTime.Sub(s.sessionStart).Seconds()
+
+		// Drop noise: a sub-threshold session that did not trip an emergency is a
+		// spurious state flip, not a real mow. Skip it so it never reaches the DB.
+		if duration < minSessionDurationSec && !status.Emergency {
+			log.Printf("SessionTracker: dropping spurious %.0fs session (state=%s)", duration, status.StateName)
+			return
+		}
 
 		// Determine status
 		sessionStatus := "completed"

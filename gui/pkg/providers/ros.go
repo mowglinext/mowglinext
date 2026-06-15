@@ -41,13 +41,13 @@ var topicMap = map[string]topicDef{
 	"imu":                 {"/imu/data", "sensor_msgs/msg/Imu"},
 	"ticks":               {"/wheel_ticks", "mowgli_interfaces/msg/WheelTick"},
 	"wheelOdom":           {"/wheel_odom", "nav_msgs/msg/Odometry"},
-	"map":                 {"", ""},                                                                   // virtual – populated via map_server services
-	"path":                {"/controller_server/FollowCoveragePath/global_plan", "nav_msgs/msg/Path"}, // coverage plan
-	"plan":                {"/plan", "nav_msgs/msg/Path"},                                             // infrequent event
-	"coverageCells":       {"/map_server_node/coverage_cells", "nav_msgs/msg/OccupancyGrid"},          // large message
+	"map":                 {"", ""},                                                            // virtual – populated via map_server services
+	"path":                {"/coverage/full_plan", "nav_msgs/msg/Path"}, // full F2C coverage plan (headland + all swaths; execution is swath-by-swath)
+	"plan":                {"/plan", "nav_msgs/msg/Path"},                                      // infrequent event
 	"power":               {"/hardware_bridge/power", "mowgli_interfaces/msg/Power"},
 	"emergency":           {"/hardware_bridge/emergency", "mowgli_interfaces/msg/Emergency"}, // safety-critical
 	"lidar":               {"/scan", "sensor_msgs/msg/LaserScan"},                            // large message
+	"mowProgress":         {"/map_server_node/mow_progress", "nav_msgs/msg/OccupancyGrid"},   // mowed-area overlay (large)
 	"diagnostics":         {"/diagnostics", "diagnostic_msgs/msg/DiagnosticArray"},
 	"fusionDiag":          {"/fusion_graph/diagnostics", "diagnostic_msgs/msg/DiagnosticArray"},
 	"obstacles":           {"/obstacle_tracker/obstacles", "mowgli_interfaces/msg/ObstacleArray"},
@@ -193,6 +193,7 @@ var foxgloveAdapters = map[string]func([]byte) ([]byte, error){
 	"gps":        adaptGPS,
 	"gnssStatus": adaptGnssStatus,
 	"pose":       adaptPose,
+	"lidar":      adaptLidar,
 }
 
 // upstreamDecimationMs caps the rate at which high-frequency topics are
@@ -319,10 +320,13 @@ func (r *RosProvider) fanOut(logicalKey string, msg []byte) {
 	for _, sub := range r.subscribers[logicalKey] {
 		sub.Publish(msg)
 	}
-	// Track mowing sessions from high-level status transitions
+	// Track mowing sessions from high-level status transitions. Enqueue to the
+	// tracker's single-consumer goroutine so transitions are applied in arrival
+	// order (a goroutine-per-message could reorder rapid MOWING->CHARGING->IDLE
+	// bursts and corrupt the session state machine).
 	if logicalKey == "highLevelStatus" && r.sessionTracker != nil {
 		msgCopy := append([]byte(nil), msg...)
-		go r.sessionTracker.OnHighLevelStatus(msgCopy)
+		r.sessionTracker.Enqueue(msgCopy)
 	}
 }
 
@@ -530,4 +534,38 @@ func (r *RosProvider) Publish(topic string, msgType string, msg interface{}) err
 		return r.cmdVelRelay.Send(msg)
 	}
 	return r.client.Publish(topic, msg, msgType)
+}
+
+// GetParameters lists ROS2 parameters via the foxglove bridge.
+func (r *RosProvider) GetParameters(ctx context.Context, names []string) ([]types2.RosParameter, error) {
+	params, err := r.client.GetParameters(ctx, names)
+	if err != nil {
+		return nil, err
+	}
+	return fromFoxgloveParams(params), nil
+}
+
+// SetParameters updates ROS2 parameters live via the foxglove bridge.
+func (r *RosProvider) SetParameters(ctx context.Context, params []types2.RosParameter) ([]types2.RosParameter, error) {
+	echoed, err := r.client.SetParameters(ctx, toFoxgloveParams(params))
+	if err != nil {
+		return nil, err
+	}
+	return fromFoxgloveParams(echoed), nil
+}
+
+func fromFoxgloveParams(in []foxglove.Parameter) []types2.RosParameter {
+	out := make([]types2.RosParameter, len(in))
+	for i, p := range in {
+		out[i] = types2.RosParameter{Name: p.Name, Value: p.Value, Type: p.Type}
+	}
+	return out
+}
+
+func toFoxgloveParams(in []types2.RosParameter) []foxglove.Parameter {
+	out := make([]foxglove.Parameter, len(in))
+	for i, p := range in {
+		out[i] = foxglove.Parameter{Name: p.Name, Value: p.Value, Type: p.Type}
+	}
+	return out
 }

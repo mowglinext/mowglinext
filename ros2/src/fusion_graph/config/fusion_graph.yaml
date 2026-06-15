@@ -107,10 +107,50 @@ fusion_graph_node:
     # cap the graph grew unbounded — 48,000+ nodes were observed in the
     # field, which inflated marginal-covariance cost until cov_xx hit
     # ~1 m and the map→odom estimate started jumping metres while the
-    # robot sat still. 3000 nodes ≈ 2 min @ 25 Hz, enough for a full
-    # mowing pass and any LiDAR loop closures within that window. Set
-    # to 0 to restore the legacy keep-everything behaviour.
-    max_graph_nodes: 3000
+    # robot sat still. Set to 0 to restore legacy keep-everything.
+    #
+    # 2026-06-04: raised 3000 → 6000. Loop closure was structurally dead
+    # with 3000: FindLoopClosureCandidates requires a candidate that is
+    # BOTH ≥ lc_min_age_s old AND still has a pose in the graph
+    # (HasPoseAt). The age gate in node-indices is ceil(lc_min_age_s /
+    # node_period_s); with the old lc_min_age_s=600 @ 0.04 s that was
+    # 15000 indices, but poses are pruned after max_graph_nodes=3000, so
+    # any age-eligible node had already been dropped → candidate set
+    # always empty → loop_closures stuck at 0 forever (confirmed on-robot
+    # 2026-06-04: 153 578 total nodes, 0 loop closures, 0 log lines). For
+    # loop closure to EVER fire the pose window must outlast the age gate:
+    # 6000 nodes ≈ 4 min @ 25 Hz vs the new lc_min_age_s=30 (≈ 750
+    # indices), leaving a ~5000-node band of revisitable candidates.
+    max_graph_nodes: 6000
+
+    # ── Loop-closure candidate age gate ──────────────────────────────
+    # A node must be at least this many seconds old to be a loop-closure
+    # candidate (FindLoopClosureCandidates, converted to node-indices via
+    # node_period_s). MUST stay well under max_graph_nodes·node_period_s
+    # or loop closure can never fire (see the max_graph_nodes note). The
+    # node's declare default is 600 s, which silently disabled the feature
+    # under the 3000-node window. 30 s ≈ 750 indices @ 25 Hz — long enough
+    # to skip the just-visited neighbours, short enough that a
+    # boustrophedon swath turnaround (adjacent swath ~30-90 s earlier,
+    # within lc_max_dist_m=5 m) registers as a revisit.
+    #
+    # The earlier claim that the stationary throttle + lc_max_candidates=3 bound
+    # dock-IDLE closures was WRONG: a long mowing session leaves thousands of
+    # nearby nodes, and a robot parked among them loop-closes every new stationary
+    # node against fresh candidates indefinitely → unbounded iSAM2 factor growth
+    # that OOM-killed the node 2026-06-09. The real bound is now
+    # lc_skip_when_rtk_fixed (below) + the max_graph_nodes window restriction in
+    # FindLoopClosureCandidates — NOT this age gate. Keep lc_min_age_s=30 so LC
+    # still fires within the window during genuine RTK-Float (tree-cover) windows.
+    lc_min_age_s: 30.0
+
+    # Skip loop-closure GENERATION while an RTK-Fixed sample is fresh (within
+    # scan_yield_timeout_s). Under RTK-Fixed the GPS factor is already absolute
+    # and mm-accurate, so each LC adds an iSAM2 factor for ~no information — an
+    # unbounded leak over a long stationary dwell (dock IDLE / charging). This is
+    # the primary fix for the 2026-06-09 OOM. LC re-enables once the fix goes
+    # stale, so no-fix windows still get global consistency. Default true.
+    lc_skip_when_rtk_fixed: true
 
     # ── Online gyro bias estimation (item #3, pragmatic) ─────────────
     # During wheel-only stationary windows, EMA-update an estimate of
@@ -220,3 +260,67 @@ fusion_graph_node:
     # well within FTC's heading PID correction range. Override key
     # (set by navigation.launch.py): fusion_graph_tf_lead_s.
     tf_publish_lead_s: 0.05
+
+    # ── Decoupled TF broadcast rate ──────────────────────────────────
+    # map→odom + odom→base_footprint are broadcast from a dedicated
+    # thread at this rate, immune to executor stalls (iSAM2 Tick on a
+    # large graph or the 1 Hz diagnostics GetAllPoses sweep can block
+    # the executor 150-250 ms on a loaded Pi — field 2026-06-07: Nav2
+    # threw ExtrapolationException even after its 100 ms transform
+    # timeout, RotationShim aborted ~19×/90 s and the robot twitched
+    # in place instead of following paths). 20 Hz halves the
+    # worst-case TF staleness vs the 25 Hz tick cadence and, combined
+    # with tf_publish_lead_s, keeps lookups in interpolation
+    # territory. <= 0 disables the thread (inline OnTimer publishing,
+    # pre-2026-06 behavior).
+    tf_broadcast_rate_hz: 20.0
+
+    # ── Dock-approach pose stabilisation ─────────────────────────────
+    # While the docking server runs its final graceful approach it
+    # publishes /cmd_vel_docking; we treat a non-zero command within
+    # docking_active_timeout_s as "approach in progress". During that
+    # window the slow REVERSE motion makes the COG travel-direction yaw
+    # noise-dominated, and the RTK fixed↔float per-epoch flicker jolts
+    # position — both jolt the fused pose, which the graceful controller
+    # chases into divergence (field 2026-06-10: drove 38→146 cm away,
+    # ω saturating ±0.85). So during the approach we drop the COG yaw
+    # factor (gyro carries yaw) and reject non-Fixed GPS epochs (hold
+    # position through the flicker). Set either gate false to disable.
+    docking_active_timeout_s: 1.0
+    gate_cog_during_docking: true
+    gate_float_gps_during_docking: true
+
+    # ── Dock-pose hold while charging (D1 fix) ───────────────────────
+    # While is_charging, re-assert a firm absolute anchor at the FULL
+    # dock_pose (x,y,yaw) once per new node, instead of the old weak
+    # live-GPS factor. The live-GPS approach walked the docked pose off
+    # the anchor (field 2026-06-10: 11.5 cm + 53° over a charge dwell,
+    # because a ~7 Hz σ=0.5 m GPS stream out-voted the one-shot dock prior
+    # and nothing held yaw) — which made re-docking aim at the wrong
+    # target. The per-node dock anchor pins position AND yaw and keeps
+    # iSAM2 well-posed with no GPS to drag it. sigma_xy small so it
+    # dominates; yaw σ from dock_pose_yaw_sigma_rad.
+    dock_reanchor_sigma_xy_m: 0.03
+
+    # ── RTK-anchored keyframe map (scan-to-keyframe absolute localization) ──
+    # The mechanism for holding <2 cm absolute DURING RTK-Float windows. Under
+    # stable RTK-Fixed, freeze {GPS-fused pose, scan} keyframes (the absolute
+    # map). During Float, ICP-match the live scan to nearby keyframes and pin
+    # absolute xy with a PoseTranslationPrior — bounding error to ~keyframe ⊕ ICP
+    # instead of letting dead-reckoning drift. REQUIRES use_scan_matching:=true
+    # (reuses the scan matcher + subscription + ICP guard rails) and LiDAR. Only
+    # delivers <2 cm where the LiDAR sees stable structure (fence/tree/dock);
+    # open lawn degrades to dead-reckoning by design. Default OFF — field-validate
+    # with the GPS-off coast-drift probe before enabling.
+    use_keyframe_map: false
+    # Capture gates (build the map):
+    kf_capture_sigma_max_m: 0.01    # only capture when the fix is mm-accurate
+    kf_capture_rtk_debounce: 3      # consecutive RTK-Fixed epochs before a capture
+    kf_capture_max_omega: 0.10      # rad/s — skip capture while pivoting (smeared scan)
+    kf_spacing_m: 0.5               # min spacing between keyframes (also store decimation)
+    max_keyframes: 2000             # hard cap (oldest evicted)
+    # Apply gates (use the map during Float):
+    kf_match_max_dist_m: 3.0        # keyframe search radius around the predicted pose
+    kf_max_candidates: 5
+    kf_apply_sigma_floor_m: 0.02    # floor on the absolute-prior σ (never overclaim)
+    kf_engage_age_s: 0.3            # engage apply once RTK-Fixed is older than this

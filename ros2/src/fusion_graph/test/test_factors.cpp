@@ -8,8 +8,10 @@
 #include "fusion_graph/factors.hpp"
 #include "fusion_graph/scan_matcher.hpp"
 #include <gtest/gtest.h>
+#include <gtsam/geometry/Point2.h>
 #include <gtsam/inference/Symbol.h>
 #include <gtsam/linear/NoiseModel.h>
+#include <gtsam/slam/PoseTranslationPrior.h>
 
 using fusion_graph::GnssLeverArmFactor;
 using fusion_graph::GyroPreintFactor;
@@ -275,4 +277,113 @@ TEST(GyroPreintFactor, WrapsAroundPi)
   const gtsam::Pose2 X_prev(0.0, 0.0, M_PI - 0.05);
   const gtsam::Pose2 X_curr(0.0, 0.0, -M_PI + 0.05);
   EXPECT_NEAR(f.evaluateError(X_prev, X_curr, 0.0)[0], 0.0, 1e-9);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// PoseTranslationPrior — availability + convention guard
+// ─────────────────────────────────────────────────────────────────────
+//
+// The keyframe layer uses GTSAM's built-in PoseTranslationPrior<Pose2>
+// as the scan-to-keyframe ABSOLUTE xy constraint (a prior on the current
+// node's translation), instead of a custom factor. This test (a) confirms
+// the header exists/links in this GTSAM 4.3a1 build, and (b) locks the
+// residual shape (2D xy) + analytic Jacobian against a wrong GTSAM bump.
+TEST(PoseTranslationPrior, AvailableAndWellFormed)
+{
+  gtsam::PoseTranslationPrior<gtsam::Pose2> f(gtsam::Symbol('x', 0),
+                                              gtsam::Point2(2.0, 1.5),
+                                              UnitDiag2());
+
+  const gtsam::Pose2 X(1.0, 1.0, 0.7);
+  gtsam::Matrix H_an;
+  auto e = f.evaluateError(X, &H_an);
+  ASSERT_EQ(e.size(), 2);  // xy-only
+
+  const double eps = 1e-6;
+  gtsam::Matrix H_num(2, 3);
+  for (int i = 0; i < 3; ++i)
+  {
+    gtsam::Vector3 d = gtsam::Vector3::Zero();
+    d[i] = eps;
+    auto ep = f.evaluateError(X.retract(d));
+    auto em = f.evaluateError(X.retract(-d));
+    H_num.col(i) = (ep - em) / (2.0 * eps);
+  }
+  for (int i = 0; i < 2; ++i)
+    for (int j = 0; j < 3; ++j)
+      EXPECT_NEAR(H_an(i, j), H_num(i, j), 1e-4);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Scan-to-keyframe composition direction (THE mirror trap)
+// ─────────────────────────────────────────────────────────────────────
+//
+// Empirically resolves: given a keyframe at kf_pose with a frozen
+// body-frame scan, and a live body-frame scan at curr_pose, which
+// composition of the ICP delta recovers the true current absolute pose?
+//
+// Scans are stored in body frame: s_i = P.transformTo(W_i) = P^-1 * W_i
+// (exactly as fusion_graph_node::OnScan builds them — base_footprint
+// points). ScanMatcher returns `delta` s.t. target = delta * source.
+// With source=kf_scan, target=curr_scan:
+//   curr^-1 * W = delta * kf^-1 * W  ∀W  ⟹  delta = curr.between(kf)
+//   ⟹  curr = kf.compose(delta.inverse())
+// This test proves it and asserts the negative control (kf.compose(delta))
+// is clearly wrong, so the implementation cannot silently use the mirror.
+namespace
+{
+// Body-frame scan of fixed map landmarks as seen from pose P.
+std::vector<Eigen::Vector2d> ScanFromPose(const std::vector<gtsam::Point2>& map_pts,
+                                          const gtsam::Pose2& P)
+{
+  std::vector<Eigen::Vector2d> out;
+  out.reserve(map_pts.size());
+  for (const auto& W : map_pts)
+  {
+    const gtsam::Point2 b = P.transformTo(W);  // world -> body (P^-1 * W)
+    out.emplace_back(b.x(), b.y());
+  }
+  return out;
+}
+}  // namespace
+
+TEST(ScanToKeyframeComposition, RecoversTruePose)
+{
+  // Asymmetric L of landmarks a few metres in front of the robot (map frame).
+  std::vector<gtsam::Point2> map_pts;
+  for (int i = 0; i < 40; ++i)
+  {
+    const double t = -2.0 + 4.0 * static_cast<double>(i) / 40.0;
+    map_pts.emplace_back(6.0 + t, 5.0);  // far wall
+  }
+  for (int i = 0; i < 40; ++i)
+  {
+    const double t = -1.5 + 3.0 * static_cast<double>(i) / 40.0;
+    map_pts.emplace_back(8.0, 4.0 + t);  // side wall (shorter, offset)
+  }
+
+  const gtsam::Pose2 kf_pose(5.0, 3.0, 0.4);
+  // ~5 cm translation + ~1.4° rotation relative motion — within ICP's
+  // no-warmstart capture range from an identity init (cf. RecoversKnownTransform).
+  const gtsam::Pose2 curr_pose(5.05, 3.0, 0.4 + 0.025);
+
+  const auto kf_scan = ScanFromPose(map_pts, kf_pose);
+  const auto curr_scan = ScanFromPose(map_pts, curr_pose);
+
+  fusion_graph::ScanMatcher matcher;
+  // source=keyframe, target=current (the order the apply-side will use).
+  auto res = matcher.Match(kf_scan, curr_scan, gtsam::Pose2());
+  ASSERT_TRUE(res.ok);
+
+  const gtsam::Pose2 via_inv = kf_pose.compose(res.delta.inverse());
+  const gtsam::Pose2 via_fwd = kf_pose.compose(res.delta);
+  const double err_inv = (via_inv.translation() - curr_pose.translation()).norm();
+  const double err_fwd = (via_fwd.translation() - curr_pose.translation()).norm();
+
+  // Derived + asserted: curr = kf.compose(delta.inverse()).
+  EXPECT_LT(err_inv, 0.03) << "kf.compose(delta.inverse()) must recover curr_pose; "
+                           << "err_inv=" << err_inv << " err_fwd=" << err_fwd;
+  // Negative control: the forward composition is the mirror — must be far off.
+  EXPECT_GT(err_fwd, 0.05) << "forward composition unexpectedly close — convention ambiguous; "
+                           << "err_inv=" << err_inv << " err_fwd=" << err_fwd;
 }

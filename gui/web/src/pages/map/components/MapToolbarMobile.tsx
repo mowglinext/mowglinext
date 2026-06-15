@@ -113,11 +113,19 @@ export const MapToolbarMobile = ({
     const [mowLoading, setMowLoading] = useState(false);
 
     const toolbarStyle: React.CSSProperties = {
-        position: "absolute",
-        bottom: 108,
+        // Anchor to the VIEWPORT (fixed), not the map container — that container
+        // bleeds past the viewport (height: 100% + 122px, negative bottom margin),
+        // and iOS Safari positions an absolute child relative to that off-screen
+        // bottom, hiding the toolbar entirely. Fixed keeps it just above the nav.
+        position: "fixed",
+        // Sit just above the floating bottom-nav (≈85px tall + safe-area). Derive
+        // the offset from the safe-area inset so it tracks the nav height on
+        // notched phones, with a comfortable gap above the nav pill.
+        bottom: "calc(env(safe-area-inset-bottom, 0px) + 100px)",
         left: 12,
         right: 12,
-        zIndex: 10,
+        // Above the bottom-nav (zIndex 50) so the nav never paints over it.
+        zIndex: 55,
         display: "flex",
         gap: 6,
         justifyContent: "center",

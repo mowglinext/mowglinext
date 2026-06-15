@@ -160,9 +160,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
 
     const [mowingAreas, setMowingAreas] = useState<{ key: string, label: string, feat: Feature }[]>([])
 
-    const {map, setMap, path, plan, lidarCollection, coverageCellsImage, highLevelStatus, joyStream, dynamicObstacles} = useMapStreams({
+    const {map, setMap, path, plan, lidarCollection, mowProgressImage, highLevelStatus, joyStream, dynamicObstacles} = useMapStreams({
         editMap,
-        isMobile,
         settings,
         offsetX,
         offsetY,
@@ -235,8 +234,9 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             newFeatures["dock"] = new DockFeatureBase(dock_lonlat, map?.dock_heading ?? 0);
         }
         if (path?.poses) {
-            // Coverage plan: the F2C swaths the robot is about to mow
-            // (/controller_server/FollowCoveragePath/global_plan, a nav_msgs/Path).
+            // Coverage plan: the full F2C route (headland rings + every swath)
+            // for the current area (/coverage/full_plan, a nav_msgs/Path).
+            // Execution is swath-by-swath, but this shows the whole plan.
             // Rendered green so it reads distinctly from the transit plan below.
             const coordinates: Position[] = path.poses.map((pose) => {
                 return transpose(offsetX, offsetY, datum, pose.pose?.position?.y!, pose.pose?.position?.x!)
@@ -518,16 +518,17 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         onMowNextArea: mowerAction("high_level_control", {Command: 4}),
         // Match MapToolbar's isIdle: the BT publishes IDLE_DOCKED as the
         // primary resting state; "IDLE" without a suffix only appears as the
-        // manual-mow fallthrough. Continue unpauses then re-starts; Pause
-        // only flips the pause flag — the BT handles the rest.
+        // manual-mow fallthrough. There is no "pause flag" in the stack (the
+        // old mower_logic/manual_pause_mowing OpenMower command does not exist
+        // here and returned HTTP 500, which also broke Continue-from-idle by
+        // rejecting before the START fired). Use real HighLevelControl commands:
+        // Continue = START (mow_progress persists, so it resumes where it left
+        // off); Pause = HOME (stop and return to dock).
         onContinueOrPause:
             highLevelStatus.highLevelStatus.state_name === "IDLE_DOCKED" ||
             highLevelStatus.highLevelStatus.state_name === "IDLE"
-                ? async () => {
-                    await mowerAction("mower_logic", {Config: {Bools: [{Name: "manual_pause_mowing", Value: false}]}})();
-                    await mowerAction("high_level_control", {Command: 1})();
-                }
-                : mowerAction("mower_logic", {Config: {Bools: [{Name: "manual_pause_mowing", Value: true}]}}),
+                ? mowerAction("high_level_control", {Command: 1})
+                : mowerAction("high_level_control", {Command: 2}),
         onBladeForward: mowerAction("mow_enabled", {MowEnabled: 1, MowDirection: 0}),
         onBladeBackward: mowerAction("mow_enabled", {MowEnabled: 1, MowDirection: 1}),
         onBladeOff: mowerAction("mow_enabled", {MowEnabled: 0, MowDirection: 0}),
@@ -661,14 +662,6 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 'circle-color': ['get', 'color'],
                             }}/>
                     </Source>
-                    {coverageCellsImage && (
-                        <Source type={"image"} id={"coverage-cells"} url={coverageCellsImage.url} coordinates={coverageCellsImage.coordinates}>
-                            <Layer type={"raster"} id={"coverage-cells-layer"} paint={{
-                                "raster-opacity": 0.7,
-                                "raster-fade-duration": 0,
-                            }}/>
-                        </Source>
-                    )}
                 </Map> : <Spinner/>}
             </div>
         );
@@ -832,9 +825,9 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 'circle-color': ['get', 'color'],
                             }}/>
                     </Source>
-                    {coverageCellsImage && (
-                        <Source type={"image"} id={"coverage-cells"} url={coverageCellsImage.url} coordinates={coverageCellsImage.coordinates}>
-                            <Layer type={"raster"} id={"coverage-cells-layer"} paint={{
+                    {mowProgressImage && (
+                        <Source type={"image"} id={"mow-progress"} url={mowProgressImage.url} coordinates={mowProgressImage.coordinates}>
+                            <Layer type={"raster"} id={"mow-progress-layer"} paint={{
                                 "raster-opacity": 0.7,
                                 "raster-fade-duration": 0,
                             }}/>
@@ -856,12 +849,12 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 <JoystickOverlay
                     visible={highLevelStatus.highLevelStatus.state_name === "RECORDING" || highLevelStatus.highLevelStatus.state_name === "MANUAL_MOWING" || manualMode}
                     isRecording={highLevelStatus.highLevelStatus.state_name === "RECORDING"}
+                    mobile={isMobile}
                     onMove={handleJoyMove}
                     onStop={handleJoyStop}
                     onFinishRecording={mowerActions.onRecordFinish}
                     onCancelRecording={mowerActions.onRecordCancel}
                     onHome={mowerActions.onHome}
-                    bottomOffset={isMobile ? 172 : 30}
                 />
                 {isMobile && (
                     <MapToolbarMobile

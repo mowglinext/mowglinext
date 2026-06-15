@@ -217,6 +217,10 @@ private:
   bool checkOscillation(const geometry_msgs::msg::TwistStamped& cmd_vel);
 
   FailureDetector failure_detector_;
+  // Guards failure_detector_ against the param-callback thread reallocating its
+  // ring buffer (setBufferLength) concurrently with the control thread's
+  // update()/isOscillating() reads.
+  std::mutex failure_detector_mutex_;
   rclcpp::Time time_last_oscillation_;
   bool oscillation_detected_{false};
   bool oscillation_warning_{false};
@@ -332,6 +336,11 @@ private:
   /// Speed limit applied via setSpeedLimit(). -1.0 means "no external limit".
   double speed_limit_{-1.0};
   bool speed_limit_is_percentage_{false};
+  // Configured max linear speed, captured at configure() and on every
+  // max_cmd_vel_speed parameter change. setSpeedLimit() restores
+  // config_.max_cmd_vel_speed to this value when the limit is cleared
+  // (speed_limit < 0); without it a once-applied limit stuck forever.
+  double base_max_cmd_vel_speed_{2.0};
 };
 
 }  // namespace mowgli_nav2_plugins

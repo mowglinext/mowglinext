@@ -241,7 +241,37 @@ private:
           }
 
           // RTK fixed (fix_type >= 4) with reasonable accuracy → GPS is fixed.
-          context_->gps_is_fixed = (context_->gps_fix_type >= 4) && (msg->position_accuracy < 0.1f);
+          // DEBOUNCED: the F9P fix_type flickers RTK-Fixed(4)↔Float(3) per epoch
+          // even at cm-stable position. Writing gps_is_fixed raw made it chatter,
+          // which flapped SetNavMode (precise↔degraded) on every BT tick and reset
+          // the MPPI optimizer ~5-10x/s → jerky, hesitant coverage (the robot
+          // could never warm-start a trajectory). Only flip gps_is_fixed once the
+          // raw condition has held steady for kGpsFixDebounceSec, so the per-epoch
+          // flicker is ignored while a genuine, sustained change still propagates.
+          constexpr double kGpsFixDebounceSec = 2.0;
+          const bool raw_fixed = (context_->gps_fix_type >= 4) && (msg->position_accuracy < 0.1f);
+          const rclcpp::Time gps_now = this->now();
+          if (!gps_fix_debounce_init_)
+          {
+            // Seed on the first sample (avoids subtracting an uninitialised Time,
+            // which would also risk a clock-source mismatch exception).
+            gps_fix_debounce_init_ = true;
+            gps_fix_candidate_ = raw_fixed;
+            gps_fix_candidate_since_ = gps_now;
+            context_->gps_is_fixed = raw_fixed;
+          }
+          else
+          {
+            if (raw_fixed != gps_fix_candidate_)
+            {
+              gps_fix_candidate_ = raw_fixed;
+              gps_fix_candidate_since_ = gps_now;
+            }
+            if ((gps_now - gps_fix_candidate_since_).seconds() >= kGpsFixDebounceSec)
+            {
+              context_->gps_is_fixed = gps_fix_candidate_;
+            }
+          }
           context_->gps_quality = std::clamp(1.0f - msg->position_accuracy, 0.0f, 1.0f);
         });
 
@@ -435,7 +465,7 @@ private:
 
     // Transit / mowing speeds, sourced from mowgli_robot.yaml and applied to
     // the live controllers by SetNavMode (FollowPath.desired_linear_vel for the
-    // RPP transit controller, FollowCoveragePath.speed_fast for FTC coverage).
+    // RPP transit controller, FollowCoveragePath.vx_max for MPPI coverage).
     // Stored on the shared BTContext so SetNavMode's tick is a pure read.
     // Previously SetNavMode hardcoded 0.5 (precise) / 0.25 (degraded), which
     // stomped the launch-injected values — the configured speeds never applied.
@@ -484,10 +514,29 @@ private:
     const double battery_full_pct = declare_parameter<double>("battery_full_percent", 95.0);
     const double battery_critical_voltage =
         declare_parameter<double>("battery_critical_voltage", 0.0);
+    // Hysteresis recovery threshold for the critical-battery handler: the
+    // robot enters critical-dock at battery_critical_percent but only leaves
+    // it (back to IDLE_DOCKED) once charged above this higher level. Without
+    // the upper threshold the critical state flapped at the entry boundary
+    // and re-ran DockRobot every tick while the pack crawled back up. Clamp
+    // to strictly above the entry threshold so the band can never invert.
+    double battery_critical_recovery_pct =
+        declare_parameter<double>("battery_critical_recovery_percent", 30.0);
+    if (battery_critical_recovery_pct <= battery_critical_pct)
+    {
+      battery_critical_recovery_pct = battery_critical_pct + 10.0;
+      RCLCPP_WARN(get_logger(),
+                  "battery_critical_recovery_percent must exceed "
+                  "battery_critical_percent (%.1f); clamped to %.1f",
+                  battery_critical_pct,
+                  battery_critical_recovery_pct);
+    }
     blackboard_->set("battery_low_pct", static_cast<float>(battery_low_pct));
     blackboard_->set("battery_critical_pct", static_cast<float>(battery_critical_pct));
     blackboard_->set("battery_full_pct", static_cast<float>(battery_full_pct));
     blackboard_->set("battery_critical_voltage", static_cast<float>(battery_critical_voltage));
+    blackboard_->set("battery_critical_recovery_pct",
+                     static_cast<float>(battery_critical_recovery_pct));
 
     tree_ = factory_.createTreeFromFile(tree_file, blackboard_);
 
@@ -542,6 +591,13 @@ private:
   // ------------------------------------------------------------------
 
   std::shared_ptr<BTContext> context_;
+
+  // GPS-fixed debounce state (see the /gps callback): rides through the F9P
+  // per-epoch Fixed↔Float flicker so gps_is_fixed — and thus SetNavMode — does
+  // not chatter and reset the MPPI optimizer.
+  bool gps_fix_debounce_init_{false};
+  bool gps_fix_candidate_{false};
+  rclcpp::Time gps_fix_candidate_since_;
 
   // Subscribers
   rclcpp::Subscription<mowgli_interfaces::msg::Status>::SharedPtr status_sub_;

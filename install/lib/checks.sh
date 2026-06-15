@@ -575,9 +575,9 @@ check_gui() {
 
   if curl -sf -o /dev/null --connect-timeout 3 "http://$ip:4006" 2>/dev/null || \
      curl -sf -o /dev/null --connect-timeout 3 "http://localhost:4006" 2>/dev/null; then
-    info "GUI accessible at http://$ip"
+    info "GUI accessible at http://$ip:4006"
   else
-    warn "GUI might be starting up — try http://$ip in your browser"
+    warn "GUI might be starting up — try http://$ip:4006 in your browser"
   fi
 
   local fg_info
@@ -595,7 +595,7 @@ check_gui() {
 
   echo ""
   echo -e "  ${BOLD}Access points:${NC}"
-  echo -e "    GUI:       ${CYAN}http://$ip${NC}"
+  echo -e "    GUI:       ${CYAN}http://$ip:4006${NC}"
   echo -e "    Foxglove:  ${CYAN}ws://$ip:8765${NC}"
   echo -e "    Rosbridge: ${CYAN}ws://$ip:9090${NC}"
   echo -e "    MQTT:      ${CYAN}$ip:1883${NC}"

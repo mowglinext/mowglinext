@@ -4,7 +4,6 @@ map_server_node:
     map_size_x: 12.0
     map_size_y: 12.0
     map_frame: "map"
-    decay_rate_per_hour: 0.1
     tool_width: 0.18
     map_file_path: ""
     areas_file_path: ""

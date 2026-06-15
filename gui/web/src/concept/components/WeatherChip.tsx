@@ -1,18 +1,20 @@
-import {Cloud, CloudRain, Sun, CloudSun, Snowflake} from "lucide-react";
+import {Cloud, CloudRain, Sun, CloudSun, Snowflake, CloudFog, CloudLightning} from "lucide-react";
 
 /**
  * Compact weather pill -- icon + temp + condition. Tone shifts to amber
  * when rain is forecast (we'll auto-dock in that case).
  */
 
-type Condition = "clear" | "partly" | "cloudy" | "rain" | "snow";
+export type Condition = "clear" | "partly" | "cloudy" | "fog" | "rain" | "snow" | "storm";
 
 const ICON: Record<Condition, typeof Cloud> = {
   clear:  Sun,
   partly: CloudSun,
   cloudy: Cloud,
+  fog:    CloudFog,
   rain:   CloudRain,
   snow:   Snowflake,
+  storm:  CloudLightning,
 };
 
 interface WeatherChipProps {
@@ -23,7 +25,7 @@ interface WeatherChipProps {
 
 export function WeatherChip({condition, tempC, rainSoon}: WeatherChipProps) {
   const Icon = ICON[condition];
-  const warn = rainSoon || condition === "rain";
+  const warn = rainSoon || condition === "rain" || condition === "storm";
   return (
     <div style={{
       display: "inline-flex", alignItems: "center", gap: 10,
@@ -51,7 +53,9 @@ function conditionLabel(c: Condition) {
     case "clear":  return "ciel dégagé";
     case "partly": return "ensoleillé";
     case "cloudy": return "nuageux";
+    case "fog":    return "brouillard";
     case "rain":   return "pluvieux";
     case "snow":   return "neigeux";
+    case "storm":  return "orageux";
   }
 }

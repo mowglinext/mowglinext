@@ -310,9 +310,10 @@ class MowSessionMonitor(Node):
         sub("/plan", Path, self._plan_cb, QOS_RELIABLE)
         sub("/scan", LaserScan, self._scan_cb, QOS_SENSOR)
 
-        # slam_toolbox RTK fallback — pose-with-covariance already
-        # composed into the GPS map frame by slam_pose_anchor_node.
-        sub("/slam/pose_cov", PoseWithCovarianceStamped, self._slam_pose_cb, QOS_RELIABLE)
+        # NOTE: the legacy /slam/pose_cov subscription was removed — slam_toolbox
+        # and slam_pose_anchor_node are gone (fusion_graph is the sole localizer
+        # and there is no publisher on that topic). The map-frame estimate is
+        # captured from /odometry/filtered_map instead.
 
         # --- TF buffer for map lookups ---
         self.tf_buffer = Buffer()
@@ -946,17 +947,27 @@ _CONFIG_LOCATIONS = {
         "/home/ubuntu/mowglinext/ros2/src/mowgli_bringup/config/localization.yaml",
         "/ros2_ws/install/mowgli_bringup/share/mowgli_bringup/config/localization.yaml",
     ],
-    "nav2_params.yaml": [
-        "/home/ubuntu/mowglinext/ros2/src/mowgli_bringup/config/nav2_params.yaml",
-        "/ros2_ws/install/mowgli_bringup/share/mowgli_bringup/config/nav2_params.yaml",
+    # nav2_params.yaml was split into a shared base + lidar/no-lidar overlays
+    # (deep-merged at launch); hash all three so a session's effective Nav2
+    # tuning is captured regardless of which variant was active.
+    "nav2_params_base.yaml": [
+        "/home/ubuntu/mowglinext/ros2/src/mowgli_bringup/config/nav2_params_base.yaml",
+        "/ros2_ws/install/mowgli_bringup/share/mowgli_bringup/config/nav2_params_base.yaml",
     ],
-    "robot_localization.yaml": [
-        "/home/ubuntu/mowglinext/ros2/src/mowgli_bringup/config/robot_localization.yaml",
-        "/ros2_ws/install/mowgli_bringup/share/mowgli_bringup/config/robot_localization.yaml",
+    "nav2_params_lidar.yaml": [
+        "/home/ubuntu/mowglinext/ros2/src/mowgli_bringup/config/nav2_params_lidar.yaml",
+        "/ros2_ws/install/mowgli_bringup/share/mowgli_bringup/config/nav2_params_lidar.yaml",
     ],
-    "slam_toolbox.yaml": [
-        "/home/ubuntu/mowglinext/ros2/src/mowgli_bringup/config/slam_toolbox.yaml",
-        "/ros2_ws/install/mowgli_bringup/share/mowgli_bringup/config/slam_toolbox.yaml",
+    "nav2_params_no_lidar.yaml": [
+        "/home/ubuntu/mowglinext/ros2/src/mowgli_bringup/config/nav2_params_no_lidar.yaml",
+        "/ros2_ws/install/mowgli_bringup/share/mowgli_bringup/config/nav2_params_no_lidar.yaml",
+    ],
+    # robot_localization.yaml and slam_toolbox.yaml were removed (fusion_graph
+    # is the sole localizer) — both files no longer exist, so they are not
+    # hashed here. fusion_graph.yaml carries the relevant tuning now.
+    "fusion_graph.yaml": [
+        "/home/ubuntu/mowglinext/ros2/src/fusion_graph/config/fusion_graph.yaml",
+        "/ros2_ws/install/fusion_graph/share/fusion_graph/config/fusion_graph.yaml",
     ],
 }
 

@@ -48,13 +48,8 @@
 #include <mowgli_interfaces/msg/obstacle_array.hpp>
 #include <mowgli_interfaces/msg/status.hpp>
 #include <mowgli_interfaces/srv/add_mowing_area.hpp>
-#include <mowgli_interfaces/srv/get_coverage_status.hpp>
 #include <mowgli_interfaces/srv/get_mowing_area.hpp>
-#include <mowgli_interfaces/srv/get_next_segment.hpp>
-#include <mowgli_interfaces/srv/get_next_strip.hpp>
-#include <mowgli_interfaces/srv/get_remaining_area_polygon.hpp>
 #include <mowgli_interfaces/srv/get_recovery_point.hpp>
-#include <mowgli_interfaces/srv/mark_segment_blocked.hpp>
 #include <mowgli_interfaces/srv/promote_obstacle.hpp>
 #include <mowgli_interfaces/srv/set_docking_point.hpp>
 #include <std_srvs/srv/trigger.hpp>
@@ -64,15 +59,14 @@ namespace mowgli_map
 
 /// @brief Multi-layer map service node for the Mowgli robot mower.
 ///
-/// Maintains a grid_map::GridMap with four semantic layers:
+/// Maintains a grid_map::GridMap with two semantic layers:
 ///   - occupancy       : binary free/occupied for Nav2 costmap
-///   - classification  : CellType enum stored as float
-///   - mow_progress    : [0,1] freshness of mowing, decays over time
-///   - confidence      : cumulative sensor observation count
+///   - classification  : CellType enum stored as float (drives the keepout
+///                       and speed costmap filter masks)
 ///
 /// The node subscribes to SLAM occupancy grids, odometry, and mower status,
-/// and publishes the full multi-layer map plus a visualisation OccupancyGrid
-/// for mow_progress. Persistence and zone management are offered as services.
+/// and publishes the full multi-layer map. Persistence and zone management
+/// are offered as services.
 class MapServerNode : public rclcpp::Node
 {
 public:
@@ -106,60 +100,14 @@ public:
     return map_mutex_;
   }
 
-  /// Expose decay rate for unit tests.
-  double decay_rate_per_hour() const
-  {
-    return decay_rate_per_hour_;
-  }
-
   /// Expose mower width for unit tests.
   double tool_width() const
   {
     return tool_width_;
   }
 
-  /// Run the publish/decay timer callback once (test-only).
-  void tick_once(double elapsed_seconds);
-
-  /// Mark cells mowed around a given position (test-only).
-  void mark_mowed(double x, double y);
-
   /// Clear all layers to their default values.
   void clear_map_layers();
-
-  /// Build coverage cells OccupancyGrid (test-only accessor).
-  nav_msgs::msg::OccupancyGrid coverage_cells_to_occupancy_grid() const;
-
-  /// Compute convex hull of 2D points (Andrew's monotone chain).
-  static std::vector<std::pair<double, double>> convex_hull(
-      std::vector<std::pair<double, double>> pts);
-
-  /// Compute optimal mow angle from polygon via Minimum Bounding Rectangle.
-  /// Returns angle in radians: the direction strips should run parallel to.
-  static double compute_optimal_mow_angle(const geometry_msgs::msg::Polygon& poly);
-
-  /// Compute or retrieve cached strip layout for an area (test-only).
-  void ensure_strip_layout(size_t area_index);
-
-  /// Path C — public test handle for the cell-based segment selector.
-  /// Caller must hold map_mutex_ for thread safety. See the private
-  /// declaration below for parameter semantics.
-  bool find_next_segment_public(size_t area_index,
-                                double robot_x,
-                                double robot_y,
-                                double robot_yaw,
-                                double prefer_dir_yaw,
-                                bool boustrophedon,
-                                double max_segment_length_m,
-                                double& out_start_x,
-                                double& out_start_y,
-                                double& out_end_x,
-                                double& out_end_y,
-                                int& out_cell_count,
-                                std::string& out_termination_reason,
-                                bool& out_is_long_transit,
-                                bool& out_coverage_complete,
-                                std::vector<std::pair<double, double>>* out_via_points = nullptr) const;
 
   /// Test-only: forward to the private apply_promoted_obstacle.
   /// Lets `test_map_server` exercise obstacle promotion without going
@@ -168,16 +116,6 @@ public:
                                         const geometry_msgs::msg::Polygon& polygon)
   {
     return apply_promoted_obstacle(area_index, polygon);
-  }
-
-  /// Test-only: mark an area's one-shot headland pass as already
-  /// emitted so find_next_segment skips straight to the boustrophedon
-  /// row planner. Production emits the perimeter headland on the FIRST
-  /// call per area; unit tests that assert in-row / obstacle /
-  /// coverage-complete behaviour must drain that one-shot first.
-  void mark_headland_emitted_for_test(size_t area_index)
-  {
-    headland_emitted_areas_.insert(area_index);
   }
 
   /// Test-only: directly invoke the add_area service handler.
@@ -192,12 +130,16 @@ public:
   void save_areas_for_test(const std::string& path);
   void load_areas_for_test(const std::string& path);
 
-  /// Test-only: directly invoke the get_remaining_area_polygon handler.
-  void get_remaining_area_polygon_for_test(
-      const mowgli_interfaces::srv::GetRemainingAreaPolygon::Request::SharedPtr req,
-      mowgli_interfaces::srv::GetRemainingAreaPolygon::Response::SharedPtr res)
+  /// Test-only: build the keepout mask and return a copy. Exercises
+  /// publish_keepout_mask() (which caches into cached_keepout_mask_) without
+  /// a live ROS subscriber. Takes map_mutex_ internally — caller must NOT
+  /// hold it. Lets tests assert the grid_map→OccupancyGrid index convention
+  /// (CLAUDE.md #14) and the lethal-outside-areas boundary policy.
+  nav_msgs::msg::OccupancyGrid build_keepout_mask_for_test()
   {
-    on_get_remaining_area_polygon(req, res);
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    publish_keepout_mask();
+    return cached_keepout_mask_;
   }
 
 private:
@@ -220,8 +162,7 @@ private:
   /// Update mow blade state from mower status.
   void on_mower_status(mowgli_interfaces::msg::Status::ConstSharedPtr msg);
 
-  /// Update mow_progress and confidence layers based on robot position.
-  /// Also checks boundary violation.
+  /// Latch the robot's map-frame position and check boundary violation.
   void on_odom(nav_msgs::msg::Odometry::ConstSharedPtr msg);
 
   /// Cache the latest /obstacle_tracker/obstacles message so the
@@ -234,8 +175,17 @@ private:
 
   // ── Timer callback ───────────────────────────────────────────────────────
 
-  /// Apply decay to mow_progress, publish grid_map and progress OccupancyGrid.
+  /// Publish the grid_map and (when dirty) the keepout/speed costmap masks.
   void on_publish_timer();
+
+  /// Stamp a tool-width disc of "mowed" into mow_progress_map_ at the given
+  /// map-frame robot position. Lazily (re)creates the grid to mirror map_'s
+  /// geometry. Takes map_mutex_ internally — caller must NOT hold it.
+  void stamp_mow_progress(double x, double y);
+
+  /// Publish mow_progress_map_ as a nav_msgs/OccupancyGrid on ~/mow_progress.
+  /// Caller MUST hold map_mutex_.
+  void publish_mow_progress();
 
   // ── Services ─────────────────────────────────────────────────────────────
 
@@ -265,49 +215,8 @@ private:
 
   /// User-promotion of a tracker observation (or raw polygon) to a
   /// permanent keepout. See PromoteObstacle.srv for the contract.
-  void on_promote_obstacle(
-      const mowgli_interfaces::srv::PromoteObstacle::Request::SharedPtr req,
-      mowgli_interfaces::srv::PromoteObstacle::Response::SharedPtr res);
-
-  // ── Strip planner services ───────────────────────────────────────────────
-
-  void on_get_next_strip(const mowgli_interfaces::srv::GetNextStrip::Request::SharedPtr req,
-                         mowgli_interfaces::srv::GetNextStrip::Response::SharedPtr res);
-
-  /// Path C — cell-based coverage. Returns the next short segment to mow
-  /// from the robot's current pose, ending at the first obstacle / dead
-  /// cell / boundary or at max_segment_length, whichever comes first.
-  /// See GetNextSegment.srv for the full contract.
-  void on_get_next_segment(const mowgli_interfaces::srv::GetNextSegment::Request::SharedPtr req,
-                           mowgli_interfaces::srv::GetNextSegment::Response::SharedPtr res);
-
-  /// Path C — fail-count + DEAD promotion. Increments fail_count for
-  /// each cell along a failed segment path; cells exceeding
-  /// dead_promote_threshold are reclassified as LAWN_DEAD. See
-  /// MarkSegmentBlocked.srv.
-  void on_mark_segment_blocked(
-      const mowgli_interfaces::srv::MarkSegmentBlocked::Request::SharedPtr req,
-      mowgli_interfaces::srv::MarkSegmentBlocked::Response::SharedPtr res);
-
-  /// Path C — manual reset. Reverts every LAWN_DEAD cell back to LAWN
-  /// and zeros fail_count. Useful at session start or when the
-  /// operator removes the obstacle that caused the DEAD promotion.
-  void on_clear_dead_cells(const std_srvs::srv::Trigger::Request::SharedPtr req,
-                           std_srvs::srv::Trigger::Response::SharedPtr res);
-
-  void on_get_coverage_status(
-      const mowgli_interfaces::srv::GetCoverageStatus::Request::SharedPtr req,
-      mowgli_interfaces::srv::GetCoverageStatus::Response::SharedPtr res);
-
-  /// Returns the area polygon minus the union of mowed cells (mow_progress
-  /// >= 0.3) as a list of disjoint MapArea pieces. Each piece carries the
-  /// original area's obstacles plus the mowed region as additional holes.
-  /// Used by the BT's PlanCoverageArea node to feed opennav_coverage with
-  /// only the remaining work on each (re)start. See
-  /// GetRemainingAreaPolygon.srv for the full contract.
-  void on_get_remaining_area_polygon(
-      const mowgli_interfaces::srv::GetRemainingAreaPolygon::Request::SharedPtr req,
-      mowgli_interfaces::srv::GetRemainingAreaPolygon::Response::SharedPtr res);
+  void on_promote_obstacle(const mowgli_interfaces::srv::PromoteObstacle::Request::SharedPtr req,
+                           mowgli_interfaces::srv::PromoteObstacle::Response::SharedPtr res);
 
   /// Compute a recovery pose inside the nearest mowing area.
   ///
@@ -326,16 +235,6 @@ private:
 
   /// Resize the map to fit all loaded areas (with margin), re-initialising layers.
   void resize_map_to_areas();
-
-  /// Convert mow_progress layer to a nav_msgs/OccupancyGrid (0–100 scale).
-  nav_msgs::msg::OccupancyGrid mow_progress_to_occupancy_grid() const;
-
-  /// Apply time-based decay to the mow_progress layer.
-  /// @param elapsed_seconds Time since last decay application.
-  void apply_decay(double elapsed_seconds);
-
-  /// Mark all cells within tool_width_ / 2 of (x, y) as freshly mowed.
-  void mark_cells_mowed(double x, double y);
 
   /// Check whether a point is inside a polygon (ray-casting algorithm).
   static bool point_in_polygon(const geometry_msgs::msg::Point32& pt,
@@ -359,20 +258,6 @@ private:
   /// @return false if the polygon has fewer than 3 points or area_index
   ///         is out of range / a navigation area.
   bool apply_promoted_obstacle(size_t area_index, const geometry_msgs::msg::Polygon& polygon);
-
-  /// Topological reachability analysis (DEAD redesign 2026-05-07).
-  /// BFS over the area's grid cells from a seed (robot pose if inside
-  /// area, else area centroid + spiral fallback), treating any cell
-  /// outside the polygon, in OBSTACLE_*/NO_GO_ZONE, or costmap-blocked
-  /// as a wall. Cells inside the polygon but unreachable get flipped
-  /// to LAWN_DEAD; previously-DEAD cells that are now reachable flip
-  /// back to LAWN. Manages map_mutex_ internally — caller must NOT hold
-  /// it. Cheap (<10 ms on a 30×30 m area at 0.05 m resolution); safe to
-  /// call from a 0.5 Hz timer.
-  void recompute_reachability_for_area(size_t area_index);
-
-  // try_emit_perimeter_ring is declared further down, alongside the
-  // SegmentResult struct it returns into.
 
   /// Build and publish the speed OccupancyGrid mask and CostmapFilterInfo.
   /// Cells within one tool_width of the mowing boundary → 50 (50 % speed).
@@ -399,127 +284,6 @@ private:
   /// Reapply area classifications to the map grid (called after loading areas).
   void apply_area_classifications();
 
-  // ── Strip planner helpers ─────────────────────────────────────────────────
-
-public:
-  /// A single mowing strip (one column in boustrophedon order).
-  struct Strip
-  {
-    geometry_msgs::msg::Point start;  // Map frame
-    geometry_msgs::msg::Point end;  // Map frame
-    int column_index{0};
-  };
-
-  /// Cached strip layout for an area.
-  struct StripLayout
-  {
-    std::vector<Strip> strips;
-    double mow_angle{0.0};
-    bool valid{false};
-  };
-
-  /// Pure helper: among the candidate strips marked eligible[i]==true, pick the
-  /// one whose nearest endpoint (start or end) is closest to (robot_x, robot_y),
-  /// and orient the returned strip so that `start` is that nearest endpoint.
-  /// Returns -1 in `out_index` and leaves `out_strip` untouched if no eligible
-  /// strip exists. Free-standing & state-free so it can be unit-tested without
-  /// spinning a Node.
-  static void select_nearest_endpoint_strip(const std::vector<Strip>& strips,
-                                            const std::vector<bool>& eligible,
-                                            double robot_x,
-                                            double robot_y,
-                                            int& out_index,
-                                            Strip& out_strip);
-
-private:
-  /// Find next unmowed strip. Returns false if coverage is complete.
-  bool find_next_unmowed_strip(
-      size_t area_index, double robot_x, double robot_y, Strip& out_strip, bool prefer_headland);
-
-  /// Convert a strip to a nav_msgs::Path, splitting at obstacle cells.
-  nav_msgs::msg::Path strip_to_path(const Strip& strip, size_t area_index) const;
-
-  /// Check if a strip is sufficiently mowed (>threshold of cells done).
-  bool is_strip_mowed(const Strip& strip, double threshold_pct = 0.2) const;
-
-  /// Check if a strip is blocked by obstacles (>threshold of obstacle cells).
-  /// Blocked strips are treated as "frontier" and skipped during planning.
-  bool is_strip_blocked(const Strip& strip, double blocked_threshold = 0.5) const;
-
-  /// Compute coverage statistics for an area.
-  void compute_coverage_stats(size_t area_index,
-                              uint32_t& total,
-                              uint32_t& mowed,
-                              uint32_t& obstacle_cells) const;
-
-  /// Count LAWN cells in an area: `total_lawn` = all reachable mowable cells
-  /// (classification == LAWN, i.e. excludes LAWN_DEAD/NO_GO/obstacle/UNKNOWN),
-  /// `unmowed_lawn` = those with mow_progress < 0.3. Used as the real-coverage
-  /// half of the area-completion test (paired with the strip layout). The
-  /// blade never reaches every edge cell, so completion is a high FRACTION of
-  /// reachable LAWN, not zero unmowed cells. Caller must hold map_mutex_.
-  void count_lawn_cells(size_t area_index, uint32_t& total_lawn, uint32_t& unmowed_lawn) const;
-
-  // ── Path C cell-based coverage ────────────────────────────────────────────
-
-  /// Result of a single segment selection.
-  struct SegmentResult
-  {
-    /// Start position of the segment in map frame. Equals the robot
-    /// position for in-place segments, or a row entry point when the
-    /// next unmowed cell is on a different row.
-    double start_x{0.0};
-    double start_y{0.0};
-    /// Final cell of the segment (last cell that will be mowed by
-    /// FollowSegment). Together with start (and via_points if any),
-    /// defines the path the controller will follow.
-    double end_x{0.0};
-    double end_y{0.0};
-    /// Optional intermediate waypoints between start_* and end_*. Empty
-    /// for straight in-row segments. Populated when the planner
-    /// generated a bypass arc around an obstacle: the via points are
-    /// the corners of the arc (lateral offset out, offset-row span,
-    /// lateral return). Path = start → via[0] → via[1] → ... → end.
-    std::vector<std::pair<double, double>> via_points{};
-    /// Number of cells traversed by this segment (along path_spacing
-    /// granularity). For diagnostics, used as segments_remaining
-    /// estimate scaling.
-    int cell_count{0};
-    /// Why the segment ended at end_*. Mirrors srv termination_reason.
-    std::string termination_reason{};
-    /// True when the segment requires a transit (>~0.5 m gap or large
-    /// turn) — the BT must disengage the blade for the move.
-    bool is_long_transit{false};
-    /// True when the area is fully covered (no unmowed reachable cell
-    /// remains). The other fields are unset in this case.
-    bool coverage_complete{false};
-  };
-
-  /// Cell-based segment selector. Searches `mow_progress` for the
-  /// nearest unmowed reachable LAWN cell to the robot, then walks
-  /// along prefer_dir_yaw (or its inverse for boustrophedon alternate
-  /// rows) until the row ends, an obstacle/dead cell appears, or
-  /// max_segment_length is reached. Caller must hold map_mutex_.
-  bool find_next_segment(size_t area_index,
-                         double robot_x,
-                         double robot_y,
-                         double robot_yaw,
-                         double prefer_dir_yaw,
-                         bool boustrophedon,
-                         double max_segment_length_m,
-                         SegmentResult& out_segment) const;
-
-  /// Generate a perimeter-ring segment around the next user-promoted
-  /// obstacle whose annulus (the unmowed strip the bypass arcs leave
-  /// behind) is still mostly unmowed. Used as the last fallback in
-  /// find_next_segment before declaring coverage_complete: in-row
-  /// strips bypass each obstacle, leaving a one-tool-width annulus
-  /// of unmowed grass; this pass closes it. Caller must hold
-  /// map_mutex_.
-  /// @return true if a ring was emitted (out_seg populated), false if
-  ///         every obstacle's annulus is already covered.
-  bool try_emit_perimeter_ring(size_t area_index, SegmentResult& out_seg) const;
-
   // ── Area entry ────────────────────────────────────────────────────────────
 
   /// A named area (mowing or navigation) with optional interior obstacles.
@@ -531,29 +295,40 @@ private:
     bool is_navigation_area{false};
   };
 
-  /// One-shot per-area flag (mutable so the const find_next_segment
-  /// can record it): false means find_next_segment will emit a
-  /// perimeter (headland) pass on its next call for that area before
-  /// falling back to the boustrophedon row planner. The headland
-  /// path mows ~one mower-width inside the polygon edge so the robot
-  /// has a free lane to turn into at every subsequent strip end —
-  /// without this, the boustrophedon strips run all the way to the
-  /// inset boundary and headland turns happen right at the polygon
-  /// edge where the robot can't safely pivot. Reset by
-  /// reset_mow_progress / area edits.
-  mutable std::set<size_t> headland_emitted_areas_;
-
   // ── Parameters ────────────────────────────────────────────────────────────
   double resolution_;
   double map_size_x_;
   double map_size_y_;
   std::string map_frame_;
-  double decay_rate_per_hour_;
   double tool_width_;
   std::string map_file_path_;
   std::string areas_file_path_;
   double publish_rate_;
   double keepout_nav_margin_;
+  /// When true (default — operator intent "lethal area where there is no
+  /// navigation or mowing area"), the keepout mask marks EVERY cell outside
+  /// the union of all area polygons (mowing + navigation, minus obstacle
+  /// holes) as LETHAL (100), so the Smac planner never routes there and MPPI
+  /// never steers the robot out of the authorised zone. The free band that
+  /// keepout_nav_margin_ would otherwise leave outside each edge is reduced
+  /// to enforce_boundary_margin_m_ (a small robot-radius slack so RTK drift
+  /// at the edge does not self-reject as "Start occupied"), and the dock
+  /// corridor carve-out still keeps a non-lethal lane for transit/docking.
+  /// When false, the legacy keepout_nav_margin_ behaviour is restored.
+  /// Disable per-site only if the dock/transit corridor is not covered by a
+  /// navigation area and the hard boundary would strand docking.
+  bool lethal_outside_areas_{true};
+  /// Slack (m) added OUTSIDE each area edge that stays FREE even when
+  /// lethal_outside_areas_ is on. Absorbs RTK/pose drift at the boundary so
+  /// the planner does not refuse a start pose that sits a few cm past the
+  /// recorded line (the recorded outline IS the robot's CENTRE path, so the
+  /// footprint legitimately overhangs it). Kept small (~robot radius) so the
+  /// planner cannot draft transit detours far outside the polygon — that is
+  /// the regression keepout_nav_margin_ at 0.45 m reopened. Inflation of the
+  /// lethal boundary is also bounded by listing keepout_filter BEFORE
+  /// inflation_layer in the costmap plugins so the wall is not inflated
+  /// inward (see nav2_params_*.yaml).
+  double enforce_boundary_margin_m_{0.25};
   /// Distance past the nearest allowed-area edge at which a boundary
   /// violation is classified as "lethal" (emergency stop) rather than
   /// just "soft" (attempt recovery back inside).
@@ -649,20 +424,18 @@ private:
   grid_map::GridMap map_;
   mutable std::mutex map_mutex_;
 
-  bool mow_blade_enabled_{false};
-  rclcpp::Time last_decay_time_;
+  /// Dedicated grid accumulating the mowed area, published as an OccupancyGrid
+  /// (~/mow_progress). It carries a single "mowed" layer and is lazily resized
+  /// to mirror map_'s geometry, so it stays independent of the main map's
+  /// occupancy/classification lifecycle. Guarded by map_mutex_.
+  grid_map::GridMap mow_progress_map_;
+  bool mow_progress_dirty_{false};
 
-  /// Most recent map-frame robot position (latched in on_odom). Used as
-  /// the preferred seed for reachability_for_area when the robot is
-  /// inside the area being analysed.
+  bool mow_blade_enabled_{false};
+
+  /// Most recent map-frame robot position (latched in on_odom).
   double last_robot_x_{0.0};
   double last_robot_y_{0.0};
-  /// Throttle the reachability BFS — recomputing every publish_timer
-  /// tick is wasted work when neither the costmap nor the polygons
-  /// changed. Recompute when masks_dirty_ flips OR every
-  /// reachability_period_s seconds.
-  rclcpp::Time last_reachability_time_{0, 0, RCL_ROS_TIME};
-  double reachability_period_s_{2.0};
 
   /// Pre-defined areas (mowing zones + navigation corridors).
   /// Any cell inside ANY area polygon is free in the keepout mask;
@@ -750,7 +523,7 @@ private:
   size_t dock_set_gps_avg_min_samples_{10};
 
   /// Thresholds for the on_set_docking_point gates beyond yaw convergence.
-  double dock_set_gps_accuracy_max_m_{0.04};   ///< 4 cm
+  double dock_set_gps_accuracy_max_m_{0.04};  ///< 4 cm
   double dock_set_gps_max_age_s_{2.0};
   double dock_set_status_max_age_s_{3.0};
 
@@ -772,16 +545,9 @@ private:
   geometry_msgs::msg::Polygon dock_exclusion_polygon_;
   bool has_dock_exclusion_{false};
 
-  /// Cached strip layouts per area (recomputed when area changes).
-  std::vector<StripLayout> strip_layouts_;
-
-  /// Track current strip index per area for boustrophedon ordering.
-  std::vector<int> current_strip_idx_;
-
   // ── Publishers ────────────────────────────────────────────────────────────
   rclcpp::Publisher<grid_map_msgs::msg::GridMap>::SharedPtr grid_map_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr mow_progress_pub_;
-  rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr coverage_cells_pub_;
 
   // Costmap filter mask publishers (transient_local so late subscribers receive
   // the last message immediately — required by Nav2 costmap filter design).
@@ -796,24 +562,6 @@ private:
   nav_msgs::msg::OccupancyGrid cached_keepout_mask_;
   nav_msgs::msg::OccupancyGrid cached_speed_mask_;
   bool masks_dirty_{true};
-
-  /// Cached OccupancyGrids for ~/mow_progress and ~/coverage_cells.
-  /// Recomputed inside the dirty block (same gate as ~/grid_map); published
-  /// every timer tick so a GUI page-reload always gets current data.
-  /// (foxglove_bridge subscribes volatile and does not relay transient_local
-  /// latches to WebSocket clients — publish-on-change would leave the map
-  /// blank after a reload while the robot is idle.)
-  nav_msgs::msg::OccupancyGrid cached_mow_progress_;
-  nav_msgs::msg::OccupancyGrid cached_coverage_cells_;
-
-  /// Gating flag for data-topic recomputation. Set whenever MOW_PROGRESS/
-  /// CONFIDENCE (mark_cells_mowed, active decay) or OCCUPANCY (on_occupancy_grid)
-  /// actually changes. When set, the publish timer rebuilds ~/grid_map
-  /// (GridMapRosConverter::toMessage — expensive) and refreshes
-  /// cached_mow_progress_ / cached_coverage_cells_ (coverage_cells_to_occupancy_grid
-  /// is O(cells × polygons)). The cached OccupancyGrids are then published every
-  /// tick regardless, keeping the GUI current without the per-tick recompute cost.
-  bool content_dirty_{true};
 
   // Replan and boundary violation publishers
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr replan_needed_pub_;
@@ -857,13 +605,6 @@ private:
   rclcpp::Service<mowgli_interfaces::srv::SetDockingPoint>::SharedPtr set_docking_point_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_areas_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr load_areas_srv_;
-  rclcpp::Service<mowgli_interfaces::srv::GetNextStrip>::SharedPtr get_next_strip_srv_;
-  rclcpp::Service<mowgli_interfaces::srv::GetNextSegment>::SharedPtr get_next_segment_srv_;
-  rclcpp::Service<mowgli_interfaces::srv::MarkSegmentBlocked>::SharedPtr mark_segment_blocked_srv_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_dead_cells_srv_;
-  rclcpp::Service<mowgli_interfaces::srv::GetCoverageStatus>::SharedPtr get_coverage_status_srv_;
-  rclcpp::Service<mowgli_interfaces::srv::GetRemainingAreaPolygon>::SharedPtr
-      get_remaining_area_polygon_srv_;
   rclcpp::Service<mowgli_interfaces::srv::GetRecoveryPoint>::SharedPtr get_recovery_point_srv_;
   rclcpp::Service<mowgli_interfaces::srv::PromoteObstacle>::SharedPtr promote_obstacle_srv_;
 

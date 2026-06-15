@@ -4,7 +4,6 @@ map_server_node:
     map_size_x: 20.0
     map_size_y: 20.0
     map_frame: "map"
-    decay_rate_per_hour: 0.1
     # tool_width is the single source of truth for the blade's effective
     # cutting width. Injected at launch from mowgli_robot.yaml.tool_width
     # (see navigation.launch.py) so this YAML only needs to keep the
@@ -31,7 +30,40 @@ map_server_node:
     # 0.3 m: still covers non-RTK drift and dock approach (dock is
     # typically within 0.2 m of polygon edge on a well-recorded site),
     # but stops the planner from drafting big detours outside the area.
-    keepout_nav_margin: 0.3
+    keepout_nav_margin: 0.45   # free band OUTSIDE the recorded line. The recorded outline IS the robot's
+                               # CENTRE path (you drive it to record), so the footprint legitimately
+                               # overhangs it; 0.30 left only 0.30 m and the 0.50 m nose swept into lethal
+                               # during boundary U-turns → robot pinned. 0.45 gives the footprint room to
+                               # overhang the line while staying under lethal_boundary_margin (0.5).
+                               # NOTE: only consulted when lethal_outside_areas is FALSE; with the default
+                               # (true) the smaller enforce_boundary_margin_m governs the outside-free band.
+
+    # Hard area-boundary enforcement. When true (operator intent: "lethal
+    # area where there is no navigation or mowing area"), the keepout mask
+    # marks EVERY cell outside the union of all areas (mowing + navigation,
+    # minus obstacle holes) as LETHAL (100). The Smac planner then never
+    # routes transit outside the authorised zone, and (via the global
+    # KeepoutFilter the planner consults) coverage/transit goals are clamped
+    # inside it — directly addressing the 2026-06 0.32 m concave-boundary
+    # excursion. The dock corridor is still carved back to FREE so docking /
+    # post-undock transit keep a lane. Set FALSE to restore the legacy wide
+    # keepout_nav_margin free band (only needed if the dock/transit corridor
+    # is NOT covered by a navigation area — otherwise the hard boundary would
+    # strand docking; draw a navigation area over the dock + approach instead).
+    lethal_outside_areas: true
+
+    # Free slack (m) left OUTSIDE each area edge even when lethal_outside_areas
+    # is on. Absorbs RTK/pose drift so a start pose a few cm past the recorded
+    # CENTRE line is not rejected as "Start occupied", and lets the footprint
+    # overhang the line. Kept ~robot radius (small) so the planner cannot draft
+    # transit detours far outside the polygon — the regression the 0.45 m
+    # keepout_nav_margin reopened. The global costmap lists keepout_filter
+    # BEFORE inflation_layer, so this lethal wall is inflated inward by only
+    # inflation_radius (0.20 m): wall at 0.25 m outside the centre line → bite
+    # ~0.05 m inside it, well clear of the swath centres (~0.29 m inside via
+    # chassis_safety_inset). Raise toward keepout_nav_margin if a tight dock
+    # sits just outside the polygon and a navigation area cannot cover it.
+    enforce_boundary_margin_m: 0.25
 
     # /local_costmap published values are 0–100 (OccupancyGrid units, with
     # the Nav2 costmap_2d → OccupancyGrid mapping: internal 254/253 →

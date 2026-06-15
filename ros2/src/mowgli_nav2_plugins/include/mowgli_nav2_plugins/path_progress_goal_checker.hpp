@@ -76,6 +76,15 @@ private:
   double xy_goal_tolerance_{0.20};
   double yaw_goal_tolerance_{0.30};
   std::string plan_topic_{};
+  // Per-swath DISCONTINUOUS coverage feeds short paths (a mow swath, or a tiny
+  // turn-connector between swaths). On a path this short the monotonic
+  // 95%-progress gate is unreliable — a 3-pose connector never registers enough
+  // index advance and the goal hangs, stalling the whole swath sequence. For any
+  // path with <= short_path_poses_ poses, fall back to SimpleGoalChecker
+  // semantics (fire on xy+yaw proximity to the goal pose), same as the n<=1
+  // degenerate guard. Long coverage paths keep the progress gate (the reason
+  // this plugin exists — see header). 0 disables (only n<=1 uses proximity).
+  size_t short_path_poses_{10};
   // Bound on the forward search window in isGoalReached. Prevents
   // boustrophedon paths from letting max_reached_index_ kangaroo past
   // a loop-back point. Tuned at 10 poses (≥10× the per-call physical

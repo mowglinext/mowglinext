@@ -20,10 +20,12 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -50,8 +52,18 @@ class FusionGraphNode : public rclcpp::Node
 {
 public:
   explicit FusionGraphNode(const rclcpp::NodeOptions& opts = {});
+  ~FusionGraphNode() override;
 
 private:
+  // ── Construction helpers ───────────────────────────────────────────
+  // The constructor is split into two methods (defined in
+  // fusion_graph_node_setup_params.cpp / _setup_comms.cpp) so each
+  // translation unit stays within the file-size budget. DeclareParameters
+  // declares + latches every ROS parameter into members; SetupCommunications
+  // creates the publishers/subscriptions/services/timers.
+  void DeclareParameters();
+  void SetupCommunications(double node_period_s);
+
   // ── Callbacks ──────────────────────────────────────────────────────
   void OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg);
   void OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg);
@@ -61,6 +73,16 @@ private:
   void OnScan(sensor_msgs::msg::LaserScan::ConstSharedPtr msg);
   void OnHighLevelStatus(mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg);
   void OnHardwareStatus(mowgli_interfaces::msg::Status::ConstSharedPtr msg);
+  // The docking server publishes /cmd_vel_docking only while it is running the
+  // final graceful approach. We use that as the "dock approach in progress"
+  // signal to stabilise the pose (see DockingApproachActive()).
+  void OnDockingCmd(geometry_msgs::msg::TwistStamped::ConstSharedPtr msg);
+  // True while the dock approach is active (a non-zero /cmd_vel_docking seen
+  // within docking_active_timeout_s_). During the slow reverse approach the COG
+  // travel-direction yaw and RTK-float position epochs both jolt the estimate,
+  // which the graceful controller then chases into divergence — so we suppress
+  // them here (field 2026-06-10).
+  bool DockingApproachActive() const;
   // Anchor the graph at the operator-calibrated dock pose. Called on
   // the rising edge of is_charging once GPS has arrived at least once.
   // Replaces the old dock_yaw_to_set_pose_node behavior.
@@ -78,6 +100,8 @@ private:
 
   // Publish TF map->odom and /odometry/filtered_map.
   void PublishOutputs(const TickOutput& out);
+  // Dedicated-thread TF broadcast loop (see tf_broadcast_rate_hz_).
+  void TfBroadcastLoop();
   // Publishes /odometry/filtered + odom→base_footprint TF from the
   // dead-reckoning state. Called unconditionally from OnTimer so the
   // local frame keeps streaming even before the graph initializes.
@@ -134,6 +158,13 @@ private:
   double dr_x_ = 0.0;
   double dr_y_ = 0.0;
   double dr_yaw_ = 0.0;
+  // Latest DR velocities, cached under tf_state_mu_ alongside dr_*. The TF
+  // broadcast uses them to forward-propagate the pose by tf_publish_lead_s_ so
+  // the future-stamped TF is an honest constant-velocity prediction rather than
+  // the current pose mislabelled into the future (which injects ~wz·lead of yaw
+  // error during pivots). dr_last_vx_eff_ is the slip-vetoed forward velocity.
+  double dr_last_gz_ = 0.0;  // bias-corrected gyro yaw rate (rad/s)
+  double dr_last_vx_eff_ = 0.0;  // slip-adjusted forward velocity (m/s)
   double wheel_vx_ = 0.0;  // latest forward velocity cached from /wheel_odom
   double wheel_wz_ = 0.0;  // latest wheel-derived yaw rate (slip-veto cross-check)
 
@@ -191,7 +222,14 @@ private:
   // extrapolated pose.
   gtsam::Pose2 t_map_odom_anchor_{0.0, 0.0, 0.0};
   uint64_t last_anchored_node_index_ = std::numeric_limits<uint64_t>::max();
-  bool t_map_odom_anchor_valid_ = false;
+  // Atomic: flipped to false from several executor-thread sites
+  // (ForceAnchor / Initialize / clear paths) and read by the TF
+  // broadcast thread. The anchor VALUE is only ever written together
+  // with valid=true under tf_state_mu_ (OnTimer capture site), so a
+  // reader holding the mutex always sees a coherent {value, valid}
+  // pair; the lock-free false-stores can at worst suppress the
+  // map→odom broadcast for one cycle, which is the intent.
+  std::atomic<bool> t_map_odom_anchor_valid_{false};
 
   // Latched seeds for initialization.
   std::optional<gtsam::Vector2> seed_xy_;  // from latest GPS
@@ -254,6 +292,31 @@ private:
   // even at full transit speed).
   double tf_publish_lead_s_ = 0.0;
 
+  // ── Decoupled TF broadcast thread ───────────────────────────────
+  // OnTimer runs graph_->Tick() (iSAM2 update) BEFORE publishing TF.
+  // On a large graph under Pi CPU load a single Tick can take
+  // 150-250 ms, and the 1 Hz diagnostics callback (GetAllPoses on
+  // the full graph) can block the executor similarly — during those
+  // stalls neither map→odom nor odom→base_footprint gets refreshed
+  // and Nav2's controller_server throws ExtrapolationException even
+  // after waiting its 100 ms transform timeout (field 2026-06-07:
+  // RotationShim aborted ~19×/90 s, robot twitched in place instead
+  // of following the path). Same failure class as the iSAM2 rebase
+  // stall (see maintenance_timer_), which was fixed by moving the
+  // rebase off-thread.
+  //
+  // The TF legs are cheap to compute (constant map→odom anchor +
+  // integrated dr_* state), so broadcast them from a dedicated
+  // thread at tf_broadcast_rate_hz, immune to executor stalls.
+  // tf_state_mu_ guards the dr_* / anchor state shared between the
+  // executor thread (writers) and the broadcast thread (reader).
+  // Set tf_broadcast_rate_hz <= 0 to disable the thread and fall
+  // back to inline OnTimer publishing.
+  std::mutex tf_state_mu_;
+  double tf_broadcast_rate_hz_ = 20.0;
+  std::thread tf_thread_;
+  std::atomic<bool> tf_thread_stop_{false};
+
   // Subscriptions.
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_wheel_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
@@ -263,6 +326,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr sub_scan_;
   rclcpp::Subscription<mowgli_interfaces::msg::HighLevelStatus>::SharedPtr sub_hl_status_;
   rclcpp::Subscription<mowgli_interfaces::msg::Status>::SharedPtr sub_hw_status_;
+  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr sub_docking_cmd_;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr sub_set_pose_;
 
   // Save-graph service handle.
@@ -284,6 +348,18 @@ private:
   // position) — saves iSAM2 bandwidth on dock-clutter revisits.
   double lc_min_delta_m_ = 0.05;  // m
   double lc_min_delta_theta_ = 0.05;  // rad (~3°)
+  // Skip loop-closure GENERATION entirely while an RTK-Fixed sample is fresh
+  // (within scan_yield_timeout_s). Under RTK-Fixed the GPS factor is already an
+  // absolute mm-accurate constraint, so a loop closure carries ~no new
+  // information — but every accepted LC still adds a factor to iSAM2. Over a long
+  // stationary dwell (dock IDLE / charging) that is an UNBOUNDED factor leak: it
+  // OOM-killed the node 2026-06-09 (graph → 10k nodes, 2307 LC factors, SIGKILL).
+  // The scan-yield σ-inflation only stopped LC from biasing the pose; it still
+  // ADDED the factor. Skipping generation bounds memory in the normal
+  // (RTK-Fixed) operating state. When the fix goes stale past the timeout LC
+  // re-enables, so it still carries global consistency through no-fix (tree)
+  // windows. Default true.
+  bool lc_skip_when_rtk_fixed_ = true;
 
   // Publishers.
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;
@@ -372,14 +448,29 @@ private:
   // (vx_max ≈ 0.30 m/s × 0.1 s = 30 mm). 50 mm leaves headroom for
   // 1-2σ outliers while still catching ≥0.5σ wrong-fix jumps.
   double rtk_wrongfix_max_jump_m_ = 0.05;
-  // σ (m) of the WEAK GPS factor kept while charging on the dock. Fully
-  // suppressing GPS on the dock left a stationary graph with only the single
-  // bootstrap prior as an absolute constraint → after ~60 nodes iSAM2 hit an
-  // indeterminate (underconstrained) linear system and the node ABORTED
-  // (field 2026-05-29, crash near x62). A deliberately loose GPS factor keeps
-  // the system well-posed without walking the trajectory off the (tighter)
-  // dock prior. Large enough that the dock prior still dominates xy.
-  double dock_gps_sigma_m_ = 0.50;
+  // Dock-pose hold while charging: re-assert a firm ForceAnchor at the FULL
+  // dock_pose (x,y,yaw) ONCE PER NEW NODE, replacing the weak live-GPS factor
+  // that walked the docked pose off the anchor (field 2026-06-10: 11.5 cm + 53°
+  // walk over a charge dwell → re-docking aimed at the wrong target). One prior
+  // per node keeps the count bounded by the sliding window (vs a fixed timer
+  // posting several priors onto the same stationary node). It keeps iSAM2
+  // well-posed (a fresh absolute constraint on each node — replaces the old weak
+  // GPS that the 2026-05-29 indeterminate-system guard needed) AND pins position
+  // and yaw with no live GPS to drag it off.
+  double dock_reanchor_sigma_xy_m_ = 0.03;
+  uint64_t last_dock_reanchor_node_ = std::numeric_limits<uint64_t>::max();
+  // Dock-approach pose stabilisation. While /cmd_vel_docking is active the
+  // graceful dock controller is steering the final approach; the slow reverse
+  // motion makes the COG travel-direction yaw unreliable and the RTK fixed↔float
+  // per-epoch flicker jolts position — both jolt the fused pose, which the
+  // controller then chases into divergence (field 2026-06-10, dockmon trace).
+  // During the approach we drop the COG yaw factor (gyro carries yaw) and reject
+  // non-Fixed GPS epochs (hold position through the flicker) so the controller
+  // sees a stable target.
+  double docking_active_timeout_s_ = 1.0;  // /cmd_vel_docking freshness
+  bool gate_cog_during_docking_ = true;
+  bool gate_float_gps_during_docking_ = true;
+  std::optional<rclcpp::Time> last_docking_cmd_stamp_;
   // Wheel-derived distance (m) traveled since the last GPS sample,
   // below which a GPS jump > rtk_wrongfix_max_jump_m_ is judged
   // inconsistent. 20 mm sits just above the per-tick encoder noise
@@ -414,6 +505,30 @@ private:
   double scan_yield_sigma_xy_ = 0.5;
   double scan_yield_sigma_theta_ = 0.3;
   std::optional<rclcpp::Time> last_rtk_fixed_stamp_;
+
+  // ── RTK-anchored keyframe map (scan-to-keyframe absolute localization) ──
+  // Requires use_scan_matching_ (reuses scan_matcher_ + the scan subscription
+  // + the ICP guard rails). CAPTURE: under stable RTK-Fixed, freeze the
+  // GPS-fused node pose + scan as a keyframe (builds the absolute map). APPLY:
+  // during RTK-Float, match the live scan to nearby keyframes and queue a
+  // PoseTranslationPrior that pins absolute xy — the mechanism that holds <2 cm
+  // through a Float window where dead-reckoning would otherwise drift. Default
+  // OFF. See graph_manager_keyframe.cpp + the OnScan capture/apply blocks.
+  bool use_keyframe_map_ = false;
+  double kf_capture_sigma_max_m_ = 0.01;  // max GPS σ to allow a capture
+  int kf_capture_rtk_debounce_ = 3;  // consecutive RTK-Fixed epochs first
+  double kf_capture_max_omega_ = 0.10;  // rad/s — no capture while pivoting
+  double kf_spacing_m_ = 0.5;  // min move between captures
+  double kf_match_max_dist_m_ = 3.0;  // apply-side keyframe search radius
+  size_t kf_max_candidates_ = 5;
+  double kf_apply_sigma_floor_m_ = 0.02;  // floor on the PoseTranslationPrior σ
+  double kf_engage_age_s_ = 0.3;  // engage apply when Fixed older than this
+  // Latches updated in OnGnss for the capture gate.
+  double last_gps_sigma_ = -1.0;  // most-recent valid GPS σ (m); <0 = none
+  int rtk_fixed_streak_ = 0;  // consecutive RTK-Fixed epochs
+  std::optional<gtsam::Vector2> last_kf_capture_xy_;
+  uint64_t kf_matches_ok_ = 0;
+  uint64_t kf_matches_fail_ = 0;
 
   // In-flight guards for the async maintenance jobs. Save and rebase
   // each run in a detached worker so the executor callback returns

@@ -45,7 +45,7 @@
         "chassis_length": {
           "type": "number",
           "title": "Chassis Length",
-          "default": 0.54,
+          "default": 0.60,
           "description": "Chassis length in metres."
         },
         "chassis_width": {
@@ -81,7 +81,7 @@
         "ticks_per_meter": {
           "type": "integer",
           "title": "Encoder Ticks per Meter",
-          "default": 1050,
+          "default": 300,
           "description": "Encoder ticks per metre of wheel travel."
         },
         "tool_width": {
@@ -148,7 +148,7 @@
         "lidar_x": {
           "type": "number",
           "title": "LiDAR Offset X",
-          "default": 0.38,
+          "default": 0.0,
           "description": "Body-frame forward offset of LiDAR from base_footprint (metres)."
         },
         "lidar_y": {
@@ -166,8 +166,8 @@
         "lidar_yaw": {
           "type": "number",
           "title": "LiDAR Yaw",
-          "default": 0.0,
-          "description": "LiDAR mounting yaw (radians)."
+          "default": 3.1408,
+          "description": "LiDAR mounting yaw (radians). Reference robot mounts the LiDAR 180°-rotated."
         },
         "gps_x": {
           "type": "number",
@@ -430,8 +430,8 @@
         "path_spacing": {
           "type": "number",
           "title": "Path Spacing",
-          "default": 0.13,
-          "description": "Spacing between mowing paths (metres). 0.13 gives overlap with 0.18 blade."
+          "default": 0.18,
+          "description": "DEPRECATED / informational only — no ROS2 node reads this. Swath spacing is driven by tool_width (coverage_server.operation_width), so this matches tool_width. A separate value re-opens the swath-gap bug."
         },
         "headland_width": {
           "type": "number",
@@ -454,8 +454,8 @@
         "min_turning_radius": {
           "type": "number",
           "title": "Min Turning Radius",
-          "default": 0.30,
-          "description": "Minimum turning radius for coverage path (metres)."
+          "default": 0.05,
+          "description": "Minimum turning radius for coverage path (metres). Skid-steer pivots in place; large values force wide F2C U-turns."
         },
         "mow_angle_offset_deg": {
           "type": "number",
@@ -510,6 +510,12 @@
           "title": "Critical Percent",
           "default": 10.0,
           "description": "Critical battery percentage."
+        },
+        "battery_critical_recovery_percent": {
+          "type": "number",
+          "title": "Critical Recovery Percent",
+          "default": 30.0,
+          "description": "Leave the critical-battery state once recharged above this percentage. Hysteresis upper bound, must be greater than Critical Percent."
         }
       }
     },
@@ -605,19 +611,19 @@
         "xy_goal_tolerance": {
           "type": "number",
           "title": "XY Goal Tolerance",
-          "default": 0.75,
+          "default": 0.30,
           "description": "Acceptable position error at goal (metres)."
         },
         "yaw_goal_tolerance": {
           "type": "number",
           "title": "Yaw Goal Tolerance",
-          "default": 1.0,
+          "default": 0.10,
           "description": "Acceptable heading error at goal (radians)."
         },
         "coverage_xy_tolerance": {
           "type": "number",
           "title": "Coverage XY Tolerance",
-          "default": 0.5,
+          "default": 0.10,
           "description": "Position tolerance for coverage waypoints (metres)."
         },
         "progress_timeout_sec": {

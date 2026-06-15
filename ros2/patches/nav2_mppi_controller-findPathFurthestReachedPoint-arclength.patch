@@ -1,0 +1,95 @@
+diff --git a/include/nav2_mppi_controller/tools/utils.hpp b/include/nav2_mppi_controller/tools/utils.hpp
+index 804f317..cb0fab6 100644
+--- a/include/nav2_mppi_controller/tools/utils.hpp
++++ b/include/nav2_mppi_controller/tools/utils.hpp
+@@ -20,6 +20,7 @@
+
+ #include <algorithm>
+ #include <chrono>
++#include <cmath>
+ #include <string>
+ #include <limits>
+ #include <memory>
+@@ -363,32 +364,58 @@ auto shortest_angular_distance(
+  */
+ inline size_t findPathFurthestReachedPoint(const CriticData & data)
+ {
+-  int traj_cols = data.trajectories.x.cols();
+-  const auto traj_x = data.trajectories.x.col(traj_cols - 1);
+-  const auto traj_y = data.trajectories.y.col(traj_cols - 1);
+-
+-  const auto dx = (data.path.x.transpose()).replicate(traj_x.rows(), 1).colwise() - traj_x;
+-  const auto dy = (data.path.y.transpose()).replicate(traj_y.rows(), 1).colwise() - traj_y;
+-
+-  const auto dists = dx * dx + dy * dy;
+-
+-  int max_id_by_trajectories = 0, min_id_by_path = 0;
+-  float min_distance_by_path = std::numeric_limits<float>::max();
+-  size_t n_rows = dists.rows();
+-  size_t n_cols = dists.cols();
+-  for (size_t i = 0; i != n_rows; i++) {
+-    min_id_by_path = 0;
+-    min_distance_by_path = std::numeric_limits<float>::max();
+-    for (size_t j = max_id_by_trajectories; j != n_cols; j++) {
+-      const float cur_dist = dists(i, j);
+-      if (cur_dist < min_distance_by_path) {
+-        min_distance_by_path = cur_dist;
+-        min_id_by_path = j;
+-      }
++  // Backport of ros-navigation/navigation2 PR #6055 (fixes issue #5925): bound
++  // the Euclidean nearest-point match by each candidate trajectory's integrated
++  // ARC-LENGTH, so the "furthest reached" index cannot jump onto a path segment
++  // that is only spatially close because of curvature (the return leg of a
++  // U-turn / a concentric-ring reversal). Identical behaviour on straight or
++  // gently-curved paths; fixes corner-cutting / "lost at the reversal" on tight
++  // turns. NOT in Kilted's nav2_mppi_controller 1.4.2 — applied locally.
++  const int traj_cols = data.trajectories.x.cols();
++  const int n_rows = static_cast<int>(data.trajectories.x.rows());
++  const int n_cols = static_cast<int>(data.path.x.size());
++
++  // Cumulative arc-lengths along the reference path.
++  std::vector<float> path_integrated_dists(n_cols, 0.0f);
++  for (int i = 1; i < n_cols; ++i) {
++    const float dx = data.path.x(i) - data.path.x(i - 1);
++    const float dy = data.path.y(i) - data.path.y(i - 1);
++    path_integrated_dists[i] = path_integrated_dists[i - 1] + sqrtf(dx * dx + dy * dy);
++  }
++
++  // Arc-length of every candidate trajectory.
++  const Eigen::ArrayXf traj_integrated_dists =
++    ((data.trajectories.x.rightCols(traj_cols - 1) -
++    data.trajectories.x.leftCols(traj_cols - 1)).square() +
++    (data.trajectories.y.rightCols(traj_cols - 1) -
++    data.trajectories.y.leftCols(traj_cols - 1)).square())
++    .sqrt().rowwise().sum();
++
++  const auto & traj_x_end = data.trajectories.x.col(traj_cols - 1);
++  const auto & traj_y_end = data.trajectories.y.col(traj_cols - 1);
++
++  int max_idx = 0;
++  for (int i = 0; i < n_rows; ++i) {
++    int max_reachable_idx = static_cast<int>(
++      std::lower_bound(
++        path_integrated_dists.begin(), path_integrated_dists.end(),
++        traj_integrated_dists(i)) - path_integrated_dists.begin());
++    max_reachable_idx = std::min(max_reachable_idx, n_cols - 1);
++
++    // Bounded Euclidean search: closest path point within [0..max_reachable_idx].
++    Eigen::Index eucl_idx;
++    ((data.path.x.head(max_reachable_idx + 1) - traj_x_end(i)).square() +
++    (data.path.y.head(max_reachable_idx + 1) - traj_y_end(i)).square()).minCoeff(&eucl_idx);
++
++    max_idx = std::max(max_idx, static_cast<int>(eucl_idx));
++
++    // Early exit once the path end is reached.
++    if (max_idx == n_cols - 1) {
++      break;
+     }
+-    max_id_by_trajectories = std::max(max_id_by_trajectories, min_id_by_path);
+   }
+-  return max_id_by_trajectories;
++
++  return static_cast<size_t>(max_idx);
+ }
+
+ /**

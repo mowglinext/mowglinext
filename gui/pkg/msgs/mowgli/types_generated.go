@@ -29,16 +29,6 @@ type CoveragePath struct {
 	Path                      nav.Path                       `json:"path"`
 }
 
-// ESCStatus matches mowgli_interfaces/msg/ESCStatus.
-type ESCStatus struct {
-	Status                    uint8                          `json:"status"`
-	Current                   float32                        `json:"current"`
-	Tacho                     uint32                         `json:"tacho"`
-	Rpm                       int16                          `json:"rpm"`
-	TemperatureMotor          float32                        `json:"temperature_motor"`
-	TemperaturePcb            float32                        `json:"temperature_pcb"`
-}
-
 // Emergency matches mowgli_interfaces/msg/Emergency.
 type Emergency struct {
 	Stamp                     geometry.Stamp                 `json:"stamp"`
@@ -47,6 +37,16 @@ type Emergency struct {
 	LiftWarning               bool                           `json:"lift_warning"`
 	LiftDurationSec           float32                        `json:"lift_duration_sec"`
 	Reason                    string                         `json:"reason"`
+}
+
+// ESCStatus matches mowgli_interfaces/msg/ESCStatus.
+type ESCStatus struct {
+	Status                    uint8                          `json:"status"`
+	Current                   float32                        `json:"current"`
+	Tacho                     uint32                         `json:"tacho"`
+	Rpm                       int16                          `json:"rpm"`
+	TemperatureMotor          float32                        `json:"temperature_motor"`
+	TemperaturePcb            float32                        `json:"temperature_pcb"`
 }
 
 // GnssStatus matches mowgli_interfaces/msg/GnssStatus.

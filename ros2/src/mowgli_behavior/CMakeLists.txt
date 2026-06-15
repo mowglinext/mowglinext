@@ -32,7 +32,6 @@ find_package(action_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(mowgli_interfaces REQUIRED)
-find_package(opennav_coverage_msgs REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 
 
@@ -73,7 +72,6 @@ ament_target_dependencies(behavior_tree_node
   std_msgs
   std_srvs
   mowgli_interfaces
-  opennav_coverage_msgs
   rcl_interfaces
 )
 
@@ -156,6 +154,7 @@ if(BUILD_TESTING)
     tf2_ros
     tf2_geometry_msgs
   )
+
 endif()
 
 ament_package()

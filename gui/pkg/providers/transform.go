@@ -187,8 +187,6 @@ func navSatStatusToFlags(status int8) uint16 {
 	default:
 		return 0
 	}
-
-	return 0
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +195,48 @@ func navSatStatusToFlags(status int8) uint16 {
 
 // adaptGPS converts a sensor_msgs/NavSatFix payload (snake_case JSON) into
 // an mowgli.AbsolutePose JSON payload (snake_case, suitable for the frontend).
+// lidarMaxPoints caps how many beams a LaserScan keeps before it is shipped to
+// the GUI. The map view downsamples to well under this for display, so sending a
+// full ~1000+ beam scan as JSON ~12x/second is wasted bandwidth and parse time
+// on both ends. adaptLidar decimates with a uniform stride and scales
+// angle_increment by that stride so the kept beams still map to the right angles.
+const lidarMaxPoints = 360
+
+// adaptLidar decimates a sensor_msgs/LaserScan payload (snake_case JSON) in
+// place. It forwards the payload unchanged when decimation does not apply (parse
+// failure, missing/short ranges) so a frame is never dropped by this transform.
+func adaptLidar(raw []byte) ([]byte, error) {
+	var msg map[string]any
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return raw, nil
+	}
+	ranges, ok := msg["ranges"].([]any)
+	if !ok || len(ranges) <= lidarMaxPoints {
+		return raw, nil
+	}
+	stride := (len(ranges) + lidarMaxPoints - 1) / lidarMaxPoints // ceil division
+	if stride < 2 {
+		return raw, nil
+	}
+
+	decimate := func(arr []any) []any {
+		out := make([]any, 0, len(arr)/stride+1)
+		for i := 0; i < len(arr); i += stride {
+			out = append(out, arr[i])
+		}
+		return out
+	}
+
+	msg["ranges"] = decimate(ranges)
+	if intensities, ok := msg["intensities"].([]any); ok && len(intensities) == len(ranges) {
+		msg["intensities"] = decimate(intensities)
+	}
+	if inc, ok := msg["angle_increment"].(float64); ok {
+		msg["angle_increment"] = inc * float64(stride)
+	}
+	return json.Marshal(msg)
+}
+
 func adaptGPS(raw []byte) ([]byte, error) {
 	var fix rawNavSatFix
 	if err := json.Unmarshal(raw, &fix); err != nil {

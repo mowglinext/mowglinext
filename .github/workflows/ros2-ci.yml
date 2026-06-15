@@ -115,19 +115,21 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libboost-all-dev libeigen3-dev libmetis-dev
 
-      # Fields2Cover 2.0.0 — mowgli_coverage pins
-      #   find_package(Fields2Cover 2.0.0 REQUIRED PATHS /opt/fields2cover-200)
-      # No v2 debian on Noble, so the Docker image (Dockerfile stage 0b) builds
-      # it from source; mirror that here (cached) or the workspace build fails
-      # at mowgli_coverage.
+      # Fields2Cover v3 — mowgli_coverage pins
+      #   find_package(Fields2Cover 3.0.0 REQUIRED PATHS /opt/fields2cover-300)
+      # v3 is UNRELEASED, so we PIN a commit SHA (matches the Dockerfile
+      # fields2cover-v3-builder stage). No debian on Noble, so the Docker image
+      # builds it from source; mirror that here (cached) or the workspace build
+      # fails at mowgli_coverage. The cache key includes the SHA so it
+      # invalidates when the pin moves.
       - name: Cache Fields2Cover build
         id: cache-f2c
         uses: actions/cache@v4
         with:
-          path: /opt/fields2cover-200
-          key: f2c-2.0.0-${{ runner.os }}-noble
+          path: /opt/fields2cover-300
+          key: f2c-3.0.0-884d895-${{ runner.os }}-noble
 
-      - name: Build Fields2Cover 2.0.0 from source
+      - name: Build Fields2Cover v3 from source
         working-directory: .
         if: steps.cache-f2c.outputs.cache-hit != 'true'
         run: |
@@ -135,15 +137,20 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake git pkg-config \
             libeigen3-dev libgdal-dev libgeos++-dev libgeos-dev libgsl-dev \
-            libtinyxml2-dev libpython3-dev python3-dev libtbb-dev \
+            libtinyxml2-dev libpython3-dev python3-dev libtbb-dev nlohmann-json3-dev \
             ros-${{ matrix.ros_distro }}-ortools-vendor
           source /opt/ros/${{ matrix.ros_distro }}/setup.bash
           cd /tmp
-          git clone --depth 1 -b v2.0.0 https://github.com/Fields2Cover/Fields2Cover.git f2c
-          cd f2c && mkdir build && cd build
+          # Pinned to v3.0 @ 884d895 — keep in sync with ros2/Dockerfile. Patch the
+          # upstream missing <iomanip> include (std::setw/setfill in visualizer.cpp;
+          # modern GCC no longer pulls it in transitively).
+          git clone https://github.com/Fields2Cover/Fields2Cover.git f2c3
+          cd f2c3 && git checkout 884d895b59192882476e986ba44ea9143a06a6a9
+          sed -i '1i #include <iomanip>' src/fields2cover/utils/visualizer.cpp
+          mkdir build && cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/opt/fields2cover-200 \
+            -DCMAKE_INSTALL_PREFIX=/opt/fields2cover-300 \
             -DBUILD_TESTS=OFF \
             -DBUILD_PYTHON=OFF \
             -DBUILD_TUTORIALS=OFF \
@@ -160,9 +167,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libgdal-dev libgeos-dev libgeos++-dev libtinyxml2-dev \
             ros-${{ matrix.ros_distro }}-ortools-vendor
-          echo "/opt/fields2cover-200/lib" | sudo tee /etc/ld.so.conf.d/f2c.conf
+          echo "/opt/fields2cover-300/lib" | sudo tee /etc/ld.so.conf.d/f2c.conf
           sudo ldconfig
-          echo "CMAKE_PREFIX_PATH=/opt/fields2cover-200:$CMAKE_PREFIX_PATH" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=/opt/fields2cover-300:$CMAKE_PREFIX_PATH" >> $GITHUB_ENV
 
       - name: Cache rosdep
         uses: actions/cache@v4

@@ -152,8 +152,27 @@
       <Fallback name="MainLogic">
 
         <!-- ============================================================
-             a. Critical battery — emergency dock, clear command
+             a. Critical battery — emergency dock, charge, recover.
              Navigation failure is non-fatal (stay where we are).
+
+             Entry is at battery_critical_pct (default 10 %). Recovery is
+             gated at battery_critical_recovery_pct (default 30 %, must be
+             > battery_critical_pct) so the state has HYSTERESIS: the robot
+             does not bounce out of the critical handler the instant the
+             pack ticks one tenth of a percent above the entry threshold,
+             and — the bug this fixes — it no longer churns DockRobot /
+             flaps CRITICAL_BATTERY_DOCKING ⇄ IDLE_DOCKED every tick while
+             the pack crawls from, say, 8 % back up toward 10 %.
+
+             After docking we HOLD on the charger (CriticalChargeOrAbort)
+             until the battery climbs above the recovery threshold, mirroring
+             the BatteryGuard charge loop below. IsChargingProgressing still
+             guards against a dead charger so we don't wait forever on a
+             broken dock. On recovery (or charger failure) we end the session
+             at IDLE_DOCKED — deliberately we do NOT auto-resume mowing here:
+             a critical-battery event ends the run; the operator restarts.
+             That keeps the safety property (never mow on a critical pack)
+             while making the RECOVERY back to IDLE actually fire.
              ============================================================ -->
         <Sequence name="CriticalBatteryDock">
           <IsBatteryLow threshold="{battery_critical_pct}" voltage_threshold="{battery_critical_voltage}"/>
@@ -167,6 +186,33 @@
             <!-- Docking failed — stay stopped, battery is critical -->
             <Sequence>
               <PublishHighLevelStatus state="0" state_name="CRITICAL_BATTERY_NAV_FAILED"/>
+              <AlwaysSuccess/>
+            </Sequence>
+          </Fallback>
+          <!-- Hold on the charger until the pack recovers past the
+               hysteresis threshold. Each 30 s wait re-ticks the loop so a
+               fresh battery sample is sampled; IsBatteryAbove exits the
+               loop the moment we clear battery_critical_recovery_pct. A
+               stalled charger trips IsChargingProgressing → ChargerFailed,
+               which breaks out of the wait so we don't sit here forever. -->
+          <PublishHighLevelStatus state="1" state_name="CRITICAL_BATTERY_CHARGING"/>
+          <Fallback name="CriticalChargeOrAbort">
+            <RetryUntilSuccessful num_attempts="960">
+              <Sequence>
+                <IsChargingProgressing/>
+                <Fallback>
+                  <IsBatteryAbove threshold="{battery_critical_recovery_pct}"/>
+                  <Sequence>
+                    <WaitForDuration duration_sec="30.0"/>
+                    <AlwaysFailure/>
+                  </Sequence>
+                </Fallback>
+              </Sequence>
+            </RetryUntilSuccessful>
+            <!-- Charger looks dead — stop waiting, fall through to IDLE so
+                 the operator sees a settled state instead of a frozen one. -->
+            <Sequence name="CriticalChargerFailed">
+              <PublishHighLevelStatus state="1" state_name="CHARGER_FAILED"/>
               <AlwaysSuccess/>
             </Sequence>
           </Fallback>
@@ -430,51 +476,36 @@
                 </Sequence>
               </Fallback>
 
-              <!-- Multi-area coverage loop (opennav_coverage migration).
+              <!-- Multi-area coverage loop.
                    Outer loop: iterate through all mowing areas.
-                   Per area: PlanCoverageArea calls F2C on the remaining
-                   un-mowed polygon (mow_progress excluded as holes), and
-                   FollowStrip feeds the resulting path to FTCController.
-                   On follow failure (collision wedge, FTC abort), the
-                   recovery branches force a replan by returning FAILURE
-                   to RetryUntilSuccessful; F2C re-plans on whatever is
-                   left of the area, naturally resuming from where we
-                   stopped.
+                   Per area: PlanCoverageArea asks mowgli_coverage's
+                   plan_coverage action for an EXPLICIT segment list
+                   (headland rings + straight serpentine swaths — no turn
+                   geometry); FollowStrip dispatches one segment per
+                   FollowCoveragePath goal (RotationShim pivots in place
+                   at each segment start, MPPI tracks the segment).
+                   Segment completion is recorded per index, so a
+                   FollowStrip retry resumes at the first un-mowed
+                   segment of the SAME deterministic plan.
                    GetNextUnmowedArea returns FAILURE when all areas are
-                   done. PlanCoverageArea on a fully-mowed area emits an
-                   empty path → FollowStrip FAILURE → 5 retries → outer
-                   AreaUnreachable → AreaLoop advances. -->
+                   done. PlanCoverageArea on a too-small/planning-failed
+                   area returns FAILURE → outer AreaUnreachable → AreaLoop
+                   advances. -->
               <Repeat num_cycles="100" name="AreaLoop">
                 <Sequence name="MowOneArea">
                   <GetNextUnmowedArea area_index="{current_area_index}"/>
                   <!-- ONE PlanCoverageArea per area per session (no
                        replan), but multiple FollowStrip retries on the
-                       SAME path. On a FollowStrip abort (collision_monitor
-                       wedge, FTC goal-approach timeout, etc.), the next
-                       FollowStrip tick re-sends ctx->current_strip_path
-                       to FTCController, which picks the closest pose
-                       to the robot via setPlan's nearest-pose search —
-                       effectively "continue from where you left off"
-                       without re-planning.
-                       PlanCoverageArea FAILURE (empty path = area
-                       already fully mowed) is captured by the outer
-                       Fallback's AreaUnreachable branch so AreaLoop
-                       advances cleanly. -->
+                       SAME segment list (resume at the first un-mowed
+                       segment index). The coverage geometry
+                       (operation_width, headland_width, passes, insets)
+                       lives in coverage_server's parameters, injected at
+                       launch from mowgli_robot.yaml. -->
                   <Fallback name="MowOrSkipArea">
                     <Sequence name="PlanThenFollow">
                       <PublishHighLevelStatus state="2" state_name="PLANNING"/>
-                      <!-- headland_width_m=0.30 (was 0.20) insets the
-                           F2C path 0.30 m from the operator polygon
-                           edge. With wheel-PI motor model + production
-                           IMU noise the post-pivot lateral drift can
-                           hit 0.20 m; planning at 0.20 m inset pushed
-                           the chassis center over the line on most
-                           swath-end pivots and triggered boundary
-                           recovery. 0.30 m gives a working margin. -->
                       <PlanCoverageArea
-                          area_index="{current_area_index}"
-                          operation_width_m="0.20"
-                          headland_width_m="0.30"/>
+                          area_index="{current_area_index}"/>
                       <!-- Obstacle-aware transit to the coverage path start.
                            On a re-plan pass (AreaLoop re-enters an area that
                            still has un-mowed cells), the remaining region can
@@ -511,8 +542,8 @@
                         </Sequence>
                         <!-- Obstacle wedge recovery: BackUp + ClearCostmap
                              then bubble up FAILURE so RetryUntilSuccessful
-                             re-ticks FollowStrip on the SAME path. FTC
-                             will resync to the closest pose. -->
+                             re-ticks FollowStrip, which resumes at the
+                             first un-mowed segment index. -->
                         <Sequence name="StuckBackoff">
                           <IsObstacleStuck min_duration_sec="4.0"
                                            max_count="3"

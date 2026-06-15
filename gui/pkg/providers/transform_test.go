@@ -184,3 +184,63 @@ func TestAdaptGnssStatusKeepsUnsupportedUniversalFieldsUnset(t *testing.T) {
 	assert.Zero(t, status.ReceiverModel)
 	assert.Zero(t, status.ReceiverFirmware)
 }
+
+func TestAdaptLidarDecimatesLargeScan(t *testing.T) {
+	const n = 1000
+	ranges := make([]string, n)
+	intensities := make([]string, n)
+	for i := 0; i < n; i++ {
+		ranges[i] = fmt.Sprintf("%d", i)     // value == original index, so we can verify which beams survive
+		intensities[i] = fmt.Sprintf("%d", i)
+	}
+	raw := []byte(fmt.Sprintf(
+		`{"header":{"frame_id":"lidar_link"},"angle_min":0.0,"angle_increment":0.01,"range_min":0.1,"range_max":12.0,"ranges":[%s],"intensities":[%s]}`,
+		joinCSV(ranges), joinCSV(intensities)))
+
+	adapted, err := adaptLidar(raw)
+	require.NoError(t, err)
+
+	var msg map[string]any
+	require.NoError(t, json.Unmarshal(adapted, &msg))
+
+	out := msg["ranges"].([]any)
+	stride := (n + lidarMaxPoints - 1) / lidarMaxPoints // 3
+	assert.LessOrEqual(t, len(out), lidarMaxPoints)
+	assert.Equal(t, len(out), len(msg["intensities"].([]any)))
+
+	// Kept beams must be the strided originals (0, stride, 2*stride, ...).
+	assert.Equal(t, float64(0), out[0])
+	assert.Equal(t, float64(stride), out[1])
+
+	// angle_increment scaled by the stride so angles stay correct.
+	assert.InEpsilon(t, 0.01*float64(stride), msg["angle_increment"].(float64), 1e-9)
+
+	// Other fields preserved.
+	assert.Equal(t, 12.0, msg["range_max"])
+}
+
+func TestAdaptLidarPassesThroughSmallScan(t *testing.T) {
+	raw := []byte(`{"angle_increment":0.02,"ranges":[1.0,2.0,3.0]}`)
+	adapted, err := adaptLidar(raw)
+	require.NoError(t, err)
+	// Small scans are forwarded byte-for-byte (no decimation).
+	assert.JSONEq(t, string(raw), string(adapted))
+}
+
+func TestAdaptLidarForwardsMalformed(t *testing.T) {
+	raw := []byte(`not json`)
+	adapted, err := adaptLidar(raw)
+	require.NoError(t, err)
+	assert.Equal(t, raw, adapted)
+}
+
+func joinCSV(items []string) string {
+	out := ""
+	for i, s := range items {
+		if i > 0 {
+			out += ","
+		}
+		out += s
+	}
+	return out
+}

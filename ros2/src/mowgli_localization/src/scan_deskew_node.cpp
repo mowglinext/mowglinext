@@ -45,6 +45,7 @@
 #include <deque>
 #include <limits>
 
+#include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/qos.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -94,6 +95,27 @@ public:
         imu_topic,
         qos_sensor,
         [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) { on_imu(*msg); });
+
+    // ── Linear (translation) deskew (opt-in) ─────────────────────────
+    // The rotation deskew above ignores the chassis's FORWARD motion during
+    // the sweep. At ≤0.3 m/s × ≤0.1 s that's <30 mm — negligible for the
+    // costmap, but it matters for the <2 cm scan-to-keyframe matcher. When
+    // enabled, each ray's endpoint is additionally shifted by the forward
+    // displacement -v·dt (vy is non-holonomically ~0). Off by default so the
+    // safety/costmap path is unchanged until validated.
+    linear_comp_enabled_ = declare_parameter<bool>("linear_comp_enabled", false);
+    wheel_max_age_s_ = declare_parameter<double>("wheel_max_age_s", 0.5);
+    const std::string wheel_topic = declare_parameter<std::string>("wheel_topic", "/wheel_odom");
+    if (linear_comp_enabled_)
+    {
+      sub_wheel_ = create_subscription<nav_msgs::msg::Odometry>(
+          wheel_topic,
+          qos_sensor,
+          [this](nav_msgs::msg::Odometry::ConstSharedPtr msg)
+          {
+            on_wheel(*msg);
+          });
+    }
 
     pub_count_ = 0;
     skipped_count_ = 0;
@@ -199,9 +221,68 @@ private:
     return false;
   }
 
+  // Forward-velocity history for linear deskew (mirrors the IMU buffer).
+  void on_wheel(const nav_msgs::msg::Odometry& msg)
+  {
+    const rclcpp::Time stamp(msg.header.stamp);
+    const double t = stamp.seconds();
+    if (t <= 0.0)
+      return;
+    const double vx = msg.twist.twist.linear.x;
+    vx_buffer_.push_back({t, vx});
+    latest_vx_ = vx;
+    latest_wheel_t_ = stamp;
+    have_wheel_ = true;
+    while (!vx_buffer_.empty() && (t - vx_buffer_.front().t_s) > imu_buffer_horizon_s_)
+      vx_buffer_.pop_front();
+  }
+
+  bool interp_vx(double t_s, double& vx_out) const
+  {
+    if (vx_buffer_.empty())
+    {
+      vx_out = 0.0;
+      return false;
+    }
+    if (t_s <= vx_buffer_.front().t_s)
+    {
+      vx_out = vx_buffer_.front().vx;
+      return false;
+    }
+    if (t_s >= vx_buffer_.back().t_s)
+    {
+      vx_out = vx_buffer_.back().vx;
+      return false;
+    }
+    for (size_t i = 1; i < vx_buffer_.size(); ++i)
+    {
+      const auto& b = vx_buffer_[i];
+      if (b.t_s >= t_s)
+      {
+        const auto& a = vx_buffer_[i - 1];
+        const double dt = b.t_s - a.t_s;
+        if (dt <= 0.0)
+        {
+          vx_out = b.vx;
+          return true;
+        }
+        const double f = (t_s - a.t_s) / dt;
+        vx_out = a.vx + f * (b.vx - a.vx);
+        return true;
+      }
+    }
+    vx_out = vx_buffer_.back().vx;
+    return false;
+  }
+
   void on_scan(const sensor_msgs::msg::LaserScan& in)
   {
     sensor_msgs::msg::LaserScan out = in;
+    // Linear deskew is active only when enabled AND we have fresh wheel odom;
+    // otherwise fall back to the rotation-only path (and never worse than raw).
+    const bool lin = linear_comp_enabled_ && have_wheel_ &&
+                     (now() - latest_wheel_t_).seconds() >= 0.0 &&
+                     (now() - latest_wheel_t_).seconds() <= wheel_max_age_s_;
 
     // If we have no fresh IMU, pass through unchanged. Better to emit a
     // smeared scan than a wildly mis-corrected one.
@@ -290,10 +371,26 @@ private:
       // is shifted by -(θ_ref - θ_i) = -ω·(t_ref - t_ray) = +ω·dt.
       const double alpha_corr = alpha + omega_at_ray * dt;
 
+      // Optional LINEAR (translation) correction. Go Cartesian at the
+      // rotation-corrected angle, shift the endpoint by the lidar's forward
+      // displacement over (t_ray → t_ref) (= +v·dt in x; vy ≈ 0 non-holo),
+      // then recompute range/angle. r_out/a_out reduce to the rotation-only
+      // path when linear deskew is off.
+      double r_out = r;
+      double a_out = alpha_corr;
+      if (lin)
+      {
+        double v_at_ray = latest_vx_;
+        interp_vx(t_ray, v_at_ray);
+        const double px = static_cast<double>(r) * std::cos(alpha_corr) + v_at_ray * dt;
+        const double py = static_cast<double>(r) * std::sin(alpha_corr);
+        r_out = std::hypot(px, py);
+        a_out = std::atan2(py, px);
+      }
+
       // Re-bin into the output grid (nearest bin).
       const int bin = static_cast<int>(
-          std::lround((alpha_corr - static_cast<double>(ang_min)) *
-                      static_cast<double>(inv_ang_inc)));
+          std::lround((a_out - static_cast<double>(ang_min)) * static_cast<double>(inv_ang_inc)));
       if (bin < 0 || bin >= static_cast<int>(n))
       {
         continue;
@@ -301,9 +398,9 @@ private:
 
       // Multi-write resolution: keep the nearest range (most pessimistic
       // for collision_monitor — better safe than sorry).
-      if (r < out.ranges[bin])
+      if (r_out < static_cast<double>(out.ranges[bin]))
       {
-        out.ranges[bin] = r;
+        out.ranges[bin] = static_cast<float>(r_out);
         if (!in.intensities.empty() && i < in.intensities.size() &&
             !out.intensities.empty() && bin < static_cast<int>(out.intensities.size()))
         {
@@ -316,8 +413,15 @@ private:
     pub_count_++;
   }
 
+  struct VxSample
+  {
+    double t_s;
+    double vx;  // m/s, forward
+  };
+
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr sub_scan_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_wheel_;
   rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr pub_;
 
   // IMU history. Deque so the trim path is O(1) on the oldest end.
@@ -331,6 +435,14 @@ private:
   std::string reference_{"end"};
   double imu_max_age_s_{0.5};
   double imu_buffer_horizon_s_{0.5};
+
+  // Linear-deskew (forward-velocity) state.
+  std::deque<VxSample> vx_buffer_;
+  double latest_vx_{0.0};
+  rclcpp::Time latest_wheel_t_{0, 0, RCL_ROS_TIME};
+  bool have_wheel_{false};
+  bool linear_comp_enabled_{false};
+  double wheel_max_age_s_{0.5};
   size_t pub_count_{0};
   size_t skipped_count_{0};
   size_t interp_misses_{0};

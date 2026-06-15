@@ -238,6 +238,21 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
                             </Form.Item>
                         </Col>
                     </Row>
+                    <Row gutter={[16, 0]}>
+                        <Col xs={8}>
+                            <Form.Item
+                                label={<Text style={{ color: "#52c41a", fontSize: 12 }}>Critical Recovery</Text>}
+                                tooltip="Leave the critical-battery state once recharged above this %. Hysteresis upper bound, must be greater than Critical."
+                            >
+                                <InputNumber
+                                    value={values.battery_critical_recovery_percent}
+                                    onChange={(v) => onChange("battery_critical_recovery_percent", v)}
+                                    min={5} max={90} step={5} precision={0}
+                                    style={{ width: "100%" }} addonAfter="%"
+                                />
+                            </Form.Item>
+                        </Col>
+                    </Row>
                 </Form>
             </Card>
         </div>

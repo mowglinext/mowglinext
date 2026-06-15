@@ -31,6 +31,13 @@
 #define DRIVEMOTOR_LENGTH_INIT_MSG 38
 #define DRIVEMOTOR_LENGTH_RQST_MSG 12
 #define DRIVEMOTOR_LENGTH_RECEIVED_MSG 20
+
+/* Kinematic ceiling on per-frame encoder motion. cmd_vel is capped to MAX_MPS,
+ * so in one ~20 ms controller frame a wheel advances at most
+ *   MAX_MPS * TICKS_PER_M * 0.02 s  ticks.
+ * The x3 factor is slack for frame-time jitter; a "reset" whose remainder
+ * exceeds this is not real motion (a glitch) and is dropped, not accumulated. */
+#define DRIVEMOTOR_MAX_TICKS_PER_FRAME ((uint32_t)(MAX_MPS * TICKS_PER_M * 0.02f * 3.0f))
 /******************************************************************************
  * Module Preprocessor Macros
  *******************************************************************************/
@@ -66,6 +73,15 @@ typedef struct
     /*19*/ uint8_t u8_CRC;
 } __attribute__((__packed__)) DRIVEMOTORS_data_t;
 
+/* Per-wheel travel-direction filter (see resolve_direction / DRIVEMOTOR_App_Rx).
+ * Holds the last *confirmed* physical direction so the motor controller's
+ * one-frame-early direction flip on a reversal cannot mis-sign coast ticks. */
+typedef struct
+{
+    int8_t  s8Eff;    /* committed/published travel direction (-1/0/+1)        */
+    uint8_t u8Resets; /* counter resets counted during an unconfirmed reversal */
+} DRIVEMOTOR_dirfilter_t;
+
 /******************************************************************************
  * Module Variable Definitions
  *******************************************************************************/
@@ -84,12 +100,13 @@ const uint8_t drivemotor_pcu8Preamble[5] = {0x55, 0xAA, 0x10, 0x01, 0xE0};
 // const uint8_t drivemotor_pcu8InitMsg[DRIVEMOTOR_LENGTH_INIT_MSG] = { 0x55, 0xaa, 0x08, 0x10, 0x80, 0xa0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x37};
 const uint8_t drivemotor_pcu8InitMsg[DRIVEMOTOR_LENGTH_INIT_MSG] = {0x55, 0xaa, 0x22, 0x10, 0x80, 0x00, 0x00, 0x00, 0x00, 0x02, 0xC8, 0x46, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x05, 0x0F, 0x14, 0x96, 0x0A, 0x1E, 0x5a, 0xfa, 0x05, 0x0A, 0x14, 0x32, 0x40, 0x04, 0x20, 0x01, 0x00, 0x00, 0x2C, 0x01, 0xEE};
 
-int8_t prev_left_direction = 0;
-int8_t prev_right_direction = 0;
 uint16_t prev_right_encoder_val = 0;
 uint16_t prev_left_encoder_val = 0;
-int16_t prev_right_wheel_speed_val = 0;
-int16_t prev_left_wheel_speed_val = 0;
+/* Last *confirmed* per-wheel direction + reset-bracket counters. Replaces the
+ * old prev_*_direction / prev_*_wheel_speed_val edge-prediction fence, which
+ * raced the controller's reset latency and mis-signed reversal coast ticks. */
+static DRIVEMOTOR_dirfilter_t left_dir_filter = {0, 0};
+static DRIVEMOTOR_dirfilter_t right_dir_filter = {0, 0};
 uint32_t right_encoder_ticks = 0;
 uint32_t left_encoder_ticks = 0;
 int32_t  right_ticks_signed = 0;  /**< Cumulative SIGNED encoder ticks (polarity = direction) */
@@ -244,12 +261,10 @@ void DRIVEMOTOR_Init(void)
 
     right_encoder_ticks = 0;
     left_encoder_ticks = 0;
-    prev_left_direction = 0;
-    prev_right_direction = 0;
     prev_right_encoder_val = 0;
     prev_left_encoder_val = 0;
-    prev_right_wheel_speed_val = 0;
-    prev_left_wheel_speed_val = 0;
+    left_dir_filter = (DRIVEMOTOR_dirfilter_t){0, 0};
+    right_dir_filter = (DRIVEMOTOR_dirfilter_t){0, 0};
 }
 
 /// @brief handle drive motor messages
@@ -370,6 +385,105 @@ void DRIVEMOTOR_App_10ms(void)
     }
 }
 
+/// @brief Resolve the physical travel direction of a wheel for odometry.
+///
+/// The drive controller flips its reported direction bit one to two frames
+/// BEFORE the wheel has actually reversed. For those frames it reports the new
+/// direction with a speed byte of 0 while the wheel is really still coasting in
+/// the OLD direction. Believing that bit feeds odometry a few ticks with the
+/// wrong sign on every reversal (which here corrupts BOTH /wheel_odom and the
+/// wheel-PI loop, since both consume left/right_ticks_signed).
+///
+/// So a reported reversal (opposite sign to the committed direction) is only
+/// adopted once the new segment is confirmed by EITHER
+///   (B) the reported speed byte going non-zero (controller now actively
+///       driving the new direction), OR
+///   (A) a second counter reset (the controller's documented double-reset that
+///       brackets the real new segment).
+/// Until then the previously committed direction keeps being reported. Resumes
+/// in the same direction and the first motion from rest carry no stale motion
+/// to mis-sign, so they are adopted immediately.
+///
+/// @param f         per-wheel filter state (updated in place)
+/// @param reported  decoded reported direction this frame (-1/0/+1)
+/// @param speed     reported speed byte this frame
+/// @param reset     non-zero if the raw counter decreased this frame (a reset)
+/// @return the committed (publishable) travel direction
+static int8_t resolve_direction(DRIVEMOTOR_dirfilter_t *f, int8_t reported, uint8_t speed, int reset)
+{
+    if (reported != 0 && (speed != 0 || f->s8Eff == 0))
+    {
+        /* (B) the speed byte confirms real motion in the reported direction -
+         * or this is the first motion from rest, with no old direction to
+         * protect. Either way, believe the reported direction immediately. */
+        f->s8Eff = reported;
+        f->u8Resets = 0;
+    }
+    else if (reported == -f->s8Eff)
+    {
+        /* Unconfirmed reversal: the controller reports the opposite direction
+         * but the speed byte is still 0 while the wheel coasts the old way.
+         * Keep the old direction until (A) a second counter reset confirms the
+         * real new segment. (Frames here have speed 0, handled above first.) */
+        if (reset && ++f->u8Resets >= 2)
+        {
+            f->s8Eff = reported;
+            f->u8Resets = 0;
+        }
+    }
+    else
+    {
+        /* stop report or same-direction frame: no reversal in progress */
+        f->u8Resets = 0;
+    }
+    return f->s8Eff;
+}
+
+/// @brief Fold one controller frame into a wheel's tick totals + travel dir.
+///
+/// Rule 1 - detect the counter reset DIRECTLY: any decrease in the controller's
+/// per-wheel counter means it reset to 0, so the progress since the reset is the
+/// new value; otherwise the counter rose and we add the difference. (The old
+/// code PREDICTED the reset from direction/speed edges and pre-synced prev_*,
+/// which raced the controller's one-frame reset latency and scored the pre-reset
+/// count as a phantom jump.) A reset whose remainder exceeds one frame's
+/// kinematic limit is a glitch and is dropped rather than accumulated.
+///
+/// Rule 2 - the magnitude is signed by the CONFIRMED direction from
+/// resolve_direction(), not the reported byte, so coast ticks on a reversal
+/// keep the old sign until the wheel has truly turned around.
+///
+/// Accumulates both the legacy unsigned-abs counter (*ticks) and the signed
+/// cumulative counter (*ticks_signed, consumed by the host + wheel-PI loop).
+///
+/// @return the committed (publishable) travel direction for this wheel.
+static int8_t DRIVEMOTOR_UpdateWheel(DRIVEMOTOR_dirfilter_t *f, int8_t reported, uint8_t speed,
+                                     uint16_t val, uint16_t *prev,
+                                     uint32_t *ticks, int32_t *ticks_signed)
+{
+    int32_t l_s32Delta = (int32_t)val - (int32_t)*prev;
+    /* Confirmed travel direction for THIS frame's motion. */
+    int8_t l_s8Eff = resolve_direction(f, reported, speed, l_s32Delta < 0);
+
+    uint32_t l_u32Mag = 0;
+    if (reported != 0)
+    {
+        if (l_s32Delta >= 0)
+        {
+            l_u32Mag = (uint32_t)l_s32Delta;             /* progress within a segment */
+        }
+        else if ((uint32_t)val <= DRIVEMOTOR_MAX_TICKS_PER_FRAME)
+        {
+            l_u32Mag = (uint32_t)val;                    /* reset: new-segment progress so far */
+        }
+        /* else: implausibly large reset remainder => glitch, drop it */
+    }
+    *prev = val;
+    *ticks += l_u32Mag;                                  /* legacy unsigned-abs counter */
+    *ticks_signed += (int32_t)l_u32Mag * (int32_t)l_s8Eff;  /* signed by CONFIRMED dir */
+    return l_s8Eff;
+}
+
 /// @brief Decode received drive motor messages
 /// @param
 void DRIVEMOTOR_App_Rx(void)
@@ -412,94 +526,31 @@ void DRIVEMOTOR_App_Rx(void)
         right_power = drivemotor_psReceivedData.u8_right_power;
 
         /*
-         * Motor-controller encoder quirk: the 16-bit encoder register can
-         * reset to 0 when the wheel's commanded direction changes (and again
-         * when the speed crosses from 0 to non-zero). Detect those events
-         * and restart the delta window so we don't register a massive phantom
-         * jump.
+         * Fold each wheel's controller frame into its tick totals and resolve
+         * the true travel direction (DRIVEMOTOR_UpdateWheel / resolve_direction).
+         * Reset detection is now DIRECT — any drop in the per-wheel counter is a
+         * reset, so the new value is the post-reset progress (a glitch beyond one
+         * frame's kinematic limit is dropped). The publishable direction is held
+         * at the old sign through a reversal until the speed byte or a second
+         * reset confirms the wheel has truly turned around, so the coast ticks
+         * the controller emits one frame early are never mis-signed. This
+         * replaces the old predict-the-reset fence + raw-direction signing, which
+         * raced the controller's reset latency and corrupted left/right_ticks_
+         * signed (and thus /wheel_odom + the wheel-PI loop) on every reversal.
          */
-        /*
-         * Direction-change fence: when `left_encoder_reset` is true the
-         * motor-controller PCB is in the middle of a direction/speed
-         * transient and its encoder register may or may not have been
-         * zeroed by the controller yet. Rather than GUESS (which the old
-         * `prev_left_encoder_val = 0` did, and failed catastrophically
-         * when the controller had NOT reset yet: delta_raw =
-         * current_encoder_val - 0 = tens of thousands of ticks
-         * mistakenly attributed to the new direction, producing
-         * ±1000 m/s bogus velocities downstream), we SYNC `prev` to
-         * whatever the current encoder value is. Delta for this one
-         * packet is then 0 — we concede up to ~21 ms of fine-grained
-         * odometry tracking during the transient, which at 0.5 m/s max
-         * is 10 mm — in exchange for never emitting a bogus tick-burst
-         * on direction change.
-         *
-         * Subsequent packets compute deltas against the post-transient
-         * baseline, so the rest of the trajectory is uncorrupted.
-         */
-        left_wheel_speed_val = left_direction * drivemotor_psReceivedData.u8_left_speed;
-        const uint8_t left_encoder_reset =
-            (left_direction == 0) ||
-            (left_direction != prev_left_direction) ||
-            (prev_left_wheel_speed_val == 0 && left_wheel_speed_val != 0);
-        if (left_encoder_reset)
-        {
-            prev_left_encoder_val = left_encoder_val;  /* sync, not zero */
-        }
+        int8_t l_s8EffLeftDir = DRIVEMOTOR_UpdateWheel(
+            &left_dir_filter, left_direction, drivemotor_psReceivedData.u8_left_speed,
+            left_encoder_val, &prev_left_encoder_val,
+            &left_encoder_ticks, &left_ticks_signed);
+        int8_t l_s8EffRightDir = DRIVEMOTOR_UpdateWheel(
+            &right_dir_filter, right_direction, drivemotor_psReceivedData.u8_right_speed,
+            right_encoder_val, &prev_right_encoder_val,
+            &right_encoder_ticks, &right_ticks_signed);
 
-        /* Encoder register wraps around 0xFFFF. We compute the delta as a
-         * SIGNED int16 difference — natural wrap handling that works in
-         * BOTH directions, provided the wheel hasn't spun >32767 ticks in
-         * one 20 ms sample (~100 m/s — impossible for a mower).
-         *
-         * Previously this was an unsigned subtraction, which is only correct
-         * for monotonically-increasing forward motion. Any backward motion
-         * (mechanical backlash, motor coast through zero, PI overshoot) made
-         * the encoder briefly count down — e.g. 100 → 91 read as uint16
-         * delta=65527 instead of -9. That uint16 was then multiplied by the
-         * motor direction byte, injecting a ±65,527-tick spike into
-         * left_ticks_signed every time the wheel jittered through zero.
-         * Once the wheel-level PI loop started consuming left_ticks_signed
-         * for feedback, those spikes saturated the PI output and the chassis
-         * spun at full ω while reporting ~0 m motion to the ROS host.
-         */
-        const int16_t left_delta_signed = (int16_t)(left_encoder_val - prev_left_encoder_val);
-        const uint16_t left_delta_raw = (left_delta_signed >= 0)
-                                            ? (uint16_t)left_delta_signed
-                                            : (uint16_t)(-left_delta_signed);
-        /* Legacy cumulative counter (unsigned-abs) kept for any existing
-         * consumer that still expects monotonic positive ticks. */
-        left_encoder_ticks += (uint32_t)left_delta_raw;
-        /* Signed cumulative count — the encoder timer here is up-only, so we
-         * still scale by the commanded motor direction. The signed delta cast
-         * above only protects against backward-jitter spikes; for true reverse
-         * motion the direction byte does the polarity flip. */
-        left_ticks_signed += (int32_t)left_delta_signed * (int32_t)left_direction;
-        prev_left_encoder_val = left_encoder_val;
-        prev_left_wheel_speed_val = left_wheel_speed_val;
-        prev_left_direction = left_direction;
-
-        /* Same fence for the right wheel — direction-change transient is
-         * per-wheel on a differential-drive platform (e.g. an in-place
-         * pivot has left and right transitions at different times). */
-        right_wheel_speed_val = right_direction * drivemotor_psReceivedData.u8_right_speed;
-        const uint8_t right_encoder_reset =
-            (right_direction == 0) ||
-            (right_direction != prev_right_direction) ||
-            (prev_right_wheel_speed_val == 0 && right_wheel_speed_val != 0);
-        if (right_encoder_reset)
-        {
-            prev_right_encoder_val = right_encoder_val;  /* sync, not zero */
-        }
-        const int16_t right_delta_signed = (int16_t)(right_encoder_val - prev_right_encoder_val);
-        const uint16_t right_delta_raw = (right_delta_signed >= 0)
-                                             ? (uint16_t)right_delta_signed
-                                             : (uint16_t)(-right_delta_signed);
-        right_encoder_ticks += (uint32_t)right_delta_raw;
-        right_ticks_signed += (int32_t)right_delta_signed * (int32_t)right_direction;
-        prev_right_encoder_val = right_encoder_val;
-        prev_right_wheel_speed_val = right_wheel_speed_val;
-        prev_right_direction = right_direction;
+        /* Sign the reported speed magnitude by the CONFIRMED direction too, so
+         * the host's velocity sign agrees with the signed-tick trend. */
+        left_wheel_speed_val = l_s8EffLeftDir * drivemotor_psReceivedData.u8_left_speed;
+        right_wheel_speed_val = l_s8EffRightDir * drivemotor_psReceivedData.u8_right_speed;
 
         wheelTicks_handler(left_ticks_signed, right_ticks_signed,
                            left_wheel_speed_val, right_wheel_speed_val);

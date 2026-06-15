@@ -319,6 +319,7 @@ All sensor positions drive both the URDF (TF frames) and the Nav2 footprint poly
 | `battery_full_percent` | `95.0` | Resume mowing above this (%) |
 | `battery_low_percent` | `20.0` | Start docking (%) |
 | `battery_critical_percent` | `10.0` | Emergency dock — BT guard (%) |
+| `battery_critical_recovery_percent` | `30.0` | Leave critical-battery state after recharge — hysteresis upper bound, must be > `battery_critical_percent` (%) |
 
 #### Mowing
 

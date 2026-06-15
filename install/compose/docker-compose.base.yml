@@ -13,6 +13,11 @@ x-ros2-env: &ros2-env
   LIDAR_ENABLED: ${LIDAR_ENABLED:-true}
   ENABLE_FOXGLOVE: ${ENABLE_FOXGLOVE:-true}
   HARDWARE_BACKEND: ${HARDWARE_BACKEND:-mowgli}
+  # full_system.launch.py reads these to pick the GNSS adapter; without them
+  # the main container always saw the gps/UBX defaults, so unicore/NMEA installs
+  # parsed the wrong backend in navsat_to_absolute_pose / gnss status.
+  GNSS_BACKEND: ${GNSS_BACKEND:-gps}
+  GPS_PROTOCOL: ${GPS_PROTOCOL:-UBX}
 
 services:
 

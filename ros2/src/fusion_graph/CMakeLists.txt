@@ -40,6 +40,10 @@ find_package(GTSAM CONFIG REQUIRED)
 add_library(fusion_graph_core
   src/factors.cpp
   src/graph_manager.cpp
+  src/graph_manager_node.cpp
+  src/graph_manager_rebase.cpp
+  src/graph_manager_persistence.cpp
+  src/graph_manager_keyframe.cpp
   src/scan_matcher.cpp
 )
 
@@ -78,6 +82,13 @@ ament_target_dependencies(fusion_graph_core PUBLIC
 
 add_executable(fusion_graph_node
   src/fusion_graph_node.cpp
+  src/fusion_graph_node_setup_params.cpp
+  src/fusion_graph_node_setup_comms.cpp
+  src/fusion_graph_node_callbacks_a.cpp
+  src/fusion_graph_node_callbacks_b.cpp
+  src/fusion_graph_node_misc.cpp
+  src/fusion_graph_node_timer.cpp
+  src/fusion_graph_node_publish.cpp
 )
 
 target_link_libraries(fusion_graph_node
@@ -175,6 +186,11 @@ if(BUILD_TESTING)
     test/test_gyro_bias.cpp
   )
   target_link_libraries(test_gyro_bias fusion_graph_core)
+
+  ament_add_gtest(test_keyframe_map
+    test/test_keyframe_map.cpp
+  )
+  target_link_libraries(test_keyframe_map fusion_graph_core)
 
   # Performance benchmarks. Long-running (~30 s on ARM); only meaningful
   # in Release builds. Output is grep-friendly for tracking regressions.

@@ -1,0 +1,190 @@
+# Nav2 parameters — LiDAR overlay (merged onto nav2_params_base.yaml).
+# Carries ONLY what differs from the no-LiDAR variant: obstacle costmap
+# layers fed by /scan_costmap, scan-based collision_monitor (PolygonSlow),
+# and FollowPath collision detection. Everything else lives in the base.
+# Deep-merged in navigation.launch.py (_load_merged). Keep this thin.
+
+controller_server:
+  ros__parameters:
+    FollowPath:
+      # Collision sim: project the carrot forward, abort if the path
+      # to the carrot hits an obstacle. 1.0 s look-ahead at 0.3 m/s
+      # = 30 cm projected; collision_monitor handles the close-range case.
+      use_collision_detection: true
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      plugins: ["obstacle_layer", "keepout_filter", "inflation_layer"]
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        # No persistence: heading drift causes wall duplicates
+        observation_persistence: 0.0
+        observation_sources: scan_filtered
+        scan_filtered:
+          topic: /scan_costmap
+          # Subscribe to the IMU-tilt-filtered /scan_costmap stream from
+          # costmap_scan_filter_node — NOT raw /scan. This is the local
+          # twin of the global costmap's source, and it matters: the
+          # min_obstacle_height band below CANNOT filter tilt-induced
+          # ground hits on its own. robot_localization runs in two_d_mode,
+          # which forces pitch=roll=0 in TF, so a 2D LaserScan always
+          # projects to ~lidar_z (0.22 m) regardless of the real chassis
+          # tilt — every ground return on a slope sails through the
+          # [0.12, 1.5] band and lands as a phantom lethal obstacle (a
+          # tiny pivot on uneven garden terrain was enough to paint
+          # them, driving FTC obstacle-deviation into left-right flap and
+          # controller_server "Failed to make progress"). costmap_scan_filter
+          # does the actual tilt rejection using the IMU gravity vector and
+          # the LIDAR mount yaw, so the planner only sees real obstacles.
+          # The height band is kept as a cheap belt-and-suspenders for the
+          # level case. NOTE: this does NOT reduce collision safety —
+          # collision_monitor reads /scan_costmap in 2D (height-agnostic)
+          # and still stops on any real return; min_obstacle_height only
+          # governs what the PLANNER routes around.
+          min_obstacle_height: 0.12
+          max_obstacle_height: 1.5
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+          raytrace_max_range: 8.0
+          raytrace_min_range: 0.0
+          # 5.0 → 3.0 m (2026-06-12): same grazing-angle rationale as the
+          # local costmap — beyond ~3 m most returns on a bumpy lawn are
+          # ground strikes. Global planning only needs obstacles marked
+          # near the route; raytrace (8 m) still clears at full range.
+          obstacle_max_range: 3.0
+          # Lowered from 0.50 m → 0.10 m so the global costmap sees the
+          # same near-field obstacles as the local costmap. Ground/grass
+          # clutter is filtered by the min_obstacle_height band (0.08 m
+          # floor) now that ground_constraint keeps base_link Z ≈ 0, so
+          # we don't need a radial guard band on top of it. The Smac
+          # planner's keepout_filter handles dock avoidance on the
+          # global side — no need to mask the dock here.
+          obstacle_min_range: 0.10
+          inf_is_valid: true
+
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      plugins: ["obstacle_layer", "inflation_layer"]
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        # Short non-zero persistence (was 0): smooths over the inevitable
+        # 1–2 missing scans during ARM TF jitter so transient obstacles
+        # don't flicker out of the costmap mid-strip. Long persistence
+        # would re-introduce the dock-residue problem post-undock; 2 s
+        # is short enough that costmap_scan_filter's 5 s post-undock
+        # grace window still clears any dock returns before they expire.
+        observation_persistence: 2.0
+        # Subscribe to the conditional /scan_costmap stream from
+        # costmap_scan_filter_node — same scan as /scan but with returns
+        # under dock_blank_range pushed to +inf while is_charging or for
+        # post_undock_blank_sec after charging drops. With that filter
+        # owning the dock-mask logic, obstacle_min_range can drop to a
+        # near-LiDAR floor and the 0.10–0.65 m mowing blind ring closes.
+        observation_sources: scan_filtered
+        scan_filtered:
+          topic: /scan_costmap
+          # Same height band as the global obstacle_layer — filter ground
+          # hits when the mower pitches on uneven terrain.
+          # 2D LaserScan rays sit at lidar_link.z (≈0.22 m); after TF to
+          # the costmap frame each point's Z ≈ lidar height on level
+          # ground. min_obstacle_height: 0.12 rejects returns whose Z has
+          # dropped toward ground level — which happens when the mower
+          # pitches/rolls on uneven garden terrain and the forward rays
+          # tilt down into the lawn. At 0.0 those ground hits were marked
+          # as phantom lethal obstacles, blocking the planner mid-swath
+          # and walling off the dock approach (controller_server "Failed
+          # to make progress"). The real 0.22 m scan plane stays well
+          # inside [0.12, 1.5] so genuine obstacles are still marked.
+          # NOTE: this does NOT reduce collision safety — collision_monitor
+          # polls raw /scan in 2D (height-agnostic) and still stops the
+          # robot on any real return; min_obstacle_height only governs what
+          # the PLANNER routes around.
+          min_obstacle_height: 0.12
+          max_obstacle_height: 1.5
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+          raytrace_max_range: 6.0
+          raytrace_min_range: 0.0
+          # 4.0 → 2.5 m (2026-06-12): at >2.5 m the 0.22 m-high scan plane
+          # grazes the lawn at <5°, so most far returns on non-flat ground
+          # are ground strikes, not obstacles — they walled the robot in
+          # with phantom lethal cells. The local controller only needs
+          # obstacles within a couple of metres; raytrace (6 m) still
+          # CLEARS stale cells at full range.
+          obstacle_max_range: 2.5
+          # Lowered from 0.65 m → 0.10 m. The dock-mask is now handled
+          # by costmap_scan_filter_node (charging-state aware), so this
+          # only needs to filter LiDAR self-returns near the housing.
+          # 0.10 m closes the previous 0.10–0.65 m blind ring during
+          # mowing — collision_monitor and Nav2 now agree on what's
+          # in front of the robot.
+          obstacle_min_range: 0.10
+          inf_is_valid: true
+
+
+collision_monitor:
+  ros__parameters:
+    polygons: ["PolygonSlow"]
+    PolygonStop:
+      type: "polygon"
+      # INSIDE the chassis on Y (chassis half-width 0.20, polygon at
+      # ±0.18) so any LiDAR return from our own chassis edge falls
+      # OUTSIDE the polygon and doesn't trip a stop. Forward extent
+      # still well past the chassis front (chassis front edge at
+      # base_link +0.48). Coords are
+      # [forward_left, forward_right, rear_right, rear_left] in
+      # base_footprint frame.
+      # NOTE: this loses some real-obstacle protection vs. the
+      # production "chassis + 5 cm" target (originally ±0.25). The
+      # right long-term fix is a chassis-blank filter on /scan,
+      # tracked separately.
+      points: "[[0.55, 0.18], [0.55, -0.18], [-0.15, -0.18], [-0.15, 0.18]]"
+      action_type: "stop"
+      # 8 points: tight enough that a single stray return doesn't trip
+      # a stop, loose enough that a real obstacle (legs, dock) reliably
+      # does. Tuned vs the LD19's 7 Hz × ~455-bin sweep.
+      min_points: 8
+      visualize: true
+      polygon_pub_topic: "polygon_stop"
+      enabled: true
+    PolygonSlow:
+      type: "polygon"
+      # Chassis + 15 cm — slow to 30% when obstacle is close
+      points: "[[0.65, 0.35], [0.65, -0.35], [-0.25, -0.35], [-0.25, 0.35]]"
+      action_type: "slowdown"
+      slowdown_ratio: 0.3
+      # 12 points: the dock structure sits near the polygon boundary
+      # when charging, causing rapid slow/normal flapping at 10 Hz.
+      # Higher min_points adds hysteresis against that edge noise.
+      min_points: 12
+      visualize: true
+      polygon_pub_topic: "polygon_slow"
+      enabled: true
+    observation_sources: ["scan"]
+    scan:
+      type: "scan"
+      # Read the FILTERED scan (chassis self-returns blanked,
+      # dock structure blanked while charging) so collision_monitor
+      # never sees the robot's own chassis as an obstacle. The raw
+      # /scan is still available for slam / debugging.
+      topic: /scan_costmap
+      # Disable the height filter (-1.0 / 5.0). The previous setting
+      # (min_height: 0.20) was a no-op for a 2D LiDAR — every scan
+      # point lands at exactly lidar_z in base frame, so the filter
+      # is tout-ou-rien depending on whether lidar_z exceeds
+      # min_height. With lidar_z=0.10 on this robot, min_height=0.20
+      # rejected every point and collision_monitor saw nothing during
+      # mowing. The polygon zones already do the spatial filtering;
+      # the lidar plane itself is the relevant z, not a filter band.
+      min_height: -1.0
+      max_height: 5.0
+      enabled: true

@@ -25,7 +25,10 @@ export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: 
 
     function handleEditMap() {
         if (!editMap) {
-            setEditHistory([{...features}]);
+            // Deep-clone: a shallow {...features} shares the inner MowingFeature
+            // objects, so later in-place geometry/name edits mutate the stored
+            // snapshot and undo can't revert.
+            setEditHistory([structuredClone(features)]);
             setHistoryIndex(0);
             setEditMap(true);
         } else if (hasUnsavedChanges) {
@@ -43,9 +46,12 @@ export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: 
     }
 
     const pushHistory = useCallback((newFeatures: Record<string, MowingFeature>) => {
+        // Snapshot a deep clone so subsequent in-place edits to the live
+        // features don't retroactively mutate this history entry.
+        const snapshot = structuredClone(newFeatures);
         setEditHistory(prev => {
             const truncated = prev.slice(0, historyIndex + 1);
-            const next = [...truncated, newFeatures].slice(-10);
+            const next = [...truncated, snapshot].slice(-10);
             setHistoryIndex(next.length - 1);
             return next;
         });
@@ -69,7 +75,9 @@ export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: 
         const newIndex = historyIndex - 1;
         setHistoryIndex(newIndex);
         skipHistoryRef.current = true;
-        setFeatures(editHistory[newIndex]);
+        // Clone on the way out so editing the restored state doesn't mutate
+        // the stored snapshot (which redo / a later undo would reuse).
+        setFeatures(structuredClone(editHistory[newIndex]));
     }, [historyIndex, editHistory, setFeatures]);
 
     const handleRedo = useCallback(() => {
@@ -77,7 +85,7 @@ export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: 
         const newIndex = historyIndex + 1;
         setHistoryIndex(newIndex);
         skipHistoryRef.current = true;
-        setFeatures(editHistory[newIndex]);
+        setFeatures(structuredClone(editHistory[newIndex]));
     }, [historyIndex, editHistory, setFeatures]);
 
     return {

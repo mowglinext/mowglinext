@@ -13,11 +13,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Mow-progress / coverage-cells visualization, decay, mark-mowed,
-// point-in-polygon helper, boundary monitoring, recovery-point service,
-// and persistent obstacle diff/update split out of map_server_node.cpp.
-// Behaviour (decay rate, mark radius, recovery offset, replan cooldown,
-// /coverage_cells convention) is unchanged.
+// Point-in-polygon helper, boundary monitoring, recovery-point service,
+// and user-promoted-obstacle application split out of map_server_node.cpp.
+// Behaviour (recovery offset, replan trigger) is unchanged.
 
 #include <algorithm>
 #include <cmath>
@@ -27,177 +25,9 @@
 
 #include "mowgli_map/internal_helpers.hpp"
 #include "mowgli_map/map_server_node.hpp"
-#include <grid_map_core/iterators/CircleIterator.hpp>
 
 namespace mowgli_map
 {
-
-nav_msgs::msg::OccupancyGrid MapServerNode::mow_progress_to_occupancy_grid() const
-{
-  nav_msgs::msg::OccupancyGrid grid;
-  grid.header.stamp = now();
-  grid.header.frame_id = map_frame_;
-  grid.info.resolution = static_cast<float>(resolution_);
-  // grid_map: size(0) iterates along X (length_x), size(1) along Y (length_y).
-  // OccupancyGrid: width = X cells, height = Y cells.
-  // grid_map r=0 → X_max (decreasing), c=0 → Y_max (decreasing).
-  // OccupancyGrid col=0 → X_min, row=0 → Y_min.
-  const int nx = map_.getSize()(0);  // cells along X
-  const int ny = map_.getSize()(1);  // cells along Y
-  grid.info.width = static_cast<uint32_t>(nx);
-  grid.info.height = static_cast<uint32_t>(ny);
-
-  grid.info.origin.position.x = map_.getPosition().x() - map_.getLength().x() * 0.5;
-  grid.info.origin.position.y = map_.getPosition().y() - map_.getLength().y() * 0.5;
-  grid.info.origin.position.z = 0.0;
-  grid.info.origin.orientation.w = 1.0;
-
-  const auto& prog = map_[std::string(layers::MOW_PROGRESS)];
-
-  grid.data.resize(static_cast<std::size_t>(nx * ny), 0);
-
-  for (int r = 0; r < nx; ++r)
-  {
-    for (int c = 0; c < ny; ++c)
-    {
-      const float val = prog(r, c);
-      const int og_col = nx - 1 - r;  // r=0 (X_max) → last col
-      const int og_row = ny - 1 - c;  // c=0 (Y_max) → last row
-      const auto flat_idx = static_cast<std::size_t>(og_row * nx + og_col);
-      const float clamped = std::clamp(val, 0.0F, 1.0F);
-      grid.data[flat_idx] = static_cast<int8_t>(std::lround(clamped * 100.0F));
-    }
-  }
-
-  return grid;
-}
-
-nav_msgs::msg::OccupancyGrid MapServerNode::coverage_cells_to_occupancy_grid() const
-{
-  // grid_map: size(0) = cells along X, size(1) = cells along Y.
-  // grid_map r=0 → X_max, c=0 → Y_max (both decrease with index).
-  // OccupancyGrid: width = X, height = Y, col=0 → X_min, row=0 → Y_min.
-
-  const auto& prog = map_[std::string(layers::MOW_PROGRESS)];
-  const auto& cls = map_[std::string(layers::CLASSIFICATION)];
-  const int nx = map_.getSize()(0);
-  const int ny = map_.getSize()(1);
-
-  nav_msgs::msg::OccupancyGrid grid;
-  grid.header.stamp = now();
-  grid.header.frame_id = map_frame_;
-  grid.info.resolution = static_cast<float>(resolution_);
-  grid.info.width = static_cast<uint32_t>(nx);
-  grid.info.height = static_cast<uint32_t>(ny);
-  grid.info.origin.position.x = map_.getPosition().x() - map_.getLength().x() * 0.5;
-  grid.info.origin.position.y = map_.getPosition().y() - map_.getLength().y() * 0.5;
-  grid.info.origin.position.z = 0.0;
-  grid.info.origin.orientation.w = 1.0;
-  grid.data.resize(static_cast<std::size_t>(nx * ny), -1);
-
-  for (int r = 0; r < nx; ++r)
-  {
-    for (int c = 0; c < ny; ++c)
-    {
-      const int og_col = nx - 1 - r;
-      const int og_row = ny - 1 - c;
-      const auto flat_idx = static_cast<std::size_t>(og_row * nx + og_col);
-
-      grid_map::Position pos;
-      const grid_map::Index idx(r, c);
-      if (!map_.getPosition(idx, pos))
-        continue;
-
-      bool in_area = false;
-      geometry_msgs::msg::Point32 pt;
-      pt.x = static_cast<float>(pos.x());
-      pt.y = static_cast<float>(pos.y());
-      for (const auto& area : areas_)
-      {
-        if (area.is_navigation_area)
-          continue;
-        if (point_in_polygon(pt, area.polygon))
-        {
-          in_area = true;
-          break;
-        }
-      }
-
-      if (!in_area)
-        continue;
-
-      auto cell_type = static_cast<CellType>(static_cast<int>(cls(r, c)));
-      if (cell_type == CellType::OBSTACLE_PERMANENT || cell_type == CellType::OBSTACLE_TEMPORARY ||
-          cell_type == CellType::NO_GO_ZONE)
-      {
-        grid.data[flat_idx] = 100;
-      }
-      else if (cell_type == CellType::LAWN_DEAD)
-      {
-        // Distinct value for cells the segment selector has given up
-        // on. The GUI map renderer can pick a separate color (e.g.
-        // amber) so the operator sees the "blocked but not a real
-        // obstacle" zones at a glance. 80 sits between mowed (0) and
-        // hard obstacle (100).
-        grid.data[flat_idx] = 80;
-      }
-      else if (prog(r, c) >= 0.3f)
-      {
-        grid.data[flat_idx] = 0;
-      }
-      else
-      {
-        grid.data[flat_idx] = 60;
-      }
-    }
-  }
-
-  return grid;
-}
-
-void MapServerNode::apply_decay(double elapsed_seconds)
-{
-  if (elapsed_seconds <= 0.0)
-  {
-    return;
-  }
-
-  // Mow-progress decay: cells slowly bleed back from fully-mowed (1.0)
-  // toward 0 so a long-idle session re-mows when restarted.
-  if (decay_rate_per_hour_ > 0.0)
-  {
-    auto& prog = map_[std::string(layers::MOW_PROGRESS)];
-    // Early-out when nothing has been mowed yet (e.g. idle on the dock): there
-    // is no progress to decay, so skip the full-grid pass and leave the data
-    // topics un-dirtied so the publish timer can skip its rebuild entirely.
-    if (prog.maxCoeff() > 0.0F)
-    {
-      const double decay_per_second = decay_rate_per_hour_ / 3600.0;
-      const float decay = static_cast<float>(decay_per_second * elapsed_seconds);
-      prog = (prog.array() - decay).max(0.0F).matrix();
-      content_dirty_ = true;
-    }
-  }
-
-  // DEAD-cell decay was deleted in the topological-reachability redesign
-  // (2026-05-07). DEAD now means "unreachable from the area's seed",
-  // computed by recompute_reachability_for_area. A previously-DEAD cell
-  // flips back to LAWN as soon as the wall that isolated it (obstacle
-  // polygon, costmap blob) is gone — no time-based decay.
-}
-
-void MapServerNode::mark_cells_mowed(double x, double y)
-{
-  const grid_map::Position center(x, y);
-  const double radius = tool_width_ * 0.5;
-
-  for (grid_map::CircleIterator it(map_, center, radius); !it.isPastEnd(); ++it)
-  {
-    map_.at(std::string(layers::MOW_PROGRESS), *it) = 1.0F;
-    map_.at(std::string(layers::CONFIDENCE), *it) += 1.0F;
-  }
-  content_dirty_ = true;
-}
 
 bool MapServerNode::point_in_polygon(const geometry_msgs::msg::Point32& pt,
                                      const geometry_msgs::msg::Polygon& polygon) noexcept

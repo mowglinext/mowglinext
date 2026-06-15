@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Switch, Typography } from "antd";
-import { GlobalOutlined, SettingOutlined, WifiOutlined } from "@ant-design/icons";
+import { GlobalOutlined, SettingOutlined } from "@ant-design/icons";
 import { useApi } from "../../hooks/useApi.ts";
 import { useDiagnostics } from "../../hooks/useDiagnostics.ts";
 import { useGnssStatus } from "../../hooks/useGnssStatus.ts";
@@ -78,7 +78,6 @@ export const PositioningSection: React.FC<Props> = ({
         }
     };
 
-    const ntripEnabled = values.ntrip_enabled ?? true;
     const persistCurrentGnssSettings = async () => {
         const partial: Record<string, any> = {};
         for (const key of GNSS_ACTION_SETTINGS_KEYS) {
@@ -87,6 +86,13 @@ export const PositioningSection: React.FC<Props> = ({
             }
         }
         return onPersistGnssSettings(partial);
+    };
+    // The serial-link baud and the baud persisted into the receiver's flash must
+    // match, so the operator only ever sets ONE "Baud". Keep the receiver-side
+    // value (gnss_config_baud) in lockstep automatically.
+    const handleBaudChange = (v: number) => {
+        onChange("gnss_serial_baud", v);
+        onChange("gnss_config_baud", v);
     };
 
     return (
@@ -166,22 +172,10 @@ export const PositioningSection: React.FC<Props> = ({
                 </Paragraph>
                 <Form layout="vertical" size="small">
                     <Row gutter={[16, 0]}>
-                        <Col xs={24} sm={12}>
-                            <Form.Item label="Receiver Profile" tooltip="Universal GNSS receiver profile id. Backend translation to receiver-specific commands is still pending.">
-                                <Select
-                                    value={normalizeGnssProfile(values.gnss_profile)}
-                                    onChange={(value) => onChange("gnss_profile", value)}
-                                    options={GNSS_PROFILE_OPTIONS.map((option) => ({
-                                        value: option.value,
-                                        label: option.label,
-                                    }))}
-                                />
-                            </Form.Item>
-                        </Col>
-                        <Col xs={24} sm={12}>
+                        <Col xs={24} sm={14}>
                             <Form.Item
                                 label="Signal Profile"
-                                tooltip="High-level constellation and signal preset. Use Expert mode only when you need family-specific overrides."
+                                tooltip="High-level constellation and signal preset. This is all most users need to touch."
                                 extra={<GnssSignalProfileHelp selectedProfile={selectedSignalProfile} />}
                             >
                                 <Select
@@ -203,37 +197,14 @@ export const PositioningSection: React.FC<Props> = ({
                                 />
                             </Form.Item>
                         </Col>
-                    </Row>
-                    <Row gutter={[16, 0]}>
-                        <Col xs={24} sm={8}>
-                            <Form.Item label="Position Rate" tooltip="Prepared for future backend profile application support.">
-                                <Select
-                                    value={values.gnss_profile_rate_hz ?? 5}
-                                    onChange={(value) => onChange("gnss_profile_rate_hz", value)}
-                                    options={GNSS_PROFILE_RATE_OPTIONS.map((option) => ({
-                                        value: option.value,
-                                        label: option.label,
-                                    }))}
-                                />
-                            </Form.Item>
-                        </Col>
-                        <Col xs={24} sm={8}>
-                            <Form.Item label="Runtime Baud" tooltip="The runtime baud used by the gps sidecar.">
+                        <Col xs={24} sm={10}>
+                            <Form.Item
+                                label="Baud"
+                                tooltip="Serial speed between the robot and the GPS receiver. Saved to the receiver flash so both sides always match — you only set it once."
+                            >
                                 <Select
                                     value={values.gnss_serial_baud ?? 921600}
-                                    onChange={(value) => onChange("gnss_serial_baud", value)}
-                                    options={GNSS_BAUD_OPTIONS.map((option) => ({
-                                        value: option.value,
-                                        label: option.label,
-                                    }))}
-                                />
-                            </Form.Item>
-                        </Col>
-                        <Col xs={24} sm={8}>
-                            <Form.Item label="Configured Receiver Baud" tooltip="Persisted target baud for future receiver-side profile application.">
-                                <Select
-                                    value={values.gnss_config_baud ?? values.gnss_serial_baud ?? 921600}
-                                    onChange={(value) => onChange("gnss_config_baud", value)}
+                                    onChange={handleBaudChange}
                                     options={GNSS_BAUD_OPTIONS.map((option) => ({
                                         value: option.value,
                                         label: option.label,
@@ -249,13 +220,13 @@ export const PositioningSection: React.FC<Props> = ({
                 type="info"
                 showIcon
                 style={{ marginBottom: 16 }}
-                message="Receiver baud and profile guidance"
+                message="Saved to the GPS receiver flash"
                 description={
                     <span>
-                        Changing baud also requires the receiver itself to be configured to the same baud.{" "}
-                        <Text strong>460800</Text> is recommended for unstable USB serial links.{" "}
-                        <Text strong>921600</Text> may work on direct UART or robust USB adapters, but it must be validated.{" "}
-                        Factory reset clears receiver settings before rebuilding the selected profile.{" "}
+                        Baud and signal profile are firmware-side settings: on save they are written to the
+                        GPS receiver's flash and the receiver briefly reconnects.{" "}
+                        <Text strong>460800</Text> is the safe baud for USB serial links;{" "}
+                        <Text strong>921600</Text> needs a robust UART or adapter.{" "}
                         {selectedSignalProfile === "custom" && GNSS_SIGNAL_PROFILE_CUSTOM_HELP_TEXT}
                     </span>
                 }
@@ -279,6 +250,32 @@ export const PositioningSection: React.FC<Props> = ({
                             Keep these at their defaults unless you know the receiver-side implications.
                         </Paragraph>
                         <Form layout="vertical" size="small">
+                            <Row gutter={[16, 0]}>
+                                <Col xs={24} sm={12}>
+                                    <Form.Item label="Receiver Profile" tooltip="Low-level receiver command set. Backend translation to receiver-specific commands is still being wired — leave on the default unless you know you need it.">
+                                        <Select
+                                            value={normalizeGnssProfile(values.gnss_profile)}
+                                            onChange={(value) => onChange("gnss_profile", value)}
+                                            options={GNSS_PROFILE_OPTIONS.map((option) => ({
+                                                value: option.value,
+                                                label: option.label,
+                                            }))}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={24} sm={12}>
+                                    <Form.Item label="Position Rate">
+                                        <Select
+                                            value={values.gnss_profile_rate_hz ?? 5}
+                                            onChange={(value) => onChange("gnss_profile_rate_hz", value)}
+                                            options={GNSS_PROFILE_RATE_OPTIONS.map((option) => ({
+                                                value: option.value,
+                                                label: option.label,
+                                            }))}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                            </Row>
                             <Row gutter={[16, 0]}>
                                 <Col xs={24} sm={10}>
                                     <Form.Item label="Receiver Family">
@@ -345,96 +342,20 @@ export const PositioningSection: React.FC<Props> = ({
                 </>
             )}
 
-            <GnssReceiverActionsCard
-                isDirty={isDirty}
-                saving={saving}
-                gpsRestarting={gpsRestarting}
-                onSave={onSave}
-                onSaveAndRestartGps={onSaveAndRestartGps}
-                onPersistBeforeAction={persistCurrentGnssSettings}
-                showSaveButtons
-            />
-
-            <Card size="small" style={{ marginBottom: 16 }}>
-                <Space direction="vertical" size={12} style={{ width: "100%" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div>
-                            <Text strong style={{ fontSize: 14 }}>
-                                <WifiOutlined style={{ marginRight: 6 }} />
-                                NTRIP RTK Corrections
-                            </Text>
-                            <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-                                Enable for centimetre-level accuracy via RTK base station.
-                            </Paragraph>
-                        </div>
-                        <Switch
-                            checked={ntripEnabled}
-                            onChange={(value) => onChange("ntrip_enabled", value)}
-                        />
-                    </div>
-
-                    {ntripEnabled && (
-                        <Form layout="vertical" size="small">
-                            <Row gutter={[16, 0]}>
-                                <Col xs={24} sm={12} lg={8}>
-                                    <Form.Item label="Host" tooltip="NTRIP caster hostname or IP">
-                                        <Input
-                                            value={values.ntrip_host ?? ""}
-                                            onChange={(event) => onChange("ntrip_host", event.target.value)}
-                                            placeholder="caster.example.com"
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={12} sm={6} lg={4}>
-                                    <Form.Item label="Port">
-                                        <InputNumber
-                                            value={values.ntrip_port ?? 2101}
-                                            onChange={(value) => onChange("ntrip_port", value)}
-                                            min={1}
-                                            max={65535}
-                                            style={{ width: "100%" }}
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={12} sm={6} lg={4}>
-                                    <Form.Item label="Mountpoint">
-                                        <Input
-                                            value={values.ntrip_mountpoint ?? ""}
-                                            onChange={(event) => onChange("ntrip_mountpoint", event.target.value)}
-                                            placeholder="RTCM3"
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={12} sm={6} lg={4}>
-                                    <Form.Item label="Username">
-                                        <Input
-                                            value={values.ntrip_user ?? ""}
-                                            onChange={(event) => onChange("ntrip_user", event.target.value)}
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={12} sm={6} lg={4}>
-                                    <Form.Item label="Password">
-                                        <Input.Password
-                                            value={values.ntrip_password ?? ""}
-                                            onChange={(event) => onChange("ntrip_password", event.target.value)}
-                                        />
-                                    </Form.Item>
-                                </Col>
-                            </Row>
-                        </Form>
-                    )}
-
-                    {!ntripEnabled && (
-                        <Alert
-                            type="info"
-                            showIcon
-                            message="Without NTRIP, GPS accuracy is ~2-5m (not suitable for autonomous mowing)."
-                            style={{ marginTop: 0 }}
-                        />
-                    )}
-                </Space>
-            </Card>
+            {/* The plan/apply/factory-reset receiver tooling is developer-grade —
+                keep it for Expert mode only. Basic users save with the page's
+                Save button at the bottom, which applies + restarts the receiver. */}
+            {expertMode && (
+                <GnssReceiverActionsCard
+                    isDirty={isDirty}
+                    saving={saving}
+                    gpsRestarting={gpsRestarting}
+                    onSave={onSave}
+                    onSaveAndRestartGps={onSaveAndRestartGps}
+                    onPersistBeforeAction={persistCurrentGnssSettings}
+                    showSaveButtons
+                />
+            )}
         </div>
     );
 };

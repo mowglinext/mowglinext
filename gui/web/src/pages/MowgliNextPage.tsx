@@ -22,6 +22,7 @@ import {ActionCluster} from "../concept/components/ActionCluster.tsx";
 import {LiveMapMini} from "../concept/components/LiveMapMini.tsx";
 import {ProgressRibbon} from "../concept/components/ProgressRibbon.tsx";
 import {WeatherChip} from "../concept/components/WeatherChip.tsx";
+import {useWeather} from "../hooks/useWeather.ts";
 import {NoiseTexture} from "../concept/components/NoiseTexture.tsx";
 import {staggerParent, riseFade, popIn, springSnap} from "../concept/motion.ts";
 
@@ -186,7 +187,9 @@ export const MowgliNextPage = () => {
 
   const actions = {
     onStart: mowerAction("high_level_control", {Command: 1}),
-    onPause: mowerAction("mower_logic", {Config: {Bools: [{Name: "manual_pause_mowing", Value: true}]}}),
+    // No pause command exists (mower_logic/manual_pause_mowing returned 500);
+    // "pause" maps to HOME (stop + dock), same as onHome.
+    onPause: mowerAction("high_level_control", {Command: 2}),
     onHome: mowerAction("high_level_control", {Command: 2}),
     onStop: mowerAction("emergency", {Emergency: 1}),
   };
@@ -497,6 +500,7 @@ function StatTile({label, value, unit, hint, accent, icon}: StatTileProps) {
 }
 
 function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
+  const weather = useWeather();
   const rows = [
     {k: 'Signal GPS',         ok: data.gps > 0,           note: data.gpsLabel},
     {k: data.rain ? 'Pluie détectée' : 'Pas de pluie',
@@ -518,7 +522,9 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
         }}>
           Bilan santé
         </div>
-        <WeatherChip condition="partly" tempC={22}/>
+        {weather?.available && (
+          <WeatherChip condition={weather.condition} tempC={weather.temp_c} rainSoon={weather.is_raining}/>
+        )}
       </div>
       <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
         {rows.map(r => (

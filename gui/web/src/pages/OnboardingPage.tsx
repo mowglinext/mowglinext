@@ -45,6 +45,7 @@ import { GnssSignalProfileHelp } from "../components/settings/GnssSignalProfileH
 import { UniversalGnssAdvancedSettings } from "../components/settings/UniversalGnssAdvancedSettings.tsx";
 import { UniversalGnssLiveStatusCard } from "../components/settings/UniversalGnssLiveStatusCard.tsx";
 import { GnssReceiverActionsCard } from "../components/settings/GnssReceiverActionsCard.tsx";
+import { NtripSection } from "../components/settings/NtripSection.tsx";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -240,7 +241,22 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
     );
 };
 
-// ── GPS Configuration step (receiver + NTRIP, no datum) ─────────────────
+// ── NTRIP step (correction network + base station, before GPS) ──────────
+
+const NtripStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => (
+    <div style={{ maxWidth: 820, margin: "0 auto" }}>
+        <Title level={4}>
+            <WifiOutlined /> NTRIP Corrections
+        </Title>
+        <Paragraph type="secondary">
+            RTK corrections give centimetre accuracy. Pick a correction network and the nearest base station on the
+            map — credentials for the free networks are filled in for you. You'll configure the GPS receiver next.
+        </Paragraph>
+        <NtripSection values={values} onChange={onChange} />
+    </div>
+);
+
+// ── GPS Configuration step (receiver only, no NTRIP, no datum) ──────────
 
 type GpsStepProps = RobotModelStepProps & {
     gpsRestarting?: boolean;
@@ -253,7 +269,6 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
     const { diagnostics } = useDiagnostics();
     const gpsStatus = deriveGpsStatus(gnssStatus);
     const detectedReceiver = gnssReceiverLabel(gnssStatus);
-    const ntripEnabled = values.ntrip_enabled ?? true;
     const selectedSignalProfile = normalizeGnssSignalProfile(values.gnss_signal_profile);
     const gnssAlertType: "success" | "warning" | "info" = gpsStatus.fixType === "RTK_FIX"
         ? "success"
@@ -268,6 +283,14 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
             }
         }
         return onPersistGnssSettings(partial);
+    };
+    // The serial link baud and the baud persisted into the receiver's flash must
+    // match, so the operator only ever sets ONE "Baud". We keep the receiver-side
+    // value (gnss_config_baud) in lockstep automatically — they should never
+    // diverge from the user's point of view.
+    const handleBaudChange = (v: number) => {
+        onChange("gnss_serial_baud", v);
+        onChange("gnss_config_baud", v);
     };
 
     return (
@@ -315,22 +338,10 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                 </Paragraph>
                 <Form layout="vertical">
                     <Row gutter={16}>
-                        <Col xs={24} sm={12}>
-                            <Form.Item label="Receiver Profile">
-                                <Select
-                                    value={normalizeGnssProfile(values.gnss_profile)}
-                                    onChange={(v) => onChange("gnss_profile", v)}
-                                    options={GNSS_PROFILE_OPTIONS.map((option) => ({
-                                        label: option.label,
-                                        value: option.value,
-                                    }))}
-                                />
-                            </Form.Item>
-                        </Col>
-                        <Col xs={24} sm={12}>
+                        <Col xs={24} sm={14}>
                             <Form.Item
                                 label="Signal Profile"
-                                tooltip="High-level constellation and signal preset. Use Expert mode only when you need family-specific overrides."
+                                tooltip="High-level constellation and signal preset. This is all most users need to touch."
                                 extra={<GnssSignalProfileHelp selectedProfile={selectedSignalProfile} />}
                             >
                                 <Select
@@ -352,37 +363,14 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                                 />
                             </Form.Item>
                         </Col>
-                    </Row>
-                    <Row gutter={16}>
-                        <Col xs={24} sm={8}>
-                            <Form.Item label="Position Rate">
-                                <Select
-                                    value={values.gnss_profile_rate_hz ?? 5}
-                                    onChange={(v) => onChange("gnss_profile_rate_hz", v)}
-                                    options={GNSS_PROFILE_RATE_OPTIONS.map((option) => ({
-                                        label: option.label,
-                                        value: option.value,
-                                    }))}
-                                />
-                            </Form.Item>
-                        </Col>
-                        <Col xs={24} sm={8}>
-                            <Form.Item label="Runtime Baud">
+                        <Col xs={24} sm={10}>
+                            <Form.Item
+                                label="Baud"
+                                tooltip="Serial speed between the robot and the GPS receiver. Saved to the receiver flash so both sides always match — you only set it once."
+                            >
                                 <Select
                                     value={values.gnss_serial_baud ?? 921600}
-                                    onChange={(v) => onChange("gnss_serial_baud", v)}
-                                    options={GNSS_BAUD_OPTIONS.map((option) => ({
-                                        label: option.label,
-                                        value: option.value,
-                                    }))}
-                                />
-                            </Form.Item>
-                        </Col>
-                        <Col xs={24} sm={8}>
-                            <Form.Item label="Configured Receiver Baud">
-                                <Select
-                                    value={values.gnss_config_baud ?? values.gnss_serial_baud ?? 921600}
-                                    onChange={(v) => onChange("gnss_config_baud", v)}
+                                    onChange={handleBaudChange}
                                     options={GNSS_BAUD_OPTIONS.map((option) => ({
                                         label: option.label,
                                         value: option.value,
@@ -398,8 +386,8 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                 type="info"
                 showIcon
                 style={{ marginBottom: 12 }}
-                message="Receiver baud and profile guidance"
-                description={`Changing baud also requires the receiver to be configured to the same baud. 460800 is recommended for unstable USB serial links. 921600 may work on direct UART or robust USB adapters, but it must be validated. Factory reset clears receiver settings before rebuilding the selected profile.${selectedSignalProfile === "custom" ? ` ${GNSS_SIGNAL_PROFILE_CUSTOM_HELP_TEXT}` : ""}`}
+                message="Saved to the GPS receiver flash"
+                description={`Baud and signal profile are firmware-side settings: on save they are written to the GPS receiver's flash and the receiver briefly reconnects. 460800 is the safe baud for USB serial links; 921600 needs a robust UART or adapter.${selectedSignalProfile === "custom" ? ` ${GNSS_SIGNAL_PROFILE_CUSTOM_HELP_TEXT}` : ""}`}
             />
 
             {expertMode && (
@@ -409,6 +397,35 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                             Receiver-family selection, raw serial wiring, and vendor-specific overrides live here.
                         </Paragraph>
                         <Form layout="vertical">
+                            <Row gutter={16}>
+                                <Col xs={24} sm={12}>
+                                    <Form.Item
+                                        label="Receiver Profile"
+                                        tooltip="Low-level receiver command set. Backend translation to receiver-specific commands is still being wired — leave on the default unless you know you need it."
+                                    >
+                                        <Select
+                                            value={normalizeGnssProfile(values.gnss_profile)}
+                                            onChange={(v) => onChange("gnss_profile", v)}
+                                            options={GNSS_PROFILE_OPTIONS.map((option) => ({
+                                                label: option.label,
+                                                value: option.value,
+                                            }))}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={24} sm={12}>
+                                    <Form.Item label="Position Rate">
+                                        <Select
+                                            value={values.gnss_profile_rate_hz ?? 5}
+                                            onChange={(v) => onChange("gnss_profile_rate_hz", v)}
+                                            options={GNSS_PROFILE_RATE_OPTIONS.map((option) => ({
+                                                label: option.label,
+                                                value: option.value,
+                                            }))}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                            </Row>
                             <Row gutter={16}>
                                 <Col xs={24} sm={10}>
                                     <Form.Item label="Receiver Family">
@@ -459,93 +476,21 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                 selectedReceiverFamily={values.gnss_receiver_family}
             />
 
-            <GnssReceiverActionsCard
-                gpsRestarting={gpsRestarting}
-                onPersistBeforeAction={persistCurrentGnssSettings}
-            />
-
-            <Card
-                size="small"
-                title={
-                    <Space>
-                        <WifiOutlined />
-                        <span>NTRIP Corrections (RTK)</span>
-                        <Switch
-                            size="small"
-                            checked={ntripEnabled}
-                            onChange={(v) => onChange("ntrip_enabled", v)}
-                        />
-                    </Space>
-                }
-            >
-                {ntripEnabled ? (
-                    <>
-                        <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
-                            NTRIP provides RTK corrections for centimetre-level accuracy.
-                            Free networks like Centipede (France) or SAPOS (Germany) are available in many countries.
-                        </Paragraph>
-                        <Form layout="vertical">
-                            <Row gutter={16}>
-                                <Col xs={16}>
-                                    <Form.Item label="Host">
-                                        <Input
-                                            value={values.ntrip_host ?? ""}
-                                            onChange={(e) => onChange("ntrip_host", e.target.value)}
-                                            placeholder="crtk.net"
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={8}>
-                                    <Form.Item label="Port">
-                                        <InputNumber
-                                            value={values.ntrip_port ?? 2101}
-                                            onChange={(v) => onChange("ntrip_port", v)}
-                                            style={{ width: "100%" }}
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={24}>
-                                    <Form.Item label="Mountpoint">
-                                        <Input
-                                            value={values.ntrip_mountpoint ?? ""}
-                                            onChange={(e) => onChange("ntrip_mountpoint", e.target.value)}
-                                            placeholder="OUIL"
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={12}>
-                                    <Form.Item label="Username">
-                                        <Input
-                                            value={values.ntrip_user ?? ""}
-                                            onChange={(e) => onChange("ntrip_user", e.target.value)}
-                                            placeholder="centipede"
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={12}>
-                                    <Form.Item label="Password">
-                                        <Input.Password
-                                            value={values.ntrip_password ?? ""}
-                                            onChange={(e) => onChange("ntrip_password", e.target.value)}
-                                            placeholder="centipede"
-                                        />
-                                    </Form.Item>
-                                </Col>
-                            </Row>
-                        </Form>
-                    </>
-                ) : (
-                    <Paragraph type="secondary">
-                        NTRIP is disabled. Your GPS will operate without RTK corrections (lower accuracy, ~1-2m).
-                    </Paragraph>
-                )}
-            </Card>
+            {/* The manual plan/apply/factory-reset/restart panel is developer
+                tooling — basic onboarding doesn't need it because Save & Continue
+                already restarts the receiver. Keep it for Expert mode only. */}
+            {expertMode && (
+                <GnssReceiverActionsCard
+                    gpsRestarting={gpsRestarting}
+                    onPersistBeforeAction={persistCurrentGnssSettings}
+                />
+            )}
 
             <Alert
                 type="info"
                 showIcon
                 message="Save & Continue to start the receiver"
-                description="Saving this step persists the receiver, signal, rate, and baud settings. Serial/NTRIP changes restart the GNSS runtime automatically; the receiver actions panel can also plan, apply, reset, or restart the GNSS sidecar directly. Acquiring an RTK fix can take 30 s to a few minutes."
+                description="Saving this step writes your signal profile and baud to the GPS receiver and restarts it automatically (NTRIP corrections were set in the previous step). Acquiring an RTK fix can take 30 s to a few minutes — that happens in the background while you set the datum next."
                 style={{ marginTop: 8 }}
             />
         </div>
@@ -554,11 +499,12 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
 
 // ── Datum step (split out from GPS configuration) ───────────────────────
 //
-// Lives after GPS config, sensors and IMU yaw so the receiver has had
-// minutes of clear-sky time to acquire RTK Fix before the operator is
-// asked to anchor the map. SBAS / RTK-Float datums silently break every
-// later mow, so the "Use current GPS position" button is gated on
-// GnssStatus.FIX_TYPE_RTK_FIXED.
+// Lives right after GPS config — the natural mental order — and BEFORE
+// sensors and calibration, which are meaningless without a map origin. The
+// RTK fix that GPS kicked off keeps acquiring in the background; SBAS /
+// RTK-Float datums silently break every later mow, so the "Use current GPS
+// position" button stays gated on GnssStatus.FIX_TYPE_RTK_FIXED — the step
+// inherently waits for the receiver to settle before it will let you anchor.
 
 type DatumStepProps = RobotModelStepProps & { gpsRestarting?: boolean };
 
@@ -1027,31 +973,34 @@ const CompleteStep: React.FC = () => {
 
 // ── Main Setup Wizard ───────────────────────────────────────────────────
 
-// Step order rationale:
+// Step order rationale (positioning is configured front-to-back, so each step
+// builds on the one before it):
 //   1. Welcome
 //   2. Robot Model — prefills hardware params; needs to come before firmware
 //      so the operator knows which board / variant they are flashing.
-//   3. Firmware — moved here (was last) so flashing happens before any
-//      configuration depends on a working motherboard / GPS receiver.
-//   4. GPS Configuration — receiver protocol, port, NTRIP. Saving this step
-//      restarts the GPS daemon so RTK fix can start acquiring in the
-//      background while later steps run.
-//   5. Sensors — sensor placement on the chassis.
-//   6. IMU / Sensor Calibration — drives the robot to learn IMU mounting,
-//      pitch/roll, mag, and (if on the dock) dock pose.
-//   7. Datum — split out from GPS so it runs only after the receiver has
-//      had minutes of clear-sky time to acquire RTK Fix, which is required
-//      for "Use current GPS position" to be safe.
+//   3. Firmware — flashing happens before any configuration depends on a
+//      working motherboard / GPS receiver.
+//   4. GPS — receiver protocol, port, NTRIP corrections. Saving this step
+//      restarts the GPS daemon so an RTK fix can start acquiring.
+//   5. Datum — anchor the map origin to the current RTK-Fixed position. Comes
+//      right after GPS (the natural mental order) and BEFORE docking/calibration,
+//      since those are meaningless without a map origin. The step gates the
+//      capture button on RTK-Fixed, so it inherently waits for the receiver to
+//      settle.
+//   6. Sensors — sensor placement on the chassis.
+//   7. Calibration — drives the robot to learn IMU mounting, pitch/roll, mag,
+//      and (if on the dock) the dock pose.
 //   8. Complete
 
 const STEP_ICONS = [
     <RocketOutlined />,
     <SettingOutlined />,
     <ThunderboltOutlined />,
+    <WifiOutlined />,
     <GlobalOutlined />,
+    <EnvironmentOutlined />,
     <AimOutlined />,
     <CompassOutlined />,
-    <EnvironmentOutlined />,
     <CheckCircleOutlined />,
 ];
 
@@ -1059,10 +1008,11 @@ const STEP_TITLES = [
     "Welcome",
     "Robot Model",
     "Firmware",
+    "NTRIP",
     "GPS",
+    "Datum",
     "Sensors",
     "Calibration",
-    "Datum",
     "Complete",
 ];
 
@@ -1106,28 +1056,31 @@ const OnboardingWizard: React.FC = () => {
         setLocalValues((prev) => ({ ...prev, [key]: value }));
     }, []);
 
-    // Step indices after the reorder:
+    // Step indices:
     //   0 Welcome
     //   1 Robot Model
     //   2 Firmware            (custom navigation, no Save & Continue)
-    //   3 GPS Configuration
-    //   4 Sensors
-    //   5 IMU / Sensor Calibration
-    //   6 Datum
-    //   7 Complete
+    //   3 NTRIP Corrections   (network + base station, set before GPS)
+    //   4 GPS Configuration
+    //   5 Datum
+    //   6 Sensors
+    //   7 IMU / Sensor Calibration
+    //   8 Complete
     const STEP_FIRMWARE = 2;
-    const STEP_GPS = 3;
-    const STEP_DATUM = 6;
+    const STEP_NTRIP = 3;
+    const STEP_GPS = 4;
+    const STEP_DATUM = 5;
+    const STEP_CALIBRATION = 7;
     const STEP_COMPLETE = STEP_TITLES.length - 1;
 
     const handleNext = useCallback(async () => {
         // Save settings when leaving any config step that mutates settings
-        // values: Robot Model (1), GPS (3), Sensors (4), Calibration (5),
-        // Datum (6). Apply-from-calibration writes through onChange but
+        // values: Robot Model (1), NTRIP (3), GPS (4), Datum (5), Sensors (6),
+        // Calibration (7). Apply-from-calibration writes through onChange but
         // does not auto-save; this is the one batch save point.
         const isConfigStep =
             currentStep === 1 ||
-            (currentStep >= 3 && currentStep <= STEP_DATUM);
+            (currentStep >= STEP_NTRIP && currentStep <= STEP_CALIBRATION);
         if (isConfigStep) {
             setSaving(true);
             await saveValues(localValues);
@@ -1151,7 +1104,7 @@ const OnboardingWizard: React.FC = () => {
             }
         }
         setCurrentStep((s) => Math.min(s + 1, STEP_TITLES.length - 1));
-    }, [currentStep, localValues, saveValues, guiApi, gpsRestart, STEP_DATUM]);
+    }, [currentStep, localValues, saveValues, guiApi, gpsRestart, STEP_GPS, STEP_CALIBRATION]);
 
     const handlePrev = useCallback(() => {
         setCurrentStep((s) => Math.max(s - 1, 0));
@@ -1161,89 +1114,121 @@ const OnboardingWizard: React.FC = () => {
     const isLastStep = currentStep === STEP_COMPLETE;
     const isFirmwareStep = currentStep === STEP_FIRMWARE;
 
+    const stepItems = STEP_TITLES.map((title, i) => ({ title, icon: STEP_ICONS[i] }));
+
+    const stepContent = (
+        <>
+            {currentStep === 0 && <WelcomeStep onNext={handleNext} />}
+            {currentStep === 1 && <RobotModelStep values={localValues} onChange={handleChange} />}
+            {currentStep === 2 && <FirmwareStep onNext={handleNext} />}
+            {currentStep === 3 && <NtripStep values={localValues} onChange={handleChange} />}
+            {currentStep === 4 && (
+                <GpsStep
+                    values={localValues}
+                    onChange={handleChange}
+                    gpsRestarting={gpsRestarting}
+                    onPersistGnssSettings={(settings) => savePartialValues(settings, {
+                        silentSuccess: true,
+                        errorMessage: "Failed to save GNSS settings before running the receiver action",
+                    })}
+                />
+            )}
+            {currentStep === 5 && <DatumStep values={localValues} onChange={handleChange} gpsRestarting={gpsRestarting} />}
+            {currentStep === 6 && <SensorStep values={localValues} onChange={handleChange} />}
+            {currentStep === 7 && <ImuYawStep values={localValues} onChange={handleChange} />}
+            {currentStep === 8 && <CompleteStep />}
+        </>
+    );
+
+    // Navigation bar (hidden on welcome, complete, and firmware steps).
+    const navBar = !isFirstStep && !isLastStep && !isFirmwareStep && (
+        <div
+            style={{
+                position: "fixed",
+                bottom: isMobile ? "calc(env(safe-area-inset-bottom, 0px) + 92px)" : 20,
+                left: isMobile ? 0 : undefined,
+                right: isMobile ? 0 : undefined,
+                padding: isMobile ? "8px 12px" : undefined,
+                background: isMobile ? colors.bgCard : undefined,
+                borderTop: isMobile ? `1px solid ${colors.border}` : undefined,
+                zIndex: 50,
+            }}
+        >
+            <Space>
+                <Button icon={<ArrowLeftOutlined />} onClick={handlePrev}>
+                    Back
+                </Button>
+                <Button
+                    type="primary"
+                    icon={currentStep === STEP_DATUM ? <SaveOutlined /> : <ArrowRightOutlined />}
+                    onClick={handleNext}
+                    loading={saving || loading || gpsRestarting}
+                >
+                    {gpsRestarting
+                        ? "Restarting GPS…"
+                        : currentStep === STEP_DATUM
+                            ? "Save & Finish"
+                            : "Next"}
+                </Button>
+            </Space>
+        </div>
+    );
+
+    // Mobile: a cramped 8-icon horizontal stepper reads badly, so show a compact
+    // "Step N of M · Title" header with a progress bar instead.
+    if (isMobile) {
+        const pct = Math.round(((currentStep + 1) / STEP_TITLES.length) * 100);
+        return (
+            <Row gutter={[0, 12]}>
+                <Col span={24}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 4 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                            <Space size={8}>
+                                <span style={{ color: colors.accent, display: "inline-flex" }}>{STEP_ICONS[currentStep]}</span>
+                                <Text strong style={{ fontSize: 15 }}>{STEP_TITLES[currentStep]}</Text>
+                            </Space>
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                                Step {currentStep + 1} of {STEP_TITLES.length}
+                            </Text>
+                        </div>
+                        <div style={{ height: 4, borderRadius: 2, background: colors.border, overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${pct}%`, background: colors.accent, transition: "width .3s ease" }} />
+                        </div>
+                    </div>
+                </Col>
+                <Col span={24} style={{ paddingBottom: isLastStep || isFirmwareStep ? 16 : 80 }}>
+                    {stepContent}
+                </Col>
+                {navBar}
+            </Row>
+        );
+    }
+
+    // Desktop: left vertical stepper rail + scrollable content. The rail gives
+    // each of the 8 steps its own labelled row instead of a cramped horizontal
+    // strip, which reads far better with this many steps.
     return (
-        <Row gutter={[0, isMobile ? 12 : 20]}>
-            {/* Steps indicator -- labelPlacement="vertical" stacks the title under
-                the icon, which prevents the horizontal text-overflow ellipsis
-                that was clipping titles like "Calibration" to "Calib" on
-                narrower viewports. */}
-            <Col span={24}>
+        <Row gutter={[28, 0]} style={{ minHeight: "calc(100vh - 150px)" }}>
+            <Col flex="0 0 220px">
                 <Steps
+                    direction="vertical"
                     current={currentStep}
-                    size={isMobile ? "small" : "default"}
-                    responsive={false}
-                    labelPlacement="vertical"
-                    items={STEP_TITLES.map((title, i) => ({
-                        title: isMobile ? undefined : title,
-                        icon: STEP_ICONS[i],
-                    }))}
-                    style={{ maxWidth: 880, margin: "0 auto" }}
+                    items={stepItems}
+                    style={{ position: "sticky", top: 8 }}
                 />
             </Col>
-
-            {/* Step content */}
             <Col
-                span={24}
+                flex="1 1 0"
                 style={{
-                    height: isMobile ? "auto" : "calc(100vh - 220px)",
-                    overflowY: isMobile ? undefined : "auto",
-                    paddingBottom: isLastStep || isFirmwareStep ? 16 : 80,
+                    minWidth: 0,
+                    height: "calc(100vh - 150px)",
+                    overflowY: "auto",
+                    paddingBottom: 80,
                 }}
             >
-                {currentStep === 0 && <WelcomeStep onNext={handleNext} />}
-                {currentStep === 1 && <RobotModelStep values={localValues} onChange={handleChange} />}
-                {currentStep === 2 && <FirmwareStep onNext={handleNext} />}
-                {currentStep === 3 && (
-                    <GpsStep
-                        values={localValues}
-                        onChange={handleChange}
-                        gpsRestarting={gpsRestarting}
-                        onPersistGnssSettings={(settings) => savePartialValues(settings, {
-                            silentSuccess: true,
-                            errorMessage: "Failed to save GNSS settings before running the receiver action",
-                        })}
-                    />
-                )}
-                {currentStep === 4 && <SensorStep values={localValues} onChange={handleChange} />}
-                {currentStep === 5 && <ImuYawStep values={localValues} onChange={handleChange} />}
-                {currentStep === 6 && <DatumStep values={localValues} onChange={handleChange} gpsRestarting={gpsRestarting} />}
-                {currentStep === 7 && <CompleteStep />}
+                {stepContent}
             </Col>
-
-            {/* Navigation bar (hidden on welcome, complete, and firmware steps) */}
-            {!isFirstStep && !isLastStep && !isFirmwareStep && (
-                <Col
-                    span={24}
-                    style={{
-                        position: "fixed",
-                        bottom: isMobile ? "calc(56px + env(safe-area-inset-bottom, 0px))" : 20,
-                        left: isMobile ? 0 : undefined,
-                        right: isMobile ? 0 : undefined,
-                        padding: isMobile ? "8px 12px" : undefined,
-                        background: isMobile ? colors.bgCard : undefined,
-                        borderTop: isMobile ? `1px solid ${colors.border}` : undefined,
-                        zIndex: 50,
-                    }}
-                >
-                    <Space>
-                        <Button icon={<ArrowLeftOutlined />} onClick={handlePrev}>
-                            Back
-                        </Button>
-                        <Button
-                            type="primary"
-                            icon={currentStep === STEP_DATUM ? <SaveOutlined /> : <ArrowRightOutlined />}
-                            onClick={handleNext}
-                            loading={saving || loading || gpsRestarting}
-                        >
-                            {gpsRestarting
-                                ? "Restarting GPS…"
-                                : currentStep === STEP_DATUM
-                                    ? "Save & Finish"
-                                    : "Next"}
-                        </Button>
-                    </Space>
-                </Col>
-            )}
+            {navBar}
         </Row>
     );
 };

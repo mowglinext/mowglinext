@@ -19,7 +19,7 @@
 
 #include "behaviortree_cpp/behavior_tree.h"
 #include "mowgli_behavior/bt_context.hpp"
-#include "mowgli_interfaces/srv/get_coverage_status.hpp"
+#include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
@@ -419,10 +419,12 @@ private:
 ///
 /// Input ports:
 ///   min_battery       (float,   default 20.0) — require at least this %.
-///   min_gps_fix_type  (int,     default 2)    — 0=no fix, 1=autonomous,
-///                                               2=DGPS, 4=RTK fixed, 5=RTK float.
-///                                               Default 2 accepts DGPS+ which is
-///                                               the minimum for outdoor nav.
+///   min_gps_fix_type  (int,     default 2)    — quality-monotonic encoding
+///                                               (see behavior_tree_node.cpp):
+///                                               0=no fix, 2=DGPS, 3=RTK float,
+///                                               4=RTK fixed (1=autonomous, unused).
+///                                               Higher = better, so require-RTK-Fixed
+///                                               is min=4. Default 2 accepts DGPS+.
 ///   tf_timeout_sec    (double,  default 0.5)  — how long to wait for TF.
 class PreFlightCheck : public BT::ConditionNode
 {
@@ -438,7 +440,7 @@ public:
         BT::InputPort<float>("min_battery", 20.0f, "Minimum battery percent to start mowing"),
         BT::InputPort<int>("min_gps_fix_type",
                            2,
-                           "Min GPS fix type (0=no,1=auto,2=DGPS,4=RTKfix,5=RTKfloat)"),
+                           "Min GPS fix type (monotonic: 0=no,2=DGPS,3=RTKfloat,4=RTKfix)"),
         BT::InputPort<double>("tf_timeout_sec", 0.5, "Max wait for map→base_footprint TF"),
     };
   }
@@ -446,7 +448,7 @@ public:
   BT::NodeStatus tick() override;
 
 private:
-  rclcpp::Client<mowgli_interfaces::srv::GetCoverageStatus>::SharedPtr coverage_client_;
+  rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr coverage_client_;
 };
 
 // ---------------------------------------------------------------------------

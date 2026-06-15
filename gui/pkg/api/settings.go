@@ -704,6 +704,12 @@ func getSchema(dbProvider types.IDBProvider) (map[string]any, error) {
 		return nil, fmt.Errorf("invalid local schema JSON: %w", err)
 	}
 
+	// Apply the Mowgli overlay (adds "Mowgli" to the OM_MOWER enum and the
+	// conditional hardware fields). The base OpenMower schema does not carry it,
+	// so without this the GUI would never offer "Mowgli" as a mower model. Done
+	// once here, at load time, so every schema consumer sees it consistently.
+	schema = applyMowgliOverlay(schema)
+
 	schemaCacheMu.Lock()
 	schemaCache = schema
 	schemaCacheTime = time.Now()
@@ -1022,9 +1028,15 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 			nodeMappings = extractNodeMappings(schema)
 		}
 
-		// Merge payload on top
+		// Merge payload on top. A null value is an explicit delete request
+		// (from the Advanced "Remove parameter" action) — drop the key so it
+		// is removed from the YAML rather than written back as "key: null".
 		for key, value := range payload {
-			existing[key] = value
+			if value == nil {
+				delete(existing, key)
+			} else {
+				existing[key] = value
+			}
 		}
 		gnssEnvUpdates := applyUniversalGnssCompatibility(existing)
 

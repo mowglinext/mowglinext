@@ -116,6 +116,24 @@ struct BTContext
   static constexpr float kAreaProgressEpsilonPct = 0.5f;
 
   // -----------------------------------------------------------------------
+  // Swath-completion model (replaces the mow_progress cell grid)
+  // -----------------------------------------------------------------------
+  /// Indices of swaths already mowed for each area, in the deterministic F2C
+  /// swath order. FollowStrip inserts a swath index once its FollowPath goal
+  /// succeeds; on a re-plan (resume after recharge / preempt) it skips any
+  /// index already present. F2C is deterministic for a fixed area+params, so
+  /// indices are stable across re-plans within a session. Persisted with the
+  /// area set so resume survives a restart. Cleared per area by EndSession /
+  /// a coverage reset.
+  std::map<uint32_t, std::set<std::size_t>> area_completed_swaths;
+  /// Total swath count for each area, set by FollowStrip after segmenting the
+  /// planned path. 0 until the area has been planned at least once.
+  std::map<uint32_t, std::size_t> area_swath_count;
+  /// Areas whose every swath is completed-or-skipped this session. Skipped by
+  /// GetNextUnmowedArea. Cleared by EndSession.
+  std::set<uint32_t> completed_areas;
+
+  // -----------------------------------------------------------------------
   // Derived / convenience fields (computed from latest_* messages)
   // -----------------------------------------------------------------------
 
@@ -159,7 +177,7 @@ struct BTContext
   /// Operator-configured drive speeds (m/s), sourced from mowgli_robot.yaml
   /// by behavior_tree_node and applied to the live controllers by SetNavMode:
   /// transit_speed → FollowPath.desired_linear_vel (RPP transit), mowing_speed
-  /// → FollowCoveragePath.speed_fast (FTC coverage). Defaults match the shipped
+  /// → FollowCoveragePath.vx_max (MPPI coverage). Defaults match the shipped
   /// template; SetNavMode halves them in "degraded" mode (floored at the host
   /// min-drive clamp).
   double transit_speed{0.25};
@@ -273,36 +291,26 @@ struct BTContext
   std::vector<geometry_msgs::msg::Point> visited_waypoints;
 
   // -----------------------------------------------------------------------
-  // Cell-based strip coverage state
+  // Swath-segmented coverage state
   // -----------------------------------------------------------------------
 
-  /// Current strip / segment path to mow. Populated by GetNextStrip
-  /// (legacy) or GetNextSegment (Path C cell-based coverage), consumed
-  /// by FollowStrip and MarkSegmentBlocked.
+  /// Full-area coverage path — the concatenation of all segments, kept for
+  /// the GUI/Foxglove full-plan view and empty-checks. Populated by
+  /// PlanCoverageArea. Execution uses current_strip_segments, NOT this.
   nav_msgs::msg::Path current_strip_path;
 
-  /// Transit goal to reach strip / segment start (populated by
-  /// GetNextStrip or GetNextSegment, consumed by TransitToStrip).
+  /// EXPLICIT ordered coverage segments from the coverage server (headland
+  /// rings first, then straight serpentine swaths). Populated by
+  /// PlanCoverageArea; FollowStrip dispatches ONE segment per
+  /// FollowCoveragePath goal (RotationShim pivots in place at each segment
+  /// start, MPPI tracks the straight swath / smooth ring). Replaces the
+  /// heading-jump re-segmentation heuristic, which silently failed on smooth
+  /// turn arcs (field 2026-06-12: one 3982-pose "swath").
+  std::vector<nav_msgs::msg::Path> current_strip_segments;
+
+  /// Transit goal to reach the coverage path start (populated by
+  /// PlanCoverageArea, consumed by TransitToStrip).
   geometry_msgs::msg::PoseStamped current_transit_goal;
-
-  /// Path C: true when the current segment requires transit
-  /// (>~0.5 m gap or large turn) so the BT must disengage the blade
-  /// before the move and re-engage at the start of the next FollowStrip.
-  /// false → blade stays on for a continuous mowing flow between
-  /// adjacent segments. Updated by GetNextSegment; read by the
-  /// IsShortSegment condition node in the BT XML.
-  bool current_segment_is_long_transit{false};
-
-  /// Path C: free-form tag set by GetNextSegment for diagnostics
-  /// ("interior" / "transit" / "complete").
-  std::string current_segment_phase{};
-
-  /// Path C: termination reason returned by the segment selector for
-  /// the current segment ("boundary" / "obstacle" / "dead_zone" /
-  /// "max_length" / "row_end"). Used by MarkSegmentBlocked decisions —
-  /// e.g. don't bump fail_count when the segment ended at a known
-  /// "obstacle" because that's not a robot failure.
-  std::string current_segment_termination_reason{};
 
   /// Latest coverage percentage.
   float coverage_percent{0.0f};

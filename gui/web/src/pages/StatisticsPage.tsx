@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useState} from "react";
-import {Table, Tag} from "antd";
+import {Table, Tag, Button, Popconfirm, message} from "antd";
+import {DeleteOutlined} from "@ant-design/icons";
 import {useApi} from "../hooks/useApi.ts";
 import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
@@ -90,6 +91,16 @@ export const StatisticsPage = () => {
     } catch { /* silently degrade */ }
     finally { setLoading(false); }
   }, []);
+
+  const clearStats = useCallback(async () => {
+    try {
+      await guiApi.request({path: "/diagnostics/sessions", method: "DELETE", format: "json"});
+      message.success("Statistics cleared");
+      await fetchData();
+    } catch {
+      message.error("Failed to clear statistics");
+    }
+  }, [fetchData]);
 
   useEffect(() => {
     fetchData();
@@ -273,11 +284,25 @@ export const StatisticsPage = () => {
         )}
 
         <DashCard padding={0}>
-          <div style={{padding: '18px 18px 0'}}>
-            <div style={{fontSize: 14, fontWeight: 600, marginBottom: 4}}>Session history</div>
-            <div style={{fontSize: 11, color: colors.textMuted, marginBottom: 14}}>
-              {sessions.length} session{sessions.length !== 1 ? 's' : ''} recorded
+          <div style={{padding: '18px 18px 0', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12}}>
+            <div>
+              <div style={{fontSize: 14, fontWeight: 600, marginBottom: 4}}>Session history</div>
+              <div style={{fontSize: 11, color: colors.textMuted, marginBottom: 14}}>
+                {sessions.length} session{sessions.length !== 1 ? 's' : ''} recorded
+              </div>
             </div>
+            <Popconfirm
+              title="Clear all statistics?"
+              description="This permanently deletes every recorded session. This cannot be undone."
+              okText="Clear"
+              okButtonProps={{danger: true}}
+              cancelText="Cancel"
+              onConfirm={clearStats}
+            >
+              <Button size="small" danger icon={<DeleteOutlined/>} disabled={sessions.length === 0}>
+                Clear
+              </Button>
+            </Popconfirm>
           </div>
           <Table
             size="small"

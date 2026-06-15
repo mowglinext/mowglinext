@@ -154,6 +154,7 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
 
   // Robot limits
   config_.max_cmd_vel_speed = declare_double("max_cmd_vel_speed", 2.0);
+  base_max_cmd_vel_speed_ = config_.max_cmd_vel_speed;
   config_.max_cmd_vel_ang = declare_double("max_cmd_vel_ang", 2.0);
   config_.max_goal_distance_error = declare_double("max_goal_distance_error", 1.0);
   config_.max_goal_angle_error = declare_double("max_goal_angle_error", 10.0);
@@ -289,6 +290,7 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     else if (key == "max_cmd_vel_speed")
     {
       config_.max_cmd_vel_speed = p.as_double();
+      base_max_cmd_vel_speed_ = config_.max_cmd_vel_speed;
     }
     else if (key == "max_cmd_vel_ang")
     {
@@ -337,8 +339,11 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     else if (key == "oscillation_recovery_min_duration")
     {
       config_.oscillation_recovery_min_duration = p.as_double();
-      failure_detector_.setBufferLength(
-          static_cast<int>(std::round(config_.oscillation_recovery_min_duration * 10.0)));
+      {
+        std::lock_guard<std::mutex> fd_lock(failure_detector_mutex_);
+        failure_detector_.setBufferLength(
+            static_cast<int>(std::round(config_.oscillation_recovery_min_duration * 10.0)));
+      }
     }
     else if (key == "check_obstacles")
     {
@@ -498,7 +503,11 @@ void FTCController::setSpeedLimit(const double& speed_limit, const bool& percent
 
   if (speed_limit_ < 0.0)
   {
-    // Negative means "no limit" — restore original parameter value.
+    // Negative means "no limit" — restore the configured max speed. Without
+    // this, a once-applied limit (e.g. from collision_monitor's speed gate)
+    // stayed latched on config_.max_cmd_vel_speed forever, permanently
+    // capping the robot below its configured speed after the limit cleared.
+    config_.max_cmd_vel_speed = base_max_cmd_vel_speed_;
     return;
   }
 
@@ -556,13 +565,16 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     return cmd_vel;
   }
 
-  // Reset the Nav2 goal checker so it re-evaluates from scratch each cycle.
-  // This prevents stateful goal checkers from latching a spurious "reached"
-  // before the FTC state machine has finished following the path.
-  if (goal_checker)
-  {
-    goal_checker->reset();
-  }
+  // NOTE: do NOT reset the goal checker here. controller_server already
+  // resets it once per new goal. Resetting every tick zeroed
+  // PathProgressGoalChecker::max_reached_index_ each cycle, and isGoalReached
+  // can only re-advance it by max_idx_advance_per_call_ (10) poses per call —
+  // so live progress was pinned at <=10/(n-1), never reaching the 0.95
+  // threshold on any real coverage path. The coverage goal checker could
+  // therefore never report success during FOLLOWING; strips only terminated
+  // via FTC's own state-machine timeout/abort. The stateless SimpleGoalChecker
+  // (transit FollowPath) is unaffected either way. (void) the unused arg.
+  (void)goal_checker;
 
   // 1. Advance the carrot; compute lat/lon/angle errors in base_link.
   update_control_point(safe_dt);
@@ -615,6 +627,33 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
       return cmd_vel;
     }
     applyLateralDeviationToCarrot();
+    // Re-derive the base_link PID errors from the NOW-deviated carrot.
+    // update_control_point() (called above) computed lat/lon/angle from the
+    // un-deviated carrot; applyLateralDeviationToCarrot() then shifted
+    // current_control_point_, but calculate_velocity_commands consumes the
+    // already-extracted error members. Without re-projecting, the lateral
+    // offset never reaches the PID and obstacle deviation was a viz-only
+    // no-op (the robot drove the nominal path straight at the obstacle).
+    // The offset is a pure translation, so heading (angle_error_) is
+    // unchanged — only lon/lat translation errors move.
+    if (lateral_deviation_ != 0.0)
+    {
+      try
+      {
+        const auto map_to_base = tf_buffer_->lookupTransform("base_link",
+                                                             "map",
+                                                             tf2::TimePointZero,
+                                                             tf2::durationFromSec(1.0));
+        tf2::doTransform(current_control_point_, local_control_point_, map_to_base);
+        lat_error_ = local_control_point_.translation().y();
+        lon_error_ = local_control_point_.translation().x();
+      }
+      catch (const tf2::TransformException& ex)
+      {
+        throw nav2_core::ControllerException(
+            std::string("FTCController: TF lookup failed (deviation reproject): ") + ex.what());
+      }
+    }
   }
   else if (checkCollision(config_.obstacle_lookahead))
   {
@@ -776,7 +815,13 @@ FTCController::PlannerState FTCController::update_planner_state()
         is_crashed_ = true;
         return PlannerState::FINISHED;
       }
-      if (std::abs(angle_error_) * (180.0 / M_PI) < config_.max_goal_angle_error)
+      // Use the GEOMETRIC (wrapped to (-π, π]) angle, not the unwrap
+      // accumulator — same fix as PRE_ROTATE above. The accumulator can
+      // drift past ±π if the robot oscillates while settling on the final
+      // heading, which would keep POST_ROTATE alive past the tolerance even
+      // when the robot is physically aligned with the goal pose.
+      const double angle_wrapped = std::atan2(std::sin(angle_error_), std::cos(angle_error_));
+      if (std::abs(angle_wrapped) * (180.0 / M_PI) < config_.max_goal_angle_error)
       {
         RCLCPP_INFO(logger_, "FTCController: POST_ROTATE done.");
         return PlannerState::FINISHED;
@@ -1147,6 +1192,11 @@ bool FTCController::checkCollision(int max_points)
     return false;
   }
 
+  // Lock the costmap while reading cells — the costmap is updated from the
+  // costmap_ros_ thread, so getCost()/getOrientedFootprint() here would
+  // otherwise race the update and read torn/half-written cells (TOCTOU).
+  std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> costmap_lock(*costmap_map_->getMutex());
+
   unsigned int mx = 0;
   unsigned int my = 0;
 
@@ -1255,6 +1305,11 @@ void FTCController::updateLateralDeviation(double dt)
   {
     return;
   }
+
+  // Lock the costmap for the duration — the ObstacleDeviation helpers below
+  // (isPathClearWithDeviation / findFirstObstacleIndex / chooseDeviationSide)
+  // all read costmap cells and would otherwise race the costmap update thread.
+  std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> costmap_lock(*costmap_map_->getMutex());
 
   const std::size_t start_idx = std::min(static_cast<std::size_t>(current_index_),
                                          global_plan_.size() - 1);
@@ -1456,15 +1511,19 @@ bool FTCController::checkOscillation(const geometry_msgs::msg::TwistStamped& cmd
   const double max_vel_theta = config_.max_cmd_vel_ang;
   const double max_vel_speed = config_.max_cmd_vel_speed;
 
-  failure_detector_.update(cmd_vel.twist.linear.x,
-                           cmd_vel.twist.angular.z,
-                           max_vel_speed,
-                           max_vel_speed,
-                           max_vel_theta,
-                           config_.oscillation_v_eps,
-                           config_.oscillation_omega_eps);
+  bool oscillating;
+  {
+    std::lock_guard<std::mutex> fd_lock(failure_detector_mutex_);
+    failure_detector_.update(cmd_vel.twist.linear.x,
+                             cmd_vel.twist.angular.z,
+                             max_vel_speed,
+                             max_vel_speed,
+                             max_vel_theta,
+                             config_.oscillation_v_eps,
+                             config_.oscillation_omega_eps);
 
-  const bool oscillating = failure_detector_.isOscillating();
+    oscillating = failure_detector_.isOscillating();
+  }
 
   if (oscillating)
   {
