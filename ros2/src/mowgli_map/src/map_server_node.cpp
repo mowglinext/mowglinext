@@ -810,21 +810,38 @@ void MapServerNode::on_publish_timer()
   const double elapsed = (now_time - last_decay_time_).seconds();
   last_decay_time_ = now_time;
 
-  // Topological reachability recompute (DEAD redesign). Run when the
-  // mask is dirty (areas/obstacles/keepouts changed) OR every
-  // reachability_period_s seconds (catches slowly-changing costmap
-  // obstacles like a person standing still). Done OUTSIDE the
-  // map_mutex_ block below because recompute_reachability_for_area
-  // takes the lock itself.
+  // Topological reachability recompute (DEAD redesign). A real change to
+  // the masks (areas/obstacles/keepouts) ALWAYS forces a recompute, and we
+  // seed it once on the first tick. The *periodic* recompute only exists to
+  // catch slowly-appearing live obstacles (e.g. a person who walks up and
+  // stands still) during mowing — it is pure waste while the robot is parked
+  // on the dock, where it was burning a full-grid BFS per area every
+  // reachability_period_s. Suppress the periodic pass when docked+charging
+  // (and the charging status is fresh enough to trust — a stale status from
+  // silent firmware falls through to the periodic recompute, the safe
+  // default). Done OUTSIDE the map_mutex_ block below because
+  // recompute_reachability_for_area takes the lock itself.
   bool needs_reach = masks_dirty_;
-  if (!needs_reach && last_reachability_time_.nanoseconds() != 0)
+  if (last_reachability_time_.nanoseconds() == 0)
   {
-    const double age = (now_time - last_reachability_time_).seconds();
-    needs_reach = age >= reachability_period_s_;
+    needs_reach = true;  // seed reachability once at startup
   }
-  else if (last_reachability_time_.nanoseconds() == 0)
+  else if (!needs_reach)
   {
-    needs_reach = true;
+    // Docked+idle only counts when the charging status is fresh; a stale
+    // status (silent firmware) leaves docked_idle false and falls through
+    // to the periodic recompute — the safe default.
+    bool docked_idle = false;
+    if (last_is_charging_ && last_status_time_.nanoseconds() != 0)
+    {
+      const double status_age = (now_time - last_status_time_).seconds();
+      docked_idle = status_age <= dock_set_status_max_age_s_;
+    }
+    if (!docked_idle)
+    {
+      const double age = (now_time - last_reachability_time_).seconds();
+      needs_reach = age >= reachability_period_s_;
+    }
   }
   if (needs_reach)
   {

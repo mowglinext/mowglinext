@@ -64,13 +64,17 @@ def generate_launch_description() -> LaunchDescription:
         "primary_mode", default_value="true",
         description="True: fusion_graph owns the map→odom TF and /odometry/filtered_map (replaces ekf_map_node). False: observer mode — output is remapped to /fusion_graph/odometry, no TF broadcast (ekf_map_node keeps owning the map frame). Set by navigation.launch.py based on whether a persisted graph file already exists.",
     )
-    # tf_publish_lead_s default 0.0 = HARDWARE-correct (no forward
-    # extrapolation). Sim launch overrides to 0.1 to absorb sim_time
-    # publish/lookup phase jitter that otherwise throws
-    # ExtrapolationException in Nav2 controller_server.
+    # tf_publish_lead_s default 0.05 — keep in sync with
+    # fusion_graph.yaml. The launch-arg dict below OVERRIDES the YAML,
+    # so a 0.0 default here silently undid the YAML fix (8c04a2db) on
+    # real hardware: Nav2 controller_server lookups at clock()->now()
+    # landed ahead of the latest TF stamp and threw
+    # ExtrapolationException every tick (robot twitching in place
+    # instead of following paths). Sim launch overrides to 0.1 to
+    # absorb the larger sim_time publish/lookup phase jitter.
     tf_publish_lead_s_arg = DeclareLaunchArgument(
-        "tf_publish_lead_s", default_value="0.0",
-        description="Forward-stamp the published map→odom TF by this many seconds. Hardware: 0.0. Sim: 0.1.",
+        "tf_publish_lead_s", default_value="0.05",
+        description="Forward-stamp the published map→odom TF by this many seconds. Hardware: 0.05. Sim: 0.1.",
     )
     # node_period_s default 0.04 = 25 Hz, sustainable on Pi. Sim
     # overrides to 0.02 (50 Hz) where a tighter TF cadence is needed

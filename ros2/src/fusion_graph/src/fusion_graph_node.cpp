@@ -43,6 +43,22 @@ geometry_msgs::msg::Quaternion QuatFromYaw(double yaw)
   return m;
 }
 
+// Forward-propagate a dead-reckoned pose (x, y, yaw) by `lead` seconds under a
+// constant-velocity model (yaw rate gz, body-forward velocity vx_eff). Used so
+// a TF stamped at now()+lead is an HONEST prediction of the pose at that
+// instant instead of the current pose mislabelled into the future — the latter
+// injects ~wz·lead of yaw error during pivots (≈4° at 1.5 rad/s with a 50 ms
+// lead), which fed straight into the controller's heading tracking. Mirrors the
+// DR integration order (yaw first, then translate along the updated heading).
+void ForwardStampPose(double lead, double gz, double vx_eff, double& x, double& y, double& yaw)
+{
+  if (lead <= 0.0)
+    return;
+  yaw += gz * lead;
+  x += vx_eff * std::cos(yaw) * lead;
+  y += vx_eff * std::sin(yaw) * lead;
+}
+
 }  // namespace
 
 FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
@@ -134,6 +150,7 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
   base_frame_ = declare_parameter<std::string>("base_frame", "base_footprint");
   tf_publish_lead_s_ = declare_parameter<double>("tf_publish_lead_s", 0.0);
+  tf_broadcast_rate_hz_ = declare_parameter<double>("tf_broadcast_rate_hz", 20.0);
 
   graph_ = std::make_shared<GraphManager>(gp);
 
@@ -476,10 +493,13 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
         // explicit operator escape hatch (robot parked), so the local
         // costmap discontinuity is acceptable and self-heals on the
         // next costmap clear.
-        dr_x_ = 0.0;
-        dr_y_ = 0.0;
-        dr_yaw_ = 0.0;
-        t_map_odom_anchor_valid_ = false;
+        {
+          std::lock_guard<std::mutex> lock(tf_state_mu_);
+          dr_x_ = 0.0;
+          dr_y_ = 0.0;
+          dr_yaw_ = 0.0;
+          t_map_odom_anchor_valid_ = false;
+        }
         resp->success = true;
         resp->message = "graph cleared + odom re-based (waiting for re-initialization)";
         RCLCPP_WARN(get_logger(), "fusion_graph: %s", resp->message.c_str());
@@ -711,11 +731,37 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
                           pub_markers_->publish(ma);
                         });
 
+  // Decoupled TF broadcast (see header). Started last so every member
+  // the loop reads is fully constructed. Observer mode never
+  // broadcasts TF, so the thread only exists in primary mode.
+  if (primary_mode_ && tf_broadcast_rate_hz_ > 0.0)
+  {
+    tf_thread_ = std::thread(
+        [this]()
+        {
+          TfBroadcastLoop();
+        });
+    RCLCPP_INFO(get_logger(),
+                "fusion_graph: dedicated TF broadcast thread at %.1f Hz "
+                "(lead %.3f s)",
+                tf_broadcast_rate_hz_,
+                tf_publish_lead_s_);
+  }
+
   RCLCPP_INFO(get_logger(),
               "fusion_graph_node up: datum=(%.6f, %.6f), node_period=%.3fs",
               datum_lat_,
               datum_lon_,
               gp.node_period_s);
+}
+
+FusionGraphNode::~FusionGraphNode()
+{
+  tf_thread_stop_.store(true, std::memory_order_release);
+  if (tf_thread_.joinable())
+  {
+    tf_thread_.join();
+  }
 }
 
 // ── Callbacks ─────────────────────────────────────────────────────────
@@ -762,7 +808,6 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
       // position uses the latest wheel vx with the just-updated yaw.
       // Sub-cm/sub-° accuracy per IMU sample at typical 91 Hz / 0.5 m/s.
       const double gz = msg->angular_velocity.z;
-      dr_yaw_ += gz * dt;
       // Slip veto (see header): if the wheels claim a yaw rate the
       // gyro doesn't see, the chassis is being skated, not driven —
       // its forward velocity is phantom. Drop the translation for
@@ -774,8 +819,17 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
           std::abs(gz) < dr_slip_gyro_max_rad_per_s_ &&
           std::abs(wheel_wz_) > dr_slip_wheel_min_rad_per_s_;
       const double vx_eff = dr_slip ? 0.0 : wheel_vx_;
-      dr_x_ += vx_eff * std::cos(dr_yaw_) * dt;
-      dr_y_ += vx_eff * std::sin(dr_yaw_) * dt;
+      {
+        // tf_state_mu_: dr_* is read concurrently by TfBroadcastLoop.
+        std::lock_guard<std::mutex> lock(tf_state_mu_);
+        dr_yaw_ += gz * dt;
+        dr_x_ += vx_eff * std::cos(dr_yaw_) * dt;
+        dr_y_ += vx_eff * std::sin(dr_yaw_) * dt;
+        // Cache the velocities that produced this step so the TF broadcast can
+        // honestly forward-propagate the pose by tf_publish_lead_s_.
+        dr_last_gz_ = gz;
+        dr_last_vx_eff_ = vx_eff;
+      }
       // Accumulate |Δθ| since the last accepted GPS for the wrong-fix
       // gate. A stationary pivot sweeps the GPS antenna by lever_arm
       // × Δθ in the map frame; without this term the gate sees a
@@ -1072,10 +1126,13 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
           // the moment the robot moves. SeedFromDockPose does the same after
           // a large yaw change (the RTK-override path doesn't, because it only
           // shifts xy and dr_yaw_ stays valid there).
-          dr_x_ = 0.0;
-          dr_y_ = 0.0;
-          dr_yaw_ = 0.0;
-          t_map_odom_anchor_valid_ = false;
+          {
+            std::lock_guard<std::mutex> lock(tf_state_mu_);
+            dr_x_ = 0.0;
+            dr_y_ = 0.0;
+            dr_yaw_ = 0.0;
+            t_map_odom_anchor_valid_ = false;
+          }
           ++cog_flip_recoveries_;
           cog_flip_count_ = 0;
           RCLCPP_WARN(get_logger(),
@@ -1456,10 +1513,13 @@ void FusionGraphNode::SeedFromDockPose()
   // session starts with that same lever arm amplifying graph-vs-DR
   // yaw error into map-pose jumps. Anchor is invalidated just below
   // so the next OnTimer recomputes map→odom against the zeroed dr_*.
-  dr_x_ = 0.0;
-  dr_y_ = 0.0;
-  dr_yaw_ = 0.0;
-  t_map_odom_anchor_valid_ = false;
+  {
+    std::lock_guard<std::mutex> lock(tf_state_mu_);
+    dr_x_ = 0.0;
+    dr_y_ = 0.0;
+    dr_yaw_ = 0.0;
+    t_map_odom_anchor_valid_ = false;
+  }
   // Latch the RTK-Fixed override one-shot so it doesn't fire later if
   // the robot undocks mid-session — same rationale as OnSetPose: the
   // dock-pose seed we just applied is the operator's authoritative
@@ -1670,6 +1730,7 @@ void FusionGraphNode::OnTimer()
   {
     if (!t_map_odom_anchor_valid_ || snap->node_index != last_anchored_node_index_)
     {
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
       const gtsam::Pose2 dr_at_node(dr_x_, dr_y_, dr_yaw_);
       t_map_odom_anchor_ = snap->pose.compose(dr_at_node.inverse());
       last_anchored_node_index_ = snap->node_index;
@@ -1725,28 +1786,37 @@ void FusionGraphNode::PublishLocalOdom()
   // local costmap and FTCController both rely on this TF, and they
   // can come up before any GPS fix has landed).
   const rclcpp::Time now = this->now();
-  // Same forward-stamp trick as map→odom: under sim_time, Nav2
-  // lookups can race a few ms ahead of the latest publish. Adding
-  // tf_publish_lead_s_ keeps tf2 in interpolation territory instead
-  // of ExtrapolationException. On real hardware (lead=0) this is a
-  // no-op.
+  // Forward-stamp the TF by tf_publish_lead_s_ so Nav2 controller_server
+  // lookups at clock()->now() land in tf2 interpolation territory instead of
+  // throwing ExtrapolationException (commit 8c04a2db; hardware lead is 0.05,
+  // not 0). The pose is propagated forward by the same lead via
+  // ForwardStampPose so the future stamp is an honest prediction — without
+  // that, a future-stamped current pose injects wz·lead of yaw error during
+  // pivots. (On hardware the dedicated TF thread owns this broadcast; this
+  // inline path runs only in observer mode / when the thread is disabled.)
   const rclcpp::Time stamp = now + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
 
+  double ex_x = dr_x_;
+  double ex_y = dr_y_;
+  double ex_yaw = dr_yaw_;
+  ForwardStampPose(tf_publish_lead_s_, dr_last_gz_, dr_last_vx_eff_, ex_x, ex_y, ex_yaw);
   const geometry_msgs::msg::Quaternion q_msg = QuatFromYaw(dr_yaw_);
 
   geometry_msgs::msg::TransformStamped t_odom_base;
   t_odom_base.header.stamp = stamp;
   t_odom_base.header.frame_id = odom_frame_;
   t_odom_base.child_frame_id = base_frame_;
-  t_odom_base.transform.translation.x = dr_x_;
-  t_odom_base.transform.translation.y = dr_y_;
+  t_odom_base.transform.translation.x = ex_x;
+  t_odom_base.transform.translation.y = ex_y;
   t_odom_base.transform.translation.z = 0.0;
-  t_odom_base.transform.rotation = q_msg;
+  t_odom_base.transform.rotation = QuatFromYaw(ex_yaw);
   // Only the PRIMARY localizer may own odom→base_footprint — same single-
   // publisher rule as map→odom below. In observer mode (A/B against another
   // odom source) we still publish /odometry/filtered for comparison but must
   // NOT broadcast the TF, or two nodes would fight over the same transform.
-  if (primary_mode_)
+  // When the dedicated TF thread is running it owns this broadcast (single
+  // writer, monotonic stamps) — skip the inline send.
+  if (primary_mode_ && !tf_thread_.joinable())
   {
     tf_broadcaster_->sendTransform(t_odom_base);
   }
@@ -1853,6 +1923,11 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   if (!primary_mode_)
     return;
 
+  // The dedicated TF thread owns the map→odom broadcast when running
+  // (single writer, monotonic stamps) — skip the inline send.
+  if (tf_thread_.joinable())
+    return;
+
   // The map→odom TF is the CONSTANT anchor captured at the moment of
   // the last graph node creation (see fusion_graph_node.hpp). Using
   // out.pose × inv(dr_now) instead would zero out current odom
@@ -1887,6 +1962,84 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   t_map_odom.child_frame_id = odom_frame_;
   t_map_odom.transform = tf2::toMsg(T_map_odom);
   tf_broadcaster_->sendTransform(t_map_odom);
+}
+
+void FusionGraphNode::TfBroadcastLoop()
+{
+  // See tf_broadcast_rate_hz_ in the header for the rationale. This
+  // loop owns ALL TF broadcasting in primary mode — PublishLocalOdom
+  // and PublishOutputs skip their inline sendTransform when the
+  // thread is running (tf_thread_.joinable()), so there is exactly
+  // one writer per TF leg and stamps stay monotonic.
+  const auto period = std::chrono::duration<double>(1.0 / tf_broadcast_rate_hz_);
+  while (!tf_thread_stop_.load(std::memory_order_acquire))
+  {
+    std::this_thread::sleep_for(period);
+    if (tf_thread_stop_.load(std::memory_order_acquire))
+    {
+      break;
+    }
+
+    double x;
+    double y;
+    double yaw;
+    double gz;
+    double vx_eff;
+    bool anchor_valid;
+    gtsam::Pose2 anchor;
+    {
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
+      x = dr_x_;
+      y = dr_y_;
+      yaw = dr_yaw_;
+      gz = dr_last_gz_;
+      vx_eff = dr_last_vx_eff_;
+      anchor_valid = t_map_odom_anchor_valid_;
+      anchor = t_map_odom_anchor_;
+    }
+
+    // Honest forward-stamp: advance the DR pose by the lead so the now()+lead
+    // stamp predicts the pose at that instant. The rotation happens in the
+    // odom→base leg (dr_yaw_); the map→odom anchor is time-invariant, so only
+    // odom→base is propagated. Removes the wz·lead heading error during pivots.
+    ForwardStampPose(tf_publish_lead_s_, gz, vx_eff, x, y, yaw);
+
+    const rclcpp::Time stamp = this->now() + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
+
+    std::vector<geometry_msgs::msg::TransformStamped> transforms;
+    transforms.reserve(2);
+
+    geometry_msgs::msg::TransformStamped t_odom_base;
+    t_odom_base.header.stamp = stamp;
+    t_odom_base.header.frame_id = odom_frame_;
+    t_odom_base.child_frame_id = base_frame_;
+    t_odom_base.transform.translation.x = x;
+    t_odom_base.transform.translation.y = y;
+    t_odom_base.transform.translation.z = 0.0;
+    t_odom_base.transform.rotation = QuatFromYaw(yaw);
+    transforms.push_back(t_odom_base);
+
+    // map→odom only once the graph has produced its first node — the
+    // constant anchor is the single source of truth (see the anchor
+    // comment block in the header).
+    if (anchor_valid)
+    {
+      tf2::Transform T_map_odom;
+      T_map_odom.setOrigin(tf2::Vector3(anchor.x(), anchor.y(), 0.0));
+      tf2::Quaternion q_map_odom;
+      q_map_odom.setRPY(0.0, 0.0, anchor.theta());
+      T_map_odom.setRotation(q_map_odom);
+
+      geometry_msgs::msg::TransformStamped t_map_odom;
+      t_map_odom.header.stamp = stamp;
+      t_map_odom.header.frame_id = map_frame_;
+      t_map_odom.child_frame_id = odom_frame_;
+      t_map_odom.transform = tf2::toMsg(T_map_odom);
+      transforms.push_back(t_map_odom);
+    }
+
+    tf_broadcaster_->sendTransform(transforms);
+  }
 }
 
 }  // namespace fusion_graph

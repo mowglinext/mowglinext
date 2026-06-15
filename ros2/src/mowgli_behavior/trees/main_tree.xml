@@ -163,7 +163,7 @@
           <SaveObstacles/>
           <ClearCostmap/>
           <Fallback name="CriticalNavOrStop">
-            <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+            <DockApproach dock_id="home_dock" dock_type="simple_charging_dock"/>
             <!-- Docking failed — stay stopped, battery is critical -->
             <Sequence>
               <PublishHighLevelStatus state="0" state_name="CRITICAL_BATTERY_NAV_FAILED"/>
@@ -333,7 +333,7 @@
                       <PublishHighLevelStatus state="2" state_name="RAIN_DETECTED_DOCKING"/>
                       <ClearCostmap/>
                       <Fallback name="RainNavOrStay">
-                        <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+                        <DockApproach dock_id="home_dock" dock_type="simple_charging_dock"/>
                         <AlwaysSuccess/>
                       </Fallback>
                     </Sequence>
@@ -390,7 +390,7 @@
                   <StopMoving/>
                   <PublishHighLevelStatus state="2" state_name="LOW_BATTERY_DOCKING"/>
                   <ClearCostmap/>
-                  <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+                  <DockApproach dock_id="home_dock" dock_type="simple_charging_dock"/>
                   <PublishHighLevelStatus state="1" state_name="CHARGING"/>
                   <Fallback name="ChargeOrAbort">
                     <RetryUntilSuccessful num_attempts="960">
@@ -562,7 +562,7 @@
               <PublishHighLevelStatus state="2" state_name="COVERAGE_FAILED_DOCKING"/>
               <ClearCostmap/>
               <Fallback name="FailedCoverageNavOrStop">
-                <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+                <DockApproach dock_id="home_dock" dock_type="simple_charging_dock"/>
                 <Sequence>
                   <PublishHighLevelStatus state="0" state_name="NAV_TO_DOCK_FAILED"/>
                   <AlwaysSuccess/>
@@ -605,7 +605,7 @@
               <ReactiveFallback name="MowingCompleteOrDocked">
                 <IsCharging/>
                 <Fallback name="MowingCompleteDockOrStop">
-                  <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+                  <DockApproach dock_id="home_dock" dock_type="simple_charging_dock"/>
                   <Sequence>
                     <PublishHighLevelStatus state="0" state_name="NAV_TO_DOCK_FAILED"/>
                     <AlwaysSuccess/>
@@ -652,7 +652,7 @@
                      approach isn't walled off (see MowingCompleteSequence). -->
                 <ClearCostmap/>
                 <Fallback name="HomeNavOrStop">
-                  <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+                  <DockApproach dock_id="home_dock" dock_type="simple_charging_dock"/>
                   <Sequence>
                     <PublishHighLevelStatus state="0" state_name="NAV_TO_DOCK_FAILED"/>
                     <AlwaysSuccess/>

@@ -220,3 +220,17 @@ fusion_graph_node:
     # well within FTC's heading PID correction range. Override key
     # (set by navigation.launch.py): fusion_graph_tf_lead_s.
     tf_publish_lead_s: 0.05
+
+    # ── Decoupled TF broadcast rate ──────────────────────────────────
+    # map→odom + odom→base_footprint are broadcast from a dedicated
+    # thread at this rate, immune to executor stalls (iSAM2 Tick on a
+    # large graph or the 1 Hz diagnostics GetAllPoses sweep can block
+    # the executor 150-250 ms on a loaded Pi — field 2026-06-07: Nav2
+    # threw ExtrapolationException even after its 100 ms transform
+    # timeout, RotationShim aborted ~19×/90 s and the robot twitched
+    # in place instead of following paths). 20 Hz halves the
+    # worst-case TF staleness vs the 10 Hz tick cadence and, combined
+    # with tf_publish_lead_s, keeps lookups in interpolation
+    # territory. <= 0 disables the thread (inline OnTimer publishing,
+    # pre-2026-06 behavior).
+    tf_broadcast_rate_hz: 20.0

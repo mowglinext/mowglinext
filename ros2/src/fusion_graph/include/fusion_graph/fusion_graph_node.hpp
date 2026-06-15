@@ -20,6 +20,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
@@ -50,6 +51,7 @@ class FusionGraphNode : public rclcpp::Node
 {
 public:
   explicit FusionGraphNode(const rclcpp::NodeOptions& opts = {});
+  ~FusionGraphNode() override;
 
 private:
   // ── Callbacks ──────────────────────────────────────────────────────
@@ -78,6 +80,8 @@ private:
 
   // Publish TF map->odom and /odometry/filtered_map.
   void PublishOutputs(const TickOutput& out);
+  // Dedicated-thread TF broadcast loop (see tf_broadcast_rate_hz_).
+  void TfBroadcastLoop();
   // Publishes /odometry/filtered + odom→base_footprint TF from the
   // dead-reckoning state. Called unconditionally from OnTimer so the
   // local frame keeps streaming even before the graph initializes.
@@ -134,6 +138,13 @@ private:
   double dr_x_ = 0.0;
   double dr_y_ = 0.0;
   double dr_yaw_ = 0.0;
+  // Latest DR velocities, cached under tf_state_mu_ alongside dr_*. The TF
+  // broadcast uses them to forward-propagate the pose by tf_publish_lead_s_ so
+  // the future-stamped TF is an honest constant-velocity prediction rather than
+  // the current pose mislabelled into the future (which injects ~wz·lead of yaw
+  // error during pivots). dr_last_vx_eff_ is the slip-vetoed forward velocity.
+  double dr_last_gz_ = 0.0;  // bias-corrected gyro yaw rate (rad/s)
+  double dr_last_vx_eff_ = 0.0;  // slip-adjusted forward velocity (m/s)
   double wheel_vx_ = 0.0;  // latest forward velocity cached from /wheel_odom
   double wheel_wz_ = 0.0;  // latest wheel-derived yaw rate (slip-veto cross-check)
 
@@ -191,7 +202,14 @@ private:
   // extrapolated pose.
   gtsam::Pose2 t_map_odom_anchor_{0.0, 0.0, 0.0};
   uint64_t last_anchored_node_index_ = std::numeric_limits<uint64_t>::max();
-  bool t_map_odom_anchor_valid_ = false;
+  // Atomic: flipped to false from several executor-thread sites
+  // (ForceAnchor / Initialize / clear paths) and read by the TF
+  // broadcast thread. The anchor VALUE is only ever written together
+  // with valid=true under tf_state_mu_ (OnTimer capture site), so a
+  // reader holding the mutex always sees a coherent {value, valid}
+  // pair; the lock-free false-stores can at worst suppress the
+  // map→odom broadcast for one cycle, which is the intent.
+  std::atomic<bool> t_map_odom_anchor_valid_{false};
 
   // Latched seeds for initialization.
   std::optional<gtsam::Vector2> seed_xy_;  // from latest GPS
@@ -253,6 +271,31 @@ private:
   // very slowly relative to typical lead times (~100 ms = sub-cm error
   // even at full transit speed).
   double tf_publish_lead_s_ = 0.0;
+
+  // ── Decoupled TF broadcast thread ───────────────────────────────
+  // OnTimer runs graph_->Tick() (iSAM2 update) BEFORE publishing TF.
+  // On a large graph under Pi CPU load a single Tick can take
+  // 150-250 ms, and the 1 Hz diagnostics callback (GetAllPoses on
+  // the full graph) can block the executor similarly — during those
+  // stalls neither map→odom nor odom→base_footprint gets refreshed
+  // and Nav2's controller_server throws ExtrapolationException even
+  // after waiting its 100 ms transform timeout (field 2026-06-07:
+  // RotationShim aborted ~19×/90 s, robot twitched in place instead
+  // of following the path). Same failure class as the iSAM2 rebase
+  // stall (see maintenance_timer_), which was fixed by moving the
+  // rebase off-thread.
+  //
+  // The TF legs are cheap to compute (constant map→odom anchor +
+  // integrated dr_* state), so broadcast them from a dedicated
+  // thread at tf_broadcast_rate_hz, immune to executor stalls.
+  // tf_state_mu_ guards the dr_* / anchor state shared between the
+  // executor thread (writers) and the broadcast thread (reader).
+  // Set tf_broadcast_rate_hz <= 0 to disable the thread and fall
+  // back to inline OnTimer publishing.
+  std::mutex tf_state_mu_;
+  double tf_broadcast_rate_hz_ = 20.0;
+  std::thread tf_thread_;
+  std::atomic<bool> tf_thread_stop_{false};
 
   // Subscriptions.
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_wheel_;

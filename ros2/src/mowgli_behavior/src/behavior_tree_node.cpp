@@ -421,6 +421,14 @@ private:
     blackboard_->set("dock_pose", dock_pose);
     blackboard_->set("undock_pose", undock_pose);
 
+    // Dock pose scalars (mowgli_robot.yaml single source of truth, injected by
+    // navigation.launch.py — same values hardware_bridge/map_server read).
+    // Stored on the shared BTContext so DockApproach can plan the staging pose
+    // and dock-aligned approach tail without re-parsing the dock_pose string.
+    context_->dock_x = declare_parameter<double>("dock_pose_x", 0.0);
+    context_->dock_y = declare_parameter<double>("dock_pose_y", 0.0);
+    context_->dock_yaw = declare_parameter<double>("dock_pose_yaw", 0.0);
+
     // Undock reverse speed and distance, sourced from mowgli_robot.yaml and
     // consumed by the BackUp BT instances in main_tree.xml via the
     // {undock_speed} / {undock_distance} blackboard references. Previously

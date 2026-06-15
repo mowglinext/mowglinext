@@ -51,6 +51,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -59,11 +60,11 @@
 
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
+#include "mowgli_hardware/angular_rate_controller.hpp"
 #include "mowgli_hardware/clock_fit.hpp"
 #include "mowgli_hardware/ll_datatypes.hpp"
 #include "mowgli_hardware/packet_handler.hpp"
 #include "mowgli_hardware/serial_port.hpp"
-#include "mowgli_hardware/angular_rate_controller.hpp"
 
 // High-level mode constants — must match HighLevelStatus.msg and the
 // HL_MODE_* defines in firmware/mowgli_protocol.h. Declared locally to
@@ -73,6 +74,7 @@ static constexpr uint8_t HL_MODE_IDLE = 1u;  ///< Docked or between missions
 static constexpr uint8_t HL_MODE_AUTONOMOUS = 2u;  ///< Autonomous mowing
 static constexpr uint8_t HL_MODE_RECORDING = 3u;  ///< Area recording
 static constexpr uint8_t HL_MODE_MANUAL_MOWING = 4u;  ///< Manual teleop with blade
+#include "mowgli_interfaces/msg/drive_cal_status.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
@@ -103,8 +105,16 @@ public:
     create_publishers();
     create_subscribers();
     create_services();
+    setup_drive_param_callback();
     open_serial_port();
     create_timers();
+    // Push any launch-time FF override once the link is up. A no-op (all NaN) by
+    // default; only sends when ff_*_byte was set via params/yaml.
+    if (!std::isnan(ff_coulomb_byte_) || !std::isnan(ff_viscous_byte_per_mps_) ||
+        !std::isnan(ff_breakaway_byte_))
+    {
+      send_drive_params();
+    }
     // Must run after declare_parameters — reads imu_cal_persist_path_. Runs
     // before any IMU packet arrives because the serial port callbacks are
     // dispatched by the executor from main(), not from the constructor.
@@ -156,10 +166,18 @@ private:
     angular_rate_params_.kp = declare_parameter<double>("angular_rate_kp", 0.4);
     angular_rate_params_.ki = declare_parameter<double>("angular_rate_ki", 2.0);
     angular_rate_params_.max_cmd = declare_parameter<double>("angular_rate_max_cmd", 1.5);
-    angular_rate_params_.integral_max =
-        declare_parameter<double>("angular_rate_integral_max", 1.5);
+    angular_rate_params_.integral_max = declare_parameter<double>("angular_rate_integral_max", 1.5);
     angular_rate_params_.target_lp_tau =
         declare_parameter<double>("angular_rate_target_lp_tau", 0.2);
+    // Sub-deadband linear-velocity clamp (m/s): commands with
+    // 0 < |vx| < min_lin_vel are zeroed in on_cmd_vel, because a sub-PWM-40
+    // forward command only buzzes the motor open-loop. Default 0.15. With the
+    // firmware closed-loop wheel PI active, LOWER this (e.g. 0.04) to let a
+    // controller creep below the deadband for precise docking — the PI's
+    // integral ramps PWM until the wheel breaks static friction, turning a
+    // slow command into a slow creep rather than buzz. Runtime-tunable
+    // (ros2 param set), so docking creep can be tuned without a rebuild.
+    min_lin_vel_ = declare_parameter<double>("min_lin_vel", 0.15);
 
     // Dock pose comes solely from mowgli_robot.yaml (declared as ROS
     // parameters above). Calibration and manual GUI adjustments persist
@@ -202,6 +220,18 @@ private:
     // at 91 Hz × 200 samples.
     imu_cal_periodic_recal_sec_ = declare_parameter<double>("imu_cal_periodic_recal_sec", 60.0);
 
+    // Drive friction-feedforward override (host → firmware, PACKET_ID_LL_DRIVE_PARAMS).
+    // NaN = "leave unset", so the firmware falls back to its passive estimate or
+    // the compile-time default (three-tier precedence). Set these live to sweep the
+    // feedforward during a friction-calibration session, e.g.
+    //   ros2 param set /hardware_bridge ff_coulomb_byte 30.0
+    // and watch the firmware's passive estimate on ~/drive_cal_status. All three
+    // are pushed together whenever any one changes (see drive-param callback).
+    const double kUnset = std::numeric_limits<double>::quiet_NaN();
+    ff_coulomb_byte_ = declare_parameter<double>("ff_coulomb_byte", kUnset);
+    ff_viscous_byte_per_mps_ = declare_parameter<double>("ff_viscous_byte_per_mps", kUnset);
+    ff_breakaway_byte_ = declare_parameter<double>("ff_breakaway_byte", kUnset);
+
     RCLCPP_INFO(get_logger(),
                 "Parameters: serial_port=%s baud_rate=%d heartbeat_rate=%.1f Hz "
                 "publish_rate=%.1f Hz high_level_rate=%.1f Hz",
@@ -233,6 +263,11 @@ private:
     // launch file (the GUI bridge subscribes to /wheel_ticks).
     pub_wheel_ticks_ =
         create_publisher<mowgli_interfaces::msg::WheelTick>("~/wheel_ticks", rclcpp::QoS(10));
+    // Friction-estimator status (~1 Hz from firmware) — surfaces the passive
+    // learned plant + whether host FF override is active, for calibration.
+    pub_drive_cal_status_ =
+        create_publisher<mowgli_interfaces::msg::DriveCalStatus>("~/drive_cal_status",
+                                                                 rclcpp::QoS(10));
     pub_battery_state_ =
         create_publisher<sensor_msgs::msg::BatteryState>("/battery_state", rclcpp::QoS(10));
     // Dock heading: publish dock_yaw at 1 Hz while charging so
@@ -477,6 +512,9 @@ private:
         break;
       case PACKET_ID_LL_BLADE_STATUS:
         handle_blade_status(data, len);
+        break;
+      case PACKET_ID_LL_DRIVE_CAL_STATUS:
+        handle_drive_cal_status(data, len);
         break;
       default:
         RCLCPP_DEBUG(get_logger(), "Unhandled packet type 0x%02X (len=%zu)", data[0], len);
@@ -1447,6 +1485,90 @@ private:
     blade_esc_current_ = static_cast<float>(pkt.power_watts);
   }
 
+  void handle_drive_cal_status(const uint8_t* data, std::size_t len)
+  {
+    if (len < sizeof(LlDriveCalStatus))
+    {
+      RCLCPP_WARN(get_logger(),
+                  "DriveCalStatus packet too short: %zu < %zu",
+                  len,
+                  sizeof(LlDriveCalStatus));
+      return;
+    }
+
+    LlDriveCalStatus pkt{};
+    std::memcpy(&pkt, data, sizeof(LlDriveCalStatus));
+
+    auto msg = mowgli_interfaces::msg::DriveCalStatus{};
+    msg.stamp = now();
+    msg.est_coulomb_byte = pkt.est_coulomb_byte;
+    msg.est_viscous_byte_per_mps = pkt.est_viscous_byte_per_mps;
+    msg.est_breakaway_byte = pkt.est_breakaway_byte;
+    msg.sample_count = pkt.sample_count;
+    msg.est_valid = (pkt.flags & DRIVE_CAL_FLAG_EST_VALID) != 0u;
+    msg.host_active = (pkt.flags & DRIVE_CAL_FLAG_HOST_ACTIVE) != 0u;
+    pub_drive_cal_status_->publish(msg);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Drive friction-feedforward override (host → firmware)
+  // ---------------------------------------------------------------------------
+
+  // Register the on-set-parameters callback that forwards ff_*_byte changes to
+  // the firmware. The three params are pushed together on every change so the
+  // firmware always receives a coherent (coulomb, viscous, breakaway) triple;
+  // unset fields stay NaN, preserving the firmware's three-tier precedence.
+  void setup_drive_param_callback()
+  {
+    ff_param_cb_handle_ = add_on_set_parameters_callback(
+        [this](const std::vector<rclcpp::Parameter>& params)
+        {
+          rcl_interfaces::msg::SetParametersResult result;
+          result.successful = true;
+          bool touched = false;
+          for (const auto& p : params)
+          {
+            if (p.get_name() == "ff_coulomb_byte")
+            {
+              ff_coulomb_byte_ = p.as_double();
+              touched = true;
+            }
+            else if (p.get_name() == "ff_viscous_byte_per_mps")
+            {
+              ff_viscous_byte_per_mps_ = p.as_double();
+              touched = true;
+            }
+            else if (p.get_name() == "ff_breakaway_byte")
+            {
+              ff_breakaway_byte_ = p.as_double();
+              touched = true;
+            }
+          }
+          if (touched)
+          {
+            send_drive_params();
+          }
+          return result;
+        });
+  }
+
+  void send_drive_params()
+  {
+    LlDriveParams pkt{};
+    pkt.type = PACKET_ID_LL_DRIVE_PARAMS;
+    pkt.coulomb_byte = static_cast<float>(ff_coulomb_byte_);
+    pkt.viscous_byte_per_mps = static_cast<float>(ff_viscous_byte_per_mps_);
+    pkt.breakaway_byte = static_cast<float>(ff_breakaway_byte_);
+    send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
+                    sizeof(LlDriveParams) - sizeof(uint16_t));
+    RCLCPP_INFO(
+        get_logger(),
+        "Drive FF override pushed: coulomb=%.1f viscous=%.1f breakaway=%.1f byte (NaN=unset)",
+        ff_coulomb_byte_,
+        ff_viscous_byte_per_mps_,
+        ff_breakaway_byte_);
+  }
+
   // ---------------------------------------------------------------------------
   // cmd_vel subscriber
   // ---------------------------------------------------------------------------
@@ -1507,18 +1629,20 @@ private:
     //
     // The sub-deadband |vx| → 0 guard is unchanged (linear has no clean
     // host-side rate feedback — encoders slip; leave it to Nav2's loops).
-    constexpr double kMinLinVel = 0.15;  // m/s — PWM 40 forward deadband + margin
+    // kMinLinVel is now the runtime `min_lin_vel` parameter (default 0.15) —
+    // lower it to let the firmware closed-loop wheel-PI creep sub-deadband for
+    // precise docking (see ctor). Transit is unaffected: RPP/coverage command
+    // >= 0.16 anyway, so the clamp only bites the slow dock-approach tail.
     constexpr double kMinCmdToConsider = 1.0e-3;  // ignore floating-point dust
-    if (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < kMinLinVel)
+    if (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < min_lin_vel_)
     {
       vx = 0.0;
     }
     if (angular_rate_loop_enabled_)
     {
       const rclcpp::Time now = this->now();
-      const double dt = last_cmd_vel_time_.nanoseconds() > 0
-                            ? (now - last_cmd_vel_time_).seconds()
-                            : 0.0;
+      const double dt =
+          last_cmd_vel_time_.nanoseconds() > 0 ? (now - last_cmd_vel_time_).seconds() : 0.0;
       last_cmd_vel_time_ = now;
       wz = mowgli_hardware::compute_angular_rate_cmd(
           wz, latest_gyro_z_, dt, angular_rate_params_, angular_rate_state_);
@@ -1583,6 +1707,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr pub_mag_raw_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_wheel_odom_;
   rclcpp::Publisher<mowgli_interfaces::msg::WheelTick>::SharedPtr pub_wheel_ticks_;
+  rclcpp::Publisher<mowgli_interfaces::msg::DriveCalStatus>::SharedPtr pub_drive_cal_status_;
   // Per-wheel cumulative-magnitude tick counters + last direction (for WheelTick;
   // see handle_odometry). Magnitude is monotonic-up; direction is 1=fwd/0=rev.
   uint32_t wheel_ticks_mag_left_{0};
@@ -1645,6 +1770,14 @@ private:
   // command from gyro feedback so measured ω tracks the commanded ω across
   // the firmware's nonlinear PWM curve. See angular_rate_controller.hpp.
   bool angular_rate_loop_enabled_{true};
+  double min_lin_vel_{0.15};  ///< sub-deadband |vx| clamp (m/s); see ctor + on_cmd_vel.
+  // Drive friction-feedforward override (host → firmware). NaN = unset; pushed
+  // to the STM32 on any change via the on-set-parameters callback. See
+  // setup_drive_param_callback() / send_drive_params().
+  double ff_coulomb_byte_{std::numeric_limits<double>::quiet_NaN()};
+  double ff_viscous_byte_per_mps_{std::numeric_limits<double>::quiet_NaN()};
+  double ff_breakaway_byte_{std::numeric_limits<double>::quiet_NaN()};
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr ff_param_cb_handle_;
   mowgli_hardware::AngularRateParams angular_rate_params_{};
   mowgli_hardware::AngularRateState angular_rate_state_{};
   double latest_gyro_z_{0.0};  ///< bias-corrected gyro_z, from the IMU path.

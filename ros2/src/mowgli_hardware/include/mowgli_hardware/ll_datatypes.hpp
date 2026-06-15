@@ -44,6 +44,7 @@ enum PacketId : uint8_t
   PACKET_ID_LL_IMU = 0x02,  ///< STM32 → Pi: IMU data
   PACKET_ID_LL_UI_EVENT = 0x03,  ///< STM32 → Pi: UI button event
   PACKET_ID_LL_ODOMETRY = 0x04,  ///< STM32 → Pi: wheel odometry
+  PACKET_ID_LL_DRIVE_CAL_STATUS = 0x06,  ///< STM32 → Pi: friction-estimator status
   PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ = 0x11,  ///< Bidirectional: config request
   PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP = 0x12,  ///< Bidirectional: config response
   PACKET_ID_LL_HEARTBEAT = 0x42,  ///< Pi → STM32: heartbeat
@@ -52,7 +53,15 @@ enum PacketId : uint8_t
   PACKET_ID_LL_BLADE_STATUS = 0x05,  ///< STM32 → Pi: blade motor status
   PACKET_ID_LL_CMD_BLADE = 0x51,  ///< Pi → STM32: blade motor control
   PACKET_ID_LL_REBOOT = 0x52,  ///< Pi → STM32: reboot the board (NVIC_SystemReset)
+  PACKET_ID_LL_DRIVE_PARAMS = 0x53,  ///< Pi → STM32: friction-feedforward override
 };
+
+// ---------------------------------------------------------------------------
+// Drive friction calibration flags (LlDriveCalStatus::flags)
+// ---------------------------------------------------------------------------
+
+constexpr uint8_t DRIVE_CAL_FLAG_EST_VALID = (1u << 0u);  ///< Passive estimate converged
+constexpr uint8_t DRIVE_CAL_FLAG_HOST_ACTIVE = (1u << 1u);  ///< Host params in effect
 
 /// Magic byte in LlReboot — a dedicated reboot packet plus this confirmation
 /// byte prevents a corrupt/misframed packet from accidentally rebooting the
@@ -219,6 +228,46 @@ struct LlReboot
 };
 
 /**
+ * @brief Drive friction-feedforward override sent by the Pi
+ *        (PACKET_ID_LL_DRIVE_PARAMS = 0x53).
+ *
+ * Sets the open-loop friction feedforward used by the firmware's low-speed
+ * drive controller: effort_byte = coulomb*sign(v) + viscous*v, with a
+ * ramp-to-first-tick breakaway assist climbing toward `breakaway`. Units are
+ * PAC5210 effort-byte (PWM_PER_MPS = 300 byte per m/s). Any NaN field is
+ * "unset" — the firmware falls back to its passive estimate if converged, else
+ * the compile-time default (three-tier precedence). Pure config: receiving this
+ * never actuates a motor.
+ */
+struct LlDriveParams
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_DRIVE_PARAMS
+  float coulomb_byte;  ///< Coulomb intercept [byte], NaN = unset
+  float viscous_byte_per_mps;  ///< Viscous slope [byte/(m/s)], NaN = unset
+  float breakaway_byte;  ///< Static breakaway level [byte], NaN = unset
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+
+/**
+ * @brief Friction-estimator status from the STM32
+ *        (PACKET_ID_LL_DRIVE_CAL_STATUS = 0x06).
+ *
+ * Periodic (~1 Hz) report of the firmware's passive friction estimate so the
+ * host can surface it and offer to promote it into mowgli_robot.yaml. The
+ * estimator only ever observes commanded motion — it never initiates any.
+ */
+struct LlDriveCalStatus
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_DRIVE_CAL_STATUS
+  uint8_t flags;  ///< See DRIVE_CAL_FLAG_* constants
+  float est_coulomb_byte;  ///< Learned Coulomb intercept [byte]
+  float est_viscous_byte_per_mps;  ///< Learned viscous slope [byte/(m/s)]
+  float est_breakaway_byte;  ///< Learned static breakaway level [byte]
+  uint16_t sample_count;  ///< RLS windows accumulated (saturating)
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+
+/**
  * @brief Blade motor status packet from STM32 (PACKET_ID_LL_BLADE_STATUS = 0x05).
  */
 struct LlBladeStatus
@@ -247,5 +296,7 @@ static_assert(sizeof(LlHighLevelState) == 5u, "LlHighLevelState layout mismatch"
 static_assert(sizeof(LlCmdVel) == 11u, "LlCmdVel layout mismatch");
 static_assert(sizeof(LlCmdBlade) == 5u, "LlCmdBlade layout mismatch");
 static_assert(sizeof(LlBladeStatus) == 16u, "LlBladeStatus layout mismatch");
+static_assert(sizeof(LlDriveParams) == 15u, "LlDriveParams layout mismatch");
+static_assert(sizeof(LlDriveCalStatus) == 18u, "LlDriveCalStatus layout mismatch");
 
 }  // namespace mowgli_hardware

@@ -16,11 +16,11 @@
 #ifndef MOWGLI_NAV2_PLUGINS__FTC_CONTROLLER_HPP_
 #define MOWGLI_NAV2_PLUGINS__FTC_CONTROLLER_HPP_
 
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
-#include <limits>
 #include <vector>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -140,6 +140,11 @@ private:
   double last_lat_error_{0.0};
   double last_lon_error_{0.0};
   double last_angle_error_{0.0};
+  /// Low-pass-filtered PID derivative state (used only when
+  /// config_.derivative_filter_tau > 0). Reset alongside last_*_error_.
+  double d_lat_filt_{0.0};
+  double d_lon_filt_{0.0};
+  double d_angle_filt_{0.0};
   double i_lat_error_{0.0};
   double i_lon_error_{0.0};
   double i_angle_error_{0.0};
@@ -279,6 +284,14 @@ private:
     double ki_ang_max{10.0};
     double kd_ang{0.0};
 
+    // First-order low-pass time constant (s) for the PID derivative terms
+    // (d_lat / d_lon / d_angle). The raw finite-difference derivative amplifies
+    // the jitter in the 10 Hz fused-pose feedback, which kd_lat then pumps into
+    // the angular command as a ~1.5 Hz steering limit cycle ("hunting") on
+    // transit. Filtering the derivative lets kd_lat stay high enough for tight
+    // cross-track tracking without the chatter. 0 disables (raw derivative).
+    double derivative_filter_tau{0.0};
+
     // Robot limits
     double max_cmd_vel_speed{2.0};
     double max_cmd_vel_ang{2.0};
@@ -308,9 +321,9 @@ private:
     // (the legacy behaviour). When enabled, the carrot is laterally offset
     // until the path is clear, then blended back once the obstacle is past.
     bool enable_obstacle_deviation{true};
-    double max_lateral_deviation{1.5};   // m, abort if needed offset exceeds this
-    double deviation_step{0.05};         // m, search increment
-    double deviation_blend_rate{0.5};    // m/s, slew rate for lateral_deviation_
+    double max_lateral_deviation{1.5};  // m, abort if needed offset exceeds this
+    double deviation_step{0.05};  // m, search increment
+    double deviation_blend_rate{0.5};  // m/s, slew rate for lateral_deviation_
     /// Minimum committed offset magnitude (m) once AVOIDANCE is entered.
     /// growDeviationUntilClear() only checks the path CENTERLINE sample
     /// per pose, so a tiny offset (e.g. one deviation_step) can clear the

@@ -84,6 +84,19 @@ TEST(ProtocolSizes, RebootPacketSize)
   EXPECT_EQ(sizeof(LlReboot), 4u);  // type(1) + magic(1) + crc(2)
 }
 
+TEST(ProtocolSizes, DriveParamsPacketSize)
+{
+  // type(1) + coulomb(4) + viscous(4) + breakaway(4) + crc(2)
+  EXPECT_EQ(sizeof(LlDriveParams), 15u);
+}
+
+TEST(ProtocolSizes, DriveCalStatusPacketSize)
+{
+  // type(1) + flags(1) + est_coulomb(4) + est_viscous(4) + est_breakaway(4)
+  // + sample_count(2) + crc(2)
+  EXPECT_EQ(sizeof(LlDriveCalStatus), 18u);
+}
+
 // ---------------------------------------------------------------------------
 // Packet ID consistency (ll_datatypes.hpp enum matches mowgli_protocol.h)
 // ---------------------------------------------------------------------------
@@ -94,6 +107,7 @@ TEST(ProtocolIds, PacketIdValues)
   EXPECT_EQ(PACKET_ID_LL_IMU, 0x02);
   EXPECT_EQ(PACKET_ID_LL_UI_EVENT, 0x03);
   EXPECT_EQ(PACKET_ID_LL_ODOMETRY, 0x04);
+  EXPECT_EQ(PACKET_ID_LL_DRIVE_CAL_STATUS, 0x06);
   EXPECT_EQ(PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ, 0x11);
   EXPECT_EQ(PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP, 0x12);
   EXPECT_EQ(PACKET_ID_LL_HEARTBEAT, 0x42);
@@ -101,6 +115,7 @@ TEST(ProtocolIds, PacketIdValues)
   EXPECT_EQ(PACKET_ID_LL_CMD_VEL, 0x50);
   EXPECT_EQ(PACKET_ID_LL_CMD_BLADE, 0x51);
   EXPECT_EQ(PACKET_ID_LL_REBOOT, 0x52);
+  EXPECT_EQ(PACKET_ID_LL_DRIVE_PARAMS, 0x53);
 }
 
 // ---------------------------------------------------------------------------

@@ -179,20 +179,28 @@ def generate_launch_description() -> LaunchDescription:
 
     # ------------------------------------------------------------------
     # TF forward-stamp / fusion_graph cadence — sim vs hardware.
-    # Defaults are the HARDWARE-correct values (no forward extrapolation,
-    # 25 Hz factor-graph). sim_full_system.launch.py overrides these to
-    # the sim-friendly values (0.1 s lead, 50 Hz) where the sim_time
-    # phase offset between publish and lookup forces ExtrapolationException
-    # at lower rates / no lead. On real hardware, forward-stamping the
-    # map TF by 100 ms costs 5° of yaw error per pivot at 0.5 rad/s
-    # — visible on Foxglove and pushed into FTC's heading PID.
+    # Hardware default is 0.05 s lead / 25 Hz factor-graph.
+    # sim_full_system.launch.py overrides to the sim values (0.1 s lead,
+    # 50 Hz) where the sim_time phase offset between publish and lookup
+    # is larger. The lead is REQUIRED on real hardware too (commit
+    # 8c04a2db): Nav2 controller_server requests map→base_footprint at
+    # clock()->now() at 10 Hz with no phase alignment to fusion_graph's
+    # 10 Hz TF publish, so with 0 lead the lookup regularly lands
+    # 10-50 ms ahead of the latest stamp and throws
+    # ExtrapolationException every tick — cmd_vel collapses to ~2-5 Hz
+    # of mostly-zero commands and the robot twitches/pivots in place
+    # instead of following the path. 50 ms lead costs at most
+    # 0.05 × 0.75 rad/s ≈ 1.4° of apparent yaw during pivots, well
+    # within the heading PIDs' correction range. This launch arg
+    # OVERRIDES fusion_graph.yaml's tf_publish_lead_s, so its default
+    # must stay in sync with the YAML (0.05).
     # fusion_graph_tf_lead_s is shared by map→odom AND odom→base
     # publishers inside fusion_graph_node now that ekf_odom is gone.
     # ------------------------------------------------------------------
     fusion_graph_tf_lead_arg = DeclareLaunchArgument(
         "fusion_graph_tf_lead_s",
-        default_value="0.0",
-        description="fusion_graph TF forward-stamp (seconds), applied to both map→odom and odom→base_footprint. Hardware default 0.0. Sim should set 0.1.",
+        default_value="0.05",
+        description="fusion_graph TF forward-stamp (seconds), applied to both map→odom and odom→base_footprint. Hardware default 0.05 (avoids Nav2 ExtrapolationException race). Sim should set 0.1.",
     )
     fusion_graph_node_period_arg = DeclareLaunchArgument(
         "fusion_graph_node_period_s",
@@ -274,8 +282,8 @@ def generate_launch_description() -> LaunchDescription:
     # them before — they were orphan params — so editing them looked like
     # it should do something but didn't. Load here and inject into the
     # Nav2 YAMLs (controller + docking) alongside the dock pose.
-    #   transit_speed    → FollowPath.desired_linear_vel + max_speed_xy
-    #   mowing_speed     → FollowCoveragePath.max_speed_xy
+    #   transit_speed    → FollowPath.speed_fast + max_cmd_vel_speed (FTC)
+    #   mowing_speed     → FollowCoveragePath.speed_fast (FTC)
     #   undock_speed     → behavior_tree_node param of the same name,
     #                      pushed onto the BT blackboard at startup and
     #                      read by undock-flow BackUp instances via
@@ -487,11 +495,15 @@ def generate_launch_description() -> LaunchDescription:
         # to govern and orphaning the GUI knob. See issue #192.
         scd["staging_x_offset"] = -float(dock_approach_distance)
 
-        # FollowPath (transit controller = RPP via RotationShim).
+        # FollowPath (transit controller = FTCController since
+        # feat/v2-control-cascade). FTC's cruise knob is speed_fast (NOT RPP's
+        # desired_linear_vel, which FTC ignores); max_cmd_vel_speed is the hard
+        # cap, so set both or the cap silently clamps the per-site transit_speed.
         fp = (doc.setdefault("controller_server", {})
                  .setdefault("ros__parameters", {})
                  .setdefault("FollowPath", {}))
-        fp["desired_linear_vel"] = transit_speed
+        fp["speed_fast"] = transit_speed
+        fp["max_cmd_vel_speed"] = transit_speed
 
         # FollowCoveragePath (FTC: coverage strip controller). Its speed
         # knob is speed_fast; mowing_speed overrides it.

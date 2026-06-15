@@ -95,10 +95,13 @@ controller_server:
     stopped_goal_checker:
       plugin: "nav2_controller::StoppedGoalChecker"
       trans_stopped_velocity: 0.10
-      xy_goal_tolerance: 0.30
-      # 0.10 rad to match the lidar config — see nav2_params.yaml for
-      # the "en biais" docking rationale.
-      yaw_goal_tolerance: 0.10
+      # Usually overridden at launch from mowgli_robot.yaml; static defaults
+      # must satisfy FTC FollowPath tolerances ≤ these (see nav2_params.yaml).
+      xy_goal_tolerance: 0.20
+      # 0.30 rad (was 0.25) — relaxed a bit (2026-06-10) so transit waypoints
+      # accept a looser heading; must stay ≥ FollowPath max_goal_angle_error
+      # (15° = 0.262 rad). Usually overridden at launch from mowgli_robot.yaml.
+      yaw_goal_tolerance: 0.30
 
     coverage_goal_checker:
       # PathProgressGoalChecker (mowgli plugin) — fires when the robot
@@ -115,54 +118,68 @@ controller_server:
       yaw_goal_tolerance: 0.30
       plan_topic: "/controller_server/FollowCoveragePath/global_plan"
 
-    # FollowPath (transit) — RotationShimController wrapping
-    # RegulatedPurePursuitController, matching nav2_params.yaml. RPP's
-    # carrot-based pure pursuit produces smooth, regulated transit
-    # commands that hold heading well on return-to-dock, where FTC's
-    # PRE_ROTATE state was issuing sub-deadband wz corrections the
-    # firmware couldn't execute and the robot would arrive at the
-    # staging pose with a stale yaw.
-    #
-    # use_collision_detection: false here — the local_costmap has no
-    # obstacle_layer without LiDAR so RPP's collision sim would
-    # always pass anyway, but switching it off avoids the every-tick
-    # ray-cast cost. collision_monitor (pass-through in no-LiDAR
-    # mode) keeps the safety contract on cmd_vel.
+    # FollowPath (transit) — mowgli_nav2_plugins/FTCController, matching
+    # nav2_params.yaml (feat/v2-control-cascade, 2026-06-08). See nav2_params.yaml
+    # FollowPath for the full rationale. Gains are identical to the LiDAR config;
+    # the only difference is obstacle handling: in no-LiDAR mode the local_costmap
+    # has no obstacle_layer, so check_obstacles / enable_obstacle_deviation are
+    # OFF (FTC would otherwise read an empty costmap every tick for nothing).
+    # collision_monitor (pass-through in no-LiDAR mode) keeps the cmd_vel safety
+    # contract.
     FollowPath:
-      plugin: "nav2_rotation_shim_controller::RotationShimController"
-      primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      plugin: "mowgli_nav2_plugins/FTCController"
 
-      # --- RotationShim params ---
-      angular_dist_threshold: 0.785
-      forward_sampling_distance: 0.5
-      rotate_to_heading_angular_vel: 0.75  # decisive pivot, clear of deadband — see nav2_params.yaml
-      max_angular_accel: 2.5
-      simulate_ahead_time: 1.0
-      rotate_to_goal_heading: true         # terminal pivot to match goal heading — needed for the opennav_docking NavigateToPose→staging handoff (see nav2_params.yaml)
-      closed_loop: true                    # use wheel odom feedback for pivot completion
+      speed_fast: 0.30
+      speed_fast_threshold: 1.0
+      speed_fast_threshold_angle: 20.0
+      speed_slow: 0.16                 # ≥ min_lin_vel host clamp (0.15)
+      speed_angular: 35.0              # 45→35 smoother pivot (field 2026-06-09)
+      acceleration: 0.2
 
-      # --- RegulatedPurePursuitController (primary) params ---
-      transform_tolerance: 0.3
-      desired_linear_vel: 0.30
-      min_approach_linear_velocity: 0.16   # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
-      approach_velocity_scaling_dist: 0.6
-      use_velocity_scaled_lookahead_dist: true
-      lookahead_time: 1.5
-      min_lookahead_dist: 0.30
-      max_lookahead_dist: 0.90
-      use_regulated_linear_velocity_scaling: true
-      regulated_linear_scaling_min_radius: 0.9
-      regulated_linear_scaling_min_speed: 0.20
-      use_cost_regulated_linear_velocity_scaling: false
-      use_collision_detection: false       # no obstacle_layer without LiDAR
-      max_allowed_time_to_collision_up_to_carrot: 1.0
-      use_rotate_to_heading: true
-      rotate_to_heading_min_angle: 0.785
-      rotate_to_heading_angular_vel: 0.75
-      max_angular_accel: 2.5
-      allow_reversing: false
-      max_robot_pose_search_dist: 10.0
-      use_interpolation: true
+      # Field-tuned 2026-06-09 (this is the ACTIVE config — robot runs no-LiDAR).
+      # See nav2_params.yaml FollowPath for the rationale on each value.
+      kp_lon: 1.0
+      ki_lon: 0.0
+      kd_lon: 0.0
+      kp_lat: 1.2
+      ki_lat: 0.0
+      kd_lat: 1.5
+      kp_ang: 1.5
+      ki_ang: 0.0
+      ki_ang_max: 62.0
+      kd_ang: 0.1
+      # Low-pass the PID derivative to kill the ~1.5 Hz transit "hunting" the
+      # raw derivative + kd_lat=1.5 produced on noisy 10 Hz pose feedback.
+      # See nav2_params.yaml for the A/B rationale. This no-lidar config is the
+      # one actually loaded when lidar_enabled:false (the real robot), so the
+      # param MUST live here too. fc ≈ 0.8 Hz at 0.2 s. Validate on Smac paths.
+      derivative_filter_tau: 0.2
+
+      max_cmd_vel_speed: 0.30
+      max_cmd_vel_ang: 1.0
+      max_follow_distance: 1.5         # DOMINANT anti-weave lever (1.0→1.5 halved cross-track)
+      # false: Dubins transit paths have no reverse segments anyway (so this is a
+      # no-op for transit), but the dock approach uses the GridBasedRS (R-S)
+      # planner which MAY reverse to set up the staging approach — FTC must honor
+      # that, so this stays false. (Was briefly true with the blanket-Dubins
+      # experiment, which broke docking.)
+      forward_only: false
+
+      # MUST stay ≤ the stopped_goal_checker (xy 0.20, yaw 0.30 rad)
+      # — see nav2_params.yaml FollowPath. 15° (was 12°) relaxes waypoint-yaw a
+      # bit so FTC stops POST_ROTATE-fighting the heading at transit goals.
+      max_goal_distance_error: 0.10
+      max_goal_angle_error: 15.0
+      goal_timeout: 20.0
+
+      # No obstacle_layer without LiDAR — disable obstacle handling entirely.
+      check_obstacles: false
+      enable_obstacle_deviation: false
+
+      oscillation_recovery: true
+      oscillation_v_eps: 0.05
+      oscillation_omega_eps: 0.05
+      oscillation_recovery_min_duration: 5.0
 
     # Follow-the-Carrot controller for coverage mowing.
     FollowCoveragePath:
@@ -206,24 +223,89 @@ planner_server:
     # (1.0s) races with the slow costmap update rate when no LiDAR is
     # driving obstacle layer ticks, causing repeated planning failures.
     costmap_update_timeout: 5.0
-    planner_plugins: ["GridBased"]
+    # Two Hybrid-A* planners: GridBased (DUBIN, forward-only) for transit and
+    # coverage-start — no reverse cusp at goals. GridBasedRS (REEDS_SHEPP) for
+    # the dock approach only (DockApproach requests it by id): forward-only
+    # Dubins cannot set up the dock-staging approach next to the obstacle by the
+    # dock (it needs a reverse), so docking keeps R-S while transit stays cusp-free.
+    planner_plugins: ["GridBased", "GridBasedRS"]
 
     GridBased:
-      plugin: "nav2_smac_planner::SmacPlanner2D"
-      tolerance: 0.50
+      # Hybrid-A* (x, y, θ) kinematic planner — see nav2_params.yaml for the
+      # full rationale. Produces forward-feasible arcs so the robot never needs
+      # the in-place fine-pivot the motor static-friction deadband can't do.
+      # Must stay in sync with nav2_params.yaml's GridBased (this no-lidar
+      # variant is what the robot actually loads when LIDAR_ENABLED=false).
+      plugin: "nav2_smac_planner::SmacPlannerHybrid"
+      tolerance: 0.25                       # m — goal xy search tolerance
       downsample_costmap: false
-      downsampling_factor: 2     # match nav2_params.yaml
-      allow_unknown: false
-      max_iterations: 100000     # match nav2_params.yaml (1M was an old experiment)
+      downsampling_factor: 1
+      allow_unknown: true
+      max_iterations: 1000000
       max_on_approach_iterations: 1000
-      max_planning_time: 3.5
-      cost_travel_multiplier: 2.0
-      use_final_approach_orientation: false
+      max_planning_time: 3.5                # ARM budget (matches old 2D planner)
+      # DUBIN (forward-only arcs): no reverse cusp at goals. REEDS_SHEPP used to
+      # insert a "short reverse leg toward the outside of the final turn" to hit
+      # the goal yaw (field 2026-06-10), which left the robot off-pose and tripped
+      # FollowPath aborts. Dubins is forward-only like v2. Dock approach uses the
+      # separate GridBasedRS (R-S) planner below — see planner_plugins note.
+      motion_model_for_search: "DUBIN"
+      angle_quantization_bins: 72
+      analytic_expansion_ratio: 3.5
+      analytic_expansion_max_length: 3.0
+      # ≥ half the REAL robot width (0.424 m → 0.212 m). 0.20 used the wrong
+      # 0.40 m width; 0.22 complies with the measured geometry.
+      minimum_turning_radius: 0.22
+      reverse_penalty: 2.0                  # unused for DUBIN; kept for parity
+      change_penalty: 0.0
+      non_straight_penalty: 1.2
+      cost_penalty: 2.0
+      retrospective_penalty: 0.015
+      lookup_table_size: 20.0
+      cache_obstacle_heuristic: false
+      smooth_path: true
       smoother:
         max_iterations: 1000
         w_smooth: 0.3
         w_data: 0.2
         tolerance: 1.0e-10
+        do_refinement: true
+        refinement_num: 2
+
+    GridBasedRS:
+      # Reeds-Shepp twin of GridBased, used ONLY by the dock approach
+      # (DockApproach requests planner_id "GridBasedRS"). R-S may reverse to set
+      # up the dock-staging approach in the tight, obstacle-adjacent dock area —
+      # which forward-only Dubins cannot plan ("no valid path", field 2026-06-10).
+      # Identical to GridBased except motion_model = REEDS_SHEPP. Keep in sync.
+      plugin: "nav2_smac_planner::SmacPlannerHybrid"
+      tolerance: 0.25
+      downsample_costmap: false
+      downsampling_factor: 1
+      allow_unknown: true
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 3.5
+      motion_model_for_search: "REEDS_SHEPP"
+      angle_quantization_bins: 72
+      analytic_expansion_ratio: 3.5
+      analytic_expansion_max_length: 3.0
+      minimum_turning_radius: 0.22
+      reverse_penalty: 2.0                  # allow reverse to set up the dock approach
+      change_penalty: 0.0
+      non_straight_penalty: 1.2
+      cost_penalty: 2.0
+      retrospective_penalty: 0.015
+      lookup_table_size: 20.0
+      cache_obstacle_heuristic: false
+      smooth_path: true
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        w_data: 0.2
+        tolerance: 1.0e-10
+        do_refinement: true
+        refinement_num: 2
 
 # ---------------------------------------------------------------------------
 # Smoother server
@@ -340,12 +422,14 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        # cost_scaling_factor 10 + inflation_radius 0.20: 0.40 m inflation
-        # made footprint corners land inside the inflated zone whenever
-        # the robot was within ~0.44 m of the polygon edge → "Start
-        # occupied" planner failures. See nav2_params.yaml.
-        cost_scaling_factor: 10.0
-        inflation_radius: 0.20
+        # Matches nav2_params.yaml global costmap: inflation_radius >=
+        # circumscribed (~0.598 m) so SmacPlannerHybrid keeps its costmap
+        # fast-path collision check; cost_scaling_factor 12 keeps the wider
+        # soft band cheap (<1 at the edge). Lethal inscribed band (~0.149 m)
+        # is unchanged, so transit corridors keep their width. See the long
+        # rationale in nav2_params.yaml's inflation_layer.
+        cost_scaling_factor: 12.0
+        inflation_radius: 0.62
 
       keepout_filter:
         plugin: "nav2_costmap_2d::KeepoutFilter"
@@ -359,11 +443,35 @@ local_costmap:
   local_costmap:
     ros__parameters:
       use_sim_time: false
-      # 10 Hz to match the lidar config so update_frequency stays above
-      # controller_frequency (10 Hz) and the costmap is always fresh when
-      # the controller ticks.
-      update_frequency: 10.0
-      publish_frequency: 2.0
+      # Refresh rate is GATED ON OBSTACLE-SOURCE PRESENCE. This is the
+      # "no obstacle sensor" variant: the plugins below are static_layer +
+      # inflation_layer only (the obstacle_layer variant lives in
+      # nav2_params.yaml, selected by use_lidar). The static_layer here
+      # subscribes to a latched EMPTY grid (/no_lidar_static_map), and with
+      # no LiDAR / depth-camera / range-sensor there is no marking source —
+      # so the costmap content is a uniform all-free grid: nothing to mark,
+      # nothing to inflate. Its content is effectively computed once and
+      # never changes.
+      #
+      # The ONE thing that still needs periodic work is the rolling window:
+      # this is a rolling_window costmap in the odom frame, so it must
+      # re-center on base_footprint as the robot drives, or the controller's
+      # lookahead leaves the window. That — plus keeping isCurrent() true for
+      # controller_server (transform_tolerance 0.5 s) — is the only reason to
+      # update at all. It does NOT need a sensor-rate refresh. At 10 Hz we
+      # were re-cycling the 240×240 grid for zero information gain (~half a
+      # core in controller_server while parked). 2 Hz slides the window well
+      # within the controller's ~2 m lookahead at mowing speed (0.5 m/s →
+      # 0.25 m drift between updates) and keeps the costmap current.
+      #
+      # When an obstacle source IS present, the obstacle_layer variant
+      # (nav2_params.yaml) restores 10 Hz so real-time returns are ingested
+      # without lag. A true "compute once" is not possible here only because
+      # of the rolling window — the content itself already is one-shot.
+      # NOTE: behaviour-affecting — field-validate that controller_server
+      # does not regress to error 107 ("Costmap timed out") before trusting.
+      update_frequency: 2.0
+      publish_frequency: 1.0
       global_frame: odom
       robot_base_frame: base_footprint
       transform_tolerance: 0.5
@@ -453,9 +561,9 @@ docking_server:
     # Match nav2_params.yaml — upstream defaults except v_linear_min
     # (stays at 0.16 for the host clamp at 0.15).
     controller.v_linear_min: 0.16
-    controller.v_linear_max: 0.25
+    controller.v_linear_max: 0.20    # lowered 0.25->0.20: gentler dock approach, less deadband-coast overshoot
     controller.v_angular_max: 0.75
-    controller.slowdown_radius: 0.25
+    controller.slowdown_radius: 0.45  # raised 0.25->0.45: brake earlier so it reaches the 0.16 floor sooner -> less terminal momentum
     # Graceful smooth-control-law gains — upstream documented defaults
     # (match nav2_params.yaml; the "15 cm" seat was a mis-pinned dock, not
     # a controller issue — stock gains converge within ~1 cm).

@@ -41,3 +41,14 @@ jobs:
       - name: Build firmware (${{ matrix.environment }})
         run: pio run -e ${{ matrix.environment }}
         working-directory: firmware/stm32/ros_usbnode
+
+      # Upload the built binary so a branch's firmware can be downloaded and
+      # flashed (e.g. via the Pi's openocd/ST-Link) without a local toolchain.
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.environment }}
+          path: |
+            firmware/stm32/ros_usbnode/.pio/build/${{ matrix.environment }}/firmware.bin
+            firmware/stm32/ros_usbnode/.pio/build/${{ matrix.environment }}/firmware.elf
+          if-no-files-found: warn

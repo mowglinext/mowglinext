@@ -106,8 +106,15 @@ static int16_t right_pwm_signed = 0;
  * stored pre-multiplied by Ki for trivial anti-windup.
  *
  * Set USE_WHEEL_PI to 0 to fall back to open-loop forwarding for
- * debugging / hardware bring-up. */
-#define USE_WHEEL_PI         1
+ * debugging / hardware bring-up.
+ *
+ * 2026-06-08 TEST (feat/firmware-open-loop): set to 0 = open-loop, replicating
+ * Mowgli v2's drive path (PWM = target * PWM_PER_MPS straight to the PAC5210,
+ * no per-wheel PI trim). v2 rotated smoothly and docked reliably; the closed
+ * loop's integral kick + 3.3 mm/tick encoder quantization make low-speed
+ * motion bang-bang, which breaks fine docking alignment. A/B comparison —
+ * revert to 1 if open-loop regresses anything. */
+#define USE_WHEEL_PI         0
 #define WHEEL_PI_KP_PWM_PER_MPS    30.0f   /* proportional gain */
 #define WHEEL_PI_KI_PWM_PER_MPS_S 5000.0f /* integral gain (50 PWM in ~0.2 s when err=0.05 m/s) */
 #define WHEEL_PI_INT_MAX_PWM     100.0f   /* anti-windup clamp on the integral term */

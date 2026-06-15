@@ -9,6 +9,7 @@
 # was 0.5 m, which made every <0.5 m strip "already done" the moment
 # FTC started.
 """Regression tests for the nav2_params.yaml goal-checker tolerances."""
+import math
 import os
 import re
 
@@ -84,17 +85,29 @@ def test_stopped_goal_checker_velocity_threshold_is_set() -> None:
     assert cfg["stopped_goal_checker"]["trans_stopped_velocity"] > 0.0
 
 
-def test_followpath_uses_rotation_shim() -> None:
-    """The transit/dock controller wraps RPP in RotationShimController so
-    big heading errors get an in-place rotate before driving. If this
-    pin slips, RPP starts driving an arc immediately and the robot
-    spirals away from its first carrot.
+def test_followpath_uses_ftc() -> None:
+    """The transit/dock controller is FTCController (feat/v2-control-cascade,
+    2026-06-08), mirroring the ROS1 "v2" stack which used Follow-The-Carrot
+    for transit AND docking. RotationShim+RPP was removed because RPP could
+    not fine-pivot on this robot's deadband-limited motors and left a
+    yaw-alignment gap at the dock staging pose. FTC's PRE_ROTATE/POST_ROTATE
+    align heading in place. Pin it so a revert is a conscious decision.
     """
     cfg = _controller_section(_load_params())
-    assert (
-        cfg["FollowPath"]["plugin"]
-        == "nav2_rotation_shim_controller::RotationShimController"
-    )
+    assert cfg["FollowPath"]["plugin"] == "mowgli_nav2_plugins/FTCController"
+
+
+def test_followpath_goal_tolerance_tighter_than_checker() -> None:
+    """FTC's internal goal acceptance MUST be tighter than the
+    stopped_goal_checker bound to FollowPath, or FTC stops at its own
+    tolerance while the external checker keeps waiting and the action hangs.
+    """
+    cfg = _controller_section(_load_params())
+    fp = cfg["FollowPath"]
+    checker = cfg["stopped_goal_checker"]
+    # max_goal_angle_error is in DEGREES; yaw_goal_tolerance in RADIANS.
+    assert math.radians(fp["max_goal_angle_error"]) <= checker["yaw_goal_tolerance"]
+    assert fp["max_goal_distance_error"] <= checker["xy_goal_tolerance"]
 
 
 def test_followcoveragepath_uses_ftc() -> None:
