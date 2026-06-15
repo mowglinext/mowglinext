@@ -27,6 +27,7 @@ set(msg_files
   "msg/MapArea.msg"
   "msg/ObstacleArray.msg"
   "msg/TrackedObstacle.msg"
+  "msg/DriveCalStatus.msg"
 )
 
 # Declare service files
