@@ -506,6 +506,7 @@ func buildImportSummary(omMap openMowerMap, shiftE, shiftN float64) ImportOpenMo
 			summary.Warnings = append(summary.Warnings, fmt.Sprintf("area %q (id=%s) is inactive — skipped", a.Properties.Name, shortID(a.ID)))
 			continue
 		}
+		a.Outline = dedupOutline(a.Outline)
 		switch strings.ToLower(a.Properties.Type) {
 		case "mow", "nav":
 			if !validateOutline(a, &summary) {
@@ -636,6 +637,7 @@ func buildMowgliNextPayload(omMap openMowerMap, shiftE, shiftN float64) (*mowgli
 		if a.Properties.Active != nil && !*a.Properties.Active {
 			continue
 		}
+		a.Outline = dedupOutline(a.Outline)
 		switch strings.ToLower(a.Properties.Type) {
 		case "mow", "nav":
 			if len(a.Outline) >= 3 {
@@ -762,6 +764,36 @@ func logImportPreview(summary ImportOpenMowerSummary, replaceReq *mowgli.Replace
 // ---------------------------------------------------------------------------
 // Geometry helpers
 // ---------------------------------------------------------------------------
+
+// dedupOutline removes consecutive duplicate vertices and a wrap-around
+// closing duplicate (rings are stored open). OpenMower exports routinely
+// start a ring with a doubled vertex (points[0] == points[1]) and/or
+// close it with a repeat of the first point. Both create zero-length
+// edges that make the polygon non-simple. boost::geometry (under the F2C
+// v3 coverage pipeline and map_server's grid_map polygon stamping)
+// rejects a zero-length segment, so an affected area imports into the
+// preview but is silently dropped by map_server — which is why areas
+// whose *first* edge is degenerate fail to import. Normalising here keeps
+// the rest of the pipeline (validation, centroid matching, the written
+// payload) working on clean geometry.
+func dedupOutline(in []openMowerPoint) []openMowerPoint {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]openMowerPoint, 0, len(in))
+	for _, p := range in {
+		if n := len(out); n > 0 && p == out[n-1] {
+			continue
+		}
+		out = append(out, p)
+	}
+	// Drop wrap-around closing duplicate(s) so the final edge back to the
+	// first vertex isn't zero-length.
+	for len(out) > 1 && out[0] == out[len(out)-1] {
+		out = out[:len(out)-1]
+	}
+	return out
+}
 
 // outlineToPoint32s materialises an OpenMower outline as the geometry
 // _msgs/Polygon.Points list expected by mowgli.MapArea.

@@ -21,6 +21,7 @@ namespace
 
 using mowgli_coverage::BoustrophedonPlan;
 using mowgli_coverage::buildContinuousPath;
+using mowgli_coverage::dedupClosedRing;
 using mowgli_coverage::distanceToRing;
 using mowgli_coverage::planBoustrophedon;
 using mowgli_coverage::pointInRing;
@@ -572,4 +573,82 @@ TEST(CoverageContinuousPath, RecordedArea1NoCuspInBounds)
   EXPECT_LT(path.size(), 200000u) << "path is implausibly large";
   EXPECT_NEAR(path.front().first, plan.rings.front().front().first, 1e-9);
   EXPECT_NEAR(path.front().second, plan.rings.front().front().second, 1e-9);
+}
+
+// ===========================================================================
+// RING DEDUP: a doubled leading vertex (points[0] == points[1]) is the common
+// OpenMower-export / hand-drawn-GUI-polygon defect. The zero-length edge makes
+// the ring non-simple, and boost::geometry (under F2C) rejects it, silently
+// dropping that area from coverage — which is exactly why the last working
+// areas of an imported map failed to plan. dedupClosedRing is the server's
+// last gate before a polygon becomes an f2c::types::Cell.
+// ===========================================================================
+
+// Count edges (i, i+1) of `ring` whose endpoints coincide. A clean closed F2C
+// ring [A,B,C,A] has none (the only coincident pair, ring[0]==ring[n-1], is
+// not consecutive).
+std::size_t zeroLengthEdges(const f2c::types::LinearRing& ring)
+{
+  std::size_t z = 0;
+  for (std::size_t i = 0; i + 1 < ring.size(); ++i)
+  {
+    const auto a = ring.getGeometry(i);
+    const auto b = ring.getGeometry(i + 1);
+    if (std::fabs(a.getX() - b.getX()) < 1e-9 && std::fabs(a.getY() - b.getY()) < 1e-9)
+    {
+      ++z;
+    }
+  }
+  return z;
+}
+
+TEST(RingDedup, DropsDoubledLeadingVertex)
+{
+  f2c::types::LinearRing in;
+  in.addPoint(f2c::types::Point(0.0, 0.0));
+  in.addPoint(f2c::types::Point(0.0, 0.0));  // the defect: doubled leading vertex
+  in.addPoint(f2c::types::Point(4.0, 0.0));
+  in.addPoint(f2c::types::Point(4.0, 3.0));
+  in.addPoint(f2c::types::Point(0.0, 3.0));
+
+  const auto out = dedupClosedRing(in);
+
+  EXPECT_EQ(zeroLengthEdges(out), 0u) << "doubled leading vertex left a zero-length edge";
+  // 4 distinct corners + explicit closing vertex.
+  EXPECT_EQ(out.size(), 5u);
+  EXPECT_NEAR(out.getGeometry(0).getX(), out.getGeometry(out.size() - 1).getX(), 1e-9);
+  EXPECT_NEAR(out.getGeometry(0).getY(), out.getGeometry(out.size() - 1).getY(), 1e-9);
+}
+
+TEST(RingDedup, AlreadyCleanRingIsUnchanged)
+{
+  f2c::types::LinearRing in;
+  in.addPoint(f2c::types::Point(0.0, 0.0));
+  in.addPoint(f2c::types::Point(4.0, 0.0));
+  in.addPoint(f2c::types::Point(4.0, 3.0));
+  in.addPoint(f2c::types::Point(0.0, 3.0));
+  in.addPoint(f2c::types::Point(0.0, 0.0));  // already closed
+
+  const auto out = dedupClosedRing(in);
+
+  EXPECT_EQ(zeroLengthEdges(out), 0u);
+  EXPECT_EQ(out.size(), in.size()) << "a clean closed ring must be left intact";
+}
+
+// End-to-end: a square whose outer ring carries the doubled leading vertex must
+// still produce a non-empty coverage plan once normalised — the regression that
+// the importer + this server gate jointly fix.
+TEST(RingDedup, DedupedDegenerateRingStillPlans)
+{
+  f2c::types::LinearRing in;
+  in.addPoint(f2c::types::Point(0.0, 0.0));
+  in.addPoint(f2c::types::Point(0.0, 0.0));  // the defect
+  in.addPoint(f2c::types::Point(3.0, 0.0));
+  in.addPoint(f2c::types::Point(3.0, 3.0));
+  in.addPoint(f2c::types::Point(0.0, 3.0));
+  f2c::types::Cell cell(dedupClosedRing(in));
+
+  const auto plan = planDefault(cell);
+  EXPECT_FALSE(plan.rings.empty() && plan.swaths.empty())
+      << "deduped degenerate ring produced an empty plan";
 }

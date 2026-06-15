@@ -123,13 +123,11 @@ f2c::types::Cell buildCellFromGoal(const mowgli_interfaces::action::PlanCoverage
     {
       ring.addPoint(f2c::types::Point(p.x, p.y));
     }
-    const auto& first = poly.points.front();
-    const auto& last = poly.points.back();
-    if (first.x != last.x || first.y != last.y)
-    {
-      ring.addPoint(f2c::types::Point(first.x, first.y));
-    }
-    return ring;
+    // dedupClosedRing drops consecutive-duplicate vertices (a doubled leading
+    // vertex is the common case from OpenMower exports / GUI polygons) and
+    // closes the ring. A zero-length edge makes the ring non-simple and
+    // boost::geometry (under F2C) rejects it, silently dropping the area.
+    return dedupClosedRing(ring);
   };
 
   f2c::types::Cell cell(make_ring(goal.outer_boundary));

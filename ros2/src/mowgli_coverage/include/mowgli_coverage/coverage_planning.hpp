@@ -122,6 +122,16 @@ bool pointInRing(double x, double y, const std::vector<std::pair<double, double>
 // distance, not vertex distance).
 double distanceToRing(double x, double y, const std::vector<std::pair<double, double>>& ring);
 
+// Drop consecutive-duplicate vertices from an F2C ring and return it closed
+// (first == last). A zero-length edge — e.g. a doubled leading vertex
+// (points[0] == points[1]), as OpenMower exports and hand-drawn GUI polygons
+// routinely carry — makes the ring non-simple, and boost::geometry (under F2C)
+// rejects it, silently dropping that area from coverage planning. This is the
+// last gate before a polygon becomes an f2c::types::Cell, so map areas reaching
+// the server from any source (importer, saved areas file, GUI editor) are
+// normalised here. Pure function (no ROS deps) — unit-testable.
+f2c::types::LinearRing dedupClosedRing(const f2c::types::LinearRing& in);
+
 }  // namespace mowgli_coverage
 
 #endif  // MOWGLI_COVERAGE__COVERAGE_PLANNING_HPP_

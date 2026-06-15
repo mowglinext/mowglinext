@@ -797,4 +797,38 @@ double distanceToRing(double x, double y, const std::vector<std::pair<double, do
   return best;
 }
 
+f2c::types::LinearRing dedupClosedRing(const f2c::types::LinearRing& in)
+{
+  f2c::types::LinearRing out;
+  bool have_prev = false;
+  double px = 0.0, py = 0.0;
+  for (std::size_t i = 0; i < in.size(); ++i)
+  {
+    const auto p = in.getGeometry(i);
+    const double x = p.getX();
+    const double y = p.getY();
+    if (have_prev && std::fabs(x - px) < 1e-9 && std::fabs(y - py) < 1e-9)
+    {
+      continue;  // zero-length edge — boost/F2C would reject the ring
+    }
+    out.addPoint(f2c::types::Point(x, y));
+    px = x;
+    py = y;
+    have_prev = true;
+  }
+  // Close the ring (F2C wants first == last). The closing seam is the ring's
+  // standard representation, not a degenerate interior edge.
+  if (out.size() >= 2)
+  {
+    const auto first = out.getGeometry(0);
+    const auto last = out.getGeometry(out.size() - 1);
+    if (std::fabs(first.getX() - last.getX()) > 1e-9 ||
+        std::fabs(first.getY() - last.getY()) > 1e-9)
+    {
+      out.addPoint(f2c::types::Point(first.getX(), first.getY()));
+    }
+  }
+  return out;
+}
+
 }  // namespace mowgli_coverage
