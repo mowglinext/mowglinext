@@ -5,6 +5,7 @@ import {
     CloudOutlined,
     CodeOutlined,
     CompassOutlined,
+    DashboardOutlined,
     HomeOutlined,
     NodeIndexOutlined,
     SafetyOutlined,
@@ -20,6 +21,7 @@ import { SettingsSection, SectionMeta } from "../../hooks/useSettingsManager.ts"
 
 const SECTION_ICONS: Record<string, React.ReactNode> = {
     tool: <ToolOutlined />,
+    dashboard: <DashboardOutlined />,
     global: <GlobalOutlined />,
     wifi: <WifiOutlined />,
     aim: <AimOutlined />,
