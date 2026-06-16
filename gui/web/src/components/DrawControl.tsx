@@ -24,7 +24,12 @@ type DrawControlProps = ConstructorParameters<typeof MapboxDraw>[0] & {
 export default function DrawControl(props: DrawControlProps) {
     const {
         drawRef, features, editMode, position,
-        onCreate, onUpdate, onCombine, onDelete, onSelectionChange, onOpenDetails,
+        onCreate = () => {},
+        onUpdate = () => {},
+        onCombine = () => {},
+        onDelete = () => {},
+        onSelectionChange = () => {},
+        onOpenDetails = () => {},
         ...drawOptions
     } = props;
     const rawMapRef = useRef<ReturnType<MapRef['getMap']> | null>(null);
@@ -134,12 +139,3 @@ export default function DrawControl(props: DrawControlProps) {
     }, [mp]);
     return null;
 }
-
-DrawControl.defaultProps = {
-    onCreate: () => {},
-    onUpdate: () => {},
-    onDelete: () => {},
-    onCombine: () => {},
-    onSelectionChange: () => {},
-    onOpenDetails: () => {},
-};

@@ -14,16 +14,22 @@ import {PoweroffOutlined, ReloadOutlined, DesktopOutlined, WifiOutlined, AlertOu
 import {stateRenderer} from "./utils.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useApi} from "../hooks/useApi.ts";
+import {limeAlpha} from "../theme/colors.ts";
+import {SettingOutlined} from "@ant-design/icons";
 import type {MenuProps} from "antd";
 
-const pulseKeyframes = `
+// Builds the badge pulse keyframes from brand tokens. Green pulse derives
+// from the lime hero accent; red pulse derives from colors.danger (rose).
+// colors.danger is a hex string ("#FF6B7A"); append an 8-bit alpha suffix
+// to get the translucent stops without hardcoding the rose RGB here.
+const buildPulseKeyframes = (dangerHex: string) => `
 @keyframes mowerPulseGreen {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(82, 196, 26, 0.6); }
-    50% { box-shadow: 0 0 0 4px rgba(82, 196, 26, 0); }
+    0%, 100% { box-shadow: 0 0 0 0 ${limeAlpha(0.6)}; }
+    50% { box-shadow: 0 0 0 4px ${limeAlpha(0)}; }
 }
 @keyframes mowerPulseRed {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.6); }
-    50% { box-shadow: 0 0 0 4px rgba(255, 77, 79, 0); }
+    0%, 100% { box-shadow: 0 0 0 0 ${dangerHex}99; }
+    50% { box-shadow: 0 0 0 4px ${dangerHex}00; }
 }
 `;
 
@@ -50,6 +56,7 @@ const statusColor = (state: string | undefined, colors: {primary: string; warnin
 
 export const MowerStatus = () => {
     const {colors} = useThemeMode();
+    const pulseKeyframes = buildPulseKeyframes(colors.danger);
     const {highLevelStatus} = useHighLevelStatus();
     const hwStatus = useStatus();
     const emergencyData = useEmergency();
@@ -120,18 +127,18 @@ export const MowerStatus = () => {
     const rebootSystem = async () => {
         try {
             await guiApi.request({path: "/system/reboot", method: "POST"});
-            notification.success({message: "Rebooting..."});
+            notification.success({message: "Redémarrage…"});
         } catch (e: any) {
-            notification.error({message: "Failed to reboot", description: e.message});
+            notification.error({message: "Échec du redémarrage", description: e.message});
         }
     };
 
     const shutdownSystem = async () => {
         try {
             await guiApi.request({path: "/system/shutdown", method: "POST"});
-            notification.success({message: "Shutting down..."});
+            notification.success({message: "Extinction…"});
         } catch (e: any) {
-            notification.error({message: "Failed to shutdown", description: e.message});
+            notification.error({message: "Échec de l'extinction", description: e.message});
         }
     };
 
@@ -139,43 +146,53 @@ export const MowerStatus = () => {
         Modal.confirm({
             title,
             content,
-            okText: "Confirm",
+            okText: "Confirmer",
             okType: "danger",
-            cancelText: "Cancel",
+            cancelText: "Annuler",
             onOk,
         });
     };
 
+    // Beginner-safe items at the top; destructive system/hardware actions
+    // (board reset, Pi reboot, shutdown) are tucked into an "Avancé"
+    // submenu so they're not hit by accident. Command logic unchanged.
     const powerMenuItems: MenuProps["items"] = [
         {
             key: "restart-mowgli",
             icon: <ReloadOutlined/>,
-            label: mowgliRestart.pending ? mowgliRestart.pendingLabel : "Restart Mowgli",
+            label: mowgliRestart.pending ? mowgliRestart.pendingLabel : "Redémarrer Mowgli",
             disabled: mowgliRestart.pending,
-            onClick: () => confirmAction("Restart Mowgli", "This will restart the MowgliNext container.", restartMowgli),
-        },
-        {
-            key: "reboot-board",
-            icon: <ReloadOutlined/>,
-            label: "Reboot Board (STM32)",
-            onClick: () => confirmAction(
-                "Reboot Board (STM32)",
-                "Resets the STM32 firmware (NVIC_SystemReset). Use to recover a wedged board — e.g. the IMU reporting NaN. Motors/blade stop during the ~1 s reset.",
-                rebootBoardAction),
+            onClick: () => confirmAction("Redémarrer Mowgli", "Cela va redémarrer le conteneur MowgliNext.", restartMowgli),
         },
         {type: "divider"},
         {
-            key: "reboot",
-            icon: <DesktopOutlined/>,
-            label: "Reboot Raspberry Pi",
-            onClick: () => confirmAction("Reboot Raspberry Pi", "The system will reboot. You will lose connection temporarily.", rebootSystem),
-        },
-        {
-            key: "shutdown",
-            icon: <PoweroffOutlined/>,
-            label: "Shutdown Raspberry Pi",
-            danger: true,
-            onClick: () => confirmAction("Shutdown Raspberry Pi", "The system will shut down. You will need physical access to turn it back on.", shutdownSystem),
+            key: "advanced",
+            icon: <SettingOutlined/>,
+            label: "Avancé",
+            children: [
+                {
+                    key: "reboot-board",
+                    icon: <ReloadOutlined/>,
+                    label: "Redémarrer la carte (STM32)",
+                    onClick: () => confirmAction(
+                        "Redémarrer la carte (STM32)",
+                        "Réinitialise le firmware STM32 (NVIC_SystemReset). À utiliser pour débloquer une carte figée — par ex. l'IMU renvoyant NaN. Les moteurs/la lame s'arrêtent pendant le reset (~1 s).",
+                        rebootBoardAction),
+                },
+                {
+                    key: "reboot",
+                    icon: <DesktopOutlined/>,
+                    label: "Redémarrer le Raspberry Pi",
+                    onClick: () => confirmAction("Redémarrer le Raspberry Pi", "Le système va redémarrer. Vous perdrez la connexion temporairement.", rebootSystem),
+                },
+                {
+                    key: "shutdown",
+                    icon: <PoweroffOutlined/>,
+                    label: "Éteindre le Raspberry Pi",
+                    danger: true,
+                    onClick: () => confirmAction("Éteindre le Raspberry Pi", "Le système va s'éteindre. Un accès physique sera nécessaire pour le rallumer.", shutdownSystem),
+                },
+            ],
         },
     ];
 
@@ -207,14 +224,14 @@ export const MowerStatus = () => {
                     </Space>
                 </Tooltip>
                 {showResetEmergency && (
-                    <Tooltip title="Reset emergency (firmware decides whether the latch clears)">
+                    <Tooltip title="Réarmer l'arrêt d'urgence (le firmware décide si le verrou se libère)">
                         <Button
                             danger
                             size="small"
                             icon={<AlertOutlined/>}
                             onClick={resetEmergencyAction}
                         >
-                            Reset
+                            Réarmer
                         </Button>
                     </Tooltip>
                 )}

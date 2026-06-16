@@ -1,14 +1,23 @@
 /* MowgliNext — premium concept tokens.
    Tech-garden aesthetic: deep emerald canvas, liquid-glass surfaces,
-   lime/aurora accents, soft luminous borders. */
+   lime/aurora accents, soft luminous borders.
 
-[data-concept] {
-  /* surfaces */
+   COLOUR vars (--lime, --ink, --bg-deep, …) are injected at runtime onto
+   <html> from the canonical TS palette in theme/colors.ts (ThemeContext →
+   cssVars()). They are declared here at :root ONLY as first-paint fallbacks;
+   the injected inline values override them. STRUCTURAL tokens (gradients,
+   elevation, type, radii, easings) live at :root too so they resolve for
+   AntD portals (modals/dropdowns/tooltips) that render outside the
+   [data-concept] subtree. Everything references the colour vars via var(). */
+
+:root {
+  /* surfaces (fallbacks — injected at runtime) */
   --bg-deep:       #02110D;
   --bg-canvas:     #061812;
   --bg-card:       rgba(255, 255, 255, 0.045);
   --bg-elevated:   rgba(255, 255, 255, 0.07);
   --bg-pressed:    rgba(255, 255, 255, 0.10);
+  --bg-card-solid: #0B1814;
 
   /* borders */
   --border-soft:   rgba(255, 255, 255, 0.08);
@@ -17,6 +26,7 @@
 
   /* accents */
   --lime:          #7CFFB2;
+  --lime-bright:   #A3FFCB;
   --mint:          #45D688;
   --emerald:       #2BAA66;
   --emerald-deep:  #167A48;
@@ -31,9 +41,9 @@
   --ink-3:         rgba(236, 255, 244, 0.42);
   --ink-4:         rgba(236, 255, 244, 0.24);
 
-  /* gradients */
-  --grad-primary:  linear-gradient(135deg, #7CFFB2 0%, #45D688 45%, #2BAA66 100%);
-  --grad-mint:     linear-gradient(135deg, #45D688 0%, #2BAA66 100%);
+  /* gradients (derive from the colour vars) */
+  --grad-primary:  linear-gradient(135deg, var(--lime) 0%, var(--mint) 45%, var(--emerald) 100%);
+  --grad-mint:     linear-gradient(135deg, var(--mint) 0%, var(--emerald) 100%);
   --grad-aurora:
     radial-gradient(circle at 22% 18%, rgba(69, 214, 232, 0.22) 0%, transparent 42%),
     radial-gradient(circle at 78% 78%, rgba(124, 255, 178, 0.26) 0%, transparent 46%),
@@ -51,7 +61,7 @@
     0 0 0 1px rgba(124, 255, 178, 0.2);
 
   /* type */
-  --font-display:  'Satoshi', 'Inter', sans-serif;
+  --font-display:  'Instrument Serif', 'Iowan Old Style', Georgia, serif;
   --font-body:     'Satoshi', 'Inter', sans-serif;
   --font-mono:     'Space Grotesk', 'JetBrains Mono', monospace;
 

@@ -17,7 +17,7 @@ describe('deriveGpsStatus', () => {
         const status: GnssStatus = {fix_type: GnssStatusConstants.FIX_TYPE_RTK_FIXED};
         expect(deriveGpsStatus(status)).toEqual({
             fixType: 'RTK_FIX',
-            label: 'RTK fixed',
+            label: 'RTK fixe',
             percent: 100,
         });
     });
@@ -26,7 +26,7 @@ describe('deriveGpsStatus', () => {
         const status: GnssStatus = {fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX};
         expect(deriveGpsStatus(status)).toEqual({
             fixType: 'GPS_FIX',
-            label: 'GPS fix',
+            label: 'GPS simple',
             percent: 25,
         });
     });
@@ -39,7 +39,7 @@ describe('deriveGpsStatus', () => {
 
         expect(deriveGpsStatus(status)).toEqual({
             fixType: 'RTK_FIX',
-            label: 'RTK fixed',
+            label: 'RTK fixe',
             percent: 100,
         });
     });
@@ -53,7 +53,7 @@ describe('deriveGpsStatus', () => {
 
         expect(deriveGpsStatus(status)).toEqual({
             fixType: 'RTK_FLOAT',
-            label: 'RTK float',
+            label: 'RTK flottant',
             percent: 50,
         });
     });
@@ -65,7 +65,7 @@ describe('deriveGpsStatus', () => {
 
         expect(deriveGpsStatus(status)).toEqual({
             fixType: 'NO_FIX',
-            label: 'No GPS',
+            label: 'Pas de GPS',
             percent: 0,
         });
     });
@@ -78,7 +78,7 @@ describe('deriveGpsStatus', () => {
 
         expect(deriveGpsStatus(status)).toEqual({
             fixType: 'GPS_FIX',
-            label: 'GPS fix',
+            label: 'GPS simple',
             percent: 25,
         });
     });
@@ -86,7 +86,7 @@ describe('deriveGpsStatus', () => {
     it('falls back to no-fix when typed status is absent', () => {
         expect(deriveGpsStatus(undefined)).toEqual({
             fixType: 'NO_FIX',
-            label: 'No GPS',
+            label: 'Pas de GPS',
             percent: 0,
         });
     });

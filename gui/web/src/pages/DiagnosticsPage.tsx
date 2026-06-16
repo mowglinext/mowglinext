@@ -64,6 +64,7 @@ import {BTStateGraph} from "../components/BTStateGraph.tsx";
 import {RobotAnatomy} from "../components/RobotAnatomy.tsx";
 import {GnssStatusConstants} from "../types/ros.ts";
 import {AlertOutlined} from "@ant-design/icons";
+import {DashCard} from "../components/dashboard/Card.tsx";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -178,26 +179,81 @@ export const DiagnosticsPage = () => {
         [diagnostics.status]
     );
 
+    // ── Health Verdict Hero ──────────────────────────────────────────────────
+    // A single beginner-readable tile derived from the same booleans the
+    // expert health bar uses. Emergency (or a stopped container / no GPS) is
+    // "Urgence"; a soft warning (RTK-Float, warm CPU, low battery) is
+    // "Attention requise"; otherwise "Tout va bien".
+
+    const cpuHot = cpuTemp > 70;
+    const cpuWarm = cpuTemp > 55 && cpuTemp <= 70;
+    const batteryLow = batteryPercent <= 20;
+    const batteryMid = batteryPercent > 20 && batteryPercent <= 50;
+
+    const healthLevel: "ok" | "warn" | "danger" =
+        emergency.active_emergency || !allContainersOk || (!gpsOk && !gpsWarn) || cpuHot || batteryLow
+            ? "danger"
+            : gpsWarn || cpuWarm || batteryMid
+                ? "warn"
+                : "ok";
+
+    const healthVerdict =
+        healthLevel === "danger" ? "Urgence" :
+        healthLevel === "warn" ? "Attention requise" :
+        "Tout va bien";
+
+    const healthColor =
+        healthLevel === "danger" ? colors.danger :
+        healthLevel === "warn" ? colors.warning :
+        colors.primary;
+
+    const healthSubtitle = emergency.active_emergency
+        ? "Arrêt d'urgence actif — intervention requise"
+        : !allContainersOk
+            ? "Un conteneur est arrêté — vérifiez le système"
+            : healthLevel === "danger"
+                ? "GPS, batterie ou température hors limites"
+                : healthLevel === "warn"
+                    ? "Tout fonctionne, quelques points à surveiller"
+                    : "Tous les systèmes sont opérationnels";
+
+    const healthHero = (
+        <DashCard tone={healthLevel === "danger" ? "danger" : "glow"} style={{marginBottom: 4}}>
+            <div style={{
+                fontSize: 11, color: colors.textMuted, letterSpacing: "0.08em",
+                textTransform: "uppercase" as const, fontWeight: 600, marginBottom: 8,
+            }}>
+                État du robot
+            </div>
+            <div className="mn-num" style={{fontSize: isMobile ? 40 : 56, lineHeight: 1, color: healthColor}}>
+                {healthVerdict}
+            </div>
+            <div style={{fontSize: 13, color: colors.textSecondary, marginTop: 10}}>
+                {healthSubtitle}
+            </div>
+        </DashCard>
+    );
+
     // ── Health Summary Bar ───────────────────────────────────────────────────
 
     const healthBar = (
         <Card size="small" style={{marginBottom: 12}}>
             <Flex wrap gap="small" align="center">
-                <Typography.Text type="secondary" style={{fontSize: 12, marginRight: 4}}>Health</Typography.Text>
+                <Typography.Text type="secondary" style={{fontSize: 12, marginRight: 4}}>État</Typography.Text>
                 <HealthBadge
-                    label={allContainersOk ? "Containers OK" : "Container Issue"}
+                    label={allContainersOk ? "Conteneurs OK" : "Problème conteneur"}
                     color={allContainersOk ? "success" : "error"}
                 />
                 <HealthBadge
-                    label={`GPS: ${gpsFixType}`}
+                    label={`GPS : ${gpsFixType}`}
                     color={gpsOk ? "success" : gpsWarn ? "warning" : "error"}
                 />
                 <HealthBadge
-                    label={`Battery: ${batteryPercent.toFixed(0)}%`}
+                    label={`Batterie : ${batteryPercent.toFixed(0)}%`}
                     color={batteryPercent > 50 ? "success" : batteryPercent > 20 ? "warning" : "error"}
                 />
                 <HealthBadge
-                    label={emergency.active_emergency ? "EMERGENCY" : "No Emergency"}
+                    label={emergency.active_emergency ? "URGENCE" : "Pas d'urgence"}
                     color={emergency.active_emergency ? "error" : "success"}
                 />
                 <HealthBadge
@@ -289,7 +345,8 @@ export const DiagnosticsPage = () => {
                         columns={containerColumns}
                         rowKey="name"
                         pagination={false}
-                        locale={{emptyText: "No container data"}}
+                        scroll={{x: "max-content"}}
+                        locale={{emptyText: "Aucune donnée conteneur"}}
                     />
                 </Card>
             </Col>
@@ -852,7 +909,7 @@ export const DiagnosticsPage = () => {
             title: "Coverage",
             dataIndex: "coverage_percent",
             key: "coverage_percent",
-            render: (v: number) => <Progress percent={Math.round(v * 100) / 100} size="small" style={{minWidth: 80}}/>,
+            render: (v: number) => <Progress percent={Math.round(v)} size="small" style={{minWidth: 80}}/>,
         },
         {title: "Total Cells", dataIndex: "total_cells", key: "total_cells"},
         {title: "Mowed", dataIndex: "mowed_cells", key: "mowed_cells"},
@@ -983,7 +1040,8 @@ export const DiagnosticsPage = () => {
                         columns={coverageColumns}
                         rowKey="area_index"
                         pagination={false}
-                        locale={{emptyText: "No coverage data"}}
+                        scroll={{x: "max-content"}}
+                        locale={{emptyText: "Aucune donnée de couverture"}}
                     />
                 </Card>
             </Col>
@@ -1505,6 +1563,7 @@ export const DiagnosticsPage = () => {
     if (isMobile) {
         return (
             <div style={{display: "flex", flexDirection: "column", gap: 12, paddingBottom: 8}}>
+                {healthHero}
                 {healthBar}
                 {sectionAlerts}
                 <Collapse
@@ -1513,12 +1572,12 @@ export const DiagnosticsPage = () => {
                     items={[
                         {
                             key: "system",
-                            label: <Space><CloudServerOutlined/> System</Space>,
+                            label: <Space><CloudServerOutlined/> Système</Space>,
                             children: sectionSystem,
                         },
                         {
                             key: "localization",
-                            label: <Space><CompassOutlined/> Localization</Space>,
+                            label: <Space><CompassOutlined/> Localisation</Space>,
                             children: sectionLocalization,
                         },
                         {
@@ -1543,7 +1602,7 @@ export const DiagnosticsPage = () => {
                         },
                         {
                             key: "calibration_status",
-                            label: "Calibration status",
+                            label: "État de la calibration",
                             children: sectionCalibrationStatus,
                         },
                         {
@@ -1568,7 +1627,7 @@ export const DiagnosticsPage = () => {
     const tabItems = [
         {
             key: "system",
-            label: <Space><CloudServerOutlined/> System</Space>,
+            label: <Space><CloudServerOutlined/> Système</Space>,
             children: <Space direction="vertical" size="middle" style={{width: "100%"}}>
                 {sectionSystem}
                 {sectionRosDiagnostics}
@@ -1576,7 +1635,7 @@ export const DiagnosticsPage = () => {
         },
         {
             key: "localization",
-            label: <Space><CompassOutlined/> Localization</Space>,
+            label: <Space><CompassOutlined/> Localisation</Space>,
             children: <Space direction="vertical" size="middle" style={{width: "100%"}}>
                 {sectionLocalization}
                 {sectionFusionGraph}
@@ -1603,6 +1662,7 @@ export const DiagnosticsPage = () => {
 
     return (
         <Space direction="vertical" size="middle" style={{width: "100%"}}>
+            {healthHero}
             {healthBar}
             {sectionAlerts}
             <Tabs defaultActiveKey="system" items={tabItems} size="large"/>

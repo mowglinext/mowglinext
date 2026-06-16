@@ -78,6 +78,7 @@ export const StatisticsPage = () => {
   const [sessions, setSessions] = useState<MowingSession[]>([]);
   const [stats, setStats] = useState<SessionStats | null>(null);
   const [loading, setLoading] = useState(false);
+  const [hoveredBar, setHoveredBar] = useState<number | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -146,7 +147,7 @@ export const StatisticsPage = () => {
       title: "Coverage", dataIndex: "coverage_percent", key: "coverage",
       render: (v: number) => (
         <div style={{display: 'flex', alignItems: 'center', gap: 8, minWidth: isMobile ? 60 : 80}}>
-          <Bar value={v ?? 0} color={colors.accent} track="rgba(255,255,255,0.08)" height={6}/>
+          <Bar value={v ?? 0} color={colors.accent} track={colors.border} height={6}/>
           <span style={{fontSize: 11, color: colors.textDim, whiteSpace: 'nowrap'}}>
             {Math.round(v ?? 0)}%
           </span>
@@ -169,8 +170,26 @@ export const StatisticsPage = () => {
     }] : []),
   ];
 
+  const isEmpty = !stats || stats.total_sessions === 0;
+
   return (
     <div style={{display: 'flex', flexDirection: 'column', gap: 16, paddingBottom: 8}}>
+      {/* Editorial page header */}
+      <div style={{marginBottom: 2}}>
+        <div style={{
+          fontSize: 11, color: colors.textMuted, fontWeight: 600,
+          letterSpacing: '0.12em', textTransform: 'uppercase' as const,
+        }}>
+          Statistiques
+        </div>
+        <div className="mn-display" style={{
+          fontSize: isMobile ? 30 : 40, color: colors.text,
+          lineHeight: 1.05, marginTop: 4, letterSpacing: '-0.02em',
+        }}>
+          Une année de tonte
+        </div>
+      </div>
+
       {/* Hero stats -- accent watermark per metric, no border to feel lighter */}
       <div style={{display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 12}}>
         {[
@@ -183,7 +202,7 @@ export const StatisticsPage = () => {
                     style={{position: 'relative', overflow: 'hidden'}}>
             <div aria-hidden style={{
               position: 'absolute', top: -28, right: -28, width: 110, height: 110, borderRadius: 110,
-              background: `radial-gradient(circle, ${s.color}24 0%, transparent 70%)`,
+              background: `radial-gradient(circle, ${isEmpty ? 'transparent' : `${s.color}24`} 0%, transparent 70%)`,
               pointerEvents: 'none',
             }}/>
             <div style={{
@@ -195,7 +214,8 @@ export const StatisticsPage = () => {
             </div>
             <div style={{position: 'relative', display: 'flex', alignItems: 'baseline', gap: 4}}>
               <div className="mn-num" style={{
-                fontSize: isMobile ? 44 : 60, color: s.color,
+                fontSize: isMobile ? 44 : 60,
+                color: isEmpty ? colors.textMuted : s.color,
                 lineHeight: 1,
               }}>
                 {s.value}
@@ -204,7 +224,7 @@ export const StatisticsPage = () => {
                 <div style={{
                   fontSize: 14, color: colors.textDim, fontWeight: 500,
                   marginLeft: 4,
-                  fontFamily: "'Geist Mono', 'JetBrains Mono', monospace",
+                  fontFamily: "'Space Grotesk', 'JetBrains Mono', monospace",
                   textTransform: 'lowercase' as const, letterSpacing: '0.04em',
                 }}>{s.unit}</div>
               )}
@@ -215,6 +235,17 @@ export const StatisticsPage = () => {
           </DashCard>
         ))}
       </div>
+
+      {isEmpty && (
+        <DashCard padding={isMobile ? 16 : 20} style={{textAlign: 'center'}}>
+          <div style={{fontSize: 14, fontWeight: 600, color: colors.text}}>
+            Aucune tonte pour l'instant
+          </div>
+          <div style={{fontSize: 12, color: colors.textDim, marginTop: 6}}>
+            Votre première session apparaîtra ici.
+          </div>
+        </DashCard>
+      )}
 
       {/* Year of lawn -- contribution-style heatmap of mowing distance */}
       <DashCard>
@@ -234,24 +265,41 @@ export const StatisticsPage = () => {
             const chartH = isMobile ? 100 : 160;
             return <div key={p} style={{position: 'absolute', left: 0, right: 0, bottom: 20 + p * chartH, height: 1, background: colors.border}}/>;
           })}
+          {/* max-value gridline label */}
+          {maxBar > 0.01 && (
+            <div style={{
+              position: 'absolute', left: 0, top: -4, fontSize: 9, fontWeight: 600,
+              color: colors.textMuted, fontFamily: "'Space Grotesk', monospace",
+            }}>
+              {maxBar.toFixed(1)} km
+            </div>
+          )}
           {weeklyBars.map((v, i) => {
             const chartH = isMobile ? 100 : 160;
             const h = maxBar > 0 ? (v / maxBar) * chartH : 0;
             const isLatest = i === weeklyBars.length - 1;
+            const showValue = (isLatest || hoveredBar === i) && v > 0;
             return (
-              <div key={i} style={{flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, position: 'relative'}}>
+              <div
+                key={i}
+                onMouseEnter={() => setHoveredBar(i)}
+                onMouseLeave={() => setHoveredBar(null)}
+                onClick={() => setHoveredBar(hoveredBar === i ? null : i)}
+                title={`Week ${i + 1}: ${v.toFixed(2)} km`}
+                style={{flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, position: 'relative', cursor: 'pointer'}}
+              >
                 <div style={{
                   width: '100%', height: Math.max(2, h),
-                  background: isLatest
+                  background: (isLatest || hoveredBar === i)
                     ? `linear-gradient(180deg, ${colors.accent}, ${colors.accent}88)`
                     : `linear-gradient(180deg, ${colors.accent}66, ${colors.accent}22)`,
                   borderRadius: '6px 6px 2px 2px',
-                  border: isLatest ? `1px solid ${colors.accent}` : 'none',
+                  border: (isLatest || hoveredBar === i) ? `1px solid ${colors.accent}` : 'none',
                   transition: 'height .4s',
                 }}/>
                 <div style={{fontSize: 9, color: colors.textMuted, position: 'absolute', bottom: 0}}>W{i + 1}</div>
-                {isLatest && v > 0 && (
-                  <div style={{position: 'absolute', top: -22, fontSize: 10, fontWeight: 700, color: colors.accent}}>
+                {showValue && (
+                  <div style={{position: 'absolute', top: -22, fontSize: 10, fontWeight: 700, color: colors.accent, whiteSpace: 'nowrap'}}>
                     {v.toFixed(1)} km
                   </div>
                 )}
@@ -276,7 +324,7 @@ export const StatisticsPage = () => {
                 </div>
                 <Bar
                   value={area.coverage_percent} max={100}
-                  color={colors.accent} track="rgba(255,255,255,0.06)" height={6}
+                  color={colors.accent} track={colors.border} height={6}
                 />
               </div>
             ))}

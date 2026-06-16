@@ -43,7 +43,7 @@ describe('MowerStatus', () => {
             highLevelStatus: {state_name: 'IDLE', battery_percent: 75, is_charging: false},
         });
         renderStatus();
-        expect(screen.getByText('Idle')).toBeInTheDocument();
+        expect(screen.getByText('Au repos')).toBeInTheDocument();
     });
 
     it('displays mowing state', () => {
@@ -51,12 +51,12 @@ describe('MowerStatus', () => {
             highLevelStatus: {state_name: 'MOWING', battery_percent: 50, is_charging: false},
         });
         renderStatus();
-        expect(screen.getByText('Mowing')).toBeInTheDocument();
+        expect(screen.getByText('Tonte')).toBeInTheDocument();
     });
 
     it('falls back to Offline when state_name is absent', () => {
         mockHighLevelStatus.mockReturnValue({highLevelStatus: {}});
         renderStatus();
-        expect(screen.getByText('Offline')).toBeInTheDocument();
+        expect(screen.getByText('Hors ligne')).toBeInTheDocument();
     });
 });

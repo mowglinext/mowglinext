@@ -86,7 +86,7 @@ export function NotificationBell() {
                     <span style={{
                         position: 'absolute', top: 2, right: 2,
                         minWidth: 16, height: 16, padding: '0 4px', borderRadius: 8,
-                        background: colors.danger, color: '#fff',
+                        background: colors.danger, color: colors.bgBase,
                         fontSize: 10, fontWeight: 700,
                         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                         boxShadow: `0 0 0 2px ${colors.bgBase}`,

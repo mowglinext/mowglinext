@@ -2,17 +2,31 @@
 // Polygon coloring is driven by user_feature_type property (set via userProperties: true).
 // Line/point coloring prefers user_color when available (paths, heading lines, mower, dock).
 //
-// Feature type color palette
-const green  = '#4caf50';  // workarea
-const white  = '#dddddd';  // navigation
-const black  = '#333333';  // obstacle
-const orange = '#fbb03b';  // active / draft / default
-const gray   = '#888888';  // inactive line fallback
+// Feature type color palette — MowgliNext brand tokens.
+// This is a plain constant module (no React context), so brand hex values are
+// inlined here as literals with traceability comments back to the palette.
+const green  = '#7CFFB2';                // brand: lime — workarea / active
+const white  = '#ECFFF4';                // brand: ink — navigation
+const black  = '#02110D';                // brand: deep — obstacle
+const orange = '#F3A85C';                // brand: amber — active / draft / default accent
+const gray   = 'rgba(236,255,244,0.42)'; // brand: ink @ 0.42 — inactive line fallback
+const mint   = '#45D688';                // brand: mint — secondary / fill green (reserved)
 
-// Mapbox expression that resolves a polygon fill color from user_feature_type
+// Mapbox expression that resolves a polygon STROKE color from user_feature_type.
+// Workarea strokes read in the lime hero accent.
 const type_color: unknown[] = [
     'case',
     ['==', ['get', 'user_feature_type'], 'workarea'],   green,
+    ['==', ['get', 'user_feature_type'], 'navigation'], white,
+    ['==', ['get', 'user_feature_type'], 'obstacle'],   black,
+    orange, // draft / active / unknown
+];
+
+// Polygon FILL color from user_feature_type. Workarea fills use the softer
+// mint (secondary green) so the lime stroke stays the dominant edge cue.
+const type_fill_color: unknown[] = [
+    'case',
+    ['==', ['get', 'user_feature_type'], 'workarea'],   mint,
     ['==', ['get', 'user_feature_type'], 'navigation'], white,
     ['==', ['get', 'user_feature_type'], 'obstacle'],   black,
     orange, // draft / active / unknown
@@ -39,7 +53,7 @@ export const MapStyle = [
         type: 'fill',
         filter: ['all', ['==', 'active', 'false'], ['==', '$type', 'Polygon']],
         paint: {
-            'fill-color': type_color,
+            'fill-color': type_fill_color,
             'fill-outline-color': type_color,
             'fill-opacity': 0.25,
         },
@@ -171,7 +185,7 @@ export const MapStyle = [
         ],
         paint: {
             'circle-radius': 6,
-            'circle-color': '#ffffff',
+            'circle-color': white,
         },
     },
 
@@ -203,7 +217,7 @@ export const MapStyle = [
         ],
         paint: {
             'circle-radius': 9,
-            'circle-color': '#ffffff',
+            'circle-color': white,
         },
     },
 
@@ -234,7 +248,7 @@ export const MapStyle = [
         ],
         paint: {
             'circle-radius': 8,
-            'circle-color': '#ffffff',
+            'circle-color': white,
             'circle-opacity': 0.9,
         },
     },
@@ -267,7 +281,7 @@ export const MapStyle = [
         ],
         paint: {
             'circle-radius': 8,
-            'circle-color': '#ffffff',
+            'circle-color': white,
             'circle-opacity': 0.9,
         },
     },
@@ -294,8 +308,8 @@ export const MapStyle = [
         type: 'fill',
         filter: ['all', ['==', 'mode', 'static'], ['==', '$type', 'Polygon']],
         paint: {
-            'fill-color': '#404040',
-            'fill-outline-color': '#404040',
+            'fill-color': gray,
+            'fill-outline-color': gray,
             'fill-opacity': 0.1,
         },
     },
@@ -305,7 +319,7 @@ export const MapStyle = [
         filter: ['all', ['==', 'mode', 'static'], ['==', '$type', 'Polygon']],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
-            'line-color': '#404040',
+            'line-color': gray,
             'line-width': 2,
         },
     },
@@ -315,7 +329,7 @@ export const MapStyle = [
         filter: ['all', ['==', 'mode', 'static'], ['==', '$type', 'LineString']],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
-            'line-color': '#404040',
+            'line-color': gray,
             'line-width': 2,
         },
     },
@@ -325,7 +339,7 @@ export const MapStyle = [
         filter: ['all', ['==', 'mode', 'static'], ['==', '$type', 'Point']],
         paint: {
             'circle-radius': 5,
-            'circle-color': '#404040',
+            'circle-color': gray,
         },
     },
 ];

@@ -2,6 +2,8 @@ import {Joystick} from "react-joystick-component";
 import {IJoystickUpdateEvent} from "react-joystick-component/build/lib/Joystick";
 import {CheckOutlined, CloseOutlined, HomeOutlined} from "@ant-design/icons";
 import AsyncButton from "../../../components/AsyncButton.tsx";
+import {useThemeMode} from "../../../theme/ThemeContext.tsx";
+import {limeAlpha} from "../../../theme/colors.ts";
 
 interface JoystickOverlayProps {
     visible: boolean;
@@ -14,24 +16,33 @@ interface JoystickOverlayProps {
     onHome?: () => Promise<void>;
 }
 
-// The default react-joystick-component look is a flat grey puck. We dress it up
-// with a glassy base ring + a glowing lime stick, and size it up for thumbs.
-const BASE_COLOR = "radial-gradient(circle at 50% 40%, rgba(124,255,178,0.10), rgba(2,17,13,0.55) 70%)";
-const STICK_COLOR = "radial-gradient(circle at 38% 32%, #BFFFD8, #45D688 55%, #2BAA66)";
-
 export const JoystickOverlay = ({
     visible, isRecording, mobile,
     onMove, onStop, onFinishRecording, onCancelRecording, onHome,
 }: JoystickOverlayProps) => {
+    const {colors} = useThemeMode();
     if (!visible) return null;
 
     const size = mobile ? 132 : 110;
 
-    // Mobile: bottom-left (natural left thumb) and lifted clear of the centered
-    // toolbar + bottom-nav. Desktop: bottom-right corner.
+    // The default react-joystick-component look is a flat grey puck. We dress
+    // it up with a glassy base ring + a glowing brand-green stick, sized up for
+    // thumbs. Tokenised from the palette (lime/mint/emerald + deep bg).
+    const baseColor = `radial-gradient(circle at 50% 40%, ${limeAlpha(0.10)}, ${colors.bgBase} 70%)`;
+    const stickColor = `radial-gradient(circle at 38% 32%, ${colors.primaryLight}, ${colors.mint} 55%, ${colors.emeraldDeep})`;
+
+    // Mobile: bottom-left (natural left thumb), lifted clear of the centred
+    // toolbar + bottom-nav. The toolbar pins itself at safe-area + 100px and is
+    // ~60px tall, so the control stack starts above that band rather than at a
+    // magic offset tuned by hand. Desktop: bottom-right corner.
+    const TOOLBAR_BAND_PX = 100 + 60 + 12; // toolbar bottom + height + gap
     const anchor: React.CSSProperties = mobile
-        ? {left: 18, bottom: "calc(env(safe-area-inset-bottom, 0px) + 172px)"}
+        ? {left: 18, bottom: `calc(env(safe-area-inset-bottom, 0px) + ${TOOLBAR_BAND_PX}px)`}
         : {right: 30, bottom: 30};
+
+    // A single flex "control stack" so the Finish/Cancel/Home buttons derive
+    // their position from the joystick row instead of their own magic offsets.
+    const actionButtonStyle: React.CSSProperties = {height: 44, minWidth: 44, borderRadius: 10, fontWeight: 600};
 
     return (
         <div style={{
@@ -50,15 +61,16 @@ export const JoystickOverlay = ({
                 position: "relative",
                 padding: 6,
                 borderRadius: "50%",
-                background: "rgba(2,17,13,0.35)",
-                border: "1px solid rgba(124,255,178,0.28)",
-                boxShadow: "0 10px 30px -10px rgba(0,0,0,0.6), inset 0 0 24px rgba(124,255,178,0.06)",
+                background: colors.glassBackground,
+                border: `1px solid ${limeAlpha(0.28)}`,
+                boxShadow: `0 10px 30px -10px rgba(0,0,0,0.6), inset 0 0 24px ${limeAlpha(0.06)}`,
                 backdropFilter: "blur(8px)",
+                WebkitBackdropFilter: "blur(8px)",
             }}>
                 <Joystick
                     size={size}
-                    baseColor={BASE_COLOR}
-                    stickColor={STICK_COLOR}
+                    baseColor={baseColor}
+                    stickColor={stickColor}
                     stickSize={Math.round(size * 0.42)}
                     move={onMove}
                     stop={onStop}
@@ -72,7 +84,7 @@ export const JoystickOverlay = ({
                         type="primary"
                         icon={<CheckOutlined/>}
                         onAsyncClick={onFinishRecording!}
-                        style={{height: 44, borderRadius: 10, fontWeight: 600}}
+                        style={actionButtonStyle}
                     >
                         Finish
                     </AsyncButton>
@@ -80,14 +92,14 @@ export const JoystickOverlay = ({
                         danger
                         icon={<CloseOutlined/>}
                         onAsyncClick={onCancelRecording!}
-                        style={{height: 44, borderRadius: 10}}
+                        style={actionButtonStyle}
                     >
                         Cancel
                     </AsyncButton>
                     <AsyncButton
                         icon={<HomeOutlined/>}
                         onAsyncClick={onHome!}
-                        style={{height: 44, borderRadius: 10}}
+                        style={actionButtonStyle}
                     >
                         Home
                     </AsyncButton>

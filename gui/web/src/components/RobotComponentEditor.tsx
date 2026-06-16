@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Alert, App, Card, InputNumber, Modal, Space, Typography, Row, Col, Tooltip, Button, Tag } from "antd";
 import { AimOutlined, CompassOutlined, EnvironmentOutlined, UndoOutlined } from "@ant-design/icons";
 import { useThemeMode } from "../theme/ThemeContext.tsx";
+import { getColors, inkAlpha } from "../theme/colors.ts";
 import { useIsMobile } from "../hooks/useIsMobile.ts";
 import { useRobotDescription } from "../hooks/useRobotDescription.ts";
 import { useCalibrationStatus } from "../hooks/useCalibrationStatus.ts";
@@ -38,12 +39,19 @@ type SensorMeta = {
     zKey: string;
 };
 
+// Sensor palette is sourced from the brand tokens (no raw hex). `color` is the
+// light-mode tint, `colorDark` the brighter dark-mode variant used on the deep
+// canvas. LiDAR = danger (rose), IMU = info/sky (aurora cyan), GPS = primary
+// (lime).
+const LIGHT_TOKENS = getColors("light");
+const DARK_TOKENS = getColors("dark");
+
 const SENSORS: SensorMeta[] = [
     {
         id: "lidar",
         label: "LiDAR",
-        color: "#E53935",
-        colorDark: "#EF5350",
+        color: LIGHT_TOKENS.danger,
+        colorDark: DARK_TOKENS.danger,
         shape: "circle",
         size: 0.04,
         xKey: "lidar_x",
@@ -54,8 +62,8 @@ const SENSORS: SensorMeta[] = [
     {
         id: "imu",
         label: "IMU",
-        color: "#1565C0",
-        colorDark: "#42A5F5",
+        color: LIGHT_TOKENS.info,
+        colorDark: DARK_TOKENS.sky,
         shape: "rect",
         size: 0.03,
         xKey: "imu_x",
@@ -66,8 +74,8 @@ const SENSORS: SensorMeta[] = [
     {
         id: "gps",
         label: "GPS",
-        color: "#2E7D32",
-        colorDark: "#66BB6A",
+        color: LIGHT_TOKENS.primary,
+        colorDark: DARK_TOKENS.primary,
         shape: "rect",
         size: 0.05,
         xKey: "gps_x",
@@ -422,11 +430,11 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
         const ccx = robot.chassisCenterX; // chassis centre offset from base_link
         const halfL = robot.baseLength / 2;
         const halfW = robot.baseWidth / 2;
-        const bodyColor = mode === "dark" ? "#2d5a2d" : "#4CAF50";
-        const bodyStroke = mode === "dark" ? "#3d7a3d" : "#2E7D32";
-        const wheelColor = mode === "dark" ? "#555" : "#333";
-        const bladeColor = mode === "dark" ? "#888" : "#9E9E9E";
-        const casterColor = mode === "dark" ? "#666" : "#555";
+        const bodyColor = mode === "dark" ? colors.emeraldDeep : colors.primaryLight;
+        const bodyStroke = mode === "dark" ? colors.mint : colors.primaryDark;
+        const wheelColor = mode === "dark" ? inkAlpha(0.35) : inkAlpha(0.7);
+        const bladeColor = colors.muted;
+        const casterColor = mode === "dark" ? inkAlpha(0.25) : inkAlpha(0.55);
 
         // Chassis rect offset by chassisCenterX (base_link is at wheel axis, not chassis centre)
         const [bx, by] = toSvg(ccx - halfL, halfW, cx, cy);
@@ -448,13 +456,13 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
         const arrowTip = toSvg(ccx + halfL + 0.04, 0, cx, cy);
         const arrowLeft = toSvg(ccx + halfL + 0.01, 0.02, cx, cy);
         const arrowRight = toSvg(ccx + halfL + 0.01, -0.02, cx, cy);
-        const arrowColor = mode === "dark" ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.3)";
+        const arrowColor = mode === "dark" ? inkAlpha(0.4) : "rgba(0,0,0,0.3)";
 
         // Dock charging station in front of the robot (robot drives forward to dock)
-        const dockFill = mode === "dark" ? "#333" : "#999";
-        const dockStroke = mode === "dark" ? "#555" : "#777";
-        const contactColor = mode === "dark" ? "#c90" : "#d4a017";
-        const dockLabelColor = mode === "dark" ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.35)";
+        const dockFill = mode === "dark" ? inkAlpha(0.16) : inkAlpha(0.6);
+        const dockStroke = mode === "dark" ? inkAlpha(0.3) : inkAlpha(0.45);
+        const contactColor = colors.warning;
+        const dockLabelColor = mode === "dark" ? inkAlpha(0.4) : "rgba(0,0,0,0.35)";
         // Base plate in front of chassis
         const frontEdge = ccx + halfL;
         const plateW = (robot.baseWidth + 0.08) * SCALE;
@@ -484,7 +492,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                     x={wallX} y={cy - wallTall / 2}
                     width={wallH} height={wallTall}
                     rx={2} ry={2}
-                    fill={mode === "dark" ? "#555" : "#777"} opacity={0.7}
+                    fill={dockStroke} opacity={0.7}
                 />
                 {/* Charging contacts (two copper strips facing the robot) */}
                 <rect
@@ -532,7 +540,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                 <text
                     x={cx} y={cy + 4}
                     textAnchor="middle" fontSize={9}
-                    fill={mode === "dark" ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.25)"}
+                    fill={mode === "dark" ? inkAlpha(0.3) : "rgba(0,0,0,0.25)"}
                     fontFamily="monospace"
                 >
                     base_link
@@ -545,7 +553,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                 </text>
             </g>
         );
-    }, [cx, cy, mode, robot]);
+    }, [cx, cy, mode, robot, colors]);
 
     // Draw a single sensor
     const renderSensor = useCallback(
@@ -565,6 +573,13 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             const handleX = sx + Math.cos(val.yaw) * handleDist;
             const handleY = sy - Math.sin(val.yaw) * handleDist;
 
+            // Transparent ≥44px touch target behind the small visible glyph so
+            // dragging works on phones (Apple HIG / Material both call for 44px
+            // minimum tap targets). The visible square/circle stays small.
+            const HIT_R = 24; // 48px diameter
+            const activeStroke = colors.text;
+            const handleFill = mode === "dark" ? colors.bgElevated : colors.bgCard;
+
             return (
                 <g key={meta.id}>
                     {(isActive || isHovered) && (
@@ -575,32 +590,35 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                         />
                     )}
 
+                    {/* Invisible drag hit-area (44px+) */}
+                    <circle
+                        cx={sx} cy={sy} r={HIT_R}
+                        fill="transparent"
+                        style={{ cursor: "grab" }}
+                        onMouseDown={(e) => handlePointerDown(meta.id, e)}
+                        onTouchStart={(e) => handlePointerDown(meta.id, e)}
+                        onMouseEnter={() => setHoveredSensor(meta.id)}
+                        onMouseLeave={() => setHoveredSensor(null)}
+                    />
+
                     {meta.shape === "circle" ? (
                         <circle
                             cx={sx} cy={sy} r={sizeInPx}
                             fill={sensorColor}
-                            stroke={isActive ? "#FFF" : sensorColor}
+                            stroke={isActive ? activeStroke : sensorColor}
                             strokeWidth={isActive ? 2 : 1}
                             opacity={0.9}
-                            style={{ cursor: "grab" }}
-                            onMouseDown={(e) => handlePointerDown(meta.id, e)}
-                            onTouchStart={(e) => handlePointerDown(meta.id, e)}
-                            onMouseEnter={() => setHoveredSensor(meta.id)}
-                            onMouseLeave={() => setHoveredSensor(null)}
+                            style={{ cursor: "grab", pointerEvents: "none" }}
                         />
                     ) : (
                         <rect
                             x={sx - sizeInPx} y={sy - sizeInPx}
                             width={sizeInPx * 2} height={sizeInPx * 2} rx={2}
                             fill={sensorColor}
-                            stroke={isActive ? "#FFF" : sensorColor}
+                            stroke={isActive ? activeStroke : sensorColor}
                             strokeWidth={isActive ? 2 : 1}
                             opacity={0.9}
-                            style={{ cursor: "grab" }}
-                            onMouseDown={(e) => handlePointerDown(meta.id, e)}
-                            onTouchStart={(e) => handlePointerDown(meta.id, e)}
-                            onMouseEnter={() => setHoveredSensor(meta.id)}
-                            onMouseLeave={() => setHoveredSensor(null)}
+                            style={{ cursor: "grab", pointerEvents: "none" }}
                         />
                     )}
 
@@ -609,6 +627,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                             <line
                                 x1={sx} y1={sy} x2={yawEndX} y2={yawEndY}
                                 stroke={sensorColor} strokeWidth={2}
+                                style={{ pointerEvents: "none" }}
                             />
                             <polygon
                                 points={(() => {
@@ -621,14 +640,21 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                     return `${yawEndX},${yawEndY} ${p1x},${p1y} ${p2x},${p2y}`;
                                 })()}
                                 fill={sensorColor}
+                                style={{ pointerEvents: "none" }}
                             />
+                            {/* Invisible rotate hit-area (44px+) */}
                             <circle
-                                cx={handleX} cy={handleY} r={6}
-                                fill={mode === "dark" ? "#333" : "#FFF"}
-                                stroke={sensorColor} strokeWidth={2}
+                                cx={handleX} cy={handleY} r={HIT_R}
+                                fill="transparent"
                                 style={{ cursor: "crosshair" }}
                                 onMouseDown={(e) => handleRotateDown(meta.id, e)}
                                 onTouchStart={(e) => handleRotateDown(meta.id, e)}
+                            />
+                            <circle
+                                cx={handleX} cy={handleY} r={6}
+                                fill={handleFill}
+                                stroke={sensorColor} strokeWidth={2}
+                                style={{ cursor: "crosshair", pointerEvents: "none" }}
                             />
                         </>
                     )}
@@ -644,7 +670,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                 </g>
             );
         },
-        [cx, cy, dragging, rotating, hoveredSensor, getSensorValue, handlePointerDown, handleRotateDown, mode]
+        [cx, cy, dragging, rotating, hoveredSensor, getSensorValue, handlePointerDown, handleRotateDown, mode, colors]
     );
 
     // Scale labels
@@ -709,7 +735,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                 <Col xs={24} lg={14}>
                     <div
                         style={{
-                            background: mode === "dark" ? "#1a1a1a" : "#fafafa",
+                            background: mode === "dark" ? colors.bgElevated : colors.bgBase,
                             border: `1px solid ${colors.border}`,
                             borderRadius: 8,
                             display: "flex",
@@ -827,11 +853,11 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                         size="small"
                         title={
                             <Space>
-                                <div style={{ width: 12, height: 12, borderRadius: 2, background: mode === "dark" ? "#666" : "#888" }} />
+                                <div style={{ width: 12, height: 12, borderRadius: 2, background: colors.muted }} />
                                 <span>Dock Pose</span>
                             </Space>
                         }
-                        style={{ marginBottom: 8, borderLeft: `3px solid ${mode === "dark" ? "#666" : "#888"}` }}
+                        style={{ marginBottom: 8, borderLeft: `3px solid ${colors.muted}` }}
                     >
                         <Row gutter={[8, 4]} align="middle">
                             <Col span={12}>
@@ -856,13 +882,13 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                 <div style={{ display: "flex", justifyContent: "center" }}>
                                     <svg width={60} height={60} viewBox="0 0 60 60">
                                         <circle cx={30} cy={30} r={28} fill="none"
-                                            stroke={mode === "dark" ? "#555" : "#ccc"} strokeWidth={1.5} />
+                                            stroke={mode === "dark" ? inkAlpha(0.3) : inkAlpha(0.5)} strokeWidth={1.5} />
                                         {["N", "E", "S", "W"].map((d, i) => {
                                             const a = (i * 90 - 90) * Math.PI / 180;
                                             return (
                                                 <text key={d} x={30 + 22 * Math.cos(a)} y={30 + 22 * Math.sin(a) + 3}
                                                     textAnchor="middle" fontSize={8} fontFamily="monospace"
-                                                    fill={d === "N" ? (mode === "dark" ? "#e55" : "#c00") : (mode === "dark" ? "#999" : "#666")}
+                                                    fill={d === "N" ? colors.danger : colors.textMuted}
                                                 >
                                                     {d}
                                                 </text>
@@ -882,10 +908,10 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                             return (
                                                 <g>
                                                     <line x1={tailX} y1={tailY} x2={tipX} y2={tipY}
-                                                        stroke={mode === "dark" ? "#4CAF50" : "#2E7D32"}
+                                                        stroke={colors.primary}
                                                         strokeWidth={2.5} strokeLinecap="round" />
                                                     <circle cx={tipX} cy={tipY} r={3}
-                                                        fill={mode === "dark" ? "#4CAF50" : "#2E7D32"} />
+                                                        fill={colors.primary} />
                                                 </g>
                                             );
                                         })()}
@@ -903,7 +929,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                         {/* Capture-from-robot action ─────────────────────── */}
                         <div
                             style={{
-                                borderTop: `1px dashed ${mode === "dark" ? "#444" : "#ddd"}`,
+                                borderTop: `1px dashed ${colors.border}`,
                                 paddingTop: 8,
                                 marginTop: 4,
                             }}

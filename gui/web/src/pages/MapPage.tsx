@@ -44,6 +44,22 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const isMobile = useIsMobile();
     const mowerAction = useMowerAction()
 
+    // Brand tokens for the Mapbox display-only layers (dock, mower, lidar).
+    // Shared between the compact and full render branches so the two stay in
+    // lockstep — never re-hardcode these hex values inline below.
+    const LAYER_COLORS = useMemo(() => ({
+        dock: colors.auroraViolet,           // dock marker + label
+        dockHeading: colors.primary,         // dock heading line (lime)
+        mower: colors.info,                  // mower center point (aurora-cyan)
+        mowerOutline: colors.emeraldDeep,    // mower footprint outline (deep accent)
+        lidarHit: colors.danger,             // lidar hit points (rose)
+        lidarMiss: colors.amber,             // lidar miss points (amber)
+        coveragePath: colors.mint,           // full F2C coverage plan line (mint)
+        halo: colors.text,                   // white halo → ink
+        labelText: colors.text,              // symbol label text → ink
+        labelHalo: colors.bgBase,            // symbol label halo → deep bg
+    }), [colors]);
+
     const {settings} = useSettings()
     const [labelsCollection, setLabelsCollection] = useState<FeatureCollection>({
         type: "FeatureCollection",
@@ -151,12 +167,12 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 type: "Feature" as const,
                 id: "dock-heading",
                 geometry: {type: "LineString", coordinates: [coords, endPoint]},
-                properties: {color: "#00e676", width: 3, feature_type: "dock-heading"},
+                properties: {color: LAYER_COLORS.dockHeading, width: 3, feature_type: "dock-heading"},
             });
         }
 
         return {type: "FeatureCollection", features: feats};
-    }, [features, offsetX, offsetY, datum]);
+    }, [features, offsetX, offsetY, datum, LAYER_COLORS]);
 
     const [mowingAreas, setMowingAreas] = useState<{ key: string, label: string, feat: Feature }[]>([])
 
@@ -242,7 +258,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 return transpose(offsetX, offsetY, datum, pose.pose?.position?.y!, pose.pose?.position?.x!)
             });
             if (coordinates.length > 1) {
-                const feature = new PathFeature("coverage-path", coordinates, "rgba(80, 200, 120, 0.9)", 2);
+                const feature = new PathFeature("coverage-path", coordinates, LAYER_COLORS.coveragePath, 2);
                 newFeatures[feature.id] = feature
             }
         }
@@ -253,12 +269,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             const feature = new ActivePathFeature("plan", coordinates);
             newFeatures[feature.id] = feature
         }
-        if (console.debug) {
-            console.debug("Set new features");
-            console.debug(newFeatures);
-        }
         setFeatures(newFeatures)
-    }, [map, path, plan, offsetX, offsetY, datum, editMap]);
+    }, [map, path, plan, offsetX, offsetY, datum, editMap, LAYER_COLORS]);
 
     useEffect(() => {
         const labels = buildLabels(Object.values(features))
@@ -567,8 +579,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         "text-allow-overlap": true,
                         "text-anchor": "top"
                     }} paint={{
-                        "text-color": "#ffffff",
-                        "text-halo-color": "rgba(0, 0, 0, 0.8)",
+                        "text-color": LAYER_COLORS.labelText,
+                        "text-halo-color": LAYER_COLORS.labelHalo,
                         "text-halo-width": 1.5,
                     }}/>
                     <DrawControl
@@ -600,15 +612,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             filter={['==', ['get', 'feature_type'], 'dock']}
                             paint={{
                                 'circle-radius': 12,
-                                'circle-color': '#ffffff',
+                                'circle-color': LAYER_COLORS.halo,
                                 'circle-opacity': 0.9,
                             }}/>
                         <Layer type={"circle"} id={"dock-point"}
                             filter={['==', ['get', 'feature_type'], 'dock']}
                             paint={{
                                 'circle-radius': 9,
-                                'circle-color': '#ff00f2',
-                                'circle-stroke-color': '#ffffff',
+                                'circle-color': LAYER_COLORS.dock,
+                                'circle-stroke-color': LAYER_COLORS.halo,
                                 'circle-stroke-width': 2,
                             }}/>
                         <Layer type={"symbol"} id={"dock-label"}
@@ -621,8 +633,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 'text-anchor': 'top',
                             }}
                             paint={{
-                                'text-color': '#ff00f2',
-                                'text-halo-color': '#ffffff',
+                                'text-color': LAYER_COLORS.dock,
+                                'text-halo-color': LAYER_COLORS.halo,
                                 'text-halo-width': 1.5,
                             }}/>
                         {/* Mower footprint (robot shape from URDF) */}
@@ -635,7 +647,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         <Layer type={"line"} id={"mower-footprint-outline"}
                             filter={['==', ['get', 'feature_type'], 'mower-footprint']}
                             paint={{
-                                'line-color': '#003d66',
+                                'line-color': LAYER_COLORS.mowerOutline,
                                 'line-width': 2,
                             }}/>
                         {/* Mower center point */}
@@ -643,8 +655,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             filter={['==', ['get', 'feature_type'], 'mower']}
                             paint={{
                                 'circle-radius': 4,
-                                'circle-color': '#00a6ff',
-                                'circle-stroke-color': '#ffffff',
+                                'circle-color': LAYER_COLORS.mower,
+                                'circle-stroke-color': LAYER_COLORS.halo,
                                 'circle-stroke-width': 1.5,
                             }}/>
                         {/* Other display points (Point geometry only — exclude polygon/line vertices) */}
@@ -652,7 +664,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             filter={['all', ['==', ['geometry-type'], 'Point'], ['!=', ['get', 'feature_type'], 'dock'], ['!=', ['get', 'feature_type'], 'mower']]}
                             paint={{
                                 'circle-radius': 8,
-                                'circle-color': '#ffffff',
+                                'circle-color': LAYER_COLORS.halo,
                                 'circle-opacity': 0.9,
                             }}/>
                         <Layer type={"circle"} id={"display-points"}
@@ -729,8 +741,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         "text-allow-overlap": true,
                         "text-anchor": "top"
                     }} paint={{
-                        "text-color": "#ffffff",
-                        "text-halo-color": "rgba(0, 0, 0, 0.8)",
+                        "text-color": LAYER_COLORS.labelText,
+                        "text-halo-color": LAYER_COLORS.labelHalo,
                         "text-halo-width": 1.5,
                     }}/>
                     <DrawControl
@@ -763,15 +775,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             filter={['==', ['get', 'feature_type'], 'dock']}
                             paint={{
                                 'circle-radius': 12,
-                                'circle-color': '#ffffff',
+                                'circle-color': LAYER_COLORS.halo,
                                 'circle-opacity': 0.9,
                             }}/>
                         <Layer type={"circle"} id={"dock-point"}
                             filter={['==', ['get', 'feature_type'], 'dock']}
                             paint={{
                                 'circle-radius': 9,
-                                'circle-color': '#ff00f2',
-                                'circle-stroke-color': '#ffffff',
+                                'circle-color': LAYER_COLORS.dock,
+                                'circle-stroke-color': LAYER_COLORS.halo,
                                 'circle-stroke-width': 2,
                             }}/>
                         <Layer type={"symbol"} id={"dock-label"}
@@ -784,8 +796,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 'text-anchor': 'top',
                             }}
                             paint={{
-                                'text-color': '#ff00f2',
-                                'text-halo-color': '#ffffff',
+                                'text-color': LAYER_COLORS.dock,
+                                'text-halo-color': LAYER_COLORS.halo,
                                 'text-halo-width': 1.5,
                             }}/>
                         {/* Mower footprint (robot shape from URDF) */}
@@ -798,7 +810,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         <Layer type={"line"} id={"mower-footprint-outline"}
                             filter={['==', ['get', 'feature_type'], 'mower-footprint']}
                             paint={{
-                                'line-color': '#003d66',
+                                'line-color': LAYER_COLORS.mowerOutline,
                                 'line-width': 2,
                             }}/>
                         {/* Mower center point */}
@@ -806,8 +818,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             filter={['==', ['get', 'feature_type'], 'mower']}
                             paint={{
                                 'circle-radius': 4,
-                                'circle-color': '#00a6ff',
-                                'circle-stroke-color': '#ffffff',
+                                'circle-color': LAYER_COLORS.mower,
+                                'circle-stroke-color': LAYER_COLORS.halo,
                                 'circle-stroke-width': 1.5,
                             }}/>
                         {/* Other display points (Point geometry only — exclude polygon/line vertices) */}
@@ -815,7 +827,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             filter={['all', ['==', ['geometry-type'], 'Point'], ['!=', ['get', 'feature_type'], 'dock'], ['!=', ['get', 'feature_type'], 'mower']]}
                             paint={{
                                 'circle-radius': 8,
-                                'circle-color': '#ffffff',
+                                'circle-color': LAYER_COLORS.halo,
                                 'circle-opacity': 0.9,
                             }}/>
                         <Layer type={"circle"} id={"display-points"}
@@ -839,8 +851,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             "circle-color": [
                                 "case",
                                 ["==", ["get", "intensity"], "hit"],
-                                "rgba(255, 50, 50, 0.8)",
-                                "rgba(255, 220, 80, 0.4)"
+                                LAYER_COLORS.lidarHit,
+                                LAYER_COLORS.lidarMiss
                             ],
                             "circle-stroke-width": 0,
                         }}/>
@@ -924,7 +936,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 )}
                 {/* Desktop: View mode — bottom glass toolbar */}
                 {!isMobile && !editMap && (
-                    <div style={{position: 'absolute', bottom: 12, left: 16, right: 16, zIndex: 10, background: colors.glassBackground, backdropFilter: 'blur(16px) saturate(180%)', WebkitBackdropFilter: 'blur(16px) saturate(180%)', borderRadius: 12, border: colors.glassBorder, boxShadow: colors.glassShadow, padding: '10px 14px'}}>
+                    <div style={{position: 'absolute', bottom: 12, left: 16, right: 16, zIndex: 10, background: colors.glassBackground, backdropFilter: 'blur(22px) saturate(140%)', WebkitBackdropFilter: 'blur(22px) saturate(140%)', borderRadius: 18, border: colors.glassBorder, boxShadow: colors.glassShadow, padding: '10px 14px'}}>
                         <MapToolbar
                             manualMode={manualMode}
                             useSatellite={useSatellite}
@@ -953,7 +965,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 )}
                 {/* Desktop: Right panel — areas list + offset */}
                 {!isMobile && (
-                    <div style={{position: 'absolute', top: 12, right: 16, zIndex: 10, display: 'flex', flexDirection: 'column', gap: 0, width: 240, maxHeight: 'calc(100% - 32px)', background: colors.glassBackground, backdropFilter: 'blur(16px) saturate(180%)', WebkitBackdropFilter: 'blur(16px) saturate(180%)', borderRadius: 12, border: colors.glassBorder, boxShadow: colors.glassShadow, overflow: 'hidden'}}>
+                    <div style={{position: 'absolute', top: 12, right: 16, zIndex: 10, display: 'flex', flexDirection: 'column', gap: 0, width: 240, maxHeight: 'calc(100% - 32px)', background: colors.glassBackground, backdropFilter: 'blur(22px) saturate(140%)', WebkitBackdropFilter: 'blur(22px) saturate(140%)', borderRadius: 18, border: colors.glassBorder, boxShadow: colors.glassShadow, overflow: 'hidden'}}>
                         <AreasListPanel
                             areas={areasList}
                             onAreaClick={editMap ? handleAreaSelect : undefined}

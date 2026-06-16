@@ -1,11 +1,14 @@
 import {motion} from "framer-motion";
-import {Play, Pause, Home, AlertTriangle} from "lucide-react";
+import {Play, Square, Home, AlertTriangle} from "lucide-react";
 import {pressFeedback, springSnap} from "../motion";
 
 /**
- * Primary action cluster -- big Play (lime gradient w/ inner shine), Pause
- * + Home + Stop as glass secondaries. State drives which primary is
- * shown; "playing" swaps Play to Pause with a layout-id morph.
+ * Primary action cluster -- big Play (lime gradient w/ inner shine), with a
+ * Home + emergency-Stop as glass secondaries. State drives the primary:
+ * idle shows Play (start mowing); "playing" morphs it to a Square that
+ * stops the run and returns to the dock (there is NO true pause — the
+ * "playing" primary maps to the same HOME command as the Home secondary, so
+ * the glyph + label say "stop & return", not "pause", to match reality).
  */
 
 type Phase = "idle" | "playing" | "returning" | "alert";
@@ -38,7 +41,7 @@ export function ActionCluster({phase, onStart, onPause, onHome, onStop}: ActionC
       <motion.button
         {...pressFeedback}
         onClick={primaryPlaying ? onPause : onStart}
-        aria-label={primaryPlaying ? "Pause" : "Start mowing"}
+        aria-label={primaryPlaying ? "Arrêter et rentrer à la base" : "Démarrer la tonte"}
         style={{
           position: "relative",
           width: 84, height: 84, borderRadius: "50%",
@@ -72,7 +75,7 @@ export function ActionCluster({phase, onStart, onPause, onHome, onStop}: ActionC
           style={{position: "relative"}}
         >
           {primaryPlaying
-            ? <Pause size={32} strokeWidth={2.4} fill="currentColor"/>
+            ? <Square size={28} strokeWidth={2.4} fill="currentColor"/>
             : <Play  size={32} strokeWidth={2.4} fill="currentColor" style={{marginLeft: 3}}/>}
         </motion.div>
       </motion.button>

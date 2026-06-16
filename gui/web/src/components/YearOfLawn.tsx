@@ -1,5 +1,6 @@
 import {useMemo} from "react";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
+import {useIsMobile} from "../hooks/useIsMobile";
 
 /**
  * GitHub-style contribution-graph rendered against mowing sessions.
@@ -43,6 +44,11 @@ function intensity(km: number, max: number): number {
 
 export function YearOfLawn({sessions}: YearOfLawnProps) {
   const {colors} = useThemeMode();
+  const isMobile = useIsMobile();
+  // The full year SVG (~810px) always horizontal-scroll-clips on phones; on
+  // mobile we render only the most recent weeks. Summary stats stay over the
+  // full 52-week window.
+  const weeksToShow = isMobile ? 20 : 52;
 
   const {grid, weeks, totalKm, activeDays, streak, monthLabels} = useMemo(() => {
     const today = startOfDay(new Date());
@@ -104,10 +110,18 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
 
   const maxKm = grid.reduce((m, c) => Math.max(m, c.km), 0.001);
 
+  // On mobile, render only the trailing `weeksToShow` columns. Re-index the
+  // month labels into the sliced window.
+  const colOffset = Math.max(0, weeks.length - weeksToShow);
+  const displayWeeks = weeks.slice(colOffset);
+  const displayMonthLabels = monthLabels
+    .filter(m => m.col >= colOffset)
+    .map(m => ({...m, col: m.col - colOffset}));
+
   const cellSize = 12;
   const cellGap = 3;
   const colWidth = cellSize + cellGap;
-  const totalWidth = 52 * colWidth + 30;
+  const totalWidth = displayWeeks.length * colWidth + 30;
   const totalHeight = 7 * colWidth + 24;
 
   const intensityColors = [
@@ -150,7 +164,7 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
       <div style={{overflowX: 'auto'}}>
         <svg width={totalWidth} height={totalHeight} style={{display: 'block'}}>
           {/* month labels */}
-          {monthLabels.map((m, i) => (
+          {displayMonthLabels.map((m, i) => (
             <text key={i}
                   x={m.col * colWidth + 28}
                   y={12}
@@ -172,7 +186,7 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
           ))}
 
           {/* cells */}
-          {weeks.map((col, ci) =>
+          {displayWeeks.map((col, ci) =>
             col.map((cell, ri) => {
               const lvl = intensity(cell.km, maxKm);
               return (

@@ -62,7 +62,7 @@ export function HighLevelStatusComponent() {
         return Date.now() + remaining * (1000 * 60 * 60)
     };
     return <Row gutter={[16, 16]}>
-        <Col lg={6} xs={12}><Statistic title="State" valueStyle={{color: colors.primary}}
+        <Col lg={6} xs={12}><Statistic title="État" valueStyle={{color: colors.primary}}
                                        value={stateRenderer(stateName)}/></Col>
         <Col lg={6} xs={12}>{gpsQuality == null ?
             <Statistic title="GPS" value="--"/> :
@@ -70,16 +70,16 @@ export function HighLevelStatusComponent() {
                        value={gpsQuality}
                        suffix={"%"}/>}
         </Col>
-        <Col lg={6} xs={12}><Statistic title="Battery" value={batteryPercent}
+        <Col lg={6} xs={12}><Statistic title="Batterie" value={batteryPercent}
                                        formatter={progressFormatter}/></Col>
         <Col lg={6} xs={12}>{isCharging ?
-            <Statistic.Countdown title="Charge ETA" format={"HH:mm"}
+            <Statistic.Countdown title="Fin de charge" format={"HH:mm"}
                                        value={estimateRemainingChargingTime()}/> :
-            <Statistic title="Charge ETA" value="--:--"/>}
+            <Statistic title="Fin de charge" value="--:--"/>}
         </Col>
-        <Col lg={6} xs={12}><Statistic title="Charging" value={isCharging ? "Yes" : "No"}
+        <Col lg={6} xs={12}><Statistic title="En charge" value={isCharging ? "Yes" : "No"}
                                        formatter={booleanFormatter}/></Col>
-        <Col lg={6} xs={12}><Statistic title="Emergency" value={isEmergency ? "Yes" : "No"}
+        <Col lg={6} xs={12}><Statistic title="Arrêt d'urgence" value={isEmergency ? "Yes" : "No"}
                                        formatter={booleanFormatterInverted}/></Col>
     </Row>;
 }

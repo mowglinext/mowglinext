@@ -25,15 +25,15 @@ export interface DiagnosticArrayLike {
 function fromFixType(fixType: number | undefined | null): GpsStatus | null {
     switch (fixType) {
         case GnssStatusConstants.FIX_TYPE_RTK_FIXED:
-            return {fixType: "RTK_FIX", label: "RTK fixed", percent: 100};
+            return {fixType: "RTK_FIX", label: "RTK fixe", percent: 100};
         case GnssStatusConstants.FIX_TYPE_RTK_FLOAT:
-            return {fixType: "RTK_FLOAT", label: "RTK float", percent: 50};
+            return {fixType: "RTK_FLOAT", label: "RTK flottant", percent: 50};
         case GnssStatusConstants.FIX_TYPE_GPS_FIX:
-            return {fixType: "GPS_FIX", label: "GPS fix", percent: 25};
+            return {fixType: "GPS_FIX", label: "GPS simple", percent: 25};
         case GnssStatusConstants.FIX_TYPE_DEAD_RECKONING:
-            return {fixType: "NO_FIX", label: "Dead reckoning", percent: 10};
+            return {fixType: "NO_FIX", label: "Estime", percent: 10};
         case GnssStatusConstants.FIX_TYPE_NO_FIX:
-            return {fixType: "NO_FIX", label: "No GPS", percent: 0};
+            return {fixType: "NO_FIX", label: "Pas de GPS", percent: 0};
         default:
             return null;
     }
@@ -42,15 +42,15 @@ function fromFixType(fixType: number | undefined | null): GpsStatus | null {
 // Source of truth: GnssStatus from /gps/status.
 export function deriveGpsStatus(gnssStatus: GnssStatus | undefined | null): GpsStatus {
     if (gnssStatus?.fix_valid === false) {
-        return {fixType: "NO_FIX", label: "No GPS", percent: 0};
+        return {fixType: "NO_FIX", label: "Pas de GPS", percent: 0};
     }
 
     if (gnssStatus?.rtk_mode === GnssStatusConstants.RTK_MODE_FIXED) {
-        return {fixType: "RTK_FIX", label: "RTK fixed", percent: 100};
+        return {fixType: "RTK_FIX", label: "RTK fixe", percent: 100};
     }
 
     if (gnssStatus?.rtk_mode === GnssStatusConstants.RTK_MODE_FLOAT) {
-        return {fixType: "RTK_FLOAT", label: "RTK float", percent: 50};
+        return {fixType: "RTK_FLOAT", label: "RTK flottant", percent: 50};
     }
 
     const fromTypedStatus = fromFixType(gnssStatus?.fix_type);
@@ -59,10 +59,10 @@ export function deriveGpsStatus(gnssStatus: GnssStatus | undefined | null): GpsS
     }
 
     if (gnssStatus?.fix_valid === true) {
-        return {fixType: "GPS_FIX", label: "GPS fix", percent: 25};
+        return {fixType: "GPS_FIX", label: "GPS simple", percent: 25};
     }
 
-    return {fixType: "NO_FIX", label: "No GPS", percent: 0};
+    return {fixType: "NO_FIX", label: "Pas de GPS", percent: 0};
 }
 
 export function gnssRtkModeLabel(gnssStatus: GnssStatus | undefined | null): GnssRtkModeLabel | undefined {

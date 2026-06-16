@@ -1,6 +1,6 @@
 import {createContext, useCallback, useContext, useEffect} from "react";
 import type {ThemeMode} from "./colors.ts";
-import {getColors, setColors} from "./colors.ts";
+import {cssVars, getColors, setColors} from "./colors.ts";
 
 interface ThemeContextValue {
     mode: ThemeMode;
@@ -23,10 +23,16 @@ export function ThemeProvider({children}: {children: React.ReactNode}) {
 
     useEffect(() => {
         setColors(mode);
-        document.documentElement.style.background = colors.bgBase;
+        const root = document.documentElement;
+        // Single source of truth: mirror the palette into the CSS custom
+        // properties so the var() layer (tokens.css gradients, .glass,
+        // KEYFRAMES_CSS) resolves from the same place as the JS `colors`.
+        const vars = cssVars();
+        for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
+        root.style.background = colors.bgBase;
         document.body.style.background = colors.bgBase;
         document.body.style.fontFamily = "'Satoshi', 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif";
-        document.documentElement.style.colorScheme = 'dark';
+        root.style.colorScheme = 'dark';
         const meta = document.querySelector('meta[name="theme-color"]');
         if (meta) meta.setAttribute('content', colors.bgBase);
     }, [mode, colors.bgBase]);

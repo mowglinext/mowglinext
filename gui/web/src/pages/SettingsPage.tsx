@@ -120,7 +120,7 @@ export const SettingsPage = () => {
     const currentSectionMeta = sections.find((s) => s.id === activeSection);
 
     return (
-        <div style={{ height: isMobile ? "auto" : "calc(100vh - 64px)", display: "flex", flexDirection: "column" }}>
+        <div style={{ minHeight: isMobile ? "auto" : "calc(100vh - 64px)", display: "flex", flexDirection: "column" }}>
             {/* Header bar */}
             <div style={{
                 padding: isMobile ? "12px 12px 0" : "16px 24px 0",
@@ -130,11 +130,10 @@ export const SettingsPage = () => {
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
                     <Input
                         prefix={<SearchOutlined style={{ color: colors.muted }} />}
-                        placeholder="Search settings..."
+                        placeholder="Rechercher un réglage…"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         allowClear
-                        size="small"
                         style={{ maxWidth: 280 }}
                     />
                     <div style={{ flex: 1 }} />
@@ -168,12 +167,15 @@ export const SettingsPage = () => {
                 )}
             </div>
 
-            {/* Main content */}
+            {/* Main content. We no longer pin this to a fixed viewport height —
+                the AppShell <main> scrolls the whole page instead, which avoids
+                the calc(100vh - 64px) fragility (mobile URL bars, nested scroll
+                traps). The nav and preview rails are made sticky on desktop so
+                they stay in view while the section content scrolls naturally. */}
             <div style={{
                 flex: 1,
                 display: "flex",
                 flexDirection: isMobile ? "column" : "row",
-                overflow: "hidden",
                 minHeight: 0,
             }}>
                 {/* Navigation */}
@@ -182,7 +184,9 @@ export const SettingsPage = () => {
                     flexShrink: 0,
                     paddingLeft: isMobile ? 0 : 8,
                     overflowX: isMobile ? "auto" : undefined,
-                    overflowY: isMobile ? undefined : "auto",
+                    position: isMobile ? undefined : "sticky",
+                    top: isMobile ? undefined : 8,
+                    alignSelf: isMobile ? undefined : "flex-start",
                 }}>
                     <SettingsNav
                         sections={sections}
@@ -195,11 +199,10 @@ export const SettingsPage = () => {
                 {/* Section content */}
                 <div style={{
                     flex: 1,
-                    overflowY: "auto",
                     // Extra bottom space on mobile so content scrolls clear of the
                     // fixed save bar (~92px) + bottom nav stacked below it.
                     padding: isMobile ? "0 12px 180px" : "0 24px 120px 16px",
-                    minHeight: 0,
+                    minWidth: 0,
                 }}>
                     {/* Section header */}
                     {currentSectionMeta && (
@@ -225,7 +228,9 @@ export const SettingsPage = () => {
                     <div style={{
                         width: 260, flexShrink: 0,
                         padding: "0 16px 120px 0",
-                        overflowY: "auto",
+                        position: "sticky",
+                        top: 8,
+                        alignSelf: "flex-start",
                     }}>
                         <SettingsPreview values={values} section={activeSection}/>
                     </div>

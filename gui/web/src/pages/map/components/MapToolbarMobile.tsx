@@ -31,7 +31,6 @@ import {
     PauseOutlined,
     CaretRightOutlined,
     ThunderboltOutlined,
-    CheckOutlined,
     ImportOutlined,
 } from "@ant-design/icons";
 import type {MenuInfo} from "rc-menu/lib/interface";
@@ -106,11 +105,15 @@ export const MapToolbarMobile = ({
     onStart, onHome, onEmergencyOn, onEmergencyOff,
     onAreaRecording, onMowNextArea, onContinueOrPause,
     onBladeForward, onBladeBackward, onBladeOff,
-    onRecordFinish, onRecordCancel,
 }: MapToolbarMobileProps) => {
     const {colors} = useThemeMode();
     const {notification} = App.useApp();
     const [mowLoading, setMowLoading] = useState(false);
+
+    // 44px minimum touch target on every control in the cluster (Apple/WCAG
+    // thumb-reach guideline). Applied via a shared style so size="large" AntD
+    // buttons never fall below the floor.
+    const touchTarget: React.CSSProperties = {minWidth: 44, minHeight: 44};
 
     const toolbarStyle: React.CSSProperties = {
         // Anchor to the VIEWPORT (fixed), not the map container — that container
@@ -122,21 +125,46 @@ export const MapToolbarMobile = ({
         // the offset from the safe-area inset so it tracks the nav height on
         // notched phones, with a comfortable gap above the nav pill.
         bottom: "calc(env(safe-area-inset-bottom, 0px) + 100px)",
+        // Leave room on the right for the pinned STOP button so the scrolling
+        // cluster never slides under it.
         left: 12,
-        right: 12,
+        right: 80,
         // Above the bottom-nav (zIndex 50) so the nav never paints over it.
         zIndex: 55,
         display: "flex",
-        gap: 6,
-        justifyContent: "center",
+        gap: 8,
+        // Horizontally scrollable cluster — never force a multi-row wrap that
+        // would push controls under the bottom-nav on short phones.
+        flexWrap: "nowrap",
+        overflowX: "auto",
+        overflowY: "hidden",
+        WebkitOverflowScrolling: "touch",
         alignItems: "center",
         background: colors.glassBackground,
-        backdropFilter: "blur(16px) saturate(180%)",
-        WebkitBackdropFilter: "blur(16px) saturate(180%)",
-        borderRadius: 12,
+        backdropFilter: "blur(22px) saturate(140%)",
+        WebkitBackdropFilter: "blur(22px) saturate(140%)",
+        borderRadius: 18,
         border: colors.glassBorder,
         boxShadow: colors.glassShadow,
         padding: "8px 12px",
+    };
+
+    // The emergency / STOP button is deliberately separated from the tool
+    // cluster and pinned to its own fixed corner so a panicking beginner finds
+    // it instantly. Larger than every other control, filled rose.
+    const stopButtonStyle: React.CSSProperties = {
+        position: "fixed",
+        bottom: "calc(env(safe-area-inset-bottom, 0px) + 100px)",
+        right: 12,
+        zIndex: 56,
+        width: 60,
+        height: 60,
+        borderRadius: 18,
+        fontWeight: 700,
+        background: emergency ? colors.bgElevated : colors.danger,
+        borderColor: colors.danger,
+        color: emergency ? colors.danger : colors.text,
+        boxShadow: colors.glassShadow,
     };
 
     const isIdle = stateName === "IDLE" || stateName === "IDLE_DOCKED";
@@ -214,183 +242,189 @@ export const MapToolbarMobile = ({
         }
     };
 
+    // Always-present, dominant, separated emergency control. Rendered outside
+    // the scrolling cluster in its own fixed corner. Keeps the exact emergency
+    // on/off commands — only the styling/label/placement changed.
+    const stopButton = (
+        <AsyncButton
+            danger
+            type={emergency ? "default" : "primary"}
+            icon={<WarningOutlined />}
+            onAsyncClick={(emergency ? onEmergencyOff : onEmergencyOn)!}
+            aria-label={emergency ? "Emergency Off" : "Emergency On"}
+            style={stopButtonStyle}
+        >
+            STOP
+        </AsyncButton>
+    );
+
     if (editMap) {
         return (
-            <div style={toolbarStyle}>
-                <Space.Compact size="middle">
-                    <AsyncButton
-                        type="primary"
-                        danger={hasUnsavedChanges}
-                        icon={<SaveOutlined />}
-                        onAsyncClick={onSaveMap}
-                        aria-label="Save"
-                    />
-                    <Button
-                        icon={<CloseOutlined />}
-                        onClick={onEditMap}
-                        aria-label="Cancel"
-                    />
-                </Space.Compact>
+            <>
+                <div style={toolbarStyle}>
+                    {/* Save / Cancel */}
+                    <Space.Compact size="large">
+                        <AsyncButton
+                            type="primary"
+                            size="large"
+                            danger={hasUnsavedChanges}
+                            icon={<SaveOutlined />}
+                            onAsyncClick={onSaveMap}
+                            aria-label="Save"
+                            style={touchTarget}
+                        />
+                        <Button
+                            size="large"
+                            icon={<CloseOutlined />}
+                            onClick={onEditMap}
+                            aria-label="Cancel"
+                            style={touchTarget}
+                        />
+                    </Space.Compact>
 
-                <Space.Compact size="middle">
-                    <Button
-                        icon={<UndoOutlined />}
-                        onClick={onUndo}
-                        disabled={historyIndex <= 0}
-                        aria-label="Undo"
-                    />
-                    <Button
-                        icon={<RedoOutlined />}
-                        onClick={onRedo}
-                        disabled={historyIndex >= editHistoryLength - 1}
-                        aria-label="Redo"
-                    />
-                </Space.Compact>
+                    {/* Undo / Redo */}
+                    <Space.Compact size="large">
+                        <Button
+                            size="large"
+                            icon={<UndoOutlined />}
+                            onClick={onUndo}
+                            disabled={historyIndex <= 0}
+                            aria-label="Undo"
+                            style={touchTarget}
+                        />
+                        <Button
+                            size="large"
+                            icon={<RedoOutlined />}
+                            onClick={onRedo}
+                            disabled={historyIndex >= editHistoryLength - 1}
+                            aria-label="Redo"
+                            style={touchTarget}
+                        />
+                    </Space.Compact>
 
-                <Space.Compact size="middle">
+                    {/* Draw / Add shape / Delete */}
+                    <Space.Compact size="large">
+                        <Button
+                            size="large"
+                            icon={<BorderOutlined />}
+                            onClick={onDrawPolygon}
+                            aria-label="Draw polygon"
+                            style={touchTarget}
+                        />
+                        <ShapePickerDropdown
+                            onDrawShape={onDrawShape}
+                            onDrawEmoji={onDrawEmoji}
+                            placement="top"
+                        >
+                            <Button size="large" icon={<PlusOutlined />} aria-label="Add shape" style={touchTarget} />
+                        </ShapePickerDropdown>
+                        <Button
+                            size="large"
+                            icon={<DeleteOutlined />}
+                            disabled={selectedFeatureCount === 0}
+                            onClick={onTrash}
+                            aria-label="Delete"
+                            style={touchTarget}
+                        />
+                    </Space.Compact>
+
                     <Button
-                        icon={<BorderOutlined />}
-                        onClick={onDrawPolygon}
-                        aria-label="Draw polygon"
+                        size="large"
+                        icon={<AimOutlined />}
+                        type={dockPlacementMode ? "primary" : "default"}
+                        onClick={onPlaceDock}
+                        aria-label="Place dock"
+                        style={touchTarget}
                     />
-                    <ShapePickerDropdown
-                        onDrawShape={onDrawShape}
-                        onDrawEmoji={onDrawEmoji}
-                        placement="top"
+
+                    {/* Combine/Subtract/Split now live inside this More menu
+                        (editMenuItems) to keep the top row uncluttered. */}
+                    <Dropdown
+                        menu={{items: editMenuItems, onClick: handleEditMenuClick}}
+                        trigger={["click"]}
+                        placement="topRight"
                     >
-                        <Button icon={<PlusOutlined />} aria-label="Add shape" />
-                    </ShapePickerDropdown>
-                    <Button
-                        icon={<DeleteOutlined />}
-                        disabled={selectedFeatureCount === 0}
-                        onClick={onTrash}
-                        aria-label="Delete"
-                    />
-                </Space.Compact>
-
-                <Space.Compact size="middle">
-                    <Button
-                        icon={<MergeCellsOutlined />}
-                        disabled={selectedFeatureCount < 2}
-                        onClick={onCombine}
-                        aria-label="Combine"
-                    />
-                    <Button
-                        icon={<MinusSquareOutlined />}
-                        disabled={selectedFeatureCount !== 2}
-                        onClick={onSubtract}
-                        aria-label="Subtract"
-                    />
-                    <Button
-                        icon={<SplitCellsOutlined />}
-                        disabled={selectedFeatureCount !== 1}
-                        onClick={onSplit}
-                        aria-label="Split"
-                    />
-                </Space.Compact>
-
-                <Button
-                    icon={<AimOutlined />}
-                    type={dockPlacementMode ? "primary" : "default"}
-                    onClick={onPlaceDock}
-                    aria-label="Place dock"
-                />
-
-                <Dropdown
-                    menu={{items: editMenuItems, onClick: handleEditMenuClick}}
-                    trigger={["click"]}
-                    placement="topRight"
-                >
-                    <Button icon={<EllipsisOutlined />} aria-label="More" />
-                </Dropdown>
-            </div>
+                        <Button size="large" icon={<EllipsisOutlined />} aria-label="More" style={touchTarget} />
+                    </Dropdown>
+                </div>
+                {stopButton}
+            </>
         );
     }
 
-    // View mode
+    // View mode — top row stays ≤5 items:
+    //   [primary action] · Edit Map · Mow · Manual · More
+    // The emergency control is pulled out into the pinned STOP corner.
+    // While RECORDING the toolbar suppresses its own primary action AND the
+    // Finish/Cancel record buttons — the JoystickOverlay owns the single
+    // Finish/Cancel/Home set so they aren't duplicated.
     return (
-        <div style={toolbarStyle}>
-            {isRecording ? (
-                <Space.Compact size="middle">
-                    <AsyncButton
-                        type="primary"
-                        icon={<CheckOutlined />}
-                        onAsyncClick={onRecordFinish!}
-                        aria-label="Finish Recording"
-                    />
-                    <AsyncButton
-                        danger
-                        icon={<CloseOutlined />}
-                        onAsyncClick={onRecordCancel!}
-                        aria-label="Cancel Recording"
-                    />
-                </Space.Compact>
-            ) : isIdle ? (
-                <AsyncButton
-                    type="primary"
-                    icon={<PlayCircleOutlined />}
-                    onAsyncClick={onStart!}
-                    aria-label="Start"
-                />
-            ) : (
-                <AsyncButton
-                    type="primary"
-                    icon={<HomeOutlined />}
-                    onAsyncClick={onHome!}
-                    aria-label="Home"
-                />
-            )}
+        <>
+            <div style={toolbarStyle}>
+                {!isRecording && (
+                    isIdle ? (
+                        <AsyncButton
+                            type="primary"
+                            size="large"
+                            icon={<PlayCircleOutlined />}
+                            onAsyncClick={onStart!}
+                            aria-label="Start"
+                            style={touchTarget}
+                        />
+                    ) : (
+                        <AsyncButton
+                            type="primary"
+                            size="large"
+                            icon={<HomeOutlined />}
+                            onAsyncClick={onHome!}
+                            aria-label="Home"
+                            style={touchTarget}
+                        />
+                    )
+                )}
 
-            {!emergency ? (
-                <AsyncButton
-                    danger
-                    icon={<WarningOutlined />}
-                    onAsyncClick={onEmergencyOn!}
-                    aria-label="Emergency On"
-                />
-            ) : (
-                <AsyncButton
-                    danger
-                    icon={<WarningOutlined />}
-                    onAsyncClick={onEmergencyOff!}
-                    aria-label="Emergency Off"
-                />
-            )}
-
-            <Button
-                icon={<EditOutlined />}
-                onClick={onEditMap}
-                aria-label="Edit Map"
-            />
-
-            <Dropdown
-                menu={{items: mowingAreas, onClick: handleMowClick}}
-                trigger={["click"]}
-                placement="topLeft"
-            >
                 <Button
-                    icon={<ScissorOutlined />}
-                    loading={mowLoading}
-                    aria-label="Mow area"
+                    size="large"
+                    icon={<EditOutlined />}
+                    onClick={onEditMap}
+                    aria-label="Edit Map"
+                    style={touchTarget}
+                />
+
+                <Dropdown
+                    menu={{items: mowingAreas, onClick: handleMowClick}}
+                    trigger={["click"]}
+                    placement="topLeft"
                 >
-                    Mow
-                </Button>
-            </Dropdown>
+                    <Button
+                        size="large"
+                        icon={<ScissorOutlined />}
+                        loading={mowLoading}
+                        aria-label="Mow area"
+                        style={touchTarget}
+                    >
+                        Mow
+                    </Button>
+                </Dropdown>
 
-            <AsyncButton
-                danger={manualMode}
-                icon={manualMode ? <StopOutlined /> : <ControlOutlined />}
-                onAsyncClick={manualMode ? onStopManualMode : onManualMode}
-                aria-label={manualMode ? "Stop Manual Mowing" : "Manual Mowing"}
-            />
+                <AsyncButton
+                    size="large"
+                    danger={manualMode}
+                    icon={manualMode ? <StopOutlined /> : <ControlOutlined />}
+                    onAsyncClick={manualMode ? onStopManualMode : onManualMode}
+                    aria-label={manualMode ? "Stop Manual Mowing" : "Manual Mowing"}
+                    style={touchTarget}
+                />
 
-            <Dropdown
-                menu={{items: dataMenuItems, onClick: handleMoreClick}}
-                trigger={["click"]}
-                placement="topRight"
-            >
-                <Button icon={<EllipsisOutlined />} aria-label="More" />
-            </Dropdown>
-        </div>
+                <Dropdown
+                    menu={{items: dataMenuItems, onClick: handleMoreClick}}
+                    trigger={["click"]}
+                    placement="topRight"
+                >
+                    <Button size="large" icon={<EllipsisOutlined />} aria-label="More" style={touchTarget} />
+                </Dropdown>
+            </div>
+            {stopButton}
+        </>
     );
 };

@@ -105,7 +105,7 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
           {compact ? (
             <div style={{display: 'flex', alignItems: 'center', gap: 14, width: '100%'}}>
               <RadialGauge value={data.battery} size={gaugeSize} thickness={8} color={colors.accent} track="rgba(255,255,255,0.08)">
-                <div className="mn-num" style={{fontSize: 32, color: colors.text, lineHeight: 1}}>{Math.round(data.battery)}<span style={{fontSize: 14, color: colors.textDim, fontFamily: 'Geist Mono, monospace', textTransform: 'lowercase', marginLeft: 2}}>%</span></div>
+                <div className="mn-num" style={{fontSize: 32, color: colors.text, lineHeight: 1}}>{Math.round(data.battery)}<span style={{fontSize: 14, color: colors.textDim, fontFamily: 'Space Grotesk, monospace', textTransform: 'lowercase', marginLeft: 2}}>%</span></div>
               </RadialGauge>
               <div style={{flex: 1}}>
                 <div style={{

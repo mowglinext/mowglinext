@@ -241,7 +241,7 @@ export const SchedulePage = () => {
                 key={i}
                 onClick={() => toggleDay(sched, i)}
                 style={{
-                  width: 36, height: 36, borderRadius: '50%',
+                  width: 44, height: 44, borderRadius: '50%',
                   border: `1.5px solid ${isActive ? color : colors.border}`,
                   background: isActive ? `${color}20` : 'transparent',
                   color: isActive ? color : colors.textSecondary,
@@ -276,10 +276,28 @@ export const SchedulePage = () => {
     );
   };
 
+  const pageHeader = (
+    <div>
+      <div style={{
+        fontSize: 11, color: colors.textMuted, fontWeight: 600,
+        letterSpacing: '0.12em', textTransform: 'uppercase' as const,
+      }}>
+        Planning
+      </div>
+      <div className="mn-display" style={{
+        fontSize: isMobile ? 30 : 40, color: colors.text,
+        lineHeight: 1.05, marginTop: 4, letterSpacing: '-0.02em',
+      }}>
+        Tontes programmées
+      </div>
+    </div>
+  );
+
   if (isMobile) {
     return (
       <div style={{display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 8}}>
-        <div style={{display: 'flex', justifyContent: 'flex-end'}}>
+        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12}}>
+          {pageHeader}
           <ActionButton primary icon={<IconPlus size={14}/>} label="New run" onClick={() => handleCreate()} disabled={loading}/>
         </div>
         {schedules.length === 0 && (
@@ -303,6 +321,7 @@ export const SchedulePage = () => {
   // Desktop: weekly grid + sub-cards
   return (
     <div style={{display: 'flex', flexDirection: 'column', gap: 16}}>
+      {pageHeader}
       {/* Weekly grid */}
       <DashCard>
         <div style={{display: 'grid', gridTemplateColumns: '48px repeat(7, 1fr)', gap: 6}}>
@@ -389,24 +408,25 @@ export const SchedulePage = () => {
         </DashCard>
 
         <DashCard>
-          <div style={{fontSize: 13, fontWeight: 600, marginBottom: 12}}>Rules</div>
+          <div style={{fontSize: 13, fontWeight: 600, marginBottom: 4}}>Rules</div>
+          <div style={{fontSize: 11, color: colors.textMuted, marginBottom: 12}}>
+            Built-in safety behaviors — always active.
+          </div>
           {[
             {k: 'Rain-aware', on: true, hint: 'pause if rain detected'},
             {k: 'Auto-dock low', on: true, hint: 'return at <20% battery'},
           ].map(r => (
             <div key={r.k} style={{display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0'}}>
-              <div style={{
-                width: 28, height: 16, borderRadius: 100,
-                background: r.on ? colors.accent : 'rgba(255,255,255,0.12)',
-                position: 'relative', transition: 'background .2s', flexShrink: 0,
+              <span style={{
+                fontSize: 10, fontWeight: 700, letterSpacing: '0.04em',
+                color: r.on ? colors.accent : colors.textMuted,
+                background: r.on ? colors.accentSoft : 'transparent',
+                border: `1px solid ${r.on ? colors.accent : colors.border}`,
+                borderRadius: 100, padding: '2px 10px', flexShrink: 0,
+                textTransform: 'uppercase' as const,
               }}>
-                <div style={{
-                  position: 'absolute', top: 2,
-                  left: r.on ? 14 : 2,
-                  width: 12, height: 12, borderRadius: 6,
-                  background: '#fff', transition: 'left .2s',
-                }}/>
-              </div>
+                {r.on ? 'On' : 'Off'}
+              </span>
               <div style={{flex: 1}}>
                 <div style={{fontSize: 12, fontWeight: 600}}>{r.k}</div>
                 <div style={{fontSize: 10, color: colors.textMuted}}>{r.hint}</div>

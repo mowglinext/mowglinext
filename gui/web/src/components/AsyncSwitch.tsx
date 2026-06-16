@@ -1,22 +1,29 @@
-import {Switch, SwitchProps} from "antd";
+import {App, Switch, SwitchProps} from "antd";
 import * as React from "react";
 
 export const AsyncSwitch: React.FC<SwitchProps & {
     onAsyncChange: (checked: boolean, event: React.MouseEvent<HTMLButtonElement> | React.KeyboardEvent<HTMLButtonElement>) => Promise<any>
 }> = (props) => {
-    const {onAsyncChange, ...rest} = props;
+    const {notification} = App.useApp();
+    const {onAsyncChange, onChange, ...rest} = props;
     const [loading, setLoading] = React.useState(false)
     const handleChange = (checked: boolean, event: React.MouseEvent<HTMLButtonElement> | React.KeyboardEvent<HTMLButtonElement>) => {
-        if (props.onChange !== undefined) {
-            props.onChange(checked, event)
-        } else if (onAsyncChange !== undefined) {
-            setLoading(true)
-            onAsyncChange(checked, event).then(() => {
-                setLoading(false)
-            }).catch(() => {
-                setLoading(false)
+        if (onAsyncChange === undefined) return;
+        // Keep any caller-supplied onChange as a side-effect, but the async
+        // handler is what owns loading + error reporting (matches AsyncButton).
+        onChange?.(checked, event)
+        setLoading(true)
+        onAsyncChange(checked, event).then(() => {
+            setLoading(false)
+        }).catch((e) => {
+            setLoading(false)
+            if (console.error)
+                console.error(e);
+            notification.error({
+                message: 'An error occured',
+                description: e?.message,
             })
-        }
+        })
     }
     return <Switch loading={loading} onChange={handleChange} {...rest}/>
 }

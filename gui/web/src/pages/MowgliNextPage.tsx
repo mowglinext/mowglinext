@@ -1,4 +1,6 @@
+import {App} from "antd";
 import {motion} from "framer-motion";
+import {useNavigate} from "react-router-dom";
 import {Sparkles, ChevronRight, Wifi, Droplets, Thermometer} from "lucide-react";
 
 import {useIsMobile} from "../hooks/useIsMobile";
@@ -94,6 +96,8 @@ function useMowerData() {
 
 export const MowgliNextPage = () => {
   const isMobile = useIsMobile();
+  const navigate = useNavigate();
+  const {modal} = App.useApp();
   const mowerAction = useMowerAction();
   const data = useMowerData();
   const {settings} = useSettings();
@@ -185,13 +189,29 @@ export const MowgliNextPage = () => {
         ? "Sécurise la zone puis relance avec le bouton vert."
         : "Tape Play pour démarrer une tonte ou laisse le planning gérer.";
 
+  // The hero "stop" affordance latches the firmware EMERGENCY — this is the
+  // real e-stop, not a soft pause. Gate it behind an explicit confirm so a
+  // mistap can't latch the safety system. The dispatched command is unchanged.
+  const fireEmergency = mowerAction("emergency", {Emergency: 1});
+  const confirmEmergency = () => {
+    modal.confirm({
+      title: "Arrêt d'urgence",
+      content: "Cela déclenche l'arrêt d'urgence matériel (lames + déplacement). À réarmer manuellement ensuite. Continuer ?",
+      okText: "Arrêt d'urgence",
+      okType: "danger",
+      cancelText: "Annuler",
+      onOk: () => fireEmergency(),
+    });
+  };
+
   const actions = {
     onStart: mowerAction("high_level_control", {Command: 1}),
     // No pause command exists (mower_logic/manual_pause_mowing returned 500);
-    // "pause" maps to HOME (stop + dock), same as onHome.
+    // the "pause" affordance maps to HOME (stop + dock), same as onHome — it is
+    // labelled "Retour base" in the UI to match what it actually does.
     onPause: mowerAction("high_level_control", {Command: 2}),
     onHome: mowerAction("high_level_control", {Command: 2}),
-    onStop: mowerAction("emergency", {Emergency: 1}),
+    onStop: confirmEmergency,
   };
 
   return (
@@ -219,7 +239,7 @@ export const MowgliNextPage = () => {
             </div>
             <div className="mn-display" style={{
               fontSize: isMobile ? 26 : 34,
-              color: 'var(--text, #ECFFF4)', fontWeight: 400,
+              color: 'var(--ink, #ECFFF4)', fontWeight: 400,
               letterSpacing: '-0.02em', lineHeight: 1.05, marginTop: 4,
             }}>
               {data.isMoving ? "Mowgli est en tonte" : data.charging ? "Mowgli charge" : "Bon retour"}
@@ -243,7 +263,7 @@ export const MowgliNextPage = () => {
                 todayMowedM2={todayMowedM2} totalArea={totalArea}
               />
             </motion.div>
-            <motion.div variants={riseFade}><LiveMapCard polygon={polygonNormalised} robot={robotNormalised} coverage={coveragePct}/></motion.div>
+            <motion.div variants={riseFade}><LiveMapCard polygon={polygonNormalised} robot={robotNormalised} coverage={coveragePct} onViewMap={() => navigate("/map")}/></motion.div>
             <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
             <motion.div variants={riseFade}><HealthCard data={data}/></motion.div>
           </div>
@@ -262,7 +282,7 @@ export const MowgliNextPage = () => {
               <motion.div variants={riseFade}><HealthCard data={data}/></motion.div>
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
-              <motion.div variants={riseFade}><LiveMapCard polygon={polygonNormalised} robot={robotNormalised} coverage={coveragePct} height={300}/></motion.div>
+              <motion.div variants={riseFade}><LiveMapCard polygon={polygonNormalised} robot={robotNormalised} coverage={coveragePct} height={300} onViewMap={() => navigate("/map")}/></motion.div>
               <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
             </div>
           </div>
@@ -315,7 +335,7 @@ function HeroCard({
               fontSize: large ? 38 : 30,
               lineHeight: 1.05, marginTop: 8,
               fontWeight: 400, letterSpacing: '-0.025em',
-              color: 'var(--text, #ECFFF4)',
+              color: 'var(--ink, #ECFFF4)',
             }}>
               {headline}
             </h1>
@@ -334,7 +354,7 @@ function HeroCard({
           >
             <div className="mn-num" style={{
               fontSize: large ? 38 : 30, fontWeight: 400, lineHeight: 1,
-              color: 'var(--text, #ECFFF4)', letterSpacing: '-0.02em',
+              color: 'var(--ink, #ECFFF4)', letterSpacing: '-0.02em',
             }}>
               {Math.round(data.battery)}
             </div>
@@ -348,25 +368,32 @@ function HeroCard({
           </BatteryRing>
         </div>
 
-        {totalArea > 0 && (
-          <div style={{marginTop: large ? 22 : 18}}>
-            <div style={{
-              display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-              marginBottom: 8,
-            }}>
-              <span style={{
-                fontSize: 11, color: 'rgba(236,255,244,0.42)',
-                letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 600,
+        {totalArea > 0 && (() => {
+          // Grid is published at 5 cm; cells × cellArea = m².
+          const cellAreaM2 = 0.05 * 0.05;
+          const mowedM2 = todayMowedM2 * cellAreaM2;
+          const totalM2 = totalArea * cellAreaM2;
+          const pct = Math.round(coveragePct * 100);
+          return (
+            <div style={{marginTop: large ? 22 : 18}}>
+              <div style={{
+                display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+                marginBottom: 8,
               }}>
-                Couverture aujourd'hui
-              </span>
-              <span style={{fontSize: 12, color: 'rgba(236,255,244,0.66)', fontWeight: 600, fontFamily: '"Space Grotesk", monospace'}}>
-                {todayMowedM2.toLocaleString()}<span style={{color: 'rgba(236,255,244,0.42)'}}> / {totalArea.toLocaleString()} cellules</span>
-              </span>
+                <span style={{
+                  fontSize: 11, color: 'rgba(236,255,244,0.42)',
+                  letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 600,
+                }}>
+                  Couverture aujourd'hui · {pct} %
+                </span>
+                <span style={{fontSize: 12, color: 'rgba(236,255,244,0.66)', fontWeight: 600, fontFamily: '"Space Grotesk", monospace'}}>
+                  {mowedM2.toFixed(0)}<span style={{color: 'rgba(236,255,244,0.42)'}}> / {totalM2.toFixed(0)} m²</span>
+                </span>
+              </div>
+              <ProgressRibbon value={coveragePct} segments={24}/>
             </div>
-            <ProgressRibbon value={coveragePct} segments={24}/>
-          </div>
-        )}
+          );
+        })()}
 
         <div style={{marginTop: large ? 28 : 22}}>
           <ActionCluster phase={phase} {...actions}/>
@@ -381,9 +408,10 @@ interface LiveMapCardProps {
   robot?: {x: number; y: number; heading: number};
   coverage: number;
   height?: number;
+  onViewMap?: () => void;
 }
 
-function LiveMapCard({polygon, robot, coverage, height = 220}: LiveMapCardProps) {
+function LiveMapCard({polygon, robot, coverage, height = 220, onViewMap}: LiveMapCardProps) {
   // LiveMapMini expects 0..1 normalised; we pass an empty/default if no
   // recorded area yet.
   return (
@@ -401,12 +429,12 @@ function LiveMapCard({polygon, robot, coverage, height = 220}: LiveMapCardProps)
           </div>
           <div className="mn-display" style={{
             fontSize: 18, fontWeight: 400, marginTop: 2,
-            color: 'var(--text, #ECFFF4)', letterSpacing: '-0.01em',
+            color: 'var(--ink, #ECFFF4)', letterSpacing: '-0.01em',
           }}>
             Trajectoire en direct
           </div>
         </div>
-        <button style={{
+        <button onClick={onViewMap} style={{
           display: 'inline-flex', alignItems: 'center', gap: 4,
           background: 'transparent', border: 'none',
           fontSize: 12, fontWeight: 600, color: 'var(--lime, #7CFFB2)', cursor: 'pointer',
@@ -479,7 +507,7 @@ function StatTile({label, value, unit, hint, accent, icon}: StatTileProps) {
         </div>
         <div style={{display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 8}}>
           <div className="mn-num" style={{
-            fontSize: 30, color: 'var(--text, #ECFFF4)', lineHeight: 1,
+            fontSize: 30, color: 'var(--ink, #ECFFF4)', lineHeight: 1,
           }}>
             {value}
           </div>
@@ -536,7 +564,7 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
               flexShrink: 0,
             }}/>
             <div style={{flex: 1, minWidth: 0}}>
-              <div style={{fontSize: 13, fontWeight: 600, color: 'var(--text, #ECFFF4)'}}>{r.k}</div>
+              <div style={{fontSize: 13, fontWeight: 600, color: 'var(--ink, #ECFFF4)'}}>{r.k}</div>
               <div style={{fontSize: 11, color: 'rgba(236,255,244,0.42)'}}>{r.note}</div>
             </div>
           </div>
@@ -552,7 +580,7 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
 
 function greetingFor() {
   const h = new Date().getHours();
-  if (h < 6)  return 'Bonsoir';
+  if (h < 6)  return 'Bonne nuit';
   if (h < 12) return 'Bonjour';
   if (h < 18) return 'Bel après-midi';
   return 'Bonsoir';

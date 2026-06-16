@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
+    App,
     Button, Card, Col, Row, Steps, Typography, Select, Space, Alert,
     Input, InputNumber, Switch, Form, Divider, Tag, Result,
 } from "antd";
@@ -54,7 +56,7 @@ const { Title, Text, Paragraph } = Typography;
 const WelcomeStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
     const { colors } = useThemeMode();
     return (
-        <div style={{ textAlign: "center", maxWidth: 640, margin: "0 auto", padding: "32px 0" }}>
+        <div style={{ textAlign: "center", maxWidth: 760, margin: "0 auto", padding: "32px 0" }}>
             <div style={{
                 width: 96, height: 96, borderRadius: 28,
                 background: `linear-gradient(135deg, ${colors.accent}, ${colors.accent}99)`,
@@ -62,7 +64,7 @@ const WelcomeStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
                 display: "flex",
                 alignItems: "center", justifyContent: "center",
                 margin: "0 auto 28px",
-                color: "#0a1a10",
+                color: colors.bgBase,
             }}>
                 <RocketOutlined style={{ fontSize: 42 }} />
             </div>
@@ -147,8 +149,17 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
         }
     };
 
+    // Reflect the fallback default as a real selection on mount: without this a
+    // user who never taps a card leaves with mower_model unset (no preset
+    // applied) even though the YardForce 500 card looks selected. We persist the
+    // default so the highlighted card and the saved value always agree.
+    useEffect(() => {
+        if (!values.mower_model) handleModelSelect("YardForce500");
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     return (
-        <div style={{ maxWidth: 800, margin: "0 auto" }}>
+        <div style={{ maxWidth: 760, margin: "0 auto" }}>
             <Title level={4}>
                 <SettingOutlined /> Choose Your Robot
             </Title>
@@ -244,7 +255,7 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
 // ── NTRIP step (correction network + base station, before GPS) ──────────
 
 const NtripStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => (
-    <div style={{ maxWidth: 820, margin: "0 auto" }}>
+    <div style={{ maxWidth: 760, margin: "0 auto" }}>
         <Title level={4}>
             <WifiOutlined /> NTRIP Corrections
         </Title>
@@ -392,7 +403,12 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
 
             {expertMode && (
                 <>
-                    <Card size="small" title={<Space><SettingOutlined /> Expert GNSS Settings</Space>} style={{ marginBottom: 16 }}>
+                    <Card
+                        size="small"
+                        title={<Space><SettingOutlined /> Expert GNSS Settings</Space>}
+                        extra={<Tag color="warning">Aperçu — pas encore actif</Tag>}
+                        style={{ marginBottom: 16 }}
+                    >
                         <Paragraph type="secondary" style={{ marginTop: 0 }}>
                             Receiver-family selection, raw serial wiring, and vendor-specific overrides live here.
                         </Paragraph>
@@ -400,7 +416,7 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                             <Row gutter={16}>
                                 <Col xs={24} sm={12}>
                                     <Form.Item
-                                        label="Receiver Profile"
+                                        label={<Space size={4}>Receiver Profile <Tag color="warning" style={{ marginInlineEnd: 0 }}>Aperçu</Tag></Space>}
                                         tooltip="Low-level receiver command set. Backend translation to receiver-specific commands is still being wired — leave on the default unless you know you need it."
                                     >
                                         <Select
@@ -451,10 +467,10 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                             </Row>
                         </Form>
                         <Alert
-                            type="info"
+                            type="warning"
                             showIcon
-                            message="Expert-mode scope"
-                            description={"For UM982, \"UM982 recommended\" maps to CONFIG SIGNALGROUP 3 6. These expert fields are saved now, but the backend API that translates them into receiver commands is still TODO."}
+                            message="Aperçu — pas encore actif"
+                            description={"Ces champs experts sont enregistrés mais l'API backend qui les traduit en commandes récepteur n'est pas encore branchée. Pour l'UM982, « UM982 recommended » correspondra à CONFIG SIGNALGROUP 3 6. En attendant, le profil de signal vendor-neutre ci-dessus suffit."}
                         />
                     </Card>
 
@@ -510,6 +526,7 @@ type DatumStepProps = RobotModelStepProps & { gpsRestarting?: boolean };
 
 const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting }) => {
     const guiApi = useApi();
+    const { notification } = App.useApp();
     const [datumLoading, setDatumLoading] = useState(false);
 
     const gnssStatus = useGnssStatus();
@@ -531,14 +548,17 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting }
                 onChange("datum_lon", parseFloat(parts[1]));
             }
         } catch (e: any) {
-            alert(e.message || "Failed to set datum from GPS");
+            notification.error({
+                message: "Failed to set datum from GPS",
+                description: e.message || "Could not capture the current GPS position as the map datum.",
+            });
         } finally {
             setDatumLoading(false);
         }
     };
 
     return (
-        <div style={{ maxWidth: 640, margin: "0 auto" }}>
+        <div style={{ maxWidth: 760, margin: "0 auto" }}>
             <Title level={4}>
                 <EnvironmentOutlined /> Map Origin (Datum)
             </Title>
@@ -618,7 +638,7 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting }
 
 const SensorStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => {
     return (
-        <div style={{ maxWidth: 900, margin: "0 auto" }}>
+        <div style={{ maxWidth: 760, margin: "0 auto" }}>
             <Title level={4}>
                 <AimOutlined /> Sensor Placement
             </Title>
@@ -668,7 +688,7 @@ const ImuYawStep: React.FC<RobotModelStepProps> = ({values, onChange}) => {
     const currentImuYawDeg = (values.imu_yaw ?? 0) * 180 / Math.PI;
 
     return (
-        <div style={{maxWidth: 700, margin: "0 auto"}}>
+        <div style={{maxWidth: 760, margin: "0 auto"}}>
             <Title level={4}>
                 <CompassOutlined/> Sensor Calibration
             </Title>
@@ -817,7 +837,7 @@ const FirmwareStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
     }
 
     return (
-        <div style={{ maxWidth: 600, margin: "0 auto", textAlign: "center", padding: "24px 0" }}>
+        <div style={{ maxWidth: 760, margin: "0 auto", textAlign: "center", padding: "24px 0" }}>
             <div style={{
                 width: 64, height: 64, borderRadius: "50%",
                 background: colors.primaryBg, display: "flex",
@@ -857,6 +877,7 @@ const FirmwareStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
 const CompleteStep: React.FC = () => {
     const { colors } = useThemeMode();
     const guiApi = useApi();
+    const navigate = useNavigate();
     const [restarting, setRestarting] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -919,14 +940,14 @@ const CompleteStep: React.FC = () => {
                     type="primary"
                     size="large"
                     icon={<EnvironmentOutlined />}
-                    onClick={() => { window.location.href = "/#/map"; }}
+                    onClick={() => navigate("/map")}
                 >
                     Draw Mowing Area
                 </Button>,
                 <Button
                     key="dashboard"
                     size="large"
-                    onClick={() => { window.location.href = "/#/mowglinext"; }}
+                    onClick={() => navigate("/mowglinext")}
                 >
                     Go to Dashboard
                 </Button>,
@@ -949,7 +970,7 @@ const CompleteStep: React.FC = () => {
                             <Button
                                 type="link"
                                 style={{ paddingLeft: 0 }}
-                                onClick={() => { window.location.href = "/#/diagnostics"; }}
+                                onClick={() => navigate("/diagnostics")}
                             >
                                 Open Diagnostics → run calibrations →
                             </Button>

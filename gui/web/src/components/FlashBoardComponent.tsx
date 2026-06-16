@@ -1,4 +1,4 @@
-import {App, Button, Col, Row, Typography} from "antd";
+import {Alert, App, Button, Col, Collapse, Row, Typography} from "antd";
 import {useEffect, useMemo, useRef, useState} from "react";
 import {fetchEventSource} from "@microsoft/fetch-event-source";
 import {createSchemaField} from "@formily/react";
@@ -194,7 +194,7 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                         <li>Limit Voltage 150mA: <strong>{values.limitVoltage150MA} V</strong></li>
                         <li>IMU Inclination Threshold: <strong>0x{(values.imuOnboardInclinationThreshold ?? 0x38).toString(16).toUpperCase().padStart(2, "0")}</strong></li>
                     </ul>
-                    <p style={{color: "red"}}><strong>Wrong voltage or current values can damage your battery or hardware!</strong></p>
+                    <p style={{color: colors.danger}}><strong>Wrong voltage or current values can damage your battery or hardware!</strong></p>
                 </div>
             ),
             okText: "Flash",
@@ -394,61 +394,111 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                         x-decorator-props={{tooltip: "Wheel base in meters"}}
                         x-component-props={{step: 0.001}}
                         x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Boolean name={"disableEmergency"} title={"Disable Emergency"} default={false}
-                        x-decorator-props={{tooltip: "Disable emergency stop"}}
-                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"maxChargeCurrent"} title={"Max Charge Current"} default={1.0}
-                        x-component-props={{step: 0.1, max: 5.0}}
-                        x-decorator-props={{tooltip: "Max charge current in Amps"}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"limitVoltage150MA"} title={"Limit Voltage 150mA"} default={28.0}
-                        x-decorator-props={{tooltip: "Voltage limit during slow charge in Volts"}}
-                        x-component-props={{step: 0.1, max: 30.0}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"maxChargeVoltage"} title={"Max Charge Voltage"} default={29.0}
-                        x-decorator-props={{tooltip: "Max charge voltage in Volts"}}
-                        x-component-props={{step: 0.1, max: 30.0}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"batChargeCutoffVoltage"} title={"Bat Charge Cutoff Voltage"} default={28.0}
-                        x-decorator-props={{tooltip: "Max battery voltage allowed in Volts"}}
-                        x-component-props={{step: 0.1, max: 30.0}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"oneWheelLiftEmergencyMillis"} title={"One Wheel Lift Emergency Millis"} default={10000}
-                        x-decorator-props={{tooltip: "Time in ms before emergency when one wheel is lifted"}}
-                        x-component-props={{step: 1}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"bothWheelsLiftEmergencyMillis"} title={"Both Wheel Lift Emergency Millis"} default={1000}
-                        x-decorator-props={{tooltip: "Time in ms before emergency when both wheels are lifted"}}
-                        x-component-props={{step: 1}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"tiltEmergencyMillis"} title={"Tilt Emergency Millis"} default={500}
-                        x-decorator-props={{tooltip: "Time in ms before emergency when mower is tilted"}}
-                        x-component-props={{step: 1}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"stopButtonEmergencyMillis"} title={"Stop Button Emergency Millis"} default={100}
-                        x-decorator-props={{tooltip: "Time in ms before emergency when stop button is pressed"}}
-                        x-component-props={{step: 1}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"playButtonClearEmergencyMillis"} title={"Play Button Clear Emergency Millis"} default={2000}
-                        x-decorator-props={{tooltip: "Time in ms to hold play button to clear emergency"}}
-                        x-component-props={{step: 1}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"imuOnboardInclinationThreshold"} title={"IMU Onboard Inclination Threshold"} default={0x38}
-                        x-decorator-props={{tooltip: "IMU inclination threshold (0x2C=more allowed, 0x38=stock)"}}
-                        x-component-props={{step: 1, min: 0, max: 127}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Boolean name={"externalImuAcceleration"} title={"External IMU Acceleration"} default={true}
-                        x-decorator-props={{tooltip: "Use external IMU for acceleration"}}
-                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Boolean name={"externalImuAngular"} title={"External IMU Angular"} default={true}
-                        x-decorator-props={{tooltip: "Use external IMU for angular"}}
-                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Boolean name={"masterJ18"} title={"Master J18"} default={true}
-                        x-decorator-props={{tooltip: "Use J18 as master"}}
-                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Boolean name={"perimeterWire"} title={"Use Perimeter wire"} default={true}
-                        x-decorator-props={{tooltip: "Use perimeter wire"}}
-                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
+
+                    {/* Progressive disclosure: the charge/voltage/current,
+                        emergency-timer and IMU-threshold fields are hidden behind
+                        an explicit fold. Wrong values here can damage the battery
+                        or disable physical safety, so they are NOT shown to a
+                        first-time flasher by default. The Formily field-state
+                        wiring (boardType effect, save/restore) is unaffected —
+                        these are the same fields, just rendered inside a Collapse. */}
+                    <Collapse
+                        ghost
+                        style={{marginBottom: 8}}
+                        items={[{
+                            key: "advanced",
+                            // forceRender keeps the Formily fields mounted even when
+                            // the panel is collapsed, so their `default` values are
+                            // registered in the form model and ALWAYS submitted with
+                            // the flash payload — never silently undefined.
+                            forceRender: true,
+                            label: (
+                                <Typography.Text strong style={{color: colors.warning}}>
+                                    Paramètres firmware avancés (peuvent endommager le matériel)
+                                </Typography.Text>
+                            ),
+                            children: (
+                                <FormLayout layout="vertical">
+                                    <Alert
+                                        type="warning"
+                                        showIcon
+                                        style={{marginBottom: 12}}
+                                        message="Ces réglages contrôlent la charge de la batterie et les sécurités physiques"
+                                        description="Des valeurs de tension ou de courant incorrectes peuvent endommager la batterie ou la carte. Ne modifiez ces champs que si vous savez précisément ce que vous faites."
+                                    />
+                                    <div style={{
+                                        border: `1px solid ${colors.danger}`,
+                                        background: colors.dangerBg,
+                                        borderRadius: 8,
+                                        padding: "10px 12px",
+                                        marginBottom: 12,
+                                    }}>
+                                        <SchemaField><SchemaField.Boolean name={"disableEmergency"} title={"Disable Emergency"} default={false}
+                                            x-decorator-props={{tooltip: "Disable emergency stop", style: {marginBottom: 0}}}
+                                            x-component="Checkbox"
+                                            x-component-props={{style: {color: colors.danger, fontWeight: 600}}}
+                                            x-decorator="FormItem"/></SchemaField>
+                                        <Typography.Text style={{color: colors.danger, fontSize: 12}}>
+                                            ⚠ Désactive l'arrêt d'urgence du firmware (roues levées, inclinaison,
+                                            bouton stop). À n'utiliser qu'en banc de test, jamais sur un robot avec lame.
+                                        </Typography.Text>
+                                    </div>
+                                    <SchemaField><SchemaField.Number name={"maxChargeCurrent"} title={"Max Charge Current"} default={1.0}
+                                        x-component-props={{step: 0.1, max: 5.0}}
+                                        x-decorator-props={{tooltip: "Max charge current in Amps"}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"limitVoltage150MA"} title={"Limit Voltage 150mA"} default={28.0}
+                                        x-decorator-props={{tooltip: "Voltage limit during slow charge in Volts"}}
+                                        x-component-props={{step: 0.1, max: 30.0}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"maxChargeVoltage"} title={"Max Charge Voltage"} default={29.0}
+                                        x-decorator-props={{tooltip: "Max charge voltage in Volts"}}
+                                        x-component-props={{step: 0.1, max: 30.0}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"batChargeCutoffVoltage"} title={"Bat Charge Cutoff Voltage"} default={28.0}
+                                        x-decorator-props={{tooltip: "Max battery voltage allowed in Volts"}}
+                                        x-component-props={{step: 0.1, max: 30.0}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"oneWheelLiftEmergencyMillis"} title={"One Wheel Lift Emergency Millis"} default={10000}
+                                        x-decorator-props={{tooltip: "Time in ms before emergency when one wheel is lifted"}}
+                                        x-component-props={{step: 1}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"bothWheelsLiftEmergencyMillis"} title={"Both Wheel Lift Emergency Millis"} default={1000}
+                                        x-decorator-props={{tooltip: "Time in ms before emergency when both wheels are lifted"}}
+                                        x-component-props={{step: 1}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"tiltEmergencyMillis"} title={"Tilt Emergency Millis"} default={500}
+                                        x-decorator-props={{tooltip: "Time in ms before emergency when mower is tilted"}}
+                                        x-component-props={{step: 1}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"stopButtonEmergencyMillis"} title={"Stop Button Emergency Millis"} default={100}
+                                        x-decorator-props={{tooltip: "Time in ms before emergency when stop button is pressed"}}
+                                        x-component-props={{step: 1}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"playButtonClearEmergencyMillis"} title={"Play Button Clear Emergency Millis"} default={2000}
+                                        x-decorator-props={{tooltip: "Time in ms to hold play button to clear emergency"}}
+                                        x-component-props={{step: 1}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"imuOnboardInclinationThreshold"} title={"IMU Onboard Inclination Threshold"} default={0x38}
+                                        x-decorator-props={{tooltip: "IMU inclination threshold (0x2C=more allowed, 0x38=stock)"}}
+                                        x-component-props={{step: 1, min: 0, max: 127}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Boolean name={"externalImuAcceleration"} title={"External IMU Acceleration"} default={true}
+                                        x-decorator-props={{tooltip: "Use external IMU for acceleration"}}
+                                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Boolean name={"externalImuAngular"} title={"External IMU Angular"} default={true}
+                                        x-decorator-props={{tooltip: "Use external IMU for angular"}}
+                                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Boolean name={"masterJ18"} title={"Master J18"} default={true}
+                                        x-decorator-props={{tooltip: "Use J18 as master"}}
+                                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Boolean name={"perimeterWire"} title={"Use Perimeter wire"} default={true}
+                                        x-decorator-props={{tooltip: "Use perimeter wire"}}
+                                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
+                                </FormLayout>
+                            ),
+                        }]}
+                    />
                 </FormLayout>
             </Col>
             <Col span={24} style={{

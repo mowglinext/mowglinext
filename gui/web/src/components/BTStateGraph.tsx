@@ -87,9 +87,11 @@ function nodeFor(state: string | undefined): string | null {
 }
 
 const keyframes = `
-@keyframes btStatePulse {
-  0%, 100% { opacity: 0.55; transform: scale(1); }
-  50% { opacity: 1; transform: scale(1.08); }
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes btStatePulse {
+    0%, 100% { opacity: 0.55; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.08); }
+  }
 }
 `;
 
@@ -170,7 +172,7 @@ export function BTStateGraph({current}: BTStateGraphProps) {
           </div>
         )}
       </div>
-      <svg viewBox="0 0 800 180" width="100%" height={180} style={{display: 'block', minWidth: 760}}>
+      <svg viewBox="0 0 800 180" width="100%" height="auto" preserveAspectRatio="xMidYMid meet" style={{display: 'block', width: '100%'}}>
         {/* edges */}
         {EDGES.map((e, i) => {
           const from = NODES.find(n => n.key === e.from);
@@ -259,7 +261,7 @@ export function BTStateGraph({current}: BTStateGraphProps) {
               )}
               <rect
                 width={NODE_W} height={NODE_H} rx={6}
-                fill={isActive ? `${accent}28` : past ? `${accent}10` : colors.bgCard}
+                fill={isActive ? `${accent}28` : past ? `${accent}3d` : colors.bgCard}
                 stroke={isActive ? accent : past ? `${accent}55` : colors.border}
                 strokeWidth={isActive ? 1.5 : 1}
               />

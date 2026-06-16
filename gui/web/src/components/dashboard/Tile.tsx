@@ -57,7 +57,7 @@ export function DashTile({icon, label, value, unit, accent, hint, trail, visual,
         {unit && (
           <div style={{
             fontSize: compact ? 12 : 14, color: colors.textDim, fontWeight: 500,
-            fontFamily: "'Geist Mono', 'JetBrains Mono', monospace",
+            fontFamily: "'Space Grotesk', 'JetBrains Mono', monospace",
             textTransform: 'lowercase' as const, letterSpacing: '0.04em',
           }}>{unit}</div>
         )}
