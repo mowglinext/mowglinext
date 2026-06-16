@@ -1521,8 +1521,11 @@ private:
     {
       RCLCPP_INFO(get_logger(),
                   "Sent drive PID: kp=%.2f ki=%.2f kd=%.2f integral_limit=%.1f pwm_per_mps=%.1f",
-                  wheel_pid_kp_, wheel_pid_ki_, wheel_pid_kd_,
-                  wheel_pid_integral_limit_, wheel_pid_pwm_per_mps_);
+                  wheel_pid_kp_,
+                  wheel_pid_ki_,
+                  wheel_pid_kd_,
+                  wheel_pid_integral_limit_,
+                  wheel_pid_pwm_per_mps_);
     }
   }
 
