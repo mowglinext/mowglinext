@@ -18,8 +18,8 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange }) => {
                 type="info"
                 showIcon
                 style={{ marginBottom: 16 }}
-                message="Applied live"
-                description="Saving pushes these gains straight to the drive controller — no ROS2 restart needed. The firmware re-validates and clamps every value; its built-in defaults are restored on power-up until the robot reconnects."
+                message="Saved and applied live"
+                description="Saving stores these in mowgli_robot.yaml and pushes them to the drive controller immediately — no ROS2 restart needed. They persist across reboots: on every boot the robot re-sends the saved values to the firmware. (The firmware itself has no storage, so it runs its built-in defaults only for the brief moment before the controller reconnects, then re-validates and clamps the values you saved.)"
             />
             <Card size="small" style={{ marginBottom: 16 }}>
                 <Space direction="vertical" size={12} style={{ width: "100%" }}>
