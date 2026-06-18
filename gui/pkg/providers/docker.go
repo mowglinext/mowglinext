@@ -12,6 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"io"
 	"strings"
+	"time"
 )
 
 type DockerProvider struct {
@@ -178,4 +179,143 @@ func (i *DockerProvider) ContainerRun(ctx context.Context, spec types2.Container
 		Stdout:      stdout.String(),
 		Stderr:      stderr.String(),
 	}, nil
+}
+
+func (i *DockerProvider) ContainerExec(ctx context.Context, containerID string, spec types2.ContainerExecSpec) (types2.ContainerExecResult, error) {
+	if i.client == nil {
+		return types2.ContainerExecResult{}, errors.New("docker client is not initialized")
+	}
+	if strings.TrimSpace(containerID) == "" {
+		return types2.ContainerExecResult{}, errors.New("container id is required")
+	}
+	if len(spec.Cmd) == 0 {
+		return types2.ContainerExecResult{}, errors.New("exec command is required")
+	}
+
+	created, err := i.client.ContainerExecCreate(ctx, containerID, types.ExecConfig{
+		Cmd:          append([]string(nil), spec.Cmd...),
+		Env:          append([]string(nil), spec.Env...),
+		User:         spec.User,
+		WorkingDir:   spec.WorkDir,
+		AttachStdout: true,
+		AttachStderr: true,
+		Tty:          false,
+	})
+	if err != nil {
+		return types2.ContainerExecResult{}, err
+	}
+
+	attached, err := i.client.ContainerExecAttach(ctx, created.ID, types.ExecStartCheck{Tty: false})
+	if err != nil {
+		return types2.ContainerExecResult{}, err
+	}
+	defer attached.Close()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	copyDone := make(chan error, 1)
+	go func() {
+		_, copyErr := stdcopy.StdCopy(&stdout, &stderr, attached.Reader)
+		copyDone <- copyErr
+	}()
+
+	if err := i.client.ContainerExecStart(ctx, created.ID, types.ExecStartCheck{Tty: false}); err != nil {
+		return types2.ContainerExecResult{}, err
+	}
+
+	if copyErr := <-copyDone; copyErr != nil {
+		return types2.ContainerExecResult{}, copyErr
+	}
+
+	inspectResult, err := i.waitForExec(ctx, created.ID)
+	if err != nil {
+		return types2.ContainerExecResult{}, err
+	}
+
+	return types2.ContainerExecResult{
+		ExecID:   created.ID,
+		ExitCode: inspectResult.ExitCode,
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+	}, nil
+}
+
+func (i *DockerProvider) ContainerExecStart(ctx context.Context, containerID string, spec types2.ContainerExecSpec) (types2.ContainerExecHandle, error) {
+	if i.client == nil {
+		return types2.ContainerExecHandle{}, errors.New("docker client is not initialized")
+	}
+	if strings.TrimSpace(containerID) == "" {
+		return types2.ContainerExecHandle{}, errors.New("container id is required")
+	}
+	if len(spec.Cmd) == 0 {
+		return types2.ContainerExecHandle{}, errors.New("exec command is required")
+	}
+
+	created, err := i.client.ContainerExecCreate(ctx, containerID, types.ExecConfig{
+		Cmd:          append([]string(nil), spec.Cmd...),
+		Env:          append([]string(nil), spec.Env...),
+		User:         spec.User,
+		WorkingDir:   spec.WorkDir,
+		AttachStdout: true,
+		AttachStderr: true,
+		Tty:          false,
+	})
+	if err != nil {
+		return types2.ContainerExecHandle{}, err
+	}
+
+	attached, err := i.client.ContainerExecAttach(ctx, created.ID, types.ExecStartCheck{Tty: false})
+	if err != nil {
+		return types2.ContainerExecHandle{}, err
+	}
+
+	pipeReader, pipeWriter := io.Pipe()
+	go func() {
+		defer attached.Close()
+		_, copyErr := stdcopy.StdCopy(pipeWriter, pipeWriter, attached.Reader)
+		_ = pipeWriter.CloseWithError(copyErr)
+	}()
+
+	if err := i.client.ContainerExecStart(ctx, created.ID, types.ExecStartCheck{Tty: false}); err != nil {
+		_ = pipeReader.Close()
+		return types2.ContainerExecHandle{}, err
+	}
+
+	return types2.ContainerExecHandle{
+		ExecID: created.ID,
+		Reader: pipeReader,
+	}, nil
+}
+
+func (i *DockerProvider) ContainerExecInspect(ctx context.Context, execID string) (types2.ContainerExecInspectResult, error) {
+	if i.client == nil {
+		return types2.ContainerExecInspectResult{}, errors.New("docker client is not initialized")
+	}
+	inspected, err := i.client.ContainerExecInspect(ctx, execID)
+	if err != nil {
+		return types2.ContainerExecInspectResult{}, err
+	}
+	return types2.ContainerExecInspectResult{
+		Running:  inspected.Running,
+		ExitCode: int64(inspected.ExitCode),
+	}, nil
+}
+
+func (i *DockerProvider) waitForExec(ctx context.Context, execID string) (types2.ContainerExecInspectResult, error) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		inspected, err := i.ContainerExecInspect(ctx, execID)
+		if err != nil {
+			return types2.ContainerExecInspectResult{}, err
+		}
+		if !inspected.Running {
+			return inspected, nil
+		}
+		select {
+		case <-ctx.Done():
+			return types2.ContainerExecInspectResult{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }

@@ -81,6 +81,18 @@ func (m *mockDockerProvider) ContainerRun(_ context.Context, spec pkgtypes.Conta
 	return result, nil
 }
 
+func (m *mockDockerProvider) ContainerExec(context.Context, string, pkgtypes.ContainerExecSpec) (pkgtypes.ContainerExecResult, error) {
+	return pkgtypes.ContainerExecResult{}, nil
+}
+
+func (m *mockDockerProvider) ContainerExecStart(context.Context, string, pkgtypes.ContainerExecSpec) (pkgtypes.ContainerExecHandle, error) {
+	return pkgtypes.ContainerExecHandle{Reader: io.NopCloser(strings.NewReader(""))}, nil
+}
+
+func (m *mockDockerProvider) ContainerExecInspect(context.Context, string) (pkgtypes.ContainerExecInspectResult, error) {
+	return pkgtypes.ContainerExecInspectResult{}, nil
+}
+
 func setupGNSSRouter(dbProvider pkgtypes.IDBProvider, dockerProvider pkgtypes.IDockerProvider) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

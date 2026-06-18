@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+
+from mowgli_tools.drive_pid_tuner import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

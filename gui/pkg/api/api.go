@@ -58,6 +58,7 @@ func NewAPI(dbProvider types.IDBProvider, dockerProvider types.IDockerProvider, 
 	ParamsRoutes(apiGroup, rosProvider)
 	NtripRoutes(apiGroup)
 	CalibrationRoutes(apiGroup, rosProvider, dbProvider)
+	DriveTuningRoutes(apiGroup, dbProvider, dockerProvider)
 	ScheduleRoutes(apiGroup, dbProvider)
 	ImportRoutes(apiGroup, rosProvider, dbProvider)
 	tileServer, err := dbProvider.Get("system.map.enabled")

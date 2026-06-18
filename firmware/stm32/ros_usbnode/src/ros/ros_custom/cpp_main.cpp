@@ -112,7 +112,7 @@ static int16_t right_pwm_signed = 0;
 #define WHEEL_PI_KI_PWM_PER_MPS_S 5000.0f /* integral gain (50 PWM in ~0.2 s when err=0.05 m/s) */
 #define WHEEL_PI_INT_MAX_PWM     100.0f   /* anti-windup clamp on the integral term */
 #define WHEEL_PI_DT_S            (MOTORS_NBT_TIME_MS / 1000.0f)
-#define WHEEL_PI_TICKS_PER_M    300.0f    /* must match mowgli_robot.yaml: ticks_per_meter */
+#define WHEEL_PI_TICKS_PER_M    ((float)TICKS_PER_M) /* single source of truth from board.h */
 
 /* Per-wheel velocity PI — battle-tested PX4 PID core (pid.hpp). Gains/limits
  * set once in init_ROS(). The integrator (kept inside the PID object) is what
@@ -670,9 +670,8 @@ extern "C" void wheelTicks_handler(
 
     /* Velocity: mm/s = (delta_ticks / TICKS_PER_M) * (1000 / dt_ms) * 1000
      *                = delta_ticks * 1e6 / (TICKS_PER_M * dt_ms).
-     * TICKS_PER_M is 300, so the constant numerator (300 * dt_ms) stays
-     * comfortably inside int32 for any realistic dt. We still cast to
-     * int64 for the mul to be safe on large tick deltas.                  */
+     * TICKS_PER_M comes from board.h, so odom + wheel PI share the same
+     * encoder scale. Cast to int64 for the multiply to stay safe.         */
     int16_t left_v_mm_s  = 0;
     int16_t right_v_mm_s = 0;
     if (dt_ms > 0)

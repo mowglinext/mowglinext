@@ -179,6 +179,10 @@ private:
             {
               min_linear_vel_ = p.as_double();
             }
+            else if (name == "ticks_per_meter")
+            {
+              ticks_per_meter_ = p.as_double();
+            }
             else if (name == "wheel_pid_kp")
             {
               wheel_pid_kp_ = p.as_double();

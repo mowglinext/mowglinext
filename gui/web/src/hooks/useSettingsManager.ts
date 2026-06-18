@@ -276,7 +276,8 @@ export const useSettingsManager = () => {
                 "wheel_pid_kp", "wheel_pid_ki", "wheel_pid_kd",
                 "wheel_pid_integral_limit", "wheel_pid_pwm_per_mps",
             ];
-            const driveDirty = driveKeys.some((k) => dirtyKeys.has(k));
+            const liveHardwareKeys = ["ticks_per_meter", ...driveKeys];
+            const liveHardwareDirty = liveHardwareKeys.some((k) => dirtyKeys.has(k));
             const hasDirtyChanges = dirtyKeys.size > 0;
             if (!hasDirtyChanges && !shouldRestartGps) {
                 notification.info({
@@ -350,13 +351,14 @@ export const useSettingsManager = () => {
                     });
                 }
             }
-            // Push drive-motor PID gains to the running hardware_bridge node so
-            // they take effect live (no restart). yamlCreate above persisted
-            // them to mowgli_robot.yaml for the next boot; this sets the live
-            // ROS params, whose on-set callback re-sends them to the STM32
-            // firmware (which re-validates and clamps every value).
-            if (hasDirtyChanges && driveDirty) {
-                const parameters = driveKeys
+            // Push live-tunable wheel/drive parameters to the running
+            // hardware_bridge node so they take effect immediately (no
+            // restart). yamlCreate above persisted them to mowgli_robot.yaml
+            // for the next boot; this sets the live ROS params too. The
+            // hardware_bridge callback applies ticks_per_meter in-process and
+            // re-sends drive PID/feedforward to the STM32 firmware.
+            if (hasDirtyChanges && liveHardwareDirty) {
+                const parameters = liveHardwareKeys
                     .filter((k) => dirtyKeys.has(k) && k in localValues)
                     .map((k) => ({ name: `hardware_bridge.${k}`, value: Number(localValues[k]) }));
                 if (parameters.length > 0) {
@@ -370,9 +372,9 @@ export const useSettingsManager = () => {
                         });
                     } catch (e: any) {
                         notification.warning({
-                            message: "Settings saved, but live drive-PID update failed",
+                            message: "Settings saved, but live wheel/drive update failed",
                             description: e?.message ??
-                                "Restart ROS2 to apply the new drive-motor PID gains.",
+                                "Restart ROS2 to apply the new wheel and drive-motor settings.",
                         });
                     }
                 }
@@ -440,6 +442,11 @@ export const useSettingsManager = () => {
             setSaving(false);
         }
     }, [guiApi, notification, savedValues]);
+
+    const acceptPersistedValues = useCallback((persistedValues: Record<string, any>) => {
+        setSavedValues((prev) => ({ ...prev, ...persistedValues }));
+        setLocalValues((prev) => ({ ...prev, ...persistedValues }));
+    }, []);
 
     const save = useCallback(async () => {
         await persistSettings();
@@ -517,6 +524,7 @@ export const useSettingsManager = () => {
         save,
         savePartialValues,
         saveAndRestartGps,
+        acceptPersistedValues,
         revert,
     };
 };

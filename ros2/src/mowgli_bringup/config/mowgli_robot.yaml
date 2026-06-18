@@ -41,7 +41,7 @@ mowgli:
     # metres. MUST match the firmware constant TICKS_PER_M in
     # firmware/stm32/ros_usbnode/include/board.h — the firmware sends
     # raw ticks, the bridge does the scaling.
-    ticks_per_meter: 300.0
+    ticks_per_meter: 399.0
     # Drive-motor wheel-velocity PID + feedforward (consumed by
     # hardware_bridge_node, pushed to the STM32 firmware over the serial link so
     # the GUI can retune the per-wheel loop without reflashing). Defaults mirror
