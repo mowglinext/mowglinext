@@ -1257,6 +1257,10 @@
   },
   "mapImportOpenMower": {
     "title": "Importer une carte OpenMower",
+    "omDatumTitle": "Datum OpenMower (optionnel)",
+    "omDatumHelp": "Saisissez le OM_DATUM_LAT / OM_DATUM_LONG du robot source pour que la carte soit reprojetée dans le repère de ce robot. Laissez vide si les deux robots partagent le même datum — sinon l'import sera décalé.",
+    "omDatumLat": "Latitude",
+    "omDatumLon": "Longitude",
     "applying": "Application…",
     "applyReplaces": "Appliquer (remplace la carte actuelle)",
     "cancel": "Annuler",

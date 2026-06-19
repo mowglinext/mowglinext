@@ -76,11 +76,13 @@ type openMowerMap struct {
 //
 // Map: the verbatim contents of the user's OpenMower map.json. Required.
 //
-// OmDatumLat / OmDatumLon: optional. When provided AND different from
-// the configured MowgliNext datum (in mowgli_robot.yaml), the importer
-// applies a translation so OpenMower's local x/y land at the right
-// MowgliNext map-frame coordinates. When omitted, "same datum" is
-// assumed (identity transform). See docs/IMPORT_OPENMOWER_MAP.md §3.
+// OmDatumLat / OmDatumLon: optional. When provided, the importer
+// reprojects OpenMower's local x/y (relative to the OM datum) into the
+// MowgliNext map frame (relative to the MN datum from mowgli_robot.yaml)
+// via WGS84 lat/lon — correcting BOTH the datum offset AND the
+// cos(latitude) east-scale mismatch. When omitted, "same datum" is
+// assumed (identity copy) and a warning is surfaced. See
+// docs/IMPORT_OPENMOWER_MAP.md §3.
 //
 // Apply: when false (the default), the handler runs in **preview-only**
 // mode — parse + validate + summary, no writes. When true, the handler
@@ -193,13 +195,13 @@ func postImportOpenMower(rosProvider types.IRosProvider, dbProvider types.IDBPro
 			return
 		}
 
-		// Resolve MowgliNext datum from mowgli_robot.yaml. When the
-		// user passed an OpenMower datum, we'll compute the shift; when
-		// they didn't, we stay at zero shift and warn.
+		// Resolve MowgliNext datum from mowgli_robot.yaml. When the user
+		// passed an OpenMower datum we reproject geodetically; otherwise
+		// we fall back to an identity copy and warn.
 		mnLat, mnLon, datumErr := readMowgliNextDatum(dbProvider)
-		shiftE, shiftN, datumWarn := computeDatumShift(req.OmDatumLat, req.OmDatumLon, mnLat, mnLon, datumErr)
+		reproj, datumWarn := resolveReprojection(req.OmDatumLat, req.OmDatumLon, mnLat, mnLon, datumErr)
 
-		summary := buildImportSummary(omMap, shiftE, shiftN)
+		summary := buildImportSummary(omMap, reproj)
 		if datumWarn != "" {
 			summary.Warnings = append([]string{datumWarn}, summary.Warnings...)
 		}
@@ -207,7 +209,7 @@ func postImportOpenMower(rosProvider types.IRosProvider, dbProvider types.IDBPro
 		// Build (in memory) the MowgliNext-shaped payload that *would*
 		// be POSTed to /map_server_node/add_area, plus the dock pose.
 		// Currently logged + counted but not actually written.
-		replaceReq, dockReq := buildMowgliNextPayload(omMap, shiftE, shiftN)
+		replaceReq, dockReq := buildMowgliNextPayload(omMap, reproj)
 
 		if req.Apply {
 			if err := applyImport(c, rosProvider, replaceReq, dockReq); err != nil {
@@ -467,35 +469,85 @@ func readMowgliNextDatum(dbProvider types.IDBProvider) (float64, float64, error)
 	return lat, lon, nil
 }
 
-// computeDatumShift returns the (east, north) shift in metres that the
-// importer must add to every OpenMower polygon vertex to land it in
-// the MowgliNext map frame, plus a warning string when the inputs
-// don't allow a confident answer.
-func computeDatumShift(omLat, omLon *float64, mnLat, mnLon float64, mnDatumErr error) (float64, float64, string) {
+// datumReprojector maps a point expressed in OpenMower's local ENU frame
+// (metres relative to the OM datum) into MowgliNext's local ENU frame
+// (metres relative to the MN datum). When the two datums coincide it is
+// an exact identity; otherwise it round-trips through WGS84 lat/lon so
+// BOTH the constant offset (datum displacement) AND the cos(latitude)
+// east-scale mismatch between the two datums are corrected. The earlier
+// additive `shiftE/shiftN` approximation only matched the offset, leaving
+// a residual skew/rotation when the datums were far apart.
+type datumReprojector struct {
+	omLat, omLon float64
+	mnLat, mnLon float64
+}
+
+// project converts (eOM, nOM) — metres east/north of the OM datum — into
+// (eMN, nMN) — metres east/north of the MN datum. M is metersPerDegreeLat.
+//
+//	lat = om_lat + nOM / M
+//	lon = om_lon + eOM / (M · cos(om_lat))
+//	eMN = (lon − mn_lon) · M · cos(mn_lat)
+//	nMN = (lat − mn_lat) · M
+func (r datumReprojector) project(eOM, nOM float64) (float64, float64) {
+	lat := r.omLat + nOM/metersPerDegreeLat
+	lon := r.omLon + eOM/(metersPerDegreeLat*math.Cos(r.omLat*math.Pi/180.0))
+	eMN := (lon - r.mnLon) * metersPerDegreeLat * math.Cos(r.mnLat*math.Pi/180.0)
+	nMN := (lat - r.mnLat) * metersPerDegreeLat
+	return eMN, nMN
+}
+
+// resolveReprojection decides how OpenMower coordinates are mapped into
+// the MowgliNext map frame and returns the reprojector plus a warning
+// string when the inputs don't allow a confident, georeferenced answer.
+//
+// Cases:
+//   - OM datum provided + MN datum readable → full geodetic reprojection.
+//   - OM datum provided + MN datum UNSET (fresh install) → adopt the OM
+//     datum as the MN datum so the import is exact (identity), and tell
+//     the operator to set datum_lat/datum_lon to the OM datum. We do NOT
+//     write mowgli_robot.yaml here: the datum is owned by the GPS/settings
+//     write path and adopting it silently would change the live map frame
+//     for an already-running localizer. Surfacing it keeps the importer
+//     side-effect-free and matches how other settings are written.
+//   - OM datum NOT provided + MN datum set → identity copy with a
+//     prominent "import will be offset" warning.
+//   - OM datum NOT provided + MN datum unset → identity copy (nothing to
+//     reference against), gentle note.
+func resolveReprojection(omLat, omLon *float64, mnLat, mnLon float64, mnDatumErr error) (datumReprojector, string) {
 	if omLat == nil || omLon == nil {
-		return 0, 0, "OpenMower datum not provided — assuming same datum as MowgliNext (identity transform). If the source robot used a different OM_DATUM_LAT/OM_DATUM_LONG, supply om_datum_lat/om_datum_lon and re-import."
+		if mnDatumErr != nil {
+			return datumReprojector{}, "Datum OpenMower non fourni et datum MowgliNext absent — l'import est copié tel quel. Renseignez le datum OpenMower (OM_DATUM_LAT/LONG) pour un géoréférencement correct."
+		}
+		return datumReprojector{mnLat: mnLat, mnLon: mnLon, omLat: mnLat, omLon: mnLon},
+			"Datum OpenMower non fourni — l'import sera décalé. Renseignez le datum OpenMower (OM_DATUM_LAT/LONG) pour un géoréférencement correct."
 	}
 	if mnDatumErr != nil {
-		return 0, 0, fmt.Sprintf("OpenMower datum provided but MowgliNext datum unreadable (%v) — applying identity transform. Configure MowgliNext datum_lat/datum_lon first.", mnDatumErr)
+		// Fresh install: no MN datum yet. Adopt the OM datum so the import
+		// is exact; the operator must promote it to datum_lat/datum_lon.
+		return datumReprojector{omLat: *omLat, omLon: *omLon, mnLat: *omLat, mnLon: *omLon},
+			fmt.Sprintf("Datum MowgliNext absent — le datum OpenMower (%.8f, %.8f) a été adopté pour cet import. Réglez datum_lat/datum_lon sur ces valeurs pour que la carte soit correctement géoréférencée.", *omLat, *omLon)
 	}
-	cosLat := math.Cos(mnLat * math.Pi / 180.0)
-	shiftE := (*omLon - mnLon) * cosLat * metersPerDegreeLat
-	shiftN := (*omLat - mnLat) * metersPerDegreeLat
-	return shiftE, shiftN, ""
+	return datumReprojector{omLat: *omLat, omLon: *omLon, mnLat: mnLat, mnLon: mnLon}, ""
 }
 
 // ---------------------------------------------------------------------------
 // Summary + payload builders
 // ---------------------------------------------------------------------------
 
-// buildImportSummary walks the parsed OpenMower map, applies the datum
-// shift, validates each area, and produces the user-facing preview.
-func buildImportSummary(omMap openMowerMap, shiftE, shiftN float64) ImportOpenMowerSummary {
+// buildImportSummary walks the parsed OpenMower map, reprojects each
+// vertex into the MowgliNext frame, validates each area, and produces
+// the user-facing preview. DatumShift{East,North}M report where the OM
+// local origin (0, 0) lands in the MN frame — the constant displacement
+// between the two datums — so the GUI's "datum shift" alert still reads
+// meaningfully under full reprojection.
+func buildImportSummary(omMap openMowerMap, reproj datumReprojector) ImportOpenMowerSummary {
+	originE, originN := reproj.project(0, 0)
 	summary := ImportOpenMowerSummary{
 		Warnings:         []string{},
 		Areas:            []ImportedAreaBrief{},
-		DatumShiftEastM:  shiftE,
-		DatumShiftNorthM: shiftN,
+		DatumShiftEastM:  originE,
+		DatumShiftNorthM: originN,
 	}
 
 	mowAndNav := []openMowerArea{}
@@ -563,9 +615,10 @@ func buildImportSummary(omMap openMowerMap, shiftE, shiftN float64) ImportOpenMo
 	}
 	if len(activeDocks) >= 1 {
 		d := activeDocks[0]
+		dx, dy := reproj.project(d.Position.X, d.Position.Y)
 		summary.DockPose = &ImportDockPose{
-			X:      d.Position.X + shiftE,
-			Y:      d.Position.Y + shiftN,
+			X:      dx,
+			Y:      dy,
 			YawRad: d.Heading,
 		}
 	}
@@ -628,7 +681,7 @@ func matchObstaclesToParents(obstacles, parents []openMowerArea, summary *Import
 // buildMowgliNextPayload constructs the (unsent) ReplaceMapReq + dock
 // pose request that the apply path will eventually use. Produced even
 // in preview mode so logging shows exactly what would be written.
-func buildMowgliNextPayload(omMap openMowerMap, shiftE, shiftN float64) (*mowgli.ReplaceMapReq, *mowgli.SetDockingPointReq) {
+func buildMowgliNextPayload(omMap openMowerMap, reproj datumReprojector) (*mowgli.ReplaceMapReq, *mowgli.SetDockingPointReq) {
 	// Re-walk the validated areas (cheap; smaller than the duplication
 	// cost of returning more from buildImportSummary).
 	mowAndNav := []openMowerArea{}
@@ -668,11 +721,11 @@ func buildMowgliNextPayload(omMap openMowerMap, shiftE, shiftN float64) (*mowgli
 		isNav := strings.EqualFold(a.Properties.Type, "nav")
 		obs := []geometry.Polygon{}
 		for _, oi := range obstacleAssign[pi] {
-			obs = append(obs, geometry.Polygon{Points: outlineToPoint32s(obstacles[oi].Outline, shiftE, shiftN)})
+			obs = append(obs, geometry.Polygon{Points: outlineToPoint32s(obstacles[oi].Outline, reproj)})
 		}
 		mapArea := mowgli.MapArea{
 			Name:      a.Properties.Name,
-			Area:      geometry.Polygon{Points: outlineToPoint32s(a.Outline, shiftE, shiftN)},
+			Area:      geometry.Polygon{Points: outlineToPoint32s(a.Outline, reproj)},
 			Obstacles: obs,
 		}
 		replaceReq.Areas = append(replaceReq.Areas, mowgli.ReplaceMapArea{
@@ -686,9 +739,10 @@ func buildMowgliNextPayload(omMap openMowerMap, shiftE, shiftN float64) (*mowgli
 		if d.Properties.Active != nil && !*d.Properties.Active {
 			continue
 		}
+		dx, dy := reproj.project(d.Position.X, d.Position.Y)
 		dockReq = &mowgli.SetDockingPointReq{
 			DockingPose: geometry.Pose{
-				Position:    geometry.Point{X: d.Position.X + shiftE, Y: d.Position.Y + shiftN, Z: 0},
+				Position:    geometry.Point{X: dx, Y: dy, Z: 0},
 				Orientation: yawToQuaternion(d.Heading),
 			},
 		}
@@ -796,13 +850,15 @@ func dedupOutline(in []openMowerPoint) []openMowerPoint {
 }
 
 // outlineToPoint32s materialises an OpenMower outline as the geometry
-// _msgs/Polygon.Points list expected by mowgli.MapArea.
-func outlineToPoint32s(outline []openMowerPoint, shiftE, shiftN float64) []geometry.Point32 {
+// _msgs/Polygon.Points list expected by mowgli.MapArea, reprojecting each
+// vertex from the OM frame into the MowgliNext frame.
+func outlineToPoint32s(outline []openMowerPoint, reproj datumReprojector) []geometry.Point32 {
 	out := make([]geometry.Point32, 0, len(outline))
 	for _, p := range outline {
+		e, n := reproj.project(p.X, p.Y)
 		out = append(out, geometry.Point32{
-			X: float32(p.X + shiftE),
-			Y: float32(p.Y + shiftN),
+			X: float32(e),
+			Y: float32(n),
 			Z: 0,
 		})
 	}
