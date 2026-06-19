@@ -5,7 +5,7 @@ builtin_interfaces/Time stamp
 uint8 mower_status
 bool raspberry_pi_power
 bool is_charging
-bool esc_power
+bool esc_power  # Legacy field from hardware_bridge; currently blade/ESC-related, not traction PAC5210 power.
 bool rain_detected
 bool sound_module_available
 bool sound_module_busy

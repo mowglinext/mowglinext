@@ -57,6 +57,16 @@ export interface DriveTuningTrial {
     notes?: string[];
 }
 
+export interface DriveTuningStatusSnapshot {
+    active_emergency?: boolean | null;
+    latched_emergency?: boolean | null;
+    is_charging?: boolean | null;
+    mower_status?: number | null;
+    esc_power?: boolean | null;
+    wheel_tick_factor?: number | null;
+    last_wheel_tick_timestamp?: string | null;
+}
+
 export interface DriveTuningReport {
     generated_at: string;
     mode: string;
@@ -76,6 +86,8 @@ export interface DriveTuningReport {
     current_params: Record<string, number>;
     starting_params: Record<string, number>;
     proposed_params: Record<string, number>;
+    failure_message?: string;
+    status_snapshot?: DriveTuningStatusSnapshot;
     reasons: string[];
     trials: DriveTuningTrial[];
 }

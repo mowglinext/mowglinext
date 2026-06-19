@@ -157,8 +157,20 @@ type driveTuningReport struct {
 	CurrentParams   map[string]float64       `json:"current_params" yaml:"current_params"`
 	StartingParams  map[string]float64       `json:"starting_params" yaml:"starting_params"`
 	ProposedParams  map[string]float64       `json:"proposed_params" yaml:"proposed_params"`
+	FailureMessage  string                   `json:"failure_message,omitempty" yaml:"failure_message"`
+	StatusSnapshot  *driveTuningStatusReport `json:"status_snapshot,omitempty" yaml:"status_snapshot"`
 	Reasons         []string                 `json:"reasons" yaml:"reasons"`
 	Trials          []driveTuningTrialReport `json:"trials" yaml:"trials"`
+}
+
+type driveTuningStatusReport struct {
+	ActiveEmergency       *bool  `json:"active_emergency,omitempty" yaml:"active_emergency"`
+	LatchedEmergency      *bool  `json:"latched_emergency,omitempty" yaml:"latched_emergency"`
+	IsCharging            *bool  `json:"is_charging,omitempty" yaml:"is_charging"`
+	MowerStatus           *int   `json:"mower_status,omitempty" yaml:"mower_status"`
+	EscPower              *bool  `json:"esc_power,omitempty" yaml:"esc_power"`
+	WheelTickFactor       *int   `json:"wheel_tick_factor,omitempty" yaml:"wheel_tick_factor"`
+	LastWheelTickTimestamp string `json:"last_wheel_tick_timestamp,omitempty" yaml:"last_wheel_tick_timestamp"`
 }
 
 type driveTuningTrialReport struct {
@@ -720,7 +732,7 @@ func buildFeedForwardCommand(req driveFFCalibrationStartRequest) ([]string, stri
 	args := []string{
 		"--mode", "ff",
 		"--profile", "custom",
-		"--cmd-topic", "/cmd_vel",
+		"--cmd-topic", "/cmd_vel_teleop",
 		"--max-speed", formatFloat(req.TestSpeedMps),
 		"--test-speed", formatFloat(req.TestSpeedMps),
 		"--distance", formatFloat(req.DistanceMeters),

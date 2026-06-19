@@ -76,7 +76,14 @@ PARAMETER_NAMES = (
 
 HL_CMD_RECORD_AREA = 3
 HL_CMD_RECORD_CANCEL = 6
+HL_STATE_IDLE = 1
+HL_STATE_AUTONOMOUS = 2
 HL_STATE_RECORDING = 3
+
+CMD_RATE_HZ = 20.0
+CMD_PERIOD_S = 1.0 / CMD_RATE_HZ
+RECORDING_ENTRY_TIMEOUT_S = 15.0
+RECORDING_EXIT_TIMEOUT_S = 3.0
 
 
 @dataclass(frozen=True)
@@ -153,7 +160,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--backup-file", type=str, default=str(_default_backup_path()),
                         help="Path used to save and restore the live parameter backup.")
     parser.add_argument("--cmd-topic", type=str, default="",
-                        help="TwistStamped topic used for the test commands.")
+                        help="TwistStamped topic used for the test commands. Defaults to /cmd_vel_teleop like the IMU calibration tool.")
     parser.add_argument("--hardware-node", type=str, default="hardware_bridge",
                         help="Node name used by the hardware parameter client.")
     parser.add_argument("--rtk-accuracy-threshold", type=float, default=0.05,
@@ -201,6 +208,11 @@ class DrivePidTuner(Node):
         self._latest_high_level_status: HighLevelStatus | None = None
         self._latest_gnss_status: GnssStatus | None = None
         self._latest_odom_time: float | None = None
+        self._latest_wheel_tick_time: float | None = None
+        self._latest_wheel_tick_factor: int | None = None
+        self._latest_wheel_tick_stamp: str | None = None
+        self._failure_message: str | None = None
+        self._failure_status_snapshot: dict[str, Any] | None = None
 
         self._parameter_client = AsyncParameterClient(self, args.hardware_node)
         self._high_level_client = self.create_client(
@@ -262,6 +274,9 @@ class DrivePidTuner(Node):
         )
 
     def _on_wheel_ticks(self, msg: WheelTick) -> None:
+        self._latest_wheel_tick_time = time.monotonic()
+        self._latest_wheel_tick_factor = int(msg.wheel_tick_factor)
+        self._latest_wheel_tick_stamp = self._stamp_to_iso(msg.stamp)
         if self._active_trial is None:
             return
         self._active_trial.tick_samples.append(
@@ -309,6 +324,16 @@ class DrivePidTuner(Node):
         self.get_logger().info(
             f"Using cmd_vel topic {self._cmd_topic} for mode {self._args.mode}."
         )
+        if self._cmd_topic == "/cmd_vel_teleop":
+            self.get_logger().info(
+                "Motion path matches IMU calibration: /cmd_vel_teleop -> twist_mux -> /cmd_vel."
+            )
+        else:
+            self.get_logger().warning(
+                "Overriding the proven IMU calibration motion path; commands will bypass /cmd_vel_teleop."
+            )
+        self._failure_message = None
+        self._failure_status_snapshot = None
         if self._args.rollback:
             return self._run_rollback()
 
@@ -326,6 +351,7 @@ class DrivePidTuner(Node):
                 applied_live=False,
                 trials=[],
                 reasons=["Dry-run only."],
+                status_snapshot=self._build_status_snapshot(),
             )
             return 0
 
@@ -361,6 +387,9 @@ class DrivePidTuner(Node):
             self._print_summary(current_params, working_params, proposed_params, feedforward_trials, response_trials,
                                 keep_final_live, reasons)
             return 0
+        except Exception as exc:
+            self._remember_failure(str(exc))
+            raise
         finally:
             try:
                 self._stop_robot()
@@ -383,6 +412,8 @@ class DrivePidTuner(Node):
                     applied_live=keep_final_live,
                     trials=[*feedforward_trials, *response_trials],
                     reasons=reasons,
+                    failure_message=self._failure_message,
+                    status_snapshot=self._failure_status_snapshot or self._build_status_snapshot(),
                 )
 
     # ------------------------------------------------------------------
@@ -392,9 +423,7 @@ class DrivePidTuner(Node):
     def _resolve_cmd_topic(self, args: argparse.Namespace) -> str:
         if args.cmd_topic:
             return str(args.cmd_topic)
-        if args.mode == "pid":
-            return "/cmd_vel_teleop"
-        return "/cmd_vel"
+        return "/cmd_vel_teleop"
 
     def _run_rollback(self) -> int:
         self._wait_for_initial_state()
@@ -414,15 +443,30 @@ class DrivePidTuner(Node):
         deadline = time.monotonic() + 8.0
         while time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.1)
-            if self._latest_status is not None and self._latest_emergency is not None and self._latest_odom_time is not None:
+            if (
+                self._latest_status is not None
+                and self._latest_emergency is not None
+                and self._latest_odom_time is not None
+                and self._latest_wheel_tick_time is not None
+            ):
                 return
-        raise RuntimeError("Timed out waiting for hardware_bridge status, emergency, and wheel odom.")
+        raise RuntimeError(
+            "Timed out waiting for hardware_bridge status, emergency, /wheel_odom, and /wheel_ticks."
+        )
 
     def _ensure_safe_to_start(self) -> None:
         if self._latest_emergency is None or self._latest_status is None:
             raise RuntimeError("Robot status is unavailable.")
         if self._latest_emergency.active_emergency or self._latest_emergency.latched_emergency:
             raise RuntimeError(f"Emergency active: {self._latest_emergency.reason}")
+        if (
+            self._latest_high_level_status is not None
+            and self._latest_high_level_status.state == HL_STATE_AUTONOMOUS
+        ):
+            raise RuntimeError(
+                "Refusing to tune while BT is AUTONOMOUS (mowing in progress). "
+                "Stop mowing first (HOME command)."
+            )
         if self._latest_status.is_charging and self._args.undock_distance <= 0.0:
             raise RuntimeError(
                 "Robot is on the dock. Re-run with --undock-distance 2.0 (or another safe value)."
@@ -583,7 +627,12 @@ class DrivePidTuner(Node):
                 )
 
             if measured_speed <= 0.02 or trial.stall_detected:
-                raise RuntimeError(f"Feed-forward pass {pass_index + 1} stalled or produced near-zero speed.")
+                self._remember_failure(self._stall_message())
+                self.get_logger().error(
+                    "Feed-forward stall debug "
+                    f"(pass_{pass_index + 1}): {self._failure_status_snapshot}"
+                )
+                raise RuntimeError(self._stall_message())
             next_pwm = clamp(
                 params.wheel_pid_pwm_per_mps * (target_speed / max(measured_speed, 1e-6)),
                 50.0,
@@ -711,34 +760,54 @@ class DrivePidTuner(Node):
     # Motion helpers
     # ------------------------------------------------------------------
 
+    def _call_high_level_control(self, command: int, label: str) -> bool:
+        if not self._high_level_client.wait_for_service(timeout_sec=3.0):
+            self.get_logger().warning(
+                f"/behavior_tree_node/high_level_control is unavailable, cannot {label}."
+            )
+            return False
+        request = HighLevelControl.Request()
+        request.command = int(command)
+        future = self._high_level_client.call_async(request)
+        response = self._wait_for_future(future, timeout_s=5.0, description=label)
+        if not response.success:
+            self.get_logger().warning(f"behavior_tree_node rejected request to {label}.")
+            return False
+        return True
+
+    def _wait_for_bt_state(self, target: int, timeout_s: float) -> bool:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self._latest_high_level_status is not None and self._latest_high_level_status.state == target:
+                return True
+            rclpy.spin_once(self, timeout_sec=0.1)
+        return self._latest_high_level_status is not None and self._latest_high_level_status.state == target
+
     def _enter_recording_if_needed(self) -> None:
         if self._latest_high_level_status is not None and self._latest_high_level_status.state == HL_STATE_RECORDING:
             return
-        if not self._high_level_client.wait_for_service(timeout_sec=5.0):
-            raise RuntimeError("/behavior_tree_node/high_level_control is unavailable.")
-        request = HighLevelControl.Request()
-        request.command = HL_CMD_RECORD_AREA
-        future = self._high_level_client.call_async(request)
-        response = self._wait_for_future(future, timeout_s=10.0, description="enter_recording")
-        if not response.success:
-            raise RuntimeError("behavior_tree_node rejected the RECORDING command.")
-        deadline = time.monotonic() + 8.0
-        while time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.1)
-            if self._latest_high_level_status is not None and self._latest_high_level_status.state == HL_STATE_RECORDING:
-                self._entered_recording = True
-                return
-        raise RuntimeError("Timed out waiting for behavior_tree_node to enter RECORDING.")
+        self.get_logger().info(
+            "Entering RECORDING mode so twist_mux forwards the tuner's /cmd_vel_teleop commands."
+        )
+        if not self._call_high_level_control(HL_CMD_RECORD_AREA, "enter recording"):
+            raise RuntimeError(
+                "Could not enter RECORDING mode via BT. Check that behavior_tree_node is alive."
+            )
+        if self._wait_for_bt_state(HL_STATE_RECORDING, RECORDING_ENTRY_TIMEOUT_S):
+            self._entered_recording = True
+            return
+        self._call_high_level_control(HL_CMD_RECORD_CANCEL, "cancel after failed recording entry")
+        state = None if self._latest_high_level_status is None else self._latest_high_level_status.state
+        raise RuntimeError(
+            "BT did not transition to RECORDING within "
+            f"{RECORDING_ENTRY_TIMEOUT_S:.0f}s (stuck at state={state})."
+        )
 
     def _cancel_recording_if_needed(self) -> None:
         if not self._entered_recording:
             return
-        if not self._high_level_client.wait_for_service(timeout_sec=2.0):
-            return
-        request = HighLevelControl.Request()
-        request.command = HL_CMD_RECORD_CANCEL
-        future = self._high_level_client.call_async(request)
-        self._wait_for_future(future, timeout_s=5.0, description="cancel_recording")
+        self._call_high_level_control(HL_CMD_RECORD_CANCEL, "cancel recording")
+        self._wait_for_bt_state(HL_STATE_IDLE, RECORDING_EXIT_TIMEOUT_S)
         self._entered_recording = False
 
     def _run_speed_trial(
@@ -789,7 +858,7 @@ class DrivePidTuner(Node):
         return metrics
 
     def _drive_segment(self, recorder: TrialRecorder) -> None:
-        rate_s = 0.05
+        rate_s = CMD_PERIOD_S
         deadline = recorder.command_start_s + recorder.command_duration_s
         while time.monotonic() < deadline:
             now_s = time.monotonic()
@@ -856,6 +925,51 @@ class DrivePidTuner(Node):
             f"pretrial_last_odom={self._format_optional_time(recorder.pretrial_last_odom_time)}s"
         )
 
+    def _stamp_to_iso(self, stamp: Any) -> str | None:
+        if stamp is None:
+            return None
+        sec = getattr(stamp, "sec", None)
+        nanosec = getattr(stamp, "nanosec", None)
+        if sec is None or nanosec is None:
+            return None
+        if sec == 0 and nanosec == 0:
+            return None
+        return datetime.fromtimestamp(float(sec) + float(nanosec) / 1e9, tz=timezone.utc).isoformat()
+
+    def _build_status_snapshot(self) -> dict[str, Any]:
+        return {
+            "active_emergency": (
+                None if self._latest_emergency is None else bool(self._latest_emergency.active_emergency)
+            ),
+            "latched_emergency": (
+                None if self._latest_emergency is None else bool(self._latest_emergency.latched_emergency)
+            ),
+            "is_charging": None if self._latest_status is None else bool(self._latest_status.is_charging),
+            "mower_status": None if self._latest_status is None else int(self._latest_status.mower_status),
+            "esc_power": None if self._latest_status is None else bool(self._latest_status.esc_power),
+            "wheel_tick_factor": self._latest_wheel_tick_factor,
+            "last_wheel_tick_timestamp": self._latest_wheel_tick_stamp,
+        }
+
+    def _remember_failure(self, message: str) -> None:
+        if self._failure_message is not None:
+            return
+        self._failure_message = message
+        self._failure_status_snapshot = self._build_status_snapshot()
+
+    def _stall_message(self) -> str:
+        return (
+            "Drive command produced no wheel motion; check traction motor power, "
+            "firmware drive loop, PAC5210 reset/enable, or safety state."
+        )
+
+    def _raise_stall_failure(self, recorder: TrialRecorder, *, reason: str) -> None:
+        self._remember_failure(self._stall_message())
+        self.get_logger().error(
+            f"Stall safety debug ({reason}) during {recorder.name}: {self._failure_status_snapshot}"
+        )
+        raise RuntimeError(self._stall_message())
+
     def _raise_odom_failure(
         self,
         *,
@@ -915,7 +1029,10 @@ class DrivePidTuner(Node):
             recent_mean = sum(sample.speed_mps for sample in recent) / len(recent)
             expected_speed = max(abs(recorder.initial_speed), abs(recorder.target_speed))
             if expected_speed >= 0.10 and recent_mean < max(0.02, 0.20 * expected_speed):
-                raise RuntimeError(f"Live stall detected during {recorder.name}.")
+                self._raise_stall_failure(
+                    recorder,
+                    reason="live_recent_speed_below_floor",
+                )
             errors = [recorder.target_speed - sample.speed_mps for sample in recent]
             zero_crossings = 0
             previous_sign = 0
@@ -943,7 +1060,7 @@ class DrivePidTuner(Node):
         deadline = time.monotonic() + max(0.0, duration_s)
         while time.monotonic() < deadline:
             self._publish_cmd(vx=0.0, wz=0.0)
-            rclpy.spin_once(self, timeout_sec=0.05)
+            rclpy.spin_once(self, timeout_sec=CMD_PERIOD_S)
 
     def _drive_for_duration(self, *, vx: float, duration_s: float) -> None:
         self._command_for_duration(vx=vx, wz=0.0, duration_s=duration_s, ramp_s=min(0.6, duration_s / 4.0))
@@ -964,7 +1081,7 @@ class DrivePidTuner(Node):
                 scale = min(scale, clamp(elapsed_s / ramp_s, 0.0, 1.0))
                 scale = min(scale, clamp(remaining_s / ramp_s, 0.0, 1.0))
             self._publish_cmd(vx=vx * scale, wz=wz * scale)
-            rclpy.spin_once(self, timeout_sec=0.05)
+            rclpy.spin_once(self, timeout_sec=CMD_PERIOD_S)
         self._stop_robot()
 
     def _publish_cmd(self, *, vx: float, wz: float) -> None:
@@ -978,7 +1095,7 @@ class DrivePidTuner(Node):
     def _stop_robot(self) -> None:
         for _ in range(5):
             self._publish_cmd(vx=0.0, wz=0.0)
-            rclpy.spin_once(self, timeout_sec=0.02)
+            rclpy.spin_once(self, timeout_sec=CMD_PERIOD_S)
 
     # ------------------------------------------------------------------
     # Trial post-processing
@@ -1187,6 +1304,8 @@ class DrivePidTuner(Node):
         applied_live: bool,
         trials: list[TrialMetrics],
         reasons: list[str],
+        failure_message: str | None = None,
+        status_snapshot: dict[str, Any] | None = None,
     ) -> None:
         if not self._args.output:
             return
@@ -1214,9 +1333,14 @@ class DrivePidTuner(Node):
             "current_params": current_params.to_dict(),
             "starting_params": starting_params.to_dict(),
             "proposed_params": proposed_params.to_dict(),
+            "status_snapshot": (
+                status_snapshot if status_snapshot is not None else self._build_status_snapshot()
+            ),
             "reasons": reasons,
             "trials": [trial.to_dict() for trial in trials],
         }
+        if failure_message is not None:
+            payload["failure_message"] = failure_message
         output_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
         self.get_logger().info(f"Saved tuning result to {output_path}")
 
@@ -1262,9 +1386,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--turn-rate must be positive.")
     if args.rollback and args.apply:
         parser.error("--rollback and --apply are mutually exclusive.")
-    resolved_cmd_topic = args.cmd_topic if args.cmd_topic else ("/cmd_vel_teleop" if args.mode == "pid" else "/cmd_vel")
-    if args.mode == "pid" and resolved_cmd_topic != "/cmd_vel_teleop":
-        parser.error("--mode pid requires --cmd-topic /cmd_vel_teleop.")
+    resolved_cmd_topic = args.cmd_topic if args.cmd_topic else "/cmd_vel_teleop"
 
     rclpy.init(args=ros_args)
     node = DrivePidTuner(args)

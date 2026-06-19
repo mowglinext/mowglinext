@@ -641,9 +641,13 @@ private:
       msg.sound_module_available = (pkt.status_bitmask & STATUS_BIT_SOUND_AVAIL) != 0u;
       msg.sound_module_busy = (pkt.status_bitmask & STATUS_BIT_SOUND_BUSY) != 0u;
       msg.ui_board_available = (pkt.status_bitmask & STATUS_BIT_UI_AVAIL) != 0u;
+      // Legacy field: kept for backward compatibility with existing GUI /
+      // diagnostics expectations. It reflects blade-controller activity, not a
+      // traction PAC5210 power/arm state (the STM32 status packet does not
+      // currently report that signal).
+      msg.esc_power = mow_enabled_ || blade_active_;
       // Blade motor fields from live telemetry
       msg.mow_enabled = mow_enabled_;
-      msg.esc_power = mow_enabled_ || blade_active_;
       msg.mower_esc_status = blade_active_ ? 1u : 0u;
       msg.mower_motor_rpm = blade_rpm_;
       msg.mower_motor_temperature = blade_temperature_;

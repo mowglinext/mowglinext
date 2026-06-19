@@ -216,8 +216,8 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
             notification.success({
                 message: "Odometry / feed-forward calibration started",
                 description: values.apply
-                    ? "The calibration runs through /cmd_vel and will apply the recommended values live only if the run completes successfully."
-                    : "This run uses /cmd_vel in recommendation-only mode and will not persist any parameter.",
+                    ? "The calibration runs through /cmd_vel_teleop like the IMU calibration tool, then applies the recommendation live only if the run completes successfully."
+                    : "This recommendation-only run uses the same /cmd_vel_teleop -> twist_mux path as IMU calibration and will not persist any parameter.",
             });
         } catch (e: any) {
             if (e?.errorFields) {
@@ -248,7 +248,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
             notification.success({
                 message: "PID auto-tune started",
                 description: values.apply
-                    ? "The autotune runs through /cmd_vel_teleop and will persist the final recommendation only after a successful run."
+                    ? "The autotune runs through the same /cmd_vel_teleop path as IMU calibration and will persist the final recommendation only after a successful run."
                     : "This run is recommendation-only and will restore the original live parameters afterwards.",
             });
         } catch (e: any) {
@@ -312,6 +312,8 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
     const latestReasons = latestParsedReport?.reasons ?? [];
     const latestTrials = latestParsedReport?.trials ?? [];
     const latestCmdVelTopic = latestParsedReport?.cmd_vel_topic ?? latestParsedReport?.cmd_topic;
+    const latestFailureMessage = latestParsedReport?.failure_message;
+    const latestStatusSnapshot = latestParsedReport?.status_snapshot;
 
     return (
         <div>
@@ -354,7 +356,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         type="info"
                         showIcon
                         message="Conservative motion profile"
-                        description="The assistants use soft ramps and publish cmd_vel = 0 between motion segments. Feed-forward publishes through /cmd_vel so hardware_bridge receives the straight-line command directly, while PID autotune stays on /cmd_vel_teleop to keep the gentler teleop path for fragile gears."
+                        description="The assistants reuse the IMU calibration motion path: stamped Twist commands on /cmd_vel_teleop, routed through twist_mux to /cmd_vel, with soft ramps and cmd_vel = 0 between motion segments."
                     />
 
                     <Descriptions size="small" column={1} bordered>
@@ -647,7 +649,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         type="info"
                         showIcon
                         message="Teleop-based step response"
-                        description="This autotune publishes through /cmd_vel_teleop using conservative ramps: 0 → 0.2, 0.2 → 0.3, 0.3 → 0.1, 0.1 → 0. The backend monitors overshoot, settling, oscillation, integral saturation, and wheel imbalance."
+                        description="This autotune follows the same /cmd_vel_teleop -> twist_mux path as the IMU calibration tool, using conservative ramps: 0 → 0.2, 0.2 → 0.3, 0.3 → 0.1, 0.1 → 0. The backend monitors overshoot, settling, oscillation, integral saturation, and wheel imbalance."
                     />
                     <Form
                         form={pidForm}
@@ -729,6 +731,43 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                 <Text code copyable>{latestReport.latest_report.report_path}</Text>
                             </Descriptions.Item>
                         </Descriptions>
+
+                        {latestFailureMessage && (
+                            <Alert
+                                type="warning"
+                                showIcon
+                                message="Last run ended with a movement fault"
+                                description={latestFailureMessage}
+                            />
+                        )}
+
+                        {latestStatusSnapshot && (
+                            <Descriptions size="small" column={2} bordered title="Status snapshot">
+                                <Descriptions.Item label="active_emergency">
+                                    {latestStatusSnapshot.active_emergency == null ? "Unknown" : String(latestStatusSnapshot.active_emergency)}
+                                </Descriptions.Item>
+                                <Descriptions.Item label="latched_emergency">
+                                    {latestStatusSnapshot.latched_emergency == null ? "Unknown" : String(latestStatusSnapshot.latched_emergency)}
+                                </Descriptions.Item>
+                                <Descriptions.Item label="is_charging">
+                                    {latestStatusSnapshot.is_charging == null ? "Unknown" : String(latestStatusSnapshot.is_charging)}
+                                </Descriptions.Item>
+                                <Descriptions.Item label="mower_status">
+                                    {latestStatusSnapshot.mower_status == null ? "Unknown" : latestStatusSnapshot.mower_status}
+                                </Descriptions.Item>
+                                <Descriptions.Item label="esc_power">
+                                    {latestStatusSnapshot.esc_power == null ? "Unknown" : String(latestStatusSnapshot.esc_power)}
+                                </Descriptions.Item>
+                                <Descriptions.Item label="wheel_tick_factor">
+                                    {latestStatusSnapshot.wheel_tick_factor == null ? "Unknown" : latestStatusSnapshot.wheel_tick_factor}
+                                </Descriptions.Item>
+                                <Descriptions.Item label="last_wheel_tick_timestamp" span={2}>
+                                    {latestStatusSnapshot.last_wheel_tick_timestamp
+                                        ? formatTimestamp(latestStatusSnapshot.last_wheel_tick_timestamp)
+                                        : "Unknown"}
+                                </Descriptions.Item>
+                            </Descriptions>
+                        )}
 
                         {latestParsedReport?.proposed_params && (
                             <Descriptions size="small" bordered column={2} title="Proposed parameters">

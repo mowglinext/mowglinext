@@ -172,7 +172,9 @@ private:
     // diagnostics, MQTT bridge, and BT logic see the same picture in sim.
     status.mower_status = mowgli_interfaces::msg::Status::MOWER_STATUS_OK;
     status.raspberry_pi_power = true;
-    status.esc_power = !sim_emergency_active_;
+    // Legacy parity with real hardware_bridge: blade-related controller power,
+    // not traction enable state.
+    status.esc_power = mow_enabled_;
     status.rain_detected = false;
     status.sound_module_available = false;
     status.sound_module_busy = false;
