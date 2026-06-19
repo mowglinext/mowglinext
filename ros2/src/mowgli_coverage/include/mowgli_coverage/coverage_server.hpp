@@ -67,6 +67,11 @@ private:
   // Drop straight swaths shorter than this (m) — a sliver clip from a concave
   // notch isn't worth an in-place pivot. Read live (field-tunable).
   double min_swath_length_{0.15};
+
+  // One-shot guard so the "configured chassis_safety_inset below the robot
+  // half-width floor" WARNING is logged once, not on every plan (field tuning
+  // can leave the inset below the floor for a whole session).
+  bool inset_floor_warned_{false};
 };
 
 }  // namespace mowgli_coverage

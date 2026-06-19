@@ -357,10 +357,31 @@ void CoverageServer::planCoverage()
   {
     // Geometry knobs read LIVE so they're `ros2 param set`-tunable between
     // plans (field iteration without a node restart).
-    const double chassis_safety_inset = get_parameter("chassis_safety_inset").as_double();
+    const double configured_inset = get_parameter("chassis_safety_inset").as_double();
     const double min_swath_length = get_parameter("min_swath_length").as_double();
     const double mow_angle_rad =
         (goal->mow_angle_deg < 0.0) ? -1.0 : goal->mow_angle_deg * M_PI / 180.0;
+
+    // SAFETY FLOOR: the boundary buffer must be at least the chassis half-width,
+    // or worst-case tracking error pushes a spinning blade past the operator
+    // polygon. chassis_safety_inset is field-tunable and has drifted to 0.0/0.08
+    // on deployed configs, which (with a 0.40 m chassis) let the robot excurse
+    // 0.32-0.39 m outside a concave boundary. Floor the planning inset at
+    // robot_width/2 regardless of the configured value.
+    const double inset_floor = robot_width_ * 0.5;
+    const double effective_inset = std::max(configured_inset, inset_floor);
+    if (effective_inset > configured_inset + 1e-9 && !inset_floor_warned_)
+    {
+      inset_floor_warned_ = true;
+      RCLCPP_WARN(get_logger(),
+                  "chassis_safety_inset=%.3fm is below the safety floor robot_width/2=%.3fm "
+                  "(robot_width=%.2fm) — planning at %.3fm so the chassis cannot cross the "
+                  "boundary. The chassis half-width is governing the boundary margin.",
+                  configured_inset,
+                  inset_floor,
+                  robot_width_,
+                  effective_inset);
+    }
 
     f2c::types::Cell cell = buildCellFromGoal(*goal);
 
@@ -368,15 +389,30 @@ void CoverageServer::planCoverage()
                                                operation_width_,
                                                default_headland_width_,
                                                num_headland_passes_,
-                                               chassis_safety_inset,
+                                               effective_inset,
                                                mow_angle_rad,
                                                min_swath_length);
+
+    // Instrumentation (no behaviour change): surface every piece the planner
+    // dropped (slivers, tiny rings, micro-cells) and the planned-coverage
+    // fraction, so partial coverage is visible in the log instead of silent.
+    for (const auto& d : plan.diagnostics.drops)
+    {
+      RCLCPP_INFO(get_logger(), "PlanCoverage: %s", d.c_str());
+    }
+    RCLCPP_INFO(get_logger(),
+                "PlanCoverage: planned coverage ~%.1f%% (%.2f/%.2f m² as op_width strips), "
+                "%zu piece(s) dropped",
+                100.0 * plan.diagnostics.planned_fraction,
+                plan.diagnostics.planned_area,
+                plan.diagnostics.field_area,
+                plan.diagnostics.drops.size());
 
     if (plan.rings.empty() && plan.swaths.empty())
     {
       result->success = false;
       result->message = "field too small after insets (chassis_safety_inset=" +
-                        std::to_string(chassis_safety_inset) +
+                        std::to_string(effective_inset) +
                         "m, headland=" + std::to_string(default_headland_width_) + "m)";
       RCLCPP_WARN(get_logger(),
                   "PlanCoverage: %s (field area=%.2fm²)",

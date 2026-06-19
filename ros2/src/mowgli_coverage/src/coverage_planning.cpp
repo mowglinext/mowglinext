@@ -8,7 +8,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
+#include <string>
 
 namespace mowgli_coverage
 {
@@ -17,6 +19,16 @@ namespace
 {
 
 constexpr double kDensifyStep = 0.10;  // m between ring polyline points
+
+// Format a "dropped <what> <val><cmp><thresh>" diagnostics line without pulling
+// in <sstream>/<iomanip>. Values are short distances/areas, so 4 decimals is
+// plenty of resolution for a log line.
+std::string fmtDrop(const char* what, double value, const char* cmp, double thresh)
+{
+  char buf[128];
+  std::snprintf(buf, sizeof(buf), "dropped %s%.4f%s%.4f", what, value, cmp, thresh);
+  return std::string(buf);
+}
 
 // Append the densified [a, b) segment to `out` (b exclusive: the next segment
 // starts at b, so shared vertices are emitted once and segments chain).
@@ -552,6 +564,9 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double min_swath_length)
 {
   BoustrophedonPlan plan;
+  // Polygon area the planned-coverage fraction is taken over (the operator's
+  // authorised area, before any inset). Instrumentation only.
+  plan.diagnostics.field_area = field_cell.area();
 
   f2c::hg::ConstHL hl;
   f2c::types::Cells cells;
@@ -582,6 +597,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // Drop degenerate micro-loops (a near-consumed tiny field can yield a
   // centimetre-scale innermost ring that isn't worth driving).
   constexpr double kMinRingPerimeter = 1.0;  // m
+  double ring_strip_area = 0.0;  // Σ perimeter·op_width of KEPT rings (for the fraction)
   for (const auto& pass_lines : headland_passes)
   {
     auto loops = ringPassToLoops(pass_lines);
@@ -594,8 +610,10 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       }
       if (perim < kMinRingPerimeter)
       {
+        plan.diagnostics.drops.push_back(fmtDrop("ring perim=", perim, "<", kMinRingPerimeter));
         continue;
       }
+      ring_strip_area += perim * op_width;
       plan.rings.push_back(std::move(loop));
     }
   }
@@ -605,6 +623,10 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   f2c::types::Cells mainland = hl.generateHeadlands(safe_cells, n_rings * op_width);
   if (mainland.size() == 0 || mainland.area() < 1e-6)
   {
+    // Rings-only is a valid plan — still report the planned fraction it covers.
+    plan.diagnostics.planned_area = ring_strip_area;
+    plan.diagnostics.planned_fraction =
+        (plan.diagnostics.field_area > 1e-9) ? ring_strip_area / plan.diagnostics.field_area : 0.0;
     return plan;
   }
 
@@ -619,11 +641,13 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   f2c::sg::BruteForce bf;
   f2c::obj::NSwath n_swath_obj;
   f2c::rp::BoustrophedonOrder order;
+  double swath_strip_area = 0.0;  // Σ length·op_width of KEPT swaths (for the fraction)
   for (std::size_t i = 0; i < mainland.size(); ++i)
   {
     const auto cell = mainland.getGeometry(i);
     if (cell.area() < 1e-6)
     {
+      plan.diagnostics.drops.push_back(fmtDrop("mainland cell area=", cell.area(), "<", 1e-6));
       continue;
     }
     f2c::types::Swaths swaths = (mow_angle_rad >= 0.0)
@@ -647,15 +671,28 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       const double len = std::hypot(p1.getX() - p0.getX(), p1.getY() - p0.getY());
       if (len < min_swath_length)
       {
+        plan.diagnostics.drops.push_back(fmtDrop("swath len=", len, "<", min_swath_length));
         continue;  // sliver clip — not worth a pivot
       }
       if (plan.swaths.empty())
       {
         plan.swath_angle_rad = std::atan2(p1.getY() - p0.getY(), p1.getX() - p0.getX());
       }
+      swath_strip_area += len * op_width;
       plan.swaths.push_back({{p0.getX(), p0.getY()}, {p1.getX(), p1.getY()}});
     }
   }
+
+  // Planned-coverage fraction: strip areas of the kept rings + swaths over the
+  // polygon area. Coarse (strips butt rather than overlap; corners double-count
+  // slightly), so it is a visibility metric, not a guarantee — but it makes a
+  // partially-planned area (slivers/rings/cells silently dropped above) VISIBLE
+  // in the server log so the next iteration can decide.
+  plan.diagnostics.planned_area = ring_strip_area + swath_strip_area;
+  plan.diagnostics.planned_fraction =
+      (plan.diagnostics.field_area > 1e-9)
+          ? plan.diagnostics.planned_area / plan.diagnostics.field_area
+          : 0.0;
 
   return plan;
 }

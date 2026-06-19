@@ -799,6 +799,25 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
 
   areas_queried_++;
 
+  // Navigation-only areas are transit corridors, NOT mowing targets — they
+  // carry is_navigation_area=true and must never be selected for coverage (the
+  // blades would run inside a zone the operator marked nav-only). map_server
+  // still returns these (success=true) because the obstacle tracker needs their
+  // geometry, so the skip lives here on the selection side. Mark the area
+  // attempted so subsequent probes don't re-evaluate it, then advance.
+  if (response->area.is_navigation_area)
+  {
+    {
+      std::lock_guard<std::mutex> lock(ctx->context_mutex);
+      ctx->attempted_areas.insert(current_area_idx_);
+    }
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "GetNextUnmowedArea: area %u is navigation-only ('%s') — skipping (not mowed)",
+                current_area_idx_,
+                response->area.name.c_str());
+    return advanceAndProbe();
+  }
+
   // Completion is now the swath-completion model: an area is done when
   // FollowStrip has mowed every swath F2C produced for it (recorded in
   // ctx->completed_areas). The onStart/advance skip-loops already exclude
@@ -1010,6 +1029,16 @@ BT::NodeStatus PlanCoverageArea::onRunning()
     {
       RCLCPP_ERROR(ctx->node->get_logger(),
                    "PlanCoverageArea: get_mowing_area failed for the requested area");
+      return BT::NodeStatus::FAILURE;
+    }
+    // Defensive: never plan coverage for a navigation-only zone (the blades
+    // would run inside a transit corridor). GetNextUnmowedArea already skips
+    // these on the selection side; this guards a directly-selected nav index.
+    if (resp->area.is_navigation_area)
+    {
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "PlanCoverageArea: area '%s' is navigation-only — refusing to plan coverage",
+                  resp->area.name.c_str());
       return BT::NodeStatus::FAILURE;
     }
     // Plan the FULL area (outer ring + obstacle holes) ONCE. Resume is

@@ -6,6 +6,7 @@
 // catch a broken plan (empty / out-of-bounds / non-serpentine / hole-crossing)
 // in CI instead of on the robot.
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -389,6 +390,78 @@ TEST(CoveragePlanning, HeadlandPassOverride)
                                       -1.0,
                                       0.15);
   EXPECT_EQ(plan.rings.size(), 3u);
+}
+
+// SAFETY FLOOR (Bug C1): the coverage server floors the planning inset at
+// robot_width/2 before calling planBoustrophedon, so a too-small configured
+// chassis_safety_inset can't let a blade cross the boundary. The floor itself
+// lives in coverage_server.cpp; here we assert the GEOMETRIC GUARANTEE it
+// provides — given the floored inset, NO planned ring point or swath endpoint
+// sits closer than robot_width/2 to the boundary. We mirror the server's floor
+// expression (max(configured, robot_width/2)) so the planner is exercised with
+// exactly the value the server would pass.
+TEST(CoveragePlanning, InsetFloorKeepsBladesInsideHalfWidth)
+{
+  constexpr double kRobotWidth = 0.40;  // 0.40 m chassis (the field excursion case)
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeadland = 0.18;
+  constexpr double kMinSwath = 0.15;
+  // The deployed-drift value that caused the 0.32-0.39 m boundary excursion:
+  // configured well below the chassis half-width.
+  constexpr double kConfiguredInset = 0.0;
+  // Server's floor: max(configured, robot_width/2).
+  const double effective_inset = std::max(kConfiguredInset, kRobotWidth * 0.5);
+  ASSERT_NEAR(effective_inset, 0.20, 1e-9) << "floor must be robot_width/2 = 0.20 m";
+
+  const auto cell = makeSquare(6.0);  // big enough to still plan after a 0.20 m inset
+  const auto plan =
+      planBoustrophedon(cell, kOpWidth, kHeadland, 0, effective_inset, -1.0, kMinSwath);
+  ASSERT_FALSE(plan.rings.empty()) << "no rings after the floored inset";
+  ASSERT_FALSE(plan.swaths.empty()) << "no swaths after the floored inset";
+
+  const auto boundary = squareRing(6.0);
+  // Densification (kDensifyStep ~0.10 m) and floating point can place a sampled
+  // ring point a few cm shy of the analytic centerline; allow a small slack but
+  // keep it well under the inset so a real breach (which would be ~0.20 m) fails.
+  constexpr double kSlack = 0.03;
+  const double min_clearance = kRobotWidth * 0.5 - kSlack;
+
+  for (const auto& loop : plan.rings)
+  {
+    for (const auto& p : loop)
+    {
+      ASSERT_TRUE(pointInRing(p.first, p.second, boundary))
+          << "ring point (" << p.first << ", " << p.second << ") is outside the boundary";
+      EXPECT_GE(distanceToRing(p.first, p.second, boundary), min_clearance)
+          << "ring point (" << p.first << ", " << p.second
+          << ") is closer than robot_width/2 to the boundary";
+    }
+  }
+  for (const auto& s : plan.swaths)
+  {
+    for (const auto& pt : {s.first, s.second})
+    {
+      ASSERT_TRUE(pointInRing(pt.first, pt.second, boundary))
+          << "swath endpoint (" << pt.first << ", " << pt.second << ") is outside the boundary";
+      EXPECT_GE(distanceToRing(pt.first, pt.second, boundary), min_clearance)
+          << "swath endpoint (" << pt.first << ", " << pt.second
+          << ") is closer than robot_width/2 to the boundary";
+    }
+  }
+}
+
+// INSTRUMENTATION (Bug A): planBoustrophedon reports a planned-coverage fraction
+// and a non-empty plan over a healthy field. The fraction is a coarse strip-area
+// estimate (visibility, not a guarantee), so we only bound it loosely.
+TEST(CoveragePlanning, DiagnosticsReportPlannedFraction)
+{
+  const auto cell = makeSquare(6.0);
+  const auto plan = planDefault(cell);
+  ASSERT_FALSE(plan.swaths.empty());
+  EXPECT_NEAR(plan.diagnostics.field_area, 36.0, 1e-6);
+  EXPECT_GT(plan.diagnostics.planned_area, 0.0);
+  // A 6 m square at 0.16 m spacing tiles densely — most of the field is planned.
+  EXPECT_GT(plan.diagnostics.planned_fraction, 0.5);
 }
 
 // pointInRing / distanceToRing handle a concave notch (kept from the previous
