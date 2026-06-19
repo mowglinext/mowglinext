@@ -152,6 +152,10 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.ki_ang = declare_double("ki_ang", 0.0);
   config_.ki_ang_max = declare_double("ki_ang_max", 10.0);
   config_.kd_ang = declare_double("kd_ang", 0.0);
+  // FOLLOWING-only heading gain; defaults to kp_ang so behaviour is unchanged
+  // unless explicitly lowered (it is, in nav2_params_base.yaml, to kill the
+  // straight-swath weave without softening the PRE_ROTATE pivot).
+  config_.kp_ang_following = declare_double("kp_ang_following", config_.kp_ang);
 
   // Derivative low-pass time constant (s); 0 = raw derivative (prior behaviour).
   config_.derivative_filter_tau = declare_double("derivative_filter_tau", 0.0);
@@ -194,6 +198,7 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.deviation_blend_rate = declare_double("deviation_blend_rate", 0.5);
   config_.min_lateral_deviation = declare_double("min_lateral_deviation", 0.30);
   config_.obstacle_wait_timeout_s = declare_double("obstacle_wait_timeout_s", 5.0);
+  config_.obstacle_clear_hold_s = declare_double("obstacle_clear_hold_s", 1.5);
 
   // Register parameter-change callback.
   param_cb_handle_ = node->add_on_set_parameters_callback(
@@ -278,6 +283,10 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     else if (key == "kp_ang")
     {
       config_.kp_ang = p.as_double();
+    }
+    else if (key == "kp_ang_following")
+    {
+      config_.kp_ang_following = p.as_double();
     }
     else if (key == "ki_ang")
     {
@@ -388,6 +397,10 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     else if (key == "obstacle_wait_timeout_s")
     {
       config_.obstacle_wait_timeout_s = p.as_double();
+    }
+    else if (key == "obstacle_clear_hold_s")
+    {
+      config_.obstacle_clear_hold_s = p.as_double();
     }
   }
 
@@ -1156,8 +1169,13 @@ void FTCController::calculate_velocity_commands(double dt,
 
   if (current_state_ == PlannerState::FOLLOWING)
   {
-    // Combined angle + lateral PID during path following.
-    double ang_speed = angle_error_ * config_.kp_ang + i_angle_error_ * config_.ki_ang +
+    // Combined angle + lateral PID during path following. NOTE: the heading
+    // gain here is kp_ang_following, NOT kp_ang. On a straight swath the full
+    // kp_ang=1.5 (needed to clear the deadband during a PRE_ROTATE pivot)
+    // makes the kp_ang*angle_error term saturate max_cmd_vel_ang and limit-
+    // cycle at ~0.5 Hz — the left-right swath weave (2026-06-19). A lower
+    // FOLLOWING gain kills the weave; the pivot path below keeps full kp_ang.
+    double ang_speed = angle_error_ * config_.kp_ang_following + i_angle_error_ * config_.ki_ang +
                        d_angle * config_.kd_ang + lat_error_for_steering * config_.kp_lat +
                        i_lat_error_ * config_.ki_lat + d_lat * config_.kd_lat;
 
@@ -1417,18 +1435,49 @@ void FTCController::updateLateralDeviation(double dt)
 
   if (clear_at_zero)
   {
-    // No obstacle on the nominal path ahead — either we never needed to
-    // avoid, or the robot has physically driven past the obstacle. Blend
-    // the offset back to zero and exit AVOIDANCE once settled.
-    target_lateral_deviation_ = 0.0;
-    if (is_avoiding_ && std::abs(lateral_deviation_) < 0.01)
+    if (is_avoiding_)
     {
-      is_avoiding_ = false;
-      RCLCPP_INFO(logger_, "FTCController: AVOIDANCE complete, back on path.");
+      // The nominal path reads clear — but the obstacle sits at the
+      // lookahead-window edge and the observation_persistence:0 costmap
+      // re-marks it each scan, so this test flickers true/false. Blending the
+      // skirt back at the FIRST clear tick (the old behaviour) caused the
+      // ±step left-right flap: complete → re-enter on the other side, never
+      // growing a deviation big enough to actually go around. HOLD the
+      // committed skirt until the path has stayed clear CONTINUOUSLY for
+      // obstacle_clear_hold_s — i.e. the robot has physically passed the
+      // obstacle — then blend back and finish.
+      if (!avoidance_clear_start_.has_value())
+      {
+        avoidance_clear_start_ = clock_->now();
+      }
+      const double clear_for = (clock_->now() - avoidance_clear_start_.value()).seconds();
+      if (clear_for >= config_.obstacle_clear_hold_s)
+      {
+        target_lateral_deviation_ = 0.0;
+        if (std::abs(lateral_deviation_) < 0.01)
+        {
+          is_avoiding_ = false;
+          avoidance_clear_start_.reset();
+          RCLCPP_INFO(logger_,
+                      "FTCController: AVOIDANCE complete (path clear for %.1fs), back on path.",
+                      clear_for);
+        }
+      }
+      // else: keep target_lateral_deviation_ at its committed value — hold the
+      // skirt through the flicker; do NOT zero it yet.
+    }
+    else
+    {
+      // Not avoiding and the path is clear: nominal line tracking.
+      target_lateral_deviation_ = 0.0;
     }
   }
   else
   {
+    // Obstacle (re)appeared on the nominal path — still committed. Cancel any
+    // pending clear-hold so a brief clear gap between scans doesn't count
+    // toward completion (the skirt holds until a SUSTAINED clear).
+    avoidance_clear_start_.reset();
     // Obstacle present on the nominal path within the lookahead. Commit to a
     // deviation that keeps the OFFSET path clear and HOLD it until the robot
     // has passed the obstacle (clear_at_zero becomes true). The deviation is
