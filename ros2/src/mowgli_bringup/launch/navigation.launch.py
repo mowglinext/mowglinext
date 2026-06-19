@@ -295,7 +295,7 @@ def generate_launch_description() -> LaunchDescription:
     # it should do something but didn't. Load here and inject into the
     # Nav2 YAMLs (controller + docking) alongside the dock pose.
     #   transit_speed    → FollowPath.desired_linear_vel (RPP)
-    #   mowing_speed     → FollowCoveragePath.vx_max (MPPI)
+    #   mowing_speed     → FollowCoveragePath.speed_fast (FTC)
     #   undock_speed     → behavior_tree_node param of the same name,
     #                      pushed onto the BT blackboard at startup and
     #                      read by undock-flow BackUp instances via
@@ -338,11 +338,11 @@ def generate_launch_description() -> LaunchDescription:
     # section; injected into coverage_server's parameters at launch
     # so changes via mowgli_robot.yaml take effect on next bringup.
     headland_width = 0.35
-    # min_turning_radius: the robot's minimum MPPI-trackable turning radius. The
-    # continuous coverage path (coverage_server → buildContinuousPath) connects
+    # min_turning_radius: the robot's minimum controller-trackable turning radius.
+    # The continuous coverage path (coverage_server → buildContinuousPath) connects
     # rings + swaths with forward turn-around arcs and rounds cusps with fillets;
     # this is the HARD FLOOR on every such arc. Shrinking a turn below it to fit
-    # in-bounds produced loops too tight for MPPI (wz≈vx/r), so the robot
+    # in-bounds produced loops too tight to track (wz≈vx/r), so the robot
     # looped/hesitated at corners — the bug this knob prevents. Injected into
     # coverage_server.min_turning_radius; operator-tunable via mowgli_robot.yaml.
     min_turning_radius = 0.15
@@ -597,15 +597,15 @@ def generate_launch_description() -> LaunchDescription:
                  .setdefault("FollowPath", {}))
         fp["desired_linear_vel"] = transit_speed
 
-        # FollowCoveragePath (coverage controller = MPPI via RotationShim).
-        # MPPI's forward-speed cap is vx_max; mowing_speed overrides it. (The
-        # old FTC knob was speed_fast — injecting that now would warn
-        # "cannot be set" and the operator's mowing_speed would never reach the
-        # controller.)
+        # FollowCoveragePath (coverage controller = FTCController). FTC's
+        # carrot forward-speed knob is speed_fast; mowing_speed overrides it.
+        # (Restored 2026-06-19, reverting the MPPI experiment whose knob was
+        # vx_max — injecting that now would warn "cannot be set" and the
+        # operator's mowing_speed would never reach the controller.)
         fcp = (doc.setdefault("controller_server", {})
                   .setdefault("ros__parameters", {})
                   .setdefault("FollowCoveragePath", {}))
-        fcp["vx_max"] = mowing_speed
+        fcp["speed_fast"] = mowing_speed
 
         # Goal-checker tolerances. Two checkers live under
         # controller_server: stopped_goal_checker (used by FollowPath /
