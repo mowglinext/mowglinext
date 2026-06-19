@@ -470,6 +470,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         handleDownloadGeoJSON,
         handleUploadGeoJSON,
         handleImportOpenMower,
+        handleReprojectOpenMowerPreview,
         handleApplyOpenMowerImport,
     } = useMapFiles({
         features,
@@ -996,11 +997,19 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             </div>
             <ImportOpenMowerModal
                 preview={importPreview}
-                onApply={async () => {
+                onApply={async (omDatumLat, omDatumLon) => {
                     if (!importFileText) {
                         throw new Error("No imported map text in memory — re-select the file.");
                     }
-                    await handleApplyOpenMowerImport(importFileText);
+                    await handleApplyOpenMowerImport(importFileText, omDatumLat, omDatumLon);
+                }}
+                onReproject={async (omDatumLat, omDatumLon) => {
+                    if (!importFileText) {
+                        throw new Error("No imported map text in memory — re-select the file.");
+                    }
+                    const summary = await handleReprojectOpenMowerPreview(importFileText, omDatumLat, omDatumLon);
+                    setImportPreview(summary);
+                    return summary;
                 }}
                 onClose={() => {
                     setImportPreview(null);

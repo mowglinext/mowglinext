@@ -36,7 +36,7 @@ func loadRealLegacyMap(t *testing.T) openMowerMap {
 // on top of.
 func TestImportRealLegacyMap_FaithfulCounts(t *testing.T) {
 	om := loadRealLegacyMap(t)
-	summary := buildImportSummary(om, 0, 0)
+	summary := buildImportSummary(om, datumReprojector{})
 
 	assert.Equal(t, 8, summary.MowingAreas, "all 8 WorkingArea zones import as mow areas")
 	assert.Equal(t, 1, summary.NavigationAreas, "the single NavigationArea imports")
@@ -53,7 +53,7 @@ func TestImportRealLegacyMap_FaithfulCounts(t *testing.T) {
 	// duplicate, and mow-7/mow-8/nav-1 also lose a leading doubled vertex
 	// (which is exactly why those last two working areas failed to import
 	// before the dedup fix).
-	replace, _ := buildMowgliNextPayload(om, 0, 0)
+	replace, _ := buildMowgliNextPayload(om, datumReprojector{})
 	require.Len(t, replace.Areas, 9)
 	gotVerts := make([]int, 0, len(replace.Areas))
 	for _, ra := range replace.Areas {
@@ -83,7 +83,7 @@ func TestImportRealLegacyMap_FaithfulCounts(t *testing.T) {
 // duplicate, in outlineToPoint32s / the legacy adapter).
 func TestImportRealLegacyMap_NoDegenerateVertices(t *testing.T) {
 	om := loadRealLegacyMap(t)
-	replace, _ := buildMowgliNextPayload(om, 0, 0)
+	replace, _ := buildMowgliNextPayload(om, datumReprojector{})
 
 	degenerate := 0
 	for _, ra := range replace.Areas {
