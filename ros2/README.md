@@ -406,6 +406,12 @@ main `mowgli-ros2` runtime no longer launches Universal GNSS directly; the
 this workspace during the migration so ROS2 CI and local development can stay
 in sync with the sidecar code until the final cleanup PR removes it.
 
+The sidecar package under `tools/motor/` is linked or copied into the colcon
+workspace as `mowgli_tools` and built into the `mowgli-ros2` runtime image.
+This is intentional: the MowgliNext GUI Drive Motor calibration assistants call
+`ros2 run mowgli_tools tune_drive_pid` inside the running ROS2 container, so
+the runtime workspace must ship that package and its Python entrypoint.
+
 If you are actively developing that upstream repo separately, set
 `UNIVERSAL_GNSS_PATH=/path/to/universal-gnss` and the workspace sync helpers
 will prefer that checkout over the vendored submodule.
@@ -468,6 +474,19 @@ INCLUDE_OPENNAV_COVERAGE_STACK=1 ./scripts/build.sh
 | `nav` | `runtime` | — | Navigation stack only (no hardware bridge) |
 | `dev-sim` | `dev` | `8765`, `6080` | Development with bind-mounted source tree |
 | `dev-sim-small` | `dev` | `8765`, `6080` | Small 10m x 8m garden for fast iteration |
+
+The runtime image also includes the `mowgli_tools` package from
+`tools/motor/`. After sourcing:
+
+```bash
+source /opt/ros/kilted/setup.bash
+source /ros2_ws/install/setup.bash
+ros2 pkg list | grep mowgli_tools
+ros2 run mowgli_tools tune_drive_pid --help
+```
+
+the `tune_drive_pid` entrypoint should be available inside `mowgli-ros2`. The
+GUI Drive Motor assistant depends on that command path.
 | `dev` | `dev` | — | Interactive shell with bind-mounted source tree |
 
 ### Running Hardware

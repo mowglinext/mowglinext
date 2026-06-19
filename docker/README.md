@@ -345,6 +345,18 @@ docker exec mowgli-ros2 cat \
 | `mowgli-mqtt` | `eclipse-mosquitto:latest` | MQTT broker for Home Assistant and telemetry | 1883, 9001 |
 | `mowgli-watchtower` | `ghcr.io/nicholas-fedor/watchtower:latest` | Auto-updates containers labelled `com.centurylinklabs.watchtower.enable: "true"` | — |
 
+`mowgli-ros2` also carries the ROS2 package `mowgli_tools`, built from the
+sidecar source at `tools/motor/`. This is required by the MowgliNext GUI Drive
+Motor assistant, which launches:
+
+```bash
+source /opt/ros/kilted/setup.bash
+source /ros2_ws/install/setup.bash
+ros2 run mowgli_tools tune_drive_pid --help
+```
+
+inside the running `mowgli-ros2` container.
+
 ### DDS middleware
 
 All ROS2 containers use **Cyclone DDS** (`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`).

@@ -52,8 +52,13 @@ jobs:
           submodules: recursive
 
       - name: Link sidecar ROS2 tools package into workspace
+        working-directory: ros2
         run: |
-          ln -sfn ../tools/motor src/mowgli_tools
+          mkdir -p src
+          rm -rf src/mowgli_tools
+          ln -s ../../tools/motor src/mowgli_tools
+          ls -la src
+          ls -la src/mowgli_tools
           test -f src/mowgli_tools/package.xml
 
       - name: Preinstall ROS apt source package
@@ -68,6 +73,12 @@ jobs:
         uses: ros-tooling/setup-ros@v0.7
         with:
           required-ros-distributions: ${{ matrix.ros_distro }}
+
+      - name: Validate mowgli_tools package discovery
+        run: |
+          source /opt/ros/${{ matrix.ros_distro }}/setup.bash
+          colcon list --base-paths src | tee /tmp/colcon-list.txt
+          grep -E '^mowgli_tools\s' /tmp/colcon-list.txt
 
       # GTSAM 4.3a1 is required by fusion_graph (find_package(GTSAM CONFIG
       # REQUIRED) in its CMakeLists). The Ubuntu apt package ships 4.2 with
