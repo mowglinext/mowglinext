@@ -71,12 +71,11 @@ public:
   /// neither side is reachable within max_search (caller treats as "give up").
   /// When `guard.costmap != nullptr`, a side is only "free" if it is also
   /// inside the zone boundary (not lethal in the guard costmap).
-  static double chooseDeviationSide(
-      const nav2_costmap_2d::Costmap2D& costmap,
-      const geometry_msgs::msg::PoseStamped& obstacle_pose,
-      double max_search,
-      double step,
-      const BoundaryGuard& guard = {});
+  static double chooseDeviationSide(const nav2_costmap_2d::Costmap2D& costmap,
+                                    const geometry_msgs::msg::PoseStamped& obstacle_pose,
+                                    double max_search,
+                                    double step,
+                                    const BoundaryGuard& guard = {});
 
   /// Check whether the laterally-offset path is clear in the lookahead
   /// window. For each pose in [start_idx, start_idx + lookahead_count), the
@@ -84,13 +83,12 @@ public:
   /// path heading) and the resulting cell is sampled. Returns true if no
   /// sampled cell is lethal. When `guard.costmap != nullptr`, an offset cell
   /// that is out-of-zone (lethal in the guard costmap) also counts as blocked.
-  static bool isPathClearWithDeviation(
-      const nav2_costmap_2d::Costmap2D& costmap,
-      const std::vector<geometry_msgs::msg::PoseStamped>& path,
-      std::size_t start_idx,
-      int lookahead_count,
-      double deviation,
-      const BoundaryGuard& guard = {});
+  static bool isPathClearWithDeviation(const nav2_costmap_2d::Costmap2D& costmap,
+                                       const std::vector<geometry_msgs::msg::PoseStamped>& path,
+                                       std::size_t start_idx,
+                                       int lookahead_count,
+                                       double deviation,
+                                       const BoundaryGuard& guard = {});
 
   /// Search for the smallest |deviation| that makes the path clear, starting
   /// from `initial_deviation` and growing in `step` increments up to
@@ -99,15 +97,14 @@ public:
   /// the unchanged max-magnitude value if no clearance found (caller checks
   /// |result| > max_deviation - step). `guard` is forwarded to the offset
   /// clearance checks.
-  static double growDeviationUntilClear(
-      const nav2_costmap_2d::Costmap2D& costmap,
-      const std::vector<geometry_msgs::msg::PoseStamped>& path,
-      std::size_t start_idx,
-      int lookahead_count,
-      double initial_deviation,
-      double max_deviation,
-      double step,
-      const BoundaryGuard& guard = {});
+  static double growDeviationUntilClear(const nav2_costmap_2d::Costmap2D& costmap,
+                                        const std::vector<geometry_msgs::msg::PoseStamped>& path,
+                                        std::size_t start_idx,
+                                        int lookahead_count,
+                                        double initial_deviation,
+                                        double max_deviation,
+                                        double step,
+                                        const BoundaryGuard& guard = {});
 };
 
 }  // namespace mowgli_nav2_plugins

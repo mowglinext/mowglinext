@@ -268,8 +268,8 @@ class BoundaryGuardTest : public ObstacleDeviationTest
 {
 protected:
   // Boundary costmap, same geometry/frame as costmap_ → identity transform.
-  nav2_costmap_2d::Costmap2D boundary_{kSize, kSize, kResolution, kOriginX, kOriginY,
-                                       nav2_costmap_2d::FREE_SPACE};
+  nav2_costmap_2d::Costmap2D boundary_{
+      kSize, kSize, kResolution, kOriginX, kOriginY, nav2_costmap_2d::FREE_SPACE};
 
   /// Stamp a square block of LETHAL cells into the boundary costmap.
   void stampBoundaryBlock(double cx, double cy, double half)
@@ -308,8 +308,7 @@ TEST_F(BoundaryGuardTest, IsPathClear_OffsetIntoBoundary_Rejected)
   // Without the guard the offset path is clear (local costmap free).
   EXPECT_TRUE(ObstacleDeviation::isPathClearWithDeviation(costmap_, path, 0, 10, 0.5));
   // With the guard the same offset lands out-of-zone → blocked.
-  EXPECT_FALSE(
-      ObstacleDeviation::isPathClearWithDeviation(costmap_, path, 0, 10, 0.5, guard()));
+  EXPECT_FALSE(ObstacleDeviation::isPathClearWithDeviation(costmap_, path, 0, 10, 0.5, guard()));
 }
 
 TEST_F(BoundaryGuardTest, GrowDeviation_OnlyClearSideOutOfZone_ReturnsOverCap)
@@ -318,8 +317,8 @@ TEST_F(BoundaryGuardTest, GrowDeviation_OnlyClearSideOutOfZone_ReturnsOverCap)
   // is locally clear, but the boundary marks ALL negative Y out-of-zone, so the
   // only locally-clear side is boundary-blocked → grow can't clear → over cap
   // (caller waits/aborts instead of leaving the zone).
-  stampBlock(0.5, 0.0, 0.2);              // local obstacle on the path
-  stampBoundaryBlock(0.5, -2.0, 2.0);     // boundary: all of -Y near x=0.5 lethal
+  stampBlock(0.5, 0.0, 0.2);  // local obstacle on the path
+  stampBoundaryBlock(0.5, -2.0, 2.0);  // boundary: all of -Y near x=0.5 lethal
   const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
   const double max_dev = 1.5;
   const double dev = ObstacleDeviation::growDeviationUntilClear(

@@ -102,12 +102,11 @@ int ObstacleDeviation::findFirstObstacleIndex(
   return -1;
 }
 
-double ObstacleDeviation::chooseDeviationSide(
-    const nav2_costmap_2d::Costmap2D& costmap,
-    const geometry_msgs::msg::PoseStamped& obstacle_pose,
-    double max_search,
-    double step,
-    const BoundaryGuard& guard)
+double ObstacleDeviation::chooseDeviationSide(const nav2_costmap_2d::Costmap2D& costmap,
+                                              const geometry_msgs::msg::PoseStamped& obstacle_pose,
+                                              double max_search,
+                                              double step,
+                                              const BoundaryGuard& guard)
 {
   if (step <= 0.0 || max_search <= 0.0)
   {
