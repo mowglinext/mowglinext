@@ -59,11 +59,11 @@
 
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
+#include "mowgli_hardware/angular_rate_controller.hpp"
 #include "mowgli_hardware/clock_fit.hpp"
 #include "mowgli_hardware/ll_datatypes.hpp"
 #include "mowgli_hardware/packet_handler.hpp"
 #include "mowgli_hardware/serial_port.hpp"
-#include "mowgli_hardware/angular_rate_controller.hpp"
 
 // High-level mode constants — must match HighLevelStatus.msg and the
 // HL_MODE_* defines in firmware/mowgli_protocol.h. Declared locally to
@@ -247,8 +247,7 @@ private:
     angular_rate_params_.kp = declare_parameter<double>("angular_rate_kp", 0.4);
     angular_rate_params_.ki = declare_parameter<double>("angular_rate_ki", 2.0);
     angular_rate_params_.max_cmd = declare_parameter<double>("angular_rate_max_cmd", 1.5);
-    angular_rate_params_.integral_max =
-        declare_parameter<double>("angular_rate_integral_max", 1.5);
+    angular_rate_params_.integral_max = declare_parameter<double>("angular_rate_integral_max", 1.5);
     angular_rate_params_.target_lp_tau =
         declare_parameter<double>("angular_rate_target_lp_tau", 0.2);
 
@@ -371,7 +370,7 @@ private:
           RCLCPP_DEBUG(get_logger(),
                        "High-level mode updated to %u (%s)",
                        msg->state,
-                        msg->state_name.c_str());
+                       msg->state_name.c_str());
         });
   }
 
@@ -1515,7 +1514,8 @@ private:
     if (last_sent_mode_ != current_mode_ || last_sent_mode_state_name_ != current_mode_state_name_)
     {
       RCLCPP_INFO(get_logger(),
-                  "hardware_bridge forwarding HL state to STM32: mode=%u (%s), state_name='%s', gps_quality=%u",
+                  "hardware_bridge forwarding HL state to STM32: mode=%u (%s), state_name='%s', "
+                  "gps_quality=%u",
                   current_mode_,
                   high_level_mode_name(current_mode_),
                   current_mode_state_name_.c_str(),
@@ -1691,9 +1691,8 @@ private:
     if (angular_rate_loop_enabled_)
     {
       const rclcpp::Time now = this->now();
-      const double dt = last_cmd_vel_time_.nanoseconds() > 0
-                            ? (now - last_cmd_vel_time_).seconds()
-                            : 0.0;
+      const double dt =
+          last_cmd_vel_time_.nanoseconds() > 0 ? (now - last_cmd_vel_time_).seconds() : 0.0;
       last_cmd_vel_time_ = now;
       wz = mowgli_hardware::compute_angular_rate_cmd(
           wz, latest_gyro_z_, dt, angular_rate_params_, angular_rate_state_);
