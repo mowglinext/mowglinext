@@ -216,6 +216,12 @@ private:
   // window the controller resumes, otherwise it throws as before.
   std::optional<rclcpp::Time> obstacle_wait_start_;
   bool obstacle_waiting_{false};
+  /// When the nominal path first read CLEAR during an active AVOIDANCE
+  /// episode. The skirt is held until it has stayed clear for
+  /// config_.obstacle_clear_hold_s (debounces the window-edge flicker that
+  /// caused the ±step left-right flap). Reset whenever the obstacle
+  /// re-appears or on a new plan.
+  std::optional<rclcpp::Time> avoidance_clear_start_;
 
   // ── Oscillation detection ─────────────────────────────────────────────────
 
@@ -287,6 +293,11 @@ private:
     double ki_ang{0.0};
     double ki_ang_max{10.0};
     double kd_ang{0.0};
+    // Heading P-gain used ONLY in the FOLLOWING state (straight-swath
+    // tracking). kp_ang itself is kept high enough to clear the deadband in a
+    // PRE_ROTATE pivot, but that high gain limit-cycles on a straight (the
+    // left-right weave). Defaults to kp_ang (no change unless set lower).
+    double kp_ang_following{1.0};
 
     // First-order low-pass time constant (s) for the PID derivative terms
     // (d_lat / d_lon / d_angle). The raw finite-difference derivative amplifies
@@ -342,6 +353,15 @@ private:
     /// costmap clears before the timeout, the controller resumes. After
     /// the timeout we throw a ControllerException as before.
     double obstacle_wait_timeout_s{5.0};
+    /// Hysteresis hold (s) before declaring AVOIDANCE complete. Once
+    /// avoiding, the nominal path must read CLEAR continuously for this long
+    /// before the skirt is blended back to the line. Without it, the
+    /// obstacle sitting at the lookahead-window edge (and the
+    /// observation_persistence:0 costmap re-marking it each scan) makes the
+    /// clear/blocked test flicker, so the old code blended the skirt back at
+    /// the first clear tick and re-entered on the other side — the ±step
+    /// left-right flap that never grows a deviation big enough to go around.
+    double obstacle_clear_hold_s{1.5};
   };
 
   Config config_;
