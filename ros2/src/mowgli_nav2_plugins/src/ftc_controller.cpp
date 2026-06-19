@@ -25,6 +25,7 @@
 #include <nav2_costmap_2d/costmap_2d.hpp>
 #include <nav2_util/node_utils.hpp>
 #include <tf2/utils.hpp>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
@@ -1258,6 +1259,12 @@ bool FTCController::checkCollision(int max_points)
   }
 
   // Check costmap cells along the lookahead path segments.
+  // NOTE: this loop samples global_plan_ poses (plan/map frame) directly
+  // against costmap_map_ (odom frame) — the same map->odom frame bug fixed in
+  // updateLateralDeviation. It is only exercised when enable_obstacle_deviation
+  // is false (not the deployed coverage config), and the footprint check above
+  // is frame-correct, so it is left as-is; transform the window here too if the
+  // deviation-disabled path is ever used in production.
   for (int i = 0; i < max_points; ++i)
   {
     std::size_t index = current_index_ + static_cast<std::size_t>(i);
@@ -1343,6 +1350,57 @@ void FTCController::updateLateralDeviation(double dt)
   const std::size_t start_idx = std::min(static_cast<std::size_t>(current_index_),
                                          global_plan_.size() - 1);
 
+  // Sample obstacles in the COSTMAP frame, not the path frame. global_plan_ is
+  // in the plan frame (map); costmap_map_ is the local costmap in its own
+  // global frame (odom). map->odom is NOT identity here — fusion_graph_node
+  // publishes it and it absorbs all GPS corrections — so feeding raw map-frame
+  // path coords into worldToMap() samples the WRONG cells (almost always free /
+  // off-window) and the obstacle is never detected: the robot drives the
+  // nominal line straight into it, while collision_monitor (which reads
+  // /scan_costmap in the robot frame) is the only thing that reacts. Transform
+  // the lookahead window into the costmap frame BEFORE sampling, then index it
+  // from 0 (the ObstacleDeviation helpers clamp to the window size).
+  std::vector<geometry_msgs::msg::PoseStamped> window;
+  {
+    const std::size_t win_end =
+        std::min(global_plan_.size(),
+                 start_idx + static_cast<std::size_t>(std::max(0, config_.obstacle_lookahead)));
+    const std::string costmap_frame = costmap_ros_->getGlobalFrameID();
+    const std::string plan_frame = global_plan_[start_idx].header.frame_id;
+    window.reserve(win_end - start_idx);
+    if (plan_frame.empty() || plan_frame == costmap_frame)
+    {
+      window.assign(global_plan_.begin() + static_cast<std::ptrdiff_t>(start_idx),
+                    global_plan_.begin() + static_cast<std::ptrdiff_t>(win_end));
+    }
+    else
+    {
+      geometry_msgs::msg::TransformStamped plan_to_costmap;
+      try
+      {
+        plan_to_costmap =
+            tf_buffer_->lookupTransform(costmap_frame, plan_frame, tf2::TimePointZero);
+      }
+      catch (const tf2::TransformException& ex)
+      {
+        // Without the transform we cannot sample obstacles correctly. Skip
+        // avoidance this tick (next tick retries) rather than act on garbage
+        // cells — never silently fall back to the broken raw-coord sampling.
+        RCLCPP_WARN_THROTTLE(logger_, *clock_, 2000,
+                             "FTCController: obstacle-deviation TF %s->%s failed (%s) — "
+                             "skipping avoidance this tick",
+                             plan_frame.c_str(), costmap_frame.c_str(), ex.what());
+        return;
+      }
+      for (std::size_t i = start_idx; i < win_end; ++i)
+      {
+        geometry_msgs::msg::PoseStamped p;
+        tf2::doTransform(global_plan_[i], p, plan_to_costmap);
+        window.push_back(p);
+      }
+    }
+  }
+
   // The decision to STOP avoiding must be gated on whether the NOMINAL path
   // (zero deviation) is clear within the lookahead — i.e. has the robot
   // advanced far enough that the obstacle has left the forward window? It
@@ -1355,7 +1413,7 @@ void FTCController::updateLateralDeviation(double dt)
   // same idx). The robot never offset enough to skirt anything; the
   // sub-deadband ±step carrot shift just dithered it left-right in place.
   const bool clear_at_zero = ObstacleDeviation::isPathClearWithDeviation(
-      *costmap_map_, global_plan_, start_idx, config_.obstacle_lookahead, 0.0);
+      *costmap_map_, window, 0, config_.obstacle_lookahead, 0.0);
 
   if (clear_at_zero)
   {
@@ -1379,7 +1437,7 @@ void FTCController::updateLateralDeviation(double dt)
     if (!is_avoiding_)
     {
       const int obs_idx = ObstacleDeviation::findFirstObstacleIndex(
-          *costmap_map_, global_plan_, start_idx, config_.obstacle_lookahead);
+          *costmap_map_, window, 0, config_.obstacle_lookahead);
       if (obs_idx < 0)
       {
         // Footprint collision but no path-pose hit (e.g. inflated cell next
@@ -1388,7 +1446,7 @@ void FTCController::updateLateralDeviation(double dt)
       }
       target_lateral_deviation_ = ObstacleDeviation::chooseDeviationSide(
           *costmap_map_,
-          global_plan_[static_cast<std::size_t>(obs_idx)],
+          window[static_cast<std::size_t>(obs_idx)],
           config_.max_lateral_deviation,
           config_.deviation_step);
       if (target_lateral_deviation_ == 0.0)
@@ -1413,7 +1471,7 @@ void FTCController::updateLateralDeviation(double dt)
       RCLCPP_INFO(logger_,
                   "FTCController: entering AVOIDANCE (target_dev=%.2fm at idx=%d)",
                   target_lateral_deviation_,
-                  obs_idx);
+                  static_cast<int>(start_idx) + obs_idx);
     }
 
     // Floor the SEARCH START to min_lateral_deviation. growDeviationUntilClear
@@ -1442,8 +1500,8 @@ void FTCController::updateLateralDeviation(double dt)
     // Grow the deviation until the offset path is clear (keeps current side).
     target_lateral_deviation_ =
         ObstacleDeviation::growDeviationUntilClear(*costmap_map_,
-                                                   global_plan_,
-                                                   start_idx,
+                                                   window,
+                                                   0,
                                                    config_.obstacle_lookahead,
                                                    dev_init,
                                                    config_.max_lateral_deviation,
