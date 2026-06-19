@@ -1404,10 +1404,14 @@ void FTCController::updateLateralDeviation(double dt)
         // Without the transform we cannot sample obstacles correctly. Skip
         // avoidance this tick (next tick retries) rather than act on garbage
         // cells — never silently fall back to the broken raw-coord sampling.
-        RCLCPP_WARN_THROTTLE(logger_, *clock_, 2000,
+        RCLCPP_WARN_THROTTLE(logger_,
+                             *clock_,
+                             2000,
                              "FTCController: obstacle-deviation TF %s->%s failed (%s) — "
                              "skipping avoidance this tick",
-                             plan_frame.c_str(), costmap_frame.c_str(), ex.what());
+                             plan_frame.c_str(),
+                             costmap_frame.c_str(),
+                             ex.what());
         return;
       }
       for (std::size_t i = start_idx; i < win_end; ++i)
@@ -1485,19 +1489,21 @@ void FTCController::updateLateralDeviation(double dt)
     // reduce it toward the path here, which is what stopped the flap.
     if (!is_avoiding_)
     {
-      const int obs_idx = ObstacleDeviation::findFirstObstacleIndex(
-          *costmap_map_, window, 0, config_.obstacle_lookahead);
+      const int obs_idx = ObstacleDeviation::findFirstObstacleIndex(*costmap_map_,
+                                                                    window,
+                                                                    0,
+                                                                    config_.obstacle_lookahead);
       if (obs_idx < 0)
       {
         // Footprint collision but no path-pose hit (e.g. inflated cell next
         // to robot from a transient scan return) — nothing to deviate around.
         return;
       }
-      target_lateral_deviation_ = ObstacleDeviation::chooseDeviationSide(
-          *costmap_map_,
-          window[static_cast<std::size_t>(obs_idx)],
-          config_.max_lateral_deviation,
-          config_.deviation_step);
+      target_lateral_deviation_ =
+          ObstacleDeviation::chooseDeviationSide(*costmap_map_,
+                                                 window[static_cast<std::size_t>(obs_idx)],
+                                                 config_.max_lateral_deviation,
+                                                 config_.deviation_step);
       if (target_lateral_deviation_ == 0.0)
       {
         // Both sides blocked at the obstacle pose. Before bailing, hold a
