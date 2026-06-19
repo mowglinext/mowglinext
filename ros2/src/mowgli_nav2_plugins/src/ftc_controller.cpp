@@ -152,6 +152,9 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.ki_ang_max = declare_double("ki_ang_max", 10.0);
   config_.kd_ang = declare_double("kd_ang", 0.0);
 
+  // Derivative low-pass time constant (s); 0 = raw derivative (prior behaviour).
+  config_.derivative_filter_tau = declare_double("derivative_filter_tau", 0.0);
+
   // Robot limits
   config_.max_cmd_vel_speed = declare_double("max_cmd_vel_speed", 2.0);
   base_max_cmd_vel_speed_ = config_.max_cmd_vel_speed;
@@ -286,6 +289,10 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     else if (key == "kd_ang")
     {
       config_.kd_ang = p.as_double();
+    }
+    else if (key == "derivative_filter_tau")
+    {
+      config_.derivative_filter_tau = p.as_double();
     }
     else if (key == "max_cmd_vel_speed")
     {
@@ -463,6 +470,9 @@ void FTCController::setPlan(const nav_msgs::msg::Path& path)
   last_lat_error_ = 0.0;
   last_lon_error_ = 0.0;
   last_angle_error_ = 0.0;
+  d_lat_filt_ = 0.0;
+  d_lon_filt_ = 0.0;
+  d_angle_filt_ = 0.0;
 
   nav_msgs::msg::Path pub_path;
 
@@ -1085,14 +1095,33 @@ void FTCController::calculate_velocity_commands(double dt,
   i_lat_error_ = std::clamp(i_lat_error_, -config_.ki_lat_max, config_.ki_lat_max);
   i_angle_error_ = std::clamp(i_angle_error_, -config_.ki_ang_max, config_.ki_ang_max);
 
-  // Derivative terms.
-  const double d_lat = (lat_error_ - last_lat_error_) / dt;
-  const double d_lon = (lon_error_ - last_lon_error_) / dt;
-  const double d_angle = (angle_error_ - last_angle_error_) / dt;
+  // Derivative terms (raw backward finite difference).
+  double d_lat = (lat_error_ - last_lat_error_) / dt;
+  double d_lon = (lon_error_ - last_lon_error_) / dt;
+  double d_angle = (angle_error_ - last_angle_error_) / dt;
 
   last_lat_error_ = lat_error_;
   last_lon_error_ = lon_error_;
   last_angle_error_ = angle_error_;
+
+  // Optional first-order low-pass on the derivative (derivative-on-measurement
+  // filtering). The raw finite difference amplifies the high-frequency jitter
+  // in the 10 Hz fused-pose feedback; kd_lat then pumps it into the angular
+  // command as a ~1.5 Hz steering limit cycle ("hunting"). Filtering the
+  // derivative lets kd_lat stay high enough for tight cross-track tracking
+  // without the chatter. tau = 0 keeps the raw derivative (prior behaviour);
+  // alpha = dt / (tau + dt) is the standard discrete one-pole coefficient.
+  // From PR #290 (64dce368).
+  if (config_.derivative_filter_tau > 0.0)
+  {
+    const double alpha = dt / (config_.derivative_filter_tau + dt);
+    d_lat_filt_ += alpha * (d_lat - d_lat_filt_);
+    d_lon_filt_ += alpha * (d_lon - d_lon_filt_);
+    d_angle_filt_ += alpha * (d_angle - d_angle_filt_);
+    d_lat = d_lat_filt_;
+    d_lon = d_lon_filt_;
+    d_angle = d_angle_filt_;
+  }
 
   // ── Linear velocity (FOLLOWING only) ──────────────────────────────────────
 

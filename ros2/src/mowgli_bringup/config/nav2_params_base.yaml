@@ -301,6 +301,14 @@ controller_server:
       kp_ang: 1.5
       ki_ang: 0.0
       kd_ang: 0.0
+      # Low-pass the PID derivative (cherry-picked from PR #290, commit 64dce368).
+      # The raw finite-difference derivative amplifies the 10 Hz fused-pose jitter
+      # and kd_lat=1.5 pumps it into a ~1.5 Hz steering limit cycle ("hunting" /
+      # whipsaw on swaths) — which is exactly why kp_lat/kd_lat above were detuned.
+      # A one-pole LPF (tau=0.2 s, fc≈0.8 Hz) keeps the derivative authority for
+      # tight cross-track tracking without the chatter. FIELD-VALIDATE the tau on
+      # real swaths; 0 reverts to the raw derivative.
+      derivative_filter_tau: 0.2
       max_cmd_vel_speed: 0.30
       max_cmd_vel_ang: 0.8
       # Loose goal-acceptance envelope: the F2C path's last pose can sit 25-50 cm
