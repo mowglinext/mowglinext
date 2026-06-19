@@ -51,6 +51,32 @@ inline void offsetLateral(const geometry_msgs::msg::PoseStamped& pose,
   out_y = pose.pose.position.y + dev * std::sin(yaw + M_PI_2);
 }
 
+/// Is the offset sample point (x, y) blocked? True if the LOCAL (obstacle)
+/// costmap cell is lethal, OR — when a boundary guard is supplied — if the
+/// point projected into the guard costmap's frame lands on a lethal cell
+/// (out-of-zone). Used ONLY for lateral-offset deviation checks so the skirt
+/// never leaves the mowing zone.
+bool offsetBlocked(const nav2_costmap_2d::Costmap2D& local,
+                   double x,
+                   double y,
+                   const ObstacleDeviation::BoundaryGuard& g)
+{
+  if (sampleCell(local, x, y) >= ObstacleDeviation::kLethalThreshold)
+  {
+    return true;
+  }
+  if (g.costmap != nullptr)
+  {
+    const double bx = g.tx + g.cos_yaw * x - g.sin_yaw * y;
+    const double by = g.ty + g.sin_yaw * x + g.cos_yaw * y;
+    if (sampleCell(*g.costmap, bx, by) >= ObstacleDeviation::kLethalThreshold)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 int ObstacleDeviation::findFirstObstacleIndex(
@@ -80,7 +106,8 @@ double ObstacleDeviation::chooseDeviationSide(
     const nav2_costmap_2d::Costmap2D& costmap,
     const geometry_msgs::msg::PoseStamped& obstacle_pose,
     double max_search,
-    double step)
+    double step,
+    const BoundaryGuard& guard)
 {
   if (step <= 0.0 || max_search <= 0.0)
   {
@@ -94,12 +121,12 @@ double ObstacleDeviation::chooseDeviationSide(
     double lx = 0.0;
     double ly = 0.0;
     offsetLateral(obstacle_pose, d, lx, ly);
-    const bool left_clear = sampleCell(costmap, lx, ly) < kLethalThreshold;
+    const bool left_clear = !offsetBlocked(costmap, lx, ly, guard);
 
     double rx = 0.0;
     double ry = 0.0;
     offsetLateral(obstacle_pose, -d, rx, ry);
-    const bool right_clear = sampleCell(costmap, rx, ry) < kLethalThreshold;
+    const bool right_clear = !offsetBlocked(costmap, rx, ry, guard);
 
     if (left_clear)
     {
@@ -118,7 +145,8 @@ bool ObstacleDeviation::isPathClearWithDeviation(
     const std::vector<geometry_msgs::msg::PoseStamped>& path,
     std::size_t start_idx,
     int lookahead_count,
-    double deviation)
+    double deviation,
+    const BoundaryGuard& guard)
 {
   if (lookahead_count <= 0 || path.empty())
   {
@@ -131,7 +159,7 @@ bool ObstacleDeviation::isPathClearWithDeviation(
     double ox = 0.0;
     double oy = 0.0;
     offsetLateral(path[i], deviation, ox, oy);
-    if (sampleCell(costmap, ox, oy) >= kLethalThreshold)
+    if (offsetBlocked(costmap, ox, oy, guard))
     {
       return false;
     }
@@ -146,7 +174,8 @@ double ObstacleDeviation::growDeviationUntilClear(
     int lookahead_count,
     double initial_deviation,
     double max_deviation,
-    double step)
+    double step,
+    const BoundaryGuard& guard)
 {
   if (step <= 0.0 || max_deviation <= 0.0)
   {
@@ -163,7 +192,7 @@ double ObstacleDeviation::growDeviationUntilClear(
   while (mag <= max_deviation)
   {
     const double candidate = sign * mag;
-    if (isPathClearWithDeviation(costmap, path, start_idx, lookahead_count, candidate))
+    if (isPathClearWithDeviation(costmap, path, start_idx, lookahead_count, candidate, guard))
     {
       return candidate;
     }

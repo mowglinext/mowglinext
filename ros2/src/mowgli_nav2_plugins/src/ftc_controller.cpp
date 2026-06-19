@@ -65,6 +65,34 @@ void FTCController::configure(const rclcpp_lifecycle::LifecycleNode::WeakPtr& pa
   obstacle_marker_pub_ =
       node->create_publisher<visualization_msgs::msg::Marker>(plugin_name_ + "/costmap_marker", 10);
 
+  // Subscribe to the GLOBAL costmap (map frame, latched). It carries the
+  // mowing-zone boundary as lethal cells (keepout / lethal_outside_areas
+  // filter). We rebuild boundary_costmap_ from each update so the lateral-
+  // OFFSET deviation checks can refuse to skirt out of the zone.
+  boundary_costmap_sub_ = node->create_subscription<nav_msgs::msg::OccupancyGrid>(
+      "/global_costmap/costmap",
+      rclcpp::QoS(1).transient_local(),
+      [this](const nav_msgs::msg::OccupancyGrid::SharedPtr og)
+      {
+        auto cm = std::make_unique<nav2_costmap_2d::Costmap2D>(og->info.width,
+                                                               og->info.height,
+                                                               og->info.resolution,
+                                                               og->info.origin.position.x,
+                                                               og->info.origin.position.y);
+        unsigned char* char_map = cm->getCharMap();
+        const std::size_t n = static_cast<std::size_t>(og->info.width) * og->info.height;
+        for (std::size_t i = 0; i < n; ++i)
+        {
+          // OccupancyGrid 100/99 = lethal/inscribed (keepout boundary or a
+          // global obstacle — both are things we must not skirt into);
+          // unknown (-1) and free → 0.
+          char_map[i] = (og->data[i] >= 99) ? 254u : 0u;
+        }
+        std::lock_guard<std::mutex> lock(boundary_mutex_);
+        boundary_costmap_ = std::move(cm);
+        boundary_frame_ = og->header.frame_id;
+      });
+
   current_state_ = PlannerState::PRE_ROTATE;
   last_time_ = clock_->now();
   time_last_oscillation_ = clock_->now();
@@ -81,6 +109,11 @@ void FTCController::cleanup()
   global_point_pub_.reset();
   global_plan_pub_.reset();
   obstacle_marker_pub_.reset();
+  boundary_costmap_sub_.reset();
+  {
+    std::lock_guard<std::mutex> lock(boundary_mutex_);
+    boundary_costmap_.reset();
+  }
 }
 
 void FTCController::activate()
@@ -199,6 +232,7 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.min_lateral_deviation = declare_double("min_lateral_deviation", 0.30);
   config_.obstacle_wait_timeout_s = declare_double("obstacle_wait_timeout_s", 5.0);
   config_.obstacle_clear_hold_s = declare_double("obstacle_clear_hold_s", 1.5);
+  config_.confine_deviation_to_zone = declare_bool("confine_deviation_to_zone", true);
 
   // Register parameter-change callback.
   param_cb_handle_ = node->add_on_set_parameters_callback(
@@ -401,6 +435,10 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     else if (key == "obstacle_clear_hold_s")
     {
       config_.obstacle_clear_hold_s = p.as_double();
+    }
+    else if (key == "confine_deviation_to_zone")
+    {
+      config_.confine_deviation_to_zone = p.as_bool();
     }
   }
 
@@ -1423,6 +1461,58 @@ void FTCController::updateLateralDeviation(double dt)
     }
   }
 
+  // Build the zone-boundary guard for the lateral-OFFSET checks only. The
+  // offset sample points are the window poses, which were transformed into the
+  // local-costmap (odom) frame above; the boundary costmap lives in the global-
+  // costmap (map) frame. So the guard's affine maps boundary_frame <- odom
+  // (map <- odom). An offset that would skirt the robot out of the mowing zone
+  // (lethal in the boundary costmap) is then rejected; if the only obstacle-
+  // clear side exits the zone, growDeviationUntilClear exceeds the cap and the
+  // existing wait-or-abort path stops the robot instead of leaving. The mutex
+  // is held for the rest of the function so the helpers can read boundary_costmap_.
+  std::unique_lock<std::mutex> boundary_lock(boundary_mutex_, std::defer_lock);
+  ObstacleDeviation::BoundaryGuard guard{};
+  if (config_.confine_deviation_to_zone)
+  {
+    boundary_lock.lock();
+    if (boundary_costmap_ == nullptr)
+    {
+      // Fail-safe: global costmap not received yet — we cannot know where the
+      // zone boundary is, so refuse to deviate blind (skip this tick, same
+      // posture as the TF-missing path).
+      RCLCPP_WARN_THROTTLE(logger_,
+                           *clock_,
+                           5000,
+                           "FTCController: confine_deviation_to_zone but no global costmap "
+                           "received yet — skipping obstacle deviation this tick.");
+      return;
+    }
+    const std::string costmap_frame = costmap_ros_->getGlobalFrameID();
+    try
+    {
+      const auto tf =
+          tf_buffer_->lookupTransform(boundary_frame_, costmap_frame, tf2::TimePointZero);
+      const double yaw = tf2::getYaw(tf.transform.rotation);
+      guard.costmap = boundary_costmap_.get();
+      guard.tx = tf.transform.translation.x;
+      guard.ty = tf.transform.translation.y;
+      guard.cos_yaw = std::cos(yaw);
+      guard.sin_yaw = std::sin(yaw);
+    }
+    catch (const tf2::TransformException& ex)
+    {
+      RCLCPP_WARN_THROTTLE(logger_,
+                           *clock_,
+                           5000,
+                           "FTCController: no transform %s <- %s for boundary guard (%s) — "
+                           "skipping obstacle deviation this tick.",
+                           boundary_frame_.c_str(),
+                           costmap_frame.c_str(),
+                           ex.what());
+      return;
+    }
+  }
+
   // The decision to STOP avoiding must be gated on whether the NOMINAL path
   // (zero deviation) is clear within the lookahead — i.e. has the robot
   // advanced far enough that the obstacle has left the forward window? It
@@ -1503,7 +1593,8 @@ void FTCController::updateLateralDeviation(double dt)
           ObstacleDeviation::chooseDeviationSide(*costmap_map_,
                                                  window[static_cast<std::size_t>(obs_idx)],
                                                  config_.max_lateral_deviation,
-                                                 config_.deviation_step);
+                                                 config_.deviation_step,
+                                                 guard);
       if (target_lateral_deviation_ == 0.0)
       {
         // Both sides blocked at the obstacle pose. Before bailing, hold a
@@ -1560,7 +1651,8 @@ void FTCController::updateLateralDeviation(double dt)
                                                    config_.obstacle_lookahead,
                                                    dev_init,
                                                    config_.max_lateral_deviation,
-                                                   config_.deviation_step);
+                                                   config_.deviation_step,
+                                                   guard);
 
     if (std::abs(target_lateral_deviation_) > config_.max_lateral_deviation)
     {

@@ -28,7 +28,9 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav2_core/controller.hpp>
 #include <nav2_core/goal_checker.hpp>
+#include <nav2_costmap_2d/costmap_2d.hpp>
 #include <nav2_costmap_2d/costmap_2d_ros.hpp>
+#include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
@@ -246,6 +248,21 @@ private:
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros_;
   nav2_costmap_2d::Costmap2D* costmap_map_{nullptr};
 
+  // ── Zone-boundary guard (confine_deviation_to_zone) ───────────────────────
+  //
+  // The LOCAL costmap (costmap_map_, odom frame) is deliberately boundary-free
+  // (obstacle layer only) so near-edge coverage swaths don't read as blocked.
+  // The mowing-zone boundary lives as LETHAL cells in the GLOBAL costmap (map
+  // frame, keepout / lethal_outside_areas filter). We subscribe to it (latched)
+  // and rebuild boundary_costmap_ from each OccupancyGrid; updateLateralDeviation
+  // feeds it as an ObstacleDeviation::BoundaryGuard to the lateral-OFFSET checks
+  // ONLY, so a skirt never leaves the zone. (The offset samples are in the LOCAL
+  // costmap / odom frame here, so the guard affine is boundary(map) <- odom.)
+  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr boundary_costmap_sub_;
+  std::unique_ptr<nav2_costmap_2d::Costmap2D> boundary_costmap_;
+  std::string boundary_frame_;  ///< frame_id of the global costmap (e.g. "map").
+  std::mutex boundary_mutex_;
+
   std::string plugin_name_;
 
   // Publishers (lifecycle-aware)
@@ -362,6 +379,14 @@ private:
     /// the first clear tick and re-entered on the other side — the ±step
     /// left-right flap that never grows a deviation big enough to go around.
     double obstacle_clear_hold_s{1.5};
+    /// Confine lateral obstacle-avoidance deviation to the mowing zone. When
+    /// true, the lateral-OFFSET checks also treat out-of-zone cells (lethal in
+    /// the global keepout costmap) as blocked, so a skirt that would leave the
+    /// zone is rejected and the wait-or-abort path stops the robot instead.
+    /// Applies ONLY to the offset checks, never to the nominal-path check
+    /// (near-edge swaths legitimately run inside the keepout margin). When
+    /// false, behaves exactly as before.
+    bool confine_deviation_to_zone{true};
   };
 
   Config config_;
