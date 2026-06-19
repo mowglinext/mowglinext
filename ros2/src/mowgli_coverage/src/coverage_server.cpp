@@ -411,9 +411,9 @@ void CoverageServer::planCoverage()
     if (plan.rings.empty() && plan.swaths.empty())
     {
       result->success = false;
-      result->message = "field too small after insets (chassis_safety_inset=" +
-                        std::to_string(effective_inset) +
-                        "m, headland=" + std::to_string(default_headland_width_) + "m)";
+      result->message =
+          "field too small after insets (chassis_safety_inset=" + std::to_string(effective_inset) +
+          "m, headland=" + std::to_string(default_headland_width_) + "m)";
       RCLCPP_WARN(get_logger(),
                   "PlanCoverage: %s (field area=%.2fm²)",
                   result->message.c_str(),
