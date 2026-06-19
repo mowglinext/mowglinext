@@ -186,6 +186,38 @@ if(BUILD_TESTING)
     action_msgs
   )
 
+  # ---- test_get_next_unmowed_area ----
+  # Regression: the mow-selection path SKIPS navigation-only areas. Stands up a
+  # real in-process get_mowing_area service returning a nav-only area + a mowing
+  # area and ticks GetNextUnmowedArea to confirm the nav-only zone is never
+  # selected for coverage.
+  ament_add_gtest(test_get_next_unmowed_area
+    test/test_get_next_unmowed_area.cpp
+    src/coverage_nodes.cpp
+  )
+
+  target_include_directories(test_get_next_unmowed_area PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_get_next_unmowed_area
+    rclcpp
+    rclcpp_action
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+    rcl_interfaces
+    action_msgs
+  )
+
 endif()
 
 ament_package()

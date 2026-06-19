@@ -25,6 +25,7 @@
 #define MOWGLI_COVERAGE__COVERAGE_PLANNING_HPP_
 
 #include <cstddef>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -34,6 +35,27 @@
 
 namespace mowgli_coverage
 {
+
+// Visibility into what planBoustrophedon dropped and how much of the polygon
+// it ended up planning. Coverage gaps were previously silent (slivers, tiny
+// rings, micro-cells, and whole-area F2C failures all just vanished from the
+// plan); these counters/strings let the next iteration SEE the loss without
+// changing any drop threshold. Pure accounting — cheap to populate.
+struct PlanDiagnostics
+{
+  // One human-readable line per dropped piece, with its measured dimension and
+  // the threshold it failed (e.g. "dropped swath len=0.1200<0.1500",
+  // "dropped ring perim=0.7000<1.0000"). The server logs these verbatim.
+  std::vector<std::string> drops;
+  // Planned-coverage fraction in [0, 1]: (sum of swath-strip areas at op_width +
+  // ring-strip areas at op_width) / polygon area. A coarse estimate (strips can
+  // overlap at corners and the rings/swaths butt rather than overlap), so it can
+  // slightly exceed the true mowed fraction — it is a visibility metric, not a
+  // guarantee. Stays 0 when the field area is non-positive.
+  double planned_fraction = 0.0;
+  double field_area = 0.0;  // m² — the polygon area the fraction is taken over
+  double planned_area = 0.0;  // m² — strip-area numerator (rings + swaths)
+};
 
 // One planned coverage, as explicit drivable segments.
 struct BoustrophedonPlan
@@ -48,6 +70,8 @@ struct BoustrophedonPlan
   std::vector<std::pair<std::pair<double, double>, std::pair<double, double>>> swaths;
   // Swath heading actually used (rad, map frame) — for logging.
   double swath_angle_rad = 0.0;
+  // Drop reasons + planned-coverage fraction (instrumentation only — see above).
+  PlanDiagnostics diagnostics;
 };
 
 // Plan boustrophedon coverage of `field_cell` (outer ring + optional holes).
@@ -65,7 +89,14 @@ struct BoustrophedonPlan
 // n_rings * op_width) so the swaths butt against the innermost ring's cut.
 //
 // Returns a plan whose rings/swaths may BOTH be empty (field too small after
-// insets — the caller reports failure). Throws on internal F2C errors.
+// insets — the caller reports failure). Throws on internal F2C errors. The
+// returned plan's `diagnostics` records every dropped piece (slivers, tiny
+// rings, micro-cells) and the planned-coverage fraction — instrumentation the
+// caller logs; no drop threshold is altered.
+//
+// chassis_safety_inset is taken as-is here: the caller is responsible for
+// flooring it at robot_width/2 (a SAFETY margin — blades must not cross the
+// boundary) before calling, so this function plans against the effective inset.
 BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double op_width,
                                     double headland_width,
