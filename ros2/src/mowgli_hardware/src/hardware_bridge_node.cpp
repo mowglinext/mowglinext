@@ -700,10 +700,9 @@ private:
 
       if (lift_recovery_mode_ && lift_active && !stop_active)
       {
-        // Lift recovery mode: blade off, wheels keep running, no emerg
-        ency.
-            // Firmware may set its own emergency latch — auto-release it.
-            msg.active_emergency = false;
+        // Lift recovery mode: blade off, wheels keep running, no emergency.
+        // Firmware may set its own emergency latch — auto-release it.
+        msg.active_emergency = false;
         msg.latched_emergency = false;
         msg.lift_warning = true;
 
