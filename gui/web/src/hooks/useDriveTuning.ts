@@ -48,12 +48,15 @@ export interface DriveTuningTrial {
     settling_time?: number | null;
     stall_detected: boolean;
     oscillation_detected: boolean;
+    live_oscillation_detected?: boolean;
+    trial_quality?: string;
     integral_saturation_suspected: boolean;
     ground_speed_mean?: number | null;
     odom_distance_m?: number | null;
     rtk_distance_m?: number | null;
     rtk_accepted: boolean;
     left_right_tick_imbalance?: number | null;
+    warnings?: string[];
     notes?: string[];
 }
 

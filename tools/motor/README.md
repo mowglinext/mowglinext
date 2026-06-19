@@ -18,6 +18,8 @@ Drive-wheel PID assistant with:
 - YAML export of trial metrics and recommended parameters
 - a dedicated tuning motion path that does not share the IMU / teleop lane:
   `/cmd_vel_tuning -> twist_mux -> /cmd_vel`
+- live oscillation is treated as a calibration warning by default in
+  feed-forward mode, with an opt-in strict abort flag when needed
 
 Example, proposal only from the dock:
 
@@ -66,6 +68,9 @@ Notes:
 - By default, pass 1 starts from the current live `hardware_bridge`
   parameters. `--profile` is kept as reference metadata unless
   `--reset-to-profile` or `--force-profile` is passed explicitly.
+- In `ff` mode, suspected live oscillation is recorded in the report as a
+  warning and the trial continues so first-bring-up calibration can still
+  finish. Use `--abort-on-live-oscillation` to restore strict abort behavior.
 - The `yardforce_8w_1964` preset starts from `1964 / 3 ~= 655 ticks/m` because
   the live bridge only sees one hall channel out of three. The motor being a
   4-pole inrunner is already reflected in the theoretical 1964 value, so it

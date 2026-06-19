@@ -83,6 +83,9 @@ class TrialMetrics:
     oscillation_detected: bool
     integral_saturation_suspected: bool
     params_used: dict[str, float]
+    live_oscillation_detected: bool = False
+    trial_quality: str = "ok"
+    warnings: tuple[str, ...] = ()
     ground_speed_mean: float | None = None
     ground_error_mean: float | None = None
     odom_distance_m: float | None = None
@@ -107,8 +110,11 @@ class TrialMetrics:
             "right_ticks_seen": self.right_ticks_seen,
             "stall_detected": self.stall_detected,
             "oscillation_detected": self.oscillation_detected,
+            "live_oscillation_detected": self.live_oscillation_detected,
+            "trial_quality": self.trial_quality,
             "integral_saturation_suspected": self.integral_saturation_suspected,
             "params_used": dict(self.params_used),
+            "warnings": list(self.warnings),
             "ground_speed_mean": self.ground_speed_mean,
             "ground_error_mean": self.ground_error_mean,
             "odom_distance_m": self.odom_distance_m,
@@ -181,6 +187,8 @@ def compute_trial_metrics(
     ground_speed_mean: float | None,
     odom_distance_m: float | None,
     rtk_distance_m: float | None,
+    live_oscillation_detected: bool = False,
+    warnings: Sequence[str] = (),
     notes: Sequence[str] = (),
 ) -> TrialMetrics:
     speeds = [sample.speed_mps for sample in speed_samples]
@@ -217,6 +225,17 @@ def compute_trial_metrics(
             and params_used.wheel_pid_integral_limit <= 100.0
         )
     )
+    warning_list = list(dict.fromkeys(warnings))
+    if oscillation_detected:
+        warning_list.append("Post-trial oscillation signature detected in the recorded speed response.")
+    if live_oscillation_detected:
+        warning_list.append("Live oscillation suspected during calibration; trial continued.")
+    warning_list = list(dict.fromkeys(warning_list))
+    trial_quality = "ok"
+    if stall_detected:
+        trial_quality = "poor"
+    elif warning_list or oscillation_detected or integral_saturation_suspected:
+        trial_quality = "warning"
     return TrialMetrics(
         name=name,
         phase=phase,
@@ -234,6 +253,9 @@ def compute_trial_metrics(
         oscillation_detected=oscillation_detected,
         integral_saturation_suspected=integral_saturation_suspected,
         params_used=params_used.to_dict(),
+        live_oscillation_detected=live_oscillation_detected,
+        trial_quality=trial_quality,
+        warnings=tuple(warning_list),
         ground_speed_mean=ground_speed_mean,
         ground_error_mean=ground_error_mean,
         odom_distance_m=odom_distance_m,
@@ -334,7 +356,11 @@ def recommend_pid_only_params(
     max_target = max(abs(trial.target_speed) for trial in usable_trials)
     median_error = _median([trial.error_mean for trial in usable_trials])
     median_overshoot = _median([trial.overshoot for trial in usable_trials])
-    oscillation_count = sum(1 for trial in usable_trials if trial.oscillation_detected)
+    oscillation_count = sum(
+        1
+        for trial in usable_trials
+        if trial.oscillation_detected or trial.live_oscillation_detected
+    )
     slow_count = sum(
         1
         for trial in usable_trials

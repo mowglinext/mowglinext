@@ -184,12 +184,15 @@ type driveTuningTrialReport struct {
 	SettlingTime                *float64 `json:"settling_time,omitempty" yaml:"settling_time"`
 	StallDetected               bool     `json:"stall_detected" yaml:"stall_detected"`
 	OscillationDetected         bool     `json:"oscillation_detected" yaml:"oscillation_detected"`
+	LiveOscillationDetected     bool     `json:"live_oscillation_detected,omitempty" yaml:"live_oscillation_detected"`
+	TrialQuality                string   `json:"trial_quality,omitempty" yaml:"trial_quality"`
 	IntegralSaturationSuspected bool     `json:"integral_saturation_suspected" yaml:"integral_saturation_suspected"`
 	GroundSpeedMean             *float64 `json:"ground_speed_mean,omitempty" yaml:"ground_speed_mean"`
 	OdomDistanceM               *float64 `json:"odom_distance_m,omitempty" yaml:"odom_distance_m"`
 	RTKDistanceM                *float64 `json:"rtk_distance_m,omitempty" yaml:"rtk_distance_m"`
 	RTKAccepted                 bool     `json:"rtk_accepted" yaml:"rtk_accepted"`
 	LeftRightTickImbalance      *float64 `json:"left_right_tick_imbalance,omitempty" yaml:"left_right_tick_imbalance"`
+	Warnings                    []string `json:"warnings,omitempty" yaml:"warnings"`
 	Notes                       []string `json:"notes,omitempty" yaml:"notes"`
 }
 
@@ -921,6 +924,7 @@ func evaluateFeedForwardReport(report *driveTuningReport, reportPath string) dri
 	}
 	odomErrors := []float64{}
 	speedErrors := []float64{}
+	hasCalibrationWarnings := false
 	for _, trial := range trials {
 		if trial.StallDetected || trial.OscillationDetected {
 			return driveTuningValidationSummary{
@@ -929,6 +933,9 @@ func evaluateFeedForwardReport(report *driveTuningReport, reportPath string) dri
 				GeneratedAt: report.GeneratedAt,
 				ReportPath:  reportPath,
 			}
+		}
+		if trial.LiveOscillationDetected || trial.TrialQuality == "warning" || trial.TrialQuality == "poor" || len(trial.Warnings) > 0 {
+			hasCalibrationWarnings = true
 		}
 		if trial.RTKAccepted && trial.OdomDistanceM != nil && trial.RTKDistanceM != nil && *trial.RTKDistanceM > 1e-6 {
 			odomErrors = append(odomErrors, absFloat(*trial.OdomDistanceM-*trial.RTKDistanceM)/absFloat(*trial.RTKDistanceM))
@@ -961,6 +968,10 @@ func evaluateFeedForwardReport(report *driveTuningReport, reportPath string) dri
 			message = fmt.Sprintf("Validated with acceptable odometry (%.1f%%) and feed-forward speed error (%.1f%%).", maxOdomError*100.0, maxSpeedError*100.0)
 		}
 	}
+	if hasCalibrationWarnings {
+		status = driveTuningStatusWarning
+		message = fmt.Sprintf("Calibration completed with warnings (odom %.1f%%, speed %.1f%%). Review live oscillation / quality notes before accepting the result.", maxOdomError*100.0, maxSpeedError*100.0)
+	}
 	return driveTuningValidationSummary{
 		Status:      status,
 		Message:     message,
@@ -972,9 +983,13 @@ func evaluateFeedForwardReport(report *driveTuningReport, reportPath string) dri
 func evaluatePIDReport(report *driveTuningReport, reportPath string) driveTuningValidationSummary {
 	trials := filterTrialsByPhase(report.Trials, "pid")
 	usable := make([]driveTuningTrialReport, 0, len(trials))
+	hasCalibrationWarnings := false
 	for _, trial := range trials {
 		if absFloat(trial.TargetSpeed) >= 0.05 {
 			usable = append(usable, trial)
+			if trial.LiveOscillationDetected || trial.TrialQuality == "warning" || trial.TrialQuality == "poor" || len(trial.Warnings) > 0 {
+				hasCalibrationWarnings = true
+			}
 		}
 	}
 	if len(usable) == 0 {
@@ -1019,6 +1034,14 @@ func evaluatePIDReport(report *driveTuningReport, reportPath string) driveTuning
 				GeneratedAt: report.GeneratedAt,
 				ReportPath:  reportPath,
 			}
+		}
+	}
+	if hasCalibrationWarnings {
+		return driveTuningValidationSummary{
+			Status:      driveTuningStatusWarning,
+			Message:     fmt.Sprintf("PID response completed with warnings; max overshoot %.1f%%. Review trial warnings before accepting the result.", maxOvershootPct*100.0),
+			GeneratedAt: report.GeneratedAt,
+			ReportPath:  reportPath,
 		}
 	}
 	return driveTuningValidationSummary{

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import math
 from pathlib import Path
+import statistics
 import sys
 import time
 from typing import Any
@@ -123,6 +124,10 @@ class TrialRecorder:
     ramp_down: bool = True
     pretrial_last_odom_time: float | None = None
     actual_end_s: float | None = None
+    live_oscillation_detected: bool = False
+    severe_live_oscillation_detected: bool = False
+    warnings: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
     speed_samples: list[SpeedSample] = field(default_factory=list)
     rtk_samples: list[RtkPoseSample] = field(default_factory=list)
     tick_samples: list[TickSample] = field(default_factory=list)
@@ -198,6 +203,11 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Maximum allowed delay between /wheel_odom samples once motion feedback is flowing.")
     parser.add_argument("--startup-grace", type=float, default=3.0,
                         help="Grace period after the first command before odom-loss checks can fail the trial.")
+    live_osc_group = parser.add_mutually_exclusive_group()
+    live_osc_group.add_argument("--abort-on-live-oscillation", action="store_true",
+                                help="Treat detected live oscillation as a hard abort instead of a calibration warning.")
+    live_osc_group.add_argument("--no-abort-on-live-oscillation", action="store_true",
+                                help="Never abort on live oscillation; record it as a warning in the trial report.")
     parser.add_argument("--auto-turn", action="store_true",
                         help="Rotate ~180 degrees between feed-forward passes.")
     parser.add_argument("--turn-direction", choices=("left", "right"), default="right",
@@ -780,7 +790,13 @@ class DrivePidTuner(Node):
                 f"{target_speed:.3f}/{measured_speed:.3f} m/s."
             )
             if trial.oscillation_detected:
-                raise RuntimeError(f"Feed-forward pass {pass_index + 1} showed strong oscillation.")
+                reasons.append(
+                    f"Pass {pass_index + 1}: oscillation warning recorded; keeping the feed-forward proposal because calibration completed."
+                )
+            if trial.live_oscillation_detected:
+                reasons.append(
+                    f"Pass {pass_index + 1}: live oscillation warning recorded during calibration; trial continued by design."
+                )
 
             params = replace(
                 params,
@@ -1079,6 +1095,123 @@ class DrivePidTuner(Node):
     def _movement_is_active(self, commanded_speed: float) -> bool:
         return abs(commanded_speed) >= ODOM_ACTIVE_SPEED_THRESHOLD_MPS
 
+    def _oscillation_grace_elapsed(self, elapsed_s: float) -> bool:
+        return elapsed_s >= max(float(self._args.startup_grace), 3.0)
+
+    def _append_trial_warning(
+        self,
+        recorder: TrialRecorder,
+        warning: str,
+        *,
+        note: str | None = None,
+    ) -> None:
+        if warning not in recorder.warnings:
+            recorder.warnings.append(warning)
+        if note is not None and note not in recorder.notes:
+            recorder.notes.append(note)
+
+    def _analyze_live_oscillation(
+        self,
+        *,
+        recent: list[SpeedSample],
+        commanded_speed: float,
+    ) -> tuple[str, int, float] | None:
+        if len(recent) < 8:
+            return None
+        errors = [commanded_speed - sample.speed_mps for sample in recent]
+        error_stddev = statistics.pstdev(errors)
+        if error_stddev < max(0.015, 0.10 * abs(commanded_speed)):
+            return None
+        zero_crossings = 0
+        previous_sign = 0
+        for error in errors:
+            if abs(error) < 0.01:
+                continue
+            sign = 1 if error > 0.0 else -1
+            if previous_sign and sign != previous_sign:
+                zero_crossings += 1
+            previous_sign = sign
+        if zero_crossings < 5:
+            return None
+        if (
+            len(recent) >= 10
+            and zero_crossings >= 8
+            and error_stddev >= max(0.03, 0.18 * abs(commanded_speed))
+        ):
+            return "severe", zero_crossings, error_stddev
+        return "mild", zero_crossings, error_stddev
+
+    def _should_abort_on_live_oscillation(
+        self,
+        *,
+        recorder: TrialRecorder,
+        severity: str,
+    ) -> bool:
+        if self._args.no_abort_on_live_oscillation:
+            return False
+        if self._args.abort_on_live_oscillation:
+            return True
+        if recorder.phase == "feedforward":
+            return False
+        return severity == "severe"
+
+    def _handle_live_oscillation(
+        self,
+        *,
+        recorder: TrialRecorder,
+        now_s: float,
+        elapsed_s: float,
+        commanded_speed: float,
+        recent: list[SpeedSample],
+    ) -> None:
+        analysis = self._analyze_live_oscillation(
+            recent=recent,
+            commanded_speed=commanded_speed,
+        )
+        if analysis is None:
+            return
+        severity, zero_crossings, error_stddev = analysis
+        will_abort = self._should_abort_on_live_oscillation(recorder=recorder, severity=severity)
+        first_mild_warning = not recorder.live_oscillation_detected
+        first_severe_warning = severity == "severe" and not recorder.severe_live_oscillation_detected
+        recorder.live_oscillation_detected = True
+        if severity == "severe":
+            recorder.severe_live_oscillation_detected = True
+        self._append_trial_warning(
+            recorder,
+            (
+                "Live oscillation suspected during calibration; trial continued."
+                if not will_abort
+                else "Live oscillation suspected during calibration."
+            ),
+            note=(
+                "Live oscillation is treated as a calibration warning in ff mode."
+                if recorder.phase == "feedforward" and not will_abort
+                else (
+                    "Severe live oscillation triggered strict abort behavior."
+                    if will_abort
+                    else "Live oscillation was recorded as a calibration warning during PID/response tuning."
+                )
+            ),
+        )
+        if first_mild_warning or first_severe_warning:
+            self.get_logger().warning(
+                "Live oscillation warning "
+                f"({severity}) during {recorder.name}: "
+                f"trial_elapsed={elapsed_s:.3f}s "
+                f"commanded_speed={commanded_speed:.3f}mps "
+                f"zero_crossings={zero_crossings} "
+                f"error_stddev={error_stddev:.4f} "
+                "continuing calibration trial."
+            )
+        if will_abort:
+            self._append_trial_warning(
+                recorder,
+                "Severe live oscillation triggered a strict-mode abort.",
+                note="Strict live-oscillation abort mode stopped the trial before completion.",
+            )
+            raise RuntimeError(f"Live oscillation detected during {recorder.name}.")
+
     def _log_odom_debug(
         self,
         *,
@@ -1206,7 +1339,7 @@ class DrivePidTuner(Node):
         recent = [sample for sample in recorder.speed_samples if now_s - sample.time_s <= 0.8]
         if (
             self._movement_is_active(commanded_speed)
-            and elapsed_s >= recorder.ramp_time_s + 0.8
+            and self._oscillation_grace_elapsed(elapsed_s)
             and len(recent) >= 5
         ):
             recent_mean = sum(sample.speed_mps for sample in recent) / len(recent)
@@ -1216,18 +1349,13 @@ class DrivePidTuner(Node):
                     recorder,
                     reason="live_recent_speed_below_floor",
                 )
-            errors = [recorder.target_speed - sample.speed_mps for sample in recent]
-            zero_crossings = 0
-            previous_sign = 0
-            for error in errors:
-                if abs(error) < 0.01:
-                    continue
-                sign = 1 if error > 0.0 else -1
-                if previous_sign and sign != previous_sign:
-                    zero_crossings += 1
-                previous_sign = sign
-            if len(recent) >= 8 and zero_crossings >= 5:
-                raise RuntimeError(f"Live oscillation detected during {recorder.name}.")
+            self._handle_live_oscillation(
+                recorder=recorder,
+                now_s=now_s,
+                elapsed_s=elapsed_s,
+                commanded_speed=commanded_speed,
+                recent=recent,
+            )
 
     def _turn_around(self) -> None:
         turn_rate = clamp(abs(float(self._args.turn_rate)), 0.10, 0.35)
@@ -1363,6 +1491,8 @@ class DrivePidTuner(Node):
             ground_speed_mean=ground_speed_mean,
             odom_distance_m=odom_distance_m,
             rtk_distance_m=rtk_distance_m,
+            live_oscillation_detected=recorder.live_oscillation_detected,
+            warnings=recorder.warnings,
             notes=notes,
         )
 
@@ -1500,8 +1630,11 @@ class DrivePidTuner(Node):
                 f"ground_mean={ground} "
                 f"overshoot={trial.overshoot:.3f} "
                 f"settle={trial.settling_time if trial.settling_time is not None else 'n/a'} "
-                f"stall={trial.stall_detected} osc={trial.oscillation_detected}"
+                f"stall={trial.stall_detected} osc={trial.oscillation_detected} "
+                f"live_osc={trial.live_oscillation_detected} quality={trial.trial_quality}"
             )
+            for warning in trial.warnings:
+                print(f"    warning: {warning}")
         print("\nReasons:")
         for reason in reasons:
             print(f"  - {reason}")

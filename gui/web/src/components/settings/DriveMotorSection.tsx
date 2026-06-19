@@ -817,8 +817,13 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                                                 {trial.phase} | target {trial.target_speed.toFixed(2)} m/s | measured {trial.measured_speed_mean.toFixed(3)} m/s
                                                             </Text>
                                                             <Text type="secondary">
-                                                                overshoot {trial.overshoot.toFixed(3)} | settling {trial.settling_time ?? "n/a"} | stall {String(trial.stall_detected)} | osc {String(trial.oscillation_detected)}
+                                                                overshoot {trial.overshoot.toFixed(3)} | settling {trial.settling_time ?? "n/a"} | stall {String(trial.stall_detected)} | osc {String(trial.oscillation_detected)} | live osc {String(!!trial.live_oscillation_detected)} | quality {trial.trial_quality ?? "ok"}
                                                             </Text>
+                                                            {!!trial.warnings?.length && (
+                                                                <Text type="warning">
+                                                                    warnings: {trial.warnings.join(" | ")}
+                                                                </Text>
+                                                            )}
                                                         </Space>
                                                     </Card>
                                                 ))}
