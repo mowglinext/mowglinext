@@ -63,7 +63,7 @@ export const HardwareSection: React.FC<Props> = ({ values, onChange, onBulkChang
                                         <Space direction="vertical" size={2} style={{ width: "100%" }}>
                                             <Space size={4}>
                                                 <Text strong style={{ fontSize: 12 }}>{t(model.label)}</Text>
-                                                {model.tag && <Tag color="green" style={{ fontSize: 10 }}>{model.tag}</Tag>}
+                                                {model.tag && <Tag color="green" style={{ fontSize: 10 }}>{t(model.tag)}</Tag>}
                                             </Space>
                                             <Text type="secondary" style={{ fontSize: 11 }}>
                                                 {t(model.description)}

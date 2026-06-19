@@ -24,7 +24,10 @@ i18n
       fr: {translation: fr},
       en: {translation: en},
     },
-    fallbackLng: "fr",
+    // Fallback chain (covers both directions if a key is ever missing):
+    // a missing English key falls back to French (the source language), and a
+    // missing French key falls back to English instead of showing a raw key.
+    fallbackLng: ["fr", "en"],
     supportedLngs: SUPPORTED_LANGUAGES.map((l) => l.code),
     // Map regional codes (e.g. "en-US", "fr-CA") onto the base language.
     nonExplicitSupportedLngs: true,
