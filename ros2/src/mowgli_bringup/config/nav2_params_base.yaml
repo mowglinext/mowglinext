@@ -211,6 +211,14 @@ controller_server:
       rotate_to_heading_angular_vel: 0.75
       max_angular_accel: 2.5
       simulate_ahead_time: 1.0
+      # Pivot ONCE at the start of each transit, then hand to the primary
+      # controller — do NOT re-engage the in-place rotate mid-path. The transit
+      # plan is FROZEN (never replanned from the current pose) and RotationShim
+      # samples its target 0.5 m from poses.front() (the plan START). Once the
+      # robot drives off poses.front(), a re-engaged shim/RPP rotate aims at that
+      # STALE point and oscillates / runs to a wrong heading and never aligns
+      # (root cause hardware-confirmed 2026-06-20; see use_rotate_to_heading below).
+      rotate_to_heading_once: true
       # Terminal pivot. With this false, neither RotationShim (start-of-path
       # only) nor RPP (mid-path, rotate_to_heading_min_angle: 0.785 rad =
       # 45°) does anything when the navigation ends with a yaw error in the
@@ -225,7 +233,11 @@ controller_server:
       # goal heading. Cost: one ~1 s in-place rotation per nav action,
       # which the operator barely notices but the docking-server NEEDS.
       rotate_to_goal_heading: true
-      closed_loop: true                    # use wheel odom feedback for pivot completion
+      # was true ("wheel odom feedback for pivot completion"), but on this deadband
+      # chassis closed_loop:true reads ~0 below the ~0.5 rad/s firmware pivot
+      # deadband and stalls the pivot — the same hard lesson already documented for
+      # FollowCoveragePath below. Open-loop ramp is required here too.
+      closed_loop: false
 
       # --- RegulatedPurePursuitController (primary) params ---
       transform_tolerance: 0.3            # ARM TF jitter envelope
@@ -244,10 +256,13 @@ controller_server:
       regulated_linear_scaling_min_speed: 0.20
       use_cost_regulated_linear_velocity_scaling: false
       max_allowed_time_to_collision_up_to_carrot: 1.0
-      # In-place rotation toward heading at large yaw error — RPP's own
-      # rotate-to-heading hand-off complements RotationShim, kicking in
-      # after RotationShim disengages if the path bends mid-trajectory.
-      use_rotate_to_heading: true
+      # DISABLED: RPP's mid-path in-place re-rotate (together with RotationShim
+      # re-engaging on each setPlan) fires against the FROZEN transit plan and,
+      # once the robot has driven off poses.front(), rotates toward a STALE target
+      # → oscillation / wrong-heading runaway (hardware-confirmed 2026-06-20).
+      # With rotate_to_heading_once:true above, the shim does ONE start pivot then
+      # RPP PURSUES through any mid-path bends (smooth on the deadband chassis).
+      use_rotate_to_heading: false
       rotate_to_heading_min_angle: 0.785
       # Match the RotationShim values above (decisive pivot, clear of the
       # firmware deadband) so RPP's mid-path rotate-to-heading hand-off is
