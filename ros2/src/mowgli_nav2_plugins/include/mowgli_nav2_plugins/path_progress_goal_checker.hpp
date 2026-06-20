@@ -114,6 +114,18 @@ private:
   // arrival.
   std::optional<rclcpp::Time> empty_path_first_call_;
   double fallback_timeout_s_{5.0};
+
+  // Stuck-at-end fallback. If the robot has covered at least
+  // stuck_completion_progress_ of the path but max_reached_index_ has not
+  // advanced for fallback_timeout_s_ — e.g. it is circling a sub-tolerance
+  // F2C end loop (min_turning_radius ~0.1 m) whose goal point sits inside
+  // the loop, so xy_goal_tolerance can NEVER be met — declare the goal
+  // reached rather than spin forever. Healthy following never reaches this
+  // branch: the monotonic index keeps advancing and clears the timer.
+  // progress_stalled_since_ is the time max_reached_index_ last failed to
+  // advance; reset on every real advance, on reset(), and on a new path.
+  double stuck_completion_progress_{0.90};
+  std::optional<rclcpp::Time> progress_stalled_since_;
 };
 
 }  // namespace mowgli_nav2_plugins

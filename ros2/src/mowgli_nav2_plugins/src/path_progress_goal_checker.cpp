@@ -41,6 +41,10 @@ void PathProgressGoalChecker::initialize(
   xy_goal_tolerance_ = declare("xy_goal_tolerance", 0.20).as_double();
   yaw_goal_tolerance_ = declare("yaw_goal_tolerance", 0.30).as_double();
   fallback_timeout_s_ = declare("fallback_timeout_s", 5.0).as_double();
+  // See header: complete a stuck-at-end mow (index pinned for
+  // fallback_timeout_s_ at >= this progress) instead of circling forever.
+  stuck_completion_progress_ =
+      declare("stuck_completion_progress", 0.90).as_double();
   // Max idx advance per isGoalReached call. Bounds the "find closest
   // pose forward of max_reached_index_" search so a boustrophedon-
   // style path that loops back over earlier ground doesn't let the
@@ -86,6 +90,7 @@ void PathProgressGoalChecker::reset()
   std::lock_guard<std::mutex> lock(mutex_);
   max_reached_index_ = 0;
   empty_path_first_call_.reset();
+  progress_stalled_since_.reset();
 }
 
 void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
@@ -127,6 +132,7 @@ void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
     last_path_first_x_ = fx;
     last_path_first_y_ = fy;
     max_reached_index_ = 0;
+    progress_stalled_since_.reset();
     RCLCPP_INFO(logger_,
                 "PathProgressGoalChecker: new path with %zu poses, "
                 "start=(%.2f,%.2f), end=(%.2f,%.2f) — reset progress",
@@ -249,44 +255,77 @@ bool PathProgressGoalChecker::isGoalReached(
       best_idx = i;
     }
   }
+  // Track whether the monotonic index advanced this call. A real advance
+  // clears the stall timer; a call with no advance starts/continues it.
+  // This distinguishes healthy following (index climbs every few calls)
+  // from a stuck end loop (index pinned for seconds). Note: at typical
+  // chassis speeds the robot crosses < 1 pose per call, so most healthy
+  // calls don't advance — but the timer resets well within a second each
+  // time a pose IS crossed, so it never approaches fallback_timeout_s_.
   if (best_idx > max_reached_index_)
   {
     max_reached_index_ = best_idx;
+    progress_stalled_since_.reset();
+  }
+  else if (!progress_stalled_since_.has_value())
+  {
+    progress_stalled_since_ = clock_->now();
   }
 
   const double progress = static_cast<double>(max_reached_index_) /
                           static_cast<double>(n - 1);
-  if (progress < progress_threshold_)
-  {
-    return false;
-  }
 
-  // Path progress condition met — also require XY proximity to the
-  // goal pose and yaw within tolerance, matching SimpleGoalChecker's
-  // final-pose check (so FTC can still do POST_ROTATE precision work).
+  // Distance + yaw error to the goal pose — needed by both the normal
+  // completion check and the stuck-fallback diagnostic.
   const double dx = query_pose.position.x - goal_pose.position.x;
   const double dy = query_pose.position.y - goal_pose.position.y;
   const double xy_err = std::hypot(dx, dy);
-  if (xy_err > xy_goal_tolerance_)
-  {
-    return false;
-  }
-
   const double yaw_q = tf2::getYaw(query_pose.orientation);
   const double yaw_g = tf2::getYaw(goal_pose.orientation);
-  double yaw_err = std::atan2(std::sin(yaw_q - yaw_g),
-                              std::cos(yaw_q - yaw_g));
-  if (std::abs(yaw_err) > yaw_goal_tolerance_)
+  const double yaw_err = std::atan2(std::sin(yaw_q - yaw_g),
+                                    std::cos(yaw_q - yaw_g));
+
+  // Normal completion: enough of the path covered AND within final-pose
+  // xy + yaw tolerance (matches SimpleGoalChecker's final-pose check so
+  // FTC can still do POST_ROTATE precision work).
+  if (progress >= progress_threshold_ &&
+      xy_err <= xy_goal_tolerance_ &&
+      std::abs(yaw_err) <= yaw_goal_tolerance_)
   {
-    return false;
+    RCLCPP_INFO(logger_,
+                "PathProgressGoalChecker: goal reached — progress=%.1f%% "
+                "(idx %zu/%zu), xy_err=%.3fm, yaw_err=%.3frad",
+                progress * 100.0, max_reached_index_, n - 1,
+                xy_err, yaw_err);
+    return true;
   }
 
-  RCLCPP_INFO(logger_,
-              "PathProgressGoalChecker: goal reached — progress=%.1f%% "
-              "(idx %zu/%zu), xy_err=%.3fm, yaw_err=%.3frad",
-              progress * 100.0, max_reached_index_, n - 1,
-              xy_err, yaw_err);
-  return true;
+  // Stuck-at-end fallback: most of the path is covered but the index has
+  // not advanced for fallback_timeout_s_. The degenerate case is an F2C
+  // end loop tighter than xy_goal_tolerance_ whose goal point sits inside
+  // the loop — the chassis circles it forever and the xy gate never
+  // closes. Complete instead of spinning. Healthy following never reaches
+  // here (the index keeps advancing, clearing the timer).
+  if (progress >= stuck_completion_progress_ &&
+      progress_stalled_since_.has_value())
+  {
+    const double stalled =
+        (clock_->now() - *progress_stalled_since_).seconds();
+    if (stalled >= fallback_timeout_s_)
+    {
+      RCLCPP_WARN(logger_,
+                  "PathProgressGoalChecker: progress=%.1f%% (idx %zu/%zu) but "
+                  "index stalled %.1fs — completing despite xy_err=%.3fm "
+                  "yaw_err=%.3frad (degenerate path end / unreachable goal "
+                  "pose). Tune coverage min_turning_radius or "
+                  "stuck_completion_progress if unexpected.",
+                  progress * 100.0, max_reached_index_, n - 1, stalled,
+                  xy_err, yaw_err);
+      return true;
+    }
+  }
+
+  return false;
 }
 
 bool PathProgressGoalChecker::getTolerances(
