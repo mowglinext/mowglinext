@@ -458,9 +458,12 @@ planner_server:
       downsample_costmap: false
       downsampling_factor: 2
       allow_unknown: false
-      max_iterations: 100000
+      # Raised from 100000 / 3.5 s: the enlarged 70 m global costmap (see
+      # global_costmap below) is a much larger grid, so give A* the budget to plan
+      # a long cross-garden transit without false-failing on the iteration/time cap.
+      max_iterations: 1000000
       max_on_approach_iterations: 1000
-      max_planning_time: 3.5
+      max_planning_time: 8.0
       cost_travel_multiplier: 2.0
       use_final_approach_orientation: false
       smoother:
@@ -596,15 +599,25 @@ global_costmap:
       # gardens: the costmap always centres on the robot, and obstacles are
       # detected in real time by the obstacle_layer.
       rolling_window: true
-      # 20×20 m rolling window (was 30×30). At resolution 0.05 m that is
-      # 400×400 = 160 k cells instead of 360 k — roughly 44 % of the data
-      # per publish tick, which brings the full-costmap publish rate back
-      # close to the 2 Hz target on ARM (was 1.3 Hz measured). LD19 useful
-      # range is 8 m and robot top speed is 0.3 m/s, so a 10 m planning
-      # radius from the rolling-window centre is still well beyond what
-      # Smac needs for strip-to-strip transit.
-      width: 20
-      height: 20
+      # 70×70 m rolling window (was 20×20). The 20 m window (±10 m radius) was
+      # sized for STRIP-TO-STRIP transit within an area, but AREA-TO-AREA transit
+      # to a distant zone exceeds it: a goal ~31 m away → SmacPlanner2D rejects it
+      # with "Goal Coordinates ... was outside bounds" → the mission reports
+      # AREA_UNREACHABLE and never moves (hardware-confirmed 2026-06-20 on a
+      # 40×44 m garden). ±35 m now covers cross-garden transits. Safe because the
+      # keepout_filter (below) makes everything outside the authorised zones LETHAL,
+      # so the planner cannot route outside even with the larger window.
+      # TRADE-OFF: at resolution 0.08 m this is 875×875 ≈ 766 k cells (vs ~62 k at
+      # 20 m), lowering the full-costmap publish rate on weaker ARM — the original
+      # reason for shrinking to 20 m. SIZING RULE: the window is centred on the
+      # robot and the planner needs the goal INSIDE it at plan time, so set
+      # width/height ≥ 2× the longest per-axis AREA-TO-AREA transit (on the
+      # 40×44 m test garden the farthest pair, Back↔Front Main, spans 34 m in Y →
+      # ~69 m → 70). To cut cells without losing coverage, coarsen THIS resolution
+      # (0.08→0.10 ≈ −36 % cells; the local costmap stays 0.05 m for fine
+      # avoidance) rather than shrinking the window.
+      width: 70
+      height: 70
       # keepout_filter makes the area boundary visible to the Smac planner so
       # transit paths never exit the authorised zone. The mask map_server_node
       # publishes is now the INVERSE/hard-boundary one: every cell outside the
