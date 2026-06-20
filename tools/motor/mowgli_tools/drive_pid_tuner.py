@@ -34,10 +34,15 @@ import yaml
 
 from .drive_pid_math import (
     DrivePidParams,
+    LiveStallDiagnostic,
     SpeedSample,
+    TickSample,
     TrialMetrics,
     clamp,
+    compute_tick_activity,
     compute_trial_metrics,
+    evaluate_live_stall,
+    evaluate_live_oscillation_abort,
     finite_or_none,
     integrate_distance,
     recommend_drive_pid_params,
@@ -94,6 +99,7 @@ RECORDING_ENTRY_TIMEOUT_S = 15.0
 RECORDING_EXIT_TIMEOUT_S = 3.0
 RECORDING_SETTLE_S = 0.6
 ODOM_ACTIVE_SPEED_THRESHOLD_MPS = 0.10
+LIVE_STALL_SPEED_WINDOW_S = 0.8
 
 
 @dataclass(frozen=True)
@@ -106,13 +112,6 @@ class RtkPoseSample:
     corrections_active: bool
     rtk_mode: int
     mode_label: str
-
-
-@dataclass(frozen=True)
-class TickSample:
-    time_s: float
-    left_ticks: int
-    right_ticks: int
 
 
 @dataclass
@@ -1205,10 +1204,33 @@ class DrivePidTuner(Node):
             return "n/a"
         return f"{value:.3f}"
 
+    def _format_optional_speed(self, value: float | None) -> str:
+        if value is None:
+            return "n/a"
+        return f"{value:.3f}"
+
     def _trial_last_odom_time(self, recorder: TrialRecorder) -> float | None:
         if recorder.speed_samples:
             return recorder.speed_samples[-1].time_s
         return self._latest_odom_time
+
+    def _recent_speed_samples(
+        self,
+        recorder: TrialRecorder,
+        *,
+        now_s: float,
+        window_s: float,
+    ) -> list[SpeedSample]:
+        return [sample for sample in recorder.speed_samples if now_s - sample.time_s <= window_s]
+
+    def _recent_tick_samples(
+        self,
+        recorder: TrialRecorder,
+        *,
+        now_s: float,
+        window_s: float,
+    ) -> list[TickSample]:
+        return [sample for sample in recorder.tick_samples if now_s - sample.time_s <= window_s]
 
     def _movement_is_active(self, commanded_speed: float) -> bool:
         return abs(commanded_speed) >= ODOM_ACTIVE_SPEED_THRESHOLD_MPS
@@ -1259,20 +1281,6 @@ class DrivePidTuner(Node):
             return "severe", zero_crossings, error_stddev
         return "mild", zero_crossings, error_stddev
 
-    def _should_abort_on_live_oscillation(
-        self,
-        *,
-        recorder: TrialRecorder,
-        severity: str,
-    ) -> bool:
-        if self._args.no_abort_on_live_oscillation:
-            return False
-        if self._args.abort_on_live_oscillation:
-            return True
-        if recorder.phase == "feedforward":
-            return False
-        return severity == "severe"
-
     def _handle_live_oscillation(
         self,
         *,
@@ -1281,6 +1289,7 @@ class DrivePidTuner(Node):
         elapsed_s: float,
         commanded_speed: float,
         recent: list[SpeedSample],
+        recent_ticks: list[TickSample],
     ) -> None:
         analysis = self._analyze_live_oscillation(
             recent=recent,
@@ -1289,40 +1298,90 @@ class DrivePidTuner(Node):
         if analysis is None:
             return
         severity, zero_crossings, error_stddev = analysis
-        will_abort = self._should_abort_on_live_oscillation(recorder=recorder, severity=severity)
+        decision = evaluate_live_oscillation_abort(
+            commanded_speed=commanded_speed,
+            recent_speed_samples=recent,
+            configured_max_speed=float(self._args.max_speed),
+            abort_on_live_oscillation=self._args.abort_on_live_oscillation,
+            no_abort_on_live_oscillation=self._args.no_abort_on_live_oscillation,
+        )
+        will_abort = decision.should_abort
         first_mild_warning = not recorder.live_oscillation_detected
-        first_severe_warning = severity == "severe" and not recorder.severe_live_oscillation_detected
+        first_severe_warning = (
+            severity == "severe" and not recorder.severe_live_oscillation_detected
+        )
         recorder.live_oscillation_detected = True
         if severity == "severe":
             recorder.severe_live_oscillation_detected = True
+        recent_speed = sum(sample.speed_mps for sample in recent) / len(recent)
+        measured_speed = recent[-1].speed_mps
+        tick_activity = compute_tick_activity(recent_ticks)
+        overshoot_ratio = max(
+            0.0,
+            (decision.peak_abs_speed - abs(commanded_speed)) / max(abs(commanded_speed), 1e-6),
+        )
         self._append_trial_warning(
             recorder,
-            (
-                "Live oscillation suspected during calibration; trial continued."
-                if not will_abort
+            "Live oscillation suspected during calibration; trial continued."
+            if not will_abort
+            else (
+                "Unsafe live speed response detected during calibration."
+                if decision.unsafe_speed_detected
                 else "Live oscillation suspected during calibration."
             ),
             note=(
-                "Live oscillation is treated as a calibration warning in ff mode."
-                if recorder.phase == "feedforward" and not will_abort
-                else (
-                    "Severe live oscillation triggered strict abort behavior."
-                    if will_abort
-                    else "Live oscillation was recorded as a calibration warning during PID/response tuning."
+                (
+                    "Severe live oscillation stayed below unsafe speed thresholds, so PID tuning continued with warning-level trial quality and conservative recommendations."
+                    if recorder.phase == "pid" and severity == "severe" and not will_abort
+                    else (
+                        "Live oscillation is treated as a calibration warning in ff mode."
+                        if recorder.phase == "feedforward" and not will_abort
+                        else (
+                            "Peak live speed exceeded the runaway safety threshold, so the trial was aborted."
+                            if decision.unsafe_speed_detected
+                            else (
+                                "Severe live oscillation triggered strict abort behavior."
+                                if will_abort
+                                else "Live oscillation was recorded as a calibration warning during PID/response tuning."
+                            )
+                        )
+                    )
                 )
             ),
         )
         if first_mild_warning or first_severe_warning:
-            self.get_logger().warning(
+            log_fn = self.get_logger().error if decision.unsafe_speed_detected else self.get_logger().warning
+            absolute_runaway = (
+                "n/a"
+                if decision.absolute_runaway_threshold is None
+                else f"{decision.absolute_runaway_threshold:.3f}"
+            )
+            log_fn(
                 "Live oscillation warning "
                 f"({severity}) during {recorder.name}: "
                 f"trial_elapsed={elapsed_s:.3f}s "
                 f"commanded_speed={commanded_speed:.3f}mps "
+                f"measured_speed={measured_speed:.3f}mps "
+                f"recent_speed={recent_speed:.3f}mps "
+                f"overshoot_ratio={overshoot_ratio:.3f} "
                 f"zero_crossings={zero_crossings} "
                 f"error_stddev={error_stddev:.4f} "
-                "continuing calibration trial."
+                f"wheel_ticks_delta={tick_activity.wheel_ticks_delta} "
+                f"peak_abs_speed={decision.peak_abs_speed:.3f}mps "
+                f"target_runaway_threshold={decision.target_runaway_threshold:.3f}mps "
+                f"absolute_runaway_threshold={absolute_runaway}mps "
+                f"unsafe_speed_detected={'yes' if decision.unsafe_speed_detected else 'no'} "
+                + (
+                    "aborting trial."
+                    if will_abort
+                    else "continuing calibration trial."
+                )
             )
         if will_abort:
+            if decision.unsafe_speed_detected:
+                raise RuntimeError(
+                    f"Unsafe live speed response detected during {recorder.name}."
+                )
             self._append_trial_warning(
                 recorder,
                 "Severe live oscillation triggered a strict-mode abort.",
@@ -1393,10 +1452,47 @@ class DrivePidTuner(Node):
             "firmware drive loop, PAC5210 reset/enable, or safety state."
         )
 
-    def _raise_stall_failure(self, recorder: TrialRecorder, *, reason: str) -> None:
+    def _log_stall_diagnostic(
+        self,
+        *,
+        recorder: TrialRecorder,
+        elapsed_s: float,
+        diagnostic: LiveStallDiagnostic,
+        level: str,
+    ) -> None:
+        message = (
+            "Stall safety debug "
+            f"({diagnostic.reason}) during {recorder.name}: "
+            f"trial_elapsed={elapsed_s:.3f}s "
+            f"commanded_speed={diagnostic.commanded_speed:.3f}mps "
+            f"measured_speed={self._format_optional_speed(diagnostic.measured_speed)}mps "
+            f"recent_speed={self._format_optional_speed(diagnostic.recent_speed)}mps "
+            f"wheel_ticks_delta={diagnostic.wheel_ticks_delta} "
+            f"left_ticks_delta={diagnostic.left_ticks_delta} "
+            f"right_ticks_delta={diagnostic.right_ticks_delta} "
+            f"time_window_used={diagnostic.time_window_used:.3f}s "
+            f"speed_floor={diagnostic.speed_floor:.3f}mps "
+            f"continuous_ticks_observed={'yes' if diagnostic.continuous_ticks_observed else 'no'} "
+            f"status_snapshot={self._build_status_snapshot()}"
+        )
+        if level == "warning":
+            self.get_logger().warning(message)
+            return
+        self.get_logger().error(message)
+
+    def _raise_stall_failure(
+        self,
+        recorder: TrialRecorder,
+        *,
+        elapsed_s: float,
+        diagnostic: LiveStallDiagnostic,
+    ) -> None:
         self._remember_failure(self._stall_message())
-        self.get_logger().error(
-            f"Stall safety debug ({reason}) during {recorder.name}: {self._failure_status_snapshot}"
+        self._log_stall_diagnostic(
+            recorder=recorder,
+            elapsed_s=elapsed_s,
+            diagnostic=diagnostic,
+            level="error",
         )
         raise RuntimeError(self._stall_message())
 
@@ -1431,6 +1527,8 @@ class DrivePidTuner(Node):
             self._latest_emergency.active_emergency or self._latest_emergency.latched_emergency
         ):
             raise RuntimeError(f"Emergency asserted during {recorder.name}: {self._latest_emergency.reason}")
+        if self._latest_status is not None and self._latest_status.is_charging:
+            raise RuntimeError(f"Charging detected during {recorder.name}.")
         if (
             self._movement_is_active(commanded_speed)
             and elapsed_s >= self._args.startup_grace
@@ -1454,25 +1552,61 @@ class DrivePidTuner(Node):
                 mode_ok = gnss.rtk_mode in (GnssStatus.RTK_MODE_FIXED, GnssStatus.RTK_MODE_FLOAT)
             if not bool(gnss.fix_valid) or not bool(gnss.corrections_active) or not mode_ok:
                 raise RuntimeError(f"Lost RTK/GPS validity during {recorder.name}.")
-        recent = [sample for sample in recorder.speed_samples if now_s - sample.time_s <= 0.8]
+        recent = self._recent_speed_samples(
+            recorder,
+            now_s=now_s,
+            window_s=LIVE_STALL_SPEED_WINDOW_S,
+        )
         if (
             self._movement_is_active(commanded_speed)
             and self._oscillation_grace_elapsed(elapsed_s)
-            and len(recent) >= 5
         ):
-            recent_mean = sum(sample.speed_mps for sample in recent) / len(recent)
-            expected_speed = abs(commanded_speed)
-            if expected_speed >= 0.10 and recent_mean < max(0.02, 0.20 * expected_speed):
-                self._raise_stall_failure(
-                    recorder,
-                    reason="live_recent_speed_below_floor",
-                )
+            recent_ticks = self._recent_tick_samples(
+                recorder,
+                now_s=now_s,
+                window_s=LIVE_STALL_SPEED_WINDOW_S,
+            )
+            stall_diagnostic = evaluate_live_stall(
+                commanded_speed=commanded_speed,
+                recent_speed_samples=recent,
+                recent_tick_samples=recent_ticks,
+                time_window_used=LIVE_STALL_SPEED_WINDOW_S,
+            )
+            if stall_diagnostic is not None:
+                if stall_diagnostic.warning_only:
+                    warning = (
+                        "Live stall safety saw low odometry speed while wheel ticks kept changing; "
+                        "continuing calibration trial."
+                    )
+                    is_new_warning = warning not in recorder.warnings
+                    self._append_trial_warning(
+                        recorder,
+                        warning,
+                        note=(
+                            "Continuous wheel ticks were still observed during the live stall check, "
+                            "so the event was downgraded to a calibration warning."
+                        ),
+                    )
+                    if is_new_warning:
+                        self._log_stall_diagnostic(
+                            recorder=recorder,
+                            elapsed_s=elapsed_s,
+                            diagnostic=stall_diagnostic,
+                            level="warning",
+                        )
+                elif stall_diagnostic.should_abort:
+                    self._raise_stall_failure(
+                        recorder,
+                        elapsed_s=elapsed_s,
+                        diagnostic=stall_diagnostic,
+                    )
             self._handle_live_oscillation(
                 recorder=recorder,
                 now_s=now_s,
                 elapsed_s=elapsed_s,
                 commanded_speed=commanded_speed,
                 recent=recent,
+                recent_ticks=recent_ticks,
             )
 
     def _turn_around(self) -> None:
@@ -1612,14 +1746,12 @@ class DrivePidTuner(Node):
         )
 
     def _ticks_seen(self, samples: list[TickSample]) -> tuple[int, int, int]:
-        if len(samples) < 2:
-            return 0, 0, 0
-        first = samples[0]
-        last = samples[-1]
-        left_delta = abs(last.left_ticks - first.left_ticks)
-        right_delta = abs(last.right_ticks - first.right_ticks)
-        average_delta = int(round((left_delta + right_delta) * 0.5))
-        return average_delta, int(left_delta), int(right_delta)
+        activity = compute_tick_activity(samples)
+        return (
+            activity.wheel_ticks_delta,
+            activity.left_ticks_delta,
+            activity.right_ticks_delta,
+        )
 
     def _compute_rtk_metrics(
         self,

@@ -187,6 +187,52 @@ class SpeedSample:
 
 
 @dataclass(frozen=True)
+class TickSample:
+    time_s: float
+    left_ticks: int
+    right_ticks: int
+
+
+@dataclass(frozen=True)
+class TickActivity:
+    wheel_ticks_delta: int
+    left_ticks_delta: int
+    right_ticks_delta: int
+    sample_count: int
+    time_span_s: float
+
+    @property
+    def continuous_ticks_observed(self) -> bool:
+        return self.left_ticks_delta > 0 or self.right_ticks_delta > 0
+
+
+@dataclass(frozen=True)
+class LiveStallDiagnostic:
+    should_abort: bool
+    warning_only: bool
+    commanded_speed: float
+    measured_speed: float | None
+    recent_speed: float | None
+    speed_floor: float
+    wheel_ticks_delta: int
+    left_ticks_delta: int
+    right_ticks_delta: int
+    time_window_used: float
+    continuous_ticks_observed: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class LiveOscillationDecision:
+    should_abort: bool
+    reason: str
+    peak_abs_speed: float
+    target_runaway_threshold: float
+    absolute_runaway_threshold: float | None
+    unsafe_speed_detected: bool
+
+
+@dataclass(frozen=True)
 class TrialMetrics:
     name: str
     phase: str
@@ -245,6 +291,125 @@ class TrialMetrics:
             "notes": list(self.notes),
         }
         return out
+
+
+def compute_tick_activity(samples: Sequence[TickSample]) -> TickActivity:
+    if len(samples) < 2:
+        return TickActivity(
+            wheel_ticks_delta=0,
+            left_ticks_delta=0,
+            right_ticks_delta=0,
+            sample_count=len(samples),
+            time_span_s=0.0,
+        )
+    first = samples[0]
+    last = samples[-1]
+    left_delta = abs(last.left_ticks - first.left_ticks)
+    right_delta = abs(last.right_ticks - first.right_ticks)
+    average_delta = int(round((left_delta + right_delta) * 0.5))
+    return TickActivity(
+        wheel_ticks_delta=int(average_delta),
+        left_ticks_delta=int(left_delta),
+        right_ticks_delta=int(right_delta),
+        sample_count=len(samples),
+        time_span_s=max(0.0, float(last.time_s - first.time_s)),
+    )
+
+
+def evaluate_live_stall(
+    *,
+    commanded_speed: float,
+    recent_speed_samples: Sequence[SpeedSample],
+    recent_tick_samples: Sequence[TickSample],
+    time_window_used: float,
+    min_commanded_speed_mps: float = 0.10,
+    min_speed_samples: int = 5,
+    speed_floor_ratio: float = 0.20,
+    minimum_speed_floor_mps: float = 0.02,
+) -> LiveStallDiagnostic | None:
+    expected_speed = abs(commanded_speed)
+    if expected_speed < min_commanded_speed_mps or len(recent_speed_samples) < min_speed_samples:
+        return None
+    recent_speed = _mean([sample.speed_mps for sample in recent_speed_samples])
+    measured_speed = recent_speed_samples[-1].speed_mps if recent_speed_samples else None
+    tick_activity = compute_tick_activity(recent_tick_samples)
+    speed_floor = max(minimum_speed_floor_mps, speed_floor_ratio * expected_speed)
+    speed_below_floor = recent_speed < speed_floor
+    if not speed_below_floor:
+        return None
+    warning_only = tick_activity.continuous_ticks_observed
+    return LiveStallDiagnostic(
+        should_abort=not warning_only,
+        warning_only=warning_only,
+        commanded_speed=float(commanded_speed),
+        measured_speed=measured_speed,
+        recent_speed=recent_speed,
+        speed_floor=speed_floor,
+        wheel_ticks_delta=tick_activity.wheel_ticks_delta,
+        left_ticks_delta=tick_activity.left_ticks_delta,
+        right_ticks_delta=tick_activity.right_ticks_delta,
+        time_window_used=float(time_window_used),
+        continuous_ticks_observed=tick_activity.continuous_ticks_observed,
+        reason=(
+            "live_recent_speed_below_floor_with_ticks"
+            if warning_only
+            else "live_recent_speed_below_floor"
+        ),
+    )
+
+
+def evaluate_live_oscillation_abort(
+    *,
+    commanded_speed: float,
+    recent_speed_samples: Sequence[SpeedSample],
+    configured_max_speed: float | None,
+    abort_on_live_oscillation: bool = False,
+    no_abort_on_live_oscillation: bool = False,
+) -> LiveOscillationDecision:
+    peak_abs_speed = max((abs(sample.speed_mps) for sample in recent_speed_samples), default=0.0)
+    target_runaway_threshold = abs(commanded_speed) * 1.8
+    max_speed_value = finite_or_none(configured_max_speed, positive=True)
+    absolute_runaway_threshold = (
+        None if max_speed_value is None else max_speed_value * 1.5
+    )
+    unsafe_speed_detected = peak_abs_speed > target_runaway_threshold
+    if absolute_runaway_threshold is not None and peak_abs_speed > absolute_runaway_threshold:
+        unsafe_speed_detected = True
+    if unsafe_speed_detected:
+        return LiveOscillationDecision(
+            should_abort=True,
+            reason="unsafe_speed_runaway",
+            peak_abs_speed=peak_abs_speed,
+            target_runaway_threshold=target_runaway_threshold,
+            absolute_runaway_threshold=absolute_runaway_threshold,
+            unsafe_speed_detected=True,
+        )
+    if no_abort_on_live_oscillation:
+        return LiveOscillationDecision(
+            should_abort=False,
+            reason="warning_only_explicit",
+            peak_abs_speed=peak_abs_speed,
+            target_runaway_threshold=target_runaway_threshold,
+            absolute_runaway_threshold=absolute_runaway_threshold,
+            unsafe_speed_detected=False,
+        )
+    if abort_on_live_oscillation:
+        return LiveOscillationDecision(
+            should_abort=True,
+            reason="strict_live_oscillation_abort",
+            peak_abs_speed=peak_abs_speed,
+            target_runaway_threshold=target_runaway_threshold,
+            absolute_runaway_threshold=absolute_runaway_threshold,
+            unsafe_speed_detected=False,
+        )
+    return LiveOscillationDecision(
+        should_abort=False,
+        reason="warning_only_default",
+        peak_abs_speed=peak_abs_speed,
+        target_runaway_threshold=target_runaway_threshold,
+        absolute_runaway_threshold=absolute_runaway_threshold,
+        unsafe_speed_detected=False,
+    )
 
 
 def compute_settling_time(

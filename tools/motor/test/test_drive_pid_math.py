@@ -1,14 +1,21 @@
 import json
 
+import pytest
 import yaml
 
 from mowgli_tools.drive_pid_math import (
     DrivePidParams,
+    LiveOscillationDecision,
+    LiveStallDiagnostic,
     SpeedSample,
+    TickSample,
     TrialMetrics,
     compute_settling_time,
+    compute_tick_activity,
     compute_trial_metrics,
     detect_oscillation,
+    evaluate_live_stall,
+    evaluate_live_oscillation_abort,
     finite_or_none,
     recommend_drive_pid_params,
     recommend_pid_only_params,
@@ -107,6 +114,132 @@ def test_detect_oscillation_flags_repeated_crossings() -> None:
         SpeedSample(1.0, 0.30),
     ]
     assert detect_oscillation(samples, target_speed=0.20)
+
+
+def test_evaluate_live_stall_downgrades_to_warning_when_ticks_continue() -> None:
+    diagnostic = evaluate_live_stall(
+        commanded_speed=0.30,
+        recent_speed_samples=[
+            SpeedSample(0.0, 0.01),
+            SpeedSample(0.2, 0.01),
+            SpeedSample(0.4, 0.02),
+            SpeedSample(0.6, 0.02),
+            SpeedSample(0.8, 0.01),
+        ],
+        recent_tick_samples=[
+            TickSample(0.0, 100, 100),
+            TickSample(0.4, 103, 104),
+            TickSample(0.8, 107, 109),
+        ],
+        time_window_used=0.8,
+    )
+
+    assert isinstance(diagnostic, LiveStallDiagnostic)
+    assert diagnostic is not None
+    assert diagnostic.warning_only
+    assert not diagnostic.should_abort
+    assert diagnostic.reason == "live_recent_speed_below_floor_with_ticks"
+    assert diagnostic.wheel_ticks_delta == 8
+    assert diagnostic.left_ticks_delta == 7
+    assert diagnostic.right_ticks_delta == 9
+    assert diagnostic.time_window_used == 0.8
+
+
+def test_evaluate_live_stall_keeps_abort_when_ticks_stop() -> None:
+    diagnostic = evaluate_live_stall(
+        commanded_speed=0.30,
+        recent_speed_samples=[
+            SpeedSample(0.0, 0.01),
+            SpeedSample(0.2, 0.01),
+            SpeedSample(0.4, 0.02),
+            SpeedSample(0.6, 0.02),
+            SpeedSample(0.8, 0.01),
+        ],
+        recent_tick_samples=[
+            TickSample(0.0, 100, 100),
+            TickSample(0.4, 100, 100),
+            TickSample(0.8, 100, 100),
+        ],
+        time_window_used=0.8,
+    )
+
+    assert isinstance(diagnostic, LiveStallDiagnostic)
+    assert diagnostic is not None
+    assert not diagnostic.warning_only
+    assert diagnostic.should_abort
+    assert diagnostic.reason == "live_recent_speed_below_floor"
+
+
+def test_compute_tick_activity_uses_average_wheel_delta() -> None:
+    activity = compute_tick_activity(
+        [
+            TickSample(0.0, 10, 20),
+            TickSample(0.5, 13, 26),
+            TickSample(1.0, 16, 30),
+        ]
+    )
+
+    assert activity.wheel_ticks_delta == 8
+    assert activity.left_ticks_delta == 6
+    assert activity.right_ticks_delta == 10
+    assert activity.continuous_ticks_observed
+
+
+def test_evaluate_live_oscillation_abort_defaults_to_warning_below_runaway_threshold() -> None:
+    decision = evaluate_live_oscillation_abort(
+        commanded_speed=0.30,
+        recent_speed_samples=[
+            SpeedSample(0.0, 0.29),
+            SpeedSample(0.2, 0.32),
+            SpeedSample(0.4, 0.28),
+            SpeedSample(0.6, 0.43),
+            SpeedSample(0.8, 0.307),
+        ],
+        configured_max_speed=0.30,
+    )
+
+    assert isinstance(decision, LiveOscillationDecision)
+    assert not decision.should_abort
+    assert not decision.unsafe_speed_detected
+    assert decision.reason == "warning_only_default"
+    assert decision.peak_abs_speed == 0.43
+    assert decision.target_runaway_threshold == 0.54
+    assert decision.absolute_runaway_threshold == pytest.approx(0.45)
+
+
+def test_evaluate_live_oscillation_abort_rejects_unsafe_speed_runaway() -> None:
+    decision = evaluate_live_oscillation_abort(
+        commanded_speed=0.30,
+        recent_speed_samples=[
+            SpeedSample(0.0, 0.29),
+            SpeedSample(0.2, 0.35),
+            SpeedSample(0.4, 0.56),
+            SpeedSample(0.6, 0.31),
+        ],
+        configured_max_speed=0.30,
+    )
+
+    assert decision.should_abort
+    assert decision.unsafe_speed_detected
+    assert decision.reason == "unsafe_speed_runaway"
+
+
+def test_evaluate_live_oscillation_abort_still_supports_explicit_strict_mode() -> None:
+    decision = evaluate_live_oscillation_abort(
+        commanded_speed=0.30,
+        recent_speed_samples=[
+            SpeedSample(0.0, 0.29),
+            SpeedSample(0.2, 0.34),
+            SpeedSample(0.4, 0.33),
+            SpeedSample(0.6, 0.31),
+        ],
+        configured_max_speed=0.30,
+        abort_on_live_oscillation=True,
+    )
+
+    assert decision.should_abort
+    assert not decision.unsafe_speed_detected
+    assert decision.reason == "strict_live_oscillation_abort"
 
 
 def test_recommend_drive_pid_params_increases_feedforward_when_robot_is_slow() -> None:
