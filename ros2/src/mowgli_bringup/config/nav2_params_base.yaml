@@ -63,6 +63,16 @@ controller_server:
   ros__parameters:
     use_sim_time: false
     enable_stamped_cmd_vel: true
+    # Velocity-feedback source for the controllers — MPPI reads current speed
+    # from here to seed its trajectory rollouts, RPP for its velocity-scaled
+    # lookahead. MUST be set: the nav2 default is "odom", but nothing publishes
+    # /odom on this robot (the wheel odometry is /wheel_odom), so leaving the
+    # default gave both controllers ZERO velocity feedback — MPPI planned every
+    # cycle as if stationary (circling on tight coverage) and RPP's lookahead
+    # collapsed to its minimum (transit weaving). Use /wheel_odom (raw, carries
+    # angular velocity); the fused /odometry/filtered currently reports
+    # twist.angular.z = 0 (separate fusion gap, so it is NOT usable here yet).
+    odom_topic: /wheel_odom
     # 10 Hz: 0.3 m/s × 100 ms = 3 cm of motion between decisions, matches
     # the 5-10 Hz upstream costmap / GPS refresh. Dropped from 20 Hz
     # because the ARM host was chronically missing the 20 Hz loop rate
