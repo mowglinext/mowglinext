@@ -348,11 +348,13 @@ controller_server:
       max_goal_angle_error: 30.0
       goal_timeout: 10.0
       max_follow_distance: 2.0
-      # forward_only=false: FTC may follow path segments in reverse when the
-      # carrot is behind the robot (typical at strip-end U-turns). forward_only=
-      # true deadlocked in a ±180° pirouette when the carrot landed directly
-      # behind the robot (the rotation-error sign flipped every tick).
-      forward_only: false
+      # forward_only=true: FTC never drives a path segment in reverse — it
+      # skirts obstacles forward and rejoins the path ahead (MPPI-style), which
+      # is the field-preferred behaviour. The earlier ±180° pirouette deadlock
+      # (carrot directly behind the robot, rotation-error sign flipping every
+      # tick) does NOT occur on the current smooth arc-based coverage paths;
+      # validated live 2026-06-21 (forward skirt, no reverse, no pirouette).
+      forward_only: true
       # Obstacle avoidance by lateral path deviation. Reads the local
       # obstacle_layer fed by /scan_costmap (nav2_params_lidar.yaml). Turned OFF
       # in the no-LiDAR overlay (no obstacle_layer to read) — that variant tracks
