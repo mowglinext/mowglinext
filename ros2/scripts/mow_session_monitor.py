@@ -128,6 +128,26 @@ RTK_COV_WINDOW_SEC = 0.30
 
 
 # -----------------------------------------------------------------------------
+# Rotation tracking (RotationShim / closed_loop diagnosis)
+#
+# The controllers command an angular rate (cmd_vel.nav.wz); the gyro
+# (imu.gyro.z) is the ground truth of what the chassis actually did. Comparing
+# the two reveals two failure modes this robot has hit:
+#   * pivot stall  — the RotationShim closed_loop=true "pins at one accel step
+#     below the firmware deadband": a sustained angular COMMAND with near-zero
+#     ACTUAL rotation while the robot is NOT driving forward (in-place pivot).
+#   * tracking error — large |cmd_wz - gyro_z| during motion (lag / overshoot).
+# -----------------------------------------------------------------------------
+
+# A pivot is "commanding rotation" when |cmd_wz| exceeds this (rad/s).
+ROT_PIVOT_CMD_THRESHOLD = 0.20
+# ...but the chassis is "not actually rotating" when |gyro_z| is below this.
+ROT_STALL_ACTUAL_THRESHOLD = 0.05
+# ...and it's an in-place pivot (not a moving arc) when |cmd_vx| is below this.
+ROT_PIVOT_FWD_THRESHOLD = 0.05
+
+
+# -----------------------------------------------------------------------------
 # Sample record — each subscription updates a slot; the periodic timer
 # snapshots the whole state into a JSON line.
 # -----------------------------------------------------------------------------
@@ -247,6 +267,12 @@ class MowSessionMonitor(Node):
         self.start_fusion_xy: Optional[tuple[float, float]] = None
         self.peak_fusion_gps_err = 0.0
         self.peak_wheel_gyro_yaw_drift = 0.0
+
+        # --- Rotation tracking aggregates (see ROT_* constants) ---
+        self.rot_err_sum = 0.0          # Σ|cmd_wz - gyro_z| over samples with both
+        self.rot_err_n = 0
+        self.peak_rot_track_err = 0.0   # worst |cmd_wz - gyro_z|
+        self.pivot_stall_samples = 0    # samples flagged as a pivot stall
 
         # --- RTK covariance-drop check state ---
         # See the comment block above RTK_FIXED_GPS_COV_THRESHOLD for why this
@@ -587,6 +613,29 @@ class MowSessionMonitor(Node):
                     s.fusion_x - s.plan_goal_x, s.fusion_y - s.plan_goal_y
                 )
 
+            # --- Rotation tracking: commanded ω vs gyro (actual) ---
+            cmd_wz = s.cmd_vel_nav_wz
+            act_wz = s.imu_gyro_z          # gyro is the chassis truth
+            rot_err = None
+            pivot_stall = False
+            if cmd_wz is not None and act_wz is not None:
+                rot_err = cmd_wz - act_wz
+                self.rot_err_sum += abs(rot_err)
+                self.rot_err_n += 1
+                self.peak_rot_track_err = max(
+                    self.peak_rot_track_err, abs(rot_err)
+                )
+                # Closed-loop-pin / deadband signature: commanding a pivot but
+                # the chassis isn't turning and isn't driving forward.
+                if (
+                    abs(cmd_wz) > ROT_PIVOT_CMD_THRESHOLD
+                    and abs(act_wz) < ROT_STALL_ACTUAL_THRESHOLD
+                    and (s.cmd_vel_nav_vx is None
+                         or abs(s.cmd_vel_nav_vx) < ROT_PIVOT_FWD_THRESHOLD)
+                ):
+                    pivot_stall = True
+                    self.pivot_stall_samples += 1
+
             record: dict[str, Any] = {
                 "type": "sample",
                 "t": now_unix,
@@ -736,6 +785,18 @@ class MowSessionMonitor(Node):
                     ),
                     "fusion_carto_yaw_diff_deg": fusion_carto_yaw_diff,
                     "wheel_gyro_yaw_drift_deg": wheel_gyro_drift,
+                    # Rotation tracking — commanded ω vs gyro (actual chassis
+                    # rotation), the signal for RotationShim / closed_loop
+                    # diagnosis. track_err_wz is per-sample; pivot_stall flags
+                    # the closed-loop-pin / deadband signature (commanding a
+                    # pivot the chassis isn't executing).
+                    "rotation": {
+                        "cmd_wz": cmd_wz,
+                        "actual_wz_gyro": act_wz,
+                        "actual_wz_wheel": s.wheel_wz,
+                        "track_err_wz": rot_err,
+                        "pivot_stall": pivot_stall,
+                    },
                     # RTK covariance-drop health (see file-top constants).
                     # violations > 0 ⇒ outlier gate rejecting RTK fixes.
                     "rtk_cov_check": {
@@ -804,6 +865,16 @@ class MowSessionMonitor(Node):
                 "session_straight_line_displacement_m": fusion_xy_travel,
                 "peak_fusion_gps_error_m": self.peak_fusion_gps_err,
                 "peak_wheel_gyro_yaw_drift_deg": self.peak_wheel_gyro_yaw_drift,
+                "rotation_tracking": {
+                    "mean_abs_track_err_wz": (
+                        self.rot_err_sum / self.rot_err_n
+                        if self.rot_err_n > 0
+                        else None
+                    ),
+                    "peak_track_err_wz": self.peak_rot_track_err,
+                    "pivot_stall_samples": self.pivot_stall_samples,
+                    "pivot_stall_sec": self.pivot_stall_samples / self.args.rate,
+                },
                 "rtk_cov_check": {
                     "rtk_fixed_arrivals": self.rtk_fixed_arrivals,
                     "ok": self.rtk_cov_checks_ok,

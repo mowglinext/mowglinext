@@ -163,6 +163,14 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   odom.pose.covariance[14] = 1e-9;
   odom.pose.covariance[21] = 1e-9;
   odom.pose.covariance[28] = 1e-9;
+  // Body-frame twist is frame-invariant, so the map-frame odom carries the
+  // same velocities as the local /odometry/filtered above (wheel vx + the
+  // bias-corrected gyro yaw rate). Without this the twist stayed all-zero,
+  // which is misleading for any consumer reading the fused estimate's
+  // velocity (e.g. the session monitor's rotation view).
+  odom.twist.twist.linear.x = wheel_vx_;
+  odom.twist.twist.linear.y = 0.0;
+  odom.twist.twist.angular.z = dr_last_gz_;
   pub_odom_->publish(odom);
 
   // Rebaseline the high-rate extrapolator (item #15). The fast
