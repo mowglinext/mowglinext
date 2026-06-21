@@ -102,6 +102,14 @@ void FusionGraphNode::PublishLocalOdom()
   odom.pose.pose.orientation = q_msg;
   odom.twist.twist.linear.x = wheel_vx_;
   odom.twist.twist.linear.y = 0.0;
+  // Bias-corrected gyro yaw rate (the same gz that integrated dr_yaw_). Nav2's
+  // controller_server reads this as its angular velocity feedback — MPPI seeds
+  // its rollouts from it, RPP scales lookahead by it. Leaving it unset (it used
+  // to default to 0) made /odometry/filtered unusable for the controllers, which
+  // is why they had to fall back to raw /wheel_odom; the gyro is the honest
+  // source during pivots, so publish it here and let the controllers use the
+  // fused odom.
+  odom.twist.twist.angular.z = dr_last_gz_;
   // Dead reckoning has unbounded drift — leave pose covariance loose
   // and let Nav2 trust the graph's /odometry/filtered_map for absolute
   // positioning. Tight roll/pitch/z so 2D consumers don't see NaN.

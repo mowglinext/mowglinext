@@ -138,6 +138,34 @@ def test_followcoveragepath_uses_rotation_shim_mppi() -> None:
     )
 
 
+# Topics that actually have a publisher on this robot. The nav2 default
+# odom_topic is "odom", which NOTHING publishes here — leaving the default
+# silently gave the controllers zero velocity feedback (MPPI circled on tight
+# coverage, RPP's velocity-scaled lookahead collapsed to its minimum and the
+# robot wove in transit). bt_navigator and controller_server must both point at
+# a real, published source. /odometry/filtered (fusion_graph local odom) now
+# carries twist.angular.z (bias-corrected gyro rate), so it is usable.
+_PUBLISHED_ODOM_TOPICS = {"/odometry/filtered", "/odometry/filtered_map", "/wheel_odom"}
+
+
+def test_controller_odom_topic_is_published() -> None:
+    """controller_server.odom_topic MUST be set to a published topic.
+
+    Regression for the silent-default bug: nav2 defaults odom_topic to "odom",
+    which has no publisher on this robot, so MPPI/RPP ran with zero velocity
+    feedback. Pin it to a real source (fused /odometry/filtered).
+    """
+    cfg = _controller_section(_load_params())
+    assert "odom_topic" in cfg, (
+        "controller_server.odom_topic is unset → falls back to the nav2 default "
+        "'odom', which nothing publishes; the controllers get no velocity feedback."
+    )
+    assert cfg["odom_topic"] in _PUBLISHED_ODOM_TOPICS, (
+        f"controller_server.odom_topic={cfg['odom_topic']!r} is not a published "
+        f"topic on this robot (expected one of {_PUBLISHED_ODOM_TOPICS})."
+    )
+
+
 # ── 2026-05-08 field bug: launch override + per-site yaml + no-lidar variant
 # all default coverage_xy_tolerance back to 0.5 m, silently re-breaking
 # coverage. The nav2_params.yaml fix above is necessary but not sufficient
