@@ -18,6 +18,47 @@ feasible) so it re-bases trivially when the upstream ref is bumped.
 
 ---
 
+## `nav2_mppi_controller-turn-in-place-injection.patch`
+
+- **Upstream:** same pinned ref as below (`71a1d84`, nav2_mppi_controller 1.4.2).
+  Applied AFTER the arc-length patch in the same builder stage.
+- **STATUS: EXPERIMENTAL SPIKE — off by default.** With
+  `turn_in_place_samples: 0` (the default) the controller is byte-for-byte
+  stock MPPI. This is NOT carried because upstream lacks a fix; it is a local
+  experiment to see whether MPPI can do the hard ~180° coverage swath flips
+  itself instead of via per-segment RotationShim re-dispatch.
+- **WHY this is a patch, not a plugin:** upstream PR #6076 pluginized only the
+  *motion models*; for a diff-drive the DiffDrive model already permits a pivot
+  (vx=0, wz≠0) — the blocker is that Gaussian control sampling (`NoiseGenerator`)
+  almost never *proposes* a near-stationary pivot, and that path is not
+  pluginizable. So the only MPPI-native route is to inject candidates directly.
+  See nav2 issue #6032 (control-set generation) — the maintainer's recommended
+  alternative is RotationShim / Spin, which is why this stays a spike.
+- **WHAT:** Adds `Optimizer::injectTurnInPlacePrimitives()`, called in
+  `generateNoisedTrajectories()` between `setNoisedControls()` and the motion
+  rollout. When `turn_in_place_samples (K) > 0` AND the robot is near-stationary
+  (`< turn_in_place_max_speed`) AND grossly mis-headed vs the path
+  `turn_in_place_lookahead` m ahead (`|yaw_err| > turn_in_place_min_yaw`), it
+  overwrites the last K of the `batch_size` sampled trajectories with a
+  deterministic **pivot-then-advance** primitive (spin toward the path heading,
+  then drive forward along it). The critics then score it like any other
+  candidate — a pivot is only chosen if it actually wins the softmax. A pure
+  spin is deliberately NOT used (it makes no progress and the path-follow critic
+  would reject it).
+- **Params** (under the MPPI controller, e.g. `FollowCoveragePath.*`):
+  `turn_in_place_samples` (int, **0=disabled**), `turn_in_place_min_yaw` (rad,
+  1.2), `turn_in_place_max_speed` (m/s, 0.1), `turn_in_place_lookahead` (m, 0.5).
+- **OPEN QUESTION the spike answers:** whether the critics actually select the
+  injected pivot at a swath flip, or whether forward candidates still out-score
+  it (Steve Macenski's caveat in #6032). Measure with the monitor's
+  `cross_checks.rotation` / `pivot_stall` telemetry on a coverage run with
+  `turn_in_place_samples: ~100` vs `0`.
+- **REMOVE** if the spike fails or once the per-segment RotationShim path is
+  chosen: delete this `.patch`, the second `COPY`/`patch`/`grep` lines in the
+  `nav2-mppi-patched-builder` Dockerfile stage.
+
+---
+
 ## `nav2_mppi_controller-findPathFurthestReachedPoint-arclength.patch`
 
 - **Upstream:** `ros-navigation/navigation2`, branch `kilted`

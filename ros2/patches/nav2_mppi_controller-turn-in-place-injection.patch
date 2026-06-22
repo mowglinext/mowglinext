@@ -1,0 +1,161 @@
+diff --git a/include/nav2_mppi_controller/optimizer.hpp b/include/nav2_mppi_controller/optimizer.hpp
+index 2ced1fe2..0aa377c9 100644
+--- a/include/nav2_mppi_controller/optimizer.hpp
++++ b/include/nav2_mppi_controller/optimizer.hpp
+@@ -175,6 +175,15 @@ protected:
+    */
+   void generateNoisedTrajectories();
+ 
++  /**
++   * @brief Overwrite the last turn_in_place_samples_ trajectories with a
++   * deterministic pivot-then-advance primitive when the robot is (near)
++   * stationary and grossly mis-headed vs the path ahead. No-op when
++   * turn_in_place_samples_ == 0. Called between setNoisedControls() and
++   * the motion-model rollout in generateNoisedTrajectories().
++   */
++  void injectTurnInPlacePrimitives();
++
+   /**
+    * @brief Apply hard vehicle constraints on control sequence
+    */
+@@ -277,6 +286,13 @@ protected:
+     std::nullopt, std::nullopt};  /// Caution, keep references
+ 
+   rclcpp::Logger logger_{rclcpp::get_logger("MPPIController")};
++
++  // Turn-in-place primitive injection (spike). turn_in_place_samples_ == 0
++  // (default) disables it and reproduces stock MPPI exactly.
++  int turn_in_place_samples_{0};
++  float turn_in_place_min_yaw_{1.2f};
++  float turn_in_place_max_speed_{0.1f};
++  float turn_in_place_lookahead_{0.5f};
+ };
+ 
+ }  // namespace mppi
+diff --git a/src/optimizer.cpp b/src/optimizer.cpp
+index 6e63361e..f989962e 100644
+--- a/src/optimizer.cpp
++++ b/src/optimizer.cpp
+@@ -22,6 +22,7 @@
+ #include <vector>
+ #include <cmath>
+ #include <chrono>
++#include <algorithm>
+ 
+ #include "nav2_core/controller_exceptions.hpp"
+ #include "nav2_costmap_2d/costmap_filters/filter_values.hpp"
+@@ -83,6 +84,18 @@ void Optimizer::getParams()
+   getParam(s.sampling_std.wz, "wz_std", 0.4f);
+   getParam(s.retry_attempt_limit, "retry_attempt_limit", 1);
+ 
++  // Turn-in-place primitive injection (mowglinext spike, off by default).
++  // When turn_in_place_samples > 0, the last K sampled trajectories are
++  // overwritten each cycle with a deterministic pivot-then-advance maneuver
++  // whenever the robot is (near) stationary AND grossly mis-headed vs the path
++  // ahead — giving the optimizer the OPTION to rotate in place at hard turns
++  // (e.g. coverage swath flips) that Gaussian sampling almost never proposes.
++  // K=0 reproduces stock MPPI exactly.
++  getParam(turn_in_place_samples_, "turn_in_place_samples", 0);
++  getParam(turn_in_place_min_yaw_, "turn_in_place_min_yaw", 1.2f);
++  getParam(turn_in_place_max_speed_, "turn_in_place_max_speed", 0.1f);
++  getParam(turn_in_place_lookahead_, "turn_in_place_lookahead", 0.5f);
++
+   s.base_constraints.ax_max = fabs(s.base_constraints.ax_max);
+   if (s.base_constraints.ax_min > 0.0) {
+     s.base_constraints.ax_min = -1.0 * s.base_constraints.ax_min;
+@@ -248,10 +261,95 @@ void Optimizer::generateNoisedTrajectories()
+ {
+   noise_generator_.setNoisedControls(state_, control_sequence_);
+   noise_generator_.generateNextNoises();
++  // Overwrite the last K candidates with a turn-in-place primitive (no-op when
++  // turn_in_place_samples == 0). Must run AFTER setNoisedControls (which writes
++  // cvx/cwz) and BEFORE updateStateVelocities (whose predict() rolls cvx/cwz
++  // into the trajectories and accel-clamps them). Single-threaded here.
++  injectTurnInPlacePrimitives();
+   updateStateVelocities(state_);
+   integrateStateVelocities(generated_trajectories_, state_);
+ }
+ 
++void Optimizer::injectTurnInPlacePrimitives()
++{
++  const int K = turn_in_place_samples_;
++  if (K <= 0) {
++    return;  // disabled — stock MPPI behaviour
++  }
++  auto & s = settings_;
++  const int n_path = static_cast<int>(path_.x.size());
++  if (n_path < 2) {
++    return;
++  }
++
++  // Gate 1: only when (near) stationary. A pivot from speed is infeasible and
++  // predict() would warp it anyway.
++  const double cur_speed = std::hypot(state_.speed.linear.x, state_.speed.linear.y);
++  if (cur_speed > turn_in_place_max_speed_) {
++    return;
++  }
++
++  // Heading the path wants ~turn_in_place_lookahead_ metres ahead of the
++  // nearest path point to the robot.
++  const double rx = state_.pose.pose.position.x;
++  const double ry = state_.pose.pose.position.y;
++  int nearest = 0;
++  float best = std::numeric_limits<float>::max();
++  for (int i = 0; i < n_path; ++i) {
++    const float dx = path_.x(i) - static_cast<float>(rx);
++    const float dy = path_.y(i) - static_cast<float>(ry);
++    const float d2 = dx * dx + dy * dy;
++    if (d2 < best) {
++      best = d2;
++      nearest = i;
++    }
++  }
++  int ahead = nearest;
++  double acc = 0.0;
++  for (int i = nearest + 1; i < n_path; ++i) {
++    acc += std::hypot(path_.x(i) - path_.x(i - 1), path_.y(i) - path_.y(i - 1));
++    ahead = i;
++    if (acc >= turn_in_place_lookahead_) {
++      break;
++    }
++  }
++  const double cur_yaw = tf2::getYaw(state_.pose.pose.orientation);
++  const double path_yaw = path_.yaws(ahead);
++
++  // Gate 2: only when grossly mis-headed (e.g. a swath flip ~ pi). Shortest
++  // signed angular distance, no <angles> dependency.
++  const double yaw_err =
++    std::atan2(std::sin(path_yaw - cur_yaw), std::cos(path_yaw - cur_yaw));
++  if (std::fabs(yaw_err) < turn_in_place_min_yaw_) {
++    return;
++  }
++
++  // Pivot-then-advance: spin toward the path heading for rot_steps, then drive
++  // forward along it for the rest of the horizon — so the candidate both
++  // ALIGNS and makes PROGRESS (a pure spin scores poorly on the path-follow
++  // critic and would never be selected).
++  const float wz_cmd = (yaw_err >= 0.0 ? 1.0f : -1.0f) * s.constraints.wz;
++  const int steps = s.time_steps;
++  const float denom = std::max(1e-3f, s.constraints.wz * s.model_dt);
++  int rot_steps = static_cast<int>(std::ceil(std::fabs(yaw_err) / denom));
++  rot_steps = std::min(rot_steps, steps);
++
++  const int batch = s.batch_size;
++  const int kk = std::min(K, batch);
++  const int start = batch - kk;
++
++  state_.cvx.block(start, 0, kk, rot_steps).setZero();
++  state_.cwz.block(start, 0, kk, rot_steps).setConstant(wz_cmd);
++  if (rot_steps < steps) {
++    const int fwd = steps - rot_steps;
++    state_.cvx.block(start, rot_steps, kk, fwd).setConstant(s.constraints.vx_max);
++    state_.cwz.block(start, rot_steps, kk, fwd).setZero();
++  }
++  if (isHolonomic()) {
++    state_.cvy.bottomRows(kk).setZero();
++  }
++}
++
+ void Optimizer::applyControlSequenceConstraints()
+ {
+   auto & s = settings_;

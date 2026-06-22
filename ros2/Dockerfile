@@ -214,10 +214,14 @@ RUN git clone --filter=blob:none --sparse ${NAV2_URL} navigation2 \
 # patching is a fail-fast guard so a future silent miss breaks the build
 # instead of regressing MPPI to corner-cutting behaviour.
 COPY patches/nav2_mppi_controller-findPathFurthestReachedPoint-arclength.patch /tmp/mppi.patch
+COPY patches/nav2_mppi_controller-turn-in-place-injection.patch /tmp/mppi-tip.patch
 RUN cd /ws/src/navigation2/nav2_mppi_controller \
  && patch -p1 < /tmp/mppi.patch \
  && grep -q 'path_integrated_dists' include/nav2_mppi_controller/tools/utils.hpp \
- && echo "Applied + verified nav2_mppi_controller arc-length patch"
+ && echo "Applied + verified nav2_mppi_controller arc-length patch" \
+ && patch -p1 < /tmp/mppi-tip.patch \
+ && grep -q 'injectTurnInPlacePrimitives' src/optimizer.cpp \
+ && echo "Applied + verified nav2_mppi_controller turn-in-place-injection patch"
 
 # Build the single patched package into a standalone overlay prefix. The
 # resulting libmppi_controller.so + plugin manifest live under
