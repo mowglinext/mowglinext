@@ -732,6 +732,24 @@ export const DiagnosticsPage = () => {
     const scanTotal = (scanOk ?? 0) + (scanFail ?? 0);
     const scanRate = scanTotal > 0 ? Math.round(((scanOk ?? 0) / scanTotal) * 100) : null;
 
+    // ICP / scan-matching detail (live LiDAR monitor).
+    const keyframesTotal = num("keyframes_total");
+    const kfOk = num("kf_matches_ok");
+    const kfFail = num("kf_matches_fail");
+    const kfTotal = (kfOk ?? 0) + (kfFail ?? 0);
+    const kfRate = kfTotal > 0 ? Math.round(((kfOk ?? 0) / kfTotal) * 100) : null;
+    const rejRmse = num("icp_rejects_rmse");
+    const rejInliers = num("icp_rejects_inliers");
+    const rejSanity = num("icp_rejects_sanity");
+    const rejDiverge = num("icp_rejects_divergence");
+    const rejTotal = (rejRmse ?? 0) + (rejInliers ?? 0) + (rejSanity ?? 0) + (rejDiverge ?? 0);
+    const gpsRejWrongfix = num("gps_rejects_wrongfix");
+    const stationaryHandPush = num("stationary_hand_push");
+    // Fraction of received scans that actually became graph factors.
+    const attachRate = (scansReceived !== null && scansReceived > 0 && scansAttached !== null)
+        ? Math.round((scansAttached / scansReceived) * 100)
+        : null;
+
     const sectionFusionGraph = (
         <Row gutter={[12, 12]}>
             <Col span={24}>
@@ -820,6 +838,87 @@ export const DiagnosticsPage = () => {
                         {t('diagnosticsPage.fusionGraphDescPart2')}
                         {t('diagnosticsPage.fusionGraphTopicLabel')} <Typography.Text code>/fusion_graph/diagnostics</Typography.Text>{" "}
                         {fusionAgeS !== null && <span>{t('diagnosticsPage.lastUpdateAgo', {seconds: fusionAgeS})}</span>}
+                    </Typography.Paragraph>
+                </Card>
+            </Col>
+        </Row>
+    );
+
+    const sectionIcpMonitor = (
+        <Row gutter={[12, 12]}>
+            <Col span={24}>
+                <Card
+                    title={
+                        <Space>
+                            <CompassOutlined/>
+                            {t('diagnosticsPage.icpMonitorTitle')}
+                            <Tag color={fusionStale ? "default" : "processing"}>
+                                {fusionStale ? t('diagnosticsPage.stale') : t('diagnosticsPage.live')}
+                            </Tag>
+                        </Space>
+                    }
+                    size="small"
+                >
+                    <Row gutter={[12, 12]}>
+                        <Col xs={12} md={6}>
+                            <Statistic
+                                title={t('diagnosticsPage.icpScanMatchRate')}
+                                value={scanRate !== null ? scanRate : "—"}
+                                suffix={scanRate !== null ? "%" : undefined}
+                                precision={0}
+                                valueStyle={{
+                                    fontSize: 18,
+                                    color: scanRate === null ? undefined : scanRate >= 95 ? colors.success : scanRate >= 80 ? colors.warning : colors.danger,
+                                }}
+                            />
+                            <Typography.Text type="secondary" style={{fontSize: 11}}>
+                                {t('diagnosticsPage.matches', {ok: scanOk ?? 0, total: scanTotal})}
+                            </Typography.Text>
+                        </Col>
+                        <Col xs={12} md={6}>
+                            <Statistic
+                                title={t('diagnosticsPage.icpRejects')}
+                                value={rejTotal}
+                                valueStyle={{fontSize: 18, color: rejTotal > 0 ? colors.warning : colors.success}}
+                            />
+                            <Typography.Text type="secondary" style={{fontSize: 11}}>
+                                {t('diagnosticsPage.icpRejectBreakdown', {
+                                    rmse: rejRmse ?? 0,
+                                    inliers: rejInliers ?? 0,
+                                    sanity: rejSanity ?? 0,
+                                    diverge: rejDiverge ?? 0,
+                                })}
+                            </Typography.Text>
+                        </Col>
+                        <Col xs={12} md={6}>
+                            <Statistic
+                                title={t('diagnosticsPage.icpKeyframes')}
+                                value={keyframesTotal ?? "—"}
+                                valueStyle={{fontSize: 18, color: (keyframesTotal ?? 0) > 0 ? colors.success : colors.warning}}
+                            />
+                            <Typography.Text type="secondary" style={{fontSize: 11}}>
+                                {kfTotal > 0
+                                    ? t('diagnosticsPage.icpKfMatches', {rate: kfRate ?? 0, ok: kfOk ?? 0, total: kfTotal})
+                                    : t('diagnosticsPage.icpNoKeyframes')}
+                            </Typography.Text>
+                        </Col>
+                        <Col xs={12} md={6}>
+                            <Statistic
+                                title={t('diagnosticsPage.loopClosures')}
+                                value={loopClosures ?? "—"}
+                                valueStyle={{fontSize: 18, color: (loopClosures ?? 0) > 0 ? colors.success : undefined}}
+                            />
+                            <Typography.Text type="secondary" style={{fontSize: 11}}>
+                                {attachRate !== null ? t('diagnosticsPage.icpAttachRate', {rate: attachRate}) : ""}
+                            </Typography.Text>
+                        </Col>
+                    </Row>
+                    <Typography.Paragraph type="secondary" style={{fontSize: 11, marginTop: 8, marginBottom: 0}}>
+                        {t('diagnosticsPage.icpGpsWrongfix', {count: gpsRejWrongfix ?? 0})}
+                        {" · "}
+                        {t('diagnosticsPage.icpStationaryPush', {count: stationaryHandPush ?? 0})}
+                        {" · "}
+                        {t('diagnosticsPage.icpMonitorHint')}
                     </Typography.Paragraph>
                 </Card>
             </Col>
@@ -1596,6 +1695,11 @@ export const DiagnosticsPage = () => {
                             children: sectionFusionGraph,
                         },
                         {
+                            key: "icp_monitor",
+                            label: <Space><CompassOutlined/> {t('diagnosticsPage.icpMonitorShort')}</Space>,
+                            children: sectionIcpMonitor,
+                        },
+                        {
                             key: "heading_sources",
                             label: <Space><CompassOutlined/> {t('diagnosticsPage.headingSourcesShort')}</Space>,
                             children: sectionHeadingSources,
@@ -1649,6 +1753,7 @@ export const DiagnosticsPage = () => {
             children: <Space direction="vertical" size="middle" style={{width: "100%"}}>
                 {sectionLocalization}
                 {sectionFusionGraph}
+                {sectionIcpMonitor}
                 {sectionHeadingSources}
             </Space>,
         },
