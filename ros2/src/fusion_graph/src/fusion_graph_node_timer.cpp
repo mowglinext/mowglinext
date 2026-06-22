@@ -115,6 +115,22 @@ void FusionGraphNode::OnTimer()
       }
       graph_->QueueScanBetween(res.delta, sm_sigma_xy, sm_sigma_theta);
       ++scan_matches_ok_;
+      // ICP-only odometry: seed from the graph pose at the first accepted
+      // match, then compose each relative scan delta. Relative (drifts) — for
+      // GUI comparison of ICP heading/pose vs the fused/GPS estimate only.
+      if (!icp_pose_seeded_)
+      {
+        if (auto snap = graph_->LatestSnapshot())
+        {
+          icp_pose_ = snap->pose;
+          icp_pose_seeded_ = true;
+        }
+      }
+      else
+      {
+        icp_pose_ = icp_pose_.compose(res.delta);
+      }
+      PublishIcpOdom();
     }
     else
     {

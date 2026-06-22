@@ -145,8 +145,20 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
     // mx/my themselves — the graph's GnssLeverArmFactor handles the
     // offset; we only loosen the gate threshold.
     const double expected_pivot_jump_m = lever_arm_radius_m_ * abs_dtheta_since_last_gps_rad_;
-    const double jump_budget = rtk_wrongfix_max_jump_m_ + expected_pivot_jump_m;
-    if (jump > jump_budget && wheel_dist_since_last_gps_m_ < rtk_wrongfix_max_wheel_m_)
+    // Motion-consistent gate: the GPS step must be explainable by how far the
+    // chassis ACTUALLY travelled since the last fix (wheel arc + lever-arm
+    // sweep) plus a fixed slack budget. The previous gate only fired when the
+    // wheel said "barely moved" (wheel_dist < rtk_wrongfix_max_wheel_m), so at
+    // 0.20 m/s with 5 Hz GNSS — ~4 cm of real travel between fixes — a several-
+    // cm wrong-fix jump DURING MOWING slipped through as "plausible motion" and
+    // rebased map→odom (field: 3-11 cm map→odom steps while raw RTK jitter was
+    // only σ≈1.4 cm). Comparing the jump against actual wheel travel makes the
+    // gate effective at any speed and reduces to the old fixed budget when
+    // stationary (wheel_dist ≈ 0). rtk_wrongfix_max_jump_m is now the slack on
+    // top of travel — size it to a few × the raw GNSS jitter σ.
+    const double jump_budget = rtk_wrongfix_max_jump_m_ + expected_pivot_jump_m +
+                               wheel_dist_since_last_gps_m_;
+    if (jump > jump_budget)
     {
       graph_->RecordGpsRejectWrongFix();
       RCLCPP_WARN_THROTTLE(get_logger(),
@@ -176,7 +188,21 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   const double var_y = msg->position_covariance[4];
   double sigma = std::sqrt(0.5 * (var_x + var_y));
   if (!std::isfinite(sigma) || sigma <= 0.0)
+  {
     sigma = -1.0;  // floor
+  }
+  else if (gps_sigma_speed_coeff_ > 0.0)
+  {
+    // Inflate the GPS σ with chassis speed. The receiver covariance reports
+    // the instantaneous fix precision but ignores motion-induced position
+    // error: GPS measurement latency × velocity, plus lever-arm sweep while
+    // moving, both displace the reported antenna position from where the robot
+    // actually is at fuse time. σ_eff = sqrt(σ_msg² + (coeff·v)²); coeff has
+    // units of seconds (≈ effective GPS latency). 0 disables (raw receiver σ).
+    const double v = std::abs(wheel_vx_);
+    const double speed_term = gps_sigma_speed_coeff_ * v;
+    sigma = std::sqrt(sigma * sigma + speed_term * speed_term);
+  }
   // Latch the most-recent valid GPS σ for the keyframe-capture quality gate
   // (only capture when the fix is mm-accurate). <0 means no usable σ.
   last_gps_sigma_ = sigma;
