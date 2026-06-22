@@ -34,6 +34,7 @@ import {useStatus} from "../hooks/useStatus.ts";
 import {useGPS} from "../hooks/useGPS.ts";
 import {useGnssStatus} from "../hooks/useGnssStatus.ts";
 import {useFusionOdom} from "../hooks/useFusionOdom.ts";
+import {useIcpOdom} from "../hooks/useIcpOdom.ts";
 import {useBTLog} from "../hooks/useBTLog.ts";
 import {useImu} from "../hooks/useImu.ts";
 import {useCogHeading} from "../hooks/useCogHeading.ts";
@@ -120,6 +121,7 @@ export const DiagnosticsPage = () => {
     const gps = useGPS();
     const gnssStatus = useGnssStatus();
     const pose = useFusionOdom();
+    const icpOdom = useIcpOdom();
     const btNodeStates = useBTLog();
     const imu = useImu();
     const {imu: cogImu, lastMessageAt: cogLastAt} = useCogHeading();
@@ -750,6 +752,22 @@ export const DiagnosticsPage = () => {
         ? Math.round((scansAttached / scansReceived) * 100)
         : null;
 
+    // ICP-only odom vs fused estimate (heading + position drift). icpOdom is
+    // empty until scan-matching is on AND a match has been accepted.
+    const icpPos = icpOdom.pose?.pose?.position;
+    const icpOri = icpOdom.pose?.pose?.orientation;
+    const fusedPos = pose.pose?.pose?.position;
+    const fusedOri = pose.pose?.pose?.orientation;
+    const icpActive = icpPos !== undefined && icpOri !== undefined;
+    const icpYawDeg = icpActive ? yawFromQuaternion(icpOri.x, icpOri.y, icpOri.z, icpOri.w) : null;
+    const fusedYawDeg = fusedOri ? yawFromQuaternion(fusedOri.x, fusedOri.y, fusedOri.z, fusedOri.w) : null;
+    const icpYawDiffDeg = (icpYawDeg !== null && fusedYawDeg !== null)
+        ? (() => { let d = icpYawDeg - fusedYawDeg; while (d > 180) d -= 360; while (d < -180) d += 360; return d; })()
+        : null;
+    const icpPosDiffM = (icpActive && fusedPos !== undefined)
+        ? Math.hypot(icpPos.x - fusedPos.x, icpPos.y - fusedPos.y)
+        : null;
+
     const sectionFusionGraph = (
         <Row gutter={[12, 12]}>
             <Col span={24}>
@@ -911,6 +929,49 @@ export const DiagnosticsPage = () => {
                             <Typography.Text type="secondary" style={{fontSize: 11}}>
                                 {attachRate !== null ? t('diagnosticsPage.icpAttachRate', {rate: attachRate}) : ""}
                             </Typography.Text>
+                        </Col>
+                    </Row>
+                    <Row gutter={[12, 12]} style={{marginTop: 4}}>
+                        <Col xs={12} md={6}>
+                            <Statistic
+                                title={t('diagnosticsPage.icpHeading')}
+                                value={icpYawDeg !== null ? icpYawDeg : "—"}
+                                suffix={icpYawDeg !== null ? "°" : undefined}
+                                precision={1}
+                                valueStyle={{fontSize: 18}}
+                            />
+                        </Col>
+                        <Col xs={12} md={6}>
+                            <Statistic
+                                title={t('diagnosticsPage.fusedHeading')}
+                                value={fusedYawDeg !== null ? fusedYawDeg : "—"}
+                                suffix={fusedYawDeg !== null ? "°" : undefined}
+                                precision={1}
+                                valueStyle={{fontSize: 18}}
+                            />
+                        </Col>
+                        <Col xs={12} md={6}>
+                            <Statistic
+                                title={t('diagnosticsPage.icpHeadingDiff')}
+                                value={icpYawDiffDeg !== null ? icpYawDiffDeg : "—"}
+                                suffix={icpYawDiffDeg !== null ? "°" : undefined}
+                                precision={1}
+                                valueStyle={{
+                                    fontSize: 18,
+                                    color: icpYawDiffDeg === null ? undefined
+                                        : Math.abs(icpYawDiffDeg) < 5 ? colors.success
+                                        : Math.abs(icpYawDiffDeg) < 15 ? colors.warning : colors.danger,
+                                }}
+                            />
+                        </Col>
+                        <Col xs={12} md={6}>
+                            <Statistic
+                                title={t('diagnosticsPage.icpPosDiff')}
+                                value={icpPosDiffM !== null ? icpPosDiffM : "—"}
+                                suffix={icpPosDiffM !== null ? "m" : undefined}
+                                precision={2}
+                                valueStyle={{fontSize: 18}}
+                            />
                         </Col>
                     </Row>
                     <Typography.Paragraph type="secondary" style={{fontSize: 11, marginTop: 8, marginBottom: 0}}>
