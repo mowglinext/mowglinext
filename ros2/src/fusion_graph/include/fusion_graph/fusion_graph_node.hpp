@@ -108,6 +108,9 @@ private:
   // dead-reckoning state. Called unconditionally from OnTimer so the
   // local frame keeps streaming even before the graph initializes.
   void PublishLocalOdom();
+  // Publishes /fusion_graph/icp_odometry — the LiDAR-only (scan-match
+  // integrated) pose, for GUI comparison against the fused/GPS estimate.
+  void PublishIcpOdom();
 
   // Launch GraphManager::Save on a detached worker. No-op if a
   // previous async save is still running. `reason` is logged.
@@ -365,6 +368,11 @@ private:
   // by the latest IMU gyro sample. Position is the unmodified last
   // fusion-published value. See PoseExtrapolator for the math.
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_fast_;
+  // LiDAR-only odometry: the scan-match deltas integrated from the graph pose
+  // at the first accepted match. Relative (drifts) — published purely so the
+  // GUI can overlay/compare the ICP heading & pose against the fused/GPS
+  // estimate. NOT consumed by any control loop.
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_icp_odom_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
   // TF for odom->base_footprint (we publish map->odom; need to compose
@@ -415,6 +423,11 @@ private:
   uint64_t scans_received_ = 0;
   uint64_t scan_matches_ok_ = 0;
   uint64_t scan_matches_fail_ = 0;
+
+  // ICP-only odometry integration (see pub_icp_odom_). Seeded from the graph
+  // pose at the first accepted scan-between match, then composes each delta.
+  gtsam::Pose2 icp_pose_{};
+  bool icp_pose_seeded_ = false;
 
   // RTK mobile wrong-fix detection state. Raw GNSS cadence and accepted GNSS
   // reference are tracked separately:
