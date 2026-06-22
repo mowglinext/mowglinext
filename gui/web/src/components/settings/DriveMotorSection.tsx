@@ -21,6 +21,7 @@ import { useDockingSensor } from "../../hooks/useDockingSensor.ts";
 import { useDriveTuning } from "../../hooks/useDriveTuning.ts";
 import { useEmergency } from "../../hooks/useEmergency.ts";
 import { useStatus } from "../../hooks/useStatus.ts";
+import { useTranslation } from "react-i18next";
 
 const { Text, Paragraph } = Typography;
 
@@ -103,6 +104,7 @@ const pickPersistedDriveValues = (report: Record<string, any> | undefined) => {
 };
 
 export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPersistedValues }) => {
+    const { t } = useTranslation();
     const { notification, modal } = App.useApp();
     const emergency = useEmergency();
     const status = useStatus();
