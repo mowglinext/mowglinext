@@ -14,7 +14,7 @@ export const useHighLevelStatus = () => {
             })
         },
         (e) => {
-            setHighLevelStatus(JSON.parse(e))
+            setHighLevelStatus((e as any))
         })
     useEffect(() => {
         highLevelStatusStream.start("/api/mowglinext/subscribe/highLevelStatus",)

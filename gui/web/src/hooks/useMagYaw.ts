@@ -18,7 +18,7 @@ export const useMagYaw = (): { imu: Imu; lastMessageAt: number | null } => {
             console.log({message: "Mag yaw stream connected"});
         },
         (e) => {
-            setImu(JSON.parse(e));
+            setImu((e as any));
             setLastMessageAt(Date.now());
         });
     useEffect(() => {

@@ -38,7 +38,7 @@ export const useFusionGraphDiagnostics = () => {
         () => { /* connected */ },
         (e) => {
             try {
-                const msg: DiagnosticArray = JSON.parse(e);
+                const msg: DiagnosticArray = (e as any);
                 const entry = msg.status?.[0];
                 if (!entry) return;
                 const values: Record<string, string> = {};

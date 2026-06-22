@@ -15,7 +15,7 @@ export const usePose = () => {
             })
         },
         (e) => {
-            setPose(JSON.parse(e))
+            setPose((e as any))
         })
     useEffect(() => {
         poseStream.start("/api/mowglinext/subscribe/pose",)
