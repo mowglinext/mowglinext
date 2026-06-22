@@ -109,6 +109,16 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
   sub_gps_ = create_subscription<sensor_msgs::msg::NavSatFix>(
       "/gps/fix", sensor_qos, std::bind(&FusionGraphNode::OnGnss, this, std::placeholders::_1));
 
+  // Commanded-speed fallback for the mobile GNSS wrong-fix gate. Wheel odom is
+  // the preferred motion source, but if it stalls briefly while Nav2 keeps
+  // commanding motion we still need a plausible lower bound on travel.
+  sub_cmd_nav_ =
+      create_subscription<geometry_msgs::msg::TwistStamped>("/cmd_vel_nav",
+                                                            50,
+                                                            std::bind(&FusionGraphNode::OnCmdVelNav,
+                                                                      this,
+                                                                      std::placeholders::_1));
+
   // /imu/cog_heading and /imu/mag_yaw are published BEST_EFFORT by
   // cog_to_imu.py and mag_yaw_publisher.py — use SensorDataQoS or
   // the subscription is silently dropped at the QoS handshake.
@@ -236,6 +246,21 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         seed_xy_.reset();
         seed_yaw_.reset();
         seed_xy_rtk_fixed_ = false;
+        last_accepted_gps_map_xy_.reset();
+        last_raw_gps_fix_stamp_.reset();
+        last_accepted_gps_fix_stamp_.reset();
+        wheel_dist_since_last_accepted_gps_m_ = 0.0;
+        {
+          std::lock_guard<std::mutex> lock(cmd_vel_mu_);
+          last_cmd_vx_mps_ = 0.0;
+          last_cmd_stamp_.reset();
+        }
+        {
+          std::lock_guard<std::mutex> lock(gps_gate_diag_mu_);
+          last_gps_gate_metrics_ = GnssMobileGateMetrics{};
+          last_gps_gate_metrics_valid_ = false;
+        }
+        gps_downweights_wrongfix_mobile_ = 0;
         // Re-zero the dead-reckoning frame. Without this the odom→base
         // transform keeps whatever offset it had accumulated (observed
         // 74 m), so map→odom = graph_pose ∘ dr⁻¹ still has the huge
@@ -356,6 +381,9 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
                           // to get a rate. A spike on any of these is
                           // worth surfacing — see PR notes.
                           add("gps_rejects_wrongfix", std::to_string(stats.gps_rejects_wrongfix));
+                          add("gps_downweights", std::to_string(gps_downweights_wrongfix_mobile_));
+                          add("gps_downweights_wrongfix_mobile",
+                              std::to_string(gps_downweights_wrongfix_mobile_));
                           add("icp_rejects_rmse", std::to_string(stats.icp_rejects_rmse));
                           add("icp_rejects_inliers", std::to_string(stats.icp_rejects_inliers));
                           add("icp_rejects_sanity", std::to_string(stats.icp_rejects_sanity));
@@ -378,6 +406,75 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
                             add("residual_ema_rad", buf);
                             std::snprintf(buf, sizeof(buf), "%.4f", stats.wheel_sigma_x_eff);
                             add("wheel_sigma_x_eff", buf);
+                          }
+                          {
+                            std::lock_guard<std::mutex> lock(gps_gate_diag_mu_);
+                            if (last_gps_gate_metrics_valid_)
+                            {
+                              char buf[32];
+                              add("gps_gate_decision",
+                                  GnssMobileGateDecisionToString(last_gps_gate_metrics_.decision));
+                              std::snprintf(buf,
+                                            sizeof(buf),
+                                            "%.3f",
+                                            last_gps_gate_metrics_.dt_gps_s);
+                              add("gps_gate_dt_gps_s", buf);
+                              std::snprintf(buf,
+                                            sizeof(buf),
+                                            "%.3f",
+                                            last_gps_gate_metrics_.cmd_vx_mps);
+                              add("gps_gate_cmd_vx_mps", buf);
+                              std::snprintf(buf,
+                                            sizeof(buf),
+                                            "%.3f",
+                                            last_gps_gate_metrics_.cmd_delta_m);
+                              add("gps_gate_cmd_delta_m", buf);
+                              std::snprintf(buf,
+                                            sizeof(buf),
+                                            "%.3f",
+                                            last_gps_gate_metrics_.wheel_delta_m);
+                              add("gps_gate_wheel_delta_m", buf);
+                              std::snprintf(buf,
+                                            sizeof(buf),
+                                            "%.3f",
+                                            last_gps_gate_metrics_.delta_gps_m);
+                              add("gps_gate_delta_gps_m", buf);
+                              std::snprintf(buf,
+                                            sizeof(buf),
+                                            "%.3f",
+                                            last_gps_gate_metrics_.expected_motion_m);
+                              add("gps_gate_expected_motion", buf);
+                              add("gps_gate_expected_motion_m", buf);
+                              std::snprintf(buf,
+                                            sizeof(buf),
+                                            "%.3f",
+                                            last_gps_gate_metrics_.gps_sigma_xy);
+                              add("gps_gate_gps_sigma_xy", buf);
+                              std::snprintf(buf,
+                                            sizeof(buf),
+                                            "%.3f",
+                                            last_gps_gate_metrics_.allowed_delta_m);
+                              add("gps_gate_allowed_delta", buf);
+                              add("gps_gate_allowed_delta_m", buf);
+                              std::snprintf(buf,
+                                            sizeof(buf),
+                                            "%.3f",
+                                            last_gps_gate_metrics_.innovation_m);
+                              add("gps_gate_innovation", buf);
+                              add("gps_gate_innovation_m", buf);
+                              std::snprintf(buf,
+                                            sizeof(buf),
+                                            "%.3f",
+                                            last_gps_gate_metrics_.forward_innovation_m);
+                              add("gps_gate_forward_innovation", buf);
+                              add("gps_gate_forward_innovation_m", buf);
+                              std::snprintf(buf,
+                                            sizeof(buf),
+                                            "%.3f",
+                                            last_gps_gate_metrics_.lateral_innovation_m);
+                              add("gps_gate_lateral_innovation", buf);
+                              add("gps_gate_lateral_innovation_m", buf);
+                            }
                           }
                           if (snap)
                           {

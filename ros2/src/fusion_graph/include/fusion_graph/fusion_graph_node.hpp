@@ -35,6 +35,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 
+#include "fusion_graph/gnss_mobile_gate.hpp"
 #include "fusion_graph/graph_manager.hpp"
 #include "fusion_graph/pose_extrapolator.hpp"
 #include "fusion_graph/scan_matcher.hpp"
@@ -68,6 +69,7 @@ private:
   void OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg);
   void OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg);
   void OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg);
+  void OnCmdVelNav(geometry_msgs::msg::TwistStamped::ConstSharedPtr msg);
   void OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg);
   void OnMagYaw(sensor_msgs::msg::Imu::ConstSharedPtr msg);
   void OnScan(sensor_msgs::msg::LaserScan::ConstSharedPtr msg);
@@ -184,19 +186,6 @@ private:
   // above so a normal coordinated turn (both agree) is never vetoed.
   double dr_slip_gyro_max_rad_per_s_ = 0.15;
   double dr_slip_wheel_min_rad_per_s_ = 0.15;
-
-  // GPS antenna radial offset from base_link, hypot(lever_arm_x,
-  // lever_arm_y). Used by the RTK wrong-fix gate in OnGnss to
-  // predict how much antenna position can shift due to pure body
-  // rotation between two GPS samples, on top of any wheel travel.
-  // NOT used to correct mx/my — the graph's GnssLeverArmFactor
-  // already applies R(yaw)·lever_arm in its residual; the gate
-  // only consults this scalar to relax its threshold.
-  double lever_arm_radius_m_ = 0.0;
-  // |Δθ| (rad) accumulated from gyro_z since the last accepted GPS
-  // sample. Paired with wheel_dist_since_last_gps_m_; both are
-  // reset on every accepted (or wrong-fix-classified) sample.
-  double abs_dtheta_since_last_gps_rad_ = 0.0;
 
   // ── map→odom static anchor ──────────────────────────────────────
   // The graph publishes one (map-frame) pose per Tick — every
@@ -321,6 +310,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_wheel_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr sub_gps_;
+  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr sub_cmd_nav_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_cog_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_mag_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr sub_scan_;
@@ -426,28 +416,33 @@ private:
   uint64_t scan_matches_ok_ = 0;
   uint64_t scan_matches_fail_ = 0;
 
-  // RTK wrong-fix detection state. F9P can re-solve carrier-phase
-  // ambiguity on a different integer set after a brief signal drop,
-  // jumping the reported solution by 3-10 cm while still reporting
-  // status=GBAS_FIX with sub-cm covariance. If the wheel odometry
-  // says we did not move that far since the last fix, the jump is
-  // not a real robot motion and absorbing it would yank the iSAM2
-  // trajectory. Skip the sample in that case (counted in
-  // GraphStats.gps_rejects_wrongfix).
+  // RTK mobile wrong-fix detection state. Raw GNSS cadence and accepted GNSS
+  // reference are tracked separately:
+  //   - last_raw_gps_fix_stamp_: every received fix, for dt/frequency stats
+  //   - last_accepted_gps_map_xy_/stamp_: only fixes that entered the graph
   //
-  // wheel_dist_since_last_gps_m_ accumulates |wheel translation|
-  // between consecutive OnGnss calls; reset to 0 in OnGnss after
-  // the check.
-  std::optional<gtsam::Vector2> last_gps_map_xy_;
-  double wheel_dist_since_last_gps_m_ = 0.0;
-  // GPS jump (m) above which the sample is rejected when the wheel
-  // accumulator stayed under rtk_wrongfix_max_wheel_m_. Picked to be
-  // well above the σ ~1 cm noise floor we measured 2026-05-17 (8-12
-  // mm σ on raw /gps/fix stationary), and below the smallest
-  // legitimate motion the robot can produce in one GPS period
-  // (vx_max ≈ 0.30 m/s × 0.1 s = 30 mm). 50 mm leaves headroom for
-  // 1-2σ outliers while still catching ≥0.5σ wrong-fix jumps.
-  double rtk_wrongfix_max_jump_m_ = 0.05;
+  // The gate always compares the new fix against the LAST ACCEPTED reference.
+  // That prevents a rejected wrong-fix cluster from becoming the new baseline.
+  // Wheel motion is accumulated since the last accepted fix for the same
+  // reason; it only resets when the sample is accepted or downweighted into
+  // the graph. Rejections are counted in GraphStats.gps_rejects_wrongfix; mild
+  // outliers are downweighted instead of hard-dropped.
+  std::optional<gtsam::Vector2> last_accepted_gps_map_xy_;
+  std::optional<rclcpp::Time> last_raw_gps_fix_stamp_;
+  std::optional<rclcpp::Time> last_accepted_gps_fix_stamp_;
+  double wheel_dist_since_last_accepted_gps_m_ = 0.0;
+  std::mutex cmd_vel_mu_;
+  double last_cmd_vx_mps_ = 0.0;
+  std::optional<rclcpp::Time> last_cmd_stamp_;
+  double gps_sigma_floor_m_ = 0.003;
+  double rtk_wrongfix_gps_sigma_multiplier_ = 2.0;
+  double rtk_wrongfix_min_margin_m_ = 0.01;
+  double rtk_wrongfix_downweight_innovation_multiplier_ = 2.0;
+  double rtk_wrongfix_downweight_sigma_multiplier_ = 4.0;
+  uint64_t gps_downweights_wrongfix_mobile_ = 0;
+  std::mutex gps_gate_diag_mu_;
+  GnssMobileGateMetrics last_gps_gate_metrics_;
+  bool last_gps_gate_metrics_valid_ = false;
   // Dock-pose hold while charging: re-assert a firm ForceAnchor at the FULL
   // dock_pose (x,y,yaw) ONCE PER NEW NODE, replacing the weak live-GPS factor
   // that walked the docked pose off the anchor (field 2026-06-10: 11.5 cm + 53°
@@ -471,13 +466,6 @@ private:
   bool gate_cog_during_docking_ = true;
   bool gate_float_gps_during_docking_ = true;
   std::optional<rclcpp::Time> last_docking_cmd_stamp_;
-  // Wheel-derived distance (m) traveled since the last GPS sample,
-  // below which a GPS jump > rtk_wrongfix_max_jump_m_ is judged
-  // inconsistent. 20 mm sits just above the per-tick encoder noise
-  // floor — at 0.30 m/s the robot covers 30 mm in 100 ms (one fix
-  // period), so a real motion easily clears 20 mm.
-  double rtk_wrongfix_max_wheel_m_ = 0.02;
-
   // ICP guard-rail thresholds — see GraphParams comments for the
   // physical intuition. Declared as ROS params so we can tighten or
   // loosen them in mowgli_robot.yaml without a rebuild.

@@ -39,12 +39,12 @@ void FusionGraphNode::OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
                             msg->twist.twist.linear.y,
                             msg->twist.twist.angular.z,
                             dt);
-      // Track wheel-derived distance since the last GPS fix for the
-      // RTK wrong-fix sanity gate in OnGnss. Speed-magnitude × dt is
-      // the right scalar — direction doesn't matter for the threshold
-      // test, only how far the chassis travelled.
+      // Track wheel-derived distance since the last ACCEPTED GPS fix for the
+      // RTK wrong-fix sanity gate in OnGnss. Speed-magnitude × dt is the
+      // right scalar — direction doesn't matter for the threshold test, only
+      // how far the chassis travelled before the next candidate GNSS update.
       const double speed = std::hypot(msg->twist.twist.linear.x, msg->twist.twist.linear.y);
-      wheel_dist_since_last_gps_m_ += speed * dt;
+      wheel_dist_since_last_accepted_gps_m_ += speed * dt;
     }
   }
   last_wheel_stamp_ = stamp;
@@ -85,12 +85,6 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
         dr_last_gz_ = gz;
         dr_last_vx_eff_ = vx_eff;
       }
-      // Accumulate |Δθ| since the last accepted GPS for the wrong-fix
-      // gate. A stationary pivot sweeps the GPS antenna by lever_arm
-      // × Δθ in the map frame; without this term the gate sees a
-      // pure-sweep jump as if it were a phantom translation and
-      // rejects every legitimate fix.
-      abs_dtheta_since_last_gps_rad_ += std::abs(gz) * dt;
     }
   }
   last_imu_stamp_ = stamp;
@@ -98,6 +92,18 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
   // fast_pose_timer_ is null — the extrapolator is just a value
   // cache.
   pose_extrap_.OnImuGyro(stamp.seconds(), msg->angular_velocity.z);
+}
+
+void FusionGraphNode::OnCmdVelNav(geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
+{
+  rclcpp::Time stamp(msg->header.stamp);
+  if (stamp.nanoseconds() == 0)
+  {
+    stamp = this->now();
+  }
+  std::lock_guard<std::mutex> lock(cmd_vel_mu_);
+  last_cmd_vx_mps_ = msg->twist.linear.x;
+  last_cmd_stamp_ = stamp;
 }
 
 void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
@@ -126,60 +132,139 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   double mx, my;
   LatLonToMap(msg->latitude, msg->longitude, mx, my);
 
-  // RTK wrong-fix detection — fires before any QueueGnss so a bad
-  // sample never reaches iSAM2. F9P can re-solve the carrier-phase
-  // ambiguity on a different integer set after a brief signal drop
-  // (vegetation, multipath spike) and the new solution jumps by
-  // 3-10 cm while still reporting status=GBAS_FIX with sub-cm
-  // covariance. If the wheel says we didn't move, the jump is not
-  // real motion — drop the sample.
-  if (last_gps_map_xy_)
-  {
-    const double jump = std::hypot(mx - (*last_gps_map_xy_).x(), my - (*last_gps_map_xy_).y());
-    // Lever-arm sweep budget. A pure body rotation by |Δθ| shifts the
-    // antenna in the map frame by up to lever_arm_radius·|Δθ| with no
-    // chassis translation; without this slack the gate rejects every
-    // GPS sample taken while the controller is pivoting in place
-    // (PRE_ROTATE, headland turn), starving the graph of corrections
-    // exactly when σ_x has nothing else pinning it. NOT applied to
-    // mx/my themselves — the graph's GnssLeverArmFactor handles the
-    // offset; we only loosen the gate threshold.
-    const double expected_pivot_jump_m = lever_arm_radius_m_ * abs_dtheta_since_last_gps_rad_;
-    const double jump_budget = rtk_wrongfix_max_jump_m_ + expected_pivot_jump_m;
-    if (jump > jump_budget && wheel_dist_since_last_gps_m_ < rtk_wrongfix_max_wheel_m_)
-    {
-      graph_->RecordGpsRejectWrongFix();
-      RCLCPP_WARN_THROTTLE(get_logger(),
-                           *get_clock(),
-                           2000,
-                           "fusion_graph: RTK wrong-fix? jump=%.3f m, wheel=%.3f m, "
-                           "sweep_budget=%.3f m — sample dropped",
-                           jump,
-                           wheel_dist_since_last_gps_m_,
-                           expected_pivot_jump_m);
-      // Reset accumulators + cache so a repeated wrong-fix doesn't
-      // permanently lock us out — once two consecutive samples agree,
-      // last_gps_map_xy_ updates and we resume normal flow.
-      last_gps_map_xy_ = gtsam::Vector2(mx, my);
-      wheel_dist_since_last_gps_m_ = 0.0;
-      abs_dtheta_since_last_gps_rad_ = 0.0;
-      return;
-    }
-  }
-  last_gps_map_xy_ = gtsam::Vector2(mx, my);
-  wheel_dist_since_last_gps_m_ = 0.0;
-  abs_dtheta_since_last_gps_rad_ = 0.0;
-
   // covariance[0] is variance of east; take sqrt for sigma. Use the
   // diagonal mean for a single sigma_xy (factor model is isotropic).
   const double var_x = msg->position_covariance[0];
   const double var_y = msg->position_covariance[4];
   double sigma = std::sqrt(0.5 * (var_x + var_y));
   if (!std::isfinite(sigma) || sigma <= 0.0)
-    sigma = -1.0;  // floor
+    sigma = gps_sigma_floor_m_;
   // Latch the most-recent valid GPS σ for the keyframe-capture quality gate
-  // (only capture when the fix is mm-accurate). <0 means no usable σ.
+  // (only capture when the fix is mm-accurate). The floor above guarantees
+  // this remains positive once a valid fix has been seen.
   last_gps_sigma_ = sigma;
+  const rclcpp::Time gps_stamp(msg->header.stamp);
+
+  // Mobile RTK wrong-fix detection — fires before any QueueGnss so a bad
+  // sample never reaches iSAM2. The old fixed 20 mm wheel-motion gate
+  // was too brittle during real mowing: at 0.20 m/s and 5 Hz GNSS the
+  // robot already travels ~40 mm between fixes, so centimetre-scale
+  // RTK re-anchors looked "plausible" and leaked straight into map→odom.
+  //
+  // Use a dynamic motion budget instead:
+  //   expected_motion = max(wheel_delta_since_accepted, cmd_delta_since_accepted)
+  //   noise_budget    = gps_sigma_xy * multiplier
+  //   allowed_delta   = expected_motion + noise_budget + margin
+  // and classify the innovation as accepted / downweighted / rejected.
+  //
+  // The reference position is the LAST ACCEPTED GPS fix, not the most-recent
+  // raw fix. A rejected wrong-fix must not become the new baseline.
+  double dt_gps_s = 0.0;
+  if (last_raw_gps_fix_stamp_)
+  {
+    dt_gps_s = std::max(0.0, (gps_stamp - *last_raw_gps_fix_stamp_).seconds());
+  }
+  if (last_accepted_gps_map_xy_)
+  {
+    double cmd_delta_m = 0.0;
+    double motion_dt_s = 0.0;
+    if (last_accepted_gps_fix_stamp_)
+    {
+      motion_dt_s = std::max(0.0, (gps_stamp - *last_accepted_gps_fix_stamp_).seconds());
+    }
+
+    double cmd_vx_mps = 0.0;
+    {
+      std::lock_guard<std::mutex> lock(cmd_vel_mu_);
+      if (last_cmd_stamp_)
+      {
+        const double cmd_age_s = (gps_stamp - *last_cmd_stamp_).seconds();
+        if (cmd_age_s >= 0.0 && cmd_age_s < 1.0)
+        {
+          cmd_vx_mps = last_cmd_vx_mps_;
+          cmd_delta_m = std::abs(cmd_vx_mps) * motion_dt_s;
+        }
+      }
+    }
+
+    double heading_yaw = seed_yaw_.value_or(0.0);
+    if (auto snap = graph_->LatestSnapshot())
+    {
+      heading_yaw = snap->pose.theta();
+    }
+    {
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
+      if (t_map_odom_anchor_valid_)
+      {
+        heading_yaw = t_map_odom_anchor_.theta() + dr_yaw_;
+      }
+    }
+
+    const GnssMobileGateMetrics gate_metrics = EvaluateGnssMobileGate(
+        dt_gps_s,
+        cmd_vx_mps,
+        cmd_delta_m,
+        wheel_dist_since_last_accepted_gps_m_,
+        mx - (*last_accepted_gps_map_xy_).x(),
+        my - (*last_accepted_gps_map_xy_).y(),
+        sigma,
+        heading_yaw,
+        GnssMobileGateParams{
+            rtk_wrongfix_gps_sigma_multiplier_,
+            rtk_wrongfix_min_margin_m_,
+            rtk_wrongfix_downweight_innovation_multiplier_,
+        });
+    {
+      std::lock_guard<std::mutex> lock(gps_gate_diag_mu_);
+      last_gps_gate_metrics_ = gate_metrics;
+      last_gps_gate_metrics_valid_ = true;
+    }
+
+    if (gate_metrics.decision == GnssMobileGateDecision::kRejected)
+    {
+      graph_->RecordGpsRejectWrongFix();
+      RCLCPP_WARN_THROTTLE(get_logger(),
+                           *get_clock(),
+                           2000,
+                           "fusion_graph: mobile RTK wrong-fix rejected — dt=%.3fs "
+                           "cmd_vx=%.3f wheel=%.3fm gps=%.3fm expected=%.3fm "
+                           "sigma=%.3fm innovation=%.3fm lateral=%.3fm allowed=%.3fm",
+                           gate_metrics.dt_gps_s,
+                           gate_metrics.cmd_vx_mps,
+                           gate_metrics.wheel_delta_m,
+                           gate_metrics.delta_gps_m,
+                           gate_metrics.expected_motion_m,
+                           gate_metrics.gps_sigma_xy,
+                           gate_metrics.innovation_m,
+                           gate_metrics.lateral_innovation_m,
+                           gate_metrics.allowed_delta_m);
+      last_raw_gps_fix_stamp_ = gps_stamp;
+      return;
+    }
+
+    if (gate_metrics.decision == GnssMobileGateDecision::kDownweighted)
+    {
+      ++gps_downweights_wrongfix_mobile_;
+      sigma = std::max(sigma, sigma * rtk_wrongfix_downweight_sigma_multiplier_);
+      RCLCPP_DEBUG_THROTTLE(get_logger(),
+                            *get_clock(),
+                            2000,
+                            "fusion_graph: mobile RTK sample downweighted — dt=%.3fs "
+                            "wheel=%.3fm gps=%.3fm expected=%.3fm sigma->%.3fm "
+                            "innovation=%.3fm lateral=%.3fm",
+                            gate_metrics.dt_gps_s,
+                            gate_metrics.wheel_delta_m,
+                            gate_metrics.delta_gps_m,
+                            gate_metrics.expected_motion_m,
+                            sigma,
+                            gate_metrics.innovation_m,
+                            gate_metrics.lateral_innovation_m);
+    }
+  }
+  last_accepted_gps_map_xy_ = gtsam::Vector2(mx, my);
+  last_accepted_gps_fix_stamp_ = gps_stamp;
+  last_raw_gps_fix_stamp_ = gps_stamp;
+  wheel_dist_since_last_accepted_gps_m_ = 0.0;
 
   // Robust noise model on GPS — applied unconditionally now (was
   // RTK-Float only). Field measurement 2026-05-17 (gps_stability.py,

@@ -185,17 +185,27 @@ fusion_graph_node:
     adaptive_noise_ema_tau_s: 0.5
     adaptive_noise_residual_floor_rad: 0.005
 
-    # ── RTK wrong-fix detection ───────────────────────────────────────
-    # F9P occasionally re-solves carrier-phase ambiguity on a different
-    # integer set, jumping the reported position by a few centimetres
-    # while still flagging GBAS_FIX with sub-cm σ. When the GPS jump
-    # exceeds rtk_wrongfix_max_jump_m AND the wheel odometry says the
-    # chassis moved less than rtk_wrongfix_max_wheel_m between samples,
-    # drop the sample (see GraphStats.gps_rejects_wrongfix). 50 mm /
-    # 20 mm picked to clear measured RTK-Fixed σ (~1 cm on this rig,
-    # 2026-05-17) while catching ≥3 cm wrong-fix jumps.
-    rtk_wrongfix_max_jump_m: 0.05
-    rtk_wrongfix_max_wheel_m: 0.02
+    # ── Mobile RTK wrong-fix detection ────────────────────────────────
+    # Compare each GNSS jump against the LAST ACCEPTED GNSS reference,
+    # not the most-recent raw sample. Raw GNSS cadence is still tracked
+    # separately for diagnostics. The motion budget is accumulated since
+    # the last accepted fix:
+    #   expected_motion = max(wheel_delta_since_accepted,
+    #                         cmd_delta_since_accepted)
+    #   noise_budget    = gps_sigma_xy * rtk_wrongfix_gps_sigma_multiplier
+    #   allowed_delta   = expected_motion + noise_budget + margin
+    #   innovation      = |delta_gps_m - expected_motion|
+    #
+    # Small innovations are accepted, medium ones are DOWNWEIGHTED
+    # (inflated GNSS sigma in the factor), and only strong outliers are
+    # rejected as mobile wrong-fixes. This avoids the old brittle fixed
+    # 20 mm wheel-motion gate, which failed during real mowing because
+    # the robot legitimately travels ~40 mm between 5 Hz fixes at
+    # 0.20 m/s.
+    rtk_wrongfix_gps_sigma_multiplier: 2.0
+    rtk_wrongfix_min_margin_m: 0.01
+    rtk_wrongfix_downweight_innovation_multiplier: 2.0
+    rtk_wrongfix_downweight_sigma_multiplier: 4.0
 
     # ── ICP scan-match guard rails ─────────────────────────────────────
     # Applied to every scan_matcher_->Match result before queueing it

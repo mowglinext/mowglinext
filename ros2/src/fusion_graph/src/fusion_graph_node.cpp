@@ -33,16 +33,12 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   gp.wheel_sigma_y = declare_parameter<double>("wheel_sigma_y", 0.005);
   gp.wheel_sigma_theta = declare_parameter<double>("wheel_sigma_theta", 0.01);
   gp.gyro_sigma_theta = declare_parameter<double>("gyro_sigma_theta", 0.005);
-  gp.gps_sigma_floor = declare_parameter<double>("gps_sigma_floor", 0.003);
+  gps_sigma_floor_m_ = declare_parameter<double>("gps_sigma_floor", 0.003);
+  gp.gps_sigma_floor = gps_sigma_floor_m_;
   gp.prior_sigma_xy = declare_parameter<double>("prior_sigma_xy", 0.05);
   gp.prior_sigma_theta = declare_parameter<double>("prior_sigma_theta", 0.05);
   gp.lever_arm_x = declare_parameter<double>("lever_arm_x", 0.0);
   gp.lever_arm_y = declare_parameter<double>("lever_arm_y", 0.0);
-  // Cache the radial lever-arm magnitude for the RTK wrong-fix gate.
-  // The graph itself consumes lever_arm_x/y via GnssLeverArmFactor;
-  // we only mirror the magnitude here for the gate-side threshold
-  // and never re-apply the offset to the GPS sample.
-  lever_arm_radius_m_ = std::hypot(gp.lever_arm_x, gp.lever_arm_y);
   gp.cov_update_every_n = declare_parameter<int>("cov_update_every_n", 10);
   gp.isam2_relinearize_skip = declare_parameter<int>("isam2_relinearize_skip", 5);
   gp.max_graph_nodes =
@@ -97,9 +93,20 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   gp.adaptive_noise_residual_floor_rad =
       declare_parameter<double>("adaptive_noise_residual_floor_rad", 0.005);
 
-  // RTK wrong-fix detection (handled in OnGnss, not in graph_manager).
-  rtk_wrongfix_max_jump_m_ =
-      declare_parameter<double>("rtk_wrongfix_max_jump_m", 0.05);
+  // Mobile RTK wrong-fix detection (handled in OnGnss, not in graph_manager).
+  // The gate compares the new fix against the last ACCEPTED GNSS reference.
+  // expected_motion = max(wheel_delta_since_accepted, cmd_delta_since_accepted)
+  // allowed_delta   = expected_motion + gps_sigma_xy * multiplier + margin
+  // innovation      = |delta_gps - expected_motion|
+  // Mild outliers are downweighted; only strong ones are rejected.
+  rtk_wrongfix_gps_sigma_multiplier_ =
+      declare_parameter<double>("rtk_wrongfix_gps_sigma_multiplier", 2.0);
+  rtk_wrongfix_min_margin_m_ =
+      declare_parameter<double>("rtk_wrongfix_min_margin_m", 0.01);
+  rtk_wrongfix_downweight_innovation_multiplier_ =
+      declare_parameter<double>("rtk_wrongfix_downweight_innovation_multiplier", 2.0);
+  rtk_wrongfix_downweight_sigma_multiplier_ =
+      declare_parameter<double>("rtk_wrongfix_downweight_sigma_multiplier", 4.0);
   // Dock-pose hold while charging: re-assert a firm ForceAnchor at the full
   // dock_pose once per new node (replaces the weak live-GPS factor that walked
   // the docked pose 11.5 cm + 53° over a dwell — field 2026-06-10). σ small so
@@ -111,8 +118,6 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   docking_active_timeout_s_ = declare_parameter<double>("docking_active_timeout_s", 1.0);
   gate_cog_during_docking_ = declare_parameter<bool>("gate_cog_during_docking", true);
   gate_float_gps_during_docking_ = declare_parameter<bool>("gate_float_gps_during_docking", true);
-  rtk_wrongfix_max_wheel_m_ =
-      declare_parameter<double>("rtk_wrongfix_max_wheel_m", 0.02);
 
   datum_lat_ = declare_parameter<double>("datum_lat", 0.0);
   datum_lon_ = declare_parameter<double>("datum_lon", 0.0);

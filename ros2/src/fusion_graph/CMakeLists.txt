@@ -177,6 +177,11 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_pose_extrapolator fusion_graph_core)
 
+  ament_add_gtest(test_gnss_mobile_gate
+    test/test_gnss_mobile_gate.cpp
+  )
+  target_link_libraries(test_gnss_mobile_gate fusion_graph_core)
+
   ament_add_gtest(test_loop_closure_robust
     test/test_loop_closure_robust.cpp
   )
