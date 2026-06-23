@@ -63,6 +63,16 @@ controller_server:
   ros__parameters:
     use_sim_time: false
     enable_stamped_cmd_vel: true
+    # Velocity-feedback source for the controllers — MPPI reads current speed
+    # from here to seed its trajectory rollouts, RPP for its velocity-scaled
+    # lookahead. MUST be set: the nav2 default is "odom", but nothing publishes
+    # /odom on this robot (the wheel odometry is /wheel_odom), so leaving the
+    # default gave both controllers ZERO velocity feedback — MPPI planned every
+    # cycle as if stationary (circling on tight coverage) and RPP's lookahead
+    # collapsed to its minimum (transit weaving). Use /wheel_odom (raw, carries
+    # angular velocity); the fused /odometry/filtered currently reports
+    # twist.angular.z = 0 (separate fusion gap, so it is NOT usable here yet).
+    odom_topic: /wheel_odom
     # 10 Hz: 0.3 m/s × 100 ms = 3 cm of motion between decisions, matches
     # the 5-10 Hz upstream costmap / GPS refresh. Dropped from 20 Hz
     # because the ARM host was chronically missing the 20 Hz loop rate
@@ -211,6 +221,14 @@ controller_server:
       rotate_to_heading_angular_vel: 0.75
       max_angular_accel: 2.5
       simulate_ahead_time: 1.0
+      # Pivot ONCE at the start of each transit, then hand to the primary
+      # controller — do NOT re-engage the in-place rotate mid-path. The transit
+      # plan is FROZEN (never replanned from the current pose) and RotationShim
+      # samples its target 0.5 m from poses.front() (the plan START). Once the
+      # robot drives off poses.front(), a re-engaged shim/RPP rotate aims at that
+      # STALE point and oscillates / runs to a wrong heading and never aligns
+      # (root cause hardware-confirmed 2026-06-20; see use_rotate_to_heading below).
+      rotate_to_heading_once: true
       # Terminal pivot. With this false, neither RotationShim (start-of-path
       # only) nor RPP (mid-path, rotate_to_heading_min_angle: 0.785 rad =
       # 45°) does anything when the navigation ends with a yaw error in the
@@ -225,7 +243,11 @@ controller_server:
       # goal heading. Cost: one ~1 s in-place rotation per nav action,
       # which the operator barely notices but the docking-server NEEDS.
       rotate_to_goal_heading: true
-      closed_loop: true                    # use wheel odom feedback for pivot completion
+      # was true ("wheel odom feedback for pivot completion"), but on this deadband
+      # chassis closed_loop:true reads ~0 below the ~0.5 rad/s firmware pivot
+      # deadband and stalls the pivot — the same hard lesson already documented for
+      # FollowCoveragePath below. Open-loop ramp is required here too.
+      closed_loop: false
 
       # --- RegulatedPurePursuitController (primary) params ---
       transform_tolerance: 0.3            # ARM TF jitter envelope
@@ -244,10 +266,13 @@ controller_server:
       regulated_linear_scaling_min_speed: 0.20
       use_cost_regulated_linear_velocity_scaling: false
       max_allowed_time_to_collision_up_to_carrot: 1.0
-      # In-place rotation toward heading at large yaw error — RPP's own
-      # rotate-to-heading hand-off complements RotationShim, kicking in
-      # after RotationShim disengages if the path bends mid-trajectory.
-      use_rotate_to_heading: true
+      # DISABLED: RPP's mid-path in-place re-rotate (together with RotationShim
+      # re-engaging on each setPlan) fires against the FROZEN transit plan and,
+      # once the robot has driven off poses.front(), rotates toward a STALE target
+      # → oscillation / wrong-heading runaway (hardware-confirmed 2026-06-20).
+      # With rotate_to_heading_once:true above, the shim does ONE start pivot then
+      # RPP PURSUES through any mid-path bends (smooth on the deadband chassis).
+      use_rotate_to_heading: false
       rotate_to_heading_min_angle: 0.785
       # Match the RotationShim values above (decisive pivot, clear of the
       # firmware deadband) so RPP's mid-path rotate-to-heading hand-off is
@@ -352,14 +377,16 @@ controller_server:
       # will corner-cut at reversals again — re-vendor the patch, don't flip this.
       enforce_path_inversion: false
       prune_distance: 1.0
-      max_robot_pose_search_dist: 1.5        # CRITICAL for dense coverage: bound the closest-pose search to
-                                             # 1.5 m ALONG THE PATH (arc-length, not euclidean). Default ~6 m
-                                             # spanned the U-turn into a neighbour swath, so a >0.18 m obstacle
-                                             # deviation snapped MPPI onto the wrong (physically-near but
-                                             # arc-length-distant) line. 1.5 m keeps tracking progress-local:
-                                             # mid-swath the neighbour is metres away in path length (excluded),
-                                             # near a swath end the F2C U-turn curve (<1 m) is still in-window
-                                             # so the transition stays smooth. No per-swath feeding needed.
+      max_robot_pose_search_dist: 1.0        # CRITICAL for the continuous full-path coverage goal: MPPI's
+                                             # PathHandler searches the closest pose only in the first N metres
+                                             # of the CURRENTLY PRUNED plan, then prunes the plan up to that
+                                             # pose. Live AREA4 runs (2026-06-22) confirmed one 376.72 m /
+                                             # 11350-pose continuous plan plus repeated 3-7 cm / 2-4.5 deg
+                                             # map->odom jumps while the robot sat near self-adjacent parts of
+                                             # that route. Keep this window just large enough to include the
+                                             # forward turn-around connector (~0.94 m for the nominal 0.30 m
+                                             # radius), but not so large that a localisation blip can re-anchor
+                                             # progress onto a nearby-yet-arc-length-distant portion.
       transform_tolerance: 0.3               # ARM TF jitter envelope
       temperature: 0.3
       gamma: 0.015
@@ -458,9 +485,12 @@ planner_server:
       downsample_costmap: false
       downsampling_factor: 2
       allow_unknown: false
-      max_iterations: 100000
+      # Raised from 100000 / 3.5 s: the enlarged 70 m global costmap (see
+      # global_costmap below) is a much larger grid, so give A* the budget to plan
+      # a long cross-garden transit without false-failing on the iteration/time cap.
+      max_iterations: 1000000
       max_on_approach_iterations: 1000
-      max_planning_time: 3.5
+      max_planning_time: 8.0
       cost_travel_multiplier: 2.0
       use_final_approach_orientation: false
       smoother:
@@ -596,15 +626,25 @@ global_costmap:
       # gardens: the costmap always centres on the robot, and obstacles are
       # detected in real time by the obstacle_layer.
       rolling_window: true
-      # 20×20 m rolling window (was 30×30). At resolution 0.05 m that is
-      # 400×400 = 160 k cells instead of 360 k — roughly 44 % of the data
-      # per publish tick, which brings the full-costmap publish rate back
-      # close to the 2 Hz target on ARM (was 1.3 Hz measured). LD19 useful
-      # range is 8 m and robot top speed is 0.3 m/s, so a 10 m planning
-      # radius from the rolling-window centre is still well beyond what
-      # Smac needs for strip-to-strip transit.
-      width: 20
-      height: 20
+      # 70×70 m rolling window (was 20×20). The 20 m window (±10 m radius) was
+      # sized for STRIP-TO-STRIP transit within an area, but AREA-TO-AREA transit
+      # to a distant zone exceeds it: a goal ~31 m away → SmacPlanner2D rejects it
+      # with "Goal Coordinates ... was outside bounds" → the mission reports
+      # AREA_UNREACHABLE and never moves (hardware-confirmed 2026-06-20 on a
+      # 40×44 m garden). ±35 m now covers cross-garden transits. Safe because the
+      # keepout_filter (below) makes everything outside the authorised zones LETHAL,
+      # so the planner cannot route outside even with the larger window.
+      # TRADE-OFF: at resolution 0.08 m this is 875×875 ≈ 766 k cells (vs ~62 k at
+      # 20 m), lowering the full-costmap publish rate on weaker ARM — the original
+      # reason for shrinking to 20 m. SIZING RULE: the window is centred on the
+      # robot and the planner needs the goal INSIDE it at plan time, so set
+      # width/height ≥ 2× the longest per-axis AREA-TO-AREA transit (on the
+      # 40×44 m test garden the farthest pair, Back↔Front Main, spans 34 m in Y →
+      # ~69 m → 70). To cut cells without losing coverage, coarsen THIS resolution
+      # (0.08→0.10 ≈ −36 % cells; the local costmap stays 0.05 m for fine
+      # avoidance) rather than shrinking the window.
+      width: 70
+      height: 70
       # keepout_filter makes the area boundary visible to the Smac planner so
       # transit paths never exit the authorised zone. The mask map_server_node
       # publishes is now the INVERSE/hard-boundary one: every cell outside the
