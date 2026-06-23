@@ -1703,7 +1703,319 @@
     "integralLimitTooltip": "Borne anti-emballement sur le terme intégral (PWM, max moteur 255)",
     "feedforward": "Anticipation",
     "pwmPerMps": "PWM par m/s",
-    "pwmPerMpsTooltip": "Échelle d'anticipation vitesse→PWM en boucle ouverte. Terme de déplacement dominant ; définit aussi la correspondance ralenti/zone morte. À modifier avec précaution."
+    "pwmPerMpsTooltip": "Échelle d'anticipation vitesse→PWM en boucle ouverte. Terme de déplacement dominant ; définit aussi la correspondance ralenti/zone morte. À modifier avec précaution.",
+    "common": {
+      "unknown": "Inconnu",
+      "never": "Jamais",
+      "unknownBackendError": "Erreur backend inconnue",
+      "noReportYetSentence": "Aucun rapport pour le moment.",
+      "noReportYet": "Aucun rapport pour le moment",
+      "cancel": "Annuler",
+      "close": "Fermer",
+      "passes": "Passes",
+      "enabled": "Activé",
+      "disabled": "Désactivé",
+      "applyPersistIfSuccessful": "Appliquer et sauvegarder en cas de succès",
+      "apply": "Appliquer",
+      "reportOnly": "Rapport uniquement",
+      "allowUndockIfDocked": "Autoriser le départ de la base si amarré",
+      "allow": "Autoriser",
+      "no": "Non",
+      "yes": "Oui",
+      "undockDistance": "Distance de sortie de base",
+      "undockDistanceTooltip": "Utilisé uniquement si la sortie de base est autorisée.",
+      "reportOnlyModeTitle": "Mode rapport uniquement",
+      "robotOnDockTitle": "Le robot est sur sa base",
+      "unavailable": "Indisponible",
+      "na": "n/d",
+      "units": {
+        "kg": "kg"
+      }
+    },
+    "tags": {
+      "validated": "validé",
+      "warning": "avertissement",
+      "notValidated": "non validé"
+    },
+    "job": {
+      "running": "en cours",
+      "completed": "terminé",
+      "completedWithWarning": "terminé avec avertissement",
+      "failed": "échoué",
+      "idle": "inactif"
+    },
+    "notifications": {
+      "applied": {
+        "title": "Réglage drive appliqué",
+        "description": "Les paramètres drive recommandés ont été sauvegardés dans mowgli_robot.yaml et synchronisés dans Réglages."
+      },
+      "loadReportFailed": {
+        "title": "Impossible de charger le dernier rapport d'auto-tuning drive"
+      },
+      "ffStarted": {
+        "title": "Calibration odométrie / feed-forward démarrée",
+        "applyDescription": "La calibration démarre avec les valeurs live actuelles de hardware_bridge à la passe 1, passe par /cmd_vel_tuning, puis applique la recommandation en direct uniquement si l'exécution se termine avec succès.",
+        "reportOnlyDescription": "Cette exécution en mode recommandation uniquement démarre avec les valeurs live actuelles de hardware_bridge à la passe 1, utilise /cmd_vel_tuning -> twist_mux et ne sauvegardera aucun paramètre."
+      },
+      "ffStartFailed": {
+        "title": "Échec du démarrage de la calibration odométrie / feed-forward"
+      },
+      "pidStarted": {
+        "title": "Auto-tuning PID drive démarré",
+        "applyDescription": "L'auto-tuning démarre avec les valeurs live actuelles de hardware_bridge à la passe 1, passe par /cmd_vel_tuning et ne sauvegarde la recommandation finale qu'après une exécution réussie.",
+        "reportOnlyDescription": "Cette exécution est en mode recommandation uniquement, démarre avec les valeurs live actuelles de hardware_bridge à la passe 1 et restaure ensuite les paramètres live d'origine."
+      },
+      "pidStartFailed": {
+        "title": "Échec du démarrage de l'auto-tuning PID drive"
+      },
+      "rollbackCompleted": {
+        "title": "Rollback du réglage drive terminé"
+      },
+      "rollbackFailed": {
+        "title": "Échec du rollback du réglage drive"
+      }
+    },
+    "alerts": {
+      "emergency": {
+        "title": "Urgence active",
+        "description": "Les assistants de calibration sont bloqués tant que l'urgence est active ou verrouillée."
+      },
+      "onDock": {
+        "title": "Le robot semble être sur sa base",
+        "description": "Les assistants refuseront de bouger tant que vous n'avez pas explicitement activé l'option de sortie de base dans la boîte de lancement."
+      },
+      "backendWarning": {
+        "title": "Avertissement backend de réglage drive"
+      }
+    },
+    "rollback": {
+      "confirm": {
+        "title": "Annuler le dernier réglage drive ?",
+        "bodyPrefix": "Cela restaure la dernière sauvegarde générée par",
+        "bodyMiddle": ", l'applique en direct à",
+        "bodySuffix": "et réécrit les valeurs restaurées dans",
+        "warning": "Utilisez ceci uniquement si vous voulez annuler le dernier résultat de tuning accepté.",
+        "ok": "Rollback du tuning"
+      }
+    },
+    "cards": {
+      "assistants": {
+        "title": "Assistants de calibration",
+        "calibrateButton": "Calibrer l'odométrie / le feed-forward",
+        "pidButton": "Auto-régler le PID drive",
+        "motionProfile": {
+          "title": "Profil de mouvement conservateur",
+          "description": "Les assistants utilisent une voie de tuning dédiée : commandes Twist horodatées sur /cmd_vel_tuning, routées via twist_mux vers /cmd_vel, avec des rampes douces et cmd_vel = 0 entre les segments de mouvement. La passe 1 démarre avec les valeurs live de hardware_bridge sauf si un mode explicite de reset au profil est activé plus tard."
+        }
+      }
+    },
+    "summary": {
+      "feedForward": {
+        "label": "Odométrie / feed-forward"
+      },
+      "pid": {
+        "label": "Auto-tuning PID"
+      },
+      "currentJob": {
+        "label": "Job en cours",
+        "startedAt": "{{mode}} démarré {{timestamp}}"
+      },
+      "lastReportDate": {
+        "label": "Date du dernier rapport"
+      },
+      "lastReportPath": {
+        "label": "Chemin du dernier rapport"
+      }
+    },
+    "actions": {
+      "startFeedForward": "Démarrer la calibration odométrie/feed-forward",
+      "startPid": "Démarrer l'auto-tuning PID",
+      "viewLastReport": "Voir le dernier rapport",
+      "rollbackLastTuning": "Annuler le dernier tuning"
+    },
+    "jobLog": {
+      "title": "Sortie live du job ({{mode}})",
+      "waiting": "En attente de sortie..."
+    },
+    "params": {
+      "kpLabel": "Kp",
+      "kiLabel": "Ki",
+      "kdLabel": "Kd"
+    },
+    "ffModal": {
+      "title": "Calibrer l'odométrie / le feed-forward",
+      "ok": "Démarrer la calibration",
+      "onDock": {
+        "description": "Activez explicitement la sortie de base ci-dessous si vous voulez que l'assistant recule avant de démarrer."
+      },
+      "workflow": {
+        "title": "Workflow",
+        "description": "Le robot effectue des passes rectilignes via /cmd_vel, compare l'odométrie roue à la RTK/GPS quand disponible, affine ticks_per_meter et wheel_pid_pwm_per_mps, puis écrit les recommandations dans un rapport YAML. L'application est optionnelle."
+      },
+      "fields": {
+        "distance": "Distance",
+        "testSpeed": "Vitesse de test",
+        "odomTimeout": "Timeout odométrie",
+        "odomTimeoutTooltip": "La sécurité de perte d'odométrie ne s'applique que tant que le robot est encore commandé au-dessus du seuil de faible vitesse.",
+        "autoUTurn": "Demi-tour automatique"
+      },
+      "resultApply": {
+        "title": "Une exécution réussie sauvegardera les valeurs feed-forward recommandées",
+        "description": "ticks_per_meter et wheel_pid_pwm_per_mps seront sauvegardés dans mowgli_robot.yaml et conservés en direct dans hardware_bridge."
+      },
+      "resultReportOnly": {
+        "description": "L'assistant générera un rapport YAML, utilisera les valeurs live actuelles de hardware_bridge pour la passe 1, puis restaurera ensuite les paramètres drive live d'origine."
+      }
+    },
+    "pidModal": {
+      "title": "Auto-régler le PID drive",
+      "ok": "Démarrer l'auto-tuning",
+      "precheck": {
+        "title": "Feed-forward / odométrie pas encore validés",
+        "description": "L'auto-tuning PID devrait être lancé uniquement après validation de ticks_per_meter et wheel_pid_pwm_per_mps. Vous pouvez continuer, mais la qualité de la recommandation risque d'être mauvaise."
+      },
+      "onDock": {
+        "description": "Activez explicitement la sortie de base ci-dessous si vous voulez que l'auto-tuning PID quitte la base avant de démarrer."
+      },
+      "workflow": {
+        "title": "Réponse indicielle pilotée en téléop",
+        "description": "Cet auto-tuning suit le chemin dédié /cmd_vel_tuning -> twist_mux, en démarrant avec les valeurs live de hardware_bridge à la passe 1 et en utilisant des rampes conservatrices : 0 → 0.2, 0.2 → 0.3, 0.3 → 0.1, 0.1 → 0. Le backend surveille le dépassement, le temps d'établissement, l'oscillation, la saturation intégrale et le déséquilibre entre roues."
+      },
+      "fields": {
+        "maxSpeed": "Vitesse maximale",
+        "segmentDuration": "Durée du segment"
+      },
+      "resultApply": {
+        "title": "Une exécution réussie sauvegardera les gains PID recommandés",
+        "description": "wheel_pid_kp, wheel_pid_ki, wheel_pid_kd et wheel_pid_integral_limit seront sauvegardés dans mowgli_robot.yaml et conservés en direct dans hardware_bridge."
+      },
+      "resultReportOnly": {
+        "description": "L'assistant démarrera avec les valeurs live de hardware_bridge à la passe 1, puis restaurera les gains PID roue live d'origine après génération du rapport."
+      }
+    },
+    "report": {
+      "title": "Dernier rapport de réglage drive",
+      "fields": {
+        "mode": "Mode du rapport",
+        "generatedAt": "Généré le",
+        "cmdVelTopic": "Topic cmd_vel",
+        "robotMass": "Masse du robot",
+        "internalTier": "Niveau interne de tuning",
+        "hardwareConfigPath": "Chemin de configuration matérielle",
+        "path": "Chemin"
+      },
+      "failure": {
+        "title": "La dernière exécution s'est terminée avec un défaut de mouvement"
+      },
+      "statusSnapshot": {
+        "title": "Instantané d'état",
+        "activeEmergency": "Urgence active",
+        "latchedEmergency": "Urgence verrouillée",
+        "isCharging": "En charge",
+        "mowerStatus": "État tondeuse",
+        "escPower": "Alim. ESC",
+        "wheelTickFactor": "Facteur ticks roue",
+        "lastWheelTickTimestamp": "Dernier horodatage de ticks roue"
+      },
+      "drivetrain": {
+        "title": "Diagnostics du train roulant",
+        "wheelRadius": "Rayon de roue",
+        "wheelCircumference": "Circonférence de roue",
+        "wheelRevPerMeter": "Tours de roue par mètre",
+        "encoderCountsPerWheelRev": "Comptes encodeur par tour de roue",
+        "configuredTicksPerRevolution": "Ticks configurés par révolution",
+        "gearboxRatio": "Rapport de réduction",
+        "derivedEstimateUnavailable": "Estimation dérivée indisponible",
+        "notes": "Notes"
+      },
+      "proposedParams": {
+        "title": "Paramètres proposés"
+      },
+      "recommendations": {
+        "title": "Recommandations et notes"
+      },
+      "rawYaml": {
+        "title": "YAML brut",
+        "empty": "Aucune charge utile YAML disponible."
+      },
+      "empty": "Aucun rapport de réglage drive disponible pour le moment.",
+      "tiers": {
+        "medium": "moyen",
+        "lightweight": "léger",
+        "heavy": "lourd",
+        "extraHeavy": "très lourd"
+      },
+      "trials": {
+        "title": "Résumé des essais ({{count}})",
+        "line1": "{{phase}} | cible {{target}} m/s | mesuré {{measured}} m/s",
+        "line2": "dépassement {{overshoot}} | établissement {{settling}} | blocage {{stall}} | osc {{osc}} | osc live {{liveOsc}} | qualité {{quality}}",
+        "warningsPrefix": "avertissements :",
+        "phases": {
+          "feedForward": "feed-forward",
+          "pid": "PID",
+          "response": "réponse"
+        },
+        "qualities": {
+          "ok": "ok",
+          "warning": "avertissement",
+          "poor": "mauvais"
+        }
+      }
+    },
+    "backend": {
+      "statusFetchFailed": "Échec de récupération de l'état du réglage drive",
+      "rollback": {
+        "successMessage": "Le rollback du réglage drive a été appliqué en direct et sauvegardé dans mowgli_robot.yaml"
+      },
+      "errors": {
+        "rollbackRequiresConfirm": "le rollback exige confirm=true",
+        "jobAlreadyRunning": "un job de réglage drive est déjà en cours",
+        "backupDidNotContainParameters": "le fichier de sauvegarde ne contenait pas de paramètres drive",
+        "commandFailed": "la commande de réglage drive a échoué",
+        "persistenceAfterApply": "le réglage drive a bien été appliqué en direct, mais la sauvegarde dans mowgli_robot.yaml a échoué",
+        "reportReadAfterRun": "le réglage drive s'est terminé, mais le rapport n'a pas pu être lu : {{error}}",
+        "containerNotFound": "conteneur {{container}} introuvable",
+        "readReport": "impossible de lire le rapport {{path}} : {{details}}",
+        "readBackup": "impossible de lire la sauvegarde {{path}} : {{details}}",
+        "listReports": "impossible de lister les rapports de réglage drive : {{details}}",
+        "marshalYaml": "échec de sérialisation YAML : {{error}}"
+      },
+      "validation": {
+        "distanceRange": "distance_m doit être entre 2 et 10",
+        "testSpeedRange": "test_speed_mps doit être > 0 et <= 0.5",
+        "odomTimeoutPositive": "odom_timeout_s doit être > 0",
+        "passesMin": "passes doit être >= 1",
+        "turnDirection": "turn_direction doit être 'left' ou 'right'",
+        "maxSpeedRange": "max_speed_mps doit être > 0 et <= 0.5",
+        "segmentDurationMin": "segment_duration_s doit être >= 2.0"
+      },
+      "summary": {
+        "feedForward": {
+          "noTrials": "Aucun essai feed-forward enregistré pour le moment.",
+          "stall": "Une passe feed-forward s'est bloquée ou n'a produit aucun mouvement de roue. Relancez après vérification de la mécanique, de la puissance de traction et de l'odométrie.",
+          "liveOscillation": "Une oscillation live a été observée pendant la calibration feed-forward. Vérifiez la mécanique et le feed-forward avant d'accepter le résultat.",
+          "noAcceptedRtk": "Un rapport feed-forward existe, mais aucune validation odométrique appuyée par RTK/GPS n'a été acceptée.",
+          "errorSummary": "Erreur odom {{odomPct}}%, erreur vitesse {{speedPct}}%.",
+          "validatedExcellent": "Validé avec une excellente odométrie ({{odomPct}}%) et une erreur feed-forward en vitesse acceptable ({{speedPct}}%).",
+          "validatedAcceptable": "Validé avec une odométrie acceptable ({{odomPct}}%) et une erreur feed-forward en vitesse de {{speedPct}}%.",
+          "postOscillationWarning": "La calibration feed-forward s'est terminée avec un avertissement d'oscillation en post-analyse (odom {{odomPct}}%, vitesse {{speedPct}}%). Vérifiez le rapport avant d'accepter le résultat.",
+          "completedWithWarnings": "La calibration s'est terminée avec des avertissements (odom {{odomPct}}%, vitesse {{speedPct}}%). Vérifiez les notes d'essai avant d'accepter le résultat."
+        },
+        "pid": {
+          "stopBehaviorReviewBraking": "Avertissement comportement à l'arrêt : un mouvement résiduel a été détecté après une commande à vitesse nulle. Les essais d'arrêt ont été exclus de la sélection des gains PID, mais le freinage/contrôle doit être revu avant d'accepter ce réglage.",
+          "stopBehaviorExcluded": "Avertissement comportement à l'arrêt : un mouvement résiduel a été détecté après une commande à vitesse nulle. Les essais d'arrêt ont été exclus de la sélection des gains PID.",
+          "noTrials": "Aucun rapport de réponse indicielle PID enregistré pour le moment.",
+          "stall": "Le rapport PID montre un palier bloqué ou sans mouvement. Relancez après vérification de la mécanique et du feed-forward.",
+          "liveOscillation": "Une oscillation live a été observée pendant le tuning PID. Relancez après avoir réduit l'agressivité ou revu le feed-forward.",
+          "overshootReached": "Le dépassement PID a atteint {{overshootPct}}% sur au moins un palier.",
+          "integralSaturation": "Le rapport PID suggère une saturation intégrale soutenue sous charge. Vérifiez KI et la limite intégrale avant d'accepter le résultat.",
+          "postOscillationUsable": "Une oscillation en post-analyse a été détectée sans oscillation live observée ; le dépassement max de {{overshootPct}}% reste exploitable pour un réglage conservateur.",
+          "completedWithWarnings": "La réponse PID s'est terminée avec des avertissements ; dépassement max {{overshootPct}}%. Vérifiez les notes d'essai avant d'accepter le résultat.",
+          "zeroSpeedExcludedSuffix": "Les essais d'arrêt à vitesse nulle ont été exclus de la sélection des gains.",
+          "validated": "Réponse indicielle PID validée avec un dépassement max de {{overshootPct}}%."
+        }
+      }
+    }
   },
   "settingsBattery": {
     "batteryThresholds": "Seuils de batterie",

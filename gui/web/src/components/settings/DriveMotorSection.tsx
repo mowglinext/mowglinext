@@ -17,11 +17,19 @@ import {
     Typography,
 } from "antd";
 import { DashboardOutlined, FileTextOutlined, HistoryOutlined, PlayCircleOutlined } from "@ant-design/icons";
+import type { TFunction } from "i18next";
 import { useDockingSensor } from "../../hooks/useDockingSensor.ts";
 import { useDriveTuning } from "../../hooks/useDriveTuning.ts";
 import { useEmergency } from "../../hooks/useEmergency.ts";
 import { useStatus } from "../../hooks/useStatus.ts";
 import { useTranslation } from "react-i18next";
+import {
+    formatDriveTuningBoolean,
+    translateDriveTuningBackendMessage,
+    translateDriveTuningInternalTier,
+    translateDriveTuningTrialPhase,
+    translateDriveTuningTrialQuality,
+} from "../../utils/driveTuningI18n.ts";
 
 const { Text, Paragraph } = Typography;
 
@@ -49,9 +57,9 @@ const formatDriveParamValue = (key: string, value: unknown) => {
     return String(value);
 };
 
-const formatReportNumber = (value?: number | null, digits = 3) => {
+const formatReportNumber = (t: TFunction, value?: number | null, digits = 3) => {
     if (typeof value !== "number" || !Number.isFinite(value)) {
-        return "Unknown";
+        return t("settingsDriveMotor.common.unknown");
     }
     return value.toFixed(digits);
 };
@@ -60,34 +68,34 @@ const hasFiniteNumber = (value?: number | null): value is number => (
     typeof value === "number" && Number.isFinite(value)
 );
 
-const statusTag = (status: "not_validated" | "validated" | "warning") => {
+const statusTag = (t: TFunction, status: "not_validated" | "validated" | "warning") => {
     if (status === "validated") {
-        return <Tag color="success">validated</Tag>;
+        return <Tag color="success">{t("settingsDriveMotor.tags.validated")}</Tag>;
     }
     if (status === "warning") {
-        return <Tag color="warning">warning</Tag>;
+        return <Tag color="warning">{t("settingsDriveMotor.tags.warning")}</Tag>;
     }
-    return <Tag>not validated</Tag>;
+    return <Tag>{t("settingsDriveMotor.tags.notValidated")}</Tag>;
 };
 
-const jobTag = (state?: string) => {
+const jobTag = (t: TFunction, state?: string) => {
     if (state === "running") {
-        return <Tag color="processing">running</Tag>;
+        return <Tag color="processing">{t("settingsDriveMotor.job.running")}</Tag>;
     }
     if (state === "succeeded") {
-        return <Tag color="success">completed</Tag>;
+        return <Tag color="success">{t("settingsDriveMotor.job.completed")}</Tag>;
     }
     if (state === "warning") {
-        return <Tag color="warning">completed with warning</Tag>;
+        return <Tag color="warning">{t("settingsDriveMotor.job.completedWithWarning")}</Tag>;
     }
     if (state === "failed") {
-        return <Tag color="error">failed</Tag>;
+        return <Tag color="error">{t("settingsDriveMotor.job.failed")}</Tag>;
     }
-    return <Tag>idle</Tag>;
+    return <Tag>{t("settingsDriveMotor.job.idle")}</Tag>;
 };
 
-const formatTimestamp = (value?: string) => {
-    if (!value) return "Never";
+const formatTimestamp = (t: TFunction, value?: string) => {
+    if (!value) return t("settingsDriveMotor.common.never");
     const parsed = new Date(value);
     return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 };
@@ -136,6 +144,22 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
 
     const feedForwardSummary = tuningStatus?.feed_forward;
     const pidSummary = tuningStatus?.pid;
+    const translateBackendMessage = (message?: string | null) => (
+        translateDriveTuningBackendMessage(t, message) ?? message ?? undefined
+    );
+    const formatBackendError = (error: any) => (
+        translateDriveTuningBackendMessage(t, error?.error?.error ?? error?.message)
+        ?? error?.error?.error
+        ?? error?.message
+        ?? t("settingsDriveMotor.common.unknownBackendError")
+    );
+    const translatedFeedForwardSummary = translateBackendMessage(feedForwardSummary?.message)
+        ?? t("settingsDriveMotor.common.noReportYetSentence");
+    const translatedPidSummary = translateBackendMessage(pidSummary?.message)
+        ?? t("settingsDriveMotor.common.noReportYetSentence");
+    const translatedJobError = translateBackendMessage(tuningStatus?.job?.error);
+    const translatedInternalTier = translateDriveTuningInternalTier(t, latestReport?.parsed?.internal_tuning_tier)
+        ?? t("settingsDriveMotor.common.unknown");
 
     useEffect(() => {
         const job = tuningStatus?.job;
@@ -156,8 +180,8 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                     acceptPersistedValues?.(persistedValues);
                     appliedJobIdsRef.current.add(job.id);
                     notification.success({
-                        message: "Drive tuning applied",
-                        description: "The recommended drive parameters were persisted into mowgli_robot.yaml and synced in Settings.",
+                        message: t("settingsDriveMotor.notifications.applied.title"),
+                        description: t("settingsDriveMotor.notifications.applied.description"),
                     });
                 }
             } catch {
@@ -168,7 +192,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
         return () => {
             cancelled = true;
         };
-    }, [acceptPersistedValues, loadLatestReport, notification, tuningStatus?.job]);
+    }, [acceptPersistedValues, loadLatestReport, notification, t, tuningStatus?.job]);
 
     const helperAlerts = useMemo(() => {
         const alerts: React.ReactNode[] = [];
@@ -178,8 +202,8 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                     key="emergency"
                     type="error"
                     showIcon
-                    message="Emergency active"
-                    description="Calibration assistants are blocked while emergency is active or latched."
+                    message={t("settingsDriveMotor.alerts.emergency.title")}
+                    description={t("settingsDriveMotor.alerts.emergency.description")}
                 />,
             );
         }
@@ -189,8 +213,8 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                     key="dock"
                     type="warning"
                     showIcon
-                    message="Robot appears to be on the dock"
-                    description="The assistants will refuse to move unless you explicitly enable the undock option in the launch dialog."
+                    message={t("settingsDriveMotor.alerts.onDock.title")}
+                    description={t("settingsDriveMotor.alerts.onDock.description")}
                 />,
             );
         }
@@ -200,13 +224,13 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                     key="backend"
                     type="warning"
                     showIcon
-                    message="Drive tuning backend warning"
-                    description={tuningError}
+                    message={t("settingsDriveMotor.alerts.backendWarning.title")}
+                    description={translateBackendMessage(tuningError)}
                 />,
             );
         }
         return alerts;
-    }, [isEmergencyActive, onDock, tuningError]);
+    }, [isEmergencyActive, onDock, t, tuningError]);
 
     const openLatestReport = async () => {
         try {
@@ -214,8 +238,8 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
             setReportOpen(true);
         } catch (e: any) {
             notification.error({
-                message: "Failed to load the last drive tuning report",
-                description: e?.error?.error ?? e?.message ?? "Unknown backend error",
+                message: t("settingsDriveMotor.notifications.loadReportFailed.title"),
+                description: formatBackendError(e),
             });
         }
     };
@@ -237,18 +261,18 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
             });
             setFfOpen(false);
             notification.success({
-                message: "Odometry / feed-forward calibration started",
+                message: t("settingsDriveMotor.notifications.ffStarted.title"),
                 description: values.apply
-                    ? "The calibration starts from the current live hardware_bridge values on pass 1, runs through /cmd_vel_tuning, then applies the recommendation live only if the run completes successfully."
-                    : "This recommendation-only run starts from the current live hardware_bridge values on pass 1, uses /cmd_vel_tuning -> twist_mux, and will not persist any parameter.",
+                    ? t("settingsDriveMotor.notifications.ffStarted.applyDescription")
+                    : t("settingsDriveMotor.notifications.ffStarted.reportOnlyDescription"),
             });
         } catch (e: any) {
             if (e?.errorFields) {
                 return;
             }
             notification.error({
-                message: "Failed to start odometry / feed-forward calibration",
-                description: e?.error?.error ?? e?.message ?? "Unknown backend error",
+                message: t("settingsDriveMotor.notifications.ffStartFailed.title"),
+                description: formatBackendError(e),
             });
         } finally {
             setStartingAction(null);
@@ -269,18 +293,18 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
             });
             setPidOpen(false);
             notification.success({
-                message: "PID auto-tune started",
+                message: t("settingsDriveMotor.notifications.pidStarted.title"),
                 description: values.apply
-                    ? "The autotune starts from the current live hardware_bridge values on pass 1, runs through /cmd_vel_tuning, and will persist the final recommendation only after a successful run."
-                    : "This run is recommendation-only, starts from the current live hardware_bridge values on pass 1, and restores the original live parameters afterwards.",
+                    ? t("settingsDriveMotor.notifications.pidStarted.applyDescription")
+                    : t("settingsDriveMotor.notifications.pidStarted.reportOnlyDescription"),
             });
         } catch (e: any) {
             if (e?.errorFields) {
                 return;
             }
             notification.error({
-                message: "Failed to start PID auto-tune",
-                description: e?.error?.error ?? e?.message ?? "Unknown backend error",
+                message: t("settingsDriveMotor.notifications.pidStartFailed.title"),
+                description: formatBackendError(e),
             });
         } finally {
             setStartingAction(null);
@@ -289,21 +313,22 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
 
     const confirmRollback = () => {
         modal.confirm({
-            title: "Rollback the last drive tuning?",
+            title: t("settingsDriveMotor.rollback.confirm.title"),
             content: (
                 <Space direction="vertical" size={8}>
                     <Text>
-                        This restores the last backup generated by <Text code>mowgli_tools tune_drive_pid</Text>, applies it live to
-                        <Text code> hardware_bridge</Text>, and writes the restored values back to <Text code>mowgli_robot.yaml</Text>.
+                        {t("settingsDriveMotor.rollback.confirm.bodyPrefix")} <Text code>mowgli_tools tune_drive_pid</Text>
+                        {t("settingsDriveMotor.rollback.confirm.bodyMiddle")} <Text code>hardware_bridge</Text>
+                        {t("settingsDriveMotor.rollback.confirm.bodySuffix")} <Text code>mowgli_robot.yaml</Text>.
                     </Text>
                     <Text type="warning">
-                        Use this only when you want to undo the last accepted tuning result.
+                        {t("settingsDriveMotor.rollback.confirm.warning")}
                     </Text>
                 </Space>
             ),
-            okText: "Rollback tuning",
+            okText: t("settingsDriveMotor.rollback.confirm.ok"),
             okType: "danger",
-            cancelText: "Cancel",
+            cancelText: t("settingsDriveMotor.common.cancel"),
             onOk: async () => {
                 try {
                     setRollingBack(true);
@@ -312,12 +337,13 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         acceptPersistedValues?.(response.restored);
                     }
                     notification.success({
-                        message: response?.message ?? "Drive tuning rollback completed",
+                        message: translateBackendMessage(response?.message)
+                            ?? t("settingsDriveMotor.notifications.rollbackCompleted.title"),
                     });
                 } catch (e: any) {
                     notification.error({
-                        message: "Failed to rollback drive tuning",
-                        description: e?.error?.error ?? e?.message ?? "Unknown backend error",
+                        message: t("settingsDriveMotor.notifications.rollbackFailed.title"),
+                        description: formatBackendError(e),
                     });
                 } finally {
                     setRollingBack(false);
@@ -351,7 +377,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
 
             <Card
                 size="small"
-                title="Calibration assistants"
+                title={t("settingsDriveMotor.cards.assistants.title")}
                 style={{ marginBottom: 16 }}
                 extra={
                     <Space wrap>
@@ -361,14 +387,14 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                             onClick={() => setFfOpen(true)}
                             disabled={runningJob || isEmergencyActive}
                         >
-                            Calibrate odometry / feed-forward
+                            {t("settingsDriveMotor.cards.assistants.calibrateButton")}
                         </Button>
                         <Button
                             icon={<PlayCircleOutlined />}
                             onClick={() => setPidOpen(true)}
                             disabled={runningJob || isEmergencyActive}
                         >
-                            Auto-tune drive PID
+                            {t("settingsDriveMotor.cards.assistants.pidButton")}
                         </Button>
                     </Space>
                 }
@@ -379,52 +405,55 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                     <Alert
                         type="info"
                         showIcon
-                        message="Conservative motion profile"
-                        description="The assistants use a dedicated tuning lane: stamped Twist commands on /cmd_vel_tuning, routed through twist_mux to /cmd_vel, with soft ramps and cmd_vel = 0 between motion segments. Pass 1 starts from the live hardware_bridge values unless an explicit reset-to-profile mode is enabled later."
+                        message={t("settingsDriveMotor.cards.assistants.motionProfile.title")}
+                        description={t("settingsDriveMotor.cards.assistants.motionProfile.description")}
                     />
 
                     <Descriptions size="small" column={1} bordered>
-                        <Descriptions.Item label="Odometry / feed-forward">
+                        <Descriptions.Item label={t("settingsDriveMotor.summary.feedForward.label")}>
                             <Space wrap>
-                                {statusTag(feedForwardSummary?.status ?? "not_validated")}
-                                <Text type="secondary">{feedForwardSummary?.message ?? "No report yet."}</Text>
+                                {statusTag(t, feedForwardSummary?.status ?? "not_validated")}
+                                <Text type="secondary">{translatedFeedForwardSummary}</Text>
                             </Space>
                         </Descriptions.Item>
-                        <Descriptions.Item label="PID auto-tune">
+                        <Descriptions.Item label={t("settingsDriveMotor.summary.pid.label")}>
                             <Space wrap>
-                                {statusTag(pidSummary?.status ?? "not_validated")}
-                                <Text type="secondary">{pidSummary?.message ?? "No report yet."}</Text>
+                                {statusTag(t, pidSummary?.status ?? "not_validated")}
+                                <Text type="secondary">{translatedPidSummary}</Text>
                             </Space>
                         </Descriptions.Item>
-                        <Descriptions.Item label="Current job">
+                        <Descriptions.Item label={t("settingsDriveMotor.summary.currentJob.label")}>
                             <Space wrap>
-                                {jobTag(tuningStatus?.job?.state)}
+                                {jobTag(t, tuningStatus?.job?.state)}
                                 {tuningStatus?.job && (
                                     <Text type="secondary">
-                                        {tuningStatus.job.mode.toUpperCase()} started {formatTimestamp(tuningStatus.job.started_at)}
+                                        {t("settingsDriveMotor.summary.currentJob.startedAt", {
+                                            mode: tuningStatus.job.mode.toUpperCase(),
+                                            timestamp: formatTimestamp(t, tuningStatus.job.started_at),
+                                        })}
                                     </Text>
                                 )}
                             </Space>
                         </Descriptions.Item>
-                        <Descriptions.Item label="Last report date">
-                            <Text>{formatTimestamp(latestReportMeta?.generated_at)}</Text>
+                        <Descriptions.Item label={t("settingsDriveMotor.summary.lastReportDate.label")}>
+                            <Text>{formatTimestamp(t, latestReportMeta?.generated_at)}</Text>
                         </Descriptions.Item>
-                        <Descriptions.Item label="Last report path">
+                        <Descriptions.Item label={t("settingsDriveMotor.summary.lastReportPath.label")}>
                             <Text code copyable={!!latestReportMeta?.report_path}>
-                                {latestReportMeta?.report_path ?? "No report yet"}
+                                {latestReportMeta?.report_path ?? t("settingsDriveMotor.common.noReportYet")}
                             </Text>
                         </Descriptions.Item>
                     </Descriptions>
 
                     <Space wrap>
                         <Button type="primary" onClick={() => setFfOpen(true)} disabled={runningJob || isEmergencyActive}>
-                            Start odometry/feed-forward calibration
+                            {t("settingsDriveMotor.actions.startFeedForward")}
                         </Button>
                         <Button onClick={() => setPidOpen(true)} disabled={runningJob || isEmergencyActive}>
-                            Start PID auto-tune
+                            {t("settingsDriveMotor.actions.startPid")}
                         </Button>
                         <Button icon={<FileTextOutlined />} onClick={openLatestReport} loading={loadingLatestReport}>
-                            View last report
+                            {t("settingsDriveMotor.actions.viewLastReport")}
                         </Button>
                         <Button
                             danger
@@ -433,7 +462,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                             disabled={runningJob}
                             loading={rollingBack}
                         >
-                            Rollback last tuning
+                            {t("settingsDriveMotor.actions.rollbackLastTuning")}
                         </Button>
                     </Space>
 
@@ -442,18 +471,20 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                             items={[
                                 {
                                     key: "job-log",
-                                    label: `Live job output (${tuningStatus.job.mode.toUpperCase()})`,
+                                    label: t("settingsDriveMotor.jobLog.title", {
+                                        mode: tuningStatus.job.mode.toUpperCase(),
+                                    }),
                                     children: (
                                         <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                                            {tuningStatus.job.error && (
+                                            {translatedJobError && (
                                                 <Alert
                                                     type={tuningStatus.job.state === "failed" ? "error" : "warning"}
                                                     showIcon
-                                                    message={tuningStatus.job.error}
+                                                    message={translatedJobError}
                                                 />
                                             )}
                                             <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0 }}>
-                                                {tuningStatus.job.logs?.trim() || "Waiting for output..."}
+                                                {tuningStatus.job.logs?.trim() || t("settingsDriveMotor.jobLog.waiting")}
                                             </pre>
                                         </Space>
                                     ),
@@ -478,7 +509,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                     <Form layout="vertical" size="small">
                         <Row gutter={[16, 0]}>
                             <Col xs={12} sm={8}>
-                                <Form.Item label="Kp" tooltip={t("settingsDriveMotor.kpTooltip")}>
+                                <Form.Item label={t("settingsDriveMotor.params.kpLabel")} tooltip={t("settingsDriveMotor.kpTooltip")}>
                                     <InputNumber
                                         value={values.wheel_pid_kp}
                                         onChange={(v) => onChange("wheel_pid_kp", v)}
@@ -488,7 +519,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
-                                <Form.Item label="Ki" tooltip={t("settingsDriveMotor.kiTooltip")}>
+                                <Form.Item label={t("settingsDriveMotor.params.kiLabel")} tooltip={t("settingsDriveMotor.kiTooltip")}>
                                     <InputNumber
                                         value={values.wheel_pid_ki}
                                         onChange={(v) => onChange("wheel_pid_ki", v)}
@@ -498,7 +529,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
-                                <Form.Item label="Kd" tooltip={t("settingsDriveMotor.kdTooltip")}>
+                                <Form.Item label={t("settingsDriveMotor.params.kdLabel")} tooltip={t("settingsDriveMotor.kdTooltip")}>
                                     <InputNumber
                                         value={values.wheel_pid_kd}
                                         onChange={(v) => onChange("wheel_pid_kd", v)}
@@ -543,12 +574,12 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
             </Card>
 
             <Modal
-                title="Calibrate odometry / feed-forward"
+                title={t("settingsDriveMotor.ffModal.title")}
                 open={ffOpen}
                 onCancel={() => setFfOpen(false)}
                 onOk={handleStartFeedForward}
-                okText="Start calibration"
-                cancelText="Cancel"
+                okText={t("settingsDriveMotor.ffModal.ok")}
+                cancelText={t("settingsDriveMotor.common.cancel")}
                 confirmLoading={startingAction === "ff"}
                 okButtonProps={{
                     disabled: isEmergencyActive || (onDock && !ffAllowUndock),
@@ -559,15 +590,15 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         <Alert
                             type="warning"
                             showIcon
-                            message="Robot is on the dock"
-                            description="Enable undock explicitly below if you want the assistant to reverse out before starting."
+                            message={t("settingsDriveMotor.common.robotOnDockTitle")}
+                            description={t("settingsDriveMotor.ffModal.onDock.description")}
                         />
                     )}
                     <Alert
                         type="info"
                         showIcon
-                        message="Workflow"
-                        description="The robot runs straight passes through /cmd_vel, compares wheel odometry against RTK/GPS when available, refines ticks_per_meter and wheel_pid_pwm_per_mps, then writes recommendations to a YAML report. Apply is optional."
+                        message={t("settingsDriveMotor.ffModal.workflow.title")}
+                        description={t("settingsDriveMotor.ffModal.workflow.description")}
                     />
                     <Form
                         form={ffForm}
@@ -585,47 +616,60 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                     >
                         <Row gutter={[16, 0]}>
                             <Col xs={24} sm={12}>
-                                <Form.Item name="distance_m" label="Distance" rules={[{ required: true }]}>
+                                <Form.Item name="distance_m" label={t("settingsDriveMotor.ffModal.fields.distance")} rules={[{ required: true }]}>
                                     <InputNumber min={2} max={10} step={0.5} precision={1} style={{ width: "100%" }} addonAfter="m" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item name="test_speed_mps" label="Test speed" rules={[{ required: true }]}>
+                                <Form.Item name="test_speed_mps" label={t("settingsDriveMotor.ffModal.fields.testSpeed")} rules={[{ required: true }]}>
                                     <InputNumber min={0.05} max={0.5} step={0.05} precision={2} style={{ width: "100%" }} addonAfter="m/s" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item name="passes" label="Passes" rules={[{ required: true }]}>
+                                <Form.Item name="passes" label={t("settingsDriveMotor.common.passes")} rules={[{ required: true }]}>
                                     <InputNumber min={1} max={10} step={1} precision={0} style={{ width: "100%" }} />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
                                 <Form.Item
                                     name="odom_timeout_s"
-                                    label="Odometry timeout"
-                                    tooltip="Lost-odometry safety only applies while the robot is still commanded above the low-speed threshold."
+                                    label={t("settingsDriveMotor.ffModal.fields.odomTimeout")}
+                                    tooltip={t("settingsDriveMotor.ffModal.fields.odomTimeoutTooltip")}
                                     rules={[{ required: true }]}
                                 >
                                     <InputNumber min={0.5} max={15} step={0.5} precision={1} style={{ width: "100%" }} addonAfter="s" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item name="auto_turn" label="Auto U-turn" valuePropName="checked">
-                                    <Switch checkedChildren="Enabled" unCheckedChildren="Disabled" />
+                                <Form.Item name="auto_turn" label={t("settingsDriveMotor.ffModal.fields.autoUTurn")} valuePropName="checked">
+                                    <Switch
+                                        checkedChildren={t("settingsDriveMotor.common.enabled")}
+                                        unCheckedChildren={t("settingsDriveMotor.common.disabled")}
+                                    />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item name="apply" label="Apply and persist if successful" valuePropName="checked">
-                                    <Switch checkedChildren="Apply" unCheckedChildren="Report only" />
+                                <Form.Item name="apply" label={t("settingsDriveMotor.common.applyPersistIfSuccessful")} valuePropName="checked">
+                                    <Switch
+                                        checkedChildren={t("settingsDriveMotor.common.apply")}
+                                        unCheckedChildren={t("settingsDriveMotor.common.reportOnly")}
+                                    />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item name="allow_undock" label="Allow undock if docked" valuePropName="checked">
-                                    <Switch checkedChildren="Allow" unCheckedChildren="No" />
+                                <Form.Item name="allow_undock" label={t("settingsDriveMotor.common.allowUndockIfDocked")} valuePropName="checked">
+                                    <Switch
+                                        checkedChildren={t("settingsDriveMotor.common.allow")}
+                                        unCheckedChildren={t("settingsDriveMotor.common.no")}
+                                    />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item name="undock_distance_m" label="Undock distance" tooltip="Used only when undock is enabled.">
+                                <Form.Item
+                                    name="undock_distance_m"
+                                    label={t("settingsDriveMotor.common.undockDistance")}
+                                    tooltip={t("settingsDriveMotor.common.undockDistanceTooltip")}
+                                >
                                     <InputNumber min={0.5} max={5} step={0.1} precision={1} style={{ width: "100%" }} addonAfter="m" />
                                 </Form.Item>
                             </Col>
@@ -635,27 +679,27 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         <Alert
                             type="success"
                             showIcon
-                            message="Successful run will persist the recommended feed-forward values"
-                            description="ticks_per_meter and wheel_pid_pwm_per_mps will be saved into mowgli_robot.yaml and kept live in hardware_bridge."
+                            message={t("settingsDriveMotor.ffModal.resultApply.title")}
+                            description={t("settingsDriveMotor.ffModal.resultApply.description")}
                         />
                     ) : (
                         <Alert
                             type="info"
                             showIcon
-                            message="Recommendation-only mode"
-                            description="The assistant will generate a YAML report, use the current live hardware_bridge values for pass 1, and restore the original live drive parameters afterwards."
+                            message={t("settingsDriveMotor.common.reportOnlyModeTitle")}
+                            description={t("settingsDriveMotor.ffModal.resultReportOnly.description")}
                         />
                     )}
                 </Space>
             </Modal>
 
             <Modal
-                title="Auto-tune drive PID"
+                title={t("settingsDriveMotor.pidModal.title")}
                 open={pidOpen}
                 onCancel={() => setPidOpen(false)}
                 onOk={handleStartPid}
-                okText="Start auto-tune"
-                cancelText="Cancel"
+                okText={t("settingsDriveMotor.pidModal.ok")}
+                cancelText={t("settingsDriveMotor.common.cancel")}
                 confirmLoading={startingAction === "pid"}
                 okButtonProps={{
                     disabled: isEmergencyActive || (onDock && !pidAllowUndock),
@@ -666,23 +710,23 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         <Alert
                             type="warning"
                             showIcon
-                            message="Feed-forward / odometry not validated yet"
-                            description="PID auto-tune should run only after ticks_per_meter and wheel_pid_pwm_per_mps were validated. You can still continue, but the recommendation quality may be poor."
+                            message={t("settingsDriveMotor.pidModal.precheck.title")}
+                            description={t("settingsDriveMotor.pidModal.precheck.description")}
                         />
                     )}
                     {onDock && !pidAllowUndock && (
                         <Alert
                             type="warning"
                             showIcon
-                            message="Robot is on the dock"
-                            description="Enable undock explicitly below if you want the PID auto-tune to leave the dock before running."
+                            message={t("settingsDriveMotor.common.robotOnDockTitle")}
+                            description={t("settingsDriveMotor.pidModal.onDock.description")}
                         />
                     )}
                     <Alert
                         type="info"
                         showIcon
-                        message="Teleop-based step response"
-                        description="This autotune follows the dedicated /cmd_vel_tuning -> twist_mux path, starting from the live hardware_bridge values on pass 1 and using conservative ramps: 0 → 0.2, 0.2 → 0.3, 0.3 → 0.1, 0.1 → 0. The backend monitors overshoot, settling, oscillation, integral saturation, and wheel imbalance."
+                        message={t("settingsDriveMotor.pidModal.workflow.title")}
+                        description={t("settingsDriveMotor.pidModal.workflow.description")}
                     />
                     <Form
                         form={pidForm}
@@ -698,32 +742,42 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                     >
                         <Row gutter={[16, 0]}>
                             <Col xs={24} sm={12}>
-                                <Form.Item name="max_speed_mps" label="Maximum speed" rules={[{ required: true }]}>
+                                <Form.Item name="max_speed_mps" label={t("settingsDriveMotor.pidModal.fields.maxSpeed")} rules={[{ required: true }]}>
                                     <InputNumber min={0.1} max={0.5} step={0.05} precision={2} style={{ width: "100%" }} addonAfter="m/s" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item name="segment_duration_s" label="Segment duration" rules={[{ required: true }]}>
+                                <Form.Item name="segment_duration_s" label={t("settingsDriveMotor.pidModal.fields.segmentDuration")} rules={[{ required: true }]}>
                                     <InputNumber min={2} max={20} step={0.5} precision={1} style={{ width: "100%" }} addonAfter="s" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item name="passes" label="Passes" rules={[{ required: true }]}>
+                                <Form.Item name="passes" label={t("settingsDriveMotor.common.passes")} rules={[{ required: true }]}>
                                     <InputNumber min={1} max={10} step={1} precision={0} style={{ width: "100%" }} />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item name="apply" label="Apply and persist if successful" valuePropName="checked">
-                                    <Switch checkedChildren="Apply" unCheckedChildren="Report only" />
+                                <Form.Item name="apply" label={t("settingsDriveMotor.common.applyPersistIfSuccessful")} valuePropName="checked">
+                                    <Switch
+                                        checkedChildren={t("settingsDriveMotor.common.apply")}
+                                        unCheckedChildren={t("settingsDriveMotor.common.reportOnly")}
+                                    />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item name="allow_undock" label="Allow undock if docked" valuePropName="checked">
-                                    <Switch checkedChildren="Allow" unCheckedChildren="No" />
+                                <Form.Item name="allow_undock" label={t("settingsDriveMotor.common.allowUndockIfDocked")} valuePropName="checked">
+                                    <Switch
+                                        checkedChildren={t("settingsDriveMotor.common.allow")}
+                                        unCheckedChildren={t("settingsDriveMotor.common.no")}
+                                    />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item name="undock_distance_m" label="Undock distance" tooltip="Used only when undock is enabled.">
+                                <Form.Item
+                                    name="undock_distance_m"
+                                    label={t("settingsDriveMotor.common.undockDistance")}
+                                    tooltip={t("settingsDriveMotor.common.undockDistanceTooltip")}
+                                >
                                     <InputNumber min={0.5} max={5} step={0.1} precision={1} style={{ width: "100%" }} addonAfter="m" />
                                 </Form.Item>
                             </Col>
@@ -733,48 +787,50 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         <Alert
                             type="success"
                             showIcon
-                            message="Successful run will persist the recommended PID gains"
-                            description="wheel_pid_kp, wheel_pid_ki, wheel_pid_kd, and wheel_pid_integral_limit will be saved into mowgli_robot.yaml and kept live in hardware_bridge."
+                            message={t("settingsDriveMotor.pidModal.resultApply.title")}
+                            description={t("settingsDriveMotor.pidModal.resultApply.description")}
                         />
                     ) : (
                         <Alert
                             type="info"
                             showIcon
-                            message="Recommendation-only mode"
-                            description="The assistant will start from the live hardware_bridge values on pass 1, then restore the original live wheel PID gains after the report is generated."
+                            message={t("settingsDriveMotor.common.reportOnlyModeTitle")}
+                            description={t("settingsDriveMotor.pidModal.resultReportOnly.description")}
                         />
                     )}
                 </Space>
             </Modal>
 
             <Modal
-                title="Last drive tuning report"
+                title={t("settingsDriveMotor.report.title")}
                 open={reportOpen}
                 onCancel={() => setReportOpen(false)}
-                footer={<Button onClick={() => setReportOpen(false)}>Close</Button>}
+                footer={<Button onClick={() => setReportOpen(false)}>{t("settingsDriveMotor.common.close")}</Button>}
                 width={900}
             >
                 {latestReport?.latest_report ? (
                     <Space direction="vertical" size={12} style={{ width: "100%" }}>
                         <Descriptions size="small" column={1} bordered>
-                            <Descriptions.Item label="Report mode">{latestReport.latest_report.mode.toUpperCase()}</Descriptions.Item>
-                            <Descriptions.Item label="Generated at">{formatTimestamp(latestReport.latest_report.generated_at)}</Descriptions.Item>
-                            <Descriptions.Item label="cmd_vel topic">{latestCmdVelTopic ?? "Unknown"}</Descriptions.Item>
-                            <Descriptions.Item label="Robot mass">
-                                {formatReportNumber(latestParsedReport?.robot_mass_kg, 2)}
-                                {hasFiniteNumber(latestParsedReport?.robot_mass_kg) ? " kg" : ""}
+                            <Descriptions.Item label={t("settingsDriveMotor.report.fields.mode")}>{latestReport.latest_report.mode.toUpperCase()}</Descriptions.Item>
+                            <Descriptions.Item label={t("settingsDriveMotor.report.fields.generatedAt")}>{formatTimestamp(t, latestReport.latest_report.generated_at)}</Descriptions.Item>
+                            <Descriptions.Item label={t("settingsDriveMotor.report.fields.cmdVelTopic")}>
+                                {latestCmdVelTopic ?? t("settingsDriveMotor.common.unknown")}
                             </Descriptions.Item>
-                            <Descriptions.Item label="Internal tuning tier">
-                                {latestParsedReport?.internal_tuning_tier ?? "Unknown"}
+                            <Descriptions.Item label={t("settingsDriveMotor.report.fields.robotMass")}>
+                                {formatReportNumber(t, latestParsedReport?.robot_mass_kg, 2)}
+                                {hasFiniteNumber(latestParsedReport?.robot_mass_kg) ? ` ${t("settingsDriveMotor.common.units.kg")}` : ""}
                             </Descriptions.Item>
-                            <Descriptions.Item label="Hardware config path">
+                            <Descriptions.Item label={t("settingsDriveMotor.report.fields.internalTier")}>
+                                {translatedInternalTier}
+                            </Descriptions.Item>
+                            <Descriptions.Item label={t("settingsDriveMotor.report.fields.hardwareConfigPath")}>
                                 {latestParsedReport?.hardware_config_path ? (
                                     <Text code copyable>{latestParsedReport.hardware_config_path}</Text>
                                 ) : (
-                                    "Unavailable"
+                                    t("settingsDriveMotor.common.unavailable")
                                 )}
                             </Descriptions.Item>
-                            <Descriptions.Item label="Path">
+                            <Descriptions.Item label={t("settingsDriveMotor.report.fields.path")}>
                                 <Text code copyable>{latestReport.latest_report.report_path}</Text>
                             </Descriptions.Item>
                         </Descriptions>
@@ -783,63 +839,63 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                             <Alert
                                 type="warning"
                                 showIcon
-                                message="Last run ended with a movement fault"
+                                message={t("settingsDriveMotor.report.failure.title")}
                                 description={latestFailureMessage}
                             />
                         )}
 
                         {latestStatusSnapshot && (
-                            <Descriptions size="small" column={2} bordered title="Status snapshot">
-                                <Descriptions.Item label="active_emergency">
-                                    {latestStatusSnapshot.active_emergency == null ? "Unknown" : String(latestStatusSnapshot.active_emergency)}
+                            <Descriptions size="small" column={2} bordered title={t("settingsDriveMotor.report.statusSnapshot.title")}>
+                                <Descriptions.Item label={t("settingsDriveMotor.report.statusSnapshot.activeEmergency")}>
+                                    {formatDriveTuningBoolean(t, latestStatusSnapshot.active_emergency)}
                                 </Descriptions.Item>
-                                <Descriptions.Item label="latched_emergency">
-                                    {latestStatusSnapshot.latched_emergency == null ? "Unknown" : String(latestStatusSnapshot.latched_emergency)}
+                                <Descriptions.Item label={t("settingsDriveMotor.report.statusSnapshot.latchedEmergency")}>
+                                    {formatDriveTuningBoolean(t, latestStatusSnapshot.latched_emergency)}
                                 </Descriptions.Item>
-                                <Descriptions.Item label="is_charging">
-                                    {latestStatusSnapshot.is_charging == null ? "Unknown" : String(latestStatusSnapshot.is_charging)}
+                                <Descriptions.Item label={t("settingsDriveMotor.report.statusSnapshot.isCharging")}>
+                                    {formatDriveTuningBoolean(t, latestStatusSnapshot.is_charging)}
                                 </Descriptions.Item>
-                                <Descriptions.Item label="mower_status">
-                                    {latestStatusSnapshot.mower_status == null ? "Unknown" : latestStatusSnapshot.mower_status}
+                                <Descriptions.Item label={t("settingsDriveMotor.report.statusSnapshot.mowerStatus")}>
+                                    {latestStatusSnapshot.mower_status == null ? t("settingsDriveMotor.common.unknown") : latestStatusSnapshot.mower_status}
                                 </Descriptions.Item>
-                                <Descriptions.Item label="esc_power">
-                                    {latestStatusSnapshot.esc_power == null ? "Unknown" : String(latestStatusSnapshot.esc_power)}
+                                <Descriptions.Item label={t("settingsDriveMotor.report.statusSnapshot.escPower")}>
+                                    {formatDriveTuningBoolean(t, latestStatusSnapshot.esc_power)}
                                 </Descriptions.Item>
-                                <Descriptions.Item label="wheel_tick_factor">
+                                <Descriptions.Item label={t("settingsDriveMotor.report.statusSnapshot.wheelTickFactor")}>
                                     {latestStatusSnapshot.wheel_tick_factor == null
-                                        ? "Unknown"
-                                        : formatReportNumber(latestStatusSnapshot.wheel_tick_factor, 3)}
+                                        ? t("settingsDriveMotor.common.unknown")
+                                        : formatReportNumber(t, latestStatusSnapshot.wheel_tick_factor, 3)}
                                 </Descriptions.Item>
-                                <Descriptions.Item label="last_wheel_tick_timestamp" span={2}>
+                                <Descriptions.Item label={t("settingsDriveMotor.report.statusSnapshot.lastWheelTickTimestamp")} span={2}>
                                     {latestStatusSnapshot.last_wheel_tick_timestamp
-                                        ? formatTimestamp(latestStatusSnapshot.last_wheel_tick_timestamp)
-                                        : "Unknown"}
+                                        ? formatTimestamp(t, latestStatusSnapshot.last_wheel_tick_timestamp)
+                                        : t("settingsDriveMotor.common.unknown")}
                                 </Descriptions.Item>
                             </Descriptions>
                         )}
 
                         {latestDrivetrain && (
-                            <Descriptions size="small" column={2} bordered title="Drivetrain diagnostics">
-                                <Descriptions.Item label="wheel_radius_m">
-                                    {formatReportNumber(latestDrivetrain.wheel_radius_m)}
+                            <Descriptions size="small" column={2} bordered title={t("settingsDriveMotor.report.drivetrain.title")}>
+                                <Descriptions.Item label={t("settingsDriveMotor.report.drivetrain.wheelRadius")}>
+                                    {formatReportNumber(t, latestDrivetrain.wheel_radius_m)}
                                 </Descriptions.Item>
-                                <Descriptions.Item label="wheel_circumference_m">
-                                    {formatReportNumber(latestDrivetrain.wheel_circumference_m)}
+                                <Descriptions.Item label={t("settingsDriveMotor.report.drivetrain.wheelCircumference")}>
+                                    {formatReportNumber(t, latestDrivetrain.wheel_circumference_m)}
                                 </Descriptions.Item>
-                                <Descriptions.Item label="wheel_rev_per_meter">
-                                    {formatReportNumber(latestDrivetrain.estimated_wheel_revolutions_per_meter)}
+                                <Descriptions.Item label={t("settingsDriveMotor.report.drivetrain.wheelRevPerMeter")}>
+                                    {formatReportNumber(t, latestDrivetrain.estimated_wheel_revolutions_per_meter)}
                                 </Descriptions.Item>
-                                <Descriptions.Item label="encoder_counts_per_wheel_rev">
-                                    {formatReportNumber(latestDrivetrain.estimated_encoder_counts_per_wheel_revolution)}
+                                <Descriptions.Item label={t("settingsDriveMotor.report.drivetrain.encoderCountsPerWheelRev")}>
+                                    {formatReportNumber(t, latestDrivetrain.estimated_encoder_counts_per_wheel_revolution)}
                                 </Descriptions.Item>
-                                <Descriptions.Item label="configured_ticks_per_revolution">
-                                    {formatReportNumber(latestDrivetrain.configured_ticks_per_revolution)}
+                                <Descriptions.Item label={t("settingsDriveMotor.report.drivetrain.configuredTicksPerRevolution")}>
+                                    {formatReportNumber(t, latestDrivetrain.configured_ticks_per_revolution)}
                                 </Descriptions.Item>
-                                <Descriptions.Item label="gearbox_ratio">
-                                    Derived estimate unavailable
+                                <Descriptions.Item label={t("settingsDriveMotor.report.drivetrain.gearboxRatio")}>
+                                    {t("settingsDriveMotor.report.drivetrain.derivedEstimateUnavailable")}
                                 </Descriptions.Item>
                                 {!!latestDrivetrain.notes?.length && (
-                                    <Descriptions.Item label="Notes" span={2}>
+                                    <Descriptions.Item label={t("settingsDriveMotor.report.drivetrain.notes")} span={2}>
                                         {latestDrivetrain.notes.join(" | ")}
                                     </Descriptions.Item>
                                 )}
@@ -847,7 +903,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         )}
 
                         {latestParsedReport?.proposed_params && (
-                            <Descriptions size="small" bordered column={2} title="Proposed parameters">
+                            <Descriptions size="small" bordered column={2} title={t("settingsDriveMotor.report.proposedParams.title")}>
                                 {Object.entries(latestParsedReport.proposed_params).map(([key, value]) => (
                                     <Descriptions.Item key={key} label={key}>
                                         {formatDriveParamValue(key, value)}
@@ -857,7 +913,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         )}
 
                         {latestReasons.length > 0 && (
-                            <Card size="small" title="Recommendations and notes">
+                            <Card size="small" title={t("settingsDriveMotor.report.recommendations.title")}>
                                 <Space direction="vertical" size={6} style={{ width: "100%" }}>
                                     {latestReasons.map((reason, index) => (
                                         <Text key={`${index}-${reason}`}>{reason}</Text>
@@ -871,7 +927,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                 items={[
                                     {
                                         key: "trial-summary",
-                                        label: `Trial summary (${latestTrials.length})`,
+                                        label: t("settingsDriveMotor.report.trials.title", { count: latestTrials.length }),
                                         children: (
                                             <Space direction="vertical" size={10} style={{ width: "100%" }}>
                                                 {latestTrials.map((trial) => (
@@ -879,14 +935,27 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                                         <Space direction="vertical" size={4} style={{ width: "100%" }}>
                                                             <Text strong>{trial.name}</Text>
                                                             <Text type="secondary">
-                                                                {trial.phase} | target {trial.target_speed.toFixed(2)} m/s | measured {trial.measured_speed_mean.toFixed(3)} m/s
+                                                                {t("settingsDriveMotor.report.trials.line1", {
+                                                                    phase: translateDriveTuningTrialPhase(t, trial.phase),
+                                                                    target: trial.target_speed.toFixed(2),
+                                                                    measured: trial.measured_speed_mean.toFixed(3),
+                                                                })}
                                                             </Text>
                                                             <Text type="secondary">
-                                                                overshoot {trial.overshoot.toFixed(3)} | settling {trial.settling_time ?? "n/a"} | stall {String(trial.stall_detected)} | osc {String(trial.oscillation_detected)} | live osc {String(!!trial.live_oscillation_detected)} | quality {trial.trial_quality ?? "ok"}
+                                                                {t("settingsDriveMotor.report.trials.line2", {
+                                                                    overshoot: trial.overshoot.toFixed(3),
+                                                                    settling: trial.settling_time == null
+                                                                        ? t("settingsDriveMotor.common.na")
+                                                                        : trial.settling_time.toFixed(3),
+                                                                    stall: formatDriveTuningBoolean(t, trial.stall_detected),
+                                                                    osc: formatDriveTuningBoolean(t, trial.oscillation_detected),
+                                                                    liveOsc: formatDriveTuningBoolean(t, !!trial.live_oscillation_detected),
+                                                                    quality: translateDriveTuningTrialQuality(t, trial.trial_quality),
+                                                                })}
                                                             </Text>
                                                             {!!trial.warnings?.length && (
                                                                 <Text type="warning">
-                                                                    warnings: {trial.warnings.join(" | ")}
+                                                                    {t("settingsDriveMotor.report.trials.warningsPrefix")} {trial.warnings.join(" | ")}
                                                                 </Text>
                                                             )}
                                                         </Space>
@@ -899,14 +968,14 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                             />
                         )}
 
-                        <Card size="small" title="Raw YAML">
+                        <Card size="small" title={t("settingsDriveMotor.report.rawYaml.title")}>
                             <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0 }}>
-                                {latestReport.raw_yaml?.trim() || "No YAML payload available."}
+                                {latestReport.raw_yaml?.trim() || t("settingsDriveMotor.report.rawYaml.empty")}
                             </pre>
                         </Card>
                     </Space>
                 ) : (
-                    <Alert type="info" showIcon message="No drive tuning report available yet." />
+                    <Alert type="info" showIcon message={t("settingsDriveMotor.report.empty")} />
                 )}
             </Modal>
         </div>
