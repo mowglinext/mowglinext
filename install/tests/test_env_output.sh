@@ -146,6 +146,33 @@ else
   assert_not_contains "USB preset does not leak GPS_BY_ID" "$legacy_by_id_key" "$usb_env"
 fi
 
+section "install/.preset keeps GNSS_RECEIVER_FAMILY explicit through docker/.env"
+
+repo_unicore="$SANDBOX/repo_unicore"
+sandbox_repo "$repo_unicore"
+harness_init "$repo_unicore"
+
+cat > "$repo_unicore/install/.preset" <<'EOF'
+GNSS_RECEIVER_FAMILY=unicore
+GNSS_SERIAL_DEVICE=/dev/ttyAMA4
+GNSS_SERIAL_BAUD=921600
+LIDAR_ENABLED=false
+LIDAR_TYPE=none
+TFLUNA_FRONT_ENABLED=false
+TFLUNA_EDGE_ENABLED=false
+EOF
+
+load_preset_file "$repo_unicore/install/.preset"
+PRESET_LOADED=true
+
+if ! harness_run; then
+  fail "harness_run for install/.preset Unicore GNSS preset" "non-zero exit"
+else
+  unicore_env="$(cat "$repo_unicore/docker/.env")"
+  assert_contains "install/.preset writes GNSS_RECEIVER_FAMILY=unicore" "GNSS_RECEIVER_FAMILY=unicore" "$unicore_env"
+  assert_contains "install/.preset keeps GNSS_BACKEND=universal" "GNSS_BACKEND=universal" "$unicore_env"
+fi
+
 section "Custom feature image tags persist into docker/.env"
 
 repo_feature="$SANDBOX/repo_feature"
