@@ -81,6 +81,20 @@ def _wrap_pi(a: float) -> float:
     return a
 
 
+def _safe_float(v: str) -> Optional[float]:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(v: str) -> Optional[int]:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 # -----------------------------------------------------------------------------
 # QoS profiles
 # -----------------------------------------------------------------------------
@@ -176,6 +190,21 @@ class LatestState:
     # --- Dock heading (when charging) ---
     gnss_heading_yaw_rad: Optional[float] = None
 
+    # --- Yaw-source attribution (diagnose 180° flip / lever-arm jumps) ---
+    # COG yaw = GPS course-over-ground (cog_to_imu_node) — the physical
+    # travel direction. fg_yaw = fusion_graph's own published yaw. The
+    # gap between cog_yaw, fg_yaw, and fusion_yaw_rad localises a yaw
+    # corruption to the COG unary vs gyro integration vs the publish path.
+    cog_yaw_rad: Optional[float] = None
+    cog_yaw_var: Optional[float] = None
+    fg_yaw_rad: Optional[float] = None
+    # fusion_graph diagnostics: yaw marginal cov, online gyro bias, and the
+    # cumulative wrong-fix reject counter (diffed across samples for a rate).
+    fg_cov_yawyaw: Optional[float] = None
+    fg_gyro_bias_z: Optional[float] = None
+    fg_gps_rejects_wrongfix: Optional[int] = None
+    fg_cog_flip_recoveries: Optional[int] = None
+
     # --- BT / status ---
     bt_state: Optional[int] = None
     bt_state_name: Optional[str] = None
@@ -247,6 +276,7 @@ class MowSessionMonitor(Node):
         self.start_fusion_xy: Optional[tuple[float, float]] = None
         self.peak_fusion_gps_err = 0.0
         self.peak_wheel_gyro_yaw_drift = 0.0
+        self.peak_cog_fusion_yaw_gap = 0.0
 
         # --- RTK covariance-drop check state ---
         # See the comment block above RTK_FIXED_GPS_COV_THRESHOLD for why this
@@ -284,6 +314,17 @@ class MowSessionMonitor(Node):
         sub("/gps/fix", NavSatFix, self._gps_fix_cb, QOS_SENSOR)
         sub("/gps/absolute_pose", PoseWithCovarianceStamped, self._gps_abs_cb, QOS_RELIABLE)
         sub("/gnss/heading", Imu, self._gnss_heading_cb, QOS_RELIABLE)
+
+        # Yaw-source attribution: COG (GPS travel direction), fusion_graph's
+        # own yaw, and its diagnostics. cog_to_imu / fusion publish these
+        # BEST_EFFORT, so subscribe with sensor QoS.
+        sub("/imu/cog_heading", Imu, self._cog_heading_cb, QOS_SENSOR)
+        sub("/imu/fg_yaw", Imu, self._fg_yaw_cb, QOS_SENSOR)
+        try:
+            from diagnostic_msgs.msg import DiagnosticArray  # type: ignore
+            sub("/fusion_graph/diagnostics", DiagnosticArray, self._fg_diag_cb, QOS_RELIABLE)
+        except ImportError as exc:
+            self.get_logger().warn(f"diagnostic_msgs not available: {exc} — fg diagnostics will be missing.")
 
         # BT + hardware state — imported lazily so we only require the
         # mowgli_interfaces package when those topics are available
@@ -452,6 +493,35 @@ class MowSessionMonitor(Node):
                 msg.orientation.z, msg.orientation.w
             )
 
+    def _cog_heading_cb(self, msg: Imu) -> None:
+        with self.state_lock:
+            self.state.cog_yaw_rad = _quat_to_yaw(
+                msg.orientation.z, msg.orientation.w
+            )
+            var = msg.orientation_covariance[8]
+            self.state.cog_yaw_var = float(var) if var and var > 0.0 else None
+
+    def _fg_yaw_cb(self, msg: Imu) -> None:
+        with self.state_lock:
+            self.state.fg_yaw_rad = _quat_to_yaw(
+                msg.orientation.z, msg.orientation.w
+            )
+
+    def _fg_diag_cb(self, msg) -> None:
+        # DiagnosticArray with key/value pairs published by fusion_graph_node
+        # (cov_yawyaw, cog_flip_recoveries, gps_rejects_wrongfix, ...).
+        with self.state_lock:
+            for status in msg.status:
+                for kv in status.values:
+                    if kv.key == "cov_yawyaw":
+                        self.state.fg_cov_yawyaw = _safe_float(kv.value)
+                    elif kv.key == "gyro_bias_z_rad_per_s":
+                        self.state.fg_gyro_bias_z = _safe_float(kv.value)
+                    elif kv.key == "gps_rejects_wrongfix":
+                        self.state.fg_gps_rejects_wrongfix = _safe_int(kv.value)
+                    elif kv.key == "cog_flip_recoveries":
+                        self.state.fg_cog_flip_recoveries = _safe_int(kv.value)
+
     def _bt_cb(self, msg) -> None:
         with self.state_lock:
             self.state.bt_state = int(msg.state)
@@ -577,6 +647,24 @@ class MowSessionMonitor(Node):
                     self.peak_wheel_gyro_yaw_drift, abs(wheel_gyro_drift)
                 )
 
+            # --- Yaw-source disagreement (180° flip / lever-arm corruption) ---
+            # cog_minus_fusion ≈ ±180° is the signature of the East→turn fault:
+            # the fused yaw is flipped vs the GPS travel direction, so the
+            # gps_x lever-arm projects position to the wrong side.
+            cog_minus_fusion_deg = None
+            if s.cog_yaw_rad is not None and s.fusion_yaw_rad is not None:
+                cog_minus_fusion_deg = math.degrees(
+                    _wrap_pi(s.cog_yaw_rad - s.fusion_yaw_rad)
+                )
+                self.peak_cog_fusion_yaw_gap = max(
+                    self.peak_cog_fusion_yaw_gap, abs(cog_minus_fusion_deg)
+                )
+            fg_minus_fusion_deg = None
+            if s.fg_yaw_rad is not None and s.fusion_yaw_rad is not None:
+                fg_minus_fusion_deg = math.degrees(
+                    _wrap_pi(s.fg_yaw_rad - s.fusion_yaw_rad)
+                )
+
             # --- Distance to plan goal ---
             dist_to_goal = None
             if (
@@ -632,6 +720,19 @@ class MowSessionMonitor(Node):
                 },
                 "gps_absolute_pose": {
                     "x": s.gps_abs_x, "y": s.gps_abs_y,
+                },
+                "yaw_sources": {
+                    # COG = GPS travel direction (cog_to_imu); fg = fusion_graph's
+                    # published yaw; fusion = /odometry/filtered_map yaw.
+                    "cog_deg": math.degrees(s.cog_yaw_rad) if s.cog_yaw_rad is not None else None,
+                    "cog_var": s.cog_yaw_var,
+                    "fg_deg": math.degrees(s.fg_yaw_rad) if s.fg_yaw_rad is not None else None,
+                    "cog_minus_fusion_deg": cog_minus_fusion_deg,
+                    "fg_minus_fusion_deg": fg_minus_fusion_deg,
+                    "cov_yawyaw": s.fg_cov_yawyaw,
+                    "gyro_bias_z": s.fg_gyro_bias_z,
+                    "gps_rejects_wrongfix": s.fg_gps_rejects_wrongfix,
+                    "cog_flip_recoveries": s.fg_cog_flip_recoveries,
                 },
                 "slam": {
                     # /slam/pose_cov, already in GPS map frame
@@ -804,6 +905,7 @@ class MowSessionMonitor(Node):
                 "session_straight_line_displacement_m": fusion_xy_travel,
                 "peak_fusion_gps_error_m": self.peak_fusion_gps_err,
                 "peak_wheel_gyro_yaw_drift_deg": self.peak_wheel_gyro_yaw_drift,
+                "peak_cog_fusion_yaw_gap_deg": self.peak_cog_fusion_yaw_gap,
                 "rtk_cov_check": {
                     "rtk_fixed_arrivals": self.rtk_fixed_arrivals,
                     "ok": self.rtk_cov_checks_ok,
