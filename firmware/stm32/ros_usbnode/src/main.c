@@ -915,14 +915,29 @@ void debug_printf(const char *fmt, ...)
 }
 
 #if BOARD_HAS_MASTER_USART
+/* Upper bound (ms) on the wait for the previous MASTER USART DMA to finish.
+ * At 115200 8N1 the longest debug string (~200 B) transmits in ~17 ms, so 25 ms
+ * never drops a normal message yet stays under the 40 ms window watchdog so a
+ * stuck busy flag can never starve the main loop into a WWDG reset. */
+#define MASTER_TX_TIMEOUT_MS 25u
 /*
  * Send message via MASTER USART (DMA Normal Mode)
  */
 void MASTER_Transmit(uint8_t *buffer, uint8_t len)
 {
-  // wait until tx buffers are free (send complete)
+  /* Wait (bounded) for the previous DMA TX to complete. If its TX-complete
+   * callback was ever missed and master_tx_busy is stuck, time out and DROP
+   * this message instead of spinning forever — spinning would starve the main
+   * loop and trip the watchdog, and overwriting master_tx_buffer mid-DMA would
+   * corrupt an in-flight transfer. The MASTER USART only carries debug output,
+   * so dropping a message is harmless. */
+  uint32_t wait_start = HAL_GetTick();
   while (master_tx_busy)
   {
+    if ((HAL_GetTick() - wait_start) > MASTER_TX_TIMEOUT_MS)
+    {
+      return;
+    }
   }
   master_tx_busy = 1;
   // copy into our master_tx_buffer
@@ -1014,10 +1029,12 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 #if BOARD_HAS_MASTER_USART
   if (huart->Instance == MASTER_USART_INSTANCE)
   {
-    if (__HAL_USART_GET_FLAG(&MASTER_USART_Handler, USART_FLAG_TC))
-    {
-      master_tx_busy = 0;
-    }
+    /* HAL invokes this callback on TX completion, so release the busy flag
+     * unconditionally. It was previously gated on a re-read of USART_FLAG_TC;
+     * when TC had not yet latched at callback time the flag was left set
+     * forever, so the next MASTER_Transmit() spun in its busy-wait, starved the
+     * main loop, and the window watchdog reset the board. */
+    master_tx_busy = 0;
   }
 #endif
 }
