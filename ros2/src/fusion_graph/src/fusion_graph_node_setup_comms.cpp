@@ -112,12 +112,8 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
   // Commanded-speed fallback for the mobile GNSS wrong-fix gate. Wheel odom is
   // the preferred motion source, but if it stalls briefly while Nav2 keeps
   // commanding motion we still need a plausible lower bound on travel.
-  sub_cmd_nav_ =
-      create_subscription<geometry_msgs::msg::TwistStamped>("/cmd_vel_nav",
-                                                            50,
-                                                            std::bind(&FusionGraphNode::OnCmdVelNav,
-                                                                      this,
-                                                                      std::placeholders::_1));
+  sub_cmd_nav_ = create_subscription<geometry_msgs::msg::TwistStamped>(
+      "/cmd_vel_nav", 50, std::bind(&FusionGraphNode::OnCmdVelNav, this, std::placeholders::_1));
 
   // /imu/cog_heading and /imu/mag_yaw are published BEST_EFFORT by
   // cog_to_imu.py and mag_yaw_publisher.py — use SensorDataQoS or
@@ -343,248 +339,212 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
                         });
 
   // Diagnostics timer at 1 Hz — coarse, just for the session monitor.
-  diag_timer_ =
-      create_wall_timer(std::chrono::seconds(1),
-                        [this]()
-                        {
-                          auto stats = graph_->Stats();
-                          auto snap = graph_->LatestSnapshot();
+  diag_timer_ = create_wall_timer(
+      std::chrono::seconds(1),
+      [this]()
+      {
+        auto stats = graph_->Stats();
+        auto snap = graph_->LatestSnapshot();
 
-                          diagnostic_msgs::msg::DiagnosticArray msg;
-                          msg.header.stamp = this->now();
-                          diagnostic_msgs::msg::DiagnosticStatus s;
-                          s.name = "fusion_graph";
-                          s.level = diagnostic_msgs::msg::DiagnosticStatus::OK;
-                          s.message = graph_->IsInitialized() ? "running" : "waiting init";
+        diagnostic_msgs::msg::DiagnosticArray msg;
+        msg.header.stamp = this->now();
+        diagnostic_msgs::msg::DiagnosticStatus s;
+        s.name = "fusion_graph";
+        s.level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+        s.message = graph_->IsInitialized() ? "running" : "waiting init";
 
-                          auto add = [&s](const std::string& k, const std::string& v)
-                          {
-                            diagnostic_msgs::msg::KeyValue kv;
-                            kv.key = k;
-                            kv.value = v;
-                            s.values.push_back(kv);
-                          };
-                          add("total_nodes", std::to_string(stats.total_nodes));
-                          add("scans_attached", std::to_string(stats.scans_attached));
-                          add("loop_closures", std::to_string(stats.loop_closures));
-                          add("scans_received", std::to_string(scans_received_));
-                          add("scan_matches_ok", std::to_string(scan_matches_ok_));
-                          add("scan_matches_fail", std::to_string(scan_matches_fail_));
-                          // RTK-anchored keyframe map (use_keyframe_map): map
-                          // size + scan-to-keyframe absolute-match health.
-                          add("keyframes_total", std::to_string(graph_->KeyframeCount()));
-                          add("kf_matches_ok", std::to_string(kf_matches_ok_));
-                          add("kf_matches_fail", std::to_string(kf_matches_fail_));
-                          // Robustness-pass health counters. Each is a
-                          // cumulative count since process start; the
-                          // session monitor diffs consecutive samples
-                          // to get a rate. A spike on any of these is
-                          // worth surfacing — see PR notes.
-                          add("gps_rejects_wrongfix", std::to_string(stats.gps_rejects_wrongfix));
-                          add("gps_downweights", std::to_string(gps_downweights_wrongfix_mobile_));
-                          add("gps_downweights_wrongfix_mobile",
-                              std::to_string(gps_downweights_wrongfix_mobile_));
-                          add("icp_rejects_rmse", std::to_string(stats.icp_rejects_rmse));
-                          add("icp_rejects_inliers", std::to_string(stats.icp_rejects_inliers));
-                          add("icp_rejects_sanity", std::to_string(stats.icp_rejects_sanity));
-                          add("icp_rejects_divergence",
-                              std::to_string(stats.icp_rejects_divergence));
-                          add("stationary_hand_push", std::to_string(stats.stationary_hand_push));
-                          add("slip_veto", std::to_string(stats.slip_veto));
-                          add("live_nodes", std::to_string(graph_->LiveNodeCount()));
-                          // Gyro bias telemetry (item #3).
-                          {
-                            char buf[32];
-                            std::snprintf(buf, sizeof(buf), "%.5f", stats.gyro_bias_z);
-                            add("gyro_bias_z_rad_per_s", buf);
-                            add("gyro_bias_updates", std::to_string(stats.gyro_bias_updates));
-                          }
-                          // Adaptive process-noise telemetry.
-                          {
-                            char buf[32];
-                            std::snprintf(buf, sizeof(buf), "%.5f", stats.residual_ema_rad);
-                            add("residual_ema_rad", buf);
-                            std::snprintf(buf, sizeof(buf), "%.4f", stats.wheel_sigma_x_eff);
-                            add("wheel_sigma_x_eff", buf);
-                          }
-                          {
-                            std::lock_guard<std::mutex> lock(gps_gate_diag_mu_);
-                            if (last_gps_gate_metrics_valid_)
-                            {
-                              char buf[32];
-                              add("gps_gate_decision",
-                                  GnssMobileGateDecisionToString(last_gps_gate_metrics_.decision));
-                              std::snprintf(buf,
-                                            sizeof(buf),
-                                            "%.3f",
-                                            last_gps_gate_metrics_.dt_gps_s);
-                              add("gps_gate_dt_gps_s", buf);
-                              std::snprintf(buf,
-                                            sizeof(buf),
-                                            "%.3f",
-                                            last_gps_gate_metrics_.cmd_vx_mps);
-                              add("gps_gate_cmd_vx_mps", buf);
-                              std::snprintf(buf,
-                                            sizeof(buf),
-                                            "%.3f",
-                                            last_gps_gate_metrics_.cmd_delta_m);
-                              add("gps_gate_cmd_delta_m", buf);
-                              std::snprintf(buf,
-                                            sizeof(buf),
-                                            "%.3f",
-                                            last_gps_gate_metrics_.wheel_delta_m);
-                              add("gps_gate_wheel_delta_m", buf);
-                              std::snprintf(buf,
-                                            sizeof(buf),
-                                            "%.3f",
-                                            last_gps_gate_metrics_.delta_gps_m);
-                              add("gps_gate_delta_gps_m", buf);
-                              std::snprintf(buf,
-                                            sizeof(buf),
-                                            "%.3f",
-                                            last_gps_gate_metrics_.expected_motion_m);
-                              add("gps_gate_expected_motion", buf);
-                              add("gps_gate_expected_motion_m", buf);
-                              std::snprintf(buf,
-                                            sizeof(buf),
-                                            "%.3f",
-                                            last_gps_gate_metrics_.gps_sigma_xy);
-                              add("gps_gate_gps_sigma_xy", buf);
-                              std::snprintf(buf,
-                                            sizeof(buf),
-                                            "%.3f",
-                                            last_gps_gate_metrics_.allowed_delta_m);
-                              add("gps_gate_allowed_delta", buf);
-                              add("gps_gate_allowed_delta_m", buf);
-                              std::snprintf(buf,
-                                            sizeof(buf),
-                                            "%.3f",
-                                            last_gps_gate_metrics_.innovation_m);
-                              add("gps_gate_innovation", buf);
-                              add("gps_gate_innovation_m", buf);
-                              std::snprintf(buf,
-                                            sizeof(buf),
-                                            "%.3f",
-                                            last_gps_gate_metrics_.forward_innovation_m);
-                              add("gps_gate_forward_innovation", buf);
-                              add("gps_gate_forward_innovation_m", buf);
-                              std::snprintf(buf,
-                                            sizeof(buf),
-                                            "%.3f",
-                                            last_gps_gate_metrics_.lateral_innovation_m);
-                              add("gps_gate_lateral_innovation", buf);
-                              add("gps_gate_lateral_innovation_m", buf);
-                            }
-                          }
-                          if (snap)
-                          {
-                            char buf[64];
-                            std::snprintf(buf, sizeof(buf), "%.4f", snap->covariance(0, 0));
-                            add("cov_xx", buf);
-                            std::snprintf(buf, sizeof(buf), "%.4f", snap->covariance(1, 1));
-                            add("cov_yy", buf);
-                            std::snprintf(buf, sizeof(buf), "%.4f", snap->covariance(2, 2));
-                            add("cov_yawyaw", buf);
-                          }
-                          msg.status.push_back(s);
-                          pub_diag_->publish(msg);
+        auto add = [&s](const std::string& k, const std::string& v)
+        {
+          diagnostic_msgs::msg::KeyValue kv;
+          kv.key = k;
+          kv.value = v;
+          s.values.push_back(kv);
+        };
+        add("total_nodes", std::to_string(stats.total_nodes));
+        add("scans_attached", std::to_string(stats.scans_attached));
+        add("loop_closures", std::to_string(stats.loop_closures));
+        add("scans_received", std::to_string(scans_received_));
+        add("scan_matches_ok", std::to_string(scan_matches_ok_));
+        add("scan_matches_fail", std::to_string(scan_matches_fail_));
+        // RTK-anchored keyframe map (use_keyframe_map): map
+        // size + scan-to-keyframe absolute-match health.
+        add("keyframes_total", std::to_string(graph_->KeyframeCount()));
+        add("kf_matches_ok", std::to_string(kf_matches_ok_));
+        add("kf_matches_fail", std::to_string(kf_matches_fail_));
+        // Robustness-pass health counters. Each is a
+        // cumulative count since process start; the
+        // session monitor diffs consecutive samples
+        // to get a rate. A spike on any of these is
+        // worth surfacing — see PR notes.
+        add("gps_rejects_wrongfix", std::to_string(stats.gps_rejects_wrongfix));
+        add("gps_downweights", std::to_string(gps_downweights_wrongfix_mobile_));
+        add("gps_downweights_wrongfix_mobile", std::to_string(gps_downweights_wrongfix_mobile_));
+        add("icp_rejects_rmse", std::to_string(stats.icp_rejects_rmse));
+        add("icp_rejects_inliers", std::to_string(stats.icp_rejects_inliers));
+        add("icp_rejects_sanity", std::to_string(stats.icp_rejects_sanity));
+        add("icp_rejects_divergence", std::to_string(stats.icp_rejects_divergence));
+        add("stationary_hand_push", std::to_string(stats.stationary_hand_push));
+        add("slip_veto", std::to_string(stats.slip_veto));
+        add("live_nodes", std::to_string(graph_->LiveNodeCount()));
+        // Gyro bias telemetry (item #3).
+        {
+          char buf[32];
+          std::snprintf(buf, sizeof(buf), "%.5f", stats.gyro_bias_z);
+          add("gyro_bias_z_rad_per_s", buf);
+          add("gyro_bias_updates", std::to_string(stats.gyro_bias_updates));
+        }
+        // Adaptive process-noise telemetry.
+        {
+          char buf[32];
+          std::snprintf(buf, sizeof(buf), "%.5f", stats.residual_ema_rad);
+          add("residual_ema_rad", buf);
+          std::snprintf(buf, sizeof(buf), "%.4f", stats.wheel_sigma_x_eff);
+          add("wheel_sigma_x_eff", buf);
+        }
+        {
+          std::lock_guard<std::mutex> lock(gps_gate_diag_mu_);
+          if (last_gps_gate_metrics_valid_)
+          {
+            char buf[32];
+            add("gps_gate_decision",
+                GnssMobileGateDecisionToString(last_gps_gate_metrics_.decision));
+            std::snprintf(buf, sizeof(buf), "%.3f", last_gps_gate_metrics_.dt_gps_s);
+            add("gps_gate_dt_gps_s", buf);
+            std::snprintf(buf, sizeof(buf), "%.3f", last_gps_gate_metrics_.cmd_vx_mps);
+            add("gps_gate_cmd_vx_mps", buf);
+            std::snprintf(buf, sizeof(buf), "%.3f", last_gps_gate_metrics_.cmd_delta_m);
+            add("gps_gate_cmd_delta_m", buf);
+            std::snprintf(buf, sizeof(buf), "%.3f", last_gps_gate_metrics_.wheel_delta_m);
+            add("gps_gate_wheel_delta_m", buf);
+            std::snprintf(buf, sizeof(buf), "%.3f", last_gps_gate_metrics_.delta_gps_m);
+            add("gps_gate_delta_gps_m", buf);
+            std::snprintf(buf, sizeof(buf), "%.3f", last_gps_gate_metrics_.expected_motion_m);
+            add("gps_gate_expected_motion", buf);
+            add("gps_gate_expected_motion_m", buf);
+            std::snprintf(buf, sizeof(buf), "%.3f", last_gps_gate_metrics_.gps_sigma_xy);
+            add("gps_gate_gps_sigma_xy", buf);
+            std::snprintf(buf, sizeof(buf), "%.3f", last_gps_gate_metrics_.allowed_delta_m);
+            add("gps_gate_allowed_delta", buf);
+            add("gps_gate_allowed_delta_m", buf);
+            std::snprintf(buf, sizeof(buf), "%.3f", last_gps_gate_metrics_.innovation_m);
+            add("gps_gate_innovation", buf);
+            add("gps_gate_innovation_m", buf);
+            std::snprintf(buf, sizeof(buf), "%.3f", last_gps_gate_metrics_.forward_innovation_m);
+            add("gps_gate_forward_innovation", buf);
+            add("gps_gate_forward_innovation_m", buf);
+            std::snprintf(buf, sizeof(buf), "%.3f", last_gps_gate_metrics_.lateral_innovation_m);
+            add("gps_gate_lateral_innovation", buf);
+            add("gps_gate_lateral_innovation_m", buf);
+          }
+        }
+        if (snap)
+        {
+          char buf[64];
+          std::snprintf(buf, sizeof(buf), "%.4f", snap->covariance(0, 0));
+          add("cov_xx", buf);
+          std::snprintf(buf, sizeof(buf), "%.4f", snap->covariance(1, 1));
+          add("cov_yy", buf);
+          std::snprintf(buf, sizeof(buf), "%.4f", snap->covariance(2, 2));
+          add("cov_yawyaw", buf);
+        }
+        msg.status.push_back(s);
+        pub_diag_->publish(msg);
 
-                          // ── Pose-graph viz ────────────────────────────────────────
-                          // Emits a single MarkerArray with three markers, each owning
-                          // its own id so subsequent publishes overwrite cleanly:
-                          //   id=0  SPHERE_LIST  — every node's optimized xy
-                          //   id=1  LINE_STRIP   — trajectory through nodes by index
-                          //   id=2  LINE_LIST    — accepted loop-closure edges
-                          // All in map_frame_; transient-local QoS so a Foxglove client
-                          // joining mid-session sees the whole graph immediately.
-                          const auto poses = graph_->GetAllPoses();
-                          const auto loops = graph_->GetLoopClosureEdges();
-                          const rclcpp::Time stamp = this->now();
+        // ── Pose-graph viz ────────────────────────────────────────
+        // Emits a single MarkerArray with three markers, each owning
+        // its own id so subsequent publishes overwrite cleanly:
+        //   id=0  SPHERE_LIST  — every node's optimized xy
+        //   id=1  LINE_STRIP   — trajectory through nodes by index
+        //   id=2  LINE_LIST    — accepted loop-closure edges
+        // All in map_frame_; transient-local QoS so a Foxglove client
+        // joining mid-session sees the whole graph immediately.
+        const auto poses = graph_->GetAllPoses();
+        const auto loops = graph_->GetLoopClosureEdges();
+        const rclcpp::Time stamp = this->now();
 
-                          visualization_msgs::msg::MarkerArray ma;
+        visualization_msgs::msg::MarkerArray ma;
 
-                          visualization_msgs::msg::Marker nodes;
-                          nodes.header.stamp = stamp;
-                          nodes.header.frame_id = map_frame_;
-                          nodes.ns = "fusion_graph";
-                          nodes.id = 0;
-                          nodes.type = visualization_msgs::msg::Marker::SPHERE_LIST;
-                          nodes.action = visualization_msgs::msg::Marker::ADD;
-                          nodes.scale.x = nodes.scale.y = nodes.scale.z = 0.10;
-                          nodes.color.r = 0.1f;
-                          nodes.color.g = 0.7f;
-                          nodes.color.b = 1.0f;
-                          nodes.color.a = 1.0f;
-                          nodes.pose.orientation.w = 1.0;
+        visualization_msgs::msg::Marker nodes;
+        nodes.header.stamp = stamp;
+        nodes.header.frame_id = map_frame_;
+        nodes.ns = "fusion_graph";
+        nodes.id = 0;
+        nodes.type = visualization_msgs::msg::Marker::SPHERE_LIST;
+        nodes.action = visualization_msgs::msg::Marker::ADD;
+        nodes.scale.x = nodes.scale.y = nodes.scale.z = 0.10;
+        nodes.color.r = 0.1f;
+        nodes.color.g = 0.7f;
+        nodes.color.b = 1.0f;
+        nodes.color.a = 1.0f;
+        nodes.pose.orientation.w = 1.0;
 
-                          visualization_msgs::msg::Marker traj;
-                          traj.header = nodes.header;
-                          traj.ns = "fusion_graph";
-                          traj.id = 1;
-                          traj.type = visualization_msgs::msg::Marker::LINE_STRIP;
-                          traj.action = visualization_msgs::msg::Marker::ADD;
-                          traj.scale.x = 0.03;
-                          traj.color.r = 0.5f;
-                          traj.color.g = 0.5f;
-                          traj.color.b = 0.5f;
-                          traj.color.a = 0.8f;
-                          traj.pose.orientation.w = 1.0;
+        visualization_msgs::msg::Marker traj;
+        traj.header = nodes.header;
+        traj.ns = "fusion_graph";
+        traj.id = 1;
+        traj.type = visualization_msgs::msg::Marker::LINE_STRIP;
+        traj.action = visualization_msgs::msg::Marker::ADD;
+        traj.scale.x = 0.03;
+        traj.color.r = 0.5f;
+        traj.color.g = 0.5f;
+        traj.color.b = 0.5f;
+        traj.color.a = 0.8f;
+        traj.pose.orientation.w = 1.0;
 
-                          // Marker bandwidth control. With 4 k+ nodes, dumping every
-                          // node to the SPHERE_LIST every second produces ~50 KB of
-                          // payload per tick — Foxglove + DDS choke. Cap at the most
-                          // recent `viz_max_nodes` (default 1500) and stride-decimate
-                          // older history if the cap is exceeded. Trajectory line still
-                          // includes the same set so the topology stays connected.
-                          constexpr size_t kVizMaxNodes = 1500;
-                          const size_t total = poses.size();
-                          const size_t stride =
-                              total > kVizMaxNodes ? std::max<size_t>(1, total / kVizMaxNodes) : 1;
-                          size_t i = 0;
-                          for (const auto& [idx, p] : poses)
-                          {
-                            if (i++ % stride != 0)
-                              continue;
-                            geometry_msgs::msg::Point pt;
-                            pt.x = p.x();
-                            pt.y = p.y();
-                            pt.z = 0.0;
-                            nodes.points.push_back(pt);
-                            traj.points.push_back(pt);
-                          }
-                          ma.markers.push_back(nodes);
-                          ma.markers.push_back(traj);
+        // Marker bandwidth control. With 4 k+ nodes, dumping every
+        // node to the SPHERE_LIST every second produces ~50 KB of
+        // payload per tick — Foxglove + DDS choke. Cap at the most
+        // recent `viz_max_nodes` (default 1500) and stride-decimate
+        // older history if the cap is exceeded. Trajectory line still
+        // includes the same set so the topology stays connected.
+        constexpr size_t kVizMaxNodes = 1500;
+        const size_t total = poses.size();
+        const size_t stride = total > kVizMaxNodes ? std::max<size_t>(1, total / kVizMaxNodes) : 1;
+        size_t i = 0;
+        for (const auto& [idx, p] : poses)
+        {
+          if (i++ % stride != 0)
+            continue;
+          geometry_msgs::msg::Point pt;
+          pt.x = p.x();
+          pt.y = p.y();
+          pt.z = 0.0;
+          nodes.points.push_back(pt);
+          traj.points.push_back(pt);
+        }
+        ma.markers.push_back(nodes);
+        ma.markers.push_back(traj);
 
-                          visualization_msgs::msg::Marker lc;
-                          lc.header = nodes.header;
-                          lc.ns = "fusion_graph";
-                          lc.id = 2;
-                          lc.type = visualization_msgs::msg::Marker::LINE_LIST;
-                          lc.action = visualization_msgs::msg::Marker::ADD;
-                          lc.scale.x = 0.04;
-                          lc.color.r = 1.0f;
-                          lc.color.g = 0.2f;
-                          lc.color.b = 0.2f;
-                          lc.color.a = 0.9f;
-                          lc.pose.orientation.w = 1.0;
-                          for (const auto& [a, b] : loops)
-                          {
-                            auto ia = poses.find(a);
-                            auto ib = poses.find(b);
-                            if (ia == poses.end() || ib == poses.end())
-                              continue;
-                            geometry_msgs::msg::Point pa, pb;
-                            pa.x = ia->second.x();
-                            pa.y = ia->second.y();
-                            pb.x = ib->second.x();
-                            pb.y = ib->second.y();
-                            lc.points.push_back(pa);
-                            lc.points.push_back(pb);
-                          }
-                          ma.markers.push_back(lc);
+        visualization_msgs::msg::Marker lc;
+        lc.header = nodes.header;
+        lc.ns = "fusion_graph";
+        lc.id = 2;
+        lc.type = visualization_msgs::msg::Marker::LINE_LIST;
+        lc.action = visualization_msgs::msg::Marker::ADD;
+        lc.scale.x = 0.04;
+        lc.color.r = 1.0f;
+        lc.color.g = 0.2f;
+        lc.color.b = 0.2f;
+        lc.color.a = 0.9f;
+        lc.pose.orientation.w = 1.0;
+        for (const auto& [a, b] : loops)
+        {
+          auto ia = poses.find(a);
+          auto ib = poses.find(b);
+          if (ia == poses.end() || ib == poses.end())
+            continue;
+          geometry_msgs::msg::Point pa, pb;
+          pa.x = ia->second.x();
+          pa.y = ia->second.y();
+          pb.x = ib->second.x();
+          pb.y = ib->second.y();
+          lc.points.push_back(pa);
+          lc.points.push_back(pb);
+        }
+        ma.markers.push_back(lc);
 
-                          pub_markers_->publish(ma);
-                        });
+        pub_markers_->publish(ma);
+      });
 
   // Decoupled TF broadcast (see header). Started last so every member
   // the loop reads is fully constructed. Observer mode never

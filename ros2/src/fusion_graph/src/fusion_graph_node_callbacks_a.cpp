@@ -200,20 +200,20 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
       }
     }
 
-    const GnssMobileGateMetrics gate_metrics = EvaluateGnssMobileGate(
-        dt_gps_s,
-        cmd_vx_mps,
-        cmd_delta_m,
-        wheel_dist_since_last_accepted_gps_m_,
-        mx - (*last_accepted_gps_map_xy_).x(),
-        my - (*last_accepted_gps_map_xy_).y(),
-        sigma,
-        heading_yaw,
-        GnssMobileGateParams{
-            rtk_wrongfix_gps_sigma_multiplier_,
-            rtk_wrongfix_min_margin_m_,
-            rtk_wrongfix_downweight_innovation_multiplier_,
-        });
+    const GnssMobileGateMetrics gate_metrics =
+        EvaluateGnssMobileGate(dt_gps_s,
+                               cmd_vx_mps,
+                               cmd_delta_m,
+                               wheel_dist_since_last_accepted_gps_m_,
+                               mx - (*last_accepted_gps_map_xy_).x(),
+                               my - (*last_accepted_gps_map_xy_).y(),
+                               sigma,
+                               heading_yaw,
+                               GnssMobileGateParams{
+                                   rtk_wrongfix_gps_sigma_multiplier_,
+                                   rtk_wrongfix_min_margin_m_,
+                                   rtk_wrongfix_downweight_innovation_multiplier_,
+                               });
     {
       std::lock_guard<std::mutex> lock(gps_gate_diag_mu_);
       last_gps_gate_metrics_ = gate_metrics;

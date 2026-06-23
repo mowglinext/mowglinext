@@ -77,8 +77,7 @@ inline GnssMobileGateMetrics EvaluateGnssMobileGate(double dt_gps_s,
   m.expected_motion_m = std::max(m.wheel_delta_m, m.cmd_delta_m);
   m.gps_sigma_xy = std::max(gps_sigma_xy, 0.0);
 
-  const double noise_budget =
-      m.gps_sigma_xy * std::max(params.gps_sigma_multiplier, 0.0);
+  const double noise_budget = m.gps_sigma_xy * std::max(params.gps_sigma_multiplier, 0.0);
   const double accept_gate = noise_budget + std::max(params.min_margin_m, 0.0);
   const double downweight_gate =
       accept_gate * std::max(params.downweight_innovation_multiplier, 1.0);
@@ -93,8 +92,7 @@ inline GnssMobileGateMetrics EvaluateGnssMobileGate(double dt_gps_s,
   m.forward_innovation_m = std::abs(std::abs(delta_forward) - m.expected_motion_m);
   m.lateral_innovation_m = std::abs(delta_lateral);
 
-  const bool accept =
-      m.innovation_m <= accept_gate && m.lateral_innovation_m <= accept_gate;
+  const bool accept = m.innovation_m <= accept_gate && m.lateral_innovation_m <= accept_gate;
   const bool downweight =
       m.innovation_m <= downweight_gate && m.lateral_innovation_m <= downweight_gate;
 
