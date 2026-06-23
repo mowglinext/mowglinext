@@ -425,9 +425,15 @@ private:
   uint64_t scan_matches_fail_ = 0;
 
   // ICP-only odometry integration (see pub_icp_odom_). Seeded from the graph
-  // pose at the first accepted scan-between match, then composes each delta.
+  // pose at the first node with a scan-between, then advanced ONCE PER NODE by
+  // the scan-between delta the graph consumed. last_scan_between_delta_ caches
+  // the latest accepted match (motion since the previous node); it is composed
+  // only when Tick() creates the next node. Composing per-tick over-integrates
+  // (~19 ticks/node, delta is cumulative-since-node) → the static-robot drift.
   gtsam::Pose2 icp_pose_{};
   bool icp_pose_seeded_ = false;
+  gtsam::Pose2 last_scan_between_delta_{};
+  bool last_scan_between_valid_ = false;
 
   // RTK mobile wrong-fix detection state. Raw GNSS cadence and accepted GNSS
   // reference are tracked separately:

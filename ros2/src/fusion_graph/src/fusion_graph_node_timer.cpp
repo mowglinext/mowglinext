@@ -115,22 +115,15 @@ void FusionGraphNode::OnTimer()
       }
       graph_->QueueScanBetween(res.delta, sm_sigma_xy, sm_sigma_theta);
       ++scan_matches_ok_;
-      // ICP-only odometry: seed from the graph pose at the first accepted
-      // match, then compose each relative scan delta. Relative (drifts) — for
-      // GUI comparison of ICP heading/pose vs the fused/GPS estimate only.
-      if (!icp_pose_seeded_)
-      {
-        if (auto snap = graph_->LatestSnapshot())
-        {
-          icp_pose_ = snap->pose;
-          icp_pose_seeded_ = true;
-        }
-      }
-      else
-      {
-        icp_pose_ = icp_pose_.compose(res.delta);
-      }
-      PublishIcpOdom();
+      // ICP-only odometry: cache the latest accepted scan-between delta (motion
+      // since the previous node). It is composed into icp_pose_ exactly ONCE,
+      // when Tick() creates the next node (below). Do NOT compose here: OnTimer
+      // runs ~N ticks per node and res.delta is cumulative-since-node, so
+      // per-tick composition over-integrates ~N× (the cause of the large
+      // static-robot heading drift). Latest-wins mirrors the QueueScanBetween
+      // the graph itself consumes once per node.
+      last_scan_between_delta_ = res.delta;
+      last_scan_between_valid_ = true;
     }
     else
     {
@@ -235,6 +228,25 @@ void FusionGraphNode::OnTimer()
     if (curr_valid)
     {
       graph_->AttachScan(out->node_index, curr_scan);
+    }
+
+    // Advance the LiDAR-only odometry exactly once per node, by the same
+    // scan-between delta the graph just consumed. Seeds from the new node's
+    // fused pose on the first node so it starts aligned, then drifts (relative
+    // scan-matching, no absolute reference) — diagnostics only.
+    if (last_scan_between_valid_)
+    {
+      if (!icp_pose_seeded_)
+      {
+        icp_pose_ = out->pose;
+        icp_pose_seeded_ = true;
+      }
+      else
+      {
+        icp_pose_ = icp_pose_.compose(last_scan_between_delta_);
+      }
+      PublishIcpOdom();
+      last_scan_between_valid_ = false;
     }
 
     // ── Keyframe capture (build the absolute map under stable RTK-Fixed) ──
