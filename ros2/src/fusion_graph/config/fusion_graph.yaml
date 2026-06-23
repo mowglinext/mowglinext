@@ -185,27 +185,32 @@ fusion_graph_node:
     adaptive_noise_ema_tau_s: 0.5
     adaptive_noise_residual_floor_rad: 0.005
 
-    # ── Mobile RTK wrong-fix detection ────────────────────────────────
-    # Compare each GNSS jump against the LAST ACCEPTED GNSS reference,
-    # not the most-recent raw sample. Raw GNSS cadence is still tracked
-    # separately for diagnostics. The motion budget is accumulated since
-    # the last accepted fix:
-    #   expected_motion = max(wheel_delta_since_accepted,
-    #                         cmd_delta_since_accepted)
-    #   noise_budget    = gps_sigma_xy * rtk_wrongfix_gps_sigma_multiplier
-    #   allowed_delta   = expected_motion + noise_budget + margin
-    #   innovation      = |delta_gps_m - expected_motion|
-    #
-    # Small innovations are accepted, medium ones are DOWNWEIGHTED
-    # (inflated GNSS sigma in the factor), and only strong outliers are
-    # rejected as mobile wrong-fixes. This avoids the old brittle fixed
-    # 20 mm wheel-motion gate, which failed during real mowing because
-    # the robot legitimately travels ~40 mm between 5 Hz fixes at
-    # 0.20 m/s.
-    rtk_wrongfix_gps_sigma_multiplier: 2.0
-    rtk_wrongfix_min_margin_m: 0.01
-    rtk_wrongfix_downweight_innovation_multiplier: 2.0
-    rtk_wrongfix_downweight_sigma_multiplier: 4.0
+    # ── RTK wrong-fix detection (motion-consistent) ───────────────────
+    # F9P occasionally re-solves carrier-phase ambiguity on a different
+    # integer set, jumping the reported position by a few centimetres
+    # while still flagging GBAS_FIX with sub-cm σ. The gate drops a fix
+    # when the GPS step exceeds what the chassis actually travelled since
+    # the last fix plus a slack budget:
+    #     jump > rtk_wrongfix_max_jump_m + lever_sweep + wheel_travel
+    # This works at any speed. (The earlier gate also required the wheel to
+    # have moved < rtk_wrongfix_max_wheel_m, which DISABLED it during
+    # mowing: at 0.20 m/s with 5 Hz GNSS the chassis travels ~4 cm between
+    # fixes, so multi-cm wrong-fix jumps slipped in and rebased map→odom by
+    # 3-11 cm — field 2026-06. wheel_dist is now part of the budget instead.)
+    # rtk_wrongfix_max_jump_m is the slack on top of travel — size it to a
+    # few × the raw GNSS jitter σ (~1.4 cm RTK on this rig).
+    rtk_wrongfix_max_jump_m: 0.05
+    # DEPRECATED — no longer used by the motion-consistent gate above. Kept
+    # so existing overlays/Foxglove that set it don't error. Safe to remove.
+    rtk_wrongfix_max_wheel_m: 0.02
+
+    # Speed-dependent GPS σ inflation: σ_eff = sqrt(σ_msg² + (coeff·v)²).
+    # The receiver covariance is the instantaneous fix precision but omits
+    # motion-induced position error (GPS latency × velocity + lever-arm
+    # sweep while moving), so during mowing a still-accepted GNSS factor can
+    # over-correct map→odom. coeff ≈ effective GPS latency in seconds; at
+    # 0.20 m/s a coeff of 0.1 adds ~2 cm of σ. 0 = disabled (raw receiver σ).
+    gps_sigma_speed_coeff: 0.0
 
     # ── ICP scan-match guard rails ─────────────────────────────────────
     # Applied to every scan_matcher_->Match result before queueing it
