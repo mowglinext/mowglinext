@@ -105,7 +105,10 @@ extern "C"
 #endif
 
 {{if .DisableEmergency }}
-    #define I_DONT_NEED_MY_FINGERS              1      // disables EmergencyController() (no wheel lift, or tilt sensing and stopping the blade anymore)
+    // Operator opted out of hardware e-stop: compiles out EmergencyController()
+    // so the stop-button / wheel-lift / tilt sensors are NOT polled. Only enable
+    // this on a chassis whose safety GPIOs are absent or unreliable.
+    #define I_DONT_NEED_MY_FINGERS              1      // disables EmergencyController()
 {{end}}
 
 {{if .PerimeterWire }}

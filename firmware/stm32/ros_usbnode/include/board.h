@@ -93,7 +93,16 @@ extern "C"
 #define BOARD_HAS_MASTER_USART 0
 #endif
 
-#define I_DONT_NEED_MY_FINGERS              1      // disables EmergencyController() (no wheel lift, or tilt sensing and stopping the blade anymore)
+// I_DONT_NEED_MY_FINGERS, when DEFINED (value is irrelevant — the guards use
+// #ifdef/#ifndef), compiles out EmergencyController() so the firmware NEVER
+// polls the physical stop button / wheel-lift / tilt sensors. That contradicts
+// "the STM32 firmware is the sole blade safety authority", so it is left
+// UNDEFINED to keep hardware e-stop sensing active.
+// WARNING: before flashing to a robot, validate per-chassis that the stop-button,
+// wheel-lift and tilt GPIOs are actually wired and not floating/noisy — otherwise
+// EmergencyController() may latch a spurious emergency. Re-#define this only if a
+// given chassis lacks those sensors.
+// #define I_DONT_NEED_MY_FINGERS           1      // disables EmergencyController()
 
 /// nominal max charge current is 1.0 Amp
 #define MAX_CHARGE_CURRENT 1.2f
