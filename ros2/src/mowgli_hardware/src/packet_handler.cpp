@@ -66,6 +66,12 @@ void PacketHandler::feed(const uint8_t* data, std::size_t len)
   }
 }
 
+void PacketHandler::reset_receive_state()
+{
+  rx_buf_.clear();
+  overflowed_ = false;
+}
+
 void PacketHandler::dispatch_frame()
 {
   // Decode COBS.  The decoded output is at most as large as the encoded input.

@@ -86,6 +86,9 @@ public:
    */
   void feed(const uint8_t* data, std::size_t len);
 
+  /// Drop any partial frame currently buffered between delimiters.
+  void reset_receive_state();
+
   /**
    * @brief Encode a raw payload into a fully-framed COBS packet.
    *
