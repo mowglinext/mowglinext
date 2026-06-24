@@ -71,6 +71,9 @@ extern "C" {
 /** Wheel odometry packet (LlOdometry / pkt_odometry_t). */
 #define PKT_ID_ODOMETRY 0x04u
 
+/** STM32 boot reset cause packet. */
+#define PKT_ID_RESET_CAUSE 0x06u
+
 /** Blade motor status packet (pkt_blade_status_t). */
 #define PKT_ID_BLADE_STATUS 0x05u
 
@@ -152,6 +155,19 @@ extern "C" {
 
 /** Wheel-lift emergency is active. */
 #define EMERGENCY_BIT_LIFT (1u << 2u)
+
+/* ---------------------------------------------------------------------------
+ * Reset cause values  (pkt_reset_cause_t::reset_cause)
+ * ---------------------------------------------------------------------------*/
+
+#define RESET_CAUSE_UNKNOWN 0u
+#define RESET_CAUSE_PIN 1u
+#define RESET_CAUSE_POR_PDR 2u
+#define RESET_CAUSE_BOR 3u
+#define RESET_CAUSE_SFTRST 4u
+#define RESET_CAUSE_IWDG 5u
+#define RESET_CAUSE_WWDG 6u
+#define RESET_CAUSE_LPWR 7u
 
 /* ---------------------------------------------------------------------------
  * USS sensor count
@@ -242,6 +258,20 @@ typedef struct {
   int16_t right_velocity_mm_s; /**< Signed right wheel velocity [mm/s] */
   uint16_t crc;                /**< CRC-16 CCITT over preceding bytes */
 } pkt_odometry_t;
+
+/**
+ * @brief Boot reset cause packet — Firmware -> Host (PKT_ID_RESET_CAUSE = 0x06).
+ *
+ * Sent periodically so the host can recover the current boot cause even if it
+ * connected after the STM32 had already started streaming.
+ *
+ * Wire size: 4 bytes.
+ */
+typedef struct {
+  uint8_t type;         /**< PKT_ID_RESET_CAUSE */
+  uint8_t reset_cause;  /**< RESET_CAUSE_* enum value */
+  uint16_t crc;         /**< CRC-16 CCITT over preceding bytes */
+} pkt_reset_cause_t;
 
 /**
  * @brief Heartbeat packet — Host -> Firmware (PKT_ID_HEARTBEAT = 0x42).
@@ -427,6 +457,9 @@ typedef struct {
  *     type(1) + dt_millis(2) + left_ticks(4) + right_ticks(4) +
  *     left_velocity_mm_s(2) + right_velocity_mm_s(2) + crc(2) = 17
  *
+ *   pkt_reset_cause_t:
+ *     type(1) + reset_cause(1) + crc(2) = 4
+ *
  *   pkt_heartbeat_t:
  *     type(1) + emergency_requested(1) + emergency_release_requested(1) +
  *     crc(2) = 5
@@ -451,6 +484,8 @@ _Static_assert(sizeof(pkt_ui_event_t) == 5u,
                "pkt_ui_event_t layout unexpected");
 _Static_assert(sizeof(pkt_odometry_t) == 17u,
                "pkt_odometry_t layout unexpected");
+_Static_assert(sizeof(pkt_reset_cause_t) == 4u,
+               "pkt_reset_cause_t layout unexpected");
 _Static_assert(sizeof(pkt_heartbeat_t) == 5u,
                "pkt_heartbeat_t layout unexpected");
 _Static_assert(sizeof(pkt_hl_state_t) == 5u,
