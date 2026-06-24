@@ -49,6 +49,7 @@ enum PacketId : uint8_t
   PACKET_ID_LL_IMU = 0x02,  ///< STM32 → Pi: IMU data
   PACKET_ID_LL_UI_EVENT = 0x03,  ///< STM32 → Pi: UI button event
   PACKET_ID_LL_ODOMETRY = 0x04,  ///< STM32 → Pi: wheel odometry
+  PACKET_ID_LL_RESET_CAUSE = 0x06,  ///< STM32 → Pi: current boot reset cause
   PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ = 0x11,  ///< Bidirectional: config request
   PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP = 0x12,  ///< Bidirectional: config response
   PACKET_ID_LL_HEARTBEAT = 0x42,  ///< Pi → STM32: heartbeat
@@ -86,6 +87,19 @@ constexpr uint8_t STATUS_BIT_UI_AVAIL = (1u << 7u);
 constexpr uint8_t EMERGENCY_BIT_LATCH = (1u << 0u);
 constexpr uint8_t EMERGENCY_BIT_STOP = (1u << 1u);
 constexpr uint8_t EMERGENCY_BIT_LIFT = (1u << 2u);
+
+// ---------------------------------------------------------------------------
+// Reset cause constants (ll_reset_cause::reset_cause)
+// ---------------------------------------------------------------------------
+
+constexpr uint8_t RESET_CAUSE_UNKNOWN = 0u;
+constexpr uint8_t RESET_CAUSE_PIN = 1u;
+constexpr uint8_t RESET_CAUSE_POR_PDR = 2u;
+constexpr uint8_t RESET_CAUSE_BOR = 3u;
+constexpr uint8_t RESET_CAUSE_SFTRST = 4u;
+constexpr uint8_t RESET_CAUSE_IWDG = 5u;
+constexpr uint8_t RESET_CAUSE_WWDG = 6u;
+constexpr uint8_t RESET_CAUSE_LPWR = 7u;
 
 // ---------------------------------------------------------------------------
 // USS (ultrasonic) sensor count
@@ -157,6 +171,19 @@ struct LlOdometry
   int32_t right_ticks;  ///< Signed cumulative right encoder ticks
   int16_t left_velocity_mm_s;  ///< Signed left wheel velocity [mm/s]
   int16_t right_velocity_mm_s;  ///< Signed right wheel velocity [mm/s]
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+
+/**
+ * @brief Boot reset cause packet sent by the STM32 (PACKET_ID_LL_RESET_CAUSE = 0x06).
+ *
+ * Sent periodically so the host can recover the current boot cause even if it
+ * connects after the STM32 has already started streaming.
+ */
+struct LlResetCause
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_RESET_CAUSE
+  uint8_t reset_cause;  ///< RESET_CAUSE_* constant
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
 
@@ -281,6 +308,7 @@ static_assert(sizeof(LlStatus) == 38u, "LlStatus layout mismatch");
 static_assert(sizeof(LlImu) == 41u, "LlImu layout mismatch");
 static_assert(sizeof(LlUiEvent) == 5u, "LlUiEvent layout mismatch");
 static_assert(sizeof(LlOdometry) == 17u, "LlOdometry layout mismatch");
+static_assert(sizeof(LlResetCause) == 4u, "LlResetCause layout mismatch");
 static_assert(sizeof(LlHeartbeat) == 5u, "LlHeartbeat layout mismatch");
 static_assert(sizeof(LlHighLevelState) == 5u, "LlHighLevelState layout mismatch");
 static_assert(sizeof(LlCmdVel) == 11u, "LlCmdVel layout mismatch");
