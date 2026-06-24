@@ -64,6 +64,11 @@ TEST(ProtocolSizes, OdometryPacketSize)
   EXPECT_EQ(sizeof(LlOdometry), 17u);
 }
 
+TEST(ProtocolSizes, ResetCausePacketSize)
+{
+  EXPECT_EQ(sizeof(LlResetCause), 4u);
+}
+
 TEST(ProtocolSizes, HeartbeatPacketSize)
 {
   EXPECT_EQ(sizeof(LlHeartbeat), 5u);
@@ -101,6 +106,7 @@ TEST(ProtocolIds, PacketIdValues)
   EXPECT_EQ(PACKET_ID_LL_IMU, 0x02);
   EXPECT_EQ(PACKET_ID_LL_UI_EVENT, 0x03);
   EXPECT_EQ(PACKET_ID_LL_ODOMETRY, 0x04);
+  EXPECT_EQ(PACKET_ID_LL_RESET_CAUSE, 0x06);
   EXPECT_EQ(PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ, 0x11);
   EXPECT_EQ(PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP, 0x12);
   EXPECT_EQ(PACKET_ID_LL_HEARTBEAT, 0x42);
@@ -268,6 +274,15 @@ TEST(ProtocolRoundtrip, HeartbeatPacket)
   pkt.type = PACKET_ID_LL_HEARTBEAT;
   pkt.emergency_requested = 0;
   pkt.emergency_release_requested = 1;
+
+  roundtrip_struct(pkt);
+}
+
+TEST(ProtocolRoundtrip, ResetCausePacket)
+{
+  LlResetCause pkt{};
+  pkt.type = PACKET_ID_LL_RESET_CAUSE;
+  pkt.reset_cause = RESET_CAUSE_WWDG;
 
   roundtrip_struct(pkt);
 }

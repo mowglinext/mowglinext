@@ -171,6 +171,8 @@ private:
     // Field parity with the real hardware_bridge_node so downstream
     // diagnostics, MQTT bridge, and BT logic see the same picture in sim.
     status.mower_status = mowgli_interfaces::msg::Status::MOWER_STATUS_OK;
+    status.reset_cause = mowgli_interfaces::msg::Status::RESET_CAUSE_UNKNOWN;
+    status.reset_cause_name = "UNKNOWN";
     status.raspberry_pi_power = true;
     // Legacy parity with real hardware_bridge: blade-related controller power,
     // not traction enable state.

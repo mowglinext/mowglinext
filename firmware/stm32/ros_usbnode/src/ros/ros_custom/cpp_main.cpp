@@ -292,9 +292,10 @@ static void on_set_drive_pid(const uint8_t *data, size_t len) {
   g_pwm_per_mps = ff;
   __enable_irq();
 
-  debug_printf(
-      "set_drive_pid: ticks=%.3f kp=%.3f ki=%.3f kd=%.3f ilim=%.3f ff=%.3f\r\n",
-      ticks_per_meter, kp, ki, kd, ilim, ff);
+  /* Do not log successful drive-PID updates here: this handler runs in the USB
+   * RX path and hardware_bridge intentionally re-sends the packet in bursts
+   * after reconnect. Printing each success over the debug UART can stall long
+   * enough to starve the main loop and re-trigger the watchdog reboot loop. */
 }
 
 static void on_hl_state(const uint8_t *data, size_t len) {
@@ -794,6 +795,10 @@ extern "C" void broadcast_handler() {
     status_pkt.charging_current = current;
     status_pkt.batt_percentage = 0; // TODO: compute from voltage curve
 
+    pkt_reset_cause_t reset_pkt;
+    reset_pkt.type = PKT_ID_RESET_CAUSE;
+    reset_pkt.reset_cause = g_boot_reset_cause_code;
+    mowgli_comms_send(&reset_pkt, sizeof(reset_pkt));
     mowgli_comms_send_status(&status_pkt);
   }
 
