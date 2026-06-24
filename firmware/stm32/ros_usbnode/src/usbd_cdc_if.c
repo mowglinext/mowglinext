@@ -361,7 +361,10 @@ uint8_t CDC_Transmit(const void *Buf, uint32_t Len)
 
     if (result != USBD_OK) {
         s_txDropCounterHead++;
-        DB_TRACE("DROP :  %d \r\n",s_txDropCounterHead);
+        /* Keep the drop counter, but do not print every overflow over the
+         * debug UART: when the host disconnects or the CDC TX queue backs up,
+         * this path can trigger at IMU rate and turn a transient USB stall into
+         * enough debug-UART backpressure to starve the main loop watchdog. */
     }
 
     CDC_ResumeTransmit();

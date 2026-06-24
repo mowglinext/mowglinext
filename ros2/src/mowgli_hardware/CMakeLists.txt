@@ -125,6 +125,15 @@ if(BUILD_TESTING)
     mowgli_hardware_core
   )
 
+  # ---- test_serial_port ----
+  ament_add_gtest(test_serial_port
+    test/test_serial_port.cpp
+  )
+  target_link_libraries(test_serial_port
+    mowgli_hardware_core
+    util
+  )
+
   # ---- test_protocol ----
   ament_add_gtest(test_protocol
     test/test_protocol.cpp
