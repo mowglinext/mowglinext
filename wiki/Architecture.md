@@ -6,17 +6,15 @@ Built on **ROS2 Kilted** with **Gazebo Harmonic** simulation, this architecture 
 
 ## Localization at a glance
 
-The map-frame localizer has **two interchangeable backends**, picked at launch time via the `use_fusion_graph` arg on `navigation.launch.py` (defaults to `false`). The local odometry path and the area / coverage layers are unaffected.
+The map-frame and local-odometry legs are both owned by a **single localizer**, `fusion_graph_node` (GTSAM iSAM2 Pose2 factor graph). It is launched **unconditionally** by `navigation.launch.py` — there is **no `use_fusion_graph` arg**, and the previous robot_localization dual EKF (`ekf_map_node` + `ekf_odom_node`) was removed. The area / coverage layers are independent of the localizer.
 
 | Layer | Owner | Notes |
 |---|---|---|
-| `map → odom` (default, `use_fusion_graph:=false`) | `ekf_map_node` @ 30 Hz | robot_localization global EKF; fuses wheels + gyro + `/gps/pose_cov` + GPS-COG absolute yaw + (optional) `/imu/mag_yaw` under `two_d_mode`. Datum from `mowgli_robot.yaml`. No SLAM. |
-| `map → odom` (opt-in, `use_fusion_graph:=true`) | `fusion_graph_node` @ 10 Hz | GTSAM iSAM2 factor-graph localizer. Same inputs as the EKF, plus a custom `GnssLeverArmFactor` (analytic Jacobian) and optional LiDAR scan-matching / loop-closure factors. Publishes the same `/odometry/filtered_map` + `map → odom` TF; adds `/fusion_graph/diagnostics` and `~/save_graph` / `~/clear_graph` services. |
-| `odom → base_footprint` | `ekf_odom_node` @ 50 Hz | robot_localization local EKF; fuses wheels + gyro_z. Continuous, never jumps. **Same in both backends.** |
-| LiDAR (opt-in) | `fusion_graph_node` | When `use_fusion_graph:=true` and `use_scan_matching` / `use_loop_closure` are on, `/scan` enters the same factor graph as scan-matching between-factors and loop-closure factors. No parallel TF tree, no separate twist channel. |
+| `map → odom` AND `odom → base_footprint` | `fusion_graph_node` (sole, default, unconditional) | GTSAM iSAM2 Pose2 factor graph; publishes **both** TF legs from a dedicated TF broadcast thread. Fuses a wheel between-factor (non-holonomic σ_y ≪ σ_x, from `/wheel_odom`), a gyro between-factor on yaw, a custom `GnssLeverArmFactor` (analytic Jacobian, antenna lever-arm rotates with node yaw, fed by `/gps/pose_cov`), and unary yaw factors for COG (`/imu/cog_heading`) and tilt-compensated mag (`/imu/mag_yaw`, when calibrated). Datum + lever-arm from `mowgli_robot.yaml`. Config in `ros2/src/fusion_graph/config/fusion_graph.yaml`. Surface: `/odometry/filtered_map`, `/fusion_graph/diagnostics`, `/fusion_graph/markers`, `~/save_graph` / `~/clear_graph` services. No SLAM. |
+| LiDAR (optional) | `fusion_graph_node` | When `use_scan_matching` / `use_loop_closure` are on, `/scan` enters the same factor graph as scan-matching between-factors and loop-closure factors, carrying the map-frame estimate through multi-minute RTK-Float windows. No parallel TF tree, no separate twist channel. |
 | Map / areas | `map_server_node` | Polygon-based area DB + `mow_progress` GridMap layer, persisted to disk. No SLAM back-end. |
 
-> The EKF and the factor-graph are **mutually exclusive** — only one publishes `map → odom` at a time. See [Optional: Factor-Graph Localizer](#optional-factor-graph-localizer-fusion_graph) below for when to enable each.
+> `fusion_graph_node` is the **only** node that publishes `map → odom` or `odom → base_footprint`. The robot_localization dual EKF, slam_toolbox, Kinematic-ICP, and FusionCore were all removed. See [Factor-Graph Localizer](#optional-factor-graph-localizer-fusion_graph) below for details.
 
 ## System Overview
 
@@ -32,8 +30,8 @@ Mowgli ROS2 is organized as a **12-package ecosystem** with clear separation of 
 │                   High-Level Control & Decision Layer                    │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────┐   │
 │  │  mowgli_behavior │  │ mowgli_nav2_     │  │  mowgli_localization │   │
-│  │  (Behavior Tree) │  │  plugins         │  │  (EKF + monitoring)  │   │
-│  │                  │  │  (FTC + RPP      │  │                      │   │
+│  │  (Behavior Tree) │  │  plugins         │  │  + fusion_graph      │   │
+│  │                  │  │  (MPPI + RPP     │  │                      │   │
 │  │  10 Hz reactive  │  │   Controllers)   │  │  Multiple nodes:     │   │
 │  │  control         │  │                  │  │  - Wheel odometry    │   │
 │  │                  │  │  Nav2 local plan │  │  - GPS converter     │   │
@@ -80,8 +78,9 @@ Mowgli ROS2 is organized as a **12-package ecosystem** with clear separation of 
 |---------|---------|--------------|
 | **mowgli_interfaces** | Message, service, and action type definitions | ROS2 core |
 | **mowgli_hardware** | Serial bridge to STM32 firmware (COBS + CRC-16 protocol) | mowgli_interfaces |
-| **mowgli_localization** | Helper nodes around robot_localization's dual EKF (wheel odometry, NavSatFix→pose conversion, COG-to-IMU absolute yaw, magnetometer yaw, dock-yaw auto-capture, localization monitor) | mowgli_interfaces, robot_localization |
-| **mowgli_nav2_plugins** | Nav2 controller plugins (FTC, RPP + RotationShimController, goal checkers) | nav2_core, mowgli_interfaces |
+| **mowgli_localization** | Localization helper nodes feeding the `fusion_graph` localizer (wheel odometry, NavSatFix→pose conversion, COG-to-IMU absolute yaw, magnetometer yaw, dock-yaw auto-capture, localization monitor) | mowgli_interfaces |
+| **fusion_graph** | Sole map+odom localizer: GTSAM iSAM2 Pose2 factor graph publishing both `map→odom` and `odom→base_footprint` | mowgli_interfaces, GTSAM |
+| **mowgli_nav2_plugins** | Nav2 controller plugins (MPPI + RPP + RotationShimController, goal checkers) | nav2_core, mowgli_interfaces |
 | **mowgli_map** | Map server with cell-based strip coverage planner (`~/get_next_strip` service), area storage/persistence, mow progress tracking (`mow_progress` grid layer), and obstacle_tracker_node | mowgli_interfaces, nav_msgs, nav2_map_server |
 | **mowgli_behavior** | Reactive behavior tree control (BehaviorTree.CPP v4) | mowgli_interfaces, nav2_msgs |
 | **mowgli_monitoring** | Diagnostics aggregation and MQTT bridge for external monitoring | diagnostic_msgs |
@@ -489,40 +488,29 @@ Source nodes:
 
 ↓
 
-robot_localization dual EKF (launched by mowgli_bringup):
-
-ekf_odom_node (50 Hz, local EKF, two_d_mode):
-   - Fuses: /wheel_odom + /imu/data (roll/pitch + gyro_z)
-   - Output: /odometry/filtered (odom frame)
-   - Publishes TF: odom → base_footprint  (continuous, never jumps)
-
-navsat_transform_node (30 Hz):
-   - Fuses /gps/fix + /odometry/filtered + /imu/data
-   - Uses a fixed lat/lon datum from mowgli_robot.yaml
-   - Publishes /odometry/gps in the map frame
-
-ekf_map_node (30 Hz, global EKF, two_d_mode) — DEFAULT:
-   - Fuses: same wheel + IMU inputs
-             + /gps/pose_cov  (PoseWithCovarianceStamped from
-                               navsat_to_absolute_pose_node)
-             + /imu/cog_heading  (GPS-COG absolute yaw from cog_to_imu.py)
-             + /imu/mag_yaw     (optional, when use_magnetometer=true)
-   - Output: /odometry/filtered_map (map frame)
-   - Publishes TF: map → odom
-
-— OR — (use_fusion_graph:=true, opt-in)
-
-fusion_graph_node (10 Hz, GTSAM iSAM2 factor-graph):
-   - 1-for-1 replacement for ekf_map_node. Same inputs, same outputs.
-   - Pose2 graph with wheel between-factor (non-holo σ_y << σ_x), gyro
-     between-factor on yaw, custom GnssLeverArmFactor (analytic Jacobian),
-     and unary yaw factors for COG / mag.
+fusion_graph_node (GTSAM iSAM2 Pose2 factor graph) — SOLE/DEFAULT,
+launched unconditionally by navigation.launch.py:
+   - Fuses: wheel between-factor (non-holo σ_y << σ_x, from /wheel_odom),
+             gyro between-factor on yaw (from /imu/data),
+             custom GnssLeverArmFactor (analytic Jacobian, lever-arm rotates
+                               with node yaw, fed by /gps/pose_cov from
+                               navsat_to_absolute_pose_node),
+             yaw unary  /imu/cog_heading  (GPS-COG absolute yaw),
+             yaw unary  /imu/mag_yaw      (optional, when calibrated)
    - Optional LiDAR scan-matching between-factors and loop-closure factors
      (gated by use_scan_matching / use_loop_closure).
    - Output: /odometry/filtered_map (map frame)
-   - Publishes TF: map → odom
+   - Publishes BOTH TFs from a dedicated TF broadcast thread:
+       map → odom               (absorbs GPS corrections)
+       odom → base_footprint    (continuous dead-reckoning, never jumps)
    - Adds: /fusion_graph/diagnostics, /fusion_graph/markers
    - Services: ~/save_graph (Trigger), ~/clear_graph (Trigger)
+   - Config: ros2/src/fusion_graph/config/fusion_graph.yaml
+
+(The robot_localization dual EKF — ekf_map_node + ekf_odom_node —
+ navsat_transform_node, robot_localization.yaml, slam_toolbox,
+ Kinematic-ICP, and FusionCore were all removed. fusion_graph_node now
+ owns both TF legs.)
 
 No SLAM: the /map OccupancyGrid is generated by map_server_node from
 user-defined area polygons, not from scan matching.
@@ -530,9 +518,8 @@ user-defined area polygons, not from scan matching.
 ↓
 
 Final Output:
-  /tf tree: map → odom → base_footprint
-  /odometry/filtered      (local EKF, odom frame)
-  /odometry/filtered_map  (global EKF, map frame)
+  /tf tree: map → odom → base_footprint  (both legs from fusion_graph_node)
+  /odometry/filtered_map  (fused pose, map frame)
   /map (area polygons from map_server_node, not SLAM)
 ```
 
@@ -572,9 +559,9 @@ Output:
 ```
 
 **Covariance Strategy:**
-- Only `vx` and `vyaw` components are configured in the odom EKF (see localization.yaml)
-- Pose covariance intentionally large to prevent odometry from dominating the filter
-- EKF will apply heavier corrections from IMU and GPS
+- Tight `vy` covariance enforces the non-holonomic constraint when the wheel between-factor is built
+- Pose covariance intentionally large to prevent odometry from dominating the factor graph
+- The factor graph applies heavier corrections from GPS and the gyro/COG/mag yaw factors
 
 **Parameters (wheel_odometry.yaml):**
 ```yaml
@@ -593,7 +580,7 @@ wheel_odometry:
 **Outputs:**
 - `/gps/absolute_pose` (geometry_msgs/PoseWithCovarianceStamped)
 
-**Purpose:** Convert NavSatFix (latitude/longitude) to a local ENU pose for GUI visualization, Behavior Tree reference, and a PoseWithCovarianceStamped twin (`/gps/pose_cov`) that `ekf_map_node` fuses. `navsat_transform_node` handles NavSatFix directly for the EKF pipeline; this node publishes the parallel Mowgli-specific `AbsolutePose` topic.
+**Purpose:** Convert NavSatFix (latitude/longitude) to a local ENU pose for GUI visualization, Behavior Tree reference, and a PoseWithCovarianceStamped twin (`/gps/pose_cov`) that `fusion_graph_node` fuses via its `GnssLeverArmFactor`. This node also publishes the Mowgli-specific `AbsolutePose` topic.
 
 **Algorithm: GNSS to Local ENU**
 
@@ -630,7 +617,7 @@ navsat_to_absolute_pose:
 #### 3c. localization_monitor_node
 
 **Inputs:**
-- `/odometry/filtered_map` (from `ekf_map_node`)
+- `/odometry/filtered_map` (from `fusion_graph_node`)
 - `/status` (for wheel tick freshness)
 - `/gps/rtk_fix` (for fix status)
 
@@ -650,11 +637,11 @@ not flap. Set `mode_debounce_sec: 0` to commit immediately.
 
 | Level | Name | Condition | Response |
 |-------|------|-----------|----------|
-| 0 | OK | EKF healthy, all sensors fresh | Continue normally |
+| 0 | OK | Localizer healthy, all sensors fresh | Continue normally |
 | 1 | ODOMETRY_STALE | No wheel ticks for 2s | Warn in logs, reduce planner timeout |
 | 2 | GPS_TIMEOUT | No fix for 10s (RTK Float OK) | Use wheel odom only, increase drift tolerance |
 | 3 | GPS_DEGRADED | RTK Float (not Fixed) | Use GPS but with higher variance |
-| 4 | FILTER_DIVERGENCE | EKF position covariance > threshold | Emergency stop recommended |
+| 4 | FILTER_DIVERGENCE | Localizer position covariance > threshold | Emergency stop recommended |
 
 **Parameters (localization_monitor.yaml):**
 ```yaml
@@ -666,12 +653,12 @@ localization_monitor:
     mode_debounce_sec: 1.0                 # hysteresis on published mode (0 = off)
 ```
 
-#### 3d. robot_localization Diagnostics Integration
+#### 3d. Localizer Diagnostics Integration
 
 **Monitoring:**
-The diagnostics_node monitors EKF health by subscribing to `/odometry/filtered_map` and checking:
-- **Rate:** Verify ~30 Hz update rate (report WARN if < 10 Hz)
-- **Position variance:** Monitor x, y components of pose covariance (Z is clamped to zero under `two_d_mode`)
+The diagnostics_node monitors localizer health by subscribing to `/odometry/filtered_map` and checking:
+- **Rate:** Verify a steady update rate (report WARN if < 10 Hz)
+- **Position variance:** Monitor x, y components of pose covariance (the localizer runs a 2D Pose2 estimate; Z is not estimated)
 - **Orientation (yaw):** Check yaw angle convergence and variance
 - **GPS consistency:** Compare `/odometry/filtered_map` to `/gps/absolute_pose` and warn if the gap widens beyond RTK accuracy expectations
 
@@ -683,15 +670,15 @@ Aggregated into `/diagnostics` as sub-status with levels:
 
 ---
 
-### Optional: Factor-Graph Localizer (fusion_graph) {#optional-factor-graph-localizer-fusion_graph}
+### Factor-Graph Localizer (fusion_graph) {#optional-factor-graph-localizer-fusion_graph}
 
-**Package:** `mowgli_localization` co-hosts `ros2/src/fusion_graph/` (separate ament_cmake package).
+**Package:** `ros2/src/fusion_graph/` (separate ament_cmake package).
 
-**Purpose:** opt-in replacement for `ekf_map_node` built on **GTSAM iSAM2**. Same wire contract — `/odometry/filtered_map` + `map → odom` TF — but the map-frame estimate is the result of an incremental Pose2 factor graph, which lets LiDAR scan-matching and loop-closure factors carry the position through multi-minute RTK-Float windows where the EKF would otherwise drift on dead-reckoning alone.
+**Purpose:** the **sole, default, unconditional** map+odom localizer, built on **GTSAM iSAM2**. It publishes **both** `map → odom` AND `odom → base_footprint` (from a dedicated TF broadcast thread), plus `/odometry/filtered_map`. The map-frame estimate is the result of an incremental Pose2 factor graph, which lets LiDAR scan-matching and loop-closure factors carry the position through multi-minute RTK-Float windows where dead-reckoning alone would drift.
 
-**Activation:** set `use_fusion_graph:=true` on `navigation.launch.py` (or in `mowgli_robot.yaml`). The two backends are **mutually exclusive**: only one of `ekf_map_node` or `fusion_graph_node` publishes `map → odom` at any time. `ekf_odom_node` (local EKF, `odom → base_footprint`) is unchanged in either mode.
+**Activation:** none — `fusion_graph_node` is launched **unconditionally** by `navigation.launch.py`. There is **no `use_fusion_graph` arg**. The robot_localization dual EKF (`ekf_map_node` + `ekf_odom_node`), `robot_localization.yaml`, slam_toolbox, Kinematic-ICP, and FusionCore were all removed; `fusion_graph_node` is the only node that publishes either TF leg. Config lives in `ros2/src/fusion_graph/config/fusion_graph.yaml`.
 
-**Graph structure (per node, 10 Hz):**
+**Graph structure (per node, `node_period_s` cadence):**
 
 | Factor | Source | Notes |
 |---|---|---|
@@ -703,12 +690,12 @@ Aggregated into `/diagnostics` as sub-status with levels:
 | Scan `BetweenFactor` (optional) | `/scan` | ICP between consecutive nodes; gated on `use_scan_matching:=true`. |
 | Loop-closure `BetweenFactor` (optional) | `/scan` + scan storage | Candidate search around new nodes; gated on `use_loop_closure:=true`. |
 
-**Public surface (in addition to the EKF surface):**
+**Public surface:**
 
 - **Topics**:
   - `/fusion_graph/diagnostics` (`diagnostic_msgs/DiagnosticArray`, 1 Hz) — `total_nodes`, `scans_attached`, `loop_closures`, `scans_received`, `scan_matches_ok`, `scan_matches_fail`, `cov_xx`, `cov_yy`, `cov_yawyaw`. Surfaced in the GUI's *Diagnostics → Fusion Graph (iSAM2)* panel.
   - `/fusion_graph/markers` (`visualization_msgs/MarkerArray`, 1 Hz, transient_local) — node positions, trajectory, loop-closure edges (decimated to ≤1500 nodes).
-  - `/imu/fg_yaw` (`sensor_msgs/Imu`, 10 Hz) — yaw-only output that can feed `ekf_map_node` as a tight yaw source when running side-by-side in observer mode.
+  - `/imu/fg_yaw` (`sensor_msgs/Imu`, 10 Hz) — yaw-only output exposed for downstream consumers / diagnostics.
 - **Services** (both `std_srvs/Trigger`):
   - `~/save_graph` — persists graph (XML), per-node scans (binary), and metadata (datum + indices) to `/ros2_ws/maps/fusion_graph.{graph,scans,meta}`. Auto-fires on RECORDING→IDLE, on dock arrival, and every `periodic_save_period_s` (default 5 min) during AUTONOMOUS state.
   - `~/clear_graph` — wipes iSAM2 + scans + queues. The next valid pose seed (GPS, set_pose, or scan-match relocalization) re-initializes.
@@ -718,7 +705,7 @@ Aggregated into `/diagnostics` as sub-status with levels:
 - On disk: `<graph_save_prefix>.graph` (gtsam serialised Values), `.scans` (per-node Eigen `Vector2d` blobs), `.meta` (next index, last node time, datum lat/lon).
 - On startup: if `autoload_graph:=true` and the files exist, the node resumes from the last-saved state; subsequent ticks add nodes after the highest loaded index. This is what makes "park the robot, restart ROS2, resume mowing" work without losing the graph.
 
-**Why it exists:** the EKF treats GPS as an unbiased XY observation and times out cleanly during dropouts, but it has no mechanism to use LiDAR for an absolute pose lock. The factor graph adds those constraints (scan between-factors and loop-closure factors) without giving up the GPS / wheel / IMU fusion the EKF already does well — at the cost of a richer node and a non-trivial CPU budget (~5 ms/tick at 10 Hz on a Pi 4 with scan matching enabled).
+**Why it exists:** a plain EKF treats GPS as an unbiased XY observation and times out cleanly during dropouts, but has no mechanism to use LiDAR for an absolute pose lock — which is why the previous robot_localization dual EKF was replaced. The factor graph adds scan between-factors and loop-closure factors on top of the same GPS / wheel / IMU fusion, at the cost of a richer node and a non-trivial CPU budget (~5 ms/tick on a Pi 4 with scan matching enabled).
 
 **Purpose:** Configuration, URDF, and launch orchestration for the entire stack.
 
@@ -768,15 +755,15 @@ base_footprint (on ground, fixed to base_link)
 **Transform Tree (TF):**
 
 ```
-Map frame (GPS-anchored via navsat_transform datum)
+Map frame (GPS-anchored via fixed datum)
     │
-    ├── [ekf_map_node publishes map→odom @ 30 Hz]
+    ├── [fusion_graph_node publishes map→odom]
     │
 Odometry frame (continuous, drift-only)
     │
-    ├── [ekf_odom_node publishes odom→base_footprint @ 50 Hz]
+    ├── [fusion_graph_node publishes odom→base_footprint]
     │
-Base footprint (on ground, robot frame for Nav2/robot_localization)
+Base footprint (on ground, robot frame for Nav2)
     │
     ├── [robot_state_publisher outputs static TFs]
     │
@@ -797,9 +784,9 @@ Starts:
 1. `robot_state_publisher` – Processes URDF/xacro, publishes robot_description and static TFs
 2. `hardware_bridge_node` – Serial bridge to STM32
 3. `twist_mux` – Priority-based cmd_vel multiplexer
-4. `ekf_odom_node` + `navsat_transform_node` + `ekf_map_node` (robot_localization dual EKF) – Wheel odometry + IMU + GPS fusion
-5. `wheel_odometry_node`, `imu_filter_madgwick`, `navsat_to_absolute_pose_node`, `localization_monitor_node` – Sensor preparation
-6. (Optional) SLAM, Nav2, behavior tree nodes
+4. `fusion_graph_node` (GTSAM iSAM2 factor graph) – sole localizer; publishes both `map→odom` and `odom→base_footprint`, fusing wheel + IMU + GPS (+ optional LiDAR)
+5. `wheel_odometry_node`, `imu_filter_madgwick`, `navsat_to_absolute_pose_node`, `cog_to_imu`, `mag_yaw_publisher`, `localization_monitor_node` – Sensor preparation feeding the factor graph
+6. Nav2, behavior tree nodes
 
 **simulation.launch.py** – Gazebo Ignition
 
@@ -810,24 +797,26 @@ Starts:
 4. `ros_gz_bridge` – Bridges sensor topics and actuator commands
 5. `joint_state_publisher` – Publishes wheel joint states for visualization
 
-**navigation.launch.py** – robot_localization + Nav2 stack (included by main)
+**navigation.launch.py** – fusion_graph localizer + Nav2 stack (included by main)
 
 Starts (in order):
-1. `ekf_odom_node`, `navsat_transform_node`, `ekf_map_node` (robot_localization).
-   `ekf_odom_node` publishes `odom→base_footprint`; `ekf_map_node` publishes
-   `map→odom`. Gated on `use_ekf`.
+1. `fusion_graph_node` (GTSAM iSAM2 factor graph) — launched
+   **unconditionally** (there is no `use_fusion_graph` arg). Publishes
+   **both** `map→odom` AND `odom→base_footprint`. Reads datum + lever-arm
+   from `mowgli_robot.yaml`; config in `fusion_graph.yaml`.
 2. `navsat_to_absolute_pose_node`, `cog_to_imu.py`, `mag_yaw_publisher.py`,
-   `dock_yaw_to_set_pose` (mowgli_localization helpers).
+   `dock_yaw_to_set_pose` (mowgli_localization helpers feeding the graph).
 3. `nav2_bringup` — all Nav2 servers (controller, planner, behaviors,
-   costmaps, lifecycle manager). Uses `nav2_params.yaml` when
-   `use_lidar=true`, `nav2_params_no_lidar.yaml` otherwise.
+   costmaps, lifecycle manager). Deep-merges `nav2_params_base.yaml` with
+   `nav2_params_lidar.yaml` when `use_lidar=true`, `nav2_params_no_lidar.yaml`
+   otherwise.
 
 #### Configuration Files
 
 **hardware_bridge.yaml** – Serial communication, IMU cal sample count.
-**robot_localization.yaml** – Dual-EKF tuning: per-EKF sensor configs (wheel odom, IMU, GPS pose, COG-yaw IMU), process noise covariance, datum settings for `navsat_transform_node`.
-**nav2_params.yaml** – Navigation stack (costmaps, planner, controller) with LiDAR.
-**nav2_params_no_lidar.yaml** – Navigation stack for GPS-only operation (no obstacle layer, collision_monitor pass-through).
+**fusion_graph.yaml** (`ros2/src/fusion_graph/config/`) – Factor-graph tuning: node cadence, wheel/gyro/GPS sigmas, lever-arm, COG/mag gates, iSAM2 knobs, LiDAR scan-matching / loop-closure block.
+**nav2_params_base.yaml** – Shared Nav2 base (costmaps, planner, controller) deep-merged with one overlay.
+**nav2_params_lidar.yaml** / **nav2_params_no_lidar.yaml** – Thin overlays for the LiDAR vs GPS-only variants (obstacle vs static layers, scan-based vs pass-through collision_monitor).
 **twist_mux.yaml** – Velocity command multiplexing (nav < teleop < emergency).
 
 ---
@@ -852,10 +841,12 @@ Starts (in order):
 **Controller Profiles (Active Configuration):**
 
 Two controllers are active for different navigation modes:
-1. **FollowPath** – Transit navigation and docking (RPP + RotationShimController wrapper)
-2. **FollowCoveragePath** – Coverage path following (FTCController with 3-axis PID, <10mm lateral accuracy)
+1. **FollowPath** – Transit navigation and docking (RotationShim wrapping RPP, `nav2_regulated_pure_pursuit_controller`)
+2. **FollowCoveragePath** – Coverage path following (RotationShim wrapping MPPI, `nav2_mppi_controller`, one segment at a time, `closed_loop: false`)
 
-#### FTCController: 4-State FSM & Path-Indexed Algorithm (Active for Coverage)
+**FTCController is retired from both slots and is no longer registered.** The FSM/algorithm subsection below is **historical** — it documents the previous Follow-The-Carrot coverage controller that has been replaced by RotationShim + MPPI.
+
+#### FTCController (HISTORICAL — retired): 4-State FSM & Path-Indexed Algorithm
 
 **State Machine:**
 
@@ -1102,7 +1093,7 @@ BehaviorTreeNode (main ROS2 node, 10 Hz)
                 │   │       │   │   └── RetryUntilSuccessful(num_attempts=5):
                 │   │       │   │       Fallback MowOrRecover:
                 │   │       │   │         ├── FollowStrip — sends path to
-                │   │       │   │         │   FollowCoveragePath (FTCController)
+                │   │       │   │         │   FollowCoveragePath (RotationShim + MPPI)
                 │   │       │   │         ├── StuckBackoff — IsObstacleStuck →
                 │   │       │   │         │   BackUp(0.40m) + ClearCostmap → re-tick
                 │   │       │   │         └── DynamicObstacleSkip —
@@ -1301,7 +1292,7 @@ class TransitToStrip : public BT::AsyncActionNode
 // Returns RUNNING/SUCCESS/FAILURE
 
 class FollowStrip : public BT::AsyncActionNode
-// Follows current strip using Nav2 (FTCController for <10mm accuracy)
+// Follows current strip using Nav2 FollowCoveragePath (RotationShim + MPPI)
 // Returns RUNNING/SUCCESS/FAILURE
 
 // Area recording node:
@@ -1403,7 +1394,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory) {
 
 1. `GetNextUnmowedArea` — outer loop. Picks the next area whose `mow_progress` layer still has un-mowed cells; writes its index to the blackboard. Returns FAILURE when all areas are complete.
 2. `PlanCoverageArea` (ONE per area per session) — calls `/map_server_node/get_remaining_area_polygon` to fetch `area outer ring + mow_progress holes` (Boost.Geometry difference of the area polygon and the already-mowed cells, CCW outer / CW holes), then sends a `compute_coverage_path` action goal to `mowgli_coverage`. Stores the resulting `nav_msgs/Path` on the BT blackboard.
-3. `FollowStrip` — sends the stored path to `FollowCoveragePath` (FTCController). On abort (collision wedge, FTC `WAITING_FOR_GOAL_APPROACH` timeout, etc.), `RetryUntilSuccessful(num_attempts=5)` re-ticks `FollowStrip` on the SAME path; FTC's `setPlan` resyncs to the closest pose, effectively "continue from where you left off" without re-planning. `IsObstacleStuck` and `WasRecentlyInCollisionStop` fallback branches insert `BackUp` + `ClearCostmap` between retries.
+3. `FollowStrip` — sends the stored path to `FollowCoveragePath` (RotationShim + MPPI). On abort (collision wedge, controller timeout, etc.), `RetryUntilSuccessful(num_attempts=5)` re-ticks `FollowStrip` on the SAME path; the controller's `setPlan` resyncs to the closest pose, effectively "continue from where you left off" without re-planning. `IsObstacleStuck` and `WasRecentlyInCollisionStop` fallback branches insert `BackUp` + `ClearCostmap` between retries.
 
 Progress is tracked in the `mow_progress` grid layer (survives restarts, stamp radius `tool_width / 2`). Coverage status is available via `~/get_coverage_status` service and `/map_server_node/coverage_cells` OccupancyGrid topic.
 
@@ -1760,14 +1751,13 @@ foxglove_bridge:
      └─ cmd_vel → hardware_bridge → STM32 → wheels
 
 4. Coverage path following (CoverageWithRecovery loop):
-   FollowCoveragePath:
-     ├─ FTCController (Follow-the-Carrot with 3-axis PID, <10mm lateral accuracy)
-     ├─ State machine: PRE_ROTATE → FOLLOWING → WAITING_FOR_GOAL_APPROACH → POST_ROTATE
-     ├─ In-place rotation at swath turns (differential drive)
-     ├─ Oscillation detection (FailureDetector)
-     ├─ Obstacle avoidance (costmap checking)
-     └─ Updates: state → WAITING_FOR_GOAL_APPROACH → POST_ROTATE → FINISHED
-        Returns: RUNNING (in progress), SUCCESS (path complete), FAILURE (stuck)
+   FollowCoveragePath (RotationShim + MPPI, one segment at a time):
+     ├─ RotationShim does an in-place pivot to the segment-start heading
+     │  (the ~180° flip between adjacent swaths)
+     ├─ MPPI tracks the SINGLE segment it was handed (closed_loop: false)
+     ├─ Obstacle avoidance via MPPI CostCritic over the LiDAR obstacle_layer
+     │  (collision_monitor PolygonSlow is the soft-slowdown fallback)
+     └─ Returns: RUNNING (in progress), SUCCESS (path complete), FAILURE (stuck)
 
 5. Feedback loop (real-time):
    STM32 (100 Hz):
@@ -1782,20 +1772,21 @@ foxglove_bridge:
      ├─ Fuses IMU gyro + accel
      └─→ /imu/data (filtered orientation)
 
-   robot_localization dual EKF:
-     ├─ ekf_odom_node (50 Hz): wheel + gyro + optional /encoder2/odom
-     │     → /odometry/filtered, /tf: odom → base_footprint
-     ├─ navsat_transform_node (30 Hz): /gps/fix + local pose → /odometry/gps
-     └─ ekf_map_node (30 Hz): wheel + gyro + /gps/pose_cov + /imu/cog_heading
-           → /odometry/filtered_map, /tf: map → odom
+   fusion_graph_node (GTSAM iSAM2 factor graph, sole localizer):
+     ├─ Fuses wheel between-factor + gyro between-factor + GnssLeverArmFactor
+     │  (/gps/pose_cov) + COG/mag yaw unaries (+ optional LiDAR factors)
+     ├─ → /odometry/filtered_map (map frame)
+     └─ Publishes BOTH /tf legs from a dedicated TF broadcast thread:
+           odom → base_footprint  (continuous dead-reckoning)
+           map → odom             (absorbs GPS corrections)
 
    The /map OccupancyGrid comes from map_server_node's user-defined area
    polygons, not from SLAM.
 
-   FTCController (10 Hz, coverage) / RPP Controller (10 Hz, transit):
-     ├─ Reads robot pose from /tf: odom → base_link
-     ├─ FTC: path-indexed PID on longitudinal, lateral, angular axes
-     ├─ RPP: regulated pure pursuit with curvature-based speed scaling (transit only)
+   MPPI (coverage, FollowCoveragePath) / RPP (transit, FollowPath):
+     ├─ Read robot pose from /tf and velocity from controller_server.odom_topic
+     ├─ MPPI: sampling-based MPC tracking one coverage segment at a time
+     ├─ RPP: regulated pure pursuit with curvature-based speed scaling (transit)
      └─→ /cmd_vel (geometry_msgs/Twist)
 
 6. Command routing (twist_mux, priority-based):
@@ -1820,7 +1811,7 @@ foxglove_bridge:
    Condition checks:
      ├─ IsEmergency (latched_emergency bit)
      ├─ NeedsDocking (battery < 20 V)
-     ├─ IsLocalizationHealthy (EKF variance < threshold)
+     ├─ IsLocalizationHealthy (fusion-graph cov_xx/cov_yy < threshold)
      └─ IsCommand (COMMAND_START still active)
    On failure:
      ├─ SetMowerEnabled(false)
@@ -1846,7 +1837,7 @@ foxglove_bridge:
        ├─ /map_server_node/coverage_cells (mow progress grid)
        ├─ /coverage_path and /coverage_outline (visualization)
        ├─ /scan (LiDAR LaserScan)
-       ├─ /fusion_graph/diagnostics (when use_fusion_graph:=true)
+       ├─ /fusion_graph/diagnostics (factor-graph health)
        ├─ /diagnostics (system health)
        └─ /tf tree (all frame transformations)
 ```
@@ -1858,13 +1849,13 @@ foxglove_bridge:
 **Standard ROS2 conventions (REP-103 + REP-105):**
 
 ```
-map (GPS-anchored via navsat_transform fixed datum)
-  │ [published by ekf_map_node @ 30 Hz]
+map (GPS-anchored via fixed datum from mowgli_robot.yaml)
+  │ [published by fusion_graph_node]
   │
   odom (continuous, drift-only)
-  │ [published by ekf_odom_node @ 50 Hz]
+  │ [published by fusion_graph_node]
   │
-  base_footprint (on ground, robot frame for Nav2/robot_localization)
+  base_footprint (on ground, robot frame for Nav2)
   │ [base_footprint → base_link static, from URDF]
   │
   ├── base_link (robot body frame, wheel axle height per OpenMower convention)
@@ -1872,7 +1863,7 @@ map (GPS-anchored via navsat_transform fixed datum)
   │
   ├── imu_link (fixed to chassis, IMU measurement frame)
   │   └── [hardware_bridge publishes IMU data in this frame;
-  │        robot_localization consumes orientation and angular velocity]
+  │        fusion_graph consumes gyro yaw rate + tilt for the gyro/mag factors]
   │
   ├── lidar_link (fixed to chassis, LiDAR origin)
   │   └── [LD19 publishes /scan in this frame; collision_monitor + obstacle_layer consume here]
@@ -1890,9 +1881,9 @@ map (GPS-anchored via navsat_transform fixed datum)
 
 | Frame | Publisher | Rate | Purpose |
 |-------|-----------|------|---------|
-| map | ekf_map_node | 30 Hz | Global frame, anchored to navsat_transform datum |
-| odom | ekf_odom_node | 50 Hz | Continuous local frame (dead-reckoning) |
-| base_footprint | ekf_odom_node | 50 Hz | On ground, robot frame for Nav2/controllers (REP-105) |
+| map | fusion_graph_node | TF thread (20 Hz) | Global frame, anchored to the fixed datum from `mowgli_robot.yaml` |
+| odom | fusion_graph_node | TF thread (20 Hz) | Continuous local frame (dead-reckoning) |
+| base_footprint | fusion_graph_node | TF thread (20 Hz) | On ground, robot frame for Nav2/controllers (REP-105) |
 | base_link | robot_state_publisher | Static | Rear wheel axle (OpenMower convention) |
 | imu_link | robot_state_publisher | Static | IMU sensor frame |
 | lidar_link | robot_state_publisher | Static | LiDAR origin (collision_monitor + obstacle_layer consume here) |
@@ -1901,9 +1892,9 @@ map (GPS-anchored via navsat_transform fixed datum)
 
 **Frame Conventions:**
 
-- `map` – Global frame, z-up, x-east, y-north (REP-103). Anchored to the navsat_transform datum from `mowgli_robot.yaml`. Published by `ekf_map_node`.
-- `odom` – Continuous local frame, drift-only. Published by `ekf_odom_node`.
-- `base_footprint` – Ground contact point, robot frame for Nav2. Published by `ekf_odom_node`.
+- `map` – Global frame, z-up, x-east, y-north (REP-103). Anchored to the fixed datum from `mowgli_robot.yaml`. Published by `fusion_graph_node`.
+- `odom` – Continuous local frame, drift-only. Published by `fusion_graph_node`.
+- `base_footprint` – Ground contact point, robot frame for Nav2. Published by `fusion_graph_node`.
 - `base_link` – Robot body frame at rear wheel axle height (OpenMower convention). Static offset from base_footprint.
 
 **Simulation (Gazebo Harmonic):**
@@ -1932,11 +1923,10 @@ This lets costmap, collision_monitor, fusion_graph (when enabled), and every oth
 | `/wheel_odom` | nav_msgs/Odometry | hardware_bridge_node | ~10 Hz | Integrated wheel velocities (RELIABLE; tight vy covariance enforces non-holonomic constraint) |
 | `/gps/fix` | sensor_msgs/NavSatFix | ublox_nav_sat_fix_hp_node | 5 Hz | RTK Fixed when available (σ ~3 mm) |
 | `/gps/absolute_pose` | geometry_msgs/PoseWithCovarianceStamped | navsat_to_absolute_pose_node | 5 Hz | RTK position converted to local ENU (diagnostics / BT) |
-| `/odometry/filtered` | nav_msgs/Odometry | ekf_odom_node | 50 Hz | Local EKF (odom frame, continuous) |
-| `/odometry/filtered_map` | nav_msgs/Odometry | ekf_map_node (default) or fusion_graph_node (opt-in) | 30 Hz / 10 Hz | Global pose (map frame, GPS-corrected; LiDAR-aware when fusion_graph is enabled) |
-| `/odometry/gps` | nav_msgs/Odometry | navsat_transform_node | on GPS arrival | NavSatFix converted to map-frame pose |
-| `/fusion_graph/diagnostics` | diagnostic_msgs/DiagnosticArray | fusion_graph_node | 1 Hz | Factor-graph health (when use_fusion_graph:=true) |
-| `/localization/status` | diagnostic_msgs/DiagnosticStatus | localization_monitor_node | 2 Hz | GPS quality + EKF health |
+| `/odometry/filtered_map` | nav_msgs/Odometry | fusion_graph_node | factor-graph cadence | Fused pose (map frame, GPS-corrected; LiDAR-aware when scan matching is enabled) |
+| `/fusion_graph/diagnostics` | diagnostic_msgs/DiagnosticArray | fusion_graph_node | 1 Hz | Factor-graph health (total_nodes, scan-match success, loop closures, cov_xx/yy) |
+| `/fusion_graph/markers` | visualization_msgs/MarkerArray | fusion_graph_node | 1 Hz | Node positions, trajectory, loop-closure edges |
+| `/localization/status` | diagnostic_msgs/DiagnosticStatus | localization_monitor_node | 2 Hz | GPS quality + localizer health |
 | `/coverage_server/_action/feedback` and `/coverage_server/_action/result` | opennav_coverage_msgs/ComputeCoveragePath | mowgli_coverage (coverage_server) | Per BT PlanCoverageArea call | F2C v2.0 coverage path (`result.nav_path`) — fed to FollowCoveragePath by FollowStrip BT node |
 | `/path` | nav_msgs/Path | planner_server (Nav2) | 1 Hz | Global path from Nav2 planner |
 | `/cmd_vel` | geometry_msgs/Twist | twist_mux | 10–50 Hz | Final velocity command (to hardware/Gazebo) |
@@ -1949,16 +1939,16 @@ This lets costmap, collision_monitor, fusion_graph (when enabled), and every oth
 | Topic | Subscriber | Purpose |
 |-------|-----------|---------|
 | `/cmd_vel` | hardware_bridge_node / Gazebo | Motor/wheel commands |
-| `/scan` | fusion_graph_node (when use_fusion_graph + use_scan_matching), collision_monitor, obstacle_layer, diagnostics_node | Scan-matching factors, obstacle detection, monitoring |
-| `/imu/data` | ekf_odom_node, ekf_map_node, diagnostics_node | Sensor fusion + monitoring |
+| `/scan` | fusion_graph_node (when use_scan_matching/use_loop_closure), collision_monitor, obstacle_layer, diagnostics_node | Scan-matching factors, obstacle detection, monitoring |
+| `/imu/data` | fusion_graph_node, diagnostics_node | Sensor fusion (gyro between-factor) + monitoring |
+| `/wheel_odom` | fusion_graph_node, controller_server (odom_topic), diagnostics_node | Wheel between-factor + MPPI/RPP velocity feedback + monitoring |
+| `/gps/pose_cov` | fusion_graph_node | GnssLeverArmFactor (map-frame GPS observation) |
 | `/odometry/filtered_map` | nav2 (bt_navigator), BT, diagnostics_node, GUI | Localized pose for control, behavior tree, diagnostics |
 | `/map` | nav2 planner, behavior_tree (area polygons), diagnostics_node | Global navigation reference (area-polygon grid) |
-| `/gps/fix` | navsat_transform_node, navsat_to_absolute_pose_node, diagnostics_node | Sensor fusion, convert fix to local frame, monitor GPS |
-| (removed) | — | The legacy `/encoder2/odom` K-ICP twist topic is gone; ekf_odom_node uses only `/wheel_odom`. |
+| `/gps/fix` | navsat_to_absolute_pose_node, diagnostics_node | Convert fix to local frame, monitor GPS |
 | `/status` | behavior_tree_node, localization_monitor_node, diagnostics_node | Health checks, sensor freshness |
 | `/emergency` | behavior_tree_node, diagnostics_node | Emergency monitoring |
 | `/power` | behavior_tree_node, diagnostics_node | Battery level monitoring |
-| `/wheel_odom` | diagnostics_node | Monitor odometry freshness |
 | `/controller_server/FollowCoveragePath/global_plan` | PathProgressGoalChecker | Coverage completion gating (>= 95% path-pose tracking + xy/yaw to goal pose) |
 
 **Services (Request-Response):**
@@ -1988,9 +1978,9 @@ This lets costmap, collision_monitor, fusion_graph (when enabled), and every oth
 1. **14-Package Modular Design:** Separation of concerns across hardware, localization, navigation, planning, monitoring, and behavior layers.
    - **Core:** mowgli_interfaces (message + service definitions, including `GetRemainingAreaPolygon.srv`)
    - **Hardware:** mowgli_hardware (STM32 bridge via COBS)
-   - **Perception:** mowgli_localization (EKF fusion helpers — `cog_to_imu_node`, `mag_yaw_publisher`, `navsat_to_absolute_pose_node`, `costmap_scan_filter_node`, `scan_deskew_node`)
-   - **Localization (opt-in):** fusion_graph (GTSAM iSAM2 factor graph; replaces `ekf_map_node` when `use_fusion_graph:=true`)
-   - **Control:** mowgli_nav2_plugins (FTCController for both FollowPath/FollowCoveragePath, `PathProgressGoalChecker` for coverage completion)
+   - **Perception:** mowgli_localization (localization helpers feeding the factor graph — `cog_to_imu_node`, `mag_yaw_publisher`, `navsat_to_absolute_pose_node`, `costmap_scan_filter_node`, `scan_deskew_node`)
+   - **Localization (sole, default):** fusion_graph (GTSAM iSAM2 factor graph; publishes both `map→odom` and `odom→base_footprint`, launched unconditionally)
+   - **Control:** mowgli_nav2_plugins (RotationShim + MPPI for FollowCoveragePath, RotationShim + RPP for FollowPath, `PathProgressGoalChecker` for coverage completion)
    - **Planning (areas + cells):** mowgli_map (area storage, `mow_progress` grid, `~/get_remaining_area_polygon` for F2C, legacy strip planner via `~/get_next_strip`)
    - **Planning (coverage path):** mowgli_coverage (Fields2Cover v2.0 server, action `compute_coverage_path`)
    - **Behavior:** mowgli_behavior (BehaviorTree.CPP v4, 10 Hz reactive control; F2C-driven coverage via `PlanCoverageArea` + `FollowStrip`)
@@ -2005,28 +1995,37 @@ This lets costmap, collision_monitor, fusion_graph (when enabled), and every oth
 
 4. **Robust Serial Protocol (COBS + CRC-16):** Enables reliable bidirectional communication between Raspberry Pi and STM32 firmware over noisy USB at 115200 baud.
 
-5. **Dual-EKF Localization (robot_localization — default localizer):**
-   - `ekf_odom_node` (50 Hz, `two_d_mode`) fuses wheel odometry + IMU
-     gyro_z → `odom → base_footprint`.
-   - `navsat_transform_node` (30 Hz) converts `/gps/fix` + local pose to
-     `/odometry/gps` in the map frame, using a fixed datum from
-     `mowgli_robot.yaml`.
-   - `ekf_map_node` (30 Hz) fuses wheel + IMU + `/gps/pose_cov` +
-     `/imu/cog_heading` → `map → odom`. Replaceable 1-for-1 by
-     `fusion_graph_node` (GTSAM iSAM2) when `use_fusion_graph:=true`.
-   - No SLAM back-end. The map frame is GPS-anchored; saved area polygons
-     and dock pose survive restarts.
-   - Non-holonomic motion enforced by tight `vy` covariance on `/wheel_odom`.
-     Absolute yaw comes from `cog_to_imu.py` (GPS course-over-ground) and
-     `mag_yaw_publisher.py` (tilt-compensated magnetometer) since the IMU
-     has no magnetometer.
+5. **Factor-Graph Localization (fusion_graph — sole, default, unconditional):**
+   - `fusion_graph_node` (GTSAM iSAM2 Pose2 graph) publishes **both**
+     `odom → base_footprint` (continuous dead-reckoning, never jumps) AND
+     `map → odom` (absorbs GPS corrections), from a dedicated TF broadcast
+     thread. There is no `use_fusion_graph` arg — it is the only localizer.
+   - Fuses a wheel between-factor (non-holonomic σ_y ≪ σ_x, from
+     `/wheel_odom`), a gyro between-factor on yaw, a custom
+     `GnssLeverArmFactor` (analytic Jacobian, lever-arm rotates with node
+     yaw, fed by `/gps/pose_cov`), and unary yaw factors for COG
+     (`/imu/cog_heading`) and tilt-compensated mag (`/imu/mag_yaw`, when
+     calibrated). Datum + lever-arm from `mowgli_robot.yaml`.
+   - The robot_localization dual EKF (`ekf_map_node` + `ekf_odom_node`),
+     `navsat_transform_node`, `robot_localization.yaml`, slam_toolbox,
+     Kinematic-ICP, and FusionCore were all removed.
+   - No SLAM back-end. The map frame is GPS-anchored; saved area polygons,
+     dock pose, and the persisted graph survive restarts.
    - Graceful degradation: operates without GPS in GNSS-denied areas
-     (wheel + IMU; with `use_fusion_graph:=true` and LiDAR, scan-matching
-     between-factors keep the map-frame estimate stable across multi-minute
-     RTK-Float windows). `ekf_odom_node` keeps `odom→base_footprint`
-     flowing even when the map-frame backend stalls.
+     (wheel + gyro dead-reckoning; with LiDAR `use_scan_matching` /
+     `use_loop_closure` on, scan-matching between-factors keep the map-frame
+     estimate stable across multi-minute RTK-Float windows).
 
-6. **Coverage Path Following:** FTCController (Follow-the-Carrot, 3-axis PID + native obstacle deviation) is the active controller for BOTH `FollowPath` (transit) and `FollowCoveragePath` (coverage strips). Single plugin, single tuning. RPP is no longer in the active stack. Coverage completion is gated by `mowgli_nav2_plugins/PathProgressGoalChecker` (>= 95 % path-pose tracking + xy/yaw to goal pose) — `StoppedGoalChecker` and `SimpleGoalChecker` both fired on velocity stoppage during PRE_ROTATE pivots, completing the action at <2 % coverage.
+6. **Coverage Path Following:** `FollowCoveragePath` = RotationShim wrapping
+   MPPI (`nav2_mppi_controller`), fed ONE coverage segment at a time
+   (`closed_loop: false`): RotationShim pivots in place to the segment-start
+   heading, MPPI tracks the segment. `FollowPath` (transit) = RotationShim
+   wrapping RPP (`nav2_regulated_pure_pursuit_controller`). **FTCController is
+   retired from both slots.** Coverage completion is gated by
+   `mowgli_nav2_plugins/PathProgressGoalChecker` (>= 95 % path-pose tracking +
+   xy/yaw to goal pose) — `StoppedGoalChecker`/`SimpleGoalChecker` fired on
+   velocity stoppage during in-place pivots, completing the action at <2 %
+   coverage.
 
 7. **F2C v2 Coverage Planning:** `mowgli_coverage` server (in-tree, action `compute_coverage_path`) wraps Fields2Cover **2.0.0**: `ConstHL.generateHeadlands` insets + `generateHeadlandSwaths` emits concentric perimeter passes (densified 10 cm), `TrapezoidalDecomp` splits inner field around interior holes, then per sub-cell `BruteForce` swath generation → `BoustrophedonOrder` → `PathPlanning(DubinsCurvesCC)` with `planPathForConnection` Dubins arcs between sub-cells. `mowgli_map`'s `~/get_remaining_area_polygon` feeds it the area polygon minus already-mowed cells (Boost.Geometry difference). The legacy `opennav_coverage` upstream is kept as a git submodule for the `_msgs` package only — the server subpackages are `COLCON_IGNORE`'d (pinned to F2C 1.2.1, missing the v2 features above).
 
@@ -2038,7 +2037,7 @@ This lets costmap, collision_monitor, fusion_graph (when enabled), and every oth
 
 9. **Priority-Based Command Routing:** twist_mux mediates three command sources (emergency > teleoperation > navigation) before forwarding to hardware bridge.
 
-10. **Comprehensive Health Monitoring:** Diagnostics aggregator tracks 8 subsystems (hardware bridge, emergency, battery, IMU, LiDAR, GPS, odometry, motors) and EKF health (rate and position covariance of `/odometry/filtered_map`) with multi-level status (OK, WARN, ERROR, STALE) for autonomous decision-making. Real-time BT visualization shows active node path and execution state in GUI diagnostics page.
+10. **Comprehensive Health Monitoring:** Diagnostics aggregator tracks 8 subsystems (hardware bridge, emergency, battery, IMU, LiDAR, GPS, odometry, motors) and localizer health (rate and position covariance of `/odometry/filtered_map`, plus `/fusion_graph/diagnostics`) with multi-level status (OK, WARN, ERROR, STALE) for autonomous decision-making. Real-time BT visualization shows active node path and execution state in GUI diagnostics page.
 
 11. **Unified Simulation-to-Hardware Workflow:**
     - Gazebo Harmonic with ros_gz_bridge enables identical ROS2 stack on both sim and real hardware
@@ -2056,8 +2055,8 @@ This lets costmap, collision_monitor, fusion_graph (when enabled), and every oth
 | Resource | Location | Purpose |
 |----------|----------|---------|
 | URDF/Xacro | src/mowgli_bringup/urdf/mowgli.urdf.xacro | Robot kinematics, sensor frames, collision geometry |
-| robot_localization Config | src/mowgli_bringup/config/robot_localization.yaml | Dual-EKF per-sensor configs, process noise, navsat_transform datum |
-| Nav2 Config | src/mowgli_bringup/config/nav2_params.yaml | Planner, controller, costmap tuning |
+| fusion_graph Config | src/fusion_graph/config/fusion_graph.yaml | Factor-graph tuning: node cadence, wheel/gyro/GPS sigmas, lever-arm, COG/mag gates, iSAM2 + LiDAR knobs |
+| Nav2 Config | src/mowgli_bringup/config/nav2_params_base.yaml (+ lidar/no_lidar overlays) | Planner, controller, costmap tuning |
 | Behavior Tree | src/mowgli_behavior/trees/main_tree.xml | High-level state machine and sequencing |
 | Coverage Config | src/mowgli_bringup/config/mowgli_robot.yaml | Coverage parameters (path_spacing, mow_angle_offset_deg, tool_width) |
 | Gazebo Worlds | src/mowgli_simulation/worlds/ | garden.sdf (realistic), empty_garden.sdf (testing) |

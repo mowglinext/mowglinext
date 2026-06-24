@@ -8,11 +8,8 @@
   <a href="https://www.behaviortree.dev/">
     <img src="https://img.shields.io/badge/BehaviorTree.CPP-v4-orange" alt="BehaviorTree">
   </a>
-  <a href="https://docs.ros.org/en/noetic/api/robot_localization/html/">
-    <img src="https://img.shields.io/badge/robot_localization-dual_EKF-success" alt="EKF">
-  </a>
   <a href="https://gtsam.org/">
-    <img src="https://img.shields.io/badge/GTSAM-iSAM2-purple" alt="GTSAM">
+    <img src="https://img.shields.io/badge/localizer-fusion__graph_(GTSAM_iSAM2)-purple" alt="GTSAM">
   </a>
   <a href="https://github.com/Fields2Cover/Fields2Cover">
     <img src="https://img.shields.io/badge/Coverage-Fields2Cover-yellow" alt="Coverage">
@@ -73,7 +70,7 @@
 
 A fully autonomous mowing stack running on real hardware: undock, navigate to zones, mow strip-by-strip with sub-centimeter accuracy, avoid obstacles, dock to charge, and resume.
 
-**Core:** robot_localization dual EKF (GPS + IMU + wheels, REP-105 map/odom) · opt-in GTSAM iSAM2 factor-graph localizer (`fusion_graph`) with LiDAR scan-matching + loop-closure · Nav2 navigation · BehaviorTree.CPP v4 · cell-based strip coverage planner
+**Core:** GTSAM iSAM2 factor-graph localizer (`fusion_graph`) — sole map+odom localizer (GPS + IMU + wheels + optional LiDAR scan-matching + loop-closure, REP-105 map/odom) · Nav2 navigation · BehaviorTree.CPP v4 · cell-based strip coverage planner
 
 **Hardware:** YardForce chassis · ARM64 SBC (RK3566/RK3588, RPi 4/5) · u-blox F9P RTK-GPS · LDRobot LD19 LiDAR · STM32 firmware
 
@@ -105,7 +102,7 @@ GUI at `http://<mower-ip>:4006` · See **[Getting Started](https://github.com/ce
 
 | Directory | Description |
 |-----------|-------------|
-| [`ros2/`](ros2/) | ROS2 stack: Nav2, robot_localization, opt-in fusion_graph (GTSAM iSAM2), BT, coverage, hardware bridge |
+| [`ros2/`](ros2/) | ROS2 stack: Nav2, fusion_graph (GTSAM iSAM2 sole localizer), BT, coverage, hardware bridge |
 | [`gui/`](gui/) | React + Go web interface |
 | [`firmware/`](firmware/) | STM32 motor control, IMU, blade safety |
 | [`install/`](install/) | Interactive installer, Docker Compose configs |
