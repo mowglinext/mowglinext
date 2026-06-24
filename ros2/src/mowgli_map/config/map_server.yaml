@@ -6,9 +6,11 @@ map_server_node:
     map_frame: "map"
     # tool_width is the single source of truth for the blade's effective
     # cutting width. Injected at launch from mowgli_robot.yaml.tool_width
-    # (see navigation.launch.py) so this YAML only needs to keep the
-    # node-internal default that backs the test harness; production
-    # value comes from the per-site config.
+    # by full_system.launch.py / sim_full_system.launch.py (the launchers that
+    # spawn map_server_node) so this YAML only needs to keep the node-internal
+    # default that backs the test harness; production value comes from the
+    # per-site config. (navigation.launch.py injects the SAME scalar into
+    # coverage_server.operation_width.)
     tool_width: 0.18
     map_file_path: ""
     areas_file_path: "/ros2_ws/maps/areas.dat"

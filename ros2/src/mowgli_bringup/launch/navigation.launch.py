@@ -306,6 +306,12 @@ def generate_launch_description() -> LaunchDescription:
     mowing_speed = 0.25
     datum_lat = 0.0
     datum_lon = 0.0
+    # GPS antenna lever arm (base_link → antenna), shared by cog_to_imu (COG
+    # de-biasing + sweep gate) and fusion_graph (GnssLeverArmFactor). 0.0
+    # fallback matches fusion_graph.launch.py so the two localizer inputs
+    # never use different lever arms when gps_x/gps_y are unset.
+    gps_x = 0.0
+    gps_y = 0.0
     # Nav2 goal/progress tolerances exposed on the GUI's Settings →
     # Navigation page. Same orphan-param story as the speeds: the YAML
     # values were being shadowed by hardcoded constants in
@@ -417,6 +423,8 @@ def generate_launch_description() -> LaunchDescription:
         mowing_speed = float(rt_rp.get("mowing_speed", mowing_speed))
         datum_lat = float(rt_rp.get("datum_lat", 0.0))
         datum_lon = float(rt_rp.get("datum_lon", 0.0))
+        gps_x = float(rt_rp.get("gps_x", 0.0))
+        gps_y = float(rt_rp.get("gps_y", 0.0))
         xy_goal_tolerance = float(
             rt_rp.get("xy_goal_tolerance", xy_goal_tolerance))
         yaw_goal_tolerance = float(
@@ -816,6 +824,12 @@ def generate_launch_description() -> LaunchDescription:
             {"use_sim_time": use_sim_time,
              "datum_lat": datum_lat,
              "datum_lon": datum_lon,
+             # Lever arm from the same mowgli_robot.yaml source fusion_graph
+             # reads (gps_x/gps_y). Without this cog_to_imu silently used its
+             # hardcoded 0.30/0.0 default and de-biased COG with the wrong
+             # lever arm on any non-default antenna mount.
+             "lever_arm_x": gps_x,
+             "lever_arm_y": gps_y,
              "enable_mag_cal": enable_mag_cal,
              "mag_calibration_path": mag_cal_path,
              "stationary_seed_rate_hz": cog_stationary_rate,
