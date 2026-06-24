@@ -426,8 +426,8 @@ TEST(ScanBetweenConvention, MatchesBetweenFactorDirection)
   const gtsam::Pose2 via_inv = prev_pose.compose(res.delta.inverse());
   const double err_fwd = (via_fwd.translation() - curr_pose.translation()).norm();
   const double err_inv = (via_inv.translation() - curr_pose.translation()).norm();
-  EXPECT_LT(err_fwd, 0.03) << "prev.compose(delta) must recover curr; "
-                           << "err_fwd=" << err_fwd << " err_inv=" << err_inv;
+  EXPECT_LT(err_fwd, 0.03) << "prev.compose(delta) must recover curr; " << "err_fwd=" << err_fwd
+                           << " err_inv=" << err_inv;
   EXPECT_GT(err_inv, 0.05) << "inverse composition unexpectedly close — inverted convention; "
                            << "err_fwd=" << err_fwd << " err_inv=" << err_inv;
 }
