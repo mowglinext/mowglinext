@@ -104,6 +104,7 @@ static const char* high_level_mode_name(const uint8_t mode)
       return "UNKNOWN";
   }
 }
+
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
@@ -123,6 +124,30 @@ namespace mowgli_hardware
 {
 
 using namespace std::chrono_literals;
+
+static const char* reset_cause_name(const uint8_t cause)
+{
+  switch (cause)
+  {
+    case RESET_CAUSE_PIN:
+      return "PIN";
+    case RESET_CAUSE_POR_PDR:
+      return "POR_PDR";
+    case RESET_CAUSE_BOR:
+      return "BOR";
+    case RESET_CAUSE_SFTRST:
+      return "SFTRST";
+    case RESET_CAUSE_IWDG:
+      return "IWDG";
+    case RESET_CAUSE_WWDG:
+      return "WWDG";
+    case RESET_CAUSE_LPWR:
+      return "LPWR";
+    case RESET_CAUSE_UNKNOWN:
+    default:
+      return "UNKNOWN";
+  }
+}
 
 class HardwareBridgeNode : public rclcpp::Node
 {
@@ -482,6 +507,7 @@ private:
   void open_serial_port()
   {
     serial_ = std::make_unique<SerialPort>(serial_port_path_, baud_rate_);
+    reset_cause_log_pending_ = true;
 
     packet_handler_.set_callback(
         [this](const uint8_t* data, std::size_t len)
@@ -560,6 +586,24 @@ private:
   // Serial I/O
   // ---------------------------------------------------------------------------
 
+  void reset_serial_dependent_state()
+  {
+    packet_handler_.reset_receive_state();
+    odom_initialized_ = false;
+    prev_left_ticks_ = 0;
+    prev_right_ticks_ = 0;
+    odom_acc_delta_left_ = 0;
+    odom_acc_delta_right_ = 0;
+    odom_acc_dt_ms_ = 0;
+    wheels_stationary_ = true;
+  }
+
+  void close_serial_for_reconnect()
+  {
+    reset_serial_dependent_state();
+    serial_->close();
+  }
+
   void read_serial_tick()
   {
     // If the port was never opened or was closed due to an error / dead-link
@@ -572,6 +616,8 @@ private:
         return;  // Still not open; will retry next tick.
       }
       last_serial_rx_time_ = now();
+      reset_serial_dependent_state();
+      reset_cause_log_pending_ = true;
       // The firmware just re-enumerated (flash / reboot / replug) and is back on
       // its compile-time default gains — re-arm the drive-PID push so the host's
       // values are restored over the next few heartbeats.
@@ -595,7 +641,7 @@ private:
                              *get_clock(),
                              2000,
                              "Serial read error — closing port to reconnect.");
-        serial_->close();
+        close_serial_for_reconnect();
         return;
       }
       if (n == 0)
@@ -618,7 +664,7 @@ private:
                   "No serial data for %.1f s — reopening %s to reconnect to the STM32.",
                   serial_rx_timeout_s_,
                   serial_port_path_.c_str());
-      serial_->close();
+      close_serial_for_reconnect();
     }
   }
 
@@ -631,11 +677,15 @@ private:
     }
 
     const std::vector<uint8_t> frame = packet_handler_.encode_packet(data, len);
-    const ssize_t written = serial_->write(frame.data(), frame.size());
+    const ssize_t written = serial_->write_all(frame.data(), frame.size());
 
     if (written < 0 || static_cast<std::size_t>(written) != frame.size())
     {
-      RCLCPP_WARN(get_logger(), "Short write or error sending packet.");
+      RCLCPP_WARN(get_logger(),
+                  "Short write or error sending packet (%zd/%zu bytes) — closing port to reconnect.",
+                  written,
+                  frame.size());
+      close_serial_for_reconnect();
       return false;
     }
     return true;
@@ -659,6 +709,9 @@ private:
       case PACKET_ID_LL_STATUS:
         handle_status(data, len);
         break;
+      case PACKET_ID_LL_RESET_CAUSE:
+        handle_reset_cause(data, len);
+        break;
       case PACKET_ID_LL_IMU:
         handle_imu(data, len);
         break;
@@ -674,6 +727,32 @@ private:
       default:
         RCLCPP_DEBUG(get_logger(), "Unhandled packet type 0x%02X (len=%zu)", data[0], len);
         break;
+    }
+  }
+
+  void handle_reset_cause(const uint8_t* data, std::size_t len)
+  {
+    if (len < sizeof(LlResetCause))
+    {
+      RCLCPP_WARN(get_logger(), "Reset-cause packet too short: %zu < %zu", len, sizeof(LlResetCause));
+      return;
+    }
+
+    LlResetCause pkt{};
+    std::memcpy(&pkt, data, sizeof(LlResetCause));
+
+    const bool cause_changed = !reset_cause_seen_ || pkt.reset_cause != last_reset_cause_;
+    last_reset_cause_ = pkt.reset_cause;
+    last_reset_cause_name_ = reset_cause_name(pkt.reset_cause);
+    reset_cause_seen_ = true;
+
+    if (reset_cause_log_pending_ || cause_changed)
+    {
+      RCLCPP_INFO(get_logger(),
+                  "STM32 boot reset cause: %s (%u)",
+                  last_reset_cause_name_.c_str(),
+                  static_cast<unsigned>(last_reset_cause_));
+      reset_cause_log_pending_ = false;
     }
   }
 
@@ -697,6 +776,8 @@ private:
       msg.mower_status = (pkt.status_bitmask & STATUS_BIT_INITIALIZED) != 0u
                              ? mowgli_interfaces::msg::Status::MOWER_STATUS_OK
                              : mowgli_interfaces::msg::Status::MOWER_STATUS_INITIALIZING;
+      msg.reset_cause = last_reset_cause_;
+      msg.reset_cause_name = last_reset_cause_name_;
       msg.raspberry_pi_power = (pkt.status_bitmask & STATUS_BIT_RASPI_POWER) != 0u;
       const bool was_charging = is_charging_;
       is_charging_ = (pkt.status_bitmask & STATUS_BIT_CHARGING) != 0u;
@@ -1949,6 +2030,10 @@ private:
   float blade_rpm_{0.0f};
   float blade_temperature_{0.0f};
   float blade_esc_current_{0.0f};
+  uint8_t last_reset_cause_{RESET_CAUSE_UNKNOWN};
+  std::string last_reset_cause_name_{"UNKNOWN"};
+  bool reset_cause_seen_{false};
+  bool reset_cause_log_pending_{true};
 
   // Odometry state
   int32_t prev_left_ticks_{0};
