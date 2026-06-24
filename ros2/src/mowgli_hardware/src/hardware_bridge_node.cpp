@@ -116,6 +116,7 @@ static const char* high_level_mode_name(const uint8_t mode)
 #include "sensor_msgs/msg/battery_state.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/magnetic_field.hpp"
+#include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "std_msgs/msg/header.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
@@ -228,6 +229,10 @@ private:
             const std::string& name = p.get_name();
             if (name == "min_linear_vel")
             {
+              if (reject_invalid_double(name, p.as_double(), 0.0, 1.0))
+              {
+                break;
+              }
               next_min_linear_vel = p.as_double();
             }
             else if (name == "ticks_per_meter")
@@ -421,6 +426,30 @@ private:
         [this](geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
         {
           on_cmd_vel(msg);
+        });
+
+    // GPS fix quality drives the firmware's GPS-LOCK panel LED (lit when
+    // gps_quality >= 90). Without this subscription gps_quality_ stayed 0 and
+    // the LED was permanently off. Map horizontal accuracy → 0..100.
+    sub_gps_fix_ = create_subscription<sensor_msgs::msg::NavSatFix>(
+        "/gps/fix",
+        rclcpp::SensorDataQoS(),
+        [this](sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
+        {
+          if (msg->status.status < sensor_msgs::msg::NavSatStatus::STATUS_FIX)
+          {
+            gps_quality_ = 0;
+            return;
+          }
+          const double sigma_h = std::sqrt(std::max(msg->position_covariance[0], 0.0));
+          if (sigma_h <= 0.05)
+            gps_quality_ = 100;  // RTK Fixed
+          else if (sigma_h <= 0.5)
+            gps_quality_ = 70;  // RTK Float / DGPS
+          else if (sigma_h <= 2.0)
+            gps_quality_ = 40;
+          else
+            gps_quality_ = 10;
         });
 
     // Mirror the behavior tree's high-level state to the firmware so it
@@ -1853,6 +1882,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_dock_heading_;
 
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr sub_cmd_vel_;
+  rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr sub_gps_fix_;
   rclcpp::Subscription<mowgli_interfaces::msg::HighLevelStatus>::SharedPtr sub_hl_status_;
 
   rclcpp::Service<mowgli_interfaces::srv::MowerControl>::SharedPtr srv_mower_control_;
