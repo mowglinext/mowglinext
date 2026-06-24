@@ -102,7 +102,10 @@ build_dynamic_udev_rules() {
   echo "# Mowgli II - dynamic rules from current hardware selection"
   echo "# ========================================================="
 
-  if by_id_path="$(find_serial_by_id "*Mowgli*")"; then
+  # Prefer the canonical systemd by-id entry for the STM32 board; keep the
+  # broader product-name fallback for test sandboxes that do not mimic the full
+  # host naming scheme.
+  if by_id_path="$(find_serial_by_id "usb-STMicroelectronics_Mowgli_*" "*Mowgli*")"; then
     emit_by_id_udev_rule "$by_id_path" "mowgli"
   fi
 

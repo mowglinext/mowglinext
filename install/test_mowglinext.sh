@@ -57,7 +57,7 @@ section "dynamic udev rules follow GNSS_SERIAL_DEVICE"
 SERIAL_BY_ID_DIR="$SANDBOX/serial/by-id"
 mkdir -p "$SERIAL_BY_ID_DIR" "$SANDBOX/dev"
 touch "$SANDBOX/dev/ttyACM0" "$SANDBOX/dev/ttyUSB0"
-ln -sf "$SANDBOX/dev/ttyACM0" "$SERIAL_BY_ID_DIR/usb-Mowgli-if00"
+ln -sf "$SANDBOX/dev/ttyACM0" "$SERIAL_BY_ID_DIR/usb-STMicroelectronics_Mowgli_test-if00"
 ln -sf "$SANDBOX/dev/ttyUSB0" "$SERIAL_BY_ID_DIR/usb-GNSS-if00"
 
 HARDWARE_BACKEND=mowgli
