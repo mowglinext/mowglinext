@@ -296,10 +296,29 @@ void PANEL_Tick(void)
 #endif
 }
 
+static uint8_t PANEL_WaitTxComplete(uint32_t timeout_ms)
+    {
+        uint32_t start = HAL_GetTick();
+
+        while (__HAL_UART_GET_FLAG(&PANEL_USART_Handler, USART_FLAG_TC) != 1)
+        {
+            if ((HAL_GetTick() - start) >= timeout_ms)
+            {
+                return 0;
+            }
+        }
+
+        return 1;
+    }
+
 void PANEL_SendLEDMessage(void){
     uint8_t ptr = 0;
     uint8_t ptr_beginScndMsg = 0;
-    while( __HAL_UART_GET_FLAG(&PANEL_USART_Handler, USART_FLAG_TC) != 1);
+
+    if (!PANEL_WaitTxComplete(3))
+    {
+        return;
+    }
 
     panel_pu8RqstMessage[ptr++] = 0x55;
     panel_pu8RqstMessage[ptr++] = 0xaa;
@@ -333,7 +352,10 @@ void PANEL_Send_Message(uint8_t *data, uint8_t dataLength, uint16_t command)
 {
     uint8_t ptr = 0;
 
-    while( __HAL_UART_GET_FLAG(&PANEL_USART_Handler, USART_FLAG_TC) != 1);
+    if (!PANEL_WaitTxComplete(3))
+    {
+        return;
+    }
 
     panel_pu8RqstMessage[ptr++] = 0x55;
     panel_pu8RqstMessage[ptr++] = 0xaa;
