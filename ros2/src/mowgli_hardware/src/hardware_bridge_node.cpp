@@ -131,9 +131,9 @@ static const char* reset_cause_name(const uint8_t cause)
   switch (cause)
   {
     case RESET_CAUSE_PIN:
-      return "PIN";
+      return "PINRST";
     case RESET_CAUSE_POR_PDR:
-      return "POR_PDR";
+      return "POR/PDR";
     case RESET_CAUSE_BOR:
       return "BOR";
     case RESET_CAUSE_SFTRST:
@@ -147,6 +147,31 @@ static const char* reset_cause_name(const uint8_t cause)
     case RESET_CAUSE_UNKNOWN:
     default:
       return "UNKNOWN";
+  }
+}
+
+static const char* reset_cause_description(const uint8_t cause)
+{
+  switch (cause)
+  {
+    case RESET_CAUSE_PIN:
+      return "External reset pin asserted: likely manual reset or hardware disturbance";
+    case RESET_CAUSE_POR_PDR:
+      return "Power-on / power-down reset: board cold-booted or supply was removed";
+    case RESET_CAUSE_BOR:
+      return "Brownout reset: supply voltage dipped below threshold";
+    case RESET_CAUSE_SFTRST:
+      return "Software reset: reboot requested by firmware or host";
+    case RESET_CAUSE_IWDG:
+      return "Independent watchdog reset: firmware stopped servicing watchdog";
+    case RESET_CAUSE_WWDG:
+      return "Window watchdog reset: main loop missed watchdog timing window; likely "
+             "timing/blocking issue";
+    case RESET_CAUSE_LPWR:
+      return "Low-power reset: MCU resumed through a low-power reset path";
+    case RESET_CAUSE_UNKNOWN:
+    default:
+      return "Unknown reset source: RCC reset flags were empty or unsupported";
   }
 }
 
@@ -798,9 +823,9 @@ private:
     if (reset_cause_log_pending_ || cause_changed)
     {
       RCLCPP_INFO(get_logger(),
-                  "STM32 boot reset cause: %s (%u)",
+                  "STM32 boot reset cause: %s — %s",
                   last_reset_cause_name_.c_str(),
-                  static_cast<unsigned>(last_reset_cause_));
+                  reset_cause_description(last_reset_cause_));
       reset_cause_log_pending_ = false;
     }
   }
