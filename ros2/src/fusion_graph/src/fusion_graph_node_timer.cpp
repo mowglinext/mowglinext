@@ -54,7 +54,13 @@ void FusionGraphNode::OnTimer()
     const double dth_init = (std::abs(dth_gyro) > 1e-9) ? dth_gyro : dth_wheel;
     const gtsam::Pose2 init_guess(dx, dy, dth_init);
 
-    auto res = scan_matcher_->Match(prev_node_scan_, curr_scan, init_guess);
+    // Match(source=curr, target=prev) so the returned delta == prev.between(curr)
+    // — the FORWARD prev→curr motion, the same convention the wheel between-factor
+    // and BetweenFactor(k_prev, k_curr) expect (graph_manager_node.cpp:346). With
+    // body-frame scans, Match returns target.between(source); calling it
+    // (prev, curr) would yield curr.between(prev) = the INVERSE, pushing the nodes
+    // apart the wrong way and mismatching the forward-motion init_guess.
+    auto res = scan_matcher_->Match(curr_scan, prev_node_scan_, init_guess);
 
     // Guard rails — drop the match if any signal screams degenerate.
     // The factor would otherwise corrupt iSAM2 for many ticks (ICP
@@ -165,7 +171,14 @@ void FusionGraphNode::OnTimer()
           auto kf = graph_->GetKeyframe(kid);
           if (!kf || kf->scan_body.empty())
             continue;
-          const gtsam::Pose2 init = kf->abs_pose.between(pred);
+          // Warm start ICP toward the value it actually converges to:
+          // Match(kf, curr) returns curr.between(kf), so seed with
+          // pred.between(kf) (≈ curr.between(kf)), NOT kf.between(pred) (its
+          // inverse — which sent the brute-force NN the wrong way during pivots).
+          // The composition below (kf.abs_pose.compose(delta.inverse())) is the
+          // direction locked by test_factors.cpp::ScanToKeyframeComposition and
+          // stays unchanged.
+          const gtsam::Pose2 init = pred.between(kf->abs_pose);
           const auto res = scan_matcher_->Match(kf->scan_body, curr_scan, init);
           if (!res.ok)
           {
@@ -301,9 +314,13 @@ void FusionGraphNode::OnTimer()
           continue;
 
         // Init guess: transform from cand to current in map frame,
-        // i.e. cand.between(curr).
+        // i.e. cand.between(curr). Match(source=curr, target=cand) returns
+        // cand.between(curr) — the measurement BetweenFactor(k_cand, k_curr)
+        // expects (graph_manager_rebase.cpp:377). Calling it (cand, curr) would
+        // return curr.between(cand) = the INVERSE, dragging the trajectory the
+        // wrong way each time an LC fires.
         const gtsam::Pose2 init = cand_pose->between(out->pose);
-        auto res = scan_matcher_->Match(cand_scan, curr_scan, init);
+        auto res = scan_matcher_->Match(curr_scan, cand_scan, init);
         if (!res.ok || res.rmse > lc_max_rmse_)
           continue;
 
