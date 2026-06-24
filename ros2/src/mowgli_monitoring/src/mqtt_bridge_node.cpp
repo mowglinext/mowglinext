@@ -204,9 +204,15 @@ MosquittoMqttClient::MosquittoMqttClient(Config config, rclcpp::Logger logger)
         mosquitto_tls_set(impl_->mosq, nullptr, "/etc/ssl/certs", nullptr, nullptr, nullptr);
     if (tls_rc != MOSQ_ERR_SUCCESS)
     {
+      // TLS was requested but could not be configured. Tear down the handle so
+      // connect() refuses rather than silently establishing a plaintext session
+      // that would leak the broker credentials and the HighLevelControl channel.
       RCLCPP_ERROR(logger,
-                   "mosquitto_tls_set failed (%d) — MQTT would connect in plaintext; aborting.",
+                   "mosquitto_tls_set failed (%d) — refusing to connect in plaintext.",
                    tls_rc);
+      mosquitto_destroy(impl_->mosq);
+      impl_->mosq = nullptr;
+      return;
     }
     else
     {
