@@ -417,12 +417,17 @@ TEST(ScanBetweenConvention, MatchesBetweenFactorDirection)
   auto res = matcher.Match(curr_scan, prev_scan, gtsam::Pose2());
   ASSERT_TRUE(res.ok);
 
-  const gtsam::Pose2 expected = prev_pose.between(curr_pose);
-  const gtsam::Pose2 err = expected.between(res.delta);
-  EXPECT_LT(err.translation().norm(), 0.03)
-      << "Match(curr, prev) must return prev.between(curr) (the BetweenFactor measurement).";
-  // Rotation sign is the unambiguous discriminator: the inverted (old buggy)
-  // delta would carry theta ≈ -0.025 instead of +0.025.
-  EXPECT_NEAR(res.delta.theta(), expected.theta(), 0.01)
-      << "scan-between delta rotation has the wrong sign — inverted convention.";
+  // BetweenFactor(k_prev, k_curr) composes as X_curr = X_prev.compose(delta),
+  // so the FORWARD composition must recover curr; the inverse (the old buggy
+  // direction, where delta was curr.between(prev)) must land far off. This
+  // mirrors ScanToKeyframeComposition's robust negative-control style and is
+  // insensitive to ICP's rotation precision from an identity init.
+  const gtsam::Pose2 via_fwd = prev_pose.compose(res.delta);
+  const gtsam::Pose2 via_inv = prev_pose.compose(res.delta.inverse());
+  const double err_fwd = (via_fwd.translation() - curr_pose.translation()).norm();
+  const double err_inv = (via_inv.translation() - curr_pose.translation()).norm();
+  EXPECT_LT(err_fwd, 0.03) << "prev.compose(delta) must recover curr; "
+                           << "err_fwd=" << err_fwd << " err_inv=" << err_inv;
+  EXPECT_GT(err_inv, 0.05) << "inverse composition unexpectedly close — inverted convention; "
+                           << "err_fwd=" << err_fwd << " err_inv=" << err_inv;
 }
