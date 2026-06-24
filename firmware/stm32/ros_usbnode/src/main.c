@@ -85,6 +85,19 @@ IWDG_HandleTypeDef IwdgHandle = {0};
 WWDG_HandleTypeDef WwdgHandle = {0};
 static uint32_t g_boot_reset_csr = 0;
 uint8_t g_boot_reset_cause_code = 0;
+volatile uint32_t g_watchdog_refresh_count = 0;
+volatile uint32_t g_watchdog_last_refresh_tick = 0;
+volatile uint32_t g_watchdog_last_refresh_gap_ms = 0;
+volatile uint32_t g_watchdog_max_refresh_gap_ms = 0;
+volatile uint32_t g_watchdog_gap_over_20ms_count = 0;
+volatile uint32_t g_watchdog_gap_over_30ms_count = 0;
+volatile uint32_t g_watchdog_gap_over_35ms_count = 0;
+#if BOARD_HAS_MASTER_USART
+volatile uint32_t g_master_tx_timeout_count = 0;
+volatile uint32_t g_master_tx_max_wait_ms = 0;
+volatile uint32_t g_master_tx_dma_error_count = 0;
+volatile uint32_t g_master_tx_last_dma_status = 0;
+#endif
 
 static const char *BOOT_PrimaryResetCause(uint32_t csr)
 {
@@ -1113,8 +1126,14 @@ void MASTER_Transmit(uint8_t *buffer, uint8_t len)
   uint32_t wait_start = HAL_GetTick();
   while (master_tx_busy)
   {
-    if ((HAL_GetTick() - wait_start) > MASTER_TX_TIMEOUT_MS)
+    uint32_t wait_ms = HAL_GetTick() - wait_start;
+    if (wait_ms > MASTER_TX_TIMEOUT_MS)
     {
+      g_master_tx_timeout_count++;
+      if (wait_ms > g_master_tx_max_wait_ms)
+      {
+        g_master_tx_max_wait_ms = wait_ms;
+      }
       return;
     }
   }
@@ -1122,7 +1141,13 @@ void MASTER_Transmit(uint8_t *buffer, uint8_t len)
   // copy into our master_tx_buffer
   master_tx_buffer_len = len;
   memcpy(master_tx_buffer, buffer, master_tx_buffer_len);
-  HAL_UART_Transmit_DMA(&MASTER_USART_Handler, (uint8_t *)master_tx_buffer, master_tx_buffer_len); // send message via UART
+  HAL_StatusTypeDef status =
+      HAL_UART_Transmit_DMA(&MASTER_USART_Handler, (uint8_t *)master_tx_buffer, master_tx_buffer_len);
+  g_master_tx_last_dma_status = (uint32_t)status;
+  if (status != HAL_OK)
+  {
+    g_master_tx_dma_error_count++;
+  }
 }
 #endif
 
@@ -1175,6 +1200,31 @@ static void WATCHDOG_vInit(void)
  */
 static void WATCHDOG_Refresh(void)
 {
+  const uint32_t now = HAL_GetTick();
+  if (g_watchdog_last_refresh_tick != 0u)
+  {
+    const uint32_t gap_ms = now - g_watchdog_last_refresh_tick;
+    g_watchdog_last_refresh_gap_ms = gap_ms;
+    if (gap_ms > g_watchdog_max_refresh_gap_ms)
+    {
+      g_watchdog_max_refresh_gap_ms = gap_ms;
+    }
+    if (gap_ms > 20u)
+    {
+      g_watchdog_gap_over_20ms_count++;
+    }
+    if (gap_ms > 30u)
+    {
+      g_watchdog_gap_over_30ms_count++;
+    }
+    if (gap_ms > 35u)
+    {
+      g_watchdog_gap_over_35ms_count++;
+    }
+  }
+  g_watchdog_last_refresh_tick = now;
+  g_watchdog_refresh_count++;
+
   /* Update WWDG counter */
   WwdgHandle.Instance = WWDG;
   if (HAL_WWDG_Refresh(&WwdgHandle) != HAL_OK)
