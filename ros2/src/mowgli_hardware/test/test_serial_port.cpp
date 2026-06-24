@@ -15,14 +15,13 @@
 
 // SPDX-License-Identifier: GPL-3.0
 
-#include "mowgli_hardware/serial_port.hpp"
-
 #include <array>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
 #include <vector>
 
+#include "mowgli_hardware/serial_port.hpp"
 #include <gtest/gtest.h>
 #include <poll.h>
 #include <pty.h>
@@ -45,9 +44,7 @@ TEST(SerialPort, WriteAllWritesCompleteSmallFrameToPty)
   const std::vector<uint8_t> frame{0x00, 0x11, 0x22, 0x33, 0x00};
   EXPECT_EQ(port.write_all(frame.data(), frame.size()), static_cast<ssize_t>(frame.size()));
 
-  struct pollfd pfd
-  {
-  };
+  struct pollfd pfd{};
   pfd.fd = master_fd;
   pfd.events = POLLIN;
   ASSERT_GT(::poll(&pfd, 1, 100), 0) << std::strerror(errno);

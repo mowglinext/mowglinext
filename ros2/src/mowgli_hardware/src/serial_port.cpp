@@ -204,13 +204,10 @@ ssize_t SerialPort::write_all(const uint8_t* data, std::size_t len)
     {
       continue;
     }
-    if ((errno == EAGAIN || errno == EWOULDBLOCK) &&
-        backpressure_retries < kMaxBackpressureRetries)
+    if ((errno == EAGAIN || errno == EWOULDBLOCK) && backpressure_retries < kMaxBackpressureRetries)
     {
       ++backpressure_retries;
-      struct pollfd pfd
-      {
-      };
+      struct pollfd pfd{};
       pfd.fd = fd_;
       pfd.events = POLLOUT;
       const int poll_result = ::poll(&pfd, 1, kPollTimeoutMs);

@@ -681,10 +681,11 @@ private:
 
     if (written < 0 || static_cast<std::size_t>(written) != frame.size())
     {
-      RCLCPP_WARN(get_logger(),
-                  "Short write or error sending packet (%zd/%zu bytes) — closing port to reconnect.",
-                  written,
-                  frame.size());
+      RCLCPP_WARN(
+          get_logger(),
+          "Short write or error sending packet (%zd/%zu bytes) — closing port to reconnect.",
+          written,
+          frame.size());
       close_serial_for_reconnect();
       return false;
     }
@@ -734,7 +735,10 @@ private:
   {
     if (len < sizeof(LlResetCause))
     {
-      RCLCPP_WARN(get_logger(), "Reset-cause packet too short: %zu < %zu", len, sizeof(LlResetCause));
+      RCLCPP_WARN(get_logger(),
+                  "Reset-cause packet too short: %zu < %zu",
+                  len,
+                  sizeof(LlResetCause));
       return;
     }
 
