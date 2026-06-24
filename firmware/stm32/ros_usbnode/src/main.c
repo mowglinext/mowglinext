@@ -37,6 +37,7 @@
 #include "soft_i2c.h"
 #include "i2c.h"
 #include "imu/imu.h"
+#include "mowgli_protocol.h"
 #include "usb_device.h"
 #include "usbd_cdc_if.h"
 #include "nbt.h"
@@ -82,6 +83,178 @@ TIM_HandleTypeDef TIM3_Handle; // PWM Beeper
 TIM_HandleTypeDef TIM4_Handle; // PWM Buzzer
 IWDG_HandleTypeDef IwdgHandle = {0};
 WWDG_HandleTypeDef WwdgHandle = {0};
+static uint32_t g_boot_reset_csr = 0;
+uint8_t g_boot_reset_cause_code = 0;
+
+static const char *BOOT_PrimaryResetCause(uint32_t csr)
+{
+#ifdef RCC_CSR_WWDGRSTF
+  if ((csr & RCC_CSR_WWDGRSTF) != 0u)
+  {
+    return "WWDG";
+  }
+#endif
+#ifdef RCC_CSR_IWDGRSTF
+  if ((csr & RCC_CSR_IWDGRSTF) != 0u)
+  {
+    return "IWDG";
+  }
+#endif
+#ifdef RCC_CSR_SFTRSTF
+  if ((csr & RCC_CSR_SFTRSTF) != 0u)
+  {
+    return "SFTRST";
+  }
+#endif
+#ifdef RCC_CSR_BORRSTF
+  if ((csr & RCC_CSR_BORRSTF) != 0u)
+  {
+    return "BOR";
+  }
+#endif
+#ifdef RCC_CSR_PORRSTF
+  if ((csr & RCC_CSR_PORRSTF) != 0u)
+  {
+    return "POR/PDR";
+  }
+#endif
+#ifdef RCC_CSR_PINRSTF
+  if ((csr & RCC_CSR_PINRSTF) != 0u)
+  {
+    return "PIN";
+  }
+#endif
+#ifdef RCC_CSR_LPWRRSTF
+  if ((csr & RCC_CSR_LPWRRSTF) != 0u)
+  {
+    return "LPWR";
+  }
+#endif
+  return "UNKNOWN";
+}
+
+static uint8_t BOOT_ResetCauseCode(uint32_t csr)
+{
+  /* LED code mapping used by BOOT_BlinkResetCause():
+   * 1=PIN, 2=POR/PDR, 3=BOR, 4=SFTRST, 5=IWDG, 6=WWDG, 7=LPWR. */
+#ifdef RCC_CSR_WWDGRSTF
+  if ((csr & RCC_CSR_WWDGRSTF) != 0u)
+  {
+    return RESET_CAUSE_WWDG;
+  }
+#endif
+#ifdef RCC_CSR_IWDGRSTF
+  if ((csr & RCC_CSR_IWDGRSTF) != 0u)
+  {
+    return RESET_CAUSE_IWDG;
+  }
+#endif
+#ifdef RCC_CSR_SFTRSTF
+  if ((csr & RCC_CSR_SFTRSTF) != 0u)
+  {
+    return RESET_CAUSE_SFTRST;
+  }
+#endif
+#ifdef RCC_CSR_BORRSTF
+  if ((csr & RCC_CSR_BORRSTF) != 0u)
+  {
+    return RESET_CAUSE_BOR;
+  }
+#endif
+#ifdef RCC_CSR_PORRSTF
+  if ((csr & RCC_CSR_PORRSTF) != 0u)
+  {
+    return RESET_CAUSE_POR_PDR;
+  }
+#endif
+#ifdef RCC_CSR_PINRSTF
+  if ((csr & RCC_CSR_PINRSTF) != 0u)
+  {
+    return RESET_CAUSE_PIN;
+  }
+#endif
+#ifdef RCC_CSR_LPWRRSTF
+  if ((csr & RCC_CSR_LPWRRSTF) != 0u)
+  {
+    return RESET_CAUSE_LPWR;
+  }
+#endif
+  return RESET_CAUSE_UNKNOWN;
+}
+
+static void BOOT_PrintResetFlagIfSet(uint32_t csr, uint32_t mask, const char *name, bool *first)
+{
+  if ((csr & mask) == 0u)
+  {
+    return;
+  }
+  if (!*first)
+  {
+    DB_TRACE("|");
+  }
+  DB_TRACE("%s", name);
+  *first = false;
+}
+
+static void BOOT_LogResetCause(uint32_t csr)
+{
+  bool first = true;
+  const uint8_t code = BOOT_ResetCauseCode(csr);
+  DB_TRACE(" * Reset cause: CSR=0x%08lx primary=%s led_code=%u flags=[",
+           (unsigned long)csr,
+           BOOT_PrimaryResetCause(csr),
+           (unsigned int)code);
+#ifdef RCC_CSR_LPWRRSTF
+  BOOT_PrintResetFlagIfSet(csr, RCC_CSR_LPWRRSTF, "LPWR", &first);
+#endif
+#ifdef RCC_CSR_WWDGRSTF
+  BOOT_PrintResetFlagIfSet(csr, RCC_CSR_WWDGRSTF, "WWDG", &first);
+#endif
+#ifdef RCC_CSR_IWDGRSTF
+  BOOT_PrintResetFlagIfSet(csr, RCC_CSR_IWDGRSTF, "IWDG", &first);
+#endif
+#ifdef RCC_CSR_SFTRSTF
+  BOOT_PrintResetFlagIfSet(csr, RCC_CSR_SFTRSTF, "SFTRST", &first);
+#endif
+#ifdef RCC_CSR_BORRSTF
+  BOOT_PrintResetFlagIfSet(csr, RCC_CSR_BORRSTF, "BOR", &first);
+#endif
+#ifdef RCC_CSR_PORRSTF
+  BOOT_PrintResetFlagIfSet(csr, RCC_CSR_PORRSTF, "POR/PDR", &first);
+#endif
+#ifdef RCC_CSR_PINRSTF
+  BOOT_PrintResetFlagIfSet(csr, RCC_CSR_PINRSTF, "PIN", &first);
+#endif
+  if (first)
+  {
+    DB_TRACE("none");
+  }
+  DB_TRACE("]\r\n");
+}
+
+static void BOOT_ClearResetFlags(void)
+{
+#ifdef RCC_CSR_RMVF
+  RCC->CSR |= RCC_CSR_RMVF;
+#endif
+}
+
+static void BOOT_BlinkResetCause(uint32_t csr)
+{
+  const uint8_t code = BOOT_ResetCauseCode(csr);
+  if (code == 0u)
+  {
+    return;
+  }
+
+  for (uint8_t i = 0; i < code; ++i)
+  {
+    HAL_GPIO_TogglePin(LED_GPIO_PORT, LED_PIN);
+    HAL_Delay(50);
+    HAL_GPIO_TogglePin(LED_GPIO_PORT, LED_PIN);
+    HAL_Delay(80);
+  }
+}
 
 #if DB_ACTIVE
 int debug_assert(int condition, const char *msg)
@@ -96,9 +269,12 @@ int debug_assert(int condition, const char *msg)
 
 int main(void)
 {
+  g_boot_reset_csr = RCC->CSR;
+  g_boot_reset_cause_code = BOOT_ResetCauseCode(g_boot_reset_csr);
 
   HAL_Init();
   SystemClock_Config();
+  BOOT_ClearResetFlags();
 
 #if BOARD_YARDFORCE500_VARIANT_ORIG
   __HAL_RCC_AFIO_CLK_ENABLE();
@@ -112,6 +288,8 @@ int main(void)
   MASTER_USART_Init();
 #endif
 
+  BOOT_LogResetCause(g_boot_reset_csr);
+
   DB_TRACE("\r\n");
   DB_TRACE("    __  ___                    ___\r\n");
   DB_TRACE("   /  |/  /___ _      ______ _/ (_)\r\n");
@@ -122,6 +300,7 @@ int main(void)
   DB_TRACE("\r\n\r\n");
   DB_TRACE(" * Master USART (debug) initialized\r\n");
   LED_Init();
+  BOOT_BlinkResetCause(g_boot_reset_csr);
   DB_TRACE(" * LED initialized\r\n");
   TIM2_Init();
   ADC_Charging_Init();
