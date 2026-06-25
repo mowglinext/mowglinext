@@ -117,6 +117,28 @@ TEST_F(ObstacleDeviationTest, FindFirstObstacle_RespectsLookahead)
   EXPECT_EQ(idx, -1);
 }
 
+TEST_F(ObstacleDeviationTest, FindFirstObstacle_OffCenterlineWithinBody_NeedsBodyWidth)
+{
+  // Obstacle OFF the path centerline (y=0.18) but inside the robot body sweep:
+  // path runs along y=0, block covers y∈[0.15,0.21] at x=0.5. The path point
+  // (0.5, 0) is free, so centerline-only detection (half_width=0) misses it —
+  // this is the gap the chassis still drives into.
+  stampBlock(0.5, 0.18, 0.03);
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  EXPECT_EQ(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.0), -1);
+  // With a 0.20 m body half-width the sweep reaches y=0.18 → detected at idx 5.
+  EXPECT_EQ(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.20), 5);
+}
+
+TEST_F(ObstacleDeviationTest, FindFirstObstacle_BeyondBodyWidth_NotDetected)
+{
+  // Obstacle at y=0.30 is OUTSIDE a 0.20 m half-width sweep (max reach 0.20),
+  // so the body misses it — body-aware detection must NOT over-trigger.
+  stampBlock(0.5, 0.30, 0.03);
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  EXPECT_EQ(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.20), -1);
+}
+
 // ── chooseDeviationSide ───────────────────────────────────────────────────────
 
 TEST_F(ObstacleDeviationTest, ChooseSide_FreeBothSides_BiasLeft)
@@ -192,6 +214,18 @@ TEST_F(ObstacleDeviationTest, IsPathClear_ObstacleOnPath_ZeroDeviation_False)
   stampBlock(0.5, 0.0, 0.05);
   const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
   EXPECT_FALSE(ObstacleDeviation::isPathClearWithDeviation(costmap_, path, 0, 10, 0.0));
+}
+
+TEST_F(ObstacleDeviationTest, IsPathClear_OffCenterlineWithinBody_NeedsBodyWidth)
+{
+  // The clear_at_zero detection path: obstacle off the centerline (y=0.18) but
+  // inside the body sweep. Centerline-only (half_width=0) reads CLEAR — the bug.
+  // Body-aware (half_width=0.20) correctly reads BLOCKED so avoidance engages.
+  stampBlock(0.5, 0.18, 0.03);
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  EXPECT_TRUE(ObstacleDeviation::isPathClearWithDeviation(costmap_, path, 0, 10, 0.0));
+  EXPECT_FALSE(ObstacleDeviation::isPathClearWithDeviation(
+      costmap_, path, 0, 10, 0.0, ObstacleDeviation::BoundaryGuard{}, 0.20));
 }
 
 TEST_F(ObstacleDeviationTest, IsPathClear_DeviationSkipsObstacle)

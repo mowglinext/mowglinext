@@ -77,13 +77,54 @@ bool offsetBlocked(const nav2_costmap_2d::Costmap2D& local,
   return false;
 }
 
+/// Sample the robot BODY — a lateral span [center_dev - half_width,
+/// center_dev + half_width] perpendicular to `pose`'s heading — against the
+/// costmap. Returns true if ANY sampled point is blocked (local lethal/inscribed
+/// cell, or out-of-zone when `g.costmap != nullptr`). Sample spacing is kept
+/// <= the costmap resolution so a thin obstacle cannot slip between samples.
+/// `half_width <= 0` collapses to a single centerline sample at `center_dev`
+/// (legacy behaviour). This is what makes detection / clearance respect the
+/// chassis sweep instead of just the path point — the costmap inscribed-
+/// inflation radius is far narrower than the real half-width here.
+bool bodyBlocked(const nav2_costmap_2d::Costmap2D& local,
+                 const geometry_msgs::msg::PoseStamped& pose,
+                 double center_dev,
+                 double half_width,
+                 const ObstacleDeviation::BoundaryGuard& g)
+{
+  int n = 1;
+  if (half_width > 0.0)
+  {
+    const double res = std::max(local.getResolution(), 0.01);
+    n = std::max(3, static_cast<int>(std::ceil((2.0 * half_width) / res)) + 1);
+  }
+  for (int k = 0; k < n; ++k)
+  {
+    double dev = center_dev;
+    if (half_width > 0.0)
+    {
+      const double frac = static_cast<double>(k) / static_cast<double>(n - 1);  // 0..1
+      dev += -half_width + frac * 2.0 * half_width;
+    }
+    double x = 0.0;
+    double y = 0.0;
+    offsetLateral(pose, dev, x, y);
+    if (offsetBlocked(local, x, y, g))
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 int ObstacleDeviation::findFirstObstacleIndex(
     const nav2_costmap_2d::Costmap2D& costmap,
     const std::vector<geometry_msgs::msg::PoseStamped>& path,
     std::size_t start_idx,
-    int lookahead_count)
+    int lookahead_count,
+    double half_width)
 {
   if (lookahead_count <= 0 || path.empty())
   {
@@ -93,8 +134,10 @@ int ObstacleDeviation::findFirstObstacleIndex(
       std::min(path.size(), start_idx + static_cast<std::size_t>(lookahead_count));
   for (std::size_t i = start_idx; i < end_idx; ++i)
   {
-    const auto& p = path[i];
-    if (sampleCell(costmap, p.pose.position.x, p.pose.position.y) >= kLethalThreshold)
+    // Detection scans the NOMINAL path body (no zone guard — the guard only
+    // rejects skirting OUT of zone, which is meaningless for "is there an
+    // obstacle ahead").
+    if (bodyBlocked(costmap, path[i], 0.0, half_width, BoundaryGuard{}))
     {
       return static_cast<int>(i);
     }
@@ -106,26 +149,21 @@ double ObstacleDeviation::chooseDeviationSide(const nav2_costmap_2d::Costmap2D& 
                                               const geometry_msgs::msg::PoseStamped& obstacle_pose,
                                               double max_search,
                                               double step,
-                                              const BoundaryGuard& guard)
+                                              const BoundaryGuard& guard,
+                                              double half_width)
 {
   if (step <= 0.0 || max_search <= 0.0)
   {
     return 0.0;
   }
-  // Sweep both sides in lockstep, returning whichever direction reaches a
-  // non-lethal cell first. Bias to the LEFT on ties (avoids zigzag flicker
-  // when both sides are equally clear at the first sample distance).
+  // Sweep both sides in lockstep, returning whichever direction first places
+  // the whole BODY (±half_width) on clear, in-zone cells. Bias to the LEFT on
+  // ties (avoids zigzag flicker when both sides are equally clear at the first
+  // sample distance).
   for (double d = step; d <= max_search; d += step)
   {
-    double lx = 0.0;
-    double ly = 0.0;
-    offsetLateral(obstacle_pose, d, lx, ly);
-    const bool left_clear = !offsetBlocked(costmap, lx, ly, guard);
-
-    double rx = 0.0;
-    double ry = 0.0;
-    offsetLateral(obstacle_pose, -d, rx, ry);
-    const bool right_clear = !offsetBlocked(costmap, rx, ry, guard);
+    const bool left_clear = !bodyBlocked(costmap, obstacle_pose, d, half_width, guard);
+    const bool right_clear = !bodyBlocked(costmap, obstacle_pose, -d, half_width, guard);
 
     if (left_clear)
     {
@@ -145,7 +183,8 @@ bool ObstacleDeviation::isPathClearWithDeviation(
     std::size_t start_idx,
     int lookahead_count,
     double deviation,
-    const BoundaryGuard& guard)
+    const BoundaryGuard& guard,
+    double half_width)
 {
   if (lookahead_count <= 0 || path.empty())
   {
@@ -155,10 +194,9 @@ bool ObstacleDeviation::isPathClearWithDeviation(
       std::min(path.size(), start_idx + static_cast<std::size_t>(lookahead_count));
   for (std::size_t i = start_idx; i < end_idx; ++i)
   {
-    double ox = 0.0;
-    double oy = 0.0;
-    offsetLateral(path[i], deviation, ox, oy);
-    if (offsetBlocked(costmap, ox, oy, guard))
+    // Body must clear at the offset `deviation` — sample the full ±half_width
+    // span, not just the offset centerline.
+    if (bodyBlocked(costmap, path[i], deviation, half_width, guard))
     {
       return false;
     }
@@ -174,7 +212,8 @@ double ObstacleDeviation::growDeviationUntilClear(
     double initial_deviation,
     double max_deviation,
     double step,
-    const BoundaryGuard& guard)
+    const BoundaryGuard& guard,
+    double half_width)
 {
   if (step <= 0.0 || max_deviation <= 0.0)
   {
@@ -191,7 +230,8 @@ double ObstacleDeviation::growDeviationUntilClear(
   while (mag <= max_deviation)
   {
     const double candidate = sign * mag;
-    if (isPathClearWithDeviation(costmap, path, start_idx, lookahead_count, candidate, guard))
+    if (isPathClearWithDeviation(costmap, path, start_idx, lookahead_count, candidate, guard,
+                                 half_width))
     {
       return candidate;
     }

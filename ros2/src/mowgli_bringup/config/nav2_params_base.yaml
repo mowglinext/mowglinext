@@ -746,14 +746,20 @@ docking_server:
     # 0.16 deadband floor (must stay > v_linear_min) — so the contacts close
     # slowly. The slowdown_radius profile (below) eases it down to v_linear_min.
     controller.v_linear_max: 0.18
-    # 0.85 (was 0.75): the graceful law's steering curvature is -1/r·(…), so it
+    # 0.45 (was 0.85): the graceful law's steering curvature is -1/r·(…), so it
     # grows as the robot nears the dock (r→0) and is then capped by
-    # v_angular_max. Raising the cap lets the controller actually execute the
-    # final cross-track correction at crawl speed instead of saturating and
-    # arriving slightly off-axis. Kept modest — the host-side wz pulse-width
-    # modulation handles the chassis deadband, so this no longer over-rotates
-    # fine corrections the way the old k_phi/k_delta 3× bumps did.
-    controller.v_angular_max: 0.85
+    # v_angular_max. At 0.85 this was a NET NEGATIVE: field-logged 2026-06-25
+    # (/cmd_vel_docking) showed ω SATURATING at exactly ±0.85 in the last ~25 cm
+    # and slamming rail-to-rail (+0.85 held at r=0.25 → −0.85 held at r=0.12) —
+    # the 1/r curvature blow-up over-rotating a sub-cm residual, overshooting and
+    # reversing. Result: violent left-right wobble at the cradle that never
+    # settled → DockRobot failed to seat (is_charging stayed false). The runway
+    # cross-track correction (r=0.4–1.5 m) only ever commands ω≈0.06–0.30, so
+    # capping at 0.45 does NOT weaken the runway null — it only clips the
+    # near-dock saturation that was the whole problem. Lower ω_max also means the
+    # angular dynamics are slow vs the linear closing (vx≈0.15), so the robot
+    # reaches the contacts before it can over-rotate → gentler, settling seat.
+    controller.v_angular_max: 0.45
     # 0.45 (was 0.25): within slowdown_radius the linear speed scales down to
     # v_linear_min (v = v_linear_max·r/slowdown_radius, clamped). A larger
     # radius means the robot reaches crawl speed ~20 cm sooner, giving the

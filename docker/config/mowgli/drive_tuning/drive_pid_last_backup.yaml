@@ -1,0 +1,9 @@
+node: hardware_bridge
+parameters:
+  ticks_per_meter: 279.275602820093
+  wheel_pid_integral_limit: 15.0
+  wheel_pid_kd: 0.0
+  wheel_pid_ki: 0.0
+  wheel_pid_kp: 0.2
+  wheel_pid_pwm_per_mps: 335.46793245425
+saved_at: '2026-06-23T21:15:41.162194+00:00'

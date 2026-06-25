@@ -223,6 +223,7 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.check_obstacles = declare_bool("check_obstacles", true);
   config_.obstacle_lookahead = declare_int("obstacle_lookahead", 5);
   config_.obstacle_footprint = declare_bool("obstacle_footprint", true);
+  config_.obstacle_body_half_width = declare_double("obstacle_body_half_width", 0.20);
 
   // Obstacle deviation
   config_.enable_obstacle_deviation = declare_bool("enable_obstacle_deviation", true);
@@ -407,6 +408,10 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     else if (key == "obstacle_footprint")
     {
       config_.obstacle_footprint = p.as_bool();
+    }
+    else if (key == "obstacle_body_half_width")
+    {
+      config_.obstacle_body_half_width = p.as_double();
     }
     else if (key == "enable_obstacle_deviation")
     {
@@ -1524,8 +1529,14 @@ void FTCController::updateLateralDeviation(double dt)
   // "entering AVOIDANCE ... at idx=N" / "AVOIDANCE complete" pairs at the
   // same idx). The robot never offset enough to skirt anything; the
   // sub-deadband ±step carrot shift just dithered it left-right in place.
+  // Body-width aware (±obstacle_body_half_width), NOT just the path centerline —
+  // otherwise an obstacle in the ~0.14–0.25 m lateral band the chassis hits but
+  // the inscribed-inflation radius misses never flips clear_at_zero false, so
+  // avoidance never engages. No zone guard here: this asks "does the body hit an
+  // obstacle on the nominal line", independent of the mowing-zone boundary.
   const bool clear_at_zero = ObstacleDeviation::isPathClearWithDeviation(
-      *costmap_map_, window, 0, config_.obstacle_lookahead, 0.0);
+      *costmap_map_, window, 0, config_.obstacle_lookahead, 0.0,
+      ObstacleDeviation::BoundaryGuard{}, config_.obstacle_body_half_width);
 
   if (clear_at_zero)
   {
@@ -1582,7 +1593,8 @@ void FTCController::updateLateralDeviation(double dt)
       const int obs_idx = ObstacleDeviation::findFirstObstacleIndex(*costmap_map_,
                                                                     window,
                                                                     0,
-                                                                    config_.obstacle_lookahead);
+                                                                    config_.obstacle_lookahead,
+                                                                    config_.obstacle_body_half_width);
       if (obs_idx < 0)
       {
         // Footprint collision but no path-pose hit (e.g. inflated cell next
@@ -1594,7 +1606,8 @@ void FTCController::updateLateralDeviation(double dt)
                                                  window[static_cast<std::size_t>(obs_idx)],
                                                  config_.max_lateral_deviation,
                                                  config_.deviation_step,
-                                                 guard);
+                                                 guard,
+                                                 config_.obstacle_body_half_width);
       if (target_lateral_deviation_ == 0.0)
       {
         // Both sides blocked at the obstacle pose. Before bailing, hold a
@@ -1621,15 +1634,15 @@ void FTCController::updateLateralDeviation(double dt)
     }
 
     // Floor the SEARCH START to min_lateral_deviation. growDeviationUntilClear
-    // only samples the single offset point per pose, so a one-step (0.05 m)
-    // offset can "clear" the path centerline while the 0.40 m chassis still
-    // overlaps the lethal cell (the costmap's inscribed-inflation radius here
-    // is only ~0.10 m — the footprint rear edge — far less than the 0.20 m
-    // half-width). Starting the search at min makes grow validate clearance
-    // from a body-width offset upward, and grow still increases past min (or
-    // reports > max) if min itself is blocked — so this never forces the
-    // carrot into an obstacle the way a blind post-grow floor would, since
-    // clearance is not monotonic in the offset.
+    // now samples the full chassis width (±obstacle_body_half_width per pose),
+    // so a one-step offset can no longer "clear" the centerline while the body
+    // still overlaps the obstacle. This floor is retained as a secondary guard:
+    // it makes AVOIDANCE commit to a real, human-visible skirt (≥ a body
+    // half-width + margin) rather than a sub-deadband 5 cm carrot nudge, and it
+    // gives margin beyond the exact body edge. grow still increases past min (or
+    // reports > max) if min itself is blocked — so this never forces the carrot
+    // into an obstacle the way a blind post-grow floor would, since clearance is
+    // not monotonic in the offset.
     double dev_init = target_lateral_deviation_;
     if (config_.min_lateral_deviation > 0.0 && std::abs(dev_init) < config_.min_lateral_deviation)
     {
@@ -1652,7 +1665,8 @@ void FTCController::updateLateralDeviation(double dt)
                                                    dev_init,
                                                    config_.max_lateral_deviation,
                                                    config_.deviation_step,
-                                                   guard);
+                                                   guard,
+                                                   config_.obstacle_body_half_width);
 
     if (std::abs(target_lateral_deviation_) > config_.max_lateral_deviation)
     {

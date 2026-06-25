@@ -347,6 +347,16 @@ private:
     bool check_obstacles{true};
     int obstacle_lookahead{5};
     bool obstacle_footprint{true};
+    /// Robot body half-width (m, perpendicular to heading) used to make BOTH
+    /// obstacle DETECTION and the deviation-clearance search sample the full
+    /// chassis sweep instead of only the path centerline. The local costmap's
+    /// inscribed-inflation radius (~0.10–0.14 m, the footprint rear edge) is far
+    /// smaller than the real half-width (chassis_width/2 ≈ 0.20 m), so a
+    /// centerline-only sample misses obstacles in the ~0.14–0.25 m lateral band
+    /// that the body still hits — they never trigger avoidance and the robot
+    /// drives into them. Sampling across ±half_width (spacing ≤ costmap
+    /// resolution) closes that gap. 0 = legacy centerline-only sampling.
+    double obstacle_body_half_width{0.20};
 
     // Obstacle deviation (FTC's "skirt the obstacle" behaviour). When
     // disabled, hitting an obstacle in lookahead throws ControllerException

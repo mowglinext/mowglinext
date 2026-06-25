@@ -57,12 +57,16 @@ public:
 
   /// Scan path poses [start_idx, start_idx + lookahead_count) and return the
   /// first index whose costmap cell is lethal. Returns -1 if none / costmap
-  /// lookup fails.
+  /// lookup fails. When `half_width > 0`, each pose is sampled across the robot
+  /// body span (±half_width perpendicular to heading, spacing ≤ costmap
+  /// resolution) so an off-centerline obstacle the chassis would hit is caught;
+  /// `half_width == 0` keeps the legacy single-centerline sample.
   static int findFirstObstacleIndex(
       const nav2_costmap_2d::Costmap2D& costmap,
       const std::vector<geometry_msgs::msg::PoseStamped>& path,
       std::size_t start_idx,
-      int lookahead_count);
+      int lookahead_count,
+      double half_width = 0.0);
 
   /// Decide which side of `obstacle_pose` is free. Scans perpendicular to
   /// the obstacle's heading by `step` increments out to `max_search`.
@@ -75,7 +79,8 @@ public:
                                     const geometry_msgs::msg::PoseStamped& obstacle_pose,
                                     double max_search,
                                     double step,
-                                    const BoundaryGuard& guard = {});
+                                    const BoundaryGuard& guard = {},
+                                    double half_width = 0.0);
 
   /// Check whether the laterally-offset path is clear in the lookahead
   /// window. For each pose in [start_idx, start_idx + lookahead_count), the
@@ -88,7 +93,8 @@ public:
                                        std::size_t start_idx,
                                        int lookahead_count,
                                        double deviation,
-                                       const BoundaryGuard& guard = {});
+                                       const BoundaryGuard& guard = {},
+                                       double half_width = 0.0);
 
   /// Search for the smallest |deviation| that makes the path clear, starting
   /// from `initial_deviation` and growing in `step` increments up to
@@ -104,7 +110,8 @@ public:
                                         double initial_deviation,
                                         double max_deviation,
                                         double step,
-                                        const BoundaryGuard& guard = {});
+                                        const BoundaryGuard& guard = {},
+                                        double half_width = 0.0);
 };
 
 }  // namespace mowgli_nav2_plugins
