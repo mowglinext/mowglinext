@@ -317,25 +317,33 @@ controller_server:
       # to the b073d975 firmware). Fix: kp_ang_following 1.0 for straight
       # tracking + kp_lat 1.2→0.8 — while kp_ang stays 1.5 ONLY for the
       # PRE_ROTATE pivot (lowering it globally stalls the pivot sub-deadband:
-      # the robot spun forever with ang_err stuck near 180°). kd_lat 1.5 kept
-      # (detuned for the wheel-PI motor model so the chassis doesn't whipsaw).
+      # the robot spun forever with ang_err stuck near 180°).
+      # 2026-06-25 FIELD TUNING (live A/B on real swaths, detrended straight-only
+      # weave metric): kd_lat 1.5 was STILL the dominant weave driver even with
+      # the LPF below — it pumped a ~0.5 Hz cross-track limit cycle (resid-std
+      # 0.047, ±6 cm / ~17 cm pk-pk). At 0.5 Hz the derivative sits right at the
+      # LPF corner (≈0.8 Hz) where the filtered D term phase-lags and turns
+      # destabilising. Swept kd_lat live: 1.5→17 cm, 0.5→3.3 cm (resid-std
+      # 0.010, best), 0.0→6 cm (loses damping authority, ω std climbs). So
+      # kd_lat=0.5 is the sweet spot — enough damping, no pumping. Weave on a
+      # straight swath dropped from ~17 cm to ~3 cm pk-pk.
       kp_lon: 1.0
       ki_lon: 0.0
       kd_lon: 0.0
       kp_lat: 0.8
       ki_lat: 0.0
-      kd_lat: 1.5
+      kd_lat: 0.5
       kp_ang: 1.5             # PRE_ROTATE pivot gain — MUST stay high (deadband)
       kp_ang_following: 1.0   # FOLLOWING (straight-swath) heading gain — kills the weave
       ki_ang: 0.0
       kd_ang: 0.0
       # Low-pass the PID derivative (cherry-picked from PR #290, commit 64dce368).
       # The raw finite-difference derivative amplifies the 10 Hz fused-pose jitter
-      # and kd_lat=1.5 pumps it into a ~1.5 Hz steering limit cycle ("hunting" /
-      # whipsaw on swaths) — which is exactly why kp_lat/kd_lat above were detuned.
-      # A one-pole LPF (tau=0.2 s, fc≈0.8 Hz) keeps the derivative authority for
-      # tight cross-track tracking without the chatter. FIELD-VALIDATE the tau on
-      # real swaths; 0 reverts to the raw derivative.
+      # and a too-high kd_lat pumps it into a steering limit cycle ("hunting" /
+      # whipsaw on swaths). A one-pole LPF (tau=0.2 s, fc≈0.8 Hz) keeps the
+      # derivative authority for tight cross-track tracking without the chatter,
+      # but the LPF ALONE was not enough at kd_lat=1.5 (see the 2026-06-25 field
+      # tuning above — kd_lat was dropped to 0.5). 0 reverts to the raw derivative.
       derivative_filter_tau: 0.2
       max_cmd_vel_speed: 0.30
       max_cmd_vel_ang: 0.8
