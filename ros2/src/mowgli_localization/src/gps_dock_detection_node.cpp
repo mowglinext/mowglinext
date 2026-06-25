@@ -67,12 +67,17 @@
  *     yaw_dock_odom = dock_pose_yaw − Δ,   Δ = yaw_map→odom
  *   We estimate Δ from /imu/cog_heading (GPS course-over-ground yaw in map,
  *     graph-INDEPENDENT) minus the robot's odom yaw at the same instant:
- *     Δ = yaw_cog_map − yaw_robot_odom. COG is only valid while moving forward
- *     (which the robot is, on the dock approach). Before any COG sample we use
- *     the last good Δ, falling back to Δ=0 (map/odom heading aligned — true
- *     right after a clean boot/seed). This keeps the seat heading off the
- *     corruptible map→odom too, so a 180° graph yaw-flip cannot point the dock
- *     the wrong way.
+ *     Δ = yaw_cog_map − yaw_robot_odom. COG is only valid while moving FORWARD,
+ *     and it INVERTS ~180° the instant the robot reverses (e.g. docking_server's
+ *     retry back-up) — a raw overwrite then flings the dock target to the wrong
+ *     side/orientation mid-approach (field-seen as a ~5 cm cross-track that the
+ *     graceful controller fights at the cradle, then 905 on the reverse). So Δ
+ *     is STABILISED (see on_cog_heading): large steps are rejected (a true
+ *     map→odom offset only drifts gradually; a big jump is a COG reverse-flip),
+ *     and the survivors are EMA-smoothed. Before any COG sample we use the last
+ *     good Δ, falling back to Δ=0 (map/odom heading aligned — true right after a
+ *     clean boot/seed). This keeps the seat heading off the corruptible
+ *     map→odom too, so a 180° graph yaw-flip cannot point the dock the wrong way.
  *
  * opennav re-transforms the odom-frame dock pose into base_footprint every
  * control loop via the (trusted, continuous) odom→base_footprint TF.
@@ -157,6 +162,18 @@ public:
     // plan notes GPS may Float at some cradles, in which case the legacy
     // graph-TF path via use_gps_dock_detection:=false is the right choice).
     require_rtk_fixed_ = declare_parameter<bool>("require_rtk_fixed", true);
+
+    // Δ (map→odom yaw) stabilisation. Δ is derived from GPS course-over-ground,
+    // which is noisy at crawl speed and FLIPS ~180° the instant the robot
+    // reverses (e.g. the docking server's retry back-up). A raw overwrite then
+    // flings the dock target to the wrong side mid-approach. A genuine map→odom
+    // offset only drifts gradually, so: (a) reject any COG sample that would
+    // move Δ by more than cog_yaw_max_jump_deg (catches the reverse-flip and
+    // glitches — keep the last good forward-motion Δ), and (b) EMA-smooth the
+    // surviving few-degree noise with cog_yaw_ema_alpha. The first sample seeds
+    // Δ directly (no prior to compare against).
+    cog_yaw_max_jump_deg_ = declare_parameter<double>("cog_yaw_max_jump_deg", 25.0);
+    cog_yaw_ema_alpha_ = declare_parameter<double>("cog_yaw_ema_alpha", 0.15);
 
     detection_pub_ =
         create_publisher<geometry_msgs::msg::PoseStamped>("detected_dock_pose", rclcpp::QoS(1));
@@ -270,15 +287,47 @@ private:
       delta -= 2.0 * M_PI;
     while (delta <= -M_PI)
       delta += 2.0 * M_PI;
-    map_to_odom_yaw_ = delta;
+
     if (!have_yaw_offset_)
     {
+      // First sample seeds Δ directly.
+      map_to_odom_yaw_ = delta;
       have_yaw_offset_ = true;
       RCLCPP_INFO(get_logger(),
                   "Acquired graph-independent map→odom yaw offset Δ=%.1f° from COG; dock "
                   "detection heading is now off the factor graph.",
                   delta * 180.0 / M_PI);
+      return;
     }
+
+    // Shortest-arc change from the current Δ, wrapped to (−π, π].
+    double jump = delta - map_to_odom_yaw_;
+    while (jump > M_PI)
+      jump -= 2.0 * M_PI;
+    while (jump <= -M_PI)
+      jump += 2.0 * M_PI;
+
+    // Reject COG reverse-flips / glitches: a true map→odom offset drifts
+    // gradually, so a large step is the GPS course-over-ground inverting on a
+    // crawl/reverse, not a real heading change. Hold the last good Δ.
+    if (std::abs(jump) > cog_yaw_max_jump_deg_ * M_PI / 180.0)
+    {
+      RCLCPP_WARN_THROTTLE(get_logger(),
+                           *get_clock(),
+                           5000,
+                           "Rejecting COG Δ jump of %.0f° (likely reverse-flip / crawl noise); "
+                           "holding Δ=%.1f°.",
+                           jump * 180.0 / M_PI,
+                           map_to_odom_yaw_ * 180.0 / M_PI);
+      return;
+    }
+
+    // EMA-smooth the surviving few-degree noise.
+    map_to_odom_yaw_ += cog_yaw_ema_alpha_ * jump;
+    while (map_to_odom_yaw_ > M_PI)
+      map_to_odom_yaw_ -= 2.0 * M_PI;
+    while (map_to_odom_yaw_ <= -M_PI)
+      map_to_odom_yaw_ += 2.0 * M_PI;
   }
 
   void on_timer()
@@ -331,6 +380,8 @@ private:
   std::string base_frame_{"base_footprint"};
   double publish_rate_hz_{10.0};
   bool require_rtk_fixed_{true};
+  double cog_yaw_max_jump_deg_{25.0};
+  double cog_yaw_ema_alpha_{0.15};
 
   // State
   tf2::Transform last_dock_odom_;
