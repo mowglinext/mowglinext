@@ -469,32 +469,60 @@ func readMowgliNextDatum(dbProvider types.IDBProvider) (float64, float64, error)
 	return lat, lon, nil
 }
 
-// datumReprojector maps a point expressed in OpenMower's local ENU frame
-// (metres relative to the OM datum) into MowgliNext's local ENU frame
-// (metres relative to the MN datum). When the two datums coincide it is
-// an exact identity; otherwise it round-trips through WGS84 lat/lon so
-// BOTH the constant offset (datum displacement) AND the cos(latitude)
-// east-scale mismatch between the two datums are corrected. The earlier
-// additive `shiftE/shiftN` approximation only matched the offset, leaving
-// a residual skew/rotation when the datums were far apart.
+// datumReprojector maps a point expressed in OpenMower's local map frame into
+// MowgliNext's local map frame.
+//
+// OpenMower's frame is UTM *grid* metres relative to its datum (it stores
+// LLtoUTM(fix) − LLtoUTM(datum); see xbot_driver_gps), so its axes follow UTM
+// grid north. MowgliNext's frame is a datum-centred, true-north equirectangular
+// ENU (navsat_to_absolute_pose_node.cpp). project() therefore inverts the UTM
+// projection (grid → WGS84 lat/lon) and re-projects into MowgliNext's ENU. This
+// corrects, in one step, the datum offset, the east-scale and — crucially — the
+// UTM meridian convergence that rotated imported maps by 1–2°. See utm.go.
+//
+// The zero value reprojects nothing (reproject=false): it copies OM coordinates
+// straight through, which is the only safe behaviour when the OpenMower datum is
+// unknown (we have no UTM anchor to invert against) and is also what the
+// faithful-import tests rely on.
 type datumReprojector struct {
-	omLat, omLon float64
+	reproject bool // false → copy OM coordinates through unchanged
+
+	// OpenMower datum expressed in UTM (the frame OM stores coordinates in).
+	omDatumE, omDatumN float64
+	omZone             int
+	omNorth            bool
+
+	// MowgliNext datum — the target true-north equirectangular ENU frame.
 	mnLat, mnLon float64
 }
 
-// project converts (eOM, nOM) — metres east/north of the OM datum — into
-// (eMN, nMN) — metres east/north of the MN datum. M is metersPerDegreeLat.
+// project converts (eOM, nOM) — OpenMower UTM-grid metres east/north of the OM
+// datum — into (eMN, nMN) — MowgliNext true-north ENU metres east/north of the
+// MN datum:
 //
-//	lat = om_lat + nOM / M
-//	lon = om_lon + eOM / (M · cos(om_lat))
-//	eMN = (lon − mn_lon) · M · cos(mn_lat)
-//	nMN = (lat − mn_lat) · M
+//	lat, lon = UTMtoLL(omDatumN + nOM, omDatumE + eOM, omZone)
+//	eMN      = (lon − mn_lon) · M · cos(mn_lat)
+//	nMN      = (lat − mn_lat) · M    (M = metersPerDegreeLat)
 func (r datumReprojector) project(eOM, nOM float64) (float64, float64) {
-	lat := r.omLat + nOM/metersPerDegreeLat
-	lon := r.omLon + eOM/(metersPerDegreeLat*math.Cos(r.omLat*math.Pi/180.0))
+	if !r.reproject {
+		return eOM, nOM
+	}
+	lat, lon := utmToLL(r.omDatumN+nOM, r.omDatumE+eOM, r.omZone, r.omNorth)
 	eMN := (lon - r.mnLon) * metersPerDegreeLat * math.Cos(r.mnLat*math.Pi/180.0)
 	nMN := (lat - r.mnLat) * metersPerDegreeLat
 	return eMN, nMN
+}
+
+// projectYaw rotates a yaw (radians, ENU CCW-from-east) given in OpenMower's
+// UTM grid-north frame into MowgliNext's true-north ENU frame by removing the
+// UTM meridian convergence at the point (eOM, nOM). The zero value leaves the
+// yaw unchanged, matching project()'s pass-through behaviour.
+func (r datumReprojector) projectYaw(yaw, eOM, nOM float64) float64 {
+	if !r.reproject {
+		return yaw
+	}
+	lat, lon := utmToLL(r.omDatumN+nOM, r.omDatumE+eOM, r.omZone, r.omNorth)
+	return yaw - utmConvergenceRad(lat, lon, r.omZone)
 }
 
 // resolveReprojection decides how OpenMower coordinates are mapped into
@@ -502,33 +530,39 @@ func (r datumReprojector) project(eOM, nOM float64) (float64, float64) {
 // string when the inputs don't allow a confident, georeferenced answer.
 //
 // Cases:
-//   - OM datum provided + MN datum readable → full geodetic reprojection.
+//   - OM datum provided + MN datum readable → full UTM→ENU reprojection
+//     (offset, scale AND grid-north convergence corrected).
 //   - OM datum provided + MN datum UNSET (fresh install) → adopt the OM
-//     datum as the MN datum so the import is exact (identity), and tell
-//     the operator to set datum_lat/datum_lon to the OM datum. We do NOT
-//     write mowgli_robot.yaml here: the datum is owned by the GPS/settings
-//     write path and adopting it silently would change the live map frame
-//     for an already-running localizer. Surfacing it keeps the importer
-//     side-effect-free and matches how other settings are written.
-//   - OM datum NOT provided + MN datum set → identity copy with a
-//     prominent "import will be offset" warning.
-//   - OM datum NOT provided + MN datum unset → identity copy (nothing to
-//     reference against), gentle note.
+//     datum as the MN datum: still reprojects (UTM grid → true-north ENU about
+//     the OM datum, so the 1–2° convergence is removed), and tells the operator
+//     to set datum_lat/datum_lon to the OM datum. We do NOT write
+//     mowgli_robot.yaml here: the datum is owned by the GPS/settings write path
+//     and adopting it silently would change the live map frame for an
+//     already-running localizer. Surfacing it keeps the importer side-effect-free
+//     and matches how other settings are written.
+//   - OM datum NOT provided → copy OM coordinates through unchanged (no UTM
+//     anchor to invert against) with a prominent warning that the map will be
+//     both offset and rotated by the UTM meridian convergence.
 func resolveReprojection(omLat, omLon *float64, mnLat, mnLon float64, mnDatumErr error) (datumReprojector, string) {
 	if omLat == nil || omLon == nil {
+		warn := "Datum OpenMower non fourni — l'import sera décalé et pivoté (convergence du méridien UTM, ~1–2°). Renseignez le datum OpenMower (OM_DATUM_LAT/LONG) pour un géoréférencement correct."
 		if mnDatumErr != nil {
-			return datumReprojector{}, "Datum OpenMower non fourni et datum MowgliNext absent — l'import est copié tel quel. Renseignez le datum OpenMower (OM_DATUM_LAT/LONG) pour un géoréférencement correct."
+			warn = "Datum OpenMower non fourni et datum MowgliNext absent — l'import est copié tel quel (décalé et pivoté du fait de la convergence UTM). Renseignez le datum OpenMower (OM_DATUM_LAT/LONG) pour un géoréférencement correct."
 		}
-		return datumReprojector{mnLat: mnLat, mnLon: mnLon, omLat: mnLat, omLon: mnLon},
-			"Datum OpenMower non fourni — l'import sera décalé. Renseignez le datum OpenMower (OM_DATUM_LAT/LONG) pour un géoréférencement correct."
+		return datumReprojector{}, warn
 	}
+
+	dn, de, zone, north := llToUTM(*omLat, *omLon)
+	r := datumReprojector{reproject: true, omDatumE: de, omDatumN: dn, omZone: zone, omNorth: north}
 	if mnDatumErr != nil {
-		// Fresh install: no MN datum yet. Adopt the OM datum so the import
-		// is exact; the operator must promote it to datum_lat/datum_lon.
-		return datumReprojector{omLat: *omLat, omLon: *omLon, mnLat: *omLat, mnLon: *omLon},
-			fmt.Sprintf("Datum MowgliNext absent — le datum OpenMower (%.8f, %.8f) a été adopté pour cet import. Réglez datum_lat/datum_lon sur ces valeurs pour que la carte soit correctement géoréférencée.", *omLat, *omLon)
+		// Fresh install: no MN datum yet. Adopt the OM datum as the MN datum so
+		// the import is georeferenced about it (and the UTM convergence removed);
+		// the operator must promote it to datum_lat/datum_lon.
+		r.mnLat, r.mnLon = *omLat, *omLon
+		return r, fmt.Sprintf("Datum MowgliNext absent — le datum OpenMower (%.8f, %.8f) a été adopté pour cet import. Réglez datum_lat/datum_lon sur ces valeurs pour que la carte soit correctement géoréférencée.", *omLat, *omLon)
 	}
-	return datumReprojector{omLat: *omLat, omLon: *omLon, mnLat: mnLat, mnLon: mnLon}, ""
+	r.mnLat, r.mnLon = mnLat, mnLon
+	return r, ""
 }
 
 // ---------------------------------------------------------------------------
@@ -619,7 +653,7 @@ func buildImportSummary(omMap openMowerMap, reproj datumReprojector) ImportOpenM
 		summary.DockPose = &ImportDockPose{
 			X:      dx,
 			Y:      dy,
-			YawRad: d.Heading,
+			YawRad: reproj.projectYaw(d.Heading, d.Position.X, d.Position.Y),
 		}
 	}
 
@@ -743,7 +777,7 @@ func buildMowgliNextPayload(omMap openMowerMap, reproj datumReprojector) (*mowgl
 		dockReq = &mowgli.SetDockingPointReq{
 			DockingPose: geometry.Pose{
 				Position:    geometry.Point{X: dx, Y: dy, Z: 0},
-				Orientation: yawToQuaternion(d.Heading),
+				Orientation: yawToQuaternion(reproj.projectYaw(d.Heading, d.Position.X, d.Position.Y)),
 			},
 		}
 		break

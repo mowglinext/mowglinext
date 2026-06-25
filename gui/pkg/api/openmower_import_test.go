@@ -212,31 +212,26 @@ func TestBuildMowgliNextPayload_AppliesReprojection(t *testing.T) {
 	var omMap openMowerMap
 	require.NoError(t, json.Unmarshal([]byte(sampleOpenMowerMap), &omMap))
 
-	// OM datum offset from MN datum by ~100 m north and ~100 m east. At the
-	// OM origin (0, 0) the projection collapses to the constant offset
-	// between the two datums; cos(lat) differs negligibly over 100 m so the
-	// origin lands very close to (dE, dN) but the test pins the exact value
-	// the reprojector computes (not an additive shift).
+	// OM datum ~100 m NE of the MN datum, off zone 32's central meridian so the
+	// UTM convergence is non-trivial. The reprojector inverts OpenMower's UTM
+	// projection, so we pin the exact value project() computes (not a shift).
 	mnLat, mnLon := 48.0, 11.0
-	reproj := datumReprojector{
-		omLat: mnLat + 100.0/metersPerDegreeLat,
-		omLon: mnLon + 100.0/(metersPerDegreeLat*math.Cos(mnLat*math.Pi/180.0)),
-		mnLat: mnLat,
-		mnLon: mnLon,
-	}
+	omLat := mnLat + 100.0/metersPerDegreeLat
+	omLon := mnLon + 100.0/(metersPerDegreeLat*math.Cos(mnLat*math.Pi/180.0))
+	reproj, warn := resolveReprojection(&omLat, &omLon, mnLat, mnLon, nil)
+	require.Empty(t, warn)
 	wantE0, wantN0 := reproj.project(0, 0)
 
 	replace, dock := buildMowgliNextPayload(omMap, reproj)
 	require.Len(t, replace.Areas, 2)
 
-	// Front lawn first vertex was (0, 0); should land at the reprojected
-	// origin (≈ (100, 100) but not exactly — that's the whole point).
+	// Front lawn first vertex was (0, 0); should land at the reprojected origin.
 	first := replace.Areas[0]
 	require.NotEmpty(t, first.Area.Area.Points)
-	assert.InDelta(t, float32(wantE0), first.Area.Area.Points[0].X, 1e-3)
-	assert.InDelta(t, float32(wantN0), first.Area.Area.Points[0].Y, 1e-3)
+	assert.InDelta(t, float32(wantE0), first.Area.Area.Points[0].X, 1e-2)
+	assert.InDelta(t, float32(wantN0), first.Area.Area.Points[0].Y, 1e-2)
 
-	// Dock was at (-0.5, 0.2) → reprojected.
+	// Dock was at (-0.5, 0.2) → reprojected position.
 	wantDockE, wantDockN := reproj.project(-0.5, 0.2)
 	assert.InDelta(t, wantDockE, dock.DockingPose.Position.X, 1e-6)
 	assert.InDelta(t, wantDockN, dock.DockingPose.Position.Y, 1e-6)
@@ -244,77 +239,97 @@ func TestBuildMowgliNextPayload_AppliesReprojection(t *testing.T) {
 
 // --- datumReprojector / resolveReprojection ------------------------------
 
-// TestReproject_RoundTrip100m is the stand-in for a real field sample (none
-// is available — see the verification gap). It builds an OM polygon whose
-// datum is offset ~100 m north and ~100 m east of the MN datum, then asserts
-// the reprojected MN points match the expected ENU to within ~1 mm. The
-// expected value is derived independently of project() by going OM→lat/lon
-// →MN by hand, so a regression in the formula is caught.
-func TestReproject_RoundTrip100m(t *testing.T) {
+// TestReproject_UTMRoundTrip builds OM-grid coordinates exactly the way
+// OpenMower does (UTM(point) − UTM(datum)) for a set of known absolute
+// positions, then asserts project() recovers MowgliNext's true-north ENU for
+// each to within ~1 mm. The expected value is derived independently of
+// project(), so a regression in the formula is caught.
+func TestReproject_UTMRoundTrip(t *testing.T) {
 	const M = metersPerDegreeLat
 	mnLat, mnLon := 48.137154, 11.576124 // Munich-ish, arbitrary
-	// OM datum offset from MN datum.
-	dNorth, dEast := 100.0, 100.0
-	omLat := mnLat + dNorth/M
-	omLon := mnLon + dEast/(M*math.Cos(mnLat*math.Pi/180.0))
+	// OM datum offset ~100 m NE of the MN datum.
+	omLat := mnLat + 100.0/M
+	omLon := mnLon + 100.0/(M*math.Cos(mnLat*math.Pi/180.0))
+	reproj, warn := resolveReprojection(&omLat, &omLon, mnLat, mnLon, nil)
+	require.Empty(t, warn)
 
-	reproj := datumReprojector{omLat: omLat, omLon: omLon, mnLat: mnLat, mnLon: mnLon}
-
-	// A handful of OM-frame points. For each, compute the expected MN-frame
-	// point by hand (the same math project() should implement).
-	cases := [][2]float64{{0, 0}, {10, 0}, {0, 6}, {-3, 3}, {123.4, -56.7}}
-	for _, c := range cases {
-		eOM, nOM := c[0], c[1]
-		lat := omLat + nOM/M
-		lon := omLon + eOM/(M*math.Cos(omLat*math.Pi/180.0))
+	dN, dE, _, _ := llToUTM(omLat, omLon)
+	for _, off := range [][2]float64{{0, 0}, {10, 0}, {0, 6}, {-3, 3}, {123.4, -56.7}} {
+		// A known absolute position ~off[E],off[N] metres from the OM datum.
+		lat := omLat + off[1]/M
+		lon := omLon + off[0]/(M*math.Cos(omLat*math.Pi/180.0))
+		// OM-grid coordinate exactly as OpenMower would store it.
+		n, e, _, _ := llToUTM(lat, lon)
+		eOM, nOM := e-dE, n-dN
+		// Expected MN ENU, computed independently of project().
 		wantE := (lon - mnLon) * M * math.Cos(mnLat*math.Pi/180.0)
 		wantN := (lat - mnLat) * M
 
 		gotE, gotN := reproj.project(eOM, nOM)
-		assert.InDelta(t, wantE, gotE, 1e-3, "east mismatch for OM point %v", c)
-		assert.InDelta(t, wantN, gotN, 1e-3, "north mismatch for OM point %v", c)
-	}
-
-	// Sanity: the OM origin must land ≈100 m NE of the MN origin. cos(lat)
-	// varies by <2e-6 over 100 m so the residual is sub-mm, but the point is
-	// that this is computed, not assumed.
-	e0, n0 := reproj.project(0, 0)
-	assert.InDelta(t, dEast, e0, 1e-2)
-	assert.InDelta(t, dNorth, n0, 1e-2)
-}
-
-func TestReproject_SameDatumIsIdentity(t *testing.T) {
-	// OM datum == MN datum → exact identity (matches the pre-fix additive
-	// behaviour for the "same datum" case).
-	lat, lon := 48.5, 11.5
-	r := datumReprojector{omLat: lat, omLon: lon, mnLat: lat, mnLon: lon}
-	for _, c := range [][2]float64{{0, 0}, {10, 6}, {-3, 3}, {-0.5, 0.2}} {
-		e, n := r.project(c[0], c[1])
-		assert.InDelta(t, c[0], e, 1e-9, "east not identity for %v", c)
-		assert.InDelta(t, c[1], n, 1e-9, "north not identity for %v", c)
+		assert.InDelta(t, wantE, gotE, 2e-3, "east mismatch for OM offset %v", off)
+		assert.InDelta(t, wantN, gotN, 2e-3, "north mismatch for OM offset %v", off)
 	}
 }
 
-func TestResolveReprojection_NoOmDatumWithMnSetIsIdentityPlusWarning(t *testing.T) {
+func TestReproject_OnCentralMeridianHasNoRotation(t *testing.T) {
+	// OM datum == MN datum AND on zone 32's central meridian (9°E) → zero
+	// convergence. project() may rescale slightly (UTM grid vs true ground
+	// distance, plus the fixed metersPerDegreeLat constant — the same projection
+	// MowgliNext's own localizer uses) but must not ROTATE: a grid-east vector
+	// stays east and a grid-north vector stays north, with no cross-axis leakage.
+	lat, lon := 48.5, 9.0
+	r, _ := resolveReprojection(&lat, &lon, lat, lon, nil)
+
+	e, n := r.project(20, 0) // grid-east
+	assert.InDelta(t, 0, n, 5e-3, "north leakage on a grid-east vector")
+	assert.InDelta(t, 20, e, 0.05, "east magnitude")
+
+	e, n = r.project(0, 20) // grid-north
+	assert.InDelta(t, 0, e, 5e-3, "east leakage on a grid-north vector")
+	assert.InDelta(t, 20, n, 0.05, "north magnitude")
+}
+
+// TestReproject_SameDatumOffCentralMeridianRemovesConvergence is the core
+// regression for the "imported map rotated 1–2°" bug: even with identical OM
+// and MN datums, OpenMower's UTM grid-north coordinates must be de-rotated by
+// the meridian convergence into MowgliNext's true-north ENU.
+func TestReproject_SameDatumOffCentralMeridianRemovesConvergence(t *testing.T) {
+	lat, lon := 48.0, 11.0 // 2° east of zone 32's central meridian (9°E)
+	r, _ := resolveReprojection(&lat, &lon, lat, lon, nil)
+
+	// A 10 m vector along OM grid-north (0, 10) rotates by −γ about the origin.
+	e, n := r.project(0, 10)
+	gamma := utmConvergenceRad(lat, lon, 32) // ~ +0.026 rad (1.49°)
+	theta := -gamma
+	wantE := -10 * math.Sin(theta)
+	wantN := 10 * math.Cos(theta)
+	assert.InDelta(t, wantE, e, 0.03)
+	assert.InDelta(t, wantN, n, 0.03)
+	// Genuinely rotated — NOT the old identity behaviour.
+	assert.Greater(t, math.Abs(e), 0.1)
+}
+
+func TestResolveReprojection_NoOmDatumWithMnSetIsPassThroughPlusWarning(t *testing.T) {
 	r, warn := resolveReprojection(nil, nil, 48.0, 11.0, nil)
-	// Identity over the MN datum.
+	assert.False(t, r.reproject)
+	// No UTM anchor → coordinates pass through unchanged.
 	e, n := r.project(5, 7)
 	assert.InDelta(t, 5, e, 1e-9)
 	assert.InDelta(t, 7, n, 1e-9)
 	assert.Contains(t, warn, "Datum OpenMower non fourni")
-	assert.Contains(t, warn, "décalé")
+	assert.Contains(t, warn, "pivoté")
 }
 
 func TestResolveReprojection_OmDatumWithMnUnsetAdoptsOmDatum(t *testing.T) {
-	// Fresh install: MN datum unreadable, OM datum provided → adopt OM as MN
-	// so the import is an exact identity, plus a "set datum_lat/lon" notice.
+	// Fresh install: MN datum unreadable, OM datum provided → adopt OM as MN so
+	// the import is georeferenced about it (convergence still removed), plus a
+	// "set datum_lat/lon" notice. The OM origin maps to the MN origin.
 	omLat, omLon := 49.123456, 8.654321
 	r, warn := resolveReprojection(&omLat, &omLon, 0, 0, errors.New("datum unset"))
-	for _, c := range [][2]float64{{0, 0}, {12.3, -4.5}} {
-		e, n := r.project(c[0], c[1])
-		assert.InDelta(t, c[0], e, 1e-9)
-		assert.InDelta(t, c[1], n, 1e-9)
-	}
+	assert.True(t, r.reproject)
+	e0, n0 := r.project(0, 0)
+	assert.InDelta(t, 0, e0, 1e-3)
+	assert.InDelta(t, 0, n0, 1e-3)
 	assert.Contains(t, warn, "Datum MowgliNext absent")
 	assert.Contains(t, warn, "datum_lat/datum_lon")
 }
@@ -323,10 +338,11 @@ func TestResolveReprojection_FullGeodeticNoWarning(t *testing.T) {
 	omLat, omLon := 49.0, 11.0
 	r, warn := resolveReprojection(&omLat, &omLon, 48.0, 11.0, nil)
 	assert.Empty(t, warn)
+	assert.True(t, r.reproject)
 	// 1° north of the MN datum → the OM origin is ~111 km north.
 	e0, n0 := r.project(0, 0)
-	assert.InDelta(t, 0, e0, 1e-6)
-	assert.InDelta(t, metersPerDegreeLat, n0, 1e-6)
+	assert.InDelta(t, 0, e0, 1e-2)
+	assert.InDelta(t, metersPerDegreeLat, n0, 1e-2)
 }
 
 // --- HTTP handler --------------------------------------------------------
