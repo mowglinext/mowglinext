@@ -164,8 +164,22 @@ controller_server:
     coverage_goal_checker:
       plugin: "mowgli_nav2_plugins/PathProgressGoalChecker"
       progress_threshold: 0.95
-      xy_goal_tolerance: 0.30
-      yaw_goal_tolerance: 0.30
+      # 2026-06-25: at the END of an area the action was ABORTING and the BT
+      # re-mowed the whole area instead of completing. Root cause: FTC reaches
+      # the goal position → POST_ROTATE (rotate to the last path pose's heading),
+      # but this checker required yaw within 0.30 rad (17°) AND xy within 0.30 m.
+      # The robot can't make the tiny final in-place rotation (sub-deadband) and
+      # FTC stops driving at max_goal_distance_error=0.50 m, so neither xy(0.30)
+      # nor yaw(0.30) was ever met → the goal was never accepted → the nav2
+      # progress_checker fired "Failed to make progress" (err 105) → action
+      # aborted → FollowStrip "area not mowable" → full re-mow (and the re-transit
+      # then hit boundary collision-ahead and stuck). For COVERAGE the final
+      # heading is meaningless and 0.5 m short of the last pose is fully covered
+      # by the perpendicular swaths, so: ignore yaw (π) and match xy to FTC's
+      # max_goal_distance_error (0.50). progress_threshold 0.95 still guarantees
+      # the area was actually mowed before "done" can fire.
+      xy_goal_tolerance: 0.50
+      yaw_goal_tolerance: 3.14   # ≈π → ignore final heading (test pins ≤ 3.1416)
       plan_topic: "/controller_server/FollowCoveragePath/global_plan"
 
     # FollowPath (transit / dock approach / home / undock recovery) —
