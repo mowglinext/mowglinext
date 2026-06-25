@@ -30,6 +30,52 @@ std::string fmtDrop(const char* what, double value, const char* cmp, double thre
   return std::string(buf);
 }
 
+// AUTO swath-angle field-size gate. f2c::sg::BruteForce::generateBestSwaths
+// sweeps 180 candidate angles (1° step) and regenerates the full swath set at
+// each, so its cost scales ~linearly with field area and explodes on large
+// fields — a 100×100 m field takes ~24 s, far past the action (15 s) and BT
+// (12 s) planning timeouts, so the coverage action fails outright. Above this
+// area we skip the exhaustive search and use the boundary's longest-edge
+// orientation (the angle the search almost always converges to on a rectangular
+// lawn anyway — swaths along the long side minimise turns), which is ~3 orders
+// of magnitude cheaper and equally deterministic across re-plans.
+//
+// The threshold is deliberately conservative: the exhaustive search measures
+// ~1.7 s at 400 m² on an x86 dev host, and the target ARM SBC is ~5× slower, so
+// even a ~400 m² field is ~8 s of search there — already close to the 12 s BT
+// timeout. Keeping the gate at 400 m² guarantees AUTO planning never times out
+// on hardware; larger lawns simply use the (near-optimal) longest-edge angle.
+constexpr double kAutoAngleMaxAreaM2 = 400.0;  // ~20 × 20 m
+
+// Orientation (radians) of the longest edge of a cell's outer ring. A cheap,
+// deterministic AUTO swath angle for large fields. Falls back to 0 (sweep along
+// +x) for a degenerate ring.
+double longestEdgeAngle(const f2c::types::Cell& cell)
+{
+  if (cell.size() == 0)
+  {
+    return 0.0;
+  }
+  const auto ring = cell.getGeometry(0);  // outer boundary
+  const std::size_t n = ring.size();
+  double best_len = -1.0;
+  double best_angle = 0.0;
+  for (std::size_t i = 0; i + 1 < n; ++i)
+  {
+    const auto a = ring.getGeometry(i);
+    const auto b = ring.getGeometry(i + 1);
+    const double dx = b.getX() - a.getX();
+    const double dy = b.getY() - a.getY();
+    const double len = std::hypot(dx, dy);
+    if (len > best_len)
+    {
+      best_len = len;
+      best_angle = std::atan2(dy, dx);
+    }
+  }
+  return best_angle;
+}
+
 // Append the densified [a, b) segment to `out` (b exclusive: the next segment
 // starts at b, so shared vertices are emitted once and segments chain).
 void densifySegment(
@@ -650,8 +696,26 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       plan.diagnostics.drops.push_back(fmtDrop("mainland cell area=", cell.area(), "<", 1e-6));
       continue;
     }
-    f2c::types::Swaths swaths = (mow_angle_rad >= 0.0)
-                                    ? bf.generateSwaths(mow_angle_rad, op_width, cell)
+    // Resolve the swath angle. Fixed angle (>= 0) is used as-is. AUTO (< 0)
+    // normally runs the exhaustive best-angle search, but on a large cell that
+    // search is too slow (see kAutoAngleMaxAreaM2) — fall back to the cheap
+    // longest-edge angle so big fields still plan within the action timeout.
+    double cell_angle = mow_angle_rad;
+    if (cell_angle < 0.0 && cell.area() > kAutoAngleMaxAreaM2)
+    {
+      cell_angle = longestEdgeAngle(cell);
+      char buf[160];
+      std::snprintf(buf,
+                    sizeof(buf),
+                    "auto-angle: cell area=%.1f m² > %.1f → longest-edge angle %.1f° "
+                    "(skipped exhaustive search)",
+                    cell.area(),
+                    kAutoAngleMaxAreaM2,
+                    cell_angle * 180.0 / M_PI);
+      plan.diagnostics.notes.push_back(std::string(buf));
+    }
+    f2c::types::Swaths swaths = (cell_angle >= 0.0)
+                                    ? bf.generateSwaths(cell_angle, op_width, cell)
                                     : bf.generateBestSwaths(n_swath_obj, op_width, cell);
     if (swaths.size() == 0)
     {

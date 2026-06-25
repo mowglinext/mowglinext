@@ -47,6 +47,9 @@ struct PlanDiagnostics
   // the threshold it failed (e.g. "dropped swath len=0.1200<0.1500",
   // "dropped ring perim=0.7000<1.0000"). The server logs these verbatim.
   std::vector<std::string> drops;
+  // Non-drop informational lines (e.g. the AUTO swath-angle large-field
+  // fallback). Logged like drops but they do NOT indicate lost coverage.
+  std::vector<std::string> notes;
   // Planned-coverage fraction in [0, 1]: (sum of swath-strip areas at op_width +
   // ring-strip areas at op_width) / polygon area. A coarse estimate (strips can
   // overlap at corners and the rings/swaths butt rather than overlap), so it can

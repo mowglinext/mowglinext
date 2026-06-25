@@ -400,6 +400,10 @@ void CoverageServer::planCoverage()
     {
       RCLCPP_INFO(get_logger(), "PlanCoverage: %s", d.c_str());
     }
+    for (const auto& note : plan.diagnostics.notes)
+    {
+      RCLCPP_INFO(get_logger(), "PlanCoverage: %s", note.c_str());
+    }
     RCLCPP_INFO(get_logger(),
                 "PlanCoverage: planned coverage ~%.1f%% (%.2f/%.2f m² as op_width strips), "
                 "%zu piece(s) dropped",

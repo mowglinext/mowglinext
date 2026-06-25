@@ -786,3 +786,39 @@ TEST(RingDedup, DedupedDegenerateRingStillPlans)
   EXPECT_FALSE(plan.rings.empty() && plan.swaths.empty())
       << "deduped degenerate ring produced an empty plan";
 }
+
+// LARGE-FIELD AUTO-ANGLE FALLBACK: f2c::sg::BruteForce::generateBestSwaths
+// sweeps 180 candidate angles and regenerates the full swath set at each, so on
+// a big field it blows past the action/BT planning timeouts and the coverage
+// action fails outright ("huge maps don't plan"). planBoustrophedon must instead
+// fall back to the boundary's longest-edge angle above kAutoAngleMaxAreaM2,
+// recording a diagnostics note, while still producing a full plan.
+TEST(CoveragePlanning, LargeFieldUsesLongestEdgeAngleFallback)
+{
+  const auto plan = planDefault(makeSquare(30.0));  // 900 m² > 400 m² gate
+  EXPECT_FALSE(plan.swaths.empty()) << "large field produced no swaths";
+  ASSERT_FALSE(plan.diagnostics.notes.empty())
+      << "expected an auto-angle fallback note on a large field";
+  EXPECT_NE(plan.diagnostics.notes[0].find("auto-angle"), std::string::npos);
+}
+
+// A field under the threshold keeps the exhaustive best-angle search (no note),
+// so small lawns get the optimum swath orientation as before.
+TEST(CoveragePlanning, SmallFieldKeepsExhaustiveAngleSearch)
+{
+  const auto plan = planDefault(makeSquare(18.0));  // 324 m² < 400 m² gate
+  EXPECT_FALSE(plan.swaths.empty());
+  EXPECT_TRUE(plan.diagnostics.notes.empty())
+      << "small field should not trigger the large-field angle fallback";
+}
+
+// The fallback is deterministic (longest-edge angle of a fixed polygon), so the
+// swath-index resume contract (CLAUDE.md invariant #7) still holds across
+// re-plans of a large field.
+TEST(CoveragePlanning, LargeFieldFallbackIsDeterministic)
+{
+  const auto a = planDefault(makeSquare(30.0));
+  const auto b = planDefault(makeSquare(30.0));
+  ASSERT_EQ(a.swaths.size(), b.swaths.size());
+  EXPECT_NEAR(a.swath_angle_rad, b.swath_angle_rad, 1e-9);
+}
