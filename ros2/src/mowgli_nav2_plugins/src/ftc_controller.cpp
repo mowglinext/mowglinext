@@ -1534,9 +1534,14 @@ void FTCController::updateLateralDeviation(double dt)
   // the inscribed-inflation radius misses never flips clear_at_zero false, so
   // avoidance never engages. No zone guard here: this asks "does the body hit an
   // obstacle on the nominal line", independent of the mowing-zone boundary.
-  const bool clear_at_zero = ObstacleDeviation::isPathClearWithDeviation(
-      *costmap_map_, window, 0, config_.obstacle_lookahead, 0.0,
-      ObstacleDeviation::BoundaryGuard{}, config_.obstacle_body_half_width);
+  const bool clear_at_zero =
+      ObstacleDeviation::isPathClearWithDeviation(*costmap_map_,
+                                                  window,
+                                                  0,
+                                                  config_.obstacle_lookahead,
+                                                  0.0,
+                                                  ObstacleDeviation::BoundaryGuard{},
+                                                  config_.obstacle_body_half_width);
 
   if (clear_at_zero)
   {
@@ -1590,11 +1595,8 @@ void FTCController::updateLateralDeviation(double dt)
     // reduce it toward the path here, which is what stopped the flap.
     if (!is_avoiding_)
     {
-      const int obs_idx = ObstacleDeviation::findFirstObstacleIndex(*costmap_map_,
-                                                                    window,
-                                                                    0,
-                                                                    config_.obstacle_lookahead,
-                                                                    config_.obstacle_body_half_width);
+      const int obs_idx = ObstacleDeviation::findFirstObstacleIndex(
+          *costmap_map_, window, 0, config_.obstacle_lookahead, config_.obstacle_body_half_width);
       if (obs_idx < 0)
       {
         // Footprint collision but no path-pose hit (e.g. inflated cell next

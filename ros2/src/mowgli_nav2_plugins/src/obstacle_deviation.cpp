@@ -230,8 +230,8 @@ double ObstacleDeviation::growDeviationUntilClear(
   while (mag <= max_deviation)
   {
     const double candidate = sign * mag;
-    if (isPathClearWithDeviation(costmap, path, start_idx, lookahead_count, candidate, guard,
-                                 half_width))
+    if (isPathClearWithDeviation(
+            costmap, path, start_idx, lookahead_count, candidate, guard, half_width))
     {
       return candidate;
     }

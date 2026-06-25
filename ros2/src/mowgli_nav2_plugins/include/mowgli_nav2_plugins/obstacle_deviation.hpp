@@ -61,12 +61,11 @@ public:
   /// body span (±half_width perpendicular to heading, spacing ≤ costmap
   /// resolution) so an off-centerline obstacle the chassis would hit is caught;
   /// `half_width == 0` keeps the legacy single-centerline sample.
-  static int findFirstObstacleIndex(
-      const nav2_costmap_2d::Costmap2D& costmap,
-      const std::vector<geometry_msgs::msg::PoseStamped>& path,
-      std::size_t start_idx,
-      int lookahead_count,
-      double half_width = 0.0);
+  static int findFirstObstacleIndex(const nav2_costmap_2d::Costmap2D& costmap,
+                                    const std::vector<geometry_msgs::msg::PoseStamped>& path,
+                                    std::size_t start_idx,
+                                    int lookahead_count,
+                                    double half_width = 0.0);
 
   /// Decide which side of `obstacle_pose` is free. Scans perpendicular to
   /// the obstacle's heading by `step` increments out to `max_search`.
