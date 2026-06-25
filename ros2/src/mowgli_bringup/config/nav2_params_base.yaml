@@ -384,6 +384,17 @@ controller_server:
       check_obstacles: true
       obstacle_lookahead: 30           # ≈1.5 m at F2C 0.05 m sampling → ~7 s warning at 0.20 m/s
       obstacle_footprint: true
+      # Body half-width for the lateral obstacle-detection sweep. 2026-06-25
+      # FIELD: the detection threshold is 253 (lethal OR inscribed), and the
+      # costmap ALREADY inflates every obstacle by the inscribed radius (~0.14 m)
+      # — so a sample already "sees" obstacles 0.14 m out. Footprint half-width is
+      # 0.25 m, so the real centerline-miss gap is only 0.25−0.14 ≈ 0.11 m. The
+      # first cut (0.20) double-counted the inscribed radius → effective reach
+      # 0.20+0.14 ≈ 0.34 m, ~0.09 m too wide. That over-reach caught boundary
+      # structures / inflation halos the rings intentionally hug → 15× "deviation
+      # > max → hold 5 s" stalls per mow. 0.12 (≈ footprint_half − inscribed)
+      # gives effective reach 0.12+0.14 ≈ 0.26 m ≈ the full footprint, no over-reach.
+      obstacle_body_half_width: 0.12
       enable_obstacle_deviation: true
       max_lateral_deviation: 1.5
       deviation_step: 0.05
