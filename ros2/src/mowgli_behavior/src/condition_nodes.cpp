@@ -46,7 +46,18 @@ BT::NodeStatus IsEmergency::tick()
     return BT::NodeStatus::SUCCESS;  // stale data → assume emergency
   }
 
-  return ctx->latest_emergency.active_emergency ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  // Treat a set firmware LATCH as emergency too, not just an actively-asserted
+  // physical trigger. A software e-stop (the /hardware_bridge/emergency_stop
+  // service, used by the GUI stop button and tooling) sets the firmware latch
+  // WITHOUT a physical lift/stop assertion, so active_emergency stays false
+  // while latched_emergency is true. Keying only off active_emergency let the
+  // BT keep ticking MainLogic (flapping into a spurious RECORDING state) while
+  // the firmware held the motors disabled — the BT must instead surface
+  // EMERGENCY and run its stop/auto-reset handler. The firmware remains the
+  // safety authority; this only fixes what the BT reports and does.
+  return (ctx->latest_emergency.active_emergency || ctx->latest_emergency.latched_emergency)
+             ? BT::NodeStatus::SUCCESS
+             : BT::NodeStatus::FAILURE;
 }
 
 // ---------------------------------------------------------------------------
