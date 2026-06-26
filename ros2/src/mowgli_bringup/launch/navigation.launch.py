@@ -637,15 +637,21 @@ def generate_launch_description() -> LaunchDescription:
         # never silently disagree (the 2026-06-25 regression: launch forced 0.25
         # while base.yaml/FTC were 0.50).
         ftc_park_dist = float(fcp.get("max_goal_distance_error", 0.50))
-        if coverage_xy_tolerance < ftc_park_dist:
+        # Use a LOCAL copy — never rebind the enclosing-scope `coverage_xy_tolerance`
+        # here. Assigning to it anywhere in this nested function makes Python treat
+        # it as function-local for the whole body, so the read just below would
+        # raise UnboundLocalError ("cannot access local variable ... where it is
+        # not associated with a value") and abort the entire navigation launch.
+        cov_xy_tol = coverage_xy_tolerance
+        if cov_xy_tol < ftc_park_dist:
             print(
                 "WARN: coverage_xy_tolerance={} m is tighter than FTC "
                 "max_goal_distance_error={} m — raising to {} m so the area can "
                 "complete (FTC parks that far short of the goal). Update "
                 "mowgli_robot.yaml.coverage_xy_tolerance to silence.".format(
-                    coverage_xy_tolerance, ftc_park_dist, ftc_park_dist))
-            coverage_xy_tolerance = ftc_park_dist
-        cgc["xy_goal_tolerance"] = coverage_xy_tolerance
+                    cov_xy_tol, ftc_park_dist, ftc_park_dist))
+            cov_xy_tol = ftc_park_dist
+        cgc["xy_goal_tolerance"] = cov_xy_tol
 
         # Progress checker timeout: how long Nav2 waits for the robot to
         # achieve required_movement_radius before declaring no-progress.
