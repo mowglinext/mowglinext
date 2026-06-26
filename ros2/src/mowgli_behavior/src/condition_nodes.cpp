@@ -524,7 +524,9 @@ BT::NodeStatus PreFlightCheck::tick()
     {
       const std::string& ver = ctx->latest_status.firmware_version;
       char buf[96];
-      snprintf(buf, sizeof(buf), "firmware-incompatible (fw=%s proto=%u — reflash)",
+      snprintf(buf,
+               sizeof(buf),
+               "firmware-incompatible (fw=%s proto=%u — reflash)",
                ver.empty() ? "?" : ver.c_str(),
                static_cast<unsigned>(ctx->latest_status.firmware_protocol_version));
       failures.emplace_back(buf);

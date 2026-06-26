@@ -55,13 +55,13 @@ extern "C"
 
 #define MOWGLI_PROTOCOL_VERSION 2u
 
-/* ---------------------------------------------------------------------------
- * Firmware version (semantic version of the firmware build). Reported to the
- * host in pkt_config_rsp_t so the ROS 2 image can verify compatibility and warn
- * the operator to reflash. The compatibility key is MOWGLI_PROTOCOL_VERSION;
- * this semver is the human-readable build identity. Keep in sync with the
- * authoritative copy in firmware/stm32/ros_usbnode/include/mowgli_protocol.h.
- * ---------------------------------------------------------------------------*/
+  /* ---------------------------------------------------------------------------
+   * Firmware version (semantic version of the firmware build). Reported to the
+   * host in pkt_config_rsp_t so the ROS 2 image can verify compatibility and warn
+   * the operator to reflash. The compatibility key is MOWGLI_PROTOCOL_VERSION;
+   * this semver is the human-readable build identity. Keep in sync with the
+   * authoritative copy in firmware/stm32/ros_usbnode/include/mowgli_protocol.h.
+   * ---------------------------------------------------------------------------*/
 
 #define MOWGLI_FW_VERSION_MAJOR 1u
 #define MOWGLI_FW_VERSION_MINOR 0u

@@ -1798,7 +1798,9 @@ private:
     fw_compatible_ = (fw_protocol_version_ == kMowgliProtocolVersion);
 
     char ver[16];
-    snprintf(ver, sizeof(ver), "%u.%u.%u",
+    snprintf(ver,
+             sizeof(ver),
+             "%u.%u.%u",
              static_cast<unsigned>(fw_version_major_),
              static_cast<unsigned>(fw_version_minor_),
              static_cast<unsigned>(fw_version_patch_));

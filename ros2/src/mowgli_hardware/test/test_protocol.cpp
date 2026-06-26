@@ -96,8 +96,8 @@ TEST(ProtocolSizes, ConfigPacketSizes)
   // Firmware version handshake. Req is a bare trigger; Rsp carries the
   // protocol version + 3-byte semver. Must match pkt_config_*_t in
   // mowgli_protocol.h.
-  EXPECT_EQ(sizeof(LlConfigReq), 3u);   // type(1) + crc(2)
-  EXPECT_EQ(sizeof(LlConfigRsp), 7u);   // type(1) + proto(1) + semver(3) + crc(2)
+  EXPECT_EQ(sizeof(LlConfigReq), 3u);  // type(1) + crc(2)
+  EXPECT_EQ(sizeof(LlConfigRsp), 7u);  // type(1) + proto(1) + semver(3) + crc(2)
 }
 
 // ---------------------------------------------------------------------------
