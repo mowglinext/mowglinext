@@ -322,18 +322,23 @@
                  pose frequently pushed us outside the boundary. -->
             <Sequence name="UndockSequence">
               <IsCharging/>
-              <!-- Hard preflight gate — blocks until RTK Fixed (4) is
-                   available, battery is OK, TF chain is healthy, and the
-                   mowing/coverage services are up.
-                   Non-RTK GPS gives σ ~20-50 cm, which is enough to push
-                   the robot outside the polygon during transit and trigger
-                   spurious boundary violations. Mowing at non-RTK is not
-                   acceptable, so the check is strict: 120×1s retries then
-                   the sequence fails and falls through to UndockFailed. -->
+              <!-- Pre-undock preflight gate: battery OK, TF chain healthy,
+                   mowing/coverage services up, and GPS at least RTK-corrected
+                   (min_gps_fix_type=2). It deliberately does NOT require RTK
+                   Fixed here: the dock cradle's partial sky obstruction / metal
+                   canopy commonly pins the F9P at RTK Float while parked, and
+                   Float collapses to fix_type=2 through the Universal GNSS flag
+                   pipeline (navsat_fix_adapter maps only true Fixed→GBAS_FIX;
+                   Float/DGPS→STATUS_FIX). Requiring Fixed here was a chicken-
+                   and-egg: the robot must undock into the open to ACQUIRE Fixed,
+                   but the gate blocked the undock. RTK Fixed is instead enforced
+                   AFTER undock by WaitForGpsFix(min_fix_type=4) below — "wait
+                   Fixed once undocked, not before". 120×1s retries then the
+                   sequence fails and falls through to UndockFailed. -->
               <PublishHighLevelStatus state="2" state_name="PREFLIGHT_CHECK"/>
               <RetryUntilSuccessful num_attempts="120">
                 <Fallback>
-                  <PreFlightCheck min_battery="20.0" min_gps_fix_type="4" tf_timeout_sec="0.5"/>
+                  <PreFlightCheck min_battery="20.0" min_gps_fix_type="2" tf_timeout_sec="0.5"/>
                   <Sequence>
                     <WaitForDuration duration_sec="1.0"/>
                     <AlwaysFailure/>
