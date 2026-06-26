@@ -2080,6 +2080,8 @@
     "mowingPattern": "Motif de tonte",
     "headlandWidth": "Largeur de tournière",
     "headlandWidthTooltip": "Largeur de la bande périmétrique tondue avant le champ intérieur (retrait ConstHL de F2C). Relié à coverage_server.default_headland_width.",
+    "swathOverlap": "Chevauchement des passes",
+    "swathOverlapTooltip": "Chevauchement supplémentaire entre passes adjacentes pour éviter les bandes non tondues. Espacement F2C = tool_width − swath_overlap.",
     "headlandPasses": "Passes de tournière",
     "headlandPassesTooltip": "Nombre d'anneaux périmétriques concentriques avant le champ intérieur. 0 = auto (ceil(headland_width / tool_width)). >0 force exactement ce nombre quelle que soit headland_width. Relié à coverage_server.num_headland_passes.",
     "chassisSafetyInset": "Retrait de sécurité du châssis",

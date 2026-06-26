@@ -1109,7 +1109,32 @@ private:
     // docks — catches residual drift the boot calibration missed.
     // Accel Z is not calibrated (preserves gravity for sensor fusion), but
     // we still sum it so we can report implied mounting pitch/roll.
-    if (imu_cal_collecting_)
+    //
+    // SAFETY/QUALITY: only accumulate while the robot is genuinely AT REST on
+    // the dock. There is no stationarity/charging re-check once collection
+    // starts, so if COMMAND_START undocks mid-window the real motion is averaged
+    // into the offset, subtracted from every future /imu/data_raw sample, and
+    // persisted — a constant gyro bias feeding fusion_graph's gyro factor → yaw
+    // drift (the load gate only rejects |gyro|>0.2 rad/s, so moderate corruption
+    // passes). Abort the in-progress cal the moment the robot moves or leaves
+    // the charger, and keep the last completed calibration instead.
+    if (imu_cal_collecting_ && (!wheels_stationary_ || !is_charging_))
+    {
+      imu_cal_collecting_ = false;
+      imu_cal_count_ = 0;
+      // Restore the previously-completed cal if there was one
+      // (start_imu_calibration cleared imu_cal_ready_); otherwise stay
+      // uncalibrated (raw passthrough) rather than apply a corrupt partial.
+      if (imu_cal_last_completed_.nanoseconds() > 0)
+      {
+        imu_cal_ready_ = true;
+      }
+      RCLCPP_WARN(get_logger(),
+                  "IMU calibration aborted mid-collection (%s) — robot not at rest; "
+                  "keeping previous calibration",
+                  !is_charging_ ? "left charger" : "wheels moving");
+    }
+    else if (imu_cal_collecting_)
     {
       imu_cal_sum_ax_ += ax;
       imu_cal_sum_ay_ += ay;

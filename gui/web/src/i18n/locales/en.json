@@ -2080,6 +2080,8 @@
     "mowingPattern": "Mowing Pattern",
     "headlandWidth": "Headland Width",
     "headlandWidthTooltip": "Width of perimeter strip mowed before the inner field (F2C ConstHL inset). Wired to coverage_server.default_headland_width.",
+    "swathOverlap": "Swath Overlap",
+    "swathOverlapTooltip": "Extra overlap between adjacent swaths to avoid thin un-mowed strips. F2C swath spacing = tool_width − swath_overlap.",
     "headlandPasses": "Headland Passes",
     "headlandPassesTooltip": "Number of concentric perimeter rings before the inner field. 0 = auto (ceil(headland_width / tool_width)). >0 forces exactly that count regardless of headland_width. Wired to coverage_server.num_headland_passes.",
     "chassisSafetyInset": "Chassis Safety Inset",

@@ -213,6 +213,31 @@ def test_mowgli_robot_yaml_default_coverage_tolerance_matches_ftc_park() -> None
     )
 
 
+def test_base_ftc_clamp_admits_speed_fast() -> None:
+    """FTC hard-clamps its output to ±max_cmd_vel_speed, so a max_cmd_vel_speed
+    below speed_fast silently caps the mow speed. The shipped base.yaml must keep
+    the clamp >= the carrot speed."""
+    cfg = _load_yaml("nav2_params_base.yaml")
+    fcp = cfg["controller_server"]["ros__parameters"]["FollowCoveragePath"]
+    assert float(fcp["max_cmd_vel_speed"]) >= float(fcp["speed_fast"]), (
+        f"base.yaml FTC max_cmd_vel_speed={fcp['max_cmd_vel_speed']} < "
+        f"speed_fast={fcp['speed_fast']} — the mow speed is silently capped."
+    )
+
+
+def test_navigation_launch_raises_ftc_clamp_with_mowing_speed() -> None:
+    """When the launch overrides speed_fast with the operator's mowing_speed it
+    must also raise max_cmd_vel_speed, or a mowing_speed above 0.30 is silently
+    clamped by FTC."""
+    src = _read_text("launch/navigation.launch.py")
+    assert re.search(r"max_cmd_vel_speed\W+\W*=\W*mowing_speed", src) or re.search(
+        r"fcp\[.max_cmd_vel_speed.\]\s*=\s*mowing_speed", src), (
+        "navigation.launch.py overrides speed_fast=mowing_speed but does not raise "
+        "FollowCoveragePath.max_cmd_vel_speed — a mowing_speed > 0.30 is silently "
+        "capped by FTC's output clamp."
+    )
+
+
 def test_base_coverage_goal_checker_xy_ge_ftc_park() -> None:
     """The static base.yaml relationship that the launch floor preserves:
     coverage_goal_checker.xy_goal_tolerance must be >= FTC's

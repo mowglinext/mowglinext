@@ -606,6 +606,15 @@ def generate_launch_description() -> LaunchDescription:
                   .setdefault("ros__parameters", {})
                   .setdefault("FollowCoveragePath", {}))
         fcp["speed_fast"] = mowing_speed
+        # FTC hard-clamps its final longitudinal command to ±max_cmd_vel_speed
+        # (ftc_controller.cpp). speed_fast only sets the carrot target, so any
+        # mowing_speed above the base max_cmd_vel_speed (0.30) was silently
+        # capped — the robot mowed slower than the operator asked with no warning.
+        # Raise the clamp to admit the requested speed, but never LOWER it below
+        # the base value (keep the base headroom when mowing_speed < cap).
+        ftc_speed_cap = float(fcp.get("max_cmd_vel_speed", 0.30))
+        if mowing_speed > ftc_speed_cap:
+            fcp["max_cmd_vel_speed"] = mowing_speed
 
         # Goal-checker tolerances. Two checkers live under
         # controller_server: stopped_goal_checker (used by FollowPath /

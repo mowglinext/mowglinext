@@ -233,22 +233,12 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12}>
-                                    <Form.Item label={t("settingsMowing.mowAngle")} tooltip={t("settingsMowing.mowAngleTooltip")}>
+                                    <Form.Item label={t("settingsMowing.swathOverlap")} tooltip={t("settingsMowing.swathOverlapTooltip")}>
                                         <InputNumber
-                                            value={values.mow_angle_offset_deg}
-                                            onChange={(v) => onChange("mow_angle_offset_deg", v)}
-                                            min={-1} max={180} step={5} precision={1}
-                                            style={{ width: "100%" }} addonAfter="deg"
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={12}>
-                                    <Form.Item label={t("settingsMowing.angleIncrement")} tooltip={t("settingsMowing.angleIncrementTooltip")}>
-                                        <InputNumber
-                                            value={values.mow_angle_increment_deg}
-                                            onChange={(v) => onChange("mow_angle_increment_deg", v)}
-                                            min={0} max={90} step={5} precision={1}
-                                            style={{ width: "100%" }} addonAfter="deg"
+                                            value={values.swath_overlap}
+                                            onChange={(v) => onChange("swath_overlap", v)}
+                                            min={0} max={0.2} step={0.01} precision={3}
+                                            style={{ width: "100%" }} addonAfter="m"
                                         />
                                     </Form.Item>
                                 </Col>
@@ -266,44 +256,6 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                         />
                     </Col>
                 </Row>
-            </Card>
-
-            {/* Outline passes */}
-            <Card size="small" title={t("settingsMowing.perimeterOutline")} style={{ marginBottom: 16 }}>
-                <Form layout="vertical" size="small">
-                    <Row gutter={[16, 0]}>
-                        <Col xs={12} sm={8}>
-                            <Form.Item label={t("settingsMowing.outlinePasses")} tooltip={t("settingsMowing.outlinePassesTooltip")}>
-                                <InputNumber
-                                    value={values.outline_passes}
-                                    onChange={(v) => onChange("outline_passes", v)}
-                                    min={0} max={5} step={1} precision={0}
-                                    style={{ width: "100%" }}
-                                />
-                            </Form.Item>
-                        </Col>
-                        <Col xs={12} sm={8}>
-                            <Form.Item label={t("settingsMowing.outlineOffset")} tooltip={t("settingsMowing.outlineOffsetTooltip")}>
-                                <InputNumber
-                                    value={values.outline_offset}
-                                    onChange={(v) => onChange("outline_offset", v)}
-                                    min={0} max={0.5} step={0.01} precision={3}
-                                    style={{ width: "100%" }} addonAfter="m"
-                                />
-                            </Form.Item>
-                        </Col>
-                        <Col xs={12} sm={8}>
-                            <Form.Item label={t("settingsMowing.outlineOverlap")} tooltip={t("settingsMowing.outlineOverlapTooltip")}>
-                                <InputNumber
-                                    value={values.outline_overlap}
-                                    onChange={(v) => onChange("outline_overlap", v)}
-                                    min={0} max={0.2} step={0.01} precision={3}
-                                    style={{ width: "100%" }} addonAfter="m"
-                                />
-                            </Form.Item>
-                        </Col>
-                    </Row>
-                </Form>
             </Card>
         </div>
     );
