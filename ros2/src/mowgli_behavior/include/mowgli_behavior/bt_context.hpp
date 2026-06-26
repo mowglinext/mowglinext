@@ -147,6 +147,13 @@ struct BTContext
   /// Areas whose every swath is completed-or-skipped this session. Skipped by
   /// GetNextUnmowedArea. Cleared by EndSession.
   std::set<uint32_t> completed_areas;
+  /// True when GetNextUnmowedArea exhausted the area list because every area is
+  /// genuinely DONE (not because of a transient service error / timeout / no
+  /// areas defined). The coverage subtree reads this (IsCoverageComplete) to
+  /// route a normal finish to the MOWING_COMPLETE terminal instead of the
+  /// COVERAGE_FAILED_DOCKING path. Reset to false at the start of each
+  /// GetNextUnmowedArea run so a transient failure never masquerades as done.
+  bool coverage_all_complete{false};
 
   // -----------------------------------------------------------------------
   // Derived / convenience fields (computed from latest_* messages)

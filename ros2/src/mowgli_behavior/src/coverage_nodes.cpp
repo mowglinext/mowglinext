@@ -803,6 +803,13 @@ BT::NodeStatus GetNextUnmowedArea::onStart()
   current_area_idx_ = 0;
   areas_queried_ = 0;
   areas_complete_ = 0;
+  probe_retries_ = 0;
+  // Clear any stale completion flag from a previous run so a transient failure
+  // this run can never be read as "all areas complete".
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->coverage_all_complete = false;
+  }
 
   // Honor a one-shot user-selected target area (set by ~/start_in_area).
   // We start the iteration from the requested index AND clip max_areas_ to
@@ -849,6 +856,10 @@ BT::NodeStatus GetNextUnmowedArea::onStart()
   {
     RCLCPP_INFO(ctx->node->get_logger(),
                 "GetNextUnmowedArea: all areas already completed/attempted this session");
+    {
+      std::lock_guard<std::mutex> lock(ctx->context_mutex);
+      ctx->coverage_all_complete = true;  // genuine completion → MOWING_COMPLETE
+    }
     return BT::NodeStatus::FAILURE;
   }
 
@@ -870,10 +881,32 @@ BT::NodeStatus GetNextUnmowedArea::onRunning()
     if (std::chrono::steady_clock::now() - call_start_ > std::chrono::seconds(2))
     {
       auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+      // A transient service blip must NOT abort the run, and must NEVER be read
+      // as "all areas complete" (ctx->coverage_all_complete stays false). Re-probe
+      // the same index a bounded number of times before giving up.
+      if (probe_retries_ < kMaxProbeRetries)
+      {
+        ++probe_retries_;
+        RCLCPP_WARN(ctx->node->get_logger(),
+                    "GetNextUnmowedArea: get_mowing_area timed out for area %u after 2s — "
+                    "re-probing (retry %u/%u)",
+                    current_area_idx_,
+                    probe_retries_,
+                    kMaxProbeRetries);
+        if (client_->service_is_ready())
+        {
+          auto request = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
+          request->index = current_area_idx_;
+          pending_future_.emplace(client_->async_send_request(request));
+        }
+        call_start_ = std::chrono::steady_clock::now();
+        return BT::NodeStatus::RUNNING;
+      }
       RCLCPP_ERROR(ctx->node->get_logger(),
-                   "GetNextUnmowedArea: get_mowing_area timed out for area %u after 2s — "
-                   "returning FAILURE (BT should retry, not assume mowing complete)",
-                   current_area_idx_);
+                   "GetNextUnmowedArea: get_mowing_area timed out for area %u after %u retries — "
+                   "FAILURE (transient service error, NOT mowing-complete)",
+                   current_area_idx_,
+                   kMaxProbeRetries);
       return BT::NodeStatus::FAILURE;
     }
     return BT::NodeStatus::RUNNING;
@@ -902,6 +935,10 @@ BT::NodeStatus GetNextUnmowedArea::advanceAndProbe()
     RCLCPP_INFO(ctx->node->get_logger(),
                 "GetNextUnmowedArea: all %u area(s) complete",
                 areas_complete_);
+    {
+      std::lock_guard<std::mutex> lock(ctx->context_mutex);
+      ctx->coverage_all_complete = true;  // genuine completion → MOWING_COMPLETE
+    }
     return BT::NodeStatus::FAILURE;
   }
   auto request = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
@@ -915,12 +952,18 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   auto response = pending_future_->future.get();
+  // A probe completed (no timeout) — reset the transient-retry budget so each
+  // stuck probe gets its own retries.
+  probe_retries_ = 0;
 
   if (!response->success)
   {
     // Index past the last defined area — nothing more to check.
     if (areas_queried_ == 0)
     {
+      // No areas defined at all — a CONFIG error, not a normal completion.
+      // Leave coverage_all_complete=false so this routes to the failure dock,
+      // not MOWING_COMPLETE.
       RCLCPP_WARN(ctx->node->get_logger(),
                   "GetNextUnmowedArea: no mowing areas defined in map_server "
                   "(get_mowing_area returned success=false at index %u). "
@@ -932,6 +975,8 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
       RCLCPP_INFO(ctx->node->get_logger(),
                   "GetNextUnmowedArea: all %u area(s) complete",
                   areas_complete_);
+      std::lock_guard<std::mutex> lock(ctx->context_mutex);
+      ctx->coverage_all_complete = true;  // genuine completion → MOWING_COMPLETE
     }
     return BT::NodeStatus::FAILURE;
   }

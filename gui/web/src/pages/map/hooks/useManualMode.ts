@@ -59,10 +59,10 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
         // Send the command first — the BT will transition to MANUAL_MOWING state.
         await mowerAction("high_level_control", {Command: 7})();
         // Enable mowing blade and keep it alive
-        await mowerAction("mow_enabled", {MowEnabled: 1, MowDirection: 0})();
+        await mowerAction("mow_enabled", {mow_enabled: 1, mow_direction: 0})();
         stopBladeKeepalive();
         bladeIntervalRef.current = setInterval(() => {
-            mowerAction("mow_enabled", {MowEnabled: 1, MowDirection: 0})();
+            mowerAction("mow_enabled", {mow_enabled: 1, mow_direction: 0})();
         }, BLADE_KEEPALIVE_MS);
         setManualMode(true);
     };
@@ -73,7 +73,7 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
         stopJoyInterval();
         lastTwistRef.current = null;
         setManualMode(false);
-        await mowerAction("mow_enabled", {MowEnabled: 0, MowDirection: 0})();
+        await mowerAction("mow_enabled", {mow_enabled: 0, mow_direction: 0})();
     };
 
     const handleJoyMove = useCallback((event: IJoystickUpdateEvent) => {

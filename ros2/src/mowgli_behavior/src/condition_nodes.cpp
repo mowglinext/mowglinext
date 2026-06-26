@@ -171,6 +171,17 @@ BT::NodeStatus IsCommand::tick()
 }
 
 // ---------------------------------------------------------------------------
+// IsCoverageComplete
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus IsCoverageComplete::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  return ctx->coverage_all_complete ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+// ---------------------------------------------------------------------------
 // IsGPSFixed
 // ---------------------------------------------------------------------------
 
@@ -309,14 +320,33 @@ BT::NodeStatus IsChargingProgressing::tick()
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   std::lock_guard<std::mutex> lock(ctx->context_mutex);
 
+  const auto now = std::chrono::steady_clock::now();
+
+  // New-charge-session detection MUST run BEFORE the charger_failed_ guard, or
+  // the latch is permanent (the old clear site sat after the guard and was thus
+  // unreachable). A long gap since the last tick means the BT left the charging
+  // branch and came back — a fresh session — so clear any latched failure and
+  // force a new baseline. Also treat "not charging right now" as a session reset
+  // (the robot is no longer on the dock pulling current).
+  if (last_tick_set_)
+  {
+    const double gap = std::chrono::duration<double>(now - last_tick_time_).count();
+    if (gap > session_gap_sec_ || !ctx->latest_power.charger_enabled)
+    {
+      charger_failed_ = false;
+      baseline_set_ = false;
+    }
+  }
+  last_tick_time_ = now;
+  last_tick_set_ = true;
+
   // Once a charger failure is detected, keep returning FAILURE until the
-  // next charging session resets the node via a fresh baseline.
+  // next charging session resets the node (above) via a fresh baseline.
   if (charger_failed_)
   {
     return BT::NodeStatus::FAILURE;
   }
 
-  const auto now = std::chrono::steady_clock::now();
   const float current_battery = ctx->battery_percent;
 
   if (!baseline_set_)

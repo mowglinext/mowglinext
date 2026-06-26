@@ -45,6 +45,17 @@
             <!-- Not on dock — just wait and re-check -->
             <WaitForDuration duration_sec="1.0"/>
           </Fallback>
+          <!-- Terminate the handler with FAILURE so EmergencyGuard (this
+               Fallback) returns FAILURE WHILE emergency is still active, halting
+               the Root ReactiveSequence before MainLogic. Without it
+               AutoResetOrWait returns SUCCESS once its 1 s wait elapses, the
+               Fallback succeeds, and the Root advanced into MainLogic for one
+               tick per cycle — flapping status and even issuing a blade-ENABLE
+               command in the ManualMowing branch during an active emergency
+               (firmware ignores it, but it's a real status/command flap). The
+               stop + blade-off + EMERGENCY status above still run every tick
+               before this. -->
+          <AlwaysFailure/>
         </Sequence>
       </Fallback>
 
@@ -612,22 +623,51 @@
 
             </ReactiveSequence>
 
-            <!-- Coverage failed — dock gracefully -->
-            <Sequence name="FailedCoverageDock">
-              <SetMowerEnabled enabled="false"/>
-              <PublishHighLevelStatus state="2" state_name="COVERAGE_FAILED_DOCKING"/>
-              <ClearCostmap/>
-              <Fallback name="FailedCoverageNavOrStop">
-                <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
-                <Sequence>
-                  <PublishHighLevelStatus state="0" state_name="NAV_TO_DOCK_FAILED"/>
-                  <AlwaysSuccess/>
-                </Sequence>
-              </Fallback>
-              <PublishHighLevelStatus state="1" state_name="IDLE_DOCKED"/>
-              <EndSession/>
-              <ClearCommand/>
-            </Sequence>
+            <!-- The AreaLoop exited. Distinguish a NORMAL completion (every
+                 area mowed → GetNextUnmowedArea set coverage_all_complete) from
+                 a genuine failure (transient service error, unreachable areas,
+                 no areas defined). The two used to share the FailedCoverageDock
+                 path, so a fully-successful run always reported
+                 COVERAGE_FAILED_DOCKING and the MOWING_COMPLETE terminal was
+                 dead. -->
+            <Fallback name="CoverageEnded">
+
+              <!-- Normal completion → MOWING_COMPLETE and dock. -->
+              <Sequence name="CoverageCompleteDock">
+                <IsCoverageComplete/>
+                <SetMowerEnabled enabled="false"/>
+                <PublishHighLevelStatus state="1" state_name="MOWING_COMPLETE"/>
+                <SaveObstacles/>
+                <ClearCostmap/>
+                <Fallback name="CompleteNavOrStop">
+                  <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+                  <Sequence>
+                    <PublishHighLevelStatus state="0" state_name="NAV_TO_DOCK_FAILED"/>
+                    <AlwaysSuccess/>
+                  </Sequence>
+                </Fallback>
+                <PublishHighLevelStatus state="1" state_name="IDLE_DOCKED"/>
+                <EndSession/>
+                <ClearCommand/>
+              </Sequence>
+
+              <!-- Genuine coverage failure — dock gracefully. -->
+              <Sequence name="FailedCoverageDock">
+                <SetMowerEnabled enabled="false"/>
+                <PublishHighLevelStatus state="2" state_name="COVERAGE_FAILED_DOCKING"/>
+                <ClearCostmap/>
+                <Fallback name="FailedCoverageNavOrStop">
+                  <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+                  <Sequence>
+                    <PublishHighLevelStatus state="0" state_name="NAV_TO_DOCK_FAILED"/>
+                    <AlwaysSuccess/>
+                  </Sequence>
+                </Fallback>
+                <PublishHighLevelStatus state="1" state_name="IDLE_DOCKED"/>
+                <EndSession/>
+                <ClearCommand/>
+              </Sequence>
+            </Fallback>
           </Fallback>
           </ReactiveSequence>
 

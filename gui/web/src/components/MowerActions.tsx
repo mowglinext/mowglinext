@@ -140,7 +140,7 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
             "label": t('mowerActions.bladeForward'),
             actions: [{
                 command: "mow_enabled",
-                args: {MowEnabled: 1, MowDirection: 0}
+                args: {mow_enabled: 1, mow_direction: 0}
             }]
         },
         {
@@ -148,7 +148,7 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
             "label": t('mowerActions.bladeBackward'),
             actions: [{
                 command: "mow_enabled",
-                args: {MowEnabled: 1, MowDirection: 1}
+                args: {mow_enabled: 1, mow_direction: 1}
             }]
         },
         {
@@ -157,7 +157,7 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
             "danger": true,
             actions: [{
                 command: "mow_enabled",
-                args: {MowEnabled: 0, MowDirection: 0}
+                args: {mow_enabled: 0, mow_direction: 0}
             }]
         },
     ];

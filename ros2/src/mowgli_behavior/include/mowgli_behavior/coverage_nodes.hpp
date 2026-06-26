@@ -261,6 +261,11 @@ private:
   uint32_t max_areas_{20};
   uint32_t areas_queried_{0};
   uint32_t areas_complete_{0};
+  // Bounded retries for a transient get_mowing_area timeout — a momentary
+  // service blip must NOT abort the whole run (and must not be mistaken for
+  // "all areas complete"). Re-probe up to kMaxProbeRetries before failing.
+  uint32_t probe_retries_{0};
+  static constexpr uint32_t kMaxProbeRetries = 3;
 };
 
 // ---------------------------------------------------------------------------
