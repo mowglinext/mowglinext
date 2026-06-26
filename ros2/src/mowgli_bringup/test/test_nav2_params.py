@@ -188,11 +188,17 @@ def test_navigation_launch_floors_coverage_tolerance_at_ftc_park() -> None:
     so the goal-checker gate can never be tighter than FTC can park.
     """
     src = _read_text("launch/navigation.launch.py")
-    assert re.search(r"coverage_xy_tolerance\s*<\s*ftc_park_dist", src), (
-        "Expected a floor on coverage_xy_tolerance in navigation.launch.py tied to "
-        "FTC's max_goal_distance_error (e.g. `if coverage_xy_tolerance < "
-        "ftc_park_dist: coverage_xy_tolerance = ftc_park_dist`). Without it, a stale "
-        "per-site YAML with 0.25 m re-breaks coverage completion."
+    # The floor: a comparison against ftc_park_dist that raises the injected
+    # tolerance up to it. The injected value is held in a local (cov_xy_tol) —
+    # NOT the enclosing coverage_xy_tolerance, which must not be rebound inside
+    # the nested _inject fn or it becomes function-local and the earlier read
+    # raises UnboundLocalError (the 2026-06-26 launch crash). Match the floor
+    # by its effect (`< ftc_park_dist` … `= ftc_park_dist`), name-agnostic.
+    assert re.search(r"<\s*ftc_park_dist", src) and re.search(r"=\s*ftc_park_dist", src), (
+        "Expected a floor on the injected coverage tolerance in navigation.launch.py "
+        "tied to FTC's max_goal_distance_error (e.g. `if cov_xy_tol < ftc_park_dist: "
+        "cov_xy_tol = ftc_park_dist`). Without it, a stale per-site YAML with 0.25 m "
+        "re-breaks coverage completion."
     )
 
 
