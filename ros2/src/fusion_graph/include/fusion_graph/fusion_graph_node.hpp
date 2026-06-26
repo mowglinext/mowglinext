@@ -450,6 +450,11 @@ private:
   // lever-arm sweep during motion). 0 = disabled (raw receiver σ). [seconds]
   double gps_sigma_speed_coeff_ = 0.0;
 
+  // SAFETY: reject a fix whose computed σ_xy exceeds this (m). 0 = disabled.
+  // Guards against fusing a garbage / standalone fix; sized to NOT reject
+  // genuine RTK-Float (the ride-through depends on it). [metres]
+  double gps_max_sigma_reject_m_ = 0.0;
+
   // RTK wrong-fix detection state. F9P can re-solve carrier-phase
   // ambiguity on a different integer set after a brief signal drop,
   // jumping the reported solution by 3-10 cm while still reporting

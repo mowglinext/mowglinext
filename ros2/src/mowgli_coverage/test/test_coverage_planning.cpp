@@ -654,16 +654,26 @@ TEST(CoverageContinuousPath, RecordedArea1NoCuspInBounds)
   ASSERT_FALSE(plan.swaths.empty()) << "no swaths on the real area";
 
   const auto& boundary = recordedArea1Pts();
-  const auto path = buildContinuousPath(plan, boundary, kTurnRadius, kMinTurnRadius, kStep);
+  // SAFETY: the server bounds the connectors/fillets by the chassis-safety-inset
+  // ring (plan.safe_boundary), NOT the raw operator polygon — otherwise a
+  // turn-around loop or fillet near a field edge pushes the spinning blade across
+  // the operator boundary. Mirror the server exactly so this test guards the real
+  // behaviour.
+  ASSERT_GE(plan.safe_boundary.size(), 3u)
+      << "plan.safe_boundary not populated for a deployed inset — connectors would "
+         "fall back to the raw boundary (the safety bug this guards)";
+  const auto& connector_boundary = plan.safe_boundary;
+  const auto path =
+      buildContinuousPath(plan, connector_boundary, kTurnRadius, kMinTurnRadius, kStep);
 
   ASSERT_GE(path.size(), 100u) << "continuous path is implausibly short";
 
-  // Diagnostics.
+  // Diagnostics: count poses outside the INSET ring (the safety-relevant bound).
   const std::size_t inv = firstInversion(path);
   std::size_t oob = 0;
   for (const auto& p : path)
   {
-    if (!pointInRing(p.first, p.second, boundary))
+    if (!pointInRing(p.first, p.second, connector_boundary))
     {
       ++oob;
     }
@@ -690,8 +700,26 @@ TEST(CoverageContinuousPath, RecordedArea1NoCuspInBounds)
   const double worst_turn = maxTurnDeg(path);
   EXPECT_LT(worst_turn, 120.0) << "path has a " << worst_turn
                                << "° turn — a near-reversal cusp MPPI will dither at";
-  // (2) Every point inside the recorded boundary.
-  EXPECT_EQ(oob, 0u) << oob << "/" << path.size() << " continuous-path points are out of bounds";
+  // (2) Every point inside the chassis-safety-inset ring AND no closer than
+  // (inset − one densify step) to the RAW operator boundary, so the spinning
+  // blade (which extends ~tool_width/2 past base_link) can never cross it even
+  // on the turn-around connectors/fillets. This is the safety guarantee the
+  // inset-bounded connectors restore; with the old raw-boundary bound a fillet
+  // could sit right on the edge.
+  EXPECT_EQ(oob, 0u) << oob << "/" << path.size()
+                     << " continuous-path points are outside the safety-inset ring";
+  double min_clearance = std::numeric_limits<double>::max();
+  for (const auto& p : path)
+  {
+    min_clearance = std::min(min_clearance, distanceToRing(p.first, p.second, boundary));
+  }
+  std::cout << "min clearance to raw operator boundary=" << min_clearance << " m (inset " << kInset
+            << ")\n"
+            << std::flush;
+  EXPECT_GE(min_clearance, kInset - kStep - 1e-6)
+      << "a continuous-path pose sits " << min_clearance
+      << " m from the raw operator boundary — closer than the chassis-safety inset (" << kInset
+      << " m); a connector/fillet can push the blade across the boundary";
   // (3) NO sustained arc tighter than the robot's min turning radius. A turn
   // shrunk below kMinTurnRadius to fit in-bounds is untrackable (wz≈vx/r), so
   // the robot loops/hesitates — the exact failure this floor prevents. A lone

@@ -474,13 +474,22 @@ void CoverageServer::planCoverage()
     {
       outer.emplace_back(p.x, p.y);
     }
+    // SAFETY: the connectors/fillets that join the (already-inset) rings+swaths
+    // must stay inside the chassis-safety-inset polygon, NOT the raw operator
+    // boundary — otherwise a turn-around loop or corner fillet near a field edge
+    // can push the spinning blade across the operator boundary while base_link
+    // stays inside (so the map_server soft-boundary monitor never fires). Bound
+    // and VERIFY against the same inset ring the discrete segments use; fall back
+    // to the raw boundary only when no inset was applied.
+    const std::vector<std::pair<double, double>>& connector_boundary =
+        plan.safe_boundary.size() >= 3 ? plan.safe_boundary : outer;
     constexpr double kConnectorTurnRadius = 0.30;  // nominal turn-around arc radius (m)
     constexpr double kConnectorStep = 0.03;  // connector densify step (m)
     // Floor on every turn-around / fillet arc — never plan a loop tighter than
     // the robot can track (read live so it's field-tunable per plan).
     const double min_turning_radius = get_parameter("min_turning_radius").as_double();
-    const auto continuous =
-        buildContinuousPath(plan, outer, kConnectorTurnRadius, min_turning_radius, kConnectorStep);
+    const auto continuous = buildContinuousPath(
+        plan, connector_boundary, kConnectorTurnRadius, min_turning_radius, kConnectorStep);
 
     result->full_path.header = header;
     double total = 0.0;
@@ -503,7 +512,11 @@ void CoverageServer::planCoverage()
         total += std::hypot(x - continuous[i - 1].first, y - continuous[i - 1].second);
       }
       result->full_path.poses.push_back(makePose(header, x, y, yaw));
-      if (outer.size() >= 3 && !pointInRing(x, y, outer))
+      // Verify against the SAME inset ring the connectors are bounded by: any
+      // pose outside it means a fallback straight connector left the safe inset
+      // (the only way the blade can approach the operator boundary), so it is the
+      // safety-relevant residual to surface — not merely outside the raw polygon.
+      if (connector_boundary.size() >= 3 && !pointInRing(x, y, connector_boundary))
       {
         ++out_of_bounds;
       }
@@ -511,10 +524,11 @@ void CoverageServer::planCoverage()
     if (out_of_bounds > 0)
     {
       // The continuous path is built from in-bounds insets + clipped connectors,
-      // so any out-of-bounds pose is a connector-geometry bug (the test guards it).
+      // so any pose outside the safety-inset ring is a connector-geometry bug
+      // (the test guards it) and means the blade may approach the boundary.
       RCLCPP_ERROR(get_logger(),
-                   "PlanCoverage: %zu/%zu continuous-path poses outside the boundary — "
-                   "connector geometry bug",
+                   "PlanCoverage: %zu/%zu continuous-path poses outside the chassis-safety "
+                   "inset — connector geometry bug (blade may approach the operator boundary)",
                    out_of_bounds,
                    result->full_path.poses.size());
     }

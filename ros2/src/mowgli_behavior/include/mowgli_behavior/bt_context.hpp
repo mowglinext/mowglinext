@@ -129,6 +129,21 @@ struct BTContext
   /// Total swath count for each area, set by FollowStrip after segmenting the
   /// planned path. 0 until the area has been planned at least once.
   std::map<uint32_t, std::size_t> area_swath_count;
+  /// Resume cursor: the furthest pose index reached along the area's CONTINUOUS
+  /// full_path. FollowStrip drives the plan as one continuous path, so the
+  /// per-segment "completed swath index" model can only ever record index 0 (on
+  /// full completion). Without this cursor, an interruption mid-path (recharge,
+  /// preempt, controller abort) restarts the WHOLE path from the beginning, an
+  /// area needing >1 charge never finishes, and a single abort that made real
+  /// progress used to fail/abandon the area. FollowStrip persists the furthest
+  /// reached index here on abort/halt and, on re-dispatch, trims the already-
+  /// driven prefix so it resumes near where it stopped. F2C is deterministic for
+  /// a fixed area+params, so the re-planned path is identical and the index is
+  /// stable. Cleared (erased) when the area completes; reset by EndSession.
+  std::map<uint32_t, std::size_t> area_resume_pose_index;
+  /// Total pose count of the area's continuous full_path (the denominator for
+  /// the resume-cursor coverage_percent). Set by FollowStrip at dispatch.
+  std::map<uint32_t, std::size_t> area_path_pose_count;
   /// Areas whose every swath is completed-or-skipped this session. Skipped by
   /// GetNextUnmowedArea. Cleared by EndSession.
   std::set<uint32_t> completed_areas;

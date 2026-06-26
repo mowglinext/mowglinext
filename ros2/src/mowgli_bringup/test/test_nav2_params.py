@@ -153,54 +153,76 @@ def _read_text(rel_path: str) -> str:
         return fh.read()
 
 
-def test_navigation_launch_default_coverage_tolerance_is_tight() -> None:
-    """navigation.launch.py picks the runtime coverage_xy_tolerance
-    from mowgli_robot.yaml, falling back to a hardcoded default. A
-    stale or missing mowgli_robot.yaml field then determines whether
-    mowing works. Pin the launch default <= mower_width.
+def _base_ftc_max_goal_distance_error() -> float:
+    """FTC's parking distance from nav2_params_base.yaml — the robot stops
+    translating up to this far short of the final pose."""
+    cfg = _load_yaml("nav2_params_base.yaml")
+    fcp = cfg["controller_server"]["ros__parameters"]["FollowCoveragePath"]
+    return float(fcp["max_goal_distance_error"])
+
+
+def test_navigation_launch_default_coverage_tolerance_matches_ftc_park() -> None:
+    """navigation.launch.py picks the runtime coverage_xy_tolerance from
+    mowgli_robot.yaml, falling back to a hardcoded default. FTC zeroes
+    linear.x once it leaves FOLLOWING, parking up to max_goal_distance_error
+    (0.50 m) short of the goal — so the coverage goal-checker XY gate must be
+    >= that, or the area never completes and re-mows. Pin the launch default
+    >= FTC's parking distance (the 2026-06-25 regression set it to 0.25).
     """
     src = _read_text("launch/navigation.launch.py")
     m = re.search(r"coverage_xy_tolerance\s*=\s*([\d\.]+)", src)
     assert m, "Could not find coverage_xy_tolerance default in navigation.launch.py"
     default = float(m.group(1))
-    # Per-swath DISCONTINUOUS model: the coverage slot uses PathProgressGoalChecker
-    # (fires only after >= 95% path progress), so a loose xy can't latch early —
-    # the floor was a SimpleGoalChecker-era concern. The ceiling now just guards
-    # against an absurd value; 0.25 m is the per-swath ceiling (each swath-end
-    # goal must SUCCEED so the next swath dispatches).
-    assert default <= 0.25, (
-        f"navigation.launch.py default coverage_xy_tolerance={default} m exceeds "
-        "the 0.25 m per-swath ceiling."
+    park = _base_ftc_max_goal_distance_error()
+    assert default >= park, (
+        f"navigation.launch.py default coverage_xy_tolerance={default} m is tighter "
+        f"than FTC max_goal_distance_error={park} m — the area-end goal would never "
+        "be accepted (progress timeout → full re-mow)."
     )
 
 
-def test_navigation_launch_clips_runaway_coverage_tolerance() -> None:
-    """A stale per-site mowgli_robot.yaml might still carry the legacy
-    0.5 m value. The launch script must clip — anything above ~0.15 m
-    silently regresses to the field-broken state.
+def test_navigation_launch_floors_coverage_tolerance_at_ftc_park() -> None:
+    """A stale per-site mowgli_robot.yaml might carry the old 0.25 m value.
+    The launch script must FLOOR the injected coverage_xy_tolerance at FTC's
+    max_goal_distance_error (not cap it at 0.25 — that was the regression),
+    so the goal-checker gate can never be tighter than FTC can park.
     """
     src = _read_text("launch/navigation.launch.py")
-    # Look for an explicit clip in the launch script's coverage_xy_tolerance handling.
-    assert re.search(r"coverage_xy_tolerance\s*>\s*0\.\d+", src), (
-        "Expected a clip on coverage_xy_tolerance in navigation.launch.py "
-        "(e.g. `if coverage_xy_tolerance > 0.15: coverage_xy_tolerance = 0.15`). "
-        "Without it, a stale per-site YAML with 0.5 m re-breaks coverage."
+    assert re.search(r"coverage_xy_tolerance\s*<\s*ftc_park_dist", src), (
+        "Expected a floor on coverage_xy_tolerance in navigation.launch.py tied to "
+        "FTC's max_goal_distance_error (e.g. `if coverage_xy_tolerance < "
+        "ftc_park_dist: coverage_xy_tolerance = ftc_park_dist`). Without it, a stale "
+        "per-site YAML with 0.25 m re-breaks coverage completion."
     )
 
 
-def test_mowgli_robot_yaml_default_coverage_tolerance_is_tight() -> None:
+def test_mowgli_robot_yaml_default_coverage_tolerance_matches_ftc_park() -> None:
     """The shipped mowgli_robot.yaml is the template per-site config gets
-    seeded from. If the shipped value is loose, every fresh install
-    inherits the bug.
+    seeded from. If the shipped value is tighter than FTC's parking distance,
+    every fresh install inherits the area-end stall.
     """
     here = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(here, "..", "config", "mowgli_robot.yaml")
     with open(path, "r", encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh)
     tol = cfg["mowgli"]["ros__parameters"]["coverage_xy_tolerance"]
-    assert tol <= 0.25, (
-        f"mowgli_robot.yaml ships coverage_xy_tolerance={tol} m exceeds the 0.25 m "
-        "per-swath ceiling (progress-gated goal checker makes a loose xy safe)."
+    park = _base_ftc_max_goal_distance_error()
+    assert tol >= park, (
+        f"mowgli_robot.yaml ships coverage_xy_tolerance={tol} m, tighter than FTC "
+        f"max_goal_distance_error={park} m — the area never completes and re-mows."
+    )
+
+
+def test_base_coverage_goal_checker_xy_ge_ftc_park() -> None:
+    """The static base.yaml relationship that the launch floor preserves:
+    coverage_goal_checker.xy_goal_tolerance must be >= FTC's
+    max_goal_distance_error so a parked FTC can satisfy the goal."""
+    cfg = _load_yaml("nav2_params_base.yaml")
+    gc = cfg["controller_server"]["ros__parameters"]["coverage_goal_checker"]
+    park = _base_ftc_max_goal_distance_error()
+    assert float(gc["xy_goal_tolerance"]) >= park, (
+        f"base.yaml coverage_goal_checker.xy_goal_tolerance={gc['xy_goal_tolerance']} "
+        f"< FTC max_goal_distance_error={park} — area-end stall."
     )
 
 

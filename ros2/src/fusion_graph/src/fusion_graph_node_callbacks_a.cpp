@@ -187,11 +187,34 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   const double var_x = msg->position_covariance[0];
   const double var_y = msg->position_covariance[4];
   double sigma = std::sqrt(0.5 * (var_x + var_y));
-  if (!std::isfinite(sigma) || sigma <= 0.0)
+  // SAFETY: a fix with UNKNOWN covariance, or a zero/non-finite reported σ, has
+  // NO trustworthy accuracy. The old code set σ=-1.0 here as a "floor" sentinel,
+  // but graph_manager then clamps σ UP to gps_sigma_floor (3 mm) — so a fix with
+  // no known accuracy (e.g. a standalone/SBAS position when the driver leaves
+  // covariance UNKNOWN) was fused as a GnssLeverArmFactor at RTK-Fixed precision,
+  // yanking map→odom by metres toward a garbage position (the next good fix then
+  // looks like a jump and the wrong-fix gate drops it, locking GPS out). Reject
+  // such fixes outright — wheel/gyro/COG keep localising — instead of trusting
+  // them. (navsat_to_absolute_pose_node guards covariance_type the same way, but
+  // it no longer feeds the localizer.)
+  if (msg->position_covariance_type ==
+          sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN ||
+      !std::isfinite(sigma) || sigma <= 0.0)
   {
-    sigma = -1.0;  // floor
+    graph_->RecordGpsRejectWrongFix();
+    RCLCPP_WARN_THROTTLE(get_logger(),
+                         *get_clock(),
+                         5000,
+                         "fusion_graph: GPS fix with unknown/zero covariance "
+                         "(cov_type=%u, var_x=%.4g, var_y=%.4g) — rejected (would "
+                         "otherwise be trusted as 3 mm RTK precision)",
+                         msg->position_covariance_type,
+                         var_x,
+                         var_y);
+    last_gps_sigma_ = -1.0;  // no usable σ this epoch (keyframe gate stays closed)
+    return;
   }
-  else if (gps_sigma_speed_coeff_ > 0.0)
+  if (gps_sigma_speed_coeff_ > 0.0)
   {
     // Inflate the GPS σ with chassis speed. The receiver covariance reports
     // the instantaneous fix precision but ignores motion-induced position
@@ -202,6 +225,24 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
     const double v = std::abs(wheel_vx_);
     const double speed_term = gps_sigma_speed_coeff_ * v;
     sigma = std::sqrt(sigma * sigma + speed_term * speed_term);
+  }
+  // SAFETY: max-σ reject. A fix this imprecise is a garbage / standalone
+  // position; fusing it (even at its honest large σ) is not worth the risk of a
+  // wrong-fix step. Disabled at 0 (default) so genuine RTK-Float — which the
+  // multi-minute ride-through depends on — is never rejected; operators size it
+  // generously above their worst Float σ when they want the extra guard.
+  if (gps_max_sigma_reject_m_ > 0.0 && sigma > gps_max_sigma_reject_m_)
+  {
+    graph_->RecordGpsRejectWrongFix();
+    RCLCPP_WARN_THROTTLE(get_logger(),
+                         *get_clock(),
+                         5000,
+                         "fusion_graph: GPS σ=%.3f m > reject threshold %.3f m — "
+                         "sample dropped",
+                         sigma,
+                         gps_max_sigma_reject_m_);
+    last_gps_sigma_ = -1.0;
+    return;
   }
   // Latch the most-recent valid GPS σ for the keyframe-capture quality gate
   // (only capture when the fix is mm-accurate). <0 means no usable σ.

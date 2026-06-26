@@ -629,6 +629,28 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
     {
       return plan;  // inset consumed the field
     }
+    // Expose the inset outer ring so the continuous-path connectors/fillets are
+    // bounded by the SAME polygon the rings/swaths are planned against (not the
+    // raw operator boundary). If the inset split the field, take the largest
+    // cell's exterior ring (the dominant drivable region).
+    std::size_t largest = 0;
+    double largest_area = -1.0;
+    for (std::size_t i = 0; i < safe_cells.size(); ++i)
+    {
+      const double a = safe_cells.getGeometry(i).area();
+      if (a > largest_area)
+      {
+        largest_area = a;
+        largest = i;
+      }
+    }
+    const auto safe_ring = safe_cells.getGeometry(largest).getGeometry(0);  // exterior
+    plan.safe_boundary.reserve(safe_ring.size());
+    for (std::size_t i = 0; i < safe_ring.size(); ++i)
+    {
+      const auto p = safe_ring.getGeometry(i);
+      plan.safe_boundary.emplace_back(p.getX(), p.getY());
+    }
   }
 
   // (2) Headland rings — n concentric mowed loops spaced op_width, outermost

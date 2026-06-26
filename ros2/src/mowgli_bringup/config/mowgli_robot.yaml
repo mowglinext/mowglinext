@@ -314,5 +314,5 @@ mowgli:
     # rad (≈5.7°) forces a final in-place pivot before the dock approach.
     xy_goal_tolerance: 0.30        # metres — acceptable goal position error
     yaw_goal_tolerance: 0.10       # radians — acceptable heading error
-    coverage_xy_tolerance: 0.25    # metres — per-swath goal (progress-gated, loose xy OK)
+    coverage_xy_tolerance: 0.50    # metres — must be >= FTC max_goal_distance_error (0.50): FTC parks that far short of the goal, so a tighter gate never completes the area (re-mow). Floored at FTC's value by navigation.launch.py.
     progress_timeout_sec: 60.0     # seconds without progress before recovery

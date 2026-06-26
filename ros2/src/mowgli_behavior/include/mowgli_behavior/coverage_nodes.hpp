@@ -89,6 +89,15 @@ private:
   // Robot distance to the current segment's first pose (TF map→base_footprint);
   // returns a large value if TF is unavailable (forces the safe transit path).
   double distanceToSegmentStart(const std::shared_ptr<BTContext>& ctx) const;
+  // Advance path_progress_idx_ to the furthest pose of the continuous path the
+  // robot has reached (monotonic, bounded forward nearest-pose search from the
+  // current cursor). Cheap to call every tick.
+  void updateProgress(const std::shared_ptr<BTContext>& ctx);
+  // Persist the resume cursor + partial coverage_percent for the area, so a
+  // re-dispatch after an abort/halt resumes near where it stopped instead of
+  // restarting the whole path (and so GetNextUnmowedArea sees the progress and
+  // does not abandon the area).
+  void persistResumeCursor(const std::shared_ptr<BTContext>& ctx);
 
   rclcpp_action::Client<Nav2FollowPath>::SharedPtr follow_client_;
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
@@ -112,6 +121,14 @@ private:
   std::size_t swath_idx_ = 0;
   std::size_t swaths_skipped_ = 0;
   bool swath_goal_sent_ = false;
+  // Resume-cursor bookkeeping for the CONTINUOUS full_path (see
+  // BTContext::area_resume_pose_index). resume_start_idx_ = absolute index into
+  // the original full_path where this run's (possibly trimmed) path begins;
+  // path_progress_idx_ = furthest pose reached within the path currently being
+  // driven; total_path_poses_ = original full_path length (percent denominator).
+  std::size_t resume_start_idx_ = 0;
+  std::size_t path_progress_idx_ = 0;
+  std::size_t total_path_poses_ = 0;
   // Area being mowed (from ctx->current_area) — keys the swath-completion
   // tracking in BTContext so a resume/re-plan skips already-mowed segments.
   uint32_t area_idx_ = 0;

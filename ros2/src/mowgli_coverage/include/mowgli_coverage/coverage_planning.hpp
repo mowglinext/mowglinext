@@ -73,6 +73,15 @@ struct BoustrophedonPlan
   std::vector<std::pair<std::pair<double, double>, std::pair<double, double>>> swaths;
   // Swath heading actually used (rad, map frame) — for logging.
   double swath_angle_rad = 0.0;
+  // Closed outer ring of the chassis-safety-inset field (the SAME inset the
+  // rings/swaths are planned against, == generateHeadlands(field, inset)). The
+  // continuous-path connectors and corner fillets MUST stay inside THIS ring,
+  // not the raw operator polygon, or a turn-around loop/fillet near a field
+  // edge can push the spinning blade across the operator boundary (the discrete
+  // segments are inset but the connectors that join them were not). Empty only
+  // when no inset was applied (chassis_safety_inset <= 0) — the caller then
+  // falls back to the raw boundary. (x, y) pairs, first == last.
+  std::vector<std::pair<double, double>> safe_boundary;
   // Drop reasons + planned-coverage fraction (instrumentation only — see above).
   PlanDiagnostics diagnostics;
 };

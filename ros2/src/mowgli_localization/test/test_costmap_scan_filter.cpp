@@ -6,9 +6,12 @@
 // helper in costmap_scan_filter_node. Drives the radial blanking
 // directly without instantiating a node, so this stays a pure-C++ test.
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <optional>
+#include <vector>
 
 #include "gtest/gtest.h"
 #include "sensor_msgs/msg/laser_scan.hpp"
@@ -51,8 +54,12 @@ struct GroundFilterConfigForTest
   double max_obstacle_z_m{1.5};
   double lidar_height_m{0.22};
   double lidar_mount_yaw{0.0};
+  int min_ground_run{8};
 };
 
+// Mirror of the production apply_ground_filter (costmap_scan_filter_node.cpp):
+// two-pass classify + run-length-gated ground strip. Kept in lockstep with the
+// node so this test guards the deployed behaviour.
 void apply_ground_filter_for_test(sensor_msgs::msg::LaserScan& io,
                                   const GroundFilterConfigForTest& cfg,
                                   const std::optional<Vec3ForTest>& up_in_imu)
@@ -65,16 +72,40 @@ void apply_ground_filter_for_test(sensor_msgs::msg::LaserScan& io,
   const float inf = std::numeric_limits<float>::infinity();
   const double a0 = io.angle_min;
   const double da = io.angle_increment;
-  for (size_t i = 0; i < io.ranges.size(); ++i)
+  const size_t n = io.ranges.size();
+  std::vector<uint8_t> klass(n, 0);  // 0=keep, 1=ground (low), 2=overhead (high)
+  for (size_t i = 0; i < n; ++i)
   {
-    float& r = io.ranges[i];
+    const float r = io.ranges[i];
     if (!std::isfinite(r))
       continue;
     const double psi = a0 + da * static_cast<double>(i) + cfg.lidar_mount_yaw;
     const double z_dir = u.x * std::cos(psi) + u.y * std::sin(psi);
     const float return_z = static_cast<float>(cfg.lidar_height_m + r * z_dir);
-    if (return_z < min_z || return_z > max_z)
-      r = inf;
+    if (return_z > max_z)
+      klass[i] = 2;
+    else if (return_z < min_z)
+      klass[i] = 1;
+  }
+  const int min_run = std::max(1, cfg.min_ground_run);
+  for (size_t i = 0; i < n; ++i)
+  {
+    if (klass[i] == 2)
+    {
+      io.ranges[i] = inf;
+      continue;
+    }
+    if (klass[i] != 1)
+      continue;
+    size_t j = i;
+    while (j < n && klass[j] == 1)
+      ++j;
+    if (static_cast<int>(j - i) >= min_run)
+    {
+      for (size_t k = i; k < j; ++k)
+        io.ranges[k] = inf;
+    }
+    i = j - 1;
   }
 }
 
@@ -210,8 +241,10 @@ TEST(CostmapScanFilterGround, GroundReturnFilteredOnNoseDownSlope)
   // -0.174 → return Z = 0.22 + 2·(-0.174) = -0.127 m, well below 0.08 m
   // floor → must be filtered to +inf.
   auto in = make_forward_only_scan(2.0f);
+  // min_ground_run=1: this test exercises the per-beam z-projection math, not
+  // the cluster guard (a single-beam scan has no run length to speak of).
   mowgli_localization::GroundFilterConfigForTest cfg{
-      true, 0.08, 1.5, 0.22};
+      true, 0.08, 1.5, 0.22, 0.0, 1};
   const double pitch_rad = 10.0 * M_PI / 180.0;  // nose-down (positive in URDF Y rotation)
   std::optional<mowgli_localization::Vec3ForTest> u =
       mowgli_localization::up_from_pitch_rad(pitch_rad);
@@ -273,10 +306,50 @@ TEST(CostmapScanFilterGround, MountYawPiFiltersForwardGroundReturn)
   // ψ = π + π ≡ 0 → z_dir = u.x = -sin(10°) → Z = 0.22 - 0.35 < 0.08.
   const double pitch_rad = 10.0 * M_PI / 180.0;
   auto in = make_single_beam_at(static_cast<float>(M_PI), 2.0f);
-  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 0.22, M_PI};
+  // min_ground_run=1: per-beam mount-yaw math test (see note above).
+  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 0.22, M_PI, 1};
   auto u = mowgli_localization::up_from_pitch_rad(pitch_rad);
   mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FALSE(std::isfinite(in.ranges[0]));
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cluster guard (SAFETY): on a slope a real vertical obstacle and sloped
+// ground both project below min_obstacle_z, so a 2-D filter can't tell them
+// apart per-beam. Ground forms a LONG contiguous arc; an obstacle subtends
+// only a few beams. The run-length guard strips the long ground arc but keeps
+// the short obstacle cluster so the costmap/collision path still sees it.
+// ─────────────────────────────────────────────────────────────────────────
+TEST(CostmapScanFilterGround, ShortObstacleClusterSurvivesLongGroundRunOnSlope)
+{
+  // All beams forward (uniform z_dir), nose-down 10° so any finite 2 m return
+  // projects to ~-0.13 m → ground-classified. The realistic obstacle geometry:
+  // a vertical obstacle occupies a few bearings (returns at ~2 m, which the
+  // slope mis-projects below the floor), while the bearings around it see sky /
+  // no return (inf) — so the obstacle is a SHORT ground-classified run isolated
+  // by non-returns, NOT contiguous with the wide ground sweep.
+  const float inf = std::numeric_limits<float>::infinity();
+  std::vector<float> ranges(30, inf);
+  for (int i = 0; i <= 14; ++i)
+    ranges[i] = 2.0f;  // long ground arc: 15 beams >= min_ground_run(8) → stripped
+  // beams [15..19] = inf (no return) → breaks the run
+  ranges[20] = 2.0f;
+  ranges[21] = 2.0f;
+  ranges[22] = 2.0f;  // 3-beam obstacle cluster (< 8) isolated by inf → kept
+  auto in = make_scan(ranges);
+  in.angle_min = 0.0f;  // all beams forward so z_dir is uniform (pure run-length test)
+  in.angle_max = 0.0f;
+  in.angle_increment = 0.0f;
+  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 0.22, 0.0, 8};
+  auto u = mowgli_localization::up_from_pitch_rad(10.0 * M_PI / 180.0);
+  mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
+  // The long 2.0 m ground arc is stripped...
+  EXPECT_FALSE(std::isfinite(in.ranges[0]));
+  EXPECT_FALSE(std::isfinite(in.ranges[14]));
+  // ...but the isolated short cluster survives (kept as a possible obstacle).
+  EXPECT_FLOAT_EQ(in.ranges[20], 2.0f);
+  EXPECT_FLOAT_EQ(in.ranges[21], 2.0f);
+  EXPECT_FLOAT_EQ(in.ranges[22], 2.0f);
 }
 
 TEST(CostmapScanFilterGround, MountYawPiKeepsRearBeam)

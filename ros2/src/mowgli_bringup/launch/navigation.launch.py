@@ -320,15 +320,17 @@ def generate_launch_description() -> LaunchDescription:
     xy_goal_tolerance = 0.30
     yaw_goal_tolerance = 0.5
     # coverage_xy_tolerance → coverage_goal_checker.xy_goal_tolerance.
-    # Per-swath DISCONTINUOUS model (2026-06-12): each swath is its own
-    # follow_path goal, and PathProgressGoalChecker only fires after the robot
-    # has tracked >= progress_threshold (0.95) of that swath's poses — so a LOOSE
-    # xy gate is safe (progress, not proximity, prevents early firing). The exact
-    # swath-end xy is irrelevant (RotationShim re-aligns at the next swath start);
-    # too tight (0.05/0.15) made each swath-end goal never SUCCEED → the next
-    # swath never dispatched (the hang that retired the per-swath model). 0.25 m
-    # lets every swath complete and advance.
-    coverage_xy_tolerance = 0.25
+    # CONTINUOUS full-path model + FTCController (feat/ftc-revive, 2026-06-25):
+    # PathProgressGoalChecker only fires after the robot tracks >= 0.95 of the
+    # path poses (progress, not proximity, prevents early firing). The catch: FTC
+    # hard-zeroes linear.x once it leaves FOLLOWING, so it PARKS up to
+    # max_goal_distance_error (0.50 m, nav2_params_base.yaml) short of the final
+    # pose. The XY gate must therefore be >= that parking distance or the goal is
+    # never accepted → progress timeout (err 105) → the whole area is re-mowed.
+    # base.yaml ships 0.50; this default matches it and the floor below keeps the
+    # injected value >= FTC's max_goal_distance_error even if a stale per-site
+    # yaml carries the old 0.25.
+    coverage_xy_tolerance = 0.50
     # Single source of truth for blade cutting width — flowed from
     # mowgli_robot.yaml.tool_width into both map_server (param
     # tool_width, used by mark_cells_mowed stamp + sliver detection)
@@ -437,21 +439,11 @@ def generate_launch_description() -> LaunchDescription:
             rt_rp.get("dock_approach_overshoot", 0.05))
         dock_charging_threshold = float(
             rt_rp.get("dock_charging_threshold", dock_charging_threshold))
-        # Defensive clip: a stale per-site mowgli_robot.yaml can carry
-        # the legacy 0.5 m default that breaks cell-based mowing (the
-        # SimpleGoalChecker fired on tick 1 — but the coverage slot uses
-        # PathProgressGoalChecker, which gates on monotonic path progress
-        # (>= 0.95), so it CANNOT latch mid-swath regardless of xy tolerance.
-        # The clip only guards against an absurd value; cap at 0.25 m, the
-        # per-swath ceiling (must let each swath-end goal SUCCEED so the next
-        # swath dispatches — see coverage_xy_tolerance comment above).
-        if coverage_xy_tolerance > 0.25:
-            print(
-                "WARN: coverage_xy_tolerance={} m exceeds the 0.25 m ceiling. "
-                "Clipping to 0.25. Update "
-                "mowgli_robot.yaml.coverage_xy_tolerance to silence.".format(
-                    coverage_xy_tolerance))
-            coverage_xy_tolerance = 0.25
+        # NOTE: coverage_xy_tolerance is FLOORED at FTC's max_goal_distance_error
+        # at injection time (see _inject below) — a value tighter than FTC's
+        # parking distance would make the area never complete and re-mow. We no
+        # longer cap it at 0.25 (the retired per-swath ceiling, which silently
+        # forced the gate BELOW FTC's 0.50 m park distance and caused the stall).
         progress_timeout_sec = float(
             rt_rp.get("progress_timeout_sec", progress_timeout_sec))
         dock_pose_yaw_sigma_rad = float(rt_rp.get(
@@ -626,6 +618,24 @@ def generate_launch_description() -> LaunchDescription:
         sgc["xy_goal_tolerance"] = xy_goal_tolerance
         sgc["yaw_goal_tolerance"] = yaw_goal_tolerance
         cgc = cs_params.setdefault("coverage_goal_checker", {})
+        # SAFETY/COMPLETION: the coverage goal-checker XY gate MUST be >= FTC's
+        # max_goal_distance_error. FTC zeroes linear.x once it leaves FOLLOWING,
+        # so the robot parks up to that distance short of the final pose; a
+        # tighter XY gate is never satisfied → the FollowCoveragePath goal never
+        # SUCCEEDs → progress_checker fires "Failed to make progress" (err 105) →
+        # FollowStrip declares the area not mowable → the BT re-mows the whole
+        # area. Floor the injected value at FTC's parking distance so the two can
+        # never silently disagree (the 2026-06-25 regression: launch forced 0.25
+        # while base.yaml/FTC were 0.50).
+        ftc_park_dist = float(fcp.get("max_goal_distance_error", 0.50))
+        if coverage_xy_tolerance < ftc_park_dist:
+            print(
+                "WARN: coverage_xy_tolerance={} m is tighter than FTC "
+                "max_goal_distance_error={} m — raising to {} m so the area can "
+                "complete (FTC parks that far short of the goal). Update "
+                "mowgli_robot.yaml.coverage_xy_tolerance to silence.".format(
+                    coverage_xy_tolerance, ftc_park_dist, ftc_park_dist))
+            coverage_xy_tolerance = ftc_park_dist
         cgc["xy_goal_tolerance"] = coverage_xy_tolerance
 
         # Progress checker timeout: how long Nav2 waits for the robot to
