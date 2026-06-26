@@ -142,6 +142,18 @@ private:
   static constexpr double kBladeSpinupDelaySec = 1.5;
   std::chrono::steady_clock::time_point blade_start_time_;
   bool goal_sent_ = false;
+
+  // A FollowCoveragePath goal that ABORTS at or beyond this fraction of the
+  // path is treated as COMPLETE rather than skipped. FTC zeroes linear.x once
+  // it leaves FOLLOWING and parks up to max_goal_distance_error (~0.5 m) short
+  // of the final pose; the PathProgressGoalChecker then can't fire (robot
+  // stopped just outside xy tolerance) and the progress_checker aborts the goal
+  // with err 105 at ~100 % tracked. Without this, that abort was scored as a
+  // skip, the near-100 % resume cursor was discarded (resume+2 >= size), the
+  // area was never marked complete, and GetNextUnmowedArea re-mowed it from
+  // scratch — an endless re-mow loop. Matches the goal-checker progress_threshold
+  // (0.95): reaching >=95 % of poses means the area is mowed.
+  static constexpr double kPathCompleteFraction = 0.95;
 };
 
 // ---------------------------------------------------------------------------

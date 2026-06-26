@@ -501,10 +501,34 @@ BT::NodeStatus FollowStrip::onRunning()
   if (status == action_msgs::msg::GoalStatus::STATUS_ABORTED ||
       status == action_msgs::msg::GoalStatus::STATUS_CANCELED)
   {
+    const std::size_t absolute = resume_start_idx_ + path_progress_idx_;
+    const double frac = total_path_poses_ > 0
+                            ? static_cast<double>(absolute) / static_cast<double>(total_path_poses_)
+                            : 0.0;
+    // Reached the end of the path: FTC parks ~max_goal_distance_error short of
+    // the final pose, so the goal-checker can't fire and the progress_checker
+    // aborts (err 105) at ~100 % tracked. The area IS mowed — treat the segment
+    // as COMPLETE (clear the resume cursor, record it done) instead of skipping
+    // it, which previously discarded the near-100 % cursor and re-mowed the
+    // whole area from scratch. See kPathCompleteFraction.
+    if (frac >= kPathCompleteFraction)
+    {
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "FollowStrip: segment %zu/%zu reached %.0f%% of path then aborted near the goal "
+                  "(area %u) — treating as MOWED (FTC parks short of the final pose)",
+                  swath_idx_ + 1,
+                  swaths_.size(),
+                  100.0 * frac,
+                  area_idx_);
+      ctx->area_resume_pose_index.erase(area_idx_);
+      ctx->area_completed_swaths[area_idx_].insert(swath_idx_);
+      follow_handle_.reset();
+      return advance();
+    }
     RCLCPP_WARN(ctx->node->get_logger(),
                 "FollowStrip: continuous path aborted/canceled at pose %zu/%zu (area %u) — "
                 "saving resume cursor",
-                resume_start_idx_ + path_progress_idx_,
+                absolute,
                 total_path_poses_,
                 area_idx_);
     // Persist where we got to so the next dispatch resumes here instead of
