@@ -513,11 +513,29 @@ BT::NodeStatus PreFlightCheck::tick()
     }
   }
 
+  // ── 6. Firmware compatibility ────────────────────────────────────────────
+  // hardware_bridge handshakes the STM32 on connect and reports whether the
+  // firmware's wire-protocol version matches this image. An incompatible (or
+  // too-old-to-answer) firmware could misread blade/emergency/odom packets, so
+  // block undock/mow until the operator reflashes.
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    if (!ctx->latest_status.firmware_compatible)
+    {
+      const std::string& ver = ctx->latest_status.firmware_version;
+      char buf[96];
+      snprintf(buf, sizeof(buf), "firmware-incompatible (fw=%s proto=%u — reflash)",
+               ver.empty() ? "?" : ver.c_str(),
+               static_cast<unsigned>(ctx->latest_status.firmware_protocol_version));
+      failures.emplace_back(buf);
+    }
+  }
+
   // ── Verdict ──────────────────────────────────────────────────────────────
   if (failures.empty())
   {
     RCLCPP_INFO(ctx->node->get_logger(),
-                "PreFlightCheck PASS: battery=%.1f%% fix=%u area-ok tf-ok",
+                "PreFlightCheck PASS: battery=%.1f%% fix=%u area-ok tf-ok fw-ok",
                 battery,
                 fix_type);
     return BT::NodeStatus::SUCCESS;

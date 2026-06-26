@@ -419,6 +419,26 @@ static void on_reboot(const uint8_t *data, size_t len) {
   }
 }
 
+/* Host -> Firmware config/version request. Replies with this firmware's
+ * wire-protocol version (the compatibility key the host checks) and its
+ * human-readable semver, so the ROS 2 image can confirm it is talking to a
+ * compatible firmware and warn the operator to reflash on mismatch. Firmware
+ * older than this handshake never registers this handler, so it simply never
+ * replies — which the host reads as "incompatible firmware". */
+static void on_config_req(const uint8_t *data, size_t len) {
+  (void)data;
+  if (len < sizeof(pkt_config_req_t) - 2u) {
+    return;
+  }
+  pkt_config_rsp_t rsp;
+  rsp.type = PKT_ID_CONFIG_RSP;
+  rsp.protocol_version = MOWGLI_PROTOCOL_VERSION;
+  rsp.fw_version_major = MOWGLI_FW_VERSION_MAJOR;
+  rsp.fw_version_minor = MOWGLI_FW_VERSION_MINOR;
+  rsp.fw_version_patch = MOWGLI_FW_VERSION_PATCH;
+  mowgli_comms_send(&rsp, sizeof(rsp));
+}
+
 /* on_hl_state blade LED feedback (moved out of on_hl_state for clarity) */
 static void update_blade_led(void) {
   if (target_blade_on_off) {
@@ -876,6 +896,7 @@ extern "C" void init_ROS() {
   mowgli_comms_register_handler(PKT_ID_CMD_BLADE, on_cmd_blade);
   mowgli_comms_register_handler(PKT_ID_REBOOT, on_reboot);
   mowgli_comms_register_handler(PKT_ID_SET_DRIVE_PID, on_set_drive_pid);
+  mowgli_comms_register_handler(PKT_ID_CONFIG_REQ, on_config_req);
 
   // Initialise timers
   NBT_init(&led_nbt, LED_NBT_TIME_MS);

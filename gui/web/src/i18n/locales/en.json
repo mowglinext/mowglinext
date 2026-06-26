@@ -579,7 +579,11 @@
     "allClear": "all clear",
     "motorTemp": "Motor {{temp}} °C",
     "runningHot": "running hot",
-    "nominal": "nominal"
+    "nominal": "nominal",
+    "firmwareOk": "Firmware OK",
+    "firmwareIncompatible": "Firmware incompatible",
+    "firmwareVersion": "v{{version}}",
+    "firmwareReflash": "v{{version}} — reflash firmware to mow"
   },
   "onboardingPage": {
     "preview": "Preview",

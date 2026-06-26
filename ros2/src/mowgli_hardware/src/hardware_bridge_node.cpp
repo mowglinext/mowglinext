@@ -136,6 +136,9 @@ public:
     create_subscribers();
     create_services();
     open_serial_port();
+    // Arm the firmware version handshake for the initial connect (the reconnect
+    // path in read_serial_tick re-arms on every subsequent re-enumeration).
+    rearm_firmware_handshake();
     create_timers();
     // Must run after declare_parameters — reads imu_cal_persist_path_. Runs
     // before any IMU packet arrives because the serial port callbacks are
@@ -573,6 +576,13 @@ private:
                                              send_drive_pid();
                                              --pid_resend_count_;
                                            }
+                                           // Firmware version handshake: ask the
+                                           // board for its protocol/firmware
+                                           // version on the first few heartbeats
+                                           // after each (re)connect, then enforce
+                                           // a timeout so firmware too old to
+                                           // answer is flagged incompatible.
+                                           service_firmware_handshake();
                                          });
 
     // High-level state.
@@ -605,6 +615,9 @@ private:
       // its compile-time default gains — re-arm the drive-PID push so the host's
       // values are restored over the next few heartbeats.
       pid_resend_count_ = 5;
+      // Re-run the firmware version handshake: a re-enumeration may be a
+      // reflash to a different firmware, so re-ask and re-evaluate compatibility.
+      rearm_firmware_handshake();
       RCLCPP_INFO(get_logger(), "Serial port re-opened successfully.");
     }
 
@@ -700,6 +713,9 @@ private:
       case PACKET_ID_LL_BLADE_STATUS:
         handle_blade_status(data, len);
         break;
+      case PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP:
+        handle_config_rsp(data, len);
+        break;
       default:
         RCLCPP_DEBUG(get_logger(), "Unhandled packet type 0x%02X (len=%zu)", data[0], len);
         break;
@@ -787,6 +803,10 @@ private:
       msg.mower_motor_rpm = blade_rpm_;
       msg.mower_motor_temperature = blade_temperature_;
       msg.mower_esc_current = blade_esc_current_;
+      // Firmware version handshake result (image <-> firmware compatibility).
+      msg.firmware_version = fw_version_str_;
+      msg.firmware_protocol_version = fw_protocol_version_;
+      msg.firmware_compatible = fw_compatible_;
       pub_status_->publish(msg);
     }
 
@@ -1756,6 +1776,108 @@ private:
   }
 
   // ---------------------------------------------------------------------------
+  // Firmware version handshake (image <-> firmware compatibility)
+  // ---------------------------------------------------------------------------
+
+  void handle_config_rsp(const uint8_t* data, std::size_t len)
+  {
+    if (len < sizeof(LlConfigRsp))
+    {
+      return;
+    }
+    LlConfigRsp pkt{};
+    std::memcpy(&pkt, data, sizeof(LlConfigRsp));
+
+    fw_protocol_version_ = pkt.protocol_version;
+    fw_version_major_ = pkt.fw_version_major;
+    fw_version_minor_ = pkt.fw_version_minor;
+    fw_version_patch_ = pkt.fw_version_patch;
+    fw_handshake_done_ = true;
+    // The wire-protocol version is the compatibility key: an image built for
+    // protocol vN can only correctly parse/command firmware of the same vN.
+    fw_compatible_ = (fw_protocol_version_ == kMowgliProtocolVersion);
+
+    char ver[16];
+    snprintf(ver, sizeof(ver), "%u.%u.%u",
+             static_cast<unsigned>(fw_version_major_),
+             static_cast<unsigned>(fw_version_minor_),
+             static_cast<unsigned>(fw_version_patch_));
+    fw_version_str_ = ver;
+
+    if (fw_compatible_)
+    {
+      RCLCPP_INFO(get_logger(),
+                  "Firmware handshake OK: firmware v%s, protocol v%u (image expects v%u).",
+                  fw_version_str_.c_str(),
+                  static_cast<unsigned>(fw_protocol_version_),
+                  static_cast<unsigned>(kMowgliProtocolVersion));
+    }
+    else
+    {
+      RCLCPP_ERROR(get_logger(),
+                   "INCOMPATIBLE FIRMWARE: firmware v%s speaks protocol v%u but this image "
+                   "expects protocol v%u. Reflash the STM32 firmware (see docs/FIRST_BOOT.md). "
+                   "Mowing is blocked until the versions match.",
+                   fw_version_str_.c_str(),
+                   static_cast<unsigned>(fw_protocol_version_),
+                   static_cast<unsigned>(kMowgliProtocolVersion));
+    }
+  }
+
+  // Reset the handshake state on (re)connect so a reflashed board is re-checked.
+  void rearm_firmware_handshake()
+  {
+    fw_handshake_done_ = false;
+    fw_compatible_ = false;
+    fw_protocol_version_ = 0u;
+    fw_version_str_.clear();
+    config_req_resend_count_ = 5;
+    fw_handshake_start_ = now();
+  }
+
+  // Sends PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ on the first few heartbeats after a
+  // (re)connect; once the resends are exhausted with no reply, the firmware is
+  // too old to implement the handshake → flag incompatible (reflash needed).
+  void service_firmware_handshake()
+  {
+    if (fw_handshake_done_ || !serial_ || !serial_->is_open())
+    {
+      return;
+    }
+    if (config_req_resend_count_ > 0)
+    {
+      send_config_request();
+      --config_req_resend_count_;
+      return;
+    }
+    // No CONFIG_RSP after the request budget + a grace window: firmware predates
+    // the handshake (or is otherwise unresponsive) → incompatible.
+    if ((now() - fw_handshake_start_).seconds() > fw_handshake_timeout_s_)
+    {
+      fw_handshake_done_ = true;
+      fw_compatible_ = false;
+      fw_protocol_version_ = 0u;
+      fw_version_str_ = "unknown";
+      RCLCPP_ERROR(get_logger(),
+                   "INCOMPATIBLE FIRMWARE: the STM32 did not answer the version handshake "
+                   "(no CONFIG_RSP in %.0f s). This firmware predates the version protocol — "
+                   "reflash it (see docs/FIRST_BOOT.md). Mowing is blocked until then.",
+                   fw_handshake_timeout_s_);
+    }
+  }
+
+  void send_config_request()
+  {
+    if (!serial_)
+    {
+      return;
+    }
+    LlConfigReq pkt{};
+    pkt.type = PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ;
+    send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt), sizeof(LlConfigReq) - sizeof(uint16_t));
+  }
+
+  // ---------------------------------------------------------------------------
   // cmd_vel subscriber
   // ---------------------------------------------------------------------------
 
@@ -1968,6 +2090,24 @@ private:
   double wheel_pid_integral_limit_{100.0};
   double wheel_pid_pwm_per_mps_{300.0};
   int pid_resend_count_{5};
+
+  // Firmware version handshake state (image <-> firmware compatibility). The
+  // bridge requests the firmware's protocol/semantic version on (re)connect and
+  // compares the wire-protocol version against kMowgliProtocolVersion. Until a
+  // definitive answer, fw_compatible_ is false so PreFlightCheck blocks mowing.
+  bool fw_handshake_done_{false};
+  bool fw_compatible_{false};
+  uint8_t fw_protocol_version_{0u};
+  uint8_t fw_version_major_{0u};
+  uint8_t fw_version_minor_{0u};
+  uint8_t fw_version_patch_{0u};
+  std::string fw_version_str_{};
+  int config_req_resend_count_{5};
+  rclcpp::Time fw_handshake_start_{0, 0, RCL_ROS_TIME};
+  // Grace window after the request budget before declaring an unanswered
+  // handshake incompatible (firmware too old to reply).
+  double fw_handshake_timeout_s_{5.0};
+
   // Host-side sub-deadband forward-velocity clamp (on_cmd_vel): any |vx| below
   // this is zeroed before reaching the firmware. Lowered from the legacy 0.15
   // (hand-rolled wheel-PI breakaway) to 0.05 now the vendored PX4 PID can track

@@ -36,6 +36,13 @@ namespace mowgli_hardware
 // Protocol v2 moves runtime drive tuning to packet 0x54 and adds
 // ticks_per_meter to the payload so legacy firmware safely ignores the packet
 // rather than mis-parsing it as the old PID-only layout.
+//
+// This is the COMPATIBILITY KEY: the bridge sends PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ
+// on every (re)connect and the firmware answers with its own
+// MOWGLI_PROTOCOL_VERSION in LlConfigRsp. If they differ — or the firmware is
+// too old to answer at all — the image and firmware speak different wire
+// formats and the operator must reflash. Bump this in lockstep with
+// MOWGLI_PROTOCOL_VERSION in mowgli_protocol.h whenever the wire format changes.
 static constexpr uint8_t kMowgliProtocolVersion = 2u;
 
 // ---------------------------------------------------------------------------
@@ -271,6 +278,36 @@ struct LlBladeStatus
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
 
+/**
+ * @brief Config request sent by the Pi (PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ = 0x11).
+ *
+ * A bare trigger sent on every (re)connect; the firmware replies with
+ * LlConfigRsp. Firmware that predates the handshake ignores the unknown packet
+ * and never replies, which the bridge reads (after a timeout) as an
+ * incompatible firmware that needs reflashing.
+ */
+struct LlConfigReq
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+
+/**
+ * @brief Config response from the STM32 (PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP = 0x12).
+ *
+ * Reports the firmware's wire-protocol version (the compatibility key checked
+ * against kMowgliProtocolVersion) plus its human-readable firmware semver.
+ */
+struct LlConfigRsp
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP
+  uint8_t protocol_version;  ///< MOWGLI_PROTOCOL_VERSION on the firmware
+  uint8_t fw_version_major;  ///< Firmware semver major
+  uint8_t fw_version_minor;  ///< Firmware semver minor
+  uint8_t fw_version_patch;  ///< Firmware semver patch
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+
 #pragma pack(pop)
 
 // ---------------------------------------------------------------------------
@@ -286,6 +323,8 @@ static_assert(sizeof(LlHighLevelState) == 5u, "LlHighLevelState layout mismatch"
 static_assert(sizeof(LlCmdVel) == 11u, "LlCmdVel layout mismatch");
 static_assert(sizeof(LlCmdBlade) == 5u, "LlCmdBlade layout mismatch");
 static_assert(sizeof(LlBladeStatus) == 16u, "LlBladeStatus layout mismatch");
+static_assert(sizeof(LlConfigReq) == 3u, "LlConfigReq layout mismatch");
+static_assert(sizeof(LlConfigRsp) == 7u, "LlConfigRsp layout mismatch");
 static_assert(sizeof(LlSetDrivePid) == 27u, "LlSetDrivePid layout mismatch");
 
 }  // namespace mowgli_hardware

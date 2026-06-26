@@ -93,6 +93,11 @@ function useMowerData() {
     currentArea: highLevelStatus.current_area != null
       ? `Area ${highLevelStatus.current_area + 1}`
       : undefined,
+    // Firmware <-> image compatibility (from the hardware_bridge handshake).
+    // null until the first Status arrives, so the health card stays quiet
+    // rather than flashing a false "incompatible" on load.
+    firmwareCompatible: status.firmware_compatible ?? null,
+    firmwareVersion: status.firmware_version ?? "",
   };
 }
 
@@ -545,6 +550,20 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
     {k: t('mowgliNextPage.motorTemp', {temp: data.motorTemp.toFixed(0)}),
                               ok: data.motorTemp < 55,    note: data.motorTemp >= 55 ? t('mowgliNextPage.runningHot') : t('mowgliNextPage.nominal')},
   ];
+  // Firmware compatibility row — only shown once the bridge has reported a
+  // verdict (firmwareCompatible !== null). When incompatible, it reads red and
+  // tells the operator to reflash; mowing is blocked by PreFlightCheck.
+  if (data.firmwareCompatible !== null) {
+    rows.push({
+      k: data.firmwareCompatible
+        ? t('mowgliNextPage.firmwareOk')
+        : t('mowgliNextPage.firmwareIncompatible'),
+      ok: data.firmwareCompatible,
+      note: data.firmwareCompatible
+        ? t('mowgliNextPage.firmwareVersion', {version: data.firmwareVersion || '?'})
+        : t('mowgliNextPage.firmwareReflash', {version: data.firmwareVersion || '?'}),
+    });
+  }
   return (
     <GlassCard padding={20}>
       <div style={{

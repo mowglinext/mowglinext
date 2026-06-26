@@ -17,3 +17,14 @@ float32 mower_esc_temperature
 float32 mower_esc_current
 float32 mower_motor_temperature
 float32 mower_motor_rpm
+
+# Firmware version handshake (image <-> firmware compatibility). Populated by
+# hardware_bridge from the STM32's CONFIG_RSP reply. firmware_compatible is
+# false until a matching reply arrives; if the firmware never answers (too old
+# to implement the handshake) it stays false and PreFlightCheck blocks mowing —
+# the operator must reflash. firmware_version is "major.minor.patch" ("" or
+# "unknown" until resolved); firmware_protocol_version is the wire protocol
+# version reported by the firmware (0 if unknown).
+string firmware_version
+uint8 firmware_protocol_version
+bool firmware_compatible
