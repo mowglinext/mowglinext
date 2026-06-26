@@ -102,8 +102,7 @@ BT::NodeStatus FollowStrip::onStart()
       resume_start_idx_ = it->second;
       nav_msgs::msg::Path trimmed;
       trimmed.header = full_path.header;
-      trimmed.poses.assign(full_path.poses.begin() +
-                               static_cast<std::ptrdiff_t>(resume_start_idx_),
+      trimmed.poses.assign(full_path.poses.begin() + static_cast<std::ptrdiff_t>(resume_start_idx_),
                            full_path.poses.end());
       RCLCPP_INFO(ctx->node->get_logger(),
                   "FollowStrip: RESUMING area %u at pose %zu/%zu (%.0f%% already driven) — "
@@ -383,8 +382,7 @@ BT::NodeStatus FollowStrip::onRunning()
     auto rit = ctx->area_resume_pose_index.find(area_idx_);
     if (rit != ctx->area_resume_pose_index.end() && total_path_poses_ > 0)
     {
-      resume_pct =
-          100.0f * static_cast<float>(rit->second) / static_cast<float>(total_path_poses_);
+      resume_pct = 100.0f * static_cast<float>(rit->second) / static_cast<float>(total_path_poses_);
     }
     ctx->coverage_percent = std::max(done_pct, resume_pct);
     // Mark the area complete once every swath is mowed (skipped swaths don't

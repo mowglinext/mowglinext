@@ -243,8 +243,7 @@ TEST(CostmapScanFilterGround, GroundReturnFilteredOnNoseDownSlope)
   auto in = make_forward_only_scan(2.0f);
   // min_ground_run=1: this test exercises the per-beam z-projection math, not
   // the cluster guard (a single-beam scan has no run length to speak of).
-  mowgli_localization::GroundFilterConfigForTest cfg{
-      true, 0.08, 1.5, 0.22, 0.0, 1};
+  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 0.22, 0.0, 1};
   const double pitch_rad = 10.0 * M_PI / 180.0;  // nose-down (positive in URDF Y rotation)
   std::optional<mowgli_localization::Vec3ForTest> u =
       mowgli_localization::up_from_pitch_rad(pitch_rad);

@@ -197,8 +197,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   // such fixes outright — wheel/gyro/COG keep localising — instead of trusting
   // them. (navsat_to_absolute_pose_node guards covariance_type the same way, but
   // it no longer feeds the localizer.)
-  if (msg->position_covariance_type ==
-          sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN ||
+  if (msg->position_covariance_type == sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN ||
       !std::isfinite(sigma) || sigma <= 0.0)
   {
     graph_->RecordGpsRejectWrongFix();
