@@ -112,9 +112,10 @@ def generate_launch_description() -> LaunchDescription:
         description="Webots execution mode: realtime | fast | pause.",
     )
 
-    # use_fusion_graph + use_magnetometer come from
-    # mowgli_robot.yaml via navigation.launch.py — no need to declare
-    # them here. CLI override still propagates.
+    # use_magnetometer comes from mowgli_robot.yaml via navigation.launch.py
+    # — no need to declare it here. CLI override still propagates.
+    # (There is no use_fusion_graph arg; fusion_graph_node is the sole,
+    # unconditional localizer.)
 
     # ------------------------------------------------------------------
     # Resolved substitutions

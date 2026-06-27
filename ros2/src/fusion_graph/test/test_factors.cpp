@@ -387,3 +387,47 @@ TEST(ScanToKeyframeComposition, RecoversTruePose)
   EXPECT_GT(err_fwd, 0.05) << "forward composition unexpectedly close — convention ambiguous; "
                            << "err_inv=" << err_inv << " err_fwd=" << err_fwd;
 }
+
+TEST(ScanBetweenConvention, MatchesBetweenFactorDirection)
+{
+  // Same asymmetric landmark set as ScanToKeyframeComposition.
+  std::vector<gtsam::Point2> map_pts;
+  for (int i = 0; i < 40; ++i)
+  {
+    const double t = -2.0 + 4.0 * static_cast<double>(i) / 40.0;
+    map_pts.emplace_back(6.0 + t, 5.0);
+  }
+  for (int i = 0; i < 40; ++i)
+  {
+    const double t = -1.5 + 3.0 * static_cast<double>(i) / 40.0;
+    map_pts.emplace_back(8.0, 4.0 + t);
+  }
+
+  const gtsam::Pose2 prev_pose(5.0, 3.0, 0.4);
+  const gtsam::Pose2 curr_pose(5.05, 3.0, 0.4 + 0.025);
+
+  const auto prev_scan = ScanFromPose(map_pts, prev_pose);
+  const auto curr_scan = ScanFromPose(map_pts, curr_pose);
+
+  fusion_graph::ScanMatcher matcher;
+  // Runtime calls Match(source=curr, target=prev) for the scan-between AND
+  // loop-closure factors, so res.delta == prev.between(curr) — the FORWARD
+  // motion that BetweenFactor(k_prev, k_curr) expects (graph_manager_node.cpp:346,
+  // graph_manager_rebase.cpp:377), identical to the wheel between-factor.
+  auto res = matcher.Match(curr_scan, prev_scan, gtsam::Pose2());
+  ASSERT_TRUE(res.ok);
+
+  // BetweenFactor(k_prev, k_curr) composes as X_curr = X_prev.compose(delta),
+  // so the FORWARD composition must recover curr; the inverse (the old buggy
+  // direction, where delta was curr.between(prev)) must land far off. This
+  // mirrors ScanToKeyframeComposition's robust negative-control style and is
+  // insensitive to ICP's rotation precision from an identity init.
+  const gtsam::Pose2 via_fwd = prev_pose.compose(res.delta);
+  const gtsam::Pose2 via_inv = prev_pose.compose(res.delta.inverse());
+  const double err_fwd = (via_fwd.translation() - curr_pose.translation()).norm();
+  const double err_inv = (via_inv.translation() - curr_pose.translation()).norm();
+  EXPECT_LT(err_fwd, 0.03) << "prev.compose(delta) must recover curr; " << "err_fwd=" << err_fwd
+                           << " err_inv=" << err_inv;
+  EXPECT_GT(err_inv, 0.05) << "inverse composition unexpectedly close — inverted convention; "
+                           << "err_fwd=" << err_fwd << " err_inv=" << err_inv;
+}

@@ -58,14 +58,19 @@
 //      Falls back to pass-through if no IMU sample within `imu_max_age_s`
 //      so we never silently strip obstacles when localization is sick.
 //
-// collision_monitor still subscribes to /scan unfiltered.
+// collision_monitor subscribes to /scan_collision — the self-return-blanked
+// stream WITHOUT the ground filter (so a slope-stripped obstacle still trips the
+// near-field hard stop), NOT raw /scan and NOT the ground-filtered /scan_costmap.
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "mowgli_interfaces/msg/status.hpp"
 #include "rclcpp/qos.hpp"
@@ -99,11 +104,16 @@ public:
     // projection. Default 0 keeps the old (flat-mount) behaviour; the
     // launch passes the real ~π value for the 180°-rotated mount.
     lidar_mount_yaw_ = declare_parameter<double>("lidar_mount_yaw", 0.0);
+    min_ground_run_ = declare_parameter<int>("min_ground_run", 8);
     imu_max_age_s_ = declare_parameter<double>("imu_max_age_s", 0.5);
     accel_g_tolerance_ms2_ = declare_parameter<double>("accel_g_tolerance_ms2", 3.0);
     const std::string input_topic = declare_parameter<std::string>("input_topic", "/scan");
     const std::string output_topic =
         declare_parameter<std::string>("output_topic", "/scan_costmap");
+    // Self-return-blanked but NOT ground-filtered stream for collision_monitor's
+    // near-field hard stop (empty disables the second publisher).
+    const std::string collision_output_topic =
+        declare_parameter<std::string>("collision_output_topic", "/scan_collision");
     const std::string status_topic =
         declare_parameter<std::string>("status_topic", "/hardware_bridge/status");
     const std::string imu_topic = declare_parameter<std::string>("imu_topic", "/imu/data");
@@ -114,6 +124,11 @@ public:
     qos_reliable.durability_volatile();
 
     pub_scan_ = create_publisher<sensor_msgs::msg::LaserScan>(output_topic, qos_sensor);
+    if (!collision_output_topic.empty())
+    {
+      pub_collision_scan_ =
+          create_publisher<sensor_msgs::msg::LaserScan>(collision_output_topic, qos_sensor);
+    }
 
     sub_scan_ = create_subscription<sensor_msgs::msg::LaserScan>(
         input_topic,
@@ -175,6 +190,16 @@ public:
     /// Yaw of the LIDAR frame relative to base_link/IMU (rad). A beam at
     /// LIDAR index angle α points along base bearing α + lidar_mount_yaw.
     double lidar_mount_yaw{0.0};
+    /// SAFETY: minimum run of consecutive ground-classified beams before any of
+    /// them is stripped as ground. A 2-D LiDAR can't tell a real vertical
+    /// obstacle from sloped ground at the same bearing/range — on a downslope a
+    /// leg/trunk/child projects BELOW min_obstacle_z and would be discarded. But
+    /// ground returns form LONG contiguous angular arcs while an obstacle
+    /// subtends only a few beams, so we only strip a "ground" return when it is
+    /// part of a run >= this length. A short ground-classified cluster is kept
+    /// (treated as a possible obstacle) — the planner/CostCritic then avoids it.
+    /// 0 disables the guard (legacy per-beam stripping).
+    int min_ground_run{8};
   };
 
   /// Apply the radial blank to a copy of @p in. Returns the result.
@@ -225,16 +250,53 @@ public:
     const float inf = std::numeric_limits<float>::infinity();
     const double a0 = io.angle_min;
     const double da = io.angle_increment;
-    for (size_t i = 0; i < io.ranges.size(); ++i)
+    const size_t n = io.ranges.size();
+
+    // Pass 1: classify each finite beam. 0 = keep, 1 = ground (projects below
+    // min_z), 2 = overhead (above max_z). The overhead strip is per-beam (a
+    // canopy/overhang return is genuinely above the robot and safe to drop); the
+    // GROUND strip is gated below by a run-length test so a real obstacle that a
+    // downslope mis-projects below min_z is not silently discarded.
+    std::vector<uint8_t> klass(n, 0);
+    for (size_t i = 0; i < n; ++i)
     {
-      float& r = io.ranges[i];
+      const float r = io.ranges[i];
       if (!std::isfinite(r))
         continue;
       const double psi = a0 + da * static_cast<double>(i) + cfg.lidar_mount_yaw;
       const double z_dir = u.x * std::cos(psi) + u.y * std::sin(psi);
       const float return_z = static_cast<float>(cfg.lidar_height_m + r * z_dir);
-      if (return_z < min_z || return_z > max_z)
-        r = inf;
+      if (return_z > max_z)
+        klass[i] = 2;
+      else if (return_z < min_z)
+        klass[i] = 1;
+    }
+
+    // Pass 2: strip overhead returns outright; strip ground returns only where
+    // they form a contiguous run >= min_ground_run (a long sweep of ground),
+    // leaving short ground-classified clusters as possible obstacles.
+    const int min_run = std::max(1, cfg.min_ground_run);
+    for (size_t i = 0; i < n; ++i)
+    {
+      if (klass[i] == 2)
+      {
+        io.ranges[i] = inf;
+        continue;
+      }
+      if (klass[i] != 1)
+        continue;
+      // Extent of the contiguous ground run containing i.
+      size_t j = i;
+      while (j < n && klass[j] == 1)
+        ++j;
+      const size_t run_len = j - i;
+      if (static_cast<int>(run_len) >= min_run)
+      {
+        for (size_t k = i; k < j; ++k)
+          io.ranges[k] = inf;
+      }
+      // else: keep the short cluster (possible obstacle the slope mis-projected).
+      i = j - 1;  // skip past the run we just handled
     }
   }
 
@@ -321,6 +383,17 @@ private:
         chassis_blank_range_, dock_active ? dock_blank_range_ : 0.0);
     sensor_msgs::msg::LaserScan out = filter_scan(msg, effective_blank, effective_blank > 0.0);
 
+    // SAFETY: collision_monitor gets the scan with chassis/dock self-returns
+    // blanked but WITHOUT the gravity ground filter applied. The ground filter
+    // can mis-classify a real vertical obstacle as ground on a slope and strip
+    // it; that false negative is acceptable for the costmap obstacle_layer
+    // (MPPI's CostCritic plans around what it sees) but MUST NOT defeat the
+    // near-field hard stop. Publishing the un-ground-filtered stream here keeps
+    // the PolygonStop/PolygonSlow zones reacting to every near return while
+    // still never seeing the robot's own chassis or the dock.
+    if (pub_collision_scan_)
+      pub_collision_scan_->publish(out);
+
     // Ground filter — only when we have a fresh IMU sample. Stale IMU →
     // pass-through so we never silently strip obstacles when localization
     // is sick (better to have phantom ground returns than to blind the
@@ -345,7 +418,8 @@ private:
                            min_obstacle_z_m_,
                            max_obstacle_z_m_,
                            lidar_height_m_,
-                           lidar_mount_yaw_};
+                           lidar_mount_yaw_,
+                           min_ground_run_};
     apply_ground_filter(out, cfg, up);
 
     pub_scan_->publish(out);
@@ -373,6 +447,7 @@ private:
   rclcpp::Subscription<mowgli_interfaces::msg::Status>::SharedPtr sub_status_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
   rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr pub_scan_;
+  rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr pub_collision_scan_;
 
   // --- Parameters --------------------------------------------------------
 
@@ -384,6 +459,7 @@ private:
   double max_obstacle_z_m_{1.5};
   double lidar_height_m_{0.22};
   double lidar_mount_yaw_{0.0};
+  int min_ground_run_{8};
   double imu_max_age_s_{0.5};
   double accel_g_tolerance_ms2_{3.0};
 

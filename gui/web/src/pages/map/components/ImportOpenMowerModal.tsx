@@ -1,5 +1,5 @@
 import {useState} from "react";
-import {Alert, Modal, Statistic, Table, Tag, Typography} from "antd";
+import {Alert, InputNumber, Modal, Space, Statistic, Table, Tag, Typography} from "antd";
 import {useTranslation} from "react-i18next";
 import type {ImportOpenMowerSummary} from "../hooks/useMapFiles.ts";
 
@@ -7,12 +7,19 @@ interface ImportOpenMowerModalProps {
     preview: ImportOpenMowerSummary | null;
     /**
      * Apply confirmation. The hook re-POSTs the stashed file body with
-     * `apply: true`; this modal owns the loading + error UI but not the
-     * fetch itself. Returning a rejected promise here surfaces the error
-     * inline (we don't auto-close — the user can read the message and
-     * cancel).
+     * `apply: true` (and the OM datum, when set); this modal owns the
+     * loading + error UI but not the fetch itself. Returning a rejected
+     * promise here surfaces the error inline (we don't auto-close — the
+     * user can read the message and cancel).
      */
-    onApply: () => Promise<void>;
+    onApply: (omDatumLat?: number, omDatumLon?: number) => Promise<void>;
+    /**
+     * Re-run the preview with the OpenMower datum. The modal calls this
+     * after the user fills (or clears) both datum fields; the returned
+     * summary replaces the current preview so the datum-shift alert, dock
+     * pose, and warnings reflect the reprojected geometry.
+     */
+    onReproject: (omDatumLat?: number, omDatumLon?: number) => Promise<ImportOpenMowerSummary>;
     onClose: () => void;
 }
 
@@ -22,26 +29,62 @@ interface ImportOpenMowerModalProps {
  * user confirms, then runs the live write path on Apply via the
  * `onApply` callback wired from MapPage / useMapFiles.
  */
-export function ImportOpenMowerModal({preview, onApply, onClose}: ImportOpenMowerModalProps) {
+export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: ImportOpenMowerModalProps) {
     const {t} = useTranslation();
     const open = preview !== null;
     const summary = preview;
     const [applying, setApplying] = useState(false);
     const [applyError, setApplyError] = useState<string | null>(null);
+    // OpenMower datum (OM_DATUM_LAT/LONG) the source map was anchored at.
+    // Both must be filled for the server to reproject; either left empty
+    // ⇒ identity copy (offset import) + a warning from the backend.
+    const [omLat, setOmLat] = useState<number | null>(null);
+    const [omLon, setOmLon] = useState<number | null>(null);
+    const [reprojecting, setReprojecting] = useState(false);
+
+    const datumPair = (lat: number | null, lon: number | null): [number?, number?] =>
+        lat !== null && lon !== null ? [lat, lon] : [undefined, undefined];
 
     const handleOk = async () => {
         setApplying(true);
         setApplyError(null);
         try {
-            await onApply();
+            const [lat, lon] = datumPair(omLat, omLon);
+            await onApply(lat, lon);
             // Reset local state before the parent clears `preview`, so
             // the next import session starts clean.
             setApplying(false);
+            setOmLat(null);
+            setOmLon(null);
             onClose();
         } catch (e: any) {
             setApplyError(e?.message ?? String(e));
             setApplying(false);
         }
+    };
+
+    // Re-preview with the current datum fields. Wired to the inputs'
+    // onBlur / onPressEnter so the operator can tweak the datum and see
+    // the reprojected preview without an extra button.
+    const handleReproject = async () => {
+        setApplyError(null);
+        setReprojecting(true);
+        try {
+            const [lat, lon] = datumPair(omLat, omLon);
+            await onReproject(lat, lon);
+        } catch (e: any) {
+            setApplyError(e?.message ?? String(e));
+        } finally {
+            setReprojecting(false);
+        }
+    };
+
+    const handleCancel = () => {
+        if (applying) return;
+        setApplyError(null);
+        setOmLat(null);
+        setOmLon(null);
+        onClose();
     };
 
     const noMowAreas = (summary?.mowing_areas ?? 0) === 0;
@@ -50,15 +93,11 @@ export function ImportOpenMowerModal({preview, onApply, onClose}: ImportOpenMowe
         <Modal
             title={t('mapImportOpenMower.title')}
             open={open}
-            onCancel={() => {
-                if (applying) return;
-                setApplyError(null);
-                onClose();
-            }}
+            onCancel={handleCancel}
             onOk={handleOk}
             okText={applying ? t('mapImportOpenMower.applying') : t('mapImportOpenMower.applyReplaces')}
             okButtonProps={{
-                disabled: applying || noMowAreas,
+                disabled: applying || reprojecting || noMowAreas,
                 loading: applying,
                 danger: true,
             }}
@@ -76,6 +115,37 @@ export function ImportOpenMowerModal({preview, onApply, onClose}: ImportOpenMowe
                         message={t('mapImportOpenMower.replaceWarningMessage')}
                         description={t('mapImportOpenMower.replaceWarningDescription')}
                     />
+
+                    <div>
+                        <Typography.Text strong>{t('mapImportOpenMower.omDatumTitle')}</Typography.Text>
+                        <Typography.Paragraph type="secondary" style={{marginTop: 4, marginBottom: 8}}>
+                            {t('mapImportOpenMower.omDatumHelp')}
+                        </Typography.Paragraph>
+                        <Space wrap>
+                            <InputNumber
+                                addonBefore={t('mapImportOpenMower.omDatumLat')}
+                                value={omLat}
+                                onChange={(v) => setOmLat(typeof v === "number" ? v : null)}
+                                onBlur={handleReproject}
+                                onPressEnter={handleReproject}
+                                disabled={applying || reprojecting}
+                                step={0.000001}
+                                style={{width: 280}}
+                                placeholder="OM_DATUM_LAT"
+                            />
+                            <InputNumber
+                                addonBefore={t('mapImportOpenMower.omDatumLon')}
+                                value={omLon}
+                                onChange={(v) => setOmLon(typeof v === "number" ? v : null)}
+                                onBlur={handleReproject}
+                                onPressEnter={handleReproject}
+                                disabled={applying || reprojecting}
+                                step={0.000001}
+                                style={{width: 280}}
+                                placeholder="OM_DATUM_LONG"
+                            />
+                        </Space>
+                    </div>
 
                     <div style={{display: "flex", gap: 32, flexWrap: "wrap"}}>
                         <Statistic title={t('mapImportOpenMower.mowingAreas')} value={summary.mowing_areas} />

@@ -110,10 +110,14 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             // swath spacing = tool_width (coverage_server.operation_width); a
             // separate spacing value re-opens the swath-gap bug. The preview and
             // tool_width (Geometry section) are the real controls.
-            "mowing_enabled", "mowing_speed", "transit_speed", "outline_passes",
-            "outline_offset", "outline_overlap", "headland_width",
-            "num_headland_passes", "chassis_safety_inset",
-            "min_turning_radius", "mow_angle_offset_deg", "mow_angle_increment_deg",
+            // The outline_*/mow_angle_* knobs were removed: NO ros2 node reads
+            // them (navigation.launch.py forwards only the keys below to
+            // coverage_server, and the BT hardcodes mow_angle_deg=-1.0 "auto"),
+            // so they were dead controls. swath_overlap (a real coverage_server
+            // param) is surfaced here instead.
+            "mowing_enabled", "mowing_speed", "transit_speed",
+            "headland_width", "num_headland_passes", "swath_overlap",
+            "chassis_safety_inset", "min_turning_radius",
         ],
     },
     {

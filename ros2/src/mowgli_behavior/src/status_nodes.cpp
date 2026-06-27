@@ -152,6 +152,8 @@ BT::NodeStatus EndSession::tick()
   // the session boundary instead).
   ctx->area_completed_swaths.clear();
   ctx->area_swath_count.clear();
+  ctx->area_resume_pose_index.clear();
+  ctx->area_path_pose_count.clear();
   ctx->completed_areas.clear();
   return BT::NodeStatus::SUCCESS;
 }

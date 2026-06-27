@@ -189,11 +189,11 @@ mowgli:
     mowing_enabled: true           # enable blade motor during mowing
     mowing_speed: 0.2              # m/s during coverage paths (field-validated comfortable cut speed)
     transit_speed: 0.25            # m/s during point-to-point navigation (→ RPP desired_linear_vel)
-    outline_passes: 1              # perimeter passes before fill
-    outline_overlap: 0.0           # overlap between outline and fill (m)
-    outline_offset: 0.05           # inward offset from boundary (m)
-    mow_angle_offset_deg: -1.0    # -1 = auto-detect optimal angle
-    mow_angle_increment_deg: 0.0  # rotate pattern each full pass
+    # NOTE: the former outline_passes / outline_overlap / outline_offset /
+    # mow_angle_offset_deg / mow_angle_increment_deg knobs were REMOVED — no ros2
+    # node read them (navigation.launch.py forwards only the keys below to
+    # coverage_server, and the BT hardcodes mow_angle_deg=-1.0 "auto"). They were
+    # dead controls. Use num_headland_passes / swath_overlap (below) instead.
     headland_width: 0.18           # headland = 1 × tool_width. NOTE: currently INERT — the
                                    # coverage BT (PlanCoverageArea) derives the F2C headland from
                                    # chassis_width (ring_inset = 0.5*chassis_width + 0.05, then
@@ -314,5 +314,5 @@ mowgli:
     # rad (≈5.7°) forces a final in-place pivot before the dock approach.
     xy_goal_tolerance: 0.30        # metres — acceptable goal position error
     yaw_goal_tolerance: 0.10       # radians — acceptable heading error
-    coverage_xy_tolerance: 0.25    # metres — per-swath goal (progress-gated, loose xy OK)
+    coverage_xy_tolerance: 0.50    # metres — must be >= FTC max_goal_distance_error (0.50): FTC parks that far short of the goal, so a tighter gate never completes the area (re-mow). Floored at FTC's value by navigation.launch.py.
     progress_timeout_sec: 60.0     # seconds without progress before recovery

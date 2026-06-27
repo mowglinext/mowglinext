@@ -68,7 +68,7 @@ func topicSubscribeInterval(topic string) (int, bool) {
 	switch topic {
 	case "gps", "gnssStatus", "pose", "imu", "ticks", "wheelOdom", "lidar":
 		return 100, true
-	case "fusionRaw", "cogHeading", "magYaw", "obstacles":
+	case "fusionRaw", "cogHeading", "magYaw", "obstacles", "icpOdom":
 		return 200, true
 	case "mowProgress":
 		return 500, true // large OccupancyGrid — throttle hard
@@ -314,6 +314,8 @@ func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			def, err = subscribe(provider, c, conn, "magYaw", 200)
 		case "fusionDiag":
 			def, err = subscribe(provider, c, conn, "fusionDiag", -1)
+		case "icpOdom":
+			def, err = subscribe(provider, c, conn, "icpOdom", 200)
 		default:
 			log.Printf("SubscriberRoute: unknown topic %q", topic)
 			return

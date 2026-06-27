@@ -154,6 +154,9 @@ type Status struct {
 	MowerEscCurrent       float32        `json:"mower_esc_current"`
 	MowerMotorTemperature float32        `json:"mower_motor_temperature"`
 	MowerMotorRpm         float32        `json:"mower_motor_rpm"`
+	FirmwareVersion         string `json:"firmware_version"`
+	FirmwareProtocolVersion uint8  `json:"firmware_protocol_version"`
+	FirmwareCompatible      bool   `json:"firmware_compatible"`
 }
 
 // TrackedObstacle matches mowgli_interfaces/msg/TrackedObstacle.

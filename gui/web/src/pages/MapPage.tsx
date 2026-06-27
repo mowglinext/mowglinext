@@ -470,6 +470,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         handleDownloadGeoJSON,
         handleUploadGeoJSON,
         handleImportOpenMower,
+        handleReprojectOpenMowerPreview,
         handleApplyOpenMowerImport,
     } = useMapFiles({
         features,
@@ -541,9 +542,9 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             highLevelStatus.highLevelStatus.state_name === "IDLE"
                 ? mowerAction("high_level_control", {Command: 1})
                 : mowerAction("high_level_control", {Command: 2}),
-        onBladeForward: mowerAction("mow_enabled", {MowEnabled: 1, MowDirection: 0}),
-        onBladeBackward: mowerAction("mow_enabled", {MowEnabled: 1, MowDirection: 1}),
-        onBladeOff: mowerAction("mow_enabled", {MowEnabled: 0, MowDirection: 0}),
+        onBladeForward: mowerAction("mow_enabled", {mow_enabled: 1, mow_direction: 0}),
+        onBladeBackward: mowerAction("mow_enabled", {mow_enabled: 1, mow_direction: 1}),
+        onBladeOff: mowerAction("mow_enabled", {mow_enabled: 0, mow_direction: 0}),
         onRecordFinish: mowerAction("high_level_control", {Command: 5}),
         onRecordCancel: mowerAction("high_level_control", {Command: 6}),
     }), [mowerAction, highLevelStatus.highLevelStatus.state_name]);
@@ -996,11 +997,19 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             </div>
             <ImportOpenMowerModal
                 preview={importPreview}
-                onApply={async () => {
+                onApply={async (omDatumLat, omDatumLon) => {
                     if (!importFileText) {
                         throw new Error("No imported map text in memory — re-select the file.");
                     }
-                    await handleApplyOpenMowerImport(importFileText);
+                    await handleApplyOpenMowerImport(importFileText, omDatumLat, omDatumLon);
+                }}
+                onReproject={async (omDatumLat, omDatumLon) => {
+                    if (!importFileText) {
+                        throw new Error("No imported map text in memory — re-select the file.");
+                    }
+                    const summary = await handleReprojectOpenMowerPreview(importFileText, omDatumLat, omDatumLon);
+                    setImportPreview(summary);
+                    return summary;
                 }}
                 onClose={() => {
                     setImportPreview(null);

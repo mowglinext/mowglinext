@@ -100,6 +100,16 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   // RTK wrong-fix detection (handled in OnGnss, not in graph_manager).
   rtk_wrongfix_max_jump_m_ =
       declare_parameter<double>("rtk_wrongfix_max_jump_m", 0.05);
+  // Speed-dependent GPS σ inflation (OnGnss): σ_eff = sqrt(σ_msg² + (coeff·v)²).
+  // Accounts for GPS-latency × velocity + lever-arm sweep that the receiver
+  // covariance omits. 0 = disabled (raw receiver σ, prior behaviour).
+  gps_sigma_speed_coeff_ = declare_parameter<double>("gps_sigma_speed_coeff", 0.0);
+  // SAFETY: reject any fix whose computed σ_xy exceeds this (m), so a garbage /
+  // standalone fix can't enter the graph. 0 = disabled. Sized generously (it must
+  // NOT reject genuine RTK-Float, which the multi-minute ride-through depends on
+  // and which can legitimately sit at dm-to-m σ); it only catches truly unusable
+  // fixes. The unknown/zero-covariance reject below is unconditional and separate.
+  gps_max_sigma_reject_m_ = declare_parameter<double>("gps_max_sigma_reject_m", 0.0);
   // Dock-pose hold while charging: re-assert a firm ForceAnchor at the full
   // dock_pose once per new node (replaces the weak live-GPS factor that walked
   // the docked pose 11.5 cm + 53° over a dwell — field 2026-06-10). σ small so

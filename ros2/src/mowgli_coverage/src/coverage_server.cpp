@@ -357,10 +357,31 @@ void CoverageServer::planCoverage()
   {
     // Geometry knobs read LIVE so they're `ros2 param set`-tunable between
     // plans (field iteration without a node restart).
-    const double chassis_safety_inset = get_parameter("chassis_safety_inset").as_double();
+    const double configured_inset = get_parameter("chassis_safety_inset").as_double();
     const double min_swath_length = get_parameter("min_swath_length").as_double();
     const double mow_angle_rad =
         (goal->mow_angle_deg < 0.0) ? -1.0 : goal->mow_angle_deg * M_PI / 180.0;
+
+    // SAFETY FLOOR: the boundary buffer must be at least the chassis half-width,
+    // or worst-case tracking error pushes a spinning blade past the operator
+    // polygon. chassis_safety_inset is field-tunable and has drifted to 0.0/0.08
+    // on deployed configs, which (with a 0.40 m chassis) let the robot excurse
+    // 0.32-0.39 m outside a concave boundary. Floor the planning inset at
+    // robot_width/2 regardless of the configured value.
+    const double inset_floor = robot_width_ * 0.5;
+    const double effective_inset = std::max(configured_inset, inset_floor);
+    if (effective_inset > configured_inset + 1e-9 && !inset_floor_warned_)
+    {
+      inset_floor_warned_ = true;
+      RCLCPP_WARN(get_logger(),
+                  "chassis_safety_inset=%.3fm is below the safety floor robot_width/2=%.3fm "
+                  "(robot_width=%.2fm) — planning at %.3fm so the chassis cannot cross the "
+                  "boundary. The chassis half-width is governing the boundary margin.",
+                  configured_inset,
+                  inset_floor,
+                  robot_width_,
+                  effective_inset);
+    }
 
     f2c::types::Cell cell = buildCellFromGoal(*goal);
 
@@ -368,16 +389,35 @@ void CoverageServer::planCoverage()
                                                operation_width_,
                                                default_headland_width_,
                                                num_headland_passes_,
-                                               chassis_safety_inset,
+                                               effective_inset,
                                                mow_angle_rad,
                                                min_swath_length);
+
+    // Instrumentation (no behaviour change): surface every piece the planner
+    // dropped (slivers, tiny rings, micro-cells) and the planned-coverage
+    // fraction, so partial coverage is visible in the log instead of silent.
+    for (const auto& d : plan.diagnostics.drops)
+    {
+      RCLCPP_INFO(get_logger(), "PlanCoverage: %s", d.c_str());
+    }
+    for (const auto& note : plan.diagnostics.notes)
+    {
+      RCLCPP_INFO(get_logger(), "PlanCoverage: %s", note.c_str());
+    }
+    RCLCPP_INFO(get_logger(),
+                "PlanCoverage: planned coverage ~%.1f%% (%.2f/%.2f m² as op_width strips), "
+                "%zu piece(s) dropped",
+                100.0 * plan.diagnostics.planned_fraction,
+                plan.diagnostics.planned_area,
+                plan.diagnostics.field_area,
+                plan.diagnostics.drops.size());
 
     if (plan.rings.empty() && plan.swaths.empty())
     {
       result->success = false;
-      result->message = "field too small after insets (chassis_safety_inset=" +
-                        std::to_string(chassis_safety_inset) +
-                        "m, headland=" + std::to_string(default_headland_width_) + "m)";
+      result->message =
+          "field too small after insets (chassis_safety_inset=" + std::to_string(effective_inset) +
+          "m, headland=" + std::to_string(default_headland_width_) + "m)";
       RCLCPP_WARN(get_logger(),
                   "PlanCoverage: %s (field area=%.2fm²)",
                   result->message.c_str(),
@@ -434,13 +474,22 @@ void CoverageServer::planCoverage()
     {
       outer.emplace_back(p.x, p.y);
     }
+    // SAFETY: the connectors/fillets that join the (already-inset) rings+swaths
+    // must stay inside the chassis-safety-inset polygon, NOT the raw operator
+    // boundary — otherwise a turn-around loop or corner fillet near a field edge
+    // can push the spinning blade across the operator boundary while base_link
+    // stays inside (so the map_server soft-boundary monitor never fires). Bound
+    // and VERIFY against the same inset ring the discrete segments use; fall back
+    // to the raw boundary only when no inset was applied.
+    const std::vector<std::pair<double, double>>& connector_boundary =
+        plan.safe_boundary.size() >= 3 ? plan.safe_boundary : outer;
     constexpr double kConnectorTurnRadius = 0.30;  // nominal turn-around arc radius (m)
     constexpr double kConnectorStep = 0.03;  // connector densify step (m)
     // Floor on every turn-around / fillet arc — never plan a loop tighter than
     // the robot can track (read live so it's field-tunable per plan).
     const double min_turning_radius = get_parameter("min_turning_radius").as_double();
-    const auto continuous =
-        buildContinuousPath(plan, outer, kConnectorTurnRadius, min_turning_radius, kConnectorStep);
+    const auto continuous = buildContinuousPath(
+        plan, connector_boundary, kConnectorTurnRadius, min_turning_radius, kConnectorStep);
 
     result->full_path.header = header;
     double total = 0.0;
@@ -463,7 +512,11 @@ void CoverageServer::planCoverage()
         total += std::hypot(x - continuous[i - 1].first, y - continuous[i - 1].second);
       }
       result->full_path.poses.push_back(makePose(header, x, y, yaw));
-      if (outer.size() >= 3 && !pointInRing(x, y, outer))
+      // Verify against the SAME inset ring the connectors are bounded by: any
+      // pose outside it means a fallback straight connector left the safe inset
+      // (the only way the blade can approach the operator boundary), so it is the
+      // safety-relevant residual to surface — not merely outside the raw polygon.
+      if (connector_boundary.size() >= 3 && !pointInRing(x, y, connector_boundary))
       {
         ++out_of_bounds;
       }
@@ -471,10 +524,11 @@ void CoverageServer::planCoverage()
     if (out_of_bounds > 0)
     {
       // The continuous path is built from in-bounds insets + clipped connectors,
-      // so any out-of-bounds pose is a connector-geometry bug (the test guards it).
+      // so any pose outside the safety-inset ring is a connector-geometry bug
+      // (the test guards it) and means the blade may approach the boundary.
       RCLCPP_ERROR(get_logger(),
-                   "PlanCoverage: %zu/%zu continuous-path poses outside the boundary — "
-                   "connector geometry bug",
+                   "PlanCoverage: %zu/%zu continuous-path poses outside the chassis-safety "
+                   "inset — connector geometry bug (blade may approach the operator boundary)",
                    out_of_bounds,
                    result->full_path.poses.size());
     }

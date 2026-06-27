@@ -10,6 +10,16 @@ controller_server:
     FollowPath:
       use_collision_detection: false       # no obstacle_layer without LiDAR
 
+    # FollowCoveragePath is FTCController (from the base). Without LiDAR there is
+    # no local obstacle_layer to read, so FTC's costmap-based obstacle checking
+    # and lateral path deviation must be OFF — otherwise it queries an empty/
+    # static costmap. The PID path tracking is identical to the LiDAR variant;
+    # only these two obstacle flags differ (mirrors FollowPath.use_collision_
+    # detection above). collision_monitor + firmware remain the safety net.
+    FollowCoveragePath:
+      check_obstacles: false
+      enable_obstacle_deviation: false
+
 planner_server:
   ros__parameters:
     # See controller_server for rationale — costmap_update_timeout default

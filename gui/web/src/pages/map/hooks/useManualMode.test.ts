@@ -38,7 +38,7 @@ describe('useManualMode', () => {
             await result.current.handleManualMode();
         });
         expect(mowerAction).toHaveBeenCalledWith('high_level_control', {Command: 7});
-        expect(mowerAction).toHaveBeenCalledWith('mow_enabled', {MowEnabled: 1, MowDirection: 0});
+        expect(mowerAction).toHaveBeenCalledWith('mow_enabled', {mow_enabled: 1, mow_direction: 0});
         expect(result.current.manualMode).toBe(true);
     });
 
@@ -53,7 +53,7 @@ describe('useManualMode', () => {
             await result.current.handleStopManualMode();
         });
         expect(mowerAction).toHaveBeenCalledWith('high_level_control', {Command: 2});
-        expect(mowerAction).toHaveBeenCalledWith('mow_enabled', {MowEnabled: 0, MowDirection: 0});
+        expect(mowerAction).toHaveBeenCalledWith('mow_enabled', {mow_enabled: 0, mow_direction: 0});
         expect(result.current.manualMode).toBe(false);
     });
 

@@ -1,0 +1,102 @@
+generated_at: '2026-06-23T20:41:04.208698+00:00'
+mode: ff
+profile: custom
+hardware_node: hardware_bridge
+backup_file: /ros2_ws/config/drive_tuning/drive_pid_last_backup.yaml
+cmd_topic: /cmd_vel_tuning
+cmd_vel_topic: /cmd_vel_tuning
+applied_live: true
+requested_apply: true
+profile_applied_initially: false
+initial_baseline_source: live_hardware_bridge
+distance_m: 3.0
+max_speed_mps: 0.3
+test_speed_mps: 0.3
+segment_duration_s: 5.0
+passes: 1
+odom_timeout_s: 4.0
+startup_grace_s: 3.0
+auto_turn: true
+turn_direction: right
+robot_mass_kg: 8.76
+internal_tuning_tier: lightweight
+hardware_config_path: /ros2_ws/config/mowgli_robot.yaml
+drivetrain_diagnostics:
+  wheel_radius_m: 0.04475
+  wheel_circumference_m: 0.2811725424962865
+  estimated_wheel_revolutions_per_meter: 3.5565350411596723
+  estimated_encoder_counts_per_wheel_revolution: 83.45401832854041
+  configured_ticks_per_revolution: 84.0
+  notes:
+  - Estimated gearbox ratio is unavailable because encoder counts per motor revolution
+    are not stored in the hardware configuration.
+current_params:
+  ticks_per_meter: 300.0
+  wheel_pid_kp: 30.0
+  wheel_pid_ki: 5000.0
+  wheel_pid_kd: 0.0
+  wheel_pid_integral_limit: 100.0
+  wheel_pid_pwm_per_mps: 300.0
+starting_params:
+  ticks_per_meter: 300.0
+  wheel_pid_kp: 30.0
+  wheel_pid_ki: 5000.0
+  wheel_pid_kd: 0.0
+  wheel_pid_integral_limit: 100.0
+  wheel_pid_pwm_per_mps: 300.0
+proposed_params:
+  ticks_per_meter: 296.8071405110355
+  wheel_pid_kp: 30.0
+  wheel_pid_ki: 5000.0
+  wheel_pid_kd: 0.0
+  wheel_pid_integral_limit: 100.0
+  wheel_pid_pwm_per_mps: 322.61920911616994
+status_snapshot:
+  active_emergency: false
+  latched_emergency: false
+  is_charging: false
+  mower_status: 255
+  esc_power: false
+  wheel_tick_factor: 300.0
+  last_wheel_tick_timestamp: '2026-06-23T20:41:01.047580+00:00'
+reasons:
+- 'Robot mass read from hardware configuration: 8.76 kg'
+- 'Internal tuning tier: lightweight'
+- 'Pass 1: ticks_per_meter -> 296.807 from odom/reference 2.540/2.567 m.'
+- 'Pass 1: wheel_pid_pwm_per_mps -> 322.619 from target/measured 0.300/0.279 m/s.'
+- 'Pass 1: oscillation warning recorded; keeping the feed-forward proposal because
+  calibration completed.'
+trials:
+- name: ff_pass_1_0.30mps
+  phase: feedforward
+  target_speed: 0.3
+  measured_speed_mean: 0.26876084094587166
+  measured_speed_rms: 0.2728265214402246
+  error_mean: 0.031239159054128322
+  error_rms: 0.05637203414504705
+  overshoot: 0.1292929292929293
+  settling_time: null
+  ticks_seen: 818
+  left_ticks_seen: 818
+  right_ticks_seen: 818
+  stall_detected: false
+  oscillation_detected: true
+  live_oscillation_detected: false
+  trial_quality: warning
+  integral_saturation_suspected: false
+  params_used:
+    ticks_per_meter: 300.0
+    wheel_pid_kp: 30.0
+    wheel_pid_ki: 5000.0
+    wheel_pid_kd: 0.0
+    wheel_pid_integral_limit: 100.0
+    wheel_pid_pwm_per_mps: 300.0
+  warnings:
+  - Post-trial oscillation signature detected in the recorded speed response.
+  ground_speed_mean: 0.27896665002235643
+  ground_error_mean: 0.021033349977643556
+  odom_distance_m: 2.53987144917623
+  rtk_distance_m: 2.5671937455444698
+  rtk_accepted: true
+  left_right_tick_imbalance: 0.0
+  notes: []

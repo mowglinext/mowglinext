@@ -106,6 +106,9 @@ private:
   // dead-reckoning state. Called unconditionally from OnTimer so the
   // local frame keeps streaming even before the graph initializes.
   void PublishLocalOdom();
+  // Publishes /fusion_graph/icp_odometry — the LiDAR-only (scan-match
+  // integrated) pose, for GUI comparison against the fused/GPS estimate.
+  void PublishIcpOdom();
 
   // Launch GraphManager::Save on a detached worker. No-op if a
   // previous async save is still running. `reason` is logged.
@@ -375,6 +378,11 @@ private:
   // by the latest IMU gyro sample. Position is the unmodified last
   // fusion-published value. See PoseExtrapolator for the math.
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_fast_;
+  // LiDAR-only odometry: the scan-match deltas integrated from the graph pose
+  // at the first accepted match. Relative (drifts) — published purely so the
+  // GUI can overlay/compare the ICP heading & pose against the fused/GPS
+  // estimate. NOT consumed by any control loop.
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_icp_odom_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
   // TF for odom->base_footprint (we publish map->odom; need to compose
@@ -425,6 +433,27 @@ private:
   uint64_t scans_received_ = 0;
   uint64_t scan_matches_ok_ = 0;
   uint64_t scan_matches_fail_ = 0;
+
+  // ICP-only odometry integration (see pub_icp_odom_). Seeded from the graph
+  // pose at the first node with a scan-between, then advanced ONCE PER NODE by
+  // the scan-between delta the graph consumed. last_scan_between_delta_ caches
+  // the latest accepted match (motion since the previous node); it is composed
+  // only when Tick() creates the next node. Composing per-tick over-integrates
+  // (~19 ticks/node, delta is cumulative-since-node) → the static-robot drift.
+  gtsam::Pose2 icp_pose_{};
+  bool icp_pose_seeded_ = false;
+  gtsam::Pose2 last_scan_between_delta_{};
+  bool last_scan_between_valid_ = false;
+
+  // GPS σ speed inflation: σ_eff = sqrt(σ_msg² + (coeff·v)²). The receiver
+  // covariance ignores motion-induced position error (GPS latency × speed,
+  // lever-arm sweep during motion). 0 = disabled (raw receiver σ). [seconds]
+  double gps_sigma_speed_coeff_ = 0.0;
+
+  // SAFETY: reject a fix whose computed σ_xy exceeds this (m). 0 = disabled.
+  // Guards against fusing a garbage / standalone fix; sized to NOT reject
+  // genuine RTK-Float (the ride-through depends on it). [metres]
+  double gps_max_sigma_reject_m_ = 0.0;
 
   // RTK wrong-fix detection state. F9P can re-solve carrier-phase
   // ambiguity on a different integer set after a brief signal drop,

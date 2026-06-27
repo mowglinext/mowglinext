@@ -6,6 +6,7 @@
 // catch a broken plan (empty / out-of-bounds / non-serpentine / hole-crossing)
 // in CI instead of on the robot.
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -391,6 +392,78 @@ TEST(CoveragePlanning, HeadlandPassOverride)
   EXPECT_EQ(plan.rings.size(), 3u);
 }
 
+// SAFETY FLOOR (Bug C1): the coverage server floors the planning inset at
+// robot_width/2 before calling planBoustrophedon, so a too-small configured
+// chassis_safety_inset can't let a blade cross the boundary. The floor itself
+// lives in coverage_server.cpp; here we assert the GEOMETRIC GUARANTEE it
+// provides — given the floored inset, NO planned ring point or swath endpoint
+// sits closer than robot_width/2 to the boundary. We mirror the server's floor
+// expression (max(configured, robot_width/2)) so the planner is exercised with
+// exactly the value the server would pass.
+TEST(CoveragePlanning, InsetFloorKeepsBladesInsideHalfWidth)
+{
+  constexpr double kRobotWidth = 0.40;  // 0.40 m chassis (the field excursion case)
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeadland = 0.18;
+  constexpr double kMinSwath = 0.15;
+  // The deployed-drift value that caused the 0.32-0.39 m boundary excursion:
+  // configured well below the chassis half-width.
+  constexpr double kConfiguredInset = 0.0;
+  // Server's floor: max(configured, robot_width/2).
+  const double effective_inset = std::max(kConfiguredInset, kRobotWidth * 0.5);
+  ASSERT_NEAR(effective_inset, 0.20, 1e-9) << "floor must be robot_width/2 = 0.20 m";
+
+  const auto cell = makeSquare(6.0);  // big enough to still plan after a 0.20 m inset
+  const auto plan =
+      planBoustrophedon(cell, kOpWidth, kHeadland, 0, effective_inset, -1.0, kMinSwath);
+  ASSERT_FALSE(plan.rings.empty()) << "no rings after the floored inset";
+  ASSERT_FALSE(plan.swaths.empty()) << "no swaths after the floored inset";
+
+  const auto boundary = squareRing(6.0);
+  // Densification (kDensifyStep ~0.10 m) and floating point can place a sampled
+  // ring point a few cm shy of the analytic centerline; allow a small slack but
+  // keep it well under the inset so a real breach (which would be ~0.20 m) fails.
+  constexpr double kSlack = 0.03;
+  const double min_clearance = kRobotWidth * 0.5 - kSlack;
+
+  for (const auto& loop : plan.rings)
+  {
+    for (const auto& p : loop)
+    {
+      ASSERT_TRUE(pointInRing(p.first, p.second, boundary))
+          << "ring point (" << p.first << ", " << p.second << ") is outside the boundary";
+      EXPECT_GE(distanceToRing(p.first, p.second, boundary), min_clearance)
+          << "ring point (" << p.first << ", " << p.second
+          << ") is closer than robot_width/2 to the boundary";
+    }
+  }
+  for (const auto& s : plan.swaths)
+  {
+    for (const auto& pt : {s.first, s.second})
+    {
+      ASSERT_TRUE(pointInRing(pt.first, pt.second, boundary))
+          << "swath endpoint (" << pt.first << ", " << pt.second << ") is outside the boundary";
+      EXPECT_GE(distanceToRing(pt.first, pt.second, boundary), min_clearance)
+          << "swath endpoint (" << pt.first << ", " << pt.second
+          << ") is closer than robot_width/2 to the boundary";
+    }
+  }
+}
+
+// INSTRUMENTATION (Bug A): planBoustrophedon reports a planned-coverage fraction
+// and a non-empty plan over a healthy field. The fraction is a coarse strip-area
+// estimate (visibility, not a guarantee), so we only bound it loosely.
+TEST(CoveragePlanning, DiagnosticsReportPlannedFraction)
+{
+  const auto cell = makeSquare(6.0);
+  const auto plan = planDefault(cell);
+  ASSERT_FALSE(plan.swaths.empty());
+  EXPECT_NEAR(plan.diagnostics.field_area, 36.0, 1e-6);
+  EXPECT_GT(plan.diagnostics.planned_area, 0.0);
+  // A 6 m square at 0.16 m spacing tiles densely — most of the field is planned.
+  EXPECT_GT(plan.diagnostics.planned_fraction, 0.5);
+}
+
 // pointInRing / distanceToRing handle a concave notch (kept from the previous
 // suite — the in-bounds verification depends on them).
 TEST(BoundaryClipGeometry, PointInRingHandlesConcaveNotch)
@@ -581,16 +654,26 @@ TEST(CoverageContinuousPath, RecordedArea1NoCuspInBounds)
   ASSERT_FALSE(plan.swaths.empty()) << "no swaths on the real area";
 
   const auto& boundary = recordedArea1Pts();
-  const auto path = buildContinuousPath(plan, boundary, kTurnRadius, kMinTurnRadius, kStep);
+  // SAFETY: the server bounds the connectors/fillets by the chassis-safety-inset
+  // ring (plan.safe_boundary), NOT the raw operator polygon — otherwise a
+  // turn-around loop or fillet near a field edge pushes the spinning blade across
+  // the operator boundary. Mirror the server exactly so this test guards the real
+  // behaviour.
+  ASSERT_GE(plan.safe_boundary.size(), 3u)
+      << "plan.safe_boundary not populated for a deployed inset — connectors would "
+         "fall back to the raw boundary (the safety bug this guards)";
+  const auto& connector_boundary = plan.safe_boundary;
+  const auto path =
+      buildContinuousPath(plan, connector_boundary, kTurnRadius, kMinTurnRadius, kStep);
 
   ASSERT_GE(path.size(), 100u) << "continuous path is implausibly short";
 
-  // Diagnostics.
+  // Diagnostics: count poses outside the INSET ring (the safety-relevant bound).
   const std::size_t inv = firstInversion(path);
   std::size_t oob = 0;
   for (const auto& p : path)
   {
-    if (!pointInRing(p.first, p.second, boundary))
+    if (!pointInRing(p.first, p.second, connector_boundary))
     {
       ++oob;
     }
@@ -617,8 +700,26 @@ TEST(CoverageContinuousPath, RecordedArea1NoCuspInBounds)
   const double worst_turn = maxTurnDeg(path);
   EXPECT_LT(worst_turn, 120.0) << "path has a " << worst_turn
                                << "° turn — a near-reversal cusp MPPI will dither at";
-  // (2) Every point inside the recorded boundary.
-  EXPECT_EQ(oob, 0u) << oob << "/" << path.size() << " continuous-path points are out of bounds";
+  // (2) Every point inside the chassis-safety-inset ring AND no closer than
+  // (inset − one densify step) to the RAW operator boundary, so the spinning
+  // blade (which extends ~tool_width/2 past base_link) can never cross it even
+  // on the turn-around connectors/fillets. This is the safety guarantee the
+  // inset-bounded connectors restore; with the old raw-boundary bound a fillet
+  // could sit right on the edge.
+  EXPECT_EQ(oob, 0u) << oob << "/" << path.size()
+                     << " continuous-path points are outside the safety-inset ring";
+  double min_clearance = std::numeric_limits<double>::max();
+  for (const auto& p : path)
+  {
+    min_clearance = std::min(min_clearance, distanceToRing(p.first, p.second, boundary));
+  }
+  std::cout << "min clearance to raw operator boundary=" << min_clearance << " m (inset " << kInset
+            << ")\n"
+            << std::flush;
+  EXPECT_GE(min_clearance, kInset - kStep - 1e-6)
+      << "a continuous-path pose sits " << min_clearance
+      << " m from the raw operator boundary — closer than the chassis-safety inset (" << kInset
+      << " m); a connector/fillet can push the blade across the boundary";
   // (3) NO sustained arc tighter than the robot's min turning radius. A turn
   // shrunk below kMinTurnRadius to fit in-bounds is untrackable (wz≈vx/r), so
   // the robot loops/hesitates — the exact failure this floor prevents. A lone
@@ -712,4 +813,40 @@ TEST(RingDedup, DedupedDegenerateRingStillPlans)
   const auto plan = planDefault(cell);
   EXPECT_FALSE(plan.rings.empty() && plan.swaths.empty())
       << "deduped degenerate ring produced an empty plan";
+}
+
+// LARGE-FIELD AUTO-ANGLE FALLBACK: f2c::sg::BruteForce::generateBestSwaths
+// sweeps 180 candidate angles and regenerates the full swath set at each, so on
+// a big field it blows past the action/BT planning timeouts and the coverage
+// action fails outright ("huge maps don't plan"). planBoustrophedon must instead
+// fall back to the boundary's longest-edge angle above kAutoAngleMaxAreaM2,
+// recording a diagnostics note, while still producing a full plan.
+TEST(CoveragePlanning, LargeFieldUsesLongestEdgeAngleFallback)
+{
+  const auto plan = planDefault(makeSquare(30.0));  // 900 m² > 400 m² gate
+  EXPECT_FALSE(plan.swaths.empty()) << "large field produced no swaths";
+  ASSERT_FALSE(plan.diagnostics.notes.empty())
+      << "expected an auto-angle fallback note on a large field";
+  EXPECT_NE(plan.diagnostics.notes[0].find("auto-angle"), std::string::npos);
+}
+
+// A field under the threshold keeps the exhaustive best-angle search (no note),
+// so small lawns get the optimum swath orientation as before.
+TEST(CoveragePlanning, SmallFieldKeepsExhaustiveAngleSearch)
+{
+  const auto plan = planDefault(makeSquare(18.0));  // 324 m² < 400 m² gate
+  EXPECT_FALSE(plan.swaths.empty());
+  EXPECT_TRUE(plan.diagnostics.notes.empty())
+      << "small field should not trigger the large-field angle fallback";
+}
+
+// The fallback is deterministic (longest-edge angle of a fixed polygon), so the
+// swath-index resume contract (CLAUDE.md invariant #7) still holds across
+// re-plans of a large field.
+TEST(CoveragePlanning, LargeFieldFallbackIsDeterministic)
+{
+  const auto a = planDefault(makeSquare(30.0));
+  const auto b = planDefault(makeSquare(30.0));
+  ASSERT_EQ(a.swaths.size(), b.swaths.size());
+  EXPECT_NEAR(a.swath_angle_rad, b.swath_angle_rad, 1e-9);
 }

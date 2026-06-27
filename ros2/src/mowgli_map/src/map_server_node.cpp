@@ -424,72 +424,7 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
     pose_msg.pose = docking_pose_;
     docking_pose_pub_->publish(pose_msg);
 
-    // Build the three coupled dock polygons. All three rectangles live in
-    // the dock's local frame (origin at docking_pose_, +X forward) and are
-    // rotated into the map frame using d_yaw.
-    //
-    //   * body     — physical dock structure: from -dock_body_length_m
-    //                (rear of body, behind dock origin) to 0 along +X,
-    //                ±dock_body_width_m/2 along Y. Marks OBSTACLE_PERMANENT.
-    //   * corridor — approach lane: from -approach_back to
-    //                -dock_body_length_m along +X (i.e. immediately behind
-    //                the body), ±half_width along Y. Marks DOCKING_AREA,
-    //                carved out of keepout mask.
-    //   * exclusion — union (-approach_back to 0, ±max half-widths). Kept
-    //                 for visualization / GUI overlay only.
-    //
-    // Convention: dock_pose_ is the *docked-robot* pose (front of robot
-    // touching the dock). +X in dock-local frame points AWAY from the dock
-    // (the staging direction); the body sits in -X, behind the docked
-    // robot's reference point. The corridor extends further in -X.
-    const double body_len = dock_body_length_m_;
-    const double body_half_width = 0.5 * dock_body_width_m_;
-    const double corridor_back = dock_approach_corridor_length_m_;
-    const double corridor_half_width = dock_approach_corridor_half_width_m_;
-    const double d_x = docking_pose_.position.x;
-    const double d_y = docking_pose_.position.y;
-    const double d_yaw = 2.0 * std::atan2(docking_pose_.orientation.z, docking_pose_.orientation.w);
-    const double cy = std::cos(d_yaw);
-    const double sy = std::sin(d_yaw);
-
-    auto append_rect =
-        [&](geometry_msgs::msg::Polygon& poly, double x_min, double x_max, double y_half)
-    {
-      const double corners[][2] = {
-          {x_max, y_half},
-          {x_max, -y_half},
-          {x_min, -y_half},
-          {x_min, y_half},
-      };
-      for (const auto& c : corners)
-      {
-        geometry_msgs::msg::Point32 pt;
-        pt.x = static_cast<float>(d_x + cy * c[0] - sy * c[1]);
-        pt.y = static_cast<float>(d_y + sy * c[0] + cy * c[1]);
-        pt.z = 0.0F;
-        poly.points.push_back(pt);
-      }
-      poly.points.push_back(poly.points.front());
-    };
-
-    append_rect(dock_body_polygon_, -body_len, 0.0, body_half_width);
-    append_rect(dock_corridor_polygon_, -corridor_back, -body_len, corridor_half_width);
-    append_rect(dock_exclusion_polygon_,
-                -corridor_back,
-                0.0,
-                std::max(body_half_width, corridor_half_width));
-    has_dock_exclusion_ = true;
-    RCLCPP_INFO(get_logger(),
-                "Dock polygons: pose=(%.2f, %.2f) yaw=%.2f rad — "
-                "body %.2fm × %.2fm (OBSTACLE_PERMANENT), "
-                "corridor %.2fm × %.2fm (DOCKING_AREA, keepout carve-out)",
-                d_x,
-                d_y,
-                d_yaw,
-                body_len,
-                2.0 * body_half_width,
-                corridor_back - body_len,
-                2.0 * corridor_half_width);
+    rebuild_dock_polygons();
   }
 
   // ── Publish timer ────────────────────────────────────────────────────────
@@ -503,6 +438,81 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
                                      });
 
   RCLCPP_INFO(get_logger(), "MapServerNode ready (%zu areas loaded).", areas_.size());
+}
+
+void MapServerNode::rebuild_dock_polygons()
+{
+  // (Re)build the three coupled dock polygons. All three rectangles live in
+  // the dock's local frame (origin at docking_pose_, +X forward) and are
+  // rotated into the map frame using d_yaw.
+  //
+  //   * body     — physical dock structure: from -dock_body_length_m
+  //                (rear of body, behind dock origin) to 0 along +X,
+  //                ±dock_body_width_m/2 along Y. Marks OBSTACLE_PERMANENT.
+  //   * corridor — approach lane: from -approach_back to -dock_body_length_m
+  //                along +X (immediately behind the body), ±half_width along
+  //                Y. Marks DOCKING_AREA, carved out of keepout mask.
+  //   * exclusion — union (-approach_back to 0, ±max half-widths). Kept for
+  //                 visualization / GUI overlay only.
+  //
+  // Convention: dock_pose_ is the *docked-robot* pose (front of robot touching
+  // the dock). +X in dock-local frame points AWAY from the dock (the staging
+  // direction); the body sits in -X, behind the docked robot's reference
+  // point. The corridor extends further in -X.
+  //
+  // Clear first so a re-placement (on_set_docking_point) replaces, not appends.
+  dock_body_polygon_.points.clear();
+  dock_corridor_polygon_.points.clear();
+  dock_exclusion_polygon_.points.clear();
+
+  const double body_len = dock_body_length_m_;
+  const double body_half_width = 0.5 * dock_body_width_m_;
+  const double corridor_back = dock_approach_corridor_length_m_;
+  const double corridor_half_width = dock_approach_corridor_half_width_m_;
+  const double d_x = docking_pose_.position.x;
+  const double d_y = docking_pose_.position.y;
+  const double d_yaw = 2.0 * std::atan2(docking_pose_.orientation.z, docking_pose_.orientation.w);
+  const double cy = std::cos(d_yaw);
+  const double sy = std::sin(d_yaw);
+
+  auto append_rect =
+      [&](geometry_msgs::msg::Polygon& poly, double x_min, double x_max, double y_half)
+  {
+    const double corners[][2] = {
+        {x_max, y_half},
+        {x_max, -y_half},
+        {x_min, -y_half},
+        {x_min, y_half},
+    };
+    for (const auto& c : corners)
+    {
+      geometry_msgs::msg::Point32 pt;
+      pt.x = static_cast<float>(d_x + cy * c[0] - sy * c[1]);
+      pt.y = static_cast<float>(d_y + sy * c[0] + cy * c[1]);
+      pt.z = 0.0F;
+      poly.points.push_back(pt);
+    }
+    poly.points.push_back(poly.points.front());
+  };
+
+  append_rect(dock_body_polygon_, -body_len, 0.0, body_half_width);
+  append_rect(dock_corridor_polygon_, -corridor_back, -body_len, corridor_half_width);
+  append_rect(dock_exclusion_polygon_,
+              -corridor_back,
+              0.0,
+              std::max(body_half_width, corridor_half_width));
+  has_dock_exclusion_ = true;
+  RCLCPP_INFO(get_logger(),
+              "Dock polygons: pose=(%.2f, %.2f) yaw=%.2f rad — "
+              "body %.2fm × %.2fm (OBSTACLE_PERMANENT), "
+              "corridor %.2fm × %.2fm (DOCKING_AREA, keepout carve-out)",
+              d_x,
+              d_y,
+              d_yaw,
+              body_len,
+              2.0 * body_half_width,
+              corridor_back - body_len,
+              2.0 * corridor_half_width);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

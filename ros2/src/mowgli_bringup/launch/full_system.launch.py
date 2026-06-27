@@ -235,8 +235,8 @@ def generate_launch_description() -> LaunchDescription:
                 bool(robot_params.get("idle_nav2_suspend", False))},
             # transit_speed / mowing_speed flow into SetNavMode, which sets
             # them on the live controllers (FollowPath.desired_linear_vel for
-            # the RPP transit controller, FollowCoveragePath.vx_max for the
-            # MPPI coverage controller) per nav mode. Without these the BT used
+            # the RPP transit controller, FollowCoveragePath.speed_fast for the
+            # FTC coverage controller) per nav mode. Without these the BT used
             # hardcoded 0.5/0.25 and the configured speeds never took effect.
             {"transit_speed": float(robot_params.get("transit_speed", 0.25))},
             {"mowing_speed": float(robot_params.get("mowing_speed", 0.2))},
@@ -313,6 +313,14 @@ def generate_launch_description() -> LaunchDescription:
                 robot_params.get("lethal_outside_areas", True))},
             {"enforce_boundary_margin_m": float(
                 robot_params.get("enforce_boundary_margin_m", 0.25))},
+            # tool_width is the SINGLE source of truth (mowgli_robot.yaml) for
+            # both the mark_cells_mowed stamp radius / sliver detection here AND
+            # coverage_server.operation_width (injected by navigation.launch.py).
+            # Inject it AFTER map_params so the operator value overrides the
+            # static map_server.yaml default — otherwise an operator who changes
+            # tool_width moves the F2C swath spacing while this stamp radius
+            # stays frozen, re-opening the un-mowed-strip / under-coverage gap.
+            {"tool_width": float(robot_params.get("tool_width", 0.18))},
         ],
     )
 

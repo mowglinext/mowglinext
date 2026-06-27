@@ -157,6 +157,24 @@ static uint8_t hl_gps_quality = 0;
 static volatile uint32_t last_heartbeat_tick = 0;
 #define HEARTBEAT_TIMEOUT_MS 2000u
 
+/* True when the CURRENTLY latched emergency was raised SOLELY by the heartbeat
+ * watchdog (host comms lost), with no physical safety sensor asserted. A pure
+ * comms-loss latch is a fail-safe stop, not a physical hazard, so it is
+ * auto-cleared when heartbeats resume (and no sensor is asserted) instead of
+ * stranding the robot until a manual play-button / GUI reset. A physical
+ * trigger (e-stop button, lift, tilt) clears this flag so its latch still
+ * requires an explicit operator release. The blade stays cut throughout — it
+ * only re-arms on an explicit CMD_BLADE after the emergency clears. */
+static volatile bool heartbeat_only_latch = false;
+
+/* Any physical safety sensor currently asserted? Firmware is the sole safety
+ * authority; this gates every automatic emergency clear. */
+static inline bool any_physical_emergency(void) {
+  return Emergency_StopButtonYellow() || Emergency_StopButtonWhite() ||
+         Emergency_WheelLiftBlue() || Emergency_WheelLiftRed() ||
+         Emergency_Tilt() || Emergency_LowZAccelerometer();
+}
+
 /* ---------------------------------------------------------------------------
  * Reboot flag
  * ---------------------------------------------------------------------------*/
@@ -193,16 +211,33 @@ static void on_heartbeat(const uint8_t *data, size_t len) {
 
   last_heartbeat_tick = HAL_GetTick();
 
+  /* Comms restored. If the active emergency was a PURE comms-loss watchdog latch
+   * (no physical trigger) and no sensor is asserted now, auto-clear it so a brief
+   * host/USB stall doesn't strand the robot until a manual reset. A physical
+   * trigger that appeared in the meantime asserts a sensor (handled below) and
+   * clears heartbeat_only_latch, so this never auto-clears a physical e-stop. */
+  if (heartbeat_only_latch && Emergency_State()) {
+    if (!any_physical_emergency()) {
+      Emergency_SetState(0);
+      heartbeat_only_latch = false;
+      debug_printf("heartbeat resumed: comms-loss emergency auto-cleared\r\n");
+    } else {
+      /* A physical sensor is now asserted — this is no longer a pure comms
+       * latch; require an explicit operator release. */
+      heartbeat_only_latch = false;
+    }
+  }
+
   if (pkt->emergency_requested) {
+    heartbeat_only_latch = false;  /* host-commanded e-stop is not comms-loss */
     Emergency_SetState(1);
   }
   if (pkt->emergency_release_requested) {
     /* Only clear emergency if no physical sensor is still asserted.
      * Firmware is the sole safety authority — never bypass hardware. */
-    if (!Emergency_StopButtonYellow() && !Emergency_StopButtonWhite() &&
-        !Emergency_WheelLiftBlue() && !Emergency_WheelLiftRed() &&
-        !Emergency_Tilt() && !Emergency_LowZAccelerometer()) {
+    if (!any_physical_emergency()) {
       Emergency_SetState(0);
+      heartbeat_only_latch = false;
     } else {
       debug_printf(
           "emergency release rejected: physical sensor still active\r\n");
@@ -382,6 +417,26 @@ static void on_reboot(const uint8_t *data, size_t len) {
     debug_printf("reboot requested by host\r\n");
     reboot_flag = true;
   }
+}
+
+/* Host -> Firmware config/version request. Replies with this firmware's
+ * wire-protocol version (the compatibility key the host checks) and its
+ * human-readable semver, so the ROS 2 image can confirm it is talking to a
+ * compatible firmware and warn the operator to reflash on mismatch. Firmware
+ * older than this handshake never registers this handler, so it simply never
+ * replies — which the host reads as "incompatible firmware". */
+static void on_config_req(const uint8_t *data, size_t len) {
+  (void)data;
+  if (len < sizeof(pkt_config_req_t) - 2u) {
+    return;
+  }
+  pkt_config_rsp_t rsp;
+  rsp.type = PKT_ID_CONFIG_RSP;
+  rsp.protocol_version = MOWGLI_PROTOCOL_VERSION;
+  rsp.fw_version_major = MOWGLI_FW_VERSION_MAJOR;
+  rsp.fw_version_minor = MOWGLI_FW_VERSION_MINOR;
+  rsp.fw_version_patch = MOWGLI_FW_VERSION_PATCH;
+  mowgli_comms_send(&rsp, sizeof(rsp));
 }
 
 /* on_hl_state blade LED feedback (moved out of on_hl_state for clarity) */
@@ -586,9 +641,17 @@ extern "C" void motors_handler() {
     }
 
     // Heartbeat watchdog: if no heartbeat for HEARTBEAT_TIMEOUT_MS, emergency
-    // stop
+    // stop. Tag a PURE comms-loss latch (no physical sensor asserted) so it can
+    // be auto-cleared when heartbeats resume (on_heartbeat), instead of
+    // stranding the robot. If a physical sensor is asserted, leave the flag
+    // cleared so the latch needs an explicit operator release.
     if (snap_heartbeat != 0 &&
         (HAL_GetTick() - snap_heartbeat) > HEARTBEAT_TIMEOUT_MS) {
+      if (any_physical_emergency()) {
+        heartbeat_only_latch = false;
+      } else if (!Emergency_State()) {
+        heartbeat_only_latch = true;
+      }
       Emergency_SetState(1);
     }
 
@@ -833,6 +896,7 @@ extern "C" void init_ROS() {
   mowgli_comms_register_handler(PKT_ID_CMD_BLADE, on_cmd_blade);
   mowgli_comms_register_handler(PKT_ID_REBOOT, on_reboot);
   mowgli_comms_register_handler(PKT_ID_SET_DRIVE_PID, on_set_drive_pid);
+  mowgli_comms_register_handler(PKT_ID_CONFIG_REQ, on_config_req);
 
   // Initialise timers
   NBT_init(&led_nbt, LED_NBT_TIME_MS);

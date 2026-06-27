@@ -20,8 +20,12 @@
 //
 // The plugin subscribes to the FTC controller's republished
 // `<plugin_name>/global_plan` topic so it always has the latest path
-// for index-tracking. Resets the max-reached index on every new path
-// (detected by size change OR header timestamp change).
+// for index-tracking. Resets the max-reached index on a new path,
+// detected by pose-count change OR the front pose moving more than 2 m.
+// header.stamp is intentionally ignored — it is unreliable when
+// controller_server forwards a stale plan and would defeat the
+// republish-tolerance that keeps the index monotonic across per-tick
+// republishes.
 
 #ifndef MOWGLI_NAV2_PLUGINS__PATH_PROGRESS_GOAL_CHECKER_HPP_
 #define MOWGLI_NAV2_PLUGINS__PATH_PROGRESS_GOAL_CHECKER_HPP_

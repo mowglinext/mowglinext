@@ -755,17 +755,20 @@ void MapServerNode::on_set_docking_point(
                   min_samples);
       return;
     }
-    double sum = 0.0;
-    double sum_sq = 0.0;
+    // Yaw is a wrapping angle in (-π, π]; a linear mean/variance blows up near
+    // ±π (a stable west-facing dock straddles the wrap point), which would
+    // always reject convergence. Use circular statistics: circular std =
+    // sqrt(-2 ln R) where R is the mean resultant length.
+    double sum_cos = 0.0;
+    double sum_sin = 0.0;
     for (const auto& [t, y] : recent_yaws_)
     {
-      sum += y;
-      sum_sq += y * y;
+      sum_cos += std::cos(y);
+      sum_sin += std::sin(y);
     }
     const double n = static_cast<double>(recent_yaws_.size());
-    const double mean = sum / n;
-    const double var = (sum_sq / n) - (mean * mean);
-    const double std_dev = std::sqrt(std::max(var, 0.0));
+    const double resultant = std::hypot(sum_cos, sum_sin) / n;
+    const double std_dev = std::sqrt(-2.0 * std::log(std::max(resultant, 1e-12)));
     if (std_dev > threshold_rad)
     {
       res->success = false;
@@ -897,6 +900,19 @@ void MapServerNode::on_set_docking_point(
                 kRuntimeRobotYaml,
                 ex.what());
   }
+
+  // Rebuild the lethal dock body + corridor carve-out so they follow the new
+  // dock pose immediately. The constructor builds these polygons only at boot
+  // (and only when a non-zero dock pose was persisted), so without this a fresh
+  // install — or any GUI re-placement — left the dock structure unmarked (or
+  // pinned to the old pose) until the node restarted, letting coverage plan a
+  // blade-on swath through the physical dock.
+  {
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    rebuild_dock_polygons();
+    masks_dirty_ = true;
+  }
+  apply_area_classifications();
 
   res->success = true;
 }

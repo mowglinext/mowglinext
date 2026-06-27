@@ -326,6 +326,9 @@ export type Status = {
   mower_esc_current?: number;
   mower_motor_temperature?: number;
   mower_motor_rpm?: number;
+  firmware_version?: string;
+  firmware_protocol_version?: number;
+  firmware_compatible?: boolean;
 };
 
 export const enum TrackedObstacleConstants {

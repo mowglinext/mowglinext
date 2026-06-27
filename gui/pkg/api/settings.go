@@ -22,12 +22,14 @@ import (
 
 // writePreservingPerms writes content to path, preserving the existing
 // file's mode and uid/gid when the file already exists. When the file
-// is being created for the first time, it is written world-writable
-// (0664) so other processes (ROS containers running as a different
-// user) can still update it. The previous behavior would silently
-// rewrite the file as owned by the GUI process with mode 0644, which
-// locked out the calibration service and the line-splice writers in
-// hardware_bridge / map_server.
+// is being created for the first time, it is written owner- and
+// group-writable (0664) so other processes (ROS containers) sharing the
+// file's group can still update it. NOTE: 0664 is NOT world-writable, so
+// the ROS-side line-splice writers (calibration service, set_docking_point,
+// drive-tuning rollback) only persist if their container shares the file's
+// gid; if the containers run with a different uid AND gid, those write-backs
+// fail with EACCES. The previous behavior would silently rewrite the file as
+// owned by the GUI process with mode 0644, which locked out those writers.
 func writePreservingPerms(path string, content []byte) error {
 	mode := os.FileMode(0664)
 	var uid, gid int = -1, -1
@@ -223,8 +225,11 @@ func extractNodeMappings(schema map[string]any) map[string]string {
 }
 
 // flattenROS2YAML reads nested ROS2 YAML (node: ros__parameters: {k: v}) and
-// returns a flat map of all parameter key-value pairs across all nodes.
-// It also duplicates datum_lat/datum_lon from mowgli node to keep them in sync.
+// returns a flat map of all parameter key-value pairs across all nodes. On a
+// key collision across nodes the last writer wins (Go map iteration order is
+// randomized, so a genuine collision with differing values resolves
+// nondeterministically); callers must ensure parameter keys are unique across
+// nodes.
 func flattenROS2YAML(yamlData map[string]any) map[string]any {
 	flat := map[string]any{}
 	for _, nodeData := range yamlData {

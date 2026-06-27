@@ -119,23 +119,27 @@ def test_followpath_uses_rotation_shim() -> None:
     )
 
 
-def test_followcoveragepath_uses_rotation_shim_mppi() -> None:
-    """Coverage is RotationShim wrapping MPPI on the CONTINUOUS full path.
+def test_followcoveragepath_uses_ftc() -> None:
+    """Coverage is FTCController (restored 2026-06-19, reverting the MPPI
+    experiment in a8fbe5fd).
 
-    RotationShim does ONE crisp in-place pivot to the path-start heading after
-    transit, then hands the whole CC-Dubins route to MPPI (it doesn't re-engage
-    at the U-turn arcs). CRITICAL: closed_loop MUST be false — closed_loop=true
-    reads ~0 odom angular velocity during the sub-deadband pivot on this chassis
-    and pins the ramp at one accel step (0.25 rad/s), so the pivot never clears
-    the firmware deadband and every coverage goal stalled. Guard both the wrap
-    and closed_loop=false against regression.
+    MPPI cut the path and swerved wide at swath U-turns/corners, and sharpening
+    corners made it weave on straights (the wz_std/wz_max tug-of-war). FTC is a
+    deterministic carrot-follower that tracks the continuous F2C route tightly,
+    pivots in place at the path start (PRE_ROTATE), and skirts obstacles by
+    lateral path deviation. The LiDAR variant must keep obstacle avoidance ON
+    (there IS a local obstacle_layer to read). Guard the plugin and the obstacle
+    flags against a silent revert to MPPI.
     """
     fcp = _controller_section(_load_params())["FollowCoveragePath"]
-    assert fcp["plugin"] == "nav2_rotation_shim_controller::RotationShimController"
-    assert fcp["primary_controller"] == "nav2_mppi_controller::MPPIController"
-    assert fcp["closed_loop"] is False, (
-        "closed_loop=true stalls the RotationShim pivot on this deadband chassis"
+    assert fcp["plugin"] == "mowgli_nav2_plugins/FTCController"
+    assert "primary_controller" not in fcp, (
+        "FTC is a standalone controller — it must NOT be wrapped in RotationShim"
     )
+    assert fcp["check_obstacles"] is True, (
+        "LiDAR variant must check obstacles (the obstacle_layer exists)"
+    )
+    assert fcp["enable_obstacle_deviation"] is True
 
 
 # ── 2026-05-08 field bug: launch override + per-site yaml + no-lidar variant
@@ -149,54 +153,107 @@ def _read_text(rel_path: str) -> str:
         return fh.read()
 
 
-def test_navigation_launch_default_coverage_tolerance_is_tight() -> None:
-    """navigation.launch.py picks the runtime coverage_xy_tolerance
-    from mowgli_robot.yaml, falling back to a hardcoded default. A
-    stale or missing mowgli_robot.yaml field then determines whether
-    mowing works. Pin the launch default <= mower_width.
+def _base_ftc_max_goal_distance_error() -> float:
+    """FTC's parking distance from nav2_params_base.yaml — the robot stops
+    translating up to this far short of the final pose."""
+    cfg = _load_yaml("nav2_params_base.yaml")
+    fcp = cfg["controller_server"]["ros__parameters"]["FollowCoveragePath"]
+    return float(fcp["max_goal_distance_error"])
+
+
+def test_navigation_launch_default_coverage_tolerance_matches_ftc_park() -> None:
+    """navigation.launch.py picks the runtime coverage_xy_tolerance from
+    mowgli_robot.yaml, falling back to a hardcoded default. FTC zeroes
+    linear.x once it leaves FOLLOWING, parking up to max_goal_distance_error
+    (0.50 m) short of the goal — so the coverage goal-checker XY gate must be
+    >= that, or the area never completes and re-mows. Pin the launch default
+    >= FTC's parking distance (the 2026-06-25 regression set it to 0.25).
     """
     src = _read_text("launch/navigation.launch.py")
     m = re.search(r"coverage_xy_tolerance\s*=\s*([\d\.]+)", src)
     assert m, "Could not find coverage_xy_tolerance default in navigation.launch.py"
     default = float(m.group(1))
-    # Per-swath DISCONTINUOUS model: the coverage slot uses PathProgressGoalChecker
-    # (fires only after >= 95% path progress), so a loose xy can't latch early —
-    # the floor was a SimpleGoalChecker-era concern. The ceiling now just guards
-    # against an absurd value; 0.25 m is the per-swath ceiling (each swath-end
-    # goal must SUCCEED so the next swath dispatches).
-    assert default <= 0.25, (
-        f"navigation.launch.py default coverage_xy_tolerance={default} m exceeds "
-        "the 0.25 m per-swath ceiling."
+    park = _base_ftc_max_goal_distance_error()
+    assert default >= park, (
+        f"navigation.launch.py default coverage_xy_tolerance={default} m is tighter "
+        f"than FTC max_goal_distance_error={park} m — the area-end goal would never "
+        "be accepted (progress timeout → full re-mow)."
     )
 
 
-def test_navigation_launch_clips_runaway_coverage_tolerance() -> None:
-    """A stale per-site mowgli_robot.yaml might still carry the legacy
-    0.5 m value. The launch script must clip — anything above ~0.15 m
-    silently regresses to the field-broken state.
+def test_navigation_launch_floors_coverage_tolerance_at_ftc_park() -> None:
+    """A stale per-site mowgli_robot.yaml might carry the old 0.25 m value.
+    The launch script must FLOOR the injected coverage_xy_tolerance at FTC's
+    max_goal_distance_error (not cap it at 0.25 — that was the regression),
+    so the goal-checker gate can never be tighter than FTC can park.
     """
     src = _read_text("launch/navigation.launch.py")
-    # Look for an explicit clip in the launch script's coverage_xy_tolerance handling.
-    assert re.search(r"coverage_xy_tolerance\s*>\s*0\.\d+", src), (
-        "Expected a clip on coverage_xy_tolerance in navigation.launch.py "
-        "(e.g. `if coverage_xy_tolerance > 0.15: coverage_xy_tolerance = 0.15`). "
-        "Without it, a stale per-site YAML with 0.5 m re-breaks coverage."
+    # The floor: a comparison against ftc_park_dist that raises the injected
+    # tolerance up to it. The injected value is held in a local (cov_xy_tol) —
+    # NOT the enclosing coverage_xy_tolerance, which must not be rebound inside
+    # the nested _inject fn or it becomes function-local and the earlier read
+    # raises UnboundLocalError (the 2026-06-26 launch crash). Match the floor
+    # by its effect (`< ftc_park_dist` … `= ftc_park_dist`), name-agnostic.
+    assert re.search(r"<\s*ftc_park_dist", src) and re.search(r"=\s*ftc_park_dist", src), (
+        "Expected a floor on the injected coverage tolerance in navigation.launch.py "
+        "tied to FTC's max_goal_distance_error (e.g. `if cov_xy_tol < ftc_park_dist: "
+        "cov_xy_tol = ftc_park_dist`). Without it, a stale per-site YAML with 0.25 m "
+        "re-breaks coverage completion."
     )
 
 
-def test_mowgli_robot_yaml_default_coverage_tolerance_is_tight() -> None:
+def test_mowgli_robot_yaml_default_coverage_tolerance_matches_ftc_park() -> None:
     """The shipped mowgli_robot.yaml is the template per-site config gets
-    seeded from. If the shipped value is loose, every fresh install
-    inherits the bug.
+    seeded from. If the shipped value is tighter than FTC's parking distance,
+    every fresh install inherits the area-end stall.
     """
     here = os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(here, "..", "config", "mowgli_robot.yaml")
     with open(path, "r", encoding="utf-8") as fh:
         cfg = yaml.safe_load(fh)
     tol = cfg["mowgli"]["ros__parameters"]["coverage_xy_tolerance"]
-    assert tol <= 0.25, (
-        f"mowgli_robot.yaml ships coverage_xy_tolerance={tol} m exceeds the 0.25 m "
-        "per-swath ceiling (progress-gated goal checker makes a loose xy safe)."
+    park = _base_ftc_max_goal_distance_error()
+    assert tol >= park, (
+        f"mowgli_robot.yaml ships coverage_xy_tolerance={tol} m, tighter than FTC "
+        f"max_goal_distance_error={park} m — the area never completes and re-mows."
+    )
+
+
+def test_base_ftc_clamp_admits_speed_fast() -> None:
+    """FTC hard-clamps its output to ±max_cmd_vel_speed, so a max_cmd_vel_speed
+    below speed_fast silently caps the mow speed. The shipped base.yaml must keep
+    the clamp >= the carrot speed."""
+    cfg = _load_yaml("nav2_params_base.yaml")
+    fcp = cfg["controller_server"]["ros__parameters"]["FollowCoveragePath"]
+    assert float(fcp["max_cmd_vel_speed"]) >= float(fcp["speed_fast"]), (
+        f"base.yaml FTC max_cmd_vel_speed={fcp['max_cmd_vel_speed']} < "
+        f"speed_fast={fcp['speed_fast']} — the mow speed is silently capped."
+    )
+
+
+def test_navigation_launch_raises_ftc_clamp_with_mowing_speed() -> None:
+    """When the launch overrides speed_fast with the operator's mowing_speed it
+    must also raise max_cmd_vel_speed, or a mowing_speed above 0.30 is silently
+    clamped by FTC."""
+    src = _read_text("launch/navigation.launch.py")
+    assert re.search(r"max_cmd_vel_speed\W+\W*=\W*mowing_speed", src) or re.search(
+        r"fcp\[.max_cmd_vel_speed.\]\s*=\s*mowing_speed", src), (
+        "navigation.launch.py overrides speed_fast=mowing_speed but does not raise "
+        "FollowCoveragePath.max_cmd_vel_speed — a mowing_speed > 0.30 is silently "
+        "capped by FTC's output clamp."
+    )
+
+
+def test_base_coverage_goal_checker_xy_ge_ftc_park() -> None:
+    """The static base.yaml relationship that the launch floor preserves:
+    coverage_goal_checker.xy_goal_tolerance must be >= FTC's
+    max_goal_distance_error so a parked FTC can satisfy the goal."""
+    cfg = _load_yaml("nav2_params_base.yaml")
+    gc = cfg["controller_server"]["ros__parameters"]["coverage_goal_checker"]
+    park = _base_ftc_max_goal_distance_error()
+    assert float(gc["xy_goal_tolerance"]) >= park, (
+        f"base.yaml coverage_goal_checker.xy_goal_tolerance={gc['xy_goal_tolerance']} "
+        f"< FTC max_goal_distance_error={park} — area-end stall."
     )
 
 
@@ -220,31 +277,37 @@ def _load_no_lidar_params() -> dict:
                        _load_yaml("nav2_params_no_lidar.yaml"))
 
 
-def test_no_lidar_followcoveragepath_uses_rotation_shim_mppi() -> None:
-    """The GPS-only variant must run the SAME coverage controller as the LiDAR
-    variant (RotationShim+MPPI, closed_loop=false). Pins it so the two can't
-    diverge again.
+def test_no_lidar_followcoveragepath_uses_ftc_without_obstacle_checks() -> None:
+    """The GPS-only variant runs the SAME FTC controller as the LiDAR variant,
+    but with obstacle checking/deviation OFF — there is no local obstacle_layer
+    to read without LiDAR, so FTC would query an empty/static costmap. Pin both.
     """
     fcp = _controller_section(_load_no_lidar_params())["FollowCoveragePath"]
-    assert fcp["plugin"] == "nav2_rotation_shim_controller::RotationShimController"
-    assert fcp["primary_controller"] == "nav2_mppi_controller::MPPIController"
-    assert fcp["closed_loop"] is False
+    assert fcp["plugin"] == "mowgli_nav2_plugins/FTCController"
+    assert fcp["check_obstacles"] is False, (
+        "no-LiDAR variant must NOT check obstacles (no obstacle_layer)"
+    )
+    assert fcp["enable_obstacle_deviation"] is False
 
 
 def test_coverage_controller_aligned_across_variants() -> None:
-    """FollowCoveragePath MUST be value-for-value identical between the LiDAR
-    and no-LiDAR configs (CLAUDE.md single-source rule). MPPI's CostCritic is
-    harmless on the no-LiDAR empty costmap, so there is no reason to diverge —
-    and a divergence is exactly the bug class that left no_lidar on FTC. Guards
-    every tuning change touching one file from forgetting the other.
+    """FollowCoveragePath's tracking config (plugin + PID + speeds) MUST be
+    identical between the LiDAR and no-LiDAR configs — only the obstacle flags
+    (check_obstacles, enable_obstacle_deviation) legitimately differ, because the
+    no-LiDAR variant has no obstacle_layer. Guards every PID/speed tuning change
+    touching one file from forgetting the other (the bug class that once left
+    no_lidar on a different controller).
     """
-    lidar = _controller_section(_load_params())["FollowCoveragePath"]
-    no_lidar = _controller_section(_load_no_lidar_params())["FollowCoveragePath"]
+    lidar = dict(_controller_section(_load_params())["FollowCoveragePath"])
+    no_lidar = dict(_controller_section(_load_no_lidar_params())["FollowCoveragePath"])
+    obstacle_flags = ("check_obstacles", "enable_obstacle_deviation")
+    for k in obstacle_flags:
+        lidar.pop(k, None)
+        no_lidar.pop(k, None)
     assert lidar == no_lidar, (
-        "FollowCoveragePath differs between the merged LiDAR and no-LiDAR "
-        "configs — it must come entirely from nav2_params_base.yaml so the two "
-        "stay in lockstep (the transit FollowPath block may differ for "
-        "use_collision_detection, but the coverage controller must not)."
+        "FollowCoveragePath tracking config differs between the merged LiDAR and "
+        "no-LiDAR configs beyond the obstacle flags — the PID/speed params must "
+        "come entirely from nav2_params_base.yaml so the two stay in lockstep."
     )
 
 
@@ -367,22 +430,25 @@ def test_overlays_select_disjoint_costmap_layers() -> None:
                 )
 
 
-def test_no_ftc_controller_anywhere() -> None:
-    """FTC is retired as a CONTROLLER (the user dropped it): no controller slot —
-    directly or as a RotationShim primary_controller — may be FTCController, and
-    no leftover disabled `_FollowCoveragePath_FTC*` block may linger in the merged
-    config. (Historical *comments* mentioning FTC are fine — they explain why it
-    was abandoned; this guards the live wiring, in both variants.)"""
+def test_coverage_is_ftc_transit_is_not() -> None:
+    """Wiring guard (restored 2026-06-19): the COVERAGE slot (FollowCoveragePath)
+    MUST be FTCController, and the TRANSIT slot (FollowPath) MUST NOT be — transit
+    stays RotationShim+RPP. FTC is a standalone controller, so it is never a
+    RotationShim primary_controller. Guards both variants against a silent swap of
+    the coverage controller back to MPPI or onto the transit slot."""
     for loader in (_load_params, _load_no_lidar_params):
         cs = loader()["controller_server"]["ros__parameters"]
-        assert not any(k.startswith("_FollowCoveragePath_FTC") for k in cs), (
-            "leftover disabled FTC block in controller_server"
+        assert cs["FollowCoveragePath"].get("plugin") == "mowgli_nav2_plugins/FTCController", (
+            "FollowCoveragePath must be FTCController"
         )
-        for slot in cs["controller_plugins"]:
-            plug = cs[slot].get("plugin", "")
-            prim = cs[slot].get("primary_controller", "")
-            assert "FTCController" not in plug, f"{slot}.plugin is FTCController"
-            assert "FTCController" not in prim, f"{slot}.primary_controller is FTCController"
+        assert "primary_controller" not in cs["FollowCoveragePath"], (
+            "FTC is standalone — FollowCoveragePath must not wrap a primary_controller"
+        )
+        fp = cs["FollowPath"]
+        assert "FTCController" not in fp.get("plugin", ""), "FollowPath (transit) must not be FTC"
+        assert "FTCController" not in fp.get("primary_controller", ""), (
+            "FollowPath (transit) must not wrap FTC"
+        )
 
 
 if __name__ == "__main__":

@@ -942,10 +942,11 @@ BT::NodeStatus SetNavMode::tick()
   // Apply the operator-configured speeds (from mowgli_robot.yaml via
   // behavior_tree_node → BTContext), NOT hardcoded magic numbers. We set the
   // knob each controller actually reads: FollowPath is RPP (via RotationShim),
-  // whose speed knob is desired_linear_vel; FollowCoveragePath is MPPI (via
-  // RotationShim), whose speed knob is vx_max (the old FTC speed_fast knob is
-  // gone with the controller — setting it just spammed "parameter not
-  // declared" warnings and silently dropped the operator's mowing_speed).
+  // whose speed knob is desired_linear_vel; FollowCoveragePath is FTCController,
+  // whose carrot-speed knob is speed_fast (FTC applies it live via its
+  // onParameterChange). Setting vx_max here — the old MPPI knob — would spam
+  // "parameter not declared" warnings and silently drop the operator's
+  // mowing_speed, since FTC has no vx_max.
   //
   // "degraded" (Float-quality GPS) runs at half the configured speed, floored
   // at the host min-drive clamp: hardware_bridge zeroes |vx| < kMinLinVel
@@ -958,7 +959,7 @@ BT::NodeStatus SetNavMode::tick()
 
   const std::vector<rclcpp::Parameter> params = {
       rclcpp::Parameter("FollowPath.desired_linear_vel", transit),
-      rclcpp::Parameter("FollowCoveragePath.vx_max", mowing),
+      rclcpp::Parameter("FollowCoveragePath.speed_fast", mowing),
   };
 
   param_client->set_parameters(params);

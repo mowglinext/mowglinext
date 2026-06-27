@@ -114,6 +114,19 @@ static void process_frame(const uint8_t *frame, size_t frame_len)
         return;
     }
 
+    /*
+     * Reject oversized frames BEFORE decoding. cobs_decode() takes no
+     * output-capacity argument and writes up to frame_len bytes into the
+     * 64-byte s_decode_buf; a corrupt or malicious stream of >MAX_ENC_PKT_SIZE
+     * non-zero bytes would otherwise overrun the scratch buffer into adjacent
+     * statics (the handler table). The largest legal packet is 41 bytes raw,
+     * so anything that can't fit a MAX_RAW_PKT_SIZE packet is invalid.
+     */
+    if (frame_len > MAX_ENC_PKT_SIZE) {
+        ++s_crc_error_count;
+        return;
+    }
+
     /* COBS-decode into scratch buffer. */
     size_t decoded_len = cobs_decode(frame, frame_len, s_decode_buf);
     if (decoded_len == 0u) {

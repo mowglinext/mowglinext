@@ -61,11 +61,24 @@ export function getCutterBetween(
 
 /**
  * Point-in-polygon test using a ray-casting algorithm.
- * Tests whether `currentLayerCoordinates` (a ring) lies inside `areaCoordinates`.
+ * Tests whether `currentLayerCoordinates` (an obstacle ring) lies inside
+ * `areaCoordinates` by testing the ring's centroid — NOT a single vertex.
+ * Testing only one corner (the old behaviour) mis-parented obstacles whose
+ * tested vertex fell outside a concave parent boundary.
  */
 export function inside(
     currentLayerCoordinates: Position[], areaCoordinates: Position[]
 ): boolean {
+    if (!currentLayerCoordinates || currentLayerCoordinates.length === 0) return false;
+    // Representative interior point of the obstacle ring (its centroid).
+    let cx = 0, cy = 0;
+    for (const p of currentLayerCoordinates) {
+        cx += p[0];
+        cy += p[1];
+    }
+    cx /= currentLayerCoordinates.length;
+    cy /= currentLayerCoordinates.length;
+
     let isInside = false;
     let j = areaCoordinates.length - 1;
     for (let i = 0; i < areaCoordinates.length; i++) {
@@ -75,9 +88,8 @@ export function inside(
         const yj = areaCoordinates[j][1];
 
         const intersect =
-            (yi > currentLayerCoordinates[1][1]) !== (yj > currentLayerCoordinates[1][1]) &&
-            currentLayerCoordinates[1][0] <
-                ((xj - xi) * (currentLayerCoordinates[1][1] - yi)) / (yj - yi) + xi;
+            (yi > cy) !== (yj > cy) &&
+            cx < ((xj - xi) * (cy - yi)) / (yj - yi) + xi;
         if (intersect) isInside = !isInside;
         j = i;
     }

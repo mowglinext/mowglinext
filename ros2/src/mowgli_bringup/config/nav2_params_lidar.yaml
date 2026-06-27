@@ -41,9 +41,11 @@ global_costmap:
           # the LIDAR mount yaw, so the planner only sees real obstacles.
           # The height band is kept as a cheap belt-and-suspenders for the
           # level case. NOTE: this does NOT reduce collision safety —
-          # collision_monitor reads /scan_costmap in 2D (height-agnostic)
-          # and still stops on any real return; min_obstacle_height only
-          # governs what the PLANNER routes around.
+          # collision_monitor reads /scan_collision (self-return-blanked,
+          # NOT ground-filtered) in 2D (height-agnostic) and still stops on
+          # any real return, including obstacles the ground filter would
+          # strip on a slope; min_obstacle_height only governs what the
+          # PLANNER routes around.
           min_obstacle_height: 0.12
           max_obstacle_height: 1.5
           clearing: true
@@ -104,9 +106,10 @@ local_costmap:
           # to make progress"). The real 0.22 m scan plane stays well
           # inside [0.12, 1.5] so genuine obstacles are still marked.
           # NOTE: this does NOT reduce collision safety — collision_monitor
-          # polls raw /scan in 2D (height-agnostic) and still stops the
-          # robot on any real return; min_obstacle_height only governs what
-          # the PLANNER routes around.
+          # polls /scan_collision (self-return-blanked, NOT ground-filtered)
+          # in 2D (height-agnostic) and still stops the robot on any real
+          # return; min_obstacle_height only governs what the PLANNER routes
+          # around.
           min_obstacle_height: 0.12
           max_obstacle_height: 1.5
           clearing: true
@@ -172,11 +175,16 @@ collision_monitor:
     observation_sources: ["scan"]
     scan:
       type: "scan"
-      # Read the FILTERED scan (chassis self-returns blanked,
-      # dock structure blanked while charging) so collision_monitor
-      # never sees the robot's own chassis as an obstacle. The raw
-      # /scan is still available for slam / debugging.
-      topic: /scan_costmap
+      # Read the self-return-blanked /scan_collision stream (chassis
+      # self-returns + dock-while-charging blanked) but WITHOUT the
+      # gravity ground filter that /scan_costmap carries. The ground
+      # filter can mis-classify a real vertical obstacle as ground on a
+      # slope and strip it — acceptable for the costmap obstacle_layer
+      # (MPPI plans around what it sees) but it MUST NOT defeat this
+      # near-field hard stop. /scan_collision keeps every near return so
+      # PolygonStop/PolygonSlow react, while still never seeing the
+      # robot's own chassis or the dock. Raw /scan stays for slam/debug.
+      topic: /scan_collision
       # Disable the height filter (-1.0 / 5.0). The previous setting
       # (min_height: 0.20) was a no-op for a 2D LiDAR — every scan
       # point lands at exactly lidar_z in base frame, so the filter

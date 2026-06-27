@@ -284,6 +284,13 @@ private:
   /// Reapply area classifications to the map grid (called after loading areas).
   void apply_area_classifications();
 
+  /// (Re)build the three coupled dock polygons (body / corridor / exclusion)
+  /// from the current docking_pose_ and set has_dock_exclusion_. Clears the
+  /// polygons first so it is safe to call repeatedly. Called from the
+  /// constructor AND on_set_docking_point so the lethal dock body + corridor
+  /// carve-out follow a live dock re-placement without a node restart.
+  void rebuild_dock_polygons();
+
   // ── Area entry ────────────────────────────────────────────────────────────
 
   /// A named area (mowing or navigation) with optional interior obstacles.

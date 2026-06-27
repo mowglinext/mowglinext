@@ -8,7 +8,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
+#include <string>
 
 namespace mowgli_coverage
 {
@@ -17,6 +19,62 @@ namespace
 {
 
 constexpr double kDensifyStep = 0.10;  // m between ring polyline points
+
+// Format a "dropped <what> <val><cmp><thresh>" diagnostics line without pulling
+// in <sstream>/<iomanip>. Values are short distances/areas, so 4 decimals is
+// plenty of resolution for a log line.
+std::string fmtDrop(const char* what, double value, const char* cmp, double thresh)
+{
+  char buf[128];
+  std::snprintf(buf, sizeof(buf), "dropped %s%.4f%s%.4f", what, value, cmp, thresh);
+  return std::string(buf);
+}
+
+// AUTO swath-angle field-size gate. f2c::sg::BruteForce::generateBestSwaths
+// sweeps 180 candidate angles (1° step) and regenerates the full swath set at
+// each, so its cost scales ~linearly with field area and explodes on large
+// fields — a 100×100 m field takes ~24 s, far past the action (15 s) and BT
+// (12 s) planning timeouts, so the coverage action fails outright. Above this
+// area we skip the exhaustive search and use the boundary's longest-edge
+// orientation (the angle the search almost always converges to on a rectangular
+// lawn anyway — swaths along the long side minimise turns), which is ~3 orders
+// of magnitude cheaper and equally deterministic across re-plans.
+//
+// The threshold is deliberately conservative: the exhaustive search measures
+// ~1.7 s at 400 m² on an x86 dev host, and the target ARM SBC is ~5× slower, so
+// even a ~400 m² field is ~8 s of search there — already close to the 12 s BT
+// timeout. Keeping the gate at 400 m² guarantees AUTO planning never times out
+// on hardware; larger lawns simply use the (near-optimal) longest-edge angle.
+constexpr double kAutoAngleMaxAreaM2 = 400.0;  // ~20 × 20 m
+
+// Orientation (radians) of the longest edge of a cell's outer ring. A cheap,
+// deterministic AUTO swath angle for large fields. Falls back to 0 (sweep along
+// +x) for a degenerate ring.
+double longestEdgeAngle(const f2c::types::Cell& cell)
+{
+  if (cell.size() == 0)
+  {
+    return 0.0;
+  }
+  const auto ring = cell.getGeometry(0);  // outer boundary
+  const std::size_t n = ring.size();
+  double best_len = -1.0;
+  double best_angle = 0.0;
+  for (std::size_t i = 0; i + 1 < n; ++i)
+  {
+    const auto a = ring.getGeometry(i);
+    const auto b = ring.getGeometry(i + 1);
+    const double dx = b.getX() - a.getX();
+    const double dy = b.getY() - a.getY();
+    const double len = std::hypot(dx, dy);
+    if (len > best_len)
+    {
+      best_len = len;
+      best_angle = std::atan2(dy, dx);
+    }
+  }
+  return best_angle;
+}
 
 // Append the densified [a, b) segment to `out` (b exclusive: the next segment
 // starts at b, so shared vertices are emitted once and segments chain).
@@ -552,6 +610,9 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double min_swath_length)
 {
   BoustrophedonPlan plan;
+  // Polygon area the planned-coverage fraction is taken over (the operator's
+  // authorised area, before any inset). Instrumentation only.
+  plan.diagnostics.field_area = field_cell.area();
 
   f2c::hg::ConstHL hl;
   f2c::types::Cells cells;
@@ -568,6 +629,28 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
     {
       return plan;  // inset consumed the field
     }
+    // Expose the inset outer ring so the continuous-path connectors/fillets are
+    // bounded by the SAME polygon the rings/swaths are planned against (not the
+    // raw operator boundary). If the inset split the field, take the largest
+    // cell's exterior ring (the dominant drivable region).
+    std::size_t largest = 0;
+    double largest_area = -1.0;
+    for (std::size_t i = 0; i < safe_cells.size(); ++i)
+    {
+      const double a = safe_cells.getGeometry(i).area();
+      if (a > largest_area)
+      {
+        largest_area = a;
+        largest = i;
+      }
+    }
+    const auto safe_ring = safe_cells.getGeometry(largest).getGeometry(0);  // exterior
+    plan.safe_boundary.reserve(safe_ring.size());
+    for (std::size_t i = 0; i < safe_ring.size(); ++i)
+    {
+      const auto p = safe_ring.getGeometry(i);
+      plan.safe_boundary.emplace_back(p.getX(), p.getY());
+    }
   }
 
   // (2) Headland rings — n concentric mowed loops spaced op_width, outermost
@@ -582,6 +665,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // Drop degenerate micro-loops (a near-consumed tiny field can yield a
   // centimetre-scale innermost ring that isn't worth driving).
   constexpr double kMinRingPerimeter = 1.0;  // m
+  double ring_strip_area = 0.0;  // Σ perimeter·op_width of KEPT rings (for the fraction)
   for (const auto& pass_lines : headland_passes)
   {
     auto loops = ringPassToLoops(pass_lines);
@@ -594,8 +678,10 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       }
       if (perim < kMinRingPerimeter)
       {
+        plan.diagnostics.drops.push_back(fmtDrop("ring perim=", perim, "<", kMinRingPerimeter));
         continue;
       }
+      ring_strip_area += perim * op_width;
       plan.rings.push_back(std::move(loop));
     }
   }
@@ -605,6 +691,10 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   f2c::types::Cells mainland = hl.generateHeadlands(safe_cells, n_rings * op_width);
   if (mainland.size() == 0 || mainland.area() < 1e-6)
   {
+    // Rings-only is a valid plan — still report the planned fraction it covers.
+    plan.diagnostics.planned_area = ring_strip_area;
+    plan.diagnostics.planned_fraction =
+        (plan.diagnostics.field_area > 1e-9) ? ring_strip_area / plan.diagnostics.field_area : 0.0;
     return plan;
   }
 
@@ -619,15 +709,35 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   f2c::sg::BruteForce bf;
   f2c::obj::NSwath n_swath_obj;
   f2c::rp::BoustrophedonOrder order;
+  double swath_strip_area = 0.0;  // Σ length·op_width of KEPT swaths (for the fraction)
   for (std::size_t i = 0; i < mainland.size(); ++i)
   {
     const auto cell = mainland.getGeometry(i);
     if (cell.area() < 1e-6)
     {
+      plan.diagnostics.drops.push_back(fmtDrop("mainland cell area=", cell.area(), "<", 1e-6));
       continue;
     }
-    f2c::types::Swaths swaths = (mow_angle_rad >= 0.0)
-                                    ? bf.generateSwaths(mow_angle_rad, op_width, cell)
+    // Resolve the swath angle. Fixed angle (>= 0) is used as-is. AUTO (< 0)
+    // normally runs the exhaustive best-angle search, but on a large cell that
+    // search is too slow (see kAutoAngleMaxAreaM2) — fall back to the cheap
+    // longest-edge angle so big fields still plan within the action timeout.
+    double cell_angle = mow_angle_rad;
+    if (cell_angle < 0.0 && cell.area() > kAutoAngleMaxAreaM2)
+    {
+      cell_angle = longestEdgeAngle(cell);
+      char buf[160];
+      std::snprintf(buf,
+                    sizeof(buf),
+                    "auto-angle: cell area=%.1f m² > %.1f → longest-edge angle %.1f° "
+                    "(skipped exhaustive search)",
+                    cell.area(),
+                    kAutoAngleMaxAreaM2,
+                    cell_angle * 180.0 / M_PI);
+      plan.diagnostics.notes.push_back(std::string(buf));
+    }
+    f2c::types::Swaths swaths = (cell_angle >= 0.0)
+                                    ? bf.generateSwaths(cell_angle, op_width, cell)
                                     : bf.generateBestSwaths(n_swath_obj, op_width, cell);
     if (swaths.size() == 0)
     {
@@ -647,15 +757,28 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       const double len = std::hypot(p1.getX() - p0.getX(), p1.getY() - p0.getY());
       if (len < min_swath_length)
       {
+        plan.diagnostics.drops.push_back(fmtDrop("swath len=", len, "<", min_swath_length));
         continue;  // sliver clip — not worth a pivot
       }
       if (plan.swaths.empty())
       {
         plan.swath_angle_rad = std::atan2(p1.getY() - p0.getY(), p1.getX() - p0.getX());
       }
+      swath_strip_area += len * op_width;
       plan.swaths.push_back({{p0.getX(), p0.getY()}, {p1.getX(), p1.getY()}});
     }
   }
+
+  // Planned-coverage fraction: strip areas of the kept rings + swaths over the
+  // polygon area. Coarse (strips butt rather than overlap; corners double-count
+  // slightly), so it is a visibility metric, not a guarantee — but it makes a
+  // partially-planned area (slivers/rings/cells silently dropped above) VISIBLE
+  // in the server log so the next iteration can decide.
+  plan.diagnostics.planned_area = ring_strip_area + swath_strip_area;
+  plan.diagnostics.planned_fraction =
+      (plan.diagnostics.field_area > 1e-9)
+          ? plan.diagnostics.planned_area / plan.diagnostics.field_area
+          : 0.0;
 
   return plan;
 }

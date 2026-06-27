@@ -50,6 +50,7 @@ var topicMap = map[string]topicDef{
 	"mowProgress":         {"/map_server_node/mow_progress", "nav_msgs/msg/OccupancyGrid"},   // mowed-area overlay (large)
 	"diagnostics":         {"/diagnostics", "diagnostic_msgs/msg/DiagnosticArray"},
 	"fusionDiag":          {"/fusion_graph/diagnostics", "diagnostic_msgs/msg/DiagnosticArray"},
+	"icpOdom":             {"/fusion_graph/icp_odometry", "nav_msgs/msg/Odometry"},                 // LiDAR-only odom (ICP monitor)
 	"obstacles":           {"/obstacle_tracker/obstacles", "mowgli_interfaces/msg/ObstacleArray"},
 	"robotDescription":    {"/robot_description", "std_msgs/msg/String"},                     // published once
 	"recordingTrajectory": {"/behavior_tree_node/recording_trajectory", "nav_msgs/msg/Path"}, // area recording preview

@@ -227,18 +227,24 @@ void FusionGraphNode::OnScan(sensor_msgs::msg::LaserScan::ConstSharedPtr msg)
       auto cand_pose = graph_->GetPose(idx);
       if (cand_scan.empty() || !cand_pose)
         continue;
-      // Use the candidate's pose as init (we expect to be close).
-      auto res = scan_matcher_->Match(cand_scan, latest_scan_, *cand_pose);
+      // Match returns a RELATIVE body-to-body transform, not an absolute pose,
+      // so seed with a relative init (identity — the robot is expected near the
+      // candidate). Match(cand, latest) returns delta = latest.between(cand);
+      // the live robot's absolute map pose is therefore
+      // cand_pose.compose(delta.inverse()). Seeding ICP with the candidate's
+      // ABSOLUTE pose (metres from origin) used to push the brute-force NN
+      // outside its correspondence gate.
+      auto res = scan_matcher_->Match(cand_scan, latest_scan_, gtsam::Pose2());
       if (res.ok && res.rmse < best_rmse)
       {
         best_rmse = res.rmse;
-        best_pose = res.delta;
+        best_pose = cand_pose->compose(res.delta.inverse());
         best_idx = idx;
       }
     }
     if (std::isfinite(best_rmse) && best_rmse < 0.10)
     {
-      // Anchor the latest loaded node at the matched pose so future
+      // Anchor the latest loaded node at the matched ABSOLUTE pose so future
       // wheel/scan factors compose from a consistent reference.
       auto snap = graph_->LatestSnapshot();
       if (snap)

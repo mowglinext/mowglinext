@@ -295,7 +295,7 @@ def generate_launch_description() -> LaunchDescription:
     # it should do something but didn't. Load here and inject into the
     # Nav2 YAMLs (controller + docking) alongside the dock pose.
     #   transit_speed    → FollowPath.desired_linear_vel (RPP)
-    #   mowing_speed     → FollowCoveragePath.vx_max (MPPI)
+    #   mowing_speed     → FollowCoveragePath.speed_fast (FTC)
     #   undock_speed     → behavior_tree_node param of the same name,
     #                      pushed onto the BT blackboard at startup and
     #                      read by undock-flow BackUp instances via
@@ -306,6 +306,12 @@ def generate_launch_description() -> LaunchDescription:
     mowing_speed = 0.25
     datum_lat = 0.0
     datum_lon = 0.0
+    # GPS antenna lever arm (base_link → antenna), shared by cog_to_imu (COG
+    # de-biasing + sweep gate) and fusion_graph (GnssLeverArmFactor). 0.0
+    # fallback matches fusion_graph.launch.py so the two localizer inputs
+    # never use different lever arms when gps_x/gps_y are unset.
+    gps_x = 0.0
+    gps_y = 0.0
     # Nav2 goal/progress tolerances exposed on the GUI's Settings →
     # Navigation page. Same orphan-param story as the speeds: the YAML
     # values were being shadowed by hardcoded constants in
@@ -314,15 +320,17 @@ def generate_launch_description() -> LaunchDescription:
     xy_goal_tolerance = 0.30
     yaw_goal_tolerance = 0.5
     # coverage_xy_tolerance → coverage_goal_checker.xy_goal_tolerance.
-    # Per-swath DISCONTINUOUS model (2026-06-12): each swath is its own
-    # follow_path goal, and PathProgressGoalChecker only fires after the robot
-    # has tracked >= progress_threshold (0.95) of that swath's poses — so a LOOSE
-    # xy gate is safe (progress, not proximity, prevents early firing). The exact
-    # swath-end xy is irrelevant (RotationShim re-aligns at the next swath start);
-    # too tight (0.05/0.15) made each swath-end goal never SUCCEED → the next
-    # swath never dispatched (the hang that retired the per-swath model). 0.25 m
-    # lets every swath complete and advance.
-    coverage_xy_tolerance = 0.25
+    # CONTINUOUS full-path model + FTCController (feat/ftc-revive, 2026-06-25):
+    # PathProgressGoalChecker only fires after the robot tracks >= 0.95 of the
+    # path poses (progress, not proximity, prevents early firing). The catch: FTC
+    # hard-zeroes linear.x once it leaves FOLLOWING, so it PARKS up to
+    # max_goal_distance_error (0.50 m, nav2_params_base.yaml) short of the final
+    # pose. The XY gate must therefore be >= that parking distance or the goal is
+    # never accepted → progress timeout (err 105) → the whole area is re-mowed.
+    # base.yaml ships 0.50; this default matches it and the floor below keeps the
+    # injected value >= FTC's max_goal_distance_error even if a stale per-site
+    # yaml carries the old 0.25.
+    coverage_xy_tolerance = 0.50
     # Single source of truth for blade cutting width — flowed from
     # mowgli_robot.yaml.tool_width into both map_server (param
     # tool_width, used by mark_cells_mowed stamp + sliver detection)
@@ -338,11 +346,11 @@ def generate_launch_description() -> LaunchDescription:
     # section; injected into coverage_server's parameters at launch
     # so changes via mowgli_robot.yaml take effect on next bringup.
     headland_width = 0.35
-    # min_turning_radius: the robot's minimum MPPI-trackable turning radius. The
-    # continuous coverage path (coverage_server → buildContinuousPath) connects
+    # min_turning_radius: the robot's minimum controller-trackable turning radius.
+    # The continuous coverage path (coverage_server → buildContinuousPath) connects
     # rings + swaths with forward turn-around arcs and rounds cusps with fillets;
     # this is the HARD FLOOR on every such arc. Shrinking a turn below it to fit
-    # in-bounds produced loops too tight for MPPI (wz≈vx/r), so the robot
+    # in-bounds produced loops too tight to track (wz≈vx/r), so the robot
     # looped/hesitated at corners — the bug this knob prevents. Injected into
     # coverage_server.min_turning_radius; operator-tunable via mowgli_robot.yaml.
     min_turning_radius = 0.15
@@ -417,6 +425,8 @@ def generate_launch_description() -> LaunchDescription:
         mowing_speed = float(rt_rp.get("mowing_speed", mowing_speed))
         datum_lat = float(rt_rp.get("datum_lat", 0.0))
         datum_lon = float(rt_rp.get("datum_lon", 0.0))
+        gps_x = float(rt_rp.get("gps_x", 0.0))
+        gps_y = float(rt_rp.get("gps_y", 0.0))
         xy_goal_tolerance = float(
             rt_rp.get("xy_goal_tolerance", xy_goal_tolerance))
         yaw_goal_tolerance = float(
@@ -429,21 +439,11 @@ def generate_launch_description() -> LaunchDescription:
             rt_rp.get("dock_approach_overshoot", 0.05))
         dock_charging_threshold = float(
             rt_rp.get("dock_charging_threshold", dock_charging_threshold))
-        # Defensive clip: a stale per-site mowgli_robot.yaml can carry
-        # the legacy 0.5 m default that breaks cell-based mowing (the
-        # SimpleGoalChecker fired on tick 1 — but the coverage slot uses
-        # PathProgressGoalChecker, which gates on monotonic path progress
-        # (>= 0.95), so it CANNOT latch mid-swath regardless of xy tolerance.
-        # The clip only guards against an absurd value; cap at 0.25 m, the
-        # per-swath ceiling (must let each swath-end goal SUCCEED so the next
-        # swath dispatches — see coverage_xy_tolerance comment above).
-        if coverage_xy_tolerance > 0.25:
-            print(
-                "WARN: coverage_xy_tolerance={} m exceeds the 0.25 m ceiling. "
-                "Clipping to 0.25. Update "
-                "mowgli_robot.yaml.coverage_xy_tolerance to silence.".format(
-                    coverage_xy_tolerance))
-            coverage_xy_tolerance = 0.25
+        # NOTE: coverage_xy_tolerance is FLOORED at FTC's max_goal_distance_error
+        # at injection time (see _inject below) — a value tighter than FTC's
+        # parking distance would make the area never complete and re-mow. We no
+        # longer cap it at 0.25 (the retired per-swath ceiling, which silently
+        # forced the gate BELOW FTC's 0.50 m park distance and caused the stall).
         progress_timeout_sec = float(
             rt_rp.get("progress_timeout_sec", progress_timeout_sec))
         dock_pose_yaw_sigma_rad = float(rt_rp.get(
@@ -597,15 +597,24 @@ def generate_launch_description() -> LaunchDescription:
                  .setdefault("FollowPath", {}))
         fp["desired_linear_vel"] = transit_speed
 
-        # FollowCoveragePath (coverage controller = MPPI via RotationShim).
-        # MPPI's forward-speed cap is vx_max; mowing_speed overrides it. (The
-        # old FTC knob was speed_fast — injecting that now would warn
-        # "cannot be set" and the operator's mowing_speed would never reach the
-        # controller.)
+        # FollowCoveragePath (coverage controller = FTCController). FTC's
+        # carrot forward-speed knob is speed_fast; mowing_speed overrides it.
+        # (Restored 2026-06-19, reverting the MPPI experiment whose knob was
+        # vx_max — injecting that now would warn "cannot be set" and the
+        # operator's mowing_speed would never reach the controller.)
         fcp = (doc.setdefault("controller_server", {})
                   .setdefault("ros__parameters", {})
                   .setdefault("FollowCoveragePath", {}))
-        fcp["vx_max"] = mowing_speed
+        fcp["speed_fast"] = mowing_speed
+        # FTC hard-clamps its final longitudinal command to ±max_cmd_vel_speed
+        # (ftc_controller.cpp). speed_fast only sets the carrot target, so any
+        # mowing_speed above the base max_cmd_vel_speed (0.30) was silently
+        # capped — the robot mowed slower than the operator asked with no warning.
+        # Raise the clamp to admit the requested speed, but never LOWER it below
+        # the base value (keep the base headroom when mowing_speed < cap).
+        ftc_speed_cap = float(fcp.get("max_cmd_vel_speed", 0.30))
+        if mowing_speed > ftc_speed_cap:
+            fcp["max_cmd_vel_speed"] = mowing_speed
 
         # Goal-checker tolerances. Two checkers live under
         # controller_server: stopped_goal_checker (used by FollowPath /
@@ -618,7 +627,31 @@ def generate_launch_description() -> LaunchDescription:
         sgc["xy_goal_tolerance"] = xy_goal_tolerance
         sgc["yaw_goal_tolerance"] = yaw_goal_tolerance
         cgc = cs_params.setdefault("coverage_goal_checker", {})
-        cgc["xy_goal_tolerance"] = coverage_xy_tolerance
+        # SAFETY/COMPLETION: the coverage goal-checker XY gate MUST be >= FTC's
+        # max_goal_distance_error. FTC zeroes linear.x once it leaves FOLLOWING,
+        # so the robot parks up to that distance short of the final pose; a
+        # tighter XY gate is never satisfied → the FollowCoveragePath goal never
+        # SUCCEEDs → progress_checker fires "Failed to make progress" (err 105) →
+        # FollowStrip declares the area not mowable → the BT re-mows the whole
+        # area. Floor the injected value at FTC's parking distance so the two can
+        # never silently disagree (the 2026-06-25 regression: launch forced 0.25
+        # while base.yaml/FTC were 0.50).
+        ftc_park_dist = float(fcp.get("max_goal_distance_error", 0.50))
+        # Use a LOCAL copy — never rebind the enclosing-scope `coverage_xy_tolerance`
+        # here. Assigning to it anywhere in this nested function makes Python treat
+        # it as function-local for the whole body, so the read just below would
+        # raise UnboundLocalError ("cannot access local variable ... where it is
+        # not associated with a value") and abort the entire navigation launch.
+        cov_xy_tol = coverage_xy_tolerance
+        if cov_xy_tol < ftc_park_dist:
+            print(
+                "WARN: coverage_xy_tolerance={} m is tighter than FTC "
+                "max_goal_distance_error={} m — raising to {} m so the area can "
+                "complete (FTC parks that far short of the goal). Update "
+                "mowgli_robot.yaml.coverage_xy_tolerance to silence.".format(
+                    cov_xy_tol, ftc_park_dist, ftc_park_dist))
+            cov_xy_tol = ftc_park_dist
+        cgc["xy_goal_tolerance"] = cov_xy_tol
 
         # Progress checker timeout: how long Nav2 waits for the robot to
         # achieve required_movement_radius before declaring no-progress.
@@ -816,6 +849,12 @@ def generate_launch_description() -> LaunchDescription:
             {"use_sim_time": use_sim_time,
              "datum_lat": datum_lat,
              "datum_lon": datum_lon,
+             # Lever arm from the same mowgli_robot.yaml source fusion_graph
+             # reads (gps_x/gps_y). Without this cog_to_imu silently used its
+             # hardcoded 0.30/0.0 default and de-biased COG with the wrong
+             # lever arm on any non-default antenna mount.
+             "lever_arm_x": gps_x,
+             "lever_arm_y": gps_y,
              "enable_mag_cal": enable_mag_cal,
              "mag_calibration_path": mag_cal_path,
              "stationary_seed_rate_hz": cog_stationary_rate,

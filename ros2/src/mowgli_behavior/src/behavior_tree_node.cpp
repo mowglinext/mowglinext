@@ -323,9 +323,23 @@ private:
                HighLevelControl::Response::SharedPtr resp)
         {
           RCLCPP_INFO(get_logger(), "HighLevelControl: received command=%u", req->command);
+          // COMMAND_S2 (4, "mow next area" — the GUI's onMowNextArea button) has
+          // no dedicated MainLogic branch: in this architecture mowing always
+          // resumes from the next UN-mowed area (GetNextUnmowedArea), so "mow
+          // next area" is functionally COMMAND_START. Normalise 4 -> 1 here so the
+          // button actually mows instead of falling through to IdleSequence
+          // (which stops the robot). If a distinct "skip current, jump to next"
+          // semantic is ever needed, give it its own branch instead.
+          uint8_t cmd = req->command;
+          if (cmd == HighLevelControl::Request::COMMAND_S2)
+          {
+            cmd = HighLevelControl::Request::COMMAND_START;
+            RCLCPP_INFO(get_logger(),
+                        "HighLevelControl: COMMAND_S2 normalised to COMMAND_START (mow next area)");
+          }
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
-            context_->current_command = req->command;
+            context_->current_command = cmd;
           }
           resp->success = true;
         });
@@ -474,7 +488,7 @@ private:
 
     // Transit / mowing speeds, sourced from mowgli_robot.yaml and applied to
     // the live controllers by SetNavMode (FollowPath.desired_linear_vel for the
-    // RPP transit controller, FollowCoveragePath.vx_max for MPPI coverage).
+    // RPP transit controller, FollowCoveragePath.speed_fast for FTC coverage).
     // Stored on the shared BTContext so SetNavMode's tick is a pure read.
     // Previously SetNavMode hardcoded 0.5 (precise) / 0.25 (degraded), which
     // stomped the launch-injected values — the configured speeds never applied.

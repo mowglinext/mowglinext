@@ -196,6 +196,31 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// IsCoverageComplete
+// ---------------------------------------------------------------------------
+
+/// Returns SUCCESS when the last GetNextUnmowedArea run ended because every
+/// area is genuinely mowed (ctx->coverage_all_complete), FAILURE otherwise
+/// (transient service error / timeout / no areas defined). Lets the coverage
+/// subtree route a normal finish to MOWING_COMPLETE instead of the
+/// COVERAGE_FAILED_DOCKING path.
+class IsCoverageComplete : public BT::ConditionNode
+{
+public:
+  IsCoverageComplete(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
 // IsGPSFixed
 // ---------------------------------------------------------------------------
 
@@ -391,9 +416,19 @@ private:
   bool charger_failed_{false};
   float baseline_battery_{0.0f};
   std::chrono::steady_clock::time_point baseline_time_{};
+  // Session-boundary detection: the node is ticked continuously while the BT is
+  // inside the charging branch. A gap longer than session_gap_sec_ between ticks
+  // means the BT LEFT the charging branch (undocked / mowed / re-docked), i.e. a
+  // NEW charge session — so a previously latched charger_failed_ must be cleared,
+  // or one transient stall would disable auto-charge-resume for the whole process
+  // lifetime (the early `if (charger_failed_) return FAILURE` ran before the only
+  // clear site, making it permanently unreachable).
+  std::chrono::steady_clock::time_point last_tick_time_{};
+  bool last_tick_set_{false};
 
   static constexpr double check_interval_sec_{1800.0};  // 30 minutes
   static constexpr float min_increase_{1.0f};  // 1% minimum
+  static constexpr double session_gap_sec_{60.0};  // tick gap that ends a session
 };
 
 // ---------------------------------------------------------------------------

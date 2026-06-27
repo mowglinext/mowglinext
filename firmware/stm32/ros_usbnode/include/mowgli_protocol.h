@@ -40,6 +40,21 @@ extern "C" {
 #define MOWGLI_PROTOCOL_VERSION 2u
 
 /* ---------------------------------------------------------------------------
+ * Firmware version (semantic version of THIS firmware build).
+ *
+ * Reported to the host in pkt_config_rsp_t (PKT_ID_CONFIG_RSP) so the ROS 2
+ * image can confirm it is talking to a compatible firmware and, if not, tell
+ * the operator to reflash. The COMPATIBILITY key is MOWGLI_PROTOCOL_VERSION
+ * (the wire format); this semver is the human-readable build identity shown in
+ * the GUI / logs. Bump the patch on any firmware release, and major/minor for
+ * notable changes.
+ * ---------------------------------------------------------------------------*/
+
+#define MOWGLI_FW_VERSION_MAJOR 1u
+#define MOWGLI_FW_VERSION_MINOR 0u
+#define MOWGLI_FW_VERSION_PATCH 0u
+
+/* ---------------------------------------------------------------------------
  * Packet IDs
  * Firmware -> Host (STM32 -> Raspberry Pi)
  * ---------------------------------------------------------------------------*/
@@ -356,6 +371,39 @@ typedef struct {
   uint16_t crc;         /**< CRC-16 CCITT over preceding bytes */
 } pkt_blade_status_t;
 
+/**
+ * @brief Config request packet — Host -> Firmware (PKT_ID_CONFIG_REQ = 0x11).
+ *
+ * A bare trigger sent by the host on every (re)connect; the firmware replies
+ * with pkt_config_rsp_t. Firmware that predates this handshake simply ignores
+ * the unknown packet ID and never replies — which the host reads (after a
+ * timeout) as "incompatible firmware, reflash required".
+ *
+ * Wire size: 3 bytes (must match sizeof(LlConfigReq) in ll_datatypes.hpp).
+ */
+typedef struct {
+  uint8_t type; /**< PKT_ID_CONFIG_REQ */
+  uint16_t crc; /**< CRC-16 CCITT over preceding bytes */
+} pkt_config_req_t;
+
+/**
+ * @brief Config response packet — Firmware -> Host (PKT_ID_CONFIG_RSP = 0x12).
+ *
+ * Reports the firmware's wire-protocol version (MOWGLI_PROTOCOL_VERSION — the
+ * compatibility key the host compares against its own) and the human-readable
+ * firmware semantic version. Sent in reply to PKT_ID_CONFIG_REQ.
+ *
+ * Wire size: 7 bytes (must match sizeof(LlConfigRsp) in ll_datatypes.hpp).
+ */
+typedef struct {
+  uint8_t type;             /**< PKT_ID_CONFIG_RSP */
+  uint8_t protocol_version; /**< MOWGLI_PROTOCOL_VERSION on this firmware */
+  uint8_t fw_version_major; /**< MOWGLI_FW_VERSION_MAJOR */
+  uint8_t fw_version_minor; /**< MOWGLI_FW_VERSION_MINOR */
+  uint8_t fw_version_patch; /**< MOWGLI_FW_VERSION_PATCH */
+  uint16_t crc;             /**< CRC-16 CCITT over preceding bytes */
+} pkt_config_rsp_t;
+
 #pragma pack(pop)
 
 /* ---------------------------------------------------------------------------
@@ -408,6 +456,10 @@ _Static_assert(sizeof(pkt_heartbeat_t) == 5u,
 _Static_assert(sizeof(pkt_hl_state_t) == 5u,
                "pkt_hl_state_t layout unexpected");
 _Static_assert(sizeof(pkt_cmd_vel_t) == 11u, "pkt_cmd_vel_t layout unexpected");
+_Static_assert(sizeof(pkt_config_req_t) == 3u,
+               "pkt_config_req_t layout unexpected");
+_Static_assert(sizeof(pkt_config_rsp_t) == 7u,
+               "pkt_config_rsp_t layout unexpected");
 _Static_assert(sizeof(pkt_set_drive_pid_t) == 27u,
                "pkt_set_drive_pid_t layout unexpected");
 _Static_assert(offsetof(pkt_set_drive_pid_t, type) == 0u,

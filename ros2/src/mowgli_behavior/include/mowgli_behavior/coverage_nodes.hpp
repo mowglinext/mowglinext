@@ -89,6 +89,15 @@ private:
   // Robot distance to the current segment's first pose (TF map→base_footprint);
   // returns a large value if TF is unavailable (forces the safe transit path).
   double distanceToSegmentStart(const std::shared_ptr<BTContext>& ctx) const;
+  // Advance path_progress_idx_ to the furthest pose of the continuous path the
+  // robot has reached (monotonic, bounded forward nearest-pose search from the
+  // current cursor). Cheap to call every tick.
+  void updateProgress(const std::shared_ptr<BTContext>& ctx);
+  // Persist the resume cursor + partial coverage_percent for the area, so a
+  // re-dispatch after an abort/halt resumes near where it stopped instead of
+  // restarting the whole path (and so GetNextUnmowedArea sees the progress and
+  // does not abandon the area).
+  void persistResumeCursor(const std::shared_ptr<BTContext>& ctx);
 
   rclcpp_action::Client<Nav2FollowPath>::SharedPtr follow_client_;
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
@@ -112,6 +121,14 @@ private:
   std::size_t swath_idx_ = 0;
   std::size_t swaths_skipped_ = 0;
   bool swath_goal_sent_ = false;
+  // Resume-cursor bookkeeping for the CONTINUOUS full_path (see
+  // BTContext::area_resume_pose_index). resume_start_idx_ = absolute index into
+  // the original full_path where this run's (possibly trimmed) path begins;
+  // path_progress_idx_ = furthest pose reached within the path currently being
+  // driven; total_path_poses_ = original full_path length (percent denominator).
+  std::size_t resume_start_idx_ = 0;
+  std::size_t path_progress_idx_ = 0;
+  std::size_t total_path_poses_ = 0;
   // Area being mowed (from ctx->current_area) — keys the swath-completion
   // tracking in BTContext so a resume/re-plan skips already-mowed segments.
   uint32_t area_idx_ = 0;
@@ -125,6 +142,18 @@ private:
   static constexpr double kBladeSpinupDelaySec = 1.5;
   std::chrono::steady_clock::time_point blade_start_time_;
   bool goal_sent_ = false;
+
+  // A FollowCoveragePath goal that ABORTS at or beyond this fraction of the
+  // path is treated as COMPLETE rather than skipped. FTC zeroes linear.x once
+  // it leaves FOLLOWING and parks up to max_goal_distance_error (~0.5 m) short
+  // of the final pose; the PathProgressGoalChecker then can't fire (robot
+  // stopped just outside xy tolerance) and the progress_checker aborts the goal
+  // with err 105 at ~100 % tracked. Without this, that abort was scored as a
+  // skip, the near-100 % resume cursor was discarded (resume+2 >= size), the
+  // area was never marked complete, and GetNextUnmowedArea re-mowed it from
+  // scratch — an endless re-mow loop. Matches the goal-checker progress_threshold
+  // (0.95): reaching >=95 % of poses means the area is mowed.
+  static constexpr double kPathCompleteFraction = 0.95;
 };
 
 // ---------------------------------------------------------------------------
@@ -244,6 +273,11 @@ private:
   uint32_t max_areas_{20};
   uint32_t areas_queried_{0};
   uint32_t areas_complete_{0};
+  // Bounded retries for a transient get_mowing_area timeout — a momentary
+  // service blip must NOT abort the whole run (and must not be mistaken for
+  // "all areas complete"). Re-probe up to kMaxProbeRetries before failing.
+  uint32_t probe_retries_{0};
+  static constexpr uint32_t kMaxProbeRetries = 3;
 };
 
 // ---------------------------------------------------------------------------

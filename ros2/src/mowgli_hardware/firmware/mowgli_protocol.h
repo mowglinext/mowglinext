@@ -55,6 +55,18 @@ extern "C"
 
 #define MOWGLI_PROTOCOL_VERSION 2u
 
+  /* ---------------------------------------------------------------------------
+   * Firmware version (semantic version of the firmware build). Reported to the
+   * host in pkt_config_rsp_t so the ROS 2 image can verify compatibility and warn
+   * the operator to reflash. The compatibility key is MOWGLI_PROTOCOL_VERSION;
+   * this semver is the human-readable build identity. Keep in sync with the
+   * authoritative copy in firmware/stm32/ros_usbnode/include/mowgli_protocol.h.
+   * ---------------------------------------------------------------------------*/
+
+#define MOWGLI_FW_VERSION_MAJOR 1u
+#define MOWGLI_FW_VERSION_MINOR 0u
+#define MOWGLI_FW_VERSION_PATCH 0u
+
 /* ---------------------------------------------------------------------------
  * Packet IDs
  * Firmware -> Host (STM32 -> Raspberry Pi)
@@ -315,6 +327,34 @@ extern "C"
     uint16_t crc; /**< CRC-16 CCITT over preceding bytes */
   } pkt_set_drive_pid_t;
 
+  /**
+   * @brief Config request — Host -> Firmware (PKT_ID_CONFIG_REQ = 0x11).
+   * Bare trigger; the firmware replies with pkt_config_rsp_t. Old firmware
+   * ignores the unknown ID and never replies (host reads that as incompatible).
+   * Wire size: 3 bytes (must match sizeof(LlConfigReq) in ll_datatypes.hpp).
+   */
+  typedef struct
+  {
+    uint8_t type; /**< PKT_ID_CONFIG_REQ */
+    uint16_t crc; /**< CRC-16 CCITT over preceding bytes */
+  } pkt_config_req_t;
+
+  /**
+   * @brief Config response — Firmware -> Host (PKT_ID_CONFIG_RSP = 0x12).
+   * Reports the firmware's wire-protocol version (compatibility key) plus its
+   * human-readable semver.
+   * Wire size: 7 bytes (must match sizeof(LlConfigRsp) in ll_datatypes.hpp).
+   */
+  typedef struct
+  {
+    uint8_t type; /**< PKT_ID_CONFIG_RSP */
+    uint8_t protocol_version; /**< MOWGLI_PROTOCOL_VERSION on the firmware */
+    uint8_t fw_version_major; /**< MOWGLI_FW_VERSION_MAJOR */
+    uint8_t fw_version_minor; /**< MOWGLI_FW_VERSION_MINOR */
+    uint8_t fw_version_patch; /**< MOWGLI_FW_VERSION_PATCH */
+    uint16_t crc; /**< CRC-16 CCITT over preceding bytes */
+  } pkt_config_rsp_t;
+
 #pragma pack(pop)
 
   /* ---------------------------------------------------------------------------
@@ -363,6 +403,8 @@ extern "C"
   _Static_assert(sizeof(pkt_heartbeat_t) == 5u, "pkt_heartbeat_t layout unexpected");
   _Static_assert(sizeof(pkt_hl_state_t) == 5u, "pkt_hl_state_t layout unexpected");
   _Static_assert(sizeof(pkt_cmd_vel_t) == 11u, "pkt_cmd_vel_t layout unexpected");
+  _Static_assert(sizeof(pkt_config_req_t) == 3u, "pkt_config_req_t layout unexpected");
+  _Static_assert(sizeof(pkt_config_rsp_t) == 7u, "pkt_config_rsp_t layout unexpected");
   _Static_assert(sizeof(pkt_set_drive_pid_t) == 27u, "pkt_set_drive_pid_t layout unexpected");
   _Static_assert(offsetof(pkt_set_drive_pid_t, type) == 0u,
                  "pkt_set_drive_pid_t.type offset unexpected");

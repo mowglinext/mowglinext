@@ -38,6 +38,11 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
   // sees GPS, never jumps. Nav2's odom_topic in nav2_params.yaml still
   // points here.
   pub_local_odom_ = create_publisher<nav_msgs::msg::Odometry>("/odometry/filtered", 10);
+  // LiDAR-only odometry (scan-match deltas integrated from the graph pose at
+  // the first accepted match). Diagnostic/visualisation only — the GUI overlays
+  // it to compare ICP heading & pose drift vs the fused/GPS estimate. Only
+  // emits when use_scan_matching is on (no matches → nothing to integrate).
+  pub_icp_odom_ = create_publisher<nav_msgs::msg::Odometry>("/fusion_graph/icp_odometry", 10);
 
   // High-rate extrapolated pose (item #15). Off by default — set
   // fast_pose_publish_rate_hz > 0 in yaml to enable. 100 Hz is the
@@ -356,10 +361,6 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
                           // to get a rate. A spike on any of these is
                           // worth surfacing — see PR notes.
                           add("gps_rejects_wrongfix", std::to_string(stats.gps_rejects_wrongfix));
-                          // 180° yaw-flip recoveries (OnCogHeading). A non-zero
-                          // count localises a yaw corruption to the COG-flip path
-                          // and timestamps when the snap-to-COG fired.
-                          add("cog_flip_recoveries", std::to_string(cog_flip_recoveries_));
                           add("icp_rejects_rmse", std::to_string(stats.icp_rejects_rmse));
                           add("icp_rejects_inliers", std::to_string(stats.icp_rejects_inliers));
                           add("icp_rejects_sanity", std::to_string(stats.icp_rejects_sanity));
