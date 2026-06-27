@@ -93,6 +93,11 @@ main() {
   print_platform_summary
 
   if ! $CHECK_ONLY; then
+    # Pre-acquire sudo credentials once for the entire install session
+    if command -v sudo >/dev/null 2>&1; then
+      echo ""
+      sudo -v
+    fi
     local TOTAL_STEPS=15
 
     # Choose the source checkout first. If the user selects another branch,
@@ -180,11 +185,11 @@ main() {
   check_devices
   check_generated_gps_yaml_alignment
   check_containers
-  check_firmware
-  check_gps
-  check_lidar
-  check_rangefinders
-  check_gui
+  check_firmware || true
+  check_gps || true
+  check_lidar || true
+  check_rangefinders || true
+  check_gui || true
 
   print_summary
 
