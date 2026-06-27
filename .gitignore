@@ -39,6 +39,13 @@ docker/config/mowgli/mowgli_robot.yaml
 docker/config/cyclonedds.xml
 docker/config/mqtt/mosquitto.conf
 docker/config/om/mower_config.sh
+# Drive-motor autotune outputs — written at runtime (as root) by tune_drive_pid
+# and managed via the GUI (gui/pkg/api/drive_tuning.go reads the mounted dir).
+# Per-install runtime artifacts; tracking them wedges git checkout/rebase when
+# the container rewrites them. Keep the dir (.gitkeep) so the bind-mount target
+# exists on a fresh checkout.
+docker/config/mowgli/drive_tuning/*
+!docker/config/mowgli/drive_tuning/.gitkeep
 install/.preset
 install/.preset.consumed
 install/logs/
