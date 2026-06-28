@@ -545,11 +545,21 @@ func (r datumReprojector) projectYaw(yaw, eOM, nOM float64) float64 {
 //     both offset and rotated by the UTM meridian convergence.
 func resolveReprojection(omLat, omLon *float64, mnLat, mnLon float64, mnDatumErr error) (datumReprojector, string) {
 	if omLat == nil || omLon == nil {
-		warn := "Datum OpenMower non fourni — l'import sera décalé et pivoté (convergence du méridien UTM, ~1–2°). Renseignez le datum OpenMower (OM_DATUM_LAT/LONG) pour un géoréférencement correct."
 		if mnDatumErr != nil {
-			warn = "Datum OpenMower non fourni et datum MowgliNext absent — l'import est copié tel quel (décalé et pivoté du fait de la convergence UTM). Renseignez le datum OpenMower (OM_DATUM_LAT/LONG) pour un géoréférencement correct."
+			// No OpenMower datum AND no MowgliNext datum — nothing to anchor the
+			// UTM inversion against, so copy OM coordinates straight through
+			// (offset + rotated). The operator must set a datum to georeference.
+			return datumReprojector{}, "Datum OpenMower non fourni et datum MowgliNext absent — l'import est copié tel quel (décalé et pivoté du fait de la convergence UTM). Renseignez le datum OpenMower (OM_DATUM_LAT/LONG) pour un géoréférencement correct."
 		}
-		return datumReprojector{}, warn
+		// No OpenMower datum, but the MowgliNext datum is known. OpenMower stores
+		// grid offsets relative to ITS datum; assume it's the same site as the
+		// MowgliNext datum (the usual case — same garden) and anchor the UTM
+		// inversion there. This removes the grid-north meridian-convergence
+		// ROTATION (the "imported map is rotated without datum" report); only a
+		// residual TRANSLATION remains if the two datums actually differed.
+		dn, de, zone, north := llToUTM(mnLat, mnLon)
+		r := datumReprojector{reproject: true, omDatumE: de, omDatumN: dn, omZone: zone, omNorth: north, mnLat: mnLat, mnLon: mnLon}
+		return r, "Datum OpenMower non fourni — le datum MowgliNext est utilisé comme référence : la rotation (convergence UTM) est corrigée, mais une translation résiduelle peut subsister si le datum OpenMower différait. Renseignez OM_DATUM_LAT/LONG pour un géoréférencement exact."
 	}
 
 	dn, de, zone, north := llToUTM(*omLat, *omLon)
@@ -803,11 +813,18 @@ func applyImport(c *gin.Context, rosProvider types.IRosProvider, replaceReq *mow
 	if replaceReq == nil {
 		return errors.New("apply: nil replace request")
 	}
-	// Reuse the gin request context for cancellation propagation, but
-	// give the whole sequence its own 30 s budget — same envelope as
-	// ReplaceMapRoute's timeout. save_areas does disk IO; add_area on a
-	// large polygon walk can take ~1 s each.
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	// Reuse the gin request context for cancellation propagation, but give the
+	// whole sequence its own budget. clear_map + save_areas are fixed-cost, but
+	// each add_area rasterises its polygon into the map_server grid, which on a
+	// large area can take seconds. A fixed 30 s timed out on huge multi-area
+	// maps, so scale the budget: a 60 s base plus per-area headroom, capped at
+	// 6 min (imports are rare and one-shot — a generous ceiling beats a false
+	// timeout that leaves the map half-written).
+	budget := 60*time.Second + time.Duration(len(replaceReq.Areas))*5*time.Second
+	if budget > 6*time.Minute {
+		budget = 6 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), budget)
 	defer cancel()
 
 	logImportf("import/openmower applying: %d areas, dock=%v", len(replaceReq.Areas), dockReq != nil)
