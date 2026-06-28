@@ -83,6 +83,9 @@ TIM_HandleTypeDef TIM3_Handle; // PWM Beeper
 TIM_HandleTypeDef TIM4_Handle; // PWM Buzzer
 IWDG_HandleTypeDef IwdgHandle = {0};
 WWDG_HandleTypeDef WwdgHandle = {0};
+#ifndef ENABLE_WWDG
+#define ENABLE_WWDG 0
+#endif
 static uint32_t g_boot_reset_csr = 0;
 uint8_t g_boot_reset_cause_code = 0;
 volatile uint32_t g_watchdog_refresh_count = 0;
@@ -1111,7 +1114,7 @@ void debug_printf(const char *fmt, ...)
  * At 115200 8N1 the longest debug string (~200 B) transmits in ~17 ms, so 25 ms
  * never drops a normal message yet stays under the 40 ms window watchdog so a
  * stuck busy flag can never starve the main loop into a WWDG reset. */
-#define MASTER_TX_TIMEOUT_MS 25u
+#define MASTER_TX_TIMEOUT_MS 0 //25u
 /*
  * Send message via MASTER USART (DMA Normal Mode)
  */
@@ -1175,6 +1178,7 @@ static void WATCHDOG_vInit(void)
 #endif /* DB_ACTIVE */
   }
 
+#if ENABLE_WWDG
 /* Initialize WWDG for run time if applicable */
 #if defined(DB_ACTIVE)
   /* setup DBGMCU block - stop WWDG at break in debug mode */
@@ -1193,6 +1197,7 @@ static void WATCHDOG_vInit(void)
     DB_TRACE(" WWDG init Error\r\n");
 #endif /* DB_ACTIVE */
   }
+#endif /* ENABLE_WWDG */
 } /* WATCHDOG_vInit() */
 
 /*
@@ -1224,7 +1229,7 @@ static void WATCHDOG_Refresh(void)
   }
   g_watchdog_last_refresh_tick = now;
   g_watchdog_refresh_count++;
-
+#if ENABLE_WWDG
   /* Update WWDG counter */
   WwdgHandle.Instance = WWDG;
   if (HAL_WWDG_Refresh(&WwdgHandle) != HAL_OK)
@@ -1233,7 +1238,7 @@ static void WATCHDOG_Refresh(void)
     DB_TRACE(" WWDG refresh error\r\n");
 #endif /* DB_ACTIVE */
   }
-
+#endif /* ENABLE_WWDG */
   /* Reload IWDG counter */
   IwdgHandle.Instance = IWDG;
   if (HAL_IWDG_Refresh(&IwdgHandle) != HAL_OK)
