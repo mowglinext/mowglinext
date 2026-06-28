@@ -720,10 +720,14 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
     {
       cover_cells = split;
       char buf[176];
-      std::snprintf(buf, sizeof(buf),
+      std::snprintf(buf,
+                    sizeof(buf),
                     "decomposition: mainland %zu cell(s) → %zu convex cell(s) "
                     "(%.1f m² preserved, err %.3f)",
-                    mainland.size(), split.size(), split.area(), area_err);
+                    mainland.size(),
+                    split.size(),
+                    split.area(),
+                    area_err);
       plan.diagnostics.notes.push_back(buf);
     }
   }
