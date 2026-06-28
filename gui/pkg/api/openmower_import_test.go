@@ -289,6 +289,46 @@ func TestReproject_OnCentralMeridianHasNoRotation(t *testing.T) {
 	assert.InDelta(t, 20, n, 0.05, "north magnitude")
 }
 
+// TestResolveReprojection_NoOmDatum_UsesMnDatumToDeRotate covers the
+// "imported map rotated without datum" report: when the OpenMower datum is
+// omitted but the MowgliNext datum is known, the importer must anchor the UTM
+// inversion at the MN datum (assuming the same site) and de-rotate, NOT copy
+// the grid-north coordinates through unchanged.
+func TestResolveReprojection_NoOmDatum_UsesMnDatumToDeRotate(t *testing.T) {
+	const M = metersPerDegreeLat
+	mnLat, mnLon := 48.5, 11.5 // 2.5° off zone 32's central meridian → real convergence
+	reproj, warn := resolveReprojection(nil, nil, mnLat, mnLon, nil)
+	require.True(t, reproj.reproject, "no OM datum + known MN datum must still reproject")
+	require.NotEmpty(t, warn, "should warn that the MN datum is used as the reference")
+
+	// OM-grid coords as OpenMower stores them, anchored at the MN datum (the
+	// assumption the fix makes); project() must recover true-north ENU to ~mm.
+	dN, dE, _, _ := llToUTM(mnLat, mnLon)
+	for _, off := range [][2]float64{{0, 0}, {15, 0}, {0, 15}, {-7, 9}} {
+		lat := mnLat + off[1]/M
+		lon := mnLon + off[0]/(M*math.Cos(mnLat*math.Pi/180.0))
+		n, e, _, _ := llToUTM(lat, lon)
+		eOM, nOM := e-dE, n-dN
+		wantE := (lon - mnLon) * M * math.Cos(mnLat*math.Pi/180.0)
+		wantN := (lat - mnLat) * M
+		gotE, gotN := reproj.project(eOM, nOM)
+		assert.InDelta(t, wantE, gotE, 3e-3, "east for OM offset %v", off)
+		assert.InDelta(t, wantN, gotN, 3e-3, "north for OM offset %v", off)
+	}
+}
+
+// TestResolveReprojection_NoDatumsAtAll_PassesThrough: with neither datum there
+// is no UTM anchor, so coordinates are copied straight through (offset+rotated)
+// and the operator is warned.
+func TestResolveReprojection_NoDatumsAtAll_PassesThrough(t *testing.T) {
+	r, warn := resolveReprojection(nil, nil, 0, 0, errors.New("no datum"))
+	assert.False(t, r.reproject, "no anchor → copy through")
+	assert.NotEmpty(t, warn)
+	e, n := r.project(12.3, -4.5)
+	assert.Equal(t, 12.3, e)
+	assert.Equal(t, -4.5, n)
+}
+
 // TestReproject_SameDatumOffCentralMeridianRemovesConvergence is the core
 // regression for the "imported map rotated 1–2°" bug: even with identical OM
 // and MN datums, OpenMower's UTM grid-north coordinates must be de-rotated by
