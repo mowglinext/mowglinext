@@ -698,21 +698,55 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
     return plan;
   }
 
-  // (4) Straight swaths per mainland cell. BruteForce clips each sweep line
-  // against the cell and makes every disjoint clip its OWN swath, so concave
-  // boundaries and interior holes need no decomposition. BoustrophedonOrder
+  // (3.5) SPIKE: Boustrophedon cellular decomposition of the mainland.
+  // The original pipeline runs BruteForce on the whole mainland as ONE cell,
+  // and the optimal swath-angle search is SKIPPED above kAutoAngleMaxAreaM2
+  // (= 400 m², i.e. essentially every real garden) in favour of the whole-field
+  // longest-edge angle — which misaligns swaths on large / multi-lobe / concave
+  // fields (more swaths, worse tiling at lobe junctions). Decomposing into
+  // convex sub-cells lets each cell get its OWN angle (now affordable, because
+  // the cells are small) — the standard F2C pipeline. Guarded: adopt the split
+  // ONLY if it actually divided the field AND preserved the area; otherwise
+  // fall back to the undivided mainland, so this can never reduce coverage.
+  // A simple convex field decomposes to 1 cell → guard fails → unchanged.
+  f2c::types::Cells cover_cells = mainland;
+  try
+  {
+    f2c::decomp::BoustrophedonDecomp decomp;
+    f2c::obj::MinSumAltitude decomp_obj;
+    f2c::types::Cells split = decomp.decompose(mainland, decomp_obj);
+    const double area_err = std::abs(split.area() - mainland.area());
+    if (split.size() > mainland.size() && area_err < 1e-2 * std::max(1.0, mainland.area()))
+    {
+      cover_cells = split;
+      char buf[176];
+      std::snprintf(buf, sizeof(buf),
+                    "decomposition: mainland %zu cell(s) → %zu convex cell(s) "
+                    "(%.1f m² preserved, err %.3f)",
+                    mainland.size(), split.size(), split.area(), area_err);
+      plan.diagnostics.notes.push_back(buf);
+    }
+  }
+  catch (const std::exception& e)
+  {
+    plan.diagnostics.notes.push_back(std::string("decomposition skipped: ") + e.what());
+  }
+
+  // (4) Straight swaths per COVER cell (decomposed convex cells, or the whole
+  // mainland if decomposition didn't apply). BruteForce clips each sweep line
+  // against the cell and makes every disjoint clip its OWN swath. BoustrophedonOrder
   // sorts the swaths along the sweep axis and alternates their driving
   // direction (serpentine). A fixed mow angle keeps the plan deterministic
   // across re-plans (swath-index resume relies on this); auto (< 0) uses the
   // swath-count-minimising angle, which is equally deterministic for a fixed
-  // polygon.
+  // polygon (and now per-cell, so the 400 m² cap rarely bites).
   f2c::sg::BruteForce bf;
   f2c::obj::NSwath n_swath_obj;
   f2c::rp::BoustrophedonOrder order;
   double swath_strip_area = 0.0;  // Σ length·op_width of KEPT swaths (for the fraction)
-  for (std::size_t i = 0; i < mainland.size(); ++i)
+  for (std::size_t i = 0; i < cover_cells.size(); ++i)
   {
-    const auto cell = mainland.getGeometry(i);
+    const auto cell = cover_cells.getGeometry(i);
     if (cell.area() < 1e-6)
     {
       plan.diagnostics.drops.push_back(fmtDrop("mainland cell area=", cell.area(), "<", 1e-6));
