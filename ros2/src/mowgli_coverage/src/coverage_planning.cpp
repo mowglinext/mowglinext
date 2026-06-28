@@ -607,7 +607,8 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     int num_headland_passes_override,
                                     double chassis_safety_inset,
                                     double mow_angle_rad,
-                                    double min_swath_length)
+                                    double min_swath_length,
+                                    bool use_decomposition)
 {
   BoustrophedonPlan plan;
   // Polygon area the planned-coverage fraction is taken over (the operator's
@@ -710,30 +711,33 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // fall back to the undivided mainland, so this can never reduce coverage.
   // A simple convex field decomposes to 1 cell → guard fails → unchanged.
   f2c::types::Cells cover_cells = mainland;
-  try
+  if (use_decomposition)
   {
-    f2c::decomp::BoustrophedonDecomp decomp;
-    f2c::obj::MinSumAltitude decomp_obj;
-    f2c::types::Cells split = decomp.decompose(mainland, decomp_obj);
-    const double area_err = std::abs(split.area() - mainland.area());
-    if (split.size() > mainland.size() && area_err < 1e-2 * std::max(1.0, mainland.area()))
+    try
     {
-      cover_cells = split;
-      char buf[176];
-      std::snprintf(buf,
-                    sizeof(buf),
-                    "decomposition: mainland %zu cell(s) → %zu convex cell(s) "
-                    "(%.1f m² preserved, err %.3f)",
-                    mainland.size(),
-                    split.size(),
-                    split.area(),
-                    area_err);
-      plan.diagnostics.notes.push_back(buf);
+      f2c::decomp::BoustrophedonDecomp decomp;
+      f2c::obj::MinSumAltitude decomp_obj;
+      f2c::types::Cells split = decomp.decompose(mainland, decomp_obj);
+      const double area_err = std::abs(split.area() - mainland.area());
+      if (split.size() > mainland.size() && area_err < 1e-2 * std::max(1.0, mainland.area()))
+      {
+        cover_cells = split;
+        char buf[176];
+        std::snprintf(buf,
+                      sizeof(buf),
+                      "decomposition: mainland %zu cell(s) → %zu convex cell(s) "
+                      "(%.1f m² preserved, err %.3f)",
+                      mainland.size(),
+                      split.size(),
+                      split.area(),
+                      area_err);
+        plan.diagnostics.notes.push_back(buf);
+      }
     }
-  }
-  catch (const std::exception& e)
-  {
-    plan.diagnostics.notes.push_back(std::string("decomposition skipped: ") + e.what());
+    catch (const std::exception& e)
+    {
+      plan.diagnostics.notes.push_back(std::string("decomposition skipped: ") + e.what());
+    }
   }
 
   // (4) Straight swaths per COVER cell (decomposed convex cells, or the whole

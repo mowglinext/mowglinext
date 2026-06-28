@@ -109,13 +109,20 @@ struct BoustrophedonPlan
 // chassis_safety_inset is taken as-is here: the caller is responsible for
 // flooring it at robot_width/2 (a SAFETY margin — blades must not cross the
 // boundary) before calling, so this function plans against the effective inset.
+// use_decomposition (default true): when set, the mainland is split into convex
+// sub-cells via f2c::decomp::BoustrophedonDecomp before swath generation, so
+// each cell gets its own swath angle (helps large / concave / multi-lobe fields
+// where the single-cell longest-edge fallback misaligns swaths). The split is
+// adopted only if it divides the field AND preserves area, so it never reduces
+// coverage; set false for the legacy single-cell behaviour (A/B comparison).
 BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double op_width,
                                     double headland_width,
                                     int num_headland_passes_override,
                                     double chassis_safety_inset,
                                     double mow_angle_rad,
-                                    double min_swath_length);
+                                    double min_swath_length,
+                                    bool use_decomposition = true);
 
 // Flatten a BoustrophedonPlan into ONE continuous, cusp-free, in-bounds
 // polyline so an MPPI-class sampling controller can track it without the

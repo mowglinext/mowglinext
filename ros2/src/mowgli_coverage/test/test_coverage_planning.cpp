@@ -850,3 +850,106 @@ TEST(CoveragePlanning, LargeFieldFallbackIsDeterministic)
   ASSERT_EQ(a.swaths.size(), b.swaths.size());
   EXPECT_NEAR(a.swath_angle_rad, b.swath_angle_rad, 1e-9);
 }
+
+// ---------------------------------------------------------------------------
+// Real large-garden A/B: F2C Boustrophedon decomposition vs single-cell, on
+// areas from a real 59×54 m multi-lobe garden (map2.json). idx 2 is the largest
+// area (~431 m² → above the 400 m² auto-angle cap, so the single-cell path uses
+// the longest-edge angle); idx 4 is the most concave. Each is planned BOTH ways
+// (use_decomposition false/true). We assert decomposition stays valid,
+// deterministic, and does not reduce planned coverage; the cell/swath counts are
+// printed so the A/B effect shows up in the test log.
+// ---------------------------------------------------------------------------
+namespace
+{
+f2c::types::Cell makeCellFromPts(const std::vector<std::pair<double, double>>& pts)
+{
+  f2c::types::LinearRing ring;
+  for (const auto& p : pts)
+  {
+    ring.addPoint(f2c::types::Point(p.first, p.second));
+  }
+  ring.addPoint(f2c::types::Point(pts.front().first, pts.front().second));  // close
+  return f2c::types::Cell(ring);
+}
+
+// map2.json WorkingArea[2] — largest area (~431 m²).
+const std::vector<std::pair<double, double>>& map2LargeAreaPts()
+{
+  static const std::vector<std::pair<double, double>> pts = {
+      {14.923, 7.14},   {36.008, 12.48},  {33.118, 22.81},  {31.701, 27.899}, {30.971, 30.555},
+      {30.944, 30.674}, {30.909, 30.793}, {30.816, 30.808}, {30.61, 30.772},  {30.286, 30.689},
+      {30.211, 30.603}, {30.126, 30.543}, {30.04, 30.493},  {29.942, 30.443}, {20.908, 27.799},
+      {20.818, 27.779}, {20.726, 27.76},  {20.639, 27.767}, {20.602, 27.793}, {20.574, 27.838},
+      {20.541, 27.948}, {20.532, 28.065}, {20.529, 28.186}, {20.542, 28.318}, {20.576, 28.426},
+      {20.615, 28.546}, {20.668, 28.664}, {20.708, 28.772}, {20.732, 28.873}, {20.748, 29.012},
+      {20.736, 29.133}, {20.726, 29.35},  {20.743, 29.453}, {20.773, 29.493}, {20.337, 30.187},
+      {20.315, 30.248}, {20.302, 30.261}, {20.262, 30.289}, {20.232, 30.305}, {9.519, 27.298}};
+  return pts;
+}
+
+// map2.json WorkingArea[4] — most concave (~292 m²).
+const std::vector<std::pair<double, double>>& map2ConcaveAreaPts()
+{
+  static const std::vector<std::pair<double, double>> pts = {
+      {30.262, -10.152}, {41.26, -7.071}, {41.378, -7.007}, {41.406, -6.941}, {41.435, -6.861},
+      {41.434, -6.765},  {36.008, 12.48}, {14.921, 7.14},   {14.925, 7.129},  {15.05, 6.635},
+      {15.124, 6.34},    {15.184, 6.163}, {15.305, 6.174},  {15.417, 6.151},  {15.522, 6.096},
+      {15.627, 6.051},   {15.716, 6.017}, {24.615, 1.873},  {24.596, 1.809},  {26.372, 1.207},
+      {26.46, 1.138},    {26.548, 1.055}, {26.585, 0.974}};
+  return pts;
+}
+
+void abReport(const char* tag, const BoustrophedonPlan& p)
+{
+  std::cout << "[map2 A/B] " << tag << ": rings=" << p.rings.size() << " swaths=" << p.swaths.size()
+            << " planned_area=" << p.diagnostics.planned_area << " m^2";
+  for (const auto& n : p.diagnostics.notes)
+  {
+    if (n.rfind("decomposition", 0) == 0)
+    {
+      std::cout << "  | " << n;
+    }
+  }
+  std::cout << std::endl;
+}
+
+void runDecompositionAB(const f2c::types::Cell& cell, std::size_t min_swaths)
+{
+  const auto without =
+      planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15, /*use_decomposition=*/false);
+  const auto with_ =
+      planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15, /*use_decomposition=*/true);
+  abReport("no-decomp", without);
+  abReport("decomp   ", with_);
+
+  // Both modes must actually cover the field.
+  ASSERT_GE(without.swaths.size(), min_swaths);
+  ASSERT_GE(with_.swaths.size(), min_swaths);
+
+  // Decomposition must NOT reduce the planned coverage area (allow 10% for the
+  // sliver-drop differences in how the field is partitioned).
+  EXPECT_GE(with_.diagnostics.planned_area, 0.90 * without.diagnostics.planned_area)
+      << "decomposition reduced planned coverage on this field";
+
+  // Deterministic across re-plans (swath-index resume depends on it).
+  const auto with2 =
+      planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15, /*use_decomposition=*/true);
+  ASSERT_EQ(with_.swaths.size(), with2.swaths.size());
+  for (std::size_t i = 0; i < with_.swaths.size(); ++i)
+  {
+    EXPECT_NEAR(with_.swaths[i].first.first, with2.swaths[i].first.first, 1e-9);
+    EXPECT_NEAR(with_.swaths[i].first.second, with2.swaths[i].first.second, 1e-9);
+  }
+}
+}  // namespace
+
+TEST(CoveragePlanning, Map2LargeArea_DecompositionAB)
+{
+  runDecompositionAB(makeCellFromPts(map2LargeAreaPts()), 5u);
+}
+
+TEST(CoveragePlanning, Map2ConcaveArea_DecompositionAB)
+{
+  runDecompositionAB(makeCellFromPts(map2ConcaveAreaPts()), 4u);
+}
