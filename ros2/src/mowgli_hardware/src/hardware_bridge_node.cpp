@@ -859,13 +859,12 @@ private:
 
     const bool has_watchdog_stage = len >= sizeof(LlResetCause);
     const uint8_t reset_cause = data[1];
-    const uint8_t last_stage_before_reset =
-        has_watchdog_stage ? data[2] : WATCHDOG_STAGE_NONE;
+    const uint8_t last_stage_before_reset = has_watchdog_stage ? data[2] : WATCHDOG_STAGE_NONE;
 
     const bool cause_changed = !reset_cause_seen_ || reset_cause != last_reset_cause_;
-    const bool stage_changed =
-        !reset_stage_seen_ || has_watchdog_stage != last_reset_has_watchdog_stage_ ||
-        last_stage_before_reset != last_reset_stage_before_reset_;
+    const bool stage_changed = !reset_stage_seen_ ||
+                               has_watchdog_stage != last_reset_has_watchdog_stage_ ||
+                               last_stage_before_reset != last_reset_stage_before_reset_;
 
     last_reset_cause_ = reset_cause;
     last_reset_cause_name_ = reset_cause_name(reset_cause);
