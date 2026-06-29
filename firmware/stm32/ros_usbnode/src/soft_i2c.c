@@ -48,6 +48,8 @@
 #define SW_I2C1_SCL_PIN   SOFT_I2C_SCL_PIN
 #define SW_I2C1_SDA_PIN   SOFT_I2C_SDA_PIN
 
+static uint8_t SW_I2C_ReadVal_SCL(void);
+
 
 void  __attribute__ ((optimize(0))) TIMER__Wait_us (uint32_t nCount) 
 {
@@ -324,7 +326,7 @@ uint8_t SW_I2C_ReadVal_SDA(void)
     return HAL_GPIO_ReadPin(SW_I2C1_SDA_GPIO, SW_I2C1_SDA_PIN);       
 }
 
-uint8_t SW_I2C_ReadVal_SCL(void)
+static uint8_t SW_I2C_ReadVal_SCL(void)
 { 
     return HAL_GPIO_ReadPin(SW_I2C1_SCL_GPIO, SW_I2C1_SCL_PIN);    
 }
