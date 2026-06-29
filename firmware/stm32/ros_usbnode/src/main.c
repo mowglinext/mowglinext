@@ -83,24 +83,8 @@ TIM_HandleTypeDef TIM3_Handle; // PWM Beeper
 TIM_HandleTypeDef TIM4_Handle; // PWM Buzzer
 IWDG_HandleTypeDef IwdgHandle = {0};
 WWDG_HandleTypeDef WwdgHandle = {0};
-#ifndef ENABLE_WWDG
-#define ENABLE_WWDG 0
-#endif
 static uint32_t g_boot_reset_csr = 0;
 uint8_t g_boot_reset_cause_code = 0;
-volatile uint32_t g_watchdog_refresh_count = 0;
-volatile uint32_t g_watchdog_last_refresh_tick = 0;
-volatile uint32_t g_watchdog_last_refresh_gap_ms = 0;
-volatile uint32_t g_watchdog_max_refresh_gap_ms = 0;
-volatile uint32_t g_watchdog_gap_over_20ms_count = 0;
-volatile uint32_t g_watchdog_gap_over_30ms_count = 0;
-volatile uint32_t g_watchdog_gap_over_35ms_count = 0;
-#if BOARD_HAS_MASTER_USART
-volatile uint32_t g_master_tx_timeout_count = 0;
-volatile uint32_t g_master_tx_max_wait_ms = 0;
-volatile uint32_t g_master_tx_dma_error_count = 0;
-volatile uint32_t g_master_tx_last_dma_status = 0;
-#endif
 
 static const char *BOOT_PrimaryResetCause(uint32_t csr)
 {
@@ -456,18 +440,6 @@ int main(void)
     if (NBT_handler(&main_blademotor_nbt))
     {
       BLADEMOTOR_App();
-
-#ifdef OPTION_PERIMETER
-      if (!Perimeter_UsesDebug())
-#endif
-      {
-        uint32_t currentTick;
-        static uint32_t old_tick;
-        DB_TRACE(" temp : %.2f \n", blade_temperature);
-        currentTick = HAL_GetTick();
-        DB_TRACE(" Current ticktime: %d    \r", (currentTick - old_tick));
-        old_tick = currentTick;
-      }
     }
 
     if (NBT_handler(&main_buzzer_nbt))
@@ -1114,7 +1086,7 @@ void debug_printf(const char *fmt, ...)
  * At 115200 8N1 the longest debug string (~200 B) transmits in ~17 ms, so 25 ms
  * never drops a normal message yet stays under the 40 ms window watchdog so a
  * stuck busy flag can never starve the main loop into a WWDG reset. */
-#define MASTER_TX_TIMEOUT_MS 0 //25u
+#define MASTER_TX_TIMEOUT_MS 25u
 /*
  * Send message via MASTER USART (DMA Normal Mode)
  */
@@ -1132,11 +1104,6 @@ void MASTER_Transmit(uint8_t *buffer, uint8_t len)
     uint32_t wait_ms = HAL_GetTick() - wait_start;
     if (wait_ms > MASTER_TX_TIMEOUT_MS)
     {
-      g_master_tx_timeout_count++;
-      if (wait_ms > g_master_tx_max_wait_ms)
-      {
-        g_master_tx_max_wait_ms = wait_ms;
-      }
       return;
     }
   }
@@ -1144,12 +1111,9 @@ void MASTER_Transmit(uint8_t *buffer, uint8_t len)
   // copy into our master_tx_buffer
   master_tx_buffer_len = len;
   memcpy(master_tx_buffer, buffer, master_tx_buffer_len);
-  HAL_StatusTypeDef status =
-      HAL_UART_Transmit_DMA(&MASTER_USART_Handler, (uint8_t *)master_tx_buffer, master_tx_buffer_len);
-  g_master_tx_last_dma_status = (uint32_t)status;
-  if (status != HAL_OK)
+  if (HAL_UART_Transmit_DMA(&MASTER_USART_Handler, (uint8_t *)master_tx_buffer, master_tx_buffer_len) != HAL_OK)
   {
-    g_master_tx_dma_error_count++;
+    master_tx_busy = 0;
   }
 }
 #endif
@@ -1178,8 +1142,6 @@ static void WATCHDOG_vInit(void)
 #endif /* DB_ACTIVE */
   }
 
-#if ENABLE_WWDG
-/* Initialize WWDG for run time if applicable */
 #if defined(DB_ACTIVE)
   /* setup DBGMCU block - stop WWDG at break in debug mode */
   __HAL_FREEZE_WWDG_DBGMCU();
@@ -1197,7 +1159,6 @@ static void WATCHDOG_vInit(void)
     DB_TRACE(" WWDG init Error\r\n");
 #endif /* DB_ACTIVE */
   }
-#endif /* ENABLE_WWDG */
 } /* WATCHDOG_vInit() */
 
 /*
@@ -1205,31 +1166,6 @@ static void WATCHDOG_vInit(void)
  */
 static void WATCHDOG_Refresh(void)
 {
-  const uint32_t now = HAL_GetTick();
-  if (g_watchdog_last_refresh_tick != 0u)
-  {
-    const uint32_t gap_ms = now - g_watchdog_last_refresh_tick;
-    g_watchdog_last_refresh_gap_ms = gap_ms;
-    if (gap_ms > g_watchdog_max_refresh_gap_ms)
-    {
-      g_watchdog_max_refresh_gap_ms = gap_ms;
-    }
-    if (gap_ms > 20u)
-    {
-      g_watchdog_gap_over_20ms_count++;
-    }
-    if (gap_ms > 30u)
-    {
-      g_watchdog_gap_over_30ms_count++;
-    }
-    if (gap_ms > 35u)
-    {
-      g_watchdog_gap_over_35ms_count++;
-    }
-  }
-  g_watchdog_last_refresh_tick = now;
-  g_watchdog_refresh_count++;
-#if ENABLE_WWDG
   /* Update WWDG counter */
   WwdgHandle.Instance = WWDG;
   if (HAL_WWDG_Refresh(&WwdgHandle) != HAL_OK)
@@ -1238,7 +1174,6 @@ static void WATCHDOG_Refresh(void)
     DB_TRACE(" WWDG refresh error\r\n");
 #endif /* DB_ACTIVE */
   }
-#endif /* ENABLE_WWDG */
   /* Reload IWDG counter */
   IwdgHandle.Instance = IWDG;
   if (HAL_IWDG_Refresh(&IwdgHandle) != HAL_OK)

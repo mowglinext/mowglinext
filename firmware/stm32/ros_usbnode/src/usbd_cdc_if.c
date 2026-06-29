@@ -109,8 +109,6 @@ static uint32_t s_rxtail = 0;
 
 static uint32_t s_lastTransmitStart = 0;
 static uint32_t s_lastTransmitComplete = 0;
-static uint32_t s_txBusyCounter = 0;
-static uint32_t s_txQueueHighWatermark = 0;
 static uint32_t s_rxDropCounterHead = 0;
 static uint32_t s_rxDropCounterTail = 0;
 static uint32_t s_txDropCounterHead = 0;
@@ -463,7 +461,6 @@ static int8_t CDC_TransmitCplt(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
 void CDC_ResumeTransmit(void)
 {
     if (CDC_IsBusy()) {
-        s_txBusyCounter++;
         return;
     }
 
@@ -560,9 +557,6 @@ uint8_t CDC_TXQueue_Enqueue(const uint8_t *buffer, uint32_t length)
 
     atomic_signal_fence(memory_order_acquire);
     s_txhead = head;
-    if ((s_txhead - s_txtail) > s_txQueueHighWatermark) {
-        s_txQueueHighWatermark = s_txhead - s_txtail;
-    }
     atomic_signal_fence(memory_order_release);
 
     return USBD_OK;
@@ -716,12 +710,6 @@ uint32_t CDC_GetDroppedTxPackets()
     return s_txDropCounterHead - s_txDropCounterTail;
 }
 
-uint32_t CDC_GetBusyCount()
-{
-    atomic_signal_fence(memory_order_acquire);
-    return s_txBusyCounter;
-}
-
 /**
  * @brief  CDC_GetDroppedRxPackets
  *         Get the number of dropped received packets (neither handled nor enqueued)
@@ -732,12 +720,6 @@ uint32_t CDC_GetDroppedRxPackets()
 {
     atomic_signal_fence(memory_order_acquire);
     return s_rxDropCounterHead - s_rxDropCounterTail;
-}
-
-uint32_t CDC_GetTxQueueHighWatermark()
-{
-    atomic_signal_fence(memory_order_acquire);
-    return s_txQueueHighWatermark;
 }
 
 /**
