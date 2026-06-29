@@ -220,6 +220,20 @@ static inline bool usb_cdc_can_queue_bytes(const uint32_t wire_bytes) {
   return CDC_TXQueue_GetWriteAvailable() >= wire_bytes;
 }
 
+static inline bool usb_cdc_should_send_telemetry_packet(
+    const uint32_t wire_bytes) {
+  if (!CDC_ShouldSendTelemetry()) {
+    return false;
+  }
+
+  if (!usb_cdc_can_queue_bytes(wire_bytes)) {
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_QUEUE_FULL);
+    return false;
+  }
+
+  return true;
+}
+
 /* ---------------------------------------------------------------------------
  * COBS packet handlers (Host -> Firmware)
  * ---------------------------------------------------------------------------*/
@@ -693,6 +707,8 @@ extern "C" void panel_handler() {
     PANEL_Tick();
 
     if (buttonupdated == 1 && buttoncleared == 0) {
+      const uint32_t ui_event_wire_bytes =
+          usb_cdc_framed_packet_size(sizeof(pkt_ui_event_t));
       pkt_ui_event_t evt;
       evt.type = PKT_ID_UI_EVENT;
       evt.press_duration = 0; // short press
@@ -700,23 +716,33 @@ extern "C" void panel_handler() {
       // Map physical buttons to IDs
       if (buttonstate[PANEL_BUTTON_DEF_S1]) {
         evt.button_id = 1;
-        mowgli_comms_send(&evt, sizeof(evt));
+        if (usb_cdc_should_send_telemetry_packet(ui_event_wire_bytes)) {
+          mowgli_comms_send(&evt, sizeof(evt));
+        }
       }
       if (buttonstate[PANEL_BUTTON_DEF_S2]) {
         evt.button_id = 2;
-        mowgli_comms_send(&evt, sizeof(evt));
+        if (usb_cdc_should_send_telemetry_packet(ui_event_wire_bytes)) {
+          mowgli_comms_send(&evt, sizeof(evt));
+        }
       }
       if (buttonstate[PANEL_BUTTON_DEF_LOCK]) {
         evt.button_id = 3;
-        mowgli_comms_send(&evt, sizeof(evt));
+        if (usb_cdc_should_send_telemetry_packet(ui_event_wire_bytes)) {
+          mowgli_comms_send(&evt, sizeof(evt));
+        }
       }
       if (buttonstate[PANEL_BUTTON_DEF_START]) {
         evt.button_id = 4;
-        mowgli_comms_send(&evt, sizeof(evt));
+        if (usb_cdc_should_send_telemetry_packet(ui_event_wire_bytes)) {
+          mowgli_comms_send(&evt, sizeof(evt));
+        }
       }
       if (buttonstate[PANEL_BUTTON_DEF_HOME]) {
         evt.button_id = 5;
-        mowgli_comms_send(&evt, sizeof(evt));
+        if (usb_cdc_should_send_telemetry_packet(ui_event_wire_bytes)) {
+          mowgli_comms_send(&evt, sizeof(evt));
+        }
       }
 
       buttonupdated = 0;
@@ -791,7 +817,10 @@ wheelTicks_handler(int32_t p_s32LeftTicksSigned, int32_t p_s32RightTicksSigned,
   odom.left_velocity_mm_s = left_v_mm_s;
   odom.right_velocity_mm_s = right_v_mm_s;
 
-  mowgli_comms_send_odometry(&odom);
+  if (usb_cdc_should_send_telemetry_packet(
+          usb_cdc_framed_packet_size(sizeof(pkt_odometry_t)))) {
+    mowgli_comms_send_odometry(&odom);
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -810,7 +839,7 @@ extern "C" void broadcast_handler() {
     const uint32_t status_group_bytes =
         usb_cdc_framed_packet_size(sizeof(pkt_reset_cause_t)) +
         usb_cdc_framed_packet_size(sizeof(pkt_status_t));
-    if (!usb_cdc_can_queue_bytes(status_group_bytes)) {
+    if (!usb_cdc_should_send_telemetry_packet(status_group_bytes)) {
       WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
       return;
     }
@@ -876,7 +905,7 @@ extern "C" void broadcast_handler() {
 
   if (nbt_due(&imu_nbt, now_tick)) {
     const uint32_t imu_wire_bytes = usb_cdc_framed_packet_size(sizeof(pkt_imu_t));
-    if (!usb_cdc_can_queue_bytes(imu_wire_bytes)) {
+    if (!usb_cdc_should_send_telemetry_packet(imu_wire_bytes)) {
       WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
       return;
     }
@@ -943,7 +972,7 @@ extern "C" void broadcast_handler() {
   if (last_heartbeat_tick != 0u && nbt_due(&blade_nbt, now_tick)) {
     const uint32_t blade_wire_bytes =
         usb_cdc_framed_packet_size(sizeof(pkt_blade_status_t));
-    if (!usb_cdc_can_queue_bytes(blade_wire_bytes)) {
+    if (!usb_cdc_should_send_telemetry_packet(blade_wire_bytes)) {
       WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
       return;
     }

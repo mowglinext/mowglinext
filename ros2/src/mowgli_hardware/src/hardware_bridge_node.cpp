@@ -265,6 +265,14 @@ static const char* watchdog_stage_name(const uint8_t stage)
       return "USB_SUSPEND";
     case WATCHDOG_STAGE_USB_RESUME:
       return "USB_RESUME";
+    case WATCHDOG_STAGE_CDC_TX_PACKET_FAIL:
+      return "CDC_TX_PACKET_FAIL";
+    case WATCHDOG_STAGE_CDC_TX_BUSY_STUCK:
+      return "CDC_TX_BUSY_STUCK";
+    case WATCHDOG_STAGE_CDC_TX_QUEUE_FULL:
+      return "CDC_TX_QUEUE_FULL";
+    case WATCHDOG_STAGE_CDC_HOST_CLOSED:
+      return "CDC_HOST_CLOSED";
     default:
       return "UNKNOWN";
   }

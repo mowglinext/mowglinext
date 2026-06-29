@@ -218,6 +218,10 @@ extern "C" {
 #define WATCHDOG_STAGE_USB_RESET 40u
 #define WATCHDOG_STAGE_USB_SUSPEND 41u
 #define WATCHDOG_STAGE_USB_RESUME 42u
+#define WATCHDOG_STAGE_CDC_TX_PACKET_FAIL 43u
+#define WATCHDOG_STAGE_CDC_TX_BUSY_STUCK 44u
+#define WATCHDOG_STAGE_CDC_TX_QUEUE_FULL 45u
+#define WATCHDOG_STAGE_CDC_HOST_CLOSED 46u
 
 /* ---------------------------------------------------------------------------
  * USS sensor count

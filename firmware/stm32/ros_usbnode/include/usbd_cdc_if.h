@@ -171,6 +171,21 @@ uint8_t CDC_DataReceivedHandler(const uint8_t *Data, uint32_t len);
 uint32_t CDC_GetLastTransmitStartTick();
 uint32_t CDC_GetLastTransmitCompleteTick();
 uint8_t CDC_IsComportOpen();
+uint8_t CDC_IsConfigured();
+uint8_t CDC_IsSuspended();
+uint8_t CDC_ShouldSendTelemetry();
+void CDC_NotifyUsbReset(void);
+void CDC_NotifyUsbSuspend(void);
+void CDC_NotifyUsbResume(void);
+void CDC_NotifyUsbConnect(void);
+void CDC_NotifyUsbDisconnect(void);
+uint32_t CDC_GetTxQueueFullCount(void);
+uint32_t CDC_GetTxPacketFailCount(void);
+uint32_t CDC_GetTxBusyStuckCount(void);
+uint32_t CDC_GetTxCompleteMissingCount(void);
+uint32_t CDC_GetHostClosedSkipCount(void);
+uint32_t CDC_GetUsbResetSeenCount(void);
+uint32_t CDC_GetUsbSuspendSeenCount(void);
 
 /**
  * @brief  CDC_TransmitString

@@ -26,6 +26,7 @@
 
 #include "usbd_cdc.h"
 #include "main.h"
+#include "usbd_cdc_if.h"
 
 /* USER CODE BEGIN Includes */
 

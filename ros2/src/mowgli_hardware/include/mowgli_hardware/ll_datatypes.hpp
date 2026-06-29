@@ -159,6 +159,10 @@ constexpr uint8_t WATCHDOG_STAGE_CDC_TX_COMPLETE = 39u;
 constexpr uint8_t WATCHDOG_STAGE_USB_RESET = 40u;
 constexpr uint8_t WATCHDOG_STAGE_USB_SUSPEND = 41u;
 constexpr uint8_t WATCHDOG_STAGE_USB_RESUME = 42u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_PACKET_FAIL = 43u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_BUSY_STUCK = 44u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_QUEUE_FULL = 45u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_HOST_CLOSED = 46u;
 
 // ---------------------------------------------------------------------------
 // USS (ultrasonic) sensor count
