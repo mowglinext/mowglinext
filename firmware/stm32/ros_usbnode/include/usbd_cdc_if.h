@@ -71,10 +71,11 @@
 #define CDC_DATA_HS_MAX_PACKET_SIZE CDC_DATA_FS_MAX_PACKET_SIZE
 #endif
 
-// define CDC_REENTRANT if you use CDC_Transmit_xx in a reentrant way, i.e. from
-// nested interrupts or from both main context and interrupt context
-// if defined, interrupts will be disabled while copying data into internal buffer (critical section)
-//#define CDC_REENTRANT
+// The firmware enqueues USB CDC TX from both the main loop (broadcast/status/
+// odom/panel) and USB RX interrupt context (CONFIG_RSP reply). Keep the TX
+// queue operations reentrant so those producers cannot race each other.
+// Interrupts stay masked only for the short queue-copy critical section.
+#define CDC_REENTRANT
 #ifdef CDC_REENTRANT
     #define CDC_ENTER_CRITICAL_SECTION()   \
        uint32_t PriMsk;                    \

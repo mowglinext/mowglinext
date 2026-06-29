@@ -199,6 +199,28 @@ static uint32_t last_odom_tick = 0;
 static void update_blade_led(void);
 
 /* ---------------------------------------------------------------------------
+ * Broadcast backpressure helpers
+ * ---------------------------------------------------------------------------*/
+static inline bool nbt_due(const nbt_t *nbt, const uint32_t now_tick) {
+  return (now_tick - nbt->previousMillis) > nbt->timeout;
+}
+
+static inline void nbt_consume(nbt_t *nbt, const uint32_t now_tick) {
+  nbt->previousMillis = now_tick;
+}
+
+static inline uint32_t usb_cdc_framed_packet_size(const size_t raw_packet_size) {
+  /* All current packets are far below 254 bytes, so COBS adds at most one
+   * overhead byte. Framed wire size = leading 0x00 + encoded payload + trailing
+   * 0x00 <= raw + 3. */
+  return (uint32_t)raw_packet_size + 3u;
+}
+
+static inline bool usb_cdc_can_queue_bytes(const uint32_t wire_bytes) {
+  return CDC_TXQueue_GetWriteAvailable() >= wire_bytes;
+}
+
+/* ---------------------------------------------------------------------------
  * COBS packet handlers (Host -> Firmware)
  * ---------------------------------------------------------------------------*/
 
@@ -774,46 +796,23 @@ wheelTicks_handler(int32_t p_s32LeftTicksSigned, int32_t p_s32RightTicksSigned,
  * IMU + status broadcast handler
  * ---------------------------------------------------------------------------*/
 extern "C" void broadcast_handler() {
-  if (NBT_handler(&imu_nbt)) {
-    pkt_imu_t imu_pkt;
-    imu_pkt.type = PKT_ID_IMU;
+  const uint32_t now_tick = HAL_GetTick();
 
-    static uint32_t last_imu_tick = 0;
-    uint32_t now_tick = HAL_GetTick();
-    imu_pkt.dt_millis = (uint16_t)(now_tick - last_imu_tick);
-    last_imu_tick = now_tick;
+  /* Bound this section to one broadcast group per pass. Without that bound a
+   * delayed loop can emit IMU + reset/status + blade packets back-to-back in
+   * the same WATCHDOG_STAGE_BROADCAST window. The USB CDC enqueue path is
+   * non-blocking, but building and queueing several packets in one pass still
+   * stretches the watchdog window unnecessarily when USB is backpressured. */
+  if (nbt_due(&status_nbt, now_tick)) {
+    const uint32_t status_group_bytes =
+        usb_cdc_framed_packet_size(sizeof(pkt_reset_cause_t)) +
+        usb_cdc_framed_packet_size(sizeof(pkt_status_t));
+    if (!usb_cdc_can_queue_bytes(status_group_bytes)) {
+      return;
+    }
 
-#ifdef EXTERNAL_IMU_ACCELERATION
-    float ax, ay, az;
-    IMU_ReadAccelerometer(&ax, &ay, &az);
-    imu_pkt.acceleration_mss[0] = ax;
-    imu_pkt.acceleration_mss[1] = ay;
-    imu_pkt.acceleration_mss[2] = az;
-#else
-    imu_pkt.acceleration_mss[0] = 0.0f;
-    imu_pkt.acceleration_mss[1] = 0.0f;
-    imu_pkt.acceleration_mss[2] = 0.0f;
-#endif
+    nbt_consume(&status_nbt, now_tick);
 
-#ifdef EXTERNAL_IMU_ANGULAR
-    float gx, gy, gz;
-    IMU_ReadGyro(&gx, &gy, &gz);
-    imu_pkt.gyro_rads[0] = gx;
-    imu_pkt.gyro_rads[1] = gy;
-    imu_pkt.gyro_rads[2] = gz;
-#else
-    imu_pkt.gyro_rads[0] = 0.0f;
-    imu_pkt.gyro_rads[1] = 0.0f;
-    imu_pkt.gyro_rads[2] = 0.0f;
-#endif
-
-    // Magnetometer — uses generic IMU_ReadMag (works with any IMU that has mag)
-    IMU_ReadMag(&imu_pkt.mag_uT[0], &imu_pkt.mag_uT[1], &imu_pkt.mag_uT[2]);
-
-    mowgli_comms_send_imu(&imu_pkt);
-  }
-
-  if (NBT_handler(&status_nbt)) {
     pkt_status_t status_pkt;
     status_pkt.type = PKT_ID_STATUS;
 
@@ -865,10 +864,65 @@ extern "C" void broadcast_handler() {
     reset_pkt.last_stage_before_reset = g_boot_last_watchdog_stage_code;
     mowgli_comms_send(&reset_pkt, sizeof(reset_pkt));
     mowgli_comms_send_status(&status_pkt);
+    return;
+  }
+
+  if (nbt_due(&imu_nbt, now_tick)) {
+    const uint32_t imu_wire_bytes = usb_cdc_framed_packet_size(sizeof(pkt_imu_t));
+    if (!usb_cdc_can_queue_bytes(imu_wire_bytes)) {
+      return;
+    }
+
+    nbt_consume(&imu_nbt, now_tick);
+
+    pkt_imu_t imu_pkt;
+    imu_pkt.type = PKT_ID_IMU;
+
+    static uint32_t last_imu_tick = 0;
+    imu_pkt.dt_millis = (uint16_t)(now_tick - last_imu_tick);
+    last_imu_tick = now_tick;
+
+#ifdef EXTERNAL_IMU_ACCELERATION
+    float ax, ay, az;
+    IMU_ReadAccelerometer(&ax, &ay, &az);
+    imu_pkt.acceleration_mss[0] = ax;
+    imu_pkt.acceleration_mss[1] = ay;
+    imu_pkt.acceleration_mss[2] = az;
+#else
+    imu_pkt.acceleration_mss[0] = 0.0f;
+    imu_pkt.acceleration_mss[1] = 0.0f;
+    imu_pkt.acceleration_mss[2] = 0.0f;
+#endif
+
+#ifdef EXTERNAL_IMU_ANGULAR
+    float gx, gy, gz;
+    IMU_ReadGyro(&gx, &gy, &gz);
+    imu_pkt.gyro_rads[0] = gx;
+    imu_pkt.gyro_rads[1] = gy;
+    imu_pkt.gyro_rads[2] = gz;
+#else
+    imu_pkt.gyro_rads[0] = 0.0f;
+    imu_pkt.gyro_rads[1] = 0.0f;
+    imu_pkt.gyro_rads[2] = 0.0f;
+#endif
+
+    // Magnetometer — uses generic IMU_ReadMag (works with any IMU that has mag)
+    IMU_ReadMag(&imu_pkt.mag_uT[0], &imu_pkt.mag_uT[1], &imu_pkt.mag_uT[2]);
+
+    mowgli_comms_send_imu(&imu_pkt);
+    return;
   }
 
   // Blade motor status (4 Hz) — only after system has initialized
-  if (NBT_handler(&blade_nbt) && last_heartbeat_tick != 0u) {
+  if (last_heartbeat_tick != 0u && nbt_due(&blade_nbt, now_tick)) {
+    const uint32_t blade_wire_bytes =
+        usb_cdc_framed_packet_size(sizeof(pkt_blade_status_t));
+    if (!usb_cdc_can_queue_bytes(blade_wire_bytes)) {
+      return;
+    }
+
+    nbt_consume(&blade_nbt, now_tick);
+
     pkt_blade_status_t blade_pkt = {};
     blade_pkt.type = PKT_ID_BLADE_STATUS;
     blade_pkt.is_active = BLADEMOTOR_bActivated ? 1u : 0u;
