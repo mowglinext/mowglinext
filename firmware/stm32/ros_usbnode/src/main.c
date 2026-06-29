@@ -1045,7 +1045,7 @@ void msgPrint(uint8_t *msg, uint8_t msg_len)
 /*
  * calc crc byte
  */
-uint8_t crcCalc(uint8_t *msg, uint8_t msg_len)
+uint8_t crcCalc(const uint8_t *msg, uint8_t msg_len)
 {
   uint8_t crc = 0x0;
   uint8_t i;

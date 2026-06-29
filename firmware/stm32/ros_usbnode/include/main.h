@@ -82,7 +82,7 @@ void EmergencyController(void);
 void StatusLEDUpdate(void);
 void setDriveMotors(uint8_t left_speed, uint8_t right_speed, uint8_t left_dir, uint8_t right_dir);
 void setBladeMotor(uint8_t on_off);
-uint8_t crcCalc(uint8_t *msg, uint8_t msg_len);
+uint8_t crcCalc(const uint8_t *msg, uint8_t msg_len);
 void msgPrint(uint8_t *msg, uint8_t msg_len);
 void chirp(uint8_t count);
 

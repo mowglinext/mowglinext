@@ -42,13 +42,13 @@ extern "C"
 #define BLADEMOTOR_USART_INSTANCE USART3
 
 #define VALID_BOARD_DEFINED 1
-#define PANEL_TYPE PANEL_TYPE_YARDFORCE_500_CLASSIC
+#define PANEL_TYPE PANEL_TYPE_YARDFORCE_500B_CLASSIC
 #define BLADEMOTOR_LENGTH_RECEIVED_MSG 16
 #define DEBUG_TYPE DEBUG_TYPE_UART
 
 #define MAX_MPS 0.5		  // Allow maximum speed of 1.0 m/s
-#define PWM_PER_MPS 300.0 // PWM value of 300 means 1 m/s bot speed so we divide by 4 to have correct robot speed but still progressive speed
-#define TICKS_PER_M 399.0 // Power-on fallback encoder ticks per meter; ROS runtime tuning overrides this after host connection
+#define PWM_PER_MPS 337.0 // PWM value of 300 means 1 m/s bot speed so we divide by 4 to have correct robot speed but still progressive speed
+#define TICKS_PER_M 339.0 // Power-on fallback encoder ticks per meter; ROS runtime tuning overrides this after host connection
 #define WHEEL_BASE  0.325		// The distance between the center of the wheels in meters
 
 #define OPTION_ULTRASONIC 0
@@ -68,8 +68,8 @@ extern "C"
 #define DEBUG_TYPE DEBUG_TYPE_SWO
 
 #define MAX_MPS 0.5		  // Allow maximum speed of 1.0 m/s
-#define PWM_PER_MPS 300.0 // PWM value of 300 means 1 m/s bot speed so we divide by 4 to have correct robot speed but still progressive speed
-#define TICKS_PER_M 300.0 // Power-on fallback encoder ticks per meter; ROS runtime tuning overrides this after host connection
+#define PWM_PER_MPS 337.0 // PWM value of 300 means 1 m/s bot speed so we divide by 4 to have correct robot speed but still progressive speed
+#define TICKS_PER_M 339.0 // Power-on fallback encoder ticks per meter; ROS runtime tuning overrides this after host connection
 #define WHEEL_BASE  0.325		// The distance between the center of the wheels in meters
 
 #define OPTION_ULTRASONIC 0
@@ -102,7 +102,7 @@ extern "C"
 // wheel-lift and tilt GPIOs are actually wired and not floating/noisy — otherwise
 // EmergencyController() may latch a spurious emergency. Re-#define this only if a
 // given chassis lacks those sensors.
-// #define I_DONT_NEED_MY_FINGERS           1      // disables EmergencyController()
+#define I_DONT_NEED_MY_FINGERS           1      // disables EmergencyController()
 
 /// nominal max charge current is 1.0 Amp
 #define MAX_CHARGE_CURRENT 1.2f

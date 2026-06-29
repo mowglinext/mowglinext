@@ -29,7 +29,7 @@
 
 #define ASSERT(EX)                                                         \
 
-__inline enum ringbuffer_state  ringbuffer_status(struct  ringbuffer *rb)
+__inline enum ringbuffer_state  ringbuffer_status(const struct  ringbuffer *rb)
 {
 	if (rb->read_index == rb->write_index) {
 		if (rb->read_mirror == rb->write_mirror)
@@ -311,4 +311,3 @@ void  ringbuffer_init(struct  ringbuffer *rb,
     rb->buffer_ptr = pool;
     rb->buffer_size = size; //ALIGN_DOWN(size, ALIGN_SIZE);
 }
-

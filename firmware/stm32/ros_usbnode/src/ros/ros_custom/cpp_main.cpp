@@ -207,7 +207,7 @@ static void on_heartbeat(const uint8_t *data, size_t len) {
     return;
   }
 
-  const pkt_heartbeat_t *pkt = (const pkt_heartbeat_t *)data;
+  const pkt_heartbeat_t *pkt = reinterpret_cast<const pkt_heartbeat_t *>(data);
 
   last_heartbeat_tick = HAL_GetTick();
 
@@ -250,7 +250,7 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
     return;
   }
 
-  const pkt_cmd_vel_t *pkt = (const pkt_cmd_vel_t *)data;
+  const pkt_cmd_vel_t *pkt = reinterpret_cast<const pkt_cmd_vel_t *>(data);
 
   last_cmd_vel_tick = HAL_GetTick();
 
@@ -287,7 +287,8 @@ static void on_set_drive_pid(const uint8_t *data, size_t len) {
     return;
   }
 
-  const pkt_set_drive_pid_t *pkt = (const pkt_set_drive_pid_t *)data;
+  const pkt_set_drive_pid_t *pkt =
+      reinterpret_cast<const pkt_set_drive_pid_t *>(data);
 
   /* Drive behaviour is safety-relevant: reject the whole packet if any field
    * is non-finite, then clamp each field to a safe range before applying so a
@@ -338,7 +339,7 @@ static void on_hl_state(const uint8_t *data, size_t len) {
     return;
   }
 
-  const pkt_hl_state_t *pkt = (const pkt_hl_state_t *)data;
+  const pkt_hl_state_t *pkt = reinterpret_cast<const pkt_hl_state_t *>(data);
 
   hl_current_mode = pkt->current_mode;
   hl_gps_quality = pkt->gps_quality;
@@ -391,7 +392,7 @@ static void on_cmd_blade(const uint8_t *data, size_t len) {
     return;
   }
 
-  const pkt_cmd_blade_t *pkt = (const pkt_cmd_blade_t *)data;
+  const pkt_cmd_blade_t *pkt = reinterpret_cast<const pkt_cmd_blade_t *>(data);
   /* Defense-in-depth: never arm the blade target while IDLE/docked. The
    * authoritative gate is in motors_handler (which zeroes blade_on_off in
    * IDLE every tick), but refusing to latch the target here keeps state
@@ -413,7 +414,7 @@ static void on_reboot(const uint8_t *data, size_t len) {
   if (len < sizeof(pkt_reboot_t) - 2u) {
     return;
   }
-  const pkt_reboot_t *pkt = (const pkt_reboot_t *)data;
+  const pkt_reboot_t *pkt = reinterpret_cast<const pkt_reboot_t *>(data);
   if (pkt->magic == PKT_REBOOT_MAGIC) {
     debug_printf("reboot requested by host\r\n");
     reboot_flag = true;
@@ -867,8 +868,7 @@ extern "C" void broadcast_handler() {
 
   // Blade motor status (4 Hz) — only after system has initialized
   if (NBT_handler(&blade_nbt) && last_heartbeat_tick != 0u) {
-    pkt_blade_status_t blade_pkt;
-    memset(&blade_pkt, 0, sizeof(blade_pkt));
+    pkt_blade_status_t blade_pkt = {};
     blade_pkt.type = PKT_ID_BLADE_STATUS;
     blade_pkt.is_active = BLADEMOTOR_bActivated ? 1u : 0u;
     blade_pkt.rpm = BLADEMOTOR_u16RPM;

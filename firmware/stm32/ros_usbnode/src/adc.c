@@ -194,7 +194,6 @@ void ADC_Charging_Init(void)
 	ADC_Charging_Handle.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
 	ADC_Charging_Handle.Init.Resolution = ADC_RESOLUTION_12B;
 	ADC_Charging_Handle.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
-    ADC_Charging_Handle.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T2_CC2;
 	ADC_Charging_Handle.Init.DMAContinuousRequests = DISABLE;
 	ADC_Charging_Handle.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
 #endif

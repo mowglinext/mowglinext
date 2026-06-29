@@ -400,6 +400,7 @@ uint8_t CDC_TransmitTimed(const void* Buf, uint32_t Len, uint32_t TimeoutMs)
 
     CDC_ENTER_CRITICAL_SECTION();
 
+    const uint8_t *byteBuf = (const uint8_t *)Buf;
     uint32_t start = HAL_GetTick();
     uint8_t result = USBD_OK;
     while (Len > 0) {
@@ -409,10 +410,10 @@ uint8_t CDC_TransmitTimed(const void* Buf, uint32_t Len, uint32_t TimeoutMs)
         }
 
         uint32_t enqueueSize = MIN(Len, APP_TX_DATA_SIZE);
-        result = CDC_Transmit(Buf, enqueueSize);
+        result = CDC_Transmit(byteBuf, enqueueSize);
         if (result == USBD_OK) {
             Len -= enqueueSize;
-            Buf += Len;
+            byteBuf += Len;
         }
 
     }
@@ -697,7 +698,7 @@ uint32_t CDC_RXQueue_Dequeue(void *Dst, uint32_t MaxLen)
  */
 uint8_t CDC_IsBusy()
 {
-    USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*) hUsbDevice.pClassData;
+    const USBD_CDC_HandleTypeDef *hcdc = (const USBD_CDC_HandleTypeDef*) hUsbDevice.pClassData;
     
     return hcdc->TxState != 0;
 }
