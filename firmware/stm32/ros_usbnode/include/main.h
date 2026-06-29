@@ -133,6 +133,7 @@ int HALLSTOP_Left_Sense(void);
 int HALLSTOP_Right_Sense(void);
 
 void debug_printf(const char *fmt, ...);
+void WATCHDOG_SetMainLoopStage(uint8_t stage);
 
 
 /* USER CODE END EFP */

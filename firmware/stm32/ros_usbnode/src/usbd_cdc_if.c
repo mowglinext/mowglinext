@@ -22,6 +22,8 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "usbd_cdc_if.h"
+#include "main.h"
+#include "mowgli_protocol.h"
 #include <stdatomic.h>
 #include <signal.h>
 
@@ -356,6 +358,7 @@ uint8_t CDC_Transmit(const void *Buf, uint32_t Len)
     uint8_t result = USBD_OK;
     /* USER CODE BEGIN 7 */
 
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_QUEUE);
     s_lastTransmitStart = HAL_GetTick();
     result = CDC_TXQueue_Enqueue((const uint8_t*)Buf, Len);
 
@@ -367,7 +370,9 @@ uint8_t CDC_Transmit(const void *Buf, uint32_t Len)
          * enough debug-UART backpressure to starve the main loop watchdog. */
     }
 
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_RESUME);
     CDC_ResumeTransmit();
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_EXIT);
 
     CDC_EXIT_CRITICAL_SECTION();
     /* USER CODE END 7 */
@@ -460,7 +465,9 @@ static int8_t CDC_TransmitCplt(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
  */
 void CDC_ResumeTransmit(void)
 {
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_RESUME);
     if (CDC_IsBusy()) {
+        WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_EXIT);
         return;
     }
 
@@ -470,6 +477,7 @@ void CDC_ResumeTransmit(void)
         USBD_CDC_SetTxBuffer(&hUsbDevice, (uint8_t*) queueData, queueLength);
         USBD_CDC_TransmitPacket(&hUsbDevice);
     }
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_EXIT);
 }
 
 /**

@@ -796,6 +796,7 @@ wheelTicks_handler(int32_t p_s32LeftTicksSigned, int32_t p_s32RightTicksSigned,
  * IMU + status broadcast handler
  * ---------------------------------------------------------------------------*/
 extern "C" void broadcast_handler() {
+  WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_ENTER);
   const uint32_t now_tick = HAL_GetTick();
 
   /* Bound this section to one broadcast group per pass. Without that bound a
@@ -808,6 +809,7 @@ extern "C" void broadcast_handler() {
         usb_cdc_framed_packet_size(sizeof(pkt_reset_cause_t)) +
         usb_cdc_framed_packet_size(sizeof(pkt_status_t));
     if (!usb_cdc_can_queue_bytes(status_group_bytes)) {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
       return;
     }
 
@@ -862,18 +864,23 @@ extern "C" void broadcast_handler() {
     reset_pkt.type = PKT_ID_RESET_CAUSE;
     reset_pkt.reset_cause = g_boot_reset_cause_code;
     reset_pkt.last_stage_before_reset = g_boot_last_watchdog_stage_code;
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_RESET_SEND);
     mowgli_comms_send(&reset_pkt, sizeof(reset_pkt));
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_STATUS_SEND);
     mowgli_comms_send_status(&status_pkt);
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
     return;
   }
 
   if (nbt_due(&imu_nbt, now_tick)) {
     const uint32_t imu_wire_bytes = usb_cdc_framed_packet_size(sizeof(pkt_imu_t));
     if (!usb_cdc_can_queue_bytes(imu_wire_bytes)) {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
       return;
     }
 
     nbt_consume(&imu_nbt, now_tick);
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_IMU_BUILD);
 
     pkt_imu_t imu_pkt;
     imu_pkt.type = PKT_ID_IMU;
@@ -909,7 +916,9 @@ extern "C" void broadcast_handler() {
     // Magnetometer — uses generic IMU_ReadMag (works with any IMU that has mag)
     IMU_ReadMag(&imu_pkt.mag_uT[0], &imu_pkt.mag_uT[1], &imu_pkt.mag_uT[2]);
 
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_IMU_SEND);
     mowgli_comms_send_imu(&imu_pkt);
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
     return;
   }
 
@@ -918,6 +927,7 @@ extern "C" void broadcast_handler() {
     const uint32_t blade_wire_bytes =
         usb_cdc_framed_packet_size(sizeof(pkt_blade_status_t));
     if (!usb_cdc_can_queue_bytes(blade_wire_bytes)) {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
       return;
     }
 
@@ -930,8 +940,13 @@ extern "C" void broadcast_handler() {
     blade_pkt.power_watts = BLADEMOTOR_u16Power;
     blade_pkt.temperature = blade_temperature;
     blade_pkt.error_count = BLADEMOTOR_u32Error;
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_BLADE_SEND);
     mowgli_comms_send(&blade_pkt, sizeof(blade_pkt));
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
+    return;
   }
+
+  WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
 }
 
 /* ---------------------------------------------------------------------------

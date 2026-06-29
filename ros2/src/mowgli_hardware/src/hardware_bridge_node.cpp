@@ -215,6 +215,28 @@ static const char* watchdog_stage_name(const uint8_t stage)
       return "BUZZER";
     case WATCHDOG_STAGE_EMERGENCY:
       return "EMERGENCY";
+    case WATCHDOG_STAGE_BROADCAST_ENTER:
+      return "BROADCAST_ENTER";
+    case WATCHDOG_STAGE_BROADCAST_IMU_BUILD:
+      return "BROADCAST_IMU_BUILD";
+    case WATCHDOG_STAGE_BROADCAST_IMU_SEND:
+      return "BROADCAST_IMU_SEND";
+    case WATCHDOG_STAGE_BROADCAST_RESET_SEND:
+      return "BROADCAST_RESET_SEND";
+    case WATCHDOG_STAGE_BROADCAST_STATUS_SEND:
+      return "BROADCAST_STATUS_SEND";
+    case WATCHDOG_STAGE_BROADCAST_BLADE_SEND:
+      return "BROADCAST_BLADE_SEND";
+    case WATCHDOG_STAGE_BROADCAST_EXIT:
+      return "BROADCAST_EXIT";
+    case WATCHDOG_STAGE_CDC_TX_ENTER:
+      return "CDC_TX_ENTER";
+    case WATCHDOG_STAGE_CDC_TX_QUEUE:
+      return "CDC_TX_QUEUE";
+    case WATCHDOG_STAGE_CDC_TX_RESUME:
+      return "CDC_TX_RESUME";
+    case WATCHDOG_STAGE_CDC_TX_EXIT:
+      return "CDC_TX_EXIT";
     default:
       return "UNKNOWN";
   }

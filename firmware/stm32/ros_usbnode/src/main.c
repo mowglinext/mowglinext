@@ -48,7 +48,6 @@
 
 static void WATCHDOG_vInit(void);
 static void WATCHDOG_Refresh(void);
-static void WATCHDOG_SetMainLoopStage(uint8_t stage);
 static const char *WATCHDOG_StageName(uint8_t stage);
 static uint8_t WATCHDOG_ReadPersistedStage(void);
 static void WATCHDOG_WritePersistedStage(uint8_t stage);
@@ -263,7 +262,7 @@ static void BOOT_BlinkResetCause(uint32_t csr)
   }
 }
 
-static void WATCHDOG_SetMainLoopStage(uint8_t stage)
+void WATCHDOG_SetMainLoopStage(uint8_t stage)
 {
   g_main_loop_stage = stage;
 }
@@ -308,6 +307,28 @@ static const char *WATCHDOG_StageName(uint8_t stage)
       return "BUZZER";
     case WATCHDOG_STAGE_EMERGENCY:
       return "EMERGENCY";
+    case WATCHDOG_STAGE_BROADCAST_ENTER:
+      return "BROADCAST_ENTER";
+    case WATCHDOG_STAGE_BROADCAST_IMU_BUILD:
+      return "BROADCAST_IMU_BUILD";
+    case WATCHDOG_STAGE_BROADCAST_IMU_SEND:
+      return "BROADCAST_IMU_SEND";
+    case WATCHDOG_STAGE_BROADCAST_RESET_SEND:
+      return "BROADCAST_RESET_SEND";
+    case WATCHDOG_STAGE_BROADCAST_STATUS_SEND:
+      return "BROADCAST_STATUS_SEND";
+    case WATCHDOG_STAGE_BROADCAST_BLADE_SEND:
+      return "BROADCAST_BLADE_SEND";
+    case WATCHDOG_STAGE_BROADCAST_EXIT:
+      return "BROADCAST_EXIT";
+    case WATCHDOG_STAGE_CDC_TX_ENTER:
+      return "CDC_TX_ENTER";
+    case WATCHDOG_STAGE_CDC_TX_QUEUE:
+      return "CDC_TX_QUEUE";
+    case WATCHDOG_STAGE_CDC_TX_RESUME:
+      return "CDC_TX_RESUME";
+    case WATCHDOG_STAGE_CDC_TX_EXIT:
+      return "CDC_TX_EXIT";
     default:
       return "UNKNOWN";
   }

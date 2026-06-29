@@ -112,7 +112,7 @@ constexpr uint8_t RESET_CAUSE_WWDG = 6u;
 constexpr uint8_t RESET_CAUSE_LPWR = 7u;
 
 // ---------------------------------------------------------------------------
-// Main-loop watchdog breadcrumb constants
+// Watchdog breadcrumb constants
 // (ll_reset_cause::last_stage_before_reset)
 // ---------------------------------------------------------------------------
 
@@ -134,6 +134,17 @@ constexpr uint8_t WATCHDOG_STAGE_DRIVEMOTOR_10MS = 14u;
 constexpr uint8_t WATCHDOG_STAGE_BLADEMOTOR = 15u;
 constexpr uint8_t WATCHDOG_STAGE_BUZZER = 16u;
 constexpr uint8_t WATCHDOG_STAGE_EMERGENCY = 17u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST_ENTER = 18u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST_IMU_BUILD = 19u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST_IMU_SEND = 20u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST_RESET_SEND = 21u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST_STATUS_SEND = 22u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST_BLADE_SEND = 23u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST_EXIT = 24u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_ENTER = 25u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_QUEUE = 26u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_RESUME = 27u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_EXIT = 28u;
 
 // ---------------------------------------------------------------------------
 // USS (ultrasonic) sensor count
