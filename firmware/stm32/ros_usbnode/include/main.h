@@ -23,6 +23,7 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f_board_hal.h"
+#include "mowgli_protocol.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
