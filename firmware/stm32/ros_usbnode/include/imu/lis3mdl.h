@@ -23,7 +23,7 @@ extern "C" {
 
 uint8_t LIS3MDL_TestDevice(void);
 void LIS3MDL_Init(void);
-void LIS3MDL_ReadMagRaw(float *x, float *y, float *z);
+int LIS3MDL_ReadMagRaw(float *x, float *y, float *z);
 
 #ifdef __cplusplus
 }

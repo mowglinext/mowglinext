@@ -25,7 +25,7 @@
 
 IMU_ReadAccelerometerRaw imuReadAccelerometerRaw=NULL;
 IMU_ReadGyroRaw imuReadGyroRaw=NULL;
-IMU_ReadGyroRaw imuReadMagRaw=NULL;  /* reuse same typedef: void(*)(float*,float*,float*) */
+IMU_ReadMagRaw imuReadMagRaw=NULL;
 
 
 static int assertAccelerometer() {
@@ -49,11 +49,20 @@ int IMU_HasGyro() {
   * 
   * units are m/s^2 uncalibrated
   */ 
+int IMU_TryReadAccelerometer(float *x, float *y, float *z)
+{
+  if (x == NULL || y == NULL || z == NULL) return 0;
+  *x = 0.0f;
+  *y = 0.0f;
+  *z = 0.0f;
+  if (imuReadAccelerometerRaw == NULL) return 0;
+  return imuReadAccelerometerRaw(x, y, z);
+}
+
 void IMU_ReadAccelerometer(float *x, float *y, float *z)
 {
   if (assertAccelerometer()) return;
-    // Raw values — calibration is handled on the ROS2 side
-    imuReadAccelerometerRaw(x, y, z);
+  (void)IMU_TryReadAccelerometer(x, y, z);
 }
 
 /**
@@ -61,26 +70,39 @@ void IMU_ReadAccelerometer(float *x, float *y, float *z)
   * 
   * units are rad/sec uncalibrated
   */ 
+int IMU_TryReadGyro(float *x, float *y, float *z)
+{
+  if (x == NULL || y == NULL || z == NULL) return 0;
+  *x = 0.0f;
+  *y = 0.0f;
+  *z = 0.0f;
+  if (imuReadGyroRaw == NULL) return 0;
+  return imuReadGyroRaw(x, y, z);
+}
+
 void IMU_ReadGyro(float *x, float *y, float *z)
 {
   if (assertGyro()) return;
-  // Raw values — calibration is handled on the ROS2 side
-  imuReadGyroRaw(x, y, z);
+  (void)IMU_TryReadGyro(x, y, z);
 }
 
 /**
   * @brief  Reads the 3 magnetometer channels (if available)
   * units are uT (microtesla), uncalibrated
   */
+int IMU_TryReadMag(float *x, float *y, float *z)
+{
+  if (x == NULL || y == NULL || z == NULL) return 0;
+  *x = 0.0f;
+  *y = 0.0f;
+  *z = 0.0f;
+  if (imuReadMagRaw == NULL) return 1;
+  return imuReadMagRaw(x, y, z);
+}
+
 void IMU_ReadMag(float *x, float *y, float *z)
 {
-  if (imuReadMagRaw != NULL) {
-    imuReadMagRaw(x, y, z);
-  } else {
-    *x = 0.0f;
-    *y = 0.0f;
-    *z = 0.0f;
-  }
+  (void)IMU_TryReadMag(x, y, z);
 }
 
 int IMU_HasMag(void)

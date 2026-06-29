@@ -32,23 +32,27 @@ typedef struct
  * IMU functions that a compatible IMU needs to be able to provide
  */
 
+int IMU_TryReadAccelerometer(float *x, float *y, float *z);
 void IMU_ReadAccelerometer(float *x, float *y, float *z);
 void IMU_Onboard_ReadAccelerometer(float *x, float *y, float *z);
 float IMU_Onboard_ReadTemp(void);
+int IMU_TryReadGyro(float *x, float *y, float *z);
 void IMU_ReadGyro(float *x, float *y, float *z);
 typedef float (*IMU_ReadBarometerTemperatureC)(void);
 typedef float (*IMU_ReadBarometerAltitudeMeters)(void);
 void IMU_Normalize( VECTOR* p );
 
 /* Any external IMU needs to implement the following functions and adhere to the ROS REP 103 standard (https://www.ros.org/reps/rep-0103.html) */
-typedef void (*IMU_ReadGyroRaw)(float *x, float *y, float *z);
-typedef void (*IMU_ReadAccelerometerRaw)(float *x, float *y, float *z);
+typedef int (*IMU_ReadGyroRaw)(float *x, float *y, float *z);
+typedef int (*IMU_ReadAccelerometerRaw)(float *x, float *y, float *z);
+typedef int (*IMU_ReadMagRaw)(float *x, float *y, float *z);
 /* end of functions to implement for IMU */
 
 void IMU_Init();
 int IMU_HasAccelerometer();
 int IMU_HasGyro();
 int IMU_HasMag();
+int IMU_TryReadMag(float *x, float *y, float *z);
 void IMU_ReadMag(float *x, float *y, float *z);
 
 

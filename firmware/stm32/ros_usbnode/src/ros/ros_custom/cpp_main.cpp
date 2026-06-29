@@ -882,39 +882,54 @@ extern "C" void broadcast_handler() {
     nbt_consume(&imu_nbt, now_tick);
     WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_IMU_BUILD);
 
-    pkt_imu_t imu_pkt;
-    imu_pkt.type = PKT_ID_IMU;
-
     static uint32_t last_imu_tick = 0;
-    imu_pkt.dt_millis = (uint16_t)(now_tick - last_imu_tick);
-    last_imu_tick = now_tick;
+    float ax = 0.0f;
+    float ay = 0.0f;
+    float az = 0.0f;
+    float gx = 0.0f;
+    float gy = 0.0f;
+    float gz = 0.0f;
+    float mx = 0.0f;
+    float my = 0.0f;
+    float mz = 0.0f;
 
 #ifdef EXTERNAL_IMU_ACCELERATION
-    float ax, ay, az;
-    IMU_ReadAccelerometer(&ax, &ay, &az);
-    imu_pkt.acceleration_mss[0] = ax;
-    imu_pkt.acceleration_mss[1] = ay;
-    imu_pkt.acceleration_mss[2] = az;
-#else
-    imu_pkt.acceleration_mss[0] = 0.0f;
-    imu_pkt.acceleration_mss[1] = 0.0f;
-    imu_pkt.acceleration_mss[2] = 0.0f;
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_IMU_ACCEL);
+    if (!IMU_TryReadAccelerometer(&ax, &ay, &az)) {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
+      return;
+    }
 #endif
 
 #ifdef EXTERNAL_IMU_ANGULAR
-    float gx, gy, gz;
-    IMU_ReadGyro(&gx, &gy, &gz);
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_IMU_GYRO);
+    if (!IMU_TryReadGyro(&gx, &gy, &gz)) {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
+      return;
+    }
+#endif
+
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_IMU_MAG);
+    if (!IMU_TryReadMag(&mx, &my, &mz)) {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
+      return;
+    }
+
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_IMU_PACKET_FILL);
+
+    pkt_imu_t imu_pkt = {};
+    imu_pkt.type = PKT_ID_IMU;
+    imu_pkt.dt_millis = (uint16_t)(now_tick - last_imu_tick);
+    last_imu_tick = now_tick;
+    imu_pkt.acceleration_mss[0] = ax;
+    imu_pkt.acceleration_mss[1] = ay;
+    imu_pkt.acceleration_mss[2] = az;
     imu_pkt.gyro_rads[0] = gx;
     imu_pkt.gyro_rads[1] = gy;
     imu_pkt.gyro_rads[2] = gz;
-#else
-    imu_pkt.gyro_rads[0] = 0.0f;
-    imu_pkt.gyro_rads[1] = 0.0f;
-    imu_pkt.gyro_rads[2] = 0.0f;
-#endif
-
-    // Magnetometer — uses generic IMU_ReadMag (works with any IMU that has mag)
-    IMU_ReadMag(&imu_pkt.mag_uT[0], &imu_pkt.mag_uT[1], &imu_pkt.mag_uT[2]);
+    imu_pkt.mag_uT[0] = mx;
+    imu_pkt.mag_uT[1] = my;
+    imu_pkt.mag_uT[2] = mz;
 
     WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_IMU_SEND);
     mowgli_comms_send_imu(&imu_pkt);

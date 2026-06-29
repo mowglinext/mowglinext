@@ -205,6 +205,10 @@ extern "C"
 #define WATCHDOG_STAGE_CDC_TX_QUEUE 26u
 #define WATCHDOG_STAGE_CDC_TX_RESUME 27u
 #define WATCHDOG_STAGE_CDC_TX_EXIT 28u
+#define WATCHDOG_STAGE_IMU_ACCEL 29u
+#define WATCHDOG_STAGE_IMU_GYRO 30u
+#define WATCHDOG_STAGE_IMU_MAG 31u
+#define WATCHDOG_STAGE_IMU_PACKET_FILL 32u
 
 /* ---------------------------------------------------------------------------
  * USS sensor count

@@ -119,14 +119,16 @@ void ICM45686_Init(void)
   debug_printf(" * ICM-45686 configured (soft-reset, pwr_mgmt, accel/gyro cfg)\r\n");
 }
 
-void ICM45686_ReadAccelerometerRaw(float *x, float *y, float *z)
+int ICM45686_ReadAccelerometerRaw(float *x, float *y, float *z)
 {
     uint8_t accel_xyz[6];
 
-    SW_I2C_UTIL_Read_Multi(icm45686_addr, ICM45686_ACCEL_XOUT_H, 6, (uint8_t*)&accel_xyz);
+    if (!SW_I2C_UTIL_Read_Multi(icm45686_addr, ICM45686_ACCEL_XOUT_H, 6, (uint8_t*)&accel_xyz)) {
+      return 0;
+    }
 
+  // default is little-endian, combine bytes
   {
-    // default is little-endian, combine bytes
     int16_t rx = (int16_t)(accel_xyz[1] << 8 | accel_xyz[0]);
     int16_t ry = (int16_t)(accel_xyz[3] << 8 | accel_xyz[2]);
     int16_t rz = (int16_t)(accel_xyz[5] << 8 | accel_xyz[4]);
@@ -134,15 +136,18 @@ void ICM45686_ReadAccelerometerRaw(float *x, float *y, float *z)
     *y = ry * icm45686_g_per_lsb * MS2_PER_G;
     *z = rz * icm45686_g_per_lsb * MS2_PER_G;
   }
+  return 1;
 }
 
-void ICM45686_ReadGyroRaw(float *x, float *y, float *z)
+int ICM45686_ReadGyroRaw(float *x, float *y, float *z)
 {
     uint8_t gyro_xyz[6];
-    SW_I2C_UTIL_Read_Multi(icm45686_addr, ICM45686_GYRO_XOUT_H, 6, (uint8_t*)&gyro_xyz);
+    if (!SW_I2C_UTIL_Read_Multi(icm45686_addr, ICM45686_GYRO_XOUT_H, 6, (uint8_t*)&gyro_xyz)) {
+      return 0;
+    }
 
+  // default is little-endian, combine bytes
   {
-    // default is little-endian, combine bytes
     int16_t gx = (int16_t)(gyro_xyz[1] << 8 | gyro_xyz[0]);
     int16_t gy = (int16_t)(gyro_xyz[3] << 8 | gyro_xyz[2]);
     int16_t gz = (int16_t)(gyro_xyz[5] << 8 | gyro_xyz[4]);
@@ -151,6 +156,7 @@ void ICM45686_ReadGyroRaw(float *x, float *y, float *z)
     *y = gy * icm45686_deg_per_lsb * RAD_PER_DEG;
     *z = gz * icm45686_deg_per_lsb * RAD_PER_DEG;
   }
+  return 1;
 }
 
 #endif

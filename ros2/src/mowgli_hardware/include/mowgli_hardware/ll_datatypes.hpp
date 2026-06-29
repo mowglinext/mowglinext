@@ -145,6 +145,10 @@ constexpr uint8_t WATCHDOG_STAGE_CDC_TX_ENTER = 25u;
 constexpr uint8_t WATCHDOG_STAGE_CDC_TX_QUEUE = 26u;
 constexpr uint8_t WATCHDOG_STAGE_CDC_TX_RESUME = 27u;
 constexpr uint8_t WATCHDOG_STAGE_CDC_TX_EXIT = 28u;
+constexpr uint8_t WATCHDOG_STAGE_IMU_ACCEL = 29u;
+constexpr uint8_t WATCHDOG_STAGE_IMU_GYRO = 30u;
+constexpr uint8_t WATCHDOG_STAGE_IMU_MAG = 31u;
+constexpr uint8_t WATCHDOG_STAGE_IMU_PACKET_FILL = 32u;
 
 // ---------------------------------------------------------------------------
 // USS (ultrasonic) sensor count

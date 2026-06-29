@@ -329,6 +329,14 @@ static const char *WATCHDOG_StageName(uint8_t stage)
       return "CDC_TX_RESUME";
     case WATCHDOG_STAGE_CDC_TX_EXIT:
       return "CDC_TX_EXIT";
+    case WATCHDOG_STAGE_IMU_ACCEL:
+      return "IMU_ACCEL";
+    case WATCHDOG_STAGE_IMU_GYRO:
+      return "IMU_GYRO";
+    case WATCHDOG_STAGE_IMU_MAG:
+      return "IMU_MAG";
+    case WATCHDOG_STAGE_IMU_PACKET_FILL:
+      return "IMU_PACKET_FILL";
     default:
       return "UNKNOWN";
   }

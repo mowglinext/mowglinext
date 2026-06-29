@@ -22,13 +22,13 @@ void MPU6050_Init(void);
   * @brief  Reads the 3 accelerometer channels and stores them in *x,*y,*z
   * units are m/s^2
   */
-void MPU6050_ReadAccelerometerRaw(float *x, float *y, float *z);
+int MPU6050_ReadAccelerometerRaw(float *x, float *y, float *z);
 
 /**
   * @brief  Reads the 3 gyro channels and stores them in *x,*y,*z
   * units are rad/sec
   */
-void MPU6050_ReadGyroRaw(float *x, float *y, float *z);
+int MPU6050_ReadGyroRaw(float *x, float *y, float *z);
 
 #ifdef __cplusplus
 }
