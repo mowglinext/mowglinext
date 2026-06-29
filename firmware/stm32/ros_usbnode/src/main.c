@@ -1082,31 +1082,19 @@ void debug_printf(const char *fmt, ...)
 }
 
 #if BOARD_HAS_MASTER_USART
-/* Upper bound (ms) on the wait for the previous MASTER USART DMA to finish.
- * At 115200 8N1 the longest debug string (~200 B) transmits in ~17 ms, so 25 ms
- * never drops a normal message yet stays under the 40 ms window watchdog so a
- * stuck busy flag can never starve the main loop into a WWDG reset. */
-#define MASTER_TX_TIMEOUT_MS 25u
 /*
- * Send message via MASTER USART (DMA Normal Mode)
+ * Send message via MASTER USART (DMA Normal Mode).
+ * Debug output is strictly best-effort: if a previous DMA transfer is still in
+ * flight, drop this message immediately so logging can never block the main
+ * loop or delay the watchdog refresh.
  */
 void MASTER_Transmit(uint8_t *buffer, uint8_t len)
 {
-  /* Wait (bounded) for the previous DMA TX to complete. If its TX-complete
-   * callback was ever missed and master_tx_busy is stuck, time out and DROP
-   * this message instead of spinning forever — spinning would starve the main
-   * loop and trip the watchdog, and overwriting master_tx_buffer mid-DMA would
-   * corrupt an in-flight transfer. The MASTER USART only carries debug output,
-   * so dropping a message is harmless. */
-  uint32_t wait_start = HAL_GetTick();
-  while (master_tx_busy)
+  if (master_tx_busy)
   {
-    uint32_t wait_ms = HAL_GetTick() - wait_start;
-    if (wait_ms > MASTER_TX_TIMEOUT_MS)
-    {
-      return;
-    }
+    return;
   }
+
   master_tx_busy = 1;
   // copy into our master_tx_buffer
   master_tx_buffer_len = len;
