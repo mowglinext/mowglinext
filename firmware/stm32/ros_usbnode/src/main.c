@@ -48,6 +48,11 @@
 
 static void WATCHDOG_vInit(void);
 static void WATCHDOG_Refresh(void);
+static void WATCHDOG_SetMainLoopStage(uint8_t stage);
+static const char *WATCHDOG_StageName(uint8_t stage);
+static uint8_t WATCHDOG_ReadPersistedStage(void);
+static void WATCHDOG_WritePersistedStage(uint8_t stage);
+static void WATCHDOG_LoadBootBreadcrumb(void);
 void TIM4_Init(void);
 void HALLSTOP_Sensor_Init(void);
 
@@ -85,6 +90,8 @@ IWDG_HandleTypeDef IwdgHandle = {0};
 WWDG_HandleTypeDef WwdgHandle = {0};
 static uint32_t g_boot_reset_csr = 0;
 uint8_t g_boot_reset_cause_code = 0;
+uint8_t g_boot_last_watchdog_stage_code = WATCHDOG_STAGE_NONE;
+static volatile uint8_t g_main_loop_stage = WATCHDOG_STAGE_NONE;
 
 static const char *BOOT_PrimaryResetCause(uint32_t csr)
 {
@@ -256,6 +263,100 @@ static void BOOT_BlinkResetCause(uint32_t csr)
   }
 }
 
+static void WATCHDOG_SetMainLoopStage(uint8_t stage)
+{
+  g_main_loop_stage = stage;
+}
+
+static const char *WATCHDOG_StageName(uint8_t stage)
+{
+  switch (stage)
+  {
+    case WATCHDOG_STAGE_NONE:
+      return "NONE";
+    case WATCHDOG_STAGE_CHATTER:
+      return "CHATTER";
+    case WATCHDOG_STAGE_MOTORS:
+      return "MOTORS";
+    case WATCHDOG_STAGE_PANEL:
+      return "PANEL";
+    case WATCHDOG_STAGE_ROS_SPIN:
+      return "ROS_SPIN";
+    case WATCHDOG_STAGE_BROADCAST:
+      return "BROADCAST";
+    case WATCHDOG_STAGE_DRIVEMOTOR_RX:
+      return "DRIVEMOTOR_RX";
+    case WATCHDOG_STAGE_PERIMETER:
+      return "PERIMETER";
+    case WATCHDOG_STAGE_ADC:
+      return "ADC";
+    case WATCHDOG_STAGE_CHARGER:
+      return "CHARGER";
+    case WATCHDOG_STAGE_STATUS_LED:
+      return "STATUS_LED";
+    case WATCHDOG_STAGE_ULTRASONIC_HANDLER:
+      return "ULTRASONIC_HANDLER";
+    case WATCHDOG_STAGE_ULTRASONIC_APP:
+      return "ULTRASONIC_APP";
+    case WATCHDOG_STAGE_WATCHDOG_REFRESH:
+      return "WATCHDOG_REFRESH";
+    case WATCHDOG_STAGE_DRIVEMOTOR_10MS:
+      return "DRIVEMOTOR_10MS";
+    case WATCHDOG_STAGE_BLADEMOTOR:
+      return "BLADEMOTOR";
+    case WATCHDOG_STAGE_BUZZER:
+      return "BUZZER";
+    case WATCHDOG_STAGE_EMERGENCY:
+      return "EMERGENCY";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+static uint8_t WATCHDOG_ReadPersistedStage(void)
+{
+#if BOARD_YARDFORCE500_VARIANT_ORIG
+  return (uint8_t)(HAL_RTCEx_BKUPRead(&hrtc, RTC_BKP_DR5) & 0xFFu);
+#elif BOARD_YARDFORCE500_VARIANT_B
+  uint32_t backup_register = (uint32_t)&(RTC->BKP0R);
+  backup_register += (RTC_BKP_DR5 * 4u);
+  return (uint8_t)(*(__IO uint32_t *)backup_register & 0xFFu);
+#else
+  return WATCHDOG_STAGE_NONE;
+#endif
+}
+
+static void WATCHDOG_WritePersistedStage(uint8_t stage)
+{
+  HAL_PWR_EnableBkUpAccess();
+#if BOARD_YARDFORCE500_VARIANT_ORIG
+  HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR5, stage);
+#elif BOARD_YARDFORCE500_VARIANT_B
+  uint32_t backup_register = (uint32_t)&(RTC->BKP0R);
+  backup_register += (RTC_BKP_DR5 * 4u);
+  *(__IO uint32_t *)backup_register = (uint32_t)stage;
+#else
+  (void)stage;
+#endif
+}
+
+static void WATCHDOG_LoadBootBreadcrumb(void)
+{
+  if (g_boot_reset_cause_code == RESET_CAUSE_WWDG)
+  {
+    g_boot_last_watchdog_stage_code = WATCHDOG_ReadPersistedStage();
+    DB_TRACE(" * Last stage before WWDG reset: %s (%u)\r\n",
+             WATCHDOG_StageName(g_boot_last_watchdog_stage_code),
+             (unsigned int)g_boot_last_watchdog_stage_code);
+  }
+  else
+  {
+    g_boot_last_watchdog_stage_code = WATCHDOG_STAGE_NONE;
+  }
+
+  WATCHDOG_WritePersistedStage(WATCHDOG_STAGE_NONE);
+}
+
 #if DB_ACTIVE
 int debug_assert(int condition, const char *msg)
 {
@@ -304,6 +405,7 @@ int main(void)
   DB_TRACE(" * LED initialized\r\n");
   TIM2_Init();
   ADC_Charging_Init();
+  WATCHDOG_LoadBootBreadcrumb();
 #ifdef OPTION_PERIMETER
   Perimeter_vInit();
 #endif
@@ -391,27 +493,38 @@ int main(void)
   chirp(2);
 
   WATCHDOG_vInit();
+  WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_NONE);
 
   while (1)
   {
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CHATTER);
     chatter_handler();
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_MOTORS);
     motors_handler();
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_PANEL);
     panel_handler();
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_ROS_SPIN);
     spinOnce();
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST);
     broadcast_handler();
 
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_DRIVEMOTOR_RX);
     DRIVEMOTOR_App_Rx();
 #ifdef OPTION_PERIMETER
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_PERIMETER);
     Perimeter_vApp();
 #endif
 
     if (NBT_handler(&main_chargecontroller_nbt))
     {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_ADC);
       ADC_input();
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CHARGER);
       ChargeController();
     }
     if (NBT_handler(&main_statusled_nbt))
     {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_STATUS_LED);
       StatusLEDUpdate();
 
       // DB_TRACE("master_rx_STATUS: %d  drivemotors_rx_buf_idx: %d  cnt_usart2_overrun: %x\r\n", master_rx_STATUS, drivemotors_rx_buf_idx, cnt_usart2_overrun);
@@ -420,30 +533,36 @@ int main(void)
     /* try to send ros message without delay*/
     if (ULTRASONIC_MessageReceived() == 1)
     {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_ULTRASONIC_HANDLER);
       ultrasonic_handler();
     }
     if (NBT_handler(&main_ultrasonicsensor_nbt))
     {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_ULTRASONIC_APP);
       ULTRASONICSENSOR_App();
     }
 #endif
     if (NBT_handler(&main_wdg_nbt))
     {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_WATCHDOG_REFRESH);
       WATCHDOG_Refresh();
     }
 
     if (NBT_handler(&main_drivemotor_nbt))
     {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_DRIVEMOTOR_10MS);
       DRIVEMOTOR_App_10ms();
     }
 
     if (NBT_handler(&main_blademotor_nbt))
     {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BLADEMOTOR);
       BLADEMOTOR_App();
     }
 
     if (NBT_handler(&main_buzzer_nbt))
     {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BUZZER);
       // TODO
       if (do_chirp)
       {
@@ -463,6 +582,7 @@ int main(void)
 #ifndef I_DONT_NEED_MY_FINGERS
     if (NBT_handler(&main_emergency_nbt))
     {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_EMERGENCY);
       EmergencyController();
     }
 #endif
@@ -1141,6 +1261,9 @@ static void WATCHDOG_vInit(void)
   WwdgHandle.Init.Prescaler = WWDG_PRESCALER_8;
   WwdgHandle.Init.Counter = 0x7F; /* 40.02 ms*/
   WwdgHandle.Init.Window = 0x7F;  /* 0ms */
+  WwdgHandle.Init.EWIMode = WWDG_EWI_ENABLE;
+  HAL_NVIC_SetPriority(WWDG_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(WWDG_IRQn);
   if( HAL_WWDG_Init(&WwdgHandle) != HAL_OK )
   {
 #ifdef DB_ACTIVE
@@ -1170,6 +1293,12 @@ static void WATCHDOG_Refresh(void)
     DB_TRACE(" IWDG refresh error\r\n");
 #endif /* DB_ACTIVE */
   }
+}
+
+void HAL_WWDG_EarlyWakeupCallback(WWDG_HandleTypeDef *hwwdg)
+{
+  (void)hwwdg;
+  WATCHDOG_WritePersistedStage((uint8_t)g_main_loop_stage);
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)

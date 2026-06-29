@@ -75,6 +75,7 @@ extern DMA_HandleTypeDef hdma_uart_blade_rx;
 extern DMA_HandleTypeDef hdma_adc;
 
 extern ADC_HandleTypeDef ADC_Charging_Handle;
+extern WWDG_HandleTypeDef WwdgHandle;
 
 /* USER CODE BEGIN EV */
 
@@ -217,6 +218,11 @@ void SysTick_Handler(void)
 /* For the available peripheral interrupt handler names,                      */
 /* please refer to the startup file (startup_stm32f4xx.s).                    */
 /******************************************************************************/
+
+void WWDG_IRQHandler(void)
+{
+  HAL_WWDG_IRQHandler(&WwdgHandle);
+}
 
 /**
   * @brief This function handles ADC1 global interrupt.

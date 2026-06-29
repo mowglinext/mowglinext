@@ -66,7 +66,7 @@ TEST(ProtocolSizes, OdometryPacketSize)
 
 TEST(ProtocolSizes, ResetCausePacketSize)
 {
-  EXPECT_EQ(sizeof(LlResetCause), 4u);
+  EXPECT_EQ(sizeof(LlResetCause), 5u);
 }
 
 TEST(ProtocolSizes, HeartbeatPacketSize)
@@ -292,6 +292,7 @@ TEST(ProtocolRoundtrip, ResetCausePacket)
   LlResetCause pkt{};
   pkt.type = PACKET_ID_LL_RESET_CAUSE;
   pkt.reset_cause = RESET_CAUSE_WWDG;
+  pkt.last_stage_before_reset = WATCHDOG_STAGE_ADC;
 
   roundtrip_struct(pkt);
 }

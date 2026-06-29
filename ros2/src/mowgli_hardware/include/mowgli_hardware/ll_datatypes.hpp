@@ -36,6 +36,9 @@ namespace mowgli_hardware
 // Protocol v2 moves runtime drive tuning to packet 0x54 and adds
 // ticks_per_meter to the payload so legacy firmware safely ignores the packet
 // rather than mis-parsing it as the old PID-only layout.
+// Protocol v3 extends the reset-cause packet with last_stage_before_reset so
+// the bridge can report which firmware main-loop section was active when the
+// WWDG fired.
 //
 // This is the COMPATIBILITY KEY: the bridge sends PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ
 // on every (re)connect and the firmware answers with its own
@@ -43,7 +46,7 @@ namespace mowgli_hardware
 // too old to answer at all — the image and firmware speak different wire
 // formats and the operator must reflash. Bump this in lockstep with
 // MOWGLI_PROTOCOL_VERSION in mowgli_protocol.h whenever the wire format changes.
-static constexpr uint8_t kMowgliProtocolVersion = 2u;
+static constexpr uint8_t kMowgliProtocolVersion = 3u;
 
 // ---------------------------------------------------------------------------
 // Packet type identifiers
@@ -107,6 +110,30 @@ constexpr uint8_t RESET_CAUSE_SFTRST = 4u;
 constexpr uint8_t RESET_CAUSE_IWDG = 5u;
 constexpr uint8_t RESET_CAUSE_WWDG = 6u;
 constexpr uint8_t RESET_CAUSE_LPWR = 7u;
+
+// ---------------------------------------------------------------------------
+// Main-loop watchdog breadcrumb constants
+// (ll_reset_cause::last_stage_before_reset)
+// ---------------------------------------------------------------------------
+
+constexpr uint8_t WATCHDOG_STAGE_NONE = 0u;
+constexpr uint8_t WATCHDOG_STAGE_CHATTER = 1u;
+constexpr uint8_t WATCHDOG_STAGE_MOTORS = 2u;
+constexpr uint8_t WATCHDOG_STAGE_PANEL = 3u;
+constexpr uint8_t WATCHDOG_STAGE_ROS_SPIN = 4u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST = 5u;
+constexpr uint8_t WATCHDOG_STAGE_DRIVEMOTOR_RX = 6u;
+constexpr uint8_t WATCHDOG_STAGE_PERIMETER = 7u;
+constexpr uint8_t WATCHDOG_STAGE_ADC = 8u;
+constexpr uint8_t WATCHDOG_STAGE_CHARGER = 9u;
+constexpr uint8_t WATCHDOG_STAGE_STATUS_LED = 10u;
+constexpr uint8_t WATCHDOG_STAGE_ULTRASONIC_HANDLER = 11u;
+constexpr uint8_t WATCHDOG_STAGE_ULTRASONIC_APP = 12u;
+constexpr uint8_t WATCHDOG_STAGE_WATCHDOG_REFRESH = 13u;
+constexpr uint8_t WATCHDOG_STAGE_DRIVEMOTOR_10MS = 14u;
+constexpr uint8_t WATCHDOG_STAGE_BLADEMOTOR = 15u;
+constexpr uint8_t WATCHDOG_STAGE_BUZZER = 16u;
+constexpr uint8_t WATCHDOG_STAGE_EMERGENCY = 17u;
 
 // ---------------------------------------------------------------------------
 // USS (ultrasonic) sensor count
@@ -185,12 +212,15 @@ struct LlOdometry
  * @brief Boot reset cause packet sent by the STM32 (PACKET_ID_LL_RESET_CAUSE = 0x06).
  *
  * Sent periodically so the host can recover the current boot cause even if it
- * connects after the STM32 has already started streaming.
+ * connects after the STM32 has already started streaming. When reset_cause is
+ * WWDG, last_stage_before_reset carries the persisted main-loop breadcrumb
+ * captured immediately before the watchdog reset.
  */
 struct LlResetCause
 {
   uint8_t type;  ///< Must equal PACKET_ID_LL_RESET_CAUSE
   uint8_t reset_cause;  ///< RESET_CAUSE_* constant
+  uint8_t last_stage_before_reset;  ///< WATCHDOG_STAGE_* constant
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
 
@@ -345,7 +375,7 @@ static_assert(sizeof(LlStatus) == 38u, "LlStatus layout mismatch");
 static_assert(sizeof(LlImu) == 41u, "LlImu layout mismatch");
 static_assert(sizeof(LlUiEvent) == 5u, "LlUiEvent layout mismatch");
 static_assert(sizeof(LlOdometry) == 17u, "LlOdometry layout mismatch");
-static_assert(sizeof(LlResetCause) == 4u, "LlResetCause layout mismatch");
+static_assert(sizeof(LlResetCause) == 5u, "LlResetCause layout mismatch");
 static_assert(sizeof(LlHeartbeat) == 5u, "LlHeartbeat layout mismatch");
 static_assert(sizeof(LlHighLevelState) == 5u, "LlHighLevelState layout mismatch");
 static_assert(sizeof(LlCmdVel) == 11u, "LlCmdVel layout mismatch");

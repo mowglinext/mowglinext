@@ -91,6 +91,7 @@ extern uint16_t  chargecontrol_pwm_val;
 extern uint8_t   chargecontrol_is_charging;
 extern uint8_t do_chirp;
 extern uint8_t g_boot_reset_cause_code;
+extern uint8_t g_boot_last_watchdog_stage_code;
 extern openmower_status_e main_eOpenmowerStatus;
 
 // uart statistics

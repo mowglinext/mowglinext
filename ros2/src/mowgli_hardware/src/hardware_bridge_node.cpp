@@ -175,6 +175,51 @@ static const char* reset_cause_description(const uint8_t cause)
   }
 }
 
+static const char* watchdog_stage_name(const uint8_t stage)
+{
+  switch (stage)
+  {
+    case WATCHDOG_STAGE_NONE:
+      return "NONE";
+    case WATCHDOG_STAGE_CHATTER:
+      return "CHATTER";
+    case WATCHDOG_STAGE_MOTORS:
+      return "MOTORS";
+    case WATCHDOG_STAGE_PANEL:
+      return "PANEL";
+    case WATCHDOG_STAGE_ROS_SPIN:
+      return "ROS_SPIN";
+    case WATCHDOG_STAGE_BROADCAST:
+      return "BROADCAST";
+    case WATCHDOG_STAGE_DRIVEMOTOR_RX:
+      return "DRIVEMOTOR_RX";
+    case WATCHDOG_STAGE_PERIMETER:
+      return "PERIMETER";
+    case WATCHDOG_STAGE_ADC:
+      return "ADC";
+    case WATCHDOG_STAGE_CHARGER:
+      return "CHARGER";
+    case WATCHDOG_STAGE_STATUS_LED:
+      return "STATUS_LED";
+    case WATCHDOG_STAGE_ULTRASONIC_HANDLER:
+      return "ULTRASONIC_HANDLER";
+    case WATCHDOG_STAGE_ULTRASONIC_APP:
+      return "ULTRASONIC_APP";
+    case WATCHDOG_STAGE_WATCHDOG_REFRESH:
+      return "WATCHDOG_REFRESH";
+    case WATCHDOG_STAGE_DRIVEMOTOR_10MS:
+      return "DRIVEMOTOR_10MS";
+    case WATCHDOG_STAGE_BLADEMOTOR:
+      return "BLADEMOTOR";
+    case WATCHDOG_STAGE_BUZZER:
+      return "BUZZER";
+    case WATCHDOG_STAGE_EMERGENCY:
+      return "EMERGENCY";
+    default:
+      return "UNKNOWN";
+  }
+}
+
 class HardwareBridgeNode : public rclcpp::Node
 {
 public:
@@ -803,29 +848,50 @@ private:
 
   void handle_reset_cause(const uint8_t* data, std::size_t len)
   {
-    if (len < sizeof(LlResetCause))
+    if (len < 4u)
     {
       RCLCPP_WARN(get_logger(),
                   "Reset-cause packet too short: %zu < %zu",
                   len,
-                  sizeof(LlResetCause));
+                  static_cast<std::size_t>(4u));
       return;
     }
 
-    LlResetCause pkt{};
-    std::memcpy(&pkt, data, sizeof(LlResetCause));
+    const bool has_watchdog_stage = len >= sizeof(LlResetCause);
+    const uint8_t reset_cause = data[1];
+    const uint8_t last_stage_before_reset =
+        has_watchdog_stage ? data[2] : WATCHDOG_STAGE_NONE;
 
-    const bool cause_changed = !reset_cause_seen_ || pkt.reset_cause != last_reset_cause_;
-    last_reset_cause_ = pkt.reset_cause;
-    last_reset_cause_name_ = reset_cause_name(pkt.reset_cause);
+    const bool cause_changed = !reset_cause_seen_ || reset_cause != last_reset_cause_;
+    const bool stage_changed =
+        !reset_stage_seen_ || has_watchdog_stage != last_reset_has_watchdog_stage_ ||
+        last_stage_before_reset != last_reset_stage_before_reset_;
+
+    last_reset_cause_ = reset_cause;
+    last_reset_cause_name_ = reset_cause_name(reset_cause);
     reset_cause_seen_ = true;
+    last_reset_stage_before_reset_ = last_stage_before_reset;
+    last_reset_stage_name_ = watchdog_stage_name(last_stage_before_reset);
+    last_reset_has_watchdog_stage_ = has_watchdog_stage;
+    reset_stage_seen_ = true;
 
-    if (reset_cause_log_pending_ || cause_changed)
+    if (reset_cause_log_pending_ || cause_changed || stage_changed)
     {
-      RCLCPP_INFO(get_logger(),
-                  "STM32 boot reset cause: %s — %s",
-                  last_reset_cause_name_.c_str(),
-                  reset_cause_description(last_reset_cause_));
+      if (last_reset_cause_ == RESET_CAUSE_WWDG && last_reset_has_watchdog_stage_)
+      {
+        RCLCPP_INFO(get_logger(),
+                    "STM32 boot reset cause: %s — %s (last stage before reset: %s)",
+                    last_reset_cause_name_.c_str(),
+                    reset_cause_description(last_reset_cause_),
+                    last_reset_stage_name_.c_str());
+      }
+      else
+      {
+        RCLCPP_INFO(get_logger(),
+                    "STM32 boot reset cause: %s — %s",
+                    last_reset_cause_name_.c_str(),
+                    reset_cause_description(last_reset_cause_));
+      }
       reset_cause_log_pending_ = false;
     }
   }
@@ -2259,6 +2325,10 @@ private:
   uint8_t last_reset_cause_{RESET_CAUSE_UNKNOWN};
   std::string last_reset_cause_name_{"UNKNOWN"};
   bool reset_cause_seen_{false};
+  uint8_t last_reset_stage_before_reset_{WATCHDOG_STAGE_NONE};
+  std::string last_reset_stage_name_{"NONE"};
+  bool last_reset_has_watchdog_stage_{false};
+  bool reset_stage_seen_{false};
   bool reset_cause_log_pending_{true};
 
   // Odometry state

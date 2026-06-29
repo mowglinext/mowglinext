@@ -862,6 +862,7 @@ extern "C" void broadcast_handler() {
     pkt_reset_cause_t reset_pkt;
     reset_pkt.type = PKT_ID_RESET_CAUSE;
     reset_pkt.reset_cause = g_boot_reset_cause_code;
+    reset_pkt.last_stage_before_reset = g_boot_last_watchdog_stage_code;
     mowgli_comms_send(&reset_pkt, sizeof(reset_pkt));
     mowgli_comms_send_status(&status_pkt);
   }

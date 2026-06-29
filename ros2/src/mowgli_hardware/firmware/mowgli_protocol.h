@@ -51,9 +51,11 @@ extern "C"
    * v2 moves runtime drive tuning to packet 0x54 and adds ticks_per_meter to
    * the payload so old firmware safely ignores the new packet instead of
    * mis-parsing it as legacy PID-only data.
+   * v3 extends pkt_reset_cause_t with last_stage_before_reset so the host can
+   * see which main-loop section was running when the WWDG fired.
    * ---------------------------------------------------------------------------*/
 
-#define MOWGLI_PROTOCOL_VERSION 2u
+#define MOWGLI_PROTOCOL_VERSION 3u
 
   /* ---------------------------------------------------------------------------
    * Firmware version (semantic version of the firmware build). Reported to the
@@ -170,6 +172,29 @@ extern "C"
 #define RESET_CAUSE_WWDG 6u
 #define RESET_CAUSE_LPWR 7u
 
+  /* ---------------------------------------------------------------------------
+   * Main-loop watchdog breadcrumb values  (pkt_reset_cause_t::last_stage_before_reset)
+   * ---------------------------------------------------------------------------*/
+
+#define WATCHDOG_STAGE_NONE 0u
+#define WATCHDOG_STAGE_CHATTER 1u
+#define WATCHDOG_STAGE_MOTORS 2u
+#define WATCHDOG_STAGE_PANEL 3u
+#define WATCHDOG_STAGE_ROS_SPIN 4u
+#define WATCHDOG_STAGE_BROADCAST 5u
+#define WATCHDOG_STAGE_DRIVEMOTOR_RX 6u
+#define WATCHDOG_STAGE_PERIMETER 7u
+#define WATCHDOG_STAGE_ADC 8u
+#define WATCHDOG_STAGE_CHARGER 9u
+#define WATCHDOG_STAGE_STATUS_LED 10u
+#define WATCHDOG_STAGE_ULTRASONIC_HANDLER 11u
+#define WATCHDOG_STAGE_ULTRASONIC_APP 12u
+#define WATCHDOG_STAGE_WATCHDOG_REFRESH 13u
+#define WATCHDOG_STAGE_DRIVEMOTOR_10MS 14u
+#define WATCHDOG_STAGE_BLADEMOTOR 15u
+#define WATCHDOG_STAGE_BUZZER 16u
+#define WATCHDOG_STAGE_EMERGENCY 17u
+
 /* ---------------------------------------------------------------------------
  * USS sensor count
  * ---------------------------------------------------------------------------*/
@@ -265,14 +290,17 @@ extern "C"
    * @brief Boot reset cause packet — Firmware -> Host (PKT_ID_RESET_CAUSE = 0x06).
    *
    * Sent periodically so the host can recover the current boot cause even if it
-   * connected after the STM32 had already started streaming.
+   * connected after the STM32 had already started streaming. When the boot cause
+   * is WWDG, last_stage_before_reset carries the persisted main-loop breadcrumb
+   * saved by the watchdog early-wakeup callback just before the reset.
    *
-   * Wire size: 4 bytes.
+   * Wire size: 5 bytes.
    */
   typedef struct
   {
     uint8_t type; /**< PKT_ID_RESET_CAUSE */
     uint8_t reset_cause; /**< RESET_CAUSE_* enum value */
+    uint8_t last_stage_before_reset; /**< WATCHDOG_STAGE_* enum value */
     uint16_t crc; /**< CRC-16 CCITT over preceding bytes */
   } pkt_reset_cause_t;
 
@@ -410,7 +438,7 @@ extern "C"
    *     left_velocity_mm_s(2) + right_velocity_mm_s(2) + crc(2) = 17
    *
    *   pkt_reset_cause_t:
-   *     type(1) + reset_cause(1) + crc(2) = 4
+   *     type(1) + reset_cause(1) + last_stage_before_reset(1) + crc(2) = 5
    *
    *   pkt_heartbeat_t:
    *     type(1) + emergency_requested(1) + emergency_release_requested(1) +
@@ -434,7 +462,7 @@ extern "C"
   _Static_assert(sizeof(pkt_imu_t) == 41u, "pkt_imu_t layout unexpected");
   _Static_assert(sizeof(pkt_ui_event_t) == 5u, "pkt_ui_event_t layout unexpected");
   _Static_assert(sizeof(pkt_odometry_t) == 17u, "pkt_odometry_t layout unexpected");
-  _Static_assert(sizeof(pkt_reset_cause_t) == 4u, "pkt_reset_cause_t layout unexpected");
+  _Static_assert(sizeof(pkt_reset_cause_t) == 5u, "pkt_reset_cause_t layout unexpected");
   _Static_assert(sizeof(pkt_heartbeat_t) == 5u, "pkt_heartbeat_t layout unexpected");
   _Static_assert(sizeof(pkt_hl_state_t) == 5u, "pkt_hl_state_t layout unexpected");
   _Static_assert(sizeof(pkt_cmd_vel_t) == 11u, "pkt_cmd_vel_t layout unexpected");
