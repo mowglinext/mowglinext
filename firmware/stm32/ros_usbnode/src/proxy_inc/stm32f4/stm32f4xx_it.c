@@ -372,11 +372,11 @@ void DMA2_Stream7_IRQHandler (void)
 void OTG_FS_IRQHandler(void)
 {
   /* USER CODE BEGIN OTG_FS_IRQn 0 */
-
+  WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_USB_IRQ_ENTER);
   /* USER CODE END OTG_FS_IRQn 0 */
   HAL_PCD_IRQHandler(&hpcd_USB_FS);
   /* USER CODE BEGIN OTG_FS_IRQn 1 */
-
+  WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_USB_IRQ_EXIT);
   /* USER CODE END OTG_FS_IRQn 1 */
 }
 

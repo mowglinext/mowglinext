@@ -484,7 +484,9 @@ static void update_blade_led(void) {
  * USB CDC receive callback — feeds COBS layer
  * ---------------------------------------------------------------------------*/
 uint8_t CDC_DataReceivedHandler(const uint8_t *Buf, uint32_t len) {
+  WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_RX_PROCESS);
   mowgli_comms_process_rx(Buf, (size_t)len);
+  WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_RX_EXIT);
   return CDC_RX_DATA_HANDLED;
 }
 

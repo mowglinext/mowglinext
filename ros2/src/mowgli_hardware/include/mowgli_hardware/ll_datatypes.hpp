@@ -149,6 +149,16 @@ constexpr uint8_t WATCHDOG_STAGE_IMU_ACCEL = 29u;
 constexpr uint8_t WATCHDOG_STAGE_IMU_GYRO = 30u;
 constexpr uint8_t WATCHDOG_STAGE_IMU_MAG = 31u;
 constexpr uint8_t WATCHDOG_STAGE_IMU_PACKET_FILL = 32u;
+constexpr uint8_t WATCHDOG_STAGE_USB_IRQ_ENTER = 33u;
+constexpr uint8_t WATCHDOG_STAGE_USB_IRQ_EXIT = 34u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_RX_ENTER = 35u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_RX_PROCESS = 36u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_RX_EXIT = 37u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_PACKET = 38u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_COMPLETE = 39u;
+constexpr uint8_t WATCHDOG_STAGE_USB_RESET = 40u;
+constexpr uint8_t WATCHDOG_STAGE_USB_SUSPEND = 41u;
+constexpr uint8_t WATCHDOG_STAGE_USB_RESUME = 42u;
 
 // ---------------------------------------------------------------------------
 // USS (ultrasonic) sensor count

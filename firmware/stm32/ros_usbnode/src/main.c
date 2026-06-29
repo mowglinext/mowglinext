@@ -337,6 +337,26 @@ static const char *WATCHDOG_StageName(uint8_t stage)
       return "IMU_MAG";
     case WATCHDOG_STAGE_IMU_PACKET_FILL:
       return "IMU_PACKET_FILL";
+    case WATCHDOG_STAGE_USB_IRQ_ENTER:
+      return "USB_IRQ_ENTER";
+    case WATCHDOG_STAGE_USB_IRQ_EXIT:
+      return "USB_IRQ_EXIT";
+    case WATCHDOG_STAGE_CDC_RX_ENTER:
+      return "CDC_RX_ENTER";
+    case WATCHDOG_STAGE_CDC_RX_PROCESS:
+      return "CDC_RX_PROCESS";
+    case WATCHDOG_STAGE_CDC_RX_EXIT:
+      return "CDC_RX_EXIT";
+    case WATCHDOG_STAGE_CDC_TX_PACKET:
+      return "CDC_TX_PACKET";
+    case WATCHDOG_STAGE_CDC_TX_COMPLETE:
+      return "CDC_TX_COMPLETE";
+    case WATCHDOG_STAGE_USB_RESET:
+      return "USB_RESET";
+    case WATCHDOG_STAGE_USB_SUSPEND:
+      return "USB_SUSPEND";
+    case WATCHDOG_STAGE_USB_RESUME:
+      return "USB_RESUME";
     default:
       return "UNKNOWN";
   }

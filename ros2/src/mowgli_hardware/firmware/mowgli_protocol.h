@@ -173,8 +173,8 @@ extern "C"
 #define RESET_CAUSE_LPWR 7u
 
   /* ---------------------------------------------------------------------------
- * Watchdog breadcrumb values  (pkt_reset_cause_t::last_stage_before_reset)
- * ---------------------------------------------------------------------------*/
+   * Watchdog breadcrumb values  (pkt_reset_cause_t::last_stage_before_reset)
+   * ---------------------------------------------------------------------------*/
 
 #define WATCHDOG_STAGE_NONE 0u
 #define WATCHDOG_STAGE_CHATTER 1u
@@ -209,6 +209,16 @@ extern "C"
 #define WATCHDOG_STAGE_IMU_GYRO 30u
 #define WATCHDOG_STAGE_IMU_MAG 31u
 #define WATCHDOG_STAGE_IMU_PACKET_FILL 32u
+#define WATCHDOG_STAGE_USB_IRQ_ENTER 33u
+#define WATCHDOG_STAGE_USB_IRQ_EXIT 34u
+#define WATCHDOG_STAGE_CDC_RX_ENTER 35u
+#define WATCHDOG_STAGE_CDC_RX_PROCESS 36u
+#define WATCHDOG_STAGE_CDC_RX_EXIT 37u
+#define WATCHDOG_STAGE_CDC_TX_PACKET 38u
+#define WATCHDOG_STAGE_CDC_TX_COMPLETE 39u
+#define WATCHDOG_STAGE_USB_RESET 40u
+#define WATCHDOG_STAGE_USB_SUSPEND 41u
+#define WATCHDOG_STAGE_USB_RESUME 42u
 
 /* ---------------------------------------------------------------------------
  * USS sensor count

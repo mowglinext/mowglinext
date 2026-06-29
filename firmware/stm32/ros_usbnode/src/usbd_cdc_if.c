@@ -325,6 +325,7 @@ static int8_t CDC_Control(uint8_t cmd, uint8_t *pbuf, uint16_t length)
 static int8_t CDC_Receive(uint8_t *Buf, uint32_t *Len)
 {
     /* USER CODE BEGIN 6 */
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_RX_ENTER);
     uint8_t dataHandled = CDC_DataReceivedHandler(Buf, *Len);
 
     if (dataHandled == CDC_RX_DATA_NOTHANDLED) {
@@ -335,7 +336,9 @@ static int8_t CDC_Receive(uint8_t *Buf, uint32_t *Len)
         }
     }
 
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_RX_EXIT);
     USBD_CDC_ReceivePacket(&hUsbDevice);
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_RX_EXIT);
     return (USBD_OK);
     /* USER CODE END 6 */
 }
@@ -445,6 +448,8 @@ static int8_t CDC_TransmitCplt(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
     UNUSED(Buf);
     UNUSED(epnum);
 
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_COMPLETE);
+
     atomic_signal_fence(memory_order_acquire);
     s_txtail += *Len;
     s_lastTransmitComplete = HAL_GetTick();
@@ -475,6 +480,7 @@ void CDC_ResumeTransmit(void)
     const uint8_t *queueData = CDC_TXQueue_Dequeue(&queueLength);
     if (queueLength > 0) {
         USBD_CDC_SetTxBuffer(&hUsbDevice, (uint8_t*) queueData, queueLength);
+        WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_PACKET);
         USBD_CDC_TransmitPacket(&hUsbDevice);
     }
     WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_EXIT);

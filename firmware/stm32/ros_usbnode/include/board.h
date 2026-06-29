@@ -102,7 +102,7 @@ extern "C"
 // wheel-lift and tilt GPIOs are actually wired and not floating/noisy — otherwise
 // EmergencyController() may latch a spurious emergency. Re-#define this only if a
 // given chassis lacks those sensors.
-#define I_DONT_NEED_MY_FINGERS           1      // disables EmergencyController()
+// #define I_DONT_NEED_MY_FINGERS           1      // disables EmergencyController()
 
 /// nominal max charge current is 1.0 Amp
 #define MAX_CHARGE_CURRENT 1.2f
