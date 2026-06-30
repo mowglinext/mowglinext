@@ -43,7 +43,6 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/battery_state.hpp"
 #include "sensor_msgs/msg/imu.hpp"
-#include "std_srvs/srv/set_bool.hpp"
 
 class FakeHardwareBridgeNode : public rclcpp::Node
 {
@@ -78,20 +77,6 @@ public:
             sim_emergency_active_ = false;
           }
           res->success = true;
-        });
-
-    firmware_debug_srv_ = create_service<std_srvs::srv::SetBool>(
-        "/hardware_bridge/set_firmware_debug",
-        [this](const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
-               std::shared_ptr<std_srvs::srv::SetBool::Response> res)
-        {
-          firmware_debug_enabled_ = req->data;
-          res->success = true;
-          res->message = firmware_debug_enabled_ ? "fake firmware debug enabled"
-                                                 : "fake firmware debug disabled";
-          RCLCPP_INFO(get_logger(),
-                      "Fake set_firmware_debug: enabled=%s",
-                      firmware_debug_enabled_ ? "true" : "false");
         });
 
     // Dock position (origin) and proximity threshold
@@ -196,7 +181,7 @@ private:
     status.sound_module_busy = false;
     status.ui_board_available = true;
     status.mow_enabled = mow_enabled_;
-    status.firmware_debug_enabled = firmware_debug_enabled_;
+    status.firmware_debug_enabled = false;
     status.mower_esc_status = 0;
     status.mower_esc_temperature = 25.0f;
     status.mower_esc_current = mow_enabled_ ? 0.5f : 0.0f;
@@ -256,10 +241,8 @@ private:
 
   bool mow_enabled_{false};
   bool sim_emergency_active_{false};
-  bool firmware_debug_enabled_{false};
   rclcpp::Service<mowgli_interfaces::srv::MowerControl>::SharedPtr mower_control_srv_;
   rclcpp::Service<mowgli_interfaces::srv::EmergencyStop>::SharedPtr emergency_stop_srv_;
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr firmware_debug_srv_;
   rclcpp::Publisher<mowgli_interfaces::msg::Status>::SharedPtr status_pub_;
   rclcpp::Publisher<mowgli_interfaces::msg::Power>::SharedPtr power_pub_;
   rclcpp::Publisher<mowgli_interfaces::msg::Emergency>::SharedPtr emergency_pub_;
