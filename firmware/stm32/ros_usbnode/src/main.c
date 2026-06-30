@@ -90,6 +90,7 @@ WWDG_HandleTypeDef WwdgHandle = {0};
 static uint32_t g_boot_reset_csr = 0;
 uint8_t g_boot_reset_cause_code = 0;
 uint8_t g_boot_last_watchdog_stage_code = WATCHDOG_STAGE_NONE;
+volatile uint8_t g_firmware_debug_enabled = 0u;
 static volatile uint8_t g_main_loop_stage = WATCHDOG_STAGE_NONE;
 
 static const char *BOOT_PrimaryResetCause(uint32_t csr)
@@ -262,8 +263,40 @@ static void BOOT_BlinkResetCause(uint32_t csr)
   }
 }
 
+static uint8_t WATCHDOG_StageAlwaysOn(uint8_t stage)
+{
+  switch (stage)
+  {
+    case WATCHDOG_STAGE_NONE:
+    case WATCHDOG_STAGE_CHATTER:
+    case WATCHDOG_STAGE_MOTORS:
+    case WATCHDOG_STAGE_PANEL:
+    case WATCHDOG_STAGE_ROS_SPIN:
+    case WATCHDOG_STAGE_BROADCAST:
+    case WATCHDOG_STAGE_DRIVEMOTOR_RX:
+    case WATCHDOG_STAGE_PERIMETER:
+    case WATCHDOG_STAGE_ADC:
+    case WATCHDOG_STAGE_CHARGER:
+    case WATCHDOG_STAGE_STATUS_LED:
+    case WATCHDOG_STAGE_ULTRASONIC_HANDLER:
+    case WATCHDOG_STAGE_ULTRASONIC_APP:
+    case WATCHDOG_STAGE_WATCHDOG_REFRESH:
+    case WATCHDOG_STAGE_DRIVEMOTOR_10MS:
+    case WATCHDOG_STAGE_BLADEMOTOR:
+    case WATCHDOG_STAGE_BUZZER:
+    case WATCHDOG_STAGE_EMERGENCY:
+      return 1u;
+    default:
+      return 0u;
+  }
+}
+
 void WATCHDOG_SetMainLoopStage(uint8_t stage)
 {
+  if ((g_firmware_debug_enabled == 0u) && (WATCHDOG_StageAlwaysOn(stage) == 0u))
+  {
+    return;
+  }
   g_main_loop_stage = stage;
 }
 

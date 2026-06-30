@@ -464,13 +464,16 @@ static void on_reboot(const uint8_t *data, size_t len) {
  * older than this handshake never registers this handler, so it simply never
  * replies — which the host reads as "incompatible firmware". */
 static void on_config_req(const uint8_t *data, size_t len) {
-  (void)data;
-  if (len < sizeof(pkt_config_req_t) - 2u) {
+  if (len < 1u) {
     return;
   }
+  const uint8_t flags = (len >= 2u) ? data[1] : 0u;
+  g_firmware_debug_enabled = (flags & CONFIG_FLAG_FIRMWARE_DEBUG) != 0u ? 1u : 0u;
+
   pkt_config_rsp_t rsp;
   rsp.type = PKT_ID_CONFIG_RSP;
   rsp.protocol_version = MOWGLI_PROTOCOL_VERSION;
+  rsp.active_flags = g_firmware_debug_enabled != 0u ? CONFIG_FLAG_FIRMWARE_DEBUG : 0u;
   rsp.fw_version_major = MOWGLI_FW_VERSION_MAJOR;
   rsp.fw_version_minor = MOWGLI_FW_VERSION_MINOR;
   rsp.fw_version_patch = MOWGLI_FW_VERSION_PATCH;

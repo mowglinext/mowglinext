@@ -71,21 +71,21 @@ type DockPoseCheck struct {
 	// Source describes where the dock_pose_* values were loaded from:
 	// "mowgli_robot.yaml" (single source of truth), or "" when the file
 	// could not be read.
-	Source        string  `json:"source,omitempty"`
+	Source string `json:"source,omitempty"`
 }
 
 // MowingSession represents a single mowing session stored in the DB.
 type MowingSession struct {
-	ID              string  `json:"id"`
-	StartTime       string  `json:"start_time"`
-	EndTime         string  `json:"end_time"`
-	DurationSec     float64 `json:"duration_sec"`
-	AreaIndex       int     `json:"area_index"`
-	CoveragePercent float32 `json:"coverage_percent"`
-	StripsCompleted uint32  `json:"strips_completed"`
-	StripsSkipped   uint32  `json:"strips_skipped"`
+	ID              string   `json:"id"`
+	StartTime       string   `json:"start_time"`
+	EndTime         string   `json:"end_time"`
+	DurationSec     float64  `json:"duration_sec"`
+	AreaIndex       int      `json:"area_index"`
+	CoveragePercent float32  `json:"coverage_percent"`
+	StripsCompleted uint32   `json:"strips_completed"`
+	StripsSkipped   uint32   `json:"strips_skipped"`
 	DistanceMeters  float64  `json:"distance_meters"`
-	Status          string   `json:"status"` // "completed", "aborted", "error"
+	Status          string   `json:"status"`          // "completed", "aborted", "error"
 	RechargePauses  int      `json:"recharge_pauses"` // recharge pauses during the session
 	Errors          []string `json:"errors"`
 }
@@ -96,6 +96,15 @@ type MowingSessionList struct {
 	Total    int             `json:"total"`
 }
 
+type FirmwareDebugRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+type FirmwareDebugResponse struct {
+	Enabled bool   `json:"enabled"`
+	Message string `json:"message,omitempty"`
+}
+
 // ---------------------------------------------------------------------------
 // Route registration
 // ---------------------------------------------------------------------------
@@ -104,6 +113,7 @@ type MowingSessionList struct {
 func DiagnosticsRoutes(r *gin.RouterGroup, dockerProvider types.IDockerProvider, rosProvider types.IRosProvider, dbProvider types.IDBProvider) {
 	group := r.Group("/diagnostics")
 	group.GET("/snapshot", getDiagnosticsSnapshot(dockerProvider, rosProvider, dbProvider))
+	group.POST("/firmware_debug", setFirmwareDebug(rosProvider))
 
 	// Legacy SLAM endpoints — SLAM (Cartographer) was removed on the feat/kiss-icp
 	// branch. The occupancy grid is now published by map_server_node directly from
@@ -118,6 +128,46 @@ func DiagnosticsRoutes(r *gin.RouterGroup, dockerProvider types.IDockerProvider,
 	group.POST("/sessions", postSession(dbProvider))
 	group.DELETE("/sessions", deleteSessions(dbProvider))
 	group.GET("/sessions/stats", getSessionStats(dbProvider))
+}
+
+func setFirmwareDebug(rosProvider types.IRosProvider) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req FirmwareDebugRequest
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid firmware debug payload: " + err.Error()})
+			return
+		}
+
+		type setBoolReq struct {
+			Data bool `json:"data"`
+		}
+		type setBoolRes struct {
+			Success bool   `json:"success"`
+			Message string `json:"message"`
+		}
+
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+		defer cancel()
+
+		var res setBoolRes
+		err := rosProvider.CallService(
+			ctx,
+			"/hardware_bridge/set_firmware_debug",
+			&setBoolReq{Data: req.Enabled},
+			&res,
+			"std_srvs/srv/SetBool",
+		)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, ErrorResponse{Error: err.Error()})
+			return
+		}
+		if !res.Success {
+			c.JSON(http.StatusServiceUnavailable, ErrorResponse{Error: res.Message})
+			return
+		}
+
+		c.JSON(http.StatusOK, FirmwareDebugResponse{Enabled: req.Enabled, Message: res.Message})
+	}
 }
 
 // ---------------------------------------------------------------------------

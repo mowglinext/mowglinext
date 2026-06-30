@@ -38,14 +38,16 @@ namespace mowgli_hardware
 // rather than mis-parsing it as the old PID-only layout.
 // Protocol v3 extends the reset-cause packet with last_stage_before_reset so
 // the bridge can report which firmware main-loop section was active when the
-// WWDG fired.
+// WWDG fired. The same v3 diagnostic stack also uses the config handshake
+// flags byte so the GUI can toggle optional firmware diagnostics on demand.
 //
 // This is the COMPATIBILITY KEY: the bridge sends PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ
 // on every (re)connect and the firmware answers with its own
 // MOWGLI_PROTOCOL_VERSION in LlConfigRsp. If they differ — or the firmware is
 // too old to answer at all — the image and firmware speak different wire
 // formats and the operator must reflash. Bump this in lockstep with
-// MOWGLI_PROTOCOL_VERSION in mowgli_protocol.h whenever the wire format changes.
+// MOWGLI_PROTOCOL_VERSION in mowgli_protocol.h when an incompatible wire
+// change requires a hard compatibility break.
 static constexpr uint8_t kMowgliProtocolVersion = 3u;
 
 // ---------------------------------------------------------------------------
@@ -169,6 +171,12 @@ constexpr uint8_t WATCHDOG_STAGE_CDC_HOST_CLOSED = 46u;
 // ---------------------------------------------------------------------------
 
 constexpr std::size_t LL_USS_SENSOR_COUNT = 5u;
+
+// ---------------------------------------------------------------------------
+// Config flags
+// ---------------------------------------------------------------------------
+
+constexpr uint8_t CONFIG_FLAG_FIRMWARE_DEBUG = (1u << 0u);
 
 // ---------------------------------------------------------------------------
 // Wire-format structs — all fields packed with no padding
@@ -367,14 +375,15 @@ struct LlBladeStatus
 /**
  * @brief Config request sent by the Pi (PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ = 0x11).
  *
- * A bare trigger sent on every (re)connect; the firmware replies with
- * LlConfigRsp. Firmware that predates the handshake ignores the unknown packet
- * and never replies, which the bridge reads (after a timeout) as an
- * incompatible firmware that needs reflashing.
+ * Sent on every (re)connect and whenever the host needs to update runtime
+ * config flags. The firmware replies with LlConfigRsp. Firmware that predates
+ * the handshake ignores the unknown packet and never replies, which the bridge
+ * reads (after a timeout) as an incompatible firmware that needs reflashing.
  */
 struct LlConfigReq
 {
   uint8_t type;  ///< Must equal PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ
+  uint8_t flags;  ///< Requested CONFIG_FLAG_* runtime bits
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
 
@@ -382,12 +391,14 @@ struct LlConfigReq
  * @brief Config response from the STM32 (PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP = 0x12).
  *
  * Reports the firmware's wire-protocol version (the compatibility key checked
- * against kMowgliProtocolVersion) plus its human-readable firmware semver.
+ * against kMowgliProtocolVersion), the currently-active runtime config flags,
+ * and its human-readable firmware semver.
  */
 struct LlConfigRsp
 {
   uint8_t type;  ///< Must equal PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP
   uint8_t protocol_version;  ///< MOWGLI_PROTOCOL_VERSION on the firmware
+  uint8_t active_flags;  ///< Active CONFIG_FLAG_* runtime bits
   uint8_t fw_version_major;  ///< Firmware semver major
   uint8_t fw_version_minor;  ///< Firmware semver minor
   uint8_t fw_version_patch;  ///< Firmware semver patch
@@ -410,8 +421,8 @@ static_assert(sizeof(LlHighLevelState) == 5u, "LlHighLevelState layout mismatch"
 static_assert(sizeof(LlCmdVel) == 11u, "LlCmdVel layout mismatch");
 static_assert(sizeof(LlCmdBlade) == 5u, "LlCmdBlade layout mismatch");
 static_assert(sizeof(LlBladeStatus) == 16u, "LlBladeStatus layout mismatch");
-static_assert(sizeof(LlConfigReq) == 3u, "LlConfigReq layout mismatch");
-static_assert(sizeof(LlConfigRsp) == 7u, "LlConfigRsp layout mismatch");
+static_assert(sizeof(LlConfigReq) == 4u, "LlConfigReq layout mismatch");
+static_assert(sizeof(LlConfigRsp) == 8u, "LlConfigRsp layout mismatch");
 static_assert(sizeof(LlSetDrivePid) == 27u, "LlSetDrivePid layout mismatch");
 
 }  // namespace mowgli_hardware

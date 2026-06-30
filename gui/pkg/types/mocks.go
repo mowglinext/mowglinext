@@ -56,16 +56,17 @@ func (m *MockDBProvider) KeysWithSuffix(suffix string) ([]string, error) {
 
 // MockRosProvider is a mock of IRosProvider for testing API handlers.
 type MockRosProvider struct {
-	mu           sync.Mutex
-	subscribers  map[string]map[string]func(msg []byte)
-	ServiceCalls []ServiceCall
-	ServiceErr   error
-	PublishErr   error
-	SubscribeErr error
+	mu               sync.Mutex
+	subscribers      map[string]map[string]func(msg []byte)
+	ServiceCalls     []ServiceCall
+	ServiceErr       error
+	ServiceResponder func(service string, req any, res any)
+	PublishErr       error
+	SubscribeErr     error
 	// Parameters returned by GetParameters; SetParams records set calls.
-	Parameters   []RosParameter
-	ParamErr     error
-	SetParams    [][]RosParameter
+	Parameters []RosParameter
+	ParamErr   error
+	SetParams  [][]RosParameter
 }
 
 type ServiceCall struct {
@@ -80,10 +81,13 @@ func NewMockRosProvider() *MockRosProvider {
 	}
 }
 
-func (m *MockRosProvider) CallService(_ context.Context, service string, req any, _ any, _ ...string) error {
+func (m *MockRosProvider) CallService(_ context.Context, service string, req any, res any, _ ...string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ServiceCalls = append(m.ServiceCalls, ServiceCall{Service: service, Req: req})
+	if m.ServiceResponder != nil {
+		m.ServiceResponder(service, req, res)
+	}
 	return m.ServiceErr
 }
 

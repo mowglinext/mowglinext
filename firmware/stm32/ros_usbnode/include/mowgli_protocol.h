@@ -36,7 +36,9 @@ extern "C" {
  * the payload so old firmware safely ignores the new packet instead of
  * mis-parsing it as legacy PID-only data.
  * v3 extends pkt_reset_cause_t with last_stage_before_reset so the host can
- * see which main-loop section was running when the WWDG fired.
+ * see which main-loop section was running when the WWDG fired. The same v3
+ * diagnostic stack also uses the config request/response flags byte to gate
+ * optional firmware diagnostics/breadcrumb detail on demand.
  * ---------------------------------------------------------------------------*/
 
 #define MOWGLI_PROTOCOL_VERSION 3u
@@ -229,6 +231,13 @@ extern "C" {
 
 /** Number of ultrasonic range sensors reported in pkt_status_t. */
 #define MOWGLI_USS_COUNT 5u
+
+/* ---------------------------------------------------------------------------
+ * Config flags
+ * ---------------------------------------------------------------------------*/
+
+/** Optional firmware diagnostics / fine-grained breadcrumbs enabled. */
+#define CONFIG_FLAG_FIRMWARE_DEBUG (1u << 0u)
 
 /* ---------------------------------------------------------------------------
  * Packed wire-format structs
@@ -466,10 +475,15 @@ typedef struct {
  * the unknown packet ID and never replies — which the host reads (after a
  * timeout) as "incompatible firmware, reflash required".
  *
- * Wire size: 3 bytes (must match sizeof(LlConfigReq) in ll_datatypes.hpp).
+ * The flags byte is a runtime control surface piggybacked onto the existing
+ * handshake path; CONFIG_FLAG_FIRMWARE_DEBUG keeps optional firmware
+ * diagnostics off by default and lets the GUI enable them temporarily.
+ *
+ * Wire size: 4 bytes (must match sizeof(LlConfigReq) in ll_datatypes.hpp).
  */
 typedef struct {
   uint8_t type; /**< PKT_ID_CONFIG_REQ */
+  uint8_t flags; /**< CONFIG_FLAG_* requested by the host */
   uint16_t crc; /**< CRC-16 CCITT over preceding bytes */
 } pkt_config_req_t;
 
@@ -477,14 +491,16 @@ typedef struct {
  * @brief Config response packet — Firmware -> Host (PKT_ID_CONFIG_RSP = 0x12).
  *
  * Reports the firmware's wire-protocol version (MOWGLI_PROTOCOL_VERSION — the
- * compatibility key the host compares against its own) and the human-readable
- * firmware semantic version. Sent in reply to PKT_ID_CONFIG_REQ.
+ * compatibility key the host compares against its own), the currently-active
+ * runtime config flags, and the human-readable firmware semantic version. Sent
+ * in reply to PKT_ID_CONFIG_REQ.
  *
- * Wire size: 7 bytes (must match sizeof(LlConfigRsp) in ll_datatypes.hpp).
+ * Wire size: 8 bytes (must match sizeof(LlConfigRsp) in ll_datatypes.hpp).
  */
 typedef struct {
   uint8_t type;             /**< PKT_ID_CONFIG_RSP */
   uint8_t protocol_version; /**< MOWGLI_PROTOCOL_VERSION on this firmware */
+  uint8_t active_flags;     /**< CONFIG_FLAG_* currently active on firmware */
   uint8_t fw_version_major; /**< MOWGLI_FW_VERSION_MAJOR */
   uint8_t fw_version_minor; /**< MOWGLI_FW_VERSION_MINOR */
   uint8_t fw_version_patch; /**< MOWGLI_FW_VERSION_PATCH */
@@ -548,9 +564,9 @@ _Static_assert(sizeof(pkt_heartbeat_t) == 5u,
 _Static_assert(sizeof(pkt_hl_state_t) == 5u,
                "pkt_hl_state_t layout unexpected");
 _Static_assert(sizeof(pkt_cmd_vel_t) == 11u, "pkt_cmd_vel_t layout unexpected");
-_Static_assert(sizeof(pkt_config_req_t) == 3u,
+_Static_assert(sizeof(pkt_config_req_t) == 4u,
                "pkt_config_req_t layout unexpected");
-_Static_assert(sizeof(pkt_config_rsp_t) == 7u,
+_Static_assert(sizeof(pkt_config_rsp_t) == 8u,
                "pkt_config_rsp_t layout unexpected");
 _Static_assert(sizeof(pkt_set_drive_pid_t) == 27u,
                "pkt_set_drive_pid_t layout unexpected");

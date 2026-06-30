@@ -119,6 +119,7 @@ static const char* high_level_mode_name(const uint8_t mode)
 #include "sensor_msgs/msg/magnetic_field.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "std_msgs/msg/header.hpp"
+#include "std_srvs/srv/set_bool.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
 namespace mowgli_hardware
@@ -662,6 +663,14 @@ private:
         {
           on_reboot_board(req, res);
         });
+
+    srv_set_firmware_debug_ = create_service<std_srvs::srv::SetBool>(
+        "~/set_firmware_debug",
+        [this](const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
+               std::shared_ptr<std_srvs::srv::SetBool::Response> res)
+        {
+          on_set_firmware_debug(req, res);
+        });
   }
 
   void open_serial_port()
@@ -707,37 +716,43 @@ private:
 
     // Heartbeat.
     const auto hb_period_ms = std::chrono::milliseconds(static_cast<int>(1000.0 / heartbeat_rate_));
-    timer_heartbeat_ = create_wall_timer(hb_period_ms,
-                                         [this]()
-                                         {
-                                           // On startup, send emergency release for the first few
-                                           // heartbeats to clear any watchdog-latched emergency
-                                           // from the container restart gap.
-                                           if (startup_release_count_ > 0)
-                                           {
-                                             emergency_release_pending_ = true;
-                                             --startup_release_count_;
-                                           }
-                                           send_heartbeat();
-                                           // Re-push the drive PID on the first
-                                           // few heartbeats after each
-                                           // (re)connect so the firmware (which
-                                           // has no config persistence) gets the
-                                           // host's gains even if one packet is
-                                           // lost during USB re-enumeration.
-                                           if (pid_resend_count_ > 0 && serial_->is_open())
-                                           {
-                                             send_drive_pid();
-                                             --pid_resend_count_;
-                                           }
-                                           // Firmware version handshake: ask the
-                                           // board for its protocol/firmware
-                                           // version on the first few heartbeats
-                                           // after each (re)connect, then enforce
-                                           // a timeout so firmware too old to
-                                           // answer is flagged incompatible.
-                                           service_firmware_handshake();
-                                         });
+    timer_heartbeat_ =
+        create_wall_timer(hb_period_ms,
+                          [this]()
+                          {
+                            // On startup, send emergency release for the first few
+                            // heartbeats to clear any watchdog-latched emergency
+                            // from the container restart gap.
+                            if (startup_release_count_ > 0)
+                            {
+                              emergency_release_pending_ = true;
+                              --startup_release_count_;
+                            }
+                            send_heartbeat();
+                            // Re-push the drive PID on the first
+                            // few heartbeats after each
+                            // (re)connect so the firmware (which
+                            // has no config persistence) gets the
+                            // host's gains even if one packet is
+                            // lost during USB re-enumeration.
+                            if (pid_resend_count_ > 0 && serial_->is_open())
+                            {
+                              send_drive_pid();
+                              --pid_resend_count_;
+                            }
+                            // Firmware version handshake: ask the
+                            // board for its protocol/firmware
+                            // version on the first few heartbeats
+                            // after each (re)connect, then enforce
+                            // a timeout so firmware too old to
+                            // answer is flagged incompatible.
+                            service_firmware_handshake();
+                            if (config_control_resend_count_ > 0 && serial_->is_open())
+                            {
+                              send_config_request();
+                              --config_control_resend_count_;
+                            }
+                          });
 
     // High-level state.
     const auto hl_period_ms =
@@ -785,6 +800,7 @@ private:
       last_serial_rx_time_ = now();
       reset_serial_dependent_state();
       reset_cause_log_pending_ = true;
+      clear_firmware_debug_state_for_reconnect();
       // The firmware just re-enumerated (flash / reboot / replug) and is back on
       // its compile-time default gains — re-arm the drive-PID push so the host's
       // values are restored over the next few heartbeats.
@@ -834,6 +850,13 @@ private:
                   "No serial data for %.1f s — reopening %s to reconnect to the STM32.",
                   serial_rx_timeout_s_,
                   serial_port_path_.c_str());
+      if (firmware_debug_requested_ || firmware_debug_enabled_)
+      {
+        RCLCPP_WARN(get_logger(),
+                    "[FW_DIAG] No serial data for %.1f s — reopening %s to reconnect to the STM32.",
+                    serial_rx_timeout_s_,
+                    serial_port_path_.c_str());
+      }
       close_serial_for_reconnect();
     }
   }
@@ -843,6 +866,13 @@ private:
     if (!serial_->is_open())
     {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "Cannot send: serial port not open.");
+      if (firmware_debug_requested_ || firmware_debug_enabled_)
+      {
+        RCLCPP_WARN_THROTTLE(get_logger(),
+                             *get_clock(),
+                             5000,
+                             "[FW_DIAG] Cannot send: serial port not open.");
+      }
       return false;
     }
 
@@ -856,6 +886,14 @@ private:
           "Short write or error sending packet (%zd/%zu bytes) — closing port to reconnect.",
           written,
           frame.size());
+      if (firmware_debug_requested_ || firmware_debug_enabled_)
+      {
+        RCLCPP_WARN(get_logger(),
+                    "[FW_DIAG] Short write or error sending packet (%zd/%zu bytes) — closing "
+                    "port to reconnect.",
+                    written,
+                    frame.size());
+      }
       close_serial_for_reconnect();
       return false;
     }
@@ -941,6 +979,14 @@ private:
                     last_reset_cause_name_.c_str(),
                     reset_cause_description(last_reset_cause_),
                     last_reset_stage_name_.c_str());
+        if (firmware_debug_requested_ || firmware_debug_enabled_)
+        {
+          RCLCPP_INFO(get_logger(),
+                      "[FW_DIAG] STM32 boot reset cause: %s — %s (last stage before reset: %s)",
+                      last_reset_cause_name_.c_str(),
+                      reset_cause_description(last_reset_cause_),
+                      last_reset_stage_name_.c_str());
+        }
       }
       else
       {
@@ -948,6 +994,13 @@ private:
                     "STM32 boot reset cause: %s — %s",
                     last_reset_cause_name_.c_str(),
                     reset_cause_description(last_reset_cause_));
+        if (firmware_debug_requested_ || firmware_debug_enabled_)
+        {
+          RCLCPP_INFO(get_logger(),
+                      "[FW_DIAG] STM32 boot reset cause: %s — %s",
+                      last_reset_cause_name_.c_str(),
+                      reset_cause_description(last_reset_cause_));
+        }
       }
       reset_cause_log_pending_ = false;
     }
@@ -1032,6 +1085,7 @@ private:
       msg.esc_power = mow_enabled_ || blade_active_;
       // Blade motor fields from live telemetry
       msg.mow_enabled = mow_enabled_;
+      msg.firmware_debug_enabled = firmware_debug_enabled_;
       msg.mower_esc_status = blade_active_ ? 1u : 0u;
       msg.mower_motor_rpm = blade_rpm_;
       msg.mower_motor_temperature = blade_temperature_;
@@ -1991,6 +2045,51 @@ private:
     res->message = "reboot request sent; board will reset within ~1 s";
   }
 
+  void on_set_firmware_debug(const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
+                             std::shared_ptr<std_srvs::srv::SetBool::Response> res)
+  {
+    if (!serial_ || !serial_->is_open())
+    {
+      res->success = false;
+      res->message = "serial port not open";
+      return;
+    }
+
+    const bool previous_requested = firmware_debug_requested_;
+    firmware_debug_requested_ = req->data;
+
+    if (!send_config_request())
+    {
+      firmware_debug_requested_ = previous_requested;
+      res->success = false;
+      res->message = "failed to send firmware debug config request";
+      return;
+    }
+
+    if (fw_handshake_done_)
+    {
+      config_control_resend_count_ = std::max(config_control_resend_count_, 2);
+    }
+    else
+    {
+      config_req_resend_count_ = std::max(config_req_resend_count_, 2);
+    }
+
+    if (req->data)
+    {
+      RCLCPP_INFO(get_logger(), "[FW_DIAG] Firmware debug enable requested.");
+      log_fw_diag_snapshot();
+    }
+    else if (firmware_debug_enabled_ || previous_requested)
+    {
+      RCLCPP_INFO(get_logger(), "[FW_DIAG] Firmware debug disable requested.");
+    }
+
+    res->success = true;
+    res->message =
+        req->data ? "firmware debug enable request sent" : "firmware debug disable request sent";
+  }
+
   void handle_blade_status(const uint8_t* data, std::size_t len)
   {
     if (len < sizeof(LlBladeStatus))
@@ -2018,10 +2117,19 @@ private:
     {
       return;
     }
+
+    const bool had_handshake = fw_handshake_done_;
+    const uint8_t previous_protocol = fw_protocol_version_;
+    const std::string previous_version = fw_version_str_;
+    const bool previous_fw_diag_enabled = firmware_debug_enabled_;
+
     LlConfigRsp pkt{};
     std::memcpy(&pkt, data, sizeof(LlConfigRsp));
 
     fw_protocol_version_ = pkt.protocol_version;
+    firmware_debug_enabled_ = (pkt.active_flags & CONFIG_FLAG_FIRMWARE_DEBUG) != 0u;
+    firmware_debug_requested_ = firmware_debug_enabled_;
+    config_control_resend_count_ = 0;
     fw_version_major_ = pkt.fw_version_major;
     fw_version_minor_ = pkt.fw_version_minor;
     fw_version_patch_ = pkt.fw_version_patch;
@@ -2039,7 +2147,9 @@ private:
              static_cast<unsigned>(fw_version_patch_));
     fw_version_str_ = ver;
 
-    if (fw_compatible_)
+    const bool version_changed = !had_handshake || previous_protocol != fw_protocol_version_ ||
+                                 previous_version != fw_version_str_;
+    if (fw_compatible_ && version_changed)
     {
       RCLCPP_INFO(get_logger(),
                   "Firmware handshake OK: firmware v%s, protocol v%u (image expects v%u).",
@@ -2047,7 +2157,7 @@ private:
                   static_cast<unsigned>(fw_protocol_version_),
                   static_cast<unsigned>(kMowgliProtocolVersion));
     }
-    else
+    else if (!fw_compatible_ && version_changed)
     {
       RCLCPP_ERROR(get_logger(),
                    "INCOMPATIBLE FIRMWARE: firmware v%s speaks protocol v%u but this image "
@@ -2056,6 +2166,22 @@ private:
                    fw_version_str_.c_str(),
                    static_cast<unsigned>(fw_protocol_version_),
                    static_cast<unsigned>(kMowgliProtocolVersion));
+    }
+
+    if (firmware_debug_enabled_)
+    {
+      if (!previous_fw_diag_enabled)
+      {
+        RCLCPP_INFO(get_logger(), "[FW_DIAG] Firmware debug enabled.");
+      }
+      if (!had_handshake || !previous_fw_diag_enabled || version_changed)
+      {
+        log_fw_diag_snapshot();
+      }
+    }
+    else if (previous_fw_diag_enabled)
+    {
+      RCLCPP_INFO(get_logger(), "[FW_DIAG] Firmware debug disabled.");
     }
   }
 
@@ -2067,6 +2193,7 @@ private:
     fw_protocol_version_ = 0u;
     fw_version_str_.clear();
     config_req_resend_count_ = 5;
+    config_control_resend_count_ = 0;
     fw_handshake_start_ = now();
   }
 
@@ -2101,15 +2228,64 @@ private:
     }
   }
 
-  void send_config_request()
+  bool send_config_request()
   {
     if (!serial_)
     {
-      return;
+      return false;
     }
     LlConfigReq pkt{};
     pkt.type = PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ;
-    send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt), sizeof(LlConfigReq) - sizeof(uint16_t));
+    pkt.flags = firmware_debug_requested_ ? CONFIG_FLAG_FIRMWARE_DEBUG : 0u;
+    return send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
+                           sizeof(LlConfigReq) - sizeof(uint16_t));
+  }
+
+  void clear_firmware_debug_state_for_reconnect()
+  {
+    const bool was_requested = firmware_debug_requested_;
+    const bool was_enabled = firmware_debug_enabled_;
+    if (was_requested || was_enabled)
+    {
+      RCLCPP_INFO(get_logger(), "[FW_DIAG] Firmware debug reset to OFF after serial reconnect.");
+    }
+    firmware_debug_requested_ = false;
+    firmware_debug_enabled_ = false;
+  }
+
+  void log_fw_diag_snapshot()
+  {
+    if (!(firmware_debug_requested_ || firmware_debug_enabled_))
+    {
+      return;
+    }
+
+    if (!fw_version_str_.empty())
+    {
+      RCLCPP_INFO(get_logger(),
+                  "[FW_DIAG] Firmware handshake OK: firmware v%s, protocol v%u.",
+                  fw_version_str_.c_str(),
+                  static_cast<unsigned>(fw_protocol_version_));
+    }
+
+    if (reset_cause_seen_)
+    {
+      if (last_reset_cause_ == RESET_CAUSE_WWDG && last_reset_has_watchdog_stage_)
+      {
+        RCLCPP_INFO(get_logger(),
+                    "[FW_DIAG] STM32 boot reset cause: %s — %s (last stage before reset: %s)",
+                    last_reset_cause_name_.c_str(),
+                    reset_cause_description(last_reset_cause_),
+                    last_reset_stage_name_.c_str());
+      }
+      else
+      {
+        RCLCPP_INFO(get_logger(),
+                    "[FW_DIAG] STM32 boot reset cause: %s — %s",
+                    last_reset_cause_name_.c_str(),
+                    reset_cause_description(last_reset_cause_));
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -2270,6 +2446,7 @@ private:
   rclcpp::Service<mowgli_interfaces::srv::MowerControl>::SharedPtr srv_mower_control_;
   rclcpp::Service<mowgli_interfaces::srv::EmergencyStop>::SharedPtr srv_emergency_stop_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_reboot_board_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_set_firmware_debug_;
 
   rclcpp::TimerBase::SharedPtr timer_read_;
   rclcpp::TimerBase::SharedPtr timer_heartbeat_;
@@ -2338,10 +2515,13 @@ private:
   uint8_t fw_version_patch_{0u};
   std::string fw_version_str_{};
   int config_req_resend_count_{5};
+  int config_control_resend_count_{0};
   rclcpp::Time fw_handshake_start_{0, 0, RCL_ROS_TIME};
   // Grace window after the request budget before declaring an unanswered
   // handshake incompatible (firmware too old to reply).
   double fw_handshake_timeout_s_{5.0};
+  bool firmware_debug_requested_{false};
+  bool firmware_debug_enabled_{false};
 
   // Host-side sub-deadband forward-velocity clamp (on_cmd_vel): any |vx| below
   // this is zeroed before reaching the firmware. Lowered from the legacy 0.15

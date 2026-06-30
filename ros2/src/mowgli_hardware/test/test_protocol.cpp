@@ -98,11 +98,12 @@ TEST(ProtocolSizes, SetDrivePidPacketSize)
 
 TEST(ProtocolSizes, ConfigPacketSizes)
 {
-  // Firmware version handshake. Req is a bare trigger; Rsp carries the
-  // protocol version + 3-byte semver. Must match pkt_config_*_t in
+  // Firmware version handshake / runtime config. Req carries flags; Rsp
+  // reports protocol version + active flags + 3-byte semver. Must match
+  // pkt_config_*_t in
   // mowgli_protocol.h.
-  EXPECT_EQ(sizeof(LlConfigReq), 3u);  // type(1) + crc(2)
-  EXPECT_EQ(sizeof(LlConfigRsp), 7u);  // type(1) + proto(1) + semver(3) + crc(2)
+  EXPECT_EQ(sizeof(LlConfigReq), 4u);  // type(1) + flags(1) + crc(2)
+  EXPECT_EQ(sizeof(LlConfigRsp), 8u);  // type(1) + proto(1) + flags(1) + semver(3) + crc(2)
 }
 
 // ---------------------------------------------------------------------------

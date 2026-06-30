@@ -11,6 +11,7 @@ import {
     Row,
     Space,
     Statistic,
+    Switch,
     Table,
     Tabs,
     Tag,
@@ -22,11 +23,13 @@ import {
     CompassOutlined,
     DashboardOutlined,
     ReloadOutlined,
+    SettingOutlined,
     SoundOutlined,
     ThunderboltOutlined,
     WarningOutlined,
     WifiOutlined,
 } from "@ant-design/icons";
+import {ContentType} from "../api/Api.ts";
 import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
 import {useEmergency} from "../hooks/useEmergency.ts";
 import {usePower} from "../hooks/usePower.ts";
@@ -61,6 +64,7 @@ import {useSettings} from "../hooks/useSettings.ts";
 import {computeBatteryPercent} from "../utils/battery.ts";
 import {useApi} from "../hooks/useApi.ts";
 import {useFusionGraphDiagnostics} from "../hooks/useFusionGraphDiagnostics.ts";
+import {useFirmwareDebugLogs} from "../hooks/useFirmwareDebugLogs.ts";
 import {useMowerAction} from "../components/MowerActions.tsx";
 import {BTStateGraph} from "../components/BTStateGraph.tsx";
 import {RobotAnatomy} from "../components/RobotAnatomy.tsx";
@@ -140,6 +144,7 @@ export const DiagnosticsPage = () => {
     const {snapshot, loading, refresh} = useDiagnosticsSnapshot();
     const {diagnostics} = useDiagnostics();
     const {settings} = useSettings();
+    const guiApi = useApi();
     const wheelRpm = useWheelRpm({wheelRadiusM: settings?.wheel_radius ?? 0.04475});
 
     // ── derived values ───────────────────────────────────────────────────────
@@ -325,6 +330,56 @@ export const DiagnosticsPage = () => {
         dockCharging: status.is_charging ?? false,
     };
 
+    const [firmwareDebugLoading, setFirmwareDebugLoading] = useState(false);
+    const [firmwareDebugTarget, setFirmwareDebugTarget] = useState<boolean | null>(null);
+
+    const firmwareDebugActual = status.firmware_debug_enabled ?? false;
+    const firmwareDebugEnabled = firmwareDebugTarget ?? firmwareDebugActual;
+    const {
+        lines: firmwareDebugLines,
+        loading: firmwareDebugLogLoading,
+        error: firmwareDebugLogError,
+    } = useFirmwareDebugLogs(firmwareDebugEnabled);
+
+    useEffect(() => {
+        if (firmwareDebugTarget !== null && firmwareDebugActual === firmwareDebugTarget) {
+            setFirmwareDebugTarget(null);
+            setFirmwareDebugLoading(false);
+        }
+    }, [firmwareDebugActual, firmwareDebugTarget]);
+
+    useEffect(() => {
+        if (firmwareDebugTarget === null) {
+            return;
+        }
+        const timeoutId = window.setTimeout(() => {
+            setFirmwareDebugTarget(null);
+            setFirmwareDebugLoading(false);
+        }, 4000);
+        return () => window.clearTimeout(timeoutId);
+    }, [firmwareDebugTarget]);
+
+    const toggleFirmwareDebug = async (checked: boolean) => {
+        setFirmwareDebugTarget(checked);
+        setFirmwareDebugLoading(true);
+        try {
+            await guiApi.request({
+                path: "/diagnostics/firmware_debug",
+                method: "POST",
+                type: ContentType.Json,
+                format: "json",
+                body: {enabled: checked},
+            });
+        } catch (e: any) {
+            setFirmwareDebugTarget(null);
+            setFirmwareDebugLoading(false);
+            notification.error({
+                message: t("diagnosticsPage.firmwareDebugToggleFailed"),
+                description: e?.message ?? t("diagnosticsPage.unknownError"),
+            });
+        }
+    };
+
     const sectionSystem = (
         <Row gutter={[12, 12]}>
             <Col span={24}>
@@ -356,7 +411,7 @@ export const DiagnosticsPage = () => {
                 </Card>
             </Col>
             <Col xs={24} lg={8}>
-                <Card title={<Space><DashboardOutlined/> CPU</Space>} size="small">
+                <Card title={<Space><DashboardOutlined/> CPU</Space>} size="small" style={{height: "100%"}}>
                     <Statistic
                         title={t('diagnosticsPage.temperature')}
                         value={cpuTemp > 0 ? cpuTemp : undefined}
@@ -365,8 +420,72 @@ export const DiagnosticsPage = () => {
                         valueStyle={{
                             color: cpuTemp > 70 ? colors.danger : cpuTemp > 55 ? colors.warning : undefined,
                         }}
-                       
                     />
+                </Card>
+            </Col>
+            <Col xs={24} lg={16}>
+                <Card
+                    size="small"
+                    style={{height: "100%"}}
+                    title={<Space><ApiOutlined/> {t("diagnosticsPage.firmwareDebugTitle")}</Space>}
+                    extra={
+                        <Space size={10}>
+                            <Switch
+                                size="small"
+                                checked={firmwareDebugEnabled}
+                                loading={firmwareDebugLoading}
+                                onChange={toggleFirmwareDebug}
+                            />
+                            <SettingOutlined style={{color: colors.textMuted, fontSize: 14}} />
+                        </Space>
+                    }
+                >
+                    {!firmwareDebugEnabled ? (
+                        <div style={{
+                            minHeight: 176,
+                            display: "flex",
+                            flexDirection: "column",
+                            justifyContent: "center",
+                            gap: 8,
+                            color: colors.textMuted,
+                        }}>
+                            <Typography.Text type="secondary">
+                                {t("diagnosticsPage.firmwareDebugOffTitle")}
+                            </Typography.Text>
+                            <Typography.Text type="secondary">
+                                {t("diagnosticsPage.firmwareDebugOffBody")}
+                            </Typography.Text>
+                        </div>
+                    ) : (
+                        <div style={{
+                            minHeight: 176,
+                            maxHeight: 176,
+                            overflowY: "auto",
+                            borderRadius: 8,
+                            border: `1px solid ${colors.borderSubtle}`,
+                            background: colors.bgCard,
+                            padding: "10px 12px",
+                            fontFamily: '"JetBrains Mono", "SF Mono", ui-monospace, monospace',
+                            fontSize: 12,
+                            lineHeight: 1.55,
+                        }}>
+                            {firmwareDebugLines.length === 0 ? (
+                                <Typography.Text type="secondary">
+                                    {firmwareDebugLogLoading
+                                        ? t("diagnosticsPage.firmwareDebugConnecting")
+                                        : firmwareDebugLogError
+                                            ? t("diagnosticsPage.firmwareDebugStreamError")
+                                            : t("diagnosticsPage.firmwareDebugWaiting")}
+                                </Typography.Text>
+                            ) : (
+                                firmwareDebugLines.map((line) => (
+                                    <div key={line.id} style={{color: colors.primary, whiteSpace: "pre-wrap"}}>
+                                        {line.plain}
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    )}
                 </Card>
             </Col>
             {snapshot?.timestamp && (
@@ -685,12 +804,10 @@ export const DiagnosticsPage = () => {
     // surfaces the per-tick GraphStats it publishes on
     // /fusion_graph/diagnostics + the Save/Clear service actions.
 
-    const guiApi = useApi();
     const mowerAction = useMowerAction();
     const resetEmergencyAction = mowerAction("emergency", {Emergency: 0});
     const {stats: fusionStats} = useFusionGraphDiagnostics();
     const [fusionBusy, setFusionBusy] = useState<"save" | "clear" | null>(null);
-
     const callFusionService = async (command: "fusion_graph_save" | "fusion_graph_clear") => {
         setFusionBusy(command === "fusion_graph_save" ? "save" : "clear");
         try {
