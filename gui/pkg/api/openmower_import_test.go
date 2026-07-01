@@ -349,15 +349,16 @@ func TestReproject_SameDatumOffCentralMeridianRemovesConvergence(t *testing.T) {
 	assert.Greater(t, math.Abs(e), 0.1)
 }
 
-func TestResolveReprojection_NoOmDatumWithMnSetIsPassThroughPlusWarning(t *testing.T) {
+func TestResolveReprojection_NoOmDatumWithMnSetReprojectsPlusWarning(t *testing.T) {
 	r, warn := resolveReprojection(nil, nil, 48.0, 11.0, nil)
-	assert.False(t, r.reproject)
-	// No UTM anchor → coordinates pass through unchanged.
+	assert.True(t, r.reproject)
+	// The known MowgliNext datum is now used as the reference anchor, so the
+	// point is corrected into true-north ENU instead of passing through unchanged.
 	e, n := r.project(5, 7)
-	assert.InDelta(t, 5, e, 1e-9)
-	assert.InDelta(t, 7, n, 1e-9)
+	assert.Greater(t, math.Abs(e-5), 0.1)
+	assert.Greater(t, math.Abs(n-7), 0.1)
 	assert.Contains(t, warn, "Datum OpenMower non fourni")
-	assert.Contains(t, warn, "pivoté")
+	assert.NotContains(t, warn, "pivoté")
 }
 
 func TestResolveReprojection_OmDatumWithMnUnsetAdoptsOmDatum(t *testing.T) {
