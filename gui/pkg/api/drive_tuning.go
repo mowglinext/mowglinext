@@ -27,6 +27,13 @@ const (
 	driveTuningBackupFile        = driveTuningContainerDir + "/drive_pid_last_backup.yaml"
 	driveTuningYamlHeader        = "# Mowgli Robot Configuration — managed by mowglinext-gui\n# This file is the single source of truth for robot parameters.\n# Changes made here are picked up on container restart.\n\n"
 	maxDriveTuningLogBytes       = 128 * 1024
+	// Feed-forward/odometry runs need a stable closed-loop wheel baseline so
+	// the very first pass does not inherit whatever live gains happen to be
+	// loaded in hardware_bridge.
+	driveTuningFFDefaultWheelKp            = 0.2
+	driveTuningFFDefaultWheelKi            = 0.099
+	driveTuningFFDefaultWheelKd            = 0.010
+	driveTuningFFDefaultWheelIntegralLimit = 15.0
 )
 
 type driveTuningMode string
@@ -769,6 +776,10 @@ func buildFeedForwardCommand(req driveFFCalibrationStartRequest) ([]string, stri
 		"--turn-direction", req.TurnDirection,
 		"--output", reportPath,
 		"--backup-file", driveTuningBackupFile,
+		"--custom-kp", formatFloat(driveTuningFFDefaultWheelKp),
+		"--custom-ki", formatFloat(driveTuningFFDefaultWheelKi),
+		"--custom-kd", formatFloat(driveTuningFFDefaultWheelKd),
+		"--custom-integral-limit", formatFloat(driveTuningFFDefaultWheelIntegralLimit),
 	}
 	if req.AutoTurn != nil && *req.AutoTurn {
 		args = append(args, "--auto-turn")

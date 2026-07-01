@@ -16,7 +16,7 @@ import {
     Tag,
     Typography,
 } from "antd";
-import { DashboardOutlined, FileTextOutlined, HistoryOutlined, PlayCircleOutlined } from "@ant-design/icons";
+import { DashboardOutlined, FileTextOutlined, HistoryOutlined } from "@ant-design/icons";
 import type { TFunction } from "i18next";
 import { useDockingSensor } from "../../hooks/useDockingSensor.ts";
 import { useDriveTuning } from "../../hooks/useDriveTuning.ts";
@@ -379,25 +379,6 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                 size="small"
                 title={t("settingsDriveMotor.cards.assistants.title")}
                 style={{ marginBottom: 16 }}
-                extra={
-                    <Space wrap>
-                        <Button
-                            type="primary"
-                            icon={<PlayCircleOutlined />}
-                            onClick={() => setFfOpen(true)}
-                            disabled={runningJob || isEmergencyActive}
-                        >
-                            {t("settingsDriveMotor.cards.assistants.calibrateButton")}
-                        </Button>
-                        <Button
-                            icon={<PlayCircleOutlined />}
-                            onClick={() => setPidOpen(true)}
-                            disabled={runningJob || isEmergencyActive}
-                        >
-                            {t("settingsDriveMotor.cards.assistants.pidButton")}
-                        </Button>
-                    </Space>
-                }
             >
                 <Space direction="vertical" size={12} style={{ width: "100%" }}>
                     {helperAlerts}
