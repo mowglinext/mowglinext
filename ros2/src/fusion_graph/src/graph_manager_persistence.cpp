@@ -197,7 +197,7 @@ bool GraphManager::Save(const std::string& prefix) const
     // Datum (WGS84) tags the map to its garden so a keyframe map is rejected
     // at a different site on Load. 9 decimals ≈ 0.1 mm at lat/lon scale.
     meta_os << "datum_lat=" << std::fixed << std::setprecision(9) << params_.datum_lat << "\n";
-    meta_os << "datum_lon=" << params_.datum_lon << "\n";
+    meta_os << "datum_lon=" << std::fixed << std::setprecision(9) << params_.datum_lon << "\n";
     // Wall-clock seconds need ≥10 integer digits + a few fractional, so
     // default 6-digit iostream precision (1.7774e+09) silently corrupts
     // the timestamp. setprecision(15) is safe for double round-trip.
@@ -307,8 +307,8 @@ bool GraphManager::Load(const std::string& prefix)
        std::abs(loaded_datum_lon - params_.datum_lon) > 1.0e-6))
   {
     fprintf(stderr,
-            "fusion_graph::Load: datum mismatch (persisted map cfg=%.7f,%.7f vs "
-            "loaded=%.7f,%.7f) — rejecting cross-garden map\n",
+            "fusion_graph::Load: datum mismatch (persisted map cfg=%.9f,%.9f vs "
+            "loaded=%.9f,%.9f) — rejecting cross-garden map\n",
             params_.datum_lat,
             params_.datum_lon,
             loaded_datum_lat,

@@ -118,7 +118,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
     datum_cos_lat_ = std::cos(datum_lat_ * M_PI / 180.0);
     RCLCPP_WARN(get_logger(),
                 "fusion_graph: datum self-seeded from first fix "
-                "(%.6f, %.6f) — set datum_lat/lon explicitly",
+                "(%.9f, %.9f) — set datum_lat/lon explicitly",
                 datum_lat_,
                 datum_lon_);
   }

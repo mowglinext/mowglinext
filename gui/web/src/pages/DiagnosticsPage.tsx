@@ -693,7 +693,7 @@ export const DiagnosticsPage = () => {
                             <Statistic
                                 title={t('diagnosticsPage.latitude')}
                                 value={gps.pose?.pose?.position?.x}
-                                precision={7}
+                                precision={9}
 
                             />
                         </Col>
@@ -701,7 +701,7 @@ export const DiagnosticsPage = () => {
                             <Statistic
                                 title={t('diagnosticsPage.longitude')}
                                 value={gps.pose?.pose?.position?.y}
-                                precision={7}
+                                precision={9}
 
                             />
                         </Col>
@@ -1392,14 +1392,14 @@ export const DiagnosticsPage = () => {
                                 <Statistic
                                     title={t('diagnosticsPage.datumLat')}
                                     value={crossChecks.dock_pose.datum_lat}
-                                    precision={7}
+                                    precision={9}
                                 />
                             </Col>
                             <Col span={12}>
                                 <Statistic
                                     title={t('diagnosticsPage.datumLon')}
                                     value={crossChecks.dock_pose.datum_lon}
-                                    precision={7}
+                                    precision={9}
                                 />
                             </Col>
                             <Col span={24}>

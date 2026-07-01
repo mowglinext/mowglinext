@@ -99,7 +99,7 @@ func readDatumLatLon(dbProvider types.IDBProvider) (lat, lon float64, ok bool) {
 // fetchWeather queries open-meteo (no API key) for current conditions.
 func fetchWeather(lat, lon float64) (WeatherResponse, error) {
 	url := fmt.Sprintf(
-		"https://api.open-meteo.com/v1/forecast?latitude=%.5f&longitude=%.5f&current=temperature_2m,precipitation,weather_code",
+		"https://api.open-meteo.com/v1/forecast?latitude=%.9f&longitude=%.9f&current=temperature_2m,precipitation,weather_code",
 		lat, lon)
 
 	resp, err := weatherClient.Get(url)

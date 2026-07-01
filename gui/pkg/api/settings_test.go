@@ -153,7 +153,7 @@ func TestPostSettings_NewFile(t *testing.T) {
 
 	fileContent := string(content)
 	assert.Contains(t, fileContent, "export OM_DATUM_LAT=")
-	assert.Contains(t, fileContent, "48.999")
+	assert.Contains(t, fileContent, "48.999000000")
 	assert.Contains(t, fileContent, "export OM_USE_NTRIP=")
 	assert.Contains(t, fileContent, "export OM_TOOL_WIDTH=")
 }
@@ -191,7 +191,7 @@ export OM_EXISTING_KEY="keep_me"
 	fileContent := string(content)
 	assert.Contains(t, fileContent, "OM_EXISTING_KEY")
 	assert.Contains(t, fileContent, "keep_me")
-	assert.Contains(t, fileContent, "99.999")
+	assert.Contains(t, fileContent, "99.999000000")
 }
 
 func TestPostSettings_BooleanConversion(t *testing.T) {
@@ -537,7 +537,7 @@ func TestPostSettingsYAML_NewFile(t *testing.T) {
 
 	content, err := os.ReadFile(yamlFile)
 	require.NoError(t, err)
-	assert.Contains(t, string(content), "datum_lat: 48.999")
+	assert.Contains(t, string(content), "datum_lat: 48.999000000")
 	assert.Contains(t, string(content), "ntrip_enabled: true")
 	assert.Contains(t, string(content), "gnss_receiver_family: unicore")
 	assert.Contains(t, string(content), "gnss_serial_device: /dev/serial/by-id/usb-gnss")
@@ -601,7 +601,7 @@ func TestPostSettingsYAML_MergesExisting(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "extra_existing")
 	assert.Contains(t, string(content), "keep_me")
-	assert.Contains(t, string(content), "99.999")
+	assert.Contains(t, string(content), "99.999000000")
 	assert.Contains(t, string(content), "gnss_receiver_family: nmea")
 	assert.Contains(t, string(content), "gnss_serial_device: /dev/serial/by-id/usb-test")
 	assert.Contains(t, string(content), "gnss_serial_baud: 115200")

@@ -88,8 +88,8 @@ def generate_launch_description() -> LaunchDescription:
     node_period_s = LaunchConfiguration("node_period_s")
 
     cfg = _read_robot_config()
-    datum_lat = float(cfg.get("datum_lat", 0.0) or 0.0)
-    datum_lon = float(cfg.get("datum_lon", 0.0) or 0.0)
+    datum_lat = float(cfg.get("datum_lat", 0.000000000) or 0.000000000)
+    datum_lon = float(cfg.get("datum_lon", 0.000000000) or 0.000000000)
     lever_x = float(cfg.get("gps_x", 0.0) or 0.0)
     lever_y = float(cfg.get("gps_y", 0.0) or 0.0)
 

@@ -346,8 +346,8 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[
             {
                 "use_sim_time": True,
-                "datum_lat": 48.137154,
-                "datum_lon": 11.576124,
+                "datum_lat": 48.137154000,
+                "datum_lon": 11.576124000,
             },
         ],
     )

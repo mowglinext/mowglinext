@@ -338,8 +338,8 @@ def generate_launch_description() -> LaunchDescription:
     # this node keeps /gps/absolute_pose for legacy consumers and emits
     # /gps/pose_cov for ekf_map_node fusion. Universal GNSS owns /gps/status.
     # ------------------------------------------------------------------
-    datum_lat = float(robot_params.get("datum_lat", 0.0))
-    datum_lon = float(robot_params.get("datum_lon", 0.0))
+    datum_lat = float(robot_params.get("datum_lat", 0.000000000))
+    datum_lon = float(robot_params.get("datum_lon", 0.000000000))
     navsat_converter_node = Node(
         package="mowgli_localization",
         executable="navsat_to_absolute_pose_node",

@@ -23,8 +23,8 @@ def _make_fix() -> NavSatFix:
     msg.header.frame_id = "gps_link"
     msg.status.status = NavSatStatus.STATUS_GBAS_FIX
     msg.status.service = NavSatStatus.SERVICE_GPS
-    msg.latitude = 48.137154
-    msg.longitude = 11.576124
+    msg.latitude = 48.137154000
+    msg.longitude = 11.576124000
     msg.altitude = 520.0
     msg.position_covariance = [
         0.01, 0.0, 0.0,
@@ -45,8 +45,8 @@ def generate_test_description():
         parameters=[
             {
                 "use_sim_time": False,
-                "datum_lat": 48.137154,
-                "datum_lon": 11.576124,
+                "datum_lat": 48.137154000,
+                "datum_lon": 11.576124000,
             }
         ],
     )
