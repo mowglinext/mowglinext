@@ -29,10 +29,10 @@ func TestBuildFeedForwardCommandAppliesStableWheelPidBaseline(t *testing.T) {
 
 	script := args[len(args)-1]
 	expectedParts := []string{
-		"'--custom-kp' '0.2'",
-		"'--custom-ki' '0.099'",
-		"'--custom-kd' '0.01'",
-		"'--custom-integral-limit' '15'",
+		"'--custom-kp' '" + formatFloat(driveTuningFFDefaultWheelKp) + "'",
+		"'--custom-ki' '" + formatFloat(driveTuningFFDefaultWheelKi) + "'",
+		"'--custom-kd' '" + formatFloat(driveTuningFFDefaultWheelKd) + "'",
+		"'--custom-integral-limit' '" + formatFloat(driveTuningFFDefaultWheelIntegralLimit) + "'",
 	}
 	for _, expected := range expectedParts {
 		if !strings.Contains(script, expected) {

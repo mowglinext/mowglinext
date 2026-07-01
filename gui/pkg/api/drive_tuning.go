@@ -31,7 +31,7 @@ const (
 	// the very first pass does not inherit whatever live gains happen to be
 	// loaded in hardware_bridge.
 	driveTuningFFDefaultWheelKp            = 0.2
-	driveTuningFFDefaultWheelKi            = 0.099
+	driveTuningFFDefaultWheelKi            = 0.100
 	driveTuningFFDefaultWheelKd            = 0.010
 	driveTuningFFDefaultWheelIntegralLimit = 15.0
 )

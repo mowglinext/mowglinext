@@ -48,27 +48,27 @@ type DockCalibrationStatus struct {
 // ImuCalibrationStatus mirrors the plaintext imu_calibration.txt format
 // written by hardware_bridge_node (v1 header).
 type ImuCalibrationStatus struct {
-	Present           bool    `json:"present"`
-	CalibratedAt      string  `json:"calibrated_at,omitempty"`
-	SamplesUsed       int     `json:"samples_used,omitempty"`
-	AccelBiasX        float64 `json:"accel_bias_x,omitempty"`
-	AccelBiasY        float64 `json:"accel_bias_y,omitempty"`
-	GyroBiasX         float64 `json:"gyro_bias_x,omitempty"`
-	GyroBiasY         float64 `json:"gyro_bias_y,omitempty"`
-	GyroBiasZ         float64 `json:"gyro_bias_z,omitempty"`
-	ImpliedPitchDeg   float64 `json:"implied_pitch_deg,omitempty"`
-	ImpliedRollDeg    float64 `json:"implied_roll_deg,omitempty"`
-	Error             string  `json:"error,omitempty"`
+	Present         bool    `json:"present"`
+	CalibratedAt    string  `json:"calibrated_at,omitempty"`
+	SamplesUsed     int     `json:"samples_used,omitempty"`
+	AccelBiasX      float64 `json:"accel_bias_x,omitempty"`
+	AccelBiasY      float64 `json:"accel_bias_y,omitempty"`
+	GyroBiasX       float64 `json:"gyro_bias_x,omitempty"`
+	GyroBiasY       float64 `json:"gyro_bias_y,omitempty"`
+	GyroBiasZ       float64 `json:"gyro_bias_z,omitempty"`
+	ImpliedPitchDeg float64 `json:"implied_pitch_deg,omitempty"`
+	ImpliedRollDeg  float64 `json:"implied_roll_deg,omitempty"`
+	Error           string  `json:"error,omitempty"`
 }
 
 // MagCalibrationStatus mirrors the relevant subset of mag_calibration.yaml.
 type MagCalibrationStatus struct {
-	Present          bool    `json:"present"`
-	CalibratedAt     string  `json:"calibrated_at,omitempty"`
-	MagnitudeMeanUT  float64 `json:"magnitude_mean_uT,omitempty"`
-	MagnitudeStdUT   float64 `json:"magnitude_std_uT,omitempty"`
-	SampleCount      int     `json:"sample_count,omitempty"`
-	Error            string  `json:"error,omitempty"`
+	Present         bool    `json:"present"`
+	CalibratedAt    string  `json:"calibrated_at,omitempty"`
+	MagnitudeMeanUT float64 `json:"magnitude_mean_uT,omitempty"`
+	MagnitudeStdUT  float64 `json:"magnitude_std_uT,omitempty"`
+	SampleCount     int     `json:"sample_count,omitempty"`
+	Error           string  `json:"error,omitempty"`
 }
 
 // CalibrationStatusResponse is the payload for GET /calibration/status.
@@ -146,11 +146,12 @@ func readDockCalibrationStatus(dbProvider types.IDBProvider) DockCalibrationStat
 
 // readImuCalibrationStatus parses the v1 plaintext format written by
 // hardware_bridge_node. Format:
-//   # mowgli_imu_calibration_v1
-//   <ts_unix> <n_samples>
-//   <off_ax> <off_ay> <off_gx> <off_gy> <off_gz>
-//   <cov_ax> <cov_ay> <cov_gx> <cov_gy> <cov_gz>
-//   <implied_pitch_deg> <implied_roll_deg>
+//
+//	# mowgli_imu_calibration_v1
+//	<ts_unix> <n_samples>
+//	<off_ax> <off_ay> <off_gx> <off_gy> <off_gz>
+//	<cov_ax> <cov_ay> <cov_gx> <cov_gy> <cov_gz>
+//	<implied_pitch_deg> <implied_roll_deg>
 func readImuCalibrationStatus() ImuCalibrationStatus {
 	f, err := os.Open(imuCalibrationPath)
 	if err != nil {
@@ -165,6 +166,9 @@ func readImuCalibrationStatus() ImuCalibrationStatus {
 	lines := []string{}
 	for scanner.Scan() {
 		lines = append(lines, strings.TrimSpace(scanner.Text()))
+	}
+	if err := scanner.Err(); err != nil {
+		return ImuCalibrationStatus{Present: true, Error: err.Error()}
 	}
 	if len(lines) < 4 {
 		return ImuCalibrationStatus{Present: true, Error: "unexpected line count"}
