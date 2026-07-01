@@ -14,6 +14,27 @@ def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
+def wrap_angle_rad(angle_rad: float) -> float:
+    return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
+
+
+def half_turn_target_yaw(start_yaw_rad: float, turn_direction: str) -> float:
+    sign = 1.0 if str(turn_direction).strip().lower() == "left" else -1.0
+    return wrap_angle_rad(start_yaw_rad + sign * math.pi)
+
+
+def yaw_error_to_target(
+    current_yaw_rad: float,
+    target_yaw_rad: float,
+    *,
+    turn_direction: str | None = None,
+) -> float:
+    error = wrap_angle_rad(target_yaw_rad - current_yaw_rad)
+    if turn_direction is not None and abs(abs(error) - math.pi) <= 1e-9:
+        return math.pi if str(turn_direction).strip().lower() == "left" else -math.pi
+    return error
+
+
 def _mean(values: Sequence[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
@@ -233,6 +254,129 @@ class LiveOscillationDecision:
 
 
 @dataclass(frozen=True)
+class YawTurnDecision:
+    target_yaw_rad: float | None
+    yaw_error_rad: float | None
+    command_wz_radps: float
+    reached_target: bool
+    timed_out: bool
+    use_timed_fallback: bool
+
+
+OSCILLATION_SEVERITIES = ("none", "minor", "moderate", "severe")
+OSCILLATION_SEVERITY_ORDER = {
+    severity: index for index, severity in enumerate(OSCILLATION_SEVERITIES)
+}
+
+
+@dataclass(frozen=True)
+class OscillationAssessment:
+    severity: str
+    zero_crossings: int
+    error_stddev: float
+    deadband_mps: float
+    peak_to_peak_speed: float
+    peak_abs_error: float
+    outside_deadband_samples: int
+
+    @property
+    def detected(self) -> bool:
+        return self.severity != "none"
+
+
+def normalize_oscillation_severity(
+    severity: str | None,
+    *,
+    detected: bool = False,
+) -> str:
+    normalized = ""
+    if severity is not None:
+        normalized = str(severity).strip().lower()
+    if normalized in OSCILLATION_SEVERITY_ORDER:
+        return normalized
+    return "moderate" if detected else "none"
+
+
+def oscillation_severity_rank(
+    severity: str | None,
+    *,
+    detected: bool = False,
+) -> int:
+    normalized = normalize_oscillation_severity(severity, detected=detected)
+    return OSCILLATION_SEVERITY_ORDER[normalized]
+
+
+def is_warning_oscillation_severity(severity: str | None) -> bool:
+    return oscillation_severity_rank(severity) >= OSCILLATION_SEVERITY_ORDER["moderate"]
+
+
+def max_oscillation_severity(*severities: str | None) -> str:
+    best = "none"
+    for severity in severities:
+        if oscillation_severity_rank(severity) > oscillation_severity_rank(best):
+            best = normalize_oscillation_severity(severity)
+    return best
+
+
+def evaluate_yaw_turn_step(
+    *,
+    start_yaw_rad: float | None,
+    current_yaw_rad: float | None,
+    elapsed_s: float,
+    turn_direction: str,
+    yaw_tolerance_rad: float,
+    max_duration_s: float,
+    angular_speed_radps: float,
+) -> YawTurnDecision:
+    if start_yaw_rad is None or current_yaw_rad is None:
+        return YawTurnDecision(
+            target_yaw_rad=None,
+            yaw_error_rad=None,
+            command_wz_radps=0.0,
+            reached_target=False,
+            timed_out=False,
+            use_timed_fallback=True,
+        )
+
+    target_yaw_rad = half_turn_target_yaw(start_yaw_rad, turn_direction)
+    yaw_error_rad = yaw_error_to_target(
+        current_yaw_rad,
+        target_yaw_rad,
+        turn_direction=turn_direction,
+    )
+    tolerance = max(1e-6, abs(yaw_tolerance_rad))
+    if abs(yaw_error_rad) <= tolerance:
+        return YawTurnDecision(
+            target_yaw_rad=target_yaw_rad,
+            yaw_error_rad=yaw_error_rad,
+            command_wz_radps=0.0,
+            reached_target=True,
+            timed_out=False,
+            use_timed_fallback=False,
+        )
+    if elapsed_s >= max(0.0, max_duration_s):
+        return YawTurnDecision(
+            target_yaw_rad=target_yaw_rad,
+            yaw_error_rad=yaw_error_rad,
+            command_wz_radps=0.0,
+            reached_target=False,
+            timed_out=True,
+            use_timed_fallback=False,
+        )
+
+    angular_speed = max(0.0, abs(angular_speed_radps))
+    command_sign = 1.0 if yaw_error_rad > 0.0 else -1.0
+    return YawTurnDecision(
+        target_yaw_rad=target_yaw_rad,
+        yaw_error_rad=yaw_error_rad,
+        command_wz_radps=command_sign * angular_speed,
+        reached_target=False,
+        timed_out=False,
+        use_timed_fallback=False,
+    )
+
+
+@dataclass(frozen=True)
 class TrialMetrics:
     name: str
     phase: str
@@ -251,6 +395,8 @@ class TrialMetrics:
     integral_saturation_suspected: bool
     params_used: dict[str, float]
     live_oscillation_detected: bool = False
+    oscillation_severity: str = "none"
+    live_oscillation_severity: str = "none"
     trial_quality: str = "ok"
     warnings: tuple[str, ...] = ()
     ground_speed_mean: float | None = None
@@ -278,6 +424,8 @@ class TrialMetrics:
             "stall_detected": self.stall_detected,
             "oscillation_detected": self.oscillation_detected,
             "live_oscillation_detected": self.live_oscillation_detected,
+            "oscillation_severity": self.oscillation_severity,
+            "live_oscillation_severity": self.live_oscillation_severity,
             "trial_quality": self.trial_quality,
             "integral_saturation_suspected": self.integral_saturation_suspected,
             "params_used": dict(self.params_used),
@@ -429,22 +577,127 @@ def compute_settling_time(
     return None
 
 
-def detect_oscillation(samples: Sequence[SpeedSample], target_speed: float) -> bool:
-    if len(samples) < 5:
-        return False
+def _oscillation_deadband_mps(target_speed: float) -> float:
+    return clamp(max(0.010, 0.04 * abs(target_speed)), 0.010, 0.020)
+
+
+def classify_oscillation(
+    samples: Sequence[SpeedSample],
+    target_speed: float,
+    *,
+    min_samples: int = 5,
+) -> OscillationAssessment:
+    deadband = _oscillation_deadband_mps(target_speed)
+    if len(samples) < min_samples:
+        return OscillationAssessment(
+            severity="none",
+            zero_crossings=0,
+            error_stddev=0.0,
+            deadband_mps=deadband,
+            peak_to_peak_speed=0.0,
+            peak_abs_error=0.0,
+            outside_deadband_samples=0,
+        )
+
     errors = [target_speed - sample.speed_mps for sample in samples]
-    if statistics.pstdev(errors) < max(0.015, 0.12 * abs(target_speed)):
-        return False
+    error_stddev = statistics.pstdev(errors)
+    peak_abs_error = max((abs(error) for error in errors), default=0.0)
+    speeds = [sample.speed_mps for sample in samples]
+    peak_to_peak_speed = max(speeds, default=0.0) - min(speeds, default=0.0)
+
     zero_crossings = 0
     previous_sign = 0
+    outside_deadband_samples = 0
     for error in errors:
-        if abs(error) < 0.01:
+        if abs(error) <= deadband:
             continue
+        outside_deadband_samples += 1
         sign = 1 if error > 0.0 else -1
         if previous_sign and sign != previous_sign:
             zero_crossings += 1
         previous_sign = sign
-    return zero_crossings >= 4
+
+    target_abs = abs(target_speed)
+    minor_stddev = max(0.010, 0.06 * target_abs)
+    minor_peak_to_peak = max(0.022, 0.16 * target_abs)
+    minor_peak_error = max(deadband * 1.5, 0.014, 0.08 * target_abs)
+    moderate_stddev = max(0.015, 0.10 * target_abs)
+    moderate_peak_to_peak = max(0.040, 0.28 * target_abs)
+    moderate_peak_error = max(0.025, 0.14 * target_abs)
+    severe_stddev = max(0.025, 0.16 * target_abs)
+    severe_peak_to_peak = max(0.070, 0.40 * target_abs)
+    severe_peak_error = max(0.040, 0.22 * target_abs)
+
+    severity = "none"
+    if (
+        zero_crossings >= 6
+        and outside_deadband_samples >= 6
+        and error_stddev >= severe_stddev
+        and peak_to_peak_speed >= severe_peak_to_peak
+        and peak_abs_error >= severe_peak_error
+    ):
+        severity = "severe"
+    elif (
+        zero_crossings >= 5
+        and outside_deadband_samples >= 5
+        and error_stddev >= moderate_stddev
+        and peak_to_peak_speed >= moderate_peak_to_peak
+        and peak_abs_error >= moderate_peak_error
+    ):
+        severity = "moderate"
+    elif (
+        zero_crossings >= 4
+        and outside_deadband_samples >= 4
+        and error_stddev >= minor_stddev
+        and peak_to_peak_speed >= minor_peak_to_peak
+        and peak_abs_error >= minor_peak_error
+    ):
+        severity = "minor"
+
+    return OscillationAssessment(
+        severity=severity,
+        zero_crossings=zero_crossings,
+        error_stddev=error_stddev,
+        deadband_mps=deadband,
+        peak_to_peak_speed=peak_to_peak_speed,
+        peak_abs_error=peak_abs_error,
+        outside_deadband_samples=outside_deadband_samples,
+    )
+
+
+def detect_oscillation(samples: Sequence[SpeedSample], target_speed: float) -> bool:
+    return classify_oscillation(samples, target_speed).detected
+
+
+def _minor_oscillation_is_informational(
+    *,
+    target_speed: float,
+    measured_speed_mean: float,
+    error_mean: float,
+    error_rms: float,
+    overshoot: float,
+    stall_detected: bool,
+    integral_saturation_suspected: bool,
+    oscillation_severity: str,
+    live_oscillation_severity: str,
+) -> bool:
+    if max_oscillation_severity(oscillation_severity, live_oscillation_severity) != "minor":
+        return False
+    if stall_detected or integral_saturation_suspected:
+        return False
+
+    target_abs = abs(target_speed)
+    mean_error_limit = max(0.012, 0.06 * target_abs)
+    rms_error_limit = max(0.018, 0.12 * target_abs)
+    overshoot_limit = max(0.018, 0.10 * target_abs)
+    mean_speed_limit = max(0.012, 0.06 * target_abs)
+
+    return (
+        abs(error_mean) <= mean_error_limit
+        and error_rms <= rms_error_limit
+        and overshoot <= overshoot_limit
+        and abs(measured_speed_mean - target_speed) <= mean_speed_limit
+    )
 
 
 def integrate_distance(samples: Sequence[SpeedSample]) -> float:
@@ -474,6 +727,7 @@ def compute_trial_metrics(
     odom_distance_m: float | None,
     rtk_distance_m: float | None,
     live_oscillation_detected: bool = False,
+    live_oscillation_severity: str | None = None,
     warnings: Sequence[str] = (),
     notes: Sequence[str] = (),
 ) -> TrialMetrics:
@@ -493,7 +747,20 @@ def compute_trial_metrics(
         tolerance_mps=max(0.02, 0.1 * abs(target_speed)),
         min_hold_s=1.0,
     )
-    oscillation_detected = detect_oscillation(response, target_speed)
+    oscillation_assessment = classify_oscillation(response, target_speed)
+    oscillation_detected = oscillation_assessment.detected
+    oscillation_severity = normalize_oscillation_severity(
+        oscillation_assessment.severity,
+        detected=oscillation_detected,
+    )
+    live_oscillation_severity = normalize_oscillation_severity(
+        live_oscillation_severity,
+        detected=live_oscillation_detected,
+    )
+    live_oscillation_detected = (
+        live_oscillation_detected
+        or oscillation_severity_rank(live_oscillation_severity) > 0
+    )
     speed_floor = max(0.02, 0.3 * abs(target_speed))
     stall_detected = False
     if not is_stop_trial:
@@ -535,11 +802,19 @@ def compute_trial_metrics(
         )
     )
     warning_list = list(dict.fromkeys(warnings))
-    stop_behavior_warning = (
+    note_list = list(dict.fromkeys(notes))
+    stop_behavior_note = (
         is_stop_trial
         and (
             abs(measured_speed_mean) > 0.03
             or response_peak_abs_speed > 0.05
+        )
+    )
+    stop_behavior_warning = (
+        is_stop_trial
+        and (
+            abs(measured_speed_mean) > 0.045
+            or response_peak_abs_speed > 0.08
         )
     )
     stop_behavior_severe = (
@@ -549,24 +824,62 @@ def compute_trial_metrics(
             or response_peak_abs_speed > 0.10
         )
     )
+    if stop_behavior_note:
+        stop_note = (
+            "Residual motion after stop command: "
+            f"mean={abs(measured_speed_mean):.3f} m/s, peak={response_peak_abs_speed:.3f} m/s."
+        )
+        if stop_note not in note_list:
+            note_list.append(stop_note)
     if stop_behavior_warning:
         warning_list.append("Stop behavior warning: residual motion detected after zero-speed command.")
-        notes = [
-            *notes,
-            (
-                "Residual motion after stop command: "
-                f"mean={abs(measured_speed_mean):.3f} m/s, peak={response_peak_abs_speed:.3f} m/s."
-            ),
-        ]
+
+    informational_minor_oscillation = _minor_oscillation_is_informational(
+        target_speed=target_speed,
+        measured_speed_mean=measured_speed_mean,
+        error_mean=error_mean,
+        error_rms=error_rms,
+        overshoot=overshoot,
+        stall_detected=stall_detected,
+        integral_saturation_suspected=integral_saturation_suspected,
+        oscillation_severity=oscillation_severity,
+        live_oscillation_severity=live_oscillation_severity,
+    )
+
     if oscillation_detected:
-        warning_list.append("Post-trial oscillation signature detected in the recorded speed response.")
-    if live_oscillation_detected:
-        warning_list.append("Live oscillation suspected during calibration; trial continued.")
+        if oscillation_severity == "minor" and informational_minor_oscillation:
+            note = (
+                "Minor post-trial oscillation stayed inside the acceptable noise envelope "
+                f"(deadband +/-{oscillation_assessment.deadband_mps:.3f} m/s)."
+            )
+            if note not in note_list:
+                note_list.append(note)
+        else:
+            warning_list.append(
+                f"Post-trial {oscillation_severity} oscillation signature detected in the recorded speed response."
+            )
+    has_live_oscillation_message = any("Live oscillation" in warning for warning in warning_list)
+    if live_oscillation_detected and not has_live_oscillation_message:
+        if live_oscillation_severity == "minor" and informational_minor_oscillation:
+            note = (
+                "Minor live oscillation crossed the target repeatedly but remained inside the "
+                "acceptable speed-error envelope, so it was recorded as informational only."
+            )
+            if note not in note_list:
+                note_list.append(note)
+        elif is_warning_oscillation_severity(live_oscillation_severity):
+            warning_list.append("Live oscillation suspected during calibration; trial continued.")
     warning_list = list(dict.fromkeys(warning_list))
+    note_list = list(dict.fromkeys(note_list))
     trial_quality = "ok"
     if stall_detected or stop_behavior_severe:
         trial_quality = "poor"
-    elif warning_list or oscillation_detected or integral_saturation_suspected:
+    elif (
+        warning_list
+        or is_warning_oscillation_severity(oscillation_severity)
+        or is_warning_oscillation_severity(live_oscillation_severity)
+        or integral_saturation_suspected
+    ):
         trial_quality = "warning"
     return TrialMetrics(
         name=name,
@@ -586,6 +899,8 @@ def compute_trial_metrics(
         integral_saturation_suspected=integral_saturation_suspected,
         params_used=params_used.to_dict(),
         live_oscillation_detected=live_oscillation_detected,
+        oscillation_severity=oscillation_severity,
+        live_oscillation_severity=live_oscillation_severity,
         trial_quality=trial_quality,
         warnings=tuple(warning_list),
         ground_speed_mean=ground_speed_mean,
@@ -594,7 +909,7 @@ def compute_trial_metrics(
         rtk_distance_m=rtk_distance_m,
         rtk_accepted=ground_speed_mean is not None and rtk_distance_m is not None,
         left_right_tick_imbalance=left_right_tick_imbalance,
-        notes=tuple(notes),
+        notes=tuple(note_list),
     )
 
 
@@ -703,15 +1018,22 @@ def recommend_pid_only_params(
     median_abs_error = _median([abs(trial.error_mean) for trial in usable_trials])
     median_overshoot = _median([trial.overshoot for trial in usable_trials])
     max_overshoot = max((trial.overshoot for trial in usable_trials), default=0.0)
-    live_oscillation_count = sum(
+    live_warning_oscillation_count = sum(
         1
         for trial in usable_trials
-        if trial.live_oscillation_detected
+        if is_warning_oscillation_severity(trial.live_oscillation_severity)
     )
-    post_analysis_oscillation_count = sum(
+    post_analysis_warning_oscillation_count = sum(
         1
         for trial in usable_trials
-        if trial.oscillation_detected and not trial.live_oscillation_detected
+        if is_warning_oscillation_severity(trial.oscillation_severity)
+        and not is_warning_oscillation_severity(trial.live_oscillation_severity)
+    )
+    minor_post_analysis_oscillation_count = sum(
+        1
+        for trial in usable_trials
+        if normalize_oscillation_severity(trial.oscillation_severity, detected=trial.oscillation_detected)
+        == "minor"
     )
     slow_count = sum(
         1
@@ -746,23 +1068,24 @@ def recommend_pid_only_params(
     severe_post_analysis_oscillation = sum(
         1
         for trial in usable_trials
-        if trial.oscillation_detected
-        and not trial.live_oscillation_detected
-        and (
-            trial.overshoot > severe_overshoot_threshold
-            or abs(trial.error_mean) > steady_state_error_threshold
-        )
+        if normalize_oscillation_severity(trial.oscillation_severity, detected=trial.oscillation_detected)
+        == "severe"
+        and not is_warning_oscillation_severity(trial.live_oscillation_severity)
     )
     repeated_post_analysis_oscillation = (
-        post_analysis_oscillation_count >= tier.post_oscillation_repeat_limit
+        post_analysis_warning_oscillation_count >= tier.post_oscillation_repeat_limit
     )
     severe_oscillation = (
-        live_oscillation_count > 0
+        live_warning_oscillation_count > 0
         or repeated_post_analysis_oscillation
         or severe_post_analysis_oscillation > 0
     )
     mild_post_analysis_oscillation = (
-        post_analysis_oscillation_count > 0 and not severe_oscillation
+        (
+            post_analysis_warning_oscillation_count > 0
+            and not severe_oscillation
+        )
+        or minor_post_analysis_oscillation_count > 0
     )
     if mild_post_analysis_oscillation:
         reasons.append(
@@ -776,13 +1099,9 @@ def recommend_pid_only_params(
         1
         for trial in usable_trials
         if trial.trial_quality == "poor"
-        or trial.live_oscillation_detected
+        or is_warning_oscillation_severity(trial.live_oscillation_severity)
         or trial.integral_saturation_suspected
-        or (
-            trial.oscillation_detected
-            and not trial.live_oscillation_detected
-            and severe_oscillation
-        )
+        or is_warning_oscillation_severity(trial.oscillation_severity)
         or dangerous_overshoot
     )
     fine_gain_mode = base_params.wheel_pid_kp <= 1.0

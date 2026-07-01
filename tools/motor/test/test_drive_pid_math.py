@@ -10,16 +10,21 @@ from mowgli_tools.drive_pid_math import (
     SpeedSample,
     TickSample,
     TrialMetrics,
+    classify_oscillation,
     compute_settling_time,
     compute_tick_activity,
     compute_trial_metrics,
     detect_oscillation,
+    evaluate_yaw_turn_step,
     evaluate_live_stall,
     evaluate_live_oscillation_abort,
     finite_or_none,
+    half_turn_target_yaw,
     recommend_drive_pid_params,
     recommend_pid_only_params,
     sanitize_finite_data,
+    wrap_angle_rad,
+    yaw_error_to_target,
 )
 
 
@@ -55,6 +60,8 @@ def _trial(
     error_mean: float,
     oscillation_detected: bool = False,
     live_oscillation_detected: bool = False,
+    oscillation_severity: str | None = None,
+    live_oscillation_severity: str | None = None,
     integral_saturation_suspected: bool = False,
     trial_quality: str = "ok",
     warnings: tuple[str, ...] = (),
@@ -79,6 +86,16 @@ def _trial(
         integral_saturation_suspected=integral_saturation_suspected,
         params_used=params.to_dict(),
         live_oscillation_detected=live_oscillation_detected,
+        oscillation_severity=(
+            oscillation_severity
+            if oscillation_severity is not None
+            else ("moderate" if oscillation_detected else "none")
+        ),
+        live_oscillation_severity=(
+            live_oscillation_severity
+            if live_oscillation_severity is not None
+            else ("moderate" if live_oscillation_detected else "none")
+        ),
         trial_quality=trial_quality,
         warnings=warnings,
         ground_speed_mean=None,
@@ -114,6 +131,140 @@ def test_detect_oscillation_flags_repeated_crossings() -> None:
         SpeedSample(1.0, 0.30),
     ]
     assert detect_oscillation(samples, target_speed=0.20)
+
+
+def test_yaw_error_wraps_cleanly_across_pi_boundary() -> None:
+    error = yaw_error_to_target(
+        current_yaw_rad=3.12,
+        target_yaw_rad=-3.12,
+        turn_direction="left",
+    )
+
+    assert error == pytest.approx(0.04318530717958602)
+    assert wrap_angle_rad(3.5) == pytest.approx(-2.7831853071795867)
+
+
+def test_evaluate_yaw_turn_step_reaches_half_turn_within_tolerance() -> None:
+    decision = evaluate_yaw_turn_step(
+        start_yaw_rad=0.20,
+        current_yaw_rad=half_turn_target_yaw(0.20, "left") - 0.03,
+        elapsed_s=5.0,
+        turn_direction="left",
+        yaw_tolerance_rad=0.05,
+        max_duration_s=18.0,
+        angular_speed_radps=0.30,
+    )
+
+    assert decision.reached_target
+    assert not decision.timed_out
+    assert not decision.use_timed_fallback
+    assert decision.command_wz_radps == 0.0
+
+
+def test_evaluate_yaw_turn_step_times_out_if_yaw_does_not_progress() -> None:
+    decision = evaluate_yaw_turn_step(
+        start_yaw_rad=0.0,
+        current_yaw_rad=0.0,
+        elapsed_s=18.1,
+        turn_direction="left",
+        yaw_tolerance_rad=0.05,
+        max_duration_s=18.0,
+        angular_speed_radps=0.30,
+    )
+
+    assert decision.timed_out
+    assert not decision.reached_target
+    assert not decision.use_timed_fallback
+    assert decision.command_wz_radps == 0.0
+
+
+def test_evaluate_yaw_turn_step_falls_back_when_yaw_is_unavailable() -> None:
+    decision = evaluate_yaw_turn_step(
+        start_yaw_rad=None,
+        current_yaw_rad=None,
+        elapsed_s=0.0,
+        turn_direction="right",
+        yaw_tolerance_rad=0.05,
+        max_duration_s=18.0,
+        angular_speed_radps=0.30,
+    )
+
+    assert decision.use_timed_fallback
+    assert not decision.reached_target
+    assert not decision.timed_out
+    assert decision.target_yaw_rad is None
+
+
+def test_classify_oscillation_ignores_micro_oscillation_at_0_30_mps() -> None:
+    analysis = classify_oscillation(
+        [
+            SpeedSample(0.0, 0.298),
+            SpeedSample(0.2, 0.301),
+            SpeedSample(0.4, 0.299),
+            SpeedSample(0.6, 0.302),
+            SpeedSample(0.8, 0.298),
+            SpeedSample(1.0, 0.301),
+            SpeedSample(1.2, 0.300),
+        ],
+        target_speed=0.30,
+    )
+
+    assert analysis.severity == "none"
+    assert not analysis.detected
+
+
+def test_classify_oscillation_ignores_small_absolute_error_at_0_10_mps() -> None:
+    analysis = classify_oscillation(
+        [
+            SpeedSample(0.0, 0.105),
+            SpeedSample(0.2, 0.109),
+            SpeedSample(0.4, 0.106),
+            SpeedSample(0.6, 0.108),
+            SpeedSample(0.8, 0.105),
+            SpeedSample(1.0, 0.109),
+            SpeedSample(1.2, 0.107),
+        ],
+        target_speed=0.10,
+    )
+
+    assert analysis.severity == "none"
+    assert not analysis.detected
+
+
+def test_classify_oscillation_flags_moderate_when_crossings_have_real_amplitude() -> None:
+    analysis = classify_oscillation(
+        [
+            SpeedSample(0.0, 0.24),
+            SpeedSample(0.2, 0.35),
+            SpeedSample(0.4, 0.25),
+            SpeedSample(0.6, 0.34),
+            SpeedSample(0.8, 0.24),
+            SpeedSample(1.0, 0.35),
+            SpeedSample(1.2, 0.25),
+        ],
+        target_speed=0.30,
+    )
+
+    assert analysis.severity == "moderate"
+    assert analysis.detected
+
+
+def test_classify_oscillation_flags_severe_when_amplitude_is_large() -> None:
+    analysis = classify_oscillation(
+        [
+            SpeedSample(0.0, 0.16),
+            SpeedSample(0.2, 0.41),
+            SpeedSample(0.4, 0.18),
+            SpeedSample(0.6, 0.43),
+            SpeedSample(0.8, 0.17),
+            SpeedSample(1.0, 0.42),
+            SpeedSample(1.2, 0.18),
+        ],
+        target_speed=0.30,
+    )
+
+    assert analysis.severity == "severe"
+    assert analysis.detected
 
 
 def test_evaluate_live_stall_downgrades_to_warning_when_ticks_continue() -> None:
@@ -403,6 +554,44 @@ def test_compute_trial_metrics_does_not_flag_integral_saturation_for_mild_oversp
     assert not trial.integral_saturation_suspected
 
 
+def test_compute_trial_metrics_stop_trial_records_note_for_small_residual_motion() -> None:
+    params = DrivePidParams(
+        ticks_per_meter=345.0,
+        wheel_pid_kp=0.2,
+        wheel_pid_ki=0.25,
+        wheel_pid_kd=0.0,
+        wheel_pid_integral_limit=5.0,
+        wheel_pid_pwm_per_mps=345.0,
+    )
+    trial = compute_trial_metrics(
+        name="pid_stop",
+        phase="pid",
+        target_speed=0.0,
+        speed_samples=[
+            SpeedSample(0.0, 0.05),
+            SpeedSample(0.5, 0.04),
+            SpeedSample(1.0, 0.03),
+            SpeedSample(1.5, 0.03),
+            SpeedSample(2.0, 0.02),
+            SpeedSample(2.5, 0.02),
+        ],
+        response_samples=None,
+        ticks_seen=120,
+        left_ticks_seen=118,
+        right_ticks_seen=122,
+        params_used=params,
+        ground_speed_mean=None,
+        odom_distance_m=0.2,
+        rtk_distance_m=None,
+        notes=(),
+    )
+
+    assert not trial.stall_detected
+    assert trial.trial_quality == "ok"
+    assert not trial.warnings
+    assert any("Residual motion after stop command:" in note for note in trial.notes)
+
+
 def test_compute_trial_metrics_stop_trial_warns_on_residual_motion_without_flagging_stall() -> None:
     params = DrivePidParams(
         ticks_per_meter=345.0,
@@ -438,6 +627,46 @@ def test_compute_trial_metrics_stop_trial_warns_on_residual_motion_without_flagg
     assert not trial.stall_detected
     assert trial.trial_quality == "warning"
     assert any("Stop behavior warning:" in warning for warning in trial.warnings)
+
+
+def test_compute_trial_metrics_keeps_minor_oscillation_informational_when_tracking_is_good() -> None:
+    params = DrivePidParams(
+        ticks_per_meter=345.0,
+        wheel_pid_kp=0.2,
+        wheel_pid_ki=0.25,
+        wheel_pid_kd=0.0,
+        wheel_pid_integral_limit=5.0,
+        wheel_pid_pwm_per_mps=345.0,
+    )
+    trial = compute_trial_metrics(
+        name="pid_step_minor_osc",
+        phase="pid",
+        target_speed=0.30,
+        speed_samples=[
+            SpeedSample(0.0, 0.275),
+            SpeedSample(0.2, 0.325),
+            SpeedSample(0.4, 0.279),
+            SpeedSample(0.6, 0.321),
+            SpeedSample(0.8, 0.280),
+            SpeedSample(1.0, 0.320),
+            SpeedSample(1.2, 0.282),
+        ],
+        response_samples=None,
+        ticks_seen=120,
+        left_ticks_seen=119,
+        right_ticks_seen=121,
+        params_used=params,
+        ground_speed_mean=None,
+        odom_distance_m=0.9,
+        rtk_distance_m=None,
+        notes=(),
+    )
+
+    assert trial.oscillation_detected
+    assert trial.oscillation_severity == "minor"
+    assert trial.trial_quality == "ok"
+    assert not trial.warnings
+    assert any("Minor post-trial oscillation" in note for note in trial.notes)
 
 
 def test_recommend_pid_only_params_keeps_early_pid_conservative_after_good_ff() -> None:
