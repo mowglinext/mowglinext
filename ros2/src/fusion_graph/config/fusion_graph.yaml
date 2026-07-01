@@ -242,8 +242,8 @@ fusion_graph_node:
     lever_arm_y: 0.0            # m, left
 
     # ── Datum (set by launch from mowgli_robot.yaml) ──────────────────
-    datum_lat: 0.0
-    datum_lon: 0.0
+    datum_lat: 0.000000000
+    datum_lon: 0.000000000
 
     # ── Frame names ───────────────────────────────────────────────────
     map_frame: map

@@ -569,7 +569,7 @@ func resolveReprojection(omLat, omLon *float64, mnLat, mnLon float64, mnDatumErr
 		// the import is georeferenced about it (and the UTM convergence removed);
 		// the operator must promote it to datum_lat/datum_lon.
 		r.mnLat, r.mnLon = *omLat, *omLon
-		return r, fmt.Sprintf("Datum MowgliNext absent — le datum OpenMower (%.8f, %.8f) a été adopté pour cet import. Réglez datum_lat/datum_lon sur ces valeurs pour que la carte soit correctement géoréférencée.", *omLat, *omLon)
+		return r, fmt.Sprintf("Datum MowgliNext absent — le datum OpenMower (%.9f, %.9f) a été adopté pour cet import. Réglez datum_lat/datum_lon sur ces valeurs pour que la carte soit correctement géoréférencée.", *omLat, *omLon)
 	}
 	r.mnLat, r.mnLon = mnLat, mnLon
 	return r, ""

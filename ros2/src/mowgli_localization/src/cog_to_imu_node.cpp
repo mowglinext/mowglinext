@@ -106,8 +106,7 @@ public:
     // sweep tangent, not the heading. Catches the slow dock-alignment pivots
     // (0.1-0.3 rad/s) that slip under min_omega_for_anchor_rps. 1.0 = reject
     // once antenna rotational speed exceeds chassis forward speed.
-    cog_sweep_dominance_ratio_ =
-        declare_parameter<double>("cog_sweep_dominance_ratio", 1.0);
+    cog_sweep_dominance_ratio_ = declare_parameter<double>("cog_sweep_dominance_ratio", 1.0);
     // Max integrated |heading change| (rad) allowed over a COG baseline. A
     // straight segment is ~0; above this the displacement no longer tracks
     // the body axis (slow oscillation) and the COG is dropped. 0.20 ≈ 11°.
@@ -118,8 +117,7 @@ public:
     // meant to be stationary, so any meaningful rotation (the dock's slow
     // 0.1-0.3 rad/s alignment pivots included) means the latched heading is
     // going stale and must not be republished. 0.05 rad/s ≈ 3°/s.
-    latch_republish_max_omega_ =
-        declare_parameter<double>("latch_republish_max_omega_rps", 0.05);
+    latch_republish_max_omega_ = declare_parameter<double>("latch_republish_max_omega_rps", 0.05);
     // Cumulative-rotation staleness gate for the latch. The instantaneous
     // latch_republish_max_omega_ gate above only suppresses republish *while*
     // the robot is turning; once an in-place pivot ENDS and ω returns to ~0
@@ -155,8 +153,7 @@ public:
     // that the optimizer must integrate over many nodes before it
     // converges. Accumulating to e.g. 0.10 m gives σ_yaw ≈ 5° per
     // publish, so a single COG correction is enough to pull the graph.
-    min_baseline_displacement_m_ =
-        declare_parameter<double>("min_baseline_displacement_m", 0.10);
+    min_baseline_displacement_m_ = declare_parameter<double>("min_baseline_displacement_m", 0.10);
 
     // ── Stationary yaw latch ────────────────────────────────────────
     stationary_seed_rate_hz_ = declare_parameter<double>("stationary_seed_rate_hz", 2.0);
@@ -350,7 +347,7 @@ private:
       cos_datum_lat_ = std::cos(datum_lat_ * kDegToRad);
       datum_seeded_ = true;
       RCLCPP_INFO(get_logger(),
-                  "datum self-seeded from first RTK fix: lat=%.8f lon=%.8f",
+                  "datum self-seeded from first RTK fix: lat=%.9f lon=%.9f",
                   datum_lat_,
                   datum_lon_);
     }
@@ -437,8 +434,7 @@ private:
     // approach the wrong way (field 2026-05-27). Use the larger of the
     // wheel/IMU rotation rate so a wheel-encoder lag at the rotation onset
     // doesn't let a sample through.
-    const double rot_rate =
-        std::max(std::abs(wheel_omega_.load()), std::abs(gyro_z_.load()));
+    const double rot_rate = std::max(std::abs(wheel_omega_.load()), std::abs(gyro_z_.load()));
     const double lever_radius = std::hypot(lever_arm_x_, lever_arm_y_);
     if (cog_sweep_dominates(rot_rate, lever_radius, wheel_vx_, cog_sweep_dominance_ratio_))
     {
@@ -536,8 +532,8 @@ private:
     // σ_yaw forward and reverse (uses |v_x| via v_eff).
     const double sigma_lever =
         compute_lever_sigma(omega_avg, v_eff, lever_arm_x_, lever_arm_y_, omega_noise_rps_);
-    const double sigma_yaw_sq = sigma_pos_yaw * sigma_pos_yaw + sigma_drift * sigma_drift +
-                                sigma_lever * sigma_lever;
+    const double sigma_yaw_sq =
+        sigma_pos_yaw * sigma_pos_yaw + sigma_drift * sigma_drift + sigma_lever * sigma_lever;
     const double yaw_var = std::max(min_yaw_var_, std::min(sigma_yaw_sq, max_yaw_var_));
 
     // Advance the anchor to the current sample so the next baseline starts
@@ -564,8 +560,7 @@ private:
 
     // Online mag-cal sample collection — only fit against COG that
     // survives the inflated-σ test (positional + drift + lever).
-    if (enable_mag_cal_ && latest_mag_valid_ &&
-        std::sqrt(sigma_yaw_sq) < (15.0 * kDegToRad))
+    if (enable_mag_cal_ && latest_mag_valid_ && std::sqrt(sigma_yaw_sq) < (15.0 * kDegToRad))
     {
       mag_samples_.emplace_back(latest_mag_[0], latest_mag_[1], latest_mag_[2], yaw);
       while (static_cast<int>(mag_samples_.size()) > mag_max_samples_)

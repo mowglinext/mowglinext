@@ -27,6 +27,13 @@ const (
 	driveTuningBackupFile        = driveTuningContainerDir + "/drive_pid_last_backup.yaml"
 	driveTuningYamlHeader        = "# Mowgli Robot Configuration — managed by mowglinext-gui\n# This file is the single source of truth for robot parameters.\n# Changes made here are picked up on container restart.\n\n"
 	maxDriveTuningLogBytes       = 128 * 1024
+	// Feed-forward/odometry runs need a stable closed-loop wheel baseline so
+	// the very first pass does not inherit whatever live gains happen to be
+	// loaded in hardware_bridge.
+	driveTuningFFDefaultWheelKp            = 0.2
+	driveTuningFFDefaultWheelKi            = 0.100
+	driveTuningFFDefaultWheelKd            = 0.010
+	driveTuningFFDefaultWheelIntegralLimit = 15.0
 )
 
 type driveTuningMode string
@@ -200,6 +207,8 @@ type driveTuningTrialReport struct {
 	StallDetected               bool     `json:"stall_detected" yaml:"stall_detected"`
 	OscillationDetected         bool     `json:"oscillation_detected" yaml:"oscillation_detected"`
 	LiveOscillationDetected     bool     `json:"live_oscillation_detected,omitempty" yaml:"live_oscillation_detected"`
+	OscillationSeverity         string   `json:"oscillation_severity,omitempty" yaml:"oscillation_severity"`
+	LiveOscillationSeverity     string   `json:"live_oscillation_severity,omitempty" yaml:"live_oscillation_severity"`
 	TrialQuality                string   `json:"trial_quality,omitempty" yaml:"trial_quality"`
 	IntegralSaturationSuspected bool     `json:"integral_saturation_suspected" yaml:"integral_saturation_suspected"`
 	GroundSpeedMean             *float64 `json:"ground_speed_mean,omitempty" yaml:"ground_speed_mean"`
@@ -769,6 +778,10 @@ func buildFeedForwardCommand(req driveFFCalibrationStartRequest) ([]string, stri
 		"--turn-direction", req.TurnDirection,
 		"--output", reportPath,
 		"--backup-file", driveTuningBackupFile,
+		"--custom-kp", formatFloat(driveTuningFFDefaultWheelKp),
+		"--custom-ki", formatFloat(driveTuningFFDefaultWheelKi),
+		"--custom-kd", formatFloat(driveTuningFFDefaultWheelKd),
+		"--custom-integral-limit", formatFloat(driveTuningFFDefaultWheelIntegralLimit),
 	}
 	if req.AutoTurn != nil && *req.AutoTurn {
 		args = append(args, "--auto-turn")
@@ -946,6 +959,8 @@ func evaluateFeedForwardReport(report *driveTuningReport, reportPath string) dri
 	hasLiveOscillation := false
 	hasPostAnalysisOscillation := false
 	for _, trial := range trials {
+		postSeverity := driveTuningOscillationSeverity(trial.OscillationSeverity, trial.OscillationDetected)
+		liveSeverity := driveTuningOscillationSeverity(trial.LiveOscillationSeverity, trial.LiveOscillationDetected)
 		if trial.StallDetected {
 			return driveTuningValidationSummary{
 				Status:      driveTuningStatusWarning,
@@ -954,13 +969,13 @@ func evaluateFeedForwardReport(report *driveTuningReport, reportPath string) dri
 				ReportPath:  reportPath,
 			}
 		}
-		if trial.LiveOscillationDetected {
+		if driveTuningWarningOscillation(liveSeverity, trial.LiveOscillationDetected) {
 			hasLiveOscillation = true
 		}
-		if trial.OscillationDetected && !trial.LiveOscillationDetected {
+		if driveTuningWarningOscillation(postSeverity, trial.OscillationDetected) && !driveTuningWarningOscillation(liveSeverity, trial.LiveOscillationDetected) {
 			hasPostAnalysisOscillation = true
 		}
-		if trial.LiveOscillationDetected || trial.TrialQuality == "warning" || trial.TrialQuality == "poor" || len(trial.Warnings) > 0 {
+		if driveTuningWarningOscillation(liveSeverity, trial.LiveOscillationDetected) || trial.TrialQuality == "warning" || trial.TrialQuality == "poor" || len(trial.Warnings) > 0 {
 			hasCalibrationWarnings = true
 		}
 		if trial.RTKAccepted && trial.OdomDistanceM != nil && trial.RTKDistanceM != nil && *trial.RTKDistanceM > 1e-6 {
@@ -1056,11 +1071,41 @@ func pidOvershootThresholds(report *driveTuningReport) (float64, float64) {
 	}
 }
 
+func driveTuningOscillationSeverity(severity string, detected bool) string {
+	normalized := strings.ToLower(strings.TrimSpace(severity))
+	switch normalized {
+	case "none", "minor", "moderate", "severe":
+		return normalized
+	default:
+		if detected {
+			return "moderate"
+		}
+		return "none"
+	}
+}
+
+func driveTuningOscillationSeverityRank(severity string, detected bool) int {
+	switch driveTuningOscillationSeverity(severity, detected) {
+	case "minor":
+		return 1
+	case "moderate":
+		return 2
+	case "severe":
+		return 3
+	default:
+		return 0
+	}
+}
+
+func driveTuningWarningOscillation(severity string, detected bool) bool {
+	return driveTuningOscillationSeverityRank(severity, detected) >= 2
+}
+
 func hasStopBehaviorWarning(trial driveTuningTrialReport) bool {
 	if absFloat(trial.TargetSpeed) >= 0.05 {
 		return false
 	}
-	if absFloat(trial.MeasuredSpeedMean) > 0.03 || absFloat(trial.Overshoot) > 0.05 {
+	if absFloat(trial.MeasuredSpeedMean) > 0.045 || absFloat(trial.Overshoot) > 0.08 {
 		return true
 	}
 	for _, warning := range trial.Warnings {
@@ -1128,6 +1173,8 @@ func evaluatePIDReport(report *driveTuningReport, reportPath string) driveTuning
 	postAnalysisOnlyCount := 0
 	severeIntegralSaturationCount := 0
 	for _, trial := range usable {
+		postSeverity := driveTuningOscillationSeverity(trial.OscillationSeverity, trial.OscillationDetected)
+		liveSeverity := driveTuningOscillationSeverity(trial.LiveOscillationSeverity, trial.LiveOscillationDetected)
 		target := absFloat(trial.TargetSpeed)
 		if target <= 1e-6 {
 			continue
@@ -1147,10 +1194,10 @@ func evaluatePIDReport(report *driveTuningReport, reportPath string) driveTuning
 		if overshootPct > maxOvershootPct {
 			maxOvershootPct = overshootPct
 		}
-		if trial.LiveOscillationDetected {
+		if driveTuningWarningOscillation(liveSeverity, trial.LiveOscillationDetected) {
 			liveOscillationCount++
 		}
-		if trial.OscillationDetected && !trial.LiveOscillationDetected {
+		if driveTuningWarningOscillation(postSeverity, trial.OscillationDetected) && !driveTuningWarningOscillation(liveSeverity, trial.LiveOscillationDetected) {
 			postAnalysisOnlyCount++
 		}
 		if trial.IntegralSaturationSuspected && trial.MeasuredSpeedMean < target*0.90 {

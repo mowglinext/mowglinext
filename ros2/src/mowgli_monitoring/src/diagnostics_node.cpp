@@ -507,13 +507,13 @@ diagnostic_msgs::msg::DiagnosticStatus DiagnosticsNode::check_gps(const rclcpp::
   {
     status.level = classify_freshness(age_sec, false, freshness_warn_sec_, freshness_error_sec_);
     status.message =
-        "GPS fix OK  lat=" + fmt_float(gps.latitude, 6) + "  lon=" + fmt_float(gps.longitude, 6);
+        "GPS fix OK  lat=" + fmt_float(gps.latitude, 9) + "  lon=" + fmt_float(gps.longitude, 9);
   }
 
   status.values.push_back(kv("fix_status", std::to_string(gps.status.status)));
   status.values.push_back(kv("service", std::to_string(gps.status.service)));
-  status.values.push_back(kv("latitude", fmt_float(gps.latitude, 7)));
-  status.values.push_back(kv("longitude", fmt_float(gps.longitude, 7)));
+  status.values.push_back(kv("latitude", fmt_float(gps.latitude, 9)));
+  status.values.push_back(kv("longitude", fmt_float(gps.longitude, 9)));
   status.values.push_back(kv("altitude_m", fmt_float(gps.altitude, 2)));
   status.values.push_back(kv("age_sec", fmt_float(age_sec, 2)));
 

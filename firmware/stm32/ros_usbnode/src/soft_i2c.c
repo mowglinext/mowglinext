@@ -40,12 +40,15 @@
 #define  I2C_READ       0x01
 #define  READ_CMD       1
 #define  WRITE_CMD      0
+#define  I2C_ACK_SPIN_LIMIT  256
 
 // map from board.h to what soft_i2c uses
 #define SW_I2C1_SCL_GPIO  SOFT_I2C_SCL_PORT
 #define SW_I2C1_SDA_GPIO  SOFT_I2C_SDA_PORT
 #define SW_I2C1_SCL_PIN   SOFT_I2C_SCL_PIN
 #define SW_I2C1_SDA_PIN   SOFT_I2C_SDA_PIN
+
+static uint8_t SW_I2C_ReadVal_SCL(void);
 
 
 void  __attribute__ ((optimize(0))) TIMER__Wait_us (uint32_t nCount) 
@@ -227,7 +230,7 @@ static int i2c_check_ack(void)
 
     scl_high();
 
-    for (i = 20000; i > 0; i--)
+    for (i = I2C_ACK_SPIN_LIMIT; i > 0; i--)
     {
         if (!SW_I2C_ReadVal_SDA()) break;	//0=ack , 1=nack
     }
@@ -235,6 +238,17 @@ static int i2c_check_ack(void)
     sda_out_mode();
 
     return i;
+}
+
+static uint8_t i2c_bus_is_idle(void)
+{
+    return (uint8_t)(SW_I2C_ReadVal_SDA() && SW_I2C_ReadVal_SCL());
+}
+
+static void i2c_abort_transaction(void)
+{
+    sda_out_mode();
+    i2c_stop_condition();
 }
 
 void i2c_send_not_ack(void)
@@ -312,7 +326,7 @@ uint8_t SW_I2C_ReadVal_SDA(void)
     return HAL_GPIO_ReadPin(SW_I2C1_SDA_GPIO, SW_I2C1_SDA_PIN);       
 }
 
-uint8_t SW_I2C_ReadVal_SCL(void)
+static uint8_t SW_I2C_ReadVal_SCL(void)
 { 
     return HAL_GPIO_ReadPin(SW_I2C1_SCL_GPIO, SW_I2C1_SCL_PIN);    
 }
@@ -533,19 +547,20 @@ uint8_t SW_I2C_ReadControl_8Bit(uint8_t IICID, uint8_t regaddr)
     uint8_t  readdata = 0;
 
     i2c_port_initial();
+    if (!i2c_bus_is_idle()) return 0x80;
 
     i2c_start_condition();
 
     i2c_slave_address(IICID, WRITE_CMD);
-    if (!i2c_check_ack()) return 0x80; // TODO error handling
+    if (!i2c_check_ack()) { i2c_abort_transaction(); return 0x80; } // TODO error handling
 
     i2c_byte_out(regaddr);
-    if (!i2c_check_ack()) return 0x40; // TODO error handling
+    if (!i2c_check_ack()) { i2c_abort_transaction(); return 0x40; } // TODO error handling
 
     i2c_start_condition();
 
     i2c_slave_address(IICID, READ_CMD);
-    if (!i2c_check_ack()) return 0x20; // TODO error handling
+    if (!i2c_check_ack()) { i2c_abort_transaction(); return 0x20; } // TODO error handling
 
     readdata = SW_I2C_Read_Data_in_in_mode();
 
@@ -597,24 +612,29 @@ uint8_t SW_I2C_ReadnControl_8Bit(uint8_t IICID, uint8_t regaddr, uint8_t rcnt, u
     uint8_t   returnack = TRUE;
     uint8_t  index;
 
+    if ((rcnt == 0) || (pdata == NULL)) {
+        return FALSE;
+    }
+
     i2c_port_initial();
+    if (!i2c_bus_is_idle()) return FALSE;
 
     i2c_start_condition();
 
     i2c_slave_address(IICID, WRITE_CMD);
-    if (!i2c_check_ack()) { returnack = FALSE; }
+    if (!i2c_check_ack()) { i2c_abort_transaction(); return FALSE; }
 
     TIMER__Wait_us(SW_I2C_WAIT_TIME);
-	
+
     i2c_byte_out(regaddr);
-    if (!i2c_check_ack()) { returnack = FALSE; }
+    if (!i2c_check_ack()) { i2c_abort_transaction(); return FALSE; }
 
     TIMER__Wait_us(SW_I2C_WAIT_TIME);
 
     i2c_start_condition();
 
     i2c_slave_address(IICID, READ_CMD);
-    if (!i2c_check_ack()) { returnack = FALSE; }
+    if (!i2c_check_ack()) { i2c_abort_transaction(); return FALSE; }
 
     for ( index = 0 ; index < rcnt ; index++){
     	TIMER__Wait_us(SW_I2C_WAIT_TIME);
@@ -622,7 +642,7 @@ uint8_t SW_I2C_ReadnControl_8Bit(uint8_t IICID, uint8_t regaddr, uint8_t rcnt, u
     }
 
     pdata[rcnt-1] = SW_I2C_Read_Data_in_in_mode();
-	
+
     i2c_send_final_nack();
 
     i2c_stop_condition();
@@ -632,36 +652,39 @@ uint8_t SW_I2C_ReadnControl_8Bit(uint8_t IICID, uint8_t regaddr, uint8_t rcnt, u
 
 uint8_t SW_I2C_Multi_ReadnControl_8Bit(uint8_t IICID, uint8_t regaddr, uint8_t rcnt, uint8_t (*pdata))
 {
-    uint8_t   returnack = TRUE;
     uint8_t  index;
 
+    if ((rcnt == 0) || (pdata == NULL)) {
+        return FALSE;
+    }
+
     i2c_port_initial();
+    if (!i2c_bus_is_idle()) return FALSE;
 
     i2c_start_condition();
 
     i2c_slave_address(IICID, WRITE_CMD);
-    if (!i2c_check_ack()) { returnack = FALSE; }
+    if (!i2c_check_ack()) { i2c_abort_transaction(); return FALSE; }
 
     i2c_byte_out(regaddr);
-    if (!i2c_check_ack()) { returnack = FALSE; }
+    if (!i2c_check_ack()) { i2c_abort_transaction(); return FALSE; }
 
     i2c_start_condition();
 
     i2c_slave_address(IICID, READ_CMD);
-    if (!i2c_check_ack()) { returnack = FALSE; }
+    if (!i2c_check_ack()) { i2c_abort_transaction(); return FALSE; }
 
     for ( index = 0 ; index < (rcnt-1) ; index++){
     	pdata[index] = SW_I2C_Read_Data_in_in_mode();
-	    i2c_send_ack();
-	//if (!i2c_check_ack()) { returnack = FALSE; }
+		    i2c_send_ack();
     }
 
     pdata[rcnt-1] = SW_I2C_Read_Data_in_in_mode();
-	
+
     i2c_check_final_read_not_ack();
     i2c_stop_condition();
 
-    return returnack;
+    return TRUE;
 }
 
 uint8_t SW_I2C_Check_SlaveAddr(uint8_t IICID)

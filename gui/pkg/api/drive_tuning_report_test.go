@@ -60,6 +60,7 @@ func TestEvaluateFeedForwardReport_PostAnalysisOscillationUsesCalibrationWarning
 				Overshoot:           0.02,
 				TrialQuality:        "warning",
 				OscillationDetected: true,
+				OscillationSeverity: "moderate",
 				RTKAccepted:         true,
 				OdomDistanceM:       float64Ptr(3.03),
 				RTKDistanceM:        float64Ptr(3.00),
@@ -91,6 +92,7 @@ func TestEvaluateFeedForwardReport_LiveOscillationUsesStrongMessage(t *testing.T
 				Overshoot:               0.02,
 				TrialQuality:            "warning",
 				LiveOscillationDetected: true,
+				LiveOscillationSeverity: "moderate",
 				RTKAccepted:             true,
 				OdomDistanceM:           float64Ptr(3.03),
 				RTKDistanceM:            float64Ptr(3.00),
@@ -108,6 +110,33 @@ func TestEvaluateFeedForwardReport_LiveOscillationUsesStrongMessage(t *testing.T
 	assert.Contains(t, summary.Message, "Live oscillation was observed during feed-forward calibration.")
 }
 
+func TestEvaluateFeedForwardReport_MinorOscillationStaysValidated(t *testing.T) {
+	report := &driveTuningReport{
+		GeneratedAt: "2026-06-20T00:00:00Z",
+		Trials: []driveTuningTrialReport{
+			{
+				Name:                "ff_pass_1",
+				Phase:               "feedforward",
+				TargetSpeed:         0.30,
+				MeasuredSpeedMean:   0.301,
+				Overshoot:           0.012,
+				TrialQuality:        "ok",
+				OscillationDetected: true,
+				OscillationSeverity: "minor",
+				RTKAccepted:         true,
+				OdomDistanceM:       float64Ptr(3.01),
+				RTKDistanceM:        float64Ptr(3.00),
+				GroundSpeedMean:     float64Ptr(0.3005),
+			},
+		},
+	}
+
+	summary := evaluateFeedForwardReport(report, "/tmp/ff.yaml")
+
+	require.Equal(t, driveTuningStatusValidated, summary.Status)
+	assert.Contains(t, summary.Message, "Validated with")
+}
+
 func TestDriveTuningInternalTierFallsBackToMediumForInvalidMass(t *testing.T) {
 	invalidMasses := []*float64{
 		float64Ptr(0.0),
@@ -119,6 +148,40 @@ func TestDriveTuningInternalTierFallsBackToMediumForInvalidMass(t *testing.T) {
 		report := &driveTuningReport{RobotMassKg: mass}
 		assert.Equal(t, "medium", driveTuningInternalTier(report))
 	}
+}
+
+func TestEvaluatePIDReport_MinorLiveOscillationDoesNotForceWarning(t *testing.T) {
+	report := &driveTuningReport{
+		GeneratedAt:  "2026-06-20T00:00:00Z",
+		InternalTier: "medium",
+		Trials: []driveTuningTrialReport{
+			{
+				Name:                    "pid_step_1",
+				Phase:                   "pid",
+				TargetSpeed:             0.30,
+				MeasuredSpeedMean:       0.30,
+				Overshoot:               0.012,
+				SettlingTime:            float64Ptr(1.2),
+				LiveOscillationDetected: true,
+				LiveOscillationSeverity: "minor",
+				TrialQuality:            "ok",
+			},
+			{
+				Name:              "pid_step_stop",
+				Phase:             "pid",
+				TargetSpeed:       0.0,
+				MeasuredSpeedMean: 0.04,
+				Overshoot:         0.06,
+				TrialQuality:      "ok",
+			},
+		},
+	}
+
+	summary := evaluatePIDReport(report, "/tmp/pid.yaml")
+
+	require.Equal(t, driveTuningStatusValidated, summary.Status)
+	assert.Contains(t, summary.Message, "Validated PID step response")
+	assert.Contains(t, summary.Message, "Zero-speed stop trials were excluded from gain selection.")
 }
 
 func TestPidOvershootThresholdsFollowMassTier(t *testing.T) {

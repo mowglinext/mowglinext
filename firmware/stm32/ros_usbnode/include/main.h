@@ -23,6 +23,7 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f_board_hal.h"
+#include "mowgli_protocol.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -82,7 +83,7 @@ void EmergencyController(void);
 void StatusLEDUpdate(void);
 void setDriveMotors(uint8_t left_speed, uint8_t right_speed, uint8_t left_dir, uint8_t right_dir);
 void setBladeMotor(uint8_t on_off);
-uint8_t crcCalc(uint8_t *msg, uint8_t msg_len);
+uint8_t crcCalc(const uint8_t *msg, uint8_t msg_len);
 void msgPrint(uint8_t *msg, uint8_t msg_len);
 void chirp(uint8_t count);
 
@@ -90,6 +91,9 @@ void chirp(uint8_t count);
 extern uint16_t  chargecontrol_pwm_val;
 extern uint8_t   chargecontrol_is_charging;
 extern uint8_t do_chirp;
+extern uint8_t g_boot_reset_cause_code;
+extern uint8_t g_boot_last_watchdog_stage_code;
+extern volatile uint8_t g_firmware_debug_enabled;
 extern openmower_status_e main_eOpenmowerStatus;
 
 // uart statistics
@@ -131,6 +135,7 @@ int HALLSTOP_Left_Sense(void);
 int HALLSTOP_Right_Sense(void);
 
 void debug_printf(const char *fmt, ...);
+void WATCHDOG_SetMainLoopStage(uint8_t stage);
 
 
 /* USER CODE END EFP */

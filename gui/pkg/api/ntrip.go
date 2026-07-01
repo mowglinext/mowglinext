@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"encoding/base64"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -75,11 +76,11 @@ func fetchSourcetable(host, port, user, pass string) (string, error) {
 
 	var req strings.Builder
 	req.WriteString("GET / HTTP/1.0\r\n")
-	req.WriteString("Host: " + host + "\r\n")
+	fmt.Fprintf(&req, "Host: %s\r\n", host)
 	req.WriteString("User-Agent: NTRIP MowgliNext\r\n")
 	if user != "" {
 		cred := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
-		req.WriteString("Authorization: Basic " + cred + "\r\n")
+		fmt.Fprintf(&req, "Authorization: Basic %s\r\n", cred)
 	}
 	req.WriteString("Accept: */*\r\n")
 	req.WriteString("Connection: close\r\n\r\n")

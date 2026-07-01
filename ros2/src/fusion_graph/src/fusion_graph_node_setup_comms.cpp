@@ -512,7 +512,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
   }
 
   RCLCPP_INFO(get_logger(),
-              "fusion_graph_node up: datum=(%.6f, %.6f), node_period=%.3fs",
+              "fusion_graph_node up: datum=(%.9f, %.9f), node_period=%.3fs",
               datum_lat_,
               datum_lon_,
               node_period_s);

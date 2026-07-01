@@ -16,7 +16,7 @@ WorldInfo {
   basicTimeStep 20
   coordinateSystem "ENU"
   gpsCoordinateSystem "WGS84"
-  gpsReference 48.137154 11.576124 0
+  gpsReference 48.137154000 11.576124000 0
 }
 Viewpoint {
   orientation -0.3 0.3 0.9 1.6

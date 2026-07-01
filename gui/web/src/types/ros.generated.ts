@@ -321,6 +321,7 @@ export type Status = {
   sound_module_busy?: boolean;
   ui_board_available?: boolean;
   mow_enabled?: boolean;
+  firmware_debug_enabled?: boolean;
   mower_esc_status?: number;
   mower_esc_temperature?: number;
   mower_esc_current?: number;

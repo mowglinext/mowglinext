@@ -163,7 +163,7 @@ int PANEL_Get_Key_Pressed(void);
 
 void PANEL_ReceiceIT(void);
 
-void PANEL_Send_Message(uint8_t *data, uint8_t dataLength, uint16_t command);
+void PANEL_Send_Message(const uint8_t *data, uint8_t dataLength, uint16_t command);
 
 extern uint8_t buttonstate[PANEL_BUTTON_BYTES+2];
 extern uint8_t buttonupdated;

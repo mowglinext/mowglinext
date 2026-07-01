@@ -199,6 +199,42 @@ static uint32_t last_odom_tick = 0;
 static void update_blade_led(void);
 
 /* ---------------------------------------------------------------------------
+ * Broadcast backpressure helpers
+ * ---------------------------------------------------------------------------*/
+static inline bool nbt_due(const nbt_t *nbt, const uint32_t now_tick) {
+  return (now_tick - nbt->previousMillis) > nbt->timeout;
+}
+
+static inline void nbt_consume(nbt_t *nbt, const uint32_t now_tick) {
+  nbt->previousMillis = now_tick;
+}
+
+static inline uint32_t usb_cdc_framed_packet_size(const size_t raw_packet_size) {
+  /* All current packets are far below 254 bytes, so COBS adds at most one
+   * overhead byte. Framed wire size = leading 0x00 + encoded payload + trailing
+   * 0x00 <= raw + 3. */
+  return (uint32_t)raw_packet_size + 3u;
+}
+
+static inline bool usb_cdc_can_queue_bytes(const uint32_t wire_bytes) {
+  return CDC_TXQueue_GetWriteAvailable() >= wire_bytes;
+}
+
+static inline bool usb_cdc_should_send_telemetry_packet(
+    const uint32_t wire_bytes) {
+  if (!CDC_ShouldSendTelemetry()) {
+    return false;
+  }
+
+  if (!usb_cdc_can_queue_bytes(wire_bytes)) {
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_QUEUE_FULL);
+    return false;
+  }
+
+  return true;
+}
+
+/* ---------------------------------------------------------------------------
  * COBS packet handlers (Host -> Firmware)
  * ---------------------------------------------------------------------------*/
 
@@ -207,7 +243,7 @@ static void on_heartbeat(const uint8_t *data, size_t len) {
     return;
   }
 
-  const pkt_heartbeat_t *pkt = (const pkt_heartbeat_t *)data;
+  const pkt_heartbeat_t *pkt = reinterpret_cast<const pkt_heartbeat_t *>(data);
 
   last_heartbeat_tick = HAL_GetTick();
 
@@ -250,7 +286,7 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
     return;
   }
 
-  const pkt_cmd_vel_t *pkt = (const pkt_cmd_vel_t *)data;
+  const pkt_cmd_vel_t *pkt = reinterpret_cast<const pkt_cmd_vel_t *>(data);
 
   last_cmd_vel_tick = HAL_GetTick();
 
@@ -287,7 +323,8 @@ static void on_set_drive_pid(const uint8_t *data, size_t len) {
     return;
   }
 
-  const pkt_set_drive_pid_t *pkt = (const pkt_set_drive_pid_t *)data;
+  const pkt_set_drive_pid_t *pkt =
+      reinterpret_cast<const pkt_set_drive_pid_t *>(data);
 
   /* Drive behaviour is safety-relevant: reject the whole packet if any field
    * is non-finite, then clamp each field to a safe range before applying so a
@@ -327,9 +364,10 @@ static void on_set_drive_pid(const uint8_t *data, size_t len) {
   g_pwm_per_mps = ff;
   __enable_irq();
 
-  debug_printf(
-      "set_drive_pid: ticks=%.3f kp=%.3f ki=%.3f kd=%.3f ilim=%.3f ff=%.3f\r\n",
-      ticks_per_meter, kp, ki, kd, ilim, ff);
+  /* Do not log successful drive-PID updates here: this handler runs in the USB
+   * RX path and hardware_bridge intentionally re-sends the packet in bursts
+   * after reconnect. Printing each success over the debug UART can stall long
+   * enough to starve the main loop and re-trigger the watchdog reboot loop. */
 }
 
 static void on_hl_state(const uint8_t *data, size_t len) {
@@ -337,7 +375,7 @@ static void on_hl_state(const uint8_t *data, size_t len) {
     return;
   }
 
-  const pkt_hl_state_t *pkt = (const pkt_hl_state_t *)data;
+  const pkt_hl_state_t *pkt = reinterpret_cast<const pkt_hl_state_t *>(data);
 
   hl_current_mode = pkt->current_mode;
   hl_gps_quality = pkt->gps_quality;
@@ -390,7 +428,7 @@ static void on_cmd_blade(const uint8_t *data, size_t len) {
     return;
   }
 
-  const pkt_cmd_blade_t *pkt = (const pkt_cmd_blade_t *)data;
+  const pkt_cmd_blade_t *pkt = reinterpret_cast<const pkt_cmd_blade_t *>(data);
   /* Defense-in-depth: never arm the blade target while IDLE/docked. The
    * authoritative gate is in motors_handler (which zeroes blade_on_off in
    * IDLE every tick), but refusing to latch the target here keeps state
@@ -412,7 +450,7 @@ static void on_reboot(const uint8_t *data, size_t len) {
   if (len < sizeof(pkt_reboot_t) - 2u) {
     return;
   }
-  const pkt_reboot_t *pkt = (const pkt_reboot_t *)data;
+  const pkt_reboot_t *pkt = reinterpret_cast<const pkt_reboot_t *>(data);
   if (pkt->magic == PKT_REBOOT_MAGIC) {
     debug_printf("reboot requested by host\r\n");
     reboot_flag = true;
@@ -426,13 +464,16 @@ static void on_reboot(const uint8_t *data, size_t len) {
  * older than this handshake never registers this handler, so it simply never
  * replies — which the host reads as "incompatible firmware". */
 static void on_config_req(const uint8_t *data, size_t len) {
-  (void)data;
-  if (len < sizeof(pkt_config_req_t) - 2u) {
+  if (len < 1u) {
     return;
   }
+  const uint8_t flags = (len >= 2u) ? data[1] : 0u;
+  g_firmware_debug_enabled = (flags & CONFIG_FLAG_FIRMWARE_DEBUG) != 0u ? 1u : 0u;
+
   pkt_config_rsp_t rsp;
   rsp.type = PKT_ID_CONFIG_RSP;
   rsp.protocol_version = MOWGLI_PROTOCOL_VERSION;
+  rsp.active_flags = g_firmware_debug_enabled != 0u ? CONFIG_FLAG_FIRMWARE_DEBUG : 0u;
   rsp.fw_version_major = MOWGLI_FW_VERSION_MAJOR;
   rsp.fw_version_minor = MOWGLI_FW_VERSION_MINOR;
   rsp.fw_version_patch = MOWGLI_FW_VERSION_PATCH;
@@ -460,7 +501,9 @@ static void update_blade_led(void) {
  * USB CDC receive callback — feeds COBS layer
  * ---------------------------------------------------------------------------*/
 uint8_t CDC_DataReceivedHandler(const uint8_t *Buf, uint32_t len) {
+  WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_RX_PROCESS);
   mowgli_comms_process_rx(Buf, (size_t)len);
+  WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_RX_EXIT);
   return CDC_RX_DATA_HANDLED;
 }
 
@@ -667,6 +710,8 @@ extern "C" void panel_handler() {
     PANEL_Tick();
 
     if (buttonupdated == 1 && buttoncleared == 0) {
+      const uint32_t ui_event_wire_bytes =
+          usb_cdc_framed_packet_size(sizeof(pkt_ui_event_t));
       pkt_ui_event_t evt;
       evt.type = PKT_ID_UI_EVENT;
       evt.press_duration = 0; // short press
@@ -674,23 +719,33 @@ extern "C" void panel_handler() {
       // Map physical buttons to IDs
       if (buttonstate[PANEL_BUTTON_DEF_S1]) {
         evt.button_id = 1;
-        mowgli_comms_send(&evt, sizeof(evt));
+        if (usb_cdc_should_send_telemetry_packet(ui_event_wire_bytes)) {
+          mowgli_comms_send(&evt, sizeof(evt));
+        }
       }
       if (buttonstate[PANEL_BUTTON_DEF_S2]) {
         evt.button_id = 2;
-        mowgli_comms_send(&evt, sizeof(evt));
+        if (usb_cdc_should_send_telemetry_packet(ui_event_wire_bytes)) {
+          mowgli_comms_send(&evt, sizeof(evt));
+        }
       }
       if (buttonstate[PANEL_BUTTON_DEF_LOCK]) {
         evt.button_id = 3;
-        mowgli_comms_send(&evt, sizeof(evt));
+        if (usb_cdc_should_send_telemetry_packet(ui_event_wire_bytes)) {
+          mowgli_comms_send(&evt, sizeof(evt));
+        }
       }
       if (buttonstate[PANEL_BUTTON_DEF_START]) {
         evt.button_id = 4;
-        mowgli_comms_send(&evt, sizeof(evt));
+        if (usb_cdc_should_send_telemetry_packet(ui_event_wire_bytes)) {
+          mowgli_comms_send(&evt, sizeof(evt));
+        }
       }
       if (buttonstate[PANEL_BUTTON_DEF_HOME]) {
         evt.button_id = 5;
-        mowgli_comms_send(&evt, sizeof(evt));
+        if (usb_cdc_should_send_telemetry_packet(ui_event_wire_bytes)) {
+          mowgli_comms_send(&evt, sizeof(evt));
+        }
       }
 
       buttonupdated = 0;
@@ -765,53 +820,35 @@ wheelTicks_handler(int32_t p_s32LeftTicksSigned, int32_t p_s32RightTicksSigned,
   odom.left_velocity_mm_s = left_v_mm_s;
   odom.right_velocity_mm_s = right_v_mm_s;
 
-  mowgli_comms_send_odometry(&odom);
+  if (usb_cdc_should_send_telemetry_packet(
+          usb_cdc_framed_packet_size(sizeof(pkt_odometry_t)))) {
+    mowgli_comms_send_odometry(&odom);
+  }
 }
 
 /* ---------------------------------------------------------------------------
  * IMU + status broadcast handler
  * ---------------------------------------------------------------------------*/
 extern "C" void broadcast_handler() {
-  if (NBT_handler(&imu_nbt)) {
-    pkt_imu_t imu_pkt;
-    imu_pkt.type = PKT_ID_IMU;
+  WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_ENTER);
+  const uint32_t now_tick = HAL_GetTick();
 
-    static uint32_t last_imu_tick = 0;
-    uint32_t now_tick = HAL_GetTick();
-    imu_pkt.dt_millis = (uint16_t)(now_tick - last_imu_tick);
-    last_imu_tick = now_tick;
+  /* Bound this section to one broadcast group per pass. Without that bound a
+   * delayed loop can emit IMU + reset/status + blade packets back-to-back in
+   * the same WATCHDOG_STAGE_BROADCAST window. The USB CDC enqueue path is
+   * non-blocking, but building and queueing several packets in one pass still
+   * stretches the watchdog window unnecessarily when USB is backpressured. */
+  if (nbt_due(&status_nbt, now_tick)) {
+    const uint32_t status_group_bytes =
+        usb_cdc_framed_packet_size(sizeof(pkt_reset_cause_t)) +
+        usb_cdc_framed_packet_size(sizeof(pkt_status_t));
+    if (!usb_cdc_should_send_telemetry_packet(status_group_bytes)) {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
+      return;
+    }
 
-#ifdef EXTERNAL_IMU_ACCELERATION
-    float ax, ay, az;
-    IMU_ReadAccelerometer(&ax, &ay, &az);
-    imu_pkt.acceleration_mss[0] = ax;
-    imu_pkt.acceleration_mss[1] = ay;
-    imu_pkt.acceleration_mss[2] = az;
-#else
-    imu_pkt.acceleration_mss[0] = 0.0f;
-    imu_pkt.acceleration_mss[1] = 0.0f;
-    imu_pkt.acceleration_mss[2] = 0.0f;
-#endif
+    nbt_consume(&status_nbt, now_tick);
 
-#ifdef EXTERNAL_IMU_ANGULAR
-    float gx, gy, gz;
-    IMU_ReadGyro(&gx, &gy, &gz);
-    imu_pkt.gyro_rads[0] = gx;
-    imu_pkt.gyro_rads[1] = gy;
-    imu_pkt.gyro_rads[2] = gz;
-#else
-    imu_pkt.gyro_rads[0] = 0.0f;
-    imu_pkt.gyro_rads[1] = 0.0f;
-    imu_pkt.gyro_rads[2] = 0.0f;
-#endif
-
-    // Magnetometer — uses generic IMU_ReadMag (works with any IMU that has mag)
-    IMU_ReadMag(&imu_pkt.mag_uT[0], &imu_pkt.mag_uT[1], &imu_pkt.mag_uT[2]);
-
-    mowgli_comms_send_imu(&imu_pkt);
-  }
-
-  if (NBT_handler(&status_nbt)) {
     pkt_status_t status_pkt;
     status_pkt.type = PKT_ID_STATUS;
 
@@ -857,21 +894,108 @@ extern "C" void broadcast_handler() {
     status_pkt.charging_current = current;
     status_pkt.batt_percentage = 0; // TODO: compute from voltage curve
 
+    pkt_reset_cause_t reset_pkt;
+    reset_pkt.type = PKT_ID_RESET_CAUSE;
+    reset_pkt.reset_cause = g_boot_reset_cause_code;
+    reset_pkt.last_stage_before_reset = g_boot_last_watchdog_stage_code;
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_RESET_SEND);
+    mowgli_comms_send(&reset_pkt, sizeof(reset_pkt));
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_STATUS_SEND);
     mowgli_comms_send_status(&status_pkt);
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
+    return;
+  }
+
+  if (nbt_due(&imu_nbt, now_tick)) {
+    const uint32_t imu_wire_bytes = usb_cdc_framed_packet_size(sizeof(pkt_imu_t));
+    if (!usb_cdc_should_send_telemetry_packet(imu_wire_bytes)) {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
+      return;
+    }
+
+    nbt_consume(&imu_nbt, now_tick);
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_IMU_BUILD);
+
+    static uint32_t last_imu_tick = 0;
+    float ax = 0.0f;
+    float ay = 0.0f;
+    float az = 0.0f;
+    float gx = 0.0f;
+    float gy = 0.0f;
+    float gz = 0.0f;
+    float mx = 0.0f;
+    float my = 0.0f;
+    float mz = 0.0f;
+
+#ifdef EXTERNAL_IMU_ACCELERATION
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_IMU_ACCEL);
+    if (!IMU_TryReadAccelerometer(&ax, &ay, &az)) {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
+      return;
+    }
+#endif
+
+#ifdef EXTERNAL_IMU_ANGULAR
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_IMU_GYRO);
+    if (!IMU_TryReadGyro(&gx, &gy, &gz)) {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
+      return;
+    }
+#endif
+
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_IMU_MAG);
+    if (!IMU_TryReadMag(&mx, &my, &mz)) {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
+      return;
+    }
+
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_IMU_PACKET_FILL);
+
+    pkt_imu_t imu_pkt = {};
+    imu_pkt.type = PKT_ID_IMU;
+    imu_pkt.dt_millis = (uint16_t)(now_tick - last_imu_tick);
+    last_imu_tick = now_tick;
+    imu_pkt.acceleration_mss[0] = ax;
+    imu_pkt.acceleration_mss[1] = ay;
+    imu_pkt.acceleration_mss[2] = az;
+    imu_pkt.gyro_rads[0] = gx;
+    imu_pkt.gyro_rads[1] = gy;
+    imu_pkt.gyro_rads[2] = gz;
+    imu_pkt.mag_uT[0] = mx;
+    imu_pkt.mag_uT[1] = my;
+    imu_pkt.mag_uT[2] = mz;
+
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_IMU_SEND);
+    mowgli_comms_send_imu(&imu_pkt);
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
+    return;
   }
 
   // Blade motor status (4 Hz) — only after system has initialized
-  if (NBT_handler(&blade_nbt) && last_heartbeat_tick != 0u) {
-    pkt_blade_status_t blade_pkt;
-    memset(&blade_pkt, 0, sizeof(blade_pkt));
+  if (last_heartbeat_tick != 0u && nbt_due(&blade_nbt, now_tick)) {
+    const uint32_t blade_wire_bytes =
+        usb_cdc_framed_packet_size(sizeof(pkt_blade_status_t));
+    if (!usb_cdc_should_send_telemetry_packet(blade_wire_bytes)) {
+      WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
+      return;
+    }
+
+    nbt_consume(&blade_nbt, now_tick);
+
+    pkt_blade_status_t blade_pkt = {};
     blade_pkt.type = PKT_ID_BLADE_STATUS;
     blade_pkt.is_active = BLADEMOTOR_bActivated ? 1u : 0u;
     blade_pkt.rpm = BLADEMOTOR_u16RPM;
     blade_pkt.power_watts = BLADEMOTOR_u16Power;
     blade_pkt.temperature = blade_temperature;
     blade_pkt.error_count = BLADEMOTOR_u32Error;
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_BLADE_SEND);
     mowgli_comms_send(&blade_pkt, sizeof(blade_pkt));
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
+    return;
   }
+
+  WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_BROADCAST_EXIT);
 }
 
 /* ---------------------------------------------------------------------------

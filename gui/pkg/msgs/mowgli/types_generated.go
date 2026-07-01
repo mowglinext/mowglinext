@@ -139,24 +139,25 @@ type Power struct {
 
 // Status matches mowgli_interfaces/msg/Status.
 type Status struct {
-	Stamp                 geometry.Stamp `json:"stamp"`
-	MowerStatus           uint8          `json:"mower_status"`
-	RaspberryPiPower      bool           `json:"raspberry_pi_power"`
-	IsCharging            bool           `json:"is_charging"`
-	EscPower              bool           `json:"esc_power"`
-	RainDetected          bool           `json:"rain_detected"`
-	SoundModuleAvailable  bool           `json:"sound_module_available"`
-	SoundModuleBusy       bool           `json:"sound_module_busy"`
-	UiBoardAvailable      bool           `json:"ui_board_available"`
-	MowEnabled            bool           `json:"mow_enabled"`
-	MowerEscStatus        uint8          `json:"mower_esc_status"`
-	MowerEscTemperature   float32        `json:"mower_esc_temperature"`
-	MowerEscCurrent       float32        `json:"mower_esc_current"`
-	MowerMotorTemperature float32        `json:"mower_motor_temperature"`
-	MowerMotorRpm         float32        `json:"mower_motor_rpm"`
-	FirmwareVersion         string `json:"firmware_version"`
-	FirmwareProtocolVersion uint8  `json:"firmware_protocol_version"`
-	FirmwareCompatible      bool   `json:"firmware_compatible"`
+	Stamp                   geometry.Stamp `json:"stamp"`
+	MowerStatus             uint8          `json:"mower_status"`
+	RaspberryPiPower        bool           `json:"raspberry_pi_power"`
+	IsCharging              bool           `json:"is_charging"`
+	EscPower                bool           `json:"esc_power"`
+	RainDetected            bool           `json:"rain_detected"`
+	SoundModuleAvailable    bool           `json:"sound_module_available"`
+	SoundModuleBusy         bool           `json:"sound_module_busy"`
+	UiBoardAvailable        bool           `json:"ui_board_available"`
+	MowEnabled              bool           `json:"mow_enabled"`
+	FirmwareDebugEnabled    bool           `json:"firmware_debug_enabled"`
+	MowerEscStatus          uint8          `json:"mower_esc_status"`
+	MowerEscTemperature     float32        `json:"mower_esc_temperature"`
+	MowerEscCurrent         float32        `json:"mower_esc_current"`
+	MowerMotorTemperature   float32        `json:"mower_motor_temperature"`
+	MowerMotorRpm           float32        `json:"mower_motor_rpm"`
+	FirmwareVersion         string         `json:"firmware_version"`
+	FirmwareProtocolVersion uint8          `json:"firmware_protocol_version"`
+	FirmwareCompatible      bool           `json:"firmware_compatible"`
 }
 
 // TrackedObstacle matches mowgli_interfaces/msg/TrackedObstacle.

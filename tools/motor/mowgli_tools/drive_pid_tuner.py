@@ -9,7 +9,6 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import math
 from pathlib import Path
-import statistics
 import sys
 import time
 from typing import Any
@@ -35,20 +34,28 @@ import yaml
 from .drive_pid_math import (
     DrivePidParams,
     LiveStallDiagnostic,
+    OscillationAssessment,
     SpeedSample,
     TickSample,
     TrialMetrics,
+    classify_oscillation,
     clamp,
     compute_tick_activity,
     compute_trial_metrics,
     evaluate_live_stall,
     evaluate_live_oscillation_abort,
+    evaluate_yaw_turn_step,
     finite_or_none,
+    half_turn_target_yaw,
     integrate_distance,
+    is_warning_oscillation_severity,
+    max_oscillation_severity,
+    oscillation_severity_rank,
     recommend_drive_pid_params,
     recommend_pid_only_params,
     resolve_robot_tuning_tier,
     sanitize_finite_data,
+    wrap_angle_rad,
 )
 from .robot_hardware_config import RobotHardwareConfig, extract_robot_hardware_config
 
@@ -100,6 +107,7 @@ RECORDING_EXIT_TIMEOUT_S = 3.0
 RECORDING_SETTLE_S = 0.6
 ODOM_ACTIVE_SPEED_THRESHOLD_MPS = 0.10
 LIVE_STALL_SPEED_WINDOW_S = 0.8
+TURN_YAW_MAX_AGE_S = 0.75
 
 
 @dataclass(frozen=True)
@@ -112,6 +120,13 @@ class RtkPoseSample:
     corrections_active: bool
     rtk_mode: int
     mode_label: str
+
+
+@dataclass(frozen=True)
+class YawObservation:
+    time_s: float
+    yaw_rad: float
+    source: str
 
 
 @dataclass
@@ -128,7 +143,7 @@ class TrialRecorder:
     pretrial_last_odom_time: float | None = None
     actual_end_s: float | None = None
     live_oscillation_detected: bool = False
-    severe_live_oscillation_detected: bool = False
+    live_oscillation_severity: str = "none"
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     speed_samples: list[SpeedSample] = field(default_factory=list)
@@ -217,8 +232,14 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Rotate ~180 degrees between feed-forward passes.")
     parser.add_argument("--turn-direction", choices=("left", "right"), default="right",
                         help="Rotation direction for --auto-turn.")
-    parser.add_argument("--turn-rate", type=float, default=0.30,
+    parser.add_argument("--turn-angular-speed-radps", "--turn-rate", dest="turn_angular_speed_radps", type=float, default=0.30,
                         help="Angular speed in rad/s used by the automatic turnaround helper.")
+    parser.add_argument("--turn-yaw-tolerance-rad", type=float, default=0.05,
+                        help="Stop the automatic turnaround when yaw error is below this threshold.")
+    parser.add_argument("--turn-max-duration-s", type=float, default=18.0,
+                        help="Maximum duration allowed for a yaw-controlled turnaround before timeout.")
+    parser.add_argument("--turn-settle-s", type=float, default=0.7,
+                        help="Zero-cmd settle time after an automatic turnaround.")
     parser.add_argument("--custom-ticks-per-meter", type=float, default=None)
     parser.add_argument("--custom-kp", type=float, default=None)
     parser.add_argument("--custom-ki", type=float, default=None)
@@ -249,6 +270,8 @@ class DrivePidTuner(Node):
         self._latest_wheel_tick_time: float | None = None
         self._latest_wheel_tick_factor: float | None = None
         self._latest_wheel_tick_stamp: str | None = None
+        self._latest_filtered_yaw: YawObservation | None = None
+        self._latest_wheel_yaw: YawObservation | None = None
         self._failure_message: str | None = None
         self._failure_status_snapshot: dict[str, Any] | None = None
 
@@ -284,7 +307,7 @@ class DrivePidTuner(Node):
         self.create_subscription(WheelTick, "/wheel_ticks", self._on_wheel_ticks, reliable_qos)
         self.create_subscription(AbsolutePose, "/gps/absolute_pose", self._on_absolute_pose, reliable_qos)
         self.create_subscription(GnssStatus, "/gps/status", self._on_gnss_status, reliable_qos)
-        self.create_subscription(Odometry, "/odometry/filtered_map", lambda _: None, sensor_qos)
+        self.create_subscription(Odometry, "/odometry/filtered_map", self._on_filtered_map_odom, sensor_qos)
 
     # ------------------------------------------------------------------
     # ROS callbacks
@@ -305,10 +328,28 @@ class DrivePidTuner(Node):
     def _on_wheel_odom(self, msg: Odometry) -> None:
         now_s = time.monotonic()
         self._latest_odom_time = now_s
+        yaw = self._yaw_from_quaternion(msg.pose.pose.orientation)
+        if yaw is not None:
+            self._latest_wheel_yaw = YawObservation(
+                time_s=now_s,
+                yaw_rad=yaw,
+                source="wheel_odom",
+            )
         if self._active_trial is None:
             return
         self._active_trial.speed_samples.append(
             SpeedSample(time_s=now_s, speed_mps=float(msg.twist.twist.linear.x))
+        )
+
+    def _on_filtered_map_odom(self, msg: Odometry) -> None:
+        now_s = time.monotonic()
+        yaw = self._yaw_from_quaternion(msg.pose.pose.orientation)
+        if yaw is None:
+            return
+        self._latest_filtered_yaw = YawObservation(
+            time_s=now_s,
+            yaw_rad=yaw,
+            source="odometry/filtered_map",
         )
 
     def _on_wheel_ticks(self, msg: WheelTick) -> None:
@@ -353,6 +394,37 @@ class DrivePidTuner(Node):
                 mode_label=mode_label,
             )
         )
+
+    def _yaw_from_quaternion(self, orientation: Any) -> float | None:
+        x = finite_or_none(getattr(orientation, "x", None))
+        y = finite_or_none(getattr(orientation, "y", None))
+        z = finite_or_none(getattr(orientation, "z", None))
+        w = finite_or_none(getattr(orientation, "w", None))
+        if None in (x, y, z, w):
+            return None
+        norm = math.sqrt(x * x + y * y + z * z + w * w)
+        if norm <= 1e-9:
+            return None
+        x /= norm
+        y /= norm
+        z /= norm
+        w /= norm
+        siny_cosp = 2.0 * (w * z + x * y)
+        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+        return wrap_angle_rad(math.atan2(siny_cosp, cosy_cosp))
+
+    def _current_turn_yaw(self, *, now_s: float | None = None) -> YawObservation | None:
+        now = time.monotonic() if now_s is None else now_s
+        candidates = [
+            self._latest_filtered_yaw,
+            self._latest_wheel_yaw,
+        ]
+        for observation in candidates:
+            if observation is None:
+                continue
+            if now - observation.time_s <= TURN_YAW_MAX_AGE_S:
+                return observation
+        return None
 
     # ------------------------------------------------------------------
     # Public entrypoint
@@ -902,11 +974,11 @@ class DrivePidTuner(Node):
                 f"Pass {pass_index + 1}: wheel_pid_pwm_per_mps -> {next_pwm:.3f} from target/measured "
                 f"{target_speed:.3f}/{measured_speed:.3f} m/s."
             )
-            if trial.oscillation_detected:
+            if is_warning_oscillation_severity(trial.oscillation_severity):
                 reasons.append(
                     f"Pass {pass_index + 1}: oscillation warning recorded; keeping the feed-forward proposal because calibration completed."
                 )
-            if trial.live_oscillation_detected:
+            if is_warning_oscillation_severity(trial.live_oscillation_severity):
                 reasons.append(
                     f"Pass {pass_index + 1}: live oscillation warning recorded during calibration; trial continued by design."
                 )
@@ -1250,36 +1322,28 @@ class DrivePidTuner(Node):
         if note is not None and note not in recorder.notes:
             recorder.notes.append(note)
 
+    def _append_trial_note(
+        self,
+        recorder: TrialRecorder,
+        note: str,
+    ) -> None:
+        if note not in recorder.notes:
+            recorder.notes.append(note)
+
     def _analyze_live_oscillation(
         self,
         *,
         recent: list[SpeedSample],
         commanded_speed: float,
-    ) -> tuple[str, int, float] | None:
-        if len(recent) < 8:
+    ) -> OscillationAssessment | None:
+        analysis = classify_oscillation(
+            recent,
+            commanded_speed,
+            min_samples=8,
+        )
+        if not analysis.detected:
             return None
-        errors = [commanded_speed - sample.speed_mps for sample in recent]
-        error_stddev = statistics.pstdev(errors)
-        if error_stddev < max(0.015, 0.10 * abs(commanded_speed)):
-            return None
-        zero_crossings = 0
-        previous_sign = 0
-        for error in errors:
-            if abs(error) < 0.01:
-                continue
-            sign = 1 if error > 0.0 else -1
-            if previous_sign and sign != previous_sign:
-                zero_crossings += 1
-            previous_sign = sign
-        if zero_crossings < 5:
-            return None
-        if (
-            len(recent) >= 10
-            and zero_crossings >= 8
-            and error_stddev >= max(0.03, 0.18 * abs(commanded_speed))
-        ):
-            return "severe", zero_crossings, error_stddev
-        return "mild", zero_crossings, error_stddev
+        return analysis
 
     def _handle_live_oscillation(
         self,
@@ -1297,7 +1361,6 @@ class DrivePidTuner(Node):
         )
         if analysis is None:
             return
-        severity, zero_crossings, error_stddev = analysis
         decision = evaluate_live_oscillation_abort(
             commanded_speed=commanded_speed,
             recent_speed_samples=recent,
@@ -1305,14 +1368,18 @@ class DrivePidTuner(Node):
             abort_on_live_oscillation=self._args.abort_on_live_oscillation,
             no_abort_on_live_oscillation=self._args.no_abort_on_live_oscillation,
         )
-        will_abort = decision.should_abort
-        first_mild_warning = not recorder.live_oscillation_detected
-        first_severe_warning = (
-            severity == "severe" and not recorder.severe_live_oscillation_detected
+        will_abort = decision.unsafe_speed_detected or (
+            decision.should_abort and is_warning_oscillation_severity(analysis.severity)
+        )
+        previous_severity = recorder.live_oscillation_severity
+        severity_changed = oscillation_severity_rank(analysis.severity) > oscillation_severity_rank(
+            previous_severity
         )
         recorder.live_oscillation_detected = True
-        if severity == "severe":
-            recorder.severe_live_oscillation_detected = True
+        recorder.live_oscillation_severity = max_oscillation_severity(
+            recorder.live_oscillation_severity,
+            analysis.severity,
+        )
         recent_speed = sum(sample.speed_mps for sample in recent) / len(recent)
         measured_speed = recent[-1].speed_mps
         tick_activity = compute_tick_activity(recent_ticks)
@@ -1320,37 +1387,49 @@ class DrivePidTuner(Node):
             0.0,
             (decision.peak_abs_speed - abs(commanded_speed)) / max(abs(commanded_speed), 1e-6),
         )
-        self._append_trial_warning(
-            recorder,
-            "Live oscillation suspected during calibration; trial continued."
-            if not will_abort
-            else (
-                "Unsafe live speed response detected during calibration."
-                if decision.unsafe_speed_detected
-                else "Live oscillation suspected during calibration."
-            ),
-            note=(
-                (
-                    "Severe live oscillation stayed below unsafe speed thresholds, so PID tuning continued with warning-level trial quality and conservative recommendations."
-                    if recorder.phase == "pid" and severity == "severe" and not will_abort
-                    else (
-                        "Live oscillation is treated as a calibration warning in ff mode."
-                        if recorder.phase == "feedforward" and not will_abort
+        if analysis.severity == "minor" and not decision.unsafe_speed_detected:
+            self._append_trial_note(
+                recorder,
+                "Minor live oscillation crossed the target repeatedly but stayed outside only a small "
+                f"deadband (+/-{analysis.deadband_mps:.3f} m/s), so it was recorded as normal tuning noise.",
+            )
+        else:
+            self._append_trial_warning(
+                recorder,
+                "Live oscillation suspected during calibration; trial continued."
+                if not will_abort
+                else (
+                    "Unsafe live speed response detected during calibration."
+                    if decision.unsafe_speed_detected
+                    else "Live oscillation suspected during calibration."
+                ),
+                note=(
+                    (
+                        "Severe live oscillation stayed below unsafe speed thresholds, so PID tuning continued "
+                        "with warning-level trial quality and conservative recommendations."
+                        if recorder.phase == "pid" and analysis.severity == "severe" and not will_abort
                         else (
-                            "Peak live speed exceeded the runaway safety threshold, so the trial was aborted."
-                            if decision.unsafe_speed_detected
+                            "Live oscillation is treated as a calibration warning in ff mode."
+                            if recorder.phase == "feedforward" and not will_abort
                             else (
-                                "Severe live oscillation triggered strict abort behavior."
-                                if will_abort
-                                else "Live oscillation was recorded as a calibration warning during PID/response tuning."
+                                "Peak live speed exceeded the runaway safety threshold, so the trial was aborted."
+                                if decision.unsafe_speed_detected
+                                else (
+                                    "Severe live oscillation triggered strict abort behavior."
+                                    if will_abort
+                                    else "Live oscillation was recorded as a calibration warning during PID/response tuning."
+                                )
                             )
                         )
                     )
-                )
-            ),
-        )
-        if first_mild_warning or first_severe_warning:
-            log_fn = self.get_logger().error if decision.unsafe_speed_detected else self.get_logger().warning
+                ),
+            )
+        if severity_changed or decision.unsafe_speed_detected:
+            log_fn = self.get_logger().error if decision.unsafe_speed_detected else (
+                self.get_logger().warning
+                if is_warning_oscillation_severity(analysis.severity)
+                else self.get_logger().info
+            )
             absolute_runaway = (
                 "n/a"
                 if decision.absolute_runaway_threshold is None
@@ -1358,14 +1437,16 @@ class DrivePidTuner(Node):
             )
             log_fn(
                 "Live oscillation warning "
-                f"({severity}) during {recorder.name}: "
+                f"({analysis.severity}) during {recorder.name}: "
                 f"trial_elapsed={elapsed_s:.3f}s "
                 f"commanded_speed={commanded_speed:.3f}mps "
                 f"measured_speed={measured_speed:.3f}mps "
                 f"recent_speed={recent_speed:.3f}mps "
                 f"overshoot_ratio={overshoot_ratio:.3f} "
-                f"zero_crossings={zero_crossings} "
-                f"error_stddev={error_stddev:.4f} "
+                f"zero_crossings={analysis.zero_crossings} "
+                f"error_stddev={analysis.error_stddev:.4f} "
+                f"deadband={analysis.deadband_mps:.4f} "
+                f"peak_to_peak={analysis.peak_to_peak_speed:.4f} "
                 f"wheel_ticks_delta={tick_activity.wheel_ticks_delta} "
                 f"peak_abs_speed={decision.peak_abs_speed:.3f}mps "
                 f"target_runaway_threshold={decision.target_runaway_threshold:.3f}mps "
@@ -1610,14 +1691,104 @@ class DrivePidTuner(Node):
             )
 
     def _turn_around(self) -> None:
-        turn_rate = clamp(abs(float(self._args.turn_rate)), 0.10, 0.35)
-        wz = turn_rate if self._args.turn_direction == "left" else -turn_rate
-        duration = math.pi / max(turn_rate, 1e-6)
-        self.get_logger().info(
-            f"Automatic turnaround: rotating {self._args.turn_direction} at {turn_rate:.2f} rad/s for {duration:.1f} s."
+        turn_speed = clamp(abs(float(self._args.turn_angular_speed_radps)), 0.10, 0.35)
+        fallback_wz = turn_speed if self._args.turn_direction == "left" else -turn_speed
+        fallback_duration = math.pi / max(turn_speed, 1e-6)
+        settle_s = max(0.0, float(self._args.turn_settle_s))
+        start_observation = self._current_turn_yaw()
+        if start_observation is None:
+            self.get_logger().warning(
+                "Automatic turnaround yaw is unavailable; falling back to timed half-turn."
+            )
+            self._perform_timed_turnaround(
+                wz=fallback_wz,
+                duration_s=fallback_duration,
+                settle_s=settle_s,
+            )
+            return
+
+        target_yaw = half_turn_target_yaw(
+            start_observation.yaw_rad,
+            self._args.turn_direction,
         )
-        self._command_for_duration(vx=0.0, wz=wz, duration_s=duration, ramp_s=min(0.8, duration / 4.0))
-        self._hold_zero(self._args.stop_between_tests)
+        self.get_logger().info(
+            "Automatic turnaround: yaw-controlled half-turn "
+            f"from {start_observation.yaw_rad:.3f} rad to {target_yaw:.3f} rad "
+            f"using {start_observation.source} at {turn_speed:.2f} rad/s."
+        )
+        start_s = time.monotonic()
+        while True:
+            if self._latest_emergency is not None and (
+                self._latest_emergency.active_emergency or self._latest_emergency.latched_emergency
+            ):
+                raise RuntimeError(
+                    f"Emergency asserted during automatic turnaround: {self._latest_emergency.reason}"
+                )
+            now_s = time.monotonic()
+            current_observation = self._current_turn_yaw(now_s=now_s)
+            decision = evaluate_yaw_turn_step(
+                start_yaw_rad=start_observation.yaw_rad,
+                current_yaw_rad=(
+                    None
+                    if current_observation is None
+                    else current_observation.yaw_rad
+                ),
+                elapsed_s=now_s - start_s,
+                turn_direction=self._args.turn_direction,
+                yaw_tolerance_rad=float(self._args.turn_yaw_tolerance_rad),
+                max_duration_s=float(self._args.turn_max_duration_s),
+                angular_speed_radps=turn_speed,
+            )
+            if decision.use_timed_fallback:
+                self.get_logger().warning(
+                    "Automatic turnaround lost fresh yaw data; falling back to timed half-turn."
+                )
+                self._perform_timed_turnaround(
+                    wz=fallback_wz,
+                    duration_s=fallback_duration,
+                    settle_s=settle_s,
+                )
+                return
+            if decision.timed_out:
+                self._stop_robot()
+                raise RuntimeError(
+                    "Automatic turnaround timed out before reaching the requested 180-degree yaw target."
+                )
+            if decision.reached_target:
+                final_source = (
+                    "unknown"
+                    if current_observation is None
+                    else current_observation.source
+                )
+                self.get_logger().info(
+                    "Automatic turnaround complete: "
+                    f"yaw error={0.0 if decision.yaw_error_rad is None else decision.yaw_error_rad:.3f} rad "
+                    f"(source {final_source})."
+                )
+                break
+            self._publish_cmd(vx=0.0, wz=decision.command_wz_radps)
+            rclpy.spin_once(self, timeout_sec=CMD_PERIOD_S)
+
+        self._stop_robot()
+        self._hold_zero(settle_s)
+
+    def _perform_timed_turnaround(
+        self,
+        *,
+        wz: float,
+        duration_s: float,
+        settle_s: float,
+    ) -> None:
+        self.get_logger().info(
+            f"Automatic turnaround fallback: rotating at {wz:.2f} rad/s for {duration_s:.1f} s."
+        )
+        self._command_for_duration(
+            vx=0.0,
+            wz=wz,
+            duration_s=duration_s,
+            ramp_s=min(0.8, duration_s / 4.0),
+        )
+        self._hold_zero(settle_s)
 
     def _hold_zero(self, duration_s: float) -> None:
         deadline = time.monotonic() + max(0.0, duration_s)
@@ -1741,6 +1912,7 @@ class DrivePidTuner(Node):
             odom_distance_m=odom_distance_m,
             rtk_distance_m=rtk_distance_m,
             live_oscillation_detected=recorder.live_oscillation_detected,
+            live_oscillation_severity=recorder.live_oscillation_severity,
             warnings=recorder.warnings,
             notes=notes,
         )
@@ -1992,8 +2164,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--undock-distance must be >= 0.")
     if args.undock_speed <= 0.0:
         parser.error("--undock-speed must be positive.")
-    if args.turn_rate <= 0.0:
-        parser.error("--turn-rate must be positive.")
+    if args.turn_angular_speed_radps <= 0.0:
+        parser.error("--turn-angular-speed-radps/--turn-rate must be positive.")
+    if args.turn_yaw_tolerance_rad <= 0.0:
+        parser.error("--turn-yaw-tolerance-rad must be positive.")
+    if args.turn_max_duration_s <= 0.0:
+        parser.error("--turn-max-duration-s must be positive.")
+    if args.turn_settle_s < 0.0:
+        parser.error("--turn-settle-s must be >= 0.")
     if args.rollback and args.apply:
         parser.error("--rollback and --apply are mutually exclusive.")
     resolved_cmd_topic = args.cmd_topic if args.cmd_topic else "/cmd_vel_tuning"

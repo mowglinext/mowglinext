@@ -32,6 +32,7 @@
 #include "mowgli_comms.h"
 #include "cobs.h"
 #include "crc16.h"
+#include "main.h"
 
 #include <string.h>  /* memmove, memcpy */
 
@@ -225,6 +226,8 @@ void mowgli_comms_send(const void *packet, size_t len)
     if (packet == NULL || len < MIN_RAW_PKT_SIZE || len > MAX_RAW_PKT_SIZE) {
         return;
     }
+
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_ENTER);
 
     /* Copy packet into mutable buffer. */
     memcpy(raw, packet, len);

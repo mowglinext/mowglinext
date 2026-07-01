@@ -64,6 +64,11 @@ TEST(ProtocolSizes, OdometryPacketSize)
   EXPECT_EQ(sizeof(LlOdometry), 17u);
 }
 
+TEST(ProtocolSizes, ResetCausePacketSize)
+{
+  EXPECT_EQ(sizeof(LlResetCause), 5u);
+}
+
 TEST(ProtocolSizes, HeartbeatPacketSize)
 {
   EXPECT_EQ(sizeof(LlHeartbeat), 5u);
@@ -93,11 +98,12 @@ TEST(ProtocolSizes, SetDrivePidPacketSize)
 
 TEST(ProtocolSizes, ConfigPacketSizes)
 {
-  // Firmware version handshake. Req is a bare trigger; Rsp carries the
-  // protocol version + 3-byte semver. Must match pkt_config_*_t in
+  // Firmware version handshake / runtime config. Req carries flags; Rsp
+  // reports protocol version + active flags + 3-byte semver. Must match
+  // pkt_config_*_t in
   // mowgli_protocol.h.
-  EXPECT_EQ(sizeof(LlConfigReq), 3u);  // type(1) + crc(2)
-  EXPECT_EQ(sizeof(LlConfigRsp), 7u);  // type(1) + proto(1) + semver(3) + crc(2)
+  EXPECT_EQ(sizeof(LlConfigReq), 4u);  // type(1) + flags(1) + crc(2)
+  EXPECT_EQ(sizeof(LlConfigRsp), 8u);  // type(1) + proto(1) + flags(1) + semver(3) + crc(2)
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +116,7 @@ TEST(ProtocolIds, PacketIdValues)
   EXPECT_EQ(PACKET_ID_LL_IMU, 0x02);
   EXPECT_EQ(PACKET_ID_LL_UI_EVENT, 0x03);
   EXPECT_EQ(PACKET_ID_LL_ODOMETRY, 0x04);
+  EXPECT_EQ(PACKET_ID_LL_RESET_CAUSE, 0x06);
   EXPECT_EQ(PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ, 0x11);
   EXPECT_EQ(PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP, 0x12);
   EXPECT_EQ(PACKET_ID_LL_HEARTBEAT, 0x42);
@@ -277,6 +284,16 @@ TEST(ProtocolRoundtrip, HeartbeatPacket)
   pkt.type = PACKET_ID_LL_HEARTBEAT;
   pkt.emergency_requested = 0;
   pkt.emergency_release_requested = 1;
+
+  roundtrip_struct(pkt);
+}
+
+TEST(ProtocolRoundtrip, ResetCausePacket)
+{
+  LlResetCause pkt{};
+  pkt.type = PACKET_ID_LL_RESET_CAUSE;
+  pkt.reset_cause = RESET_CAUSE_WWDG;
+  pkt.last_stage_before_reset = WATCHDOG_STAGE_ADC;
 
   roundtrip_struct(pkt);
 }

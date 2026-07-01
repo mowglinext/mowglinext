@@ -102,6 +102,18 @@ public:
    */
   ssize_t write(const uint8_t* data, std::size_t len);
 
+  /**
+   * @brief Write the complete buffer, retrying short non-blocking writes briefly.
+   *
+   * The serial fd is opened O_NONBLOCK. A single write(2) can therefore return
+   * EAGAIN or write only part of a packet during USB CDC back-pressure. This
+   * helper keeps small COBS frames atomic from the caller's point of view, while
+   * still returning quickly on a dead device.
+   *
+   * @return Number of bytes written, or -1 if no byte could be written.
+   */
+  ssize_t write_all(const uint8_t* data, std::size_t len);
+
   /// @return The device path this port was constructed with.
   [[nodiscard]] const std::string& device() const noexcept;
 

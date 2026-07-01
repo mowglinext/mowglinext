@@ -102,7 +102,7 @@ void LSM6_Init(void)
   * @brief  Reads the 3 accelerometer channels and stores them in *x,*y,*z
   * units are m/s^2
   */
-void LSM6_ReadAccelerometerRaw(float *x, float *y, float *z)
+int LSM6_ReadAccelerometerRaw(float *x, float *y, float *z)
 {
     uint8_t accel_xyz[6];   // 2 bytes each
 
@@ -116,28 +116,34 @@ void LSM6_ReadAccelerometerRaw(float *x, float *y, float *z)
     }
     debug_printf("\r\n");
 */
-    if(acked) {
-        *x =  (int16_t)(accel_xyz[1] << 8 | accel_xyz[0]) * LSM6_G_FACTOR * MS2_PER_G;
-        *y =  (int16_t)(accel_xyz[3] << 8 | accel_xyz[2]) * LSM6_G_FACTOR * MS2_PER_G;
-        *z =  (int16_t)(accel_xyz[5] << 8 | accel_xyz[4]) * LSM6_G_FACTOR * MS2_PER_G;    
+    if (!acked) {
+        return 0;
     }
+
+    *x =  (int16_t)(accel_xyz[1] << 8 | accel_xyz[0]) * LSM6_G_FACTOR * MS2_PER_G;
+    *y =  (int16_t)(accel_xyz[3] << 8 | accel_xyz[2]) * LSM6_G_FACTOR * MS2_PER_G;
+    *z =  (int16_t)(accel_xyz[5] << 8 | accel_xyz[4]) * LSM6_G_FACTOR * MS2_PER_G;
+    return 1;
 }
 
 /**
   * @brief  Reads the 3 gyro channels and stores them in *x,*y,*z
   * units are rad/sec
   */
-void LSM6_ReadGyroRaw(float *x, float *y, float *z)
+int LSM6_ReadGyroRaw(float *x, float *y, float *z)
 {
     uint8_t gyro_xyz[6];   // 2 bytes each
 
     uint8_t acked = SW_I2C_UTIL_Read_Multi(lsm6_address, LSM6_OUTX_L_G, 6, (uint8_t*)&gyro_xyz);
     
-    if(acked) {
-      *x = (int16_t)(gyro_xyz[1] << 8 | gyro_xyz[0]) * LSM6_DPS_FACTOR * RAD_PER_DEG;
-      *y = (int16_t)(gyro_xyz[3] << 8 | gyro_xyz[2]) * LSM6_DPS_FACTOR * RAD_PER_DEG;
-      *z = (int16_t)(gyro_xyz[5] << 8 | gyro_xyz[4]) * LSM6_DPS_FACTOR * RAD_PER_DEG;    
+    if (!acked) {
+      return 0;
     }
+
+    *x = (int16_t)(gyro_xyz[1] << 8 | gyro_xyz[0]) * LSM6_DPS_FACTOR * RAD_PER_DEG;
+    *y = (int16_t)(gyro_xyz[3] << 8 | gyro_xyz[2]) * LSM6_DPS_FACTOR * RAD_PER_DEG;
+    *z = (int16_t)(gyro_xyz[5] << 8 | gyro_xyz[4]) * LSM6_DPS_FACTOR * RAD_PER_DEG;
+    return 1;
 }
 
 #endif

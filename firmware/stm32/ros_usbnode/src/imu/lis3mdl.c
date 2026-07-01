@@ -36,11 +36,13 @@ void LIS3MDL_Init(void)
     SW_I2C_UTIL_WRITE(LIS3MDL_ADDRESS, LIS3MDL_CTRL_REG4, 0x0C);
 }
 
-void LIS3MDL_ReadMagRaw(float *x, float *y, float *z)
+int LIS3MDL_ReadMagRaw(float *x, float *y, float *z)
 {
     uint8_t mag_xyz[6];
 
-    SW_I2C_UTIL_Read_Multi(LIS3MDL_ADDRESS, LIS3MDL_OUT_X_L, 6, mag_xyz);
+    if (!SW_I2C_UTIL_Read_Multi(LIS3MDL_ADDRESS, LIS3MDL_OUT_X_L, 6, mag_xyz)) {
+        return 0;
+    }
 
     /* Raw values in LSB, convert to microtesla:
      * 1 Gauss = 100 uT, LIS3MDL_GAUSS_FACTOR = Gauss/LSB
@@ -48,6 +50,7 @@ void LIS3MDL_ReadMagRaw(float *x, float *y, float *z)
     *x = (float)(int16_t)(mag_xyz[1] << 8 | mag_xyz[0]) * LIS3MDL_GAUSS_FACTOR * 100.0f;
     *y = (float)(int16_t)(mag_xyz[3] << 8 | mag_xyz[2]) * LIS3MDL_GAUSS_FACTOR * 100.0f;
     *z = (float)(int16_t)(mag_xyz[5] << 8 | mag_xyz[4]) * LIS3MDL_GAUSS_FACTOR * 100.0f;
+    return 1;
 }
 
 #endif /* DISABLE_LIS3MDL */

@@ -34,12 +34,12 @@
 #include <memory>
 #include <mutex>
 
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/srv/emergency_stop.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
-#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/battery_state.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -103,8 +103,7 @@ public:
     // (remapped via mowgli.launch.py to /gnss/heading). Mirror that here so
     // calibrate_imu_yaw_node and dock_yaw_to_set_pose see the same data
     // path in sim as on real hardware.
-    dock_heading_pub_ = create_publisher<sensor_msgs::msg::Imu>(
-        "/gnss/heading", rclcpp::QoS(10));
+    dock_heading_pub_ = create_publisher<sensor_msgs::msg::Imu>("/gnss/heading", rclcpp::QoS(10));
 
     // Subscribe to the sim's GROUND-TRUTH chassis pose, published by
     // kinematic_drive on /sim/ground_truth_pose. On the real robot
@@ -171,6 +170,8 @@ private:
     // Field parity with the real hardware_bridge_node so downstream
     // diagnostics, MQTT bridge, and BT logic see the same picture in sim.
     status.mower_status = mowgli_interfaces::msg::Status::MOWER_STATUS_OK;
+    status.reset_cause = mowgli_interfaces::msg::Status::RESET_CAUSE_UNKNOWN;
+    status.reset_cause_name = "UNKNOWN";
     status.raspberry_pi_power = true;
     // Legacy parity with real hardware_bridge: blade-related controller power,
     // not traction enable state.
@@ -180,6 +181,7 @@ private:
     status.sound_module_busy = false;
     status.ui_board_available = true;
     status.mow_enabled = mow_enabled_;
+    status.firmware_debug_enabled = false;
     status.mower_esc_status = 0;
     status.mower_esc_temperature = 25.0f;
     status.mower_esc_current = mow_enabled_ ? 0.5f : 0.0f;

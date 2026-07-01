@@ -20,6 +20,31 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const latLonDecimalPlaces = 9
+
+var fixedPrecisionEnvKeys = map[string]bool{
+	"OM_DATUM_LAT":  true,
+	"OM_DATUM_LONG": true,
+	"OM_DATUM_LON":  true,
+}
+
+var fixedPrecisionYAMLKeys = map[string]bool{
+	"datum_lat": true,
+	"datum_lon": true,
+	"dock_lat":  true,
+	"dock_lon":  true,
+}
+
+type fixedPrecisionFloat float64
+
+func (f fixedPrecisionFloat) MarshalYAML() (any, error) {
+	return &yaml.Node{
+		Kind:  yaml.ScalarNode,
+		Tag:   "!!float",
+		Value: formatLatLonDecimal(float64(f)),
+	}, nil
+}
+
 // writePreservingPerms writes content to path, preserving the existing
 // file's mode and uid/gid when the file already exists. When the file
 // is being created for the first time, it is written owner- and
@@ -314,6 +339,82 @@ func coerceValue(value string, schemaType string) any {
 	return value
 }
 
+func asFloat64(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int8:
+		return float64(v), true
+	case int16:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case uint:
+		return float64(v), true
+	case uint8:
+		return float64(v), true
+	case uint16:
+		return float64(v), true
+	case uint32:
+		return float64(v), true
+	case uint64:
+		return float64(v), true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func formatLatLonDecimal(value float64) string {
+	return strconv.FormatFloat(value, 'f', latLonDecimalPlaces, 64)
+}
+
+func serializeShellSettingValue(key string, value any) string {
+	if fixedPrecisionEnvKeys[key] {
+		if f, ok := asFloat64(value); ok {
+			return fmt.Sprintf("%#v", formatLatLonDecimal(f))
+		}
+	}
+	return fmt.Sprintf("%#v", value)
+}
+
+func applyFixedPrecisionGeoScalars(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, child := range typed {
+			if fixedPrecisionYAMLKeys[key] {
+				if f, ok := asFloat64(child); ok {
+					out[key] = fixedPrecisionFloat(f)
+					continue
+				}
+			}
+			out[key] = applyFixedPrecisionGeoScalars(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, child := range typed {
+			out[i] = applyFixedPrecisionGeoScalars(child)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func marshalROS2YAMLWithGeoPrecision(nested map[string]any) ([]byte, error) {
+	return yaml.Marshal(applyFixedPrecisionGeoScalars(nested))
+}
+
 func stringValue(value any, defaultValue string) string {
 	if value == nil {
 		return defaultValue
@@ -462,25 +563,25 @@ func gnssCompatFromFlat(flat map[string]any) map[string]string {
 	}
 
 	return map[string]string{
-		"GNSS_STACK":           "universal",
-		"GNSS_STATUS_SOURCE":   "universal",
-		"GNSS_RECEIVER_FAMILY": receiverFamily,
-		"GNSS_TRANSPORT":       "serial",
-		"GNSS_SERIAL_DEVICE":   serialDevice,
-		"GNSS_SERIAL_BAUD":     serialBaud,
-		"GNSS_CONFIG_BAUD":     configBaud,
-		"GNSS_PROFILE":         profile,
-		"GNSS_SIGNAL_PROFILE":  signalProfile,
-		"GNSS_PROFILE_RATE_HZ": profileRateHz,
-		"GNSS_BACKEND":         "universal",
-		"GNSS_NTRIP_ENABLED":   boolStringValue(flat["ntrip_enabled"], true),
-		"GNSS_NTRIP_HOST":      stringValue(flat["ntrip_host"], "crtk.net"),
-		"GNSS_NTRIP_PORT":      stringValue(flat["ntrip_port"], "2101"),
-		"GNSS_NTRIP_MOUNTPOINT": ntripMountpoint,
-		"GNSS_NTRIP_USERNAME":   stringValue(flat["ntrip_user"], "centipede"),
-		"GNSS_NTRIP_PASSWORD":   stringValue(flat["ntrip_password"], "centipede"),
-		"GNSS_RTCM_FORWARDING":   "true",
-		"GNSS_NTRIP_GGA_ENABLED": ntripGGAEnabled,
+		"GNSS_STACK":                "universal",
+		"GNSS_STATUS_SOURCE":        "universal",
+		"GNSS_RECEIVER_FAMILY":      receiverFamily,
+		"GNSS_TRANSPORT":            "serial",
+		"GNSS_SERIAL_DEVICE":        serialDevice,
+		"GNSS_SERIAL_BAUD":          serialBaud,
+		"GNSS_CONFIG_BAUD":          configBaud,
+		"GNSS_PROFILE":              profile,
+		"GNSS_SIGNAL_PROFILE":       signalProfile,
+		"GNSS_PROFILE_RATE_HZ":      profileRateHz,
+		"GNSS_BACKEND":              "universal",
+		"GNSS_NTRIP_ENABLED":        boolStringValue(flat["ntrip_enabled"], true),
+		"GNSS_NTRIP_HOST":           stringValue(flat["ntrip_host"], "crtk.net"),
+		"GNSS_NTRIP_PORT":           stringValue(flat["ntrip_port"], "2101"),
+		"GNSS_NTRIP_MOUNTPOINT":     ntripMountpoint,
+		"GNSS_NTRIP_USERNAME":       stringValue(flat["ntrip_user"], "centipede"),
+		"GNSS_NTRIP_PASSWORD":       stringValue(flat["ntrip_password"], "centipede"),
+		"GNSS_RTCM_FORWARDING":      "true",
+		"GNSS_NTRIP_GGA_ENABLED":    ntripGGAEnabled,
 		"GNSS_NTRIP_GGA_INTERVAL_S": stringValue(flat["gnss_ntrip_gga_interval_s"], "10"),
 	}
 }
@@ -811,7 +912,7 @@ func PostSettings(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRoutes 
 			if value == false {
 				value = "False"
 			}
-			fileContent += "export " + key + "=" + fmt.Sprintf("%#v", value) + "\n"
+			fileContent += "export " + key + "=" + serializeShellSettingValue(key, value) + "\n"
 		}
 		if err = os.MkdirAll(filepath.Dir(string(mowerConfigFile)), 0755); err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
@@ -895,7 +996,6 @@ var (
 	schemaCacheTime time.Time
 	schemaCacheTTL  = 1 * time.Hour
 )
-
 
 // GetSettingsSchema returns the mower config JSON Schema.
 //
@@ -1049,7 +1149,7 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		nested := nestToROS2YAML(existing, nodeMappings, existingYAML)
 
 		// Marshal with YAML comments header
-		out, err := yaml.Marshal(nested)
+		out, err := marshalROS2YAMLWithGeoPrecision(nested)
 		if err != nil {
 			c.JSON(500, ErrorResponse{Error: "failed to marshal YAML: " + err.Error()})
 			return

@@ -36,19 +36,19 @@ void WT901_Init(void);
   * @brief  Reads the 3 accelerometer channels and stores them in *x,*y,*z
   * units are m/s^2
   */
-void WT901_ReadAccelerometerRaw(float *x, float *y, float *z);
+int WT901_ReadAccelerometerRaw(float *x, float *y, float *z);
 
 /**
   * @brief  Reads the 3 gyro channels and stores them in *x,*y,*z
   * units are rad/sec
   */
-void WT901_ReadGyroRaw(float *x, float *y, float *z);
+int WT901_ReadGyroRaw(float *x, float *y, float *z);
 
 /**
   * @brief  Reads the 3 magnetometer channels and stores them in *x,*y,*z
   * units are uT (microtesla)
   */
-void WT901_ReadMagRaw(float *x, float *y, float *z);
+int WT901_ReadMagRaw(float *x, float *y, float *z);
 
 #endif
 #endif /*WT901_H*/ 

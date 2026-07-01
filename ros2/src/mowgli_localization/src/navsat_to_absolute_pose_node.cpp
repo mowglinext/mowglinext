@@ -79,7 +79,7 @@ NavSatToAbsolutePoseNode::NavSatToAbsolutePoseNode(const rclcpp::NodeOptions& op
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
   RCLCPP_INFO(get_logger(),
-              "NavSatToAbsolutePoseNode started — datum: [%.7f, %.7f]",
+              "NavSatToAbsolutePoseNode started — datum: [%.9f, %.9f]",
               datum_lat_,
               datum_lon_);
 }
@@ -100,8 +100,7 @@ void NavSatToAbsolutePoseNode::declare_parameters()
   // Defensive guards on /gps/pose_cov — see header for rationale.
   pos_accuracy_inflation_threshold_m_ =
       declare_parameter<double>("pos_accuracy_inflation_threshold_m", 0.025);
-  pos_accuracy_inflation_factor_ =
-      declare_parameter<double>("pos_accuracy_inflation_factor", 10.0);
+  pos_accuracy_inflation_factor_ = declare_parameter<double>("pos_accuracy_inflation_factor", 10.0);
   pos_accuracy_reject_threshold_m_ =
       declare_parameter<double>("pos_accuracy_reject_threshold_m", 0.500);
 }
@@ -363,12 +362,13 @@ void NavSatToAbsolutePoseNode::on_navsat_fix(sensor_msgs::msg::NavSatFix::ConstS
   // the EKF latches onto a bad pose.
   if (out.position_accuracy > pos_accuracy_reject_threshold_m_)
   {
-    RCLCPP_WARN_THROTTLE(get_logger(),
-                         *get_clock(),
-                         5000,
-                         "Dropping /gps/pose_cov: receiver reports σ=%.0f mm > reject threshold %.0f mm",
-                         static_cast<double>(out.position_accuracy) * 1000.0,
-                         pos_accuracy_reject_threshold_m_ * 1000.0);
+    RCLCPP_WARN_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        5000,
+        "Dropping /gps/pose_cov: receiver reports σ=%.0f mm > reject threshold %.0f mm",
+        static_cast<double>(out.position_accuracy) * 1000.0,
+        pos_accuracy_reject_threshold_m_ * 1000.0);
     return;
   }
 
@@ -393,8 +393,7 @@ void NavSatToAbsolutePoseNode::on_navsat_fix(sensor_msgs::msg::NavSatFix::ConstS
   // factor onto the variance so kalman gain shrinks proportionally.
   if (out.position_accuracy > pos_accuracy_inflation_threshold_m_)
   {
-    const double inflate_sq =
-        pos_accuracy_inflation_factor_ * pos_accuracy_inflation_factor_;
+    const double inflate_sq = pos_accuracy_inflation_factor_ * pos_accuracy_inflation_factor_;
     var_x *= inflate_sq;
     var_y *= inflate_sq;
     RCLCPP_DEBUG_THROTTLE(get_logger(),

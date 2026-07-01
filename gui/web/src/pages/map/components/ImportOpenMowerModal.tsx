@@ -129,7 +129,8 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
                                 onBlur={handleReproject}
                                 onPressEnter={handleReproject}
                                 disabled={applying || reprojecting}
-                                step={0.000001}
+                                step={0.000000001}
+                                precision={9}
                                 style={{width: 280}}
                                 placeholder="OM_DATUM_LAT"
                             />
@@ -140,7 +141,8 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
                                 onBlur={handleReproject}
                                 onPressEnter={handleReproject}
                                 disabled={applying || reprojecting}
-                                step={0.000001}
+                                step={0.000000001}
+                                precision={9}
                                 style={{width: 280}}
                                 placeholder="OM_DATUM_LONG"
                             />

@@ -79,8 +79,8 @@ run_check() {
   local gps
   gps=$(topic_once "/gps/fix")
   local lat lon alt gps_status cov
-  lat=$(echo "$gps" | grep "latitude:" | awk '{printf "%.7f", $2}')
-  lon=$(echo "$gps" | grep "longitude:" | awk '{printf "%.7f", $2}')
+  lat=$(echo "$gps" | grep "latitude:" | awk '{printf "%.9f", $2}')
+  lon=$(echo "$gps" | grep "longitude:" | awk '{printf "%.9f", $2}')
   alt=$(echo "$gps" | grep "altitude:" | awk '{printf "%.1f", $2}')
   gps_status=$(echo "$gps" | grep "^  status:" | head -1 | awk '{print $2}')
   cov=$(echo "$gps" | grep "^- " | head -1 | awk '{printf "%.4f", $2}')

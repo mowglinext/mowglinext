@@ -579,7 +579,7 @@ func persistGNSSRuntimeBaud(dbProvider pkgtypes.IDBProvider, runtimeBaud string)
 	gnssEnvUpdates := applyUniversalGnssCompatibility(doc.Flat)
 
 	nested := nestToROS2YAML(doc.Flat, doc.NodeMappings, doc.ExistingYAML)
-	out, err := yaml.Marshal(nested)
+	out, err := marshalROS2YAMLWithGeoPrecision(nested)
 	if err != nil {
 		return fmt.Errorf("failed to marshal YAML: %w", err)
 	}

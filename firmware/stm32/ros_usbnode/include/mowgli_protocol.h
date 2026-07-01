@@ -35,9 +35,13 @@ extern "C" {
  * v2 moves runtime drive tuning to packet 0x54 and adds ticks_per_meter to
  * the payload so old firmware safely ignores the new packet instead of
  * mis-parsing it as legacy PID-only data.
+ * v3 extends pkt_reset_cause_t with last_stage_before_reset so the host can
+ * see which main-loop section was running when the WWDG fired. The same v3
+ * diagnostic stack also uses the config request/response flags byte to gate
+ * optional firmware diagnostics/breadcrumb detail on demand.
  * ---------------------------------------------------------------------------*/
 
-#define MOWGLI_PROTOCOL_VERSION 2u
+#define MOWGLI_PROTOCOL_VERSION 3u
 
 /* ---------------------------------------------------------------------------
  * Firmware version (semantic version of THIS firmware build).
@@ -70,6 +74,9 @@ extern "C" {
 
 /** Wheel odometry packet (LlOdometry / pkt_odometry_t). */
 #define PKT_ID_ODOMETRY 0x04u
+
+/** STM32 boot reset cause packet. */
+#define PKT_ID_RESET_CAUSE 0x06u
 
 /** Blade motor status packet (pkt_blade_status_t). */
 #define PKT_ID_BLADE_STATUS 0x05u
@@ -154,11 +161,83 @@ extern "C" {
 #define EMERGENCY_BIT_LIFT (1u << 2u)
 
 /* ---------------------------------------------------------------------------
+ * Reset cause values  (pkt_reset_cause_t::reset_cause)
+ * ---------------------------------------------------------------------------*/
+
+#define RESET_CAUSE_UNKNOWN 0u
+#define RESET_CAUSE_PIN 1u
+#define RESET_CAUSE_POR_PDR 2u
+#define RESET_CAUSE_BOR 3u
+#define RESET_CAUSE_SFTRST 4u
+#define RESET_CAUSE_IWDG 5u
+#define RESET_CAUSE_WWDG 6u
+#define RESET_CAUSE_LPWR 7u
+
+/* ---------------------------------------------------------------------------
+ * Watchdog breadcrumb values  (pkt_reset_cause_t::last_stage_before_reset)
+ * ---------------------------------------------------------------------------*/
+
+#define WATCHDOG_STAGE_NONE 0u
+#define WATCHDOG_STAGE_CHATTER 1u
+#define WATCHDOG_STAGE_MOTORS 2u
+#define WATCHDOG_STAGE_PANEL 3u
+#define WATCHDOG_STAGE_ROS_SPIN 4u
+#define WATCHDOG_STAGE_BROADCAST 5u
+#define WATCHDOG_STAGE_DRIVEMOTOR_RX 6u
+#define WATCHDOG_STAGE_PERIMETER 7u
+#define WATCHDOG_STAGE_ADC 8u
+#define WATCHDOG_STAGE_CHARGER 9u
+#define WATCHDOG_STAGE_STATUS_LED 10u
+#define WATCHDOG_STAGE_ULTRASONIC_HANDLER 11u
+#define WATCHDOG_STAGE_ULTRASONIC_APP 12u
+#define WATCHDOG_STAGE_WATCHDOG_REFRESH 13u
+#define WATCHDOG_STAGE_DRIVEMOTOR_10MS 14u
+#define WATCHDOG_STAGE_BLADEMOTOR 15u
+#define WATCHDOG_STAGE_BUZZER 16u
+#define WATCHDOG_STAGE_EMERGENCY 17u
+#define WATCHDOG_STAGE_BROADCAST_ENTER 18u
+#define WATCHDOG_STAGE_BROADCAST_IMU_BUILD 19u
+#define WATCHDOG_STAGE_BROADCAST_IMU_SEND 20u
+#define WATCHDOG_STAGE_BROADCAST_RESET_SEND 21u
+#define WATCHDOG_STAGE_BROADCAST_STATUS_SEND 22u
+#define WATCHDOG_STAGE_BROADCAST_BLADE_SEND 23u
+#define WATCHDOG_STAGE_BROADCAST_EXIT 24u
+#define WATCHDOG_STAGE_CDC_TX_ENTER 25u
+#define WATCHDOG_STAGE_CDC_TX_QUEUE 26u
+#define WATCHDOG_STAGE_CDC_TX_RESUME 27u
+#define WATCHDOG_STAGE_CDC_TX_EXIT 28u
+#define WATCHDOG_STAGE_IMU_ACCEL 29u
+#define WATCHDOG_STAGE_IMU_GYRO 30u
+#define WATCHDOG_STAGE_IMU_MAG 31u
+#define WATCHDOG_STAGE_IMU_PACKET_FILL 32u
+#define WATCHDOG_STAGE_USB_IRQ_ENTER 33u
+#define WATCHDOG_STAGE_USB_IRQ_EXIT 34u
+#define WATCHDOG_STAGE_CDC_RX_ENTER 35u
+#define WATCHDOG_STAGE_CDC_RX_PROCESS 36u
+#define WATCHDOG_STAGE_CDC_RX_EXIT 37u
+#define WATCHDOG_STAGE_CDC_TX_PACKET 38u
+#define WATCHDOG_STAGE_CDC_TX_COMPLETE 39u
+#define WATCHDOG_STAGE_USB_RESET 40u
+#define WATCHDOG_STAGE_USB_SUSPEND 41u
+#define WATCHDOG_STAGE_USB_RESUME 42u
+#define WATCHDOG_STAGE_CDC_TX_PACKET_FAIL 43u
+#define WATCHDOG_STAGE_CDC_TX_BUSY_STUCK 44u
+#define WATCHDOG_STAGE_CDC_TX_QUEUE_FULL 45u
+#define WATCHDOG_STAGE_CDC_HOST_CLOSED 46u
+
+/* ---------------------------------------------------------------------------
  * USS sensor count
  * ---------------------------------------------------------------------------*/
 
 /** Number of ultrasonic range sensors reported in pkt_status_t. */
 #define MOWGLI_USS_COUNT 5u
+
+/* ---------------------------------------------------------------------------
+ * Config flags
+ * ---------------------------------------------------------------------------*/
+
+/** Optional firmware diagnostics / fine-grained breadcrumbs enabled. */
+#define CONFIG_FLAG_FIRMWARE_DEBUG (1u << 0u)
 
 /* ---------------------------------------------------------------------------
  * Packed wire-format structs
@@ -242,6 +321,23 @@ typedef struct {
   int16_t right_velocity_mm_s; /**< Signed right wheel velocity [mm/s] */
   uint16_t crc;                /**< CRC-16 CCITT over preceding bytes */
 } pkt_odometry_t;
+
+/**
+ * @brief Boot reset cause packet — Firmware -> Host (PKT_ID_RESET_CAUSE = 0x06).
+ *
+ * Sent periodically so the host can recover the current boot cause even if it
+ * connected after the STM32 had already started streaming. When the boot cause
+ * is WWDG, last_stage_before_reset carries the persisted main-loop breadcrumb
+ * saved by the watchdog early-wakeup callback just before the reset.
+ *
+ * Wire size: 5 bytes.
+ */
+typedef struct {
+  uint8_t type;                    /**< PKT_ID_RESET_CAUSE */
+  uint8_t reset_cause;             /**< RESET_CAUSE_* enum value */
+  uint8_t last_stage_before_reset; /**< WATCHDOG_STAGE_* enum value */
+  uint16_t crc;                    /**< CRC-16 CCITT over preceding bytes */
+} pkt_reset_cause_t;
 
 /**
  * @brief Heartbeat packet — Host -> Firmware (PKT_ID_HEARTBEAT = 0x42).
@@ -379,10 +475,15 @@ typedef struct {
  * the unknown packet ID and never replies — which the host reads (after a
  * timeout) as "incompatible firmware, reflash required".
  *
- * Wire size: 3 bytes (must match sizeof(LlConfigReq) in ll_datatypes.hpp).
+ * The flags byte is a runtime control surface piggybacked onto the existing
+ * handshake path; CONFIG_FLAG_FIRMWARE_DEBUG keeps optional firmware
+ * diagnostics off by default and lets the GUI enable them temporarily.
+ *
+ * Wire size: 4 bytes (must match sizeof(LlConfigReq) in ll_datatypes.hpp).
  */
 typedef struct {
   uint8_t type; /**< PKT_ID_CONFIG_REQ */
+  uint8_t flags; /**< CONFIG_FLAG_* requested by the host */
   uint16_t crc; /**< CRC-16 CCITT over preceding bytes */
 } pkt_config_req_t;
 
@@ -390,14 +491,16 @@ typedef struct {
  * @brief Config response packet — Firmware -> Host (PKT_ID_CONFIG_RSP = 0x12).
  *
  * Reports the firmware's wire-protocol version (MOWGLI_PROTOCOL_VERSION — the
- * compatibility key the host compares against its own) and the human-readable
- * firmware semantic version. Sent in reply to PKT_ID_CONFIG_REQ.
+ * compatibility key the host compares against its own), the currently-active
+ * runtime config flags, and the human-readable firmware semantic version. Sent
+ * in reply to PKT_ID_CONFIG_REQ.
  *
- * Wire size: 7 bytes (must match sizeof(LlConfigRsp) in ll_datatypes.hpp).
+ * Wire size: 8 bytes (must match sizeof(LlConfigRsp) in ll_datatypes.hpp).
  */
 typedef struct {
   uint8_t type;             /**< PKT_ID_CONFIG_RSP */
   uint8_t protocol_version; /**< MOWGLI_PROTOCOL_VERSION on this firmware */
+  uint8_t active_flags;     /**< CONFIG_FLAG_* currently active on firmware */
   uint8_t fw_version_major; /**< MOWGLI_FW_VERSION_MAJOR */
   uint8_t fw_version_minor; /**< MOWGLI_FW_VERSION_MINOR */
   uint8_t fw_version_patch; /**< MOWGLI_FW_VERSION_PATCH */
@@ -427,6 +530,9 @@ typedef struct {
  *     type(1) + dt_millis(2) + left_ticks(4) + right_ticks(4) +
  *     left_velocity_mm_s(2) + right_velocity_mm_s(2) + crc(2) = 17
  *
+ *   pkt_reset_cause_t:
+ *     type(1) + reset_cause(1) + last_stage_before_reset(1) + crc(2) = 5
+ *
  *   pkt_heartbeat_t:
  *     type(1) + emergency_requested(1) + emergency_release_requested(1) +
  *     crc(2) = 5
@@ -451,14 +557,16 @@ _Static_assert(sizeof(pkt_ui_event_t) == 5u,
                "pkt_ui_event_t layout unexpected");
 _Static_assert(sizeof(pkt_odometry_t) == 17u,
                "pkt_odometry_t layout unexpected");
+_Static_assert(sizeof(pkt_reset_cause_t) == 5u,
+               "pkt_reset_cause_t layout unexpected");
 _Static_assert(sizeof(pkt_heartbeat_t) == 5u,
                "pkt_heartbeat_t layout unexpected");
 _Static_assert(sizeof(pkt_hl_state_t) == 5u,
                "pkt_hl_state_t layout unexpected");
 _Static_assert(sizeof(pkt_cmd_vel_t) == 11u, "pkt_cmd_vel_t layout unexpected");
-_Static_assert(sizeof(pkt_config_req_t) == 3u,
+_Static_assert(sizeof(pkt_config_req_t) == 4u,
                "pkt_config_req_t layout unexpected");
-_Static_assert(sizeof(pkt_config_rsp_t) == 7u,
+_Static_assert(sizeof(pkt_config_rsp_t) == 8u,
                "pkt_config_rsp_t layout unexpected");
 _Static_assert(sizeof(pkt_set_drive_pid_t) == 27u,
                "pkt_set_drive_pid_t layout unexpected");

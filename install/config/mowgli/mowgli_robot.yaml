@@ -93,8 +93,8 @@ mowgli:
         # Datum — map origin in WGS84 lat/lon. Set per-site by the
         # installer or by the GUI's "Auto-detect from GPS" button.
         datum_alt: 0
-        datum_lat: 0
-        datum_lon: 0
+        datum_lat: 0.000000000
+        datum_lon: 0.000000000
         # NTRIP — RTK correction stream. Rover defaults use the public
         # Centipede/CRTK network and stay enabled unless explicitly disabled.
         ntrip_enabled: true

@@ -304,8 +304,8 @@ def generate_launch_description() -> LaunchDescription:
     #                      list). See issue #191.
     transit_speed = 0.3
     mowing_speed = 0.25
-    datum_lat = 0.0
-    datum_lon = 0.0
+    datum_lat = 0.000000000
+    datum_lon = 0.000000000
     # GPS antenna lever arm (base_link → antenna), shared by cog_to_imu (COG
     # de-biasing + sweep gate) and fusion_graph (GnssLeverArmFactor). 0.0
     # fallback matches fusion_graph.launch.py so the two localizer inputs
@@ -423,8 +423,8 @@ def generate_launch_description() -> LaunchDescription:
         dock_pose_yaw = float(rt_rp.get("dock_pose_yaw", 0.0))
         transit_speed = float(rt_rp.get("transit_speed", transit_speed))
         mowing_speed = float(rt_rp.get("mowing_speed", mowing_speed))
-        datum_lat = float(rt_rp.get("datum_lat", 0.0))
-        datum_lon = float(rt_rp.get("datum_lon", 0.0))
+        datum_lat = float(rt_rp.get("datum_lat", 0.000000000))
+        datum_lon = float(rt_rp.get("datum_lon", 0.000000000))
         gps_x = float(rt_rp.get("gps_x", 0.0))
         gps_y = float(rt_rp.get("gps_y", 0.0))
         xy_goal_tolerance = float(
