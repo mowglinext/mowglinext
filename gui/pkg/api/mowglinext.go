@@ -311,7 +311,7 @@ func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		case "recordingTrajectory":
 			def, err = subscribe(provider, c, conn, "recordingTrajectory", -1)
 		case "obstacles":
-			def, err = subscribe(provider, c, conn, "obstacles", -1)
+			def, err = subscribe(provider, c, conn, "obstacles", 200) // match topicSubscribeInterval (multiplex path)
 		case "cogHeading":
 			def, err = subscribe(provider, c, conn, "cogHeading", 200)
 		case "magYaw":
@@ -573,43 +573,64 @@ func subscribe(provider types.IRosProvider, c *gin.Context, conn *websocket.Conn
 func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 	group.POST("/call/:command", func(c *gin.Context) {
 		command := c.Param("command")
+		// Bound every ROS service call: foxglove's CallService waits on
+		// ctx.Done(), and ctx only cancels when the browser
+		// drops the HTTP connection — a hung ROS node (behavior_tree /
+		// hardware_bridge / fusion_graph down) would otherwise pin this
+		// handler goroutine and a pendingSvc slot indefinitely. Every other
+		// route in this file already wraps with WithTimeout; this one was the
+		// exception.
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+		defer cancel()
 		var err error
 		switch command {
 		case "high_level_control":
 			var CallReq mowgli.HighLevelControlReq
 			err = c.BindJSON(&CallReq)
 			if err != nil {
+				// Explicit JSON body: gin's BindJSON aborts with a bare 400, and
+				// the frontend's useMowerAction reads res.error from JSON.
+				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			err = provider.CallService(c.Request.Context(), "/behavior_tree_node/high_level_control", &CallReq, &mowgli.HighLevelControlRes{}, "mowgli_interfaces/srv/HighLevelControl")
+			err = provider.CallService(ctx, "/behavior_tree_node/high_level_control", &CallReq, &mowgli.HighLevelControlRes{}, "mowgli_interfaces/srv/HighLevelControl")
 		case "emergency":
 			var CallReq mowgli.EmergencyStopReq
 			err = c.BindJSON(&CallReq)
 			if err != nil {
+				// Explicit JSON body: gin's BindJSON aborts with a bare 400, and
+				// the frontend's useMowerAction reads res.error from JSON.
+				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			err = provider.CallService(c.Request.Context(), "/hardware_bridge/emergency_stop", &CallReq, &mowgli.EmergencyStopRes{}, "mowgli_interfaces/srv/EmergencyStop")
+			err = provider.CallService(ctx, "/hardware_bridge/emergency_stop", &CallReq, &mowgli.EmergencyStopRes{}, "mowgli_interfaces/srv/EmergencyStop")
 		case "mow_enabled":
 			var CallReq mowgli.MowerControlReq
 			err = c.BindJSON(&CallReq)
 			if err != nil {
+				// Explicit JSON body: gin's BindJSON aborts with a bare 400, and
+				// the frontend's useMowerAction reads res.error from JSON.
+				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			err = provider.CallService(c.Request.Context(), "/hardware_bridge/mower_control", &CallReq, &mowgli.MowerControlRes{}, "mowgli_interfaces/srv/MowerControl")
+			err = provider.CallService(ctx, "/hardware_bridge/mower_control", &CallReq, &mowgli.MowerControlRes{}, "mowgli_interfaces/srv/MowerControl")
 		case "start_in_area":
 			var CallReq mowgli.StartInAreaReq
 			err = c.BindJSON(&CallReq)
 			if err != nil {
+				// Explicit JSON body: gin's BindJSON aborts with a bare 400, and
+				// the frontend's useMowerAction reads res.error from JSON.
+				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			err = provider.CallService(c.Request.Context(), "/behavior_tree_node/start_in_area", &CallReq, &mowgli.StartInAreaRes{}, "mowgli_interfaces/srv/StartInArea")
+			err = provider.CallService(ctx, "/behavior_tree_node/start_in_area", &CallReq, &mowgli.StartInAreaRes{}, "mowgli_interfaces/srv/StartInArea")
 		case "set_datum":
 			type TriggerRes struct {
 				Success bool   `json:"success"`
 				Message string `json:"message"`
 			}
 			var res TriggerRes
-			err = provider.CallService(c.Request.Context(), "/navsat_to_absolute_pose/set_datum", &struct{}{}, &res, "std_srvs/srv/Trigger")
+			err = provider.CallService(ctx, "/navsat_to_absolute_pose/set_datum", &struct{}{}, &res, "std_srvs/srv/Trigger")
 			if err == nil && !res.Success {
 				err = errors.New(res.Message)
 			}
@@ -626,10 +647,13 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			var CallReq mowgli.PromoteObstacleReq
 			err = c.BindJSON(&CallReq)
 			if err != nil {
+				// Explicit JSON body: gin's BindJSON aborts with a bare 400, and
+				// the frontend's useMowerAction reads res.error from JSON.
+				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
 			var promoteRes mowgli.PromoteObstacleRes
-			err = provider.CallService(c.Request.Context(),
+			err = provider.CallService(ctx,
 				"/map_server_node/promote_obstacle",
 				&CallReq,
 				&promoteRes,
@@ -652,7 +676,7 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				service = "/fusion_graph_node/clear_graph"
 			}
 			var res TriggerRes
-			err = provider.CallService(c.Request.Context(), service, &struct{}{}, &res, "std_srvs/srv/Trigger")
+			err = provider.CallService(ctx, service, &struct{}{}, &res, "std_srvs/srv/Trigger")
 			if err == nil && !res.Success {
 				err = errors.New(res.Message)
 			}
@@ -670,7 +694,7 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				Message string `json:"message"`
 			}
 			var res TriggerRes
-			err = provider.CallService(c.Request.Context(), "/behavior_tree_node/clear_coverage_resume", &struct{}{}, &res, "std_srvs/srv/Trigger")
+			err = provider.CallService(ctx, "/behavior_tree_node/clear_coverage_resume", &struct{}{}, &res, "std_srvs/srv/Trigger")
 			if err == nil && !res.Success {
 				err = errors.New(res.Message)
 			}
@@ -686,7 +710,7 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				Message string `json:"message"`
 			}
 			var res TriggerRes
-			err = provider.CallService(c.Request.Context(), "/hardware_bridge/reboot_board", &struct{}{}, &res, "std_srvs/srv/Trigger")
+			err = provider.CallService(ctx, "/hardware_bridge/reboot_board", &struct{}{}, &res, "std_srvs/srv/Trigger")
 			if err == nil && !res.Success {
 				err = errors.New(res.Message)
 			}
