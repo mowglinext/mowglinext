@@ -144,6 +144,23 @@ func ClearMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 	})
 }
 
+// mapWriteBudget returns the context timeout for a clear_map → add_area×N →
+// save_areas sequence. clear_map + save_areas are fixed-cost, but each add_area
+// RASTERISES its polygon into the map_server grid, which on a large area takes
+// seconds — and on a slow SBC (RPi4) a multi-area map easily blows a fixed
+// budget, leaving the map half-written (issue #341: "can't save a big map,
+// ~30 s timeout"). Scale it: a 60 s base plus per-area headroom, capped at
+// 6 min. Map writes are rare and operator-driven, so a generous ceiling beats a
+// false timeout. Shared by ReplaceMapRoute (map editor "Save Map") and the
+// OpenMower importer so the two never drift.
+func mapWriteBudget(nAreas int) time.Duration {
+	budget := 60*time.Second + time.Duration(nAreas)*5*time.Second
+	if budget > 6*time.Minute {
+		budget = 6 * time.Minute
+	}
+	return budget
+}
+
 // replaceMapInternal is the ROS-side flow shared by the public PUT
 // handler and the OpenMower importer. It does clear_map → add_area×N →
 // save_areas; the wrapping (HTTP body decode / response codes) is the
@@ -192,14 +209,17 @@ func replaceMapInternal(ctx context.Context, provider types.IRosProvider, req *m
 // @Router /mowglinext/map [put]
 func ReplaceMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 	group.PUT("/map", func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
-		defer cancel()
-
+		// Decode BEFORE choosing the timeout so the budget can scale with the
+		// area count (each add_area rasterises — a fixed 30 s timed out saving a
+		// big edited map on RPi4, issue #341).
 		var CallReq mowgli.ReplaceMapReq
 		if err := unmarshalROSMessage[*mowgli.ReplaceMapReq](c.Request.Body, &CallReq); err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
 		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), mapWriteBudget(len(CallReq.Areas)))
+		defer cancel()
+
 		if err := replaceMapInternal(ctx, provider, &CallReq); err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
