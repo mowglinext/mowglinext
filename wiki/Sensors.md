@@ -81,11 +81,10 @@ Legacy-only status path
   - legacy `heading_deg`, `heading_accuracy_deg`, and
     `dual_antenna_heading` remain compatibility fields only during the current
     transition
-- This integration branch temporarily pins
-  `ros2/src/external/universal-gnss` to
-  `chore/gnss-geodesy-terminology-audit` at
-  `e155211e437dfbf0b32fb7ed230e99341c28c319` until those Universal GNSS
-  changes merge upstream.
+- The current Universal GNSS submodule points to `main` at `0a02e7e`, which
+  already includes the canonical GNSS/geodesy terminology, baseline ROS2
+  fields, RTCM semantic diagnostics, and generic NMEA `rtk_mode` mapping used
+  by the current MowgliNext integration.
 - `sensors/gps`, `sensors/unicore`, and `gnss_runtime_state_builder.cpp` still remain for the legacy fallback path until field validation is complete.
 - Do not commit real `GNSS_NTRIP_PASSWORD` values or copy them into docs/logs.
 - The devcontainer now mirrors the host `/dev` tree at `/host-dev` and re-links `/dev/serial/by-id` when the host provides it.
