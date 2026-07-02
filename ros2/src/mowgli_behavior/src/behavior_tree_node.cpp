@@ -40,6 +40,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/bool.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 using namespace std::chrono_literals;
 
@@ -384,6 +385,72 @@ private:
         });
 
     RCLCPP_DEBUG(get_logger(), "~/start_in_area service server created");
+
+    // ~/clear_coverage_resume: "Start fresh" — discard any persisted mowing
+    // progress so the NEXT COMMAND_START begins at the first line instead of
+    // resuming mid-path. The GUI offers this vs "Resume" when
+    // coverage_resume_available is true (a prior session was interrupted without
+    // reaching a dock/EndSession boundary). This is the operator's explicit
+    // resume-vs-restart choice (issue: "starts at 2nd/3rd line"); the automatic
+    // in-session resume after an e-stop is unaffected.
+    clear_coverage_resume_srv_ = create_service<std_srvs::srv::Trigger>(
+        "~/clear_coverage_resume",
+        [this](const std_srvs::srv::Trigger::Request::SharedPtr /*req*/,
+               std_srvs::srv::Trigger::Response::SharedPtr resp)
+        {
+          {
+            std::lock_guard<std::mutex> lock(context_->context_mutex);
+            context_->area_completed_swaths.clear();
+            context_->area_swath_count.clear();
+            context_->area_resume_pose_index.clear();
+            context_->area_path_pose_count.clear();
+            context_->completed_areas.clear();
+            context_->attempted_areas.clear();
+            context_->area_attempt_count.clear();
+            context_->area_last_coverage.clear();
+            clearCoverageResumeState(*context_);
+          }
+          publishResumeAvailable();
+          RCLCPP_INFO(get_logger(),
+                      "Cleared coverage resume state on request — next start begins fresh");
+          resp->success = true;
+          resp->message = "coverage resume state cleared";
+        });
+
+    // Latched signal the GUI reads to decide whether to offer "Resume vs Start
+    // fresh". True when a prior session left recoverable progress.
+    resume_available_pub_ = create_publisher<std_msgs::msg::Bool>(
+        "~/coverage_resume_available", rclcpp::QoS(1).transient_local());
+    publishResumeAvailable();
+    resume_available_timer_ = create_wall_timer(1s, [this]() { publishResumeAvailable(); });
+
+    RCLCPP_DEBUG(get_logger(), "~/clear_coverage_resume service + resume-available signal created");
+  }
+
+  // Publish whether a coverage session can be resumed (a persisted resume cursor
+  // or completed-area set survives from an interrupted session). Republished on
+  // change; latched so a late GUI subscriber always gets the current value.
+  void publishResumeAvailable()
+  {
+    if (!resume_available_pub_)
+    {
+      return;
+    }
+    bool available;
+    {
+      std::lock_guard<std::mutex> lock(context_->context_mutex);
+      available =
+          !context_->area_resume_pose_index.empty() || !context_->completed_areas.empty();
+    }
+    if (available == last_resume_available_ && resume_available_published_)
+    {
+      return;
+    }
+    std_msgs::msg::Bool msg;
+    msg.data = available;
+    resume_available_pub_->publish(msg);
+    last_resume_available_ = available;
+    resume_available_published_ = true;
   }
 
   // Non-blocking check for Nav2 action servers.  The BT tick loop starts
@@ -654,6 +721,11 @@ private:
   // Service server
   rclcpp::Service<mowgli_interfaces::srv::HighLevelControl>::SharedPtr high_level_control_srv_;
   rclcpp::Service<mowgli_interfaces::srv::StartInArea>::SharedPtr start_in_area_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_coverage_resume_srv_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr resume_available_pub_;
+  rclcpp::TimerBase::SharedPtr resume_available_timer_;
+  bool last_resume_available_ = false;
+  bool resume_available_published_ = false;
 
   // BehaviorTree.CPP
   BT::BehaviorTreeFactory factory_;

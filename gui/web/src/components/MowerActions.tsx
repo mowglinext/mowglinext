@@ -1,11 +1,12 @@
 import {useApi} from "../hooks/useApi.ts";
 import {App, Card, Col, Divider, Row} from "antd";
-import {PlayCircleOutlined, HomeOutlined, WarningOutlined} from '@ant-design/icons';
+import {PlayCircleOutlined, HomeOutlined, WarningOutlined, RedoOutlined} from '@ant-design/icons';
 import AsyncButton from "./AsyncButton.tsx";
 import React from "react";
 import styled from "styled-components";
 import AsyncDropDownButton from "./AsyncDropDownButton.tsx";
 import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
+import {useCoverageResumeAvailable} from "../hooks/useCoverageResumeAvailable.ts";
 import {HighLevelStatusConstants} from "../types/ros.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useTranslation} from "react-i18next";
@@ -35,8 +36,24 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
     const {t} = useTranslation();
     const {highLevelStatus} = useHighLevelStatus();
     const mowerAction = useMowerAction()
+    const guiApi = useApi();
+    const resumeAvailable = useCoverageResumeAvailable();
     const {modal} = App.useApp();
     const {colors} = useThemeMode();
+
+    // "Start fresh": discard persisted mowing progress, then start — so the mow
+    // begins at the first line instead of resuming a prior interrupted session
+    // (the "starts at 2nd/3rd line" report). Plain Start still resumes.
+    const startFresh = async () => {
+        const clr = await guiApi.mowglinext.callCreate("coverage_clear_resume", {});
+        if (clr.error) {
+            throw new Error(clr.error.error);
+        }
+        const res = await guiApi.mowglinext.callCreate("high_level_control", {Command: 1});
+        if (res.error) {
+            throw new Error(res.error.error);
+        }
+    };
 
     // Home from IDLE means the robot is somewhere on the lawn (it's been
     // undocked) and the operator wants it to drive itself back to the dock.
@@ -182,7 +199,17 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
                  (highLevelStatus.state_name === "IDLE" || highLevelStatus.state_name === "IDLE_DOCKED") ? (
                     <AsyncButton icon={<PlayCircleOutlined/>} type="primary" key="btnHLC1"
                                  onAsyncClick={mowerAction("high_level_control", {Command: 1})}
-                    >{t('mowerActions.start')}</AsyncButton>
+                    >{resumeAvailable ? t('mowerActions.resume') : t('mowerActions.start')}</AsyncButton>
+                ) : null}
+                {/* When a prior mow was interrupted, "Start" resumes mid-path; this
+                    second button discards that progress and mows from the first
+                    line (issue: "starts at 2nd/3rd line"). */}
+                {highLevelStatus.state !== HighLevelStatusConstants.HIGH_LEVEL_STATE_AUTONOMOUS &&
+                 (highLevelStatus.state_name === "IDLE" || highLevelStatus.state_name === "IDLE_DOCKED") &&
+                 resumeAvailable ? (
+                    <AsyncButton icon={<RedoOutlined/>} key="btnHLCFresh"
+                                 onAsyncClick={startFresh}
+                    >{t('mowerActions.startFresh')}</AsyncButton>
                 ) : null}
                 {/* Home button is hidden only when the robot is already
                     docked (IDLE_DOCKED). From IDLE we show it so the operator
