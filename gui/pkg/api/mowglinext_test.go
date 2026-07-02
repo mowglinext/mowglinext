@@ -2,8 +2,9 @@ package api
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
+
+	"github.com/vmihailenco/msgpack/v5"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -191,14 +192,18 @@ func readMultiplexFrame(t *testing.T, conn *websocket.Conn) (string, []byte) {
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	_, raw, err := conn.ReadMessage()
 	require.NoError(t, err)
+	// Since the #337 binary transport, frames are msgpack-encoded
+	// {topic, data:<decoded object>} sent as BINARY websocket messages
+	// (was JSON {topic, data:<base64>}). Re-encode the decoded object as
+	// JSON so the assertions can keep comparing JSON payloads.
 	var frame struct {
-		Topic string `json:"topic"`
-		Data  string `json:"data"`
+		Topic string      `msgpack:"topic"`
+		Data  interface{} `msgpack:"data"`
 	}
-	require.NoError(t, json.Unmarshal(raw, &frame))
-	decoded, err := base64.StdEncoding.DecodeString(frame.Data)
+	require.NoError(t, msgpack.Unmarshal(raw, &frame))
+	payload, err := json.Marshal(frame.Data)
 	require.NoError(t, err)
-	return frame.Topic, decoded
+	return frame.Topic, payload
 }
 
 func TestMultiplexRoute_FansOutOnSubscribe(t *testing.T) {
