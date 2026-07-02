@@ -631,7 +631,8 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     int num_headland_passes_override,
                                     double chassis_safety_inset,
                                     double mow_angle_rad,
-                                    double min_swath_length)
+                                    double min_swath_length,
+                                    int ring_direction)
 {
   BoustrophedonPlan plan;
   // Polygon area the planned-coverage fraction is taken over (the operator's
@@ -733,6 +734,24 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       {
         plan.diagnostics.drops.push_back(fmtDrop("ring perim=", perim, "<", kMinRingPerimeter));
         continue;
+      }
+      // Perimeter/headland travel winding (#335): flip the loop so a side-mounted
+      // blade stays on the cut side. Shoelace signed area > 0 = CCW, < 0 = CW.
+      // ring_direction: 1 = clockwise, 2 = counter-clockwise, 0 = leave as F2C
+      // emitted it.
+      if (ring_direction != 0)
+      {
+        double area2 = 0.0;
+        for (std::size_t i = 0; i + 1 < loop.size(); ++i)
+        {
+          area2 += loop[i].first * loop[i + 1].second - loop[i + 1].first * loop[i].second;
+        }
+        const bool is_ccw = area2 > 0.0;
+        const bool want_ccw = (ring_direction == 2);
+        if (is_ccw != want_ccw)
+        {
+          std::reverse(loop.begin(), loop.end());
+        }
       }
       ring_strip_area += perim * op_width;
       plan.rings.push_back(std::move(loop));

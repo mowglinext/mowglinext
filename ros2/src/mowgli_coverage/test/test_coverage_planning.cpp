@@ -400,6 +400,32 @@ TEST(CoverageContinuousPath, ContinuousPathAvoidsHole)
                          << " sub-path poses fall inside the obstacle hole";
 }
 
+// #335: ring_direction controls the perimeter/headland travel winding (blade
+// side). 1 = clockwise (negative shoelace area), 2 = counter-clockwise
+// (positive). The two produce the same ring geometry driven the opposite way.
+TEST(CoveragePlanning, RingDirectionControlsWinding)
+{
+  auto signedArea = [](const std::vector<std::pair<double, double>>& loop)
+  {
+    double a = 0.0;
+    for (std::size_t i = 0; i + 1 < loop.size(); ++i)
+    {
+      a += loop[i].first * loop[i + 1].second - loop[i + 1].first * loop[i].second;
+    }
+    return a;
+  };
+  const auto cell = makeSquare(4.0);
+  const auto cw = planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15, /*ring_direction=*/1);
+  const auto ccw = planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15, /*ring_direction=*/2);
+  ASSERT_FALSE(cw.rings.empty());
+  ASSERT_FALSE(ccw.rings.empty());
+  EXPECT_LT(signedArea(cw.rings.front()), 0.0) << "CW ring must have negative signed area";
+  EXPECT_GT(signedArea(ccw.rings.front()), 0.0) << "CCW ring must have positive signed area";
+  // Default (0) leaves F2C's natural winding untouched.
+  const auto def = planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15, /*ring_direction=*/0);
+  ASSERT_FALSE(def.rings.empty());
+}
+
 // Concave L-shape: covered without decomposition — swaths exist in BOTH lobes
 // and none crosses the notch.
 TEST(CoveragePlanning, ConcaveFieldIsCovered)

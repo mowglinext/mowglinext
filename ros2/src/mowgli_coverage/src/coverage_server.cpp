@@ -39,6 +39,9 @@ nav2_util::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::S
   // plans with `ros2 param set` (no node restart).
   declare_parameter<double>("chassis_safety_inset", 0.0);
   declare_parameter<double>("min_swath_length", 0.15);
+  // Perimeter/headland travel winding (#335): 0 = planner default (F2C natural),
+  // 1 = clockwise, 2 = counter-clockwise. Read live in planCoverage.
+  declare_parameter<int>("ring_direction", 0);
   // Hard floor on every turn-around / fillet arc in the continuous path: the
   // robot's minimum MPPI-trackable turning radius (mowgli_robot.yaml). Read live
   // in planCoverage so it can be field-tuned between plans.
@@ -351,6 +354,9 @@ void CoverageServer::planCoverage()
     // plans (field iteration without a node restart).
     const double configured_inset = get_parameter("chassis_safety_inset").as_double();
     const double min_swath_length = get_parameter("min_swath_length").as_double();
+    // Perimeter/headland travel winding (#335): 0 = planner default, 1 = CW,
+    // 2 = CCW. Read live so it is field-tunable per plan.
+    const int ring_direction = static_cast<int>(get_parameter("ring_direction").as_int());
     const double mow_angle_rad =
         (goal->mow_angle_deg < 0.0) ? -1.0 : goal->mow_angle_deg * M_PI / 180.0;
 
@@ -383,7 +389,8 @@ void CoverageServer::planCoverage()
                                                num_headland_passes_,
                                                effective_inset,
                                                mow_angle_rad,
-                                               min_swath_length);
+                                               min_swath_length,
+                                               ring_direction);
 
     // Instrumentation (no behaviour change): surface every piece the planner
     // dropped (slivers, tiny rings, micro-cells) and the planned-coverage

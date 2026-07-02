@@ -106,6 +106,11 @@ struct BoustrophedonPlan
 //   chassis_safety_inset polygon pull-back applied before everything (m)
 //   mow_angle_rad        fixed swath heading; < 0 → auto (minimise swath count)
 //   min_swath_length     drop straight swaths shorter than this (m)
+//   ring_direction       perimeter/headland travel winding: 0 = planner default
+//                        (F2C natural), 1 = clockwise, 2 = counter-clockwise.
+//                        Flips which side of the robot faces the boundary — set
+//                        it to keep a side-mounted blade on the cut side
+//                        (issue #335). Swaths/connectors follow the rings.
 //
 // Geometry: safe = inset(field, chassis_safety_inset); rings are n_rings
 // concentric loops spaced op_width inside safe; mainland = inset(safe,
@@ -126,7 +131,8 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     int num_headland_passes_override,
                                     double chassis_safety_inset,
                                     double mow_angle_rad,
-                                    double min_swath_length);
+                                    double min_swath_length,
+                                    int ring_direction = 0);
 
 // Flatten a BoustrophedonPlan into ONE continuous, cusp-free, in-bounds
 // polyline so an MPPI-class sampling controller can track it without the
