@@ -17,6 +17,7 @@ import {
     readGnssBooleanState,
     readGnssNumber,
 } from './gpsStatus.ts';
+import {gnssStatusSamples} from '../test/mocks.tsx';
 
 describe('deriveGpsStatus', () => {
     it('maps RTK fixed status to the highest quality label', () => {
@@ -227,6 +228,36 @@ describe('deriveGpsStatus', () => {
         expect(gnssCorrectionStreamStatusLabel({
             correction_stream_status: GnssStatusConstants.CORRECTION_STREAM_STATUS_WAITING,
         })).toBe(en.gpsStatus.correctionStreamWaiting);
+    });
+
+    it('treats the Generic NMEA sample as RTK float from public rtk_mode without renaming fields', () => {
+        expect(deriveGpsStatus(gnssStatusSamples.nmea_gga_fix_quality_float)).toEqual({
+            fixType: 'RTK_FLOAT',
+            label: en.gpsStatus.rtkFloat,
+            percent: 50,
+        });
+    });
+
+    it.each([
+        ['ntrip_startup_waiting', en.gpsStatus.correctionStreamWaiting],
+        ['correction_stream_active', en.gpsStatus.correctionStreamActive],
+        ['correction_stream_unavailable', en.gpsStatus.correctionStreamUnavailable],
+        ['correction_stream_error', en.gpsStatus.correctionStreamError],
+    ] as const)('keeps correction stream sample %s aligned with the public enum label', (sampleName, expectedLabel) => {
+        expect(gnssCorrectionStreamStatusLabel(gnssStatusSamples[sampleName])).toBe(expectedLabel);
+    });
+
+    it('keeps malformed MSM sample values explicit instead of collapsing them to unsupported', () => {
+        const sample = gnssStatusSamples.msm_malformed_not_decoded;
+
+        expect(hasGnssCapability(sample, GnssStatusConstants.CAP_MSM_SUMMARY)).toBe(true);
+        expect(hasGnssValue(sample, GnssStatusConstants.CAP_MSM_SUMMARY)).toBe(true);
+        expect(sample.msm_summary_seen).toBe(true);
+        expect(sample.msm_summary_decoded).toBe(false);
+        expect(sample.msm_summary_valid).toBe(false);
+        expect(sample.msm_summary_satellite_count).toBe(0);
+        expect(sample.msm_summary_signal_count).toBe(0);
+        expect(sample.msm_summary_cell_count).toBe(0);
     });
 
     it('merges diagnostics-derived correction stream fields into a typed GNSS sample when the bridge is older', () => {
