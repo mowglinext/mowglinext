@@ -30,6 +30,13 @@
 namespace mowgli_map
 {
 
+// OccupancyGrid value for the outside boundary-slack band. KeepoutFilter maps
+// mask values to cost as round(v × 254 / 100): 90 → ~229 — steep enough that
+// Smac never routes through the band when ANY legal route (navigation area)
+// exists, non-lethal so RTK drift a few cm outside the boundary does not read
+// as "in collision" and a last-resort crossing remains plannable.
+constexpr int8_t kBoundarySlackCost = 90;
+
 void MapServerNode::publish_keepout_mask()
 {
   if (areas_.empty())
@@ -143,9 +150,24 @@ void MapServerNode::publish_keepout_mask()
       bool inner_buffer = inside_any && boundary_inner_margin_m_ > 0.0 &&
                           inside_min_edge_dist < boundary_inner_margin_m_;
 
-      if ((inside_any || within_outside_margin) && !inner_buffer)
+      if (inside_any && !inner_buffer)
       {
         mask.data[flat_idx] = 0;
+      }
+      else if (within_outside_margin && !inner_buffer)
+      {
+        // The outside slack band exists so RTK drift at the boundary does not
+        // self-reject (the robot sitting a few cm outside must not be "in
+        // collision"). But leaving it FREE (0) created PHANTOM CORRIDORS: two
+        // areas whose edges run within 2×margin of each other exposed a free
+        // strip between them, and the planner shortcut THROUGH it instead of
+        // routing via the operator's navigation areas (field report 2026-07:
+        // "il passe direct d'une zone à une autre… 50 cm de chaque côté
+        // d'autorisé"). Make the band HIGH-COST instead: non-lethal (drift
+        // tolerated, a last-resort crossing still plans if NO legal route
+        // exists) but expensive enough that Smac always prefers any
+        // navigation-area route.
+        mask.data[flat_idx] = kBoundarySlackCost;
       }
     }
   }
