@@ -465,6 +465,25 @@ bool allInside(const std::vector<std::pair<double, double>>& pts,
   return true;
 }
 
+// True iff no sampled point of `pts` falls inside any hole ring (issue #333: a
+// turn-around connector or corner fillet must not cut through an obstacle).
+// Empty `holes` → trivially clear.
+bool clearOfHoles(const std::vector<std::pair<double, double>>& pts,
+                  const std::vector<std::vector<std::pair<double, double>>>& holes)
+{
+  for (const auto& hole : holes)
+  {
+    for (const auto& p : pts)
+    {
+      if (pointInRing(p.first, p.second, hole))
+      {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 // Build a forward connector from `start` (oriented at the previous segment's
 // exit heading) to `goal` (oriented at the next segment's entry heading) that
 // stays inside `boundary`. Tries the nominal `turn_radius`, then shrinks toward
@@ -475,6 +494,7 @@ std::vector<std::pair<double, double>> buildConnector(
     const Pose& start,
     const Pose& goal,
     const std::vector<std::pair<double, double>>& boundary,
+    const std::vector<std::vector<std::pair<double, double>>>& holes,
     double turn_radius,
     double min_radius,
     double step,
@@ -486,12 +506,15 @@ std::vector<std::pair<double, double>> buildConnector(
   {
     double len = 0.0;
     auto pts = sampleDubins(start, goal, r, step, len);
-    if (!pts.empty() && allInside(pts, boundary))
+    // Accept the largest radius whose arc is both inside the boundary AND clear
+    // of every hole → smoothest turn-around that stays out of obstacles (#333).
+    if (!pts.empty() && allInside(pts, boundary) && clearOfHoles(pts, holes))
     {
-      return pts;  // largest in-bounds radius first → smoothest that fits
+      return pts;
     }
   }
-  // Last resort: straight blind connector (may be out-of-bounds → real gap).
+  // Last resort: straight blind connector (may leave the boundary OR cross a
+  // hole → a real, reportable gap the server surfaces).
   used_fallback = true;
   std::vector<std::pair<double, double>> straight;
   densifySegmentStep(start.x, start.y, goal.x, goal.y, step, straight);
@@ -512,6 +535,7 @@ std::vector<std::pair<double, double>> buildConnector(
 std::vector<std::pair<double, double>> roundSharpCorners(
     const std::vector<std::pair<double, double>>& pts,
     const std::vector<std::pair<double, double>>& boundary,
+    const std::vector<std::vector<std::pair<double, double>>>& holes,
     double max_turn_rad,
     double fillet_r,
     double min_radius,
@@ -571,9 +595,9 @@ std::vector<std::pair<double, double>> roundSharpCorners(
       const Pose t1{B.first + outx * d, B.second + outy * d, out_dir};  // arc exit
       double arc_len = 0.0;
       auto arc = sampleDubins(t0, t1, r, step, arc_len);  // start-incl, end-excl
-      if (arc.empty() || !allInside(arc, boundary))
+      if (arc.empty() || !allInside(arc, boundary) || !clearOfHoles(arc, holes))
       {
-        continue;
+        continue;  // off-boundary or through a hole (#333) → try a smaller radius
       }
       // Sanity: a fillet should be short (a single tangent arc, not a loop).
       if (arc_len > 3.0 * r + 0.5)
@@ -650,6 +674,35 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
     {
       const auto p = safe_ring.getGeometry(i);
       plan.safe_boundary.emplace_back(p.getX(), p.getY());
+    }
+  }
+
+  // Expose the interior hole rings the continuous-path connectors/fillets must
+  // stay OUT of (issue #333). Use the INSET field's holes when an inset was
+  // applied (they are grown outward by the inset, so the blade clears an
+  // obstacle by the same margin it clears the outer boundary); otherwise the raw
+  // operator holes. Collect across every cell (the inset may have split the
+  // field) so a connector near any hole is caught.
+  {
+    const f2c::types::Cells& hole_src = (chassis_safety_inset > 1e-3) ? safe_cells : cells;
+    for (std::size_t i = 0; i < hole_src.size(); ++i)
+    {
+      const auto& cell = hole_src.getGeometry(i);
+      for (std::size_t r = 1; r < cell.size(); ++r)  // ring 0 = exterior, 1.. = holes
+      {
+        const auto ring = cell.getGeometry(r);
+        std::vector<std::pair<double, double>> hole;
+        hole.reserve(ring.size());
+        for (std::size_t j = 0; j < ring.size(); ++j)
+        {
+          const auto p = ring.getGeometry(j);
+          hole.emplace_back(p.getX(), p.getY());
+        }
+        if (hole.size() >= 3)
+        {
+          plan.safe_holes.push_back(std::move(hole));
+        }
+      }
     }
   }
 
@@ -785,7 +838,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
 
 // ── Continuous cusp-free path (forward turn-around connectors) ───────────────
 
-std::vector<std::pair<double, double>> buildContinuousPath(
+std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     const BoustrophedonPlan& plan,
     const std::vector<std::pair<double, double>>& boundary,
     double turn_radius,
@@ -814,10 +867,10 @@ std::vector<std::pair<double, double>> buildContinuousPath(
     }
   }
 
-  std::vector<std::pair<double, double>> path;
+  std::vector<std::vector<std::pair<double, double>>> subpaths;
   if (segs.empty())
   {
-    return path;
+    return subpaths;
   }
 
   // Heading at a polyline's start (p[0]→p[1]) and end (p[n-2]→p[n-1]).
@@ -835,12 +888,13 @@ std::vector<std::pair<double, double>> buildContinuousPath(
   // radius (mowgli_robot.yaml min_turning_radius). Shrinking a turn-around below
   // this to "fit in-bounds" produced loops MPPI could not track (wz≈vx/r), so the
   // robot looped/hesitated; when no arc >= this fits, buildConnector falls back
-  // to a straight join (reportable gap) instead of an untrackable loop.
+  // to a straight join instead of an untrackable loop.
   const double min_radius = std::max(0.02, min_turn_radius);
 
+  std::vector<std::pair<double, double>> path;  // the sub-path being accumulated
   for (std::size_t i = 0; i < segs.size(); ++i)
   {
-    if (i > 0)
+    if (i > 0 && !path.empty())
     {
       // Forward turn-around connector from the previous segment's exit pose to
       // this segment's entry pose. Both are oriented, so the Dubins path leaves
@@ -848,16 +902,33 @@ std::vector<std::pair<double, double>> buildContinuousPath(
       const Pose start{path.back().first, path.back().second, exitHeading(segs[i - 1])};
       const Pose goal{segs[i].front().first, segs[i].front().second, entryHeading(segs[i])};
       bool fallback = false;
-      auto conn = buildConnector(start, goal, boundary, turn_radius, min_radius, step, fallback);
-      // conn is start-inclusive (== path.back()) / goal-exclusive; drop the
-      // duplicate start so the polyline stays simple.
-      if (!conn.empty())
+      auto conn = buildConnector(
+          start, goal, boundary, plan.safe_holes, turn_radius, min_radius, step, fallback);
+      // A forward Dubins connector is a LOCAL arc — it cannot route around a
+      // large interior hole. If no in-bounds, hole-free arc fit, buildConnector
+      // returned a straight fallback; only keep it when that straight is itself
+      // safe (a short join that happens to clear everything). Otherwise BREAK the
+      // path here: finalize this sub-path and start a fresh one at segs[i], so
+      // FollowStrip bridges the gap with a blade-off, costmap-aware Nav2 transit
+      // that routes around the obstacle (issue #333).
+      const bool conn_safe =
+          !conn.empty() &&
+          (!fallback || (allInside(conn, boundary) && clearOfHoles(conn, plan.safe_holes)));
+      if (conn_safe)
       {
+        // conn is start-inclusive (== path.back()) / goal-exclusive; drop the
+        // duplicate start so the polyline stays simple.
         path.insert(path.end(), conn.begin() + 1, conn.end());
       }
+      else
+      {
+        subpaths.push_back(std::move(path));
+        path.clear();
+      }
     }
-    // Append this segment. path.back() (== goal of the connector) coincides
-    // with segs[i].front(), so skip the first point to avoid a zero-length step.
+    // Append this segment. When continuing a sub-path, path.back() (== goal of
+    // the connector) coincides with segs[i].front(), so skip the first point to
+    // avoid a zero-length step; at a fresh sub-path start, take the whole segment.
     const auto& s = segs[i];
     if (path.empty())
     {
@@ -867,6 +938,10 @@ std::vector<std::pair<double, double>> buildContinuousPath(
     {
       path.insert(path.end(), s.begin() + 1, s.end());
     }
+  }
+  if (!path.empty())
+  {
+    subpaths.push_back(std::move(path));
   }
 
   // Round ONLY the true cusps — corners that exceed the 90° inversion limit
@@ -879,11 +954,40 @@ std::vector<std::pair<double, double>> buildContinuousPath(
   // findFirstPathInversion would flag (>90°) is still rounded. The fillet radius
   // is floored at min_radius (= min_turn_radius): a corner that can only be
   // rounded tighter than that is left sharp (pivoted through) rather than turned
-  // into a sub-trackable loop.
+  // into a sub-trackable loop. Applied PER sub-path (each is independently
+  // continuous; a fillet must never span a break).
   constexpr double kCornerThreshold = 88.0 * M_PI / 180.0;
   const double fillet_r = std::max(turn_radius * 0.5, min_radius);
-  path = roundSharpCorners(path, boundary, kCornerThreshold, fillet_r, min_radius, step);
+  std::vector<std::vector<std::pair<double, double>>> out;
+  out.reserve(subpaths.size());
+  for (auto& sp : subpaths)
+  {
+    if (sp.size() < 2)
+    {
+      continue;
+    }
+    out.push_back(roundSharpCorners(
+        sp, boundary, plan.safe_holes, kCornerThreshold, fillet_r, min_radius, step));
+  }
+  return out;
+}
 
+std::vector<std::pair<double, double>> buildContinuousPath(
+    const BoustrophedonPlan& plan,
+    const std::vector<std::pair<double, double>>& boundary,
+    double turn_radius,
+    double min_turn_radius,
+    double step)
+{
+  // Concatenate the hole-free sub-paths into one polyline (GUI full_path + the
+  // no-hole common case, where there is exactly one sub-path). The driver uses
+  // buildContinuousSubPaths so any inter-sub-path gap becomes a Nav2 transit.
+  const auto subs = buildContinuousSubPaths(plan, boundary, turn_radius, min_turn_radius, step);
+  std::vector<std::pair<double, double>> path;
+  for (const auto& sp : subs)
+  {
+    path.insert(path.end(), sp.begin(), sp.end());
+  }
   return path;
 }
 

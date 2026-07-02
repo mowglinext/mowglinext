@@ -115,17 +115,27 @@ private:
   NavGoalHandle::SharedPtr nav_handle_;
   bool transit_active_ = false;
 
-  // The explicit segments being executed (copied from
-  // ctx->current_strip_segments in onStart).
+  // The drivable units being executed: the hole-free continuous SUB-PATHS
+  // (ctx->current_strip_subpaths, issue #333), or a single continuous path when
+  // the field has no holes. FollowStrip drives one FollowCoveragePath goal per
+  // unit and bridges gaps between units with a blade-off Nav2 transit.
   std::vector<nav_msgs::msg::Path> swaths_;
   std::size_t swath_idx_ = 0;
   std::size_t swaths_skipped_ = 0;
   bool swath_goal_sent_ = false;
-  // Resume-cursor bookkeeping for the CONTINUOUS full_path (see
-  // BTContext::area_resume_pose_index). resume_start_idx_ = absolute index into
-  // the original full_path where this run's (possibly trimmed) path begins;
-  // path_progress_idx_ = furthest pose reached within the path currently being
-  // driven; total_path_poses_ = original full_path length (percent denominator).
+  // Absolute start index of each swaths_ unit within the CONCATENATION of all
+  // units (== full_path). swath_base_[k] = sum of the ORIGINAL (untrimmed) pose
+  // counts of units 0..k-1, so the resume cursor persisted in
+  // BTContext::area_resume_pose_index is an index into the concatenation and
+  // stays comparable to area_path_pose_count. For a single unit this is {0} and
+  // the bookkeeping reduces to the original single-path behaviour.
+  std::vector<std::size_t> swath_base_;
+  // Resume-cursor bookkeeping. resume_start_idx_ = trim offset WITHIN the
+  // currently-driven unit (swaths_[swath_idx_]) where this run begins (non-zero
+  // only for the one unit a mid-unit resume trimmed); path_progress_idx_ =
+  // furthest pose reached within the currently-driven (trimmed) unit;
+  // total_path_poses_ = concatenation length (percent denominator). Both reset
+  // to 0 on advance() to the next unit.
   std::size_t resume_start_idx_ = 0;
   std::size_t path_progress_idx_ = 0;
   std::size_t total_path_poses_ = 0;

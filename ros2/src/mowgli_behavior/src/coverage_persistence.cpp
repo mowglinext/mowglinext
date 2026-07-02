@@ -65,9 +65,9 @@ bool saveCoverageResumeState(const BTContext& ctx)
     if (auto it = ctx.area_path_pose_count.find(idx); it != ctx.area_path_pose_count.end())
       pose_count = it->second;
     // -1 sentinel = no live resume cursor (area finished or never interrupted).
-    long long resume = -1;
+    int64_t resume = -1;
     if (auto it = ctx.area_resume_pose_index.find(idx); it != ctx.area_resume_pose_index.end())
-      resume = static_cast<long long>(it->second);
+      resume = static_cast<int64_t>(it->second);
 
     out << "area " << idx << ' ' << pose_count << ' ' << resume << " completed";
     if (auto it = ctx.area_completed_swaths.find(idx); it != ctx.area_completed_swaths.end())
@@ -138,7 +138,7 @@ bool loadCoverageResumeState(BTContext& ctx)
     {
       uint32_t idx;
       std::size_t pose_count;
-      long long resume;
+      int64_t resume;
       std::string completed_tag;
       if (!(ls >> idx >> pose_count >> resume >> completed_tag))
       {

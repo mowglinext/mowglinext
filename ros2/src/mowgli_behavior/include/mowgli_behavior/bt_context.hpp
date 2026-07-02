@@ -347,6 +347,17 @@ struct BTContext
   /// turn arcs (field 2026-06-12: one 3982-pose "swath").
   std::vector<nav_msgs::msg::Path> current_strip_segments;
 
+  /// Hole-free continuous SUB-PATHS from the coverage server (issue #333), in
+  /// drive order. A forward turn-around connector can't route around a large
+  /// interior obstacle, so the continuous path is split where it would cross a
+  /// hole; FollowStrip drives each sub-path with MPPI and bridges the gap
+  /// between consecutive sub-paths with a blade-off, costmap-aware Nav2 transit
+  /// (its existing >kSegmentTransitGap behaviour) that routes around the
+  /// obstacle. Exactly ONE entry for a hole-free field (== current_strip_path).
+  /// When present, FollowStrip drives THESE (one FollowCoveragePath goal per
+  /// sub-path) instead of the single current_strip_path.
+  std::vector<nav_msgs::msg::Path> current_strip_subpaths;
+
   /// Transit goal to reach the coverage path start (populated by
   /// PlanCoverageArea, consumed by TransitToStrip).
   geometry_msgs::msg::PoseStamped current_transit_goal;

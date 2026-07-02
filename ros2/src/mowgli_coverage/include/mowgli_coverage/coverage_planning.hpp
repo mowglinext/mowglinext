@@ -82,6 +82,17 @@ struct BoustrophedonPlan
   // when no inset was applied (chassis_safety_inset <= 0) — the caller then
   // falls back to the raw boundary. (x, y) pairs, first == last.
   std::vector<std::pair<double, double>> safe_boundary;
+  // Inset ("grown") interior hole rings the continuous-path connectors and
+  // corner fillets must stay OUT of, mirroring how safe_boundary is the ring
+  // they must stay INSIDE. When the chassis-safety inset is applied these are
+  // the holes of the inset field (grown outward by the inset, so the blade
+  // clears an obstacle by the same margin it clears the outer boundary); with
+  // no inset they are the raw operator holes. Rings/swaths are already clipped
+  // around holes by F2C, but the turn-around connectors that JOIN them were
+  // only validated against the outer boundary — a loop or straight fallback
+  // could cut through a hole (issue #333). Each entry is one closed hole ring
+  // (x, y). Empty when the field has no holes.
+  std::vector<std::vector<std::pair<double, double>>> safe_holes;
   // Drop reasons + planned-coverage fraction (instrumentation only — see above).
   PlanDiagnostics diagnostics;
 };
@@ -155,7 +166,29 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
 //
 // Returns one densified polyline starting at the first ring's first point. Pure
 // function (no ROS deps) — unit-testable. Empty when the plan has no segments.
+//
+// This is the concatenation of buildContinuousSubPaths() (below) — it stays a
+// single polyline for the GUI full_path and the no-hole common case. When the
+// field has holes it may contain a straight join across a hole; the DRIVER uses
+// buildContinuousSubPaths so those joins become blade-off Nav2 transits instead.
 std::vector<std::pair<double, double>> buildContinuousPath(
+    const BoustrophedonPlan& plan,
+    const std::vector<std::pair<double, double>>& boundary,
+    double turn_radius,
+    double min_turn_radius,
+    double step);
+
+// Like buildContinuousPath, but SPLIT into one or more hole-free continuous
+// sub-paths (issue #333). A forward turn-around connector is a local Dubins arc;
+// it cannot route around a large interior obstacle, so where the only join
+// between two segments would cross a hole (or leave the boundary), the path is
+// BROKEN there instead of drawn straight through the obstacle. Each returned
+// sub-path is internally continuous and cusp-free (an MPPI-trackable run); the
+// caller (FollowStrip) drives them in order, bridging the gap between
+// consecutive sub-paths with a blade-off, costmap-aware Nav2 transit that routes
+// around the hole. With a hole-free field this returns exactly one sub-path
+// identical to buildContinuousPath. Sub-paths with < 2 points are dropped.
+std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     const BoustrophedonPlan& plan,
     const std::vector<std::pair<double, double>>& boundary,
     double turn_radius,

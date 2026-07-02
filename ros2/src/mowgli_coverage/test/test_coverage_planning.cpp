@@ -22,6 +22,7 @@ namespace
 
 using mowgli_coverage::BoustrophedonPlan;
 using mowgli_coverage::buildContinuousPath;
+using mowgli_coverage::buildContinuousSubPaths;
 using mowgli_coverage::dedupClosedRing;
 using mowgli_coverage::distanceToRing;
 using mowgli_coverage::planBoustrophedon;
@@ -330,6 +331,73 @@ TEST(CoveragePlanning, HoleIsNotCrossed)
           << "swath crosses the hole at (" << x << ", " << y << ")";
     }
   }
+}
+
+// #333: the CONTINUOUS path's turn-around connectors AND corner fillets — not
+// just the swaths — must stay out of an obstacle hole. Before the fix the
+// connectors were validated only against the outer boundary, so a turn-around
+// loop or a straight fallback join between two hole-split segments could cut
+// straight through the obstacle. Flatten the plan to the one continuous path and
+// assert no pose lands inside the hole. Also confirms the inset hole ring is
+// exposed on the plan (the data the avoidance uses).
+TEST(CoverageContinuousPath, ContinuousPathAvoidsHole)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeadland = 0.18;
+  constexpr double kInset = 0.15;
+  constexpr double kMinSwath = 0.15;
+  constexpr double kTurnRadius = 0.30;
+  constexpr double kMinTurnRadius = 0.15;
+  constexpr double kStep = 0.03;
+
+  // 6 m square with a 1.5 m central hole — big enough that hole-free connectors
+  // exist on the mowed side, so the fix can route around rather than fall back.
+  f2c::types::Cell cell = makeSquare(6.0);
+  f2c::types::LinearRing hole;
+  hole.addPoint(f2c::types::Point(2.25, 2.25));
+  hole.addPoint(f2c::types::Point(3.75, 2.25));
+  hole.addPoint(f2c::types::Point(3.75, 3.75));
+  hole.addPoint(f2c::types::Point(2.25, 3.75));
+  hole.addPoint(f2c::types::Point(2.25, 2.25));
+  cell.addRing(hole);
+
+  const auto plan = planBoustrophedon(cell, kOpWidth, kHeadland, 0, kInset, -1.0, kMinSwath);
+  ASSERT_FALSE(plan.rings.empty()) << "no rings on the hole field";
+  ASSERT_GE(plan.safe_boundary.size(), 3u);
+  ASSERT_FALSE(plan.safe_holes.empty())
+      << "inset hole ring not exposed on the plan — connectors have nothing to avoid";
+
+  // The DRIVER follows the split sub-paths; each must be internally hole-free.
+  // The gap between consecutive sub-paths is bridged by a blade-off Nav2 transit
+  // (routes around the hole), so it is intentionally NOT continuous here.
+  const auto subs =
+      buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
+  ASSERT_GE(subs.size(), 2u)
+      << "a central hole must split the path into >=2 sub-paths (else a connector "
+         "cut through the hole)";
+
+  // The RAW hole ring: sub-paths are validated against the GROWN (inset) hole,
+  // so the raw hole is cleared with margin. Any sub-path pose inside it is a real
+  // #333 breach.
+  const std::vector<std::pair<double, double>> hole_ring = {{2.25, 2.25},
+                                                            {3.75, 2.25},
+                                                            {3.75, 3.75},
+                                                            {2.25, 3.75}};
+  std::size_t total_pts = 0, in_hole = 0;
+  for (const auto& sp : subs)
+  {
+    ASSERT_GE(sp.size(), 2u) << "degenerate sub-path emitted";
+    for (const auto& p : sp)
+    {
+      ++total_pts;
+      if (pointInRing(p.first, p.second, hole_ring))
+      {
+        ++in_hole;
+      }
+    }
+  }
+  EXPECT_EQ(in_hole, 0u) << in_hole << "/" << total_pts
+                         << " sub-path poses fall inside the obstacle hole";
 }
 
 // Concave L-shape: covered without decomposition — swaths exist in BOTH lobes
