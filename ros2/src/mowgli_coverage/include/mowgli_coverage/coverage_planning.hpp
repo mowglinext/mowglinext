@@ -132,7 +132,8 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double chassis_safety_inset,
                                     double mow_angle_rad,
                                     double min_swath_length,
-                                    int ring_direction = 0);
+                                    int ring_direction = 0,
+                                    double min_turn_radius = 0.15);
 
 // Flatten a BoustrophedonPlan into ONE continuous, cusp-free, in-bounds
 // polyline so an MPPI-class sampling controller can track it without the

@@ -383,6 +383,11 @@ void CoverageServer::planCoverage()
 
     f2c::types::Cell cell = buildCellFromGoal(*goal);
 
+    // Robot's minimum trackable turning radius — floors both the ring-corner
+    // fillets inside the planner and the turn-around connectors below. Read
+    // live so it stays field-tunable per plan.
+    const double min_turning_radius = get_parameter("min_turning_radius").as_double();
+
     BoustrophedonPlan plan = planBoustrophedon(cell,
                                                operation_width_,
                                                default_headland_width_,
@@ -390,7 +395,8 @@ void CoverageServer::planCoverage()
                                                effective_inset,
                                                mow_angle_rad,
                                                min_swath_length,
-                                               ring_direction);
+                                               ring_direction,
+                                               min_turning_radius);
 
     // Instrumentation (no behaviour change): surface every piece the planner
     // dropped (slivers, tiny rings, micro-cells) and the planned-coverage
@@ -484,9 +490,6 @@ void CoverageServer::planCoverage()
         plan.safe_boundary.size() >= 3 ? plan.safe_boundary : outer;
     constexpr double kConnectorTurnRadius = 0.30;  // nominal turn-around arc radius (m)
     constexpr double kConnectorStep = 0.03;  // connector densify step (m)
-    // Floor on every turn-around / fillet arc — never plan a loop tighter than
-    // the robot can track (read live so it's field-tunable per plan).
-    const double min_turning_radius = get_parameter("min_turning_radius").as_double();
     // Build the plan as one or more HOLE-FREE continuous sub-paths. A single
     // forward turn-around connector can't route around a large interior hole, so
     // the path breaks where it would otherwise cross one; the BT drives each

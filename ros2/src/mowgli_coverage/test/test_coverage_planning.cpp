@@ -532,6 +532,44 @@ TEST(CoverageContinuousPath, NotchFieldLobeChainedNoMidFieldJoins)
   }
   // No blade-on pose out of bounds (the straight-through-the-bite fallback).
   EXPECT_EQ(oob, 0u) << oob << " blade-on poses outside the safety inset";
+  // Field report 2026-07 ("robot stalls after every headland ring"): F2C closed
+  // every ring on the same polygon corner, so the ring CLOSURE vertex and the
+  // ring→ring junctions carried ~112° near-cusps FTC fought the drivetrain
+  // deadband through. Pin the fixed geometry directly on plan.rings: every
+  // closure must sit on a straight (mid-longest-edge rotation) and every
+  // ring→ring junction must be a near-parallel sideways shift.
+  auto stepHeading = [](const std::pair<double, double>& a, const std::pair<double, double>& b)
+  {
+    return std::atan2(b.second - a.second, b.first - a.first);
+  };
+  auto turnDeg = [](double h_in, double h_out)
+  {
+    double d = h_out - h_in;
+    while (d > M_PI)
+      d -= 2.0 * M_PI;
+    while (d < -M_PI)
+      d += 2.0 * M_PI;
+    return std::fabs(d) * 180.0 / M_PI;
+  };
+  for (std::size_t i = 0; i < plan.rings.size(); ++i)
+  {
+    const auto& L = plan.rings[i];
+    ASSERT_GE(L.size(), 4u);
+    // Closure smoothness: heading into the closure vs heading out of the start.
+    const double closure_turn =
+        turnDeg(stepHeading(L[L.size() - 2], L[L.size() - 1]), stepHeading(L[0], L[1]));
+    EXPECT_LT(closure_turn, 30.0) << "ring " << i << " closes with a " << closure_turn
+                                  << "° corner — closure not on a straight edge";
+    if (i + 1 < plan.rings.size())
+    {
+      const auto& N = plan.rings[i + 1];
+      const double junction_turn =
+          turnDeg(stepHeading(L[L.size() - 2], L[L.size() - 1]), stepHeading(N[0], N[1]));
+      EXPECT_LT(junction_turn, 30.0)
+          << "ring " << i << "→" << i + 1 << " junction turns " << junction_turn
+          << "° — rings no longer chain on parallel edges (the FTC stall geometry)";
+    }
+  }
   // Turn-around teardrops are ~1.5 m of connector; the old mid-field diagonals
   // were 10–25 m. Anything beyond 3.5 m is a relocation being mowed.
   EXPECT_LT(worst_conn_run, 3.5)
