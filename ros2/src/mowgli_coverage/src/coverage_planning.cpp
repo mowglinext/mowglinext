@@ -1315,6 +1315,88 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
       out.emplace_back(rounded.begin() + static_cast<std::ptrdiff_t>(begin), rounded.end());
     }
   }
+
+  // Sub-path DRIVE ORDER: minimize the blade-off Nav2 transit BETWEEN sub-paths.
+  // The sub-paths above come out in swath-chain order; on a multi-hole field that
+  // leaves the driver criss-crossing the lawn between lobes (measured 77 m of
+  // blade-off transit on the recorded 4-hole garden). Greedy nearest-neighbour
+  // over the FINISHED sub-path polylines, entering each at whichever end is
+  // nearer, mows spatially adjacent lobes consecutively (77 → 47 m there).
+  //   * Reversing a FINISHED polyline is safe: the points are identical, so every
+  //     turn-around / fillet stays exactly as in-bounds and trackable as before —
+  //     only reversing the swath ORDER *before* the path is built relocates
+  //     U-turns (the hazard the seed-from-BoustrophedonOrder note above guards);
+  //     driving the same polyline backwards moves nothing.
+  //   * Sub-path 0 stays the seed — TransitToStrip already drives the robot to
+  //     its start, and the BT resumes by sub-path index (deterministic: a fixed
+  //     plan yields a fixed NN order, so indices are stable across re-plans).
+  //   * Adopt the NN order ONLY when it actually shortens the transit, so a field
+  //     the chain order already sequenced well can never regress.
+  if (out.size() > 1)
+  {
+    auto gap = [](const std::pair<double, double>& a, const std::pair<double, double>& b)
+    {
+      return std::hypot(a.first - b.first, a.second - b.second);
+    };
+    double chain_transit = 0.0;
+    for (std::size_t i = 1; i < out.size(); ++i)
+    {
+      chain_transit += gap(out[i - 1].back(), out[i].front());
+    }
+    std::vector<std::size_t> order{0};
+    std::vector<bool> reversed_flag(out.size(), false);
+    std::vector<bool> used(out.size(), false);
+    used[0] = true;
+    std::pair<double, double> cur = out[0].back();
+    double nn_transit = 0.0;
+    for (std::size_t n = 1; n < out.size(); ++n)
+    {
+      std::size_t best = 0;
+      bool best_rev = false;
+      double best_d = std::numeric_limits<double>::max();
+      for (std::size_t j = 0; j < out.size(); ++j)
+      {
+        if (used[j])
+        {
+          continue;
+        }
+        const double ds = gap(cur, out[j].front());  // enter forward
+        const double de = gap(cur, out[j].back());  // enter reversed
+        if (ds < best_d)
+        {
+          best_d = ds;
+          best = j;
+          best_rev = false;
+        }
+        if (de < best_d)
+        {
+          best_d = de;
+          best = j;
+          best_rev = true;
+        }
+      }
+      used[best] = true;
+      reversed_flag[best] = best_rev;
+      order.push_back(best);
+      nn_transit += best_d;
+      cur = best_rev ? out[best].front() : out[best].back();
+    }
+    if (nn_transit + 1e-6 < chain_transit)
+    {
+      std::vector<std::vector<std::pair<double, double>>> reordered;
+      reordered.reserve(out.size());
+      for (const std::size_t idx : order)
+      {
+        std::vector<std::pair<double, double>> sp = std::move(out[idx]);
+        if (reversed_flag[idx])
+        {
+          std::reverse(sp.begin(), sp.end());
+        }
+        reordered.push_back(std::move(sp));
+      }
+      out = std::move(reordered);
+    }
+  }
   return out;
 }
 
