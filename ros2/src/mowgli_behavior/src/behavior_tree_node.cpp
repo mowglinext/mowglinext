@@ -27,6 +27,7 @@
 #include "mowgli_behavior/action_nodes.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
+#include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
@@ -67,6 +68,24 @@ public:
     context_->tf_buffer = std::make_shared<tf2_ros::Buffer>(get_clock());
     context_->tf_listener = std::make_shared<tf2_ros::TransformListener>(*context_->tf_buffer);
     context_->helper_node = rclcpp::Node::make_shared("_bt_helper_node");
+
+    // Disk-backed coverage resume: where FollowStrip persists per-area progress
+    // so an interrupted mow survives a full process/container restart (reboot,
+    // crash, docker restart, power-cycle after an emergency stop) — the in-RAM
+    // BTContext resume only survives a live BT halt. Default lives on the
+    // bind-mounted maps volume so it outlives the container. Empty disables it.
+    context_->coverage_resume_path =
+        declare_parameter<std::string>("coverage_resume_path", "/ros2_ws/maps/coverage_resume.txt");
+    if (loadCoverageResumeState(*context_))
+    {
+      RCLCPP_INFO(get_logger(),
+                  "Restored coverage resume state from %s (current_area=%d, %zu area(s) with a "
+                  "resume cursor, %zu completed)",
+                  context_->coverage_resume_path.c_str(),
+                  context_->current_area,
+                  context_->area_resume_pose_index.size(),
+                  context_->completed_areas.size());
+    }
 
     setupSubscribers();
     setupServiceServer();

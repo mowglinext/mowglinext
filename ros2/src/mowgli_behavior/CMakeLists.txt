@@ -48,6 +48,7 @@ add_executable(behavior_tree_node
   src/status_nodes.cpp
   src/utility_nodes.cpp
   src/coverage_nodes.cpp
+  src/coverage_persistence.cpp
   src/recording_nodes.cpp
   src/register_nodes.cpp
 )
@@ -194,6 +195,7 @@ if(BUILD_TESTING)
   ament_add_gtest(test_get_next_unmowed_area
     test/test_get_next_unmowed_area.cpp
     src/coverage_nodes.cpp
+    src/coverage_persistence.cpp
   )
 
   target_include_directories(test_get_next_unmowed_area PUBLIC
@@ -216,6 +218,28 @@ if(BUILD_TESTING)
     tf2_geometry_msgs
     rcl_interfaces
     action_msgs
+  )
+
+  # Round-trip + staleness coverage for the disk-backed resume state (issue #334:
+  # coverage must resume after a full process/container restart, not just an
+  # in-RAM BT halt).
+  ament_add_gtest(test_coverage_persistence
+    test/test_coverage_persistence.cpp
+    src/coverage_persistence.cpp
+  )
+
+  target_include_directories(test_coverage_persistence PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_coverage_persistence
+    rclcpp
+    behaviortree_cpp
+    mowgli_interfaces
+    nav_msgs
+    geometry_msgs
+    tf2_ros
   )
 
 endif()

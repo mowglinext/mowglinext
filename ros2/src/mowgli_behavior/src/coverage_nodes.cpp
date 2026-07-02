@@ -20,6 +20,7 @@
 #include <limits>
 
 #include "action_msgs/msg/goal_status.hpp"
+#include "mowgli_behavior/coverage_persistence.hpp"
 #include "tf2/exceptions.h"
 
 namespace mowgli_behavior
@@ -86,6 +87,34 @@ BT::NodeStatus FollowStrip::onStart()
         full_path.poses.size());
   }
   total_path_poses_ = full_path.poses.size();
+
+  // Staleness guard for disk-loaded resume state: F2C is deterministic for a
+  // fixed area+params, so a persisted pose count that no longer matches the
+  // freshly re-planned path means the area geometry or coverage params changed
+  // since the interrupted (possibly pre-restart) session. Resuming a stale
+  // cursor / skipping stale swath indices against a DIFFERENT path is unsafe —
+  // discard this area's persisted resume state and mow it fresh from the start.
+  // (Within a live session the counts always match, so this is a no-op there; it
+  // only bites on cross-restart loads after a map edit.)
+  {
+    auto pcit = ctx->area_path_pose_count.find(area_idx_);
+    const bool has_persisted_state = ctx->area_resume_pose_index.count(area_idx_) > 0 ||
+                                     ctx->area_completed_swaths.count(area_idx_) > 0;
+    if (pcit != ctx->area_path_pose_count.end() && pcit->second != total_path_poses_ &&
+        has_persisted_state)
+    {
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "FollowStrip: area %u persisted path had %zu poses but re-plan has %zu — "
+                  "area/params changed, discarding stale resume state and mowing fresh",
+                  area_idx_,
+                  pcit->second,
+                  total_path_poses_);
+      ctx->area_resume_pose_index.erase(area_idx_);
+      ctx->area_completed_swaths.erase(area_idx_);
+      ctx->completed_areas.erase(area_idx_);
+      saveCoverageResumeState(*ctx);
+    }
+  }
   ctx->area_path_pose_count[area_idx_] = total_path_poses_;
 
   // RESUME: if an earlier pass was interrupted mid-path (recharge / preempt /
@@ -142,6 +171,7 @@ BT::NodeStatus FollowStrip::onStart()
     {
       // Every swath already mowed this session — nothing left for this area.
       ctx->completed_areas.insert(area_idx_);
+      saveCoverageResumeState(*ctx);
       ctx->total_swaths = static_cast<int>(swaths_.size());
       ctx->completed_swaths = static_cast<int>(done.size());
       ctx->coverage_percent = 100.0f;
@@ -271,6 +301,9 @@ void FollowStrip::persistResumeCursor(const std::shared_ptr<BTContext>& ctx)
               absolute,
               total_path_poses_,
               static_cast<double>(ctx->coverage_percent));
+  // Persist to disk so the resume survives a full process/container restart,
+  // not just the in-RAM BT halt (the whole point of issue #334).
+  saveCoverageResumeState(*ctx);
 }
 
 bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
@@ -390,6 +423,7 @@ BT::NodeStatus FollowStrip::onRunning()
     if (done.size() >= swaths_.size())
     {
       ctx->completed_areas.insert(area_idx_);
+      saveCoverageResumeState(*ctx);
     }
     if (swaths_skipped_ >= swaths_.size())
     {
@@ -489,6 +523,7 @@ BT::NodeStatus FollowStrip::onRunning()
     ctx->area_resume_pose_index.erase(area_idx_);
     // Record this segment as mowed for the area (survives a resume re-plan).
     ctx->area_completed_swaths[area_idx_].insert(swath_idx_);
+    saveCoverageResumeState(*ctx);
     RCLCPP_INFO(ctx->node->get_logger(),
                 "FollowStrip: segment %zu/%zu completed (area %u)",
                 swath_idx_ + 1,
@@ -522,6 +557,7 @@ BT::NodeStatus FollowStrip::onRunning()
                   area_idx_);
       ctx->area_resume_pose_index.erase(area_idx_);
       ctx->area_completed_swaths[area_idx_].insert(swath_idx_);
+      saveCoverageResumeState(*ctx);
       follow_handle_.reset();
       return advance();
     }
@@ -1152,8 +1188,7 @@ PolygonStats polygon_stats(const geometry_msgs::msg::Polygon& poly)
     s.min_y = std::min(s.min_y, static_cast<double>(a.y));
     s.max_y = std::max(s.max_y, static_cast<double>(a.y));
     s.signed_area += static_cast<double>(a.x) * b.y - static_cast<double>(b.x) * a.y;
-    s.perimeter += std::hypot(static_cast<double>(b.x) - a.x,
-                              static_cast<double>(b.y) - a.y);
+    s.perimeter += std::hypot(static_cast<double>(b.x) - a.x, static_cast<double>(b.y) - a.y);
   }
   s.signed_area *= 0.5;
   return s;
@@ -1217,8 +1252,7 @@ BT::NodeStatus PlanCoverageArea::onRunning()
     {
       return BT::NodeStatus::FAILURE;
     }
-    if (srv_future_->future.wait_for(std::chrono::milliseconds(0)) !=
-        std::future_status::ready)
+    if (srv_future_->future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
     {
       if (std::chrono::steady_clock::now() - phase_start_ > std::chrono::seconds(3))
       {
