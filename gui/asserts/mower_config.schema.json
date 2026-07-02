@@ -257,6 +257,11 @@
           "default": "auto",
           "description": "Universal GNSS receiver family. Auto is recommended unless you know you need a specific parser."
         },
+        "gnss_receiver_model": {
+          "type": "string",
+          "title": "Receiver Model",
+          "description": "Optional Universal GNSS configuration hint passed only to configurator tools when explicitly set. Leave empty for Unknown / Auto."
+        },
         "gnss_serial_device": {
           "type": "string",
           "title": "Serial Device",
@@ -299,7 +304,7 @@
         "gnss_signal_group": {
           "type": "string",
           "title": "Raw Signal Group",
-          "description": "Vendor-specific expert override. For Unicore UM982 the recommended raw value is 3 6."
+          "description": "Vendor-specific expert override. Universal GNSS validates documented signal groups against the selected receiver model and warns when falling back safely."
         },
         "gnss_unicore_pvt_algorithm": {
           "type": "string",

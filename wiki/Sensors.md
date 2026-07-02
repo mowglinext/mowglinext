@@ -55,6 +55,7 @@ Legacy-only status path
 
 - Universal GNSS is the only official direct-GNSS stack and is launched from `mowgli-ros2` through `mowgli_bringup/universal_gnss.launch.py`.
 - The installer now writes a preferred Universal GNSS env contract: `GNSS_STACK`, `GNSS_RECEIVER_FAMILY`, `GNSS_TRANSPORT`, `GNSS_SERIAL_DEVICE`, `GNSS_SERIAL_BAUD`, and `GNSS_NTRIP_*`.
+- The persisted MowgliNext GNSS configurator seam now also accepts an optional `gnss_receiver_model` YAML field for Universal GNSS plan/apply tooling. When it is empty, MowgliNext calls Universal GNSS without `--model` and surfaces the tool's safe-fallback warnings instead of inferring anything from runtime state.
 - Installer and GUI flows now treat `GNSS_*` as the user-facing truth. `GNSS_BACKEND` and `GPS_*` remain compatibility mirrors for legacy tooling only.
 - For USB receivers, `GNSS_SERIAL_DEVICE` should normally be a stable `/dev/serial/by-id/...` path rather than a raw `ttyACM*` or `ttyUSB*` node.
 - `921600` is the recommended validation baud for advanced u-blox and Unicore profiles.
@@ -81,6 +82,7 @@ Legacy-only status path
   - legacy `heading_deg`, `heading_accuracy_deg`, and
     `dual_antenna_heading` remain compatibility fields only during the current
     transition
+- Runtime `/gps/status.receiver_model` remains observational/display-only in MowgliNext. It is not auto-copied into the persisted configurator `gnss_receiver_model`; an operator must choose that explicitly before MowgliNext forwards `--model` to Universal GNSS tools.
 - The current Universal GNSS submodule points to `main` at `0a02e7e`, which
   already includes the canonical GNSS/geodesy terminology, baseline ROS2
   fields, RTCM semantic diagnostics, and generic NMEA `rtk_mode` mapping used

@@ -602,7 +602,7 @@
   "onboardingPage": {
     "preview": "Aperçu",
     "previewNotActiveYet": "Aperçu — pas encore actif",
-    "expertFieldsNotWired": "Ces champs experts sont enregistrés mais l'API backend qui les traduit en commandes récepteur n'est pas encore branchée. Pour l'UM982, « UM982 recommended » correspondra à CONFIG SIGNALGROUP 3 6. En attendant, le profil de signal vendor-neutre ci-dessus suffit.",
+    "expertFieldsNotWired": "Ces champs experts sont enregistrés. Le modèle de récepteur optionnel est transmis à Universal GNSS lorsqu'il est défini, tandis que les autres surcharges expertes brutes ne sont pas encore traduites par MowgliNext. Universal GNSS valide et applique les groupes de signaux documentés pour le modèle sélectionné, et Inconnu / Auto utilise un repli sûr avec avertissements.",
     "gpsRestarting": "Redémarrage GPS…",
     "gpsRestartedWaitRtk": "GPS redémarré — patientez pour le RTK Fix",
     "gpsRestartFailed": "Échec du redémarrage GPS",
@@ -1638,31 +1638,56 @@
     "signalProfileCustomHelpText": "Personnalisé prendra plus tard en charge des fichiers de profil fournis par l'utilisateur ou des jeux de commandes récepteur brutes depuis le mode Expert/Développeur. Le support backend pour l'upload et les commandes brutes n'est pas encore branché.",
     "unicore": {
       "title": "Réglages spécifiques au fabricant",
-      "description": "À n'utiliser que lorsque les abstractions GNSS génériques ne suffisent pas. Le réglage des groupes de signaux UM982 reste ici plutôt que de déborder dans le flux utilisateur principal.",
+      "description": "À n'utiliser que lorsque les abstractions GNSS génériques ne suffisent pas. Universal GNSS reste la source de vérité pour le filtrage par modèle Unicore et la gestion des groupes de signaux documentés.",
+      "receiverModel": {
+        "label": "Modèle de récepteur",
+        "tooltip": "Indice optionnel de modèle de récepteur Unicore transmis aux outils Universal GNSS de planification/application uniquement lorsque vous le définissez explicitement.",
+        "helpText": "Universal GNSS valide et applique les groupes de signaux documentés pour le modèle sélectionné. Laissez sur Inconnu / Auto pour omettre --model et utiliser le repli sûr avec avertissements.",
+        "option": {
+          "auto": {
+            "label": "Inconnu / Auto"
+          },
+          "um982": {
+            "label": "UM982 compatible baseline double antenne"
+          },
+          "um980": {
+            "label": "UM980 sans baseline"
+          },
+          "ub9a0": {
+            "label": "UB9A0 sans baseline"
+          },
+          "um981": {
+            "label": "UM981 mappage inconnu/non pris en charge"
+          },
+          "um952": {
+            "label": "UM952 mappage inconnu/non pris en charge"
+          }
+        }
+      },
       "signalGroup": {
         "label": "Préréglage de groupe de signaux",
         "rawLabel": "Groupe de signaux brut",
-        "tooltip": "Choisissez un préréglage de groupe de signaux Unicore, puis affinez la valeur brute uniquement si nécessaire.",
+        "tooltip": "Choisissez une valeur brute documentée de groupe de signaux Unicore si nécessaire, puis affinez la surcharge brute uniquement si vous souhaitez la gérer explicitement.",
         "option": {
           "default": {
             "label": "Par défaut / Actuel"
           },
           "um982": {
             "label": "UM982 recommandé",
-            "description": "Correspond à CONFIG SIGNALGROUP 3 6."
+            "description": "Renseigne la surcharge experte brute avec 3 6. Universal GNSS décide toujours si cette valeur documentée est valide pour le modèle sélectionné."
           },
           "allBands": {
             "label": "Toutes les bandes (UM980 / UM981)",
-            "description": "Correspond à CONFIG SIGNALGROUP 2."
+            "description": "Renseigne la surcharge experte brute avec 2."
           },
           "ppp": {
             "label": "Optimisé PPP",
-            "description": "Correspond à CONFIG SIGNALGROUP 3."
+            "description": "Renseigne la surcharge experte brute avec 3."
           }
         },
         "customOptionLabel": "Personnalisé",
         "customPlaceholder": "ex. 3 6",
-        "helpText": "Les réglages normaux sont indépendants du fabricant. Les réglages experts sont spécifiques à la famille de récepteur. Pour l'UM982, « UM982 recommandé » correspond à CONFIG SIGNALGROUP 3 6."
+        "helpText": "Les réglages normaux sont indépendants du fabricant. Les réglages experts sont spécifiques à la famille de récepteur. Universal GNSS valide les groupes de signaux documentés pour le modèle sélectionné et avertit lorsqu'Inconnu / Auto applique un repli sûr."
       },
       "pvtAlgorithm": {
         "label": "Algorithme PVT",

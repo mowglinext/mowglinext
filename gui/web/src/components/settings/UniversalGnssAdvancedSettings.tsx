@@ -5,6 +5,7 @@ import {
     GNSS_ADVANCED_SETTINGS_BY_FAMILY,
     GNSS_CUSTOM_OPTION_VALUE,
     inferPresetTextSelection,
+    normalizeGnssReceiverModel,
     normalizeGnssSignalGroup,
     normalizeGnssString,
 } from "./gnssConfig.ts";
@@ -157,7 +158,9 @@ export const UniversalGnssAdvancedSettings: React.FC<Props> = ({
                         <div key={field.key}>
                             <Form.Item label={t(field.label)} tooltip={t(field.tooltip)}>
                                 <Select
-                                    value={normalizeGnssString(values[field.key])}
+                                    value={field.key === "gnss_receiver_model"
+                                        ? normalizeGnssReceiverModel(values[field.key])
+                                        : normalizeGnssString(values[field.key])}
                                     onChange={(value) => onChange(field.key, value)}
                                     options={field.options.map((option) => ({
                                         value: option.value,

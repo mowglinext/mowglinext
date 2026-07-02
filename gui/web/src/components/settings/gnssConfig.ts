@@ -62,6 +62,7 @@ export const GNSS_PROFILE_RATE_OPTIONS = [
 
 export const GNSS_ACTION_SETTINGS_KEYS = [
     "gnss_receiver_family",
+    "gnss_receiver_model",
     "gnss_serial_device",
     "gnss_serial_baud",
     "gnss_config_baud",
@@ -158,6 +159,21 @@ export const GNSS_ADVANCED_SETTINGS_BY_FAMILY: Record<string, GnssReceiverAdvanc
         title: "gnssConfig.unicore.title",
         description: "gnssConfig.unicore.description",
         fields: [
+            {
+                kind: "select",
+                key: "gnss_receiver_model",
+                label: "gnssConfig.unicore.receiverModel.label",
+                tooltip: "gnssConfig.unicore.receiverModel.tooltip",
+                options: [
+                    { value: "", label: "gnssConfig.unicore.receiverModel.option.auto.label" },
+                    { value: "UM982", label: "gnssConfig.unicore.receiverModel.option.um982.label" },
+                    { value: "UM980", label: "gnssConfig.unicore.receiverModel.option.um980.label" },
+                    { value: "UB9A0", label: "gnssConfig.unicore.receiverModel.option.ub9a0.label" },
+                    { value: "UM981", label: "gnssConfig.unicore.receiverModel.option.um981.label" },
+                    { value: "UM952", label: "gnssConfig.unicore.receiverModel.option.um952.label" },
+                ],
+                helpText: "gnssConfig.unicore.receiverModel.helpText",
+            },
             {
                 kind: "presetText",
                 key: "gnss_signal_group",
@@ -279,6 +295,20 @@ export const normalizeGnssSignalProfile = (value: unknown): string => {
             return "custom";
         default:
             return "custom";
+    }
+};
+
+export const normalizeGnssReceiverModel = (value: unknown): string => {
+    const normalized = normalizeGnssString(value).toUpperCase();
+    switch (normalized) {
+        case "":
+        case "AUTO":
+        case "UNKNOWN":
+        case "UNKNOWN/AUTO":
+        case "AUTO/UNKNOWN":
+            return "";
+        default:
+            return normalized;
     }
 };
 

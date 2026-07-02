@@ -602,7 +602,7 @@
   "onboardingPage": {
     "preview": "Preview",
     "previewNotActiveYet": "Preview — not active yet",
-    "expertFieldsNotWired": "These expert fields are saved, but the backend API that translates them into receiver commands is not wired up yet. For the UM982, \"UM982 recommended\" will map to CONFIG SIGNALGROUP 3 6. In the meantime, the vendor-neutral signal profile above is enough.",
+    "expertFieldsNotWired": "These expert fields are saved. The optional receiver model is forwarded to Universal GNSS when set, while the remaining raw expert overrides are still not translated by MowgliNext. Universal GNSS validates and applies documented signal groups for the selected model, and Unknown / Auto uses a safe fallback with warnings.",
     "gpsRestarting": "Restarting GPS…",
     "gpsRestartedWaitRtk": "GPS restarted — wait for RTK Fix",
     "gpsRestartFailed": "GPS restart failed",
@@ -1638,31 +1638,56 @@
     "signalProfileCustomHelpText": "Custom will later support user-provided profile files or raw receiver command sets from Expert/Developer mode. Upload and raw-command backend support are not wired yet.",
     "unicore": {
       "title": "Vendor-Specific Settings",
-      "description": "Use these only when the generic GNSS abstractions are not enough. UM982 signal-group tuning stays here instead of leaking into the main user workflow.",
+      "description": "Use these only when the generic GNSS abstractions are not enough. Universal GNSS remains the source of truth for Unicore model gating and documented signal-group handling.",
+      "receiverModel": {
+        "label": "Receiver model",
+        "tooltip": "Optional Unicore receiver model hint forwarded to Universal GNSS plan/apply tools only when you set it explicitly.",
+        "helpText": "Universal GNSS validates and applies documented signal groups for the selected model. Leave this on Unknown / Auto to omit --model and use the safe fallback with warnings.",
+        "option": {
+          "auto": {
+            "label": "Unknown / Auto"
+          },
+          "um982": {
+            "label": "UM982 dual-antenna baseline capable"
+          },
+          "um980": {
+            "label": "UM980 non-baseline"
+          },
+          "ub9a0": {
+            "label": "UB9A0 non-baseline"
+          },
+          "um981": {
+            "label": "UM981 unsupported/unknown mapping"
+          },
+          "um952": {
+            "label": "UM952 unsupported/unknown mapping"
+          }
+        }
+      },
       "signalGroup": {
         "label": "Signal Group Preset",
         "rawLabel": "Raw Signal Group",
-        "tooltip": "Choose a Unicore signal-group preset, then fine-tune the raw value only if needed.",
+        "tooltip": "Choose a documented raw Unicore signal-group value if needed, then fine-tune the raw override only when you intend to manage it explicitly.",
         "option": {
           "default": {
             "label": "Default / Current"
           },
           "um982": {
             "label": "UM982 recommended",
-            "description": "Maps to CONFIG SIGNALGROUP 3 6."
+            "description": "Fills the raw expert override with 3 6. Universal GNSS still decides whether that documented value is valid for the selected model."
           },
           "allBands": {
             "label": "All bands (UM980 / UM981)",
-            "description": "Maps to CONFIG SIGNALGROUP 2."
+            "description": "Fills the raw expert override with 2."
           },
           "ppp": {
             "label": "PPP optimized",
-            "description": "Maps to CONFIG SIGNALGROUP 3."
+            "description": "Fills the raw expert override with 3."
           }
         },
         "customOptionLabel": "Custom",
         "customPlaceholder": "e.g. 3 6",
-        "helpText": "Normal settings are vendor-neutral. Expert settings are receiver-family specific. For UM982, \"UM982 recommended\" maps to CONFIG SIGNALGROUP 3 6."
+        "helpText": "Normal settings are vendor-neutral. Expert settings are receiver-family specific. Universal GNSS validates documented signal groups for the selected model and warns when Unknown / Auto falls back safely."
       },
       "pvtAlgorithm": {
         "label": "PVT Algorithm",
