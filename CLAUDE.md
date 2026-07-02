@@ -4,6 +4,20 @@ Open-source autonomous robot mower monorepo. ROS2 Kilted, Nav2, and a GTSAM iSAM
 
 **Website:** https://mowgli.garden | **Wiki:** https://github.com/cedbossneo/mowglinext/wiki | **First-boot checklist:** [`docs/FIRST_BOOT.md`](docs/FIRST_BOOT.md)
 
+## Reference Index
+
+This file holds the always-on essentials (Safety, Monorepo Layout, Architecture Invariants, What NOT to Do). Detailed reference material is split into `docs/claude/` — **read the relevant file when working in that area:**
+
+| File | Read it when… |
+|------|---------------|
+| [`docs/claude/high-level-api.md`](docs/claude/high-level-api.md) | Touching `HighLevelControl`/`HighLevelStatus`, BT states, area recording, or manual mowing |
+| [`docs/claude/ros2-specifics.md`](docs/claude/ros2-specifics.md) | Working on the localizer, navigation, coverage, GPS fusion, IMU calibration, or Nav2 tuning (detail behind the invariants) |
+| [`docs/claude/commands.md`](docs/claude/commands.md) | Building/testing, or after changing `.msg`/`.srv` files (code-generation workflow) |
+| [`docs/claude/session-monitoring.md`](docs/claude/session-monitoring.md) | Running a mowing/tuning test — record the JSONL session timeline in parallel |
+| [`docs/claude/contributing.md`](docs/claude/contributing.md) | Code style, commit conventions, git/branch workflow, recommended skills/agents |
+
+Also: [`.claude/rules/ros2.md`](.claude/rules/ros2.md) — ROS2 node/QoS/launch/testing/safety conventions.
+
 ## Safety — READ FIRST
 
 This robot has spinning blades. The STM32 firmware is the sole blade safety authority.
@@ -43,215 +57,6 @@ This robot has spinning blades. The STM32 firmware is the sole blade safety auth
 12. **Battery current for dock detection** — Hardware bridge publishes `abs(charging_current)` when charging, `0.0` when not, for `SimpleChargingDock` compatibility.
 13. **Docking server cmd_vel** — Remapped to `/cmd_vel_docking` through twist_mux (priority 15).
 14. **Coverage grid_map → OccupancyGrid convention** — easy to get wrong. `grid_map::GridMap::getSize()(0)` = cells along X, `getSize()(1)` = cells along Y. grid_map iterates with `r=0 → X_max` (decreasing) and `c=0 → Y_max` (decreasing). `nav_msgs/OccupancyGrid` has `width = X_cells`, `height = Y_cells`, row-major with `data[y_row * width + x_col]`, where `col=0 ↔ origin.x` (X_min) and `row=0 ↔ origin.y` (Y_min). To convert a grid_map cell `(r, c)` to an OccupancyGrid index: `og_col = nx - 1 - r`, `og_row = ny - 1 - c`, `flat_idx = og_row * nx + og_col`. ALWAYS set `mask.info.width = nx` and `mask.info.height = ny` — swapping produces a 90°-rotated mask, which silently marks valid interior polygon cells as lethal and breaks Smac planning with "Start occupied" errors. See `mow_progress_to_occupancy_grid()` in `map_server_node.cpp` as the reference implementation.
-
-## High-Level Commands and States
-
-### HighLevelControl.srv Commands
-| Value | Constant | Description |
-|-------|----------|-------------|
-| 1 | `COMMAND_START` | Begin autonomous mowing |
-| 2 | `COMMAND_HOME` | Return to dock |
-| 3 | `COMMAND_RECORD_AREA` | Start area boundary recording |
-| 4 | `COMMAND_S2` | Mow next area |
-| 5 | `COMMAND_RECORD_FINISH` | Finish recording, save polygon |
-| 6 | `COMMAND_RECORD_CANCEL` | Cancel recording, discard trajectory |
-| 7 | `COMMAND_MANUAL_MOW` | Enter manual mowing mode (teleop + blade) |
-| 254 | `COMMAND_RESET_EMERGENCY` | Reset latched emergency |
-| 255 | `COMMAND_DELETE_MAPS` | Delete all maps |
-
-### HighLevelStatus.msg States
-| Value | Constant | Description |
-|-------|----------|-------------|
-| 0 | `HIGH_LEVEL_STATE_NULL` | Emergency or transitional |
-| 1 | `HIGH_LEVEL_STATE_IDLE` | Idle, docked, charging, returning home |
-| 2 | `HIGH_LEVEL_STATE_AUTONOMOUS` | Autonomous mowing (undocking, transit, mowing, recovering) |
-| 3 | `HIGH_LEVEL_STATE_RECORDING` | Area recording in progress |
-| 4 | `HIGH_LEVEL_STATE_MANUAL_MOWING` | Manual mowing via teleop |
-
-### Area Recording Flow
-1. GUI sends `COMMAND_RECORD_AREA` (3) to start recording
-2. BT enters `RecordArea` node — records position at 2 Hz, publishes live preview on `~/recording_trajectory`
-3. User drives robot along boundary
-4. GUI sends `COMMAND_RECORD_FINISH` (5) — trajectory is simplified (Douglas-Peucker) and saved via `/map_server_node/add_area`
-5. Or GUI sends `COMMAND_RECORD_CANCEL` (6) — trajectory discarded
-
-### Manual Mowing
-- Dedicated BT state with `COMMAND_MANUAL_MOW` (7) — does not hijack recording mode
-- Teleop via `/cmd_vel_teleop` (twist_mux priority)
-- Blade managed by GUI (fire-and-forget to firmware)
-- Collision_monitor, GPS, and the active map-frame localizer all remain active
-
-## Code Style
-
-| Component | Style | Tool |
-|-----------|-------|------|
-| C++ (ros2/) | 2-space indent, `snake_case` files/params, `CamelCase` classes | `clang-format` (config in `ros2/.clang-format`) |
-| Go (gui/) | Standard Go | `gofmt` |
-| TypeScript (gui/web/) | Prettier + ESLint | `yarn lint` |
-| Python (launch files) | PEP 8 | — |
-| YAML (config) | 2-space indent, `snake_case` keys | — |
-
-## Commit Conventions
-
-```
-<type>: <description>
-
-Types: feat, fix, refactor, docs, test, chore, perf, ci
-```
-
-No Co-Authored-By lines. Keep messages concise and focused on "why".
-
-## ROS2 Specifics
-
-- **Distro:** Kilted
-- **DDS:** Cyclone DDS (all containers share `docker/config/cyclonedds.xml`)
-- **Topics:** Mowgli-specific topics under `/mowgli/` namespace
-- **Frames:** `map` (global, GPS-anchored via fixed datum), `odom` (continuous local, dead-reckoning only — never jumps), `base_footprint` (robot frame for Nav2), `base_link` (rear axle), `lidar_link`, `imu_link`
-- **TF chain:** `map→odom` AND `odom→base_footprint` are **both** published by `fusion_graph_node` (broadcast from its dedicated TF thread; `map→odom` absorbs GPS corrections, `odom→base_footprint` is continuous dead-reckoning) — per Invariant 2, do NOT publish either from any other node. `base_footprint→base_link` (static), `base_link→sensors` (static — `base_link→imu_link` rotation = `imu_yaw/pitch/roll` from `mowgli_robot.yaml`, auto-calibratable via GUI button)
-- **Units:** SI throughout (metres, radians, seconds)
-- **Sensor fusion:** `fusion_graph_node` (GTSAM iSAM2 Pose2 graph) is the sole localizer — it publishes BOTH `map→odom` AND `odom→base_footprint`. One node per `node_period_s`; factors: a wheel between-factor (non-holonomic σ_y << σ_x, fed by `/wheel_odom`), a gyro between-factor on yaw, a custom `GnssLeverArmFactor` (analytic Jacobian — antenna lever-arm rotates with node yaw) fed by `/gps/pose_cov`, and unary yaw factors for COG (`/imu/cog_heading`) and tilt-compensated mag (`/imu/mag_yaw`, when calibrated); optional LiDAR scan-matching/loop-closure factors gated by `use_scan_matching`/`use_loop_closure`. Config in `ros2/src/fusion_graph/config/fusion_graph.yaml`. Absolute yaw comes from `cog_to_imu_node.cpp` (GPS course-over-ground, gated on BOTH `wheel_omega` AND IMU `gyro_z` for `on_fix` and `republish_latched_when_stationary` — wheel-only gating let multi-degree COG yaw jumps slip through during PRE_ROTATE tight arcs, because the Gazebo diff-drive plugin under-reports `wheel.angular.z` while the IMU still sees real angular motion) and `mag_yaw_publisher.py` (tilt-compensated magnetometer yaw, when magnetometer is calibrated). The `hardware_bridge_node` runs a 20 s IMU bias calibration (`imu_cal_samples: 1000`) every time the robot docks, and logs the implied mounting pitch/roll so the operator can promote any >1° offset into `mowgli_robot.yaml` → `imu_pitch/imu_roll`.
-- **Navigation:** `FollowCoveragePath` = `mowgli_nav2_plugins/FTCController` (deterministic Follow-the-Carrot; decoupled lon/lat/ang PID with a low-pass on the derivative; one `PRE_ROTATE` pivot then tracks the continuous `full_path`; lateral obstacle avoidance via `enable_obstacle_deviation`). `FollowPath` (transit) = RotationShim + RPP. FTC was restored 2026-06-19, reverting an MPPI experiment (MPPI cut corners at U-turns and weaved on the straights).
-- **Coverage:** Two-package pipeline. `map_server_node` (`mowgli_map`) owns area polygons + the `mow_progress` grid layer. `coverage_server` (`mowgli_coverage`, action `plan_coverage` = `mowgli_interfaces/action/PlanCoverage`) runs a deliberately minimal F2C v3 pipeline in `planBoustrophedon()` (`coverage_planning.cpp`): `ConstHL::generateHeadlands(chassis_safety_inset)` pre-inset; `ConstHL::generateHeadlandSwaths(op_width, n_rings, out2in)` concentric mowed rings (n = `num_headland_passes` or ceil(headland/op_width)); `ConstHL::generateHeadlands(n_rings*op_width)` mainland; `BruteForce` swaths (fixed or auto angle; each disjoint clip of a sweep line is its OWN swath, so concave fields and holes need NO decomposition); `BoustrophedonOrder` serpentine. NO `pp::PathPlanning`, NO turn planners, NO OR-Tools genRoute, NO TrapezoidalDecomp, NO boundary clipping (the plan is built from insets; an out-of-bounds pose is logged as a planner bug). Result = explicit per-segment `nav_msgs/Path[]` + types (ring|swath). One `PlanCoverageArea` per area per session; `FollowStrip` resumes by segment index.
-- **Coverage goal-checker:** `coverage_goal_checker` is `mowgli_nav2_plugins/PathProgressGoalChecker` (NOT `StoppedGoalChecker` — that one fires on velocity stoppage and matches mid-traversal during FTC's PRE_ROTATE pivots, which would complete the action at <2% coverage). It subscribes to `<plugin_name>/global_plan` (= `/controller_server/FollowCoveragePath/global_plan`) and only fires when the robot has monotonically tracked >= `progress_threshold` (0.95) of path poses AND is within xy/yaw tolerance of the goal pose. Includes a `fallback_timeout_s` watchdog (5 s) for missing global_plan and an `n<=1` guard for degenerate paths.
-- **Area Recording:** `RecordArea` BT node records trajectory at 2 Hz, Douglas-Peucker simplification, saves polygon via `/map_server_node/add_area`. Live preview on `~/recording_trajectory`.
-- **Manual Mowing:** Dedicated BT state (COMMAND_MANUAL_MOW=7). Teleop via `/cmd_vel_teleop`, blade managed by GUI. Collision_monitor, GPS, and the `fusion_graph` localizer remain active.
-- **Emergency Auto-Reset:** BT auto-resets emergency when robot placed on dock (charging detected). Firmware is safety authority.
-- **GPS fusion:** `navsat_to_absolute_pose_node` reads `/gps/fix` (NavSatFix) and emits `/gps/pose_cov` (PoseWithCovarianceStamped in `map` frame) with covariance derived from `position_accuracy` and a lever-arm correction applied via the current map-frame yaw. `fusion_graph_node` fuses `/gps/pose_cov` via its `GnssLeverArmFactor` (with a bounded motion-consistent wrong-fix gate). `/gps/absolute_pose` remains exposed for the GUI and BT. With RTK-Fixed (σ ~3 mm) and frequent updates, the graph converges to fix precision.
-- **fusion_graph (sole map+odom localizer):** `fusion_graph_node` (GTSAM iSAM2) is launched **unconditionally** by `navigation.launch.py` — there is **no `use_fusion_graph` arg**, do not write one from the GUI. Pose2 graph; one node per `node_period_s`, with a wheel between-factor (non-holonomic σ_y << σ_x), a gyro between-factor on yaw, a custom `GnssLeverArmFactor` (analytic Jacobian — antenna lever-arm rotates with the node's yaw, so it couples to heading correctly), and unary yaw factors for COG and tilt-compensated mag. **LiDAR scan-matching between-factors and loop-closure factors are wired** (gated by `use_scan_matching` / `use_loop_closure`) — they let the map-frame estimate carry through multi-minute RTK-Float windows, which is why this design exists. Reads datum + lever-arm from `mowgli_robot.yaml` via `fusion_graph.launch.py`. Persists `<graph_save_prefix>.{graph,scans,meta}` (default `/ros2_ws/maps/fusion_graph.*`); auto-saves on RECORDING→IDLE, dock arrival, and every `periodic_save_period_s` (5 min) in AUTONOMOUS state. Surface: `/fusion_graph/diagnostics`, `/fusion_graph/markers`, `/imu/fg_yaw`, services `~/save_graph` + `~/clear_graph` (both `Trigger`).
-- **IMU mounting calibration:** `base_link→imu_link` rotation (imu_roll, imu_pitch, imu_yaw in mowgli_robot.yaml) is critical — if wrong, gravity-removal leaks into pitch and yaw integration degrades. Use the GUI's "Auto-calibrate" button next to IMU Yaw — the robot drives itself ~0.6 m forward then back and solves `imu_yaw = atan2(-ay_chip, ax_chip)` from accel direction vs wheel-derived `a_body`.
-- **Nav2 tuning:** Global costmap 30m x 30m rolling window; keepout_filter disabled in global costmap (blocks transit/docking); collision_monitor in coverage mode uses **PolygonSlow only** (`polygons: ["PolygonSlow"]` — PolygonStop kept firing whenever the chassis grazed a costmap obstacle, freezing cmd_vel; obstacle avoidance during coverage is FTC's lateral path deviation (`enable_obstacle_deviation`, reading the LiDAR `obstacle_layer`), with collision_monitor's PolygonSlow as the soft-slowdown fallback); source_timeout 5.0s (ARM TF jitter); PoseProgressChecker `required_movement_radius: 0.15` + `required_movement_angle: 0.5 rad` (counts rotation as progress so headland pivots don't trip "no progress"), `movement_time_allowance: 30s` default (operator-tunable via `progress_timeout_sec`); failure_tolerance 1.0; speeds default `transit 0.5 / mowing 0.5 m/s` (per-site overrides in `mowgli_robot.yaml`).
-- **Joystick:** Foxglove client passes `schemaName` in `clientAdvertise` for JSON-to-CDR conversion. GUI shows joystick during "RECORDING" state (not just "AREA_RECORDING").
-
-See sections below for detailed package descriptions, topics, and architecture.
-
-## Git Workflow
-
-**NEVER commit directly to main.** Always use feature branches and PRs:
-```bash
-git checkout main && git pull
-git checkout -b feat/my-feature    # or fix/, refactor/, test/, chore/, docs/
-# ... make changes ...
-git add <files> && git commit -m "feat: description"
-gh pr create --title "feat: my feature" --body "..."
-```
-
-### Dev Branch Workflow
-
-Docker builds trigger on both `main` and `dev` branches. Images are tagged `:main` and `:dev` respectively. Use `mowgli-dev` / `mowgli-main` commands to switch between environments. Iterate on `dev`, merge to `main` when stable.
-
-## Quick Commands
-
-All ROS2 commands assume you are inside the devcontainer.
-
-```bash
-# Build ROS2 workspace
-cd ros2 && make build
-
-# Build a single package
-cd ros2 && make build-pkg PKG=mowgli_behavior
-
-# Run headless simulation
-cd ros2 && make sim
-
-# Run E2E tests (simulation must be running in another terminal)
-cd ros2 && make e2e-test
-
-# Format C++ code
-cd ros2 && make format
-
-# Run unit tests
-cd ros2 && make test
-
-# Build firmware
-cd firmware/stm32/ros_usbnode && pio run
-
-# GUI development
-cd gui && go build -o openmower-gui && cd web && yarn dev
-
-# --- Code generation (run after changing .msg/.srv files) ---
-
-# Regenerate firmware rosserial C++ headers from ROS2 .msg files
-python3 firmware/scripts/sync_ros_lib.py          # writes to firmware/stm32/ros_usbnode/src/ros/ros_lib/mower_msgs/
-python3 firmware/scripts/sync_ros_lib.py --check   # diff-only, no writes (CI)
-
-# Regenerate Go message/service structs from ROS2 .msg/.srv files
-cd gui && ./generate_go_msgs.sh                    # writes to gui/pkg/msgs/*/types_generated.go
-
-# Regenerate TypeScript ROS types (snake_case fields matching rosbridge JSON)
-cd gui && ./generate_ts_types.sh                   # writes to gui/web/src/types/ros.ts
-```
-
-### Code Generation Workflow
-
-When you modify `ros2/src/mowgli_interfaces/msg/*.msg` or `srv/*.srv`:
-1. **Firmware headers:** `python3 firmware/scripts/sync_ros_lib.py` — regenerates rosserial C++ headers
-2. **Go types:** `cd gui && ./generate_go_msgs.sh` — regenerates Go structs with JSON tags for rosbridge
-3. **TypeScript types:** `cd gui && ./generate_ts_types.sh` — regenerates `gui/web/src/types/ros.ts` with snake_case fields matching rosbridge JSON
-4. **Protocol constants:** Update `HL_MODE_*` defines in `firmware/stm32/ros_usbnode/include/mowgli_protocol.h` AND `ros2/src/mowgli_hardware/firmware/mowgli_protocol.h` (these are manually maintained — keep in sync with `HighLevelStatus.msg`)
-
-Do NOT hand-edit `*_generated.go`, `ros_lib/mower_msgs/*.h`, or `gui/web/src/types/ros.ts` — re-run the scripts instead.
-
-## Mowing Session Monitoring
-
-**Whenever a mowing test is run (COMMAND_START, undock, autonomous motion, or any tuning session that involves the robot moving), also run the session monitor in parallel.** Output is a JSONL timeline that can be diffed/plotted across sessions to see how tuning changes affect behavior.
-
-```bash
-# Detached background from the host (writes to /ros2_ws/logs/mow_sessions/
-# inside the container, which is not mounted — better to bind-mount docker/logs/
-# or redirect via --output-dir):
-docker exec -d mowgli-ros2 bash -c '
-  source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && \
-  python3 /ros2_ws/scripts/mow_session_monitor.py \
-    --session 2026-04-29-fusion-graph-tuning-v1 \
-    --output-dir /ros2_ws/maps'
-
-# Interactively from inside the container (Ctrl-C to stop + write summary):
-docker exec -it mowgli-ros2 bash -c '
-  source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && \
-  python3 /ros2_ws/scripts/mow_session_monitor.py --session <name> \
-    --output-dir /ros2_ws/maps'
-```
-
-The `--output-dir /ros2_ws/maps` redirects to the bind-mounted `install_mowgli_maps` Docker volume so logs persist outside the container. Or bind-mount `docker/logs/mow_sessions/` explicitly in compose for a host-visible path.
-
-**What it records** (per-sample, 10 Hz default):
-- Fused pose + twist from `/odometry/filtered_map` (x/y/z, yaw, vx/vy/wz) **+ position covariance (cov_xx, cov_yy, derived sigma_xy_m)**
-- TF snapshots: `map→base_footprint` (composed through `map→odom→base_footprint`), `odom→base_footprint` (local EKF)
-- Wheel twist + covariance + integrated distance and yaw
-- IMU gyro + accel + integrated gyro yaw
-- GPS NavSatFix (lat/lon/alt/status/covariance) + `/gps/absolute_pose` ENU
-- Dock heading (`/gnss/heading` while charging)
-- BT state (state_name, current_area, current_strip), hardware mode, emergency flags, battery
-- `cmd_vel_nav` (Nav2 output) + `cmd_vel` (post-safety, what reaches motors)
-- Nav2 `/plan` length, next pose, goal pose, distance-to-goal
-- LiDAR scan health (valid point count, min range)
-- Fusion graph stats: pulled from `/fusion_graph/diagnostics` (node count, scan-match success rate, loop closures, marginal cov)
-- **Cross-source consistency**: `fusion ↔ gps` distance, `wheel ↔ gyro` yaw drift, and `fusion ↔ scan-match` ICP success rate from `/fusion_graph/diagnostics`
-- **RTK covariance-drop health**: on every RTK-Fixed GPS arrival, confirm `/odometry/filtered_map` cov drops to σ≤~3 cm within 300 ms — surfaced as `cross_checks.rtk_cov_check.{arrivals,ok,violations}` per sample and rolled into a `rtk_cov_check.verdict` ("healthy" / "intermittent" / "gate_rejecting" / "no_rtk") in the summary.
-
-**Metadata header** (first line of the JSONL): session name, UTC timestamp, git branch + commit + dirty flag, docker image tags from `.env`, SHA-256 truncated hashes of `mowgli_robot.yaml`, `fusion_graph.yaml`, and the Nav2 params (`nav2_params_base.yaml` + `nav2_params_lidar.yaml` + `nav2_params_no_lidar.yaml`) — so sessions from different tunings are grouped/comparable.
-
-**Summary record** (last line, written on Ctrl-C or clean shutdown): total duration, samples written, wheel-integrated distance, straight-line displacement, peak `fusion↔gps` error, peak `wheel↔gyro` yaw drift, RTK cov-check totals + verdict, final BT state.
-
-**Log directory:** `docker/logs/mow_sessions/<session_name>.jsonl`. Commit notable sessions (golden runs, failure cases) so they survive in git history.
-
-## Recommended Skills and Agents
-
-When using Claude Code on this project:
-
-### Skills to Use
-- `/ros2-engineering` — ROS2 node patterns, QoS, launch files, Nav2 (use for any ros2/ work)
-- `/cpp-coding-standards` — C++ Core Guidelines (use for C++ reviews)
-- `/docker-patterns` — Dockerfile and compose patterns (use for docker/ and sensors/ work)
-- `/tdd` — Test-driven development (use when adding new features)
-
-### Agents to Invoke
-- **code-reviewer** — after any code changes
-- **cpp-reviewer** — after C++ changes in ros2/
-- **security-reviewer** — before commits touching auth, configs, or firmware commands
-- **build-error-resolver** — when colcon or Docker builds fail
-- **tdd-guide** — when implementing new features
-- **architect** — for design decisions spanning multiple packages
 
 ## What NOT to Do
 
