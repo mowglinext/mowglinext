@@ -76,6 +76,7 @@ func topicSubscribeInterval(topic string) (int, bool) {
 	case "diagnostics", "status", "highLevelStatus", "btLog", "map",
 		"path", "plan", "power", "emergency", "dockingSensor",
 		"robotDescription", "recordingTrajectory",
+		"coverageResumeAvailable",
 		"fusionDiag":
 		return -1, true
 	default:
@@ -293,6 +294,8 @@ func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			def, err = subscribe(provider, c, conn, "path", -1)
 		case "plan":
 			def, err = subscribe(provider, c, conn, "plan", -1)
+		case "coverageResumeAvailable":
+			def, err = subscribe(provider, c, conn, "coverageResumeAvailable", -1)
 		case "power":
 			def, err = subscribe(provider, c, conn, "power", -1)
 		case "emergency":
@@ -650,6 +653,24 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			}
 			var res TriggerRes
 			err = provider.CallService(c.Request.Context(), service, &struct{}{}, &res, "std_srvs/srv/Trigger")
+			if err == nil && !res.Success {
+				err = errors.New(res.Message)
+			}
+			if err == nil {
+				c.JSON(200, map[string]interface{}{"message": res.Message})
+				return
+			}
+		case "coverage_clear_resume":
+			// "Start fresh": discard persisted mowing progress so the next
+			// COMMAND_START begins at the first line instead of resuming mid-path
+			// (the "starts at 2nd/3rd line" report). The frontend calls this before
+			// sending Command:1 when coverageResumeAvailable is true.
+			type TriggerRes struct {
+				Success bool   `json:"success"`
+				Message string `json:"message"`
+			}
+			var res TriggerRes
+			err = provider.CallService(c.Request.Context(), "/behavior_tree_node/clear_coverage_resume", &struct{}{}, &res, "std_srvs/srv/Trigger")
 			if err == nil && !res.Success {
 				err = errors.New(res.Message)
 			}

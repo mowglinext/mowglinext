@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { Card, Col, Form, InputNumber, Row, Space, Switch, Typography } from "antd";
+import { Card, Col, Form, InputNumber, Row, Select, Space, Switch, Typography } from "antd";
 import { ScissorOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
@@ -239,6 +239,20 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                                             onChange={(v) => onChange("swath_overlap", v)}
                                             min={0} max={0.2} step={0.01} precision={3}
                                             style={{ width: "100%" }} addonAfter="m"
+                                        />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={12}>
+                                    <Form.Item label={t("settingsMowing.mowDirection")} tooltip={t("settingsMowing.mowDirectionTooltip")}>
+                                        <Select
+                                            value={values.mow_direction ?? 0}
+                                            onChange={(v) => onChange("mow_direction", v)}
+                                            style={{ width: "100%" }}
+                                            options={[
+                                                { value: 0, label: t("settingsMowing.mowDirectionAuto") },
+                                                { value: 1, label: t("settingsMowing.mowDirectionCw") },
+                                                { value: 2, label: t("settingsMowing.mowDirectionCcw") },
+                                            ]}
                                         />
                                     </Form.Item>
                                 </Col>

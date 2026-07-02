@@ -358,6 +358,11 @@ def generate_launch_description() -> LaunchDescription:
     # num_headland_passes: 0 = auto (ceil(headland_width / tool_width)),
     # >0 forces exactly that many concentric perimeter rings.
     num_headland_passes = 0
+    # mow_direction: perimeter/headland travel winding (issue #335) — 0 = planner
+    # default (F2C natural), 1 = clockwise, 2 = counter-clockwise. Set it to keep
+    # a side-mounted blade on the cut side. Injected into coverage_server's
+    # ring_direction param below.
+    mow_direction = 0
     # swath_overlap: how much narrower F2C's swath spacing is than the physical
     # cut width. F2C's operation_width (Robot::setCovWidth) = tool_width −
     # swath_overlap, so adjacent swaths OVERLAP by this much. tool_width itself
@@ -457,6 +462,7 @@ def generate_launch_description() -> LaunchDescription:
         headland_width = float(rt_rp.get("headland_width", headland_width))
         num_headland_passes = int(rt_rp.get(
             "num_headland_passes", num_headland_passes))
+        mow_direction = int(rt_rp.get("mow_direction", mow_direction))
         swath_overlap = float(rt_rp.get("swath_overlap", swath_overlap))
         min_turning_radius = float(rt_rp.get(
             "min_turning_radius", min_turning_radius))
@@ -679,6 +685,8 @@ def generate_launch_description() -> LaunchDescription:
         cov_params["robot_width"] = cw
         cov_params["default_headland_width"] = headland_width
         cov_params["num_headland_passes"] = num_headland_passes
+        # Perimeter/headland travel winding (blade-side, issue #335).
+        cov_params["ring_direction"] = mow_direction
         cov_params["chassis_safety_inset"] = chassis_safety_inset
         # Hard floor on the continuous path's turn-around / fillet arcs so no
         # turn is ever tighter than the robot can track (clamp to the tuned
