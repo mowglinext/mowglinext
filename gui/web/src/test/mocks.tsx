@@ -19,7 +19,9 @@ export const gnssStatusSampleNames = [
     'correction_stream_active',
     'correction_stream_unavailable',
     'correction_stream_error',
+    'satellite_cn0_unknown',
     'msm_summary_present',
+    'msm_summary_not_seen',
     'msm_malformed_not_decoded',
     'nmea_gga_fix_quality_float',
 ] as const;
@@ -35,6 +37,16 @@ const BASELINE_CAPABILITIES =
     GnssStatusConstants.CAP_BASELINE_SOLUTION_STATUS;
 const CORRECTION_STREAM_CAPABILITY = GnssStatusConstants.CAP_CORRECTION_STREAM;
 const MSM_SUMMARY_CAPABILITY = GnssStatusConstants.CAP_MSM_SUMMARY;
+const SATELLITE_CAPABILITIES =
+    GnssStatusConstants.CAP_SATELLITES_USED |
+    GnssStatusConstants.CAP_SATELLITES_VISIBLE |
+    GnssStatusConstants.CAP_SATELLITES_TRACKED;
+const CN0_CAPABILITIES =
+    GnssStatusConstants.CAP_MEAN_CN0 |
+    GnssStatusConstants.CAP_MAX_CN0;
+const RF_HEALTH_CAPABILITIES =
+    GnssStatusConstants.CAP_INTERFERENCE_STATUS |
+    GnssStatusConstants.CAP_JAMMING_STATUS;
 
 export const gnssStatusSamples: Record<GnssStatusSampleName, GnssStatus> = {
     dual_antenna_um982_solved: {
@@ -51,6 +63,13 @@ export const gnssStatusSamples: Record<GnssStatusSampleName, GnssStatus> = {
         baseline_length_m: 1.247,
         baseline_solution_status: GnssStatusConstants.BASELINE_STATUS_COMPUTED,
         correction_stream_status: GnssStatusConstants.CORRECTION_STREAM_STATUS_ACTIVE,
+        satellites_used: 18,
+        satellites_visible: 24,
+        satellites_tracked: 21,
+        mean_cn0_db_hz: 41.5,
+        max_cn0_db_hz: 50.0,
+        interference_detected: false,
+        jamming_detected: false,
         msm_summary_seen: true,
         msm_summary_decoded: true,
         msm_summary_valid: true,
@@ -62,8 +81,20 @@ export const gnssStatusSamples: Record<GnssStatusSampleName, GnssStatus> = {
         msm_summary_cell_count: 52,
         msm_summary_age_s: 0.4,
         quality_percent: 100,
-        capability_flags: RTK_MODE_CAPABILITY | BASELINE_CAPABILITIES | CORRECTION_STREAM_CAPABILITY | MSM_SUMMARY_CAPABILITY,
-        value_flags: RTK_MODE_CAPABILITY | BASELINE_CAPABILITIES | CORRECTION_STREAM_CAPABILITY | MSM_SUMMARY_CAPABILITY,
+        capability_flags: RTK_MODE_CAPABILITY |
+            BASELINE_CAPABILITIES |
+            CORRECTION_STREAM_CAPABILITY |
+            MSM_SUMMARY_CAPABILITY |
+            SATELLITE_CAPABILITIES |
+            CN0_CAPABILITIES |
+            RF_HEALTH_CAPABILITIES,
+        value_flags: RTK_MODE_CAPABILITY |
+            BASELINE_CAPABILITIES |
+            CORRECTION_STREAM_CAPABILITY |
+            MSM_SUMMARY_CAPABILITY |
+            SATELLITE_CAPABILITIES |
+            CN0_CAPABILITIES |
+            RF_HEALTH_CAPABILITIES,
     },
     baseline_unavailable_unknown: {
         backend: 'universal',
@@ -124,6 +155,17 @@ export const gnssStatusSamples: Record<GnssStatusSampleName, GnssStatus> = {
         capability_flags: RTK_MODE_CAPABILITY | CORRECTION_STREAM_CAPABILITY,
         value_flags: RTK_MODE_CAPABILITY | CORRECTION_STREAM_CAPABILITY,
     },
+    satellite_cn0_unknown: {
+        backend: 'universal',
+        receiver_vendor: 'u-blox',
+        receiver_model: 'F9P',
+        fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX,
+        fix_valid: true,
+        rtk_mode: GnssStatusConstants.RTK_MODE_NONE,
+        quality_percent: 25,
+        capability_flags: RTK_MODE_CAPABILITY | SATELLITE_CAPABILITIES | CN0_CAPABILITIES,
+        value_flags: RTK_MODE_CAPABILITY,
+    },
     msm_summary_present: {
         backend: 'universal',
         receiver_vendor: 'u-blox',
@@ -142,6 +184,20 @@ export const gnssStatusSamples: Record<GnssStatusSampleName, GnssStatus> = {
         msm_summary_signal_count: 22,
         msm_summary_cell_count: 31,
         msm_summary_age_s: 0.6,
+        capability_flags: RTK_MODE_CAPABILITY | CORRECTION_STREAM_CAPABILITY | MSM_SUMMARY_CAPABILITY,
+        value_flags: RTK_MODE_CAPABILITY | CORRECTION_STREAM_CAPABILITY | MSM_SUMMARY_CAPABILITY,
+    },
+    msm_summary_not_seen: {
+        backend: 'universal',
+        receiver_vendor: 'u-blox',
+        receiver_model: 'F9P',
+        fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX,
+        fix_valid: true,
+        rtk_mode: GnssStatusConstants.RTK_MODE_NONE,
+        correction_stream_status: GnssStatusConstants.CORRECTION_STREAM_STATUS_WAITING,
+        msm_summary_seen: false,
+        msm_summary_decoded: false,
+        msm_summary_valid: false,
         capability_flags: RTK_MODE_CAPABILITY | CORRECTION_STREAM_CAPABILITY | MSM_SUMMARY_CAPABILITY,
         value_flags: RTK_MODE_CAPABILITY | CORRECTION_STREAM_CAPABILITY | MSM_SUMMARY_CAPABILITY,
     },

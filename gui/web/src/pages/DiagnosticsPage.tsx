@@ -27,7 +27,6 @@ import {
     SoundOutlined,
     ThunderboltOutlined,
     WarningOutlined,
-    WifiOutlined,
 } from "@ant-design/icons";
 import {ContentType} from "../api/Api.ts";
 import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
@@ -52,12 +51,6 @@ import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {
     deriveGpsStatus,
-    gnssBaselineSolutionStatusLabel,
-    gnssCorrectionStreamStatusLabel,
-    gnssReceiverLabel,
-    gnssRtkModeLabel,
-    hasGnssCapability,
-    readGnssBooleanState,
     readGnssNumber,
 } from "../utils/gpsStatus.ts";
 import {useEffect, useMemo, useState} from "react";
@@ -73,6 +66,7 @@ import {RobotAnatomy} from "../components/RobotAnatomy.tsx";
 import {GnssStatusConstants} from "../types/ros.ts";
 import {AlertOutlined} from "@ant-design/icons";
 import {DashCard} from "../components/dashboard/Card.tsx";
+import {GnssLiveDiagnosticsCard} from "../components/gnss/GnssLiveDiagnosticsCard.tsx";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -158,10 +152,6 @@ export const DiagnosticsPage = () => {
 
     const gpsFix = useMemo(() => deriveGpsStatus(gnssStatus), [gnssStatus]);
     const gpsFixType = gpsFix.label;
-    const gpsReceiver = gnssReceiverLabel(gnssStatus);
-    const gpsRtkMode = gnssRtkModeLabel(gnssStatus);
-    const correctionStreamStatus = gnssCorrectionStreamStatusLabel(gnssStatus);
-    const baselineSolutionStatus = gnssBaselineSolutionStatusLabel(gnssStatus);
 
     const orientation = pose.pose?.pose?.orientation;
     const qx = orientation?.x ?? 0;
@@ -506,147 +496,6 @@ export const DiagnosticsPage = () => {
 
     const zDriftColor = poseZ > 2 ? colors.danger : poseZ > 0.5 ? colors.warning : undefined;
     const flatCheck = Math.abs(roll) < 5 && Math.abs(pitch) < 5;
-    const gpsFixColor = gpsFix.fixType === "RTK_FIX"
-        ? colors.primary
-        : gpsFix.fixType === "RTK_FLOAT"
-            ? colors.warning
-            : colors.danger;
-    const gpsHdop = readGnssNumber(gnssStatus, GnssStatusConstants.CAP_HDOP, gnssStatus.hdop);
-    const gpsVdop = readGnssNumber(gnssStatus, GnssStatusConstants.CAP_VDOP, gnssStatus.vdop);
-    const gpsVerticalAccuracy = readGnssNumber(
-        gnssStatus,
-        GnssStatusConstants.CAP_VERTICAL_ACCURACY,
-        gnssStatus.vertical_accuracy_m,
-    );
-    const gpsHeading = readGnssNumber(gnssStatus, GnssStatusConstants.CAP_HEADING, gnssStatus.heading_deg);
-    const gpsHeadingAccuracy = readGnssNumber(
-        gnssStatus,
-        GnssStatusConstants.CAP_HEADING_ACCURACY,
-        gnssStatus.heading_accuracy_deg,
-    );
-    const gpsSatellitesUsed = readGnssNumber(
-        gnssStatus,
-        GnssStatusConstants.CAP_SATELLITES_USED,
-        gnssStatus.satellites_used,
-    );
-    const gpsSatellitesVisible = readGnssNumber(
-        gnssStatus,
-        GnssStatusConstants.CAP_SATELLITES_VISIBLE,
-        gnssStatus.satellites_visible,
-    );
-    const gpsSatellitesTracked = readGnssNumber(
-        gnssStatus,
-        GnssStatusConstants.CAP_SATELLITES_TRACKED,
-        gnssStatus.satellites_tracked,
-    );
-    const gpsCorrectionAge = readGnssNumber(
-        gnssStatus,
-        GnssStatusConstants.CAP_CORRECTION_AGE,
-        gnssStatus.correction_age_s,
-    );
-    const gpsMeanCn0 = readGnssNumber(
-        gnssStatus,
-        GnssStatusConstants.CAP_MEAN_CN0,
-        gnssStatus.mean_cn0_db_hz,
-    );
-    const gpsMaxCn0 = readGnssNumber(
-        gnssStatus,
-        GnssStatusConstants.CAP_MAX_CN0,
-        gnssStatus.max_cn0_db_hz,
-    );
-    const differentialState = readGnssBooleanState(
-        gnssStatus,
-        GnssStatusConstants.CAP_DIFFERENTIAL_CORRECTIONS,
-        gnssStatus.differential_corrections,
-    );
-    const correctionsState = readGnssBooleanState(
-        gnssStatus,
-        GnssStatusConstants.CAP_CORRECTIONS_ACTIVE,
-        gnssStatus.corrections_active,
-    );
-    const dualAntennaState = readGnssBooleanState(
-        gnssStatus,
-        GnssStatusConstants.CAP_DUAL_ANTENNA_STATUS,
-        gnssStatus.dual_antenna_heading,
-    );
-    const dualAntennaBaselineState = readGnssBooleanState(
-        gnssStatus,
-        GnssStatusConstants.CAP_DUAL_ANTENNA_BASELINE,
-        gnssStatus.dual_antenna_baseline,
-    );
-    const interferenceState = readGnssBooleanState(
-        gnssStatus,
-        GnssStatusConstants.CAP_INTERFERENCE_STATUS,
-        gnssStatus.interference_detected,
-    );
-    const jammingState = readGnssBooleanState(
-        gnssStatus,
-        GnssStatusConstants.CAP_JAMMING_STATUS,
-        gnssStatus.jamming_detected,
-    );
-    const baselineAzimuth = readGnssNumber(
-        gnssStatus,
-        GnssStatusConstants.CAP_BASELINE_AZIMUTH,
-        gnssStatus.baseline_azimuth_deg,
-    );
-    const baselinePitch = readGnssNumber(
-        gnssStatus,
-        GnssStatusConstants.CAP_BASELINE_PITCH,
-        gnssStatus.baseline_pitch_deg,
-    );
-    const baselineLength = readGnssNumber(
-        gnssStatus,
-        GnssStatusConstants.CAP_BASELINE_LENGTH,
-        gnssStatus.baseline_length_m,
-    );
-    const hasMsmSummary = hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_MSM_SUMMARY);
-    const hasMsmSummaryValue = ((gnssStatus.value_flags ?? 0) & GnssStatusConstants.CAP_MSM_SUMMARY) !== 0;
-    const msmSummaryLabel = hasMsmSummaryValue
-        ? [
-            gnssStatus.msm_summary_constellations_seen || undefined,
-            gnssStatus.msm_summary_message_type ? `MSM ${gnssStatus.msm_summary_message_type}` : undefined,
-            gnssStatus.msm_summary_station_id ? `station ${gnssStatus.msm_summary_station_id}` : undefined,
-            gnssStatus.msm_summary_satellite_count ? `sat ${gnssStatus.msm_summary_satellite_count}` : undefined,
-            gnssStatus.msm_summary_signal_count ? `sig ${gnssStatus.msm_summary_signal_count}` : undefined,
-            gnssStatus.msm_summary_cell_count ? `cell ${gnssStatus.msm_summary_cell_count}` : undefined,
-            gnssStatus.msm_summary_age_s ? `${gnssStatus.msm_summary_age_s.toFixed(1)} s` : undefined,
-        ].filter(Boolean).join(" · ")
-        : undefined;
-    const formatOptionalBool = (value: ReturnType<typeof readGnssBooleanState>) => {
-        switch (value) {
-            case "true":
-                return t('diagnosticsPage.yes');
-            case "false":
-                return t('diagnosticsPage.no');
-            case "unknown":
-                return t('diagnosticsPage.unknown');
-            case "unsupported":
-            default:
-                return t('diagnosticsPage.notAvailable');
-        }
-    };
-    const typedGpsDetails = [
-        {flag: GnssStatusConstants.CAP_SATELLITES_USED, label: t('diagnosticsPage.satellitesUsed'), value: gpsSatellitesUsed},
-        {flag: GnssStatusConstants.CAP_SATELLITES_VISIBLE, label: t('diagnosticsPage.satellitesVisible'), value: gpsSatellitesVisible},
-        {flag: GnssStatusConstants.CAP_SATELLITES_TRACKED, label: t('diagnosticsPage.satellitesTracked'), value: gpsSatellitesTracked},
-        {flag: GnssStatusConstants.CAP_HDOP, label: "HDOP", value: gpsHdop, precision: 2},
-        {flag: GnssStatusConstants.CAP_VDOP, label: "VDOP", value: gpsVdop, precision: 2},
-        {flag: GnssStatusConstants.CAP_VERTICAL_ACCURACY, label: t('diagnosticsPage.verticalAccuracyM'), value: gpsVerticalAccuracy, precision: 3},
-        {flag: GnssStatusConstants.CAP_HEADING, label: t('diagnosticsPage.headingDeg'), value: gpsHeading, precision: 1},
-        {flag: GnssStatusConstants.CAP_HEADING_ACCURACY, label: t('diagnosticsPage.headingAccuracyDeg'), value: gpsHeadingAccuracy, precision: 2},
-        {flag: GnssStatusConstants.CAP_CORRECTION_AGE, label: t('diagnosticsPage.correctionAgeS'), value: gpsCorrectionAge, precision: 1},
-        {flag: GnssStatusConstants.CAP_MEAN_CN0, label: "Mean CN0 (dB-Hz)", value: gpsMeanCn0, precision: 1},
-        {flag: GnssStatusConstants.CAP_MAX_CN0, label: "Max CN0 (dB-Hz)", value: gpsMaxCn0, precision: 1},
-        {flag: GnssStatusConstants.CAP_BASELINE_AZIMUTH, label: t('diagnosticsPage.baselineAzimuthDeg'), value: baselineAzimuth, precision: 2},
-        {flag: GnssStatusConstants.CAP_BASELINE_PITCH, label: t('diagnosticsPage.baselinePitchDeg'), value: baselinePitch, precision: 2},
-        {flag: GnssStatusConstants.CAP_BASELINE_LENGTH, label: t('diagnosticsPage.baselineLengthM'), value: baselineLength, precision: 3},
-    ];
-    const hasAdvancedGnssFields = typedGpsDetails.some((item) => hasGnssCapability(gnssStatus, item.flag)) ||
-        hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_DUAL_ANTENNA_BASELINE) ||
-        hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_BASELINE_SOLUTION_STATUS) ||
-        hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_CORRECTION_STREAM) ||
-        hasMsmSummary;
-
     const sectionLocalization = (
         <Row gutter={[12, 12]}>
             <Col xs={24} lg={12}>
@@ -724,115 +573,13 @@ export const DiagnosticsPage = () => {
                 </Card>
             </Col>
             <Col xs={24} lg={12}>
-                <Card title={<Space><WifiOutlined/> GPS</Space>} size="small">
-                    <Row gutter={[12, 12]}>
-                        <Col span={24}>
-                            <Space>
-                                <Typography.Text type="secondary" style={{fontSize: 12}}>{t('diagnosticsPage.fixType')}</Typography.Text>
-                                <Tag color={gpsFixColor === colors.primary ? "blue" : gpsFixColor === colors.warning ? "warning" : "error"}>
-                                    {gpsFixType}
-                                </Tag>
-                            </Space>
-                        </Col>
-                        <Col span={12}>
-                            <Statistic
-                                title={t('diagnosticsPage.latitude')}
-                                value={gps.pose?.pose?.position?.x}
-                                precision={9}
-
-                            />
-                        </Col>
-                        <Col span={12}>
-                            <Statistic
-                                title={t('diagnosticsPage.longitude')}
-                                value={gps.pose?.pose?.position?.y}
-                                precision={9}
-
-                            />
-                        </Col>
-                        <Col span={12}>
-                            <Statistic
-                                title={t('diagnosticsPage.altitudeM')}
-                                value={gps.pose?.pose?.position?.z}
-                                precision={3}
-
-                            />
-                        </Col>
-                        <Col span={12}>
-                            <Statistic
-                                title={t('diagnosticsPage.horizontalAccuracyM')}
-                                value={gpsAccuracy}
-                                precision={3}
-                                valueStyle={
-                                    (gpsAccuracy ?? 0) > 0.1
-                                        ? {color: colors.warning}
-                                        : undefined
-                                }
-
-                            />
-                        </Col>
-                        <Col span={24}>
-                            <Descriptions size="small" column={2}>
-                                <Descriptions.Item label={t('diagnosticsPage.receiver')}>{gpsReceiver}</Descriptions.Item>
-                                <Descriptions.Item label={t('diagnosticsPage.backend')}>{gnssStatus.backend || t('diagnosticsPage.unknownLower')}</Descriptions.Item>
-                                <Descriptions.Item label={t('diagnosticsPage.rtkMode')}>{gpsRtkMode ?? t('diagnosticsPage.unknown')}</Descriptions.Item>
-                                {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_CORRECTION_STREAM) && (
-                                    <Descriptions.Item label={t('diagnosticsPage.correctionStreamStatus')}>
-                                        {correctionStreamStatus ?? t('diagnosticsPage.unknown')}
-                                    </Descriptions.Item>
-                                )}
-                                <Descriptions.Item label={t('diagnosticsPage.differentialCorrections')}>{formatOptionalBool(differentialState)}</Descriptions.Item>
-                                <Descriptions.Item label={t('diagnosticsPage.correctionsActive')}>{formatOptionalBool(correctionsState)}</Descriptions.Item>
-                                {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_DUAL_ANTENNA_STATUS) && (
-                                    <Descriptions.Item label={t('diagnosticsPage.dualAntennaHeading')}>
-                                        {formatOptionalBool(dualAntennaState)}
-                                    </Descriptions.Item>
-                                )}
-                                {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_DUAL_ANTENNA_BASELINE) && (
-                                    <Descriptions.Item label={t('diagnosticsPage.dualAntennaBaseline')}>
-                                        {formatOptionalBool(dualAntennaBaselineState)}
-                                    </Descriptions.Item>
-                                )}
-                                {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_BASELINE_SOLUTION_STATUS) && (
-                                    <Descriptions.Item label={t('diagnosticsPage.baselineSolutionStatus')}>
-                                        {baselineSolutionStatus ?? t('diagnosticsPage.unknown')}
-                                    </Descriptions.Item>
-                                )}
-                                {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_INTERFERENCE_STATUS) && (
-                                    <Descriptions.Item label={t('diagnosticsPage.rfInterference')}>
-                                        {formatOptionalBool(interferenceState)}
-                                    </Descriptions.Item>
-                                )}
-                                {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_JAMMING_STATUS) && (
-                                    <Descriptions.Item label={t('diagnosticsPage.jamming')}>
-                                        {formatOptionalBool(jammingState)}
-                                    </Descriptions.Item>
-                                )}
-                                {typedGpsDetails
-                                    .filter((item) => hasGnssCapability(gnssStatus, item.flag))
-                                    .map((item) => (
-                                    <Descriptions.Item key={item.label} label={item.label}>
-                                            {item.value === undefined
-                                                ? t('diagnosticsPage.unknown')
-                                                : item.precision !== undefined
-                                                    ? item.value.toFixed(item.precision)
-                                                    : String(item.value)}
-                                        </Descriptions.Item>
-                                    ))}
-                                {hasMsmSummary && (
-                                    <Descriptions.Item label={t('diagnosticsPage.msmSummary')}>
-                                        {msmSummaryLabel || t('diagnosticsPage.unknown')}
-                                    </Descriptions.Item>
-                                )}
-                            </Descriptions>
-                            {!hasAdvancedGnssFields && (
-                                <Typography.Text type="secondary" style={{fontSize: 11}}>
-                                    {t('diagnosticsPage.advancedGnssUnavailable')}
-                                </Typography.Text>
-                            )}
-                        </Col>
-                    </Row>
-                </Card>
+                <GnssLiveDiagnosticsCard
+                    gnssStatus={gnssStatus}
+                    latitude={gps.pose?.pose?.position?.x}
+                    longitude={gps.pose?.pose?.position?.y}
+                    altitudeM={gps.pose?.pose?.position?.z}
+                    horizontalAccuracyM={gpsAccuracy}
+                />
             </Col>
         </Row>
     );
