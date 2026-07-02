@@ -11,7 +11,7 @@ export const useGnssStatus = () => {
     const ignoreStreamEvent = () => {};
     const gnssStatusStream = useWS<string>(ignoreStreamEvent, ignoreStreamEvent, (payload) => {
         try {
-            setGnssStatus(JSON.parse(payload) as GnssStatus);
+            setGnssStatus(payload as unknown as GnssStatus);
             parseWarningLoggedRef.current = false;
         } catch (error) {
             if (!parseWarningLoggedRef.current) {

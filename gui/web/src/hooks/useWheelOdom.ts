@@ -31,7 +31,7 @@ export const useWheelOdom = () => {
         }, () => {
         },
         (e) => {
-            setOdom(JSON.parse(e))
+            setOdom((e as any))
         })
     useEffect(() => {
         stream.start("/api/mowglinext/subscribe/wheelOdom")

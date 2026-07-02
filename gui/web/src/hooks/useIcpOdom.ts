@@ -16,7 +16,7 @@ export const useIcpOdom = () => {
         () => { /* connected */ },
         (e) => {
             try {
-                setOdom(JSON.parse(e));
+                setOdom((e as any));
             } catch {
                 /* ignore malformed messages */
             }

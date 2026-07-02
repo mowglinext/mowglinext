@@ -14,7 +14,7 @@ export const useWheelTicks = () => {
             })
         },
         (e) => {
-            setWheelTicks(JSON.parse(e))
+            setWheelTicks((e as any))
         })
     useEffect(() => {
         ticksStream.start("/api/mowglinext/subscribe/ticks",)

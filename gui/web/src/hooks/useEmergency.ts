@@ -14,7 +14,7 @@ export const useEmergency = () => {
             })
         },
         (e) => {
-            setEmergency(JSON.parse(e))
+            setEmergency((e as any))
         })
     useEffect(() => {
         emergencyStream.start("/api/mowglinext/subscribe/emergency",)

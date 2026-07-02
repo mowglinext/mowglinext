@@ -18,6 +18,7 @@ import (
 	"github.com/docker/distribution/uuid"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 // wsWriteTimeout bounds a single WebSocket write. A frozen/slow client must not
@@ -401,11 +402,22 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 
 		var writeMu sync.Mutex
 		writeFrame := func(topic string, data []byte) {
-			frame := map[string]string{
-				"topic": topic,
-				"data":  base64.StdEncoding.EncodeToString(data),
+			// Re-encode the frame as MessagePack and send it as a BINARY frame.
+			// `data` is the per-message snake_case JSON produced upstream; we
+			// decode it to a generic value and msgpack-encode {topic, data:obj}
+			// so the browser does ONE fast msgpack decode instead of
+			// JSON.parse(envelope) → atob → JSON.parse(payload) on the main
+			// thread. Field names (snake_case) are preserved, so the frontend
+			// TS interfaces are unchanged. The JSON→obj cost moves to Go (fast,
+			// off the browser's single thread).
+			var obj interface{}
+			if err := json.Unmarshal(data, &obj); err != nil {
+				return
 			}
-			payload, err := json.Marshal(frame)
+			payload, err := msgpack.Marshal(map[string]interface{}{
+				"topic": topic,
+				"data":  obj,
+			})
 			if err != nil {
 				return
 			}
@@ -418,7 +430,7 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			// timeout/error, close the conn so the read loop unblocks and the
 			// deferred cleanup releases all subscriptions.
 			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
-			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+			if err := conn.WriteMessage(websocket.BinaryMessage, payload); err != nil {
 				_ = conn.Close()
 			}
 		}

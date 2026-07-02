@@ -14,7 +14,7 @@ export const useStatus = () => {
             })
         },
         (e) => {
-            setStatus(JSON.parse(e))
+            setStatus((e as any))
         })
     useEffect(() => {
         statusStream.start("/api/mowglinext/subscribe/status",)
