@@ -207,13 +207,15 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
              std::shared_ptr<std_srvs::srv::Trigger::Response> resp)
       {
-        const bool ok = graph_->Save(graph_save_prefix_);
-        resp->success = ok;
-        resp->message = ok ? "saved to " + graph_save_prefix_ + ".*" : "save failed";
-        if (ok)
-          RCLCPP_INFO(get_logger(), "fusion_graph: %s", resp->message.c_str());
-        else
-          RCLCPP_WARN(get_logger(), "fusion_graph: %s", resp->message.c_str());
+        // Dispatch on the async save worker, never inline: a direct Save()
+        // blocks this executor for the full file write (~500 ms on the robot's
+        // eMMC — the exact stall DispatchAsyncSave was built to avoid,
+        // 2026-05-14 incident), starving the timers that feed the TF fallback
+        // path and risking Nav2 ExtrapolationExceptions on every manual save.
+        DispatchAsyncSave("manual-service");
+        resp->success = true;
+        resp->message = "save dispatched to " + graph_save_prefix_ + ".* (async)";
+        RCLCPP_INFO(get_logger(), "fusion_graph: %s", resp->message.c_str());
       });
 
   // ── Clear-graph service ─────────────────────────────────────────

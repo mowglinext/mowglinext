@@ -288,6 +288,13 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
   auto tight_noise = MakeDiagonal({std::max(latest_node_sigma_xy, 1.0e-4),
                                    std::max(latest_node_sigma_xy, 1.0e-4),
                                    std::max(latest_node_sigma_theta, 1.0e-4)});
+  // Rebuild from POSE keys only. `transformed` may also carry per-node
+  // gyro-bias variables ('b', double) when use_imu_preint is on; the loop below
+  // adds no factor for them, and handing iSAM2 new variables that no new factor
+  // references makes the update underconstrained (IndeterminantLinearSystem →
+  // ResetLocked wipes the graph). Bias is re-estimated live, so drop it here —
+  // mirroring what Load() does.
+  gtsam::Values pose_values;
   for (const auto& kv : transformed)
   {
     gtsam::Symbol s(kv.key);
@@ -295,8 +302,9 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
       continue;
     const auto noise = (kv.key == latest_key) ? tight_noise : loose_noise;
     fg.add(gtsam::PriorFactor<gtsam::Pose2>(kv.key, kv.value.cast<gtsam::Pose2>(), noise));
+    pose_values.insert(kv.key, kv.value);
   }
-  fresh.update(fg, transformed);
+  fresh.update(fg, pose_values);
   isam_ = std::move(fresh);
   estimate_dirty_ = true;
   // Loop-closure edges collapsed into priors during the rebuild.

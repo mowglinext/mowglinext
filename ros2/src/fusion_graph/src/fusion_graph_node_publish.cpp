@@ -102,6 +102,13 @@ void FusionGraphNode::PublishLocalOdom()
   odom.pose.pose.orientation = q_msg;
   odom.twist.twist.linear.x = wheel_vx_;
   odom.twist.twist.linear.y = 0.0;
+  // Bias-corrected gyro yaw rate — the SAME rate dead-reckoning integrates into
+  // dr_yaw_. Leaving this 0 made /odometry/filtered unusable as Nav2's
+  // controller_server.odom_topic (MPPI seeds rollouts / RPP scales lookahead
+  // from twist.angular.z — the documented "controllers had zero velocity
+  // feedback" gap that forced odom_topic onto raw /wheel_odom). Same executor
+  // thread as the dr_* writers, so no lock needed here.
+  odom.twist.twist.angular.z = dr_last_gz_;
   // Dead reckoning has unbounded drift — leave pose covariance loose
   // and let Nav2 trust the graph's /odometry/filtered_map for absolute
   // positioning. Tight roll/pitch/z so 2D consumers don't see NaN.
@@ -113,6 +120,10 @@ void FusionGraphNode::PublishLocalOdom()
   odom.pose.covariance[21] = 1e-9;  // roll
   odom.pose.covariance[28] = 1e-9;  // pitch
   odom.pose.covariance[35] = 0.02;  // yaw — gyro short-term σ ≈ 0.14 rad
+  for (auto& v : odom.twist.covariance)
+    v = 0.0;
+  odom.twist.covariance[0] = 0.02;  // vx — wheel-odom velocity noise
+  odom.twist.covariance[35] = 4e-4;  // wz — gyro rate noise (σ ≈ 0.02 rad/s)
   pub_local_odom_->publish(odom);
 }
 
