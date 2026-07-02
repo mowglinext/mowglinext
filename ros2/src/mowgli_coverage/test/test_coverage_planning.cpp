@@ -401,6 +401,95 @@ TEST(CoverageContinuousPath, ContinuousPathAvoidsHole)
                          << " sub-path poses fall inside the obstacle hole";
 }
 
+// Sub-path DRIVE ORDER: on a multi-lobe field the sub-paths are reordered by
+// nearest-neighbour (entering each at whichever end is nearer) to cut the
+// blade-off Nav2 transit between them — measured 77 → 47 m on the recorded
+// 4-hole garden. Reversing a FINISHED sub-path polyline is safe (identical
+// points → every turn-around stays in-bounds), so the reorder must preserve two
+// safety-critical properties: (1) every sub-path is still hole-free, and (2) the
+// order is DETERMINISTIC — the BT resumes coverage by sub-path index, so a
+// re-plan of the same area must reproduce the identical sequence.
+TEST(CoverageContinuousPath, SubPathReorderStaysHoleFreeAndDeterministic)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeadland = 0.18;
+  constexpr double kInset = 0.15;
+  constexpr double kMinSwath = 0.15;
+  constexpr double kTurnRadius = 0.18;
+  constexpr double kMinTurnRadius = 0.15;
+  constexpr double kStep = 0.03;
+
+  // 10 m square with two separated holes → several lobes, so the driver relocates
+  // between them and the NN reorder is exercised (> 2 sub-paths).
+  f2c::types::Cell cell = makeSquare(10.0);
+  auto add_hole = [&cell](double cx, double cy, double h)
+  {
+    f2c::types::LinearRing r;
+    r.addPoint(f2c::types::Point(cx - h, cy - h));
+    r.addPoint(f2c::types::Point(cx + h, cy - h));
+    r.addPoint(f2c::types::Point(cx + h, cy + h));
+    r.addPoint(f2c::types::Point(cx - h, cy + h));
+    r.addPoint(f2c::types::Point(cx - h, cy - h));
+    cell.addRing(r);
+  };
+  add_hole(3.0, 3.0, 0.9);
+  add_hole(7.0, 7.0, 0.9);
+
+  const auto plan = planBoustrophedon(cell, kOpWidth, kHeadland, 0, kInset, -1.0, kMinSwath);
+  ASSERT_GE(plan.safe_holes.size(), 2u) << "both holes must reach the plan as safe_holes";
+  const auto subs =
+      buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
+  ASSERT_GE(subs.size(), 3u) << "two holes should split the plan into >=3 lobes to reorder";
+
+  // (1) Hole-free preserved after reorder/reversal.
+  std::size_t in_hole = 0, total = 0;
+  for (const auto& sp : subs)
+  {
+    ASSERT_GE(sp.size(), 2u) << "degenerate sub-path after reorder";
+    for (const auto& p : sp)
+    {
+      ++total;
+      for (const auto& hole : plan.safe_holes)
+      {
+        if (pointInRing(p.first, p.second, hole))
+        {
+          ++in_hole;
+          break;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(in_hole, 0u) << in_hole << "/" << total << " poses inside a hole after reorder";
+
+  // (2) Deterministic across re-plans (BT resume-by-index stability).
+  const auto subs2 =
+      buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
+  ASSERT_EQ(subs.size(), subs2.size()) << "sub-path count not reproducible";
+  for (std::size_t i = 0; i < subs.size(); ++i)
+  {
+    ASSERT_EQ(subs[i].size(), subs2[i].size())
+        << "sub-path " << i << " length differs across re-plans";
+    EXPECT_NEAR(subs[i].front().first, subs2[i].front().first, 1e-9)
+        << "sub-path " << i << " start x";
+    EXPECT_NEAR(subs[i].front().second, subs2[i].front().second, 1e-9)
+        << "sub-path " << i << " start y";
+    EXPECT_NEAR(subs[i].back().first, subs2[i].back().first, 1e-9) << "sub-path " << i << " end x";
+  }
+
+  // (3) The realized inter-sub-path transit is finite and sane (a runaway order
+  // would criss-cross far more than a few field diagonals).
+  double transit = 0.0;
+  for (std::size_t i = 1; i < subs.size(); ++i)
+  {
+    transit += std::hypot(subs[i].front().first - subs[i - 1].back().first,
+                          subs[i].front().second - subs[i - 1].back().second);
+  }
+  const double field_diag = 10.0 * std::sqrt(2.0);
+  EXPECT_LT(transit, field_diag * static_cast<double>(subs.size()))
+      << "relocation transit " << transit << " m implausibly long for " << subs.size()
+      << " sub-paths — the NN order is not sequencing lobes locally";
+}
+
 // #335: ring_direction controls the perimeter/headland travel winding (blade
 // side). 1 = clockwise (negative shoelace area), 2 = counter-clockwise
 // (positive). The two produce the same ring geometry driven the opposite way.
