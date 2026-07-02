@@ -42,7 +42,7 @@ export const SchedulePage = () => {
     () => {},
     () => {},
     (data) => {
-      const parsed = JSON.parse(data) as MapType;
+      const parsed = data as unknown as MapType;
       const names = (parsed.working_area ?? []).map((a) => a.name);
       setWorkingAreas(names);
     },

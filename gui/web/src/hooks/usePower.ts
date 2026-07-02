@@ -14,7 +14,7 @@ export const usePower = () => {
             })
         },
         (e) => {
-            setPower(JSON.parse(e))
+            setPower((e as any))
         })
     useEffect(() => {
         powerStream.start("/api/mowglinext/subscribe/power",)

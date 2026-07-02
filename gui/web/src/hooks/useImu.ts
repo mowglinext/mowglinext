@@ -14,7 +14,7 @@ export const useImu = () => {
             })
         },
         (e) => {
-            setImu(JSON.parse(e))
+            setImu((e as any))
         })
     useEffect(() => {
         imuStream.start("/api/mowglinext/subscribe/imu",)

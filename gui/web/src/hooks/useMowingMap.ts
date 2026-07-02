@@ -14,7 +14,7 @@ export const useMowingMap = () => {
         () => { /* closed */ },
         () => { /* connected */ },
         (data) => {
-            try { setMap(JSON.parse(data) as MapType); }
+            try { setMap(data as unknown as MapType); }
             catch { /* ignore */ }
         },
     );

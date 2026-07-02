@@ -15,7 +15,7 @@ export const useGPS = () => {
             })
         },
         (e) => {
-            setGps(JSON.parse(e))
+            setGps((e as any))
         })
     useEffect(() => {
         gpsStream.start("/api/mowglinext/subscribe/gps",)

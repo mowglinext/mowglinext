@@ -132,7 +132,7 @@ export function useMapStreams({
             console.log({ message: "Pose Stream connected" });
         },
         (e) => {
-            const pose = JSON.parse(e) as AbsolutePose;
+            const pose = (e as any) as AbsolutePose;
             const mower_lonlat = transpose(
                 offsetX,
                 offsetY,
@@ -181,7 +181,7 @@ export function useMapStreams({
             console.log({ message: "MAP Stream connected" });
         },
         (e) => {
-            const parse = JSON.parse(e) as MapType;
+            const parse = (e as any) as MapType;
             if (console.debug) console.debug(parse);
             setMap(parse);
             setMapKey("live");
@@ -196,7 +196,7 @@ export function useMapStreams({
             console.log({ message: "PATH Stream connected" });
         },
         (e) => {
-            const parse = JSON.parse(e) as Path;
+            const parse = (e as any) as Path;
             setPath(parse);
         }
     );
@@ -209,7 +209,7 @@ export function useMapStreams({
             console.log({ message: "PLAN Stream connected" });
         },
         (e) => {
-            const parse = JSON.parse(e) as Path;
+            const parse = (e as any) as Path;
             setPlan(parse);
         }
     );
@@ -232,7 +232,7 @@ export function useMapStreams({
             console.log({ message: "Lidar Stream connected" });
         },
         (e) => {
-            const scan = JSON.parse(e) as LaserScan;
+            const scan = (e as any) as LaserScan;
             const pose = robotPoseRef.current;
             if (!pose || !scan.ranges) return;
 
@@ -292,7 +292,7 @@ export function useMapStreams({
         () => {},
         () => { console.log({ message: "Obstacles Stream connected" }); },
         (e) => {
-            const parsed = JSON.parse(e) as ObstacleArray;
+            const parsed = (e as any) as ObstacleArray;
             if (parsed.obstacles) {
                 // Only show persistent obstacles (status=1)
                 setDynamicObstacles(parsed.obstacles.filter(o => o.status === 1));
@@ -338,7 +338,7 @@ export function useMapStreams({
         () => { console.log({ message: "MowProgress Stream closed" }); },
         () => { console.log({ message: "MowProgress Stream connected" }); },
         (e) => {
-            const grid = JSON.parse(e) as OccupancyGrid;
+            const grid = (e as any) as OccupancyGrid;
             if (!grid.info || !grid.data) return;
             if ((grid.info.width ?? 0) === 0 || (grid.info.height ?? 0) === 0) return;
             mowProgressPendingRef.current = { grid, offsetX, offsetY, datum };
@@ -362,7 +362,7 @@ export function useMapStreams({
             console.log({ message: "RecordingTrajectory Stream connected" });
         },
         (e) => {
-            const path = JSON.parse(e) as Path;
+            const path = (e as any) as Path;
             if (!path.poses || path.poses.length === 0) {
                 // Recording cleared — remove trajectory feature
                 setFeatures((oldFeatures) => {
