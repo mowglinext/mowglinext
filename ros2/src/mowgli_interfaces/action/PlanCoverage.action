@@ -25,6 +25,11 @@ string message                         # failure reason when success == false
 nav_msgs/Path[] segments               # ordered drivable segments (rings out→in, then swaths)
 uint8[] segment_types                  # parallel to segments (SEGMENT_*)
 nav_msgs/Path full_path                # concatenation of all segments (GUI / visualisation only)
+nav_msgs/Path[] drivable_subpaths      # hole-free continuous sub-paths in drive order; the BT
+                                       # follows each with MPPI and bridges the gap between
+                                       # consecutive sub-paths with a blade-off Nav2 transit that
+                                       # routes around obstacles (issue #333). Exactly one entry
+                                       # for a hole-free field (== full_path).
 float64 total_distance                 # sum of segment lengths (m)
 uint32 ring_count
 uint32 swath_count

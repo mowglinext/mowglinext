@@ -117,7 +117,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             // param) is surfaced here instead.
             "mowing_enabled", "mowing_speed", "transit_speed",
             "headland_width", "num_headland_passes", "swath_overlap",
-            "chassis_safety_inset", "min_turning_radius",
+            "chassis_safety_inset", "min_turning_radius", "mow_direction",
         ],
     },
     {

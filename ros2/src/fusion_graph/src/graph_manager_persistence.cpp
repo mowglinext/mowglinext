@@ -349,7 +349,15 @@ bool GraphManager::Load(const std::string& prefix)
   gtsam::Values kept_values;
   for (const auto& key_value : loaded_values)
   {
-    if (cutoff > 0 && gtsam::Symbol(key_value.key).index() < cutoff)
+    const gtsam::Symbol sym(key_value.key);
+    // Only pose keys ('x') are restored. A graph saved with use_imu_preint=true
+    // also serializes per-node gyro-bias variables (Symbol 'b', type double):
+    // casting those to Pose2 throws at boot, and re-inserting them with no
+    // factor referencing them leaves the update underconstrained. Bias is
+    // cheap to re-estimate live, so drop them on load.
+    if (sym.chr() != 'x')
+      continue;
+    if (cutoff > 0 && sym.index() < cutoff)
       continue;  // older than the window — drop (its info was already in priors)
     fg.add(gtsam::PriorFactor<gtsam::Pose2>(key_value.key,
                                             key_value.value.cast<gtsam::Pose2>(),

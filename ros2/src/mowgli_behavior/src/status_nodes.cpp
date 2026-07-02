@@ -15,6 +15,8 @@
 
 #include "mowgli_behavior/status_nodes.hpp"
 
+#include "mowgli_behavior/coverage_persistence.hpp"
+
 namespace mowgli_behavior
 {
 
@@ -155,6 +157,10 @@ BT::NodeStatus EndSession::tick()
   ctx->area_resume_pose_index.clear();
   ctx->area_path_pose_count.clear();
   ctx->completed_areas.clear();
+  // Remove the on-disk resume snapshot too: this is a real session boundary, so
+  // the next COMMAND_START must start fresh rather than resume a finished (or
+  // aborted-and-docked) session from the persisted cursor.
+  clearCoverageResumeState(*ctx);
   return BT::NodeStatus::SUCCESS;
 }
 

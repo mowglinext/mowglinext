@@ -162,7 +162,7 @@ export const useRobotDescription = (): RobotGeometry => {
         (raw) => {
             if (receivedRef.current) return; // only need the first message
             try {
-                const msg = JSON.parse(raw);
+                const msg = raw as { data?: string; Data?: string };
                 // rosbridge delivers std_msgs/String as {"data": "..."}
                 // After snakeToPascal it may be {"Data": "..."} or {"data": "..."}
                 const urdfXml: string = msg.Data ?? msg.data ?? "";

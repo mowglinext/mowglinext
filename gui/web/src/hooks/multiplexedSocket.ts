@@ -6,14 +6,21 @@
 // upstream subscription per topic per tab.
 //
 // Wire format (matches MultiplexRoute in gui/pkg/api/mowglinext.go):
-//   client → server: {"op": "subscribe"|"unsubscribe", "topic": "<key>"}
-//   server → client: {"topic": "<key>", "data": "<base64>"}
+//   client → server: {"op": "subscribe"|"unsubscribe", "topic": "<key>"}  (JSON text)
+//   server → client: MessagePack BINARY frame {"topic": "<key>", "data": <decoded msg object>}
+//
+// The server msgpack-encodes the already-decoded ROS message (snake_case keys
+// preserved), so listeners receive the message OBJECT directly — no per-hook
+// JSON.parse, no base64. Keeps the heavy number-array parse off the browser
+// main thread (one msgpack decode vs JSON.parse(envelope)+atob+JSON.parse).
 
-type Listener = (data: string, first: boolean) => void;
+import {unpack} from "msgpackr";
+
+type Listener = (data: unknown, first: boolean) => void;
 
 interface ServerFrame {
     topic: string;
-    data: string;
+    data: unknown;
 }
 
 interface ClientOp {
@@ -86,6 +93,8 @@ class MultiplexedSocket {
         this.state = "connecting";
 
         const ws = new WebSocket(this.url);
+        // Server frames are MessagePack binary; receive them as ArrayBuffer.
+        ws.binaryType = "arraybuffer";
         this.ws = ws;
 
         ws.onopen = () => {
@@ -98,20 +107,16 @@ class MultiplexedSocket {
         };
 
         ws.onmessage = (e: MessageEvent) => {
+            // MessagePack binary frame → {topic, data: <decoded object>}.
             let frame: ServerFrame;
             try {
-                frame = JSON.parse(typeof e.data === "string" ? e.data : "") as ServerFrame;
+                if (!(e.data instanceof ArrayBuffer)) return;
+                frame = unpack(new Uint8Array(e.data)) as ServerFrame;
             } catch {
                 return;
             }
             const set = this.listeners.get(frame.topic);
             if (!set || set.size === 0) return;
-            let decoded: string;
-            try {
-                decoded = atob(frame.data);
-            } catch {
-                return;
-            }
             // Snapshot listeners so a callback that unsubscribes mid-iteration
             // does not affect the current dispatch.
             const snapshot = Array.from(set);
@@ -119,7 +124,7 @@ class MultiplexedSocket {
                 const isFirst = this.pendingFirst.has(cb);
                 if (isFirst) this.pendingFirst.delete(cb);
                 try {
-                    cb(decoded, isFirst);
+                    cb(frame.data, isFirst);
                 } catch (err) {
                     console.error("MultiplexedSocket: listener threw", err);
                 }

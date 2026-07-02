@@ -660,7 +660,14 @@ func persistGNSSRuntimeBaud(dbProvider pkgtypes.IDBProvider, runtimeBaud string)
 		return err
 	}
 	if strings.TrimSpace(doc.RuntimeEnvPath) != "" {
-		if err := writeRuntimeEnvFile(doc.RuntimeEnvPath, gnssEnvUpdates); err != nil {
+		// Persisting a runtime baud must only touch the baud keys in the .env —
+		// regenerating the whole GNSS env block here would clobber NTRIP/device
+		// values an operator may have set directly in the runtime environment.
+		baudEnvUpdates := map[string]string{
+			"GNSS_SERIAL_BAUD": gnssEnvUpdates["GNSS_SERIAL_BAUD"],
+			"GNSS_CONFIG_BAUD": gnssEnvUpdates["GNSS_CONFIG_BAUD"],
+		}
+		if err := writeRuntimeEnvFile(doc.RuntimeEnvPath, baudEnvUpdates); err != nil {
 			return err
 		}
 	}

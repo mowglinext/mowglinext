@@ -27,20 +27,21 @@ CoverageServer::CoverageServer(const rclcpp::NodeOptions& options)
   RCLCPP_INFO(get_logger(), "Creating %s", get_name());
 }
 
-nav2_util::CallbackReturn CoverageServer::on_configure(
-    const rclcpp_lifecycle::State& /*state*/)
+nav2_util::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Configuring %s", get_name());
 
   robot_width_ = declare_parameter<double>("robot_width", 0.40);
   operation_width_ = declare_parameter<double>("operation_width", 0.18);
-  default_headland_width_ =
-      declare_parameter<double>("default_headland_width", 0.20);
+  default_headland_width_ = declare_parameter<double>("default_headland_width", 0.20);
   num_headland_passes_ = declare_parameter<int>("num_headland_passes", 0);
   // Declared here, READ LIVE in planCoverage — both are field-tuned between
   // plans with `ros2 param set` (no node restart).
   declare_parameter<double>("chassis_safety_inset", 0.0);
   declare_parameter<double>("min_swath_length", 0.15);
+  // Perimeter/headland travel winding (#335): 0 = planner default (F2C natural),
+  // 1 = clockwise, 2 = counter-clockwise. Read live in planCoverage.
+  declare_parameter<int>("ring_direction", 0);
   // Hard floor on every turn-around / fillet arc in the continuous path: the
   // robot's minimum MPPI-trackable turning radius (mowgli_robot.yaml). Read live
   // in planCoverage so it can be field-tuned between plans.
@@ -51,10 +52,8 @@ nav2_util::CallbackReturn CoverageServer::on_configure(
   // client's goal handle is invalidated underneath it. 15 s clears the client.
   double action_server_result_timeout =
       declare_parameter<double>("action_server_result_timeout", 15.0);
-  rcl_action_server_options_t server_options =
-      rcl_action_server_get_default_options();
-  server_options.result_timeout.nanoseconds =
-      RCL_S_TO_NS(action_server_result_timeout);
+  rcl_action_server_options_t server_options = rcl_action_server_get_default_options();
+  server_options.result_timeout.nanoseconds = RCL_S_TO_NS(action_server_result_timeout);
 
   action_server_ = std::make_unique<ActionServer>(shared_from_this(),
                                                   "plan_coverage",
@@ -74,8 +73,7 @@ nav2_util::CallbackReturn CoverageServer::on_configure(
   return nav2_util::CallbackReturn::SUCCESS;
 }
 
-nav2_util::CallbackReturn CoverageServer::on_activate(
-    const rclcpp_lifecycle::State& /*state*/)
+nav2_util::CallbackReturn CoverageServer::on_activate(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Activating %s", get_name());
   action_server_->activate();
@@ -83,8 +81,7 @@ nav2_util::CallbackReturn CoverageServer::on_activate(
   return nav2_util::CallbackReturn::SUCCESS;
 }
 
-nav2_util::CallbackReturn CoverageServer::on_deactivate(
-    const rclcpp_lifecycle::State& /*state*/)
+nav2_util::CallbackReturn CoverageServer::on_deactivate(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Deactivating %s", get_name());
   action_server_->deactivate();
@@ -92,16 +89,14 @@ nav2_util::CallbackReturn CoverageServer::on_deactivate(
   return nav2_util::CallbackReturn::SUCCESS;
 }
 
-nav2_util::CallbackReturn CoverageServer::on_cleanup(
-    const rclcpp_lifecycle::State& /*state*/)
+nav2_util::CallbackReturn CoverageServer::on_cleanup(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Cleaning up %s", get_name());
   action_server_.reset();
   return nav2_util::CallbackReturn::SUCCESS;
 }
 
-nav2_util::CallbackReturn CoverageServer::on_shutdown(
-    const rclcpp_lifecycle::State& /*state*/)
+nav2_util::CallbackReturn CoverageServer::on_shutdown(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Shutting down %s", get_name());
   return nav2_util::CallbackReturn::SUCCESS;
@@ -359,6 +354,9 @@ void CoverageServer::planCoverage()
     // plans (field iteration without a node restart).
     const double configured_inset = get_parameter("chassis_safety_inset").as_double();
     const double min_swath_length = get_parameter("min_swath_length").as_double();
+    // Perimeter/headland travel winding (#335): 0 = planner default, 1 = CW,
+    // 2 = CCW. Read live so it is field-tunable per plan.
+    const int ring_direction = static_cast<int>(get_parameter("ring_direction").as_int());
     const double mow_angle_rad =
         (goal->mow_angle_deg < 0.0) ? -1.0 : goal->mow_angle_deg * M_PI / 180.0;
 
@@ -385,13 +383,20 @@ void CoverageServer::planCoverage()
 
     f2c::types::Cell cell = buildCellFromGoal(*goal);
 
+    // Robot's minimum trackable turning radius — floors both the ring-corner
+    // fillets inside the planner and the turn-around connectors below. Read
+    // live so it stays field-tunable per plan.
+    const double min_turning_radius = get_parameter("min_turning_radius").as_double();
+
     BoustrophedonPlan plan = planBoustrophedon(cell,
                                                operation_width_,
                                                default_headland_width_,
                                                num_headland_passes_,
                                                effective_inset,
                                                mow_angle_rad,
-                                               min_swath_length);
+                                               min_swath_length,
+                                               ring_direction,
+                                               min_turning_radius);
 
     // Instrumentation (no behaviour change): surface every piece the planner
     // dropped (slivers, tiny rings, micro-cells) and the planned-coverage
@@ -485,41 +490,77 @@ void CoverageServer::planCoverage()
         plan.safe_boundary.size() >= 3 ? plan.safe_boundary : outer;
     constexpr double kConnectorTurnRadius = 0.30;  // nominal turn-around arc radius (m)
     constexpr double kConnectorStep = 0.03;  // connector densify step (m)
-    // Floor on every turn-around / fillet arc — never plan a loop tighter than
-    // the robot can track (read live so it's field-tunable per plan).
-    const double min_turning_radius = get_parameter("min_turning_radius").as_double();
-    const auto continuous = buildContinuousPath(
+    // Build the plan as one or more HOLE-FREE continuous sub-paths. A single
+    // forward turn-around connector can't route around a large interior hole, so
+    // the path breaks where it would otherwise cross one; the BT drives each
+    // sub-path with MPPI and bridges the gaps with a blade-off Nav2 transit that
+    // routes around the obstacle (issue #333). full_path is their concatenation
+    // (GUI viz); drivable_subpaths is what the BT follows.
+    const auto subpaths = buildContinuousSubPaths(
         plan, connector_boundary, kConnectorTurnRadius, min_turning_radius, kConnectorStep);
 
     result->full_path.header = header;
+    result->drivable_subpaths.clear();
     double total = 0.0;
     std::size_t out_of_bounds = 0;
-    for (std::size_t i = 0; i < continuous.size(); ++i)
+    std::size_t in_hole = 0;
+    for (const auto& sub : subpaths)
     {
-      const double x = continuous[i].first;
-      const double y = continuous[i].second;
-      double yaw = 0.0;
-      if (i + 1 < continuous.size())
+      nav_msgs::msg::Path spath;
+      spath.header = header;
+      for (std::size_t i = 0; i < sub.size(); ++i)
       {
-        yaw = std::atan2(continuous[i + 1].second - y, continuous[i + 1].first - x);
+        const double x = sub[i].first;
+        const double y = sub[i].second;
+        double yaw = 0.0;
+        if (i + 1 < sub.size())
+        {
+          yaw = std::atan2(sub[i + 1].second - y, sub[i + 1].first - x);
+        }
+        else if (i > 0)
+        {
+          yaw = std::atan2(y - sub[i - 1].second, x - sub[i - 1].first);
+        }
+        if (i > 0)
+        {
+          total += std::hypot(x - sub[i - 1].first, y - sub[i - 1].second);
+        }
+        const auto pose = makePose(header, x, y, yaw);
+        spath.poses.push_back(pose);
+        result->full_path.poses.push_back(pose);
+        // Verify against the SAME inset ring the connectors are bounded by: any
+        // pose outside it means a fallback straight connector left the safe inset
+        // (the only way the blade can approach the operator boundary), so it is
+        // the safety-relevant residual to surface — not merely outside the raw
+        // polygon.
+        if (connector_boundary.size() >= 3 && !pointInRing(x, y, connector_boundary))
+        {
+          ++out_of_bounds;
+        }
+        // Sub-paths are split so none crosses a hole; a residual pose inside one
+        // means even a straight fallback couldn't be avoided (degenerate
+        // geometry) — surface it as the #333 safety residual.
+        for (const auto& hole : plan.safe_holes)
+        {
+          if (pointInRing(x, y, hole))
+          {
+            ++in_hole;
+            break;
+          }
+        }
       }
-      else if (i > 0)
+      if (spath.poses.size() >= 2)
       {
-        yaw = std::atan2(y - continuous[i - 1].second, x - continuous[i - 1].first);
+        result->drivable_subpaths.push_back(std::move(spath));
       }
-      if (i > 0)
-      {
-        total += std::hypot(x - continuous[i - 1].first, y - continuous[i - 1].second);
-      }
-      result->full_path.poses.push_back(makePose(header, x, y, yaw));
-      // Verify against the SAME inset ring the connectors are bounded by: any
-      // pose outside it means a fallback straight connector left the safe inset
-      // (the only way the blade can approach the operator boundary), so it is the
-      // safety-relevant residual to surface — not merely outside the raw polygon.
-      if (connector_boundary.size() >= 3 && !pointInRing(x, y, connector_boundary))
-      {
-        ++out_of_bounds;
-      }
+    }
+    if (result->drivable_subpaths.size() > 1)
+    {
+      RCLCPP_INFO(get_logger(),
+                  "PlanCoverage: split into %zu hole-free sub-paths — %zu blade-off Nav2 "
+                  "transit(s) will route around obstacle(s) between them",
+                  result->drivable_subpaths.size(),
+                  result->drivable_subpaths.size() - 1);
     }
     if (out_of_bounds > 0)
     {
@@ -530,6 +571,15 @@ void CoverageServer::planCoverage()
                    "PlanCoverage: %zu/%zu continuous-path poses outside the chassis-safety "
                    "inset — connector geometry bug (blade may approach the operator boundary)",
                    out_of_bounds,
+                   result->full_path.poses.size());
+    }
+    if (in_hole > 0)
+    {
+      RCLCPP_ERROR(get_logger(),
+                   "PlanCoverage: %zu/%zu continuous-path poses inside an obstacle hole — a "
+                   "turn-around connector could not route around the hole (blade may cross the "
+                   "obstacle during the transition)",
+                   in_hole,
                    result->full_path.poses.size());
     }
 

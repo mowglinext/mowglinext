@@ -571,6 +571,25 @@ func gnssCompatFromFlat(flat map[string]any) map[string]string {
 		ntripGGAEnabled = "true"
 	}
 
+	// crtk.net is the public Centipede caster, whose well-known anonymous login
+	// is "centipede/centipede". Only fall back to those credentials when the
+	// receiver is actually pointed at that caster AND the operator has not
+	// supplied (or has deliberately cleared) their own. Injecting "centipede"
+	// unconditionally would (a) hand a custom caster the wrong credentials and
+	// (b) silently re-enable the public caster for an operator who cleared the
+	// fields to disable it.
+	ntripHost := stringValue(flat["ntrip_host"], "crtk.net")
+	ntripUser := stringValue(flat["ntrip_user"], "")
+	ntripPassword := stringValue(flat["ntrip_password"], "")
+	if strings.EqualFold(ntripHost, "crtk.net") {
+		if ntripUser == "" {
+			ntripUser = "centipede"
+		}
+		if ntripPassword == "" {
+			ntripPassword = "centipede"
+		}
+	}
+
 	return map[string]string{
 		"GNSS_STACK":                "universal",
 		"GNSS_STATUS_SOURCE":        "universal",
@@ -584,11 +603,11 @@ func gnssCompatFromFlat(flat map[string]any) map[string]string {
 		"GNSS_PROFILE_RATE_HZ":      profileRateHz,
 		"GNSS_BACKEND":              "universal",
 		"GNSS_NTRIP_ENABLED":        boolStringValue(flat["ntrip_enabled"], true),
-		"GNSS_NTRIP_HOST":           stringValue(flat["ntrip_host"], "crtk.net"),
+		"GNSS_NTRIP_HOST":           ntripHost,
 		"GNSS_NTRIP_PORT":           stringValue(flat["ntrip_port"], "2101"),
 		"GNSS_NTRIP_MOUNTPOINT":     ntripMountpoint,
-		"GNSS_NTRIP_USERNAME":       stringValue(flat["ntrip_user"], "centipede"),
-		"GNSS_NTRIP_PASSWORD":       stringValue(flat["ntrip_password"], "centipede"),
+		"GNSS_NTRIP_USERNAME":       ntripUser,
+		"GNSS_NTRIP_PASSWORD":       ntripPassword,
 		"GNSS_RTCM_FORWARDING":      "true",
 		"GNSS_NTRIP_GGA_ENABLED":    ntripGGAEnabled,
 		"GNSS_NTRIP_GGA_INTERVAL_S": stringValue(flat["gnss_ntrip_gga_interval_s"], "10"),

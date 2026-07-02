@@ -24,7 +24,7 @@ export const useBTLog = () => {
 
     const stream = useWS<string>(() => {}, () => {},
         (e) => {
-            const msg: BTLog = JSON.parse(e);
+            const msg: BTLog = (e as any);
             if (msg.event_log) {
                 for (const ev of msg.event_log) {
                     accRef.current.set(ev.node_name, ev.current_status);

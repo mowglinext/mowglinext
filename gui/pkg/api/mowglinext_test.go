@@ -2,8 +2,9 @@ package api
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
+
+	"github.com/vmihailenco/msgpack/v5"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -191,14 +192,18 @@ func readMultiplexFrame(t *testing.T, conn *websocket.Conn) (string, []byte) {
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	_, raw, err := conn.ReadMessage()
 	require.NoError(t, err)
+	// Since the #337 binary transport, frames are msgpack-encoded
+	// {topic, data:<decoded object>} sent as BINARY websocket messages
+	// (was JSON {topic, data:<base64>}). Re-encode the decoded object as
+	// JSON so the assertions can keep comparing JSON payloads.
 	var frame struct {
-		Topic string `json:"topic"`
-		Data  string `json:"data"`
+		Topic string      `msgpack:"topic"`
+		Data  interface{} `msgpack:"data"`
 	}
-	require.NoError(t, json.Unmarshal(raw, &frame))
-	decoded, err := base64.StdEncoding.DecodeString(frame.Data)
+	require.NoError(t, msgpack.Unmarshal(raw, &frame))
+	payload, err := json.Marshal(frame.Data)
 	require.NoError(t, err)
-	return frame.Topic, decoded
+	return frame.Topic, payload
 }
 
 func TestMultiplexRoute_FansOutOnSubscribe(t *testing.T) {
@@ -267,4 +272,16 @@ func TestMultiplexRoute_DropsSubscriptionsOnDisconnect(t *testing.T) {
 
 	// Dispatch after the client is gone should be a no-op (no panic).
 	mock.Dispatch("imu", []byte(`{"a":1}`))
+}
+
+func TestMapWriteBudget(t *testing.T) {
+	// Base budget for a small/empty map (regression: a fixed 30 s used to time
+	// out saving a big edited map on RPi4 — issue #341).
+	assert.Equal(t, 60*time.Second, mapWriteBudget(0))
+	// Scales +5 s per area.
+	assert.Equal(t, 60*time.Second+10*5*time.Second, mapWriteBudget(10))
+	// Capped at 6 min so a pathological area count can't set an absurd budget.
+	assert.Equal(t, 6*time.Minute, mapWriteBudget(1000))
+	// The old fixed 30 s is always exceeded now, even for zero areas.
+	assert.Greater(t, mapWriteBudget(0), 30*time.Second)
 }

@@ -205,6 +205,11 @@ mowgli:
     # >0 forces exactly that many concentric perimeter rings, e.g. 1 for a
     # single perimeter pass, 2 for double, regardless of headland_width.
     num_headland_passes: 0
+    # mow_direction: perimeter/headland travel winding (issue #335). 0 = planner
+    # default (F2C natural), 1 = clockwise, 2 = counter-clockwise. Set it so a
+    # side-mounted blade stays on the cut side. navigation.launch.py injects this
+    # into coverage_server.ring_direction; swaths/connectors follow the rings.
+    mow_direction: 0
     # chassis_safety_inset: planning-time pull-back of the polygon edge before
     # the headland rings/swaths are generated, so the OUTERMOST mowed ring sits
     # (chassis_safety_inset + op_width/2) inside the boundary. This is the

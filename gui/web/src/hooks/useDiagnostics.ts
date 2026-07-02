@@ -29,7 +29,7 @@ export const useDiagnostics = () => {
             console.log({ message: "Diagnostics Stream connected" })
         },
         (e) => {
-            const msg: DiagnosticArray = JSON.parse(e);
+            const msg: DiagnosticArray = (e as any);
             // Merge incoming entries by name (latest value wins)
             if (msg.status) {
                 for (const entry of msg.status) {

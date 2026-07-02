@@ -147,6 +147,14 @@ struct BTContext
   /// Areas whose every swath is completed-or-skipped this session. Skipped by
   /// GetNextUnmowedArea. Cleared by EndSession.
   std::set<uint32_t> completed_areas;
+  /// Filesystem path the coverage RESUME state (the four maps above +
+  /// completed_areas + current_area) is persisted to, so an interrupted session
+  /// survives a full process/container restart — not just the in-RAM BT
+  /// halt/resume. Set from the `coverage_resume_path` parameter at startup;
+  /// empty disables disk persistence. Written on every interruption / swath
+  /// completion, loaded once at node startup, and removed by EndSession. See
+  /// coverage_persistence.{hpp,cpp}.
+  std::string coverage_resume_path;
   /// True when GetNextUnmowedArea exhausted the area list because every area is
   /// genuinely DONE (not because of a transient service error / timeout / no
   /// areas defined). The coverage subtree reads this (IsCoverageComplete) to
@@ -338,6 +346,17 @@ struct BTContext
   /// heading-jump re-segmentation heuristic, which silently failed on smooth
   /// turn arcs (field 2026-06-12: one 3982-pose "swath").
   std::vector<nav_msgs::msg::Path> current_strip_segments;
+
+  /// Hole-free continuous SUB-PATHS from the coverage server (issue #333), in
+  /// drive order. A forward turn-around connector can't route around a large
+  /// interior obstacle, so the continuous path is split where it would cross a
+  /// hole; FollowStrip drives each sub-path with MPPI and bridges the gap
+  /// between consecutive sub-paths with a blade-off, costmap-aware Nav2 transit
+  /// (its existing >kSegmentTransitGap behaviour) that routes around the
+  /// obstacle. Exactly ONE entry for a hole-free field (== current_strip_path).
+  /// When present, FollowStrip drives THESE (one FollowCoveragePath goal per
+  /// sub-path) instead of the single current_strip_path.
+  std::vector<nav_msgs::msg::Path> current_strip_subpaths;
 
   /// Transit goal to reach the coverage path start (populated by
   /// PlanCoverageArea, consumed by TransitToStrip).
