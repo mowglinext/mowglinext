@@ -501,6 +501,15 @@ func normalizeGnssSignalProfile(value any) string {
 	}
 }
 
+func normalizeGnssReceiverModel(value any) string {
+	switch model := strings.ToUpper(strings.TrimSpace(stringValue(value, ""))); model {
+	case "", "AUTO", "UNKNOWN", "UNKNOWN/AUTO", "AUTO/UNKNOWN":
+		return ""
+	default:
+		return model
+	}
+}
+
 func normalizeGnssProfileRate(value any) string {
 	switch stringValue(value, "5") {
 	case "1", "5", "7", "10":
@@ -622,6 +631,9 @@ func applyUniversalGnssCompatibility(flat map[string]any) map[string]string {
 	}
 	flat["gnss_profile"] = compat["GNSS_PROFILE"]
 	flat["gnss_signal_profile"] = compat["GNSS_SIGNAL_PROFILE"]
+	if _, exists := flat["gnss_receiver_model"]; exists {
+		flat["gnss_receiver_model"] = normalizeGnssReceiverModel(flat["gnss_receiver_model"])
+	}
 	if rateHz, err := strconv.Atoi(compat["GNSS_PROFILE_RATE_HZ"]); err == nil {
 		flat["gnss_profile_rate_hz"] = rateHz
 	} else {

@@ -107,8 +107,13 @@ type rawUniversalGnssStatus struct {
 	DifferentialCorrections bool     `json:"differential_corrections"`
 	CorrectionsActive       bool     `json:"corrections_active"`
 	DualAntennaHeading      bool     `json:"dual_antenna_heading"`
+	DualAntennaBaseline     bool     `json:"dual_antenna_baseline"`
 	InterferenceDetected    bool     `json:"interference_detected"`
 	JammingDetected         bool     `json:"jamming_detected"`
+	BaselineAzimuthDeg      float32  `json:"baseline_azimuth_deg"`
+	BaselinePitchDeg        float32  `json:"baseline_pitch_deg"`
+	BaselineLengthM         float32  `json:"baseline_length_m"`
+	BaselineSolutionStatus  uint8    `json:"baseline_solution_status"`
 }
 
 const (
@@ -139,6 +144,11 @@ const (
 	mowgliCapDualAntennaStatus  = 32768
 	mowgliCapInterferenceStatus = 65536
 	mowgliCapJammingStatus      = 131072
+	mowgliCapDualAntennaBase    = 262144
+	mowgliCapBaselineAzimuth    = 524288
+	mowgliCapBaselinePitch      = 1048576
+	mowgliCapBaselineLength     = 2097152
+	mowgliCapBaselineStatus     = 4194304
 
 	universalFixTypeUnknown        = 0
 	universalFixTypeNoFix          = 1
@@ -168,6 +178,11 @@ const (
 	universalCapHeadingAccuracy    = 32768
 	universalCapDiffCorrections    = 65536
 	universalCapCorrectionsActive  = 131072
+	universalCapDualAntennaBase    = 262144
+	universalCapBaselineAzimuth    = 524288
+	universalCapBaselinePitch      = 1048576
+	universalCapBaselineLength     = 2097152
+	universalCapBaselineStatus     = 4194304
 )
 
 // ---------------------------------------------------------------------------
@@ -356,8 +371,13 @@ func adaptGnssStatus(raw []byte) ([]byte, error) {
 		MeanCn0DbHz:             status.MeanCn0DbHz,
 		MaxCn0DbHz:              status.MaxCn0DbHz,
 		DualAntennaHeading:      status.DualAntennaHeading,
+		DualAntennaBaseline:     status.DualAntennaBaseline,
 		InterferenceDetected:    status.InterferenceDetected,
 		JammingDetected:         status.JammingDetected,
+		BaselineAzimuthDeg:      status.BaselineAzimuthDeg,
+		BaselinePitchDeg:        status.BaselinePitchDeg,
+		BaselineLengthM:         status.BaselineLengthM,
+		BaselineSolutionStatus:  mapUniversalBaselineSolutionStatus(status.BaselineSolutionStatus),
 	}
 
 	return json.Marshal(adapted)
@@ -408,6 +428,10 @@ func qualityPercentForFixType(fixType uint8) float32 {
 	default:
 		return 0.0
 	}
+}
+
+func mapUniversalBaselineSolutionStatus(status uint8) uint8 {
+	return status
 }
 
 func mapUniversalGnssCapabilityFlags(flags uint32) uint32 {
@@ -465,6 +489,21 @@ func mapUniversalGnssCapabilityFlags(flags uint32) uint32 {
 	}
 	if flags&universalCapJammingState != 0 {
 		mapped |= mowgliCapJammingStatus
+	}
+	if flags&universalCapDualAntennaBase != 0 {
+		mapped |= mowgliCapDualAntennaBase
+	}
+	if flags&universalCapBaselineAzimuth != 0 {
+		mapped |= mowgliCapBaselineAzimuth
+	}
+	if flags&universalCapBaselinePitch != 0 {
+		mapped |= mowgliCapBaselinePitch
+	}
+	if flags&universalCapBaselineLength != 0 {
+		mapped |= mowgliCapBaselineLength
+	}
+	if flags&universalCapBaselineStatus != 0 {
+		mapped |= mowgliCapBaselineStatus
 	}
 	return mapped
 }

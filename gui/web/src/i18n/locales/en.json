@@ -353,8 +353,12 @@
     "satellitesVisible": "Satellites visible",
     "satellitesTracked": "Satellites tracked",
     "verticalAccuracyM": "Vertical accuracy (m)",
-    "headingDeg": "Heading (deg)",
+    "headingDeg": "GNSS heading (deg)",
     "headingAccuracyDeg": "Heading accuracy (deg)",
+    "baselineAzimuthDeg": "Baseline azimuth (deg)",
+    "baselinePitchDeg": "Baseline pitch (deg)",
+    "baselineLengthM": "Baseline length (m)",
+    "baselineSolutionStatus": "Baseline solution status",
     "correctionAgeS": "Correction age (s)",
     "filteredPose": "Filtered Pose (map frame)",
     "live": "Live",
@@ -370,6 +374,7 @@
     "flatCheckOk": "OK",
     "flatCheckDrift": "DRIFT",
     "fixType": "Fix Type",
+    "gpsGnssTitle": "GPS / GNSS",
     "latitude": "Latitude",
     "longitude": "Longitude",
     "altitudeM": "Altitude (m)",
@@ -377,9 +382,12 @@
     "receiver": "Receiver",
     "backend": "Backend",
     "rtkMode": "RTK mode",
+    "correctionStreamStatus": "Correction stream",
     "differentialCorrections": "Differential corrections",
     "correctionsActive": "Corrections active",
     "dualAntennaHeading": "Dual-antenna heading",
+    "dualAntennaBaseline": "Dual-antenna baseline",
+    "msmSummary": "MSM summary",
     "rfInterference": "RF interference",
     "jamming": "Jamming",
     "advancedGnssUnavailable": "Advanced GNSS fields are not available for this backend.",
@@ -597,7 +605,7 @@
   "onboardingPage": {
     "preview": "Preview",
     "previewNotActiveYet": "Preview — not active yet",
-    "expertFieldsNotWired": "These expert fields are saved, but the backend API that translates them into receiver commands is not wired up yet. For the UM982, \"UM982 recommended\" will map to CONFIG SIGNALGROUP 3 6. In the meantime, the vendor-neutral signal profile above is enough.",
+    "expertFieldsNotWired": "These expert fields are saved. The optional receiver model is forwarded to Universal GNSS when set, while the remaining raw expert overrides are still not translated by MowgliNext. Universal GNSS validates and applies documented signal groups for the selected model, and Unknown / Auto uses a safe fallback with warnings.",
     "gpsRestarting": "Restarting GPS…",
     "gpsRestartedWaitRtk": "GPS restarted — wait for RTK Fix",
     "gpsRestartFailed": "GPS restart failed",
@@ -1030,7 +1038,21 @@
     "rtkFloat": "RTK Float",
     "gpsFix": "GPS fix",
     "deadReckoning": "Dead reckoning",
-    "noGps": "No GPS"
+    "noGps": "No GPS",
+    "baselineUnknown": "Unknown",
+    "baselineComputed": "Computed",
+    "baselineNotSolved": "Not solved",
+    "baselineInsufficientObservations": "Insufficient observations",
+    "baselineNoConvergence": "No convergence",
+    "baselineOutOfTolerance": "Out of tolerance",
+    "baselineCovarianceTraceExceeded": "Covariance trace exceeded",
+    "baselineNotConfigured": "Not configured",
+    "correctionStreamUnknown": "Unknown",
+    "correctionStreamIdle": "Idle",
+    "correctionStreamWaiting": "Waiting",
+    "correctionStreamActive": "Active",
+    "correctionStreamUnavailable": "Unavailable",
+    "correctionStreamError": "Error"
   },
   "containerRestart": {
     "pending": "Restarting…",
@@ -1619,31 +1641,34 @@
     "signalProfileCustomHelpText": "Custom will later support user-provided profile files or raw receiver command sets from Expert/Developer mode. Upload and raw-command backend support are not wired yet.",
     "unicore": {
       "title": "Vendor-Specific Settings",
-      "description": "Use these only when the generic GNSS abstractions are not enough. UM982 signal-group tuning stays here instead of leaking into the main user workflow.",
-      "signalGroup": {
-        "label": "Signal Group Preset",
-        "rawLabel": "Raw Signal Group",
-        "tooltip": "Choose a Unicore signal-group preset, then fine-tune the raw value only if needed.",
+      "description": "Use these only when the generic GNSS abstractions are not enough. Universal GNSS remains the source of truth for Unicore model gating and documented signal-group handling.",
+      "receiverModel": {
+        "label": "Receiver model",
+        "tooltip": "Optional Unicore receiver model hint forwarded to Universal GNSS plan/apply tools only when you set it explicitly.",
+        "helpText": "Universal GNSS validates and applies documented signal groups for the selected model. Leave this on Unknown / Auto to omit --model and use the safe fallback with warnings.",
         "option": {
-          "default": {
-            "label": "Default / Current"
+          "auto": {
+            "label": "Unknown / Auto"
+          },
+          "um960": {
+            "label": "UM960 non-baseline"
+          },
+          "um980": {
+            "label": "UM980 non-baseline"
+          },
+          "um981": {
+            "label": "UM981 non-baseline"
           },
           "um982": {
-            "label": "UM982 recommended",
-            "description": "Maps to CONFIG SIGNALGROUP 3 6."
-          },
-          "allBands": {
-            "label": "All bands (UM980 / UM981)",
-            "description": "Maps to CONFIG SIGNALGROUP 2."
-          },
-          "ppp": {
-            "label": "PPP optimized",
-            "description": "Maps to CONFIG SIGNALGROUP 3."
+            "label": "UM982 dual-antenna baseline capable"
           }
-        },
-        "customOptionLabel": "Custom",
-        "customPlaceholder": "e.g. 3 6",
-        "helpText": "Normal settings are vendor-neutral. Expert settings are receiver-family specific. For UM982, \"UM982 recommended\" maps to CONFIG SIGNALGROUP 3 6."
+        }
+      },
+      "signalGroup": {
+        "label": "Raw Signal Group",
+        "tooltip": "Optional raw Unicore signal-group override. Leave it empty unless documented receiver guidance tells you to set a specific value.",
+        "placeholder": "e.g. 3 6",
+        "helpText": "Universal GNSS remains responsible for validating any documented signal-group value against the selected receiver model and for surfacing safe-fallback warnings."
       },
       "pvtAlgorithm": {
         "label": "PVT Algorithm",
@@ -2207,7 +2232,7 @@
     "rtkWaitAfterUndockLabel": "RTK Wait After Undock",
     "gpsTimeoutLabel": "GPS Timeout",
     "expertScopeTitle": "Expert-mode scope",
-    "expertScopeDescription": "Signal-group presets, raw signal-group values, PVT algorithm, RTK reliability, RTK timeout, and DGPS timeout are stored here for future backend translation. Raw command textarea, dry-run plan, and reset/apply tooling still need a dedicated API."
+    "expertScopeDescription": "Raw signal-group values, PVT algorithm, RTK reliability, RTK timeout, and DGPS timeout are stored here for future backend translation. Raw command textarea, dry-run plan, and reset/apply tooling still need a dedicated API."
   },
   "settingsLocalization": {
     "scanMatchingTitle": "LiDAR scan matching",
@@ -2317,11 +2342,45 @@
   "settingsGnssLiveStatus": {
     "cardTitle": "Live GNSS Status",
     "detectedReceiver": "Detected receiver",
+    "backend": "Backend",
     "liveStatus": "Live status",
+    "rtkMode": "RTK mode",
+    "rtkModeNone": "None",
     "parserHealth": "Parser health",
     "correctionForwarding": "Correction forwarding",
+    "correctionStream": "Correction stream",
     "receiverCorrections": "Receiver corrections",
     "receiverHealth": "Receiver health",
+    "rfInterference": "RF interference",
+    "jamming": "Jamming",
+    "satelliteSectionTitle": "Satellites",
+    "satellitesUsedOfVisible": "Used / visible",
+    "satellitesTrackedOfVisible": "Tracked / visible",
+    "signalQualitySectionTitle": "Signal quality",
+    "cn0ScaleNote": "Bar scale: 0 dB-Hz to 45 dB-Hz.",
+    "meanCn0DbHz": "Mean C/N0",
+    "maxCn0DbHz": "Max C/N0",
+    "correctionMsmSectionTitle": "Corrections and MSM",
+    "msmState": "MSM state",
+    "msmStateNotSeen": "Not seen",
+    "msmStateSeenUndecoded": "Seen but undecoded",
+    "msmStateDecodedInvalid": "Decoded invalid",
+    "msmStateValid": "Valid",
+    "msmMessageType": "MSM message type",
+    "msmStationId": "MSM station ID",
+    "msmConstellationsSeen": "Constellations seen",
+    "msmSatelliteCount": "MSM satellite count",
+    "msmSignalCount": "MSM signal count",
+    "msmCellCount": "MSM cell count",
+    "msmAgeS": "MSM age (s)",
+    "baselineSectionTitle": "Baseline",
+    "dualAntennaBaseline": "Dual-antenna baseline",
+    "baselineSolutionStatus": "Baseline solution status",
+    "baselineAzimuthDeg": "Baseline azimuth (deg)",
+    "baselinePitchDeg": "Baseline pitch (deg)",
+    "baselineLengthM": "Baseline length (m)",
+    "msmSummary": "MSM summary",
+    "receiverConfigSectionTitle": "Receiver configuration",
     "selectedRuntimeBaud": "Selected runtime baud",
     "selectedConfigBaud": "Selected config baud",
     "selectedProfile": "Selected profile",

@@ -19,11 +19,6 @@ type ColorRGBA struct {
 	A                         float32                        `json:"a"`
 }
 
-// MarkerArray matches visualization_msgs/msg/MarkerArray.
-type MarkerArray struct {
-	Markers                   []Marker                       `json:"markers"`
-}
-
 // Marker matches visualization_msgs/msg/Marker.
 type Marker struct {
 	Header                    geometry.Header                `json:"header"`
@@ -36,5 +31,10 @@ type Marker struct {
 	Color                     ColorRGBA                      `json:"color"`
 	Lifetime                  Duration                       `json:"lifetime"`
 	Points                    []geometry.Point               `json:"points"`
+}
+
+// MarkerArray matches visualization_msgs/msg/MarkerArray.
+type MarkerArray struct {
+	Markers                   []Marker                       `json:"markers"`
 }
 

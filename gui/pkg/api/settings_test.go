@@ -517,6 +517,7 @@ func TestPostSettingsYAML_NewFile(t *testing.T) {
 		"datum_lat":                  48.999,
 		"ntrip_enabled":              true,
 		"gnss_receiver_family":       "unicore",
+		"gnss_receiver_model":        "UM982",
 		"gnss_serial_device":         "/dev/serial/by-id/usb-gnss",
 		"gnss_serial_baud":           921600,
 		"gnss_config_baud":           460800,
@@ -540,6 +541,7 @@ func TestPostSettingsYAML_NewFile(t *testing.T) {
 	assert.Contains(t, string(content), "datum_lat: 48.999000000")
 	assert.Contains(t, string(content), "ntrip_enabled: true")
 	assert.Contains(t, string(content), "gnss_receiver_family: unicore")
+	assert.Contains(t, string(content), "gnss_receiver_model: UM982")
 	assert.Contains(t, string(content), "gnss_serial_device: /dev/serial/by-id/usb-gnss")
 	assert.Contains(t, string(content), "gnss_serial_baud: 921600")
 	assert.Contains(t, string(content), "gnss_config_baud: 460800")
@@ -640,6 +642,7 @@ func TestPostSettingsYAML_PreservesFractionalTicksPerMeter(t *testing.T) {
 func TestApplyUniversalGnssCompatibility_NormalizesProfileKeys(t *testing.T) {
 	flat := map[string]any{
 		"gnss_receiver_family": "unicore",
+		"gnss_receiver_model":  " um982 ",
 		"gnss_serial_device":   "/dev/ttyUSB0",
 		"gnss_serial_baud":     460800,
 		"gnss_profile":         "debug",
@@ -658,6 +661,7 @@ func TestApplyUniversalGnssCompatibility_NormalizesProfileKeys(t *testing.T) {
 	assert.Equal(t, "460800", compat["GNSS_CONFIG_BAUD"])
 	assert.Equal(t, "rover_high_precision_debug", flat["gnss_profile"])
 	assert.Equal(t, "high_precision", flat["gnss_signal_profile"])
+	assert.Equal(t, "UM982", flat["gnss_receiver_model"])
 	assert.Equal(t, 7, flat["gnss_profile_rate_hz"])
 	assert.Equal(t, 460800, flat["gnss_config_baud"])
 	assert.Equal(t, "3 6", flat["gnss_signal_group"])

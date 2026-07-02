@@ -62,6 +62,7 @@ export const GNSS_PROFILE_RATE_OPTIONS = [
 
 export const GNSS_ACTION_SETTINGS_KEYS = [
     "gnss_receiver_family",
+    "gnss_receiver_model",
     "gnss_serial_device",
     "gnss_serial_baud",
     "gnss_config_baud",
@@ -159,31 +160,25 @@ export const GNSS_ADVANCED_SETTINGS_BY_FAMILY: Record<string, GnssReceiverAdvanc
         description: "gnssConfig.unicore.description",
         fields: [
             {
-                kind: "presetText",
+                kind: "select",
+                key: "gnss_receiver_model",
+                label: "gnssConfig.unicore.receiverModel.label",
+                tooltip: "gnssConfig.unicore.receiverModel.tooltip",
+                options: [
+                    { value: "", label: "gnssConfig.unicore.receiverModel.option.auto.label" },
+                    { value: "UM960", label: "gnssConfig.unicore.receiverModel.option.um960.label" },
+                    { value: "UM980", label: "gnssConfig.unicore.receiverModel.option.um980.label" },
+                    { value: "UM981", label: "gnssConfig.unicore.receiverModel.option.um981.label" },
+                    { value: "UM982", label: "gnssConfig.unicore.receiverModel.option.um982.label" },
+                ],
+                helpText: "gnssConfig.unicore.receiverModel.helpText",
+            },
+            {
+                kind: "text",
                 key: "gnss_signal_group",
                 label: "gnssConfig.unicore.signalGroup.label",
-                rawLabel: "gnssConfig.unicore.signalGroup.rawLabel",
                 tooltip: "gnssConfig.unicore.signalGroup.tooltip",
-                options: [
-                    { value: "", label: "gnssConfig.unicore.signalGroup.option.default.label" },
-                    {
-                        value: "3 6",
-                        label: "gnssConfig.unicore.signalGroup.option.um982.label",
-                        description: "gnssConfig.unicore.signalGroup.option.um982.description",
-                    },
-                    {
-                        value: "2",
-                        label: "gnssConfig.unicore.signalGroup.option.allBands.label",
-                        description: "gnssConfig.unicore.signalGroup.option.allBands.description",
-                    },
-                    {
-                        value: "3",
-                        label: "gnssConfig.unicore.signalGroup.option.ppp.label",
-                        description: "gnssConfig.unicore.signalGroup.option.ppp.description",
-                    },
-                ],
-                customOptionLabel: "gnssConfig.unicore.signalGroup.customOptionLabel",
-                customPlaceholder: "gnssConfig.unicore.signalGroup.customPlaceholder",
+                placeholder: "gnssConfig.unicore.signalGroup.placeholder",
                 helpText: "gnssConfig.unicore.signalGroup.helpText",
             },
             {
@@ -279,6 +274,20 @@ export const normalizeGnssSignalProfile = (value: unknown): string => {
             return "custom";
         default:
             return "custom";
+    }
+};
+
+export const normalizeGnssReceiverModel = (value: unknown): string => {
+    const normalized = normalizeGnssString(value).toUpperCase();
+    switch (normalized) {
+        case "":
+        case "AUTO":
+        case "UNKNOWN":
+        case "UNKNOWN/AUTO":
+        case "AUTO/UNKNOWN":
+            return "";
+        default:
+            return normalized;
     }
 };
 
