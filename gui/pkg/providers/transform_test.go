@@ -86,8 +86,8 @@ func TestAdaptGnssStatusMapsUniversalPayloadToMowgliShape(t *testing.T) {
 		"fix_valid":true,
 		"fix_type":4,
 		"rtk_mode":3,
-		"capability_flags":262143,
-		"value_flags":262143,
+		"capability_flags":8388607,
+		"value_flags":8388607,
 		"horizontal_accuracy_m":0.02,
 		"vertical_accuracy_m":0.04,
 		"hdop":0.8,
@@ -103,8 +103,13 @@ func TestAdaptGnssStatusMapsUniversalPayloadToMowgliShape(t *testing.T) {
 		"differential_corrections":true,
 		"corrections_active":false,
 		"dual_antenna_heading":true,
+		"dual_antenna_baseline":true,
 		"interference_detected":false,
-		"jamming_detected":true
+		"jamming_detected":true,
+		"baseline_azimuth_deg":182.25,
+		"baseline_pitch_deg":0.1,
+		"baseline_length_m":1.5,
+		"baseline_solution_status":1
 	}`)
 
 	adapted, err := adaptGnssStatus(raw)
@@ -135,8 +140,13 @@ func TestAdaptGnssStatusMapsUniversalPayloadToMowgliShape(t *testing.T) {
 	assert.True(t, status.DifferentialCorrections)
 	assert.False(t, status.CorrectionsActive)
 	assert.True(t, status.DualAntennaHeading)
+	assert.True(t, status.DualAntennaBaseline)
 	assert.False(t, status.InterferenceDetected)
 	assert.True(t, status.JammingDetected)
+	assert.Equal(t, float32(182.25), status.BaselineAzimuthDeg)
+	assert.Equal(t, float32(0.1), status.BaselinePitchDeg)
+	assert.Equal(t, float32(1.5), status.BaselineLengthM)
+	assert.Equal(t, uint8(1), status.BaselineSolutionStatus)
 	assert.Equal(t, uint32(
 		mowgliCapRtkMode|
 			mowgliCapHorizontalAccuracy|
@@ -155,7 +165,12 @@ func TestAdaptGnssStatusMapsUniversalPayloadToMowgliShape(t *testing.T) {
 			mowgliCapCorrectionsActive|
 			mowgliCapDualAntennaStatus|
 			mowgliCapInterferenceStatus|
-			mowgliCapJammingStatus,
+			mowgliCapJammingStatus|
+			mowgliCapDualAntennaBase|
+			mowgliCapBaselineAzimuth|
+			mowgliCapBaselinePitch|
+			mowgliCapBaselineLength|
+			mowgliCapBaselineStatus,
 	), status.CapabilityFlags)
 	assert.Equal(t, status.CapabilityFlags, status.ValueFlags)
 }

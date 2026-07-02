@@ -3,13 +3,13 @@
 //
 // Field names are snake_case to match the JSON from rosbridge.
 
-export type Point32 = {
+export type Point = {
   x?: number;
   y?: number;
   z?: number;
 };
 
-export type Point = {
+export type Point32 = {
   x?: number;
   y?: number;
   z?: number;
@@ -105,10 +105,6 @@ export type LaserScan = {
   intensities?: number[];
 };
 
-export type MarkerArray = {
-  markers?: Marker[];
-};
-
 export type Marker = {
   ns?: string;
   id?: number;
@@ -124,6 +120,10 @@ export type Marker = {
   text?: string;
   mesh_resource?: string;
   mesh_use_embedded_materials?: boolean;
+};
+
+export type MarkerArray = {
+  markers?: Marker[];
 };
 
 export const enum AbsolutePoseConstants {
@@ -159,15 +159,6 @@ export type CoveragePath = {
   path?: Path;
 };
 
-export type Emergency = {
-  stamp?: { sec: number; nanosec: number };
-  active_emergency?: boolean;
-  latched_emergency?: boolean;
-  lift_warning?: boolean;
-  lift_duration_sec?: number;
-  reason?: string;
-};
-
 export const enum ESCStatusConstants {
   ESC_STATUS_DISCONNECTED = 99,
   ESC_STATUS_ERROR = 100,
@@ -185,6 +176,15 @@ export type ESCStatus = {
   temperature_pcb?: number;
 };
 
+export type Emergency = {
+  stamp?: { sec: number; nanosec: number };
+  active_emergency?: boolean;
+  latched_emergency?: boolean;
+  lift_warning?: boolean;
+  lift_duration_sec?: number;
+  reason?: string;
+};
+
 export const enum GnssStatusConstants {
   FIX_TYPE_NO_FIX = 0,
   FIX_TYPE_GPS_FIX = 1,
@@ -195,6 +195,20 @@ export const enum GnssStatusConstants {
   RTK_MODE_NONE = 1,
   RTK_MODE_FLOAT = 2,
   RTK_MODE_FIXED = 3,
+  BASELINE_STATUS_UNKNOWN = 0,
+  BASELINE_STATUS_COMPUTED = 1,
+  BASELINE_STATUS_NOT_SOLVED = 2,
+  BASELINE_STATUS_INSUFFICIENT_OBSERVATIONS = 3,
+  BASELINE_STATUS_NO_CONVERGENCE = 4,
+  BASELINE_STATUS_OUT_OF_TOLERANCE = 5,
+  BASELINE_STATUS_COVARIANCE_TRACE_EXCEEDED = 6,
+  BASELINE_STATUS_NOT_CONFIGURED = 7,
+  CORRECTION_STREAM_STATUS_UNKNOWN = 0,
+  CORRECTION_STREAM_STATUS_IDLE = 1,
+  CORRECTION_STREAM_STATUS_WAITING = 2,
+  CORRECTION_STREAM_STATUS_ACTIVE = 3,
+  CORRECTION_STREAM_STATUS_UNAVAILABLE = 4,
+  CORRECTION_STREAM_STATUS_ERROR = 5,
   CAP_RTK_MODE = 1,
   CAP_HDOP = 2,
   CAP_VDOP = 4,
@@ -213,6 +227,13 @@ export const enum GnssStatusConstants {
   CAP_DUAL_ANTENNA_STATUS = 32768,
   CAP_INTERFERENCE_STATUS = 65536,
   CAP_JAMMING_STATUS = 131072,
+  CAP_DUAL_ANTENNA_BASELINE = 262144,
+  CAP_BASELINE_AZIMUTH = 524288,
+  CAP_BASELINE_PITCH = 1048576,
+  CAP_BASELINE_LENGTH = 2097152,
+  CAP_BASELINE_SOLUTION_STATUS = 4194304,
+  CAP_CORRECTION_STREAM = 8388608,
+  CAP_MSM_SUMMARY = 16777216,
 };
 
 export type GnssStatus = {
@@ -245,6 +266,22 @@ export type GnssStatus = {
   correction_age_s?: number;
   mean_cn0_db_hz?: number;
   max_cn0_db_hz?: number;
+  dual_antenna_baseline?: boolean;
+  baseline_azimuth_deg?: number;
+  baseline_pitch_deg?: number;
+  baseline_length_m?: number;
+  baseline_solution_status?: number;
+  correction_stream_status?: number;
+  msm_summary_seen?: boolean;
+  msm_summary_decoded?: boolean;
+  msm_summary_valid?: boolean;
+  msm_summary_message_type?: number;
+  msm_summary_station_id?: number;
+  msm_summary_constellations_seen?: string;
+  msm_summary_satellite_count?: number;
+  msm_summary_signal_count?: number;
+  msm_summary_cell_count?: number;
+  msm_summary_age_s?: number;
 };
 
 export const enum HighLevelStatusConstants {
@@ -308,11 +345,21 @@ export type Power = {
 export const enum StatusConstants {
   MOWER_STATUS_INITIALIZING = 0,
   MOWER_STATUS_OK = 255,
+  RESET_CAUSE_UNKNOWN = 0,
+  RESET_CAUSE_PIN = 1,
+  RESET_CAUSE_POR_PDR = 2,
+  RESET_CAUSE_BOR = 3,
+  RESET_CAUSE_SFTRST = 4,
+  RESET_CAUSE_IWDG = 5,
+  RESET_CAUSE_WWDG = 6,
+  RESET_CAUSE_LPWR = 7,
 };
 
 export type Status = {
   stamp?: { sec: number; nanosec: number };
   mower_status?: number;
+  reset_cause?: number;
+  reset_cause_name?: string;
   raspberry_pi_power?: boolean;
   is_charging?: boolean;
   esc_power?: boolean;

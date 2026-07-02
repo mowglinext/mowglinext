@@ -2,13 +2,18 @@ import React from "react";
 import { Card, Descriptions, Tag, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { DiagnosticArray } from "../../hooks/useDiagnostics.ts";
-import { GnssStatus } from "../../types/ros.ts";
+import { GnssStatus, GnssStatusConstants } from "../../types/ros.ts";
 import {
     deriveGpsStatus,
     diagnosticsValueMap,
     findDiagnosticStatusByName,
+    gnssBaselineSolutionStatusLabel,
+    gnssCorrectionStreamStatusLabel,
     gnssReceiverLabel,
+    hasGnssCapability,
+    hasGnssValue,
     parseDiagnosticBool,
+    readGnssNumber,
 } from "../../utils/gpsStatus.ts";
 import { gnssProfileLabel, gnssSignalProfileLabel, normalizeGnssString } from "./gnssConfig.ts";
 
@@ -67,6 +72,38 @@ export const UniversalGnssLiveStatusCard: React.FC<Props> = ({
     const receiverHealthy = parseDiagnosticBool(summaryValues.receiver_healthy);
     const receiverCorrectionAvailable = parseDiagnosticBool(forwardingValues.receiver_correction_available);
     const receiverFamily = normalizeGnssString(selectedReceiverFamily) || "auto";
+    const correctionStream = gnssCorrectionStreamStatusLabel(gnssStatus) ?? t("settingsGnssLiveStatus.unknown");
+    const baselineSolutionStatus = gnssBaselineSolutionStatusLabel(gnssStatus);
+    const baselineAzimuth = readGnssNumber(
+        gnssStatus,
+        GnssStatusConstants.CAP_BASELINE_AZIMUTH,
+        gnssStatus?.baseline_azimuth_deg,
+    );
+    const baselinePitch = readGnssNumber(
+        gnssStatus,
+        GnssStatusConstants.CAP_BASELINE_PITCH,
+        gnssStatus?.baseline_pitch_deg,
+    );
+    const baselineLength = readGnssNumber(
+        gnssStatus,
+        GnssStatusConstants.CAP_BASELINE_LENGTH,
+        gnssStatus?.baseline_length_m,
+    );
+    const hasMsmSummary = hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_MSM_SUMMARY);
+    const hasMsmSummaryValue = hasGnssValue(gnssStatus, GnssStatusConstants.CAP_MSM_SUMMARY);
+    const dualAntennaBaseline = hasGnssValue(gnssStatus, GnssStatusConstants.CAP_DUAL_ANTENNA_BASELINE)
+        ? gnssStatus?.dual_antenna_baseline
+        : undefined;
+    const msmSummaryLabel = hasMsmSummaryValue
+        ? [
+            gnssStatus?.msm_summary_constellations_seen || undefined,
+            gnssStatus?.msm_summary_message_type ? `MSM ${gnssStatus.msm_summary_message_type}` : undefined,
+            gnssStatus?.msm_summary_station_id ? `station ${gnssStatus.msm_summary_station_id}` : undefined,
+            gnssStatus?.msm_summary_satellite_count ? `sat ${gnssStatus.msm_summary_satellite_count}` : undefined,
+            gnssStatus?.msm_summary_signal_count ? `sig ${gnssStatus.msm_summary_signal_count}` : undefined,
+            gnssStatus?.msm_summary_cell_count ? `cell ${gnssStatus.msm_summary_cell_count}` : undefined,
+        ].filter(Boolean).join(" · ")
+        : undefined;
 
     return (
         <Card size="small" title={t("settingsGnssLiveStatus.cardTitle")} style={{ marginBottom: 16 }}>
@@ -82,8 +119,8 @@ export const UniversalGnssLiveStatusCard: React.FC<Props> = ({
                 <Descriptions.Item label={t("settingsGnssLiveStatus.parserHealth")}>
                     {boolTag(parserHealthy, t("settingsGnssLiveStatus.healthy"), t("settingsGnssLiveStatus.warning"), t("settingsGnssLiveStatus.unknown"))}
                 </Descriptions.Item>
-                <Descriptions.Item label={t("settingsGnssLiveStatus.correctionForwarding")}>
-                    {forwardingTag(forwarding?.message ?? t("settingsGnssLiveStatus.unknown"))}
+                <Descriptions.Item label={t("settingsGnssLiveStatus.correctionStream")}>
+                    {forwardingTag(correctionStream)}
                 </Descriptions.Item>
                 <Descriptions.Item label={t("settingsGnssLiveStatus.receiverCorrections")}>
                     {boolTag(receiverCorrectionAvailable ?? correctionAvailable, t("settingsGnssLiveStatus.available"), t("settingsGnssLiveStatus.unavailable"), t("settingsGnssLiveStatus.unknown"))}
@@ -91,6 +128,36 @@ export const UniversalGnssLiveStatusCard: React.FC<Props> = ({
                 <Descriptions.Item label={t("settingsGnssLiveStatus.receiverHealth")}>
                     {boolTag(receiverHealthy, t("settingsGnssLiveStatus.healthy"), t("settingsGnssLiveStatus.warning"), t("settingsGnssLiveStatus.unknown"))}
                 </Descriptions.Item>
+                {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_DUAL_ANTENNA_BASELINE) && (
+                    <Descriptions.Item label={t("settingsGnssLiveStatus.dualAntennaBaseline")}>
+                        {boolTag(dualAntennaBaseline, t("settingsGnssLiveStatus.available"), t("settingsGnssLiveStatus.unavailable"), t("settingsGnssLiveStatus.unknown"))}
+                    </Descriptions.Item>
+                )}
+                {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_BASELINE_SOLUTION_STATUS) && (
+                    <Descriptions.Item label={t("settingsGnssLiveStatus.baselineSolutionStatus")}>
+                        {baselineSolutionStatus ?? t("settingsGnssLiveStatus.unknown")}
+                    </Descriptions.Item>
+                )}
+                {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_BASELINE_AZIMUTH) && (
+                    <Descriptions.Item label={t("settingsGnssLiveStatus.baselineAzimuthDeg")}>
+                        {baselineAzimuth !== undefined ? baselineAzimuth.toFixed(2) : t("settingsGnssLiveStatus.unknown")}
+                    </Descriptions.Item>
+                )}
+                {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_BASELINE_PITCH) && (
+                    <Descriptions.Item label={t("settingsGnssLiveStatus.baselinePitchDeg")}>
+                        {baselinePitch !== undefined ? baselinePitch.toFixed(2) : t("settingsGnssLiveStatus.unknown")}
+                    </Descriptions.Item>
+                )}
+                {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_BASELINE_LENGTH) && (
+                    <Descriptions.Item label={t("settingsGnssLiveStatus.baselineLengthM")}>
+                        {baselineLength !== undefined ? baselineLength.toFixed(3) : t("settingsGnssLiveStatus.unknown")}
+                    </Descriptions.Item>
+                )}
+                {hasMsmSummary && (
+                    <Descriptions.Item label={t("settingsGnssLiveStatus.msmSummary")}>
+                        {msmSummaryLabel || t("settingsGnssLiveStatus.unknown")}
+                    </Descriptions.Item>
+                )}
                 <Descriptions.Item label={t("settingsGnssLiveStatus.selectedRuntimeBaud")}>
                     <Text code>{normalizeGnssString(selectedBaud) || "921600"}</Text>
                 </Descriptions.Item>

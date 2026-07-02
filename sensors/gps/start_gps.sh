@@ -247,6 +247,7 @@ python3 /universal_gnss_topic_bridge.py --ros-args \
   -p "frame_id:=${frame_id}" \
   -p "input_status_topic:=${internal_status_topic}" \
   -p "output_status_topic:=/gps/status" \
+  -p "input_diagnostics_topic:=/diagnostics" \
   -p "input_rtcm_topic:=${internal_rtcm_topic}" \
   -p "output_rtcm_topic:=/rtcm" &
 UNIVERSAL_BRIDGE_PID=$!

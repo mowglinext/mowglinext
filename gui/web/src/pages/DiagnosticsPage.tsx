@@ -52,6 +52,8 @@ import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {
     deriveGpsStatus,
+    gnssBaselineSolutionStatusLabel,
+    gnssCorrectionStreamStatusLabel,
     gnssReceiverLabel,
     gnssRtkModeLabel,
     hasGnssCapability,
@@ -158,6 +160,8 @@ export const DiagnosticsPage = () => {
     const gpsFixType = gpsFix.label;
     const gpsReceiver = gnssReceiverLabel(gnssStatus);
     const gpsRtkMode = gnssRtkModeLabel(gnssStatus);
+    const correctionStreamStatus = gnssCorrectionStreamStatusLabel(gnssStatus);
+    const baselineSolutionStatus = gnssBaselineSolutionStatusLabel(gnssStatus);
 
     const orientation = pose.pose?.pose?.orientation;
     const qx = orientation?.x ?? 0;
@@ -565,6 +569,11 @@ export const DiagnosticsPage = () => {
         GnssStatusConstants.CAP_DUAL_ANTENNA_STATUS,
         gnssStatus.dual_antenna_heading,
     );
+    const dualAntennaBaselineState = readGnssBooleanState(
+        gnssStatus,
+        GnssStatusConstants.CAP_DUAL_ANTENNA_BASELINE,
+        gnssStatus.dual_antenna_baseline,
+    );
     const interferenceState = readGnssBooleanState(
         gnssStatus,
         GnssStatusConstants.CAP_INTERFERENCE_STATUS,
@@ -575,6 +584,34 @@ export const DiagnosticsPage = () => {
         GnssStatusConstants.CAP_JAMMING_STATUS,
         gnssStatus.jamming_detected,
     );
+    const baselineAzimuth = readGnssNumber(
+        gnssStatus,
+        GnssStatusConstants.CAP_BASELINE_AZIMUTH,
+        gnssStatus.baseline_azimuth_deg,
+    );
+    const baselinePitch = readGnssNumber(
+        gnssStatus,
+        GnssStatusConstants.CAP_BASELINE_PITCH,
+        gnssStatus.baseline_pitch_deg,
+    );
+    const baselineLength = readGnssNumber(
+        gnssStatus,
+        GnssStatusConstants.CAP_BASELINE_LENGTH,
+        gnssStatus.baseline_length_m,
+    );
+    const hasMsmSummary = hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_MSM_SUMMARY);
+    const hasMsmSummaryValue = ((gnssStatus.value_flags ?? 0) & GnssStatusConstants.CAP_MSM_SUMMARY) !== 0;
+    const msmSummaryLabel = hasMsmSummaryValue
+        ? [
+            gnssStatus.msm_summary_constellations_seen || undefined,
+            gnssStatus.msm_summary_message_type ? `MSM ${gnssStatus.msm_summary_message_type}` : undefined,
+            gnssStatus.msm_summary_station_id ? `station ${gnssStatus.msm_summary_station_id}` : undefined,
+            gnssStatus.msm_summary_satellite_count ? `sat ${gnssStatus.msm_summary_satellite_count}` : undefined,
+            gnssStatus.msm_summary_signal_count ? `sig ${gnssStatus.msm_summary_signal_count}` : undefined,
+            gnssStatus.msm_summary_cell_count ? `cell ${gnssStatus.msm_summary_cell_count}` : undefined,
+            gnssStatus.msm_summary_age_s ? `${gnssStatus.msm_summary_age_s.toFixed(1)} s` : undefined,
+        ].filter(Boolean).join(" · ")
+        : undefined;
     const formatOptionalBool = (value: ReturnType<typeof readGnssBooleanState>) => {
         switch (value) {
             case "true":
@@ -600,7 +637,15 @@ export const DiagnosticsPage = () => {
         {flag: GnssStatusConstants.CAP_CORRECTION_AGE, label: t('diagnosticsPage.correctionAgeS'), value: gpsCorrectionAge, precision: 1},
         {flag: GnssStatusConstants.CAP_MEAN_CN0, label: "Mean CN0 (dB-Hz)", value: gpsMeanCn0, precision: 1},
         {flag: GnssStatusConstants.CAP_MAX_CN0, label: "Max CN0 (dB-Hz)", value: gpsMaxCn0, precision: 1},
+        {flag: GnssStatusConstants.CAP_BASELINE_AZIMUTH, label: t('diagnosticsPage.baselineAzimuthDeg'), value: baselineAzimuth, precision: 2},
+        {flag: GnssStatusConstants.CAP_BASELINE_PITCH, label: t('diagnosticsPage.baselinePitchDeg'), value: baselinePitch, precision: 2},
+        {flag: GnssStatusConstants.CAP_BASELINE_LENGTH, label: t('diagnosticsPage.baselineLengthM'), value: baselineLength, precision: 3},
     ];
+    const hasAdvancedGnssFields = typedGpsDetails.some((item) => hasGnssCapability(gnssStatus, item.flag)) ||
+        hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_DUAL_ANTENNA_BASELINE) ||
+        hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_BASELINE_SOLUTION_STATUS) ||
+        hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_CORRECTION_STREAM) ||
+        hasMsmSummary;
 
     const sectionLocalization = (
         <Row gutter={[12, 12]}>
@@ -731,11 +776,26 @@ export const DiagnosticsPage = () => {
                                 <Descriptions.Item label={t('diagnosticsPage.receiver')}>{gpsReceiver}</Descriptions.Item>
                                 <Descriptions.Item label={t('diagnosticsPage.backend')}>{gnssStatus.backend || t('diagnosticsPage.unknownLower')}</Descriptions.Item>
                                 <Descriptions.Item label={t('diagnosticsPage.rtkMode')}>{gpsRtkMode ?? t('diagnosticsPage.unknown')}</Descriptions.Item>
+                                {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_CORRECTION_STREAM) && (
+                                    <Descriptions.Item label={t('diagnosticsPage.correctionStreamStatus')}>
+                                        {correctionStreamStatus ?? t('diagnosticsPage.unknown')}
+                                    </Descriptions.Item>
+                                )}
                                 <Descriptions.Item label={t('diagnosticsPage.differentialCorrections')}>{formatOptionalBool(differentialState)}</Descriptions.Item>
                                 <Descriptions.Item label={t('diagnosticsPage.correctionsActive')}>{formatOptionalBool(correctionsState)}</Descriptions.Item>
                                 {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_DUAL_ANTENNA_STATUS) && (
                                     <Descriptions.Item label={t('diagnosticsPage.dualAntennaHeading')}>
                                         {formatOptionalBool(dualAntennaState)}
+                                    </Descriptions.Item>
+                                )}
+                                {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_DUAL_ANTENNA_BASELINE) && (
+                                    <Descriptions.Item label={t('diagnosticsPage.dualAntennaBaseline')}>
+                                        {formatOptionalBool(dualAntennaBaselineState)}
+                                    </Descriptions.Item>
+                                )}
+                                {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_BASELINE_SOLUTION_STATUS) && (
+                                    <Descriptions.Item label={t('diagnosticsPage.baselineSolutionStatus')}>
+                                        {baselineSolutionStatus ?? t('diagnosticsPage.unknown')}
                                     </Descriptions.Item>
                                 )}
                                 {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_INTERFERENCE_STATUS) && (
@@ -751,7 +811,7 @@ export const DiagnosticsPage = () => {
                                 {typedGpsDetails
                                     .filter((item) => hasGnssCapability(gnssStatus, item.flag))
                                     .map((item) => (
-                                        <Descriptions.Item key={item.label} label={item.label}>
+                                    <Descriptions.Item key={item.label} label={item.label}>
                                             {item.value === undefined
                                                 ? t('diagnosticsPage.unknown')
                                                 : item.precision !== undefined
@@ -759,8 +819,13 @@ export const DiagnosticsPage = () => {
                                                     : String(item.value)}
                                         </Descriptions.Item>
                                     ))}
+                                {hasMsmSummary && (
+                                    <Descriptions.Item label={t('diagnosticsPage.msmSummary')}>
+                                        {msmSummaryLabel || t('diagnosticsPage.unknown')}
+                                    </Descriptions.Item>
+                                )}
                             </Descriptions>
-                            {!typedGpsDetails.some((item) => hasGnssCapability(gnssStatus, item.flag)) && (
+                            {!hasAdvancedGnssFields && (
                                 <Typography.Text type="secondary" style={{fontSize: 11}}>
                                     {t('diagnosticsPage.advancedGnssUnavailable')}
                                 </Typography.Text>

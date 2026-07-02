@@ -6,11 +6,14 @@ import en from '../i18n/locales/en.json';
 import {
     deriveGpsStatus,
     deriveGnssStatusFromDiagnostics,
+    gnssBaselineSolutionStatusLabel,
+    gnssCorrectionStreamStatusLabel,
     gnssRtkModeLabel,
     gnssReceiverLabel,
     hasTypedGnssStatusSample,
     hasGnssCapability,
     hasGnssValue,
+    mergeGnssStatusDiagnosticProjection,
     readGnssBooleanState,
     readGnssNumber,
 } from './gpsStatus.ts';
@@ -206,6 +209,47 @@ describe('deriveGpsStatus', () => {
         expect(gnssRtkModeLabel({rtk_mode: GnssStatusConstants.RTK_MODE_FLOAT})).toBe('Float');
         expect(gnssRtkModeLabel({rtk_mode: GnssStatusConstants.RTK_MODE_FIXED})).toBe('Fixed');
         expect(gnssRtkModeLabel({rtk_mode: GnssStatusConstants.RTK_MODE_UNKNOWN})).toBe('Unknown');
+    });
+
+    it('maps baseline solution labels from the public enum values', () => {
+        expect(gnssBaselineSolutionStatusLabel({
+            baseline_solution_status: GnssStatusConstants.BASELINE_STATUS_COMPUTED,
+        })).toBe(en.gpsStatus.baselineComputed);
+        expect(gnssBaselineSolutionStatusLabel({
+            baseline_solution_status: GnssStatusConstants.BASELINE_STATUS_NOT_SOLVED,
+        })).toBe(en.gpsStatus.baselineNotSolved);
+    });
+
+    it('maps correction stream labels from the public enum values', () => {
+        expect(gnssCorrectionStreamStatusLabel({
+            correction_stream_status: GnssStatusConstants.CORRECTION_STREAM_STATUS_ACTIVE,
+        })).toBe(en.gpsStatus.correctionStreamActive);
+        expect(gnssCorrectionStreamStatusLabel({
+            correction_stream_status: GnssStatusConstants.CORRECTION_STREAM_STATUS_WAITING,
+        })).toBe(en.gpsStatus.correctionStreamWaiting);
+    });
+
+    it('merges diagnostics-derived correction stream fields into a typed GNSS sample when the bridge is older', () => {
+        const merged = mergeGnssStatusDiagnosticProjection(
+            {
+                backend: 'universal',
+                fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX,
+                capability_flags: GnssStatusConstants.CAP_HORIZONTAL_ACCURACY,
+                value_flags: GnssStatusConstants.CAP_HORIZONTAL_ACCURACY,
+            },
+            deriveGnssStatusFromDiagnostics({
+                status: [
+                    {
+                        name: 'universal_gnss_ntrip/rtcm_forwarding',
+                        message: 'RTCM forwarding active',
+                        values: [],
+                    },
+                ],
+            }),
+        );
+
+        expect(merged.correction_stream_status).toBe(GnssStatusConstants.CORRECTION_STREAM_STATUS_ACTIVE);
+        expect((merged.capability_flags ?? 0) & GnssStatusConstants.CAP_CORRECTION_STREAM).not.toBe(0);
     });
 
     it('formats user-facing receiver labels without leaking backend ids', () => {
