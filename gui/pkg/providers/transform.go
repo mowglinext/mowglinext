@@ -171,13 +171,12 @@ const (
 )
 
 // ---------------------------------------------------------------------------
-// NavSatStatus → AbsolutePose Flags mapping (bitmask:
-//   FLAG_GPS_RTK=1, FLAG_GPS_RTK_FIXED=2, FLAG_GPS_RTK_FLOAT=4)
+// NavSatStatus → AbsolutePose Flags mapping. RTK fixed/float are no longer
+// encoded here — RTK state now flows through GnssStatus.rtk_mode (see
+// deriveGpsStatus / adaptGnssStatus). This only distinguishes fix vs no-fix:
 //
-//	status == 2 (STATUS_GBAS_FIX)  → Flags = 1  (generic GPS fix)
-//	status == 1 (STATUS_SBAS_FIX)  → Flags = 1  (generic GPS fix)
-//	status == 0 (STATUS_FIX)       → Flags = 1  (generic GPS fix)
-//	status == -1 (STATUS_NO_FIX)   → Flags = 0
+//	status >= 0 (STATUS_FIX/SBAS/GBAS) → Flags = 1  (generic GPS fix)
+//	status == -1 (STATUS_NO_FIX)       → Flags = 0
 // ---------------------------------------------------------------------------
 
 func navSatStatusToFlags(status int8) uint16 {
