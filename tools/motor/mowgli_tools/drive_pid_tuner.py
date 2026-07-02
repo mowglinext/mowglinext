@@ -1330,6 +1330,22 @@ class DrivePidTuner(Node):
         if note not in recorder.notes:
             recorder.notes.append(note)
 
+    def _log_live_oscillation_event(
+        self,
+        *,
+        severity: str,
+        unsafe_speed_detected: bool,
+        message: str,
+    ) -> None:
+        # Keep separate logger callsites per level so rclpy does not see the
+        # same throttled/log-filtered location switching severity between calls.
+        if unsafe_speed_detected:
+            self.get_logger().error(message)
+        elif is_warning_oscillation_severity(severity):
+            self.get_logger().warning(message)
+        else:
+            self.get_logger().info(message)
+
     def _analyze_live_oscillation(
         self,
         *,
@@ -1425,18 +1441,16 @@ class DrivePidTuner(Node):
                 ),
             )
         if severity_changed or decision.unsafe_speed_detected:
-            log_fn = self.get_logger().error if decision.unsafe_speed_detected else (
-                self.get_logger().warning
-                if is_warning_oscillation_severity(analysis.severity)
-                else self.get_logger().info
-            )
             absolute_runaway = (
                 "n/a"
                 if decision.absolute_runaway_threshold is None
                 else f"{decision.absolute_runaway_threshold:.3f}"
             )
-            log_fn(
-                "Live oscillation warning "
+            self._log_live_oscillation_event(
+                severity=analysis.severity,
+                unsafe_speed_detected=decision.unsafe_speed_detected,
+                message=(
+                    "Live oscillation warning "
                 f"({analysis.severity}) during {recorder.name}: "
                 f"trial_elapsed={elapsed_s:.3f}s "
                 f"commanded_speed={commanded_speed:.3f}mps "
@@ -1457,6 +1471,7 @@ class DrivePidTuner(Node):
                     if will_abort
                     else "continuing calibration trial."
                 )
+                ),
             )
         if will_abort:
             if decision.unsafe_speed_detected:
