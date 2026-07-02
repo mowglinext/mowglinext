@@ -186,14 +186,23 @@ std::vector<std::pair<double, double>> buildContinuousPath(
 
 // Like buildContinuousPath, but SPLIT into one or more hole-free continuous
 // sub-paths (issue #333). A forward turn-around connector is a local Dubins arc;
-// it cannot route around a large interior obstacle, so where the only join
-// between two segments would cross a hole (or leave the boundary), the path is
-// BROKEN there instead of drawn straight through the obstacle. Each returned
-// sub-path is internally continuous and cusp-free (an MPPI-trackable run); the
-// caller (FollowStrip) drives them in order, bridging the gap between
-// consecutive sub-paths with a blade-off, costmap-aware Nav2 transit that routes
-// around the hole. With a hole-free field this returns exactly one sub-path
-// identical to buildContinuousPath. Sub-paths with < 2 points are dropped.
+// it cannot route around a large interior obstacle, so the path is BROKEN
+// instead of joined blade-on when:
+//   * the only join between two segments would cross a hole or leave the
+//     boundary (a straight fallback that isn't safe), OR
+//   * the join gap exceeds ~0.6 m (kMaxMowJoinGapM) — that is a RELOCATION
+//     (lobe change across a concave bite, innermost ring → far first swath),
+//     not a turn-around; an in-bounds Dubins for it would mow a long diagonal
+//     across the middle of the lawn.
+// Swath pieces are nearest-endpoint chained before joining (identical to the
+// plain serpentine on a convex field; mows each lobe of a concave/hole-split
+// field contiguously so a lobe change costs ONE split, not one per column).
+// Each returned sub-path is internally continuous and cusp-free (an
+// MPPI-trackable run); the caller (FollowStrip) drives them in order, bridging
+// the gap between consecutive sub-paths with a blade-off, costmap-aware Nav2
+// transit that routes around the obstacle. With a convex hole-free field this
+// returns exactly one sub-path identical to buildContinuousPath. Sub-paths
+// with < 2 points are dropped.
 std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     const BoustrophedonPlan& plan,
     const std::vector<std::pair<double, double>>& boundary,

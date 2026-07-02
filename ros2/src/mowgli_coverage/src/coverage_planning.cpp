@@ -865,7 +865,7 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     double step)
 {
   // Flatten the plan into ordered drivable segments (densified polylines),
-  // rings first (outermost → inner) then serpentine swaths.
+  // rings first (outermost → inner) then the swaths.
   std::vector<std::vector<std::pair<double, double>>> segs;
   for (const auto& loop : plan.rings)
   {
@@ -874,7 +874,68 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
       segs.push_back(loop);
     }
   }
-  for (const auto& sw : plan.swaths)
+
+  // Nearest-endpoint chaining of the swath pieces. BoustrophedonOrder's
+  // serpentine interleaves the pieces of a sweep line that a concave bite (or a
+  // hole) split — below,above,below,above… — which forced one field-crossing
+  // blade-on join PER COLUMN through/around the bite (user report: "the plan
+  // lands in the middle at the rounded parts"). Greedy nearest-endpoint chaining
+  // is identical to the plain serpentine on a convex field (the nearest unvisited
+  // piece IS the adjacent swath, entered at the near end), but on a split field
+  // it mows each lobe contiguously and leaves ONE long hop per lobe change —
+  // which the join-gap split below turns into a single blade-off Nav2 transit.
+  // Deterministic for a fixed plan (greedy from a fixed seed). O(n²), n = a few
+  // hundred swaths at most.
+  std::vector<std::pair<std::pair<double, double>, std::pair<double, double>>> ordered_swaths;
+  {
+    const auto& sw_in = plan.swaths;
+    std::vector<bool> used(sw_in.size(), false);
+    // Seed from where the robot will actually be: the innermost ring's end, or
+    // the first swath's start when the plan has no rings.
+    std::pair<double, double> cur =
+        !segs.empty()
+            ? segs.back().back()
+            : (!sw_in.empty() ? sw_in.front().first : std::pair<double, double>{0.0, 0.0});
+    ordered_swaths.reserve(sw_in.size());
+    for (std::size_t n = 0; n < sw_in.size(); ++n)
+    {
+      std::size_t best = sw_in.size();
+      bool flip = false;
+      double best_d = std::numeric_limits<double>::max();
+      for (std::size_t i = 0; i < sw_in.size(); ++i)
+      {
+        if (used[i])
+        {
+          continue;
+        }
+        const double d0 =
+            std::hypot(sw_in[i].first.first - cur.first, sw_in[i].first.second - cur.second);
+        const double d1 =
+            std::hypot(sw_in[i].second.first - cur.first, sw_in[i].second.second - cur.second);
+        if (d0 < best_d)
+        {
+          best_d = d0;
+          best = i;
+          flip = false;
+        }
+        if (d1 < best_d)
+        {
+          best_d = d1;
+          best = i;
+          flip = true;
+        }
+      }
+      used[best] = true;
+      auto sw = sw_in[best];
+      if (flip)
+      {
+        std::swap(sw.first, sw.second);
+      }
+      cur = sw.second;
+      ordered_swaths.push_back(sw);
+    }
+  }
+  for (const auto& sw : ordered_swaths)
   {
     std::vector<std::pair<double, double>> pts;
     densifySegmentStep(
@@ -920,26 +981,40 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
       // and arrives tangent → no cusp at either junction.
       const Pose start{path.back().first, path.back().second, exitHeading(segs[i - 1])};
       const Pose goal{segs[i].front().first, segs[i].front().second, entryHeading(segs[i])};
-      bool fallback = false;
-      auto conn = buildConnector(
-          start, goal, boundary, plan.safe_holes, turn_radius, min_radius, step, fallback);
-      // A forward Dubins connector is a LOCAL arc — it cannot route around a
-      // large interior hole. If no in-bounds, hole-free arc fit, buildConnector
-      // returned a straight fallback; only keep it when that straight is itself
-      // safe (a short join that happens to clear everything). Otherwise BREAK the
-      // path here: finalize this sub-path and start a fresh one at segs[i], so
-      // FollowStrip bridges the gap with a blade-off, costmap-aware Nav2 transit
-      // that routes around the obstacle (issue #333).
-      const bool conn_safe =
-          !conn.empty() &&
-          (!fallback || (allInside(conn, boundary) && clearOfHoles(conn, plan.safe_holes)));
-      if (conn_safe)
+      // A blade-on connector is a TURN-AROUND between adjacent passes (~op_width
+      // apart). A join longer than this is a RELOCATION (lobe change across a
+      // concave bite, innermost-ring → far first swath): an in-bounds Dubins for
+      // it "works" but mows a long diagonal across the middle of the lawn (user
+      // report). Split instead — FollowStrip bridges it with a blade-off Nav2
+      // transit. 0.6 m matches the BT's kSegmentTransitGap for the same decision.
+      constexpr double kMaxMowJoinGapM = 0.6;
+      const double join_gap = std::hypot(goal.x - start.x, goal.y - start.y);
+      bool conn_safe = false;
+      if (join_gap <= kMaxMowJoinGapM)
       {
-        // conn is start-inclusive (== path.back()) / goal-exclusive; drop the
-        // duplicate start so the polyline stays simple.
-        path.insert(path.end(), conn.begin() + 1, conn.end());
+        bool fallback = false;
+        auto conn = buildConnector(
+            start, goal, boundary, plan.safe_holes, turn_radius, min_radius, step, fallback);
+        // A forward Dubins connector is a LOCAL arc — it cannot route around a
+        // large interior hole. If no in-bounds, hole-free arc fit, buildConnector
+        // returned a straight fallback; keep it only when that straight is itself
+        // safe (a short join that happens to clear everything — its V-cusp is
+        // rounded by roundSharpCorners below, or split off by the residual-cusp
+        // pass when the fillet can't fit). Otherwise BREAK the path here:
+        // finalize this sub-path and start a fresh one at segs[i], so FollowStrip
+        // bridges the gap with a blade-off, costmap-aware Nav2 transit that
+        // routes around the obstacle (issue #333).
+        conn_safe =
+            !conn.empty() &&
+            (!fallback || (allInside(conn, boundary) && clearOfHoles(conn, plan.safe_holes)));
+        if (conn_safe)
+        {
+          // conn is start-inclusive (== path.back()) / goal-exclusive; drop the
+          // duplicate start so the polyline stays simple.
+          path.insert(path.end(), conn.begin() + 1, conn.end());
+        }
       }
-      else
+      if (!conn_safe)
       {
         subpaths.push_back(std::move(path));
         path.clear();
@@ -985,8 +1060,43 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     {
       continue;
     }
-    out.push_back(roundSharpCorners(
-        sp, boundary, plan.safe_holes, kCornerThreshold, fillet_r, min_radius, step));
+    auto rounded = roundSharpCorners(
+        sp, boundary, plan.safe_holes, kCornerThreshold, fillet_r, min_radius, step);
+    // Residual-cusp split: roundSharpCorners leaves a corner SHARP when no
+    // in-bounds fillet of radius >= min_radius fits (typically the V-cusp of a
+    // kept straight-fallback join squeezed against the safety inset — measured
+    // 147.8° on the recorded garden). A >115° corner is a near-reversal MPPI
+    // dithers at, so SPLIT the sub-path there instead: the next FollowPath goal
+    // starts at the corner and RotationShim pivots in place to the new heading —
+    // exactly the right maneuver for a sharp corner this chassis can't arc
+    // through. Gentle (<=115°) corners stay: MPPI turns through those fine.
+    constexpr double kCuspSplitCos = -0.42261826174;  // cos(115°)
+    std::size_t begin = 0;
+    for (std::size_t i = 1; i + 1 < rounded.size(); ++i)
+    {
+      const double ax = rounded[i].first - rounded[i - 1].first;
+      const double ay = rounded[i].second - rounded[i - 1].second;
+      const double bx = rounded[i + 1].first - rounded[i].first;
+      const double by = rounded[i + 1].second - rounded[i].second;
+      const double na = std::hypot(ax, ay), nb = std::hypot(bx, by);
+      if (na < 1e-9 || nb < 1e-9)
+      {
+        continue;
+      }
+      if ((ax * bx + ay * by) / (na * nb) < kCuspSplitCos)
+      {
+        if (i + 1 - begin >= 2)
+        {
+          out.emplace_back(rounded.begin() + static_cast<std::ptrdiff_t>(begin),
+                           rounded.begin() + static_cast<std::ptrdiff_t>(i + 1));
+        }
+        begin = i;  // corner pose starts the next run (pivot happens here)
+      }
+    }
+    if (rounded.size() - begin >= 2)
+    {
+      out.emplace_back(rounded.begin() + static_cast<std::ptrdiff_t>(begin), rounded.end());
+    }
   }
   return out;
 }
