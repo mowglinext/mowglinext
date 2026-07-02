@@ -347,7 +347,7 @@ TEST(CoverageContinuousPath, ContinuousPathAvoidsHole)
   constexpr double kHeadland = 0.18;
   constexpr double kInset = 0.15;
   constexpr double kMinSwath = 0.15;
-  constexpr double kTurnRadius = 0.30;
+  constexpr double kTurnRadius = 0.18;  // deployed connector_turn_radius default
   constexpr double kMinTurnRadius = 0.15;
   constexpr double kStep = 0.03;
 
@@ -441,7 +441,7 @@ TEST(CoverageContinuousPath, NotchFieldLobeChainedNoMidFieldJoins)
   constexpr double kHeadland = 0.18;
   constexpr double kInset = 0.15;
   constexpr double kMinSwath = 0.15;
-  constexpr double kTurnRadius = 0.30;
+  constexpr double kTurnRadius = 0.18;  // deployed connector_turn_radius default
   constexpr double kMinTurnRadius = 0.15;
   constexpr double kStep = 0.03;
 
@@ -889,7 +889,7 @@ TEST(CoverageContinuousPath, RecordedArea1NoCuspInBounds)
   constexpr double kHeadland = 0.18;
   constexpr double kInset = 0.15;
   constexpr double kMinSwath = 0.15;
-  constexpr double kTurnRadius = 0.30;
+  constexpr double kTurnRadius = 0.18;  // deployed connector_turn_radius default
   constexpr double kMinTurnRadius = 0.15;  // robot's min MPPI-trackable radius
   constexpr double kStep = 0.03;
 

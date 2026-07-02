@@ -354,6 +354,15 @@ def generate_launch_description() -> LaunchDescription:
     # looped/hesitated at corners — the bug this knob prevents. Injected into
     # coverage_server.min_turning_radius; operator-tunable via mowgli_robot.yaml.
     min_turning_radius = 0.15
+    # connector_turn_radius: nominal radius of the swath-to-swath turn-around
+    # arcs in the continuous coverage path. A forward 180° reversal at op_width
+    # spacing always loops (a clean U needs r ≤ op_width/2 ≈ 0.09, below the
+    # min_turning_radius floor), but the loop SIZE scales with this radius: 0.30
+    # balloons a big teardrop into the headland (the "turning loops" seen with
+    # >2 headland passes); ~op_width (0.18) collapses it to a compact U-turn.
+    # Injected into coverage_server.connector_turn_radius; operator-tunable via
+    # mowgli_robot.yaml (raise toward 0.30 if the tighter turns hesitate).
+    connector_turn_radius = 0.18
     progress_timeout_sec = 300.0
     # num_headland_passes: 0 = auto (ceil(headland_width / tool_width)),
     # >0 forces exactly that many concentric perimeter rings.
@@ -466,6 +475,8 @@ def generate_launch_description() -> LaunchDescription:
         swath_overlap = float(rt_rp.get("swath_overlap", swath_overlap))
         min_turning_radius = float(rt_rp.get(
             "min_turning_radius", min_turning_radius))
+        connector_turn_radius = float(rt_rp.get(
+            "connector_turn_radius", connector_turn_radius))
         # Operator override wins; otherwise fall back to chassis_width/2
         # (cw was already read above from the same runtime config).
         if "chassis_safety_inset" in rt_rp:
@@ -692,6 +703,12 @@ def generate_launch_description() -> LaunchDescription:
         # turn is ever tighter than the robot can track (clamp to the tuned
         # [0.10, 0.50] band; sub-0.10 loops are untrackable, >0.50 bulges OOB).
         cov_params["min_turning_radius"] = min(0.50, max(0.10, min_turning_radius))
+        # Nominal turn-around radius for the continuous path (compact U vs big
+        # teardrop). Clamp to a sane band and never below the trackable floor:
+        # buildConnector floors it at min_turning_radius anyway, but keep the
+        # injected value coherent.
+        cov_params["connector_turn_radius"] = min(
+            0.50, max(min(0.50, max(0.10, min_turning_radius)), connector_turn_radius))
 
         tmp = tempfile.NamedTemporaryFile(
             mode="w", prefix="mowgli_nav2_", suffix=".yaml", delete=False)
