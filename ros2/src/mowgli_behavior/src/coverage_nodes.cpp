@@ -1141,16 +1141,22 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
   // ctx->completed_areas). The onStart/advance skip-loops already exclude
   // completed_areas, so reaching here normally means "has remaining work" —
   // but re-check under the lock in case it completed between probes.
+  // NOTE: the lock MUST be released before advanceAndProbe() — it re-locks the
+  // same non-recursive context_mutex, so calling it from inside this scope
+  // deadlocks the BT tick thread (robot freezes) the first time a completed
+  // area is re-probed (any multi-area session after area 0 finishes).
+  bool already_complete = false;
   {
     std::lock_guard<std::mutex> lock(ctx->context_mutex);
-    if (ctx->completed_areas.count(current_area_idx_) > 0)
-    {
-      areas_complete_++;
-      RCLCPP_INFO(ctx->node->get_logger(),
-                  "GetNextUnmowedArea: area %u already complete",
-                  current_area_idx_);
-      return advanceAndProbe();
-    }
+    already_complete = ctx->completed_areas.count(current_area_idx_) > 0;
+  }
+  if (already_complete)
+  {
+    areas_complete_++;
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "GetNextUnmowedArea: area %u already complete",
+                current_area_idx_);
+    return advanceAndProbe();
   }
 
   // Area has remaining work. Guard against an area that can never finish

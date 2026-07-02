@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <memory>
@@ -393,36 +394,37 @@ private:
     // reaching a dock/EndSession boundary). This is the operator's explicit
     // resume-vs-restart choice (issue: "starts at 2nd/3rd line"); the automatic
     // in-session resume after an e-stop is unaffected.
+    // The clear is DEFERRED to the BT tick thread (processed at the top of
+    // tickTree) rather than done inline: the BT nodes (FollowStrip,
+    // GetNextUnmowedArea, EndSession) read/write these maps WITHOUT the context
+    // mutex — safe today only because every callback of this node shares the
+    // default MutuallyExclusive callback group, so tick/service/timers are
+    // serialized even under the MultiThreadedExecutor. Deferring keeps every
+    // map mutation on the tick thread, so a future Reentrant group / callback
+    // re-homing can't silently turn this into a data race against a mid-tick
+    // `const auto& done = ctx->area_completed_swaths[...]` reference.
     clear_coverage_resume_srv_ = create_service<std_srvs::srv::Trigger>(
         "~/clear_coverage_resume",
         [this](const std_srvs::srv::Trigger::Request::SharedPtr /*req*/,
                std_srvs::srv::Trigger::Response::SharedPtr resp)
         {
-          {
-            std::lock_guard<std::mutex> lock(context_->context_mutex);
-            context_->area_completed_swaths.clear();
-            context_->area_swath_count.clear();
-            context_->area_resume_pose_index.clear();
-            context_->area_path_pose_count.clear();
-            context_->completed_areas.clear();
-            context_->attempted_areas.clear();
-            context_->area_attempt_count.clear();
-            context_->area_last_coverage.clear();
-            clearCoverageResumeState(*context_);
-          }
-          publishResumeAvailable();
+          clear_resume_requested_.store(true);
           RCLCPP_INFO(get_logger(),
-                      "Cleared coverage resume state on request — next start begins fresh");
+                      "Coverage resume clear requested — applied before the next BT tick");
           resp->success = true;
           resp->message = "coverage resume state cleared";
         });
 
     // Latched signal the GUI reads to decide whether to offer "Resume vs Start
     // fresh". True when a prior session left recoverable progress.
-    resume_available_pub_ = create_publisher<std_msgs::msg::Bool>(
-        "~/coverage_resume_available", rclcpp::QoS(1).transient_local());
+    resume_available_pub_ = create_publisher<std_msgs::msg::Bool>("~/coverage_resume_available",
+                                                                  rclcpp::QoS(1).transient_local());
     publishResumeAvailable();
-    resume_available_timer_ = create_wall_timer(1s, [this]() { publishResumeAvailable(); });
+    resume_available_timer_ = create_wall_timer(1s,
+                                                [this]()
+                                                {
+                                                  publishResumeAvailable();
+                                                });
 
     RCLCPP_DEBUG(get_logger(), "~/clear_coverage_resume service + resume-available signal created");
   }
@@ -439,8 +441,7 @@ private:
     bool available;
     {
       std::lock_guard<std::mutex> lock(context_->context_mutex);
-      available =
-          !context_->area_resume_pose_index.empty() || !context_->completed_areas.empty();
+      available = !context_->area_resume_pose_index.empty() || !context_->completed_areas.empty();
     }
     if (available == last_resume_available_ && resume_available_published_)
     {
@@ -677,6 +678,25 @@ private:
 
   void tickTree()
   {
+    // Apply a pending "Start fresh" clear BEFORE ticking, on the tick thread —
+    // every coverage-map mutation stays on this thread (see the service
+    // registration comment). Between ticks no BT node holds a reference into
+    // the maps, so clearing here is race-free by construction.
+    if (clear_resume_requested_.exchange(false))
+    {
+      std::lock_guard<std::mutex> lock(context_->context_mutex);
+      context_->area_completed_swaths.clear();
+      context_->area_swath_count.clear();
+      context_->area_resume_pose_index.clear();
+      context_->area_path_pose_count.clear();
+      context_->completed_areas.clear();
+      context_->attempted_areas.clear();
+      context_->area_attempt_count.clear();
+      context_->area_last_coverage.clear();
+      clearCoverageResumeState(*context_);
+      RCLCPP_INFO(get_logger(),
+                  "Cleared coverage resume state on request — next start begins fresh");
+    }
     try
     {
       const BT::NodeStatus status = tree_.tickOnce();
@@ -724,8 +744,14 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_coverage_resume_srv_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr resume_available_pub_;
   rclcpp::TimerBase::SharedPtr resume_available_timer_;
-  bool last_resume_available_ = false;
-  bool resume_available_published_ = false;
+  // Set by the ~/clear_coverage_resume service, consumed by tickTree() so the
+  // actual map clearing happens on the BT tick thread (see the service comment).
+  std::atomic<bool> clear_resume_requested_{false};
+  // Only touched from this node's mutually-exclusive callback group (timer +
+  // service + init), so plain bools would work today — atomic future-proofs
+  // them against a Reentrant-group conversion, same rationale as the deferral.
+  std::atomic<bool> last_resume_available_{false};
+  std::atomic<bool> resume_available_published_{false};
 
   // BehaviorTree.CPP
   BT::BehaviorTreeFactory factory_;
