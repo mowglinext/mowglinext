@@ -273,3 +273,15 @@ func TestMultiplexRoute_DropsSubscriptionsOnDisconnect(t *testing.T) {
 	// Dispatch after the client is gone should be a no-op (no panic).
 	mock.Dispatch("imu", []byte(`{"a":1}`))
 }
+
+func TestMapWriteBudget(t *testing.T) {
+	// Base budget for a small/empty map (regression: a fixed 30 s used to time
+	// out saving a big edited map on RPi4 — issue #341).
+	assert.Equal(t, 60*time.Second, mapWriteBudget(0))
+	// Scales +5 s per area.
+	assert.Equal(t, 60*time.Second+10*5*time.Second, mapWriteBudget(10))
+	// Capped at 6 min so a pathological area count can't set an absurd budget.
+	assert.Equal(t, 6*time.Minute, mapWriteBudget(1000))
+	// The old fixed 30 s is always exceeded now, even for zero areas.
+	assert.Greater(t, mapWriteBudget(0), 30*time.Second)
+}
