@@ -1647,47 +1647,25 @@
           "auto": {
             "label": "Inconnu / Auto"
           },
-          "um982": {
-            "label": "UM982 compatible baseline double antenne"
+          "um960": {
+            "label": "UM960 sans baseline"
           },
           "um980": {
             "label": "UM980 sans baseline"
           },
-          "ub9a0": {
-            "label": "UB9A0 sans baseline"
-          },
           "um981": {
-            "label": "UM981 mappage inconnu/non pris en charge"
+            "label": "UM981 sans baseline"
           },
-          "um952": {
-            "label": "UM952 mappage inconnu/non pris en charge"
+          "um982": {
+            "label": "UM982 compatible baseline double antenne"
           }
         }
       },
       "signalGroup": {
-        "label": "Préréglage de groupe de signaux",
-        "rawLabel": "Groupe de signaux brut",
-        "tooltip": "Choisissez une valeur brute documentée de groupe de signaux Unicore si nécessaire, puis affinez la surcharge brute uniquement si vous souhaitez la gérer explicitement.",
-        "option": {
-          "default": {
-            "label": "Par défaut / Actuel"
-          },
-          "um982": {
-            "label": "UM982 recommandé",
-            "description": "Renseigne la surcharge experte brute avec 3 6. Universal GNSS décide toujours si cette valeur documentée est valide pour le modèle sélectionné."
-          },
-          "allBands": {
-            "label": "Toutes les bandes (UM980 / UM981)",
-            "description": "Renseigne la surcharge experte brute avec 2."
-          },
-          "ppp": {
-            "label": "Optimisé PPP",
-            "description": "Renseigne la surcharge experte brute avec 3."
-          }
-        },
-        "customOptionLabel": "Personnalisé",
-        "customPlaceholder": "ex. 3 6",
-        "helpText": "Les réglages normaux sont indépendants du fabricant. Les réglages experts sont spécifiques à la famille de récepteur. Universal GNSS valide les groupes de signaux documentés pour le modèle sélectionné et avertit lorsqu'Inconnu / Auto applique un repli sûr."
+        "label": "Groupe de signaux brut",
+        "tooltip": "Surcharge brute facultative du groupe de signaux Unicore. Laissez vide sauf si une documentation récepteur vous demande une valeur précise.",
+        "placeholder": "ex. 3 6",
+        "helpText": "Universal GNSS reste responsable de la validation de toute valeur documentée de groupe de signaux par rapport au modèle de récepteur sélectionné et de la remontée des avertissements de repli sûr."
       },
       "pvtAlgorithm": {
         "label": "Algorithme PVT",
@@ -2246,7 +2224,7 @@
     "rtkWaitAfterUndockLabel": "Attente RTK après désaccostage",
     "gpsTimeoutLabel": "Délai GPS",
     "expertScopeTitle": "Portée du mode expert",
-    "expertScopeDescription": "Les préréglages de groupe de signaux, les valeurs brutes de groupe de signaux, l'algorithme PVT, la fiabilité RTK, le délai RTK et le délai DGPS sont stockés ici pour une future traduction backend. La zone de texte de commande brute, le plan de simulation et les outils de réinitialisation/application nécessitent encore une API dédiée."
+    "expertScopeDescription": "Les valeurs brutes de groupe de signaux, l'algorithme PVT, la fiabilité RTK, le délai RTK et le délai DGPS sont stockés ici pour une future traduction backend. La zone de texte de commande brute, le plan de simulation et les outils de réinitialisation/application nécessitent encore une API dédiée."
   },
   "settingsLocalization": {
     "scanMatchingTitle": "Recalage de scan LiDAR",

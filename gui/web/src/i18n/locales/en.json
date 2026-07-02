@@ -1647,47 +1647,25 @@
           "auto": {
             "label": "Unknown / Auto"
           },
-          "um982": {
-            "label": "UM982 dual-antenna baseline capable"
+          "um960": {
+            "label": "UM960 non-baseline"
           },
           "um980": {
             "label": "UM980 non-baseline"
           },
-          "ub9a0": {
-            "label": "UB9A0 non-baseline"
-          },
           "um981": {
-            "label": "UM981 unsupported/unknown mapping"
+            "label": "UM981 non-baseline"
           },
-          "um952": {
-            "label": "UM952 unsupported/unknown mapping"
+          "um982": {
+            "label": "UM982 dual-antenna baseline capable"
           }
         }
       },
       "signalGroup": {
-        "label": "Signal Group Preset",
-        "rawLabel": "Raw Signal Group",
-        "tooltip": "Choose a documented raw Unicore signal-group value if needed, then fine-tune the raw override only when you intend to manage it explicitly.",
-        "option": {
-          "default": {
-            "label": "Default / Current"
-          },
-          "um982": {
-            "label": "UM982 recommended",
-            "description": "Fills the raw expert override with 3 6. Universal GNSS still decides whether that documented value is valid for the selected model."
-          },
-          "allBands": {
-            "label": "All bands (UM980 / UM981)",
-            "description": "Fills the raw expert override with 2."
-          },
-          "ppp": {
-            "label": "PPP optimized",
-            "description": "Fills the raw expert override with 3."
-          }
-        },
-        "customOptionLabel": "Custom",
-        "customPlaceholder": "e.g. 3 6",
-        "helpText": "Normal settings are vendor-neutral. Expert settings are receiver-family specific. Universal GNSS validates documented signal groups for the selected model and warns when Unknown / Auto falls back safely."
+        "label": "Raw Signal Group",
+        "tooltip": "Optional raw Unicore signal-group override. Leave it empty unless documented receiver guidance tells you to set a specific value.",
+        "placeholder": "e.g. 3 6",
+        "helpText": "Universal GNSS remains responsible for validating any documented signal-group value against the selected receiver model and for surfacing safe-fallback warnings."
       },
       "pvtAlgorithm": {
         "label": "PVT Algorithm",
@@ -2246,7 +2224,7 @@
     "rtkWaitAfterUndockLabel": "RTK Wait After Undock",
     "gpsTimeoutLabel": "GPS Timeout",
     "expertScopeTitle": "Expert-mode scope",
-    "expertScopeDescription": "Signal-group presets, raw signal-group values, PVT algorithm, RTK reliability, RTK timeout, and DGPS timeout are stored here for future backend translation. Raw command textarea, dry-run plan, and reset/apply tooling still need a dedicated API."
+    "expertScopeDescription": "Raw signal-group values, PVT algorithm, RTK reliability, RTK timeout, and DGPS timeout are stored here for future backend translation. Raw command textarea, dry-run plan, and reset/apply tooling still need a dedicated API."
   },
   "settingsLocalization": {
     "scanMatchingTitle": "LiDAR scan matching",
