@@ -1,4 +1,4 @@
-{{- /*gotype: github.com/cedbossneo/mowglinext-gui/pkg/providers.FirmwareConfig*/ -}}
+{{- /*gotype: github.com/mowglinext/mowglinext-gui/pkg/providers.FirmwareConfig*/ -}}
 
 #ifndef __BOARD_H
 #define __BOARD_H

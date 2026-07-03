@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	pkgtypes "github.com/cedbossneo/mowglinext/pkg/types"
+	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -119,6 +119,14 @@ func defaultGNSSYAML(serialDevice string, receiverFamily string, profile string)
 		"    gnss_profile_rate_hz: 5\n"
 }
 
+func defaultGNSSYAMLWithModel(serialDevice string, receiverFamily string, profile string, receiverModel string) string {
+	base := defaultGNSSYAML(serialDevice, receiverFamily, profile)
+	if strings.TrimSpace(receiverModel) == "" {
+		return base
+	}
+	return base + "    gnss_receiver_model: " + receiverModel + "\n"
+}
+
 func newGNSSTestDB(t *testing.T, yamlContent string) (*pkgtypes.MockDBProvider, string) {
 	t.Helper()
 	yamlFile := writeGNSSConfigFile(t, yamlContent)
@@ -151,7 +159,10 @@ func defaultMockDocker() *mockDockerProvider {
 func TestGNSSPlan_DoesNotRequireConfirmAndAvoidsSerialAccess(t *testing.T) {
 	db, _ := newGNSSTestDB(t, defaultGNSSYAML("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision"))
 	docker := defaultMockDocker()
-	docker.runResults = []pkgtypes.ContainerRunResult{{ExitCode: 0, Stdout: "ok"}}
+	docker.runResults = []pkgtypes.ContainerRunResult{{
+		ExitCode: 0,
+		Stdout:   `{"status":"ok","warnings":["Unknown Unicore model; safe fallback kept documented signal-group auto-selection disabled."]}`,
+	}}
 
 	router := setupGNSSRouter(db, docker)
 
@@ -167,11 +178,15 @@ func TestGNSSPlan_DoesNotRequireConfirmAndAvoidsSerialAccess(t *testing.T) {
 	assert.Equal(t, gnssConfigPlanBinary, docker.runSpecs[0].Cmd[0])
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--config-baud")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "460800")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--signal-profile")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "balanced")
+	assert.NotContains(t, docker.runSpecs[0].Cmd, "--model")
 
 	var response GNSSActionResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	assert.True(t, response.Success)
 	assert.Equal(t, "plan", response.Action)
+	assert.Contains(t, strings.Join(response.Warnings, "\n"), "safe fallback kept documented signal-group auto-selection disabled")
 }
 
 func TestGNSSApply_RequiresConfirm(t *testing.T) {
@@ -209,7 +224,10 @@ func TestGNSSFactoryResetApply_RequiresConfirmFactoryReset(t *testing.T) {
 func TestGNSSApply_PassesConfigBaudAndRestartsAfterSuccess(t *testing.T) {
 	db, envFile := newGNSSTestDB(t, defaultGNSSYAML("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision"))
 	docker := defaultMockDocker()
-	docker.runResults = []pkgtypes.ContainerRunResult{{ExitCode: 0, Stdout: "apply ok"}}
+	docker.runResults = []pkgtypes.ContainerRunResult{{
+		ExitCode: 0,
+		Stdout:   `{"status":"ok","warnings":["Universal GNSS skipped documented model-specific signal groups because no receiver model was selected."]}`,
+	}}
 	router := setupGNSSRouter(db, docker)
 
 	w := httptest.NewRecorder()
@@ -229,6 +247,8 @@ func TestGNSSApply_PassesConfigBaudAndRestartsAfterSuccess(t *testing.T) {
 	assert.Contains(t, docker.runSpecs[0].Cmd, "460800")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--device")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--signal-profile")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "balanced")
 
 	envContent, err := os.ReadFile(envFile)
 	require.NoError(t, err)
@@ -243,7 +263,51 @@ func TestGNSSApply_PassesConfigBaudAndRestartsAfterSuccess(t *testing.T) {
 	assert.Equal(t, "460800", response.RuntimeBaud)
 	assert.False(t, response.RuntimeBaudDiffersFromConfig)
 	assert.Contains(t, strings.Join(response.Warnings, "\n"), "Configured receiver baud differs from runtime baud.")
-	assert.Contains(t, strings.Join(response.Warnings, "\n"), "GNSS_SIGNAL_PROFILE is persisted in the UI")
+	assert.NotContains(t, strings.Join(response.Warnings, "\n"), "GNSS_SIGNAL_PROFILE is persisted in the UI")
+	assert.Contains(t, strings.Join(response.Warnings, "\n"), "no receiver model was selected")
+}
+
+func TestGNSSPlan_AddsConfiguredReceiverModels(t *testing.T) {
+	for _, receiverModel := range []string{"UM960", "UM982"} {
+		t.Run(receiverModel, func(t *testing.T) {
+			db, _ := newGNSSTestDB(t, defaultGNSSYAMLWithModel("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision", receiverModel))
+			docker := defaultMockDocker()
+			docker.runResults = []pkgtypes.ContainerRunResult{{ExitCode: 0, Stdout: `{"status":"ok","warnings":[]}`}}
+			router := setupGNSSRouter(db, docker)
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("POST", "/api/settings/gnss/plan", nil)
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			require.Len(t, docker.runSpecs, 1)
+			assert.Contains(t, docker.runSpecs[0].Cmd, "--model")
+			assert.Contains(t, docker.runSpecs[0].Cmd, receiverModel)
+		})
+	}
+}
+
+func TestGNSSApply_AddsConfiguredReceiverModelsWithoutSignalGroupTranslation(t *testing.T) {
+	for _, receiverModel := range []string{"UM980", "UM981"} {
+		t.Run(receiverModel, func(t *testing.T) {
+			db, _ := newGNSSTestDB(t, defaultGNSSYAMLWithModel("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision", receiverModel))
+			docker := defaultMockDocker()
+			docker.runResults = []pkgtypes.ContainerRunResult{{ExitCode: 0, Stdout: `{"status":"ok","warnings":[]}`}}
+			router := setupGNSSRouter(db, docker)
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("POST", "/api/settings/gnss/apply", bytes.NewReader([]byte(`{"confirm":true}`)))
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			require.Len(t, docker.runSpecs, 1)
+			assert.Contains(t, docker.runSpecs[0].Cmd, "--model")
+			assert.Contains(t, docker.runSpecs[0].Cmd, receiverModel)
+			assert.NotContains(t, docker.runSpecs[0].Cmd, "--signal-group")
+			assert.NotContains(t, strings.Join(docker.runSpecs[0].Cmd, " "), "SIGNALGROUP")
+		})
+	}
 }
 
 func TestGNSSApply_RejectsInvalidSerialDevice(t *testing.T) {

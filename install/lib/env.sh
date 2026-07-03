@@ -123,8 +123,16 @@ sync_gnss_env_contract_values() {
   : "${GNSS_NTRIP_ENABLED:=${CONFIG_NTRIP_ENABLED:-true}}"
   : "${GNSS_NTRIP_HOST:=${CONFIG_NTRIP_HOST:-crtk.net}}"
   : "${GNSS_NTRIP_PORT:=${CONFIG_NTRIP_PORT:-2101}}"
-  : "${GNSS_NTRIP_USERNAME:=${CONFIG_NTRIP_USER:-centipede}}"
-  : "${GNSS_NTRIP_PASSWORD:=${CONFIG_NTRIP_PASSWORD:-centipede}}"
+  GNSS_NTRIP_USERNAME="${GNSS_NTRIP_USERNAME:-${CONFIG_NTRIP_USER:-}}"
+  GNSS_NTRIP_PASSWORD="${GNSS_NTRIP_PASSWORD:-${CONFIG_NTRIP_PASSWORD:-}}"
+  # crtk.net is the public Centipede caster, whose anonymous login is
+  # "centipede/centipede". Only fall back to it when actually pointed at that
+  # caster — a custom caster must never receive the Centipede credentials, and a
+  # credential the operator deliberately cleared must not be silently restored.
+  if [[ "${GNSS_NTRIP_HOST,,}" == "crtk.net" ]]; then
+    : "${GNSS_NTRIP_USERNAME:=centipede}"
+    : "${GNSS_NTRIP_PASSWORD:=centipede}"
+  fi
   : "${GNSS_NTRIP_MOUNTPOINT:=${CONFIG_NTRIP_MOUNTPOINT:-NEAR}}"
   : "${GNSS_RTCM_FORWARDING:=true}"
   : "${GNSS_NTRIP_GGA_ENABLED:=$(if [[ "${GNSS_NTRIP_MOUNTPOINT:-}" =~ ^[Nn][Ee][Aa][Rr] ]]; then printf 'true\n'; else printf 'false\n'; fi)}"

@@ -55,6 +55,7 @@ Legacy-only status path
 
 - Universal GNSS is the only official direct-GNSS stack and is launched from `mowgli-ros2` through `mowgli_bringup/universal_gnss.launch.py`.
 - The installer now writes a preferred Universal GNSS env contract: `GNSS_STACK`, `GNSS_RECEIVER_FAMILY`, `GNSS_TRANSPORT`, `GNSS_SERIAL_DEVICE`, `GNSS_SERIAL_BAUD`, and `GNSS_NTRIP_*`.
+- The persisted MowgliNext GNSS configurator seam now also accepts an optional `gnss_receiver_model` YAML field for Universal GNSS plan/apply tooling. When it is empty, MowgliNext calls Universal GNSS without `--model` and surfaces the tool's safe-fallback warnings instead of inferring anything from runtime state.
 - Installer and GUI flows now treat `GNSS_*` as the user-facing truth. `GNSS_BACKEND` and `GPS_*` remain compatibility mirrors for legacy tooling only.
 - For USB receivers, `GNSS_SERIAL_DEVICE` should normally be a stable `/dev/serial/by-id/...` path rather than a raw `ttyACM*` or `ttyUSB*` node.
 - `921600` is the recommended validation baud for advanced u-blox and Unicore profiles.
@@ -69,7 +70,23 @@ Legacy-only status path
 - The old standalone `ublox_gnss.launch.py` bringup and `ublox_gnss.yaml` config were removed in Milestone 8.
 - In the supported runtime path, Universal GNSS owns `/gps/fix`, `/gps/status`, `/diagnostics`, and `/rtcm`.
 - The local Mowgli `/gps/status` reconstruction path stays disabled in that supported runtime path.
-- The GUI/backend still consumes `/gps/status` through the existing Mowgli schema, but that shape is now produced by a thin backend adapter in universal mode instead of new frontend vendor parsing.
+- The public Mowgli `/gps/status` schema now mirrors the Universal GNSS
+  projection directly in the GNSS sidecar bridge:
+  - runtime-status fields keep canonical GNSS names such as
+    `rtk_mode`, `baseline_azimuth_deg`, `baseline_pitch_deg`,
+    `baseline_length_m`, and `baseline_solution_status`
+  - diagnostics-derived correction-stream state is exposed separately through
+    `correction_stream_status`
+  - RTCM semantic MSM summary data is exposed separately through
+    `msm_summary_*`
+  - legacy `heading_deg`, `heading_accuracy_deg`, and
+    `dual_antenna_heading` remain compatibility fields only during the current
+    transition
+- Runtime `/gps/status.receiver_model` remains observational/display-only in MowgliNext. It is not auto-copied into the persisted configurator `gnss_receiver_model`; an operator must choose that explicitly before MowgliNext forwards `--model` to Universal GNSS tools.
+- The current Universal GNSS submodule points to `main` at `0a02e7e`, which
+  already includes the canonical GNSS/geodesy terminology, baseline ROS2
+  fields, RTCM semantic diagnostics, and generic NMEA `rtk_mode` mapping used
+  by the current MowgliNext integration.
 - `sensors/gps`, `sensors/unicore`, and `gnss_runtime_state_builder.cpp` still remain for the legacy fallback path until field validation is complete.
 - Do not commit real `GNSS_NTRIP_PASSWORD` values or copy them into docs/logs.
 - The devcontainer now mirrors the host `/dev` tree at `/host-dev` and re-links `/dev/serial/by-id` when the host provides it.

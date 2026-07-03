@@ -92,7 +92,7 @@
     "current": "Current",
     "motor": "Motor",
     "summary": "Summary",
-    "mowerState": "Mower status",
+    "mowerState": "Firmware",
     "power": "Power",
     "cutOff": "Cut off",
     "uiBoard": "UI board",
@@ -155,14 +155,16 @@
     "returnToDock": "Return to dock",
     "cancel": "Cancel",
     "recordZone": "Record a zone",
-    "mowNextZone": "Mow the next zone",
-    "continue": "Continue",
+    "mowNextZone": "Resume / Mow",
+    "continue": "Resume",
     "pause": "Pause",
     "disableEmergency": "Disable emergency stop",
     "bladeForward": "Blade forward",
     "bladeBackward": "Blade backward",
     "bladeOff": "Blade stopped",
     "start": "Start",
+    "resume": "Resume",
+    "startFresh": "Start fresh",
     "emergencyStop": "Emergency stop",
     "rearm": "Re-arm",
     "more": "More",
@@ -178,6 +180,10 @@
     "stateCalibration": "Calibration",
     "stateMowing": "Mowing",
     "stateTransit": "Transit",
+    "statePlanning": "Planning",
+    "stateObstacleBackoff": "Avoiding obstacle",
+    "stateObstacleCleared": "Obstacle cleared",
+    "stateAreaUnreachable": "Area unreachable",
     "stateSkippedStrip": "Skipped strip",
     "stateReturningBase": "Returning to base",
     "stateMowingComplete": "Mowing complete",
@@ -351,8 +357,12 @@
     "satellitesVisible": "Satellites visible",
     "satellitesTracked": "Satellites tracked",
     "verticalAccuracyM": "Vertical accuracy (m)",
-    "headingDeg": "Heading (deg)",
+    "headingDeg": "GNSS heading (deg)",
     "headingAccuracyDeg": "Heading accuracy (deg)",
+    "baselineAzimuthDeg": "Baseline azimuth (deg)",
+    "baselinePitchDeg": "Baseline pitch (deg)",
+    "baselineLengthM": "Baseline length (m)",
+    "baselineSolutionStatus": "Baseline solution status",
     "correctionAgeS": "Correction age (s)",
     "filteredPose": "Filtered Pose (map frame)",
     "live": "Live",
@@ -368,6 +378,7 @@
     "flatCheckOk": "OK",
     "flatCheckDrift": "DRIFT",
     "fixType": "Fix Type",
+    "gpsGnssTitle": "GPS / GNSS",
     "latitude": "Latitude",
     "longitude": "Longitude",
     "altitudeM": "Altitude (m)",
@@ -375,9 +386,12 @@
     "receiver": "Receiver",
     "backend": "Backend",
     "rtkMode": "RTK mode",
+    "correctionStreamStatus": "Correction stream",
     "differentialCorrections": "Differential corrections",
     "correctionsActive": "Corrections active",
     "dualAntennaHeading": "Dual-antenna heading",
+    "dualAntennaBaseline": "Dual-antenna baseline",
+    "msmSummary": "MSM summary",
     "rfInterference": "RF interference",
     "jamming": "Jamming",
     "advancedGnssUnavailable": "Advanced GNSS fields are not available for this backend.",
@@ -595,7 +609,7 @@
   "onboardingPage": {
     "preview": "Preview",
     "previewNotActiveYet": "Preview — not active yet",
-    "expertFieldsNotWired": "These expert fields are saved, but the backend API that translates them into receiver commands is not wired up yet. For the UM982, \"UM982 recommended\" will map to CONFIG SIGNALGROUP 3 6. In the meantime, the vendor-neutral signal profile above is enough.",
+    "expertFieldsNotWired": "These expert fields are saved. The optional receiver model is forwarded to Universal GNSS when set, while the remaining raw expert overrides are still not translated by MowgliNext. Universal GNSS validates and applies documented signal groups for the selected model, and Unknown / Auto uses a safe fallback with warnings.",
     "gpsRestarting": "Restarting GPS…",
     "gpsRestartedWaitRtk": "GPS restarted — wait for RTK Fix",
     "gpsRestartFailed": "GPS restart failed",
@@ -631,7 +645,7 @@
     "expertMode": "Expert mode",
     "normalVsExpert": "Normal settings are vendor-neutral. Expert settings are receiver-family specific.",
     "signalProfileLabel": "Signal Profile",
-    "signalProfileTooltip": "High-level constellation and signal preset. This is all most users need to touch.",
+    "signalProfileTooltip": "High-level constellation and signal preset. Saved with your settings, but only written to the receiver's flash when you run Plan & Apply in Expert mode.",
     "baudLabel": "Baud",
     "baudTooltip": "Serial speed between the robot and the GPS receiver. Saved to the receiver flash so both sides always match — you only set it once.",
     "savedToFlashTitle": "Saved to the GPS receiver flash",
@@ -644,7 +658,7 @@
     "receiverFamilyLabel": "Receiver Family",
     "serialDeviceLabel": "Serial Device",
     "saveContinueReceiverTitle": "Save & Continue to start the receiver",
-    "saveContinueReceiverDesc": "Saving this step writes your signal profile and baud to the GPS receiver and restarts it automatically (NTRIP corrections were set in the previous step). Acquiring an RTK fix can take 30 s to a few minutes — that happens in the background while you set the datum next.",
+    "saveContinueReceiverDesc": "Saving this step writes your GPS settings and restarts the receiver with the new transport and NTRIP corrections (set in the previous step). The signal profile is stored for the next flash-write; to push it into the receiver's flash, use Plan & Apply in Expert mode. Acquiring an RTK fix can take 30 s to a few minutes — that happens in the background while you set the datum next.",
     "datumSetFailedTitle": "Failed to set datum from GPS",
     "datumSetFailedDesc": "Could not capture the current GPS position as the map datum.",
     "datumTitle": "Map Origin (Datum)",
@@ -1004,9 +1018,11 @@
   },
   "actionCluster": {
     "emergencyStop": "Emergency stop",
-    "stopAndReturn": "Stop and return to base",
+    "returnToDock": "Return to dock",
     "startMowing": "Start mowing",
-    "returnToBase": "Return to base"
+    "pause": "Pause",
+    "returnToBase": "Return to base",
+    "rearm": "Re-arm"
   },
   "modeSegment": {
     "ecoLabel": "Eco",
@@ -1028,7 +1044,21 @@
     "rtkFloat": "RTK Float",
     "gpsFix": "GPS fix",
     "deadReckoning": "Dead reckoning",
-    "noGps": "No GPS"
+    "noGps": "No GPS",
+    "baselineUnknown": "Unknown",
+    "baselineComputed": "Computed",
+    "baselineNotSolved": "Not solved",
+    "baselineInsufficientObservations": "Insufficient observations",
+    "baselineNoConvergence": "No convergence",
+    "baselineOutOfTolerance": "Out of tolerance",
+    "baselineCovarianceTraceExceeded": "Covariance trace exceeded",
+    "baselineNotConfigured": "Not configured",
+    "correctionStreamUnknown": "Unknown",
+    "correctionStreamIdle": "Idle",
+    "correctionStreamWaiting": "Waiting",
+    "correctionStreamActive": "Active",
+    "correctionStreamUnavailable": "Unavailable",
+    "correctionStreamError": "Error"
   },
   "containerRestart": {
     "pending": "Restarting…",
@@ -1166,10 +1196,10 @@
     "flattenMap": "Flatten map",
     "tilt3dView": "Tilt 3D view",
     "areaRecording": "Area Recording",
-    "mowNextArea": "Mow Next Area",
-    "continue": "Continue",
+    "mowNextArea": "Resume / Mow",
+    "continue": "Resume",
     "pause": "Pause",
-    "stopManualMowing": "Stop Manual Mowing",
+    "stopManualMowing": "Stop",
     "manualMowing": "Manual Mowing",
     "bladeForward": "Blade Forward",
     "bladeBackward": "Blade Backward",
@@ -1186,7 +1216,7 @@
     "emergencyOn": "Emergency On",
     "emergencyOff": "Emergency Off",
     "mowArea": "Mow area",
-    "stopManual": "Stop Manual",
+    "stopManual": "Stop",
     "manualMow": "Manual Mow",
     "more": "More"
   },
@@ -1195,8 +1225,8 @@
     "darkMap": "Dark map",
     "satellite": "Satellite",
     "areaRecording": "Area Recording",
-    "mowNextArea": "Mow Next Area",
-    "continue": "Continue",
+    "mowNextArea": "Resume / Mow",
+    "continue": "Resume",
     "pause": "Pause",
     "bladeForward": "Blade Forward",
     "bladeBackward": "Blade Backward",
@@ -1227,7 +1257,7 @@
     "editMap": "Edit Map",
     "mowArea": "Mow area",
     "mow": "Mow",
-    "stopManualMowing": "Stop Manual Mowing",
+    "stopManualMowing": "Stop",
     "manualMowing": "Manual Mowing"
   },
   "mapEditorToolbar": {
@@ -1617,31 +1647,34 @@
     "signalProfileCustomHelpText": "Custom will later support user-provided profile files or raw receiver command sets from Expert/Developer mode. Upload and raw-command backend support are not wired yet.",
     "unicore": {
       "title": "Vendor-Specific Settings",
-      "description": "Use these only when the generic GNSS abstractions are not enough. UM982 signal-group tuning stays here instead of leaking into the main user workflow.",
-      "signalGroup": {
-        "label": "Signal Group Preset",
-        "rawLabel": "Raw Signal Group",
-        "tooltip": "Choose a Unicore signal-group preset, then fine-tune the raw value only if needed.",
+      "description": "Use these only when the generic GNSS abstractions are not enough. Universal GNSS remains the source of truth for Unicore model gating and documented signal-group handling.",
+      "receiverModel": {
+        "label": "Receiver model",
+        "tooltip": "Optional Unicore receiver model hint forwarded to Universal GNSS plan/apply tools only when you set it explicitly.",
+        "helpText": "Universal GNSS validates and applies documented signal groups for the selected model. Leave this on Unknown / Auto to omit --model and use the safe fallback with warnings.",
         "option": {
-          "default": {
-            "label": "Default / Current"
+          "auto": {
+            "label": "Unknown / Auto"
+          },
+          "um960": {
+            "label": "UM960 non-baseline"
+          },
+          "um980": {
+            "label": "UM980 non-baseline"
+          },
+          "um981": {
+            "label": "UM981 non-baseline"
           },
           "um982": {
-            "label": "UM982 recommended",
-            "description": "Maps to CONFIG SIGNALGROUP 3 6."
-          },
-          "allBands": {
-            "label": "All bands (UM980 / UM981)",
-            "description": "Maps to CONFIG SIGNALGROUP 2."
-          },
-          "ppp": {
-            "label": "PPP optimized",
-            "description": "Maps to CONFIG SIGNALGROUP 3."
+            "label": "UM982 dual-antenna baseline capable"
           }
-        },
-        "customOptionLabel": "Custom",
-        "customPlaceholder": "e.g. 3 6",
-        "helpText": "Normal settings are vendor-neutral. Expert settings are receiver-family specific. For UM982, \"UM982 recommended\" maps to CONFIG SIGNALGROUP 3 6."
+        }
+      },
+      "signalGroup": {
+        "label": "Raw Signal Group",
+        "tooltip": "Optional raw Unicore signal-group override. Leave it empty unless documented receiver guidance tells you to set a specific value.",
+        "placeholder": "e.g. 3 6",
+        "helpText": "Universal GNSS remains responsible for validating any documented signal-group value against the selected receiver model and for surfacing safe-fallback warnings."
       },
       "pvtAlgorithm": {
         "label": "PVT Algorithm",
@@ -2095,6 +2128,11 @@
     "swathOverlapTooltip": "Extra overlap between adjacent swaths to avoid thin un-mowed strips. F2C swath spacing = tool_width − swath_overlap.",
     "headlandPasses": "Headland Passes",
     "headlandPassesTooltip": "Number of concentric perimeter rings before the inner field. 0 = auto (ceil(headland_width / tool_width)). >0 forces exactly that count regardless of headland_width. Wired to coverage_server.num_headland_passes.",
+    "mowDirection": "Perimeter Direction",
+    "mowDirectionTooltip": "Travel direction around the perimeter/headland rings. Set it so a side-mounted blade stays on the cut side. Auto keeps the planner's natural winding. Wired to coverage_server.ring_direction.",
+    "mowDirectionAuto": "Auto (planner default)",
+    "mowDirectionCw": "Clockwise",
+    "mowDirectionCcw": "Counter-clockwise",
     "chassisSafetyInset": "Chassis Safety Inset",
     "chassisSafetyInsetTooltip": "Pre-shrink the operator polygon by this many metres before F2C plans. Defaults to chassis_width / 2 so the chassis edge stays inside the polygon under perfect tracking. Wired to coverage_server.chassis_safety_inset.",
     "minTurningRadius": "Min Turning Radius",
@@ -2183,7 +2221,7 @@
     "expertMode": "Expert mode",
     "gnssProfilesDescription": "Normal settings are vendor-neutral. Expert settings are receiver-family specific and stay hidden until you explicitly enable them.",
     "signalProfileLabel": "Signal Profile",
-    "signalProfileTooltip": "High-level constellation and signal preset. This is all most users need to touch.",
+    "signalProfileTooltip": "High-level constellation and signal preset. Saved with your settings, but only written to the receiver's flash when you run Plan & Apply in Expert mode.",
     "baudLabel": "Baud",
     "baudTooltip": "Serial speed between the robot and the GPS receiver. Saved to the receiver flash so both sides always match — you only set it once.",
     "savedToFlashTitle": "Saved to the GPS receiver flash",
@@ -2200,7 +2238,7 @@
     "rtkWaitAfterUndockLabel": "RTK Wait After Undock",
     "gpsTimeoutLabel": "GPS Timeout",
     "expertScopeTitle": "Expert-mode scope",
-    "expertScopeDescription": "Signal-group presets, raw signal-group values, PVT algorithm, RTK reliability, RTK timeout, and DGPS timeout are stored here for future backend translation. Raw command textarea, dry-run plan, and reset/apply tooling still need a dedicated API."
+    "expertScopeDescription": "Raw signal-group values, PVT algorithm, RTK reliability, RTK timeout, and DGPS timeout are stored here for future backend translation. Raw command textarea, dry-run plan, and reset/apply tooling still need a dedicated API."
   },
   "settingsLocalization": {
     "scanMatchingTitle": "LiDAR scan matching",
@@ -2310,11 +2348,45 @@
   "settingsGnssLiveStatus": {
     "cardTitle": "Live GNSS Status",
     "detectedReceiver": "Detected receiver",
+    "backend": "Backend",
     "liveStatus": "Live status",
+    "rtkMode": "RTK mode",
+    "rtkModeNone": "None",
     "parserHealth": "Parser health",
     "correctionForwarding": "Correction forwarding",
+    "correctionStream": "Correction stream",
     "receiverCorrections": "Receiver corrections",
     "receiverHealth": "Receiver health",
+    "rfInterference": "RF interference",
+    "jamming": "Jamming",
+    "satelliteSectionTitle": "Satellites",
+    "satellitesUsedOfVisible": "Used / visible",
+    "satellitesTrackedOfVisible": "Tracked / visible",
+    "signalQualitySectionTitle": "Signal quality",
+    "cn0ScaleNote": "Bar scale: 0 dB-Hz to 45 dB-Hz.",
+    "meanCn0DbHz": "Mean C/N0",
+    "maxCn0DbHz": "Max C/N0",
+    "correctionMsmSectionTitle": "Corrections and MSM",
+    "msmState": "MSM state",
+    "msmStateNotSeen": "Not seen",
+    "msmStateSeenUndecoded": "Seen but undecoded",
+    "msmStateDecodedInvalid": "Decoded invalid",
+    "msmStateValid": "Valid",
+    "msmMessageType": "MSM message type",
+    "msmStationId": "MSM station ID",
+    "msmConstellationsSeen": "Constellations seen",
+    "msmSatelliteCount": "MSM satellite count",
+    "msmSignalCount": "MSM signal count",
+    "msmCellCount": "MSM cell count",
+    "msmAgeS": "MSM age (s)",
+    "baselineSectionTitle": "Baseline",
+    "dualAntennaBaseline": "Dual-antenna baseline",
+    "baselineSolutionStatus": "Baseline solution status",
+    "baselineAzimuthDeg": "Baseline azimuth (deg)",
+    "baselinePitchDeg": "Baseline pitch (deg)",
+    "baselineLengthM": "Baseline length (m)",
+    "msmSummary": "MSM summary",
+    "receiverConfigSectionTitle": "Receiver configuration",
     "selectedRuntimeBaud": "Selected runtime baud",
     "selectedConfigBaud": "Selected config baud",
     "selectedProfile": "Selected profile",

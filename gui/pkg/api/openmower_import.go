@@ -11,11 +11,10 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
-	"github.com/cedbossneo/mowglinext/pkg/msgs/geometry"
-	"github.com/cedbossneo/mowglinext/pkg/msgs/mowgli"
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 )
@@ -814,17 +813,10 @@ func applyImport(c *gin.Context, rosProvider types.IRosProvider, replaceReq *mow
 		return errors.New("apply: nil replace request")
 	}
 	// Reuse the gin request context for cancellation propagation, but give the
-	// whole sequence its own budget. clear_map + save_areas are fixed-cost, but
-	// each add_area rasterises its polygon into the map_server grid, which on a
-	// large area can take seconds. A fixed 30 s timed out on huge multi-area
-	// maps, so scale the budget: a 60 s base plus per-area headroom, capped at
-	// 6 min (imports are rare and one-shot — a generous ceiling beats a false
-	// timeout that leaves the map half-written).
-	budget := 60*time.Second + time.Duration(len(replaceReq.Areas))*5*time.Second
-	if budget > 6*time.Minute {
-		budget = 6 * time.Minute
-	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), budget)
+	// whole clear_map → add_area×N → save_areas sequence a size-scaled budget
+	// (each add_area rasterises — a fixed timeout leaves a huge map half-written).
+	// Shared with ReplaceMapRoute so the import and the map editor stay in sync.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), mapWriteBudget(len(replaceReq.Areas)))
 	defer cancel()
 
 	logImportf("import/openmower applying: %d areas, dock=%v", len(replaceReq.Areas), dockReq != nil)

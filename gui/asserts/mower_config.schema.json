@@ -8,7 +8,15 @@
         "mower_model": {
           "type": "string",
           "title": "Mower Model",
-          "enum": ["YardForce500", "YardForce500B", "YardForceSA650", "YardForce900ECO", "LUV1000RI", "Sabo", "CUSTOM"],
+          "enum": [
+            "YardForce500",
+            "YardForce500B",
+            "YardForceSA650",
+            "YardForce900ECO",
+            "LUV1000RI",
+            "Sabo",
+            "CUSTOM"
+          ],
           "default": "YardForce500",
           "description": "The type of mower you are using."
         },
@@ -45,13 +53,13 @@
         "chassis_length": {
           "type": "number",
           "title": "Chassis Length",
-          "default": 0.60,
+          "default": 0.6,
           "description": "Chassis length in metres."
         },
         "chassis_width": {
           "type": "number",
           "title": "Chassis Width",
-          "default": 0.40,
+          "default": 0.4,
           "description": "Chassis width in metres."
         },
         "chassis_height": {
@@ -81,7 +89,7 @@
         "ticks_per_meter": {
           "type": "number",
           "title": "Encoder Ticks per Meter",
-          "default": 300.0,
+          "default": 399.0,
           "description": "Encoder ticks per metre of wheel travel."
         },
         "tool_width": {
@@ -194,7 +202,7 @@
         "lidar_y": {
           "type": "number",
           "title": "LiDAR Offset Y",
-          "default": 0.0,
+          "default": 0.024,
           "description": "Body-frame left offset of LiDAR from base_footprint (metres)."
         },
         "lidar_z": {
@@ -253,9 +261,19 @@
         "gnss_receiver_family": {
           "type": "string",
           "title": "Receiver Family",
-          "enum": ["auto", "ublox", "unicore", "nmea"],
+          "enum": [
+            "auto",
+            "ublox",
+            "unicore",
+            "nmea"
+          ],
           "default": "auto",
           "description": "Universal GNSS receiver family. Auto is recommended unless you know you need a specific parser."
+        },
+        "gnss_receiver_model": {
+          "type": "string",
+          "title": "Receiver Model",
+          "description": "Optional Universal GNSS configuration hint passed only to configurator tools when explicitly set. Leave empty for Unknown / Auto."
         },
         "gnss_serial_device": {
           "type": "string",
@@ -272,21 +290,37 @@
         "gnss_profile": {
           "type": "string",
           "title": "Receiver Profile",
-          "enum": ["runtime_only", "rover_high_precision", "rover_high_precision_debug", "factory_reset"],
+          "enum": [
+            "runtime_only",
+            "rover_high_precision",
+            "rover_high_precision_debug",
+            "factory_reset"
+          ],
           "default": "runtime_only",
           "description": "Vendor-neutral Universal GNSS receiver profile id to persist for this robot."
         },
         "gnss_signal_profile": {
           "type": "string",
           "title": "Signal Profile",
-          "enum": ["minimal", "balanced", "high_precision", "all_signals", "custom"],
+          "enum": [
+            "minimal",
+            "balanced",
+            "high_precision",
+            "all_signals",
+            "custom"
+          ],
           "default": "balanced",
           "description": "Vendor-neutral constellation/signal profile used by the future backend translator. Custom is reserved for future profile-file or raw-command workflows."
         },
         "gnss_profile_rate_hz": {
           "type": "integer",
           "title": "Position Rate",
-          "enum": [1, 5, 7, 10],
+          "enum": [
+            1,
+            5,
+            7,
+            10
+          ],
           "default": 5,
           "description": "Requested Universal GNSS receiver update/output rate in Hz."
         },
@@ -299,7 +333,7 @@
         "gnss_signal_group": {
           "type": "string",
           "title": "Raw Signal Group",
-          "description": "Vendor-specific expert override. For Unicore UM982 the recommended raw value is 3 6."
+          "description": "Vendor-specific expert override. Universal GNSS validates documented signal groups against the selected receiver model and warns when falling back safely."
         },
         "gnss_unicore_pvt_algorithm": {
           "type": "string",
@@ -336,47 +370,55 @@
         "ntrip_enabled": {
           "type": "boolean",
           "title": "Enable NTRIP",
-          "default": true,
+          "default": false,
           "description": "Enable NTRIP RTK corrections for cm-level accuracy."
         }
       },
-      "allOf": [{
-        "if": { "properties": { "ntrip_enabled": { "const": true } } },
-        "then": {
-          "properties": {
-            "ntrip_host": {
-              "type": "string",
-              "title": "NTRIP Host",
-              "default": "",
-              "description": "Hostname or IP of your NTRIP caster."
-            },
-            "ntrip_port": {
-              "type": "integer",
-              "title": "NTRIP Port",
-              "default": 2101,
-              "description": "Port of your NTRIP caster."
-            },
-            "ntrip_user": {
-              "type": "string",
-              "title": "NTRIP Username",
-              "default": "",
-              "description": "NTRIP username."
-            },
-            "ntrip_password": {
-              "type": "string",
-              "title": "NTRIP Password",
-              "default": "",
-              "description": "NTRIP password."
-            },
-            "ntrip_mountpoint": {
-              "type": "string",
-              "title": "NTRIP Mountpoint",
-              "default": "",
-              "description": "NTRIP endpoint / mount point."
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "ntrip_enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ntrip_host": {
+                "type": "string",
+                "title": "NTRIP Host",
+                "default": "",
+                "description": "Hostname or IP of your NTRIP caster."
+              },
+              "ntrip_port": {
+                "type": "integer",
+                "title": "NTRIP Port",
+                "default": 2101,
+                "description": "Port of your NTRIP caster."
+              },
+              "ntrip_user": {
+                "type": "string",
+                "title": "NTRIP Username",
+                "default": "",
+                "description": "NTRIP username."
+              },
+              "ntrip_password": {
+                "type": "string",
+                "title": "NTRIP Password",
+                "default": "",
+                "description": "NTRIP password."
+              },
+              "ntrip_mountpoint": {
+                "type": "string",
+                "title": "NTRIP Mountpoint",
+                "default": "",
+                "description": "NTRIP endpoint / mount point."
+              }
             }
           }
         }
-      }]
+      ]
     },
     "docking_settings": {
       "title": "Docking",
@@ -386,19 +428,19 @@
         "undock_distance": {
           "type": "number",
           "title": "Undock Distance",
-          "default": 1.5,
+          "default": 1.0,
           "description": "Reverse distance when undocking (metres)."
         },
         "undock_speed": {
           "type": "number",
           "title": "Undock Speed",
-          "default": 0.15,
+          "default": 0.16,
           "description": "Reverse speed when undocking (m/s)."
         },
         "dock_approach_distance": {
           "type": "number",
           "title": "Dock Approach Distance",
-          "default": 1.0,
+          "default": 1.5,
           "description": "Staging point distance in front of dock (metres)."
         },
         "dock_approach_overshoot": {
@@ -440,13 +482,13 @@
         "mowing_speed": {
           "type": "number",
           "title": "Mowing Speed",
-          "default": 0.3,
+          "default": 0.2,
           "description": "Robot speed during mowing (m/s)."
         },
         "transit_speed": {
           "type": "number",
           "title": "Transit Speed",
-          "default": 0.4,
+          "default": 0.25,
           "description": "Robot speed when transiting between zones and to dock (m/s)."
         },
         "outline_passes": {
@@ -488,13 +530,13 @@
         "chassis_safety_inset": {
           "type": "number",
           "title": "Chassis Safety Inset",
-          "default": 0.20,
+          "default": 0.15,
           "description": "Pre-shrink the operator polygon by this many metres before F2C plans anything. Defaults to chassis_width / 2 so the chassis edge stays inside the polygon under perfect FTC tracking."
         },
         "min_turning_radius": {
           "type": "number",
           "title": "Min Turning Radius",
-          "default": 0.05,
+          "default": 0.15,
           "description": "Minimum turning radius for coverage path (metres). Skid-steer pivots in place; large values force wide F2C U-turns."
         },
         "mow_angle_offset_deg": {
@@ -518,7 +560,7 @@
         "battery_full_voltage": {
           "type": "number",
           "title": "Full Voltage",
-          "default": 28.0,
+          "default": 28.5,
           "description": "Voltage at which battery is considered full. Default 28.0 matches YardForce500 SLA packs on the dock; raise if your pack genuinely reaches a higher resting voltage."
         },
         "battery_empty_voltage": {
@@ -602,7 +644,11 @@
         "slam_mode": {
           "type": "string",
           "title": "SLAM Mode",
-          "enum": ["lifelong", "mapping", "localization"],
+          "enum": [
+            "lifelong",
+            "mapping",
+            "localization"
+          ],
           "default": "lifelong",
           "description": "Legacy SLAM toolbox operating mode. Unused — fusion_graph_node (GTSAM iSAM2) is the primary localizer and slam_toolbox is no longer part of the stack. Kept for config backward compatibility."
         },
@@ -626,7 +672,12 @@
         "rain_mode": {
           "type": "integer",
           "title": "Rain Mode",
-          "enum": [0, 1, 2, 3],
+          "enum": [
+            0,
+            1,
+            2,
+            3
+          ],
           "default": 2,
           "description": "0=Ignore, 1=Dock, 2=Dock until dry, 3=Pause automatic mode."
         },
@@ -651,19 +702,19 @@
         "xy_goal_tolerance": {
           "type": "number",
           "title": "XY Goal Tolerance",
-          "default": 0.30,
+          "default": 0.3,
           "description": "Acceptable position error at goal (metres)."
         },
         "yaw_goal_tolerance": {
           "type": "number",
           "title": "Yaw Goal Tolerance",
-          "default": 0.10,
+          "default": 0.1,
           "description": "Acceptable heading error at goal (radians)."
         },
         "coverage_xy_tolerance": {
           "type": "number",
           "title": "Coverage XY Tolerance",
-          "default": 0.10,
+          "default": 0.5,
           "description": "Position tolerance for coverage waypoints (metres)."
         },
         "progress_timeout_sec": {

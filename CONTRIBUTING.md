@@ -66,7 +66,7 @@ pio run
 
 ## Reporting Bugs
 
-Use the [bug report template](https://github.com/cedbossneo/mowglinext/issues/new?template=bug_report.yml) and include:
+Use the [bug report template](https://github.com/mowglinext/mowglinext/issues/new?template=bug_report.yml) and include:
 - Hardware (board, GPS, LiDAR model)
 - Steps to reproduce
 - Expected vs actual behavior
@@ -74,7 +74,7 @@ Use the [bug report template](https://github.com/cedbossneo/mowglinext/issues/ne
 
 ## Proposing Features
 
-Use the [feature request template](https://github.com/cedbossneo/mowglinext/issues/new?template=feature_request.yml). The community and AI will help evaluate and refine proposals.
+Use the [feature request template](https://github.com/mowglinext/mowglinext/issues/new?template=feature_request.yml). The community and AI will help evaluate and refine proposals.
 
 ## License
 

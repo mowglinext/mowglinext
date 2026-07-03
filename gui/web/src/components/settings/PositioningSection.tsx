@@ -3,9 +3,9 @@ import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Row, Select, S
 import { GlobalOutlined, SettingOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useApi } from "../../hooks/useApi.ts";
-import { useDiagnostics } from "../../hooks/useDiagnostics.ts";
 import { useGnssStatus } from "../../hooks/useGnssStatus.ts";
 import { deriveGpsStatus, gnssReceiverLabel } from "../../utils/gpsStatus.ts";
+import { GnssLiveStatusSummaryCard } from "../gnss/GnssLiveStatusSummaryCard.tsx";
 import {
     GNSS_BAUD_OPTIONS,
     GNSS_ACTION_SETTINGS_KEYS,
@@ -19,7 +19,6 @@ import {
 } from "./gnssConfig.ts";
 import { GnssSignalProfileHelp } from "./GnssSignalProfileHelp.tsx";
 import { UniversalGnssAdvancedSettings } from "./UniversalGnssAdvancedSettings.tsx";
-import { UniversalGnssLiveStatusCard } from "./UniversalGnssLiveStatusCard.tsx";
 import { GnssReceiverActionsCard } from "./GnssReceiverActionsCard.tsx";
 
 const { Text, Paragraph } = Typography;
@@ -51,7 +50,6 @@ export const PositioningSection: React.FC<Props> = ({
     const [datumLoading, setDatumLoading] = useState(false);
     const [expertMode, setExpertMode] = useState(false);
     const gnssStatus = useGnssStatus();
-    const { diagnostics } = useDiagnostics();
     const gpsStatus = deriveGpsStatus(gnssStatus);
     const detectedReceiver = gnssReceiverLabel(gnssStatus);
     const selectedSignalProfile = normalizeGnssSignalProfile(values.gnss_signal_profile);
@@ -233,13 +231,8 @@ export const PositioningSection: React.FC<Props> = ({
                 }
             />
 
-            <UniversalGnssLiveStatusCard
-                diagnostics={diagnostics}
+            <GnssLiveStatusSummaryCard
                 gnssStatus={gnssStatus}
-                selectedBaud={values.gnss_serial_baud}
-                selectedConfigBaud={values.gnss_config_baud}
-                selectedProfile={values.gnss_profile}
-                selectedSignalProfile={values.gnss_signal_profile}
                 selectedReceiverFamily={values.gnss_receiver_family}
             />
 
@@ -344,7 +337,11 @@ export const PositioningSection: React.FC<Props> = ({
 
             {/* The plan/apply/factory-reset receiver tooling is developer-grade —
                 keep it for Expert mode only. Basic users save with the page's
-                Save button at the bottom, which applies + restarts the receiver. */}
+                Save button at the bottom, which persists the settings and
+                restarts the receiver container to pick up transport/NTRIP
+                changes. The signal profile is a receiver-flash setting: it only
+                reaches the receiver via Plan & Apply here, not via a plain
+                Save/restart. */}
             {expertMode && (
                 <GnssReceiverActionsCard
                     isDirty={isDirty}

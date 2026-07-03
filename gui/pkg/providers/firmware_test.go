@@ -1,7 +1,7 @@
 package providers
 
 import (
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"os"
 	"testing"

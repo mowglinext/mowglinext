@@ -17,7 +17,6 @@ import { useIsMobile } from "../hooks/useIsMobile";
 import { useSettingsSchema } from "../hooks/useSettingsSchema.ts";
 import { useApi } from "../hooks/useApi.ts";
 import { useGnssStatus } from "../hooks/useGnssStatus.ts";
-import { useDiagnostics } from "../hooks/useDiagnostics.ts";
 import { useCalibrationStatus } from "../hooks/useCalibrationStatus.ts";
 import { useImuYawCalibration } from "../hooks/useImuYawCalibration.ts";
 import { GnssStatusConstants } from "../types/ros.ts";
@@ -46,9 +45,9 @@ import {
 } from "../components/settings/gnssConfig.ts";
 import { GnssSignalProfileHelp } from "../components/settings/GnssSignalProfileHelp.tsx";
 import { UniversalGnssAdvancedSettings } from "../components/settings/UniversalGnssAdvancedSettings.tsx";
-import { UniversalGnssLiveStatusCard } from "../components/settings/UniversalGnssLiveStatusCard.tsx";
 import { GnssReceiverActionsCard } from "../components/settings/GnssReceiverActionsCard.tsx";
 import { NtripSection } from "../components/settings/NtripSection.tsx";
+import { GnssLiveStatusSummaryCard } from "../components/gnss/GnssLiveStatusSummaryCard.tsx";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -281,7 +280,6 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
     const { t } = useTranslation();
     const [expertMode, setExpertMode] = useState(false);
     const gnssStatus = useGnssStatus();
-    const { diagnostics } = useDiagnostics();
     const gpsStatus = deriveGpsStatus(gnssStatus);
     const detectedReceiver = gnssReceiverLabel(gnssStatus);
     const selectedSignalProfile = normalizeGnssSignalProfile(values.gnss_signal_profile);
@@ -484,19 +482,15 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                 </>
             )}
 
-            <UniversalGnssLiveStatusCard
-                diagnostics={diagnostics}
+            <GnssLiveStatusSummaryCard
                 gnssStatus={gnssStatus}
-                selectedBaud={values.gnss_serial_baud}
-                selectedConfigBaud={values.gnss_config_baud}
-                selectedProfile={values.gnss_profile}
-                selectedSignalProfile={values.gnss_signal_profile}
                 selectedReceiverFamily={values.gnss_receiver_family}
             />
 
             {/* The manual plan/apply/factory-reset/restart panel is developer
-                tooling — basic onboarding doesn't need it because Save & Continue
-                already restarts the receiver. Keep it for Expert mode only. */}
+                tooling — Save & Continue restarts the receiver container for
+                transport/NTRIP changes, but only Plan & Apply writes the signal
+                profile into the receiver's flash. Keep it for Expert mode only. */}
             {expertMode && (
                 <GnssReceiverActionsCard
                     gpsRestarting={gpsRestarting}

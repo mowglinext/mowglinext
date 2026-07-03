@@ -53,10 +53,14 @@ export const restartGps = (api: GuiApi) =>
 
 /**
  * Settings keys whose values are consumed directly by the GNSS receiver
- * container today. Profile translation/apply is not wired yet, so the
- * vendor-neutral profile/signal/expert keys are intentionally excluded:
- * saving those persists intent, but only serial/NTRIP/runtime transport
- * changes require an immediate mowgli-gps restart.
+ * container on a plain restart. The vendor-neutral profile/signal-profile
+ * keys are intentionally excluded: a container restart only re-launches the
+ * driver with new serial/NTRIP transport — it never re-flashes the receiver.
+ * The signal profile is a receiver-flash setting that only reaches the
+ * receiver through the Expert-mode Plan & Apply flow (POST /settings/gnss/apply,
+ * which runs gnss_config_apply --signal-profile). Saving from the basic view
+ * persists intent for that next apply; only serial/NTRIP transport changes
+ * require an immediate mowgli-gps restart.
  */
 export const GPS_RESTART_KEYS = new Set<string>([
     "gnss_receiver_family",

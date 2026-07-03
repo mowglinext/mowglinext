@@ -22,7 +22,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
 MOWGLI_MSG_DIR="$SCRIPT_DIR/../ros2/src/mowgli_interfaces/msg"
 MOWGLI_SRV_DIR="$SCRIPT_DIR/../ros2/src/mowgli_interfaces/srv"
 MSGS_DIR="$SCRIPT_DIR/pkg/msgs"
-MODULE="github.com/cedbossneo/mowglinext/pkg/msgs"
+MODULE="github.com/mowglinext/mowglinext/pkg/msgs"
 
 # Temporary directory for embedded standard ROS2 msg definitions
 STD_MSGS=$(mktemp -d)

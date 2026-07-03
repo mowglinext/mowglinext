@@ -13,18 +13,18 @@ type Header struct {
 	FrameId                   string                         `json:"frame_id"`
 }
 
-// Point32 matches geometry_msgs/msg/Point32.
-type Point32 struct {
-	X                         float32                        `json:"x"`
-	Y                         float32                        `json:"y"`
-	Z                         float32                        `json:"z"`
-}
-
 // Point matches geometry_msgs/msg/Point.
 type Point struct {
 	X                         float64                        `json:"x"`
 	Y                         float64                        `json:"y"`
 	Z                         float64                        `json:"z"`
+}
+
+// Point32 matches geometry_msgs/msg/Point32.
+type Point32 struct {
+	X                         float32                        `json:"x"`
+	Y                         float32                        `json:"y"`
+	Z                         float32                        `json:"z"`
 }
 
 // Polygon matches geometry_msgs/msg/Polygon.

@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
@@ -87,6 +87,7 @@ func SettingsRoutes(r *gin.RouterGroup, dbProvider types.IDBProvider) {
 	PostSettings(r, dbProvider)
 	GetSettingsSchema(r, dbProvider)
 	GetSettingsYAML(r, dbProvider)
+	GetSettingsYAMLDefaults(r, dbProvider)
 	PostSettingsYAML(r, dbProvider)
 	GetSettingsStatus(r, dbProvider)
 	PostSettingsStatus(r, dbProvider)
@@ -323,6 +324,57 @@ func nestToROS2YAML(flat map[string]any, nodeMappings map[string]string, existin
 	return result
 }
 
+// valuesEqual reports whether a config value equals a schema default,
+// tolerating the numeric-type churn that YAML/JSON round-trips introduce
+// (a template default of 5 may arrive as int 5, int64 5, or float64 5.0;
+// booleans and strings compare directly). This is the predicate that keeps
+// the installed mowgli_robot.yaml SPARSE: any key whose live value equals its
+// schema default is dropped on write, so the ROS2 deep-merge falls through to
+// the package template. Resetting a field to its default is therefore just
+// "write the default value" — it disappears from the installed file.
+func valuesEqual(a, b any) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	// Numeric comparison first: JSON numbers decode to float64, YAML ints to
+	// int, so a strict == would spuriously flag "5" != "5.0".
+	if af, aok := asFloat64(a); aok {
+		if bf, bok := asFloat64(b); bok {
+			return af == bf
+		}
+	}
+	if ab, aok := a.(bool); aok {
+		if bb, bok := b.(bool); bok {
+			return ab == bb
+		}
+	}
+	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
+}
+
+// pruneNestedKeys removes the given parameter keys from every node's
+// ros__parameters block in a nested ROS2 YAML tree. nestToROS2YAML clones the
+// pre-existing on-disk structure verbatim, so a key that was dropped from the
+// flat map to keep the config sparse would otherwise survive in the clone;
+// this scrubs it from the final output.
+func pruneNestedKeys(nested map[string]any, keys map[string]bool) {
+	if len(keys) == 0 {
+		return
+	}
+	for _, nodeData := range nested {
+		nodeMap, ok := nodeData.(map[string]any)
+		if !ok {
+			continue
+		}
+		rosParams, ok := nodeMap["ros__parameters"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for key := range keys {
+			delete(rosParams, key)
+		}
+	}
+}
+
 func coerceValue(value string, schemaType string) any {
 	switch schemaType {
 	case "boolean":
@@ -501,6 +553,15 @@ func normalizeGnssSignalProfile(value any) string {
 	}
 }
 
+func normalizeGnssReceiverModel(value any) string {
+	switch model := strings.ToUpper(strings.TrimSpace(stringValue(value, ""))); model {
+	case "", "AUTO", "UNKNOWN", "UNKNOWN/AUTO", "AUTO/UNKNOWN":
+		return ""
+	default:
+		return model
+	}
+}
+
 func normalizeGnssProfileRate(value any) string {
 	switch stringValue(value, "5") {
 	case "1", "5", "7", "10":
@@ -562,6 +623,25 @@ func gnssCompatFromFlat(flat map[string]any) map[string]string {
 		ntripGGAEnabled = "true"
 	}
 
+	// crtk.net is the public Centipede caster, whose well-known anonymous login
+	// is "centipede/centipede". Only fall back to those credentials when the
+	// receiver is actually pointed at that caster AND the operator has not
+	// supplied (or has deliberately cleared) their own. Injecting "centipede"
+	// unconditionally would (a) hand a custom caster the wrong credentials and
+	// (b) silently re-enable the public caster for an operator who cleared the
+	// fields to disable it.
+	ntripHost := stringValue(flat["ntrip_host"], "crtk.net")
+	ntripUser := stringValue(flat["ntrip_user"], "")
+	ntripPassword := stringValue(flat["ntrip_password"], "")
+	if strings.EqualFold(ntripHost, "crtk.net") {
+		if ntripUser == "" {
+			ntripUser = "centipede"
+		}
+		if ntripPassword == "" {
+			ntripPassword = "centipede"
+		}
+	}
+
 	return map[string]string{
 		"GNSS_STACK":                "universal",
 		"GNSS_STATUS_SOURCE":        "universal",
@@ -575,11 +655,11 @@ func gnssCompatFromFlat(flat map[string]any) map[string]string {
 		"GNSS_PROFILE_RATE_HZ":      profileRateHz,
 		"GNSS_BACKEND":              "universal",
 		"GNSS_NTRIP_ENABLED":        boolStringValue(flat["ntrip_enabled"], true),
-		"GNSS_NTRIP_HOST":           stringValue(flat["ntrip_host"], "crtk.net"),
+		"GNSS_NTRIP_HOST":           ntripHost,
 		"GNSS_NTRIP_PORT":           stringValue(flat["ntrip_port"], "2101"),
 		"GNSS_NTRIP_MOUNTPOINT":     ntripMountpoint,
-		"GNSS_NTRIP_USERNAME":       stringValue(flat["ntrip_user"], "centipede"),
-		"GNSS_NTRIP_PASSWORD":       stringValue(flat["ntrip_password"], "centipede"),
+		"GNSS_NTRIP_USERNAME":       ntripUser,
+		"GNSS_NTRIP_PASSWORD":       ntripPassword,
 		"GNSS_RTCM_FORWARDING":      "true",
 		"GNSS_NTRIP_GGA_ENABLED":    ntripGGAEnabled,
 		"GNSS_NTRIP_GGA_INTERVAL_S": stringValue(flat["gnss_ntrip_gga_interval_s"], "10"),
@@ -603,6 +683,9 @@ func applyUniversalGnssCompatibility(flat map[string]any) map[string]string {
 	}
 	flat["gnss_profile"] = compat["GNSS_PROFILE"]
 	flat["gnss_signal_profile"] = compat["GNSS_SIGNAL_PROFILE"]
+	if _, exists := flat["gnss_receiver_model"]; exists {
+		flat["gnss_receiver_model"] = normalizeGnssReceiverModel(flat["gnss_receiver_model"])
+	}
 	if rateHz, err := strconv.Atoi(compat["GNSS_PROFILE_RATE_HZ"]); err == nil {
 		flat["gnss_profile_rate_hz"] = rateHz
 	} else {
@@ -1082,6 +1165,37 @@ func GetSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRout
 	})
 }
 
+// GetSettingsYAMLDefaults returns the flat map of schema-default values —
+// the GUI's authoritative source of "default" for each parameter. Because the
+// GUI backend runs in a container that does NOT ship the ROS2 package template
+// (mowgli_bringup/config/mowgli_robot.yaml, the true default source consumed by
+// robot_config_util's deep-merge), the JSON schema `default` values stand in
+// for it. They SHOULD match the template; a divergence is a schema bug, not a
+// runtime one. The frontend uses this to (a) show which values are
+// operator-overridden vs at default and (b) implement per-field "reset to
+// default" (writing the default value, which PostSettingsYAML then prunes to
+// keep the installed config sparse).
+//
+// @Summary returns the schema default value for every known parameter
+// @Description returns a flat key-value map of default values (the reset-to-default source)
+// @Tags settings
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} ErrorResponse
+// @Router /settings/yaml/defaults [get]
+func GetSettingsYAMLDefaults(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRoutes {
+	return r.GET("/settings/yaml/defaults", func(c *gin.Context) {
+		schema, err := getSchema(dbProvider)
+		if err != nil {
+			c.JSON(500, ErrorResponse{Error: err.Error()})
+			return
+		}
+		defaults := map[string]any{}
+		extractDefaults(schema, defaults)
+		c.JSON(200, defaults)
+	})
+}
+
 // PostSettingsYAML receives flat key-value settings from the form,
 // nests them into proper ROS2 YAML structure, and writes mowgli_robot.yaml.
 //
@@ -1122,8 +1236,8 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		// Merge schema defaults
 		schema, err := getSchema(dbProvider)
 		nodeMappings := map[string]string{}
+		defaults := map[string]any{}
 		if err == nil {
-			defaults := map[string]any{}
 			extractDefaults(schema, defaults)
 			for key, value := range defaults {
 				if _, exists := existing[key]; !exists {
@@ -1134,8 +1248,10 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		}
 
 		// Merge payload on top. A null value is an explicit delete request
-		// (from the Advanced "Remove parameter" action) — drop the key so it
-		// is removed from the YAML rather than written back as "key: null".
+		// (from the Advanced "Remove parameter" action, or a per-field
+		// "reset to default" for a key that has no schema default) — drop the
+		// key so it is removed from the YAML rather than written back as
+		// "key: null".
 		for key, value := range payload {
 			if value == nil {
 				delete(existing, key)
@@ -1145,8 +1261,24 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		}
 		gnssEnvUpdates := applyUniversalGnssCompatibility(existing)
 
+		// Keep the installed config SPARSE: any key whose value equals its
+		// schema default is pruned so the ROS2 launch-time deep-merge falls
+		// through to the package template (the source of defaults). This is
+		// also how "reset to default" persists — the field is written with
+		// its default value from the form, and pruned here. prunedKeys is
+		// applied to the nested output too, because nestToROS2YAML preserves
+		// pre-existing on-disk keys and would otherwise resurrect them.
+		prunedKeys := map[string]bool{}
+		for key, def := range defaults {
+			if cur, exists := existing[key]; exists && valuesEqual(cur, def) {
+				delete(existing, key)
+				prunedKeys[key] = true
+			}
+		}
+
 		// Nest back into ROS2 YAML structure
 		nested := nestToROS2YAML(existing, nodeMappings, existingYAML)
+		pruneNestedKeys(nested, prunedKeys)
 
 		// Marshal with YAML comments header
 		out, err := marshalROS2YAMLWithGeoPrecision(nested)

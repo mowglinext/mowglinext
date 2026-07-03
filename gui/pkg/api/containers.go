@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	types2 "github.com/cedbossneo/mowglinext/pkg/types"
+	types2 "github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/docker/docker/api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 )
 
 func ContainersRoutes(r *gin.RouterGroup, provider types2.IDockerProvider) {
@@ -105,7 +106,21 @@ func ContainerLogsRoutes(group *gin.RouterGroup, provider types2.IDockerProvider
 	var upgrader = websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
-		CheckOrigin:     func(r *http.Request) bool { return true },
+		// Same exact-host Origin check as the main API upgrader
+		// (mowglinext.go): the API has no auth layer, so accepting any
+		// origin let a malicious page on the same network open this
+		// stream cross-site. Empty Origin (non-browser clients) allowed.
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return true
+			}
+			u, err := url.Parse(origin)
+			if err != nil {
+				return false
+			}
+			return u.Host == r.Host
+		},
 	}
 
 	group.GET("/:containerId/logs", func(c *gin.Context) {

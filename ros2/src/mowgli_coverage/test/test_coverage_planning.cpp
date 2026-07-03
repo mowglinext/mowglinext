@@ -7,6 +7,7 @@
 // in CI instead of on the robot.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -22,6 +23,7 @@ namespace
 
 using mowgli_coverage::BoustrophedonPlan;
 using mowgli_coverage::buildContinuousPath;
+using mowgli_coverage::buildContinuousSubPaths;
 using mowgli_coverage::dedupClosedRing;
 using mowgli_coverage::distanceToRing;
 using mowgli_coverage::planBoustrophedon;
@@ -330,6 +332,338 @@ TEST(CoveragePlanning, HoleIsNotCrossed)
           << "swath crosses the hole at (" << x << ", " << y << ")";
     }
   }
+}
+
+// #333: the CONTINUOUS path's turn-around connectors AND corner fillets — not
+// just the swaths — must stay out of an obstacle hole. Before the fix the
+// connectors were validated only against the outer boundary, so a turn-around
+// loop or a straight fallback join between two hole-split segments could cut
+// straight through the obstacle. Flatten the plan to the one continuous path and
+// assert no pose lands inside the hole. Also confirms the inset hole ring is
+// exposed on the plan (the data the avoidance uses).
+TEST(CoverageContinuousPath, ContinuousPathAvoidsHole)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeadland = 0.18;
+  constexpr double kInset = 0.15;
+  constexpr double kMinSwath = 0.15;
+  constexpr double kTurnRadius = 0.18;  // deployed connector_turn_radius default
+  constexpr double kMinTurnRadius = 0.15;
+  constexpr double kStep = 0.03;
+
+  // 6 m square with a 1.5 m central hole — big enough that hole-free connectors
+  // exist on the mowed side, so the fix can route around rather than fall back.
+  f2c::types::Cell cell = makeSquare(6.0);
+  f2c::types::LinearRing hole;
+  hole.addPoint(f2c::types::Point(2.25, 2.25));
+  hole.addPoint(f2c::types::Point(3.75, 2.25));
+  hole.addPoint(f2c::types::Point(3.75, 3.75));
+  hole.addPoint(f2c::types::Point(2.25, 3.75));
+  hole.addPoint(f2c::types::Point(2.25, 2.25));
+  cell.addRing(hole);
+
+  const auto plan = planBoustrophedon(cell, kOpWidth, kHeadland, 0, kInset, -1.0, kMinSwath);
+  ASSERT_FALSE(plan.rings.empty()) << "no rings on the hole field";
+  ASSERT_GE(plan.safe_boundary.size(), 3u);
+  ASSERT_FALSE(plan.safe_holes.empty())
+      << "inset hole ring not exposed on the plan — connectors have nothing to avoid";
+
+  // The DRIVER follows the split sub-paths; each must be internally hole-free.
+  // The gap between consecutive sub-paths is bridged by a blade-off Nav2 transit
+  // (routes around the hole), so it is intentionally NOT continuous here.
+  const auto subs =
+      buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
+  ASSERT_GE(subs.size(), 2u)
+      << "a central hole must split the path into >=2 sub-paths (else a connector "
+         "cut through the hole)";
+
+  // The RAW hole ring: sub-paths are validated against the GROWN (inset) hole,
+  // so the raw hole is cleared with margin. Any sub-path pose inside it is a real
+  // #333 breach.
+  const std::vector<std::pair<double, double>> hole_ring = {{2.25, 2.25},
+                                                            {3.75, 2.25},
+                                                            {3.75, 3.75},
+                                                            {2.25, 3.75}};
+  std::size_t total_pts = 0, in_hole = 0;
+  for (const auto& sp : subs)
+  {
+    ASSERT_GE(sp.size(), 2u) << "degenerate sub-path emitted";
+    for (const auto& p : sp)
+    {
+      ++total_pts;
+      if (pointInRing(p.first, p.second, hole_ring))
+      {
+        ++in_hole;
+      }
+    }
+  }
+  EXPECT_EQ(in_hole, 0u) << in_hole << "/" << total_pts
+                         << " sub-path poses fall inside the obstacle hole";
+}
+
+// Sub-path DRIVE ORDER: on a multi-lobe field the sub-paths are reordered by
+// nearest-neighbour (entering each at whichever end is nearer) to cut the
+// blade-off Nav2 transit between them — measured 77 → 47 m on the recorded
+// 4-hole garden. Reversing a FINISHED sub-path polyline is safe (identical
+// points → every turn-around stays in-bounds), so the reorder must preserve two
+// safety-critical properties: (1) every sub-path is still hole-free, and (2) the
+// order is DETERMINISTIC — the BT resumes coverage by sub-path index, so a
+// re-plan of the same area must reproduce the identical sequence.
+TEST(CoverageContinuousPath, SubPathReorderStaysHoleFreeAndDeterministic)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeadland = 0.18;
+  constexpr double kInset = 0.15;
+  constexpr double kMinSwath = 0.15;
+  constexpr double kTurnRadius = 0.18;
+  constexpr double kMinTurnRadius = 0.15;
+  constexpr double kStep = 0.03;
+
+  // 10 m square with two separated holes → several lobes, so the driver relocates
+  // between them and the NN reorder is exercised (> 2 sub-paths).
+  f2c::types::Cell cell = makeSquare(10.0);
+  auto add_hole = [&cell](double cx, double cy, double h)
+  {
+    f2c::types::LinearRing r;
+    r.addPoint(f2c::types::Point(cx - h, cy - h));
+    r.addPoint(f2c::types::Point(cx + h, cy - h));
+    r.addPoint(f2c::types::Point(cx + h, cy + h));
+    r.addPoint(f2c::types::Point(cx - h, cy + h));
+    r.addPoint(f2c::types::Point(cx - h, cy - h));
+    cell.addRing(r);
+  };
+  add_hole(3.0, 3.0, 0.9);
+  add_hole(7.0, 7.0, 0.9);
+
+  const auto plan = planBoustrophedon(cell, kOpWidth, kHeadland, 0, kInset, -1.0, kMinSwath);
+  ASSERT_GE(plan.safe_holes.size(), 2u) << "both holes must reach the plan as safe_holes";
+  const auto subs =
+      buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
+  ASSERT_GE(subs.size(), 3u) << "two holes should split the plan into >=3 lobes to reorder";
+
+  // (1) Hole-free preserved after reorder/reversal.
+  std::size_t in_hole = 0, total = 0;
+  for (const auto& sp : subs)
+  {
+    ASSERT_GE(sp.size(), 2u) << "degenerate sub-path after reorder";
+    for (const auto& p : sp)
+    {
+      ++total;
+      for (const auto& hole : plan.safe_holes)
+      {
+        if (pointInRing(p.first, p.second, hole))
+        {
+          ++in_hole;
+          break;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(in_hole, 0u) << in_hole << "/" << total << " poses inside a hole after reorder";
+
+  // (2) Deterministic across re-plans (BT resume-by-index stability).
+  const auto subs2 =
+      buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
+  ASSERT_EQ(subs.size(), subs2.size()) << "sub-path count not reproducible";
+  for (std::size_t i = 0; i < subs.size(); ++i)
+  {
+    ASSERT_EQ(subs[i].size(), subs2[i].size())
+        << "sub-path " << i << " length differs across re-plans";
+    EXPECT_NEAR(subs[i].front().first, subs2[i].front().first, 1e-9)
+        << "sub-path " << i << " start x";
+    EXPECT_NEAR(subs[i].front().second, subs2[i].front().second, 1e-9)
+        << "sub-path " << i << " start y";
+    EXPECT_NEAR(subs[i].back().first, subs2[i].back().first, 1e-9) << "sub-path " << i << " end x";
+  }
+
+  // (3) The realized inter-sub-path transit is finite and sane (a runaway order
+  // would criss-cross far more than a few field diagonals).
+  double transit = 0.0;
+  for (std::size_t i = 1; i < subs.size(); ++i)
+  {
+    transit += std::hypot(subs[i].front().first - subs[i - 1].back().first,
+                          subs[i].front().second - subs[i - 1].back().second);
+  }
+  const double field_diag = 10.0 * std::sqrt(2.0);
+  EXPECT_LT(transit, field_diag * static_cast<double>(subs.size()))
+      << "relocation transit " << transit << " m implausibly long for " << subs.size()
+      << " sub-paths — the NN order is not sequencing lobes locally";
+}
+
+// #335: ring_direction controls the perimeter/headland travel winding (blade
+// side). 1 = clockwise (negative shoelace area), 2 = counter-clockwise
+// (positive). The two produce the same ring geometry driven the opposite way.
+TEST(CoveragePlanning, RingDirectionControlsWinding)
+{
+  auto signedArea = [](const std::vector<std::pair<double, double>>& loop)
+  {
+    double a = 0.0;
+    for (std::size_t i = 0; i + 1 < loop.size(); ++i)
+    {
+      a += loop[i].first * loop[i + 1].second - loop[i + 1].first * loop[i].second;
+    }
+    return a;
+  };
+  const auto cell = makeSquare(4.0);
+  const auto cw = planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15, /*ring_direction=*/1);
+  const auto ccw = planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15, /*ring_direction=*/2);
+  ASSERT_FALSE(cw.rings.empty());
+  ASSERT_FALSE(ccw.rings.empty());
+  EXPECT_LT(signedArea(cw.rings.front()), 0.0) << "CW ring must have negative signed area";
+  EXPECT_GT(signedArea(ccw.rings.front()), 0.0) << "CCW ring must have positive signed area";
+  // Default (0) leaves F2C's natural winding untouched.
+  const auto def = planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15, /*ring_direction=*/0);
+  ASSERT_FALSE(def.rings.empty());
+}
+
+// Field report (2026-07): a tall field with a small concave bite on one edge.
+// BoustrophedonOrder interleaves the swath pieces the bite splits
+// (below,above,below,above…), which used to force one blade-on field-crossing
+// join per column — long diagonals mowed across the middle of the lawn, plus a
+// straight fallback THROUGH the bite (out of bounds, boundary-guard trip).
+// The nearest-endpoint chaining + the 0.6 m join-gap split must yield: each lobe
+// mowed contiguously, a handful of sub-paths, zero out-of-bounds poses, and NO
+// long blade-on connector run away from the planned swaths/rings.
+TEST(CoverageContinuousPath, NotchFieldLobeChainedNoMidFieldJoins)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeadland = 0.18;
+  constexpr double kInset = 0.15;
+  constexpr double kMinSwath = 0.15;
+  constexpr double kTurnRadius = 0.18;  // deployed connector_turn_radius default
+  constexpr double kMinTurnRadius = 0.15;
+  constexpr double kStep = 0.03;
+
+  // ~8.7 x 29 m (252 m²) with a bite on the left edge at y ≈ 21.3–23.0.
+  const std::vector<std::pair<double, double>> outer = {{0.5, 0.0},
+                                                        {8.2, 0.0},
+                                                        {8.7, 0.5},
+                                                        {8.7, 28.5},
+                                                        {8.2, 29.0},
+                                                        {0.5, 29.0},
+                                                        {0.0, 28.5},
+                                                        {0.0, 23.0},
+                                                        {0.8, 22.6},
+                                                        {0.9, 22.0},
+                                                        {0.6, 21.6},
+                                                        {0.0, 21.3},
+                                                        {0.0, 0.5}};
+  f2c::types::LinearRing ring;
+  for (const auto& p : outer)
+  {
+    ring.addPoint(f2c::types::Point(p.first, p.second));
+  }
+  ring.addPoint(f2c::types::Point(outer.front().first, outer.front().second));
+  const f2c::types::Cell cell{ring};
+
+  const auto plan = planBoustrophedon(cell, kOpWidth, kHeadland, 0, kInset, -1.0, kMinSwath);
+  ASSERT_FALSE(plan.rings.empty());
+  ASSERT_GE(plan.swaths.size(), 40u);
+  ASSERT_GE(plan.safe_boundary.size(), 3u);
+
+  const auto subs =
+      buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
+  ASSERT_GE(subs.size(), 2u) << "the bite must split at least one lobe change";
+  EXPECT_LE(subs.size(), 5u) << subs.size()
+                             << " sub-paths — one split per column instead of per lobe";
+
+  // Every plan primitive as a segment list (swaths + densified ring edges), to
+  // classify poses as on-primitive vs connector.
+  std::vector<std::array<double, 4>> prim;
+  for (const auto& s : plan.swaths)
+  {
+    prim.push_back({s.first.first, s.first.second, s.second.first, s.second.second});
+  }
+  for (const auto& loop : plan.rings)
+  {
+    for (std::size_t i = 0; i + 1 < loop.size(); ++i)
+    {
+      prim.push_back({loop[i].first, loop[i].second, loop[i + 1].first, loop[i + 1].second});
+    }
+  }
+  auto distToPrims = [&prim](double x, double y)
+  {
+    double best = std::numeric_limits<double>::max();
+    for (const auto& s : prim)
+    {
+      const double dx = s[2] - s[0], dy = s[3] - s[1];
+      const double l2 = dx * dx + dy * dy;
+      double t = l2 > 1e-12 ? ((x - s[0]) * dx + (y - s[1]) * dy) / l2 : 0.0;
+      t = std::max(0.0, std::min(1.0, t));
+      best = std::min(best, std::hypot(x - (s[0] + t * dx), y - (s[1] + t * dy)));
+    }
+    return best;
+  };
+
+  std::size_t oob = 0;
+  double worst_conn_run = 0.0;
+  for (const auto& path : subs)
+  {
+    double run = 0.0;
+    for (std::size_t i = 0; i < path.size(); ++i)
+    {
+      if (!pointInRing(path[i].first, path[i].second, plan.safe_boundary))
+      {
+        ++oob;
+      }
+      const bool on_conn = distToPrims(path[i].first, path[i].second) > 0.30;
+      if (on_conn && i > 0)
+      {
+        run += std::hypot(path[i].first - path[i - 1].first, path[i].second - path[i - 1].second);
+      }
+      else
+      {
+        worst_conn_run = std::max(worst_conn_run, run);
+        run = 0.0;
+      }
+    }
+    worst_conn_run = std::max(worst_conn_run, run);
+  }
+  // No blade-on pose out of bounds (the straight-through-the-bite fallback).
+  EXPECT_EQ(oob, 0u) << oob << " blade-on poses outside the safety inset";
+  // Field report 2026-07 ("robot stalls after every headland ring"): F2C closed
+  // every ring on the same polygon corner, so the ring CLOSURE vertex and the
+  // ring→ring junctions carried ~112° near-cusps FTC fought the drivetrain
+  // deadband through. Pin the fixed geometry directly on plan.rings: every
+  // closure must sit on a straight (mid-longest-edge rotation) and every
+  // ring→ring junction must be a near-parallel sideways shift.
+  auto stepHeading = [](const std::pair<double, double>& a, const std::pair<double, double>& b)
+  {
+    return std::atan2(b.second - a.second, b.first - a.first);
+  };
+  auto turnDeg = [](double h_in, double h_out)
+  {
+    double d = h_out - h_in;
+    while (d > M_PI)
+      d -= 2.0 * M_PI;
+    while (d < -M_PI)
+      d += 2.0 * M_PI;
+    return std::fabs(d) * 180.0 / M_PI;
+  };
+  for (std::size_t i = 0; i < plan.rings.size(); ++i)
+  {
+    const auto& L = plan.rings[i];
+    ASSERT_GE(L.size(), 4u);
+    // Closure smoothness: heading into the closure vs heading out of the start.
+    const double closure_turn =
+        turnDeg(stepHeading(L[L.size() - 2], L[L.size() - 1]), stepHeading(L[0], L[1]));
+    EXPECT_LT(closure_turn, 30.0) << "ring " << i << " closes with a " << closure_turn
+                                  << "° corner — closure not on a straight edge";
+    if (i + 1 < plan.rings.size())
+    {
+      const auto& N = plan.rings[i + 1];
+      const double junction_turn =
+          turnDeg(stepHeading(L[L.size() - 2], L[L.size() - 1]), stepHeading(N[0], N[1]));
+      EXPECT_LT(junction_turn, 30.0)
+          << "ring " << i << "→" << i + 1 << " junction turns " << junction_turn
+          << "° — rings no longer chain on parallel edges (the FTC stall geometry)";
+    }
+  }
+  // Turn-around teardrops are ~1.5 m of connector; the old mid-field diagonals
+  // were 10–25 m. Anything beyond 3.5 m is a relocation being mowed.
+  EXPECT_LT(worst_conn_run, 3.5)
+      << "a " << worst_conn_run << " m blade-on connector run crosses the field — a "
+      << "relocation is being mowed instead of split into a Nav2 transit";
 }
 
 // Concave L-shape: covered without decomposition — swaths exist in BOTH lobes
@@ -644,7 +978,7 @@ TEST(CoverageContinuousPath, RecordedArea1NoCuspInBounds)
   constexpr double kHeadland = 0.18;
   constexpr double kInset = 0.15;
   constexpr double kMinSwath = 0.15;
-  constexpr double kTurnRadius = 0.30;
+  constexpr double kTurnRadius = 0.18;  // deployed connector_turn_radius default
   constexpr double kMinTurnRadius = 0.15;  // robot's min MPPI-trackable radius
   constexpr double kStep = 0.03;
 
@@ -663,78 +997,76 @@ TEST(CoverageContinuousPath, RecordedArea1NoCuspInBounds)
       << "plan.safe_boundary not populated for a deployed inset — connectors would "
          "fall back to the raw boundary (the safety bug this guards)";
   const auto& connector_boundary = plan.safe_boundary;
-  const auto path =
-      buildContinuousPath(plan, connector_boundary, kTurnRadius, kMinTurnRadius, kStep);
+  // The driven units are the SUB-PATHS: each is an independently continuous,
+  // cusp-free, in-bounds MPPI run; the gap BETWEEN sub-paths is a blade-off Nav2
+  // transit (a relocation, not a driven cusp), so the per-path invariants below
+  // apply PER SUB-PATH, not across the viz-only concatenation.
+  const auto subs =
+      buildContinuousSubPaths(plan, connector_boundary, kTurnRadius, kMinTurnRadius, kStep);
+  ASSERT_GE(subs.size(), 1u);
+  // A concave garden may split at lobe changes, but the nearest-endpoint
+  // chaining must keep it to a handful of relocations — a per-column explosion
+  // means the ordering regressed.
+  EXPECT_LE(subs.size(), 6u) << subs.size()
+                             << " sub-paths — lobe chaining regressed (one split per column?)";
 
-  ASSERT_GE(path.size(), 100u) << "continuous path is implausibly short";
-
-  // Diagnostics: count poses outside the INSET ring (the safety-relevant bound).
-  const std::size_t inv = firstInversion(path);
-  std::size_t oob = 0;
-  for (const auto& p : path)
+  std::size_t total_poses = 0;
+  double total_len = 0.0, worst_turn = 0.0;
+  std::size_t oob = 0, tight_run = 0;
+  double min_clearance = std::numeric_limits<double>::max();
+  for (const auto& path : subs)
   {
-    if (!pointInRing(p.first, p.second, connector_boundary))
+    ASSERT_GE(path.size(), 2u);
+    total_poses += path.size();
+    total_len += pathLength(path);
+    // (1) NO near-180° REVERSAL cusp within a driven run. Forward turn-around
+    // connectors remove every swath U-turn; what can remain are pivot-able ~90°
+    // corners the rings inherit from a rectangular boundary. Bound the WORST
+    // turn well below a reversal (120°).
+    worst_turn = std::max(worst_turn, maxTurnDeg(path));
+    // (2) Every point inside the chassis-safety-inset ring AND no closer than
+    // (inset − one densify step) to the RAW operator boundary, so the spinning
+    // blade can never cross it even on the turn-around connectors/fillets.
+    for (const auto& p : path)
     {
-      ++oob;
+      if (!pointInRing(p.first, p.second, connector_boundary))
+      {
+        ++oob;
+      }
+      min_clearance = std::min(min_clearance, distanceToRing(p.first, p.second, boundary));
     }
+    // (3) NO sustained arc tighter than the robot's min turning radius (an
+    // untrackable loop). A lone sharp ring corner is ONE over-curved step.
+    tight_run = std::max(tight_run, maxTightArcRun(path, kStep, kMinTurnRadius));
   }
+  ASSERT_GE(total_poses, 100u) << "continuous path is implausibly short";
   std::cout << "\n=== recorded_area_1 continuous-path analysis ===\n"
             << "rings=" << plan.rings.size() << "  swaths=" << plan.swaths.size()
-            << "  turn_radius=" << kTurnRadius << "  step=" << kStep << "\n"
-            << "points=" << path.size() << "  length=" << pathLength(path) << " m\n"
-            << "max_local_turn=" << maxTurnDeg(path) << " deg\n"
-            << "first_inversion="
-            << (inv < path.size() ? std::to_string(inv) + "/" + std::to_string(path.size())
-                                  : std::string("none"))
-            << "  out_of_bounds=" << oob << "/" << path.size() << "\n"
-            << std::flush;
-  (void)inv;  // inversion index is informational; see the two invariants below.
-
-  // (1) NO near-180° REVERSAL cusp. The continuous path exists so MPPI never
-  // hits a sharp reversal (its bimodal dither). Forward turn-around connectors
-  // remove every swath U-turn; what can remain are pivot-able ~90° corners the
-  // rings inherit from a rectangular boundary, which a diff-drive turns through
-  // fine. So we bound the WORST turn well below a reversal (120°) rather than
-  // forbidding every >90° corner — the old strict check only passed because
-  // sub-min_turning_radius fillets (the bug below) masked those right angles.
-  const double worst_turn = maxTurnDeg(path);
-  EXPECT_LT(worst_turn, 120.0) << "path has a " << worst_turn
-                               << "° turn — a near-reversal cusp MPPI will dither at";
-  // (2) Every point inside the chassis-safety-inset ring AND no closer than
-  // (inset − one densify step) to the RAW operator boundary, so the spinning
-  // blade (which extends ~tool_width/2 past base_link) can never cross it even
-  // on the turn-around connectors/fillets. This is the safety guarantee the
-  // inset-bounded connectors restore; with the old raw-boundary bound a fillet
-  // could sit right on the edge.
-  EXPECT_EQ(oob, 0u) << oob << "/" << path.size()
-                     << " continuous-path points are outside the safety-inset ring";
-  double min_clearance = std::numeric_limits<double>::max();
-  for (const auto& p : path)
-  {
-    min_clearance = std::min(min_clearance, distanceToRing(p.first, p.second, boundary));
-  }
-  std::cout << "min clearance to raw operator boundary=" << min_clearance << " m (inset " << kInset
+            << "  sub-paths=" << subs.size() << "  turn_radius=" << kTurnRadius
+            << "  step=" << kStep << "\n"
+            << "points=" << total_poses << "  length=" << total_len << " m\n"
+            << "max_local_turn=" << worst_turn << " deg" << "  out_of_bounds=" << oob << "/"
+            << total_poses << "\n"
+            << "min clearance to raw operator boundary=" << min_clearance << " m (inset " << kInset
             << ")\n"
+            << "max_tight_arc_run=" << tight_run << " steps (floor " << kMinTurnRadius << " m)\n"
             << std::flush;
+
+  EXPECT_LT(worst_turn, 120.0) << "a sub-path has a " << worst_turn
+                               << "° turn — a near-reversal cusp MPPI will dither at";
+  EXPECT_EQ(oob, 0u) << oob << "/" << total_poses
+                     << " continuous-path points are outside the safety-inset ring";
   EXPECT_GE(min_clearance, kInset - kStep - 1e-6)
       << "a continuous-path pose sits " << min_clearance
       << " m from the raw operator boundary — closer than the chassis-safety inset (" << kInset
       << " m); a connector/fillet can push the blade across the boundary";
-  // (3) NO sustained arc tighter than the robot's min turning radius. A turn
-  // shrunk below kMinTurnRadius to fit in-bounds is untrackable (wz≈vx/r), so
-  // the robot loops/hesitates — the exact failure this floor prevents. A lone
-  // sharp ring corner is ONE over-curved step (allowed — it's a pivot); a
-  // too-tight loop is many consecutive over-curved steps.
-  const std::size_t tight_run = maxTightArcRun(path, kStep, kMinTurnRadius);
-  std::cout << "max_tight_arc_run=" << tight_run << " steps (floor " << kMinTurnRadius << " m)\n"
-            << std::flush;
   EXPECT_LT(tight_run, 3u) << "found a run of " << tight_run
                            << " consecutive steps tighter than min_turning_radius ("
                            << kMinTurnRadius << " m) — an untrackable loop";
-  // (3) Non-trivial, and starts at the first ring's first point.
-  EXPECT_LT(path.size(), 200000u) << "path is implausibly large";
-  EXPECT_NEAR(path.front().first, plan.rings.front().front().first, 1e-9);
-  EXPECT_NEAR(path.front().second, plan.rings.front().front().second, 1e-9);
+  // (4) Non-trivial, and starts at the first ring's first point.
+  EXPECT_LT(total_poses, 200000u) << "path is implausibly large";
+  EXPECT_NEAR(subs.front().front().first, plan.rings.front().front().first, 1e-9);
+  EXPECT_NEAR(subs.front().front().second, plan.rings.front().front().second, 1e-9);
 }
 
 // ===========================================================================

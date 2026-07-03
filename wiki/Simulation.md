@@ -14,7 +14,9 @@ The simulation provides:
 - **Docker-based workflow:** Containerized simulation eliminates environment conflicts
 
 **What's NOT simulated:**
-- RTK-GPS (can be mocked via GPS pose converter)
+- RTK-GPS (robot-side receiver behavior is not simulated; GUI validation for
+  public `GnssStatus` baseline/correction/MSM scenarios lives in the existing
+  frontend test/mock seam under `gui/web/src/test/mocks.tsx`)
 - Battery drain / charging
 - Grass cutting blade physics (motor control still available)
 - Weathering / seasonal map changes

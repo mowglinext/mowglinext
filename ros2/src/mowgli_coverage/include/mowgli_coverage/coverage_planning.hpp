@@ -82,6 +82,17 @@ struct BoustrophedonPlan
   // when no inset was applied (chassis_safety_inset <= 0) — the caller then
   // falls back to the raw boundary. (x, y) pairs, first == last.
   std::vector<std::pair<double, double>> safe_boundary;
+  // Inset ("grown") interior hole rings the continuous-path connectors and
+  // corner fillets must stay OUT of, mirroring how safe_boundary is the ring
+  // they must stay INSIDE. When the chassis-safety inset is applied these are
+  // the holes of the inset field (grown outward by the inset, so the blade
+  // clears an obstacle by the same margin it clears the outer boundary); with
+  // no inset they are the raw operator holes. Rings/swaths are already clipped
+  // around holes by F2C, but the turn-around connectors that JOIN them were
+  // only validated against the outer boundary — a loop or straight fallback
+  // could cut through a hole (issue #333). Each entry is one closed hole ring
+  // (x, y). Empty when the field has no holes.
+  std::vector<std::vector<std::pair<double, double>>> safe_holes;
   // Drop reasons + planned-coverage fraction (instrumentation only — see above).
   PlanDiagnostics diagnostics;
 };
@@ -95,6 +106,11 @@ struct BoustrophedonPlan
 //   chassis_safety_inset polygon pull-back applied before everything (m)
 //   mow_angle_rad        fixed swath heading; < 0 → auto (minimise swath count)
 //   min_swath_length     drop straight swaths shorter than this (m)
+//   ring_direction       perimeter/headland travel winding: 0 = planner default
+//                        (F2C natural), 1 = clockwise, 2 = counter-clockwise.
+//                        Flips which side of the robot faces the boundary — set
+//                        it to keep a side-mounted blade on the cut side
+//                        (issue #335). Swaths/connectors follow the rings.
 //
 // Geometry: safe = inset(field, chassis_safety_inset); rings are n_rings
 // concentric loops spaced op_width inside safe; mainland = inset(safe,
@@ -115,7 +131,9 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     int num_headland_passes_override,
                                     double chassis_safety_inset,
                                     double mow_angle_rad,
-                                    double min_swath_length);
+                                    double min_swath_length,
+                                    int ring_direction = 0,
+                                    double min_turn_radius = 0.15);
 
 // Flatten a BoustrophedonPlan into ONE continuous, cusp-free, in-bounds
 // polyline so an MPPI-class sampling controller can track it without the
@@ -155,7 +173,38 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
 //
 // Returns one densified polyline starting at the first ring's first point. Pure
 // function (no ROS deps) — unit-testable. Empty when the plan has no segments.
+//
+// This is the concatenation of buildContinuousSubPaths() (below) — it stays a
+// single polyline for the GUI full_path and the no-hole common case. When the
+// field has holes it may contain a straight join across a hole; the DRIVER uses
+// buildContinuousSubPaths so those joins become blade-off Nav2 transits instead.
 std::vector<std::pair<double, double>> buildContinuousPath(
+    const BoustrophedonPlan& plan,
+    const std::vector<std::pair<double, double>>& boundary,
+    double turn_radius,
+    double min_turn_radius,
+    double step);
+
+// Like buildContinuousPath, but SPLIT into one or more hole-free continuous
+// sub-paths (issue #333). A forward turn-around connector is a local Dubins arc;
+// it cannot route around a large interior obstacle, so the path is BROKEN
+// instead of joined blade-on when:
+//   * the only join between two segments would cross a hole or leave the
+//     boundary (a straight fallback that isn't safe), OR
+//   * the join gap exceeds ~0.6 m (kMaxMowJoinGapM) — that is a RELOCATION
+//     (lobe change across a concave bite, innermost ring → far first swath),
+//     not a turn-around; an in-bounds Dubins for it would mow a long diagonal
+//     across the middle of the lawn.
+// Swath pieces are nearest-endpoint chained before joining (identical to the
+// plain serpentine on a convex field; mows each lobe of a concave/hole-split
+// field contiguously so a lobe change costs ONE split, not one per column).
+// Each returned sub-path is internally continuous and cusp-free (an
+// MPPI-trackable run); the caller (FollowStrip) drives them in order, bridging
+// the gap between consecutive sub-paths with a blade-off, costmap-aware Nav2
+// transit that routes around the obstacle. With a convex hole-free field this
+// returns exactly one sub-path identical to buildContinuousPath. Sub-paths
+// with < 2 points are dropped.
+std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     const BoustrophedonPlan& plan,
     const std::vector<std::pair<double, double>>& boundary,
     double turn_radius,

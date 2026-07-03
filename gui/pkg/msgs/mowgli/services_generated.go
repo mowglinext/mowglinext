@@ -2,7 +2,7 @@
 package mowgli
 
 import (
-	"github.com/cedbossneo/mowglinext/pkg/msgs/geometry"
+	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 )
 
 // AddMowingAreaReq for mowgli_interfaces/srv/AddMowingArea request.

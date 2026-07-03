@@ -12,7 +12,7 @@
 
 ### Option A: GitHub Codespaces (recommended)
 
-Click **Code → Codespaces → Create codespace on main** on the [repo page](https://github.com/cedbossneo/mowglinext). You get a full ROS2 Kilted environment with Nav2, Gazebo, and all dev tools — ready in minutes, no local setup.
+Click **Code → Codespaces → Create codespace on main** on the [repo page](https://github.com/mowglinext/mowglinext). You get a full ROS2 Kilted environment with Nav2, Gazebo, and all dev tools — ready in minutes, no local setup.
 
 ### Option B: VS Code DevContainer (local)
 

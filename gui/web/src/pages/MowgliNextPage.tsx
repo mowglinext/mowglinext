@@ -38,14 +38,6 @@ import {staggerParent, riseFade, popIn, springSnap} from "../concept/motion.ts";
  * provides the side-rail + header chrome.
  */
 
-const MOTION_STATES = new Set([
-  "MOWING", "TRANSIT", "UNDOCKING", "RETURNING_HOME", "MANUAL_MOWING",
-  "RESUMING_AFTER_RAIN", "RESUMING_UNDOCKING", "BOUNDARY_RECOVERY",
-  "LOW_BATTERY_DOCKING", "CRITICAL_BATTERY_DOCKING",
-  "COVERAGE_FAILED_DOCKING", "SKIP_STRIP", "PREFLIGHT_CHECK",
-  "CALIBRATING_HEADING", "RECORDING",
-]);
-
 function useMowerData() {
   const {highLevelStatus} = useHighLevelStatus();
   const power = usePower();
@@ -62,18 +54,16 @@ function useMowerData() {
   const gpsStatus = deriveGpsStatus(gnss);
 
   const stateName = highLevelStatus.state_name ?? (
-    isEmergency ? "EMERGENCY" : isCharging ? "CHARGING" : "IDLE"
+    isEmergency ? "EMERGENCY" : isCharging ? "CHARGING" : "IDLE_DOCKED"
   );
 
-  const areaPct = (() => {
-    if (highLevelStatus.current_path != null && highLevelStatus.current_path > 0 &&
-        highLevelStatus.current_path_index != null) {
-      return (highLevelStatus.current_path_index / highLevelStatus.current_path) * 100;
-    }
-    return 0;
-  })();
-
-  const isMoving = stateName ? MOTION_STATES.has(stateName) : false;
+  // Motion is derived from the NUMERIC high-level state, which status_nodes.cpp
+  // publishes reliably every tick (2=AUTONOMOUS, 3=RECORDING, 4=MANUAL_MOWING).
+  // The old string allowlist omitted state=2 substates (PLANNING,
+  // OBSTACLE_BACKOFF, DYNAMIC_OBSTACLE_CLEARED, AREA_UNREACHABLE) and carried a
+  // phantom SKIP_STRIP, so every planning/backoff phase read as "idle" mid-mow.
+  const stateNum = highLevelStatus.state ?? -1;
+  const isMoving = stateNum === 2 || stateNum === 3 || stateNum === 4;
 
   return {
     state: stateName,
@@ -88,7 +78,6 @@ function useMowerData() {
     escTemp: status.mower_esc_temperature ?? 0,
     motorTemp: status.mower_motor_temperature ?? 0,
     rain: status.rain_detected ?? false,
-    areaPct,
     isMoving,
     currentArea: highLevelStatus.current_area != null
       ? `Area ${highLevelStatus.current_area + 1}`
@@ -214,12 +203,17 @@ export const MowgliNextPage = () => {
 
   const actions = {
     onStart: mowerAction("high_level_control", {Command: 1}),
-    // No pause command exists (mower_logic/manual_pause_mowing returned 500);
-    // the "pause" affordance maps to HOME (stop + dock), same as onHome — it is
-    // labelled "Retour base" in the UI to match what it actually does.
-    onPause: mowerAction("high_level_control", {Command: 2}),
+    // Pause = STOP (COMMAND_STOP=8 → StopHoldSequence: mower off, halt in place,
+    // Nav2 left up so the mission can resume via START, no dock drive). The
+    // separate Home control keeps HOME (Command 2 → return to dock).
+    onPause: mowerAction("high_level_control", {Command: 8}),
     onHome: mowerAction("high_level_control", {Command: 2}),
     onStop: confirmEmergency,
+    // Clear a latched emergency from the Dashboard. Without this the robot is
+    // stuck: the BT EmergencyGuard halts before MainLogic, so Play (Command 1)
+    // is inert while latched. Firmware is the safety authority — it only clears
+    // the latch if the physical trigger is no longer asserted.
+    onRearm: mowerAction("emergency", {Emergency: 0}),
   };
 
   return (
@@ -309,7 +303,7 @@ interface HeroCardProps {
   phase: "idle" | "playing" | "returning" | "alert";
   actions: {
     onStart: () => void; onPause: () => void;
-    onHome: () => void; onStop: () => void;
+    onHome: () => void; onStop: () => void; onRearm: () => void;
   };
   headline: React.ReactNode;
   subline: string;

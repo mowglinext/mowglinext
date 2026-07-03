@@ -3,12 +3,12 @@ import i18n from "../../i18n";
 import en from "../../i18n/locales/en.json";
 import {
     GNSS_ADVANCED_SETTINGS_BY_FAMILY,
-    GNSS_CUSTOM_OPTION_VALUE,
+    GNSS_ACTION_SETTINGS_KEYS,
     gnssProfileLabel,
     gnssSignalProfileDescription,
     gnssSignalProfileLabel,
-    inferPresetTextSelection,
     normalizeGnssProfile,
+    normalizeGnssReceiverModel,
     normalizeGnssSignalGroup,
 } from "./gnssConfig.ts";
 
@@ -17,17 +17,9 @@ describe("gnssConfig", () => {
         expect(normalizeGnssSignalGroup("  3   6  ")).toBe("3 6");
     });
 
-    it("matches known signal-group presets before falling back to custom", () => {
-        const field = GNSS_ADVANCED_SETTINGS_BY_FAMILY.unicore?.fields[0];
-        expect(field).toBeDefined();
-        expect(field?.kind).toBe("presetText");
-        const presetField = field!;
-        if (presetField.kind !== "presetText") {
-            throw new Error("expected presetText field");
-        }
-        expect(inferPresetTextSelection(presetField, "3 6")).toBe("3 6");
-        expect(inferPresetTextSelection(presetField, "3")).toBe("3");
-        expect(inferPresetTextSelection(presetField, "4 9")).toBe(GNSS_CUSTOM_OPTION_VALUE);
+    it("normalizes receiver-model placeholders into the config-auto path", () => {
+        expect(normalizeGnssReceiverModel("unknown")).toBe("");
+        expect(normalizeGnssReceiverModel(" um982 ")).toBe("UM982");
     });
 
     it("formats profile labels for the UI", () => {
@@ -44,5 +36,30 @@ describe("gnssConfig", () => {
         expect(normalizeGnssProfile("balanced")).toBe("runtime_only");
         expect(normalizeGnssProfile("high_precision")).toBe("rover_high_precision");
         expect(normalizeGnssProfile("debug")).toBe("rover_high_precision_debug");
+    });
+
+    it("includes a dedicated persisted receiver-model field in the unicore expert seam", () => {
+        const receiverModelField = GNSS_ADVANCED_SETTINGS_BY_FAMILY.unicore?.fields[0];
+        expect(receiverModelField?.kind).toBe("select");
+        expect(receiverModelField?.key).toBe("gnss_receiver_model");
+        expect(GNSS_ACTION_SETTINGS_KEYS).toContain("gnss_receiver_model");
+        if (receiverModelField?.kind !== "select") {
+            throw new Error("expected select field");
+        }
+        expect(receiverModelField.options.map((option) => option.value)).toEqual([
+            "",
+            "UM960",
+            "UM980",
+            "UM981",
+            "UM982",
+        ]);
+        expect(i18n.t(receiverModelField.options[1].label)).toBe(en.gnssConfig.unicore.receiverModel.option.um960.label);
+        expect(i18n.t(receiverModelField.options[3].label)).toBe(en.gnssConfig.unicore.receiverModel.option.um981.label);
+    });
+
+    it("keeps signal-group editing as a raw expert override without Mowgli-side presets", () => {
+        const signalGroupField = GNSS_ADVANCED_SETTINGS_BY_FAMILY.unicore?.fields[1];
+        expect(signalGroupField?.kind).toBe("text");
+        expect(signalGroupField?.key).toBe("gnss_signal_group");
     });
 });

@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cedbossneo/mowglinext/pkg/msgs/geometry"
-	"github.com/cedbossneo/mowglinext/pkg/msgs/mowgli"
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/docker/distribution/uuid"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -76,6 +76,7 @@ func topicSubscribeInterval(topic string) (int, bool) {
 	case "diagnostics", "status", "highLevelStatus", "btLog", "map",
 		"path", "plan", "power", "emergency", "dockingSensor",
 		"robotDescription", "recordingTrajectory",
+		"coverageResumeAvailable",
 		"fusionDiag":
 		return -1, true
 	default:
@@ -143,6 +144,23 @@ func ClearMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 	})
 }
 
+// mapWriteBudget returns the context timeout for a clear_map → add_area×N →
+// save_areas sequence. clear_map + save_areas are fixed-cost, but each add_area
+// RASTERISES its polygon into the map_server grid, which on a large area takes
+// seconds — and on a slow SBC (RPi4) a multi-area map easily blows a fixed
+// budget, leaving the map half-written (issue #341: "can't save a big map,
+// ~30 s timeout"). Scale it: a 60 s base plus per-area headroom, capped at
+// 6 min. Map writes are rare and operator-driven, so a generous ceiling beats a
+// false timeout. Shared by ReplaceMapRoute (map editor "Save Map") and the
+// OpenMower importer so the two never drift.
+func mapWriteBudget(nAreas int) time.Duration {
+	budget := 60*time.Second + time.Duration(nAreas)*5*time.Second
+	if budget > 6*time.Minute {
+		budget = 6 * time.Minute
+	}
+	return budget
+}
+
 // replaceMapInternal is the ROS-side flow shared by the public PUT
 // handler and the OpenMower importer. It does clear_map → add_area×N →
 // save_areas; the wrapping (HTTP body decode / response codes) is the
@@ -191,14 +209,17 @@ func replaceMapInternal(ctx context.Context, provider types.IRosProvider, req *m
 // @Router /mowglinext/map [put]
 func ReplaceMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 	group.PUT("/map", func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
-		defer cancel()
-
+		// Decode BEFORE choosing the timeout so the budget can scale with the
+		// area count (each add_area rasterises — a fixed 30 s timed out saving a
+		// big edited map on RPi4, issue #341).
 		var CallReq mowgli.ReplaceMapReq
 		if err := unmarshalROSMessage[*mowgli.ReplaceMapReq](c.Request.Body, &CallReq); err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
 		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), mapWriteBudget(len(CallReq.Areas)))
+		defer cancel()
+
 		if err := replaceMapInternal(ctx, provider, &CallReq); err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
@@ -293,6 +314,8 @@ func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			def, err = subscribe(provider, c, conn, "path", -1)
 		case "plan":
 			def, err = subscribe(provider, c, conn, "plan", -1)
+		case "coverageResumeAvailable":
+			def, err = subscribe(provider, c, conn, "coverageResumeAvailable", -1)
 		case "power":
 			def, err = subscribe(provider, c, conn, "power", -1)
 		case "emergency":
@@ -308,7 +331,7 @@ func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		case "recordingTrajectory":
 			def, err = subscribe(provider, c, conn, "recordingTrajectory", -1)
 		case "obstacles":
-			def, err = subscribe(provider, c, conn, "obstacles", -1)
+			def, err = subscribe(provider, c, conn, "obstacles", 200) // match topicSubscribeInterval (multiplex path)
 		case "cogHeading":
 			def, err = subscribe(provider, c, conn, "cogHeading", 200)
 		case "magYaw":
@@ -570,43 +593,64 @@ func subscribe(provider types.IRosProvider, c *gin.Context, conn *websocket.Conn
 func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 	group.POST("/call/:command", func(c *gin.Context) {
 		command := c.Param("command")
+		// Bound every ROS service call: foxglove's CallService waits on
+		// ctx.Done(), and ctx only cancels when the browser
+		// drops the HTTP connection — a hung ROS node (behavior_tree /
+		// hardware_bridge / fusion_graph down) would otherwise pin this
+		// handler goroutine and a pendingSvc slot indefinitely. Every other
+		// route in this file already wraps with WithTimeout; this one was the
+		// exception.
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+		defer cancel()
 		var err error
 		switch command {
 		case "high_level_control":
 			var CallReq mowgli.HighLevelControlReq
 			err = c.BindJSON(&CallReq)
 			if err != nil {
+				// Explicit JSON body: gin's BindJSON aborts with a bare 400, and
+				// the frontend's useMowerAction reads res.error from JSON.
+				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			err = provider.CallService(c.Request.Context(), "/behavior_tree_node/high_level_control", &CallReq, &mowgli.HighLevelControlRes{}, "mowgli_interfaces/srv/HighLevelControl")
+			err = provider.CallService(ctx, "/behavior_tree_node/high_level_control", &CallReq, &mowgli.HighLevelControlRes{}, "mowgli_interfaces/srv/HighLevelControl")
 		case "emergency":
 			var CallReq mowgli.EmergencyStopReq
 			err = c.BindJSON(&CallReq)
 			if err != nil {
+				// Explicit JSON body: gin's BindJSON aborts with a bare 400, and
+				// the frontend's useMowerAction reads res.error from JSON.
+				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			err = provider.CallService(c.Request.Context(), "/hardware_bridge/emergency_stop", &CallReq, &mowgli.EmergencyStopRes{}, "mowgli_interfaces/srv/EmergencyStop")
+			err = provider.CallService(ctx, "/hardware_bridge/emergency_stop", &CallReq, &mowgli.EmergencyStopRes{}, "mowgli_interfaces/srv/EmergencyStop")
 		case "mow_enabled":
 			var CallReq mowgli.MowerControlReq
 			err = c.BindJSON(&CallReq)
 			if err != nil {
+				// Explicit JSON body: gin's BindJSON aborts with a bare 400, and
+				// the frontend's useMowerAction reads res.error from JSON.
+				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			err = provider.CallService(c.Request.Context(), "/hardware_bridge/mower_control", &CallReq, &mowgli.MowerControlRes{}, "mowgli_interfaces/srv/MowerControl")
+			err = provider.CallService(ctx, "/hardware_bridge/mower_control", &CallReq, &mowgli.MowerControlRes{}, "mowgli_interfaces/srv/MowerControl")
 		case "start_in_area":
 			var CallReq mowgli.StartInAreaReq
 			err = c.BindJSON(&CallReq)
 			if err != nil {
+				// Explicit JSON body: gin's BindJSON aborts with a bare 400, and
+				// the frontend's useMowerAction reads res.error from JSON.
+				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			err = provider.CallService(c.Request.Context(), "/behavior_tree_node/start_in_area", &CallReq, &mowgli.StartInAreaRes{}, "mowgli_interfaces/srv/StartInArea")
+			err = provider.CallService(ctx, "/behavior_tree_node/start_in_area", &CallReq, &mowgli.StartInAreaRes{}, "mowgli_interfaces/srv/StartInArea")
 		case "set_datum":
 			type TriggerRes struct {
 				Success bool   `json:"success"`
 				Message string `json:"message"`
 			}
 			var res TriggerRes
-			err = provider.CallService(c.Request.Context(), "/navsat_to_absolute_pose/set_datum", &struct{}{}, &res, "std_srvs/srv/Trigger")
+			err = provider.CallService(ctx, "/navsat_to_absolute_pose/set_datum", &struct{}{}, &res, "std_srvs/srv/Trigger")
 			if err == nil && !res.Success {
 				err = errors.New(res.Message)
 			}
@@ -623,10 +667,13 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			var CallReq mowgli.PromoteObstacleReq
 			err = c.BindJSON(&CallReq)
 			if err != nil {
+				// Explicit JSON body: gin's BindJSON aborts with a bare 400, and
+				// the frontend's useMowerAction reads res.error from JSON.
+				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
 			var promoteRes mowgli.PromoteObstacleRes
-			err = provider.CallService(c.Request.Context(),
+			err = provider.CallService(ctx,
 				"/map_server_node/promote_obstacle",
 				&CallReq,
 				&promoteRes,
@@ -649,7 +696,25 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				service = "/fusion_graph_node/clear_graph"
 			}
 			var res TriggerRes
-			err = provider.CallService(c.Request.Context(), service, &struct{}{}, &res, "std_srvs/srv/Trigger")
+			err = provider.CallService(ctx, service, &struct{}{}, &res, "std_srvs/srv/Trigger")
+			if err == nil && !res.Success {
+				err = errors.New(res.Message)
+			}
+			if err == nil {
+				c.JSON(200, map[string]interface{}{"message": res.Message})
+				return
+			}
+		case "coverage_clear_resume":
+			// "Start fresh": discard persisted mowing progress so the next
+			// COMMAND_START begins at the first line instead of resuming mid-path
+			// (the "starts at 2nd/3rd line" report). The frontend calls this before
+			// sending Command:1 when coverageResumeAvailable is true.
+			type TriggerRes struct {
+				Success bool   `json:"success"`
+				Message string `json:"message"`
+			}
+			var res TriggerRes
+			err = provider.CallService(ctx, "/behavior_tree_node/clear_coverage_resume", &struct{}{}, &res, "std_srvs/srv/Trigger")
 			if err == nil && !res.Success {
 				err = errors.New(res.Message)
 			}
@@ -665,7 +730,7 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				Message string `json:"message"`
 			}
 			var res TriggerRes
-			err = provider.CallService(c.Request.Context(), "/hardware_bridge/reboot_board", &struct{}{}, &res, "std_srvs/srv/Trigger")
+			err = provider.CallService(ctx, "/hardware_bridge/reboot_board", &struct{}{}, &res, "std_srvs/srv/Trigger")
 			if err == nil && !res.Success {
 				err = errors.New(res.Message)
 			}

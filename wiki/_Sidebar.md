@@ -25,4 +25,4 @@
 - [Contributing](Contributing)
 - [AI-Assisted Contributing](AI-Assisted-Contributing)
 - [FAQ](FAQ)
-- [Discussions](https://github.com/cedbossneo/mowglinext/discussions)
+- [Discussions](https://github.com/mowglinext/mowglinext/discussions)

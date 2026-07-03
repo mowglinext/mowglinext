@@ -18,11 +18,16 @@ if [ ! -f "$CONFIG" ]; then
 fi
 
 parse_yaml() {
-  # Tolerate a missing key: under `set -euo pipefail` a non-matching grep makes
-  # the pipeline exit non-zero, and a bare `NTRIP_HOST=$(parse_yaml ...)`
-  # assignment then aborts the whole script BEFORE the `${VAR:-default}`
-  # fallbacks below can apply. `|| true` keeps it returning empty + exit 0.
-  { grep -E "^\s+${1}:" "$CONFIG" | head -1 | sed 's/.*:\s*//' | tr -d '"' | tr -d "'"; } || true
+  # Extract the scalar value of an indented `<key>:` entry. Strips only the
+  # first `key:` prefix (so values containing ':' — NTRIP passwords, host:port —
+  # survive) and only a single pair of surrounding quotes (so a value that
+  # legitimately contains a quote is not corrupted). The `|| true` tolerates a
+  # missing key: under `set -euo pipefail` a non-matching grep makes the pipeline
+  # exit non-zero, and a bare `NTRIP_HOST=$(parse_yaml ...)` assignment would then
+  # abort the whole script BEFORE the `${VAR:-default}` fallbacks can apply.
+  { grep -E "^[[:space:]]+${1}:" "$CONFIG" | head -1 \
+    | sed -E 's/^[[:space:]]*[^:]*:[[:space:]]*//' \
+    | sed -E 's/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/'; } || true
 }
 
 normalize_lower() {
@@ -73,7 +78,9 @@ resolve_serial_device() {
     return 0
   fi
 
-  printf '/dev/ttyAMA4\n'
+  # /dev/gps is the installer's udev symlink for the GNSS receiver and is the
+  # safe last-resort default when neither the env nor the YAML pins a device.
+  printf '/dev/gps\n'
 }
 
 resolve_serial_baud() {
@@ -98,7 +105,15 @@ resolve_ntrip_enabled() {
     return 0
   fi
 
-  normalize_bool "$(parse_yaml ntrip_enabled)"
+  local yaml_enabled
+  yaml_enabled="$(parse_yaml ntrip_enabled)"
+  if [ -n "$yaml_enabled" ]; then
+    normalize_bool "$yaml_enabled"
+    return 0
+  fi
+
+  # Default-on when wholly unconfigured (matches the prior compose default).
+  printf 'true\n'
 }
 
 resolve_ntrip_host() {
@@ -123,6 +138,13 @@ resolve_ntrip_port() {
   printf '%s\n' "${port:-2101}"
 }
 
+# crtk.net is the public Centipede caster (anonymous login "centipede/centipede").
+# Only fall back to that login when the receiver is actually pointed at that
+# caster — never inject it for a custom caster or override a cleared credential.
+ntrip_uses_centipede_caster() {
+  [ "$(normalize_lower "$(resolve_ntrip_host)")" = "crtk.net" ]
+}
+
 resolve_ntrip_username() {
   if [ -n "${GNSS_NTRIP_USERNAME:-}" ]; then
     printf '%s\n' "$GNSS_NTRIP_USERNAME"
@@ -131,7 +153,14 @@ resolve_ntrip_username() {
 
   local username
   username="$(parse_yaml ntrip_user)"
-  printf '%s\n' "${username:-centipede}"
+  if [ -n "$username" ]; then
+    printf '%s\n' "$username"
+    return 0
+  fi
+
+  if ntrip_uses_centipede_caster; then
+    printf 'centipede\n'
+  fi
 }
 
 resolve_ntrip_password() {
@@ -142,7 +171,14 @@ resolve_ntrip_password() {
 
   local password
   password="$(parse_yaml ntrip_password)"
-  printf '%s\n' "${password:-centipede}"
+  if [ -n "$password" ]; then
+    printf '%s\n' "$password"
+    return 0
+  fi
+
+  if ntrip_uses_centipede_caster; then
+    printf 'centipede\n'
+  fi
 }
 
 resolve_ntrip_mountpoint() {
@@ -247,6 +283,7 @@ python3 /universal_gnss_topic_bridge.py --ros-args \
   -p "frame_id:=${frame_id}" \
   -p "input_status_topic:=${internal_status_topic}" \
   -p "output_status_topic:=/gps/status" \
+  -p "input_diagnostics_topic:=/diagnostics" \
   -p "input_rtcm_topic:=${internal_rtcm_topic}" \
   -p "output_rtcm_topic:=/rtcm" &
 UNIVERSAL_BRIDGE_PID=$!

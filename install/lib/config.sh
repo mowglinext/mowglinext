@@ -3,7 +3,7 @@
 
 # ── Global configuration ────────────────────────────────────────────────────
 
-REPO_URL="https://github.com/cedbossneo/mowglinext.git"
+REPO_URL="https://github.com/mowglinext/mowglinext.git"
 
 # Fork-local override (gitignored). Create install/lib/config.local.sh to
 # point at your own fork without touching tracked files:

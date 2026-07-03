@@ -4,7 +4,7 @@ Complete guide to all configuration files and parameters in the Mowgli ROS2 syst
 
 This documentation is for ROS2 Kilted with Gazebo Harmonic.
 
-[CLAUDE.md](https://github.com/cedbossneo/mowglinext/blob/main/CLAUDE.md) is the authoritative short-form reference. If any section here contradicts it, CLAUDE.md wins.
+[CLAUDE.md](https://github.com/mowglinext/mowglinext/blob/main/CLAUDE.md) is the authoritative short-form reference. If any section here contradicts it, CLAUDE.md wins.
 
 ## Overview
 

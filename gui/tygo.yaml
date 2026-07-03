@@ -5,18 +5,18 @@ packages:
     output_path: "web/src/types/ros/visualization_msgs"
   - path: "github.com/bluenviron/goroslib/v2/pkg/msgs/nav_msgs"
     output_path: "web/src/types/ros/nav_msgs"
-  - path: "github.com/cedbossneo/mowglinext/pkg/msgs/dynamic_reconfigure"
+  - path: "github.com/mowglinext/mowglinext/pkg/msgs/dynamic_reconfigure"
     output_path: "web/src/types/ros/dynamic_reconfigure"
-  - path: "github.com/cedbossneo/mowglinext/pkg/msgs/mower_msgs"
+  - path: "github.com/mowglinext/mowglinext/pkg/msgs/mower_msgs"
     output_path: "web/src/types/ros/mower_msgs"
-  - path: "github.com/cedbossneo/mowglinext/pkg/msgs/mower_map"
+  - path: "github.com/mowglinext/mowglinext/pkg/msgs/mower_map"
     output_path: "web/src/types/ros/mower_map"
     frontmatter: |
       import {Polygon, Pose} from '../geometry_msgs/index.ts'
     type_mappings:
       geometry_msgs.Polygon: "Polygon"
       geometry_msgs.Pose: "Pose"
-  - path: "github.com/cedbossneo/mowglinext/pkg/msgs/xbot_msgs"
+  - path: "github.com/mowglinext/mowglinext/pkg/msgs/xbot_msgs"
     output_path: "web/src/types/ros/xbot_msgs"
     frontmatter: |
       import {Polygon, PoseWithCovariance, Vector3} from '../geometry_msgs/index.ts'

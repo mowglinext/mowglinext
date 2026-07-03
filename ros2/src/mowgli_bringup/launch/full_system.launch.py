@@ -33,8 +33,8 @@ Brings up all subsystems:
 """
 
 import os
+import sys
 
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
@@ -46,6 +46,12 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+
+# Shared robot-config loader (sibling module installed alongside this launch
+# file). Deep-merges the SPARSE installed mowgli_robot.yaml over the in-package
+# template defaults, so a missing key falls through to its versioned default.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from robot_config_util import load_robot_params  # noqa: E402
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -73,16 +79,16 @@ def generate_launch_description() -> LaunchDescription:
     _runtime_cfg_path = "/ros2_ws/config/mowgli_robot.yaml"
     _early_use_lidar = "true"
     _yaml_set_lidar = False
-    if os.path.isfile(_runtime_cfg_path):
-        try:
-            with open(_runtime_cfg_path, "r") as _f:
-                _cfg = yaml.safe_load(_f) or {}
-            _rp = _cfg.get("mowgli", {}).get("ros__parameters", {})
-            if "lidar_enabled" in _rp:
-                _early_use_lidar = "true" if bool(_rp["lidar_enabled"]) else "false"
-                _yaml_set_lidar = True
-        except yaml.YAMLError:
-            pass
+    # Merged params = in-package template defaults with the installed sparse
+    # config layered on top. `lidar_enabled` is an INSTALL-DECIDED key that is
+    # ABSENT from the template, so its PRESENCE in the merged params still
+    # signals an explicit operator choice (env-var fallback preserved below);
+    # if the installed config omits it, the key stays absent and the LIDAR_ENABLED
+    # env var / default governs.
+    _rp = load_robot_params(bringup_dir, _runtime_cfg_path)
+    if "lidar_enabled" in _rp:
+        _early_use_lidar = "true" if bool(_rp["lidar_enabled"]) else "false"
+        _yaml_set_lidar = True
 
     # mowgli_robot.yaml is the source of truth. The LIDAR_ENABLED env var
     # (installer / compose .env) is a FALLBACK ONLY — it applies when the
@@ -169,16 +175,13 @@ def generate_launch_description() -> LaunchDescription:
     # nav2_params_base.yaml + the lidar/no-lidar overlay; nothing here loads them.)
     monitoring_params = os.path.join(monitoring_dir, "config", "diagnostics.yaml")
     mqtt_params = os.path.join(monitoring_dir, "config", "mqtt_bridge.yaml")
-    # Robot-specific config (bind-mounted from mowgli-docker/config/mowgli/)
-    robot_config = "/ros2_ws/config/mowgli_robot.yaml"
 
-    # Load robot config to extract mowgli parameters for nodes that need
-    # explicit values (e.g. navsat_to_absolute_pose needs datum from mowgli).
-    robot_params = {}
-    if os.path.isfile(robot_config):
-        with open(robot_config, "r") as f:
-            robot_config_yaml = yaml.safe_load(f) or {}
-        robot_params = robot_config_yaml.get("mowgli", {}).get("ros__parameters", {})
+    # Robot parameters for nodes that need explicit values (e.g.
+    # navsat_to_absolute_pose needs the datum). Merged params = in-package
+    # template defaults with the installed sparse config layered on top, so a
+    # key the installed config omits falls through to its versioned template
+    # default (single source of truth).
+    robot_params = load_robot_params(bringup_dir, _runtime_cfg_path)
 
     # ------------------------------------------------------------------
     # 1. mowgli.launch.py — hardware bridge, RSP, twist_mux
