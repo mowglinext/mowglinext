@@ -5,7 +5,7 @@
 # Publishes sensor_msgs/LaserScan on /scan with frame_id=lidar_link.
 #
 # To use this instead of the default LD19 driver, set in your .env:
-#   LIDAR_IMAGE=ghcr.io/cedbossneo/mowglinext/lidar-rplidar:main
+#   LIDAR_IMAGE=ghcr.io/mowglinext/mowglinext/lidar-rplidar:main
 # or override the build context in docker-compose.override.yml.
 # =============================================================================
 FROM ros:kilted-ros-base AS build

@@ -19,7 +19,7 @@
 
 #include "behaviortree_cpp/behavior_tree.h"
 #include "mowgli_behavior/bt_context.hpp"
-#include "mowgli_interfaces/srv/get_coverage_status.hpp"
+#include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
@@ -190,6 +190,31 @@ public:
   static BT::PortsList providedPorts()
   {
     return {BT::InputPort<uint8_t>("command", "Expected HighLevelControl command value")};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
+// IsCoverageComplete
+// ---------------------------------------------------------------------------
+
+/// Returns SUCCESS when the last GetNextUnmowedArea run ended because every
+/// area is genuinely mowed (ctx->coverage_all_complete), FAILURE otherwise
+/// (transient service error / timeout / no areas defined). Lets the coverage
+/// subtree route a normal finish to MOWING_COMPLETE instead of the
+/// COVERAGE_FAILED_DOCKING path.
+class IsCoverageComplete : public BT::ConditionNode
+{
+public:
+  IsCoverageComplete(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
   }
 
   BT::NodeStatus tick() override;
@@ -391,9 +416,19 @@ private:
   bool charger_failed_{false};
   float baseline_battery_{0.0f};
   std::chrono::steady_clock::time_point baseline_time_{};
+  // Session-boundary detection: the node is ticked continuously while the BT is
+  // inside the charging branch. A gap longer than session_gap_sec_ between ticks
+  // means the BT LEFT the charging branch (undocked / mowed / re-docked), i.e. a
+  // NEW charge session — so a previously latched charger_failed_ must be cleared,
+  // or one transient stall would disable auto-charge-resume for the whole process
+  // lifetime (the early `if (charger_failed_) return FAILURE` ran before the only
+  // clear site, making it permanently unreachable).
+  std::chrono::steady_clock::time_point last_tick_time_{};
+  bool last_tick_set_{false};
 
   static constexpr double check_interval_sec_{1800.0};  // 30 minutes
   static constexpr float min_increase_{1.0f};  // 1% minimum
+  static constexpr double session_gap_sec_{60.0};  // tick gap that ends a session
 };
 
 // ---------------------------------------------------------------------------
@@ -419,10 +454,12 @@ private:
 ///
 /// Input ports:
 ///   min_battery       (float,   default 20.0) — require at least this %.
-///   min_gps_fix_type  (int,     default 2)    — 0=no fix, 1=autonomous,
-///                                               2=DGPS, 4=RTK fixed, 5=RTK float.
-///                                               Default 2 accepts DGPS+ which is
-///                                               the minimum for outdoor nav.
+///   min_gps_fix_type  (int,     default 2)    — quality-monotonic encoding
+///                                               (see behavior_tree_node.cpp):
+///                                               0=no fix, 2=DGPS, 3=RTK float,
+///                                               4=RTK fixed (1=autonomous, unused).
+///                                               Higher = better, so require-RTK-Fixed
+///                                               is min=4. Default 2 accepts DGPS+.
 ///   tf_timeout_sec    (double,  default 0.5)  — how long to wait for TF.
 class PreFlightCheck : public BT::ConditionNode
 {
@@ -438,7 +475,7 @@ public:
         BT::InputPort<float>("min_battery", 20.0f, "Minimum battery percent to start mowing"),
         BT::InputPort<int>("min_gps_fix_type",
                            2,
-                           "Min GPS fix type (0=no,1=auto,2=DGPS,4=RTKfix,5=RTKfloat)"),
+                           "Min GPS fix type (monotonic: 0=no,2=DGPS,3=RTKfloat,4=RTKfix)"),
         BT::InputPort<double>("tf_timeout_sec", 0.5, "Max wait for map→base_footprint TF"),
     };
   }
@@ -446,7 +483,7 @@ public:
   BT::NodeStatus tick() override;
 
 private:
-  rclcpp::Client<mowgli_interfaces::srv::GetCoverageStatus>::SharedPtr coverage_client_;
+  rclcpp::Client<mowgli_interfaces::srv::GetMowingArea>::SharedPtr coverage_client_;
 };
 
 // ---------------------------------------------------------------------------

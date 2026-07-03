@@ -1,4 +1,6 @@
 import {useState} from "react";
+import {useTranslation} from "react-i18next";
+import type {TFunction} from "i18next";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 
 /**
@@ -33,36 +35,36 @@ interface PartInfo {
   ok: boolean;
 }
 
-function partInfo(part: Part, inputs: AnatomyInputs): PartInfo {
+function partInfo(part: Part, inputs: AnatomyInputs, t: TFunction): PartInfo {
   switch (part) {
     case 'gps':
-      return {label: 'GPS antenna', value: inputs.gpsLabel, ok: inputs.gpsOk};
+      return {label: t('robotAnatomy.gpsAntenna'), value: inputs.gpsLabel, ok: inputs.gpsOk};
     case 'imu':
-      return {label: 'IMU', value: inputs.imuOk ? `yaw ${inputs.imuYawDeg.toFixed(0)}°` : 'no data', ok: inputs.imuOk};
+      return {label: 'IMU', value: inputs.imuOk ? t('robotAnatomy.yawValue', {n: inputs.imuYawDeg.toFixed(0)}) : t('robotAnatomy.noData'), ok: inputs.imuOk};
     case 'lidar':
-      return {label: 'LiDAR', value: inputs.lidarOk ? 'streaming' : 'no scan', ok: inputs.lidarOk};
+      return {label: 'LiDAR', value: inputs.lidarOk ? t('robotAnatomy.streaming') : t('robotAnatomy.noScan'), ok: inputs.lidarOk};
     case 'battery':
       return {
-        label: 'Battery',
+        label: t('robotAnatomy.battery'),
         value: `${inputs.batteryPct.toFixed(0)}% · ${inputs.vBattery.toFixed(1)} V`,
         ok: inputs.batteryPct > 20,
       };
     case 'blade':
-      return {label: 'Blade', value: inputs.bladeOn ? 'spinning' : 'off', ok: !inputs.bladeOn};
+      return {label: t('robotAnatomy.blade'), value: inputs.bladeOn ? t('robotAnatomy.spinning') : t('robotAnatomy.off'), ok: !inputs.bladeOn};
     case 'wheelL':
-      return {label: 'Left wheel', value: `${inputs.wheelLeftRpm.toFixed(0)} rpm`, ok: true};
+      return {label: t('robotAnatomy.leftWheel'), value: t('robotAnatomy.rpmValue', {n: inputs.wheelLeftRpm.toFixed(0)}), ok: true};
     case 'wheelR':
-      return {label: 'Right wheel', value: `${inputs.wheelRightRpm.toFixed(0)} rpm`, ok: true};
+      return {label: t('robotAnatomy.rightWheel'), value: t('robotAnatomy.rpmValue', {n: inputs.wheelRightRpm.toFixed(0)}), ok: true};
     case 'motor':
       return {
-        label: 'Motors',
+        label: t('robotAnatomy.motors'),
         value: `motor ${inputs.motorTempC.toFixed(0)}°C · ESC ${inputs.escTempC.toFixed(0)}°C`,
         ok: inputs.motorTempC < 55,
       };
     case 'dock':
-      return {label: 'Dock', value: inputs.dockCharging ? 'charging' : 'off-dock', ok: true};
+      return {label: t('robotAnatomy.dock'), value: inputs.dockCharging ? t('robotAnatomy.charging') : t('robotAnatomy.offDock'), ok: true};
     case 'rain':
-      return {label: 'Rain sensor', value: inputs.rain ? 'wet' : 'dry', ok: !inputs.rain};
+      return {label: t('robotAnatomy.rainSensor'), value: inputs.rain ? t('robotAnatomy.wet') : t('robotAnatomy.dry'), ok: !inputs.rain};
   }
 }
 
@@ -72,12 +74,13 @@ interface RobotAnatomyProps {
 
 export function RobotAnatomy({inputs}: RobotAnatomyProps) {
   const {colors} = useThemeMode();
+  const {t} = useTranslation();
   const [hover, setHover] = useState<Part | null>(null);
   const active: Part = hover ?? 'battery';
-  const info = partInfo(active, inputs);
+  const info = partInfo(active, inputs, t);
 
   const partColor = (part: Part): string => {
-    const {ok} = partInfo(part, inputs);
+    const {ok} = partInfo(part, inputs, t);
     return ok ? colors.accent : colors.amber;
   };
 
@@ -103,7 +106,7 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
           fontSize: 11, color: colors.textMuted, letterSpacing: '0.08em',
           textTransform: 'uppercase' as const, marginBottom: 10,
         }}>
-          Robot anatomy
+          {t('robotAnatomy.robotAnatomy')}
         </div>
         <svg viewBox="0 0 320 270" width="100%" style={{display: 'block', maxHeight: 290}}>
           {/* chassis */}
@@ -119,7 +122,7 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
             onMouseEnter={handleEnter('dock')} onMouseLeave={handleLeave}
             style={{cursor: 'pointer'}}
           />
-          <text x={160} y={250} textAnchor="middle" fontSize={9} fill={colors.text}>Dock</text>
+          <text x={160} y={250} textAnchor="middle" fontSize={9} fill={colors.text}>{t('robotAnatomy.dock')}</text>
 
           {/* GPS antenna (top-center) */}
           <g onMouseEnter={handleEnter('gps')} onMouseLeave={handleLeave} style={{cursor: 'pointer'}}>
@@ -159,7 +162,7 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
               <line x1={-12} y1={0} x2={12} y2={0} stroke={stroke('blade')} strokeWidth={2}/>
               <line x1={0} y1={-12} x2={0} y2={12} stroke={stroke('blade')} strokeWidth={2}/>
             </g>
-            <text x={160} y={224} textAnchor="middle" fontSize={9} fill={colors.text}>Blade</text>
+            <text x={160} y={224} textAnchor="middle" fontSize={9} fill={colors.text}>{t('robotAnatomy.blade')}</text>
           </g>
 
           {/* Wheels */}
@@ -184,7 +187,7 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
           <g onMouseEnter={handleEnter('rain')} onMouseLeave={handleLeave} style={{cursor: 'pointer'}}>
             <path d="M 105 84 q 4 -6 8 0 q 4 -6 8 0 q 4 -6 8 0"
                   fill="none" stroke={stroke('rain')} strokeWidth={sw('rain') + 0.5} strokeLinecap="round"/>
-            <text x={117} y={75} textAnchor="middle" fontSize={9} fill={colors.textDim}>Rain</text>
+            <text x={117} y={75} textAnchor="middle" fontSize={9} fill={colors.textDim}>{t('robotAnatomy.rain')}</text>
           </g>
 
           {/* heading arrow (front) */}
@@ -197,7 +200,7 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
         background: colors.bgCard, borderRadius: 10, padding: '12px 14px',
       }}>
         <div style={{fontSize: 10, color: colors.textMuted, letterSpacing: '0.06em', textTransform: 'uppercase'}}>
-          {hover ? 'Inspecting' : 'Hover a part'}
+          {hover ? t('robotAnatomy.inspecting') : t('robotAnatomy.hoverAPart')}
         </div>
         <div className="mn-display" style={{fontSize: 24, color: colors.text, marginTop: 4, lineHeight: 1.1}}>
           {info.label}
@@ -211,7 +214,7 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
         <div style={{
           marginTop: 'auto', paddingTop: 10, fontSize: 11, color: colors.textMuted,
         }}>
-          Green = healthy, amber = needs attention.
+          {t('robotAnatomy.legend')}
         </div>
       </div>
     </div>

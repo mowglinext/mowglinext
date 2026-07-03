@@ -47,21 +47,25 @@ export const restartGui = (api: GuiApi) =>
 export const restartMowgliNext = (api: GuiApi) =>
     containerAction(api, { name: "mowglinext", label: { key: "app", value: "mowglinext" } }, "restart");
 
-/** Restart the GPS container (picks up new NTRIP / serial / protocol config) */
+/** Restart the GNSS receiver container (picks up new NTRIP / serial config) */
 export const restartGps = (api: GuiApi) =>
     containerAction(api, { name: "gps" }, "restart");
 
 /**
- * Settings keys whose values are consumed by the GPS docker container
- * (NTRIP credentials, mountpoint, serial port, protocol). Saving any of
- * these requires bouncing mowgli-gps to actually apply the change.
- * Datum lat/lon/alt are read by ROS2 (navsat_to_absolute_pose_node), not
- * by the GPS container itself, so they are deliberately not in this list.
+ * Settings keys whose values are consumed directly by the GNSS receiver
+ * container on a plain restart. The vendor-neutral profile/signal-profile
+ * keys are intentionally excluded: a container restart only re-launches the
+ * driver with new serial/NTRIP transport — it never re-flashes the receiver.
+ * The signal profile is a receiver-flash setting that only reaches the
+ * receiver through the Expert-mode Plan & Apply flow (POST /settings/gnss/apply,
+ * which runs gnss_config_apply --signal-profile). Saving from the basic view
+ * persists intent for that next apply; only serial/NTRIP transport changes
+ * require an immediate mowgli-gps restart.
  */
 export const GPS_RESTART_KEYS = new Set<string>([
-    "gps_protocol",
-    "gps_port",
-    "gps_baudrate",
+    "gnss_receiver_family",
+    "gnss_serial_device",
+    "gnss_serial_baud",
     "ntrip_enabled",
     "ntrip_host",
     "ntrip_port",

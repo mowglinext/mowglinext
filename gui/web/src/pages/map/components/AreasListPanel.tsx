@@ -1,11 +1,12 @@
 import {EnvironmentOutlined, CompassOutlined, StopOutlined, UpOutlined, DownOutlined} from "@ant-design/icons";
+import {useTranslation} from "react-i18next";
 import type {AreaListItem} from "../utils/types.ts";
 import {useThemeMode} from "../../../theme/ThemeContext.tsx";
 
-const TYPE_CONFIG: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
-    workarea: {color: '#4caf50', icon: <EnvironmentOutlined/>, label: 'Work Area'},
-    navigation: {color: '#888888', icon: <CompassOutlined/>, label: 'Navigation'},
-    obstacle: {color: '#bf0000', icon: <StopOutlined/>, label: 'Obstacle'},
+const TYPE_CONFIG: Record<string, { color: string; icon: React.ReactNode; labelKey: string }> = {
+    workarea: {color: '#4caf50', icon: <EnvironmentOutlined/>, labelKey: 'mapAreasList.typeWorkArea'},
+    navigation: {color: '#888888', icon: <CompassOutlined/>, labelKey: 'mapAreasList.typeNavigation'},
+    obstacle: {color: '#bf0000', icon: <StopOutlined/>, labelKey: 'mapAreasList.typeObstacle'},
 };
 
 interface AreasListPanelProps {
@@ -17,6 +18,7 @@ interface AreasListPanelProps {
 
 export const AreasListPanel = ({areas, onAreaClick, onReorder, selectedId}: AreasListPanelProps) => {
     const {colors} = useThemeMode();
+    const {t} = useTranslation();
     const workAreas = areas.filter(a => a.ftype === 'workarea');
     if (areas.length === 0) return null;
 
@@ -32,7 +34,7 @@ export const AreasListPanel = ({areas, onAreaClick, onReorder, selectedId}: Area
                 letterSpacing: '0.05em',
                 borderBottom: `1px solid ${colors.borderSubtle}`,
             }}>
-                Areas ({areas.length})
+                {t('mapAreasList.areasHeader', {count: areas.length})}
             </div>
 
             {/* Area items */}
@@ -108,7 +110,7 @@ export const AreasListPanel = ({areas, onAreaClick, onReorder, selectedId}: Area
                                                     cursor: item.mowingOrder <= 1 ? 'not-allowed' : 'pointer',
                                                     fontSize: 10, lineHeight: 1,
                                                 }}
-                                                aria-label="Move up"
+                                                aria-label={t('mapAreasList.moveUp')}
                                             >
                                                 <UpOutlined />
                                             </button>
@@ -121,7 +123,7 @@ export const AreasListPanel = ({areas, onAreaClick, onReorder, selectedId}: Area
                                                     cursor: item.mowingOrder >= workAreas.length ? 'not-allowed' : 'pointer',
                                                     fontSize: 10, lineHeight: 1,
                                                 }}
-                                                aria-label="Move down"
+                                                aria-label={t('mapAreasList.moveDown')}
                                             >
                                                 <DownOutlined />
                                             </button>

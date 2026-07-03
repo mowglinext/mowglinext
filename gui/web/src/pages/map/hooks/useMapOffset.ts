@@ -1,4 +1,5 @@
 import {useEffect, useState} from "react";
+import {useTranslation} from "react-i18next";
 import type {NotificationInstance} from "antd/es/notification/interface";
 
 let offsetXTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -11,6 +12,7 @@ interface UseMapOffsetOptions {
 }
 
 export function useMapOffset({config, setConfig, notification}: UseMapOffsetOptions) {
+    const {t} = useTranslation();
     const [offsetX, setOffsetX] = useState(0);
     const [offsetY, setOffsetY] = useState(0);
 
@@ -28,7 +30,7 @@ export function useMapOffset({config, setConfig, notification}: UseMapOffsetOpti
                 try {
                     await setConfig({"gui.map.offset.x": value.toString()});
                 } catch (e: any) {
-                    notification.error({message: "Failed to save offset", description: e.message});
+                    notification.error({message: t('mapOffset.saveError'), description: e.message});
                 }
             })();
         }, 1000);
@@ -42,7 +44,7 @@ export function useMapOffset({config, setConfig, notification}: UseMapOffsetOpti
                 try {
                     await setConfig({"gui.map.offset.y": value.toString()});
                 } catch (e: any) {
-                    notification.error({message: "Failed to save offset", description: e.message});
+                    notification.error({message: t('mapOffset.saveError'), description: e.message});
                 }
             })();
         }, 1000);

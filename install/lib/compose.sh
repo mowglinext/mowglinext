@@ -52,6 +52,7 @@ ensure_default_configs() {
 build_compose_stack() {
   COMPOSE_FILES=()
   local gnss_backend
+  local gnss_stack
   local gnss_service
 
   COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.base.yml")
@@ -62,25 +63,35 @@ build_compose_stack() {
   # In MAVROS mode, GPS is handled via Pixhawk/MAVROS + NTRIP sidecar,
   # so direct GNSS compose fragments must not be included.
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
+  gnss_stack="$(effective_gnss_stack 2>/dev/null || true)"
   if ! is_supported_gnss_backend "$gnss_backend"; then
     error "Unknown GNSS_BACKEND: ${GNSS_BACKEND:-unset} (expected: $(list_supported_gnss_backends))"
     return 1
   fi
 
-  if [ "$gnss_backend" != "disabled" ]; then
+  case "$gnss_stack" in
+    universal|disabled)
+      ;;
+    *)
+      error "Unknown GNSS_STACK: ${GNSS_STACK:-unset} (expected: universal|disabled)"
+      return 1
+      ;;
+  esac
+
+  if [[ "$gnss_stack" != "disabled" && "$gnss_backend" != "disabled" ]]; then
     gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
     case "$gnss_service" in
       gps)
         COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.gps.yml")
-        ;;
-      gnss_unicore)
-        COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.unicore.yaml")
         ;;
       *)
         error "No compose fragment mapped for GNSS backend: ${gnss_backend}"
         return 1
         ;;
     esac
+    if [[ "$gnss_stack" == "universal" ]]; then
+      info "Universal GNSS selected: GNSS runs in the mowgli-gps sidecar."
+    fi
   fi
 
   COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.watchtower.yml")
@@ -131,6 +142,69 @@ build_compose_stack() {
 # (or EOF), preserving indentation. Skips x-ros2-env anchors since the merged
 # file defines its own single anchor.
 
+compose_extract_anchor_block() {
+  local file="$1"
+  awk '
+    /^x-ros2-env:/ { in_anchor=1 }
+    in_anchor {
+      if ($0 ~ /^services:/) {
+        exit
+      }
+      print
+    }
+  ' "$file"
+}
+
+compose_extract_section() {
+  local file="$1"
+  local section="$2"
+
+  awk -v section="$section" '
+    $0 ~ ("^" section ":") { in_section=1; next }
+    in_section && $0 ~ /^[A-Za-z0-9_-]+:/ { exit }
+    in_section { print }
+  ' "$file"
+}
+
+write_compose_merged_fallback() {
+  local anchor_written=false
+  local volumes_written=false
+  local f
+  local section
+
+  {
+    for f in "${COMPOSE_FILES[@]}"; do
+      if [[ "$anchor_written" == "false" ]]; then
+        section="$(compose_extract_anchor_block "$f")"
+        if [[ -n "$section" ]]; then
+          printf '%s\n' "$section"
+          printf '\n'
+          anchor_written=true
+        fi
+      fi
+    done
+
+    printf 'services:\n'
+    for f in "${COMPOSE_FILES[@]}"; do
+      section="$(compose_extract_section "$f" services)"
+      if [[ -n "$section" ]]; then
+        printf '%s\n' "$section"
+      fi
+    done
+
+    for f in "${COMPOSE_FILES[@]}"; do
+      section="$(compose_extract_section "$f" volumes)"
+      if [[ -n "$section" ]]; then
+        if [[ "$volumes_written" == "false" ]]; then
+          printf '\nvolumes:\n'
+          volumes_written=true
+        fi
+        printf '%s\n' "$section"
+      fi
+    done
+  } > "$FINAL_COMPOSE_FILE"
+}
+
 write_compose_merged() {
 # Generate a single self-contained docker-compose.yaml by merging all
 # selected compose templates. Users get one readable file instead of
@@ -154,14 +228,17 @@ write_compose_merged() {
   # (image-tag bumps, switching `:main` ↔ `:dev`, watchtower picking up
   # a new pin) was silently ignored — the compose file shipped with the
   # values resolved at first install.
-  (
+  if ! (
     cd "$REPO_DIR" || exit 1
     docker_compose_cmd \
       --project-directory "$REPO_DIR" \
       --env-file "$FINAL_ENV_FILE" \
       "${compose_args[@]}" \
       config --no-interpolate > "$FINAL_COMPOSE_FILE"
-  )
+  ) || [[ ! -s "$FINAL_COMPOSE_FILE" ]]; then
+    warn "docker compose config unavailable — generating a fallback merged compose for local validation"
+    write_compose_merged_fallback
+  fi
 
   info "Generated: $FINAL_COMPOSE_FILE"
 }

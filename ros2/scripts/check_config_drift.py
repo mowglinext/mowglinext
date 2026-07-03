@@ -30,9 +30,9 @@ What this script does
   in the runtime file) and is silent.
 - Prints a diff and exits non-zero if any structural field has drifted.
 
-User-tunable fields (datum, dock pose, IMU mounting calibration, GPS
-ports, NTRIP creds…) are intentionally allowed to differ — those *should*
-only live in the runtime file.
+User-tunable fields (datum, dock pose, IMU mounting calibration, GNSS
+transport, NTRIP creds…) are intentionally allowed to differ — those
+*should* only live in the runtime file.
 
 Run as part of CI; or manually before / after editing either yaml.
 """
@@ -75,7 +75,8 @@ USER_OVERRIDE = {
     "dock_pose_x", "dock_pose_y", "dock_pose_yaw",
     "imu_pitch", "imu_roll", "imu_yaw", "imu_x", "imu_y", "imu_z",
     "gps_antenna_x", "gps_antenna_y", "gps_x", "gps_y", "gps_z",
-    "gps_port", "gps_baudrate", "gps_protocol", "gps_timeout_sec",
+    "gnss_receiver_family", "gnss_serial_device", "gnss_serial_baud",
+    "gps_timeout_sec",
     "gps_wait_after_undock_sec",
     "ntrip_enabled", "ntrip_host", "ntrip_port",
     "ntrip_user", "ntrip_password", "ntrip_mountpoint",

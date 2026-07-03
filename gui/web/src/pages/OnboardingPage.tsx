@@ -1,5 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import {
+    App,
     Button, Card, Col, Row, Steps, Typography, Select, Space, Alert,
     Input, InputNumber, Switch, Form, Divider, Tag, Result,
 } from "antd";
@@ -18,6 +21,7 @@ import { useCalibrationStatus } from "../hooks/useCalibrationStatus.ts";
 import { useImuYawCalibration } from "../hooks/useImuYawCalibration.ts";
 import { GnssStatusConstants } from "../types/ros.ts";
 import { CompassOutlined } from "@ant-design/icons";
+import { deriveGpsStatus, gnssReceiverLabel } from "../utils/gpsStatus.ts";
 import { RobotComponentEditor } from "../components/RobotComponentEditor.tsx";
 import { FlashBoardComponent } from "../components/FlashBoardComponent.tsx";
 import { MOWER_MODELS } from "../constants/mowerModels.ts";
@@ -28,15 +32,32 @@ import {
     GPS_RESTART_KEYS,
 } from "../utils/containers.ts";
 import { useContainerRestart } from "../hooks/useContainerRestart.ts";
+import {
+    GNSS_BAUD_OPTIONS,
+    GNSS_ACTION_SETTINGS_KEYS,
+    GNSS_PROFILE_OPTIONS,
+    GNSS_PROFILE_RATE_OPTIONS,
+    GNSS_RECEIVER_FAMILY_OPTIONS,
+    GNSS_SIGNAL_PROFILE_OPTIONS,
+    GNSS_SIGNAL_PROFILE_CUSTOM_HELP_TEXT,
+    normalizeGnssProfile,
+    normalizeGnssSignalProfile,
+} from "../components/settings/gnssConfig.ts";
+import { GnssSignalProfileHelp } from "../components/settings/GnssSignalProfileHelp.tsx";
+import { UniversalGnssAdvancedSettings } from "../components/settings/UniversalGnssAdvancedSettings.tsx";
+import { GnssReceiverActionsCard } from "../components/settings/GnssReceiverActionsCard.tsx";
+import { NtripSection } from "../components/settings/NtripSection.tsx";
+import { GnssLiveStatusSummaryCard } from "../components/gnss/GnssLiveStatusSummaryCard.tsx";
 
 const { Title, Text, Paragraph } = Typography;
 
 // ── Step 0: Welcome ─────────────────────────────────────────────────────
 
 const WelcomeStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
+    const { t } = useTranslation();
     const { colors } = useThemeMode();
     return (
-        <div style={{ textAlign: "center", maxWidth: 640, margin: "0 auto", padding: "32px 0" }}>
+        <div style={{ textAlign: "center", maxWidth: 760, margin: "0 auto", padding: "32px 0" }}>
             <div style={{
                 width: 96, height: 96, borderRadius: 28,
                 background: `linear-gradient(135deg, ${colors.accent}, ${colors.accent}99)`,
@@ -44,7 +65,7 @@ const WelcomeStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
                 display: "flex",
                 alignItems: "center", justifyContent: "center",
                 margin: "0 auto 28px",
-                color: "#0a1a10",
+                color: colors.bgBase,
             }}>
                 <RocketOutlined style={{ fontSize: 42 }} />
             </div>
@@ -52,12 +73,10 @@ const WelcomeStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
                 marginBottom: 10, letterSpacing: "-0.01em",
                 fontSize: 42, fontWeight: 400, lineHeight: 1.05,
             }}>
-                Let's meet your <em>Mowgli</em>.
+                {t("onboardingPage.welcomeTitlePrefix")} <em>Mowgli</em>{t("onboardingPage.welcomeTitleSuffix")}
             </Title>
             <Paragraph type="secondary" style={{ fontSize: 16, marginBottom: 36, lineHeight: 1.6 }}>
-                A few short steps and you're ready to mow. Nothing here is set in
-                stone -- you can always change these settings later from the
-                Settings page.
+                {t("onboardingPage.welcomeIntro")}
             </Paragraph>
 
             <Row gutter={[16, 16]} style={{ textAlign: "left", marginBottom: 32 }}>
@@ -66,9 +85,9 @@ const WelcomeStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
                         <Space>
                             <SettingOutlined style={{ color: colors.primary, fontSize: 20 }} />
                             <div>
-                                <Text strong>Choose your robot</Text>
+                                <Text strong>{t("onboardingPage.welcomeCardRobotTitle")}</Text>
                                 <br />
-                                <Text type="secondary">Select your mower model and firmware</Text>
+                                <Text type="secondary">{t("onboardingPage.welcomeCardRobotDesc")}</Text>
                             </div>
                         </Space>
                     </Card>
@@ -78,9 +97,9 @@ const WelcomeStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
                         <Space>
                             <GlobalOutlined style={{ color: colors.primary, fontSize: 20 }} />
                             <div>
-                                <Text strong>Set up GPS</Text>
+                                <Text strong>{t("onboardingPage.welcomeCardGpsTitle")}</Text>
                                 <br />
-                                <Text type="secondary">Configure your position and RTK corrections</Text>
+                                <Text type="secondary">{t("onboardingPage.welcomeCardGpsDesc")}</Text>
                             </div>
                         </Space>
                     </Card>
@@ -90,9 +109,9 @@ const WelcomeStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
                         <Space>
                             <AimOutlined style={{ color: colors.primary, fontSize: 20 }} />
                             <div>
-                                <Text strong>Place your sensors</Text>
+                                <Text strong>{t("onboardingPage.welcomeCardSensorsTitle")}</Text>
                                 <br />
-                                <Text type="secondary">Visually position LiDAR, IMU, and GPS on the robot</Text>
+                                <Text type="secondary">{t("onboardingPage.welcomeCardSensorsDesc")}</Text>
                             </div>
                         </Space>
                     </Card>
@@ -100,7 +119,7 @@ const WelcomeStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
             </Row>
 
             <Button type="primary" size="large" onClick={onNext} icon={<ArrowRightOutlined />}>
-                Get Started
+                {t("onboardingPage.getStarted")}
             </Button>
         </div>
     );
@@ -116,6 +135,7 @@ type RobotModelStepProps = {
 // MOWER_MODELS imported from constants/mowerModels.ts
 
 const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => {
+    const { t } = useTranslation();
     const { colors } = useThemeMode();
     const selectedModel = values.mower_model || "YardForce500";
 
@@ -129,13 +149,22 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
         }
     };
 
+    // Reflect the fallback default as a real selection on mount: without this a
+    // user who never taps a card leaves with mower_model unset (no preset
+    // applied) even though the YardForce 500 card looks selected. We persist the
+    // default so the highlighted card and the saved value always agree.
+    useEffect(() => {
+        if (!values.mower_model) handleModelSelect("YardForce500");
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     return (
-        <div style={{ maxWidth: 800, margin: "0 auto" }}>
+        <div style={{ maxWidth: 760, margin: "0 auto" }}>
             <Title level={4}>
-                <SettingOutlined /> Choose Your Robot
+                <SettingOutlined /> {t("onboardingPage.robotModelTitle")}
             </Title>
             <Paragraph type="secondary">
-                Select your mower model. This pre-fills hardware parameters like wheel size, battery voltage, and blade dimensions.
+                {t("onboardingPage.robotModelIntro")}
             </Paragraph>
 
             <Row gutter={[12, 12]}>
@@ -158,13 +187,13 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                             >
                                 <Space direction="vertical" size={4} style={{ width: "100%" }}>
                                     <Space>
-                                        <Text strong>{model.label}</Text>
+                                        <Text strong>{t(model.label)}</Text>
                                         {(model as any).tag && (
-                                            <Tag color="green">{(model as any).tag}</Tag>
+                                            <Tag color="green">{t((model as any).tag)}</Tag>
                                         )}
                                     </Space>
                                     <Text type="secondary" style={{ fontSize: 12 }}>
-                                        {model.description}
+                                        {t(model.description)}
                                     </Text>
                                 </Space>
                             </Card>
@@ -179,14 +208,14 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                     <Alert
                         type="info"
                         showIcon
-                        message="Custom configuration"
-                        description="You can fine-tune all hardware parameters in Settings after completing onboarding."
+                        message={t("onboardingPage.customConfigTitle")}
+                        description={t("onboardingPage.customConfigDesc")}
                         style={{ marginBottom: 16 }}
                     />
                     <Form layout="vertical">
                         <Row gutter={[16, 0]}>
                             <Col xs={12} sm={8}>
-                                <Form.Item label="Wheel Radius" tooltip="Drive wheel radius in metres">
+                                <Form.Item label={t("onboardingPage.wheelRadiusLabel")} tooltip={t("onboardingPage.wheelRadiusTooltip")}>
                                     <InputNumber
                                         value={values.wheel_radius ?? 0.04475}
                                         onChange={(v) => onChange("wheel_radius", v)}
@@ -196,7 +225,7 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
-                                <Form.Item label="Wheel Track" tooltip="Centre-to-centre wheel distance">
+                                <Form.Item label={t("onboardingPage.wheelTrackLabel")} tooltip={t("onboardingPage.wheelTrackTooltip")}>
                                     <InputNumber
                                         value={values.wheel_track ?? 0.325}
                                         onChange={(v) => onChange("wheel_track", v)}
@@ -206,7 +235,7 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
-                                <Form.Item label="Blade Radius" tooltip="Mowing blade radius">
+                                <Form.Item label={t("onboardingPage.bladeRadiusLabel")} tooltip={t("onboardingPage.bladeRadiusTooltip")}>
                                     <InputNumber
                                         value={values.blade_radius ?? 0.09}
                                         onChange={(v) => onChange("blade_radius", v)}
@@ -223,54 +252,140 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
     );
 };
 
-// ── GPS Configuration step (receiver + NTRIP, no datum) ─────────────────
+// ── NTRIP step (correction network + base station, before GPS) ──────────
 
-type GpsStepProps = RobotModelStepProps & { gpsRestarting?: boolean };
-
-const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting }) => {
-    const ntripEnabled = values.ntrip_enabled ?? true;
-
+const NtripStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => {
+    const { t } = useTranslation();
     return (
-        <div style={{ maxWidth: 640, margin: "0 auto" }}>
+        <div style={{ maxWidth: 760, margin: "0 auto" }}>
             <Title level={4}>
-                <GlobalOutlined /> GPS Configuration
+                <WifiOutlined /> {t("onboardingPage.ntripTitle")}
             </Title>
             <Paragraph type="secondary">
-                Configure how the robot talks to its GPS receiver and (optionally) where it pulls RTK corrections
-                from. The map origin (datum) is set later — once this step is saved and the receiver has had a
-                moment to acquire an RTK fix, the Datum step will let you anchor the map at your dock.
+                {t("onboardingPage.ntripIntro")}
+            </Paragraph>
+            <NtripSection values={values} onChange={onChange} />
+        </div>
+    );
+};
+
+// ── GPS Configuration step (receiver only, no NTRIP, no datum) ──────────
+
+type GpsStepProps = RobotModelStepProps & {
+    gpsRestarting?: boolean;
+    onPersistGnssSettings: (settings: Record<string, any>) => Promise<boolean>;
+};
+
+const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPersistGnssSettings }) => {
+    const { t } = useTranslation();
+    const [expertMode, setExpertMode] = useState(false);
+    const gnssStatus = useGnssStatus();
+    const gpsStatus = deriveGpsStatus(gnssStatus);
+    const detectedReceiver = gnssReceiverLabel(gnssStatus);
+    const selectedSignalProfile = normalizeGnssSignalProfile(values.gnss_signal_profile);
+    const gnssAlertType: "success" | "warning" | "info" = gpsStatus.fixType === "RTK_FIX"
+        ? "success"
+        : gpsStatus.fixType === "NO_FIX"
+            ? "warning"
+            : "info";
+    const persistCurrentGnssSettings = async () => {
+        const partial: Record<string, any> = {};
+        for (const key of GNSS_ACTION_SETTINGS_KEYS) {
+            if (Object.prototype.hasOwnProperty.call(values, key)) {
+                partial[key] = values[key];
+            }
+        }
+        return onPersistGnssSettings(partial);
+    };
+    // The serial link baud and the baud persisted into the receiver's flash must
+    // match, so the operator only ever sets ONE "Baud". We keep the receiver-side
+    // value (gnss_config_baud) in lockstep automatically — they should never
+    // diverge from the user's point of view.
+    const handleBaudChange = (v: number) => {
+        onChange("gnss_serial_baud", v);
+        onChange("gnss_config_baud", v);
+    };
+
+    return (
+        <div style={{ maxWidth: 760, margin: "0 auto" }}>
+            <Title level={4}>
+                <GlobalOutlined /> {t("onboardingPage.gpsTitle")}
+            </Title>
+            <Paragraph type="secondary">
+                {t("onboardingPage.gpsIntro")}
             </Paragraph>
 
             {gpsRestarting && (
                 <Alert
                     type="info"
                     showIcon
-                    message="GPS container is restarting to apply your NTRIP / serial settings"
-                    description="Wait ~10–30 s for RTK Fix to come back before setting the datum."
+                    message={t("onboardingPage.gpsRestartingAlertTitle")}
+                    description={t("onboardingPage.gpsRestartingAlertDesc")}
                     style={{ marginBottom: 12 }}
                 />
             )}
 
-            <Card size="small" title={<Space><WifiOutlined /> GPS Receiver</Space>} style={{ marginBottom: 16 }}>
+            <Alert
+                type={gnssAlertType}
+                showIcon
+                message={t("onboardingPage.detectedReceiver", { receiver: detectedReceiver })}
+                description={t("onboardingPage.liveGnssStatus", { status: gpsStatus.label })}
+                style={{ marginBottom: 12 }}
+            />
+
+            <Card
+                size="small"
+                title={<Space><WifiOutlined /> {t("onboardingPage.gnssReceiverCardTitle")}</Space>}
+                extra={(
+                    <Space size="small">
+                        <Text type="secondary" style={{ fontSize: 12 }}>{t("onboardingPage.expertMode")}</Text>
+                        <Switch size="small" checked={expertMode} onChange={setExpertMode} />
+                    </Space>
+                )}
+                style={{ marginBottom: 16 }}
+            >
+                <Paragraph type="secondary" style={{ marginTop: 0 }}>
+                    {t("onboardingPage.normalVsExpert")}
+                </Paragraph>
                 <Form layout="vertical">
                     <Row gutter={16}>
-                        <Col xs={12}>
-                            <Form.Item label="Protocol">
+                        <Col xs={24} sm={14}>
+                            <Form.Item
+                                label={t("onboardingPage.signalProfileLabel")}
+                                tooltip={t("onboardingPage.signalProfileTooltip")}
+                                extra={<GnssSignalProfileHelp selectedProfile={selectedSignalProfile} />}
+                            >
                                 <Select
-                                    value={values.gps_protocol ?? "UBX"}
-                                    onChange={(v) => onChange("gps_protocol", v)}
-                                    options={[
-                                        { label: "UBX (u-blox)", value: "UBX" },
-                                        { label: "NMEA", value: "NMEA" },
-                                    ]}
+                                    value={selectedSignalProfile}
+                                    onChange={(v) => onChange("gnss_signal_profile", v)}
+                                    options={GNSS_SIGNAL_PROFILE_OPTIONS.map((option) => ({
+                                        label: t(option.label),
+                                        value: option.value,
+                                        description: t(option.description),
+                                    }))}
+                                    optionRender={(option) => (
+                                        <div>
+                                            <div>{String(option.data.label)}</div>
+                                            <Text type="secondary" style={{ fontSize: 12 }}>
+                                                {String(option.data.description ?? "")}
+                                            </Text>
+                                        </div>
+                                    )}
                                 />
                             </Form.Item>
                         </Col>
-                        <Col xs={12}>
-                            <Form.Item label="Serial Port">
-                                <Input
-                                    value={values.gps_port ?? "/dev/gps"}
-                                    onChange={(e) => onChange("gps_port", e.target.value)}
+                        <Col xs={24} sm={10}>
+                            <Form.Item
+                                label={t("onboardingPage.baudLabel")}
+                                tooltip={t("onboardingPage.baudTooltip")}
+                            >
+                                <Select
+                                    value={values.gnss_serial_baud ?? 921600}
+                                    onChange={handleBaudChange}
+                                    options={GNSS_BAUD_OPTIONS.map((option) => ({
+                                        label: option.label,
+                                        value: option.value,
+                                    }))}
                                 />
                             </Form.Item>
                         </Col>
@@ -278,88 +393,116 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting }) =>
                 </Form>
             </Card>
 
-            <Card
-                size="small"
-                title={
-                    <Space>
-                        <WifiOutlined />
-                        <span>NTRIP Corrections (RTK)</span>
-                        <Switch
-                            size="small"
-                            checked={ntripEnabled}
-                            onChange={(v) => onChange("ntrip_enabled", v)}
-                        />
-                    </Space>
-                }
-            >
-                {ntripEnabled ? (
-                    <>
-                        <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
-                            NTRIP provides RTK corrections for centimetre-level accuracy.
-                            Free networks like Centipede (France) or SAPOS (Germany) are available in many countries.
+            <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message={t("onboardingPage.savedToFlashTitle")}
+                description={`${t("onboardingPage.savedToFlashDesc")}${selectedSignalProfile === "custom" ? ` ${t(GNSS_SIGNAL_PROFILE_CUSTOM_HELP_TEXT)}` : ""}`}
+            />
+
+            {expertMode && (
+                <>
+                    <Card
+                        size="small"
+                        title={<Space><SettingOutlined /> {t("onboardingPage.expertGnssSettingsTitle")}</Space>}
+                        extra={<Tag color="warning">{t('onboardingPage.previewNotActiveYet')}</Tag>}
+                        style={{ marginBottom: 16 }}
+                    >
+                        <Paragraph type="secondary" style={{ marginTop: 0 }}>
+                            {t("onboardingPage.expertGnssSettingsDesc")}
                         </Paragraph>
                         <Form layout="vertical">
                             <Row gutter={16}>
-                                <Col xs={16}>
-                                    <Form.Item label="Host">
+                                <Col xs={24} sm={12}>
+                                    <Form.Item
+                                        label={<Space size={4}>{t("onboardingPage.receiverProfileLabel")} <Tag color="warning" style={{ marginInlineEnd: 0 }}>{t('onboardingPage.preview')}</Tag></Space>}
+                                        tooltip={t("onboardingPage.receiverProfileTooltip")}
+                                    >
+                                        <Select
+                                            value={normalizeGnssProfile(values.gnss_profile)}
+                                            onChange={(v) => onChange("gnss_profile", v)}
+                                            options={GNSS_PROFILE_OPTIONS.map((option) => ({
+                                                label: t(option.label),
+                                                value: option.value,
+                                            }))}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={24} sm={12}>
+                                    <Form.Item label={t("onboardingPage.positionRateLabel")}>
+                                        <Select
+                                            value={values.gnss_profile_rate_hz ?? 5}
+                                            onChange={(v) => onChange("gnss_profile_rate_hz", v)}
+                                            options={GNSS_PROFILE_RATE_OPTIONS.map((option) => ({
+                                                label: option.label,
+                                                value: option.value,
+                                            }))}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                            </Row>
+                            <Row gutter={16}>
+                                <Col xs={24} sm={10}>
+                                    <Form.Item label={t("onboardingPage.receiverFamilyLabel")}>
+                                        <Select
+                                            value={values.gnss_receiver_family ?? "auto"}
+                                            onChange={(v) => onChange("gnss_receiver_family", v)}
+                                            options={GNSS_RECEIVER_FAMILY_OPTIONS.map((option) => ({
+                                                label: t(option.label),
+                                                value: option.value,
+                                            }))}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={24} sm={14}>
+                                    <Form.Item label={t("onboardingPage.serialDeviceLabel")}>
                                         <Input
-                                            value={values.ntrip_host ?? ""}
-                                            onChange={(e) => onChange("ntrip_host", e.target.value)}
-                                            placeholder="crtk.net"
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={8}>
-                                    <Form.Item label="Port">
-                                        <InputNumber
-                                            value={values.ntrip_port ?? 2101}
-                                            onChange={(v) => onChange("ntrip_port", v)}
-                                            style={{ width: "100%" }}
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={24}>
-                                    <Form.Item label="Mountpoint">
-                                        <Input
-                                            value={values.ntrip_mountpoint ?? ""}
-                                            onChange={(e) => onChange("ntrip_mountpoint", e.target.value)}
-                                            placeholder="OUIL"
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={12}>
-                                    <Form.Item label="Username">
-                                        <Input
-                                            value={values.ntrip_user ?? ""}
-                                            onChange={(e) => onChange("ntrip_user", e.target.value)}
-                                            placeholder="centipede"
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={12}>
-                                    <Form.Item label="Password">
-                                        <Input.Password
-                                            value={values.ntrip_password ?? ""}
-                                            onChange={(e) => onChange("ntrip_password", e.target.value)}
-                                            placeholder="centipede"
+                                            value={values.gnss_serial_device ?? "/dev/ttyAMA4"}
+                                            onChange={(e) => onChange("gnss_serial_device", e.target.value)}
+                                            placeholder="/dev/serial/by-id/..."
                                         />
                                     </Form.Item>
                                 </Col>
                             </Row>
                         </Form>
-                    </>
-                ) : (
-                    <Paragraph type="secondary">
-                        NTRIP is disabled. Your GPS will operate without RTK corrections (lower accuracy, ~1-2m).
-                    </Paragraph>
-                )}
-            </Card>
+                        <Alert
+                            type="warning"
+                            showIcon
+                            message={t('onboardingPage.previewNotActiveYet')}
+                            description={t('onboardingPage.expertFieldsNotWired')}
+                        />
+                    </Card>
+
+                    <UniversalGnssAdvancedSettings
+                        receiverFamily={values.gnss_receiver_family ?? "auto"}
+                        values={values}
+                        onChange={onChange}
+                    />
+                </>
+            )}
+
+            <GnssLiveStatusSummaryCard
+                gnssStatus={gnssStatus}
+                selectedReceiverFamily={values.gnss_receiver_family}
+            />
+
+            {/* The manual plan/apply/factory-reset/restart panel is developer
+                tooling — Save & Continue restarts the receiver container for
+                transport/NTRIP changes, but only Plan & Apply writes the signal
+                profile into the receiver's flash. Keep it for Expert mode only. */}
+            {expertMode && (
+                <GnssReceiverActionsCard
+                    gpsRestarting={gpsRestarting}
+                    onPersistBeforeAction={persistCurrentGnssSettings}
+                />
+            )}
 
             <Alert
                 type="info"
                 showIcon
-                message="Save & Continue to start the receiver"
-                description="The GPS daemon picks up these settings when the configuration is saved. Acquiring an RTK fix can take 30 s to a few minutes — by the time you reach the Datum step it should be ready."
+                message={t("onboardingPage.saveContinueReceiverTitle")}
+                description={t("onboardingPage.saveContinueReceiverDesc")}
                 style={{ marginTop: 8 }}
             />
         </div>
@@ -368,16 +511,19 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting }) =>
 
 // ── Datum step (split out from GPS configuration) ───────────────────────
 //
-// Lives after GPS config, sensors and IMU yaw so the receiver has had
-// minutes of clear-sky time to acquire RTK Fix before the operator is
-// asked to anchor the map. SBAS / RTK-Float datums silently break every
-// later mow, so the "Use current GPS position" button is gated on
-// GnssStatus.FIX_TYPE_RTK_FIXED.
+// Lives right after GPS config — the natural mental order — and BEFORE
+// sensors and calibration, which are meaningless without a map origin. The
+// RTK fix that GPS kicked off keeps acquiring in the background; SBAS /
+// RTK-Float datums silently break every later mow, so the "Use current GPS
+// position" button stays gated on GnssStatus.FIX_TYPE_RTK_FIXED — the step
+// inherently waits for the receiver to settle before it will let you anchor.
 
 type DatumStepProps = RobotModelStepProps & { gpsRestarting?: boolean };
 
 const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting }) => {
+    const { t } = useTranslation();
     const guiApi = useApi();
+    const { notification } = App.useApp();
     const [datumLoading, setDatumLoading] = useState(false);
 
     const gnssStatus = useGnssStatus();
@@ -385,7 +531,7 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting }
     const isRtkFixed = fixType === GnssStatusConstants.FIX_TYPE_RTK_FIXED;
     const isRtkFloat = fixType === GnssStatusConstants.FIX_TYPE_RTK_FLOAT;
     const isPlainFix = fixType === GnssStatusConstants.FIX_TYPE_GPS_FIX;
-    const fixLabel = isRtkFixed ? "RTK FIX" : isRtkFloat ? "RTK FLOAT" : isPlainFix ? "GPS FIX" : "no fix";
+    const fixLabel = isRtkFixed ? "RTK FIX" : isRtkFloat ? "RTK FLOAT" : isPlainFix ? "GPS FIX" : t("onboardingPage.noFix");
 
     const setDatumFromGps = async () => {
         setDatumLoading(true);
@@ -399,45 +545,46 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting }
                 onChange("datum_lon", parseFloat(parts[1]));
             }
         } catch (e: any) {
-            alert(e.message || "Failed to set datum from GPS");
+            notification.error({
+                message: t("onboardingPage.datumSetFailedTitle"),
+                description: e.message || t("onboardingPage.datumSetFailedDesc"),
+            });
         } finally {
             setDatumLoading(false);
         }
     };
 
     return (
-        <div style={{ maxWidth: 640, margin: "0 auto" }}>
+        <div style={{ maxWidth: 760, margin: "0 auto" }}>
             <Title level={4}>
-                <EnvironmentOutlined /> Map Origin (Datum)
+                <EnvironmentOutlined /> {t("onboardingPage.datumTitle")}
             </Title>
             <Paragraph type="secondary">
-                Anchor the robot's local map to a GPS coordinate near your docking station. This becomes the
-                (0, 0) origin of every later map and mowing area. Drop it on the dock if possible.
+                {t("onboardingPage.datumIntro")}
             </Paragraph>
 
-            <Card size="small" title={<Space><EnvironmentOutlined /> Datum coordinates</Space>} style={{ marginBottom: 16 }}>
+            <Card size="small" title={<Space><EnvironmentOutlined /> {t("onboardingPage.datumCoordinatesTitle")}</Space>} style={{ marginBottom: 16 }}>
                 <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
-                    Either enter the coordinate manually (right-click your dock in Google Maps to copy lat/lon),
-                    or capture it directly from the robot once it has an RTK Fix.
+                    {t("onboardingPage.datumCoordinatesHint")}
                 </Paragraph>
                 <Form layout="vertical">
                     <Row gutter={16}>
                         <Col xs={12}>
-                            <Form.Item label="Latitude">
+                            <Form.Item label={t("onboardingPage.latitudeLabel")}>
                                 <InputNumber
                                     value={values.datum_lat ?? 0}
                                     onChange={(v) => onChange("datum_lat", v)}
-                                    step={0.000001} precision={8} style={{ width: "100%" }}
+                                    step={0.000000001} precision={9} style={{ width: "100%" }}
                                     placeholder="48.8796"
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={12}>
-                            <Form.Item label="Longitude">
+                            <Form.Item label={t("onboardingPage.longitudeLabel")}>
                                 <InputNumber
                                     value={values.datum_lon ?? 0}
                                     onChange={(v) => onChange("datum_lon", v)}
-                                    step={0.000001} precision={8} style={{ width: "100%" }}
+                                    step={0.000000001} precision={9} style={{ width: "100%" }}
                                     placeholder="2.1728"
                                 />
                             </Form.Item>
@@ -451,15 +598,17 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting }
                         style={{ marginTop: -8 }}
                     >
                         {gpsRestarting
-                            ? "GPS restarting…"
-                            : `Use current GPS position ${isRtkFixed ? "" : "(waiting for RTK Fix)"}`}
+                            ? t("onboardingPage.gpsRestartingShort")
+                            : isRtkFixed
+                                ? t("onboardingPage.useCurrentGpsPosition")
+                                : t("onboardingPage.useCurrentGpsPositionWaiting")}
                     </Button>
                     {gpsRestarting && (
                         <Alert
                             type="info"
                             showIcon
-                            message="GPS container is restarting to apply your NTRIP / serial settings"
-                            description="Wait ~10–30 s for RTK Fix to come back before setting the datum."
+                            message={t("onboardingPage.gpsContainerRestartingTitle")}
+                            description={t("onboardingPage.gpsContainerRestartingDesc")}
                             style={{ marginTop: 12 }}
                         />
                     )}
@@ -467,11 +616,11 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting }
                         <Alert
                             type="warning"
                             showIcon
-                            message={`Current GPS quality: ${fixLabel}`}
+                            message={t("onboardingPage.currentGpsQuality", { fix: fixLabel })}
                             description={
                                 isRtkFloat
-                                    ? "RTK Float gives ~10–20 cm accuracy and drifts when corrections lapse. Wait for RTK Fix (σ ~3 mm) before anchoring the datum."
-                                    : "Without RTK Fix the datum can be metres off, which silently breaks every later mow. Make sure NTRIP corrections are flowing and the antenna has clear sky."
+                                    ? t("onboardingPage.rtkFloatWarning")
+                                    : t("onboardingPage.noRtkFixWarning")
                             }
                             style={{ marginTop: 12 }}
                         />
@@ -485,14 +634,14 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting }
 // ── Step 3: Sensor Placement ────────────────────────────────────────────
 
 const SensorStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => {
+    const { t } = useTranslation();
     return (
-        <div style={{ maxWidth: 900, margin: "0 auto" }}>
+        <div style={{ maxWidth: 760, margin: "0 auto" }}>
             <Title level={4}>
-                <AimOutlined /> Sensor Placement
+                <AimOutlined /> {t("onboardingPage.sensorPlacementTitle")}
             </Title>
             <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-                Position your sensors on the robot. Drag them on the top-down view or use the precise numeric inputs.
-                These positions tell the robot exactly where each sensor is mounted relative to the chassis centre.
+                {t("onboardingPage.sensorPlacementIntro")}
             </Paragraph>
             <RobotComponentEditor values={values} onChange={onChange} />
         </div>
@@ -513,6 +662,7 @@ const SensorStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => {
 // CalibrateImuYaw.srv response fields).
 
 const ImuYawStep: React.FC<RobotModelStepProps> = ({values, onChange}) => {
+    const {t} = useTranslation();
     const {colors} = useThemeMode();
     const {status: calibrationStatus, refresh: refreshCalibrationStatus} = useCalibrationStatus();
     const {
@@ -536,53 +686,50 @@ const ImuYawStep: React.FC<RobotModelStepProps> = ({values, onChange}) => {
     const currentImuYawDeg = (values.imu_yaw ?? 0) * 180 / Math.PI;
 
     return (
-        <div style={{maxWidth: 700, margin: "0 auto"}}>
+        <div style={{maxWidth: 760, margin: "0 auto"}}>
             <Title level={4}>
-                <CompassOutlined/> Sensor Calibration
+                <CompassOutlined/> {t("onboardingPage.calibrationTitle")}
             </Title>
             <Paragraph type="secondary" style={{marginBottom: 16}}>
-                The robot drives itself through a short routine to learn how its sensors are mounted.
-                Without this step the robot drifts in odom, can dock at an angle, and loses its heading
-                when GPS corrections lapse. Plan for up to 2&nbsp;minutes of autonomous motion — stand
-                clear, collision_monitor stays armed.
+                {t("onboardingPage.calibrationIntro")}
             </Paragraph>
 
             <Card size="small" style={{marginBottom: 16}}>
-                <Paragraph strong style={{marginBottom: 8}}>What this calibration measures</Paragraph>
+                <Paragraph strong style={{marginBottom: 8}}>{t("onboardingPage.measuresHeading")}</Paragraph>
                 <ul style={{paddingLeft: 20, marginBottom: 0, color: colors.textSecondary, fontSize: 13}}>
-                    <li><Text strong>Dock pose</Text> (when started on the dock): the robot reverses ~2&nbsp;m under RTK GPS to capture the dock's lat/lon and heading, then writes them to <Text code>mowgli_robot.yaml</Text>.</li>
-                    <li><Text strong>IMU mounting yaw</Text>: 3 forward/backward cycles at 0.5&nbsp;m/s let the accelerometer's body-frame impulse be compared to the wheel-derived acceleration so the IMU's rotation around base_link is recovered.</li>
-                    <li><Text strong>Pitch / roll bias</Text>: the stationary baseline windows expose any non-level mounting (1° offsets here matter — gyro integration drifts otherwise).</li>
-                    <li><Text strong>Magnetometer hard/soft-iron</Text> (if a mag is publishing): a slow figure-8 fits the ellipsoid offsets so tilt-compensated yaw is usable as an absolute heading source.</li>
+                    <li><Text strong>{t("onboardingPage.measureDockPoseLabel")}</Text> {t("onboardingPage.measureDockPoseBody")} <Text code>mowgli_robot.yaml</Text>.</li>
+                    <li><Text strong>{t("onboardingPage.measureImuYawLabel")}</Text>{t("onboardingPage.measureImuYawBody")}</li>
+                    <li><Text strong>{t("onboardingPage.measurePitchRollLabel")}</Text>{t("onboardingPage.measurePitchRollBody")}</li>
+                    <li><Text strong>{t("onboardingPage.measureMagLabel")}</Text> {t("onboardingPage.measureMagBody")}</li>
                 </ul>
             </Card>
 
             <Card size="small" style={{marginBottom: 16}}>
-                <Paragraph strong style={{marginBottom: 8}}>Pre-flight checklist</Paragraph>
+                <Paragraph strong style={{marginBottom: 8}}>{t("onboardingPage.preflightHeading")}</Paragraph>
                 <ul style={{paddingLeft: 20, marginBottom: 0, color: colors.textSecondary, fontSize: 13}}>
-                    <li>Place the robot <Text strong>on the dock</Text> if you want the dock pose recorded too — otherwise just leave it parked with ≥&nbsp;1.5&nbsp;m of clear space ahead and behind.</li>
-                    <li>NTRIP corrections flowing and an RTK Fix nearby (otherwise the dock pre-phase is skipped, but IMU calibration still runs).</li>
-                    <li>No active emergency, blade off, lid closed.</li>
-                    <li>Don't move or touch the robot during the run — every bump shows up as accelerometer noise and widens the std-dev.</li>
+                    <li>{t("onboardingPage.preflightDockPrefix")} <Text strong>{t("onboardingPage.preflightDockEmphasis")}</Text> {t("onboardingPage.preflightDockSuffix")}</li>
+                    <li>{t("onboardingPage.preflightNtrip")}</li>
+                    <li>{t("onboardingPage.preflightEmergency")}</li>
+                    <li>{t("onboardingPage.preflightDontTouch")}</li>
                 </ul>
             </Card>
 
             <Card size="small" style={{marginBottom: 16}}>
                 <Row gutter={[16, 8]}>
                     <Col xs={12}>
-                        <Text type="secondary" style={{fontSize: 11}}>Current imu_yaw</Text>
+                        <Text type="secondary" style={{fontSize: 11}}>{t("onboardingPage.currentImuYaw")}</Text>
                         <div style={{fontSize: 18, fontWeight: 500}}>{currentImuYawDeg.toFixed(2)}°</div>
                     </Col>
                     <Col xs={12}>
-                        <Text type="secondary" style={{fontSize: 11}}>Dock pose</Text>
+                        <Text type="secondary" style={{fontSize: 11}}>{t("onboardingPage.dockPose")}</Text>
                         <div style={{fontSize: 18, fontWeight: 500}}>
-                            {dockPresent ? <Tag color="success">Present</Tag> : <Tag color="warning">Missing</Tag>}
+                            {dockPresent ? <Tag color="success">{t("onboardingPage.present")}</Tag> : <Tag color="warning">{t("onboardingPage.missing")}</Tag>}
                         </div>
                     </Col>
                     <Col xs={12}>
-                        <Text type="secondary" style={{fontSize: 11}}>IMU bias</Text>
+                        <Text type="secondary" style={{fontSize: 11}}>{t("onboardingPage.imuBias")}</Text>
                         <div style={{fontSize: 18, fontWeight: 500}}>
-                            {imuPresent ? <Tag color="success">Present</Tag> : <Tag color="warning">Missing</Tag>}
+                            {imuPresent ? <Tag color="success">{t("onboardingPage.present")}</Tag> : <Tag color="warning">{t("onboardingPage.missing")}</Tag>}
                         </div>
                     </Col>
                 </Row>
@@ -597,7 +744,7 @@ const ImuYawStep: React.FC<RobotModelStepProps> = ({values, onChange}) => {
                     loading={calibRunning}
                     disabled={calibRunning}
                 >
-                    {calibResult ? "Re-run calibration" : "Start IMU yaw calibration"}
+                    {calibResult ? t("onboardingPage.rerunCalibration") : t("onboardingPage.startImuYawCalibration")}
                 </Button>
             </div>
 
@@ -605,8 +752,8 @@ const ImuYawStep: React.FC<RobotModelStepProps> = ({values, onChange}) => {
                 <Alert
                     type="info"
                     showIcon
-                    message="Calibration running — robot is driving itself"
-                    description="Forward leg, pause, backward leg. Stand clear. Motion stops automatically. May take up to 2 minutes (longer when the dock pre-phase runs)."
+                    message={t("onboardingPage.calibRunningTitle")}
+                    description={t("onboardingPage.calibRunningDesc")}
                     style={{marginBottom: 16}}
                 />
             )}
@@ -618,18 +765,20 @@ const ImuYawStep: React.FC<RobotModelStepProps> = ({values, onChange}) => {
                     message={`imu_yaw = ${calibResult.imu_yaw_deg.toFixed(2)}° (σ ±${calibResult.std_dev_deg.toFixed(2)}°)`}
                     description={
                         <>
-                            <div>From {calibResult.samples_used} valid motion samples.</div>
+                            <div>{t("onboardingPage.fromValidSamples", { count: calibResult.samples_used })}</div>
                             {calibResult.dock_valid && (
                                 <div>
-                                    Dock pose updated: yaw={calibResult.dock_pose_yaw_deg?.toFixed(2)}°
-                                    (σ {calibResult.dock_yaw_sigma_deg?.toFixed(2)}°,
-                                    displacement {calibResult.dock_undock_displacement_m?.toFixed(2) ?? "?"} m).
+                                    {t("onboardingPage.dockPoseUpdated", {
+                                        yaw: calibResult.dock_pose_yaw_deg?.toFixed(2),
+                                        sigma: calibResult.dock_yaw_sigma_deg?.toFixed(2),
+                                        displacement: calibResult.dock_undock_displacement_m?.toFixed(2) ?? "?",
+                                    })}
                                 </div>
                             )}
                             <div style={{marginTop: 12}}>
                                 <Space>
-                                    <Button type="primary" onClick={applyCalibration}>Apply to settings</Button>
-                                    <Button onClick={resetCalibration}>Discard</Button>
+                                    <Button type="primary" onClick={applyCalibration}>{t("onboardingPage.applyToSettings")}</Button>
+                                    <Button onClick={resetCalibration}>{t("onboardingPage.discard")}</Button>
                                 </Space>
                             </div>
                         </>
@@ -642,16 +791,15 @@ const ImuYawStep: React.FC<RobotModelStepProps> = ({values, onChange}) => {
                 <Alert
                     type="error"
                     showIcon
-                    message="Calibration failed"
+                    message={t("onboardingPage.calibFailedTitle")}
                     description={
                         <>
                             <div>{calibResult.message}</div>
                             <div style={{marginTop: 8, color: colors.textSecondary}}>
-                                Hint: drive faster or longer so the accelerometer sees a clear forward and
-                                backward impulse along the body X axis.
+                                {t("onboardingPage.calibFailedHint")}
                             </div>
                             <div style={{marginTop: 12}}>
-                                <Button onClick={resetCalibration}>Reset</Button>
+                                <Button onClick={resetCalibration}>{t("onboardingPage.reset")}</Button>
                             </div>
                         </>
                     }
@@ -662,8 +810,8 @@ const ImuYawStep: React.FC<RobotModelStepProps> = ({values, onChange}) => {
             <Alert
                 type="info"
                 showIcon
-                message="You can skip this step"
-                description="If you have already calibrated this robot from the Diagnostics page (or know your imu_yaw value), use the Next button. The Complete step will warn you if calibration is still missing."
+                message={t("onboardingPage.skipStepTitle")}
+                description={t("onboardingPage.skipStepDesc")}
                 style={{maxWidth: 500, margin: "0 auto"}}
             />
         </div>
@@ -673,19 +821,20 @@ const ImuYawStep: React.FC<RobotModelStepProps> = ({values, onChange}) => {
 // ── Step 5: Firmware ────────────────────────────────────────────────────
 
 const FirmwareStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
+    const { t } = useTranslation();
     const { colors } = useThemeMode();
     const [showFlash, setShowFlash] = useState(false);
 
     if (showFlash) {
         return (
-            <Card title="Flash Firmware">
+            <Card title={t("onboardingPage.flashFirmware")}>
                 <FlashBoardComponent onNext={onNext} />
             </Card>
         );
     }
 
     return (
-        <div style={{ maxWidth: 600, margin: "0 auto", textAlign: "center", padding: "24px 0" }}>
+        <div style={{ maxWidth: 760, margin: "0 auto", textAlign: "center", padding: "24px 0" }}>
             <div style={{
                 width: 64, height: 64, borderRadius: "50%",
                 background: colors.primaryBg, display: "flex",
@@ -694,26 +843,25 @@ const FirmwareStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
             }}>
                 <ThunderboltOutlined style={{ fontSize: 28, color: colors.primary }} />
             </div>
-            <Title level={4}>Firmware</Title>
+            <Title level={4}>{t("onboardingPage.firmwareTitle")}</Title>
             <Paragraph type="secondary" style={{ marginBottom: 24 }}>
-                If this is a new build, you need to flash the Mowgli firmware onto your motherboard.
-                If your firmware is already up to date, you can skip this step.
+                {t("onboardingPage.firmwareIntro")}
             </Paragraph>
 
             <Space size="middle">
                 <Button type="primary" size="large" onClick={() => setShowFlash(true)}>
-                    Flash Firmware
+                    {t("onboardingPage.flashFirmware")}
                 </Button>
                 <Button size="large" onClick={onNext}>
-                    Skip — Already Flashed
+                    {t("onboardingPage.skipAlreadyFlashed")}
                 </Button>
             </Space>
 
             <Alert
                 type="warning"
                 showIcon
-                message="Flashing will rewrite your motherboard firmware"
-                description="Make sure your mower is connected via USB and powered on. Wrong voltage settings can damage hardware."
+                message={t("onboardingPage.flashWarningTitle")}
+                description={t("onboardingPage.flashWarningDesc")}
                 style={{ marginTop: 24, textAlign: "left" }}
             />
         </div>
@@ -723,8 +871,10 @@ const FirmwareStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
 // ── Step 5: Complete ────────────────────────────────────────────────────
 
 const CompleteStep: React.FC = () => {
+    const { t } = useTranslation();
     const { colors } = useThemeMode();
     const guiApi = useApi();
+    const navigate = useNavigate();
     const [restarting, setRestarting] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -737,8 +887,8 @@ const CompleteStep: React.FC = () => {
     const { status: calibrationStatus } = useCalibrationStatus();
     const missingCalibrations: string[] = [];
     if (calibrationStatus) {
-        if (!calibrationStatus.dock?.present) missingCalibrations.push("dock pose");
-        if (!calibrationStatus.imu?.present) missingCalibrations.push("IMU bias + mounting");
+        if (!calibrationStatus.dock?.present) missingCalibrations.push(t("onboardingPage.missingDockPose"));
+        if (!calibrationStatus.imu?.present) missingCalibrations.push(t("onboardingPage.missingImuBias"));
         // Magnetometer is optional — only warn when use_magnetometer is on
         // (no good signal client-side yet, so we just don't flag mag here).
     }
@@ -770,8 +920,8 @@ const CompleteStep: React.FC = () => {
         return (
             <Result
                 icon={<RocketOutlined style={{ color: colors.primary }} spin />}
-                title="Applying configuration..."
-                subTitle="Restarting the mower service with your new settings. This takes a few seconds."
+                title={t("onboardingPage.applyingConfigTitle")}
+                subTitle={t("onboardingPage.applyingConfigSubtitle")}
             />
         );
     }
@@ -779,24 +929,24 @@ const CompleteStep: React.FC = () => {
     return (
         <Result
             icon={<CheckCircleOutlined style={{ color: colors.primary }} />}
-            title="You're all set!"
-            subTitle="Your mower is configured and ready to go. Head to the Map to draw your first mowing area, or check the Dashboard to monitor your robot."
+            title={t("onboardingPage.allSetTitle")}
+            subTitle={t("onboardingPage.allSetSubtitle")}
             extra={[
                 <Button
                     key="map"
                     type="primary"
                     size="large"
                     icon={<EnvironmentOutlined />}
-                    onClick={() => { window.location.href = "/#/map"; }}
+                    onClick={() => navigate("/map")}
                 >
-                    Draw Mowing Area
+                    {t("onboardingPage.drawMowingArea")}
                 </Button>,
                 <Button
                     key="dashboard"
                     size="large"
-                    onClick={() => { window.location.href = "/#/mowglinext"; }}
+                    onClick={() => navigate("/mowglinext")}
                 >
-                    Go to Dashboard
+                    {t("onboardingPage.goToDashboard")}
                 </Button>,
             ]}
         >
@@ -804,22 +954,21 @@ const CompleteStep: React.FC = () => {
                 <Alert
                     type="warning"
                     showIcon
-                    message="Calibration steps still pending"
+                    message={t("onboardingPage.calibPendingTitle")}
                     description={
                         <>
                             <Text>
-                                Your robot is configured, but{" "}
-                                <Text strong>{missingCalibrations.join(" and ")}</Text>{" "}
-                                {missingCalibrations.length === 1 ? "is" : "are"} not calibrated yet.
-                                Without these the robot will drift in odom and may dock at an angle.
+                                {t("onboardingPage.calibPendingPrefix")}{" "}
+                                <Text strong>{missingCalibrations.join(t("onboardingPage.calibPendingJoin"))}</Text>{" "}
+                                {t("onboardingPage.calibPendingSuffix", { count: missingCalibrations.length })}
                             </Text>
                             <br />
                             <Button
                                 type="link"
                                 style={{ paddingLeft: 0 }}
-                                onClick={() => { window.location.href = "/#/diagnostics"; }}
+                                onClick={() => navigate("/diagnostics")}
                             >
-                                Open Diagnostics → run calibrations →
+                                {t("onboardingPage.openDiagnosticsRunCalibrations")}
                             </Button>
                         </>
                     }
@@ -830,8 +979,8 @@ const CompleteStep: React.FC = () => {
                 <Alert
                     type="warning"
                     showIcon
-                    message="Could not restart the mower service"
-                    description={`${error}. You may need to restart it manually.`}
+                    message={t("onboardingPage.restartFailedTitle")}
+                    description={`${error}. ${t("onboardingPage.restartFailedDesc")}`}
                     style={{ maxWidth: 500, margin: "0 auto" }}
                 />
             )}
@@ -841,57 +990,64 @@ const CompleteStep: React.FC = () => {
 
 // ── Main Setup Wizard ───────────────────────────────────────────────────
 
-// Step order rationale:
+// Step order rationale (positioning is configured front-to-back, so each step
+// builds on the one before it):
 //   1. Welcome
 //   2. Robot Model — prefills hardware params; needs to come before firmware
 //      so the operator knows which board / variant they are flashing.
-//   3. Firmware — moved here (was last) so flashing happens before any
-//      configuration depends on a working motherboard / GPS receiver.
-//   4. GPS Configuration — receiver protocol, port, NTRIP. Saving this step
-//      restarts the GPS daemon so RTK fix can start acquiring in the
-//      background while later steps run.
-//   5. Sensors — sensor placement on the chassis.
-//   6. IMU / Sensor Calibration — drives the robot to learn IMU mounting,
-//      pitch/roll, mag, and (if on the dock) dock pose.
-//   7. Datum — split out from GPS so it runs only after the receiver has
-//      had minutes of clear-sky time to acquire RTK Fix, which is required
-//      for "Use current GPS position" to be safe.
+//   3. Firmware — flashing happens before any configuration depends on a
+//      working motherboard / GPS receiver.
+//   4. GPS — receiver protocol, port, NTRIP corrections. Saving this step
+//      restarts the GPS daemon so an RTK fix can start acquiring.
+//   5. Datum — anchor the map origin to the current RTK-Fixed position. Comes
+//      right after GPS (the natural mental order) and BEFORE docking/calibration,
+//      since those are meaningless without a map origin. The step gates the
+//      capture button on RTK-Fixed, so it inherently waits for the receiver to
+//      settle.
+//   6. Sensors — sensor placement on the chassis.
+//   7. Calibration — drives the robot to learn IMU mounting, pitch/roll, mag,
+//      and (if on the dock) the dock pose.
 //   8. Complete
 
 const STEP_ICONS = [
     <RocketOutlined />,
     <SettingOutlined />,
     <ThunderboltOutlined />,
+    <WifiOutlined />,
     <GlobalOutlined />,
+    <EnvironmentOutlined />,
     <AimOutlined />,
     <CompassOutlined />,
-    <EnvironmentOutlined />,
     <CheckCircleOutlined />,
 ];
 
+// i18n key strings resolved with t() at render time (see stepItems / mobile
+// header). NTRIP / GPS / Datum stay technical tokens via their en values.
 const STEP_TITLES = [
-    "Welcome",
-    "Robot Model",
-    "Firmware",
-    "GPS",
-    "Sensors",
-    "Calibration",
-    "Datum",
-    "Complete",
+    "onboardingPage.stepWelcome",
+    "onboardingPage.stepRobotModel",
+    "onboardingPage.stepFirmware",
+    "onboardingPage.stepNtrip",
+    "onboardingPage.stepGps",
+    "onboardingPage.stepDatum",
+    "onboardingPage.stepSensors",
+    "onboardingPage.stepCalibration",
+    "onboardingPage.stepComplete",
 ];
 
 const OnboardingWizard: React.FC = () => {
+    const { t } = useTranslation();
     const { colors } = useThemeMode();
     const isMobile = useIsMobile();
-    const { values: savedValues, saveValues, loading } = useSettingsSchema();
+    const { values: savedValues, saveValues, savePartialValues, loading } = useSettingsSchema();
     const guiApi = useApi();
     const [currentStep, setCurrentStep] = useState(0);
     const [localValues, setLocalValues] = useState<Record<string, any>>({});
     const [saving, setSaving] = useState(false);
     const gpsRestart = useContainerRestart({
-        pendingLabel: "Redémarrage GPS…",
-        successMessage: "GPS redémarré — patientez pour le RTK Fix",
-        errorMessage: "Échec du redémarrage GPS",
+        pendingLabel: t('onboardingPage.gpsRestarting'),
+        successMessage: t('onboardingPage.gpsRestartedWaitRtk'),
+        errorMessage: t('onboardingPage.gpsRestartFailed'),
         skipReadinessProbe: true,
     });
     const gpsRestarting = gpsRestart.pending;
@@ -920,28 +1076,31 @@ const OnboardingWizard: React.FC = () => {
         setLocalValues((prev) => ({ ...prev, [key]: value }));
     }, []);
 
-    // Step indices after the reorder:
+    // Step indices:
     //   0 Welcome
     //   1 Robot Model
     //   2 Firmware            (custom navigation, no Save & Continue)
-    //   3 GPS Configuration
-    //   4 Sensors
-    //   5 IMU / Sensor Calibration
-    //   6 Datum
-    //   7 Complete
+    //   3 NTRIP Corrections   (network + base station, set before GPS)
+    //   4 GPS Configuration
+    //   5 Datum
+    //   6 Sensors
+    //   7 IMU / Sensor Calibration
+    //   8 Complete
     const STEP_FIRMWARE = 2;
-    const STEP_GPS = 3;
-    const STEP_DATUM = 6;
+    const STEP_NTRIP = 3;
+    const STEP_GPS = 4;
+    const STEP_DATUM = 5;
+    const STEP_CALIBRATION = 7;
     const STEP_COMPLETE = STEP_TITLES.length - 1;
 
     const handleNext = useCallback(async () => {
         // Save settings when leaving any config step that mutates settings
-        // values: Robot Model (1), GPS (3), Sensors (4), Calibration (5),
-        // Datum (6). Apply-from-calibration writes through onChange but
+        // values: Robot Model (1), NTRIP (3), GPS (4), Datum (5), Sensors (6),
+        // Calibration (7). Apply-from-calibration writes through onChange but
         // does not auto-save; this is the one batch save point.
         const isConfigStep =
             currentStep === 1 ||
-            (currentStep >= 3 && currentStep <= STEP_DATUM);
+            (currentStep >= STEP_NTRIP && currentStep <= STEP_CALIBRATION);
         if (isConfigStep) {
             setSaving(true);
             await saveValues(localValues);
@@ -965,7 +1124,7 @@ const OnboardingWizard: React.FC = () => {
             }
         }
         setCurrentStep((s) => Math.min(s + 1, STEP_TITLES.length - 1));
-    }, [currentStep, localValues, saveValues, guiApi, gpsRestart, STEP_DATUM]);
+    }, [currentStep, localValues, saveValues, guiApi, gpsRestart, STEP_GPS, STEP_CALIBRATION]);
 
     const handlePrev = useCallback(() => {
         setCurrentStep((s) => Math.max(s - 1, 0));
@@ -975,79 +1134,121 @@ const OnboardingWizard: React.FC = () => {
     const isLastStep = currentStep === STEP_COMPLETE;
     const isFirmwareStep = currentStep === STEP_FIRMWARE;
 
+    const stepItems = STEP_TITLES.map((title, i) => ({ title: t(title), icon: STEP_ICONS[i] }));
+
+    const stepContent = (
+        <>
+            {currentStep === 0 && <WelcomeStep onNext={handleNext} />}
+            {currentStep === 1 && <RobotModelStep values={localValues} onChange={handleChange} />}
+            {currentStep === 2 && <FirmwareStep onNext={handleNext} />}
+            {currentStep === 3 && <NtripStep values={localValues} onChange={handleChange} />}
+            {currentStep === 4 && (
+                <GpsStep
+                    values={localValues}
+                    onChange={handleChange}
+                    gpsRestarting={gpsRestarting}
+                    onPersistGnssSettings={(settings) => savePartialValues(settings, {
+                        silentSuccess: true,
+                        errorMessage: t("onboardingPage.persistGnssError"),
+                    })}
+                />
+            )}
+            {currentStep === 5 && <DatumStep values={localValues} onChange={handleChange} gpsRestarting={gpsRestarting} />}
+            {currentStep === 6 && <SensorStep values={localValues} onChange={handleChange} />}
+            {currentStep === 7 && <ImuYawStep values={localValues} onChange={handleChange} />}
+            {currentStep === 8 && <CompleteStep />}
+        </>
+    );
+
+    // Navigation bar (hidden on welcome, complete, and firmware steps).
+    const navBar = !isFirstStep && !isLastStep && !isFirmwareStep && (
+        <div
+            style={{
+                position: "fixed",
+                bottom: isMobile ? "calc(env(safe-area-inset-bottom, 0px) + 92px)" : 20,
+                left: isMobile ? 0 : undefined,
+                right: isMobile ? 0 : undefined,
+                padding: isMobile ? "8px 12px" : undefined,
+                background: isMobile ? colors.bgCard : undefined,
+                borderTop: isMobile ? `1px solid ${colors.border}` : undefined,
+                zIndex: 50,
+            }}
+        >
+            <Space>
+                <Button icon={<ArrowLeftOutlined />} onClick={handlePrev}>
+                    {t("onboardingPage.back")}
+                </Button>
+                <Button
+                    type="primary"
+                    icon={currentStep === STEP_DATUM ? <SaveOutlined /> : <ArrowRightOutlined />}
+                    onClick={handleNext}
+                    loading={saving || loading || gpsRestarting}
+                >
+                    {gpsRestarting
+                        ? t("onboardingPage.restartingGps")
+                        : currentStep === STEP_DATUM
+                            ? t("onboardingPage.saveAndFinish")
+                            : t("onboardingPage.next")}
+                </Button>
+            </Space>
+        </div>
+    );
+
+    // Mobile: a cramped 8-icon horizontal stepper reads badly, so show a compact
+    // "Step N of M · Title" header with a progress bar instead.
+    if (isMobile) {
+        const pct = Math.round(((currentStep + 1) / STEP_TITLES.length) * 100);
+        return (
+            <Row gutter={[0, 12]}>
+                <Col span={24}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 4 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                            <Space size={8}>
+                                <span style={{ color: colors.accent, display: "inline-flex" }}>{STEP_ICONS[currentStep]}</span>
+                                <Text strong style={{ fontSize: 15 }}>{t(STEP_TITLES[currentStep])}</Text>
+                            </Space>
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                                {t("onboardingPage.stepCounter", { current: currentStep + 1, total: STEP_TITLES.length })}
+                            </Text>
+                        </div>
+                        <div style={{ height: 4, borderRadius: 2, background: colors.border, overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${pct}%`, background: colors.accent, transition: "width .3s ease" }} />
+                        </div>
+                    </div>
+                </Col>
+                <Col span={24} style={{ paddingBottom: isLastStep || isFirmwareStep ? 16 : 80 }}>
+                    {stepContent}
+                </Col>
+                {navBar}
+            </Row>
+        );
+    }
+
+    // Desktop: left vertical stepper rail + scrollable content. The rail gives
+    // each of the 8 steps its own labelled row instead of a cramped horizontal
+    // strip, which reads far better with this many steps.
     return (
-        <Row gutter={[0, isMobile ? 12 : 20]}>
-            {/* Steps indicator -- labelPlacement="vertical" stacks the title under
-                the icon, which prevents the horizontal text-overflow ellipsis
-                that was clipping titles like "Calibration" to "Calib" on
-                narrower viewports. */}
-            <Col span={24}>
+        <Row gutter={[28, 0]} style={{ minHeight: "calc(100vh - 150px)" }}>
+            <Col flex="0 0 220px">
                 <Steps
+                    direction="vertical"
                     current={currentStep}
-                    size={isMobile ? "small" : "default"}
-                    responsive={false}
-                    labelPlacement="vertical"
-                    items={STEP_TITLES.map((title, i) => ({
-                        title: isMobile ? undefined : title,
-                        icon: STEP_ICONS[i],
-                    }))}
-                    style={{ maxWidth: 880, margin: "0 auto" }}
+                    items={stepItems}
+                    style={{ position: "sticky", top: 8 }}
                 />
             </Col>
-
-            {/* Step content */}
             <Col
-                span={24}
+                flex="1 1 0"
                 style={{
-                    height: isMobile ? "auto" : "calc(100vh - 220px)",
-                    overflowY: isMobile ? undefined : "auto",
-                    paddingBottom: isLastStep || isFirmwareStep ? 16 : 80,
+                    minWidth: 0,
+                    height: "calc(100vh - 150px)",
+                    overflowY: "auto",
+                    paddingBottom: 80,
                 }}
             >
-                {currentStep === 0 && <WelcomeStep onNext={handleNext} />}
-                {currentStep === 1 && <RobotModelStep values={localValues} onChange={handleChange} />}
-                {currentStep === 2 && <FirmwareStep onNext={handleNext} />}
-                {currentStep === 3 && <GpsStep values={localValues} onChange={handleChange} gpsRestarting={gpsRestarting} />}
-                {currentStep === 4 && <SensorStep values={localValues} onChange={handleChange} />}
-                {currentStep === 5 && <ImuYawStep values={localValues} onChange={handleChange} />}
-                {currentStep === 6 && <DatumStep values={localValues} onChange={handleChange} gpsRestarting={gpsRestarting} />}
-                {currentStep === 7 && <CompleteStep />}
+                {stepContent}
             </Col>
-
-            {/* Navigation bar (hidden on welcome, complete, and firmware steps) */}
-            {!isFirstStep && !isLastStep && !isFirmwareStep && (
-                <Col
-                    span={24}
-                    style={{
-                        position: "fixed",
-                        bottom: isMobile ? "calc(56px + env(safe-area-inset-bottom, 0px))" : 20,
-                        left: isMobile ? 0 : undefined,
-                        right: isMobile ? 0 : undefined,
-                        padding: isMobile ? "8px 12px" : undefined,
-                        background: isMobile ? colors.bgCard : undefined,
-                        borderTop: isMobile ? `1px solid ${colors.border}` : undefined,
-                        zIndex: 50,
-                    }}
-                >
-                    <Space>
-                        <Button icon={<ArrowLeftOutlined />} onClick={handlePrev}>
-                            Back
-                        </Button>
-                        <Button
-                            type="primary"
-                            icon={currentStep === STEP_DATUM ? <SaveOutlined /> : <ArrowRightOutlined />}
-                            onClick={handleNext}
-                            loading={saving || loading || gpsRestarting}
-                        >
-                            {gpsRestarting
-                                ? "Restarting GPS…"
-                                : currentStep === STEP_DATUM
-                                    ? "Save & Finish"
-                                    : "Next"}
-                        </Button>
-                    </Space>
-                </Col>
-            )}
+            {navBar}
         </Row>
     );
 };

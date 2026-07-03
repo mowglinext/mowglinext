@@ -1,4 +1,5 @@
 import {Button, InputNumber, Slider} from "antd";
+import {useTranslation} from "react-i18next";
 import {CompassOutlined} from "@ant-design/icons";
 import {useThemeMode} from "../../../theme/ThemeContext.tsx";
 
@@ -13,6 +14,7 @@ interface MapOffsetPanelProps {
 
 export const MapOffsetPanel = ({offsetX, offsetY, bearing, onChangeX, onChangeY, onChangeBearing}: MapOffsetPanelProps) => {
     const {colors} = useThemeMode();
+    const {t} = useTranslation();
     return (
     <div>
         <div style={{
@@ -23,7 +25,7 @@ export const MapOffsetPanel = ({offsetX, offsetY, bearing, onChangeX, onChangeY,
             letterSpacing: '0.05em',
             marginBottom: 6,
         }}>
-            Map Offset
+            {t('mapOffsetPanel.mapOffset')}
         </div>
         <div style={{display: 'flex', gap: 8}}>
             <div style={{flex: 1}}>
@@ -45,7 +47,7 @@ export const MapOffsetPanel = ({offsetX, offsetY, bearing, onChangeX, onChangeY,
             marginTop: 10,
             marginBottom: 6,
         }}>
-            Map Rotation
+            {t('mapOffsetPanel.mapRotation')}
         </div>
         <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
             <div style={{flex: 1}}>
@@ -71,7 +73,7 @@ export const MapOffsetPanel = ({offsetX, offsetY, bearing, onChangeX, onChangeY,
                 size="small"
                 icon={<CompassOutlined/>}
                 onClick={() => onChangeBearing(0)}
-                title="Reset to north-up"
+                title={t('mapOffsetPanel.resetToNorthUp')}
             />
         </div>
     </div>

@@ -24,7 +24,7 @@ section "Standard install keeps unsupported optional services out of compose"
 repo_standard="$SANDBOX/repo_standard"
 sandbox_repo "$repo_standard"
 harness_init "$repo_standard"
-harness_set_preset gps=ubx-uart lidar=ldlidar-uart tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
 
 if harness_run; then
   pass "standard harness_run"

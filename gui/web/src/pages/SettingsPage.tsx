@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Alert, Badge, Button, Input, Spin, Typography } from "antd";
 import {
     ReloadOutlined,
@@ -14,6 +15,8 @@ import { restartRos2 } from "../utils/containers.ts";
 import { useContainerRestart } from "../hooks/useContainerRestart.ts";
 import { SettingsNav } from "../components/settings/SettingsNav.tsx";
 import { HardwareSection } from "../components/settings/HardwareSection.tsx";
+import { DriveMotorSection } from "../components/settings/DriveMotorSection.tsx";
+import { NtripSection } from "../components/settings/NtripSection.tsx";
 import { PositioningSection } from "../components/settings/PositioningSection.tsx";
 import { SensorsSection } from "../components/settings/SensorsSection.tsx";
 import { LocalizationSection } from "../components/settings/LocalizationSection.tsx";
@@ -29,6 +32,7 @@ import { SettingsPreview } from "../components/settings/SettingsPreview.tsx";
 const { Text } = Typography;
 
 export const SettingsPage = () => {
+    const { t } = useTranslation();
     const guiApi = useApi();
     const isMobile = useIsMobile();
     const { colors } = useThemeMode();
@@ -48,16 +52,23 @@ export const SettingsPage = () => {
         handleChange,
         handleBulkChange,
         isSectionDirty,
+        hasDefault,
+        isOverridden,
+        resetToDefault,
         save,
+        savePartialValues,
+        saveAndRestartGps,
+        acceptPersistedValues,
         revert,
+        gpsRestarting,
     } = useSettingsManager();
 
     // Long-running: container restart + rosbridge reconnect. Disable button
     // until ROS2 is reachable again to avoid duplicate-click restart storms.
     const ros2Restart = useContainerRestart({
-        pendingLabel: "Redémarrage ROS2…",
-        successMessage: "ROS2 redémarré",
-        errorMessage: "Échec du redémarrage ROS2",
+        pendingLabel: t('settingsPage.ros2Restarting'),
+        successMessage: t('settingsPage.ros2Restarted'),
+        errorMessage: t('settingsPage.ros2RestartFailed'),
     });
     const handleRestartRos2 = useCallback(
         () => ros2Restart.run(() => restartRos2(guiApi)),
@@ -68,14 +79,46 @@ export const SettingsPage = () => {
         switch (activeSection) {
             case "hardware":
                 return <HardwareSection values={values} onChange={handleChange} onBulkChange={handleBulkChange} />;
+            case "drive_motor":
+                return (
+                    <DriveMotorSection
+                        values={values}
+                        onChange={handleChange}
+                        acceptPersistedValues={acceptPersistedValues}
+                    />
+                );
+            case "ntrip":
+                return <NtripSection values={values} onChange={handleChange} />;
             case "positioning":
-                return <PositioningSection values={values} onChange={handleChange} />;
+                return (
+                    <PositioningSection
+                        values={values}
+                        onChange={handleChange}
+                        isDirty={isDirty}
+                        saving={saving}
+                        gpsRestarting={gpsRestarting}
+                        onSave={save}
+                        onPersistGnssSettings={(settings) => savePartialValues(settings, {
+                            silentSuccess: true,
+                            errorMessage: "Failed to save GNSS settings before running the receiver action",
+                        })}
+                        onSaveAndRestartGps={saveAndRestartGps}
+                    />
+                );
             case "sensors":
                 return <SensorsSection values={values} onChange={handleChange} />;
             case "localization":
                 return <LocalizationSection values={values} onChange={handleChange} />;
             case "mowing":
-                return <MowingSection values={values} onChange={handleChange} />;
+                return (
+                    <MowingSection
+                        values={values}
+                        onChange={handleChange}
+                        isOverridden={isOverridden}
+                        hasDefault={hasDefault}
+                        onReset={resetToDefault}
+                    />
+                );
             case "docking":
                 return <DockingSection values={values} onChange={handleChange} />;
             case "battery":
@@ -83,7 +126,15 @@ export const SettingsPage = () => {
             case "safety":
                 return <SafetySection values={values} onChange={handleChange} />;
             case "navigation":
-                return <NavigationSection values={values} onChange={handleChange} />;
+                return (
+                    <NavigationSection
+                        values={values}
+                        onChange={handleChange}
+                        isOverridden={isOverridden}
+                        hasDefault={hasDefault}
+                        onReset={resetToDefault}
+                    />
+                );
             case "rain":
                 return <RainSection values={values} onChange={handleChange} />;
             case "advanced":
@@ -100,7 +151,7 @@ export const SettingsPage = () => {
     const currentSectionMeta = sections.find((s) => s.id === activeSection);
 
     return (
-        <div style={{ height: isMobile ? "auto" : "calc(100vh - 64px)", display: "flex", flexDirection: "column" }}>
+        <div style={{ minHeight: isMobile ? "auto" : "calc(100vh - 64px)", display: "flex", flexDirection: "column" }}>
             {/* Header bar */}
             <div style={{
                 padding: isMobile ? "12px 12px 0" : "16px 24px 0",
@@ -110,11 +161,10 @@ export const SettingsPage = () => {
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
                     <Input
                         prefix={<SearchOutlined style={{ color: colors.muted }} />}
-                        placeholder="Search settings..."
+                        placeholder={t('settingsPage.searchSettingPlaceholder')}
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         allowClear
-                        size="small"
                         style={{ maxWidth: 280 }}
                     />
                     <div style={{ flex: 1 }} />
@@ -148,12 +198,15 @@ export const SettingsPage = () => {
                 )}
             </div>
 
-            {/* Main content */}
+            {/* Main content. We no longer pin this to a fixed viewport height —
+                the AppShell <main> scrolls the whole page instead, which avoids
+                the calc(100vh - 64px) fragility (mobile URL bars, nested scroll
+                traps). The nav and preview rails are made sticky on desktop so
+                they stay in view while the section content scrolls naturally. */}
             <div style={{
                 flex: 1,
                 display: "flex",
                 flexDirection: isMobile ? "column" : "row",
-                overflow: "hidden",
                 minHeight: 0,
             }}>
                 {/* Navigation */}
@@ -162,7 +215,9 @@ export const SettingsPage = () => {
                     flexShrink: 0,
                     paddingLeft: isMobile ? 0 : 8,
                     overflowX: isMobile ? "auto" : undefined,
-                    overflowY: isMobile ? undefined : "auto",
+                    position: isMobile ? undefined : "sticky",
+                    top: isMobile ? undefined : 8,
+                    alignSelf: isMobile ? undefined : "flex-start",
                 }}>
                     <SettingsNav
                         sections={sections}
@@ -175,9 +230,10 @@ export const SettingsPage = () => {
                 {/* Section content */}
                 <div style={{
                     flex: 1,
-                    overflowY: "auto",
-                    padding: isMobile ? "0 12px 120px" : "0 24px 120px 16px",
-                    minHeight: 0,
+                    // Extra bottom space on mobile so content scrolls clear of the
+                    // fixed save bar (~92px) + bottom nav stacked below it.
+                    padding: isMobile ? "0 12px 180px" : "0 24px 120px 16px",
+                    minWidth: 0,
                 }}>
                     {/* Section header */}
                     {currentSectionMeta && (
@@ -185,12 +241,12 @@ export const SettingsPage = () => {
                             <div className="mn-display" style={{
                                 fontSize: 28, color: colors.text, lineHeight: 1.1, letterSpacing: '-0.01em',
                             }}>
-                                {currentSectionMeta.label}
+                                {t(currentSectionMeta.label)}
                             </div>
                             <div style={{
                                 fontSize: 12, color: colors.textDim, marginTop: 4,
                             }}>
-                                {currentSectionMeta.description}
+                                {t(currentSectionMeta.description)}
                             </div>
                         </div>
                     )}
@@ -203,7 +259,9 @@ export const SettingsPage = () => {
                     <div style={{
                         width: 260, flexShrink: 0,
                         padding: "0 16px 120px 0",
-                        overflowY: "auto",
+                        position: "sticky",
+                        top: 8,
+                        alignSelf: "flex-start",
                     }}>
                         <SettingsPreview values={values} section={activeSection}/>
                     </div>
@@ -213,13 +271,15 @@ export const SettingsPage = () => {
             {/* Fixed save bar */}
             <div style={{
                 position: "fixed",
-                bottom: isMobile ? "calc(56px + env(safe-area-inset-bottom, 0px))" : 0,
+                // Sit above the floating bottom-nav (~85px tall + safe-area) so the
+                // Save bar doesn't collide with / hide behind the nav on mobile.
+                bottom: isMobile ? "calc(env(safe-area-inset-bottom, 0px) + 92px)" : 0,
                 left: isMobile ? 0 : undefined,
                 right: 0,
                 padding: "10px 16px",
                 background: colors.bgCard,
                 borderTop: `1px solid ${colors.border}`,
-                zIndex: 50,
+                zIndex: 51,
                 display: "flex",
                 alignItems: "center",
                 gap: 8,

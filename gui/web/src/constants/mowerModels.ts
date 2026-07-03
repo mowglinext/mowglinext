@@ -9,9 +9,9 @@ export type MowerModel = {
 export const MOWER_MODELS: MowerModel[] = [
     {
         value: "YardForce500",
-        label: "YardForce Classic 500",
-        description: "Most common model. 28V battery, 18cm blade, rear-wheel drive.",
-        tag: "Popular",
+        label: "mowerModels.YardForce500.label",
+        description: "mowerModels.YardForce500.description",
+        tag: "mowerModels.YardForce500.tag",
         defaults: {
             wheel_radius: 0.04475, wheel_track: 0.325, wheel_x_offset: 0.0,
             wheel_width: 0.04, chassis_height: 0.19, chassis_mass_kg: 8.76,
@@ -19,7 +19,7 @@ export const MOWER_MODELS: MowerModel[] = [
             blade_radius: 0.09, tool_width: 0.18, ticks_per_meter: 300,
             battery_full_voltage: 28.5, battery_empty_voltage: 24.0,
             battery_critical_voltage: 23.0,
-            gps_x: 0.173, gps_y: -0.004, gps_z: 0.2,
+            gps_x: 0.3, gps_y: 0.0, gps_z: 0.2,
             imu_x: 0.187, imu_y: -0.195, imu_z: 0.0, imu_yaw: 0.0,
             lidar_x: 0.0, lidar_y: 0.025, lidar_z: 0.1, lidar_yaw: -3.1416,
             chassis_length: 0.54, chassis_width: 0.40, chassis_center_x: 0.18,
@@ -27,8 +27,8 @@ export const MOWER_MODELS: MowerModel[] = [
     },
     {
         value: "YardForce500B",
-        label: "YardForce 500B",
-        description: "500 B variant with different blade motor UART and panel layout.",
+        label: "mowerModels.YardForce500B.label",
+        description: "mowerModels.YardForce500B.description",
         defaults: {
             wheel_radius: 0.04475, wheel_track: 0.325, wheel_x_offset: 0.0,
             wheel_width: 0.04, chassis_height: 0.19, chassis_mass_kg: 8.76,
@@ -36,7 +36,7 @@ export const MOWER_MODELS: MowerModel[] = [
             blade_radius: 0.09, tool_width: 0.18, ticks_per_meter: 300,
             battery_full_voltage: 28.5, battery_empty_voltage: 24.0,
             battery_critical_voltage: 23.0,
-            gps_x: 0.173, gps_y: -0.004, gps_z: 0.2,
+            gps_x: 0.3, gps_y: 0.0, gps_z: 0.2,
             imu_x: 0.187, imu_y: -0.195, imu_z: 0.0, imu_yaw: 0.0,
             lidar_x: 0.0, lidar_y: 0.025, lidar_z: 0.1, lidar_yaw: -3.1416,
             chassis_length: 0.54, chassis_width: 0.40, chassis_center_x: 0.18,
@@ -44,8 +44,8 @@ export const MOWER_MODELS: MowerModel[] = [
     },
     {
         value: "YardForceSA650",
-        label: "YardForce SA650",
-        description: "Larger model (570x390mm) with higher encoder resolution.",
+        label: "mowerModels.YardForceSA650.label",
+        description: "mowerModels.YardForceSA650.description",
         defaults: {
             wheel_radius: 0.04475, wheel_track: 0.325, wheel_x_offset: 0.0,
             wheel_width: 0.04, chassis_height: 0.26, chassis_mass_kg: 9.5,
@@ -60,8 +60,8 @@ export const MOWER_MODELS: MowerModel[] = [
     },
     {
         value: "YardForce900ECO",
-        label: "YardForce 900 ECO",
-        description: "Same chassis as SA650 (570x390mm), larger battery.",
+        label: "mowerModels.YardForce900ECO.label",
+        description: "mowerModels.YardForce900ECO.description",
         defaults: {
             wheel_radius: 0.04475, wheel_track: 0.325, wheel_x_offset: 0.0,
             wheel_width: 0.04, chassis_height: 0.26, chassis_mass_kg: 10.0,
@@ -76,8 +76,8 @@ export const MOWER_MODELS: MowerModel[] = [
     },
     {
         value: "LUV1000RI",
-        label: "YardForce LUV1000RI",
-        description: "574x400mm chassis, narrower wheelbase (0.285m), ultrasonic sensor.",
+        label: "mowerModels.LUV1000RI.label",
+        description: "mowerModels.LUV1000RI.description",
         defaults: {
             wheel_radius: 0.04475, wheel_track: 0.285, wheel_x_offset: 0.0,
             wheel_width: 0.04, chassis_height: 0.282, chassis_mass_kg: 9.0,
@@ -92,8 +92,8 @@ export const MOWER_MODELS: MowerModel[] = [
     },
     {
         value: "Sabo",
-        label: "Sabo MOWiT 500F",
-        description: "Large professional mower (775x535mm), 32cm cutting width.",
+        label: "mowerModels.Sabo.label",
+        description: "mowerModels.Sabo.description",
         defaults: {
             wheel_radius: 0.04475, wheel_track: 0.45, wheel_x_offset: 0.0,
             wheel_width: 0.05, chassis_height: 0.36, chassis_mass_kg: 14.0,
@@ -108,8 +108,8 @@ export const MOWER_MODELS: MowerModel[] = [
     },
     {
         value: "CUSTOM",
-        label: "Custom Robot",
-        description: "Manually configure all hardware parameters for a custom build.",
+        label: "mowerModels.CUSTOM.label",
+        description: "mowerModels.CUSTOM.description",
         defaults: {},
     },
 ];

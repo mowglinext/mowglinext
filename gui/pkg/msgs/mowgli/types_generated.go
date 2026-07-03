@@ -2,8 +2,8 @@
 package mowgli
 
 import (
-	"github.com/cedbossneo/mowglinext/pkg/msgs/geometry"
-	"github.com/cedbossneo/mowglinext/pkg/msgs/nav"
+	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
+	"github.com/mowglinext/mowglinext/pkg/msgs/nav"
 )
 
 // AbsolutePose matches mowgli_interfaces/msg/AbsolutePose.
@@ -80,6 +80,22 @@ type GnssStatus struct {
 	CorrectionAgeS            float32                        `json:"correction_age_s"`
 	MeanCn0DbHz               float32                        `json:"mean_cn0_db_hz"`
 	MaxCn0DbHz                float32                        `json:"max_cn0_db_hz"`
+	DualAntennaBaseline       bool                           `json:"dual_antenna_baseline"`
+	BaselineAzimuthDeg        float32                        `json:"baseline_azimuth_deg"`
+	BaselinePitchDeg          float32                        `json:"baseline_pitch_deg"`
+	BaselineLengthM           float32                        `json:"baseline_length_m"`
+	BaselineSolutionStatus    uint8                          `json:"baseline_solution_status"`
+	CorrectionStreamStatus    uint8                          `json:"correction_stream_status"`
+	MsmSummarySeen            bool                           `json:"msm_summary_seen"`
+	MsmSummaryDecoded         bool                           `json:"msm_summary_decoded"`
+	MsmSummaryValid           bool                           `json:"msm_summary_valid"`
+	MsmSummaryMessageType     uint16                         `json:"msm_summary_message_type"`
+	MsmSummaryStationId       uint16                         `json:"msm_summary_station_id"`
+	MsmSummaryConstellationsSeen string                         `json:"msm_summary_constellations_seen"`
+	MsmSummarySatelliteCount  uint16                         `json:"msm_summary_satellite_count"`
+	MsmSummarySignalCount     uint16                         `json:"msm_summary_signal_count"`
+	MsmSummaryCellCount       uint16                         `json:"msm_summary_cell_count"`
+	MsmSummaryAgeS            float32                        `json:"msm_summary_age_s"`
 }
 
 // HighLevelStatus matches mowgli_interfaces/msg/HighLevelStatus.
@@ -141,6 +157,8 @@ type Power struct {
 type Status struct {
 	Stamp                     geometry.Stamp                 `json:"stamp"`
 	MowerStatus               uint8                          `json:"mower_status"`
+	ResetCause                uint8                          `json:"reset_cause"`
+	ResetCauseName            string                         `json:"reset_cause_name"`
 	RaspberryPiPower          bool                           `json:"raspberry_pi_power"`
 	IsCharging                bool                           `json:"is_charging"`
 	EscPower                  bool                           `json:"esc_power"`
@@ -149,11 +167,15 @@ type Status struct {
 	SoundModuleBusy           bool                           `json:"sound_module_busy"`
 	UiBoardAvailable          bool                           `json:"ui_board_available"`
 	MowEnabled                bool                           `json:"mow_enabled"`
+	FirmwareDebugEnabled      bool                           `json:"firmware_debug_enabled"`
 	MowerEscStatus            uint8                          `json:"mower_esc_status"`
 	MowerEscTemperature       float32                        `json:"mower_esc_temperature"`
 	MowerEscCurrent           float32                        `json:"mower_esc_current"`
 	MowerMotorTemperature     float32                        `json:"mower_motor_temperature"`
 	MowerMotorRpm             float32                        `json:"mower_motor_rpm"`
+	FirmwareVersion           string                         `json:"firmware_version"`
+	FirmwareProtocolVersion   uint8                          `json:"firmware_protocol_version"`
+	FirmwareCompatible        bool                           `json:"firmware_compatible"`
 }
 
 // TrackedObstacle matches mowgli_interfaces/msg/TrackedObstacle.
@@ -170,7 +192,7 @@ type TrackedObstacle struct {
 // WheelTick matches mowgli_interfaces/msg/WheelTick.
 type WheelTick struct {
 	Stamp                     geometry.Stamp                 `json:"stamp"`
-	WheelTickFactor           uint32                         `json:"wheel_tick_factor"`
+	WheelTickFactor           float32                        `json:"wheel_tick_factor"`
 	ValidWheels               uint8                          `json:"valid_wheels"`
 	WheelDirectionFl          uint8                          `json:"wheel_direction_fl"`
 	WheelTicksFl              uint32                         `json:"wheel_ticks_fl"`

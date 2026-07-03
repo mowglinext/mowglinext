@@ -1,4 +1,5 @@
 import {useCallback, useRef, useState} from "react";
+import {useTranslation} from "react-i18next";
 import union from "@turf/union";
 import difference from "@turf/difference";
 import {featureCollection} from "@turf/helpers";
@@ -60,11 +61,24 @@ export function getCutterBetween(
 
 /**
  * Point-in-polygon test using a ray-casting algorithm.
- * Tests whether `currentLayerCoordinates` (a ring) lies inside `areaCoordinates`.
+ * Tests whether `currentLayerCoordinates` (an obstacle ring) lies inside
+ * `areaCoordinates` by testing the ring's centroid — NOT a single vertex.
+ * Testing only one corner (the old behaviour) mis-parented obstacles whose
+ * tested vertex fell outside a concave parent boundary.
  */
 export function inside(
     currentLayerCoordinates: Position[], areaCoordinates: Position[]
 ): boolean {
+    if (!currentLayerCoordinates || currentLayerCoordinates.length === 0) return false;
+    // Representative interior point of the obstacle ring (its centroid).
+    let cx = 0, cy = 0;
+    for (const p of currentLayerCoordinates) {
+        cx += p[0];
+        cy += p[1];
+    }
+    cx /= currentLayerCoordinates.length;
+    cy /= currentLayerCoordinates.length;
+
     let isInside = false;
     let j = areaCoordinates.length - 1;
     for (let i = 0; i < areaCoordinates.length; i++) {
@@ -74,9 +88,8 @@ export function inside(
         const yj = areaCoordinates[j][1];
 
         const intersect =
-            (yi > currentLayerCoordinates[1][1]) !== (yj > currentLayerCoordinates[1][1]) &&
-            currentLayerCoordinates[1][0] <
-                ((xj - xi) * (currentLayerCoordinates[1][1] - yi)) / (yj - yi) + xi;
+            (yi > cy) !== (yj > cy) &&
+            cx < ((xj - xi) * (cy - yi)) / (yj - yi) + xi;
         if (intersect) isInside = !isInside;
         j = i;
     }
@@ -255,6 +268,8 @@ export function useMapEditing({
     notification,
     mapInstanceRef,
 }: UseMapEditingOptions): UseMapEditingReturn {
+    const {t} = useTranslation();
+
     // -----------------------------------------------------------------------
     // State
     // -----------------------------------------------------------------------
@@ -343,7 +358,7 @@ export function useMapEditing({
                 });
                 if (!area) {
                     notification.info({
-                        message: "Unable to match an area for this obstacle",
+                        message: t('mapEditing.unableToMatchAreaForObstacle'),
                     });
                     return null;
                 }
@@ -375,7 +390,7 @@ export function useMapEditing({
                 !(targetFeat instanceof MowingFeatureBase) ||
                 targetFeat.geometry.type !== "Polygon"
             ) {
-                notification.error({message: "Split target is not a valid polygon"});
+                notification.error({message: t('mapEditing.splitTargetNotValidPolygon')});
                 return;
             }
 
@@ -445,8 +460,7 @@ export function useMapEditing({
 
                 if (hits.length < 2) {
                     notification.error({
-                        message:
-                            "Line must cross the area at least twice to split it",
+                        message: t('mapEditing.lineMustCrossTwice'),
                     });
                     return;
                 }
@@ -516,8 +530,7 @@ export function useMapEditing({
                             );
                             if (!parentArea) {
                                 notification.error({
-                                    message:
-                                        "No parent area found for obstacle split",
+                                    message: t('mapEditing.noParentAreaForObstacleSplit'),
                                 });
                                 return curr;
                             }
@@ -527,7 +540,7 @@ export function useMapEditing({
                         }
                         default:
                             notification.error({
-                                message: `Unknown type ${areaType}`,
+                                message: t('mapEditing.unknownType', {type: areaType}),
                             });
                             return curr;
                     }
@@ -552,16 +565,16 @@ export function useMapEditing({
                         drawRef.current.add(drawFeat);
                     }
                 }
-                notification.success({message: "Area split into 2 pieces"});
+                notification.success({message: t('mapEditing.areaSplitIntoTwo')});
             } catch (err) {
                 notification.error({
-                    message: `Split failed: ${
-                        err instanceof Error ? err.message : String(err)
-                    }`,
+                    message: t('mapEditing.splitFailed', {
+                        error: err instanceof Error ? err.message : String(err),
+                    }),
                 });
             }
         },
-        [features, mowingAreas.length, notification, setFeatures, drawRef]
+        [features, mowingAreas.length, notification, setFeatures, drawRef, t]
     );
 
     // -----------------------------------------------------------------------
@@ -631,7 +644,7 @@ export function useMapEditing({
                 coordinates.geometry.type !== "Polygon"
             ) {
                 notification.error({
-                    message: "Unable to combine areas. Do they overlap?",
+                    message: t('mapEditing.unableToCombineAreas'),
                 });
                 setFeatures({...features}); // revert
                 return;
@@ -679,8 +692,7 @@ export function useMapEditing({
                         });
                         if (!area) {
                             notification.info({
-                                message:
-                                    "Unable to match an area for this obstacle",
+                                message: t('mapEditing.unableToMatchAreaForObstacle'),
                             });
                             return features; // revert
                         }
@@ -690,7 +702,7 @@ export function useMapEditing({
                     }
                     default:
                         notification.error({
-                            message: `Unknown type ${areaType}`,
+                            message: t('mapEditing.unknownType', {type: areaType}),
                         });
                         return features; // revert
                 }
@@ -706,7 +718,7 @@ export function useMapEditing({
                 return newFeatures;
             });
         },
-        [features, mowingAreas.length, notification, setFeatures]
+        [features, mowingAreas.length, notification, setFeatures, t]
     );
 
     const onDelete = useCallback(
@@ -744,7 +756,7 @@ export function useMapEditing({
                 ftype !== "navigation" &&
                 ftype !== "obstacle"
             ) {
-                notification.info({message: "Unable to edit this feature"});
+                notification.info({message: t('mapEditing.unableToEditFeature')});
                 return;
             }
             setCurMowingAreaFeature({
@@ -758,7 +770,7 @@ export function useMapEditing({
             } as MowingAreaEdit);
             setAreaModelOpen(true);
         },
-        [notification]
+        [notification, t]
     );
 
     // -----------------------------------------------------------------------
@@ -849,7 +861,7 @@ export function useMapEditing({
 
         const outline = emojiToPolygon(emoji);
         if (!outline || outline.length < 4) {
-            notification.error({message: "Could not trace a shape from this emoji"});
+            notification.error({message: t('mapEditing.couldNotTraceShapeFromEmoji')});
             return;
         }
 
@@ -881,7 +893,7 @@ export function useMapEditing({
                 setModalOpen(true);
             }
         }
-    }, [drawRef, mapInstanceRef, notification]);
+    }, [drawRef, mapInstanceRef, notification, t]);
 
     const handleTrash = useCallback(() => {
         drawRef.current?.trash();
@@ -902,7 +914,7 @@ export function useMapEditing({
 
     const handleSubtract = useCallback(() => {
         if (selectedFeatureIds.length !== 2) {
-            notification.info({message: "Select exactly 2 areas to subtract"});
+            notification.info({message: t('mapEditing.selectExactlyTwoToSubtract')});
             return;
         }
         const [keepId, cutId] = selectedFeatureIds;
@@ -915,7 +927,7 @@ export function useMapEditing({
             !(cutFeat instanceof MowingFeatureBase)
         ) {
             notification.error({
-                message: "Both selections must be polygon areas",
+                message: t('mapEditing.bothSelectionsMustBePolygons'),
             });
             return;
         }
@@ -925,8 +937,7 @@ export function useMapEditing({
         );
         if (!result || result.geometry.type !== "Polygon") {
             notification.error({
-                message:
-                    "Subtract failed — areas may not overlap, or result is not a simple polygon",
+                message: t('mapEditing.subtractFailed'),
             });
             return;
         }
@@ -950,24 +961,24 @@ export function useMapEditing({
                 featureIds: [keepId],
             });
         }
-        notification.success({message: "Area subtracted"});
-    }, [selectedFeatureIds, features, notification, setFeatures, drawRef]);
+        notification.success({message: t('mapEditing.areaSubtracted')});
+    }, [selectedFeatureIds, features, notification, setFeatures, drawRef, t]);
 
     const handleSplit = useCallback(() => {
         if (selectedFeatureIds.length !== 1) {
-            notification.info({message: "Select exactly 1 area to split"});
+            notification.info({message: t('mapEditing.selectExactlyOneToSplit')});
             return;
         }
         const targetId = selectedFeatureIds[0];
         const feat = features[targetId];
         if (!feat || !(feat instanceof MowingFeatureBase)) {
-            notification.error({message: "Selection must be a polygon area"});
+            notification.error({message: t('mapEditing.selectionMustBePolygon')});
             return;
         }
         setSplitTargetId(targetId);
-        notification.info({message: "Draw a line across the area to split it"});
+        notification.info({message: t('mapEditing.drawLineAcrossArea')});
         drawRef.current?.changeMode("split_line" as any);
-    }, [selectedFeatureIds, features, notification, drawRef]);
+    }, [selectedFeatureIds, features, notification, drawRef, t]);
 
     // -----------------------------------------------------------------------
     // Modal handlers

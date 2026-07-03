@@ -6,6 +6,7 @@ import {App, ConfigProvider, theme} from "antd";
 import {Spinner} from "./components/Spinner.tsx";
 import {ThemeProvider, useThemeMode} from "./theme/ThemeContext.tsx";
 import {NotificationCenterProvider} from "./hooks/useNotificationCenter.tsx";
+import "./i18n";
 
 // Lazy-load each page so the first paint only ships the shell + the route
 // the user actually opens. Everything else streams in on demand.
@@ -17,15 +18,16 @@ const OnboardingPage   = React.lazy(() => import("./pages/OnboardingPage.tsx"));
 const SchedulePage     = React.lazy(() => import("./pages/SchedulePage.tsx"));
 const DiagnosticsPage  = React.lazy(() => import("./pages/DiagnosticsPage.tsx"));
 const StatisticsPage   = React.lazy(() => import("./pages/StatisticsPage.tsx"));
+const ParametersPage   = React.lazy(() => import("./pages/ParametersPage.tsx"));
 const ConceptRoot      = React.lazy(() => import("./concept/ConceptRoot.tsx"));
 
 const router = createHashRouter([
-    {
-        // Standalone premium concept -- lives outside the AntD chrome so
-        // its tokens + CSS don't fight with the operator app.
+    // Standalone design-concept playground. It is 100% mocked data, so it is
+    // only mounted in dev builds and never ships to the robot.
+    ...(import.meta.env.DEV ? [{
         path: "/concept",
         element: <ConceptRoot/>,
-    },
+    }] : []),
     {
         path: "/",
         element: <AppShell/>,
@@ -61,6 +63,10 @@ const router = createHashRouter([
             {
                 element: <StatisticsPage/>,
                 path: "/statistics",
+            },
+            {
+                element: <ParametersPage/>,
+                path: "/parameters",
             }
         ]
     },

@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cedbossneo/mowglinext/pkg/foxglove"
-	"github.com/cedbossneo/mowglinext/pkg/msgs/mowgli"
-	types2 "github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/foxglove"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	types2 "github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/sirupsen/logrus"
 )
 
@@ -17,8 +17,8 @@ import (
 // The frontend and internal routes always use logical keys; the ROS2 topic name
 // is only used when sending the foxglove subscribe op.
 type topicDef struct {
-	ROS2Topic  string
-	MsgType    string
+	ROS2Topic string
+	MsgType   string
 }
 
 // topicMap maps logical keys (used by SubscriberRoute and internal code) to
@@ -26,10 +26,10 @@ type topicDef struct {
 // Virtual topics (map) have an empty MsgType and are never sent to
 // foxglove_bridge; they are populated by internal logic instead.
 var topicMap = map[string]topicDef{
-	"status":              {"/hardware_bridge/status", "mowgli_interfaces/msg/Status"},
-	"highLevelStatus":     {"/behavior_tree_node/high_level_status", "mowgli_interfaces/msg/HighLevelStatus"},
-	"gps":                 {"/gps/absolute_pose", "mowgli_interfaces/msg/AbsolutePose"},
-	"gnssStatus":          {"/gps/status", "mowgli_interfaces/msg/GnssStatus"},
+	"status":          {"/hardware_bridge/status", "mowgli_interfaces/msg/Status"},
+	"highLevelStatus": {"/behavior_tree_node/high_level_status", "mowgli_interfaces/msg/HighLevelStatus"},
+	"gps":             {"/gps/fix", "sensor_msgs/msg/NavSatFix"},
+	"gnssStatus":      {"/gps/status", "mowgli_interfaces/msg/GnssStatus"},
 	// The robot's global pose comes from fusion_graph_node, the sole
 	// map-frame localizer. "pose" and "fusionRaw" both point at
 	// /odometry/filtered_map; the duplicate key is kept for backwards
@@ -41,24 +41,29 @@ var topicMap = map[string]topicDef{
 	"imu":                 {"/imu/data", "sensor_msgs/msg/Imu"},
 	"ticks":               {"/wheel_ticks", "mowgli_interfaces/msg/WheelTick"},
 	"wheelOdom":           {"/wheel_odom", "nav_msgs/msg/Odometry"},
-	"map":                 {"", ""},                                                            // virtual – populated via map_server services
-	"path":                {"/controller_server/FollowCoveragePath/global_plan", "nav_msgs/msg/Path"}, // coverage plan
-	"plan":                {"/plan", "nav_msgs/msg/Path"},                                      // infrequent event
-	"coverageCells":       {"/map_server_node/coverage_cells", "nav_msgs/msg/OccupancyGrid"},   // large message
+	"map":                 {"", ""},                                     // virtual – populated via map_server services
+	"path":                {"/coverage/full_plan", "nav_msgs/msg/Path"}, // full F2C coverage plan (headland + all swaths; execution is swath-by-swath)
+	"plan":                {"/plan", "nav_msgs/msg/Path"},               // infrequent event
 	"power":               {"/hardware_bridge/power", "mowgli_interfaces/msg/Power"},
-	"emergency":           {"/hardware_bridge/emergency", "mowgli_interfaces/msg/Emergency"},   // safety-critical
-	"lidar":               {"/scan", "sensor_msgs/msg/LaserScan"},                              // large message
+	"emergency":           {"/hardware_bridge/emergency", "mowgli_interfaces/msg/Emergency"}, // safety-critical
+	"lidar":               {"/scan", "sensor_msgs/msg/LaserScan"},                            // large message
+	"mowProgress":         {"/map_server_node/mow_progress", "nav_msgs/msg/OccupancyGrid"},   // mowed-area overlay (large)
 	"diagnostics":         {"/diagnostics", "diagnostic_msgs/msg/DiagnosticArray"},
 	"fusionDiag":          {"/fusion_graph/diagnostics", "diagnostic_msgs/msg/DiagnosticArray"},
+	"icpOdom":             {"/fusion_graph/icp_odometry", "nav_msgs/msg/Odometry"}, // LiDAR-only odom (ICP monitor)
 	"obstacles":           {"/obstacle_tracker/obstacles", "mowgli_interfaces/msg/ObstacleArray"},
-	"robotDescription":    {"/robot_description", "std_msgs/msg/String"},                       // published once
-	"recordingTrajectory": {"/behavior_tree_node/recording_trajectory", "nav_msgs/msg/Path"},   // area recording preview
+	"robotDescription":    {"/robot_description", "std_msgs/msg/String"},                     // published once
+	"recordingTrajectory": {"/behavior_tree_node/recording_trajectory", "nav_msgs/msg/Path"}, // area recording preview
+	// Latched std_msgs/Bool: true when a prior interrupted mow can be resumed, so
+	// the GUI offers "Resume" vs "Start fresh" instead of silently resuming (the
+	// "starts at 2nd/3rd line" report).
+	"coverageResumeAvailable": {"/behavior_tree_node/coverage_resume_available", "std_msgs/msg/Bool"},
 	// Synthetic heading sources fused by fusion_graph_node as yaw unary
 	// factors. Both carry sensor_msgs/Imu with only `orientation` and
 	// `orientation_covariance[8]` populated — see cog_to_imu.py and
 	// mag_yaw_publisher.py in mowgli_localization.
-	"cogHeading":          {"/imu/cog_heading", "sensor_msgs/msg/Imu"},
-	"magYaw":              {"/imu/mag_yaw", "sensor_msgs/msg/Imu"},
+	"cogHeading": {"/imu/cog_heading", "sensor_msgs/msg/Imu"},
+	"magYaw":     {"/imu/mag_yaw", "sensor_msgs/msg/Imu"},
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +171,8 @@ func (r *RosSubscriber) run() {
 // and /wheel_odom no longer chew CPU when the browser is closed and the
 // optional MQTT/HomeKit providers are disabled.
 type RosProvider struct {
-	client *foxglove.Client
+	client      *foxglove.Client
+	cmdVelRelay *cmdVelRelayClient
 
 	mtx                sync.Mutex
 	subscribers        map[string]map[string]*RosSubscriber // logicalKey -> id -> subscriber
@@ -189,7 +195,10 @@ type RosProvider struct {
 // the foxglove client and the fanOut. Topics absent from this map are
 // forwarded as-is (snake_case JSON from CDR deserialization).
 var foxgloveAdapters = map[string]func([]byte) ([]byte, error){
-	"pose": adaptPose,
+	"gps":        adaptGPS,
+	"gnssStatus": adaptGnssStatus,
+	"pose":       adaptPose,
+	"lidar":      adaptLidar,
 }
 
 // upstreamDecimationMs caps the rate at which high-frequency topics are
@@ -222,8 +231,11 @@ func NewRosProvider(dbProvider types2.IDBProvider) types2.IRosProvider {
 		foxgloveURL = string(url)
 	}
 
+	cmdVelRelayURL := "ws://localhost:8766"
+
 	r := &RosProvider{
 		client:             foxglove.NewClient(foxgloveURL),
+		cmdVelRelay:        newCmdVelRelayClient(cmdVelRelayURL),
 		subscribers:        make(map[string]map[string]*RosSubscriber),
 		lastMessage:        make(map[string][]byte),
 		foxgloveSubscribed: make(map[string]bool),
@@ -313,10 +325,13 @@ func (r *RosProvider) fanOut(logicalKey string, msg []byte) {
 	for _, sub := range r.subscribers[logicalKey] {
 		sub.Publish(msg)
 	}
-	// Track mowing sessions from high-level status transitions
+	// Track mowing sessions from high-level status transitions. Enqueue to the
+	// tracker's single-consumer goroutine so transitions are applied in arrival
+	// order (a goroutine-per-message could reorder rapid MOWING->CHARGING->IDLE
+	// bursts and corrupt the session state machine).
 	if logicalKey == "highLevelStatus" && r.sessionTracker != nil {
 		msgCopy := append([]byte(nil), msg...)
-		go r.sessionTracker.OnHighLevelStatus(msgCopy)
+		r.sessionTracker.Enqueue(msgCopy)
 	}
 }
 
@@ -326,7 +341,7 @@ func (r *RosProvider) fanOut(logicalKey string, msg []byte) {
 func (r *RosProvider) initDockPoseSubscription() {
 	type rawPoseStamped struct {
 		Pose struct {
-			Position    struct{ X, Y, Z float64 } `json:"position"`
+			Position    struct{ X, Y, Z float64 }    `json:"position"`
 			Orientation struct{ X, Y, Z, W float64 } `json:"orientation"`
 		} `json:"pose"`
 	}
@@ -442,7 +457,6 @@ func (r *RosProvider) pollMap() {
 	r.fanOut("map", data)
 }
 
-
 // ---------------------------------------------------------------------------
 // IRosProvider implementation
 // ---------------------------------------------------------------------------
@@ -514,7 +528,49 @@ func (r *RosProvider) UnSubscribe(topic string, id string) {
 	}
 }
 
-// Publish sends msg to the named ROS2 topic via foxglove_bridge.
+// Publish sends msg to the named ROS2 topic. For /cmd_vel_teleop the relay
+// client (port 8766) is preferred over foxglove_bridge: it delivers JSON
+// directly to rclpy without JSON→CDR conversion overhead or the shared-
+// connection head-of-line blocking that causes manual mowing lag. If the
+// relay is not yet connected (e.g., early startup), it falls back to
+// foxglove_bridge so the first manual commands still reach the robot.
 func (r *RosProvider) Publish(topic string, msgType string, msg interface{}) error {
+	if topic == "/cmd_vel_teleop" && r.cmdVelRelay.Connected() {
+		return r.cmdVelRelay.Send(msg)
+	}
 	return r.client.Publish(topic, msg, msgType)
+}
+
+// GetParameters lists ROS2 parameters via the foxglove bridge.
+func (r *RosProvider) GetParameters(ctx context.Context, names []string) ([]types2.RosParameter, error) {
+	params, err := r.client.GetParameters(ctx, names)
+	if err != nil {
+		return nil, err
+	}
+	return fromFoxgloveParams(params), nil
+}
+
+// SetParameters updates ROS2 parameters live via the foxglove bridge.
+func (r *RosProvider) SetParameters(ctx context.Context, params []types2.RosParameter) ([]types2.RosParameter, error) {
+	echoed, err := r.client.SetParameters(ctx, toFoxgloveParams(params))
+	if err != nil {
+		return nil, err
+	}
+	return fromFoxgloveParams(echoed), nil
+}
+
+func fromFoxgloveParams(in []foxglove.Parameter) []types2.RosParameter {
+	out := make([]types2.RosParameter, len(in))
+	for i, p := range in {
+		out[i] = types2.RosParameter{Name: p.Name, Value: p.Value, Type: p.Type}
+	}
+	return out
+}
+
+func toFoxgloveParams(in []types2.RosParameter) []foxglove.Parameter {
+	out := make([]foxglove.Parameter, len(in))
+	for i, p := range in {
+		out[i] = foxglove.Parameter{Name: p.Name, Value: p.Value, Type: p.Type}
+	}
+	return out
 }

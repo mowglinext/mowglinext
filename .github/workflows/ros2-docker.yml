@@ -7,6 +7,7 @@ on:
       - "v*.*.*"
     paths:
       - 'ros2/**'
+      - 'tools/motor/**'
       - '.github/workflows/ros2-docker.yml'
   workflow_dispatch:
     inputs:
@@ -72,7 +73,8 @@ jobs:
         id: build
         uses: docker/build-push-action@v7
         with:
-          context: ./ros2
+          context: .
+          file: ./ros2/Dockerfile
           target: ${{ matrix.target }}
           platforms: ${{ matrix.arch }}
           build-args: |
@@ -84,6 +86,20 @@ jobs:
           outputs: type=image,name=${{ env.IMAGE_NAME }}${{ matrix.suffix }},push-by-digest=true,name-canonical=true,push=true
           provenance: true
           sbom: true
+
+      - name: Smoke test runtime image
+        run: |
+          image="${{ env.IMAGE_NAME }}${{ matrix.suffix }}@${{ steps.build.outputs.digest }}"
+          docker run --rm "$image" bash -lc '
+            set -euo pipefail
+            ros2 pkg prefix mowgli_bringup
+            ros2 pkg prefix mowgli_tools
+            ros2 run mowgli_tools tune_drive_pid --help > /tmp/mowgli_tools_help.txt
+            grep -q "Controlled drive PID tuning" /tmp/mowgli_tools_help.txt
+            ros2 launch mowgli_bringup full_system.launch.py --show-args \
+              > /tmp/full_system_show_args.txt
+            ! grep -q use_universal_gnss /tmp/full_system_show_args.txt
+          '
 
       - name: Export digest
         run: |

@@ -29,6 +29,7 @@
 #include "nav2_msgs/action/back_up.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav2_msgs/srv/clear_entire_costmap.hpp"
+#include "nav2_msgs/srv/manage_lifecycle_nodes.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_srvs/srv/empty.hpp"
@@ -102,6 +103,56 @@ public:
 private:
   rclcpp::Client<nav2_msgs::srv::ClearEntireCostmap>::SharedPtr global_client_;
   rclcpp::Client<nav2_msgs::srv::ClearEntireCostmap>::SharedPtr local_client_;
+};
+
+// ---------------------------------------------------------------------------
+// SetNav2Lifecycle
+// ---------------------------------------------------------------------------
+
+/// PAUSEs or RESUMEs the Nav2 lifecycle stack via
+/// /lifecycle_manager_navigation/manage_nodes, to drop idle CPU/thermal
+/// load while the robot sits docked. The whole Nav2 navigation group
+/// (controller/planner/smoother/behaviors/bt_navigator/waypoint/docking/
+/// coverage/collision_monitor) is otherwise kept fully active and looping
+/// its costmaps even while parked — on the Pi 4 that is the dominant idle
+/// thermal cost (triaged 2026-06-16).
+///
+/// SAFETY: pausing the navigation group also deactivates collision_monitor,
+/// so PAUSE is gated on charger_enabled — it only fires when the robot is
+/// physically on the dock, where it cannot move (motors coast at zero, no
+/// cmd_vel is issued in IDLE) and the firmware remains the sole safety
+/// authority. RESUME is wired as a root guard that runs before any motion
+/// branch, and the existing Nav2ReadyPoll in MowingSequence blocks all
+/// motion until lifecycle_manager reports active — so collision_monitor is
+/// always active again before the robot can drive.
+///
+/// Behaviour is gated behind the idle_nav2_suspend blackboard flag
+/// (default false): when disabled this node is a pure no-op (a single
+/// blackboard read, no service call). The node tracks ctx->nav2_suspended
+/// so a manage_nodes request is only sent on an actual transition — RESUME
+/// when already active, or a redundant PAUSE, costs nothing.
+///
+/// Input ports:
+///   - command: "PAUSE" or "RESUME"
+class SetNav2Lifecycle : public BT::SyncActionNode
+{
+public:
+  SetNav2Lifecycle(const std::string& name, const BT::NodeConfig& config)
+      : BT::SyncActionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {
+        BT::InputPort<std::string>("command", "PAUSE or RESUME"),
+    };
+  }
+
+  BT::NodeStatus tick() override;
+
+private:
+  rclcpp::Client<nav2_msgs::srv::ManageLifecycleNodes>::SharedPtr client_;
 };
 
 // ---------------------------------------------------------------------------

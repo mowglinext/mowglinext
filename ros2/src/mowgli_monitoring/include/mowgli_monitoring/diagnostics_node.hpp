@@ -153,6 +153,8 @@ std::string level_name(uint8_t level);
  * battery_error_pct    double  10.0   %  — battery ERROR level
  * motor_temp_warn_c    double  60.0   °C — ESC/motor WARN temperature
  * motor_temp_error_c   double  80.0   °C — ESC/motor ERROR temperature
+ * lidar_enabled        bool    false     — gate the LiDAR /scan health check; when
+ *                                          false, report OK "LiDAR disabled"
  */
 class DiagnosticsNode : public rclcpp::Node
 {
@@ -232,6 +234,7 @@ private:
   double battery_error_pct_{10.0};
   double motor_temp_warn_c_{60.0};
   double motor_temp_error_c_{80.0};
+  bool lidar_enabled_{false};
 
   // ---- State snapshot -------------------------------------------------------
 

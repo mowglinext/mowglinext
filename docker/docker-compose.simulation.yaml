@@ -27,8 +27,8 @@ services:
   simulation:
     container_name: mowgli_simulation
     build:
-      context: ../ros2
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: ros2/Dockerfile
       target: simulation
     network_mode: host
     ipc: host
@@ -55,8 +55,8 @@ services:
   dev-sim:
     container_name: mowgli_dev_sim
     build:
-      context: ../ros2
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: ros2/Dockerfile
       target: simulation
     network_mode: host
     ipc: host
@@ -95,8 +95,8 @@ services:
   simulation-gui:
     container_name: mowgli_sim_gui
     build:
-      context: ../ros2
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: ros2/Dockerfile
       target: simulation
     network_mode: host
     ipc: host

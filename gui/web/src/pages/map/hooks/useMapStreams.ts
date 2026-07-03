@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { Map as MapboxMap } from "mapbox-gl";
 import { useWS } from "../../../hooks/useWS.ts";
 import { useHighLevelStatus } from "../../../hooks/useHighLevelStatus.ts";
@@ -21,23 +21,23 @@ import {
 import { drawLine, drawRobotSilhouette, transpose } from "../../../utils/map.tsx";
 import { useRobotDescription } from "../../../hooks/useRobotDescription.ts";
 
-type CoverageCellsImage = {
+export type MowProgressImage = {
     url: string;
     coordinates: [[number, number], [number, number], [number, number], [number, number]];
 };
 
-// Rasterize an OccupancyGrid to a Mapbox image source. This is the single most
-// expensive per-message operation in the map view (allocates a width×height
-// canvas, loops every cell, then PNG+base64-encodes the whole thing via
-// toDataURL) — 50-300 ms on a big map. It is intentionally a free function so
-// it captures nothing and is only ever invoked from a coalesced rAF (never on
-// the WebSocket message handler), so a burst of grids can't stall the pump.
-function renderCoverageCells(
+// Rasterize the mow-progress OccupancyGrid (100 = mowed, 0 = unmowed) to a
+// Mapbox image source. This is the single most expensive per-message operation
+// in the map view (allocates a width×height canvas, loops every cell, then
+// PNG+base64-encodes the whole thing via toDataURL). It is a free function so it
+// captures nothing and is only ever invoked from a coalesced rAF, never on the
+// WebSocket message handler — so a burst of grids can't stall the pump.
+function renderMowProgress(
     grid: OccupancyGrid,
     offsetX: number,
     offsetY: number,
     datum: [number, number, number],
-    setCoverageCellsImage: (v: CoverageCellsImage | null) => void,
+    setImage: (v: MowProgressImage | null) => void,
 ) {
     if (!grid.info || !grid.data) return;
     const width = grid.info.width ?? 0;
@@ -56,35 +56,17 @@ function renderCoverageCells(
     const imageData = ctx.createImageData(width, height);
     for (let row = 0; row < height; row++) {
         for (let col = 0; col < width; col++) {
-            // OccupancyGrid row 0 = bottom, canvas row 0 = top -> flip vertically
+            // OccupancyGrid row 0 = bottom, canvas row 0 = top -> flip vertically.
             const gridIdx = row * width + col;
             const canvasIdx = ((height - 1 - row) * width + col) * 4;
-            const val = grid.data[gridIdx];
-
-            if (val === 60) {
-                // To-mow: light green
-                imageData.data[canvasIdx] = 100;
-                imageData.data[canvasIdx + 1] = 220;
-                imageData.data[canvasIdx + 2] = 100;
-                imageData.data[canvasIdx + 3] = 140;
-            } else if (val === 80) {
-                // LAWN_DEAD: amber so the operator can tell it apart from a real
-                // sensed obstacle (red, 100). Decays back to to-mow if cleared.
-                imageData.data[canvasIdx] = 230;
-                imageData.data[canvasIdx + 1] = 160;
-                imageData.data[canvasIdx + 2] = 50;
+            if (grid.data[gridIdx] >= 100) {
+                // Mowed: translucent lime overlay.
+                imageData.data[canvasIdx] = 124;
+                imageData.data[canvasIdx + 1] = 255;
+                imageData.data[canvasIdx + 2] = 178;
                 imageData.data[canvasIdx + 3] = 150;
-            } else if (val === 100) {
-                // Obstacle: red
-                imageData.data[canvasIdx] = 255;
-                imageData.data[canvasIdx + 1] = 60;
-                imageData.data[canvasIdx + 2] = 60;
-                imageData.data[canvasIdx + 3] = 160;
             } else {
-                // 0 (mowed), -1 (unknown), anything else: transparent
-                imageData.data[canvasIdx] = 0;
-                imageData.data[canvasIdx + 1] = 0;
-                imageData.data[canvasIdx + 2] = 0;
+                // Unmowed / unknown: transparent.
                 imageData.data[canvasIdx + 3] = 0;
             }
         }
@@ -93,17 +75,13 @@ function renderCoverageCells(
 
     const gridWidth = width * resolution;
     const gridHeight = height * resolution;
+    // Mapbox image source coords: [top-left, top-right, bottom-right, bottom-left].
+    const topLeft = transpose(offsetX, offsetY, datum, originY + gridHeight, originX);
+    const topRight = transpose(offsetX, offsetY, datum, originY + gridHeight, originX + gridWidth);
+    const bottomRight = transpose(offsetX, offsetY, datum, originY, originX + gridWidth);
+    const bottomLeft = transpose(offsetX, offsetY, datum, originY, originX);
 
-    // Mapbox image source coordinates: [top-left, top-right, bottom-right, bottom-left]
-    const topLeft = transpose(offsetX, offsetY, datum, originY + gridHeight, originX) as [number, number];
-    const topRight = transpose(offsetX, offsetY, datum, originY + gridHeight, originX + gridWidth) as [number, number];
-    const bottomRight = transpose(offsetX, offsetY, datum, originY, originX + gridWidth) as [number, number];
-    const bottomLeft = transpose(offsetX, offsetY, datum, originY, originX) as [number, number];
-
-    setCoverageCellsImage({
-        url: canvas.toDataURL(),
-        coordinates: [topLeft, topRight, bottomRight, bottomLeft],
-    });
+    setImage({url: canvas.toDataURL(), coordinates: [topLeft, topRight, bottomRight, bottomLeft]});
 }
 
 interface UseMapStreamsOptions {
@@ -139,14 +117,11 @@ export function useMapStreams({
         features: [],
     });
     const [dynamicObstacles, setDynamicObstacles] = useState<TrackedObstacle[]>([]);
-    const [coverageCellsImage, setCoverageCellsImage] = useState<CoverageCellsImage | null>(null);
-
-    // Coalescing buffer for coverage-cell rasterization: the latest grid waits
-    // here and is rendered once per animation frame (see coverageCellsStream).
-    const coveragePendingRef = React.useRef<
-        { grid: OccupancyGrid; offsetX: number; offsetY: number; datum: [number, number, number] } | null
-    >(null);
-    const coverageRafRef = React.useRef<number | null>(null);
+    // Debounce timer for tearing down the teleop joy stream. A single stray
+    // non-MANUAL_MOWING/non-RECORDING frame (guard blip ahead of MainLogic) must
+    // NOT kill teleop mid-drive — we only stop the joy stream after the mower has
+    // stayed out of a joy-eligible state for a sustained window.
+    const joyStopTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
     const highLevelStatus = useHighLevelStatus();
 
@@ -162,7 +137,7 @@ export function useMapStreams({
             console.log({ message: "Pose Stream connected" });
         },
         (e) => {
-            const pose = JSON.parse(e) as AbsolutePose;
+            const pose = (e as any) as AbsolutePose;
             const mower_lonlat = transpose(
                 offsetX,
                 offsetY,
@@ -211,7 +186,7 @@ export function useMapStreams({
             console.log({ message: "MAP Stream connected" });
         },
         (e) => {
-            const parse = JSON.parse(e) as MapType;
+            const parse = (e as any) as MapType;
             if (console.debug) console.debug(parse);
             setMap(parse);
             setMapKey("live");
@@ -226,7 +201,7 @@ export function useMapStreams({
             console.log({ message: "PATH Stream connected" });
         },
         (e) => {
-            const parse = JSON.parse(e) as Path;
+            const parse = (e as any) as Path;
             setPath(parse);
         }
     );
@@ -239,7 +214,7 @@ export function useMapStreams({
             console.log({ message: "PLAN Stream connected" });
         },
         (e) => {
-            const parse = JSON.parse(e) as Path;
+            const parse = (e as any) as Path;
             setPlan(parse);
         }
     );
@@ -262,7 +237,7 @@ export function useMapStreams({
             console.log({ message: "Lidar Stream connected" });
         },
         (e) => {
-            const scan = JSON.parse(e) as LaserScan;
+            const scan = (e as any) as LaserScan;
             const pose = robotPoseRef.current;
             if (!pose || !scan.ranges) return;
 
@@ -272,15 +247,34 @@ export function useMapStreams({
             const rangeMin = scan.range_min ?? 0;
             const rangeMax = scan.range_max ?? 12;
 
+            // Scan rays live in the lidar_link frame, which is mounted on the
+            // chassis with a static base_footprint→lidar_link transform
+            // (lidar_x/y forward+lateral offset, lidar_yaw heading offset — see
+            // mowgli_robot.yaml). Compose that mount transform with the robot
+            // pose so points land at their true map position instead of being
+            // drawn as if the lidar sat at base_footprint with zero yaw.
+            const lidarX = parseFloat(settings["lidar_x"]) || 0;
+            const lidarY = parseFloat(settings["lidar_y"]) || 0;
+            const lidarYaw = parseFloat(settings["lidar_yaw"]) || 0;
+            const cosH = Math.cos(pose.heading);
+            const sinH = Math.sin(pose.heading);
+
             // Downsample: take every Nth point for performance
             const step = Math.max(1, Math.floor(scan.ranges.length / 90));
             for (let i = 0; i < scan.ranges.length; i += step) {
                 const range = scan.ranges[i];
                 if (range < rangeMin || range > rangeMax) continue;
 
-                const angle = angleMin + i * angleInc + pose.heading;
-                const endX = pose.x + range * Math.cos(angle);
-                const endY = pose.y + range * Math.sin(angle);
+                // Point in the lidar frame (lidar_yaw folded into the ray angle).
+                const angle = angleMin + i * angleInc + lidarYaw;
+                const px = range * Math.cos(angle);
+                const py = range * Math.sin(angle);
+                // lidar_link → base_footprint (rotate by lidar_yaw, translate by mount offset).
+                const bx = lidarX + px;
+                const by = lidarY + py;
+                // base_footprint → map (rotate by robot heading, translate by pose).
+                const endX = pose.x + bx * cosH - by * sinH;
+                const endY = pose.y + bx * sinH + by * cosH;
                 const endLonLat = transpose(offsetX, offsetY, datum, endY, endX);
 
                 rays.push({
@@ -303,7 +297,7 @@ export function useMapStreams({
         () => {},
         () => { console.log({ message: "Obstacles Stream connected" }); },
         (e) => {
-            const parsed = JSON.parse(e) as ObstacleArray;
+            const parsed = (e as any) as ObstacleArray;
             if (parsed.obstacles) {
                 // Only show persistent obstacles (status=1)
                 setDynamicObstacles(parsed.obstacles.filter(o => o.status === 1));
@@ -337,6 +331,34 @@ export function useMapStreams({
         }
     );
 
+    // Mow-progress overlay: the latest grid waits in a ref and is rasterized at
+    // most once per animation frame (the raster + toDataURL is too heavy to run
+    // on the WebSocket message handler — it would stall pose/lidar frames).
+    const [mowProgressImage, setMowProgressImage] = useState<MowProgressImage | null>(null);
+    const mowProgressPendingRef = React.useRef<
+        { grid: OccupancyGrid; offsetX: number; offsetY: number; datum: [number, number, number] } | null
+    >(null);
+    const mowProgressRafRef = React.useRef<number | null>(null);
+    const mowProgressStream = useWS<string>(
+        () => { console.log({ message: "MowProgress Stream closed" }); },
+        () => { console.log({ message: "MowProgress Stream connected" }); },
+        (e) => {
+            const grid = (e as any) as OccupancyGrid;
+            if (!grid.info || !grid.data) return;
+            if ((grid.info.width ?? 0) === 0 || (grid.info.height ?? 0) === 0) return;
+            mowProgressPendingRef.current = { grid, offsetX, offsetY, datum };
+            if (mowProgressRafRef.current == null) {
+                mowProgressRafRef.current = requestAnimationFrame(() => {
+                    mowProgressRafRef.current = null;
+                    const pending = mowProgressPendingRef.current;
+                    mowProgressPendingRef.current = null;
+                    if (!pending) return;
+                    renderMowProgress(pending.grid, pending.offsetX, pending.offsetY, pending.datum, setMowProgressImage);
+                });
+            }
+        }
+    );
+
     const recordingTrajectoryStream = useWS<string>(
         () => {
             console.log({ message: "RecordingTrajectory Stream closed" });
@@ -345,7 +367,7 @@ export function useMapStreams({
             console.log({ message: "RecordingTrajectory Stream connected" });
         },
         (e) => {
-            const path = JSON.parse(e) as Path;
+            const path = (e as any) as Path;
             if (!path.poses || path.poses.length === 0) {
                 // Recording cleared — remove trajectory feature
                 setFeatures((oldFeatures) => {
@@ -371,41 +393,6 @@ export function useMapStreams({
         }
     );
 
-    const coverageCellsStream = useWS<string>(
-        () => {
-            console.log({ message: "CoverageCells Stream closed" });
-        },
-        () => {
-            console.log({ message: "CoverageCells Stream connected" });
-        },
-        (e) => {
-            const grid = JSON.parse(e) as OccupancyGrid;
-            if (!grid.info || !grid.data) return;
-            if ((grid.info.width ?? 0) === 0 || (grid.info.height ?? 0) === 0) return;
-
-            // Stash the latest grid and rasterize at most once per animation
-            // frame. Parsing is cheap; the canvas raster + toDataURL is not, so
-            // doing it here (on the WS message handler) would block pose/lidar
-            // frames behind it and stutter — or crash — the map on a big grid.
-            coveragePendingRef.current = { grid, offsetX, offsetY, datum };
-            if (coverageRafRef.current == null) {
-                coverageRafRef.current = requestAnimationFrame(() => {
-                    coverageRafRef.current = null;
-                    const pending = coveragePendingRef.current;
-                    coveragePendingRef.current = null;
-                    if (!pending) return;
-                    renderCoverageCells(
-                        pending.grid,
-                        pending.offsetX,
-                        pending.offsetY,
-                        pending.datum,
-                        setCoverageCellsImage,
-                    );
-                });
-            }
-        }
-    );
-
     // Keep lidar layer on top of draw layers
     useEffect(() => {
         const m = mapInstanceRef.current;
@@ -426,13 +413,11 @@ export function useMapStreams({
             planStream.stop();
             lidarStream.stop();
             obstaclesStream.stop();
-            coverageCellsStream.stop();
             recordingTrajectoryStream.stop();
             highLevelStatus.stop();
             setPath(undefined);
             setPlan(undefined);
             setLidarCollection({ type: "FeatureCollection", features: [] });
-            setCoverageCellsImage(null);
         } else {
             if (
                 settings["datum_lon"] == undefined ||
@@ -447,7 +432,7 @@ export function useMapStreams({
             planStream.start("/api/mowglinext/subscribe/plan");
             lidarStream.start("/api/mowglinext/subscribe/lidar");
             obstaclesStream.start("/api/mowglinext/subscribe/obstacles");
-            coverageCellsStream.start("/api/mowglinext/subscribe/coverageCells");
+            mowProgressStream.start("/api/mowglinext/subscribe/mowProgress");
         }
     }, [editMap]);
 
@@ -455,16 +440,29 @@ export function useMapStreams({
     useEffect(() => {
         const stateName = highLevelStatus.highLevelStatus.state_name;
         if (stateName === "RECORDING") {
+            clearTimeout(joyStopTimerRef.current);
+            joyStopTimerRef.current = undefined;
             joyStream.start("/api/mowglinext/publish/joy");
             recordingTrajectoryStream.start("/api/mowglinext/subscribe/recordingTrajectory");
             setEditMap(false);
             return;
         }
         if (stateName === "MANUAL_MOWING") {
+            clearTimeout(joyStopTimerRef.current);
+            joyStopTimerRef.current = undefined;
             joyStream.start("/api/mowglinext/publish/joy");
             return;
         }
-        joyStream.stop();
+        // Leaving a joy-eligible state: DEBOUNCE the joy teardown so a single
+        // stray guard frame (EMERGENCY/battery/boundary blip) can't kill teleop
+        // mid-drive. The recording-trajectory cleanup can happen immediately —
+        // it's only visual and re-subscribes instantly if RECORDING returns.
+        if (joyStopTimerRef.current === undefined) {
+            joyStopTimerRef.current = setTimeout(() => {
+                joyStopTimerRef.current = undefined;
+                joyStream.stop();
+            }, 1200);
+        }
         recordingTrajectoryStream.stop();
         // Clear trajectory feature when leaving recording mode
         setFeatures((oldFeatures) => {
@@ -473,6 +471,11 @@ export function useMapStreams({
             return newFeatures;
         });
     }, [highLevelStatus.highLevelStatus.state_name]);
+
+    // Clear the joy-stop debounce on unmount so it can't fire after teardown.
+    useEffect(() => {
+        return () => clearTimeout(joyStopTimerRef.current);
+    }, []);
 
     // Start streams once the datum is available. Keyed on the datum values
     // ONLY — not the whole `settings` object. The previous `[settings]`
@@ -494,7 +497,7 @@ export function useMapStreams({
         planStream.start("/api/mowglinext/subscribe/plan");
         lidarStream.start("/api/mowglinext/subscribe/lidar");
         obstaclesStream.start("/api/mowglinext/subscribe/obstacles");
-        coverageCellsStream.start("/api/mowglinext/subscribe/coverageCells");
+        mowProgressStream.start("/api/mowglinext/subscribe/mowProgress");
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [settings["datum_lon"], settings["datum_lat"]]);
 
@@ -508,24 +511,24 @@ export function useMapStreams({
             planStream.stop();
             lidarStream.stop();
             obstaclesStream.stop();
-            coverageCellsStream.stop();
+            mowProgressStream.stop();
+            if (mowProgressRafRef.current != null) {
+                cancelAnimationFrame(mowProgressRafRef.current);
+                mowProgressRafRef.current = null;
+            }
             recordingTrajectoryStream.stop();
             highLevelStatus.stop();
-            if (coverageRafRef.current != null) {
-                cancelAnimationFrame(coverageRafRef.current);
-                coverageRafRef.current = null;
-            }
         };
     }, []);
 
     return {
         map,
         dynamicObstacles,
-        coverageCellsImage,
         setMap,
         path,
         plan,
         lidarCollection,
+        mowProgressImage,
         highLevelStatus,
         joyStream,
     };

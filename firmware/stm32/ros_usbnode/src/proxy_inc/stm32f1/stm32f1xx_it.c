@@ -77,6 +77,7 @@ extern DMA_HandleTypeDef hdma_uart4_rx;
 DMA_HandleTypeDef hdma_adc;
 
 extern ADC_HandleTypeDef ADC_Charging_Handle;
+extern WWDG_HandleTypeDef WwdgHandle;
 
 /* USER CODE BEGIN EV */
 
@@ -218,6 +219,11 @@ void SysTick_Handler(void)
 /* Add here the Interrupt Handlers for the used peripherals.                  */
 /* For the available peripheral interrupt handler names,                      */
 /* please refer to the startup file (startup_stm32f1xx.s).                    */
+
+void WWDG_IRQHandler(void)
+{
+  HAL_WWDG_IRQHandler(&WwdgHandle);
+}
 /******************************************************************************/
 
 /**
@@ -386,11 +392,11 @@ void DMA2_Channel4_5_IRQHandler(void)
 void USB_LP_CAN1_RX0_IRQHandler(void)
 {
   /* USER CODE BEGIN USB_LP_CAN1_RX0_IRQn 0 */
-
+  WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_USB_IRQ_ENTER);
   /* USER CODE END USB_LP_CAN1_RX0_IRQn 0 */
   HAL_PCD_IRQHandler(&hpcd_USB_FS);
   /* USER CODE BEGIN USB_LP_CAN1_RX0_IRQn 1 */
-
+  WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_USB_IRQ_EXIT);
   /* USER CODE END USB_LP_CAN1_RX0_IRQn 1 */
 }
 

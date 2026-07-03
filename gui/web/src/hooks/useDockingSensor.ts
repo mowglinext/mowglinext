@@ -14,7 +14,7 @@ export const useDockingSensor = () => {
             })
         },
         (e) => {
-            setDockingSensor(JSON.parse(e))
+            setDockingSensor((e as any))
         })
     useEffect(() => {
         dockingSensorStream.start("/api/mowglinext/subscribe/dockingSensor",)

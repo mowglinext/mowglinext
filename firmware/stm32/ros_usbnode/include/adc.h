@@ -13,6 +13,14 @@
 #ifndef __ADC_H
 #define __ADC_H
 
+#include <stdint.h>
+
+#if defined(BOARD_YARDFORCE500_VARIANT_B)
+#include "stm32f4xx_hal.h"
+#else
+#include "stm32f1xx_hal.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -116,6 +116,54 @@ struct BTContext
   static constexpr float kAreaProgressEpsilonPct = 0.5f;
 
   // -----------------------------------------------------------------------
+  // Swath-completion model (replaces the mow_progress cell grid)
+  // -----------------------------------------------------------------------
+  /// Indices of swaths already mowed for each area, in the deterministic F2C
+  /// swath order. FollowStrip inserts a swath index once its FollowPath goal
+  /// succeeds; on a re-plan (resume after recharge / preempt) it skips any
+  /// index already present. F2C is deterministic for a fixed area+params, so
+  /// indices are stable across re-plans within a session. Persisted with the
+  /// area set so resume survives a restart. Cleared per area by EndSession /
+  /// a coverage reset.
+  std::map<uint32_t, std::set<std::size_t>> area_completed_swaths;
+  /// Total swath count for each area, set by FollowStrip after segmenting the
+  /// planned path. 0 until the area has been planned at least once.
+  std::map<uint32_t, std::size_t> area_swath_count;
+  /// Resume cursor: the furthest pose index reached along the area's CONTINUOUS
+  /// full_path. FollowStrip drives the plan as one continuous path, so the
+  /// per-segment "completed swath index" model can only ever record index 0 (on
+  /// full completion). Without this cursor, an interruption mid-path (recharge,
+  /// preempt, controller abort) restarts the WHOLE path from the beginning, an
+  /// area needing >1 charge never finishes, and a single abort that made real
+  /// progress used to fail/abandon the area. FollowStrip persists the furthest
+  /// reached index here on abort/halt and, on re-dispatch, trims the already-
+  /// driven prefix so it resumes near where it stopped. F2C is deterministic for
+  /// a fixed area+params, so the re-planned path is identical and the index is
+  /// stable. Cleared (erased) when the area completes; reset by EndSession.
+  std::map<uint32_t, std::size_t> area_resume_pose_index;
+  /// Total pose count of the area's continuous full_path (the denominator for
+  /// the resume-cursor coverage_percent). Set by FollowStrip at dispatch.
+  std::map<uint32_t, std::size_t> area_path_pose_count;
+  /// Areas whose every swath is completed-or-skipped this session. Skipped by
+  /// GetNextUnmowedArea. Cleared by EndSession.
+  std::set<uint32_t> completed_areas;
+  /// Filesystem path the coverage RESUME state (the four maps above +
+  /// completed_areas + current_area) is persisted to, so an interrupted session
+  /// survives a full process/container restart — not just the in-RAM BT
+  /// halt/resume. Set from the `coverage_resume_path` parameter at startup;
+  /// empty disables disk persistence. Written on every interruption / swath
+  /// completion, loaded once at node startup, and removed by EndSession. See
+  /// coverage_persistence.{hpp,cpp}.
+  std::string coverage_resume_path;
+  /// True when GetNextUnmowedArea exhausted the area list because every area is
+  /// genuinely DONE (not because of a transient service error / timeout / no
+  /// areas defined). The coverage subtree reads this (IsCoverageComplete) to
+  /// route a normal finish to the MOWING_COMPLETE terminal instead of the
+  /// COVERAGE_FAILED_DOCKING path. Reset to false at the start of each
+  /// GetNextUnmowedArea run so a transient failure never masquerades as done.
+  bool coverage_all_complete{false};
+
+  // -----------------------------------------------------------------------
   // Derived / convenience fields (computed from latest_* messages)
   // -----------------------------------------------------------------------
 
@@ -156,10 +204,19 @@ struct BTContext
   /// Current navigation mode: "precise" or "degraded"
   std::string current_nav_mode{"precise"};
 
+  /// Whether SetNav2Lifecycle has suspended (PAUSEd) the Nav2 lifecycle
+  /// stack to save CPU/thermal budget while idle on the dock. Tracked here
+  /// (rather than re-querying lifecycle_manager every tick) so the
+  /// SetNav2Lifecycle RESUME/PAUSE nodes only issue a manage_nodes service
+  /// call on an actual state transition — the BT is the sole pause/resume
+  /// authority. Only meaningful when the idle_nav2_suspend feature flag is
+  /// enabled; stays false otherwise. Protected by context_mutex.
+  bool nav2_suspended{false};
+
   /// Operator-configured drive speeds (m/s), sourced from mowgli_robot.yaml
   /// by behavior_tree_node and applied to the live controllers by SetNavMode:
   /// transit_speed → FollowPath.desired_linear_vel (RPP transit), mowing_speed
-  /// → FollowCoveragePath.speed_fast (FTC coverage). Defaults match the shipped
+  /// → FollowCoveragePath.vx_max (MPPI coverage). Defaults match the shipped
   /// template; SetNavMode halves them in "degraded" mode (floored at the host
   /// min-drive clamp).
   double transit_speed{0.25};
@@ -273,36 +330,37 @@ struct BTContext
   std::vector<geometry_msgs::msg::Point> visited_waypoints;
 
   // -----------------------------------------------------------------------
-  // Cell-based strip coverage state
+  // Swath-segmented coverage state
   // -----------------------------------------------------------------------
 
-  /// Current strip / segment path to mow. Populated by GetNextStrip
-  /// (legacy) or GetNextSegment (Path C cell-based coverage), consumed
-  /// by FollowStrip and MarkSegmentBlocked.
+  /// Full-area coverage path — the concatenation of all segments, kept for
+  /// the GUI/Foxglove full-plan view and empty-checks. Populated by
+  /// PlanCoverageArea. Execution uses current_strip_segments, NOT this.
   nav_msgs::msg::Path current_strip_path;
 
-  /// Transit goal to reach strip / segment start (populated by
-  /// GetNextStrip or GetNextSegment, consumed by TransitToStrip).
+  /// EXPLICIT ordered coverage segments from the coverage server (headland
+  /// rings first, then straight serpentine swaths). Populated by
+  /// PlanCoverageArea; FollowStrip dispatches ONE segment per
+  /// FollowCoveragePath goal (RotationShim pivots in place at each segment
+  /// start, MPPI tracks the straight swath / smooth ring). Replaces the
+  /// heading-jump re-segmentation heuristic, which silently failed on smooth
+  /// turn arcs (field 2026-06-12: one 3982-pose "swath").
+  std::vector<nav_msgs::msg::Path> current_strip_segments;
+
+  /// Hole-free continuous SUB-PATHS from the coverage server (issue #333), in
+  /// drive order. A forward turn-around connector can't route around a large
+  /// interior obstacle, so the continuous path is split where it would cross a
+  /// hole; FollowStrip drives each sub-path with MPPI and bridges the gap
+  /// between consecutive sub-paths with a blade-off, costmap-aware Nav2 transit
+  /// (its existing >kSegmentTransitGap behaviour) that routes around the
+  /// obstacle. Exactly ONE entry for a hole-free field (== current_strip_path).
+  /// When present, FollowStrip drives THESE (one FollowCoveragePath goal per
+  /// sub-path) instead of the single current_strip_path.
+  std::vector<nav_msgs::msg::Path> current_strip_subpaths;
+
+  /// Transit goal to reach the coverage path start (populated by
+  /// PlanCoverageArea, consumed by TransitToStrip).
   geometry_msgs::msg::PoseStamped current_transit_goal;
-
-  /// Path C: true when the current segment requires transit
-  /// (>~0.5 m gap or large turn) so the BT must disengage the blade
-  /// before the move and re-engage at the start of the next FollowStrip.
-  /// false → blade stays on for a continuous mowing flow between
-  /// adjacent segments. Updated by GetNextSegment; read by the
-  /// IsShortSegment condition node in the BT XML.
-  bool current_segment_is_long_transit{false};
-
-  /// Path C: free-form tag set by GetNextSegment for diagnostics
-  /// ("interior" / "transit" / "complete").
-  std::string current_segment_phase{};
-
-  /// Path C: termination reason returned by the segment selector for
-  /// the current segment ("boundary" / "obstacle" / "dead_zone" /
-  /// "max_length" / "row_end"). Used by MarkSegmentBlocked decisions —
-  /// e.g. don't bump fail_count when the segment ended at a known
-  /// "obstacle" because that's not a robot failure.
-  std::string current_segment_termination_reason{};
 
   /// Latest coverage percentage.
   float coverage_percent{0.0f};

@@ -6,20 +6,18 @@ Dockerized ROS2 drivers for each supported sensor. Each subdirectory contains a 
 
 | Sensor | Type | Directory | ROS2 Topic | Protocol |
 |--------|------|-----------|------------|----------|
-| u-blox ZED-F9P | RTK GPS | [`gps/`](gps/) | `/gps/fix` (NavSatFix) + `/gps/status` (GnssStatus via shared adapter) | USB-CDC |
-| Unicore UM98x | RTK GPS | [`unicore/`](unicore/) | `/gps/fix` (NavSatFix) | UART/USB |
-| Generic NMEA-0183 | GPS (any vendor) | [`nmea/`](nmea/) | `/gps/fix` (NavSatFix), `/gps/vel` (TwistStamped) | UART/USB |
+| Universal GNSS sidecar | GNSS | [`gps/`](gps/) | `/gps/fix` (NavSatFix) + `/gps/status` (GnssStatus) | UART/USB |
 | LDRobot LD19 | 2D LiDAR | [`lidar/`](lidar/) | `/scan` (LaserScan) | UART 230400 |
 
-### GPS backend selection
+### GNSS receiver selection
 
-The installer offers three GNSS backends (`GNSS_BACKEND` env): `gps` (legacy container for generic UBX or NMEA receivers), `ublox` (F9P UBX HP + bundled NTRIP), and `unicore` (UM98x). For generic receivers that emit standard NMEA-0183 sentences (GGA, RMC, GSA, VTG) — Emlid Reach, BN-220, LC29H, NEO-M8N in NMEA mode, etc. — use `GNSS_BACKEND=gps` with `GPS_PROTOCOL=NMEA`. Caveats:
+Direct GNSS installs now use the Universal GNSS sidecar only. Receiver choice is expressed through `GNSS_RECEIVER_FAMILY=auto|ublox|unicore|nmea`, while the public runtime contract stays backend-agnostic:
 
 - Common runtime topics stay backend-agnostic: `/gps/fix` remains `sensor_msgs/NavSatFix`, `/gps/azimuth` remains `compass_msgs/Azimuth` when available, `/gps/status` carries typed GNSS/RTK state, and `/diagnostics` stays human/debug-only.
 
-- Position covariance is derived from HDOP only, no UBX `position_accuracy`. The map-frame EKF / `fusion_graph` will see a more pessimistic σ than RTK-Fixed implies.
-- RTK still works if the receiver outputs RTK-quality GGA fix-quality codes (4=Fixed, 5=Float). The shared `/gps/status` runtime builder now publishes typed basic GNSS state for NMEA too, but it only exposes fields that the generic driver surfaces in this repo. Carrier-state, satellite counts, correction-age, and richer RF/RTCM metadata remain unavailable unless the backend provides structured telemetry for them.
-- NTRIP/RTCM relay is **not bundled**. Configure NTRIP on the receiver itself (Emlid and most modern modules support it natively). Relaying RTCM from a ROS-side ntrip client back to the same `/dev/gps` port requires a custom sidecar — not provided here.
+- Position covariance is derived from HDOP only, so the map-frame EKF / `fusion_graph` can remain more conservative than RTK-Fixed implies.
+- Generic NMEA receivers are supported through the Universal GNSS parser family selection instead of a separate runtime path.
+- NTRIP/RTCM forwarding is handled in the Universal GNSS sidecar path.
 
 ## Adding a New Sensor
 
@@ -38,6 +36,9 @@ Images are built automatically by the CI workflow (`.github/workflows/docker.yml
 To build locally:
 
 ```bash
-docker build -t mowgli-gps sensors/gps/
+docker build -t mowgli-gps -f sensors/gps/Dockerfile .
 docker build -t mowgli-lidar --target runtime sensors/lidar/
 ```
+
+The `gps` image now expects the monorepo root as its Docker build context so it
+can bundle the vendored Universal GNSS prep overlay from `ros2/src/`.

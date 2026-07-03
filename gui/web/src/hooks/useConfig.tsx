@@ -1,10 +1,12 @@
 import {useApi} from "./useApi.ts";
 import {App} from "antd";
 import {useEffect, useState} from "react";
+import {useTranslation} from "react-i18next";
 
 export const useConfig = (keys: string[]) => {
     const guiApi = useApi()
     const {notification} = App.useApp();
+    const {t} = useTranslation();
     const [config, setConfig] = useState<Record<string, any>>({})
     const handleSetConfig = async (newConfig: Record<string, any>) => {
         try {
@@ -18,7 +20,7 @@ export const useConfig = (keys: string[]) => {
             }))
         } catch (e: any) {
             notification.error({
-                message: "Failed to save config",
+                message: t('hookNotifications.failedToSaveConfig'),
                 description: e.message,
             })
         }
@@ -37,7 +39,7 @@ export const useConfig = (keys: string[]) => {
                 setConfig(offsetConfig.data)
             } catch (e: any) {
                 notification.error({
-                    message: "Failed to load config",
+                    message: t('hookNotifications.failedToLoadConfig'),
                     description: e.message,
                 })
             }

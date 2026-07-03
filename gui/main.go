@@ -8,8 +8,8 @@
 package main
 
 import (
-	"github.com/cedbossneo/mowglinext/pkg/api"
-	"github.com/cedbossneo/mowglinext/pkg/providers"
+	"github.com/mowglinext/mowglinext/pkg/api"
+	"github.com/mowglinext/mowglinext/pkg/providers"
 	"github.com/joho/godotenv"
 )
 

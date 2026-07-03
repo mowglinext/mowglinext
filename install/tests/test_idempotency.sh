@@ -19,6 +19,11 @@ source "$SCRIPT_DIR/lib/mocks.sh"
 # shellcheck source=lib/harness.sh
 source "$SCRIPT_DIR/lib/harness.sh"
 
+real_docker_compose_available() {
+  PATH="$ORIG_PATH" command -v docker >/dev/null 2>&1 \
+    && HOME="$ORIG_HOME" PATH="$ORIG_PATH" docker compose version >/dev/null 2>&1
+}
+
 setup_sandbox
 install_all_mocks
 
@@ -29,7 +34,7 @@ sandbox_repo "$SANDBOX_REPO"
 section "First installer run"
 
 harness_init "$SANDBOX_REPO"
-harness_set_preset gnss=gps gps=ubx-uart lidar=ldlidar-uart tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
 if harness_run; then
   pass "first run: harness_run"
 else
@@ -49,7 +54,7 @@ section "Second installer run, same preset"
 sleep 1
 
 harness_init "$SANDBOX_REPO"
-harness_set_preset gnss=gps gps=ubx-uart lidar=ldlidar-uart tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
 if harness_run; then
   pass "second run: harness_run"
 else
@@ -80,13 +85,21 @@ compose_backup_count=$(find "$SANDBOX_REPO/docker" -maxdepth 1 -name 'docker-com
 # Idempotency negative check: live config files still parse after a re-run
 section "Generated files still valid after re-run"
 
-if HOME="$ORIG_HOME" docker compose \
-    -f "$SANDBOX_REPO/docker/docker-compose.yaml" \
-    --env-file "$SANDBOX_REPO/docker/.env" \
-    config -q 2>/dev/null; then
-  pass "compose config -q after re-run"
+if real_docker_compose_available; then
+  if HOME="$ORIG_HOME" docker compose \
+      -f "$SANDBOX_REPO/docker/docker-compose.yaml" \
+      --env-file "$SANDBOX_REPO/docker/.env" \
+      config -q 2>/dev/null; then
+    pass "compose config -q after re-run"
+  else
+    fail "compose config -q after re-run" "compose became invalid"
+  fi
 else
-  fail "compose config -q after re-run" "compose became invalid"
+  if [ -s "$SANDBOX_REPO/docker/docker-compose.yaml" ]; then
+    pass "compose fallback file present after re-run"
+  else
+    fail "compose fallback file present after re-run" "generated compose is empty"
+  fi
 fi
 
 # ── Third run, different preset → outputs must reflect new preset ─────────
@@ -94,15 +107,17 @@ section "Third run with different preset propagates change"
 
 sleep 1
 harness_init "$SANDBOX_REPO"
-harness_set_preset gnss=gps gps=nmea-uart lidar=rplidar-usb tfluna=front
+harness_set_preset gnss=nmea gnss_connection=uart lidar=rplidar-usb tfluna=front
 harness_run >/dev/null 2>&1
 
-new_proto=$(grep -E "^GPS_PROTOCOL=" "$SANDBOX_REPO/docker/.env" | cut -d= -f2)
-new_baud=$(grep -E "^GPS_BAUD=" "$SANDBOX_REPO/docker/.env" | cut -d= -f2)
+new_family=$(grep -E "^GNSS_RECEIVER_FAMILY=" "$SANDBOX_REPO/docker/.env" | cut -d= -f2)
+new_device=$(grep -E "^GNSS_SERIAL_DEVICE=" "$SANDBOX_REPO/docker/.env" | cut -d= -f2)
+new_baud=$(grep -E "^GNSS_SERIAL_BAUD=" "$SANDBOX_REPO/docker/.env" | cut -d= -f2)
 new_lidar=$(grep -E "^LIDAR_TYPE=" "$SANDBOX_REPO/docker/.env" | cut -d= -f2)
 
-assert_eq "third run: GPS_PROTOCOL switched to NMEA" "NMEA" "$new_proto"
-assert_eq "third run: GPS_BAUD switched to 115200" "115200" "$new_baud"
+assert_eq "third run: GNSS_RECEIVER_FAMILY switched to nmea" "nmea" "$new_family"
+assert_eq "third run: GNSS_SERIAL_DEVICE remains UART" "/dev/ttyAMA4" "$new_device"
+assert_eq "third run: GNSS_SERIAL_BAUD stays at the validated runtime target" "921600" "$new_baud"
 assert_eq "third run: LIDAR_TYPE switched to rplidar" "rplidar" "$new_lidar"
 
 test_summary

@@ -3,7 +3,7 @@
 # A.1 Smoke test — installer runs to completion non-interactively
 #
 # Drives install/mowglinext.sh's data-flow through the harness with the
-# default hardware preset (Mowgli STM32 + uBlox UART + LDLiDAR UART, no
+# default hardware preset (Mowgli STM32 + Universal GNSS UART + LDLiDAR UART, no
 # rangefinders) and verifies every output artefact is produced.
 # =============================================================================
 
@@ -26,7 +26,7 @@ install_all_mocks
 SANDBOX_REPO="$SANDBOX/repo"
 sandbox_repo "$SANDBOX_REPO"
 harness_init "$SANDBOX_REPO"
-harness_set_preset gps=ubx-uart lidar=ldlidar-uart tfluna=none
+harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
 
 if harness_run; then
   pass "Installer flow completes for default preset"
@@ -38,8 +38,6 @@ assert_file_exists ".env materialised" "$SANDBOX_REPO/docker/.env"
 assert_file_exists "docker-compose.yaml materialised" "$SANDBOX_REPO/docker/docker-compose.yaml"
 assert_file_exists "mowgli_robot.yaml materialised" \
   "$SANDBOX_REPO/docker/config/mowgli/mowgli_robot.yaml"
-assert_file_exists "mower_config.sh materialised" \
-  "$SANDBOX_REPO/docker/config/om/mower_config.sh"
 assert_file_exists "cyclonedds.xml materialised" \
   "$SANDBOX_REPO/docker/config/cyclonedds.xml"
 assert_file_exists "mosquitto.conf materialised" \

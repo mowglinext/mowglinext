@@ -52,36 +52,38 @@ fi
 assert_eq "Unicore command sequence" $'CONFIG COM1 921600\nSAVECONFIG' "$(cat "$commands_file")"
 assert_eq "Unicore stty sequence" "$port 460800"$'\n'"$port 921600" "$(cat "$stty_file")"
 
-section "GPS_BAUD changes only on verified success"
+section "GNSS_SERIAL_BAUD changes only on verified success"
 
-GNSS_BACKEND=unicore
-GPS_BAUD=460800
+GNSS_BACKEND=universal
+GNSS_RECEIVER_FAMILY=unicore
+GNSS_SERIAL_BAUD=460800
 UNICORE_COM_PORT=COM1
 verify_result=0
 : > "$commands_file"
 : > "$stty_file"
-maybe_upgrade_unicore_baud "$port" "$GPS_BAUD" auto
-assert_eq "GPS_BAUD becomes 921600 after verified Unicore upgrade" "921600" "$GPS_BAUD"
+maybe_upgrade_unicore_baud "$port" "$GNSS_SERIAL_BAUD" auto
+assert_eq "GNSS_SERIAL_BAUD becomes 921600 after verified Unicore upgrade" "921600" "$GNSS_SERIAL_BAUD"
 
-GPS_BAUD=460800
+GNSS_SERIAL_BAUD=460800
 verify_result=1
 : > "$commands_file"
 : > "$stty_file"
-maybe_upgrade_unicore_baud "$port" "$GPS_BAUD" auto
-assert_eq "GPS_BAUD remains detected baud after failed Unicore upgrade" "460800" "$GPS_BAUD"
+maybe_upgrade_unicore_baud "$port" "$GNSS_SERIAL_BAUD" auto
+assert_eq "GNSS_SERIAL_BAUD remains detected baud after failed Unicore upgrade" "460800" "$GNSS_SERIAL_BAUD"
 
 section "No-op for other GNSS backends"
 
-GPS_BAUD=460800
-GNSS_BACKEND=gps
+GNSS_SERIAL_BAUD=460800
+GNSS_BACKEND=universal
+GNSS_RECEIVER_FAMILY=auto
 : > "$commands_file"
-maybe_upgrade_unicore_baud "$port" "$GPS_BAUD" auto
-assert_eq "generic gps backend does not send Unicore commands" "" "$(cat "$commands_file")"
-assert_eq "generic gps backend keeps GPS_BAUD" "460800" "$GPS_BAUD"
+maybe_upgrade_unicore_baud "$port" "$GNSS_SERIAL_BAUD" auto
+assert_eq "generic universal backend does not send Unicore commands" "" "$(cat "$commands_file")"
+assert_eq "generic universal backend keeps GNSS_SERIAL_BAUD" "460800" "$GNSS_SERIAL_BAUD"
 
-GNSS_BACKEND=ublox
+GNSS_RECEIVER_FAMILY=ublox
 : > "$commands_file"
-maybe_upgrade_unicore_baud "$port" "$GPS_BAUD" auto
+maybe_upgrade_unicore_baud "$port" "$GNSS_SERIAL_BAUD" auto
 assert_eq "ublox backend does not send Unicore commands" "" "$(cat "$commands_file")"
 
 test_summary

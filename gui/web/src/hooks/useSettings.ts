@@ -1,6 +1,7 @@
 import {useApi} from "./useApi.ts";
 import {App} from "antd";
 import {useEffect, useState} from "react";
+import {useTranslation} from "react-i18next";
 import {useConfig} from "./useConfig.tsx";
 
 export enum SettingValueType {
@@ -161,6 +162,7 @@ const flattenConfig = (newConfig: Record<string, any>): Record<string, any> => {
 export const useSettings = () => {
     const guiApi = useApi()
     const {notification} = App.useApp();
+    const {t} = useTranslation();
     const db = useConfig(SettingKeysFromDB)
     const [loading, setLoading] = useState<boolean>(false)
     const [settings, setSettings] = useState<Record<keyof typeof SettingsDesc, any>>({})
@@ -220,7 +222,7 @@ export const useSettings = () => {
                 setLoading(false)
             } catch (e: any) {
                 notification.error({
-                    message: "Failed to load settings",
+                    message: t("useSettingsHook.loadFailed"),
                     description: e.message,
                 })
                 setLoading(false)
@@ -253,12 +255,12 @@ export const useSettings = () => {
             }
             await db.setConfig(dbFiltered)
             notification.success({
-                message: "Settings saved",
+                message: t("useSettingsHook.saved"),
             })
             setLoading(false)
         } catch (e: any) {
             notification.error({
-                message: "Failed to save settings",
+                message: t("useSettingsHook.saveFailed"),
                 description: e.message,
             })
             setLoading(false)

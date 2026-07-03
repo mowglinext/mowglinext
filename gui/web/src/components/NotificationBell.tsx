@@ -1,14 +1,16 @@
 import {useEffect, useRef, useState} from "react";
 import {AnimatePresence, motion} from "framer-motion";
+import {useTranslation} from "react-i18next";
+import type {TFunction} from "i18next";
 import {useNotificationCenter, type NotificationItem} from "../hooks/useNotificationCenter.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 
-const formatRelative = (ms: number): string => {
+const formatRelative = (ms: number, t: TFunction): string => {
     const diff = Date.now() - ms;
-    if (diff < 60_000) return 'just now';
-    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-    return `${Math.floor(diff / 86_400_000)}d ago`;
+    if (diff < 60_000) return t('notificationBell.justNow');
+    if (diff < 3_600_000) return t('notificationBell.minutesAgo', {n: Math.floor(diff / 60_000)});
+    if (diff < 86_400_000) return t('notificationBell.hoursAgo', {n: Math.floor(diff / 3_600_000)});
+    return t('notificationBell.daysAgo', {n: Math.floor(diff / 86_400_000)});
 };
 
 const dotKeyframes = `
@@ -51,6 +53,7 @@ const levelColor = (lvl: NotificationItem['level'], colors: ReturnType<typeof us
 
 export function NotificationBell() {
     const {colors} = useThemeMode();
+    const {t} = useTranslation();
     const {items, unread, markRead, markAllRead, dismiss, clear} = useNotificationCenter();
     const [open, setOpen] = useState(false);
     const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -74,7 +77,7 @@ export function NotificationBell() {
                     setOpen(next);
                     if (next) markAllRead();
                 }}
-                aria-label={`Notifications${unread > 0 ? ` (${unread} unread)` : ''}`}
+                aria-label={unread > 0 ? t('notificationBell.bellAriaUnread', {n: unread}) : t('notificationBell.bellAria')}
                 style={{
                     position: 'relative', background: 'transparent', border: 'none',
                     cursor: 'pointer', padding: 6, display: 'inline-flex',
@@ -86,7 +89,7 @@ export function NotificationBell() {
                     <span style={{
                         position: 'absolute', top: 2, right: 2,
                         minWidth: 16, height: 16, padding: '0 4px', borderRadius: 8,
-                        background: colors.danger, color: '#fff',
+                        background: colors.danger, color: colors.bgBase,
                         fontSize: 10, fontWeight: 700,
                         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                         boxShadow: `0 0 0 2px ${colors.bgBase}`,
@@ -118,7 +121,7 @@ export function NotificationBell() {
                             padding: '12px 14px', borderBottom: `1px solid ${colors.border}`,
                         }}>
                             <div style={{fontSize: 13, fontWeight: 700, color: colors.text}}>
-                                Notifications
+                                {t('notificationBell.notifications')}
                             </div>
                             {items.length > 0 && (
                                 <button
@@ -127,7 +130,7 @@ export function NotificationBell() {
                                         background: 'transparent', border: 'none', cursor: 'pointer',
                                         color: colors.textMuted, fontSize: 11, fontWeight: 600,
                                     }}
-                                >Clear all</button>
+                                >{t('notificationBell.clearAll')}</button>
                             )}
                         </div>
                         <div style={{flex: 1, overflowY: 'auto'}}>
@@ -136,9 +139,9 @@ export function NotificationBell() {
                                     padding: '40px 16px', textAlign: 'center',
                                     color: colors.textMuted, fontSize: 13,
                                 }}>
-                                    Nothing right now.
+                                    {t('notificationBell.nothingRightNow')}
                                     <div style={{fontSize: 11, marginTop: 6}}>
-                                        Critical events (emergency, rain, completion) will land here.
+                                        {t('notificationBell.criticalEventsHint')}
                                     </div>
                                 </div>
                             )}
@@ -173,12 +176,12 @@ export function NotificationBell() {
                                                 </div>
                                             )}
                                             <div style={{fontSize: 10, color: colors.textMuted, marginTop: 4}}>
-                                                {formatRelative(item.timestamp)}
+                                                {formatRelative(item.timestamp, t)}
                                             </div>
                                         </div>
                                         <button
                                             onClick={(e) => { e.stopPropagation(); dismiss(item.id); }}
-                                            aria-label="Dismiss"
+                                            aria-label={t('notificationBell.dismiss')}
                                             style={{
                                                 background: 'transparent', border: 'none', cursor: 'pointer',
                                                 color: colors.textMuted, padding: 4, lineHeight: 1,

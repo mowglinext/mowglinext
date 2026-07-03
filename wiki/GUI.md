@@ -8,13 +8,13 @@ Default: `http://<mower-ip>:4006`
 
 ## Dashboard
 
-![Dashboard — mowing state](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/screenshots/dashboard-mowing.png)
+![Dashboard — mowing state](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/screenshots/dashboard-mowing.png)
 
 The dashboard adapts to the mower's current state with a **hero card** that shows contextual information and actions:
 
 | State | Hero card | Actions |
 |-------|-----------|---------|
-| **Mowing** | Zone name, progress bar, elapsed time, GPS quality | Pause, Send home, Emergency |
+| **Mowing** | Zone name, progress bar, elapsed time, GPS quality | Pause (stop-in-place hold, `COMMAND_STOP`), Send home (dock, `COMMAND_HOME`), Emergency |
 | **Idle / Docked** | Battery level, mower icon, next scheduled run | Start mowing, Emergency |
 | **Charging** | Radial gauge with battery %, charge current, ETA | Mow anyway |
 | **Emergency** | Alert with description and instructions | Reset emergency |
@@ -32,7 +32,7 @@ The bottom row shows **Today's work** (zone progress, active zones), **Next up**
 
 ### Mobile
 
-![Dashboard — mobile](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/screenshots/dashboard-mobile.png)
+![Dashboard — mobile](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/screenshots/dashboard-mobile.png)
 
 On mobile, the dashboard stacks vertically: compact hero card, 2x2 tile grid, and collapsible sensor/system panels. All buttons expand to full width. The bottom tab bar provides quick access to Home, Map, Stats, and Settings.
 
@@ -40,8 +40,8 @@ On mobile, the dashboard stacks vertically: compact hero card, 2x2 tile grid, an
 
 | | |
 |---|---|
-| ![Map](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/screenshots/map.png) | ![Schedule](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/screenshots/schedule.png) |
-| ![Statistics](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/screenshots/stats.png) | ![Dashboard idle](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/screenshots/dashboard-idle.png) |
+| ![Map](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/screenshots/map.png) | ![Schedule](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/screenshots/schedule.png) |
+| ![Statistics](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/screenshots/stats.png) | ![Dashboard idle](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/screenshots/dashboard-idle.png) |
 
 | Page | Description |
 |------|-------------|
@@ -63,7 +63,9 @@ The *Localization* section gathers the four flags that pick the map-frame fusion
 - **Loop closure** (`use_loop_closure`) — searches past scans for revisits and adds loop-closure factors. Greyed out until *Fusion Graph* is enabled.
 - **Magnetometer yaw** (`use_magnetometer`) — fuses tilt-compensated magnetometer yaw as a unary factor. Off by default — enable only after running mag calibration with motors-off.
 
-Editable yaw / position fields for the dock (`dock_pose_x`, `dock_pose_y`, `dock_pose_yaw`) are intentionally **not** in the UI: those are auto-captured by `dock_yaw_to_set_pose` into `dock_calibration.yaml` on every dock arrival, and surfacing them as editable was misleading.
+Editable yaw / position fields for the dock (`dock_pose_x`, `dock_pose_y`, `dock_pose_yaw`) are intentionally **not** in the UI: those are auto-captured into `mowgli_robot.yaml` (there is no `dock_calibration.yaml` — it was removed; `mowgli_robot.yaml` is the single source of truth) by the IMU-yaw calibration and by the map editor's "Set docking point" action, and surfacing them as free-text editable was misleading.
+
+**Overridden dot + reset to default.** Across the Settings sections, any field whose value differs from its shipped default shows a small **dot** and a **reset (undo) button** that reverts it to the default. This works with the [sparse installed config](https://github.com/mowglinext/mowglinext/wiki/Configuration#sparse-robot-config-model): reset deletes the key from the installed `mowgli_robot.yaml` so it falls back to the in-package template, and the backend prunes any saved-equals-default key on write to keep the file sparse.
 
 ### Diagnostics: Fusion Graph panel
 
@@ -115,4 +117,4 @@ docker build -t openmower-gui gui/
 
 ## Configuration
 
-The GUI reads and writes `docker/config/mowgli/mowgli_robot.yaml`. Changes take effect after restarting the `mowgli` container.
+The GUI reads and writes the **installed** `mowgli_robot.yaml` (`/config/mowgli_robot.yaml` in the container, bind-mounted from `install/config/mowgli/`). It keeps that file [sparse](https://github.com/mowglinext/mowglinext/wiki/Configuration#sparse-robot-config-model): on write it drops any key whose value equals the shipped default, so absent keys fall through to their template defaults at launch. (The GUI's notion of "default" is the settings JSON schema, which mirrors the in-package template `mowgli_bringup/config/mowgli_robot.yaml` — the true default source the launch-time deep-merge consumes.) Changes take effect after restarting the `mowgli` container.

@@ -27,8 +27,8 @@ Brings up:
 """
 
 import os
+import sys
 
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -41,6 +41,12 @@ from launch.substitutions import (
 from launch_ros.actions import Node
 from launch_ros.descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
+
+# Shared robot-config loader (sibling module installed alongside this launch
+# file). Deep-merges the SPARSE installed mowgli_robot.yaml over the in-package
+# template defaults, so a missing key falls through to its versioned default.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from robot_config_util import load_robot_params  # noqa: E402
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -73,15 +79,11 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # Robot config (mowgli_robot.yaml)
     # ------------------------------------------------------------------
-    # Try the Docker-mounted config first, fall back to the in-package default.
-    robot_config_path = "/ros2_ws/config/mowgli_robot.yaml"
-    if not os.path.isfile(robot_config_path):
-        robot_config_path = os.path.join(bringup_dir, "config", "mowgli_robot.yaml")
-
-    with open(robot_config_path, "r") as f:
-        robot_config_yaml = yaml.safe_load(f) or {}
-
-    robot_params = robot_config_yaml.get("mowgli", {}).get("ros__parameters", {})
+    # Merged params = in-package template defaults with the installed sparse
+    # config layered on top (robot_config_util.load_robot_params). A key the
+    # installed config omits falls through to its versioned template default;
+    # a missing installed file yields the pure template. Single source of truth.
+    robot_params = load_robot_params(bringup_dir, "/ros2_ws/config/mowgli_robot.yaml")
 
     # ------------------------------------------------------------------
     # URDF / xacro
@@ -198,11 +200,22 @@ def generate_launch_description() -> LaunchDescription:
             {"dock_pose_yaw": float(robot_params.get("dock_pose_yaw", 0.0))},
             {"imu_yaw": float(robot_params.get("imu_yaw", 0.0))},
             # Wheel odometry kinematics — single source of truth in
-            # mowgli_robot.yaml. Hardware bridge previously hardcoded
-            # 0.325 m / 300 ticks/m which silently diverged from the
-            # YAML and the URDF (also from the firmware's TICKS_PER_M).
+            # mowgli_robot.yaml. hardware_bridge uses ticks_per_meter for
+            # host-side odometry and also re-sends it to the STM32 so the
+            # wheel PI / firmware odom leave board.h TICKS_PER_M as a
+            # startup-only fallback.
             {"wheel_track": float(robot_params.get("wheel_track", 0.325))},
             {"ticks_per_meter": float(robot_params.get("ticks_per_meter", 300.0))},
+            # Drive-motor wheel-velocity PID + feedforward, pushed to the STM32
+            # firmware so the GUI can retune the per-wheel loop without
+            # reflashing. Defaults mirror the firmware compile-time fallback.
+            {"wheel_pid_kp": float(robot_params.get("wheel_pid_kp", 30.0))},
+            {"wheel_pid_ki": float(robot_params.get("wheel_pid_ki", 5000.0))},
+            {"wheel_pid_kd": float(robot_params.get("wheel_pid_kd", 0.0))},
+            {"wheel_pid_integral_limit": float(robot_params.get(
+                "wheel_pid_integral_limit", 100.0))},
+            {"wheel_pid_pwm_per_mps": float(robot_params.get(
+                "wheel_pid_pwm_per_mps", 300.0))},
             # IMU calibration tuning (operator-tunable via the GUI).
             {"imu_cal_samples": int(robot_params.get("imu_cal_samples", 200))},
             {"imu_cal_persist_path": str(robot_params.get(

@@ -8,7 +8,7 @@ ldlidar_node:
     comm.timeout_msec: 1000
 
     # Sensor config
-    lidar.model: LDLiDAR_LD19
+    lidar.model: LD19
     lidar.rot_verse: CCW                # ROS convention
     lidar.units: M                      # metres
     lidar.frame_id: lidar_link

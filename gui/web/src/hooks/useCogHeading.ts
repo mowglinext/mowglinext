@@ -19,7 +19,7 @@ export const useCogHeading = (): { imu: Imu; lastMessageAt: number | null } => {
             console.log({message: "COG heading stream connected"});
         },
         (e) => {
-            setImu(JSON.parse(e));
+            setImu((e as any));
             setLastMessageAt(Date.now());
         });
     useEffect(() => {

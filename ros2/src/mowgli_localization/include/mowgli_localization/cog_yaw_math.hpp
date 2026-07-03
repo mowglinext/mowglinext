@@ -140,6 +140,30 @@ inline bool cog_sweep_dominates(double omega, double lever_radius, double vx,
   return sweep_speed > ratio * std::abs(vx);
 }
 
+// Deadbanded absolute-rotation increment for the stationary-latch staleness
+// gate.
+//
+// The stationary yaw latch holds the heading from the last forward-motion
+// segment and republishes it at 2 Hz while the robot is still. After an
+// in-place pivot that latch is stale by the pivot angle, yet the
+// instantaneous-omega republish gate passes again the moment the pivot stops.
+// To catch this we integrate rotation since the latch was set and drop the
+// latch past a threshold. The integral MUST be deadbanded: a plain integral of
+// |gyro_z| accumulates the gyro noise floor (~0.01-0.03 rad/s) over a
+// multi-second stationary dwell and would falsely invalidate a perfectly good
+// latch. Below `deadband` the sample is treated as noise and contributes
+// nothing; at or above it the true rotation |omega|*dt is accumulated. A real
+// pivot (|omega| well over the deadband) trips the threshold within a fraction
+// of a turn; a still robot never does.
+inline double cog_latch_rotation_increment(double omega, double dt, double deadband)
+{
+  if (dt <= 0.0 || std::abs(omega) <= deadband)
+  {
+    return 0.0;
+  }
+  return std::abs(omega) * dt;
+}
+
 }  // namespace mowgli_localization
 
 #endif  // MOWGLI_LOCALIZATION__COG_YAW_MATH_HPP_

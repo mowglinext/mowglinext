@@ -28,8 +28,7 @@ MSG_UART_INVALID="Invalid choice"
 MSG_UART_AFTER_REBOOT="available after reboot"
 
 # ── GPS (gps.sh) ──
-MSG_GPS_CONNECTION="GPS connection:"
-MSG_GPS_PROTOCOL="GPS protocol:"
+MSG_GNSS_CONNECTION="GNSS connection:"
 MSG_GPS_DEBUG_CONFIRM="Enable GPS debug port (miniUART / gps_debug)?"
 MSG_GPS_INVALID_CONNECTION="Invalid GPS connection choice"
 MSG_GPS_INVALID_PROTOCOL="Invalid protocol choice"

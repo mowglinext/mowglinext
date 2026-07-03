@@ -177,30 +177,36 @@ void WT901_Init(void)
   * @brief  Reads the 3 accelerometer channels and stores them in *x,*y,*z
   * units are m/s^2
   */
-void WT901_ReadAccelerometerRaw(float *x, float *y, float *z)
+int WT901_ReadAccelerometerRaw(float *x, float *y, float *z)
 {
     uint8_t accel_xyz[6];   // 2 bytes each
 
-    SW_I2C_UTIL_Read_Multi(WT901_ADDRESS, AX, 6, (uint8_t*)accel_xyz);
+    if (!SW_I2C_UTIL_Read_Multi(WT901_ADDRESS, AX, 6, (uint8_t*)accel_xyz)) {
+        return 0;
+    }
 
     *x =  (float)(int16_t)(accel_xyz[1] << 8 | accel_xyz[0]) * WT901_G_FACTOR * MS2_PER_G;
     *y =  (float)(int16_t)(accel_xyz[3] << 8 | accel_xyz[2]) * WT901_G_FACTOR * MS2_PER_G;
-    *z =  (float)(int16_t)(accel_xyz[5] << 8 | accel_xyz[4]) * WT901_G_FACTOR * MS2_PER_G;    
+    *z =  (float)(int16_t)(accel_xyz[5] << 8 | accel_xyz[4]) * WT901_G_FACTOR * MS2_PER_G;
+    return 1;
 }
 
 /**
   * @brief  Reads the 3 gyro channels and stores them in *x,*y,*z
   * units are rad/sec
   */
-void WT901_ReadGyroRaw(float *x, float *y, float *z)
+int WT901_ReadGyroRaw(float *x, float *y, float *z)
 {
     uint8_t gyro_xyz[6];   // 2 bytes each
 
-    SW_I2C_UTIL_Read_Multi(WT901_ADDRESS, GX, 6, (uint8_t*)&gyro_xyz);
+    if (!SW_I2C_UTIL_Read_Multi(WT901_ADDRESS, GX, 6, (uint8_t*)&gyro_xyz)) {
+        return 0;
+    }
     
     *x = (float)(int16_t)(gyro_xyz[1] << 8 | gyro_xyz[0]) * WT901_DPS_FACTOR * RAD_PER_DEG;
     *y = (float)(int16_t)(gyro_xyz[3] << 8 | gyro_xyz[2]) * WT901_DPS_FACTOR * RAD_PER_DEG;
-    *z = (float)(int16_t)(gyro_xyz[5] << 8 | gyro_xyz[4]) * WT901_DPS_FACTOR * RAD_PER_DEG;    
+    *z = (float)(int16_t)(gyro_xyz[5] << 8 | gyro_xyz[4]) * WT901_DPS_FACTOR * RAD_PER_DEG;
+    return 1;
 }
 
 /**
@@ -224,15 +230,18 @@ float WT901_TempRaw(void)
   * @brief  Reads the 3 magnetometer channels and stores them in *x,*y,*z
   * units are uT (microtesla)
   */
-void WT901_ReadMagRaw(float *x, float *y, float *z)
+int WT901_ReadMagRaw(float *x, float *y, float *z)
 {
     uint8_t mag_xyz[6];   // 2 bytes each
 
-    SW_I2C_UTIL_Read_Multi(WT901_ADDRESS, HX, 6, (uint8_t*)mag_xyz);
+    if (!SW_I2C_UTIL_Read_Multi(WT901_ADDRESS, HX, 6, (uint8_t*)mag_xyz)) {
+        return 0;
+    }
 
     *x = (float)(int16_t)(mag_xyz[1] << 8 | mag_xyz[0]);
     *y = (float)(int16_t)(mag_xyz[3] << 8 | mag_xyz[2]);
     *z = (float)(int16_t)(mag_xyz[5] << 8 | mag_xyz[4]);
+    return 1;
 }
 
 #endif

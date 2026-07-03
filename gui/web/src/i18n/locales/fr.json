@@ -1,0 +1,2748 @@
+{
+  "language": {
+    "label": "Langue",
+    "fr": "Français",
+    "en": "English"
+  },
+  "nav": {
+    "home": "Accueil",
+    "map": "Carte",
+    "schedule": "Planning",
+    "diagnostics": "Diagnostic",
+    "diagShort": "Diag",
+    "stats": "Stats",
+    "settings": "Réglages",
+    "parameters": "Paramètres",
+    "logs": "Logs",
+    "onboarding": "Onboarding",
+    "more": "Plus",
+    "close": "Fermer"
+  },
+  "pageMeta": {
+    "home": {
+      "subtitle": "Vue en direct"
+    },
+    "map": {
+      "subtitle": "Zones et trajectoire"
+    },
+    "schedule": {
+      "subtitle": "Semaine type"
+    },
+    "diagnostics": {
+      "subtitle": "Capteurs et état système"
+    },
+    "statistics": {
+      "title": "Statistiques",
+      "subtitle": "Historique long terme"
+    },
+    "settings": {
+      "subtitle": "Configuration robot"
+    },
+    "parameters": {
+      "subtitle": "Réglage ROS2 en direct"
+    },
+    "logs": {
+      "subtitle": "Sortie des conteneurs"
+    }
+  },
+  "parametersPage": {
+    "tierBasic": "Débutant",
+    "tierMiddle": "Avancé",
+    "tierExpert": "Expert",
+    "confirmSafetyTitle": "Appliquer ce réglage de sécurité ?",
+    "confirmSafetyBody": "influence le mouvement ou la sécurité du robot. La nouvelle valeur s'applique immédiatement sur le robot en marche.",
+    "confirmNewValue": "Nouvelle valeur :",
+    "apply": "Appliquer",
+    "cancel": "Annuler",
+    "arrayReadOnlyTooltip": "Les tableaux sont en lecture seule : modifier un vecteur en sécurité nécessite une interface par élément, pas encore disponible ici.",
+    "safetyTag": "Sécurité",
+    "loadError": "Impossible de charger les paramètres — le robot est-il connecté ?",
+    "updateSuccess": "{{name}} mis à jour",
+    "updateFailure": "Échec de la mise à jour de {{name}}",
+    "liveWarningTitle": "Ces réglages s'appliquent en direct et ne sont pas sauvegardés dans le YAML",
+    "liveWarningDescription": "Les modifications prennent effet immédiatement sur le robot en marche et sont perdues au prochain redémarrage de ROS2. Pour des valeurs persistantes, utilisez la page Réglages.",
+    "shownCount_one": "{{count}} paramètre · application en direct",
+    "shownCount_other": "{{count}} paramètres · application en direct",
+    "searchPlaceholder": "Rechercher un paramètre…",
+    "tierGuardTitle": "Mode {{tier}} — réservé aux utilisateurs avertis",
+    "tierGuardDescription": "Ces paramètres bas-niveau pilotent l'estimation de pose, les gains moteur, les seuils de sécurité et plus encore. Une mauvaise valeur peut faire bouger le robot de façon inattendue ou dégrader la localisation. Les contrôles restent verrouillés tant que vous n'avez pas confirmé.",
+    "understandRisks": "J'ai compris les risques",
+    "emptySearch": "Aucun paramètre ne correspond à votre recherche",
+    "emptyProfile": "Aucun paramètre dans ce profil"
+  },
+  "statusComponent": {
+    "charging": "En charge",
+    "chargerActive": "Chargeur actif",
+    "notCharging": "Pas en charge",
+    "emergencyWithReason": "Urgence : {{reason}}",
+    "emergencyStopUpper": "ARRÊT D'URGENCE",
+    "latched": "Verrouillé (appuyez sur play pour libérer)",
+    "initializing": "Initialisation",
+    "systemAndSafety": "Système & sécurité",
+    "mowerWithStatus": "Tondeuse : {{status}}",
+    "rpiPower": "Alim. RPi",
+    "mowEnabled": "Tonte activée",
+    "rain": "Pluie",
+    "noRain": "Pas de pluie",
+    "basePresent": "Base : présente",
+    "baseAbsent": "Base : absente",
+    "energyAndMotor": "Énergie & moteur",
+    "battery": "Batterie",
+    "charge": "Charge",
+    "current": "Courant",
+    "motor": "Moteur",
+    "summary": "Résumé",
+    "mowerState": "Micrologiciel",
+    "power": "Alimentation",
+    "cutOff": "Coupée",
+    "uiBoard": "Carte UI",
+    "available": "Disponible",
+    "absent": "Absente",
+    "detected": "Détectée",
+    "none": "Aucune",
+    "emergencyStop": "Arrêt d'urgence",
+    "base": "Base",
+    "present": "Présente",
+    "motorTemperature": "Température moteur",
+    "advanced": "Avancé",
+    "systemStatus": "État système",
+    "escPower": "Alim. ESC",
+    "soundModule": "Module son",
+    "soundBusy": "Son : occupé",
+    "soundIdle": "Son : inactif",
+    "rainDetected": "Pluie détectée",
+    "energy": "Énergie",
+    "baseSensor": "Capteur de base",
+    "distanceValue": "Distance : {{value}} m",
+    "cuttingMotor": "Moteur de coupe",
+    "escStatus": "État ESC",
+    "tempEsc": "Temp. ESC",
+    "tempMotor": "Temp. moteur"
+  },
+  "highLevelStatus": {
+    "state": "État",
+    "battery": "Batterie",
+    "chargingEnd": "Fin de charge",
+    "charging": "En charge",
+    "emergencyStop": "Arrêt d'urgence"
+  },
+  "mowerStatus": {
+    "restartingMowgli": "Redémarrage Mowgli…",
+    "mowgliRestarted": "Mowgli redémarré",
+    "mowgliRestartFailed": "Échec du redémarrage Mowgli",
+    "restarting": "Redémarrage…",
+    "restartFailed": "Échec du redémarrage",
+    "shuttingDown": "Extinction…",
+    "shutdownFailed": "Échec de l'extinction",
+    "confirm": "Confirmer",
+    "cancel": "Annuler",
+    "restartMowgli": "Redémarrer Mowgli",
+    "restartMowgliConfirm": "Cela va redémarrer le conteneur MowgliNext.",
+    "advanced": "Avancé",
+    "restartBoard": "Redémarrer la carte (STM32)",
+    "restartBoardConfirm": "Réinitialise le firmware STM32 (NVIC_SystemReset). À utiliser pour débloquer une carte figée — par ex. l'IMU renvoyant NaN. Les moteurs/la lame s'arrêtent pendant le reset (~1 s).",
+    "restartPi": "Redémarrer le Raspberry Pi",
+    "restartPiConfirm": "Le système va redémarrer. Vous perdrez la connexion temporairement.",
+    "shutdownPi": "Éteindre le Raspberry Pi",
+    "shutdownPiConfirm": "Le système va s'éteindre. Un accès physique sera nécessaire pour le rallumer.",
+    "rearm": "Réarmer",
+    "rearmEmergencyTooltip": "Réarmer l'arrêt d'urgence (le firmware décide si le verrou se libère)"
+  },
+  "mowerActions": {
+    "sendHomeTitle": "Renvoyer le robot à la base ?",
+    "sendHomeBody": "Le robot va calculer un itinéraire vers la base et s'y rendre seul.",
+    "sendHomeHint": "Assurez-vous que la zone entre le robot et la base est dégagée et que la position de la base est correctement définie.",
+    "returnToDock": "Retour dock",
+    "cancel": "Annuler",
+    "recordZone": "Enregistrer une zone",
+    "mowNextZone": "Reprendre la tonte",
+    "continue": "Reprendre",
+    "pause": "Pause",
+    "disableEmergency": "Désactiver l'arrêt d'urgence",
+    "bladeForward": "Lame avant",
+    "bladeBackward": "Lame arrière",
+    "bladeOff": "Lame arrêtée",
+    "start": "Démarrer",
+    "resume": "Reprendre",
+    "startFresh": "Redémarrer à zéro",
+    "emergencyStop": "Arrêt d'urgence",
+    "rearm": "Réarmer",
+    "more": "Plus",
+    "cardTitle": "Actions"
+  },
+  "utils": {
+    "stateOffline": "Hors ligne",
+    "stateAtBase": "À la base",
+    "stateIdle": "Au repos",
+    "stateCharging": "En charge",
+    "statePreflight": "Pré-vol",
+    "stateLeavingBase": "Départ base",
+    "stateCalibration": "Calibration",
+    "stateMowing": "Tonte",
+    "stateTransit": "Transit",
+    "statePlanning": "Planification",
+    "stateObstacleBackoff": "Évitement obstacle",
+    "stateObstacleCleared": "Obstacle contourné",
+    "stateAreaUnreachable": "Zone inaccessible",
+    "stateSkippedStrip": "Bande ignorée",
+    "stateReturningBase": "Retour base",
+    "stateMowingComplete": "Tonte terminée",
+    "stateRecording": "Enregistrement",
+    "stateSaved": "Enregistré",
+    "stateManual": "Manuel",
+    "stateLowBattery": "Batterie faible",
+    "stateCriticalBattery": "Batterie critique",
+    "stateReturnFailedBattery": "Échec retour (batterie)",
+    "stateRain": "Pluie",
+    "stateRainWaiting": "Attente pluie",
+    "stateRainTimeout": "Délai pluie dépassé",
+    "stateResuming": "Reprise",
+    "stateResumingStart": "Reprise départ",
+    "stateBoundaryRecovery": "Récupération limite",
+    "stateEmergencyStop": "Arrêt d'urgence",
+    "stateBoundaryAlert": "Alerte limite",
+    "stateStartFailed": "Échec départ",
+    "stateChargerFailed": "Échec chargeur",
+    "stateNavigationFailed": "Échec navigation",
+    "stateCoverageFailed": "Échec couverture"
+  },
+  "flashBoard": {
+    "advancedParamsLabel": "Paramètres firmware avancés (peuvent endommager le matériel)",
+    "advancedAlertMessage": "Ces réglages contrôlent la charge de la batterie et les sécurités physiques",
+    "advancedAlertDescription": "Des valeurs de tension ou de courant incorrectes peuvent endommager la batterie ou la carte. Ne modifiez ces champs que si vous savez précisément ce que vous faites.",
+    "disableEmergencyWarning": "⚠ Désactive l'arrêt d'urgence du firmware (roues levées, inclinaison, bouton stop). À n'utiliser qu'en banc de test, jamais sur un robot avec lame.",
+    "errorRetrievingConfig": "Erreur lors de la récupération de la configuration",
+    "errorConnectingFlashEndpoint": "Erreur de connexion au point de flashage",
+    "confirmFlashTitle": "Confirmer le flashage du firmware",
+    "confirmVerifyParams": "Veuillez vérifier les paramètres suivants avant de flasher :",
+    "maxChargeCurrentLabel": "Courant de charge max",
+    "maxChargeVoltageLabel": "Tension de charge max",
+    "batChargeCutoffVoltageLabel": "Tension de coupure de charge batterie",
+    "limitVoltage150MALabel": "Tension limite 150 mA",
+    "imuInclinationThresholdLabel": "Seuil d'inclinaison IMU",
+    "confirmWrongValuesWarning": "Des valeurs de tension ou de courant incorrectes peuvent endommager votre batterie ou votre matériel !",
+    "flash": "Flasher",
+    "cancel": "Annuler",
+    "flashingFirmware": "Flashage du firmware…",
+    "flashFailed": "Échec du flashage",
+    "flashComplete": "Flashage terminé",
+    "flashedSuccessfully": "Firmware flashé avec succès !",
+    "errorPrefix": "Erreur",
+    "backToConfig": "Retour à la configuration",
+    "flashingShort": "Flashage…",
+    "next": "Suivant",
+    "boardSelectionTitle": "Sélection de la carte",
+    "versionTitle": "Version",
+    "archiveTitle": "Archive",
+    "archiveTooltip": "Archive à utiliser pour le firmware",
+    "repositoryTitle": "Dépôt",
+    "repositoryTooltip": "Dépôt à utiliser pour le firmware",
+    "branchTitle": "Branche",
+    "branchTooltip": "Branche à utiliser pour le firmware",
+    "firmwareDirectoryTitle": "Répertoire du firmware",
+    "firmwareDirectoryTooltip": "Chemin vers le répertoire du firmware dans le dépôt cloné (contenant stm32/ros_usbnode)",
+    "panelSelectionTitle": "Sélection du panneau",
+    "debugTypeTitle": "Type de débogage",
+    "debugTypeNone": "Aucun",
+    "maxMpsTitle": "Vitesse max (m/s)",
+    "maxMpsTooltip": "Vitesse maximale en mètres par seconde",
+    "tickPerMTitle": "Ticks par mètre",
+    "tickPerMTooltip": "Nombre de ticks de roue par mètre",
+    "wheelBaseTitle": "Empattement",
+    "wheelBaseTooltip": "Empattement en mètres",
+    "disableEmergencyTitle": "Désactiver l'arrêt d'urgence",
+    "disableEmergencyTooltip": "Désactiver l'arrêt d'urgence",
+    "maxChargeCurrentTitle": "Courant de charge max",
+    "maxChargeCurrentTooltip": "Courant de charge max en ampères",
+    "limitVoltage150MATitle": "Tension limite 150 mA",
+    "limitVoltage150MATooltip": "Limite de tension pendant la charge lente, en volts",
+    "maxChargeVoltageTitle": "Tension de charge max",
+    "maxChargeVoltageTooltip": "Tension de charge max en volts",
+    "batChargeCutoffVoltageTitle": "Tension de coupure de charge batterie",
+    "batChargeCutoffVoltageTooltip": "Tension batterie max autorisée en volts",
+    "oneWheelLiftEmergencyMillisTitle": "Délai d'urgence levée d'une roue (ms)",
+    "oneWheelLiftEmergencyMillisTooltip": "Temps en ms avant l'urgence lorsqu'une roue est levée",
+    "bothWheelsLiftEmergencyMillisTitle": "Délai d'urgence levée des deux roues (ms)",
+    "bothWheelsLiftEmergencyMillisTooltip": "Temps en ms avant l'urgence lorsque les deux roues sont levées",
+    "tiltEmergencyMillisTitle": "Délai d'urgence inclinaison (ms)",
+    "tiltEmergencyMillisTooltip": "Temps en ms avant l'urgence lorsque la tondeuse est inclinée",
+    "stopButtonEmergencyMillisTitle": "Délai d'urgence bouton stop (ms)",
+    "stopButtonEmergencyMillisTooltip": "Temps en ms avant l'urgence lorsque le bouton stop est appuyé",
+    "playButtonClearEmergencyMillisTitle": "Délai bouton play pour effacer l'urgence (ms)",
+    "playButtonClearEmergencyMillisTooltip": "Temps en ms pour maintenir le bouton play afin d'effacer l'urgence",
+    "imuOnboardInclinationThresholdTitle": "Seuil d'inclinaison IMU embarquée",
+    "imuOnboardInclinationThresholdTooltip": "Seuil d'inclinaison IMU (0x2C = plus permissif, 0x38 = d'origine)",
+    "externalImuAccelerationTitle": "Accélération IMU externe",
+    "externalImuAccelerationTooltip": "Utiliser l'IMU externe pour l'accélération",
+    "externalImuAngularTitle": "Angulaire IMU externe",
+    "externalImuAngularTooltip": "Utiliser l'IMU externe pour l'angulaire",
+    "masterJ18Title": "J18 maître",
+    "masterJ18Tooltip": "Utiliser J18 comme maître",
+    "perimeterWireTitle": "Utiliser le fil périmétrique",
+    "perimeterWireTooltip": "Utiliser le fil périmétrique",
+    "validationFailed": "Échec de la validation",
+    "flashFirmware": "Flasher le firmware",
+    "skip": "Ignorer"
+  },
+  "dockingSection": {
+    "dockingBehaviour": "Comportement de l'accostage",
+    "dockingBehaviourDescription": "Réglez la façon dont le robot s'approche et quitte la base. La position de la base (X, Y, Yaw) se définit depuis l'éditeur de carte.",
+    "undockDistance": "Distance de désaccostage",
+    "undockDistanceTooltip": "Distance de recul en quittant la base",
+    "undockSpeed": "Vitesse de désaccostage",
+    "undockSpeedTooltip": "Vitesse de recul au désaccostage",
+    "approachDistance": "Distance d'approche",
+    "approachDistanceTooltip": "Distance du point de préparation devant la base",
+    "chargerDetection": "Détection du chargeur",
+    "chargerDetectionTooltip": "Utiliser la tension de charge pour confirmer l'accostage",
+    "advanced": "Avancé",
+    "maxRetries": "Tentatives max",
+    "maxRetriesTooltip": "Nombre d'essais d'accostage avant d'abandonner",
+    "chargingThreshold": "Seuil de charge",
+    "chargingThresholdTooltip": "Courant batterie (A) à partir duquel SimpleChargingDock considère la base atteinte. Plus élevé = le robot s'enfonce davantage dans les contacts avant de s'arrêter ; plus bas = s'arrête plus tôt. ~0,3 A donne un contact stable sur le chargeur YardForce.",
+    "approachOvershoot": "Dépassement d'approche",
+    "approachOvershootTooltip": "Distance (m) parcourue au-delà de la pose de la base pour bien enfoncer les contacts de charge. ~0,05 m compense le bruit RTK/bras de levier résiduel.",
+    "baseHeadingUncertainty": "Incertitude du cap de la base",
+    "baseHeadingUncertaintyTooltip": "Écart-type (rad) du cap de la base utilisé pour amorcer le graphe de fusion au contact de charge. Plus faible = on fait davantage confiance au cap calibré."
+  },
+  "diagnosticsPage": {
+    "verdictEmergency": "Urgence",
+    "verdictAttention": "Attention requise",
+    "verdictAllGood": "Tout va bien",
+    "subtitleEmergency": "Arrêt d'urgence actif — intervention requise",
+    "subtitleContainerStopped": "Un conteneur est arrêté — vérifiez le système",
+    "subtitleOutOfRange": "GPS, batterie ou température hors limites",
+    "subtitleWatch": "Tout fonctionne, quelques points à surveiller",
+    "subtitleAllOperational": "Tous les systèmes sont opérationnels",
+    "robotStatus": "État du robot",
+    "statusLabel": "État",
+    "containersOk": "Conteneurs OK",
+    "containerProblem": "Problème conteneur",
+    "gpsBadge": "GPS : {{value}}",
+    "batteryBadge": "Batterie : {{value}}%",
+    "emergencyUpper": "URGENCE",
+    "noEmergency": "Pas d'urgence",
+    "noContainerData": "Aucune donnée conteneur",
+    "noCoverageData": "Aucune donnée de couverture",
+    "tabSystem": "Système",
+    "tabLocalization": "Localisation",
+    "calibrationStatus": "État de la calibration",
+    "escOff": "Éteint",
+    "escDisconnected": "Déconnecté",
+    "escError": "Erreur",
+    "escStalled": "Calé",
+    "escOk": "OK",
+    "escRunning": "En marche",
+    "colName": "Nom",
+    "colState": "État",
+    "colStatus": "Statut",
+    "colStarted": "Démarré",
+    "containers": "Conteneurs",
+    "refresh": "Rafraîchir",
+    "temperature": "Température",
+    "firmwareDebugTitle": "Debug Firmware",
+    "firmwareDebugOffTitle": "Les diagnostics firmware sont désactivés.",
+    "firmwareDebugOffBody": "Activez l’interrupteur pour demander au STM32 et à hardware_bridge d’émettre uniquement les lignes de diagnostic firmware.",
+    "firmwareDebugConnecting": "Connexion aux diagnostics firmware…",
+    "firmwareDebugWaiting": "En attente de lignes de diagnostic firmware…",
+    "firmwareDebugStreamError": "Flux de diagnostic firmware indisponible.",
+    "firmwareDebugToggleFailed": "Impossible de mettre à jour l’état du debug firmware",
+    "lastSnapshot": "Dernier instantané : il y a {{seconds}} s",
+    "yes": "Oui",
+    "no": "Non",
+    "unknown": "Inconnu",
+    "unknownLower": "inconnu",
+    "notAvailable": "Non disponible",
+    "satellitesUsed": "Satellites utilisés",
+    "satellitesVisible": "Satellites visibles",
+    "satellitesTracked": "Satellites suivis",
+    "verticalAccuracyM": "Précision verticale (m)",
+    "headingDeg": "Cap GNSS (deg)",
+    "headingAccuracyDeg": "Précision du cap (deg)",
+    "baselineAzimuthDeg": "Azimut de la baseline (deg)",
+    "baselinePitchDeg": "Tangage de la baseline (deg)",
+    "baselineLengthM": "Longueur de la baseline (m)",
+    "baselineSolutionStatus": "Statut de solution de la baseline",
+    "correctionAgeS": "Âge des corrections (s)",
+    "filteredPose": "Pose filtrée (repère carte)",
+    "live": "En direct",
+    "waiting": "En attente...",
+    "xM": "X (m)",
+    "yM": "Y (m)",
+    "zM": "Z (m)",
+    "yawDeg": "Lacet (deg)",
+    "rollDeg": "Roulis (deg)",
+    "pitchDeg": "Tangage (deg)",
+    "zDrift": "Dérive Z",
+    "flatCheck": "Contrôle d'horizontalité",
+    "flatCheckOk": "OK",
+    "flatCheckDrift": "DÉRIVE",
+    "fixType": "Type de fix",
+    "gpsGnssTitle": "GPS / GNSS",
+    "latitude": "Latitude",
+    "longitude": "Longitude",
+    "altitudeM": "Altitude (m)",
+    "horizontalAccuracyM": "Précision horizontale (m)",
+    "receiver": "Récepteur",
+    "backend": "Backend",
+    "rtkMode": "Mode RTK",
+    "correctionStreamStatus": "Flux de correction",
+    "differentialCorrections": "Corrections différentielles",
+    "correctionsActive": "Corrections actives",
+    "dualAntennaHeading": "Cap double antenne",
+    "dualAntennaBaseline": "Baseline double antenne",
+    "msmSummary": "Résumé MSM",
+    "rfInterference": "Interférence RF",
+    "jamming": "Brouillage",
+    "advancedGnssUnavailable": "Les champs GNSS avancés ne sont pas disponibles pour ce backend.",
+    "graphSaved": "Graphe enregistré",
+    "graphCleared": "Graphe effacé",
+    "fusionGraphActionFailed": "Échec de l'action sur le graphe de fusion",
+    "fusionGraphTitle": "Graphe de fusion (iSAM2)",
+    "stale": "Périmé",
+    "running": "en marche",
+    "saveGraph": "Enregistrer le graphe",
+    "clearGraph": "Effacer le graphe",
+    "nodesInGraph": "Nœuds dans le graphe",
+    "withScans": "{{count}} avec scans",
+    "loopClosures": "Fermetures de boucle",
+    "icpSuccessRate": "Taux de réussite ICP",
+    "matches": "{{ok}}/{{total}} correspondances",
+    "scansReceived": "{{count}} scans reçus",
+    "icpMonitorTitle": "ICP / Recalage de scans",
+    "icpMonitorShort": "Moniteur ICP",
+    "live": "en direct",
+    "icpScanMatchRate": "Taux de recalage",
+    "icpRejects": "Rejets ICP",
+    "icpRejectBreakdown": "rmse {{rmse}} · inliers {{inliers}} · cohérence {{sanity}} · divergence {{diverge}}",
+    "icpKeyframes": "Images-clés",
+    "icpKfMatches": "{{rate}} % · {{ok}}/{{total}} recalages clés",
+    "icpNoKeyframes": "aucune image-clé — pas de cap absolu",
+    "icpAttachRate": "{{rate}} % des scans intégrés",
+    "icpGpsWrongfix": "Rejets GPS mauvais-fix : {{count}}",
+    "icpStationaryPush": "poussée à l'arrêt : {{count}}",
+    "icpMonitorHint": "l'ICP image-à-image ne donne qu'un cap relatif ; le cap absolu nécessite images-clés / fermetures de boucle",
+    "icpHeading": "Cap ICP",
+    "fusedHeading": "Cap fusionné",
+    "icpHeadingDiff": "Δ cap (ICP−fusionné)",
+    "icpPosDiff": "Δ position (ICP−fusionné)",
+    "poseSigma": "σ de pose",
+    "yawSigma": "lacet ±{{value}}°",
+    "fusionGraphDescPart1": "Graphe de facteurs GTSAM iSAM2. Enregistrer conserve les nœuds + scans dans",
+    "fusionGraphDescPart2": "Effacer vide le graphe et attend le prochain fix GPS ou set_pose pour se réinitialiser.",
+    "fusionGraphTopicLabel": "Topic :",
+    "lastUpdateAgo": "· dernière mise à jour il y a {{seconds}} s",
+    "headingSources": "Sources de cap (fusionnées par fusion_graph)",
+    "filter": "Filtre",
+    "referenceSignal": "Signal de référence pour les écarts ci-dessous.",
+    "cogGps": "COG (GPS)",
+    "deltaFilterCog": "Δ(filtre−cog) : {{value}}°",
+    "magnetometer": "Magnétomètre",
+    "deltaFilterMag": "Δ(filtre−mag) : {{value}}°",
+    "colArea": "Zone",
+    "colCoverage": "Couverture",
+    "colTotalCells": "Cellules totales",
+    "colMowed": "Tondues",
+    "colObstacles": "Obstacles",
+    "colStripsLeft": "Bandes restantes",
+    "btState": "État BT",
+    "state": "État",
+    "subState": "Sous-état",
+    "battery": "Batterie",
+    "voltage": "Tension",
+    "charging": "En charge",
+    "chargeCurrent": "Courant de charge",
+    "chargerVoltage": "Tension du chargeur",
+    "emergency": "Urgence",
+    "emergencyActive": "ACTIVE",
+    "latched": "Verrouillée",
+    "clear": "Dégagée",
+    "resetEmergency": "Réarmer l'urgence",
+    "activeBtNodes": "Nœuds BT actifs",
+    "coverage": "Couverture",
+    "configurationCrossChecks": "Vérifications croisées de configuration",
+    "noWarnings": "Aucun avertissement.",
+    "dockPose": "Pose de la base",
+    "datumLat": "Latitude datum",
+    "datumLon": "Longitude datum",
+    "configPresent": "Configuration présente",
+    "calibrationStarted": "Calibration démarrée",
+    "calibrationStartedDesc": "Exécution de 3 cycles avant/arrière plus la pré-phase de base optionnelle. Cela peut prendre jusqu'à 2 minutes.",
+    "calibrationComplete": "Calibration terminée",
+    "refreshingStatus": "Actualisation du statut...",
+    "calibrationFailed": "Échec de la calibration",
+    "magCalibrationStarted": "Calibration du magnétomètre démarrée",
+    "magCalibrationStartedDesc": "Le robot va effectuer un figure-8 (~30 s). Assurez-vous d'au moins 1,5 m dégagé devant et derrière.",
+    "magCalibrationComplete": "Calibration du magnétomètre terminée",
+    "magCalibrationFailed": "Échec de la calibration du magnétomètre",
+    "unknownError": "Erreur inconnue",
+    "dockCalibration": "Calibration de la base",
+    "present": "Présent",
+    "missing": "Manquant",
+    "runCalibration": "Lancer la calibration",
+    "position": "Position",
+    "yaw": "Lacet",
+    "dockPoseNotSet": "La pose de la base n'est pas encore définie dans mowgli_robot.yaml. Lancez la calibration pendant que le robot est sur la base, ou placez la base manuellement depuis la vue carte.",
+    "imuBiasCalibration": "Calibration du biais IMU",
+    "calibratedAt": "Calibré le",
+    "samples": "Échantillons",
+    "gyroBias": "Biais gyroscope (rad/s)",
+    "impliedPitchRoll": "Tangage/roulis implicite",
+    "noImuCalibration": "Pas encore de imu_calibration.txt — hardware_bridge calibrera automatiquement au prochain accostage.",
+    "magnetometerCalibration": "Calibration du magnétomètre",
+    "disabled": "Désactivé",
+    "enableAndRun": "Activer et lancer",
+    "magFusionOffPart1": "La fusion du magnétomètre est désactivée. Activez ",
+    "magFusionOffPart2": " sur calibrate_imu_yaw_node pour inclure la phase de rotation.",
+    "angVelX": "Vit. ang. X",
+    "angVelY": "Vit. ang. Y",
+    "angVelZ": "Vit. ang. Z",
+    "linAccX": "Acc. lin. X",
+    "linAccY": "Acc. lin. Y",
+    "linAccZ": "Acc. lin. Z",
+    "wheelOdometry": "Odométrie des roues",
+    "linearVel": "Vitesse linéaire (m/s)",
+    "angularVel": "Vitesse angulaire (rad/s)",
+    "poseXM": "Pose X (m)",
+    "poseYM": "Pose Y (m)",
+    "perWheelEncoders": "Encodeurs par roue",
+    "frontLeft": "Avant gauche",
+    "frontRight": "Avant droite",
+    "rearLeft": "Arrière gauche",
+    "rearRight": "Arrière droite",
+    "ticksWithDirection": "{{ticks}} ticks · {{direction}}",
+    "directionForward": "↑ avant",
+    "directionReverse": "↓ arrière",
+    "noEncoderReading": "pas de lecture d'encodeur",
+    "tickFactorLabel": "Facteur de ticks :",
+    "tickFactorUnit": "ticks/m à la roue.",
+    "bodyOmegaLabel": "Oméga corps depuis diff. G/D :",
+    "perWheelTempNote": "Les températures et courants moteur par roue ne sont pas exposés par le firmware ; seul le moteur de lame les rapporte (voir État du matériel ci-dessous).",
+    "hardwareStatus": "État du matériel",
+    "mowerStatus": "État de la tondeuse",
+    "statusOk": "OK",
+    "initializing": "Initialisation",
+    "rain": "Pluie",
+    "detected": "Détectée",
+    "none": "Aucune",
+    "escStatus": "État ESC",
+    "escUnknown": "Inconnu ({{code}})",
+    "escTemp": "Temp. ESC",
+    "motorTemp": "Temp. moteur",
+    "motorRpm": "RPM moteur",
+    "rpiPower": "Alim. RPi",
+    "escPower": "Alim. ESC",
+    "uiBoard": "Carte UI",
+    "soundModule": "Module son",
+    "mowEnabled": "Tonte activée",
+    "rosDiagnostics": "Diagnostics ROS",
+    "noDiagnosticMessages": "Aucun message de diagnostic reçu.",
+    "noKeyValuePairs": "Aucune paire clé-valeur.",
+    "alerts": "Alertes",
+    "fusionGraphShort": "Graphe de fusion",
+    "headingSourcesShort": "Sources de cap",
+    "btStateAndCoverage": "État BT & couverture",
+    "sensors": "Capteurs",
+    "tabRobot": "Robot",
+    "tabCalibration": "Calibration"
+  },
+  "mowgliNextPage": {
+    "headlineUntilHomePrefix": "Encore ",
+    "headlineMinutes": "{{value}} min",
+    "headlineUntilHomeSuffix": " avant la maison.",
+    "headlineChargingPrefix": "En charge · ",
+    "headlinePercent": "{{value}} %",
+    "emergencyStop": "Arrêt d'urgence",
+    "headlineIdlePrefix": "Mowgli est ",
+    "headlineIdleEmphasis": "au repos",
+    "headlineIdleSuffix": ".",
+    "sublineMoving": "Avance à {{gps}} · {{area}}",
+    "activeZone": "zone active",
+    "sublineCharging": "Sur la dock, {{current}} A en entrée.",
+    "sublineEmergency": "Sécurise la zone puis relance avec le bouton vert.",
+    "sublineIdle": "Tape Play pour démarrer une tonte ou laisse le planning gérer.",
+    "emergencyConfirmBody": "Cela déclenche l'arrêt d'urgence matériel (lames + déplacement). À réarmer manuellement ensuite. Continuer ?",
+    "cancel": "Annuler",
+    "mowgliMowing": "Mowgli est en tonte",
+    "mowgliCharging": "Mowgli charge",
+    "welcomeBack": "Bon retour",
+    "orbMowing": "En tonte",
+    "orbCharging": "En charge",
+    "orbAlert": "Alerte",
+    "orbIdle": "Au repos",
+    "greetingNight": "Bonne nuit",
+    "greetingMorning": "Bonjour",
+    "greetingAfternoon": "Bel après-midi",
+    "greetingEvening": "Bonsoir",
+    "mowgliWithZone": "Mowgli · {{area}}",
+    "mowgliNoZone": "Mowgli · sans zone",
+    "battery": "batterie",
+    "coverageToday": "Couverture aujourd'hui · {{pct}} %",
+    "liveMap": "Carte vivante",
+    "livePath": "Trajectoire en direct",
+    "viewMap": "Voir la carte",
+    "blades": "Lames",
+    "motor": "Moteur",
+    "rain": "Pluie",
+    "rainDetected": "détectée",
+    "dry": "au sec",
+    "mowingPaused": "tonte mise en pause",
+    "goodConditions": "bonnes conditions",
+    "healthCheck": "Bilan santé",
+    "gpsSignal": "Signal GPS",
+    "rainDetectedRow": "Pluie détectée",
+    "noRain": "Pas de pluie",
+    "mowingPausedShort": "tonte en pause",
+    "conditionsOk": "conditions OK",
+    "alertActive": "Alerte active",
+    "noAlerts": "Aucune alerte",
+    "toRearm": "à réarmer",
+    "allClear": "tout clair",
+    "motorTemp": "Moteur {{temp}} °C",
+    "runningHot": "tourne chaud",
+    "nominal": "nominal",
+    "firmwareOk": "Firmware OK",
+    "firmwareIncompatible": "Firmware incompatible",
+    "firmwareVersion": "v{{version}}",
+    "firmwareReflash": "v{{version}} — reflashez le firmware pour tondre"
+  },
+  "onboardingPage": {
+    "preview": "Aperçu",
+    "previewNotActiveYet": "Aperçu — pas encore actif",
+    "expertFieldsNotWired": "Ces champs experts sont enregistrés. Le modèle de récepteur optionnel est transmis à Universal GNSS lorsqu'il est défini, tandis que les autres surcharges expertes brutes ne sont pas encore traduites par MowgliNext. Universal GNSS valide et applique les groupes de signaux documentés pour le modèle sélectionné, et Inconnu / Auto utilise un repli sûr avec avertissements.",
+    "gpsRestarting": "Redémarrage GPS…",
+    "gpsRestartedWaitRtk": "GPS redémarré — patientez pour le RTK Fix",
+    "gpsRestartFailed": "Échec du redémarrage GPS",
+    "welcomeTitlePrefix": "Faisons connaissance avec votre",
+    "welcomeTitleSuffix": ".",
+    "welcomeIntro": "Quelques étapes rapides et vous êtes prêt à tondre. Rien n'est gravé dans le marbre — vous pourrez toujours modifier ces réglages plus tard depuis la page Réglages.",
+    "welcomeCardRobotTitle": "Choisissez votre robot",
+    "welcomeCardRobotDesc": "Sélectionnez votre modèle de tondeuse et le firmware",
+    "welcomeCardGpsTitle": "Configurez le GPS",
+    "welcomeCardGpsDesc": "Configurez votre position et les corrections RTK",
+    "welcomeCardSensorsTitle": "Placez vos capteurs",
+    "welcomeCardSensorsDesc": "Positionnez visuellement le LiDAR, l'IMU et le GPS sur le robot",
+    "getStarted": "Commencer",
+    "robotModelTitle": "Choisissez votre robot",
+    "robotModelIntro": "Sélectionnez votre modèle de tondeuse. Cela préremplit les paramètres matériels comme la taille des roues, la tension de la batterie et les dimensions de la lame.",
+    "customConfigTitle": "Configuration personnalisée",
+    "customConfigDesc": "Vous pourrez affiner tous les paramètres matériels dans les Réglages après l'onboarding.",
+    "wheelRadiusLabel": "Rayon de roue",
+    "wheelRadiusTooltip": "Rayon de la roue motrice en mètres",
+    "wheelTrackLabel": "Voie des roues",
+    "wheelTrackTooltip": "Distance centre à centre entre les roues",
+    "bladeRadiusLabel": "Rayon de lame",
+    "bladeRadiusTooltip": "Rayon de la lame de coupe",
+    "ntripTitle": "Corrections NTRIP",
+    "ntripIntro": "Les corrections RTK donnent une précision centimétrique. Choisissez un réseau de correction et la base la plus proche sur la carte — les identifiants des réseaux gratuits sont préremplis pour vous. Vous configurerez le récepteur GPS ensuite.",
+    "gpsTitle": "Configuration GNSS",
+    "gpsIntro": "Configurez d'abord le récepteur GNSS avec des profils vendor-neutral, puis activez le mode Expert uniquement si vous avez besoin de réglages spécifiques à une famille de récepteurs. L'origine de la carte (datum) est définie plus tard, une fois que le récepteur a eu le temps d'acquérir un RTK fix.",
+    "gpsRestartingAlertTitle": "Le récepteur GNSS redémarre pour appliquer vos réglages série et NTRIP",
+    "gpsRestartingAlertDesc": "Patientez ~10–30 s pour que le RTK Fix revienne avant de définir le datum. Les actions d'application de profil récepteur, de réinitialisation d'usine et de redémarrage GNSS sont disponibles dans le panneau d'actions récepteur ci-dessous.",
+    "detectedReceiver": "Récepteur détecté : {{receiver}}",
+    "liveGnssStatus": "État GNSS en direct : {{status}}. L'interface d'onboarding normale reste vendor-neutral ; le réglage spécifique à une famille se trouve en mode Expert.",
+    "gnssReceiverCardTitle": "Récepteur GNSS",
+    "expertMode": "Mode Expert",
+    "normalVsExpert": "Les réglages normaux sont vendor-neutral. Les réglages experts sont spécifiques à une famille de récepteurs.",
+    "signalProfileLabel": "Profil de signal",
+    "signalProfileTooltip": "Préréglage de constellation et de signal de haut niveau. C'est tout ce que la plupart des utilisateurs ont besoin de toucher.",
+    "baudLabel": "Baud",
+    "baudTooltip": "Vitesse série entre le robot et le récepteur GPS. Enregistrée dans la flash du récepteur pour que les deux côtés correspondent toujours — vous ne la réglez qu'une seule fois.",
+    "savedToFlashTitle": "Enregistré dans la flash du récepteur GPS",
+    "savedToFlashDesc": "Le baud et le profil de signal sont des réglages côté firmware : à l'enregistrement, ils sont écrits dans la flash du récepteur GPS et le récepteur se reconnecte brièvement. 460800 est le baud sûr pour les liaisons série USB ; 921600 nécessite un UART ou un adaptateur robuste.",
+    "expertGnssSettingsTitle": "Réglages GNSS experts",
+    "expertGnssSettingsDesc": "La sélection de la famille de récepteurs, le câblage série brut et les réglages spécifiques au fabricant se trouvent ici.",
+    "receiverProfileLabel": "Profil récepteur",
+    "receiverProfileTooltip": "Jeu de commandes récepteur bas-niveau. La traduction backend vers les commandes spécifiques au récepteur est encore en cours — laissez la valeur par défaut sauf si vous savez que vous en avez besoin.",
+    "positionRateLabel": "Cadence de position",
+    "receiverFamilyLabel": "Famille de récepteur",
+    "serialDeviceLabel": "Périphérique série",
+    "saveContinueReceiverTitle": "Enregistrer et continuer pour démarrer le récepteur",
+    "saveContinueReceiverDesc": "L'enregistrement de cette étape écrit votre profil de signal et votre baud dans le récepteur GPS et le redémarre automatiquement (les corrections NTRIP ont été définies à l'étape précédente). L'acquisition d'un RTK fix peut prendre de 30 s à quelques minutes — cela se produit en arrière-plan pendant que vous définissez le datum ensuite.",
+    "datumSetFailedTitle": "Échec de la définition du datum depuis le GPS",
+    "datumSetFailedDesc": "Impossible de capturer la position GPS actuelle comme datum de la carte.",
+    "datumTitle": "Origine de la carte (Datum)",
+    "datumIntro": "Ancrez la carte locale du robot à une coordonnée GPS près de votre station d'accueil. Cela devient l'origine (0, 0) de chaque carte et zone de tonte ultérieure. Placez-la sur la base si possible.",
+    "datumCoordinatesTitle": "Coordonnées du datum",
+    "datumCoordinatesHint": "Saisissez la coordonnée manuellement (clic droit sur votre base dans Google Maps pour copier lat/lon), ou capturez-la directement depuis le robot une fois qu'il a un RTK Fix.",
+    "latitudeLabel": "Latitude",
+    "longitudeLabel": "Longitude",
+    "gpsRestartingShort": "Redémarrage GPS…",
+    "useCurrentGpsPosition": "Utiliser la position GPS actuelle",
+    "useCurrentGpsPositionWaiting": "Utiliser la position GPS actuelle (en attente du RTK Fix)",
+    "gpsContainerRestartingTitle": "Le conteneur GPS redémarre pour appliquer vos réglages NTRIP / série",
+    "gpsContainerRestartingDesc": "Patientez ~10–30 s pour que le RTK Fix revienne avant de définir le datum.",
+    "noFix": "pas de fix",
+    "currentGpsQuality": "Qualité GPS actuelle : {{fix}}",
+    "rtkFloatWarning": "Le RTK Float donne une précision de ~10–20 cm et dérive quand les corrections s'interrompent. Attendez le RTK Fix (σ ~3 mm) avant d'ancrer le datum.",
+    "noRtkFixWarning": "Sans RTK Fix, le datum peut être décalé de plusieurs mètres, ce qui casse silencieusement chaque tonte ultérieure. Assurez-vous que les corrections NTRIP circulent et que l'antenne a une vue dégagée du ciel.",
+    "sensorPlacementTitle": "Placement des capteurs",
+    "sensorPlacementIntro": "Positionnez vos capteurs sur le robot. Faites-les glisser sur la vue de dessus ou utilisez les saisies numériques précises. Ces positions indiquent au robot exactement où chaque capteur est monté par rapport au centre du châssis.",
+    "calibrationTitle": "Calibration des capteurs",
+    "calibrationIntro": "Le robot se déplace tout seul à travers une courte routine pour apprendre comment ses capteurs sont montés. Sans cette étape, le robot dérive en odom, peut s'accoster de travers et perd son cap quand les corrections GPS s'interrompent. Prévoyez jusqu'à 2 minutes de mouvement autonome — restez à l'écart, collision_monitor reste armé.",
+    "measuresHeading": "Ce que mesure cette calibration",
+    "measureDockPoseLabel": "Pose de la base",
+    "measureDockPoseBody": "(quand démarrée sur la base) : le robot recule d'environ 2 m sous GPS RTK pour capturer la lat/lon et le cap de la base, puis les écrit dans",
+    "measureImuYawLabel": "Lacet de montage IMU",
+    "measureImuYawBody": " : 3 cycles avant/arrière à 0,5 m/s permettent de comparer l'impulsion en repère corps de l'accéléromètre à l'accélération dérivée des roues afin de retrouver la rotation de l'IMU autour de base_link.",
+    "measurePitchRollLabel": "Biais de tangage / roulis",
+    "measurePitchRollBody": " : les fenêtres de référence à l'arrêt révèlent tout montage non horizontal (les décalages de 1° comptent ici — sinon l'intégration du gyroscope dérive).",
+    "measureMagLabel": "Magnétomètre hard/soft-iron",
+    "measureMagBody": "(si un magnétomètre publie) : un lent figure-8 ajuste les décalages de l'ellipsoïde pour que le lacet compensé en inclinaison soit utilisable comme source de cap absolu.",
+    "preflightHeading": "Liste de vérification avant départ",
+    "preflightDockPrefix": "Placez le robot",
+    "preflightDockEmphasis": "sur la base",
+    "preflightDockSuffix": "si vous voulez aussi enregistrer la pose de la base — sinon laissez-le simplement garé avec ≥ 1,5 m d'espace dégagé devant et derrière.",
+    "preflightNtrip": "Corrections NTRIP en circulation et un RTK Fix à proximité (sinon la pré-phase de base est ignorée, mais la calibration IMU s'exécute quand même).",
+    "preflightEmergency": "Pas d'urgence active, lame coupée, capot fermé.",
+    "preflightDontTouch": "Ne déplacez pas et ne touchez pas le robot pendant le déroulement — chaque secousse apparaît comme du bruit d'accéléromètre et élargit l'écart-type.",
+    "currentImuYaw": "imu_yaw actuel",
+    "dockPose": "Pose de la base",
+    "imuBias": "Biais IMU",
+    "present": "Présent",
+    "missing": "Manquant",
+    "rerunCalibration": "Relancer la calibration",
+    "startImuYawCalibration": "Démarrer la calibration du lacet IMU",
+    "calibRunningTitle": "Calibration en cours — le robot se déplace tout seul",
+    "calibRunningDesc": "Aller avant, pause, aller arrière. Restez à l'écart. Le mouvement s'arrête automatiquement. Peut prendre jusqu'à 2 minutes (plus longtemps quand la pré-phase de base s'exécute).",
+    "fromValidSamples": "À partir de {{count}} échantillons de mouvement valides.",
+    "dockPoseUpdated": "Pose de la base mise à jour : yaw={{yaw}}° (σ {{sigma}}°, déplacement {{displacement}} m).",
+    "applyToSettings": "Appliquer aux réglages",
+    "discard": "Abandonner",
+    "calibFailedTitle": "Échec de la calibration",
+    "calibFailedHint": "Astuce : roulez plus vite ou plus longtemps pour que l'accéléromètre voie une impulsion avant et arrière nette le long de l'axe X du corps.",
+    "reset": "Réinitialiser",
+    "skipStepTitle": "Vous pouvez ignorer cette étape",
+    "skipStepDesc": "Si vous avez déjà calibré ce robot depuis la page Diagnostic (ou si vous connaissez votre valeur imu_yaw), utilisez le bouton Suivant. L'étape Terminé vous avertira si la calibration est toujours manquante.",
+    "flashFirmware": "Flasher le firmware",
+    "firmwareTitle": "Firmware",
+    "firmwareIntro": "S'il s'agit d'un nouveau montage, vous devez flasher le firmware Mowgli sur votre carte mère. Si votre firmware est déjà à jour, vous pouvez ignorer cette étape.",
+    "skipAlreadyFlashed": "Ignorer — déjà flashé",
+    "flashWarningTitle": "Le flashage va réécrire le firmware de votre carte mère",
+    "flashWarningDesc": "Assurez-vous que votre tondeuse est connectée en USB et sous tension. Des réglages de tension incorrects peuvent endommager le matériel.",
+    "missingDockPose": "pose de la base",
+    "missingImuBias": "biais IMU + montage",
+    "applyingConfigTitle": "Application de la configuration...",
+    "applyingConfigSubtitle": "Redémarrage du service de tonte avec vos nouveaux réglages. Cela prend quelques secondes.",
+    "allSetTitle": "Tout est prêt !",
+    "allSetSubtitle": "Votre tondeuse est configurée et prête à l'emploi. Rendez-vous sur la Carte pour dessiner votre première zone de tonte, ou consultez le Tableau de bord pour surveiller votre robot.",
+    "drawMowingArea": "Dessiner une zone de tonte",
+    "goToDashboard": "Aller au tableau de bord",
+    "calibPendingTitle": "Étapes de calibration encore en attente",
+    "calibPendingPrefix": "Votre robot est configuré, mais",
+    "calibPendingJoin": " et ",
+    "calibPendingSuffix_one": "n'est pas encore calibré. Sans cela, le robot dérivera en odom et pourra s'accoster de travers.",
+    "calibPendingSuffix_other": "ne sont pas encore calibrés. Sans cela, le robot dérivera en odom et pourra s'accoster de travers.",
+    "openDiagnosticsRunCalibrations": "Ouvrir Diagnostic → lancer les calibrations →",
+    "restartFailedTitle": "Impossible de redémarrer le service de tonte",
+    "restartFailedDesc": "Vous devrez peut-être le redémarrer manuellement.",
+    "persistGnssError": "Échec de l'enregistrement des réglages GNSS avant de lancer l'action récepteur",
+    "stepWelcome": "Bienvenue",
+    "stepRobotModel": "Modèle de robot",
+    "stepFirmware": "Firmware",
+    "stepNtrip": "NTRIP",
+    "stepGps": "GPS",
+    "stepDatum": "Datum",
+    "stepSensors": "Capteurs",
+    "stepCalibration": "Calibration",
+    "stepComplete": "Terminé",
+    "back": "Retour",
+    "restartingGps": "Redémarrage GPS…",
+    "saveAndFinish": "Enregistrer et terminer",
+    "next": "Suivant",
+    "stepCounter": "Étape {{current}} sur {{total}}"
+  },
+  "settingsPage": {
+    "ros2Restarting": "Redémarrage ROS2…",
+    "ros2Restarted": "ROS2 redémarré",
+    "ros2RestartFailed": "Échec du redémarrage ROS2",
+    "searchSettingPlaceholder": "Rechercher un réglage…"
+  },
+  "schedulePage": {
+    "planning": "Planning",
+    "scheduledMows": "Tontes programmées",
+    "areaLabel": "Zone {{index}}",
+    "dayMon": "Lun",
+    "dayTue": "Mar",
+    "dayWed": "Mer",
+    "dayThu": "Jeu",
+    "dayFri": "Ven",
+    "daySat": "Sam",
+    "daySun": "Dim",
+    "letterSun": "D",
+    "letterMon": "L",
+    "letterTue": "M",
+    "letterWed": "M",
+    "letterThu": "J",
+    "letterFri": "V",
+    "letterSat": "S",
+    "failedToLoad": "Échec du chargement des plannings",
+    "failedToCreate": "Échec de la création du planning",
+    "failedToUpdate": "Échec de la mise à jour du planning",
+    "failedToDelete": "Échec de la suppression du planning",
+    "templateWeekendName": "Guerrier du week-end",
+    "templateWeekendSubtitle": "Le samedi à 10:00",
+    "templateStealthName": "Tontes discrètes",
+    "templateStealthSubtitle": "Lun · Mer · Ven à 06:00",
+    "templateDailyName": "Tonte rapide quotidienne",
+    "templateDailySubtitle": "Tous les jours à 08:00",
+    "tagWeekly": "Hebdomadaire",
+    "tagOffHours": "Heures creuses",
+    "tagEveryDay": "Tous les jours",
+    "deleteScheduleTitle": "Supprimer le planning",
+    "deleteScheduleConfirm": "Voulez-vous vraiment supprimer ce planning ?",
+    "delete": "Supprimer",
+    "cancel": "Annuler",
+    "lastRun": "Dernière : {{value}}",
+    "never": "Jamais",
+    "newRun": "Nouvelle tonte",
+    "pickAStarter": "Choisissez un modèle",
+    "pickAStarterDescTap": "Une touche pour créer un planning. Ajustez ensuite les jours, l'heure et la zone.",
+    "pickAStarterDescClick": "Un clic pour créer un planning. Ajustez ensuite les jours, l'heure et la zone.",
+    "thisWeek": "Cette semaine",
+    "activeSchedules": "plannings actifs",
+    "schedules": "Plannings",
+    "noSchedulesYet": "Aucun planning pour l'instant. Choisissez un modèle ci-dessous ou créez une tonte personnalisée.",
+    "schedulesConfigured": "{{count}} planning(s) configuré(s).",
+    "rules": "Règles",
+    "rulesDescription": "Comportements de sécurité intégrés — toujours actifs.",
+    "ruleRainAware": "Anti-pluie",
+    "ruleRainAwareHint": "pause si pluie détectée",
+    "ruleAutoDockLow": "Retour batterie faible",
+    "ruleAutoDockLowHint": "retour à < 20 % de batterie",
+    "on": "Activé",
+    "off": "Désactivé"
+  },
+  "statisticsPage": {
+    "statistics": "Statistiques",
+    "aYearOfMowing": "Une année de tonte",
+    "noMowingYet": "Aucune tonte pour l'instant",
+    "firstSessionWillAppearHere": "Votre première session apparaîtra ici.",
+    "statisticsCleared": "Statistiques effacées",
+    "failedToClearStatistics": "Échec de l'effacement des statistiques",
+    "colDate": "Date",
+    "colDuration": "Durée",
+    "colArea": "Zone",
+    "colCoverage": "Couverture",
+    "colStatus": "État",
+    "rechargeTag": "{{count}}× recharge",
+    "heroTotalDistance": "Distance totale",
+    "heroSinceInstall": "depuis l'installation",
+    "heroHoursActive": "Heures actives",
+    "heroSessionsCount": "{{count}} sessions",
+    "heroCompletionRate": "Taux de complétion",
+    "heroCompletedCount": "{{count}} terminées",
+    "heroRunsCompleted": "Tontes terminées",
+    "heroAvgCoverage": "couverture moy. {{pct}} %",
+    "distancePerWeek": "Distance par semaine",
+    "last12Weeks": "12 dernières semaines (km)",
+    "weekTooltip": "Semaine {{week}} : {{km}} km",
+    "zoneCoverage": "Couverture des zones",
+    "areaLabel": "Zone {{index}}",
+    "cellsLabel": "{{mowed}}/{{total}} cellules",
+    "sessionHistory": "Historique des sessions",
+    "sessionsRecorded": "{{count}} session(s) enregistrée(s)",
+    "clearAllTitle": "Effacer toutes les statistiques ?",
+    "clearAllDescription": "Cela supprime définitivement chaque session enregistrée. Cette action est irréversible.",
+    "clear": "Effacer",
+    "cancel": "Annuler",
+    "noSessionsRecorded": "Aucune session de tonte enregistrée pour l'instant."
+  },
+  "dashboardHome": {
+    "statusMowing": "En tonte",
+    "statusIdle": "Au repos",
+    "statCoverage": "Couverture",
+    "statCoverageHint": "42 % de la zone",
+    "statMowing": "Tonte",
+    "statMowingHint": "restantes aujourd'hui",
+    "statWeather": "Météo",
+    "statWeatherHint": "ensoleillé · sec",
+    "heroZoneLabel": "Mowgli · zone Jardin sud",
+    "heroRemainingPrefix": "Encore",
+    "heroRemainingValue": "{{minutes}} min",
+    "heroRemainingSuffix": "avant la maison.",
+    "heroSubline": "Il avance à 0.42 m/s · gazon humide détecté, vitesse réduite de 12 %.",
+    "battery": "batterie",
+    "dayProgress": "Progression du jour",
+    "cuttingMode": "Mode de coupe",
+    "liveMap": "Carte vivante",
+    "liveMapSubtitle": "Jardin sud · trajectoire en direct",
+    "viewMap": "Voir la carte",
+    "scheduledNext": "Programmé ensuite",
+    "nextRun1When": "Demain · 07:30",
+    "nextRun1Area": "Jardin nord",
+    "nextRun1Duration": "≈ 55 min",
+    "nextRun2When": "Vendredi · 18:00",
+    "nextRun2Area": "Pelouse devant",
+    "nextRun2Duration": "≈ 35 min",
+    "greetingEvening": "Bonsoir",
+    "greetingMorning": "Bonjour",
+    "greetingAfternoon": "Bel après-midi"
+  },
+  "conceptStatistics": {
+    "title": "Statistiques",
+    "headlineWeeks": "12 semaines",
+    "headlineRest": "d'affilée. Belle saison.",
+    "heroAreaLabel": "Surface tondue",
+    "heroAreaDelta": "+12 % vs mois dernier",
+    "heroSessionsLabel": "Sessions",
+    "heroSessionsDelta": "61 cette semaine",
+    "heroStreakLabel": "Streak",
+    "heroStreakUnit": "sem.",
+    "heroStreakDelta": "meilleur record !",
+    "heroSavingsLabel": "Économie",
+    "heroSavingsDelta": "≈ 920 € épargnés",
+    "heatmapSubtitle": "186 jours actifs · 184.3 km de tonte cumulée",
+    "distancePerWeek": "Distance par semaine",
+    "recentSessions": "Sessions récentes",
+    "session1Date": "Aujourd'hui · 14:30",
+    "session2Date": "Hier · 18:12",
+    "session3Date": "Hier · 07:30",
+    "session4Date": "29 mai · 19:00",
+    "session5Date": "29 mai · 07:00",
+    "session6Date": "27 mai · 09:00",
+    "zoneSouthGarden": "Jardin sud",
+    "zoneNorthGarden": "Jardin nord",
+    "zoneFrontLawn": "Pelouse devant",
+    "zoneSidePath": "Allée latérale",
+    "monthJun": "jui.",
+    "monthJul": "juil.",
+    "monthAug": "août",
+    "monthSep": "sept.",
+    "monthOct": "oct.",
+    "monthNov": "nov.",
+    "monthDec": "déc.",
+    "monthJan": "janv.",
+    "monthFeb": "fév.",
+    "monthMar": "mars",
+    "monthApr": "avr.",
+    "monthMay": "mai",
+    "dayMon": "Lun",
+    "dayWed": "Mer",
+    "dayFri": "Ven",
+    "legendLess": "Moins",
+    "legendMore": "Plus"
+  },
+  "quickControls": {
+    "title": "Contrôles",
+    "headlinePrefix": "Mowgli, prêt à",
+    "headlineEmphasis": "partir",
+    "statusActive": "Active",
+    "statusPaused": "En pause",
+    "cuttingMode": "Mode de coupe",
+    "toggleMute": "Sourdine",
+    "toggleHeadlights": "Phares",
+    "toggleLock": "Verrou",
+    "toggleLocate": "Locate",
+    "primaryAction": "Action principale",
+    "mowingInProgress": "Tonte en cours",
+    "mowerPaused": "Tondeuse en pause",
+    "tapToPause": "Tape pour mettre en pause",
+    "tapToResume": "Tape pour reprendre",
+    "stopAria": "Stop",
+    "pauseAria": "Pause",
+    "resumeAria": "Reprendre",
+    "returnToBaseAria": "Retour à la base",
+    "emergencyStop": "Stop d'urgence",
+    "pauseLabel": "Pause",
+    "startLabel": "Lancer",
+    "returnLabel": "Rentrer",
+    "manualControl": "Pilotage manuel",
+    "holdToMove": "Maintenir pour déplacer",
+    "bladeRunning": "Lame en marche",
+    "bladeStopped": "Lame à l'arrêt",
+    "bladeCutForSafety": "Coupée pour la sécurité"
+  },
+  "scheduleZones": {
+    "title": "Planning",
+    "headlineCount": "6 tontes",
+    "headlineRest": "programmées cette semaine",
+    "newMow": "Nouvelle tonte",
+    "thisWeek": "Cette semaine",
+    "thisWeekSummary": "6 tontes · 3h 45min",
+    "ruleAntiRain": "Anti-pluie",
+    "ruleAntiHeat": "Anti-canicule",
+    "ruleNightMow": "Tonte de nuit",
+    "yourZones": "Tes zones",
+    "weatherThisWeek": "Météo cette semaine",
+    "zoneSouthGarden": "Jardin sud",
+    "zoneNorthGarden": "Jardin nord",
+    "zoneFrontLawn": "Pelouse devant",
+    "zoneSidePath": "Allée latérale",
+    "dayMon": "Lun",
+    "dayTue": "Mar",
+    "dayWed": "Mer",
+    "dayThu": "Jeu",
+    "dayFri": "Ven",
+    "daySat": "Sam",
+    "daySun": "Dim",
+    "mowCount_one": "{{count}} tonte",
+    "mowCount_other": "{{count}} tontes"
+  },
+  "gardenMap": {
+    "zoneSouthGarden": "Jardin sud",
+    "zoneNorthGarden": "Jardin nord",
+    "zoneFrontLawn": "Pelouse devant",
+    "zoneSidePath": "Allée latérale",
+    "statusMowed": "42 % mowé",
+    "gardenZones": "Zones du jardin",
+    "zonesSummary": "4 zones · 430 m²",
+    "zoneMowingTag": "· en tonte",
+    "coveredPercent": "{{percent}} % couvert",
+    "livePosition": "Position en direct",
+    "telemetryHeading": "Cap",
+    "telemetrySpeed": "Vitesse",
+    "zoneAction": "Action sur la zone",
+    "mowThisZone": "Mowing cette zone",
+    "edit": "Modifier",
+    "delete": "Supprimer",
+    "collapse": "Replier",
+    "viewZones": "Voir les zones"
+  },
+  "weatherChip": {
+    "rainIncoming": "pluie en approche",
+    "clear": "ciel dégagé",
+    "partly": "ensoleillé",
+    "cloudy": "nuageux",
+    "fog": "brouillard",
+    "rain": "pluvieux",
+    "snow": "neigeux",
+    "storm": "orageux"
+  },
+  "conceptBottomNav": {
+    "home": "Accueil",
+    "map": "Carte",
+    "controls": "Contrôle",
+    "schedule": "Planning",
+    "stats": "Stats"
+  },
+  "actionCluster": {
+    "emergencyStop": "Stop d'urgence",
+    "returnToDock": "Retour base",
+    "startMowing": "Démarrer la tonte",
+    "pause": "Pause",
+    "returnToBase": "Retour à la base",
+    "rearm": "Réarmer"
+  },
+  "modeSegment": {
+    "ecoLabel": "Eco",
+    "ecoTagline": "Plus long, plus silencieux",
+    "sportLabel": "Sport",
+    "sportTagline": "Vitesse + couverture rapide",
+    "silentLabel": "Silencieux",
+    "silentTagline": "Vitesse réduite, sons feutrés"
+  },
+  "conceptSideRail": {
+    "home": "Accueil",
+    "map": "Carte",
+    "controls": "Contrôle",
+    "schedule": "Planning",
+    "stats": "Stats"
+  },
+  "gpsStatus": {
+    "rtkFixed": "RTK fixe",
+    "rtkFloat": "RTK flottant",
+    "gpsFix": "GPS simple",
+    "deadReckoning": "Estime",
+    "noGps": "Pas de GPS",
+    "baselineUnknown": "Inconnu",
+    "baselineComputed": "Calculé",
+    "baselineNotSolved": "Non résolu",
+    "baselineInsufficientObservations": "Observations insuffisantes",
+    "baselineNoConvergence": "Pas de convergence",
+    "baselineOutOfTolerance": "Hors tolérance",
+    "baselineCovarianceTraceExceeded": "Trace de covariance dépassée",
+    "baselineNotConfigured": "Non configuré",
+    "correctionStreamUnknown": "Inconnu",
+    "correctionStreamIdle": "Au repos",
+    "correctionStreamWaiting": "En attente",
+    "correctionStreamActive": "Actif",
+    "correctionStreamUnavailable": "Indisponible",
+    "correctionStreamError": "Erreur"
+  },
+  "containerRestart": {
+    "pending": "Redémarrage…",
+    "success": "Container redémarré",
+    "error": "Échec du redémarrage",
+    "timeoutDescription": "ROS2 n'a pas redémarré dans les {{seconds}} s."
+  },
+  "settingsManager": {
+    "gpsRestartPending": "Redémarrage GPS…",
+    "gpsRestartSuccess": "GPS redémarré — patientez ~10–30 s pour le RTK Fix",
+    "gpsRestartError": "Échec du redémarrage GPS"
+  },
+  "mowerStates": {
+    "IDLE_DOCKED": {
+      "label": "À la base",
+      "friendly": "Au repos sur la base"
+    },
+    "IDLE": {
+      "label": "Au repos",
+      "friendly": "Prêt quand vous voulez"
+    },
+    "CHARGING": {
+      "label": "En charge",
+      "friendly": "Recharge de la batterie"
+    },
+    "PREFLIGHT_CHECK": {
+      "label": "Pré-vol",
+      "friendly": "Vérifications avant départ"
+    },
+    "UNDOCKING": {
+      "label": "Départ base",
+      "friendly": "Quitte la base"
+    },
+    "CALIBRATING_HEADING": {
+      "label": "Calibration cap",
+      "friendly": "Calibration du cap"
+    },
+    "MOWING": {
+      "label": "Tonte",
+      "friendly": "Tonte en cours"
+    },
+    "TRANSIT": {
+      "label": "Transit",
+      "friendly": "Trajet vers la bande suivante"
+    },
+    "SKIP_STRIP": {
+      "label": "Bande ignorée",
+      "friendly": "Bande inaccessible ignorée"
+    },
+    "RETURNING_HOME": {
+      "label": "Retour base",
+      "friendly": "Retour vers la base"
+    },
+    "MOWING_COMPLETE": {
+      "label": "Tonte terminée",
+      "friendly": "Toutes les zones tondues"
+    },
+    "RECORDING": {
+      "label": "Enregistrement",
+      "friendly": "Enregistrement de la limite"
+    },
+    "RECORDING_COMPLETE": {
+      "label": "Enregistré",
+      "friendly": "Limite de zone enregistrée"
+    },
+    "MANUAL_MOWING": {
+      "label": "Tonte manuelle",
+      "friendly": "Mode tonte manuelle"
+    },
+    "LOW_BATTERY_DOCKING": {
+      "label": "Batterie faible",
+      "friendly": "Batterie faible — retour à la base"
+    },
+    "CRITICAL_BATTERY_DOCKING": {
+      "label": "Batterie critique",
+      "friendly": "Batterie critique — retour à la base"
+    },
+    "CRITICAL_BATTERY_NAV_FAILED": {
+      "label": "Échec retour",
+      "friendly": "Batterie critique et retour impossible"
+    },
+    "RAIN_DETECTED_DOCKING": {
+      "label": "Pluie détectée",
+      "friendly": "Pluie détectée — retour à la base"
+    },
+    "RAIN_WAITING": {
+      "label": "Attente du sec",
+      "friendly": "Attend la fin de la pluie"
+    },
+    "RAIN_TIMEOUT": {
+      "label": "Délai pluie",
+      "friendly": "Abandon de l'attente du temps sec"
+    },
+    "RESUMING_AFTER_RAIN": {
+      "label": "Reprise",
+      "friendly": "Reprise après la pluie"
+    },
+    "RESUMING_UNDOCKING": {
+      "label": "Reprise départ",
+      "friendly": "Quitte la base pour reprendre"
+    },
+    "BOUNDARY_RECOVERY": {
+      "label": "Récup. limite",
+      "friendly": "Récupération après un écart de limite"
+    },
+    "EMERGENCY": {
+      "label": "Arrêt d'urgence",
+      "friendly": "Arrêt d'urgence activé"
+    },
+    "BOUNDARY_EMERGENCY_STOP": {
+      "label": "Alerte limite",
+      "friendly": "Arrêt — hors limites"
+    },
+    "UNDOCK_FAILED": {
+      "label": "Échec départ",
+      "friendly": "Échec du départ — vérifier la base"
+    },
+    "CHARGER_FAILED": {
+      "label": "Échec chargeur",
+      "friendly": "Chargeur non détecté"
+    },
+    "NAV_TO_DOCK_FAILED": {
+      "label": "Échec navigation",
+      "friendly": "Navigation vers la base impossible"
+    },
+    "COVERAGE_FAILED_DOCKING": {
+      "label": "Échec couverture",
+      "friendly": "Échec couverture — retour à la base"
+    }
+  },
+  "mapToolbar": {
+    "actionFailed": "Échec de l'action",
+    "darkMap": "Carte sombre",
+    "satellite": "Satellite",
+    "flattenMap": "Aplatir la carte",
+    "tilt3dView": "Vue 3D inclinée",
+    "areaRecording": "Enregistrement de zone",
+    "mowNextArea": "Reprendre la tonte",
+    "continue": "Reprendre",
+    "pause": "Pause",
+    "stopManualMowing": "Arrêter",
+    "manualMowing": "Tonte manuelle",
+    "bladeForward": "Lame avant",
+    "bladeBackward": "Lame arrière",
+    "bladeOff": "Lame arrêtée",
+    "backupMap": "Sauvegarder la carte",
+    "restoreMap": "Restaurer la carte",
+    "importFromOpenMower": "Importer depuis OpenMower",
+    "downloadGeojson": "Télécharger le GeoJSON",
+    "editMap": "Modifier la carte",
+    "finishRecording": "Terminer l'enregistrement",
+    "cancelRecording": "Annuler l'enregistrement",
+    "start": "Démarrer",
+    "home": "Retour base",
+    "emergencyOn": "Arrêt d'urgence activé",
+    "emergencyOff": "Arrêt d'urgence désactivé",
+    "mowArea": "Tondre une zone",
+    "stopManual": "Arrêter",
+    "manualMow": "Tonte manuelle",
+    "more": "Plus"
+  },
+  "mapToolbarMobile": {
+    "actionFailed": "Échec de l'action",
+    "darkMap": "Carte sombre",
+    "satellite": "Satellite",
+    "areaRecording": "Enregistrement de zone",
+    "mowNextArea": "Reprendre la tonte",
+    "continue": "Reprendre",
+    "pause": "Pause",
+    "bladeForward": "Lame avant",
+    "bladeBackward": "Lame arrière",
+    "bladeOff": "Lame arrêtée",
+    "backupMap": "Sauvegarder la carte",
+    "restoreMap": "Restaurer la carte",
+    "importFromOpenMower": "Importer depuis OpenMower",
+    "downloadGeojson": "Télécharger le GeoJSON",
+    "uploadGeojson": "Importer le GeoJSON",
+    "editProperties": "Modifier les propriétés",
+    "combine": "Combiner",
+    "subtract": "Soustraire",
+    "splitDrawLine": "Diviser (tracer une ligne)",
+    "emergencyOff": "Arrêt d'urgence désactivé",
+    "emergencyOn": "Arrêt d'urgence activé",
+    "stop": "STOP",
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "undo": "Annuler",
+    "redo": "Rétablir",
+    "drawPolygon": "Tracer un polygone",
+    "addShape": "Ajouter une forme",
+    "delete": "Supprimer",
+    "placeDock": "Placer la base",
+    "more": "Plus",
+    "start": "Démarrer",
+    "home": "Retour base",
+    "editMap": "Modifier la carte",
+    "mowArea": "Tondre une zone",
+    "mow": "Tondre",
+    "stopManualMowing": "Arrêter",
+    "manualMowing": "Tonte manuelle"
+  },
+  "mapEditorToolbar": {
+    "saveMapUnsaved": "Enregistrer la carte *",
+    "saveMap": "Enregistrer la carte",
+    "cancelEditing": "Annuler l'édition",
+    "undo": "Annuler",
+    "redo": "Rétablir",
+    "drawPolygon": "Dessiner un polygone",
+    "addShape": "Ajouter une forme",
+    "deleteSelected": "Supprimer la sélection",
+    "combine": "Combiner (sélectionner 2+)",
+    "subtract": "Soustraire (sélectionner 2)",
+    "split": "Diviser (sélectionner 1, tracer une ligne)",
+    "editProperties": "Modifier les propriétés",
+    "clickToPlaceDock": "Cliquez sur la carte pour placer la base",
+    "placeDockPoint": "Placer le point de base"
+  },
+  "mapShapePicker": {
+    "square": "Carré",
+    "circle": "Cercle",
+    "hexagon": "Hexagone",
+    "size": "Taille",
+    "emoji": "Emoji",
+    "add": "Ajouter"
+  },
+  "mapOffsetPanel": {
+    "mapOffset": "Décalage de la carte",
+    "mapRotation": "Rotation de la carte",
+    "resetToNorthUp": "Réinitialiser vers le nord"
+  },
+  "mapEditArea": {
+    "areaTypeMowing": "Zone de tonte",
+    "areaTypeNavigation": "Zone de navigation",
+    "areaTypeObstacle": "Obstacle",
+    "titleEditNamed": "Modifier « {{name}} »",
+    "titleEdit": "Modifier la zone",
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "areaType": "Type de zone",
+    "areaName": "Nom de la zone",
+    "areaNamePlaceholder": "ex. Pelouse devant",
+    "mowingOrder": "Ordre de tonte"
+  },
+  "mapNewArea": {
+    "title": "Nouvelle zone",
+    "addArea": "Ajouter la zone",
+    "cancel": "Annuler",
+    "areaType": "Type de zone",
+    "areaTypeWorking": "Zone de tonte",
+    "areaTypeNavigation": "Zone de navigation",
+    "areaTypeObstacle": "Obstacle",
+    "areaNameOptional": "Nom de la zone (facultatif)",
+    "areaNamePlaceholder": "ex. Pelouse devant"
+  },
+  "mapImportOpenMower": {
+    "title": "Importer une carte OpenMower",
+    "omDatumTitle": "Datum OpenMower (optionnel)",
+    "omDatumHelp": "Saisissez le OM_DATUM_LAT / OM_DATUM_LONG du robot source pour que la carte soit reprojetée dans le repère de ce robot. Laissez vide si les deux robots partagent le même datum — sinon l'import sera décalé.",
+    "omDatumLat": "Latitude",
+    "omDatumLon": "Longitude",
+    "applying": "Application…",
+    "applyReplaces": "Appliquer (remplace la carte actuelle)",
+    "cancel": "Annuler",
+    "replaceWarningMessage": "Appliquer remplace la carte MowgliNext actuelle",
+    "replaceWarningDescription": "Cliquer sur Appliquer effacera chaque zone et pose de base existantes, puis écrira les zones affichées ci-dessous. Utilisez d'abord Sauvegarder la carte depuis le menu Plus si vous voulez un fichier de restauration.",
+    "mowingAreas": "Zones de tonte",
+    "navigationAreas": "Zones de navigation",
+    "obstaclesReparented": "Obstacles (réaffectés)",
+    "orphanObstaclesDropped": "Obstacles orphelins (abandonnés)",
+    "dockPose": "Pose de la base",
+    "xMeters": "X (m)",
+    "yMeters": "Y (m)",
+    "yawRad": "Lacet (rad)",
+    "noDockingStation": "Aucune station d'accueil active dans la carte source — la pose de la base ne sera pas modifiée.",
+    "datumShift": "Décalage de référence : (est={{east}} m, nord={{north}} m)",
+    "datumShiftDescription": "Les coordonnées OpenMower ont été translatées pour s'aligner sur le repère de la carte MowgliNext. Si cela semble incorrect, vérifiez les deux références.",
+    "noMowingAreasMessage": "Aucune zone de tonte dans ce fichier",
+    "noMowingAreasDescription": "MowgliNext requiert au moins une zone de tonte. Appliquer est désactivé — fermez cette fenêtre et choisissez un autre map.json.",
+    "colName": "Nom",
+    "unnamed": "(sans nom)",
+    "colType": "Type",
+    "colVertices": "Sommets",
+    "colObstacles": "Obstacles",
+    "colApproxArea": "Surface approx. (m²)",
+    "warningCount_one": "{{count}} avertissement",
+    "warningCount_other": "{{count}} avertissements",
+    "applyFailed": "Échec de l'application"
+  },
+  "mapAreasList": {
+    "typeWorkArea": "Zone de travail",
+    "typeNavigation": "Navigation",
+    "typeObstacle": "Obstacle",
+    "areasHeader": "Zones ({{count}})",
+    "moveUp": "Monter",
+    "moveDown": "Descendre"
+  },
+  "mapTrackedObstacles": {
+    "outsideAreaMessage": "L'obstacle est en dehors de toutes les zones de tonte",
+    "outsideAreaDescription": "Tracez une zone de tonte qui couvre cet obstacle avant de le promouvoir.",
+    "areaFallback": "zone {{index}}",
+    "confirmTitle": "Promouvoir l'obstacle en exclusion permanente ?",
+    "confirmBodyPrefix": "Cela ajoute le polygone comme exclusion permanente dans",
+    "confirmBodySuffix": "Le robot planifiera son trajet autour de lui désormais (jusqu'à ce que vous le retiriez).",
+    "trackerId": "Id du traceur : {{id}}",
+    "pointsCount_one": "{{count}} point",
+    "pointsCount_other": "{{count}} points",
+    "promote": "Promouvoir",
+    "cancel": "Annuler",
+    "promotedSuccess": "Obstacle promu dans {{area}}",
+    "promoteFailed": "Échec de la promotion de l'obstacle",
+    "header": "Obstacles suivis ({{count}})",
+    "noArea": "aucune zone",
+    "obstacleLabel": "Obstacle n°{{id}}",
+    "pointsShort_one": "{{count}} pt",
+    "pointsShort_other": "{{count}} pt",
+    "noContainingArea": "Aucune zone englobante",
+    "promoteTooltip": "Promouvoir en exclusion permanente"
+  },
+  "mapEditing": {
+    "unableToMatchAreaForObstacle": "Impossible d'associer une zone à cet obstacle",
+    "splitTargetNotValidPolygon": "La cible de la découpe n'est pas un polygone valide",
+    "lineMustCrossTwice": "La ligne doit traverser la zone au moins deux fois pour la découper",
+    "noParentAreaForObstacleSplit": "Aucune zone parente trouvée pour la découpe de l'obstacle",
+    "unknownType": "Type inconnu {{type}}",
+    "areaSplitIntoTwo": "Zone découpée en 2 parties",
+    "splitFailed": "Échec de la découpe : {{error}}",
+    "unableToCombineAreas": "Impossible de fusionner les zones. Se chevauchent-elles ?",
+    "unableToEditFeature": "Impossible de modifier cet élément",
+    "couldNotTraceShapeFromEmoji": "Impossible de tracer une forme à partir de cet emoji",
+    "selectExactlyTwoToSubtract": "Sélectionnez exactement 2 zones à soustraire",
+    "bothSelectionsMustBePolygons": "Les deux sélections doivent être des zones polygonales",
+    "subtractFailed": "Échec de la soustraction — les zones ne se chevauchent peut-être pas, ou le résultat n'est pas un polygone simple",
+    "areaSubtracted": "Zone soustraite",
+    "selectExactlyOneToSplit": "Sélectionnez exactement 1 zone à découper",
+    "selectionMustBePolygon": "La sélection doit être une zone polygonale",
+    "drawLineAcrossArea": "Tracez une ligne à travers la zone pour la découper"
+  },
+  "mapFiles": {
+    "areaSaved": "Zone enregistrée",
+    "failedToSaveArea": "Échec de l'enregistrement de la zone",
+    "bagImportComingSoonMessage": "Import OpenMower .bag — bientôt disponible",
+    "bagImportComingSoonDescription": "Convertissez d'abord votre map.bag en map.json sur le robot source (OpenMower 1.x convertit automatiquement au démarrage), puis réimportez le .json. Voir docs/IMPORT_OPENMOWER_MAP.md §6.",
+    "openMowerImportFailed": "Échec de l'import OpenMower",
+    "openMowerMapImported": "Carte OpenMower importée",
+    "openMowerMapImportedDescription": "Zones + pose de la base écrites. /map devrait se rafraîchir sous peu.",
+    "unknownType": "Type inconnu {{type}}"
+  },
+  "mapStreams": {},
+  "mapPage": {},
+  "mapJoystick": {
+    "finish": "Terminer",
+    "cancel": "Annuler",
+    "home": "Retour base"
+  },
+  "mapManualMode": {},
+  "mapBearing": {
+    "saveError": "Échec de l'enregistrement de l'orientation"
+  },
+  "mapEditHistory": {
+    "discardTitle": "Abandonner les modifications non enregistrées ?",
+    "discardContent": "Vous avez des modifications de carte non enregistrées. Si vous annulez maintenant, toutes les modifications seront perdues.",
+    "discardOk": "Abandonner",
+    "keepEditing": "Continuer l'édition"
+  },
+  "mapOffset": {
+    "saveError": "Échec de l'enregistrement du décalage"
+  },
+  "paramCatalog": {
+    "tier": {
+      "basic": "Débutant",
+      "middle": "Avancé",
+      "expert": "Expert"
+    },
+    "uncurated": {
+      "description": "Paramètre non documenté — exposé uniquement dans le profil Expert."
+    },
+    "tool_width": {
+      "label": "Largeur d'outil",
+      "description": "Largeur de coupe effective de la lame. Détermine à la fois le rayon de marquage de la zone tondue et l'espacement des bandes F2C."
+    },
+    "transit_speed": {
+      "label": "Vitesse de transit",
+      "description": "Vitesse de déplacement entre les zones ou vers la base."
+    },
+    "mowing_speed": {
+      "label": "Vitesse de tonte",
+      "description": "Vitesse en marche avant pendant la tonte d'une bande."
+    },
+    "num_headland_passes": {
+      "label": "Passes de bordure",
+      "description": "Nombre d'anneaux de bordure concentriques tondus avant les bandes en va-et-vient."
+    },
+    "headland_width": {
+      "label": "Largeur de bordure",
+      "description": "Largeur totale de la bande de bordure ; les anneaux sont espacés de la largeur d'outil."
+    },
+    "swath_overlap": {
+      "label": "Chevauchement des bandes",
+      "description": "Chevauchement supplémentaire entre bandes adjacentes pour éviter de fines bandes non tondues."
+    },
+    "swath_angle": {
+      "label": "Angle des bandes",
+      "description": "Angle fixe des lignes de tonte. Laissez en automatique sauf si vous avez besoin d'une direction de rayure spécifique."
+    },
+    "chassis_safety_inset": {
+      "label": "Retrait de sécurité du châssis",
+      "description": "Retrait préalable de la bordure du terrain pour garder le châssis à l'intérieur du polygone."
+    },
+    "progress_timeout_sec": {
+      "label": "Délai de progression",
+      "description": "Durée pendant laquelle le contrôleur peut ne faire aucun progrès avant que la récupération se déclenche."
+    },
+    "dock_approach_overshoot": {
+      "label": "Dépassement d'approche de la base",
+      "description": "Distance supplémentaire parcourue au-delà de la pose de la base pour garantir le contact de charge."
+    },
+    "use_gps_dock_detection": {
+      "label": "Détection GPS de la base",
+      "description": "Détecter la base à partir de la pose GPS de la base au lieu de se fier à isDocked()."
+    },
+    "dock_pose_yaw_sigma_rad": {
+      "label": "Incertitude du lacet de la base",
+      "description": "Incertitude de cap supposée de la pose de base configurée."
+    },
+    "declination_deg": {
+      "label": "Déclinaison magnétique",
+      "description": "Déclinaison magnétique locale appliquée au lacet du magnétomètre."
+    },
+    "mag_yaw_variance": {
+      "label": "Variance du lacet magnétique",
+      "description": "Variance du bruit de capteur pour le facteur de lacet du magnétomètre."
+    },
+    "enable_mag_cal": {
+      "label": "Collecter la calibration magnétique",
+      "description": "Recueillir des échantillons du magnétomètre en RTK-Fixed pour estimer les offsets fer dur/fer doux."
+    },
+    "min_horizontal_uT": {
+      "label": "Champ horizontal min.",
+      "description": "Amplitude minimale du champ horizontal en dessous de laquelle le lacet du magnétomètre est rejeté."
+    },
+    "datum_lat": {
+      "label": "Latitude du repère",
+      "description": "Latitude d'origine de la carte. Définie lors de l'onboarding à partir d'une position RTK-Fixed."
+    },
+    "datum_lon": {
+      "label": "Longitude du repère",
+      "description": "Longitude d'origine de la carte. Définie lors de l'onboarding à partir d'une position RTK-Fixed."
+    },
+    "node_period_s": {
+      "label": "Période des nœuds du graphe",
+      "description": "Cadence à laquelle le graphe de facteurs ajoute un nouveau nœud Pose2."
+    },
+    "use_scan_matching": {
+      "label": "Recalage de scans LiDAR",
+      "description": "Ajouter des facteurs intermédiaires de recalage de scans LiDAR pour traverser les fenêtres RTK-Float."
+    },
+    "use_loop_closure": {
+      "label": "Fermeture de boucle LiDAR",
+      "description": "Ajouter des facteurs de fermeture de boucle à partir de scans LiDAR revisités."
+    },
+    "icp_max_iter": {
+      "label": "Itérations max ICP",
+      "description": "Nombre maximal d'itérations pour la résolution ICP du recalage de scans."
+    },
+    "icp_max_corresp_dist": {
+      "label": "Distance de correspondance ICP",
+      "description": "Distance maximale entre paires de points considérée comme une correspondance."
+    },
+    "icp_max_rmse_m": {
+      "label": "RMSE max ICP",
+      "description": "Rejeter un recalage de scan dont le RMSE dépasse cette valeur."
+    },
+    "dock_blank_range": {
+      "label": "Portée d'occultation de la base",
+      "description": "Occulter les retours LiDAR dans cette portée autour de la base pour éviter l'auto-détection."
+    },
+    "post_undock_blank_sec": {
+      "label": "Occultation après désaccostage",
+      "description": "Supprimer la détection d'obstacles pendant cette durée après le désaccostage."
+    },
+    "min_obstacle_z_m": {
+      "label": "Hauteur min. d'obstacle",
+      "description": "Ignorer les points LiDAR sous cette hauteur (filtre de sol)."
+    },
+    "max_obstacle_z_m": {
+      "label": "Hauteur max. d'obstacle",
+      "description": "Ignorer les points LiDAR au-dessus de cette hauteur."
+    },
+    "lidar_height_m": {
+      "label": "Hauteur de montage du LiDAR",
+      "description": "Hauteur du LiDAR au-dessus du sol, utilisée par le filtre de sol."
+    },
+    "angular_rate_kp": {
+      "label": "Kp de vitesse angulaire",
+      "description": "Gain proportionnel de la boucle d'assistance de vitesse angulaire côté ROS."
+    },
+    "angular_rate_ki": {
+      "label": "Ki de vitesse angulaire",
+      "description": "Gain intégral de la boucle d'assistance de vitesse angulaire."
+    },
+    "angular_rate_kff": {
+      "label": "Kff de vitesse angulaire",
+      "description": "Gain d'anticipation de la boucle d'assistance de vitesse angulaire."
+    },
+    "imu_cal_samples": {
+      "label": "Échantillons de calibration IMU",
+      "description": "Nombre d'échantillons moyennés pendant la calibration du biais de l'IMU sur la base."
+    },
+    "imu_cal_auto_rest_sec": {
+      "label": "Fenêtre de repos IMU",
+      "description": "Durée pendant laquelle le robot doit être détecté immobile avant le démarrage d'une calibration de biais."
+    },
+    "imu_cal_periodic_recal_sec": {
+      "label": "Intervalle de recalibration IMU",
+      "description": "Fréquence à laquelle le biais de l'IMU est ré-estimé à l'arrêt."
+    },
+    "battery_warn_pct": {
+      "label": "Seuil d'avertissement batterie %",
+      "description": "Niveau de batterie en dessous duquel un diagnostic d'avertissement est émis."
+    },
+    "battery_error_pct": {
+      "label": "Seuil d'erreur batterie %",
+      "description": "Niveau de batterie en dessous duquel un diagnostic d'erreur est émis."
+    },
+    "motor_temp_warn_c": {
+      "label": "Avertissement temp. moteur",
+      "description": "Température moteur au-dessus de laquelle un avertissement est émis."
+    },
+    "motor_temp_error_c": {
+      "label": "Erreur temp. moteur",
+      "description": "Température moteur au-dessus de laquelle une erreur est émise."
+    }
+  },
+  "gnssConfig": {
+    "receiverFamily": {
+      "auto": {
+        "label": "Auto"
+      },
+      "ublox": {
+        "label": "u-blox"
+      },
+      "unicore": {
+        "label": "Unicore"
+      },
+      "nmea": {
+        "label": "NMEA"
+      }
+    },
+    "profile": {
+      "runtime_only": {
+        "label": "Exécution seule"
+      },
+      "rover_high_precision": {
+        "label": "Rover haute précision"
+      },
+      "rover_high_precision_debug": {
+        "label": "Rover haute précision + débogage"
+      },
+      "factory_reset": {
+        "label": "Réinitialisation d'usine"
+      }
+    },
+    "signalProfile": {
+      "balanced": {
+        "label": "Équilibré",
+        "description": "Profil par défaut recommandé. Utilise un mélange équilibré des constellations GNSS et des bandes de signal disponibles."
+      },
+      "high_precision": {
+        "label": "Précision maximale",
+        "description": "Privilégie les signaux multi-bandes et haute précision pour les meilleures performances de positionnement."
+      },
+      "all_signals": {
+        "label": "Compatibilité maximale",
+        "description": "Utilise le plus large ensemble de signaux couramment pris en charge pour une compatibilité récepteur et régionale maximale."
+      },
+      "minimal": {
+        "label": "Faible bande passante",
+        "description": "Réduit la charge de signaux et d'observations quand la bande passante, la puissance de traitement ou la capacité de transport des corrections est limitée."
+      },
+      "custom": {
+        "label": "Personnalisé",
+        "description": "Réservé à de futurs fichiers de profil fournis par l'utilisateur ou à des jeux de commandes récepteur brutes lorsque le support backend sera disponible."
+      }
+    },
+    "signalProfileHelpText": "Les profils de signal sont indépendants du fabricant. Différentes familles de récepteurs peuvent associer le même profil à des choix de signaux et de constellations différents.",
+    "signalProfileCustomHelpText": "Personnalisé prendra plus tard en charge des fichiers de profil fournis par l'utilisateur ou des jeux de commandes récepteur brutes depuis le mode Expert/Développeur. Le support backend pour l'upload et les commandes brutes n'est pas encore branché.",
+    "unicore": {
+      "title": "Réglages spécifiques au fabricant",
+      "description": "À n'utiliser que lorsque les abstractions GNSS génériques ne suffisent pas. Universal GNSS reste la source de vérité pour le filtrage par modèle Unicore et la gestion des groupes de signaux documentés.",
+      "receiverModel": {
+        "label": "Modèle de récepteur",
+        "tooltip": "Indice optionnel de modèle de récepteur Unicore transmis aux outils Universal GNSS de planification/application uniquement lorsque vous le définissez explicitement.",
+        "helpText": "Universal GNSS valide et applique les groupes de signaux documentés pour le modèle sélectionné. Laissez sur Inconnu / Auto pour omettre --model et utiliser le repli sûr avec avertissements.",
+        "option": {
+          "auto": {
+            "label": "Inconnu / Auto"
+          },
+          "um960": {
+            "label": "UM960 sans baseline"
+          },
+          "um980": {
+            "label": "UM980 sans baseline"
+          },
+          "um981": {
+            "label": "UM981 sans baseline"
+          },
+          "um982": {
+            "label": "UM982 compatible baseline double antenne"
+          }
+        }
+      },
+      "signalGroup": {
+        "label": "Groupe de signaux brut",
+        "tooltip": "Surcharge brute facultative du groupe de signaux Unicore. Laissez vide sauf si une documentation récepteur vous demande une valeur précise.",
+        "placeholder": "ex. 3 6",
+        "helpText": "Universal GNSS reste responsable de la validation de toute valeur documentée de groupe de signaux par rapport au modèle de récepteur sélectionné et de la remontée des avertissements de repli sûr."
+      },
+      "pvtAlgorithm": {
+        "label": "Algorithme PVT",
+        "tooltip": "Surcharge facultative de l'algorithme PVT spécifique à Unicore que le futur traducteur backend pourra associer aux commandes du fabricant.",
+        "placeholder": "ex. MULTI",
+        "helpText": "Laissez vide pour conserver la valeur par défaut/actuelle du récepteur. Ce champ est enregistré dès maintenant, mais la traduction d'application côté backend est encore à faire."
+      },
+      "rtkReliability": {
+        "label": "Fiabilité RTK",
+        "tooltip": "Réglage facultatif de fiabilité RTK spécifique à Unicore transmis uniquement en mode Expert.",
+        "placeholder": "ex. HIGH"
+      },
+      "rtkTimeout": {
+        "label": "Délai d'expiration RTK",
+        "tooltip": "Surcharge facultative du délai d'expiration RTK spécifique à la famille de récepteur."
+      },
+      "dgpsTimeout": {
+        "label": "Délai d'expiration DGPS",
+        "tooltip": "Surcharge facultative du délai d'expiration DGPS spécifique à la famille de récepteur."
+      }
+    }
+  },
+  "mowerModels": {
+    "YardForce500": {
+      "label": "YardForce Classic 500",
+      "description": "Modèle le plus répandu. Batterie 28 V, lame de 18 cm, propulsion arrière.",
+      "tag": "Populaire"
+    },
+    "YardForce500B": {
+      "label": "YardForce 500B",
+      "description": "Variante 500 B avec un UART de moteur de lame et une disposition de panneau différents."
+    },
+    "YardForceSA650": {
+      "label": "YardForce SA650",
+      "description": "Modèle plus grand (570x390 mm) avec une résolution d'encodeur supérieure."
+    },
+    "YardForce900ECO": {
+      "label": "YardForce 900 ECO",
+      "description": "Même châssis que le SA650 (570x390 mm), batterie plus grande."
+    },
+    "LUV1000RI": {
+      "label": "YardForce LUV1000RI",
+      "description": "Châssis 574x400 mm, empattement plus étroit (0,285 m), capteur ultrason."
+    },
+    "Sabo": {
+      "label": "Sabo MOWiT 500F",
+      "description": "Grande tondeuse professionnelle (775x535 mm), largeur de coupe de 32 cm."
+    },
+    "CUSTOM": {
+      "label": "Robot personnalisé",
+      "description": "Configurer manuellement tous les paramètres matériels pour une construction personnalisée."
+    }
+  },
+  "settingsHardware": {
+    "robotModel": "Modèle de robot",
+    "robotModelDescription": "Sélectionnez votre tondeuse pour pré-remplir les dimensions matérielles.",
+    "wheelsAndBlade": "Roues et lame",
+    "wheelRadius": "Rayon de roue",
+    "wheelRadiusTooltip": "Rayon de la roue motrice en mètres",
+    "wheelTrack": "Voie des roues",
+    "wheelTrackTooltip": "Distance centre à centre entre les roues motrices",
+    "bladeRadius": "Rayon de lame",
+    "bladeRadiusTooltip": "Rayon de la lame de tonte",
+    "toolWidth": "Largeur de coupe",
+    "toolWidthTooltip": "Largeur de coupe effective (2 x blade_radius)",
+    "encoderTicksPerMeter": "Ticks d'encodeur/mètre",
+    "encoderTicksPerMeterTooltip": "Ticks d'encodeur par mètre parcouru par la roue",
+    "chassisAndGeometry": "Châssis et géométrie",
+    "advanced": "Avancé",
+    "chassisLength": "Longueur du châssis",
+    "chassisWidth": "Largeur du châssis",
+    "chassisHeight": "Hauteur du châssis",
+    "chassisCenterX": "Centre X du châssis",
+    "chassisCenterXTooltip": "Distance de base_link au centre du châssis",
+    "mass": "Masse",
+    "wheelWidth": "Largeur de roue",
+    "wheelXOffset": "Décalage X des roues",
+    "wheelXOffsetTooltip": "Décalage de l'axe des roues par rapport à base_link",
+    "casterRadius": "Rayon de roulette",
+    "casterTrack": "Voie des roulettes"
+  },
+  "settingsDriveMotor": {
+    "savedLiveTitle": "Sauvegardé et appliqué en direct",
+    "savedLiveDescription": "La sauvegarde enregistre ces valeurs dans mowgli_robot.yaml et les transmet immédiatement au contrôleur de déplacement — aucun redémarrage de ROS2 nécessaire. Elles persistent après un redémarrage : à chaque démarrage, le robot renvoie les valeurs sauvegardées au firmware. (Le firmware lui-même n'a aucun stockage, il utilise donc ses valeurs par défaut intégrées uniquement pendant le bref instant avant la reconnexion du contrôleur, puis revalide et borne les valeurs que vous avez sauvegardées.)",
+    "wheelVelocityPid": "PID de vitesse des roues",
+    "wheelVelocityPidDescription": "Gains en boucle fermée que le firmware STM32 utilise pour suivre la vitesse commandée de chaque roue. Des Kp/Ki plus élevés donnent un suivi plus rigide ; trop élevés, ils provoquent des oscillations ou un dépassement. Kd est normalement à 0.",
+    "kpTooltip": "Gain proportionnel (PWM par m/s)",
+    "kiTooltip": "Gain intégral (PWM par m/s·s) — comble la zone morte de friction statique",
+    "kdTooltip": "Gain dérivé (PWM par m/s²) — 0 désactive",
+    "integralLimit": "Limite intégrale",
+    "integralLimitTooltip": "Borne anti-emballement sur le terme intégral (PWM, max moteur 255)",
+    "feedforward": "Anticipation",
+    "pwmPerMps": "PWM par m/s",
+    "pwmPerMpsTooltip": "Échelle d'anticipation vitesse→PWM en boucle ouverte. Terme de déplacement dominant ; définit aussi la correspondance ralenti/zone morte. À modifier avec précaution.",
+    "common": {
+      "unknown": "Inconnu",
+      "never": "Jamais",
+      "unknownBackendError": "Erreur backend inconnue",
+      "noReportYetSentence": "Aucun rapport pour le moment.",
+      "noReportYet": "Aucun rapport pour le moment",
+      "cancel": "Annuler",
+      "close": "Fermer",
+      "passes": "Passes",
+      "enabled": "Activé",
+      "disabled": "Désactivé",
+      "applyPersistIfSuccessful": "Appliquer et sauvegarder en cas de succès",
+      "apply": "Appliquer",
+      "reportOnly": "Rapport uniquement",
+      "allowUndockIfDocked": "Autoriser le départ de la base si amarré",
+      "allow": "Autoriser",
+      "no": "Non",
+      "yes": "Oui",
+      "undockDistance": "Distance de sortie de base",
+      "undockDistanceTooltip": "Utilisé uniquement si la sortie de base est autorisée.",
+      "reportOnlyModeTitle": "Mode rapport uniquement",
+      "robotOnDockTitle": "Le robot est sur sa base",
+      "unavailable": "Indisponible",
+      "na": "n/d",
+      "units": {
+        "kg": "kg"
+      }
+    },
+    "tags": {
+      "validated": "validé",
+      "warning": "avertissement",
+      "notValidated": "non validé"
+    },
+    "job": {
+      "running": "en cours",
+      "completed": "terminé",
+      "completedWithWarning": "terminé avec avertissement",
+      "failed": "échoué",
+      "idle": "inactif"
+    },
+    "notifications": {
+      "applied": {
+        "title": "Réglage drive appliqué",
+        "description": "Les paramètres drive recommandés ont été sauvegardés dans mowgli_robot.yaml et synchronisés dans Réglages."
+      },
+      "loadReportFailed": {
+        "title": "Impossible de charger le dernier rapport d'auto-tuning drive"
+      },
+      "ffStarted": {
+        "title": "Calibration odométrie / feed-forward démarrée",
+        "applyDescription": "La calibration démarre avec les valeurs live actuelles de hardware_bridge à la passe 1, passe par /cmd_vel_tuning, puis applique la recommandation en direct uniquement si l'exécution se termine avec succès.",
+        "reportOnlyDescription": "Cette exécution en mode recommandation uniquement démarre avec les valeurs live actuelles de hardware_bridge à la passe 1, utilise /cmd_vel_tuning -> twist_mux et ne sauvegardera aucun paramètre."
+      },
+      "ffStartFailed": {
+        "title": "Échec du démarrage de la calibration odométrie / feed-forward"
+      },
+      "pidStarted": {
+        "title": "Auto-tuning PID drive démarré",
+        "applyDescription": "L'auto-tuning démarre avec les valeurs live actuelles de hardware_bridge à la passe 1, passe par /cmd_vel_tuning et ne sauvegarde la recommandation finale qu'après une exécution réussie.",
+        "reportOnlyDescription": "Cette exécution est en mode recommandation uniquement, démarre avec les valeurs live actuelles de hardware_bridge à la passe 1 et restaure ensuite les paramètres live d'origine."
+      },
+      "pidStartFailed": {
+        "title": "Échec du démarrage de l'auto-tuning PID drive"
+      },
+      "rollbackCompleted": {
+        "title": "Rollback du réglage drive terminé"
+      },
+      "rollbackFailed": {
+        "title": "Échec du rollback du réglage drive"
+      }
+    },
+    "alerts": {
+      "emergency": {
+        "title": "Urgence active",
+        "description": "Les assistants de calibration sont bloqués tant que l'urgence est active ou verrouillée."
+      },
+      "onDock": {
+        "title": "Le robot semble être sur sa base",
+        "description": "Les assistants refuseront de bouger tant que vous n'avez pas explicitement activé l'option de sortie de base dans la boîte de lancement."
+      },
+      "backendWarning": {
+        "title": "Avertissement backend de réglage drive"
+      }
+    },
+    "rollback": {
+      "confirm": {
+        "title": "Annuler le dernier réglage drive ?",
+        "bodyPrefix": "Cela restaure la dernière sauvegarde générée par",
+        "bodyMiddle": ", l'applique en direct à",
+        "bodySuffix": "et réécrit les valeurs restaurées dans",
+        "warning": "Utilisez ceci uniquement si vous voulez annuler le dernier résultat de tuning accepté.",
+        "ok": "Rollback du tuning"
+      }
+    },
+    "cards": {
+      "assistants": {
+        "title": "Assistants de calibration",
+        "calibrateButton": "Calibrer l'odométrie / le feed-forward",
+        "pidButton": "Auto-régler le PID drive",
+        "motionProfile": {
+          "title": "Profil de mouvement conservateur",
+          "description": "Les assistants utilisent une voie de tuning dédiée : commandes Twist horodatées sur /cmd_vel_tuning, routées via twist_mux vers /cmd_vel, avec des rampes douces et cmd_vel = 0 entre les segments de mouvement. La passe 1 démarre avec les valeurs live de hardware_bridge sauf si un mode explicite de reset au profil est activé plus tard."
+        }
+      }
+    },
+    "summary": {
+      "feedForward": {
+        "label": "Odométrie / feed-forward"
+      },
+      "pid": {
+        "label": "Auto-tuning PID"
+      },
+      "currentJob": {
+        "label": "Job en cours",
+        "startedAt": "{{mode}} démarré {{timestamp}}"
+      },
+      "lastReportDate": {
+        "label": "Date du dernier rapport"
+      },
+      "lastReportPath": {
+        "label": "Chemin du dernier rapport"
+      }
+    },
+    "actions": {
+      "startFeedForward": "Démarrer la calibration odométrie/feed-forward",
+      "startPid": "Démarrer l'auto-tuning PID",
+      "viewLastReport": "Voir le dernier rapport",
+      "rollbackLastTuning": "Annuler le dernier tuning"
+    },
+    "jobLog": {
+      "title": "Sortie live du job ({{mode}})",
+      "waiting": "En attente de sortie..."
+    },
+    "params": {
+      "kpLabel": "Kp",
+      "kiLabel": "Ki",
+      "kdLabel": "Kd"
+    },
+    "ffModal": {
+      "title": "Calibrer l'odométrie / le feed-forward",
+      "ok": "Démarrer la calibration",
+      "onDock": {
+        "description": "Activez explicitement la sortie de base ci-dessous si vous voulez que l'assistant recule avant de démarrer."
+      },
+      "workflow": {
+        "title": "Workflow",
+        "description": "Le robot effectue des passes rectilignes via /cmd_vel, compare l'odométrie roue à la RTK/GPS quand disponible, affine ticks_per_meter et wheel_pid_pwm_per_mps, puis écrit les recommandations dans un rapport YAML. L'application est optionnelle."
+      },
+      "fields": {
+        "distance": "Distance",
+        "testSpeed": "Vitesse de test",
+        "odomTimeout": "Timeout odométrie",
+        "odomTimeoutTooltip": "La sécurité de perte d'odométrie ne s'applique que tant que le robot est encore commandé au-dessus du seuil de faible vitesse.",
+        "autoUTurn": "Demi-tour automatique"
+      },
+      "resultApply": {
+        "title": "Une exécution réussie sauvegardera les valeurs feed-forward recommandées",
+        "description": "ticks_per_meter et wheel_pid_pwm_per_mps seront sauvegardés dans mowgli_robot.yaml et conservés en direct dans hardware_bridge."
+      },
+      "resultReportOnly": {
+        "description": "L'assistant générera un rapport YAML, utilisera les valeurs live actuelles de hardware_bridge pour la passe 1, puis restaurera ensuite les paramètres drive live d'origine."
+      }
+    },
+    "pidModal": {
+      "title": "Auto-régler le PID drive",
+      "ok": "Démarrer l'auto-tuning",
+      "precheck": {
+        "title": "Feed-forward / odométrie pas encore validés",
+        "description": "L'auto-tuning PID devrait être lancé uniquement après validation de ticks_per_meter et wheel_pid_pwm_per_mps. Vous pouvez continuer, mais la qualité de la recommandation risque d'être mauvaise."
+      },
+      "onDock": {
+        "description": "Activez explicitement la sortie de base ci-dessous si vous voulez que l'auto-tuning PID quitte la base avant de démarrer."
+      },
+      "workflow": {
+        "title": "Réponse indicielle pilotée en téléop",
+        "description": "Cet auto-tuning suit le chemin dédié /cmd_vel_tuning -> twist_mux, en démarrant avec les valeurs live de hardware_bridge à la passe 1 et en utilisant des rampes conservatrices : 0 → 0.2, 0.2 → 0.3, 0.3 → 0.1, 0.1 → 0. Le backend surveille le dépassement, le temps d'établissement, l'oscillation, la saturation intégrale et le déséquilibre entre roues."
+      },
+      "fields": {
+        "maxSpeed": "Vitesse maximale",
+        "segmentDuration": "Durée du segment"
+      },
+      "resultApply": {
+        "title": "Une exécution réussie sauvegardera les gains PID recommandés",
+        "description": "wheel_pid_kp, wheel_pid_ki, wheel_pid_kd et wheel_pid_integral_limit seront sauvegardés dans mowgli_robot.yaml et conservés en direct dans hardware_bridge."
+      },
+      "resultReportOnly": {
+        "description": "L'assistant démarrera avec les valeurs live de hardware_bridge à la passe 1, puis restaurera les gains PID roue live d'origine après génération du rapport."
+      }
+    },
+    "report": {
+      "title": "Dernier rapport de réglage drive",
+      "fields": {
+        "mode": "Mode du rapport",
+        "generatedAt": "Généré le",
+        "cmdVelTopic": "Topic cmd_vel",
+        "robotMass": "Masse du robot",
+        "internalTier": "Niveau interne de tuning",
+        "hardwareConfigPath": "Chemin de configuration matérielle",
+        "path": "Chemin"
+      },
+      "failure": {
+        "title": "La dernière exécution s'est terminée avec un défaut de mouvement"
+      },
+      "statusSnapshot": {
+        "title": "Instantané d'état",
+        "activeEmergency": "Urgence active",
+        "latchedEmergency": "Urgence verrouillée",
+        "isCharging": "En charge",
+        "mowerStatus": "État tondeuse",
+        "escPower": "Alim. ESC",
+        "wheelTickFactor": "Facteur ticks roue",
+        "lastWheelTickTimestamp": "Dernier horodatage de ticks roue"
+      },
+      "drivetrain": {
+        "title": "Diagnostics du train roulant",
+        "wheelRadius": "Rayon de roue",
+        "wheelCircumference": "Circonférence de roue",
+        "wheelRevPerMeter": "Tours de roue par mètre",
+        "encoderCountsPerWheelRev": "Comptes encodeur par tour de roue",
+        "configuredTicksPerRevolution": "Ticks configurés par révolution",
+        "gearboxRatio": "Rapport de réduction",
+        "derivedEstimateUnavailable": "Estimation dérivée indisponible",
+        "notes": "Notes"
+      },
+      "proposedParams": {
+        "title": "Paramètres proposés"
+      },
+      "recommendations": {
+        "title": "Recommandations et notes"
+      },
+      "rawYaml": {
+        "title": "YAML brut",
+        "empty": "Aucune charge utile YAML disponible."
+      },
+      "empty": "Aucun rapport de réglage drive disponible pour le moment.",
+      "tiers": {
+        "medium": "moyen",
+        "lightweight": "léger",
+        "heavy": "lourd",
+        "extraHeavy": "très lourd"
+      },
+      "trials": {
+        "title": "Résumé des essais ({{count}})",
+        "line1": "{{phase}} | cible {{target}} m/s | mesuré {{measured}} m/s",
+        "line2": "dépassement {{overshoot}} | établissement {{settling}} | blocage {{stall}} | osc {{osc}} | osc live {{liveOsc}} | qualité {{quality}}",
+        "warningsPrefix": "avertissements :",
+        "phases": {
+          "feedForward": "feed-forward",
+          "pid": "PID",
+          "response": "réponse"
+        },
+        "qualities": {
+          "ok": "ok",
+          "warning": "avertissement",
+          "poor": "mauvais"
+        }
+      }
+    },
+    "backend": {
+      "statusFetchFailed": "Échec de récupération de l'état du réglage drive",
+      "rollback": {
+        "successMessage": "Le rollback du réglage drive a été appliqué en direct et sauvegardé dans mowgli_robot.yaml"
+      },
+      "errors": {
+        "rollbackRequiresConfirm": "le rollback exige confirm=true",
+        "jobAlreadyRunning": "un job de réglage drive est déjà en cours",
+        "backupDidNotContainParameters": "le fichier de sauvegarde ne contenait pas de paramètres drive",
+        "commandFailed": "la commande de réglage drive a échoué",
+        "persistenceAfterApply": "le réglage drive a bien été appliqué en direct, mais la sauvegarde dans mowgli_robot.yaml a échoué",
+        "reportReadAfterRun": "le réglage drive s'est terminé, mais le rapport n'a pas pu être lu : {{error}}",
+        "containerNotFound": "conteneur {{container}} introuvable",
+        "readReport": "impossible de lire le rapport {{path}} : {{details}}",
+        "readBackup": "impossible de lire la sauvegarde {{path}} : {{details}}",
+        "listReports": "impossible de lister les rapports de réglage drive : {{details}}",
+        "marshalYaml": "échec de sérialisation YAML : {{error}}"
+      },
+      "validation": {
+        "distanceRange": "distance_m doit être entre 2 et 10",
+        "testSpeedRange": "test_speed_mps doit être > 0 et <= 0.5",
+        "odomTimeoutPositive": "odom_timeout_s doit être > 0",
+        "passesMin": "passes doit être >= 1",
+        "turnDirection": "turn_direction doit être 'left' ou 'right'",
+        "maxSpeedRange": "max_speed_mps doit être > 0 et <= 0.5",
+        "segmentDurationMin": "segment_duration_s doit être >= 2.0"
+      },
+      "summary": {
+        "feedForward": {
+          "noTrials": "Aucun essai feed-forward enregistré pour le moment.",
+          "stall": "Une passe feed-forward s'est bloquée ou n'a produit aucun mouvement de roue. Relancez après vérification de la mécanique, de la puissance de traction et de l'odométrie.",
+          "liveOscillation": "Une oscillation live a été observée pendant la calibration feed-forward. Vérifiez la mécanique et le feed-forward avant d'accepter le résultat.",
+          "noAcceptedRtk": "Un rapport feed-forward existe, mais aucune validation odométrique appuyée par RTK/GPS n'a été acceptée.",
+          "errorSummary": "Erreur odom {{odomPct}}%, erreur vitesse {{speedPct}}%.",
+          "validatedExcellent": "Validé avec une excellente odométrie ({{odomPct}}%) et une erreur feed-forward en vitesse acceptable ({{speedPct}}%).",
+          "validatedAcceptable": "Validé avec une odométrie acceptable ({{odomPct}}%) et une erreur feed-forward en vitesse de {{speedPct}}%.",
+          "postOscillationWarning": "La calibration feed-forward s'est terminée avec un avertissement d'oscillation en post-analyse (odom {{odomPct}}%, vitesse {{speedPct}}%). Vérifiez le rapport avant d'accepter le résultat.",
+          "completedWithWarnings": "La calibration s'est terminée avec des avertissements (odom {{odomPct}}%, vitesse {{speedPct}}%). Vérifiez les notes d'essai avant d'accepter le résultat."
+        },
+        "pid": {
+          "stopBehaviorReviewBraking": "Avertissement comportement à l'arrêt : un mouvement résiduel a été détecté après une commande à vitesse nulle. Les essais d'arrêt ont été exclus de la sélection des gains PID, mais le freinage/contrôle doit être revu avant d'accepter ce réglage.",
+          "stopBehaviorExcluded": "Avertissement comportement à l'arrêt : un mouvement résiduel a été détecté après une commande à vitesse nulle. Les essais d'arrêt ont été exclus de la sélection des gains PID.",
+          "noTrials": "Aucun rapport de réponse indicielle PID enregistré pour le moment.",
+          "stall": "Le rapport PID montre un palier bloqué ou sans mouvement. Relancez après vérification de la mécanique et du feed-forward.",
+          "liveOscillation": "Une oscillation live a été observée pendant le tuning PID. Relancez après avoir réduit l'agressivité ou revu le feed-forward.",
+          "overshootReached": "Le dépassement PID a atteint {{overshootPct}}% sur au moins un palier.",
+          "integralSaturation": "Le rapport PID suggère une saturation intégrale soutenue sous charge. Vérifiez KI et la limite intégrale avant d'accepter le résultat.",
+          "postOscillationUsable": "Une oscillation en post-analyse a été détectée sans oscillation live observée ; le dépassement max de {{overshootPct}}% reste exploitable pour un réglage conservateur.",
+          "completedWithWarnings": "La réponse PID s'est terminée avec des avertissements ; dépassement max {{overshootPct}}%. Vérifiez les notes d'essai avant d'accepter le résultat.",
+          "zeroSpeedExcludedSuffix": "Les essais d'arrêt à vitesse nulle ont été exclus de la sélection des gains.",
+          "validated": "Réponse indicielle PID validée avec un dépassement max de {{overshootPct}}%."
+        }
+      }
+    }
+  },
+  "settingsBattery": {
+    "batteryThresholds": "Seuils de batterie",
+    "batteryThresholdsDescription": "Définissez les niveaux de tension et de pourcentage qui contrôlent quand accoster et quand reprendre la tonte.",
+    "fullVoltage": "Tension pleine",
+    "fullVoltageTooltip": "Batterie considérée pleine au-dessus de cette valeur",
+    "emptyVoltage": "Tension vide",
+    "emptyVoltageTooltip": "Accoster si en dessous pendant 20 s",
+    "criticalVoltage": "Tension critique",
+    "criticalVoltageTooltip": "Accostage immédiat en dessous de cette valeur",
+    "percentageThresholds": "Seuils en pourcentage",
+    "resumeAbove": "Reprendre au-dessus",
+    "resumeAboveTooltip": "Reprendre la tonte au-dessus de ce %",
+    "lowDock": "Faible (accostage)",
+    "lowDockTooltip": "Rejoindre la base en dessous de ce %",
+    "critical": "Critique",
+    "criticalTooltip": "Niveau de batterie critique",
+    "criticalRecovery": "Récupération critique",
+    "criticalRecoveryTooltip": "Quitter l'état batterie critique une fois rechargée au-dessus de ce %. Borne supérieure d'hystérésis, doit être supérieure à Critique."
+  },
+  "settingsSafety": {
+    "alertMessage": "Les réglages de sécurité protègent le robot et son environnement",
+    "alertDescription": "Le firmware est la seule autorité de sécurité. Ces réglages configurent le comportement du firmware — les désactiver réduit la protection.",
+    "motorTemperatureLimits": "Limites de température moteur",
+    "motorTemperatureLimitsDescription": "Le moteur de lame s'arrête au-dessus du seuil haut et reprend en dessous du seuil bas (hystérésis).",
+    "stopAbove": "Arrêt au-dessus",
+    "stopAboveTooltip": "Arrêter le moteur de lame au-dessus de cette température",
+    "resumeBelow": "Reprise en dessous",
+    "resumeBelowTooltip": "Reprendre le moteur de lame en dessous de cette température",
+    "obstacleAvoidance": "Évitement d'obstacles",
+    "maxDetourDistance": "Distance max de détour",
+    "maxDetourDistanceTooltip": "Distance maximale de détour autour d'un obstacle avant d'abandonner"
+  },
+  "settingsMowing": {
+    "mowingMotor": "Moteur de tonte",
+    "mowingMotorDescription": "Désactivez pour tester sans faire tourner la lame.",
+    "mowingSpeed": "Vitesse de tonte",
+    "mowingSpeedTooltip": "Vitesse pendant les bandes de tonte (m/s)",
+    "transitSpeed": "Vitesse de transit",
+    "transitSpeedTooltip": "Vitesse lors des trajets vers/depuis la base ou entre les zones",
+    "mowingPattern": "Motif de tonte",
+    "headlandWidth": "Largeur de tournière",
+    "headlandWidthTooltip": "Largeur de la bande périmétrique tondue avant le champ intérieur (retrait ConstHL de F2C). Relié à coverage_server.default_headland_width.",
+    "swathOverlap": "Chevauchement des passes",
+    "swathOverlapTooltip": "Chevauchement supplémentaire entre passes adjacentes pour éviter les bandes non tondues. Espacement F2C = tool_width − swath_overlap.",
+    "headlandPasses": "Passes de tournière",
+    "headlandPassesTooltip": "Nombre d'anneaux périmétriques concentriques avant le champ intérieur. 0 = auto (ceil(headland_width / tool_width)). >0 force exactement ce nombre quelle que soit headland_width. Relié à coverage_server.num_headland_passes.",
+    "mowDirection": "Sens de tonte du périmètre",
+    "mowDirectionTooltip": "Sens de déplacement autour des anneaux de périmètre/tournière. Réglez-le pour qu'une lame déportée sur le côté reste du côté à tondre. Auto conserve le sens naturel du planificateur. Relié à coverage_server.ring_direction.",
+    "mowDirectionAuto": "Auto (défaut du planificateur)",
+    "mowDirectionCw": "Sens horaire",
+    "mowDirectionCcw": "Sens anti-horaire",
+    "chassisSafetyInset": "Retrait de sécurité du châssis",
+    "chassisSafetyInsetTooltip": "Réduit au préalable le polygone d'opération de ce nombre de mètres avant que F2C ne planifie. Par défaut chassis_width / 2 afin que le bord du châssis reste à l'intérieur du polygone en suivi parfait. Relié à coverage_server.chassis_safety_inset.",
+    "minTurningRadius": "Rayon de braquage minimal",
+    "minTurningRadiusTooltip": "F2C Robot::setMinTurningRadius — borne le rayon des arcs CC-Dubins entre les bandes. La couverture utilise des arcs CONTINUS, donc il doit être assez large pour que le MPPI SUIVE le demi-tour : trop petit (~0,05 m) crée un quasi-rebroussement sur lequel le contrôleur accroche ; ~0,12 m donne un demi-tour en Ω doux qui tient dans la bande de tournière. Relié à coverage_server.min_turning_radius.",
+    "mowAngle": "Angle de tonte",
+    "mowAngleTooltip": "Décalage de l'angle de tonte en degrés (-1 = auto)",
+    "angleIncrement": "Incrément d'angle",
+    "angleIncrementTooltip": "Fait pivoter l'angle de tonte à chaque passe complète",
+    "stripPreview": "Aperçu des bandes (espacement vs couverture de la lame)",
+    "perimeterOutline": "Périmètre (contour)",
+    "outlinePasses": "Passes de contour",
+    "outlinePassesTooltip": "Nombre de passes périmétriques avant le remplissage",
+    "outlineOffset": "Décalage du contour",
+    "outlineOffsetTooltip": "Décalage vers l'intérieur depuis la limite",
+    "outlineOverlap": "Recouvrement du contour",
+    "outlineOverlapTooltip": "Recouvrement entre le contour et le remplissage"
+  },
+  "settingsNavigation": {
+    "goalTolerances": "Tolérances de cible",
+    "goalTolerancesDescription": "À quelle distance le robot doit se rapprocher d'une position cible avant de la considérer atteinte. Des tolérances plus serrées signifient plus de précision mais peuvent provoquer des oscillations.",
+    "transitXyTolerance": "Tolérance XY de transit",
+    "transitXyToleranceTooltip": "Tolérance de position pour les points de passage de transit",
+    "yawTolerance": "Tolérance de lacet",
+    "yawToleranceTooltip": "Tolérance de cap à la cible (radians)",
+    "coverageXyTolerance": "Tolérance XY de couverture",
+    "coverageXyToleranceTooltip": "Tolérance de position pendant les bandes de tonte",
+    "recovery": "Récupération",
+    "progressTimeout": "Délai de progression",
+    "progressTimeoutTooltip": "Secondes sans progression vers l'avant avant que la récupération ne se déclenche"
+  },
+  "settingsSensors": {
+    "lidarSensor": "Capteur LiDAR",
+    "lidarDescriptionPart1": "Activez si votre robot dispose d'un LiDAR. Bascule aussi",
+    "lidarDescriptionAnd": " et ",
+    "lidarDescriptionPart2": " afin que le graphe de facteurs fusionne les scans LiDAR. Affinez-les dans l'onglet Localisation.",
+    "imuBiasCalibration": "Calibration du biais IMU",
+    "imuBiasCalibrationDescription": "Le pont matériel réestime automatiquement le biais gyro/accel de l'IMU pendant que le robot est garé et immobile sur la base. Ceci règle la façon dont il échantillonne.",
+    "calibrationSamples": "Échantillons de calibration",
+    "calibrationSamplesTooltip": "Nombre d'échantillons IMU immobiles moyennés par calibration de biais.",
+    "restWindowBeforeCal": "Fenêtre de repos avant calibration",
+    "restWindowBeforeCalTooltip": "Durée pendant laquelle le robot doit être détecté immobile avant qu'une calibration ne démarre.",
+    "periodicRecalInterval": "Intervalle de recalibration périodique",
+    "periodicRecalIntervalTooltip": "Réestime le biais IMU toutes les N secondes lorsque le robot est sur la base. 0 désactive la recalibration périodique."
+  },
+  "settingsRain": {
+    "rainBehavior": "Comportement en cas de pluie",
+    "rainBehaviorDescription": "Ce que le robot doit faire lorsqu'il détecte de la pluie.",
+    "rainModeIgnoreLabel": "Ignorer",
+    "rainModeIgnoreDescription": "Continuer la tonte quelle que soit la pluie",
+    "rainModeDockLabel": "Base",
+    "rainModeDockDescription": "Retourner à la base quand la pluie est détectée",
+    "rainModeDockUntilDryLabel": "Base jusqu'au sec",
+    "rainModeDockUntilDryDescription": "Retour à la base et attente de l'arrêt de la pluie + délai",
+    "rainModePauseAutoLabel": "Pause auto",
+    "rainModePauseAutoDescription": "Mettre entièrement en pause le mode automatique",
+    "timing": "Minutage",
+    "resumeDelay": "Délai de reprise",
+    "resumeDelayTooltip": "Minutes à attendre après l'arrêt de la pluie avant de reprendre",
+    "debounce": "Anti-rebond",
+    "debounceTooltip": "Secondes de signal de pluie continu avant déclenchement"
+  },
+  "settingsAdvanced": {
+    "advancedParameters": "Paramètres avancés",
+    "advancedParametersDescription": "Ce sont des paramètres YAML bruts non couverts par les sections ci-dessus. Modifiez avec précaution — des valeurs invalides peuvent casser la configuration du robot.",
+    "noExtraParameters": "Aucun paramètre supplémentaire défini",
+    "parameter": "Paramètre",
+    "value": "Valeur",
+    "removeThisParameter": "Supprimer ce paramètre ?",
+    "remove": "Supprimer",
+    "cancel": "Annuler",
+    "addParameter": "Ajouter un paramètre",
+    "valuePlaceholder": "valeur",
+    "add": "Ajouter"
+  },
+  "settingsPositioning": {
+    "datumSetFromGps": "Référence définie depuis la position GPS actuelle",
+    "datumGpsFailed": "Échec de l'obtention de la position GPS",
+    "mapOriginTitle": "Origine de la carte (référence)",
+    "mapOriginDescription": "La coordonnée GPS utilisée comme origine de la carte locale. Placez-la près de votre station de charge.",
+    "latitude": "Latitude",
+    "longitude": "Longitude",
+    "useCurrentGpsPosition": "Utiliser la position GPS actuelle (nécessite un fix RTK)",
+    "detectedReceiver": "Récepteur détecté : {{receiver}}",
+    "liveGnssStatus": "État GNSS universel en direct : {{status}}. L'interface principale reste indépendante du fabricant ; le mode expert n'expose le réglage propre à la famille de récepteur qu'en cas de besoin.",
+    "gnssProfilesTitle": "Profils GNSS",
+    "expertMode": "Mode expert",
+    "gnssProfilesDescription": "Les réglages normaux sont indépendants du fabricant. Les réglages experts sont spécifiques à la famille de récepteur et restent masqués jusqu'à ce que vous les activiez explicitement.",
+    "signalProfileLabel": "Profil de signal",
+    "signalProfileTooltip": "Préréglage haut niveau de constellation et de signal. C'est tout ce que la plupart des utilisateurs ont besoin de toucher.",
+    "baudLabel": "Baud",
+    "baudTooltip": "Vitesse série entre le robot et le récepteur GPS. Enregistrée dans la flash du récepteur pour que les deux côtés correspondent toujours — vous ne la réglez qu'une seule fois.",
+    "savedToFlashTitle": "Enregistré dans la flash du récepteur GPS",
+    "savedToFlashIntro": "Le baud et le profil de signal sont des réglages côté firmware : à l'enregistrement, ils sont écrits dans la flash du récepteur GPS et le récepteur se reconnecte brièvement.",
+    "savedToFlashSafeBaud": "est le baud sûr pour les liaisons série USB ;",
+    "savedToFlashFastBaud": "nécessite un UART ou un adaptateur robuste.",
+    "expertGnssTitle": "Réglages GNSS experts",
+    "expertGnssDescription": "La sélection de la famille de récepteur, le câblage série brut et les surcharges spécifiques au fabricant se trouvent ici. Gardez ces valeurs par défaut sauf si vous connaissez les implications côté récepteur.",
+    "receiverProfileLabel": "Profil de récepteur",
+    "receiverProfileTooltip": "Jeu de commandes bas niveau du récepteur. La traduction backend vers les commandes spécifiques au récepteur est encore en cours de mise en place — laissez la valeur par défaut sauf si vous savez en avoir besoin.",
+    "positionRateLabel": "Fréquence de position",
+    "receiverFamilyLabel": "Famille de récepteur",
+    "serialDeviceLabel": "Périphérique série",
+    "rtkWaitAfterUndockLabel": "Attente RTK après désaccostage",
+    "gpsTimeoutLabel": "Délai GPS",
+    "expertScopeTitle": "Portée du mode expert",
+    "expertScopeDescription": "Les valeurs brutes de groupe de signaux, l'algorithme PVT, la fiabilité RTK, le délai RTK et le délai DGPS sont stockés ici pour une future traduction backend. La zone de texte de commande brute, le plan de simulation et les outils de réinitialisation/application nécessitent encore une API dédiée."
+  },
+  "settingsLocalization": {
+    "scanMatchingTitle": "Recalage de scan LiDAR",
+    "scanMatchingSummary": "Ajoute des facteurs intermédiaires ICP de /scan au graphe.",
+    "scanMatchingDetail": "Chaque nouveau nœud du graphe exécute un ICP sur le scan précédent et ajoute un BetweenFactor avec le mouvement relatif. Combat les pertes GPS mais coûte ~5 ms/tick à 10 Hz.",
+    "loopClosureTitle": "Fermeture de boucle",
+    "loopClosureSummary": "Cherche des revisites dans les scans passés et ajoute des facteurs LC.",
+    "loopClosureDetail": "Déclenche une recherche de candidats autour de chaque nouveau nœud (rayon de 5 m, âge minimum de 10 min). Les fermetures de boucle réussies ramènent la dérive vers la pose initialement cartographiée, même en cours de session.",
+    "magYawTitle": "Lacet magnétomètre",
+    "magYawSummary": "Fusionne le lacet mag compensé en inclinaison comme facteur unaire de lacet.",
+    "magYawDetail": "Désactivé par défaut — le biais induit par les moteurs rend le magnétomètre peu fiable sur la plupart des châssis. À n'activer qu'après une calibration mag moteurs coupés et la validation d'un |B| stable.",
+    "badgeDisabled": "Désactivé dans les réglages",
+    "badgeNoDriver": "Aucun pilote détecté",
+    "badgeLive": "En direct",
+    "badgeWarn": "Avertissement",
+    "badgeError": "Erreur",
+    "badgeStale": "Obsolète",
+    "mapFrameLocalizerTitle": "Localisateur en repère carte",
+    "mapFrameLocalizerIntro": "Le graphe de facteurs GTSAM iSAM2",
+    "mapFrameLocalizerMid": "est le seul fuseur en repère carte — roues + IMU + GPS + lacet COG, plus les facteurs LiDAR optionnels ci-dessous. Il publie aussi la TF locale",
+    "mapFrameLocalizerTfPrefix": "TF, il n'y a donc pas de",
+    "mapFrameLocalizerTfSuffix": "séparé à configurer.",
+    "readArchitectureNotes": "Lire les notes d'architecture →",
+    "lidarObstacleTitle": "LiDAR — évitement d'obstacles",
+    "lidarObstacleIntro": "Toujours actif (quand le pilote LiDAR tourne). La couche d'obstacles de la costmap Nav2 et",
+    "lidarObstacleConsume": "consomment",
+    "lidarObstacleOutro": "directement pour arrêter le robot avant qu'il ne heurte quelque chose — c'est indépendant des options LiDAR du graphe de facteurs ci-dessous.",
+    "lidarTogglePrefix": "Activez/désactivez le pilote LiDAR lui-même dans",
+    "latestDiagnostic": "Dernier diagnostic :",
+    "lidarLocalizationTitle": "LiDAR — localisation (graphe de facteurs)",
+    "lidarLocalizationIntro": "Optionnel. Quand activé,",
+    "lidarLocalizationConsumes": "consomme",
+    "lidarLocalizationOutro": "comme facteurs intermédiaires de recalage de scan et facteurs de fermeture de boucle, afin que la pose en repère carte puisse tenir pendant des fenêtres RTK-Float de plusieurs minutes.",
+    "yawSourcesTitle": "Sources de lacet",
+    "magCalibrationTitle": "Calibration et réglage du magnétomètre",
+    "magCalibrationIntroPrefix": "Utilisé uniquement quand",
+    "magYawInline": "Lacet magnétomètre",
+    "magCalibrationIntroSuffix": "est activé ci-dessus. La calibration collecte des échantillons hard/soft-iron en RTK-Fixed ; le reste règle quand le lacet mag est jugé fiable et avec quelle intensité.",
+    "collectCalibrationSamples": "Collecter des échantillons de calibration",
+    "collectCalibrationDescription": "Recueille des échantillons du magnétomètre en RTK-Fixed pour estimer les décalages hard/soft-iron. À exécuter moteurs coupés, puis à désactiver.",
+    "magneticDeclinationLabel": "Déclinaison magnétique",
+    "magneticDeclinationTooltip": "Déclinaison magnétique locale appliquée au lacet du magnétomètre (France ≈ 1,5°).",
+    "minHorizontalFieldLabel": "Champ horizontal minimum",
+    "minHorizontalFieldTooltip": "Amplitude minimale du champ horizontal pour un lacet valide. En dessous, le lacet mag est rejeté.",
+    "magYawVarianceLabel": "Variance du lacet mag",
+    "magYawVarianceTooltip": "Variance du bruit capteur (rad²) pour le facteur unaire de lacet du magnétomètre. Plus élevé = moins de confiance."
+  },
+  "settingsGnssAdvanced": {
+    "rawValueFallback": "{{label}} valeur brute"
+  },
+  "settingsGnssSignalHelp": {},
+  "settingsGnssReceiver": {
+    "cardTitle": "Actions récepteur",
+    "saveSettings": "Enregistrer les réglages",
+    "saveAndRestartGps": "Enregistrer + redémarrer le GPS",
+    "actionPlan": "Planifier l'application du profil",
+    "actionApply": "Appliquer le profil au récepteur",
+    "actionFactoryReset": "Reset usine + application du profil",
+    "actionRestart": "Redémarrer le GPS",
+    "cancel": "Annuler",
+    "unknownApiError": "Erreur API GNSS inconnue",
+    "backendRequestFailed": "Échec de la requête vers le backend GNSS",
+    "summaryPartialFailure": "L'action GNSS s'est terminée avec un échec partiel",
+    "summaryPartialFailureDesc": "Consultez les avertissements, la sortie des commandes et l'état du redémarrage ci-dessous.",
+    "summaryFailed": "Échec de l'action GNSS",
+    "summaryFailedDesc": "Consultez la sortie des commandes et les avertissements ci-dessous.",
+    "summarySuccess": "Action GNSS terminée avec succès",
+    "summarySuccessDesc": "La sortie des commandes et les avertissements du backend sont affichés ci-dessous.",
+    "notifyPartialFailure": "{{action}} terminé avec un échec partiel",
+    "notifyPartialFailureDesc": "Consultez les avertissements du backend et le résultat du redémarrage dans le panneau d'action GNSS.",
+    "notifyFailed": "{{action}} a échoué",
+    "notifyFailedDesc": "Consultez le panneau d'action GNSS pour stdout/stderr et les avertissements.",
+    "notifyCompleted": "{{action}} terminé",
+    "confirmApplyTitle": "Appliquer le profil GNSS au récepteur ?",
+    "confirmApplyBody": "Le sidecar GPS sera arrêté, le profil du récepteur sera appliqué dans un conteneur GNSS à usage unique, et le sidecar GPS ne sera redémarré que si l'application réussit.",
+    "confirmApplyWarning": "Ne débranchez pas l'alimentation ni le câblage USB/série pendant l'application du profil du récepteur.",
+    "confirmApplyOk": "Appliquer le profil",
+    "confirmFactoryResetTitle": "Reset usine du récepteur et réapplication du profil ?",
+    "confirmFactoryResetDanger": "Le reset usine efface les réglages du récepteur avant de reconstruire le profil sélectionné.",
+    "confirmFactoryResetBody": "Le backend arrêtera le sidecar GPS, exécutera le flux persistant de reset usine, puis réappliquera le profil sauvegardé sélectionné et ne redémarrera le GPS que si ce flux réussit.",
+    "confirmFactoryResetWarning": "À utiliser uniquement lorsque vous voulez intentionnellement reconstruire la configuration du récepteur à partir d'un état vierge.",
+    "confirmFactoryResetOk": "Reset usine et application",
+    "actionInProgress": "{{action}} en cours",
+    "actionInProgressDesc": "En attente du retour de l'API backend GNSS : sortie des commandes, avertissements et état du redémarrage.",
+    "backendResult": "Résultat du backend",
+    "tagPartialFailure": "Échec partiel",
+    "tagSuccess": "Succès",
+    "tagFailed": "Échec",
+    "tagGpsRestarted": "GPS redémarré",
+    "tagGpsRestartFailed": "Échec du redémarrage GPS",
+    "tagRuntimeBaudUpdated": "Baud d'exécution mis à jour",
+    "tagBaudMismatch": "Baud incohérent",
+    "fieldReceiverFamily": "Famille de récepteur :",
+    "fieldProfile": "Profil :",
+    "fieldSignalProfile": "Profil de signal :",
+    "fieldSerialDevice": "Périphérique série :",
+    "fieldBaud": "Baud :",
+    "baudRuntimeConfigured": "exécution {{runtime}} / configuré {{configured}}",
+    "unknownValue": "inconnu",
+    "fieldRestartError": "Erreur de redémarrage :",
+    "backendWarnings": "Avertissements du backend",
+    "commandIndex": "Commande {{index}}",
+    "exitCode": "code {{code}}",
+    "commandSummary": "Résumé de la commande",
+    "transportError": "Erreur de transport"
+  },
+  "settingsGnssLiveStatus": {
+    "cardTitle": "État GNSS en direct",
+    "detectedReceiver": "Récepteur détecté",
+    "backend": "Backend",
+    "liveStatus": "État en direct",
+    "rtkMode": "Mode RTK",
+    "rtkModeNone": "Aucun",
+    "parserHealth": "Santé du parseur",
+    "correctionForwarding": "Transfert des corrections",
+    "correctionStream": "Flux de correction",
+    "receiverCorrections": "Corrections du récepteur",
+    "receiverHealth": "Santé du récepteur",
+    "rfInterference": "Interférences RF",
+    "jamming": "Brouillage",
+    "satelliteSectionTitle": "Satellites",
+    "satellitesUsedOfVisible": "Utilisés / visibles",
+    "satellitesTrackedOfVisible": "Suivis / visibles",
+    "signalQualitySectionTitle": "Qualité du signal",
+    "cn0ScaleNote": "Échelle des barres : 0 dB-Hz à 45 dB-Hz.",
+    "meanCn0DbHz": "C/N0 moyen",
+    "maxCn0DbHz": "C/N0 max",
+    "correctionMsmSectionTitle": "Corrections et MSM",
+    "msmState": "État MSM",
+    "msmStateNotSeen": "Non vu",
+    "msmStateSeenUndecoded": "Vu mais non décodé",
+    "msmStateDecodedInvalid": "Décodé invalide",
+    "msmStateValid": "Valide",
+    "msmMessageType": "Type de message MSM",
+    "msmStationId": "ID station MSM",
+    "msmConstellationsSeen": "Constellations vues",
+    "msmSatelliteCount": "Nombre de satellites MSM",
+    "msmSignalCount": "Nombre de signaux MSM",
+    "msmCellCount": "Nombre de cellules MSM",
+    "msmAgeS": "Âge MSM (s)",
+    "baselineSectionTitle": "Baseline",
+    "dualAntennaBaseline": "Baseline double antenne",
+    "baselineSolutionStatus": "Statut de solution de la baseline",
+    "baselineAzimuthDeg": "Azimut de la baseline (deg)",
+    "baselinePitchDeg": "Tangage de la baseline (deg)",
+    "baselineLengthM": "Longueur de la baseline (m)",
+    "msmSummary": "Résumé MSM",
+    "receiverConfigSectionTitle": "Configuration du récepteur",
+    "selectedRuntimeBaud": "Baud d'exécution sélectionné",
+    "selectedConfigBaud": "Baud de configuration sélectionné",
+    "selectedProfile": "Profil sélectionné",
+    "selectedSignalProfile": "Profil de signal sélectionné",
+    "healthy": "Sain",
+    "warning": "Avertissement",
+    "unknown": "Inconnu",
+    "available": "Disponible",
+    "unavailable": "Indisponible"
+  },
+  "settingsNtrip": {
+    "title": "Corrections RTK NTRIP",
+    "disabledWarning": "Sans NTRIP, la précision GPS est d'environ 2–5 m — insuffisant pour une tonte autonome.",
+    "intro": "Choisissez un réseau de corrections, puis sélectionnez la station de base la plus proche sur la carte. Les identifiants des réseaux gratuits sont renseignés pour vous.",
+    "showAllFreeNetworks": "Afficher tous les réseaux gratuits",
+    "host": "Hôte",
+    "port": "Port",
+    "user": "Utilisateur",
+    "pass": "Mot de passe",
+    "mountpoint": "Mountpoint",
+    "loadStations": "Charger les stations",
+    "emailAddon": "Votre e-mail (identifiant RTK2go)",
+    "loadProviderError": "Impossible de charger les stations de {{provider}}. Vérifiez que le caster est accessible.",
+    "loadFreeNetworksError": "Impossible de charger les réseaux gratuits.",
+    "baseStationsCount": "{{count}} stations de base — cliquez sur la plus proche",
+    "selected": "Sélectionnée : {{mountpoint}}",
+    "searchStationPlaceholder": "…ou recherchez une station par nom",
+    "advancedRawFields": "Avancé : champs NTRIP bruts"
+  },
+  "settingsNtripStationMap": {
+    "yourRobot": "Votre robot"
+  },
+  "robotComponentEditor": {
+    "dockPoseSetFromGps": "Pose de la base définie (depuis le GPS)",
+    "dockPoseSetFromGpsDescription": "Position de la base capturée depuis le fix GPS moyenné et enregistrée dans mowgli_robot.yaml. L'indicateur sur la carte se place sur la nouvelle pose au prochain envoi /map.",
+    "unknownError": "Erreur inconnue",
+    "failedToSetDockPose": "Échec de la définition de la pose de la base",
+    "noRobotPoseYet": "Aucune pose du robot disponible pour l'instant",
+    "setDockFromPoseTitle": "Définir la pose de la base depuis la position actuelle du robot ?",
+    "setDockPose": "Définir la pose de la base",
+    "cancel": "Annuler",
+    "setDockConfirmIntro1": "Cela capture les",
+    "setDockConfirmXYHeading": "x, y ET le cap",
+    "setDockConfirmIntro2": "du robot maintenant et les écrit dans",
+    "setDockConfirmIntro3": "comme nouvelle pose de la base. L'auto-calibration de l'IMU exécutée au prochain accostage affinera le lacet s'il dérive.",
+    "currentRobot": "Robot actuel",
+    "bearing": "cap",
+    "savedDock": "Base enregistrée",
+    "setDockConfirmFooter": "Assurez-vous que le robot est posé sur la base et orienté dans la direction d'approche souhaitée. La nouvelle pose persiste au redémarrage des conteneurs.",
+    "sensorPlacement": "Placement des capteurs",
+    "metersFromUrdf": "m (depuis l'URDF)",
+    "dragSensorsHint": "Faites glisser les capteurs sur la vue de dessus du robot pour définir leur position X/Y. Utilisez la poignée de rotation (petit cercle) pour régler le lacet du capteur. L'espacement de la grille est de 5 cm. Les dimensions du robot sont lues depuis le topic /robot_description.",
+    "resetToDefaults": "Réinitialiser aux valeurs par défaut",
+    "xForward": "X (avant)",
+    "yLeft": "Y (gauche)",
+    "zHeight": "Z (hauteur)",
+    "yaw": "Lacet",
+    "autoCalibrateImuTooltip": "Auto-calibrer le lacet de montage de l'IMU (le robot avance lui-même d'environ 0,6 m puis recule)",
+    "dockPose": "Pose de la base",
+    "bearingCompass": "Cap (boussole, 0–360°)",
+    "compassBearingHint": "Cap boussole : 0° = N, 90° = E, 180° = S, 270° = O. Tenez une boussole de téléphone derrière la base, pointée dans le sens d'entrée du robot, et lisez le cap. Capturé automatiquement à la première charge par dock_yaw_to_set_pose",
+    "source": "source",
+    "captureFromRobot": "Capturer depuis la position actuelle du robot",
+    "captureIntro1": "Garez le robot sur la base, face à la direction d'approche, puis cliquez ci-dessous. Capture",
+    "captureXYYaw": "x, y ET lacet",
+    "captureIntro2": "d'un coup — c'est la façon la plus fiable d'initialiser la pose de la base pour une nouvelle carte.",
+    "robotNow": "Robot actuel : x={{x}} m, y={{y}} m, cap={{bearing}}°",
+    "waitingForPose": "En attente de la pose du robot…",
+    "tooltipNotCharging": "Placez le robot sur la base avec les contacts de charge engagés avant de définir la pose de référence",
+    "tooltipWaitingPose": "En attente de la pose du robot",
+    "tooltipCapturePose": "Capturer la pose actuelle du robot comme référence canonique de la base",
+    "coordinatesHint": "Les coordonnées sont relatives à base_link (centre de l'axe des roues arrière). X+ = avant, Y+ = gauche, Z+ = haut. Le lacet est la rotation autour de l'axe Z en degrés (affiché) / radians (stocké).",
+    "imuCalibTitle": "Auto-calibration du lacet de l'IMU",
+    "imuCalibIntro1": "Le robot va",
+    "imuCalibDriveItself": "se déplacer tout seul",
+    "imuCalibForward": "0,6 m vers l'avant",
+    "imuCalibIntro2": "puis revenir au point de départ, ce qui prend environ",
+    "imuCalibTenSeconds": "10 secondes",
+    "imuCalibBullet1a": "Assurez-vous que le robot est",
+    "imuCalibUndocked": "désaccosté",
+    "imuCalibBullet1b": "(il refuse de fonctionner pendant la charge).",
+    "imuCalibBullet2a": "Laissez",
+    "imuCalibAtLeast1m": "au moins 1 m",
+    "imuCalibBullet2b": "d'espace dégagé devant et derrière.",
+    "imuCalibBullet3": "Toute urgence active doit d'abord être levée.",
+    "imuCalibCollisionMonitor": "Le moniteur de collision reste armé — les obstacles arrêteront le mouvement.",
+    "imuCalibTechnical": "Estime le lacet de montage de la puce IMU par rapport à base_link en comparant le vecteur d'accélération horizontale à l'accélération en repère robot issue de l'odométrie des roues pendant les rampes avant et arrière. Seuls les échantillons avec |wz| < 0.05 rad/s et |a_body| > 0.1 m/s² sont utilisés.",
+    "start": "Démarrer",
+    "calibRunningMessage": "Calibration en cours — le robot se déplace tout seul",
+    "calibRunningDescription": "Trajet avant, pause, trajet arrière. Restez à l'écart. Le mouvement s'arrêtera automatiquement.",
+    "calibConfidence": "Confiance ±{{dev}}° à partir de {{samples}} échantillons valides.",
+    "calibCurrentValue": "Valeur actuelle : {{value}}°",
+    "calibFailed": "Échec de la calibration",
+    "calibFailedHint": "Astuce : déplacez-vous plus vite ou plus longtemps pour que l'accéléromètre perçoive une impulsion avant et arrière nette le long de l'axe X du robot.",
+    "retry": "Réessayer",
+    "discard": "Abandonner",
+    "apply": "Appliquer"
+  },
+  "robotAnatomy": {
+    "gpsAntenna": "Antenne GPS",
+    "yawValue": "lacet {{n}}°",
+    "noData": "aucune donnée",
+    "streaming": "en flux",
+    "noScan": "aucun scan",
+    "battery": "Batterie",
+    "blade": "Lame",
+    "spinning": "en rotation",
+    "off": "arrêtée",
+    "leftWheel": "Roue gauche",
+    "rightWheel": "Roue droite",
+    "rpmValue": "{{n}} tr/min",
+    "motors": "Moteurs",
+    "dock": "Base",
+    "charging": "en charge",
+    "offDock": "hors base",
+    "rainSensor": "Capteur de pluie",
+    "rain": "Pluie",
+    "wet": "humide",
+    "dry": "sec",
+    "robotAnatomy": "Anatomie du robot",
+    "inspecting": "Inspection",
+    "hoverAPart": "Survolez une pièce",
+    "legend": "Vert = sain, ambre = à surveiller."
+  },
+  "dashboardHeroCard": {
+    "mowerNeedsYou": "La tondeuse a besoin de vous",
+    "crossedTheBoundary": "A franchi la limite",
+    "emergencyStop": "Arrêt d'urgence",
+    "crossedBoundaryHint": "Replacez la tondeuse à l'intérieur de la limite, puis reprenez.",
+    "emergencyStopHint": "Vérifiez que la tondeuse est dégagée des obstacles, puis relâchez.",
+    "sendHome": "Renvoyer à la base",
+    "resume": "Reprendre",
+    "resetEmergency": "Réarmer l'urgence",
+    "charging": "EN CHARGE",
+    "minLeft": "~{{n}} min restantes",
+    "pulling": "Tire {{amps}} A",
+    "toppingUp": "Recharge en cours",
+    "backToFull": "Pleine charge dans ~{{n}} min",
+    "onDockPulling": "Sur la base, tire {{amps}} A. Je reprends la main une fois à 100 %.",
+    "mowAnyway": "Tondre quand même",
+    "pausedRainDetected": "En pause -- pluie détectée",
+    "waitingOutWeather": "J'attends que le temps passe",
+    "resumeWhenClears": "Je reprendrai automatiquement dès l'éclaircie.",
+    "runningLow": "Batterie faible",
+    "headingToDock": "Retour à la base -- {{pct}} %",
+    "resumeOnceCharged": "Je reprendrai automatiquement une fois rechargé.",
+    "keepMowing": "Continuer la tonte",
+    "theLawn": "la pelouse",
+    "mowingArea": "Tonte de {{area}}",
+    "recordingAreaBoundary": "Enregistrement de la limite de zone",
+    "headingBackToDock": "Retour vers la base",
+    "passProgress": "{{pct}} % de ce passage effectué -- {{time}} aujourd'hui",
+    "batteryAt": "Batterie à {{pct}} %",
+    "driveAlongBoundary": "Roulez le long de la limite, puis terminez l'enregistrement",
+    "zoneProgress": "Progression de la zone",
+    "pause": "Pause",
+    "home": "Retour base",
+    "mowgliIsParked": "Mowgli est garé",
+    "mowgliIsReady": "Mowgli est prêt",
+    "outOnLawnPrefix": "Sur la pelouse à ",
+    "allRestedPrefix": "Bien reposé à ",
+    "idleOffDockHint": "Touchez Retour base pour renvoyer le robot à la base, ou Démarrer pour tondre depuis ici.",
+    "idleDockedHint": "Touchez Démarrer la tonte pour commencer, ou attendez la prochaine tonte programmée.",
+    "idleOffDockHintShort": "Touchez Retour base pour rentrer, ou Démarrer pour tondre depuis ici.",
+    "idleDockedHintShort": "Touchez Démarrer pour commencer, ou attendez la prochaine tonte programmée.",
+    "startMowing": "Démarrer la tonte"
+  },
+  "yearOfLawn": {
+    "yearOfLawn": "Une année de tonte",
+    "last52Weeks": "52 dernières semaines",
+    "activeDays": "Jours actifs",
+    "currentStreak": "Série en cours",
+    "dayCount_one": "{{count}} jour",
+    "dayCount_other": "{{count}} jours",
+    "dayMon": "Lun",
+    "dayWed": "Mer",
+    "dayFri": "Ven",
+    "cellTooltip": "{{date}} -- {{km}} km",
+    "less": "Moins",
+    "more": "Plus"
+  },
+  "notificationBell": {
+    "justNow": "à l'instant",
+    "minutesAgo": "il y a {{n}} min",
+    "hoursAgo": "il y a {{n}} h",
+    "daysAgo": "il y a {{n}} j",
+    "bellAria": "Notifications",
+    "bellAriaUnread": "Notifications ({{n}} non lues)",
+    "notifications": "Notifications",
+    "clearAll": "Tout effacer",
+    "nothingRightNow": "Rien pour le moment.",
+    "criticalEventsHint": "Les événements critiques (urgence, pluie, fin de tonte) apparaîtront ici.",
+    "dismiss": "Ignorer"
+  },
+  "iosInstallBanner": {
+    "title": "Installer MowgliNext",
+    "tapPrefix": "Touchez",
+    "then": "puis",
+    "addToHomeScreen": "Ajouter à l'écran d'accueil",
+    "suffix": "pour une expérience plein écran",
+    "dismiss": "Ignorer"
+  },
+  "logsPage": {
+    "streamClosed": "Flux de logs fermé",
+    "failedToListContainers": "Échec du listage des conteneurs",
+    "containerStarted": "Conteneur démarré",
+    "containerStopped": "Conteneur arrêté",
+    "containerRestarted": "Conteneur redémarré",
+    "failedToCommandContainer": "Échec de la commande {{command}} sur le conteneur",
+    "selectContainer": "Sélectionner un conteneur",
+    "restart": "Redémarrer",
+    "stop": "Arrêter",
+    "start": "Démarrer",
+    "searchPlaceholder": "Rechercher dans les logs…",
+    "levelErrors": "Erreurs",
+    "levelWarnings": "Avertissements",
+    "levelInfo": "Info",
+    "levelDebug": "Debug",
+    "levelOther": "Autre",
+    "live": "Direct",
+    "paused": "En pause",
+    "clear": "Effacer",
+    "waitingForOutput": "En attente de la sortie des logs…",
+    "noLinesMatch": "Aucune ligne ne correspond aux filtres actifs."
+  },
+  "imuYawCalibration": {
+    "timedOut": "Délai dépassé après 155 s. Le service tourne peut-être encore — vérifiez le robot et réessayez.",
+    "failed": "Échec de la calibration du lacet IMU",
+    "applied": "Calibration appliquée",
+    "previously": "(précédemment {{value}}°)",
+    "rememberToSave": ". Pensez à enregistrer la configuration."
+  },
+  "useSettingsHook": {
+    "loadFailed": "Échec du chargement des réglages",
+    "saved": "Réglages enregistrés",
+    "saveFailed": "Échec de l'enregistrement des réglages"
+  },
+  "btStateGraph": {
+    "heading": "État de l'arbre de comportement",
+    "nodeDocked": "À la base",
+    "nodeUndock": "Départ",
+    "nodeTransit": "Transit",
+    "nodeMow": "Tonte",
+    "nodeReturn": "Retour",
+    "nodeDock": "Accostage",
+    "nodeCharge": "Charge",
+    "nodeRainDock": "Pluie → base",
+    "nodeLowBatt": "Batt. faible",
+    "nodeRecovery": "Récupération",
+    "nodeEstop": "Arrêt urg.",
+    "nodeManual": "Manuel",
+    "nodeRecording": "Enregistre.",
+    "legendCycle": "Cycle",
+    "legendOperator": "Opérateur",
+    "legendFaultRecovery": "Défaut / récupération"
+  },
+  "notificationCenter": {
+    "emergencyTitle": "Arrêt d'urgence déclenché",
+    "emergencyBody": "Le firmware a verrouillé l'arrêt d'urgence. Vérifiez le robot, puis appuyez sur Réinitialiser pour le libérer.",
+    "rainTitle": "Pluie détectée",
+    "rainBody": "Tonte mise en pause. Le robot reprendra automatiquement dès que la pluie cesse.",
+    "mowingCompleteTitle": "Tonte terminée",
+    "mowingCompleteBody": "Toutes les zones programmées ont été tondues.",
+    "boundaryTitle": "Limite franchie",
+    "boundaryBody": "Le robot s'est arrêté après être sorti de la zone. Replacez-le à l'intérieur, puis reprenez."
+  },
+  "asyncButton": {
+    "errorOccurred": "Une erreur est survenue"
+  },
+  "settingsSections": {
+    "hardware": {
+      "label": "Matériel",
+      "description": "Modèle de robot, roues, châssis et dimensions de la lame"
+    },
+    "drive_motor": {
+      "label": "Moteurs",
+      "description": "Gains PID de vitesse de roue du firmware et feedforward (appliqués en direct)"
+    },
+    "ntrip": {
+      "label": "Corrections NTRIP",
+      "description": "Réseau de correction RTK et station de base — à configurer avant le GPS"
+    },
+    "positioning": {
+      "label": "GPS et positionnement",
+      "description": "Récepteur GNSS universel et datum de la carte"
+    },
+    "sensors": {
+      "label": "Capteurs",
+      "description": "Placement du LiDAR, de l'IMU et de l'antenne GPS sur le robot"
+    },
+    "localization": {
+      "label": "Localisation",
+      "description": "Stratégie de fusion en repère carte et facteurs LiDAR optionnels"
+    },
+    "mowing": {
+      "label": "Tonte",
+      "description": "Réglages de vitesse, andain/lisière, angle et contour"
+    },
+    "docking": {
+      "label": "Accostage",
+      "description": "Distance de désaccostage, approche et réglages de réessai"
+    },
+    "battery": {
+      "label": "Batterie",
+      "description": "Seuils de tension et de pourcentage pour la charge"
+    },
+    "safety": {
+      "label": "Sécurité",
+      "description": "Arrêts d'urgence, limites de température, évitement d'obstacles"
+    },
+    "navigation": {
+      "label": "Navigation",
+      "description": "Tolérances de cible et délai de progression"
+    },
+    "rain": {
+      "label": "Pluie",
+      "description": "Comportement de détection de pluie et délai"
+    },
+    "advanced": {
+      "label": "Avancé",
+      "description": "Paramètres bruts et paires clé-valeur personnalisées"
+    },
+    "toasts": {
+      "loadFailed": "Échec du chargement des réglages",
+      "noChanges": "Aucune modification à enregistrer",
+      "saved": "Réglages enregistrés",
+      "savedDescription": "Redémarrez ROS2 pour appliquer les modifications.",
+      "savedGpsRestartDescription": "Redémarrage du GPS pour appliquer les modifications GNSS. Redémarrez ROS2 pour appliquer les autres modifications enregistrées.",
+      "restartingGps": "Redémarrage du GPS avec les réglages actuels",
+      "dockRefreshFailed": "Réglages enregistrés, mais l'actualisation à chaud de map_server a échoué",
+      "dockRefreshFailedDescription": "Redémarrez ROS2 (ou appelez /map_server_node/set_docking_point manuellement) pour prendre en compte la nouvelle pose de la base.",
+      "drivePidUpdateFailed": "Réglages enregistrés, mais la mise à jour à chaud du PID des moteurs a échoué",
+      "drivePidUpdateFailedDescription": "Redémarrez ROS2 pour appliquer les nouveaux gains PID des moteurs.",
+      "saveFailed": "Échec de l'enregistrement des réglages"
+    }
+  },
+  "ntripProviders": {
+    "centipedeNote": "Réseau RTK communautaire gratuit. Identifiants publics — choisissez simplement la base la plus proche.",
+    "rtk2goNote": "Casters communautaires gratuits dans le monde entier. Utilisez votre e-mail comme identifiant.",
+    "saposNote": "Service national payant — saisissez l'hôte du caster et les identifiants de votre Land.",
+    "customName": "Caster personnalisé",
+    "customNote": "Saisissez l'hôte, le port et (facultatif) l'identifiant de n'importe quel caster NTRIP."
+  },
+  "paramGroups": {
+    "Coverage": "Couverture",
+    "Docking": "Accostage",
+    "GNSS": "GNSS",
+    "Localization": "Localisation",
+    "LiDAR": "LiDAR",
+    "Motor control": "Contrôle moteur",
+    "IMU": "IMU",
+    "Diagnostics": "Diagnostics",
+    "Other": "Autre"
+  },
+  "hookNotifications": {
+    "failedToLoadConfig": "Échec du chargement de la configuration",
+    "failedToSaveConfig": "Échec de l'enregistrement de la configuration"
+  }
+}

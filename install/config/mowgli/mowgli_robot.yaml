@@ -1,201 +1,76 @@
-# Mowgli Robot Configuration — seeded by the installer, then managed
-# by mowglinext-gui (Settings page). This file is the single source
-# of truth for robot parameters; changes are picked up on container
-# restart.
+# =============================================================================
+# mowgli_robot.yaml — SPARSE installed robot configuration
 #
-# Site-specific keys (datum, dock_pose, ntrip_*, imu calibration,
-# magnetometer calibration) are filled in by the installer and the
-# GUI's onboarding wizard. Mounting positions and chassis dims are
-# YardForce500 defaults — adjust on the GUI's Settings page if you
-# run a different chassis.
+# This file is DELIBERATELY SPARSE. It holds ONLY:
+#   * Bucket A — install-time choices made by the installer / onboarding wizard
+#     (hardware selection, GNSS receiver + serial, datum, NTRIP credentials).
+#   * Bucket B — per-robot CALIBRATION OUTPUTS written back by the GUI / nodes
+#     (dock pose, encoder scale, wheel PID, IMU yaw, magnetometer settings).
+#
+# EVERY OTHER PARAMETER'S DEFAULT lives in the in-package template
+# `mowgli_bringup/config/mowgli_robot.yaml` (versioned, ships with the
+# software). At launch, robot_config_util.load_robot_params() DEEP-MERGES this
+# sparse file OVER that template, so any key absent here falls through to its
+# template default. This is exactly how the GUI's "reset to default" works:
+# deleting a key from this file reverts it to the template value.
+#
+# So: to change a value, set it here (it overrides the template). To restore a
+# default, DELETE its line here (do NOT copy the template value in). Do not add
+# keys that are pure defaults — keep this file sparse.
+# =============================================================================
 
 mowgli:
     ros__parameters:
-        # ── Operational mode ────────────────────────────────────────
-        automatic_mode: 0
-        mowing_enabled: true
+        # ── Bucket A — install-time choices ─────────────────────────
+        # Hardware model + LiDAR presence. `lidar_enabled` is install-decided
+        # and is intentionally ABSENT from the template — its presence here is
+        # what tells the launch files an explicit operator choice was made.
+        mower_model: YardForce500
         lidar_enabled: true
 
-        # Localizer backend — when LiDAR is present we want the
-        # GTSAM factor-graph localizer with scan-matching + loop
-        # closure so we ride through RTK-Float windows.
-        use_fusion_graph: true
-        use_scan_matching: true
-        use_loop_closure: true
-        use_magnetometer: false
+        # GNSS receiver + serial link.
+        gnss_receiver_family: auto
+        gnss_serial_device: /dev/ttyAMA4
+        gnss_serial_baud: 921600
 
-        # ── Battery (YardForce500 28 V pack) ────────────────────────
-        battery_critical_percent: 10
-        battery_critical_voltage: 23
-        battery_empty_voltage: 24
-        battery_full_percent: 95
-        # YardForce500 SLA packs top out at ~28.0 V on the dock. Earlier
-        # default of 28.5 V capped the displayed percent at 88.9 % even when
-        # fully charged. Operators with a pack that truly reaches 28.5 V can
-        # override this here.
-        battery_full_voltage: 28.0
-        battery_low_percent: 20
+        # Datum — map origin in WGS84 lat/lon. Set per-site by the installer or
+        # the GUI's "Auto-detect from GPS" button. 0/0 = not yet set.
+        datum_lat: 0.000000000
+        datum_lon: 0.000000000
 
-        # ── Chassis (YardForce500 measured) ─────────────────────────
-        blade_radius: 0.09
-        caster_radius: 0.03
-        caster_track: 0.36
-        chassis_center_x: 0.18
-        chassis_height: 0.19
-        chassis_length: 0.54
-        chassis_mass_kg: 8.76
-        chassis_width: 0.4
-        tool_width: 0.18
-        wheel_radius: 0.04475
-        wheel_track: 0.325
-        wheel_width: 0.04
-        wheel_x_offset: 0
-        # ticks_per_meter — consumed by hardware_bridge_node to convert
-        # raw encoder tick deltas to metres. MUST match the firmware
-        # constant TICKS_PER_M in firmware/stm32/ros_usbnode/include/board.h.
-        ticks_per_meter: 300.0
-        ticks_per_revolution: 84
-
-        # ── Sensor mounting (relative to base_link / wheel axis) ────
-        # Defaults are physically measured on a YardForce500 with the
-        # standard mowgli antenna/IMU/LiDAR mount. Override on the
-        # Settings page if your robot differs.
-        gps_x: 0.3
-        gps_y: 0
-        gps_z: 0.2
-        imu_x: 0.191
-        imu_y: -0.186
-        imu_z: 0.095
-        # imu_pitch / imu_roll / imu_yaw are calibrated per robot —
-        # use the GUI's Auto-calibrate button (Diagnostics → IMU yaw
-        # calibration). Default 0 means uncalibrated.
-        imu_pitch: 0
-        imu_roll: 0
-        imu_yaw: 0
-        lidar_x: 0
-        lidar_y: 0.025
-        lidar_z: 0.22
-        lidar_yaw: -3.1416
-
-        # ── GPS / RTK ───────────────────────────────────────────────
-        gps_baudrate: 921600
-        gps_port: /dev/gps
-        gps_protocol: UBX
-        gps_timeout_sec: 5
-        gps_wait_after_undock_sec: 10
-        # Datum — map origin in WGS84 lat/lon. Set per-site by the
-        # installer or by the GUI's "Auto-detect from GPS" button.
-        datum_alt: 0
-        datum_lat: 0
-        datum_lon: 0
-        # NTRIP — RTK correction stream. Filled in by the installer
-        # interactive prompt. Leave blank to disable.
+        # NTRIP — RTK correction stream. Disabled + empty by default; the
+        # installer / GUI fill these in for the site's caster.
         ntrip_enabled: false
         ntrip_host: ""
-        ntrip_mountpoint: ""
-        ntrip_password: ""
         ntrip_port: 2101
         ntrip_user: ""
+        ntrip_password: ""
+        ntrip_mountpoint: ""
 
-        # ── Docking ─────────────────────────────────────────────────
-        # dock_pose is captured by the GUI's IMU yaw calibration
-        # (which docks first) or the manual "Set dock to current pose"
-        # action — both write back here via line-splice updates.
-        # Approach distance = the final straight-in runway (injected as
-        # opennav_docking simple_charging_dock.staging_x_offset). 1.5 m is
-        # a clean, calm approach once the dock pose is correctly pinned.
-        dock_approach_distance: 1.5
-        dock_max_retries: 3
-        dock_pose_x: 0
-        dock_pose_y: 0
-        dock_pose_yaw: 0
-        dock_use_charger_detection: true
-        undock_distance: 1.5
-        undock_speed: 0.15
+        # ── Bucket B — per-robot calibration outputs ────────────────
+        # Dock pose (map frame) — captured by the GUI's IMU yaw calibration or
+        # the "Set dock to current pose" action, written back via line-splice.
+        dock_pose_x: 0.0
+        dock_pose_y: 0.0
+        dock_pose_yaw: 0.0
 
-        # ── Mowing pattern ──────────────────────────────────────────
-        # coverage_xy_tolerance: FTC coverage goal xy tolerance (m). Hard
-        #   ceiling 0.15 m in navigation.launch.py (clamped + warned above
-        #   that). 0.10 is the safe default.
-        coverage_xy_tolerance: 0.10
-        headland_width: 0.18
-        # min_turning_radius: F2C swath-connection turn radius (m). The
-        #   YardForce500 is a skid-steer that pivots in place, so keep this
-        #   small — a large value forces wide Dubins U-turns between swaths
-        #   and degrades coverage. 0.05 ≈ pivot-in-place.
-        min_turning_radius: 0.05
-        mow_angle_increment_deg: 0
-        mow_angle_offset_deg: -1
-        mower_model: YardForce500
-        mowing_speed: 0.2
-        outline_offset: 0.05
-        outline_overlap: 0
-        outline_passes: 1
-        path_spacing: 0.13
-        progress_timeout_sec: 60
-        transit_speed: 0.25
-        # xy/yaw_goal_tolerance: Nav2 transit + dock-staging goal tolerance.
-        #   Keep tight — loose values let the robot "arrive" far from the
-        #   staging pose and miss the dock. 0.30 m / 0.20 rad are the sane
-        #   defaults; tighten per-site via the GUI if needed.
-        xy_goal_tolerance: 0.30
-        yaw_goal_tolerance: 0.20
+        # Encoder scale — MUST match the firmware and the physical wheels.
+        # Calibrated per robot (drive-a-known-distance). Template default 399.0.
+        ticks_per_meter: 399.0
 
-        # ── Persistence ─────────────────────────────────────────────
-        map_save_on_dock: true
-        map_save_path: /ros2_ws/maps/garden_map
-        max_obstacle_avoidance_distance: 2
+        # Drive-motor wheel-velocity PID + feedforward, pushed to the STM32.
+        # Retuned per robot via the GUI; values here mirror the template.
+        wheel_pid_kp: 30.0
+        wheel_pid_ki: 5000.0
+        wheel_pid_kd: 0.0
+        wheel_pid_integral_limit: 100.0
+        wheel_pid_pwm_per_mps: 300.0
 
-        # ── Safety ──────────────────────────────────────────────────
-        # Lift/tilt emergency is the firmware's job — these flags only
-        # control whether ROS2 should react when the firmware reports
-        # it. Leave false unless you specifically want the BT to do
-        # extra recovery on top of firmware emergency.
-        emergency_stop_on_lift: false
-        emergency_stop_on_tilt: false
-        lift_blade_resume_delay_sec: 1
-        lift_recovery_mode: false
-        motor_temp_high_c: 80
-        motor_temp_low_c: 40
-        rain_debounce_sec: 10
-        rain_delay_minutes: 30
-        rain_mode: 2
+        # IMU mounting yaw offset (rad) — solved by the GUI's Auto-calibrate
+        # button. 0 = uncalibrated.
+        imu_yaw: 0.0
 
-        # ── Behavior Tree tuning ────────────────────────────────────
-        # tick_rate: BT tick frequency (Hz). 10 Hz is the default.
-        # bt_debug_logging: emit verbose BT node-tick traces.
-        tick_rate: 10.0
-        bt_debug_logging: false
-
-        # ── IMU calibration (hardware_bridge_node) ──────────────────
-        # Calibration is auto-triggered on dock arrival. These knobs
-        # tune how it samples and persists across container restarts.
-        # imu_cal_samples: number of stationary IMU samples to average
-        # imu_cal_persist_path: where the calibration is stored
-        # imu_cal_auto_rest_sec: stationary detection window before cal
-        # imu_cal_periodic_recal_sec: refresh cal every N s while docked
-        imu_cal_samples: 200
-        imu_cal_persist_path: /ros2_ws/maps/imu_calibration.txt
-        imu_cal_auto_rest_sec: 15.0
-        imu_cal_periodic_recal_sec: 600.0
-
-        # ── Magnetometer fusion (cog_to_imu + mag_yaw_publisher) ────
-        # Default OFF on stock chassis: motor field induces heading-
-        # dependent bias static cal cannot remove. Enable only on a
-        # motor-isolated mag mount.
-        # enable_mag_cal: collect mag samples while RTK-Fixed
-        # mag_calibration_path: persisted hard-iron / soft-iron file
-        # declination_deg: local magnetic declination (France ≈ 1.5°)
-        # min_horizontal_uT: minimum horizontal field for valid yaw
-        # mag_yaw_variance: published yaw covariance (rad²)
+        # Magnetometer fusion. Default OFF on stock chassis (motor field bias);
+        # enable + set declination only on a motor-isolated mag mount.
         enable_mag_cal: false
-        mag_calibration_path: /ros2_ws/maps/mag_calibration.yaml
         declination_deg: 1.5
-        min_horizontal_uT: 5.0
-        mag_yaw_variance: 0.0027
-
-        # ── Dock seeding (dock_yaw_to_set_pose) ─────────────────────
-        # dock_pose_yaw_sigma_rad: noise on the yaw observation when
-        # the EKF is seeded with the dock heading on charge rising
-        # edge. Lower = trust the dock heading more strongly.
-        dock_pose_yaw_sigma_rad: 0.035

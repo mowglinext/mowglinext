@@ -5,9 +5,8 @@
 
 set -euo pipefail
 
-# Preserve the original argv so sync_repo_branch_to_image_channel can re-exec
-# us with the same flags after switching the git checkout to the requested
-# channel. Must be captured before parse_args() consumes anything.
+# Preserve the original argv so an explicit repository branch switch can
+# re-exec the installer with the same flags after checking out the new source.
 MOWGLI_INSTALLER_ARGV=("$@")
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -94,27 +93,30 @@ main() {
   print_platform_summary
 
   if ! $CHECK_ONLY; then
+    # Pre-acquire sudo credentials once for the entire install session
+    if command -v sudo >/dev/null 2>&1; then
+      echo ""
+      sudo -v
+    fi
     local TOTAL_STEPS=15
 
-    # Language selection, load previous env unless a web preset intentionally
-    # starts a fresh runtime configuration.
+    # Choose the source checkout first. If the user selects another branch,
+    # the installer intentionally checks it out, syncs submodules, and
+    # re-execs before any further prompts or runtime generation happen.
+    select_repo_branch
+    sync_repo_branch_to_selected_branch
+
+    # Language selection, then load previous env unless a web preset
+    # intentionally starts a fresh runtime configuration.
     select_language
     load_install_state
 
     # Image refs are tied to the install script version — never inherit
     # stale paths from older installs (e.g. mowgli-docker, openmower-gui).
-    unset MOWGLI_ROS2_IMAGE GPS_IMAGE UNICORE_IMAGE LIDAR_IMAGE MAVROS_IMAGE NMEA_IMAGE GUI_IMAGE
+    unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE GUI_IMAGE
 
-    # Image channel selection (main = stable, dev = iteration). Uses the
-    # previous IMAGE_TAG from .env as the default. Skipped if a preset or
-    # --branch= flag already set it.
+    # Image tag selection is independent from the selected repository branch.
     select_image_channel
-
-    # If IMAGE_TAG ended up different from the current git branch (e.g. the
-    # bootstrap cloned :main but the user picked dev), check out the matching
-    # branch and re-exec so the rest of the install reads the new branch's
-    # compose files, scripts, and lib code.
-    sync_repo_branch_to_image_channel
 
     progress_run_interactive 1 "$TOTAL_STEPS" "Updating system" \
       run_system_update
@@ -128,7 +130,7 @@ main() {
     progress_run_interactive 4 "$TOTAL_STEPS" "Selecting hardware backend" \
       select_hardware_backend
 
-    progress_run_interactive 5 "$TOTAL_STEPS" "Configuring GPS" \
+    progress_run_interactive 5 "$TOTAL_STEPS" "Configuring Universal GNSS" \
       run_gps_configuration_step
 
     progress_run_interactive 6 "$TOTAL_STEPS" "Configuring LiDAR" \
@@ -183,11 +185,11 @@ main() {
   check_devices
   check_generated_gps_yaml_alignment
   check_containers
-  check_firmware
-  check_gps
-  check_lidar
-  check_rangefinders
-  check_gui
+  check_firmware || true
+  check_gps || true
+  check_lidar || true
+  check_rangefinders || true
+  check_gui || true
 
   print_summary
 

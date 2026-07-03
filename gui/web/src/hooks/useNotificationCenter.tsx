@@ -2,6 +2,7 @@ import {
     createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
     type ReactNode,
 } from "react";
+import {useTranslation} from "react-i18next";
 
 /**
  * App-scoped notification center.
@@ -106,6 +107,7 @@ export function useAutoNotifications(opts: {
     rainDetected: boolean;
     state: string | undefined;
 }) {
+    const {t} = useTranslation();
     const {push} = useNotificationCenter();
     const prevEmergencyRef = useRef(opts.emergencyActive);
     const prevRainRef = useRef(opts.rainDetected);
@@ -113,28 +115,29 @@ export function useAutoNotifications(opts: {
 
     useEffect(() => {
         if (opts.emergencyActive && !prevEmergencyRef.current) {
-            push({level: 'error', title: 'Emergency stop triggered',
-                  body: 'Firmware latched the e-stop. Check the robot, then tap Reset to clear.'});
+            push({level: 'error', title: t('notificationCenter.emergencyTitle'),
+                  body: t('notificationCenter.emergencyBody')});
         }
         prevEmergencyRef.current = opts.emergencyActive;
-    }, [opts.emergencyActive, push]);
+    }, [opts.emergencyActive, push, t]);
 
     useEffect(() => {
         if (opts.rainDetected && !prevRainRef.current) {
-            push({level: 'warning', title: 'Rain detected',
-                  body: 'Mowing paused. The robot will resume automatically once the rain clears.'});
+            push({level: 'warning', title: t('notificationCenter.rainTitle'),
+                  body: t('notificationCenter.rainBody')});
         }
         prevRainRef.current = opts.rainDetected;
-    }, [opts.rainDetected, push]);
+    }, [opts.rainDetected, push, t]);
 
     useEffect(() => {
         if (opts.state === 'MOWING_COMPLETE' && prevStateRef.current !== 'MOWING_COMPLETE') {
-            push({level: 'success', title: 'Mowing complete', body: 'All scheduled areas have been mowed.'});
+            push({level: 'success', title: t('notificationCenter.mowingCompleteTitle'),
+                  body: t('notificationCenter.mowingCompleteBody')});
         }
         if (opts.state === 'BOUNDARY_EMERGENCY_STOP' && prevStateRef.current !== 'BOUNDARY_EMERGENCY_STOP') {
-            push({level: 'error', title: 'Crossed the boundary',
-                  body: 'The robot stopped after leaving the area. Lift it back in, then resume.'});
+            push({level: 'error', title: t('notificationCenter.boundaryTitle'),
+                  body: t('notificationCenter.boundaryBody')});
         }
         prevStateRef.current = opts.state;
-    }, [opts.state, push]);
+    }, [opts.state, push, t]);
 }

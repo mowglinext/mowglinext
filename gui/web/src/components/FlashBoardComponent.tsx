@@ -1,4 +1,4 @@
-import {App, Button, Col, Row, Typography} from "antd";
+import {Alert, App, Button, Col, Collapse, Row, Typography} from "antd";
 import {useEffect, useMemo, useRef, useState} from "react";
 import {fetchEventSource} from "@microsoft/fetch-event-source";
 import {createSchemaField} from "@formily/react";
@@ -14,6 +14,7 @@ import {
 } from "@formily/antd-v5";
 import {StyledTerminal} from "./StyledTerminal.tsx";
 import Terminal, {ColorMode, TerminalOutput} from "react-terminal-ui";
+import {useTranslation} from "react-i18next";
 import {createForm, onFieldValueChange} from "@formily/core";
 import {useApi} from "../hooks/useApi.ts";
 import {useIsMobile} from "../hooks/useIsMobile";
@@ -60,6 +61,7 @@ type Config = {
 export const FlashBoardComponent = (props: { onNext: () => void }) => {
     const isMobile = useIsMobile();
     const {colors} = useThemeMode();
+    const {t} = useTranslation();
     const form = useMemo(() => createForm({
         validateFirst: true,
         effects: (form) => {
@@ -94,7 +96,7 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                 }
             } catch (e: any) {
                 notification.error({
-                    message: "Error retrieving config",
+                    message: t('flashBoard.errorRetrievingConfig'),
                     description: e.toString(),
                 });
             }
@@ -143,7 +145,7 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                 onopen(res) {
                     if (res.status >= 400 && res.status < 500 && res.status !== 429) {
                         notification.error({
-                            message: "Error connecting to flash endpoint",
+                            message: t('flashBoard.errorConnectingFlashEndpoint'),
                             description: res.statusText,
                         });
                     }
@@ -183,23 +185,23 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
 
     const flashFirmware = (values: Config) => {
         const confirmModal = modal.confirm({
-            title: "Confirm firmware flash",
+            title: t('flashBoard.confirmFlashTitle'),
             content: (
                 <div>
-                    <p><strong>Please verify the following parameters before flashing:</strong></p>
+                    <p><strong>{t('flashBoard.confirmVerifyParams')}</strong></p>
                     <ul style={{listStyle: "none", padding: 0}}>
-                        <li>Max Charge Current: <strong>{values.maxChargeCurrent} A</strong></li>
-                        <li>Max Charge Voltage: <strong>{values.maxChargeVoltage} V</strong></li>
-                        <li>Bat Charge Cutoff Voltage: <strong>{values.batChargeCutoffVoltage} V</strong></li>
-                        <li>Limit Voltage 150mA: <strong>{values.limitVoltage150MA} V</strong></li>
-                        <li>IMU Inclination Threshold: <strong>0x{(values.imuOnboardInclinationThreshold ?? 0x38).toString(16).toUpperCase().padStart(2, "0")}</strong></li>
+                        <li>{t('flashBoard.maxChargeCurrentLabel')}: <strong>{values.maxChargeCurrent} A</strong></li>
+                        <li>{t('flashBoard.maxChargeVoltageLabel')}: <strong>{values.maxChargeVoltage} V</strong></li>
+                        <li>{t('flashBoard.batChargeCutoffVoltageLabel')}: <strong>{values.batChargeCutoffVoltage} V</strong></li>
+                        <li>{t('flashBoard.limitVoltage150MALabel')}: <strong>{values.limitVoltage150MA} V</strong></li>
+                        <li>{t('flashBoard.imuInclinationThresholdLabel')}: <strong>0x{(values.imuOnboardInclinationThreshold ?? 0x38).toString(16).toUpperCase().padStart(2, "0")}</strong></li>
                     </ul>
-                    <p style={{color: "red"}}><strong>Wrong voltage or current values can damage your battery or hardware!</strong></p>
+                    <p style={{color: colors.danger}}><strong>{t('flashBoard.confirmWrongValuesWarning')}</strong></p>
                 </div>
             ),
-            okText: "Flash",
+            okText: t('flashBoard.flash'),
             okType: "danger",
-            cancelText: "Cancel",
+            cancelText: t('flashBoard.cancel'),
             onOk: () => {
                 confirmModal.destroy();
                 doFlashFirmware(values);
@@ -213,7 +215,7 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
             <Row gutter={[0, 16]}>
                 <Col span={24}>
                     <Typography.Title level={5} style={{margin: 0}}>
-                        {isFlashing ? "Flashing firmware..." : flashError ? "Flash failed" : "Flash complete"}
+                        {isFlashing ? t('flashBoard.flashingFirmware') : flashError ? t('flashBoard.flashFailed') : t('flashBoard.flashComplete')}
                     </Typography.Title>
                 </Col>
                 <Col span={24}>
@@ -225,12 +227,12 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                                 ))}
                                 {flashDone && (
                                     <TerminalOutput>
-                                        {"\n✅ Firmware flashed successfully!"}
+                                        {`\n✅ ${t('flashBoard.flashedSuccessfully')}`}
                                     </TerminalOutput>
                                 )}
                                 {flashError && (
                                     <TerminalOutput>
-                                        {`\n❌ Error: ${flashError}`}
+                                        {`\n❌ ${t('flashBoard.errorPrefix')}: ${flashError}`}
                                     </TerminalOutput>
                                 )}
                             </Terminal>
@@ -252,14 +254,14 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                             <Button onClick={() => {
                                 setData(undefined);
                                 setFlashError(null);
-                            }}>Back to config</Button>
+                            }}>{t('flashBoard.backToConfig')}</Button>
                         )}
                         <Button
                             type="primary"
                             disabled={isFlashing}
                             onClick={props.onNext}
                         >
-                            {isFlashing ? "Flashing..." : "Next"}
+                            {isFlashing ? t('flashBoard.flashingShort') : t('flashBoard.next')}
                         </Button>
                     </FormButtonGroup>
                 </Col>
@@ -274,7 +276,7 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                 <FormLayout layout="vertical">
                     <SchemaField><SchemaField.String
                         name={"boardType"}
-                        title={"Board Selection"}
+                        title={t('flashBoard.boardSelectionTitle')}
                         default={"BOARD_VERMUT_YARDFORCE500"}
                         enum={[{
                             label: "Vermut - YardForce 500 Classic",
@@ -294,7 +296,7 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                         x-decorator="FormItem"/></SchemaField>
                     <SchemaField><SchemaField.String
                         name={"version"}
-                        title={"Version"}
+                        title={t('flashBoard.versionTitle')}
                         default={"0_13_X"}
                         enum={[{
                             label: "V0.13",
@@ -335,35 +337,35 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                         x-decorator="FormItem"/></SchemaField>
                     <SchemaField><SchemaField.String
                         name={"file"}
-                        title={"Archive"}
+                        title={t('flashBoard.archiveTitle')}
                         default={"https://github.com/ClemensElflein/MowgliNext/releases/download/latest/firmware.zip"}
-                        x-decorator-props={{tooltip: "Archive to use for firmware"}}
+                        x-decorator-props={{tooltip: t('flashBoard.archiveTooltip')}}
                         x-component="Input"
                         x-decorator="FormItem"/></SchemaField>
                     <SchemaField><SchemaField.String
                         name={"repository"}
-                        title={"Repository"}
-                        default={"https://github.com/cedbossneo/mowglinext"}
-                        x-decorator-props={{tooltip: "Repository to use for firmware"}}
+                        title={t('flashBoard.repositoryTitle')}
+                        default={"https://github.com/mowglinext/mowglinext"}
+                        x-decorator-props={{tooltip: t('flashBoard.repositoryTooltip')}}
                         x-component="Input"
                         x-decorator="FormItem"/></SchemaField>
                     <SchemaField><SchemaField.String
                         name={"branch"}
-                        title={"Branch"}
+                        title={t('flashBoard.branchTitle')}
                         default={"main"}
-                        x-decorator-props={{tooltip: "Branch to use for firmware"}}
+                        x-decorator-props={{tooltip: t('flashBoard.branchTooltip')}}
                         x-component="Input"
                         x-decorator="FormItem"/></SchemaField>
                     <SchemaField><SchemaField.String
                         name={"directory"}
-                        title={"Firmware Directory"}
+                        title={t('flashBoard.firmwareDirectoryTitle')}
                         default={"firmware"}
-                        x-decorator-props={{tooltip: "Path to the firmware directory inside the cloned repository (containing stm32/ros_usbnode)"}}
+                        x-decorator-props={{tooltip: t('flashBoard.firmwareDirectoryTooltip')}}
                         x-component="Input"
                         x-decorator="FormItem"/></SchemaField>
                     <SchemaField><SchemaField.String
                         name={"panelType"}
-                        title={"Panel Selection"}
+                        title={t('flashBoard.panelSelectionTitle')}
                         default={"PANEL_TYPE_YARDFORCE_500_CLASSIC"}
                         enum={[
                             {label: "YardForce 500 Classic", value: "PANEL_TYPE_YARDFORCE_500_CLASSIC"},
@@ -374,81 +376,130 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                         x-decorator="FormItem"/></SchemaField>
                     <SchemaField><SchemaField.String
                         name={"debugType"}
-                        title={"Debug Type"}
+                        title={t('flashBoard.debugTypeTitle')}
                         default={"DEBUG_TYPE_UART"}
                         enum={[
-                            {label: "None", value: "DEBUG_TYPE_NONE"},
+                            {label: t('flashBoard.debugTypeNone'), value: "DEBUG_TYPE_NONE"},
                             {label: "Uart", value: "DEBUG_TYPE_UART"},
                             {label: "Swo", value: "DEBUG_TYPE_SWO"},
                         ]} x-component="Select"
                         x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"maxMps"} title={"Max MPS"} default={0.5}
-                        x-decorator-props={{tooltip: "Max speed in meters per second"}}
+                    <SchemaField><SchemaField.Number name={"maxMps"} title={t('flashBoard.maxMpsTitle')} default={0.5}
+                        x-decorator-props={{tooltip: t('flashBoard.maxMpsTooltip')}}
                         x-component-props={{step: 0.1, max: 1.0}}
                         x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"tickPerM"} title={"Tick per meter"} default={300.0}
-                        x-decorator-props={{tooltip: "Number of wheel ticks per meter"}}
+                    <SchemaField><SchemaField.Number name={"tickPerM"} title={t('flashBoard.tickPerMTitle')} default={300.0}
+                        x-decorator-props={{tooltip: t('flashBoard.tickPerMTooltip')}}
                         x-component-props={{step: 0.1}}
                         x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"wheelBase"} title={"Wheel base"} default={0.325}
-                        x-decorator-props={{tooltip: "Wheel base in meters"}}
+                    <SchemaField><SchemaField.Number name={"wheelBase"} title={t('flashBoard.wheelBaseTitle')} default={0.325}
+                        x-decorator-props={{tooltip: t('flashBoard.wheelBaseTooltip')}}
                         x-component-props={{step: 0.001}}
                         x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Boolean name={"disableEmergency"} title={"Disable Emergency"} default={false}
-                        x-decorator-props={{tooltip: "Disable emergency stop"}}
-                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"maxChargeCurrent"} title={"Max Charge Current"} default={1.0}
-                        x-component-props={{step: 0.1, max: 5.0}}
-                        x-decorator-props={{tooltip: "Max charge current in Amps"}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"limitVoltage150MA"} title={"Limit Voltage 150mA"} default={28.0}
-                        x-decorator-props={{tooltip: "Voltage limit during slow charge in Volts"}}
-                        x-component-props={{step: 0.1, max: 30.0}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"maxChargeVoltage"} title={"Max Charge Voltage"} default={29.0}
-                        x-decorator-props={{tooltip: "Max charge voltage in Volts"}}
-                        x-component-props={{step: 0.1, max: 30.0}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"batChargeCutoffVoltage"} title={"Bat Charge Cutoff Voltage"} default={28.0}
-                        x-decorator-props={{tooltip: "Max battery voltage allowed in Volts"}}
-                        x-component-props={{step: 0.1, max: 30.0}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"oneWheelLiftEmergencyMillis"} title={"One Wheel Lift Emergency Millis"} default={10000}
-                        x-decorator-props={{tooltip: "Time in ms before emergency when one wheel is lifted"}}
-                        x-component-props={{step: 1}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"bothWheelsLiftEmergencyMillis"} title={"Both Wheel Lift Emergency Millis"} default={1000}
-                        x-decorator-props={{tooltip: "Time in ms before emergency when both wheels are lifted"}}
-                        x-component-props={{step: 1}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"tiltEmergencyMillis"} title={"Tilt Emergency Millis"} default={500}
-                        x-decorator-props={{tooltip: "Time in ms before emergency when mower is tilted"}}
-                        x-component-props={{step: 1}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"stopButtonEmergencyMillis"} title={"Stop Button Emergency Millis"} default={100}
-                        x-decorator-props={{tooltip: "Time in ms before emergency when stop button is pressed"}}
-                        x-component-props={{step: 1}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"playButtonClearEmergencyMillis"} title={"Play Button Clear Emergency Millis"} default={2000}
-                        x-decorator-props={{tooltip: "Time in ms to hold play button to clear emergency"}}
-                        x-component-props={{step: 1}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"imuOnboardInclinationThreshold"} title={"IMU Onboard Inclination Threshold"} default={0x38}
-                        x-decorator-props={{tooltip: "IMU inclination threshold (0x2C=more allowed, 0x38=stock)"}}
-                        x-component-props={{step: 1, min: 0, max: 127}}
-                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Boolean name={"externalImuAcceleration"} title={"External IMU Acceleration"} default={true}
-                        x-decorator-props={{tooltip: "Use external IMU for acceleration"}}
-                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Boolean name={"externalImuAngular"} title={"External IMU Angular"} default={true}
-                        x-decorator-props={{tooltip: "Use external IMU for angular"}}
-                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Boolean name={"masterJ18"} title={"Master J18"} default={true}
-                        x-decorator-props={{tooltip: "Use J18 as master"}}
-                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Boolean name={"perimeterWire"} title={"Use Perimeter wire"} default={true}
-                        x-decorator-props={{tooltip: "Use perimeter wire"}}
-                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
+
+                    {/* Progressive disclosure: the charge/voltage/current,
+                        emergency-timer and IMU-threshold fields are hidden behind
+                        an explicit fold. Wrong values here can damage the battery
+                        or disable physical safety, so they are NOT shown to a
+                        first-time flasher by default. The Formily field-state
+                        wiring (boardType effect, save/restore) is unaffected —
+                        these are the same fields, just rendered inside a Collapse. */}
+                    <Collapse
+                        ghost
+                        style={{marginBottom: 8}}
+                        items={[{
+                            key: "advanced",
+                            // forceRender keeps the Formily fields mounted even when
+                            // the panel is collapsed, so their `default` values are
+                            // registered in the form model and ALWAYS submitted with
+                            // the flash payload — never silently undefined.
+                            forceRender: true,
+                            label: (
+                                <Typography.Text strong style={{color: colors.warning}}>
+                                    {t('flashBoard.advancedParamsLabel')}
+                                </Typography.Text>
+                            ),
+                            children: (
+                                <FormLayout layout="vertical">
+                                    <Alert
+                                        type="warning"
+                                        showIcon
+                                        style={{marginBottom: 12}}
+                                        message={t('flashBoard.advancedAlertMessage')}
+                                        description={t('flashBoard.advancedAlertDescription')}
+                                    />
+                                    <div style={{
+                                        border: `1px solid ${colors.danger}`,
+                                        background: colors.dangerBg,
+                                        borderRadius: 8,
+                                        padding: "10px 12px",
+                                        marginBottom: 12,
+                                    }}>
+                                        <SchemaField><SchemaField.Boolean name={"disableEmergency"} title={t('flashBoard.disableEmergencyTitle')} default={false}
+                                            x-decorator-props={{tooltip: t('flashBoard.disableEmergencyTooltip'), style: {marginBottom: 0}}}
+                                            x-component="Checkbox"
+                                            x-component-props={{style: {color: colors.danger, fontWeight: 600}}}
+                                            x-decorator="FormItem"/></SchemaField>
+                                        <Typography.Text style={{color: colors.danger, fontSize: 12}}>
+                                            {t('flashBoard.disableEmergencyWarning')}
+                                        </Typography.Text>
+                                    </div>
+                                    <SchemaField><SchemaField.Number name={"maxChargeCurrent"} title={t('flashBoard.maxChargeCurrentTitle')} default={1.0}
+                                        x-component-props={{step: 0.1, max: 5.0}}
+                                        x-decorator-props={{tooltip: t('flashBoard.maxChargeCurrentTooltip')}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"limitVoltage150MA"} title={t('flashBoard.limitVoltage150MATitle')} default={28.0}
+                                        x-decorator-props={{tooltip: t('flashBoard.limitVoltage150MATooltip')}}
+                                        x-component-props={{step: 0.1, max: 30.0}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"maxChargeVoltage"} title={t('flashBoard.maxChargeVoltageTitle')} default={29.0}
+                                        x-decorator-props={{tooltip: t('flashBoard.maxChargeVoltageTooltip')}}
+                                        x-component-props={{step: 0.1, max: 30.0}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"batChargeCutoffVoltage"} title={t('flashBoard.batChargeCutoffVoltageTitle')} default={28.0}
+                                        x-decorator-props={{tooltip: t('flashBoard.batChargeCutoffVoltageTooltip')}}
+                                        x-component-props={{step: 0.1, max: 30.0}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"oneWheelLiftEmergencyMillis"} title={t('flashBoard.oneWheelLiftEmergencyMillisTitle')} default={10000}
+                                        x-decorator-props={{tooltip: t('flashBoard.oneWheelLiftEmergencyMillisTooltip')}}
+                                        x-component-props={{step: 1}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"bothWheelsLiftEmergencyMillis"} title={t('flashBoard.bothWheelsLiftEmergencyMillisTitle')} default={1000}
+                                        x-decorator-props={{tooltip: t('flashBoard.bothWheelsLiftEmergencyMillisTooltip')}}
+                                        x-component-props={{step: 1}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"tiltEmergencyMillis"} title={t('flashBoard.tiltEmergencyMillisTitle')} default={500}
+                                        x-decorator-props={{tooltip: t('flashBoard.tiltEmergencyMillisTooltip')}}
+                                        x-component-props={{step: 1}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"stopButtonEmergencyMillis"} title={t('flashBoard.stopButtonEmergencyMillisTitle')} default={100}
+                                        x-decorator-props={{tooltip: t('flashBoard.stopButtonEmergencyMillisTooltip')}}
+                                        x-component-props={{step: 1}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"playButtonClearEmergencyMillis"} title={t('flashBoard.playButtonClearEmergencyMillisTitle')} default={2000}
+                                        x-decorator-props={{tooltip: t('flashBoard.playButtonClearEmergencyMillisTooltip')}}
+                                        x-component-props={{step: 1}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Number name={"imuOnboardInclinationThreshold"} title={t('flashBoard.imuOnboardInclinationThresholdTitle')} default={0x38}
+                                        x-decorator-props={{tooltip: t('flashBoard.imuOnboardInclinationThresholdTooltip')}}
+                                        x-component-props={{step: 1, min: 0, max: 127}}
+                                        x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Boolean name={"externalImuAcceleration"} title={t('flashBoard.externalImuAccelerationTitle')} default={true}
+                                        x-decorator-props={{tooltip: t('flashBoard.externalImuAccelerationTooltip')}}
+                                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Boolean name={"externalImuAngular"} title={t('flashBoard.externalImuAngularTitle')} default={true}
+                                        x-decorator-props={{tooltip: t('flashBoard.externalImuAngularTooltip')}}
+                                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Boolean name={"masterJ18"} title={t('flashBoard.masterJ18Title')} default={true}
+                                        x-decorator-props={{tooltip: t('flashBoard.masterJ18Tooltip')}}
+                                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
+                                    <SchemaField><SchemaField.Boolean name={"perimeterWire"} title={t('flashBoard.perimeterWireTitle')} default={true}
+                                        x-decorator-props={{tooltip: t('flashBoard.perimeterWireTooltip')}}
+                                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
+                                </FormLayout>
+                            ),
+                        }]}
+                    />
                 </FormLayout>
             </Col>
             <Col span={24} style={{
@@ -466,13 +517,13 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                         form.submit(flashFirmware).catch((err: unknown) => {
                             if (err instanceof Error) {
                                 notification.error({
-                                    message: "Validation failed",
+                                    message: t('flashBoard.validationFailed'),
                                     description: err.message,
                                 });
                             }
                         });
-                    }}>Flash Firmware</Button>
-                    <Button onClick={props.onNext}>Skip</Button>
+                    }}>{t('flashBoard.flashFirmware')}</Button>
+                    <Button onClick={props.onNext}>{t('flashBoard.skip')}</Button>
                 </FormButtonGroup>
             </Col>
         </Row>

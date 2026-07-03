@@ -290,6 +290,33 @@ TEST_F(DiagnosticsTest, CategoryLevelsAreValidDiagnosticLevels)
 }
 
 // ===========================================================================
+// 4b. LiDAR enable gating
+// ===========================================================================
+
+TEST_F(DiagnosticsTest, LidarDisabledReportsOkNotError)
+{
+  // Default lidar_enabled=false (GPS-only operation): the health check must
+  // report OK rather than a spurious "No LiDAR scan received" error.
+  auto node = make_node("_lidar_off");
+  const auto status = node->check_lidar(node->now());
+  EXPECT_EQ(status.name, "LiDAR");
+  EXPECT_EQ(status.level, DiagLevel::OK);
+  EXPECT_EQ(status.message, "LiDAR disabled");
+}
+
+TEST_F(DiagnosticsTest, LidarEnabledWithoutScanReportsError)
+{
+  // With the LiDAR enabled but no /scan ever received, the error is preserved.
+  rclcpp::NodeOptions opts;
+  opts.arguments({"--ros-args", "--remap", "__node:=test_diag_lidar_on"});
+  opts.parameter_overrides({rclcpp::Parameter("lidar_enabled", true)});
+  auto node = std::make_shared<mowgli_monitoring::DiagnosticsNode>(opts);
+  const auto status = node->check_lidar(node->now());
+  EXPECT_EQ(status.level, DiagLevel::ERROR);
+  EXPECT_EQ(status.message, "No LiDAR scan received");
+}
+
+// ===========================================================================
 // 5. Edge cases
 // ===========================================================================
 

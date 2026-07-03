@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { App } from "antd";
+import { useTranslation } from "react-i18next";
 
 /**
  * Wait for ROS2 to be reachable again after a container restart.
@@ -60,13 +61,18 @@ export type ContainerRestartOptions = {
  *   for ROS2 to come back. Idempotent: re-entrant calls while pending are no-ops.
  */
 export const useContainerRestart = (options: ContainerRestartOptions = {}) => {
+    const { t } = useTranslation();
     const {
-        pendingLabel = "Redémarrage…",
-        successMessage = "Container redémarré",
-        errorMessage = "Échec du redémarrage",
+        pendingLabel,
+        successMessage,
+        errorMessage,
         timeoutMs = 60_000,
         skipReadinessProbe = false,
     } = options;
+    // Callers may override the copy; otherwise fall back to the translated defaults.
+    const pendingText = pendingLabel ?? t("containerRestart.pending");
+    const successText = successMessage ?? t("containerRestart.success");
+    const errorText = errorMessage ?? t("containerRestart.error");
 
     const { notification } = App.useApp();
     const [pending, setPending] = useState(false);
@@ -83,22 +89,22 @@ export const useContainerRestart = (options: ContainerRestartOptions = {}) => {
                     const ok = await waitForRos2(timeoutMs);
                     if (!ok) {
                         notification.warning({
-                            message: errorMessage,
-                            description: `ROS2 n'a pas redémarré dans les ${Math.round(timeoutMs / 1000)} s.`,
+                            message: errorText,
+                            description: t("containerRestart.timeoutDescription", {seconds: Math.round(timeoutMs / 1000)}),
                         });
                         return;
                     }
                 }
-                notification.success({ message: successMessage });
+                notification.success({ message: successText });
             } catch (e: any) {
-                notification.error({ message: errorMessage, description: e.message });
+                notification.error({ message: errorText, description: e.message });
             } finally {
                 pendingRef.current = false;
                 setPending(false);
             }
         },
-        [notification, successMessage, errorMessage, timeoutMs, skipReadinessProbe],
+        [notification, successText, errorText, timeoutMs, skipReadinessProbe, t],
     );
 
-    return { pending, pendingLabel, run };
+    return { pending, pendingLabel: pendingText, run };
 };

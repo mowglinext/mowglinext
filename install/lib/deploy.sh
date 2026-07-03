@@ -27,7 +27,18 @@ fetch_repo_branch_metadata() {
   local repo_dir="${1:?fetch_repo_branch_metadata: missing repo dir}"
 
   repo_has_origin_remote "$repo_dir" || return 1
+  ensure_repo_fetch_refspec "$repo_dir"
   git -C "$repo_dir" fetch --quiet origin "$REPO_BRANCH" >/dev/null 2>&1
+}
+
+ensure_repo_fetch_refspec() {
+  local repo_dir="${1:?ensure_repo_fetch_refspec: missing repo dir}"
+  local refspec="+refs/heads/*:refs/remotes/origin/*"
+
+  repo_has_origin_remote "$repo_dir" || return 1
+  if ! git -C "$repo_dir" config --get-all remote.origin.fetch 2>/dev/null | grep -qxF "$refspec"; then
+    git -C "$repo_dir" config --replace-all remote.origin.fetch "$refspec"
+  fi
 }
 
 report_repository_sync_status() {
@@ -38,7 +49,7 @@ report_repository_sync_status() {
   remote_ref="origin/${REPO_BRANCH}"
 
   if [ "$current_ref" != "$REPO_BRANCH" ]; then
-    warn "Repository is currently on '${current_ref}' (expected '${REPO_BRANCH}'). The installer will not switch branches during this run."
+    warn "Repository is currently on '${current_ref}' while the selected branch is '${REPO_BRANCH}'."
   fi
 
   if repo_has_local_changes "$repo_dir"; then
@@ -87,95 +98,116 @@ report_repository_sync_status() {
   warn "Repository has diverged from ${remote_ref} (ahead ${ahead}, behind ${behind}). Continuing with the current checkout."
 }
 
-# Align the git checkout with the selected image channel (IMAGE_TAG).
-#
-# The bootstrap (docs/install.sh) does `git clone --branch <ref> --depth 1`,
-# which implies --single-branch — so a fresh install only tracks origin/main
-# (or whatever --branch was passed to bootstrap). When the user later picks
-# `dev` in select_image_channel, the docker tags become `:dev` but the source
-# tree (compose files, configs, scripts, lib code) stays on main. This drift
-# is the bug: pick dev, get a main checkout that pulls dev images.
-#
-# This function broadens the fetch refspec, fetches the target branch, and
-# checks it out. After a successful switch it re-execs the installer so the
-# rest of the run loads the new branch's lib/ and compose/ on disk.
-sync_repo_branch_to_image_channel() {
-  local target_branch="${IMAGE_TAG:-main}"
+sync_repo_submodules_for_current_checkout() {
+  local repo_dir="${1:?sync_repo_submodules_for_current_checkout: missing repo dir}"
+  local submodule_status=""
 
-  # No repo, nothing to sync.
+  [ -d "$repo_dir/.git" ] || return 0
+  submodule_status="$(git -C "$repo_dir" submodule status --recursive 2>/dev/null || true)"
+  [ -n "$submodule_status" ] || return 0
+
+  if ! printf '%s\n' "$submodule_status" | grep -qE '^[+-]'; then
+    return 0
+  fi
+
+  if repo_has_local_changes "$repo_dir"; then
+    warn "Local repository changes detected — skipping automatic submodule sync for the current checkout."
+    return 0
+  fi
+
+  info "Synchronizing git submodules for the current checkout"
+  if git -C "$repo_dir" submodule update --init --recursive >/dev/null 2>&1; then
+    info "Git submodules ready for $(repo_current_ref "$repo_dir")"
+  else
+    warn "Could not synchronize git submodules for the current checkout. Continue if the repository is already complete."
+  fi
+}
+
+sync_repo_branch_to_selected_branch() {
+  local current_branch=""
+  local current_ref=""
+  local target_branch=""
+  local has_remote_branch=false
+
   if [ ! -d "$REPO_DIR/.git" ]; then
-    REPO_BRANCH="$target_branch"
     return 0
   fi
 
-  local current_branch
-  current_branch="$(repo_current_ref "$REPO_DIR")"
+  current_branch="$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  current_ref="$(repo_current_ref "$REPO_DIR")"
+  target_branch="${REPO_BRANCH:-${current_branch:-}}"
 
-  if [ "$current_branch" = "$target_branch" ]; then
-    REPO_BRANCH="$target_branch"
+  if [ -z "$target_branch" ]; then
+    warn "No repository branch selected; keeping the current checkout."
+    sync_repo_submodules_for_current_checkout "$REPO_DIR"
     return 0
   fi
 
-  step "Switching repository to '$target_branch' branch (image channel: $IMAGE_TAG)"
+  if [[ -n "$current_branch" && "$current_branch" == "$target_branch" ]]; then
+    info "Repository checkout: ${current_branch}"
+    sync_repo_submodules_for_current_checkout "$REPO_DIR"
+    return 0
+  fi
+
+  if [[ -z "$current_branch" && "$current_ref" == "$target_branch" ]]; then
+    warn "Repository is on detached HEAD (${current_ref}). Keeping the current checkout."
+    sync_repo_submodules_for_current_checkout "$REPO_DIR"
+    return 0
+  fi
+
+  step "Switching repository to '$target_branch' branch"
 
   if repo_has_local_changes "$REPO_DIR"; then
-    warn "Local repository changes detected — staying on '$current_branch'."
-    warn "Commit or discard them and re-run the installer to switch to '$target_branch'."
-    return 0
+    error "Cannot switch repository branches with local changes present in $REPO_DIR"
+    return 1
   fi
 
-  if ! repo_has_origin_remote "$REPO_DIR"; then
-    warn "No origin remote configured — cannot switch to '$target_branch'."
-    return 0
-  fi
-
-  # Broaden the single-branch refspec from the shallow bootstrap clone so
-  # `git fetch` can see origin/<other_branch>.
-  local refspec="+refs/heads/*:refs/remotes/origin/*"
-  if ! git -C "$REPO_DIR" config --get-all remote.origin.fetch 2>/dev/null | grep -qxF "$refspec"; then
-    git -C "$REPO_DIR" config --replace-all remote.origin.fetch "$refspec"
-  fi
-
-  # --unshallow is needed on the bootstrap's --depth 1 clone, but errors on a
-  # full clone. Try unshallow first, fall back to a plain fetch.
-  if ! git -C "$REPO_DIR" fetch --quiet --unshallow origin "$target_branch" 2>/dev/null; then
-    if ! git -C "$REPO_DIR" fetch --quiet origin "$target_branch"; then
-      warn "Could not fetch origin/$target_branch — staying on '$current_branch'."
-      return 0
+  if repo_has_origin_remote "$REPO_DIR"; then
+    ensure_repo_fetch_refspec "$REPO_DIR"
+    if ! git -C "$REPO_DIR" fetch --quiet --unshallow origin "$target_branch" 2>/dev/null; then
+      git -C "$REPO_DIR" fetch --quiet origin "$target_branch" >/dev/null 2>&1 || true
     fi
-  fi
 
-  if ! git -C "$REPO_DIR" rev-parse --verify "refs/remotes/origin/$target_branch" >/dev/null 2>&1; then
-    warn "Remote branch origin/$target_branch is unavailable — staying on '$current_branch'."
-    return 0
+    if git -C "$REPO_DIR" rev-parse --verify "refs/remotes/origin/$target_branch" >/dev/null 2>&1; then
+      has_remote_branch=true
+    fi
   fi
 
   if git -C "$REPO_DIR" rev-parse --verify "refs/heads/$target_branch" >/dev/null 2>&1; then
     if ! git -C "$REPO_DIR" checkout --quiet "$target_branch"; then
-      warn "Could not check out '$target_branch' — staying on '$current_branch'."
-      return 0
+      error "Could not check out local branch '$target_branch'"
+      return 1
     fi
-    git -C "$REPO_DIR" reset --hard --quiet "origin/$target_branch"
-  else
+    if [[ "$has_remote_branch" == "true" ]]; then
+      if git -C "$REPO_DIR" merge --ff-only "origin/$target_branch" >/dev/null 2>&1; then
+        info "Fast-forwarded '$target_branch' to origin/$target_branch"
+      else
+        warn "Local branch '$target_branch' could not be fast-forwarded to origin/$target_branch; keeping the local branch tip."
+      fi
+    fi
+  elif [[ "$has_remote_branch" == "true" ]]; then
     if ! git -C "$REPO_DIR" checkout --quiet -b "$target_branch" "origin/$target_branch"; then
-      warn "Could not create local branch '$target_branch' — staying on '$current_branch'."
-      return 0
+      error "Could not create local branch '$target_branch' from origin/$target_branch"
+      return 1
     fi
+  else
+    error "Branch '$target_branch' was not found locally or on origin"
+    return 1
   fi
 
-  REPO_BRANCH="$target_branch"
+  sync_repo_submodules_for_current_checkout "$REPO_DIR"
   info "Repository now on '$target_branch' branch"
+  info "Re-executing installer from '$target_branch' branch..."
 
-  # The bash functions and library code currently in memory are from the
-  # branch we just left. Re-exec the installer so the rest of the run uses
-  # the freshly checked-out source. Guard against infinite re-exec loops.
-  if [ -z "${MOWGLI_REEXEC_AFTER_BRANCH_SWITCH:-}" ]; then
-    info "Re-executing installer from '$target_branch' branch..."
-    export MOWGLI_REEXEC_AFTER_BRANCH_SWITCH=1
-    export IMAGE_TAG
-    export IMAGE_CHANNEL_PRESET=true
+  export REPO_BRANCH="$target_branch"
+  export REPO_BRANCH_PRESET=true
+  export IMAGE_TAG="${IMAGE_TAG:-}"
+  export IMAGE_CHANNEL_PRESET="${IMAGE_CHANNEL_PRESET:-false}"
+
+  if declare -p MOWGLI_INSTALLER_ARGV >/dev/null 2>&1; then
     exec bash "$INSTALL_DIR/mowglinext.sh" "${MOWGLI_INSTALLER_ARGV[@]+"${MOWGLI_INSTALLER_ARGV[@]}"}"
   fi
+  exec bash "$INSTALL_DIR/mowglinext.sh"
 }
 
 setup_directory() {

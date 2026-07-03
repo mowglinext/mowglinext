@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -71,9 +72,9 @@ type Client struct {
 	connMu sync.Mutex
 
 	// channels maps topic name → channel state.
-	channels   map[string]*channelState
+	channels     map[string]*channelState
 	channelsByID map[uint32]*channelState
-	chanMu     sync.RWMutex
+	chanMu       sync.RWMutex
 
 	// services maps service name → service state.
 	services     map[string]*serviceState
@@ -99,6 +100,11 @@ type Client struct {
 	pendingSvc map[uint32]*pendingServiceCall
 	svcMu      sync.Mutex
 
+	// pendingParam maps a getParameters/setParameters request id → response
+	// channel, so the parameterValues reply can be routed back to the caller.
+	pendingParam map[string]chan []Parameter
+	paramMu      sync.Mutex
+
 	// advertised tracks client-publish channels.
 	advertised map[string]uint32 // topic → client channel ID
 	advMu      sync.Mutex
@@ -120,6 +126,38 @@ type Client struct {
 	dialer websocket.Dialer
 }
 
+// sanitizeJSONValue converts non-finite floats from live ROS payloads into nil
+// so json.Marshal can encode the frame instead of dropping the whole message.
+func sanitizeJSONValue(v interface{}) interface{} {
+	switch typed := v.(type) {
+	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return nil
+		}
+		return typed
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(typed))
+		for key, value := range typed {
+			out[key] = sanitizeJSONValue(value)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(typed))
+		for idx, value := range typed {
+			out[idx] = sanitizeJSONValue(value)
+		}
+		return out
+	case []float64:
+		out := make([]interface{}, len(typed))
+		for idx, value := range typed {
+			out[idx] = sanitizeJSONValue(value)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 // NewClient creates a Client that will connect to the foxglove_bridge
 // WebSocket at url (e.g. "ws://localhost:8765").
 func NewClient(url string) *Client {
@@ -132,6 +170,7 @@ func NewClient(url string) *Client {
 		subscribers:    make(map[string][]subscriberEntry),
 		pendingTopics:  make(map[string]bool),
 		pendingSvc:     make(map[uint32]*pendingServiceCall),
+		pendingParam:   make(map[string]chan []Parameter),
 		advertised:     make(map[string]uint32),
 		done:           make(chan struct{}),
 		reconnectDelay: defaultReconnectDelay,
@@ -282,20 +321,28 @@ func (c *Client) Unsubscribe(topic, id string) {
 	if len(filtered) == 0 {
 		delete(c.subscribers, topic)
 
-		c.chanMu.RLock()
+		// Snapshot and clear subscriptionID under the write lock — the same
+		// field is read by handleMessageData and written by subscribeTopic on
+		// other goroutines, so the previous read-then-write outside chanMu
+		// raced both. Do the network write after releasing the lock.
+		c.chanMu.Lock()
 		ch, chOK := c.channels[topic]
-		c.chanMu.RUnlock()
+		var subID uint32
+		if chOK {
+			subID = ch.subscriptionID
+			ch.subscriptionID = 0
+		}
+		c.chanMu.Unlock()
 
-		if chOK && ch.subscriptionID != 0 && c.connected.Load() {
+		if chOK && subID != 0 && c.connected.Load() {
 			msg := clientUnsubscribe{
 				Op:              "unsubscribe",
-				SubscriptionIDs: []uint32{ch.subscriptionID},
+				SubscriptionIDs: []uint32{subID},
 			}
 			if err := c.writeJSON(msg); err != nil {
 				logrus.WithError(err).WithField("topic", topic).
 					Warn("foxglove: failed to unsubscribe")
 			}
-			ch.subscriptionID = 0
 		}
 	} else {
 		c.subscribers[topic] = filtered
@@ -588,6 +635,9 @@ func (c *Client) dispatchText(data []byte) {
 			}
 		}
 
+	case "parameterValues":
+		c.handleParameterValues(data)
+
 	case "status":
 		var status serverStatus
 		if err := json.Unmarshal(data, &status); err != nil {
@@ -630,6 +680,12 @@ func (c *Client) handleAdvertise(adv serverAdvertise) {
 			schema = &msgSchema{}
 		}
 		state := &channelState{def: ch, schema: schema}
+		// Preserve an existing active subscription across a re-advertise of the
+		// same topic — otherwise the fresh state's subscriptionID=0 silently
+		// orphans the live subscription and handleMessageData drops its data.
+		if prev, ok := c.channels[ch.Topic]; ok {
+			state.subscriptionID = prev.subscriptionID
+		}
 		c.channels[ch.Topic] = state
 		c.channelsByID[ch.ID] = state
 	}
@@ -747,7 +803,7 @@ func (c *Client) handleMessageData(data []byte) {
 		return
 	}
 
-	jsonData, err := json.Marshal(result)
+	jsonData, err := json.Marshal(sanitizeJSONValue(result))
 	if err != nil {
 		logrus.WithError(err).WithField("topic", topic).
 			Debug("foxglove: JSON marshal failed")

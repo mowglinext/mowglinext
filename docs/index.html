@@ -14,7 +14,7 @@
 <div class="beta-banner">
   <span class="beta-tag">BETA</span>
   MowgliNext is under active development — not yet ready for production use.
-  <a href="https://github.com/cedbossneo/mowglinext">Follow progress on GitHub</a>
+  <a href="https://github.com/mowglinext/mowglinext">Follow progress on GitHub</a>
 </div>
 
 <!-- ─── Navigation ──────────────────────────────────── -->
@@ -25,8 +25,8 @@
       <li><a href="#how-it-works">How It Works</a></li>
       <li><a href="#features">Features</a></li>
       <li><a href="#getting-started">Get Started</a></li>
-      <li><a href="https://github.com/cedbossneo/mowglinext/wiki">Wiki</a></li>
-      <li><a href="https://github.com/cedbossneo/mowglinext">GitHub</a></li>
+      <li><a href="https://github.com/mowglinext/mowglinext/wiki">Wiki</a></li>
+      <li><a href="https://github.com/mowglinext/mowglinext">GitHub</a></li>
     </ul>
   </div>
 </nav>
@@ -129,8 +129,8 @@
     </p>
     <div class="buttons">
       <a href="#getting-started" class="btn btn-primary">Get Started</a>
-      <a href="https://github.com/cedbossneo/mowglinext" class="btn btn-secondary">View on GitHub</a>
-      <a href="https://github.com/cedbossneo/mowglinext/wiki" class="btn btn-secondary">Read the Docs</a>
+      <a href="https://github.com/mowglinext/mowglinext" class="btn btn-secondary">View on GitHub</a>
+      <a href="https://github.com/mowglinext/mowglinext/wiki" class="btn btn-secondary">Read the Docs</a>
     </div>
   </div>
 </section>
@@ -306,53 +306,42 @@
         </div>
       </div>
 
-      <!-- GNSS backend -->
+      <!-- Universal GNSS -->
       <div class="composer-group" id="gnss-group">
-        <h3>GNSS Backend</h3>
-        <p class="composer-hint">Driver selection — picks which sensor container is installed</p>
-        <div class="composer-options" data-group="gnss">
-          <button class="composer-option active" data-value="ublox">
+        <h3>Universal GNSS</h3>
+        <p class="composer-hint" id="gnss-group-hint">Universal GNSS is the only supported direct GNSS stack. Pick the receiver family and serial connection here; the installer will still ask for the exact device path and detect the receiver baud.</p>
+        <div class="composer-options" data-group="gnssReceiverFamily">
+          <button class="composer-option active" data-value="auto">
             <span class="option-icon">🛰️</span>
+            <span class="option-label">Auto</span>
+            <span class="option-desc">Let Universal GNSS auto-detect the receiver family at runtime</span>
+          </button>
+          <button class="composer-option" data-value="ublox">
+            <span class="option-icon">📍</span>
             <span class="option-label">u-blox</span>
-            <span class="option-desc">ZED-F9P / F9R via ublox_dgnss + NTRIP</span>
+            <span class="option-desc">Explicit u-blox receiver family selection</span>
           </button>
           <button class="composer-option" data-value="unicore">
-            <span class="option-icon">🛰️</span>
-            <span class="option-label">Unicore</span>
-            <span class="option-desc">UM98x dual-antenna GNSS (heading + RTK)</span>
+            <span class="option-icon">🧭</span>
+            <span class="option-label">Unicore / UM982</span>
+            <span class="option-desc">Explicit Unicore family selection for UM980/UM981/UM982-class receivers</span>
           </button>
-          <button class="composer-option" data-value="gps">
-            <span class="option-icon">📟</span>
-            <span class="option-label">Generic / Legacy</span>
-            <span class="option-desc">Any UBX or NMEA receiver via the legacy gps container</span>
+          <button class="composer-option" data-value="nmea">
+            <span class="option-icon">📜</span>
+            <span class="option-label">Generic NMEA</span>
+            <span class="option-desc">Use the generic NMEA receiver-family mode</span>
           </button>
         </div>
-      </div>
-
-      <!-- GPS protocol / connection -->
-      <div class="composer-group" id="gps-group">
-        <h3>GPS Receiver</h3>
-        <p class="composer-hint" id="gps-group-hint">Protocol + wiring for the selected GNSS path. Unicore completes its real serial device selection inside the installer, so this web preset is omitted there.</p>
-        <div class="composer-options" data-group="gps">
-          <button class="composer-option active" data-value="ubx-uart">
+        <div class="composer-options" data-group="gnssConnection">
+          <button class="composer-option active" data-value="uart">
             <span class="option-icon">📡</span>
-            <span class="option-label">UBX / UART</span>
-            <span class="option-desc">PCB default — ttyAMA4</span>
+            <span class="option-label">UART</span>
+            <span class="option-desc">Default for the Mowgli PCB serial header</span>
           </button>
-          <button class="composer-option" data-value="ubx-usb">
+          <button class="composer-option" data-value="usb">
             <span class="option-icon">🔌</span>
-            <span class="option-label">UBX / USB</span>
-            <span class="option-desc">USB cable to GPS</span>
-          </button>
-          <button class="composer-option" data-value="nmea-uart">
-            <span class="option-icon">📡</span>
-            <span class="option-label">NMEA / UART</span>
-            <span class="option-desc">Generic NMEA GPS</span>
-          </button>
-          <button class="composer-option" data-value="nmea-usb">
-            <span class="option-icon">🔌</span>
-            <span class="option-label">NMEA / USB</span>
-            <span class="option-desc">Generic NMEA via USB</span>
+            <span class="option-label">USB</span>
+            <span class="option-desc">Installer will prefer a stable /dev/serial/by-id path</span>
           </button>
         </div>
       </div>
@@ -494,12 +483,10 @@
 <!-- ─── Composer JS ─────────────────────────────────── -->
 <script>
 (function() {
-  var state = { backend: 'mowgli', gnss: 'ublox', gps: 'ubx-uart', lidar: 'ldlidar-uart', tfluna: 'none', channel: 'main' };
+  var state = { backend: 'mowgli', gnssReceiverFamily: 'auto', gnssConnection: 'uart', lidar: 'ldlidar-uart', tfluna: 'none', channel: 'main' };
   var baseUrl = 'https://mowgli.garden/install.sh';
-  var defaultGpsHint = 'Protocol + wiring for the selected GNSS path. Unicore completes its real serial device selection inside the installer, so this web preset is omitted there.';
-  var unicoreGpsHint = 'Unicore port/device selection is completed in the installer. The web composer keeps --gnss=unicore but does not emit a GPS protocol or wiring preset.';
-  var ubloxGpsHint = 'Dedicated u-blox backend uses the vendor USB/libusb driver. The installer asks for the receiver USB serial string, so this web GPS preset is omitted there.';
-  var mavrosGpsHint = 'MAVROS uses the flight controller telemetry link. Direct GNSS/GPS container selection is disabled for this backend.';
+  var defaultGnssHint = 'Universal GNSS is the only supported direct GNSS path. Pick the receiver family and connection here; the installer will ask for the exact serial device and detect baud before first boot.';
+  var mavrosGnssHint = 'MAVROS uses the flight controller telemetry link. Direct Universal GNSS selection is disabled for this backend.';
 
   function setGroupDisabled(groupId, disabled) {
     var group = document.getElementById(groupId);
@@ -513,25 +500,18 @@
 
   function syncComposerUI() {
     var mavrosSelected = state.backend === 'mavros';
-    var unicoreSelected = state.gnss === 'unicore';
-    var ubloxSelected = state.gnss === 'ublox';
-    var gpsHint = document.getElementById('gps-group-hint');
+    var gnssHint = document.getElementById('gnss-group-hint');
 
     setGroupDisabled('gnss-group', mavrosSelected);
-    setGroupDisabled('gps-group', mavrosSelected || unicoreSelected || ubloxSelected);
 
-    if (!gpsHint) {
+    if (!gnssHint) {
       return;
     }
 
     if (mavrosSelected) {
-      gpsHint.textContent = mavrosGpsHint;
-    } else if (ubloxSelected) {
-      gpsHint.textContent = ubloxGpsHint;
-    } else if (unicoreSelected) {
-      gpsHint.textContent = unicoreGpsHint;
+      gnssHint.textContent = mavrosGnssHint;
     } else {
-      gpsHint.textContent = defaultGpsHint;
+      gnssHint.textContent = defaultGnssHint;
     }
   }
 
@@ -542,10 +522,8 @@
     parts.push('--backend=' + state.backend);
 
     if (state.backend !== 'mavros') {
-      parts.push('--gnss=' + state.gnss);
-      if (state.gnss !== 'unicore' && state.gnss !== 'ublox') {
-        parts.push('--gps=' + state.gps);
-      }
+      parts.push('--gnss-receiver-family=' + state.gnssReceiverFamily);
+      parts.push('--gnss-connection=' + state.gnssConnection);
     }
 
     parts.push('--lidar=' + state.lidar);
@@ -659,9 +637,9 @@
       or contribute code. Every contribution makes autonomous mowing better for everyone.
     </p>
     <div class="buttons">
-      <a href="https://github.com/cedbossneo/mowglinext/discussions" class="btn btn-primary">Join Discussions</a>
-      <a href="https://github.com/cedbossneo/mowglinext/blob/main/CONTRIBUTING.md" class="btn btn-secondary">Contributing Guide</a>
-      <a href="https://github.com/cedbossneo/mowglinext/issues/new/choose" class="btn btn-secondary">Report a Bug</a>
+      <a href="https://github.com/mowglinext/mowglinext/discussions" class="btn btn-primary">Join Discussions</a>
+      <a href="https://github.com/mowglinext/mowglinext/blob/main/CONTRIBUTING.md" class="btn btn-secondary">Contributing Guide</a>
+      <a href="https://github.com/mowglinext/mowglinext/issues/new/choose" class="btn btn-secondary">Report a Bug</a>
     </div>
   </div>
 </section>
@@ -670,7 +648,7 @@
 <footer>
   <div class="container">
     <p>
-      MowgliNext is <a href="https://github.com/cedbossneo/mowglinext/blob/main/LICENSE">GPLv3 licensed</a> — same as OpenMower, because open source is how we all win.
+      MowgliNext is <a href="https://github.com/mowglinext/mowglinext/blob/main/LICENSE">GPLv3 licensed</a> — same as OpenMower, because open source is how we all win.
       <br>
       Built on <a href="https://docs.ros.org/en/kilted/">ROS2 Kilted</a>,
       <a href="https://docs.nav2.org/">Nav2</a>, and

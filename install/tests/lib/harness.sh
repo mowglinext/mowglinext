@@ -13,7 +13,7 @@
 # Usage:
 #   source install/tests/lib/harness.sh
 #   harness_init "$SANDBOX_REPO"   # absolute path to a sandboxed checkout
-#   harness_set_preset gps=ubx-uart lidar=ldlidar-uart tfluna=none
+#   harness_set_preset gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
 #   harness_run                    # generate .env + docker-compose.yaml +
 #                                  # mowgli_robot.yaml; no docker pull
 # =============================================================================
@@ -29,16 +29,16 @@ harness_init() {
   export MOWGLI_HOME="$repo_dir"
 
   # Clear any state leaked from a previous harness_init in the same
-  # shell so the matrix tests in test_gps_matrix.sh / test_lidar_matrix.sh
-  # don't carry GPS_UART_DEVICE etc. from one preset into the next.
-  unset GNSS_BACKEND GPS_CONNECTION GPS_PROTOCOL GPS_PORT GPS_BAUD \
-        GPS_UART_DEVICE GPS_BY_ID GPS_DEBUG_ENABLED GPS_DEBUG_PORT \
-        GPS_DEBUG_UART_DEVICE GPS_DEBUG_BAUD \
-        UNICORE_COM_PORT UNICORE_TARGET_BAUD \
-        UBLOX_DEVICE_FAMILY UBLOX_DEVICE_SERIAL_STRING \
+  # shell so the matrix tests do not carry one preset into the next.
+  unset GNSS_BACKEND GNSS_STATUS_SOURCE GNSS_STACK GNSS_RECEIVER_FAMILY \
+        GNSS_TRANSPORT GNSS_SERIAL_DEVICE GNSS_SERIAL_BAUD \
+        GNSS_CONNECTION_HINT GNSS_RTCM_FORWARDING \
+        GNSS_NTRIP_ENABLED GNSS_NTRIP_HOST GNSS_NTRIP_PORT \
+        GNSS_NTRIP_MOUNTPOINT GNSS_NTRIP_USERNAME GNSS_NTRIP_PASSWORD \
+        IMAGE_TAG \
         LIDAR_ENABLED LIDAR_TYPE LIDAR_MODEL LIDAR_CONNECTION \
         LIDAR_PORT LIDAR_UART_DEVICE LIDAR_BAUD LIDAR_IMAGE \
-        MOWGLI_ROS2_IMAGE GPS_IMAGE UNICORE_IMAGE MAVROS_IMAGE GUI_IMAGE \
+        MOWGLI_ROS2_IMAGE GPS_IMAGE MAVROS_IMAGE GUI_IMAGE \
         TFLUNA_FRONT_ENABLED TFLUNA_FRONT_PORT TFLUNA_FRONT_UART_DEVICE \
         TFLUNA_FRONT_BAUD TFLUNA_EDGE_ENABLED TFLUNA_EDGE_PORT \
         TFLUNA_EDGE_UART_DEVICE TFLUNA_EDGE_BAUD \
@@ -120,14 +120,14 @@ harness_init() {
   prompt() { REPLY="${2:-}"; }
   confirm() { return 1; }   # default: answer "no"
   pick_uart_port() { REPLY="${1:-/dev/ttyAMA4}"; }
-  pick_serial_by_id() { REPLY="${1:-${GPS_BY_ID:-/dev/serial/by-id/usb-stub}}"; }
+  pick_serial_by_id() { REPLY="${1:-${GNSS_SERIAL_DEVICE:-/dev/serial/by-id/usb-stub}}"; }
   step() { :; }
   export -f prompt confirm pick_uart_port pick_serial_by_id step
 
   # Defaults that interactive_config would otherwise prompt for.
   CONFIG_DATUM_LAT="0.0"
   CONFIG_DATUM_LON="0.0"
-  CONFIG_NTRIP_ENABLED="false"
+  CONFIG_NTRIP_ENABLED="true"
   CONFIG_NTRIP_HOST="crtk.net"
   CONFIG_NTRIP_PORT="2101"
   CONFIG_NTRIP_USER="centipede"
@@ -144,13 +144,14 @@ harness_init() {
 
   # Defaults for backend selection — overridden by harness_set_preset().
   HARDWARE_BACKEND="${HARDWARE_BACKEND:-mowgli}"
-  GNSS_BACKEND="${GNSS_BACKEND:-gps}"
-  GPS_CONNECTION="${GPS_CONNECTION:-uart}"
-  GPS_PROTOCOL="${GPS_PROTOCOL:-UBX}"
-  GPS_BAUD="${GPS_BAUD:-921600}"
-  GPS_UART_DEVICE="${GPS_UART_DEVICE:-/dev/ttyAMA4}"
-  UBLOX_DEVICE_FAMILY="${UBLOX_DEVICE_FAMILY:-F9P}"
-  GPS_DEBUG_ENABLED="${GPS_DEBUG_ENABLED:-false}"
+  GNSS_BACKEND="${GNSS_BACKEND:-universal}"
+  GNSS_STATUS_SOURCE="${GNSS_STATUS_SOURCE:-universal}"
+  GNSS_STACK="${GNSS_STACK:-universal}"
+  GNSS_RECEIVER_FAMILY="${GNSS_RECEIVER_FAMILY:-auto}"
+  GNSS_TRANSPORT="${GNSS_TRANSPORT:-serial}"
+  GNSS_CONNECTION_HINT="${GNSS_CONNECTION_HINT:-uart}"
+  GNSS_SERIAL_DEVICE="${GNSS_SERIAL_DEVICE:-}"
+  GNSS_SERIAL_BAUD="${GNSS_SERIAL_BAUD:-}"
   LIDAR_ENABLED="${LIDAR_ENABLED:-true}"
   LIDAR_TYPE="${LIDAR_TYPE:-ldlidar}"
   LIDAR_MODEL="${LIDAR_MODEL:-LDLiDAR_LD19}"
@@ -164,9 +165,9 @@ harness_init() {
 }
 
 # Apply a key=value list of presets, mimicking what install/lib/config.sh
-# parse_args does for --gps / --lidar / --tfluna flags.
+# parse_args does for --gnss / --gnss-connection / --lidar / --tfluna flags.
 harness_set_preset() {
-  local kv proto conn
+  local kv
   for kv in "$@"; do
     local key="${kv%%=*}" val="${kv#*=}"
     case "$key" in
@@ -182,27 +183,46 @@ harness_set_preset() {
         fi
         ;;
       gnss)
-        GNSS_BACKEND="$val"
-        if [ "$val" = "ublox" ]; then
-          GPS_CONNECTION="usb"
-          GPS_PROTOCOL="UBX"
-          GPS_UART_DEVICE=""
-          GPS_BY_ID="${GPS_BY_ID:-/dev/serial/by-id/ublox-test-serial}"
-          GPS_PORT="${GPS_BY_ID}"
-          UBLOX_DEVICE_SERIAL_STRING="${UBLOX_DEVICE_SERIAL_STRING:-}"
-        fi
-        ;;
-      gps)
-        proto="${val%%-*}"; conn="${val##*-}"
-        case "$proto" in
-          ubx)  GPS_PROTOCOL="UBX"; unset GPS_BAUD ;;
-          nmea) GPS_PROTOCOL="NMEA"; unset GPS_BAUD ;;
+        case "$val" in
+          auto|ublox|unicore|nmea)
+            GNSS_STACK="universal"
+            GNSS_STATUS_SOURCE="universal"
+            GNSS_BACKEND="universal"
+            GNSS_RECEIVER_FAMILY="$val"
+            ;;
+          disabled)
+            GNSS_STACK="disabled"
+            GNSS_STATUS_SOURCE="external"
+            GNSS_BACKEND="disabled"
+            GNSS_RECEIVER_FAMILY="auto"
+            GNSS_SERIAL_DEVICE=""
+            GNSS_SERIAL_BAUD=""
+            ;;
+          *)
+            GNSS_RECEIVER_FAMILY="$val"
+            ;;
         esac
-        case "$conn" in
-          usb)  GPS_CONNECTION="usb";  GPS_UART_DEVICE="" ;;
-          uart) GPS_CONNECTION="uart"; GPS_UART_DEVICE="${GPS_UART_DEVICE:-/dev/ttyAMA4}" ;;
+        ;;
+      gnss_connection)
+        case "$val" in
+          usb)
+            GNSS_CONNECTION_HINT="usb"
+            case "${GNSS_SERIAL_DEVICE:-}" in
+              /dev/serial/by-id/*|/dev/ttyACM*|/dev/ttyUSB*) ;;
+              *) GNSS_SERIAL_DEVICE="/dev/serial/by-id/usb-stub" ;;
+            esac
+            ;;
+          uart)
+            GNSS_CONNECTION_HINT="uart"
+            case "${GNSS_SERIAL_DEVICE:-}" in
+              /dev/ttyAMA*|/dev/ttyS*|/dev/ttyTHS*|/dev/ttyHS*) ;;
+              *) GNSS_SERIAL_DEVICE="/dev/ttyAMA4" ;;
+            esac
+            ;;
         esac
         ;;
+      gnss_device) GNSS_SERIAL_DEVICE="$val" ;;
+      gnss_baud) GNSS_SERIAL_BAUD="$val" ;;
       lidar)
         case "$val" in
           none)
@@ -246,6 +266,11 @@ harness_set_preset() {
       datum_lat) CONFIG_DATUM_LAT="$val" ;;
       datum_lon) CONFIG_DATUM_LON="$val" ;;
       ntrip)     CONFIG_NTRIP_ENABLED="$val" ;;
+      ntrip_host) CONFIG_NTRIP_HOST="$val" ;;
+      ntrip_port) CONFIG_NTRIP_PORT="$val" ;;
+      ntrip_user) CONFIG_NTRIP_USER="$val" ;;
+      ntrip_password) CONFIG_NTRIP_PASSWORD="$val" ;;
+      ntrip_mountpoint) CONFIG_NTRIP_MOUNTPOINT="$val" ;;
     esac
   done
 }

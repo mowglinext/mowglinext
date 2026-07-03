@@ -8,21 +8,21 @@ import {
     DatabaseOutlined,
     DownloadOutlined,
     ControlOutlined,
-    StopOutlined,
     PlayCircleOutlined,
     HomeOutlined,
     WarningOutlined,
     ScissorOutlined,
     AimOutlined,
     ForwardOutlined,
-    PauseOutlined,
     CaretRightOutlined,
+    PauseOutlined,
     ThunderboltOutlined,
     CheckOutlined,
     CloseOutlined,
     ImportOutlined,
 } from "@ant-design/icons";
 import type {MenuInfo} from "rc-menu/lib/interface";
+import {useTranslation} from "react-i18next";
 import AsyncButton from "../../../components/AsyncButton.tsx";
 import AsyncDropDownButton from "../../../components/AsyncDropDownButton.tsx";
 import type {Feature} from "geojson";
@@ -74,6 +74,7 @@ export const MapToolbar = ({
     onRecordFinish, onRecordCancel,
 }: MapToolbarProps) => {
     const {notification} = App.useApp();
+    const {t} = useTranslation();
     const isIdle = stateName === "IDLE" || stateName === "IDLE_DOCKED";
     const isRecording = stateName === "RECORDING";
 
@@ -81,36 +82,36 @@ export const MapToolbar = ({
         fn?.().catch((e: Error) => {
             console.error(e);
             notification.error({
-                message: "Action failed",
+                message: t("mapToolbar.actionFailed"),
                 description: e.message,
             });
         });
     };
 
     const moreMenuItems: MenuProps["items"] = [
-        {key: "satellite", icon: <GlobalOutlined />, label: useSatellite ? "Dark map" : "Satellite"},
+        {key: "satellite", icon: <GlobalOutlined />, label: useSatellite ? t("mapToolbar.darkMap") : t("mapToolbar.satellite")},
         ...(onTogglePitch
-            ? [{key: "pitch", icon: <GlobalOutlined />, label: pitched ? "Flatten map" : "Tilt 3D view"} satisfies NonNullable<MenuProps["items"]>[number]]
+            ? [{key: "pitch", icon: <GlobalOutlined />, label: pitched ? t("mapToolbar.flattenMap") : t("mapToolbar.tilt3dView")} satisfies NonNullable<MenuProps["items"]>[number]]
             : []),
         {type: "divider"},
-        {key: "areaRecording", icon: <AimOutlined />, label: "Area Recording"},
-        {key: "mowNext", icon: <ForwardOutlined />, label: "Mow Next Area"},
-        {key: "continueOrPause", icon: isIdle ? <CaretRightOutlined /> : <PauseOutlined />, label: isIdle ? "Continue" : "Pause"},
+        {key: "areaRecording", icon: <AimOutlined />, label: t("mapToolbar.areaRecording")},
+        {key: "mowNext", icon: <ForwardOutlined />, label: t("mapToolbar.mowNextArea")},
+        {key: "continueOrPause", icon: isIdle ? <CaretRightOutlined /> : <PauseOutlined />, label: isIdle ? t("mapToolbar.continue") : t("mapToolbar.pause")},
         {type: "divider"},
         ...(manualMode
-            ? [{key: "stopManual", icon: <StopOutlined />, label: "Stop Manual Mowing", danger: true} satisfies NonNullable<MenuProps["items"]>[number]]
-            : [{key: "manual", icon: <ControlOutlined />, label: "Manual Mowing"} satisfies NonNullable<MenuProps["items"]>[number]]
+            ? [{key: "stopManual", icon: <HomeOutlined />, label: t("mapToolbar.stopManualMowing"), danger: true} satisfies NonNullable<MenuProps["items"]>[number]]
+            : [{key: "manual", icon: <ControlOutlined />, label: t("mapToolbar.manualMowing")} satisfies NonNullable<MenuProps["items"]>[number]]
         ),
         {type: "divider"},
-        {key: "bladeForward", icon: <ThunderboltOutlined />, label: "Blade Forward"},
-        {key: "bladeBackward", icon: <ThunderboltOutlined />, label: "Blade Backward"},
-        {key: "bladeOff", icon: <ThunderboltOutlined />, label: "Blade Off", danger: true},
+        {key: "bladeForward", icon: <ThunderboltOutlined />, label: t("mapToolbar.bladeForward")},
+        {key: "bladeBackward", icon: <ThunderboltOutlined />, label: t("mapToolbar.bladeBackward")},
+        {key: "bladeOff", icon: <ThunderboltOutlined />, label: t("mapToolbar.bladeOff"), danger: true},
         {type: "divider"},
-        {key: "backup", icon: <DatabaseOutlined />, label: "Backup Map"},
-        {key: "restore", icon: <DatabaseOutlined />, label: "Restore Map"},
-        {key: "importOpenMower", icon: <ImportOutlined />, label: "Import from OpenMower"},
+        {key: "backup", icon: <DatabaseOutlined />, label: t("mapToolbar.backupMap")},
+        {key: "restore", icon: <DatabaseOutlined />, label: t("mapToolbar.restoreMap")},
+        {key: "importOpenMower", icon: <ImportOutlined />, label: t("mapToolbar.importFromOpenMower")},
         {type: "divider"},
-        {key: "download", icon: <DownloadOutlined />, label: "Download GeoJSON"},
+        {key: "download", icon: <DownloadOutlined />, label: t("mapToolbar.downloadGeojson")},
     ];
 
     const handleMoreClick: MenuProps["onClick"] = ({key}: MenuInfo) => {
@@ -139,7 +140,7 @@ export const MapToolbar = ({
                 icon={<EditOutlined />}
                 onClick={onEditMap}
             >
-                Edit Map
+                {t("mapToolbar.editMap")}
             </Button>
 
             {isRecording ? (
@@ -149,14 +150,14 @@ export const MapToolbar = ({
                         icon={<CheckOutlined />}
                         onAsyncClick={onRecordFinish!}
                     >
-                        Finish Recording
+                        {t("mapToolbar.finishRecording")}
                     </AsyncButton>
                     <AsyncButton
                         danger
                         icon={<CloseOutlined />}
                         onAsyncClick={onRecordCancel!}
                     >
-                        Cancel Recording
+                        {t("mapToolbar.cancelRecording")}
                     </AsyncButton>
                 </>
             ) : isIdle ? (
@@ -165,7 +166,7 @@ export const MapToolbar = ({
                     icon={<PlayCircleOutlined />}
                     onAsyncClick={onStart!}
                 >
-                    Start
+                    {t("mapToolbar.start")}
                 </AsyncButton>
             ) : (
                 <AsyncButton
@@ -173,7 +174,7 @@ export const MapToolbar = ({
                     icon={<HomeOutlined />}
                     onAsyncClick={onHome!}
                 >
-                    Home
+                    {t("mapToolbar.home")}
                 </AsyncButton>
             )}
 
@@ -183,7 +184,7 @@ export const MapToolbar = ({
                     icon={<WarningOutlined />}
                     onAsyncClick={onEmergencyOn!}
                 >
-                    Emergency On
+                    {t("mapToolbar.emergencyOn")}
                 </AsyncButton>
             ) : (
                 <AsyncButton
@@ -191,7 +192,7 @@ export const MapToolbar = ({
                     icon={<WarningOutlined />}
                     onAsyncClick={onEmergencyOff!}
                 >
-                    Emergency Off
+                    {t("mapToolbar.emergencyOff")}
                 </AsyncButton>
             )}
 
@@ -202,14 +203,22 @@ export const MapToolbar = ({
                     onAsyncClick: (e: MenuInfo) => onMowArea(e.key),
                 }}
             >
-                Mow area
+                {t("mapToolbar.mowArea")}
             </AsyncDropDownButton>
+
+            <AsyncButton
+                danger={manualMode}
+                icon={manualMode ? <HomeOutlined /> : <ControlOutlined />}
+                onAsyncClick={manualMode ? onStopManualMode : onManualMode}
+            >
+                {manualMode ? t("mapToolbar.stopManual") : t("mapToolbar.manualMow")}
+            </AsyncButton>
 
             <Dropdown
                 menu={{items: moreMenuItems, onClick: handleMoreClick}}
                 trigger={["click"]}
             >
-                <Button icon={<EllipsisOutlined />}>More</Button>
+                <Button icon={<EllipsisOutlined />}>{t("mapToolbar.more")}</Button>
             </Dropdown>
         </Space>
     );

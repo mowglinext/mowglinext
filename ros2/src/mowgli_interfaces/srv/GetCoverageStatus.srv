@@ -1,8 +1,0 @@
-uint32 area_index
----
-bool success
-float32 coverage_percent
-uint32 total_cells
-uint32 mowed_cells
-uint32 obstacle_cells
-uint32 strips_remaining

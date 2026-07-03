@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {App} from "antd";
+import {useTranslation} from "react-i18next";
 import type {MowingFeature} from "../../../types/map.ts";
 
 interface UseMapEditHistoryOptions {
@@ -11,6 +12,7 @@ interface UseMapEditHistoryOptions {
 
 export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: UseMapEditHistoryOptions) {
     const {modal} = App.useApp();
+    const {t} = useTranslation();
     const [editHistory, setEditHistory] = useState<Record<string, MowingFeature>[]>([]);
     const [historyIndex, setHistoryIndex] = useState(-1);
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -25,16 +27,19 @@ export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: 
 
     function handleEditMap() {
         if (!editMap) {
-            setEditHistory([{...features}]);
+            // Deep-clone: a shallow {...features} shares the inner MowingFeature
+            // objects, so later in-place geometry/name edits mutate the stored
+            // snapshot and undo can't revert.
+            setEditHistory([structuredClone(features)]);
             setHistoryIndex(0);
             setEditMap(true);
         } else if (hasUnsavedChanges) {
             modal.confirm({
-                title: 'Discard unsaved changes?',
-                content: 'You have unsaved map changes. If you cancel now, all changes will be lost.',
-                okText: 'Discard',
+                title: t('mapEditHistory.discardTitle'),
+                content: t('mapEditHistory.discardContent'),
+                okText: t('mapEditHistory.discardOk'),
                 okType: 'danger',
-                cancelText: 'Keep editing',
+                cancelText: t('mapEditHistory.keepEditing'),
                 onOk: exitEditMode,
             });
         } else {
@@ -43,9 +48,12 @@ export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: 
     }
 
     const pushHistory = useCallback((newFeatures: Record<string, MowingFeature>) => {
+        // Snapshot a deep clone so subsequent in-place edits to the live
+        // features don't retroactively mutate this history entry.
+        const snapshot = structuredClone(newFeatures);
         setEditHistory(prev => {
             const truncated = prev.slice(0, historyIndex + 1);
-            const next = [...truncated, newFeatures].slice(-10);
+            const next = [...truncated, snapshot].slice(-10);
             setHistoryIndex(next.length - 1);
             return next;
         });
@@ -69,7 +77,9 @@ export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: 
         const newIndex = historyIndex - 1;
         setHistoryIndex(newIndex);
         skipHistoryRef.current = true;
-        setFeatures(editHistory[newIndex]);
+        // Clone on the way out so editing the restored state doesn't mutate
+        // the stored snapshot (which redo / a later undo would reuse).
+        setFeatures(structuredClone(editHistory[newIndex]));
     }, [historyIndex, editHistory, setFeatures]);
 
     const handleRedo = useCallback(() => {
@@ -77,7 +87,7 @@ export function useMapEditHistory({features, setFeatures, editMap, setEditMap}: 
         const newIndex = historyIndex + 1;
         setHistoryIndex(newIndex);
         skipHistoryRef.current = true;
-        setFeatures(editHistory[newIndex]);
+        setFeatures(structuredClone(editHistory[newIndex]));
     }, [historyIndex, editHistory, setFeatures]);
 
     return {

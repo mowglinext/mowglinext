@@ -187,46 +187,60 @@ handler — no new ROS service surface is needed.
 
 ## 3. Coordinate frame handling
 
-MowgliNext's `map` frame is ENU anchored at `(datum_lat, datum_lon)`
-read from `mowgli_robot.yaml` (see `gui/pkg/api/diagnostics.go ::
-extractYAMLFloat`). OpenMower's `map` frame is also ENU but anchored at
-its own `(OM_DATUM_LAT, OM_DATUM_LONG)`.
+MowgliNext's `map` frame is a **true-north** equirectangular ENU anchored
+at `(datum_lat, datum_lon)` from `mowgli_robot.yaml`
+(`navsat_to_absolute_pose_node.cpp`: `east=(lon−datum_lon)·cos(datum_lat)·M`,
+`north=(lat−datum_lat)·M`).
 
-There are three real-world cases:
+OpenMower's `map` frame is **NOT** the same kind of ENU. Its
+`xbot_driver_gps` stores every point as **UTM grid** eastings/northings
+relative to its datum (`LLtoUTM(fix) − LLtoUTM(OM_DATUM)`; see
+`xbot_driver_gps/src/interfaces/ublox_gps_interface.cpp`). UTM axes follow
+**grid north**, which differs from true north by the meridian convergence
+`γ = atan(tan(λ − λ₀)·sin φ)` (`λ₀` = the zone's central meridian). A couple
+of degrees off the central meridian, `γ` reaches **1–2°** — this is the
+"imported map is rotated 1–2°" report. On a large lawn the same rotation
+also pushes the boundary far enough out of place to break coverage planning.
 
-### 3a. Same datum (the easy case)
-
-User reuses the same RTK base station + the same configured datum →
-**identity transform**. `(x_om, y_om) → (x_mn, y_mn) = (x_om, y_om)`.
-Everything imports verbatim. The importer assumes this case by default
-when the user does not provide an OpenMower datum on the upload.
-
-### 3b. Different datum, same locale
-
-User changed RTK base, or migrated the install. We need to translate
-all points by the displacement between the two datums:
+The importer therefore does a **full UTM round-trip**, not an additive
+shift: it inverts OpenMower's exact projection and re-projects into
+MowgliNext's frame (`gui/pkg/api/utm.go`, a port of the Snyder-series
+`RobotLocalization::NavsatConversions` OpenMower links):
 
 ```
-shift_east_m  = (lon_om - lon_mn) * cos(lat_mn * π/180) * METERS_PER_DEG
-shift_north_m = (lat_om - lat_mn)                       * METERS_PER_DEG
-METERS_PER_DEG = 111319.49079327357   # WGS84 1° at the equator, used by MowgliNext
+abs_UTM = LLtoUTM(om_datum) + (x_om, y_om)   # OpenMower's stored grid coords
+lat,lon = UTMtoLL(abs_UTM, om_zone)          # invert OM's projection
+x_mn    = (lon − mn_lon) · cos(mn_lat) · M   # MowgliNext true-north ENU
+y_mn    = (lat − mn_lat)              · M     # M = 111319.49079327357
 ```
 
-(matches the constant in `gui/web/src/utils/map.tsx`). Then for every
-point: `x_mn = x_om + shift_east_m`, `y_mn = y_om + shift_north_m`.
+This corrects the datum offset, the east-scale AND the grid-north
+convergence in one step, and the dock heading is rotated by `−γ` to match
+(`datumReprojector.projectYaw`).
 
-The importer will accept an optional `om_datum_lat` / `om_datum_lon`
-form field on the upload. When provided, it computes the shift and
-applies it. When omitted, it logs a warning and uses 3a (identity).
+### 3a. Same datum
 
-### 3c. Datum + bearing change (rare)
+User reuses the same RTK base + configured datum. The offset is zero, but
+the UTM grid→true-north convergence is **still removed**, so even a
+same-datum import is de-rotated (this is intentional — OpenMower's stored
+coordinates are grid-aligned regardless of the datum).
 
-If the user is also rotating their world (e.g. they re-recorded the
-dock heading, or they want their lawn aligned with magnetic north
-instead of true north), a bearing rotation needs to be composed with
-the translation. **Not in scope** for the first import iteration. The
-GUI's existing **Map offset / bearing** panel is the manual escape hatch
-for this case.
+### 3b. Different datum / migrated install
+
+The round-trip above absorbs an arbitrary datum displacement exactly (no
+small-angle/flat-earth approximation), so a moved RTK base or a relocated
+install imports correctly as long as the OpenMower datum is supplied.
+
+### 3c. OpenMower datum required for georeferencing
+
+The fix needs the source `OM_DATUM_LAT/LONG` (the UTM anchor to invert
+against). The import modal has two optional inputs for it. When omitted,
+the importer **cannot** undo the convergence and falls back to copying the
+OpenMower coordinates through unchanged, with a prominent warning that the
+map will be both offset and rotated — the user should re-import with the
+datum filled in. (The GUI's display-only **Map offset / bearing** panel is
+no longer the rotation fix — it only spins the Mapbox camera, never the
+saved coordinates.)
 
 ### Lat/lon round-trip
 
@@ -234,8 +248,7 @@ The actual OpenMower datum is discoverable at runtime by sniffing the
 robot — `mower_config.sh` sets it as an env var that's exposed on the
 ROS parameter server (and in `/odom_to_world_node` config), or it can
 be read from `mower_logic` debug topics. **We will not auto-discover
-it from the JSON file**, because the file doesn't carry it. The UI will
-ask.
+it from the JSON file**, because the file doesn't carry it. The UI asks.
 
 ---
 
@@ -262,15 +275,14 @@ can decide whether to confirm.
 
 ## 5. Decisions taken when flipping the write path live
 
-1. **Datum mismatch.** Shipped option (c) from the original tradeoffs:
-   no UI for `om_datum_lat`/`om_datum_lon` yet — the preview modal
-   surfaces the computed datum shift loudly ("Datum shift:
-   east=X m, north=Y m") and the per-area approximate-area column.
-   Combined with the **Map offset / bearing** panel as the manual
-   escape hatch, that is enough to catch obvious frame mismatches
-   before the user clicks Apply. If field experience says otherwise,
-   option (a) (require the OpenMower datum on upload) is a small
-   addition.
+1. **Datum mismatch.** The preview modal now has `om_datum_lat`/
+   `om_datum_lon` inputs and re-previews on change; with the datum
+   supplied the importer does the full UTM round-trip (§3) so the offset,
+   scale and grid-north convergence are all corrected before Apply. It
+   still surfaces the computed datum shift loudly ("Datum shift:
+   east=X m, north=Y m") and the per-area approximate-area column. Without
+   the datum it warns that the map will be offset+rotated rather than
+   silently shifting.
 
 2. **Dock yaw convention.** Both stacks use `yaw = atan2(north, east)`,
    so the heading is portable. But OpenMower stores the heading as a

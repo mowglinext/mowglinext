@@ -14,5 +14,5 @@
 wheel_odometry:
   ros__parameters:
     wheel_distance: 0.325
-    ticks_per_meter: 300.0
+    ticks_per_meter: 399.0
     publish_tf: false

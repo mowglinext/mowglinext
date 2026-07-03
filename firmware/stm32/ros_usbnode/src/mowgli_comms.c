@@ -32,6 +32,7 @@
 #include "mowgli_comms.h"
 #include "cobs.h"
 #include "crc16.h"
+#include "main.h"
 
 #include <string.h>  /* memmove, memcpy */
 
@@ -111,6 +112,19 @@ static void process_frame(const uint8_t *frame, size_t frame_len)
 {
     /* Ignore empty frames (two consecutive delimiters). */
     if (frame_len == 0u) {
+        return;
+    }
+
+    /*
+     * Reject oversized frames BEFORE decoding. cobs_decode() takes no
+     * output-capacity argument and writes up to frame_len bytes into the
+     * 64-byte s_decode_buf; a corrupt or malicious stream of >MAX_ENC_PKT_SIZE
+     * non-zero bytes would otherwise overrun the scratch buffer into adjacent
+     * statics (the handler table). The largest legal packet is 41 bytes raw,
+     * so anything that can't fit a MAX_RAW_PKT_SIZE packet is invalid.
+     */
+    if (frame_len > MAX_ENC_PKT_SIZE) {
+        ++s_crc_error_count;
         return;
     }
 
@@ -212,6 +226,8 @@ void mowgli_comms_send(const void *packet, size_t len)
     if (packet == NULL || len < MIN_RAW_PKT_SIZE || len > MAX_RAW_PKT_SIZE) {
         return;
     }
+
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_ENTER);
 
     /* Copy packet into mutable buffer. */
     memcpy(raw, packet, len);

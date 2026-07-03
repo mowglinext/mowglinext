@@ -18,7 +18,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ---------------------------------------------------------------------------
 
 find_package(ament_cmake        REQUIRED)
-find_package(diagnostic_msgs    REQUIRED)
 find_package(rclcpp             REQUIRED)
 find_package(nav_msgs           REQUIRED)
 find_package(geometry_msgs      REQUIRED)
@@ -65,15 +64,12 @@ ament_target_dependencies(wheel_odometry_node
 # ---------------------------------------------------------------------------
 
 add_executable(navsat_to_absolute_pose_node
-  src/gnss_runtime_state_builder.cpp
-  src/gnss_status_adapter.cpp
   src/navsat_to_absolute_pose_node.cpp
 )
 
 target_include_directories(navsat_to_absolute_pose_node PUBLIC ${INCLUDE_DIR})
 
 ament_target_dependencies(navsat_to_absolute_pose_node
-  diagnostic_msgs
   rclcpp
   sensor_msgs
   geometry_msgs
@@ -189,6 +185,31 @@ add_executable(scan_deskew_node
 ament_target_dependencies(scan_deskew_node
   rclcpp
   sensor_msgs
+  nav_msgs
+)
+
+# ---------------------------------------------------------------------------
+# Executable: gps_dock_detection_node — publishes a GPS-derived dock detection
+# (PoseStamped on detected_dock_pose, in the odom fixed_frame) so
+# opennav_docking can approach the cradle off RTK-Fixed GPS instead of the
+# corruptible map→odom factor-graph TF. See the source header for the full
+# data flow + RTK-Float fallback rationale.
+# ---------------------------------------------------------------------------
+
+add_executable(gps_dock_detection_node
+  src/gps_dock_detection_node.cpp
+)
+
+target_include_directories(gps_dock_detection_node PUBLIC ${INCLUDE_DIR})
+
+ament_target_dependencies(gps_dock_detection_node
+  rclcpp
+  geometry_msgs
+  sensor_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  mowgli_interfaces
 )
 
 # ---------------------------------------------------------------------------
@@ -210,6 +231,7 @@ install(
     calibrate_imu_yaw_node
     costmap_scan_filter_node
     scan_deskew_node
+    gps_dock_detection_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -271,30 +293,6 @@ if(BUILD_TESTING)
     sensor_msgs
   )
 
-  ament_add_gtest(test_gnss_status_adapter
-    test/test_gnss_status_adapter.cpp
-    src/gnss_status_adapter.cpp
-  )
-  ament_target_dependencies(test_gnss_status_adapter
-    rclcpp
-    mowgli_interfaces
-  )
-  target_include_directories(test_gnss_status_adapter PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-  )
-
-  ament_add_gtest(test_gnss_runtime_state_builder
-    test/test_gnss_runtime_state_builder.cpp
-    src/gnss_runtime_state_builder.cpp
-  )
-  ament_target_dependencies(test_gnss_runtime_state_builder
-    diagnostic_msgs
-    rclcpp
-    sensor_msgs
-  )
-  target_include_directories(test_gnss_runtime_state_builder PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-  )
 endif()
 
 # ---------------------------------------------------------------------------
@@ -304,7 +302,6 @@ endif()
 ament_export_include_directories(include)
 ament_export_dependencies(
   rclcpp
-  diagnostic_msgs
   nav_msgs
   geometry_msgs
   sensor_msgs

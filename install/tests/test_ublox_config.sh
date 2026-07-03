@@ -102,60 +102,60 @@ fi
 assert_not_contains "no CFG-PRT change when already at 921600" "set-baud" "$UBLOX_COMMANDS"
 assert_not_contains "no save when already at 921600" "save" "$UBLOX_COMMANDS"
 
-section "GPS_BAUD changes only on verified u-blox success"
+section "GNSS_SERIAL_BAUD changes only on verified u-blox success"
 
 reset_ublox_mocks
-GNSS_BACKEND=ublox
-GPS_PROTOCOL=UBX
-GPS_BAUD=9600
+GNSS_BACKEND=universal
+GNSS_RECEIVER_FAMILY=ublox
+GNSS_SERIAL_BAUD=9600
 UBLOX_IDENTIFY_BAUDS="9600"
-maybe_upgrade_ublox_baud "$port" "$GPS_BAUD" auto
-assert_eq "ublox backend becomes 921600 after verified upgrade" "921600" "$GPS_BAUD"
+maybe_upgrade_ublox_baud "$port" "$GNSS_SERIAL_BAUD" auto
+assert_eq "ublox backend becomes 921600 after verified upgrade" "921600" "$GNSS_SERIAL_BAUD"
 
 reset_ublox_mocks
-GNSS_BACKEND=gps
-GPS_PROTOCOL=UBX
-GPS_BAUD=9600
+GNSS_BACKEND=universal
+GNSS_RECEIVER_FAMILY=auto
+GNSS_SERIAL_BAUD=9600
 UBLOX_IDENTIFY_BAUDS="9600"
-maybe_upgrade_ublox_baud "$port" "$GPS_BAUD" auto
-assert_eq "generic gps UBX becomes 921600 only after verified u-blox upgrade" "921600" "$GPS_BAUD"
+maybe_upgrade_ublox_baud "$port" "$GNSS_SERIAL_BAUD" auto
+assert_eq "generic auto receiver becomes 921600 only after verified u-blox upgrade" "921600" "$GNSS_SERIAL_BAUD"
 
 section "unknown receiver is not forced"
 
 reset_ublox_mocks
-GNSS_BACKEND=gps
-GPS_PROTOCOL=UBX
-GPS_BAUD=9600
+GNSS_BACKEND=universal
+GNSS_RECEIVER_FAMILY=auto
+GNSS_SERIAL_BAUD=9600
 UBLOX_IDENTIFY_BAUDS=""
-maybe_upgrade_ublox_baud "$port" "$GPS_BAUD" auto
-assert_eq "unknown receiver keeps detected baud" "9600" "$GPS_BAUD"
+maybe_upgrade_ublox_baud "$port" "$GNSS_SERIAL_BAUD" auto
+assert_eq "unknown receiver keeps detected baud" "9600" "$GNSS_SERIAL_BAUD"
 assert_not_contains "unknown receiver skips CFG-PRT" "set-baud" "$UBLOX_COMMANDS"
 
 section "verification failure keeps detected baud"
 
 reset_ublox_mocks
-GNSS_BACKEND=ublox
-GPS_PROTOCOL=UBX
-GPS_BAUD=9600
+GNSS_BACKEND=universal
+GNSS_RECEIVER_FAMILY=ublox
+GNSS_SERIAL_BAUD=9600
 UBLOX_IDENTIFY_BAUDS="9600"
 UBLOX_SET_BAUD_OK="false"
-maybe_upgrade_ublox_baud "$port" "$GPS_BAUD" auto
-assert_eq "failed upgrade keeps detected baud" "9600" "$GPS_BAUD"
+maybe_upgrade_ublox_baud "$port" "$GNSS_SERIAL_BAUD" auto
+assert_eq "failed upgrade keeps detected baud" "9600" "$GNSS_SERIAL_BAUD"
 
 section "No-op for other GNSS modes"
 
 reset_ublox_mocks
-GNSS_BACKEND=unicore
-GPS_PROTOCOL=UBX
-GPS_BAUD=460800
-maybe_upgrade_ublox_baud "$port" "$GPS_BAUD" auto
+GNSS_BACKEND=universal
+GNSS_RECEIVER_FAMILY=unicore
+GNSS_SERIAL_BAUD=460800
+maybe_upgrade_ublox_baud "$port" "$GNSS_SERIAL_BAUD" auto
 assert_eq "unicore backend does not send u-blox commands" "" "$UBLOX_COMMANDS"
 
 reset_ublox_mocks
-GNSS_BACKEND=gps
-GPS_PROTOCOL=NMEA
-GPS_BAUD=115200
-maybe_upgrade_ublox_baud "$port" "$GPS_BAUD" auto
+GNSS_BACKEND=universal
+GNSS_RECEIVER_FAMILY=nmea
+GNSS_SERIAL_BAUD=115200
+maybe_upgrade_ublox_baud "$port" "$GNSS_SERIAL_BAUD" auto
 assert_eq "generic NMEA backend does not send u-blox commands" "" "$UBLOX_COMMANDS"
 
 test_summary

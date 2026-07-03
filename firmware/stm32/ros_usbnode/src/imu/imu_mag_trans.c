@@ -37,7 +37,7 @@ double external_imu_mag_cal_matrix[3][3];
 void IMU_ApplyMagTransformation(double x, double y, double z, double *x_cal, double *y_cal, double *z_cal)
 {
 
-  double uncalibrated_values[3] = { x, y, z };
+  const double uncalibrated_values[3] = { x, y, z };
 /*
   uncalibrated_values[0] = x;
   uncalibrated_values[1] = y;

@@ -53,6 +53,23 @@ public:
 
 private:
   rclcpp::Publisher<mowgli_interfaces::msg::HighLevelStatus>::SharedPtr pub_;
+
+  // --- Transient-IDLE debounce -------------------------------------------
+  // The published state is recomputed from tree traversal every tick with no
+  // latch, so a one-tick reactive deselection of MowingSequence (or a cleared
+  // current_command) makes the IdleSequence fall-through publish state=IDLE for
+  // a single tick during an active mission — the GUI then flashes "idle" mid-mow.
+  // We hold the last published state and require a transition INTO idle from an
+  // active state (AUTONOMOUS/RECORDING/MANUAL_MOWING) to persist for
+  // kIdleDebounceTicks consecutive ticks before we actually publish idle;
+  // otherwise we re-publish the previous active state. Transitions into motion
+  // states and into EMERGENCY/NULL (state=0) are published immediately.
+  static constexpr uint8_t kStateNull = 0;  // HIGH_LEVEL_STATE_NULL / emergency
+  static constexpr uint8_t kStateIdle = 1;  // HIGH_LEVEL_STATE_IDLE
+  static constexpr int kIdleDebounceTicks = 3;  // ~0.3 s at 10 Hz
+  bool have_published_{false};
+  uint8_t last_published_state_{0};
+  int pending_idle_ticks_{0};
 };
 
 // ---------------------------------------------------------------------------

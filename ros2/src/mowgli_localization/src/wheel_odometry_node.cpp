@@ -70,7 +70,7 @@ WheelOdometryNode::WheelOdometryNode(const rclcpp::NodeOptions& options)
 
   RCLCPP_INFO(
       get_logger(),
-      "WheelOdometryNode started — wheel_distance=%.3f m, ticks_per_meter=%.1f, publish_tf=%s",
+      "WheelOdometryNode started — wheel_distance=%.3f m, ticks_per_meter=%.3f, publish_tf=%s",
       wheel_distance_,
       ticks_per_meter_,
       publish_tf_ ? "true" : "false");

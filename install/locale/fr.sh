@@ -28,8 +28,7 @@ MSG_UART_INVALID="Choix invalide"
 MSG_UART_AFTER_REBOOT="disponible apres redemarrage"
 
 # ── GPS (gps.sh) ──
-MSG_GPS_CONNECTION="Connexion GPS :"
-MSG_GPS_PROTOCOL="Protocole GPS :"
+MSG_GNSS_CONNECTION="Connexion GNSS :"
 MSG_GPS_DEBUG_CONFIRM="Activer le port GPS debug (miniUART / gps_debug) ?"
 MSG_GPS_INVALID_CONNECTION="Choix connexion GPS invalide"
 MSG_GPS_INVALID_PROTOCOL="Choix protocole invalide"

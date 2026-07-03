@@ -1,5 +1,6 @@
 import {motion, LayoutGroup} from "framer-motion";
 import {Home, Map as MapIcon, Gamepad2, Calendar, BarChart3} from "lucide-react";
+import {useTranslation} from "react-i18next";
 import {springSnap} from "../motion";
 import type {Screen} from "./BottomNav";
 
@@ -10,12 +11,12 @@ import type {Screen} from "./BottomNav";
  * so route changes feel continuous if the viewport flips.
  */
 
-const ITEMS: {key: Screen; label: string; icon: typeof Home}[] = [
-  {key: "home",     label: "Accueil",  icon: Home},
-  {key: "map",      label: "Carte",    icon: MapIcon},
-  {key: "controls", label: "Contrôle", icon: Gamepad2},
-  {key: "schedule", label: "Planning", icon: Calendar},
-  {key: "stats",    label: "Stats",    icon: BarChart3},
+const ITEMS: {key: Screen; labelKey: string; icon: typeof Home}[] = [
+  {key: "home",     labelKey: "conceptSideRail.home",     icon: Home},
+  {key: "map",      labelKey: "conceptSideRail.map",      icon: MapIcon},
+  {key: "controls", labelKey: "conceptSideRail.controls", icon: Gamepad2},
+  {key: "schedule", labelKey: "conceptSideRail.schedule", icon: Calendar},
+  {key: "stats",    labelKey: "conceptSideRail.stats",    icon: BarChart3},
 ];
 
 interface SideRailProps {
@@ -24,6 +25,7 @@ interface SideRailProps {
 }
 
 export function SideRail({active, onChange}: SideRailProps) {
+  const {t} = useTranslation();
   return (
     <aside style={{
       position: "fixed", top: 0, bottom: 0, left: 0,
@@ -68,7 +70,7 @@ export function SideRail({active, onChange}: SideRailProps) {
           display: "flex", flexDirection: "column", gap: 4,
           padding: "0 12px", flex: 1,
         }}>
-          {ITEMS.map(({key, label, icon: Icon}) => {
+          {ITEMS.map(({key, labelKey, icon: Icon}) => {
             const isActive = key === active;
             return (
               <button
@@ -103,7 +105,7 @@ export function SideRail({active, onChange}: SideRailProps) {
                   />
                 )}
                 <Icon size={20} strokeWidth={isActive ? 2.4 : 2}/>
-                <span>{label}</span>
+                <span>{t(labelKey)}</span>
               </button>
             );
           })}

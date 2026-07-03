@@ -1,5 +1,6 @@
 import {motion, LayoutGroup} from "framer-motion";
 import {Leaf, Zap, Moon} from "lucide-react";
+import {useTranslation} from "react-i18next";
 import {springSnap} from "../motion";
 
 /**
@@ -9,10 +10,10 @@ import {springSnap} from "../motion";
 
 export type Mode = "eco" | "sport" | "silent";
 
-const MODES: {key: Mode; label: string; icon: typeof Leaf; tagline: string}[] = [
-  {key: "eco",    label: "Eco",        icon: Leaf, tagline: "Plus long, plus silencieux"},
-  {key: "sport",  label: "Sport",      icon: Zap,  tagline: "Vitesse + couverture rapide"},
-  {key: "silent", label: "Silencieux", icon: Moon, tagline: "Vitesse réduite, sons feutrés"},
+const MODES: {key: Mode; labelKey: string; icon: typeof Leaf; taglineKey: string}[] = [
+  {key: "eco",    labelKey: "modeSegment.ecoLabel",    icon: Leaf, taglineKey: "modeSegment.ecoTagline"},
+  {key: "sport",  labelKey: "modeSegment.sportLabel",  icon: Zap,  taglineKey: "modeSegment.sportTagline"},
+  {key: "silent", labelKey: "modeSegment.silentLabel", icon: Moon, taglineKey: "modeSegment.silentTagline"},
 ];
 
 interface ModeSegmentProps {
@@ -21,6 +22,7 @@ interface ModeSegmentProps {
 }
 
 export function ModeSegment({value, onChange}: ModeSegmentProps) {
+  const {t} = useTranslation();
   const active = MODES.find(m => m.key === value)!;
   return (
     <div>
@@ -37,7 +39,7 @@ export function ModeSegment({value, onChange}: ModeSegmentProps) {
             border: "1px solid var(--border-soft)",
           }}
         >
-          {MODES.map(({key, label, icon: Icon}) => {
+          {MODES.map(({key, labelKey, icon: Icon}) => {
             const isActive = key === value;
             return (
               <button
@@ -71,7 +73,7 @@ export function ModeSegment({value, onChange}: ModeSegmentProps) {
                   />
                 )}
                 <Icon size={14} strokeWidth={2.3}/>
-                <span>{label}</span>
+                <span>{t(labelKey)}</span>
               </button>
             );
           })}
@@ -81,7 +83,7 @@ export function ModeSegment({value, onChange}: ModeSegmentProps) {
         fontSize: 11, color: "var(--ink-3)", marginTop: 8,
         textAlign: "center", letterSpacing: "0.02em",
       }}>
-        {active.tagline}
+        {t(active.taglineKey)}
       </div>
     </div>
   );

@@ -46,8 +46,13 @@ export UDEV_RULES_FILE="$SANDBOX/99-mowgli.rules"
 export SUDO=""
 
 export HARDWARE_BACKEND="mowgli"
-export GNSS_BACKEND="unicore"
-unset GPS_CONNECTION GPS_PROTOCOL GPS_PORT GPS_BY_ID GPS_UART_DEVICE GPS_BAUD 2>/dev/null || true
+export GNSS_BACKEND="universal"
+export GNSS_STATUS_SOURCE="universal"
+export GNSS_STACK="universal"
+export GNSS_RECEIVER_FAMILY="unicore"
+export GNSS_TRANSPORT="serial"
+export GNSS_CONNECTION_HINT="uart"
+unset GNSS_SERIAL_DEVICE GNSS_SERIAL_BAUD 2>/dev/null || true
 export LIDAR_ENABLED="false"
 export TFLUNA_FRONT_ENABLED="false"
 export TFLUNA_EDGE_ENABLED="false"
@@ -58,18 +63,16 @@ touch "$SANDBOX/dev/ttyACM0"
 ln -s "$SANDBOX/dev/ttyACM0" "$SANDBOX/serial-by-id/usb-Mowgli_STM32-if00"
 export SERIAL_BY_ID_DIR="$SANDBOX/serial-by-id"
 
-# Reproduce the web composer Unicore path:
-# --backend=mowgli --gnss=unicore --lidar=ldlidar-uart --tfluna=none
-# No --gps flag is emitted, so setup_env fills the runtime GPS defaults
-# before udev verification runs.
+# Reproduce the Universal GNSS Unicore path:
+# --backend=mowgli --gnss=unicore --gnss-connection=uart --lidar=ldlidar-uart --tfluna=none
 setup_env >/dev/null 2>&1
-touch "$GPS_UART_DEVICE"
+touch "$(gnss_serial_device_from_state)"
 
 set -u
 if output="$(install_udev_rules 2>&1)"; then
-  pass "install_udev_rules handles unicore web preset under set -u"
+  pass "install_udev_rules handles unicore Universal GNSS preset under set -u"
 else
-  fail "install_udev_rules handles unicore web preset under set -u" "$output"
+  fail "install_udev_rules handles unicore Universal GNSS preset under set -u" "$output"
 fi
 set +u
 
@@ -78,6 +81,7 @@ rules="$(cat "$UDEV_RULES_FILE")"
 assert_contains "Mowgli by-id rule generated" 'SYMLINK+="mowgli"' "$rules"
 assert_contains "Mowgli by-id rule uses resolved kernel" 'KERNEL=="ttyACM0"' "$rules"
 assert_contains "gps uart rule generated" 'SYMLINK+="gps"' "$rules"
-assert_eq "GNSS backend remains unicore" "unicore" "$GNSS_BACKEND"
+assert_eq "GNSS backend remains universal" "universal" "$GNSS_BACKEND"
+assert_eq "GNSS receiver family remains unicore" "unicore" "$GNSS_RECEIVER_FAMILY"
 
 test_summary

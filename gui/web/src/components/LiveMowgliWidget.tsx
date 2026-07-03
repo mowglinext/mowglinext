@@ -172,7 +172,7 @@ export function LiveMowgliWidget({compact, moving, activeAreaIndex}: LiveMowgliW
                             marginTop: 4, lineHeight: 1,
                         }}>
                             {avgCoverage.toFixed(0)}<span style={{
-                                fontSize: 12, fontFamily: "'Geist Mono', monospace",
+                                fontSize: 12, fontFamily: "'Space Grotesk', monospace",
                                 color: colors.textMuted, marginLeft: 2,
                             }}>%</span>
                         </div>

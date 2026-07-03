@@ -168,6 +168,94 @@ BT::NodeStatus ClearCostmap::tick()
 }
 
 // ---------------------------------------------------------------------------
+// SetNav2Lifecycle
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus SetNav2Lifecycle::tick()
+{
+  // Feature flag (default false): when disabled, this node is a pure no-op.
+  // No service client is created and no manage_nodes request is ever sent,
+  // so behaviour is identical to a build without idle suspend.
+  bool enabled = false;
+  config().blackboard->get<bool>("idle_nav2_suspend", enabled);
+  if (!enabled)
+  {
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  std::string command;
+  if (!getInput<std::string>("command", command))
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+  const bool want_pause = (command == "PAUSE");
+  if (!want_pause && command != "RESUME")
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  // Decide whether a transition is actually needed. ctx->nav2_suspended is
+  // our single source of truth (the BT is the only pause/resume authority),
+  // so we issue a manage_nodes call only on a real transition — no per-tick
+  // service spam while mowing or while parked.
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    if (want_pause)
+    {
+      if (ctx->nav2_suspended)
+      {
+        return BT::NodeStatus::SUCCESS;  // already paused
+      }
+      // SAFETY: only suspend (which deactivates collision_monitor) when the
+      // robot is physically on the dock. Off-dock idle keeps Nav2 active.
+      if (!ctx->latest_power.charger_enabled)
+      {
+        return BT::NodeStatus::SUCCESS;
+      }
+    }
+    else if (!ctx->nav2_suspended)
+    {
+      return BT::NodeStatus::SUCCESS;  // already active, nothing to resume
+    }
+  }
+
+  if (!client_)
+  {
+    client_ = ctx->helper_node->create_client<nav2_msgs::srv::ManageLifecycleNodes>(
+        "/lifecycle_manager_navigation/manage_nodes");
+  }
+  if (!client_->service_is_ready())
+  {
+    // lifecycle_manager not up yet — leave our tracked state unchanged so we
+    // retry on the next tick rather than desyncing.
+    RCLCPP_WARN_THROTTLE(ctx->node->get_logger(),
+                         *ctx->node->get_clock(),
+                         5000,
+                         "SetNav2Lifecycle: manage_nodes service not ready, skipping %s",
+                         command.c_str());
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  auto req = std::make_shared<nav2_msgs::srv::ManageLifecycleNodes::Request>();
+  req->command = want_pause ? nav2_msgs::srv::ManageLifecycleNodes::Request::PAUSE
+                            : nav2_msgs::srv::ManageLifecycleNodes::Request::RESUME;
+  // Fire-and-forget: RESUME completion is gated downstream by Nav2ReadyPoll
+  // (Nav2Active) before any motion, so we don't block the tick on the
+  // transition. Mark our tracked state immediately.
+  client_->async_send_request(req);
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->nav2_suspended = want_pause;
+  }
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "SetNav2Lifecycle: sent %s to lifecycle_manager_navigation",
+              command.c_str());
+  return BT::NodeStatus::SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
 // NavigateToPose
 // ---------------------------------------------------------------------------
 
@@ -406,7 +494,9 @@ BT::NodeStatus NavigateInsideBoundary::onRunning()
     RCLCPP_INFO(ctx->node->get_logger(),
                 "NavigateInsideBoundary: disabling global_costmap keepout_filter "
                 "(recovery target=(%.2f, %.2f), %.2fm outside)",
-                recovery_pose_.position.x, recovery_pose_.position.y, distance_outside_);
+                recovery_pose_.position.x,
+                recovery_pose_.position.y,
+                distance_outside_);
     return BT::NodeStatus::RUNNING;
   }
 
@@ -541,8 +631,7 @@ BT::NodeStatus NavigateInsideBoundary::onRunning()
       backup_result_requested_ = true;
     }
 
-    if (backup_result_future_.wait_for(std::chrono::milliseconds(0)) !=
-        std::future_status::ready)
+    if (backup_result_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
     {
       return BT::NodeStatus::RUNNING;
     }
@@ -617,7 +706,9 @@ BT::NodeStatus NavigateInsideBoundary::SendNav2Goal()
 
   RCLCPP_INFO(ctx->node->get_logger(),
               "NavigateInsideBoundary: nav2 goal sent (x=%.2f y=%.2f, %.2fm outside)",
-              recovery_pose_.position.x, recovery_pose_.position.y, distance_outside_);
+              recovery_pose_.position.x,
+              recovery_pose_.position.y,
+              distance_outside_);
   phase_ = Phase::WaitingForGoalHandle;
   return BT::NodeStatus::RUNNING;
 }
@@ -640,8 +731,8 @@ BT::NodeStatus NavigateInsideBoundary::BeginReEnableKeepout()
     keepout_disabled_ = false;
     return pending_nav_result_;
   }
-  set_param_future_ = keepout_params_client_->set_parameters(
-      {rclcpp::Parameter("keepout_filter.enabled", true)});
+  set_param_future_ =
+      keepout_params_client_->set_parameters({rclcpp::Parameter("keepout_filter.enabled", true)});
   phase_ = Phase::ReEnablingKeepout;
   return BT::NodeStatus::RUNNING;
 }
@@ -682,7 +773,8 @@ BT::NodeStatus NavigateInsideBoundary::BeginFallbackBackup()
 
   RCLCPP_INFO(ctx->node->get_logger(),
               "NavigateInsideBoundary: fallback backup goal sent (%.2f m @ %.2f m/s)",
-              kBackupDist, kBackupSpeed);
+              kBackupDist,
+              kBackupSpeed);
   return BT::NodeStatus::RUNNING;
 }
 
@@ -704,8 +796,7 @@ void NavigateInsideBoundary::onHalted()
   }
   if (keepout_disabled_)
   {
-    RCLCPP_INFO(ctx->node->get_logger(),
-                "NavigateInsideBoundary: halt — restoring keepout filter");
+    RCLCPP_INFO(ctx->node->get_logger(), "NavigateInsideBoundary: halt — restoring keepout filter");
     RequestKeepoutEnable(true);
     keepout_disabled_ = false;
   }
@@ -851,9 +942,11 @@ BT::NodeStatus SetNavMode::tick()
   // Apply the operator-configured speeds (from mowgli_robot.yaml via
   // behavior_tree_node → BTContext), NOT hardcoded magic numbers. We set the
   // knob each controller actually reads: FollowPath is RPP (via RotationShim),
-  // whose speed knob is desired_linear_vel; FollowCoveragePath is FTC, whose
-  // knob is speed_fast (it ignores desired_linear_vel — setting that was a
-  // long-standing no-op that left coverage speed unconfigurable here).
+  // whose speed knob is desired_linear_vel; FollowCoveragePath is FTCController,
+  // whose carrot-speed knob is speed_fast (FTC applies it live via its
+  // onParameterChange). Setting vx_max here — the old MPPI knob — would spam
+  // "parameter not declared" warnings and silently drop the operator's
+  // mowing_speed, since FTC has no vx_max.
   //
   // "degraded" (Float-quality GPS) runs at half the configured speed, floored
   // at the host min-drive clamp: hardware_bridge zeroes |vx| < kMinLinVel

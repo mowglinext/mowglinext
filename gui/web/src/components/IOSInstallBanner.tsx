@@ -1,4 +1,5 @@
 import {CloseOutlined} from "@ant-design/icons";
+import {useTranslation} from "react-i18next";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 
 interface IOSInstallBannerProps {
@@ -15,6 +16,7 @@ const ShareIcon = () => (
 
 export const IOSInstallBanner = ({onDismiss}: IOSInstallBannerProps) => {
     const {colors} = useThemeMode();
+    const {t} = useTranslation();
     return (<div style={{
         position: 'fixed',
         bottom: 'calc(56px + env(safe-area-inset-bottom, 0px) + 8px)',
@@ -47,15 +49,15 @@ export const IOSInstallBanner = ({onDismiss}: IOSInstallBannerProps) => {
         </div>
         <div style={{flex: 1, minWidth: 0}}>
             <div style={{fontWeight: 600, fontSize: 14, color: colors.text, marginBottom: 4}}>
-                Install MowgliNext
+                {t('iosInstallBanner.title')}
             </div>
             <div style={{fontSize: 12, color: colors.muted, lineHeight: 1.4}}>
-                Tap <ShareIcon/> then <strong style={{color: colors.text}}>Add to Home Screen</strong> for full-screen experience
+                {t('iosInstallBanner.tapPrefix')} <ShareIcon/> {t('iosInstallBanner.then')} <strong style={{color: colors.text}}>{t('iosInstallBanner.addToHomeScreen')}</strong> {t('iosInstallBanner.suffix')}
             </div>
         </div>
         <button
             onClick={onDismiss}
-            aria-label="Dismiss"
+            aria-label={t('iosInstallBanner.dismiss')}
             style={{
                 background: 'none',
                 border: 'none',

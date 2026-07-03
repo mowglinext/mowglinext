@@ -3,6 +3,7 @@ import {render, screen} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {AreasListPanel} from './AreasListPanel.tsx';
 import type {AreaListItem} from '../utils/types.ts';
+import i18n from "../../../i18n";
 
 describe('AreasListPanel', () => {
     const areas: AreaListItem[] = [
@@ -13,7 +14,7 @@ describe('AreasListPanel', () => {
 
     it('shows area count in header', () => {
         render(<AreasListPanel areas={areas} />);
-        expect(screen.getByText('Areas (3)')).toBeInTheDocument();
+        expect(screen.getByText(i18n.t('mapAreasList.areasHeader', {count: 3}))).toBeInTheDocument();
     });
 
     it('renders all areas immediately (no expand needed)', () => {

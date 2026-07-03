@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <memory>
@@ -27,6 +28,7 @@
 #include "mowgli_behavior/action_nodes.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
+#include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
@@ -39,6 +41,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/bool.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 using namespace std::chrono_literals;
 
@@ -67,6 +70,24 @@ public:
     context_->tf_buffer = std::make_shared<tf2_ros::Buffer>(get_clock());
     context_->tf_listener = std::make_shared<tf2_ros::TransformListener>(*context_->tf_buffer);
     context_->helper_node = rclcpp::Node::make_shared("_bt_helper_node");
+
+    // Disk-backed coverage resume: where FollowStrip persists per-area progress
+    // so an interrupted mow survives a full process/container restart (reboot,
+    // crash, docker restart, power-cycle after an emergency stop) — the in-RAM
+    // BTContext resume only survives a live BT halt. Default lives on the
+    // bind-mounted maps volume so it outlives the container. Empty disables it.
+    context_->coverage_resume_path =
+        declare_parameter<std::string>("coverage_resume_path", "/ros2_ws/maps/coverage_resume.txt");
+    if (loadCoverageResumeState(*context_))
+    {
+      RCLCPP_INFO(get_logger(),
+                  "Restored coverage resume state from %s (current_area=%d, %zu area(s) with a "
+                  "resume cursor, %zu completed)",
+                  context_->coverage_resume_path.c_str(),
+                  context_->current_area,
+                  context_->area_resume_pose_index.size(),
+                  context_->completed_areas.size());
+    }
 
     setupSubscribers();
     setupServiceServer();
@@ -241,7 +262,37 @@ private:
           }
 
           // RTK fixed (fix_type >= 4) with reasonable accuracy → GPS is fixed.
-          context_->gps_is_fixed = (context_->gps_fix_type >= 4) && (msg->position_accuracy < 0.1f);
+          // DEBOUNCED: the F9P fix_type flickers RTK-Fixed(4)↔Float(3) per epoch
+          // even at cm-stable position. Writing gps_is_fixed raw made it chatter,
+          // which flapped SetNavMode (precise↔degraded) on every BT tick and reset
+          // the MPPI optimizer ~5-10x/s → jerky, hesitant coverage (the robot
+          // could never warm-start a trajectory). Only flip gps_is_fixed once the
+          // raw condition has held steady for kGpsFixDebounceSec, so the per-epoch
+          // flicker is ignored while a genuine, sustained change still propagates.
+          constexpr double kGpsFixDebounceSec = 2.0;
+          const bool raw_fixed = (context_->gps_fix_type >= 4) && (msg->position_accuracy < 0.1f);
+          const rclcpp::Time gps_now = this->now();
+          if (!gps_fix_debounce_init_)
+          {
+            // Seed on the first sample (avoids subtracting an uninitialised Time,
+            // which would also risk a clock-source mismatch exception).
+            gps_fix_debounce_init_ = true;
+            gps_fix_candidate_ = raw_fixed;
+            gps_fix_candidate_since_ = gps_now;
+            context_->gps_is_fixed = raw_fixed;
+          }
+          else
+          {
+            if (raw_fixed != gps_fix_candidate_)
+            {
+              gps_fix_candidate_ = raw_fixed;
+              gps_fix_candidate_since_ = gps_now;
+            }
+            if ((gps_now - gps_fix_candidate_since_).seconds() >= kGpsFixDebounceSec)
+            {
+              context_->gps_is_fixed = gps_fix_candidate_;
+            }
+          }
           context_->gps_quality = std::clamp(1.0f - msg->position_accuracy, 0.0f, 1.0f);
         });
 
@@ -293,9 +344,23 @@ private:
                HighLevelControl::Response::SharedPtr resp)
         {
           RCLCPP_INFO(get_logger(), "HighLevelControl: received command=%u", req->command);
+          // COMMAND_S2 (4, "mow next area" — the GUI's onMowNextArea button) has
+          // no dedicated MainLogic branch: in this architecture mowing always
+          // resumes from the next UN-mowed area (GetNextUnmowedArea), so "mow
+          // next area" is functionally COMMAND_START. Normalise 4 -> 1 here so the
+          // button actually mows instead of falling through to IdleSequence
+          // (which stops the robot). If a distinct "skip current, jump to next"
+          // semantic is ever needed, give it its own branch instead.
+          uint8_t cmd = req->command;
+          if (cmd == HighLevelControl::Request::COMMAND_S2)
+          {
+            cmd = HighLevelControl::Request::COMMAND_START;
+            RCLCPP_INFO(get_logger(),
+                        "HighLevelControl: COMMAND_S2 normalised to COMMAND_START (mow next area)");
+          }
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
-            context_->current_command = req->command;
+            context_->current_command = cmd;
           }
           resp->success = true;
         });
@@ -321,6 +386,72 @@ private:
         });
 
     RCLCPP_DEBUG(get_logger(), "~/start_in_area service server created");
+
+    // ~/clear_coverage_resume: "Start fresh" — discard any persisted mowing
+    // progress so the NEXT COMMAND_START begins at the first line instead of
+    // resuming mid-path. The GUI offers this vs "Resume" when
+    // coverage_resume_available is true (a prior session was interrupted without
+    // reaching a dock/EndSession boundary). This is the operator's explicit
+    // resume-vs-restart choice (issue: "starts at 2nd/3rd line"); the automatic
+    // in-session resume after an e-stop is unaffected.
+    // The clear is DEFERRED to the BT tick thread (processed at the top of
+    // tickTree) rather than done inline: the BT nodes (FollowStrip,
+    // GetNextUnmowedArea, EndSession) read/write these maps WITHOUT the context
+    // mutex — safe today only because every callback of this node shares the
+    // default MutuallyExclusive callback group, so tick/service/timers are
+    // serialized even under the MultiThreadedExecutor. Deferring keeps every
+    // map mutation on the tick thread, so a future Reentrant group / callback
+    // re-homing can't silently turn this into a data race against a mid-tick
+    // `const auto& done = ctx->area_completed_swaths[...]` reference.
+    clear_coverage_resume_srv_ = create_service<std_srvs::srv::Trigger>(
+        "~/clear_coverage_resume",
+        [this](const std_srvs::srv::Trigger::Request::SharedPtr /*req*/,
+               std_srvs::srv::Trigger::Response::SharedPtr resp)
+        {
+          clear_resume_requested_.store(true);
+          RCLCPP_INFO(get_logger(),
+                      "Coverage resume clear requested — applied before the next BT tick");
+          resp->success = true;
+          resp->message = "coverage resume state cleared";
+        });
+
+    // Latched signal the GUI reads to decide whether to offer "Resume vs Start
+    // fresh". True when a prior session left recoverable progress.
+    resume_available_pub_ = create_publisher<std_msgs::msg::Bool>("~/coverage_resume_available",
+                                                                  rclcpp::QoS(1).transient_local());
+    publishResumeAvailable();
+    resume_available_timer_ = create_wall_timer(1s,
+                                                [this]()
+                                                {
+                                                  publishResumeAvailable();
+                                                });
+
+    RCLCPP_DEBUG(get_logger(), "~/clear_coverage_resume service + resume-available signal created");
+  }
+
+  // Publish whether a coverage session can be resumed (a persisted resume cursor
+  // or completed-area set survives from an interrupted session). Republished on
+  // change; latched so a late GUI subscriber always gets the current value.
+  void publishResumeAvailable()
+  {
+    if (!resume_available_pub_)
+    {
+      return;
+    }
+    bool available;
+    {
+      std::lock_guard<std::mutex> lock(context_->context_mutex);
+      available = !context_->area_resume_pose_index.empty() || !context_->completed_areas.empty();
+    }
+    if (available == last_resume_available_ && resume_available_published_)
+    {
+      return;
+    }
+    std_msgs::msg::Bool msg;
+    msg.data = available;
+    resume_available_pub_->publish(msg);
+    last_resume_available_ = available;
+    resume_available_published_ = true;
   }
 
   // Non-blocking check for Nav2 action servers.  The BT tick loop starts
@@ -421,16 +552,26 @@ private:
     blackboard_->set("dock_pose", dock_pose);
     blackboard_->set("undock_pose", undock_pose);
 
-    // Undock reverse speed, sourced from mowgli_robot.yaml.undock_speed
-    // and consumed by the BackUp BT instances in main_tree.xml via the
-    // {undock_speed} blackboard reference. Previously the speed was
-    // hardcoded as a string attribute in three undock-flow BackUps,
-    // which kept the yaml value orphan — editing the GUI slider did
-    // nothing. Recovery-side BackUps (e.g. OBSTACLE_BACKOFF) intentionally
-    // stay hardcoded; they are not "undocking" so they should not move
-    // when the operator tunes undock speed. See issue #191.
+    // Undock reverse speed and distance, sourced from mowgli_robot.yaml and
+    // consumed by the BackUp BT instances in main_tree.xml via the
+    // {undock_speed} / {undock_distance} blackboard references. Previously
+    // both were hardcoded in the BT XML, so editing the YAML had no effect.
+    // Recovery-side BackUps (e.g. OBSTACLE_BACKOFF) intentionally stay
+    // hardcoded; they are not undocking and must not shift when the operator
+    // tunes undock distance. See issue #191.
     const double undock_speed = declare_parameter<double>("undock_speed", 0.15);
     blackboard_->set("undock_speed", undock_speed);
+    const double undock_distance = declare_parameter<double>("undock_distance", 1.0);
+    blackboard_->set("undock_distance", undock_distance);
+
+    // idle_nav2_suspend (default false): when true, the BT PAUSEs the Nav2
+    // lifecycle stack (via SetNav2Lifecycle) while parked on the dock to cut
+    // the idle CPU/thermal load of the always-looping costmaps, and RESUMEs
+    // it (root Nav2ResumeGuard) before any motion. Default-off so enabling
+    // it is a deliberate, per-site operator decision. Read by the
+    // SetNav2Lifecycle nodes from the blackboard.
+    const bool idle_nav2_suspend = declare_parameter<bool>("idle_nav2_suspend", false);
+    blackboard_->set("idle_nav2_suspend", idle_nav2_suspend);
 
     // Transit / mowing speeds, sourced from mowgli_robot.yaml and applied to
     // the live controllers by SetNavMode (FollowPath.desired_linear_vel for the
@@ -483,10 +624,29 @@ private:
     const double battery_full_pct = declare_parameter<double>("battery_full_percent", 95.0);
     const double battery_critical_voltage =
         declare_parameter<double>("battery_critical_voltage", 0.0);
+    // Hysteresis recovery threshold for the critical-battery handler: the
+    // robot enters critical-dock at battery_critical_percent but only leaves
+    // it (back to IDLE_DOCKED) once charged above this higher level. Without
+    // the upper threshold the critical state flapped at the entry boundary
+    // and re-ran DockRobot every tick while the pack crawled back up. Clamp
+    // to strictly above the entry threshold so the band can never invert.
+    double battery_critical_recovery_pct =
+        declare_parameter<double>("battery_critical_recovery_percent", 30.0);
+    if (battery_critical_recovery_pct <= battery_critical_pct)
+    {
+      battery_critical_recovery_pct = battery_critical_pct + 10.0;
+      RCLCPP_WARN(get_logger(),
+                  "battery_critical_recovery_percent must exceed "
+                  "battery_critical_percent (%.1f); clamped to %.1f",
+                  battery_critical_pct,
+                  battery_critical_recovery_pct);
+    }
     blackboard_->set("battery_low_pct", static_cast<float>(battery_low_pct));
     blackboard_->set("battery_critical_pct", static_cast<float>(battery_critical_pct));
     blackboard_->set("battery_full_pct", static_cast<float>(battery_full_pct));
     blackboard_->set("battery_critical_voltage", static_cast<float>(battery_critical_voltage));
+    blackboard_->set("battery_critical_recovery_pct",
+                     static_cast<float>(battery_critical_recovery_pct));
 
     tree_ = factory_.createTreeFromFile(tree_file, blackboard_);
 
@@ -518,6 +678,25 @@ private:
 
   void tickTree()
   {
+    // Apply a pending "Start fresh" clear BEFORE ticking, on the tick thread —
+    // every coverage-map mutation stays on this thread (see the service
+    // registration comment). Between ticks no BT node holds a reference into
+    // the maps, so clearing here is race-free by construction.
+    if (clear_resume_requested_.exchange(false))
+    {
+      std::lock_guard<std::mutex> lock(context_->context_mutex);
+      context_->area_completed_swaths.clear();
+      context_->area_swath_count.clear();
+      context_->area_resume_pose_index.clear();
+      context_->area_path_pose_count.clear();
+      context_->completed_areas.clear();
+      context_->attempted_areas.clear();
+      context_->area_attempt_count.clear();
+      context_->area_last_coverage.clear();
+      clearCoverageResumeState(*context_);
+      RCLCPP_INFO(get_logger(),
+                  "Cleared coverage resume state on request — next start begins fresh");
+    }
     try
     {
       const BT::NodeStatus status = tree_.tickOnce();
@@ -542,6 +721,13 @@ private:
 
   std::shared_ptr<BTContext> context_;
 
+  // GPS-fixed debounce state (see the /gps callback): rides through the F9P
+  // per-epoch Fixed↔Float flicker so gps_is_fixed — and thus SetNavMode — does
+  // not chatter and reset the MPPI optimizer.
+  bool gps_fix_debounce_init_{false};
+  bool gps_fix_candidate_{false};
+  rclcpp::Time gps_fix_candidate_since_;
+
   // Subscribers
   rclcpp::Subscription<mowgli_interfaces::msg::Status>::SharedPtr status_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::Emergency>::SharedPtr emergency_sub_;
@@ -555,6 +741,17 @@ private:
   // Service server
   rclcpp::Service<mowgli_interfaces::srv::HighLevelControl>::SharedPtr high_level_control_srv_;
   rclcpp::Service<mowgli_interfaces::srv::StartInArea>::SharedPtr start_in_area_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_coverage_resume_srv_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr resume_available_pub_;
+  rclcpp::TimerBase::SharedPtr resume_available_timer_;
+  // Set by the ~/clear_coverage_resume service, consumed by tickTree() so the
+  // actual map clearing happens on the BT tick thread (see the service comment).
+  std::atomic<bool> clear_resume_requested_{false};
+  // Only touched from this node's mutually-exclusive callback group (timer +
+  // service + init), so plain bools would work today — atomic future-proofs
+  // them against a Reentrant-group conversion, same rationale as the deferral.
+  std::atomic<bool> last_resume_available_{false};
+  std::atomic<bool> resume_available_published_{false};
 
   // BehaviorTree.CPP
   BT::BehaviorTreeFactory factory_;

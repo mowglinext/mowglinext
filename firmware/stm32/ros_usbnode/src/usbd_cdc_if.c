@@ -22,6 +22,8 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "usbd_cdc_if.h"
+#include "main.h"
+#include "mowgli_protocol.h"
 #include <stdatomic.h>
 #include <signal.h>
 
@@ -69,6 +71,12 @@
 #undef APP_RX_DATA_SIZE
 #define APP_RX_DATA_SIZE 2
 #endif
+
+/* Only after this bounded timeout may the wrapper forcibly clear hcdc->TxState.
+ * Shorter anomalies are treated as transient and left to the normal TX-complete
+ * callback path. */
+#define CDC_TX_BUSY_TIMEOUT_MS 500u
+#define CDC_TELEMETRY_PROBE_MS 1000u
 /* USER CODE END PRIVATE_DEFINES */
 
 /**
@@ -109,10 +117,23 @@ static uint32_t s_rxtail = 0;
 
 static uint32_t s_lastTransmitStart = 0;
 static uint32_t s_lastTransmitComplete = 0;
+static uint32_t s_lastTransmitSubmit = 0;
 static uint32_t s_rxDropCounterHead = 0;
 static uint32_t s_rxDropCounterTail = 0;
 static uint32_t s_txDropCounterHead = 0;
 static uint32_t s_txDropCounterTail = 0;
+static uint32_t s_txQueueFullCount = 0;
+static uint32_t s_txPacketFailCount = 0;
+static uint32_t s_txBusyStuckCount = 0;
+static uint32_t s_txCompleteMissingCount = 0;
+static uint32_t s_hostClosedSkipCount = 0;
+static uint32_t s_usbResetSeenCount = 0;
+static uint32_t s_usbSuspendSeenCount = 0;
+static uint32_t s_telemetryProbeUntil = 0;
+static uint8_t s_usbSuspended = 0;
+static uint8_t s_txPacketArmed = 0;
+static uint8_t s_txPacketFailPendingRecovery = 0;
+static uint8_t s_txRecoveryHold = 0;
 
 #ifdef USE_USB_FS
     static uint8_t ReceiveBuffer[CDC_DATA_FS_MAX_PACKET_SIZE];
@@ -168,6 +189,12 @@ static int8_t CDC_Receive(uint8_t *pbuf, uint32_t *Len);
 static int8_t CDC_TransmitCplt(uint8_t *pbuf, uint32_t *Len, uint8_t epnum);
 
 /* USER CODE BEGIN PRIVATE_FUNCTIONS_DECLARATION */
+static USBD_CDC_HandleTypeDef *CDC_ClassData(void);
+static uint8_t CDC_IsConfiguredInternal(void);
+static void CDC_ArmTelemetryProbe(void);
+static void CDC_ClearRecoveryHold(void);
+static void CDC_EnterRecoveryHold(void);
+static uint8_t CDC_TelemetryProbeActive(uint32_t now_tick);
 static uint8_t CDC_RXQueue_Enqueue(const uint8_t *buffer, uint32_t length);
 static uint8_t CDC_TXQueue_Enqueue(const uint8_t *buffer, uint32_t length);
 static const uint8_t* CDC_TXQueue_Dequeue(uint32_t *length);
@@ -197,6 +224,44 @@ USBD_CDC_ItfTypeDef USBD_Interface_fops_HS = {
 #endif
 
 /* Private functions ---------------------------------------------------------*/
+static USBD_CDC_HandleTypeDef *CDC_ClassData(void)
+{
+    return (USBD_CDC_HandleTypeDef*)hUsbDevice.pClassData;
+}
+
+static uint8_t CDC_IsConfiguredInternal(void)
+{
+    return hUsbDevice.dev_state == USBD_STATE_CONFIGURED;
+}
+
+static void CDC_ArmTelemetryProbe(void)
+{
+    s_telemetryProbeUntil = HAL_GetTick() + CDC_TELEMETRY_PROBE_MS;
+}
+
+static void CDC_ClearRecoveryHold(void)
+{
+    atomic_signal_fence(memory_order_acquire);
+    s_txRecoveryHold = 0u;
+    atomic_signal_fence(memory_order_release);
+}
+
+static void CDC_EnterRecoveryHold(void)
+{
+    atomic_signal_fence(memory_order_acquire);
+    s_txPacketArmed = 0u;
+    s_txPacketFailPendingRecovery = 0u;
+    s_lastTransmitSubmit = 0u;
+    s_txtail = s_txhead;
+    s_txRecoveryHold = 1u;
+    atomic_signal_fence(memory_order_release);
+}
+
+static uint8_t CDC_TelemetryProbeActive(uint32_t now_tick)
+{
+    return (uint8_t)((int32_t)(s_telemetryProbeUntil - now_tick) > 0);
+}
+
 /**
  * @brief  Initializes the CDC media low layer over the FS USB IP
  * @retval USBD_OK if all operations are OK else USBD_FAIL
@@ -207,6 +272,12 @@ static int8_t CDC_Init(void)
     /* Set Application Buffers */
     USBD_CDC_SetTxBuffer(&hUsbDevice, UserTxBufferFS, 0);
     USBD_CDC_SetRxBuffer(&hUsbDevice, ReceiveBuffer);
+    s_usbSuspended = 0u;
+    s_txPacketArmed = 0u;
+    s_txPacketFailPendingRecovery = 0u;
+    s_lastTransmitSubmit = 0u;
+    CDC_ClearRecoveryHold();
+    CDC_ArmTelemetryProbe();
     return (USBD_OK);
     /* USER CODE END 3 */
 }
@@ -218,6 +289,10 @@ static int8_t CDC_Init(void)
 static int8_t CDC_DeInit(void)
 {
     /* USER CODE BEGIN 4 */
+    s_txPacketArmed = 0u;
+    s_txPacketFailPendingRecovery = 0u;
+    s_lastTransmitSubmit = 0u;
+    CDC_EnterRecoveryHold();
     return (USBD_OK);
     /* USER CODE END 4 */
 }
@@ -323,6 +398,10 @@ static int8_t CDC_Control(uint8_t cmd, uint8_t *pbuf, uint16_t length)
 static int8_t CDC_Receive(uint8_t *Buf, uint32_t *Len)
 {
     /* USER CODE BEGIN 6 */
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_RX_ENTER);
+    CDC_ArmTelemetryProbe();
+    CDC_ClearRecoveryHold();
+    s_txPacketFailPendingRecovery = 0u;
     uint8_t dataHandled = CDC_DataReceivedHandler(Buf, *Len);
 
     if (dataHandled == CDC_RX_DATA_NOTHANDLED) {
@@ -333,7 +412,9 @@ static int8_t CDC_Receive(uint8_t *Buf, uint32_t *Len)
         }
     }
 
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_RX_EXIT);
     USBD_CDC_ReceivePacket(&hUsbDevice);
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_RX_EXIT);
     return (USBD_OK);
     /* USER CODE END 6 */
 }
@@ -356,15 +437,23 @@ uint8_t CDC_Transmit(const void *Buf, uint32_t Len)
     uint8_t result = USBD_OK;
     /* USER CODE BEGIN 7 */
 
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_QUEUE);
     s_lastTransmitStart = HAL_GetTick();
     result = CDC_TXQueue_Enqueue((const uint8_t*)Buf, Len);
 
     if (result != USBD_OK) {
+        WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_QUEUE_FULL);
         s_txDropCounterHead++;
-        DB_TRACE("DROP :  %d \r\n",s_txDropCounterHead);
+        s_txQueueFullCount++;
+        /* Keep the drop counter, but do not print every overflow over the
+         * debug UART: when the host disconnects or the CDC TX queue backs up,
+         * this path can trigger at IMU rate and turn a transient USB stall into
+         * enough debug-UART backpressure to starve the main loop watchdog. */
     }
 
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_RESUME);
     CDC_ResumeTransmit();
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_EXIT);
 
     CDC_EXIT_CRITICAL_SECTION();
     /* USER CODE END 7 */
@@ -395,6 +484,7 @@ uint8_t CDC_TransmitTimed(const void* Buf, uint32_t Len, uint32_t TimeoutMs)
 
     CDC_ENTER_CRITICAL_SECTION();
 
+    const uint8_t *byteBuf = (const uint8_t *)Buf;
     uint32_t start = HAL_GetTick();
     uint8_t result = USBD_OK;
     while (Len > 0) {
@@ -404,10 +494,10 @@ uint8_t CDC_TransmitTimed(const void* Buf, uint32_t Len, uint32_t TimeoutMs)
         }
 
         uint32_t enqueueSize = MIN(Len, APP_TX_DATA_SIZE);
-        result = CDC_Transmit(Buf, enqueueSize);
+        result = CDC_Transmit(byteBuf, enqueueSize);
         if (result == USBD_OK) {
             Len -= enqueueSize;
-            Buf += Len;
+            byteBuf += Len;
         }
 
     }
@@ -436,11 +526,19 @@ static int8_t CDC_TransmitCplt(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
     UNUSED(Buf);
     UNUSED(epnum);
 
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_COMPLETE);
+
     atomic_signal_fence(memory_order_acquire);
-    s_txtail += *Len;
     s_lastTransmitComplete = HAL_GetTick();
+    if (s_txPacketArmed != 0u) {
+        s_txtail += *Len;
+    }
+    s_txPacketArmed = 0u;
+    s_txPacketFailPendingRecovery = 0u;
+    s_lastTransmitSubmit = 0u;
     atomic_signal_fence(memory_order_release);
 
+    CDC_ClearRecoveryHold();
     CDC_ResumeTransmit();
 
     /* USER CODE END 13 */
@@ -456,7 +554,36 @@ static int8_t CDC_TransmitCplt(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
  */
 void CDC_ResumeTransmit(void)
 {
+    USBD_CDC_HandleTypeDef *hcdc;
+
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_RESUME);
+    if (s_txRecoveryHold != 0u) {
+        WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_EXIT);
+        return;
+    }
+
+    hcdc = CDC_ClassData();
     if (CDC_IsBusy()) {
+        if (hcdc != NULL && (s_txPacketArmed != 0u || s_txPacketFailPendingRecovery != 0u) &&
+            CDC_IsConfiguredInternal() &&
+            s_usbSuspended == 0u &&
+            (HAL_GetTick() - s_lastTransmitSubmit) > CDC_TX_BUSY_TIMEOUT_MS) {
+            WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_BUSY_STUCK);
+            s_txBusyStuckCount++;
+            s_txCompleteMissingCount++;
+            /* The class TxState stayed busy beyond the documented timeout while
+             * the device was configured/open enough for normal traffic. Drop
+             * queued telemetry and release the vendor busy flag so a later USB
+             * event or host RX can restart cleanly. */
+            hcdc->TxState = 0u;
+            CDC_EnterRecoveryHold();
+        }
+        WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_EXIT);
+        return;
+    }
+
+    if (!CDC_IsConfiguredInternal() || s_usbSuspended != 0u) {
+        WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_EXIT);
         return;
     }
 
@@ -464,8 +591,18 @@ void CDC_ResumeTransmit(void)
     const uint8_t *queueData = CDC_TXQueue_Dequeue(&queueLength);
     if (queueLength > 0) {
         USBD_CDC_SetTxBuffer(&hUsbDevice, (uint8_t*) queueData, queueLength);
-        USBD_CDC_TransmitPacket(&hUsbDevice);
+        WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_PACKET);
+        s_txPacketArmed = 1u;
+        s_txPacketFailPendingRecovery = 0u;
+        s_lastTransmitSubmit = HAL_GetTick();
+        if (USBD_CDC_TransmitPacket(&hUsbDevice) != USBD_OK) {
+            WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_PACKET_FAIL);
+            s_txPacketFailCount++;
+            s_txPacketArmed = 0u;
+            s_txPacketFailPendingRecovery = 1u;
+        }
     }
+    WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_EXIT);
 }
 
 /**
@@ -688,9 +825,9 @@ uint32_t CDC_RXQueue_Dequeue(void *Dst, uint32_t MaxLen)
  */
 uint8_t CDC_IsBusy()
 {
-    USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*) hUsbDevice.pClassData;
-    
-    return hcdc->TxState != 0;
+    const USBD_CDC_HandleTypeDef *hcdc = CDC_ClassData();
+
+    return hcdc != NULL && hcdc->TxState != 0u;
 }
 
 /**
@@ -770,6 +907,17 @@ uint32_t CDC_GetLastTransmitCompleteTick()
     return s_lastTransmitComplete;
 }
 
+uint8_t CDC_IsConfigured()
+{
+    return CDC_IsConfiguredInternal();
+}
+
+uint8_t CDC_IsSuspended()
+{
+    atomic_signal_fence(memory_order_acquire);
+    return s_usbSuspended;
+}
+
 /**
  * @brief  CDC_IsComportOpen
  *         Check if the connectd computer is reading data through the virtual com port
@@ -786,6 +934,116 @@ uint8_t CDC_IsComportOpen()
 {
     atomic_signal_fence(memory_order_acquire);
     return s_lastTransmitStart != 0 && s_lastTransmitStart - s_lastTransmitComplete < 500;
+}
+
+uint8_t CDC_ShouldSendTelemetry()
+{
+    const uint32_t now_tick = HAL_GetTick();
+
+    if (!CDC_IsConfiguredInternal()) {
+        WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_HOST_CLOSED);
+        s_hostClosedSkipCount++;
+        return 0u;
+    }
+
+    if (s_usbSuspended != 0u) {
+        WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_USB_SUSPEND);
+        return 0u;
+    }
+
+    if (s_txRecoveryHold != 0u) {
+        WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_TX_BUSY_STUCK);
+        return 0u;
+    }
+
+    if (s_lastTransmitStart == 0u || CDC_TelemetryProbeActive(now_tick)) {
+        return 1u;
+    }
+
+    if (!CDC_IsComportOpen()) {
+        WATCHDOG_SetMainLoopStage(WATCHDOG_STAGE_CDC_HOST_CLOSED);
+        s_hostClosedSkipCount++;
+        return 0u;
+    }
+
+    return 1u;
+}
+
+void CDC_NotifyUsbReset(void)
+{
+    s_usbResetSeenCount++;
+    s_usbSuspended = 0u;
+    s_txPacketArmed = 0u;
+    s_txPacketFailPendingRecovery = 0u;
+    s_lastTransmitSubmit = 0u;
+    CDC_ClearRecoveryHold();
+    CDC_ArmTelemetryProbe();
+}
+
+void CDC_NotifyUsbSuspend(void)
+{
+    s_usbSuspendSeenCount++;
+    s_usbSuspended = 1u;
+}
+
+void CDC_NotifyUsbResume(void)
+{
+    s_usbSuspended = 0u;
+    s_txPacketFailPendingRecovery = 0u;
+    CDC_ClearRecoveryHold();
+    CDC_ArmTelemetryProbe();
+}
+
+void CDC_NotifyUsbConnect(void)
+{
+    s_usbSuspended = 0u;
+    s_txPacketFailPendingRecovery = 0u;
+    CDC_ClearRecoveryHold();
+    CDC_ArmTelemetryProbe();
+}
+
+void CDC_NotifyUsbDisconnect(void)
+{
+    s_usbSuspended = 0u;
+    s_txPacketArmed = 0u;
+    s_txPacketFailPendingRecovery = 0u;
+    s_lastTransmitSubmit = 0u;
+    CDC_EnterRecoveryHold();
+}
+
+uint32_t CDC_GetTxQueueFullCount(void)
+{
+    return s_txQueueFullCount;
+}
+
+uint32_t CDC_GetTxPacketFailCount(void)
+{
+    return s_txPacketFailCount;
+}
+
+uint32_t CDC_GetTxBusyStuckCount(void)
+{
+    return s_txBusyStuckCount;
+}
+
+uint32_t CDC_GetTxCompleteMissingCount(void)
+{
+    return s_txCompleteMissingCount;
+}
+
+uint32_t CDC_GetHostClosedSkipCount(void)
+{
+    return s_hostClosedSkipCount;
+}
+
+uint32_t CDC_GetUsbResetSeenCount(void)
+{
+    return s_usbResetSeenCount;
+}
+
+uint32_t CDC_GetUsbSuspendSeenCount(void)
+{
+    return s_usbSuspendSeenCount;
 }
 
 /**

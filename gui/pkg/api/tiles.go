@@ -1,7 +1,7 @@
 package api
 
 import (
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"log"
 	"net/http"

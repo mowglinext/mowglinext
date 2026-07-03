@@ -1,3 +1,4 @@
+import {useTranslation} from "react-i18next";
 import {useThemeMode} from "../../theme/ThemeContext.tsx";
 import {DashCard} from "./Card.tsx";
 import {ActionButton} from "./ActionButton.tsx";
@@ -35,6 +36,7 @@ interface HeroCardProps {
 
 export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, onResumeFromBoundary, onResetEmergency}: HeroCardProps) {
   const {colors} = useThemeMode();
+  const {t} = useTranslation();
   const {state} = data;
   const critical = state === 'BOUNDARY_EMERGENCY_STOP' || state === 'EMERGENCY';
 
@@ -58,28 +60,28 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
               fontSize: compact ? 10 : 11, color: colors.danger, fontWeight: 700,
               letterSpacing: '0.12em', textTransform: 'uppercase' as const,
             }}>
-              Mower needs you
+              {t('dashboardHeroCard.mowerNeedsYou')}
             </div>
             <div className="mn-display" style={{fontSize: compact ? 24 : 34, color: colors.text, marginTop: 6, lineHeight: 1.05}}>
-              {state === 'BOUNDARY_EMERGENCY_STOP' ? 'Crossed the boundary' : 'Emergency stop'}
+              {state === 'BOUNDARY_EMERGENCY_STOP' ? t('dashboardHeroCard.crossedTheBoundary') : t('dashboardHeroCard.emergencyStop')}
             </div>
             <div style={{fontSize: compact ? 13 : 14, color: colors.textDim, marginTop: 6, lineHeight: 1.5}}>
               {state === 'BOUNDARY_EMERGENCY_STOP'
-                ? 'Lift the mower back inside the boundary, then resume.'
-                : 'Check the mower is clear of obstacles, then release.'}
+                ? t('dashboardHeroCard.crossedBoundaryHint')
+                : t('dashboardHeroCard.emergencyStopHint')}
             </div>
           </div>
         </div>
         <div style={{display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap'}}>
           {state === 'BOUNDARY_EMERGENCY_STOP' ? (
             <>
-              <ActionButton primary icon={<IconHome size={16}/>} label="Send home" onClick={onHome}
+              <ActionButton primary icon={<IconHome size={16}/>} label={t('dashboardHeroCard.sendHome')} onClick={onHome}
                        style={compact ? {flex: 1, justifyContent: 'center'} : undefined}/>
-              <ActionButton label="Resume" icon={<IconPlay size={14}/>} onClick={onResumeFromBoundary}
+              <ActionButton label={t('dashboardHeroCard.resume')} icon={<IconPlay size={14}/>} onClick={onResumeFromBoundary}
                        style={compact ? {flex: 1, justifyContent: 'center'} : undefined}/>
             </>
           ) : (
-            <ActionButton primary icon={<IconAlert size={16}/>} label="Reset emergency" onClick={onResetEmergency}
+            <ActionButton primary icon={<IconAlert size={16}/>} label={t('dashboardHeroCard.resetEmergency')} onClick={onResetEmergency}
                      style={compact ? {flex: 1, justifyContent: 'center'} : undefined}/>
           )}
         </div>
@@ -105,20 +107,20 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
           {compact ? (
             <div style={{display: 'flex', alignItems: 'center', gap: 14, width: '100%'}}>
               <RadialGauge value={data.battery} size={gaugeSize} thickness={8} color={colors.accent} track="rgba(255,255,255,0.08)">
-                <div className="mn-num" style={{fontSize: 32, color: colors.text, lineHeight: 1}}>{Math.round(data.battery)}<span style={{fontSize: 14, color: colors.textDim, fontFamily: 'Geist Mono, monospace', textTransform: 'lowercase', marginLeft: 2}}>%</span></div>
+                <div className="mn-num" style={{fontSize: 32, color: colors.text, lineHeight: 1}}>{Math.round(data.battery)}<span style={{fontSize: 14, color: colors.textDim, fontFamily: 'Space Grotesk, monospace', textTransform: 'lowercase', marginLeft: 2}}>%</span></div>
               </RadialGauge>
               <div style={{flex: 1}}>
                 <div style={{
                   fontSize: 10, color: colors.accent, fontWeight: 700,
                   letterSpacing: '0.08em', display: 'flex', gap: 3, alignItems: 'center',
                 }}>
-                  <IconBolt size={10}/> CHARGING
+                  <IconBolt size={10}/> {t('dashboardHeroCard.charging')}
                 </div>
                 <div style={{fontSize: 20, color: colors.text, marginTop: 6}}>
-                  ~{etaMin} min left
+                  {t('dashboardHeroCard.minLeft', {n: etaMin})}
                 </div>
                 <div style={{fontSize: 13, color: colors.textDim, marginTop: 4}}>
-                  Pulling {data.current.toFixed(1)}A
+                  {t('dashboardHeroCard.pulling', {amps: data.current.toFixed(1)})}
                 </div>
               </div>
             </div>
@@ -131,7 +133,7 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
                   letterSpacing: '0.08em', display: 'flex', gap: 3,
                   alignItems: 'center', justifyContent: 'center',
                 }}>
-                  <IconBolt size={10}/> CHARGING
+                  <IconBolt size={10}/> {t('dashboardHeroCard.charging')}
                 </div>
               </RadialGauge>
               <div style={{flex: 1}}>
@@ -139,16 +141,16 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
                   fontSize: 11, color: colors.accent, fontWeight: 700,
                   letterSpacing: '0.12em', textTransform: 'uppercase' as const,
                 }}>
-                  Topping up
+                  {t('dashboardHeroCard.toppingUp')}
                 </div>
                 <div style={{fontSize: 28, color: colors.text, marginTop: 6}}>
-                  Back to full in ~{etaMin} min
+                  {t('dashboardHeroCard.backToFull', {n: etaMin})}
                 </div>
                 <div style={{fontSize: 14, color: colors.textDim, marginTop: 6, lineHeight: 1.5}}>
-                  On the dock, pulling {data.current.toFixed(1)}A. I'll take over again once we hit 100%.
+                  {t('dashboardHeroCard.onDockPulling', {amps: data.current.toFixed(1)})}
                 </div>
                 <div style={{display: 'flex', gap: 8, marginTop: 14}}>
-                  <ActionButton label="Mow anyway" icon={<IconPlay size={14}/>} onClick={onStart}/>
+                  <ActionButton label={t('dashboardHeroCard.mowAnyway')} icon={<IconPlay size={14}/>} onClick={onStart}/>
                 </div>
               </div>
             </>
@@ -156,7 +158,7 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
         </div>
         {compact && (
           <div style={{display: 'flex', gap: 8, marginTop: 12}}>
-            <ActionButton label="Mow anyway" icon={<IconPlay size={14}/>} onClick={onStart}
+            <ActionButton label={t('dashboardHeroCard.mowAnyway')} icon={<IconPlay size={14}/>} onClick={onStart}
                      style={{flex: 1, justifyContent: 'center'}}/>
           </div>
         )}
@@ -187,18 +189,18 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
               fontSize: compact ? 10 : 11, color: colors.sky, fontWeight: 700,
               letterSpacing: '0.12em', textTransform: 'uppercase' as const,
             }}>
-              Paused -- rain detected
+              {t('dashboardHeroCard.pausedRainDetected')}
             </div>
             <div className="mn-display" style={{fontSize: compact ? 24 : 34, marginTop: 6, lineHeight: 1.1, color: colors.text}}>
-              Waiting out the weather
+              {t('dashboardHeroCard.waitingOutWeather')}
             </div>
             <div style={{fontSize: compact ? 13 : 14, color: colors.textDim, marginTop: 6, lineHeight: 1.5}}>
-              I'll resume automatically when it clears.
+              {t('dashboardHeroCard.resumeWhenClears')}
             </div>
           </div>
         </div>
         <div style={{display: 'flex', gap: 8, marginTop: 12}}>
-          <ActionButton label="Mow anyway" onClick={onStart}
+          <ActionButton label={t('dashboardHeroCard.mowAnyway')} onClick={onStart}
                    style={compact ? {flex: 1, justifyContent: 'center'} : undefined}/>
         </div>
       </DashCard>
@@ -229,18 +231,18 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
               fontSize: compact ? 10 : 11, color: colors.amber, fontWeight: 700,
               letterSpacing: '0.12em', textTransform: 'uppercase' as const,
             }}>
-              Running low
+              {t('dashboardHeroCard.runningLow')}
             </div>
             <div className="mn-display" style={{fontSize: compact ? 24 : 34, marginTop: 6, lineHeight: 1.1, color: colors.text}}>
-              Heading to dock -- {Math.round(data.battery)}%
+              {t('dashboardHeroCard.headingToDock', {pct: Math.round(data.battery)})}
             </div>
             <div style={{fontSize: compact ? 13 : 14, color: colors.textDim, marginTop: 6, lineHeight: 1.5}}>
-              I'll resume automatically once charged.
+              {t('dashboardHeroCard.resumeOnceCharged')}
             </div>
           </div>
         </div>
         <div style={{display: 'flex', gap: 8, marginTop: 12}}>
-          <ActionButton label="Keep mowing" onClick={onStart}
+          <ActionButton label={t('dashboardHeroCard.keepMowing')} onClick={onStart}
                    style={compact ? {flex: 1, justifyContent: 'center'} : undefined}/>
         </div>
       </DashCard>
@@ -252,18 +254,18 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
   const isRecording = state === 'RECORDING';
   const isActiveMowing = state === 'MOWING' || state === 'TRANSIT' || state === 'MANUAL_MOWING';
   if (isActiveMowing || isReturning || state === 'UNDOCKING' || isRecording) {
-    const areaName = data.currentArea ?? 'the lawn';
+    const areaName = data.currentArea ?? t('dashboardHeroCard.theLawn');
     const headline = isActiveMowing
-      ? `Mowing ${areaName}`
+      ? t('dashboardHeroCard.mowingArea', {area: areaName})
       : isRecording
-        ? 'Recording area boundary'
-        : 'Heading back to dock';
+        ? t('dashboardHeroCard.recordingAreaBoundary')
+        : t('dashboardHeroCard.headingBackToDock');
     const subtitle = isActiveMowing
-      ? `${data.areaPct.toFixed(0)}% of this pass done -- ${fmt.mins(data.timeToday)} today`
+      ? t('dashboardHeroCard.passProgress', {pct: data.areaPct.toFixed(0), time: fmt.mins(data.timeToday)})
       : isReturning
-        ? `Battery at ${Math.round(data.battery)}%`
+        ? t('dashboardHeroCard.batteryAt', {pct: Math.round(data.battery)})
         : isRecording
-          ? 'Drive along the boundary, then finish recording'
+          ? t('dashboardHeroCard.driveAlongBoundary')
           : '';
 
     return (
@@ -295,21 +297,21 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
           {(state === 'MOWING' || state === 'MANUAL_MOWING') && (
             <div style={{marginTop: compact ? 10 : 16, display: 'flex', flexDirection: 'column', gap: 4}}>
               <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 11, color: colors.textDim}}>
-                <span>Zone progress</span><span>{data.areaPct.toFixed(0)}%</span>
+                <span>{t('dashboardHeroCard.zoneProgress')}</span><span>{data.areaPct.toFixed(0)}%</span>
               </div>
               <Bar value={data.areaPct} color={colors.accent} track="rgba(255,255,255,0.08)" height={compact ? 6 : 8}/>
             </div>
           )}
           <div style={{display: 'flex', gap: 8, marginTop: compact ? 12 : 18, flexWrap: 'wrap'}}>
             {(state === 'MOWING' || state === 'MANUAL_MOWING') && (
-              <ActionButton label="Pause" icon={<IconPause size={14}/>} onClick={onPause}
+              <ActionButton label={t('dashboardHeroCard.pause')} icon={<IconPause size={14}/>} onClick={onPause}
                        style={compact ? {flex: 1, justifyContent: 'center', padding: '10px 14px'} : undefined}/>
             )}
             {isReturning && (
-              <ActionButton label="Keep mowing" icon={<IconPlay size={14}/>} primary onClick={onStart}
+              <ActionButton label={t('dashboardHeroCard.keepMowing')} icon={<IconPlay size={14}/>} primary onClick={onStart}
                        style={compact ? {flex: 1, justifyContent: 'center', padding: '10px 14px'} : undefined}/>
             )}
-            <ActionButton label="Home" icon={<IconHome size={14}/>} onClick={onHome}
+            <ActionButton label={t('dashboardHeroCard.home')} icon={<IconHome size={14}/>} onClick={onHome}
                      style={compact ? {flex: 1, justifyContent: 'center', padding: '10px 14px'} : undefined}/>
             <ActionButton icon={<IconAlert size={14}/>} danger onClick={onEmergency}
                      style={{padding: compact ? '10px 14px' : '12px 14px'}}/>
@@ -352,10 +354,12 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
                 fontSize: 10, color: colors.accent, fontWeight: 700,
                 letterSpacing: '0.12em', textTransform: 'uppercase' as const,
               }}>
-                {idleOffDock ? 'Mowgli is parked' : 'Mowgli is ready'}
+                {idleOffDock ? t('dashboardHeroCard.mowgliIsParked') : t('dashboardHeroCard.mowgliIsReady')}
               </div>
               <div className="mn-display" style={{fontSize: 26, color: colors.text, marginTop: 4, lineHeight: 1.05}}>
-                {idleOffDock ? <>Out on the lawn at <em>{Math.round(data.battery)}%</em></> : <>All rested at <em>{Math.round(data.battery)}%</em></>}
+                {idleOffDock
+                  ? <>{t('dashboardHeroCard.outOnLawnPrefix')}<em>{Math.round(data.battery)}%</em></>
+                  : <>{t('dashboardHeroCard.allRestedPrefix')}<em>{Math.round(data.battery)}%</em></>}
               </div>
             </div>
           )}
@@ -366,30 +370,32 @@ export function HeroCard({data, compact, onStart, onHome, onPause, onEmergency, 
               fontSize: 11, color: colors.accent, fontWeight: 700,
               letterSpacing: '0.12em', textTransform: 'uppercase' as const,
             }}>
-              {idleOffDock ? 'Mowgli is parked' : 'Mowgli is ready'}
+              {idleOffDock ? t('dashboardHeroCard.mowgliIsParked') : t('dashboardHeroCard.mowgliIsReady')}
             </div>
             <div className="mn-display" style={{fontSize: 38, color: colors.text, marginTop: 8, lineHeight: 1.05}}>
-              {idleOffDock ? <>Out on the lawn at <em>{Math.round(data.battery)}%</em></> : <>All rested at <em>{Math.round(data.battery)}%</em></>}
+              {idleOffDock
+                ? <>{t('dashboardHeroCard.outOnLawnPrefix')}<em>{Math.round(data.battery)}%</em></>
+                : <>{t('dashboardHeroCard.allRestedPrefix')}<em>{Math.round(data.battery)}%</em></>}
             </div>
             <div style={{fontSize: 14, color: colors.textDim, marginTop: 6}}>
               {idleOffDock
-                ? 'Tap Home to send the robot back to the dock, or Start to mow from here.'
-                : 'Tap Start mowing to begin, or wait for the next scheduled run.'}
+                ? t('dashboardHeroCard.idleOffDockHint')
+                : t('dashboardHeroCard.idleDockedHint')}
             </div>
           </div>
         )}
         {compact && (
           <div style={{fontSize: 13, color: colors.textDim}}>
             {idleOffDock
-              ? 'Tap Home to dock, or Start to mow from here.'
-              : 'Tap Start to begin, or wait for the next scheduled run.'}
+              ? t('dashboardHeroCard.idleOffDockHintShort')
+              : t('dashboardHeroCard.idleDockedHintShort')}
           </div>
         )}
         <div style={{display: 'flex', gap: 8, width: compact ? '100%' : undefined}}>
-          <ActionButton label="Start mowing" primary icon={<IconPlay size={16}/>} onClick={onStart}
+          <ActionButton label={t('dashboardHeroCard.startMowing')} primary icon={<IconPlay size={16}/>} onClick={onStart}
                    style={compact ? {flex: 1, justifyContent: 'center'} : undefined}/>
           {idleOffDock && (
-            <ActionButton label="Home" icon={<IconHome size={16}/>} onClick={onHome}
+            <ActionButton label={t('dashboardHeroCard.home')} icon={<IconHome size={16}/>} onClick={onHome}
                      style={compact ? {flex: 1, justifyContent: 'center'} : undefined}/>
           )}
           <ActionButton icon={<IconAlert size={14}/>} danger onClick={onEmergency} style={{padding: '12px 14px'}}/>

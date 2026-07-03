@@ -106,8 +106,7 @@ public:
     // sweep tangent, not the heading. Catches the slow dock-alignment pivots
     // (0.1-0.3 rad/s) that slip under min_omega_for_anchor_rps. 1.0 = reject
     // once antenna rotational speed exceeds chassis forward speed.
-    cog_sweep_dominance_ratio_ =
-        declare_parameter<double>("cog_sweep_dominance_ratio", 1.0);
+    cog_sweep_dominance_ratio_ = declare_parameter<double>("cog_sweep_dominance_ratio", 1.0);
     // Max integrated |heading change| (rad) allowed over a COG baseline. A
     // straight segment is ~0; above this the displacement no longer tracks
     // the body axis (slow oscillation) and the COG is dropped. 0.20 ≈ 11°.
@@ -118,8 +117,24 @@ public:
     // meant to be stationary, so any meaningful rotation (the dock's slow
     // 0.1-0.3 rad/s alignment pivots included) means the latched heading is
     // going stale and must not be republished. 0.05 rad/s ≈ 3°/s.
-    latch_republish_max_omega_ =
-        declare_parameter<double>("latch_republish_max_omega_rps", 0.05);
+    latch_republish_max_omega_ = declare_parameter<double>("latch_republish_max_omega_rps", 0.05);
+    // Cumulative-rotation staleness gate for the latch. The instantaneous
+    // latch_republish_max_omega_ gate above only suppresses republish *while*
+    // the robot is turning; once an in-place pivot ENDS and ω returns to ~0
+    // the gate passes again and the pre-pivot heading gets republished — but
+    // the latch only updates on forward translation, so after a 180° pivot it
+    // is stale by π and corrupts the fused yaw (field 2026-06-20: manual
+    // east→west flip teleported fusion yaw −6°→−131° while motionless, then
+    // dragged position around the gps_x lever-arm circle). Track absolute
+    // rotation accumulated since the latch was set and drop the latch once it
+    // exceeds this; a real pivot trips it immediately. We do NOT reuse
+    // abs_dtheta_since_anchor_ — that integrates |gyro_z| with no deadband and
+    // resets every GPS fix, so over a multi-second stationary dwell its noise
+    // floor would falsely invalidate a good latch. latch_rotation_deadband_rps
+    // is the per-sample floor below which |gyro_z| is treated as noise and not
+    // accumulated. 0.26 rad ≈ 15°.
+    latch_max_rotation_rad_ = declare_parameter<double>("latch_max_rotation_rad", 0.26);
+    latch_rotation_deadband_rps_ = declare_parameter<double>("latch_rotation_deadband_rps", 0.05);
     // Number of consecutive non-rotating GPS samples required before we
     // start accumulating a new baseline after a pivot ends. 2 samples
     // at 5 Hz GPS ≈ 400 ms of confirmed straight motion before COG
@@ -138,8 +153,7 @@ public:
     // that the optimizer must integrate over many nodes before it
     // converges. Accumulating to e.g. 0.10 m gives σ_yaw ≈ 5° per
     // publish, so a single COG correction is enough to pull the graph.
-    min_baseline_displacement_m_ =
-        declare_parameter<double>("min_baseline_displacement_m", 0.10);
+    min_baseline_displacement_m_ = declare_parameter<double>("min_baseline_displacement_m", 0.10);
 
     // ── Stationary yaw latch ────────────────────────────────────────
     stationary_seed_rate_hz_ = declare_parameter<double>("stationary_seed_rate_hz", 2.0);
@@ -216,6 +230,22 @@ public:
             double cur = abs_dtheta_since_anchor_.load(std::memory_order_relaxed);
             while (!abs_dtheta_since_anchor_.compare_exchange_weak(cur, cur + inc))
             {
+            }
+            // Deadbanded rotation since the stationary latch was set. Unlike
+            // abs_dtheta_since_anchor_ this ignores sub-deadband samples, so a
+            // long stationary dwell doesn't accumulate gyro noise into a false
+            // staleness trip. Drives the latch-invalidation in
+            // republish_latched_when_stationary().
+            const double linc =
+                mowgli_localization::cog_latch_rotation_increment(msg->angular_velocity.z,
+                                                                  dt,
+                                                                  latch_rotation_deadband_rps_);
+            if (linc > 0.0)
+            {
+              double lcur = abs_dtheta_since_latch_.load(std::memory_order_relaxed);
+              while (!abs_dtheta_since_latch_.compare_exchange_weak(lcur, lcur + linc))
+              {
+              }
             }
           }
         });
@@ -317,7 +347,7 @@ private:
       cos_datum_lat_ = std::cos(datum_lat_ * kDegToRad);
       datum_seeded_ = true;
       RCLCPP_INFO(get_logger(),
-                  "datum self-seeded from first RTK fix: lat=%.8f lon=%.8f",
+                  "datum self-seeded from first RTK fix: lat=%.9f lon=%.9f",
                   datum_lat_,
                   datum_lon_);
     }
@@ -404,8 +434,7 @@ private:
     // approach the wrong way (field 2026-05-27). Use the larger of the
     // wheel/IMU rotation rate so a wheel-encoder lag at the rotation onset
     // doesn't let a sample through.
-    const double rot_rate =
-        std::max(std::abs(wheel_omega_.load()), std::abs(gyro_z_.load()));
+    const double rot_rate = std::max(std::abs(wheel_omega_.load()), std::abs(gyro_z_.load()));
     const double lever_radius = std::hypot(lever_arm_x_, lever_arm_y_);
     if (cog_sweep_dominates(rot_rate, lever_radius, wheel_vx_, cog_sweep_dominance_ratio_))
     {
@@ -503,8 +532,8 @@ private:
     // σ_yaw forward and reverse (uses |v_x| via v_eff).
     const double sigma_lever =
         compute_lever_sigma(omega_avg, v_eff, lever_arm_x_, lever_arm_y_, omega_noise_rps_);
-    const double sigma_yaw_sq = sigma_pos_yaw * sigma_pos_yaw + sigma_drift * sigma_drift +
-                                sigma_lever * sigma_lever;
+    const double sigma_yaw_sq =
+        sigma_pos_yaw * sigma_pos_yaw + sigma_drift * sigma_drift + sigma_lever * sigma_lever;
     const double yaw_var = std::max(min_yaw_var_, std::min(sigma_yaw_sq, max_yaw_var_));
 
     // Advance the anchor to the current sample so the next baseline starts
@@ -526,11 +555,12 @@ private:
 
     const double mono_now = static_cast<double>(get_clock()->now().nanoseconds()) * 1e-9;
     latched_yaw_ = LatchedYaw{mono_now, yaw, yaw_var};
+    // Fresh latch — start counting rotation away from this heading from zero.
+    abs_dtheta_since_latch_ = 0.0;
 
     // Online mag-cal sample collection — only fit against COG that
     // survives the inflated-σ test (positional + drift + lever).
-    if (enable_mag_cal_ && latest_mag_valid_ &&
-        std::sqrt(sigma_yaw_sq) < (15.0 * kDegToRad))
+    if (enable_mag_cal_ && latest_mag_valid_ && std::sqrt(sigma_yaw_sq) < (15.0 * kDegToRad))
     {
       mag_samples_.emplace_back(latest_mag_[0], latest_mag_[1], latest_mag_[2], yaw);
       while (static_cast<int>(mag_samples_.size()) > mag_max_samples_)
@@ -577,6 +607,18 @@ private:
     {
       return;
     }
+    // Cumulative-rotation staleness: the instantaneous gate above only catches
+    // the moment of turning. If the robot has rotated past latch_max_rotation_rad_
+    // since the latch was set (e.g. an in-place pivot that has since stopped),
+    // the latched heading no longer describes where the robot points — drop it
+    // rather than republish a stale, tight-covariance yaw into the graph. A new
+    // latch is seeded by on_fix() once forward motion resumes.
+    if (abs_dtheta_since_latch_.load() > latch_max_rotation_rad_)
+    {
+      latched_yaw_.reset();
+      ++latch_invalidated_rotation_;
+      return;
+    }
     const double mono_now = static_cast<double>(get_clock()->now().nanoseconds()) * 1e-9;
     const double age = std::max(0.0, mono_now - latched_yaw_->stamp);
     if (age > stationary_max_age_s_)
@@ -617,7 +659,8 @@ private:
     RCLCPP_INFO(get_logger(),
                 "cog_to_imu stats: published fwd=%d rev=%d seed=%d, "
                 "rejected fix=%d accuracy=%d stationary=%d rotating=%d sweep=%d "
-                "displacement=%d baseline_rot=%lu, mag_cal samples=%zu (writes=%d)",
+                "displacement=%d baseline_rot=%lu latch_invalid_rot=%lu, "
+                "mag_cal samples=%zu (writes=%d)",
                 published_fwd_,
                 published_rev_,
                 stationary_seeds_published_,
@@ -628,6 +671,7 @@ private:
                 rejected_sweep_,
                 rejected_displacement_,
                 static_cast<unsigned long>(rejected_baseline_rotation_),
+                static_cast<unsigned long>(latch_invalidated_rotation_),
                 mag_samples_.size(),
                 mag_fit_count_);
     published_fwd_ = 0;
@@ -878,6 +922,8 @@ private:
   double min_omega_for_anchor_{};
   double cog_sweep_dominance_ratio_{1.0};
   double latch_republish_max_omega_{0.05};
+  double latch_max_rotation_rad_{0.26};
+  double latch_rotation_deadband_rps_{0.05};
   double max_pos_accuracy_{};
   double min_dt_{}, max_dt_{};
   double max_yaw_var_{}, min_yaw_var_{};
@@ -943,6 +989,9 @@ private:
   // COG when this exceeds cog_max_baseline_rotation_rad_ (a straight baseline
   // is near zero). last_imu_t_ is the previous /imu/data stamp for dt.
   std::atomic<double> abs_dtheta_since_anchor_{0.0};
+  // Deadbanded absolute rotation accumulated since the stationary latch was
+  // set; drives latch invalidation in republish_latched_when_stationary().
+  std::atomic<double> abs_dtheta_since_latch_{0.0};
   std::atomic<double> last_imu_t_{0.0};
   double cog_max_baseline_rotation_rad_{0.20};
   uint64_t rejected_baseline_rotation_{0};
@@ -975,6 +1024,7 @@ private:
   int rejected_rotating_{0};
   int rejected_sweep_{0};
   int stationary_seeds_published_{0};
+  uint64_t latch_invalidated_rotation_{0};
 };
 
 }  // namespace mowgli_localization

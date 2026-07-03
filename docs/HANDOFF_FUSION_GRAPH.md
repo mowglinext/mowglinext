@@ -6,8 +6,8 @@
 > Cette page reste publiée comme trace de la transition (commits, choix de design,
 > liste des helpers retirés) — utile pour archéologie git, pas pour onboarder.
 >
-> [archi]: https://github.com/cedbossneo/mowglinext/wiki/Architecture#optional-factor-graph-localizer-fusion_graph
-> [cfg]: https://github.com/cedbossneo/mowglinext/wiki/Configuration#7-fusion_graph
+> [archi]: https://github.com/mowglinext/mowglinext/wiki/Architecture#optional-factor-graph-localizer-fusion_graph
+> [cfg]: https://github.com/mowglinext/mowglinext/wiki/Configuration#7-fusion_graph
 
 > Document de passation pour reprise dans une nouvelle session Claude Code.
 > **Branche de départ :** `feat/slam-rtk-fallback` (ou créer `feat/fusion-graph` from `main`).

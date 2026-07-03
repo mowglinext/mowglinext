@@ -1,6 +1,7 @@
 import React from "react";
 import { Card, Col, Form, InputNumber, Row, Space, Typography } from "antd";
 import { CloudOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
 
 const { Text, Paragraph } = Typography;
@@ -11,13 +12,14 @@ type Props = {
 };
 
 const RAIN_MODES = [
-    { value: 0, label: "Ignore", description: "Keep mowing regardless of rain", color: "#8c8c8c" },
-    { value: 1, label: "Dock", description: "Return to dock when rain detected", color: "#1890ff" },
-    { value: 2, label: "Dock Until Dry", description: "Dock and wait for rain to stop + delay", color: "#13c2c2" },
-    { value: 3, label: "Pause Auto", description: "Pause automatic mode entirely", color: "#722ed1" },
+    { value: 0, labelKey: "rainModeIgnoreLabel", descriptionKey: "rainModeIgnoreDescription", color: "#8c8c8c" },
+    { value: 1, labelKey: "rainModeDockLabel", descriptionKey: "rainModeDockDescription", color: "#1890ff" },
+    { value: 2, labelKey: "rainModeDockUntilDryLabel", descriptionKey: "rainModeDockUntilDryDescription", color: "#13c2c2" },
+    { value: 3, labelKey: "rainModePauseAutoLabel", descriptionKey: "rainModePauseAutoDescription", color: "#722ed1" },
 ];
 
 export const RainSection: React.FC<Props> = ({ values, onChange }) => {
+    const { t } = useTranslation();
     const { colors } = useThemeMode();
     const currentMode = values.rain_mode ?? 2;
 
@@ -28,10 +30,10 @@ export const RainSection: React.FC<Props> = ({ values, onChange }) => {
                     <div>
                         <Text strong style={{ fontSize: 14 }}>
                             <CloudOutlined style={{ marginRight: 6 }} />
-                            Rain Behavior
+                            {t("settingsRain.rainBehavior")}
                         </Text>
                         <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-                            What the robot should do when it detects rain.
+                            {t("settingsRain.rainBehaviorDescription")}
                         </Paragraph>
                     </div>
 
@@ -55,11 +57,11 @@ export const RainSection: React.FC<Props> = ({ values, onChange }) => {
                                         styles={{ body: { padding: "8px 10px" } }}
                                     >
                                         <Text strong style={{ fontSize: 12, color: isSelected ? mode.color : undefined }}>
-                                            {mode.label}
+                                            {t(`settingsRain.${mode.labelKey}`)}
                                         </Text>
                                         <br />
                                         <Text type="secondary" style={{ fontSize: 11 }}>
-                                            {mode.description}
+                                            {t(`settingsRain.${mode.descriptionKey}`)}
                                         </Text>
                                     </Card>
                                 </Col>
@@ -70,11 +72,11 @@ export const RainSection: React.FC<Props> = ({ values, onChange }) => {
             </Card>
 
             {currentMode > 0 && (
-                <Card size="small" title="Timing" style={{ marginBottom: 16 }}>
+                <Card size="small" title={t("settingsRain.timing")} style={{ marginBottom: 16 }}>
                     <Form layout="vertical" size="small">
                         <Row gutter={[16, 0]}>
                             <Col xs={12}>
-                                <Form.Item label="Resume Delay" tooltip="Minutes to wait after rain stops before resuming">
+                                <Form.Item label={t("settingsRain.resumeDelay")} tooltip={t("settingsRain.resumeDelayTooltip")}>
                                     <InputNumber
                                         value={values.rain_delay_minutes}
                                         onChange={(v) => onChange("rain_delay_minutes", v)}
@@ -84,7 +86,7 @@ export const RainSection: React.FC<Props> = ({ values, onChange }) => {
                                 </Form.Item>
                             </Col>
                             <Col xs={12}>
-                                <Form.Item label="Debounce" tooltip="Seconds of continuous rain signal before triggering">
+                                <Form.Item label={t("settingsRain.debounce")} tooltip={t("settingsRain.debounceTooltip")}>
                                     <InputNumber
                                         value={values.rain_debounce_sec}
                                         onChange={(v) => onChange("rain_debounce_sec", v)}

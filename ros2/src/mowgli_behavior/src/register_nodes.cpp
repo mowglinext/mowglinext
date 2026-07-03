@@ -37,6 +37,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<IsCommand>("IsCommand");
 
   factory.registerNodeType<IsGPSFixed>("IsGPSFixed");
+  factory.registerNodeType<IsCoverageComplete>("IsCoverageComplete");
   factory.registerNodeType<ReplanNeeded>("ReplanNeeded");
   factory.registerNodeType<IsBoundaryViolation>("IsBoundaryViolation");
   factory.registerNodeType<IsLethalBoundaryViolation>("IsLethalBoundaryViolation");
@@ -53,6 +54,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<SetMowerEnabled>("SetMowerEnabled");
   factory.registerNodeType<StopMoving>("StopMoving");
   factory.registerNodeType<ClearCostmap>("ClearCostmap");
+  factory.registerNodeType<SetNav2Lifecycle>("SetNav2Lifecycle");
   factory.registerNodeType<PublishHighLevelStatus>("PublishHighLevelStatus");
   factory.registerNodeType<WaitForDuration>("WaitForDuration");
   factory.registerNodeType<WaitForGpsFix>("WaitForGpsFix");
@@ -73,18 +75,15 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<RecordResumeUndockFailure>("RecordResumeUndockFailure");
   factory.registerNodeType<ResetEmergency>("ResetEmergency");
 
-  // Cell-based coverage nodes (strip-by-strip dynamic coverage)
+  // Swath-segmented coverage nodes. GetNextUnmowedArea iterates areas,
+  // PlanCoverageArea plans the full area (F2C, DISCONTINUOUS), FollowStrip
+  // follows it one swath at a time.
   factory.registerNodeType<GetNextUnmowedArea>("GetNextUnmowedArea");
-  factory.registerNodeType<GetNextStrip>("GetNextStrip");
   factory.registerNodeType<FollowStrip>("FollowStrip");
   factory.registerNodeType<TransitToStrip>("TransitToStrip");
   factory.registerNodeType<DetourAroundObstacle>("DetourAroundObstacle");
-  // Path C — cell-based coverage (segment-by-segment dynamic coverage).
-  factory.registerNodeType<GetNextSegment>("GetNextSegment");
-  factory.registerNodeType<IsShortSegment>("IsShortSegment");
-  factory.registerNodeType<MarkSegmentBlocked>("MarkSegmentBlocked");
 
-  // opennav_coverage migration — F2C-backed full-area planner.
+  // F2C-backed full-area planner (mowgli_coverage plan_coverage segments).
   // Output goes into ctx->current_strip_path; FollowStrip consumes it.
   factory.registerNodeType<PlanCoverageArea>("PlanCoverageArea");
 

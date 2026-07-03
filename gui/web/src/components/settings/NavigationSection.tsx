@@ -1,15 +1,36 @@
 import React from "react";
 import { Card, Col, Form, InputNumber, Row, Space, Typography } from "antd";
 import { CompassOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
+import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 
 const { Text, Paragraph } = Typography;
 
 type Props = {
     values: Record<string, any>;
     onChange: (key: string, value: any) => void;
+    isOverridden?: (key: string) => boolean;
+    hasDefault?: (key: string) => boolean;
+    onReset?: (key: string) => void;
 };
 
-export const NavigationSection: React.FC<Props> = ({ values, onChange }) => {
+export const NavigationSection: React.FC<Props> = ({
+    values,
+    onChange,
+    isOverridden,
+    hasDefault,
+    onReset,
+}) => {
+    const { t } = useTranslation();
+    const fieldLabel = (key: string, label: React.ReactNode) => (
+        <SettingFieldLabel
+            settingKey={key}
+            label={label}
+            overridden={isOverridden?.(key) ?? false}
+            canReset={hasDefault?.(key) ?? false}
+            onReset={onReset}
+        />
+    );
     return (
         <div>
             <Card size="small" style={{ marginBottom: 16 }}>
@@ -17,17 +38,16 @@ export const NavigationSection: React.FC<Props> = ({ values, onChange }) => {
                     <div>
                         <Text strong style={{ fontSize: 14 }}>
                             <CompassOutlined style={{ marginRight: 6 }} />
-                            Goal Tolerances
+                            {t("settingsNavigation.goalTolerances")}
                         </Text>
                         <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-                            How close the robot needs to get to a target position before considering it reached.
-                            Tighter tolerances mean more precision but may cause oscillation.
+                            {t("settingsNavigation.goalTolerancesDescription")}
                         </Paragraph>
                     </div>
                     <Form layout="vertical" size="small">
                         <Row gutter={[16, 0]}>
                             <Col xs={12} sm={8}>
-                                <Form.Item label="Transit XY Tolerance" tooltip="Position tolerance for transit waypoints">
+                                <Form.Item label={fieldLabel("xy_goal_tolerance", t("settingsNavigation.transitXyTolerance"))} tooltip={t("settingsNavigation.transitXyToleranceTooltip")}>
                                     <InputNumber
                                         value={values.xy_goal_tolerance}
                                         onChange={(v) => onChange("xy_goal_tolerance", v)}
@@ -37,7 +57,7 @@ export const NavigationSection: React.FC<Props> = ({ values, onChange }) => {
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
-                                <Form.Item label="Yaw Tolerance" tooltip="Heading tolerance at goal (radians)">
+                                <Form.Item label={fieldLabel("yaw_goal_tolerance", t("settingsNavigation.yawTolerance"))} tooltip={t("settingsNavigation.yawToleranceTooltip")}>
                                     <InputNumber
                                         value={values.yaw_goal_tolerance}
                                         onChange={(v) => onChange("yaw_goal_tolerance", v)}
@@ -47,7 +67,7 @@ export const NavigationSection: React.FC<Props> = ({ values, onChange }) => {
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
-                                <Form.Item label="Coverage XY Tolerance" tooltip="Position tolerance during mowing strips">
+                                <Form.Item label={fieldLabel("coverage_xy_tolerance", t("settingsNavigation.coverageXyTolerance"))} tooltip={t("settingsNavigation.coverageXyToleranceTooltip")}>
                                     <InputNumber
                                         value={values.coverage_xy_tolerance}
                                         onChange={(v) => onChange("coverage_xy_tolerance", v)}
@@ -61,11 +81,11 @@ export const NavigationSection: React.FC<Props> = ({ values, onChange }) => {
                 </Space>
             </Card>
 
-            <Card size="small" title="Recovery" style={{ marginBottom: 16 }}>
+            <Card size="small" title={t("settingsNavigation.recovery")} style={{ marginBottom: 16 }}>
                 <Form layout="vertical" size="small">
                     <Row gutter={[16, 0]}>
                         <Col xs={12} sm={8}>
-                            <Form.Item label="Progress Timeout" tooltip="Seconds without forward progress before recovery kicks in">
+                            <Form.Item label={fieldLabel("progress_timeout_sec", t("settingsNavigation.progressTimeout"))} tooltip={t("settingsNavigation.progressTimeoutTooltip")}>
                                 <InputNumber
                                     value={values.progress_timeout_sec}
                                     onChange={(v) => onChange("progress_timeout_sec", v)}

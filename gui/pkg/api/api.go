@@ -1,9 +1,9 @@
 package api
 
 import (
-	"github.com/cedbossneo/mowglinext/docs"
-	"github.com/cedbossneo/mowglinext/pkg/providers"
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/docs"
+	"github.com/mowglinext/mowglinext/pkg/providers"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-contrib/static"
 	"github.com/gin-gonic/gin"
@@ -32,16 +32,33 @@ func NewAPI(dbProvider types.IDBProvider, dockerProvider types.IDockerProvider, 
 	if err != nil {
 		log.Fatal(err)
 	}
-	r.Use(static.Serve("/", static.LocalFile(string(webDirectory), false)))
+	webDir := string(webDirectory)
+	r.Use(func(c *gin.Context) {
+		p := c.Request.URL.Path
+		if p == "/" || p == "/index.html" {
+			c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+		}
+		c.Next()
+	})
+	r.Use(static.Serve("/", static.LocalFile(webDir, false)))
+	r.NoRoute(func(c *gin.Context) {
+		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+		c.File(webDir + "/index.html")
+	})
 	apiGroup := r.Group("/api")
 	ConfigRoute(apiGroup, dbProvider)
 	SettingsRoutes(apiGroup, dbProvider)
+	GNSSRoutes(apiGroup, dbProvider, dockerProvider)
 	ContainersRoutes(apiGroup, dockerProvider)
 	MowgliNextRoutes(apiGroup, rosProvider)
 	SetupRoutes(apiGroup, firmwareProvider)
 	SystemRoutes(apiGroup)
 	DiagnosticsRoutes(apiGroup, dockerProvider, rosProvider, dbProvider)
+	WeatherRoutes(apiGroup, dbProvider)
+	ParamsRoutes(apiGroup, rosProvider)
+	NtripRoutes(apiGroup)
 	CalibrationRoutes(apiGroup, rosProvider, dbProvider)
+	DriveTuningRoutes(apiGroup, dbProvider, dockerProvider)
 	ScheduleRoutes(apiGroup, dbProvider)
 	ImportRoutes(apiGroup, rosProvider, dbProvider)
 	tileServer, err := dbProvider.Get("system.map.enabled")

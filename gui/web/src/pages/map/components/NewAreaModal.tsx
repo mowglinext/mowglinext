@@ -1,4 +1,5 @@
 import {Form, Input, Modal, Select} from "antd";
+import {useTranslation} from "react-i18next";
 
 interface NewAreaModalProps {
     open: boolean;
@@ -10,39 +11,42 @@ interface NewAreaModalProps {
     onCancel: () => void;
 }
 
-export const NewAreaModal = ({open, areaType, areaName, onAreaTypeChange, onAreaNameChange, onSave, onCancel}: NewAreaModalProps) => (
-    <Modal
-        open={open}
-        title="New area"
-        okText="Add area"
-        cancelText="Cancel"
-        onOk={onSave}
-        onCancel={onCancel}
-        destroyOnClose
-    >
-        <Form layout="vertical" style={{marginTop: 16}}>
-            <Form.Item label="Area type">
-                <Select
-                    value={areaType}
-                    onChange={onAreaTypeChange}
-                    options={[
-                        {value: 'workarea', label: 'Working Area'},
-                        {value: 'navigation', label: 'Navigation Area'},
-                        {value: 'obstacle', label: 'Obstacle'},
-                    ]}
-                />
-            </Form.Item>
-            {areaType === 'workarea' && (
-                <Form.Item label="Area name (optional)">
-                    <Input
-                        placeholder="e.g. Front lawn"
-                        value={areaName}
-                        onChange={(e) => onAreaNameChange(e.target.value)}
-                        onPressEnter={onSave}
-                        autoFocus
+export const NewAreaModal = ({open, areaType, areaName, onAreaTypeChange, onAreaNameChange, onSave, onCancel}: NewAreaModalProps) => {
+    const {t} = useTranslation();
+    return (
+        <Modal
+            open={open}
+            title={t('mapNewArea.title')}
+            okText={t('mapNewArea.addArea')}
+            cancelText={t('mapNewArea.cancel')}
+            onOk={onSave}
+            onCancel={onCancel}
+            destroyOnClose
+        >
+            <Form layout="vertical" style={{marginTop: 16}}>
+                <Form.Item label={t('mapNewArea.areaType')}>
+                    <Select
+                        value={areaType}
+                        onChange={onAreaTypeChange}
+                        options={[
+                            {value: 'workarea', label: t('mapNewArea.areaTypeWorking')},
+                            {value: 'navigation', label: t('mapNewArea.areaTypeNavigation')},
+                            {value: 'obstacle', label: t('mapNewArea.areaTypeObstacle')},
+                        ]}
                     />
                 </Form.Item>
-            )}
-        </Form>
-    </Modal>
-);
+                {areaType === 'workarea' && (
+                    <Form.Item label={t('mapNewArea.areaNameOptional')}>
+                        <Input
+                            placeholder={t('mapNewArea.areaNamePlaceholder')}
+                            value={areaName}
+                            onChange={(e) => onAreaNameChange(e.target.value)}
+                            onPressEnter={onSave}
+                            autoFocus
+                        />
+                    </Form.Item>
+                )}
+            </Form>
+        </Modal>
+    );
+};

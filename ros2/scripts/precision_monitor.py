@@ -28,7 +28,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import TwistStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from sensor_msgs.msg import LaserScan, PointCloud2
@@ -95,7 +95,7 @@ class PrecisionMonitorNode(Node):
         self._gps_pose: PoseWithCovarianceStamped | None = None
         self._scan: LaserScan | None = None
         self._map: OccupancyGrid | None = None
-        self._cmd_vel: Twist | None = None
+        self._cmd_vel: TwistStamped | None = None
 
         # ── Subscribers ──────────────────────────────────────────────────
         self.create_subscription(
@@ -116,13 +116,9 @@ class PrecisionMonitorNode(Node):
             self._on_scan,
             _SENSOR_QOS,
         )
-        # SLAM scan-match visualisation — PointCloud2, best-effort.
-        self.create_subscription(
-            PointCloud2,
-            "/slam_toolbox/scan_visualization",
-            self._on_slam_scan,
-            _SENSOR_QOS,
-        )
+        # NOTE: the /slam_toolbox/scan_visualization subscription was removed —
+        # slam_toolbox is gone (fusion_graph is the sole localizer) and nothing
+        # publishes that PointCloud2 topic anymore.
         self.create_subscription(
             OccupancyGrid,
             "/map",
@@ -131,7 +127,7 @@ class PrecisionMonitorNode(Node):
         )
         # cmd_vel is used only for the speed penalty in localization_quality.
         self.create_subscription(
-            Twist,
+            TwistStamped,
             "/cmd_vel",
             self._on_cmd_vel,
             _SENSOR_QOS,
@@ -169,7 +165,7 @@ class PrecisionMonitorNode(Node):
     def _on_map(self, msg: OccupancyGrid) -> None:
         self._map = msg
 
-    def _on_cmd_vel(self, msg: Twist) -> None:
+    def _on_cmd_vel(self, msg: TwistStamped) -> None:
         self._cmd_vel = msg
 
     # ── Metric computations ──────────────────────────────────────────────
@@ -256,7 +252,7 @@ class PrecisionMonitorNode(Node):
 
         # Speed mismatch penalty — penalise when cmd_vel says move but odom is still
         if self._cmd_vel is not None and odom_speed is not None:
-            cmd_speed = abs(self._cmd_vel.linear.x)
+            cmd_speed = abs(self._cmd_vel.twist.linear.x)
             if cmd_speed > _SPEED_MOVING_THRESHOLD_M_S and odom_speed < _SPEED_MOVING_THRESHOLD_M_S:
                 # Scale: the larger the commanded speed the worse the mismatch
                 ratio = min(cmd_speed / 1.0, 1.0)  # 1 m/s = full penalty

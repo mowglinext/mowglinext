@@ -16,28 +16,53 @@
   // Mount the repo at /ros2_ws/src (ROS2 workspace convention)
   "workspaceMount": "source=${localWorkspaceFolder},target=/ros2_ws/src/mowglinext,type=bind",
   "workspaceFolder": "/ros2_ws/src/mowglinext",
+  // Local robot bringup expects direct access to USB/UART receivers after a
+  // devcontainer rebuild on the host machine.
+  "runArgs": [
+    "--privileged"
+  ],
+  "mounts": [
+    "source=/dev,target=/host-dev,type=bind,readonly"
+  ],
 
   // Forward ports for visualization and debugging
   "forwardPorts": [
-    4006,   // GUI (Go backend + React frontend)
-    8765,   // Foxglove Bridge WebSocket
-    6080,   // noVNC (if Gazebo GUI needed)
-    9090    // rosbridge WebSocket (legacy GUI path)
+    4006,
+    // GUI (Go backend + React frontend)
+    8765,
+    // Foxglove Bridge WebSocket
+    6080,
+    // noVNC (if Gazebo GUI needed)
+    9090 // rosbridge WebSocket (legacy GUI path)
   ],
   "portsAttributes": {
-    "4006": { "label": "Mowgli GUI", "onAutoForward": "notify" },
-    "8765": { "label": "Foxglove Studio", "onAutoForward": "notify" },
-    "6080": { "label": "noVNC Gazebo GUI", "onAutoForward": "ignore" },
-    "9090": { "label": "rosbridge (legacy)", "onAutoForward": "ignore" }
+    "4006": {
+      "label": "Mowgli GUI",
+      "onAutoForward": "notify"
+    },
+    "8765": {
+      "label": "Foxglove Studio",
+      "onAutoForward": "notify"
+    },
+    "6080": {
+      "label": "noVNC Gazebo GUI",
+      "onAutoForward": "ignore"
+    },
+    "9090": {
+      "label": "rosbridge (legacy)",
+      "onAutoForward": "ignore"
+    }
   },
 
   // Claude Code CLI
   "features": {
-    "ghcr.io/anthropics/devcontainer-features/claude-code:latest": {}
+    "ghcr.io/anthropics/devcontainer-features/claude-code:latest": {},
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
   },
 
   // Build the ROS2 workspace after container creation
   "postCreateCommand": ".devcontainer/post-create.sh",
+  "postStartCommand": ".devcontainer/post-start.sh",
 
   // Environment
   "containerEnv": {
@@ -53,6 +78,8 @@
   "customizations": {
     "vscode": {
       "extensions": [
+        "openai.chatgpt",
+        "ms-azuretools.vscode-docker",
         "ms-iot.vscode-ros",
         "ms-vscode.cpptools",
         "ms-vscode.cmake-tools",
@@ -81,7 +108,9 @@
         ],
         "[python]": {
           "editor.defaultFormatter": "charliermarsh.ruff",
-          "editor.codeActionsOnSave": { "source.organizeImports": "explicit" }
+          "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+          }
         },
         "go.toolsManagement.autoUpdate": true,
         "go.useLanguageServer": true

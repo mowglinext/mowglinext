@@ -22,6 +22,11 @@ twist_mux:
         timeout: 0.5
         priority: 20      # operator override always beats navigation
 
+      tuning:
+        topic: /cmd_vel_tuning
+        timeout: 0.5
+        priority: 30      # dedicated drive-tuning lane above shared teleop/ws relay
+
       emergency:
         topic: /cmd_vel_emergency
         timeout: 0.2      # tighter timeout for safety-critical source

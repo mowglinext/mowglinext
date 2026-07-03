@@ -56,12 +56,17 @@ func (m *MockDBProvider) KeysWithSuffix(suffix string) ([]string, error) {
 
 // MockRosProvider is a mock of IRosProvider for testing API handlers.
 type MockRosProvider struct {
-	mu           sync.Mutex
-	subscribers  map[string]map[string]func(msg []byte)
-	ServiceCalls []ServiceCall
-	ServiceErr   error
-	PublishErr   error
-	SubscribeErr error
+	mu               sync.Mutex
+	subscribers      map[string]map[string]func(msg []byte)
+	ServiceCalls     []ServiceCall
+	ServiceErr       error
+	ServiceResponder func(service string, req any, res any)
+	PublishErr       error
+	SubscribeErr     error
+	// Parameters returned by GetParameters; SetParams records set calls.
+	Parameters []RosParameter
+	ParamErr   error
+	SetParams  [][]RosParameter
 }
 
 type ServiceCall struct {
@@ -76,10 +81,13 @@ func NewMockRosProvider() *MockRosProvider {
 	}
 }
 
-func (m *MockRosProvider) CallService(_ context.Context, service string, req any, _ any, _ ...string) error {
+func (m *MockRosProvider) CallService(_ context.Context, service string, req any, res any, _ ...string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ServiceCalls = append(m.ServiceCalls, ServiceCall{Service: service, Req: req})
+	if m.ServiceResponder != nil {
+		m.ServiceResponder(service, req, res)
+	}
 	return m.ServiceErr
 }
 
@@ -106,6 +114,25 @@ func (m *MockRosProvider) UnSubscribe(topic string, id string) {
 
 func (m *MockRosProvider) Publish(_ string, _ string, _ interface{}) error {
 	return m.PublishErr
+}
+
+func (m *MockRosProvider) GetParameters(_ context.Context, _ []string) ([]RosParameter, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ParamErr != nil {
+		return nil, m.ParamErr
+	}
+	return m.Parameters, nil
+}
+
+func (m *MockRosProvider) SetParameters(_ context.Context, params []RosParameter) ([]RosParameter, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ParamErr != nil {
+		return nil, m.ParamErr
+	}
+	m.SetParams = append(m.SetParams, params)
+	return params, nil
 }
 
 // Dispatch simulates delivering a message to all subscribers of a logical topic key.

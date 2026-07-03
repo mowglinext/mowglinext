@@ -33,6 +33,23 @@
 namespace mowgli_hardware
 {
 
+// Protocol v2 moves runtime drive tuning to packet 0x54 and adds
+// ticks_per_meter to the payload so legacy firmware safely ignores the packet
+// rather than mis-parsing it as the old PID-only layout.
+// Protocol v3 extends the reset-cause packet with last_stage_before_reset so
+// the bridge can report which firmware main-loop section was active when the
+// WWDG fired. The same v3 diagnostic stack also uses the config handshake
+// flags byte so the GUI can toggle optional firmware diagnostics on demand.
+//
+// This is the COMPATIBILITY KEY: the bridge sends PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ
+// on every (re)connect and the firmware answers with its own
+// MOWGLI_PROTOCOL_VERSION in LlConfigRsp. If they differ — or the firmware is
+// too old to answer at all — the image and firmware speak different wire
+// formats and the operator must reflash. Bump this in lockstep with
+// MOWGLI_PROTOCOL_VERSION in mowgli_protocol.h when an incompatible wire
+// change requires a hard compatibility break.
+static constexpr uint8_t kMowgliProtocolVersion = 3u;
+
 // ---------------------------------------------------------------------------
 // Packet type identifiers
 // ---------------------------------------------------------------------------
@@ -44,6 +61,7 @@ enum PacketId : uint8_t
   PACKET_ID_LL_IMU = 0x02,  ///< STM32 → Pi: IMU data
   PACKET_ID_LL_UI_EVENT = 0x03,  ///< STM32 → Pi: UI button event
   PACKET_ID_LL_ODOMETRY = 0x04,  ///< STM32 → Pi: wheel odometry
+  PACKET_ID_LL_RESET_CAUSE = 0x06,  ///< STM32 → Pi: current boot reset cause
   PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ = 0x11,  ///< Bidirectional: config request
   PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP = 0x12,  ///< Bidirectional: config response
   PACKET_ID_LL_HEARTBEAT = 0x42,  ///< Pi → STM32: heartbeat
@@ -52,6 +70,8 @@ enum PacketId : uint8_t
   PACKET_ID_LL_BLADE_STATUS = 0x05,  ///< STM32 → Pi: blade motor status
   PACKET_ID_LL_CMD_BLADE = 0x51,  ///< Pi → STM32: blade motor control
   PACKET_ID_LL_REBOOT = 0x52,  ///< Pi → STM32: reboot the board (NVIC_SystemReset)
+  PACKET_ID_LL_SET_DRIVE_PID =
+      0x54,  ///< Pi → STM32: drive-motor runtime tuning (PID/FF + ticks_per_meter)
 };
 
 /// Magic byte in LlReboot — a dedicated reboot packet plus this confirmation
@@ -81,10 +101,82 @@ constexpr uint8_t EMERGENCY_BIT_STOP = (1u << 1u);
 constexpr uint8_t EMERGENCY_BIT_LIFT = (1u << 2u);
 
 // ---------------------------------------------------------------------------
+// Reset cause constants (ll_reset_cause::reset_cause)
+// ---------------------------------------------------------------------------
+
+constexpr uint8_t RESET_CAUSE_UNKNOWN = 0u;
+constexpr uint8_t RESET_CAUSE_PIN = 1u;
+constexpr uint8_t RESET_CAUSE_POR_PDR = 2u;
+constexpr uint8_t RESET_CAUSE_BOR = 3u;
+constexpr uint8_t RESET_CAUSE_SFTRST = 4u;
+constexpr uint8_t RESET_CAUSE_IWDG = 5u;
+constexpr uint8_t RESET_CAUSE_WWDG = 6u;
+constexpr uint8_t RESET_CAUSE_LPWR = 7u;
+
+// ---------------------------------------------------------------------------
+// Watchdog breadcrumb constants
+// (ll_reset_cause::last_stage_before_reset)
+// ---------------------------------------------------------------------------
+
+constexpr uint8_t WATCHDOG_STAGE_NONE = 0u;
+constexpr uint8_t WATCHDOG_STAGE_CHATTER = 1u;
+constexpr uint8_t WATCHDOG_STAGE_MOTORS = 2u;
+constexpr uint8_t WATCHDOG_STAGE_PANEL = 3u;
+constexpr uint8_t WATCHDOG_STAGE_ROS_SPIN = 4u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST = 5u;
+constexpr uint8_t WATCHDOG_STAGE_DRIVEMOTOR_RX = 6u;
+constexpr uint8_t WATCHDOG_STAGE_PERIMETER = 7u;
+constexpr uint8_t WATCHDOG_STAGE_ADC = 8u;
+constexpr uint8_t WATCHDOG_STAGE_CHARGER = 9u;
+constexpr uint8_t WATCHDOG_STAGE_STATUS_LED = 10u;
+constexpr uint8_t WATCHDOG_STAGE_ULTRASONIC_HANDLER = 11u;
+constexpr uint8_t WATCHDOG_STAGE_ULTRASONIC_APP = 12u;
+constexpr uint8_t WATCHDOG_STAGE_WATCHDOG_REFRESH = 13u;
+constexpr uint8_t WATCHDOG_STAGE_DRIVEMOTOR_10MS = 14u;
+constexpr uint8_t WATCHDOG_STAGE_BLADEMOTOR = 15u;
+constexpr uint8_t WATCHDOG_STAGE_BUZZER = 16u;
+constexpr uint8_t WATCHDOG_STAGE_EMERGENCY = 17u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST_ENTER = 18u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST_IMU_BUILD = 19u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST_IMU_SEND = 20u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST_RESET_SEND = 21u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST_STATUS_SEND = 22u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST_BLADE_SEND = 23u;
+constexpr uint8_t WATCHDOG_STAGE_BROADCAST_EXIT = 24u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_ENTER = 25u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_QUEUE = 26u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_RESUME = 27u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_EXIT = 28u;
+constexpr uint8_t WATCHDOG_STAGE_IMU_ACCEL = 29u;
+constexpr uint8_t WATCHDOG_STAGE_IMU_GYRO = 30u;
+constexpr uint8_t WATCHDOG_STAGE_IMU_MAG = 31u;
+constexpr uint8_t WATCHDOG_STAGE_IMU_PACKET_FILL = 32u;
+constexpr uint8_t WATCHDOG_STAGE_USB_IRQ_ENTER = 33u;
+constexpr uint8_t WATCHDOG_STAGE_USB_IRQ_EXIT = 34u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_RX_ENTER = 35u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_RX_PROCESS = 36u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_RX_EXIT = 37u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_PACKET = 38u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_COMPLETE = 39u;
+constexpr uint8_t WATCHDOG_STAGE_USB_RESET = 40u;
+constexpr uint8_t WATCHDOG_STAGE_USB_SUSPEND = 41u;
+constexpr uint8_t WATCHDOG_STAGE_USB_RESUME = 42u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_PACKET_FAIL = 43u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_BUSY_STUCK = 44u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_TX_QUEUE_FULL = 45u;
+constexpr uint8_t WATCHDOG_STAGE_CDC_HOST_CLOSED = 46u;
+
+// ---------------------------------------------------------------------------
 // USS (ultrasonic) sensor count
 // ---------------------------------------------------------------------------
 
 constexpr std::size_t LL_USS_SENSOR_COUNT = 5u;
+
+// ---------------------------------------------------------------------------
+// Config flags
+// ---------------------------------------------------------------------------
+
+constexpr uint8_t CONFIG_FLAG_FIRMWARE_DEBUG = (1u << 0u);
 
 // ---------------------------------------------------------------------------
 // Wire-format structs — all fields packed with no padding
@@ -154,6 +246,22 @@ struct LlOdometry
 };
 
 /**
+ * @brief Boot reset cause packet sent by the STM32 (PACKET_ID_LL_RESET_CAUSE = 0x06).
+ *
+ * Sent periodically so the host can recover the current boot cause even if it
+ * connects after the STM32 has already started streaming. When reset_cause is
+ * WWDG, last_stage_before_reset carries the persisted main-loop breadcrumb
+ * captured immediately before the watchdog reset.
+ */
+struct LlResetCause
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_RESET_CAUSE
+  uint8_t reset_cause;  ///< RESET_CAUSE_* constant
+  uint8_t last_stage_before_reset;  ///< WATCHDOG_STAGE_* constant
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+
+/**
  * @brief Heartbeat packet sent by the Pi (PACKET_ID_LL_HEARTBEAT = 0x42).
  *
  * Must be sent at regular intervals (typically 250 ms). The STM32 will
@@ -219,6 +327,38 @@ struct LlReboot
 };
 
 /**
+ * @brief Drive-motor runtime tuning packet sent by the Pi (PACKET_ID_LL_SET_DRIVE_PID = 0x54).
+ *
+ * Retunes the firmware's per-wheel velocity loop (both wheels share the gains)
+ * and the runtime encoder scale without reflashing. The firmware
+ * validates/clamps every field before applying and keeps its compile-time
+ * defaults as the power-on fallback until the host reconnects.
+ */
+struct LlSetDrivePid
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_SET_DRIVE_PID
+  float ticks_per_meter;  ///< Runtime encoder scale [ticks / m]
+  float kp;  ///< Proportional gain [PWM per m/s]
+  float ki;  ///< Integral gain [PWM per (m/s·s)]
+  float kd;  ///< Derivative gain [PWM per (m/s²)]
+  float integral_limit;  ///< Anti-windup clamp on the integral term [PWM]
+  float pwm_per_mps;  ///< Open-loop feedforward velocity→PWM scale
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+
+static_assert(offsetof(LlSetDrivePid, type) == 0u, "LlSetDrivePid.type offset drifted");
+static_assert(offsetof(LlSetDrivePid, ticks_per_meter) == 1u,
+              "LlSetDrivePid.ticks_per_meter offset drifted");
+static_assert(offsetof(LlSetDrivePid, kp) == 5u, "LlSetDrivePid.kp offset drifted");
+static_assert(offsetof(LlSetDrivePid, ki) == 9u, "LlSetDrivePid.ki offset drifted");
+static_assert(offsetof(LlSetDrivePid, kd) == 13u, "LlSetDrivePid.kd offset drifted");
+static_assert(offsetof(LlSetDrivePid, integral_limit) == 17u,
+              "LlSetDrivePid.integral_limit offset drifted");
+static_assert(offsetof(LlSetDrivePid, pwm_per_mps) == 21u,
+              "LlSetDrivePid.pwm_per_mps offset drifted");
+static_assert(offsetof(LlSetDrivePid, crc) == 25u, "LlSetDrivePid.crc offset drifted");
+
+/**
  * @brief Blade motor status packet from STM32 (PACKET_ID_LL_BLADE_STATUS = 0x05).
  */
 struct LlBladeStatus
@@ -232,6 +372,39 @@ struct LlBladeStatus
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
 
+/**
+ * @brief Config request sent by the Pi (PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ = 0x11).
+ *
+ * Sent on every (re)connect and whenever the host needs to update runtime
+ * config flags. The firmware replies with LlConfigRsp. Firmware that predates
+ * the handshake ignores the unknown packet and never replies, which the bridge
+ * reads (after a timeout) as an incompatible firmware that needs reflashing.
+ */
+struct LlConfigReq
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ
+  uint8_t flags;  ///< Requested CONFIG_FLAG_* runtime bits
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+
+/**
+ * @brief Config response from the STM32 (PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP = 0x12).
+ *
+ * Reports the firmware's wire-protocol version (the compatibility key checked
+ * against kMowgliProtocolVersion), the currently-active runtime config flags,
+ * and its human-readable firmware semver.
+ */
+struct LlConfigRsp
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP
+  uint8_t protocol_version;  ///< MOWGLI_PROTOCOL_VERSION on the firmware
+  uint8_t active_flags;  ///< Active CONFIG_FLAG_* runtime bits
+  uint8_t fw_version_major;  ///< Firmware semver major
+  uint8_t fw_version_minor;  ///< Firmware semver minor
+  uint8_t fw_version_patch;  ///< Firmware semver patch
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+
 #pragma pack(pop)
 
 // ---------------------------------------------------------------------------
@@ -242,10 +415,14 @@ static_assert(sizeof(LlStatus) == 38u, "LlStatus layout mismatch");
 static_assert(sizeof(LlImu) == 41u, "LlImu layout mismatch");
 static_assert(sizeof(LlUiEvent) == 5u, "LlUiEvent layout mismatch");
 static_assert(sizeof(LlOdometry) == 17u, "LlOdometry layout mismatch");
+static_assert(sizeof(LlResetCause) == 5u, "LlResetCause layout mismatch");
 static_assert(sizeof(LlHeartbeat) == 5u, "LlHeartbeat layout mismatch");
 static_assert(sizeof(LlHighLevelState) == 5u, "LlHighLevelState layout mismatch");
 static_assert(sizeof(LlCmdVel) == 11u, "LlCmdVel layout mismatch");
 static_assert(sizeof(LlCmdBlade) == 5u, "LlCmdBlade layout mismatch");
 static_assert(sizeof(LlBladeStatus) == 16u, "LlBladeStatus layout mismatch");
+static_assert(sizeof(LlConfigReq) == 4u, "LlConfigReq layout mismatch");
+static_assert(sizeof(LlConfigRsp) == 8u, "LlConfigRsp layout mismatch");
+static_assert(sizeof(LlSetDrivePid) == 27u, "LlSetDrivePid layout mismatch");
 
 }  // namespace mowgli_hardware

@@ -46,7 +46,18 @@ BT::NodeStatus IsEmergency::tick()
     return BT::NodeStatus::SUCCESS;  // stale data → assume emergency
   }
 
-  return ctx->latest_emergency.active_emergency ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  // Treat a set firmware LATCH as emergency too, not just an actively-asserted
+  // physical trigger. A software e-stop (the /hardware_bridge/emergency_stop
+  // service, used by the GUI stop button and tooling) sets the firmware latch
+  // WITHOUT a physical lift/stop assertion, so active_emergency stays false
+  // while latched_emergency is true. Keying only off active_emergency let the
+  // BT keep ticking MainLogic (flapping into a spurious RECORDING state) while
+  // the firmware held the motors disabled — the BT must instead surface
+  // EMERGENCY and run its stop/auto-reset handler. The firmware remains the
+  // safety authority; this only fixes what the BT reports and does.
+  return (ctx->latest_emergency.active_emergency || ctx->latest_emergency.latched_emergency)
+             ? BT::NodeStatus::SUCCESS
+             : BT::NodeStatus::FAILURE;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +179,17 @@ BT::NodeStatus IsCommand::tick()
     current = ctx->current_command;
   }
   return current == res.value() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+// ---------------------------------------------------------------------------
+// IsCoverageComplete
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus IsCoverageComplete::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  return ctx->coverage_all_complete ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 // ---------------------------------------------------------------------------
@@ -309,14 +331,33 @@ BT::NodeStatus IsChargingProgressing::tick()
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   std::lock_guard<std::mutex> lock(ctx->context_mutex);
 
+  const auto now = std::chrono::steady_clock::now();
+
+  // New-charge-session detection MUST run BEFORE the charger_failed_ guard, or
+  // the latch is permanent (the old clear site sat after the guard and was thus
+  // unreachable). A long gap since the last tick means the BT left the charging
+  // branch and came back — a fresh session — so clear any latched failure and
+  // force a new baseline. Also treat "not charging right now" as a session reset
+  // (the robot is no longer on the dock pulling current).
+  if (last_tick_set_)
+  {
+    const double gap = std::chrono::duration<double>(now - last_tick_time_).count();
+    if (gap > session_gap_sec_ || !ctx->latest_power.charger_enabled)
+    {
+      charger_failed_ = false;
+      baseline_set_ = false;
+    }
+  }
+  last_tick_time_ = now;
+  last_tick_set_ = true;
+
   // Once a charger failure is detected, keep returning FAILURE until the
-  // next charging session resets the node via a fresh baseline.
+  // next charging session resets the node (above) via a fresh baseline.
   if (charger_failed_)
   {
     return BT::NodeStatus::FAILURE;
   }
 
-  const auto now = std::chrono::steady_clock::now();
   const float current_battery = ctx->battery_percent;
 
   if (!baseline_set_)
@@ -431,19 +472,22 @@ BT::NodeStatus PreFlightCheck::tick()
   }
 
   // ── 5. Mowing area defined ───────────────────────────────────────────────
+  // Probe map_server with get_mowing_area(index=0): success=false means no
+  // areas are defined (the cell-based get_coverage_status was removed with the
+  // coverage-cell mechanism; get_mowing_area is the kept readiness probe).
   if (!coverage_client_)
   {
-    coverage_client_ = ctx->helper_node->create_client<mowgli_interfaces::srv::GetCoverageStatus>(
-        "/map_server_node/get_coverage_status");
+    coverage_client_ = ctx->helper_node->create_client<mowgli_interfaces::srv::GetMowingArea>(
+        "/map_server_node/get_mowing_area");
   }
   if (!coverage_client_->service_is_ready())
   {
-    failures.emplace_back("coverage-service-unavailable");
+    failures.emplace_back("map-area-service-unavailable");
   }
   else
   {
-    auto req = std::make_shared<mowgli_interfaces::srv::GetCoverageStatus::Request>();
-    req->area_index = 0;
+    auto req = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
+    req->index = 0;
     auto future = coverage_client_->async_send_request(req);
     auto start = std::chrono::steady_clock::now();
     bool ready = false;
@@ -457,7 +501,7 @@ BT::NodeStatus PreFlightCheck::tick()
     }
     if (!ready)
     {
-      failures.emplace_back("coverage-query-timeout");
+      failures.emplace_back("map-area-query-timeout");
     }
     else
     {
@@ -469,11 +513,31 @@ BT::NodeStatus PreFlightCheck::tick()
     }
   }
 
+  // ── 6. Firmware compatibility ────────────────────────────────────────────
+  // hardware_bridge handshakes the STM32 on connect and reports whether the
+  // firmware's wire-protocol version matches this image. An incompatible (or
+  // too-old-to-answer) firmware could misread blade/emergency/odom packets, so
+  // block undock/mow until the operator reflashes.
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    if (!ctx->latest_status.firmware_compatible)
+    {
+      const std::string& ver = ctx->latest_status.firmware_version;
+      char buf[96];
+      snprintf(buf,
+               sizeof(buf),
+               "firmware-incompatible (fw=%s proto=%u — reflash)",
+               ver.empty() ? "?" : ver.c_str(),
+               static_cast<unsigned>(ctx->latest_status.firmware_protocol_version));
+      failures.emplace_back(buf);
+    }
+  }
+
   // ── Verdict ──────────────────────────────────────────────────────────────
   if (failures.empty())
   {
     RCLCPP_INFO(ctx->node->get_logger(),
-                "PreFlightCheck PASS: battery=%.1f%% fix=%u area-ok tf-ok",
+                "PreFlightCheck PASS: battery=%.1f%% fix=%u area-ok tf-ok fw-ok",
                 battery,
                 fix_type);
     return BT::NodeStatus::SUCCESS;

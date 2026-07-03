@@ -22,19 +22,19 @@ Complete Mowgli robot mower system launch.
 Brings up all subsystems:
   1. mowgli.launch.py        — hardware bridge, RSP, twist_mux
   2. navigation.launch.py    — robot_localization (dual EKF), Nav2
-  3. Behavior tree node       — mowgli_behavior
-  4. Map server               — mowgli_map
-  5. Wheel odometry            — mowgli_localization
-  6. NavSat converter          — mowgli_localization (/gps/absolute_pose, /gps/status, /gps/pose_cov)
-  7. Localization monitor      — mowgli_localization
-  8. Diagnostics               — mowgli_monitoring
-  9. MQTT bridge (optional)   — mowgli_monitoring
-  10. foxglove_bridge — WebSocket bridge for GUI and Foxglove Studio
+  3. Behavior tree node      — mowgli_behavior
+  4. Map server              — mowgli_map
+  5. Wheel odometry          — mowgli_localization
+  6. NavSat converter        — mowgli_localization (/gps/absolute_pose, /gps/pose_cov)
+  7. Localization monitor    — mowgli_localization
+  8. Diagnostics             — mowgli_monitoring
+  9. MQTT bridge (optional)  — mowgli_monitoring
+  10. foxglove_bridge        — WebSocket bridge for GUI and Foxglove Studio
 """
 
 import os
+import sys
 
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
@@ -45,9 +45,22 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+
+# Shared robot-config loader (sibling module installed alongside this launch
+# file). Deep-merges the SPARSE installed mowgli_robot.yaml over the in-package
+# template defaults, so a missing key falls through to its versioned default.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from robot_config_util import load_robot_params  # noqa: E402
 
 
 def generate_launch_description() -> LaunchDescription:
+    # Keep sidecar-internal GNSS transport/status channels out of Foxglove.
+    # This covers the current hidden topic prefix plus older visible names.
+    internal_gnss_topic_whitelist = (
+        r"^(?!/(?:_gps_internal|gps_internal|universal_gnss)(?:/.*)?$).*"
+    )
+
     # ------------------------------------------------------------------
     # Package directories
     # ------------------------------------------------------------------
@@ -65,23 +78,30 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     _runtime_cfg_path = "/ros2_ws/config/mowgli_robot.yaml"
     _early_use_lidar = "true"
-    if os.path.isfile(_runtime_cfg_path):
-        try:
-            with open(_runtime_cfg_path, "r") as _f:
-                _cfg = yaml.safe_load(_f) or {}
-            _rp = _cfg.get("mowgli", {}).get("ros__parameters", {})
-            if "lidar_enabled" in _rp:
-                _early_use_lidar = "true" if bool(_rp["lidar_enabled"]) else "false"
-        except yaml.YAMLError:
-            pass
+    _yaml_set_lidar = False
+    # Merged params = in-package template defaults with the installed sparse
+    # config layered on top. `lidar_enabled` is an INSTALL-DECIDED key that is
+    # ABSENT from the template, so its PRESENCE in the merged params still
+    # signals an explicit operator choice (env-var fallback preserved below);
+    # if the installed config omits it, the key stays absent and the LIDAR_ENABLED
+    # env var / default governs.
+    _rp = load_robot_params(bringup_dir, _runtime_cfg_path)
+    if "lidar_enabled" in _rp:
+        _early_use_lidar = "true" if bool(_rp["lidar_enabled"]) else "false"
+        _yaml_set_lidar = True
 
-    # LIDAR_ENABLED env var overrides the yaml (back-compat with the
-    # installer's .env workflow).
-    _env_lidar = os.environ.get("LIDAR_ENABLED", "").strip().lower()
-    if _env_lidar in ("false", "0", "no"):
-        _early_use_lidar = "false"
-    elif _env_lidar in ("true", "1", "yes"):
-        _early_use_lidar = "true"
+    # mowgli_robot.yaml is the source of truth. The LIDAR_ENABLED env var
+    # (installer / compose .env) is a FALLBACK ONLY — it applies when the
+    # runtime yaml does NOT specify lidar_enabled (fresh install before the GUI
+    # has written one). When the yaml DOES set lidar_enabled, it WINS: a
+    # deliberate operator/GUI toggle must not be silently overridden by a stale
+    # .env (the .env said false while the GUI had re-enabled lidar — confusing).
+    if not _yaml_set_lidar:
+        _env_lidar = os.environ.get("LIDAR_ENABLED", "").strip().lower()
+        if _env_lidar in ("false", "0", "no"):
+            _early_use_lidar = "false"
+        elif _env_lidar in ("true", "1", "yes"):
+            _early_use_lidar = "true"
 
     # ------------------------------------------------------------------
     # Declared arguments
@@ -151,19 +171,17 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     behavior_params = os.path.join(behavior_dir, "config", "behavior_tree.yaml")
     map_params = os.path.join(map_dir, "config", "map_server.yaml")
-    nav2_params_file = os.path.join(bringup_dir, "config", "nav2_params.yaml")
+    # (Nav2 params are owned by navigation.launch.py, which deep-merges
+    # nav2_params_base.yaml + the lidar/no-lidar overlay; nothing here loads them.)
     monitoring_params = os.path.join(monitoring_dir, "config", "diagnostics.yaml")
     mqtt_params = os.path.join(monitoring_dir, "config", "mqtt_bridge.yaml")
-    # Robot-specific config (bind-mounted from mowgli-docker/config/mowgli/)
-    robot_config = "/ros2_ws/config/mowgli_robot.yaml"
 
-    # Load robot config to extract mowgli parameters for nodes that need
-    # explicit values (e.g. navsat_to_absolute_pose needs datum from mowgli).
-    robot_params = {}
-    if os.path.isfile(robot_config):
-        with open(robot_config, "r") as f:
-            robot_config_yaml = yaml.safe_load(f) or {}
-        robot_params = robot_config_yaml.get("mowgli", {}).get("ros__parameters", {})
+    # Robot parameters for nodes that need explicit values (e.g.
+    # navsat_to_absolute_pose needs the datum). Merged params = in-package
+    # template defaults with the installed sparse config layered on top, so a
+    # key the installed config omits falls through to its versioned template
+    # default (single source of truth).
+    robot_params = load_robot_params(bringup_dir, _runtime_cfg_path)
 
     # ------------------------------------------------------------------
     # 1. mowgli.launch.py — hardware bridge, RSP, twist_mux
@@ -207,10 +225,17 @@ def generate_launch_description() -> LaunchDescription:
             # so they appear on the GUI Settings page.
             {"tick_rate": float(robot_params.get("tick_rate", 10.0))},
             {"bt_debug_logging": bool(robot_params.get("bt_debug_logging", False))},
-            # undock_speed is consumed by the BackUp BT instances via
-            # the {undock_speed} blackboard reference in main_tree.xml.
-            # See issue #191.
+            # undock_speed / undock_distance are consumed by the BackUp BT
+            # instances via {undock_speed} / {undock_distance} blackboard
+            # references in main_tree.xml. See issue #191.
             {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
+            {"undock_distance": float(robot_params.get("undock_distance", 1.0))},
+            # idle_nav2_suspend: PAUSE the Nav2 lifecycle stack while parked on
+            # the dock to cut idle CPU/thermal load (costmaps stop looping).
+            # Default off — a deliberate per-site opt-in. RESUME is guaranteed
+            # before motion by the root Nav2ResumeGuard + Nav2ReadyPoll.
+            {"idle_nav2_suspend":
+                bool(robot_params.get("idle_nav2_suspend", False))},
             # transit_speed / mowing_speed flow into SetNavMode, which sets
             # them on the live controllers (FollowPath.desired_linear_vel for
             # the RPP transit controller, FollowCoveragePath.speed_fast for the
@@ -218,6 +243,26 @@ def generate_launch_description() -> LaunchDescription:
             # hardcoded 0.5/0.25 and the configured speeds never took effect.
             {"transit_speed": float(robot_params.get("transit_speed", 0.25))},
             {"mowing_speed": float(robot_params.get("mowing_speed", 0.2))},
+            # Battery thresholds — operator-tunable in mowgli_robot.yaml and
+            # surfaced on the GUI Settings page. Forwarded here under the C++
+            # parameter names the behavior node declares (behavior_tree.yaml
+            # uses *_pct aliases that do NOT match those names, so without
+            # this passthrough the node silently runs its compiled defaults).
+            # battery_critical_recovery_percent is the HYSTERESIS upper bound
+            # the critical-battery handler uses to return to IDLE after a
+            # recharge; it must exceed battery_critical_percent (the node
+            # clamps it if not).
+            {"battery_full_voltage": float(robot_params.get("battery_full_voltage", 28.0))},
+            {"battery_empty_voltage": float(robot_params.get("battery_empty_voltage", 24.0))},
+            {"battery_critical_voltage": float(robot_params.get("battery_critical_voltage", 0.0))},
+            {"battery_low_percent": float(robot_params.get("battery_low_percent", 20.0))},
+            {"battery_critical_percent": float(robot_params.get("battery_critical_percent", 10.0))},
+            {"battery_full_percent": float(robot_params.get("battery_full_percent", 95.0))},
+            {
+                "battery_critical_recovery_percent": float(
+                    robot_params.get("battery_critical_recovery_percent", 30.0)
+                )
+            },
         ],
     )
 
@@ -248,8 +293,37 @@ def generate_launch_description() -> LaunchDescription:
             # around discrete obstacles uses the correct robot footprint
             # and the wall-vs-obstacle threshold operators tune per site.
             {"chassis_width": float(robot_params.get("chassis_width", 0.40))},
+            # Mirror the chassis_safety_inset coverage_server gets from
+            # navigation.launch.py (operator override, else chassis_width/2).
+            # The BT no longer pre-gates polygon size (the coverage server
+            # reports too-small fields itself), but other BT consumers (bypass
+            # arcs) still read this.
+            {"chassis_safety_inset": float(
+                robot_params.get(
+                    "chassis_safety_inset",
+                    float(robot_params.get("chassis_width", 0.40)) / 2.0))},
             {"max_obstacle_avoidance_distance":
                 float(robot_params.get("max_obstacle_avoidance_distance", 2.0))},
+            # Hard area-boundary enforcement (operator intent: "lethal area
+            # where there is no navigation or mowing area"). When true (default)
+            # the keepout mask marks every cell outside the union of all areas
+            # as LETHAL so the planner never routes out and MPPI never steers
+            # out. Operator-tunable from mowgli_robot.yaml / GUI; set false only
+            # if the dock/transit corridor is NOT covered by a navigation area
+            # (otherwise the hard boundary would strand docking). The free slack
+            # left outside each edge for RTK drift is enforce_boundary_margin_m.
+            {"lethal_outside_areas": bool(
+                robot_params.get("lethal_outside_areas", True))},
+            {"enforce_boundary_margin_m": float(
+                robot_params.get("enforce_boundary_margin_m", 0.25))},
+            # tool_width is the SINGLE source of truth (mowgli_robot.yaml) for
+            # both the mark_cells_mowed stamp radius / sliver detection here AND
+            # coverage_server.operation_width (injected by navigation.launch.py).
+            # Inject it AFTER map_params so the operator value overrides the
+            # static map_server.yaml default — otherwise an operator who changes
+            # tool_width moves the F2C swath spacing while this stamp radius
+            # stays frozen, re-opening the un-mowed-strip / under-coverage gap.
+            {"tool_width": float(robot_params.get("tool_width", 0.18))},
         ],
     )
 
@@ -262,16 +336,13 @@ def generate_launch_description() -> LaunchDescription:
     # publisher for /wheel_odom. Keep the source in the package for now
     # (disabled) and rely on hardware_bridge alone.
     # ------------------------------------------------------------------
-    # 7a. NavSat adapter for legacy AbsolutePose + typed GNSS status
+    # 6a. NavSat adapter for legacy AbsolutePose-compatible consumers.
     # navsat_transform_node takes /gps/fix directly for the EKF pipeline;
-    # this node publishes /gps/status through the shared GNSS adapter,
-    # keeps /gps/absolute_pose for legacy consumers, and emits /gps/pose_cov
-    # for ekf_map_node fusion.
+    # this node keeps /gps/absolute_pose for legacy consumers and emits
+    # /gps/pose_cov for ekf_map_node fusion. Universal GNSS owns /gps/status.
     # ------------------------------------------------------------------
-    datum_lat = float(robot_params.get("datum_lat", 0.0))
-    datum_lon = float(robot_params.get("datum_lon", 0.0))
-    gnss_backend = os.environ.get("GNSS_BACKEND", "gps")
-    gps_protocol = os.environ.get("GPS_PROTOCOL", "UBX")
+    datum_lat = float(robot_params.get("datum_lat", 0.000000000))
+    datum_lon = float(robot_params.get("datum_lon", 0.000000000))
     navsat_converter_node = Node(
         package="mowgli_localization",
         executable="navsat_to_absolute_pose_node",
@@ -281,15 +352,13 @@ def generate_launch_description() -> LaunchDescription:
             {
                 "datum_lat": datum_lat,
                 "datum_lon": datum_lon,
-                "gnss_backend": gnss_backend,
-                "gps_protocol": gps_protocol,
             },
             {"use_sim_time": use_sim_time},
         ],
     )
 
     # ------------------------------------------------------------------
-    # 8. Localization monitor
+    # 7. Localization monitor
     # ------------------------------------------------------------------
     localization_monitor_node = Node(
         package="mowgli_localization",
@@ -302,7 +371,7 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ------------------------------------------------------------------
-    # 8b. IMU yaw calibration node (on-demand)
+    # 7b. IMU yaw calibration node (on-demand)
     # Exposes /calibrate_imu_yaw_node/calibrate — idle until called.
     # ------------------------------------------------------------------
     calibrate_imu_yaw_node = Node(
@@ -312,11 +381,13 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             {"use_sim_time": use_sim_time},
+            {"undock_distance": float(robot_params.get("undock_distance", 2.0))},
+            {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
         ],
     )
 
     # ------------------------------------------------------------------
-    # 9. Diagnostics
+    # 8. Diagnostics
     # ------------------------------------------------------------------
     diagnostics_node = Node(
         package="mowgli_monitoring",
@@ -325,12 +396,17 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             monitoring_params,
-            {"use_sim_time": use_sim_time},
+            {
+                "use_sim_time": use_sim_time,
+                # Follow the same authoritative LiDAR flag as the Nav stack so the
+                # health check reports "disabled" instead of a false "no scan" error.
+                "lidar_enabled": ParameterValue(use_lidar, value_type=bool),
+            },
         ],
     )
 
     # ------------------------------------------------------------------
-    # 10. MQTT bridge (optional)
+    # 9. MQTT bridge (optional)
     # ------------------------------------------------------------------
     mqtt_bridge_node = Node(
         condition=IfCondition(enable_mqtt),
@@ -345,10 +421,11 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ------------------------------------------------------------------
-    # 11. Foxglove Bridge — WebSocket bridge for GUI and Foxglove Studio
+    # 10. Foxglove Bridge — WebSocket bridge for GUI and Foxglove Studio
     # ------------------------------------------------------------------
-    # No topic/service whitelists — all topics are available for Foxglove
-    # Studio debugging. The GUI backend throttles subscriptions on its side.
+    # Expose the public graph broadly, but keep sidecar-internal GNSS
+    # transport/status topics out of Foxglove so they do not leak into the
+    # GUI contract or trigger schema-resolution noise.
     foxglove_bridge_node = Node(
         condition=IfCondition(enable_foxglove),
         package="foxglove_bridge",
@@ -360,11 +437,18 @@ def generate_launch_description() -> LaunchDescription:
                 "port": foxglove_port,
                 "address": "0.0.0.0",
                 "send_buffer_limit": 10000000,
-                "num_threads": 0,
+                "num_threads": 2,
+                "topic_whitelist": [internal_gnss_topic_whitelist],
+                "client_topic_whitelist": [internal_gnss_topic_whitelist],
                 "capabilities": [
                     "clientPublish",
                     "services",
                     "connectionGraph",
+                    # Allow Foxglove Studio to read AND set ROS parameters live
+                    # (e.g. tuning controller_server / coverage critics in the
+                    # field). param_whitelist (default '.*') gates which params.
+                    "parameters",
+                    "parametersSubscribe",
                 ],
             },
         ],
@@ -374,6 +458,21 @@ def generate_launch_description() -> LaunchDescription:
     # navigation_launch.py (in the lifecycle_nodes list). Do NOT launch
     # it here — duplicating it exhausts DDS participants and causes
     # lifecycle conflicts.
+
+    # ------------------------------------------------------------------
+    # 12. cmd_vel WebSocket relay — low-latency manual mowing control
+    # ------------------------------------------------------------------
+    # Accepts TwistStamped JSON on port 8766 and publishes directly to
+    # /cmd_vel_teleop via rclpy, bypassing foxglove_bridge's JSON→CDR
+    # conversion overhead and the shared-connection head-of-line blocking
+    # with subscription data. The Go GUI's PublisherRoute connects here
+    # instead of going through foxglove_bridge for manual mowing.
+    cmd_vel_relay_node = Node(
+        package="mowgli_bringup",
+        executable="cmd_vel_ws_relay.py",
+        name="cmd_vel_ws_relay",
+        output="screen",
+    )
 
     # ------------------------------------------------------------------
     # 13. Obstacle tracker — persistent LiDAR obstacle detection
@@ -440,6 +539,7 @@ def generate_launch_description() -> LaunchDescription:
             diagnostics_node,
             mqtt_bridge_node,
             foxglove_bridge_node,
+            cmd_vel_relay_node,
             # Dock heading is published by hardware_bridge at 1 Hz while
             # charging (~/dock_heading → /gnss/heading via mowgli.launch.py
             # remapping). No separate launch action needed.

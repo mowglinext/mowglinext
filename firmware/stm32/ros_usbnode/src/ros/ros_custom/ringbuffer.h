@@ -62,7 +62,7 @@ uint32_t  ringbuffer_getchar(struct  ringbuffer *rb, uint8_t *ch);
 void  ringbuffer_flush(struct  ringbuffer *rb);
 
 uint16_t  ringbuffer_get_size(struct  ringbuffer *rb);
-enum  ringbuffer_state  ringbuffer_status(struct  ringbuffer *rb);
+enum  ringbuffer_state  ringbuffer_status(const struct  ringbuffer *rb);
 
 /** return the size of data in rb */
 uint16_t  ringbuffer_data_len(struct  ringbuffer *rb);

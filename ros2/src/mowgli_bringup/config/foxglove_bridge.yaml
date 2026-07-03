@@ -4,6 +4,8 @@ foxglove_bridge:
     address: "0.0.0.0"
     send_buffer_limit: 10000000
     num_threads: 0
-    # Whitelist params omitted — foxglove_bridge exposes all topics/services
-    # by default. Add entries to restrict, e.g.:
-    # topic_whitelist: ["/scan", "/cmd_vel"]
+    # Keep sidecar-internal Universal GNSS topics off the public GUI surface.
+    topic_whitelist:
+      - "^(?!/(?:_gps_internal|gps_internal|universal_gnss)(?:/.*)?$).*"
+    client_topic_whitelist:
+      - "^(?!/(?:_gps_internal|gps_internal|universal_gnss)(?:/.*)?$).*"

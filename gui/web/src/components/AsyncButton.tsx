@@ -1,11 +1,13 @@
 import {App, Button, ButtonProps} from "antd";
 import * as React from "react";
+import {useTranslation} from "react-i18next";
 
 
 export const AsyncButton: React.FC<ButtonProps & {
     onAsyncClick: (event: React.MouseEvent) => Promise<any>
 }> = (props) => {
 
+    const {t} = useTranslation();
     const {notification} = App.useApp();
     const {onAsyncClick, ...rest} = props;
     const [loading, setLoading] = React.useState(false)
@@ -19,7 +21,7 @@ export const AsyncButton: React.FC<ButtonProps & {
                 if (console.error)
                     console.error(e);
                 notification.error({
-                    message: 'An error occured',
+                    message: t('asyncButton.errorOccurred'),
                     description: e.message,
                 })
             })

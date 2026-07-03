@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -13,20 +14,47 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
 
+const latLonDecimalPlaces = 9
+
+var fixedPrecisionEnvKeys = map[string]bool{
+	"OM_DATUM_LAT":  true,
+	"OM_DATUM_LONG": true,
+	"OM_DATUM_LON":  true,
+}
+
+var fixedPrecisionYAMLKeys = map[string]bool{
+	"datum_lat": true,
+	"datum_lon": true,
+	"dock_lat":  true,
+	"dock_lon":  true,
+}
+
+type fixedPrecisionFloat float64
+
+func (f fixedPrecisionFloat) MarshalYAML() (any, error) {
+	return &yaml.Node{
+		Kind:  yaml.ScalarNode,
+		Tag:   "!!float",
+		Value: formatLatLonDecimal(float64(f)),
+	}, nil
+}
+
 // writePreservingPerms writes content to path, preserving the existing
 // file's mode and uid/gid when the file already exists. When the file
-// is being created for the first time, it is written world-writable
-// (0664) so other processes (ROS containers running as a different
-// user) can still update it. The previous behavior would silently
-// rewrite the file as owned by the GUI process with mode 0644, which
-// locked out the calibration service and the line-splice writers in
-// hardware_bridge / map_server.
+// is being created for the first time, it is written owner- and
+// group-writable (0664) so other processes (ROS containers) sharing the
+// file's group can still update it. NOTE: 0664 is NOT world-writable, so
+// the ROS-side line-splice writers (calibration service, set_docking_point,
+// drive-tuning rollback) only persist if their container shares the file's
+// gid; if the containers run with a different uid AND gid, those write-backs
+// fail with EACCES. The previous behavior would silently rewrite the file as
+// owned by the GUI process with mode 0644, which locked out those writers.
 func writePreservingPerms(path string, content []byte) error {
 	mode := os.FileMode(0664)
 	var uid, gid int = -1, -1
@@ -59,6 +87,7 @@ func SettingsRoutes(r *gin.RouterGroup, dbProvider types.IDBProvider) {
 	PostSettings(r, dbProvider)
 	GetSettingsSchema(r, dbProvider)
 	GetSettingsYAML(r, dbProvider)
+	GetSettingsYAMLDefaults(r, dbProvider)
 	PostSettingsYAML(r, dbProvider)
 	GetSettingsStatus(r, dbProvider)
 	PostSettingsStatus(r, dbProvider)
@@ -222,8 +251,11 @@ func extractNodeMappings(schema map[string]any) map[string]string {
 }
 
 // flattenROS2YAML reads nested ROS2 YAML (node: ros__parameters: {k: v}) and
-// returns a flat map of all parameter key-value pairs across all nodes.
-// It also duplicates datum_lat/datum_lon from mowgli node to keep them in sync.
+// returns a flat map of all parameter key-value pairs across all nodes. On a
+// key collision across nodes the last writer wins (Go map iteration order is
+// randomized, so a genuine collision with differing values resolves
+// nondeterministically); callers must ensure parameter keys are unique across
+// nodes.
 func flattenROS2YAML(yamlData map[string]any) map[string]any {
 	flat := map[string]any{}
 	for _, nodeData := range yamlData {
@@ -292,6 +324,57 @@ func nestToROS2YAML(flat map[string]any, nodeMappings map[string]string, existin
 	return result
 }
 
+// valuesEqual reports whether a config value equals a schema default,
+// tolerating the numeric-type churn that YAML/JSON round-trips introduce
+// (a template default of 5 may arrive as int 5, int64 5, or float64 5.0;
+// booleans and strings compare directly). This is the predicate that keeps
+// the installed mowgli_robot.yaml SPARSE: any key whose live value equals its
+// schema default is dropped on write, so the ROS2 deep-merge falls through to
+// the package template. Resetting a field to its default is therefore just
+// "write the default value" — it disappears from the installed file.
+func valuesEqual(a, b any) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	// Numeric comparison first: JSON numbers decode to float64, YAML ints to
+	// int, so a strict == would spuriously flag "5" != "5.0".
+	if af, aok := asFloat64(a); aok {
+		if bf, bok := asFloat64(b); bok {
+			return af == bf
+		}
+	}
+	if ab, aok := a.(bool); aok {
+		if bb, bok := b.(bool); bok {
+			return ab == bb
+		}
+	}
+	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
+}
+
+// pruneNestedKeys removes the given parameter keys from every node's
+// ros__parameters block in a nested ROS2 YAML tree. nestToROS2YAML clones the
+// pre-existing on-disk structure verbatim, so a key that was dropped from the
+// flat map to keep the config sparse would otherwise survive in the clone;
+// this scrubs it from the final output.
+func pruneNestedKeys(nested map[string]any, keys map[string]bool) {
+	if len(keys) == 0 {
+		return
+	}
+	for _, nodeData := range nested {
+		nodeMap, ok := nodeData.(map[string]any)
+		if !ok {
+			continue
+		}
+		rosParams, ok := nodeMap["ros__parameters"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for key := range keys {
+			delete(rosParams, key)
+		}
+	}
+}
+
 func coerceValue(value string, schemaType string) any {
 	switch schemaType {
 	case "boolean":
@@ -306,6 +389,405 @@ func coerceValue(value string, schemaType string) any {
 		}
 	}
 	return value
+}
+
+func asFloat64(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int8:
+		return float64(v), true
+	case int16:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case uint:
+		return float64(v), true
+	case uint8:
+		return float64(v), true
+	case uint16:
+		return float64(v), true
+	case uint32:
+		return float64(v), true
+	case uint64:
+		return float64(v), true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func formatLatLonDecimal(value float64) string {
+	return strconv.FormatFloat(value, 'f', latLonDecimalPlaces, 64)
+}
+
+func serializeShellSettingValue(key string, value any) string {
+	if fixedPrecisionEnvKeys[key] {
+		if f, ok := asFloat64(value); ok {
+			return fmt.Sprintf("%#v", formatLatLonDecimal(f))
+		}
+	}
+	return fmt.Sprintf("%#v", value)
+}
+
+func applyFixedPrecisionGeoScalars(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, child := range typed {
+			if fixedPrecisionYAMLKeys[key] {
+				if f, ok := asFloat64(child); ok {
+					out[key] = fixedPrecisionFloat(f)
+					continue
+				}
+			}
+			out[key] = applyFixedPrecisionGeoScalars(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, child := range typed {
+			out[i] = applyFixedPrecisionGeoScalars(child)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func marshalROS2YAMLWithGeoPrecision(nested map[string]any) ([]byte, error) {
+	return yaml.Marshal(applyFixedPrecisionGeoScalars(nested))
+}
+
+func stringValue(value any, defaultValue string) string {
+	if value == nil {
+		return defaultValue
+	}
+	text := strings.TrimSpace(fmt.Sprintf("%v", value))
+	if text == "" || text == "<nil>" {
+		return defaultValue
+	}
+	return text
+}
+
+func boolStringValue(value any, defaultValue bool) string {
+	if value == nil {
+		if defaultValue {
+			return "true"
+		}
+		return "false"
+	}
+	switch v := value.(type) {
+	case bool:
+		if v {
+			return "true"
+		}
+		return "false"
+	default:
+		text := strings.ToLower(stringValue(value, ""))
+		switch text {
+		case "1", "true", "yes", "on":
+			return "true"
+		case "0", "false", "no", "off":
+			return "false"
+		}
+	}
+	if defaultValue {
+		return "true"
+	}
+	return "false"
+}
+
+func normalizeGnssReceiverFamily(value any) string {
+	switch strings.ToLower(stringValue(value, "auto")) {
+	case "", "auto":
+		return "auto"
+	case "u-blox", "ublox":
+		return "ublox"
+	case "unicore":
+		return "unicore"
+	case "nmea":
+		return "nmea"
+	default:
+		return strings.ToLower(stringValue(value, "auto"))
+	}
+}
+
+func normalizeGnssProfile(value any) string {
+	switch strings.ToLower(strings.ReplaceAll(stringValue(value, "runtime_only"), "-", "_")) {
+	case "", "runtime_only", "balanced", "power_saving":
+		return "runtime_only"
+	case "high_precision", "survey", "rover_high_precision":
+		return "rover_high_precision"
+	case "debug", "rover_high_precision_debug":
+		return "rover_high_precision_debug"
+	case "factory_reset":
+		return "factory_reset"
+	default:
+		return "runtime_only"
+	}
+}
+
+func normalizeGnssSignalProfile(value any) string {
+	switch strings.ToLower(strings.ReplaceAll(stringValue(value, "balanced"), "-", "_")) {
+	case "", "balanced":
+		return "balanced"
+	case "minimal":
+		return "minimal"
+	case "ppp_optimized", "high_precision":
+		return "high_precision"
+	case "all_signals":
+		return "all_signals"
+	case "custom":
+		return "custom"
+	default:
+		return "balanced"
+	}
+}
+
+func normalizeGnssReceiverModel(value any) string {
+	switch model := strings.ToUpper(strings.TrimSpace(stringValue(value, ""))); model {
+	case "", "AUTO", "UNKNOWN", "UNKNOWN/AUTO", "AUTO/UNKNOWN":
+		return ""
+	default:
+		return model
+	}
+}
+
+func normalizeGnssProfileRate(value any) string {
+	switch stringValue(value, "5") {
+	case "1", "5", "7", "10":
+		return stringValue(value, "5")
+	default:
+		return "5"
+	}
+}
+
+func normalizeGnssSignalGroup(value any) string {
+	fields := strings.Fields(stringValue(value, ""))
+	return strings.Join(fields, " ")
+}
+
+func firstValue(flat map[string]any, keys ...string) any {
+	for _, key := range keys {
+		value, ok := flat[key]
+		if !ok || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			if strings.TrimSpace(typed) == "" {
+				continue
+			}
+		}
+		return value
+	}
+	return nil
+}
+
+func gnssConnectionFromDevice(serialDevice string) string {
+	switch {
+	case strings.HasPrefix(serialDevice, "/dev/serial/by-id/"),
+		strings.HasPrefix(serialDevice, "/dev/ttyUSB"),
+		strings.HasPrefix(serialDevice, "/dev/ttyACM"):
+		return "usb"
+	case strings.HasPrefix(serialDevice, "/dev/ttyAMA"),
+		strings.HasPrefix(serialDevice, "/dev/ttyS"),
+		strings.HasPrefix(serialDevice, "/dev/ttyTHS"),
+		strings.HasPrefix(serialDevice, "/dev/ttyHS"):
+		return "uart"
+	default:
+		return "uart"
+	}
+}
+
+func gnssCompatFromFlat(flat map[string]any) map[string]string {
+	receiverFamily := normalizeGnssReceiverFamily(flat["gnss_receiver_family"])
+	serialDevice := stringValue(flat["gnss_serial_device"], "/dev/ttyAMA4")
+	serialBaud := stringValue(flat["gnss_serial_baud"], "921600")
+	configBaud := stringValue(firstValue(flat, "gnss_config_baud", "gnss_serial_baud"), serialBaud)
+	profile := normalizeGnssProfile(flat["gnss_profile"])
+	signalProfile := normalizeGnssSignalProfile(flat["gnss_signal_profile"])
+	profileRateHz := normalizeGnssProfileRate(firstValue(flat, "gnss_profile_rate_hz", "gnss_rate_hz"))
+	ntripMountpoint := stringValue(flat["ntrip_mountpoint"], "NEAR")
+	ntripGGAEnabled := "false"
+	if strings.HasPrefix(strings.ToLower(ntripMountpoint), "near") {
+		ntripGGAEnabled = "true"
+	}
+
+	// crtk.net is the public Centipede caster, whose well-known anonymous login
+	// is "centipede/centipede". Only fall back to those credentials when the
+	// receiver is actually pointed at that caster AND the operator has not
+	// supplied (or has deliberately cleared) their own. Injecting "centipede"
+	// unconditionally would (a) hand a custom caster the wrong credentials and
+	// (b) silently re-enable the public caster for an operator who cleared the
+	// fields to disable it.
+	ntripHost := stringValue(flat["ntrip_host"], "crtk.net")
+	ntripUser := stringValue(flat["ntrip_user"], "")
+	ntripPassword := stringValue(flat["ntrip_password"], "")
+	if strings.EqualFold(ntripHost, "crtk.net") {
+		if ntripUser == "" {
+			ntripUser = "centipede"
+		}
+		if ntripPassword == "" {
+			ntripPassword = "centipede"
+		}
+	}
+
+	return map[string]string{
+		"GNSS_STACK":                "universal",
+		"GNSS_STATUS_SOURCE":        "universal",
+		"GNSS_RECEIVER_FAMILY":      receiverFamily,
+		"GNSS_TRANSPORT":            "serial",
+		"GNSS_SERIAL_DEVICE":        serialDevice,
+		"GNSS_SERIAL_BAUD":          serialBaud,
+		"GNSS_CONFIG_BAUD":          configBaud,
+		"GNSS_PROFILE":              profile,
+		"GNSS_SIGNAL_PROFILE":       signalProfile,
+		"GNSS_PROFILE_RATE_HZ":      profileRateHz,
+		"GNSS_BACKEND":              "universal",
+		"GNSS_NTRIP_ENABLED":        boolStringValue(flat["ntrip_enabled"], true),
+		"GNSS_NTRIP_HOST":           ntripHost,
+		"GNSS_NTRIP_PORT":           stringValue(flat["ntrip_port"], "2101"),
+		"GNSS_NTRIP_MOUNTPOINT":     ntripMountpoint,
+		"GNSS_NTRIP_USERNAME":       ntripUser,
+		"GNSS_NTRIP_PASSWORD":       ntripPassword,
+		"GNSS_RTCM_FORWARDING":      "true",
+		"GNSS_NTRIP_GGA_ENABLED":    ntripGGAEnabled,
+		"GNSS_NTRIP_GGA_INTERVAL_S": stringValue(flat["gnss_ntrip_gga_interval_s"], "10"),
+	}
+}
+
+func applyUniversalGnssCompatibility(flat map[string]any) map[string]string {
+	compat := gnssCompatFromFlat(flat)
+
+	flat["gnss_receiver_family"] = compat["GNSS_RECEIVER_FAMILY"]
+	flat["gnss_serial_device"] = compat["GNSS_SERIAL_DEVICE"]
+	if baud, err := strconv.Atoi(compat["GNSS_SERIAL_BAUD"]); err == nil {
+		flat["gnss_serial_baud"] = baud
+	} else {
+		flat["gnss_serial_baud"] = compat["GNSS_SERIAL_BAUD"]
+	}
+	if configBaud, err := strconv.Atoi(compat["GNSS_CONFIG_BAUD"]); err == nil {
+		flat["gnss_config_baud"] = configBaud
+	} else {
+		flat["gnss_config_baud"] = compat["GNSS_CONFIG_BAUD"]
+	}
+	flat["gnss_profile"] = compat["GNSS_PROFILE"]
+	flat["gnss_signal_profile"] = compat["GNSS_SIGNAL_PROFILE"]
+	if _, exists := flat["gnss_receiver_model"]; exists {
+		flat["gnss_receiver_model"] = normalizeGnssReceiverModel(flat["gnss_receiver_model"])
+	}
+	if rateHz, err := strconv.Atoi(compat["GNSS_PROFILE_RATE_HZ"]); err == nil {
+		flat["gnss_profile_rate_hz"] = rateHz
+	} else {
+		flat["gnss_profile_rate_hz"] = compat["GNSS_PROFILE_RATE_HZ"]
+	}
+	flat["gnss_signal_group"] = normalizeGnssSignalGroup(flat["gnss_signal_group"])
+	delete(flat, "gnss_rate_hz")
+
+	return compat
+}
+
+var legacyGnssEnvKeys = []string{
+	"GPS_CONNECTION",
+	"GPS_" + "RUNTIME_MODE",
+	"GPS_" + "PROTOCOL",
+	"GPS_" + "PORT",
+	"GPS_" + "BY_ID",
+	"GPS_" + "UART_DEVICE",
+	"GPS_" + "BAUD",
+	"GPS_" + "DEBUG_ENABLED",
+	"GPS_" + "DEBUG_PORT",
+	"GPS_" + "DEBUG_UART_DEVICE",
+	"GPS_" + "DEBUG_BAUD",
+	"GPS_" + "UART_RULE",
+	"GPS_" + "DEBUG_UART_RULE",
+	"UBLOX_" + "DEVICE_FAMILY",
+	"UBLOX_" + "DEVICE_SERIAL_STRING",
+	"UNICORE_" + "ROS_PACKAGE",
+	"UNICORE_" + "ROS_EXECUTABLE",
+	"UNICORE_COM_PORT",
+	"UNICORE_IMAGE",
+}
+
+func writeRuntimeEnvFile(path string, updates map[string]string) error {
+	var content string
+	if file, err := os.ReadFile(path); err == nil {
+		content = string(file)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	lines := []string{}
+	if content != "" {
+		lines = strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	} else {
+		lines = []string{}
+	}
+
+	seen := map[string]bool{}
+	for idx, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		eq := strings.IndexByte(line, '=')
+		if eq <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:eq])
+		legacyKey := false
+		for _, candidate := range legacyGnssEnvKeys {
+			if key == candidate {
+				lines[idx] = ""
+				legacyKey = true
+				break
+			}
+		}
+		if legacyKey {
+			continue
+		}
+		value, ok := updates[key]
+		if !ok {
+			continue
+		}
+		lines[idx] = fmt.Sprintf("%s=%s", key, value)
+		seen[key] = true
+	}
+
+	keys := make([]string, 0, len(updates))
+	for key := range updates {
+		if !seen[key] {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		lines = append(lines, fmt.Sprintf("%s=%s", key, updates[key]))
+	}
+
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+
+	out := strings.TrimRight(strings.Join(filtered, "\n"), "\n") + "\n"
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return writePreservingPerms(path, []byte(out))
 }
 
 // applyMowgliOverlay modifies the settings schema to add Mowgli-specific
@@ -411,6 +893,12 @@ func getSchema(dbProvider types.IDBProvider) (map[string]any, error) {
 		return nil, fmt.Errorf("invalid local schema JSON: %w", err)
 	}
 
+	// Apply the Mowgli overlay (adds "Mowgli" to the OM_MOWER enum and the
+	// conditional hardware fields). The base OpenMower schema does not carry it,
+	// so without this the GUI would never offer "Mowgli" as a mower model. Done
+	// once here, at load time, so every schema consumer sees it consistently.
+	schema = applyMowgliOverlay(schema)
+
 	schemaCacheMu.Lock()
 	schemaCache = schema
 	schemaCacheTime = time.Now()
@@ -507,7 +995,7 @@ func PostSettings(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRoutes 
 			if value == false {
 				value = "False"
 			}
-			fileContent += "export " + key + "=" + fmt.Sprintf("%#v", value) + "\n"
+			fileContent += "export " + key + "=" + serializeShellSettingValue(key, value) + "\n"
 		}
 		if err = os.MkdirAll(filepath.Dir(string(mowerConfigFile)), 0755); err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
@@ -592,7 +1080,6 @@ var (
 	schemaCacheTTL  = 1 * time.Hour
 )
 
-
 // GetSettingsSchema returns the mower config JSON Schema.
 //
 // @Summary returns the mower config JSON Schema
@@ -672,7 +1159,40 @@ func GetSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRout
 			}
 		}
 
+		applyUniversalGnssCompatibility(flat)
+
 		c.JSON(200, flat)
+	})
+}
+
+// GetSettingsYAMLDefaults returns the flat map of schema-default values —
+// the GUI's authoritative source of "default" for each parameter. Because the
+// GUI backend runs in a container that does NOT ship the ROS2 package template
+// (mowgli_bringup/config/mowgli_robot.yaml, the true default source consumed by
+// robot_config_util's deep-merge), the JSON schema `default` values stand in
+// for it. They SHOULD match the template; a divergence is a schema bug, not a
+// runtime one. The frontend uses this to (a) show which values are
+// operator-overridden vs at default and (b) implement per-field "reset to
+// default" (writing the default value, which PostSettingsYAML then prunes to
+// keep the installed config sparse).
+//
+// @Summary returns the schema default value for every known parameter
+// @Description returns a flat key-value map of default values (the reset-to-default source)
+// @Tags settings
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} ErrorResponse
+// @Router /settings/yaml/defaults [get]
+func GetSettingsYAMLDefaults(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRoutes {
+	return r.GET("/settings/yaml/defaults", func(c *gin.Context) {
+		schema, err := getSchema(dbProvider)
+		if err != nil {
+			c.JSON(500, ErrorResponse{Error: err.Error()})
+			return
+		}
+		defaults := map[string]any{}
+		extractDefaults(schema, defaults)
+		c.JSON(200, defaults)
 	})
 }
 
@@ -716,8 +1236,8 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		// Merge schema defaults
 		schema, err := getSchema(dbProvider)
 		nodeMappings := map[string]string{}
+		defaults := map[string]any{}
 		if err == nil {
-			defaults := map[string]any{}
 			extractDefaults(schema, defaults)
 			for key, value := range defaults {
 				if _, exists := existing[key]; !exists {
@@ -727,16 +1247,41 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 			nodeMappings = extractNodeMappings(schema)
 		}
 
-		// Merge payload on top
+		// Merge payload on top. A null value is an explicit delete request
+		// (from the Advanced "Remove parameter" action, or a per-field
+		// "reset to default" for a key that has no schema default) — drop the
+		// key so it is removed from the YAML rather than written back as
+		// "key: null".
 		for key, value := range payload {
-			existing[key] = value
+			if value == nil {
+				delete(existing, key)
+			} else {
+				existing[key] = value
+			}
+		}
+		gnssEnvUpdates := applyUniversalGnssCompatibility(existing)
+
+		// Keep the installed config SPARSE: any key whose value equals its
+		// schema default is pruned so the ROS2 launch-time deep-merge falls
+		// through to the package template (the source of defaults). This is
+		// also how "reset to default" persists — the field is written with
+		// its default value from the form, and pruned here. prunedKeys is
+		// applied to the nested output too, because nestToROS2YAML preserves
+		// pre-existing on-disk keys and would otherwise resurrect them.
+		prunedKeys := map[string]bool{}
+		for key, def := range defaults {
+			if cur, exists := existing[key]; exists && valuesEqual(cur, def) {
+				delete(existing, key)
+				prunedKeys[key] = true
+			}
 		}
 
 		// Nest back into ROS2 YAML structure
 		nested := nestToROS2YAML(existing, nodeMappings, existingYAML)
+		pruneNestedKeys(nested, prunedKeys)
 
 		// Marshal with YAML comments header
-		out, err := yaml.Marshal(nested)
+		out, err := marshalROS2YAMLWithGeoPrecision(nested)
 		if err != nil {
 			c.JSON(500, ErrorResponse{Error: "failed to marshal YAML: " + err.Error()})
 			return
@@ -753,6 +1298,14 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		if err := writePreservingPerms(string(configFilePath), []byte(header+string(out))); err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
+		}
+
+		envFilePath, err := dbProvider.Get("system.mower.runtimeEnvFile")
+		if err == nil && len(envFilePath) > 0 {
+			if err := writeRuntimeEnvFile(string(envFilePath), gnssEnvUpdates); err != nil {
+				c.JSON(500, ErrorResponse{Error: "failed to update runtime env: " + err.Error()})
+				return
+			}
 		}
 
 		log.Printf("Saved mowgli_robot.yaml (%d bytes)", len(out)+len(header))

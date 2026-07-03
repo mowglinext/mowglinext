@@ -1,5 +1,6 @@
 import {useCallback, useState} from "react";
 import {App} from "antd";
+import {useTranslation} from "react-i18next";
 
 // Shared state machine for the IMU yaw + dock pose auto-calibration.
 // Used by both:
@@ -65,6 +66,7 @@ interface UseImuYawCalibrationOptions {
 }
 
 export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYawCalibrationOptions) => {
+    const {t} = useTranslation();
     const {notification} = App.useApp();
     const [calibOpen, setCalibOpen] = useState(false);
     const [calibRunning, setCalibRunning] = useState(false);
@@ -106,17 +108,17 @@ export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYaw
             setCalibResult(data);
         } catch (e: any) {
             const msg = e?.name === "AbortError"
-                ? "Timed out after 155 s. The service may still be running — check the robot and retry."
+                ? t("imuYawCalibration.timedOut")
                 : (e?.message || String(e));
             notification.error({
-                message: "IMU yaw calibration failed",
+                message: t("imuYawCalibration.failed"),
                 description: msg,
             });
         } finally {
             clearTimeout(timeoutId);
             setCalibRunning(false);
         }
-    }, [notification]);
+    }, [notification, t]);
 
     const applyCalibration = useCallback(() => {
         if (!calibResult || !calibResult.success) return;
@@ -156,16 +158,16 @@ export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYaw
 
         const previousDeg = currentImuYawRad != null ? roundTo(radToDeg(currentImuYawRad), 2) : null;
         notification.success({
-            message: "Calibration applied",
+            message: t("imuYawCalibration.applied"),
             description:
                 appliedBits.join(" · ")
-                + (previousDeg != null ? ` (previously ${previousDeg}°)` : "")
-                + ". Remember to save the configuration.",
+                + (previousDeg != null ? ` ${t("imuYawCalibration.previously", {value: previousDeg})}` : "")
+                + t("imuYawCalibration.rememberToSave"),
             duration: 6,
         });
         setCalibOpen(false);
         resetCalibration();
-    }, [calibResult, onApplyValue, currentImuYawRad, notification, resetCalibration]);
+    }, [calibResult, onApplyValue, currentImuYawRad, notification, resetCalibration, t]);
 
     return {
         calibOpen,

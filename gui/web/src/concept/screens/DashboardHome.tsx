@@ -1,5 +1,6 @@
 import {useState} from "react";
 import {motion} from "framer-motion";
+import {useTranslation} from "react-i18next";
 import {
   Sparkles, ChevronRight, Wifi, Droplets, ThermometerSun, Wind,
 } from "lucide-react";
@@ -28,6 +29,7 @@ import {useViewport} from "../useViewport";
  */
 
 export function DashboardHome() {
+  const {t} = useTranslation();
   const [mode, setMode] = useState<Mode>("eco");
   const [phase, setPhase] = useState<"idle" | "playing" | "returning" | "alert">("playing");
   const vp = useViewport();
@@ -90,7 +92,7 @@ export function DashboardHome() {
           <StatusOrb
             tone={phase === "playing" ? "live" : "resting"}
             size={10}
-            label={phase === "playing" ? "En tonte" : "Au repos"}
+            label={phase === "playing" ? t('dashboardHome.statusMowing') : t('dashboardHome.statusIdle')}
           />
         </motion.header>
 
@@ -131,15 +133,15 @@ export function DashboardHome() {
               <motion.div variants={riseFade} style={{
                 display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12,
               }}>
-                <StatTile label="Couverture" value={`${Math.round(coverage * 100)}`}
+                <StatTile label={t('dashboardHome.statCoverage')} value={`${Math.round(coverage * 100)}`}
                           unit="%" icon={<Droplets size={14}/>}
-                          accent="lime" hint="42 % de la zone"/>
-                <StatTile label="Tonte" value="47" unit="min"
+                          accent="lime" hint={t('dashboardHome.statCoverageHint')}/>
+                <StatTile label={t('dashboardHome.statMowing')} value="47" unit="min"
                           icon={<Wind size={14}/>}
-                          accent="cyan" hint="restantes aujourd'hui"/>
-                <StatTile label="Météo" value="22" unit="°C"
+                          accent="cyan" hint={t('dashboardHome.statMowingHint')}/>
+                <StatTile label={t('dashboardHome.statWeather')} value="22" unit="°C"
                           icon={<ThermometerSun size={14}/>}
-                          accent="amber" hint="ensoleillé · sec"/>
+                          accent="amber" hint={t('dashboardHome.statWeatherHint')}/>
               </motion.div>
             </div>
           </div>
@@ -167,15 +169,15 @@ export function DashboardHome() {
               display: "grid", gridTemplateColumns: "repeat(3, 1fr)",
               gap: 10, marginBottom: 16,
             }}>
-              <StatTile label="Couverture" value={`${Math.round(coverage * 100)}`}
+              <StatTile label={t('dashboardHome.statCoverage')} value={`${Math.round(coverage * 100)}`}
                         unit="%" icon={<Droplets size={14}/>}
-                        accent="lime" hint="42 % de la zone"/>
-              <StatTile label="Tonte" value="47" unit="min"
+                        accent="lime" hint={t('dashboardHome.statCoverageHint')}/>
+              <StatTile label={t('dashboardHome.statMowing')} value="47" unit="min"
                         icon={<Wind size={14}/>}
-                        accent="cyan" hint="restantes aujourd'hui"/>
-              <StatTile label="Météo" value="22" unit="°C"
+                        accent="cyan" hint={t('dashboardHome.statMowingHint')}/>
+              <StatTile label={t('dashboardHome.statWeather')} value="22" unit="°C"
                         icon={<ThermometerSun size={14}/>}
-                        accent="amber" hint="ensoleillé · sec"/>
+                        accent="amber" hint={t('dashboardHome.statWeatherHint')}/>
             </motion.div>
             <motion.div variants={riseFade}>
               <UpNextCard/>
@@ -205,6 +207,7 @@ interface HeroCardProps {
 function HeroCard({
   battery, remainingMin, coverage, todayMowedM2, totalArea, phase, setPhase, large,
 }: HeroCardProps) {
+  const {t} = useTranslation();
   return (
     <GlassCard variant="glow" padding={0}>
       <div style={{
@@ -225,7 +228,7 @@ function HeroCard({
               fontSize: 11, color: "var(--lime)", fontWeight: 700,
               letterSpacing: "0.12em", textTransform: "uppercase",
             }}>
-              Mowgli · zone Jardin sud
+              {t('dashboardHome.heroZoneLabel')}
             </div>
             <h1 className="display" style={{
               fontSize: large ? 42 : 32,
@@ -233,17 +236,17 @@ function HeroCard({
               fontWeight: 700, letterSpacing: "-0.028em",
               color: "var(--ink)",
             }}>
-              Encore <span style={{
+              {t('dashboardHome.heroRemainingPrefix')} <span style={{
                 background: "var(--grad-primary)",
                 WebkitBackgroundClip: "text", backgroundClip: "text",
                 WebkitTextFillColor: "transparent", color: "transparent",
-              }}>{remainingMin} min</span> avant la maison.
+              }}>{t('dashboardHome.heroRemainingValue', {minutes: remainingMin})}</span> {t('dashboardHome.heroRemainingSuffix')}
             </h1>
             <p style={{
               fontSize: large ? 15 : 14, color: "var(--ink-2)", marginTop: 10,
               lineHeight: 1.55, maxWidth: 460,
             }}>
-              Il avance à 0.42 m/s · gazon humide détecté, vitesse réduite de 12 %.
+              {t('dashboardHome.heroSubline')}
             </p>
           </div>
           <BatteryRing
@@ -263,7 +266,7 @@ function HeroCard({
               letterSpacing: "0.1em", textTransform: "uppercase",
               fontWeight: 600, marginTop: 2,
             }}>
-              batterie
+              {t('dashboardHome.battery')}
             </div>
           </BatteryRing>
         </div>
@@ -278,7 +281,7 @@ function HeroCard({
               letterSpacing: "0.08em", textTransform: "uppercase",
               fontWeight: 600,
             }}>
-              Progression du jour
+              {t('dashboardHome.dayProgress')}
             </span>
             <span className="mono" style={{
               fontSize: 13, color: "var(--ink-2)", fontWeight: 600,
@@ -296,6 +299,7 @@ function HeroCard({
             onPause={() => setPhase("idle")}
             onHome={() => setPhase("returning")}
             onStop={() => setPhase("alert")}
+            onRearm={() => setPhase("idle")}
           />
         </div>
       </div>
@@ -309,6 +313,7 @@ interface ModeCardProps {
 }
 
 function ModeCard({mode, setMode}: ModeCardProps) {
+  const {t} = useTranslation();
   return (
     <GlassCard padding={20}>
       <div style={{
@@ -320,7 +325,7 @@ function ModeCard({mode, setMode}: ModeCardProps) {
           letterSpacing: "0.08em", textTransform: "uppercase",
           fontWeight: 600,
         }}>
-          Mode de coupe
+          {t('dashboardHome.cuttingMode')}
         </span>
       </div>
       <ModeSegment value={mode} onChange={setMode}/>
@@ -335,6 +340,7 @@ interface LiveGardenCardProps {
 }
 
 function LiveGardenCard({coverage, robot, height = 200}: LiveGardenCardProps) {
+  const {t} = useTranslation();
   return (
     <GlassCard padding={0} style={{overflow: "hidden"}}>
       <div style={{
@@ -347,20 +353,20 @@ function LiveGardenCard({coverage, robot, height = 200}: LiveGardenCardProps) {
             letterSpacing: "0.08em", textTransform: "uppercase",
             fontWeight: 600,
           }}>
-            Carte vivante
+            {t('dashboardHome.liveMap')}
           </div>
           <div className="display" style={{
             fontSize: 18, fontWeight: 700, marginTop: 2,
             color: "var(--ink)", letterSpacing: "-0.01em",
           }}>
-            Jardin sud · trajectoire en direct
+            {t('dashboardHome.liveMapSubtitle')}
           </div>
         </div>
         <button style={{
           display: "inline-flex", alignItems: "center", gap: 4,
           fontSize: 12, fontWeight: 600, color: "var(--lime)",
         }}>
-          Voir la carte
+          {t('dashboardHome.viewMap')}
           <ChevronRight size={14} strokeWidth={2.4}/>
         </button>
       </div>
@@ -370,6 +376,7 @@ function LiveGardenCard({coverage, robot, height = 200}: LiveGardenCardProps) {
 }
 
 function UpNextCard() {
+  const {t} = useTranslation();
   return (
     <GlassCard padding={20}>
       <div style={{
@@ -381,12 +388,12 @@ function UpNextCard() {
           letterSpacing: "0.08em", textTransform: "uppercase",
           fontWeight: 600,
         }}>
-          Programmé ensuite
+          {t('dashboardHome.scheduledNext')}
         </div>
         <WeatherChip condition="partly" tempC={22}/>
       </div>
-      <NextRunRow when="Demain · 07:30" area="Jardin nord" duration="≈ 55 min" first/>
-      <NextRunRow when="Vendredi · 18:00" area="Pelouse devant" duration="≈ 35 min"/>
+      <NextRunRow when={t('dashboardHome.nextRun1When')} area={t('dashboardHome.nextRun1Area')} duration={t('dashboardHome.nextRun1Duration')} first/>
+      <NextRunRow when={t('dashboardHome.nextRun2When')} area={t('dashboardHome.nextRun2Area')} duration={t('dashboardHome.nextRun2Duration')}/>
     </GlassCard>
   );
 }
@@ -396,12 +403,13 @@ function UpNextCard() {
 // ─────────────────────────────────────────────────────────────────────
 
 function Greeting() {
+  const {t} = useTranslation();
   const h = new Date().getHours();
   const text =
-    h < 6  ? "Bonsoir" :
-    h < 12 ? "Bonjour" :
-    h < 18 ? "Bel après-midi" :
-    "Bonsoir";
+    h < 6  ? t('dashboardHome.greetingEvening') :
+    h < 12 ? t('dashboardHome.greetingMorning') :
+    h < 18 ? t('dashboardHome.greetingAfternoon') :
+    t('dashboardHome.greetingEvening');
   return <>{text}</>;
 }
 

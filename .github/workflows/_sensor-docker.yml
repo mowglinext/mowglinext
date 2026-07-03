@@ -16,8 +16,18 @@ on:
         description: 'Build context path (e.g. ./sensors/gps)'
         type: string
         required: true
+      dockerfile:
+        description: 'Optional Dockerfile path relative to the repository root'
+        type: string
+        required: false
+        default: ''
       target:
         description: 'Optional Dockerfile target stage'
+        type: string
+        required: false
+        default: ''
+      smoke-test:
+        description: 'Optional shell script to run inside the built image'
         type: string
         required: false
         default: ''
@@ -53,6 +63,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -71,7 +83,8 @@ jobs:
           images: ${{ env.IMAGE_PREFIX }}/${{ inputs.image }}
 
       - name: Build and push by digest
-        id: build
+        id: build_default
+        if: inputs.dockerfile == ''
         uses: docker/build-push-action@v7
         with:
           context: ${{ inputs.context }}
@@ -85,9 +98,42 @@ jobs:
           provenance: true
           sbom: true
 
+      - name: Build and push by digest
+        id: build_custom
+        if: inputs.dockerfile != ''
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          target: ${{ inputs.target }}
+          platforms: ${{ matrix.arch }}
+          no-cache: ${{ inputs.no-cache }}
+          cache-from: ${{ inputs.no-cache != true && format('type=registry,ref={0}/{1}:buildcache-{2}', env.IMAGE_PREFIX, inputs.image, matrix.arch == 'linux/arm64' && 'arm64' || 'amd64') || '' }}
+          cache-to: type=registry,ref=${{ env.IMAGE_PREFIX }}/${{ inputs.image }}:buildcache-${{ matrix.arch == 'linux/arm64' && 'arm64' || 'amd64' }},mode=max
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE_PREFIX }}/${{ inputs.image }},push-by-digest=true,name-canonical=true,push=true
+          provenance: true
+          sbom: true
+
+      - name: Smoke test image
+        if: inputs.smoke-test != ''
+        env:
+          DIGEST: ${{ steps.build_custom.outputs.digest || steps.build_default.outputs.digest }}
+          IMAGE: ${{ env.IMAGE_PREFIX }}/${{ inputs.image }}
+          SMOKE_TEST: ${{ inputs.smoke-test }}
+        run: |
+          set -euo pipefail
+          script="/tmp/${{ inputs.image }}-smoke.sh"
+          printf '%s\n' "$SMOKE_TEST" > "$script"
+          chmod +x "$script"
+          docker run --rm \
+            -v "$script:/tmp/smoke-test.sh:ro" \
+            "${IMAGE}@${DIGEST}" \
+            bash /tmp/smoke-test.sh
+
       - name: Export digest
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.build_custom.outputs.digest || steps.build_default.outputs.digest }}
         run: |
           mkdir -p /tmp/digests
           touch "/tmp/digests/${DIGEST#sha256:}"

@@ -47,8 +47,8 @@ extern "C"
 #define DEBUG_TYPE DEBUG_TYPE_UART
 
 #define MAX_MPS 0.5		  // Allow maximum speed of 1.0 m/s
-#define PWM_PER_MPS 300.0 // PWM value of 300 means 1 m/s bot speed so we divide by 4 to have correct robot speed but still progressive speed
-#define TICKS_PER_M 300.0 // Motor Encoder ticks per meter
+#define PWM_PER_MPS 337.0 // PWM value of 300 means 1 m/s bot speed so we divide by 4 to have correct robot speed but still progressive speed
+#define TICKS_PER_M 339.0 // Power-on fallback encoder ticks per meter; ROS runtime tuning overrides this after host connection
 #define WHEEL_BASE  0.325		// The distance between the center of the wheels in meters
 
 #define OPTION_ULTRASONIC 0
@@ -68,8 +68,8 @@ extern "C"
 #define DEBUG_TYPE DEBUG_TYPE_SWO
 
 #define MAX_MPS 0.5		  // Allow maximum speed of 1.0 m/s
-#define PWM_PER_MPS 300.0 // PWM value of 300 means 1 m/s bot speed so we divide by 4 to have correct robot speed but still progressive speed
-#define TICKS_PER_M 300.0 // Motor Encoder ticks per meter
+#define PWM_PER_MPS 275.0 // PWM value of 300 means 1 m/s bot speed so we divide by 4 to have correct robot speed but still progressive speed
+#define TICKS_PER_M 277.0 // Power-on fallback encoder ticks per meter; ROS runtime tuning overrides this after host connection
 #define WHEEL_BASE  0.325		// The distance between the center of the wheels in meters
 
 #define OPTION_ULTRASONIC 0
@@ -87,22 +87,31 @@ extern "C"
 
 #define MAX_MPS 0.5		  // Allow maximum speed of 1.0 m/s
 #define PWM_PER_MPS 300.0 // PWM value of 300 means 1 m/s bot speed so we divide by 4 to have correct robot speed but still progressive speed
-#define TICKS_PER_M 300.0 // Motor Encoder ticks per meter
+#define TICKS_PER_M 300.0 // Power-on fallback encoder ticks per meter; ROS runtime tuning overrides this after host connection
 #define WHEEL_BASE 0.285   // The distance between the center of the wheels in meters
 
 #define BOARD_HAS_MASTER_USART 0
 #endif
 
-//#define I_DONT_NEED_MY_FINGERS              1      // disables EmergencyController() (no wheel lift, or tilt sensing and stopping the blade anymore)
+// I_DONT_NEED_MY_FINGERS, when DEFINED (value is irrelevant — the guards use
+// #ifdef/#ifndef), compiles out EmergencyController() so the firmware NEVER
+// polls the physical stop button / wheel-lift / tilt sensors. That contradicts
+// "the STM32 firmware is the sole blade safety authority", so it is left
+// UNDEFINED to keep hardware e-stop sensing active.
+// WARNING: before flashing to a robot, validate per-chassis that the stop-button,
+// wheel-lift and tilt GPIOs are actually wired and not floating/noisy — otherwise
+// EmergencyController() may latch a spurious emergency. Re-#define this only if a
+// given chassis lacks those sensors.
+// #define I_DONT_NEED_MY_FINGERS           1      // disables EmergencyController()
 
 /// nominal max charge current is 1.0 Amp
-#define MAX_CHARGE_CURRENT 1.0f
+#define MAX_CHARGE_CURRENT 1.2f
 /// Max voltage allowed
-#define MAX_CHARGE_VOLTAGE 29.0f
+#define MAX_CHARGE_VOLTAGE 29.4f
 /// Voltage threshold for CC to CV transition
-#define LIMIT_VOLTAGE_150MA 28.0f
+#define LIMIT_VOLTAGE_150MA 28.8f
 /// Default max battery voltage allowed
-#define BAT_CHARGE_CUTOFF_VOLTAGE  28.0f
+#define BAT_CHARGE_CUTOFF_VOLTAGE  29.2f
 /// We consider the battery is full when in CV mode the current below 0.1A
 #define CHARGE_END_LIMIT_CURRENT 0.08f
 // if voltage is greater than this assume we are docked

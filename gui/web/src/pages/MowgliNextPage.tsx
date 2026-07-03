@@ -1,4 +1,8 @@
+import {App} from "antd";
 import {motion} from "framer-motion";
+import {useNavigate} from "react-router-dom";
+import {useTranslation} from "react-i18next";
+import type {TFunction} from "i18next";
 import {Sparkles, ChevronRight, Wifi, Droplets, Thermometer} from "lucide-react";
 
 import {useIsMobile} from "../hooks/useIsMobile";
@@ -22,6 +26,7 @@ import {ActionCluster} from "../concept/components/ActionCluster.tsx";
 import {LiveMapMini} from "../concept/components/LiveMapMini.tsx";
 import {ProgressRibbon} from "../concept/components/ProgressRibbon.tsx";
 import {WeatherChip} from "../concept/components/WeatherChip.tsx";
+import {useWeather} from "../hooks/useWeather.ts";
 import {NoiseTexture} from "../concept/components/NoiseTexture.tsx";
 import {staggerParent, riseFade, popIn, springSnap} from "../concept/motion.ts";
 
@@ -32,14 +37,6 @@ import {staggerParent, riseFade, popIn, springSnap} from "../concept/motion.ts";
  * live map + stats right). The page itself sits inside AppShell which
  * provides the side-rail + header chrome.
  */
-
-const MOTION_STATES = new Set([
-  "MOWING", "TRANSIT", "UNDOCKING", "RETURNING_HOME", "MANUAL_MOWING",
-  "RESUMING_AFTER_RAIN", "RESUMING_UNDOCKING", "BOUNDARY_RECOVERY",
-  "LOW_BATTERY_DOCKING", "CRITICAL_BATTERY_DOCKING",
-  "COVERAGE_FAILED_DOCKING", "SKIP_STRIP", "PREFLIGHT_CHECK",
-  "CALIBRATING_HEADING", "RECORDING",
-]);
 
 function useMowerData() {
   const {highLevelStatus} = useHighLevelStatus();
@@ -57,18 +54,16 @@ function useMowerData() {
   const gpsStatus = deriveGpsStatus(gnss);
 
   const stateName = highLevelStatus.state_name ?? (
-    isEmergency ? "EMERGENCY" : isCharging ? "CHARGING" : "IDLE"
+    isEmergency ? "EMERGENCY" : isCharging ? "CHARGING" : "IDLE_DOCKED"
   );
 
-  const areaPct = (() => {
-    if (highLevelStatus.current_path != null && highLevelStatus.current_path > 0 &&
-        highLevelStatus.current_path_index != null) {
-      return (highLevelStatus.current_path_index / highLevelStatus.current_path) * 100;
-    }
-    return 0;
-  })();
-
-  const isMoving = stateName ? MOTION_STATES.has(stateName) : false;
+  // Motion is derived from the NUMERIC high-level state, which status_nodes.cpp
+  // publishes reliably every tick (2=AUTONOMOUS, 3=RECORDING, 4=MANUAL_MOWING).
+  // The old string allowlist omitted state=2 substates (PLANNING,
+  // OBSTACLE_BACKOFF, DYNAMIC_OBSTACLE_CLEARED, AREA_UNREACHABLE) and carried a
+  // phantom SKIP_STRIP, so every planning/backoff phase read as "idle" mid-mow.
+  const stateNum = highLevelStatus.state ?? -1;
+  const isMoving = stateNum === 2 || stateNum === 3 || stateNum === 4;
 
   return {
     state: stateName,
@@ -83,16 +78,23 @@ function useMowerData() {
     escTemp: status.mower_esc_temperature ?? 0,
     motorTemp: status.mower_motor_temperature ?? 0,
     rain: status.rain_detected ?? false,
-    areaPct,
     isMoving,
     currentArea: highLevelStatus.current_area != null
       ? `Area ${highLevelStatus.current_area + 1}`
       : undefined,
+    // Firmware <-> image compatibility (from the hardware_bridge handshake).
+    // null until the first Status arrives, so the health card stays quiet
+    // rather than flashing a false "incompatible" on load.
+    firmwareCompatible: status.firmware_compatible ?? null,
+    firmwareVersion: status.firmware_version ?? "",
   };
 }
 
 export const MowgliNextPage = () => {
+  const {t} = useTranslation();
   const isMobile = useIsMobile();
+  const navigate = useNavigate();
+  const {modal} = App.useApp();
   const mowerAction = useMowerAction();
   const data = useMowerData();
   const {settings} = useSettings();
@@ -161,34 +163,57 @@ export const MowgliNextPage = () => {
     : 0;
 
   const headline = data.isMoving && remainingMin > 0
-    ? <>Encore <span style={{
+    ? <>{t('mowgliNextPage.headlineUntilHomePrefix')}<span style={{
         background: 'var(--grad-primary, linear-gradient(135deg, #7CFFB2, #2BAA66))',
         WebkitBackgroundClip: 'text', backgroundClip: 'text',
         WebkitTextFillColor: 'transparent', color: 'transparent',
-      }}>{remainingMin} min</span> avant la maison.</>
+      }}>{t('mowgliNextPage.headlineMinutes', {value: remainingMin})}</span>{t('mowgliNextPage.headlineUntilHomeSuffix')}</>
     : data.state === "CHARGING"
-      ? <>En charge · <span style={{
+      ? <>{t('mowgliNextPage.headlineChargingPrefix')}<span style={{
           background: 'var(--grad-primary, linear-gradient(135deg, #7CFFB2, #2BAA66))',
           WebkitBackgroundClip: 'text', backgroundClip: 'text',
           WebkitTextFillColor: 'transparent', color: 'transparent',
-        }}>{Math.round(data.battery)} %</span></>
+        }}>{t('mowgliNextPage.headlinePercent', {value: Math.round(data.battery)})}</span></>
       : data.emergency
-        ? <span style={{color: 'var(--rose, #FF6B7A)'}}>Arrêt d'urgence</span>
-        : <>Mowgli est <em style={{fontStyle: 'italic', color: 'var(--lime, #7CFFB2)'}}>au repos</em>.</>;
+        ? <span style={{color: 'var(--rose, #FF6B7A)'}}>{t('mowgliNextPage.emergencyStop')}</span>
+        : <>{t('mowgliNextPage.headlineIdlePrefix')}<em style={{fontStyle: 'italic', color: 'var(--lime, #7CFFB2)'}}>{t('mowgliNextPage.headlineIdleEmphasis')}</em>{t('mowgliNextPage.headlineIdleSuffix')}</>;
 
   const subline = data.isMoving
-    ? `Avance à ${data.gpsLabel.toLowerCase()} · ${data.currentArea ?? "zone active"}`
+    ? t('mowgliNextPage.sublineMoving', {gps: data.gpsLabel.toLowerCase(), area: data.currentArea ?? t('mowgliNextPage.activeZone')})
     : data.charging
-      ? `Sur la dock, ${data.current.toFixed(1)} A en entrée.`
+      ? t('mowgliNextPage.sublineCharging', {current: data.current.toFixed(1)})
       : data.emergency
-        ? "Sécurise la zone puis relance avec le bouton vert."
-        : "Tape Play pour démarrer une tonte ou laisse le planning gérer.";
+        ? t('mowgliNextPage.sublineEmergency')
+        : t('mowgliNextPage.sublineIdle');
+
+  // The hero "stop" affordance latches the firmware EMERGENCY — this is the
+  // real e-stop, not a soft pause. Gate it behind an explicit confirm so a
+  // mistap can't latch the safety system. The dispatched command is unchanged.
+  const fireEmergency = mowerAction("emergency", {Emergency: 1});
+  const confirmEmergency = () => {
+    modal.confirm({
+      title: t('mowgliNextPage.emergencyStop'),
+      content: t('mowgliNextPage.emergencyConfirmBody'),
+      okText: t('mowgliNextPage.emergencyStop'),
+      okType: "danger",
+      cancelText: t('mowgliNextPage.cancel'),
+      onOk: () => fireEmergency(),
+    });
+  };
 
   const actions = {
     onStart: mowerAction("high_level_control", {Command: 1}),
-    onPause: mowerAction("mower_logic", {Config: {Bools: [{Name: "manual_pause_mowing", Value: true}]}}),
+    // Pause = STOP (COMMAND_STOP=8 → StopHoldSequence: mower off, halt in place,
+    // Nav2 left up so the mission can resume via START, no dock drive). The
+    // separate Home control keeps HOME (Command 2 → return to dock).
+    onPause: mowerAction("high_level_control", {Command: 8}),
     onHome: mowerAction("high_level_control", {Command: 2}),
-    onStop: mowerAction("emergency", {Emergency: 1}),
+    onStop: confirmEmergency,
+    // Clear a latched emergency from the Dashboard. Without this the robot is
+    // stuck: the BT EmergencyGuard halts before MainLogic, so Play (Command 1)
+    // is inert while latched. Firmware is the safety authority — it only clears
+    // the latch if the physical trigger is no longer asserted.
+    onRearm: mowerAction("emergency", {Emergency: 0}),
   };
 
   return (
@@ -212,20 +237,20 @@ export const MowgliNextPage = () => {
               fontSize: 11, color: 'rgba(236,255,244,0.42)',
               letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600,
             }}>
-              {greetingFor()}
+              {greetingFor(t)}
             </div>
             <div className="mn-display" style={{
               fontSize: isMobile ? 26 : 34,
-              color: 'var(--text, #ECFFF4)', fontWeight: 400,
+              color: 'var(--ink, #ECFFF4)', fontWeight: 400,
               letterSpacing: '-0.02em', lineHeight: 1.05, marginTop: 4,
             }}>
-              {data.isMoving ? "Mowgli est en tonte" : data.charging ? "Mowgli charge" : "Bon retour"}
+              {data.isMoving ? t('mowgliNextPage.mowgliMowing') : data.charging ? t('mowgliNextPage.mowgliCharging') : t('mowgliNextPage.welcomeBack')}
             </div>
           </div>
           <StatusOrb
             tone={data.emergency ? "alert" : data.isMoving ? "live" : data.charging ? "charging" : "resting"}
             size={10}
-            label={data.isMoving ? "En tonte" : data.charging ? "En charge" : data.emergency ? "Alerte" : "Au repos"}
+            label={data.isMoving ? t('mowgliNextPage.orbMowing') : data.charging ? t('mowgliNextPage.orbCharging') : data.emergency ? t('mowgliNextPage.orbAlert') : t('mowgliNextPage.orbIdle')}
           />
         </motion.header>
 
@@ -240,7 +265,7 @@ export const MowgliNextPage = () => {
                 todayMowedM2={todayMowedM2} totalArea={totalArea}
               />
             </motion.div>
-            <motion.div variants={riseFade}><LiveMapCard polygon={polygonNormalised} robot={robotNormalised} coverage={coveragePct}/></motion.div>
+            <motion.div variants={riseFade}><LiveMapCard polygon={polygonNormalised} robot={robotNormalised} coverage={coveragePct} onViewMap={() => navigate("/map")}/></motion.div>
             <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
             <motion.div variants={riseFade}><HealthCard data={data}/></motion.div>
           </div>
@@ -259,7 +284,7 @@ export const MowgliNextPage = () => {
               <motion.div variants={riseFade}><HealthCard data={data}/></motion.div>
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
-              <motion.div variants={riseFade}><LiveMapCard polygon={polygonNormalised} robot={robotNormalised} coverage={coveragePct} height={300}/></motion.div>
+              <motion.div variants={riseFade}><LiveMapCard polygon={polygonNormalised} robot={robotNormalised} coverage={coveragePct} height={300} onViewMap={() => navigate("/map")}/></motion.div>
               <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
             </div>
           </div>
@@ -278,7 +303,7 @@ interface HeroCardProps {
   phase: "idle" | "playing" | "returning" | "alert";
   actions: {
     onStart: () => void; onPause: () => void;
-    onHome: () => void; onStop: () => void;
+    onHome: () => void; onStop: () => void; onRearm: () => void;
   };
   headline: React.ReactNode;
   subline: string;
@@ -291,6 +316,7 @@ interface HeroCardProps {
 function HeroCard({
   data, phase, actions, headline, subline, coveragePct, todayMowedM2, totalArea, large,
 }: HeroCardProps) {
+  const {t} = useTranslation();
   return (
     <GlassCard variant="glow" padding={0}>
       <div style={{
@@ -306,13 +332,13 @@ function HeroCard({
               fontSize: 11, color: 'var(--lime, #7CFFB2)', fontWeight: 700,
               letterSpacing: '0.12em', textTransform: 'uppercase',
             }}>
-              {data.currentArea ? `Mowgli · ${data.currentArea}` : 'Mowgli · sans zone'}
+              {data.currentArea ? t('mowgliNextPage.mowgliWithZone', {area: data.currentArea}) : t('mowgliNextPage.mowgliNoZone')}
             </div>
             <h1 className="mn-display" style={{
               fontSize: large ? 38 : 30,
               lineHeight: 1.05, marginTop: 8,
               fontWeight: 400, letterSpacing: '-0.025em',
-              color: 'var(--text, #ECFFF4)',
+              color: 'var(--ink, #ECFFF4)',
             }}>
               {headline}
             </h1>
@@ -331,7 +357,7 @@ function HeroCard({
           >
             <div className="mn-num" style={{
               fontSize: large ? 38 : 30, fontWeight: 400, lineHeight: 1,
-              color: 'var(--text, #ECFFF4)', letterSpacing: '-0.02em',
+              color: 'var(--ink, #ECFFF4)', letterSpacing: '-0.02em',
             }}>
               {Math.round(data.battery)}
             </div>
@@ -340,30 +366,37 @@ function HeroCard({
               letterSpacing: '0.1em', textTransform: 'uppercase',
               fontWeight: 600, marginTop: 2,
             }}>
-              batterie
+              {t('mowgliNextPage.battery')}
             </div>
           </BatteryRing>
         </div>
 
-        {totalArea > 0 && (
-          <div style={{marginTop: large ? 22 : 18}}>
-            <div style={{
-              display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-              marginBottom: 8,
-            }}>
-              <span style={{
-                fontSize: 11, color: 'rgba(236,255,244,0.42)',
-                letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 600,
+        {totalArea > 0 && (() => {
+          // Grid is published at 5 cm; cells × cellArea = m².
+          const cellAreaM2 = 0.05 * 0.05;
+          const mowedM2 = todayMowedM2 * cellAreaM2;
+          const totalM2 = totalArea * cellAreaM2;
+          const pct = Math.round(coveragePct * 100);
+          return (
+            <div style={{marginTop: large ? 22 : 18}}>
+              <div style={{
+                display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+                marginBottom: 8,
               }}>
-                Couverture aujourd'hui
-              </span>
-              <span style={{fontSize: 12, color: 'rgba(236,255,244,0.66)', fontWeight: 600, fontFamily: '"Space Grotesk", monospace'}}>
-                {todayMowedM2.toLocaleString()}<span style={{color: 'rgba(236,255,244,0.42)'}}> / {totalArea.toLocaleString()} cellules</span>
-              </span>
+                <span style={{
+                  fontSize: 11, color: 'rgba(236,255,244,0.42)',
+                  letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 600,
+                }}>
+                  {t('mowgliNextPage.coverageToday', {pct})}
+                </span>
+                <span style={{fontSize: 12, color: 'rgba(236,255,244,0.66)', fontWeight: 600, fontFamily: '"Space Grotesk", monospace'}}>
+                  {mowedM2.toFixed(0)}<span style={{color: 'rgba(236,255,244,0.42)'}}> / {totalM2.toFixed(0)} m²</span>
+                </span>
+              </div>
+              <ProgressRibbon value={coveragePct} segments={24}/>
             </div>
-            <ProgressRibbon value={coveragePct} segments={24}/>
-          </div>
-        )}
+          );
+        })()}
 
         <div style={{marginTop: large ? 28 : 22}}>
           <ActionCluster phase={phase} {...actions}/>
@@ -378,9 +411,11 @@ interface LiveMapCardProps {
   robot?: {x: number; y: number; heading: number};
   coverage: number;
   height?: number;
+  onViewMap?: () => void;
 }
 
-function LiveMapCard({polygon, robot, coverage, height = 220}: LiveMapCardProps) {
+function LiveMapCard({polygon, robot, coverage, height = 220, onViewMap}: LiveMapCardProps) {
+  const {t} = useTranslation();
   // LiveMapMini expects 0..1 normalised; we pass an empty/default if no
   // recorded area yet.
   return (
@@ -394,21 +429,21 @@ function LiveMapCard({polygon, robot, coverage, height = 220}: LiveMapCardProps)
             fontSize: 11, color: 'rgba(236,255,244,0.42)',
             letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 600,
           }}>
-            Carte vivante
+            {t('mowgliNextPage.liveMap')}
           </div>
           <div className="mn-display" style={{
             fontSize: 18, fontWeight: 400, marginTop: 2,
-            color: 'var(--text, #ECFFF4)', letterSpacing: '-0.01em',
+            color: 'var(--ink, #ECFFF4)', letterSpacing: '-0.01em',
           }}>
-            Trajectoire en direct
+            {t('mowgliNextPage.livePath')}
           </div>
         </div>
-        <button style={{
+        <button onClick={onViewMap} style={{
           display: 'inline-flex', alignItems: 'center', gap: 4,
           background: 'transparent', border: 'none',
           fontSize: 12, fontWeight: 600, color: 'var(--lime, #7CFFB2)', cursor: 'pointer',
         }}>
-          Voir la carte
+          {t('mowgliNextPage.viewMap')}
           <ChevronRight size={14} strokeWidth={2.4}/>
         </button>
       </div>
@@ -423,19 +458,20 @@ function LiveMapCard({polygon, robot, coverage, height = 220}: LiveMapCardProps)
 }
 
 function TilesRow({data}: {data: ReturnType<typeof useMowerData>}) {
+  const {t} = useTranslation();
   return (
     <div style={{display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10}}>
       <StatTile label="GPS" value={`${Math.round(data.gps)}`} unit="%"
                 hint={data.gpsLabel} accent="cyan" icon={<Wifi size={14}/>}/>
-      <StatTile label="Lames" value={data.rpm > 0 ? Math.round(data.rpm).toString() : 'off'}
+      <StatTile label={t('mowgliNextPage.blades')} value={data.rpm > 0 ? Math.round(data.rpm).toString() : 'off'}
                 unit={data.rpm > 0 ? 'rpm' : ''} hint={`${data.current.toFixed(1)} A`}
                 accent="amber" icon={<Sparkles size={14}/>}/>
-      <StatTile label="Moteur" value={data.motorTemp.toFixed(0)} unit="°c"
+      <StatTile label={t('mowgliNextPage.motor')} value={data.motorTemp.toFixed(0)} unit="°c"
                 hint={`ESC ${data.escTemp.toFixed(0)} °C`}
                 accent={data.motorTemp > 55 ? "amber" : "lime"}
                 icon={<Thermometer size={14}/>}/>
-      <StatTile label="Pluie" value={data.rain ? 'détectée' : 'au sec'} unit=""
-                hint={data.rain ? 'tonte mise en pause' : 'bonnes conditions'}
+      <StatTile label={t('mowgliNextPage.rain')} value={data.rain ? t('mowgliNextPage.rainDetected') : t('mowgliNextPage.dry')} unit=""
+                hint={data.rain ? t('mowgliNextPage.mowingPaused') : t('mowgliNextPage.goodConditions')}
                 accent={data.rain ? "amber" : "lime"}
                 icon={<Droplets size={14}/>}/>
     </div>
@@ -476,7 +512,7 @@ function StatTile({label, value, unit, hint, accent, icon}: StatTileProps) {
         </div>
         <div style={{display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 8}}>
           <div className="mn-num" style={{
-            fontSize: 30, color: 'var(--text, #ECFFF4)', lineHeight: 1,
+            fontSize: 30, color: 'var(--ink, #ECFFF4)', lineHeight: 1,
           }}>
             {value}
           </div>
@@ -497,15 +533,31 @@ function StatTile({label, value, unit, hint, accent, icon}: StatTileProps) {
 }
 
 function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
+  const {t} = useTranslation();
+  const weather = useWeather();
   const rows = [
-    {k: 'Signal GPS',         ok: data.gps > 0,           note: data.gpsLabel},
-    {k: data.rain ? 'Pluie détectée' : 'Pas de pluie',
-                              ok: !data.rain,             note: data.rain ? 'tonte en pause' : 'conditions OK'},
-    {k: data.emergency ? 'Alerte active' : 'Aucune alerte',
-                              ok: !data.emergency,        note: data.emergency ? 'à réarmer' : 'tout clair'},
-    {k: `Moteur ${data.motorTemp.toFixed(0)} °C`,
-                              ok: data.motorTemp < 55,    note: data.motorTemp >= 55 ? 'tourne chaud' : 'nominal'},
+    {k: t('mowgliNextPage.gpsSignal'),         ok: data.gps > 0,           note: data.gpsLabel},
+    {k: data.rain ? t('mowgliNextPage.rainDetectedRow') : t('mowgliNextPage.noRain'),
+                              ok: !data.rain,             note: data.rain ? t('mowgliNextPage.mowingPausedShort') : t('mowgliNextPage.conditionsOk')},
+    {k: data.emergency ? t('mowgliNextPage.alertActive') : t('mowgliNextPage.noAlerts'),
+                              ok: !data.emergency,        note: data.emergency ? t('mowgliNextPage.toRearm') : t('mowgliNextPage.allClear')},
+    {k: t('mowgliNextPage.motorTemp', {temp: data.motorTemp.toFixed(0)}),
+                              ok: data.motorTemp < 55,    note: data.motorTemp >= 55 ? t('mowgliNextPage.runningHot') : t('mowgliNextPage.nominal')},
   ];
+  // Firmware compatibility row — only shown once the bridge has reported a
+  // verdict (firmwareCompatible !== null). When incompatible, it reads red and
+  // tells the operator to reflash; mowing is blocked by PreFlightCheck.
+  if (data.firmwareCompatible !== null) {
+    rows.push({
+      k: data.firmwareCompatible
+        ? t('mowgliNextPage.firmwareOk')
+        : t('mowgliNextPage.firmwareIncompatible'),
+      ok: data.firmwareCompatible,
+      note: data.firmwareCompatible
+        ? t('mowgliNextPage.firmwareVersion', {version: data.firmwareVersion || '?'})
+        : t('mowgliNextPage.firmwareReflash', {version: data.firmwareVersion || '?'}),
+    });
+  }
   return (
     <GlassCard padding={20}>
       <div style={{
@@ -516,9 +568,11 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
           fontSize: 11, color: 'rgba(236,255,244,0.42)',
           letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 600,
         }}>
-          Bilan santé
+          {t('mowgliNextPage.healthCheck')}
         </div>
-        <WeatherChip condition="partly" tempC={22}/>
+        {weather?.available && (
+          <WeatherChip condition={weather.condition} tempC={weather.temp_c} rainSoon={weather.is_raining}/>
+        )}
       </div>
       <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
         {rows.map(r => (
@@ -530,7 +584,7 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
               flexShrink: 0,
             }}/>
             <div style={{flex: 1, minWidth: 0}}>
-              <div style={{fontSize: 13, fontWeight: 600, color: 'var(--text, #ECFFF4)'}}>{r.k}</div>
+              <div style={{fontSize: 13, fontWeight: 600, color: 'var(--ink, #ECFFF4)'}}>{r.k}</div>
               <div style={{fontSize: 11, color: 'rgba(236,255,244,0.42)'}}>{r.note}</div>
             </div>
           </div>
@@ -544,12 +598,12 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
 // Utilities
 // ─────────────────────────────────────────────────────────────────────
 
-function greetingFor() {
+function greetingFor(t: TFunction) {
   const h = new Date().getHours();
-  if (h < 6)  return 'Bonsoir';
-  if (h < 12) return 'Bonjour';
-  if (h < 18) return 'Bel après-midi';
-  return 'Bonsoir';
+  if (h < 6)  return t('mowgliNextPage.greetingNight');
+  if (h < 12) return t('mowgliNextPage.greetingMorning');
+  if (h < 18) return t('mowgliNextPage.greetingAfternoon');
+  return t('mowgliNextPage.greetingEvening');
 }
 
 function normaliseToUnit(pts: {x: number; y: number}[]): {x: number; y: number}[] {

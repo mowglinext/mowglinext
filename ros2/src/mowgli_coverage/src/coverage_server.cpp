@@ -2,26 +2,24 @@
 
 #include "mowgli_coverage/coverage_server.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "rclcpp_components/register_node_macro.hpp"
 
-// Fields2Cover 2.0 — pull in the umbrella header so we get
-// f2c::types::*, f2c::hg::ConstHL, f2c::sg::BruteForce,
-// f2c::rp::BoustrophedonOrder, f2c::pp::PathPlanning,
-// f2c::pp::DubinsCurvesCC.
+// Fields2Cover v3 umbrella header (f2c::types::*, f2c::hg::ConstHL, ...).
 #include "fields2cover.h"
+#include "mowgli_coverage/coverage_planning.hpp"
 
 namespace mowgli_coverage
 {
-
-using std::placeholders::_1;
 
 CoverageServer::CoverageServer(const rclcpp::NodeOptions& options)
     : nav2_util::LifecycleNode("coverage_server", "", options)
@@ -29,69 +27,66 @@ CoverageServer::CoverageServer(const rclcpp::NodeOptions& options)
   RCLCPP_INFO(get_logger(), "Creating %s", get_name());
 }
 
-nav2_util::CallbackReturn CoverageServer::on_configure(
-    const rclcpp_lifecycle::State& /*state*/)
+nav2_util::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Configuring %s", get_name());
 
-  // Snapshot static parameters. Keys mirror the upstream
-  // opennav_coverage server so nav2_params.yaml can stay unchanged
-  // during the migration.
   robot_width_ = declare_parameter<double>("robot_width", 0.40);
-  operation_width_ = declare_parameter<double>("operation_width", 0.20);
-  default_headland_width_ =
-      declare_parameter<double>("default_headland_width", 0.20);
-  min_turning_radius_ = declare_parameter<double>("min_turning_radius", 0.05);
-  max_diff_curvature_ = declare_parameter<double>("linear_curv_change", 200.0);
-  chassis_safety_inset_ =
-      declare_parameter<double>("chassis_safety_inset", 0.0);
-  num_headland_passes_ =
-      declare_parameter<int>("num_headland_passes", 0);
-  min_subcell_area_m2_ = declare_parameter<double>("min_subcell_area_m2", 0.25);
+  operation_width_ = declare_parameter<double>("operation_width", 0.18);
+  default_headland_width_ = declare_parameter<double>("default_headland_width", 0.20);
+  num_headland_passes_ = declare_parameter<int>("num_headland_passes", 0);
+  // Declared here, READ LIVE in planCoverage — both are field-tuned between
+  // plans with `ros2 param set` (no node restart).
+  declare_parameter<double>("chassis_safety_inset", 0.0);
+  declare_parameter<double>("min_swath_length", 0.15);
+  // Perimeter/headland travel winding (#335): 0 = planner default (F2C natural),
+  // 1 = clockwise, 2 = counter-clockwise. Read live in planCoverage.
+  declare_parameter<int>("ring_direction", 0);
+  // Hard floor on every turn-around / fillet arc in the continuous path: the
+  // robot's minimum MPPI-trackable turning radius (mowgli_robot.yaml). Read live
+  // in planCoverage so it can be field-tuned between plans.
+  declare_parameter<double>("min_turning_radius", 0.15);
+  // Nominal turn-around arc radius for the continuous-path connectors. A forward
+  // 180° swath-to-swath reversal at op_width spacing (~0.18 m) cannot avoid a
+  // loop (a clean U needs r ≤ op_width/2 ≈ 0.09 m, below the min_turning_radius
+  // floor), so buildConnector always LOOPS — but the loop SIZE scales with this
+  // nominal radius: at 0.30 m it balloons into a big teardrop that overshoots
+  // deep into the headland (the "turning loops" users see with >2 headland
+  // passes, where there's room for the big loop); at ~op_width it collapses to a
+  // compact, tight U-turn. Default 0.18 (≈ op_width) for compact turns. Floored
+  // at min_turning_radius by buildConnector, so it never goes sub-trackable.
+  // TUNING TRADE-OFF: smaller = compact turns but nearer the trackable floor
+  // (a deadband diff-drive may track a 0.30 m arc more smoothly than a 0.18 m
+  // one); raise toward 0.30 if tight turns induce hesitation. Read live.
+  declare_parameter<double>("connector_turn_radius", 0.18);
 
-  // The legacy server exposed a handful of mode strings (DUBIN /
-  // DUBIN_CC / REEDS_SHEPP, BOUSTROPHEDON / SNAKE, BRUTE_FORCE,
-  // CONSTANT, etc.). For Mowgli we always use the same combination,
-  // so we read but don't act on these — log them once so an operator
-  // knows why their YAML override is being ignored.
-  declare_parameter<std::string>("default_swath_angle_type", "BRUTE_FORCE");
-  declare_parameter<std::string>("default_swath_type", "LENGTH");
-  declare_parameter<std::string>("default_route_type", "BOUSTROPHEDON");
-  declare_parameter<std::string>("default_path_type", "DUBIN");
-  declare_parameter<std::string>("default_path_continuity_type",
-                                 "DISCONTINUOUS");
-  declare_parameter<bool>("coordinates_in_cartesian_frame", true);
-
-  // Action server result timeout. Keep this >= the BT client's per-piece wait
+  // Action server result timeout. Keep this >= the BT client's per-plan wait
   // (PlanCoverageArea, 12 s): if the server expires the result first the
   // client's goal handle is invalidated underneath it. 15 s clears the client.
-  double action_server_result_timeout = 15.0;
-  declare_parameter<double>("action_server_result_timeout", 15.0);
-  get_parameter("action_server_result_timeout", action_server_result_timeout);
-  rcl_action_server_options_t server_options =
-      rcl_action_server_get_default_options();
-  server_options.result_timeout.nanoseconds =
-      RCL_S_TO_NS(action_server_result_timeout);
+  double action_server_result_timeout =
+      declare_parameter<double>("action_server_result_timeout", 15.0);
+  rcl_action_server_options_t server_options = rcl_action_server_get_default_options();
+  server_options.result_timeout.nanoseconds = RCL_S_TO_NS(action_server_result_timeout);
 
-  action_server_ = std::make_unique<ActionServer>(
-      shared_from_this(),
-      "compute_coverage_path",
-      std::bind(&CoverageServer::computeCoveragePath, this),
-      nullptr,
-      std::chrono::milliseconds(500),
-      true,
-      server_options);
+  action_server_ = std::make_unique<ActionServer>(shared_from_this(),
+                                                  "plan_coverage",
+                                                  std::bind(&CoverageServer::planCoverage, this),
+                                                  nullptr,
+                                                  std::chrono::milliseconds(500),
+                                                  true,
+                                                  server_options);
 
   RCLCPP_INFO(get_logger(),
-              "F2C v2.0 backend ready. robot_width=%.2fm op_width=%.2fm "
-              "headland=%.2fm min_R=%.2fm",
-              robot_width_, operation_width_, default_headland_width_,
-              min_turning_radius_);
+              "F2C v3 boustrophedon backend ready. robot_width=%.2fm "
+              "op_width=%.2fm headland=%.2fm passes=%d",
+              robot_width_,
+              operation_width_,
+              default_headland_width_,
+              num_headland_passes_);
   return nav2_util::CallbackReturn::SUCCESS;
 }
 
-nav2_util::CallbackReturn CoverageServer::on_activate(
-    const rclcpp_lifecycle::State& /*state*/)
+nav2_util::CallbackReturn CoverageServer::on_activate(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Activating %s", get_name());
   action_server_->activate();
@@ -99,8 +94,7 @@ nav2_util::CallbackReturn CoverageServer::on_activate(
   return nav2_util::CallbackReturn::SUCCESS;
 }
 
-nav2_util::CallbackReturn CoverageServer::on_deactivate(
-    const rclcpp_lifecycle::State& /*state*/)
+nav2_util::CallbackReturn CoverageServer::on_deactivate(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Deactivating %s", get_name());
   action_server_->deactivate();
@@ -108,16 +102,14 @@ nav2_util::CallbackReturn CoverageServer::on_deactivate(
   return nav2_util::CallbackReturn::SUCCESS;
 }
 
-nav2_util::CallbackReturn CoverageServer::on_cleanup(
-    const rclcpp_lifecycle::State& /*state*/)
+nav2_util::CallbackReturn CoverageServer::on_cleanup(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Cleaning up %s", get_name());
   action_server_.reset();
   return nav2_util::CallbackReturn::SUCCESS;
 }
 
-nav2_util::CallbackReturn CoverageServer::on_shutdown(
-    const rclcpp_lifecycle::State& /*state*/)
+nav2_util::CallbackReturn CoverageServer::on_shutdown(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Shutting down %s", get_name());
   return nav2_util::CallbackReturn::SUCCESS;
@@ -126,76 +118,232 @@ nav2_util::CallbackReturn CoverageServer::on_shutdown(
 namespace
 {
 
-// Build an F2CCell from the goal's polygon list. The first
-// Coordinates entry is the outer ring; any subsequent entries are
-// interior holes (obstacles). All coordinates are interpreted in the
-// cartesian map frame — Mowgli does not use the GPS-coordinate path.
-//
-// NOTE: F2C wants linear rings closed (first == last). The BT side
-// generally passes open rings, so we close them here.
-f2c::types::Cell buildCellFromGoal(
-    const opennav_coverage_msgs::action::ComputeCoveragePath::Goal& goal)
-{
-  if (goal.polygons.empty())
-  {
-    throw std::invalid_argument("Goal has no polygons");
-  }
+constexpr double kSwathStep = 0.10;  // m between poses on a straight swath
 
-  auto make_ring = [](const auto& coords) {
+// Build the F2C cell from the goal's outer boundary + obstacle holes.
+// F2C wants closed rings (first == last); the BT passes open rings.
+f2c::types::Cell buildCellFromGoal(const mowgli_interfaces::action::PlanCoverage::Goal& goal)
+{
+  if (goal.outer_boundary.points.size() < 3)
+  {
+    throw std::invalid_argument("outer_boundary needs >= 3 points");
+  }
+  auto make_ring = [](const geometry_msgs::msg::Polygon& poly)
+  {
     f2c::types::LinearRing ring;
-    if (coords.coordinates.empty())
+    for (const auto& p : poly.points)
     {
-      throw std::invalid_argument("Polygon has no coordinates");
+      ring.addPoint(f2c::types::Point(p.x, p.y));
     }
-    for (const auto& c : coords.coordinates)
-    {
-      ring.addPoint(f2c::types::Point(c.axis1, c.axis2));
-    }
-    // Close the ring if the caller didn't.
-    const auto& first = coords.coordinates.front();
-    const auto& last = coords.coordinates.back();
-    if (first.axis1 != last.axis1 || first.axis2 != last.axis2)
-    {
-      ring.addPoint(f2c::types::Point(first.axis1, first.axis2));
-    }
-    return ring;
+    // dedupClosedRing drops consecutive-duplicate vertices (a doubled leading
+    // vertex is the common case from OpenMower exports / GUI polygons) and
+    // closes the ring. A zero-length edge makes the ring non-simple and
+    // boost::geometry (under F2C) rejects it, silently dropping the area.
+    return dedupClosedRing(ring);
   };
 
-  f2c::types::Cell cell(make_ring(goal.polygons[0]));
-  for (std::size_t i = 1; i < goal.polygons.size(); ++i)
+  f2c::types::Cell cell(make_ring(goal.outer_boundary));
+  for (const auto& hole : goal.obstacles)
   {
-    cell.addRing(make_ring(goal.polygons[i]));
+    if (hole.points.size() >= 3)
+    {
+      cell.addRing(make_ring(hole));
+    }
   }
   return cell;
 }
 
-nav_msgs::msg::Path toNavPath(const f2c::types::Path& path,
-                              const std_msgs::msg::Header& header)
+geometry_msgs::msg::PoseStamped makePose(const std_msgs::msg::Header& header,
+                                         double x,
+                                         double y,
+                                         double yaw)
 {
-  nav_msgs::msg::Path msg;
-  msg.header = header;
-  for (const auto& state : path.getStates())
+  geometry_msgs::msg::PoseStamped ps;
+  ps.header = header;
+  ps.pose.position.x = x;
+  ps.pose.position.y = y;
+  const double half = yaw * 0.5;
+  ps.pose.orientation.z = std::sin(half);
+  ps.pose.orientation.w = std::cos(half);
+  return ps;
+}
+
+// Douglas-Peucker simplification of an open polyline (indices [lo, hi] of pts),
+// marking which vertices to KEEP. Removes points that lie within `tol` of the
+// chord — i.e. densification points (deviation 0) and digitisation jitter — so
+// only genuine corners survive.
+void douglasPeucker(const std::vector<std::pair<double, double>>& pts,
+                    std::size_t lo,
+                    std::size_t hi,
+                    double tol,
+                    std::vector<bool>& keep)
+{
+  if (hi <= lo + 1)
   {
-    geometry_msgs::msg::PoseStamped ps;
-    ps.header = header;
-    ps.pose.position.x = state.point.getX();
-    ps.pose.position.y = state.point.getY();
-    ps.pose.position.z = 0.0;
-    const double half = state.angle * 0.5;
-    ps.pose.orientation.z = std::sin(half);
-    ps.pose.orientation.w = std::cos(half);
-    msg.poses.push_back(ps);
+    return;
   }
-  return msg;
+  const double ax = pts[lo].first, ay = pts[lo].second;
+  const double bx = pts[hi].first, by = pts[hi].second;
+  const double dx = bx - ax, dy = by - ay;
+  const double len2 = dx * dx + dy * dy;
+  double worst = -1.0;
+  std::size_t worst_i = lo;
+  for (std::size_t i = lo + 1; i < hi; ++i)
+  {
+    const double px = pts[i].first, py = pts[i].second;
+    double dist;
+    if (len2 < 1e-12)
+    {
+      dist = std::hypot(px - ax, py - ay);
+    }
+    else
+    {
+      double t = ((px - ax) * dx + (py - ay) * dy) / len2;
+      t = std::max(0.0, std::min(1.0, t));
+      dist = std::hypot(px - (ax + t * dx), py - (ay + t * dy));
+    }
+    if (dist > worst)
+    {
+      worst = dist;
+      worst_i = i;
+    }
+  }
+  if (worst > tol)
+  {
+    keep[worst_i] = true;
+    douglasPeucker(pts, lo, worst_i, tol, keep);
+    douglasPeucker(pts, worst_i, hi, tol, keep);
+  }
+}
+
+// One headland ring loop → a SEQUENCE of open drivable arcs, ONE per straight
+// edge of the simplified perimeter, with a RotationShim pivot at every corner.
+//
+// Why not feed the ring as one path: a closed loop's goal pose == its start
+// pose, so MPPI's GoalCritic thinks it's already arrived and barely drives it
+// (field 2026-06-12: cmd_vel≈0, "Failed to make progress"). And this chassis
+// CANNOT steer through a bend at low speed — the deadband kills fine angular
+// corrections (that's why we pivot in place) — so any arc carrying a real bend
+// gets driven STRAIGHT and overshoots the turn ("goes too far without turning",
+// field 2026-06-12). So we Douglas-Peucker the densified ring down to its true
+// corners (tol kDpTol), then emit one STRAIGHT arc per corner-to-corner edge
+// (re-densified to kSwathStep). MPPI only ever tracks a straight line; every
+// turn is a clean pivot. The loop is rotated to start at the point nearest the
+// previous segment's end so the hand-over hop is minimal.
+std::vector<nav_msgs::msg::Path> ringToArcs(const std::vector<std::pair<double, double>>& loop,
+                                            const std_msgs::msg::Header& header,
+                                            bool have_near,
+                                            double near_x,
+                                            double near_y)
+{
+  std::vector<nav_msgs::msg::Path> arcs;
+  if (loop.size() < 3)
+  {
+    return arcs;
+  }
+  // Open ring (drop the duplicated closing vertex), rotated to start nearest
+  // the previous segment's end.
+  const std::size_t n = loop.size() - 1;
+  std::size_t start = 0;
+  if (have_near)
+  {
+    double best = std::numeric_limits<double>::max();
+    for (std::size_t i = 0; i < n; ++i)
+    {
+      const double d = std::hypot(loop[i].first - near_x, loop[i].second - near_y);
+      if (d < best)
+      {
+        best = d;
+        start = i;
+      }
+    }
+  }
+  // Ordered closed point list: start, start+1, …, back to start.
+  std::vector<std::pair<double, double>> pts;
+  pts.reserve(n + 1);
+  for (std::size_t k = 0; k <= n; ++k)
+  {
+    pts.push_back(loop[(start + k) % n]);
+  }
+
+  // Simplify to corners. Endpoints (the shared start/end vertex) always kept.
+  constexpr double kDpTol = 0.08;  // m — collapses densification + jitter
+  constexpr double kSwathStep = 0.10;
+  std::vector<bool> keep(pts.size(), false);
+  keep.front() = keep.back() = true;
+  douglasPeucker(pts, 0, pts.size() - 1, kDpTol, keep);
+  std::vector<std::pair<double, double>> corners;
+  for (std::size_t i = 0; i < pts.size(); ++i)
+  {
+    if (keep[i])
+    {
+      corners.push_back(pts[i]);
+    }
+  }
+
+  // One straight arc per corner-to-corner edge, densified to kSwathStep with a
+  // constant tangent heading (a pure straight line MPPI tracks cleanly).
+  for (std::size_t c = 0; c + 1 < corners.size(); ++c)
+  {
+    const double x0 = corners[c].first, y0 = corners[c].second;
+    const double x1 = corners[c + 1].first, y1 = corners[c + 1].second;
+    const double dx = x1 - x0, dy = y1 - y0;
+    const double len = std::hypot(dx, dy);
+    if (len < 1e-3)
+    {
+      continue;
+    }
+    const double yaw = std::atan2(dy, dx);
+    const int steps = std::max(1, static_cast<int>(std::ceil(len / kSwathStep)));
+    nav_msgs::msg::Path p;
+    p.header = header;
+    for (int k = 0; k <= steps; ++k)
+    {
+      const double t = static_cast<double>(k) / static_cast<double>(steps);
+      p.poses.push_back(makePose(header, x0 + t * dx, y0 + t * dy, yaw));
+    }
+    arcs.push_back(std::move(p));
+  }
+  return arcs;
+}
+
+// One straight swath → drivable Path densified at kSwathStep, constant yaw.
+nav_msgs::msg::Path swathToPath(
+    double x0, double y0, double x1, double y1, const std_msgs::msg::Header& header)
+{
+  nav_msgs::msg::Path path;
+  path.header = header;
+  const double dx = x1 - x0, dy = y1 - y0;
+  const double len = std::hypot(dx, dy);
+  const double yaw = std::atan2(dy, dx);
+  const int n = std::max(1, static_cast<int>(std::ceil(len / kSwathStep)));
+  path.poses.reserve(n + 1);
+  for (int k = 0; k <= n; ++k)
+  {
+    const double t = static_cast<double>(k) / static_cast<double>(n);
+    path.poses.push_back(makePose(header, x0 + t * dx, y0 + t * dy, yaw));
+  }
+  return path;
+}
+
+double pathLength(const nav_msgs::msg::Path& path)
+{
+  double len = 0.0;
+  for (std::size_t i = 1; i < path.poses.size(); ++i)
+  {
+    len += std::hypot(path.poses[i].pose.position.x - path.poses[i - 1].pose.position.x,
+                      path.poses[i].pose.position.y - path.poses[i - 1].pose.position.y);
+  }
+  return len;
 }
 
 }  // namespace
 
-void CoverageServer::computeCoveragePath()
+void CoverageServer::planCoverage()
 {
   const auto start_time = now();
   auto goal = action_server_->get_current_goal();
-  auto result = std::make_shared<ComputeCoveragePath::Result>();
+  auto result = std::make_shared<PlanCoverage::Result>();
 
   if (!action_server_ || !action_server_->is_server_active())
   {
@@ -209,370 +357,284 @@ void CoverageServer::computeCoveragePath()
     return;
   }
 
-  // F2C planning is single-threaded and can take 1-2 s on a non-trivial
-  // field — between phases, poll for a cancel from the BT (raised by
-  // PlanCoverageArea::onHalted via async_cancel_goal). Without these
-  // checks the server would finish planning, succeeded_current() against
-  // a goal the BT already cancelled, and the BT would sit in
-  // WaitingForResult until its 30 s timeout — a 30 s freeze on every
-  // emergency / area switch on production hardware.
-  auto check_cancel = [this, &result]() -> bool {
-    if (!action_server_->is_cancel_requested())
-    {
-      return false;
-    }
-    RCLCPP_INFO(get_logger(),
-                "Goal canceled mid-planning — terminating");
-    result->error_code = ComputeCoveragePath::Result::NONE;
-    action_server_->terminate_all(result);
-    return true;
-  };
-
   std_msgs::msg::Header header;
   header.stamp = now();
-  header.frame_id = goal->frame_id.empty() ? std::string{"map"} : goal->frame_id;
+  header.frame_id = "map";
 
   try
   {
-    // (0) Robot setup. F2C v2 uses setters (private fields).
-    f2c::types::Robot robot(robot_width_, operation_width_);
-    robot.setMinTurningRadius(min_turning_radius_);
-    robot.setMaxDiffCurv(max_diff_curvature_);
+    // Geometry knobs read LIVE so they're `ros2 param set`-tunable between
+    // plans (field iteration without a node restart).
+    const double configured_inset = get_parameter("chassis_safety_inset").as_double();
+    const double min_swath_length = get_parameter("min_swath_length").as_double();
+    // Perimeter/headland travel winding (#335): 0 = planner default, 1 = CW,
+    // 2 = CCW. Read live so it is field-tunable per plan.
+    const int ring_direction = static_cast<int>(get_parameter("ring_direction").as_int());
+    const double mow_angle_rad =
+        (goal->mow_angle_deg < 0.0) ? -1.0 : goal->mow_angle_deg * M_PI / 180.0;
 
-    // (1) Cell with outer + obstacle rings from the goal.
+    // SAFETY FLOOR: the boundary buffer must be at least the chassis half-width,
+    // or worst-case tracking error pushes a spinning blade past the operator
+    // polygon. chassis_safety_inset is field-tunable and has drifted to 0.0/0.08
+    // on deployed configs, which (with a 0.40 m chassis) let the robot excurse
+    // 0.32-0.39 m outside a concave boundary. Floor the planning inset at
+    // robot_width/2 regardless of the configured value.
+    const double inset_floor = robot_width_ * 0.5;
+    const double effective_inset = std::max(configured_inset, inset_floor);
+    if (effective_inset > configured_inset + 1e-9 && !inset_floor_warned_)
+    {
+      inset_floor_warned_ = true;
+      RCLCPP_WARN(get_logger(),
+                  "chassis_safety_inset=%.3fm is below the safety floor robot_width/2=%.3fm "
+                  "(robot_width=%.2fm) — planning at %.3fm so the chassis cannot cross the "
+                  "boundary. The chassis half-width is governing the boundary margin.",
+                  configured_inset,
+                  inset_floor,
+                  robot_width_,
+                  effective_inset);
+    }
+
     f2c::types::Cell cell = buildCellFromGoal(*goal);
 
-    // F2C wraps cells in F2CCells (a multi-cell collection). For
-    // single-cell coverage we wrap our one cell into a one-element
-    // collection.
-    f2c::types::Cells cells;
-    cells.addGeometry(cell);
+    // Robot's minimum trackable turning radius — floors both the ring-corner
+    // fillets inside the planner and the turn-around connectors below. Read
+    // live so it stays field-tunable per plan.
+    const double min_turning_radius = get_parameter("min_turning_radius").as_double();
 
-    // (2) Headland. Override the default if the caller specified one
-    // via headland_mode (string-coded as the width on the legacy
-    // server). The BT passes the inset directly through this field.
-    double headland_width = default_headland_width_;
-    if (!goal->headland_mode.width || goal->headland_mode.width <= 0.0)
+    BoustrophedonPlan plan = planBoustrophedon(cell,
+                                               operation_width_,
+                                               default_headland_width_,
+                                               num_headland_passes_,
+                                               effective_inset,
+                                               mow_angle_rad,
+                                               min_swath_length,
+                                               ring_direction,
+                                               min_turning_radius);
+
+    // Instrumentation (no behaviour change): surface every piece the planner
+    // dropped (slivers, tiny rings, micro-cells) and the planned-coverage
+    // fraction, so partial coverage is visible in the log instead of silent.
+    for (const auto& d : plan.diagnostics.drops)
     {
-      // Field unset / nonsense — keep our default.
+      RCLCPP_INFO(get_logger(), "PlanCoverage: %s", d.c_str());
     }
-    else
+    for (const auto& note : plan.diagnostics.notes)
     {
-      headland_width = goal->headland_mode.width;
+      RCLCPP_INFO(get_logger(), "PlanCoverage: %s", note.c_str());
     }
-    f2c::hg::ConstHL hl;
+    RCLCPP_INFO(get_logger(),
+                "PlanCoverage: planned coverage ~%.1f%% (%.2f/%.2f m² as op_width strips), "
+                "%zu piece(s) dropped",
+                100.0 * plan.diagnostics.planned_fraction,
+                plan.diagnostics.planned_area,
+                plan.diagnostics.field_area,
+                plan.diagnostics.drops.size());
 
-    // (1.5) Safety pre-inset. The polygon F2C plans into is the
-    // operator's mowing area shrunk by chassis_safety_inset_ (default
-    // 0.20 m ≈ chassis_width/2). Without this, F2C's outermost
-    // headland ring sits at op_width/2 = 9 cm from the polygon edge,
-    // and FTC tracking error during corner traversals (~ 15 cm) pushes
-    // the chassis 6 cm OUTSIDE the polygon — visible as the boundary
-    // excursion at session 2026-05-12-post-bug-sweep, t=1778592275:
-    // robot at (1.05, -3.00) → (1.38, -3.07) → (1.47, -3.11),
-    // BoundaryGuard fires, mowing aborts at 22 % coverage.
-    //
-    // Pre-insetting trades 11 % of usable area (on a 9 × 6 m field;
-    // <2 % on real-world 100 m² lawns) for a hard guarantee that the
-    // chassis cannot leave the authorised polygon even with worst-
-    // case tracking error. The headland traversal AND the inner-field
-    // swaths both ride inside this safety buffer.
-    f2c::types::Cells safe_cells = cells;
-    if (chassis_safety_inset_ > 0.001)
+    if (plan.rings.empty() && plan.swaths.empty())
     {
-      safe_cells = hl.generateHeadlands(cells, chassis_safety_inset_);
-      if (safe_cells.size() == 0 ||
-          safe_cells.getGeometry(0).area() < 1e-6)
-      {
-        RCLCPP_WARN(get_logger(),
-                    "Chassis safety inset (%.2f m) consumed the entire "
-                    "field — refusing to plan.",
-                    chassis_safety_inset_);
-        result->error_code =
-            ComputeCoveragePath::Result::INTERNAL_F2C_ERROR;
-        action_server_->terminate_current(result);
-        return;
-      }
-    }
-
-    f2c::types::Cells inner = hl.generateHeadlands(safe_cells, headland_width);
-
-    if (inner.size() == 0 || inner.getGeometry(0).area() < 1e-6)
-    {
+      result->success = false;
+      result->message =
+          "field too small after insets (chassis_safety_inset=" + std::to_string(effective_inset) +
+          "m, headland=" + std::to_string(default_headland_width_) + "m)";
       RCLCPP_WARN(get_logger(),
-                  "Headland inset (%.2f m on top of %.2f m chassis safety) "
-                  "consumed the entire field — nothing left to swath.",
-                  headland_width, chassis_safety_inset_);
-      result->error_code =
-          ComputeCoveragePath::Result::INTERNAL_F2C_ERROR;
+                  "PlanCoverage: %s (field area=%.2fm²)",
+                  result->message.c_str(),
+                  cell.area());
       action_server_->terminate_current(result);
       return;
     }
 
-    // (2b) Headland coverage — F2C v2 ships generateHeadlandSwaths()
-    // which returns N concentric rings at op_width spacing; we emit
-    // them as a perimeter traversal that prefixes the inner-field
-    // swaths. Without this the polygon's outer `headland_width` strip
-    // never gets mowed (ConstHL.generateHeadlands only INSETS the
-    // planning field, doesn't generate rings to traverse it).
-    //
-    // n_passes: operator override (num_headland_passes_, set via
-    // mowgli_robot.yaml → coverage_server param) when > 0, otherwise
-    // auto-derive as ceil(headland_width / op_width). One pass minimum.
-    // dir_out2in=true: the outer ring is the first one in the vector,
-    // so the robot follows the polygon perimeter first then spirals
-    // inward toward the F2C swath start.
-    f2c::types::Path headland_path;
-    const int n_headland_passes =
-        (num_headland_passes_ > 0)
-            ? num_headland_passes_
-            : std::max(1,
-                       static_cast<int>(std::ceil(
-                           headland_width / robot.getCovWidth())));
-    // Use safe_cells (pre-inset polygon) so the outermost headland
-    // ring sits at chassis_safety_inset_ + op_width/2 from the real
-    // polygon edge — keeps the chassis inside under FTC tracking
-    // error.
-    auto headland_passes = hl.generateHeadlandSwaths(
-        safe_cells, robot.getCovWidth(), n_headland_passes,
-        /*dir_out2in=*/true);
-    // F2C returns the ring as a sparse vertex list (typically just the
-    // polygon corners). Densify between consecutive vertices so FTC's
-    // carrot has poses to chase along each edge — without this, an
-    // 8-pose ring leaves the controller jumping between corners and
-    // PolygonStop fires on the discontinuity.
-    constexpr double kHeadlandStep = 0.10;  // m between path poses
-    std::size_t headland_pose_count = 0;
-    for (const auto& pass_cells : headland_passes)
+    // Assemble segments: rings outermost-first (each split into corner arcs),
+    // then serpentine swaths. Each ring is rotated to start near the previous
+    // segment's end so the inter-segment hop stays minimal.
+    bool have_prev_end = false;
+    double prev_x = 0.0, prev_y = 0.0;
+    for (const auto& loop : plan.rings)
     {
-      for (std::size_t c = 0; c < pass_cells.size(); ++c)
+      for (auto& arc : ringToArcs(loop, header, have_prev_end, prev_x, prev_y))
       {
-        const auto pass_cell = pass_cells.getGeometry(c);
-        const auto ring = pass_cell.getExteriorRing();
-        const std::size_t n = ring.size();
-        if (n < 3)
+        if (arc.poses.size() < 2)
         {
           continue;
         }
-        // Skip the trailing duplicate vertex (F2C closes the ring by
-        // repeating index 0 at index n-1).
-        const std::size_t last = (ring.getGeometry(0) ==
-                                   ring.getGeometry(n - 1)) ? n - 1 : n;
-        for (std::size_t i = 0; i < last; ++i)
+        prev_x = arc.poses.back().pose.position.x;
+        prev_y = arc.poses.back().pose.position.y;
+        have_prev_end = true;
+        result->segments.push_back(std::move(arc));
+        result->segment_types.push_back(PlanCoverage::Result::SEGMENT_RING);
+      }
+    }
+    for (const auto& sw : plan.swaths)
+    {
+      nav_msgs::msg::Path p =
+          swathToPath(sw.first.first, sw.first.second, sw.second.first, sw.second.second, header);
+      if (p.poses.size() < 2)
+      {
+        continue;
+      }
+      result->segments.push_back(std::move(p));
+      result->segment_types.push_back(PlanCoverage::Result::SEGMENT_SWATH);
+    }
+
+    // full_path = ONE CONTINUOUS route. buildContinuousPath connects the rings +
+    // swaths with forward turn-around arcs (looping into the already-mowed
+    // headland side), producing a single CUSP-FREE, in-bounds polyline. MPPI
+    // follows this without the bimodal "dither/spin" it does at sharp ~180°
+    // reversals, and keeps its dynamic obstacle avoidance; the backported
+    // arc-length MPPI fix tracks the arcs cleanly. Re-mowing on the turn loops
+    // is accepted. Cusp-free + in-bounds are GUARANTEED by test_coverage_planning
+    // (CoverageContinuousPath) on the real recorded area. The discrete
+    // result->segments above are kept for the GUI / resume bookkeeping; the BT
+    // drives full_path.
+    std::vector<std::pair<double, double>> outer;
+    outer.reserve(goal->outer_boundary.points.size());
+    for (const auto& p : goal->outer_boundary.points)
+    {
+      outer.emplace_back(p.x, p.y);
+    }
+    // SAFETY: the connectors/fillets that join the (already-inset) rings+swaths
+    // must stay inside the chassis-safety-inset polygon, NOT the raw operator
+    // boundary — otherwise a turn-around loop or corner fillet near a field edge
+    // can push the spinning blade across the operator boundary while base_link
+    // stays inside (so the map_server soft-boundary monitor never fires). Bound
+    // and VERIFY against the same inset ring the discrete segments use; fall back
+    // to the raw boundary only when no inset was applied.
+    const std::vector<std::pair<double, double>>& connector_boundary =
+        plan.safe_boundary.size() >= 3 ? plan.safe_boundary : outer;
+    // Nominal turn-around arc radius (m), read live. Smaller => compact U-turns
+    // instead of big teardrop loops; floored at min_turning_radius by
+    // buildConnector. See the connector_turn_radius declaration for the tuning
+    // trade-off.
+    const double connector_turn_radius = get_parameter("connector_turn_radius").as_double();
+    constexpr double kConnectorStep = 0.03;  // connector densify step (m)
+    // Build the plan as one or more HOLE-FREE continuous sub-paths. A single
+    // forward turn-around connector can't route around a large interior hole, so
+    // the path breaks where it would otherwise cross one; the BT drives each
+    // sub-path with MPPI and bridges the gaps with a blade-off Nav2 transit that
+    // routes around the obstacle (issue #333). full_path is their concatenation
+    // (GUI viz); drivable_subpaths is what the BT follows.
+    const auto subpaths = buildContinuousSubPaths(
+        plan, connector_boundary, connector_turn_radius, min_turning_radius, kConnectorStep);
+
+    result->full_path.header = header;
+    result->drivable_subpaths.clear();
+    double total = 0.0;
+    std::size_t out_of_bounds = 0;
+    std::size_t in_hole = 0;
+    for (const auto& sub : subpaths)
+    {
+      nav_msgs::msg::Path spath;
+      spath.header = header;
+      for (std::size_t i = 0; i < sub.size(); ++i)
+      {
+        const double x = sub[i].first;
+        const double y = sub[i].second;
+        double yaw = 0.0;
+        if (i + 1 < sub.size())
         {
-          const auto a = ring.getGeometry(i);
-          const auto b = ring.getGeometry((i + 1) % n);
-          const double dx = b.getX() - a.getX();
-          const double dy = b.getY() - a.getY();
-          const double seg_len = std::hypot(dx, dy);
-          const double yaw = std::atan2(dy, dx);
-          const int n_steps = std::max(
-              1, static_cast<int>(std::ceil(seg_len / kHeadlandStep)));
-          // Emit n_steps poses for t = k/n_steps, k in [0, n_steps).
-          // Endpoint b is NOT emitted here — the next segment's start
-          // == this segment's end, so b gets emitted as the next
-          // segment's k=0 pose. Avoids double-emit at vertices.
-          for (int k = 0; k < n_steps; ++k)
+          yaw = std::atan2(sub[i + 1].second - y, sub[i + 1].first - x);
+        }
+        else if (i > 0)
+        {
+          yaw = std::atan2(y - sub[i - 1].second, x - sub[i - 1].first);
+        }
+        if (i > 0)
+        {
+          total += std::hypot(x - sub[i - 1].first, y - sub[i - 1].second);
+        }
+        const auto pose = makePose(header, x, y, yaw);
+        spath.poses.push_back(pose);
+        result->full_path.poses.push_back(pose);
+        // Verify against the SAME inset ring the connectors are bounded by: any
+        // pose outside it means a fallback straight connector left the safe inset
+        // (the only way the blade can approach the operator boundary), so it is
+        // the safety-relevant residual to surface — not merely outside the raw
+        // polygon.
+        if (connector_boundary.size() >= 3 && !pointInRing(x, y, connector_boundary))
+        {
+          ++out_of_bounds;
+        }
+        // Sub-paths are split so none crosses a hole; a residual pose inside one
+        // means even a straight fallback couldn't be avoided (degenerate
+        // geometry) — surface it as the #333 safety residual.
+        for (const auto& hole : plan.safe_holes)
+        {
+          if (pointInRing(x, y, hole))
           {
-            const double t = static_cast<double>(k) /
-                             static_cast<double>(n_steps);
-            f2c::types::PathState st;
-            st.point = f2c::types::Point(a.getX() + t * dx,
-                                          a.getY() + t * dy);
-            st.angle = yaw;
-            headland_path.addState(st);
-            ++headland_pose_count;
+            ++in_hole;
+            break;
           }
         }
-        // Close the ring — emit the wrap-back vertex (== ring[0])
-        // explicitly so the densified polyline reaches the starting
-        // point. Without this the very last segment of a closed
-        // ring drops its endpoint, leaving up to kHeadlandStep of
-        // unmowed perimeter at the close.
-        const auto v0 = ring.getGeometry(0);
-        const auto v1 = ring.getGeometry(1 % n);
-        f2c::types::PathState close_st;
-        close_st.point = v0;
-        close_st.angle = std::atan2(v1.getY() - v0.getY(),
-                                     v1.getX() - v0.getX());
-        headland_path.addState(close_st);
-        ++headland_pose_count;
+      }
+      if (spath.poses.size() >= 2)
+      {
+        result->drivable_subpaths.push_back(std::move(spath));
       }
     }
-    RCLCPP_INFO(get_logger(),
-                "Headland: %d pass(es) at %.2f m spacing → %zu poses",
-                n_headland_passes, robot.getCovWidth(),
-                headland_pose_count);
-    if (check_cancel()) return;
-
-    // (3) Decompose the inner field around interior holes. Without
-    // this, BoustrophedonOrder serialises ALL swaths north-to-south
-    // and PathPlanning connects non-adjacent endpoints with straight
-    // lines (min_turning_radius=0.05 m, so effectively no arc) —
-    // visible in Foxglove as long diagonal connectors cutting across
-    // the field around the obstacle. TrapezoidalDecomp splits the
-    // (now headland-trimmed) field into sub-cells so the routing
-    // operates on each cleanly. Skip when there are no holes (single
-    // outer ring → decompose returns the same one cell unchanged but
-    // we save the cycle).
-    f2c::types::Cells planning_cells;
-    if (cell.size() > 1)
+    if (result->drivable_subpaths.size() > 1)
     {
-      f2c::decomp::TrapezoidalDecomp decomp;
-      // Split perpendicular to swath direction (which we don't know
-      // until BruteForce runs). 0 rad as a starting point is fine —
-      // BoustrophedonDecomp would pick this for us; for trapezoidal
-      // the angle just controls split orientation, not coverage.
-      decomp.setSplitAngle(0.0);
-      planning_cells = decomp.decompose(inner);
       RCLCPP_INFO(get_logger(),
-                  "TrapezoidalDecomp split the inner field into %zu sub-cell(s)",
-                  planning_cells.size());
+                  "PlanCoverage: split into %zu hole-free sub-paths — %zu blade-off Nav2 "
+                  "transit(s) will route around obstacle(s) between them",
+                  result->drivable_subpaths.size(),
+                  result->drivable_subpaths.size() - 1);
     }
-    else
+    if (out_of_bounds > 0)
     {
-      planning_cells = inner;
+      // The continuous path is built from in-bounds insets + clipped connectors,
+      // so any pose outside the safety-inset ring is a connector-geometry bug
+      // (the test guards it) and means the blade may approach the boundary.
+      RCLCPP_ERROR(get_logger(),
+                   "PlanCoverage: %zu/%zu continuous-path poses outside the chassis-safety "
+                   "inset — connector geometry bug (blade may approach the operator boundary)",
+                   out_of_bounds,
+                   result->full_path.poses.size());
     }
-
-    // (4) Per sub-cell pipeline: BruteForce swaths → BoustrophedonOrder
-    // → PathPlanning(DubinsCurvesCC). Concatenate paths in cell order
-    // with explicit Dubins connectors between sub-cells so the path is
-    // ONE continuous F2CPath instead of N disjoint pieces. Without the
-    // connectors, the path-end pose of cell N and the path-start pose
-    // of cell N+1 are arbitrary (no shared edge), so FTC's
-    // WAITING_FOR_GOAL_APPROACH state times out trying to drive the
-    // last 25 cm to a goal pose that isn't reachable in a straight
-    // line. planPathForConnection inserts a Dubins arc using the
-    // robot's min_turning_radius; FTC follows it like any other path
-    // segment.
-    f2c::obj::NSwath n_swath_obj;
-    f2c::sg::BruteForce bf;
-    f2c::rp::BoustrophedonOrder order;
-    f2c::pp::PathPlanning pp;
-    f2c::pp::DubinsCurvesCC turn;
-    // Path starts with the headland traversal so the perimeter strip
-    // gets mowed first; the inner-field swaths are appended after.
-    f2c::types::Path path = headland_path;
-    std::size_t total_swaths = 0;
-    // Carry the headland's last pose as the connector start so the
-    // first inner-field path links smoothly via Dubins.
-    bool have_prev_end = !headland_path.getStates().empty();
-    f2c::types::Point prev_end_pt;
-    double prev_end_ang = 0.0;
-    if (have_prev_end)
+    if (in_hole > 0)
     {
-      const auto& last = headland_path.getStates().back();
-      prev_end_pt = last.point;
-      prev_end_ang = last.angle;
-    }
-    std::size_t skipped_tiny = 0;
-    for (std::size_t i = 0; i < planning_cells.size(); ++i)
-    {
-      // Cancel poll between sub-cells (each iteration is the most
-      // expensive single phase here — BruteForce + PathPlanning can
-      // each be ~100 ms on a non-trivial sub-cell).
-      if (check_cancel()) return;
-
-      const auto sub_cell = planning_cells.getGeometry(i);
-      // Drop sub-cells that can't fit a single useful swath BEFORE the
-      // costly BruteForce below (generateBestSwaths is ~0.3-0.6 s on each
-      // sub-cell even when it ultimately yields zero swaths). F2C v2's
-      // TrapezoidalDecomp splits a hole-bearing polygon into dozens of
-      // slivers along the densified ConstHL output — a resume plan on a
-      // mowed-out field produced 224 sub-cells, ~170 of them 0.07-0.28 m²,
-      // each burning a full BruteForce for no coverage → 94 s per piece
-      // (field 2026-06-01). These slivers never produce a swath, so screen
-      // them on area here. The simplify-the-mowed-hole fix in
-      // remaining_polygon keeps the sub-cell COUNT sane; this floor keeps
-      // the per-sub-cell COST off the staircase remnants. 0.25 m² ≈ a
-      // 0.18 m swath × 1.4 m — anything smaller can't tile. Tunable via the
-      // min_subcell_area_m2 param.
-      if (sub_cell.area() < min_subcell_area_m2_)
-      {
-        ++skipped_tiny;
-        continue;
-      }
-      f2c::types::Swaths swaths =
-          bf.generateBestSwaths(n_swath_obj, robot.getCovWidth(), sub_cell);
-      if (swaths.size() == 0)
-      {
-        RCLCPP_WARN(get_logger(),
-                    "Sub-cell %zu (area %.2f m²) produced no swaths — skipping",
-                    i, sub_cell.area());
-        continue;
-      }
-      f2c::types::Swaths ordered = order.genSortedSwaths(swaths);
-      f2c::types::Path sub_path = pp.planPath(robot, ordered, turn);
-      if (sub_path.size() == 0)
-      {
-        continue;
-      }
-      const auto& first_state = sub_path.getStates().front();
-      const auto& last_state = sub_path.getStates().back();
-
-      if (have_prev_end)
-      {
-        // Bridge from previous cell's end-pose to this cell's start-pose.
-        // Empty middle MultiPoint — no waypoints in between, just the
-        // two endpoints. Dubins finds the shortest forward-only arc
-        // respecting the robot's turning radius.
-        f2c::types::MultiPoint no_waypoints;
-        f2c::types::Path connector = pp.planPathForConnection(
-            robot, prev_end_pt, prev_end_ang, no_waypoints,
-            first_state.point, first_state.angle, turn);
-        if (connector.size() > 0)
-        {
-          path += connector;
-        }
-      }
-      path += sub_path;
-      prev_end_pt = last_state.point;
-      prev_end_ang = last_state.angle;
-      have_prev_end = true;
-      total_swaths += ordered.size();
+      RCLCPP_ERROR(get_logger(),
+                   "PlanCoverage: %zu/%zu continuous-path poses inside an obstacle hole — a "
+                   "turn-around connector could not route around the hole (blade may cross the "
+                   "obstacle during the transition)",
+                   in_hole,
+                   result->full_path.poses.size());
     }
 
-    if (path.size() == 0)
-    {
-      RCLCPP_WARN(get_logger(),
-                  "F2C produced an empty coverage path (cov_width=%.2f m, "
-                  "headland=%.2f m, field area=%.2f m², %zu sub-cells)",
-                  robot.getCovWidth(), headland_width, cell.area(),
-                  planning_cells.size());
-      result->error_code =
-          ComputeCoveragePath::Result::INTERNAL_F2C_ERROR;
-      action_server_->terminate_current(result);
-      return;
-    }
+    result->success = true;
+    result->ring_count = static_cast<uint32_t>(std::count(result->segment_types.begin(),
+                                                          result->segment_types.end(),
+                                                          PlanCoverage::Result::SEGMENT_RING));
+    result->swath_count = static_cast<uint32_t>(std::count(result->segment_types.begin(),
+                                                           result->segment_types.end(),
+                                                           PlanCoverage::Result::SEGMENT_SWATH));
+    result->total_distance = total;
+    result->planning_time_s = (now() - start_time).seconds();
 
-    // (6) Convert to nav_msgs/Path. We don't populate the older
-    // PathComponents structure — Mowgli's BT only consumes nav_path.
-    result->nav_path = toNavPath(path, header);
-    result->planning_time = now() - start_time;
-    result->error_code = ComputeCoveragePath::Result::NONE;
-
-    RCLCPP_INFO(
-        get_logger(),
-        "Coverage path planned: %zu poses, %zu swaths across %zu sub-cell(s) "
-        "(skipped %zu < %.3f m² as too small), headland=%.2fm, "
-        "chassis_safety=%.2fm, field=%.2fm² (planning %.0fms)",
-        result->nav_path.poses.size(), total_swaths, planning_cells.size(),
-        skipped_tiny, min_subcell_area_m2_, headland_width,
-        chassis_safety_inset_, cell.area(),
-        1e3 * (now() - start_time).seconds());
+    RCLCPP_INFO(get_logger(),
+                "Coverage planned: %u ring(s) + %u swath(s) = %zu segments, "
+                "%.1fm total, angle=%.1f°, field=%.2fm² (%.0fms)",
+                result->ring_count,
+                result->swath_count,
+                result->segments.size(),
+                total,
+                plan.swath_angle_rad * 180.0 / M_PI,
+                cell.area(),
+                1e3 * result->planning_time_s);
 
     action_server_->succeeded_current(result);
   }
   catch (const std::invalid_argument& e)
   {
     RCLCPP_ERROR(get_logger(), "Invalid coverage goal: %s", e.what());
-    result->error_code = ComputeCoveragePath::Result::INVALID_COORDS;
+    result->success = false;
+    result->message = e.what();
     action_server_->terminate_current(result);
   }
   catch (const std::exception& e)
   {
     RCLCPP_ERROR(get_logger(), "Internal Fields2Cover error: %s", e.what());
-    result->error_code = ComputeCoveragePath::Result::INTERNAL_F2C_ERROR;
+    result->success = false;
+    result->message = e.what();
     action_server_->terminate_current(result);
   }
 }

@@ -117,6 +117,28 @@ TEST_F(ObstacleDeviationTest, FindFirstObstacle_RespectsLookahead)
   EXPECT_EQ(idx, -1);
 }
 
+TEST_F(ObstacleDeviationTest, FindFirstObstacle_OffCenterlineWithinBody_NeedsBodyWidth)
+{
+  // Obstacle OFF the path centerline (y=0.18) but inside the robot body sweep:
+  // path runs along y=0, block covers y∈[0.15,0.21] at x=0.5. The path point
+  // (0.5, 0) is free, so centerline-only detection (half_width=0) misses it —
+  // this is the gap the chassis still drives into.
+  stampBlock(0.5, 0.18, 0.03);
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  EXPECT_EQ(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.0), -1);
+  // With a 0.20 m body half-width the sweep reaches y=0.18 → detected at idx 5.
+  EXPECT_EQ(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.20), 5);
+}
+
+TEST_F(ObstacleDeviationTest, FindFirstObstacle_BeyondBodyWidth_NotDetected)
+{
+  // Obstacle at y=0.30 is OUTSIDE a 0.20 m half-width sweep (max reach 0.20),
+  // so the body misses it — body-aware detection must NOT over-trigger.
+  stampBlock(0.5, 0.30, 0.03);
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  EXPECT_EQ(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.20), -1);
+}
+
 // ── chooseDeviationSide ───────────────────────────────────────────────────────
 
 TEST_F(ObstacleDeviationTest, ChooseSide_FreeBothSides_BiasLeft)
@@ -194,6 +216,18 @@ TEST_F(ObstacleDeviationTest, IsPathClear_ObstacleOnPath_ZeroDeviation_False)
   EXPECT_FALSE(ObstacleDeviation::isPathClearWithDeviation(costmap_, path, 0, 10, 0.0));
 }
 
+TEST_F(ObstacleDeviationTest, IsPathClear_OffCenterlineWithinBody_NeedsBodyWidth)
+{
+  // The clear_at_zero detection path: obstacle off the centerline (y=0.18) but
+  // inside the body sweep. Centerline-only (half_width=0) reads CLEAR — the bug.
+  // Body-aware (half_width=0.20) correctly reads BLOCKED so avoidance engages.
+  stampBlock(0.5, 0.18, 0.03);
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  EXPECT_TRUE(ObstacleDeviation::isPathClearWithDeviation(costmap_, path, 0, 10, 0.0));
+  EXPECT_FALSE(ObstacleDeviation::isPathClearWithDeviation(
+      costmap_, path, 0, 10, 0.0, ObstacleDeviation::BoundaryGuard{}, 0.20));
+}
+
 TEST_F(ObstacleDeviationTest, IsPathClear_DeviationSkipsObstacle)
 {
   // Block centred on path at (0.5, 0). Deviating left by 0.5 m should clear it
@@ -257,6 +291,90 @@ TEST_F(ObstacleDeviationTest, GrowDeviation_PreservesSign)
   const double dev = ObstacleDeviation::growDeviationUntilClear(
       costmap_, path, 0, 10, -0.05, 1.5, 0.05);
   EXPECT_LT(dev, -0.20);  // negative side
+}
+
+// ── BoundaryGuard (confine deviation to zone) ─────────────────────────────────
+//
+// A second synthetic costmap acts as the zone boundary (lethal = out-of-zone).
+// The two test costmaps share a frame, so the guard transform is identity.
+
+class BoundaryGuardTest : public ObstacleDeviationTest
+{
+protected:
+  // Boundary costmap, same geometry/frame as costmap_ → identity transform.
+  nav2_costmap_2d::Costmap2D boundary_{
+      kSize, kSize, kResolution, kOriginX, kOriginY, nav2_costmap_2d::FREE_SPACE};
+
+  /// Stamp a square block of LETHAL cells into the boundary costmap.
+  void stampBoundaryBlock(double cx, double cy, double half)
+  {
+    unsigned int mx0 = 0;
+    unsigned int my0 = 0;
+    unsigned int mx1 = 0;
+    unsigned int my1 = 0;
+    ASSERT_TRUE(boundary_.worldToMap(cx - half, cy - half, mx0, my0));
+    ASSERT_TRUE(boundary_.worldToMap(cx + half, cy + half, mx1, my1));
+    for (unsigned int x = mx0; x <= mx1; ++x)
+    {
+      for (unsigned int y = my0; y <= my1; ++y)
+      {
+        boundary_.setCost(x, y, nav2_costmap_2d::LETHAL_OBSTACLE);
+      }
+    }
+  }
+
+  /// Identity guard pointing at boundary_ (test costmaps share a frame).
+  ObstacleDeviation::BoundaryGuard guard()
+  {
+    ObstacleDeviation::BoundaryGuard g;
+    g.costmap = &boundary_;
+    return g;  // tx/ty = 0, cos_yaw = 1, sin_yaw = 0 (identity)
+  }
+};
+
+TEST_F(BoundaryGuardTest, IsPathClear_OffsetIntoBoundary_Rejected)
+{
+  // LOCAL costmap is empty (free everywhere), so a +0.5 m left offset is
+  // locally clear. But the boundary marks the left side out-of-zone, so the
+  // offset must be reported BLOCKED.
+  stampBoundaryBlock(0.5, 0.5, 0.5);  // boundary-lethal on the left of the path
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  // Without the guard the offset path is clear (local costmap free).
+  EXPECT_TRUE(ObstacleDeviation::isPathClearWithDeviation(costmap_, path, 0, 10, 0.5));
+  // With the guard the same offset lands out-of-zone → blocked.
+  EXPECT_FALSE(ObstacleDeviation::isPathClearWithDeviation(costmap_, path, 0, 10, 0.5, guard()));
+}
+
+TEST_F(BoundaryGuardTest, GrowDeviation_OnlyClearSideOutOfZone_ReturnsOverCap)
+{
+  // Local obstacle on the path forces a deviation. The right side (negative Y)
+  // is locally clear, but the boundary marks ALL negative Y out-of-zone, so the
+  // only locally-clear side is boundary-blocked → grow can't clear → over cap
+  // (caller waits/aborts instead of leaving the zone).
+  stampBlock(0.5, 0.0, 0.2);  // local obstacle on the path
+  stampBoundaryBlock(0.5, -2.0, 2.0);  // boundary: all of -Y near x=0.5 lethal
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  const double max_dev = 1.5;
+  const double dev = ObstacleDeviation::growDeviationUntilClear(
+      costmap_, path, 0, 10, -0.05, max_dev, 0.05, guard());
+  EXPECT_GT(std::abs(dev), max_dev);  // no in-zone clearance on the chosen side
+}
+
+TEST_F(BoundaryGuardTest, ChooseSide_OtherSideOutOfZone_PicksInZoneSide)
+{
+  // Pose facing +X → left = +Y, right = -Y. The local obstacle is on the left
+  // AND the right is out-of-zone per the boundary... so flip it: make the LEFT
+  // out-of-zone and the right in-zone+free. chooseDeviationSide must pick the
+  // in-zone (right) side.
+  stampBoundaryBlock(0.0, 0.5, 0.5);  // boundary-lethal on the LEFT (+Y)
+  geometry_msgs::msg::PoseStamped p;
+  p.pose.position.x = 0.0;
+  p.pose.position.y = 0.0;
+  tf2::Quaternion q;
+  q.setRPY(0.0, 0.0, 0.0);
+  p.pose.orientation = tf2::toMsg(q);
+  const double dev = ObstacleDeviation::chooseDeviationSide(costmap_, p, 2.0, 0.1, guard());
+  EXPECT_LT(dev, 0.0);  // right side (in-zone), even though left is locally free
 }
 
 }  // namespace mowgli_nav2_plugins

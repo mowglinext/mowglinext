@@ -1,20 +1,63 @@
 import React, { useState } from "react";
-import { Alert, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Switch, Typography } from "antd";
-import { GlobalOutlined, WifiOutlined } from "@ant-design/icons";
+import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Switch, Typography } from "antd";
+import { GlobalOutlined, SettingOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 import { useApi } from "../../hooks/useApi.ts";
-import { App } from "antd";
+import { useGnssStatus } from "../../hooks/useGnssStatus.ts";
+import { deriveGpsStatus, gnssReceiverLabel } from "../../utils/gpsStatus.ts";
+import { GnssLiveStatusSummaryCard } from "../gnss/GnssLiveStatusSummaryCard.tsx";
+import {
+    GNSS_BAUD_OPTIONS,
+    GNSS_ACTION_SETTINGS_KEYS,
+    GNSS_PROFILE_OPTIONS,
+    GNSS_PROFILE_RATE_OPTIONS,
+    GNSS_RECEIVER_FAMILY_OPTIONS,
+    GNSS_SIGNAL_PROFILE_OPTIONS,
+    GNSS_SIGNAL_PROFILE_CUSTOM_HELP_TEXT,
+    normalizeGnssProfile,
+    normalizeGnssSignalProfile,
+} from "./gnssConfig.ts";
+import { GnssSignalProfileHelp } from "./GnssSignalProfileHelp.tsx";
+import { UniversalGnssAdvancedSettings } from "./UniversalGnssAdvancedSettings.tsx";
+import { GnssReceiverActionsCard } from "./GnssReceiverActionsCard.tsx";
 
 const { Text, Paragraph } = Typography;
 
 type Props = {
     values: Record<string, any>;
     onChange: (key: string, value: any) => void;
+    isDirty: boolean;
+    saving: boolean;
+    gpsRestarting: boolean;
+    onSave: () => void | Promise<void>;
+    onSaveAndRestartGps: () => void | Promise<void>;
+    onPersistGnssSettings: (settings: Record<string, any>) => Promise<boolean>;
 };
 
-export const PositioningSection: React.FC<Props> = ({ values, onChange }) => {
+export const PositioningSection: React.FC<Props> = ({
+    values,
+    onChange,
+    isDirty,
+    saving,
+    gpsRestarting,
+    onSave,
+    onSaveAndRestartGps,
+    onPersistGnssSettings,
+}) => {
+    const { t } = useTranslation();
     const guiApi = useApi();
     const { notification } = App.useApp();
     const [datumLoading, setDatumLoading] = useState(false);
+    const [expertMode, setExpertMode] = useState(false);
+    const gnssStatus = useGnssStatus();
+    const gpsStatus = deriveGpsStatus(gnssStatus);
+    const detectedReceiver = gnssReceiverLabel(gnssStatus);
+    const selectedSignalProfile = normalizeGnssSignalProfile(values.gnss_signal_profile);
+    const statusType: "success" | "warning" | "info" = gpsStatus.fixType === "RTK_FIX"
+        ? "success"
+        : gpsStatus.fixType === "NO_FIX"
+            ? "warning"
+            : "info";
 
     const setDatumFromGps = async () => {
         setDatumLoading(true);
@@ -26,48 +69,66 @@ export const PositioningSection: React.FC<Props> = ({ values, onChange }) => {
             if (parts.length === 2) {
                 onChange("datum_lat", parseFloat(parts[0]));
                 onChange("datum_lon", parseFloat(parts[1]));
-                notification.success({ message: "Datum set from current GPS position" });
+                notification.success({ message: t("settingsPositioning.datumSetFromGps") });
             }
         } catch (e: any) {
-            notification.error({ message: "Failed to get GPS position", description: e.message });
+            notification.error({ message: t("settingsPositioning.datumGpsFailed"), description: e.message });
         } finally {
             setDatumLoading(false);
         }
     };
 
-    const ntripEnabled = values.ntrip_enabled ?? true;
+    const persistCurrentGnssSettings = async () => {
+        const partial: Record<string, any> = {};
+        for (const key of GNSS_ACTION_SETTINGS_KEYS) {
+            if (Object.prototype.hasOwnProperty.call(values, key)) {
+                partial[key] = values[key];
+            }
+        }
+        return onPersistGnssSettings(partial);
+    };
+    // The serial-link baud and the baud persisted into the receiver's flash must
+    // match, so the operator only ever sets ONE "Baud". Keep the receiver-side
+    // value (gnss_config_baud) in lockstep automatically.
+    const handleBaudChange = (v: number) => {
+        onChange("gnss_serial_baud", v);
+        onChange("gnss_config_baud", v);
+    };
 
     return (
         <div>
-            {/* GPS Datum */}
             <Card size="small" style={{ marginBottom: 16 }}>
                 <Space direction="vertical" size={12} style={{ width: "100%" }}>
                     <div>
                         <Text strong style={{ fontSize: 14 }}>
                             <GlobalOutlined style={{ marginRight: 6 }} />
-                            Map Origin (Datum)
+                            {t("settingsPositioning.mapOriginTitle")}
                         </Text>
                         <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-                            The GPS coordinate used as origin for the local map. Place it near your docking station.
+                            {t("settingsPositioning.mapOriginDescription")}
                         </Paragraph>
                     </div>
                     <Form layout="vertical" size="small">
                         <Row gutter={[16, 0]}>
                             <Col xs={12} sm={8}>
-                                <Form.Item label="Latitude">
+                                <Form.Item label={t("settingsPositioning.latitude")}>
                                     <InputNumber
                                         value={values.datum_lat}
-                                        onChange={(v) => onChange("datum_lat", v)}
-                                        step={0.0000001} precision={7} style={{ width: "100%" }}
+                                        onChange={(value) => onChange("datum_lat", value)}
+                                        step={0.000000001}
+                                        precision={9}
+                                        style={{ width: "100%" }}
                                     />
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
-                                <Form.Item label="Longitude">
+                                <Form.Item label={t("settingsPositioning.longitude")}>
                                     <InputNumber
                                         value={values.datum_lon}
-                                        onChange={(v) => onChange("datum_lon", v)}
-                                        step={0.0000001} precision={7} style={{ width: "100%" }}
+                                        onChange={(value) => onChange("datum_lon", value)}
+                                        step={0.000000001}
+                                        precision={9}
+                                        style={{ width: "100%" }}
                                     />
                                 </Form.Item>
                             </Col>
@@ -79,7 +140,7 @@ export const PositioningSection: React.FC<Props> = ({ values, onChange }) => {
                                     onClick={setDatumFromGps}
                                     style={{ fontSize: 12, padding: 0 }}
                                 >
-                                    Use current GPS position (requires RTK fix)
+                                    {t("settingsPositioning.useCurrentGpsPosition")}
                                 </Button>
                             </Col>
                         </Row>
@@ -87,33 +148,67 @@ export const PositioningSection: React.FC<Props> = ({ values, onChange }) => {
                 </Space>
             </Card>
 
-            {/* Serial link */}
-            <Card size="small" title="GPS Serial Link" style={{ marginBottom: 16 }}>
+            <Alert
+                showIcon
+                type={statusType}
+                style={{ marginBottom: 16 }}
+                message={t("settingsPositioning.detectedReceiver", { receiver: detectedReceiver })}
+                description={t("settingsPositioning.liveGnssStatus", { status: gpsStatus.label })}
+            />
+
+            <Card
+                size="small"
+                title={t("settingsPositioning.gnssProfilesTitle")}
+                extra={(
+                    <Space size="small">
+                        <Text type="secondary" style={{ fontSize: 12 }}>{t("settingsPositioning.expertMode")}</Text>
+                        <Switch size="small" checked={expertMode} onChange={setExpertMode} />
+                    </Space>
+                )}
+                style={{ marginBottom: 16 }}
+            >
+                <Paragraph type="secondary" style={{ marginTop: 0 }}>
+                    {t("settingsPositioning.gnssProfilesDescription")}
+                </Paragraph>
                 <Form layout="vertical" size="small">
                     <Row gutter={[16, 0]}>
-                        <Col xs={24} sm={12}>
-                            <Form.Item label="Device Port" tooltip="Serial device path inside the GPS container — udev maps the USB receiver to this path">
-                                <Input
-                                    value={values.gps_port ?? "/dev/gps"}
-                                    onChange={(e) => onChange("gps_port", e.target.value)}
-                                    placeholder="/dev/gps"
+                        <Col xs={24} sm={14}>
+                            <Form.Item
+                                label={t("settingsPositioning.signalProfileLabel")}
+                                tooltip={t("settingsPositioning.signalProfileTooltip")}
+                                extra={<GnssSignalProfileHelp selectedProfile={selectedSignalProfile} />}
+                            >
+                                <Select
+                                    value={selectedSignalProfile}
+                                    onChange={(value) => onChange("gnss_signal_profile", value)}
+                                    options={GNSS_SIGNAL_PROFILE_OPTIONS.map((option) => ({
+                                        value: option.value,
+                                        label: t(option.label),
+                                        description: t(option.description),
+                                    }))}
+                                    optionRender={(option) => (
+                                        <div>
+                                            <div>{String(option.data.label)}</div>
+                                            <Text type="secondary" style={{ fontSize: 12 }}>
+                                                {String(option.data.description ?? "")}
+                                            </Text>
+                                        </div>
+                                    )}
                                 />
                             </Form.Item>
                         </Col>
-                        <Col xs={24} sm={12}>
-                            <Form.Item label="Baud Rate" tooltip="Serial baud rate. F9P defaults to 460800; LC29H factory-set to 115200.">
+                        <Col xs={24} sm={10}>
+                            <Form.Item
+                                label={t("settingsPositioning.baudLabel")}
+                                tooltip={t("settingsPositioning.baudTooltip")}
+                            >
                                 <Select
-                                    value={values.gps_baudrate ?? 460800}
-                                    onChange={(v) => onChange("gps_baudrate", v)}
-                                    options={[
-                                        { value: 9600, label: "9600" },
-                                        { value: 38400, label: "38400" },
-                                        { value: 57600, label: "57600" },
-                                        { value: 115200, label: "115200" },
-                                        { value: 230400, label: "230400" },
-                                        { value: 460800, label: "460800" },
-                                        { value: 921600, label: "921600" },
-                                    ]}
+                                    value={values.gnss_serial_baud ?? 921600}
+                                    onChange={handleBaudChange}
+                                    options={GNSS_BAUD_OPTIONS.map((option) => ({
+                                        value: option.value,
+                                        label: option.label,
+                                    }))}
                                 />
                             </Form.Item>
                         </Col>
@@ -121,125 +216,143 @@ export const PositioningSection: React.FC<Props> = ({ values, onChange }) => {
                 </Form>
             </Card>
 
-            {/* Protocol & Timeouts */}
-            <Card size="small" title="Protocol & Timeouts" style={{ marginBottom: 16 }}>
-                <Form layout="vertical" size="small">
-                    <Row gutter={[16, 0]}>
-                        <Col xs={12} sm={8}>
-                            <Form.Item label="GPS Protocol" tooltip="UBX for u-blox receivers, NMEA for generic">
-                                <Select
-                                    value={values.gps_protocol ?? "UBX"}
-                                    onChange={(v) => onChange("gps_protocol", v)}
-                                    options={[
-                                        { value: "UBX", label: "UBX (u-blox)" },
-                                        { value: "NMEA", label: "NMEA (generic)" },
-                                    ]}
-                                />
-                            </Form.Item>
-                        </Col>
-                        <Col xs={12} sm={8}>
-                            <Form.Item label="Wait After Undock" tooltip="Seconds to wait for RTK fix after undocking">
-                                <InputNumber
-                                    value={values.gps_wait_after_undock_sec}
-                                    onChange={(v) => onChange("gps_wait_after_undock_sec", v)}
-                                    min={0} step={1} style={{ width: "100%" }}
-                                    addonAfter="s"
-                                />
-                            </Form.Item>
-                        </Col>
-                        <Col xs={12} sm={8}>
-                            <Form.Item label="GPS Timeout" tooltip="Pause mowing if no fix for this long">
-                                <InputNumber
-                                    value={values.gps_timeout_sec}
-                                    onChange={(v) => onChange("gps_timeout_sec", v)}
-                                    min={1} step={1} style={{ width: "100%" }}
-                                    addonAfter="s"
-                                />
-                            </Form.Item>
-                        </Col>
-                    </Row>
-                </Form>
-            </Card>
+            <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message={t("settingsPositioning.savedToFlashTitle")}
+                description={
+                    <span>
+                        {t("settingsPositioning.savedToFlashIntro")}{" "}
+                        <Text strong>460800</Text> {t("settingsPositioning.savedToFlashSafeBaud")}{" "}
+                        <Text strong>921600</Text> {t("settingsPositioning.savedToFlashFastBaud")}{" "}
+                        {selectedSignalProfile === "custom" && t(GNSS_SIGNAL_PROFILE_CUSTOM_HELP_TEXT)}
+                    </span>
+                }
+            />
 
-            {/* NTRIP Configuration */}
-            <Card size="small" style={{ marginBottom: 16 }}>
-                <Space direction="vertical" size={12} style={{ width: "100%" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div>
-                            <Text strong style={{ fontSize: 14 }}>
-                                <WifiOutlined style={{ marginRight: 6 }} />
-                                NTRIP RTK Corrections
-                            </Text>
-                            <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-                                Enable for centimetre-level accuracy via RTK base station.
-                            </Paragraph>
-                        </div>
-                        <Switch
-                            checked={ntripEnabled}
-                            onChange={(v) => onChange("ntrip_enabled", v)}
-                        />
-                    </div>
+            <GnssLiveStatusSummaryCard
+                gnssStatus={gnssStatus}
+                selectedReceiverFamily={values.gnss_receiver_family}
+            />
 
-                    {ntripEnabled && (
+            {expertMode && (
+                <>
+                    <Card size="small" title={<Space><SettingOutlined /> {t("settingsPositioning.expertGnssTitle")}</Space>} style={{ marginBottom: 16 }}>
+                        <Paragraph type="secondary" style={{ marginTop: 0 }}>
+                            {t("settingsPositioning.expertGnssDescription")}
+                        </Paragraph>
                         <Form layout="vertical" size="small">
                             <Row gutter={[16, 0]}>
-                                <Col xs={24} sm={12} lg={8}>
-                                    <Form.Item label="Host" tooltip="NTRIP caster hostname or IP">
-                                        <Input
-                                            value={values.ntrip_host ?? ""}
-                                            onChange={(e) => onChange("ntrip_host", e.target.value)}
-                                            placeholder="caster.example.com"
+                                <Col xs={24} sm={12}>
+                                    <Form.Item label={t("settingsPositioning.receiverProfileLabel")} tooltip={t("settingsPositioning.receiverProfileTooltip")}>
+                                        <Select
+                                            value={normalizeGnssProfile(values.gnss_profile)}
+                                            onChange={(value) => onChange("gnss_profile", value)}
+                                            options={GNSS_PROFILE_OPTIONS.map((option) => ({
+                                                value: option.value,
+                                                label: t(option.label),
+                                            }))}
                                         />
                                     </Form.Item>
                                 </Col>
-                                <Col xs={12} sm={6} lg={4}>
-                                    <Form.Item label="Port">
+                                <Col xs={24} sm={12}>
+                                    <Form.Item label={t("settingsPositioning.positionRateLabel")}>
+                                        <Select
+                                            value={values.gnss_profile_rate_hz ?? 5}
+                                            onChange={(value) => onChange("gnss_profile_rate_hz", value)}
+                                            options={GNSS_PROFILE_RATE_OPTIONS.map((option) => ({
+                                                value: option.value,
+                                                label: option.label,
+                                            }))}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                            </Row>
+                            <Row gutter={[16, 0]}>
+                                <Col xs={24} sm={10}>
+                                    <Form.Item label={t("settingsPositioning.receiverFamilyLabel")}>
+                                        <Select
+                                            value={values.gnss_receiver_family ?? "auto"}
+                                            onChange={(value) => onChange("gnss_receiver_family", value)}
+                                            options={GNSS_RECEIVER_FAMILY_OPTIONS.map((option) => ({
+                                                value: option.value,
+                                                label: t(option.label),
+                                            }))}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={24} sm={14}>
+                                    <Form.Item label={t("settingsPositioning.serialDeviceLabel")}>
+                                        <Input
+                                            value={values.gnss_serial_device ?? "/dev/ttyAMA4"}
+                                            onChange={(event) => onChange("gnss_serial_device", event.target.value)}
+                                            placeholder="/dev/serial/by-id/..."
+                                        />
+                                    </Form.Item>
+                                </Col>
+                            </Row>
+                            <Row gutter={[16, 0]}>
+                                <Col xs={12} sm={6}>
+                                    <Form.Item label={t("settingsPositioning.rtkWaitAfterUndockLabel")}>
                                         <InputNumber
-                                            value={values.ntrip_port ?? 2101}
-                                            onChange={(v) => onChange("ntrip_port", v)}
-                                            min={1} max={65535} style={{ width: "100%" }}
+                                            value={values.gps_wait_after_undock_sec}
+                                            onChange={(value) => onChange("gps_wait_after_undock_sec", value)}
+                                            min={0}
+                                            step={1}
+                                            style={{ width: "100%" }}
+                                            addonAfter="s"
                                         />
                                     </Form.Item>
                                 </Col>
-                                <Col xs={12} sm={6} lg={4}>
-                                    <Form.Item label="Mountpoint">
-                                        <Input
-                                            value={values.ntrip_mountpoint ?? ""}
-                                            onChange={(e) => onChange("ntrip_mountpoint", e.target.value)}
-                                            placeholder="RTCM3"
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={12} sm={6} lg={4}>
-                                    <Form.Item label="Username">
-                                        <Input
-                                            value={values.ntrip_user ?? ""}
-                                            onChange={(e) => onChange("ntrip_user", e.target.value)}
-                                        />
-                                    </Form.Item>
-                                </Col>
-                                <Col xs={12} sm={6} lg={4}>
-                                    <Form.Item label="Password">
-                                        <Input.Password
-                                            value={values.ntrip_password ?? ""}
-                                            onChange={(e) => onChange("ntrip_password", e.target.value)}
+                                <Col xs={12} sm={6}>
+                                    <Form.Item label={t("settingsPositioning.gpsTimeoutLabel")}>
+                                        <InputNumber
+                                            value={values.gps_timeout_sec}
+                                            onChange={(value) => onChange("gps_timeout_sec", value)}
+                                            min={1}
+                                            step={1}
+                                            style={{ width: "100%" }}
+                                            addonAfter="s"
                                         />
                                     </Form.Item>
                                 </Col>
                             </Row>
                         </Form>
-                    )}
-
-                    {!ntripEnabled && (
                         <Alert
                             type="info"
                             showIcon
-                            message="Without NTRIP, GPS accuracy is ~2-5m (not suitable for autonomous mowing)."
-                            style={{ marginTop: 0 }}
+                            message={t("settingsPositioning.expertScopeTitle")}
+                            description={t("settingsPositioning.expertScopeDescription")}
                         />
-                    )}
-                </Space>
-            </Card>
+                    </Card>
+
+                    <UniversalGnssAdvancedSettings
+                        receiverFamily={values.gnss_receiver_family ?? "auto"}
+                        values={values}
+                        onChange={onChange}
+                    />
+                </>
+            )}
+
+            {/* The plan/apply/factory-reset receiver tooling is developer-grade —
+                keep it for Expert mode only. Basic users save with the page's
+                Save button at the bottom, which persists the settings and
+                restarts the receiver container to pick up transport/NTRIP
+                changes. The signal profile is a receiver-flash setting: it only
+                reaches the receiver via Plan & Apply here, not via a plain
+                Save/restart. */}
+            {expertMode && (
+                <GnssReceiverActionsCard
+                    isDirty={isDirty}
+                    saving={saving}
+                    gpsRestarting={gpsRestarting}
+                    onSave={onSave}
+                    onSaveAndRestartGps={onSaveAndRestartGps}
+                    onPersistBeforeAction={persistCurrentGnssSettings}
+                    showSaveButtons
+                />
+            )}
         </div>
     );
 };

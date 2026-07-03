@@ -26,12 +26,11 @@ serial_try_baud_nmea() {
 
 serial_probe_baud() {
   local port="${1:?serial_probe_baud: missing port}"
-  local backend="${2:-gps}"
-  local protocol="${3:-UBX}"
+  local receiver_family="${2:-auto}"
   local baud
   local bauds=()
 
-  case "$backend" in
+  case "$receiver_family" in
     unicore)
       bauds=(921600 460800 115200 230400 57600 38400 9600)
       ;;
@@ -39,10 +38,7 @@ serial_probe_baud() {
       bauds=(460800 115200 9600 230400 57600 38400 921600)
       ;;
     *)
-      case "$protocol" in
-        NMEA) bauds=(115200 9600 38400 57600 230400 460800 921600) ;;
-        *)    bauds=(460800 115200 9600 230400 57600 38400 921600) ;;
-      esac
+      bauds=(115200 9600 38400 57600 230400 460800 921600)
       ;;
   esac
 
@@ -58,17 +54,16 @@ serial_probe_baud() {
 
 prompt_or_probe_baud() {
   local port="${1:?prompt_or_probe_baud: missing port}"
-  local backend="${2:-gps}"
-  local protocol="${3:-UBX}"
-  local default_baud="${4:-921600}"
-  local mode="${5:-ask}"
+  local receiver_family="${2:-auto}"
+  local default_baud="${3:-921600}"
+  local mode="${4:-ask}"
   local detected=""
   local choice=""
 
   if ! serial_port_exists "$port"; then
     warn "Serial port $port does not exist; falling back to manual baud selection."
   elif [ "$mode" = "auto" ]; then
-    if detected="$(serial_probe_baud "$port" "$backend" "$protocol" 2>/dev/null)"; then
+    if detected="$(serial_probe_baud "$port" "$receiver_family" 2>/dev/null)"; then
       info "Detected GPS/GNSS baud on $port: $detected"
       REPLY="$detected"
       return 0
@@ -83,7 +78,7 @@ prompt_or_probe_baud() {
     choice="$REPLY"
 
     if [ "$choice" = "1" ] && serial_port_exists "$port"; then
-      if detected="$(serial_probe_baud "$port" "$backend" "$protocol" 2>/dev/null)"; then
+      if detected="$(serial_probe_baud "$port" "$receiver_family" 2>/dev/null)"; then
         info "Detected GPS/GNSS baud on $port: $detected"
         REPLY="$detected"
         return 0

@@ -19,7 +19,8 @@
 FROM ros:kilted-ros-base AS build
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG LDLIDAR_REF=devel
+ARG LDLIDAR_REF=v0.3.0
+ARG LDLIDAR_SHA=4ee53a8b176037cf418a54b25007075bb2b1d3a0
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -47,7 +48,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /ros2_ws/src
 RUN git clone --depth 1 --branch ${LDLIDAR_REF} \
-      https://github.com/Myzhar/ldrobot-lidar-ros2.git
+      https://github.com/Myzhar/ldrobot-lidar-ros2.git \
+ && cd ldrobot-lidar-ros2 \
+ && git checkout ${LDLIDAR_SHA} \
+ && git submodule update --init --recursive
 
 # Upstream CMakeLists has a FATAL_ERROR when the ROS distro isn't humble
 # or jazzy. Downgrade every FATAL_ERROR to WARNING in the driver's cmake
@@ -72,6 +76,18 @@ RUN . /opt/ros/kilted/setup.sh \
  && colcon build --merge-install \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
       --parallel-workers $(nproc)
+
+# Upstream ldlidar_component builds the LDROBOT SDK as a SHARED library
+# target named `ldlidar` (libldlidar.so) and links the component against it,
+# but its install() rule only installs the component — not the SDK lib. With
+# --merge-install + a runtime stage that COPYs only /ros2_ws/install,
+# libldlidar.so is left behind in the build tree and the component fails to
+# dlopen at startup ("libldlidar.so: cannot open shared object file"). Install
+# it explicitly next to the component (/opt/ldlidar/lib is on LD_LIBRARY_PATH
+# via the sourced overlay).
+RUN cp "$(find /ros2_ws/build -name libldlidar.so -print -quit)" \
+       /ros2_ws/install/lib/ \
+ && test -f /ros2_ws/install/lib/libldlidar.so
 
 # =============================================================================
 # Runtime

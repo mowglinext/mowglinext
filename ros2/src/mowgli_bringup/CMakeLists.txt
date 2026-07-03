@@ -16,12 +16,15 @@ install(
     config
     urdf
   DESTINATION share/${PROJECT_NAME}
+  PATTERN "__pycache__" EXCLUDE
+  PATTERN "*.pyc" EXCLUDE
 )
 
 install(
   PROGRAMS
     scripts/wait_for_tf.py
     scripts/empty_static_map_pub.py
+    scripts/cmd_vel_ws_relay.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -43,6 +46,10 @@ if(BUILD_TESTING)
   add_launch_test(test/test_nodes_startup.launch.py
     TIMEOUT 60
   )
+  
+  add_launch_test(test/test_navsat_status_universal.launch.py
+    TIMEOUT 45
+  )
 
   # Static config-validation tests for nav2_params.yaml. Cheap (no nodes
   # spun up) and they guard against regressions like the 2026-05-08
@@ -51,6 +58,15 @@ if(BUILD_TESTING)
   # never moved.
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_nav2_params test/test_nav2_params.py
+    TIMEOUT 30
+  )
+  ament_add_pytest_test(test_gnss_launch_config test/test_gnss_launch_config.py
+    TIMEOUT 30
+  )
+  # Verifies the sparse-installed-config deep-merge (robot_config_util):
+  # template-only defaults, sparse overrides + fall-through, reset-to-default,
+  # and full-config backward compat.
+  ament_add_pytest_test(test_robot_config_util test/test_robot_config_util.py
     TIMEOUT 30
   )
 

@@ -1,5 +1,6 @@
 import {useState} from 'react';
 import {Dropdown, InputNumber} from 'antd';
+import {useTranslation} from 'react-i18next';
 import {BorderOutlined, RadiusSettingOutlined, PlusOutlined} from '@ant-design/icons';
 import type {ShapeType} from '../hooks/useMapEditing';
 import {useThemeMode} from '../../../theme/ThemeContext.tsx';
@@ -13,10 +14,10 @@ interface ShapePickerDropdownProps {
     placement?: 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight' | 'top' | 'bottom';
 }
 
-const shapes: {key: ShapeType; label: string; icon: React.ReactNode}[] = [
-    {key: 'square', label: 'Square', icon: <BorderOutlined />},
-    {key: 'circle', label: 'Circle', icon: <RadiusSettingOutlined />},
-    {key: 'hexagon', label: 'Hexagon', icon: <span style={{fontSize: 14, lineHeight: 1}}>⬡</span>},
+const shapes: {key: ShapeType; labelKey: string; icon: React.ReactNode}[] = [
+    {key: 'square', labelKey: 'mapShapePicker.square', icon: <BorderOutlined />},
+    {key: 'circle', labelKey: 'mapShapePicker.circle', icon: <RadiusSettingOutlined />},
+    {key: 'hexagon', labelKey: 'mapShapePicker.hexagon', icon: <span style={{fontSize: 14, lineHeight: 1}}>⬡</span>},
 ];
 
 export const ShapePickerDropdown = ({
@@ -27,6 +28,7 @@ export const ShapePickerDropdown = ({
 }: ShapePickerDropdownProps) => {
     const [size, setSize] = useState(5);
     const {colors} = useThemeMode();
+    const {t} = useTranslation();
 
     const menuItemStyle: React.CSSProperties = {
         display: 'flex',
@@ -64,7 +66,7 @@ export const ShapePickerDropdown = ({
         >
             {/* Size control */}
             <div style={{padding: '4px 8px 8px', display: 'flex', alignItems: 'center', gap: 8}}>
-                <span style={{color: colors.muted, fontSize: 12}}>Size</span>
+                <span style={{color: colors.muted, fontSize: 12}}>{t('mapShapePicker.size')}</span>
                 <InputNumber
                     size="small"
                     min={0.1}
@@ -89,7 +91,7 @@ export const ShapePickerDropdown = ({
                     onMouseOut={hoverOff}
                 >
                     {s.icon}
-                    {s.label}
+                    {t(s.labelKey)}
                 </button>
             ))}
 
@@ -97,7 +99,7 @@ export const ShapePickerDropdown = ({
 
             {/* Emoji section */}
             <div style={{padding: '4px 8px 2px', color: colors.muted, fontSize: 11, fontWeight: 600}}>
-                Emoji
+                {t('mapShapePicker.emoji')}
             </div>
             <div style={{
                 display: 'grid',
@@ -154,7 +156,7 @@ export const ShapePickerDropdown = ({
                     }}
                 >
                     <PlusOutlined />
-                    Add
+                    {t('mapShapePicker.add')}
                 </button>
             )}
         </Dropdown>

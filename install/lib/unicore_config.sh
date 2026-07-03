@@ -80,7 +80,10 @@ maybe_upgrade_unicore_baud() {
   local mode="${3:-auto}"
   local com_port
 
-  [ "${GNSS_BACKEND:-}" = "unicore" ] || return 0
+  case "${GNSS_RECEIVER_FAMILY:-${GNSS_BACKEND:-}}" in
+    unicore) ;;
+    *) return 0 ;;
+  esac
   [ -n "$port" ] || return 0
   [ -n "$current_baud" ] || return 0
   [ "$current_baud" != "$UNICORE_TARGET_BAUD" ] || return 0
@@ -95,10 +98,10 @@ maybe_upgrade_unicore_baud() {
 
   info "Unicore baud detected at ${current_baud}; attempting ${com_port} -> ${UNICORE_TARGET_BAUD}."
   if configure_unicore_baud_921600 "$port" "$current_baud" "$com_port"; then
-    GPS_BAUD="$UNICORE_TARGET_BAUD"
-    info "Unicore receiver verified at ${UNICORE_TARGET_BAUD}; GPS_BAUD updated."
+    GNSS_SERIAL_BAUD="$UNICORE_TARGET_BAUD"
+    info "Unicore receiver verified at ${UNICORE_TARGET_BAUD}; GNSS_SERIAL_BAUD updated."
   else
-    GPS_BAUD="$current_baud"
-    warn "Unable to switch Unicore receiver to ${UNICORE_TARGET_BAUD}; keeping GPS_BAUD=${current_baud}."
+    GNSS_SERIAL_BAUD="$current_baud"
+    warn "Unable to switch Unicore receiver to ${UNICORE_TARGET_BAUD}; keeping GNSS_SERIAL_BAUD=${current_baud}."
   fi
 }

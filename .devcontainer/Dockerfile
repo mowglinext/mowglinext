@@ -15,7 +15,7 @@
 #
 # Example:
 #   docker build \
-#     --build-arg BASE_IMAGE=ghcr.io/cedbossneo/mowglinext/mowgli-ros2:feat-my-branch \
+#     --build-arg BASE_IMAGE=ghcr.io/mowglinext/mowglinext/mowgli-ros2:feat-my-branch \
 #     -f .devcontainer/Dockerfile -t mowglinext-devcontainer .
 #
 # Default (ros:kilted-ros-base) reproduces the upstream Codespaces flow
@@ -110,6 +110,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # ── Diagnostics ──
     ros-kilted-diagnostic-msgs \
     ros-kilted-diagnostic-updater \
+    ros-kilted-rclcpp-components \
+    ros-kilted-rclcpp-lifecycle \
     # ── Bridges ──
     ros-kilted-foxglove-bridge \
     ros-kilted-rosbridge-suite \
@@ -117,6 +119,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-kilted-ublox-msgs \
     ros-kilted-nmea-msgs \
     ros-kilted-rtcm-msgs \
+    ros-kilted-geometry-msgs \
+    ros-kilted-nav-msgs \
+    ros-kilted-sensor-msgs \
+    ros-kilted-std-msgs \
     # ── Gazebo Harmonic (headless simulation) ──
     ros-kilted-ros-gz-sim \
     ros-kilted-ros-gz-bridge \
@@ -130,6 +136,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     git \
+    libcurl4-openssl-dev \
+    libusb-1.0-0-dev \
     # ── Runtime deps ──
     libtinyxml2-dev \
     python3-argcomplete \
@@ -170,10 +178,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN git clone --depth 1 --branch v2.0.0 https://github.com/Fields2Cover/Fields2Cover.git /tmp/Fields2Cover && \
     cmake -S /tmp/Fields2Cover -B /tmp/Fields2Cover/build \
       -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_INSTALL_PREFIX=/usr/local \
+      -DCMAKE_INSTALL_PREFIX=/opt/fields2cover-200 \
       -DBUILD_TESTING=OFF && \
     cmake --build /tmp/Fields2Cover/build -j$(nproc) && \
     cmake --install /tmp/Fields2Cover/build && \
+    echo '/opt/fields2cover-200/lib' > /etc/ld.so.conf.d/fields2cover-200.conf && \
     rm -rf /tmp/Fields2Cover && \
     ldconfig
 

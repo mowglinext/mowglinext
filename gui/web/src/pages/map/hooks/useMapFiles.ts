@@ -1,4 +1,5 @@
 import React, {ChangeEvent} from "react";
+import {useTranslation} from "react-i18next";
 import type {NotificationInstance} from "antd/es/notification/interface";
 import type {FeatureCollection, Feature} from "geojson";
 import type {Map as MapType} from "../../../types/ros.ts";
@@ -28,6 +29,10 @@ interface UseMapFilesOptions {
     guiApi: Api<unknown>;
     dockDirty: boolean;
     setDockDirty: (v: boolean) => void;
+    // Builds the editable feature set (areas, obstacles, dock) from a Map
+    // message. Needed by handleRestoreMap because the MapPage effect that
+    // normally does this is intentionally skipped while editMap is true.
+    buildFeaturesFromMap: (m: MapType) => Record<string, MowingFeature>;
 }
 
 export function useMapFiles({
@@ -44,7 +49,10 @@ export function useMapFiles({
     guiApi,
     dockDirty,
     setDockDirty,
+    buildFeaturesFromMap,
 }: UseMapFilesOptions) {
+    const {t} = useTranslation();
+
     async function handleSaveMap() {
         const areas: Record<string, MowgliMapArea[]> = {
             "area": [],
@@ -135,13 +143,13 @@ export function useMapFiles({
         try {
             await guiApi.mowglinext.putMowglinext(updateMsg);
             notification.success({
-                message: "Area saved",
+                message: t('mapFiles.areaSaved'),
             });
             setHasUnsavedChanges(false);
             setEditMap(false);
         } catch (e: any) {
             notification.error({
-                message: "Failed to save area",
+                message: t('mapFiles.failedToSaveArea'),
                 description: e.message,
             });
         }
@@ -209,6 +217,13 @@ export function useMapFiles({
                 const parts = content.split(",");
                 const newMap = JSON.parse(atob(parts[1])) as MapType;
                 setMap(newMap);
+                // The MapPage effect that turns a Map into editable features
+                // skips while editMap is true (set just above), so build them
+                // here — otherwise handleSaveMap would persist the stale
+                // features and the restored map would be silently discarded.
+                setFeatures(buildFeaturesFromMap(newMap));
+                setHasUnsavedChanges(true);
+                setDockDirty(true);
             });
             reader.readAsDataURL(file);
         });
@@ -265,8 +280,8 @@ export function useMapFiles({
 
             if (file.name.toLowerCase().endsWith(".bag")) {
                 notification.info({
-                    message: "OpenMower .bag import — coming soon",
-                    description: "Convert your map.bag to map.json on the source robot first (OpenMower 1.x auto-converts at boot), then re-import the .json. See docs/IMPORT_OPENMOWER_MAP.md §6.",
+                    message: t('mapFiles.bagImportComingSoonMessage'),
+                    description: t('mapFiles.bagImportComingSoonDescription'),
                 });
                 return;
             }
@@ -291,7 +306,7 @@ export function useMapFiles({
                 setImportPreview(summary);
             } catch (e: any) {
                 notification.error({
-                    message: "OpenMower import failed",
+                    message: t('mapFiles.openMowerImportFailed'),
                     description: e?.message ?? String(e),
                 });
             }
@@ -300,24 +315,70 @@ export function useMapFiles({
     };
 
     /**
+     * Re-run the preview for an already-stashed map.json, this time
+     * supplying the OpenMower datum (OM_DATUM_LAT/LONG). The server
+     * reprojects every vertex from the OM datum into the MowgliNext map
+     * frame; without it the import lands at a constant offset (and a slight
+     * skew). Called by the modal when the user fills in / clears the datum
+     * fields. Returns the fresh summary so the modal can re-render the
+     * preview (datum-shift alert, dock pose, warnings).
+     */
+    const handleReprojectOpenMowerPreview = async (
+        importFileText: string,
+        omDatumLat?: number,
+        omDatumLon?: number,
+    ): Promise<ImportOpenMowerSummary> => {
+        if (!importFileText) {
+            throw new Error("no stashed map text — pick a file before re-projecting");
+        }
+        const body: Record<string, unknown> = {map: JSON.parse(importFileText)};
+        if (omDatumLat !== undefined && omDatumLon !== undefined) {
+            body.om_datum_lat = omDatumLat;
+            body.om_datum_lon = omDatumLon;
+        }
+        const res = await fetch("/api/import/openmower", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+            const errBody = await res.text();
+            throw new Error(`HTTP ${res.status}: ${errBody}`);
+        }
+        return (await res.json()) as ImportOpenMowerSummary;
+    };
+
+    /**
      * Confirm step of the OpenMower import. Re-POSTs the stashed file
      * body with `apply: true` so the server runs the same parse +
      * validate pipeline the user already saw in the preview modal, then
      * fires clear_map → add_area×N → save_areas → set_docking_point.
+     *
+     * The OpenMower datum (when the user supplied it) is sent again so the
+     * applied geometry matches the previewed, reprojected geometry exactly.
      *
      * On success the modal closes; `/map` will refresh on its own via
      * the existing websocket stream — no manual refetch needed. We do
      * drop the dirty / editMap flags so a previous in-progress local
      * edit doesn't reappear over the freshly imported areas.
      */
-    const handleApplyOpenMowerImport = async (importFileText: string): Promise<void> => {
+    const handleApplyOpenMowerImport = async (
+        importFileText: string,
+        omDatumLat?: number,
+        omDatumLon?: number,
+    ): Promise<void> => {
         if (!importFileText) {
             throw new Error("no stashed map text — preview must run before apply");
+        }
+        const body: Record<string, unknown> = {map: JSON.parse(importFileText), apply: true};
+        if (omDatumLat !== undefined && omDatumLon !== undefined) {
+            body.om_datum_lat = omDatumLat;
+            body.om_datum_lon = omDatumLon;
         }
         const res = await fetch("/api/import/openmower", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({map: JSON.parse(importFileText), apply: true}),
+            body: JSON.stringify(body),
         });
         if (!res.ok) {
             const errBody = await res.text();
@@ -328,8 +389,8 @@ export function useMapFiles({
         setHasUnsavedChanges(false);
         setDockDirty(false);
         notification.success({
-            message: "OpenMower map imported",
-            description: "Areas + dock pose written. /map should refresh shortly.",
+            message: t('mapFiles.openMowerMapImported'),
+            description: t('mapFiles.openMowerMapImportedDescription'),
         });
     };
 
@@ -375,7 +436,7 @@ export function useMapFiles({
                                 break;
                             default:
                                 notification.error({
-                                    message: `Unknown type ${areaType}`,
+                                    message: t('mapFiles.unknownType', {type: areaType}),
                                 });
                                 setFeatures({...features}); // revert
                                 return;
@@ -387,7 +448,7 @@ export function useMapFiles({
                                 break;
                             default:
                                 notification.error({
-                                    message: `Unknown type ${areaType}`,
+                                    message: t('mapFiles.unknownType', {type: areaType}),
                                 });
                                 setFeatures({...features}); // revert
                                 return;
@@ -410,6 +471,7 @@ export function useMapFiles({
         handleDownloadGeoJSON,
         handleUploadGeoJSON,
         handleImportOpenMower,
+        handleReprojectOpenMowerPreview,
         handleApplyOpenMowerImport,
     };
 }

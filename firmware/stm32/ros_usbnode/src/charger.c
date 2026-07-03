@@ -248,7 +248,6 @@ void ChargeController(void)
           //charger_state = CHARGER_STATE_END_CHARGING;
           /*consider as the battery full */
           ampere_acc.f = 2.8;
-          SOC = 100;
         }
 
         break;

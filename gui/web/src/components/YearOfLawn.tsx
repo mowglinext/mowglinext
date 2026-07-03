@@ -1,5 +1,7 @@
 import {useMemo} from "react";
+import {useTranslation} from "react-i18next";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
+import {useIsMobile} from "../hooks/useIsMobile";
 
 /**
  * GitHub-style contribution-graph rendered against mowing sessions.
@@ -43,6 +45,12 @@ function intensity(km: number, max: number): number {
 
 export function YearOfLawn({sessions}: YearOfLawnProps) {
   const {colors} = useThemeMode();
+  const {t} = useTranslation();
+  const isMobile = useIsMobile();
+  // The full year SVG (~810px) always horizontal-scroll-clips on phones; on
+  // mobile we render only the most recent weeks. Summary stats stay over the
+  // full 52-week window.
+  const weeksToShow = isMobile ? 20 : 52;
 
   const {grid, weeks, totalKm, activeDays, streak, monthLabels} = useMemo(() => {
     const today = startOfDay(new Date());
@@ -104,10 +112,18 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
 
   const maxKm = grid.reduce((m, c) => Math.max(m, c.km), 0.001);
 
+  // On mobile, render only the trailing `weeksToShow` columns. Re-index the
+  // month labels into the sliced window.
+  const colOffset = Math.max(0, weeks.length - weeksToShow);
+  const displayWeeks = weeks.slice(colOffset);
+  const displayMonthLabels = monthLabels
+    .filter(m => m.col >= colOffset)
+    .map(m => ({...m, col: m.col - colOffset}));
+
   const cellSize = 12;
   const cellGap = 3;
   const colWidth = cellSize + cellGap;
-  const totalWidth = 52 * colWidth + 30;
+  const totalWidth = displayWeeks.length * colWidth + 30;
   const totalHeight = 7 * colWidth + 24;
 
   const intensityColors = [
@@ -123,15 +139,15 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
       <div style={{display: 'flex', gap: 24, marginBottom: 14, flexWrap: 'wrap'}}>
         <div>
           <div style={{fontSize: 11, color: colors.textMuted, letterSpacing: '0.06em', textTransform: 'uppercase'}}>
-            Year of lawn
+            {t('yearOfLawn.yearOfLawn')}
           </div>
           <div style={{fontSize: 22, fontWeight: 700, color: colors.text, marginTop: 2, letterSpacing: '-0.02em'}}>
-            {totalKm.toFixed(1)} km <span style={{fontSize: 13, color: colors.textDim, fontWeight: 500}}>last 52 weeks</span>
+            {totalKm.toFixed(1)} km <span style={{fontSize: 13, color: colors.textDim, fontWeight: 500}}>{t('yearOfLawn.last52Weeks')}</span>
           </div>
         </div>
         <div>
           <div style={{fontSize: 11, color: colors.textMuted, letterSpacing: '0.06em', textTransform: 'uppercase'}}>
-            Active days
+            {t('yearOfLawn.activeDays')}
           </div>
           <div style={{fontSize: 22, fontWeight: 700, color: colors.text, marginTop: 2, letterSpacing: '-0.02em'}}>
             {activeDays}
@@ -139,10 +155,10 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
         </div>
         <div>
           <div style={{fontSize: 11, color: colors.textMuted, letterSpacing: '0.06em', textTransform: 'uppercase'}}>
-            Current streak
+            {t('yearOfLawn.currentStreak')}
           </div>
           <div style={{fontSize: 22, fontWeight: 700, color: streak > 0 ? colors.accent : colors.text, marginTop: 2, letterSpacing: '-0.02em'}}>
-            {streak} day{streak === 1 ? '' : 's'}
+            {t('yearOfLawn.dayCount', {count: streak})}
           </div>
         </div>
       </div>
@@ -150,7 +166,7 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
       <div style={{overflowX: 'auto'}}>
         <svg width={totalWidth} height={totalHeight} style={{display: 'block'}}>
           {/* month labels */}
-          {monthLabels.map((m, i) => (
+          {displayMonthLabels.map((m, i) => (
             <text key={i}
                   x={m.col * colWidth + 28}
                   y={12}
@@ -161,18 +177,18 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
           ))}
 
           {/* day-of-week labels */}
-          {['Mon', 'Wed', 'Fri'].map((d, i) => (
-            <text key={d}
+          {(['dayMon', 'dayWed', 'dayFri'] as const).map((dKey, i) => (
+            <text key={dKey}
                   x={0}
                   y={18 + (i * 2 + 1) * colWidth + 8}
                   fontSize={9}
                   fill={colors.textMuted}>
-              {d}
+              {t(`yearOfLawn.${dKey}`)}
             </text>
           ))}
 
           {/* cells */}
-          {weeks.map((col, ci) =>
+          {displayWeeks.map((col, ci) =>
             col.map((cell, ri) => {
               const lvl = intensity(cell.km, maxKm);
               return (
@@ -186,7 +202,7 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
                   fill={intensityColors[lvl]}
                   stroke={lvl === 0 ? colors.borderSubtle : 'none'}
                 >
-                  <title>{`${cell.date.toLocaleDateString()} -- ${cell.km.toFixed(2)} km`}</title>
+                  <title>{t('yearOfLawn.cellTooltip', {date: cell.date.toLocaleDateString(), km: cell.km.toFixed(2)})}</title>
                 </rect>
               );
             })
@@ -199,7 +215,7 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
         display: 'flex', alignItems: 'center', gap: 6,
         fontSize: 10, color: colors.textMuted, marginTop: 6, justifyContent: 'flex-end',
       }}>
-        <span>Less</span>
+        <span>{t('yearOfLawn.less')}</span>
         {intensityColors.map((c, i) => (
           <span key={i} style={{
             width: 10, height: 10, borderRadius: 2,
@@ -207,7 +223,7 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
             border: i === 0 ? `1px solid ${colors.borderSubtle}` : 'none',
           }}/>
         ))}
-        <span>More</span>
+        <span>{t('yearOfLawn.more')}</span>
       </div>
     </div>
   );

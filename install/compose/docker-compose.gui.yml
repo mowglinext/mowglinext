@@ -16,12 +16,14 @@ services:
       FOXGLOVE_URL: ws://localhost:8765
       MOWER_CONFIG_FILE: /config/mower_config.sh
       MOWER_YAML_CONFIG_FILE: /mowgli_config/mowgli_robot.yaml
+      MOWER_RUNTIME_ENV_FILE: /runtime_config/.env
       DOCKER_HOST: unix:///var/run/docker.sock
       DB_PATH: /db
     volumes:
       - ./docker/config/db:/db
       - ./docker/config/om:/config:ro
       - ./docker/config/mowgli:/mowgli_config
+      - ./docker:/runtime_config
       - /var/run/docker.sock:/var/run/docker.sock
       - /dev/bus/usb:/dev/bus/usb
       - mowgli_maps:/ros2_ws/maps

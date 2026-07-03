@@ -2,7 +2,7 @@ package api
 
 import (
 	"bufio"
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"io"
 )

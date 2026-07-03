@@ -1,10 +1,12 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { Badge, Menu, Tabs } from "antd";
 import {
     AimOutlined,
     CloudOutlined,
     CodeOutlined,
     CompassOutlined,
+    DashboardOutlined,
     HomeOutlined,
     NodeIndexOutlined,
     SafetyOutlined,
@@ -12,6 +14,7 @@ import {
     ThunderboltOutlined,
     ToolOutlined,
     GlobalOutlined,
+    WifiOutlined,
 } from "@ant-design/icons";
 import { useIsMobile } from "../../hooks/useIsMobile.ts";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
@@ -19,7 +22,9 @@ import { SettingsSection, SectionMeta } from "../../hooks/useSettingsManager.ts"
 
 const SECTION_ICONS: Record<string, React.ReactNode> = {
     tool: <ToolOutlined />,
+    dashboard: <DashboardOutlined />,
     global: <GlobalOutlined />,
+    wifi: <WifiOutlined />,
     aim: <AimOutlined />,
     "node-index": <NodeIndexOutlined />,
     scissor: <ScissorOutlined />,
@@ -44,6 +49,7 @@ export const SettingsNav: React.FC<Props> = ({
     onSectionChange,
     isSectionDirty,
 }) => {
+    const { t } = useTranslation();
     const isMobile = useIsMobile();
     const { colors } = useThemeMode();
 
@@ -59,7 +65,7 @@ export const SettingsNav: React.FC<Props> = ({
                     label: (
                         <Badge dot={isSectionDirty(section.id)} offset={[4, 0]}>
                             {SECTION_ICONS[section.icon]}
-                            <span style={{ marginLeft: 4, fontSize: 12 }}>{section.label}</span>
+                            <span style={{ marginLeft: 4, fontSize: 12 }}>{t(section.label)}</span>
                         </Badge>
                     ),
                 }))}
@@ -83,7 +89,7 @@ export const SettingsNav: React.FC<Props> = ({
                 icon: SECTION_ICONS[section.icon],
                 label: (
                     <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        {section.label}
+                        {t(section.label)}
                         {isSectionDirty(section.id) && (
                             <span
                                 style={{

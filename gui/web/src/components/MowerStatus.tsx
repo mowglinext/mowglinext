@@ -14,42 +14,43 @@ import {PoweroffOutlined, ReloadOutlined, DesktopOutlined, WifiOutlined, AlertOu
 import {stateRenderer} from "./utils.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useApi} from "../hooks/useApi.ts";
+import {limeAlpha} from "../theme/colors.ts";
+import {SettingOutlined} from "@ant-design/icons";
 import type {MenuProps} from "antd";
+import {useTranslation} from "react-i18next";
 
-const pulseKeyframes = `
+// Builds the badge pulse keyframes from brand tokens. Green pulse derives
+// from the lime hero accent; red pulse derives from colors.danger (rose).
+// colors.danger is a hex string ("#FF6B7A"); append an 8-bit alpha suffix
+// to get the translucent stops without hardcoding the rose RGB here.
+const buildPulseKeyframes = (dangerHex: string) => `
 @keyframes mowerPulseGreen {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(82, 196, 26, 0.6); }
-    50% { box-shadow: 0 0 0 4px rgba(82, 196, 26, 0); }
+    0%, 100% { box-shadow: 0 0 0 0 ${limeAlpha(0.6)}; }
+    50% { box-shadow: 0 0 0 4px ${limeAlpha(0)}; }
 }
 @keyframes mowerPulseRed {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.6); }
-    50% { box-shadow: 0 0 0 4px rgba(255, 77, 79, 0); }
+    0%, 100% { box-shadow: 0 0 0 0 ${dangerHex}99; }
+    50% { box-shadow: 0 0 0 4px ${dangerHex}00; }
 }
 `;
 
-// Motion states → primary (active); resting states → warning;
-// everything else (emergencies, unknown) → danger.
-const MOTION_STATES = new Set([
-    "MOWING", "TRANSIT", "UNDOCKING", "RETURNING_HOME", "MANUAL_MOWING",
-    "RESUMING_AFTER_RAIN", "RESUMING_UNDOCKING", "BOUNDARY_RECOVERY",
-    "LOW_BATTERY_DOCKING", "CRITICAL_BATTERY_DOCKING", "RAIN_DETECTED_DOCKING",
-    "COVERAGE_FAILED_DOCKING", "SKIP_STRIP", "PREFLIGHT_CHECK",
-    "CALIBRATING_HEADING", "RECORDING",
-]);
-const RESTING_STATES = new Set([
-    "IDLE", "IDLE_DOCKED", "CHARGING", "MOWING_COMPLETE",
-    "RECORDING_COMPLETE", "RAIN_WAITING", "RAIN_TIMEOUT",
-]);
-
-const statusColor = (state: string | undefined, colors: {primary: string; warning: string; danger: string}): string => {
-    if (!state) return colors.danger;
-    if (MOTION_STATES.has(state)) return colors.primary;
-    if (RESTING_STATES.has(state)) return colors.warning;
+// Colour by the NUMERIC high-level state (status_nodes.cpp publishes it every
+// tick): 2=AUTONOMOUS / 3=RECORDING / 4=MANUAL_MOWING are active (primary);
+// 1=IDLE is resting (warning); 0=NULL/EMERGENCY or unknown is danger. The old
+// string-allowlist approach mis-coloured legitimate state=2 substates
+// (PLANNING, OBSTACLE_BACKOFF, DYNAMIC_OBSTACLE_CLEARED, AREA_UNREACHABLE) as
+// danger-red because the set never enumerated them.
+const statusColor = (stateNum: number | undefined, isEmergency: boolean, colors: {primary: string; warning: string; danger: string}): string => {
+    if (isEmergency) return colors.danger;
+    if (stateNum === 2 || stateNum === 3 || stateNum === 4) return colors.primary;
+    if (stateNum === 1) return colors.warning;
     return colors.danger;
 };
 
 export const MowerStatus = () => {
+    const {t} = useTranslation();
     const {colors} = useThemeMode();
+    const pulseKeyframes = buildPulseKeyframes(colors.danger);
     const {highLevelStatus} = useHighLevelStatus();
     const hwStatus = useStatus();
     const emergencyData = useEmergency();
@@ -66,9 +67,13 @@ export const MowerStatus = () => {
     const stateName = highLevelStatus.state_name ?? (
         isEmergency ? "EMERGENCY" :
         isCharging ? "CHARGING" :
-        hwStatus.mower_status != null ? "IDLE" :
+        hwStatus.mower_status != null ? "IDLE_DOCKED" :
         undefined
     );
+    // Numeric high-level state (reliable, published every tick): 2=AUTONOMOUS,
+    // 3=RECORDING, 4=MANUAL_MOWING. Drives colour/pulse/mowing so transient
+    // state=2 substates (planning, obstacle backoff) never read as idle.
+    const stateNum = highLevelStatus.state ?? -1;
 
     const gpsStatus = deriveGpsStatus(gnss);
     const gpsColor =
@@ -81,9 +86,7 @@ export const MowerStatus = () => {
         highLevelStatus.battery_percent, power.v_battery, settings,
     );
 
-    const isMowing = stateName === "MOWING" || stateName === "TRANSIT" ||
-        stateName === "UNDOCKING" || stateName === "RETURNING_HOME" ||
-        stateName === "MANUAL_MOWING";
+    const isMowing = stateNum === 2 || stateNum === 3 || stateNum === 4;
 
     const pulseAnimation = isEmergency
         ? 'mowerPulseRed 1.5s ease-in-out infinite'
@@ -100,9 +103,9 @@ export const MowerStatus = () => {
     // Long-running: container restart + rosbridge reconnect. Lock the menu
     // item until ROS2 is reachable again to prevent duplicate-click storms.
     const mowgliRestart = useContainerRestart({
-        pendingLabel: "Redémarrage Mowgli…",
-        successMessage: "Mowgli redémarré",
-        errorMessage: "Échec du redémarrage Mowgli",
+        pendingLabel: t('mowerStatus.restartingMowgli'),
+        successMessage: t('mowerStatus.mowgliRestarted'),
+        errorMessage: t('mowerStatus.mowgliRestartFailed'),
     });
     const restartMowgli = () => mowgliRestart.run(() => restartMowgliNext(guiApi));
 
@@ -120,18 +123,18 @@ export const MowerStatus = () => {
     const rebootSystem = async () => {
         try {
             await guiApi.request({path: "/system/reboot", method: "POST"});
-            notification.success({message: "Rebooting..."});
+            notification.success({message: t('mowerStatus.restarting')});
         } catch (e: any) {
-            notification.error({message: "Failed to reboot", description: e.message});
+            notification.error({message: t('mowerStatus.restartFailed'), description: e.message});
         }
     };
 
     const shutdownSystem = async () => {
         try {
             await guiApi.request({path: "/system/shutdown", method: "POST"});
-            notification.success({message: "Shutting down..."});
+            notification.success({message: t('mowerStatus.shuttingDown')});
         } catch (e: any) {
-            notification.error({message: "Failed to shutdown", description: e.message});
+            notification.error({message: t('mowerStatus.shutdownFailed'), description: e.message});
         }
     };
 
@@ -139,43 +142,53 @@ export const MowerStatus = () => {
         Modal.confirm({
             title,
             content,
-            okText: "Confirm",
+            okText: t('mowerStatus.confirm'),
             okType: "danger",
-            cancelText: "Cancel",
+            cancelText: t('mowerStatus.cancel'),
             onOk,
         });
     };
 
+    // Beginner-safe items at the top; destructive system/hardware actions
+    // (board reset, Pi reboot, shutdown) are tucked into an "Avancé"
+    // submenu so they're not hit by accident. Command logic unchanged.
     const powerMenuItems: MenuProps["items"] = [
         {
             key: "restart-mowgli",
             icon: <ReloadOutlined/>,
-            label: mowgliRestart.pending ? mowgliRestart.pendingLabel : "Restart Mowgli",
+            label: mowgliRestart.pending ? mowgliRestart.pendingLabel : t('mowerStatus.restartMowgli'),
             disabled: mowgliRestart.pending,
-            onClick: () => confirmAction("Restart Mowgli", "This will restart the MowgliNext container.", restartMowgli),
-        },
-        {
-            key: "reboot-board",
-            icon: <ReloadOutlined/>,
-            label: "Reboot Board (STM32)",
-            onClick: () => confirmAction(
-                "Reboot Board (STM32)",
-                "Resets the STM32 firmware (NVIC_SystemReset). Use to recover a wedged board — e.g. the IMU reporting NaN. Motors/blade stop during the ~1 s reset.",
-                rebootBoardAction),
+            onClick: () => confirmAction(t('mowerStatus.restartMowgli'), t('mowerStatus.restartMowgliConfirm'), restartMowgli),
         },
         {type: "divider"},
         {
-            key: "reboot",
-            icon: <DesktopOutlined/>,
-            label: "Reboot Raspberry Pi",
-            onClick: () => confirmAction("Reboot Raspberry Pi", "The system will reboot. You will lose connection temporarily.", rebootSystem),
-        },
-        {
-            key: "shutdown",
-            icon: <PoweroffOutlined/>,
-            label: "Shutdown Raspberry Pi",
-            danger: true,
-            onClick: () => confirmAction("Shutdown Raspberry Pi", "The system will shut down. You will need physical access to turn it back on.", shutdownSystem),
+            key: "advanced",
+            icon: <SettingOutlined/>,
+            label: t('mowerStatus.advanced'),
+            children: [
+                {
+                    key: "reboot-board",
+                    icon: <ReloadOutlined/>,
+                    label: t('mowerStatus.restartBoard'),
+                    onClick: () => confirmAction(
+                        t('mowerStatus.restartBoard'),
+                        t('mowerStatus.restartBoardConfirm'),
+                        rebootBoardAction),
+                },
+                {
+                    key: "reboot",
+                    icon: <DesktopOutlined/>,
+                    label: t('mowerStatus.restartPi'),
+                    onClick: () => confirmAction(t('mowerStatus.restartPi'), t('mowerStatus.restartPiConfirm'), rebootSystem),
+                },
+                {
+                    key: "shutdown",
+                    icon: <PoweroffOutlined/>,
+                    label: t('mowerStatus.shutdownPi'),
+                    danger: true,
+                    onClick: () => confirmAction(t('mowerStatus.shutdownPi'), t('mowerStatus.shutdownPiConfirm'), shutdownSystem),
+                },
+            ],
         },
     ];
 
@@ -185,7 +198,7 @@ export const MowerStatus = () => {
             <Space size="small" style={{flexShrink: 0}}>
                 <Space size={4}>
                     <Badge
-                        color={statusColor(stateName, colors)}
+                        color={statusColor(stateNum, isEmergency, colors)}
                         style={{animation: pulseAnimation, borderRadius: '50%'}}
                     />
                     <Typography.Text style={{fontSize: 12, color: colors.text, whiteSpace: 'nowrap'}}>
@@ -207,14 +220,14 @@ export const MowerStatus = () => {
                     </Space>
                 </Tooltip>
                 {showResetEmergency && (
-                    <Tooltip title="Reset emergency (firmware decides whether the latch clears)">
+                    <Tooltip title={t('mowerStatus.rearmEmergencyTooltip')}>
                         <Button
                             danger
                             size="small"
                             icon={<AlertOutlined/>}
                             onClick={resetEmergencyAction}
                         >
-                            Reset
+                            {t('mowerStatus.rearm')}
                         </Button>
                     </Tooltip>
                 )}

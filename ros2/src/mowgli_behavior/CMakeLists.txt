@@ -32,7 +32,6 @@ find_package(action_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(mowgli_interfaces REQUIRED)
-find_package(opennav_coverage_msgs REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 
 
@@ -49,6 +48,7 @@ add_executable(behavior_tree_node
   src/status_nodes.cpp
   src/utility_nodes.cpp
   src/coverage_nodes.cpp
+  src/coverage_persistence.cpp
   src/recording_nodes.cpp
   src/register_nodes.cpp
 )
@@ -73,7 +73,6 @@ ament_target_dependencies(behavior_tree_node
   std_msgs
   std_srvs
   mowgli_interfaces
-  opennav_coverage_msgs
   rcl_interfaces
 )
 
@@ -156,6 +155,93 @@ if(BUILD_TESTING)
     tf2_ros
     tf2_geometry_msgs
   )
+
+  # ---- test_set_nav2_lifecycle ----
+  # Exercises the SetNav2Lifecycle action node's idle-suspend gating
+  # (disabled = no-op, PAUSE refused off-dock, idempotent transitions) and,
+  # with a fake manage_nodes service, the actual PAUSE/RESUME transition.
+  ament_add_gtest(test_set_nav2_lifecycle
+    test/test_set_nav2_lifecycle.cpp
+    src/navigation_nodes.cpp
+  )
+
+  target_include_directories(test_set_nav2_lifecycle PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_set_nav2_lifecycle
+    rclcpp
+    rclcpp_action
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+    rcl_interfaces
+    action_msgs
+  )
+
+  # ---- test_get_next_unmowed_area ----
+  # Regression: the mow-selection path SKIPS navigation-only areas. Stands up a
+  # real in-process get_mowing_area service returning a nav-only area + a mowing
+  # area and ticks GetNextUnmowedArea to confirm the nav-only zone is never
+  # selected for coverage.
+  ament_add_gtest(test_get_next_unmowed_area
+    test/test_get_next_unmowed_area.cpp
+    src/coverage_nodes.cpp
+    src/coverage_persistence.cpp
+  )
+
+  target_include_directories(test_get_next_unmowed_area PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_get_next_unmowed_area
+    rclcpp
+    rclcpp_action
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+    rcl_interfaces
+    action_msgs
+  )
+
+  # Round-trip + staleness coverage for the disk-backed resume state (issue #334:
+  # coverage must resume after a full process/container restart, not just an
+  # in-RAM BT halt).
+  ament_add_gtest(test_coverage_persistence
+    test/test_coverage_persistence.cpp
+    src/coverage_persistence.cpp
+  )
+
+  target_include_directories(test_coverage_persistence PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_coverage_persistence
+    rclcpp
+    behaviortree_cpp
+    mowgli_interfaces
+    nav_msgs
+    geometry_msgs
+    tf2_ros
+  )
+
 endif()
 
 ament_package()

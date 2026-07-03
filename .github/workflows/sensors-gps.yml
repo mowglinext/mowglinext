@@ -5,6 +5,11 @@ on:
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'sensors/gps/**'
+      - 'sensors/README.md'
+      - 'ros2/src/mowgli_interfaces'
+      - 'ros2/src/mowgli_interfaces/**'
+      - 'ros2/src/external/universal-gnss'
+      - 'ros2/src/external/universal-gnss/**'
       - '.github/workflows/sensors-gps.yml'
       - '.github/workflows/_sensor-docker.yml'
   workflow_dispatch:
@@ -27,5 +32,34 @@ jobs:
     uses: ./.github/workflows/_sensor-docker.yml
     with:
       image: gps
-      context: ./sensors/gps
+      context: .
+      dockerfile: sensors/gps/Dockerfile
+      smoke-test: |
+        set -euo pipefail
+        find /opt -name setup.bash 2>/dev/null | sort
+        set +u
+        source /opt/ros/kilted/setup.bash
+        for f in /opt/gnss_sidecar/setup.bash; do
+          [ -f "$f" ] && echo "sourcing $f" && source "$f"
+        done
+        set -u
+        ros2 pkg list | sort | grep -Ei "mowgli|gnss|universal|rtcm" || true
+        ros2 pkg prefix mowgli_interfaces
+        ros2 pkg prefix universal_gnss_ros2
+        ros2 pkg list | grep -x mowgli_interfaces
+        ros2 pkg list | grep -x universal_gnss_ros2
+        ros2 pkg executables universal_gnss_ros2 | grep -x "universal_gnss_ros2 receiver_node"
+        ros2 pkg executables universal_gnss_ros2 | grep -x "universal_gnss_ros2 ntrip_node"
+        test -x /universal_gnss_topic_bridge.py
+        python3 -m py_compile /universal_gnss_topic_bridge.py
+        python3 - <<'PY'
+        from mowgli_interfaces.msg import GnssStatus as MowgliGnssStatus
+        from rtcm_msgs.msg import Message as RtcmMessage
+        from universal_gnss_ros2.msg import GnssStatus as UniversalGnssStatus
+        from universal_gnss_ros2.msg import RtcmFrame
+        assert MowgliGnssStatus.CAP_RTK_MODE > 0
+        assert UniversalGnssStatus.CAP_RTK_MODE > 0
+        assert hasattr(RtcmFrame, "data")
+        assert hasattr(RtcmMessage, "message")
+        PY
       no-cache: ${{ inputs.no-cache == true }}

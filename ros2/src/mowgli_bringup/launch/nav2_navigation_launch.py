@@ -89,7 +89,10 @@ def generate_launch_description():
 
     declare_params_file_cmd = DeclareLaunchArgument(
         'params_file',
-        default_value=os.path.join(bringup_dir, 'params', 'nav2_params.yaml'),
+        # Vestigial default — navigation.launch.py always overrides this with the
+        # deep-merged base+overlay temp file. Points at the shared base so the
+        # default at least resolves to a real (if costmap-incomplete) file.
+        default_value=os.path.join(bringup_dir, 'config', 'nav2_params_base.yaml'),
         description='Full path to the ROS2 parameters file to use for all launched nodes',
     )
 
@@ -226,14 +229,12 @@ def generate_launch_description():
                 remappings=remappings + [('cmd_vel', 'cmd_vel_docking')],
             ),
             # mowgli_coverage server — Mowgli-owned action server backed
-            # directly by Fields2Cover v2.0.0 (linked via target
-            # Fields2Cover::Fields2Cover from /opt/fields2cover-200,
-            # the project Dockerfile installs the library at that
-            # prefix). Implements the same opennav_coverage_msgs
-            # action so the BT-side PlanCoverageArea client is
-            # unchanged. Replaces the legacy opennav_coverage server
-            # (which was pinned to F2C 1.2.1 — that subpackage is
-            # COLCON_IGNORE'd to keep the build clean).
+            # directly by Fields2Cover v3 (linked via target
+            # Fields2Cover::Fields2Cover from /opt/fields2cover-300).
+            # Serves mowgli_interfaces/action/PlanCoverage
+            # (`plan_coverage`): explicit ordered segments — headland
+            # rings + straight serpentine swaths, no turn planning (the
+            # diff-drive pivots in place between segments).
             Node(
                 package='mowgli_coverage',
                 executable='mowgli_coverage',

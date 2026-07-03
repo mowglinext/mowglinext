@@ -5,14 +5,16 @@ UBLOX_CFG_PORT_ID="${UBLOX_CFG_PORT_ID:-1}"
 UBLOX_HELPER="${UBLOX_HELPER:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ublox_config_helper.py}"
 
 ublox_backend_selected() {
+  case "${GNSS_RECEIVER_FAMILY:-auto}" in
+    nmea|unicore)
+      return 1
+      ;;
+  esac
+
   case "${GNSS_BACKEND:-}" in
-    ublox)
+    universal|"")
       return 0
-      ;;
-    gps)
-      [ "${GPS_PROTOCOL:-UBX}" = "UBX" ]
-      return $?
-      ;;
+    ;;
     *)
       return 1
       ;;
@@ -90,23 +92,23 @@ maybe_upgrade_ublox_baud() {
   serial_port_exists "$port" || return 0
 
   if ! detect_ublox_receiver "$port" "$current_baud" >/dev/null 2>&1; then
-    warn "Receiver on $port did not confirm as u-blox via UBX MON-VER; keeping GPS_BAUD=${current_baud}."
-    GPS_BAUD="$current_baud"
+    warn "Receiver on $port did not confirm as u-blox via UBX MON-VER; keeping GNSS_SERIAL_BAUD=${current_baud}."
+    GNSS_SERIAL_BAUD="$current_baud"
     return 0
   fi
 
   if [ "$current_baud" = "$UBLOX_TARGET_BAUD" ]; then
-    GPS_BAUD="$UBLOX_TARGET_BAUD"
-    info "u-blox receiver already responds at ${UBLOX_TARGET_BAUD}; keeping GPS_BAUD=${GPS_BAUD}."
+    GNSS_SERIAL_BAUD="$UBLOX_TARGET_BAUD"
+    info "u-blox receiver already responds at ${UBLOX_TARGET_BAUD}; keeping GNSS_SERIAL_BAUD=${GNSS_SERIAL_BAUD}."
     return 0
   fi
 
   info "u-blox receiver detected at ${current_baud}; attempting UART${UBLOX_CFG_PORT_ID} -> ${UBLOX_TARGET_BAUD}."
   if configure_ublox_baud_921600 "$port" "$current_baud"; then
-    GPS_BAUD="$UBLOX_TARGET_BAUD"
-    info "u-blox receiver verified at ${UBLOX_TARGET_BAUD}; GPS_BAUD updated."
+    GNSS_SERIAL_BAUD="$UBLOX_TARGET_BAUD"
+    info "u-blox receiver verified at ${UBLOX_TARGET_BAUD}; GNSS_SERIAL_BAUD updated."
   else
-    GPS_BAUD="$current_baud"
-    warn "Unable to switch u-blox receiver to ${UBLOX_TARGET_BAUD}; keeping GPS_BAUD=${current_baud}."
+    GNSS_SERIAL_BAUD="$current_baud"
+    warn "Unable to switch u-blox receiver to ${UBLOX_TARGET_BAUD}; keeping GNSS_SERIAL_BAUD=${current_baud}."
   fi
 }

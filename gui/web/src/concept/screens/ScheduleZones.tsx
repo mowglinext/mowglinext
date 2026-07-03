@@ -1,4 +1,5 @@
 import {motion} from "framer-motion";
+import {useTranslation} from "react-i18next";
 import {Plus, Sun, Moon, Calendar, Cloud, Droplets} from "lucide-react";
 
 import {GlassCard} from "../components/GlassCard";
@@ -25,15 +26,18 @@ interface ScheduledRun {
 }
 
 const RUNS: ScheduledRun[] = [
-  {id: "r1", zone: "Jardin sud",     zoneAccent: "lime",  day: 1, start: 7,  end: 8.5},
-  {id: "r2", zone: "Jardin nord",    zoneAccent: "cyan",  day: 1, start: 18, end: 19},
-  {id: "r3", zone: "Pelouse devant", zoneAccent: "amber", day: 2, start: 7,  end: 7.5},
-  {id: "r4", zone: "Jardin sud",     zoneAccent: "lime",  day: 4, start: 6,  end: 8},
-  {id: "r5", zone: "Allée latérale", zoneAccent: "rose",  day: 5, start: 18, end: 18.5},
-  {id: "r6", zone: "Jardin nord",    zoneAccent: "cyan",  day: 6, start: 9,  end: 11},
+  {id: "r1", zone: "scheduleZones.zoneSouthGarden", zoneAccent: "lime",  day: 1, start: 7,  end: 8.5},
+  {id: "r2", zone: "scheduleZones.zoneNorthGarden", zoneAccent: "cyan",  day: 1, start: 18, end: 19},
+  {id: "r3", zone: "scheduleZones.zoneFrontLawn",   zoneAccent: "amber", day: 2, start: 7,  end: 7.5},
+  {id: "r4", zone: "scheduleZones.zoneSouthGarden", zoneAccent: "lime",  day: 4, start: 6,  end: 8},
+  {id: "r5", zone: "scheduleZones.zoneSidePath",    zoneAccent: "rose",  day: 5, start: 18, end: 18.5},
+  {id: "r6", zone: "scheduleZones.zoneNorthGarden", zoneAccent: "cyan",  day: 6, start: 9,  end: 11},
 ];
 
-const DAYS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
+const DAY_KEYS = [
+  "scheduleZones.dayMon", "scheduleZones.dayTue", "scheduleZones.dayWed",
+  "scheduleZones.dayThu", "scheduleZones.dayFri", "scheduleZones.daySat", "scheduleZones.daySun",
+];
 const HOURS = [5, 7, 9, 11, 13, 15, 17, 19, 21];
 
 const ACCENT: Record<ScheduledRun["zoneAccent"], string> = {
@@ -44,6 +48,7 @@ const ACCENT: Record<ScheduledRun["zoneAccent"], string> = {
 };
 
 export function ScheduleZones() {
+  const {t} = useTranslation();
   const vp = useViewport();
   return (
     <div style={{
@@ -77,13 +82,13 @@ export function ScheduleZones() {
               letterSpacing: "0.08em", textTransform: "uppercase",
               fontWeight: 700,
             }}>
-              Planning
+              {t('scheduleZones.title')}
             </div>
             <h1 className="display" style={{
               fontSize: vp.isAtLeastTablet ? 36 : 28, marginTop: 4,
               fontWeight: 700, letterSpacing: "-0.025em", lineHeight: 1.1,
             }}>
-              <em style={{fontStyle: "italic", color: "var(--lime)"}}>6 tontes</em> programmées cette semaine
+              <em style={{fontStyle: "italic", color: "var(--lime)"}}>{t('scheduleZones.headlineCount')}</em> {t('scheduleZones.headlineRest')}
             </h1>
           </div>
           <motion.button
@@ -99,7 +104,7 @@ export function ScheduleZones() {
             }}
           >
             <Plus size={16} strokeWidth={2.4}/>
-            Nouvelle tonte
+            {t('scheduleZones.newMow')}
           </motion.button>
         </motion.header>
 
@@ -117,13 +122,13 @@ export function ScheduleZones() {
                   letterSpacing: "0.08em", textTransform: "uppercase",
                   fontWeight: 700,
                 }}>
-                  Cette semaine
+                  {t('scheduleZones.thisWeek')}
                 </div>
                 <div className="display" style={{
                   fontSize: 20, fontWeight: 700, marginTop: 4,
                   letterSpacing: "-0.02em",
                 }}>
-                  6 tontes · 3h 45min
+                  {t('scheduleZones.thisWeekSummary')}
                 </div>
               </div>
 
@@ -138,9 +143,9 @@ export function ScheduleZones() {
                 display: "flex", gap: 12, padding: "14px 22px 18px",
                 borderTop: "1px solid var(--border-soft)",
               }}>
-                <RulePill icon={<Cloud size={14}/>}    label="Anti-pluie" active/>
-                <RulePill icon={<Sun size={14}/>}      label="Anti-canicule" active/>
-                <RulePill icon={<Moon size={14}/>}     label="Tonte de nuit" active={false}/>
+                <RulePill icon={<Cloud size={14}/>}    label={t('scheduleZones.ruleAntiRain')} active/>
+                <RulePill icon={<Sun size={14}/>}      label={t('scheduleZones.ruleAntiHeat')} active/>
+                <RulePill icon={<Moon size={14}/>}     label={t('scheduleZones.ruleNightMow')} active={false}/>
               </div>
             </GlassCard>
           </motion.div>
@@ -155,13 +160,13 @@ export function ScheduleZones() {
                 letterSpacing: "0.08em", textTransform: "uppercase",
                 fontWeight: 700, marginBottom: 14,
               }}>
-                Tes zones
+                {t('scheduleZones.yourZones')}
               </div>
               <div style={{display: "flex", flexDirection: "column", gap: 10}}>
-                <ZoneRow name="Jardin sud"     accent="lime"  area={184} weekly={4} duration="≈ 2h 10min"/>
-                <ZoneRow name="Jardin nord"    accent="cyan"  area={116} weekly={2} duration="≈ 55min"/>
-                <ZoneRow name="Pelouse devant" accent="amber" area={92}  weekly={1} duration="≈ 35min"/>
-                <ZoneRow name="Allée latérale" accent="rose"  area={38}  weekly={1} duration="≈ 15min"/>
+                <ZoneRow name={t('scheduleZones.zoneSouthGarden')}     accent="lime"  area={184} weekly={4} duration="≈ 2h 10min"/>
+                <ZoneRow name={t('scheduleZones.zoneNorthGarden')}    accent="cyan"  area={116} weekly={2} duration="≈ 55min"/>
+                <ZoneRow name={t('scheduleZones.zoneFrontLawn')} accent="amber" area={92}  weekly={1} duration="≈ 35min"/>
+                <ZoneRow name={t('scheduleZones.zoneSidePath')} accent="rose"  area={38}  weekly={1} duration="≈ 15min"/>
               </div>
             </GlassCard>
 
@@ -174,13 +179,13 @@ export function ScheduleZones() {
                   fontSize: 11, color: "var(--ink-2)",
                   letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 700,
                 }}>
-                  Météo cette semaine
+                  {t('scheduleZones.weatherThisWeek')}
                 </span>
               </div>
               <div style={{
                 display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6,
               }}>
-                {DAYS.map((d, i) => {
+                {DAY_KEYS.map((d, i) => {
                   const temp = [22, 23, 21, 19, 18, 17, 19][i];
                   const rainy = i === 3 || i === 4;
                   return (
@@ -192,7 +197,7 @@ export function ScheduleZones() {
                       borderRadius: 10,
                     }}>
                       <div style={{fontSize: 9, color: "var(--ink-3)", fontWeight: 700, letterSpacing: "0.06em"}}>
-                        {d}
+                        {t(d)}
                       </div>
                       {rainy ? <Cloud size={16} color="var(--amber)"/> : <Sun size={16} color="var(--lime)"/>}
                       <div className="mono" style={{
@@ -218,6 +223,7 @@ export function ScheduleZones() {
 // ─────────────────────────────────────────────────────────────────────
 
 function WeekGrid({runs}: {runs: ScheduledRun[]}) {
+  const {t} = useTranslation();
   const startHour = HOURS[0];
   const endHour   = HOURS[HOURS.length - 1];
   const totalHours = endHour - startHour;
@@ -231,13 +237,13 @@ function WeekGrid({runs}: {runs: ScheduledRun[]}) {
       gridTemplateRows: "auto",
     }}>
       <div/>
-      {DAYS.map((d, i) => (
+      {DAY_KEYS.map((d, i) => (
         <div key={d} style={{
           padding: "6px 0 12px", textAlign: "center",
           fontSize: 10, color: "var(--ink-2)",
           letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 700,
         }}>
-          {d}
+          {t(d)}
           <div style={{
             fontSize: 16, fontWeight: 700, color: i === 0 ? "var(--lime)" : "var(--ink)",
             marginTop: 4, fontFamily: "var(--font-display)", letterSpacing: "-0.01em",
@@ -311,7 +317,7 @@ function WeekGrid({runs}: {runs: ScheduledRun[]}) {
                   fontSize: 11, fontWeight: 700, color: "var(--ink)",
                   lineHeight: 1.2,
                 }}>
-                  {run.zone}
+                  {t(run.zone)}
                 </div>
                 <div className="mono" style={{
                   fontSize: 9, color: accent, marginTop: 3, fontWeight: 600,
@@ -336,6 +342,7 @@ interface ZoneRowProps {
 }
 
 function ZoneRow({name, accent, area, weekly, duration}: ZoneRowProps) {
+  const {t} = useTranslation();
   const accentColor = ACCENT[accent];
   return (
     <motion.div
@@ -369,7 +376,7 @@ function ZoneRow({name, accent, area, weekly, duration}: ZoneRowProps) {
           {name}
         </div>
         <div className="mono" style={{fontSize: 11, color: "var(--ink-3)", marginTop: 2}}>
-          {area} m² · {weekly} tonte{weekly > 1 ? "s" : ""} · {duration}
+          {area} m² · {t('scheduleZones.mowCount', {count: weekly})} · {duration}
         </div>
       </div>
       <div className="display" style={{

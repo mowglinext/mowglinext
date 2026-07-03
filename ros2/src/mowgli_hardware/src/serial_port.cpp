@@ -21,6 +21,7 @@
 #include <utility>
 
 #include <fcntl.h>
+#include <poll.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -166,6 +167,66 @@ ssize_t SerialPort::write(const uint8_t* data, std::size_t len)
     return -1;
   }
   return ::write(fd_, data, len);
+}
+
+ssize_t SerialPort::write_all(const uint8_t* data, std::size_t len)
+{
+  if (fd_ < 0)
+  {
+    errno = EBADF;
+    return -1;
+  }
+  if (data == nullptr && len > 0)
+  {
+    errno = EINVAL;
+    return -1;
+  }
+
+  std::size_t offset = 0;
+  int backpressure_retries = 0;
+  constexpr int kMaxBackpressureRetries = 4;
+  constexpr int kPollTimeoutMs = 5;
+
+  while (offset < len)
+  {
+    const ssize_t n = ::write(fd_, data + offset, len - offset);
+    if (n > 0)
+    {
+      offset += static_cast<std::size_t>(n);
+      backpressure_retries = 0;
+      continue;
+    }
+    if (n == 0)
+    {
+      break;
+    }
+    if (errno == EINTR)
+    {
+      continue;
+    }
+    if ((errno == EAGAIN || errno == EWOULDBLOCK) && backpressure_retries < kMaxBackpressureRetries)
+    {
+      ++backpressure_retries;
+      struct pollfd pfd
+      {
+      };
+      pfd.fd = fd_;
+      pfd.events = POLLOUT;
+      const int poll_result = ::poll(&pfd, 1, kPollTimeoutMs);
+      if (poll_result < 0 && errno != EINTR)
+      {
+        break;
+      }
+      continue;
+    }
+    break;
+  }
+
+  if (offset == 0)
+  {
+    return -1;
+  }
+  return static_cast<ssize_t>(offset);
 }
 
 const std::string& SerialPort::device() const noexcept

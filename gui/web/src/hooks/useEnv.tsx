@@ -1,10 +1,12 @@
 import {useApi} from "./useApi.ts";
 import {App} from "antd";
 import {useEffect, useState} from "react";
+import {useTranslation} from "react-i18next";
 
 export const useEnv = () => {
     const guiApi = useApi()
     const {notification} = App.useApp();
+    const {t} = useTranslation();
     const [env, setEnv] = useState<Record<string, any>>({})
     useEffect(() => {
         (async () => {
@@ -16,7 +18,7 @@ export const useEnv = () => {
                 setEnv(envs.data)
             } catch (e: any) {
                 notification.error({
-                    message: "Failed to load config",
+                    message: t('hookNotifications.failedToLoadConfig'),
                     description: e.message,
                 })
             }

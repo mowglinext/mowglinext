@@ -18,37 +18,29 @@
  * @file navsat_to_absolute_pose_node.hpp
  * @brief Converts sensor_msgs/NavSatFix → mowgli_interfaces/AbsolutePose.
  *
- * Bridges generic ROS2 GNSS fixes into the Mowgli AbsolutePose message
- * and the unified /gps/status runtime topic.
+ * Bridges generic ROS2 GNSS fixes into the Mowgli AbsolutePose message.
  *
  * Performs WGS84 → local ENU projection using a configurable datum origin.
- * The shared /gps/status topic is published by first building an internal
- * GnssRuntimeState from the incoming NavSatFix, then converting that state
- * through the common GnssStatus adapter. Structured GNSS diagnostics enrich
- * that runtime state when a backend provides them.
+ * Universal GNSS is the single owner of the typed /gps/status contract, so
+ * this node only consumes /gps/fix and publishes /gps/absolute_pose plus the
+ * robot_localization-friendly /gps/pose_cov twin.
  *
  * Subscribed topics:
  *   /gps/fix   sensor_msgs/msg/NavSatFix
- *   /diagnostics diagnostic_msgs/msg/DiagnosticArray (GNSS-only enrichment)
  *
  * Published topics:
  *   /gps/absolute_pose    mowgli_interfaces/msg/AbsolutePose
- *   /gps/status           mowgli_interfaces/msg/GnssStatus
+ *   /gps/pose_cov         geometry_msgs/msg/PoseWithCovarianceStamped
  */
 
 #pragma once
 
 #include <cmath>
 #include <memory>
-#include <mutex>
-#include <optional>
 
-#include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "geometry_msgs/msg/pose_with_covariance.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
-#include "mowgli_interfaces/msg/gnss_status.hpp"
-#include "mowgli_localization/gnss_runtime_state_builder.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -71,7 +63,6 @@ private:
   void create_services();
 
   void on_navsat_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg);
-  void on_diagnostics(diagnostic_msgs::msg::DiagnosticArray::ConstSharedPtr msg);
   void on_set_datum(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
                     std::shared_ptr<std_srvs::srv::Trigger::Response> response);
 
@@ -87,10 +78,6 @@ private:
   double datum_lat_{0.0};
   double datum_lon_{0.0};
   double cos_datum_lat_{1.0};  ///< Precomputed cos(datum_lat) for projection
-  std::string gnss_backend_name_{};
-  std::string gps_protocol_{};
-  double gnss_diagnostics_timeout_sec_{5.0};
-  GnssBackendKind gnss_backend_{GnssBackendKind::kUnknown};
 
   // Latest GPS fix for the set_datum service.
   sensor_msgs::msg::NavSatFix last_fix_;
@@ -98,7 +85,6 @@ private:
 
   // ROS handles
   rclcpp::Publisher<mowgli_interfaces::msg::AbsolutePose>::SharedPtr pose_pub_;
-  rclcpp::Publisher<mowgli_interfaces::msg::GnssStatus>::SharedPtr gnss_status_pub_;
   /// Standard-msg twin of the AbsolutePose topic. robot_localization's EKF
   /// pose0 input expects PoseWithCovarianceStamped; AbsolutePose is a
   /// Mowgli-specific type and not subscribable by the EKF.
@@ -110,10 +96,7 @@ private:
   /// during pure rotation.
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_cov_pub_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr fix_sub_;
-  rclcpp::Subscription<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_sub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr set_datum_srv_;
-  mutable std::mutex gnss_diagnostics_mutex_;
-  std::optional<GnssDiagnosticSnapshot> gnss_diagnostics_snapshot_;
 
   /// TF listener to resolve base_footprint↔gps_link (static from URDF,
   /// gives the lever arm) and map↔base_footprint (dynamic from ekf_map,

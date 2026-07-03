@@ -1,6 +1,7 @@
 import React, { useMemo } from "react";
 import { Card, Col, Form, InputNumber, Row, Space, Typography } from "antd";
 import { ThunderboltOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
 import { usePower } from "../../hooks/usePower.ts";
 
@@ -111,6 +112,7 @@ const BatteryGauge: React.FC<{
 };
 
 export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
+    const { t } = useTranslation();
     const { colors } = useThemeMode();
     const power = usePower();
 
@@ -125,10 +127,10 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
                     <div>
                         <Text strong style={{ fontSize: 14 }}>
                             <ThunderboltOutlined style={{ marginRight: 6 }} />
-                            Battery Thresholds
+                            {t("settingsBattery.batteryThresholds")}
                         </Text>
                         <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-                            Set voltage and percentage levels that control when to dock and when to resume mowing.
+                            {t("settingsBattery.batteryThresholdsDescription")}
                         </Paragraph>
                     </div>
 
@@ -152,8 +154,8 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
                         <Row gutter={[16, 0]}>
                             <Col xs={8}>
                                 <Form.Item
-                                    label={<Text style={{ color: "#52c41a", fontSize: 12 }}>Full Voltage</Text>}
-                                    tooltip="Battery considered full above this"
+                                    label={<Text style={{ color: "#52c41a", fontSize: 12 }}>{t("settingsBattery.fullVoltage")}</Text>}
+                                    tooltip={t("settingsBattery.fullVoltageTooltip")}
                                 >
                                     <InputNumber
                                         value={values.battery_full_voltage}
@@ -165,8 +167,8 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
                             </Col>
                             <Col xs={8}>
                                 <Form.Item
-                                    label={<Text style={{ color: "#fa8c16", fontSize: 12 }}>Empty Voltage</Text>}
-                                    tooltip="Dock if below this for 20s"
+                                    label={<Text style={{ color: "#fa8c16", fontSize: 12 }}>{t("settingsBattery.emptyVoltage")}</Text>}
+                                    tooltip={t("settingsBattery.emptyVoltageTooltip")}
                                 >
                                     <InputNumber
                                         value={values.battery_empty_voltage}
@@ -178,8 +180,8 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
                             </Col>
                             <Col xs={8}>
                                 <Form.Item
-                                    label={<Text style={{ color: "#f5222d", fontSize: 12 }}>Critical Voltage</Text>}
-                                    tooltip="Immediate dock below this"
+                                    label={<Text style={{ color: "#f5222d", fontSize: 12 }}>{t("settingsBattery.criticalVoltage")}</Text>}
+                                    tooltip={t("settingsBattery.criticalVoltageTooltip")}
                                 >
                                     <InputNumber
                                         value={values.battery_critical_voltage}
@@ -195,13 +197,13 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
             </Card>
 
             {/* Percentage thresholds */}
-            <Card size="small" title="Percentage Thresholds" style={{ marginBottom: 16 }}>
+            <Card size="small" title={t("settingsBattery.percentageThresholds")} style={{ marginBottom: 16 }}>
                 <Form layout="vertical" size="small">
                     <Row gutter={[16, 0]}>
                         <Col xs={8}>
                             <Form.Item
-                                label={<Text style={{ color: "#52c41a", fontSize: 12 }}>Resume Above</Text>}
-                                tooltip="Resume mowing above this %"
+                                label={<Text style={{ color: "#52c41a", fontSize: 12 }}>{t("settingsBattery.resumeAbove")}</Text>}
+                                tooltip={t("settingsBattery.resumeAboveTooltip")}
                             >
                                 <InputNumber
                                     value={values.battery_full_percent}
@@ -213,8 +215,8 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
                         </Col>
                         <Col xs={8}>
                             <Form.Item
-                                label={<Text style={{ color: "#fa8c16", fontSize: 12 }}>Low (Dock)</Text>}
-                                tooltip="Head to dock below this %"
+                                label={<Text style={{ color: "#fa8c16", fontSize: 12 }}>{t("settingsBattery.lowDock")}</Text>}
+                                tooltip={t("settingsBattery.lowDockTooltip")}
                             >
                                 <InputNumber
                                     value={values.battery_low_percent}
@@ -226,13 +228,28 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
                         </Col>
                         <Col xs={8}>
                             <Form.Item
-                                label={<Text style={{ color: "#f5222d", fontSize: 12 }}>Critical</Text>}
-                                tooltip="Critical battery level"
+                                label={<Text style={{ color: "#f5222d", fontSize: 12 }}>{t("settingsBattery.critical")}</Text>}
+                                tooltip={t("settingsBattery.criticalTooltip")}
                             >
                                 <InputNumber
                                     value={values.battery_critical_percent}
                                     onChange={(v) => onChange("battery_critical_percent", v)}
                                     min={1} max={30} step={5} precision={0}
+                                    style={{ width: "100%" }} addonAfter="%"
+                                />
+                            </Form.Item>
+                        </Col>
+                    </Row>
+                    <Row gutter={[16, 0]}>
+                        <Col xs={8}>
+                            <Form.Item
+                                label={<Text style={{ color: "#52c41a", fontSize: 12 }}>{t("settingsBattery.criticalRecovery")}</Text>}
+                                tooltip={t("settingsBattery.criticalRecoveryTooltip")}
+                            >
+                                <InputNumber
+                                    value={values.battery_critical_recovery_percent}
+                                    onChange={(v) => onChange("battery_critical_recovery_percent", v)}
+                                    min={5} max={90} step={5} precision={0}
                                     style={{ width: "100%" }} addonAfter="%"
                                 />
                             </Form.Item>

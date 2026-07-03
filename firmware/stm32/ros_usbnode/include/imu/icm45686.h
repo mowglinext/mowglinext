@@ -187,12 +187,12 @@ void ICM45686_Init(void);
 /**
  * Read raw accelerometer (m/s^2)
  */
-void ICM45686_ReadAccelerometerRaw(float *x, float *y, float *z);
+int ICM45686_ReadAccelerometerRaw(float *x, float *y, float *z);
 
 /**
  * Read raw gyroscope (rad/s)
  */
-void ICM45686_ReadGyroRaw(float *x, float *y, float *z);
+int ICM45686_ReadGyroRaw(float *x, float *y, float *z);
 
 #ifdef __cplusplus
 }

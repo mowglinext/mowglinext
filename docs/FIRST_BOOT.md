@@ -34,6 +34,8 @@ MowgliNext expects centimetre-accurate GPS. Without it, area recording is noisy 
   ```
 - If `pitch` or `roll` is larger than ~1°, the IMU is physically mounted at an angle. Copy those values into `mowgli_robot.yaml` → `imu_pitch`, `imu_roll`, and recreate the container. Values under 1° are chip bias and are already removed by the calibration.
 
+> **Editing `mowgli_robot.yaml` — sparse config model.** The installed `mowgli_robot.yaml` (`/ros2_ws/config/mowgli_robot.yaml`) is **sparse**: it should hold only per-robot overrides and calibration outputs. Every parameter's *default* lives in the in-package template (`mowgli_bringup/config/mowgli_robot.yaml`) and is deep-merged in at launch, so you only need to add a key when you want to override its default. In the GUI, most settings are editable directly; a small dot marks any value you have overridden and a **reset button** reverts it to the default (by deleting the key). Prefer the GUI over hand-editing — it keeps the file sparse for you.
+
 ## 4. IMU yaw calibration (requires motion)
 
 The IMU's heading relative to forward is not auto-detected — it has to be solved by driving the robot a short distance.
@@ -61,6 +63,32 @@ The IMU's heading relative to forward is not auto-detected — it has to be solv
   3. Iterate through each mowing area: plan the next strip, transit to its start, follow it with FTCController, repeat until the area is covered. Then move to the next area.
   4. Dock when all areas are done, or when battery drops below the low-battery threshold.
 - Progress is persisted in the `mow_progress` grid layer and survives restarts, so if you hit Emergency mid-mow you can resume later.
+
+## Troubleshooting
+
+### No IMU / wheel / firmware data after flashing the STM32
+
+After flashing, the board resets and re-enumerates over USB. On this hardware the
+re-enumeration intermittently **fails** (EMI), which looks like *all* firmware
+topics going silent at once — `/imu/data`, `/wheel_odom`, `/hardware_bridge/status`
+all dead — even though the ROS2 stack and GUI are fine. `hardware_bridge` opened
+`/dev/mowgli` before the disconnect and is now holding a dead handle.
+
+Confirm with `dmesg`: repeated `usb 5-1: device descriptor read/64, error -62`
+ending in `unable to enumerate USB device`, and `/dev/mowgli` missing.
+
+**Recover without a power cycle** — rebind the STM32's USB controller (it's on
+`fc840000.usb`; the GPS is on the separate `fc8c0000.usb`, so GPS is undisturbed):
+
+```bash
+echo fc840000.usb | sudo tee /sys/bus/platform/drivers/ohci-platform/unbind
+sleep 2
+echo fc840000.usb | sudo tee /sys/bus/platform/drivers/ohci-platform/bind
+```
+
+The board re-enumerates cleanly (`dmesg` shows `Product: Mowgli`, no -62) and
+`/dev/mowgli → ttyACM*` reappears. Then restart the ROS2 container so
+`hardware_bridge` reopens the port: `docker restart mowgli-ros2`.
 
 ## Not yet supported / coming soon
 

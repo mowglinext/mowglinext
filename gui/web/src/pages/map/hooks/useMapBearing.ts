@@ -1,4 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from "react";
+import {useTranslation} from "react-i18next";
 import type {NotificationInstance} from "antd/es/notification/interface";
 
 // Display-only Mapbox bearing (compass rotation in degrees, clockwise from
@@ -16,6 +17,7 @@ interface UseMapBearingOptions {
 const DEBOUNCE_MS = 400;
 
 export function useMapBearing({config, setConfig, notification}: UseMapBearingOptions) {
+    const {t} = useTranslation();
     const [bearing, setBearing] = useState(0);
     // Instance-scoped timeout: a previous module-scoped timer leaked across
     // remounts and was the root cause of issue #153 (rotation reset to 0
@@ -40,9 +42,9 @@ export function useMapBearing({config, setConfig, notification}: UseMapBearingOp
         try {
             await setConfig({"gui.map.display.bearing": value.toString()});
         } catch (e: any) {
-            notification.error({message: "Failed to save bearing", description: e.message});
+            notification.error({message: t('mapBearing.saveError'), description: e.message});
         }
-    }, [setConfig, notification]);
+    }, [setConfig, notification, t]);
 
     const handleBearing = useCallback((value: number) => {
         // Normalise into [-180, 180) so the persisted value stays compact.

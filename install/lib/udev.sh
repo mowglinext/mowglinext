@@ -34,7 +34,7 @@ emit_by_id_udev_rule() {
 
   # Prefer a USB-attribute match (idVendor/idProduct[/serial]) so the symlink
   # survives re-enumeration. The previous KERNEL=="ttyACMn" form broke as soon
-  # as a device's CDC-ACM index changed (e.g. F9P resets after ublox_dgnss
+  # as a device's CDC-ACM index changed (e.g. F9P resets after receiver reconfiguration
   # writes config, jumping ttyACM1 -> ttyACM3, leaving /dev/gps dangling and
   # causing EIO on every RTCM write).
   if command -v udevadm >/dev/null 2>&1 && [ -e "$resolved" ]; then
@@ -89,25 +89,28 @@ EOF
 }
 
 build_dynamic_udev_rules() {
-  local by_id_path
+  local by_id_path=""
   local gnss_backend
-  local gps_protocol="${GPS_PROTOCOL:-UBX}"
+  local gnss_device
+  local gnss_connection
 
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
-  if [[ "${GNSS_BACKEND:-}" == "nmea" ]]; then
-    gps_protocol="NMEA"
-  fi
+  gnss_device="$(gnss_serial_device_from_state)"
+  gnss_connection="$(gnss_connection_from_serial_device "$gnss_device")"
 
   echo "# ========================================================="
   echo "# Mowgli II - dynamic rules from current hardware selection"
   echo "# ========================================================="
 
-  if by_id_path="$(find_serial_by_id "*Mowgli*")"; then
+  # Prefer the canonical systemd by-id entry for the STM32 board; keep the
+  # broader product-name fallback for test sandboxes that do not mimic the full
+  # host naming scheme.
+  if by_id_path="$(find_serial_by_id "usb-STMicroelectronics_Mowgli_*" "*Mowgli*")"; then
     emit_by_id_udev_rule "$by_id_path" "mowgli"
   fi
 
   # MAVROS uses the explicitly selected device. Prefer by-id when selected,
-  # but keep the ttyACM/ttyUSB fallback for compatibility with manual choices.
+  # but keep the ttyACM/ttyUSB fallback for manual choices.
   if [ "${HARDWARE_BACKEND:-mowgli}" = "mavros" ] && [ -n "${MAVROS_BY_ID:-}" ] && [ -e "${MAVROS_BY_ID}" ]; then
     if [ -L "$MAVROS_BY_ID" ]; then
       emit_by_id_udev_rule "$MAVROS_BY_ID" "mavros"
@@ -116,42 +119,20 @@ build_dynamic_udev_rules() {
     fi
   fi
 
-  # GPS principal
-  # The /dev/gps symlink is a *convenience* for manual debugging — the
-  # sensors/gps container talks to the F9P via the /dev/serial/by-id/...
-  # path passed in GPS_DEVICE_PATH (always created by systemd-udev), so
-  # the absence of this rule no longer breaks the container.
+  # GPS principal. The /dev/gps symlink is a convenience for manual debugging;
+  # the Universal GNSS sidecar uses GNSS_SERIAL_DEVICE directly.
   if [ "$gnss_backend" != "disabled" ]; then
-    if [ "${GPS_CONNECTION:-usb}" = "uart" ] && [ -n "${GPS_UART_DEVICE:-}" ]; then
-      echo "KERNEL==\"$(basename "$GPS_UART_DEVICE")\", SYMLINK+=\"gps\", MODE=\"0666\""
-    elif [ -n "${GPS_BY_ID:-}" ] && [ -e "${GPS_BY_ID}" ]; then
-      emit_by_id_udev_rule "$GPS_BY_ID" "gps"
+    if [ "$gnss_connection" = "uart" ] && [ -n "$gnss_device" ]; then
+      echo "KERNEL==\"$(basename "$gnss_device")\", SYMLINK+=\"gps\", MODE=\"0666\""
+    elif [ -L "$gnss_device" ] && [ -e "$gnss_device" ]; then
+      emit_by_id_udev_rule "$gnss_device" "gps"
+    elif [ -n "$gnss_device" ] && [ -e "$gnss_device" ]; then
+      echo "KERNEL==\"$(basename "$gnss_device")\", SYMLINK+=\"gps\", MODE=\"0666\""
     elif [ "${HARDWARE_BACKEND:-mowgli}" != "mavros" ]; then
-      case "$gnss_backend" in
-        gps|ublox)
-          if [[ "$gps_protocol" != "NMEA" ]]; then
-            by_id_path="$(find_serial_by_id "*u-blox*" "*ublox*" || true)"
-          else
-            by_id_path=""
-          fi
-          ;;
-        unicore)
-          by_id_path=""
-          ;;
-        *)
-          by_id_path=""
-          ;;
-      esac
-
       if [ -n "$by_id_path" ]; then
         emit_by_id_udev_rule "$by_id_path" "gps"
       fi
     fi
-  fi
-
-  # GPS debug (miniUART only)
-  if [ "$gnss_backend" != "disabled" ] && [ "${GPS_DEBUG_ENABLED:-false}" = "true" ] && [ -n "${GPS_DEBUG_UART_DEVICE:-}" ]; then
-    echo "KERNEL==\"$(basename "$GPS_DEBUG_UART_DEVICE")\", SYMLINK+=\"gps_debug\", MODE=\"0666\""
   fi
 
   # LiDAR
@@ -205,28 +186,30 @@ install_udev_rules() {
 
   # Verify symlinks were created — UART devices may not exist until reboot
   local gnss_backend
+  local gnss_device
+  local gnss_connection
   local needs_reboot=false
 
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
+  gnss_device="$(gnss_serial_device_from_state)"
+  gnss_connection="$(gnss_connection_from_serial_device "$gnss_device")"
 
-  if [ "$gnss_backend" != "disabled" ] && [ "${GPS_CONNECTION:-usb}" = "uart" ] && [ -n "${GPS_UART_DEVICE:-}" ]; then
-    if [ ! -e "$GPS_UART_DEVICE" ]; then
-      warn "GPS UART device $GPS_UART_DEVICE does not exist yet (UART overlay needs reboot)"
+  if [ "$gnss_backend" != "disabled" ] && [ "$gnss_connection" = "uart" ] && [ -n "$gnss_device" ]; then
+    if [ ! -e "$gnss_device" ]; then
+      warn "GPS UART device $gnss_device does not exist yet (UART overlay needs reboot)"
       needs_reboot=true
-    elif [ ! -e "${GPS_PORT:-/dev/gps}" ]; then
-      warn "GPS symlink ${GPS_PORT:-/dev/gps} not created — check udev rules"
+    elif [ ! -e "/dev/gps" ]; then
+      warn "GPS symlink /dev/gps not created — check udev rules"
     else
-      info "GPS symlink: ${GPS_PORT:-/dev/gps} -> $(readlink -f "${GPS_PORT:-/dev/gps}")"
+      info "GPS symlink: /dev/gps -> $(readlink -f /dev/gps)"
     fi
-  elif [ "$gnss_backend" != "disabled" ] && [ -n "${GPS_BY_ID:-}" ]; then
-    if [ ! -e "${GPS_BY_ID}" ]; then
-      warn "GPS by-id device ${GPS_BY_ID} does not exist"
+  elif [ "$gnss_backend" != "disabled" ] && [ -n "$gnss_device" ]; then
+    if [ ! -e "$gnss_device" ]; then
+      warn "GPS device $gnss_device does not exist"
     else
-      # /dev/gps udev rule is now optional — start_gps.sh reads the by-id
-      # path directly via GPS_DEVICE_PATH. Just confirm GPS_PORT resolves.
-      info "GPS device: ${GPS_BY_ID} -> $(readlink -f "${GPS_BY_ID}")"
-      if [ -e "${GPS_PORT:-/dev/gps}" ] && [ "${GPS_PORT:-/dev/gps}" != "${GPS_BY_ID}" ]; then
-        info "GPS symlink: ${GPS_PORT:-/dev/gps} -> $(readlink -f "${GPS_PORT:-/dev/gps}")"
+      info "GPS device: ${gnss_device} -> $(readlink -f "${gnss_device}")"
+      if [ -e "/dev/gps" ] && [ "/dev/gps" != "${gnss_device}" ]; then
+        info "GPS symlink: /dev/gps -> $(readlink -f /dev/gps)"
       fi
     fi
   fi

@@ -1,3 +1,4 @@
+import {useTranslation} from "react-i18next";
 import {MOWER_STATES} from "./constants.ts";
 
 interface StatePillProps {
@@ -7,6 +8,9 @@ interface StatePillProps {
 }
 
 export function StatePill({state, compact = false, pulse = true}: StatePillProps) {
+  const {t} = useTranslation();
+  // Known states map to an i18n key; an unknown state falls back to its raw
+  // code (t() returns the key unchanged when there's no translation).
   const info = MOWER_STATES[state] ?? {label: state, tone: 'info' as const};
   const bg = info.tone === 'danger' ? 'rgba(255,107,107,0.14)'
     : info.tone === 'warning' ? 'rgba(255,197,103,0.14)'
@@ -31,7 +35,7 @@ export function StatePill({state, compact = false, pulse = true}: StatePillProps
         display: 'inline-block',
         animation: pulse && info.tone !== 'info' ? 'mn-pulse 1.2s ease-in-out infinite' : 'none',
       }}/>
-      {info.label}
+      {t(info.label)}
     </span>
   );
 }

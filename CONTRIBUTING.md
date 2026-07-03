@@ -27,7 +27,8 @@ Thanks for your interest in contributing! MowgliNext is a community-driven proje
 # Requires ROS2 Kilted on Ubuntu 24.04
 cd ros2
 source /opt/ros/kilted/setup.bash
-rosdep install --from-paths src --ignore-src -y
+rosdep install --from-paths src --ignore-src \
+  --skip-keys universal_gnss_ros2 -y
 colcon build
 colcon test
 ```
@@ -65,7 +66,7 @@ pio run
 
 ## Reporting Bugs
 
-Use the [bug report template](https://github.com/cedbossneo/mowglinext/issues/new?template=bug_report.yml) and include:
+Use the [bug report template](https://github.com/mowglinext/mowglinext/issues/new?template=bug_report.yml) and include:
 - Hardware (board, GPS, LiDAR model)
 - Steps to reproduce
 - Expected vs actual behavior
@@ -73,7 +74,7 @@ Use the [bug report template](https://github.com/cedbossneo/mowglinext/issues/ne
 
 ## Proposing Features
 
-Use the [feature request template](https://github.com/cedbossneo/mowglinext/issues/new?template=feature_request.yml). The community and AI will help evaluate and refine proposals.
+Use the [feature request template](https://github.com/mowglinext/mowglinext/issues/new?template=feature_request.yml). The community and AI will help evaluate and refine proposals.
 
 ## License
 

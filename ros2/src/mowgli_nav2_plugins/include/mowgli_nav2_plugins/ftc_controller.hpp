@@ -16,11 +16,11 @@
 #ifndef MOWGLI_NAV2_PLUGINS__FTC_CONTROLLER_HPP_
 #define MOWGLI_NAV2_PLUGINS__FTC_CONTROLLER_HPP_
 
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
-#include <limits>
 #include <vector>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -28,7 +28,9 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav2_core/controller.hpp>
 #include <nav2_core/goal_checker.hpp>
+#include <nav2_costmap_2d/costmap_2d.hpp>
 #include <nav2_costmap_2d/costmap_2d_ros.hpp>
+#include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
@@ -140,6 +142,11 @@ private:
   double last_lat_error_{0.0};
   double last_lon_error_{0.0};
   double last_angle_error_{0.0};
+  /// Low-pass-filtered PID derivative state (used only when
+  /// config_.derivative_filter_tau > 0). Reset alongside last_*_error_.
+  double d_lat_filt_{0.0};
+  double d_lon_filt_{0.0};
+  double d_angle_filt_{0.0};
   double i_lat_error_{0.0};
   double i_lon_error_{0.0};
   double i_angle_error_{0.0};
@@ -211,12 +218,22 @@ private:
   // window the controller resumes, otherwise it throws as before.
   std::optional<rclcpp::Time> obstacle_wait_start_;
   bool obstacle_waiting_{false};
+  /// When the nominal path first read CLEAR during an active AVOIDANCE
+  /// episode. The skirt is held until it has stayed clear for
+  /// config_.obstacle_clear_hold_s (debounces the window-edge flicker that
+  /// caused the ±step left-right flap). Reset whenever the obstacle
+  /// re-appears or on a new plan.
+  std::optional<rclcpp::Time> avoidance_clear_start_;
 
   // ── Oscillation detection ─────────────────────────────────────────────────
 
   bool checkOscillation(const geometry_msgs::msg::TwistStamped& cmd_vel);
 
   FailureDetector failure_detector_;
+  // Guards failure_detector_ against the param-callback thread reallocating its
+  // ring buffer (setBufferLength) concurrently with the control thread's
+  // update()/isOscillating() reads.
+  std::mutex failure_detector_mutex_;
   rclcpp::Time time_last_oscillation_;
   bool oscillation_detected_{false};
   bool oscillation_warning_{false};
@@ -230,6 +247,21 @@ private:
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros_;
   nav2_costmap_2d::Costmap2D* costmap_map_{nullptr};
+
+  // ── Zone-boundary guard (confine_deviation_to_zone) ───────────────────────
+  //
+  // The LOCAL costmap (costmap_map_, odom frame) is deliberately boundary-free
+  // (obstacle layer only) so near-edge coverage swaths don't read as blocked.
+  // The mowing-zone boundary lives as LETHAL cells in the GLOBAL costmap (map
+  // frame, keepout / lethal_outside_areas filter). We subscribe to it (latched)
+  // and rebuild boundary_costmap_ from each OccupancyGrid; updateLateralDeviation
+  // feeds it as an ObstacleDeviation::BoundaryGuard to the lateral-OFFSET checks
+  // ONLY, so a skirt never leaves the zone. (The offset samples are in the LOCAL
+  // costmap / odom frame here, so the guard affine is boundary(map) <- odom.)
+  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr boundary_costmap_sub_;
+  std::unique_ptr<nav2_costmap_2d::Costmap2D> boundary_costmap_;
+  std::string boundary_frame_;  ///< frame_id of the global costmap (e.g. "map").
+  std::mutex boundary_mutex_;
 
   std::string plugin_name_;
 
@@ -278,6 +310,19 @@ private:
     double ki_ang{0.0};
     double ki_ang_max{10.0};
     double kd_ang{0.0};
+    // Heading P-gain used ONLY in the FOLLOWING state (straight-swath
+    // tracking). kp_ang itself is kept high enough to clear the deadband in a
+    // PRE_ROTATE pivot, but that high gain limit-cycles on a straight (the
+    // left-right weave). Defaults to kp_ang (no change unless set lower).
+    double kp_ang_following{1.0};
+
+    // First-order low-pass time constant (s) for the PID derivative terms
+    // (d_lat / d_lon / d_angle). The raw finite-difference derivative amplifies
+    // the jitter in the 10 Hz fused-pose feedback, which kd_lat then pumps into
+    // the angular command as a ~1.5 Hz steering limit cycle ("hunting"). Filtering
+    // the derivative lets kd_lat stay high for tight cross-track tracking without
+    // the chatter. 0 disables (raw derivative). From PR #290 (64dce368).
+    double derivative_filter_tau{0.0};
 
     // Robot limits
     double max_cmd_vel_speed{2.0};
@@ -302,6 +347,16 @@ private:
     bool check_obstacles{true};
     int obstacle_lookahead{5};
     bool obstacle_footprint{true};
+    /// Robot body half-width (m, perpendicular to heading) used to make BOTH
+    /// obstacle DETECTION and the deviation-clearance search sample the full
+    /// chassis sweep instead of only the path centerline. The local costmap's
+    /// inscribed-inflation radius (~0.10–0.14 m, the footprint rear edge) is far
+    /// smaller than the real half-width (chassis_width/2 ≈ 0.20 m), so a
+    /// centerline-only sample misses obstacles in the ~0.14–0.25 m lateral band
+    /// that the body still hits — they never trigger avoidance and the robot
+    /// drives into them. Sampling across ±half_width (spacing ≤ costmap
+    /// resolution) closes that gap. 0 = legacy centerline-only sampling.
+    double obstacle_body_half_width{0.20};
 
     // Obstacle deviation (FTC's "skirt the obstacle" behaviour). When
     // disabled, hitting an obstacle in lookahead throws ControllerException
@@ -325,6 +380,23 @@ private:
     /// costmap clears before the timeout, the controller resumes. After
     /// the timeout we throw a ControllerException as before.
     double obstacle_wait_timeout_s{5.0};
+    /// Hysteresis hold (s) before declaring AVOIDANCE complete. Once
+    /// avoiding, the nominal path must read CLEAR continuously for this long
+    /// before the skirt is blended back to the line. Without it, the
+    /// obstacle sitting at the lookahead-window edge (and the
+    /// observation_persistence:0 costmap re-marking it each scan) makes the
+    /// clear/blocked test flicker, so the old code blended the skirt back at
+    /// the first clear tick and re-entered on the other side — the ±step
+    /// left-right flap that never grows a deviation big enough to go around.
+    double obstacle_clear_hold_s{1.5};
+    /// Confine lateral obstacle-avoidance deviation to the mowing zone. When
+    /// true, the lateral-OFFSET checks also treat out-of-zone cells (lethal in
+    /// the global keepout costmap) as blocked, so a skirt that would leave the
+    /// zone is rejected and the wait-or-abort path stops the robot instead.
+    /// Applies ONLY to the offset checks, never to the nominal-path check
+    /// (near-edge swaths legitimately run inside the keepout margin). When
+    /// false, behaves exactly as before.
+    bool confine_deviation_to_zone{true};
   };
 
   Config config_;
@@ -332,6 +404,11 @@ private:
   /// Speed limit applied via setSpeedLimit(). -1.0 means "no external limit".
   double speed_limit_{-1.0};
   bool speed_limit_is_percentage_{false};
+  // Configured max linear speed, captured at configure() and on every
+  // max_cmd_vel_speed parameter change. setSpeedLimit() restores
+  // config_.max_cmd_vel_speed to this value when the limit is cleared
+  // (speed_limit < 0); without it a once-applied limit stuck forever.
+  double base_max_cmd_vel_speed_{2.0};
 };
 
 }  // namespace mowgli_nav2_plugins

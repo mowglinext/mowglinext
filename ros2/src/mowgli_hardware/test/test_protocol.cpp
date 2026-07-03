@@ -64,6 +64,11 @@ TEST(ProtocolSizes, OdometryPacketSize)
   EXPECT_EQ(sizeof(LlOdometry), 17u);
 }
 
+TEST(ProtocolSizes, ResetCausePacketSize)
+{
+  EXPECT_EQ(sizeof(LlResetCause), 5u);
+}
+
 TEST(ProtocolSizes, HeartbeatPacketSize)
 {
   EXPECT_EQ(sizeof(LlHeartbeat), 5u);
@@ -84,6 +89,23 @@ TEST(ProtocolSizes, RebootPacketSize)
   EXPECT_EQ(sizeof(LlReboot), 4u);  // type(1) + magic(1) + crc(2)
 }
 
+TEST(ProtocolSizes, SetDrivePidPacketSize)
+{
+  // type(1) + ticks_per_meter/kp/ki/kd/integral_limit/pwm_per_mps(6*4=24)
+  // + crc(2) = 27.
+  EXPECT_EQ(sizeof(LlSetDrivePid), 27u);
+}
+
+TEST(ProtocolSizes, ConfigPacketSizes)
+{
+  // Firmware version handshake / runtime config. Req carries flags; Rsp
+  // reports protocol version + active flags + 3-byte semver. Must match
+  // pkt_config_*_t in
+  // mowgli_protocol.h.
+  EXPECT_EQ(sizeof(LlConfigReq), 4u);  // type(1) + flags(1) + crc(2)
+  EXPECT_EQ(sizeof(LlConfigRsp), 8u);  // type(1) + proto(1) + flags(1) + semver(3) + crc(2)
+}
+
 // ---------------------------------------------------------------------------
 // Packet ID consistency (ll_datatypes.hpp enum matches mowgli_protocol.h)
 // ---------------------------------------------------------------------------
@@ -94,6 +116,7 @@ TEST(ProtocolIds, PacketIdValues)
   EXPECT_EQ(PACKET_ID_LL_IMU, 0x02);
   EXPECT_EQ(PACKET_ID_LL_UI_EVENT, 0x03);
   EXPECT_EQ(PACKET_ID_LL_ODOMETRY, 0x04);
+  EXPECT_EQ(PACKET_ID_LL_RESET_CAUSE, 0x06);
   EXPECT_EQ(PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ, 0x11);
   EXPECT_EQ(PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP, 0x12);
   EXPECT_EQ(PACKET_ID_LL_HEARTBEAT, 0x42);
@@ -101,6 +124,7 @@ TEST(ProtocolIds, PacketIdValues)
   EXPECT_EQ(PACKET_ID_LL_CMD_VEL, 0x50);
   EXPECT_EQ(PACKET_ID_LL_CMD_BLADE, 0x51);
   EXPECT_EQ(PACKET_ID_LL_REBOOT, 0x52);
+  EXPECT_EQ(PACKET_ID_LL_SET_DRIVE_PID, 0x54);
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +288,16 @@ TEST(ProtocolRoundtrip, HeartbeatPacket)
   roundtrip_struct(pkt);
 }
 
+TEST(ProtocolRoundtrip, ResetCausePacket)
+{
+  LlResetCause pkt{};
+  pkt.type = PACKET_ID_LL_RESET_CAUSE;
+  pkt.reset_cause = RESET_CAUSE_WWDG;
+  pkt.last_stage_before_reset = WATCHDOG_STAGE_ADC;
+
+  roundtrip_struct(pkt);
+}
+
 TEST(ProtocolRoundtrip, HighLevelStatePacket)
 {
   LlHighLevelState pkt{};
@@ -282,6 +316,75 @@ TEST(ProtocolRoundtrip, CmdVelPacket)
   pkt.angular_z = -0.15f;
 
   roundtrip_struct(pkt);
+}
+
+TEST(ProtocolRoundtrip, SetDrivePidPacket)
+{
+  LlSetDrivePid pkt{};
+  pkt.type = PACKET_ID_LL_SET_DRIVE_PID;
+  pkt.ticks_per_meter = 319.305f;
+  pkt.kp = 30.0f;
+  pkt.ki = 5000.0f;
+  pkt.kd = 0.0f;
+  pkt.integral_limit = 100.0f;
+  pkt.pwm_per_mps = 300.0f;
+
+  roundtrip_struct(pkt);
+}
+
+TEST(SetDrivePidPacket, PreservesFractionalTicksPerMeter)
+{
+  LlSetDrivePid pkt{};
+  pkt.type = PACKET_ID_LL_SET_DRIVE_PID;
+  pkt.ticks_per_meter = 319.305f;
+  pkt.kp = 0.2f;
+  pkt.ki = 0.0f;
+  pkt.kd = 0.0f;
+  pkt.integral_limit = 0.0f;
+  pkt.pwm_per_mps = 261.035f;
+
+  const uint8_t* raw = reinterpret_cast<const uint8_t*>(&pkt);
+  float decoded_ticks = 0.0f;
+  std::memcpy(&decoded_ticks, raw + 1, sizeof(decoded_ticks));
+  EXPECT_FLOAT_EQ(decoded_ticks, 319.305f);
+
+  float decoded_ff = 0.0f;
+  std::memcpy(&decoded_ff, raw + 21, sizeof(decoded_ff));
+  EXPECT_FLOAT_EQ(decoded_ff, 261.035f);
+}
+
+TEST(SetDrivePidPacket, FieldOffsetsAreCorrect)
+{
+  LlSetDrivePid pkt{};
+  pkt.type = PACKET_ID_LL_SET_DRIVE_PID;
+  pkt.ticks_per_meter = 319.305f;
+  pkt.kp = 0.2f;
+  pkt.ki = 0.3f;
+  pkt.kd = 0.4f;
+  pkt.integral_limit = 10.0f;
+  pkt.pwm_per_mps = 261.035f;
+  pkt.crc = 0xABCD;
+
+  const uint8_t* raw = reinterpret_cast<const uint8_t*>(&pkt);
+  EXPECT_EQ(raw[0], PACKET_ID_LL_SET_DRIVE_PID);
+
+  float value = 0.0f;
+  std::memcpy(&value, raw + 1, sizeof(value));
+  EXPECT_FLOAT_EQ(value, 319.305f);
+  std::memcpy(&value, raw + 5, sizeof(value));
+  EXPECT_FLOAT_EQ(value, 0.2f);
+  std::memcpy(&value, raw + 9, sizeof(value));
+  EXPECT_FLOAT_EQ(value, 0.3f);
+  std::memcpy(&value, raw + 13, sizeof(value));
+  EXPECT_FLOAT_EQ(value, 0.4f);
+  std::memcpy(&value, raw + 17, sizeof(value));
+  EXPECT_FLOAT_EQ(value, 10.0f);
+  std::memcpy(&value, raw + 21, sizeof(value));
+  EXPECT_FLOAT_EQ(value, 261.035f);
+
+  uint16_t crc = 0u;
+  std::memcpy(&crc, raw + 25, sizeof(crc));
+  EXPECT_EQ(crc, 0xABCD);
 }
 
 // ---------------------------------------------------------------------------

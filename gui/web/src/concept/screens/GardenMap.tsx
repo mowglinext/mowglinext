@@ -1,5 +1,6 @@
 import {useState} from "react";
 import {motion, AnimatePresence} from "framer-motion";
+import {useTranslation} from "react-i18next";
 import {
   Layers, Maximize2, Plus, Edit3, Trash2, Navigation,
   ChevronUp, MapPin,
@@ -28,13 +29,14 @@ interface Zone {
 }
 
 const ZONES: Zone[] = [
-  {id: "z1", name: "Jardin sud",     area: 184, coverage: 0.42, active: true,  accent: "lime"},
-  {id: "z2", name: "Jardin nord",    area: 116, coverage: 0,    active: false, accent: "cyan"},
-  {id: "z3", name: "Pelouse devant", area: 92,  coverage: 1.0,  active: false, accent: "amber"},
-  {id: "z4", name: "Allée latérale", area: 38,  coverage: 0,    active: false, accent: "rose"},
+  {id: "z1", name: "gardenMap.zoneSouthGarden", area: 184, coverage: 0.42, active: true,  accent: "lime"},
+  {id: "z2", name: "gardenMap.zoneNorthGarden", area: 116, coverage: 0,    active: false, accent: "cyan"},
+  {id: "z3", name: "gardenMap.zoneFrontLawn",   area: 92,  coverage: 1.0,  active: false, accent: "amber"},
+  {id: "z4", name: "gardenMap.zoneSidePath",    area: 38,  coverage: 0,    active: false, accent: "rose"},
 ];
 
 export function GardenMap() {
+  const {t} = useTranslation();
   const vp = useViewport();
   const [, setLayer] = useState<"satellite" | "vector">("vector");
   const [selectedZone, setSelectedZone] = useState<string>("z1");
@@ -96,13 +98,13 @@ export function GardenMap() {
             fontSize: 14, fontWeight: 700, color: "var(--ink)",
             letterSpacing: "-0.01em",
           }}>
-            Jardin sud
+            {t('gardenMap.zoneSouthGarden')}
           </div>
           <span style={{
             fontSize: 11, color: "var(--ink-3)",
             paddingLeft: 8, marginLeft: 4, borderLeft: "1px solid var(--border-soft)",
           }}>
-            42 % mowé
+            {t('gardenMap.statusMowed')}
           </span>
         </GlassCard>
 
@@ -142,13 +144,13 @@ export function GardenMap() {
                       letterSpacing: "0.08em", textTransform: "uppercase",
                       fontWeight: 700,
                     }}>
-                      Zones du jardin
+                      {t('gardenMap.gardenZones')}
                     </div>
                     <div className="display" style={{
                       fontSize: 22, fontWeight: 700, marginTop: 4,
                       letterSpacing: "-0.02em",
                     }}>
-                      4 zones · 430 m²
+                      {t('gardenMap.zonesSummary')}
                     </div>
                   </div>
                   <button style={{
@@ -250,6 +252,7 @@ interface ZoneRowProps {
 }
 
 function ZoneRow({zone, isSelected, onClick}: ZoneRowProps) {
+  const {t} = useTranslation();
   const accentVar = {
     lime: "var(--lime)",
     cyan: "var(--aurora-cyan)",
@@ -295,21 +298,21 @@ function ZoneRow({zone, isSelected, onClick}: ZoneRowProps) {
           display: "flex", alignItems: "baseline", gap: 8,
           fontSize: 14, fontWeight: 600, color: "var(--ink)",
         }}>
-          {zone.name}
+          {t(zone.name)}
           {zone.active && (
             <span style={{
               fontSize: 9, color: "var(--lime)",
               letterSpacing: "0.08em", textTransform: "uppercase",
               fontWeight: 700,
             }}>
-              · en tonte
+              {t('gardenMap.zoneMowingTag')}
             </span>
           )}
         </div>
         <div className="mono" style={{
           fontSize: 11, color: "var(--ink-3)", marginTop: 2,
         }}>
-          {zone.area} m² · {Math.round(zone.coverage * 100)} % couvert
+          {zone.area} m² · {t('gardenMap.coveredPercent', {percent: Math.round(zone.coverage * 100)})}
         </div>
         {/* progress bar */}
         <div style={{
@@ -332,6 +335,7 @@ function ZoneRow({zone, isSelected, onClick}: ZoneRowProps) {
 }
 
 function RobotTelemetryCard({compact}: {compact?: boolean} = {}) {
+  const {t} = useTranslation();
   return (
     <GlassCard padding={16}>
       <div style={{
@@ -343,7 +347,7 @@ function RobotTelemetryCard({compact}: {compact?: boolean} = {}) {
           letterSpacing: "0.08em", textTransform: "uppercase",
           fontWeight: 700,
         }}>
-          Position en direct
+          {t('gardenMap.livePosition')}
         </span>
       </div>
 
@@ -354,8 +358,8 @@ function RobotTelemetryCard({compact}: {compact?: boolean} = {}) {
       }}>
         <Telemetry label="X" value="+12.4" unit="m"/>
         <Telemetry label="Y" value="-4.7" unit="m"/>
-        <Telemetry label="Cap" value="38" unit="°"/>
-        <Telemetry label="Vitesse" value="0.42" unit="m/s"/>
+        <Telemetry label={t('gardenMap.telemetryHeading')} value="38" unit="°"/>
+        <Telemetry label={t('gardenMap.telemetrySpeed')} value="0.42" unit="m/s"/>
         <Telemetry label="GPS σ" value="3" unit="cm" tone="ok"/>
         <Telemetry label="Strips" value="11" unit="/ 24"/>
       </div>
@@ -388,6 +392,7 @@ function Telemetry({
 }
 
 function ZoneActionsCard() {
+  const {t} = useTranslation();
   return (
     <GlassCard padding={16}>
       <div style={{
@@ -395,7 +400,7 @@ function ZoneActionsCard() {
         letterSpacing: "0.08em", textTransform: "uppercase",
         fontWeight: 700, marginBottom: 12,
       }}>
-        Action sur la zone
+        {t('gardenMap.zoneAction')}
       </div>
 
       <button style={{
@@ -408,7 +413,7 @@ function ZoneActionsCard() {
         marginBottom: 8,
       }}>
         <Navigation size={16} strokeWidth={2.4}/>
-        Mowing cette zone
+        {t('gardenMap.mowThisZone')}
       </button>
 
       <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8}}>
@@ -421,7 +426,7 @@ function ZoneActionsCard() {
           color: "var(--ink)",
         }}>
           <Edit3 size={14} strokeWidth={2.2}/>
-          Modifier
+          {t('gardenMap.edit')}
         </button>
         <button style={{
           display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
@@ -432,7 +437,7 @@ function ZoneActionsCard() {
           color: "var(--rose)",
         }}>
           <Trash2 size={14} strokeWidth={2.2}/>
-          Supprimer
+          {t('gardenMap.delete')}
         </button>
       </div>
     </GlassCard>
@@ -450,6 +455,7 @@ interface BottomSheetProps {
 }
 
 function BottomSheet({open, onToggle, children}: BottomSheetProps) {
+  const {t} = useTranslation();
   return (
     <>
       <AnimatePresence>
@@ -510,7 +516,7 @@ function BottomSheet({open, onToggle, children}: BottomSheetProps) {
             letterSpacing: "0.06em", textTransform: "uppercase", fontWeight: 600,
           }}>
             <ChevronUp size={12} strokeWidth={2.6}/>
-            {open ? "Replier" : "Voir les zones"}
+            {open ? t('gardenMap.collapse') : t('gardenMap.viewZones')}
           </div>
         </button>
         <div style={{overflowY: "auto", maxHeight: "calc(70vh - 60px)"}} className="scrollbar-thin">

@@ -1,5 +1,6 @@
 import {useState} from "react";
 import {motion} from "framer-motion";
+import {useTranslation} from "react-i18next";
 import {
   ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
   Scissors, ScissorsLineDashed, Volume2, Lightbulb, Lock, Crosshair,
@@ -24,6 +25,7 @@ import {useViewport} from "../useViewport";
  */
 
 export function QuickControls() {
+  const {t} = useTranslation();
   const vp = useViewport();
   const [mode, setMode] = useState<Mode>("eco");
   const [running, setRunning] = useState(true);
@@ -62,16 +64,16 @@ export function QuickControls() {
               fontSize: 11, color: "var(--ink-3)",
               letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 700,
             }}>
-              Contrôles
+              {t('quickControls.title')}
             </div>
             <h1 className="display" style={{
               fontSize: vp.isAtLeastTablet ? 38 : 28, marginTop: 4,
               fontWeight: 700, letterSpacing: "-0.025em", lineHeight: 1.1,
             }}>
-              Mowgli, prêt à <em style={{fontStyle: "italic", color: "var(--lime)"}}>partir</em>.
+              {t('quickControls.headlinePrefix')} <em style={{fontStyle: "italic", color: "var(--lime)"}}>{t('quickControls.headlineEmphasis')}</em>.
             </h1>
           </div>
-          <StatusOrb tone={running ? "live" : "resting"} size={10} label={running ? "Active" : "En pause"}/>
+          <StatusOrb tone={running ? "live" : "resting"} size={10} label={running ? t('quickControls.statusActive') : t('quickControls.statusPaused')}/>
         </motion.header>
 
         <div style={{
@@ -101,7 +103,7 @@ export function QuickControls() {
                   letterSpacing: "0.08em", textTransform: "uppercase",
                   fontWeight: 700, marginBottom: 14,
                 }}>
-                  Mode de coupe
+                  {t('quickControls.cuttingMode')}
                 </div>
                 <ModeSegment value={mode} onChange={setMode}/>
               </GlassCard>
@@ -114,10 +116,10 @@ export function QuickControls() {
             <motion.div variants={riseFade} style={{
               display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10,
             }}>
-              <QuickToggle icon={<Volume2 size={18}/>}     label="Sourdine"  defaultActive={false}/>
-              <QuickToggle icon={<Lightbulb size={18}/>}   label="Phares"   defaultActive={true}/>
-              <QuickToggle icon={<Lock size={18}/>}        label="Verrou"   defaultActive={false}/>
-              <QuickToggle icon={<Crosshair size={18}/>}   label="Locate"   pulse/>
+              <QuickToggle icon={<Volume2 size={18}/>}     label={t('quickControls.toggleMute')}  defaultActive={false}/>
+              <QuickToggle icon={<Lightbulb size={18}/>}   label={t('quickControls.toggleHeadlights')}   defaultActive={true}/>
+              <QuickToggle icon={<Lock size={18}/>}        label={t('quickControls.toggleLock')}   defaultActive={false}/>
+              <QuickToggle icon={<Crosshair size={18}/>}   label={t('quickControls.toggleLocate')}   pulse/>
             </motion.div>
           </div>
         </div>
@@ -131,6 +133,7 @@ export function QuickControls() {
 // ─────────────────────────────────────────────────────────────────────
 
 function PrimaryActionHero({running, onToggle}: {running: boolean; onToggle: () => void}) {
+  const {t} = useTranslation();
   return (
     <GlassCard variant="glow" padding={0}>
       <div style={{
@@ -148,29 +151,29 @@ function PrimaryActionHero({running, onToggle}: {running: boolean; onToggle: () 
               fontSize: 10, color: "var(--lime)", fontWeight: 700,
               letterSpacing: "0.12em", textTransform: "uppercase",
             }}>
-              Action principale
+              {t('quickControls.primaryAction')}
             </div>
             <div className="display" style={{
               fontSize: 24, fontWeight: 700, marginTop: 4,
               letterSpacing: "-0.02em",
             }}>
-              {running ? "Tonte en cours" : "Tondeuse en pause"}
+              {running ? t('quickControls.mowingInProgress') : t('quickControls.mowerPaused')}
             </div>
             <div style={{
               fontSize: 12, color: "var(--ink-2)", marginTop: 6,
             }}>
-              {running ? "Tape pour mettre en pause" : "Tape pour reprendre"}
+              {running ? t('quickControls.tapToPause') : t('quickControls.tapToResume')}
             </div>
           </div>
         </div>
 
         {/* Big action button */}
         <div style={{display: "flex", alignItems: "center", justifyContent: "center", gap: 14}}>
-          <SecondaryActionBig icon={<Square size={20} fill="currentColor"/>} ariaLabel="Stop" tone="danger"/>
+          <SecondaryActionBig icon={<Square size={20} fill="currentColor"/>} ariaLabel={t('quickControls.stopAria')} tone="danger"/>
           <motion.button
             {...pressFeedback}
             onClick={onToggle}
-            aria-label={running ? "Pause" : "Reprendre"}
+            aria-label={running ? t('quickControls.pauseAria') : t('quickControls.resumeAria')}
             style={{
               position: "relative",
               width: 132, height: 132, borderRadius: "50%",
@@ -203,7 +206,7 @@ function PrimaryActionHero({running, onToggle}: {running: boolean; onToggle: () 
                 : <Play  size={48} strokeWidth={2.4} fill="currentColor" style={{marginLeft: 4}}/>}
             </motion.div>
           </motion.button>
-          <SecondaryActionBig icon={<ArrowDown size={20}/>} ariaLabel="Retour à la base" tone="cyan"/>
+          <SecondaryActionBig icon={<ArrowDown size={20}/>} ariaLabel={t('quickControls.returnToBaseAria')} tone="cyan"/>
         </div>
 
         <div style={{
@@ -211,9 +214,9 @@ function PrimaryActionHero({running, onToggle}: {running: boolean; onToggle: () 
           fontSize: 11, color: "var(--ink-3)",
           letterSpacing: "0.06em", textTransform: "uppercase", fontWeight: 600,
         }}>
-          <span>Stop d'urgence</span>
-          <span style={{color: "var(--lime)"}}>{running ? "Pause" : "Lancer"}</span>
-          <span>Rentrer</span>
+          <span>{t('quickControls.emergencyStop')}</span>
+          <span style={{color: "var(--lime)"}}>{running ? t('quickControls.pauseLabel') : t('quickControls.startLabel')}</span>
+          <span>{t('quickControls.returnLabel')}</span>
         </div>
       </div>
     </GlassCard>
@@ -247,6 +250,7 @@ function SecondaryActionBig({
 }
 
 function JoystickPadCard() {
+  const {t} = useTranslation();
   return (
     <GlassCard padding={22}>
       <div style={{
@@ -258,12 +262,12 @@ function JoystickPadCard() {
           letterSpacing: "0.08em", textTransform: "uppercase",
           fontWeight: 700,
         }}>
-          Pilotage manuel
+          {t('quickControls.manualControl')}
         </div>
         <span style={{
           fontSize: 11, color: "var(--ink-3)",
         }}>
-          Maintenir pour déplacer
+          {t('quickControls.holdToMove')}
         </span>
       </div>
 
@@ -321,6 +325,7 @@ function DirectionalArrow({dir}: {dir: "up" | "down" | "left" | "right"}) {
 }
 
 function BladeControlCard({blade, onToggle}: {blade: boolean; onToggle: () => void}) {
+  const {t} = useTranslation();
   return (
     <GlassCard padding={20}>
       <div style={{
@@ -342,10 +347,10 @@ function BladeControlCard({blade, onToggle}: {blade: boolean; onToggle: () => vo
           </div>
           <div>
             <div className="display" style={{fontSize: 18, fontWeight: 700, color: "var(--ink)"}}>
-              Lame {blade ? "en marche" : "à l'arrêt"}
+              {blade ? t('quickControls.bladeRunning') : t('quickControls.bladeStopped')}
             </div>
             <div style={{fontSize: 12, color: "var(--ink-3)", marginTop: 2}}>
-              {blade ? "2580 tr/min · 0.4 A" : "Coupée pour la sécurité"}
+              {blade ? "2580 tr/min · 0.4 A" : t('quickControls.bladeCutForSafety')}
             </div>
           </div>
         </div>

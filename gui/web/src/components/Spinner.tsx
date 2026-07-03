@@ -1,5 +1,17 @@
 import {Spin} from "antd";
 
 export function Spinner() {
-    return <Spin size={"large"} style={{position: "relative", left: "50%", top: "50%"}}/>;
+    return (
+        <div style={{
+            position: "fixed",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "var(--bg-deep)",
+            zIndex: 10,
+        }}>
+            <Spin size={"large"}/>
+        </div>
+    );
 }

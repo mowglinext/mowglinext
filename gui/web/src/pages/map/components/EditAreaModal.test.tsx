@@ -3,6 +3,8 @@ import {render, screen} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {EditAreaModal} from './EditAreaModal.tsx';
 import {MowingAreaEdit} from '../utils/types.ts';
+import i18n from "../../../i18n";
+import en from "../../../i18n/locales/en.json";
 
 describe('EditAreaModal', () => {
     const area = new MowingAreaEdit();
@@ -21,13 +23,13 @@ describe('EditAreaModal', () => {
 
     it('renders with area name in title', () => {
         render(<EditAreaModal {...defaultProps} />);
-        expect(screen.getByText('Edit "Garden"')).toBeInTheDocument();
+        expect(screen.getByText(i18n.t('mapEditArea.titleEditNamed', {name: 'Garden'}))).toBeInTheDocument();
     });
 
     it('shows generic title when no name', () => {
         const noNameArea = new MowingAreaEdit();
         render(<EditAreaModal {...defaultProps} area={noNameArea} />);
-        expect(screen.getByText('Edit area')).toBeInTheDocument();
+        expect(screen.getByText(en.mapEditArea.titleEdit)).toBeInTheDocument();
     });
 
     it('renders with area name in input for workarea', () => {
@@ -42,7 +44,7 @@ describe('EditAreaModal', () => {
 
     it('shows area type selector', () => {
         render(<EditAreaModal {...defaultProps} />);
-        expect(screen.getByText('Mowing Area')).toBeInTheDocument();
+        expect(screen.getByText(en.mapEditArea.areaTypeMowing)).toBeInTheDocument();
     });
 
     it('hides name and mowing order for navigation type', () => {
@@ -50,27 +52,27 @@ describe('EditAreaModal', () => {
         navArea.feature_type = 'navigation';
         render(<EditAreaModal {...defaultProps} area={navArea} />);
         expect(screen.queryByDisplayValue('Garden')).not.toBeInTheDocument();
-        expect(screen.queryByText('Mowing order')).not.toBeInTheDocument();
+        expect(screen.queryByText(en.mapEditArea.mowingOrder)).not.toBeInTheDocument();
     });
 
     it('hides name and mowing order for obstacle type', () => {
         const obstArea = new MowingAreaEdit();
         obstArea.feature_type = 'obstacle';
         render(<EditAreaModal {...defaultProps} area={obstArea} />);
-        expect(screen.queryByText('Area name')).not.toBeInTheDocument();
-        expect(screen.queryByText('Mowing order')).not.toBeInTheDocument();
+        expect(screen.queryByText(en.mapEditArea.areaName)).not.toBeInTheDocument();
+        expect(screen.queryByText(en.mapEditArea.mowingOrder)).not.toBeInTheDocument();
     });
 
     it('does not render when closed', () => {
         render(<EditAreaModal {...defaultProps} open={false} />);
-        expect(screen.queryByText('Edit "Garden"')).not.toBeInTheDocument();
+        expect(screen.queryByText(i18n.t('mapEditArea.titleEditNamed', {name: 'Garden'}))).not.toBeInTheDocument();
     });
 
     it('calls onSave when Save clicked', async () => {
         const onSave = vi.fn();
         const user = userEvent.setup();
         render(<EditAreaModal {...defaultProps} onSave={onSave} />);
-        await user.click(screen.getByText('Save'));
+        await user.click(screen.getByText(en.mapEditArea.save));
         expect(onSave).toHaveBeenCalled();
     });
 
@@ -78,7 +80,7 @@ describe('EditAreaModal', () => {
         const onCancel = vi.fn();
         const user = userEvent.setup();
         render(<EditAreaModal {...defaultProps} onCancel={onCancel} />);
-        await user.click(screen.getByText('Cancel'));
+        await user.click(screen.getByText(en.mapEditArea.cancel));
         expect(onCancel).toHaveBeenCalled();
     });
 

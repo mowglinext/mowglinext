@@ -2,7 +2,7 @@
 package visualization
 
 import (
-	"github.com/cedbossneo/mowglinext/pkg/msgs/geometry"
+	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 )
 
 // Duration matches builtin_interfaces/msg/Duration.

@@ -1,11 +1,12 @@
 import React, {useMemo} from "react";
-import {Alert, Card, Col, Row, Space, Switch, Tag, Typography} from "antd";
+import {Alert, Card, Col, Form, InputNumber, Row, Space, Switch, Tag, Typography} from "antd";
 import {
     CompassOutlined,
     NodeIndexOutlined,
     RadarChartOutlined,
     SafetyCertificateOutlined,
 } from "@ant-design/icons";
+import {useTranslation} from "react-i18next";
 import {useThemeMode} from "../../theme/ThemeContext.tsx";
 import {useDiagnostics} from "../../hooks/useDiagnostics.ts";
 
@@ -32,32 +33,23 @@ type Toggle = {
 const LIDAR_FACTOR_TOGGLES: Toggle[] = [
     {
         key: "use_scan_matching",
-        title: "LiDAR scan matching",
-        summary: "Add ICP between-factors from /scan to the graph.",
-        detail:
-            "Each new graph node runs ICP against the previous scan and adds a " +
-            "BetweenFactor with the relative motion. Fights GPS dropouts but " +
-            "costs ~5 ms/tick at 10 Hz.",
+        title: "settingsLocalization.scanMatchingTitle",
+        summary: "settingsLocalization.scanMatchingSummary",
+        detail: "settingsLocalization.scanMatchingDetail",
     },
     {
         key: "use_loop_closure",
-        title: "Loop closure",
-        summary: "Search past scans for revisits and add LC factors.",
-        detail:
-            "Triggers a candidate search around each new node (5 m radius, " +
-            "10 min minimum age). Successful loop closures pull drift back to " +
-            "the originally-mapped pose, even mid-session.",
+        title: "settingsLocalization.loopClosureTitle",
+        summary: "settingsLocalization.loopClosureSummary",
+        detail: "settingsLocalization.loopClosureDetail",
     },
 ];
 
 const MAGNETOMETER_TOGGLE: Toggle = {
     key: "use_magnetometer",
-    title: "Magnetometer yaw",
-    summary: "Fuse tilt-compensated mag yaw as a yaw unary factor.",
-    detail:
-        "Off by default — motor-induced bias makes the magnetometer " +
-        "unreliable on most chassis. Enable only after running mag " +
-        "calibration with motors-off and validating a stable |B|.",
+    title: "settingsLocalization.magYawTitle",
+    summary: "settingsLocalization.magYawSummary",
+    detail: "settingsLocalization.magYawDetail",
 };
 
 interface LidarDiag {
@@ -84,17 +76,18 @@ function pickLidarDiagnostic(diagnostics: { status?: { name?: string; level?: nu
 }
 
 function lidarBadge(diag: LidarDiag | null, lidarEnabled: boolean): {label: string; color: string} {
-    if (!lidarEnabled) return {label: "Disabled in settings", color: "default"};
-    if (!diag) return {label: "No driver detected", color: "warning"};
+    if (!lidarEnabled) return {label: "settingsLocalization.badgeDisabled", color: "default"};
+    if (!diag) return {label: "settingsLocalization.badgeNoDriver", color: "warning"};
     switch (diag.level) {
-        case 0: return {label: "Live", color: "success"};
-        case 1: return {label: "Warn", color: "warning"};
-        case 2: return {label: "Error", color: "error"};
-        default: return {label: "Stale", color: "default"};
+        case 0: return {label: "settingsLocalization.badgeLive", color: "success"};
+        case 1: return {label: "settingsLocalization.badgeWarn", color: "warning"};
+        case 2: return {label: "settingsLocalization.badgeError", color: "error"};
+        default: return {label: "settingsLocalization.badgeStale", color: "default"};
     }
 }
 
 export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
+    const {t} = useTranslation();
     const {colors} = useThemeMode();
     const lidarEnabled = asBool(values.use_lidar ?? values.lidar_enabled ?? true);
     const {diagnostics} = useDiagnostics();
@@ -107,18 +100,17 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                 type="info"
                 showIcon
                 style={{marginBottom: 16}}
-                message="Map-frame localizer"
+                message={t("settingsLocalization.mapFrameLocalizerTitle")}
                 description={
                     <span>
-                        The GTSAM iSAM2 factor graph (<Text code>fusion_graph_node</Text>) is the
-                        sole map-frame fuser — wheel + IMU + GPS + COG yaw, plus the optional
-                        LiDAR factors below. It also publishes the local <Text code>odom→base_footprint</Text>{" "}
-                        TF, so there is no separate <Text code>ekf_odom_node</Text> to configure.{" "}
+                        {t("settingsLocalization.mapFrameLocalizerIntro")} (<Text code>fusion_graph_node</Text>){t("settingsLocalization.mapFrameLocalizerMid")}{" "}
+                        <Text code>odom→base_footprint</Text>{" "}
+                        {t("settingsLocalization.mapFrameLocalizerTfPrefix")} <Text code>ekf_odom_node</Text> {t("settingsLocalization.mapFrameLocalizerTfSuffix")}{" "}
                         <Link
-                            href="https://github.com/cedbossneo/mowglinext/wiki/Architecture#optional-factor-graph-localizer-fusion_graph"
+                            href="https://github.com/mowglinext/mowglinext/wiki/Architecture#optional-factor-graph-localizer-fusion_graph"
                             target="_blank"
                         >
-                            Read the architecture notes →
+                            {t("settingsLocalization.readArchitectureNotes")}
                         </Link>
                     </span>
                 }
@@ -131,24 +123,21 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                 title={
                     <Space>
                         <SafetyCertificateOutlined style={{color: colors.accent}}/>
-                        <span>LiDAR — obstacle avoidance</span>
-                        <Tag color={badge.color}>{badge.label}</Tag>
+                        <span>{t("settingsLocalization.lidarObstacleTitle")}</span>
+                        <Tag color={badge.color}>{t(badge.label)}</Tag>
                     </Space>
                 }
             >
                 <Paragraph type="secondary" style={{marginTop: 0, marginBottom: 8}}>
-                    Always on (when the LiDAR driver is running). The Nav2 costmap
-                    obstacle layer and <Text code>collision_monitor</Text> consume{" "}
-                    <Text code>/scan</Text> directly to stop the robot before it hits
-                    something — this is independent of the factor-graph LiDAR
-                    options below.
+                    {t("settingsLocalization.lidarObstacleIntro")} <Text code>collision_monitor</Text> {t("settingsLocalization.lidarObstacleConsume")}{" "}
+                    <Text code>/scan</Text> {t("settingsLocalization.lidarObstacleOutro")}
                 </Paragraph>
                 <Paragraph type="secondary" style={{marginTop: 0, marginBottom: 0, fontSize: 11}}>
-                    Toggle the LiDAR driver itself in <Text strong>Sensors → use_lidar</Text>.
+                    {t("settingsLocalization.lidarTogglePrefix")} <Text strong>Sensors → use_lidar</Text>.
                     {lidarDiag?.message ? (
                         <>
                             {" "}
-                            Latest diagnostic: <Text code>{lidarDiag.message}</Text>
+                            {t("settingsLocalization.latestDiagnostic")} <Text code>{lidarDiag.message}</Text>
                         </>
                     ) : null}
                 </Paragraph>
@@ -161,21 +150,19 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                 title={
                     <Space>
                         <RadarChartOutlined style={{color: colors.accent}}/>
-                        <span>LiDAR — localization (factor graph)</span>
+                        <span>{t("settingsLocalization.lidarLocalizationTitle")}</span>
                     </Space>
                 }
             >
                 <Paragraph type="secondary" style={{marginTop: 0, marginBottom: 12}}>
-                    Optional. When enabled, <Text code>fusion_graph_node</Text> consumes{" "}
-                    <Text code>/scan</Text> as scan-matching between-factors and
-                    loop-closure factors so the map-frame pose can ride through
-                    multi-minute RTK-Float windows.
+                    {t("settingsLocalization.lidarLocalizationIntro")} <Text code>fusion_graph_node</Text> {t("settingsLocalization.lidarLocalizationConsumes")}{" "}
+                    <Text code>/scan</Text> {t("settingsLocalization.lidarLocalizationOutro")}
                 </Paragraph>
-                {LIDAR_FACTOR_TOGGLES.map((t) => {
-                    const enabled = asBool(values[t.key]);
+                {LIDAR_FACTOR_TOGGLES.map((toggle) => {
+                    const enabled = asBool(values[toggle.key]);
                     return (
                         <Card
-                            key={t.key}
+                            key={toggle.key}
                             size="small"
                             style={{marginBottom: 8}}
                             styles={{body: {padding: "10px 12px"}}}
@@ -185,20 +172,20 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                                     <Space>
                                         <Text strong style={{fontSize: 14}}>
                                             <NodeIndexOutlined style={{marginRight: 6, color: colors.accent}}/>
-                                            {t.title}
+                                            {t(toggle.title)}
                                         </Text>
                                     </Space>
                                     <Paragraph style={{margin: "4px 0 0", fontSize: 12}}>
-                                        {t.summary}
+                                        {t(toggle.summary)}
                                     </Paragraph>
                                     <Paragraph type="secondary" style={{margin: "4px 0 0", fontSize: 11}}>
-                                        {t.detail}
+                                        {t(toggle.detail)}
                                     </Paragraph>
                                 </Col>
                                 <Col flex="none">
                                     <Switch
                                         checked={enabled}
-                                        onChange={(v) => onChange(t.key, v)}
+                                        onChange={(v) => onChange(toggle.key, v)}
                                     />
                                 </Col>
                             </Row>
@@ -213,7 +200,7 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                 title={
                     <Space>
                         <CompassOutlined style={{color: colors.accent}}/>
-                        <span>Yaw sources</span>
+                        <span>{t("settingsLocalization.yawSourcesTitle")}</span>
                     </Space>
                 }
             >
@@ -226,13 +213,13 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                         <Col flex="auto">
                             <Text strong style={{fontSize: 14}}>
                                 <CompassOutlined style={{marginRight: 6, color: colors.accent}}/>
-                                {MAGNETOMETER_TOGGLE.title}
+                                {t(MAGNETOMETER_TOGGLE.title)}
                             </Text>
                             <Paragraph style={{margin: "4px 0 0", fontSize: 12}}>
-                                {MAGNETOMETER_TOGGLE.summary}
+                                {t(MAGNETOMETER_TOGGLE.summary)}
                             </Paragraph>
                             <Paragraph type="secondary" style={{margin: "4px 0 0", fontSize: 11}}>
-                                {MAGNETOMETER_TOGGLE.detail}
+                                {t(MAGNETOMETER_TOGGLE.detail)}
                             </Paragraph>
                         </Col>
                         <Col flex="none">
@@ -243,6 +230,72 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                         </Col>
                     </Row>
                 </Card>
+            </Card>
+
+            {/* ── Group D: Magnetometer calibration & tuning ──────────────── */}
+            <Card
+                size="small"
+                style={{marginTop: 16}}
+                title={
+                    <Space>
+                        <CompassOutlined style={{color: colors.accent}}/>
+                        <span>{t("settingsLocalization.magCalibrationTitle")}</span>
+                    </Space>
+                }
+            >
+                <Paragraph type="secondary" style={{marginTop: 0, marginBottom: 12, fontSize: 12}}>
+                    {t("settingsLocalization.magCalibrationIntroPrefix")} <Text strong>{t("settingsLocalization.magYawInline")}</Text> {t("settingsLocalization.magCalibrationIntroSuffix")}
+                </Paragraph>
+                <Card size="small" style={{marginBottom: 12}} styles={{body: {padding: "10px 12px"}}}>
+                    <Row align="middle" gutter={[16, 8]} wrap={false}>
+                        <Col flex="auto">
+                            <Text strong style={{fontSize: 14}}>{t("settingsLocalization.collectCalibrationSamples")}</Text>
+                            <Paragraph type="secondary" style={{margin: "4px 0 0", fontSize: 11}}>
+                                {t("settingsLocalization.collectCalibrationDescription")}
+                            </Paragraph>
+                        </Col>
+                        <Col flex="none">
+                            <Switch
+                                checked={asBool(values.enable_mag_cal)}
+                                onChange={(v) => onChange("enable_mag_cal", v)}
+                            />
+                        </Col>
+                    </Row>
+                </Card>
+                <Form layout="vertical" size="small">
+                    <Row gutter={[16, 0]}>
+                        <Col xs={24} sm={8}>
+                            <Form.Item label={t("settingsLocalization.magneticDeclinationLabel")} tooltip={t("settingsLocalization.magneticDeclinationTooltip")}>
+                                <InputNumber
+                                    value={values.declination_deg}
+                                    onChange={(v) => onChange("declination_deg", v)}
+                                    min={-30} max={30} step={0.1} precision={2}
+                                    style={{width: "100%"}} addonAfter="°"
+                                />
+                            </Form.Item>
+                        </Col>
+                        <Col xs={24} sm={8}>
+                            <Form.Item label={t("settingsLocalization.minHorizontalFieldLabel")} tooltip={t("settingsLocalization.minHorizontalFieldTooltip")}>
+                                <InputNumber
+                                    value={values.min_horizontal_uT}
+                                    onChange={(v) => onChange("min_horizontal_uT", v)}
+                                    min={0} max={100} step={1} precision={1}
+                                    style={{width: "100%"}} addonAfter="µT"
+                                />
+                            </Form.Item>
+                        </Col>
+                        <Col xs={24} sm={8}>
+                            <Form.Item label={t("settingsLocalization.magYawVarianceLabel")} tooltip={t("settingsLocalization.magYawVarianceTooltip")}>
+                                <InputNumber
+                                    value={values.mag_yaw_variance}
+                                    onChange={(v) => onChange("mag_yaw_variance", v)}
+                                    min={0.0001} max={1} step={0.0001} precision={4}
+                                    style={{width: "100%"}} addonAfter="rad²"
+                                />
+                            </Form.Item>
+                        </Col>
+                    </Row>
+                </Form>
             </Card>
         </div>
     );

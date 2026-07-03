@@ -1,4 +1,5 @@
 import {motion} from "framer-motion";
+import {useTranslation} from "react-i18next";
 import {TrendingUp, Flame, Sparkles, Award, Activity} from "lucide-react";
 
 import {GlassCard} from "../components/GlassCard";
@@ -13,6 +14,7 @@ import {useViewport} from "../useViewport";
  */
 
 export function Statistics() {
+  const {t} = useTranslation();
   const vp = useViewport();
 
   return (
@@ -42,13 +44,13 @@ export function Statistics() {
             fontSize: 11, color: "var(--ink-3)",
             letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 700,
           }}>
-            Statistiques
+            {t('conceptStatistics.title')}
           </div>
           <h1 className="display" style={{
             fontSize: vp.isAtLeastTablet ? 36 : 28, marginTop: 4,
             fontWeight: 700, letterSpacing: "-0.025em", lineHeight: 1.1,
           }}>
-            <em style={{fontStyle: "italic", color: "var(--lime)"}}>12 semaines</em> d'affilée. Belle saison.
+            <em style={{fontStyle: "italic", color: "var(--lime)"}}>{t('conceptStatistics.headlineWeeks')}</em> {t('conceptStatistics.headlineRest')}
           </h1>
         </motion.header>
 
@@ -59,14 +61,14 @@ export function Statistics() {
           gap: 12,
           marginBottom: 22,
         }}>
-          <HeroStat label="Surface tondue" value="184.3" unit="km²" accent="lime"
-                    delta="+12 % vs mois dernier" icon={<TrendingUp size={14}/>}/>
-          <HeroStat label="Sessions" value="263" unit="" accent="cyan"
-                    delta="61 cette semaine"     icon={<Activity size={14}/>}/>
-          <HeroStat label="Streak" value="12" unit="sem." accent="amber"
-                    delta="meilleur record !"   icon={<Flame size={14}/>}/>
-          <HeroStat label="Économie" value="46" unit="h" accent="rose"
-                    delta="≈ 920 € épargnés"     icon={<Award size={14}/>}/>
+          <HeroStat label={t('conceptStatistics.heroAreaLabel')} value="184.3" unit="km²" accent="lime"
+                    delta={t('conceptStatistics.heroAreaDelta')} icon={<TrendingUp size={14}/>}/>
+          <HeroStat label={t('conceptStatistics.heroSessionsLabel')} value="263" unit="" accent="cyan"
+                    delta={t('conceptStatistics.heroSessionsDelta')}     icon={<Activity size={14}/>}/>
+          <HeroStat label={t('conceptStatistics.heroStreakLabel')} value="12" unit={t('conceptStatistics.heroStreakUnit')} accent="amber"
+                    delta={t('conceptStatistics.heroStreakDelta')}   icon={<Flame size={14}/>}/>
+          <HeroStat label={t('conceptStatistics.heroSavingsLabel')} value="46" unit="h" accent="rose"
+                    delta={t('conceptStatistics.heroSavingsDelta')}     icon={<Award size={14}/>}/>
         </motion.div>
 
         {/* Year of lawn heatmap */}
@@ -87,7 +89,7 @@ export function Statistics() {
                   fontSize: vp.isAtLeastTablet ? 24 : 18, fontWeight: 700, marginTop: 4,
                   letterSpacing: "-0.02em",
                 }}>
-                  186 jours actifs · 184.3 km de tonte cumulée
+                  {t('conceptStatistics.heatmapSubtitle')}
                 </div>
               </div>
               <Legend/>
@@ -112,7 +114,7 @@ export function Statistics() {
                   fontSize: 11, color: "var(--ink-2)",
                   letterSpacing: "0.08em", textTransform: "uppercase", fontWeight: 700,
                 }}>
-                  Distance par semaine
+                  {t('conceptStatistics.distancePerWeek')}
                 </span>
               </div>
               <WeeklyBars/>
@@ -126,15 +128,15 @@ export function Statistics() {
                 letterSpacing: "0.08em", textTransform: "uppercase",
                 fontWeight: 700, marginBottom: 14,
               }}>
-                Sessions récentes
+                {t('conceptStatistics.recentSessions')}
               </div>
               <div style={{display: "flex", flexDirection: "column", gap: 6}}>
-                <SessionRow date="Aujourd'hui · 14:30" zone="Jardin sud"     duration="1h 47min" status="ongoing"/>
-                <SessionRow date="Hier · 18:12"        zone="Pelouse devant" duration="35min" status="ok"/>
-                <SessionRow date="Hier · 07:30"        zone="Jardin nord"    duration="52min" status="ok"/>
-                <SessionRow date="29 mai · 19:00"      zone="Allée latérale" duration="14min" status="ok"/>
-                <SessionRow date="29 mai · 07:00"      zone="Jardin sud"     duration="2h 04min" status="ok"/>
-                <SessionRow date="27 mai · 09:00"      zone="Jardin nord"    duration="48min" status="rain"/>
+                <SessionRow date={t('conceptStatistics.session1Date')} zone={t('conceptStatistics.zoneSouthGarden')}     duration="1h 47min" status="ongoing"/>
+                <SessionRow date={t('conceptStatistics.session2Date')}        zone={t('conceptStatistics.zoneFrontLawn')} duration="35min" status="ok"/>
+                <SessionRow date={t('conceptStatistics.session3Date')}        zone={t('conceptStatistics.zoneNorthGarden')}    duration="52min" status="ok"/>
+                <SessionRow date={t('conceptStatistics.session4Date')}      zone={t('conceptStatistics.zoneSidePath')} duration="14min" status="ok"/>
+                <SessionRow date={t('conceptStatistics.session5Date')}      zone={t('conceptStatistics.zoneSouthGarden')}     duration="2h 04min" status="ok"/>
+                <SessionRow date={t('conceptStatistics.session6Date')}      zone={t('conceptStatistics.zoneNorthGarden')}    duration="48min" status="rain"/>
               </div>
             </GlassCard>
           </motion.div>
@@ -209,7 +211,13 @@ function HeroStat({
 
 const HEATMAP_WEEKS = 52;
 const HEATMAP_DAYS = 7;
-const MONTHS = ["jui.", "juil.", "août", "sept.", "oct.", "nov.", "déc.", "janv.", "fév.", "mars", "avr.", "mai"];
+const MONTH_KEYS = [
+  "conceptStatistics.monthJun", "conceptStatistics.monthJul", "conceptStatistics.monthAug",
+  "conceptStatistics.monthSep", "conceptStatistics.monthOct", "conceptStatistics.monthNov",
+  "conceptStatistics.monthDec", "conceptStatistics.monthJan", "conceptStatistics.monthFeb",
+  "conceptStatistics.monthMar", "conceptStatistics.monthApr", "conceptStatistics.monthMay",
+];
+const DAY_KEYS = ["conceptStatistics.dayMon", "conceptStatistics.dayWed", "conceptStatistics.dayFri"];
 
 function pseudoIntensity(week: number, day: number): number {
   // deterministic noise that varies by week + day, biases mowing days
@@ -219,6 +227,7 @@ function pseudoIntensity(week: number, day: number): number {
 }
 
 function YearHeatmap() {
+  const {t} = useTranslation();
   const cellSize = 12;
   const gap = 3;
   const colors = [
@@ -235,25 +244,25 @@ function YearHeatmap() {
     <div style={{overflowX: "auto"}} className="scrollbar-thin">
       <svg width={totalWidth + 30} height={totalHeight} style={{display: "block"}}>
         {/* month labels */}
-        {MONTHS.map((m, i) => (
+        {MONTH_KEYS.map((m, i) => (
           <text key={m}
-            x={Math.round((i / MONTHS.length) * totalWidth) + 30}
+            x={Math.round((i / MONTH_KEYS.length) * totalWidth) + 30}
             y={10}
             fontSize={9}
             fill="rgba(236,255,244,0.45)"
             fontFamily="var(--font-body)">
-            {m}
+            {t(m)}
           </text>
         ))}
         {/* day labels */}
-        {["Lun", "Mer", "Ven"].map((d, i) => (
+        {DAY_KEYS.map((d, i) => (
           <text key={d}
             x={0}
             y={22 + (i * 2 + 1) * (cellSize + gap)}
             fontSize={9}
             fill="rgba(236,255,244,0.45)"
             fontFamily="var(--font-body)">
-            {d}
+            {t(d)}
           </text>
         ))}
         {/* cells */}
@@ -285,6 +294,7 @@ function YearHeatmap() {
 }
 
 function Legend() {
+  const {t} = useTranslation();
   const colors = [
     "rgba(255,255,255,0.04)",
     "rgba(124,255,178,0.20)",
@@ -297,13 +307,13 @@ function Legend() {
       display: "inline-flex", alignItems: "center", gap: 6,
       fontSize: 10, color: "var(--ink-3)",
     }}>
-      <span>Moins</span>
+      <span>{t('conceptStatistics.legendLess')}</span>
       {colors.map((c, i) => (
         <span key={i} style={{
           width: 10, height: 10, borderRadius: 2, background: c,
         }}/>
       ))}
-      <span>Plus</span>
+      <span>{t('conceptStatistics.legendMore')}</span>
     </div>
   );
 }

@@ -12,51 +12,54 @@ export const MONO_FONT = "'Space Grotesk', 'JetBrains Mono', ui-monospace, monos
 //   warning  = non-fatal anomaly that still needs operator awareness
 //   success  = terminal success (completion, charging-done banners)
 //   danger   = emergency / blocking failure
+// `label`/`friendly` hold i18n key strings (under the `mowerStates` namespace),
+// resolved at render time via `t(...)` — see StatePill.tsx. `tone` stays inline
+// because it drives the palette, not copy.
 export const MOWER_STATES: Record<string, { label: string; tone: 'info' | 'primary' | 'warning' | 'success' | 'danger'; friendly: string }> = {
   // Idle / docked family
-  IDLE_DOCKED:                { label: 'Docked',             tone: 'info',    friendly: 'Resting on dock' },
-  IDLE:                       { label: 'Idle',               tone: 'info',    friendly: 'Ready when you are' },
-  CHARGING:                   { label: 'Charging',           tone: 'success', friendly: 'Topping up the battery' },
+  IDLE_DOCKED:                { label: 'mowerStates.IDLE_DOCKED.label',                 tone: 'info',    friendly: 'mowerStates.IDLE_DOCKED.friendly' },
+  IDLE:                       { label: 'mowerStates.IDLE.label',                        tone: 'info',    friendly: 'mowerStates.IDLE.friendly' },
+  CHARGING:                   { label: 'mowerStates.CHARGING.label',                    tone: 'success', friendly: 'mowerStates.CHARGING.friendly' },
 
   // Autonomous mowing cycle
-  PREFLIGHT_CHECK:            { label: 'Preflight Check',    tone: 'info',    friendly: 'Running preflight checks' },
-  UNDOCKING:                  { label: 'Undocking',          tone: 'primary', friendly: 'Leaving the dock' },
-  CALIBRATING_HEADING:        { label: 'Calibrating Heading',tone: 'info',    friendly: 'Calibrating heading' },
-  MOWING:                     { label: 'Mowing',             tone: 'primary', friendly: 'Mowing the lawn' },
-  TRANSIT:                    { label: 'Transit',            tone: 'primary', friendly: 'Moving to next strip' },
-  SKIP_STRIP:                 { label: 'Skipping Strip',     tone: 'info',    friendly: 'Skipping unreachable strip' },
-  RETURNING_HOME:             { label: 'Returning',          tone: 'primary', friendly: 'Heading back to dock' },
-  MOWING_COMPLETE:            { label: 'Mowing Complete',    tone: 'success', friendly: 'All areas mowed' },
+  PREFLIGHT_CHECK:            { label: 'mowerStates.PREFLIGHT_CHECK.label',             tone: 'info',    friendly: 'mowerStates.PREFLIGHT_CHECK.friendly' },
+  UNDOCKING:                  { label: 'mowerStates.UNDOCKING.label',                   tone: 'primary', friendly: 'mowerStates.UNDOCKING.friendly' },
+  CALIBRATING_HEADING:        { label: 'mowerStates.CALIBRATING_HEADING.label',         tone: 'info',    friendly: 'mowerStates.CALIBRATING_HEADING.friendly' },
+  MOWING:                     { label: 'mowerStates.MOWING.label',                      tone: 'primary', friendly: 'mowerStates.MOWING.friendly' },
+  TRANSIT:                    { label: 'mowerStates.TRANSIT.label',                     tone: 'primary', friendly: 'mowerStates.TRANSIT.friendly' },
+  SKIP_STRIP:                 { label: 'mowerStates.SKIP_STRIP.label',                  tone: 'info',    friendly: 'mowerStates.SKIP_STRIP.friendly' },
+  RETURNING_HOME:             { label: 'mowerStates.RETURNING_HOME.label',              tone: 'primary', friendly: 'mowerStates.RETURNING_HOME.friendly' },
+  MOWING_COMPLETE:            { label: 'mowerStates.MOWING_COMPLETE.label',             tone: 'success', friendly: 'mowerStates.MOWING_COMPLETE.friendly' },
 
   // Recording
-  RECORDING:                  { label: 'Recording',          tone: 'primary', friendly: 'Recording area boundary' },
-  RECORDING_COMPLETE:         { label: 'Recording Saved',    tone: 'success', friendly: 'Area boundary saved' },
+  RECORDING:                  { label: 'mowerStates.RECORDING.label',                   tone: 'primary', friendly: 'mowerStates.RECORDING.friendly' },
+  RECORDING_COMPLETE:         { label: 'mowerStates.RECORDING_COMPLETE.label',          tone: 'success', friendly: 'mowerStates.RECORDING_COMPLETE.friendly' },
 
   // Manual
-  MANUAL_MOWING:              { label: 'Manual Mowing',      tone: 'primary', friendly: 'Manual mowing mode' },
+  MANUAL_MOWING:              { label: 'mowerStates.MANUAL_MOWING.label',               tone: 'primary', friendly: 'mowerStates.MANUAL_MOWING.friendly' },
 
   // Battery
-  LOW_BATTERY_DOCKING:        { label: 'Low Battery',        tone: 'warning', friendly: 'Low battery — heading to dock' },
-  CRITICAL_BATTERY_DOCKING:   { label: 'Critical Battery',   tone: 'warning', friendly: 'Critical battery — heading to dock' },
-  CRITICAL_BATTERY_NAV_FAILED:{ label: 'Battery Nav Failed', tone: 'danger',  friendly: 'Critical battery and cannot navigate home' },
+  LOW_BATTERY_DOCKING:        { label: 'mowerStates.LOW_BATTERY_DOCKING.label',         tone: 'warning', friendly: 'mowerStates.LOW_BATTERY_DOCKING.friendly' },
+  CRITICAL_BATTERY_DOCKING:   { label: 'mowerStates.CRITICAL_BATTERY_DOCKING.label',    tone: 'warning', friendly: 'mowerStates.CRITICAL_BATTERY_DOCKING.friendly' },
+  CRITICAL_BATTERY_NAV_FAILED:{ label: 'mowerStates.CRITICAL_BATTERY_NAV_FAILED.label', tone: 'danger',  friendly: 'mowerStates.CRITICAL_BATTERY_NAV_FAILED.friendly' },
 
   // Rain
-  RAIN_DETECTED_DOCKING:      { label: 'Rain Detected',      tone: 'warning', friendly: 'Rain detected — heading to dock' },
-  RAIN_WAITING:               { label: 'Waiting for Dry',    tone: 'warning', friendly: 'Waiting for the rain to stop' },
-  RAIN_TIMEOUT:               { label: 'Rain Timeout',       tone: 'warning', friendly: 'Gave up waiting for dry weather' },
-  RESUMING_AFTER_RAIN:        { label: 'Resuming',           tone: 'primary', friendly: 'Resuming after rain delay' },
+  RAIN_DETECTED_DOCKING:      { label: 'mowerStates.RAIN_DETECTED_DOCKING.label',       tone: 'warning', friendly: 'mowerStates.RAIN_DETECTED_DOCKING.friendly' },
+  RAIN_WAITING:               { label: 'mowerStates.RAIN_WAITING.label',                tone: 'warning', friendly: 'mowerStates.RAIN_WAITING.friendly' },
+  RAIN_TIMEOUT:               { label: 'mowerStates.RAIN_TIMEOUT.label',                tone: 'warning', friendly: 'mowerStates.RAIN_TIMEOUT.friendly' },
+  RESUMING_AFTER_RAIN:        { label: 'mowerStates.RESUMING_AFTER_RAIN.label',         tone: 'primary', friendly: 'mowerStates.RESUMING_AFTER_RAIN.friendly' },
 
   // Recovery / transitions
-  RESUMING_UNDOCKING:         { label: 'Resuming Undock',    tone: 'primary', friendly: 'Leaving the dock to resume' },
-  BOUNDARY_RECOVERY:          { label: 'Boundary Recovery',  tone: 'warning', friendly: 'Recovering after boundary event' },
+  RESUMING_UNDOCKING:         { label: 'mowerStates.RESUMING_UNDOCKING.label',          tone: 'primary', friendly: 'mowerStates.RESUMING_UNDOCKING.friendly' },
+  BOUNDARY_RECOVERY:          { label: 'mowerStates.BOUNDARY_RECOVERY.label',           tone: 'warning', friendly: 'mowerStates.BOUNDARY_RECOVERY.friendly' },
 
   // Failures / emergencies
-  EMERGENCY:                  { label: 'Emergency Stop',     tone: 'danger',  friendly: 'Emergency stop engaged' },
-  BOUNDARY_EMERGENCY_STOP:    { label: 'Boundary Alert',     tone: 'danger',  friendly: 'Stopped — outside boundary' },
-  UNDOCK_FAILED:              { label: 'Undock Failed',      tone: 'warning', friendly: 'Undock failed — check dock' },
-  CHARGER_FAILED:             { label: 'Charger Failed',     tone: 'warning', friendly: 'Charger not detected' },
-  NAV_TO_DOCK_FAILED:         { label: 'Nav to Dock Failed', tone: 'danger',  friendly: 'Could not navigate to dock' },
-  COVERAGE_FAILED_DOCKING:    { label: 'Coverage Failed',    tone: 'warning', friendly: 'Coverage failed — returning to dock' },
+  EMERGENCY:                  { label: 'mowerStates.EMERGENCY.label',                   tone: 'danger',  friendly: 'mowerStates.EMERGENCY.friendly' },
+  BOUNDARY_EMERGENCY_STOP:    { label: 'mowerStates.BOUNDARY_EMERGENCY_STOP.label',     tone: 'danger',  friendly: 'mowerStates.BOUNDARY_EMERGENCY_STOP.friendly' },
+  UNDOCK_FAILED:              { label: 'mowerStates.UNDOCK_FAILED.label',               tone: 'warning', friendly: 'mowerStates.UNDOCK_FAILED.friendly' },
+  CHARGER_FAILED:             { label: 'mowerStates.CHARGER_FAILED.label',              tone: 'warning', friendly: 'mowerStates.CHARGER_FAILED.friendly' },
+  NAV_TO_DOCK_FAILED:         { label: 'mowerStates.NAV_TO_DOCK_FAILED.label',          tone: 'danger',  friendly: 'mowerStates.NAV_TO_DOCK_FAILED.friendly' },
+  COVERAGE_FAILED_DOCKING:    { label: 'mowerStates.COVERAGE_FAILED_DOCKING.label',     tone: 'warning', friendly: 'mowerStates.COVERAGE_FAILED_DOCKING.friendly' },
 };
 
 export const fmt = {
@@ -103,12 +106,52 @@ export const KEYFRAMES_CSS = `
   position: absolute; inset: 0;
   padding: 1px;
   border-radius: inherit;
-  background: linear-gradient(140deg, rgba(124,255,178,0.32) 0%, rgba(124,255,178,0) 32%, rgba(255,255,255,0) 62%, rgba(69,214,232,0.18) 100%);
+  background: var(--grad-edge);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
           mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor; mask-composite: exclude;
   pointer-events: none;
 }
+
+/* ─── AntD Card → liquid glass ──────────────────────────────────────────
+   Pull every stock AntD Card into the tech-garden glass language so pages
+   built on AntD (Diagnostics, Settings, Onboarding) match the hand-built
+   DashCard/GlassCard surfaces without per-page edits. Same recipe as
+   DashCard: translucent dark fill, backdrop blur, soft border, luminous
+   top-left edge. */
+.ant-card {
+  position: relative;
+  background: rgba(11, 24, 20, 0.6) !important;
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid var(--border-soft) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: 0 24px 60px -20px rgba(0,0,0,0.5), 0 4px 16px -4px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.04) !important;
+  overflow: hidden;
+}
+.ant-card::before {
+  content: '';
+  position: absolute; inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: var(--grad-edge);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  pointer-events: none;
+  z-index: 0;
+}
+.ant-card-head { border-bottom: 1px solid var(--border-soft) !important; background: transparent !important; }
+.ant-card-body, .ant-card-head { position: relative; z-index: 1; }
+/* Nested cards (a card inside a card) shouldn't double up the blur+edge —
+   flatten the inner one to a plain translucent tile. */
+.ant-card .ant-card {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--bg-elevated) !important;
+  box-shadow: none !important;
+}
+.ant-card .ant-card::before { display: none; }
 
 .mn-btn { transition: background .12s, border-color .12s, transform .08s; }
 .mn-btn:hover { transform: translateY(-1px); }
@@ -192,89 +235,113 @@ export const KEYFRAMES_CSS = `
 /* AntD primary button -- lime gradient + dark ink so it matches the
    concept's hero Play. Default buttons get a glass treatment. */
 .ant-btn-primary {
-  background: linear-gradient(135deg, #7CFFB2 0%, #45D688 55%, #2BAA66 100%) !important;
+  background: var(--grad-primary) !important;
   border: none !important;
-  color: #02110D !important;
+  color: var(--bg-deep) !important;
   font-weight: 700 !important;
   box-shadow: 0 8px 24px -10px rgba(124, 255, 178, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.35) !important;
   transition: transform 0.12s ease, box-shadow 0.12s ease !important;
 }
 .ant-btn-primary:hover,
 .ant-btn-primary:focus {
-  background: linear-gradient(135deg, #A3FFCB 0%, #5EE3A0 55%, #45D688 100%) !important;
+  background: linear-gradient(135deg, var(--lime-bright) 0%, var(--lime) 55%, var(--mint) 100%) !important;
   box-shadow: 0 10px 28px -8px rgba(124, 255, 178, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.42) !important;
   transform: translateY(-1px);
-  color: #02110D !important;
+  color: var(--bg-deep) !important;
 }
 .ant-btn-primary:active { transform: translateY(0); }
 
 .ant-btn-default {
-  background: rgba(255, 255, 255, 0.045) !important;
-  border: 1px solid rgba(236, 255, 244, 0.10) !important;
-  color: #ECFFF4 !important;
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-soft) !important;
+  color: var(--ink) !important;
   backdrop-filter: blur(12px);
   font-weight: 600 !important;
 }
 .ant-btn-default:hover,
 .ant-btn-default:focus {
-  background: rgba(255, 255, 255, 0.075) !important;
-  border-color: rgba(124, 255, 178, 0.35) !important;
-  color: #ECFFF4 !important;
+  background: var(--bg-elevated) !important;
+  border-color: var(--border-glow) !important;
+  color: var(--ink) !important;
 }
 
 .ant-btn-dangerous {
   background: rgba(255, 107, 122, 0.12) !important;
   border: 1px solid rgba(255, 107, 122, 0.4) !important;
-  color: #FF6B7A !important;
+  color: var(--rose) !important;
   font-weight: 600 !important;
 }
 .ant-btn-dangerous:hover,
 .ant-btn-dangerous:focus {
   background: rgba(255, 107, 122, 0.18) !important;
   border-color: rgba(255, 107, 122, 0.6) !important;
-  color: #FF6B7A !important;
+  color: var(--rose) !important;
 }
 
 /* AntD Steps -- pull the stepper into the concept palette. */
 .ant-steps-item-process .ant-steps-item-icon {
-  background: linear-gradient(135deg, #7CFFB2, #2BAA66) !important;
+  background: linear-gradient(135deg, var(--lime), var(--emerald)) !important;
   border-color: transparent !important;
   box-shadow: 0 8px 22px -8px rgba(124, 255, 178, 0.5);
 }
-.ant-steps-item-process .ant-steps-item-icon > .ant-steps-icon { color: #02110D !important; }
+.ant-steps-item-process .ant-steps-item-icon > .ant-steps-icon { color: var(--bg-deep) !important; }
 .ant-steps-item-finish .ant-steps-item-icon {
   background: rgba(124, 255, 178, 0.16) !important;
   border-color: rgba(124, 255, 178, 0.5) !important;
 }
-.ant-steps-item-finish .ant-steps-item-icon > .ant-steps-icon { color: #7CFFB2 !important; }
+.ant-steps-item-finish .ant-steps-item-icon > .ant-steps-icon { color: var(--lime) !important; }
 .ant-steps-item-wait .ant-steps-item-icon {
   background: rgba(255, 255, 255, 0.03) !important;
-  border-color: rgba(236, 255, 244, 0.14) !important;
+  border-color: var(--border-sharp) !important;
 }
-.ant-steps-item-title { color: #ECFFF4 !important; }
+.ant-steps-item-title { color: var(--ink) !important; }
 .ant-steps-item-process > .ant-steps-item-container > .ant-steps-item-content > .ant-steps-item-title {
-  color: #7CFFB2 !important;
+  color: var(--lime) !important;
 }
 .ant-steps-item-tail::after { background: rgba(236, 255, 244, 0.10) !important; }
 .ant-steps-item-finish > .ant-steps-item-container > .ant-steps-item-tail::after {
-  background: linear-gradient(90deg, #7CFFB2, #45D688) !important;
+  background: linear-gradient(90deg, var(--lime), var(--mint)) !important;
 }
 
 /* AntD Switch -- lime when on. */
 .ant-switch-checked {
-  background: linear-gradient(135deg, #7CFFB2, #2BAA66) !important;
+  background: linear-gradient(135deg, var(--lime), var(--emerald)) !important;
 }
 .ant-switch-checked:hover {
-  background: linear-gradient(135deg, #A3FFCB, #45D688) !important;
+  background: linear-gradient(135deg, var(--lime-bright), var(--mint)) !important;
 }
 
-/* AntD Tag glow tweaks */
+/* AntD Tag -- pill shape + brand palette (override AntD preset swatches so
+   success/error/warning/processing tags read lime/rose/amber/cyan). */
 .ant-tag {
   border-radius: 999px !important;
   padding: 2px 10px !important;
   font-weight: 600 !important;
   border-width: 1px !important;
 }
+.ant-tag-success, .ant-tag-green {
+  color: var(--lime) !important;
+  background: rgba(124, 255, 178, 0.12) !important;
+  border-color: rgba(124, 255, 178, 0.32) !important;
+}
+.ant-tag-error, .ant-tag-red {
+  color: var(--rose) !important;
+  background: rgba(255, 107, 122, 0.12) !important;
+  border-color: rgba(255, 107, 122, 0.34) !important;
+}
+.ant-tag-warning, .ant-tag-orange, .ant-tag-gold {
+  color: var(--amber) !important;
+  background: rgba(243, 168, 92, 0.12) !important;
+  border-color: rgba(243, 168, 92, 0.34) !important;
+}
+.ant-tag-processing, .ant-tag-blue, .ant-tag-cyan {
+  color: var(--aurora-cyan) !important;
+  background: rgba(69, 214, 232, 0.12) !important;
+  border-color: rgba(69, 214, 232, 0.34) !important;
+}
+/* AntD Progress -- brand the default track + stroke. */
+.ant-progress-bg { background: var(--grad-primary) !important; }
+.ant-progress-inner { background: var(--border-soft) !important; }
 
 /* Staggered page entrance: children with [data-stagger] animate in
    sequence on initial mount. Combine with --stagger-index from JS. */

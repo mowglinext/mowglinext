@@ -74,12 +74,23 @@ def _automatic_mode(v: str) -> str:
     return {"MANUAL": "0", "SEMIAUTO": "1", "AUTO": "2"}.get(s, _unquote(v))
 
 
+def _protocol_to_receiver_family(v: str) -> str:
+    s = _unquote(v).upper()
+    if s == "UBX":
+        return "ublox"
+    if s == "NMEA":
+        return "nmea"
+    return _unquote(v).lower()
+
+
+OM_GPS = "OM_GPS_"
+
 OM_TO_YAML: Dict[str, Tuple[str, callable]] = {
     "OM_DATUM_LAT": ("datum_lat", _unquote),
     "OM_DATUM_LONG": ("datum_lon", _unquote),
-    "OM_GPS_PROTOCOL": ("gps_protocol", _unquote),
-    "OM_GPS_PORT": ("gps_port", _unquote),
-    "OM_GPS_BAUDRATE": ("gps_baudrate", _unquote),
+    f"{OM_GPS}PROTOCOL": ("gnss_receiver_family", _protocol_to_receiver_family),
+    f"{OM_GPS}PORT": ("gnss_serial_device", _unquote),
+    f"{OM_GPS}BAUDRATE": ("gnss_serial_baud", _unquote),
     "OM_USE_NTRIP": ("ntrip_enabled", _bool),
     "OM_NTRIP_HOSTNAME": ("ntrip_host", _unquote),
     "OM_NTRIP_PORT": ("ntrip_port", _unquote),

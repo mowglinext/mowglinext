@@ -11,7 +11,7 @@ defaults without rebuilding the image.
 
 | File | Purpose |
 |------|---------|
-| `mowgli_robot.yaml` | **Site-specific overrides** — GPS datum, NTRIP, dock pose, battery, mowing speed. Edit this first. |
+| `mowgli_robot.yaml` | **Site-specific overrides** — Universal GNSS serial settings, datum, NTRIP, dock pose, battery, mowing speed. Edit this first. |
 
 ## Additional overrideable files
 
@@ -29,7 +29,7 @@ The launch files in `mowgli_bringup` check for the presence of files under
 
 ## Quick start
 
-1. Edit `mowgli_robot.yaml` — set your GPS datum, NTRIP, and dock pose
+1. Edit `mowgli_robot.yaml` — set your Universal GNSS serial device, datum, NTRIP, and dock pose
 2. Restart: `docker compose restart mowgli`
 3. For advanced tuning, copy more files from the image:
 
@@ -43,13 +43,16 @@ docker exec mowgli-ros2 cat /ros2_ws/install/mowgli_bringup/share/mowgli_bringup
 
 ## Note on GPS device
 
-If your GPS receiver appears as `/dev/ttyUSB1` (or `/dev/gps` via udev) rather
-than the default, add a `devices` override in a `docker-compose.override.yaml`:
+Prefer wiring Universal GNSS to the stable `/dev/serial/by-id/...` path for
+your receiver. Use a raw `ttyUSB*` or `ttyACM*` node only as a temporary
+diagnostic fallback when by-id is unavailable.
+
+If you need a manual `devices` override, point it at the by-id path:
 
 ```yaml
 services:
   mowgli:
     devices:
       - /dev/mowgli:/dev/mowgli
-      - /dev/ttyUSB1:/dev/gps
+      - /dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00:/dev/gps
 ```

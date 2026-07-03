@@ -1,4 +1,5 @@
 import {Form, Input, InputNumber, Modal, Select} from "antd";
+import {useTranslation} from "react-i18next";
 import {MowingAreaEdit} from "../utils/types.ts";
 
 interface EditAreaModalProps {
@@ -10,51 +11,54 @@ interface EditAreaModalProps {
 }
 
 const AREA_TYPE_OPTIONS = [
-    {value: 'workarea', label: 'Mowing Area'},
-    {value: 'navigation', label: 'Navigation Area'},
-    {value: 'obstacle', label: 'Obstacle'},
+    {value: 'workarea', labelKey: 'mapEditArea.areaTypeMowing'},
+    {value: 'navigation', labelKey: 'mapEditArea.areaTypeNavigation'},
+    {value: 'obstacle', labelKey: 'mapEditArea.areaTypeObstacle'},
 ];
 
-export const EditAreaModal = ({open, area, onChange, onSave, onCancel}: EditAreaModalProps) => (
-    <Modal
-        open={open}
-        title={area.name ? `Edit "${area.name}"` : "Edit area"}
-        okText="Save"
-        cancelText="Cancel"
-        onOk={onSave}
-        onCancel={onCancel}
-        destroyOnClose
-    >
-        <Form layout="vertical" style={{marginTop: 16}}>
-            <Form.Item label="Area type">
-                <Select
-                    value={area.feature_type}
-                    onChange={(v) => onChange({...area, feature_type: v})}
-                    options={AREA_TYPE_OPTIONS}
-                />
-            </Form.Item>
-            {area.feature_type === 'workarea' && (
-                <Form.Item label="Area name">
-                    <Input
-                        key="areaname"
-                        placeholder="e.g. Front lawn"
-                        value={area.name}
-                        onChange={(e) => onChange({...area, name: e.target.value})}
-                        autoFocus
+export const EditAreaModal = ({open, area, onChange, onSave, onCancel}: EditAreaModalProps) => {
+    const {t} = useTranslation();
+    return (
+        <Modal
+            open={open}
+            title={area.name ? t('mapEditArea.titleEditNamed', {name: area.name}) : t('mapEditArea.titleEdit')}
+            okText={t('mapEditArea.save')}
+            cancelText={t('mapEditArea.cancel')}
+            onOk={onSave}
+            onCancel={onCancel}
+            destroyOnClose
+        >
+            <Form layout="vertical" style={{marginTop: 16}}>
+                <Form.Item label={t('mapEditArea.areaType')}>
+                    <Select
+                        value={area.feature_type}
+                        onChange={(v) => onChange({...area, feature_type: v})}
+                        options={AREA_TYPE_OPTIONS.map((o) => ({value: o.value, label: t(o.labelKey)}))}
                     />
                 </Form.Item>
-            )}
-            {area.feature_type === 'workarea' && (
-                <Form.Item label="Mowing order">
-                    <InputNumber
-                        key="mowingorder"
-                        min={1}
-                        value={area.mowing_order}
-                        onChange={(v) => onChange({...area, mowing_order: v ?? 9999})}
-                        style={{width: '100%'}}
-                    />
-                </Form.Item>
-            )}
-        </Form>
-    </Modal>
-);
+                {area.feature_type === 'workarea' && (
+                    <Form.Item label={t('mapEditArea.areaName')}>
+                        <Input
+                            key="areaname"
+                            placeholder={t('mapEditArea.areaNamePlaceholder')}
+                            value={area.name}
+                            onChange={(e) => onChange({...area, name: e.target.value})}
+                            autoFocus
+                        />
+                    </Form.Item>
+                )}
+                {area.feature_type === 'workarea' && (
+                    <Form.Item label={t('mapEditArea.mowingOrder')}>
+                        <InputNumber
+                            key="mowingorder"
+                            min={1}
+                            value={area.mowing_order}
+                            onChange={(v) => onChange({...area, mowing_order: v ?? 9999})}
+                            style={{width: '100%'}}
+                        />
+                    </Form.Item>
+                )}
+            </Form>
+        </Modal>
+    );
+};

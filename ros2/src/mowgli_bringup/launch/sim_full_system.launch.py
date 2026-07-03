@@ -54,6 +54,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -111,9 +112,10 @@ def generate_launch_description() -> LaunchDescription:
         description="Webots execution mode: realtime | fast | pause.",
     )
 
-    # use_fusion_graph + use_magnetometer come from
-    # mowgli_robot.yaml via navigation.launch.py — no need to declare
-    # them here. CLI override still propagates.
+    # use_magnetometer comes from mowgli_robot.yaml via navigation.launch.py
+    # — no need to declare it here. CLI override still propagates.
+    # (There is no use_fusion_graph arg; fusion_graph_node is the sole,
+    # unconditional localizer.)
 
     # ------------------------------------------------------------------
     # Resolved substitutions
@@ -160,7 +162,6 @@ def generate_launch_description() -> LaunchDescription:
         ),
         launch_arguments={
             "use_sim_time": "true",
-            "use_ekf": "True",
             "use_lidar": use_lidar,
             # cog_to_imu defaults are fine in sim now that the node
             # self-gates the stationary anchor on |wheel_omega| (won't
@@ -234,7 +235,10 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             monitoring_params,
-            {"use_sim_time": True},
+            {
+                "use_sim_time": True,
+                "lidar_enabled": ParameterValue(use_lidar, value_type=bool),
+            },
         ],
     )
 
@@ -342,8 +346,8 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[
             {
                 "use_sim_time": True,
-                "datum_lat": 48.137154,
-                "datum_lon": 11.576124,
+                "datum_lat": 48.137154000,
+                "datum_lon": 11.576124000,
             },
         ],
     )

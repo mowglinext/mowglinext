@@ -41,7 +41,7 @@ check_lidar_preset() {
   local repo="$SANDBOX/repo_lidar_${label}"
   sandbox_repo "$repo"
   harness_init "$repo"
-  harness_set_preset gnss=gps gps=ubx-uart "lidar=$preset" tfluna=none
+  harness_set_preset gnss=auto gnss_connection=uart "lidar=$preset" tfluna=none
   if harness_run >/dev/null 2>&1; then
     pass "$label: harness_run"
   else
