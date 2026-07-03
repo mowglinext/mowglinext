@@ -71,7 +71,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         keys: [
             "datum_lat", "datum_lon", "datum_alt",
             "gnss_receiver_family", "gnss_serial_device", "gnss_serial_baud",
-            "gnss_config_baud", "gnss_profile", "gnss_signal_profile",
+            "gnss_config_baud", "gnss_execution_baud", "gnss_profile", "gnss_signal_profile",
             "gnss_profile_rate_hz", "gnss_signal_group",
             "gnss_unicore_pvt_algorithm", "gnss_unicore_rtk_reliability",
             "gnss_unicore_rtk_timeout_s", "gnss_unicore_dgps_timeout_s",

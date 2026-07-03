@@ -1639,6 +1639,11 @@
     },
     "signalProfileHelpText": "Signal profiles are vendor-neutral. Different receiver families can map the same profile to different signal and constellation choices.",
     "signalProfileCustomHelpText": "Custom will later support user-provided profile files or raw receiver command sets from Expert/Developer mode. Upload and raw-command backend support are not wired yet.",
+    "executionBaud": {
+      "auto": {
+        "label": "Auto / probe live receiver"
+      }
+    },
     "unicore": {
       "title": "Vendor-Specific Settings",
       "description": "Use these only when the generic GNSS abstractions are not enough. Universal GNSS remains the source of truth for Unicore model gating and documented signal-group handling.",
@@ -2217,7 +2222,7 @@
     "signalProfileLabel": "Signal Profile",
     "signalProfileTooltip": "High-level constellation and signal preset. This is all most users need to touch.",
     "baudLabel": "Baud",
-    "baudTooltip": "Serial speed between the robot and the GPS receiver. Saved to the receiver flash so both sides always match — you only set it once.",
+    "baudTooltip": "Target runtime/config baud for mowgli-gps and the receiver profile. Execution-baud probing for live apply is configured separately in expert mode.",
     "savedToFlashTitle": "Saved to the GPS receiver flash",
     "savedToFlashIntro": "Baud and signal profile are firmware-side settings: on save they are written to the GPS receiver's flash and the receiver briefly reconnects.",
     "savedToFlashSafeBaud": "is the safe baud for USB serial links;",
@@ -2229,6 +2234,9 @@
     "positionRateLabel": "Position Rate",
     "receiverFamilyLabel": "Receiver Family",
     "serialDeviceLabel": "Serial Device",
+    "executionBaudLabel": "Execution baud",
+    "executionBaudTooltip": "Current live baud used by the one-shot Universal GNSS configurator. Leave this on Auto to probe the receiver first instead of assuming the target baud is already active.",
+    "executionBaudHelpText": "Auto probing is especially useful after a Unicore reset or manual receiver-side baud changes. The selected runtime/config baud remains the target after apply.",
     "rtkWaitAfterUndockLabel": "RTK Wait After Undock",
     "gpsTimeoutLabel": "GPS Timeout",
     "expertScopeTitle": "Expert-mode scope",
@@ -2347,8 +2355,11 @@
     "fieldProfile": "Profile:",
     "fieldSignalProfile": "Signal profile:",
     "fieldSerialDevice": "Serial device:",
-    "fieldBaud": "Baud:",
-    "baudRuntimeConfigured": "runtime {{runtime}} / configured {{configured}}",
+    "fieldExecutionBaud": "Execution baud:",
+    "fieldDetectedBaud": "Detected live baud:",
+    "fieldRuntimeBaud": "Active runtime baud:",
+    "fieldConfigBaud": "Target configured baud:",
+    "executionBaudAuto": "auto / probing",
     "unknownValue": "unknown",
     "fieldRestartError": "Restart error:",
     "backendWarnings": "Backend warnings",
