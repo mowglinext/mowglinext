@@ -46,6 +46,19 @@ nav2_util::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::S
   // robot's minimum MPPI-trackable turning radius (mowgli_robot.yaml). Read live
   // in planCoverage so it can be field-tuned between plans.
   declare_parameter<double>("min_turning_radius", 0.15);
+  // Nominal turn-around arc radius for the continuous-path connectors. A forward
+  // 180° swath-to-swath reversal at op_width spacing (~0.18 m) cannot avoid a
+  // loop (a clean U needs r ≤ op_width/2 ≈ 0.09 m, below the min_turning_radius
+  // floor), so buildConnector always LOOPS — but the loop SIZE scales with this
+  // nominal radius: at 0.30 m it balloons into a big teardrop that overshoots
+  // deep into the headland (the "turning loops" users see with >2 headland
+  // passes, where there's room for the big loop); at ~op_width it collapses to a
+  // compact, tight U-turn. Default 0.18 (≈ op_width) for compact turns. Floored
+  // at min_turning_radius by buildConnector, so it never goes sub-trackable.
+  // TUNING TRADE-OFF: smaller = compact turns but nearer the trackable floor
+  // (a deadband diff-drive may track a 0.30 m arc more smoothly than a 0.18 m
+  // one); raise toward 0.30 if tight turns induce hesitation. Read live.
+  declare_parameter<double>("connector_turn_radius", 0.18);
 
   // Action server result timeout. Keep this >= the BT client's per-plan wait
   // (PlanCoverageArea, 12 s): if the server expires the result first the
@@ -488,7 +501,11 @@ void CoverageServer::planCoverage()
     // to the raw boundary only when no inset was applied.
     const std::vector<std::pair<double, double>>& connector_boundary =
         plan.safe_boundary.size() >= 3 ? plan.safe_boundary : outer;
-    constexpr double kConnectorTurnRadius = 0.30;  // nominal turn-around arc radius (m)
+    // Nominal turn-around arc radius (m), read live. Smaller => compact U-turns
+    // instead of big teardrop loops; floored at min_turning_radius by
+    // buildConnector. See the connector_turn_radius declaration for the tuning
+    // trade-off.
+    const double connector_turn_radius = get_parameter("connector_turn_radius").as_double();
     constexpr double kConnectorStep = 0.03;  // connector densify step (m)
     // Build the plan as one or more HOLE-FREE continuous sub-paths. A single
     // forward turn-around connector can't route around a large interior hole, so
@@ -497,7 +514,7 @@ void CoverageServer::planCoverage()
     // routes around the obstacle (issue #333). full_path is their concatenation
     // (GUI viz); drivable_subpaths is what the BT follows.
     const auto subpaths = buildContinuousSubPaths(
-        plan, connector_boundary, kConnectorTurnRadius, min_turning_radius, kConnectorStep);
+        plan, connector_boundary, connector_turn_radius, min_turning_radius, kConnectorStep);
 
     result->full_path.header = header;
     result->drivable_subpaths.clear();
