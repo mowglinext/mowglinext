@@ -31,10 +31,15 @@ harness_init() {
   # Clear any state leaked from a previous harness_init in the same
   # shell so the matrix tests do not carry one preset into the next.
   unset GNSS_BACKEND GNSS_STATUS_SOURCE GNSS_STACK GNSS_RECEIVER_FAMILY \
-        GNSS_TRANSPORT GNSS_SERIAL_DEVICE GNSS_SERIAL_BAUD \
+        GNSS_TRANSPORT GNSS_SERIAL_DEVICE GNSS_SERIAL_BAUD GNSS_FRAME_ID \
         GNSS_CONNECTION_HINT GNSS_RTCM_FORWARDING \
         GNSS_NTRIP_ENABLED GNSS_NTRIP_HOST GNSS_NTRIP_PORT \
         GNSS_NTRIP_MOUNTPOINT GNSS_NTRIP_USERNAME GNSS_NTRIP_PASSWORD \
+        GNSS_NTRIP_GGA_ENABLED GNSS_NTRIP_GGA_INTERVAL_S \
+        GNSS_RECEIVER_FAMILY_CLI_PRESET GNSS_CONNECTION_CLI_PRESET \
+        GNSS_SERIAL_DEVICE_CLI_PRESET GNSS_SERIAL_BAUD_CLI_PRESET \
+        GNSS_FRAME_ID_CLI_PRESET GNSS_NTRIP_GGA_ENABLED_CLI_PRESET \
+        GNSS_NTRIP_GGA_INTERVAL_S_CLI_PRESET \
         IMAGE_TAG \
         LIDAR_ENABLED LIDAR_TYPE LIDAR_MODEL LIDAR_CONNECTION \
         LIDAR_PORT LIDAR_UART_DEVICE LIDAR_BAUD LIDAR_IMAGE \
@@ -45,6 +50,9 @@ harness_init() {
         HARDWARE_BACKEND MAVROS_BY_ID MAVROS_PORT MAVROS_BAUD \
         MAVROS_GCS_URL MAVROS_TGT_SYSTEM MAVROS_TGT_COMPONENT \
         MAVROS_AUTOPILOT MAVROS_ENABLED \
+        CONFIG_NTRIP_ENABLED_EXPLICIT CONFIG_NTRIP_HOST_EXPLICIT \
+        CONFIG_NTRIP_PORT_EXPLICIT CONFIG_NTRIP_USER_EXPLICIT \
+        CONFIG_NTRIP_PASSWORD_EXPLICIT CONFIG_NTRIP_MOUNTPOINT_EXPLICIT \
         GPS_UART_RULE GPS_DEBUG_UART_RULE LIDAR_UART_RULE \
         TFLUNA_FRONT_UART_RULE TFLUNA_EDGE_UART_RULE \
         PRESET_LOADED CLI_PRESET STATE_ACTIVE_PRESET_FILE \
@@ -185,6 +193,7 @@ harness_set_preset() {
       gnss)
         case "$val" in
           auto|ublox|unicore|nmea)
+            GNSS_RECEIVER_FAMILY_CLI_PRESET=true
             GNSS_STACK="universal"
             GNSS_STATUS_SOURCE="universal"
             GNSS_BACKEND="universal"
@@ -206,6 +215,7 @@ harness_set_preset() {
       gnss_connection)
         case "$val" in
           usb)
+            GNSS_CONNECTION_CLI_PRESET=true
             GNSS_CONNECTION_HINT="usb"
             case "${GNSS_SERIAL_DEVICE:-}" in
               /dev/serial/by-id/*|/dev/ttyACM*|/dev/ttyUSB*) ;;
@@ -213,6 +223,7 @@ harness_set_preset() {
             esac
             ;;
           uart)
+            GNSS_CONNECTION_CLI_PRESET=true
             GNSS_CONNECTION_HINT="uart"
             case "${GNSS_SERIAL_DEVICE:-}" in
               /dev/ttyAMA*|/dev/ttyS*|/dev/ttyTHS*|/dev/ttyHS*) ;;
@@ -221,8 +232,8 @@ harness_set_preset() {
             ;;
         esac
         ;;
-      gnss_device) GNSS_SERIAL_DEVICE="$val" ;;
-      gnss_baud) GNSS_SERIAL_BAUD="$val" ;;
+      gnss_device) GNSS_SERIAL_DEVICE_CLI_PRESET=true; GNSS_SERIAL_DEVICE="$val" ;;
+      gnss_baud) GNSS_SERIAL_BAUD_CLI_PRESET=true; GNSS_SERIAL_BAUD="$val" ;;
       lidar)
         case "$val" in
           none)
@@ -265,12 +276,12 @@ harness_set_preset() {
         ;;
       datum_lat) CONFIG_DATUM_LAT="$val" ;;
       datum_lon) CONFIG_DATUM_LON="$val" ;;
-      ntrip)     CONFIG_NTRIP_ENABLED="$val" ;;
-      ntrip_host) CONFIG_NTRIP_HOST="$val" ;;
-      ntrip_port) CONFIG_NTRIP_PORT="$val" ;;
-      ntrip_user) CONFIG_NTRIP_USER="$val" ;;
-      ntrip_password) CONFIG_NTRIP_PASSWORD="$val" ;;
-      ntrip_mountpoint) CONFIG_NTRIP_MOUNTPOINT="$val" ;;
+      ntrip)     CONFIG_NTRIP_ENABLED_EXPLICIT=true; CONFIG_NTRIP_ENABLED="$val" ;;
+      ntrip_host) CONFIG_NTRIP_HOST_EXPLICIT=true; CONFIG_NTRIP_HOST="$val" ;;
+      ntrip_port) CONFIG_NTRIP_PORT_EXPLICIT=true; CONFIG_NTRIP_PORT="$val" ;;
+      ntrip_user) CONFIG_NTRIP_USER_EXPLICIT=true; CONFIG_NTRIP_USER="$val" ;;
+      ntrip_password) CONFIG_NTRIP_PASSWORD_EXPLICIT=true; CONFIG_NTRIP_PASSWORD="$val" ;;
+      ntrip_mountpoint) CONFIG_NTRIP_MOUNTPOINT_EXPLICIT=true; CONFIG_NTRIP_MOUNTPOINT="$val" ;;
     esac
   done
 }

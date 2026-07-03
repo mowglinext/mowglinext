@@ -176,34 +176,49 @@ check_generated_gps_yaml_alignment() {
   step "Check: Generated GPS YAML"
 
   local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
-  local yaml_serial_device yaml_serial_baud
-  local expected_serial_device expected_serial_baud
+  local yaml_receiver_family yaml_serial_device yaml_serial_baud
+  local yaml_frame_id yaml_ntrip_enabled
+
+  _describe_gnss_resolution() {
+    local label="$1"
+    local yaml_value="$2"
+    local env_value="$3"
+    local default_value="$4"
+
+    if [[ -n "$yaml_value" ]]; then
+      if [[ -n "$env_value" && "$yaml_value" != "$env_value" ]]; then
+        info "$label resolves from mowgli_robot.yaml ($yaml_value); docker/.env fallback remains $env_value"
+      else
+        info "$label resolves from mowgli_robot.yaml ($yaml_value)"
+      fi
+      return 0
+    fi
+
+    if [[ -n "$env_value" ]]; then
+      info "$label falls back to docker/.env ($env_value)"
+      return 0
+    fi
+
+    info "$label falls back to the built-in default ($default_value)"
+  }
 
   if [[ ! -f "$yaml_file" ]]; then
     fail "Generated mowgli_robot.yaml missing"
-    add_issue "Missing $yaml_file. Re-run $(installer_main_command) to regenerate the ROS config from docker/.env."
+    add_issue "Missing $yaml_file. Re-run $(installer_main_command) to create the active GNSS YAML config."
     return
   fi
 
+  yaml_receiver_family="$(yaml_gps_value "$yaml_file" gnss_receiver_family)"
   yaml_serial_device="$(yaml_gps_value "$yaml_file" gnss_serial_device)"
   yaml_serial_baud="$(yaml_gps_value "$yaml_file" gnss_serial_baud)"
-  expected_serial_device="$(gnss_serial_device_from_state)"
-  expected_serial_baud="$(gnss_serial_baud_from_state)"
+  yaml_frame_id="$(yaml_gps_value "$yaml_file" gnss_frame_id)"
+  yaml_ntrip_enabled="$(yaml_gps_value "$yaml_file" ntrip_enabled)"
 
-  if [[ "$yaml_serial_device" != "${expected_serial_device:-/dev/ttyAMA4}" ]]; then
-    fail "GNSS serial device diverges between docker/.env and mowgli_robot.yaml"
-    add_issue "docker/.env has GNSS_SERIAL_DEVICE=${expected_serial_device:-/dev/ttyAMA4} but $yaml_file has gnss_serial_device=${yaml_serial_device:-missing}. Re-run $(installer_main_command) to resync."
-  fi
-
-  if [[ "$yaml_serial_baud" != "${expected_serial_baud:-921600}" ]]; then
-    fail "GNSS serial baud diverges between docker/.env and mowgli_robot.yaml"
-    add_issue "docker/.env has GNSS_SERIAL_BAUD=${expected_serial_baud:-921600} but $yaml_file has gnss_serial_baud=${yaml_serial_baud:-missing}. Re-run $(installer_main_command) to resync."
-  fi
-
-  if [[ "$yaml_serial_device" == "${expected_serial_device:-/dev/ttyAMA4}" \
-    && "$yaml_serial_baud" == "${expected_serial_baud:-921600}" ]]; then
-    info "docker/.env and mowgli_robot.yaml agree on gnss_serial_device/gnss_serial_baud"
-  fi
+  _describe_gnss_resolution "GNSS receiver family" "$yaml_receiver_family" "${GNSS_RECEIVER_FAMILY:-}" "auto"
+  _describe_gnss_resolution "GNSS serial device" "$yaml_serial_device" "${GNSS_SERIAL_DEVICE:-}" "/dev/ttyAMA4"
+  _describe_gnss_resolution "GNSS serial baud" "$yaml_serial_baud" "${GNSS_SERIAL_BAUD:-}" "921600"
+  _describe_gnss_resolution "GNSS frame_id" "$yaml_frame_id" "${GNSS_FRAME_ID:-}" "gps_link"
+  _describe_gnss_resolution "GNSS NTRIP enabled" "$yaml_ntrip_enabled" "${GNSS_NTRIP_ENABLED:-}" "true"
 }
 
 check_containers() {

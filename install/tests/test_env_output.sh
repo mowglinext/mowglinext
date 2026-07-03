@@ -118,6 +118,8 @@ assert_contains "GNSS_BACKEND=universal (public runtime)" "GNSS_BACKEND=universa
 assert_contains "GNSS_STATUS_SOURCE=universal (default)" "GNSS_STATUS_SOURCE=universal" "$ENV_CONTENT"
 assert_contains "TFLUNA_FRONT_ENABLED=false (default)" "TFLUNA_FRONT_ENABLED=false" "$ENV_CONTENT"
 assert_contains "TFLUNA_EDGE_ENABLED=false (default)" "TFLUNA_EDGE_ENABLED=false" "$ENV_CONTENT"
+assert_contains "GNSS fallback comment explains .env role" "# GNSS_* values below are fallback-only first-boot defaults." "$ENV_CONTENT"
+assert_contains "GNSS fallback comment points to YAML/GUI" "# Active operator GNSS settings live in docker/config/mowgli/mowgli_robot.yaml and the GUI." "$ENV_CONTENT"
 legacy_protocol_key="GPS_""PROTOCOL="
 legacy_runtime_mode_key="GPS_""RUNTIME_MODE="
 legacy_port_key="GPS_""PORT="

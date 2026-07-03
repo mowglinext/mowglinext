@@ -309,7 +309,7 @@
       <!-- Universal GNSS -->
       <div class="composer-group" id="gnss-group">
         <h3>Universal GNSS</h3>
-        <p class="composer-hint" id="gnss-group-hint">Universal GNSS is the only supported direct GNSS stack. Pick the receiver family and serial connection here; the installer will still ask for the exact device path and detect the receiver baud.</p>
+        <p class="composer-hint" id="gnss-group-hint">Universal GNSS is the only supported direct GNSS stack. Pick first-boot defaults for the receiver family and serial connection here; the active runtime GNSS config later lives in the GUI/YAML, and the installer will still ask for the exact device path and detect the receiver baud.</p>
         <div class="composer-options" data-group="gnssReceiverFamily">
           <button class="composer-option active" data-value="auto">
             <span class="option-icon">🛰️</span>
@@ -485,7 +485,7 @@
 (function() {
   var state = { backend: 'mowgli', gnssReceiverFamily: 'auto', gnssConnection: 'uart', lidar: 'ldlidar-uart', tfluna: 'none', channel: 'main' };
   var baseUrl = 'https://mowgli.garden/install.sh';
-  var defaultGnssHint = 'Universal GNSS is the only supported direct GNSS path. Pick the receiver family and connection here; the installer will ask for the exact serial device and detect baud before first boot.';
+  var defaultGnssHint = 'Universal GNSS is the only supported direct GNSS path. Pick first-boot GNSS defaults here; the installer will ask for the exact serial device and detect baud, while the active runtime configuration later lives in the GUI/YAML.';
   var mavrosGnssHint = 'MAVROS uses the flight controller telemetry link. Direct Universal GNSS selection is disabled for this backend.';
 
   function setGroupDisabled(groupId, disabled) {

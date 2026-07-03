@@ -292,6 +292,19 @@ recompute_image_defaults
 
 CHECK_ONLY=false
 CLI_PRESET=false
+GNSS_RECEIVER_FAMILY_CLI_PRESET=false
+GNSS_CONNECTION_CLI_PRESET=false
+GNSS_SERIAL_DEVICE_CLI_PRESET=false
+GNSS_SERIAL_BAUD_CLI_PRESET=false
+GNSS_FRAME_ID_CLI_PRESET=false
+GNSS_NTRIP_GGA_ENABLED_CLI_PRESET=false
+GNSS_NTRIP_GGA_INTERVAL_S_CLI_PRESET=false
+CONFIG_NTRIP_ENABLED_EXPLICIT=false
+CONFIG_NTRIP_HOST_EXPLICIT=false
+CONFIG_NTRIP_PORT_EXPLICIT=false
+CONFIG_NTRIP_USER_EXPLICIT=false
+CONFIG_NTRIP_PASSWORD_EXPLICIT=false
+CONFIG_NTRIP_MOUNTPOINT_EXPLICIT=false
 
 installer_main_command() {
   printf 'bash %q' "$REPO_DIR/install/mowglinext.sh"
@@ -675,6 +688,129 @@ gnss_serial_baud_from_state() {
   printf '%s\n' "${GNSS_SERIAL_BAUD:-921600}"
 }
 
+existing_yaml_value() {
+  local key="${1:?existing_yaml_value: missing key}"
+  local yaml_file="${2:-$DOCKER_DIR/config/mowgli/mowgli_robot.yaml}"
+  local line value
+
+  [ -f "$yaml_file" ] || return 0
+
+  line="$(grep -E "^[[:space:]]+${key}:" "$yaml_file" 2>/dev/null | head -1 || true)"
+  value="${line#*:}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%%#*}"
+  value="${value%"${value##*[![:space:]]}"}"
+  value="${value#\"}"
+  value="${value%\"}"
+  value="${value#\'}"
+  value="${value%\'}"
+  printf '%s\n' "$value"
+}
+
+gnss_installer_key_is_explicit() {
+  local key="${1:?gnss_installer_key_is_explicit: missing key}"
+
+  case "$key" in
+    GNSS_RECEIVER_FAMILY)
+      [[ "${GNSS_RECEIVER_FAMILY_CLI_PRESET:-false}" == "true" ]] && return 0
+      ;;
+    GNSS_TRANSPORT)
+      [[ "${GNSS_CONNECTION_CLI_PRESET:-false}" == "true" ]] && return 0
+      ;;
+    GNSS_SERIAL_DEVICE)
+      if [[ "${GNSS_SERIAL_DEVICE_CLI_PRESET:-false}" == "true" \
+        || "${GNSS_CONNECTION_CLI_PRESET:-false}" == "true" ]]; then
+        return 0
+      fi
+      ;;
+    GNSS_SERIAL_BAUD)
+      [[ "${GNSS_SERIAL_BAUD_CLI_PRESET:-false}" == "true" ]] && return 0
+      ;;
+    GNSS_FRAME_ID)
+      [[ "${GNSS_FRAME_ID_CLI_PRESET:-false}" == "true" ]] && return 0
+      ;;
+    GNSS_NTRIP_GGA_ENABLED)
+      [[ "${GNSS_NTRIP_GGA_ENABLED_CLI_PRESET:-false}" == "true" ]] && return 0
+      ;;
+    GNSS_NTRIP_GGA_INTERVAL_S)
+      [[ "${GNSS_NTRIP_GGA_INTERVAL_S_CLI_PRESET:-false}" == "true" ]] && return 0
+      ;;
+  esac
+
+  if declare -F preset_key_loaded >/dev/null 2>&1; then
+    case "$key" in
+      GNSS_RECEIVER_FAMILY|GNSS_TRANSPORT|GNSS_SERIAL_DEVICE|GNSS_SERIAL_BAUD|\
+      GNSS_FRAME_ID|GNSS_NTRIP_GGA_ENABLED|GNSS_NTRIP_GGA_INTERVAL_S)
+        preset_key_loaded "$key" && return 0
+        ;;
+    esac
+  fi
+
+  return 1
+}
+
+preserved_gnss_value() {
+  local explicit="${1:-false}"
+  local current="${2:-}"
+  local previous="${3:-}"
+  local default_value="${4:-}"
+
+  if [[ "$explicit" == "true" ]]; then
+    printf '%s\n' "$current"
+    return 0
+  fi
+
+  if [[ -n "$previous" ]]; then
+    printf '%s\n' "$previous"
+    return 0
+  fi
+
+  if [[ -n "$current" ]]; then
+    printf '%s\n' "$current"
+    return 0
+  fi
+
+  printf '%s\n' "$default_value"
+}
+
+apply_existing_yaml_gnss_state() {
+  local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
+  [ -f "$yaml_file" ] || return 0
+
+  local prev_receiver_family prev_transport prev_serial_device prev_serial_baud
+  local prev_frame_id prev_ntrip_gga_enabled prev_ntrip_gga_interval_s
+
+  prev_receiver_family="$(existing_yaml_value gnss_receiver_family "$yaml_file")"
+  prev_transport="$(existing_yaml_value gnss_transport "$yaml_file")"
+  prev_serial_device="$(existing_yaml_value gnss_serial_device "$yaml_file")"
+  prev_serial_baud="$(existing_yaml_value gnss_serial_baud "$yaml_file")"
+  prev_frame_id="$(existing_yaml_value gnss_frame_id "$yaml_file")"
+  prev_ntrip_gga_enabled="$(existing_yaml_value gnss_ntrip_gga_enabled "$yaml_file")"
+  prev_ntrip_gga_interval_s="$(existing_yaml_value gnss_ntrip_gga_interval_s "$yaml_file")"
+
+  if ! gnss_installer_key_is_explicit GNSS_RECEIVER_FAMILY && [[ -n "$prev_receiver_family" ]]; then
+    GNSS_RECEIVER_FAMILY="$prev_receiver_family"
+  fi
+  if ! gnss_installer_key_is_explicit GNSS_TRANSPORT && [[ -n "$prev_transport" ]]; then
+    GNSS_TRANSPORT="$prev_transport"
+  fi
+  if ! gnss_installer_key_is_explicit GNSS_SERIAL_DEVICE && [[ -n "$prev_serial_device" ]]; then
+    GNSS_SERIAL_DEVICE="$prev_serial_device"
+  fi
+  if ! gnss_installer_key_is_explicit GNSS_SERIAL_BAUD && [[ -n "$prev_serial_baud" ]]; then
+    GNSS_SERIAL_BAUD="$prev_serial_baud"
+  fi
+  if ! gnss_installer_key_is_explicit GNSS_FRAME_ID && [[ -n "$prev_frame_id" ]]; then
+    GNSS_FRAME_ID="$prev_frame_id"
+  fi
+  if ! gnss_installer_key_is_explicit GNSS_NTRIP_GGA_ENABLED && [[ -n "$prev_ntrip_gga_enabled" ]]; then
+    GNSS_NTRIP_GGA_ENABLED="$prev_ntrip_gga_enabled"
+  fi
+  if ! gnss_installer_key_is_explicit GNSS_NTRIP_GGA_INTERVAL_S && [[ -n "$prev_ntrip_gga_interval_s" ]]; then
+    GNSS_NTRIP_GGA_INTERVAL_S="$prev_ntrip_gga_interval_s"
+  fi
+}
+
 compose_gnss_service_name() {
   local backend="${1:-$(effective_gnss_backend)}"
 
@@ -738,6 +874,7 @@ parse_args() {
         ;;
       --gnss=*)
         CLI_PRESET=true
+        GNSS_RECEIVER_FAMILY_CLI_PRESET=true
         local gnss_spec="${1#*=}"
         case "$gnss_spec" in
           auto)
@@ -766,6 +903,7 @@ parse_args() {
         ;;
       --gnss-connection=*)
         CLI_PRESET=true
+        GNSS_CONNECTION_CLI_PRESET=true
         case "${1#*=}" in
           usb|USB)
             GNSS_CONNECTION_HINT="usb"
@@ -781,10 +919,12 @@ parse_args() {
         ;;
       --gnss-device=*)
         CLI_PRESET=true
+        GNSS_SERIAL_DEVICE_CLI_PRESET=true
         GNSS_SERIAL_DEVICE="${1#*=}"
         ;;
       --gnss-baud=*)
         CLI_PRESET=true
+        GNSS_SERIAL_BAUD_CLI_PRESET=true
         local gnss_baud_spec="${1#*=}"
         case "$gnss_baud_spec" in
           auto)
@@ -801,6 +941,7 @@ parse_args() {
         ;;
       --gnss-receiver-family=*)
         CLI_PRESET=true
+        GNSS_RECEIVER_FAMILY_CLI_PRESET=true
         local receiver_family_spec
         receiver_family_spec="$(normalize_gnss_receiver_family "${1#*=}")"
         case "$receiver_family_spec" in
@@ -933,18 +1074,21 @@ load_existing_config() {
     return
   fi
 
-  _yaml_val() {
-    grep -E "^\s+${1}:" "$yaml_file" 2>/dev/null | head -1 | sed 's/.*:\s*//' | tr -d '"' | tr -d "'"
-  }
-
-  PREV_DATUM_LAT=$(_yaml_val datum_lat)
-  PREV_DATUM_LON=$(_yaml_val datum_lon)
-  PREV_NTRIP_ENABLED=$(_yaml_val ntrip_enabled)
-  PREV_NTRIP_HOST=$(_yaml_val ntrip_host)
-  PREV_NTRIP_PORT=$(_yaml_val ntrip_port)
-  PREV_NTRIP_USER=$(_yaml_val ntrip_user)
-  PREV_NTRIP_PASSWORD=$(_yaml_val ntrip_password)
-  PREV_NTRIP_MOUNTPOINT=$(_yaml_val ntrip_mountpoint)
+  PREV_DATUM_LAT="$(existing_yaml_value datum_lat "$yaml_file")"
+  PREV_DATUM_LON="$(existing_yaml_value datum_lon "$yaml_file")"
+  PREV_GNSS_RECEIVER_FAMILY="$(existing_yaml_value gnss_receiver_family "$yaml_file")"
+  PREV_GNSS_TRANSPORT="$(existing_yaml_value gnss_transport "$yaml_file")"
+  PREV_GNSS_SERIAL_DEVICE="$(existing_yaml_value gnss_serial_device "$yaml_file")"
+  PREV_GNSS_SERIAL_BAUD="$(existing_yaml_value gnss_serial_baud "$yaml_file")"
+  PREV_GNSS_FRAME_ID="$(existing_yaml_value gnss_frame_id "$yaml_file")"
+  PREV_GNSS_NTRIP_GGA_ENABLED="$(existing_yaml_value gnss_ntrip_gga_enabled "$yaml_file")"
+  PREV_GNSS_NTRIP_GGA_INTERVAL_S="$(existing_yaml_value gnss_ntrip_gga_interval_s "$yaml_file")"
+  PREV_NTRIP_ENABLED="$(existing_yaml_value ntrip_enabled "$yaml_file")"
+  PREV_NTRIP_HOST="$(existing_yaml_value ntrip_host "$yaml_file")"
+  PREV_NTRIP_PORT="$(existing_yaml_value ntrip_port "$yaml_file")"
+  PREV_NTRIP_USER="$(existing_yaml_value ntrip_user "$yaml_file")"
+  PREV_NTRIP_PASSWORD="$(existing_yaml_value ntrip_password "$yaml_file")"
+  PREV_NTRIP_MOUNTPOINT="$(existing_yaml_value ntrip_mountpoint "$yaml_file")"
 }
 
 interactive_config() {
@@ -1103,6 +1247,12 @@ interactive_config() {
   CONFIG_NTRIP_USER="$ntrip_user"
   CONFIG_NTRIP_PASSWORD="$ntrip_password"
   CONFIG_NTRIP_MOUNTPOINT="$ntrip_mountpoint"
+  CONFIG_NTRIP_ENABLED_EXPLICIT=true
+  CONFIG_NTRIP_HOST_EXPLICIT=true
+  CONFIG_NTRIP_PORT_EXPLICIT=true
+  CONFIG_NTRIP_USER_EXPLICIT=true
+  CONFIG_NTRIP_PASSWORD_EXPLICIT=true
+  CONFIG_NTRIP_MOUNTPOINT_EXPLICIT=true
   CONFIG_LIDAR_X="0.20"
   CONFIG_LIDAR_Y="0.0"
   CONFIG_LIDAR_Z="0.22"
@@ -1160,15 +1310,22 @@ PY
 write_config() {
   local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
   local template="$INSTALL_DIR/config/mowgli/mowgli_robot.yaml"
-  local env_file="${FINAL_ENV_FILE:-$DOCKER_DIR/.env}"
+  local resolved_receiver_family resolved_transport resolved_serial_device
+  local resolved_serial_baud resolved_frame_id resolved_ntrip_enabled
+  local resolved_ntrip_host resolved_ntrip_port resolved_ntrip_user
+  local resolved_ntrip_password resolved_ntrip_mountpoint
+  local resolved_ntrip_gga_enabled resolved_ntrip_gga_interval_s
 
   : "${GNSS_RECEIVER_FAMILY:=auto}"
+  : "${GNSS_TRANSPORT:=serial}"
   : "${GNSS_SERIAL_DEVICE:=/dev/ttyAMA4}"
   : "${GNSS_SERIAL_BAUD:=921600}"
+  : "${GNSS_FRAME_ID:=gps_link}"
+  : "${GNSS_NTRIP_GGA_ENABLED:=true}"
+  : "${GNSS_NTRIP_GGA_INTERVAL_S:=10}"
 
-  # docker/.env is the installer/compose source of truth. This generated yaml
-  # is the ROS-side runtime config materialised from the current env values.
-  #
+  load_existing_config
+
   # Seed from the comprehensive template if the runtime yaml doesn't
   # exist yet. We never overwrite an existing file — that would wipe
   # GUI-managed values like chassis dims, IMU calibration, fusion
@@ -1189,18 +1346,56 @@ EOF
     info "Patching existing $yaml_file in place"
   fi
 
+  resolved_receiver_family="$(preserved_gnss_value \
+    "$(if gnss_installer_key_is_explicit GNSS_RECEIVER_FAMILY; then printf 'true'; else printf 'false'; fi)" \
+    "${GNSS_RECEIVER_FAMILY}" "${PREV_GNSS_RECEIVER_FAMILY:-}" "auto")"
+  resolved_transport="$(preserved_gnss_value \
+    "$(if gnss_installer_key_is_explicit GNSS_TRANSPORT; then printf 'true'; else printf 'false'; fi)" \
+    "${GNSS_TRANSPORT}" "${PREV_GNSS_TRANSPORT:-}" "serial")"
+  resolved_serial_device="$(preserved_gnss_value \
+    "$(if gnss_installer_key_is_explicit GNSS_SERIAL_DEVICE; then printf 'true'; else printf 'false'; fi)" \
+    "${GNSS_SERIAL_DEVICE}" "${PREV_GNSS_SERIAL_DEVICE:-}" "/dev/ttyAMA4")"
+  resolved_serial_baud="$(preserved_gnss_value \
+    "$(if gnss_installer_key_is_explicit GNSS_SERIAL_BAUD; then printf 'true'; else printf 'false'; fi)" \
+    "${GNSS_SERIAL_BAUD}" "${PREV_GNSS_SERIAL_BAUD:-}" "921600")"
+  resolved_frame_id="$(preserved_gnss_value \
+    "$(if gnss_installer_key_is_explicit GNSS_FRAME_ID; then printf 'true'; else printf 'false'; fi)" \
+    "${GNSS_FRAME_ID}" "${PREV_GNSS_FRAME_ID:-}" "gps_link")"
+  resolved_ntrip_enabled="$(preserved_gnss_value \
+    "${CONFIG_NTRIP_ENABLED_EXPLICIT:-false}" "${CONFIG_NTRIP_ENABLED:-}" "${PREV_NTRIP_ENABLED:-}" "true")"
+  resolved_ntrip_host="$(preserved_gnss_value \
+    "${CONFIG_NTRIP_HOST_EXPLICIT:-false}" "${CONFIG_NTRIP_HOST:-}" "${PREV_NTRIP_HOST:-}" "crtk.net")"
+  resolved_ntrip_port="$(preserved_gnss_value \
+    "${CONFIG_NTRIP_PORT_EXPLICIT:-false}" "${CONFIG_NTRIP_PORT:-}" "${PREV_NTRIP_PORT:-}" "2101")"
+  resolved_ntrip_user="$(preserved_gnss_value \
+    "${CONFIG_NTRIP_USER_EXPLICIT:-false}" "${CONFIG_NTRIP_USER:-}" "${PREV_NTRIP_USER:-}" "centipede")"
+  resolved_ntrip_password="$(preserved_gnss_value \
+    "${CONFIG_NTRIP_PASSWORD_EXPLICIT:-false}" "${CONFIG_NTRIP_PASSWORD:-}" "${PREV_NTRIP_PASSWORD:-}" "centipede")"
+  resolved_ntrip_mountpoint="$(preserved_gnss_value \
+    "${CONFIG_NTRIP_MOUNTPOINT_EXPLICIT:-false}" "${CONFIG_NTRIP_MOUNTPOINT:-}" "${PREV_NTRIP_MOUNTPOINT:-}" "NEAR")"
+  resolved_ntrip_gga_enabled="$(preserved_gnss_value \
+    "$(if gnss_installer_key_is_explicit GNSS_NTRIP_GGA_ENABLED; then printf 'true'; else printf 'false'; fi)" \
+    "${GNSS_NTRIP_GGA_ENABLED}" "${PREV_GNSS_NTRIP_GGA_ENABLED:-}" "true")"
+  resolved_ntrip_gga_interval_s="$(preserved_gnss_value \
+    "$(if gnss_installer_key_is_explicit GNSS_NTRIP_GGA_INTERVAL_S; then printf 'true'; else printf 'false'; fi)" \
+    "${GNSS_NTRIP_GGA_INTERVAL_S}" "${PREV_GNSS_NTRIP_GGA_INTERVAL_S:-}" "10")"
+
   # Patch in only the keys the installer is responsible for.
   _yaml_patch_key "$yaml_file" datum_lat       "$CONFIG_DATUM_LAT"
   _yaml_patch_key "$yaml_file" datum_lon       "$CONFIG_DATUM_LON"
-  _yaml_patch_key "$yaml_file" gnss_receiver_family "\"$GNSS_RECEIVER_FAMILY\""
-  _yaml_patch_key "$yaml_file" gnss_serial_device "\"$GNSS_SERIAL_DEVICE\""
-  _yaml_patch_key "$yaml_file" gnss_serial_baud "$GNSS_SERIAL_BAUD"
-  _yaml_patch_key "$yaml_file" ntrip_enabled   "$CONFIG_NTRIP_ENABLED"
-  _yaml_patch_key "$yaml_file" ntrip_host      "\"$CONFIG_NTRIP_HOST\""
-  _yaml_patch_key "$yaml_file" ntrip_port      "$CONFIG_NTRIP_PORT"
-  _yaml_patch_key "$yaml_file" ntrip_user      "\"$CONFIG_NTRIP_USER\""
-  _yaml_patch_key "$yaml_file" ntrip_password  "\"$CONFIG_NTRIP_PASSWORD\""
-  _yaml_patch_key "$yaml_file" ntrip_mountpoint "\"$CONFIG_NTRIP_MOUNTPOINT\""
+  _yaml_patch_key "$yaml_file" gnss_receiver_family "\"$resolved_receiver_family\""
+  _yaml_patch_key "$yaml_file" gnss_transport "\"$resolved_transport\""
+  _yaml_patch_key "$yaml_file" gnss_serial_device "\"$resolved_serial_device\""
+  _yaml_patch_key "$yaml_file" gnss_serial_baud "$resolved_serial_baud"
+  _yaml_patch_key "$yaml_file" gnss_frame_id "\"$resolved_frame_id\""
+  _yaml_patch_key "$yaml_file" ntrip_enabled   "$resolved_ntrip_enabled"
+  _yaml_patch_key "$yaml_file" ntrip_host      "\"$resolved_ntrip_host\""
+  _yaml_patch_key "$yaml_file" ntrip_port      "$resolved_ntrip_port"
+  _yaml_patch_key "$yaml_file" ntrip_user      "\"$resolved_ntrip_user\""
+  _yaml_patch_key "$yaml_file" ntrip_password  "\"$resolved_ntrip_password\""
+  _yaml_patch_key "$yaml_file" ntrip_mountpoint "\"$resolved_ntrip_mountpoint\""
+  _yaml_patch_key "$yaml_file" gnss_ntrip_gga_enabled "$resolved_ntrip_gga_enabled"
+  _yaml_patch_key "$yaml_file" gnss_ntrip_gga_interval_s "$resolved_ntrip_gga_interval_s"
 
   # LiDAR enable + the LiDAR-aware localizer flags. When the operator
   # picked a LiDAR in the previous step we also want the GTSAM
@@ -1229,14 +1424,6 @@ EOF
   _yaml_patch_key "$yaml_file" dock_pose_yaw "$CONFIG_DOCK_YAW"
 
   info "Wrote $yaml_file"
-  if declare -F sync_gnss_env_contract_values >/dev/null 2>&1 \
-    && declare -F write_gnss_env_contract_keys >/dev/null 2>&1; then
-    sync_gnss_env_contract_values
-    touch "$env_file"
-    upsert_env_key "$env_file" "GNSS_STATUS_SOURCE" "$GNSS_STATUS_SOURCE"
-    upsert_env_key "$env_file" "GNSS_BACKEND" "$(effective_gnss_backend 2>/dev/null || printf 'universal\n')"
-    write_gnss_env_contract_keys "$env_file"
-  fi
 }
 
 auto_detect_position() {

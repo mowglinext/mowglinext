@@ -102,8 +102,65 @@ else
   fi
 fi
 
-# ── Third run, different preset → outputs must reflect new preset ─────────
-section "Third run with different preset propagates change"
+# ── Third run, preserve existing YAML when no new GNSS flags are supplied ──
+section "Third run preserves existing YAML GNSS config by default"
+
+python3 - <<'PY' "$SANDBOX_REPO/docker/config/mowgli/mowgli_robot.yaml"
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+replacements = {
+    'gnss_receiver_family: "auto"': 'gnss_receiver_family: "unicore"',
+    'gnss_serial_device: "/dev/ttyAMA4"': 'gnss_serial_device: "/dev/serial/by-id/existing-gnss"',
+    'gnss_serial_baud: 921600': 'gnss_serial_baud: 460800',
+    'gnss_frame_id: "gps_link"': 'gnss_frame_id: "gps_custom"',
+    'ntrip_enabled: true': 'ntrip_enabled: false',
+}
+for old, new in replacements.items():
+    text = text.replace(old, new)
+path.write_text(text)
+PY
+
+sed -i 's/^GNSS_RECEIVER_FAMILY=.*/GNSS_RECEIVER_FAMILY=auto/' "$SANDBOX_REPO/docker/.env"
+sed -i 's|^GNSS_SERIAL_DEVICE=.*|GNSS_SERIAL_DEVICE=/dev/ttyAMA4|' "$SANDBOX_REPO/docker/.env"
+sed -i 's/^GNSS_SERIAL_BAUD=.*/GNSS_SERIAL_BAUD=921600/' "$SANDBOX_REPO/docker/.env"
+sed -i 's/^GNSS_FRAME_ID=.*/GNSS_FRAME_ID=gps_link/' "$SANDBOX_REPO/docker/.env"
+sed -i 's/^GNSS_NTRIP_ENABLED=.*/GNSS_NTRIP_ENABLED=true/' "$SANDBOX_REPO/docker/.env"
+
+sleep 1
+harness_init "$SANDBOX_REPO"
+if harness_run >/dev/null 2>&1; then
+  pass "third run: harness_run without new GNSS flags"
+else
+  fail "third run: harness_run without new GNSS flags"
+fi
+
+ROBOT_YAML3="$(cat "$SANDBOX_REPO/docker/config/mowgli/mowgli_robot.yaml")"
+ENV3="$(cat "$SANDBOX_REPO/docker/.env")"
+
+assert_match "third run keeps gnss_receiver_family from YAML" \
+  '^[[:space:]]+gnss_receiver_family:[[:space:]]+"?unicore"?[[:space:]]*$' "$ROBOT_YAML3"
+assert_match "third run keeps gnss_serial_device from YAML" \
+  '^[[:space:]]+gnss_serial_device:[[:space:]]+"?/dev/serial/by-id/existing-gnss"?[[:space:]]*$' "$ROBOT_YAML3"
+assert_match "third run keeps gnss_serial_baud from YAML" \
+  '^[[:space:]]+gnss_serial_baud:[[:space:]]+460800[[:space:]]*$' "$ROBOT_YAML3"
+assert_match "third run keeps gnss_frame_id from YAML" \
+  '^[[:space:]]+gnss_frame_id:[[:space:]]+"?gps_custom"?[[:space:]]*$' "$ROBOT_YAML3"
+assert_match "third run keeps ntrip_enabled=false from YAML" \
+  '^[[:space:]]+ntrip_enabled:[[:space:]]+false[[:space:]]*$' "$ROBOT_YAML3"
+assert_contains "third run updates fallback env from preserved YAML receiver family" "GNSS_RECEIVER_FAMILY=unicore" "$ENV3"
+assert_contains "third run updates fallback env from preserved YAML serial device" "GNSS_SERIAL_DEVICE=/dev/serial/by-id/existing-gnss" "$ENV3"
+assert_contains "third run updates fallback env from preserved YAML serial baud" "GNSS_SERIAL_BAUD=460800" "$ENV3"
+assert_contains "third run updates fallback env from preserved YAML ntrip false" "GNSS_NTRIP_ENABLED=false" "$ENV3"
+
+source "$SANDBOX_REPO/install/lib/checks.sh"
+check_output="$(check_generated_gps_yaml_alignment 2>&1 || true)"
+assert_not_contains "check_generated_gps_yaml_alignment no longer errors on YAML/env divergence" "diverges between docker/.env and mowgli_robot.yaml" "$check_output"
+assert_contains "check_generated_gps_yaml_alignment reports YAML-first resolution" "resolves from mowgli_robot.yaml" "$check_output"
+
+# ── Fourth run, different preset → outputs must reflect the explicit change ─
+section "Fourth run with different preset propagates explicit change"
 
 sleep 1
 harness_init "$SANDBOX_REPO"
@@ -115,9 +172,9 @@ new_device=$(grep -E "^GNSS_SERIAL_DEVICE=" "$SANDBOX_REPO/docker/.env" | cut -d
 new_baud=$(grep -E "^GNSS_SERIAL_BAUD=" "$SANDBOX_REPO/docker/.env" | cut -d= -f2)
 new_lidar=$(grep -E "^LIDAR_TYPE=" "$SANDBOX_REPO/docker/.env" | cut -d= -f2)
 
-assert_eq "third run: GNSS_RECEIVER_FAMILY switched to nmea" "nmea" "$new_family"
-assert_eq "third run: GNSS_SERIAL_DEVICE remains UART" "/dev/ttyAMA4" "$new_device"
-assert_eq "third run: GNSS_SERIAL_BAUD stays at the validated runtime target" "921600" "$new_baud"
-assert_eq "third run: LIDAR_TYPE switched to rplidar" "rplidar" "$new_lidar"
+assert_eq "fourth run: GNSS_RECEIVER_FAMILY switched to nmea" "nmea" "$new_family"
+assert_eq "fourth run: GNSS_SERIAL_DEVICE switches to the explicit UART fallback" "/dev/ttyAMA4" "$new_device"
+assert_eq "fourth run: GNSS_SERIAL_BAUD keeps preserved YAML baud without explicit baud flag" "460800" "$new_baud"
+assert_eq "fourth run: LIDAR_TYPE switched to rplidar" "rplidar" "$new_lidar"
 
 test_summary
