@@ -46,6 +46,7 @@ Architecture (REP-105):
 """
 
 import os
+import sys
 
 import yaml
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
@@ -63,6 +64,12 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node, SetParameter
 from nav2_common.launch import RewrittenYaml
+
+# Shared robot-config loader (sibling module installed alongside this launch
+# file). Deep-merges the SPARSE installed mowgli_robot.yaml over the in-package
+# template defaults, so a missing key falls through to its versioned default.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from robot_config_util import load_robot_params  # noqa: E402
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -93,30 +100,30 @@ def generate_launch_description() -> LaunchDescription:
     # can disable per-site (e.g. cradles where GPS only Floats) to fall back
     # to the legacy graph-TF approach.
     _early_use_gps_dock_detection = "true"
-    if os.path.isfile(_runtime_cfg_path):
-        try:
-            with open(_runtime_cfg_path, "r") as _f:
-                _cfg = yaml.safe_load(_f) or {}
-            _rp = _cfg.get("mowgli", {}).get("ros__parameters", {})
-            # The yaml key is `lidar_enabled` (matches install
-            # template + GUI). The launch CLI arg is still
-            # `use_lidar:=true|false` so existing CI / dev scripts
-            # don't break.
-            if "lidar_enabled" in _rp:
-                _early_use_lidar = "true" if bool(_rp["lidar_enabled"]) else "false"
-                _lidar_from_yaml = True
-            _early_use_magnetometer = "true" if bool(
-                _rp.get("use_magnetometer", False)) else "false"
-            _early_use_scan_matching = "true" if bool(
-                _rp.get("use_scan_matching", False)) else "false"
-            _early_use_loop_closure = "true" if bool(
-                _rp.get("use_loop_closure", False)) else "false"
-            _early_fusion_graph_period = str(
-                float(_rp.get("fusion_graph_node_period_s", 0.04)))
-            _early_use_gps_dock_detection = "true" if bool(
-                _rp.get("use_gps_dock_detection", True)) else "false"
-        except yaml.YAMLError:
-            pass
+    # Merged params = in-package template defaults with the installed sparse
+    # config layered on top (robot_config_util.load_robot_params). INSTALL-
+    # DECIDED keys (e.g. lidar_enabled) live ONLY in the installed config and
+    # are absent from the template, so their PRESENCE in _rp still signals an
+    # explicit operator choice (env-var fallback preserved); DEFAULT toggles
+    # (use_magnetometer / use_scan_matching / …) fall through to the template
+    # value when the installed config omits them.
+    _rp = load_robot_params(bringup_dir, _runtime_cfg_path)
+    if "lidar_enabled" in _rp:
+        # The yaml key is `lidar_enabled` (matches install template + GUI). The
+        # launch CLI arg is still `use_lidar:=true|false` so existing CI / dev
+        # scripts don't break.
+        _early_use_lidar = "true" if bool(_rp["lidar_enabled"]) else "false"
+        _lidar_from_yaml = True
+    _early_use_magnetometer = "true" if bool(
+        _rp.get("use_magnetometer", False)) else "false"
+    _early_use_scan_matching = "true" if bool(
+        _rp.get("use_scan_matching", False)) else "false"
+    _early_use_loop_closure = "true" if bool(
+        _rp.get("use_loop_closure", False)) else "false"
+    _early_fusion_graph_period = str(
+        float(_rp.get("fusion_graph_node_period_s", 0.04)))
+    _early_use_gps_dock_detection = "true" if bool(
+        _rp.get("use_gps_dock_detection", True)) else "false"
 
     # LIDAR_ENABLED env var is a FALLBACK ONLY — it applies only when the yaml
     # does NOT set lidar_enabled. The GUI-managed yaml is authoritative when
@@ -242,11 +249,10 @@ def generate_launch_description() -> LaunchDescription:
     # of this launch always read the package template, which silently
     # diverged from the URDF (mowgli.launch.py uses the runtime path)
     # and gave Nav2 a footprint that did not match the actual robot.
-    runtime_config = "/ros2_ws/config/mowgli_robot.yaml"
-    template_config = os.path.join(bringup_dir, "config", "mowgli_robot.yaml")
-    robot_config_file = (
-        runtime_config if os.path.isfile(runtime_config) else template_config
-    )
+    # Merged params (template defaults + installed sparse overrides) — chassis
+    # geometry lives in the template, so the footprint is correct even when the
+    # installed config omits the dimensions (they are not install-decided).
+    rp = load_robot_params(bringup_dir, "/ros2_ws/config/mowgli_robot.yaml")
     footprint_str = ""
     # Physical chassis width default — overwritten from the robot config below
     # when present. Hoisted here so it is always defined for the chassis_safety_inset
@@ -262,10 +268,7 @@ def generate_launch_description() -> LaunchDescription:
     # frame; it is 0 on this stack but kept general.
     lidar_height_m = 0.22
     lidar_mount_yaw = 0.0
-    if os.path.isfile(robot_config_file):
-        with open(robot_config_file, "r") as f:
-            rcfg = yaml.safe_load(f) or {}
-        rp = rcfg.get("mowgli", {}).get("ros__parameters", {})
+    if rp:
         lidar_height_m = float(rp.get("lidar_z", lidar_height_m))
         lidar_mount_yaw = float(rp.get("lidar_yaw", 0.0)) - float(rp.get("imu_yaw", 0.0))
         cl = float(rp.get("chassis_length", 0.54))
@@ -428,10 +431,15 @@ def generate_launch_description() -> LaunchDescription:
     min_horizontal_uT = 5.0
     mag_yaw_variance = 0.0027
     runtime_robot_config = "/ros2_ws/config/mowgli_robot.yaml"
-    if os.path.isfile(runtime_robot_config):
-        with open(runtime_robot_config, "r") as f:
-            rt_cfg = yaml.safe_load(f) or {}
-        rt_rp = rt_cfg.get("mowgli", {}).get("ros__parameters", {})
+    # Merged params: in-package template defaults with the installed sparse
+    # config layered on top. Every rt_rp.get(key, <fallback>) below therefore
+    # resolves to the TEMPLATE default when the installed config omits the key,
+    # so the inline fallbacks are now belt-and-suspenders (kept only to survive
+    # a template that is itself missing a key). This is the single-source-of-
+    # truth behaviour: a maintainer changing a template default reaches every
+    # robot whose sparse config does not explicitly override it.
+    rt_rp = load_robot_params(bringup_dir, runtime_robot_config)
+    if rt_rp:
         dock_pose_x = float(rt_rp.get("dock_pose_x", 0.0))
         dock_pose_y = float(rt_rp.get("dock_pose_y", 0.0))
         dock_pose_yaw = float(rt_rp.get("dock_pose_yaw", 0.0))
