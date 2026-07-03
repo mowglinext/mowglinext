@@ -19,6 +19,8 @@ const (
 	gnssContainerName       = "mowgli-gps"
 	gnssConfigPlanBinary    = "/opt/gnss_sidecar/bin/gnss_config_plan"
 	gnssConfigApplyBinary   = "/opt/gnss_sidecar/bin/gnss_config_apply"
+	gnssApplyModeRuntime    = "runtime-only"
+	gnssApplyModeFactory    = "factory-reset"
 	gnssApplyTimeoutMs      = "5000"
 	gnssRouteCommandTimeout = 2 * time.Minute
 	gnssSettingsHeader      = "# Mowgli Robot Configuration — managed by mowglinext-gui\n# This file is the single source of truth for robot parameters.\n# Changes made here are picked up on container restart.\n\n"
@@ -297,6 +299,9 @@ func runApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDBProvider, do
 }
 
 func runFactoryResetApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDBProvider, dockerProvider pkgtypes.IDockerProvider, cfg gnssSavedConfig) (GNSSActionResponse, int, error) {
+	if err := validateGNSSFactoryResetRecoveryPolicy(cfg); err != nil {
+		return GNSSActionResponse{}, http.StatusBadRequest, err
+	}
 	if err := validateGNSSSerialDeviceExists(cfg.SerialDevice); err != nil {
 		return GNSSActionResponse{}, http.StatusBadRequest, err
 	}
@@ -308,6 +313,7 @@ func runFactoryResetApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDB
 
 	response := newGNSSActionResponse("factory_reset_apply", cfg, containerDetails)
 	addGNSSConfigWarnings(&response, cfg, true)
+	addGNSSFactoryResetRecoveryWarning(&response, cfg)
 
 	if containerDetails.Running {
 		response.StopAttempted = true
@@ -432,11 +438,38 @@ func addGNSSConfigWarnings(response *GNSSActionResponse, cfg gnssSavedConfig, li
 	}
 }
 
+func addGNSSFactoryResetRecoveryWarning(response *GNSSActionResponse, cfg gnssSavedConfig) {
+	switch cfg.ReceiverFamily {
+	case "unicore":
+		response.Warnings = append(response.Warnings,
+			fmt.Sprintf(
+				"Factory-reset recovery mode is active for Unicore. Universal GNSS will reset %s at the current baud, reopen the same device at 115200, reprobe with VERSIONA, restore COM1 to %s, verify VERSIONA again at %s, and only then this backend will replay the selected %s profile in runtime-only mode.",
+				cfg.SerialDevice,
+				cfg.ConfigBaud,
+				cfg.ConfigBaud,
+				cfg.Profile,
+			),
+		)
+	}
+}
+
+func validateGNSSFactoryResetRecoveryPolicy(cfg gnssSavedConfig) error {
+	switch cfg.ReceiverFamily {
+	case "unicore":
+		return nil
+	case "ublox":
+		return fmt.Errorf("factory reset + apply is unsupported for GNSS receiver family ublox because no safe u-blox reset recovery policy is configured in MowgliNext")
+	case "nmea", "auto":
+		return fmt.Errorf("factory reset + apply is unsupported for GNSS receiver family %s because no safe reset recovery policy exists", cfg.ReceiverFamily)
+	default:
+		return fmt.Errorf("factory reset + apply is unsupported for GNSS receiver family %s because no safe reset recovery policy exists", cfg.ReceiverFamily)
+	}
+}
+
 func buildGNSSPlanCommand(cfg gnssSavedConfig) []string {
 	command := []string{
 		gnssConfigPlanBinary,
 		"--json",
-		"--persistent",
 		"--config-baud", cfg.ConfigBaud,
 		"--rate-hz", cfg.ProfileRateHz,
 	}
@@ -448,6 +481,11 @@ func buildGNSSPlanCommand(cfg gnssSavedConfig) []string {
 }
 
 func buildGNSSApplyCommand(cfg gnssSavedConfig, profile string) []string {
+	applyMode := gnssApplyModeRuntime
+	if canonicalProfile, ok := canonicalGNSSProfile(profile); ok && canonicalProfile == "factory_reset" {
+		applyMode = gnssApplyModeFactory
+	}
+
 	command := []string{
 		gnssConfigApplyBinary,
 		"--json",
@@ -455,7 +493,7 @@ func buildGNSSApplyCommand(cfg gnssSavedConfig, profile string) []string {
 		"--device", cfg.SerialDevice,
 		"--baud", cfg.RuntimeBaud,
 		"--profile", profile,
-		"--apply-mode", "persistent",
+		"--apply-mode", applyMode,
 		"--config-baud", cfg.ConfigBaud,
 		"--rate-hz", cfg.ProfileRateHz,
 		"--timeout-ms", gnssApplyTimeoutMs,
