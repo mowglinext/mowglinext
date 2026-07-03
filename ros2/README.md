@@ -4,8 +4,8 @@ A complete ROS2 Kilted robot mower stack built from scratch. Autonomous coverage
 
 Originally inspired by the [OpenMower](https://github.com/ClemensElflein/open_mower_ros) project but rewritten from the ground up for ROS2 Kilted with Nav2, a REP-105-compliant dual-EKF GPS+IMU+wheels localizer, and cell-based strip coverage. The current localizer is the standard `ekf_odom_node` + `navsat_transform_node` + `ekf_map_node` trio under `two_d_mode`, with `fusion_graph_node` (GTSAM iSAM2) as an opt-in 1-for-1 replacement for `ekf_map_node` that adds LiDAR scan-matching between-factors and loop-closure factors.
 
-[![CI](https://github.com/cedbossneo/mowgli-ros2/actions/workflows/ci.yml/badge.svg)](https://github.com/cedbossneo/mowgli-ros2/actions/workflows/ci.yml)
-[![Docker](https://github.com/cedbossneo/mowgli-ros2/actions/workflows/docker.yml/badge.svg)](https://github.com/cedbossneo/mowgli-ros2/actions/workflows/docker.yml)
+[![CI](https://github.com/mowglinext/mowglinext/actions/workflows/ros2-ci.yml/badge.svg)](https://github.com/mowglinext/mowglinext/actions/workflows/ros2-ci.yml)
+[![Docker](https://github.com/mowglinext/mowglinext/actions/workflows/ros2-docker.yml/badge.svg)](https://github.com/mowglinext/mowglinext/actions/workflows/ros2-docker.yml)
 
 ---
 

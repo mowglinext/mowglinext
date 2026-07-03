@@ -159,10 +159,11 @@ Copy `.env.example` to `.env` and edit. All keys and their defaults:
 | `MOWER_IP` | `10.0.0.161` | IP of the mower Pi — only used in ser2net mode |
 | `LIDAR_PORT` | `/dev/ttyS1` | Host device path for the LD19 UART |
 | `LIDAR_BAUD` | `230400` | LD19 baud rate |
-| `MOWGLI_ROS2_IMAGE` | `ghcr.io/cedbossneo/mowgli-ros2/mowgli-ros2:main` | Full ROS2 stack |
-| `GPS_IMAGE` | `ghcr.io/cedbossneo/mowgli-docker/gps:v3` | u-blox + NTRIP driver |
-| `LIDAR_IMAGE` | `ghcr.io/cedbossneo/mowgli-docker/lidar:v3` | LD19 LiDAR driver |
-| `GUI_IMAGE` | `ghcr.io/cedbossneo/openmower-gui:v3` | OpenMower GUI |
+| `MOWGLI_ROS2_IMAGE` | `ghcr.io/mowglinext/mowglinext/mowgli-ros2:main` | Full ROS2 stack |
+| `GPS_IMAGE` | `ghcr.io/mowglinext/mowglinext/gps:main` | u-blox + NTRIP driver |
+| `LIDAR_IMAGE` | `ghcr.io/mowglinext/mowglinext/lidar-ldlidar:main` | LD19 LiDAR driver |
+| `MAVROS_IMAGE` | `ghcr.io/mowglinext/mowglinext/mavros:main` | MAVROS bridge |
+| `GUI_IMAGE` | `ghcr.io/mowglinext/mowglinext/mowglinext-gui:main` | Web GUI |
 
 For Universal GNSS, set `GNSS_SERIAL_DEVICE=/dev/serial/by-id/...` and keep
 `GPS_PORT` aligned with the same by-id path when you need the legacy
@@ -320,7 +321,7 @@ docker exec mowgli-ros2 cat \
 │  └──────────────────┘   └──────────────────────────┘   │
 │                                                         │
 │  ┌──────────────────┐   ┌──────────────────────────┐   │
-│  │  openmower-gui   │   │  mowgli-mqtt             │   │
+│  │  mowgli-gui      │   │  mowgli-mqtt             │   │
 │  │  Go + React      │   │  eclipse-mosquitto        │   │
 │  │  ws://…:9090     │   │  :1883 (MQTT)             │   │
 │  │  port: 80        │   │  :9001 (MQTT-WS)          │   │
@@ -338,10 +339,10 @@ docker exec mowgli-ros2 cat \
 
 | Container | Image | Purpose | Exposed ports |
 |---|---|---|---|
-| `mowgli-ros2` | `ghcr.io/cedbossneo/mowgli-ros2/mowgli-ros2:main` | Full ROS2 stack: hardware bridge, Nav2, SLAM, rosbridge, Foxglove | 9090 (rosbridge), 8765 (Foxglove) |
-| `mowgli-gps` | `ghcr.io/cedbossneo/mowgli-docker/gps:v3` | u-blox ZED-F9P driver + NTRIP RTK corrections | — |
-| `mowgli-lidar` | `ghcr.io/cedbossneo/mowgli-docker/lidar:v3` | LDRobot LD19 driver, publishes `/scan` | — |
-| `openmower-gui` | `ghcr.io/cedbossneo/openmower-gui:v3` | Web UI — area mapping, mowing control, config editor | 80 (host networking) |
+| `mowgli-ros2` | `ghcr.io/mowglinext/mowglinext/mowgli-ros2:main` | Full ROS2 stack: hardware bridge, Nav2, fusion_graph localizer, rosbridge, Foxglove | 9090 (rosbridge), 8765 (Foxglove) |
+| `mowgli-gps` | `ghcr.io/mowglinext/mowglinext/gps:main` | u-blox ZED-F9P driver + NTRIP RTK corrections | — |
+| `mowgli-lidar` | `ghcr.io/mowglinext/mowglinext/lidar-ldlidar:main` | LDRobot LD19 driver, publishes `/scan` | — |
+| `mowgli-gui` | `ghcr.io/mowglinext/mowglinext/mowglinext-gui:main` | Web UI — area mapping, mowing control, config editor | 80 (host networking) |
 | `mowgli-mqtt` | `eclipse-mosquitto:latest` | MQTT broker for Home Assistant and telemetry | 1883, 9001 |
 | `mowgli-watchtower` | `ghcr.io/nicholas-fedor/watchtower:latest` | Auto-updates containers labelled `com.centurylinklabs.watchtower.enable: "true"` | — |
 

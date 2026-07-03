@@ -66,7 +66,7 @@ The desktop layout uses a left rail (`Root` in `gui/web/src/routes/root.tsx:268-
 - See the robot's current high-level state (Idle, Autonomous, Recording, Manual Mowing) — the pill in the top-right reflects `HighLevelStatus.msg` values from `CLAUDE.md`.
 - Read live battery %, GPS quality, blade state, motor temperature.
 - Glance at "Today's work" (zone progress), "Next up" (pulled from the schedule), and "Health check" (RTK status, rain, emergency, motor temp).
-- Tap **Start mowing** to begin (or **Home** to dock — the secondary ⚠️ button is also the emergency reset entry point).
+- Tap **Start mowing** to begin. While mowing, the primary button becomes **Pause** — a true stop-in-place hold (blade off, halt where it stands, no dock trip) via `COMMAND_STOP` (8); tap **Continue** to resume. **Home** drives the robot back to the dock (`COMMAND_HOME`); the secondary ⚠️ button is also the emergency reset entry point.
 - Expand **System Info** and **Sensors & Diagnostics** at the bottom to see the live IMU / GPS / wheel-tick stream.
 
 ![Dashboard with sensors expanded](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/dashboard/03-sensors-detail.png)
@@ -106,7 +106,8 @@ The **More** menu contains everything that doesn't fit on the bottom bar:
 - *Dark map* — toggle Mapbox satellite vs dark style.
 - *Area Recording* — sends `COMMAND_RECORD_AREA` (3). Drive the robot along the boundary; finish via the same menu when you're done.
 - *Mow Next Area* — advances the multi-area outer loop without restarting.
-- *Continue* — resumes a paused run.
+- *Pause / Stop* — sends `COMMAND_STOP` (8): a true **stop-in-place hold** (blade off, halt where it stands, stays put — it does **not** drive to the dock, that is *Home*/`COMMAND_HOME`). Resumable.
+- *Continue* — resumes a paused run (re-issues `COMMAND_START`, picking up from the persisted mow-progress).
 - *Manual Mowing* — `COMMAND_MANUAL_MOW` (7); blade managed from the GUI, motion via teleop. **Collision monitor stays active** (`CLAUDE.md` invariant 9).
 - *Blade Forward / Backward / Off* — fire-and-forget commands; firmware decides whether to honour them.
 - *Backup Map / Restore Map / Download GeoJSON* — full-map import/export.
@@ -193,6 +194,8 @@ The Settings page (`gui/web/src/pages/SettingsPage.tsx`) groups parameters into 
 | Advanced | `settings/11-advanced.png` | Raw key/value editor for `mowgli_robot.yaml` parameters not covered elsewhere |
 
 Each tab persists changes to the GUI's settings store; the **Restart ROS2** button at the bottom-right (visible in every tab) reloads the ROS2 container so YAML-backed parameters are picked up.
+
+**Overridden dot + reset to default.** The installed `mowgli_robot.yaml` is [sparse](https://github.com/mowglinext/mowglinext/wiki/Configuration#sparse-robot-config-model) — it stores only values that differ from the shipped defaults. Any field you have pinned to a non-default value shows a small **dot** before its label; a subtle **reset (undo) button** next to it reverts the field to its default. Reset deletes the key from the installed config so it falls back to the in-package template, and the backend prunes any saved value that already equals its default — so the installed file stays sparse and a later software update that changes a default automatically flows through to fields you never overrode.
 
 The **Localization** tab is worth a closer look:
 
@@ -282,6 +285,8 @@ Localization is the part the user feels is most under-explained today. Here is t
 | `dock_pose_x/y/yaw` | `mowgli_robot.yaml` | (a) IMU yaw calibration when started while docked, **OR** (b) map editor → "Set docking point" with robot manually positioned on dock | Once at install. Re-run if you physically move the dock. |
 | `imu_calibration.txt` (gyro/accel bias) | `/ros2_ws/maps/imu_calibration.txt` | Auto, every dock arrival, `hardware_bridge_node` | Continuous. Look at Diagnostics → IMU bias panel; if `Implied pitch/roll` is > ~1° you should bake those into `imu_pitch/roll` (see FIRST_BOOT.md §3). |
 | `mag_calibration.yaml` (magnetometer) | `/ros2_ws/maps/mag_calibration.yaml` | `calibrate_imu_yaw_node` rotation phase, **only when `do_mag_calibration=true`** (off by default) | Optional — only needed if you toggle Magnetometer yaw on. |
+
+> The `mowgli_robot.yaml` values above are exactly the per-robot calibration outputs that the **sparse** installed config is meant to carry (alongside the install-time datum/NTRIP/hardware choices). Everything else is a template default — see [Configuration → Sparse robot config model](https://github.com/mowglinext/mowglinext/wiki/Configuration#sparse-robot-config-model).
 
 **What changes when you tune `use_fusion_graph`:**
 
