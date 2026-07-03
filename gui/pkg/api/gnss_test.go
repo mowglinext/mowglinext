@@ -178,6 +178,8 @@ func TestGNSSPlan_DoesNotRequireConfirmAndAvoidsSerialAccess(t *testing.T) {
 	assert.Equal(t, gnssConfigPlanBinary, docker.runSpecs[0].Cmd[0])
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--config-baud")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "460800")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--signal-profile")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "balanced")
 	assert.NotContains(t, docker.runSpecs[0].Cmd, "--model")
 
 	var response GNSSActionResponse
@@ -245,6 +247,8 @@ func TestGNSSApply_PassesConfigBaudAndRestartsAfterSuccess(t *testing.T) {
 	assert.Contains(t, docker.runSpecs[0].Cmd, "460800")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--device")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--signal-profile")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "balanced")
 
 	envContent, err := os.ReadFile(envFile)
 	require.NoError(t, err)
@@ -259,7 +263,7 @@ func TestGNSSApply_PassesConfigBaudAndRestartsAfterSuccess(t *testing.T) {
 	assert.Equal(t, "460800", response.RuntimeBaud)
 	assert.False(t, response.RuntimeBaudDiffersFromConfig)
 	assert.Contains(t, strings.Join(response.Warnings, "\n"), "Configured receiver baud differs from runtime baud.")
-	assert.Contains(t, strings.Join(response.Warnings, "\n"), "GNSS_SIGNAL_PROFILE is persisted in the UI")
+	assert.NotContains(t, strings.Join(response.Warnings, "\n"), "GNSS_SIGNAL_PROFILE is persisted in the UI")
 	assert.Contains(t, strings.Join(response.Warnings, "\n"), "no receiver model was selected")
 }
 

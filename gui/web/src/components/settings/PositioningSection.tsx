@@ -337,7 +337,11 @@ export const PositioningSection: React.FC<Props> = ({
 
             {/* The plan/apply/factory-reset receiver tooling is developer-grade —
                 keep it for Expert mode only. Basic users save with the page's
-                Save button at the bottom, which applies + restarts the receiver. */}
+                Save button at the bottom, which persists the settings and
+                restarts the receiver container to pick up transport/NTRIP
+                changes. The signal profile is a receiver-flash setting: it only
+                reaches the receiver via Plan & Apply here, not via a plain
+                Save/restart. */}
             {expertMode && (
                 <GnssReceiverActionsCard
                     isDirty={isDirty}
