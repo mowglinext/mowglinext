@@ -34,24 +34,16 @@ const buildPulseKeyframes = (dangerHex: string) => `
 }
 `;
 
-// Motion states → primary (active); resting states → warning;
-// everything else (emergencies, unknown) → danger.
-const MOTION_STATES = new Set([
-    "MOWING", "TRANSIT", "UNDOCKING", "RETURNING_HOME", "MANUAL_MOWING",
-    "RESUMING_AFTER_RAIN", "RESUMING_UNDOCKING", "BOUNDARY_RECOVERY",
-    "LOW_BATTERY_DOCKING", "CRITICAL_BATTERY_DOCKING", "RAIN_DETECTED_DOCKING",
-    "COVERAGE_FAILED_DOCKING", "SKIP_STRIP", "PREFLIGHT_CHECK",
-    "CALIBRATING_HEADING", "RECORDING",
-]);
-const RESTING_STATES = new Set([
-    "IDLE", "IDLE_DOCKED", "CHARGING", "MOWING_COMPLETE",
-    "RECORDING_COMPLETE", "RAIN_WAITING", "RAIN_TIMEOUT",
-]);
-
-const statusColor = (state: string | undefined, colors: {primary: string; warning: string; danger: string}): string => {
-    if (!state) return colors.danger;
-    if (MOTION_STATES.has(state)) return colors.primary;
-    if (RESTING_STATES.has(state)) return colors.warning;
+// Colour by the NUMERIC high-level state (status_nodes.cpp publishes it every
+// tick): 2=AUTONOMOUS / 3=RECORDING / 4=MANUAL_MOWING are active (primary);
+// 1=IDLE is resting (warning); 0=NULL/EMERGENCY or unknown is danger. The old
+// string-allowlist approach mis-coloured legitimate state=2 substates
+// (PLANNING, OBSTACLE_BACKOFF, DYNAMIC_OBSTACLE_CLEARED, AREA_UNREACHABLE) as
+// danger-red because the set never enumerated them.
+const statusColor = (stateNum: number | undefined, isEmergency: boolean, colors: {primary: string; warning: string; danger: string}): string => {
+    if (isEmergency) return colors.danger;
+    if (stateNum === 2 || stateNum === 3 || stateNum === 4) return colors.primary;
+    if (stateNum === 1) return colors.warning;
     return colors.danger;
 };
 
@@ -75,9 +67,13 @@ export const MowerStatus = () => {
     const stateName = highLevelStatus.state_name ?? (
         isEmergency ? "EMERGENCY" :
         isCharging ? "CHARGING" :
-        hwStatus.mower_status != null ? "IDLE" :
+        hwStatus.mower_status != null ? "IDLE_DOCKED" :
         undefined
     );
+    // Numeric high-level state (reliable, published every tick): 2=AUTONOMOUS,
+    // 3=RECORDING, 4=MANUAL_MOWING. Drives colour/pulse/mowing so transient
+    // state=2 substates (planning, obstacle backoff) never read as idle.
+    const stateNum = highLevelStatus.state ?? -1;
 
     const gpsStatus = deriveGpsStatus(gnss);
     const gpsColor =
@@ -90,9 +86,7 @@ export const MowerStatus = () => {
         highLevelStatus.battery_percent, power.v_battery, settings,
     );
 
-    const isMowing = stateName === "MOWING" || stateName === "TRANSIT" ||
-        stateName === "UNDOCKING" || stateName === "RETURNING_HOME" ||
-        stateName === "MANUAL_MOWING";
+    const isMowing = stateNum === 2 || stateNum === 3 || stateNum === 4;
 
     const pulseAnimation = isEmergency
         ? 'mowerPulseRed 1.5s ease-in-out infinite'
@@ -204,7 +198,7 @@ export const MowerStatus = () => {
             <Space size="small" style={{flexShrink: 0}}>
                 <Space size={4}>
                     <Badge
-                        color={statusColor(stateName, colors)}
+                        color={statusColor(stateNum, isEmergency, colors)}
                         style={{animation: pulseAnimation, borderRadius: '50%'}}
                     />
                     <Typography.Text style={{fontSize: 12, color: colors.text, whiteSpace: 'nowrap'}}>
