@@ -63,6 +63,12 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_gnss_launch_config test/test_gnss_launch_config.py
     TIMEOUT 30
   )
+  # Verifies the sparse-installed-config deep-merge (robot_config_util):
+  # template-only defaults, sparse overrides + fall-through, reset-to-default,
+  # and full-config backward compat.
+  ament_add_pytest_test(test_robot_config_util test/test_robot_config_util.py
+    TIMEOUT 30
+  )
 
 endif()
 

@@ -27,8 +27,8 @@ Brings up:
 """
 
 import os
+import sys
 
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -41,6 +41,12 @@ from launch.substitutions import (
 from launch_ros.actions import Node
 from launch_ros.descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
+
+# Shared robot-config loader (sibling module installed alongside this launch
+# file). Deep-merges the SPARSE installed mowgli_robot.yaml over the in-package
+# template defaults, so a missing key falls through to its versioned default.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from robot_config_util import load_robot_params  # noqa: E402
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -73,15 +79,11 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # Robot config (mowgli_robot.yaml)
     # ------------------------------------------------------------------
-    # Try the Docker-mounted config first, fall back to the in-package default.
-    robot_config_path = "/ros2_ws/config/mowgli_robot.yaml"
-    if not os.path.isfile(robot_config_path):
-        robot_config_path = os.path.join(bringup_dir, "config", "mowgli_robot.yaml")
-
-    with open(robot_config_path, "r") as f:
-        robot_config_yaml = yaml.safe_load(f) or {}
-
-    robot_params = robot_config_yaml.get("mowgli", {}).get("ros__parameters", {})
+    # Merged params = in-package template defaults with the installed sparse
+    # config layered on top (robot_config_util.load_robot_params). A key the
+    # installed config omits falls through to its versioned template default;
+    # a missing installed file yields the pure template. Single source of truth.
+    robot_params = load_robot_params(bringup_dir, "/ros2_ws/config/mowgli_robot.yaml")
 
     # ------------------------------------------------------------------
     # URDF / xacro

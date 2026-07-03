@@ -3,12 +3,16 @@ import { Card, Col, Form, InputNumber, Row, Select, Space, Switch, Typography } 
 import { ScissorOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
+import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 
 const { Text, Paragraph } = Typography;
 
 type Props = {
     values: Record<string, any>;
     onChange: (key: string, value: any) => void;
+    isOverridden?: (key: string) => boolean;
+    hasDefault?: (key: string) => boolean;
+    onReset?: (key: string) => void;
 };
 
 /** Mini SVG preview showing the strip pattern. Spacing == tool_width (F2C
@@ -130,8 +134,23 @@ const StripPreview: React.FC<{ pathSpacing: number; toolWidth: number; headlandW
     );
 };
 
-export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
+export const MowingSection: React.FC<Props> = ({
+    values,
+    onChange,
+    isOverridden,
+    hasDefault,
+    onReset,
+}) => {
     const { t } = useTranslation();
+    const fieldLabel = (key: string, label: React.ReactNode) => (
+        <SettingFieldLabel
+            settingKey={key}
+            label={label}
+            overridden={isOverridden?.(key) ?? false}
+            canReset={hasDefault?.(key) ?? false}
+            onReset={onReset}
+        />
+    );
     // F2C swath spacing == tool_width (Robot::setCovWidth). The
     // preview shows blade swaths spaced by tool_width — adjacent
     // strips tile exactly, no overlap or gap.
@@ -162,7 +181,7 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                     <Form layout="vertical" size="small">
                         <Row gutter={[16, 0]}>
                             <Col xs={12} sm={8}>
-                                <Form.Item label={t("settingsMowing.mowingSpeed")} tooltip={t("settingsMowing.mowingSpeedTooltip")}>
+                                <Form.Item label={fieldLabel("mowing_speed", t("settingsMowing.mowingSpeed"))} tooltip={t("settingsMowing.mowingSpeedTooltip")}>
                                     <InputNumber
                                         value={values.mowing_speed}
                                         onChange={(v) => onChange("mowing_speed", v)}
@@ -172,7 +191,7 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
-                                <Form.Item label={t("settingsMowing.transitSpeed")} tooltip={t("settingsMowing.transitSpeedTooltip")}>
+                                <Form.Item label={fieldLabel("transit_speed", t("settingsMowing.transitSpeed"))} tooltip={t("settingsMowing.transitSpeedTooltip")}>
                                     <InputNumber
                                         value={values.transit_speed}
                                         onChange={(v) => onChange("transit_speed", v)}
@@ -193,7 +212,7 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                         <Form layout="vertical" size="small">
                             <Row gutter={[16, 0]}>
                                 <Col xs={12}>
-                                    <Form.Item label={t("settingsMowing.headlandWidth")} tooltip={t("settingsMowing.headlandWidthTooltip")}>
+                                    <Form.Item label={fieldLabel("headland_width", t("settingsMowing.headlandWidth"))} tooltip={t("settingsMowing.headlandWidthTooltip")}>
                                         <InputNumber
                                             value={values.headland_width}
                                             onChange={(v) => onChange("headland_width", v)}
@@ -203,7 +222,7 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12}>
-                                    <Form.Item label={t("settingsMowing.headlandPasses")} tooltip={t("settingsMowing.headlandPassesTooltip")}>
+                                    <Form.Item label={fieldLabel("num_headland_passes", t("settingsMowing.headlandPasses"))} tooltip={t("settingsMowing.headlandPassesTooltip")}>
                                         <InputNumber
                                             value={values.num_headland_passes}
                                             onChange={(v) => onChange("num_headland_passes", v)}
@@ -213,7 +232,7 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12}>
-                                    <Form.Item label={t("settingsMowing.chassisSafetyInset")} tooltip={t("settingsMowing.chassisSafetyInsetTooltip")}>
+                                    <Form.Item label={fieldLabel("chassis_safety_inset", t("settingsMowing.chassisSafetyInset"))} tooltip={t("settingsMowing.chassisSafetyInsetTooltip")}>
                                         <InputNumber
                                             value={values.chassis_safety_inset}
                                             onChange={(v) => onChange("chassis_safety_inset", v)}
@@ -223,7 +242,7 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12}>
-                                    <Form.Item label={t("settingsMowing.minTurningRadius")} tooltip={t("settingsMowing.minTurningRadiusTooltip")}>
+                                    <Form.Item label={fieldLabel("min_turning_radius", t("settingsMowing.minTurningRadius"))} tooltip={t("settingsMowing.minTurningRadiusTooltip")}>
                                         <InputNumber
                                             value={values.min_turning_radius}
                                             onChange={(v) => onChange("min_turning_radius", v)}
@@ -233,7 +252,7 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12}>
-                                    <Form.Item label={t("settingsMowing.swathOverlap")} tooltip={t("settingsMowing.swathOverlapTooltip")}>
+                                    <Form.Item label={fieldLabel("swath_overlap", t("settingsMowing.swathOverlap"))} tooltip={t("settingsMowing.swathOverlapTooltip")}>
                                         <InputNumber
                                             value={values.swath_overlap}
                                             onChange={(v) => onChange("swath_overlap", v)}
@@ -243,7 +262,7 @@ export const MowingSection: React.FC<Props> = ({ values, onChange }) => {
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12}>
-                                    <Form.Item label={t("settingsMowing.mowDirection")} tooltip={t("settingsMowing.mowDirectionTooltip")}>
+                                    <Form.Item label={fieldLabel("mow_direction", t("settingsMowing.mowDirection"))} tooltip={t("settingsMowing.mowDirectionTooltip")}>
                                         <Select
                                             value={values.mow_direction ?? 0}
                                             onChange={(v) => onChange("mow_direction", v)}
