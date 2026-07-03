@@ -85,7 +85,10 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
     };
 
     const handleStopManualMode = async () => {
-        await mowerAction("high_level_control", {Command: 2})();
+        // STOP (COMMAND_STOP=8 → StopHoldSequence): from MANUAL_MOWING (state 4)
+        // this halts in place and turns the mower off, exiting manual — no dock
+        // drive.
+        await mowerAction("high_level_control", {Command: 8})();
         // Explicit Stop: drop the manual UI immediately and cancel any pending
         // debounce so a lingering timer can't re-toggle it.
         clearTimeout(exitTimerRef.current);

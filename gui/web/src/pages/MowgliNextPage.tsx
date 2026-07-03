@@ -203,10 +203,10 @@ export const MowgliNextPage = () => {
 
   const actions = {
     onStart: mowerAction("high_level_control", {Command: 1}),
-    // No pause command exists (mower_logic/manual_pause_mowing returned 500);
-    // the "pause" affordance maps to HOME (stop + dock), same as onHome — it is
-    // labelled "Retour base" in the UI to match what it actually does.
-    onPause: mowerAction("high_level_control", {Command: 2}),
+    // Pause = STOP (COMMAND_STOP=8 → StopHoldSequence: mower off, halt in place,
+    // Nav2 left up so the mission can resume via START, no dock drive). The
+    // separate Home control keeps HOME (Command 2 → return to dock).
+    onPause: mowerAction("high_level_control", {Command: 8}),
     onHome: mowerAction("high_level_control", {Command: 2}),
     onStop: confirmEmergency,
     // Clear a latched emergency from the Dashboard. Without this the robot is

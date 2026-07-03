@@ -29,6 +29,7 @@ import {
     AimOutlined,
     ForwardOutlined,
     CaretRightOutlined,
+    PauseOutlined,
     ThunderboltOutlined,
     ImportOutlined,
 } from "@ant-design/icons";
@@ -185,7 +186,7 @@ export const MapToolbarMobile = ({
         {type: "divider"},
         {key: "areaRecording", icon: <AimOutlined />, label: t("mapToolbarMobile.areaRecording")},
         {key: "mowNext", icon: <ForwardOutlined />, label: t("mapToolbarMobile.mowNextArea")},
-        {key: "continueOrPause", icon: isIdle ? <CaretRightOutlined /> : <HomeOutlined />, label: isIdle ? t("mapToolbarMobile.continue") : t("mapToolbarMobile.pause")},
+        {key: "continueOrPause", icon: isIdle ? <CaretRightOutlined /> : <PauseOutlined />, label: isIdle ? t("mapToolbarMobile.continue") : t("mapToolbarMobile.pause")},
         {type: "divider"},
         {key: "bladeForward", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeForward")},
         {key: "bladeBackward", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeBackward")},
