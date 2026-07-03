@@ -419,9 +419,6 @@ func addGNSSConfigWarnings(response *GNSSActionResponse, cfg gnssSavedConfig, li
 		}
 		response.Warnings = append(response.Warnings, warning)
 	}
-	if cfg.SignalProfile != "" {
-		response.Warnings = append(response.Warnings, "GNSS_SIGNAL_PROFILE is persisted in the UI, but backend translation to Universal GNSS tool arguments is not implemented yet.")
-	}
 }
 
 func buildGNSSPlanCommand(cfg gnssSavedConfig) []string {
@@ -431,6 +428,9 @@ func buildGNSSPlanCommand(cfg gnssSavedConfig) []string {
 		"--persistent",
 		"--config-baud", cfg.ConfigBaud,
 		"--rate-hz", cfg.ProfileRateHz,
+	}
+	if cfg.SignalProfile != "" {
+		command = append(command, "--signal-profile", cfg.SignalProfile)
 	}
 	if cfg.ReceiverModel != "" {
 		command = append(command, "--model", cfg.ReceiverModel)
@@ -452,6 +452,9 @@ func buildGNSSApplyCommand(cfg gnssSavedConfig, profile string) []string {
 		"--rate-hz", cfg.ProfileRateHz,
 		"--timeout-ms", gnssApplyTimeoutMs,
 		"--confirm",
+	}
+	if cfg.SignalProfile != "" {
+		command = append(command, "--signal-profile", cfg.SignalProfile)
 	}
 	if cfg.ReceiverModel != "" {
 		command = append(command, "--model", cfg.ReceiverModel)
