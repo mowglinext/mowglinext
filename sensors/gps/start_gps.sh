@@ -338,7 +338,26 @@ receiver_family="$(resolve_receiver_family)"
 transport="$(resolve_transport)"
 serial_device="$(resolve_serial_device)"
 serial_baud="$(resolve_serial_baud)"
-publish_rate_hz="$(resolve_publish_rate_hz)"
+normalize_ros_double() {
+  value="$1"
+
+  case "$value" in
+    "")
+      printf '%s\n' "10.0"
+      ;;
+    *.*)
+      printf '%s\n' "$value"
+      ;;
+    *[!0-9]*)
+      printf '%s\n' "$value"
+      ;;
+    *)
+      printf '%s\n' "${value}.0"
+      ;;
+  esac
+}
+
+publish_rate_hz="$(normalize_ros_double "$(resolve_publish_rate_hz)")"
 frame_id="$(resolve_frame_id)"
 ntrip_enabled="$(resolve_ntrip_enabled)"
 ntrip_host="$(resolve_ntrip_host)"
