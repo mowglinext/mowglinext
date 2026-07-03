@@ -19,7 +19,6 @@ import {
     UploadOutlined,
     ScissorOutlined,
     ControlOutlined,
-    StopOutlined,
     SplitCellsOutlined,
     MinusSquareOutlined,
     PlayCircleOutlined,
@@ -29,7 +28,6 @@ import {
     BorderOutlined,
     AimOutlined,
     ForwardOutlined,
-    PauseOutlined,
     CaretRightOutlined,
     ThunderboltOutlined,
     ImportOutlined,
@@ -187,7 +185,7 @@ export const MapToolbarMobile = ({
         {type: "divider"},
         {key: "areaRecording", icon: <AimOutlined />, label: t("mapToolbarMobile.areaRecording")},
         {key: "mowNext", icon: <ForwardOutlined />, label: t("mapToolbarMobile.mowNextArea")},
-        {key: "continueOrPause", icon: isIdle ? <CaretRightOutlined /> : <PauseOutlined />, label: isIdle ? t("mapToolbarMobile.continue") : t("mapToolbarMobile.pause")},
+        {key: "continueOrPause", icon: isIdle ? <CaretRightOutlined /> : <HomeOutlined />, label: isIdle ? t("mapToolbarMobile.continue") : t("mapToolbarMobile.pause")},
         {type: "divider"},
         {key: "bladeForward", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeForward")},
         {key: "bladeBackward", icon: <ThunderboltOutlined />, label: t("mapToolbarMobile.bladeBackward")},
@@ -412,7 +410,7 @@ export const MapToolbarMobile = ({
                 <AsyncButton
                     size="large"
                     danger={manualMode}
-                    icon={manualMode ? <StopOutlined /> : <ControlOutlined />}
+                    icon={manualMode ? <HomeOutlined /> : <ControlOutlined />}
                     onAsyncClick={manualMode ? onStopManualMode : onManualMode}
                     aria-label={manualMode ? t("mapToolbarMobile.stopManualMowing") : t("mapToolbarMobile.manualMowing")}
                     style={touchTarget}

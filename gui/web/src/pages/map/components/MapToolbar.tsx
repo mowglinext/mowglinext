@@ -8,14 +8,12 @@ import {
     DatabaseOutlined,
     DownloadOutlined,
     ControlOutlined,
-    StopOutlined,
     PlayCircleOutlined,
     HomeOutlined,
     WarningOutlined,
     ScissorOutlined,
     AimOutlined,
     ForwardOutlined,
-    PauseOutlined,
     CaretRightOutlined,
     ThunderboltOutlined,
     CheckOutlined,
@@ -97,10 +95,10 @@ export const MapToolbar = ({
         {type: "divider"},
         {key: "areaRecording", icon: <AimOutlined />, label: t("mapToolbar.areaRecording")},
         {key: "mowNext", icon: <ForwardOutlined />, label: t("mapToolbar.mowNextArea")},
-        {key: "continueOrPause", icon: isIdle ? <CaretRightOutlined /> : <PauseOutlined />, label: isIdle ? t("mapToolbar.continue") : t("mapToolbar.pause")},
+        {key: "continueOrPause", icon: isIdle ? <CaretRightOutlined /> : <HomeOutlined />, label: isIdle ? t("mapToolbar.continue") : t("mapToolbar.pause")},
         {type: "divider"},
         ...(manualMode
-            ? [{key: "stopManual", icon: <StopOutlined />, label: t("mapToolbar.stopManualMowing"), danger: true} satisfies NonNullable<MenuProps["items"]>[number]]
+            ? [{key: "stopManual", icon: <HomeOutlined />, label: t("mapToolbar.stopManualMowing"), danger: true} satisfies NonNullable<MenuProps["items"]>[number]]
             : [{key: "manual", icon: <ControlOutlined />, label: t("mapToolbar.manualMowing")} satisfies NonNullable<MenuProps["items"]>[number]]
         ),
         {type: "divider"},
@@ -209,7 +207,7 @@ export const MapToolbar = ({
 
             <AsyncButton
                 danger={manualMode}
-                icon={manualMode ? <StopOutlined /> : <ControlOutlined />}
+                icon={manualMode ? <HomeOutlined /> : <ControlOutlined />}
                 onAsyncClick={manualMode ? onStopManualMode : onManualMode}
             >
                 {manualMode ? t("mapToolbar.stopManual") : t("mapToolbar.manualMow")}

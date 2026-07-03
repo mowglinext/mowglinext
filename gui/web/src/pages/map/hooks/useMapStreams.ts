@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { Map as MapboxMap } from "mapbox-gl";
 import { useWS } from "../../../hooks/useWS.ts";
 import { useHighLevelStatus } from "../../../hooks/useHighLevelStatus.ts";
@@ -117,6 +117,11 @@ export function useMapStreams({
         features: [],
     });
     const [dynamicObstacles, setDynamicObstacles] = useState<TrackedObstacle[]>([]);
+    // Debounce timer for tearing down the teleop joy stream. A single stray
+    // non-MANUAL_MOWING/non-RECORDING frame (guard blip ahead of MainLogic) must
+    // NOT kill teleop mid-drive — we only stop the joy stream after the mower has
+    // stayed out of a joy-eligible state for a sustained window.
+    const joyStopTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
     const highLevelStatus = useHighLevelStatus();
 
@@ -435,16 +440,29 @@ export function useMapStreams({
     useEffect(() => {
         const stateName = highLevelStatus.highLevelStatus.state_name;
         if (stateName === "RECORDING") {
+            clearTimeout(joyStopTimerRef.current);
+            joyStopTimerRef.current = undefined;
             joyStream.start("/api/mowglinext/publish/joy");
             recordingTrajectoryStream.start("/api/mowglinext/subscribe/recordingTrajectory");
             setEditMap(false);
             return;
         }
         if (stateName === "MANUAL_MOWING") {
+            clearTimeout(joyStopTimerRef.current);
+            joyStopTimerRef.current = undefined;
             joyStream.start("/api/mowglinext/publish/joy");
             return;
         }
-        joyStream.stop();
+        // Leaving a joy-eligible state: DEBOUNCE the joy teardown so a single
+        // stray guard frame (EMERGENCY/battery/boundary blip) can't kill teleop
+        // mid-drive. The recording-trajectory cleanup can happen immediately —
+        // it's only visual and re-subscribes instantly if RECORDING returns.
+        if (joyStopTimerRef.current === undefined) {
+            joyStopTimerRef.current = setTimeout(() => {
+                joyStopTimerRef.current = undefined;
+                joyStream.stop();
+            }, 1200);
+        }
         recordingTrajectoryStream.stop();
         // Clear trajectory feature when leaving recording mode
         setFeatures((oldFeatures) => {
@@ -453,6 +471,11 @@ export function useMapStreams({
             return newFeatures;
         });
     }, [highLevelStatus.highLevelStatus.state_name]);
+
+    // Clear the joy-stop debounce on unmount so it can't fire after teardown.
+    useEffect(() => {
+        return () => clearTimeout(joyStopTimerRef.current);
+    }, []);
 
     // Start streams once the datum is available. Keyed on the datum values
     // ONLY — not the whole `settings` object. The previous `[settings]`
