@@ -6,6 +6,10 @@ uint8 COMMAND_RECORD_AREA=3
 uint8 COMMAND_RECORD_FINISH=5
 uint8 COMMAND_RECORD_CANCEL=6
 uint8 COMMAND_MANUAL_MOW=7
+# Stop-in-place / hold: halt motion, mower off, stay put — does NOT drive to the
+# dock (that is COMMAND_HOME). Routes to the StopHold/IdleSequence branch. Used
+# by the GUI's "Stop Manual" and "Pause" buttons.
+uint8 COMMAND_STOP=8
 uint8 COMMAND_RESET_EMERGENCY=254
 uint8 COMMAND_DELETE_MAPS=255
 
