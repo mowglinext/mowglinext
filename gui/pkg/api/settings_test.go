@@ -558,12 +558,14 @@ func TestPostSettingsYAML_NewFile(t *testing.T) {
 	assert.Contains(t, string(envContent), "GNSS_RECEIVER_FAMILY=unicore")
 	assert.Contains(t, string(envContent), "GNSS_SERIAL_DEVICE=/dev/serial/by-id/usb-gnss")
 	assert.Contains(t, string(envContent), "GNSS_SERIAL_BAUD=921600")
-	assert.Contains(t, string(envContent), "GNSS_CONFIG_BAUD=460800")
-	assert.Contains(t, string(envContent), "GNSS_PROFILE=rover_high_precision")
-	assert.Contains(t, string(envContent), "GNSS_SIGNAL_PROFILE=all_signals")
-	assert.Contains(t, string(envContent), "GNSS_PROFILE_RATE_HZ=5")
 	assert.Contains(t, string(envContent), "GNSS_BACKEND=universal")
+	assert.Contains(t, string(envContent), "GNSS_TRANSPORT=serial")
+	assert.Contains(t, string(envContent), "GNSS_FRAME_ID=gps_link")
 	assert.Contains(t, string(envContent), "GNSS_NTRIP_ENABLED=true")
+	assert.NotContains(t, string(envContent), "GNSS_CONFIG_BAUD=460800")
+	assert.NotContains(t, string(envContent), "GNSS_PROFILE=rover_high_precision")
+	assert.NotContains(t, string(envContent), "GNSS_SIGNAL_PROFILE=all_signals")
+	assert.NotContains(t, string(envContent), "GNSS_PROFILE_RATE_HZ=5")
 	assert.NotContains(t, string(envContent), "GNSS_SIGNAL_GROUP=3 6")
 	assert.NotContains(t, string(envContent), legacyProtocol)
 	assert.NotContains(t, string(envContent), legacyByID)
@@ -674,7 +676,7 @@ func TestPostSettingsYAMLPurgesLegacyRuntimeEnvKeys(t *testing.T) {
 	legacyProtocol := "GPS_" + "PROTOCOL=UBX\n"
 	legacyByID := "GPS_" + "BY_ID=/dev/serial/by-id/legacy\n"
 	legacyRuntime := "UNICORE_" + "ROS_EXECUTABLE=unicore_node\n"
-	envFile := createTempConfigFile(t, "ROS_DOMAIN_ID=0\n"+legacyProtocol+legacyByID+legacyRuntime)
+	envFile := createTempConfigFile(t, "ROS_DOMAIN_ID=0\n"+legacyProtocol+legacyByID+legacyRuntime+"GNSS_RECEIVER_FAMILY=ublox\nGNSS_PROFILE=runtime_only\n")
 
 	db := types.NewMockDBProvider()
 	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
@@ -702,6 +704,82 @@ func TestPostSettingsYAMLPurgesLegacyRuntimeEnvKeys(t *testing.T) {
 	assert.NotContains(t, string(envContent), strings.TrimSpace(legacyProtocol))
 	assert.NotContains(t, string(envContent), strings.TrimSpace(legacyByID))
 	assert.NotContains(t, string(envContent), strings.TrimSpace(legacyRuntime))
+	assert.Contains(t, string(envContent), "GNSS_RECEIVER_FAMILY=ublox")
+	assert.NotContains(t, string(envContent), "GNSS_PROFILE=runtime_only")
+}
+
+func TestGetSettingsYAML_UsesEnvFallbackForFamilyDeviceAndBaudWhenYAMLIsMissing(t *testing.T) {
+	yamlFile := createTempYAMLFile(t, "mowgli:\n  ros__parameters:\n    gnss_profile: rover_high_precision\n")
+	envFile := createTempConfigFile(t, strings.Join([]string{
+		"GNSS_RECEIVER_FAMILY=unicore",
+		"GNSS_SERIAL_DEVICE=/dev/serial/by-id/usb-fallback",
+		"GNSS_SERIAL_BAUD=460800",
+	}, "\n")+"\n")
+
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+
+	router := setupSettingsRouter(db)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/settings/yaml", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, "unicore", response["gnss_receiver_family"])
+	assert.Equal(t, "/dev/serial/by-id/usb-fallback", response["gnss_serial_device"])
+	assert.Equal(t, float64(460800), response["gnss_serial_baud"])
+}
+
+func TestGetSettingsYAML_KeepsExplicitNTRIPDisableOverEnvFallback(t *testing.T) {
+	yamlFile := createTempYAMLFile(t, `mowgli:
+  ros__parameters:
+    ntrip_enabled: false
+`)
+	envFile := createTempConfigFile(t, "GNSS_NTRIP_ENABLED=true\n")
+
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+
+	router := setupSettingsRouter(db)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/settings/yaml", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, false, response["ntrip_enabled"])
+}
+
+func TestGetSettingsYAML_UsesDefaultsOnlyWhenYAMLAndEnvAreAbsent(t *testing.T) {
+	yamlFile := createTempYAMLFile(t, "")
+	envFile := createTempConfigFile(t, "")
+
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+
+	router := setupSettingsRouter(db)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/settings/yaml", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, "auto", response["gnss_receiver_family"])
+	assert.Equal(t, "/dev/ttyAMA4", response["gnss_serial_device"])
+	assert.Equal(t, float64(921600), response["gnss_serial_baud"])
 }
 
 func TestPostSettingsYAML_InvalidJSON(t *testing.T) {

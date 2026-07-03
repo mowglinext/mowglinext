@@ -2283,6 +2283,24 @@
   "settingsGnssAdvanced": {
     "rawValueFallback": "{{label}} Raw Value"
   },
+  "gnssRuntimeConfig": {
+    "detectedDevicesLabel": "Detected serial device",
+    "detectedDevicesPlaceholder": "Select a detected serial device",
+    "manualSerialPathLabel": "Manual serial path override",
+    "activeLinkLabel": "Active runtime link",
+    "resolvedTarget": "Resolved target: {{path}}",
+    "envFallbackMessage": "Runtime is using .env fallback for GNSS family/device/baud because no GUI YAML override is saved yet: {{family}} / {{device}} / {{baud}}.",
+    "configuredDeviceMissing": "The selected GNSS serial device no longer exists: {{device}}.",
+    "activeDeviceMissing": "The active GNSS serial device does not exist: {{device}}.",
+    "familyMismatch": "Detected receiver family {{detected}} differs from the selected family {{selected}}.",
+    "modelMismatch": "Detected receiver model {{detected}} differs from the selected model {{selected}}.",
+    "loadWarning": "Unable to load GNSS runtime config details.",
+    "source": {
+      "config": "GUI/YAML",
+      "env": ".env fallback",
+      "default": "built-in default"
+    }
+  },
   "settingsGnssSignalHelp": {},
   "settingsGnssReceiver": {
     "cardTitle": "Receiver Actions",

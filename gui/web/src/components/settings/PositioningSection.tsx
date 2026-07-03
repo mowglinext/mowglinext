@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Alert, App, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Switch, Typography } from "antd";
+import { Alert, App, Button, Card, Col, Form, InputNumber, Row, Select, Space, Switch, Typography } from "antd";
 import { GlobalOutlined, SettingOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useApi } from "../../hooks/useApi.ts";
@@ -20,6 +20,7 @@ import {
 import { GnssSignalProfileHelp } from "./GnssSignalProfileHelp.tsx";
 import { UniversalGnssAdvancedSettings } from "./UniversalGnssAdvancedSettings.tsx";
 import { GnssReceiverActionsCard } from "./GnssReceiverActionsCard.tsx";
+import { GnssSerialDeviceConfigField } from "./GnssSerialDeviceConfigField.tsx";
 
 const { Text, Paragraph } = Typography;
 
@@ -283,13 +284,13 @@ export const PositioningSection: React.FC<Props> = ({
                                     </Form.Item>
                                 </Col>
                                 <Col xs={24} sm={14}>
-                                    <Form.Item label={t("settingsPositioning.serialDeviceLabel")}>
-                                        <Input
-                                            value={values.gnss_serial_device ?? "/dev/ttyAMA4"}
-                                            onChange={(event) => onChange("gnss_serial_device", event.target.value)}
-                                            placeholder="/dev/serial/by-id/..."
-                                        />
-                                    </Form.Item>
+                                    <GnssSerialDeviceConfigField
+                                        value={values.gnss_serial_device}
+                                        onChange={(value) => onChange("gnss_serial_device", value)}
+                                        selectedReceiverFamily={values.gnss_receiver_family}
+                                        selectedReceiverModel={values.gnss_receiver_model}
+                                        gnssStatus={gnssStatus}
+                                    />
                                 </Col>
                             </Row>
                             <Row gutter={[16, 0]}>

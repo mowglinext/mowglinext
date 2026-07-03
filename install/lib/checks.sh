@@ -176,8 +176,8 @@ check_generated_gps_yaml_alignment() {
   step "Check: Generated GPS YAML"
 
   local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
-  local yaml_receiver_family yaml_serial_device yaml_serial_baud
-  local expected_receiver_family expected_serial_device expected_serial_baud
+  local yaml_serial_device yaml_serial_baud
+  local expected_serial_device expected_serial_baud
 
   if [[ ! -f "$yaml_file" ]]; then
     fail "Generated mowgli_robot.yaml missing"
@@ -185,17 +185,10 @@ check_generated_gps_yaml_alignment() {
     return
   fi
 
-  yaml_receiver_family="$(yaml_gps_value "$yaml_file" gnss_receiver_family)"
   yaml_serial_device="$(yaml_gps_value "$yaml_file" gnss_serial_device)"
   yaml_serial_baud="$(yaml_gps_value "$yaml_file" gnss_serial_baud)"
-  expected_receiver_family="$(gnss_receiver_family_from_state)"
   expected_serial_device="$(gnss_serial_device_from_state)"
   expected_serial_baud="$(gnss_serial_baud_from_state)"
-
-  if [[ "$yaml_receiver_family" != "${expected_receiver_family:-auto}" ]]; then
-    fail "GNSS receiver family diverges between docker/.env and mowgli_robot.yaml"
-    add_issue "docker/.env has GNSS_RECEIVER_FAMILY=${expected_receiver_family:-auto} but $yaml_file has gnss_receiver_family=${yaml_receiver_family:-missing}. Re-run $(installer_main_command) to resync."
-  fi
 
   if [[ "$yaml_serial_device" != "${expected_serial_device:-/dev/ttyAMA4}" ]]; then
     fail "GNSS serial device diverges between docker/.env and mowgli_robot.yaml"
@@ -207,10 +200,9 @@ check_generated_gps_yaml_alignment() {
     add_issue "docker/.env has GNSS_SERIAL_BAUD=${expected_serial_baud:-921600} but $yaml_file has gnss_serial_baud=${yaml_serial_baud:-missing}. Re-run $(installer_main_command) to resync."
   fi
 
-  if [[ "$yaml_receiver_family" == "${expected_receiver_family:-auto}" \
-    && "$yaml_serial_device" == "${expected_serial_device:-/dev/ttyAMA4}" \
+  if [[ "$yaml_serial_device" == "${expected_serial_device:-/dev/ttyAMA4}" \
     && "$yaml_serial_baud" == "${expected_serial_baud:-921600}" ]]; then
-    info "docker/.env and mowgli_robot.yaml agree on gnss_receiver_family/gnss_serial_device/gnss_serial_baud"
+    info "docker/.env and mowgli_robot.yaml agree on gnss_serial_device/gnss_serial_baud"
   fi
 }
 

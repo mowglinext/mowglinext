@@ -2283,6 +2283,24 @@
   "settingsGnssAdvanced": {
     "rawValueFallback": "{{label}} valeur brute"
   },
+  "gnssRuntimeConfig": {
+    "detectedDevicesLabel": "Périphérique série détecté",
+    "detectedDevicesPlaceholder": "Sélectionner un périphérique série détecté",
+    "manualSerialPathLabel": "Surcharge manuelle du chemin série",
+    "activeLinkLabel": "Lien runtime actif",
+    "resolvedTarget": "Cible résolue : {{path}}",
+    "envFallbackMessage": "Le runtime utilise actuellement le fallback `.env` pour la famille GNSS, le périphérique et le baud car aucune surcharge YAML GUI n'est encore enregistrée : {{family}} / {{device}} / {{baud}}.",
+    "configuredDeviceMissing": "Le périphérique série GNSS sélectionné n'existe plus : {{device}}.",
+    "activeDeviceMissing": "Le périphérique série GNSS actif n'existe pas : {{device}}.",
+    "familyMismatch": "La famille de récepteur détectée {{detected}} diffère de la famille sélectionnée {{selected}}.",
+    "modelMismatch": "Le modèle de récepteur détecté {{detected}} diffère du modèle sélectionné {{selected}}.",
+    "loadWarning": "Impossible de charger les détails de configuration runtime GNSS.",
+    "source": {
+      "config": "GUI/YAML",
+      "env": "fallback .env",
+      "default": "valeur par défaut"
+    }
+  },
   "settingsGnssSignalHelp": {},
   "settingsGnssReceiver": {
     "cardTitle": "Actions récepteur",

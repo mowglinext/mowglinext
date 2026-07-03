@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	pkgtypes "github.com/cedbossneo/mowglinext/pkg/types"
 	dockertypes "github.com/docker/docker/api/types"
@@ -107,6 +109,30 @@ func writeGNSSConfigFile(t *testing.T, config string) string {
 	return file
 }
 
+type stubFileInfo struct{}
+
+func (stubFileInfo) Name() string       { return "stub" }
+func (stubFileInfo) Size() int64        { return 0 }
+func (stubFileInfo) Mode() os.FileMode  { return 0644 }
+func (stubFileInfo) ModTime() time.Time { return time.Time{} }
+func (stubFileInfo) IsDir() bool        { return false }
+func (stubFileInfo) Sys() any           { return nil }
+
+func stubGNSSDeviceInspection(t *testing.T) {
+	t.Helper()
+
+	previousStat := gnssPathStat
+	gnssPathStat = func(path string) (os.FileInfo, error) {
+		if strings.HasPrefix(path, "/dev/") {
+			return stubFileInfo{}, nil
+		}
+		return previousStat(path)
+	}
+	t.Cleanup(func() {
+		gnssPathStat = previousStat
+	})
+}
+
 func defaultGNSSYAML(serialDevice string, receiverFamily string, profile string) string {
 	return "mowgli:\n" +
 		"  ros__parameters:\n" +
@@ -129,6 +155,7 @@ func defaultGNSSYAMLWithModel(serialDevice string, receiverFamily string, profil
 
 func newGNSSTestDB(t *testing.T, yamlContent string) (*pkgtypes.MockDBProvider, string) {
 	t.Helper()
+	stubGNSSDeviceInspection(t)
 	yamlFile := writeGNSSConfigFile(t, yamlContent)
 	envFile := createTempConfigFile(t, "ROS_DOMAIN_ID=0\n")
 	db := pkgtypes.NewMockDBProvider()
@@ -318,6 +345,147 @@ func TestGNSSApply_RejectsInvalidSerialDevice(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "/dev/*")
+	assert.Empty(t, docker.runSpecs)
+}
+
+func TestGNSSPlan_UsesYAMLFamilyDeviceAndBaudOverEnvFallback(t *testing.T) {
+	db, envFile := newGNSSTestDB(t, defaultGNSSYAML("/dev/ttyUSB9", "unicore", "rover_high_precision"))
+	require.NoError(t, os.WriteFile(envFile, []byte(strings.Join([]string{
+		"GNSS_RECEIVER_FAMILY=ublox",
+		"GNSS_SERIAL_DEVICE=/dev/ttyUSB1",
+		"GNSS_SERIAL_BAUD=115200",
+	}, "\n")+"\n"), 0644))
+
+	docker := defaultMockDocker()
+	docker.runResults = []pkgtypes.ContainerRunResult{{ExitCode: 0, Stdout: `{"status":"ok","warnings":[]}`}}
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/gnss/apply", bytes.NewReader([]byte(`{"confirm":true}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, docker.runSpecs, 1)
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--family")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "unicore")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--device")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "/dev/ttyUSB9")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--baud")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "921600")
+}
+
+func TestGNSSApply_UsesEnvFallbackWhenYAMLValuesAreMissing(t *testing.T) {
+	db, envFile := newGNSSTestDB(t, "mowgli:\n  ros__parameters:\n    gnss_profile: rover_high_precision\n")
+	require.NoError(t, os.WriteFile(envFile, []byte(strings.Join([]string{
+		"GNSS_RECEIVER_FAMILY=unicore",
+		"GNSS_SERIAL_DEVICE=/dev/ttyUSB7",
+		"GNSS_SERIAL_BAUD=460800",
+	}, "\n")+"\n"), 0644))
+
+	docker := defaultMockDocker()
+	docker.runResults = []pkgtypes.ContainerRunResult{{ExitCode: 0, Stdout: `{"status":"ok","warnings":[]}`}}
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/gnss/apply", bytes.NewReader([]byte(`{"confirm":true}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, docker.runSpecs, 1)
+	assert.Contains(t, docker.runSpecs[0].Cmd, "unicore")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "/dev/ttyUSB7")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "460800")
+}
+
+func TestGNSSRuntimeConfigEndpoint_ReportsSourcesAndDetectedDevices(t *testing.T) {
+	db, envFile := newGNSSTestDB(t, "mowgli:\n  ros__parameters:\n    gnss_serial_baud: 921600\n")
+	require.NoError(t, os.WriteFile(envFile, []byte(strings.Join([]string{
+		"GNSS_RECEIVER_FAMILY=unicore",
+		"GNSS_SERIAL_DEVICE=/dev/serial/by-id/usb-gnss",
+		"GNSS_SERIAL_BAUD=460800",
+	}, "\n")+"\n"), 0644))
+
+	previousGlob := gnssPathGlob
+	previousStat := gnssPathStat
+	previousEval := gnssPathEvalLink
+	gnssPathGlob = func(pattern string) ([]string, error) {
+		if strings.Contains(pattern, "serial/by-id") {
+			return []string{"/dev/serial/by-id/usb-gnss"}, nil
+		}
+		return nil, nil
+	}
+	gnssPathStat = func(path string) (os.FileInfo, error) {
+		switch path {
+		case "/dev/serial/by-id/usb-gnss", "/dev/ttyUSB1":
+			return stubFileInfo{}, nil
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+	gnssPathEvalLink = func(path string) (string, error) {
+		if path == "/dev/serial/by-id/usb-gnss" {
+			return "/dev/ttyUSB1", nil
+		}
+		return path, nil
+	}
+	t.Cleanup(func() {
+		gnssPathGlob = previousGlob
+		gnssPathStat = previousStat
+		gnssPathEvalLink = previousEval
+	})
+
+	docker := defaultMockDocker()
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/settings/gnss/runtime-config", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var response gnssRuntimeConfigResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, "env", response.ReceiverFamily.Source)
+	assert.Equal(t, "unicore", response.ReceiverFamily.ActiveValue)
+	assert.Equal(t, "default", response.Transport.Source)
+	assert.Equal(t, "serial", response.Transport.ActiveValue)
+	assert.Equal(t, "env", response.SerialDevice.Source)
+	assert.Equal(t, "/dev/serial/by-id/usb-gnss", response.SerialDevice.ActiveValue)
+	assert.Equal(t, "config", response.SerialBaud.Source)
+	assert.Equal(t, "921600", response.SerialBaud.ActiveValue)
+	assert.Equal(t, "default", response.NTRIPEnabled.Source)
+	assert.Equal(t, "true", response.NTRIPEnabled.ActiveValue)
+	assert.True(t, response.ActiveSerialDeviceExists)
+	assert.Equal(t, "/dev/ttyUSB1", response.ActiveSerialResolvedPath)
+	require.Len(t, response.SerialDevices, 1)
+	assert.Equal(t, "/dev/serial/by-id/usb-gnss", response.SerialDevices[0].Path)
+	assert.Equal(t, "/dev/ttyUSB1", response.SerialDevices[0].ResolvedPath)
+}
+
+func TestGNSSApply_ReturnsClearErrorWhenSelectedDeviceIsMissing(t *testing.T) {
+	db, envFile := newGNSSTestDB(t, defaultGNSSYAML("/dev/ttyUSB42", "unicore", "rover_high_precision"))
+	require.NoError(t, os.WriteFile(envFile, []byte("GNSS_SERIAL_DEVICE=/dev/ttyUSB99\n"), 0644))
+
+	previousStat := gnssPathStat
+	gnssPathStat = func(path string) (os.FileInfo, error) {
+		return nil, errors.New("missing device")
+	}
+	t.Cleanup(func() {
+		gnssPathStat = previousStat
+	})
+
+	docker := defaultMockDocker()
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/gnss/apply", bytes.NewReader([]byte(`{"confirm":true}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "GNSS serial device does not exist")
 	assert.Empty(t, docker.runSpecs)
 }
 

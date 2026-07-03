@@ -13,7 +13,6 @@ import (
 
 	pkgtypes "github.com/cedbossneo/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -95,6 +94,7 @@ type gnssFactoryResetRequest struct {
 
 func GNSSRoutes(r *gin.RouterGroup, dbProvider pkgtypes.IDBProvider, dockerProvider pkgtypes.IDockerProvider) {
 	group := r.Group("/settings/gnss")
+	group.GET("/runtime-config", getGNSSRuntimeConfig(dbProvider))
 	group.POST("/plan", postGNSSPlan(dbProvider, dockerProvider))
 	group.POST("/apply", postGNSSApply(dbProvider, dockerProvider))
 	group.POST("/factory-reset-apply", postGNSSFactoryResetApply(dbProvider, dockerProvider))
@@ -234,6 +234,10 @@ func postGNSSRestart(dbProvider pkgtypes.IDBProvider, dockerProvider pkgtypes.ID
 }
 
 func runApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDBProvider, dockerProvider pkgtypes.IDockerProvider, cfg gnssSavedConfig) (GNSSActionResponse, int, error) {
+	if err := validateGNSSSerialDeviceExists(cfg.SerialDevice); err != nil {
+		return GNSSActionResponse{}, http.StatusBadRequest, err
+	}
+
 	containerDetails, err := getGPSContainerDetails(parentCtx, dockerProvider)
 	if err != nil {
 		return GNSSActionResponse{}, http.StatusInternalServerError, err
@@ -293,6 +297,10 @@ func runApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDBProvider, do
 }
 
 func runFactoryResetApplyFlow(parentCtx context.Context, dbProvider pkgtypes.IDBProvider, dockerProvider pkgtypes.IDockerProvider, cfg gnssSavedConfig) (GNSSActionResponse, int, error) {
+	if err := validateGNSSSerialDeviceExists(cfg.SerialDevice); err != nil {
+		return GNSSActionResponse{}, http.StatusBadRequest, err
+	}
+
 	containerDetails, err := getGPSContainerDetails(parentCtx, dockerProvider)
 	if err != nil {
 		return GNSSActionResponse{}, http.StatusInternalServerError, err
@@ -589,52 +597,6 @@ func mergeGNSSWarnings(existing []string, additions []string) []string {
 	return merged
 }
 
-func loadGNSSSettingsDocument(dbProvider pkgtypes.IDBProvider) (gnssSavedConfig, error) {
-	configFilePath, err := dbProvider.Get("system.mower.yamlConfigFile")
-	if err != nil {
-		return gnssSavedConfig{}, fmt.Errorf("failed to read GNSS YAML config path: %w", err)
-	}
-
-	file, err := os.ReadFile(string(configFilePath))
-	if err != nil {
-		return gnssSavedConfig{}, fmt.Errorf("failed to read saved GNSS config: %w", err)
-	}
-
-	existingYAML := map[string]any{}
-	if err := yaml.Unmarshal(file, &existingYAML); err != nil {
-		return gnssSavedConfig{}, fmt.Errorf("invalid GNSS YAML config: %w", err)
-	}
-
-	flat := flattenROS2YAML(existingYAML)
-	nodeMappings := map[string]string{}
-
-	schema, err := getSchema(dbProvider)
-	if err == nil {
-		defaults := map[string]any{}
-		extractDefaults(schema, defaults)
-		for key, value := range defaults {
-			if _, exists := flat[key]; !exists {
-				flat[key] = value
-			}
-		}
-		nodeMappings = extractNodeMappings(schema)
-	}
-
-	runtimeEnvPath, err := dbProvider.Get("system.mower.runtimeEnvFile")
-	runtimeEnv := ""
-	if err == nil {
-		runtimeEnv = string(runtimeEnvPath)
-	}
-
-	return gnssSavedConfig{
-		ConfigPath:     string(configFilePath),
-		RuntimeEnvPath: runtimeEnv,
-		ExistingYAML:   existingYAML,
-		NodeMappings:   nodeMappings,
-		Flat:           flat,
-	}, nil
-}
-
 func persistGNSSRuntimeBaud(dbProvider pkgtypes.IDBProvider, runtimeBaud string) error {
 	doc, err := loadGNSSSettingsDocument(dbProvider)
 	if err != nil {
@@ -646,7 +608,7 @@ func persistGNSSRuntimeBaud(dbProvider pkgtypes.IDBProvider, runtimeBaud string)
 	} else {
 		doc.Flat["gnss_serial_baud"] = runtimeBaud
 	}
-	gnssEnvUpdates := applyUniversalGnssCompatibility(doc.Flat)
+	applyUniversalGnssCompatibility(doc.Flat)
 
 	nested := nestToROS2YAML(doc.Flat, doc.NodeMappings, doc.ExistingYAML)
 	out, err := marshalROS2YAMLWithGeoPrecision(nested)
@@ -660,12 +622,11 @@ func persistGNSSRuntimeBaud(dbProvider pkgtypes.IDBProvider, runtimeBaud string)
 		return err
 	}
 	if strings.TrimSpace(doc.RuntimeEnvPath) != "" {
-		// Persisting a runtime baud must only touch the baud keys in the .env —
-		// regenerating the whole GNSS env block here would clobber NTRIP/device
-		// values an operator may have set directly in the runtime environment.
+		// Persisting a runtime baud must only refresh the serial-baud fallback in
+		// the runtime env. Receiver-specific config lives in YAML and Universal
+		// GNSS tooling; .env is fallback-only.
 		baudEnvUpdates := map[string]string{
-			"GNSS_SERIAL_BAUD": gnssEnvUpdates["GNSS_SERIAL_BAUD"],
-			"GNSS_CONFIG_BAUD": gnssEnvUpdates["GNSS_CONFIG_BAUD"],
+			"GNSS_SERIAL_BAUD": stringValue(doc.Flat["gnss_serial_baud"], runtimeBaud),
 		}
 		if err := writeRuntimeEnvFile(doc.RuntimeEnvPath, baudEnvUpdates); err != nil {
 			return err

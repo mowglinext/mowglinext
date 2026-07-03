@@ -25,7 +25,7 @@ services:
       - ./docker/config/mowgli:/mowgli_config
       - ./docker:/runtime_config
       - /var/run/docker.sock:/var/run/docker.sock
-      - /dev/bus/usb:/dev/bus/usb
+      - /dev:/dev
       - mowgli_maps:/ros2_ws/maps
     depends_on:
       - mowgli

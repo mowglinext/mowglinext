@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import {
     App,
     Button, Card, Col, Row, Steps, Typography, Select, Space, Alert,
-    Input, InputNumber, Switch, Form, Divider, Tag, Result,
+    InputNumber, Switch, Form, Divider, Tag, Result,
 } from "antd";
 import {
     RocketOutlined, SettingOutlined, GlobalOutlined,
@@ -48,6 +48,7 @@ import { UniversalGnssAdvancedSettings } from "../components/settings/UniversalG
 import { GnssReceiverActionsCard } from "../components/settings/GnssReceiverActionsCard.tsx";
 import { NtripSection } from "../components/settings/NtripSection.tsx";
 import { GnssLiveStatusSummaryCard } from "../components/gnss/GnssLiveStatusSummaryCard.tsx";
+import { GnssSerialDeviceConfigField } from "../components/settings/GnssSerialDeviceConfigField.tsx";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -456,13 +457,13 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                                     </Form.Item>
                                 </Col>
                                 <Col xs={24} sm={14}>
-                                    <Form.Item label={t("onboardingPage.serialDeviceLabel")}>
-                                        <Input
-                                            value={values.gnss_serial_device ?? "/dev/ttyAMA4"}
-                                            onChange={(e) => onChange("gnss_serial_device", e.target.value)}
-                                            placeholder="/dev/serial/by-id/..."
-                                        />
-                                    </Form.Item>
+                                    <GnssSerialDeviceConfigField
+                                        value={values.gnss_serial_device}
+                                        onChange={(value) => onChange("gnss_serial_device", value)}
+                                        selectedReceiverFamily={values.gnss_receiver_family}
+                                        selectedReceiverModel={values.gnss_receiver_model}
+                                        gnssStatus={gnssStatus}
+                                    />
                                 </Col>
                             </Row>
                         </Form>
