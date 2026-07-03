@@ -1,4 +1,4 @@
-module github.com/cedbossneo/mowglinext
+module github.com/mowglinext/mowglinext
 
 go 1.24.0
 

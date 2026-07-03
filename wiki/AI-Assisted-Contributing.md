@@ -172,5 +172,5 @@ If Claude flags something as ðŸ”´ **Critical**, it must be fixed before merge. ð
 ## Need Help?
 
 - Mention `@claude` in your issue or PR for instant AI help
-- Ask in [Discussions](https://github.com/cedbossneo/mowglinext/discussions)
+- Ask in [Discussions](https://github.com/mowglinext/mowglinext/discussions)
 - Check the [FAQ](FAQ) for common questions

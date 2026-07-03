@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"

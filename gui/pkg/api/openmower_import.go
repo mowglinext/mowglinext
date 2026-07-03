@@ -12,9 +12,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/cedbossneo/mowglinext/pkg/msgs/geometry"
-	"github.com/cedbossneo/mowglinext/pkg/msgs/mowgli"
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 )

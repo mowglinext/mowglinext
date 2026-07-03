@@ -2,7 +2,7 @@
 package std
 
 import (
-	"github.com/cedbossneo/mowglinext/pkg/msgs/geometry"
+	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 )
 
 // Bool matches std_msgs/msg/Bool.

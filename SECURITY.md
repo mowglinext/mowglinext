@@ -6,7 +6,7 @@ If you discover a security vulnerability in MowgliNext, please report it respons
 
 **Do NOT open a public issue for security vulnerabilities.**
 
-Instead, please use [GitHub Security Advisories](https://github.com/cedbossneo/mowglinext/security/advisories/new) to report the vulnerability privately.
+Instead, please use [GitHub Security Advisories](https://github.com/mowglinext/mowglinext/security/advisories/new) to report the vulnerability privately.
 
 ## Scope
 

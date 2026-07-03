@@ -13,7 +13,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/types"
 )
 
 // Paths to the runtime calibration artefacts. The mowgli_robot.yaml

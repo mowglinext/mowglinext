@@ -9,6 +9,6 @@
 #
 # Effect: the installer and its test suite will default all Docker image
 # references to ghcr.io/<your-org>/<your-repo>/... instead of the upstream
-# ghcr.io/cedbossneo/mowglinext/... registry.
+# ghcr.io/mowglinext/mowglinext/... registry.
 
 REPO_URL="https://github.com/<your-org>/mowglinext.git"

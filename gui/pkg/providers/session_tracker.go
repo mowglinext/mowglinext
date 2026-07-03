@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/types"
 )
 
 // MowingSessionRecord mirrors the API type for DB storage.

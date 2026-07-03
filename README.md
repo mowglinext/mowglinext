@@ -44,13 +44,13 @@
   <a href="https://mowgli.garden">
     <img src="https://img.shields.io/badge/Website-mowgli.garden-success">
   </a>
-  <a href="https://github.com/cedbossneo/mowglinext/wiki">
+  <a href="https://github.com/mowglinext/mowglinext/wiki">
     <img src="https://img.shields.io/badge/Wiki-Documentation-blue">
   </a>
-  <a href="https://github.com/cedbossneo/mowglinext/discussions">
+  <a href="https://github.com/mowglinext/mowglinext/discussions">
     <img src="https://img.shields.io/badge/Discussions-GitHub-purple">
   </a>
-  <a href="https://github.com/cedbossneo/mowglinext/issues">
+  <a href="https://github.com/mowglinext/mowglinext/issues">
     <img src="https://img.shields.io/badge/Issues-GitHub-red">
   </a>
   <a href="CONTRIBUTING.md">
@@ -74,7 +74,7 @@ A fully autonomous mowing stack running on real hardware: undock, navigate to zo
 
 **Hardware:** YardForce chassis · ARM64 SBC (RK3566/RK3588, RPi 4/5) · u-blox F9P RTK-GPS · LDRobot LD19 LiDAR · STM32 firmware
 
-See the **[Architecture wiki page](https://github.com/cedbossneo/mowglinext/wiki/Architecture)** for full system design and data flow.
+See the **[Architecture wiki page](https://github.com/mowglinext/mowglinext/wiki/Architecture)** for full system design and data flow.
 
 ## Dashboard
 
@@ -84,7 +84,7 @@ See the **[Architecture wiki page](https://github.com/cedbossneo/mowglinext/wiki
 
 State-adaptive hero card with live sparkline telemetry, health checks, and contextual actions. Weekly schedule grid, statistics with bar charts, and full Mapbox map editor. Dark & light themes, responsive mobile layout.
 
-See the **[GUI wiki page](https://github.com/cedbossneo/mowglinext/wiki/GUI)** for all pages and design details.
+See the **[GUI wiki page](https://github.com/mowglinext/mowglinext/wiki/GUI)** for all pages and design details.
 
 ## Quick Start
 
@@ -96,7 +96,7 @@ curl -sSL https://mowgli.garden/install.sh | bash
 
 The website composer and bootstrap installer now target the Universal GNSS runtime only for direct GNSS setups.
 
-GUI at `http://<mower-ip>:4006` · See **[Getting Started](https://github.com/cedbossneo/mowglinext/wiki/Getting-Started)** for full setup.
+GUI at `http://<mower-ip>:4006` · See **[Getting Started](https://github.com/mowglinext/mowglinext/wiki/Getting-Started)** for full setup.
 
 ## Monorepo
 
@@ -113,7 +113,7 @@ GUI at `http://<mower-ip>:4006` · See **[Getting Started](https://github.com/ce
 
 | Resource | Content |
 |----------|---------|
-| **[Wiki](https://github.com/cedbossneo/mowglinext/wiki)** | Architecture, configuration, deployment, sensors, firmware, BT, GUI, FAQ |
+| **[Wiki](https://github.com/mowglinext/mowglinext/wiki)** | Architecture, configuration, deployment, sensors, firmware, BT, GUI, FAQ |
 | **[Website](https://mowgli.garden)** | Landing page, install composer, features overview |
 | **[First Boot](docs/FIRST_BOOT.md)** | Post-install checklist |
 
@@ -123,7 +123,7 @@ MowgliNext exists because of [OpenMower](https://openmower.de/). They proved rob
 
 ## Contributing
 
-We welcome contributions! See the [Contributing Guide](CONTRIBUTING.md) and [AI-Assisted Contributing](https://github.com/cedbossneo/mowglinext/wiki/AI-Assisted-Contributing).
+We welcome contributions! See the [Contributing Guide](CONTRIBUTING.md) and [AI-Assisted Contributing](https://github.com/mowglinext/mowglinext/wiki/AI-Assisted-Contributing).
 
 ## Acknowledgments
 

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	pkgtypes "github.com/cedbossneo/mowglinext/pkg/types"
+	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"

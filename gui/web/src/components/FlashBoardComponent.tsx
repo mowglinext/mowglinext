@@ -345,7 +345,7 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                     <SchemaField><SchemaField.String
                         name={"repository"}
                         title={t('flashBoard.repositoryTitle')}
-                        default={"https://github.com/cedbossneo/mowglinext"}
+                        default={"https://github.com/mowglinext/mowglinext"}
                         x-decorator-props={{tooltip: t('flashBoard.repositoryTooltip')}}
                         x-component="Input"
                         x-decorator="FormItem"/></SchemaField>
