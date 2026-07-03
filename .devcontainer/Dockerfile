@@ -15,7 +15,7 @@
 #
 # Example:
 #   docker build \
-#     --build-arg BASE_IMAGE=ghcr.io/cedbossneo/mowglinext/mowgli-ros2:feat-my-branch \
+#     --build-arg BASE_IMAGE=ghcr.io/mowglinext/mowglinext/mowgli-ros2:feat-my-branch \
 #     -f .devcontainer/Dockerfile -t mowglinext-devcontainer .
 #
 # Default (ros:kilted-ros-base) reproduces the upstream Codespaces flow

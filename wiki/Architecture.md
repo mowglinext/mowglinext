@@ -2,7 +2,7 @@
 
 Comprehensive technical documentation of the Mowgli ROS2 system design, including package organization, data flow, communication protocols, and integration points.
 
-Built on **ROS2 Kilted** with **Gazebo Harmonic** simulation, this architecture spans 12 focused packages providing complete autonomous lawn mower functionality. [CLAUDE.md](https://github.com/cedbossneo/mowglinext/blob/main/CLAUDE.md) is the authoritative short-form reference and the place to check first if any page on the wiki looks out of date.
+Built on **ROS2 Kilted** with **Gazebo Harmonic** simulation, this architecture spans 12 focused packages providing complete autonomous lawn mower functionality. [CLAUDE.md](https://github.com/mowglinext/mowglinext/blob/main/CLAUDE.md) is the authoritative short-form reference and the place to check first if any page on the wiki looks out of date.
 
 ## Localization at a glance
 

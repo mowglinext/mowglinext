@@ -55,7 +55,7 @@ ExecStart=/usr/bin/podman run --conmon-pidfile %t/container-gui.pid --cidfile %t
   --volume /boot/mowglinext/db:/app/db \
   --volume /boot/mowglinext/mower_config.txt:/config/mower_config.sh \
   --label io.containers.autoupdate=image \
-  ghcr.io/cedbossneo/mowglinext-gui:master
+  ghcr.io/mowglinext/mowglinext-gui:master
 
 #ExecStartPost=/usr/bin/podman image prune --all --force
 
@@ -137,4 +137,4 @@ the backend
 
 To generate go msgs, just run inside the repository this docker command:
 
-docker run -v $PWD:/app ghcr.io/cedbossneo/mowglinext-gui:generate-msg
+docker run -v $PWD:/app ghcr.io/mowglinext/mowglinext-gui:generate-msg

@@ -21,9 +21,9 @@ Welcome to the MowgliNext documentation wiki — the reference hub for the open-
 ## Project Links
 
 - **Website:** https://mowgli.garden
-- **GitHub:** https://github.com/cedbossneo/mowglinext
-- **Issues:** https://github.com/cedbossneo/mowglinext/issues
-- **Discussions:** https://github.com/cedbossneo/mowglinext/discussions
+- **GitHub:** https://github.com/mowglinext/mowglinext
+- **Issues:** https://github.com/mowglinext/mowglinext/issues
+- **Discussions:** https://github.com/mowglinext/mowglinext/discussions
 
 ## Monorepo Structure
 

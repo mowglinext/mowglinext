@@ -2,8 +2,8 @@
 package mowgli
 
 import (
-	"github.com/cedbossneo/mowglinext/pkg/msgs/geometry"
-	"github.com/cedbossneo/mowglinext/pkg/msgs/nav"
+	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
+	"github.com/mowglinext/mowglinext/pkg/msgs/nav"
 )
 
 // AbsolutePose matches mowgli_interfaces/msg/AbsolutePose.

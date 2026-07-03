@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	pkgtypes "github.com/cedbossneo/mowglinext/pkg/types"
+	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 )

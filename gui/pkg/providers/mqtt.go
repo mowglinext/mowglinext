@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/brutella/hap/accessory"
-	"github.com/cedbossneo/mowglinext/pkg/msgs/mowgli"
-	types2 "github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	types2 "github.com/mowglinext/mowglinext/pkg/types"
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"

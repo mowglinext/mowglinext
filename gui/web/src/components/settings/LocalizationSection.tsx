@@ -107,7 +107,7 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                         <Text code>odom→base_footprint</Text>{" "}
                         {t("settingsLocalization.mapFrameLocalizerTfPrefix")} <Text code>ekf_odom_node</Text> {t("settingsLocalization.mapFrameLocalizerTfSuffix")}{" "}
                         <Link
-                            href="https://github.com/cedbossneo/mowglinext/wiki/Architecture#optional-factor-graph-localizer-fusion_graph"
+                            href="https://github.com/mowglinext/mowglinext/wiki/Architecture#optional-factor-graph-localizer-fusion_graph"
                             target="_blank"
                         >
                             {t("settingsLocalization.readArchitectureNotes")}

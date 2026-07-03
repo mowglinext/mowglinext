@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"text/template"
 
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"golang.org/x/sys/execabs"

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/types"
 )
 
 func loadStoredSessions(t *testing.T, db types.IDBProvider) []MowingSessionRecord {

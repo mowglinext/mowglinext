@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cedbossneo/mowglinext/pkg/foxglove"
-	"github.com/cedbossneo/mowglinext/pkg/msgs/mowgli"
-	types2 "github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/foxglove"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	types2 "github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/sirupsen/logrus"
 )
 

@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cedbossneo/mowglinext/pkg/msgs/mowgli"
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/sirupsen/logrus"
 )
 

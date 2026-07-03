@@ -92,7 +92,7 @@ required. Verify with `docker compose version`.
 #### 2. Clone this repository
 
 ```bash
-git clone --depth 1 https://github.com/cedbossneo/mowglinext.git
+git clone --depth 1 https://github.com/mowglinext/mowglinext.git
 cd mowglinext/docker
 ```
 

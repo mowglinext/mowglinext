@@ -94,7 +94,7 @@ TFLUNA_FLAG=""
 BACKEND_FLAG=""
 IMAGE_TAG_FLAG=""
 
-REPO_URL="https://github.com/cedbossneo/mowglinext.git"
+REPO_URL="https://github.com/mowglinext/mowglinext.git"
 REPO_BRANCH="main"
 INSTALL_DIR="${MOWGLI_HOME:-$HOME/mowglinext}"
 

@@ -1,6 +1,6 @@
 # Getting Started
 
-> **Looking for the short version?** See [`docs/FIRST_BOOT.md`](https://github.com/cedbossneo/mowglinext/blob/main/docs/FIRST_BOOT.md) in the main repo for the docked-only post-install checklist (GUI open → RTK Fixed → IMU calibration → dock pose → record area → first autonomous mow).
+> **Looking for the short version?** See [`docs/FIRST_BOOT.md`](https://github.com/mowglinext/mowglinext/blob/main/docs/FIRST_BOOT.md) in the main repo for the docked-only post-install checklist (GUI open → RTK Fixed → IMU calibration → dock pose → record area → first autonomous mow).
 
 ## Hardware
 
@@ -37,7 +37,7 @@ The fastest way to explore and develop MowgliNext — no local setup required:
 
 ### GitHub Codespaces (cloud)
 
-1. Go to [github.com/cedbossneo/mowglinext](https://github.com/cedbossneo/mowglinext)
+1. Go to [github.com/mowglinext/mowglinext](https://github.com/mowglinext/mowglinext)
 2. Click **Code → Codespaces → Create codespace on main**
 3. Select a **8-core** machine type (16-core recommended for simulation)
 4. Wait for the container to build (~10 min first time, cached after)
@@ -45,7 +45,7 @@ The fastest way to explore and develop MowgliNext — no local setup required:
 ### VS Code DevContainer (local)
 
 1. Install [Docker](https://docs.docker.com/get-docker/) and the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
-2. Clone the repo: `git clone https://github.com/cedbossneo/mowglinext.git`
+2. Clone the repo: `git clone https://github.com/mowglinext/mowglinext.git`
 3. Open in VS Code → **Reopen in Container** when prompted
 
 ### What's included
@@ -111,7 +111,7 @@ If you prefer to set things up manually:
 ### 1. Clone
 
 ```bash
-git clone https://github.com/cedbossneo/mowglinext.git
+git clone https://github.com/mowglinext/mowglinext.git
 cd mowglinext
 ```
 

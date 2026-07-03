@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cedbossneo/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
