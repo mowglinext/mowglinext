@@ -11,11 +11,19 @@ import {
     normalizeGnssProfile,
     normalizeGnssReceiverModel,
     normalizeGnssSignalGroup,
+    rawGnssInputString,
 } from "./gnssConfig.ts";
 
 describe("gnssConfig", () => {
     it("normalizes Unicore signal-group whitespace", () => {
         expect(normalizeGnssSignalGroup("  3   6  ")).toBe("3 6");
+        expect(normalizeGnssSignalGroup("3,6")).toBe("3 6");
+        expect(normalizeGnssSignalGroup("3/6")).toBe("3 6");
+    });
+
+    it("preserves raw signal-group typing until blur/save normalization runs", () => {
+        expect(rawGnssInputString("3 6")).toBe("3 6");
+        expect(rawGnssInputString("3,6")).toBe("3,6");
     });
 
     it("normalizes receiver-model placeholders into the config-auto path", () => {

@@ -520,7 +520,8 @@ func normalizeGnssProfileRate(value any) string {
 }
 
 func normalizeGnssSignalGroup(value any) string {
-	fields := strings.Fields(stringValue(value, ""))
+	replaced := strings.NewReplacer(",", " ", "/", " ").Replace(stringValue(value, ""))
+	fields := strings.Fields(replaced)
 	return strings.Join(fields, " ")
 }
 

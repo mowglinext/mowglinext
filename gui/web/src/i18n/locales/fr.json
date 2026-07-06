@@ -605,7 +605,7 @@
   "onboardingPage": {
     "preview": "Aperçu",
     "previewNotActiveYet": "Aperçu — pas encore actif",
-    "expertFieldsNotWired": "Ces champs experts sont enregistrés. Le modèle de récepteur optionnel est transmis à Universal GNSS lorsqu'il est défini, tandis que les autres surcharges expertes brutes ne sont pas encore traduites par MowgliNext. Universal GNSS valide et applique les groupes de signaux documentés pour le modèle sélectionné, et Inconnu / Auto utilise un repli sûr avec avertissements.",
+    "expertFieldsNotWired": "Ces champs experts sont enregistrés. Le modèle de récepteur optionnel est transmis à Universal GNSS lorsqu'il est défini, tandis que les autres surcharges expertes brutes ne sont pas encore traduites par MowgliNext. Le texte SIGNALGROUP Unicore accepte 3 6, 3,6 ou 3/6 et est normalisé à l'enregistrement.",
     "gpsRestarting": "Redémarrage GPS…",
     "gpsRestartedWaitRtk": "GPS redémarré — patientez pour le RTK Fix",
     "gpsRestartFailed": "Échec du redémarrage GPS",
@@ -1646,11 +1646,11 @@
     },
     "unicore": {
       "title": "Réglages spécifiques au fabricant",
-      "description": "À n'utiliser que lorsque les abstractions GNSS génériques ne suffisent pas. Universal GNSS reste la source de vérité pour le filtrage par modèle Unicore et la gestion des groupes de signaux documentés.",
+      "description": "À n'utiliser que lorsque les abstractions GNSS génériques ne suffisent pas. Le modèle de récepteur reste un indice pour la planification, tandis que la saisie SIGNALGROUP reste sous le contrôle de l'opérateur.",
       "receiverModel": {
         "label": "Modèle de récepteur",
         "tooltip": "Indice optionnel de modèle de récepteur Unicore transmis aux outils Universal GNSS de planification/application uniquement lorsque vous le définissez explicitement.",
-        "helpText": "Universal GNSS valide et applique les groupes de signaux documentés pour le modèle sélectionné. Laissez sur Inconnu / Auto pour omettre --model et utiliser le repli sûr avec avertissements.",
+        "helpText": "Utilisez ceci comme indice de modèle pour la planification Universal GNSS. Pour UM982, les paires double antenne courantes sont 3 6 et 4 5 ; les exemples simple antenne courants sont 2 0, 3 0, 4 0 et 7 0.",
         "option": {
           "auto": {
             "label": "Inconnu / Auto"
@@ -1671,9 +1671,9 @@
       },
       "signalGroup": {
         "label": "Groupe de signaux brut",
-        "tooltip": "Surcharge brute facultative du groupe de signaux Unicore. Laissez vide sauf si une documentation récepteur vous demande une valeur précise.",
+        "tooltip": "Surcharge brute facultative du groupe de signaux Unicore. Saisissez les groupes master et slave sous la forme 3 6, 3,6 ou 3/6 ; laissez vide sauf si une documentation récepteur vous demande une valeur précise.",
         "placeholder": "ex. 3 6",
-        "helpText": "Universal GNSS reste responsable de la validation de toute valeur documentée de groupe de signaux par rapport au modèle de récepteur sélectionné et de la remontée des avertissements de repli sûr."
+        "helpText": "MowgliNext normalise cette valeur en 'master slave' à l'enregistrement. Universal GNSS accepte toute paire 0..9 valide par syntaxe, puis émet un avertissement quand la combinaison est avancée et ne fait pas partie des presets documentés recommandés."
       },
       "pvtAlgorithm": {
         "label": "Algorithme PVT",

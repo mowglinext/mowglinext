@@ -671,6 +671,19 @@ func TestApplyUniversalGnssCompatibility_NormalizesProfileKeys(t *testing.T) {
 	assert.False(t, hasLegacyRate)
 }
 
+func TestApplyUniversalGnssCompatibility_NormalizesSignalGroupSeparators(t *testing.T) {
+	for _, input := range []string{"3,6", "3/6"} {
+		flat := map[string]any{
+			"gnss_receiver_family": "unicore",
+			"gnss_signal_group":    input,
+		}
+
+		applyUniversalGnssCompatibility(flat)
+
+		assert.Equal(t, "3 6", flat["gnss_signal_group"])
+	}
+}
+
 func TestPostSettingsYAMLPurgesLegacyRuntimeEnvKeys(t *testing.T) {
 	yamlFile := createTempYAMLFile(t, "")
 	legacyProtocol := "GPS_" + "PROTOCOL=UBX\n"

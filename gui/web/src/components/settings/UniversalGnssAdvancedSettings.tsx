@@ -8,6 +8,7 @@ import {
     normalizeGnssReceiverModel,
     normalizeGnssSignalGroup,
     normalizeGnssString,
+    rawGnssInputString,
 } from "./gnssConfig.ts";
 
 const { Paragraph } = Typography;
@@ -107,12 +108,23 @@ export const UniversalGnssAdvancedSettings: React.FC<Props> = ({
                     }
 
                     if (field.kind === "text") {
+                        const isSignalGroupField = field.key === "gnss_signal_group";
                         return (
                             <div key={field.key}>
                                 <Form.Item label={t(field.label)} tooltip={t(field.tooltip)}>
                                     <Input
-                                        value={normalizeGnssString(values[field.key])}
-                                        onChange={(event) => onChange(field.key, normalizeGnssString(event.target.value))}
+                                        value={isSignalGroupField
+                                            ? rawGnssInputString(values[field.key])
+                                            : normalizeGnssString(values[field.key])}
+                                        onChange={(event) => onChange(
+                                            field.key,
+                                            isSignalGroupField
+                                                ? event.target.value
+                                                : normalizeGnssString(event.target.value),
+                                        )}
+                                        onBlur={isSignalGroupField
+                                            ? (event) => onChange(field.key, normalizeGnssSignalGroup(event.target.value))
+                                            : undefined}
                                         placeholder={field.placeholder ? t(field.placeholder) : field.placeholder}
                                     />
                                 </Form.Item>

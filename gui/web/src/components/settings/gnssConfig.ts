@@ -239,9 +239,20 @@ export const normalizeGnssString = (value: unknown): string => {
 
 export const normalizeGnssSignalGroup = (value: unknown): string =>
     normalizeGnssString(value)
+        .replace(/[,/]+/g, " ")
         .split(/\s+/)
         .filter(Boolean)
         .join(" ");
+
+export const rawGnssInputString = (value: unknown): string => {
+    if (typeof value === "string") {
+        return value;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return String(value);
+    }
+    return "";
+};
 
 const normalizeOptionValue = (value: unknown): string =>
     normalizeGnssString(value).toLowerCase().replace(/-/g, "_");

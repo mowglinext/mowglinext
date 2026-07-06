@@ -605,7 +605,7 @@
   "onboardingPage": {
     "preview": "Preview",
     "previewNotActiveYet": "Preview — not active yet",
-    "expertFieldsNotWired": "These expert fields are saved. The optional receiver model is forwarded to Universal GNSS when set, while the remaining raw expert overrides are still not translated by MowgliNext. Universal GNSS validates and applies documented signal groups for the selected model, and Unknown / Auto uses a safe fallback with warnings.",
+    "expertFieldsNotWired": "These expert fields are saved. The optional receiver model is forwarded to Universal GNSS when set, while the remaining raw expert overrides are still not translated by MowgliNext. Raw Unicore SIGNALGROUP text accepts 3 6, 3,6, or 3/6 and is normalized on save.",
     "gpsRestarting": "Restarting GPS…",
     "gpsRestartedWaitRtk": "GPS restarted — wait for RTK Fix",
     "gpsRestartFailed": "GPS restart failed",
@@ -1646,11 +1646,11 @@
     },
     "unicore": {
       "title": "Vendor-Specific Settings",
-      "description": "Use these only when the generic GNSS abstractions are not enough. Universal GNSS remains the source of truth for Unicore model gating and documented signal-group handling.",
+      "description": "Use these only when the generic GNSS abstractions are not enough. Receiver model remains a planning hint, while raw SIGNALGROUP input stays operator-controlled.",
       "receiverModel": {
         "label": "Receiver model",
         "tooltip": "Optional Unicore receiver model hint forwarded to Universal GNSS plan/apply tools only when you set it explicitly.",
-        "helpText": "Universal GNSS validates and applies documented signal groups for the selected model. Leave this on Unknown / Auto to omit --model and use the safe fallback with warnings.",
+        "helpText": "Use this as a model hint for Universal GNSS planning. For UM982, common dual-antenna pairs are 3 6 and 4 5; common single-antenna examples are 2 0, 3 0, 4 0, and 7 0.",
         "option": {
           "auto": {
             "label": "Unknown / Auto"
@@ -1671,9 +1671,9 @@
       },
       "signalGroup": {
         "label": "Raw Signal Group",
-        "tooltip": "Optional raw Unicore signal-group override. Leave it empty unless documented receiver guidance tells you to set a specific value.",
+        "tooltip": "Optional raw Unicore signal-group override. Enter master and slave groups as 3 6, 3,6, or 3/6; leave it empty unless receiver-side guidance tells you to set a specific value.",
         "placeholder": "e.g. 3 6",
-        "helpText": "Universal GNSS remains responsible for validating any documented signal-group value against the selected receiver model and for surfacing safe-fallback warnings."
+        "helpText": "MowgliNext normalizes this to 'master slave' on save. Universal GNSS accepts any syntactically valid 0..9 pair, then warns when the combination is advanced and not one of the recommended documented presets."
       },
       "pvtAlgorithm": {
         "label": "PVT Algorithm",
