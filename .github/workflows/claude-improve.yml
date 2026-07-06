@@ -56,9 +56,9 @@ jobs:
         id: analysis
         uses: anthropics/claude-code-action@v1
         with:
-          model: claude-sonnet-4-6
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          direct_prompt: |
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
             You are a robotics software architect reviewing the MowgliNext project — an open-source ROS2 autonomous robot mower.
 
             Analyze the current state of the project and propose 2-3 concrete improvements.
@@ -66,55 +66,37 @@ jobs:
             Context:
             ${{ steps.context.outputs.data }}
 
-            For each proposal, output EXACTLY this format (the workflow will parse it):
-
-            ---PROPOSAL---
-            TITLE: <concise issue title with conventional prefix like feat: or fix: or refactor:>
-            LABELS: <comma-separated labels from: ros2, gui, firmware, docker, sensors, docs, ci, enhancement, bug>
-            BODY:
-            <markdown body with:
-            ## Motivation
-            Why this matters
-
-            ## Proposed Approach
-            How to implement it
-
-            ## Effort Estimate
-            Small / Medium / Large
-
-            🤖 *Proposed by Claude — review and discuss before implementing*
-            >
-            ---END---
-
             Rules:
             - Only propose things that are NOT already covered by open issues
             - Focus on safety, reliability, developer experience, or community growth
             - Be specific and actionable — no vague "improve testing" suggestions
             - Consider the project is a real robot mower that runs outdoors
-          timeout_minutes: 5
+
+            Return a `proposals` array (at most 3; empty if nothing is worth proposing).
+            For each proposal provide:
+            - title: concise issue title with a conventional prefix (feat:, fix:, refactor:)
+            - labels: array chosen from [ros2, gui, firmware, docker, sensors, docs, ci, enhancement, bug]
+            - body: markdown with sections "## Motivation", "## Proposed Approach", and
+              "## Effort Estimate" (Small / Medium / Large), ending with the line
+              "🤖 *Proposed by Claude — review and discuss before implementing*"
+          claude_args: |
+            --model claude-sonnet-4-6
+            --json-schema '{"type":"object","properties":{"proposals":{"type":"array","maxItems":3,"items":{"type":"object","properties":{"title":{"type":"string"},"labels":{"type":"array","items":{"type":"string"}},"body":{"type":"string"}},"required":["title","body"]}}},"required":["proposals"]}'
 
       - name: Create issues from proposals
-        if: steps.analysis.outputs.result != ''
-        run: |
-          echo '${{ steps.analysis.outputs.result }}' | \
-          awk '/---PROPOSAL---/{found=1; next} /---END---/{found=0; if(title && body) print title "\t" labels "\t" body; title=""; labels=""; body=""} found{
-            if(/^TITLE: /){title=substr($0,8)}
-            else if(/^LABELS: /){labels=substr($0,9)}
-            else if(/^BODY:/){inbody=1}
-            else if(inbody){body=body"\n"$0}
-          }' | while IFS=$'\t' read -r title labels body; do
-            if [ -n "$title" ]; then
-              LABEL_ARGS=""
-              IFS=',' read -ra LABEL_ARRAY <<< "$labels"
-              for label in "${LABEL_ARRAY[@]}"; do
-                label=$(echo "$label" | xargs)
-                LABEL_ARGS="$LABEL_ARGS --label $label"
-              done
-              echo "$body" | gh issue create \
-                --title "$title" \
-                $LABEL_ARGS \
-                --body-file - 2>/dev/null || echo "Failed to create: $title"
-            fi
-          done
+        if: steps.analysis.outputs.structured_output != ''
         env:
+          STRUCTURED_OUTPUT: ${{ steps.analysis.outputs.structured_output }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$STRUCTURED_OUTPUT" | jq -c '.proposals[]?' | while read -r proposal; do
+            title=$(printf '%s' "$proposal" | jq -r '.title')
+            [ -z "$title" ] && continue
+            label_args=()
+            while IFS= read -r label; do
+              [ -n "$label" ] && label_args+=(--label "$label")
+            done < <(printf '%s' "$proposal" | jq -r '.labels[]?')
+            printf '%s' "$proposal" | jq -r '.body' | \
+              gh issue create --title "$title" "${label_args[@]}" --body-file - \
+              || echo "Failed to create: $title"
+          done
