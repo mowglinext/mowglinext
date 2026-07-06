@@ -50,6 +50,7 @@ type gnssSavedConfig struct {
 	ExecutionBaud  string
 	Profile        string
 	SignalProfile  string
+	SignalGroup    string
 	ReceiverModel  string
 	ProfileRateHz  string
 }
@@ -502,6 +503,9 @@ func buildGNSSPlanCommand(cfg gnssSavedConfig) []string {
 	if cfg.ReceiverModel != "" {
 		command = append(command, "--model", cfg.ReceiverModel)
 	}
+	if shouldPassGNSSSignalGroup(cfg) {
+		command = append(command, "--signal-group", cfg.SignalGroup)
+	}
 	command = append(command, cfg.ReceiverFamily, cfg.Profile)
 	return command
 }
@@ -534,7 +538,14 @@ func buildGNSSApplyCommand(cfg gnssSavedConfig, profile string) []string {
 	if cfg.ReceiverModel != "" {
 		command = append(command, "--model", cfg.ReceiverModel)
 	}
+	if shouldPassGNSSSignalGroup(cfg) {
+		command = append(command, "--signal-group", cfg.SignalGroup)
+	}
 	return command
+}
+
+func shouldPassGNSSSignalGroup(cfg gnssSavedConfig) bool {
+	return cfg.ReceiverFamily == "unicore" && strings.TrimSpace(cfg.SignalGroup) != ""
 }
 
 func buildGNSSProbeBaudCandidates(cfg gnssSavedConfig) []string {
@@ -625,6 +636,14 @@ func loadSavedGNSSConfig(dbProvider pkgtypes.IDBProvider) (gnssSavedConfig, erro
 	if err := validateGNSSSerialDevice(serialDevice); err != nil {
 		return gnssSavedConfig{}, err
 	}
+	signalGroup := ""
+	if receiverFamily == "unicore" {
+		var err error
+		signalGroup, err = validateGNSSSignalGroup(doc.Flat["gnss_signal_group"])
+		if err != nil {
+			return gnssSavedConfig{}, err
+		}
+	}
 
 	return gnssSavedConfig{
 		ConfigPath:     doc.ConfigPath,
@@ -639,9 +658,33 @@ func loadSavedGNSSConfig(dbProvider pkgtypes.IDBProvider) (gnssSavedConfig, erro
 		ExecutionBaud:  executionBaud,
 		Profile:        profile,
 		SignalProfile:  normalizeGnssSignalProfile(doc.Flat["gnss_signal_profile"]),
+		SignalGroup:    signalGroup,
 		ReceiverModel:  normalizeGnssReceiverModel(doc.Flat["gnss_receiver_model"]),
 		ProfileRateHz:  rateHz,
 	}, nil
+}
+
+func validateGNSSSignalGroup(value any) (string, error) {
+	normalized := normalizeGnssSignalGroup(value)
+	if normalized == "" {
+		return "", nil
+	}
+
+	fields := strings.Fields(normalized)
+	if len(fields) != 2 {
+		return "", fmt.Errorf("invalid GNSS signal group %q: expected two groups like \"3 6\"; collapsed values like \"36\" are not allowed", stringValue(value, ""))
+	}
+
+	groups := make([]string, 0, 2)
+	for _, field := range fields {
+		group, err := strconv.Atoi(field)
+		if err != nil || group < 0 || group > 9 {
+			return "", fmt.Errorf("invalid GNSS signal group %q: each group must be an integer in the range 0..9", stringValue(value, ""))
+		}
+		groups = append(groups, strconv.Itoa(group))
+	}
+
+	return strings.Join(groups, " "), nil
 }
 
 type gnssToolJSONOutput struct {

@@ -153,6 +153,14 @@ func defaultGNSSYAMLWithModel(serialDevice string, receiverFamily string, profil
 	return base + "    gnss_receiver_model: " + receiverModel + "\n"
 }
 
+func defaultGNSSYAMLWithSignalGroup(serialDevice string, receiverFamily string, profile string, signalGroup string) string {
+	base := defaultGNSSYAML(serialDevice, receiverFamily, profile)
+	if strings.TrimSpace(signalGroup) == "" {
+		return base
+	}
+	return base + "    gnss_signal_group: \"" + signalGroup + "\"\n"
+}
+
 func newGNSSTestDB(t *testing.T, yamlContent string) (*pkgtypes.MockDBProvider, string) {
 	t.Helper()
 	stubGNSSDeviceInspection(t)
@@ -340,10 +348,26 @@ func TestBuildGNSSPlanCommand_UsesRuntimeOnlyPlanByDefault(t *testing.T) {
 	assert.Equal(t, []string{"unicore", "rover_high_precision"}, command[len(command)-2:])
 }
 
-func TestGNSSApply_AddsConfiguredReceiverModelsWithoutSignalGroupTranslation(t *testing.T) {
+func TestGNSSPlan_AddsConfiguredSignalGroupWhenPresent(t *testing.T) {
+	command := buildGNSSPlanCommand(gnssSavedConfig{
+		ReceiverFamily: "unicore",
+		ConfigBaud:     "921600",
+		Profile:        "rover_high_precision",
+		ProfileRateHz:  "10",
+		ReceiverModel:  "UM982",
+		SignalGroup:    "3 6",
+	})
+
+	assert.Contains(t, command, "--signal-group")
+	assert.Contains(t, command, "3 6")
+}
+
+func TestGNSSApply_AddsConfiguredReceiverModelsAndSignalGroupTranslation(t *testing.T) {
 	for _, receiverModel := range []string{"UM980", "UM981", "UM982"} {
 		t.Run(receiverModel, func(t *testing.T) {
-			db, _ := newGNSSTestDB(t, defaultGNSSYAMLWithModel("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision", receiverModel))
+			yaml := defaultGNSSYAMLWithModel("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision", receiverModel) +
+				"    gnss_signal_group: \"2 0\"\n"
+			db, _ := newGNSSTestDB(t, yaml)
 			docker := defaultMockDocker()
 			docker.runResults = []pkgtypes.ContainerRunResult{{ExitCode: 0, Stdout: `{"status":"ok","warnings":[]}`}}
 			router := setupGNSSRouter(db, docker)
@@ -361,10 +385,34 @@ func TestGNSSApply_AddsConfiguredReceiverModelsWithoutSignalGroupTranslation(t *
 			assert.Contains(t, docker.runSpecs[0].Cmd, gnssApplyModeRuntime)
 			assert.NotContains(t, docker.runSpecs[0].Cmd, "persistent")
 			assert.NotContains(t, docker.runSpecs[0].Cmd, gnssApplyModeFactory)
-			assert.NotContains(t, docker.runSpecs[0].Cmd, "--signal-group")
-			assert.NotContains(t, strings.Join(docker.runSpecs[0].Cmd, " "), "SIGNALGROUP")
+			assert.Contains(t, docker.runSpecs[0].Cmd, "--signal-group")
+			assert.Contains(t, docker.runSpecs[0].Cmd, "2 0")
 		})
 	}
+}
+
+func TestGNSSPlan_PropagatesSignalGroupToTool(t *testing.T) {
+	db, _ := newGNSSTestDB(t, defaultGNSSYAMLWithSignalGroup("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision", "3 6"))
+	docker := defaultMockDocker()
+	docker.runResults = []pkgtypes.ContainerRunResult{{
+		ExitCode: 0,
+		Stdout:   `{"status":"ok","commands":[{"command":"CONFIG SIGNALGROUP 3 6"}],"warnings":[]}`,
+	}}
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/gnss/plan", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, docker.runSpecs, 1)
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--signal-group")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "3 6")
+
+	var response GNSSActionResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.Len(t, response.Executions, 1)
+	assert.Contains(t, response.Executions[0].Stdout, "CONFIG SIGNALGROUP 3 6")
 }
 
 func TestGNSSFactoryResetApply_UsesDedicatedResetModeThenRuntimeProfileApply(t *testing.T) {
@@ -437,6 +485,7 @@ func TestBuildGNSSApplyCommand_FactoryResetProfileIsTheOnlyPathUsingFactoryReset
 		ExecutionBaud:  gnssBaudAuto,
 		ProfileRateHz:  "10",
 		ReceiverModel:  "UM982",
+		SignalGroup:    "3 6",
 	}
 
 	normalCommand := buildGNSSApplyCommand(cfg, "rover_high_precision")
@@ -449,12 +498,16 @@ func TestBuildGNSSApplyCommand_FactoryResetProfileIsTheOnlyPathUsingFactoryReset
 	assert.NotContains(t, normalCommand, gnssApplyModeFactory)
 	assert.Contains(t, normalCommand, "--model")
 	assert.Contains(t, normalCommand, "UM982")
+	assert.Contains(t, normalCommand, "--signal-group")
+	assert.Contains(t, normalCommand, "3 6")
 
 	resetCommand := buildGNSSApplyCommand(cfg, "factory_reset")
 	assert.Contains(t, resetCommand, gnssApplyModeFactory)
 	assert.NotContains(t, resetCommand, "persistent")
 	assert.Contains(t, resetCommand, "--model")
 	assert.Contains(t, resetCommand, "UM982")
+	assert.Contains(t, resetCommand, "--signal-group")
+	assert.Contains(t, resetCommand, "3 6")
 }
 
 func TestGNSSFactoryResetApply_RejectsUbloxWithoutRunningDestructiveWorkflow(t *testing.T) {
@@ -560,6 +613,36 @@ func TestBuildGNSSApplyCommand_UsesExplicitExecutionBaudWhenConfigured(t *testin
 	assert.Contains(t, command, "--baud")
 	assert.Contains(t, command, "115200")
 	assert.NotContains(t, command, "--probe-bauds")
+}
+
+func TestBuildGNSSCommands_SkipSignalGroupWhenEmpty(t *testing.T) {
+	cfg := gnssSavedConfig{
+		ReceiverFamily: "unicore",
+		SerialDevice:   "/dev/ttyUSB7",
+		RuntimeBaud:    "921600",
+		ConfigBaud:     "921600",
+		ExecutionBaud:  gnssBaudAuto,
+		Profile:        "rover_high_precision",
+		ProfileRateHz:  "10",
+	}
+
+	assert.NotContains(t, buildGNSSPlanCommand(cfg), "--signal-group")
+	assert.NotContains(t, buildGNSSApplyCommand(cfg, "rover_high_precision"), "--signal-group")
+}
+
+func TestGNSSPlan_RejectsCollapsedSignalGroupBeforeCommandGeneration(t *testing.T) {
+	db, _ := newGNSSTestDB(t, defaultGNSSYAMLWithSignalGroup("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision", "36"))
+	docker := defaultMockDocker()
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/gnss/plan", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid GNSS signal group")
+	assert.Contains(t, w.Body.String(), "36")
+	assert.Empty(t, docker.runSpecs)
 }
 
 func TestBuildGNSSApplyCommand_AutoProbeHintsAreUnicoreSpecific(t *testing.T) {
