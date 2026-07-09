@@ -52,6 +52,9 @@ export const SettingsPage = () => {
         handleChange,
         handleBulkChange,
         isSectionDirty,
+        hasDefault,
+        isOverridden,
+        resetToDefault,
         save,
         savePartialValues,
         saveAndRestartGps,
@@ -107,7 +110,15 @@ export const SettingsPage = () => {
             case "localization":
                 return <LocalizationSection values={values} onChange={handleChange} />;
             case "mowing":
-                return <MowingSection values={values} onChange={handleChange} />;
+                return (
+                    <MowingSection
+                        values={values}
+                        onChange={handleChange}
+                        isOverridden={isOverridden}
+                        hasDefault={hasDefault}
+                        onReset={resetToDefault}
+                    />
+                );
             case "docking":
                 return <DockingSection values={values} onChange={handleChange} />;
             case "battery":
@@ -115,7 +126,15 @@ export const SettingsPage = () => {
             case "safety":
                 return <SafetySection values={values} onChange={handleChange} />;
             case "navigation":
-                return <NavigationSection values={values} onChange={handleChange} />;
+                return (
+                    <NavigationSection
+                        values={values}
+                        onChange={handleChange}
+                        isOverridden={isOverridden}
+                        hasDefault={hasDefault}
+                        onReset={resetToDefault}
+                    />
+                );
             case "rain":
                 return <RainSection values={values} onChange={handleChange} />;
             case "advanced":

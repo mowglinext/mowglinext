@@ -847,7 +847,24 @@
         </ReactiveSequence>
 
         <!-- ============================================================
-             f. Idle default
+             f. Stop-in-place / hold (COMMAND_STOP = 8)
+             ============================================================
+             "Stop Manual" and "Pause" route here (NOT COMMAND_HOME, which
+             drives to the dock). Halt motion + mower off and stay put while
+             the command is latched at 8. Unlike IdleSequence this does NOT
+             PAUSE the Nav2 lifecycle, so a paused mission can resume promptly.
+             ReactiveSequence so a new command (e.g. START/HOME) deselects this
+             branch on the next tick. -->
+        <ReactiveSequence name="StopHoldSequence">
+          <IsCommand command="8"/>
+          <SetMowerEnabled enabled="false"/>
+          <StopMoving/>
+          <PublishHighLevelStatus state="1" state_name="IDLE"/>
+          <WaitForDuration duration_sec="0.5"/>
+        </ReactiveSequence>
+
+        <!-- ============================================================
+             g. Idle default
              ============================================================ -->
         <Sequence name="IdleSequence">
           <SetMowerEnabled enabled="false"/>

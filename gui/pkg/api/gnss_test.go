@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	pkgtypes "github.com/cedbossneo/mowglinext/pkg/types"
+	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -214,6 +214,8 @@ func TestGNSSPlan_DoesNotRequireConfirmAndAvoidsSerialAccess(t *testing.T) {
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--config-baud")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "460800")
 	assert.NotContains(t, docker.runSpecs[0].Cmd, "--persistent")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--signal-profile")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "balanced")
 	assert.NotContains(t, docker.runSpecs[0].Cmd, "--model")
 
 	var response GNSSActionResponse
@@ -281,12 +283,16 @@ func TestGNSSApply_PassesConfigBaudAndRestartsAfterSuccess(t *testing.T) {
 	assert.Contains(t, docker.runSpecs[0].Cmd, "460800")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--device")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0")
+
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--apply-mode")
 	assert.Contains(t, docker.runSpecs[0].Cmd, gnssApplyModeRuntime)
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--baud")
 	assert.Contains(t, docker.runSpecs[0].Cmd, gnssBaudAuto)
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--probe-bauds")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "921600,460800,115200,230400")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--signal-profile")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "balanced")
+
 	assert.NotContains(t, docker.runSpecs[0].Cmd, "persistent")
 	assert.NotContains(t, docker.runSpecs[0].Cmd, gnssApplyModeFactory)
 	assert.NotContains(t, docker.runSpecs[0].Cmd, "--model")
@@ -306,7 +312,7 @@ func TestGNSSApply_PassesConfigBaudAndRestartsAfterSuccess(t *testing.T) {
 	assert.Equal(t, "460800", response.RuntimeBaud)
 	assert.False(t, response.RuntimeBaudDiffersFromConfig)
 	assert.Contains(t, strings.Join(response.Warnings, "\n"), "Configured receiver baud differs from runtime baud.")
-	assert.Contains(t, strings.Join(response.Warnings, "\n"), "GNSS_SIGNAL_PROFILE is persisted in the UI")
+	assert.NotContains(t, strings.Join(response.Warnings, "\n"), "GNSS_SIGNAL_PROFILE is persisted in the UI")
 	assert.Contains(t, strings.Join(response.Warnings, "\n"), "no receiver model was selected")
 	assert.Contains(t, strings.Join(response.Warnings, "\n"), "execution baud is set to auto")
 }

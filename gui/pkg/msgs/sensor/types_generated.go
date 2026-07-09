@@ -2,7 +2,7 @@
 package sensor
 
 import (
-	"github.com/cedbossneo/mowglinext/pkg/msgs/geometry"
+	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 )
 
 // Imu matches sensor_msgs/msg/Imu.

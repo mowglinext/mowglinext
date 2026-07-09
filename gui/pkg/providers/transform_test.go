@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/cedbossneo/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

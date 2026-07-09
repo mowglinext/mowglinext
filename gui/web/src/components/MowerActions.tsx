@@ -126,9 +126,9 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
             // plain IDLE except as the manual-mow fallthrough).
             key: (highLevelStatus.state_name == "IDLE_DOCKED" || highLevelStatus.state_name == "IDLE") ? "continue" : "pause",
             label: (highLevelStatus.state_name == "IDLE_DOCKED" || highLevelStatus.state_name == "IDLE") ? t('mowerActions.continue') : t('mowerActions.pause'),
-            // No pause flag exists in the stack (the old mower_logic/
-            // manual_pause_mowing command returned HTTP 500). Continue = START
-            // (resumes via persisted mow_progress); Pause = HOME (dock).
+            // Continue = START (resumes via persisted mow_progress); Pause =
+            // STOP (COMMAND_STOP=8 → StopHoldSequence: mower off, halt in place,
+            // Nav2 left up so the mission can resume, no dock drive).
             actions: (highLevelStatus.state_name == "IDLE_DOCKED" || highLevelStatus.state_name == "IDLE") ? [{
                 command: "high_level_control",
                 args: {
@@ -137,7 +137,7 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
             }] : [{
                 command: "high_level_control",
                 args: {
-                    Command: 2,
+                    Command: 8,
                 }
             }]
         },

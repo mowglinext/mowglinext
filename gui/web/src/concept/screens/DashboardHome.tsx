@@ -299,6 +299,7 @@ function HeroCard({
             onPause={() => setPhase("idle")}
             onHome={() => setPhase("returning")}
             onStop={() => setPhase("alert")}
+            onRearm={() => setPhase("idle")}
           />
         </div>
       </div>

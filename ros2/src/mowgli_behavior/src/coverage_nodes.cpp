@@ -959,6 +959,15 @@ BT::NodeStatus GetNextUnmowedArea::onStart()
       {
         current_area_idx_ = static_cast<uint32_t>(target);
         max_areas_ = current_area_idx_ + 1;
+        // Explicit single-area re-mow: clear any stale completed/attempted flag
+        // for THIS target so the skip loop below cannot advance past it. Without
+        // this, re-selecting an area already mown this session (sets are only
+        // cleared by EndSession) makes the skip loop overshoot max_areas_ →
+        // "all areas completed" → FAILURE → the requested area never mows.
+        // Guarded to the explicit-target path only, so normal COMMAND_START
+        // iteration still honors completed/attempted skipping.
+        ctx->completed_areas.erase(current_area_idx_);
+        ctx->attempted_areas.erase(current_area_idx_);
         RCLCPP_INFO(ctx->node->get_logger(),
                     "GetNextUnmowedArea: targeted run — mowing only area %u (single-area mode)",
                     current_area_idx_);

@@ -185,6 +185,11 @@ export const useSettingsManager = () => {
     const { notification } = App.useApp();
     const [savedValues, setSavedValues] = useState<Record<string, any>>({});
     const [localValues, setLocalValues] = useState<Record<string, any>>({});
+    // Schema defaults = the GUI's source of "default value" for each key.
+    // (The backend derives these from the JSON schema, which stands in for the
+    // ROS2 package template it cannot read at runtime.) Used for the
+    // per-field "reset to default" affordance and the overridden indicator.
+    const [defaults, setDefaults] = useState<Record<string, any>>({});
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [restartRequired, setRestartRequired] = useState(false);
@@ -208,6 +213,20 @@ export const useSettingsManager = () => {
                 const data = (res.data as Record<string, any>) || {};
                 setSavedValues(data);
                 setLocalValues(data);
+                // Best-effort: the reset-to-default UI degrades gracefully
+                // (no reset icons) if this fails, so it must not block load.
+                try {
+                    const defRes = await guiApi.request({
+                        path: "/settings/yaml/defaults",
+                        method: "GET",
+                        format: "json",
+                    });
+                    if (!defRes.error) {
+                        setDefaults((defRes.data as Record<string, any>) || {});
+                    }
+                } catch {
+                    /* defaults unavailable — reset affordance hidden */
+                }
                 initialLoadDone.current = true;
             } catch (e: any) {
                 notification.error({
@@ -227,6 +246,52 @@ export const useSettingsManager = () => {
     const handleBulkChange = useCallback((changes: Record<string, any>) => {
         setLocalValues((prev) => ({ ...prev, ...changes }));
     }, []);
+
+    // hasDefault: the schema knows a default for this key (so a reset is
+    // meaningful). isDefault: the current local value already equals that
+    // default (tolerating int/float JSON churn, so 5 == 5.0). isOverridden:
+    // has a default AND the local value differs from it — the operator has
+    // pinned a non-default value that we should visually flag.
+    const valuesMatch = (a: any, b: any): boolean => {
+        if (typeof a === "number" && typeof b === "number") return a === b;
+        // Number vs numeric-string / int-vs-float from JSON round-trips.
+        const an = Number(a);
+        const bn = Number(b);
+        if (!Number.isNaN(an) && !Number.isNaN(bn) &&
+            (typeof a !== "string" || a.trim() !== "") &&
+            (typeof b !== "string" || b.trim() !== "")) {
+            return an === bn;
+        }
+        return JSON.stringify(a) === JSON.stringify(b);
+    };
+
+    const hasDefault = useCallback(
+        (key: string): boolean => key in defaults,
+        [defaults]
+    );
+
+    const isDefault = useCallback(
+        (key: string): boolean =>
+            key in defaults && valuesMatch(localValues[key], defaults[key]),
+        [defaults, localValues]
+    );
+
+    const isOverridden = useCallback(
+        (key: string): boolean =>
+            key in defaults && !valuesMatch(localValues[key], defaults[key]),
+        [defaults, localValues]
+    );
+
+    // resetToDefault reverts a field to its schema default in the local (unsaved)
+    // state; the operator still presses Save to persist. On save the backend
+    // prunes default-valued keys, so the installed config stays sparse.
+    const resetToDefault = useCallback(
+        (key: string) => {
+            if (!(key in defaults)) return;
+            setLocalValues((prev) => ({ ...prev, [key]: defaults[key] }));
+        },
+        [defaults]
+    );
 
     // Dirty detection
     const dirtyKeys = useMemo(() => {
@@ -514,6 +579,7 @@ export const useSettingsManager = () => {
         sections: SECTION_DEFINITIONS,
         values: localValues,
         savedValues,
+        defaults,
         loading,
         saving,
         gpsRestarting: gpsRestart.pending,
@@ -525,6 +591,10 @@ export const useSettingsManager = () => {
         setSearchQuery,
         handleChange,
         handleBulkChange,
+        hasDefault,
+        isDefault,
+        isOverridden,
+        resetToDefault,
         isSectionDirty,
         matchesSearch,
         save,

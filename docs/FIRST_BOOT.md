@@ -34,6 +34,8 @@ MowgliNext expects centimetre-accurate GPS. Without it, area recording is noisy 
   ```
 - If `pitch` or `roll` is larger than ~1°, the IMU is physically mounted at an angle. Copy those values into `mowgli_robot.yaml` → `imu_pitch`, `imu_roll`, and recreate the container. Values under 1° are chip bias and are already removed by the calibration.
 
+> **Editing `mowgli_robot.yaml` — sparse config model.** The installed `mowgli_robot.yaml` (`/ros2_ws/config/mowgli_robot.yaml`) is **sparse**: it should hold only per-robot overrides and calibration outputs. Every parameter's *default* lives in the in-package template (`mowgli_bringup/config/mowgli_robot.yaml`) and is deep-merged in at launch, so you only need to add a key when you want to override its default. In the GUI, most settings are editable directly; a small dot marks any value you have overridden and a **reset button** reverts it to the default (by deleting the key). Prefer the GUI over hand-editing — it keeps the file sparse for you.
+
 ## 4. IMU yaw calibration (requires motion)
 
 The IMU's heading relative to forward is not auto-detected — it has to be solved by driving the robot a short distance.

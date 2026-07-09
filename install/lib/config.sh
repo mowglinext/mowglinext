@@ -3,7 +3,7 @@
 
 # ── Global configuration ────────────────────────────────────────────────────
 
-REPO_URL="https://github.com/cedbossneo/mowglinext.git"
+REPO_URL="https://github.com/mowglinext/mowglinext.git"
 
 # Fork-local override (gitignored). Create install/lib/config.local.sh to
 # point at your own fork without touching tracked files:
@@ -872,6 +872,23 @@ parse_args() {
         IMAGE_CHANNEL_PRESET=true
         recompute_image_defaults
         ;;
+      --backend=*)
+        CLI_PRESET=true
+        local backend_spec="${1#*=}"
+        case "$backend_spec" in
+          mowgli)
+            HARDWARE_BACKEND="mowgli"
+            MAVROS_BY_ID=""
+            ;;
+          mavros)
+            HARDWARE_BACKEND="mavros"
+            ;;
+          *)
+            error "Unknown hardware backend: $backend_spec (expected mowgli or mavros)"
+            exit 1
+            ;;
+        esac
+        ;;
       --gnss=*)
         CLI_PRESET=true
         GNSS_RECEIVER_FAMILY_CLI_PRESET=true
@@ -1459,8 +1476,8 @@ auto_detect_position() {
   local attempt=0
   while [[ $attempt -lt 12 ]]; do
     fix_data=$(docker_cmd exec mowgli-ros2 bash -c "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /gps/fix --once 2>/dev/null" 2>/dev/null || true)
-    lat=$(echo "$fix_data" | grep "latitude:" | awk '{print $2}')
-    lon=$(echo "$fix_data" | grep "longitude:" | awk '{print $2}')
+    lat=$(awk '/latitude:/ {print $2; exit}' <<< "$fix_data")
+    lon=$(awk '/longitude:/ {print $2; exit}' <<< "$fix_data")
 
     if [[ -n "$lat" && "$lat" != "0.0" ]]; then
       break
@@ -1482,7 +1499,7 @@ auto_detect_position() {
   if docker_cmd inspect -f '{{.State.Status}}' mowgli-ros2 2>/dev/null | grep -q running; then
     local status_data
     status_data=$(docker_cmd exec mowgli-ros2 bash -c "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /hardware_bridge/status --once 2>/dev/null" 2>/dev/null || true)
-    is_charging=$(echo "$status_data" | grep "is_charging:" | awk '{print $2}')
+    is_charging=$(awk '/is_charging:/ {print $2; exit}' <<< "$status_data")
   fi
 
   CONFIG_DATUM_LAT="$lat"

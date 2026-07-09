@@ -2,7 +2,7 @@
 
 This guide walks you through the GUI of a live MowgliNext robot mower (the web interface served on port `4006` of the robot). It is built from a real-robot session — the screenshots in `docs/gui-walkthrough/screenshots/` were captured against a running mower with RTK-Fixed GPS, so the values you see (89% battery, 13,092 fusion-graph nodes, etc.) are real.
 
-If you only need the technical reference, head to the [Wiki](https://github.com/cedbossneo/mowglinext/wiki) — it documents the ROS2 stack in depth. **This guide is for operators**, not roboticists.
+If you only need the technical reference, head to the [Wiki](https://github.com/mowglinext/mowglinext/wiki) — it documents the ROS2 stack in depth. **This guide is for operators**, not roboticists.
 
 ---
 
@@ -59,17 +59,17 @@ The desktop layout uses a left rail (`Root` in `gui/web/src/routes/root.tsx:268-
 
 ### 2.1 Dashboard
 
-![Dashboard overview](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/dashboard/01-overview.png)
+![Dashboard overview](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/dashboard/01-overview.png)
 
 **What you can do here**
 
 - See the robot's current high-level state (Idle, Autonomous, Recording, Manual Mowing) — the pill in the top-right reflects `HighLevelStatus.msg` values from `CLAUDE.md`.
 - Read live battery %, GPS quality, blade state, motor temperature.
 - Glance at "Today's work" (zone progress), "Next up" (pulled from the schedule), and "Health check" (RTK status, rain, emergency, motor temp).
-- Tap **Start mowing** to begin (or **Home** to dock — the secondary ⚠️ button is also the emergency reset entry point).
+- Tap **Start mowing** to begin. While mowing, the primary button becomes **Pause** — a true stop-in-place hold (blade off, halt where it stands, no dock trip) via `COMMAND_STOP` (8); tap **Continue** to resume. **Home** drives the robot back to the dock (`COMMAND_HOME`); the secondary ⚠️ button is also the emergency reset entry point.
 - Expand **System Info** and **Sensors & Diagnostics** at the bottom to see the live IMU / GPS / wheel-tick stream.
 
-![Dashboard with sensors expanded](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/dashboard/03-sensors-detail.png)
+![Dashboard with sensors expanded](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/dashboard/03-sensors-detail.png)
 
 **Common tasks**
 
@@ -79,13 +79,13 @@ The desktop layout uses a left rail (`Root` in `gui/web/src/routes/root.tsx:268-
 
 **Mobile**
 
-![Dashboard on mobile](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/mobile/01-dashboard.png)
+![Dashboard on mobile](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/mobile/01-dashboard.png)
 
 The hero card and KPI tiles stack vertically; bottom tabs replace the sidebar.
 
 ### 2.2 Map page
 
-![Map overview](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/map/01-map-overview.png)
+![Map overview](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/map/01-map-overview.png)
 
 The map is a Mapbox satellite layer with the robot icon, dock marker (`DOCK`), and the mowing-area polygons (`Area 1`, `Area 2`) drawn in green over the user's actual yard. The right-hand panel lists every area and exposes the **Map Offset** controls (X/Y nudge in metres, applied client-side for visual alignment when the satellite imagery is mis-georeferenced).
 
@@ -99,21 +99,22 @@ The map is a Mapbox satellite layer with the robot icon, dock marker (`DOCK`), a
 | **Mow area** | Start mowing the currently-selected area only |
 | **More** | Opens a dropdown — see screenshot below |
 
-![More menu](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/map/02-more-menu.png)
+![More menu](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/map/02-more-menu.png)
 
 The **More** menu contains everything that doesn't fit on the bottom bar:
 
 - *Dark map* — toggle Mapbox satellite vs dark style.
 - *Area Recording* — sends `COMMAND_RECORD_AREA` (3). Drive the robot along the boundary; finish via the same menu when you're done.
 - *Mow Next Area* — advances the multi-area outer loop without restarting.
-- *Continue* — resumes a paused run.
+- *Pause / Stop* — sends `COMMAND_STOP` (8): a true **stop-in-place hold** (blade off, halt where it stands, stays put — it does **not** drive to the dock, that is *Home*/`COMMAND_HOME`). Resumable.
+- *Continue* — resumes a paused run (re-issues `COMMAND_START`, picking up from the persisted mow-progress).
 - *Manual Mowing* — `COMMAND_MANUAL_MOW` (7); blade managed from the GUI, motion via teleop. **Collision monitor stays active** (`CLAUDE.md` invariant 9).
 - *Blade Forward / Backward / Off* — fire-and-forget commands; firmware decides whether to honour them.
 - *Backup Map / Restore Map / Download GeoJSON* — full-map import/export.
 
 **Edit mode**
 
-![Map in edit mode](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/map/03-edit-mode.png)
+![Map in edit mode](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/map/03-edit-mode.png)
 
 Click **Edit Map** and the bottom bar is replaced by a vertical toolbar with: save / close / undo / redo / draw rectangle (border) / draw polygon (plus) / delete / merge cells / minus-square (subtract) / split-cells / form (open `EditAreaModal` for the selected area) / aim (centre on robot) / **environment pin (Set docking point)** / rotation degree input.
 
@@ -121,7 +122,7 @@ Click **Edit Map** and the bottom bar is replaced by a vertical toolbar with: sa
 
 If you try to leave edit mode with unsaved changes you get a confirmation:
 
-![Discard unsaved changes](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/map/04-save-confirmation-modal.png)
+![Discard unsaved changes](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/map/04-save-confirmation-modal.png)
 
 **Common tasks**
 
@@ -135,15 +136,15 @@ If you try to leave edit mode with unsaved changes you get a confirmation:
 The 5-step wizard (`gui/web/src/pages/OnboardingPage.tsx:551-654`). The sequence is:
 
 #### Step 0 — Welcome
-![Welcome](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/01-welcome.png)
+![Welcome](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/01-welcome.png)
 Three info cards summarise what the wizard will do.
 
 #### Step 1 — Robot Model
-![Robot Model](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/02-robot-model.png)
+![Robot Model](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/02-robot-model.png)
 Pick from YardForce Classic 500 / 500B / SA650 / 900 ECO / LUV1000RI, Sabo MOWiT 500F, or Custom. Selecting a preset auto-fills `wheel_radius`, `wheel_track`, `blade_radius`, battery thresholds, encoder ticks/rev (see `gui/web/src/constants/mowerModels.ts`).
 
 #### Step 2 — GPS & Positioning
-![GPS step](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/03-gps.png)
+![GPS step](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/03-gps.png)
 
 Three panels:
 
@@ -154,18 +155,18 @@ Three panels:
 > **Operator tip:** the dock should be physically positioned where you want the map origin. Stand the robot on the dock, wait for "RTK FIX" in the Diagnostics page, and only *then* click **Use current GPS position**.
 
 #### Step 3 — Sensors
-![Sensor placement](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/04-sensors.png)
+![Sensor placement](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/04-sensors.png)
 
 Visual robot editor (`gui/web/src/components/RobotComponentEditor.tsx`) with drag-to-place LiDAR / IMU / GPS markers on a top-down rectangle representing your chassis. Numeric inputs on the right side give precision for X (forward), Y (left), Z (height), Yaw.
 
 > **Critical:** the small **compass icon** next to **IMU Yaw** triggers `POST /api/calibration/imu-yaw` (`gui/pkg/api/calibration.go:63-122`). The robot drives ~0.6 m forward then back — do **not** click it indoors, on a slope, or near furniture. The service blocks for up to 150 s and writes `imu_yaw` (and pitch/roll if the stationary baseline is good enough) directly into `mowgli_robot.yaml`.
 
 #### Step 4 — Firmware
-![Firmware step](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/05-firmware.png)
+![Firmware step](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/05-firmware.png)
 
 If you skipped this earlier, you can flash the STM32 from here. The flash UI (`FlashBoardComponent.tsx`) lets you pick the board variant, repository, branch, panel layout, and debug type:
 
-![Flash board](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/06-flash-firmware.png)
+![Flash board](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/06-flash-firmware.png)
 
 If your firmware is already up-to-date, click **Skip — Already Flashed**.
 
@@ -194,9 +195,11 @@ The Settings page (`gui/web/src/pages/SettingsPage.tsx`) groups parameters into 
 
 Each tab persists changes to the GUI's settings store; the **Restart ROS2** button at the bottom-right (visible in every tab) reloads the ROS2 container so YAML-backed parameters are picked up.
 
+**Overridden dot + reset to default.** The installed `mowgli_robot.yaml` is [sparse](https://github.com/mowglinext/mowglinext/wiki/Configuration#sparse-robot-config-model) — it stores only values that differ from the shipped defaults. Any field you have pinned to a non-default value shows a small **dot** before its label; a subtle **reset (undo) button** next to it reverts the field to its default. Reset deletes the key from the installed config so it falls back to the in-package template, and the backend prunes any saved value that already equals its default — so the installed file stays sparse and a later software update that changes a default automatically flows through to fields you never overrode.
+
 The **Localization** tab is worth a closer look:
 
-![Localization tab](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/settings/04-localization.png)
+![Localization tab](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/settings/04-localization.png)
 
 The four toggles (`gui/web/src/components/settings/LocalizationSection.tsx:23-63`):
 
@@ -207,13 +210,13 @@ The four toggles (`gui/web/src/components/settings/LocalizationSection.tsx:23-63
 
 ### 2.5 Diagnostics page
 
-This is the most information-dense page in the app. It is a near-superset of what the Wiki [Architecture](https://github.com/cedbossneo/mowglinext/wiki/Architecture) describes, but rendered live.
+This is the most information-dense page in the app. It is a near-superset of what the Wiki [Architecture](https://github.com/mowglinext/mowglinext/wiki/Architecture) describes, but rendered live.
 
-![Diagnostics top](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/diagnostics/01-overview.png)
+![Diagnostics top](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/diagnostics/01-overview.png)
 
 **Top of page:** Health pills (Containers OK, GPS: RTK FIX, Battery 88%, No Emergency, CPU 53.6 °C), Alerts panel, Containers table (mowgli-ros2 / mowgli-gui / mowgli-gps / mowgli-lidar / mowgli-mqtt with state + uptime), CPU temperature card.
 
-![Pose + GPS + Fusion Graph](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/diagnostics/02-pose-gps.png)
+![Pose + GPS + Fusion Graph](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/diagnostics/02-pose-gps.png)
 
 **Filtered Pose / GPS / Fusion Graph (iSAM2) / Heading sources / BT State / Coverage**:
 
@@ -221,7 +224,7 @@ This is the most information-dense page in the app. It is a near-superset of wha
 - *Heading sources*: side-by-side comparison of the active filter yaw, GPS course-over-ground (`/imu/cog_heading`), and magnetometer yaw (`/imu/mag_yaw`). When mag is "Stale" the unary factor is not being fused.
 - *Coverage*: per-area progress (cells mowed / total cells, obstacles, strips left).
 
-![Calibration panels](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/diagnostics/03-bt-coverage-network.png)
+![Calibration panels](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/diagnostics/03-bt-coverage-network.png)
 
 **Configuration cross-checks + three calibration panels** (`DiagnosticsPage.tsx:917-1057`):
 
@@ -230,13 +233,13 @@ This is the most information-dense page in the app. It is a near-superset of wha
 - *IMU bias calibration* — read from `/ros2_ws/maps/imu_calibration.txt`. Shows calibrated-at timestamp, sample count (1000 in the live session), gyro bias vector, and implied pitch/roll. The hardware bridge auto-runs this every time the robot returns to the dock.
 - *Magnetometer calibration* — read from `/ros2_ws/maps/mag_calibration.yaml`. Shows |B| mean / std / sample count. The **Enable & run** button currently only opens a notification telling you to flip the `do_mag_calibration` parameter on `calibrate_imu_yaw_node` — it is **not yet a one-click operation** (see `DiagnosticsPage.tsx:896-902` and `ONBOARDING_IMPROVEMENTS.md` gap #4).
 
-![ROS Diagnostics](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/diagnostics/04-imu-wheel-bottom.png)
+![ROS Diagnostics](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/diagnostics/04-imu-wheel-bottom.png)
 
 **Hardware Status + ROS Diagnostics**: the bottom is the canonical `diagnostic_msgs/DiagnosticArray` view. Click any row to expand the per-key/value detail. In our live session, `ekf_odom_node: odometry/filtered topic status = ERROR — No events recorded` is visible — this is expected when `use_fusion_graph=true` and `ekf_odom_node` is disabled, and the GUI doesn't yet know to suppress it.
 
 ### 2.6 Schedule
 
-![Schedule](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/schedule/01-overview.png)
+![Schedule](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/schedule/01-overview.png)
 
 Weekly grid (Mon–Sun, 6:00–19:00). Bottom panels show:
 - **This week** (count of active schedules + per-day chips).
@@ -247,13 +250,13 @@ Empty in our test session — schedules are user-defined.
 
 ### 2.7 Logs
 
-![Logs](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/logs/01-overview.png)
+![Logs](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/logs/01-overview.png)
 
 Live tail of any selected container's stdout/stderr. Picker defaults to `mowgli-ros2`; **Restart** / **Stop** buttons at the top-right are container-level controls.
 
 ### 2.8 Statistics
 
-![Statistics](https://raw.githubusercontent.com/cedbossneo/mowglinext/dev/docs/gui-walkthrough/screenshots/statistics/01-overview.png)
+![Statistics](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/statistics/01-overview.png)
 
 Lifetime KPIs: Total Distance, Hours Active, Completion Rate, Runs Completed. Below: distance-per-week chart (12-week window), per-zone coverage (cells mowed / total), session history table with date / duration / area / coverage / status.
 
@@ -282,6 +285,8 @@ Localization is the part the user feels is most under-explained today. Here is t
 | `dock_pose_x/y/yaw` | `mowgli_robot.yaml` | (a) IMU yaw calibration when started while docked, **OR** (b) map editor → "Set docking point" with robot manually positioned on dock | Once at install. Re-run if you physically move the dock. |
 | `imu_calibration.txt` (gyro/accel bias) | `/ros2_ws/maps/imu_calibration.txt` | Auto, every dock arrival, `hardware_bridge_node` | Continuous. Look at Diagnostics → IMU bias panel; if `Implied pitch/roll` is > ~1° you should bake those into `imu_pitch/roll` (see FIRST_BOOT.md §3). |
 | `mag_calibration.yaml` (magnetometer) | `/ros2_ws/maps/mag_calibration.yaml` | `calibrate_imu_yaw_node` rotation phase, **only when `do_mag_calibration=true`** (off by default) | Optional — only needed if you toggle Magnetometer yaw on. |
+
+> The `mowgli_robot.yaml` values above are exactly the per-robot calibration outputs that the **sparse** installed config is meant to carry (alongside the install-time datum/NTRIP/hardware choices). Everything else is a template default — see [Configuration → Sparse robot config model](https://github.com/mowglinext/mowglinext/wiki/Configuration#sparse-robot-config-model).
 
 **What changes when you tune `use_fusion_graph`:**
 
@@ -323,7 +328,7 @@ These are operator-facing and self-explanatory in the UI:
 
 ## 4. Troubleshooting
 
-The Wiki [FAQ](https://github.com/cedbossneo/mowglinext/wiki/FAQ) is the long version. Below are the ones the GUI directly surfaces.
+The Wiki [FAQ](https://github.com/mowglinext/mowglinext/wiki/FAQ) is the long version. Below are the ones the GUI directly surfaces.
 
 ### "RTK is not Fixed"
 
@@ -381,8 +386,8 @@ The Wiki [FAQ](https://github.com/cedbossneo/mowglinext/wiki/FAQ) is the long ve
 
 ## Where to go next
 
-- **Wiki — Architecture:** https://github.com/cedbossneo/mowglinext/wiki/Architecture (deep dive into TF chain, fusion_graph, BT, coverage)
-- **Wiki — Configuration:** https://github.com/cedbossneo/mowglinext/wiki/Configuration (every YAML key)
-- **Wiki — FAQ:** https://github.com/cedbossneo/mowglinext/wiki/FAQ
+- **Wiki — Architecture:** https://github.com/mowglinext/mowglinext/wiki/Architecture (deep dive into TF chain, fusion_graph, BT, coverage)
+- **Wiki — Configuration:** https://github.com/mowglinext/mowglinext/wiki/Configuration (every YAML key)
+- **Wiki — FAQ:** https://github.com/mowglinext/mowglinext/wiki/FAQ
 - **First-boot checklist:** [`docs/FIRST_BOOT.md`](FIRST_BOOT.md)
 - **Onboarding gaps + roadmap:** [`docs/ONBOARDING_IMPROVEMENTS.md`](ONBOARDING_IMPROVEMENTS.md)

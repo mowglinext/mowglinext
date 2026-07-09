@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	pkgtypes "github.com/cedbossneo/mowglinext/pkg/types"
+	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -500,6 +500,9 @@ func buildGNSSPlanCommand(cfg gnssSavedConfig) []string {
 		"--config-baud", cfg.ConfigBaud,
 		"--rate-hz", cfg.ProfileRateHz,
 	}
+	if cfg.SignalProfile != "" {
+		command = append(command, "--signal-profile", cfg.SignalProfile)
+	}
 	if cfg.ReceiverModel != "" {
 		command = append(command, "--model", cfg.ReceiverModel)
 	}
@@ -530,17 +533,25 @@ func buildGNSSApplyCommand(cfg gnssSavedConfig, profile string) []string {
 		"--timeout-ms", gnssApplyTimeoutMs,
 		"--confirm",
 	}
+
 	if executionBaud == gnssBaudAuto {
 		if probeBauds := buildGNSSProbeBaudCandidates(cfg); len(probeBauds) > 0 {
 			command = append(command, "--probe-bauds", strings.Join(probeBauds, ","))
 		}
 	}
+
+	if cfg.SignalProfile != "" {
+		command = append(command, "--signal-profile", cfg.SignalProfile)
+	}
+
 	if cfg.ReceiverModel != "" {
 		command = append(command, "--model", cfg.ReceiverModel)
 	}
+
 	if shouldPassGNSSSignalGroup(cfg) {
 		command = append(command, "--signal-group", cfg.SignalGroup)
 	}
+
 	return command
 }
 

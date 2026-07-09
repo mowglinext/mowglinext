@@ -2,7 +2,7 @@
 package nav
 
 import (
-	"github.com/cedbossneo/mowglinext/pkg/msgs/geometry"
+	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 )
 
 // MapMetaData matches nav_msgs/msg/MapMetaData.

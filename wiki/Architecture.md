@@ -2,7 +2,7 @@
 
 Comprehensive technical documentation of the Mowgli ROS2 system design, including package organization, data flow, communication protocols, and integration points.
 
-Built on **ROS2 Kilted** with **Gazebo Harmonic** simulation, this architecture spans 12 focused packages providing complete autonomous lawn mower functionality. [CLAUDE.md](https://github.com/cedbossneo/mowglinext/blob/main/CLAUDE.md) is the authoritative short-form reference and the place to check first if any page on the wiki looks out of date.
+Built on **ROS2 Kilted** with **Gazebo Harmonic** simulation, this architecture spans 12 focused packages providing complete autonomous lawn mower functionality. [CLAUDE.md](https://github.com/mowglinext/mowglinext/blob/main/CLAUDE.md) is the authoritative short-form reference and the place to check first if any page on the wiki looks out of date.
 
 ## Localization at a glance
 
@@ -241,6 +241,9 @@ Application layer
     COMMAND_RECORD_FINISH=5     # Finish recording, save polygon
     COMMAND_RECORD_CANCEL=6     # Cancel recording, discard trajectory
     COMMAND_MANUAL_MOW=7        # Enter manual mowing mode (teleop + blade)
+    COMMAND_STOP=8              # Stop-in-place hold: mower off, halt, stay put
+                               #   (NOT dock — that is COMMAND_HOME). Resumable.
+                               #   GUI Pause / Stop use this.
     COMMAND_RESET_EMERGENCY=254 # Reset latched emergency
     COMMAND_DELETE_MAPS=255     # Delete all maps
 
@@ -818,6 +821,7 @@ Starts (in order):
 **nav2_params_base.yaml** – Shared Nav2 base (costmaps, planner, controller) deep-merged with one overlay.
 **nav2_params_lidar.yaml** / **nav2_params_no_lidar.yaml** – Thin overlays for the LiDAR vs GPS-only variants (obstacle vs static layers, scan-based vs pass-through collision_monitor).
 **twist_mux.yaml** – Velocity command multiplexing (nav < teleop < emergency).
+**mowgli_robot.yaml** – Per-robot config. **Sparse model:** the *installed* file (`/ros2_ws/config/mowgli_robot.yaml`, from `install/config/mowgli/`) holds only install-time choices (datum, NTRIP, `lidar_enabled`, GNSS hardware, `mower_model`) + calibration outputs (dock pose, `ticks_per_meter`, `wheel_pid_*`, `imu_yaw`, mag). Every other default lives in the in-package template `mowgli_bringup/config/mowgli_robot.yaml`; at launch `mowgli_bringup/launch/robot_config_util.py` (`load_robot_params`) **deep-merges the installed sparse file over the template**, so absent keys fall through to template defaults. This is what lets the GUI "reset to default" by simply deleting a key, and lets a maintainer change a template default for all robots that never overrode it. Older *full* installed configs still merge to themselves (no-op).
 
 ---
 

@@ -188,8 +188,8 @@ if ! harness_run; then
 else
   feature_env="$(cat "$repo_feature/docker/.env")"
   assert_contains "custom IMAGE_TAG written" "IMAGE_TAG=feat-universal-gnss-integration" "$feature_env"
-  assert_contains "custom GPS image tag written" "GPS_IMAGE=ghcr.io/cedbossneo/mowglinext/gps:feat-universal-gnss-integration" "$feature_env"
-  assert_contains "custom mowgli-ros2 image tag written" "MOWGLI_ROS2_IMAGE=ghcr.io/cedbossneo/mowglinext/mowgli-ros2:feat-universal-gnss-integration" "$feature_env"
+  assert_contains "custom GPS image tag written" "GPS_IMAGE=ghcr.io/mowglinext/mowglinext/gps:feat-universal-gnss-integration" "$feature_env"
+  assert_contains "custom mowgli-ros2 image tag written" "MOWGLI_ROS2_IMAGE=ghcr.io/mowglinext/mowglinext/mowgli-ros2:feat-universal-gnss-integration" "$feature_env"
 fi
 
 section "NTRIP env is written without leaking secrets to logs"

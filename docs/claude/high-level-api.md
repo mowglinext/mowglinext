@@ -12,6 +12,7 @@
 | 5 | `COMMAND_RECORD_FINISH` | Finish recording, save polygon |
 | 6 | `COMMAND_RECORD_CANCEL` | Cancel recording, discard trajectory |
 | 7 | `COMMAND_MANUAL_MOW` | Enter manual mowing mode (teleop + blade) |
+| 8 | `COMMAND_STOP` | Stop-in-place hold: mower off, halt, stay put (NOT dock — that is `COMMAND_HOME`). Routes to `StopHoldSequence`. Resumable via `COMMAND_START`. GUI Pause / Stop use this. |
 | 254 | `COMMAND_RESET_EMERGENCY` | Reset latched emergency |
 | 255 | `COMMAND_DELETE_MAPS` | Delete all maps |
 
@@ -30,6 +31,9 @@
 3. User drives robot along boundary
 4. GUI sends `COMMAND_RECORD_FINISH` (5) — trajectory is simplified (Douglas-Peucker) and saved via `/map_server_node/add_area`
 5. Or GUI sends `COMMAND_RECORD_CANCEL` (6) — trajectory discarded
+
+## Stop-in-place / Pause
+- `COMMAND_STOP` (8) routes to the BT `StopHoldSequence`: mower off, halt where it stands, and hold — it does **not** drive to the dock (that is `COMMAND_HOME`). Resumable with `COMMAND_START` (picks up from the persisted `mow_progress`). The GUI's Pause / Stop buttons issue this; it is a true pause, distinct from Home/dock.
 
 ## Manual Mowing
 - Dedicated BT state with `COMMAND_MANUAL_MOW` (7) — does not hijack recording mode

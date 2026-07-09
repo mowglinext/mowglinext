@@ -19,7 +19,6 @@ import {
     UploadOutlined,
     ScissorOutlined,
     ControlOutlined,
-    StopOutlined,
     SplitCellsOutlined,
     MinusSquareOutlined,
     PlayCircleOutlined,
@@ -29,8 +28,8 @@ import {
     BorderOutlined,
     AimOutlined,
     ForwardOutlined,
-    PauseOutlined,
     CaretRightOutlined,
+    PauseOutlined,
     ThunderboltOutlined,
     ImportOutlined,
 } from "@ant-design/icons";
@@ -412,7 +411,7 @@ export const MapToolbarMobile = ({
                 <AsyncButton
                     size="large"
                     danger={manualMode}
-                    icon={manualMode ? <StopOutlined /> : <ControlOutlined />}
+                    icon={manualMode ? <HomeOutlined /> : <ControlOutlined />}
                     onAsyncClick={manualMode ? onStopManualMode : onManualMode}
                     aria-label={manualMode ? t("mapToolbarMobile.stopManualMowing") : t("mapToolbarMobile.manualMowing")}
                     style={touchTarget}

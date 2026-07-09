@@ -512,8 +512,9 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
             />
 
             {/* The manual plan/apply/factory-reset/restart panel is developer
-                tooling — basic onboarding doesn't need it because Save & Continue
-                already restarts the receiver. Keep it for Expert mode only. */}
+                tooling — Save & Continue restarts the receiver container for
+                transport/NTRIP changes, but only Plan & Apply writes the signal
+                profile into the receiver's flash. Keep it for Expert mode only. */}
             {expertMode && (
                 <GnssReceiverActionsCard
                     gpsRestarting={gpsRestarting}

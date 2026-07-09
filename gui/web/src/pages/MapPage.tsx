@@ -536,12 +536,13 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         // here and returned HTTP 500, which also broke Continue-from-idle by
         // rejecting before the START fired). Use real HighLevelControl commands:
         // Continue = START (mow_progress persists, so it resumes where it left
-        // off); Pause = HOME (stop and return to dock).
+        // off); Pause = STOP (COMMAND_STOP=8 → StopHoldSequence: mower off, halt
+        // in place, Nav2 left up so the mission can resume, no dock drive).
         onContinueOrPause:
             highLevelStatus.highLevelStatus.state_name === "IDLE_DOCKED" ||
             highLevelStatus.highLevelStatus.state_name === "IDLE"
                 ? mowerAction("high_level_control", {Command: 1})
-                : mowerAction("high_level_control", {Command: 2}),
+                : mowerAction("high_level_control", {Command: 8}),
         onBladeForward: mowerAction("mow_enabled", {mow_enabled: 1, mow_direction: 0}),
         onBladeBackward: mowerAction("mow_enabled", {mow_enabled: 1, mow_direction: 1}),
         onBladeOff: mowerAction("mow_enabled", {mow_enabled: 0, mow_direction: 0}),
