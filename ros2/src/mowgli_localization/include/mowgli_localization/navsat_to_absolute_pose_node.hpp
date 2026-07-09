@@ -21,12 +21,14 @@
  * Bridges generic ROS2 GNSS fixes into the Mowgli AbsolutePose message.
  *
  * Performs WGS84 → local ENU projection using a configurable datum origin.
- * Universal GNSS is the single owner of the typed /gps/status contract, so
- * this node only consumes /gps/fix and publishes /gps/absolute_pose plus the
+ * Universal GNSS is the single owner of the typed /gps/status contract. This
+ * node consumes /gps/fix for coordinates/covariance and /gps/status for the
+ * authoritative RTK/fix state, then publishes /gps/absolute_pose plus the
  * robot_localization-friendly /gps/pose_cov twin.
  *
  * Subscribed topics:
- *   /gps/fix   sensor_msgs/msg/NavSatFix
+ *   /gps/fix     sensor_msgs/msg/NavSatFix
+ *   /gps/status  mowgli_interfaces/msg/GnssStatus
  *
  * Published topics:
  *   /gps/absolute_pose    mowgli_interfaces/msg/AbsolutePose
@@ -41,6 +43,7 @@
 #include "geometry_msgs/msg/pose_with_covariance.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
+#include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -96,7 +99,13 @@ private:
   /// during pure rotation.
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_cov_pub_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr fix_sub_;
+  rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr status_sub_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr set_datum_srv_;
+
+  /// Latest typed GNSS status. /gps/status is the authoritative RTK/fix-state
+  /// source even when /gps/fix covariance is missing or rejected.
+  mowgli_interfaces::msg::GnssStatus last_status_;
+  bool has_status_{false};
 
   /// TF listener to resolve base_footprint↔gps_link (static from URDF,
   /// gives the lever arm) and map↔base_footprint (dynamic from ekf_map,

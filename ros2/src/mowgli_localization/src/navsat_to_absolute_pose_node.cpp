@@ -25,11 +25,9 @@
  * This is accurate to ~1 cm within 10 km of the datum, which is more than
  * sufficient for a garden robot mower operating within a few hundred metres.
  *
- * NavSatFix status mapping to AbsolutePose flags:
- *   STATUS_FIX              → FLAG_GPS_RTK (generic fix)
- *   STATUS_SBAS_FIX         → FLAG_GPS_RTK_FLOAT
- *   STATUS_GBAS_FIX         → FLAG_GPS_RTK_FIXED
- *   covariance_type UNKNOWN → FLAG_GPS_DEAD_RECKONING
+ * NavSatFix carries the coordinates/covariance. The typed RTK/fix-state comes
+ * from /gps/status when available, with NavSatFix status used only as a
+ * conservative fallback during bring-up.
  *
  * Universal GNSS owns the typed /gps/status contract. This node only projects
  * /gps/fix into the Mowgli-local absolute-pose topics consumed by the GUI,
@@ -43,6 +41,7 @@
 #include <iomanip>
 #include <sstream>
 
+#include "mowgli_localization/navsat_projection_utils.hpp"
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "tf2/LinearMath/Quaternion.h"
 
@@ -124,6 +123,14 @@ void NavSatToAbsolutePoseNode::create_subscribers()
       [this](sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
       {
         on_navsat_fix(msg);
+      });
+  status_sub_ = create_subscription<mowgli_interfaces::msg::GnssStatus>(
+      "/gps/status",
+      rclcpp::QoS(10),
+      [this](mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
+      {
+        last_status_ = *msg;
+        has_status_ = true;
       });
 }
 
@@ -214,22 +221,9 @@ void NavSatToAbsolutePoseNode::on_navsat_fix(sensor_msgs::msg::NavSatFix::ConstS
   out.header.frame_id = "map";
   out.source = AbsPose::SOURCE_GPS;
 
-  // Map NavSatFix status to AbsolutePose flags.
-  switch (msg->status.status)
-  {
-    case NavStatus::STATUS_GBAS_FIX:
-      out.flags = AbsPose::FLAG_GPS_RTK | AbsPose::FLAG_GPS_RTK_FIXED;
-      break;
-    case NavStatus::STATUS_SBAS_FIX:
-      out.flags = AbsPose::FLAG_GPS_RTK | AbsPose::FLAG_GPS_RTK_FLOAT;
-      break;
-    case NavStatus::STATUS_FIX:
-      out.flags = AbsPose::FLAG_GPS_RTK;
-      break;
-    default:
-      out.flags = AbsPose::FLAG_GPS_DEAD_RECKONING;
-      break;
-  }
+  const std::optional<mowgli_interfaces::msg::GnssStatus> authoritative_status =
+      has_status_ ? std::make_optional(last_status_) : std::nullopt;
+  out.flags = ResolveAbsolutePoseFlags(authoritative_status, msg->status.status);
 
   // Position in local ENU frame. Note: ROS REP-103 map frame is
   // x=east (or forward), y=north (or left). We store east→x, north→y
@@ -255,7 +249,6 @@ void NavSatToAbsolutePoseNode::on_navsat_fix(sensor_msgs::msg::NavSatFix::ConstS
   else
   {
     out.position_accuracy = 10.0f;  // Unknown — large default.
-    out.flags = AbsPose::FLAG_GPS_DEAD_RECKONING;
   }
 
   // Resolve the GPS lever arm once from TF (URDF static). Retry silently
@@ -349,17 +342,14 @@ void NavSatToAbsolutePoseNode::on_navsat_fix(sensor_msgs::msg::NavSatFix::ConstS
   // appropriately; without Float updates the map-frame position freezes
   // during the long Float windows under tree cover, leaving the controller
   // to act on stale poses.
-  if (msg->status.status != NavStatus::STATUS_GBAS_FIX &&
-      msg->status.status != NavStatus::STATUS_SBAS_FIX)
+  if (!HasAuthoritativeRtkPoseState(authoritative_status, msg->status.status))
   {
     return;
   }
 
-  // Defensive guard on the receiver's own accuracy: even with carr_soln=2
-  // (RTK Fixed) the F9P can produce false fixes during environmental
-  // degradation. NAV-COV reports σ growing past nominal in those cases
-  // — use that signal to either down-weight or drop the sample before
-  // the EKF latches onto a bad pose.
+  // Defensive guard on the receiver's own accuracy: even with a typed RTK
+  // state the covariance still controls whether /gps/pose_cov is trustworthy
+  // enough for localization fusion.
   if (out.position_accuracy > pos_accuracy_reject_threshold_m_)
   {
     RCLCPP_WARN_THROTTLE(

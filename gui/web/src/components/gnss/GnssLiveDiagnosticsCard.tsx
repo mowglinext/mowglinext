@@ -223,7 +223,7 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
                         <Col span={12}>
                             <Statistic
                                 title={t("diagnosticsPage.horizontalAccuracyM")}
-                                value={horizontalAccuracyM ?? "-"}
+                                value={horizontalAccuracyM ?? "—"}
                                 precision={horizontalAccuracyM !== undefined ? 3 : undefined}
                             />
                         </Col>

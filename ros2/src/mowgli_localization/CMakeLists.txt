@@ -293,6 +293,17 @@ if(BUILD_TESTING)
     sensor_msgs
   )
 
+  ament_add_gtest(test_navsat_projection_utils
+    test/test_navsat_projection_utils.cpp
+  )
+  target_include_directories(test_navsat_projection_utils PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  ament_target_dependencies(test_navsat_projection_utils
+    mowgli_interfaces
+    sensor_msgs
+  )
+
 endif()
 
 # ---------------------------------------------------------------------------

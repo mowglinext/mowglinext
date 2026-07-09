@@ -178,10 +178,13 @@ struct BTContext
   // GPS quality classification (derived from gps_quality / fix_type)
   // -----------------------------------------------------------------------
 
-  /// GPS fix type: 0=no fix, 1=autonomous, 2=DGPS, 4=RTK fixed, 5=RTK float
+  /// Quality-monotonic GPS fix type derived from /gps/status:
+  /// 0=no fix, 2=generic GNSS fix, 3=RTK float, 4=RTK fixed.
   uint8_t gps_fix_type{0};
 
-  /// true when RTK fixed (fix_type >= 4 and gps_quality > 80%)
+  /// True when the authoritative /gps/status contract reports a stable RTK-fixed
+  /// state at high confidence. SeedYawFromMotion and preflight RTK gates read
+  /// this instead of inferring fix quality from /gps/absolute_pose covariance.
   bool gps_is_fixed{false};
 
   // -----------------------------------------------------------------------

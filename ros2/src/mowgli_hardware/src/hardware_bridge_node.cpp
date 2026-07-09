@@ -105,7 +105,9 @@ static const char* high_level_mode_name(const uint8_t mode)
   }
 }
 
+#include "mowgli_interfaces/gnss_status_utils.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
+#include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
@@ -585,28 +587,15 @@ private:
           on_cmd_vel(msg);
         });
 
-    // GPS fix quality drives the firmware's GPS-LOCK panel LED (lit when
-    // gps_quality >= 90). Without this subscription gps_quality_ stayed 0 and
-    // the LED was permanently off. Map horizontal accuracy → 0..100.
-    sub_gps_fix_ = create_subscription<sensor_msgs::msg::NavSatFix>(
-        "/gps/fix",
-        rclcpp::SensorDataQoS(),
-        [this](sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
+    // /gps/status is the authoritative fix-state source for the GPS-LOCK LED.
+    // Use the same typed status helper as the behavior tree so a missing or
+    // rejected NavSatFix covariance cannot disagree with the BT/GUI RTK state.
+    sub_gnss_status_ = create_subscription<mowgli_interfaces::msg::GnssStatus>(
+        "/gps/status",
+        rclcpp::QoS(10),
+        [this](mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
         {
-          if (msg->status.status < sensor_msgs::msg::NavSatStatus::STATUS_FIX)
-          {
-            gps_quality_ = 0;
-            return;
-          }
-          const double sigma_h = std::sqrt(std::max(msg->position_covariance[0], 0.0));
-          if (sigma_h <= 0.05)
-            gps_quality_ = 100;  // RTK Fixed
-          else if (sigma_h <= 0.5)
-            gps_quality_ = 70;  // RTK Float / DGPS
-          else if (sigma_h <= 2.0)
-            gps_quality_ = 40;
-          else
-            gps_quality_ = 10;
+          gps_quality_ = mowgli_interfaces::gnss_status_utils::HardwareQualityPercent(*msg);
         });
 
     // Mirror the behavior tree's high-level state to the firmware so it
@@ -2440,7 +2429,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_dock_heading_;
 
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr sub_cmd_vel_;
-  rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr sub_gps_fix_;
+  rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr sub_gnss_status_;
   rclcpp::Subscription<mowgli_interfaces::msg::HighLevelStatus>::SharedPtr sub_hl_status_;
 
   rclcpp::Service<mowgli_interfaces::srv::MowerControl>::SharedPtr srv_mower_control_;

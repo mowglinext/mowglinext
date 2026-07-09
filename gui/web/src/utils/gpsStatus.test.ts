@@ -4,6 +4,7 @@ import {GnssStatusConstants, type GnssStatus} from '../types/ros.ts';
 // (pinned to English in test/setup.ts) so reworded copy doesn't break the test.
 import en from '../i18n/locales/en.json';
 import {
+    displayHorizontalAccuracyM,
     deriveGpsStatus,
     deriveGnssStatusFromDiagnostics,
     gnssBaselineSolutionStatusLabel,
@@ -174,6 +175,17 @@ describe('deriveGpsStatus', () => {
             GnssStatusConstants.CAP_HORIZONTAL_ACCURACY,
             status.horizontal_accuracy_m,
         )).toBeUndefined();
+    });
+
+    it('keeps unknown horizontal accuracy unavailable instead of inventing 0.000', () => {
+        const status: GnssStatus = {
+            capability_flags: GnssStatusConstants.CAP_HORIZONTAL_ACCURACY,
+            value_flags: 0,
+            horizontal_accuracy_m: 0,
+        };
+
+        expect(displayHorizontalAccuracyM(status)).toBeUndefined();
+        expect(displayHorizontalAccuracyM(undefined)).toBeUndefined();
     });
 
     it('maps optional boolean fields through support and value flags', () => {
