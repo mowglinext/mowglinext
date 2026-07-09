@@ -163,7 +163,7 @@ func postGNSSApply(dbProvider pkgtypes.IDBProvider, dockerProvider pkgtypes.IDoc
 			return
 		}
 		if cfg.Profile == "factory_reset" {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "GNSS_PROFILE=factory_reset must use the dedicated factory reset endpoint"})
+			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "GNSS_PROFILE=factory_reset is destructive, expert-only, and must use the dedicated factory reset endpoint"})
 			return
 		}
 
@@ -194,7 +194,7 @@ func postGNSSFactoryResetApply(dbProvider pkgtypes.IDBProvider, dockerProvider p
 			return
 		}
 		if cfg.Profile == "factory_reset" {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "select a non-reset GNSS profile before using factory reset + apply"})
+			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "select a non-reset GNSS profile before using factory reset + apply; factory_reset is destructive and not intended for normal GUI recovery"})
 			return
 		}
 
@@ -470,7 +470,7 @@ func addGNSSFactoryResetRecoveryWarning(response *GNSSActionResponse, cfg gnssSa
 	case "unicore":
 		response.Warnings = append(response.Warnings,
 			fmt.Sprintf(
-				"Factory-reset recovery mode is active for Unicore. Universal GNSS will reset %s at the current baud, reopen the same device at 115200, reprobe with VERSIONA, restore COM1 to %s, verify VERSIONA again at %s, and only then this backend will replay the selected %s profile in runtime-only mode.",
+				"Factory-reset recovery mode is active for Unicore. This path is destructive, expert-only, and should not be used for normal GUI recovery. Universal GNSS will reset %s at the current baud, reopen the same device at 115200, reprobe with VERSIONA, restore COM1 to %s, verify VERSIONA again at %s, and only then this backend will replay the selected %s profile in runtime-only mode.",
 				cfg.SerialDevice,
 				cfg.ConfigBaud,
 				cfg.ConfigBaud,

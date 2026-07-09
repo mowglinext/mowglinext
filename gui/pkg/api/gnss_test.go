@@ -471,6 +471,7 @@ func TestGNSSFactoryResetApply_UsesDedicatedResetModeThenRuntimeProfileApply(t *
 	assert.Equal(t, resetCommand, response.Executions[0].Command)
 	assert.Equal(t, applyCommand, response.Executions[1].Command)
 	assert.Contains(t, strings.Join(response.Warnings, "\n"), "Factory-reset recovery mode is active")
+	assert.Contains(t, strings.Join(response.Warnings, "\n"), "destructive")
 	assert.Contains(t, strings.Join(response.Warnings, "\n"), "Unicore")
 	assert.Contains(t, strings.Join(response.Warnings, "\n"), "115200")
 	assert.Contains(t, strings.Join(response.Warnings, "\n"), "VERSIONA")
