@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
+	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
 )
 
 const (
@@ -457,9 +457,7 @@ func addGNSSConfigWarnings(response *GNSSActionResponse, cfg gnssSavedConfig, li
 		}
 		response.Warnings = append(response.Warnings, warning)
 	}
-	if cfg.SignalProfile != "" {
-		response.Warnings = append(response.Warnings, "GNSS_SIGNAL_PROFILE is persisted in the UI, but backend translation to Universal GNSS tool arguments is not implemented yet.")
-	}
+
 	if normalizeGNSSExecutionBaudDisplay(cfg.ExecutionBaud) == gnssBaudAuto {
 		response.Warnings = append(response.Warnings, "GNSS execution baud is set to auto. Universal GNSS will probe the receiver before live apply instead of assuming the target configured baud is already active.")
 	}

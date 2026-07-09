@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	pkgtypes "github.com/cedbossneo/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
 	"gopkg.in/yaml.v3"
 )
 
