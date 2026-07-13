@@ -163,77 +163,6 @@ RUN . /opt/ros/kilted/setup.sh \
  && rm -rf /ws/build /ws/log /ws/src
 
 # =============================================================================
-# Stage 0d: nav2-mppi-patched-builder
-# Rebuilds nav2_mppi_controller from the upstream Kilted source with our local
-# arc-length path-progress patch (ros2/patches/, backport of upstream PR #6055,
-# fixes issue #5925). Kilted's apt package (ros-kilted-nav2-mppi-controller
-# 1.4.2) still has the Euclidean findPathFurthestReachedPoint(), which makes
-# MPPI cut corners / "lose" the swath at the tight reversals on coverage paths
-# (~180-degree swath flips, concentric headland-ring reversals).
-#
-# The patched package is built as a STANDALONE overlay into
-# /opt/nav2_mppi_patched, COPY'd into the runtime stage, and sourced by
-# ros2_entrypoint.sh AFTER /opt/ros/kilted but BEFORE the workspace overlay so
-# it shadows the apt-installed system package without rebuilding our own
-# workspace against it.
-#
-# Pinned to navigation2 kilted @ 71a1d84 (= nav2_mppi_controller 1.4.2, the
-# version the apt package ships). If the SHA is bumped, re-verify the patch
-# still applies (see ros2/patches/README.md). REMOVE this whole stage once
-# Kilted ships PR #6055 — otherwise it silently shadows a future fixed
-# nav2_mppi_controller with our stale 1.4.2 build.
-# =============================================================================
-FROM ros:kilted-ros-base AS nav2-mppi-patched-builder
-
-ARG DEBIAN_FRONTEND=noninteractive
-ARG NAV2_REF=kilted
-ARG NAV2_SHA=71a1d84f49dc48e226c96619188ee12054824ff3
-ARG NAV2_URL=https://github.com/ros-navigation/navigation2.git
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential cmake git patch \
-      python3-colcon-common-extensions \
-      ros-kilted-nav2-core \
-      ros-kilted-nav2-costmap-2d \
-      ros-kilted-nav2-util \
-      ros-kilted-nav2-msgs \
-      ros-kilted-nav2-controller \
- && rm -rf /var/lib/apt/lists/*
-
-# Sparse-checkout just nav2_mppi_controller from the pinned navigation2 ref.
-WORKDIR /ws/src
-RUN git clone --filter=blob:none --sparse ${NAV2_URL} navigation2 \
- && cd navigation2 \
- && git sparse-checkout set nav2_mppi_controller \
- && git checkout ${NAV2_SHA}
-
-# Apply the local arc-length path-progress patch (PR #6055 backport). Use
-# `patch`, NOT `git apply`: in this blob-filtered + sparse clone `git apply`
-# silently NO-OPs (exit 0, file unchanged) because it can't reconcile the
-# index blob hashes — that would ship an UNPATCHED controller. The grep after
-# patching is a fail-fast guard so a future silent miss breaks the build
-# instead of regressing MPPI to corner-cutting behaviour.
-COPY ros2/patches/nav2_mppi_controller-findPathFurthestReachedPoint-arclength.patch /tmp/mppi.patch
-RUN cd /ws/src/navigation2/nav2_mppi_controller \
- && patch -p1 < /tmp/mppi.patch \
- && grep -q 'path_integrated_dists' include/nav2_mppi_controller/tools/utils.hpp \
- && echo "Applied + verified nav2_mppi_controller arc-length patch"
-
-# Build the single patched package into a standalone overlay prefix. The
-# resulting libmppi_controller.so + plugin manifest live under
-# /opt/nav2_mppi_patched and take precedence once the overlay is sourced.
-WORKDIR /ws
-RUN /bin/bash -c "\
-    source /opt/ros/kilted/setup.bash && \
-    colcon build --merge-install \
-      --packages-select nav2_mppi_controller \
-      --install-base /opt/nav2_mppi_patched \
-      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -Wno-dev \
-      --parallel-workers \$(nproc) \
-    " \
- && rm -rf /ws/build /ws/log /ws/src
-
-# =============================================================================
 # Stage 1: base
 # Installs all runtime ROS2 dependencies. Both runtime and simulation stages
 # inherit from here, keeping the image lean.
@@ -507,12 +436,6 @@ COPY --from=build /ros2_ws/install/ install/
 # "package not found" schema error per /ubx_* topic + ublox_dgnss service on
 # every client reconnect. Sourced by ros2_entrypoint.sh as a ROS overlay.
 COPY --from=ublox-msgs-builder /ws/install /opt/ublox_msgs
-
-# Pull the patched nav2_mppi_controller (arc-length path progress, PR #6055
-# backport — see ros2/patches/). Sourced by ros2_entrypoint.sh AFTER
-# /opt/ros/kilted so it shadows the apt-installed system MPPI controller.
-# REMOVE once Kilted ships the fix (see ros2/patches/README.md).
-COPY --from=nav2-mppi-patched-builder /opt/nav2_mppi_patched /opt/nav2_mppi_patched
 
 # Copy all launch files and config from every package
 COPY ros2/src/mowgli_bringup/launch/    /ros2_ws/install/mowgli_bringup/share/mowgli_bringup/launch/

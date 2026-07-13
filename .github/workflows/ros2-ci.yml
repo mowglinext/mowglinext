@@ -22,6 +22,25 @@ env:
   ROS_DISTRO: kilted
 
 jobs:
+  # ─── Config Drift Gate ───────────────────────────────────────────────────────
+  # Guards Architecture Invariant 15: the installed mowgli_robot.yaml is SPARSE
+  # over the in-package template. check_config_drift.py fails if a STRUCTURAL
+  # field (chassis geometry, wheel kinematics, sensor mounts) is defined in both
+  # files with divergent values, or added to the installed file with no template
+  # default — either of which silently gives Nav2/URDF/coverage the wrong
+  # chassis. No ROS2 setup needed; runs in seconds as a hard gate.
+  config-drift:
+    name: Config Drift (mowgli_robot.yaml)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check mowgli_robot.yaml structural drift
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 ros2/scripts/check_config_drift.py
+
   # ─── Build & Test ────────────────────────────────────────────────────────────
   build-and-test:
     name: Build & Test (ROS2 ${{ matrix.ros_distro }})
