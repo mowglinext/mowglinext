@@ -26,7 +26,8 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       (github.event.pull_request.draft == false &&
-       github.event.pull_request.head.repo.full_name == github.repository)
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.actor != 'dependabot[bot]')
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -37,10 +38,9 @@ jobs:
       - name: Generate wiki updates
         uses: anthropics/claude-code-action@v1
         with:
-          model: claude-sonnet-4-6
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          timeout_minutes: 15
-          direct_prompt: |
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
             You are updating the MowgliNext wiki to reflect the changes in this PR.
 
             1. Run `git diff origin/main...HEAD` to see what changed in this PR.
@@ -62,15 +62,9 @@ jobs:
             Do NOT create new wiki pages unless a major new feature warrants it.
             Do NOT update wiki pages just for minor bug fixes, dependency bumps, or CI tweaks.
             Focus on changes that affect how users interact with the project.
-          allowed_tools: |
-            Read
-            Write
-            Edit
-            Bash(git log:*)
-            Bash(git diff:*)
-            Bash(git show:*)
-            Glob
-            Grep
+          claude_args: |
+            --model claude-sonnet-4-6
+            --allowedTools "Read,Write,Edit,Bash(git log:*),Bash(git diff:*),Bash(git show:*),Glob,Grep"
 
       - name: Commit wiki updates to PR branch
         env:
