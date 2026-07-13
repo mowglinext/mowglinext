@@ -12,6 +12,14 @@ export const GNSS_BAUD_OPTIONS = [
     { value: 921600, label: "921600" },
 ] as const;
 
+export const GNSS_EXECUTION_BAUD_OPTIONS = [
+    { value: "auto", label: "gnssConfig.executionBaud.auto.label" },
+    { value: "115200", label: "115200" },
+    { value: "230400", label: "230400" },
+    { value: "460800", label: "460800" },
+    { value: "921600", label: "921600" },
+] as const;
+
 export const GNSS_PROFILE_OPTIONS = [
     { value: "runtime_only", label: "gnssConfig.profile.runtime_only.label" },
     { value: "rover_high_precision", label: "gnssConfig.profile.rover_high_precision.label" },
@@ -66,6 +74,7 @@ export const GNSS_ACTION_SETTINGS_KEYS = [
     "gnss_serial_device",
     "gnss_serial_baud",
     "gnss_config_baud",
+    "gnss_execution_baud",
     "gnss_profile",
     "gnss_signal_profile",
     "gnss_profile_rate_hz",
@@ -230,9 +239,20 @@ export const normalizeGnssString = (value: unknown): string => {
 
 export const normalizeGnssSignalGroup = (value: unknown): string =>
     normalizeGnssString(value)
+        .replace(/[,/]+/g, " ")
         .split(/\s+/)
         .filter(Boolean)
         .join(" ");
+
+export const rawGnssInputString = (value: unknown): string => {
+    if (typeof value === "string") {
+        return value;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return String(value);
+    }
+    return "";
+};
 
 const normalizeOptionValue = (value: unknown): string =>
     normalizeGnssString(value).toLowerCase().replace(/-/g, "_");

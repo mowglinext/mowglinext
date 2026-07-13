@@ -20,7 +20,7 @@ MowgliNext expects centimetre-accurate GPS. Without it, area recording is noisy 
 2. `status=2` means GBAS/RTK Fixed — you are done.
 3. `status=1` or `0` means you are on SBAS or a basic fix. The usual fixes, in order:
    - Confirm antenna has a clear sky view (no tree canopy, no metal overhang).
-   - Confirm NTRIP credentials are correct (`install/.env` or `/ros2_ws/config/mowgli_robot.yaml` → `ntrip_host`, `ntrip_mountpoint`, `ntrip_user`, `ntrip_password`).
+   - Confirm the active YAML GNSS config is correct (`docker/config/mowgli/mowgli_robot.yaml` → `ntrip_host`, `ntrip_mountpoint`, `ntrip_user`, `ntrip_password`). `docker/.env` carries fallback-only first-boot defaults and does not override explicit YAML values.
    - `ros2 topic hz /ntrip_client/rtcm` should print a rate around 50–60 Hz. If 0, the NTRIP client isn't getting RTCM.
    - If you move indoors or the sky view was bad at boot, the receiver may never converge — re-boot outdoors.
 
@@ -47,7 +47,7 @@ The IMU's heading relative to forward is not auto-detected — it has to be solv
 ## 5. Dock pose
 
 - Dock position and yaw live in `mowgli_robot.yaml` (`dock_pose_x`, `dock_pose_y`, `dock_pose_yaw`) — single source of truth. The IMU/dock auto-calibration service and the "set dock pose" action in the GUI both write the measured values back to that file via in-place line edits that preserve comments. `hardware_bridge`, `map_server_node`, and `dock_yaw_to_set_pose` read the values as ROS parameters at startup.
-- The GPS datum is a fixed lat/lon in `mowgli_robot.yaml` consumed by `navsat_transform_node`, so the map origin is the same across restarts.
+- The GPS datum and active GNSS operator settings live in `mowgli_robot.yaml`, consumed by `navsat_transform_node` and the GNSS sidecar at startup. Use the GUI/backend/Universal GNSS flow for receiver model/profile/signal configuration; `docker/.env` only provides fallback defaults when the YAML leaves a value unset.
 
 ## 6. Record a mowing area
 

@@ -50,8 +50,8 @@ import {useDiagnostics} from "../hooks/useDiagnostics.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {
+    displayHorizontalAccuracyM,
     deriveGpsStatus,
-    readGnssNumber,
 } from "../utils/gpsStatus.ts";
 import {useEffect, useMemo, useState} from "react";
 import {useTranslation} from "react-i18next";
@@ -63,7 +63,6 @@ import {useFirmwareDebugLogs} from "../hooks/useFirmwareDebugLogs.ts";
 import {useMowerAction} from "../components/MowerActions.tsx";
 import {BTStateGraph} from "../components/BTStateGraph.tsx";
 import {RobotAnatomy} from "../components/RobotAnatomy.tsx";
-import {GnssStatusConstants} from "../types/ros.ts";
 import {AlertOutlined} from "@ant-design/icons";
 import {DashCard} from "../components/dashboard/Card.tsx";
 import {GnssLiveDiagnosticsCard} from "../components/gnss/GnssLiveDiagnosticsCard.tsx";
@@ -164,11 +163,7 @@ export const DiagnosticsPage = () => {
     const poseZ = pose.pose?.pose?.position?.z ?? 0;
 
     const allContainersOk = !snapshot?.containers?.length || snapshot.containers.every(c => c.state === "running");
-    const gpsAccuracy = readGnssNumber(
-        gnssStatus,
-        GnssStatusConstants.CAP_HORIZONTAL_ACCURACY,
-        gnssStatus.horizontal_accuracy_m,
-    ) ?? gps.position_accuracy;
+    const gpsAccuracy = displayHorizontalAccuracyM(gnssStatus);
     const gpsFixValid = gnssStatus.fix_valid ?? false;
     const gpsOk = gpsFixValid && gpsAccuracy !== undefined && gpsAccuracy <= 0.1;
     const gpsWarn = gpsFixValid && (gpsAccuracy === undefined || gpsAccuracy > 0.1);

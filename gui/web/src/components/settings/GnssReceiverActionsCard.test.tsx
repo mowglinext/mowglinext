@@ -121,4 +121,37 @@ describe("GnssReceiverActionsCard", () => {
         const failureMessages = await screen.findAllByText("GNSS profile apply failed");
         expect(failureMessages.length).toBeGreaterThan(0);
     });
+
+    it("renders execution, detected, runtime, and target baud fields separately", async () => {
+        requestMock.mockResolvedValue({
+            data: {
+                success: true,
+                message: "GNSS profile apply succeeded",
+                execution_baud: "auto",
+                detected_baud: "115200",
+                runtime_baud: "115200",
+                config_baud: "921600",
+                executions: [
+                    {
+                        tool: "gnss_config_apply",
+                        command: ["/opt/gnss_sidecar/bin/gnss_config_apply", "--baud", "auto"],
+                        exit_code: 0,
+                        success: true,
+                    },
+                ],
+            },
+            error: null,
+        });
+
+        const user = userEvent.setup();
+        renderCard();
+
+        await user.click(screen.getByRole("button", { name: new RegExp(en.settingsGnssReceiver.actionPlan, "i") }));
+
+        expect(await screen.findByText(en.settingsGnssReceiver.fieldExecutionBaud)).toBeInTheDocument();
+        expect(screen.getByText(en.settingsGnssReceiver.executionBaudAuto)).toBeInTheDocument();
+        expect(screen.getByText(en.settingsGnssReceiver.fieldDetectedBaud)).toBeInTheDocument();
+        expect(screen.getByText(en.settingsGnssReceiver.fieldRuntimeBaud)).toBeInTheDocument();
+        expect(screen.getByText(en.settingsGnssReceiver.fieldConfigBaud)).toBeInTheDocument();
+    });
 });

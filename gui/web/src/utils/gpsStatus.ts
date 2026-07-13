@@ -383,6 +383,16 @@ export function readGnssNumber(
     return hasGnssValue(gnssStatus, flag) && value != null ? value : undefined;
 }
 
+export function displayHorizontalAccuracyM(
+    gnssStatus: GnssStatus | undefined | null,
+): number | undefined {
+    return readGnssNumber(
+        gnssStatus,
+        GnssStatusConstants.CAP_HORIZONTAL_ACCURACY,
+        gnssStatus?.horizontal_accuracy_m,
+    );
+}
+
 export function readGnssBooleanState(
     gnssStatus: GnssStatus | undefined | null,
     flag: number,

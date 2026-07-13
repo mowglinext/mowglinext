@@ -333,7 +333,7 @@
         "gnss_signal_group": {
           "type": "string",
           "title": "Raw Signal Group",
-          "description": "Vendor-specific expert override. Universal GNSS validates documented signal groups against the selected receiver model and warns when falling back safely."
+          "description": "Vendor-specific expert override. Accepts 'master slave', 'master,slave', or 'master/slave' and is normalized on save; advanced Unicore combinations are allowed with warnings instead of a hard allowlist."
         },
         "gnss_unicore_pvt_algorithm": {
           "type": "string",

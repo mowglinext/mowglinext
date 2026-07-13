@@ -609,7 +609,7 @@
   "onboardingPage": {
     "preview": "Preview",
     "previewNotActiveYet": "Preview — not active yet",
-    "expertFieldsNotWired": "These expert fields are saved. The optional receiver model is forwarded to Universal GNSS when set, while the remaining raw expert overrides are still not translated by MowgliNext. Universal GNSS validates and applies documented signal groups for the selected model, and Unknown / Auto uses a safe fallback with warnings.",
+    "expertFieldsNotWired": "These expert fields are saved. The optional receiver model is forwarded to Universal GNSS when set, while the remaining raw expert overrides are still not translated by MowgliNext. Raw Unicore SIGNALGROUP text accepts 3 6, 3,6, or 3/6 and is normalized on save.",
     "gpsRestarting": "Restarting GPS…",
     "gpsRestartedWaitRtk": "GPS restarted — wait for RTK Fix",
     "gpsRestartFailed": "GPS restart failed",
@@ -1645,13 +1645,18 @@
     },
     "signalProfileHelpText": "Signal profiles are vendor-neutral. Different receiver families can map the same profile to different signal and constellation choices.",
     "signalProfileCustomHelpText": "Custom will later support user-provided profile files or raw receiver command sets from Expert/Developer mode. Upload and raw-command backend support are not wired yet.",
+    "executionBaud": {
+      "auto": {
+        "label": "Auto / probe live receiver"
+      }
+    },
     "unicore": {
       "title": "Vendor-Specific Settings",
-      "description": "Use these only when the generic GNSS abstractions are not enough. Universal GNSS remains the source of truth for Unicore model gating and documented signal-group handling.",
+      "description": "Use these only when the generic GNSS abstractions are not enough. Receiver model remains a planning hint, while raw SIGNALGROUP input stays operator-controlled.",
       "receiverModel": {
         "label": "Receiver model",
         "tooltip": "Optional Unicore receiver model hint forwarded to Universal GNSS plan/apply tools only when you set it explicitly.",
-        "helpText": "Universal GNSS validates and applies documented signal groups for the selected model. Leave this on Unknown / Auto to omit --model and use the safe fallback with warnings.",
+        "helpText": "Use this as a model hint for Universal GNSS planning. For UM982, common dual-antenna pairs are 3 6 and 4 5; common single-antenna examples are 2 0, 3 0, 4 0, and 7 0.",
         "option": {
           "auto": {
             "label": "Unknown / Auto"
@@ -1672,9 +1677,9 @@
       },
       "signalGroup": {
         "label": "Raw Signal Group",
-        "tooltip": "Optional raw Unicore signal-group override. Leave it empty unless documented receiver guidance tells you to set a specific value.",
+        "tooltip": "Optional raw Unicore signal-group override. Enter master and slave groups as 3 6, 3,6, or 3/6; leave it empty unless receiver-side guidance tells you to set a specific value.",
         "placeholder": "e.g. 3 6",
-        "helpText": "Universal GNSS remains responsible for validating any documented signal-group value against the selected receiver model and for surfacing safe-fallback warnings."
+        "helpText": "MowgliNext normalizes this to 'master slave' on save. Universal GNSS accepts any syntactically valid 0..9 pair, then warns when the combination is advanced and not one of the recommended documented presets."
       },
       "pvtAlgorithm": {
         "label": "PVT Algorithm",
@@ -2223,7 +2228,7 @@
     "signalProfileLabel": "Signal Profile",
     "signalProfileTooltip": "High-level constellation and signal preset. Saved with your settings, but only written to the receiver's flash when you run Plan & Apply in Expert mode.",
     "baudLabel": "Baud",
-    "baudTooltip": "Serial speed between the robot and the GPS receiver. Saved to the receiver flash so both sides always match — you only set it once.",
+    "baudTooltip": "Target runtime/config baud for mowgli-gps and the receiver profile. Execution-baud probing for live apply is configured separately in expert mode.",
     "savedToFlashTitle": "Saved to the GPS receiver flash",
     "savedToFlashIntro": "Baud and signal profile are firmware-side settings: on save they are written to the GPS receiver's flash and the receiver briefly reconnects.",
     "savedToFlashSafeBaud": "is the safe baud for USB serial links;",
@@ -2235,6 +2240,9 @@
     "positionRateLabel": "Position Rate",
     "receiverFamilyLabel": "Receiver Family",
     "serialDeviceLabel": "Serial Device",
+    "executionBaudLabel": "Execution baud",
+    "executionBaudTooltip": "Current live baud used by the one-shot Universal GNSS configurator. Leave this on Auto to probe the receiver first instead of assuming the target baud is already active.",
+    "executionBaudHelpText": "Auto probing is especially useful after a Unicore reset or manual receiver-side baud changes. The selected runtime/config baud remains the target after apply.",
     "rtkWaitAfterUndockLabel": "RTK Wait After Undock",
     "gpsTimeoutLabel": "GPS Timeout",
     "expertScopeTitle": "Expert-mode scope",
@@ -2289,6 +2297,24 @@
   "settingsGnssAdvanced": {
     "rawValueFallback": "{{label}} Raw Value"
   },
+  "gnssRuntimeConfig": {
+    "detectedDevicesLabel": "Detected serial device",
+    "detectedDevicesPlaceholder": "Select a detected serial device",
+    "manualSerialPathLabel": "Manual serial path override",
+    "activeLinkLabel": "Active runtime link",
+    "resolvedTarget": "Resolved target: {{path}}",
+    "envFallbackMessage": "Runtime is using .env fallback for GNSS family/device/baud because no GUI YAML override is saved yet: {{family}} / {{device}} / {{baud}}.",
+    "configuredDeviceMissing": "The selected GNSS serial device no longer exists: {{device}}.",
+    "activeDeviceMissing": "The active GNSS serial device does not exist: {{device}}.",
+    "familyMismatch": "Detected receiver family {{detected}} differs from the selected family {{selected}}.",
+    "modelMismatch": "Detected receiver model {{detected}} differs from the selected model {{selected}}.",
+    "loadWarning": "Unable to load GNSS runtime config details.",
+    "source": {
+      "config": "GUI/YAML",
+      "env": ".env fallback",
+      "default": "built-in default"
+    }
+  },
   "settingsGnssSignalHelp": {},
   "settingsGnssReceiver": {
     "cardTitle": "Receiver Actions",
@@ -2335,8 +2361,11 @@
     "fieldProfile": "Profile:",
     "fieldSignalProfile": "Signal profile:",
     "fieldSerialDevice": "Serial device:",
-    "fieldBaud": "Baud:",
-    "baudRuntimeConfigured": "runtime {{runtime}} / configured {{configured}}",
+    "fieldExecutionBaud": "Execution baud:",
+    "fieldDetectedBaud": "Detected live baud:",
+    "fieldRuntimeBaud": "Active runtime baud:",
+    "fieldConfigBaud": "Target configured baud:",
+    "executionBaudAuto": "auto / probing",
     "unknownValue": "unknown",
     "fieldRestartError": "Restart error:",
     "backendWarnings": "Backend warnings",

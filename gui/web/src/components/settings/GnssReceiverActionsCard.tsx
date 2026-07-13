@@ -29,6 +29,8 @@ type GnssActionResponse = {
     signal_profile?: string;
     profile_rate_hz?: string;
     serial_device?: string;
+    execution_baud?: string;
+    detected_baud?: string;
     runtime_baud?: string;
     config_baud?: string;
     runtime_baud_differs_from_config?: boolean;
@@ -100,6 +102,13 @@ const formatCommand = (command?: string[]): string => {
         return "";
     }
     return command.join(" ");
+};
+
+const formatBaudValue = (value: string | undefined, autoLabel: string, unknownLabel: string): string => {
+    if (!value || !value.trim()) {
+        return unknownLabel;
+    }
+    return value === "auto" ? autoLabel : value;
 };
 
 export const GnssReceiverActionsCard: React.FC<Props> = ({
@@ -376,9 +385,32 @@ export const GnssReceiverActionsCard: React.FC<Props> = ({
                                 {lastResponse.serial_device && (
                                     <Text><Text strong>{t("settingsGnssReceiver.fieldSerialDevice")}</Text> {lastResponse.serial_device}</Text>
                                 )}
-                                {(lastResponse.runtime_baud || lastResponse.config_baud) && (
+                                {lastResponse.execution_baud && (
                                     <Text>
-                                        <Text strong>{t("settingsGnssReceiver.fieldBaud")}</Text> {t("settingsGnssReceiver.baudRuntimeConfigured", { runtime: lastResponse.runtime_baud ?? t("settingsGnssReceiver.unknownValue"), configured: lastResponse.config_baud ?? t("settingsGnssReceiver.unknownValue") })}
+                                        <Text strong>{t("settingsGnssReceiver.fieldExecutionBaud")}</Text>{" "}
+                                        {formatBaudValue(
+                                            lastResponse.execution_baud,
+                                            t("settingsGnssReceiver.executionBaudAuto"),
+                                            t("settingsGnssReceiver.unknownValue"),
+                                        )}
+                                    </Text>
+                                )}
+                                {lastResponse.detected_baud && (
+                                    <Text>
+                                        <Text strong>{t("settingsGnssReceiver.fieldDetectedBaud")}</Text>{" "}
+                                        {lastResponse.detected_baud}
+                                    </Text>
+                                )}
+                                {lastResponse.runtime_baud && (
+                                    <Text>
+                                        <Text strong>{t("settingsGnssReceiver.fieldRuntimeBaud")}</Text>{" "}
+                                        {lastResponse.runtime_baud}
+                                    </Text>
+                                )}
+                                {lastResponse.config_baud && (
+                                    <Text>
+                                        <Text strong>{t("settingsGnssReceiver.fieldConfigBaud")}</Text>{" "}
+                                        {lastResponse.config_baud}
                                     </Text>
                                 )}
                                 {lastResponse.restart_error && (

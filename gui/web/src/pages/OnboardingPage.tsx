@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import {
     App,
     Button, Card, Col, Row, Steps, Typography, Select, Space, Alert,
-    Input, InputNumber, Switch, Form, Divider, Tag, Result,
+    InputNumber, Switch, Form, Divider, Tag, Result,
 } from "antd";
 import {
     RocketOutlined, SettingOutlined, GlobalOutlined,
@@ -35,12 +35,14 @@ import { useContainerRestart } from "../hooks/useContainerRestart.ts";
 import {
     GNSS_BAUD_OPTIONS,
     GNSS_ACTION_SETTINGS_KEYS,
+    GNSS_EXECUTION_BAUD_OPTIONS,
     GNSS_PROFILE_OPTIONS,
     GNSS_PROFILE_RATE_OPTIONS,
     GNSS_RECEIVER_FAMILY_OPTIONS,
     GNSS_SIGNAL_PROFILE_OPTIONS,
     GNSS_SIGNAL_PROFILE_CUSTOM_HELP_TEXT,
     normalizeGnssProfile,
+    normalizeGnssString,
     normalizeGnssSignalProfile,
 } from "../components/settings/gnssConfig.ts";
 import { GnssSignalProfileHelp } from "../components/settings/GnssSignalProfileHelp.tsx";
@@ -48,6 +50,7 @@ import { UniversalGnssAdvancedSettings } from "../components/settings/UniversalG
 import { GnssReceiverActionsCard } from "../components/settings/GnssReceiverActionsCard.tsx";
 import { NtripSection } from "../components/settings/NtripSection.tsx";
 import { GnssLiveStatusSummaryCard } from "../components/gnss/GnssLiveStatusSummaryCard.tsx";
+import { GnssSerialDeviceConfigField } from "../components/settings/GnssSerialDeviceConfigField.tsx";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -283,6 +286,10 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
     const gpsStatus = deriveGpsStatus(gnssStatus);
     const detectedReceiver = gnssReceiverLabel(gnssStatus);
     const selectedSignalProfile = normalizeGnssSignalProfile(values.gnss_signal_profile);
+    const selectedExecutionBaud = (() => {
+        const value = normalizeGnssString(values.gnss_execution_baud).toLowerCase();
+        return value === "" || value === "auto" ? "auto" : normalizeGnssString(values.gnss_execution_baud);
+    })();
     const gnssAlertType: "success" | "warning" | "info" = gpsStatus.fixType === "RTK_FIX"
         ? "success"
         : gpsStatus.fixType === "NO_FIX"
@@ -297,10 +304,9 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
         }
         return onPersistGnssSettings(partial);
     };
-    // The serial link baud and the baud persisted into the receiver's flash must
-    // match, so the operator only ever sets ONE "Baud". We keep the receiver-side
-    // value (gnss_config_baud) in lockstep automatically — they should never
-    // diverge from the user's point of view.
+    // The sidecar runtime baud and the target receiver config baud should stay
+    // aligned for normal operation. The separate execution/probing baud lives
+    // in expert mode and is only used by the one-shot configurator flow.
     const handleBaudChange = (v: number) => {
         onChange("gnss_serial_baud", v);
         onChange("gnss_config_baud", v);
@@ -456,11 +462,29 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                                     </Form.Item>
                                 </Col>
                                 <Col xs={24} sm={14}>
-                                    <Form.Item label={t("onboardingPage.serialDeviceLabel")}>
-                                        <Input
-                                            value={values.gnss_serial_device ?? "/dev/ttyAMA4"}
-                                            onChange={(e) => onChange("gnss_serial_device", e.target.value)}
-                                            placeholder="/dev/serial/by-id/..."
+                                    <GnssSerialDeviceConfigField
+                                        value={values.gnss_serial_device}
+                                        onChange={(value) => onChange("gnss_serial_device", value)}
+                                        selectedReceiverFamily={values.gnss_receiver_family}
+                                        selectedReceiverModel={values.gnss_receiver_model}
+                                        gnssStatus={gnssStatus}
+                                    />
+                                </Col>
+                            </Row>
+                            <Row gutter={16}>
+                                <Col xs={24} sm={12}>
+                                    <Form.Item
+                                        label={t("settingsPositioning.executionBaudLabel")}
+                                        tooltip={t("settingsPositioning.executionBaudTooltip")}
+                                        extra={t("settingsPositioning.executionBaudHelpText")}
+                                    >
+                                        <Select
+                                            value={selectedExecutionBaud}
+                                            onChange={(value) => onChange("gnss_execution_baud", value)}
+                                            options={GNSS_EXECUTION_BAUD_OPTIONS.map((option) => ({
+                                                label: option.value === "auto" ? t(option.label) : option.label,
+                                                value: option.value,
+                                            }))}
                                         />
                                     </Form.Item>
                                 </Col>

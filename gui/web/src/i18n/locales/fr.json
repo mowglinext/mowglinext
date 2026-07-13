@@ -609,7 +609,7 @@
   "onboardingPage": {
     "preview": "Aperçu",
     "previewNotActiveYet": "Aperçu — pas encore actif",
-    "expertFieldsNotWired": "Ces champs experts sont enregistrés. Le modèle de récepteur optionnel est transmis à Universal GNSS lorsqu'il est défini, tandis que les autres surcharges expertes brutes ne sont pas encore traduites par MowgliNext. Universal GNSS valide et applique les groupes de signaux documentés pour le modèle sélectionné, et Inconnu / Auto utilise un repli sûr avec avertissements.",
+    "expertFieldsNotWired": "Ces champs experts sont enregistrés. Le modèle de récepteur optionnel est transmis à Universal GNSS lorsqu'il est défini, tandis que les autres surcharges expertes brutes ne sont pas encore traduites par MowgliNext. Le texte SIGNALGROUP Unicore accepte 3 6, 3,6 ou 3/6 et est normalisé à l'enregistrement.",
     "gpsRestarting": "Redémarrage GPS…",
     "gpsRestartedWaitRtk": "GPS redémarré — patientez pour le RTK Fix",
     "gpsRestartFailed": "Échec du redémarrage GPS",
@@ -1645,13 +1645,18 @@
     },
     "signalProfileHelpText": "Les profils de signal sont indépendants du fabricant. Différentes familles de récepteurs peuvent associer le même profil à des choix de signaux et de constellations différents.",
     "signalProfileCustomHelpText": "Personnalisé prendra plus tard en charge des fichiers de profil fournis par l'utilisateur ou des jeux de commandes récepteur brutes depuis le mode Expert/Développeur. Le support backend pour l'upload et les commandes brutes n'est pas encore branché.",
+    "executionBaud": {
+      "auto": {
+        "label": "Auto / sonder le récepteur en direct"
+      }
+    },
     "unicore": {
       "title": "Réglages spécifiques au fabricant",
-      "description": "À n'utiliser que lorsque les abstractions GNSS génériques ne suffisent pas. Universal GNSS reste la source de vérité pour le filtrage par modèle Unicore et la gestion des groupes de signaux documentés.",
+      "description": "À n'utiliser que lorsque les abstractions GNSS génériques ne suffisent pas. Le modèle de récepteur reste un indice pour la planification, tandis que la saisie SIGNALGROUP reste sous le contrôle de l'opérateur.",
       "receiverModel": {
         "label": "Modèle de récepteur",
         "tooltip": "Indice optionnel de modèle de récepteur Unicore transmis aux outils Universal GNSS de planification/application uniquement lorsque vous le définissez explicitement.",
-        "helpText": "Universal GNSS valide et applique les groupes de signaux documentés pour le modèle sélectionné. Laissez sur Inconnu / Auto pour omettre --model et utiliser le repli sûr avec avertissements.",
+        "helpText": "Utilisez ceci comme indice de modèle pour la planification Universal GNSS. Pour UM982, les paires double antenne courantes sont 3 6 et 4 5 ; les exemples simple antenne courants sont 2 0, 3 0, 4 0 et 7 0.",
         "option": {
           "auto": {
             "label": "Inconnu / Auto"
@@ -1672,9 +1677,9 @@
       },
       "signalGroup": {
         "label": "Groupe de signaux brut",
-        "tooltip": "Surcharge brute facultative du groupe de signaux Unicore. Laissez vide sauf si une documentation récepteur vous demande une valeur précise.",
+        "tooltip": "Surcharge brute facultative du groupe de signaux Unicore. Saisissez les groupes master et slave sous la forme 3 6, 3,6 ou 3/6 ; laissez vide sauf si une documentation récepteur vous demande une valeur précise.",
         "placeholder": "ex. 3 6",
-        "helpText": "Universal GNSS reste responsable de la validation de toute valeur documentée de groupe de signaux par rapport au modèle de récepteur sélectionné et de la remontée des avertissements de repli sûr."
+        "helpText": "MowgliNext normalise cette valeur en 'master slave' à l'enregistrement. Universal GNSS accepte toute paire 0..9 valide par syntaxe, puis émet un avertissement quand la combinaison est avancée et ne fait pas partie des presets documentés recommandés."
       },
       "pvtAlgorithm": {
         "label": "Algorithme PVT",
@@ -2223,7 +2228,7 @@
     "signalProfileLabel": "Profil de signal",
     "signalProfileTooltip": "Préréglage haut niveau de constellation et de signal. C'est tout ce que la plupart des utilisateurs ont besoin de toucher.",
     "baudLabel": "Baud",
-    "baudTooltip": "Vitesse série entre le robot et le récepteur GPS. Enregistrée dans la flash du récepteur pour que les deux côtés correspondent toujours — vous ne la réglez qu'une seule fois.",
+    "baudTooltip": "Baud cible runtime/config pour mowgli-gps et le profil du récepteur. La détection du baud d'exécution pour un apply live se règle séparément en mode expert.",
     "savedToFlashTitle": "Enregistré dans la flash du récepteur GPS",
     "savedToFlashIntro": "Le baud et le profil de signal sont des réglages côté firmware : à l'enregistrement, ils sont écrits dans la flash du récepteur GPS et le récepteur se reconnecte brièvement.",
     "savedToFlashSafeBaud": "est le baud sûr pour les liaisons série USB ;",
@@ -2235,6 +2240,9 @@
     "positionRateLabel": "Fréquence de position",
     "receiverFamilyLabel": "Famille de récepteur",
     "serialDeviceLabel": "Périphérique série",
+    "executionBaudLabel": "Baud d'exécution",
+    "executionBaudTooltip": "Baud live courant utilisé par le configurateur Universal GNSS à usage unique. Laissez sur Auto pour sonder d'abord le récepteur au lieu de supposer que le baud cible est déjà actif.",
+    "executionBaudHelpText": "La sonde auto est particulièrement utile après un reset Unicore ou des changements de baud faits manuellement côté récepteur. Le baud runtime/config sélectionné reste la cible après l'apply.",
     "rtkWaitAfterUndockLabel": "Attente RTK après désaccostage",
     "gpsTimeoutLabel": "Délai GPS",
     "expertScopeTitle": "Portée du mode expert",
@@ -2289,6 +2297,24 @@
   "settingsGnssAdvanced": {
     "rawValueFallback": "{{label}} valeur brute"
   },
+  "gnssRuntimeConfig": {
+    "detectedDevicesLabel": "Périphérique série détecté",
+    "detectedDevicesPlaceholder": "Sélectionner un périphérique série détecté",
+    "manualSerialPathLabel": "Surcharge manuelle du chemin série",
+    "activeLinkLabel": "Lien runtime actif",
+    "resolvedTarget": "Cible résolue : {{path}}",
+    "envFallbackMessage": "Le runtime utilise actuellement le fallback `.env` pour la famille GNSS, le périphérique et le baud car aucune surcharge YAML GUI n'est encore enregistrée : {{family}} / {{device}} / {{baud}}.",
+    "configuredDeviceMissing": "Le périphérique série GNSS sélectionné n'existe plus : {{device}}.",
+    "activeDeviceMissing": "Le périphérique série GNSS actif n'existe pas : {{device}}.",
+    "familyMismatch": "La famille de récepteur détectée {{detected}} diffère de la famille sélectionnée {{selected}}.",
+    "modelMismatch": "Le modèle de récepteur détecté {{detected}} diffère du modèle sélectionné {{selected}}.",
+    "loadWarning": "Impossible de charger les détails de configuration runtime GNSS.",
+    "source": {
+      "config": "GUI/YAML",
+      "env": "fallback .env",
+      "default": "valeur par défaut"
+    }
+  },
   "settingsGnssSignalHelp": {},
   "settingsGnssReceiver": {
     "cardTitle": "Actions récepteur",
@@ -2335,8 +2361,11 @@
     "fieldProfile": "Profil :",
     "fieldSignalProfile": "Profil de signal :",
     "fieldSerialDevice": "Périphérique série :",
-    "fieldBaud": "Baud :",
-    "baudRuntimeConfigured": "exécution {{runtime}} / configuré {{configured}}",
+    "fieldExecutionBaud": "Baud d'exécution :",
+    "fieldDetectedBaud": "Baud live détecté :",
+    "fieldRuntimeBaud": "Baud runtime actif :",
+    "fieldConfigBaud": "Baud configuré cible :",
+    "executionBaudAuto": "auto / sonde",
     "unknownValue": "inconnu",
     "fieldRestartError": "Erreur de redémarrage :",
     "backendWarnings": "Avertissements du backend",

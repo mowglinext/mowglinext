@@ -65,6 +65,15 @@ describe("GnssLiveDiagnosticsCard", () => {
         expect(screen.queryByTestId("gnss-cn0-max-fill")).not.toBeInTheDocument();
     });
 
+    it("renders unknown horizontal accuracy as unavailable instead of 0.000", () => {
+        renderCard("satellite_cn0_unknown", {
+            horizontalAccuracyM: undefined,
+        });
+
+        expect(screen.queryByText("0.000")).not.toBeInTheDocument();
+        expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    });
+
     it.each([
         ["ntrip_startup_waiting", en.gpsStatus.correctionStreamWaiting],
         ["correction_stream_active", en.gpsStatus.correctionStreamActive],
