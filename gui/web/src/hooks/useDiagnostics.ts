@@ -9,31 +9,43 @@ export interface DiagnosticStatus {
     values: { key: string; value: string }[];
 }
 
-export interface DiagnosticArray {
-    status?: DiagnosticStatus[];
+/** A diagnostic entry stamped with the wall-clock time it was last received. */
+export interface TimestampedDiagnosticStatus extends DiagnosticStatus {
+    receivedAt: number;
 }
+
+export interface DiagnosticArray {
+    status?: TimestampedDiagnosticStatus[];
+}
+
+/** Entries not refreshed within this window should be rendered as stale. */
+export const DIAGNOSTIC_STALE_MS = 30_000;
+
+/** True when an accumulated entry has not been refreshed for DIAGNOSTIC_STALE_MS. */
+export const isDiagnosticStale = (
+    entry: Pick<TimestampedDiagnosticStatus, "receivedAt">,
+    nowMs: number,
+): boolean => nowMs - entry.receivedAt > DIAGNOSTIC_STALE_MS;
 
 /**
  * Subscribes to the /diagnostics topic and accumulates entries by name.
- * Entries are merged (latest wins per name) and throttled to avoid flicker
- * from high-frequency diagnostic updates.
+ * Entries are merged (latest wins per name), stamped with `receivedAt`
+ * so consumers can grey out entries that stopped updating, and throttled
+ * to avoid flicker from high-frequency diagnostic updates.
  */
 export const useDiagnostics = () => {
     const [diagnostics, setDiagnostics] = useState<DiagnosticArray>({})
-    const accumulatorRef = useRef<Map<string, DiagnosticStatus>>(new Map());
+    const accumulatorRef = useRef<Map<string, TimestampedDiagnosticStatus>>(new Map());
     const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    const diagnosticsStream = useWS<string>(() => {
-            console.log({ message: "Diagnostics Stream closed" })
-        }, () => {
-            console.log({ message: "Diagnostics Stream connected" })
-        },
+    const diagnosticsStream = useWS<string>(() => {}, () => {},
         (e) => {
-            const msg: DiagnosticArray = (e as any);
+            const msg: { status?: DiagnosticStatus[] } = (e as any);
             // Merge incoming entries by name (latest value wins)
             if (msg.status) {
+                const receivedAt = Date.now();
                 for (const entry of msg.status) {
-                    accumulatorRef.current.set(entry.name, entry);
+                    accumulatorRef.current.set(entry.name, {...entry, receivedAt});
                 }
             }
             // Throttle state updates to max 1 per second

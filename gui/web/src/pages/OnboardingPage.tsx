@@ -32,6 +32,7 @@ import {
     GPS_RESTART_KEYS,
 } from "../utils/containers.ts";
 import { useContainerRestart } from "../hooks/useContainerRestart.ts";
+import { httpBase } from "../utils/apiHost.ts";
 import {
     GNSS_BAUD_OPTIONS,
     GNSS_ACTION_SETTINGS_KEYS,
@@ -923,10 +924,7 @@ const CompleteStep: React.FC = () => {
             setRestarting(true);
             try {
                 // Mark onboarding done in DB so we don't redirect again
-                const base = import.meta.env.DEV
-                    ? `http://${(import.meta.env.VITE_API_HOST as string | undefined) ?? 'localhost:4006'}`
-                    : '';
-                await fetch(`${base}/api/settings/status`, { method: 'POST' });
+                await fetch(`${httpBase()}/api/settings/status`, { method: 'POST' });
 
                 // Restart ROS2 container first (picks up new mowgli_robot.yaml)
                 await restartRos2(guiApi);

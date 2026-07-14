@@ -89,7 +89,7 @@ function lidarBadge(diag: LidarDiag | null, lidarEnabled: boolean): {label: stri
 export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
     const {t} = useTranslation();
     const {colors} = useThemeMode();
-    const lidarEnabled = asBool(values.use_lidar ?? values.lidar_enabled ?? true);
+    const lidarEnabled = asBool(values.lidar_enabled ?? false);
     const {diagnostics} = useDiagnostics();
     const lidarDiag = useMemo(() => pickLidarDiagnostic(diagnostics ?? {}), [diagnostics]);
     const badge = lidarBadge(lidarDiag, lidarEnabled);
@@ -133,7 +133,7 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                     <Text code>/scan</Text> {t("settingsLocalization.lidarObstacleOutro")}
                 </Paragraph>
                 <Paragraph type="secondary" style={{marginTop: 0, marginBottom: 0, fontSize: 11}}>
-                    {t("settingsLocalization.lidarTogglePrefix")} <Text strong>Sensors → use_lidar</Text>.
+                    {t("settingsLocalization.lidarTogglePrefix")} <Text strong>Sensors → lidar_enabled</Text>.
                     {lidarDiag?.message ? (
                         <>
                             {" "}

@@ -1,7 +1,7 @@
 import React, {ChangeEvent} from "react";
 import {useTranslation} from "react-i18next";
 import type {NotificationInstance} from "antd/es/notification/interface";
-import type {FeatureCollection, Feature} from "geojson";
+import type {FeatureCollection} from "geojson";
 import type {Map as MapType} from "../../../types/ros.ts";
 import {
     MowingFeature,
@@ -10,9 +10,11 @@ import {
     ObstacleFeature,
     DockFeatureBase,
     MowingFeatureBase,
+    featuresFromJSON,
+    type SerializedMapFeature,
 } from "../../../types/map.ts";
 import type {Api, MowgliMapArea, MowgliReplaceMapReq} from "../../../api/Api.ts";
-import {dedupePoints, getQuaternionFromHeading, itranspose} from "../../../utils/map.tsx";
+import {dedupePoints, getQuaternionFromHeading, isRingInsidePolygon, itranspose} from "../../../utils/map.tsx";
 
 interface UseMapFilesOptions {
     features: Record<string, MowingFeature>;
@@ -83,16 +85,11 @@ export function useMapFiles({
         const featureIndexMap: Record<string, {type: string; index: number}> = {};
 
         for (const f of areaFeatures) {
-            const idDetails = f.id.split("-");
-            if (idDetails.length !== 4) {
-                console.error("Invalid id " + f.id);
-                continue;
-            }
-            const type = idDetails[0];
-            if (!areas[type]) {
-                console.error("Unknown area type " + type);
-                continue;
-            }
+            // Bucket by CLASS, not by id prefix: a workarea↔navigation type
+            // change keeps the old id (e.g. "area-1-area-1" is now a
+            // NavigationFeature), so id-prefix bucketing silently dropped the
+            // converted area from the save payload.
+            const type = f instanceof NavigationFeature ? "navigation" : "area";
 
             const index = typeCounters[type]++;
             featureIndexMap[f.id] = {type, index};
@@ -109,12 +106,26 @@ export function useMapFiles({
             };
         }
 
-        // Process obstacles and attach them to their parent area
+        // Process obstacles and attach them to their parent area. When the
+        // recorded parent link is broken (stale reference after edits), try
+        // to re-parent by geometry containment before giving up; anything
+        // still unmatched is reported to the user instead of vanishing
+        // silently from the saved map.
+        const droppedObstacles: string[] = [];
         for (const f of obstacleFeatures) {
             const parentArea = f.getMowingArea();
-            const parentMapping = featureIndexMap[parentArea.id];
+            let parentMapping = parentArea ? featureIndexMap[parentArea.id] : undefined;
             if (!parentMapping) {
-                console.error("Obstacle " + f.id + " references unknown parent area " + parentArea.id);
+                const obstacleRing = f.geometry.coordinates[0] ?? [];
+                const containing = areaFeatures.find(
+                    (a) =>
+                        a instanceof MowingAreaFeature &&
+                        isRingInsidePolygon(obstacleRing, a.geometry.coordinates[0] ?? [])
+                );
+                if (containing) parentMapping = featureIndexMap[containing.id];
+            }
+            if (!parentMapping) {
+                droppedObstacles.push(String(f.id));
                 continue;
             }
 
@@ -140,50 +151,65 @@ export function useMapFiles({
             }
         }
 
+        if (droppedObstacles.length > 0) {
+            notification.warning({
+                message: t('mapFiles.obstaclesDropped'),
+                description: t('mapFiles.obstaclesDroppedDescription', {
+                    ids: droppedObstacles.join(", "),
+                }),
+            });
+        }
+
+        // Sequence BOTH saves in one try/catch: success is only reported (and
+        // edit mode only exited) once the areas AND the dock pose are actually
+        // persisted. A dock POST failure previously escaped the handler after
+        // the success toast had already fired.
         try {
             await guiApi.mowglinext.putMowglinext(updateMsg);
+
+            // Save dock position only when the user actually edited it.
+            // Otherwise the dock feature reflects whatever the /map topic
+            // last published, which can be stale relative to the dock pose
+            // persisted in mowgli_robot.yaml (e.g. just-written by the
+            // calibration service). Saving unconditionally would clobber it.
+            const dockFeature = features["dock"];
+            if (dockDirty && dockFeature instanceof DockFeatureBase) {
+                const coords = dockFeature.getCoordinates();
+                const rosCoords = itranspose(offsetX, offsetY, datum, coords[1], coords[0]);
+                const heading = dockFeature.getHeading();
+                const quaternionFromHeading = getQuaternionFromHeading(heading);
+                await guiApi.mowglinext.mapDockingCreate({
+                    docking_pose: {
+                        orientation: {
+                            x: quaternionFromHeading.x!!,
+                            y: quaternionFromHeading.y!!,
+                            z: quaternionFromHeading.z!!,
+                            w: quaternionFromHeading.w!!,
+                        },
+                        position: {
+                            x: rosCoords[0],
+                            y: rosCoords[1],
+                            z: 0,
+                        },
+                    },
+                    // Manual map-drag: use the dragged coordinates as-is (operator
+                    // placed the dock marker explicitly — do NOT override with GPS).
+                    use_gps_position: false,
+                });
+                setDockDirty(false);
+            }
+
             notification.success({
                 message: t('mapFiles.areaSaved'),
             });
             setHasUnsavedChanges(false);
             setEditMap(false);
         } catch (e: any) {
+            // Stay in edit mode so the user's changes are not lost.
             notification.error({
                 message: t('mapFiles.failedToSaveArea'),
-                description: e.message,
+                description: e?.message ?? String(e),
             });
-        }
-
-        // Save dock position only when the user actually edited it.
-        // Otherwise the dock feature reflects whatever the /map topic
-        // last published, which can be stale relative to the dock pose
-        // persisted in mowgli_robot.yaml (e.g. just-written by the
-        // calibration service). Saving unconditionally would clobber it.
-        const dockFeature = features["dock"];
-        if (dockDirty && dockFeature instanceof DockFeatureBase) {
-            const coords = dockFeature.getCoordinates();
-            const rosCoords = itranspose(offsetX, offsetY, datum, coords[1], coords[0]);
-            const heading = dockFeature.getHeading();
-            const quaternionFromHeading = getQuaternionFromHeading(heading);
-            await guiApi.mowglinext.mapDockingCreate({
-                docking_pose: {
-                    orientation: {
-                        x: quaternionFromHeading.x!!,
-                        y: quaternionFromHeading.y!!,
-                        z: quaternionFromHeading.z!!,
-                        w: quaternionFromHeading.w!!,
-                    },
-                    position: {
-                        x: rosCoords[0],
-                        y: rosCoords[1],
-                        z: 0,
-                    },
-                },
-                // Manual map-drag: use the dragged coordinates as-is (operator
-                // placed the dock marker explicitly — do NOT override with GPS).
-                use_gps_position: false,
-            });
-            setDockDirty(false);
         }
     }
 
@@ -231,9 +257,20 @@ export function useMapFiles({
     };
 
     const handleDownloadGeoJSON = () => {
+        // Export only the user's map features (areas, obstacles, dock) —
+        // never the transient display features (mower, footprint, heading,
+        // plan, dyn-obs…), which would otherwise pollute the file and break
+        // re-import. Serialize plain GeoJSON, not class instances.
         const geojson = {
             type: "FeatureCollection",
-            features: Object.values(features),
+            features: Object.values(features)
+                .filter((f) => f instanceof MowingFeatureBase || f instanceof DockFeatureBase)
+                .map((f) => ({
+                    type: "Feature" as const,
+                    id: f.id,
+                    geometry: f.geometry,
+                    properties: f.properties,
+                })),
         };
         const a = document.createElement("a");
         document.body.appendChild(a);
@@ -406,58 +443,57 @@ export function useMapFiles({
             }
             const reader = new FileReader();
             reader.onload = (event) => {
-                const geojson = JSON.parse(event.target?.result as string) as FeatureCollection;
-                const geojsonfeatures = geojson.features.reduce((acc, feature) => {
-                    acc[feature.id as string] = feature;
-                    return acc;
-                }, {} as Record<string, Feature>);
+                // Parse + VALIDATE the whole file into plain snapshots BEFORE
+                // touching state. The old code type-cast raw GeoJSON objects to
+                // feature classes (never constructing them), so every
+                // `instanceof` check downstream failed: the polygons never
+                // rendered and Save persisted an empty map. We now build a
+                // SerializedMapFeature snapshot and rehydrate real class
+                // instances through the same factory the edit-history uses.
+                let geojson: FeatureCollection;
+                try {
+                    geojson = JSON.parse(event.target?.result as string) as FeatureCollection;
+                } catch {
+                    notification.error({message: t('mapFiles.uploadParseError')});
+                    return;
+                }
+                if (!geojson || !Array.isArray(geojson.features)) {
+                    notification.error({message: t('mapFiles.uploadParseError')});
+                    return;
+                }
 
-                const newFeatures = {} as Record<string, MowingFeature>;
-                Object.values(geojsonfeatures).forEach(element => {
-                    const areaType = element?.properties?.feature_type as string;
-
-                    let nfeat = null;
-                    if (!element.id)
+                const KNOWN_TYPES = new Set(['workarea', 'navigation', 'obstacle', 'dock']);
+                const snapshot: Record<string, SerializedMapFeature> = {};
+                for (const element of geojson.features) {
+                    if (element.id == null || !element.geometry) continue;
+                    const id = String(element.id);
+                    const featureType = element.properties?.feature_type as string | undefined;
+                    if (!featureType || !KNOWN_TYPES.has(featureType)) {
+                        // Abort WITHOUT mutating state — a single bad feature
+                        // must not partially overwrite the current map.
+                        notification.error({
+                            message: t('mapFiles.unknownType', {type: featureType ?? '?'}),
+                        });
                         return;
-
-                    if (typeof element.id == 'number')
-                        element.id = element.id.toString();
-
-                    if (element.geometry.type == 'Polygon') {
-                        switch (areaType) {
-                            case 'workarea':
-                                nfeat = element as MowingAreaFeature;
-                                break;
-                            case 'navigation':
-                                nfeat = element as NavigationFeature;
-                                break;
-                            case 'obstacle':
-                                nfeat = element as ObstacleFeature;
-                                break;
-                            default:
-                                notification.error({
-                                    message: t('mapFiles.unknownType', {type: areaType}),
-                                });
-                                setFeatures({...features}); // revert
-                                return;
-                        }
-                    } else {
-                        switch (areaType) {
-                            case 'dock':
-                                nfeat = element as DockFeatureBase;
-                                break;
-                            default:
-                                notification.error({
-                                    message: t('mapFiles.unknownType', {type: areaType}),
-                                });
-                                setFeatures({...features}); // revert
-                                return;
-                        }
                     }
-                    newFeatures[element.id] = nfeat;
-                });
+                    snapshot[id] = {
+                        id,
+                        type: 'Feature',
+                        geometry: element.geometry as SerializedMapFeature['geometry'],
+                        properties: (element.properties ?? {}) as Record<string, unknown>,
+                        parent_id: element.properties?.mowing_area as string | undefined,
+                    };
+                }
 
+                if (Object.keys(snapshot).length === 0) {
+                    notification.error({message: t('mapFiles.uploadEmpty')});
+                    return;
+                }
+
+                const newFeatures = featuresFromJSON(snapshot);
                 setFeatures(newFeatures);
+                setHasUnsavedChanges(true);
+                notification.success({message: t('mapFiles.uploadSuccess')});
             };
             reader.readAsText(file);
         });

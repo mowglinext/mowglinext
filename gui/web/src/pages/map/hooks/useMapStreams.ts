@@ -131,10 +131,8 @@ export function useMapStreams({
 
     const poseStream = useWS<string>(
         () => {
-            console.log({ message: "Pose Stream closed" });
         },
         () => {
-            console.log({ message: "Pose Stream connected" });
         },
         (e) => {
             const pose = (e as any) as AbsolutePose;
@@ -180,14 +178,11 @@ export function useMapStreams({
 
     const mapStream = useWS<string>(
         () => {
-            console.log({ message: "MAP Stream closed" });
         },
         () => {
-            console.log({ message: "MAP Stream connected" });
         },
         (e) => {
             const parse = (e as any) as MapType;
-            if (console.debug) console.debug(parse);
             setMap(parse);
             setMapKey("live");
         }
@@ -195,10 +190,8 @@ export function useMapStreams({
 
     const pathStream = useWS<string>(
         () => {
-            console.log({ message: "PATH Stream closed" });
         },
         () => {
-            console.log({ message: "PATH Stream connected" });
         },
         (e) => {
             const parse = (e as any) as Path;
@@ -208,10 +201,8 @@ export function useMapStreams({
 
     const planStream = useWS<string>(
         () => {
-            console.log({ message: "PLAN Stream closed" });
         },
         () => {
-            console.log({ message: "PLAN Stream connected" });
         },
         (e) => {
             const parse = (e as any) as Path;
@@ -221,20 +212,16 @@ export function useMapStreams({
 
     const joyStream = useWS<string>(
         () => {
-            console.log({ message: "Joystick Stream closed" });
         },
         () => {
-            console.log({ message: "Joystick Stream connected" });
         },
         () => {}
     );
 
     const lidarStream = useWS<string>(
         () => {
-            console.log({ message: "Lidar Stream closed" });
         },
         () => {
-            console.log({ message: "Lidar Stream connected" });
         },
         (e) => {
             const scan = (e as any) as LaserScan;
@@ -295,7 +282,7 @@ export function useMapStreams({
 
     const obstaclesStream = useWS<string>(
         () => {},
-        () => { console.log({ message: "Obstacles Stream connected" }); },
+        () => {},
         (e) => {
             const parsed = (e as any) as ObstacleArray;
             if (parsed.obstacles) {
@@ -321,7 +308,7 @@ export function useMapStreams({
                                 "dyn-obs-" + obs.id,
                                 coords,
                                 "rgba(255, 100, 100, 0.4)",
-                                0.1
+                                2
                             );
                         }
                     });
@@ -340,8 +327,8 @@ export function useMapStreams({
     >(null);
     const mowProgressRafRef = React.useRef<number | null>(null);
     const mowProgressStream = useWS<string>(
-        () => { console.log({ message: "MowProgress Stream closed" }); },
-        () => { console.log({ message: "MowProgress Stream connected" }); },
+        () => {},
+        () => {},
         (e) => {
             const grid = (e as any) as OccupancyGrid;
             if (!grid.info || !grid.data) return;
@@ -361,10 +348,8 @@ export function useMapStreams({
 
     const recordingTrajectoryStream = useWS<string>(
         () => {
-            console.log({ message: "RecordingTrajectory Stream closed" });
         },
         () => {
-            console.log({ message: "RecordingTrajectory Stream connected" });
         },
         (e) => {
             const path = (e as any) as Path;
@@ -387,7 +372,7 @@ export function useMapStreams({
                     "recording-trajectory",
                     coords,
                     "#ff6600",
-                    0.3,
+                    2,
                 ),
             }));
         }

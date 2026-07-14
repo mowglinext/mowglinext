@@ -12,22 +12,37 @@ export interface BTLog {
     event_log?: BTStatusChange[];
 }
 
+/** Latest status of a BT node plus when that status was last reported. */
+export interface BTNodeState {
+    status: string;
+    updatedAt: number;
+}
+
+/** Nodes not updated within this window should be rendered as stale. */
+export const BT_NODE_STALE_MS = 30_000;
+
+/** True when a node state has not been refreshed for BT_NODE_STALE_MS. */
+export const isBTNodeStale = (state: BTNodeState, nowMs: number): boolean =>
+    nowMs - state.updatedAt > BT_NODE_STALE_MS;
+
 /**
  * Subscribes to /behavior_tree_log and accumulates node states.
- * Returns a map of node_name → current_status for all nodes that
- * have reported at least one status change.
+ * Returns a map of node_name → {status, updatedAt} for all nodes that
+ * have reported at least one status change; `updatedAt` lets consumers
+ * grey out nodes that stopped reporting.
  */
 export const useBTLog = () => {
-    const [nodeStates, setNodeStates] = useState<Map<string, string>>(new Map());
-    const accRef = useRef<Map<string, string>>(new Map());
+    const [nodeStates, setNodeStates] = useState<Map<string, BTNodeState>>(new Map());
+    const accRef = useRef<Map<string, BTNodeState>>(new Map());
     const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const stream = useWS<string>(() => {}, () => {},
         (e) => {
             const msg: BTLog = (e as any);
             if (msg.event_log) {
+                const updatedAt = Date.now();
                 for (const ev of msg.event_log) {
-                    accRef.current.set(ev.node_name, ev.current_status);
+                    accRef.current.set(ev.node_name, {status: ev.current_status, updatedAt});
                 }
             }
             // Throttle updates to 2/s

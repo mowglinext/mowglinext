@@ -19,7 +19,8 @@ export interface AnatomyInputs {
   gpsOk: boolean;
   imuYawDeg: number;
   imuOk: boolean;
-  lidarOk: boolean;
+  /** undefined = no live scan-freshness signal available → shown as "unknown". */
+  lidarOk?: boolean;
   wheelLeftRpm: number;
   wheelRightRpm: number;
   bladeOn: boolean;
@@ -29,42 +30,51 @@ export interface AnatomyInputs {
 
 type Part = 'gps' | 'imu' | 'lidar' | 'battery' | 'blade' | 'wheelL' | 'wheelR' | 'motor' | 'dock' | 'rain';
 
+type PartTone = 'ok' | 'warn' | 'unknown';
+
 interface PartInfo {
   label: string;
   value: string;
-  ok: boolean;
+  tone: PartTone;
+}
+
+function boolTone(ok: boolean): PartTone {
+  return ok ? 'ok' : 'warn';
 }
 
 function partInfo(part: Part, inputs: AnatomyInputs, t: TFunction): PartInfo {
   switch (part) {
     case 'gps':
-      return {label: t('robotAnatomy.gpsAntenna'), value: inputs.gpsLabel, ok: inputs.gpsOk};
+      return {label: t('robotAnatomy.gpsAntenna'), value: inputs.gpsLabel, tone: boolTone(inputs.gpsOk)};
     case 'imu':
-      return {label: 'IMU', value: inputs.imuOk ? t('robotAnatomy.yawValue', {n: inputs.imuYawDeg.toFixed(0)}) : t('robotAnatomy.noData'), ok: inputs.imuOk};
+      return {label: 'IMU', value: inputs.imuOk ? t('robotAnatomy.yawValue', {n: inputs.imuYawDeg.toFixed(0)}) : t('robotAnatomy.noData'), tone: boolTone(inputs.imuOk)};
     case 'lidar':
-      return {label: 'LiDAR', value: inputs.lidarOk ? t('robotAnatomy.streaming') : t('robotAnatomy.noScan'), ok: inputs.lidarOk};
+      // Without a live scan-freshness signal we refuse to fake "streaming".
+      return inputs.lidarOk === undefined
+        ? {label: 'LiDAR', value: t('robotAnatomy.unknown'), tone: 'unknown'}
+        : {label: 'LiDAR', value: inputs.lidarOk ? t('robotAnatomy.streaming') : t('robotAnatomy.noScan'), tone: boolTone(inputs.lidarOk)};
     case 'battery':
       return {
         label: t('robotAnatomy.battery'),
         value: `${inputs.batteryPct.toFixed(0)}% · ${inputs.vBattery.toFixed(1)} V`,
-        ok: inputs.batteryPct > 20,
+        tone: boolTone(inputs.batteryPct > 20),
       };
     case 'blade':
-      return {label: t('robotAnatomy.blade'), value: inputs.bladeOn ? t('robotAnatomy.spinning') : t('robotAnatomy.off'), ok: !inputs.bladeOn};
+      return {label: t('robotAnatomy.blade'), value: inputs.bladeOn ? t('robotAnatomy.spinning') : t('robotAnatomy.off'), tone: boolTone(!inputs.bladeOn)};
     case 'wheelL':
-      return {label: t('robotAnatomy.leftWheel'), value: t('robotAnatomy.rpmValue', {n: inputs.wheelLeftRpm.toFixed(0)}), ok: true};
+      return {label: t('robotAnatomy.leftWheel'), value: t('robotAnatomy.rpmValue', {n: inputs.wheelLeftRpm.toFixed(0)}), tone: 'ok'};
     case 'wheelR':
-      return {label: t('robotAnatomy.rightWheel'), value: t('robotAnatomy.rpmValue', {n: inputs.wheelRightRpm.toFixed(0)}), ok: true};
+      return {label: t('robotAnatomy.rightWheel'), value: t('robotAnatomy.rpmValue', {n: inputs.wheelRightRpm.toFixed(0)}), tone: 'ok'};
     case 'motor':
       return {
         label: t('robotAnatomy.motors'),
-        value: `motor ${inputs.motorTempC.toFixed(0)}°C · ESC ${inputs.escTempC.toFixed(0)}°C`,
-        ok: inputs.motorTempC < 55,
+        value: t('robotAnatomy.motorTemps', {motor: inputs.motorTempC.toFixed(0), esc: inputs.escTempC.toFixed(0)}),
+        tone: boolTone(inputs.motorTempC < 55),
       };
     case 'dock':
-      return {label: t('robotAnatomy.dock'), value: inputs.dockCharging ? t('robotAnatomy.charging') : t('robotAnatomy.offDock'), ok: true};
+      return {label: t('robotAnatomy.dock'), value: inputs.dockCharging ? t('robotAnatomy.charging') : t('robotAnatomy.offDock'), tone: 'ok'};
     case 'rain':
-      return {label: t('robotAnatomy.rainSensor'), value: inputs.rain ? t('robotAnatomy.wet') : t('robotAnatomy.dry'), ok: !inputs.rain};
+      return {label: t('robotAnatomy.rainSensor'), value: inputs.rain ? t('robotAnatomy.wet') : t('robotAnatomy.dry'), tone: boolTone(!inputs.rain)};
   }
 }
 
@@ -79,10 +89,15 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
   const active: Part = hover ?? 'battery';
   const info = partInfo(active, inputs, t);
 
-  const partColor = (part: Part): string => {
-    const {ok} = partInfo(part, inputs, t);
-    return ok ? colors.accent : colors.amber;
+  const toneColor = (tone: PartTone): string => {
+    switch (tone) {
+      case 'ok': return colors.accent;
+      case 'unknown': return colors.textMuted;
+      default: return colors.amber;
+    }
   };
+
+  const partColor = (part: Part): string => toneColor(partInfo(part, inputs, t).tone);
 
   const fill = (part: Part) => hover === part ? `${partColor(part)}55` : `${partColor(part)}22`;
   const stroke = (part: Part) => partColor(part);
@@ -206,7 +221,7 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
           {info.label}
         </div>
         <div className="mn-num" style={{
-          fontSize: 20, color: info.ok ? colors.accent : colors.amber,
+          fontSize: 20, color: toneColor(info.tone),
           marginTop: 8, lineHeight: 1,
         }}>
           {info.value}

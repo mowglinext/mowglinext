@@ -8,11 +8,14 @@ import {useWheelTicks} from "./useWheelTicks.ts";
  * direction (0/1) plus `wheel_tick_factor` (ticks per metre at the wheel
  * radius). We don't have ticks-per-revolution directly, so RPM is derived
  * from the radius supplied via `useSettings()` -- or, if we don't have it,
- * we fall back to a configurable default (0.105 m radius -> ~0.66 m
- * circumference -> ticks * factor / circumference revolutions).
+ * we fall back to the robot default wheel radius (0.04475 m, matching
+ * `wheel_radius` in mowgli_bringup/config/mowgli_robot.yaml).
  *
- * Returns NaN per wheel until two samples have arrived.
+ * Returns 0 per wheel until two samples have arrived.
  */
+
+/** Default wheel radius in metres — mirrors the mowgli_robot.yaml template. */
+export const DEFAULT_WHEEL_RADIUS_M = 0.04475;
 
 export interface WheelRpm {
   fl: number;
@@ -28,7 +31,7 @@ interface UseWheelRpmOptions {
   wheelRadiusM?: number;
 }
 
-export function useWheelRpm({wheelRadiusM = 0.105}: UseWheelRpmOptions = {}): WheelRpm {
+export function useWheelRpm({wheelRadiusM = DEFAULT_WHEEL_RADIUS_M}: UseWheelRpmOptions = {}): WheelRpm {
   const ticks = useWheelTicks();
   const [rpm, setRpm] = useState<WheelRpm>({fl: 0, fr: 0, rl: 0, rr: 0, bodyOmega: 0});
   const lastSample = useRef<{

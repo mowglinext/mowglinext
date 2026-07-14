@@ -68,15 +68,21 @@ export function NotificationBell() {
         return () => document.removeEventListener('mousedown', handler);
     }, [open]);
 
+    // Mark everything read when the panel CLOSES (not on open), so the
+    // unread highlight/dot styling stays visible while the operator is
+    // actually reading the list. Covers every close path (bell toggle,
+    // click-outside) because it watches the open -> closed transition.
+    const wasOpenRef = useRef(false);
+    useEffect(() => {
+        if (wasOpenRef.current && !open) markAllRead();
+        wasOpenRef.current = open;
+    }, [open, markAllRead]);
+
     return (
         <div ref={wrapRef} style={{position: 'relative'}}>
             <style>{dotKeyframes}</style>
             <button
-                onClick={() => {
-                    const next = !open;
-                    setOpen(next);
-                    if (next) markAllRead();
-                }}
+                onClick={() => setOpen(prev => !prev)}
                 aria-label={unread > 0 ? t('notificationBell.bellAriaUnread', {n: unread}) : t('notificationBell.bellAria')}
                 style={{
                     position: 'relative', background: 'transparent', border: 'none',

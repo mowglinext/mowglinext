@@ -6,6 +6,7 @@ import { dirtyKeysRequireGpsRestart, restartGps } from "../utils/containers.ts";
 import { useContainerRestart } from "./useContainerRestart.ts";
 import { getQuaternionFromHeading } from "../utils/map.tsx";
 import { ContentType } from "../api/Api.ts";
+import { valuesMatch } from "../utils/settingsValues.ts";
 
 export type SettingsSection =
     | "hardware"
@@ -76,6 +77,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "gnss_unicore_pvt_algorithm", "gnss_unicore_rtk_reliability",
             "gnss_unicore_rtk_timeout_s", "gnss_unicore_dgps_timeout_s",
             "gps_wait_after_undock_sec", "gps_timeout_sec",
+            "gnss_receiver_model",
         ],
     },
     {
@@ -88,6 +90,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "imu_x", "imu_y", "imu_z", "imu_yaw", "imu_pitch", "imu_roll",
             "gps_x", "gps_y", "gps_z",
             "dock_pose_yaw",
+            "imu_cal_samples", "imu_cal_auto_rest_sec", "imu_cal_periodic_recal_sec",
         ],
     },
     {
@@ -98,6 +101,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         keys: [
             "use_scan_matching", "use_loop_closure",
             "use_magnetometer",
+            "enable_mag_cal", "declination_deg", "min_horizontal_uT", "mag_yaw_variance",
         ],
     },
     {
@@ -129,6 +133,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "undock_distance", "undock_speed", "dock_approach_distance",
             "dock_max_retries", "dock_use_charger_detection",
             "dock_charging_threshold",
+            "dock_approach_overshoot", "dock_pose_yaw_sigma_rad",
         ],
     },
     {
@@ -252,19 +257,8 @@ export const useSettingsManager = () => {
     // default (tolerating int/float JSON churn, so 5 == 5.0). isOverridden:
     // has a default AND the local value differs from it — the operator has
     // pinned a non-default value that we should visually flag.
-    const valuesMatch = (a: any, b: any): boolean => {
-        if (typeof a === "number" && typeof b === "number") return a === b;
-        // Number vs numeric-string / int-vs-float from JSON round-trips.
-        const an = Number(a);
-        const bn = Number(b);
-        if (!Number.isNaN(an) && !Number.isNaN(bn) &&
-            (typeof a !== "string" || a.trim() !== "") &&
-            (typeof b !== "string" || b.trim() !== "")) {
-            return an === bn;
-        }
-        return JSON.stringify(a) === JSON.stringify(b);
-    };
-
+    // valuesMatch is imported from ../utils/settingsValues.ts (null-safe;
+    // the old inline copy treated valuesMatch(null, 0) as true via Number(null)).
     const hasDefault = useCallback(
         (key: string): boolean => key in defaults,
         [defaults]
@@ -370,7 +364,17 @@ export const useSettingsManager = () => {
             if (hasDirtyChanges) {
                 const res = await guiApi.settings.yamlCreate(dirtyPayload);
                 if (res.error) throw new Error((res.error as any).error);
-                setSavedValues({ ...localValues });
+                // AdvancedSection deletes surface as null-valued keys. The
+                // backend drops null keys from the YAML on save, so prune them
+                // from local state too — otherwise the deleted rows reappear.
+                const pruned: Record<string, any> = {};
+                for (const [key, value] of Object.entries(localValues)) {
+                    if (value !== null) {
+                        pruned[key] = value;
+                    }
+                }
+                setSavedValues(pruned);
+                setLocalValues(pruned);
                 setRestartRequired(true);
                 notification.success({
                     message: t("settingsSections.toasts.saved"),
@@ -443,9 +447,9 @@ export const useSettingsManager = () => {
                         });
                     } catch (e: any) {
                         notification.warning({
-                            message: "Settings saved, but live wheel/drive update failed",
+                            message: t("settingsSections.toasts.drivePidUpdateFailed"),
                             description: e?.message ??
-                                "Restart ROS2 to apply the new wheel and drive-motor settings.",
+                                t("settingsSections.toasts.drivePidUpdateFailedDescription"),
                         });
                     }
                 }

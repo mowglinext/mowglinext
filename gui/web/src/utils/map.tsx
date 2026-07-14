@@ -1,9 +1,6 @@
 import {Quaternion} from "../types/ros.ts";
 import type {RobotGeometry} from "../hooks/useRobotDescription.ts";
 
-export const earth = 6371008.8;  // radius of the earth in meters
-export const pi = Math.PI;
-
 // Metres per degree of latitude (WGS84 equatorial radius × deg→rad)
 const METERS_PER_DEG = 6378137.0 * Math.PI / 180.0;
 
@@ -26,30 +23,41 @@ export function drawLine(offsetX: number, offsetY: number, datum: [number, numbe
 }
 
 /**
- * Generate a rotated robot footprint polygon in [lon, lat] coordinates.
- * The footprint is a rectangle defined by front/rear/halfWidth offsets from
- * base_link (at wheel axis centre), rotated by the robot heading.
+ * Point-in-polygon test using a ray-casting algorithm.
+ * Tests whether `ringCoordinates` (e.g. an obstacle ring) lies inside
+ * `polygonCoordinates` by testing the ring's centroid — NOT a single vertex.
+ * Testing only one corner mis-parents obstacles whose tested vertex falls
+ * outside a concave parent boundary.
  */
-export function drawRobotFootprint(
-    offsetX: number, offsetY: number, datum: [number, number, number],
-    posY: number, posX: number, heading: number,
-    chassisFront: number, chassisRear: number, halfWidth: number,
-): [number, number][] {
-    const cos = Math.cos(heading);
-    const sin = Math.sin(heading);
-    // Corners in local frame relative to base_link: [forward, left]
-    const corners = [
-        [chassisFront, halfWidth],
-        [chassisFront, -halfWidth],
-        [chassisRear, -halfWidth],
-        [chassisRear, halfWidth],
-        [chassisFront, halfWidth], // close the polygon
-    ];
-    return corners.map(([fx, fy]) => {
-        const rx = posX + fx * cos - fy * sin;
-        const ry = posY + fx * sin + fy * cos;
-        return transpose(offsetX, offsetY, datum, ry, rx);
-    });
+export function isRingInsidePolygon(
+    ringCoordinates: [number, number][] | number[][],
+    polygonCoordinates: [number, number][] | number[][],
+): boolean {
+    if (!ringCoordinates || ringCoordinates.length === 0) return false;
+    // Representative interior point of the ring (its centroid).
+    let cx = 0, cy = 0;
+    for (const p of ringCoordinates) {
+        cx += p[0];
+        cy += p[1];
+    }
+    cx /= ringCoordinates.length;
+    cy /= ringCoordinates.length;
+
+    let isInside = false;
+    let j = polygonCoordinates.length - 1;
+    for (let i = 0; i < polygonCoordinates.length; i++) {
+        const xi = polygonCoordinates[i][0];
+        const yi = polygonCoordinates[i][1];
+        const xj = polygonCoordinates[j][0];
+        const yj = polygonCoordinates[j][1];
+
+        const intersect =
+            (yi > cy) !== (yj > cy) &&
+            cx < ((xj - xi) * (cy - yi)) / (yj - yi) + xi;
+        if (intersect) isInside = !isInside;
+        j = i;
+    }
+    return isInside;
 }
 
 /**

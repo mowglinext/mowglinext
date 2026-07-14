@@ -3,17 +3,30 @@ import { Card, Col, Collapse, Form, InputNumber, Row, Space, Switch, Typography 
 import { HomeOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
+import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 
 const { Text, Paragraph } = Typography;
 
 type Props = {
     values: Record<string, any>;
     onChange: (key: string, value: any) => void;
+    isOverridden?: (key: string) => boolean;
+    hasDefault?: (key: string) => boolean;
+    onReset?: (key: string) => void;
 };
 
-export const DockingSection: React.FC<Props> = ({ values, onChange }) => {
+export const DockingSection: React.FC<Props> = ({ values, onChange, isOverridden, hasDefault, onReset }) => {
     const { colors } = useThemeMode();
     const { t } = useTranslation();
+    const fieldLabel = (key: string, label: React.ReactNode) => (
+        <SettingFieldLabel
+            settingKey={key}
+            label={label}
+            overridden={isOverridden?.(key) ?? false}
+            canReset={hasDefault?.(key) ?? false}
+            onReset={onReset}
+        />
+    );
     return (
         <div>
             <Card size="small" style={{ marginBottom: 16 }}>
@@ -30,7 +43,7 @@ export const DockingSection: React.FC<Props> = ({ values, onChange }) => {
                     <Form layout="vertical" size="small">
                         <Row gutter={[16, 0]}>
                             <Col xs={24} sm={12}>
-                                <Form.Item label={t('dockingSection.undockDistance')} tooltip={t('dockingSection.undockDistanceTooltip')}>
+                                <Form.Item label={fieldLabel("undock_distance", t('dockingSection.undockDistance'))} tooltip={t('dockingSection.undockDistanceTooltip')}>
                                     <InputNumber
                                         value={values.undock_distance}
                                         onChange={(v) => onChange("undock_distance", v)}
@@ -40,7 +53,7 @@ export const DockingSection: React.FC<Props> = ({ values, onChange }) => {
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item label={t('dockingSection.undockSpeed')} tooltip={t('dockingSection.undockSpeedTooltip')}>
+                                <Form.Item label={fieldLabel("undock_speed", t('dockingSection.undockSpeed'))} tooltip={t('dockingSection.undockSpeedTooltip')}>
                                     <InputNumber
                                         value={values.undock_speed}
                                         onChange={(v) => onChange("undock_speed", v)}
@@ -50,7 +63,7 @@ export const DockingSection: React.FC<Props> = ({ values, onChange }) => {
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item label={t('dockingSection.approachDistance')} tooltip={t('dockingSection.approachDistanceTooltip')}>
+                                <Form.Item label={fieldLabel("dock_approach_distance", t('dockingSection.approachDistance'))} tooltip={t('dockingSection.approachDistanceTooltip')}>
                                     <InputNumber
                                         value={values.dock_approach_distance}
                                         onChange={(v) => onChange("dock_approach_distance", v)}
@@ -60,7 +73,7 @@ export const DockingSection: React.FC<Props> = ({ values, onChange }) => {
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
-                                <Form.Item label={t('dockingSection.chargerDetection')} tooltip={t('dockingSection.chargerDetectionTooltip')}>
+                                <Form.Item label={fieldLabel("dock_use_charger_detection", t('dockingSection.chargerDetection'))} tooltip={t('dockingSection.chargerDetectionTooltip')}>
                                     <Switch
                                         checked={values.dock_use_charger_detection ?? true}
                                         onChange={(v) => onChange("dock_use_charger_detection", v)}
@@ -84,7 +97,7 @@ export const DockingSection: React.FC<Props> = ({ values, onChange }) => {
                                     <Form layout="vertical" size="small">
                                         <Row gutter={[16, 0]}>
                                             <Col xs={24} sm={12}>
-                                                <Form.Item label={t('dockingSection.maxRetries')} tooltip={t('dockingSection.maxRetriesTooltip')}>
+                                                <Form.Item label={fieldLabel("dock_max_retries", t('dockingSection.maxRetries'))} tooltip={t('dockingSection.maxRetriesTooltip')}>
                                                     <InputNumber
                                                         value={values.dock_max_retries}
                                                         onChange={(v) => onChange("dock_max_retries", v)}
@@ -94,7 +107,7 @@ export const DockingSection: React.FC<Props> = ({ values, onChange }) => {
                                                 </Form.Item>
                                             </Col>
                                             <Col xs={24} sm={12}>
-                                                <Form.Item label={t('dockingSection.chargingThreshold')} tooltip={t('dockingSection.chargingThresholdTooltip')}>
+                                                <Form.Item label={fieldLabel("dock_charging_threshold", t('dockingSection.chargingThreshold'))} tooltip={t('dockingSection.chargingThresholdTooltip')}>
                                                     <InputNumber
                                                         value={values.dock_charging_threshold}
                                                         onChange={(v) => onChange("dock_charging_threshold", v)}
@@ -104,7 +117,7 @@ export const DockingSection: React.FC<Props> = ({ values, onChange }) => {
                                                 </Form.Item>
                                             </Col>
                                             <Col xs={24} sm={12}>
-                                                <Form.Item label={t('dockingSection.approachOvershoot')} tooltip={t('dockingSection.approachOvershootTooltip')}>
+                                                <Form.Item label={fieldLabel("dock_approach_overshoot", t('dockingSection.approachOvershoot'))} tooltip={t('dockingSection.approachOvershootTooltip')}>
                                                     <InputNumber
                                                         value={values.dock_approach_overshoot}
                                                         onChange={(v) => onChange("dock_approach_overshoot", v)}
@@ -114,7 +127,7 @@ export const DockingSection: React.FC<Props> = ({ values, onChange }) => {
                                                 </Form.Item>
                                             </Col>
                                             <Col xs={24} sm={12}>
-                                                <Form.Item label={t('dockingSection.baseHeadingUncertainty')} tooltip={t('dockingSection.baseHeadingUncertaintyTooltip')}>
+                                                <Form.Item label={fieldLabel("dock_pose_yaw_sigma_rad", t('dockingSection.baseHeadingUncertainty'))} tooltip={t('dockingSection.baseHeadingUncertaintyTooltip')}>
                                                     <InputNumber
                                                         value={values.dock_pose_yaw_sigma_rad}
                                                         onChange={(v) => onChange("dock_pose_yaw_sigma_rad", v)}

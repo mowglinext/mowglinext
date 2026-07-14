@@ -65,8 +65,22 @@ function ParamRow({
     }
   }, [onCommit, param.name]);
 
+  // Coerce the pending value before it reaches a LIVE ROS2 param. Clearing an
+  // InputNumber yields null — committing that would blank a live parameter, so
+  // we skip it and revert the visual edit. Integer params (param.type carries
+  // the ROS type name, e.g. "integer"/"int") are rounded so a typed "1.7" can't
+  // reach an int param.
+  const coerce = useCallback((next: unknown): unknown => {
+    if (next == null) return null;
+    const isInt = /int/i.test(param.type ?? "");
+    if (isInt && typeof next === "number") return Math.round(next);
+    return next;
+  }, [param.type]);
+
   // For safety/motion params, confirm before applying the live change.
-  const guardedCommit = useCallback((next: unknown) => {
+  const guardedCommit = useCallback((raw: unknown) => {
+    const next = coerce(raw);
+    if (next == null) { setValue(param.value); return; } // don't blank a live param
     if (!danger) { commit(next); return; }
     modal.confirm({
       title: t("parametersPage.confirmSafetyTitle"),
@@ -87,7 +101,7 @@ function ParamRow({
       onOk: () => commit(next),
       onCancel: () => setValue(param.value), // revert the visual edit
     });
-  }, [danger, commit, modal, colors, meta, param.value, t]);
+  }, [danger, commit, coerce, modal, colors, meta, param.value, t]);
 
   const controlWidth = isMobile ? "100%" : undefined;
 

@@ -737,6 +737,13 @@
   resolved "https://registry.yarnpkg.com/@oxc-project/types/-/types-0.122.0.tgz#2f4e77a3b183c87b2a326affd703ef71ba836601"
   integrity sha512-oLAl5kBpV4w69UtFZ9xqcmTi+GENWOcPF7FCrczTiBbmC0ibXxCwyvZGbO39rCVEuLGAZM84DH0pUIyyv/YJzA==
 
+"@playwright/test@^1.50.0":
+  version "1.61.1"
+  resolved "https://registry.yarnpkg.com/@playwright/test/-/test-1.61.1.tgz#48568dc22af7819e55fa5e8e3bc79b7e6a3e6675"
+  integrity sha512-8nKv6+0RJSL9FE4jYOEGXnPeM/Hg12qZpmqzZjRh3qM0Y7c3z1mrOTfFLids72RDQYVh9WpLEfR5WdpNX4fkig==
+  dependencies:
+    playwright "1.61.1"
+
 "@rc-component/async-validator@^5.0.3":
   version "5.1.0"
   resolved "https://registry.yarnpkg.com/@rc-component/async-validator/-/async-validator-5.1.0.tgz#e81f31e676d9cadc71e4310bbf1749c7a5882291"
@@ -2065,6 +2072,11 @@ framer-motion@^12.40.0:
     motion-utils "^12.39.0"
     tslib "^2.4.0"
 
+fsevents@2.3.2:
+  version "2.3.2"
+  resolved "https://registry.yarnpkg.com/fsevents/-/fsevents-2.3.2.tgz#8a526f78b8fdf4623b709e0b975c52c24c02fd1a"
+  integrity sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==
+
 fsevents@~2.3.3:
   version "2.3.3"
   resolved "https://registry.yarnpkg.com/fsevents/-/fsevents-2.3.3.tgz#cac6407785d03675a2a5e1a5305c697b347d90d6"
@@ -2588,11 +2600,6 @@ minimist@^1.2.8:
   resolved "https://registry.yarnpkg.com/minimist/-/minimist-1.2.8.tgz#c1a464e7693302e082a075cee0c057741ac4772c"
   integrity sha512-2yyAR8qBkN3YuheJanUpWC5U3bb5osDywNB8RzDVlDwDHbocAJveqqj1u8+SVD7jkWT4yvsHCpWqqWqAxb0zCA==
 
-moment@^2.30.1:
-  version "2.30.1"
-  resolved "https://registry.yarnpkg.com/moment/-/moment-2.30.1.tgz#f8c91c07b7a786e30c59926df530b4eac96974ae"
-  integrity sha512-uEmtNhbDOrWPFS+hdjFCBfy9f2YoyzRpwcl+DqpC6taX21FzsTLQVbMV/W7PzNSX6x/bhC1zA3c2UQ5NzH6how==
-
 motion-dom@^12.40.0:
   version "12.40.0"
   resolved "https://registry.yarnpkg.com/motion-dom/-/motion-dom-12.40.0.tgz#95fb411ac72e8adbaf5f1b17b8f07783da223bee"
@@ -2859,6 +2866,20 @@ pkg-types@^2.3.0:
     confbox "^0.2.2"
     exsolve "^1.0.7"
     pathe "^2.0.3"
+
+playwright-core@1.61.1:
+  version "1.61.1"
+  resolved "https://registry.yarnpkg.com/playwright-core/-/playwright-core-1.61.1.tgz#3c99841307efbbabc9d724c41a88c914705d15fc"
+  integrity sha512-h7Qlt6m4REp25qvIdvbDtVmD4LqVXfpRxhORv9L0jzETM05p4fuPJ3dKyuSXQxDSbXnmS79HAgi9589lGSpLkg==
+
+playwright@1.61.1:
+  version "1.61.1"
+  resolved "https://registry.yarnpkg.com/playwright/-/playwright-1.61.1.tgz#d8c0c06eb93c28981afc747bace453bdbd5018bc"
+  integrity sha512-DWnY5o3YbLWK4GovuAVwpqL+1VwGNdUGrRr++8j8PtQQzvAVZUIMjKQ90fY689sEJZJBbZVw1rXaOKSTitkzPQ==
+  dependencies:
+    playwright-core "1.61.1"
+  optionalDependencies:
+    fsevents "2.3.2"
 
 polyclip-ts@^0.16.8:
   version "0.16.8"

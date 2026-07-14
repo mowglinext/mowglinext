@@ -1,6 +1,7 @@
 import { useApi } from "./useApi.ts";
 import { App } from "antd";
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 export type JSONSchema = {
     type?: string;
@@ -44,6 +45,7 @@ export type JSONSchemaCondition = {
 export const useSettingsSchema = () => {
     const guiApi = useApi();
     const { notification } = App.useApp();
+    const { t } = useTranslation();
     const [schema, setSchema] = useState<JSONSchema | null>(null);
     const [values, setValues] = useState<Record<string, any>>({});
     const [loading, setLoading] = useState(false);
@@ -66,7 +68,7 @@ export const useSettingsSchema = () => {
                 }
             } catch (e: any) {
                 notification.error({
-                    message: "Failed to load settings schema",
+                    message: t("settingsSchema.loadFailed"),
                     description: e.message,
                 });
             } finally {
@@ -86,19 +88,19 @@ export const useSettingsSchema = () => {
                 setValues(newValues);
                 setRestartRequired(true);
                 notification.success({
-                    message: "Settings saved",
-                    description: "Restart ROS2 to apply the new configuration.",
+                    message: t("settingsSections.toasts.saved"),
+                    description: t("settingsSections.toasts.savedDescription"),
                 });
             } catch (e: any) {
                 notification.error({
-                    message: "Failed to save settings",
+                    message: t("settingsSections.toasts.saveFailed"),
                     description: e.message,
                 });
             } finally {
                 setLoading(false);
             }
         },
-        [guiApi, notification]
+        [guiApi, notification, t]
     );
 
     const savePartialValues = useCallback(
@@ -131,14 +133,14 @@ export const useSettingsSchema = () => {
                 setValues((prev) => ({ ...prev, ...changedPayload }));
                 if (!options?.silentSuccess) {
                     notification.success({
-                        message: options?.successMessage ?? "Settings saved",
+                        message: options?.successMessage ?? t("settingsSections.toasts.saved"),
                         description: options?.successDescription,
                     });
                 }
                 return true;
             } catch (e: any) {
                 notification.error({
-                    message: options?.errorMessage ?? "Failed to save settings",
+                    message: options?.errorMessage ?? t("settingsSections.toasts.saveFailed"),
                     description: e.message,
                 });
                 return false;
@@ -146,7 +148,7 @@ export const useSettingsSchema = () => {
                 setLoading(false);
             }
         },
-        [guiApi, notification, values],
+        [guiApi, notification, values, t],
     );
 
     return { schema, values, saveValues, savePartialValues, loading, restartRequired };

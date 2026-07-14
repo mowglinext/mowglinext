@@ -46,6 +46,13 @@ export function limeAlpha(opacity: number): string {
   return `rgba(${LIME_RGB}, ${opacity})`;
 }
 
+/**
+ * Signature lime hero gradient (rail logo, active nav pills). Single-sourced
+ * from PALETTE — do NOT re-hardcode the stops anywhere else.
+ */
+export const BRAND_GRADIENT =
+  `linear-gradient(135deg, ${PALETTE.lime} 0%, ${PALETTE.mint} 50%, ${PALETTE.emerald} 100%)`;
+
 interface ColorTokens {
   bgBase: string;
   bgCard: string;

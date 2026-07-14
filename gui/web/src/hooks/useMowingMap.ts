@@ -1,6 +1,5 @@
-import {useEffect, useState} from "react";
 import {Map as MapType} from "../types/ros.ts";
-import {useWS} from "./useWS.ts";
+import {useTopic} from "./useTopic.ts";
 
 /**
  * Subscribes to the merged /map view (working_area + navigation_area + dock
@@ -8,19 +7,4 @@ import {useWS} from "./useWS.ts";
  * both maintain locally -- factored out so the dashboard widget can reuse the
  * same data.
  */
-export const useMowingMap = () => {
-    const [map, setMap] = useState<MapType>({});
-    const stream = useWS<string>(
-        () => { /* closed */ },
-        () => { /* connected */ },
-        (data) => {
-            try { setMap(data as unknown as MapType); }
-            catch { /* ignore */ }
-        },
-    );
-    useEffect(() => {
-        stream.start("/api/mowglinext/subscribe/map");
-        return () => { stream.stop(); };
-    }, []);
-    return map;
-};
+export const useMowingMap = (): MapType => useTopic<MapType>("map", {}).data;

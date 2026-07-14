@@ -146,7 +146,8 @@
     "shutdownPi": "Éteindre le Raspberry Pi",
     "shutdownPiConfirm": "Le système va s'éteindre. Un accès physique sera nécessaire pour le rallumer.",
     "rearm": "Réarmer",
-    "rearmEmergencyTooltip": "Réarmer l'arrêt d'urgence (le firmware décide si le verrou se libère)"
+    "rearmEmergencyTooltip": "Réarmer l'arrêt d'urgence (le firmware décide si le verrou se libère)",
+    "powerMenuAria": "Menu batterie et alimentation"
   },
   "mowerActions": {
     "sendHomeTitle": "Renvoyer le robot à la base ?",
@@ -192,6 +193,7 @@
     "stateManual": "Manuel",
     "stateLowBattery": "Batterie faible",
     "stateCriticalBattery": "Batterie critique",
+    "stateCriticalCharging": "Charge critique",
     "stateReturnFailedBattery": "Échec retour (batterie)",
     "stateRain": "Pluie",
     "stateRainWaiting": "Attente pluie",
@@ -365,7 +367,7 @@
     "baselineSolutionStatus": "Statut de solution de la baseline",
     "correctionAgeS": "Âge des corrections (s)",
     "filteredPose": "Pose filtrée (repère carte)",
-    "live": "En direct",
+    "live": "en direct",
     "waiting": "En attente...",
     "xM": "X (m)",
     "yM": "Y (m)",
@@ -411,7 +413,6 @@
     "scansReceived": "{{count}} scans reçus",
     "icpMonitorTitle": "ICP / Recalage de scans",
     "icpMonitorShort": "Moniteur ICP",
-    "live": "en direct",
     "icpScanMatchRate": "Taux de recalage",
     "icpRejects": "Rejets ICP",
     "icpRejectBreakdown": "rmse {{rmse}} · inliers {{inliers}} · cohérence {{sanity}} · divergence {{diverge}}",
@@ -544,7 +545,24 @@
     "btStateAndCoverage": "État BT & couverture",
     "sensors": "Capteurs",
     "tabRobot": "Robot",
-    "tabCalibration": "Calibration"
+    "tabCalibration": "Calibration",
+    "calibrationCancel": "Annuler",
+    "calibrationStatusErrorTitle": "Échec du chargement de l’état de calibration",
+    "calibrationTimedOut": "Délai de calibration dépassé",
+    "cpuTemp": "CPU : {{value}} °C",
+    "cpuTempUnknown": "CPU : --",
+    "crossCheckError": "Erreur",
+    "crossCheckOk": "OK",
+    "crossCheckWarn": "Avertissement",
+    "imuCalibrationConfirmBody": "Le robot va avancer et reculer plusieurs fois (jusqu’à ~2 minutes). Assurez-vous que la zone est dégagée.",
+    "imuCalibrationConfirmOk": "Lancer la calibration",
+    "imuCalibrationConfirmTitle": "Lancer la calibration du lacet IMU ?",
+    "magCalibrationConfirmBody": "Le robot va tourner sur place pour calibrer le magnétomètre. Assurez-vous que la zone est dégagée.",
+    "magCalibrationConfirmOk": "Lancer la calibration",
+    "magCalibrationConfirmTitle": "Lancer la calibration du magnétomètre ?",
+    "resetEmergencySuccess": "Réinitialisation d’urgence envoyée",
+    "snapshotErrorTitle": "Échec du chargement des diagnostics",
+    "verdictCritical": "Critique"
   },
   "mowgliNextPage": {
     "headlineUntilHomePrefix": "Encore ",
@@ -577,7 +595,7 @@
     "mowgliWithZone": "Mowgli · {{area}}",
     "mowgliNoZone": "Mowgli · sans zone",
     "battery": "batterie",
-    "coverageToday": "Couverture aujourd'hui · {{pct}} %",
+    "coverageToday": "Couverture aujourd’hui · {{pct}} %",
     "liveMap": "Carte vivante",
     "livePath": "Trajectoire en direct",
     "viewMap": "Voir la carte",
@@ -604,7 +622,11 @@
     "firmwareOk": "Firmware OK",
     "firmwareIncompatible": "Firmware incompatible",
     "firmwareVersion": "v{{version}}",
-    "firmwareReflash": "v{{version}} — reflashez le firmware pour tondre"
+    "firmwareReflash": "v{{version}} — reflashez le firmware pour tondre",
+    "coverageProgress": "Couverture de la zone · {{pct}} %",
+    "bladesOff": "arrêt",
+    "areaN": "Zone {{number}}",
+    "actionFailed": "Échec de la commande"
   },
   "onboardingPage": {
     "preview": "Aperçu",
@@ -750,13 +772,26 @@
     "restartingGps": "Redémarrage GPS…",
     "saveAndFinish": "Enregistrer et terminer",
     "next": "Suivant",
-    "stepCounter": "Étape {{current}} sur {{total}}"
+    "stepCounter": "Étape {{current}} sur {{total}}",
+    "calibPendingSuffix": "({{count}} en attente)"
   },
   "settingsPage": {
     "ros2Restarting": "Redémarrage ROS2…",
     "ros2Restarted": "ROS2 redémarré",
     "ros2RestartFailed": "Échec du redémarrage ROS2",
-    "searchSettingPlaceholder": "Rechercher un réglage…"
+    "searchSettingPlaceholder": "Rechercher un réglage…",
+    "gnssSaveError": "Échec de l’enregistrement des paramètres GNSS avant l’action du récepteur",
+    "noSearchResults": "Aucun réglage ne correspond à votre recherche",
+    "restartConfirmTitle": "Redémarrer ROS2 ?",
+    "restartConfirmBody": "Ceci redémarre la pile de navigation. Ne redémarrez pas pendant la tonte.",
+    "restartConfirmOk": "Redémarrer",
+    "restartConfirmCancel": "Annuler",
+    "restartRequired": "Redémarrage requis pour appliquer les modifications enregistrées",
+    "restartRos2": "Redémarrer ROS2",
+    "revert": "Annuler les modifications",
+    "saveWithCount": "Enregistrer ({{count}} modifications)",
+    "saved": "Enregistré",
+    "unsavedChanges": "modifications non enregistrées"
   },
   "schedulePage": {
     "planning": "Planning",
@@ -803,15 +838,22 @@
     "activeSchedules": "plannings actifs",
     "schedules": "Plannings",
     "noSchedulesYet": "Aucun planning pour l'instant. Choisissez un modèle ci-dessous ou créez une tonte personnalisée.",
-    "schedulesConfigured": "{{count}} planning(s) configuré(s).",
+    "schedulesConfigured": "{{count}} programmations configurées.",
     "rules": "Règles",
     "rulesDescription": "Comportements de sécurité intégrés — toujours actifs.",
-    "ruleRainAware": "Anti-pluie",
+    "ruleRainAware": "Détection de pluie",
     "ruleRainAwareHint": "pause si pluie détectée",
-    "ruleAutoDockLow": "Retour batterie faible",
-    "ruleAutoDockLowHint": "retour à < 20 % de batterie",
+    "ruleAutoDockLow": "Retour auto batterie faible",
+    "ruleAutoDockLowHint": "retour si batterie <20%",
     "on": "Activé",
-    "off": "Désactivé"
+    "off": "Désactivé",
+    "schedulesConfigured_one": "{{count}} programmation configurée.",
+    "schedulesConfigured_other": "{{count}} programmations configurées.",
+    "lastDayTooltip": "Au moins un jour doit rester sélectionné",
+    "appliesToAllAreas": "S’applique à toutes les zones",
+    "blockStartHint": "début · toutes les zones",
+    "createdDisabledTitle": "Programmation créée (désactivée)",
+    "createdDisabledBody": "Vérifiez l’heure et les jours, puis activez-la."
   },
   "statisticsPage": {
     "statistics": "Statistiques",
@@ -841,12 +883,18 @@
     "areaLabel": "Zone {{index}}",
     "cellsLabel": "{{mowed}}/{{total}} cellules",
     "sessionHistory": "Historique des sessions",
-    "sessionsRecorded": "{{count}} session(s) enregistrée(s)",
+    "sessionsRecorded": "{{count}} sessions enregistrées",
     "clearAllTitle": "Effacer toutes les statistiques ?",
     "clearAllDescription": "Cela supprime définitivement chaque session enregistrée. Cette action est irréversible.",
     "clear": "Effacer",
     "cancel": "Annuler",
-    "noSessionsRecorded": "Aucune session de tonte enregistrée pour l'instant."
+    "noSessionsRecorded": "Aucune session de tonte enregistrée pour l'instant.",
+    "heroSessionsCount_one": "{{count}} session",
+    "heroSessionsCount_other": "{{count}} sessions",
+    "heroCompletedCount_one": "{{count}} terminée",
+    "heroCompletedCount_other": "{{count}} terminées",
+    "sessionsRecorded_one": "{{count}} session enregistrée",
+    "sessionsRecorded_other": "{{count}} sessions enregistrées"
   },
   "dashboardHome": {
     "statusMowing": "En tonte",
@@ -1353,7 +1401,10 @@
     "typeObstacle": "Obstacle",
     "areasHeader": "Zones ({{count}})",
     "moveUp": "Monter",
-    "moveDown": "Descendre"
+    "moveDown": "Descendre",
+    "navigationArea": "Navigation {{index}}",
+    "obstacleArea": "Obstacle {{index}}",
+    "unnamedArea": "Zone {{index}}"
   },
   "mapTrackedObstacles": {
     "outsideAreaMessage": "L'obstacle est en dehors de toutes les zones de tonte",
@@ -1394,7 +1445,11 @@
     "areaSubtracted": "Zone soustraite",
     "selectExactlyOneToSplit": "Sélectionnez exactement 1 zone à découper",
     "selectionMustBePolygon": "La sélection doit être une zone polygonale",
-    "drawLineAcrossArea": "Tracez une ligne à travers la zone pour la découper"
+    "drawLineAcrossArea": "Tracez une ligne à travers la zone pour la découper",
+    "deleteAreaConfirmTitle": "Supprimer cette zone ?",
+    "deleteAreaConfirmBody": "La zone sélectionnée (et ses obstacles) sera supprimée. Vous pouvez annuler avant d’enregistrer.",
+    "deleteAreaConfirmOk": "Supprimer",
+    "deleteAreaConfirmCancel": "Annuler"
   },
   "mapFiles": {
     "areaSaved": "Zone enregistrée",
@@ -1404,10 +1459,20 @@
     "openMowerImportFailed": "Échec de l'import OpenMower",
     "openMowerMapImported": "Carte OpenMower importée",
     "openMowerMapImportedDescription": "Zones + pose de la base écrites. /map devrait se rafraîchir sous peu.",
-    "unknownType": "Type inconnu {{type}}"
+    "unknownType": "Type inconnu {{type}}",
+    "obstaclesDropped": "Certains obstacles ont été ignorés",
+    "obstaclesDroppedDescription": "Ces zones d’exclusion sans zone parente correspondante n’ont pas été enregistrées : {{ids}}",
+    "uploadEmpty": "Aucune entité de carte valide trouvée dans le fichier",
+    "uploadParseError": "Impossible de lire le fichier GeoJSON",
+    "uploadSuccess": "Carte importée — vérifiez, puis Enregistrer pour appliquer"
   },
   "mapStreams": {},
-  "mapPage": {},
+  "mapPage": {
+    "mapboxTokenMissingDetail": "Définissez VITE_MAPBOX_TOKEN pour afficher les tuiles de la carte.",
+    "mapboxTokenMissingTitle": "Jeton de carte manquant",
+    "noDatumDetail": "En attente d’un datum GPS. Configurez-le lors de l’initialisation ou une fois le récepteur fixé.",
+    "noDatumTitle": "Aucun datum GPS pour l’instant"
+  },
   "mapJoystick": {
     "finish": "Terminer",
     "cancel": "Annuler",
@@ -1759,7 +1824,11 @@
     "wheelXOffset": "Décalage X des roues",
     "wheelXOffsetTooltip": "Décalage de l'axe des roues par rapport à base_link",
     "casterRadius": "Rayon de roulette",
-    "casterTrack": "Voie des roulettes"
+    "casterTrack": "Voie des roulettes",
+    "modelConfirmTitle": "Appliquer le préréglage du modèle ?",
+    "modelConfirmBody": "Ceci écrase les dimensions matérielles, les décalages de capteurs et les seuils de batterie — y compris les valeurs calibrées.",
+    "modelConfirmOk": "Appliquer le préréglage",
+    "modelConfirmCancel": "Annuler"
   },
   "settingsDriveMotor": {
     "savedLiveTitle": "Sauvegardé et appliqué en direct",
@@ -2372,7 +2441,11 @@
     "commandIndex": "Commande {{index}}",
     "exitCode": "code {{code}}",
     "commandSummary": "Résumé de la commande",
-    "transportError": "Erreur de transport"
+    "transportError": "Erreur de transport",
+    "dirtyAlertMessage": "Modifications GNSS non enregistrées",
+    "dirtyAlertDescription": "Enregistrez vos modifications avant de lancer une action du récepteur.",
+    "savedAlertMessage": "Paramètres GNSS enregistrés",
+    "savedAlertDescription": "Vous pouvez maintenant lancer une action du récepteur avec les paramètres actuels."
   },
   "settingsGnssLiveStatus": {
     "cardTitle": "État GNSS en direct",
@@ -2538,7 +2611,9 @@
     "robotAnatomy": "Anatomie du robot",
     "inspecting": "Inspection",
     "hoverAPart": "Survolez une pièce",
-    "legend": "Vert = sain, ambre = à surveiller."
+    "legend": "Vert = sain, ambre = à surveiller.",
+    "motorTemps": "moteur {{motor}} °C · ESC {{esc}} °C",
+    "unknown": "Inconnu"
   },
   "dashboardHeroCard": {
     "mowerNeedsYou": "La tondeuse a besoin de vous",
@@ -2773,5 +2848,28 @@
   "hookNotifications": {
     "failedToLoadConfig": "Échec du chargement de la configuration",
     "failedToSaveConfig": "Échec de l'enregistrement de la configuration"
+  },
+  "liveMapMini": {
+    "noAreaYet": "Aucune zone enregistrée",
+    "noAreaHint": "Enregistrez une zone de tonte pour voir la carte en direct."
+  },
+  "settingsPreview": {
+    "batteryReturnLine": "Retour à la base à {{low}} %, critique à {{critical}} %",
+    "batteryThresholds": "Seuils de batterie",
+    "batteryVoltageLine": "Vide {{empty}} V · Pleine {{full}} V ({{fullPct}} %)",
+    "chassisTitle": "Châssis · vue de dessus (m)",
+    "cutLabel": "coupe",
+    "emptyState": "Ajustez les réglages pour voir un aperçu en direct ici.",
+    "swathCountLabel": "{{count}} passes · espacement {{cm}} cm",
+    "swathLayoutTitle": "Disposition des passes",
+    "toolWidthNote": "La largeur d’outil pilote aussi l’espacement F2C — plus fin = plus de passes.",
+    "trackLabel": "voie"
+  },
+  "settingsReset": {
+    "overridden": "Remplacé — diffère de la valeur par défaut",
+    "resetToDefault": "Réinitialiser par défaut"
+  },
+  "settingsSchema": {
+    "loadFailed": "Échec du chargement du schéma de réglages"
   }
 }

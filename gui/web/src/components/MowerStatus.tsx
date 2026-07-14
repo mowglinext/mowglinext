@@ -232,15 +232,25 @@ export const MowerStatus = () => {
                     </Tooltip>
                 )}
                 <Dropdown menu={{items: powerMenuItems}} trigger={["click"]} placement="bottomRight">
-                    <Space size={4} style={{cursor: "pointer"}}>
-                        <PoweroffOutlined style={{
-                            color: isCharging ? colors.primary : colors.muted,
-                            fontSize: 13,
-                        }}/>
-                        <Typography.Text style={{fontSize: 12, color: colors.text}}>
-                            {batteryPercent}%
-                        </Typography.Text>
-                    </Space>
+                    {/* Real button (not a Space div) so the power menu is
+                        keyboard-focusable/activatable. type="text" keeps the
+                        chromeless icon+text look. */}
+                    <Button
+                        type="text"
+                        size="small"
+                        aria-label={t('mowerStatus.powerMenuAria')}
+                        style={{padding: '0 4px', height: 'auto'}}
+                    >
+                        <Space size={4}>
+                            <PoweroffOutlined style={{
+                                color: isCharging ? colors.primary : colors.muted,
+                                fontSize: 13,
+                            }}/>
+                            <Typography.Text style={{fontSize: 12, color: colors.text}}>
+                                {batteryPercent}%
+                            </Typography.Text>
+                        </Space>
+                    </Button>
                 </Dropdown>
             </Space>
         </>

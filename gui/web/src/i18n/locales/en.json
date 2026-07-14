@@ -146,7 +146,8 @@
     "shutdownPi": "Shut down the Raspberry Pi",
     "shutdownPiConfirm": "The system will shut down. Physical access will be required to power it back on.",
     "rearm": "Re-arm",
-    "rearmEmergencyTooltip": "Re-arm the emergency stop (the firmware decides whether the latch releases)"
+    "rearmEmergencyTooltip": "Re-arm the emergency stop (the firmware decides whether the latch releases)",
+    "powerMenuAria": "Battery and power menu"
   },
   "mowerActions": {
     "sendHomeTitle": "Send the robot back to base?",
@@ -192,6 +193,7 @@
     "stateManual": "Manual",
     "stateLowBattery": "Low battery",
     "stateCriticalBattery": "Critical battery",
+    "stateCriticalCharging": "Critical charge",
     "stateReturnFailedBattery": "Return failed (battery)",
     "stateRain": "Rain",
     "stateRainWaiting": "Waiting for rain",
@@ -365,7 +367,7 @@
     "baselineSolutionStatus": "Baseline solution status",
     "correctionAgeS": "Correction age (s)",
     "filteredPose": "Filtered Pose (map frame)",
-    "live": "Live",
+    "live": "live",
     "waiting": "Waiting...",
     "xM": "X (m)",
     "yM": "Y (m)",
@@ -411,7 +413,6 @@
     "scansReceived": "{{count}} scans received",
     "icpMonitorTitle": "ICP / Scan Matching",
     "icpMonitorShort": "ICP Monitor",
-    "live": "live",
     "icpScanMatchRate": "Scan-match rate",
     "icpRejects": "ICP rejects",
     "icpRejectBreakdown": "rmse {{rmse}} · inliers {{inliers}} · sanity {{sanity}} · diverge {{diverge}}",
@@ -544,7 +545,24 @@
     "btStateAndCoverage": "BT State & Coverage",
     "sensors": "Sensors",
     "tabRobot": "Robot",
-    "tabCalibration": "Calibration"
+    "tabCalibration": "Calibration",
+    "calibrationCancel": "Cancel",
+    "calibrationStatusErrorTitle": "Failed to load calibration status",
+    "calibrationTimedOut": "Calibration timed out",
+    "cpuTemp": "CPU: {{value}} °C",
+    "cpuTempUnknown": "CPU: --",
+    "crossCheckError": "Error",
+    "crossCheckOk": "OK",
+    "crossCheckWarn": "Warning",
+    "imuCalibrationConfirmBody": "The robot will drive forward and back several times (up to ~2 minutes). Make sure the area is clear.",
+    "imuCalibrationConfirmOk": "Start calibration",
+    "imuCalibrationConfirmTitle": "Start IMU yaw calibration?",
+    "magCalibrationConfirmBody": "The robot will rotate in place to calibrate the magnetometer. Make sure the area is clear.",
+    "magCalibrationConfirmOk": "Start calibration",
+    "magCalibrationConfirmTitle": "Start magnetometer calibration?",
+    "resetEmergencySuccess": "Emergency reset sent",
+    "snapshotErrorTitle": "Failed to load diagnostics",
+    "verdictCritical": "Critical"
   },
   "mowgliNextPage": {
     "headlineUntilHomePrefix": "Just ",
@@ -577,11 +595,14 @@
     "mowgliWithZone": "Mowgli · {{area}}",
     "mowgliNoZone": "Mowgli · no zone",
     "battery": "battery",
-    "coverageToday": "Coverage today · {{pct}} %",
+    "coverageProgress": "Area coverage · {{pct}} %",
     "liveMap": "Live map",
     "livePath": "Live path",
     "viewMap": "View map",
     "blades": "Blades",
+    "bladesOff": "off",
+    "areaN": "Area {{number}}",
+    "actionFailed": "Command failed",
     "motor": "Motor",
     "rain": "Rain",
     "rainDetected": "detected",
@@ -604,7 +625,8 @@
     "firmwareOk": "Firmware OK",
     "firmwareIncompatible": "Firmware incompatible",
     "firmwareVersion": "v{{version}}",
-    "firmwareReflash": "v{{version}} — reflash firmware to mow"
+    "firmwareReflash": "v{{version}} — reflash firmware to mow",
+    "coverageToday": "Coverage today · {{pct}} %"
   },
   "onboardingPage": {
     "preview": "Preview",
@@ -750,18 +772,30 @@
     "restartingGps": "Restarting GPS…",
     "saveAndFinish": "Save & Finish",
     "next": "Next",
-    "stepCounter": "Step {{current}} of {{total}}"
+    "stepCounter": "Step {{current}} of {{total}}",
+    "calibPendingSuffix": "({{count}} pending)"
   },
   "settingsPage": {
     "ros2Restarting": "Restarting ROS2…",
     "ros2Restarted": "ROS2 restarted",
     "ros2RestartFailed": "ROS2 restart failed",
-    "searchSettingPlaceholder": "Search a setting…"
+    "searchSettingPlaceholder": "Search a setting…",
+    "gnssSaveError": "Failed to save GNSS settings before running the receiver action",
+    "noSearchResults": "No settings match your search",
+    "restartConfirmTitle": "Restart ROS2?",
+    "restartConfirmBody": "This restarts the navigation stack. Do not restart while the robot is mowing.",
+    "restartConfirmOk": "Restart",
+    "restartConfirmCancel": "Cancel",
+    "restartRequired": "Restart required to apply saved changes",
+    "restartRos2": "Restart ROS2",
+    "revert": "Revert",
+    "saveWithCount": "Save ({{count}} changes)",
+    "saved": "Saved",
+    "unsavedChanges": "unsaved changes"
   },
   "schedulePage": {
     "planning": "Planning",
     "scheduledMows": "Scheduled mows",
-    "areaLabel": "Area {{index}}",
     "dayMon": "Mon",
     "dayTue": "Tue",
     "dayWed": "Wed",
@@ -803,6 +837,14 @@
     "activeSchedules": "active schedules",
     "schedules": "Schedules",
     "noSchedulesYet": "No schedules yet. Pick a starter below or create a custom run.",
+    "schedulesConfigured_one": "{{count}} schedule configured.",
+    "schedulesConfigured_other": "{{count}} schedules configured.",
+    "lastDayTooltip": "At least one day must stay selected",
+    "appliesToAllAreas": "Applies to all areas",
+    "blockStartHint": "start · all areas",
+    "createdDisabledTitle": "Schedule created (disabled)",
+    "createdDisabledBody": "Review the time and days, then enable it.",
+    "areaLabel": "Area {{index}}",
     "schedulesConfigured": "{{count}} schedules configured.",
     "rules": "Rules",
     "rulesDescription": "Built-in safety behaviors — always active.",
@@ -812,6 +854,10 @@
     "ruleAutoDockLowHint": "return at <20% battery",
     "on": "On",
     "off": "Off"
+  },
+  "liveMapMini": {
+    "noAreaYet": "No area recorded yet",
+    "noAreaHint": "Record a mowing area to see the live map."
   },
   "statisticsPage": {
     "statistics": "Statistics",
@@ -829,9 +875,11 @@
     "heroTotalDistance": "Total distance",
     "heroSinceInstall": "since install",
     "heroHoursActive": "Hours active",
-    "heroSessionsCount": "{{count}} sessions",
+    "heroSessionsCount_one": "{{count}} session",
+    "heroSessionsCount_other": "{{count}} sessions",
     "heroCompletionRate": "Completion rate",
-    "heroCompletedCount": "{{count}} completed",
+    "heroCompletedCount_one": "{{count}} completed",
+    "heroCompletedCount_other": "{{count}} completed",
     "heroRunsCompleted": "Runs completed",
     "heroAvgCoverage": "avg {{pct}}% coverage",
     "distancePerWeek": "Distance per week",
@@ -841,12 +889,16 @@
     "areaLabel": "Area {{index}}",
     "cellsLabel": "{{mowed}}/{{total}} cells",
     "sessionHistory": "Session history",
-    "sessionsRecorded": "{{count}} sessions recorded",
+    "sessionsRecorded_one": "{{count}} session recorded",
+    "sessionsRecorded_other": "{{count}} sessions recorded",
     "clearAllTitle": "Clear all statistics?",
     "clearAllDescription": "This permanently deletes every recorded session. This cannot be undone.",
     "clear": "Clear",
     "cancel": "Cancel",
-    "noSessionsRecorded": "No mowing sessions recorded yet."
+    "noSessionsRecorded": "No mowing sessions recorded yet.",
+    "heroSessionsCount": "{{count}} sessions",
+    "heroCompletedCount": "{{count}} completed",
+    "sessionsRecorded": "{{count}} sessions recorded"
   },
   "dashboardHome": {
     "statusMowing": "Mowing",
@@ -1353,7 +1405,10 @@
     "typeObstacle": "Obstacle",
     "areasHeader": "Areas ({{count}})",
     "moveUp": "Move up",
-    "moveDown": "Move down"
+    "moveDown": "Move down",
+    "navigationArea": "Navigation {{index}}",
+    "obstacleArea": "Obstacle {{index}}",
+    "unnamedArea": "Area {{index}}"
   },
   "mapTrackedObstacles": {
     "outsideAreaMessage": "Obstacle is outside every mowing area",
@@ -1394,7 +1449,11 @@
     "areaSubtracted": "Area subtracted",
     "selectExactlyOneToSplit": "Select exactly 1 area to split",
     "selectionMustBePolygon": "Selection must be a polygon area",
-    "drawLineAcrossArea": "Draw a line across the area to split it"
+    "drawLineAcrossArea": "Draw a line across the area to split it",
+    "deleteAreaConfirmTitle": "Delete this area?",
+    "deleteAreaConfirmBody": "The selected area (and its obstacles) will be removed. You can undo before saving.",
+    "deleteAreaConfirmOk": "Delete",
+    "deleteAreaConfirmCancel": "Cancel"
   },
   "mapFiles": {
     "areaSaved": "Area saved",
@@ -1404,10 +1463,20 @@
     "openMowerImportFailed": "OpenMower import failed",
     "openMowerMapImported": "OpenMower map imported",
     "openMowerMapImportedDescription": "Areas + dock pose written. /map should refresh shortly.",
-    "unknownType": "Unknown type {{type}}"
+    "unknownType": "Unknown type {{type}}",
+    "obstaclesDropped": "Some obstacles were dropped",
+    "obstaclesDroppedDescription": "These keep-out zones had no matching parent area and were not saved: {{ids}}",
+    "uploadEmpty": "No valid map features found in the file",
+    "uploadParseError": "Could not read the GeoJSON file",
+    "uploadSuccess": "Map imported — review, then Save to apply"
   },
   "mapStreams": {},
-  "mapPage": {},
+  "mapPage": {
+    "mapboxTokenMissingDetail": "Set VITE_MAPBOX_TOKEN to display the map tiles.",
+    "mapboxTokenMissingTitle": "Map token missing",
+    "noDatumDetail": "Waiting for a GPS datum. Configure it during onboarding or once the receiver has a fix.",
+    "noDatumTitle": "No GPS datum yet"
+  },
   "mapJoystick": {
     "finish": "Finish",
     "cancel": "Cancel",
@@ -1759,7 +1828,11 @@
     "wheelXOffset": "Wheel X Offset",
     "wheelXOffsetTooltip": "Wheel axle offset from base_link",
     "casterRadius": "Caster Radius",
-    "casterTrack": "Caster Track"
+    "casterTrack": "Caster Track",
+    "modelConfirmTitle": "Apply model preset?",
+    "modelConfirmBody": "This overwrites hardware dimensions, sensor offsets and battery thresholds — including any calibrated values.",
+    "modelConfirmOk": "Apply preset",
+    "modelConfirmCancel": "Cancel"
   },
   "settingsDriveMotor": {
     "savedLiveTitle": "Saved and applied live",
@@ -2372,7 +2445,11 @@
     "commandIndex": "Command {{index}}",
     "exitCode": "exit {{code}}",
     "commandSummary": "Command summary",
-    "transportError": "Transport Error"
+    "transportError": "Transport Error",
+    "dirtyAlertMessage": "Unsaved GNSS changes",
+    "dirtyAlertDescription": "Save your changes before running a receiver action.",
+    "savedAlertMessage": "GNSS settings saved",
+    "savedAlertDescription": "You can now run a receiver action with the current settings."
   },
   "settingsGnssLiveStatus": {
     "cardTitle": "Live GNSS Status",
@@ -2538,7 +2615,9 @@
     "robotAnatomy": "Robot anatomy",
     "inspecting": "Inspecting",
     "hoverAPart": "Hover a part",
-    "legend": "Green = healthy, amber = needs attention."
+    "legend": "Green = healthy, amber = needs attention.",
+    "motorTemps": "motor {{motor}} °C · ESC {{esc}} °C",
+    "unknown": "Unknown"
   },
   "dashboardHeroCard": {
     "mowerNeedsYou": "Mower needs you",
@@ -2773,5 +2852,24 @@
   "hookNotifications": {
     "failedToLoadConfig": "Failed to load config",
     "failedToSaveConfig": "Failed to save config"
+  },
+  "settingsPreview": {
+    "batteryReturnLine": "Returns home at {{low}} %, critical at {{critical}} %",
+    "batteryThresholds": "Battery thresholds",
+    "batteryVoltageLine": "Empty {{empty}} V · Full {{full}} V ({{fullPct}} %)",
+    "chassisTitle": "Chassis · top-down (m)",
+    "cutLabel": "cut",
+    "emptyState": "Adjust settings to see a live preview here.",
+    "swathCountLabel": "{{count}} swaths · spacing {{cm}} cm",
+    "swathLayoutTitle": "Swath layout",
+    "toolWidthNote": "Tool width also drives F2C swath spacing — thinner means more passes.",
+    "trackLabel": "track"
+  },
+  "settingsReset": {
+    "overridden": "Overridden — differs from default",
+    "resetToDefault": "Reset to default"
+  },
+  "settingsSchema": {
+    "loadFailed": "Failed to load settings schema"
   }
 }

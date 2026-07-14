@@ -1,4 +1,5 @@
 import {useCallback, useRef, useState} from "react";
+import {App} from "antd";
 import {useTranslation} from "react-i18next";
 import union from "@turf/union";
 import difference from "@turf/difference";
@@ -176,7 +177,6 @@ export function sortFeatures(
         }
     );
 
-    console.log(idxorder);
     let i = 1;
     idxorder.forEach((e) => {
         if (e instanceof MowingAreaFeature) {
@@ -269,6 +269,7 @@ export function useMapEditing({
     mapInstanceRef,
 }: UseMapEditingOptions): UseMapEditingReturn {
     const {t} = useTranslation();
+    const {modal} = App.useApp();
 
     // -----------------------------------------------------------------------
     // State
@@ -896,8 +897,17 @@ export function useMapEditing({
     }, [drawRef, mapInstanceRef, notification, t]);
 
     const handleTrash = useCallback(() => {
-        drawRef.current?.trash();
-    }, [drawRef]);
+        // Deleting an area is destructive and (until saved) only reversible via
+        // undo — gate it behind a confirm so a mistap can't wipe a zone.
+        modal.confirm({
+            title: t('mapEditing.deleteAreaConfirmTitle'),
+            content: t('mapEditing.deleteAreaConfirmBody'),
+            okText: t('mapEditing.deleteAreaConfirmOk'),
+            okType: 'danger',
+            cancelText: t('mapEditing.deleteAreaConfirmCancel'),
+            onOk: () => { drawRef.current?.trash(); },
+        });
+    }, [drawRef, modal, t]);
 
     const handleCombine = useCallback(() => {
         drawRef.current?.combineFeatures();

@@ -1,13 +1,27 @@
 import reactUseWebSocketModule from "react-use-websocket";
-import {useRef, useState} from "react";
+import {useEffect, useRef, useState} from "react";
+import {wsBase} from "../utils/apiHost";
 import {
     getMultiplexedSocket,
     isMultiplexableSubscribeUri,
     topicFromSubscribeUri,
+    type MultiplexStatus,
 } from "./multiplexedSocket.ts";
 
 // Vite 8 CJS interop may wrap the default export differently at runtime
 const useWebSocket = (reactUseWebSocketModule as unknown as { default: typeof reactUseWebSocketModule }).default ?? reactUseWebSocketModule;
+
+/**
+ * useMultiplexStatus — live connection status of the shared multiplex
+ * WebSocket. Lets the app shell render a truthful offline indicator instead
+ * of assuming the stream is up. "closed" covers both idle (no subscribers)
+ * and a dropped connection awaiting reconnect.
+ */
+export const useMultiplexStatus = (): MultiplexStatus => {
+    const [status, setStatus] = useState<MultiplexStatus>(() => getMultiplexedSocket().getStatus());
+    useEffect(() => getMultiplexedSocket().onStatusChange(setStatus), []);
+    return status;
+};
 
 /**
  * useWS — start/stop a stream of payloads from the GUI backend.
@@ -34,12 +48,18 @@ export const useWS = <T>(
     const onInfoRef = useRef(onInfo);
     onInfoRef.current = onInfo;
 
-    // Active multiplex unsubscribe (set when start() targets a subscribe URI).
+    // Active multiplex unsubscribe + status-listener unregister (set when
+    // start() targets a subscribe URI).
     const muxUnsubscribeRef = useRef<(() => void) | null>(null);
+    const muxStatusUnsubRef = useRef<(() => void) | null>(null);
 
-    // Publish-side socket (only used for non-subscribe URIs).
+    // Publish-side socket (only used for non-subscribe URIs). The state
+    // drives useWebSocket below; the ref mirrors it so teardown() never
+    // closes over a stale value.
     const [pubUri, setPubUri] = useState<string | null>(null);
+    const pubUriRef = useRef<string | null>(null);
     const pubFirstRef = useRef(true);
+    const pubDecodeWarnedRef = useRef(false);
     const ws = useWebSocket(pubUri, {
         share: true,
         shouldReconnect: () => true,
@@ -55,9 +75,19 @@ export const useWS = <T>(
             onErrorRef.current(new Error("Stream closed"));
         },
         onMessage: (e: MessageEvent) => {
+            let decoded: string;
+            try {
+                decoded = atob(e.data);
+            } catch (err) {
+                if (!pubDecodeWarnedRef.current) {
+                    pubDecodeWarnedRef.current = true;
+                    console.warn("useWS: dropping non-base64 frame", {uri: pubUriRef.current}, err);
+                }
+                return;
+            }
             const isFirst = pubFirstRef.current;
             if (isFirst) pubFirstRef.current = false;
-            onDataRef.current(atob(e.data) as T, isFirst);
+            onDataRef.current(decoded as T, isFirst);
         },
     });
 
@@ -66,7 +96,12 @@ export const useWS = <T>(
             muxUnsubscribeRef.current();
             muxUnsubscribeRef.current = null;
         }
-        if (pubUri !== null) {
+        if (muxStatusUnsubRef.current) {
+            muxStatusUnsubRef.current();
+            muxStatusUnsubRef.current = null;
+        }
+        if (pubUriRef.current !== null) {
+            pubUriRef.current = null;
             setPubUri(null);
             pubFirstRef.current = false;
         }
@@ -88,18 +123,26 @@ export const useWS = <T>(
                     onDataRef.current(data as T, isFirst);
                 },
             );
+            // Surface shared-socket drops/reconnects through the caller's
+            // handlers so they are no longer dead code on the multiplex path.
+            let sawClose = false;
+            muxStatusUnsubRef.current = getMultiplexedSocket().onStatusChange((status) => {
+                if (status === "closed") {
+                    sawClose = true;
+                    onErrorRef.current(new Error("Stream closed"));
+                } else if (status === "open" && sawClose) {
+                    sawClose = false;
+                    onInfoRef.current("Stream connected");
+                }
+            });
             return;
         }
 
         // Publish path: open a dedicated socket as before.
         pubFirstRef.current = true;
-        const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-        if (import.meta.env.DEV) {
-            const host = (import.meta.env.VITE_API_HOST as string | undefined) ?? 'localhost:4006';
-            setPubUri(`${protocol}://${host}${uri}`);
-        } else {
-            setPubUri(`${protocol}://${window.location.host}${uri}`);
-        }
+        pubDecodeWarnedRef.current = false;
+        pubUriRef.current = `${wsBase()}${uri}`;
+        setPubUri(pubUriRef.current);
     };
 
     const stop = () => {

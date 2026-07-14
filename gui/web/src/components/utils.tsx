@@ -37,6 +37,7 @@ const STATE_LABEL_KEYS: Record<string, string> = {
     MANUAL_MOWING: "stateManual",
     LOW_BATTERY_DOCKING: "stateLowBattery",
     CRITICAL_BATTERY_DOCKING: "stateCriticalBattery",
+    CRITICAL_BATTERY_CHARGING: "stateCriticalCharging",
     CRITICAL_BATTERY_NAV_FAILED: "stateReturnFailedBattery",
     RAIN_DETECTED_DOCKING: "stateRain",
     RAIN_WAITING: "stateRainWaiting",
