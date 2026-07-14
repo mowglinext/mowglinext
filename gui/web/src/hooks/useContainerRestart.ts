@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { App } from "antd";
 import { useTranslation } from "react-i18next";
+import { wsBase } from "../utils/apiHost";
 
 /**
  * Wait for ROS2 to be reachable again after a container restart.
@@ -12,11 +13,7 @@ import { useTranslation } from "react-i18next";
  */
 const waitForRos2 = (timeoutMs: number): Promise<boolean> =>
     new Promise((resolve) => {
-        const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-        const host = import.meta.env.DEV
-            ? ((import.meta.env.VITE_API_HOST as string | undefined) ?? "localhost:4006")
-            : window.location.host;
-        const url = `${protocol}://${host}/api/mowglinext/subscribe/highLevelStatus`;
+        const url = `${wsBase()}/api/mowglinext/subscribe/highLevelStatus`;
 
         let settled = false;
         const finish = (ok: boolean) => {

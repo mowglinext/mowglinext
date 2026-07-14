@@ -4,12 +4,16 @@ import { ThunderboltOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
 import { usePower } from "../../hooks/usePower.ts";
+import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 
 const { Text, Paragraph } = Typography;
 
 type Props = {
     values: Record<string, any>;
     onChange: (key: string, value: any) => void;
+    isOverridden?: (key: string) => boolean;
+    hasDefault?: (key: string) => boolean;
+    onReset?: (key: string) => void;
 };
 
 /** Visual battery gauge showing threshold positions */
@@ -111,10 +115,20 @@ const BatteryGauge: React.FC<{
     );
 };
 
-export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
+export const BatterySection: React.FC<Props> = ({ values, onChange, isOverridden, hasDefault, onReset }) => {
     const { t } = useTranslation();
     const { colors } = useThemeMode();
     const power = usePower();
+
+    const fieldLabel = (key: string, label: React.ReactNode) => (
+        <SettingFieldLabel
+            settingKey={key}
+            label={label}
+            overridden={isOverridden?.(key) ?? false}
+            canReset={hasDefault?.(key) ?? false}
+            onReset={onReset}
+        />
+    );
 
     const fullV = values.battery_full_voltage ?? 28.5;
     const emptyV = values.battery_empty_voltage ?? 24.0;
@@ -154,7 +168,7 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
                         <Row gutter={[16, 0]}>
                             <Col xs={8}>
                                 <Form.Item
-                                    label={<Text style={{ color: "#52c41a", fontSize: 12 }}>{t("settingsBattery.fullVoltage")}</Text>}
+                                    label={fieldLabel("battery_full_voltage", <Text style={{ color: "#52c41a", fontSize: 12 }}>{t("settingsBattery.fullVoltage")}</Text>)}
                                     tooltip={t("settingsBattery.fullVoltageTooltip")}
                                 >
                                     <InputNumber
@@ -167,7 +181,7 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
                             </Col>
                             <Col xs={8}>
                                 <Form.Item
-                                    label={<Text style={{ color: "#fa8c16", fontSize: 12 }}>{t("settingsBattery.emptyVoltage")}</Text>}
+                                    label={fieldLabel("battery_empty_voltage", <Text style={{ color: "#fa8c16", fontSize: 12 }}>{t("settingsBattery.emptyVoltage")}</Text>)}
                                     tooltip={t("settingsBattery.emptyVoltageTooltip")}
                                 >
                                     <InputNumber
@@ -180,7 +194,7 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
                             </Col>
                             <Col xs={8}>
                                 <Form.Item
-                                    label={<Text style={{ color: "#f5222d", fontSize: 12 }}>{t("settingsBattery.criticalVoltage")}</Text>}
+                                    label={fieldLabel("battery_critical_voltage", <Text style={{ color: "#f5222d", fontSize: 12 }}>{t("settingsBattery.criticalVoltage")}</Text>)}
                                     tooltip={t("settingsBattery.criticalVoltageTooltip")}
                                 >
                                     <InputNumber
@@ -202,7 +216,7 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
                     <Row gutter={[16, 0]}>
                         <Col xs={8}>
                             <Form.Item
-                                label={<Text style={{ color: "#52c41a", fontSize: 12 }}>{t("settingsBattery.resumeAbove")}</Text>}
+                                label={fieldLabel("battery_full_percent", <Text style={{ color: "#52c41a", fontSize: 12 }}>{t("settingsBattery.resumeAbove")}</Text>)}
                                 tooltip={t("settingsBattery.resumeAboveTooltip")}
                             >
                                 <InputNumber
@@ -215,7 +229,7 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
                         </Col>
                         <Col xs={8}>
                             <Form.Item
-                                label={<Text style={{ color: "#fa8c16", fontSize: 12 }}>{t("settingsBattery.lowDock")}</Text>}
+                                label={fieldLabel("battery_low_percent", <Text style={{ color: "#fa8c16", fontSize: 12 }}>{t("settingsBattery.lowDock")}</Text>)}
                                 tooltip={t("settingsBattery.lowDockTooltip")}
                             >
                                 <InputNumber
@@ -228,7 +242,7 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
                         </Col>
                         <Col xs={8}>
                             <Form.Item
-                                label={<Text style={{ color: "#f5222d", fontSize: 12 }}>{t("settingsBattery.critical")}</Text>}
+                                label={fieldLabel("battery_critical_percent", <Text style={{ color: "#f5222d", fontSize: 12 }}>{t("settingsBattery.critical")}</Text>)}
                                 tooltip={t("settingsBattery.criticalTooltip")}
                             >
                                 <InputNumber
@@ -243,7 +257,7 @@ export const BatterySection: React.FC<Props> = ({ values, onChange }) => {
                     <Row gutter={[16, 0]}>
                         <Col xs={8}>
                             <Form.Item
-                                label={<Text style={{ color: "#52c41a", fontSize: 12 }}>{t("settingsBattery.criticalRecovery")}</Text>}
+                                label={fieldLabel("battery_critical_recovery_percent", <Text style={{ color: "#52c41a", fontSize: 12 }}>{t("settingsBattery.criticalRecovery")}</Text>)}
                                 tooltip={t("settingsBattery.criticalRecoveryTooltip")}
                             >
                                 <InputNumber

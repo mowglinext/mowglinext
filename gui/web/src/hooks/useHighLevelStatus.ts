@@ -4,15 +4,9 @@ import {useWS} from "./useWS.ts";
 
 export const useHighLevelStatus = () => {
     const [highLevelStatus, setHighLevelStatus] = useState<HighLevelStatus>({})
-    const highLevelStatusStream = useWS<string>(() => {
-            console.log({
-                message: "High Level Status Stream closed",
-            })
-        }, () => {
-            console.log({
-                message: "High Level Status Stream connected",
-            })
-        },
+    const highLevelStatusStream = useWS<string>(
+        () => {},
+        () => {},
         (e) => {
             setHighLevelStatus((e as any))
         })

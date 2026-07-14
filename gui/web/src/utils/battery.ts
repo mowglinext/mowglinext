@@ -13,6 +13,26 @@ export const BATTERY_DEFAULTS = {
  * Falls back to linear interpolation between empty and full voltage.
  * Returns a rounded integer 0–100.
  */
+export type BatteryLevel = "ok" | "warn" | "danger";
+
+/** Thresholds shared by every battery badge/statistic on the GUI. */
+export const BATTERY_WARN_PERCENT = 50;
+export const BATTERY_DANGER_PERCENT = 20;
+
+/**
+ * Map a battery percentage to a severity level.
+ * > 50 % → ok, 21–50 % → warn, ≤ 20 % → danger.
+ */
+export const getBatteryLevel = (percent: number): BatteryLevel => {
+    if (percent <= BATTERY_DANGER_PERCENT) {
+        return "danger";
+    }
+    if (percent <= BATTERY_WARN_PERCENT) {
+        return "warn";
+    }
+    return "ok";
+};
+
 export const computeBatteryPercent = (
     batteryPercent: number | null | undefined,
     voltage: number | undefined,

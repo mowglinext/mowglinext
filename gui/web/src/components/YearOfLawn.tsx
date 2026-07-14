@@ -1,5 +1,6 @@
 import {useMemo} from "react";
 import {useTranslation} from "react-i18next";
+import i18n from "../i18n";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
 
@@ -80,9 +81,13 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
       if (km > 0) activeDays += 1;
     }
 
-    // Streak (consecutive active days ending today)
+    // Streak (consecutive active days). Today has no mow recorded until the
+    // robot runs, so counting strictly to the last cell reads 0 all morning.
+    // If today is still empty, let the streak end at yesterday instead.
+    let streakStart = cells.length - 1;
+    if (streakStart >= 0 && cells[streakStart].km <= 0) streakStart -= 1;
     let streak = 0;
-    for (let i = cells.length - 1; i >= 0; i--) {
+    for (let i = streakStart; i >= 0; i--) {
       if (cells[i].km > 0) streak += 1;
       else break;
     }
@@ -101,7 +106,7 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
     weeks.forEach((col, ci) => {
       const m = col[0].date.getMonth();
       if (m !== prevMonth) {
-        const isoMonth = col[0].date.toLocaleString(undefined, {month: 'short'});
+        const isoMonth = col[0].date.toLocaleString(i18n.language, {month: 'short'});
         monthLabels.push({col: ci, label: isoMonth});
         prevMonth = m;
       }
@@ -202,7 +207,7 @@ export function YearOfLawn({sessions}: YearOfLawnProps) {
                   fill={intensityColors[lvl]}
                   stroke={lvl === 0 ? colors.borderSubtle : 'none'}
                 >
-                  <title>{t('yearOfLawn.cellTooltip', {date: cell.date.toLocaleDateString(), km: cell.km.toFixed(2)})}</title>
+                  <title>{t('yearOfLawn.cellTooltip', {date: cell.date.toLocaleDateString(i18n.language), km: cell.km.toFixed(2)})}</title>
                 </rect>
               );
             })

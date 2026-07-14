@@ -29,8 +29,10 @@
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
+#include "mowgli_interfaces/gnss_status_utils.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
+#include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
@@ -191,7 +193,9 @@ private:
                                                    context_->lethal_boundary_violation = msg->data;
                                                  });
 
-    // GPS position and quality for heading calibration during undock
+    // GPS position for heading calibration during undock. RTK/fix-state comes
+    // from /gps/status so covariance fallout on /gps/fix does not masquerade
+    // as "no RTK fix" in the behavior tree.
     gps_sub_ = create_subscription<mowgli_interfaces::msg::AbsolutePose>(
         "/gps/absolute_pose",
         10,
@@ -234,48 +238,49 @@ private:
             }
           }
 
-          // Derive fix type from flags. The ordinal MUST be monotonic in
-          // quality (higher = better) because the undock/preflight gates use
-          // ">= min_fix_type". RTK-Fixed is the best fix, so it must be the
-          // highest value — earlier code ranked Float (5) ABOVE Fixed (4),
-          // which let a robot in RTK-Float pass a "require RTK-Fixed" (min=4)
-          // gate and undock/mow on Float-quality GPS (σ 10-50 cm). Ordering:
-          //   FLAG_GPS_RTK_FIXED → 4 (RTK fixed — best)
-          //   FLAG_GPS_RTK_FLOAT → 3 (RTK float — worse than fixed)
-          //   FLAG_GPS_RTK       → 2 (DGPS/RTK)
-          //   otherwise          → 0 (no fix / autonomous)
-          if (msg->flags & AP::FLAG_GPS_RTK_FIXED)
+          if (!has_authoritative_gnss_status_)
           {
-            context_->gps_fix_type = 4;
+            // Fallback for legacy bring-up before /gps/status arrives.
+            if (msg->flags & AP::FLAG_GPS_RTK_FIXED)
+            {
+              context_->gps_fix_type = 4;
+            }
+            else if (msg->flags & AP::FLAG_GPS_RTK_FLOAT)
+            {
+              context_->gps_fix_type = 3;
+            }
+            else if (msg->flags & AP::FLAG_GPS_RTK)
+            {
+              context_->gps_fix_type = 2;
+            }
+            else
+            {
+              context_->gps_fix_type = 0;
+            }
+            context_->gps_is_fixed =
+                (context_->gps_fix_type >= 4) && (msg->position_accuracy < 0.1f);
+            context_->gps_quality = std::clamp(1.0f - msg->position_accuracy, 0.0f, 1.0f);
           }
-          else if (msg->flags & AP::FLAG_GPS_RTK_FLOAT)
-          {
-            context_->gps_fix_type = 3;
-          }
-          else if (msg->flags & AP::FLAG_GPS_RTK)
-          {
-            context_->gps_fix_type = 2;
-          }
-          else
-          {
-            context_->gps_fix_type = 0;
-          }
+        });
 
-          // RTK fixed (fix_type >= 4) with reasonable accuracy → GPS is fixed.
-          // DEBOUNCED: the F9P fix_type flickers RTK-Fixed(4)↔Float(3) per epoch
-          // even at cm-stable position. Writing gps_is_fixed raw made it chatter,
-          // which flapped SetNavMode (precise↔degraded) on every BT tick and reset
-          // the MPPI optimizer ~5-10x/s → jerky, hesitant coverage (the robot
-          // could never warm-start a trajectory). Only flip gps_is_fixed once the
-          // raw condition has held steady for kGpsFixDebounceSec, so the per-epoch
-          // flicker is ignored while a genuine, sustained change still propagates.
+    gnss_status_sub_ = create_subscription<mowgli_interfaces::msg::GnssStatus>(
+        "/gps/status",
+        10,
+        [this](mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
+        {
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          has_authoritative_gnss_status_ = true;
+          context_->gps_fix_type = mowgli_interfaces::gnss_status_utils::BehaviorTreeFixType(*msg);
+          context_->gps_quality = mowgli_interfaces::gnss_status_utils::NormalizedQuality(*msg);
+
+          // Debounce RTK-fixed transitions so the BT does not chatter during
+          // short-lived fix-state flicker while still trusting the typed
+          // /gps/status contract rather than /gps/absolute_pose covariance.
           constexpr double kGpsFixDebounceSec = 2.0;
-          const bool raw_fixed = (context_->gps_fix_type >= 4) && (msg->position_accuracy < 0.1f);
+          const bool raw_fixed = mowgli_interfaces::gnss_status_utils::BehaviorTreeRtkFixed(*msg);
           const rclcpp::Time gps_now = this->now();
           if (!gps_fix_debounce_init_)
           {
-            // Seed on the first sample (avoids subtracting an uninitialised Time,
-            // which would also risk a clock-source mismatch exception).
             gps_fix_debounce_init_ = true;
             gps_fix_candidate_ = raw_fixed;
             gps_fix_candidate_since_ = gps_now;
@@ -293,7 +298,6 @@ private:
               context_->gps_is_fixed = gps_fix_candidate_;
             }
           }
-          context_->gps_quality = std::clamp(1.0f - msg->position_accuracy, 0.0f, 1.0f);
         });
 
     // collision_monitor state — used by IsObstacleStuck to detect when
@@ -727,6 +731,7 @@ private:
   bool gps_fix_debounce_init_{false};
   bool gps_fix_candidate_{false};
   rclcpp::Time gps_fix_candidate_since_;
+  bool has_authoritative_gnss_status_{false};
 
   // Subscribers
   rclcpp::Subscription<mowgli_interfaces::msg::Status>::SharedPtr status_sub_;
@@ -736,6 +741,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr boundary_violation_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr lethal_boundary_violation_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::AbsolutePose>::SharedPtr gps_sub_;
+  rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr gnss_status_sub_;
   rclcpp::Subscription<nav2_msgs::msg::CollisionMonitorState>::SharedPtr collision_monitor_sub_;
 
   // Service server

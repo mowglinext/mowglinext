@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useState} from "react";
 import {useTranslation} from "react-i18next";
+import i18n from "../i18n";
 import {Table, Tag, Button, Popconfirm, message} from "antd";
 import {DeleteOutlined} from "@ant-design/icons";
 import {useApi} from "../hooks/useApi.ts";
@@ -65,7 +66,7 @@ function formatDistanceUnit(meters: number): string {
 
 function formatDate(timestamp: string): string {
   if (!timestamp) return "--";
-  return new Date(timestamp).toLocaleString(undefined, {
+  return new Date(timestamp).toLocaleString(i18n.language, {
     month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
   });
 }
@@ -118,7 +119,9 @@ export const StatisticsPage = () => {
 
   // Generate fake weekly data from sessions for the bar chart
   const weeklyBars = Array.from({length: 12}, (_, i) => {
-    const weekAgo = 12 - i;
+    // i=0 is the oldest column (11 weeks ago), i=11 is the current week
+    // (diffWeeks === 0). Using 12 - i skipped week 0 and hid the current week.
+    const weekAgo = 11 - i;
     const weekSessions = sessions.filter(s => {
       const d = new Date(s.start_time);
       const now = new Date();
@@ -133,8 +136,8 @@ export const StatisticsPage = () => {
     {
       title: t('statisticsPage.colDate'), dataIndex: "start_time", key: "start_time",
       sorter: (a: MowingSession, b: MowingSession) =>
-        new Date(b.start_time).getTime() - new Date(a.start_time).getTime(),
-      defaultSortOrder: "ascend" as const,
+        new Date(a.start_time).getTime() - new Date(b.start_time).getTime(),
+      defaultSortOrder: "descend" as const,
       render: (v: string) => <span style={{fontSize: 13}}>{formatDate(v)}</span>,
     },
     ...(!isMobile ? [{

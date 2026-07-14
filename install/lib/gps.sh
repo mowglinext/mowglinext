@@ -66,6 +66,10 @@ preset_key_loaded() {
 configure_gps() {
   step "Universal GNSS configuration"
 
+  if declare -F apply_existing_yaml_gnss_state >/dev/null 2>&1; then
+    apply_existing_yaml_gnss_state
+  fi
+
   : "${GNSS_BACKEND:=universal}"
   : "${GNSS_STATUS_SOURCE:=universal}"
   : "${GNSS_STACK:=universal}"

@@ -3,6 +3,7 @@ import {useApi} from "../hooks/useApi.ts";
 import {App} from "antd";
 import turfArea from "@turf/area";
 import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import {useTranslation} from "react-i18next";
 import {MapArea, Map as MapType} from "../types/ros.ts";
 import DrawControl from "../components/DrawControl.tsx";
 import Map, {Layer, Source} from 'react-map-gl/mapbox';
@@ -38,8 +39,14 @@ import {useIsMobile} from "../hooks/useIsMobile.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 
 
+// Mapbox access token comes from the build env only — no hardcoded fallback.
+// When it is missing the page renders a clear error panel instead of a broken
+// (blank) map, so the misconfiguration is obvious rather than silent.
+const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
+
 export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const {notification} = App.useApp();
+    const {t} = useTranslation();
     const {colors} = useThemeMode();
     const isMobile = useIsMobile();
     const mowerAction = useMowerAction()
@@ -100,6 +107,9 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const robotPoseRef = useRef<{ x: number; y: number; heading: number } | null>(null)
     const mapInstanceRef = useRef<MapboxMap | null>(null)
     const drawRef = useRef<import('@mapbox/mapbox-gl-draw').default | null>(null);
+    // Stable ref to the 'rotateend' listener so it can be removed on unmount
+    // (StrictMode mounts twice, otherwise the handler stacks).
+    const rotateEndHandlerRef = useRef<(() => void) | null>(null);
 
     // Only include editable polygon features for DrawControl — exclude mower,
     // paths, and other display-only features so that frequent pose updates don't
@@ -356,10 +366,12 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             .filter((f): f is MowingAreaFeature => f instanceof MowingAreaFeature)
             .sort((a, b) => (a.getMowingOrder() ?? 9999) - (b.getMowingOrder() ?? 9999));
         for (let i = 0; i < workareas.length; ++i) {
-            names[i] = workareas[i].getLabel();
+            names[i] = workareas[i].getLabel(
+                t('mapAreasList.unnamedArea', {order: workareas[i].getMowingOrder()})
+            );
         }
         return names;
-    }, [features]);
+    }, [features, t]);
 
     // Build the areas list for the sidebar panel
     const areasList = useMemo(() => {
@@ -375,7 +387,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 if (ta !== tb) return ta - tb;
                 return (a.properties.mowing_order ?? 0) - (b.properties.mowing_order ?? 0);
             })
-            .map((f) => {
+            .map((f, i, arr) => {
                 const areaSqm = turfArea(f);
                 const areaLabel = areaSqm >= 10000
                     ? `${(areaSqm / 10000).toFixed(2)} ha`
@@ -383,16 +395,19 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 const ftype = f.properties.feature_type;
                 let name = '';
                 if (f instanceof MowingAreaFeature) {
-                    name = f.getLabel();
+                    name = f.getLabel(t('mapAreasList.unnamedArea', {order: f.getMowingOrder()}));
                 } else if (f instanceof NavigationFeature) {
-                    name = `Navigation ${f.id}`;
+                    // Short 1-based ordinal within its own type, not the raw id.
+                    const navIdx = arr.slice(0, i).filter(x => x instanceof NavigationFeature).length + 1;
+                    name = t('mapAreasList.navigationArea', {index: navIdx});
                 } else if (f instanceof ObstacleFeature) {
-                    name = `Obstacle ${f.id}`;
+                    const obsIdx = arr.slice(0, i).filter(x => x instanceof ObstacleFeature).length + 1;
+                    name = t('mapAreasList.obstacleArea', {index: obsIdx});
                 }
                 const mowingOrder = f instanceof MowingAreaFeature ? f.getMowingOrder() : undefined;
                 return { id: f.id, name, ftype, areaLabel, mowingOrder };
             });
-    }, [features]);
+    }, [features, t]);
 
     const handleReorder = useCallback((id: string, direction: 'up' | 'down') => {
         setFeatures((curr) => {
@@ -493,8 +508,31 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
 
     const {manualMode, handleManualMode, handleStopManualMode, handleJoyMove, handleJoyStop} = useManualMode({mowerAction, joyStream, stateName: highLevelStatus.highLevelStatus.state_name});
 
+    // Toggle dock placement mode: re-pressing the button (or pressing Escape)
+    // cancels it, so the crosshair cursor is not a one-way trap.
     const handleDockPlacement = useCallback(() => {
-        setDockPlacementMode(true);
+        setDockPlacementMode(prev => !prev);
+    }, []);
+
+    // Escape cancels an armed dock placement.
+    useEffect(() => {
+        if (!dockPlacementMode) return;
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape") setDockPlacementMode(false);
+        };
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, [dockPlacementMode]);
+
+    // Remove the map's 'rotateend' listener on unmount (added in onLoad).
+    useEffect(() => {
+        return () => {
+            const m = mapInstanceRef.current;
+            if (m && rotateEndHandlerRef.current) {
+                m.off('rotateend', rotateEndHandlerRef.current);
+                rotateEndHandlerRef.current = null;
+            }
+        };
     }, []);
 
     const handleMapClick = useCallback((e: {lngLat: {lng: number; lat: number}}) => {
@@ -550,8 +588,41 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         onRecordCancel: mowerAction("high_level_control", {Command: 6}),
     }), [mowerAction, highLevelStatus.highLevelStatus.state_name]);
 
+    // Centered message panel used for the missing-token and missing-datum
+    // states — a plain, translated explanation instead of an eternal spinner
+    // or a broken map.
+    const CenteredMessage: React.FC<{title: string; detail?: string}> = ({title, detail}) => (
+        <div style={{
+            width: '100%',
+            height: '100%',
+            minHeight: compact ? undefined : 240,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+            textAlign: 'center',
+            padding: 24,
+            color: colors.textSecondary,
+            background: colors.bgCard,
+            borderRadius: 12,
+        }}>
+            <div style={{fontSize: compact ? 14 : 16, fontWeight: 600, color: colors.text}}>{title}</div>
+            {detail && <div style={{fontSize: compact ? 12 : 14}}>{detail}</div>}
+        </div>
+    );
+
+    if (!MAPBOX_TOKEN) {
+        return <CenteredMessage
+            title={t('mapPage.mapboxTokenMissingTitle')}
+            detail={t('mapPage.mapboxTokenMissingDetail')}
+        />;
+    }
     if (_datumLon == 0 || _datumLat == 0) {
-        return <Spinner/>
+        return <CenteredMessage
+            title={t('mapPage.noDatumTitle')}
+            detail={t('mapPage.noDatumDetail')}
+        />;
     }
     if (compact) {
         return (
@@ -562,7 +633,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                                          projection={{
                                                              name: "globe"
                                                          }}
-                                                         mapboxAccessToken={import.meta.env.VITE_MAPBOX_TOKEN || "pk.eyJ1IjoiY2VkYm9zc25lbyIsImEiOiJjbGxldjB4aDEwOW5vM3BxamkxeWRwb2VoIn0.WOccbQZZyO1qfAgNxnHAnA"}
+                                                         mapboxAccessToken={MAPBOX_TOKEN}
                                                          initialViewState={{
                                                              bounds: [{lng: map_sw[0], lat: map_sw[1]}, {lng: map_ne[0], lat: map_ne[1]}],
                                                              bearing,
@@ -715,7 +786,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                                          projection={{
                                                              name: "globe"
                                                          }}
-                                                         mapboxAccessToken={import.meta.env.VITE_MAPBOX_TOKEN || "pk.eyJ1IjoiY2VkYm9zc25lbyIsImEiOiJjbGxldjB4aDEwOW5vM3BxamkxeWRwb2VoIn0.WOccbQZZyO1qfAgNxnHAnA"}
+                                                         mapboxAccessToken={MAPBOX_TOKEN}
                                                          initialViewState={{
                                                              bounds: [{lng: map_sw[0], lat: map_sw[1]}, {lng: map_ne[0], lat: map_ne[1]}],
                                                              bearing,
@@ -728,8 +799,12 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                                              // Capture user-driven rotation (right-click drag on
                                                              // desktop, two-finger rotate on touch — both enabled
                                                              // by default in mapbox-gl) and persist via the same
-                                                             // debounced handler the slider uses.
-                                                             m.on('rotateend', () => handleBearing(m.getBearing()));
+                                                             // debounced handler the slider uses. Keep a stable ref
+                                                             // so the unmount effect can remove it (StrictMode
+                                                             // mounts twice, otherwise the handler stacks).
+                                                             const onRotateEnd = () => handleBearing(m.getBearing());
+                                                             rotateEndHandlerRef.current = onRotateEnd;
+                                                             m.on('rotateend', onRotateEnd);
                                                          }}
                                                          onClick={handleMapClick}
                                                          cursor={dockPlacementMode ? 'crosshair' : undefined}

@@ -56,9 +56,19 @@ export const LogsPage = () => {
     const [autoScroll, setAutoScroll] = useState(true);
     const nextIdRef = useRef(0);
     const listRef = useRef<HTMLDivElement | null>(null);
+    // useWS.onClose fires for BOTH server-side drops and our own stop()/container
+    // switches. Flag the deliberate ones so we don't surface an error toast for
+    // an intentional stop or a container change.
+    const intentionalStopRef = useRef(false);
 
     const stream = useWS<string>(
-        () => { notification.error({message: t('logsPage.streamClosed')}); },
+        () => {
+            if (intentionalStopRef.current) {
+                intentionalStopRef.current = false;
+                return;
+            }
+            notification.error({message: t('logsPage.streamClosed')});
+        },
         () => { /* connected */ },
         (line, first) => {
             setLogs(prev => {
@@ -105,7 +115,8 @@ export const LogsPage = () => {
         nextIdRef.current = 0;
         setLogs([]);
         stream.start(`/api/containers/${containerId}/logs`);
-        return () => { stream?.stop(); };
+        // Switching containers (or unmounting) closes the socket on purpose.
+        return () => { intentionalStopRef.current = true; stream?.stop(); };
     }, [containerId]);
 
     const commandContainer = (command: "start" | "stop" | "restart") => async () => {
@@ -121,6 +132,8 @@ export const LogsPage = () => {
             if (command === "start" || command === "restart") {
                 stream.start(`/api/containers/${containerId}/logs`);
             } else {
+                // Stopping the container intentionally closes the stream.
+                intentionalStopRef.current = true;
                 stream?.stop();
             }
             await listContainers();
@@ -151,11 +164,15 @@ export const LogsPage = () => {
         return c;
     }, [logs]);
 
+    // Once the buffer hits MAX_LINES, filtered.length plateaus even as new
+    // lines keep arriving, so an effect keyed on it stops firing and autoscroll
+    // dies. Key on the last line's monotonic id, which always advances.
+    const lastLineId = filtered.length > 0 ? filtered[filtered.length - 1].id : -1;
     useEffect(() => {
         if (!autoScroll) return;
         const el = listRef.current;
         if (el) el.scrollTop = el.scrollHeight;
-    }, [filtered.length, autoScroll]);
+    }, [lastLineId, autoScroll]);
 
     const handleScroll = () => {
         const el = listRef.current;

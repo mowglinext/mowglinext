@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "generate:api": "swagger-typescript-api generate -p ../docs/swagger.json -o src/api"
+    "generate:api": "swagger-typescript-api generate -p ../docs/swagger.json -o src/api",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@formily/antd-v5": "^1.2.4",
@@ -30,7 +32,6 @@
     "lucide-react": "^1.17.0",
     "mapbox-gl": "^3.20.0",
     "match-sorter": "^8.2.0",
-    "moment": "^2.30.1",
     "msgpackr": "^1.11.2",
     "prop-types": "^15.8.1",
     "react": "^19.2.4",
@@ -46,6 +47,7 @@
     "usng.js": "^0.4.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.50.0",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",

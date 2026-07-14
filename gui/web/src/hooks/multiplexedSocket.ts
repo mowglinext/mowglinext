@@ -18,6 +18,18 @@ import {unpack} from "msgpackr";
 
 type Listener = (data: unknown, first: boolean) => void;
 
+/**
+ * Public connection status. "closed" covers both never-connected/idle and a
+ * dropped connection awaiting reconnect — consumers only need to know whether
+ * live data can currently arrive.
+ */
+export type MultiplexStatus = "connecting" | "open" | "closed";
+
+type StatusListener = (status: MultiplexStatus) => void;
+
+/** Minimum interval between "malformed frame" console warnings. */
+const DECODE_WARN_INTERVAL_MS = 10_000;
+
 interface ServerFrame {
     topic: string;
     data: unknown;
@@ -38,9 +50,46 @@ class MultiplexedSocket {
     private pendingFirst = new WeakSet<Listener>();
     private reconnectAttempt = 0;
     private reconnectTimer: number | null = null;
+    private statusListeners = new Set<StatusListener>();
+    private lastDecodeWarnAt = 0;
 
     constructor(url: string) {
         this.url = url;
+    }
+
+    /** Current status for the shared connection ("closed" when idle). */
+    getStatus(): MultiplexStatus {
+        switch (this.state) {
+            case "open":
+                return "open";
+            case "connecting":
+                return "connecting";
+            default:
+                return "closed";
+        }
+    }
+
+    /**
+     * Register for status transitions (connecting → open → closed → ...).
+     * Returns an unregister function. The callback is NOT invoked with the
+     * current status on registration — read {@link getStatus} for that.
+     */
+    onStatusChange(cb: StatusListener): () => void {
+        this.statusListeners.add(cb);
+        return () => {
+            this.statusListeners.delete(cb);
+        };
+    }
+
+    private notifyStatus(): void {
+        const status = this.getStatus();
+        for (const cb of Array.from(this.statusListeners)) {
+            try {
+                cb(status);
+            } catch (err) {
+                console.error("MultiplexedSocket: status listener threw", err);
+            }
+        }
     }
 
     subscribe(topic: string, listener: Listener): () => void {
@@ -79,9 +128,11 @@ class MultiplexedSocket {
                 clearTimeout(this.reconnectTimer);
                 this.reconnectTimer = null;
             }
-            // Close the live socket if open; onclose will not reconnect
-            // because the listeners map is now empty.
-            if (this.state === "open" && this.ws) {
+            // Close the socket whether open OR still connecting — an in-flight
+            // handshake with no listeners left would otherwise become an
+            // orphan connection. onclose will not reconnect because the
+            // listeners map is now empty.
+            if (this.ws) {
                 try { this.ws.close(); } catch { /* ignore */ }
             }
         }
@@ -91,6 +142,7 @@ class MultiplexedSocket {
         if (this.state !== "idle") return;
         if (this.listeners.size === 0) return;
         this.state = "connecting";
+        this.notifyStatus();
 
         const ws = new WebSocket(this.url);
         // Server frames are MessagePack binary; receive them as ArrayBuffer.
@@ -98,8 +150,15 @@ class MultiplexedSocket {
         this.ws = ws;
 
         ws.onopen = () => {
+            // Every subscriber may have gone away during the handshake —
+            // don't keep an orphan connection alive.
+            if (this.listeners.size === 0) {
+                try { ws.close(); } catch { /* ignore */ }
+                return;
+            }
             this.state = "open";
             this.reconnectAttempt = 0;
+            this.notifyStatus();
             // Re-subscribe to every topic that still has listeners.
             for (const topic of this.listeners.keys()) {
                 this.send({op: "subscribe", topic});
@@ -112,7 +171,8 @@ class MultiplexedSocket {
             try {
                 if (!(e.data instanceof ArrayBuffer)) return;
                 frame = unpack(new Uint8Array(e.data)) as ServerFrame;
-            } catch {
+            } catch (err) {
+                this.warnDecodeFailure(e.data, err);
                 return;
             }
             const set = this.listeners.get(frame.topic);
@@ -138,11 +198,31 @@ class MultiplexedSocket {
         ws.onclose = () => {
             this.ws = null;
             this.state = "idle";
+            this.notifyStatus();
             // Reconnect only if there's still something to listen for.
             if (this.listeners.size > 0) {
                 this.scheduleReconnect();
             }
         };
+    }
+
+    /**
+     * Rate-limited (max one per {@link DECODE_WARN_INTERVAL_MS}) warning for
+     * frames that fail msgpack decoding. The topic is part of the frame that
+     * failed to decode, so only the raw size + subscribed topics are known.
+     */
+    private warnDecodeFailure(data: ArrayBuffer, err: unknown): void {
+        const now = Date.now();
+        if (now - this.lastDecodeWarnAt < DECODE_WARN_INTERVAL_MS) return;
+        this.lastDecodeWarnAt = now;
+        console.warn(
+            "MultiplexedSocket: dropping undecodable frame",
+            {
+                byteLength: data.byteLength,
+                subscribedTopics: Array.from(this.listeners.keys()),
+            },
+            err,
+        );
     }
 
     private scheduleReconnect(): void {
@@ -165,16 +245,12 @@ class MultiplexedSocket {
     }
 }
 
+import {wsBase} from "../utils/apiHost";
+
 let singleton: MultiplexedSocket | null = null;
 
 function multiplexUrl(): string {
-    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    if (import.meta.env.DEV) {
-        // VITE_API_HOST=10.69.4.198:4006 points the dev WS at a remote backend.
-        const host = (import.meta.env.VITE_API_HOST as string | undefined) ?? 'localhost:4006';
-        return `${protocol}://${host}/api/mowglinext/multiplex`;
-    }
-    return `${protocol}://${window.location.host}/api/mowglinext/multiplex`;
+    return `${wsBase()}/api/mowglinext/multiplex`;
 }
 
 export function getMultiplexedSocket(): MultiplexedSocket {

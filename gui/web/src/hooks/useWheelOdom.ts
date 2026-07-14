@@ -1,5 +1,4 @@
-import {useEffect, useState} from "react";
-import {useWS} from "./useWS.ts";
+import {useTopic} from "./useTopic.ts";
 
 export interface WheelOdom {
     header?: { stamp?: { sec: number; nanosec: number }; frame_id?: string };
@@ -22,20 +21,7 @@ export interface WheelOdom {
 
 /**
  * Subscribes to /wheel_odom — raw wheel-derived odometry from the hardware
- * bridge (pre-EKF). Useful in Diagnostics to verify encoder integration
+ * bridge (pre-fusion). Useful in Diagnostics to verify encoder integration
  * independently of the fused map-frame estimate.
  */
-export const useWheelOdom = () => {
-    const [odom, setOdom] = useState<WheelOdom>({})
-    const stream = useWS<string>(() => {
-        }, () => {
-        },
-        (e) => {
-            setOdom((e as any))
-        })
-    useEffect(() => {
-        stream.start("/api/mowglinext/subscribe/wheelOdom")
-        return () => { stream.stop() }
-    }, []);
-    return odom;
-};
+export const useWheelOdom = (): WheelOdom => useTopic<WheelOdom>("wheelOdom", {}).data;

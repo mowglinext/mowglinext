@@ -1,4 +1,4 @@
-import {App, Select, Switch, TimePicker} from "antd";
+import {App, Switch, Tag, TimePicker, Tooltip} from "antd";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {useTranslation} from "react-i18next";
 import type {TFunction} from "i18next";
@@ -27,6 +27,16 @@ function areaLabel(t: TFunction, index: number, name: string | undefined): strin
   return name ? `${index + 1}. ${name}` : t('schedulePage.areaLabel', {index: index + 1});
 }
 
+/** Pull a human-readable message out of an unknown thrown API error. */
+function errorMessage(e: unknown): string | undefined {
+  if (e instanceof Error && e.message) return e.message;
+  if (typeof e === "object" && e !== null) {
+    const err = (e as {error?: {error?: string}; message?: string});
+    return err.error?.error ?? err.message;
+  }
+  return undefined;
+}
+
 export const SchedulePage = () => {
   const {t} = useTranslation();
   const {colors} = useThemeMode();
@@ -52,12 +62,6 @@ export const SchedulePage = () => {
     mapStream.start("/api/mowglinext/subscribe/map");
     return () => { mapStream.stop(); };
   }, []);
-
-  const areaOptions = workingAreas.length > 0
-    ? workingAreas.map((name, index) => ({label: areaLabel(t, index, name), value: index}))
-    : Array.from({length: Math.max(1, schedules.reduce((max, s) => Math.max(max, s.area + 1), 1))}, (_, i) => ({
-        label: areaLabel(t, i, undefined), value: i,
-      }));
 
   const fetchSchedules = useCallback(async () => {
     try {
@@ -85,8 +89,14 @@ export const SchedulePage = () => {
         format: "json",
       });
       await fetchSchedules();
-    } catch {
-      notification.error({message: t('schedulePage.failedToCreate')});
+      // New schedules are created disabled for safety; tell the operator so an
+      // untouched starter template doesn't silently never run.
+      notification.info({
+        message: t('schedulePage.createdDisabledTitle'),
+        description: t('schedulePage.createdDisabledBody'),
+      });
+    } catch (e) {
+      notification.error({message: t('schedulePage.failedToCreate'), description: errorMessage(e)});
     } finally {
       setLoading(false);
     }
@@ -155,8 +165,8 @@ export const SchedulePage = () => {
     try {
       await guiApi.request({path: `/schedules/${sched.id}`, method: "PUT", body: sched, format: "json"});
       await fetchSchedules();
-    } catch {
-      notification.error({message: t('schedulePage.failedToUpdate')});
+    } catch (e) {
+      notification.error({message: t('schedulePage.failedToUpdate'), description: errorMessage(e)});
     }
   };
 
@@ -164,8 +174,8 @@ export const SchedulePage = () => {
     try {
       await guiApi.request({path: `/schedules/${id}`, method: "DELETE", format: "json"});
       await fetchSchedules();
-    } catch {
-      notification.error({message: t('schedulePage.failedToDelete')});
+    } catch (e) {
+      notification.error({message: t('schedulePage.failedToDelete'), description: errorMessage(e)});
     }
   };
 
@@ -181,7 +191,11 @@ export const SchedulePage = () => {
   };
 
   const toggleDay = (sched: Schedule, day: number) => {
-    const days = sched.daysOfWeek.includes(day)
+    const isRemoving = sched.daysOfWeek.includes(day);
+    // A schedule with zero days is meaningless and the backend rejects it with
+    // a generic 400. Block un-toggling the last remaining day client-side.
+    if (isRemoving && sched.daysOfWeek.length <= 1) return;
+    const days = isRemoving
       ? sched.daysOfWeek.filter(d => d !== day)
       : [...sched.daysOfWeek, day];
     handleUpdate({...sched, daysOfWeek: days});
@@ -209,9 +223,6 @@ export const SchedulePage = () => {
 
   // Schedule card for each schedule (mobile + bottom section on desktop)
   const scheduleCard = (sched: Schedule, idx: number) => {
-    const optionsWithCurrent = areaOptions.some((o) => o.value === sched.area)
-      ? areaOptions
-      : [...areaOptions, {label: areaLabel(t, sched.area, undefined), value: sched.area}];
     const color = schedColors[idx % schedColors.length];
     return (
       <DashCard key={sched.id} style={{display: 'flex', flexDirection: 'column', gap: 12}}>
@@ -221,13 +232,11 @@ export const SchedulePage = () => {
             checked={sched.enabled}
             onChange={(checked) => handleUpdate({...sched, enabled: checked})}
           />
-          <Select
-            value={sched.area}
-            size="small"
-            style={{flex: 1}}
-            options={optionsWithCurrent}
-            onChange={(val) => handleUpdate({...sched, area: val})}
-          />
+          {/* The backend always issues a full COMMAND_START (see scheduler.go),
+              so the per-schedule area is never honoured. Surface a read-only
+              note instead of a misleading selector; the data field is kept for
+              forward-compat. */}
+          <Tag style={{marginLeft: 'auto'}}>{t('schedulePage.appliesToAllAreas')}</Tag>
         </div>
         <TimePicker
           value={dayjs(sched.time, "HH:mm")}
@@ -239,22 +248,27 @@ export const SchedulePage = () => {
         <div style={{display: 'flex', gap: 6, justifyContent: 'space-between'}}>
           {DAY_LETTER_KEYS.map((letterKey, i) => {
             const isActive = sched.daysOfWeek.includes(i);
-            return (
+            const isLastDay = isActive && sched.daysOfWeek.length <= 1;
+            const dayButton = (
               <button
                 key={i}
                 onClick={() => toggleDay(sched, i)}
+                disabled={isLastDay}
                 style={{
                   width: 44, height: 44, borderRadius: '50%',
                   border: `1.5px solid ${isActive ? color : colors.border}`,
                   background: isActive ? `${color}20` : 'transparent',
                   color: isActive ? color : colors.textSecondary,
-                  fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                  fontSize: 13, fontWeight: 600, cursor: isLastDay ? 'not-allowed' : 'pointer',
                   transition: 'all 0.15s', padding: 0, fontFamily: FONT,
                 }}
               >
                 {t(`schedulePage.${letterKey}`)}
               </button>
             );
+            return isLastDay
+              ? <Tooltip key={i} title={t('schedulePage.lastDayTooltip')}>{dayButton}</Tooltip>
+              : dayButton;
           })}
         </div>
         <div style={{

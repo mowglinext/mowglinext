@@ -1,5 +1,5 @@
 import {type ReactNode, useEffect, useMemo, useState} from "react";
-import {Outlet, useMatches, useNavigate} from "react-router-dom";
+import {useMatches, useNavigate, useOutlet} from "react-router-dom";
 import {AnimatePresence, motion, LayoutGroup} from "framer-motion";
 import {
   Home, Map as MapIcon, Calendar, Compass, Settings, Terminal, Rocket, Activity,
@@ -12,12 +12,16 @@ import {MowerStatus} from "./MowerStatus.tsx";
 import {NotificationBell} from "./NotificationBell.tsx";
 import {LanguageSwitcher} from "./LanguageSwitcher.tsx";
 import {LiveStatusStrip} from "./LiveStatusStrip.tsx";
+import {IOSInstallBanner} from "./IOSInstallBanner.tsx";
+import {useIOSInstallPrompt} from "../hooks/useIOSInstallPrompt.ts";
 import {useAutoNotifications} from "../hooks/useNotificationCenter.tsx";
 import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
 import {useEmergency} from "../hooks/useEmergency.ts";
 import {useStatus} from "../hooks/useStatus.ts";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
+import {BRAND_GRADIENT} from "../theme/colors.ts";
+import {httpBase} from "../utils/apiHost.ts";
 import {KEYFRAMES_CSS} from "./dashboard";
 import "../concept/concept.css";
 
@@ -94,10 +98,7 @@ export function AppShell() {
     if (configChecked) return;
     (async () => {
       try {
-        const base = import.meta.env.DEV
-          ? `http://${(import.meta.env.VITE_API_HOST as string | undefined) ?? 'localhost:4006'}`
-          : '';
-        const res = await fetch(`${base}/api/settings/status`);
+        const res = await fetch(`${httpBase()}/api/settings/status`);
         const data = await res.json();
         if (!data.onboarding_completed && currentPath !== '/onboarding') {
           navigate({pathname: '/onboarding'});
@@ -123,6 +124,10 @@ export function AppShell() {
   const bottomItems = useMemo(() => NAV.filter(n => n.showInBottom), []);
   const overflowItems = useMemo(() => NAV.filter(n => !n.showInBottom), []);
   const [moreOpen, setMoreOpen] = useState(false);
+
+  // iOS "Add to Home Screen" hint — only ever shows on iOS Safari outside
+  // standalone mode, and stays dismissed for the session (sessionStorage).
+  const {showPrompt: showInstallBanner, dismiss: dismissInstallBanner} = useIOSInstallPrompt();
 
   if (isMobile) {
     return (
@@ -172,6 +177,8 @@ export function AppShell() {
         }}>
           <AnimatedOutlet currentPath={currentPath}/>
         </main>
+
+        {showInstallBanner && <IOSInstallBanner onDismiss={dismissInstallBanner}/>}
 
         <MobileMoreSheet
           open={moreOpen}
@@ -269,6 +276,14 @@ function AuroraBackdrop() {
 }
 
 function AnimatedOutlet({currentPath}: {currentPath: string}) {
+  // Snapshot the outlet ELEMENT here instead of rendering a live <Outlet/>.
+  // AnimatePresence (mode="wait") keeps the outgoing motion.div mounted while
+  // it fades out; a live <Outlet/> inside it subscribes to router context and
+  // re-renders the exiting div with the NEW route's content — a redirect
+  // during initial load then leaves the page blank or stuck mid-fade. With
+  // useOutlet() the element is captured per render/location, so the cached
+  // exiting div keeps the OLD page and the freshly keyed div gets the new one.
+  const outlet = useOutlet();
   return (
     <AnimatePresence mode="wait">
       <motion.div
@@ -279,7 +294,7 @@ function AnimatedOutlet({currentPath}: {currentPath: string}) {
         transition={{duration: 0.28, ease: [0.2, 0.7, 0.2, 1]}}
         style={{height: '100%'}}
       >
-        <Outlet/>
+        {outlet}
       </motion.div>
     </AnimatePresence>
   );
@@ -312,7 +327,7 @@ function DesktopSideRail({items, activePath, onNavigate}: RailProps) {
       }}>
         <div style={{
           width: 44, height: 44, borderRadius: 14,
-          background: 'linear-gradient(135deg, #7CFFB2 0%, #45D688 50%, #2BAA66 100%)',
+          background: BRAND_GRADIENT,
           color: '#02110D',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontFamily: 'Satoshi', fontWeight: 900, fontSize: 22, lineHeight: 1,
@@ -358,7 +373,7 @@ function DesktopSideRail({items, activePath, onNavigate}: RailProps) {
                     layoutId="app-rail-pill"
                     style={{
                       position: 'absolute', inset: 0,
-                      background: 'linear-gradient(135deg, #7CFFB2 0%, #45D688 50%, #2BAA66 100%)',
+                      background: BRAND_GRADIENT,
                       borderRadius: 14,
                       boxShadow: '0 12px 26px -6px rgba(124, 255, 178, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.32)',
                       zIndex: -1,
@@ -397,7 +412,7 @@ const bottomNavPill = (
     layoutId="app-bottom-pill"
     style={{
       position: 'absolute', inset: 0,
-      background: 'linear-gradient(135deg, #7CFFB2 0%, #45D688 50%, #2BAA66 100%)',
+      background: BRAND_GRADIENT,
       borderRadius: 999,
       boxShadow: '0 6px 20px -6px rgba(124, 255, 178, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.3)',
       zIndex: -1,
@@ -463,6 +478,17 @@ interface MoreSheetProps {
 
 function MobileMoreSheet({open, items, activePath, onClose, onNavigate}: MoreSheetProps) {
   const {t} = useTranslation();
+
+  // Escape closes the sheet (keyboard parity with the backdrop tap / X button).
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [open, onClose]);
+
   return (
     <AnimatePresence>
       {open && (

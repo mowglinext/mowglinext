@@ -1,5 +1,4 @@
-import {useEffect, useState} from "react";
-import {useWS} from "./useWS.ts";
+import {useTopic} from "./useTopic.ts";
 import type {FusionOdom} from "./useFusionOdom.ts";
 
 /**
@@ -9,22 +8,4 @@ import type {FusionOdom} from "./useFusionOdom.ts";
  * Used to compare ICP heading/pose against the fused/GPS estimate in the
  * Diagnostics ICP panel. Same Odometry shape as useFusionOdom.
  */
-export const useIcpOdom = () => {
-    const [odom, setOdom] = useState<FusionOdom>({});
-    const stream = useWS<string>(
-        () => { /* closed */ },
-        () => { /* connected */ },
-        (e) => {
-            try {
-                setOdom((e as any));
-            } catch {
-                /* ignore malformed messages */
-            }
-        },
-    );
-    useEffect(() => {
-        stream.start("/api/mowglinext/subscribe/icpOdom");
-        return () => { stream.stop(); };
-    }, []);
-    return odom;
-};
+export const useIcpOdom = (): FusionOdom => useTopic<FusionOdom>("icpOdom", {}).data;

@@ -46,8 +46,11 @@ export const AdvancedSection: React.FC<Props> = ({ values, advancedKeys, onChang
         onChange(key, parsed);
     };
 
+    // Hide keys that are undefined OR marked-for-deletion (null). handleDelete
+    // sets the value to null so the delete reaches the backend on save; the row
+    // must disappear immediately rather than linger showing an empty input.
     const dataSource = advancedKeys
-        .filter((k) => values[k] !== undefined)
+        .filter((k) => values[k] != null)
         .sort()
         .map((key) => ({
             key,

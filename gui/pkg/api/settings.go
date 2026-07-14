@@ -572,7 +572,8 @@ func normalizeGnssProfileRate(value any) string {
 }
 
 func normalizeGnssSignalGroup(value any) string {
-	fields := strings.Fields(stringValue(value, ""))
+	replaced := strings.NewReplacer(",", " ", "/", " ").Replace(stringValue(value, ""))
+	fields := strings.Fields(replaced)
 	return strings.Join(fields, " ")
 }
 
@@ -611,16 +612,22 @@ func gnssConnectionFromDevice(serialDevice string) string {
 
 func gnssCompatFromFlat(flat map[string]any) map[string]string {
 	receiverFamily := normalizeGnssReceiverFamily(flat["gnss_receiver_family"])
+	transport := stringValue(firstValue(flat, "gnss_transport"), "serial")
 	serialDevice := stringValue(flat["gnss_serial_device"], "/dev/ttyAMA4")
 	serialBaud := stringValue(flat["gnss_serial_baud"], "921600")
 	configBaud := stringValue(firstValue(flat, "gnss_config_baud", "gnss_serial_baud"), serialBaud)
 	profile := normalizeGnssProfile(flat["gnss_profile"])
 	signalProfile := normalizeGnssSignalProfile(flat["gnss_signal_profile"])
 	profileRateHz := normalizeGnssProfileRate(firstValue(flat, "gnss_profile_rate_hz", "gnss_rate_hz"))
-	ntripMountpoint := stringValue(flat["ntrip_mountpoint"], "NEAR")
+	frameID := stringValue(firstValue(flat, "gnss_frame_id"), "gps_link")
+	ntripEnabled := boolStringValue(firstValue(flat, "gnss_ntrip_enabled", "ntrip_enabled"), true)
+	ntripMountpoint := stringValue(firstValue(flat, "gnss_ntrip_mountpoint", "ntrip_mountpoint"), "NEAR")
 	ntripGGAEnabled := "false"
 	if strings.HasPrefix(strings.ToLower(ntripMountpoint), "near") {
 		ntripGGAEnabled = "true"
+	}
+	if ggaEnabled := firstValue(flat, "gnss_ntrip_gga_enabled"); ggaEnabled != nil {
+		ntripGGAEnabled = boolStringValue(ggaEnabled, false)
 	}
 
 	// crtk.net is the public Centipede caster, whose well-known anonymous login
@@ -630,9 +637,9 @@ func gnssCompatFromFlat(flat map[string]any) map[string]string {
 	// unconditionally would (a) hand a custom caster the wrong credentials and
 	// (b) silently re-enable the public caster for an operator who cleared the
 	// fields to disable it.
-	ntripHost := stringValue(flat["ntrip_host"], "crtk.net")
-	ntripUser := stringValue(flat["ntrip_user"], "")
-	ntripPassword := stringValue(flat["ntrip_password"], "")
+	ntripHost := stringValue(firstValue(flat, "gnss_ntrip_host", "ntrip_host"), "crtk.net")
+	ntripUser := stringValue(firstValue(flat, "gnss_ntrip_username", "ntrip_user"), "")
+	ntripPassword := stringValue(firstValue(flat, "gnss_ntrip_password", "ntrip_password"), "")
 	if strings.EqualFold(ntripHost, "crtk.net") {
 		if ntripUser == "" {
 			ntripUser = "centipede"
@@ -646,23 +653,47 @@ func gnssCompatFromFlat(flat map[string]any) map[string]string {
 		"GNSS_STACK":                "universal",
 		"GNSS_STATUS_SOURCE":        "universal",
 		"GNSS_RECEIVER_FAMILY":      receiverFamily,
-		"GNSS_TRANSPORT":            "serial",
+		"GNSS_TRANSPORT":            transport,
 		"GNSS_SERIAL_DEVICE":        serialDevice,
 		"GNSS_SERIAL_BAUD":          serialBaud,
+		"GNSS_FRAME_ID":             frameID,
 		"GNSS_CONFIG_BAUD":          configBaud,
 		"GNSS_PROFILE":              profile,
 		"GNSS_SIGNAL_PROFILE":       signalProfile,
 		"GNSS_PROFILE_RATE_HZ":      profileRateHz,
 		"GNSS_BACKEND":              "universal",
-		"GNSS_NTRIP_ENABLED":        boolStringValue(flat["ntrip_enabled"], true),
+		"GNSS_NTRIP_ENABLED":        ntripEnabled,
 		"GNSS_NTRIP_HOST":           ntripHost,
-		"GNSS_NTRIP_PORT":           stringValue(flat["ntrip_port"], "2101"),
+		"GNSS_NTRIP_PORT":           stringValue(firstValue(flat, "gnss_ntrip_port", "ntrip_port"), "2101"),
 		"GNSS_NTRIP_MOUNTPOINT":     ntripMountpoint,
 		"GNSS_NTRIP_USERNAME":       ntripUser,
 		"GNSS_NTRIP_PASSWORD":       ntripPassword,
 		"GNSS_RTCM_FORWARDING":      "true",
 		"GNSS_NTRIP_GGA_ENABLED":    ntripGGAEnabled,
-		"GNSS_NTRIP_GGA_INTERVAL_S": stringValue(flat["gnss_ntrip_gga_interval_s"], "10"),
+		"GNSS_NTRIP_GGA_INTERVAL_S": stringValue(firstValue(flat, "gnss_ntrip_gga_interval_s"), "10"),
+	}
+}
+
+func gnssRuntimeEnvFallbackFromFlat(flat map[string]any) map[string]string {
+	compat := gnssCompatFromFlat(flat)
+	return map[string]string{
+		"GNSS_STACK":                compat["GNSS_STACK"],
+		"GNSS_STATUS_SOURCE":        compat["GNSS_STATUS_SOURCE"],
+		"GNSS_RECEIVER_FAMILY":      compat["GNSS_RECEIVER_FAMILY"],
+		"GNSS_TRANSPORT":            compat["GNSS_TRANSPORT"],
+		"GNSS_SERIAL_DEVICE":        compat["GNSS_SERIAL_DEVICE"],
+		"GNSS_SERIAL_BAUD":          compat["GNSS_SERIAL_BAUD"],
+		"GNSS_FRAME_ID":             compat["GNSS_FRAME_ID"],
+		"GNSS_BACKEND":              compat["GNSS_BACKEND"],
+		"GNSS_NTRIP_ENABLED":        compat["GNSS_NTRIP_ENABLED"],
+		"GNSS_NTRIP_HOST":           compat["GNSS_NTRIP_HOST"],
+		"GNSS_NTRIP_PORT":           compat["GNSS_NTRIP_PORT"],
+		"GNSS_NTRIP_MOUNTPOINT":     compat["GNSS_NTRIP_MOUNTPOINT"],
+		"GNSS_NTRIP_USERNAME":       compat["GNSS_NTRIP_USERNAME"],
+		"GNSS_NTRIP_PASSWORD":       compat["GNSS_NTRIP_PASSWORD"],
+		"GNSS_RTCM_FORWARDING":      compat["GNSS_RTCM_FORWARDING"],
+		"GNSS_NTRIP_GGA_ENABLED":    compat["GNSS_NTRIP_GGA_ENABLED"],
+		"GNSS_NTRIP_GGA_INTERVAL_S": compat["GNSS_NTRIP_GGA_INTERVAL_S"],
 	}
 }
 
@@ -717,6 +748,11 @@ var legacyGnssEnvKeys = []string{
 	"UNICORE_" + "ROS_EXECUTABLE",
 	"UNICORE_COM_PORT",
 	"UNICORE_IMAGE",
+	"GNSS_CONFIG_BAUD",
+	"GNSS_PROFILE",
+	"GNSS_SIGNAL_PROFILE",
+	"GNSS_PROFILE_RATE_HZ",
+	"GNSS_SIGNAL_GROUP",
 }
 
 func writeRuntimeEnvFile(path string, updates map[string]string) error {
@@ -1116,52 +1152,16 @@ func GetSettingsSchema(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRo
 // @Router /settings/yaml [get]
 func GetSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRoutes {
 	return r.GET("/settings/yaml", func(c *gin.Context) {
-		configFilePath, err := dbProvider.Get("system.mower.yamlConfigFile")
+		doc, err := loadGNSSSettingsDocument(dbProvider)
 		if err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
 		}
-		file, err := os.ReadFile(string(configFilePath))
-		if err != nil {
-			if os.IsNotExist(err) {
-				// Return schema defaults when file doesn't exist
-				schema, schemaErr := getSchema(dbProvider)
-				if schemaErr != nil {
-					c.JSON(200, map[string]any{})
-					return
-				}
-				defaults := map[string]any{}
-				extractDefaults(schema, defaults)
-				c.JSON(200, defaults)
-				return
-			}
-			c.JSON(500, ErrorResponse{Error: err.Error()})
-			return
-		}
 
-		var yamlData map[string]any
-		if err := yaml.Unmarshal(file, &yamlData); err != nil {
-			c.JSON(500, ErrorResponse{Error: "invalid YAML: " + err.Error()})
-			return
-		}
+		responseFlat := cloneFlatMap(doc.Flat)
+		applyUniversalGnssCompatibility(responseFlat)
 
-		flat := flattenROS2YAML(yamlData)
-
-		// Merge schema defaults for missing keys
-		schema, err := getSchema(dbProvider)
-		if err == nil {
-			defaults := map[string]any{}
-			extractDefaults(schema, defaults)
-			for key, value := range defaults {
-				if _, exists := flat[key]; !exists {
-					flat[key] = value
-				}
-			}
-		}
-
-		applyUniversalGnssCompatibility(flat)
-
-		c.JSON(200, flat)
+		c.JSON(200, responseFlat)
 	})
 }
 
@@ -1259,7 +1259,8 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 				existing[key] = value
 			}
 		}
-		gnssEnvUpdates := applyUniversalGnssCompatibility(existing)
+		applyUniversalGnssCompatibility(existing)
+		gnssEnvUpdates := gnssRuntimeEnvFallbackFromFlat(existing)
 
 		// Keep the installed config SPARSE: any key whose value equals its
 		// schema default is pruned so the ROS2 launch-time deep-merge falls

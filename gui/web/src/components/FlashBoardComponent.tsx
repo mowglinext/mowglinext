@@ -143,11 +143,15 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                 },
                 signal: controller.signal,
                 onopen(res) {
-                    if (res.status >= 400 && res.status < 500 && res.status !== 429) {
+                    if (!res.ok) {
                         notification.error({
                             message: t('flashBoard.errorConnectingFlashEndpoint'),
                             description: res.statusText,
                         });
+                        // Throw so the outer catch records flashError and the
+                        // "Back to config" path appears — returning a resolved
+                        // promise here used to leave isFlashing stuck forever.
+                        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
                     }
                     return Promise.resolve()
                 },
@@ -164,9 +168,12 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                         setData((data) => [...(data ?? []), event.data]);
                     }
                 },
-                onclose() {},
-                onerror(err) {
+                onclose() {
+                    // Server closed the stream (with or without an "end"
+                    // event) — never leave the UI wedged in "flashing".
                     setIsFlashing(false);
+                },
+                onerror(err) {
                     setFlashError(err.toString());
                     // Re-throw to stop fetch-event-source's automatic retry.
                     // Otherwise the library re-POSTs on any stream error and
@@ -177,9 +184,12 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
             });
         } catch (e: any) {
             if (e.name !== 'AbortError') {
-                setIsFlashing(false);
                 setFlashError(e.toString());
             }
+        } finally {
+            // Belt-and-braces: whatever path ended the stream (end event,
+            // close, error, abort), the flashing state must not persist.
+            setIsFlashing(false);
         }
     };
 

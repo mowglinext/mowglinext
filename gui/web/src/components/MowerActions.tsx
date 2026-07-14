@@ -180,8 +180,8 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
     ];
     let children = props.children;
     if (children && Array.isArray(children)) {
-        children = children.map(c => {
-            return c ? <Col>{c}</Col> : null
+        children = children.map((c, index) => {
+            return c ? <Col key={`mower-action-${index}`}>{c}</Col> : null
         })
     } else if (children) {
         children = <Col>{children}</Col>

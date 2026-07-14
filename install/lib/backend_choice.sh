@@ -74,8 +74,8 @@ select_hardware_backend() {
   echo "  [1] Mowgli STM32 board"
   echo "  [2] Pixhawk via MAVROS"
   echo ""
-  printf "Choice [1-2]: "
-  read -r choice
+  prompt "Choice [1-2]" "1"
+  choice="$REPLY"
 
   case "$choice" in
     1)
@@ -179,8 +179,8 @@ detect_mavros_by_id() {
   if [ "${#candidates[@]}" -eq 1 ]; then
     choice="1"
   else
-    printf "Select MAVROS port [1-%d]: " "${#candidates[@]}"
-    read -r choice
+    prompt "Select MAVROS port [1-${#candidates[@]}]" "1"
+    choice="$REPLY"
   fi
 
   if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#candidates[@]}" ]; then
@@ -197,8 +197,8 @@ select_mavros_autopilot() {
   echo "  [1] ArduPilot / ArduRover"
   echo "  [2] PX4"
   echo ""
-  printf "Choice [1-2]: "
-  read -r choice
+  prompt "Choice [1-2]" "1"
+  choice="$REPLY"
 
   case "$choice" in
     1)
@@ -223,8 +223,8 @@ select_mavros_gcs_mode() {
   echo "  [2] UDP broadcast (PC + mobile on local network)"
   echo "  [3] UDP unicast (single remote PC)"
   echo ""
-  printf "Choice [1-3]: "
-  read -r choice
+  prompt "Choice [1-3]" "1"
+  choice="$REPLY"
 
   case "$choice" in
     1)
@@ -250,17 +250,16 @@ select_mavros_gcs_ip() {
   local port="14550"
 
   echo ""
-  printf "Remote GCS IP address (example: 192.168.10.100): "
-  read -r ip
+  prompt "Remote GCS IP address (example: 192.168.10.100)" ""
+  ip="$REPLY"
 
   if [ -z "$ip" ]; then
     error "IP address cannot be empty"
     return 1
   fi
 
-  printf "Remote GCS UDP port [14550]: "
-  read -r port
-  port="${port:-14550}"
+  prompt "Remote GCS UDP port [14550]:" "14550"
+  port="$REPLY"
 
   if ! [[ "$port" =~ ^[0-9]+$ ]]; then
     error "Invalid UDP port"

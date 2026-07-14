@@ -2,7 +2,7 @@
 
 This page is kept only to catch old links.
 
-Receiver-specific runtime profiles are no longer part of the supported MowgliNext install surface. The installer now writes the Universal GNSS contract only, centered on:
+Receiver-specific runtime profiles are no longer part of the supported MowgliNext install surface. Active GNSS operator configuration now lives in `mowgli_robot.yaml` and the GUI/backend flow; `docker/.env` keeps fallback-only first-boot defaults such as:
 
 ```env
 GNSS_STACK=universal
@@ -14,4 +14,4 @@ GNSS_SERIAL_BAUD=921600
 GNSS_NTRIP_ENABLED=true
 ```
 
-Do not add receiver-specific runtime keys to new installs.
+Universal GNSS remains responsible for receiver model/profile/signal validation and apply behavior. Do not add receiver-specific runtime keys or signal-group logic to the installer.

@@ -39,6 +39,7 @@ import {staggerParent, riseFade, popIn, springSnap} from "../concept/motion.ts";
  */
 
 function useMowerData() {
+  const {t} = useTranslation();
   const {highLevelStatus} = useHighLevelStatus();
   const power = usePower();
   const status = useStatus();
@@ -73,14 +74,20 @@ function useMowerData() {
     gps: gpsStatus.percent,
     gpsLabel: gpsStatus.label,
     vBattery: power.v_battery ?? 0,
+    // Battery charge current (shown while docked/charging) vs. blade motor
+    // current (shown on the Blades tile) are DIFFERENT signals — keep them
+    // separate so the Blades tile doesn't read the charger.
     current: power.charge_current ?? 0,
+    bladeCurrent: status.mower_esc_current ?? 0,
     rpm: status.mower_motor_rpm ?? 0,
     escTemp: status.mower_esc_temperature ?? 0,
     motorTemp: status.mower_motor_temperature ?? 0,
     rain: status.rain_detected ?? false,
     isMoving,
+    toolWidth: (settings?.tool_width as number | undefined) ?? 0.18,
+    currentAreaIndex: highLevelStatus.current_area ?? null,
     currentArea: highLevelStatus.current_area != null
-      ? `Area ${highLevelStatus.current_area + 1}`
+      ? t('mowgliNextPage.areaN', {number: highLevelStatus.current_area + 1})
       : undefined,
     // Firmware <-> image compatibility (from the hardware_bridge handshake).
     // null until the first Status arrives, so the health card stays quiet
@@ -94,16 +101,18 @@ export const MowgliNextPage = () => {
   const {t} = useTranslation();
   const isMobile = useIsMobile();
   const navigate = useNavigate();
-  const {modal} = App.useApp();
+  const {modal, notification} = App.useApp();
   const mowerAction = useMowerAction();
   const data = useMowerData();
-  const {settings} = useSettings();
   const {snapshot} = useDiagnosticsSnapshot();
   const map = useMowingMap();
   const odom = useFusionOdom();
 
   const coverage = snapshot?.coverage ?? [];
-  const activeArea = coverage.find(c => c.area_index === 0);
+  // Show the area the robot is ACTUALLY mowing, not always area 0 — otherwise
+  // the progress bar / ETA report area 0's grid while it mows area 2.
+  const activeArea = coverage.find(c => c.area_index === (data.currentAreaIndex ?? 0))
+    ?? coverage.find(c => c.area_index === 0);
   const todayMowedM2 = activeArea ? activeArea.mowed_cells : 0;
   const totalArea = activeArea ? activeArea.total_cells : 0;
   const coveragePct = totalArea > 0 ? todayMowedM2 / totalArea : 0;
@@ -153,7 +162,7 @@ export const MowgliNextPage = () => {
   const cellResolutionM = 0.05;            // map_server publishes the grid at 5 cm
   const remainingCells = Math.max(0, totalArea - todayMowedM2);
   const remainingM2 = remainingCells * cellResolutionM * cellResolutionM;
-  const toolWidthM = (settings?.tool_width as number | undefined) ?? 0.18;
+  const toolWidthM = data.toolWidth;
   const liveVel = Math.abs(odom?.twist?.twist?.linear?.x ?? 0);
   const nominalSpeed = 0.35;               // typical OpenMower cruise
   const speedMs = liveVel > 0.05 ? liveVel : nominalSpeed;
@@ -201,19 +210,34 @@ export const MowgliNextPage = () => {
     });
   };
 
+  // mowerAction() returns a fn that THROWS on service error. ActionCluster
+  // invokes these from a plain onClick, so a rejection would be swallowed with
+  // zero feedback — a robot that "won't start" would look like a hardware
+  // fault. Wrap each so failures surface a notification.
+  const withFeedback = (fn: () => Promise<unknown>) => async () => {
+    try {
+      await fn();
+    } catch (e: unknown) {
+      notification.error({
+        message: t('mowgliNextPage.actionFailed'),
+        description: e instanceof Error ? e.message : undefined,
+      });
+    }
+  };
+
   const actions = {
-    onStart: mowerAction("high_level_control", {Command: 1}),
+    onStart: withFeedback(mowerAction("high_level_control", {Command: 1})),
     // Pause = STOP (COMMAND_STOP=8 → StopHoldSequence: mower off, halt in place,
     // Nav2 left up so the mission can resume via START, no dock drive). The
     // separate Home control keeps HOME (Command 2 → return to dock).
-    onPause: mowerAction("high_level_control", {Command: 8}),
-    onHome: mowerAction("high_level_control", {Command: 2}),
+    onPause: withFeedback(mowerAction("high_level_control", {Command: 8})),
+    onHome: withFeedback(mowerAction("high_level_control", {Command: 2})),
     onStop: confirmEmergency,
     // Clear a latched emergency from the Dashboard. Without this the robot is
     // stuck: the BT EmergencyGuard halts before MainLogic, so Play (Command 1)
     // is inert while latched. Firmware is the safety authority — it only clears
     // the latch if the physical trigger is no longer asserted.
-    onRearm: mowerAction("emergency", {Emergency: 0}),
+    onRearm: withFeedback(mowerAction("emergency", {Emergency: 0})),
   };
 
   return (
@@ -447,12 +471,29 @@ function LiveMapCard({polygon, robot, coverage, height = 220, onViewMap}: LiveMa
           <ChevronRight size={14} strokeWidth={2.4}/>
         </button>
       </div>
-      <LiveMapMini
-        polygon={polygon && polygon.length > 0 ? normaliseToUnit(polygon) : undefined}
-        robot={robot}
-        coverage={coverage}
-        height={height}
-      />
+      {polygon && polygon.length > 0 ? (
+        <LiveMapMini
+          polygon={normaliseToUnit(polygon)}
+          robot={robot}
+          coverage={coverage}
+          height={height}
+        />
+      ) : (
+        // No recorded area — show an honest empty state rather than
+        // LiveMapMini's decorative default polygon + fake robot.
+        <div style={{
+          height, display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: 6,
+          padding: '0 22px 22px', textAlign: 'center',
+        }}>
+          <div className="mn-display" style={{fontSize: 15, color: 'var(--ink, #ECFFF4)'}}>
+            {t('liveMapMini.noAreaYet')}
+          </div>
+          <div style={{fontSize: 12, color: 'rgba(236,255,244,0.42)'}}>
+            {t('liveMapMini.noAreaHint')}
+          </div>
+        </div>
+      )}
     </GlassCard>
   );
 }
@@ -463,8 +504,8 @@ function TilesRow({data}: {data: ReturnType<typeof useMowerData>}) {
     <div style={{display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10}}>
       <StatTile label="GPS" value={`${Math.round(data.gps)}`} unit="%"
                 hint={data.gpsLabel} accent="cyan" icon={<Wifi size={14}/>}/>
-      <StatTile label={t('mowgliNextPage.blades')} value={data.rpm > 0 ? Math.round(data.rpm).toString() : 'off'}
-                unit={data.rpm > 0 ? 'rpm' : ''} hint={`${data.current.toFixed(1)} A`}
+      <StatTile label={t('mowgliNextPage.blades')} value={data.rpm > 0 ? Math.round(data.rpm).toString() : t('mowgliNextPage.bladesOff')}
+                unit={data.rpm > 0 ? 'rpm' : ''} hint={`${data.bladeCurrent.toFixed(1)} A`}
                 accent="amber" icon={<Sparkles size={14}/>}/>
       <StatTile label={t('mowgliNextPage.motor')} value={data.motorTemp.toFixed(0)} unit="°c"
                 hint={`ESC ${data.escTemp.toFixed(0)} °C`}

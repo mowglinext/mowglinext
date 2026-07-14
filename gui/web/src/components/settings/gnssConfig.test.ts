@@ -4,17 +4,26 @@ import en from "../../i18n/locales/en.json";
 import {
     GNSS_ADVANCED_SETTINGS_BY_FAMILY,
     GNSS_ACTION_SETTINGS_KEYS,
+    GNSS_EXECUTION_BAUD_OPTIONS,
     gnssProfileLabel,
     gnssSignalProfileDescription,
     gnssSignalProfileLabel,
     normalizeGnssProfile,
     normalizeGnssReceiverModel,
     normalizeGnssSignalGroup,
+    rawGnssInputString,
 } from "./gnssConfig.ts";
 
 describe("gnssConfig", () => {
     it("normalizes Unicore signal-group whitespace", () => {
         expect(normalizeGnssSignalGroup("  3   6  ")).toBe("3 6");
+        expect(normalizeGnssSignalGroup("3,6")).toBe("3 6");
+        expect(normalizeGnssSignalGroup("3/6")).toBe("3 6");
+    });
+
+    it("preserves raw signal-group typing until blur/save normalization runs", () => {
+        expect(rawGnssInputString("3 6")).toBe("3 6");
+        expect(rawGnssInputString("3,6")).toBe("3,6");
     });
 
     it("normalizes receiver-model placeholders into the config-auto path", () => {
@@ -61,5 +70,17 @@ describe("gnssConfig", () => {
         const signalGroupField = GNSS_ADVANCED_SETTINGS_BY_FAMILY.unicore?.fields[1];
         expect(signalGroupField?.kind).toBe("text");
         expect(signalGroupField?.key).toBe("gnss_signal_group");
+    });
+
+    it("persists an optional execution-baud override separately from runtime/config baud", () => {
+        expect(GNSS_ACTION_SETTINGS_KEYS).toContain("gnss_execution_baud");
+        expect(GNSS_EXECUTION_BAUD_OPTIONS.map((option) => option.value)).toEqual([
+            "auto",
+            "115200",
+            "230400",
+            "460800",
+            "921600",
+        ]);
+        expect(i18n.t(GNSS_EXECUTION_BAUD_OPTIONS[0].label)).toBe(en.gnssConfig.executionBaud.auto.label);
     });
 });

@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
 	dockertypes "github.com/docker/docker/api/types"
@@ -107,6 +109,30 @@ func writeGNSSConfigFile(t *testing.T, config string) string {
 	return file
 }
 
+type stubFileInfo struct{}
+
+func (stubFileInfo) Name() string       { return "stub" }
+func (stubFileInfo) Size() int64        { return 0 }
+func (stubFileInfo) Mode() os.FileMode  { return 0644 }
+func (stubFileInfo) ModTime() time.Time { return time.Time{} }
+func (stubFileInfo) IsDir() bool        { return false }
+func (stubFileInfo) Sys() any           { return nil }
+
+func stubGNSSDeviceInspection(t *testing.T) {
+	t.Helper()
+
+	previousStat := gnssPathStat
+	gnssPathStat = func(path string) (os.FileInfo, error) {
+		if strings.HasPrefix(path, "/dev/") {
+			return stubFileInfo{}, nil
+		}
+		return previousStat(path)
+	}
+	t.Cleanup(func() {
+		gnssPathStat = previousStat
+	})
+}
+
 func defaultGNSSYAML(serialDevice string, receiverFamily string, profile string) string {
 	return "mowgli:\n" +
 		"  ros__parameters:\n" +
@@ -127,8 +153,17 @@ func defaultGNSSYAMLWithModel(serialDevice string, receiverFamily string, profil
 	return base + "    gnss_receiver_model: " + receiverModel + "\n"
 }
 
+func defaultGNSSYAMLWithSignalGroup(serialDevice string, receiverFamily string, profile string, signalGroup string) string {
+	base := defaultGNSSYAML(serialDevice, receiverFamily, profile)
+	if strings.TrimSpace(signalGroup) == "" {
+		return base
+	}
+	return base + "    gnss_signal_group: \"" + signalGroup + "\"\n"
+}
+
 func newGNSSTestDB(t *testing.T, yamlContent string) (*pkgtypes.MockDBProvider, string) {
 	t.Helper()
+	stubGNSSDeviceInspection(t)
 	yamlFile := writeGNSSConfigFile(t, yamlContent)
 	envFile := createTempConfigFile(t, "ROS_DOMAIN_ID=0\n")
 	db := pkgtypes.NewMockDBProvider()
@@ -178,6 +213,7 @@ func TestGNSSPlan_DoesNotRequireConfirmAndAvoidsSerialAccess(t *testing.T) {
 	assert.Equal(t, gnssConfigPlanBinary, docker.runSpecs[0].Cmd[0])
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--config-baud")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "460800")
+	assert.NotContains(t, docker.runSpecs[0].Cmd, "--persistent")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--signal-profile")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "balanced")
 	assert.NotContains(t, docker.runSpecs[0].Cmd, "--model")
@@ -247,8 +283,21 @@ func TestGNSSApply_PassesConfigBaudAndRestartsAfterSuccess(t *testing.T) {
 	assert.Contains(t, docker.runSpecs[0].Cmd, "460800")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--device")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0")
+
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--apply-mode")
+	assert.Contains(t, docker.runSpecs[0].Cmd, gnssApplyModeRuntime)
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--baud")
+	assert.Contains(t, docker.runSpecs[0].Cmd, gnssBaudAuto)
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--probe-bauds")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "921600,460800,115200,230400")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--signal-profile")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "balanced")
+
+	assert.NotContains(t, docker.runSpecs[0].Cmd, "persistent")
+	assert.NotContains(t, docker.runSpecs[0].Cmd, gnssApplyModeFactory)
+	assert.NotContains(t, docker.runSpecs[0].Cmd, "--model")
+	assert.NotContains(t, docker.runSpecs[0].Cmd, "--signal-group")
+	assert.NotContains(t, strings.Join(docker.runSpecs[0].Cmd, " "), "SIGNALGROUP")
 
 	envContent, err := os.ReadFile(envFile)
 	require.NoError(t, err)
@@ -265,6 +314,7 @@ func TestGNSSApply_PassesConfigBaudAndRestartsAfterSuccess(t *testing.T) {
 	assert.Contains(t, strings.Join(response.Warnings, "\n"), "Configured receiver baud differs from runtime baud.")
 	assert.NotContains(t, strings.Join(response.Warnings, "\n"), "GNSS_SIGNAL_PROFILE is persisted in the UI")
 	assert.Contains(t, strings.Join(response.Warnings, "\n"), "no receiver model was selected")
+	assert.Contains(t, strings.Join(response.Warnings, "\n"), "execution baud is set to auto")
 }
 
 func TestGNSSPlan_AddsConfiguredReceiverModels(t *testing.T) {
@@ -281,16 +331,49 @@ func TestGNSSPlan_AddsConfiguredReceiverModels(t *testing.T) {
 
 			require.Equal(t, http.StatusOK, w.Code)
 			require.Len(t, docker.runSpecs, 1)
+			assert.NotContains(t, docker.runSpecs[0].Cmd, "--persistent")
 			assert.Contains(t, docker.runSpecs[0].Cmd, "--model")
 			assert.Contains(t, docker.runSpecs[0].Cmd, receiverModel)
 		})
 	}
 }
 
-func TestGNSSApply_AddsConfiguredReceiverModelsWithoutSignalGroupTranslation(t *testing.T) {
-	for _, receiverModel := range []string{"UM980", "UM981"} {
+func TestBuildGNSSPlanCommand_UsesRuntimeOnlyPlanByDefault(t *testing.T) {
+	command := buildGNSSPlanCommand(gnssSavedConfig{
+		ReceiverFamily: "unicore",
+		ConfigBaud:     "921600",
+		Profile:        "rover_high_precision",
+		ProfileRateHz:  "10",
+		ReceiverModel:  "UM982",
+	})
+
+	assert.Equal(t, gnssConfigPlanBinary, command[0])
+	assert.NotContains(t, command, "--persistent")
+	assert.Contains(t, command, "--model")
+	assert.Contains(t, command, "UM982")
+	assert.Equal(t, []string{"unicore", "rover_high_precision"}, command[len(command)-2:])
+}
+
+func TestGNSSPlan_AddsConfiguredSignalGroupWhenPresent(t *testing.T) {
+	command := buildGNSSPlanCommand(gnssSavedConfig{
+		ReceiverFamily: "unicore",
+		ConfigBaud:     "921600",
+		Profile:        "rover_high_precision",
+		ProfileRateHz:  "10",
+		ReceiverModel:  "UM982",
+		SignalGroup:    "3 6",
+	})
+
+	assert.Contains(t, command, "--signal-group")
+	assert.Contains(t, command, "3 6")
+}
+
+func TestGNSSApply_AddsConfiguredReceiverModelsAndSignalGroupTranslation(t *testing.T) {
+	for _, receiverModel := range []string{"UM980", "UM981", "UM982"} {
 		t.Run(receiverModel, func(t *testing.T) {
-			db, _ := newGNSSTestDB(t, defaultGNSSYAMLWithModel("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision", receiverModel))
+			yaml := defaultGNSSYAMLWithModel("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision", receiverModel) +
+				"    gnss_signal_group: \"2 0\"\n"
+			db, _ := newGNSSTestDB(t, yaml)
 			docker := defaultMockDocker()
 			docker.runResults = []pkgtypes.ContainerRunResult{{ExitCode: 0, Stdout: `{"status":"ok","warnings":[]}`}}
 			router := setupGNSSRouter(db, docker)
@@ -304,10 +387,152 @@ func TestGNSSApply_AddsConfiguredReceiverModelsWithoutSignalGroupTranslation(t *
 			require.Len(t, docker.runSpecs, 1)
 			assert.Contains(t, docker.runSpecs[0].Cmd, "--model")
 			assert.Contains(t, docker.runSpecs[0].Cmd, receiverModel)
-			assert.NotContains(t, docker.runSpecs[0].Cmd, "--signal-group")
-			assert.NotContains(t, strings.Join(docker.runSpecs[0].Cmd, " "), "SIGNALGROUP")
+			assert.Contains(t, docker.runSpecs[0].Cmd, "--apply-mode")
+			assert.Contains(t, docker.runSpecs[0].Cmd, gnssApplyModeRuntime)
+			assert.NotContains(t, docker.runSpecs[0].Cmd, "persistent")
+			assert.NotContains(t, docker.runSpecs[0].Cmd, gnssApplyModeFactory)
+			assert.Contains(t, docker.runSpecs[0].Cmd, "--signal-group")
+			assert.Contains(t, docker.runSpecs[0].Cmd, "2 0")
 		})
 	}
+}
+
+func TestGNSSPlan_PropagatesSignalGroupToTool(t *testing.T) {
+	db, _ := newGNSSTestDB(t, defaultGNSSYAMLWithSignalGroup("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision", "3 6"))
+	docker := defaultMockDocker()
+	docker.runResults = []pkgtypes.ContainerRunResult{{
+		ExitCode: 0,
+		Stdout:   `{"status":"ok","commands":[{"command":"CONFIG SIGNALGROUP 3 6"}],"warnings":[]}`,
+	}}
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/gnss/plan", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, docker.runSpecs, 1)
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--signal-group")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "3 6")
+
+	var response GNSSActionResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.Len(t, response.Executions, 1)
+	assert.Contains(t, response.Executions[0].Stdout, "CONFIG SIGNALGROUP 3 6")
+}
+
+func TestGNSSFactoryResetApply_UsesDedicatedResetModeThenRuntimeProfileApply(t *testing.T) {
+	db, envFile := newGNSSTestDB(t, defaultGNSSYAMLWithModel("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision", "UM982"))
+	docker := defaultMockDocker()
+	docker.runResults = []pkgtypes.ContainerRunResult{
+		{ExitCode: 0, Stdout: `{"status":"ok","warnings":[]}`},
+		{ExitCode: 0, Stdout: `{"status":"ok","warnings":[]}`},
+	}
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/gnss/factory-reset-apply", bytes.NewReader([]byte(`{"confirm_factory_reset":true}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, docker.stopCalls, 1)
+	require.Len(t, docker.startCalls, 1)
+	require.Len(t, docker.runSpecs, 2)
+	assert.Equal(t, []string{"stop", "run", "run", "start"}, docker.events)
+
+	resetCommand := docker.runSpecs[0].Cmd
+	assert.Equal(t, gnssConfigApplyBinary, resetCommand[0])
+	assert.Contains(t, resetCommand, "--profile")
+	assert.Contains(t, resetCommand, "factory_reset")
+	assert.Contains(t, resetCommand, "--apply-mode")
+	assert.Contains(t, resetCommand, gnssApplyModeFactory)
+	assert.NotContains(t, resetCommand, "persistent")
+	assert.Contains(t, resetCommand, "--model")
+	assert.Contains(t, resetCommand, "UM982")
+
+	applyCommand := docker.runSpecs[1].Cmd
+	assert.Equal(t, gnssConfigApplyBinary, applyCommand[0])
+	assert.Contains(t, applyCommand, "--profile")
+	assert.Contains(t, applyCommand, "rover_high_precision")
+	assert.Contains(t, applyCommand, "--apply-mode")
+	assert.Contains(t, applyCommand, gnssApplyModeRuntime)
+	assert.NotContains(t, applyCommand, "persistent")
+	assert.NotContains(t, applyCommand, gnssApplyModeFactory)
+	assert.Contains(t, applyCommand, "--model")
+	assert.Contains(t, applyCommand, "UM982")
+
+	envContent, err := os.ReadFile(envFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(envContent), "GNSS_SERIAL_BAUD=460800")
+
+	var response GNSSActionResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.True(t, response.Success)
+	assert.Equal(t, "factory_reset_apply", response.Action)
+	assert.True(t, response.RuntimeBaudUpdated)
+	assert.True(t, response.RestartAttempted)
+	assert.True(t, response.RestartSucceeded)
+	require.Len(t, response.Executions, 2)
+	assert.Equal(t, resetCommand, response.Executions[0].Command)
+	assert.Equal(t, applyCommand, response.Executions[1].Command)
+	assert.Contains(t, strings.Join(response.Warnings, "\n"), "Factory-reset recovery mode is active")
+	assert.Contains(t, strings.Join(response.Warnings, "\n"), "destructive")
+	assert.Contains(t, strings.Join(response.Warnings, "\n"), "Unicore")
+	assert.Contains(t, strings.Join(response.Warnings, "\n"), "115200")
+	assert.Contains(t, strings.Join(response.Warnings, "\n"), "VERSIONA")
+}
+
+func TestBuildGNSSApplyCommand_FactoryResetProfileIsTheOnlyPathUsingFactoryResetMode(t *testing.T) {
+	cfg := gnssSavedConfig{
+		ReceiverFamily: "unicore",
+		SerialDevice:   "/dev/ttyUSB7",
+		RuntimeBaud:    "921600",
+		ConfigBaud:     "460800",
+		ExecutionBaud:  gnssBaudAuto,
+		ProfileRateHz:  "10",
+		ReceiverModel:  "UM982",
+		SignalGroup:    "3 6",
+	}
+
+	normalCommand := buildGNSSApplyCommand(cfg, "rover_high_precision")
+	assert.Contains(t, normalCommand, gnssApplyModeRuntime)
+	assert.Contains(t, normalCommand, "--baud")
+	assert.Contains(t, normalCommand, gnssBaudAuto)
+	assert.Contains(t, normalCommand, "--probe-bauds")
+	assert.Contains(t, normalCommand, "921600,460800,115200,230400")
+	assert.NotContains(t, normalCommand, "persistent")
+	assert.NotContains(t, normalCommand, gnssApplyModeFactory)
+	assert.Contains(t, normalCommand, "--model")
+	assert.Contains(t, normalCommand, "UM982")
+	assert.Contains(t, normalCommand, "--signal-group")
+	assert.Contains(t, normalCommand, "3 6")
+
+	resetCommand := buildGNSSApplyCommand(cfg, "factory_reset")
+	assert.Contains(t, resetCommand, gnssApplyModeFactory)
+	assert.NotContains(t, resetCommand, "persistent")
+	assert.Contains(t, resetCommand, "--model")
+	assert.Contains(t, resetCommand, "UM982")
+	assert.Contains(t, resetCommand, "--signal-group")
+	assert.Contains(t, resetCommand, "3 6")
+}
+
+func TestGNSSFactoryResetApply_RejectsUbloxWithoutRunningDestructiveWorkflow(t *testing.T) {
+	db, _ := newGNSSTestDB(t, defaultGNSSYAML("/dev/serial/by-id/usb-u-blox-if00-port0", "ublox", "rover_high_precision"))
+	docker := defaultMockDocker()
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/gnss/factory-reset-apply", bytes.NewReader([]byte(`{"confirm_factory_reset":true}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "unsupported for GNSS receiver family ublox")
+	assert.Contains(t, w.Body.String(), "safe u-blox reset recovery policy")
+	assert.Empty(t, docker.stopCalls)
+	assert.Empty(t, docker.startCalls)
+	assert.Empty(t, docker.runSpecs)
 }
 
 func TestGNSSApply_RejectsInvalidSerialDevice(t *testing.T) {
@@ -322,6 +547,274 @@ func TestGNSSApply_RejectsInvalidSerialDevice(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "/dev/*")
+	assert.Empty(t, docker.runSpecs)
+}
+
+func TestGNSSPlan_UsesYAMLFamilyDeviceAndBaudOverEnvFallback(t *testing.T) {
+	db, envFile := newGNSSTestDB(t, defaultGNSSYAML("/dev/ttyUSB9", "unicore", "rover_high_precision"))
+	require.NoError(t, os.WriteFile(envFile, []byte(strings.Join([]string{
+		"GNSS_RECEIVER_FAMILY=ublox",
+		"GNSS_SERIAL_DEVICE=/dev/ttyUSB1",
+		"GNSS_SERIAL_BAUD=115200",
+	}, "\n")+"\n"), 0644))
+
+	docker := defaultMockDocker()
+	docker.runResults = []pkgtypes.ContainerRunResult{{ExitCode: 0, Stdout: `{"status":"ok","warnings":[]}`}}
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/gnss/apply", bytes.NewReader([]byte(`{"confirm":true}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, docker.runSpecs, 1)
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--family")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "unicore")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--device")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "/dev/ttyUSB9")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--baud")
+	assert.Contains(t, docker.runSpecs[0].Cmd, gnssBaudAuto)
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--probe-bauds")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "921600,460800,115200,230400")
+}
+
+func TestGNSSApply_UsesEnvFallbackWhenYAMLValuesAreMissing(t *testing.T) {
+	db, envFile := newGNSSTestDB(t, "mowgli:\n  ros__parameters:\n    gnss_profile: rover_high_precision\n")
+	require.NoError(t, os.WriteFile(envFile, []byte(strings.Join([]string{
+		"GNSS_RECEIVER_FAMILY=unicore",
+		"GNSS_SERIAL_DEVICE=/dev/ttyUSB7",
+		"GNSS_SERIAL_BAUD=460800",
+	}, "\n")+"\n"), 0644))
+
+	docker := defaultMockDocker()
+	docker.runResults = []pkgtypes.ContainerRunResult{{ExitCode: 0, Stdout: `{"status":"ok","warnings":[]}`}}
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/gnss/apply", bytes.NewReader([]byte(`{"confirm":true}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, docker.runSpecs, 1)
+	assert.Contains(t, docker.runSpecs[0].Cmd, "unicore")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "/dev/ttyUSB7")
+	assert.Contains(t, docker.runSpecs[0].Cmd, gnssBaudAuto)
+	assert.Contains(t, docker.runSpecs[0].Cmd, "--probe-bauds")
+	assert.Contains(t, docker.runSpecs[0].Cmd, "460800,115200,230400,921600")
+}
+
+func TestBuildGNSSApplyCommand_UsesExplicitExecutionBaudWhenConfigured(t *testing.T) {
+	cfg := gnssSavedConfig{
+		ReceiverFamily: "unicore",
+		SerialDevice:   "/dev/ttyUSB7",
+		RuntimeBaud:    "921600",
+		ConfigBaud:     "921600",
+		ExecutionBaud:  "115200",
+		ProfileRateHz:  "10",
+	}
+
+	command := buildGNSSApplyCommand(cfg, "rover_high_precision")
+
+	assert.Contains(t, command, "--baud")
+	assert.Contains(t, command, "115200")
+	assert.NotContains(t, command, "--probe-bauds")
+}
+
+func TestBuildGNSSCommands_SkipSignalGroupWhenEmpty(t *testing.T) {
+	cfg := gnssSavedConfig{
+		ReceiverFamily: "unicore",
+		SerialDevice:   "/dev/ttyUSB7",
+		RuntimeBaud:    "921600",
+		ConfigBaud:     "921600",
+		ExecutionBaud:  gnssBaudAuto,
+		Profile:        "rover_high_precision",
+		ProfileRateHz:  "10",
+	}
+
+	assert.NotContains(t, buildGNSSPlanCommand(cfg), "--signal-group")
+	assert.NotContains(t, buildGNSSApplyCommand(cfg, "rover_high_precision"), "--signal-group")
+}
+
+func TestGNSSPlan_RejectsCollapsedSignalGroupBeforeCommandGeneration(t *testing.T) {
+	db, _ := newGNSSTestDB(t, defaultGNSSYAMLWithSignalGroup("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision", "36"))
+	docker := defaultMockDocker()
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/gnss/plan", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "invalid GNSS signal group")
+	assert.Contains(t, w.Body.String(), "36")
+	assert.Empty(t, docker.runSpecs)
+}
+
+func TestBuildGNSSApplyCommand_AutoProbeHintsAreUnicoreSpecific(t *testing.T) {
+	cfg := gnssSavedConfig{
+		ReceiverFamily: "ublox",
+		SerialDevice:   "/dev/ttyACM0",
+		RuntimeBaud:    "460800",
+		ConfigBaud:     "921600",
+		ExecutionBaud:  gnssBaudAuto,
+		ProfileRateHz:  "5",
+	}
+
+	command := buildGNSSApplyCommand(cfg, "rover_high_precision")
+
+	assert.Contains(t, command, "--baud")
+	assert.Contains(t, command, gnssBaudAuto)
+	assert.NotContains(t, command, "--probe-bauds")
+}
+
+func TestGNSSApply_AutoExecutionBaudSurfacesDetectedBaudFromToolOutput(t *testing.T) {
+	db, _ := newGNSSTestDB(t, defaultGNSSYAMLWithModel("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision", "UM982"))
+	docker := defaultMockDocker()
+	docker.runResults = []pkgtypes.ContainerRunResult{{
+		ExitCode: 0,
+		Stdout:   `{"status":"ok","warnings":[],"discovery":{"baud":115200},"transport":{"baud":460800},"execution_summary":{"final_status":"completed"}}`,
+	}}
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/gnss/apply", bytes.NewReader([]byte(`{"confirm":true}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var response GNSSActionResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.True(t, response.Success)
+	assert.Equal(t, gnssBaudAuto, response.ExecutionBaud)
+	assert.Equal(t, "115200", response.DetectedBaud)
+	assert.Equal(t, "460800", response.RuntimeBaud)
+	assert.Equal(t, "460800", response.ConfigBaud)
+	assert.True(t, response.RuntimeBaudUpdated)
+	assert.False(t, response.RuntimeBaudDiffersFromConfig)
+}
+
+func TestGNSSApply_PersistsOldRuntimeBaudWhenUnicoreConfigBaudDoesNotBecomeLive(t *testing.T) {
+	db, envFile := newGNSSTestDB(t, defaultGNSSYAMLWithModel("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision", "UM980"))
+	docker := defaultMockDocker()
+	docker.runResults = []pkgtypes.ContainerRunResult{{
+		ExitCode: 0,
+		Stdout:   `{"status":"ok","warnings":["configured baud 460800 bps did not become active live after CONFIG COM1; continuing at the previously detected 115200 bps transport until a persistent/save workflow or reboot makes the new baud active"],"discovery":{"baud":115200},"transport":{"baud":115200},"execution_summary":{"final_status":"completed"}}`,
+	}}
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/gnss/apply", bytes.NewReader([]byte(`{"confirm":true}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	envContent, err := os.ReadFile(envFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(envContent), "GNSS_SERIAL_BAUD=115200")
+
+	var response GNSSActionResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.True(t, response.Success)
+	assert.Equal(t, gnssBaudAuto, response.ExecutionBaud)
+	assert.Equal(t, "115200", response.DetectedBaud)
+	assert.Equal(t, "115200", response.RuntimeBaud)
+	assert.Equal(t, "460800", response.ConfigBaud)
+	assert.True(t, response.RuntimeBaudUpdated)
+	assert.True(t, response.RuntimeBaudDiffersFromConfig)
+	assert.Contains(t, strings.Join(response.Warnings, "\n"), "did not become active live")
+}
+
+func TestGNSSRuntimeConfigEndpoint_ReportsSourcesAndDetectedDevices(t *testing.T) {
+	db, envFile := newGNSSTestDB(t, "mowgli:\n  ros__parameters:\n    gnss_serial_baud: 921600\n")
+	require.NoError(t, os.WriteFile(envFile, []byte(strings.Join([]string{
+		"GNSS_RECEIVER_FAMILY=unicore",
+		"GNSS_SERIAL_DEVICE=/dev/serial/by-id/usb-gnss",
+		"GNSS_SERIAL_BAUD=460800",
+	}, "\n")+"\n"), 0644))
+
+	previousGlob := gnssPathGlob
+	previousStat := gnssPathStat
+	previousEval := gnssPathEvalLink
+	gnssPathGlob = func(pattern string) ([]string, error) {
+		if strings.Contains(pattern, "serial/by-id") {
+			return []string{"/dev/serial/by-id/usb-gnss"}, nil
+		}
+		return nil, nil
+	}
+	gnssPathStat = func(path string) (os.FileInfo, error) {
+		switch path {
+		case "/dev/serial/by-id/usb-gnss", "/dev/ttyUSB1":
+			return stubFileInfo{}, nil
+		default:
+			return nil, os.ErrNotExist
+		}
+	}
+	gnssPathEvalLink = func(path string) (string, error) {
+		if path == "/dev/serial/by-id/usb-gnss" {
+			return "/dev/ttyUSB1", nil
+		}
+		return path, nil
+	}
+	t.Cleanup(func() {
+		gnssPathGlob = previousGlob
+		gnssPathStat = previousStat
+		gnssPathEvalLink = previousEval
+	})
+
+	docker := defaultMockDocker()
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/settings/gnss/runtime-config", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var response gnssRuntimeConfigResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, "env", response.ReceiverFamily.Source)
+	assert.Equal(t, "unicore", response.ReceiverFamily.ActiveValue)
+	assert.Equal(t, "default", response.Transport.Source)
+	assert.Equal(t, "serial", response.Transport.ActiveValue)
+	assert.Equal(t, "env", response.SerialDevice.Source)
+	assert.Equal(t, "/dev/serial/by-id/usb-gnss", response.SerialDevice.ActiveValue)
+	assert.Equal(t, "config", response.SerialBaud.Source)
+	assert.Equal(t, "921600", response.SerialBaud.ActiveValue)
+	assert.Equal(t, "default", response.NTRIPEnabled.Source)
+	assert.Equal(t, "true", response.NTRIPEnabled.ActiveValue)
+	assert.True(t, response.ActiveSerialDeviceExists)
+	assert.Equal(t, "/dev/ttyUSB1", response.ActiveSerialResolvedPath)
+	require.Len(t, response.SerialDevices, 1)
+	assert.Equal(t, "/dev/serial/by-id/usb-gnss", response.SerialDevices[0].Path)
+	assert.Equal(t, "/dev/ttyUSB1", response.SerialDevices[0].ResolvedPath)
+}
+
+func TestGNSSApply_ReturnsClearErrorWhenSelectedDeviceIsMissing(t *testing.T) {
+	db, envFile := newGNSSTestDB(t, defaultGNSSYAML("/dev/ttyUSB42", "unicore", "rover_high_precision"))
+	require.NoError(t, os.WriteFile(envFile, []byte("GNSS_SERIAL_DEVICE=/dev/ttyUSB99\n"), 0644))
+
+	previousStat := gnssPathStat
+	gnssPathStat = func(path string) (os.FileInfo, error) {
+		return nil, errors.New("missing device")
+	}
+	t.Cleanup(func() {
+		gnssPathStat = previousStat
+	})
+
+	docker := defaultMockDocker()
+	router := setupGNSSRouter(db, docker)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/gnss/apply", bytes.NewReader([]byte(`{"confirm":true}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "GNSS serial device does not exist")
 	assert.Empty(t, docker.runSpecs)
 }
 

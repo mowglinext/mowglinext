@@ -1,6 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Alert, Badge, Button, Input, Spin, Typography } from "antd";
+import { Alert, App, Badge, Button, Empty, Input, Spin, Typography } from "antd";
 import {
     ReloadOutlined,
     SaveOutlined,
@@ -33,6 +33,7 @@ const { Text } = Typography;
 
 export const SettingsPage = () => {
     const { t } = useTranslation();
+    const { modal } = App.useApp();
     const guiApi = useApi();
     const isMobile = useIsMobile();
     const { colors } = useThemeMode();
@@ -49,6 +50,7 @@ export const SettingsPage = () => {
         searchQuery,
         advancedKeys,
         setSearchQuery,
+        matchesSearch,
         handleChange,
         handleBulkChange,
         isSectionDirty,
@@ -74,6 +76,37 @@ export const SettingsPage = () => {
         () => ros2Restart.run(() => restartRos2(guiApi)),
         [ros2Restart, guiApi],
     );
+    const confirmRestartRos2 = useCallback(() => {
+        modal.confirm({
+            title: t("settingsPage.restartConfirmTitle"),
+            content: t("settingsPage.restartConfirmBody"),
+            okText: t("settingsPage.restartConfirmOk"),
+            cancelText: t("settingsPage.restartConfirmCancel"),
+            onOk: handleRestartRos2,
+        });
+    }, [modal, t, handleRestartRos2]);
+
+    // Search filter: a section is visible when the query is empty, or when it
+    // matches ANY of the section's keys, or the section's translated
+    // label/description. Empty query shows everything.
+    const visibleSections = useMemo(() => {
+        if (!searchQuery) return sections;
+        return sections.filter(
+            (section) =>
+                section.keys.some((key) => matchesSearch(key)) ||
+                matchesSearch("", t(section.label)) ||
+                matchesSearch("", t(section.description)),
+        );
+    }, [sections, searchQuery, matchesSearch, t]);
+
+    // When the active section gets filtered out by the search, jump to the
+    // first still-visible section so the content pane never goes blank.
+    useEffect(() => {
+        if (visibleSections.length === 0) return;
+        if (!visibleSections.some((s) => s.id === activeSection)) {
+            setActiveSection(visibleSections[0].id);
+        }
+    }, [visibleSections, activeSection]);
 
     const renderSection = () => {
         switch (activeSection) {
@@ -100,7 +133,7 @@ export const SettingsPage = () => {
                         onSave={save}
                         onPersistGnssSettings={(settings) => savePartialValues(settings, {
                             silentSuccess: true,
-                            errorMessage: "Failed to save GNSS settings before running the receiver action",
+                            errorMessage: t("settingsPage.gnssSaveError"),
                         })}
                         onSaveAndRestartGps={saveAndRestartGps}
                     />
@@ -170,7 +203,7 @@ export const SettingsPage = () => {
                     <div style={{ flex: 1 }} />
                     {isDirty && (
                         <Badge count={dirtyKeys.size} size="small" offset={[-4, 0]}>
-                            <Text type="secondary" style={{ fontSize: 11 }}>unsaved changes</Text>
+                            <Text type="secondary" style={{ fontSize: 11 }}>{t("settingsPage.unsavedChanges")}</Text>
                         </Badge>
                     )}
                 </div>
@@ -180,17 +213,17 @@ export const SettingsPage = () => {
                     <Alert
                         type="warning"
                         showIcon
-                        message="Restart required to apply saved changes"
+                        message={t("settingsPage.restartRequired")}
                         action={
                             <Button
                                 size="small"
                                 type="primary"
                                 icon={<ReloadOutlined />}
-                                onClick={handleRestartRos2}
+                                onClick={confirmRestartRos2}
                                 loading={ros2Restart.pending}
                                 disabled={ros2Restart.pending}
                             >
-                                {ros2Restart.pending ? ros2Restart.pendingLabel : "Restart ROS2"}
+                                {ros2Restart.pending ? ros2Restart.pendingLabel : t("settingsPage.restartRos2")}
                             </Button>
                         }
                         style={{ marginBottom: 12 }}
@@ -219,12 +252,20 @@ export const SettingsPage = () => {
                     top: isMobile ? undefined : 8,
                     alignSelf: isMobile ? undefined : "flex-start",
                 }}>
-                    <SettingsNav
-                        sections={sections}
-                        activeSection={activeSection}
-                        onSectionChange={setActiveSection}
-                        isSectionDirty={isSectionDirty}
-                    />
+                    {visibleSections.length > 0 ? (
+                        <SettingsNav
+                            sections={visibleSections}
+                            activeSection={activeSection}
+                            onSectionChange={setActiveSection}
+                            isSectionDirty={isSectionDirty}
+                        />
+                    ) : (
+                        <Empty
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                            description={t("settingsPage.noSearchResults")}
+                            style={{ marginTop: 24 }}
+                        />
+                    )}
                 </div>
 
                 {/* Section content */}
@@ -236,7 +277,7 @@ export const SettingsPage = () => {
                     minWidth: 0,
                 }}>
                     {/* Section header */}
-                    {currentSectionMeta && (
+                    {visibleSections.length > 0 && currentSectionMeta && (
                         <div style={{ marginBottom: 20 }}>
                             <div className="mn-display" style={{
                                 fontSize: 28, color: colors.text, lineHeight: 1.1, letterSpacing: '-0.01em',
@@ -251,7 +292,7 @@ export const SettingsPage = () => {
                         </div>
                     )}
 
-                    {renderSection()}
+                    {visibleSections.length > 0 && renderSection()}
                 </div>
 
                 {/* Live preview rail (desktop only) */}
@@ -291,25 +332,25 @@ export const SettingsPage = () => {
                     loading={saving}
                     disabled={!isDirty}
                 >
-                    {isDirty ? `Save (${dirtyKeys.size} changes)` : "Saved"}
+                    {isDirty ? t("settingsPage.saveWithCount", {count: dirtyKeys.size}) : t("settingsPage.saved")}
                 </Button>
                 {isDirty && (
                     <Button
                         icon={<UndoOutlined />}
                         onClick={revert}
                     >
-                        Revert
+                        {t("settingsPage.revert")}
                     </Button>
                 )}
                 <div style={{ flex: 1 }} />
                 <Button
                     icon={<ReloadOutlined />}
-                    onClick={handleRestartRos2}
+                    onClick={confirmRestartRos2}
                     size="small"
                     loading={ros2Restart.pending}
                     disabled={ros2Restart.pending}
                 >
-                    {ros2Restart.pending ? ros2Restart.pendingLabel : "Restart ROS2"}
+                    {ros2Restart.pending ? ros2Restart.pendingLabel : t("settingsPage.restartRos2")}
                 </Button>
             </div>
         </div>

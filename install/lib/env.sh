@@ -33,6 +33,15 @@ remove_env_keys_with_prefix() {
   sed -i "/^${prefix}[A-Z0-9_]*=.*/d" "$file"
 }
 
+ensure_env_comment_line() {
+  local file="$1"
+  local comment="$2"
+
+  [ -f "$file" ] || return 0
+  grep -Fqx "$comment" "$file" 2>/dev/null && return 0
+  printf '%s\n' "$comment" >> "$file"
+}
+
 remove_legacy_gnss_env_keys() {
   local file="$1"
   local legacy_keys=(
@@ -80,17 +89,54 @@ env_yaml_value() {
 
 load_gnss_ntrip_runtime_defaults() {
   local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
+  local yaml_enabled yaml_host yaml_port yaml_user yaml_password yaml_mountpoint
 
   if [[ ! -f "$yaml_file" ]]; then
     return 0
   fi
 
-  : "${GNSS_NTRIP_ENABLED:=$(env_yaml_value "$yaml_file" ntrip_enabled)}"
-  : "${GNSS_NTRIP_HOST:=$(env_yaml_value "$yaml_file" ntrip_host)}"
-  : "${GNSS_NTRIP_PORT:=$(env_yaml_value "$yaml_file" ntrip_port)}"
-  : "${GNSS_NTRIP_USERNAME:=$(env_yaml_value "$yaml_file" ntrip_user)}"
-  : "${GNSS_NTRIP_PASSWORD:=$(env_yaml_value "$yaml_file" ntrip_password)}"
-  : "${GNSS_NTRIP_MOUNTPOINT:=$(env_yaml_value "$yaml_file" ntrip_mountpoint)}"
+  yaml_enabled="$(env_yaml_value "$yaml_file" ntrip_enabled)"
+  yaml_host="$(env_yaml_value "$yaml_file" ntrip_host)"
+  yaml_port="$(env_yaml_value "$yaml_file" ntrip_port)"
+  yaml_user="$(env_yaml_value "$yaml_file" ntrip_user)"
+  yaml_password="$(env_yaml_value "$yaml_file" ntrip_password)"
+  yaml_mountpoint="$(env_yaml_value "$yaml_file" ntrip_mountpoint)"
+
+  if [[ "${CONFIG_NTRIP_ENABLED_EXPLICIT:-false}" != "true" && -n "$yaml_enabled" ]]; then
+    GNSS_NTRIP_ENABLED="$yaml_enabled"
+  elif [[ -z "${GNSS_NTRIP_ENABLED:-}" ]]; then
+    GNSS_NTRIP_ENABLED="$yaml_enabled"
+  fi
+
+  if [[ "${CONFIG_NTRIP_HOST_EXPLICIT:-false}" != "true" && -n "$yaml_host" ]]; then
+    GNSS_NTRIP_HOST="$yaml_host"
+  elif [[ -z "${GNSS_NTRIP_HOST:-}" ]]; then
+    GNSS_NTRIP_HOST="$yaml_host"
+  fi
+
+  if [[ "${CONFIG_NTRIP_PORT_EXPLICIT:-false}" != "true" && -n "$yaml_port" ]]; then
+    GNSS_NTRIP_PORT="$yaml_port"
+  elif [[ -z "${GNSS_NTRIP_PORT:-}" ]]; then
+    GNSS_NTRIP_PORT="$yaml_port"
+  fi
+
+  if [[ "${CONFIG_NTRIP_USER_EXPLICIT:-false}" != "true" && -n "$yaml_user" ]]; then
+    GNSS_NTRIP_USERNAME="$yaml_user"
+  elif [[ -z "${GNSS_NTRIP_USERNAME:-}" ]]; then
+    GNSS_NTRIP_USERNAME="$yaml_user"
+  fi
+
+  if [[ "${CONFIG_NTRIP_PASSWORD_EXPLICIT:-false}" != "true" && -n "$yaml_password" ]]; then
+    GNSS_NTRIP_PASSWORD="$yaml_password"
+  elif [[ -z "${GNSS_NTRIP_PASSWORD:-}" ]]; then
+    GNSS_NTRIP_PASSWORD="$yaml_password"
+  fi
+
+  if [[ "${CONFIG_NTRIP_MOUNTPOINT_EXPLICIT:-false}" != "true" && -n "$yaml_mountpoint" ]]; then
+    GNSS_NTRIP_MOUNTPOINT="$yaml_mountpoint"
+  elif [[ -z "${GNSS_NTRIP_MOUNTPOINT:-}" ]]; then
+    GNSS_NTRIP_MOUNTPOINT="$yaml_mountpoint"
+  fi
 }
 
 sync_gnss_env_contract_values() {
@@ -142,6 +188,8 @@ sync_gnss_env_contract_values() {
 write_gnss_env_contract_keys() {
   local env_file="${1:?write_gnss_env_contract_keys: missing env file}"
 
+  ensure_env_comment_line "$env_file" "# GNSS_* values below are fallback-only first-boot defaults."
+  ensure_env_comment_line "$env_file" "# Active operator GNSS settings live in docker/config/mowgli/mowgli_robot.yaml and the GUI."
   upsert_env_key "$env_file" "GNSS_STACK" "$GNSS_STACK"
   upsert_env_key "$env_file" "GNSS_RECEIVER_FAMILY" "$GNSS_RECEIVER_FAMILY"
   upsert_env_key "$env_file" "GNSS_TRANSPORT" "$GNSS_TRANSPORT"
@@ -171,7 +219,9 @@ setup_env() {
   : "${ENABLE_FOXGLOVE:=true}"
 
   # Main GNSS receiver.
-  # GNSS_* is the only public runtime contract written to docker/.env.
+  # docker/.env now carries fallback-only GNSS defaults for first boot and
+  # headless recovery. The active operator configuration lives in YAML/GUI and
+  # is resolved at runtime before these env values are consulted.
   : "${GNSS_BACKEND:=universal}"
   : "${GNSS_STATUS_SOURCE:=$(default_gnss_status_source)}"
   : "${GNSS_STACK:=$(default_gnss_stack)}"

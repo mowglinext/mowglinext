@@ -52,8 +52,16 @@ assert_match "gnss_serial_device=/dev/ttyAMA4" \
   '^[[:space:]]+gnss_serial_device:[[:space:]]+"?/dev/ttyAMA4"?[[:space:]]*$' "$CONTENT"
 assert_match "gnss_serial_baud=921600" \
   '^[[:space:]]+gnss_serial_baud:[[:space:]]+921600[[:space:]]*$' "$CONTENT"
+assert_match "gnss_transport=serial" \
+  '^[[:space:]]+gnss_transport:[[:space:]]+"?serial"?[[:space:]]*$' "$CONTENT"
+assert_match "gnss_frame_id=gps_link" \
+  '^[[:space:]]+gnss_frame_id:[[:space:]]+"?gps_link"?[[:space:]]*$' "$CONTENT"
 assert_match "ntrip_enabled=true" \
   '^[[:space:]]+ntrip_enabled:[[:space:]]+true[[:space:]]*$' "$CONTENT"
+assert_match "gnss_ntrip_gga_enabled=true" \
+  '^[[:space:]]+gnss_ntrip_gga_enabled:[[:space:]]+true[[:space:]]*$' "$CONTENT"
+assert_match "gnss_ntrip_gga_interval_s=10" \
+  '^[[:space:]]+gnss_ntrip_gga_interval_s:[[:space:]]+10[[:space:]]*$' "$CONTENT"
 
 legacy_yaml_keys=(
   "gps_""protocol:"

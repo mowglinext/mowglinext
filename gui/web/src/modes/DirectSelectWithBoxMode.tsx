@@ -77,7 +77,9 @@ DirectSelectWithBoxMode.pathsToCoordinates = function (featureId: any, paths: an
 };
 
 DirectSelectWithBoxMode.onFeature = function (state: any, e: any) {
-  const isTouch = e.originalEvent instanceof TouchEvent;
+  // `TouchEvent` is undefined on desktop Safari/Firefox — referencing it bare
+  // throws a ReferenceError. Guard with `typeof` before the instanceof check.
+  const isTouch = typeof TouchEvent !== 'undefined' && e.originalEvent instanceof TouchEvent;
   // Require Ctrl/Cmd key to drag the entire area on desktop (prevents accidental moves).
   // On touch devices, allow dragging without modifier since there's no keyboard.
   if (state.selectedCoordPaths.length === 0 && (isTouch || e.originalEvent.ctrlKey || e.originalEvent.metaKey)) {
@@ -220,11 +222,6 @@ DirectSelectWithBoxMode.onMouseMove = function (state: any, e: any) {
 
   const isDraggableItem = onVertex || isFeature || isMidPoint;
   if (isDraggableItem && state.dragMoving) this.fireUpdate();
-
-  if (state.boxSelect) {
-    state.boxEndPoint = [e.point.x, e.point.y];
-    this.updateBoxSelect(state);
-  }
 
   return true;
 };

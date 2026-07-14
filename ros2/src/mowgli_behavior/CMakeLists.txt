@@ -242,6 +242,19 @@ if(BUILD_TESTING)
     tf2_ros
   )
 
+  ament_add_gtest(test_gnss_status_authority
+    test/test_gnss_status_authority.cpp
+  )
+
+  target_include_directories(test_gnss_status_authority PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_gnss_status_authority
+    mowgli_interfaces
+  )
+
 endif()
 
 ament_package()
