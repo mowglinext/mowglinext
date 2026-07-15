@@ -301,6 +301,13 @@ gtsam::Pose2 FusionGraphNode::SlewPublishedAnchor(const gtsam::Pose2& target,
                                                   bool anchor_valid,
                                                   double dt)
 {
+  // An odom re-base (OnTimer) sets force_pub_resync_: the target anchor just
+  // jumped by a coordinated amount that leaves map→base UNCHANGED, so the
+  // published anchor must snap to it (not ramp) or map→base would move. Drop
+  // pub_valid so AnchorSlewStep snaps on this cycle.
+  if (force_pub_resync_.exchange(false, std::memory_order_acq_rel))
+    t_map_odom_pub_valid_ = false;
+
   // Thin wrapper over the pure AnchorSlewStep (anchor_slew.hpp). Single
   // writer of t_map_odom_pub_ per run mode (TF thread when the broadcast
   // thread runs, executor otherwise) → no lock taken here.

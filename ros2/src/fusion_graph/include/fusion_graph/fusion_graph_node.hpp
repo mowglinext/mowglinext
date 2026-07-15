@@ -270,6 +270,21 @@ private:
   // the dedicated TF thread is disabled (observer / tf_broadcast_rate<=0).
   double last_map_pub_s_ = -1.0;
 
+  // ── Odom re-base (lever-arm limiter) ────────────────────────────
+  // map→odom = graph_pose ⊙ dr⁻¹, so a small graph YAW jitter rotates the
+  // odom→base offset and becomes a map→odom POSITION step proportional to
+  // |dr| (distance from the odom origin). As the robot drives away from
+  // that origin the same jitter produces ever-larger position jumps → the
+  // fused pose teleports vs the smooth odom trail and the controller can't
+  // track. When |dr| exceeds odom_rebase_dist_m we reset the odom POSITION
+  // origin onto the robot (dr_x/y→0, heading kept) and shift the anchor so
+  // map→base is unchanged — keeping the lever arm small. 0 = disabled.
+  double odom_rebase_dist_m_ = 0.0;
+  // Set by OnTimer at a re-base; SlewPublishedAnchor snaps the published
+  // anchor to the (coordinated) new target so map→base stays continuous
+  // across the reset instead of the slew ramping it.
+  std::atomic<bool> force_pub_resync_{false};
+
   // Advance t_map_odom_pub_ toward the raw target anchor by at most
   // anchor_max_{lin,ang}_slew over dt; snap on relocalization-scale jumps.
   // Returns the anchor to broadcast. Single-writer per run mode.
@@ -305,6 +320,16 @@ private:
   double cog_flip_min_interval_s_ = 10.0;
   double cog_flip_consistency_rad_ = 0.52;  // ~30°
   std::optional<double> cog_flip_prev_yaw_;
+  // Gate the COG yaw FACTOR (not just the flip recovery) on RTK-Fixed. COG is
+  // the GPS travel direction; under RTK-Float/NO_FIX a few-cm-to-m displacement
+  // error over the ~20 cm inter-fix baseline becomes a huge heading error, so
+  // the COG turns to garbage and corrupts the weakly-observable yaw (map→odom
+  // then balloons and the lever arm amplifies graph jitter into position jumps
+  // → the robot drives out of bounds). Gyro + scan-matching carry yaw through
+  // the Float window. NEVER gate before init — TrySeedInitialPose needs the seed.
+  bool cog_require_rtk_ = true;
+  double cog_rtk_max_age_s_ = 2.0;
+  uint64_t cog_rtk_gated_ = 0;  // diagnostic counter
   std::optional<rclcpp::Time> last_flip_recovery_stamp_;
   // True when seed_xy_ was set from an RTK-Fixed fix (carr_soln=2).
   // Drives the prior sigma at Initialize: tight (sub-cm) when set,

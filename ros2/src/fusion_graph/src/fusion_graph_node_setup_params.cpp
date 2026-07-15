@@ -89,6 +89,10 @@ void FusionGraphNode::DeclareParameters()
   cog_flip_require_rtk_ = declare_parameter<bool>("cog_flip_require_rtk", true);
   cog_flip_min_interval_s_ = declare_parameter<double>("cog_flip_min_interval_s", 10.0);
   cog_flip_consistency_rad_ = declare_parameter<double>("cog_flip_consistency_rad", 0.52);
+  // Gate the COG yaw factor itself on RTK-Fixed (see fusion_graph_node.hpp):
+  // a Float/NO_FIX-derived COG is garbage and corrupts the yaw.
+  cog_require_rtk_ = declare_parameter<bool>("cog_require_rtk", true);
+  cog_rtk_max_age_s_ = declare_parameter<double>("cog_rtk_max_age_s", 2.0);
 
   // ── Magnetometer (off by default) ───────────────────────────────
   // Motors near the chassis induce a heading-dependent bias on the

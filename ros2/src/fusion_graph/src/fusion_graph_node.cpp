@@ -141,6 +141,11 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   anchor_max_ang_slew_radps_ = declare_parameter<double>("anchor_max_ang_slew_radps", 0.20);
   anchor_snap_dist_m_ = declare_parameter<double>("anchor_snap_dist_m", 0.50);
   anchor_snap_yaw_rad_ = declare_parameter<double>("anchor_snap_yaw_rad", 0.35);
+  // Odom re-base distance (see fusion_graph_node.hpp). Reset the odom position
+  // origin onto the robot once it has driven this far, so the map→odom lever
+  // arm (and thus graph-yaw-jitter → position-jump amplification) stays small.
+  // 0 = disabled.
+  odom_rebase_dist_m_ = declare_parameter<double>("odom_rebase_dist_m", 0.0);
 
   graph_ = std::make_shared<GraphManager>(gp);
   DeclareParameters();

@@ -404,6 +404,25 @@ void FusionGraphNode::OnTimer()
       last_anchored_node_index_ = snap->node_index;
       t_map_odom_anchor_valid_ = true;
     }
+    // Odom re-base: once the robot has driven odom_rebase_dist_m from the odom
+    // origin, reset the odom POSITION onto the robot (heading kept) and shift
+    // the anchor so map→base is unchanged. This keeps the lever arm |dr| small
+    // so graph-yaw jitter can't rotate it into large map→odom position steps.
+    // OnImu (same executor thread) can't interrupt; the lock guards the TF
+    // reader thread. force_pub_resync_ makes the slew snap the published anchor
+    // to the new (coordinated) target so map→base stays continuous.
+    if (odom_rebase_dist_m_ > 0.0 && t_map_odom_anchor_valid_)
+    {
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
+      if (std::hypot(dr_x_, dr_y_) > odom_rebase_dist_m_)
+      {
+        const gtsam::Pose2 map_base = t_map_odom_anchor_.compose(gtsam::Pose2(dr_x_, dr_y_, dr_yaw_));
+        dr_x_ = 0.0;
+        dr_y_ = 0.0;
+        t_map_odom_anchor_ = map_base.compose(gtsam::Pose2(0.0, 0.0, dr_yaw_).inverse());
+        force_pub_resync_.store(true, std::memory_order_release);
+      }
+    }
     PublishOutputs(*snap);
   }
 }
