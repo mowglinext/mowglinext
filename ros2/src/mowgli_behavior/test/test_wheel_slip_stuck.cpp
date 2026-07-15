@@ -210,6 +210,16 @@ TEST_F(IsWheelSlipStuckTest, FailsOnShortSpan)
   EXPECT_EQ(ctx->obstacle_backoff_count, 0);
 }
 
+// Window whose surviving endpoints span FAR more than window_sec (a stalled
+// snapshot timer bridging a gap) must not fire either — the commanded
+// integral would cover motion the displacement check never saw.
+TEST_F(IsWheelSlipStuckTest, FailsOnOverlongSpan)
+{
+  fillWindow(/*span*/ 8.0, 1.2, 1.2, 0.0, 0.0);  // 8 s >> 1.5 × 4 s window
+  EXPECT_EQ(tick(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(ctx->obstacle_backoff_count, 0);
+}
+
 // Empty / single-sample window → FAILURE.
 TEST_F(IsWheelSlipStuckTest, FailsOnEmptyWindow)
 {

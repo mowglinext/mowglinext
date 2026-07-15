@@ -770,14 +770,27 @@ BT::NodeStatus IsWheelSlipStuck::tick()
   {
     return BT::NodeStatus::FAILURE;
   }
+  // Pick the sample BRACKETING the window boundary: the last one at or
+  // before now − window_sec, falling back to the first inside the window.
+  // Selecting only samples strictly inside the window drops the boundary
+  // sample (at 5 Hz the oldest in-window sample is ~0.2 s young, and a
+  // sample exactly window_sec old always loses the now-vs-snapshot race),
+  // silently shortening every judged window.
   const auto window_start = now - std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                       std::chrono::duration<double>(window_sec));
   const BTContext::MotionSample* oldest = nullptr;
   for (const auto& s : ctx->motion_window)
   {
-    if (s.t >= window_start)
+    if (s.t <= window_start)
     {
-      oldest = &s;
+      oldest = &s;  // keep advancing — we want the LAST pre-boundary sample
+    }
+    else
+    {
+      if (oldest == nullptr)
+      {
+        oldest = &s;  // no pre-boundary sample survived — first in-window one
+      }
       break;
     }
   }
@@ -785,11 +798,12 @@ BT::NodeStatus IsWheelSlipStuck::tick()
   {
     return BT::NodeStatus::FAILURE;
   }
-  // The window must actually SPAN close to window_sec — right after startup
-  // (or a window purge) the oldest surviving sample may be much younger, and
-  // judging "no displacement" over half a window is hair-triggered.
+  // The judged span must be CLOSE to window_sec on both sides: shorter
+  // (right after startup / a purge) is hair-triggered; much longer (a
+  // stalled snapshot timer bridging a gap) would accumulate commanded
+  // distance over motion the displacement check never saw.
   const double span_sec = std::chrono::duration<double>(newest.t - oldest->t).count();
-  if (span_sec < 0.8 * window_sec)
+  if (span_sec < 0.8 * window_sec || span_sec > 1.5 * window_sec)
   {
     return BT::NodeStatus::FAILURE;
   }
