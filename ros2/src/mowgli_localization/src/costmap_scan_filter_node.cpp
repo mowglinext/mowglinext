@@ -73,6 +73,7 @@
 #include <vector>
 
 #include "mowgli_interfaces/msg/status.hpp"
+#include "mowgli_localization/scan_filters.hpp"
 #include "rclcpp/qos.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -87,6 +88,17 @@ public:
   CostmapScanFilterNode() : Node("costmap_scan_filter")
   {
     dock_blank_range_ = declare_parameter<double>("dock_blank_range", 0.70);
+    // Bearing width (deg, total) of the dock blank, centred on robot
+    // FORWARD (the side the nose-in dock/canopy occupies while charging).
+    // 220° keeps generous side coverage blanked while leaving the REAR
+    // beams live — so during the undock BackUp / calibration reverse the
+    // costmap and /scan_collision still see a real obstacle behind the
+    // robot (the historical full-circle blank made undock blind to it).
+    // 360 = exact legacy full-circle blank (per-site escape hatch for
+    // docks whose structure wraps behind the robot). Clamped [90, 360].
+    dock_blank_sector_rad_ =
+        std::clamp(declare_parameter<double>("dock_blank_sector_deg", 220.0), 90.0, 360.0) * M_PI /
+        180.0;
     // Always-on radial blank used to suppress the robot's own chassis from
     // the LiDAR scan. Real hardware: LiDAR mount usually clears the
     // chassis, so 0 is fine. Sim/edge cases: any return inside this
@@ -104,6 +116,11 @@ public:
     // projection. Default 0 keeps the old (flat-mount) behaviour; the
     // launch passes the real ~π value for the 180°-rotated mount.
     lidar_mount_yaw_ = declare_parameter<double>("lidar_mount_yaw", 0.0);
+    // BASE-frame LIDAR mount yaw (mowgli_robot.yaml lidar_yaw, NO imu_yaw
+    // subtraction) — the sector blank's "forward" is base forward, while
+    // lidar_mount_yaw above is the IMU-frame rotation the gravity
+    // projection needs. The two coincide when imu_yaw == 0.
+    lidar_yaw_ = declare_parameter<double>("lidar_yaw", 0.0);
     min_ground_run_ = declare_parameter<int>("min_ground_run", 8);
     imu_max_age_s_ = declare_parameter<double>("imu_max_age_s", 0.5);
     accel_g_tolerance_ms2_ = declare_parameter<double>("accel_g_tolerance_ms2", 3.0);
@@ -147,7 +164,7 @@ public:
 
     RCLCPP_INFO(get_logger(),
                 "costmap_scan_filter started — %s -> %s, chassis_blank_range=%.2f m, "
-                "dock_blank_range=%.2f m, post_undock_blank_sec=%.1f s, "
+                "dock_blank_range=%.2f m (sector %.0f°), post_undock_blank_sec=%.1f s, "
                 "ground_filter=%s [Z range %.2f..%.2f m, lidar_height=%.2f m, "
                 "lidar_mount_yaw=%.3f rad, imu_max_age=%.2f s, "
                 "accel_g_tol=±%.2f m/s², source %s].",
@@ -155,6 +172,7 @@ public:
                 output_topic.c_str(),
                 chassis_blank_range_,
                 dock_blank_range_,
+                dock_blank_sector_rad_ * 180.0 / M_PI,
                 post_undock_blank_sec_,
                 enable_ground_filter_ ? "on" : "off",
                 min_obstacle_z_m_,
@@ -168,137 +186,10 @@ public:
 
   static constexpr double kGravityMs2 = 9.80665;
 
-  // --- Pure logic exposed for unit tests ---------------------------------
-
-  /// Three-component vector — used for the gravity-aligned "up" direction
-  /// expressed in the IMU/base_link frame.
-  struct Vec3
-  {
-    double x{0.0};
-    double y{0.0};
-    double z{1.0};
-  };
-
-  /// Ground-filter parameters bundled together so the test can call the
-  /// pure filter without a node.
-  struct GroundFilterConfig
-  {
-    bool enabled{false};
-    double min_obstacle_z_m{0.08};
-    double max_obstacle_z_m{1.5};
-    double lidar_height_m{0.22};
-    /// Yaw of the LIDAR frame relative to base_link/IMU (rad). A beam at
-    /// LIDAR index angle α points along base bearing α + lidar_mount_yaw.
-    double lidar_mount_yaw{0.0};
-    /// SAFETY: minimum run of consecutive ground-classified beams before any of
-    /// them is stripped as ground. A 2-D LiDAR can't tell a real vertical
-    /// obstacle from sloped ground at the same bearing/range — on a downslope a
-    /// leg/trunk/child projects BELOW min_obstacle_z and would be discarded. But
-    /// ground returns form LONG contiguous angular arcs while an obstacle
-    /// subtends only a few beams, so we only strip a "ground" return when it is
-    /// part of a run >= this length. A short ground-classified cluster is kept
-    /// (treated as a possible obstacle) — the planner/CostCritic then avoids it.
-    /// 0 disables the guard (legacy per-beam stripping).
-    int min_ground_run{8};
-  };
-
-  /// Apply the radial blank to a copy of @p in. Returns the result.
-  /// `blank_active` is the cached output of `is_blank_active()` — passed
-  /// in so the test can drive the state machine without a clock.
-  static sensor_msgs::msg::LaserScan filter_scan(const sensor_msgs::msg::LaserScan& in,
-                                                 double dock_blank_range,
-                                                 bool blank_active)
-  {
-    sensor_msgs::msg::LaserScan out = in;
-    if (!blank_active)
-      return out;
-    const float threshold = static_cast<float>(dock_blank_range);
-    const float inf = std::numeric_limits<float>::infinity();
-    for (auto& r : out.ranges)
-    {
-      if (std::isfinite(r) && r < threshold)
-        r = inf;
-    }
-    return out;
-  }
-
-  /// Apply the gravity-aware ground filter to @p io in place. For each
-  /// beam at LIDAR index angle α, rotate into the base/IMU frame by the
-  /// LIDAR mount yaw (ψ = α + lidar_mount_yaw) before projecting onto the
-  /// IMU's measured "up" unit vector:
-  ///
-  ///     ψ        = α + cfg.lidar_mount_yaw
-  ///     z_dir    = up_in_imu.x · cos ψ + up_in_imu.y · sin ψ
-  ///     return_Z = lidar_height + range · z_dir
-  ///
-  /// where up_in_imu = accel / |accel| (the gravity reaction direction).
-  /// Returns whose Z is outside [min_obstacle_z_m, max_obstacle_z_m] get
-  /// pushed to +inf so obstacle_layer ignores them.
-  ///
-  /// `up_in_imu` is std::nullopt when no fresh sample exists (or the
-  /// filter is disabled). In that case the function is a no-op — better
-  /// to publish phantom obstacles than to silently strip real ones.
-  static void apply_ground_filter(sensor_msgs::msg::LaserScan& io,
-                                  const GroundFilterConfig& cfg,
-                                  const std::optional<Vec3>& up_in_imu)
-  {
-    if (!cfg.enabled || !up_in_imu.has_value())
-      return;
-    const Vec3& u = *up_in_imu;
-    const float min_z = static_cast<float>(cfg.min_obstacle_z_m);
-    const float max_z = static_cast<float>(cfg.max_obstacle_z_m);
-    const float inf = std::numeric_limits<float>::infinity();
-    const double a0 = io.angle_min;
-    const double da = io.angle_increment;
-    const size_t n = io.ranges.size();
-
-    // Pass 1: classify each finite beam. 0 = keep, 1 = ground (projects below
-    // min_z), 2 = overhead (above max_z). The overhead strip is per-beam (a
-    // canopy/overhang return is genuinely above the robot and safe to drop); the
-    // GROUND strip is gated below by a run-length test so a real obstacle that a
-    // downslope mis-projects below min_z is not silently discarded.
-    std::vector<uint8_t> klass(n, 0);
-    for (size_t i = 0; i < n; ++i)
-    {
-      const float r = io.ranges[i];
-      if (!std::isfinite(r))
-        continue;
-      const double psi = a0 + da * static_cast<double>(i) + cfg.lidar_mount_yaw;
-      const double z_dir = u.x * std::cos(psi) + u.y * std::sin(psi);
-      const float return_z = static_cast<float>(cfg.lidar_height_m + r * z_dir);
-      if (return_z > max_z)
-        klass[i] = 2;
-      else if (return_z < min_z)
-        klass[i] = 1;
-    }
-
-    // Pass 2: strip overhead returns outright; strip ground returns only where
-    // they form a contiguous run >= min_ground_run (a long sweep of ground),
-    // leaving short ground-classified clusters as possible obstacles.
-    const int min_run = std::max(1, cfg.min_ground_run);
-    for (size_t i = 0; i < n; ++i)
-    {
-      if (klass[i] == 2)
-      {
-        io.ranges[i] = inf;
-        continue;
-      }
-      if (klass[i] != 1)
-        continue;
-      // Extent of the contiguous ground run containing i.
-      size_t j = i;
-      while (j < n && klass[j] == 1)
-        ++j;
-      const size_t run_len = j - i;
-      if (static_cast<int>(run_len) >= min_run)
-      {
-        for (size_t k = i; k < j; ++k)
-          io.ranges[k] = inf;
-      }
-      // else: keep the short cluster (possible obstacle the slope mis-projected).
-      i = j - 1;  // skip past the run we just handled
-    }
-  }
+  // The pure filter helpers (filter_scan, apply_ground_filter, Vec3,
+  // GroundFilterConfig) live in mowgli_localization/scan_filters.hpp —
+  // shared with test_costmap_scan_filter so the tests exercise the exact
+  // deployed logic instead of a hand-mirrored copy.
 
 private:
   void on_status(const mowgli_interfaces::msg::Status& msg)
@@ -373,15 +264,19 @@ private:
 
   void on_scan(const sensor_msgs::msg::LaserScan& msg)
   {
-    // Two-stage radial blank: chassis_blank_range_ is always on, then
-    // dock_blank_range_ kicks in only while charging / immediately
-    // post-undock. The `effective` blank range is the larger of the two
-    // currently-active values, so a single pass through filter_scan
-    // suffices.
+    // Two-stage blank: chassis_blank_range_ is always on at every bearing
+    // (self-returns come from all around the housing); the dock blank kicks
+    // in only while charging / immediately post-undock AND only within
+    // dock_blank_sector_rad_ of robot-forward — the rear beams stay live so
+    // the undock BackUp's collision check and the calibration rear guard
+    // still see a real obstacle behind the robot during the blank window.
     const bool dock_active = is_blank_active();
-    const double effective_blank = std::max(
-        chassis_blank_range_, dock_active ? dock_blank_range_ : 0.0);
-    sensor_msgs::msg::LaserScan out = filter_scan(msg, effective_blank, effective_blank > 0.0);
+    sensor_msgs::msg::LaserScan out = filter_scan(msg,
+                                                  chassis_blank_range_,
+                                                  dock_blank_range_,
+                                                  dock_active,
+                                                  dock_blank_sector_rad_,
+                                                  lidar_yaw_);
 
     // SAFETY: collision_monitor gets the scan with chassis/dock self-returns
     // blanked but WITHOUT the gravity ground filter applied. The ground filter
@@ -452,6 +347,7 @@ private:
   // --- Parameters --------------------------------------------------------
 
   double dock_blank_range_{0.70};
+  double dock_blank_sector_rad_{220.0 * M_PI / 180.0};
   double chassis_blank_range_{0.0};
   double post_undock_blank_sec_{5.0};
   bool enable_ground_filter_{true};
@@ -459,6 +355,7 @@ private:
   double max_obstacle_z_m_{1.5};
   double lidar_height_m_{0.22};
   double lidar_mount_yaw_{0.0};
+  double lidar_yaw_{0.0};
   int min_ground_run_{8};
   double imu_max_age_s_{0.5};
   double accel_g_tolerance_ms2_{3.0};

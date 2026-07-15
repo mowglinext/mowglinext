@@ -168,6 +168,31 @@ export const ObstaclesSection: React.FC<Props> = ({
                 </Form>
             </Card>
 
+            {/* Calibration drive guard — the calibration profiles bypass the
+                collision monitor (teleop lane), this pauses/aborts them on a
+                blocked path. Expert knobs (range/sector/wait) live in
+                Advanced. */}
+            <Card size="small" title={t("settingsObstacles.calibrationGuard")} style={{ marginBottom: 16 }}>
+                <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
+                    {t("settingsObstacles.calibrationGuardDescription")}
+                </Paragraph>
+                <Form layout="vertical" size="small">
+                    <Row gutter={[16, 0]}>
+                        <Col xs={24} sm={8}>
+                            <Form.Item
+                                label={fieldLabel("calibration_guard_enabled", t("settingsObstacles.calibrationGuardEnabled"))}
+                                tooltip={t("settingsObstacles.calibrationGuardEnabledTooltip")}
+                            >
+                                <Switch
+                                    checked={values.calibration_guard_enabled !== false}
+                                    onChange={(v) => onChange("calibration_guard_enabled", v)}
+                                />
+                            </Form.Item>
+                        </Col>
+                    </Row>
+                </Form>
+            </Card>
+
             {/* Approach slowdown */}
             <Card size="small" title={t("settingsObstacles.approachSlowdown")} style={{ marginBottom: 16 }}>
                 <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>

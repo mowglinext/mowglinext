@@ -268,9 +268,13 @@ def generate_launch_description() -> LaunchDescription:
     # frame; it is 0 on this stack but kept general.
     lidar_height_m = 0.22
     lidar_mount_yaw = 0.0
+    # lidar_yaw proper (BASE-frame mount yaw, no imu_yaw subtraction) — used
+    # by the sector-limited dock blank, whose "forward" is base forward.
+    lidar_base_yaw = 0.0
     if rp:
         lidar_height_m = float(rp.get("lidar_z", lidar_height_m))
-        lidar_mount_yaw = float(rp.get("lidar_yaw", 0.0)) - float(rp.get("imu_yaw", 0.0))
+        lidar_base_yaw = float(rp.get("lidar_yaw", 0.0))
+        lidar_mount_yaw = lidar_base_yaw - float(rp.get("imu_yaw", 0.0))
         cl = float(rp.get("chassis_length", 0.54))
         cw = float(rp.get("chassis_width", 0.40))
         ccx = float(rp.get("chassis_center_x", 0.18))
@@ -1032,6 +1036,17 @@ def generate_launch_description() -> LaunchDescription:
              # tighten if real-obstacle sensitivity is critical.
              "chassis_blank_range": 0.55,
              "dock_blank_range": 0.70,
+             # Sector-limited dock blank (deg, total, centred on BASE
+             # forward — the nose-in dock side). 220 keeps the REAR beams
+             # live during charge/post-undock so the undock BackUp's
+             # collision check and the calibration rear guard can see a
+             # real obstacle behind the robot; 360 restores the legacy
+             # full-circle blank (per-site escape hatch). lidar_yaw (base
+             # frame, no imu_yaw subtraction) rotates beam angles to base
+             # bearings for the sector test.
+             "dock_blank_sector_deg": float(
+                 rp.get("dock_blank_sector_deg", 220.0)) if rp else 220.0,
+             "lidar_yaw": lidar_base_yaw,
              "post_undock_blank_sec": 5.0,
              # Ground-filter geometry from mowgli_robot.yaml. lidar_mount_yaw
              # (~π on the 180°-rotated mount) is essential — without it the

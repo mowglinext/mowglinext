@@ -356,6 +356,25 @@ mowgli:
     stuck_window_sec: 4.0
     stuck_min_commanded_m: 0.15
     stuck_max_displacement_m: 0.05
+    # Scan guard for the open-loop calibration drives (calibrate_imu_yaw_node
+    # publishes on /cmd_vel_teleop, which BYPASSES the collision_monitor).
+    # When /scan_collision shows >= 3 returns within calibration_guard_range_m
+    # inside a calibration_guard_sector_deg-wide sector centred on the motion
+    # direction, the drive PAUSES; if it stays blocked longer than
+    # calibration_guard_wait_sec the calibration aborts with a clear message.
+    # No-op without a LiDAR (stale-scan gate). Clamps: range [0.2, 2.0] m,
+    # sector [20, 180]°, wait [5, 300] s.
+    calibration_guard_enabled: true
+    calibration_guard_range_m: 0.45
+    calibration_guard_sector_deg: 60.0
+    calibration_guard_wait_sec: 30.0
+    # Bearing width (deg, total, centred on robot FORWARD — the nose-in dock
+    # side) of costmap_scan_filter's dock blank while charging / post-undock.
+    # 220 keeps the REAR beams live so the undock BackUp collision check and
+    # the calibration rear guard still see a real obstacle behind the robot;
+    # 360 restores the legacy full-circle blank (escape hatch for docks whose
+    # structure wraps behind the robot). Clamped [90, 360].
+    dock_blank_sector_deg: 220.0
 
     # -----------------------------------------------------------------
     # Navigation tolerances (garden terrain)

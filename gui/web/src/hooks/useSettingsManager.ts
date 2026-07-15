@@ -168,6 +168,10 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "obstacle_margin", "obstacle_slowdown_ratio",
             "stuck_detection_enabled", "stuck_window_sec",
             "stuck_min_commanded_m", "stuck_max_displacement_m",
+            // calibration_guard_{range_m,sector_deg,wait_sec} and
+            // dock_blank_sector_deg intentionally NOT listed: they carry
+            // schema defaults so they surface in Advanced for expert tuning.
+            "calibration_guard_enabled",
         ],
     },
     {
