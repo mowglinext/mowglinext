@@ -48,6 +48,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<PreFlightCheck>("PreFlightCheck");
   factory.registerNodeType<Nav2Active>("Nav2Active");
   factory.registerNodeType<IsObstacleStuck>("IsObstacleStuck");
+  factory.registerNodeType<IsWheelSlipStuck>("IsWheelSlipStuck");
   factory.registerNodeType<WasRecentlyInCollisionStop>("WasRecentlyInCollisionStop");
 
   // Action nodes

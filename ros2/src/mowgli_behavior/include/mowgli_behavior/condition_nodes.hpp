@@ -583,6 +583,56 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// IsWheelSlipStuck
+// ---------------------------------------------------------------------------
+
+/// Fires (SUCCESS) when the robot has been COMMANDED to move but its
+/// GPS/graph-anchored map pose has not moved — wheels spinning on / stalled
+/// against an obstacle below the 2D LiDAR scan plane (tree roots, molehills):
+/// the digging-in failure mode IsObstacleStuck can never see because the
+/// collision_monitor never reports STOP for sub-scan-plane obstacles.
+///
+/// Detector: over the last `window_sec` of BTContext::motion_window samples,
+///   commanded = max(Δcmd_dist, Δwheel_dist)   (covers stall AND slip)
+///   displacement = hypot(Δmap_x, Δmap_y)
+///   stuck ⇔ commanded ≥ min_commanded_m AND displacement ≤ max_displacement_m
+/// Both window endpoints must have map_valid; a fusion_graph map jump only
+/// INFLATES displacement, suppressing the trigger (fail-safe).
+///
+/// Shares obstacle_backoff_count / last_obstacle_backoff_time with
+/// IsObstacleStuck: one per-session cap and one cooldown across both
+/// StuckBackoff triggers.
+class IsWheelSlipStuck : public BT::ConditionNode
+{
+public:
+  IsWheelSlipStuck(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {
+        BT::InputPort<bool>("enabled", true, "Master toggle (stuck_detection_enabled)"),
+        BT::InputPort<double>("window_sec", 4.0, "Rolling window length (s)"),
+        BT::InputPort<double>("min_commanded_m",
+                              0.15,
+                              "Commanded/wheel travel over the window needed to arm (m)"),
+        BT::InputPort<double>(
+            "max_displacement_m",
+            0.05,
+            "Map-frame displacement at or below which the robot counts as stuck (m)"),
+        BT::InputPort<int>("max_count", 3, "Per-session cap shared with IsObstacleStuck"),
+        BT::InputPort<double>("cooldown_sec",
+                              8.0,
+                              "Minimum gap between firings, shared with IsObstacleStuck"),
+    };
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
 // WasRecentlyInCollisionStop
 // ---------------------------------------------------------------------------
 

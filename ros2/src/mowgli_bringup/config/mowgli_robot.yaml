@@ -341,6 +341,21 @@ mowgli:
     # inside the chassis+15 cm approach box (LiDAR variant only). 0.3 = slow
     # to 30 % of commanded speed. Clamped to [0.05, 1.0].
     obstacle_slowdown_ratio: 0.3
+    # Wheel-slip / stall stuck detection (IsWheelSlipStuck → StuckBackoff:
+    # blade off + BackUp 0.40 m + costmap clear, shared per-session cap with
+    # the collision-monitor trigger). Fires when the robot was COMMANDED to
+    # travel ≥ stuck_min_commanded_m over stuck_window_sec but its
+    # GPS/graph-anchored map pose moved ≤ stuck_max_displacement_m — wheels
+    # spinning on / stalled against something BELOW the 2D LiDAR scan plane
+    # (tree roots, molehills), the digging-in failure mode. Clamps in
+    # behavior_tree_node: window [2, 30] s, commanded [0.05, 1.0] m,
+    # displacement [0.01, 0.3] m. stuck_max_displacement_m must stay above
+    # RTK-Fixed + graph jitter over the window (σ_xy ~ mm-cm) but below real
+    # mowing progress (0.2 m/s × 4 s = 0.8 m).
+    stuck_detection_enabled: true
+    stuck_window_sec: 4.0
+    stuck_min_commanded_m: 0.15
+    stuck_max_displacement_m: 0.05
 
     # -----------------------------------------------------------------
     # Navigation tolerances (garden terrain)

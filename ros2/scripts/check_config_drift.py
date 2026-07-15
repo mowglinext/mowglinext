@@ -102,6 +102,8 @@ USER_OVERRIDE = {
     "path_spacing", "mow_angle_offset_deg", "mow_angle_increment_deg",
     "max_obstacle_avoidance_distance", "coverage_xy_tolerance",
     "obstacle_inflation_radius", "obstacle_margin", "obstacle_slowdown_ratio",
+    "stuck_detection_enabled", "stuck_window_sec",
+    "stuck_min_commanded_m", "stuck_max_displacement_m",
     "xy_goal_tolerance", "yaw_goal_tolerance",
     "progress_timeout_sec",
     "motor_temp_low_c", "motor_temp_high_c",

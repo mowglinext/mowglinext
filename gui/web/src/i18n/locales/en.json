@@ -2203,7 +2203,17 @@
     "approachSlowdown": "Approach Slowdown",
     "approachSlowdownDescription": "The collision monitor slows the robot when a scan return enters the approach box around the chassis (LiDAR variant).",
     "slowdownRatio": "Slowdown Ratio",
-    "slowdownRatioTooltip": "Speed factor near obstacles: 0.3 = slow to 30% of the commanded speed"
+    "slowdownRatioTooltip": "Speed factor near obstacles: 0.3 = slow to 30% of the commanded speed",
+    "stuckDetection": "Stuck Detection",
+    "stuckDetectionDescription": "When the robot is commanded to move but its GPS position does not change — wheels spinning or stalled on roots invisible to the LiDAR — it turns the blade off and backs up instead of digging in.",
+    "stuckEnabled": "Enable",
+    "stuckEnabledTooltip": "Automatically back up when wheels spin or stall without the robot actually moving",
+    "stuckWindow": "Detection Window",
+    "stuckWindowTooltip": "Seconds of commanded-but-not-moving before backing off",
+    "stuckMinCommanded": "Min Commanded Travel",
+    "stuckMinCommandedTooltip": "Commanded/wheel travel over the window needed to arm the detector",
+    "stuckMaxDisplacement": "Max Real Displacement",
+    "stuckMaxDisplacementTooltip": "GPS displacement at or below which the robot counts as stuck (must exceed RTK noise)"
   },
   "settingsMowing": {
     "mowingMotor": "Mowing Motor",

@@ -230,6 +230,18 @@ def generate_launch_description() -> LaunchDescription:
             # references in main_tree.xml. See issue #191.
             {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
             {"undock_distance": float(robot_params.get("undock_distance", 1.0))},
+            # Wheel-slip / stall stuck detection (IsWheelSlipStuck →
+            # StuckBackoff). Blackboard-forwarded like undock_* above;
+            # template defaults + GUI (Settings → Obstacles) in
+            # mowgli_robot.yaml. behavior_tree_node clamps.
+            {"stuck_detection_enabled": bool(
+                robot_params.get("stuck_detection_enabled", True))},
+            {"stuck_window_sec": float(
+                robot_params.get("stuck_window_sec", 4.0))},
+            {"stuck_min_commanded_m": float(
+                robot_params.get("stuck_min_commanded_m", 0.15))},
+            {"stuck_max_displacement_m": float(
+                robot_params.get("stuck_max_displacement_m", 0.05))},
             # idle_nav2_suspend: PAUSE the Nav2 lifecycle stack while parked on
             # the dock to cut idle CPU/thermal load (costmaps stop looping).
             # Default off — a deliberate per-site opt-in. RESUME is guaranteed

@@ -15,7 +15,9 @@
 
 #include "mowgli_behavior/condition_nodes.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 #include <mutex>
@@ -704,6 +706,139 @@ BT::NodeStatus IsObstacleStuck::tick()
               "IsObstacleStuck: collision_monitor STOP active for %.1fs — "
               "triggering obstacle-backoff (%d/%d)",
               stop_age_sec,
+              ctx->obstacle_backoff_count,
+              max_count);
+
+  return BT::NodeStatus::SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
+// IsWheelSlipStuck
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus IsWheelSlipStuck::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  bool enabled = true;
+  if (auto res = getInput<bool>("enabled"))
+  {
+    enabled = res.value();
+  }
+  if (!enabled)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+  double window_sec = 4.0;
+  if (auto res = getInput<double>("window_sec"))
+  {
+    window_sec = res.value();
+  }
+  double min_commanded_m = 0.15;
+  if (auto res = getInput<double>("min_commanded_m"))
+  {
+    min_commanded_m = res.value();
+  }
+  double max_displacement_m = 0.05;
+  if (auto res = getInput<double>("max_displacement_m"))
+  {
+    max_displacement_m = res.value();
+  }
+  int max_count = 3;
+  if (auto res = getInput<int>("max_count"))
+  {
+    max_count = res.value();
+  }
+  double cooldown_sec = 8.0;
+  if (auto res = getInput<double>("cooldown_sec"))
+  {
+    cooldown_sec = res.value();
+  }
+
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+
+  const auto now = std::chrono::steady_clock::now();
+
+  // Newest sample must be fresh (the 5 Hz snapshot timer is alive) and
+  // map-valid; then walk back to the oldest sample still inside the window.
+  if (ctx->motion_window.size() < 2)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+  const auto& newest = ctx->motion_window.back();
+  if (!newest.map_valid || std::chrono::duration<double>(now - newest.t).count() > 1.0)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+  const auto window_start = now - std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                      std::chrono::duration<double>(window_sec));
+  const BTContext::MotionSample* oldest = nullptr;
+  for (const auto& s : ctx->motion_window)
+  {
+    if (s.t >= window_start)
+    {
+      oldest = &s;
+      break;
+    }
+  }
+  if (oldest == nullptr || !oldest->map_valid || oldest == &newest)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+  // The window must actually SPAN close to window_sec — right after startup
+  // (or a window purge) the oldest surviving sample may be much younger, and
+  // judging "no displacement" over half a window is hair-triggered.
+  const double span_sec = std::chrono::duration<double>(newest.t - oldest->t).count();
+  if (span_sec < 0.8 * window_sec)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // Stall AND slip covered: wheels blocked by a root → wheel_dist ~0 but
+  // cmd_dist accumulates; wheels digging in place → both accumulate. Either
+  // way the map pose stays put.
+  const double commanded =
+      std::max(newest.cmd_dist - oldest->cmd_dist, newest.wheel_dist - oldest->wheel_dist);
+  const double displacement =
+      std::hypot(newest.map_x - oldest->map_x, newest.map_y - oldest->map_y);
+  if (commanded < min_commanded_m || displacement > max_displacement_m)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+
+  // Shared per-session cap + cooldown with IsObstacleStuck — one budget for
+  // the whole StuckBackoff recovery, whichever trigger fires.
+  if (ctx->obstacle_backoff_count >= max_count)
+  {
+    RCLCPP_WARN_THROTTLE(ctx->node->get_logger(),
+                         *ctx->node->get_clock(),
+                         5000,
+                         "IsWheelSlipStuck: backoff cap reached (%d/%d), "
+                         "deferring to MarkBlockedAndSkip",
+                         ctx->obstacle_backoff_count,
+                         max_count);
+    return BT::NodeStatus::FAILURE;
+  }
+  if (ctx->last_obstacle_backoff_time.time_since_epoch().count() != 0)
+  {
+    const double since_last_sec =
+        std::chrono::duration<double>(now - ctx->last_obstacle_backoff_time).count();
+    if (since_last_sec < cooldown_sec)
+    {
+      return BT::NodeStatus::FAILURE;
+    }
+  }
+
+  ctx->obstacle_backoff_count++;
+  ctx->last_obstacle_backoff_time = now;
+
+  RCLCPP_WARN(ctx->node->get_logger(),
+              "IsWheelSlipStuck: commanded %.2f m but map displacement only "
+              "%.2f m over %.1f s — wheels slipping/stalled (likely a "
+              "sub-scan-plane obstacle), triggering obstacle-backoff (%d/%d)",
+              commanded,
+              displacement,
+              span_sec,
               ctx->obstacle_backoff_count,
               max_count);
 

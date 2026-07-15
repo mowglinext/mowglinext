@@ -13,8 +13,10 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -25,6 +27,7 @@
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "behaviortree_cpp/behavior_tree.h"
 #include "behaviortree_cpp/loggers/bt_cout_logger.h"
+#include "geometry_msgs/msg/twist_stamped.hpp"
 #include "mowgli_behavior/action_nodes.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
@@ -40,10 +43,12 @@
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav2_msgs/action/undock_robot.hpp"
 #include "nav2_msgs/msg/collision_monitor_state.hpp"
+#include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_srvs/srv/trigger.hpp"
+#include "tf2/exceptions.hpp"
 
 using namespace std::chrono_literals;
 
@@ -335,6 +340,82 @@ private:
           }
         });
 
+    // Motion integrals for IsWheelSlipStuck. Two "trying to move" signals:
+    // /cmd_vel_monitored (post-collision_monitor command — accumulates even
+    // when the wheels are STALLED against a root, the case wheel odom misses)
+    // and /wheel_odom (accumulates when the wheels SPIN in place, the case a
+    // near-zero commanded speed could under-report). The condition node takes
+    // max(cmd, wheel) over its window. dt is wall-clock between messages,
+    // clamped so a stream hiccup can't inject a huge phantom distance.
+    cmd_vel_sub_ = create_subscription<geometry_msgs::msg::TwistStamped>(
+        "/cmd_vel_monitored",
+        10,
+        [this](geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
+        {
+          const auto now = std::chrono::steady_clock::now();
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          if (last_cmd_vel_time_.time_since_epoch().count() != 0)
+          {
+            const double dt =
+                std::min(kMotionIntegrationMaxDtSec,
+                         std::chrono::duration<double>(now - last_cmd_vel_time_).count());
+            context_->cmd_dist_accum += std::fabs(msg->twist.linear.x) * dt;
+          }
+          last_cmd_vel_time_ = now;
+        });
+
+    wheel_odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+        "/wheel_odom",
+        rclcpp::SensorDataQoS(),
+        [this](nav_msgs::msg::Odometry::ConstSharedPtr msg)
+        {
+          const auto now = std::chrono::steady_clock::now();
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          if (last_wheel_odom_time_.time_since_epoch().count() != 0)
+          {
+            const double dt =
+                std::min(kMotionIntegrationMaxDtSec,
+                         std::chrono::duration<double>(now - last_wheel_odom_time_).count());
+            context_->wheel_dist_accum += std::fabs(msg->twist.twist.linear.x) * dt;
+          }
+          last_wheel_odom_time_ = now;
+        });
+
+    // 5 Hz snapshot of the motion integrals + the GPS/graph-anchored
+    // map→base_footprint position into the rolling window IsWheelSlipStuck
+    // reads. TF unavailability is recorded (map_valid=false) rather than
+    // skipped so the condition can refuse to fire on a stale window.
+    motion_window_timer_ = create_wall_timer(
+        std::chrono::milliseconds(200),
+        [this]()
+        {
+          BTContext::MotionSample sample;
+          sample.t = std::chrono::steady_clock::now();
+          try
+          {
+            const auto tf =
+                context_->tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
+            sample.map_x = tf.transform.translation.x;
+            sample.map_y = tf.transform.translation.y;
+            sample.map_valid = true;
+          }
+          catch (const tf2::TransformException&)
+          {
+            sample.map_valid = false;
+          }
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          sample.cmd_dist = context_->cmd_dist_accum;
+          sample.wheel_dist = context_->wheel_dist_accum;
+          context_->motion_window.push_back(sample);
+          // Keep ~2× the largest window IsWheelSlipStuck can be configured
+          // with (30 s) so the oldest-sample lookup always has slack.
+          const auto horizon = sample.t - std::chrono::seconds(60);
+          while (!context_->motion_window.empty() && context_->motion_window.front().t < horizon)
+          {
+            context_->motion_window.pop_front();
+          }
+        });
+
     RCLCPP_DEBUG(get_logger(), "Topic subscribers created");
   }
 
@@ -568,6 +649,23 @@ private:
     const double undock_distance = declare_parameter<double>("undock_distance", 1.0);
     blackboard_->set("undock_distance", undock_distance);
 
+    // Wheel-slip / stall stuck detection (IsWheelSlipStuck, StuckBackoff).
+    // Template defaults in mowgli_bringup/config/mowgli_robot.yaml (GUI:
+    // Settings → Obstacles); forwarded here by full_system.launch.py. Clamps
+    // mirror the template comments so a stray override cannot make the
+    // detector hair-triggered (window < 2 s) or dead (displacement gate 0).
+    const bool stuck_enabled = declare_parameter<bool>("stuck_detection_enabled", true);
+    blackboard_->set("stuck_detection_enabled", stuck_enabled);
+    const double stuck_window_sec =
+        std::clamp(declare_parameter<double>("stuck_window_sec", 4.0), 2.0, 30.0);
+    blackboard_->set("stuck_window_sec", stuck_window_sec);
+    const double stuck_min_commanded_m =
+        std::clamp(declare_parameter<double>("stuck_min_commanded_m", 0.15), 0.05, 1.0);
+    blackboard_->set("stuck_min_commanded_m", stuck_min_commanded_m);
+    const double stuck_max_displacement_m =
+        std::clamp(declare_parameter<double>("stuck_max_displacement_m", 0.05), 0.01, 0.3);
+    blackboard_->set("stuck_max_displacement_m", stuck_max_displacement_m);
+
     // idle_nav2_suspend (default false): when true, the BT PAUSEs the Nav2
     // lifecycle stack (via SetNav2Lifecycle) while parked on the dock to cut
     // the idle CPU/thermal load of the always-looping costmaps, and RESUMEs
@@ -743,6 +841,15 @@ private:
   rclcpp::Subscription<mowgli_interfaces::msg::AbsolutePose>::SharedPtr gps_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr gnss_status_sub_;
   rclcpp::Subscription<nav2_msgs::msg::CollisionMonitorState>::SharedPtr collision_monitor_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr wheel_odom_sub_;
+  // Wall-clock stamps of the previous cmd_vel / wheel_odom message, for the
+  // |v|·dt motion integrals (guarded by context_mutex alongside the accums).
+  std::chrono::steady_clock::time_point last_cmd_vel_time_{};
+  std::chrono::steady_clock::time_point last_wheel_odom_time_{};
+  // Cap per-message integration dt: a stream that stalls then resumes must
+  // not inject a phantom |v|·gap distance into the stuck detector.
+  static constexpr double kMotionIntegrationMaxDtSec = 0.5;
 
   // Service server
   rclcpp::Service<mowgli_interfaces::srv::HighLevelControl>::SharedPtr high_level_control_srv_;
@@ -750,6 +857,7 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_coverage_resume_srv_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr resume_available_pub_;
   rclcpp::TimerBase::SharedPtr resume_available_timer_;
+  rclcpp::TimerBase::SharedPtr motion_window_timer_;
   // Set by the ~/clear_coverage_resume service, consumed by tickTree() so the
   // actual map clearing happens on the BT tick thread (see the service comment).
   std::atomic<bool> clear_resume_requested_{false};
