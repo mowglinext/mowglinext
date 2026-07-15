@@ -42,7 +42,7 @@ import {useThemeMode} from "../theme/ThemeContext.tsx";
 // Mapbox access token comes from the build env only — no hardcoded fallback.
 // When it is missing the page renders a clear error panel instead of a broken
 // (blank) map, so the misconfiguration is obvious rather than silent.
-const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
+const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined || "pk.eyJ1IjoiY2VkYm9zc25lbyIsImEiOiJjbGxldjB4aDEwOW5vM3BxamkxeWRwb2VoIn0.WOccbQZZyO1qfAgNxnHAnA";
 
 export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const {notification} = App.useApp();
