@@ -461,8 +461,7 @@ protected:
 TEST_F(ObstacleMarginTest, DrawnObstacleGetsLethalMarginBand)
 {
   // 8×8 m lawn with a 1×1 m drawn obstacle (tree) centred at the origin.
-  ASSERT_TRUE(add_area_with_obstacle(make_rect(-4, -4, 4, 4),
-                                     make_rect(-0.5, -0.5, 0.5, 0.5)));
+  ASSERT_TRUE(add_area_with_obstacle(make_rect(-4, -4, 4, 4), make_rect(-0.5, -0.5, 0.5, 0.5)));
 
   const auto mask = node_->build_keepout_mask_for_test();
   ASSERT_FALSE(mask.data.empty());
@@ -470,11 +469,9 @@ TEST_F(ObstacleMarginTest, DrawnObstacleGetsLethalMarginBand)
   // Inside the drawn obstacle → LETHAL (classification NO_GO overlay).
   EXPECT_EQ(mask_at(mask, 0.0, 0.0), 100) << "inside drawn obstacle must be lethal";
   // 0.2 m outside the polygon edge, within the 0.3 m margin → LETHAL.
-  EXPECT_EQ(mask_at(mask, 0.75, 0.0), 100)
-      << "cell inside the obstacle_margin band must be lethal";
+  EXPECT_EQ(mask_at(mask, 0.75, 0.0), 100) << "cell inside the obstacle_margin band must be lethal";
   // Well outside the margin band (edge + 0.3 m + slack) → FREE lawn.
-  EXPECT_EQ(mask_at(mask, 1.5, 0.0), 0)
-      << "lawn beyond the margin band must stay free";
+  EXPECT_EQ(mask_at(mask, 1.5, 0.0), 0) << "lawn beyond the margin band must stay free";
 }
 
 TEST_F(AreaTypeTest, DrawnObstacleWithoutMarginIsEdgeTight)

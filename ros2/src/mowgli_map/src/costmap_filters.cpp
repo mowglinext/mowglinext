@@ -160,17 +160,16 @@ void MapServerNode::publish_keepout_mask()
   // coverage_server's F2C hole buffering, so both planners keep the same
   // distance from a drawn tree/root zone.
   const auto cell_hits_obstacle =
-      [this](const geometry_msgs::msg::Point32& pt,
-             const geometry_msgs::msg::Polygon& obs) {
-        if (point_in_polygon(pt, obs))
-        {
-          return true;
-        }
-        return obstacle_margin_m_ > 0.0 &&
-               point_to_polygon_distance(static_cast<double>(pt.x),
-                                         static_cast<double>(pt.y),
-                                         obs) <= obstacle_margin_m_;
-      };
+      [this](const geometry_msgs::msg::Point32& pt, const geometry_msgs::msg::Polygon& obs)
+  {
+    if (point_in_polygon(pt, obs))
+    {
+      return true;
+    }
+    return obstacle_margin_m_ > 0.0 &&
+           point_to_polygon_distance(static_cast<double>(pt.x), static_cast<double>(pt.y), obs) <=
+               obstacle_margin_m_;
+  };
   for (int r = 0; r < nx; ++r)
   {
     for (int c = 0; c < ny; ++c)

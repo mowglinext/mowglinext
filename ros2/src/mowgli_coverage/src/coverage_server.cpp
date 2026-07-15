@@ -409,8 +409,8 @@ void CoverageServer::planCoverage()
     // Drawn-obstacle margin, read live like the other geometry knobs. Clamp
     // mirrors the launch-injection band so a stray `ros2 param set` cannot
     // inflate holes past the field.
-    const double obstacle_margin = std::clamp(
-        get_parameter("obstacle_margin").as_double(), 0.0, 1.0);
+    const double obstacle_margin =
+        std::clamp(get_parameter("obstacle_margin").as_double(), 0.0, 1.0);
 
     f2c::types::Cell cell = buildCellFromGoal(*goal, obstacle_margin);
 

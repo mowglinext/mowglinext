@@ -124,8 +124,7 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   // Extra LETHAL band around drawn obstacle polygons in the keepout mask.
   // Same key drives coverage_server's F2C hole buffering (injected at launch
   // from mowgli_robot.yaml.obstacle_margin) — keep the two in lockstep.
-  obstacle_margin_m_ =
-      std::clamp(declare_parameter<double>("obstacle_margin", 0.0), 0.0, 1.0);
+  obstacle_margin_m_ = std::clamp(declare_parameter<double>("obstacle_margin", 0.0), 0.0, 1.0);
 
   // Dock body (physical structure the robot cannot drive into). Cells
   // inside are marked OBSTACLE_PERMANENT — F2C strips stop at the body

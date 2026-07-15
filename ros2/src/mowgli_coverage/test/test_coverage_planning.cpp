@@ -1172,11 +1172,9 @@ TEST(ObstacleMargin, GrowsRingOutwardByMargin)
   {
     const auto p = out.getGeometry(i);
     const double d = mowgli_coverage::distanceToRing(p.getX(), p.getY(), orig);
-    EXPECT_GE(d, margin - 1e-6)
-        << "grown vertex " << i << " at (" << p.getX() << ", " << p.getY()
-        << ") is only " << d << " m from the original obstacle ring";
-    EXPECT_LE(d, margin + 1e-6)
-        << "grown vertex " << i << " overshoots the requested margin";
+    EXPECT_GE(d, margin - 1e-6) << "grown vertex " << i << " at (" << p.getX() << ", " << p.getY()
+                                << ") is only " << d << " m from the original obstacle ring";
+    EXPECT_LE(d, margin + 1e-6) << "grown vertex " << i << " overshoots the requested margin";
   }
   // Closed ring (F2C requirement).
   EXPECT_NEAR(out.getGeometry(0).getX(), out.getGeometry(out.size() - 1).getX(), 1e-9);
@@ -1232,11 +1230,11 @@ TEST(ObstacleMargin, PlanKeepsMarginOffDrawnObstacle)
 
   const std::vector<std::pair<double, double>> obstacle = {
       {3.5, 3.5}, {4.5, 3.5}, {4.5, 4.5}, {3.5, 4.5}, {3.5, 3.5}};
-  auto check_point = [&](double x, double y, const char* what) {
+  auto check_point = [&](double x, double y, const char* what)
+  {
     const double d = mowgli_coverage::distanceToRing(x, y, obstacle);
-    EXPECT_GE(d, margin - 1e-3)
-        << what << " point (" << x << ", " << y << ") is " << d
-        << " m from the drawn obstacle — margin " << margin << " violated";
+    EXPECT_GE(d, margin - 1e-3) << what << " point (" << x << ", " << y << ") is " << d
+                                << " m from the drawn obstacle — margin " << margin << " violated";
   };
   for (const auto& ring : plan.rings)
   {
