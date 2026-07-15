@@ -24,6 +24,7 @@ import { MowingSection } from "../components/settings/MowingSection.tsx";
 import { DockingSection } from "../components/settings/DockingSection.tsx";
 import { BatterySection } from "../components/settings/BatterySection.tsx";
 import { SafetySection } from "../components/settings/SafetySection.tsx";
+import { ObstaclesSection } from "../components/settings/ObstaclesSection.tsx";
 import { NavigationSection } from "../components/settings/NavigationSection.tsx";
 import { RainSection } from "../components/settings/RainSection.tsx";
 import { AdvancedSection } from "../components/settings/AdvancedSection.tsx";
@@ -158,6 +159,16 @@ export const SettingsPage = () => {
                 return <BatterySection values={values} onChange={handleChange} />;
             case "safety":
                 return <SafetySection values={values} onChange={handleChange} />;
+            case "obstacles":
+                return (
+                    <ObstaclesSection
+                        values={values}
+                        onChange={handleChange}
+                        isOverridden={isOverridden}
+                        hasDefault={hasDefault}
+                        onReset={resetToDefault}
+                    />
+                );
             case "navigation":
                 return (
                     <NavigationSection

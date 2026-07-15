@@ -304,6 +304,12 @@ def generate_launch_description() -> LaunchDescription:
                     float(robot_params.get("chassis_width", 0.40)) / 2.0))},
             {"max_obstacle_avoidance_distance":
                 float(robot_params.get("max_obstacle_avoidance_distance", 2.0))},
+            # Extra LETHAL margin grown around drawn obstacle polygons in the
+            # keepout mask — mirrors coverage_server.obstacle_margin (injected
+            # by navigation.launch.py) so the transit planner and the swath
+            # planner keep the same distance from a drawn tree/root zone.
+            {"obstacle_margin": min(1.0, max(0.0, float(
+                robot_params.get("obstacle_margin", 0.0))))},
             # Hard area-boundary enforcement (operator intent: "lethal area
             # where there is no navigation or mowing area"). When true (default)
             # the keepout mask marks every cell outside the union of all areas

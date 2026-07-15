@@ -59,6 +59,12 @@ nav2_util::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::S
   // (a deadband diff-drive may track a 0.30 m arc more smoothly than a 0.18 m
   // one); raise toward 0.30 if tight turns induce hesitation. Read live.
   declare_parameter<double>("connector_turn_radius", 0.18);
+  // Extra buffer (m) grown around drawn map-obstacle polygons (holes) before
+  // planning — keeps swaths/connectors off root zones the 2D LiDAR cannot see.
+  // Injected at launch from mowgli_robot.yaml.obstacle_margin (GUI: Settings →
+  // Obstacles); map_server applies the same key to its keepout mask so transit
+  // and coverage keep the same distance. Read LIVE per plan.
+  declare_parameter<double>("obstacle_margin", 0.0);
 
   // Action server result timeout. Keep this >= the BT client's per-plan wait
   // (PlanCoverageArea, 12 s): if the server expires the result first the
@@ -122,7 +128,13 @@ constexpr double kSwathStep = 0.10;  // m between poses on a straight swath
 
 // Build the F2C cell from the goal's outer boundary + obstacle holes.
 // F2C wants closed rings (first == last); the BT passes open rings.
-f2c::types::Cell buildCellFromGoal(const mowgli_interfaces::action::PlanCoverage::Goal& goal)
+// obstacle_margin (m) grows each HOLE outward at ingestion (bufferRingOutward)
+// so the whole downstream pipeline — headlands, safe_holes, sub-path splits,
+// connectors — keeps that distance from drawn obstacles (root zones the 2D
+// LiDAR cannot see). The outer boundary is untouched (chassis_safety_inset
+// owns that margin).
+f2c::types::Cell buildCellFromGoal(const mowgli_interfaces::action::PlanCoverage::Goal& goal,
+                                   double obstacle_margin)
 {
   if (goal.outer_boundary.points.size() < 3)
   {
@@ -147,7 +159,7 @@ f2c::types::Cell buildCellFromGoal(const mowgli_interfaces::action::PlanCoverage
   {
     if (hole.points.size() >= 3)
     {
-      cell.addRing(make_ring(hole));
+      cell.addRing(bufferRingOutward(make_ring(hole), obstacle_margin));
     }
   }
   return cell;
@@ -394,7 +406,13 @@ void CoverageServer::planCoverage()
                   effective_inset);
     }
 
-    f2c::types::Cell cell = buildCellFromGoal(*goal);
+    // Drawn-obstacle margin, read live like the other geometry knobs. Clamp
+    // mirrors the launch-injection band so a stray `ros2 param set` cannot
+    // inflate holes past the field.
+    const double obstacle_margin =
+        std::clamp(get_parameter("obstacle_margin").as_double(), 0.0, 1.0);
+
+    f2c::types::Cell cell = buildCellFromGoal(*goal, obstacle_margin);
 
     // Robot's minimum trackable turning radius — floors both the ring-corner
     // fillets inside the planner and the turn-around connectors below. Read

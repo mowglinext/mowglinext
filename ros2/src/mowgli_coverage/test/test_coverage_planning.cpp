@@ -1147,6 +1147,120 @@ TEST(RingDedup, DedupedDegenerateRingStillPlans)
       << "deduped degenerate ring produced an empty plan";
 }
 
+// ---------------------------------------------------------------------------
+// bufferRingOutward — drawn-obstacle margin (mowgli_robot.yaml.obstacle_margin)
+// ---------------------------------------------------------------------------
+
+TEST(ObstacleMargin, GrowsRingOutwardByMargin)
+{
+  // 1×1 m square obstacle centred at (2, 2).
+  f2c::types::LinearRing in;
+  in.addPoint(f2c::types::Point(1.5, 1.5));
+  in.addPoint(f2c::types::Point(2.5, 1.5));
+  in.addPoint(f2c::types::Point(2.5, 2.5));
+  in.addPoint(f2c::types::Point(1.5, 2.5));
+
+  const double margin = 0.3;
+  const auto out = mowgli_coverage::bufferRingOutward(in, margin);
+
+  ASSERT_GE(out.size(), 4u);
+  // Every grown vertex sits at least `margin` from the ORIGINAL ring (rounded
+  // joins mean edge midpoints sit exactly margin out, corners on the arc).
+  std::vector<std::pair<double, double>> orig = {
+      {1.5, 1.5}, {2.5, 1.5}, {2.5, 2.5}, {1.5, 2.5}, {1.5, 1.5}};
+  for (std::size_t i = 0; i < out.size(); ++i)
+  {
+    const auto p = out.getGeometry(i);
+    const double d = mowgli_coverage::distanceToRing(p.getX(), p.getY(), orig);
+    EXPECT_GE(d, margin - 1e-6) << "grown vertex " << i << " at (" << p.getX() << ", " << p.getY()
+                                << ") is only " << d << " m from the original obstacle ring";
+    EXPECT_LE(d, margin + 1e-6) << "grown vertex " << i << " overshoots the requested margin";
+  }
+  // Closed ring (F2C requirement).
+  EXPECT_NEAR(out.getGeometry(0).getX(), out.getGeometry(out.size() - 1).getX(), 1e-9);
+  EXPECT_NEAR(out.getGeometry(0).getY(), out.getGeometry(out.size() - 1).getY(), 1e-9);
+}
+
+TEST(ObstacleMargin, ZeroMarginIsPassthrough)
+{
+  f2c::types::LinearRing in;
+  in.addPoint(f2c::types::Point(0.0, 0.0));
+  in.addPoint(f2c::types::Point(1.0, 0.0));
+  in.addPoint(f2c::types::Point(1.0, 1.0));
+  in.addPoint(f2c::types::Point(0.0, 1.0));
+
+  const auto out = mowgli_coverage::bufferRingOutward(in, 0.0);
+  // Same vertices, dedup-closed — identical to dedupClosedRing(in).
+  const auto expected = dedupClosedRing(in);
+  ASSERT_EQ(out.size(), expected.size());
+  for (std::size_t i = 0; i < out.size(); ++i)
+  {
+    EXPECT_NEAR(out.getGeometry(i).getX(), expected.getGeometry(i).getX(), 1e-9);
+    EXPECT_NEAR(out.getGeometry(i).getY(), expected.getGeometry(i).getY(), 1e-9);
+  }
+}
+
+TEST(ObstacleMargin, DegenerateRingFallsBackToInput)
+{
+  // Two-point "ring" cannot be buffered — must fall back, never drop.
+  f2c::types::LinearRing in;
+  in.addPoint(f2c::types::Point(0.0, 0.0));
+  in.addPoint(f2c::types::Point(1.0, 0.0));
+
+  const auto out = mowgli_coverage::bufferRingOutward(in, 0.3);
+  EXPECT_GE(out.size(), 2u) << "degenerate obstacle ring was dropped";
+}
+
+// End-to-end: with a margin, no planned ring point or swath sample may come
+// closer than the margin to the DRAWN obstacle ring (the planner's chassis
+// inset adds more on top; this pins the floor the margin itself guarantees).
+TEST(ObstacleMargin, PlanKeepsMarginOffDrawnObstacle)
+{
+  f2c::types::Cell cell = makeSquare(8.0);
+  f2c::types::LinearRing hole;
+  hole.addPoint(f2c::types::Point(3.5, 3.5));
+  hole.addPoint(f2c::types::Point(4.5, 3.5));
+  hole.addPoint(f2c::types::Point(4.5, 4.5));
+  hole.addPoint(f2c::types::Point(3.5, 4.5));
+  const double margin = 0.3;
+  cell.addRing(mowgli_coverage::bufferRingOutward(dedupClosedRing(hole), margin));
+
+  const auto plan = planDefault(cell);
+  ASSERT_FALSE(plan.swaths.empty()) << "field with grown hole produced no swaths";
+
+  const std::vector<std::pair<double, double>> obstacle = {
+      {3.5, 3.5}, {4.5, 3.5}, {4.5, 4.5}, {3.5, 4.5}, {3.5, 3.5}};
+  auto check_point = [&](double x, double y, const char* what)
+  {
+    const double d = mowgli_coverage::distanceToRing(x, y, obstacle);
+    EXPECT_GE(d, margin - 1e-3) << what << " point (" << x << ", " << y << ") is " << d
+                                << " m from the drawn obstacle — margin " << margin << " violated";
+  };
+  for (const auto& ring : plan.rings)
+  {
+    for (const auto& p : ring)
+    {
+      check_point(p.first, p.second, "ring");
+    }
+  }
+  // Swaths are straight — sample along each segment, not just endpoints.
+  for (const auto& s : plan.swaths)
+  {
+    const double len = swathLen(s);
+    const int n = std::max(1, static_cast<int>(len / 0.05));
+    for (int i = 0; i <= n; ++i)
+    {
+      const double t = static_cast<double>(i) / n;
+      check_point(s.first.first + t * (s.second.first - s.first.first),
+                  s.first.second + t * (s.second.second - s.first.second),
+                  "swath");
+    }
+  }
+  // The grown hole must surface in safe_holes so the continuous-path
+  // connectors inherit the margin too.
+  EXPECT_FALSE(plan.safe_holes.empty()) << "grown hole missing from safe_holes";
+}
+
 // LARGE-FIELD AUTO-ANGLE FALLBACK: f2c::sg::BruteForce::generateBestSwaths
 // sweeps 180 candidate angles and regenerates the full swath set at each, so on
 // a big field it blows past the action/BT planning timeouts and the coverage

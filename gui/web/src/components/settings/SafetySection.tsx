@@ -68,23 +68,9 @@ export const SafetySection: React.FC<Props> = ({ values, onChange }) => {
                 </Form>
             </Card>
 
-            {/* Obstacle avoidance */}
-            <Card size="small" title={t("settingsSafety.obstacleAvoidance")} style={{ marginBottom: 16 }}>
-                <Form layout="vertical" size="small">
-                    <Row gutter={[16, 0]}>
-                        <Col xs={12} sm={8}>
-                            <Form.Item label={t("settingsSafety.maxDetourDistance")} tooltip={t("settingsSafety.maxDetourDistanceTooltip")}>
-                                <InputNumber
-                                    value={values.max_obstacle_avoidance_distance}
-                                    onChange={(v) => onChange("max_obstacle_avoidance_distance", v)}
-                                    min={0.5} max={10} step={0.5} precision={1}
-                                    style={{ width: "100%" }} addonAfter="m"
-                                />
-                            </Form.Item>
-                        </Col>
-                    </Row>
-                </Form>
-            </Card>
+            {/* max_obstacle_avoidance_distance moved to the Obstacles
+                section (ObstaclesSection.tsx) alongside the other
+                obstacle-avoidance knobs. */}
         </div>
     );
 };

@@ -232,6 +232,14 @@ double distanceToRing(double x, double y, const std::vector<std::pair<double, do
 // normalised here. Pure function (no ROS deps) — unit-testable.
 f2c::types::LinearRing dedupClosedRing(const f2c::types::LinearRing& in);
 
+// Grow a drawn-obstacle ring outward by `margin` metres (GDAL Buffer, rounded
+// joins) and return it dedup-closed. Applied at goal-ingestion time so every
+// downstream consumer — headland growth, safe_holes, sub-path splitting,
+// connector routing — inherits the operator's obstacle_margin automatically.
+// margin < 1e-3 or a degenerate ring falls back to dedupClosedRing(in): the
+// obstacle is never dropped, only the extra margin. Pure function — testable.
+f2c::types::LinearRing bufferRingOutward(const f2c::types::LinearRing& in, double margin);
+
 }  // namespace mowgli_coverage
 
 #endif  // MOWGLI_COVERAGE__COVERAGE_PLANNING_HPP_

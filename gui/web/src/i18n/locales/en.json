@@ -2187,10 +2187,23 @@
     "stopAbove": "Stop Above",
     "stopAboveTooltip": "Stop blade motor above this temperature",
     "resumeBelow": "Resume Below",
-    "resumeBelowTooltip": "Resume blade motor below this temperature",
-    "obstacleAvoidance": "Obstacle Avoidance",
+    "resumeBelowTooltip": "Resume blade motor below this temperature"
+  },
+  "settingsObstacles": {
+    "rootZoneHintTitle": "Trees with large roots?",
+    "rootZoneHintDescription": "The 2D LiDAR cannot see roots below its scan plane (~10–20 cm). Draw the tree as an obstacle in the map editor and raise the drawn obstacle margin so mowing and transit keep off the root zone.",
+    "avoidanceMargins": "Avoidance Margins",
+    "avoidanceMarginsDescription": "How much distance the robot keeps from obstacles. Changes take effect after a ROS2 restart.",
+    "inflationRadius": "Obstacle Inflation Radius",
+    "inflationRadiusTooltip": "Buffer around LiDAR-detected obstacles (trunks, walls) in the local costmap. Raise if the robot passes too close to trees it can see.",
     "maxDetourDistance": "Max Detour Distance",
-    "maxDetourDistanceTooltip": "Maximum distance to detour around an obstacle before giving up"
+    "maxDetourDistanceTooltip": "Maximum lateral detour around an obstacle before giving up — drives both coverage skirting and the bypass give-up threshold",
+    "drawnObstacleMargin": "Drawn Obstacle Margin",
+    "drawnObstacleMarginTooltip": "Extra margin around obstacles drawn on the map, applied to both coverage and transit planning. Use for root zones invisible to the LiDAR.",
+    "approachSlowdown": "Approach Slowdown",
+    "approachSlowdownDescription": "The collision monitor slows the robot when a scan return enters the approach box around the chassis (LiDAR variant).",
+    "slowdownRatio": "Slowdown Ratio",
+    "slowdownRatioTooltip": "Speed factor near obstacles: 0.3 = slow to 30% of the commanded speed"
   },
   "settingsMowing": {
     "mowingMotor": "Mowing Motor",
@@ -2803,7 +2816,11 @@
     },
     "safety": {
       "label": "Safety",
-      "description": "Emergency stops, temperature limits, obstacle avoidance"
+      "description": "Emergency stops and temperature limits"
+    },
+    "obstacles": {
+      "label": "Obstacles",
+      "description": "Avoidance margins, drawn obstacle buffers, approach slowdown"
     },
     "navigation": {
       "label": "Navigation",

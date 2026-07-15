@@ -396,6 +396,11 @@ controller_server:
       # gives effective reach 0.12+0.14 ≈ 0.26 m ≈ the full footprint, no over-reach.
       obstacle_body_half_width: 0.12
       enable_obstacle_deviation: true
+      # OVERRIDDEN AT LAUNCH: navigation.launch.py injects
+      # mowgli_robot.yaml.max_obstacle_avoidance_distance (default 2.0,
+      # clamped [0.5, 10.0]) here — the same knob that drives
+      # map_server.bypass_max_length. The static value below only governs
+      # isolated runs/tests that load this yaml directly.
       max_lateral_deviation: 1.5
       deviation_step: 0.05
       deviation_blend_rate: 0.5

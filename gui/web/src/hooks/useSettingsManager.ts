@@ -19,6 +19,7 @@ export type SettingsSection =
     | "docking"
     | "battery"
     | "safety"
+    | "obstacles"
     | "navigation"
     | "rain"
     | "advanced";
@@ -154,8 +155,17 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         description: "settingsSections.safety.description",
         keys: [
             "motor_temp_high_c", "motor_temp_low_c",
-            "max_obstacle_avoidance_distance",
             "lift_blade_resume_delay_sec", "lift_recovery_mode",
+        ],
+    },
+    {
+        id: "obstacles",
+        label: "settingsSections.obstacles.label",
+        icon: "warning",
+        description: "settingsSections.obstacles.description",
+        keys: [
+            "obstacle_inflation_radius", "max_obstacle_avoidance_distance",
+            "obstacle_margin", "obstacle_slowdown_ratio",
         ],
     },
     {

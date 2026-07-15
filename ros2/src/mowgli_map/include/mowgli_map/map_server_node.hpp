@@ -377,6 +377,13 @@ private:
   /// of ~0.7 m inside the polygon.
   double boundary_inner_margin_m_{0.3};
 
+  /// Extra LETHAL margin grown around drawn obstacle polygons in the keepout
+  /// mask (mowgli_robot.yaml.obstacle_margin, GUI: Settings → Obstacles).
+  /// Mirrors coverage_server.obstacle_margin — the coverage planner buffers
+  /// its F2C holes by the same value — so transit and swath planning keep an
+  /// identical distance from a drawn tree/root zone. 0 = polygon edge only.
+  double obstacle_margin_m_{0.0};
+
   /// How far inside the polygon strip endpoints must sit. Applied when the
   /// coverage planner generates strips: the axis-aligned bounding-box
   /// y-intersections are shrunk by this value on both ends. Must cover the

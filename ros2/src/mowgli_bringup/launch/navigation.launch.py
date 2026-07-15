@@ -425,6 +425,14 @@ def generate_launch_description() -> LaunchDescription:
     # can edit them without an SSH session. Defaults match the C++ node
     # defaults; override on the Settings page.
     dock_pose_yaw_sigma_rad = 0.035
+    # Obstacle-avoidance knobs (GUI: Settings → Obstacles). Defaults match the
+    # template mowgli_robot.yaml; clamps applied at injection time below.
+    # max_obstacle_avoidance_distance drives BOTH FTC max_lateral_deviation
+    # (here) and map_server bypass_max_length (full_system.launch.py).
+    max_obstacle_avoidance_distance = 2.0
+    obstacle_inflation_radius = 0.60
+    obstacle_margin = 0.0
+    obstacle_slowdown_ratio = 0.3
     enable_mag_cal = False
     mag_cal_path = "/ros2_ws/maps/mag_calibration.yaml"
     declination_deg = 1.5
@@ -485,6 +493,13 @@ def generate_launch_description() -> LaunchDescription:
             "min_turning_radius", min_turning_radius))
         connector_turn_radius = float(rt_rp.get(
             "connector_turn_radius", connector_turn_radius))
+        max_obstacle_avoidance_distance = float(rt_rp.get(
+            "max_obstacle_avoidance_distance", max_obstacle_avoidance_distance))
+        obstacle_inflation_radius = float(rt_rp.get(
+            "obstacle_inflation_radius", obstacle_inflation_radius))
+        obstacle_margin = float(rt_rp.get("obstacle_margin", obstacle_margin))
+        obstacle_slowdown_ratio = float(rt_rp.get(
+            "obstacle_slowdown_ratio", obstacle_slowdown_ratio))
         # Operator override wins; otherwise fall back to chassis_width/2
         # (cw was already read above from the same runtime config).
         if "chassis_safety_inset" in rt_rp:
@@ -641,6 +656,35 @@ def generate_launch_description() -> LaunchDescription:
         if mowing_speed > ftc_speed_cap:
             fcp["max_cmd_vel_speed"] = mowing_speed
 
+        # Obstacle-avoidance knobs (GUI: Settings → Obstacles).
+        # max_obstacle_avoidance_distance historically only reached
+        # map_server.bypass_max_length (full_system.launch.py) while FTC's
+        # max_lateral_deviation stayed pinned at the static base-yaml value —
+        # the GUI slider silently did nothing for coverage-time skirting.
+        # One knob now drives both consumers.
+        fcp["max_lateral_deviation"] = min(
+            10.0, max(0.5, max_obstacle_avoidance_distance))
+        # LOCAL costmap inflation only. Floor 0.58: the nav2 inflation layer
+        # degrades footprint-cost semantics below the chassis circumscribed
+        # radius (~0.572 m) and FTC's deviation detector (threshold 253)
+        # assumes the inscribed band exists. The GLOBAL costmap radius (0.20)
+        # is deliberately untouched — 0.30 already blocked all transit paths
+        # on a 9×6 m polygon (see the inflation_layer comment in base.yaml).
+        lc_infl = (doc.setdefault("local_costmap", {})
+                      .setdefault("local_costmap", {})
+                      .setdefault("ros__parameters", {})
+                      .setdefault("inflation_layer", {}))
+        lc_infl["inflation_radius"] = min(
+            1.50, max(0.58, obstacle_inflation_radius))
+        # PolygonSlow only exists in the LiDAR overlay's collision_monitor —
+        # write the slowdown ratio only when the merged doc carries it so the
+        # no-lidar variant (pass-through monitor) stays untouched.
+        cm_params = (doc.get("collision_monitor", {})
+                        .get("ros__parameters", {}))
+        if "PolygonSlow" in cm_params:
+            cm_params["PolygonSlow"]["slowdown_ratio"] = min(
+                1.0, max(0.05, obstacle_slowdown_ratio))
+
         # Goal-checker tolerances. Two checkers live under
         # controller_server: stopped_goal_checker (used by FollowPath /
         # transit) and coverage_goal_checker (used by FollowCoveragePath
@@ -707,6 +751,11 @@ def generate_launch_description() -> LaunchDescription:
         # Perimeter/headland travel winding (blade-side, issue #335).
         cov_params["ring_direction"] = mow_direction
         cov_params["chassis_safety_inset"] = chassis_safety_inset
+        # Extra buffer grown around drawn map-obstacle polygons (holes) before
+        # swath planning — keeps the robot off root zones the 2D LiDAR cannot
+        # see. map_server applies the SAME key to its keepout mask
+        # (full_system.launch.py) so planner and keepout stay consistent.
+        cov_params["obstacle_margin"] = min(1.0, max(0.0, obstacle_margin))
         # Hard floor on the continuous path's turn-around / fillet arcs so no
         # turn is ever tighter than the robot can track (clamp to the tuned
         # [0.10, 0.50] band; sub-0.10 loops are untrackable, >0.50 bulges OOB).
