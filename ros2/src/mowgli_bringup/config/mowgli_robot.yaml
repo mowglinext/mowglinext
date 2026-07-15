@@ -246,7 +246,7 @@ mowgli:
     # -----------------------------------------------------------------
     # Docking
     # -----------------------------------------------------------------
-    dock_pose_x: 0.0              # dock position in map frame (set per-site)
+    dock_pose_x: 0.0             # sim: robot at world origin; area is centred on origin instead
     dock_pose_y: 0.0
     # dock_pose_yaw MUST be a map-frame ENU yaw (rad) — opennav_docking
     # consumes it directly as the dock heading. Set it via the GUI
@@ -256,7 +256,7 @@ mowgli:
     # /odometry/filtered_map yaw equals this. NOTE: 4.17 below is a stale
     # hand-entered phone-compass seed (239°) — NOT a valid ENU yaw;
     # recalibrate per-site before relying on docking.
-    dock_pose_yaw: 4.17
+    dock_pose_yaw: 0.0             # sim: match MowgliMower world rotation (yaw 0, facing +X/east)
     undock_distance: 1.0           # reverse distance when undocking (m); must be > 0.5 m for CalibrateHeadingFromUndock
     undock_speed: 0.16             # reverse speed (m/s) — above kMinLinVel=0.15 host clamp
     # Distance (m) to the staging pose behind the dock — the final

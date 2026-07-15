@@ -182,6 +182,11 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_map_odom_slew fusion_graph_core)
 
+  ament_add_gtest(test_yaw_gates
+    test/test_yaw_gates.cpp
+  )
+  target_link_libraries(test_yaw_gates fusion_graph_core)
+
   ament_add_gtest(test_loop_closure_robust
     test/test_loop_closure_robust.cpp
   )

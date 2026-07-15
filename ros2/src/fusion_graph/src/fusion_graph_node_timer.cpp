@@ -16,6 +16,7 @@
 #include <tf2/exceptions.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+#include "fusion_graph/yaw_gates.hpp"
 #include "fusion_graph/fusion_graph_node.hpp"
 #include "fusion_graph/fusion_graph_node_util.hpp"
 
@@ -119,6 +120,9 @@ void FusionGraphNode::OnTimer()
         sm_sigma_xy = std::max(sm_sigma_xy, scan_yield_sigma_xy_);
         sm_sigma_theta = std::max(sm_sigma_theta, scan_yield_sigma_theta_);
       }
+      // Level 2: floor the scan yaw σ so LiDAR yields yaw to the gyro (keeps
+      // σ_xy tight → still carries POSITION through Float). See header.
+      sm_sigma_theta = ScanYawSigma(sm_sigma_theta, scan_yaw_sigma_floor_rad_);
       graph_->QueueScanBetween(res.delta, sm_sigma_xy, sm_sigma_theta);
       ++scan_matches_ok_;
       // ICP-only odometry: cache the latest accepted scan-between delta (motion
@@ -354,6 +358,8 @@ void FusionGraphNode::OnTimer()
           lc_sigma_xy = std::max(lc_sigma_xy, scan_yield_sigma_xy_);
           lc_sigma_theta = std::max(lc_sigma_theta, scan_yield_sigma_theta_);
         }
+        // Level 2: floor the loop-closure yaw σ too (yield yaw to gyro).
+        lc_sigma_theta = ScanYawSigma(lc_sigma_theta, scan_yaw_sigma_floor_rad_);
         graph_->AddLoopClosure(cand_idx, out->node_index, res.delta, lc_sigma_xy, lc_sigma_theta);
         RCLCPP_INFO(get_logger(),
                     "fusion_graph: loop closure %lu -> %lu accepted "

@@ -171,6 +171,11 @@ FROM ros:kilted-ros-base AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# LOCAL-ONLY (do not commit): this Docker host has no IPv6 route, so apt's
+# default IPv6-first to ports.ubuntu.com times out. Force IPv4 for all apt in
+# the base-derived stages.
+RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Navigation
     ros-kilted-nav2-bringup \
@@ -394,9 +399,10 @@ RUN /bin/bash -c "\
     source /opt/ros/kilted/setup.bash && \
     source install/setup.bash && \
     export CMAKE_PREFIX_PATH=/opt/fields2cover-300:/opt/gtsam:\${CMAKE_PREFIX_PATH:-} && \
+    export MAKEFLAGS=-j3 && \
     colcon build \
       --cmake-args -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTING=OFF \
-      --parallel-workers \$(nproc) \
+      --parallel-workers 2 \
       --event-handlers console_cohesion+ \
     "
 

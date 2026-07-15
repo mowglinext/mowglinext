@@ -330,6 +330,26 @@ private:
   bool cog_require_rtk_ = true;
   double cog_rtk_max_age_s_ = 2.0;
   uint64_t cog_rtk_gated_ = 0;  // diagnostic counter
+  // OpenMower-style heading discipline (Level 1). COG = GPS travel direction,
+  // so it is meaningless/ambiguous below a forward-speed floor (undefined at
+  // rest, noise-dominated when slow, 180°-flipped in reverse). Gate it to
+  // forward motion above cog_min_speed_mps and FLOOR its σ at cog_min_sigma_rad
+  // so it TRENDS the gyro-integrated heading rather than snapping to a noisy
+  // per-fix course — the gyro carries yaw short-term, COG only anchors it long
+  // term. Mirrors xbot_positioning's min_speed gate + cov=1e4 soft update.
+  double cog_min_speed_mps_ = 0.08;
+  double cog_min_sigma_rad_ = 0.15;  // ~8.6° floor
+
+  // ── LiDAR yaw yield (Level 2) ───────────────────────────────────
+  // Scan-matching (and loop closure) between-factors carry BOTH position and
+  // yaw. In feature-poor / symmetric scenery the ICP yaw can converge wrong
+  // with a confident (tight) σ_theta and BAKE a wrong heading into the graph
+  // that later GPS can't undo — reproduced as a stuck, oscillating yaw. Floor
+  // the scan/loop-closure σ_theta so LiDAR's yaw only weakly nudges the graph
+  // (the gyro carries yaw), while σ_xy stays tight so LiDAR still CARRIES
+  // POSITION through RTK-Float windows — its essential role we must keep for
+  // canopy dropout. 0 = disabled (old behaviour, LiDAR yaw fully trusted).
+  double scan_yaw_sigma_floor_rad_ = 0.30;  // ~17°
   std::optional<rclcpp::Time> last_flip_recovery_stamp_;
   // True when seed_xy_ was set from an RTK-Fixed fix (carr_soln=2).
   // Drives the prior sigma at Initialize: tight (sub-cm) when set,

@@ -52,29 +52,25 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
   {
     return;
   }
-  // Gate the COG yaw factor on RTK-Fixed once initialized. A COG derived from
-  // Float/NO_FIX GPS displacement is heading-garbage (few-cm-to-m noise over a
-  // ~20 cm baseline) and corrupts the weakly-observable yaw → map→odom balloons
-  // → lever-arm amplifies graph jitter into position jumps → the robot drives
-  // out of bounds. Gyro + scan-matching carry yaw through the Float window.
-  // Do NOT gate before init: TrySeedInitialPose needs the COG seed regardless.
-  if (cog_require_rtk_ && graph_->IsInitialized())
+  // OpenMower-style single-antenna heading discipline (yaw_gates.hpp,
+  // unit-tested). A COG derived from Float/NO_FIX GPS or from slow/reverse
+  // motion is heading-garbage and corrupts the weakly-observable yaw (map→odom
+  // balloons → lever-arm amplifies jitter into position jumps → robot drives
+  // out of bounds). Apply it only when RTK-Fixed AND translating forward; else
+  // the gyro carries yaw. Before init the seed always needs it.
+  const bool rtk_fresh =
+      last_rtk_fixed_stamp_ &&
+      (this->now() - *last_rtk_fixed_stamp_).seconds() < cog_rtk_max_age_s_;
+  if (!CogShouldApply(graph_->IsInitialized(), rtk_fresh, wheel_vx_, cog_require_rtk_,
+                      cog_min_speed_mps_))
   {
-    const bool rtk_fresh =
-        last_rtk_fixed_stamp_ &&
-        (this->now() - *last_rtk_fixed_stamp_).seconds() < cog_rtk_max_age_s_;
-    if (!rtk_fresh)
-    {
-      ++cog_rtk_gated_;
-      return;
-    }
+    ++cog_rtk_gated_;
+    return;
   }
   const double yaw = YawFromQuat(msg->orientation);
-  // covariance[8] is yaw variance.
-  double var = msg->orientation_covariance[8];
-  if (!std::isfinite(var) || var <= 0.0)
-    var = 0.05 * 0.05;
-  const double sigma = std::sqrt(var);
+  // Soft σ (floored): COG only TRENDS the gyro heading, never snaps to a noisy
+  // per-fix course. covariance[8] is the message yaw variance.
+  const double sigma = CogEffectiveSigma(msg->orientation_covariance[8], cog_min_sigma_rad_);
   graph_->QueueYaw(yaw, sigma);
   seed_yaw_ = yaw;
 

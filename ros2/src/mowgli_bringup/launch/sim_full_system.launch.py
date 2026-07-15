@@ -218,7 +218,7 @@ def generate_launch_description() -> LaunchDescription:
             # whatever appears in the world file.
             {
                 "area_names": ["main_mow"],
-                "area_polygons": ["-7.0,-3.0;2.0,-3.0;2.0,3.0;-7.0,3.0"],
+                "area_polygons": ["-4.5,-3.0;4.5,-3.0;4.5,3.0;-4.5,3.0"],
                 "area_is_navigation": [False],
                 "area_obstacles": [""],
             },
