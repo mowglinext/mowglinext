@@ -23,10 +23,10 @@ namespace fusion_graph
 struct AnchorSlewCfg
 {
   bool enabled = true;
-  double max_lin_mps = 0.10;  // ≤ injected map-frame velocity from corrections
+  double max_lin_mps = 0.10;    // ≤ injected map-frame velocity from corrections
   double max_ang_radps = 0.20;  // ≤ injected map-frame yaw rate
-  double snap_dist_m = 0.50;  // above → relocalization, apply immediately
-  double snap_yaw_rad = 0.35;  // above → relocalization, apply immediately
+  double snap_dist_m = 0.50;    // above → relocalization, apply immediately
+  double snap_yaw_rad = 0.35;   // above → relocalization, apply immediately
 };
 
 // Advance a published anchor (px,py,pyaw + pub_valid, all mutated in place) one

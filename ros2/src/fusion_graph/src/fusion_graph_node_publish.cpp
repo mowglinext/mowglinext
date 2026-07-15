@@ -182,8 +182,9 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   {
     const bool raw_valid = t_map_odom_anchor_valid_;
     const double now_s = this->now().seconds();
-    const double dt = (last_map_pub_s_ < 0.0) ? (1.0 / std::max(tf_broadcast_rate_hz_, 1.0))
-                                              : std::max(0.0, now_s - last_map_pub_s_);
+    const double dt = (last_map_pub_s_ < 0.0)
+                          ? (1.0 / std::max(tf_broadcast_rate_hz_, 1.0))
+                          : std::max(0.0, now_s - last_map_pub_s_);
     last_map_pub_s_ = now_s;
     map_odom_anchor = SlewPublishedAnchor(t_map_odom_anchor_, raw_valid, dt);
     have_anchor = raw_valid && (!anchor_slew_enabled_ || t_map_odom_pub_valid_);
@@ -315,19 +316,8 @@ gtsam::Pose2 FusionGraphNode::SlewPublishedAnchor(const gtsam::Pose2& target,
   double ox = 0.0;
   double oy = 0.0;
   double oyaw = 0.0;
-  AnchorSlewStep(t_map_odom_pub_valid_,
-                 px,
-                 py,
-                 pyaw,
-                 anchor_valid,
-                 target.x(),
-                 target.y(),
-                 target.theta(),
-                 dt,
-                 cfg,
-                 ox,
-                 oy,
-                 oyaw);
+  AnchorSlewStep(t_map_odom_pub_valid_, px, py, pyaw, anchor_valid,
+                 target.x(), target.y(), target.theta(), dt, cfg, ox, oy, oyaw);
   t_map_odom_pub_ = gtsam::Pose2(px, py, pyaw);
   return gtsam::Pose2(ox, oy, oyaw);
 }

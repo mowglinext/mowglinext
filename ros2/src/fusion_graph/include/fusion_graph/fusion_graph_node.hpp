@@ -609,8 +609,10 @@ private:
   // shared_ptr because a detached worker may outlive the node at
   // shutdown — the worker captures this shared_ptr by value and
   // writes false on completion without touching `this`.
-  std::shared_ptr<std::atomic<bool>> save_in_flight_ = std::make_shared<std::atomic<bool>>(false);
-  std::shared_ptr<std::atomic<bool>> rebase_in_flight_ = std::make_shared<std::atomic<bool>>(false);
+  std::shared_ptr<std::atomic<bool>> save_in_flight_ =
+      std::make_shared<std::atomic<bool>>(false);
+  std::shared_ptr<std::atomic<bool>> rebase_in_flight_ =
+      std::make_shared<std::atomic<bool>>(false);
 };
 
 }  // namespace fusion_graph
