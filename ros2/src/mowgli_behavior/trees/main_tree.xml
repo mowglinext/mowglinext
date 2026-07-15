@@ -586,9 +586,28 @@
                              re-ticks FollowStrip, which resumes at the
                              first un-mowed segment index. -->
                         <Sequence name="StuckBackoff">
-                          <IsObstacleStuck min_duration_sec="4.0"
-                                           max_count="3"
-                                           cooldown_sec="8.0"/>
+                          <!-- Two independent stuck triggers, one shared
+                               per-session cap + cooldown (BTContext
+                               obstacle_backoff_count):
+                               - IsObstacleStuck: collision_monitor STOP wedge
+                                 (LiDAR-visible obstacle).
+                               - IsWheelSlipStuck: commanded-but-not-moving in
+                                 the MAP frame — wheels spinning on / stalled
+                                 against something BELOW the scan plane (tree
+                                 roots). Without it the robot kept forcing,
+                                 digging itself in; now it backs off, blade
+                                 already cut by the sequence below. -->
+                          <Fallback name="StuckTriggers">
+                            <IsObstacleStuck min_duration_sec="4.0"
+                                             max_count="3"
+                                             cooldown_sec="8.0"/>
+                            <IsWheelSlipStuck enabled="{stuck_detection_enabled}"
+                                              window_sec="{stuck_window_sec}"
+                                              min_commanded_m="{stuck_min_commanded_m}"
+                                              max_displacement_m="{stuck_max_displacement_m}"
+                                              max_count="3"
+                                              cooldown_sec="8.0"/>
+                          </Fallback>
                           <PublishHighLevelStatus state="2"
                                                   state_name="OBSTACLE_BACKOFF"/>
                           <SetMowerEnabled enabled="false"/>

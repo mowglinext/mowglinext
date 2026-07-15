@@ -156,6 +156,34 @@ if(BUILD_TESTING)
     tf2_geometry_msgs
   )
 
+  # ---- test_wheel_slip_stuck ----
+  # Exercises IsWheelSlipStuck by filling BTContext::motion_window the way
+  # behavior_tree_node's 5 Hz snapshot timer would (slip, stall, moving,
+  # stale/invalid TF, shared cap + cooldown with IsObstacleStuck).
+  ament_add_gtest(test_wheel_slip_stuck
+    test/test_wheel_slip_stuck.cpp
+    src/condition_nodes.cpp
+  )
+
+  target_include_directories(test_wheel_slip_stuck PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_wheel_slip_stuck
+    rclcpp
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+  )
+
   # ---- test_set_nav2_lifecycle ----
   # Exercises the SetNav2Lifecycle action node's idle-suspend gating
   # (disabled = no-op, PAUSE refused off-dock, idempotent transitions) and,

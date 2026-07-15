@@ -2199,7 +2199,17 @@
     "approachSlowdown": "Ralentissement à l'approche",
     "approachSlowdownDescription": "Le moniteur de collision ralentit le robot quand un retour de scan entre dans la boîte d'approche autour du châssis (variante LiDAR).",
     "slowdownRatio": "Facteur de ralentissement",
-    "slowdownRatioTooltip": "Facteur de vitesse près des obstacles : 0,3 = ralentir à 30 % de la vitesse commandée"
+    "slowdownRatioTooltip": "Facteur de vitesse près des obstacles : 0,3 = ralentir à 30 % de la vitesse commandée",
+    "stuckDetection": "Détection d'enlisement",
+    "stuckDetectionDescription": "Quand le robot reçoit une commande de mouvement mais que sa position GPS ne change pas — roues qui patinent ou calées sur des racines invisibles au LiDAR — il coupe la lame et recule au lieu de creuser.",
+    "stuckEnabled": "Activer",
+    "stuckEnabledTooltip": "Reculer automatiquement quand les roues patinent ou calent sans que le robot avance réellement",
+    "stuckWindow": "Fenêtre de détection",
+    "stuckWindowTooltip": "Secondes de commande-sans-mouvement avant de reculer",
+    "stuckMinCommanded": "Déplacement commandé min",
+    "stuckMinCommandedTooltip": "Distance commandée/roues sur la fenêtre nécessaire pour armer le détecteur",
+    "stuckMaxDisplacement": "Déplacement réel max",
+    "stuckMaxDisplacementTooltip": "Déplacement GPS en dessous duquel le robot est considéré enlisé (doit dépasser le bruit RTK)"
   },
   "settingsMowing": {
     "mowingMotor": "Moteur de tonte",

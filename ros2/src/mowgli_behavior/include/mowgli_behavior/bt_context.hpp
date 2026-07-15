@@ -17,6 +17,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -289,6 +290,40 @@ struct BTContext
   /// enforce a cooldown so we don't re-fire on the same wedge while
   /// the BackUp + costmap clear is still settling.
   std::chrono::steady_clock::time_point last_obstacle_backoff_time{};
+
+  // -----------------------------------------------------------------------
+  // Wheel-slip / stall stuck detection (IsWheelSlipStuck)
+  // -----------------------------------------------------------------------
+
+  /// One 5 Hz motion snapshot: monotonically-growing distance integrals of
+  /// |cmd_vel_monitored.linear.x| and |/wheel_odom vx| plus the map-frame
+  /// base_footprint position at snapshot time. IsWheelSlipStuck compares the
+  /// window's oldest and newest samples: lots of COMMANDED (or wheel) travel
+  /// with (near-)zero MAP displacement means the robot is digging in on a
+  /// root/obstacle the LiDAR cannot see. The map pose (GPS/graph-anchored) is
+  /// deliberately used instead of /odometry/filtered — the odom estimate is
+  /// wheel-fed dead-reckoning and happily "moves" while the wheels spin in
+  /// place. A fusion_graph map jump inflates displacement, which SUPPRESSES
+  /// firing — fail-safe.
+  struct MotionSample
+  {
+    std::chrono::steady_clock::time_point t{};
+    double cmd_dist{0.0};  ///< ∫|cmd_vel.linear.x| dt up to t (m)
+    double wheel_dist{0.0};  ///< ∫|wheel vx| dt up to t (m)
+    double map_x{0.0};
+    double map_y{0.0};
+    bool map_valid{false};  ///< map→base_footprint TF was available at t
+  };
+
+  /// Rolling window of motion samples (guarded by context_mutex like the
+  /// collision fields above). behavior_tree_node's 5 Hz timer appends and
+  /// trims to ~2× the largest window IsWheelSlipStuck reads.
+  std::deque<MotionSample> motion_window;
+
+  /// Running integrals updated by the /cmd_vel_monitored and /wheel_odom
+  /// subscribers; snapshotted into motion_window by the 5 Hz timer.
+  double cmd_dist_accum{0.0};
+  double wheel_dist_accum{0.0};
 
   // -----------------------------------------------------------------------
   // Per-session flags reset by ClearCommand at session end

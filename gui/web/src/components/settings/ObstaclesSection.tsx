@@ -1,5 +1,5 @@
 import React from "react";
-import { Alert, Card, Col, Form, InputNumber, Row, Typography } from "antd";
+import { Alert, Card, Col, Form, InputNumber, Row, Switch, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 
@@ -96,6 +96,71 @@ export const ObstaclesSection: React.FC<Props> = ({
                                     onChange={(v) => onChange("obstacle_margin", v)}
                                     min={0} max={1} step={0.05} precision={2}
                                     style={{ width: "100%" }} addonAfter="m"
+                                />
+                            </Form.Item>
+                        </Col>
+                    </Row>
+                </Form>
+            </Card>
+
+            {/* Stuck detection — wheels spinning/stalled on sub-scan-plane
+                obstacles (roots): back up instead of digging in. */}
+            <Card size="small" title={t("settingsObstacles.stuckDetection")} style={{ marginBottom: 16 }}>
+                <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
+                    {t("settingsObstacles.stuckDetectionDescription")}
+                </Paragraph>
+                <Form layout="vertical" size="small">
+                    <Row gutter={[16, 0]}>
+                        <Col xs={24} sm={6}>
+                            <Form.Item
+                                label={fieldLabel("stuck_detection_enabled", t("settingsObstacles.stuckEnabled"))}
+                                tooltip={t("settingsObstacles.stuckEnabledTooltip")}
+                            >
+                                <Switch
+                                    checked={values.stuck_detection_enabled !== false}
+                                    onChange={(v) => onChange("stuck_detection_enabled", v)}
+                                />
+                            </Form.Item>
+                        </Col>
+                        <Col xs={12} sm={6}>
+                            <Form.Item
+                                label={fieldLabel("stuck_window_sec", t("settingsObstacles.stuckWindow"))}
+                                tooltip={t("settingsObstacles.stuckWindowTooltip")}
+                            >
+                                <InputNumber
+                                    value={values.stuck_window_sec}
+                                    onChange={(v) => onChange("stuck_window_sec", v)}
+                                    min={2} max={30} step={0.5} precision={1}
+                                    style={{ width: "100%" }} addonAfter="s"
+                                    disabled={values.stuck_detection_enabled === false}
+                                />
+                            </Form.Item>
+                        </Col>
+                        <Col xs={12} sm={6}>
+                            <Form.Item
+                                label={fieldLabel("stuck_min_commanded_m", t("settingsObstacles.stuckMinCommanded"))}
+                                tooltip={t("settingsObstacles.stuckMinCommandedTooltip")}
+                            >
+                                <InputNumber
+                                    value={values.stuck_min_commanded_m}
+                                    onChange={(v) => onChange("stuck_min_commanded_m", v)}
+                                    min={0.05} max={1} step={0.05} precision={2}
+                                    style={{ width: "100%" }} addonAfter="m"
+                                    disabled={values.stuck_detection_enabled === false}
+                                />
+                            </Form.Item>
+                        </Col>
+                        <Col xs={12} sm={6}>
+                            <Form.Item
+                                label={fieldLabel("stuck_max_displacement_m", t("settingsObstacles.stuckMaxDisplacement"))}
+                                tooltip={t("settingsObstacles.stuckMaxDisplacementTooltip")}
+                            >
+                                <InputNumber
+                                    value={values.stuck_max_displacement_m}
+                                    onChange={(v) => onChange("stuck_max_displacement_m", v)}
+                                    min={0.01} max={0.3} step={0.01} precision={2}
+                                    style={{ width: "100%" }} addonAfter="m"
+                                    disabled={values.stuck_detection_enabled === false}
                                 />
                             </Form.Item>
                         </Col>

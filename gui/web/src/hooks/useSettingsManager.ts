@@ -166,6 +166,8 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         keys: [
             "obstacle_inflation_radius", "max_obstacle_avoidance_distance",
             "obstacle_margin", "obstacle_slowdown_ratio",
+            "stuck_detection_enabled", "stuck_window_sec",
+            "stuck_min_commanded_m", "stuck_max_displacement_m",
         ],
     },
     {

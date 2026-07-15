@@ -658,6 +658,30 @@
           "title": "Approach Slowdown Ratio",
           "default": 0.3,
           "description": "Speed factor when a scan return enters the chassis+15 cm approach box (LiDAR variant). 0.3 = slow to 30% of commanded speed."
+        },
+        "stuck_detection_enabled": {
+          "type": "boolean",
+          "title": "Stuck Detection",
+          "default": true,
+          "description": "Back up automatically when the robot is commanded to move but its GPS pose does not (wheels spinning/stalled on roots invisible to the LiDAR)."
+        },
+        "stuck_window_sec": {
+          "type": "number",
+          "title": "Stuck Detection Window",
+          "default": 4.0,
+          "description": "Seconds of commanded-but-not-moving before the robot backs off. Clamped to [2, 30]."
+        },
+        "stuck_min_commanded_m": {
+          "type": "number",
+          "title": "Stuck Min Commanded Travel",
+          "default": 0.15,
+          "description": "Commanded/wheel travel (m) over the window needed to arm the detector. Clamped to [0.05, 1.0]."
+        },
+        "stuck_max_displacement_m": {
+          "type": "number",
+          "title": "Stuck Max Real Displacement",
+          "default": 0.05,
+          "description": "GPS-frame displacement (m) at or below which the robot counts as stuck. Must exceed RTK noise over the window. Clamped to [0.01, 0.3]."
         }
       }
     },
