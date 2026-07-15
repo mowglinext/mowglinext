@@ -145,6 +145,8 @@ add_executable(calibrate_imu_yaw_node
   src/calibrate_imu_yaw_node.cpp
 )
 
+target_include_directories(calibrate_imu_yaw_node PUBLIC ${INCLUDE_DIR})
+
 ament_target_dependencies(calibrate_imu_yaw_node
   rclcpp
   geometry_msgs
@@ -164,6 +166,8 @@ target_link_libraries(calibrate_imu_yaw_node yaml-cpp)
 add_executable(costmap_scan_filter_node
   src/costmap_scan_filter_node.cpp
 )
+
+target_include_directories(costmap_scan_filter_node PUBLIC ${INCLUDE_DIR})
 
 ament_target_dependencies(costmap_scan_filter_node
   rclcpp
@@ -283,13 +287,28 @@ if(BUILD_TESTING)
   )
 
   # ---- test_costmap_scan_filter ----
-  # Re-implements the static helper so we don't drag rclcpp/main symbols
-  # into the test binary; the helper is small enough to keep in sync by
-  # eye and a regression there will trigger a test failure here.
+  # Exercises the shared header-only filter logic (scan_filters.hpp) the node
+  # deploys: chassis blank, sector-limited dock blank, gravity ground filter.
   ament_add_gtest(test_costmap_scan_filter
     test/test_costmap_scan_filter.cpp
   )
+  target_include_directories(test_costmap_scan_filter PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
   ament_target_dependencies(test_costmap_scan_filter
+    sensor_msgs
+  )
+
+  # ---- test_scan_sector_guard ----
+  # sector_blocked() — the pure helper behind the calibration drive guard
+  # (calibrate_imu_yaw_node pauses/aborts its open-loop drives on it).
+  ament_add_gtest(test_scan_sector_guard
+    test/test_scan_sector_guard.cpp
+  )
+  target_include_directories(test_scan_sector_guard PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  ament_target_dependencies(test_scan_sector_guard
     sensor_msgs
   )
 

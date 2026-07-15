@@ -2213,7 +2213,11 @@
     "stuckMinCommanded": "Min Commanded Travel",
     "stuckMinCommandedTooltip": "Commanded/wheel travel over the window needed to arm the detector",
     "stuckMaxDisplacement": "Max Real Displacement",
-    "stuckMaxDisplacementTooltip": "GPS displacement at or below which the robot counts as stuck (must exceed RTK noise)"
+    "stuckMaxDisplacementTooltip": "GPS displacement at or below which the robot counts as stuck (must exceed RTK noise)",
+    "calibrationGuard": "Calibration Drive Guard",
+    "calibrationGuardDescription": "The startup calibration drives (forward/back, figure-8, dock reverse) bypass the collision monitor. With the guard on, the robot pauses when the LiDAR sees an obstacle in its path and aborts the calibration if it does not clear. Range, sector and wait time are tunable in Advanced.",
+    "calibrationGuardEnabled": "Enable",
+    "calibrationGuardEnabledTooltip": "Pause/abort calibration drives when the path is blocked (no effect without a LiDAR)"
   },
   "settingsMowing": {
     "mowingMotor": "Mowing Motor",

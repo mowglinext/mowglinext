@@ -16,97 +16,32 @@
 #include "gtest/gtest.h"
 #include "sensor_msgs/msg/laser_scan.hpp"
 
-// Expose the static helpers without dragging in rclcpp at link time.
-// The implementations live in costmap_scan_filter_node.cpp; we mimic the
-// function signatures here and keep them in sync. If the node ever grows
-// a third filter pass, refactor these into a shared header instead of
-// duplicating again.
+// The filter logic now lives in mowgli_localization/scan_filters.hpp (shared
+// with the node — the "refactor into a shared header" this file's old
+// hand-mirrored copies asked for once the sector-limited dock blank became a
+// third pass). The aliases below keep the historical test names while
+// exercising the exact deployed functions.
+#include "mowgli_localization/scan_filters.hpp"
+
 namespace mowgli_localization
 {
-sensor_msgs::msg::LaserScan filter_scan_for_test(const sensor_msgs::msg::LaserScan& in,
-                                                 double dock_blank_range,
-                                                 bool blank_active)
+using Vec3ForTest = Vec3;
+using GroundFilterConfigForTest = GroundFilterConfig;
+
+inline void apply_ground_filter_for_test(sensor_msgs::msg::LaserScan& io,
+                                         const GroundFilterConfigForTest& cfg,
+                                         const std::optional<Vec3>& up_in_imu)
 {
-  sensor_msgs::msg::LaserScan out = in;
-  if (!blank_active)
-    return out;
-  const float threshold = static_cast<float>(dock_blank_range);
-  const float inf = std::numeric_limits<float>::infinity();
-  for (auto& r : out.ranges)
-  {
-    if (std::isfinite(r) && r < threshold)
-      r = inf;
-  }
-  return out;
+  apply_ground_filter(io, cfg, up_in_imu);
 }
 
-struct Vec3ForTest
+/// Legacy call shape: single radial blank at every bearing == the new
+/// filter_scan with a full-circle (2π) dock sector and no chassis blank.
+inline sensor_msgs::msg::LaserScan filter_scan_for_test(const sensor_msgs::msg::LaserScan& in,
+                                                        double dock_blank_range,
+                                                        bool blank_active)
 {
-  double x{0.0};
-  double y{0.0};
-  double z{1.0};
-};
-
-struct GroundFilterConfigForTest
-{
-  bool enabled{false};
-  double min_obstacle_z_m{0.08};
-  double max_obstacle_z_m{1.5};
-  double lidar_height_m{0.22};
-  double lidar_mount_yaw{0.0};
-  int min_ground_run{8};
-};
-
-// Mirror of the production apply_ground_filter (costmap_scan_filter_node.cpp):
-// two-pass classify + run-length-gated ground strip. Kept in lockstep with the
-// node so this test guards the deployed behaviour.
-void apply_ground_filter_for_test(sensor_msgs::msg::LaserScan& io,
-                                  const GroundFilterConfigForTest& cfg,
-                                  const std::optional<Vec3ForTest>& up_in_imu)
-{
-  if (!cfg.enabled || !up_in_imu.has_value())
-    return;
-  const auto& u = *up_in_imu;
-  const float min_z = static_cast<float>(cfg.min_obstacle_z_m);
-  const float max_z = static_cast<float>(cfg.max_obstacle_z_m);
-  const float inf = std::numeric_limits<float>::infinity();
-  const double a0 = io.angle_min;
-  const double da = io.angle_increment;
-  const size_t n = io.ranges.size();
-  std::vector<uint8_t> klass(n, 0);  // 0=keep, 1=ground (low), 2=overhead (high)
-  for (size_t i = 0; i < n; ++i)
-  {
-    const float r = io.ranges[i];
-    if (!std::isfinite(r))
-      continue;
-    const double psi = a0 + da * static_cast<double>(i) + cfg.lidar_mount_yaw;
-    const double z_dir = u.x * std::cos(psi) + u.y * std::sin(psi);
-    const float return_z = static_cast<float>(cfg.lidar_height_m + r * z_dir);
-    if (return_z > max_z)
-      klass[i] = 2;
-    else if (return_z < min_z)
-      klass[i] = 1;
-  }
-  const int min_run = std::max(1, cfg.min_ground_run);
-  for (size_t i = 0; i < n; ++i)
-  {
-    if (klass[i] == 2)
-    {
-      io.ranges[i] = inf;
-      continue;
-    }
-    if (klass[i] != 1)
-      continue;
-    size_t j = i;
-    while (j < n && klass[j] == 1)
-      ++j;
-    if (static_cast<int>(j - i) >= min_run)
-    {
-      for (size_t k = i; k < j; ++k)
-        io.ranges[k] = inf;
-    }
-    i = j - 1;
-  }
+  return filter_scan(in, 0.0, dock_blank_range, blank_active, 2.0 * M_PI, 0.0);
 }
 
 /// Build the up-in-IMU vector for a robot pitched `pitch_rad` (positive
@@ -401,4 +336,102 @@ TEST(CostmapScanFilterGround, NonFiniteRangesUntouched)
   mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FALSE(std::isfinite(in.ranges[0]));
   EXPECT_TRUE(std::isnan(in.ranges[1]));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sector-limited dock blank (dock_blank_sector_deg). The dock/canopy sits
+// FORWARD of a nose-in-docked robot; keeping REAR beams live during the
+// charge/post-undock window is what lets the undock BackUp collision check
+// and the calibration rear guard see a real obstacle behind the robot.
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace
+{
+
+/// Full-circle 5-beam scan: bearings -π, -π/2, 0, +π/2, +π at LIDAR index
+/// angles (yaw rotation applied by the filter under test).
+sensor_msgs::msg::LaserScan make_scan_360(const std::vector<float>& ranges)
+{
+  sensor_msgs::msg::LaserScan s;
+  s.angle_min = static_cast<float>(-M_PI);
+  s.angle_max = static_cast<float>(M_PI);
+  s.angle_increment = static_cast<float>(2.0 * M_PI / (ranges.size() - 1));
+  s.range_min = 0.05f;
+  s.range_max = 12.0f;
+  s.ranges = ranges;
+  return s;
+}
+
+constexpr double kSector220 = 220.0 * M_PI / 180.0;
+
+}  // namespace
+
+TEST(CostmapScanFilterSector, RearReturnSurvivesForwardBlanked)
+{
+  // Beams at -π, -π/2, 0, +π/2, +π — all at 0.5 m (< 0.70 dock range).
+  auto in = make_scan_360({0.5f, 0.5f, 0.5f, 0.5f, 0.5f});
+  auto out = mowgli_localization::filter_scan(in,
+                                              /*chassis*/ 0.0,
+                                              /*dock*/ 0.70,
+                                              /*dock_active*/ true,
+                                              kSector220,
+                                              /*lidar_yaw*/ 0.0);
+  // Forward (index 2, ψ=0) and sides (±90° < 110° half-sector) blanked.
+  EXPECT_FALSE(std::isfinite(out.ranges[2])) << "forward return must be blanked";
+  EXPECT_FALSE(std::isfinite(out.ranges[1])) << "-90° return inside the 220° sector";
+  EXPECT_FALSE(std::isfinite(out.ranges[3])) << "+90° return inside the 220° sector";
+  // Rear (±π, |ψ|=180° > 110°) stays LIVE — the undock BackUp's view.
+  EXPECT_FLOAT_EQ(out.ranges[0], 0.5f) << "rear return must survive the sector blank";
+  EXPECT_FLOAT_EQ(out.ranges[4], 0.5f) << "rear return must survive the sector blank";
+}
+
+TEST(CostmapScanFilterSector, FullCircleSectorIsLegacyBlank)
+{
+  auto in = make_scan_360({0.5f, 0.5f, 0.5f, 0.5f, 0.5f});
+  auto out = mowgli_localization::filter_scan(in, 0.0, 0.70, true, 2.0 * M_PI, 0.0);
+  for (const auto& r : out.ranges)
+  {
+    EXPECT_FALSE(std::isfinite(r)) << "360° sector must blank every bearing (legacy)";
+  }
+}
+
+TEST(CostmapScanFilterSector, MountYawRotatesSectorToBaseForward)
+{
+  // 180°-rotated mount (this robot): LIDAR index angle ±π points BASE
+  // forward. With lidar_yaw=π the blank must land on index ±π beams and
+  // spare the index-0 beam (base rear).
+  auto in = make_scan_360({0.5f, 0.5f, 0.5f, 0.5f, 0.5f});
+  auto out = mowgli_localization::filter_scan(in, 0.0, 0.70, true, kSector220, M_PI);
+  EXPECT_FALSE(std::isfinite(out.ranges[0])) << "index -π beam is base-forward → blanked";
+  EXPECT_FALSE(std::isfinite(out.ranges[4])) << "index +π beam is base-forward → blanked";
+  EXPECT_FLOAT_EQ(out.ranges[2], 0.5f) << "index 0 beam is base-rear → live";
+}
+
+TEST(CostmapScanFilterSector, ChassisBlankStaysRadial)
+{
+  // Chassis self-return blank has no sector: a rear return inside
+  // chassis_blank_range is blanked even though the dock sector spares it,
+  // and even with the dock blank inactive.
+  auto in = make_scan_360({0.2f, 5.0f, 0.2f, 5.0f, 0.2f});
+  auto out = mowgli_localization::filter_scan(in,
+                                              /*chassis*/ 0.3,
+                                              /*dock*/ 0.70,
+                                              /*dock_active*/ false,
+                                              kSector220,
+                                              0.0);
+  EXPECT_FALSE(std::isfinite(out.ranges[0])) << "rear chassis self-return blanked";
+  EXPECT_FALSE(std::isfinite(out.ranges[2])) << "forward chassis self-return blanked";
+  EXPECT_FALSE(std::isfinite(out.ranges[4])) << "rear chassis self-return blanked";
+  EXPECT_FLOAT_EQ(out.ranges[1], 5.0f);
+  EXPECT_FLOAT_EQ(out.ranges[3], 5.0f);
+}
+
+TEST(CostmapScanFilterSector, InactiveDockBlankLeavesNearReturns)
+{
+  auto in = make_scan_360({0.5f, 0.5f, 0.5f, 0.5f, 0.5f});
+  auto out = mowgli_localization::filter_scan(in, 0.0, 0.70, false, kSector220, 0.0);
+  for (const auto& r : out.ranges)
+  {
+    EXPECT_FLOAT_EQ(r, 0.5f) << "no blank outside the charge/post-undock window";
+  }
 }

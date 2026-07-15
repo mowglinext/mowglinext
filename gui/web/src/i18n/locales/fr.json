@@ -2209,7 +2209,11 @@
     "stuckMinCommanded": "Déplacement commandé min",
     "stuckMinCommandedTooltip": "Distance commandée/roues sur la fenêtre nécessaire pour armer le détecteur",
     "stuckMaxDisplacement": "Déplacement réel max",
-    "stuckMaxDisplacementTooltip": "Déplacement GPS en dessous duquel le robot est considéré enlisé (doit dépasser le bruit RTK)"
+    "stuckMaxDisplacementTooltip": "Déplacement GPS en dessous duquel le robot est considéré enlisé (doit dépasser le bruit RTK)",
+    "calibrationGuard": "Garde des trajets de calibration",
+    "calibrationGuardDescription": "Les trajets de calibration au démarrage (avant/arrière, figure-8, recul dock) contournent le moniteur de collision. Avec la garde active, le robot se met en pause quand le LiDAR voit un obstacle sur sa trajectoire et abandonne la calibration s'il ne se dégage pas. Portée, secteur et délai sont réglables dans Avancé.",
+    "calibrationGuardEnabled": "Activer",
+    "calibrationGuardEnabledTooltip": "Pause/abandon des trajets de calibration quand le chemin est bloqué (sans effet sans LiDAR)"
   },
   "settingsMowing": {
     "mowingMotor": "Moteur de tonte",

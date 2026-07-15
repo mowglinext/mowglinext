@@ -401,6 +401,21 @@ def generate_launch_description() -> LaunchDescription:
             {"use_sim_time": use_sim_time},
             {"undock_distance": float(robot_params.get("undock_distance", 2.0))},
             {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
+            # Drive-direction scan guard: the calibration profiles publish on
+            # /cmd_vel_teleop (bypasses collision_monitor), so the node pauses
+            # its own drives when /scan_collision shows an obstacle in the
+            # motion sector. No-op on LiDAR-less robots (stale-scan gate).
+            {"calibration_guard_enabled": bool(
+                robot_params.get("calibration_guard_enabled", True))},
+            {"calibration_guard_range_m": float(
+                robot_params.get("calibration_guard_range_m", 0.45))},
+            {"calibration_guard_sector_deg": float(
+                robot_params.get("calibration_guard_sector_deg", 60.0))},
+            {"calibration_guard_wait_sec": float(
+                robot_params.get("calibration_guard_wait_sec", 30.0))},
+            # Beam index angle → base bearing rotation (same lidar_yaw the
+            # URDF/scan filters use).
+            {"lidar_yaw": float(robot_params.get("lidar_yaw", 0.0))},
         ],
     )
 

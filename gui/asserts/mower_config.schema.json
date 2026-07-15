@@ -682,6 +682,36 @@
           "title": "Stuck Max Real Displacement",
           "default": 0.05,
           "description": "GPS-frame displacement (m) at or below which the robot counts as stuck. Must exceed RTK noise over the window. Clamped to [0.01, 0.3]."
+        },
+        "calibration_guard_enabled": {
+          "type": "boolean",
+          "title": "Calibration Drive Guard",
+          "default": true,
+          "description": "Pause the IMU/dock calibration drives when the LiDAR sees an obstacle in the motion direction (they bypass the collision monitor), aborting if it does not clear. No effect without a LiDAR."
+        },
+        "calibration_guard_range_m": {
+          "type": "number",
+          "title": "Calibration Guard Range",
+          "default": 0.45,
+          "description": "Distance (m) at which a scan return in the motion sector pauses the calibration drive. Clamped to [0.2, 2.0]."
+        },
+        "calibration_guard_sector_deg": {
+          "type": "number",
+          "title": "Calibration Guard Sector",
+          "default": 60.0,
+          "description": "Total bearing width (deg) of the guarded sector centred on the motion direction. Clamped to [20, 180]."
+        },
+        "calibration_guard_wait_sec": {
+          "type": "number",
+          "title": "Calibration Guard Wait",
+          "default": 30.0,
+          "description": "Seconds a blocked calibration drive waits for the path to clear before aborting. Clamped to [5, 300]."
+        },
+        "dock_blank_sector_deg": {
+          "type": "number",
+          "title": "Dock Blank Sector",
+          "default": 220.0,
+          "description": "Bearing width (deg, centred on robot forward) of the LiDAR dock blank while charging/undocking. 220 keeps rear beams live so the undock back-up can see obstacles behind; 360 restores the legacy full-circle blank. Clamped to [90, 360]."
         }
       }
     },

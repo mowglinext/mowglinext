@@ -37,6 +37,7 @@
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/srv/calibrate_imu_yaw.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
+#include "mowgli_localization/scan_sector_guard.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/callback_group.hpp"
 #include "rclcpp/executors/multi_threaded_executor.hpp"
@@ -286,6 +287,41 @@ public:
         declare_parameter<double>("undock_distance", DOCK_UNDOCK_DISTANCE_DEFAULT_M);
     dock_undock_speed_ = declare_parameter<double>("undock_speed", DOCK_UNDOCK_SPEED_DEFAULT);
 
+    // Scan guard for the open-loop calibration drives. These publish on
+    // /cmd_vel_teleop, which BYPASSES the collision_monitor (teleop
+    // twist_mux lane) — without this the calibration drives blind into
+    // whatever is parked in front of / behind the robot. The guard reads
+    // /scan_collision (self-return + sector-limited dock blanked, NOT
+    // ground-filtered — the same conservative stream collision_monitor
+    // polls) and PAUSES the drive while the motion-direction sector is
+    // blocked, aborting the calibration if it stays blocked longer than
+    // calibration_guard_wait_sec. No-op without a LiDAR: a scan older
+    // than 1 s (or never received) disables the guard rather than
+    // deadlocking LiDAR-less robots.
+    calibration_guard_enabled_ = declare_parameter<bool>("calibration_guard_enabled", true);
+    calibration_guard_range_m_ =
+        std::clamp(declare_parameter<double>("calibration_guard_range_m", 0.45), 0.2, 2.0);
+    calibration_guard_half_angle_rad_ =
+        std::clamp(declare_parameter<double>("calibration_guard_sector_deg", 60.0), 20.0, 180.0) *
+        M_PI / 360.0;  // total width → half-angle
+    calibration_guard_wait_sec_ =
+        std::clamp(declare_parameter<double>("calibration_guard_wait_sec", 30.0), 5.0, 300.0);
+    // LIDAR mount yaw relative to base_link (mowgli_robot.yaml lidar_yaw,
+    // forwarded by the launch) — rotates a beam's index angle to its base
+    // bearing, same convention as costmap_scan_filter's sector blank.
+    lidar_yaw_ = declare_parameter<double>("lidar_yaw", 0.0);
+
+    scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
+        "/scan_collision",
+        rclcpp::SensorDataQoS(),
+        [this](sensor_msgs::msg::LaserScan::ConstSharedPtr msg)
+        {
+          std::lock_guard<std::mutex> lk(scan_lock_);
+          last_scan_ = *msg;
+          last_scan_time_ = std::chrono::steady_clock::now();
+        },
+        sub_opts);
+
     RCLCPP_INFO(get_logger(),
                 "IMU yaw calibration node ready. Dock undock: %.2f m @ %.2f m/s. "
                 "Ensure robot is undocked with ~1 m of clear space in front and "
@@ -404,12 +440,74 @@ private:
     cmd_pub_->publish(m);
   }
 
+  // ── Drive-direction scan guard ─────────────────────────────────────
+
+  /// True when the /scan_collision sector in the motion direction
+  /// (bearing 0 = forward, π = reverse) currently shows an obstacle
+  /// within calibration_guard_range_m. False when the guard is disabled
+  /// or the scan is missing/stale (> 1 s — no-LiDAR robots must not
+  /// deadlock; staleness must not trust pre-obstacle data either).
+  bool motion_blocked(double bearing_rad, double extra_half_angle_rad = 0.0)
+  {
+    if (!calibration_guard_enabled_)
+      return false;
+    std::lock_guard<std::mutex> lk(scan_lock_);
+    if (last_scan_time_.time_since_epoch().count() == 0)
+      return false;
+    const double age =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - last_scan_time_).count();
+    if (age > 1.0)
+      return false;
+    return sector_blocked(last_scan_,
+                          bearing_rad,
+                          lidar_yaw_,
+                          calibration_guard_half_angle_rad_ + extra_half_angle_rad,
+                          calibration_guard_range_m_);
+  }
+
+  /// Pause-then-abort semantics for the guarded drive loops: publish zero
+  /// while the motion sector is blocked; throw (→ the calibrate_cb
+  /// try/catch fails the service with a clear message) if it stays
+  /// blocked longer than calibration_guard_wait_sec.
+  void guard_hold_or_throw(double bearing_rad, const char* phase)
+  {
+    if (!motion_blocked(bearing_rad))
+      return;
+    RCLCPP_WARN(get_logger(),
+                "Obstacle within %.2f m in the %s drive path — pausing "
+                "calibration (waiting up to %.0f s for it to clear).",
+                calibration_guard_range_m_,
+                phase,
+                calibration_guard_wait_sec_);
+    const double deadline = monotonic() + calibration_guard_wait_sec_;
+    const double period = 1.0 / CMD_RATE_HZ;
+    while (motion_blocked(bearing_rad))
+    {
+      if (emergency_active_)
+      {
+        publish_vx(0.0);
+        throw std::runtime_error("emergency during guarded calibration hold");
+      }
+      if (monotonic() > deadline)
+      {
+        publish_vx(0.0);
+        throw std::runtime_error(std::string("obstacle in ") + phase +
+                                 " drive path did not clear — remove it and re-run calibration");
+      }
+      publish_vx(0.0);
+      sleep_for(period);
+    }
+    RCLCPP_INFO(get_logger(), "Drive path clear — resuming calibration.");
+  }
+
   void drive_profile(double signed_cruise_speed)
   {
+    const double bearing = (signed_cruise_speed >= 0.0) ? 0.0 : M_PI;
     const double period = 1.0 / CMD_RATE_HZ;
     int n = std::max(1, static_cast<int>(RAMP_SEC * CMD_RATE_HZ));
     for (int i = 0; i < n; ++i)
     {
+      guard_hold_or_throw(bearing, signed_cruise_speed >= 0.0 ? "forward" : "reverse");
       const double v = signed_cruise_speed * (i + 1) / n;
       publish_vx(v);
       sleep_for(period);
@@ -417,6 +515,7 @@ private:
     n = std::max(1, static_cast<int>(CRUISE_SEC * CMD_RATE_HZ));
     for (int i = 0; i < n; ++i)
     {
+      guard_hold_or_throw(bearing, signed_cruise_speed >= 0.0 ? "forward" : "reverse");
       publish_vx(signed_cruise_speed);
       sleep_for(period);
     }
@@ -453,8 +552,13 @@ private:
     const double seconds_per_side = (2.0 * M_PI * loops_per_side) / wz_mag;
     const int steps_per_side = std::max(1, static_cast<int>(seconds_per_side * CMD_RATE_HZ));
 
+    // Widen the guarded sector ±15° beyond the straight-drive width: the
+    // figure-8 constantly curves, so the chassis sweeps past the nominal
+    // forward bearing.
+    const double fig8_extra_half_angle = 15.0 * M_PI / 180.0;
     for (double sign : {+1.0, -1.0})
     {
+      double blocked_since = -1.0;
       for (int i = 0; i < steps_per_side; ++i)
       {
         if (emergency_active_)
@@ -462,6 +566,34 @@ private:
           publish_arc(0.0, 0.0);
           return;
         }
+        if (motion_blocked(0.0, fig8_extra_half_angle))
+        {
+          // Hold in place; give up on the mag profile (not the whole
+          // service) if the path stays blocked — the fit then fails with
+          // "too few samples" and the operator sees the pause warnings.
+          if (blocked_since < 0.0)
+          {
+            blocked_since = monotonic();
+            RCLCPP_WARN(get_logger(),
+                        "Obstacle within %.2f m of the figure-8 path — "
+                        "pausing (up to %.0f s).",
+                        calibration_guard_range_m_,
+                        calibration_guard_wait_sec_);
+          }
+          else if (monotonic() - blocked_since > calibration_guard_wait_sec_)
+          {
+            RCLCPP_ERROR(get_logger(),
+                         "Figure-8 path stayed blocked — abandoning the mag "
+                         "drive profile.");
+            publish_arc(0.0, 0.0);
+            return;
+          }
+          publish_arc(0.0, 0.0);
+          --i;  // don't consume profile steps while holding
+          sleep_for(period);
+          continue;
+        }
+        blocked_since = -1.0;
         publish_arc(linear_m_s, sign * wz_mag);
         sleep_for(period);
       }
@@ -545,7 +677,8 @@ private:
                 y0);
 
     const double period = 1.0 / CMD_RATE_HZ;
-    const double t_deadline = monotonic() + DOCK_UNDOCK_TIMEOUT_SEC;
+    double t_deadline = monotonic() + DOCK_UNDOCK_TIMEOUT_SEC;
+    double blocked_since = -1.0;
     double displacement = 0.0;
     while (monotonic() < t_deadline)
     {
@@ -555,6 +688,33 @@ private:
         RCLCPP_ERROR(get_logger(), "Emergency during dock undock — aborting.");
         return std::nullopt;
       }
+      // Rear-sector guard: the sector-limited dock blank keeps rear beams
+      // live even during the post-undock blank window, so a real obstacle
+      // behind the robot is visible here. Hold (extending the drive
+      // deadline) and abort if it never clears.
+      if (motion_blocked(M_PI))
+      {
+        if (blocked_since < 0.0)
+        {
+          blocked_since = monotonic();
+          RCLCPP_WARN(get_logger(),
+                      "Obstacle within %.2f m behind the robot — pausing "
+                      "dock-yaw reverse (up to %.0f s).",
+                      calibration_guard_range_m_,
+                      calibration_guard_wait_sec_);
+        }
+        else if (monotonic() - blocked_since > calibration_guard_wait_sec_)
+        {
+          publish_vx(0.0);
+          RCLCPP_ERROR(get_logger(), "Reverse path stayed blocked — aborting dock yaw drive.");
+          return std::nullopt;
+        }
+        publish_vx(0.0);
+        t_deadline += period;  // holding must not consume the drive timeout
+        sleep_for(period);
+        continue;
+      }
+      blocked_since = -1.0;
       publish_vx(-dock_undock_speed_);
       if (gps_have_)
       {
@@ -1464,6 +1624,19 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::MagneticField>::SharedPtr mag_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::AbsolutePose>::SharedPtr gps_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
+
+  // Drive-direction scan guard (see constructor comment). last_scan_ is a
+  // full copy under scan_lock_ — the guard reads it at CMD_RATE (20 Hz)
+  // against the LD19's ~455-bin sweep, trivial on this CPU budget.
+  bool calibration_guard_enabled_{true};
+  double calibration_guard_range_m_{0.45};
+  double calibration_guard_half_angle_rad_{30.0 * M_PI / 180.0};
+  double calibration_guard_wait_sec_{30.0};
+  double lidar_yaw_{0.0};
+  std::mutex scan_lock_;
+  sensor_msgs::msg::LaserScan last_scan_;
+  std::chrono::steady_clock::time_point last_scan_time_{};
   rclcpp::Client<mowgli_interfaces::srv::HighLevelControl>::SharedPtr hlc_client_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub_;
   rclcpp::Service<mowgli_interfaces::srv::CalibrateImuYaw>::SharedPtr srv_;
