@@ -148,6 +148,17 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   // falls back to inline OnTimer publishing.
   tf_broadcast_rate_hz_ = declare_parameter<double>("tf_broadcast_rate_hz", 20.0);
 
+  // map→odom slew-rate limiter (see fusion_graph_node.hpp). Eases the
+  // published anchor toward the raw graph target at a bounded rate so
+  // per-node graph corrections enter map→base as continuous sub-second
+  // ramps instead of steps (the weave/hunting root cause). A jump past the
+  // snap thresholds is a genuine relocalization → applied immediately.
+  anchor_slew_enabled_ = declare_parameter<bool>("anchor_slew_enabled", true);
+  anchor_max_lin_slew_mps_ = declare_parameter<double>("anchor_max_lin_slew_mps", 0.10);
+  anchor_max_ang_slew_radps_ = declare_parameter<double>("anchor_max_ang_slew_radps", 0.20);
+  anchor_snap_dist_m_ = declare_parameter<double>("anchor_snap_dist_m", 0.50);
+  anchor_snap_yaw_rad_ = declare_parameter<double>("anchor_snap_yaw_rad", 0.35);
+
   graph_ = std::make_shared<GraphManager>(gp);
   DeclareParameters();
   SetupCommunications(gp.node_period_s);

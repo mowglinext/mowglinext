@@ -290,6 +290,35 @@ fusion_graph_node:
     # pre-2026-06 behavior).
     tf_broadcast_rate_hz: 20.0
 
+    # ── map→odom slew-rate limiter (REP-105 continuity) ──────────────
+    # The map→odom anchor is recomputed only when a new graph node lands
+    # (node_period_s moving / stationary_node_period_s at rest). Publishing
+    # it raw pushes each graph correction — GPS innovation, loop closure,
+    # scan-match, or the whole refinement snapped in at the end of a 5 s
+    # stationary window — into map→base as a STEP, and Nav2's controller
+    # tracks a teleporting pose → left/right weave + in-place hunting. The
+    # TF thread instead eases a published anchor toward the raw target at a
+    # bounded rate: a few-cm RTK correction becomes a sub-second ramp, not
+    # a step. This restores the REP-105 guarantee that the map-frame
+    # correction is applied continuously, and lets FTC's gains be tuned for
+    # tracking authority instead of jitter rejection.
+    #   anchor_max_lin_slew_mps  : 0.10 m/s → ≤10 cm/s of injected map-frame
+    #       velocity, a fraction of the 0.16–0.20 m/s mow speed → invisible
+    #       to FTC; a 3 cm correction clears in ~0.3 s.
+    #   anchor_max_ang_slew_radps: 0.20 rad/s (≈11°/s) → a 0.1 rad yaw
+    #       correction eases in over ~0.5 s.
+    #   anchor_snap_dist_m / anchor_snap_yaw_rad: beyond these the target is
+    #       a genuine relocalization (re-seed, first fix after a long Float,
+    #       big loop closure) → snap immediately, never lag reality. Well
+    #       above any per-node RTK correction (sub-cm/sub-deg).
+    #   anchor_slew_enabled=false reproduces the pre-slew step behaviour
+    #       exactly — flip it on a live swath for an A/B on the weave.
+    anchor_slew_enabled: true
+    anchor_max_lin_slew_mps: 0.10
+    anchor_max_ang_slew_radps: 0.20
+    anchor_snap_dist_m: 0.50
+    anchor_snap_yaw_rad: 0.35
+
     # ── Dock-approach pose stabilisation ─────────────────────────────
     # While the docking server runs its final graceful approach it
     # publishes /cmd_vel_docking; we treat a non-zero command within

@@ -234,6 +234,47 @@ private:
   // map→odom broadcast for one cycle, which is the intent.
   std::atomic<bool> t_map_odom_anchor_valid_{false};
 
+  // ── map→odom slew-rate limiter (continuity restoration) ─────────
+  // t_map_odom_anchor_ above is the RAW target: it steps discontinuously
+  // whenever a new node lands with a graph correction (GPS innovation,
+  // loop closure, scan-match, or the accumulated refinement snapped in at
+  // the end of a stationary_node_period_s window). Publishing it directly
+  // pushes those steps straight into map→base = anchor ⊙ odom→base, and
+  // Nav2's controller tracks a teleporting pose → left/right weave and
+  // in-place hunting. REP-105 requires the map-frame correction to be
+  // applied CONTINUOUSLY. So the TF thread eases a PUBLISHED anchor toward
+  // the raw target at a bounded rate: a few-cm RTK correction becomes a
+  // sub-second ramp instead of a step; a genuine relocalization (target
+  // jumps past anchor_snap_dist_m / anchor_snap_yaw_rad — re-seed, first
+  // fix after a long Float, big loop closure) snaps immediately so we never
+  // lag reality. Set anchor_slew_enabled=false to reproduce the pre-slew
+  // step behaviour exactly (A/B validation).
+  //
+  // t_map_odom_pub_ is written ONLY by the TF broadcast thread (single
+  // writer → no lock for its own state). t_map_odom_pub_shared_ is a copy
+  // published back under tf_state_mu_ so PublishOutputs (executor thread)
+  // serves /odometry/filtered_map + /imu/fg_yaw from the SAME smoothed
+  // anchor as the TF, keeping viz and TF consistent.
+  bool anchor_slew_enabled_ = true;
+  double anchor_max_lin_slew_mps_ = 0.10;
+  double anchor_max_ang_slew_radps_ = 0.20;
+  double anchor_snap_dist_m_ = 0.50;
+  double anchor_snap_yaw_rad_ = 0.35;
+  gtsam::Pose2 t_map_odom_pub_{0.0, 0.0, 0.0};
+  bool t_map_odom_pub_valid_ = false;
+  // Smoothed anchor mirrored under tf_state_mu_ for PublishOutputs
+  // (/odometry/filtered_map + /imu/fg_yaw) to match the TF exactly.
+  gtsam::Pose2 t_map_odom_pub_shared_{0.0, 0.0, 0.0};
+  bool t_map_odom_pub_shared_valid_ = false;
+  // Wall-clock of the last inline map-frame publish, for the slew dt when
+  // the dedicated TF thread is disabled (observer / tf_broadcast_rate<=0).
+  double last_map_pub_s_ = -1.0;
+
+  // Advance t_map_odom_pub_ toward the raw target anchor by at most
+  // anchor_max_{lin,ang}_slew over dt; snap on relocalization-scale jumps.
+  // Returns the anchor to broadcast. Single-writer per run mode.
+  gtsam::Pose2 SlewPublishedAnchor(const gtsam::Pose2& target, bool anchor_valid, double dt);
+
   // Latched seeds for initialization.
   std::optional<gtsam::Vector2> seed_xy_;  // from latest GPS
   std::optional<double> seed_yaw_;  // from latest COG/mag

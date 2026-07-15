@@ -5,6 +5,7 @@
 // implementation is split across several translation units to keep each file within the project's
 // 600-line budget; all share fusion_graph_node.hpp + fusion_graph_node_util.hpp.)
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -16,6 +17,7 @@
 #include <tf2/exceptions.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+#include "fusion_graph/anchor_slew.hpp"
 #include "fusion_graph/fusion_graph_node.hpp"
 #include "fusion_graph/fusion_graph_node_util.hpp"
 
@@ -156,9 +158,41 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   // and the map→odom TF stay glued to out.pose for up to
   // stationary_node_period_s (5 s by default) → robot looks frozen
   // in viz, then teleports when the next Tick lands.
+  // Select the smoothed map→odom anchor to extrapolate through current
+  // odom. In threaded mode the TF thread owns the slew and mirrors the
+  // result under tf_state_mu_; in inline mode (observer / thread disabled)
+  // we slew here — the sole writer of t_map_odom_pub_ in that mode.
+  gtsam::Pose2 map_odom_anchor;
+  bool have_anchor;
+  if (tf_thread_.joinable())
+  {
+    std::lock_guard<std::mutex> lock(tf_state_mu_);
+    if (anchor_slew_enabled_)
+    {
+      have_anchor = t_map_odom_pub_shared_valid_;
+      map_odom_anchor = t_map_odom_pub_shared_;
+    }
+    else
+    {
+      have_anchor = t_map_odom_anchor_valid_;
+      map_odom_anchor = t_map_odom_anchor_;
+    }
+  }
+  else
+  {
+    const bool raw_valid = t_map_odom_anchor_valid_;
+    const double now_s = this->now().seconds();
+    const double dt = (last_map_pub_s_ < 0.0)
+                          ? (1.0 / std::max(tf_broadcast_rate_hz_, 1.0))
+                          : std::max(0.0, now_s - last_map_pub_s_);
+    last_map_pub_s_ = now_s;
+    map_odom_anchor = SlewPublishedAnchor(t_map_odom_anchor_, raw_valid, dt);
+    have_anchor = raw_valid && (!anchor_slew_enabled_ || t_map_odom_pub_valid_);
+  }
+
   const gtsam::Pose2 dr_now(dr_x_, dr_y_, dr_yaw_);
   const gtsam::Pose2 extrapolated_map_base =
-      t_map_odom_anchor_valid_ ? t_map_odom_anchor_.compose(dr_now) : out.pose;
+      have_anchor ? map_odom_anchor.compose(dr_now) : out.pose;
 
   // 1. nav_msgs/Odometry on /odometry/filtered_map.
   nav_msgs::msg::Odometry odom;
@@ -236,11 +270,11 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   // motion in the composition map→base = map→odom × odom→base, so
   // the robot would freeze at the snapshot pose between Ticks.
   tf2::Transform T_map_odom;
-  if (t_map_odom_anchor_valid_)
+  if (have_anchor)
   {
-    T_map_odom.setOrigin(tf2::Vector3(t_map_odom_anchor_.x(), t_map_odom_anchor_.y(), 0.0));
+    T_map_odom.setOrigin(tf2::Vector3(map_odom_anchor.x(), map_odom_anchor.y(), 0.0));
     tf2::Quaternion q_map_odom;
-    q_map_odom.setRPY(0.0, 0.0, t_map_odom_anchor_.theta());
+    q_map_odom.setRPY(0.0, 0.0, map_odom_anchor.theta());
     T_map_odom.setRotation(q_map_odom);
   }
   else
@@ -264,6 +298,30 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   tf_broadcaster_->sendTransform(t_map_odom);
 }
 
+gtsam::Pose2 FusionGraphNode::SlewPublishedAnchor(const gtsam::Pose2& target,
+                                                  bool anchor_valid,
+                                                  double dt)
+{
+  // Thin wrapper over the pure AnchorSlewStep (anchor_slew.hpp). Single
+  // writer of t_map_odom_pub_ per run mode (TF thread when the broadcast
+  // thread runs, executor otherwise) → no lock taken here.
+  const AnchorSlewCfg cfg{anchor_slew_enabled_,
+                          anchor_max_lin_slew_mps_,
+                          anchor_max_ang_slew_radps_,
+                          anchor_snap_dist_m_,
+                          anchor_snap_yaw_rad_};
+  double px = t_map_odom_pub_.x();
+  double py = t_map_odom_pub_.y();
+  double pyaw = t_map_odom_pub_.theta();
+  double ox = 0.0;
+  double oy = 0.0;
+  double oyaw = 0.0;
+  AnchorSlewStep(t_map_odom_pub_valid_, px, py, pyaw, anchor_valid,
+                 target.x(), target.y(), target.theta(), dt, cfg, ox, oy, oyaw);
+  t_map_odom_pub_ = gtsam::Pose2(px, py, pyaw);
+  return gtsam::Pose2(ox, oy, oyaw);
+}
+
 void FusionGraphNode::TfBroadcastLoop()
 {
   // See tf_broadcast_rate_hz_ in the header for the rationale. This
@@ -272,6 +330,7 @@ void FusionGraphNode::TfBroadcastLoop()
   // thread is running (tf_thread_.joinable()), so there is exactly
   // one writer per TF leg and stamps stay monotonic.
   const auto period = std::chrono::duration<double>(1.0 / tf_broadcast_rate_hz_);
+  auto last_tick = std::chrono::steady_clock::now();
   while (!tf_thread_stop_.load(std::memory_order_acquire))
   {
     std::this_thread::sleep_for(period);
@@ -296,6 +355,21 @@ void FusionGraphNode::TfBroadcastLoop()
       vx_eff = dr_last_vx_eff_;
       anchor_valid = t_map_odom_anchor_valid_;
       anchor = t_map_odom_anchor_;
+    }
+
+    // Slew the published anchor toward the raw target at a bounded rate so
+    // graph corrections enter map→base continuously. dt from a monotonic
+    // clock so the slew rate is honest under ARM scheduler jitter.
+    const auto tick_now = std::chrono::steady_clock::now();
+    const double dt = std::chrono::duration<double>(tick_now - last_tick).count();
+    last_tick = tick_now;
+    const gtsam::Pose2 pub_anchor = SlewPublishedAnchor(anchor, anchor_valid, dt);
+    {
+      // Mirror the smoothed anchor for PublishOutputs (executor thread) so
+      // /odometry/filtered_map + /imu/fg_yaw match this TF exactly.
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
+      t_map_odom_pub_shared_ = pub_anchor;
+      t_map_odom_pub_shared_valid_ = anchor_valid && t_map_odom_pub_valid_;
     }
 
     // Honest forward-stamp: advance the DR pose by the lead so the now()+lead
@@ -325,9 +399,9 @@ void FusionGraphNode::TfBroadcastLoop()
     if (anchor_valid)
     {
       tf2::Transform T_map_odom;
-      T_map_odom.setOrigin(tf2::Vector3(anchor.x(), anchor.y(), 0.0));
+      T_map_odom.setOrigin(tf2::Vector3(pub_anchor.x(), pub_anchor.y(), 0.0));
       tf2::Quaternion q_map_odom;
-      q_map_odom.setRPY(0.0, 0.0, anchor.theta());
+      q_map_odom.setRPY(0.0, 0.0, pub_anchor.theta());
       T_map_odom.setRotation(q_map_odom);
 
       geometry_msgs::msg::TransformStamped t_map_odom;
