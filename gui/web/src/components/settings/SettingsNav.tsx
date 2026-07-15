@@ -14,6 +14,7 @@ import {
     ThunderboltOutlined,
     ToolOutlined,
     GlobalOutlined,
+    WarningOutlined,
     WifiOutlined,
 } from "@ant-design/icons";
 import { useIsMobile } from "../../hooks/useIsMobile.ts";
@@ -31,6 +32,7 @@ const SECTION_ICONS: Record<string, React.ReactNode> = {
     home: <HomeOutlined />,
     thunderbolt: <ThunderboltOutlined />,
     safety: <SafetyOutlined />,
+    warning: <WarningOutlined />,
     compass: <CompassOutlined />,
     cloud: <CloudOutlined />,
     code: <CodeOutlined />,

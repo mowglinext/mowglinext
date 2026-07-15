@@ -10,7 +10,13 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <memory>
 #include <string>
+
+// GDAL/OGR (F2C's geometry backend) — bufferRingOutward grows drawn-obstacle
+// rings with OGRPolygon::Buffer. Explicit include: the transitive path via
+// fields2cover.h is an implementation detail of F2C.
+#include "ogr_geometry.h"
 
 namespace mowgli_coverage
 {
@@ -1462,6 +1468,69 @@ double distanceToRing(double x, double y, const std::vector<std::pair<double, do
     best = std::min(best, std::hypot(x - px, y - py));
   }
   return best;
+}
+
+f2c::types::LinearRing bufferRingOutward(const f2c::types::LinearRing& in, double margin)
+{
+  if (margin < 1e-3 || in.size() < 3)
+  {
+    return dedupClosedRing(in);
+  }
+  // Grow the ring's polygon outward with GDAL/OGR (F2C's own geometry
+  // backend): drawn map obstacles get an operator-tunable safety margin
+  // (obstacle_margin) so the planner keeps swaths, connectors and headlands
+  // off root zones the 2D LiDAR cannot see. Rounded joins (8 quadrant
+  // segments) avoid miter spikes on concave operator polygons.
+  OGRLinearRing ogr_ring;
+  for (std::size_t i = 0; i < in.size(); ++i)
+  {
+    const auto p = in.getGeometry(i);
+    ogr_ring.addPoint(p.getX(), p.getY());
+  }
+  ogr_ring.closeRings();
+  OGRPolygon poly;
+  poly.addRing(&ogr_ring);
+  std::unique_ptr<OGRGeometry> grown(poly.Buffer(margin, 8));
+  // Buffer degeneracies (self-intersecting input, collapsed area) fall back
+  // to the raw ring — the planner still avoids the drawn polygon itself,
+  // just without the extra margin. Never drop the obstacle.
+  if (!grown)
+  {
+    return dedupClosedRing(in);
+  }
+  const OGRPolygon* grown_poly = nullptr;
+  const auto flat_type = wkbFlatten(grown->getGeometryType());
+  if (flat_type == wkbPolygon)
+  {
+    grown_poly = grown->toPolygon();
+  }
+  else if (flat_type == wkbMultiPolygon)
+  {
+    // Outward buffering can merge lobes of a degenerate ring into several
+    // parts; keep the largest (the obstacle body).
+    double best_area = -1.0;
+    for (const auto* part : *grown->toMultiPolygon())
+    {
+      const double a = part->get_Area();
+      if (a > best_area)
+      {
+        best_area = a;
+        grown_poly = part;
+      }
+    }
+  }
+  if (!grown_poly || !grown_poly->getExteriorRing() ||
+      grown_poly->getExteriorRing()->getNumPoints() < 4)
+  {
+    return dedupClosedRing(in);
+  }
+  const OGRLinearRing* ext = grown_poly->getExteriorRing();
+  f2c::types::LinearRing out;
+  for (int i = 0; i < ext->getNumPoints(); ++i)
+  {
+    out.addPoint(f2c::types::Point(ext->getX(i), ext->getY(i)));
+  }
+  return dedupClosedRing(out);
 }
 
 f2c::types::LinearRing dedupClosedRing(const f2c::types::LinearRing& in)

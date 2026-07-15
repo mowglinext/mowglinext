@@ -2183,10 +2183,23 @@
     "stopAbove": "Arrêt au-dessus",
     "stopAboveTooltip": "Arrêter le moteur de lame au-dessus de cette température",
     "resumeBelow": "Reprise en dessous",
-    "resumeBelowTooltip": "Reprendre le moteur de lame en dessous de cette température",
-    "obstacleAvoidance": "Évitement d'obstacles",
+    "resumeBelowTooltip": "Reprendre le moteur de lame en dessous de cette température"
+  },
+  "settingsObstacles": {
+    "rootZoneHintTitle": "Arbres avec de grosses racines ?",
+    "rootZoneHintDescription": "Le LiDAR 2D ne voit pas les racines sous son plan de scan (~10–20 cm). Dessinez l'arbre comme obstacle dans l'éditeur de carte et augmentez la marge des obstacles dessinés pour que la tonte et les transits restent hors de la zone de racines.",
+    "avoidanceMargins": "Marges d'évitement",
+    "avoidanceMarginsDescription": "Distance que le robot conserve vis-à-vis des obstacles. Les changements prennent effet après un redémarrage ROS2.",
+    "inflationRadius": "Rayon d'inflation obstacles",
+    "inflationRadiusTooltip": "Tampon autour des obstacles détectés au LiDAR (troncs, murs) dans le costmap local. Augmentez si le robot passe trop près des arbres qu'il voit.",
     "maxDetourDistance": "Distance max de détour",
-    "maxDetourDistanceTooltip": "Distance maximale de détour autour d'un obstacle avant d'abandonner"
+    "maxDetourDistanceTooltip": "Détour latéral maximal autour d'un obstacle avant d'abandonner — pilote l'évitement en tonte et le seuil d'abandon du contournement",
+    "drawnObstacleMargin": "Marge des obstacles dessinés",
+    "drawnObstacleMarginTooltip": "Marge supplémentaire autour des obstacles dessinés sur la carte, appliquée à la tonte et aux transits. À utiliser pour les zones de racines invisibles au LiDAR.",
+    "approachSlowdown": "Ralentissement à l'approche",
+    "approachSlowdownDescription": "Le moniteur de collision ralentit le robot quand un retour de scan entre dans la boîte d'approche autour du châssis (variante LiDAR).",
+    "slowdownRatio": "Facteur de ralentissement",
+    "slowdownRatioTooltip": "Facteur de vitesse près des obstacles : 0,3 = ralentir à 30 % de la vitesse commandée"
   },
   "settingsMowing": {
     "mowingMotor": "Moteur de tonte",
@@ -2799,7 +2812,11 @@
     },
     "safety": {
       "label": "Sécurité",
-      "description": "Arrêts d'urgence, limites de température, évitement d'obstacles"
+      "description": "Arrêts d'urgence et limites de température"
+    },
+    "obstacles": {
+      "label": "Obstacles",
+      "description": "Marges d'évitement, tampons des obstacles dessinés, ralentissement à l'approche"
     },
     "navigation": {
       "label": "Navigation",

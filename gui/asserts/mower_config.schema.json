@@ -617,12 +617,6 @@
           "default": 40.0,
           "description": "Resume blade below this motor temperature (C)."
         },
-        "max_obstacle_avoidance_distance": {
-          "type": "number",
-          "title": "Max Obstacle Detour",
-          "default": 2.0,
-          "description": "Maximum detour distance around obstacles (metres)."
-        },
         "lift_blade_resume_delay_sec": {
           "type": "number",
           "title": "Lift Blade Resume Delay",
@@ -634,6 +628,36 @@
           "title": "Lift Recovery Mode",
           "default": false,
           "description": "Allow autonomous resume after a lift event (default: stay stopped until operator ack)."
+        }
+      }
+    },
+    "obstacle_settings": {
+      "title": "Obstacles",
+      "type": "object",
+      "properties": {
+        "obstacle_inflation_radius": {
+          "type": "number",
+          "title": "Obstacle Inflation Radius",
+          "default": 0.6,
+          "description": "Buffer (m) kept around LiDAR-detected obstacles in the local costmap. Raise if the robot passes too close to trees it can see. Clamped to [0.58, 1.5] at launch."
+        },
+        "max_obstacle_avoidance_distance": {
+          "type": "number",
+          "title": "Max Obstacle Detour",
+          "default": 2.0,
+          "description": "Maximum lateral detour (m) around obstacles — drives both the coverage controller's skirting and the bypass give-up threshold."
+        },
+        "obstacle_margin": {
+          "type": "number",
+          "title": "Drawn Obstacle Margin",
+          "default": 0.0,
+          "description": "Extra margin (m) around obstacles drawn on the map, applied to both coverage and transit planning. Draw a tree trunk and set this to cover its roots (invisible to the 2D LiDAR)."
+        },
+        "obstacle_slowdown_ratio": {
+          "type": "number",
+          "title": "Approach Slowdown Ratio",
+          "default": 0.3,
+          "description": "Speed factor when a scan return enters the chassis+15 cm approach box (LiDAR variant). 0.3 = slow to 30% of commanded speed."
         }
       }
     },

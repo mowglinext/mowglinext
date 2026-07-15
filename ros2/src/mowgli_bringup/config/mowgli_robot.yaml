@@ -308,7 +308,39 @@ mowgli:
     motor_temp_high_c: 80.0        # stop blade if motor exceeds
     motor_temp_low_c: 40.0         # resume blade below this
     # Lift/tilt emergency is handled by firmware (STM32), not ROS2
-    max_obstacle_avoidance_distance: 2.0  # how far to deviate from path
+
+    # -----------------------------------------------------------------
+    # Obstacles (GUI: Settings → Obstacles)
+    # -----------------------------------------------------------------
+    # How far the robot may deviate laterally from its path to skirt an
+    # obstacle. ONE knob, TWO consumers (injected at launch):
+    #   - FTCController max_lateral_deviation (coverage-time skirting)
+    #   - map_server bypass_max_length (give-up threshold for the mow-progress
+    #     bypass corridor)
+    # Clamped to [0.5, 10.0] by navigation.launch.py.
+    max_obstacle_avoidance_distance: 2.0
+    # Inflation radius (m) around LiDAR-detected obstacles in the LOCAL
+    # costmap — the buffer FTC/RPP keep from trunks, legs, walls seen by the
+    # scan. Injected into local_costmap.inflation_layer.inflation_radius.
+    # Clamped to [0.58, 1.50]: the nav2 inflation layer degrades
+    # footprint-cost semantics below the chassis circumscribed radius
+    # (~0.572 m), and FTC's deviation detector (cost threshold 253) assumes
+    # the inscribed band exists. Raise this if the robot passes too close to
+    # trees it can see. Does NOT affect the global costmap (its 0.20 m radius
+    # is pinned — larger values blocked transit paths, see nav2_params_base).
+    obstacle_inflation_radius: 0.60
+    # Extra margin (m) grown around DRAWN map obstacle polygons, applied in
+    # BOTH the coverage planner (F2C holes are buffered outward before swath
+    # planning) and the keepout mask (cells within the margin of an obstacle
+    # polygon are LETHAL for transit planning). Use it to keep the robot off
+    # root zones: draw the tree trunk as an obstacle and set the margin to
+    # cover the roots (the 2D LiDAR cannot see them — they are below the
+    # scan plane). Clamped to [0.0, 1.0].
+    obstacle_margin: 0.0
+    # collision_monitor PolygonSlow slowdown factor when a scan return is
+    # inside the chassis+15 cm approach box (LiDAR variant only). 0.3 = slow
+    # to 30 % of commanded speed. Clamped to [0.05, 1.0].
+    obstacle_slowdown_ratio: 0.3
 
     # -----------------------------------------------------------------
     # Navigation tolerances (garden terrain)

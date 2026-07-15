@@ -257,6 +257,115 @@ def test_base_coverage_goal_checker_xy_ge_ftc_park() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Obstacle-avoidance knob injection (GUI: Settings → Obstacles)
+# ---------------------------------------------------------------------------
+
+
+def _template_robot_params() -> dict:
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "..", "config", "mowgli_robot.yaml")
+    with open(path, "r", encoding="utf-8") as fh:
+        return yaml.safe_load(fh)["mowgli"]["ros__parameters"]
+
+
+def test_navigation_launch_injects_ftc_max_lateral_deviation() -> None:
+    """max_obstacle_avoidance_distance must drive FTC's max_lateral_deviation.
+    Before 2026-07 it only reached map_server.bypass_max_length — the GUI
+    'Max Obstacle Detour' slider silently did nothing for coverage-time
+    skirting (FTC stayed pinned at the static base.yaml 1.5 m)."""
+    src = _read_text("launch/navigation.launch.py")
+    assert re.search(
+        r"fcp\[.max_lateral_deviation.\]\s*=.*max_obstacle_avoidance_distance",
+        src, re.DOTALL), (
+        "navigation.launch.py must inject max_obstacle_avoidance_distance into "
+        "FollowCoveragePath.max_lateral_deviation — otherwise the GUI knob is an "
+        "orphan and FTC keeps the static base.yaml deviation limit."
+    )
+
+
+def test_navigation_launch_injects_local_inflation_with_floor() -> None:
+    """obstacle_inflation_radius reaches ONLY the local costmap, floored at
+    0.58 m (chassis circumscribed radius ~0.572 — below it the inflation
+    layer degrades footprint-cost semantics and FTC's threshold-253 deviation
+    detector loses its inscribed band)."""
+    src = _read_text("launch/navigation.launch.py")
+    m = re.search(
+        r"lc_infl\[.inflation_radius.\]\s*=\s*min\(\s*([\d.]+),\s*max\(([\d.]+),"
+        r"\s*obstacle_inflation_radius", src)
+    assert m, (
+        "navigation.launch.py must clamp-inject obstacle_inflation_radius into the "
+        "local costmap inflation_layer (lc_infl['inflation_radius'] = min(hi, "
+        "max(lo, obstacle_inflation_radius)))."
+    )
+    assert float(m.group(2)) >= 0.58, (
+        f"inflation floor {m.group(2)} is below the chassis circumscribed radius "
+        "(~0.572 m) — footprint-cost semantics degrade below it."
+    )
+    # The GLOBAL costmap radius is pinned at 0.20 (0.30 blocked all transit
+    # paths on a 9×6 m polygon) — the LOCAL chain must be the only
+    # inflation_radius writer in the launch script.
+    writers = re.findall(r"(\w+)\[.inflation_radius.\]\s*=", src)
+    assert writers == ["lc_infl"], (
+        f"inflation_radius writers in navigation.launch.py: {writers} — only the "
+        "local-costmap chain (lc_infl) may write it; the 0.20 m global radius is "
+        "pinned (0.30 blocked transits, see base.yaml)."
+    )
+
+
+def test_navigation_launch_guards_polygon_slow_write() -> None:
+    """PolygonSlow only exists in the LiDAR overlay's collision_monitor. The
+    slowdown_ratio injection must be guarded so the no-lidar merge (pass-
+    through monitor) is not given a phantom polygon block."""
+    src = _read_text("launch/navigation.launch.py")
+    assert re.search(r"if\s+.PolygonSlow.\s+in\s+", src), (
+        "navigation.launch.py must guard the PolygonSlow.slowdown_ratio write "
+        "with a presence check — the no-lidar variant has no PolygonSlow."
+    )
+
+
+def test_navigation_launch_injects_coverage_obstacle_margin() -> None:
+    """obstacle_margin must reach coverage_server (F2C hole buffering). Its
+    keepout twin is injected by full_system.launch.py into map_server."""
+    src = _read_text("launch/navigation.launch.py")
+    assert re.search(
+        r"cov_params\[.obstacle_margin.\]\s*=.*obstacle_margin", src), (
+        "navigation.launch.py must inject obstacle_margin into coverage_server — "
+        "drawn-obstacle margins would otherwise only apply to transit (keepout), "
+        "not to the swath plan."
+    )
+    fs_src = _read_text("launch/full_system.launch.py")
+    assert re.search(r"obstacle_margin", fs_src), (
+        "full_system.launch.py must forward obstacle_margin to map_server so the "
+        "keepout mask keeps the same distance as the coverage plan."
+    )
+
+
+def test_obstacle_template_defaults_match_static_yaml() -> None:
+    """The template's obstacle knobs must default to the static yaml values so
+    a sparse installed file (no overrides) is behaviour-preserving."""
+    rp = _template_robot_params()
+    base = _load_yaml("nav2_params_base.yaml")
+    lidar = _load_yaml("nav2_params_lidar.yaml")
+    local_infl = (base["local_costmap"]["local_costmap"]["ros__parameters"]
+                  ["inflation_layer"]["inflation_radius"])
+    assert float(rp["obstacle_inflation_radius"]) == float(local_infl), (
+        f"template obstacle_inflation_radius={rp['obstacle_inflation_radius']} != "
+        f"base.yaml local inflation_radius={local_infl} — a fresh install would "
+        "silently change avoidance behaviour."
+    )
+    slow = (lidar["collision_monitor"]["ros__parameters"]["PolygonSlow"]
+            ["slowdown_ratio"])
+    assert float(rp["obstacle_slowdown_ratio"]) == float(slow), (
+        f"template obstacle_slowdown_ratio={rp['obstacle_slowdown_ratio']} != "
+        f"lidar overlay PolygonSlow.slowdown_ratio={slow}."
+    )
+    assert float(rp["obstacle_margin"]) == 0.0, (
+        "template obstacle_margin must default to 0.0 (no margin) so existing "
+        "sites' plans are unchanged until the operator opts in."
+    )
+
+
 def test_no_lidar_variant_uses_path_progress_goal_checker() -> None:
     """nav2_params_no_lidar.yaml is the GPS-only variant — it must use the
     same PathProgressGoalChecker plugin with a high progress threshold and

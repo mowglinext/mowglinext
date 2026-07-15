@@ -418,3 +418,82 @@ TEST_F(AreaTypeTest, KeepoutMaskEmptyWhenNoAreas)
   EXPECT_TRUE(mask.data.empty())
       << "with zero areas, no keepout mask is produced (world stays drivable)";
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Drawn-obstacle margin (mowgli_robot.yaml.obstacle_margin) — the keepout
+// twin of coverage_server's F2C hole buffering. A drawn obstacle (a tree)
+// must project a LETHAL band obstacle_margin wide around its polygon so
+// transit paths keep off root zones the 2D LiDAR cannot see.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class ObstacleMarginTest : public AreaTypeTest
+{
+protected:
+  void SetUp() override
+  {
+    rclcpp::NodeOptions opts;
+    opts.append_parameter_override("resolution", 0.1);
+    opts.append_parameter_override("map_size_x", 10.0);
+    opts.append_parameter_override("map_size_y", 10.0);
+    opts.append_parameter_override("map_frame", "map");
+    opts.append_parameter_override("tool_width", 0.2);
+    opts.append_parameter_override("map_file_path", "");
+    opts.append_parameter_override("areas_file_path", "");
+    opts.append_parameter_override("publish_rate", 1.0);
+    opts.append_parameter_override("obstacle_margin", 0.3);
+    node_ = std::make_shared<mowgli_map::MapServerNode>(opts);
+  }
+
+  bool add_area_with_obstacle(const geometry_msgs::msg::Polygon& area,
+                              const geometry_msgs::msg::Polygon& obstacle)
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+    req->area.name = "lawn_with_tree";
+    req->area.area = area;
+    req->area.obstacles.push_back(obstacle);
+    req->is_navigation_area = false;
+    auto res = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+    node_->add_area_for_test(req, res);
+    return res->success;
+  }
+};
+
+TEST_F(ObstacleMarginTest, DrawnObstacleGetsLethalMarginBand)
+{
+  // 8×8 m lawn with a 1×1 m drawn obstacle (tree) centred at the origin.
+  ASSERT_TRUE(add_area_with_obstacle(make_rect(-4, -4, 4, 4),
+                                     make_rect(-0.5, -0.5, 0.5, 0.5)));
+
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+
+  // Inside the drawn obstacle → LETHAL (classification NO_GO overlay).
+  EXPECT_EQ(mask_at(mask, 0.0, 0.0), 100) << "inside drawn obstacle must be lethal";
+  // 0.2 m outside the polygon edge, within the 0.3 m margin → LETHAL.
+  EXPECT_EQ(mask_at(mask, 0.75, 0.0), 100)
+      << "cell inside the obstacle_margin band must be lethal";
+  // Well outside the margin band (edge + 0.3 m + slack) → FREE lawn.
+  EXPECT_EQ(mask_at(mask, 1.5, 0.0), 0)
+      << "lawn beyond the margin band must stay free";
+}
+
+TEST_F(AreaTypeTest, DrawnObstacleWithoutMarginIsEdgeTight)
+{
+  // Default node (obstacle_margin = 0): the drawn obstacle is lethal but
+  // projects NO margin band — pre-existing behaviour preserved.
+  auto req = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+  req->area.name = "lawn_with_tree";
+  req->area.area = make_rect(-4, -4, 4, 4);
+  req->area.obstacles.push_back(make_rect(-0.5, -0.5, 0.5, 0.5));
+  req->is_navigation_area = false;
+  auto res = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+  node_->add_area_for_test(req, res);
+  ASSERT_TRUE(res->success);
+
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+
+  EXPECT_EQ(mask_at(mask, 0.0, 0.0), 100) << "inside drawn obstacle must be lethal";
+  EXPECT_EQ(mask_at(mask, 0.75, 0.0), 0)
+      << "without obstacle_margin the band outside the polygon stays free";
+}

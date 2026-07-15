@@ -151,6 +151,26 @@ void MapServerNode::publish_keepout_mask()
   }
 
   // Overlay obstacle polygons: cells inside any obstacle -> 100 (lethal).
+  // Two sources share this pass: obstacle_polygons_ (dynamic LiDAR-promoted)
+  // and every area's DRAWN entry.obstacles (whose interiors are also lethal
+  // via the classification NO_GO_ZONE overlay below — the polygon pass here
+  // is what carries the margin band). obstacle_margin_m_
+  // (mowgli_robot.yaml.obstacle_margin) additionally marks cells within that
+  // distance OUTSIDE each polygon — the transit-side twin of
+  // coverage_server's F2C hole buffering, so both planners keep the same
+  // distance from a drawn tree/root zone.
+  const auto cell_hits_obstacle =
+      [this](const geometry_msgs::msg::Point32& pt,
+             const geometry_msgs::msg::Polygon& obs) {
+        if (point_in_polygon(pt, obs))
+        {
+          return true;
+        }
+        return obstacle_margin_m_ > 0.0 &&
+               point_to_polygon_distance(static_cast<double>(pt.x),
+                                         static_cast<double>(pt.y),
+                                         obs) <= obstacle_margin_m_;
+      };
   for (int r = 0; r < nx; ++r)
   {
     for (int c = 0; c < ny; ++c)
@@ -167,15 +187,31 @@ void MapServerNode::publish_keepout_mask()
       pt.y = static_cast<float>(pos.y());
       pt.z = 0.0F;
 
+      bool lethal = false;
       for (const auto& obs : obstacle_polygons_)
       {
-        if (point_in_polygon(pt, obs))
+        if (cell_hits_obstacle(pt, obs))
         {
-          const int og_col = nx - 1 - r;
-          const int og_row = ny - 1 - c;
-          mask.data[static_cast<std::size_t>(og_row * nx + og_col)] = 100;
+          lethal = true;
           break;
         }
+      }
+      for (std::size_t a = 0; !lethal && a < areas_.size(); ++a)
+      {
+        for (const auto& obs : areas_[a].obstacles)
+        {
+          if (cell_hits_obstacle(pt, obs))
+          {
+            lethal = true;
+            break;
+          }
+        }
+      }
+      if (lethal)
+      {
+        const int og_col = nx - 1 - r;
+        const int og_row = ny - 1 - c;
+        mask.data[static_cast<std::size_t>(og_row * nx + og_col)] = 100;
       }
     }
   }

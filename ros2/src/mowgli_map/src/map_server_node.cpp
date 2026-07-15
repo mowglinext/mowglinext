@@ -121,6 +121,11 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   chassis_width_m_ = declare_parameter<double>("chassis_width", 0.40);
   bypass_safety_margin_m_ = declare_parameter<double>("bypass_safety_margin_m", 0.05);
   bypass_max_length_m_ = declare_parameter<double>("max_obstacle_avoidance_distance", 2.0);
+  // Extra LETHAL band around drawn obstacle polygons in the keepout mask.
+  // Same key drives coverage_server's F2C hole buffering (injected at launch
+  // from mowgli_robot.yaml.obstacle_margin) — keep the two in lockstep.
+  obstacle_margin_m_ =
+      std::clamp(declare_parameter<double>("obstacle_margin", 0.0), 0.0, 1.0);
 
   // Dock body (physical structure the robot cannot drive into). Cells
   // inside are marked OBSTACLE_PERMANENT — F2C strips stop at the body

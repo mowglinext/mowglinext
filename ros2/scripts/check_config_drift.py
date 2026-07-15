@@ -101,6 +101,7 @@ USER_OVERRIDE = {
     "outline_offset", "outline_overlap", "outline_passes",
     "path_spacing", "mow_angle_offset_deg", "mow_angle_increment_deg",
     "max_obstacle_avoidance_distance", "coverage_xy_tolerance",
+    "obstacle_inflation_radius", "obstacle_margin", "obstacle_slowdown_ratio",
     "xy_goal_tolerance", "yaw_goal_tolerance",
     "progress_timeout_sec",
     "motor_temp_low_c", "motor_temp_high_c",
