@@ -505,6 +505,16 @@ private:
   // the next dock arrival re-seeds.
   bool dock_seeded_this_session_ = false;
 
+  // Boot dock-seed fallback: if the graph is still uninitialized a few
+  // seconds after boot (is_charging never arrived — e.g. degraded DDS
+  // discovery — AND no COG yaw is available while parked), seed from the
+  // calibrated dock pose so a fresh boot on the dock always yields a map
+  // frame. Without this, Nav2's planner_server aborts activation when
+  // map→base_footprint never appears, cascading the whole bringup down.
+  // boot_stamp_s_ is latched on the first uninitialized OnTimer tick.
+  double boot_stamp_s_ = -1.0;
+  bool dock_seed_fallback_done_ = false;
+
   // Dock-arrival pose seed (formerly the dock_yaw_to_set_pose node).
   // On the rising edge of is_charging we anchor the graph at the
   // operator-calibrated dock pose. The two are deduplicated by

@@ -355,9 +355,42 @@ void FollowStrip::persistResumeCursor(const std::shared_ptr<BTContext>& ctx)
   // base offset + how far into that (possibly trimmed) unit we got.
   const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
   const std::size_t absolute = base + resume_start_idx_ + path_progress_idx_;
+  const double pct =
+      100.0 * static_cast<double>(absolute) / static_cast<double>(total_path_poses_);
+
+  // Near-complete acceptance. The coverage_goal_checker already treats
+  // >= 95 % monotonic path traversal as goal-reached; if a reactive guard
+  // (a phantom obstacle promotion, or a localization-drift boundary flicker at
+  // the outermost ring) halts FollowStrip AFTER that much of the path is driven,
+  // the area is effectively mowed. Re-dispatching it just re-plans and re-drives
+  // into the SAME edge trip — an infinite loop that never advances to GoHome.
+  // Instead, mark every swath of this area done so GetNextUnmowedArea retires it
+  // and the BT proceeds to the next area / dock.
+  constexpr double kAreaCompleteProgressPct = 95.0;
+  if (pct >= kAreaCompleteProgressPct)
+  {
+    for (std::size_t s = 0; s < swaths_.size(); ++s)
+    {
+      ctx->area_completed_swaths[area_idx_].insert(s);
+    }
+    ctx->completed_areas.insert(area_idx_);
+    ctx->area_resume_pose_index.erase(area_idx_);  // done — do not resume
+    ctx->coverage_percent = 100.0f;
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "FollowStrip: area %u interrupted at pose %zu/%zu (%.0f%%) — >= %.0f%% driven, "
+                "accepting as MOWED (guard trip near field edge); advancing to GoHome/dock "
+                "instead of re-dispatching",
+                area_idx_,
+                absolute,
+                total_path_poses_,
+                pct,
+                kAreaCompleteProgressPct);
+    saveCoverageResumeState(*ctx);
+    return;
+  }
+
   ctx->area_resume_pose_index[area_idx_] = absolute;
-  ctx->coverage_percent =
-      100.0f * static_cast<float>(absolute) / static_cast<float>(total_path_poses_);
+  ctx->coverage_percent = static_cast<float>(pct);
   RCLCPP_INFO(ctx->node->get_logger(),
               "FollowStrip: area %u interrupted at pose %zu/%zu (%.0f%%) — resume cursor saved",
               area_idx_,

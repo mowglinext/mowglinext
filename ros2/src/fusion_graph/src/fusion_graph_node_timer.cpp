@@ -27,6 +27,38 @@ void FusionGraphNode::OnTimer()
 {
   const double now_s = this->now().seconds();
 
+  // Boot dock-seed fallback. The normal init paths are (a) is_charging →
+  // SeedFromDockPose, and (b) GPS xy + COG/mag yaw → TrySeedInitialPose.
+  // Both can silently fail on a fresh boot on the dock: is_charging may
+  // never be delivered (degraded DDS discovery), and a parked chassis
+  // produces no COG heading, so seed_yaw_ stays empty. When that happens
+  // the graph never initializes, no map→odom TF is published, and Nav2's
+  // planner_server aborts activation (global_costmap can't get map→base),
+  // taking the whole lifecycle bringup down with it. If we're still
+  // uninitialized a few seconds after boot, fall back to the calibrated
+  // dock pose — the robot normally boots parked on the dock. Suppressed
+  // when hardware status has been seen AND reports NOT charging, so a
+  // robot that boots away from the dock is left to GPS-based init.
+  constexpr double kDockSeedFallbackS = 6.0;
+  if (!graph_->IsInitialized())
+  {
+    if (boot_stamp_s_ < 0.0)
+    {
+      boot_stamp_s_ = now_s;
+    }
+    else if (!dock_seed_fallback_done_ &&
+             (now_s - boot_stamp_s_) > kDockSeedFallbackS &&
+             (!last_is_charging_valid_ || last_is_charging_))
+    {
+      RCLCPP_WARN(get_logger(),
+                  "fusion_graph: still uninitialized %.1fs after boot "
+                  "(is_charging/COG unavailable) — seeding from dock pose",
+                  now_s - boot_stamp_s_);
+      SeedFromDockPose();
+      dock_seed_fallback_done_ = true;
+    }
+  }
+
   // Run scan-matching against the previous-node scan and queue the
   // resulting between-factor before Tick — Tick consumes the queue
   // when it creates a new node.
