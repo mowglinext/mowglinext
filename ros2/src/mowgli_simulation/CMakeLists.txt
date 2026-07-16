@@ -18,6 +18,7 @@ find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(mowgli_interfaces REQUIRED)
+find_package(mowgli_hardware REQUIRED)  # for angular_rate_controller.hpp (sim_actuation)
 
 # ---------------------------------------------------------------------------
 # Fake hardware bridge for simulation
@@ -41,6 +42,27 @@ ament_target_dependencies(fake_hardware_bridge_node
 
 install(TARGETS
   fake_hardware_bridge_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# ---------------------------------------------------------------------------
+# Sim actuation model — firmware static-friction deadband + host angular-rate
+# PI (reuses the REAL mowgli_hardware/angular_rate_controller.hpp) so the sim
+# reproduces the near-deadband angular limit cycle (mowing weave / dock hunt).
+# ---------------------------------------------------------------------------
+add_executable(sim_actuation_node
+  src/sim_actuation_node.cpp
+)
+
+ament_target_dependencies(sim_actuation_node
+  rclcpp
+  geometry_msgs
+  sensor_msgs
+  mowgli_hardware
+)
+
+install(TARGETS
+  sim_actuation_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

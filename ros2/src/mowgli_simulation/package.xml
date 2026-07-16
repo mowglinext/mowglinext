@@ -24,6 +24,7 @@
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>mowgli_interfaces</depend>
+  <depend>mowgli_hardware</depend>
 
   <!-- Python plugin runtime deps (mowgli_simulation.kinematic_drive) -->
   <exec_depend>rclpy</exec_depend>

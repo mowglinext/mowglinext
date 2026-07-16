@@ -398,10 +398,11 @@ def generate_launch_description() -> LaunchDescription:
                 "output_topic": "/wheel_odom",
                 "slip_period_s": 30.0,
                 "slip_duration_s": 1.0,
-                # Bias temporarily zeroed for fusion_graph debugging —
-                # we want to isolate algorithm behaviour from sensor
-                # noise. Reset to 0.05 once the baseline is clean.
-                "slip_vx_bias": 0.0,
+                # Enabled for actuation-fidelity testing (operator wants slip):
+                # periodic wheel-slip events over-report /wheel_odom vx, so the
+                # encoder-vs-GPS mismatch the anti-wheelspin FTC guard reacts to
+                # actually occurs in sim. Set 0.0 for a slip-free A/B baseline.
+                "slip_vx_bias": 0.05,
             }
         ],
     )
@@ -456,6 +457,34 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ------------------------------------------------------------------
+    # Sim actuation model — inserts the firmware static-friction deadband +
+    # the host angular-rate PI (the REAL mowgli_hardware controller) between
+    # the nav command (/cmd_vel) and the Webots wheels (/cmd_vel_wheels), so
+    # the sim reproduces the near-deadband angular limit cycle (mowing weave /
+    # dock hunt) that the ideal diff_drive cannot. A/B the fix at runtime:
+    #   ros2 param set /sim_actuation angular_rate_loop_enabled false
+    #   ros2 param set /sim_actuation angular_rate_ki 0.5
+    # Set deadband_enabled:=false for an ideal-actuation baseline.
+    # ------------------------------------------------------------------
+    sim_actuation_node = Node(
+        package="mowgli_simulation",
+        executable="sim_actuation_node",
+        name="sim_actuation",
+        output="screen",
+        parameters=[
+            {
+                "use_sim_time": True,
+                "angular_rate_loop_enabled": True,
+                "angular_rate_ki": 2.0,
+                "deadband_enabled": True,
+                "wz_break_free": 0.18,
+                "wz_keep_move": 0.08,
+                "min_linear_vel": 0.05,
+            }
+        ],
+    )
+
+    # ------------------------------------------------------------------
     # LaunchDescription
     # ------------------------------------------------------------------
     return LaunchDescription(
@@ -476,6 +505,7 @@ def generate_launch_description() -> LaunchDescription:
             twist_mux_node,
             sim_wheel_slip_node,
             sim_imu_noise_node,
+            sim_actuation_node,
             behavior_tree_node,
             map_server_node,
             obstacle_tracker_node,
