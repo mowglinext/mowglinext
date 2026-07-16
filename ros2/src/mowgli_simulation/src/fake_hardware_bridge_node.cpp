@@ -182,6 +182,12 @@ private:
     status.ui_board_available = true;
     status.mow_enabled = mow_enabled_;
     status.firmware_debug_enabled = false;
+    // Report a compatible firmware handshake so the BT's PreFlightCheck
+    // firmware gate passes in sim (there is no STM32 to handshake). Without
+    // this, firmware_compatible defaults false and undock/mow is blocked with
+    // "firmware-incompatible (proto=0 — reflash)".
+    status.firmware_compatible = true;
+    status.firmware_version = "sim";
     status.mower_esc_status = 0;
     status.mower_esc_temperature = 25.0f;
     status.mower_esc_current = mow_enabled_ ? 0.5f : 0.0f;
