@@ -16,9 +16,9 @@
 #include <tf2/exceptions.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
-#include "fusion_graph/yaw_gates.hpp"
 #include "fusion_graph/fusion_graph_node.hpp"
 #include "fusion_graph/fusion_graph_node_util.hpp"
+#include "fusion_graph/yaw_gates.hpp"
 
 namespace fusion_graph
 {
@@ -46,8 +46,7 @@ void FusionGraphNode::OnTimer()
     {
       boot_stamp_s_ = now_s;
     }
-    else if (!dock_seed_fallback_done_ &&
-             (now_s - boot_stamp_s_) > kDockSeedFallbackS &&
+    else if (!dock_seed_fallback_done_ && (now_s - boot_stamp_s_) > kDockSeedFallbackS &&
              (!last_is_charging_valid_ || last_is_charging_))
     {
       RCLCPP_WARN(get_logger(),
@@ -454,7 +453,8 @@ void FusionGraphNode::OnTimer()
       std::lock_guard<std::mutex> lock(tf_state_mu_);
       if (std::hypot(dr_x_, dr_y_) > odom_rebase_dist_m_)
       {
-        const gtsam::Pose2 map_base = t_map_odom_anchor_.compose(gtsam::Pose2(dr_x_, dr_y_, dr_yaw_));
+        const gtsam::Pose2 map_base =
+            t_map_odom_anchor_.compose(gtsam::Pose2(dr_x_, dr_y_, dr_yaw_));
         dr_x_ = 0.0;
         dr_y_ = 0.0;
         t_map_odom_anchor_ = map_base.compose(gtsam::Pose2(0.0, 0.0, dr_yaw_).inverse());

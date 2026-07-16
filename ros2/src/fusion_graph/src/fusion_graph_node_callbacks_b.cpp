@@ -59,11 +59,10 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
   // balloons → lever-arm amplifies jitter into position jumps → robot drives
   // out of bounds). Apply it only when RTK-Fixed AND translating forward; else
   // the gyro carries yaw. Before init the seed always needs it.
-  const bool rtk_fresh =
-      last_rtk_fixed_stamp_ &&
-      (this->now() - *last_rtk_fixed_stamp_).seconds() < cog_rtk_max_age_s_;
-  if (!CogShouldApply(graph_->IsInitialized(), rtk_fresh, wheel_vx_, cog_require_rtk_,
-                      cog_min_speed_mps_))
+  const bool rtk_fresh = last_rtk_fixed_stamp_ &&
+                         (this->now() - *last_rtk_fixed_stamp_).seconds() < cog_rtk_max_age_s_;
+  if (!CogShouldApply(
+          graph_->IsInitialized(), rtk_fresh, wheel_vx_, cog_require_rtk_, cog_min_speed_mps_))
   {
     ++cog_rtk_gated_;
     return;

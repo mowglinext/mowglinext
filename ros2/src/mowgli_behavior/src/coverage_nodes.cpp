@@ -355,8 +355,7 @@ void FollowStrip::persistResumeCursor(const std::shared_ptr<BTContext>& ctx)
   // base offset + how far into that (possibly trimmed) unit we got.
   const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
   const std::size_t absolute = base + resume_start_idx_ + path_progress_idx_;
-  const double pct =
-      100.0 * static_cast<double>(absolute) / static_cast<double>(total_path_poses_);
+  const double pct = 100.0 * static_cast<double>(absolute) / static_cast<double>(total_path_poses_);
 
   // Near-complete acceptance. The coverage_goal_checker already treats
   // >= 95 % monotonic path traversal as goal-reached; if a reactive guard

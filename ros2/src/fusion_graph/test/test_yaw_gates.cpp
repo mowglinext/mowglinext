@@ -15,8 +15,11 @@ namespace fg = fusion_graph;
 TEST(CogShouldApply, UninitializedAlwaysAccepts)
 {
   // Before init the seed needs the COG even at rest / no RTK.
-  EXPECT_TRUE(fg::CogShouldApply(/*init=*/false, /*rtk=*/false, /*vx=*/0.0,
-                                 /*require_rtk=*/true, /*min_speed=*/0.08));
+  EXPECT_TRUE(fg::CogShouldApply(/*init=*/false,
+                                 /*rtk=*/false,
+                                 /*vx=*/0.0,
+                                 /*require_rtk=*/true,
+                                 /*min_speed=*/0.08));
 }
 
 TEST(CogShouldApply, GatedWhenRtkRequiredAndNotFresh)

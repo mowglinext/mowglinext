@@ -22,8 +22,8 @@ namespace fusion_graph
 // seed needs it). Once initialized it must be RTK-Fixed-fresh (if require_rtk)
 // and the robot must be moving forward above min_speed (COG is undefined at
 // rest, noisy when slow, 180°-flipped in reverse where wheel_vx < 0).
-inline bool CogShouldApply(bool initialized, bool rtk_fresh, double wheel_vx,
-                           bool require_rtk, double min_speed_mps)
+inline bool CogShouldApply(
+    bool initialized, bool rtk_fresh, double wheel_vx, bool require_rtk, double min_speed_mps)
 {
   if (!initialized)
     return true;  // seeding: never gate
