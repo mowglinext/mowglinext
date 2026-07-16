@@ -725,6 +725,12 @@ docking_server:
     # the param name is nested under `controller` — bare
     # `transform_tolerance` at this level is silently dropped.
     controller.transform_tolerance: 0.5
+    # Give the graceful dock controller velocity feedback (CLAUDE.md invariant 16
+    # — controller_server has this, docking_server was missing it, so the
+    # controller ran velocity-blind and couldn't damp its own near-dock heading
+    # corrections → the left-right hunt at the cradle). /wheel_odom carries the
+    # measured body twist (wheel vx + gyro wz); /odometry/filtered is equivalent.
+    controller.odom_topic: /wheel_odom
     # 10 Hz (was 2 Hz): tighter approach control + faster polling of
     # isDocked()/isCharging() so the robot stops within ~100 ms of the
     # charging signal arriving rather than up to ~500 ms. Not high
