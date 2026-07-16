@@ -167,6 +167,9 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.speed_slow = declare_double("speed_slow", 0.2);
   config_.speed_angular = declare_double("speed_angular", 20.0);
   config_.acceleration = declare_double("acceleration", 1.0);
+  config_.stall_speed_ratio = declare_double("stall_speed_ratio", 0.35);
+  config_.stall_grace_s = declare_double("stall_grace_s", 0.6);
+  config_.stall_crawl_speed = declare_double("stall_crawl_speed", 0.08);
 
   // PID longitudinal
   config_.kp_lon = declare_double("kp_lon", 1.0);
@@ -282,6 +285,18 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     else if (key == "acceleration")
     {
       config_.acceleration = p.as_double();
+    }
+    else if (key == "stall_speed_ratio")
+    {
+      config_.stall_speed_ratio = p.as_double();
+    }
+    else if (key == "stall_grace_s")
+    {
+      config_.stall_grace_s = p.as_double();
+    }
+    else if (key == "stall_crawl_speed")
+    {
+      config_.stall_crawl_speed = p.as_double();
     }
     else if (key == "kp_lon")
     {
@@ -598,7 +613,7 @@ void FTCController::setSpeedLimit(const double& speed_limit, const bool& percent
 
 geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     const geometry_msgs::msg::PoseStamped& /*pose*/,
-    const geometry_msgs::msg::Twist& /*velocity*/,
+    const geometry_msgs::msg::Twist& velocity,
     nav2_core::GoalChecker* goal_checker)
 {
   geometry_msgs::msg::TwistStamped cmd_vel;
@@ -620,6 +635,10 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   //     and silently drops it — leaving the strip un-driven for the
   //     entire goal_timeout window.
   const double safe_dt = std::clamp(dt, 0.01, 0.5);
+
+  // Cache the measured forward speed (odom feedback) for update_control_point's
+  // anti-wheelspin stall detection.
+  last_measured_fwd_speed_ = velocity.linear.x;
 
   if (is_crashed_)
   {
@@ -959,8 +978,27 @@ void FTCController::update_control_point(double dt)
 
       // Compute target speed based on how much straight path lies ahead.
       const double straight_dist = distanceLookahead();
-      const double target_speed =
+      double target_speed =
           (straight_dist >= config_.speed_fast_threshold) ? config_.speed_fast : config_.speed_slow;
+
+      // Anti-wheelspin traction control. If the carrot is already commanding a
+      // meaningful forward speed but the robot's ACTUAL forward speed (odom
+      // feedback) stays well below it, the wheels are slipping or the chassis is
+      // blocked. Rather than ramp to speed_fast and floor it — which spins the
+      // wheels and digs holes in soft turf (operator report) — ease the target
+      // down to a slow crawl until traction returns, so the robot pushes gently
+      // instead of accelerating hard into the obstruction.
+      if (config_.stall_speed_ratio > 0.0)
+      {
+        const double actual_fwd = std::abs(last_measured_fwd_speed_);
+        const bool stalling = current_movement_speed_ > config_.stall_crawl_speed &&
+                              actual_fwd < config_.stall_speed_ratio * current_movement_speed_;
+        stall_time_ = stalling ? (stall_time_ + dt) : 0.0;
+        if (stall_time_ > config_.stall_grace_s)
+        {
+          target_speed = std::min(target_speed, config_.stall_crawl_speed);
+        }
+      }
 
       // Smooth speed ramp (acceleration / deceleration).
       if (target_speed > current_movement_speed_)

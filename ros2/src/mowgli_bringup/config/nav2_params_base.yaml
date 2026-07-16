@@ -325,6 +325,14 @@ controller_server:
       speed_slow: 0.16                 # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
       speed_angular: 45.0
       acceleration: 0.2
+      # Anti-wheelspin / traction control. When the carrot commands forward speed
+      # but the ACTUAL forward speed (odom) stays below stall_speed_ratio × the
+      # command for stall_grace_s, the wheels are slipping / the chassis is
+      # blocked. Ease the carrot to stall_crawl_speed instead of flooring it —
+      # which digs holes in soft turf (operator report). Set ratio ≤ 0 to disable.
+      stall_speed_ratio: 0.35
+      stall_grace_s: 0.6
+      stall_crawl_speed: 0.08
       # Decoupled PID gains. 2026-06-19: the straight-swath weave (a ~0.5 Hz
       # left-right limit cycle) was the FOLLOWING heading gain saturating
       # max_cmd_vel_ang — the wheel-velocity PID was exonerated (byte-identical

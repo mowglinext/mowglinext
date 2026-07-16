@@ -120,6 +120,12 @@ private:
   uint32_t current_index_{0};
   double current_progress_{0.0};
   double current_movement_speed_{0.0};
+  // Seconds the robot has been stalling (actual forward speed << commanded).
+  // Drives the anti-wheelspin crawl (see Config::stall_*).
+  double stall_time_{0.0};
+  // Latest measured forward speed (odom feedback), cached from
+  // computeVelocityCommands so update_control_point can detect a stall.
+  double last_measured_fwd_speed_{0.0};
 
   // ── PID state ────────────────────────────────────────────────────────────
 
@@ -292,6 +298,17 @@ private:
     double speed_slow{0.2};
     double speed_angular{20.0};
     double acceleration{1.0};
+
+    // Anti-wheelspin / traction control. When the carrot commands a forward
+    // speed but the robot's ACTUAL forward speed (odom feedback) stays below
+    // stall_speed_ratio * commanded for longer than stall_grace_s, the wheels
+    // are slipping or the chassis is blocked. Ease the carrot speed down to
+    // stall_crawl_speed instead of ramping to speed_fast and flooring it —
+    // which spins the wheels and digs holes in soft turf. Set
+    // stall_speed_ratio <= 0 to disable.
+    double stall_speed_ratio{0.35};
+    double stall_grace_s{0.6};
+    double stall_crawl_speed{0.08};
 
     // PID longitudinal
     double kp_lon{1.0};
