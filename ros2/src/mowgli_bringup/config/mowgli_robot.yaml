@@ -188,7 +188,7 @@ mowgli:
     # -----------------------------------------------------------------
     # Battery
     # -----------------------------------------------------------------
-    battery_full_voltage: 28.5     # consider fully charged above this
+    battery_full_voltage: 28.0     # consider fully charged above this
     battery_empty_voltage: 24.0    # dock if below for sustained period
     battery_critical_voltage: 23.0 # immediate dock
     battery_full_percent: 95.0     # resume mowing above this %
@@ -202,7 +202,7 @@ mowgli:
     # -----------------------------------------------------------------
     mowing_enabled: true           # enable blade motor during mowing
     mowing_speed: 0.2              # m/s during coverage paths (field-validated comfortable cut speed)
-    transit_speed: 0.25            # m/s during point-to-point navigation (→ RPP desired_linear_vel)
+    transit_speed: 0.2             # m/s during point-to-point navigation (→ RPP desired_linear_vel)
     # NOTE: the former outline_passes / outline_overlap / outline_offset /
     # mow_angle_offset_deg / mow_angle_increment_deg knobs were REMOVED — no ros2
     # node read them (navigation.launch.py forwards only the keys below to
@@ -271,7 +271,7 @@ mowgli:
     # hand-entered phone-compass seed (239°) — NOT a valid ENU yaw;
     # recalibrate per-site before relying on docking.
     dock_pose_yaw: 0.0             # sim: match MowgliMower world rotation (yaw 0, facing +X/east)
-    undock_distance: 1.0           # reverse distance when undocking (m); must be > 0.5 m for CalibrateHeadingFromUndock
+    undock_distance: 1.5           # reverse distance when undocking (m); must be > 0.5 m for CalibrateHeadingFromUndock
     undock_speed: 0.16             # reverse speed (m/s) — above kMinLinVel=0.15 host clamp
     # Distance (m) to the staging pose behind the dock — the final
     # straight-in approach runway. Injected as opennav_docking
@@ -332,7 +332,7 @@ mowgli:
     #   - map_server bypass_max_length (give-up threshold for the mow-progress
     #     bypass corridor)
     # Clamped to [0.5, 10.0] by navigation.launch.py.
-    max_obstacle_avoidance_distance: 2.0
+    max_obstacle_avoidance_distance: 3.0
     # Inflation radius (m) around LiDAR-detected obstacles in the LOCAL
     # costmap — the buffer FTC/RPP keep from trunks, legs, walls seen by the
     # scan. Injected into local_costmap.inflation_layer.inflation_radius.
@@ -342,10 +342,12 @@ mowgli:
     # the inscribed band exists. Raise this if the robot passes too close to
     # trees it can see. Does NOT affect the global costmap (its 0.20 m radius
     # is pinned — larger values blocked transit paths, see nav2_params_base).
-    # 0.80 (was 0.60) — task #35, 2026-07-17: field analysis showed obstacles
-    # only pushing the path from 0.4-0.6 m out at ~0.17 m/s, reacting too
-    # late for a smooth deviation.
-    obstacle_inflation_radius: 0.80
+    # 1.0 (was 0.80, was 0.60 before that) — task #35, 2026-07-17: field
+    # analysis showed obstacles only pushing the path from 0.4-0.6 m out at
+    # ~0.17 m/s, reacting too late for a smooth deviation; 0.80 was the
+    # first bump. Task #43, same day: the user's own field-converged value
+    # is 1.0, superseding #35's 0.80 — folded in as the new template default.
+    obstacle_inflation_radius: 1.0
     # Extra margin (m) grown around DRAWN map obstacle polygons, applied in
     # BOTH the coverage planner (F2C holes are buffered outward before swath
     # planning) and the keepout mask (cells within the margin of an obstacle
@@ -362,11 +364,18 @@ mowgli:
     # -----------------------------------------------------------------
     # Navigation tolerances (garden terrain)
     # -----------------------------------------------------------------
-    # 0.30 m / 0.10 rad (was 0.75 / 1.0). The previous values let FTC
-    # report SUCCESS with the chassis 25-40° off the goal yaw, which
-    # made opennav_docking attack the cradle "en biais" (sideways). 0.10
-    # rad (≈5.7°) forces a final in-place pivot before the dock approach.
-    xy_goal_tolerance: 0.30        # metres — acceptable goal position error
-    yaw_goal_tolerance: 0.10       # radians — acceptable heading error
+    # History: 0.75/1.0 rad let FTC report SUCCESS with the chassis 25-40°
+    # off the goal yaw, which made opennav_docking attack the cradle
+    # "en biais" (sideways) — tightened to 0.30 m / 0.10 rad to force a
+    # final in-place pivot before the dock approach.
+    # Task #43, 2026-07-17: folded in the user's field-converged values,
+    # tighter on position (0.10 m) but LOOSER on yaw (0.20 rad ≈ 11.4°)
+    # than the 0.10 rad fix above. FLAGGED to team-lead/user: re-verify
+    # docking approach heading is still square (not "en biais") with the
+    # looser yaw tolerance — the #37/#39 firmware yaw-loop fixes (same
+    # session) may be why 0.20 rad is now safe, but this reopens the exact
+    # failure mode the 0.10 rad value was chosen to close.
+    xy_goal_tolerance: 0.1         # metres — acceptable goal position error
+    yaw_goal_tolerance: 0.2        # radians — acceptable heading error
     coverage_xy_tolerance: 0.50    # metres — must be >= FTC max_goal_distance_error (0.50): FTC parks that far short of the goal, so a tighter gate never completes the area (re-mow). Floored at FTC's value by navigation.launch.py.
-    progress_timeout_sec: 60.0     # seconds without progress before recovery
+    progress_timeout_sec: 10.0     # seconds without progress before recovery
