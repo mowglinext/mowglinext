@@ -62,6 +62,7 @@
 #include "mowgli_hardware/angular_rate_controller.hpp"
 #include "mowgli_hardware/clock_fit.hpp"
 #include "mowgli_hardware/ll_datatypes.hpp"
+#include "mowgli_hardware/odometry_publisher.hpp"
 #include "mowgli_hardware/packet_handler.hpp"
 #include "mowgli_hardware/serial_port.hpp"
 
@@ -113,6 +114,7 @@ static const char* high_level_mode_name(const uint8_t mode)
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/msg/wheel_tick.hpp"
 #include "mowgli_interfaces/srv/emergency_stop.hpp"
+#include "mowgli_interfaces/srv/high_level_control.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -285,12 +287,13 @@ class HardwareBridgeNode : public rclcpp::Node
 {
 public:
   explicit HardwareBridgeNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions())
-      : Node("hardware_bridge", options)
+      : Node("hardware_bridge", options), odometry_publisher_(*this)
   {
     declare_parameters();
     create_publishers();
     create_subscribers();
     create_services();
+    create_service_clients();
     open_serial_port();
     // Arm the firmware version handshake for the initial connect (the reconnect
     // path in read_serial_tick re-arms on every subsequent re-enumeration).
@@ -482,10 +485,17 @@ private:
     // Closed-loop angular-rate controller — see angular_rate_controller.hpp.
     // Gains are gentle by default (USB latency caps them); tune live via
     // ros2 param set. angular_rate_loop_enabled:=false → plain passthrough.
+    //
+    // 2026-07-17 WEAVE FIX (Option B, task #24, UNVALIDATED ON HARDWARE —
+    // see angular_rate_controller.hpp for the full rationale + required
+    // validation sequence before blade-on use): ki default 2.0 -> 0.0 removes
+    // the host integrator from the 3-loop cascade that caused the weave; kff
+    // default 1.0 -> 1.35 refits the feed-forward for the deadband/gain the
+    // integrator used to absorb. Rollback is params-only (ki:=2.0, kff:=1.0).
     angular_rate_loop_enabled_ = declare_parameter<bool>("angular_rate_loop_enabled", true);
-    angular_rate_params_.kff = declare_parameter<double>("angular_rate_kff", 1.0);
+    angular_rate_params_.kff = declare_parameter<double>("angular_rate_kff", 1.35);
     angular_rate_params_.kp = declare_parameter<double>("angular_rate_kp", 0.4);
-    angular_rate_params_.ki = declare_parameter<double>("angular_rate_ki", 2.0);
+    angular_rate_params_.ki = declare_parameter<double>("angular_rate_ki", 0.0);
     angular_rate_params_.max_cmd = declare_parameter<double>("angular_rate_max_cmd", 1.5);
     angular_rate_params_.integral_max = declare_parameter<double>("angular_rate_integral_max", 1.5);
     angular_rate_params_.target_lp_tau =
@@ -557,12 +567,9 @@ private:
     // diagnostically to inspect the chip and see chassis distortion.
     pub_mag_raw_ =
         create_publisher<sensor_msgs::msg::MagneticField>("~/imu/mag_raw", rclcpp::QoS(10));
-    pub_wheel_odom_ = create_publisher<nav_msgs::msg::Odometry>("~/wheel_odom", rclcpp::QoS(10));
-    // Per-wheel encoder ticks (diagnostics — GUI "Per-Wheel Encoders" panel).
-    // 2-wheel diff-drive maps to RL/RR only. Remapped to /wheel_ticks in the
-    // launch file (the GUI bridge subscribes to /wheel_ticks).
-    pub_wheel_ticks_ =
-        create_publisher<mowgli_interfaces::msg::WheelTick>("~/wheel_ticks", rclcpp::QoS(10));
+    // ~/wheel_odom + ~/wheel_ticks are created by odometry_publisher_'s own
+    // constructor (odometry_publisher_(*this) in the init-list) — see
+    // odometry_publisher.hpp.
     pub_battery_state_ =
         create_publisher<sensor_msgs::msg::BatteryState>("/battery_state", rclcpp::QoS(10));
     // Dock heading: publish dock_yaw at 1 Hz while charging so
@@ -660,6 +667,21 @@ private:
         {
           on_set_firmware_debug(req, res);
         });
+  }
+
+  // Services this node CALLS (as opposed to create_services() above, which
+  // creates services this node HOSTS). Kept separate for that distinction.
+  void create_service_clients()
+  {
+    // START/HOME panel buttons → the same high_level_control service the GUI
+    // calls (task #31 — see handle_ui_event). Client-side only; the service
+    // itself is served by behavior_tree_node as "~/high_level_control", which
+    // (launch files set name="behavior_tree_node", no remapping) resolves to
+    // the ABSOLUTE name below — confirmed against the GUI Go backend, which
+    // calls this exact string from 7+ sites (gui/pkg/providers/homekit.go,
+    // scheduler.go, gui/pkg/api/mowglinext.go, and their tests).
+    client_high_level_control_ = create_client<mowgli_interfaces::srv::HighLevelControl>(
+        "/behavior_tree_node/high_level_control");
   }
 
   void open_serial_port()
@@ -760,13 +782,7 @@ private:
   void reset_serial_dependent_state()
   {
     packet_handler_.reset_receive_state();
-    odom_initialized_ = false;
-    prev_left_ticks_ = 0;
-    prev_right_ticks_ = 0;
-    odom_acc_delta_left_ = 0;
-    odom_acc_delta_right_ = 0;
-    odom_acc_dt_ms_ = 0;
-    wheels_stationary_ = true;
+    odometry_publisher_.reset();
   }
 
   void close_serial_for_reconnect()
@@ -1054,8 +1070,9 @@ private:
       // yaw-integration error). While the robot sits stationary on dock,
       // refresh the cal every imu_cal_periodic_recal_sec_ seconds so the
       // offsets match current-temperature.
-      if (is_charging_ && imu_cal_ready_ && !imu_cal_collecting_ && wheels_stationary_ &&
-          imu_cal_periodic_recal_sec_ > 0.0 && imu_cal_last_completed_.nanoseconds() > 0)
+      if (is_charging_ && imu_cal_ready_ && !imu_cal_collecting_ &&
+          odometry_publisher_.wheels_stationary() && imu_cal_periodic_recal_sec_ > 0.0 &&
+          imu_cal_last_completed_.nanoseconds() > 0)
       {
         const double age_sec = (now() - imu_cal_last_completed_).seconds();
         if (age_sec >= imu_cal_periodic_recal_sec_)
@@ -1105,6 +1122,7 @@ private:
         // Firmware may set its own emergency latch — auto-release it.
         msg.active_emergency = false;
         msg.latched_emergency = false;
+        fw_latched_emergency_ = false;
         msg.lift_warning = true;
 
         // Track lift duration
@@ -1133,6 +1151,7 @@ private:
         // Normal mode or stop button: full emergency
         msg.active_emergency = stop_active || lift_active;
         msg.latched_emergency = latch_active;
+        fw_latched_emergency_ = latch_active;
         msg.lift_warning = false;
         msg.lift_duration_sec = 0.0f;
 
@@ -1377,7 +1396,7 @@ private:
     // Gate: no cal yet + not charging + wheels stationary for auto_rest_sec.
     if (!imu_cal_ready_ && !imu_cal_collecting_ && !is_charging_)
     {
-      if (wheels_stationary_)
+      if (odometry_publisher_.wheels_stationary())
       {
         if (imu_cal_at_rest_since_.nanoseconds() == 0)
         {
@@ -1414,7 +1433,7 @@ private:
     // drift (the load gate only rejects |gyro|>0.2 rad/s, so moderate corruption
     // passes). Abort the in-progress cal the moment the robot moves or leaves
     // the charger, and keep the last completed calibration instead.
-    if (imu_cal_collecting_ && (!wheels_stationary_ || !is_charging_))
+    if (imu_cal_collecting_ && (!odometry_publisher_.wheels_stationary() || !is_charging_))
     {
       imu_cal_collecting_ = false;
       imu_cal_count_ = 0;
@@ -1700,6 +1719,19 @@ private:
     pub_dock_heading_->publish(msg);
   }
 
+  // Panel button → mowing action (task #31). button_id 4 (START/PLAY) and 5
+  // (HOME) call the SAME ~/high_level_control service the GUI uses — DRY,
+  // and no new authority: this issues a high-level command the GUI can
+  // already send at any time, it does not bypass any firmware safety check.
+  // button_id 1/2/3 (S1/S2/LOCK) are UART panel buttons with no mapped
+  // action yet (per user decision) — log-only, same as before.
+  //
+  // SAFETY: COMMAND_START drives the BT into MOWING, which enables the
+  // blades — pressing the physical PLAY button now has the same physical
+  // effect as pressing Start in the GUI. Firmware remains the sole blade-
+  // safety authority (E-stop, lift, latch) regardless of which client asked
+  // for AUTONOMOUS mode; this only adds a second caller of an already-
+  // existing, already-GUI-reachable high-level command.
   void handle_ui_event(const uint8_t* data, std::size_t len)
   {
     if (len < sizeof(LlUiEvent))
@@ -1715,8 +1747,66 @@ private:
                 "UI button event: button_id=%u duration=%u",
                 pkt.button_id,
                 pkt.press_duration);
+
+    uint8_t command;
+    switch (pkt.button_id)
+    {
+      case 4:  // START/PLAY
+        command = mowgli_interfaces::srv::HighLevelControl::Request::COMMAND_START;
+        break;
+      case 5:  // HOME
+        command = mowgli_interfaces::srv::HighLevelControl::Request::COMMAND_HOME;
+        break;
+      default:
+        // S1/S2/LOCK (1/2/3) or an unrecognized id: log-only, no action.
+        return;
+    }
+
+    // async_send_request must not block the packet-handler/serial thread —
+    // the response is only used for logging, so a fire-and-forget callback
+    // (mirrors mqtt_bridge_node's on_mqtt_command, the existing precedent
+    // for a ROS2 client of this exact service) is enough.
+    if (!client_high_level_control_->service_is_ready())
+    {
+      RCLCPP_WARN(get_logger(),
+                  "handle_ui_event: high_level_control service not available; "
+                  "panel button_id=%u command dropped.",
+                  pkt.button_id);
+      return;
+    }
+
+    auto request = std::make_shared<mowgli_interfaces::srv::HighLevelControl::Request>();
+    request->command = command;
+    client_high_level_control_->async_send_request(
+        request,
+        [this, button_id = pkt.button_id, command](
+            rclcpp::Client<mowgli_interfaces::srv::HighLevelControl>::SharedFuture future)
+        {
+          const auto response = future.get();
+          if (response->success)
+          {
+            RCLCPP_INFO(get_logger(),
+                        "handle_ui_event: panel button_id=%u -> high_level_control command=%u "
+                        "succeeded.",
+                        button_id,
+                        command);
+          }
+          else
+          {
+            RCLCPP_WARN(get_logger(),
+                        "handle_ui_event: panel button_id=%u -> high_level_control command=%u "
+                        "reported failure.",
+                        button_id,
+                        command);
+          }
+        });
   }
 
+  // Decode the wire packet and delegate to odometry_publisher_, which owns
+  // ~/wheel_odom + ~/wheel_ticks and all the tick-delta/aggregation logic
+  // (16-bit wrap recovery, spike rejection, 50 ms aggregation, dock-charging
+  // force-zero) — see odometry_publisher.hpp for the full rationale (task
+  // #11 god-node breakup; verbatim port, this method only decodes now).
   void handle_odometry(const uint8_t* data, std::size_t len)
   {
     if (len < sizeof(LlOdometry))
@@ -1727,189 +1817,7 @@ private:
 
     LlOdometry pkt{};
     std::memcpy(&pkt, data, sizeof(LlOdometry));
-
-    // Signed tick deltas since last firmware packet (polarity = direction).
-    int32_t d_left = pkt.left_ticks - prev_left_ticks_;
-    int32_t d_right = pkt.right_ticks - prev_right_ticks_;
-    prev_left_ticks_ = pkt.left_ticks;
-    prev_right_ticks_ = pkt.right_ticks;
-
-    if (!odom_initialized_)
-    {
-      odom_initialized_ = true;
-      return;
-    }
-
-    // 16-bit unsigned-counter wraparound recovery. Firmware packets carry
-    // int32_t left_ticks / right_ticks but the underlying motor-controller
-    // encoder counter is 16-bit and wraps 0xFFFF↔0x0000. After a wrap a
-    // raw subtraction produces a delta of ±65535 (with small ±N noise from
-    // the actual motion that occurred during the wrap), which is the
-    // signature we observe ("dL=-65528", "dR=65535" etc.). Unwrap any
-    // delta whose magnitude is closer to 65536 than to 0 by adding/
-    // subtracting 65536 — this recovers the true small physical delta
-    // instead of dropping the packet and losing position information.
-    auto unwrap_16bit = [](int32_t d)
-    {
-      if (d > 32768)
-        return d - 65536;
-      if (d < -32768)
-        return d + 65536;
-      return d;
-    };
-    d_left = unwrap_16bit(d_left);
-    d_right = unwrap_16bit(d_right);
-
-    // Sanity-clamp residual implausible deltas. After wrap-recovery the
-    // remaining oversize deltas are firmware glitches (e.g. motor-controller
-    // encoder reset on direction change not in lockstep with the firmware's
-    // own prev tracking). Drop those — at 21 ms packet period and a hard
-    // 2 m/s upper bound the physical max is ~13 ticks; 100 leaves margin.
-    constexpr int32_t kTickSpikeLimit = 100;
-    if (std::abs(d_left) > kTickSpikeLimit || std::abs(d_right) > kTickSpikeLimit)
-    {
-      RCLCPP_WARN_THROTTLE(get_logger(),
-                           *get_clock(),
-                           2000,
-                           "Dropping residual wheel tick spike: dL=%d dR=%d (limit=%d).",
-                           d_left,
-                           d_right,
-                           kTickSpikeLimit);
-      d_left = 0;
-      d_right = 0;
-    }
-
-    // ----- Per-wheel WheelTick (diagnostics: GUI "Per-Wheel Encoders") -----
-    // Published every firmware packet (~47 Hz). The mower is 2-wheel diff-drive,
-    // so only the Rear-Left / Rear-Right slots are valid (left→RL, right→RR,
-    // matching the wheel_odometry_node convention); Front-L/R stay invalid.
-    // WheelTick wants MONOTONIC-up magnitude counts plus a direction byte
-    // (consumers do (cur-prev)*sign(direction)), whereas the firmware sends
-    // signed cumulative ticks — so accumulate |delta| and derive the direction
-    // from the delta sign (holding the last direction through a zero delta).
-    wheel_ticks_mag_left_ += static_cast<uint32_t>(std::abs(d_left));
-    wheel_ticks_mag_right_ += static_cast<uint32_t>(std::abs(d_right));
-    if (d_left > 0)
-      wheel_dir_left_ = 1u;
-    else if (d_left < 0)
-      wheel_dir_left_ = 0u;
-    if (d_right > 0)
-      wheel_dir_right_ = 1u;
-    else if (d_right < 0)
-      wheel_dir_right_ = 0u;
-
-    mowgli_interfaces::msg::WheelTick wt{};
-    wt.stamp = now();
-    wt.wheel_tick_factor = static_cast<float>(ticks_per_meter_);
-    wt.valid_wheels = mowgli_interfaces::msg::WheelTick::WHEEL_VALID_RL |
-                      mowgli_interfaces::msg::WheelTick::WHEEL_VALID_RR;
-    wt.wheel_direction_rl = wheel_dir_left_;
-    wt.wheel_ticks_rl = wheel_ticks_mag_left_;
-    wt.wheel_direction_rr = wheel_dir_right_;
-    wt.wheel_ticks_rr = wheel_ticks_mag_right_;
-    pub_wheel_ticks_->publish(wt);
-
-    // ----- Aggregate firmware packets into ~10 Hz wheel_odom publishes -----
-    // Firmware packets arrive at ~47 Hz (every ~21 ms). At slow speeds this
-    // gives only 0-3 ticks per window, so single-tick encoder noise (1 tick
-    // = ~167 mm/s over 21 ms!) gets amplified into phantom velocity spikes
-    // that robot_localization trusts thanks to the tight wheel covariance. Sum 5
-    // packets (~100 ms, ~15 ticks at 0.5 m/s) so the velocity denominator
-    // grows and single-tick noise collapses to ~7 % relative error.
-    odom_acc_delta_left_ += d_left;
-    odom_acc_delta_right_ += d_right;
-    odom_acc_dt_ms_ += pkt.dt_millis;
-
-    // 50 ms aggregation → ~20 Hz /wheel_odom. Tested: 33 ms (30 Hz)
-    // saturated the EKF on this ARM CPU and produced "Failed to meet
-    // update rate" errors on every cycle. 50 ms is twice the GPS rate
-    // and twice the controller rate — sufficient for closed-loop
-    // velocity control without choking the filter.
-    static constexpr uint32_t kAggregateMs = 50;
-    if (odom_acc_dt_ms_ < kAggregateMs)
-    {
-      return;
-    }
-
-    // Smoothed timestamp via the clock fitter. We feed it the
-    // aggregated dt_ms (i.e. the total firmware time spanned by the
-    // 5 packets we just folded together), so the fitter's virtual
-    // firmware clock advances in sync with the published rate.
-    const auto stamp = odom_clock_fit_.Ingest(odom_acc_dt_ms_, now());
-    const int32_t acc_d_left = odom_acc_delta_left_;
-    const int32_t acc_d_right = odom_acc_delta_right_;
-    const uint32_t acc_dt_ms = odom_acc_dt_ms_;
-    odom_acc_delta_left_ = 0;
-    odom_acc_delta_right_ = 0;
-    odom_acc_dt_ms_ = 0;
-
-    wheels_stationary_ = (acc_d_left == 0 && acc_d_right == 0);
-
-    // Debug: log the aggregated window periodically.
-    static int odom_debug_count = 0;
-    if (++odom_debug_count % 10 == 0)
-    {
-      RCLCPP_INFO(get_logger(),
-                  "Odom: acc_dL=%d acc_dR=%d acc_dt=%u ms  (cum L=%d R=%d)",
-                  acc_d_left,
-                  acc_d_right,
-                  acc_dt_ms,
-                  pkt.left_ticks,
-                  pkt.right_ticks);
-    }
-
-    const double dt_sec = static_cast<double>(acc_dt_ms) / 1000.0;
-    const double d_left_m = static_cast<double>(acc_d_left) / ticks_per_meter_;
-    const double d_right_m = static_cast<double>(acc_d_right) / ticks_per_meter_;
-    double vx = (d_left_m + d_right_m) * 0.5 / dt_sec;
-    double vyaw = (d_right_m - d_left_m) / wheel_track_ / dt_sec;
-
-    auto msg = nav_msgs::msg::Odometry{};
-    msg.header.stamp = stamp;
-    msg.header.frame_id = "odom";
-    msg.child_frame_id = "base_link";
-
-    // Force zero whenever the dock contacts are live. Charging current
-    // proves the robot is mechanically anchored to the dock — the motors
-    // cannot have moved it regardless of BT state. Previous narrower
-    // condition (charging AND mode ∈ {NULL, IDLE}) missed the transient
-    // RETURNING_HOME / end-of-mission states, during which the BT is
-    // still mode=AUTONOMOUS(2) but the robot has already re-docked and
-    // is physically stationary. Without the zero constraint, gyro_z
-    // bias (~0.01 rad/s on the WT901) integrates into fusion yaw at
-    // ~30°/min, which then corrupts the fused heading estimate and
-    // manifests as a slowly-rotating robot icon while on the dock.
-    //
-    // Edge case: the charger bit can briefly stay high during a BackUp
-    // undock before the contacts separate. That moment is handled by
-    // the UndockRobot action, not by the wheel-odom path, so zeroing
-    // for those ~100 ms is harmless.
-    const bool force_zero = is_charging_;
-    if (force_zero)
-    {
-      vx = 0.0;
-      vyaw = 0.0;
-    }
-
-    msg.twist.twist.linear.x = vx;
-    msg.twist.twist.angular.z = vyaw;
-
-    // Covariance: force_zero → very tight (we're certain we're not moving).
-    // Otherwise: linear vel σ = 0.1 m/s, yaw rate σ = 0.03 rad/s (tight
-    // wheel trust — calibrated drivetrain, dominated by grass slip ~3%).
-    const double vel_var = force_zero ? 1e-6 : 0.01;
-    msg.twist.covariance[0] = vel_var;  // vx variance
-    // Non-holonomic constraint: diff-drive can't slide sideways. Tight
-    // variance on VY=0 tells robot_localization to treat this as a hard constraint;
-    // leaving at 1e6 ("unknown") lets GPS+IMU noise accumulate as apparent
-    // lateral drift during outdoor runs.
-    msg.twist.covariance[7] = 1e-4;  // vy (enforce VY = 0)
-    msg.twist.covariance[14] = 1e6;  // vz - unknown
-    msg.twist.covariance[21] = 1e6;  // wx - unknown
-    msg.twist.covariance[28] = 1e6;  // wy - unknown
-    msg.twist.covariance[35] = force_zero ? 1e-6 : 9e-4;  // wz variance
-
-    pub_wheel_odom_->publish(msg);
+    odometry_publisher_.handle_packet(pkt, ticks_per_meter_, wheel_track_, is_charging_);
   }
 
   // ---------------------------------------------------------------------------
@@ -2289,7 +2197,37 @@ private:
     // The firmware ignores cmd_vel when mode is IDLE.  When velocity commands
     // arrive before the BT publishes any high-level state, ensure the firmware
     // is not left in NULL/transition mode.
-    if (current_mode_ == HL_MODE_NULL && (vx != 0.0 || wz != 0.0))
+    //
+    // 2026-07-17 (task #18) — KNOWN, BOUNDED AUTHORITY LEAK, documented rather
+    // than fully closed: this ~/cmd_vel is twist_mux's MERGED output (5
+    // sources: navigation prio 10, docking 15, teleop 20, tuning 30,
+    // emergency 100 — see twist_mux.yaml). hardware_bridge has no
+    // source-attribution on the merged topic today, so ANY non-zero traffic
+    // from ANY lane — including a teleop joystick nudge or a drive-PID tuning
+    // command sent before the BT has booted — trips this fallback and forces
+    // HL_MODE_AUTONOMOUS, not just genuine nav-lane traffic. Narrowing this to
+    // "navigation lane only" needs either a new subscription to twist_mux's
+    // active-source diagnostics, or an explicit BT-boot handshake (BT
+    // publishes an initial state before any node is allowed to command
+    // velocity) — both are bigger changes than this task's scope and the mode
+    // semantics deserve a Firmware-side conversation first: HL_MODE_AUTONOMOUS
+    // is the mission-in-progress label, and reusing it for "some non-BT
+    // process is bootstrapping velocity" conflates the two on the firmware
+    // side (dock-auto-reset, telemetry displays, etc. all read current_mode_
+    // as ground truth for "is the robot autonomously mowing"). Coordinate
+    // with Firmware before changing what mode this fallback targets.
+    //
+    // What IS closed here (needs no firmware coordination): the fallback can
+    // no longer fire while the firmware has an ACTUAL latch asserted
+    // (fw_latched_emergency_, computed from pkt.emergency_bitmask in the
+    // telemetry poll — the firmware-reported state, not just the ROS2-side
+    // ~/emergency_stop service flag, so a physical STOP-button press that
+    // never went through that service still blocks this). Without this guard,
+    // stray velocity traffic on any mux lane while e-stopped would silently
+    // promote the firmware to AUTONOMOUS — exactly the kind of side effect
+    // Invariant 9 (firmware is sole safety authority) means to prevent from
+    // ever being masked by ROS2-side state.
+    if (current_mode_ == HL_MODE_NULL && !fw_latched_emergency_ && (vx != 0.0 || wz != 0.0))
     {
       current_mode_ = HL_MODE_AUTONOMOUS;
       current_mode_state_name_ = "AUTONOMOUS_CMD_VEL_FALLBACK";
@@ -2417,14 +2355,11 @@ private:
   rclcpp::Publisher<mowgli_interfaces::msg::Power>::SharedPtr pub_power_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_imu_;
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr pub_mag_raw_;
-  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_wheel_odom_;
-  rclcpp::Publisher<mowgli_interfaces::msg::WheelTick>::SharedPtr pub_wheel_ticks_;
-  // Per-wheel cumulative-magnitude tick counters + last direction (for WheelTick;
-  // see handle_odometry). Magnitude is monotonic-up; direction is 1=fwd/0=rev.
-  uint32_t wheel_ticks_mag_left_{0};
-  uint32_t wheel_ticks_mag_right_{0};
-  uint8_t wheel_dir_left_{1};
-  uint8_t wheel_dir_right_{1};
+  // Owns ~/wheel_odom + ~/wheel_ticks and all wheel-tick decode/aggregation
+  // state (see odometry_publisher.hpp — extracted from the former inline
+  // handle_odometry() as part of the god-node breakup, task #11).
+  // Constructed in the init-list above (odometry_publisher_(*this)).
+  OdometryPublisher odometry_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr pub_battery_state_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_dock_heading_;
 
@@ -2436,6 +2371,11 @@ private:
   rclcpp::Service<mowgli_interfaces::srv::EmergencyStop>::SharedPtr srv_emergency_stop_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_reboot_board_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_set_firmware_debug_;
+
+  // Client (not server, unlike the srv_* members above): calls
+  // behavior_tree_node's high_level_control service on panel button presses.
+  // See create_service_clients() and handle_ui_event() (task #31).
+  rclcpp::Client<mowgli_interfaces::srv::HighLevelControl>::SharedPtr client_high_level_control_;
 
   rclcpp::TimerBase::SharedPtr timer_read_;
   rclcpp::TimerBase::SharedPtr timer_heartbeat_;
@@ -2465,6 +2405,16 @@ private:
   bool emergency_active_{false};
   bool emergency_release_pending_{false};
   int startup_release_count_{5};  // Send release for first 5 heartbeats
+
+  // Firmware-REPORTED latch state (mirrors msg.latched_emergency, computed
+  // from pkt.emergency_bitmask in the telemetry poll — see the ~/emergency
+  // publish block). Unlike emergency_active_ above (which only reflects a
+  // ROS2-side ~/emergency_stop service request), this reflects what the
+  // firmware itself is telling us, including a physical STOP-button press
+  // that never went through the ROS2 service. Gates the cmd_vel→AUTONOMOUS
+  // mode-inference fallback in on_cmd_vel (task #18): stray velocity traffic
+  // must never auto-promote HL_MODE while the firmware has a latch asserted.
+  bool fw_latched_emergency_{false};
 
   // Lift recovery mode: blade off on lift, no emergency, auto-resume
   bool lift_recovery_mode_{false};
@@ -2557,25 +2507,15 @@ private:
   bool reset_stage_seen_{false};
   bool reset_cause_log_pending_{true};
 
-  // Odometry state
-  int32_t prev_left_ticks_{0};
-  int32_t prev_right_ticks_{0};
-  bool odom_initialized_{false};
-  bool wheels_stationary_{true};
-  // Aggregation window: sum firmware packets (~21 ms) until we reach
-  // kAggregateMs (~100 ms) and publish one /wheel_odom at ~10 Hz. Widens
-  // the velocity denominator so single-tick encoder noise doesn't blow up.
-  int32_t odom_acc_delta_left_{0};
-  int32_t odom_acc_delta_right_{0};
-  uint32_t odom_acc_dt_ms_{0};
+  // Odometry state (wheel-tick decode/aggregation, wheels_stationary_) now
+  // lives in odometry_publisher_ (see the ROS2-interfaces member section
+  // above) — task #11 god-node breakup.
 
-  // Per-stream clock fitters — one for IMU (50 Hz), one for the
-  // aggregated wheel-odom (20 Hz). Both run independently because
-  // the firmware emits IMU and odometry on separate cadences and
-  // a stall on one channel shouldn't perturb the other's stamp
-  // smoothing.
+  // IMU clock fitter (50 Hz). The odometry clock fitter now lives inside
+  // odometry_publisher_ — both still run independently because the firmware
+  // emits IMU and odometry on separate cadences and a stall on one channel
+  // shouldn't perturb the other's stamp smoothing.
   HostFirmwareClockFit imu_clock_fit_;
-  HostFirmwareClockFit odom_clock_fit_;
 
   // IMU calibration state (computed while docked and idle, OR when stationary
   // off-dock via auto-cal, OR loaded from the persisted file at boot)

@@ -62,6 +62,7 @@ ament_target_dependencies(mowgli_hardware_core
 
 add_executable(hardware_bridge_node
   src/hardware_bridge_node.cpp
+  src/odometry_publisher.cpp
 )
 
 target_link_libraries(hardware_bridge_node

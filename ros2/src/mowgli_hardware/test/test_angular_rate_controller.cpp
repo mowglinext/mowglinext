@@ -60,9 +60,18 @@ double settle(double target, const mh::AngularRateParams& p, int ticks = 400)
 // converge the MEASURED rate onto the target — at every operating point,
 // including the sub-deadband commands that open-loop passthrough left at
 // ~36 % and the pulse approach left at ~17 %.
+//
+// ki is set explicitly here: this test exercises the INTEGRAL mechanism,
+// which is still available (config-controlled) but is no longer the
+// production default. 2026-07-17 WEAVE FIX (Option B, task #24): the
+// integrator was found to fight the per-wheel firmware PIs and cause a
+// left-right weave, so the shipped default is now ki=0 (feedforward-
+// dominant, see DefaultsAreFeedforwardDominantNoIntegrator below) —
+// UNVALIDATED ON HARDWARE, see angular_rate_controller.hpp.
 TEST(AngularRateController, ConvergesAcrossNonlinearCurve)
 {
-  mh::AngularRateParams p;  // defaults
+  mh::AngularRateParams p;
+  p.ki = 2.0;  // exercise the integral mechanism explicitly (see above)
   for (double target : {0.10, 0.15, 0.20, 0.30, 0.40, -0.20, -0.35})
   {
     const double measured = settle(target, p);
@@ -74,9 +83,13 @@ TEST(AngularRateController, ConvergesAcrossNonlinearCurve)
 // The command the loop emits to achieve a sub-deadband target must be BOOSTED
 // above the raw target (that is the whole point — the firmware needs more than
 // the target to overcome its deadband+gain), but must not run away.
+//
+// ki explicit — see ConvergesAcrossNonlinearCurve above for why (the
+// production default is now ki=0, task #24).
 TEST(AngularRateController, BoostsSubDeadbandCommandWithinLimits)
 {
   mh::AngularRateParams p;
+  p.ki = 2.0;
   mh::AngularRateState st{};
   double measured = 0.0;
   double last_cmd = 0.0;
@@ -109,9 +122,13 @@ TEST(AngularRateController, ZeroTargetStopsAndResets)
 // target crosses zero a few ticks after the raw command flips, so the reset
 // happens slightly later than the first reverse tick — but the steady state
 // must be correct.
+// ki explicit — see ConvergesAcrossNonlinearCurve above for why (the
+// production default is now ki=0, task #24; with no integrator there is no
+// stale integral to drop).
 TEST(AngularRateController, SignFlipDropsStaleIntegral)
 {
   mh::AngularRateParams p;
+  p.ki = 2.0;
   mh::AngularRateState st{};
   double measured = 0.0;
   // Wind up positive.
@@ -136,9 +153,14 @@ TEST(AngularRateController, SignFlipDropsStaleIntegral)
 // extracts the net intent so the emitted command is smooth and the measured
 // rate tracks the NET target — not the jitter. Without the filter the
 // deadband + sign-flip resets lose the net rotation and pulse the output.
+// ki explicit — see ConvergesAcrossNonlinearCurve above for why (the
+// production default is now ki=0, task #24). Without the integrator the
+// feedforward-only loop has steady-state error against this deadband model,
+// so it would not track the net target closely enough for this assertion.
 TEST(AngularRateController, DitherTargetIsSmoothed)
 {
   mh::AngularRateParams p;  // tau=0.2 default
+  p.ki = 2.0;
   mh::AngularRateState st{};
   double measured = 0.0;
   double sum = 0.0, sumsq = 0.0, meas_sum = 0.0;
@@ -172,9 +194,14 @@ TEST(AngularRateController, DitherTargetIsSmoothed)
 
 // Anti-windup: a permanently stalled chassis (sim returns 0 always) must not
 // let the integrator — or the emitted command — grow without bound.
+//
+// ki explicit — see ConvergesAcrossNonlinearCurve above for why (the
+// production default is now ki=0, task #24; with no integrator this clamp
+// is not exercised, so the mechanism is tested directly here instead).
 TEST(AngularRateController, AntiWindupClampsStalledOutput)
 {
   mh::AngularRateParams p;
+  p.ki = 2.0;
   mh::AngularRateState st{};
   double cmd = 0.0;
   for (int i = 0; i < 1000; ++i)
@@ -197,4 +224,38 @@ TEST(AngularRateController, FeedForwardOnlyEqualsTarget)
   p.target_lp_tau = 0.0;  // disable filter so a single call equals the target
   mh::AngularRateState st{};
   EXPECT_NEAR(mh::compute_angular_rate_cmd(0.25, 0.1, 0.05, p, st), 0.25, 1e-9);
+}
+
+// 2026-07-17 WEAVE FIX (Option B, task #24, USER-APPROVED sign-off on the
+// task #8 design proposal). *** UNVALIDATED ON HARDWARE — see the header
+// comment in angular_rate_controller.hpp for the required bench + blade-off
+// validation sequence before any blade-on use. ***
+//
+// This locks in what the SHIPPED DEFAULTS actually do now: ki=0 removes the
+// host integrator from the 3-loop cascade (FTC heading PID -> this loop ->
+// per-wheel firmware PIs) identified as the weave's root cause, and kff is
+// refit toward the measured inverse gain (~1.35) to do the deadband + gain
+// compensation open-loop instead. Two consequences to keep visible in tests:
+//   1. the integral state must stay inert (never grows) under a sustained
+//      tracking error — the removed loop really is gone;
+//   2. unlike the ki>0 mechanism exercised above, this does NOT drive
+//      steady-state error to zero — that tradeoff (stability over exact
+//      tracking) is the whole point of Option B.
+TEST(AngularRateController, DefaultsAreFeedforwardDominantNoIntegrator)
+{
+  mh::AngularRateParams p;  // production defaults
+  EXPECT_DOUBLE_EQ(p.ki, 0.0);
+  EXPECT_NEAR(p.kff, 1.35, 1e-9);
+  mh::AngularRateState st{};
+  double measured = 0.0;
+  for (int i = 0; i < 400; ++i)
+  {
+    measured = sim_firmware_rate(mh::compute_angular_rate_cmd(0.3, measured, 0.05, p, st));
+  }
+  // No integrator: the integral state never leaves zero regardless of a
+  // sustained tracking error.
+  EXPECT_DOUBLE_EQ(st.integral, 0.0);
+  // Feedforward + a small kp get close but do not close the gap exactly.
+  EXPECT_NEAR(measured, 0.3, 0.1);
+  EXPECT_LT(measured, 0.3);  // steady-state error is real, not eliminated
 }

@@ -42,6 +42,33 @@
 //   USB round-trip latency (~50-90 ms host↔STM32) caps the usable gains;
 //   defaults are deliberately gentle. For a 0.3 m/s mower that is plenty.
 //
+// ============================================================================
+// 2026-07-17 WEAVE FIX — Option B (task #24, USER-APPROVED sign-off on the
+// task #8 design proposal). Left-right weave on straights/U-turns was traced
+// to a 3-loop integrating cascade with no bandwidth separation: FTC heading
+// PID -> this host omega-PI (ki=2.0) -> two independent per-wheel firmware
+// PIs. The host integrator wound up/down on the ~50-90 ms USB round trip and
+// fought the wheel loops. Option B removes that integrator (ki: 2.0 -> 0.0)
+// and refits the feed-forward gain (kff: 1.0 -> 1.35, from the measured
+// curve above) to do the deadband + gain compensation open-loop instead.
+// kp is unchanged and now purely damps.
+//
+// *** UNVALIDATED ON HARDWARE. THIS CHANGES PHYSICAL STEERING ON A BLADED
+// ROBOT. Do not deploy blade-on until the full validation sequence from the
+// task #8 proposal has run, in order:
+//   1. Bench step-response: re-run the inverse-curve measurement (the
+//      commanded/actual table above) against the new kff and confirm the
+//      fit; refit kff again if the curve has drifted.
+//   2. Blade-OFF straight-line weave amplitude vs the ki=2.0 baseline.
+//   3. Blade-OFF coverage swaths including U-turns.
+//   4. Blade-OFF dock approach x5 (this is the loop that produces the
+//      dither the target low-pass exists for — watch for regressions there).
+//   5. Only then: blade-ON, supervised.
+// If any step regresses, the safe rollback is params-only: set
+// angular_rate_ki back to 2.0 (and angular_rate_kff back to 1.0) via the
+// hardware_bridge_node parameter — no rebuild required. ***
+// ============================================================================
+//
 // Pure / ROS-free so it is unit-testable; all state is caller-owned.
 
 #ifndef MOWGLI_HARDWARE__ANGULAR_RATE_CONTROLLER_HPP_
@@ -55,13 +82,28 @@ namespace mowgli_hardware
 
 struct AngularRateParams
 {
-  // Gentle defaults: USB round-trip latency (~50-90 ms ≈ 1-2 cmd ticks) plus
-  // the firmware's hard sub-deadband edge make a large kp limit-cycle around
-  // the deadband, so most of the work is done by the integrator (smooth, zero
-  // steady-state error) with kp only damping. Tune live if needed.
-  double kff = 1.0;          ///< feed-forward: baseline command = kff * target.
+  // 2026-07-17 WEAVE FIX (Option B, task #24, USER-APPROVED, UNVALIDATED ON
+  // HARDWARE — see the big warning below): ki defaults to 0 and kff is
+  // refit toward the measured inverse gain. Root cause (task #8 design
+  // proposal): this host PI, the FTC heading PID, and the two independent
+  // per-wheel firmware PIs formed a 3-loop integrating cascade with no
+  // bandwidth separation — the host integrator (ki=2.0) wound up and down on
+  // a ~50-90 ms USB round trip, fighting the wheel loops and producing the
+  // left-right weave. Removing the host integrator (ki=0) collapses the
+  // cascade to 2 loops; the feed-forward term (kff) now does the deadband
+  // + gain compensation open-loop, refit from the measured curve in the
+  // header comment above (0.72-0.75 gain in the 0.2-0.4 rad/s band →
+  // inverse ≈ 1.33-1.35). kp stays small and now purely damps.
+  //
+  // Prior gentle defaults (ki=2.0, kff=1.0) exploited USB round-trip latency
+  // (~50-90 ms ≈ 1-2 cmd ticks) plus the firmware's hard sub-deadband edge:
+  // a large kp would limit-cycle around the deadband, so most of the work
+  // was done by the integrator (smooth, zero steady-state error) with kp
+  // only damping. That mechanism is still available (set ki>0 to re-enable
+  // it) but is no longer the default.
+  double kff = 1.35;         ///< feed-forward: baseline command = kff * target.
   double kp = 0.4;           ///< proportional gain on (target - measured) rad/s.
-  double ki = 2.0;           ///< integral gain (1/s); absorbs deadband + gain.
+  double ki = 0.0;           ///< integral gain (1/s); 0 = feedforward-dominant (Option B).
   double max_cmd = 1.5;      ///< output clamp (rad/s), also anti-windup ceiling.
   double integral_max = 1.5; ///< |integral term| clamp (rad/s) — anti-windup.
   double min_target = 1.0e-3;///< |target| below this → output 0, reset state.

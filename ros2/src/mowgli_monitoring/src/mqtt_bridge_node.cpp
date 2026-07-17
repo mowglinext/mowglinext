@@ -483,7 +483,7 @@ void MqttBridgeNode::create_subscriptions()
 
 void MqttBridgeNode::create_service_client()
 {
-  srv_high_level_ = create_client<mowgli_interfaces::srv::HighLevelControl>("/high_level_control");
+  srv_high_level_ = create_client<mowgli_interfaces::srv::HighLevelControl>("/behavior_tree_node/high_level_control");
 }
 
 void MqttBridgeNode::create_timer()
