@@ -241,10 +241,10 @@ hardware_bridge:
 - **Purpose:** Firmware uses this for telemetry, sound notifications, LED feedback
 - **Tuning:** Lower rate OK (2 Hz sufficient for informational updates)
 
-#### `angular_rate_loop_enabled` / `angular_rate_kp` / `angular_rate_ki`
+#### `angular_rate_loop_enabled` / `angular_rate_kp` / `angular_rate_ki` / `angular_rate_kff`
 
-- **Type:** bool / double / double
-- **Defaults:** `true` / `0.4` / `2.0` (node defaults; **sourced from
+- **Type:** bool / double / double / double
+- **Defaults:** `true` / `0.4` / `0.0` / `1.35` (node defaults; **sourced from
   `mowgli_robot.yaml`** and injected at launch by `mowgli.launch.py`, so they
   are operator-tunable from the GUI config without editing `hardware_bridge.yaml`)
 - **Description:** Host-side gyro angular-rate PI on `wz`. When enabled,
@@ -252,6 +252,18 @@ hardware_bridge:
   twist to firmware. When disabled (`angular_rate_loop_enabled: false`), `wz`
   passes through untouched and the firmware per-wheel velocity PID owns all wheel
   control.
+- **2026-07-17 WEAVE FIX (Option B, task #24) — UNVALIDATED ON HARDWARE:** `ki`
+  defaults to `0.0` (was `2.0`) and `kff` to `1.35` (was `1.0`, and previously
+  not GUI-tunable at all). The prior integrator was found to fight the
+  independent per-wheel firmware PIs on the ~50-90 ms USB round trip, forming a
+  3-loop integrating cascade with no bandwidth separation that produced a
+  left-right weave; removing it (`ki: 0`) and refitting the feed-forward gain
+  toward the measured inverse curve (`kff: 1.35`) collapses the cascade to 2
+  loops. This changes physical steering on a bladed robot and has **not** yet
+  run the bench + blade-off validation sequence from the task #8 proposal —
+  see `angular_rate_controller.hpp` for the full rationale and required steps
+  before blade-on use. Rollback is params-only: set `angular_rate_ki` back to
+  `2.0` and `angular_rate_kff` back to `1.0`.
 - **Note:** The host loop can ring in yaw (rotation overshoot). On this robot it
   is disabled (`angular_rate_loop_enabled: false`) — the firmware velocity loop
   handles wheel tracking. The default keeps the prior (enabled) behaviour so sim

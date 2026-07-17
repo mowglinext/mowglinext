@@ -70,7 +70,7 @@
 
 A fully autonomous mowing stack running on real hardware: undock, navigate to zones, mow strip-by-strip with sub-centimeter accuracy, avoid obstacles, dock to charge, and resume.
 
-**Core:** GTSAM iSAM2 factor-graph localizer (`fusion_graph`) — sole map+odom localizer (GPS + IMU + wheels + optional LiDAR scan-matching + loop-closure, REP-105 map/odom) · Nav2 navigation · BehaviorTree.CPP v4 · cell-based strip coverage planner
+**Core:** GTSAM iSAM2 factor-graph localizer (`fusion_graph`) — sole map+odom localizer (GPS + IMU + wheels + optional LiDAR scan-matching + loop-closure, REP-105 map/odom) · Nav2 navigation · BehaviorTree.CPP v4 · multi-area continuous-subpath coverage
 
 **Hardware:** YardForce chassis · ARM64 SBC (RK3566/RK3588, RPi 4/5) · u-blox F9P RTK-GPS · LDRobot LD19 LiDAR · STM32 firmware
 
