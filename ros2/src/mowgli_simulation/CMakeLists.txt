@@ -46,12 +46,18 @@ install(TARGETS
 )
 
 # ---------------------------------------------------------------------------
-# Sim actuation model — firmware static-friction deadband + host angular-rate
-# PI (reuses the REAL mowgli_hardware/angular_rate_controller.hpp) so the sim
-# reproduces the near-deadband angular limit cycle (mowing weave / dock hunt).
+# Sim actuation model — per-wheel firmware motor model (firmware_wheel_model.hpp)
+# + host angular-rate PI (reuses the REAL mowgli_hardware/angular_rate_controller.hpp)
+# so the sim reproduces the near-deadband angular limit cycle (mowing weave / dock hunt).
 # ---------------------------------------------------------------------------
 add_executable(sim_actuation_node
   src/sim_actuation_node.cpp
+)
+
+target_include_directories(sim_actuation_node
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
 )
 
 ament_target_dependencies(sim_actuation_node
@@ -107,6 +113,18 @@ if(BUILD_TESTING)
   # Exclude uncrustify — we use clang-format (see .clang-format)
   set(ament_cmake_uncrustify_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+
+  # ---- test_firmware_wheel_model ----
+  # firmware_wheel_model.hpp is header-only and ROS-free; no ROS deps needed.
+  ament_add_gtest(test_firmware_wheel_model
+    test/test_firmware_wheel_model.cpp
+  )
+  target_include_directories(test_firmware_wheel_model
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
 endif()
 
 ament_package()
