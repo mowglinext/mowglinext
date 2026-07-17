@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "mowgli_interfaces/motion_yaw_fit.hpp"
 #include "mowgli_interfaces/robot_yaml_scalar.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 
@@ -34,65 +35,11 @@ namespace mowgli_behavior
 namespace
 {
 
-// -------------------------------------------------------------------------
-// Total-least-squares line fit through a chronological sequence of
-// (x, y) GPS samples. Returns (yaw, sigma_yaw): yaw is the chronological
-// motion direction (NOT yet flipped to robot heading), sigma_yaw is the
-// 1σ angular uncertainty derived from perpendicular residuals.
-// -------------------------------------------------------------------------
-std::pair<double, double> fit_motion_yaw(const std::vector<std::pair<double, double>>& s)
-{
-  const size_t n = s.size();
-  if (n < 2u) {
-    return {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
-  }
-
-  double xsum = 0.0;
-  double ysum = 0.0;
-  for (const auto& p : s) { xsum += p.first; ysum += p.second; }
-  const double xbar = xsum / static_cast<double>(n);
-  const double ybar = ysum / static_cast<double>(n);
-
-  double Sxx = 0.0;
-  double Syy = 0.0;
-  double Sxy = 0.0;
-  for (const auto& p : s) {
-    const double dx = p.first - xbar;
-    const double dy = p.second - ybar;
-    Sxx += dx * dx;
-    Syy += dy * dy;
-    Sxy += dx * dy;
-  }
-
-  // Principal axis of the centred 2×2 covariance: yaw = ½·atan2(2·Sxy, Sxx−Syy).
-  // This gives the line direction up to a ±π ambiguity.
-  double yaw = 0.5 * std::atan2(2.0 * Sxy, Sxx - Syy);
-
-  // Resolve sign by chronological order: motion is from samples.front to
-  // samples.back, dot with the current yaw vector must be positive.
-  const double dx_chron = s.back().first  - s.front().first;
-  const double dy_chron = s.back().second - s.front().second;
-  if (dx_chron * std::cos(yaw) + dy_chron * std::sin(yaw) < 0.0) {
-    yaw += M_PI;
-  }
-  while (yaw >  M_PI) yaw -= 2.0 * M_PI;
-  while (yaw < -M_PI) yaw += 2.0 * M_PI;
-
-  // Perpendicular residuals → σ_yaw ≈ rms_perp / baseline.
-  const double cy = std::cos(yaw);
-  const double sy = std::sin(yaw);
-  double sum_perp2 = 0.0;
-  for (const auto& p : s) {
-    const double dx = p.first - xbar;
-    const double dy = p.second - ybar;
-    const double perp = -dx * sy + dy * cy;
-    sum_perp2 += perp * perp;
-  }
-  const double rms_perp = std::sqrt(sum_perp2 / static_cast<double>(n));
-  const double baseline = std::hypot(dx_chron, dy_chron);
-  const double sigma_yaw = (baseline > 0.01) ? (rms_perp / baseline) : 0.1;
-  return {yaw, sigma_yaw};
-}
+// fit_motion_yaw moved to mowgli_interfaces::motion_yaw_fit::FitMotionYaw
+// (task #47) — mowgli_localization/calibrate_imu_yaw_node.cpp's dock-yaw
+// reverse maneuver now reuses the exact same total-least-squares fit
+// instead of an endpoint-only atan2.
+using mowgli_interfaces::motion_yaw_fit::FitMotionYaw;
 
 // -------------------------------------------------------------------------
 // Angular EMA: blend two yaws by working in the (cos, sin) plane to avoid
@@ -280,7 +227,7 @@ BT::NodeStatus CalibrateHeadingFromUndock::tick()
   double sigma_yaw = 0.0;
   const char* method = "endpoint";
   if (have_line_fit_samples) {
-    const auto [motion_yaw, motion_sigma] = fit_motion_yaw(samples);
+    const auto [motion_yaw, motion_sigma] = FitMotionYaw(samples);
     // Robot heading points opposite the motion (BackUp reverses).
     yaw = motion_yaw + M_PI;
     while (yaw >  M_PI) yaw -= 2.0 * M_PI;
