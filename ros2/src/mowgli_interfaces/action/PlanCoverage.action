@@ -5,11 +5,15 @@
 # swaths, NO turn planning (the robot is a diff-drive that pivots in place;
 # turns belong to the navigation stack, not the coverage planner).
 #
-# The result is a list of explicit, ordered, individually-drivable SEGMENTS:
-# concentric headland rings (outermost first) followed by straight swaths in
-# serpentine order. The BT dispatches ONE segment per FollowCoveragePath goal;
-# RotationShim pivots in place to the segment-start heading, MPPI tracks the
-# segment. No heuristic path re-segmentation anywhere.
+# The result carries the plan in TWO forms. `segments` is a list of explicit,
+# ordered, individually-drivable pieces (concentric headland rings, outermost
+# first, then straight swaths in serpentine order) — GUI display and resume
+# bookkeeping only; the BT does NOT dispatch these one at a time. Execution
+# uses `drivable_subpaths`: hole-free continuous sub-paths (segments already
+# joined by forward turn-around connector arcs) that FTCController drives
+# end-to-end per sub-path via a pose cursor, bridging any gap between
+# consecutive sub-paths with a blade-off Nav2 transit. No heuristic path
+# re-segmentation anywhere.
 
 # Goal
 geometry_msgs/Polygon outer_boundary
@@ -17,16 +21,26 @@ geometry_msgs/Polygon[] obstacles      # interior holes (>= 3 points each)
 float64 mow_angle_deg                  # swath heading in the map frame; < 0 = auto (minimise swath count)
 ---
 # Result
-uint8 SEGMENT_RING=0    # densified closed headland loop — followed continuously
-uint8 SEGMENT_SWATH=1   # straight mainland swath — pivot at start, drive straight
+uint8 SEGMENT_RING=0    # densified closed headland loop
+uint8 SEGMENT_SWATH=1   # straight mainland swath
 
 bool success
 string message                         # failure reason when success == false
+# GUI / resume bookkeeping ONLY — the BT does not dispatch these one at a
+# time; execution (including the resume-cursor staleness fingerprint,
+# mowgli_behavior area_plan_fingerprint) is keyed off drivable_subpaths below,
+# not this field. Kept for the GUI plan view and PlanCoverageArea's own
+# ring/swath-count log line.
 nav_msgs/Path[] segments               # ordered drivable segments (rings out→in, then swaths)
 uint8[] segment_types                  # parallel to segments (SEGMENT_*)
 nav_msgs/Path full_path                # concatenation of all segments (GUI / visualisation only)
-nav_msgs/Path[] drivable_subpaths      # hole-free continuous sub-paths in drive order; the BT
-                                       # follows each with MPPI and bridges the gap between
+nav_msgs/Path[] drivable_subpaths      # WHAT EXECUTION ACTUALLY DRIVES. Hole-free continuous
+                                       # sub-paths in drive order, already joined with forward
+                                       # turn-around connector arcs. mowgli_nav2_plugins/
+                                       # FTCController drives each end-to-end as ONE
+                                       # FollowCoveragePath goal via a pose cursor (one PRE_ROTATE
+                                       # pivot to the sub-path-start heading, then tracks
+                                       # tightly); FollowStrip bridges the gap between
                                        # consecutive sub-paths with a blade-off Nav2 transit that
                                        # routes around obstacles (issue #333). Exactly one entry
                                        # for a hole-free field (== full_path).

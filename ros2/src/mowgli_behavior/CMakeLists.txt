@@ -255,6 +255,37 @@ if(BUILD_TESTING)
     mowgli_interfaces
   )
 
+  # Single-source regression guard (task #14): FollowStrip::kSegmentTransitGap
+  # and mowgli_coverage's planning-side split threshold must agree — see
+  # test_coverage_transit_gap.cpp. Header-only on both sides (constexpr class
+  # member + constexpr free constant), so no coverage_nodes.cpp / .cpp source
+  # needs linking here.
+  ament_add_gtest(test_coverage_transit_gap
+    test/test_coverage_transit_gap.cpp
+  )
+
+  target_include_directories(test_coverage_transit_gap PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_coverage_transit_gap
+    rclcpp
+    rclcpp_action
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+    rcl_interfaces
+    action_msgs
+  )
+
 endif()
 
 ament_package()

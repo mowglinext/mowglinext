@@ -27,10 +27,13 @@ struct BTContext;
 ///
 /// Persisted fields (the minimum needed to resume near where the robot
 /// stopped): per-area resume cursor (`area_resume_pose_index`), the planned
-/// path pose count per area (`area_path_pose_count`, used as a staleness key —
-/// a changed area re-plans to a different pose count and the stale cursor is
-/// discarded), the completed-swath sets (`area_completed_swaths`), the
-/// completed-area set (`completed_areas`), and the current area index.
+/// path pose count per area (`area_path_pose_count`), the plan-geometry
+/// fingerprint per area (`area_plan_fingerprint`, the resume-cursor staleness
+/// key — a changed area/params re-plans to a different geometry, so the stale
+/// cursor is discarded; a pose-count-only key was insufficient because the AUTO
+/// mow-angle tie-break or sub-path split can change geometry at equal count),
+/// the completed-swath sets (`area_completed_swaths`), the completed-area set
+/// (`completed_areas`), and the current area index.
 ///
 /// The file is written atomically (temp + rename) and every reader tolerates a
 /// missing / empty / corrupt file by returning false and leaving the context

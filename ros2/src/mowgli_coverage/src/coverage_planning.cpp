@@ -13,6 +13,8 @@
 #include <memory>
 #include <string>
 
+#include "mowgli_interfaces/coverage_geometry.hpp"
+
 // GDAL/OGR (F2C's geometry backend) — bufferRingOutward grows drawn-obstacle
 // rings with OGRPolygon::Buffer. Explicit include: the transitive path via
 // fields2cover.h is an implementation detail of F2C.
@@ -1209,11 +1211,12 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
       // concave bite, innermost-ring → far first swath): an in-bounds Dubins for
       // it "works" but mows a long diagonal across the middle of the lawn (user
       // report). Split instead — FollowStrip bridges it with a blade-off Nav2
-      // transit. 0.6 m matches the BT's kSegmentTransitGap for the same decision.
-      constexpr double kMaxMowJoinGapM = 0.6;
+      // transit. Single-sourced from mowgli_interfaces so this matches the BT's
+      // FollowStrip::kSegmentTransitGap for the same decision — see
+      // coverage_geometry.hpp for why the two sides must agree.
       const double join_gap = std::hypot(goal.x - start.x, goal.y - start.y);
       bool conn_safe = false;
-      if (join_gap <= kMaxMowJoinGapM)
+      if (join_gap <= mowgli_interfaces::coverage_geometry::kSegmentTransitGapM)
       {
         bool fallback = false;
         auto conn = buildConnector(

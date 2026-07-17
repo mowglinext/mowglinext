@@ -28,6 +28,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_interfaces/action/plan_coverage.hpp"
+#include "mowgli_interfaces/coverage_geometry.hpp"
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
@@ -40,19 +41,24 @@ namespace mowgli_behavior
 {
 
 // ---------------------------------------------------------------------------
-// FollowStrip — execute the planned coverage segments, blade ON.
+// FollowStrip — execute the planned coverage path, blade ON.
 //
-// Consumes ctx->current_strip_segments (EXPLICIT ordered segments from the
-// coverage server: headland rings first, then straight serpentine swaths) and
-// dispatches ONE segment per FollowCoveragePath goal. RotationShim pivots in
-// place to the segment-start heading; MPPI tracks the straight swath / smooth
-// ring; the PathProgressGoalChecker fires at the segment end.
+// Consumes ctx->current_strip_subpaths (the hole-free, continuous drivable
+// SUB-PATHS from the coverage server — already joined with forward turn-
+// around connector arcs; issue #333) and drives each as ONE FollowCoveragePath
+// goal end-to-end via mowgli_nav2_plugins/FTCController: one PRE_ROTATE pivot
+// to the sub-path-start heading, then FTC tracks the continuous path tightly
+// (following the connector arcs at swath U-turns) using a pose cursor
+// (path_progress_idx_ / total_path_poses_), not per-segment dispatch. Falls
+// back to ctx->current_strip_path or the raw ctx->current_strip_segments
+// (joined) only if current_strip_subpaths is empty — see swaths_ construction
+// in onStart(). ctx->current_strip_segments itself is GUI/resume bookkeeping,
+// not what this node normally drives.
 //
-// When the next segment's start is far from the robot (resume mid-list, a
-// skipped segment, or a concave field whose serpentine hops across a notch),
-// the node first runs a NavigateToPose transit to the segment start —
-// boundary-aware (global costmap keepout) instead of letting MPPI cut
-// cross-country.
+// When the next unit's start is far from the robot (resume mid-list, a
+// skipped unit, or a concave field whose sub-paths hop across a hole), the
+// node first runs a NavigateToPose transit to the unit start — boundary-aware
+// (global costmap keepout) instead of letting FTC cut cross-country.
 // ---------------------------------------------------------------------------
 
 class FollowStrip : public BT::StatefulActionNode
@@ -62,6 +68,17 @@ public:
   using FollowGoalHandle = rclcpp_action::ClientGoalHandle<Nav2FollowPath>;
   using Nav2Navigate = nav2_msgs::action::NavigateToPose;
   using NavGoalHandle = rclcpp_action::ClientGoalHandle<Nav2Navigate>;
+
+  // Start an explicit transit when the segment start is farther than this.
+  // Below it, RotationShim+MPPI close the gap themselves (adjacent swaths are
+  // one op_width ≈ 0.16 m apart). Single-sourced from mowgli_interfaces so
+  // this matches mowgli_coverage's planning-side split threshold (the server
+  // decides which gaps become a separate drivable_subpaths entry using the
+  // exact same value) — see coverage_geometry.hpp for why the two sides must
+  // agree. Public (unlike the rest of this class's tuning constants) so the
+  // single-source regression test can assert the equality directly.
+  static constexpr double kSegmentTransitGap =
+      mowgli_interfaces::coverage_geometry::kSegmentTransitGapM;
 
   FollowStrip(const std::string& name, const BT::NodeConfig& config)
       : BT::StatefulActionNode(name, config)
@@ -114,6 +131,14 @@ private:
   std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
   NavGoalHandle::SharedPtr nav_handle_;
   bool transit_active_ = false;
+  // A blade-off transit is REQUIRED for the current swath (its start is
+  // >kSegmentTransitGap away) but navigate_to_pose was not ready when we tried to
+  // dispatch it. The blade is held OFF and the dispatch is retried each tick;
+  // this flag prevents ever falling through to a blade-on FollowPath across the
+  // gap. Bounded by kTransitServerWaitSec (from transit_wait_start_), after which
+  // the swath is skipped rather than mowed cross-country.
+  bool transit_pending_ = false;
+  std::chrono::steady_clock::time_point transit_wait_start_;
 
   // The drivable units being executed: the hole-free continuous SUB-PATHS
   // (ctx->current_strip_subpaths, issue #333), or a single continuous path when
@@ -143,10 +168,11 @@ private:
   // tracking in BTContext so a resume/re-plan skips already-mowed segments.
   uint32_t area_idx_ = 0;
 
-  // Start an explicit transit when the segment start is farther than this.
-  // Below it, RotationShim+MPPI close the gap themselves (adjacent swaths are
-  // one op_width ≈ 0.16 m apart).
-  static constexpr double kSegmentTransitGap = 0.6;
+  // Max time to hold (blade off) waiting for navigate_to_pose to become ready to
+  // run a required inter-swath transit. If the server never comes up in this
+  // window the swath is skipped (rolls to the next pass) — the robot never drives
+  // to a >kSegmentTransitGap segment start blade-on.
+  static constexpr double kTransitServerWaitSec = 5.0;
 
   // Blade spinup delay — wait before sending the FIRST segment goal
   static constexpr double kBladeSpinupDelaySec = 1.5;
