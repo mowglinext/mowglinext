@@ -176,8 +176,24 @@ static volatile float g_pwm_per_mps = (float)PWM_PER_MPS;
 #define YAW_LOWSPEED_REF_MPS 0.15f
 #define YAW_LOWSPEED_FLOOR 0.25f
 #define YAW_INT_LEAK_AT_FLOOR 0.90f /* per-cycle integral retain factor at FLOOR authority */
+/* Anti-self-oscillation (task #39): the loop was self-exciting a ~2-4 Hz yaw
+ * limit-cycle against the wheel deadband/stiction while the command was smooth
+ * (~0.15 Hz). Two damping terms, both only REDUCE aggressiveness:
+ *  - 1st-order IIR low-pass on the gyro feedback: alpha = dt / (RC + dt). At the
+ *    50 Hz (dt=20 ms) motor rate, alpha=0.30 → RC≈47 ms → cutoff ≈ 3.4 Hz: it
+ *    attenuates the 2-4 Hz self-oscillation the loop was chasing while adding
+ *    little phase lag at the ~0.15 Hz of a real turn.
+ *  - Slew-rate limit on the injected trim: caps |Δtrim| per 20 ms cycle so the
+ *    output can't snap across the wheel deadband and re-excite the cycle. At
+ *    0.03 m/s/cycle, full-scale (±0.15) takes ~5 cycles (100 ms) — invisible to a
+ *    0.15 Hz command, fatal to a 2-4 Hz one. */
+#define YAW_GYRO_LP_ALPHA 0.30f
+#define YAW_TRIM_SLEW_MPS_PER_CYCLE 0.03f
 static PID yaw_pid;
 static float prev_yaw_trim_mps = 0.0f;
+static float prev_applied_yaw_trim_mps = 0.0f; /* last trim actually injected (slew-limit state) */
+static float yaw_gyro_filt = 0.0f;             /* low-passed gyro yaw rate [rad/s] */
+static uint8_t yaw_gyro_filt_valid = 0u;       /* 0 until the IIR is seeded after a reset */
 static float prev_cmd_wz = 0.0f;
 static volatile float cmd_wz = 0.0f; /* commanded yaw rate [rad/s], set by on_cmd_vel */
 static volatile uint8_t g_yaw_loop_enabled = 1;   /* default on for A/B */
@@ -690,6 +706,7 @@ extern "C" void motors_handler() {
     if (yaw_reset) {
       yaw_pid.resetIntegral();
       yaw_pid.resetDerivative();
+      yaw_gyro_filt_valid = 0u; /* re-seed the gyro low-pass after a reset */
     }
     prev_cmd_wz = snap_cmd_wz;
 
@@ -713,7 +730,18 @@ extern "C" void motors_handler() {
        * Both this and the IMU broadcast read run in the cooperative main loop,
        * so there is no re-entrancy on the software-I2C bus. */
       if (IMU_TryReadGyro(&gx, &gy, &gz)) {
-        const float meas_wz = g_yaw_gyro_sign * gz; /* rad/s, robot +yaw = CCW */
+        const float meas_wz_raw =
+            g_yaw_gyro_sign * gz; /* rad/s, robot +yaw = CCW */
+        /* 1st-order IIR low-pass on the gyro feedback (seeded on the first
+         * sample after a reset to avoid a startup transient) so the loop stops
+         * chasing the 2-4 Hz self-oscillation. */
+        if (!yaw_gyro_filt_valid) {
+          yaw_gyro_filt = meas_wz_raw;
+          yaw_gyro_filt_valid = 1u;
+        } else {
+          yaw_gyro_filt += YAW_GYRO_LP_ALPHA * (meas_wz_raw - yaw_gyro_filt);
+        }
+        const float meas_wz = yaw_gyro_filt;
         const float yaw_err = snap_cmd_wz - meas_wz;
         /* Conditional-integration anti-windup: freeze the integrator only in
          * the direction that would push |trim| further past the clamp (same
@@ -747,8 +775,19 @@ extern "C" void motors_handler() {
          * injected (base rotation is unaffected — it rides the IK feedforward). */
         yaw_trim_mps = raw_trim * yaw_speed_scale;
       }
+      /* Slew-rate limit the injected trim (runs even on a gyro-read failure,
+       * where yaw_trim_mps is 0, so prev tracks the applied value): the output
+       * can't snap across the wheel deadband in one cycle and re-excite the
+       * limit-cycle. */
+      const float yaw_dtrim = yaw_trim_mps - prev_applied_yaw_trim_mps;
+      if (yaw_dtrim > YAW_TRIM_SLEW_MPS_PER_CYCLE)
+        yaw_trim_mps = prev_applied_yaw_trim_mps + YAW_TRIM_SLEW_MPS_PER_CYCLE;
+      else if (yaw_dtrim < -YAW_TRIM_SLEW_MPS_PER_CYCLE)
+        yaw_trim_mps = prev_applied_yaw_trim_mps - YAW_TRIM_SLEW_MPS_PER_CYCLE;
+      prev_applied_yaw_trim_mps = yaw_trim_mps;
     } else {
       prev_yaw_trim_mps = 0.0f;
+      prev_applied_yaw_trim_mps = 0.0f;
     }
 
     /* Apply the symmetric differential trim to the per-wheel setpoints
