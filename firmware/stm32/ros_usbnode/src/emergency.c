@@ -25,11 +25,12 @@
 
 //#define EMERGENCY_DEBUG 1
 
-#define EMERGENCY_CHECKING_DISABLE 2
-#define EMERGENCY_CHECKING_ENABLE 3
-
-static bool emergency_checking_disabled = false;
-static uint8_t emergency_state = 0;
+/* Written by EmergencyController() in the main loop (bit-OR of sensor flags)
+ * AND by Emergency_SetState() from the USB RX interrupt (host assert/release).
+ * volatile so neither context caches a stale copy; a plain uint8_t load/store
+ * is already atomic on Cortex-M3, but the read-modify-write |= is NOT, so
+ * every OR is done under a __disable_irq guard (see emergency_set_bits). */
+static volatile uint8_t emergency_state = 0;
 static uint32_t stop_emergency_started = 0;
 static uint32_t blue_wheel_lift_emergency_started = 0;
 static uint32_t red_wheel_lift_emergency_started = 0;
@@ -49,22 +50,30 @@ uint8_t Emergency_State(void)
 }
 
 /**
- * @brief Set Emergency State bits
+ * @brief Set Emergency State (host/ROS API, runs in USB RX interrupt context)
+ * @note  Only assert (any non-zero -> 1) or release (0). The former
+ *        EMERGENCY_CHECKING_DISABLE/ENABLE opcodes let a host packet globally
+ *        disable ALL physical safety sensors (e-stop, wheel-lift, tilt) — that
+ *        bypass has been removed. Firmware is the sole safety authority and its
+ *        sensor checking must never be disableable over comms. A single-byte
+ *        store to the volatile state is atomic on Cortex-M3.
  * @retval none
  */
 void  Emergency_SetState(uint8_t new_emergency_state)
 {
-    switch (new_emergency_state)  {
-        case EMERGENCY_CHECKING_DISABLE:
-            emergency_checking_disabled = true;
-            emergency_state = 0;
-            break;
-        case EMERGENCY_CHECKING_ENABLE:
-            emergency_checking_disabled = false;
-            break;
-        default:
-            emergency_state = new_emergency_state;
-    }
+    emergency_state = (new_emergency_state != 0) ? 1u : 0u;
+}
+
+/**
+ * @brief OR sensor bits into the emergency state atomically w.r.t. the USB RX
+ *        interrupt (Emergency_SetState). Without the guard, the load-OR-store
+ *        could drop a concurrent host assert/release.
+ */
+static void emergency_set_bits(uint8_t bits)
+{
+    __disable_irq();
+    emergency_state |= bits;
+    __enable_irq();
 }
 
 /**
@@ -149,11 +158,6 @@ void EmergencyController(void)
     debug_printf("  >> play_button: %d\r\n",play_button);
 #endif
 
-    if (emergency_checking_disabled) {
-        emergency_state = 0;
-        return;
-    }
-
     if (stop_button_yellow || stop_button_white)
     {
         if (stop_emergency_started == 0)
@@ -166,11 +170,11 @@ void EmergencyController(void)
             {
                 if (stop_button_yellow)
                 {
-                    emergency_state |= 0b00010;
+                    emergency_set_bits(0b00010);
                     debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - STOP BUTTON (\e[33myellow\e[0m) triggered\r\n");
                 }
                 if (stop_button_white) {
-                    emergency_state |= 0b00100;
+                    emergency_set_bits(0b00100);
                     debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - STOP BUTTON (\e[37m0mwhite\e[) triggered\r\n");
                 }
             }
@@ -189,7 +193,7 @@ void EmergencyController(void)
         }
         else if (now-both_wheels_lift_emergency_started>=BOTH_WHEELS_LIFT_EMERGENCY_MILLIS)
         {
-            emergency_state |= 0b11000;
+            emergency_set_bits(0b11000);
             debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - WHEEL LIFT (\e[31mred\e[0m and \e[34mblue\e[0m) triggered\r\n");
         }
     } else {
@@ -203,7 +207,7 @@ void EmergencyController(void)
         }
         else if (now-blue_wheel_lift_emergency_started>=ONE_WHEEL_LIFT_EMERGENCY_MILLIS)
         {
-            emergency_state |= 0b01000;
+            emergency_set_bits(0b01000);
             debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - WHEEL LIFT (\e[34mblue\e[0m) triggered\r\n");
         }
     } else {
@@ -217,7 +221,7 @@ void EmergencyController(void)
         }
         else if (now-red_wheel_lift_emergency_started>=ONE_WHEEL_LIFT_EMERGENCY_MILLIS)
         {
-            emergency_state |= 0b10000;
+            emergency_set_bits(0b10000);
             debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - WHEEL LIFT (\e[31mred\e[0m) triggered\r\n");
         }
     } else {
@@ -233,7 +237,7 @@ void EmergencyController(void)
         else
         {
             if (now - accelerometer_int_emergency_started >= TILT_EMERGENCY_MILLIS) {
-                emergency_state |= 0b100000;
+                emergency_set_bits(0b100000);
                 debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - ACCELEROMETER TILT triggered\r\n");
             }
         }     
@@ -252,7 +256,7 @@ void EmergencyController(void)
         else
         {
             if (now - tilt_emergency_started >= TILT_EMERGENCY_MILLIS) {
-                emergency_state |= 0b100000;
+                emergency_set_bits(0b100000);
                 debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - MECHANICAL TILT triggered\r\n");
             }
         }

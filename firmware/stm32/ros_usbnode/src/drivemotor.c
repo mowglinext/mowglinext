@@ -21,6 +21,7 @@
 
 #include "adc.h"
 #include "board.h"
+#include "emergency.h"
 #include "main.h"
 #include "ros/ros_custom/cpp_main.h"
 
@@ -368,15 +369,26 @@ void DRIVEMOTOR_App_10ms(void) {
     HAL_UART_Receive_DMA(&DRIVEMOTORS_USART_Handler,
                          (uint8_t *)&drivemotor_psReceivedData,
                          sizeof(DRIVEMOTORS_data_t));
-    drivemotor_prepareMsg(100, 100, 0, 0); /* set to -0.33m/s  */
+
+    /* SAFETY: the collision auto-reverse drives the wheels open-loop at
+     * 100 PWM. It must NEVER run while an emergency (e-stop button, wheel
+     * lift, tilt, accelerometer, heartbeat-loss) is asserted. If emergency
+     * fires mid-reverse, hard-stop the wheels this frame and abandon the
+     * maneuver back to RUN (where cmd_vel drive is itself gated to 0 by the
+     * hard_stop path in cpp_main). */
+    if (Emergency_State() != 0) {
+      drivemotor_prepareMsg(0, 0, 0, 0);
+      drivemotor_eState = DRIVEMOTOR_RUN;
+    } else {
+      drivemotor_prepareMsg(100, 100, 0, 0); /* set to -0.33m/s  */
+      if ((HAL_GetTick() - l_u32Timestamp) > 2000) {
+        drivemotor_eState = DRIVEMOTOR_WAIT;
+        l_u32Timestamp = HAL_GetTick();
+      }
+    }
     HAL_UART_Transmit_DMA(&DRIVEMOTORS_USART_Handler,
                           (uint8_t *)drivemotor_pu8RqstMessage,
                           DRIVEMOTOR_LENGTH_RQST_MSG);
-
-    if ((HAL_GetTick() - l_u32Timestamp) > 2000) {
-      drivemotor_eState = DRIVEMOTOR_WAIT;
-      l_u32Timestamp = HAL_GetTick();
-    }
 
     break;
 
@@ -390,7 +402,13 @@ void DRIVEMOTOR_App_10ms(void) {
                           (uint8_t *)drivemotor_pu8RqstMessage,
                           DRIVEMOTOR_LENGTH_RQST_MSG);
 
-    if ((HAL_GetTick() - l_u32Timestamp) > 1000) {
+    /* SAFETY: bail out of the post-reverse settle immediately on emergency
+     * so the state machine returns to the (emergency-gated) RUN state
+     * instead of holding here. WAIT already commands 0, so this only shortens
+     * the dwell — it never drives. */
+    if (Emergency_State() != 0) {
+      drivemotor_eState = DRIVEMOTOR_RUN;
+    } else if ((HAL_GetTick() - l_u32Timestamp) > 1000) {
       drivemotor_eState = DRIVEMOTOR_RUN;
     }
 
