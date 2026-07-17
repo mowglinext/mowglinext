@@ -718,11 +718,29 @@ void MapServerNode::on_set_docking_point(
   //           free of that circularity; averaging kills the ~1-3 cm RTK jitter.
   //   false — manual map-drag / settings edit: the operator specified the
   //           location directly, so use req->docking_pose.position as given.
-  // Yaw always comes from the request (single-antenna GPS gives no heading;
-  // the yaw-convergence gate above validated it).
-  docking_pose_ = req->docking_pose;  // yaw/orientation (and position if !gps)
+  //
+  // Orientation (task #45, from #44's circularity trace): the SAME gauge-
+  // reset circularity that poisons the fused POSITION while charging also
+  // poisons the fused YAW — fusion_graph pins the fused yaw to the EXISTING
+  // dock_pose_yaw via a tight (~2°) unary factor plus a periodic gauge
+  // reset, so req->docking_pose.orientation is just as circular as its
+  // position would be in the use_gps_position=true case (confirmed #44: no
+  // independent yaw source is observable at standstill on the dock). A
+  // few-degree bad heading could therefore never self-correct via a live
+  // GUI re-capture, and #44 traced this as the likely cause of a consistent
+  // ~10cm-right dock miss (yaw_err × ~1.5m approach distance). PRESERVE the
+  // existing dock_pose_yaw for a live GPS capture — it comes from the
+  // motion-derived, RTK-gated writers (calibrate_imu_yaw_node's reverse
+  // maneuver + per-undock CalibrateHeadingFromUndock, both confirmed NOT
+  // circular in #40/#44). For a manual map-drag (use_gps_position=false)
+  // the operator is explicitly setting orientation by hand, so honor the
+  // request as before — that path was never circular (no fused-yaw readback
+  // involved).
+  const auto preserved_orientation = docking_pose_.orientation;
+  docking_pose_ = req->docking_pose;  // orientation (and position if !gps)
   if (req->use_gps_position)
   {
+    docking_pose_.orientation = preserved_orientation;
     double gps_x_mean = 0.0;
     double gps_y_mean = 0.0;
     {
@@ -754,7 +772,8 @@ void MapServerNode::on_set_docking_point(
     docking_pose_.position.z = 0.0;
     RCLCPP_INFO(get_logger(),
                 "Docking point captured from averaged GPS: (%.3f, %.3f) over %zu "
-                "samples; request fused position was (%.3f, %.3f) — Δ=(%.3f, %.3f) m",
+                "samples; request fused position was (%.3f, %.3f) — Δ=(%.3f, %.3f) m. "
+                "Orientation UNCHANGED (kept existing dock_pose_yaw — see task #45).",
                 gps_x_mean,
                 gps_y_mean,
                 recent_gps_xy_.size(),

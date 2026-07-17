@@ -164,15 +164,27 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             // dock. use_gps_position=true tells map_server to capture the dock
             // POSITION from the averaged independent GPS projection, NOT the px/py
             // we send (which come from the fused pose — gauge-reset onto the old
-            // dock_pose while charging, so it would be circular). Yaw is taken
-            // from our quaternion (single-antenna GPS gives no heading).
+            // dock_pose while charging, so it would be circular).
+            //
+            // Task #45 (from #44's circularity trace): the SAME gauge-reset
+            // circularity poisons the fused YAW while charging just as much as
+            // position — fusion_graph pins the fused yaw to the EXISTING
+            // dock_pose_yaw, so it can never self-correct via a live capture.
+            // map_server's on_set_docking_point now PRESERVES the existing
+            // dock_pose_yaw whenever use_gps_position=true and ignores the
+            // orientation we send below — we still send a quaternion because the
+            // service request shape requires one, but it is a no-op server-side
+            // for this call. Dock heading only changes via the motion-derived
+            // calibration (calibrate_imu_yaw_node's dock-yaw drive, or the
+            // per-undock refinement) — see the "Run Calibration" action.
             //
             // Because the stored position is the GPS one (not our px/py), we must
             // NOT optimistically push px/py into the form — that was the bug: it
             // showed the fused value and a later Settings "Save" would overwrite
             // the GPS value. Instead, after the service persists, read the actual
             // stored dock pose back from /calibration/status (which reads
-            // mowgli_robot.yaml) and reflect THAT in the form.
+            // mowgli_robot.yaml) and reflect THAT in the form — this also
+            // correctly reflects the now-unchanged yaw.
             const q = getQuaternionFromHeading(yaw);
             try {
                 setSettingDock(true);
