@@ -126,6 +126,28 @@ static int32_t prev_right_ticks_signed_pi = 0;
 static float prev_left_target_mps = 0.0f;
 static float prev_right_target_mps = 0.0f;
 
+/* ---------------------------------------------------------------------------
+ * Firmware-level anti-dig (task #46). ALWAYS active, in every mode, and
+ * un-bypassable by any ROS controller: motors_handler drives the wheels for
+ * docking, mowing AND transit alike (opennav_docking's cmd_vel arrives on the
+ * same PKT_ID_CMD_VEL path), so cutting power here catches the "stuck wheels
+ * keep spinning and dig holes in the lawn" failure that the FTC-level
+ * anti-wheelspin (host, coverage-only) never sees. Per wheel: if it is
+ * COMMANDED to move (|target| > MIN_TARGET) and the loop is actually PUSHING
+ * (|PWM| > MIN_ABS_PWM — the PI integrator has wound past the deadband) but the
+ * encoder logs < MIN_PROGRESS_M of real travel over WINDOW_MS, latch the wheel
+ * OFF (force PWM 0) until the command clears. Only ever REDUCES output. */
+#define ANTIDIG_WINDOW_MS 2500u       /* persistent stall before cut [ms] */
+#define ANTIDIG_MIN_TARGET_MPS 0.02f  /* below this the wheel isn't "commanded" */
+#define ANTIDIG_MIN_ABS_PWM 60        /* below this it isn't really "pushing" (deadband ~40) */
+#define ANTIDIG_MIN_PROGRESS_M 0.03f  /* real travel over the window that counts as "moving" */
+static uint32_t l_dig_stall_ms = 0u;
+static uint32_t r_dig_stall_ms = 0u;
+static int32_t l_dig_stall_ticks = 0;
+static int32_t r_dig_stall_ticks = 0;
+static bool l_dig_latched = false;
+static bool r_dig_latched = false;
+
 /* Open-loop feedforward velocity->PWM scale. Runtime-tunable copy of the
  * board.h PWM_PER_MPS default so the ROS 2 host can retune the drive loop via
  * PKT_ID_SET_DRIVE_PID without a reflash. Seeded with the compile-time default,
@@ -637,6 +659,43 @@ extern "C" void chatter_handler() {
   }
 }
 
+/* Anti-dig per-wheel step (task #46). Returns true when the wheel must be cut
+ * (caller forces PWM 0 + resets that wheel's integrator). Accumulates real
+ * travel over the window so a slow-but-progressing creep (normal dock approach)
+ * is NOT flagged — only a commanded, pushing, non-progressing wheel latches.
+ * Clears the latch the instant the command drops below MIN_TARGET. */
+static bool antidig_step(uint32_t *stall_ms, int32_t *stall_ticks, bool *latched,
+                         float target, int16_t pwm, int32_t dticks,
+                         int32_t min_ticks) {
+  const bool commanded = fabsf(target) > ANTIDIG_MIN_TARGET_MPS;
+  if (!commanded) {
+    *stall_ms = 0u;
+    *stall_ticks = 0;
+    *latched = false;
+    return false;
+  }
+  if (*latched) {
+    return true; /* hold until the command clears (handled above) */
+  }
+  const bool pushing = (pwm > ANTIDIG_MIN_ABS_PWM) || (pwm < -ANTIDIG_MIN_ABS_PWM);
+  if (!pushing) {
+    *stall_ms = 0u;
+    *stall_ticks = 0;
+    return false;
+  }
+  *stall_ms += MOTORS_NBT_TIME_MS;
+  *stall_ticks += (dticks < 0) ? -dticks : dticks;
+  if (*stall_ms >= ANTIDIG_WINDOW_MS) {
+    if (*stall_ticks < min_ticks) {
+      *latched = true; /* pushed hard for the whole window, barely moved → dig */
+    } else {
+      *stall_ms = 0u; /* actually progressing — reset the window */
+      *stall_ticks = 0;
+    }
+  }
+  return *latched;
+}
+
 /* ---------------------------------------------------------------------------
  * Drive & blade motors handler
  * ---------------------------------------------------------------------------*/
@@ -900,6 +959,22 @@ extern "C" void motors_handler() {
     right_pwm_signed = (r_target == 0.0f && fabsf(r_actual_mps) < 0.02f)
                            ? 0
                            : (int16_t)r_pwm_f;
+
+    /* Anti-dig cutout (always active, all modes). min_ticks derived from the
+     * live ticks_per_meter so the "is it progressing?" test tracks calibration.
+     * dleft/dright_ticks and left/right_pwm_signed are this cycle's values. */
+    const int32_t antidig_min_ticks =
+        (int32_t)(ANTIDIG_MIN_PROGRESS_M * snap_ticks_per_meter);
+    if (antidig_step(&l_dig_stall_ms, &l_dig_stall_ticks, &l_dig_latched, l_target,
+                     left_pwm_signed, dleft_ticks, antidig_min_ticks)) {
+      left_pwm_signed = 0;
+      left_wheel_pid.resetIntegral();
+    }
+    if (antidig_step(&r_dig_stall_ms, &r_dig_stall_ticks, &r_dig_latched, r_target,
+                     right_pwm_signed, dright_ticks, antidig_min_ticks)) {
+      right_pwm_signed = 0;
+      right_wheel_pid.resetIntegral();
+    }
 #else
     /* Open-loop fallback for bring-up / regression A/B. Replicates the
      * pre-PI mapping exactly: PWM = target × PWM_PER_MPS, no encoder
