@@ -234,10 +234,25 @@ def generate_launch_description() -> LaunchDescription:
             # passthrough (the firmware per-wheel velocity PID then owns wheel
             # control) when the loop oscillates in yaw. Default keeps the prior
             # behaviour (enabled) so sim / other configs are unchanged.
+            #
+            # 2026-07-17 WEAVE FIX (Option B, task #24, USER-APPROVED sign-off
+            # on the task #8 design proposal) — UNVALIDATED ON HARDWARE, see
+            # angular_rate_controller.hpp for the full rationale + required
+            # blade-off validation sequence before blade-on use. These
+            # hardcoded fallbacks are the ones that actually reach the robot
+            # (this dict is later in the Node parameters list than
+            # hardware_bridge.yaml, so it wins): ki 2.0 -> 0.0 removes the
+            # host integrator that was fighting the per-wheel firmware PIs;
+            # kff (newly wired here so it is GUI/robot-config tunable like
+            # kp/ki) defaults to 1.35, refit toward the measured inverse gain
+            # to replace the deadband/gain compensation the integrator used
+            # to provide. Rollback is params-only: angular_rate_ki back to
+            # 2.0 and angular_rate_kff back to 1.0 in mowgli_robot.yaml.
             {"angular_rate_loop_enabled": bool(robot_params.get(
                 "angular_rate_loop_enabled", True))},
             {"angular_rate_kp": float(robot_params.get("angular_rate_kp", 0.4))},
-            {"angular_rate_ki": float(robot_params.get("angular_rate_ki", 2.0))},
+            {"angular_rate_ki": float(robot_params.get("angular_rate_ki", 0.0))},
+            {"angular_rate_kff": float(robot_params.get("angular_rate_kff", 1.35))},
         ],
         # The node publishes on ~/topic (e.g. /hardware_bridge/wheel_odom).
         # behavior_tree_node subscribes to /hardware_bridge/status etc.

@@ -68,8 +68,11 @@ from nav2_common.launch import RewrittenYaml
 # Shared robot-config loader (sibling module installed alongside this launch
 # file). Deep-merges the SPARSE installed mowgli_robot.yaml over the in-package
 # template defaults, so a missing key falls through to its versioned default.
+# deep_merge is the same helper, reused below to compose nav2_params_base.yaml
+# with the selected lidar/no-lidar overlay — one tested recursive-merge
+# implementation instead of a per-file copy that can drift.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from robot_config_util import load_robot_params  # noqa: E402
+from robot_config_util import DEFAULT_TOOL_WIDTH_M, deep_merge, load_robot_params  # noqa: E402
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -343,8 +346,13 @@ def generate_launch_description() -> LaunchDescription:
     # operation_width=0.20), which made map_server's stamp radius
     # narrower than F2C's swath spacing — every gap between adjacent
     # swaths had a strip of cells that map_server never marked as
-    # mowed. Sharing the one number fixes that by construction.
-    tool_width = 0.18
+    # mowed. Sharing the one number fixes that by construction. The
+    # fallback default itself is also single-sourced (robot_config_util.
+    # DEFAULT_TOOL_WIDTH_M) instead of hardcoded here AND in
+    # full_system.launch.py — that duplication is the exact class of bug
+    # (mower_width=0.18 vs a separately-hardcoded operation_width=0.20)
+    # that caused the 54% coverage regression this comment describes.
+    tool_width = DEFAULT_TOOL_WIDTH_M
     # F2C v2 coverage tuning. Operator-tunable via the GUI's Mowing
     # section; injected into coverage_server's parameters at launch
     # so changes via mowgli_robot.yaml take effect on next bringup.
@@ -530,19 +538,6 @@ def generate_launch_description() -> LaunchDescription:
     # those tmp files to RewrittenYaml as its sources. RewrittenYaml then
     # handles the remaining scalar rewrites (use_sim_time, footprint, BT XML
     # paths) without touching the pose list.
-    def _deep_merge(base, overlay):
-        """Recursively merge overlay into base: nested dicts merge key-by-key,
-        lists and scalars replace wholesale. Used to compose the shared
-        nav2_params_base.yaml with the selected lidar/no-lidar overlay."""
-        import copy
-        out = copy.deepcopy(base)
-        for k, v in overlay.items():
-            if k in out and isinstance(out[k], dict) and isinstance(v, dict):
-                out[k] = _deep_merge(out[k], v)
-            else:
-                out[k] = copy.deepcopy(v)
-        return out
-
     def _inject_dock_pose_and_speeds(overlay_path: str) -> str:
         """Merge nav2_params_base.yaml with the given variant overlay, write
         mowgli_robot.yaml-derived values into the result, and return the temp
@@ -560,7 +555,7 @@ def generate_launch_description() -> LaunchDescription:
             base_doc = yaml.safe_load(fh) or {}
         with open(overlay_path, "r") as fh:
             overlay_doc = yaml.safe_load(fh) or {}
-        doc = _deep_merge(base_doc, overlay_doc)
+        doc = deep_merge(base_doc, overlay_doc)
         # home_dock.pose must be a YAML list (PARAMETER_DOUBLE_ARRAY).
         home_dock = (doc.setdefault("docking_server", {})
                         .setdefault("ros__parameters", {})

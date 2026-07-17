@@ -457,14 +457,19 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ------------------------------------------------------------------
-    # Sim actuation model — inserts the firmware static-friction deadband +
-    # the host angular-rate PI (the REAL mowgli_hardware controller) between
-    # the nav command (/cmd_vel) and the Webots wheels (/cmd_vel_wheels), so
-    # the sim reproduces the near-deadband angular limit cycle (mowing weave /
-    # dock hunt) that the ideal diff_drive cannot. A/B the fix at runtime:
+    # Sim actuation model — inserts the per-wheel firmware motor model
+    # (firmware_wheel_model.hpp: inverse kinematics, two per-wheel PIs,
+    # per-wheel PWM stiction, forward kinematics) + the host angular-rate PI
+    # (the REAL mowgli_hardware controller) between the nav command
+    # (/cmd_vel) and the Webots wheels (/cmd_vel_wheels), so the sim
+    # reproduces the near-deadband angular limit cycle (mowing weave / dock
+    # hunt) that the ideal diff_drive cannot. A/B the fix at runtime:
     #   ros2 param set /sim_actuation angular_rate_loop_enabled false
     #   ros2 param set /sim_actuation angular_rate_ki 0.5
     # Set deadband_enabled:=false for an ideal-actuation baseline.
+    # Wheel-model gains mirror firmware/stm32/ros_usbnode/{include/board.h,
+    # src/ros/ros_custom/cpp_main.cpp} and MUST stay in lockstep with
+    # mowgli_simulation/kinematic_drive.py's identical Python copy.
     # ------------------------------------------------------------------
     sim_actuation_node = Node(
         package="mowgli_simulation",
@@ -477,8 +482,16 @@ def generate_launch_description() -> LaunchDescription:
                 "angular_rate_loop_enabled": True,
                 "angular_rate_ki": 2.0,
                 "deadband_enabled": True,
-                "wz_break_free": 0.18,
-                "wz_keep_move": 0.08,
+                "wheel_separation": 0.325,
+                "firmware_max_mps": 0.5,
+                "firmware_pwm_per_mps": 300.0,
+                "firmware_pwm_max": 255.0,
+                "firmware_deadband_pwm_static": 40.0,
+                "firmware_deadband_pwm_kinetic": 30.0,
+                "firmware_pi_kp_pwm_per_mps": 30.0,
+                "firmware_pi_ki_pwm_per_mps_s": 5000.0,
+                "firmware_pi_int_max_pwm": 100.0,
+                "firmware_pi_hold_thresh_mps": 0.02,
                 "min_linear_vel": 0.05,
             }
         ],

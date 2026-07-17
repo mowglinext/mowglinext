@@ -35,6 +35,15 @@ def _load_helper():
 _util = _load_helper()
 load_robot_params = _util.load_robot_params
 
+# Launch files that must derive their tool_width fallback from the one shared
+# constant instead of each hardcoding their own literal (task #17 — that
+# duplication, mower_width=0.18 vs a separately-hardcoded operation_width=0.20,
+# caused the 54% coverage regression: map_server's mark_cells_mowed stamp
+# radius went narrower than F2C's swath spacing, leaving an un-mowed strip
+# between every pair of adjacent swaths).
+_MAP_SERVER_LAUNCH = _LAUNCH_DIR / "full_system.launch.py"
+_COVERAGE_LAUNCH = _LAUNCH_DIR / "navigation.launch.py"
+
 
 def _template_params() -> dict:
     with open(_TEMPLATE_PATH, "r") as handle:
@@ -140,3 +149,39 @@ def test_full_runtime_merges_to_itself():
 
     for key in template:
         assert merged[key] == full[key]
+
+
+def test_default_tool_width_matches_template():
+    """The last-resort DEFAULT_TOOL_WIDTH_M fallback must agree with the
+    template's tool_width — it is a floor beneath the real (template) single
+    source of truth, not a second one. If these ever diverge, a robot whose
+    installed config AND the template both somehow lack the key would get a
+    silently different value in map_server vs coverage_server again."""
+    template = _template_params()
+    assert "tool_width" in template
+    assert _util.DEFAULT_TOOL_WIDTH_M == template["tool_width"]
+
+
+def test_map_server_and_coverage_launch_share_tool_width_default():
+    """Regression guard: full_system.launch.py (map_server.tool_width) and
+    navigation.launch.py (feeds coverage_server.operation_width) must both
+    fall back to robot_config_util.DEFAULT_TOOL_WIDTH_M — not each hardcode
+    their own literal. This is a source-text check (launch files pull in the
+    full `launch`/`launch_ros`/ament ROS2 packages via generate_launch_description,
+    so they cannot be imported directly in a plain-Python test); it fails
+    loudly if either file stops importing/using the shared constant, or if a
+    stray hardcoded tool_width fallback literal (e.g. "0.18") reappears.
+    """
+    map_server_src = _MAP_SERVER_LAUNCH.read_text()
+    coverage_src = _COVERAGE_LAUNCH.read_text()
+
+    assert "DEFAULT_TOOL_WIDTH_M" in map_server_src, (
+        f"{_MAP_SERVER_LAUNCH.name} must import DEFAULT_TOOL_WIDTH_M from robot_config_util"
+    )
+    assert "DEFAULT_TOOL_WIDTH_M" in coverage_src, (
+        f"{_COVERAGE_LAUNCH.name} must import DEFAULT_TOOL_WIDTH_M from robot_config_util"
+    )
+    # The fallback for the tool_width param itself must be the shared
+    # constant, not a bare numeric literal re-hardcoded at the call site.
+    assert 'robot_params.get("tool_width", DEFAULT_TOOL_WIDTH_M)' in map_server_src
+    assert "tool_width = DEFAULT_TOOL_WIDTH_M" in coverage_src

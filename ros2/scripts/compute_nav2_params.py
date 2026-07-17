@@ -90,6 +90,15 @@ except ImportError:  # pragma: no cover
     sys.stderr.write("PyYAML required: pip install pyyaml\n")
     sys.exit(2)
 
+# Shared recursive dict-merge (deep-copies throughout so the result shares no
+# mutable nested dict with either input). Imported rather than duplicated so
+# this stays in lockstep with what navigation.launch.py actually composes —
+# see robot_config_util.py's deep_merge docstring for why the naive
+# `dict(base)` shallow-copy variant is unsafe.
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "src", "mowgli_bringup", "launch"))
+from robot_config_util import deep_merge  # noqa: E402
+
 
 # ===========================================================================
 # Hardware constants (firmware — NOT operator editable).
@@ -856,20 +865,6 @@ def emit_yaml(res: dict) -> str:
 # ===========================================================================
 # Comparison against the merged base + overlay nav2 params
 # ===========================================================================
-def deep_merge(base, overlay):
-    """Recursively merge overlay into base — nested dicts merge key-by-key,
-    lists and scalars replace wholesale. MUST mirror navigation.launch.py's
-    _deep_merge so --compare sees exactly what the launch file composes."""
-    import copy
-    out = copy.deepcopy(base)
-    for k, v in overlay.items():
-        if k in out and isinstance(out[k], dict) and isinstance(v, dict):
-            out[k] = deep_merge(out[k], v)
-        else:
-            out[k] = copy.deepcopy(v)
-    return out
-
-
 def load_merged_nav2(base_path: str, overlay_path: str | None) -> dict:
     with open(base_path, "r", encoding="utf-8") as fh:
         base = yaml.safe_load(fh) or {}

@@ -452,7 +452,6 @@ COPY ros2/src/mowgli_bringup/config/    /ros2_ws/install/mowgli_bringup/share/mo
 COPY ros2/src/mowgli_localization/config/  /ros2_ws/install/mowgli_localization/share/mowgli_localization/config/
 
 # fusion_graph ships its own launch + config used by navigation.launch.py
-# when use_fusion_graph:=true.
 COPY ros2/src/fusion_graph/launch/  /ros2_ws/install/fusion_graph/share/fusion_graph/launch/
 COPY ros2/src/fusion_graph/config/  /ros2_ws/install/fusion_graph/share/fusion_graph/config/
 

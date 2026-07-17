@@ -691,8 +691,7 @@ local_costmap:
         inflation_radius: 0.60
 
 # ---------------------------------------------------------------------------
-# Map server / AMCL (unused — map->odom is published by ekf_map_node
-# (default) or fusion_graph_node (opt-in via use_fusion_graph);
+# Map server / AMCL (unused — map->odom is published by fusion_graph_node;
 # kept for completeness / Nav2 lifecycle compatibility)
 # ---------------------------------------------------------------------------
 map_server:

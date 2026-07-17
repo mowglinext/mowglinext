@@ -11,9 +11,18 @@
 """Regression tests for the nav2_params.yaml goal-checker tolerances."""
 import os
 import re
+import sys
 
 import pytest
 import yaml
+
+# Shared recursive dict-merge (deep-copies throughout, so the merged result
+# shares no mutable nested dict with either input). Imported rather than
+# duplicated so these tests validate the exact same merge navigation.launch.py
+# actually performs, instead of a parallel (and previously shallow-copy,
+# aliasing-prone) reimplementation.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "launch"))
+from robot_config_util import deep_merge as _deep_merge  # noqa: E402
 
 
 def _config_path(name: str) -> str:
@@ -24,19 +33,6 @@ def _config_path(name: str) -> str:
 def _load_yaml(name: str) -> dict:
     with open(_config_path(name), "r", encoding="utf-8") as fh:
         return yaml.safe_load(fh)
-
-
-def _deep_merge(base: dict, overlay: dict) -> dict:
-    """Mirror of navigation.launch.py _deep_merge: nested dicts merge key-by-key,
-    lists/scalars replace. The runtime Nav2 config is base ⊕ variant overlay, so
-    the tests must validate the MERGED result, not the standalone files."""
-    out = dict(base)
-    for k, v in overlay.items():
-        if k in out and isinstance(out[k], dict) and isinstance(v, dict):
-            out[k] = _deep_merge(out[k], v)
-        else:
-            out[k] = v
-    return out
 
 
 def _load_params() -> dict:
@@ -537,6 +533,67 @@ def test_overlays_select_disjoint_costmap_layers() -> None:
                 assert layer in params, (
                     f"{variant}: {cm} plugins references undefined layer '{layer}'"
                 )
+
+
+def test_controller_server_odom_topic_is_not_default() -> None:
+    """CLAUDE.md 'What NOT to Do': controller_server.odom_topic must never be
+    left unset — Nav2 defaults it to "odom", which NOTHING publishes on this
+    robot, so MPPI/RPP/FTC get ZERO velocity feedback (MPPI circles on tight
+    coverage; RPP's velocity-scaled lookahead collapses -> transit weaving).
+    CLAUDE.md previously claimed this file already guarded odom_topic; it
+    didn't (grep=0) — this is that guard, for both variants.
+    """
+    for loader in (_load_params, _load_no_lidar_params):
+        odom_topic = _controller_section(loader()).get("odom_topic")
+        assert odom_topic, (
+            "controller_server.odom_topic is unset — Nav2 defaults to 'odom', "
+            "which nothing publishes on this robot."
+        )
+        assert odom_topic != "odom", (
+            f"controller_server.odom_topic={odom_topic!r} — the unpublished Nav2 "
+            "default would leave every controller with zero velocity feedback."
+        )
+
+
+def test_docking_server_odom_topic_is_not_default() -> None:
+    """Same guard as controller_server, for the docking graceful controller's
+    nested `controller.odom_topic` (CLAUDE.md invariant 16 — the dock
+    controller was missing velocity feedback entirely until this was added,
+    causing a left-right hunt at the cradle).
+    """
+    for loader in (_load_params, _load_no_lidar_params):
+        odom_topic = loader()["docking_server"]["ros__parameters"].get("controller.odom_topic")
+        assert odom_topic, (
+            "docking_server controller.odom_topic is unset — the dock controller "
+            "runs velocity-blind and can't damp its own near-dock heading corrections."
+        )
+        assert odom_topic != "odom", (
+            f"docking_server controller.odom_topic={odom_topic!r} — the unpublished "
+            "Nav2 default 'odom' leaves the dock controller velocity-blind."
+        )
+
+
+def test_ftc_stall_trio_present_in_both_variants() -> None:
+    """FTC's anti-wheelspin stall easing (ftc_stall.hpp / StallDecision) needs
+    all three of stall_speed_ratio, stall_grace_s, stall_crawl_speed — a
+    missing key silently falls back to the C++ struct default rather than
+    failing loudly, which could re-open the wheelspin/turf-digging behaviour
+    the feature exists to prevent. Guard both variants (both merge the same
+    FollowCoveragePath from nav2_params_base.yaml today, but that's the
+    invariant this test pins, not an assumption).
+    """
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        for key in ("stall_speed_ratio", "stall_grace_s", "stall_crawl_speed"):
+            assert key in fcp, f"FollowCoveragePath.{key} missing from merged config"
+        assert fcp["stall_speed_ratio"] > 0.0, (
+            "stall_speed_ratio <= 0 disables anti-wheelspin easing entirely"
+        )
+        assert fcp["stall_grace_s"] > 0.0
+        assert 0.0 < fcp["stall_crawl_speed"] < fcp["speed_slow"], (
+            f"stall_crawl_speed={fcp['stall_crawl_speed']} must be a genuine crawl — "
+            f"below speed_slow={fcp['speed_slow']} — or easing to it doesn't slow anything down"
+        )
 
 
 def test_coverage_is_ftc_transit_is_not() -> None:

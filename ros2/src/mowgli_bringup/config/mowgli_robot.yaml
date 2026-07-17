@@ -122,7 +122,6 @@ mowgli:
     # true), and GNSS lever-arm + COG / mag unaries. Equivalent
     # functionality to the legacy ekf_map_node, with the option to
     # enable scan-matching + loop closure on LiDAR-equipped robots.
-    use_fusion_graph: true
 
     # use_magnetometer (default false): subscribe to /imu/mag_yaw and
     # let it influence the map-frame yaw. The chassis motor field
