@@ -54,9 +54,20 @@ extern "C" {
  * notable changes.
  * ---------------------------------------------------------------------------*/
 
+/* Injected at compile time from git by git_build_id.py (PlatformIO pre-build
+ * hook) so every commit auto-bumps the reported firmware_version with no manual
+ * step. These #ifndef fallbacks apply only to builds where the hook did not run
+ * (e.g. a source-tarball build with no git). Display/identity only — the
+ * host↔firmware COMPATIBILITY key is MOWGLI_PROTOCOL_VERSION, never this. */
+#ifndef MOWGLI_FW_VERSION_MAJOR
 #define MOWGLI_FW_VERSION_MAJOR 1u
+#endif
+#ifndef MOWGLI_FW_VERSION_MINOR
 #define MOWGLI_FW_VERSION_MINOR 0u
+#endif
+#ifndef MOWGLI_FW_VERSION_PATCH
 #define MOWGLI_FW_VERSION_PATCH 0u
+#endif
 
 /* ---------------------------------------------------------------------------
  * Packet IDs
