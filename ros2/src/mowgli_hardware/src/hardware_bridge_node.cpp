@@ -370,7 +370,7 @@ private:
     // trim_limit∈[0,0.5]); loop_enabled/gyro_sign are read once at startup —
     // gyro_sign is the field sign-check remedy for the physical IMU mounting
     // (UNVALIDATED default +1) and is not expected to change at runtime.
-    yaw_kp_ = declare_parameter<double>("yaw_kp", 0.30);
+    yaw_kp_ = declare_parameter<double>("yaw_kp", 0.12);
     yaw_ki_ = declare_parameter<double>("yaw_ki", 0.40);
     yaw_trim_limit_mps_ = declare_parameter<double>("yaw_trim_limit_mps", 0.15);
     yaw_loop_enabled_ = declare_parameter<bool>("yaw_loop_enabled", true);

@@ -73,6 +73,16 @@ const CATALOG: Record<string, ParamMeta> = {
   max_obstacle_z_m: {label: "paramCatalog.max_obstacle_z_m.label", description: "paramCatalog.max_obstacle_z_m.description", tier: "expert", group: "LiDAR", unit: "m"},
   lidar_height_m: {label: "paramCatalog.lidar_height_m.label", description: "paramCatalog.lidar_height_m.description", tier: "expert", group: "LiDAR", unit: "m"},
 
+  // ── Obstacles (local_costmap avoidance tuning) ────────────────────────────
+  // task #35, 2026-07-17 field analysis: obstacles only pushed the path from
+  // 0.4-0.6 m out at ~0.17 m/s — too late for a smooth deviation.
+  obstacle_inflation_radius: {label: "paramCatalog.obstacle_inflation_radius.label", description: "paramCatalog.obstacle_inflation_radius.description", tier: "middle", group: "Obstacles", unit: "m"},
+  // task #36, 2026-07-17 field analysis: a wait-clock reset bug let the
+  // coverage controller hold zero velocity ~40s (vs. the intended
+  // obstacle_wait_timeout_s cap) when skirting a marginal obstacle. Fixed
+  // in ftc_controller.cpp; surfacing the timeout itself as GUI-tunable.
+  obstacle_wait_timeout_s: {label: "paramCatalog.obstacle_wait_timeout_s.label", description: "paramCatalog.obstacle_wait_timeout_s.description", tier: "middle", group: "Obstacles", unit: "s"},
+
   // ── Motor control (firmware-adjacent PID) ────────────────────────────────
   // 2026-07-17 Option C (task #34): angular_rate_kp/ki/kff (the host-side
   // yaw-rate PI, Option B task #24) are removed — the loop now runs in

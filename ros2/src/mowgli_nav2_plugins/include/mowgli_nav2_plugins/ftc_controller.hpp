@@ -222,13 +222,24 @@ private:
   // retries for nothing. We now hold zero velocity for up to
   // obstacle_wait_timeout_s seconds; if the costmap clears in that
   // window the controller resumes, otherwise it throws as before.
+  // IMPORTANT: only clear obstacle_wait_start_/obstacle_waiting_ once a
+  // candidate has been CONFIRMED workable (post max_lateral_deviation
+  // check) or the debounced clear-hold below has elapsed — clearing it the
+  // moment a candidate side is merely *found* let the two wait call-sites
+  // hand each other fresh 5s windows on every chooseDeviationSide flip-flop
+  // near a marginal gap, deferring the abort indefinitely (field: observed
+  // ~40s stall with cmd_vel pinned at zero, vs. the intended 5s cap).
   std::optional<rclcpp::Time> obstacle_wait_start_;
   bool obstacle_waiting_{false};
-  /// When the nominal path first read CLEAR during an active AVOIDANCE
-  /// episode. The skirt is held until it has stayed clear for
-  /// config_.obstacle_clear_hold_s (debounces the window-edge flicker that
-  /// caused the ±step left-right flap). Reset whenever the obstacle
-  /// re-appears or on a new plan.
+  /// When the nominal path first read CLEAR — during an active AVOIDANCE
+  /// episode (is_avoiding_) OR during a not-yet-avoiding WAIT
+  /// (obstacle_waiting_). Shared by both: the skirt / the wait is held
+  /// until the path has stayed clear CONTINUOUSLY for
+  /// config_.obstacle_clear_hold_s (debounces the window-edge flicker —
+  /// observation_persistence:0 costmap re-marking a cell — that caused the
+  /// ±step left-right flap in the avoidance case and the same-symptom
+  /// indefinite-wait stall in the waiting case). Reset whenever the
+  /// obstacle re-appears or on a new plan.
   std::optional<rclcpp::Time> avoidance_clear_start_;
 
   // ── Oscillation detection ─────────────────────────────────────────────────

@@ -59,7 +59,7 @@ mowgli:
     # power-on fallback (Firmware-2's #33 report). The firmware re-validates
     # and clamps every value on receipt (yaw_kp 0-5, yaw_ki 0-20,
     # yaw_trim_limit_mps 0-MAX_MPS=0.5).
-    yaw_kp: 0.30                  # P gain [m/s differential trim per rad/s yaw error]
+    yaw_kp: 0.12                  # P gain [m/s differential trim per rad/s yaw error]
     yaw_ki: 0.40                  # I gain [m/s trim per (rad/s·s)]
     yaw_trim_limit_mps: 0.15      # clamp on |differential trim| [m/s]
     yaw_loop_enabled: true        # 1 = closed yaw loop on, 0 = open-diff passthrough
@@ -342,7 +342,10 @@ mowgli:
     # the inscribed band exists. Raise this if the robot passes too close to
     # trees it can see. Does NOT affect the global costmap (its 0.20 m radius
     # is pinned — larger values blocked transit paths, see nav2_params_base).
-    obstacle_inflation_radius: 0.60
+    # 0.80 (was 0.60) — task #35, 2026-07-17: field analysis showed obstacles
+    # only pushing the path from 0.4-0.6 m out at ~0.17 m/s, reacting too
+    # late for a smooth deviation.
+    obstacle_inflation_radius: 0.80
     # Extra margin (m) grown around DRAWN map obstacle polygons, applied in
     # BOTH the coverage planner (F2C holes are buffered outward before swath
     # planning) and the keepout mask (cells within the margin of an obstacle

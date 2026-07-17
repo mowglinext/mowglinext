@@ -236,7 +236,7 @@ def generate_launch_description() -> LaunchDescription:
             # tune the firmware loop instead, pushed via PACKET_ID_LL_SET_YAW_PID
             # (a separate packet from SET_DRIVE_PID — Firmware-2's #33 report).
             # Defaults match the firmware's own power-on fallback.
-            {"yaw_kp": float(robot_params.get("yaw_kp", 0.30))},
+            {"yaw_kp": float(robot_params.get("yaw_kp", 0.12))},
             {"yaw_ki": float(robot_params.get("yaw_ki", 0.40))},
             {"yaw_trim_limit_mps": float(robot_params.get("yaw_trim_limit_mps", 0.15))},
             {"yaw_loop_enabled": bool(robot_params.get("yaw_loop_enabled", True))},

@@ -1617,6 +1617,27 @@ void FTCController::updateLateralDeviation(double dt)
     }
     else
     {
+      // Not avoiding, but possibly WAITING (both-sides-blocked / needs-more-
+      // than-max, set by waitOrThrowForObstacle below). Same window-edge
+      // flicker risk as the is_avoiding_ branch above — the observation_
+      // persistence:0 costmap can transiently miss the obstacle cell for one
+      // tick. Require a sustained clear (obstacle_clear_hold_s, same field as
+      // the avoidance case) before releasing the wait; otherwise a single-
+      // tick flicker falls through to the obstacle_waiting_ clear below and
+      // resets obstacle_wait_start_, deferring the abort indefinitely.
+      if (obstacle_waiting_)
+      {
+        if (!avoidance_clear_start_.has_value())
+        {
+          avoidance_clear_start_ = clock_->now();
+        }
+        const double clear_for = (clock_->now() - avoidance_clear_start_.value()).seconds();
+        if (clear_for < config_.obstacle_clear_hold_s)
+        {
+          return;  // still holding zero velocity via obstacle_waiting_
+        }
+        avoidance_clear_start_.reset();
+      }
       // Not avoiding and the path is clear: nominal line tracking.
       target_lateral_deviation_ = 0.0;
     }
@@ -1666,8 +1687,17 @@ void FTCController::updateLateralDeviation(double dt)
       // nonzero here (the both-sides-blocked path above either waits and
       // returns or throws, so we never reach this with target == 0).
       avoid_sign_ = (target_lateral_deviation_ >= 0.0) ? 1.0 : -1.0;
-      obstacle_wait_start_.reset();
-      obstacle_waiting_ = false;
+      // Do NOT clear obstacle_wait_start_/obstacle_waiting_ here. Finding a
+      // candidate side only means we skip the both-sides-blocked wait call
+      // below (line ~1659 above) — growDeviationUntilClear (below) can still
+      // reject this same candidate for exceeding max_lateral_deviation and
+      // re-enter waitOrThrowForObstacle. Clearing the clock here first would
+      // hand that second call a fresh 5s window every time chooseDeviationSide
+      // flip-flops between "found a side" and "both sides blocked" near a
+      // marginal gap — silently deferring the abort indefinitely (field:
+      // observed ~40s stall, cmd_vel pinned at zero, vs. the intended 5s cap).
+      // The wait state is cleared once, below, only after a candidate has
+      // genuinely passed the max_lateral_deviation check.
       RCLCPP_INFO(logger_,
                   "FTCController: entering AVOIDANCE (target_dev=%.2fm at idx=%d)",
                   target_lateral_deviation_,

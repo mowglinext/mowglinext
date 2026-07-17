@@ -412,6 +412,15 @@ controller_server:
       max_lateral_deviation: 1.5
       deviation_step: 0.05
       deviation_blend_rate: 0.5
+      # How long to hold zero velocity on a blocked/over-max deviation before
+      # aborting the strip (field: "15x deviation > max -> hold 5s stalls per
+      # mow" above), and how long the path must read continuously clear before
+      # releasing that hold / declaring AVOIDANCE complete — both debounce the
+      # observation_persistence:0 costmap's window-edge flicker. Listed
+      # explicitly (GUI-tunable) alongside their siblings above; previously
+      # only the C++ declare_double default applied.
+      obstacle_wait_timeout_s: 5.0
+      obstacle_clear_hold_s: 1.5
 
 # ---------------------------------------------------------------------------
 # Planner server
@@ -680,15 +689,24 @@ local_costmap:
         # jerking at the last moment. (factor 10 decayed to ~0 within ~0.1 m, so
         # even a wide radius had no usable slope.)
         cost_scaling_factor: 3.5
-        # 0.60 m (was 0.10). 0.10 gave MPPI no potential field around obstacles
-        # → late, sharp, hesitant avoidance. 0.60 m also sits ABOVE the chassis
-        # circumscribed radius (~0.572 m), which clears the "inflation radius is
-        # smaller than circumscribed radius" error — restoring MPPI CostCritic's
-        # potential-field fast path (no full-footprint check = less ARM CPU).
+        # 0.80 m (was 0.60, was 0.10 before that — task #35, 2026-07-17 field
+        # analysis: the robot let obstacles get to 0.4-0.6 m forward before
+        # reacting, at ~0.17 m/s that's under 4 s of margin). 0.60 m already
+        # sat ABOVE the chassis circumscribed radius (~0.572 m), which clears
+        # the "inflation radius is smaller than circumscribed radius" error —
+        # restoring MPPI/FTC CostCritic's potential-field fast path (no
+        # full-footprint check = less ARM CPU) — 0.80 m keeps that margin and
+        # extends the gradient's lead distance without changing its steepness
+        # (cost_scaling_factor unchanged): the fix here is DISTANCE, not
+        # shape — obstacles start pushing the path sooner, not harder.
         # SAFE for boundary U-turns: the LOCAL costmap carries NO keepout layer
         # (boundary enforcement is the planner + collision_monitor), so this
         # inflates only real LiDAR obstacles, not the boundary edge.
-        inflation_radius: 0.60
+        # This value is OVERWRITTEN at launch by obstacle_inflation_radius
+        # (mowgli_robot.yaml, clamped to [0.58, 1.50] — see
+        # navigation.launch.py's _inject_dock_pose_and_speeds); it only governs
+        # a raw `ros2 launch` of this file with no robot-config injection.
+        inflation_radius: 0.80
 
 # ---------------------------------------------------------------------------
 # Map server / AMCL (unused — map->odom is published by fusion_graph_node;

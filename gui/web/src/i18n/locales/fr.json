@@ -1619,6 +1619,14 @@
       "label": "Hauteur de montage du LiDAR",
       "description": "Hauteur du LiDAR au-dessus du sol, utilisée par le filtre de sol."
     },
+    "obstacle_inflation_radius": {
+      "label": "Rayon d'inflation des obstacles",
+      "description": "Marge conservée par rapport aux obstacles détectés par le LiDAR dans la costmap locale. Une valeur plus élevée fait réagir le robot plus tôt, de plus loin."
+    },
+    "obstacle_wait_timeout_s": {
+      "label": "Délai d'attente devant un obstacle",
+      "description": "Durée pendant laquelle le robot reste immobile pour tenter de contourner un obstacle bloqué avant d'abandonner la bande. Une valeur plus longue tolère les blocages passagers (ex. une personne qui passe) ; une valeur plus courte abandonne plus vite une bande bloquée."
+    },
     "yaw_kp": {
       "label": "Kp de boucle de lacet",
       "description": "Gain proportionnel du régulateur de vitesse de lacet en boucle fermée du firmware."

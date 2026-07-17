@@ -1623,6 +1623,14 @@
       "label": "LiDAR mount height",
       "description": "Height of the LiDAR above ground, used by the ground filter."
     },
+    "obstacle_inflation_radius": {
+      "label": "Obstacle inflation radius",
+      "description": "Buffer kept from LiDAR-detected obstacles in the local costmap. Larger values make the robot start avoiding obstacles sooner, from further away."
+    },
+    "obstacle_wait_timeout_s": {
+      "label": "Obstacle wait timeout",
+      "description": "How long the robot holds still trying to skirt a blocked obstacle before giving up on the strip. Longer values ride out transient blockages (e.g. a person passing); shorter values abandon a stuck strip sooner."
+    },
     "yaw_kp": {
       "label": "Yaw loop Kp",
       "description": "Proportional gain of the firmware's closed-loop yaw-rate controller."

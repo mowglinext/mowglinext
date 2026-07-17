@@ -438,7 +438,11 @@ def generate_launch_description() -> LaunchDescription:
     # max_obstacle_avoidance_distance drives BOTH FTC max_lateral_deviation
     # (here) and map_server bypass_max_length (full_system.launch.py).
     max_obstacle_avoidance_distance = 2.0
-    obstacle_inflation_radius = 0.60
+    # 0.80 (was 0.60) — task #35, 2026-07-17 field analysis: obstacles were
+    # only pushing the path from 0.4-0.6 m out at ~0.17 m/s, too late to react
+    # smoothly. See nav2_params_base.yaml's local_costmap.inflation_layer
+    # comment for the full rationale; clamped to [0.58, 1.50] below.
+    obstacle_inflation_radius = 0.80
     obstacle_margin = 0.0
     obstacle_slowdown_ratio = 0.3
     enable_mag_cal = False
