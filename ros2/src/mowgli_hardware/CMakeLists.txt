@@ -150,16 +150,6 @@ if(BUILD_TESTING)
   target_link_libraries(test_clock_fit
     mowgli_hardware_core
   )
-
-  # ---- test_angular_rate_controller ----
-  # angular_rate_controller.hpp is header-only; link mowgli_hardware_core only
-  # for its public include directories (no ROS deps needed — pure function).
-  ament_add_gtest(test_angular_rate_controller
-    test/test_angular_rate_controller.cpp
-  )
-  target_link_libraries(test_angular_rate_controller
-    mowgli_hardware_core
-  )
 endif()
 
 # ---------------------------------------------------------------------------

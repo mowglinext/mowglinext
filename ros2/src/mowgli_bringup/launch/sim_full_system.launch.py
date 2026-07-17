@@ -459,17 +459,19 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # Sim actuation model — inserts the per-wheel firmware motor model
     # (firmware_wheel_model.hpp: inverse kinematics, two per-wheel PIs,
-    # per-wheel PWM stiction, forward kinematics) + the host angular-rate PI
-    # (the REAL mowgli_hardware controller) between the nav command
+    # per-wheel PWM stiction, forward kinematics) between the nav command
     # (/cmd_vel) and the Webots wheels (/cmd_vel_wheels), so the sim
-    # reproduces the near-deadband angular limit cycle (mowing weave / dock
-    # hunt) that the ideal diff_drive cannot. A/B the fix at runtime:
-    #   ros2 param set /sim_actuation angular_rate_loop_enabled false
-    #   ros2 param set /sim_actuation angular_rate_ki 0.5
+    # reproduces the per-wheel PWM stiction the ideal diff_drive cannot.
     # Set deadband_enabled:=false for an ideal-actuation baseline.
     # Wheel-model gains mirror firmware/stm32/ros_usbnode/{include/board.h,
     # src/ros/ros_custom/cpp_main.cpp} and MUST stay in lockstep with
     # mowgli_simulation/kinematic_drive.py's identical Python copy.
+    #
+    # 2026-07-17 Option C (task #34): this used to ALSO insert a host-side
+    # angular-rate PI (Option B, task #24) ahead of the per-wheel model —
+    # that stage is removed. wz now passes straight through, matching
+    # hardware_bridge's new behaviour (the yaw-rate loop moved into
+    # firmware, task #33).
     # ------------------------------------------------------------------
     sim_actuation_node = Node(
         package="mowgli_simulation",
@@ -479,8 +481,6 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[
             {
                 "use_sim_time": True,
-                "angular_rate_loop_enabled": True,
-                "angular_rate_ki": 2.0,
                 "deadband_enabled": True,
                 "wheel_separation": 0.325,
                 "firmware_max_mps": 0.5,

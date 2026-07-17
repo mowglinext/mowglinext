@@ -57,14 +57,9 @@ From ``mowgli_robot.yaml`` (mowgli.ros__parameters):
   mowing_speed, transit_speed
   min_turning_radius, coverage_xy_tolerance, xy/yaw_goal_tolerance
   chassis_safety_inset, headland_width, num_headland_passes
-  angular_rate_loop_enabled  — gyro PI rate loop on the host
-                               (mowgli.launch.py default: True). ON → |wz| is
-                               clamped at angular_rate_max_cmd (1.5 rad/s) and
-                               the PI bridges the rotational deadband. OFF →
-                               wz passes straight through diff-drive
-                               kinematics (kinematic cap only) but the open-
-                               loop rotational deadband bites. Both ceilings
-                               are derived; the active one drives the outputs.
+  (none — the gyro yaw-rate loop moved into FIRMWARE, task #33/#34, Option C.
+   It is no longer a host-toggleable ROS param; HW_ANGULAR_RATE_MAX_CMD below
+   is carried as the firmware's clamp value until #33 reports its own.)
 
 From firmware (board.h / cpp_main.cpp — NOT operator-editable):
   MAX_MPS (0.5)        — per-wheel top speed (firmware clamp)
@@ -121,8 +116,11 @@ BOARD_DEFAULTS = {
 # hardware_bridge_node clamps (declared params, not board.h):
 #   min_linear_vel  default 0.05 — |vx| below this is zeroed (sub-deadband
 #                   guard; the firmware PID tracks ≥0.05 cleanly)
-#   angular_rate_max_cmd default 1.5 — gyro PI rate-loop output cap; ACTIVE
-#                   only when angular_rate_loop_enabled (default true)
+# 2026-07-17 Option C (task #34): the gyro rate-loop output cap used to be a
+# host param (angular_rate_max_cmd, active only when angular_rate_loop_enabled
+# — both removed). The loop now runs in firmware (task #33) unconditionally;
+# this constant is kept as the firmware's clamp value (was the host default)
+# until #33 reports its own value/param name.
 HW_MIN_LINEAR_VEL = 0.05
 HW_ANGULAR_RATE_MAX_CMD = 1.5
 
@@ -324,11 +322,6 @@ def gather_inputs(rp: dict, knobs: dict, board: dict) -> dict:
         "chassis_safety_inset": float(inset),
         "headland_width": float(rp.get("headland_width", 0.18)),
         "num_headland_passes": int(rp.get("num_headland_passes", 0)),
-        # Gyro PI rate loop — mowgli.launch.py default True. Field lesson
-        # (2026-06): OFF made the robot stick/oscillate instead of turning;
-        # this input decides which wz ceiling is ACTIVE.
-        "angular_rate_loop_enabled": bool(
-            rp.get("angular_rate_loop_enabled", True)),
         "max_mps": float(board["max_mps"]),
         "pwm_per_mps": float(board["pwm_per_mps"]),
         "pwm_deadband": float(board["pwm_deadband"]),
@@ -392,10 +385,9 @@ def kinematics(inp: dict, knobs: dict) -> dict:
     tracking oscillation). This is the constraint the 2026-06-12 wz_max=2.0
     bump violated at mowing speed (2*(0.5-0.2)/0.325 = 1.85).
 
-    Rate-loop ceiling: with angular_rate_loop_enabled (gyro PI on the host),
-    |wz| commands are clamped at angular_rate_max_cmd = 1.5 — any larger
-    wz_max/pivot rate in Nav2 is silently unreachable. With the loop OFF the
-    kinematic cap applies, but the open-loop rotational deadband bites.
+    Rate-loop ceiling: the gyro yaw-rate loop (now firmware-side, Option C
+    task #33/#34) clamps |wz| commands at HW_ANGULAR_RATE_MAX_CMD = 1.5 — any
+    larger wz_max/pivot rate in Nav2 is silently unreachable.
 
     Deadband (PAC5210 brushed-DC, ~PWM 40 on the 0-300 = 1 m/s scale):
         vx_breakaway = pwm_deadband / pwm_per_mps            (≈0.133 m/s)
@@ -410,14 +402,11 @@ def kinematics(inp: dict, knobs: dict) -> dict:
     vx_breakaway = inp["pwm_deadband"] / inp["pwm_per_mps"]
     wz_breakaway = 2.0 * vx_breakaway / track
     omega_pivot_max = 2.0 * vw / track
-    loop_on = inp["angular_rate_loop_enabled"]
-    if loop_on:
-        wz_ceiling = min(omega_pivot_max, HW_ANGULAR_RATE_MAX_CMD)
-        ceiling_why = ("rate loop ON: min(2*MAX_MPS/track, "
-                       f"angular_rate_max_cmd={HW_ANGULAR_RATE_MAX_CMD})")
-    else:
-        wz_ceiling = omega_pivot_max
-        ceiling_why = "rate loop OFF: kinematic in-place cap 2*MAX_MPS/track"
+    # Option C (task #34): the firmware yaw-rate loop is unconditional now
+    # (no host toggle), so the clamp is always active.
+    wz_ceiling = min(omega_pivot_max, HW_ANGULAR_RATE_MAX_CMD)
+    ceiling_why = ("firmware rate loop: min(2*MAX_MPS/track, "
+                   f"HW_ANGULAR_RATE_MAX_CMD={HW_ANGULAR_RATE_MAX_CMD})")
     wz_sat_at_mow = 2.0 * (vw - inp["mowing_speed"]) / track
     a_lin = inp["motor_force_n"] / inp["chassis_mass_kg"]
     return {
@@ -469,10 +458,8 @@ def mppi(inp: dict, knobs: dict, kin: dict, fp: dict) -> dict:
     wz_max = min(kin["_wz_ceiling"][0], wz_sat)
     vx_std = knobs["vx_std_fraction"] * vx_max
     wz_std = knobs["wz_std_fraction"] * wz_max
-    wz_std_floor = None
-    if not inp["angular_rate_loop_enabled"]:
-        wz_std_floor = 0.5 * kin["_wz_breakaway"][0]
-        wz_std = max(wz_std, wz_std_floor)
+    # Option C (task #34): the wz_std floor for "rate loop OFF" no longer
+    # applies — the firmware yaw-rate loop is unconditional, no host toggle.
     ax_max = kin["_a_lin_budget"][0]
     ax_min = -knobs["decel_max"]
     az_max = knobs["angular_accel"]
@@ -482,8 +469,6 @@ def mppi(inp: dict, knobs: dict, kin: dict, fp: dict) -> dict:
     thresh = round(pred_dist, 2)
     deadband_vx = round(knobs["deadband_margin"] * kin["_vx_breakaway"][0], 2)
     wz_std_why = f"= wz_std_fraction({knobs['wz_std_fraction']}) * wz_max"
-    if wz_std_floor is not None:
-        wz_std_why += f", floored at 0.5*wz_breakaway={wz_std_floor:.2f} (loop OFF)"
     return {
         "vx_max": (round(vx_max, 3), "= mowing_speed"),
         "vx_min": (round(vx_min, 3), "= -reverse_fraction * vx_max (escape reverse)"),
@@ -518,9 +503,8 @@ def rotation_shim(inp: dict, knobs: dict, kin: dict) -> dict:
 
     The pivot rate must:
       (a) clear the rotational deadband decisively — wz_breakaway ≈ 0.82
-          rad/s open-loop. With the rate loop ON the gyro PI bridges it, so
-          0.9*wz_breakaway is already safe; with it OFF stay strictly above
-          (deadband_margin * wz_breakaway).
+          rad/s open-loop. The firmware rate loop (Option C, task #33/#34)
+          bridges it, so 0.9*wz_breakaway is safe.
       (b) stay <= the active wz ceiling (rate-loop clamp or kinematic cap).
       (c) keep per-wheel pivot speed at a controllable fraction of MAX_MPS:
           wz_pivot = pivot_wheel_fraction * omega_pivot_max  (profile knob;
@@ -530,19 +514,17 @@ def rotation_shim(inp: dict, knobs: dict, kin: dict) -> dict:
     behavior_server floors (Spin recovery) also derive from the deadband:
         min_rotational_vel = deadband_margin * wz_breakaway  (≈0.85 field).
     """
-    loop_on = inp["angular_rate_loop_enabled"]
     wz_break = kin["_wz_breakaway"][0]
     ceiling = kin["_wz_ceiling"][0]
     coverage_pivot = min(knobs["pivot_wheel_fraction"] * kin["_omega_pivot_max"][0],
                          ceiling)
-    transit_floor = (0.9 if loop_on else knobs["deadband_margin"]) * wz_break
+    transit_floor = 0.9 * wz_break
     transit_pivot = min(max(transit_floor, 0.5), coverage_pivot)
     min_rot = knobs["deadband_margin"] * wz_break
     return {
         "transit_rotate_to_heading_angular_vel": (
             round(transit_pivot, 3),
-            f"max({'0.9' if loop_on else 'deadband_margin'}*wz_breakaway, 0.5), "
-            "capped at coverage rate"),
+            "max(0.9*wz_breakaway, 0.5), capped at coverage rate"),
         "coverage_rotate_to_heading_angular_vel": (
             round(coverage_pivot, 3),
             f"pivot_wheel_fraction({knobs['pivot_wheel_fraction']}) * "
@@ -1034,8 +1016,7 @@ def emit_compare(res: dict, nav: dict, label: str) -> str:
     lines = []
     lines.append("=" * 100)
     lines.append(f"DERIVED ({res['_profile']}) vs CURRENT  ({label})")
-    lines.append(f"  active wz ceiling = {ceiling} "
-                 f"(angular_rate_loop_enabled={inp['angular_rate_loop_enabled']}); "
+    lines.append(f"  active wz ceiling = {ceiling} (firmware rate loop, Option C); "
                  f"wheel-saturation wz @ mowing speed = {wz_sat_mow}; "
                  f"vx breakaway = {vx_break}")
     lines.append("  HARD = physics violation (clamped/clipped/zeroed at runtime); "

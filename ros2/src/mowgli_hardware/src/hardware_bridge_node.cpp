@@ -59,7 +59,6 @@
 
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
-#include "mowgli_hardware/angular_rate_controller.hpp"
 #include "mowgli_hardware/clock_fit.hpp"
 #include "mowgli_hardware/ll_datatypes.hpp"
 #include "mowgli_hardware/odometry_publisher.hpp"
@@ -86,6 +85,16 @@ static constexpr double kMinRuntimeWheelKd = 0.0;
 static constexpr double kMaxRuntimeWheelKd = 500.0;
 static constexpr double kMinRuntimeWheelIntegralLimit = 0.0;
 static constexpr double kMaxRuntimeWheelIntegralLimit = 255.0;
+// Firmware gyro yaw-rate loop (Option C) — mirrors the firmware's own
+// pid_constrain() ranges (Firmware-2, task #33 report) so an out-of-range
+// host value is rejected here instead of being silently re-clamped on the
+// wire to something the operator didn't ask for.
+static constexpr double kMinRuntimeYawKp = 0.0;
+static constexpr double kMaxRuntimeYawKp = 5.0;
+static constexpr double kMinRuntimeYawKi = 0.0;
+static constexpr double kMaxRuntimeYawKi = 20.0;
+static constexpr double kMinRuntimeYawTrimLimitMps = 0.0;
+static constexpr double kMaxRuntimeYawTrimLimitMps = 0.5;  // firmware MAX_MPS
 
 static const char* high_level_mode_name(const uint8_t mode)
 {
@@ -351,6 +360,21 @@ private:
     wheel_pid_kd_ = declare_parameter<double>("wheel_pid_kd", 0.0);
     wheel_pid_integral_limit_ = declare_parameter<double>("wheel_pid_integral_limit", 100.0);
     wheel_pid_pwm_per_mps_ = declare_parameter<double>("wheel_pid_pwm_per_mps", 300.0);
+    // Firmware gyro yaw-rate loop (Option C, task #33/#34 — replaces the
+    // removed host-side angular_rate_controller.hpp). Pushed to the STM32 via
+    // PACKET_ID_LL_SET_YAW_PID (see send_yaw_pid()). Defaults are the
+    // firmware's own power-on fallback (Firmware-2, task #33 report) so a
+    // host that never connects still gets the same behaviour firmware boots
+    // with. kp/ki/trim_limit_mps are live-tunable via the set-parameters
+    // callback below (same firmware clamps: kp∈[0,5], ki∈[0,20],
+    // trim_limit∈[0,0.5]); loop_enabled/gyro_sign are read once at startup —
+    // gyro_sign is the field sign-check remedy for the physical IMU mounting
+    // (UNVALIDATED default +1) and is not expected to change at runtime.
+    yaw_kp_ = declare_parameter<double>("yaw_kp", 0.30);
+    yaw_ki_ = declare_parameter<double>("yaw_ki", 0.40);
+    yaw_trim_limit_mps_ = declare_parameter<double>("yaw_trim_limit_mps", 0.15);
+    yaw_loop_enabled_ = declare_parameter<bool>("yaw_loop_enabled", true);
+    yaw_gyro_sign_ = declare_parameter<int>("yaw_gyro_sign", 1);
     // Sub-deadband forward-velocity clamp threshold (see min_linear_vel_).
     // Default 0.05 (was a hardcoded 0.15) — the PX4 PID firmware can track
     // slow setpoints now. Live-tunable via the callback below.
@@ -361,6 +385,7 @@ private:
           rcl_interfaces::msg::SetParametersResult result;
           result.successful = true;
           bool drive_pid_changed = false;
+          bool yaw_pid_changed = false;
           double next_min_linear_vel = min_linear_vel_;
           double next_ticks_per_meter = ticks_per_meter_;
           double next_wheel_pid_kp = wheel_pid_kp_;
@@ -368,6 +393,9 @@ private:
           double next_wheel_pid_kd = wheel_pid_kd_;
           double next_wheel_pid_integral_limit = wheel_pid_integral_limit_;
           double next_wheel_pid_pwm_per_mps = wheel_pid_pwm_per_mps_;
+          double next_yaw_kp = yaw_kp_;
+          double next_yaw_ki = yaw_ki_;
+          double next_yaw_trim_limit_mps = yaw_trim_limit_mps_;
           auto reject_invalid_double = [&result](const std::string& name,
                                                  const double value,
                                                  const double lower,
@@ -459,6 +487,36 @@ private:
               next_wheel_pid_pwm_per_mps = p.as_double();
               drive_pid_changed = true;
             }
+            else if (name == "yaw_kp")
+            {
+              if (reject_invalid_double(name, p.as_double(), kMinRuntimeYawKp, kMaxRuntimeYawKp))
+              {
+                break;
+              }
+              next_yaw_kp = p.as_double();
+              yaw_pid_changed = true;
+            }
+            else if (name == "yaw_ki")
+            {
+              if (reject_invalid_double(name, p.as_double(), kMinRuntimeYawKi, kMaxRuntimeYawKi))
+              {
+                break;
+              }
+              next_yaw_ki = p.as_double();
+              yaw_pid_changed = true;
+            }
+            else if (name == "yaw_trim_limit_mps")
+            {
+              if (reject_invalid_double(name,
+                                        p.as_double(),
+                                        kMinRuntimeYawTrimLimitMps,
+                                        kMaxRuntimeYawTrimLimitMps))
+              {
+                break;
+              }
+              next_yaw_trim_limit_mps = p.as_double();
+              yaw_pid_changed = true;
+            }
           }
           if (!result.successful)
           {
@@ -471,6 +529,9 @@ private:
           wheel_pid_kd_ = next_wheel_pid_kd;
           wheel_pid_integral_limit_ = next_wheel_pid_integral_limit;
           wheel_pid_pwm_per_mps_ = next_wheel_pid_pwm_per_mps;
+          yaw_kp_ = next_yaw_kp;
+          yaw_ki_ = next_yaw_ki;
+          yaw_trim_limit_mps_ = next_yaw_trim_limit_mps;
           // Push the new gains to the firmware immediately (live apply, no
           // restart), and arm a couple of heartbeat resends in case this packet
           // is lost. The firmware re-clamps every value, so this callback does
@@ -480,26 +541,20 @@ private:
             send_drive_pid();
             pid_resend_count_ = std::max(pid_resend_count_, 2);
           }
+          if (yaw_pid_changed)
+          {
+            send_yaw_pid();
+            pid_resend_count_ = std::max(pid_resend_count_, 2);
+          }
           return result;
         });
-    // Closed-loop angular-rate controller — see angular_rate_controller.hpp.
-    // Gains are gentle by default (USB latency caps them); tune live via
-    // ros2 param set. angular_rate_loop_enabled:=false → plain passthrough.
-    //
-    // 2026-07-17 WEAVE FIX (Option B, task #24, UNVALIDATED ON HARDWARE —
-    // see angular_rate_controller.hpp for the full rationale + required
-    // validation sequence before blade-on use): ki default 2.0 -> 0.0 removes
-    // the host integrator from the 3-loop cascade that caused the weave; kff
-    // default 1.0 -> 1.35 refits the feed-forward for the deadband/gain the
-    // integrator used to absorb. Rollback is params-only (ki:=2.0, kff:=1.0).
-    angular_rate_loop_enabled_ = declare_parameter<bool>("angular_rate_loop_enabled", true);
-    angular_rate_params_.kff = declare_parameter<double>("angular_rate_kff", 1.35);
-    angular_rate_params_.kp = declare_parameter<double>("angular_rate_kp", 0.4);
-    angular_rate_params_.ki = declare_parameter<double>("angular_rate_ki", 0.0);
-    angular_rate_params_.max_cmd = declare_parameter<double>("angular_rate_max_cmd", 1.5);
-    angular_rate_params_.integral_max = declare_parameter<double>("angular_rate_integral_max", 1.5);
-    angular_rate_params_.target_lp_tau =
-        declare_parameter<double>("angular_rate_target_lp_tau", 0.2);
+    // 2026-07-17 Option C (task #34, supersedes the Option B host ω-PI that
+    // used to live here — task #24, now removed): the yaw-rate loop runs in
+    // FIRMWARE instead (task #33), closing on the same gyro but with no USB
+    // round-trip latency. on_cmd_vel() now sends the commanded wz straight
+    // through with no host-side shaping. Firmware's yaw gains are tunable via
+    // PACKET_ID_LL_SET_YAW_PID (see send_yaw_pid()) — a separate packet from
+    // SET_DRIVE_PID, per Firmware-2's #33 interface report.
 
     // Dock pose comes solely from mowgli_robot.yaml (declared as ROS
     // parameters above). Calibration and manual GUI adjustments persist
@@ -740,15 +795,16 @@ private:
                               --startup_release_count_;
                             }
                             send_heartbeat();
-                            // Re-push the drive PID on the first
-                            // few heartbeats after each
-                            // (re)connect so the firmware (which
-                            // has no config persistence) gets the
-                            // host's gains even if one packet is
+                            // Re-push the drive PID (and the yaw-loop PID,
+                            // same burst — task #34) on the first few
+                            // heartbeats after each (re)connect so the
+                            // firmware (which has no config persistence)
+                            // gets the host's gains even if one packet is
                             // lost during USB re-enumeration.
                             if (pid_resend_count_ > 0 && serial_->is_open())
                             {
                               send_drive_pid();
+                              send_yaw_pid();
                               --pid_resend_count_;
                             }
                             // Firmware version handshake: ask the
@@ -1570,12 +1626,6 @@ private:
     msg.angular_velocity.y = gy;
     msg.angular_velocity.z = gz;
 
-    // Latest bias-corrected yaw rate, snapshotted for the closed-loop
-    // angular-rate controller in on_cmd_vel. Single-writer (this IMU path) /
-    // single-reader (cmd_vel callback), both on the one rclcpp executor —
-    // no lock needed. ~90 Hz, well above cmd_vel cadence.
-    latest_gyro_z_ = gz;
-
     // Magnetometer data is ignored — uncalibrated on metal robot chassis,
     // gives ~229° error vs real heading. dock_pose_yaw is a map-frame ENU
     // yaw, set by the GUI "Set Docking Point" calibration or the undock
@@ -1924,6 +1974,39 @@ private:
     }
   }
 
+  // Firmware gyro yaw-rate loop tuning (Option C, task #33/#34). Mirrors
+  // send_drive_pid() exactly — separate packet (PACKET_ID_LL_SET_YAW_PID),
+  // same "re-send on (re)connect via pid_resend_count_" burst (Firmware-2's
+  // #33 report: firmware has no config persistence, so a lost packet must be
+  // retried). encode_packet appends the CRC, so it is left zero-initialized
+  // here, matching send_drive_pid()'s convention.
+  void send_yaw_pid()
+  {
+    if (!serial_)
+    {
+      return;
+    }
+    LlSetYawPid pkt{};
+    pkt.type = PACKET_ID_LL_SET_YAW_PID;
+    pkt.yaw_kp = static_cast<float>(yaw_kp_);
+    pkt.yaw_ki = static_cast<float>(yaw_ki_);
+    pkt.trim_limit_mps = static_cast<float>(yaw_trim_limit_mps_);
+    pkt.enabled = yaw_loop_enabled_ ? 1u : 0u;
+    pkt.gyro_sign = static_cast<int8_t>(yaw_gyro_sign_);
+    if (send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
+                        sizeof(LlSetYawPid) - sizeof(uint16_t)))
+    {
+      RCLCPP_INFO(get_logger(),
+                  "Sent yaw-loop params: kp=%.3f ki=%.3f trim_limit_mps=%.3f enabled=%d "
+                  "gyro_sign=%d",
+                  yaw_kp_,
+                  yaw_ki_,
+                  yaw_trim_limit_mps_,
+                  static_cast<int>(pkt.enabled),
+                  static_cast<int>(pkt.gyro_sign));
+    }
+  }
+
   void on_reboot_board(const std::shared_ptr<std_srvs::srv::Trigger::Request>,
                        std::shared_ptr<std_srvs::srv::Trigger::Response> res)
   {
@@ -2264,22 +2347,14 @@ private:
     // min_linear_vel:=0.0 to disable the guard entirely, or raise it back
     // toward 0.15 if a given chassis still can't execute slow forward.
     //
-    // wz handling — closed-loop angular-rate controller.
-    //
-    // WHY: the firmware PWM→rotation response is nonlinear and load-
-    // dependent (measured 2026-05-27: commanded 0.2/0.3/0.4 rad/s → actual
-    // 0.07/0.22/0.30, i.e. a soft deadband plus a ~0.7-0.75 drifting gain).
-    // Every Nav2 controller assumes commanded ω == actual ω, so the mismatch
-    // surfaced as under-rotation, dock-approach stalls and (when an earlier
-    // fix over-corrected) left/right oscillation. Four open-loop amplitude
-    // hacks (floor 0.85 / pulse / floor 0.5 / pulse+burst) all failed because
-    // none measured the result. compute_angular_rate_cmd() closes the loop on
-    // the gyro so the firmware command is driven until measured == target,
-    // absorbing the deadband + nonlinear gain at every operating point. See
-    // angular_rate_controller.hpp for the full rationale and the history.
-    // Safe now (the closed-loop boost 2a371798 was dropped pre-slip-veto)
-    // because fusion_graph slip-vetoes the transient wheel/IMU mismatch.
-    // Set angular_rate_loop_enabled:=false to fall back to passthrough.
+    // wz handling — Option C (task #34): the closed-loop yaw-rate shaping
+    // that used to live here (Option B, task #24 — a host-side PI closing
+    // on the gyro to absorb the firmware's nonlinear PWM→rotation response)
+    // has moved INTO FIRMWARE (task #33), which now runs the same closed
+    // loop without the ~50-90 ms USB round-trip latency that limited the
+    // host-side gains. wz is sent straight through, unshaped; see the
+    // firmware's own yaw_kp/yaw_ki (tuned via SET_DRIVE_PID, send_drive_pid())
+    // for the loop that used to be angular_rate_controller.hpp here.
     //
     // The sub-deadband |vx| → 0 guard is unchanged (linear has no clean
     // host-side rate feedback — encoders slip; leave it to Nav2's loops).
@@ -2287,15 +2362,6 @@ private:
     if (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < min_linear_vel_)
     {
       vx = 0.0;
-    }
-    if (angular_rate_loop_enabled_)
-    {
-      const rclcpp::Time now = this->now();
-      const double dt =
-          last_cmd_vel_time_.nanoseconds() > 0 ? (now - last_cmd_vel_time_).seconds() : 0.0;
-      last_cmd_vel_time_ = now;
-      wz = mowgli_hardware::compute_angular_rate_cmd(
-          wz, latest_gyro_z_, dt, angular_rate_params_, angular_rate_state_);
     }
 
     LlCmdVel pkt{};
@@ -2442,6 +2508,15 @@ private:
   double wheel_pid_pwm_per_mps_{300.0};
   int pid_resend_count_{5};
 
+  // Firmware gyro yaw-rate loop (Option C, task #33/#34). Defaults are the
+  // firmware's own power-on fallback. Shares pid_resend_count_ above with
+  // the wheel PID for the reconnect resend burst — see send_yaw_pid().
+  double yaw_kp_{0.30};
+  double yaw_ki_{0.40};
+  double yaw_trim_limit_mps_{0.15};
+  bool yaw_loop_enabled_{true};
+  int yaw_gyro_sign_{1};
+
   // Firmware version handshake state (image <-> firmware compatibility). The
   // bridge requests the firmware's protocol/semantic version on (re)connect and
   // compares the wire-protocol version against kMowgliProtocolVersion. Until a
@@ -2470,14 +2545,6 @@ private:
   // field iteration without a rebuild.
   double min_linear_vel_{0.05};
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr min_lin_vel_cb_handle_;
-  // Closed-loop angular-rate controller (on_cmd_vel). Drives the firmware yaw
-  // command from gyro feedback so measured ω tracks the commanded ω across
-  // the firmware's nonlinear PWM curve. See angular_rate_controller.hpp.
-  bool angular_rate_loop_enabled_{true};
-  mowgli_hardware::AngularRateParams angular_rate_params_{};
-  mowgli_hardware::AngularRateState angular_rate_state_{};
-  double latest_gyro_z_{0.0};  ///< bias-corrected gyro_z, from the IMU path.
-  rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
   bool mow_enabled_{false};
   bool is_charging_{false};
   uint8_t current_mode_{0};

@@ -130,9 +130,10 @@ inline void step_wheel(double target_mps, double& actual_mps, double& pi_int_pwm
 /// motor model for one tick and return the ACHIEVABLE body twist.
 ///
 /// \param cmd_vx forward velocity command (m/s).
-/// \param cmd_wz yaw-rate command (rad/s) — already past any host-side
-///               closed-loop correction (angular_rate_controller), matching
-///               what the real firmware receives over the wire.
+/// \param cmd_wz yaw-rate command (rad/s), matching what the real firmware
+///               receives over the wire (Option C, task #34: the host sends
+///               this straight through — the yaw-rate loop runs in firmware,
+///               not on the host, so there is no host-side shaping stage).
 /// \param dt          seconds since the previous call.
 /// \param p           firmware-mirrored gains / limits.
 /// \param st          caller-owned per-wheel PI + stiction state.

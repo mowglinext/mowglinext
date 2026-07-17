@@ -1623,17 +1623,25 @@
       "label": "LiDAR mount height",
       "description": "Height of the LiDAR above ground, used by the ground filter."
     },
-    "angular_rate_kp": {
-      "label": "Angular rate Kp",
-      "description": "Proportional gain of the ROS-side angular-rate assist loop."
+    "yaw_kp": {
+      "label": "Yaw loop Kp",
+      "description": "Proportional gain of the firmware's closed-loop yaw-rate controller."
     },
-    "angular_rate_ki": {
-      "label": "Angular rate Ki",
-      "description": "Integral gain of the angular-rate assist loop."
+    "yaw_ki": {
+      "label": "Yaw loop Ki",
+      "description": "Integral gain of the firmware's closed-loop yaw-rate controller."
     },
-    "angular_rate_kff": {
-      "label": "Angular rate Kff",
-      "description": "Feed-forward gain of the angular-rate assist loop."
+    "yaw_trim_limit_mps": {
+      "label": "Yaw trim limit",
+      "description": "Clamp on the per-wheel differential velocity trim the yaw loop may apply."
+    },
+    "yaw_loop_enabled": {
+      "label": "Yaw loop enabled",
+      "description": "Enable the firmware's closed-loop yaw-rate controller. When off, the wheels run open-diff (no gyro-based trim)."
+    },
+    "yaw_gyro_sign": {
+      "label": "Yaw gyro sign",
+      "description": "Sign of the onboard gyro's Z axis relative to robot yaw (+1/-1). Flip this if the yaw loop diverges instead of correcting."
     },
     "imu_cal_samples": {
       "label": "IMU cal samples",

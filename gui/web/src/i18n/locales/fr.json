@@ -1619,17 +1619,25 @@
       "label": "Hauteur de montage du LiDAR",
       "description": "Hauteur du LiDAR au-dessus du sol, utilisée par le filtre de sol."
     },
-    "angular_rate_kp": {
-      "label": "Kp de vitesse angulaire",
-      "description": "Gain proportionnel de la boucle d'assistance de vitesse angulaire côté ROS."
+    "yaw_kp": {
+      "label": "Kp de boucle de lacet",
+      "description": "Gain proportionnel du régulateur de vitesse de lacet en boucle fermée du firmware."
     },
-    "angular_rate_ki": {
-      "label": "Ki de vitesse angulaire",
-      "description": "Gain intégral de la boucle d'assistance de vitesse angulaire."
+    "yaw_ki": {
+      "label": "Ki de boucle de lacet",
+      "description": "Gain intégral du régulateur de vitesse de lacet en boucle fermée du firmware."
     },
-    "angular_rate_kff": {
-      "label": "Kff de vitesse angulaire",
-      "description": "Gain d'anticipation de la boucle d'assistance de vitesse angulaire."
+    "yaw_trim_limit_mps": {
+      "label": "Limite de correction de lacet",
+      "description": "Limite de la correction différentielle de vitesse par roue appliquée par la boucle de lacet."
+    },
+    "yaw_loop_enabled": {
+      "label": "Boucle de lacet activée",
+      "description": "Active le régulateur de vitesse de lacet en boucle fermée du firmware. Désactivée, les roues fonctionnent en différentiel ouvert (sans correction gyroscopique)."
+    },
+    "yaw_gyro_sign": {
+      "label": "Signe du gyroscope de lacet",
+      "description": "Signe de l'axe Z du gyroscope embarqué par rapport au lacet du robot (+1/-1). À inverser si la boucle de lacet diverge au lieu de corriger."
     },
     "imu_cal_samples": {
       "label": "Échantillons de calibration IMU",

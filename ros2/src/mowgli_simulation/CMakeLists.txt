@@ -18,7 +18,6 @@ find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(mowgli_interfaces REQUIRED)
-find_package(mowgli_hardware REQUIRED)  # for angular_rate_controller.hpp (sim_actuation)
 
 # ---------------------------------------------------------------------------
 # Fake hardware bridge for simulation
@@ -47,8 +46,11 @@ install(TARGETS
 
 # ---------------------------------------------------------------------------
 # Sim actuation model — per-wheel firmware motor model (firmware_wheel_model.hpp)
-# + host angular-rate PI (reuses the REAL mowgli_hardware/angular_rate_controller.hpp)
-# so the sim reproduces the near-deadband angular limit cycle (mowing weave / dock hunt).
+# so the sim reproduces the per-wheel PWM stiction the ideal diff_drive cannot.
+# 2026-07-17 Option C (task #34): no longer depends on mowgli_hardware — the
+# host-side angular-rate PI it used to reuse (angular_rate_controller.hpp) was
+# removed (the yaw-rate loop moved into firmware, task #33); wz now passes
+# through unshaped, so no IMU feedback is needed here either.
 # ---------------------------------------------------------------------------
 add_executable(sim_actuation_node
   src/sim_actuation_node.cpp
@@ -63,8 +65,6 @@ target_include_directories(sim_actuation_node
 ament_target_dependencies(sim_actuation_node
   rclcpp
   geometry_msgs
-  sensor_msgs
-  mowgli_hardware
 )
 
 install(TARGETS

@@ -74,9 +74,14 @@ const CATALOG: Record<string, ParamMeta> = {
   lidar_height_m: {label: "paramCatalog.lidar_height_m.label", description: "paramCatalog.lidar_height_m.description", tier: "expert", group: "LiDAR", unit: "m"},
 
   // ── Motor control (firmware-adjacent PID) ────────────────────────────────
-  angular_rate_kp: {label: "paramCatalog.angular_rate_kp.label", description: "paramCatalog.angular_rate_kp.description", tier: "expert", group: "Motor control"},
-  angular_rate_ki: {label: "paramCatalog.angular_rate_ki.label", description: "paramCatalog.angular_rate_ki.description", tier: "expert", group: "Motor control"},
-  angular_rate_kff: {label: "paramCatalog.angular_rate_kff.label", description: "paramCatalog.angular_rate_kff.description", tier: "expert", group: "Motor control"},
+  // 2026-07-17 Option C (task #34): angular_rate_kp/ki/kff (the host-side
+  // yaw-rate PI, Option B task #24) are removed — the loop now runs in
+  // firmware (task #33), tuned via these params (PACKET_ID_LL_SET_YAW_PID).
+  yaw_kp: {label: "paramCatalog.yaw_kp.label", description: "paramCatalog.yaw_kp.description", tier: "expert", group: "Motor control"},
+  yaw_ki: {label: "paramCatalog.yaw_ki.label", description: "paramCatalog.yaw_ki.description", tier: "expert", group: "Motor control"},
+  yaw_trim_limit_mps: {label: "paramCatalog.yaw_trim_limit_mps.label", description: "paramCatalog.yaw_trim_limit_mps.description", tier: "expert", group: "Motor control", unit: "m/s"},
+  yaw_loop_enabled: {label: "paramCatalog.yaw_loop_enabled.label", description: "paramCatalog.yaw_loop_enabled.description", tier: "expert", group: "Motor control"},
+  yaw_gyro_sign: {label: "paramCatalog.yaw_gyro_sign.label", description: "paramCatalog.yaw_gyro_sign.description", tier: "expert", group: "Motor control"},
 
   // ── IMU calibration ──────────────────────────────────────────────────────
   imu_cal_samples: {label: "paramCatalog.imu_cal_samples.label", description: "paramCatalog.imu_cal_samples.description", tier: "expert", group: "IMU"},

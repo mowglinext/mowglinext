@@ -52,6 +52,21 @@ mowgli:
     wheel_pid_kd: 0.0            # derivative gain [PWM per (m/s²)] (0 = off)
     wheel_pid_integral_limit: 100.0  # anti-windup clamp on the integral term [PWM]
     wheel_pid_pwm_per_mps: 300.0     # open-loop feedforward velocity→PWM scale
+    # Firmware gyro yaw-rate loop (Option C, 2026-07-17, task #33/#34 —
+    # replaces the removed host-side angular_rate_* PI). Consumed by
+    # hardware_bridge_node, pushed to the STM32 over PACKET_ID_LL_SET_YAW_PID
+    # (a separate packet from SET_DRIVE_PID). Defaults are the firmware's own
+    # power-on fallback (Firmware-2's #33 report). The firmware re-validates
+    # and clamps every value on receipt (yaw_kp 0-5, yaw_ki 0-20,
+    # yaw_trim_limit_mps 0-MAX_MPS=0.5).
+    yaw_kp: 0.30                  # P gain [m/s differential trim per rad/s yaw error]
+    yaw_ki: 0.40                  # I gain [m/s trim per (rad/s·s)]
+    yaw_trim_limit_mps: 0.15      # clamp on |differential trim| [m/s]
+    yaw_loop_enabled: true        # 1 = closed yaw loop on, 0 = open-diff passthrough
+    # gyro_sign (+1/-1): sign of the onboard gyro's Z axis vs robot +yaw (CCW).
+    # UNVALIDATED default (+1) — the field sign-check remedy if the loop
+    # diverges is to flip this without a firmware reflash.
+    yaw_gyro_sign: 1
     # Behavior tree tuning (consumed by behavior_tree_node)
     tick_rate: 10.0
     bt_debug_logging: false

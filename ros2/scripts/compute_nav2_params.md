@@ -55,20 +55,17 @@ Derived floors keep every commanded motion decisively above these:
 `VelocityDeadbandCritic` vx = `deadband_margin (1.1) · vx_breakaway` ≈ 0.15;
 RPP `min_approach_linear_velocity` ≈ 0.16; behavior_server
 `min_rotational_vel` ≈ 0.90 (field value 0.85 — same math). The host bridges
-the deadband (hardware_bridge `min_linear_vel` guard + gyro PI rate loop /
-pulse modulation), but commands that *live* inside the deadband still dither.
+the deadband (hardware_bridge `min_linear_vel` guard + the firmware gyro
+rate loop), but commands that *live* inside the deadband still dither.
 
-### The rate loop is an INPUT, not an assumption
+### The rate loop clamp
 
-`angular_rate_loop_enabled` (mowgli_robot.yaml, default true per
-mowgli.launch.py) decides the wz ceiling:
-
-- **ON** (field-validated default — OFF made the robot stick/oscillate): the
-  host gyro PI clamps |wz| at `angular_rate_max_cmd = 1.5 rad/s`. Anything
-  above 1.5 in Nav2 (wz_max, pivot rates, Spin max) is **silently clamped**.
-- **OFF**: kinematic in-place cap `2·MAX_MPS/track ≈ 3.08`, but the open-loop
-  rotational deadband bites; wz_std additionally floors at `0.5·wz_breakaway`
-  so MPPI samples actually cross the deadband.
+2026-07-17 Option C (task #33/#34): the gyro yaw-rate loop moved from the
+host into FIRMWARE and is no longer a host-toggleable `angular_rate_loop_enabled`
+ROS param — it runs unconditionally. It clamps |wz| at
+`HW_ANGULAR_RATE_MAX_CMD = 1.5 rad/s` (carried over from the removed host
+default; update once firmware reports its own clamp value). Anything above
+1.5 in Nav2 (wz_max, pivot rates, Spin max) is **silently clamped**.
 
 `--compare` flags ceiling violations as **HARD** (vs mere DIVERGES).
 

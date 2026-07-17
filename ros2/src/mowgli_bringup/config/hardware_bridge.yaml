@@ -20,25 +20,9 @@ hardware_bridge:
     # minimum for the WT901, giving ~√5 ≈ 2.2× tighter gyro/accel offsets.
     imu_cal_samples: 1000
 
-    # Closed-loop angular-rate (yaw) controller — see
-    # mowgli_hardware/include/mowgli_hardware/angular_rate_controller.hpp for
-    # the full rationale, and hardware_bridge_node.cpp:482+ for wiring.
-    #
-    # 2026-07-17 WEAVE FIX (Option B, task #24, USER-APPROVED sign-off on the
-    # task #8 design proposal). *** UNVALIDATED ON HARDWARE — CHANGES
-    # PHYSICAL STEERING ON A BLADED ROBOT. Do not run blade-on until the
-    # full validation sequence (bench step-response refit -> blade-OFF
-    # straight-line weave check -> blade-OFF coverage swaths incl. U-turns ->
-    # blade-OFF dock x5 -> blade-ON supervised) has passed. Rollback is
-    # params-only: set angular_rate_ki back to 2.0 and angular_rate_kff back
-    # to 1.0. ***
-    #
-    # ki: 2.0 -> 0.0 removes the host integrator that was fighting the
-    # per-wheel firmware PIs on the ~50-90 ms USB round trip (the 3-loop
-    # integrating cascade identified as the weave's root cause). kff:
-    # 1.0 -> 1.35 refits the feed-forward gain toward the measured inverse
-    # curve (0.72-0.75 gain in the 0.2-0.4 rad/s band) so it does the
-    # deadband + gain compensation the integrator used to absorb. kp is
-    # unchanged (still a small damping term).
-    angular_rate_ki: 0.0
-    angular_rate_kff: 1.35
+    # 2026-07-17 Option C (task #34): the host-side closed-loop angular-rate
+    # (yaw) controller that used to be configured here (Option B, task #24 —
+    # angular_rate_ki/_kff/_kp/_loop_enabled) is REMOVED. The yaw-rate loop
+    # now runs in firmware (task #33), closing on the same gyro without the
+    # host's USB round-trip latency; tune it via yaw_kp/yaw_ki (SET_DRIVE_PID)
+    # instead.
