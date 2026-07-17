@@ -35,13 +35,20 @@ export const SettingFieldLabel: React.FC<Props> = ({
 }) => {
     const { t } = useTranslation();
     const showReset = canReset && overridden && !!onReset;
+    const overriddenText = t("settingsReset.overridden", "Overridden — differs from default");
     return (
         <Space size={4} align="center">
             {overridden ? (
-                <Badge
-                    color="gold"
-                    title={t("settingsReset.overridden", "Overridden — differs from default")}
-                />
+                <Tooltip title={overriddenText}>
+                    <Badge
+                        color="gold"
+                        // The dot alone is a color-only signal; role="img" +
+                        // aria-label give screen readers the same information
+                        // the sighted hover tooltip provides.
+                        role="img"
+                        aria-label={overriddenText}
+                    />
+                </Tooltip>
             ) : null}
             <span>{label}</span>
             {showReset ? (

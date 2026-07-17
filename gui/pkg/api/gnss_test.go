@@ -902,3 +902,51 @@ func TestGNSSApply_RestartFailureIsReportedAsPartialFailure(t *testing.T) {
 	assert.Contains(t, response.RestartError, "general error for testing")
 	assert.Equal(t, "GNSS apply succeeded but mowgli-gps failed to restart", response.Message)
 }
+
+// TestPersistGNSSRuntimeBaud_KeepsInstalledConfigSparse guards against the
+// sparseness leak found during #20: loadGNSSSettingsDocument's doc.Flat comes
+// back with every schema default pre-merged in (so in-process readers see a
+// complete parameter set), but persistGNSSRuntimeBaud used to write that
+// FULL map straight to disk on every baud change — silently materializing
+// every unrelated parameter (chassis geometry, datum, dock pose, ...) into
+// the installed sparse config (Architecture Invariant 15) as a side effect
+// of a routine baud probe. Uses the real schema (via chdirToGuiRoot), not a
+// stub, so this proves the fix against the actual default set.
+func TestPersistGNSSRuntimeBaud_KeepsInstalledConfigSparse(t *testing.T) {
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+
+	// datum_lat is an explicit, non-GNSS value the operator set away from its
+	// schema default (0.0) — it must survive persistGNSSRuntimeBaud untouched.
+	yamlContent := "mowgli:\n  ros__parameters:\n    datum_lat: 48.5\n"
+	db, envFile := newGNSSTestDB(t, yamlContent)
+
+	// 115200 differs from the gnss_serial_baud schema default (921600), so it
+	// is expected to persist explicitly.
+	require.NoError(t, persistGNSSRuntimeBaud(db, "115200"))
+
+	yamlPath, err := db.Get("system.mower.yamlConfigFile")
+	require.NoError(t, err)
+	content, err := os.ReadFile(string(yamlPath))
+	require.NoError(t, err)
+
+	assert.Contains(t, string(content), "datum_lat: 48.5")
+	assert.Contains(t, string(content), "gnss_serial_baud: 115200")
+
+	// None of these were touched by a GNSS baud persist and each equals its
+	// schema default — the regression case is a hardware_settings key
+	// (tool_width, wheel_radius) or an unrelated gps_settings key getting
+	// materialized purely because doc.Flat carried the full merged default
+	// set into the write path.
+	for _, key := range []string{
+		"tool_width", "wheel_radius", "chassis_length", "mowing_speed",
+		"dock_pose_x", "dock_pose_y",
+	} {
+		assert.NotContainsf(t, string(content), key, "expected %s to stay out of the installed config", key)
+	}
+
+	envContent, err := os.ReadFile(envFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(envContent), "GNSS_SERIAL_BAUD=115200")
+}

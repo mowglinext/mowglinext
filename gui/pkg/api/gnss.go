@@ -666,7 +666,7 @@ func loadSavedGNSSConfig(dbProvider pkgtypes.IDBProvider) (gnssSavedConfig, erro
 		ConfigBaud:     configBaud,
 		ExecutionBaud:  executionBaud,
 		Profile:        profile,
-		SignalProfile:  normalizeGnssSignalProfile(doc.Flat["gnss_signal_profile"]),
+		SignalProfile:  normalizeGnssSignalProfile(doc.Flat["gnss_signal_profile"], "balanced"),
 		SignalGroup:    signalGroup,
 		ReceiverModel:  normalizeGnssReceiverModel(doc.Flat["gnss_receiver_model"]),
 		ProfileRateHz:  rateHz,
@@ -810,9 +810,20 @@ func persistGNSSRuntimeBaud(dbProvider pkgtypes.IDBProvider, runtimeBaud string)
 	} else {
 		doc.Flat["gnss_serial_baud"] = runtimeBaud
 	}
-	applyUniversalGnssCompatibility(doc.Flat)
+	defaults := loadSchemaDefaults(dbProvider)
+	applyUniversalGnssCompatibility(doc.Flat, defaults)
+
+	// doc.Flat came out of loadGNSSSettingsDocument with every schema default
+	// pre-merged in (so callers reading it see a complete parameter set) —
+	// writing it straight to disk would blow the installed config's
+	// sparseness (Architecture Invariant 15), persisting the FULL parameter
+	// set on every baud change instead of just the GNSS keys that actually
+	// changed. Prune back to only the values that differ from their default,
+	// the same way PostSettingsYAML does.
+	prunedKeys := sparsifyFlat(doc.Flat, defaults)
 
 	nested := nestToROS2YAML(doc.Flat, doc.NodeMappings, doc.ExistingYAML)
+	pruneNestedKeys(nested, prunedKeys)
 	out, err := marshalROS2YAMLWithGeoPrecision(nested)
 	if err != nil {
 		return fmt.Errorf("failed to marshal YAML: %w", err)

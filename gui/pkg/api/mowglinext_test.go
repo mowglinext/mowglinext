@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 
 	"github.com/vmihailenco/msgpack/v5"
@@ -272,6 +273,73 @@ func TestMultiplexRoute_DropsSubscriptionsOnDisconnect(t *testing.T) {
 
 	// Dispatch after the client is gone should be a no-op (no panic).
 	mock.Dispatch("imu", []byte(`{"a":1}`))
+}
+
+// TestTopicSubscribeInterval_CoversKnownSubscriberRouteTopics locks
+// topicSubscribeInterval as the single source of topic->interval truth: both
+// SubscriberRoute (dedicated /subscribe/:topic connections) and
+// MultiplexRoute (fan-out over one connection) derive their throttle
+// intervals from it, so a topic added to one path can't silently diverge
+// from the other.
+func TestTopicSubscribeInterval_CoversKnownSubscriberRouteTopics(t *testing.T) {
+	knownTopics := []string{
+		"gps", "gnssStatus", "pose", "imu", "ticks", "wheelOdom", "lidar",
+		"fusionRaw", "cogHeading", "magYaw", "obstacles", "icpOdom",
+		"mowProgress",
+		"diagnostics", "status", "highLevelStatus", "btLog", "map",
+		"path", "plan", "power", "emergency", "dockingSensor",
+		"robotDescription", "recordingTrajectory",
+		"coverageResumeAvailable", "fusionDiag",
+	}
+	for _, topic := range knownTopics {
+		interval, known := topicSubscribeInterval(topic)
+		assert.Truef(t, known, "expected %q to be a known topic", topic)
+		assert.NotZerof(t, interval, "expected %q to resolve to a real interval or -1 (unthrottled)", topic)
+	}
+
+	_, known := topicSubscribeInterval("not_a_real_topic")
+	assert.False(t, known)
+}
+
+// dialSubscribe opens the test server's dedicated /subscribe/:topic
+// WebSocket.
+func dialSubscribe(t *testing.T, server *httptest.Server, topic string) *websocket.Conn {
+	t.Helper()
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/mowglinext/subscribe/" + topic
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	return conn
+}
+
+func TestSubscriberRoute_DeliversKnownTopic(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	server := httptest.NewServer(setupMowgliNextRouter(mock))
+	defer server.Close()
+	conn := dialSubscribe(t, server, "highLevelStatus")
+	defer conn.Close()
+	// Give the server's handler a moment to register the subscription.
+	time.Sleep(50 * time.Millisecond)
+
+	mock.Dispatch("highLevelStatus", []byte(`{"hello":"world"}`))
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, raw, err := conn.ReadMessage()
+	require.NoError(t, err)
+	decoded, err := base64.StdEncoding.DecodeString(string(raw))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"hello":"world"}`, string(decoded))
+}
+
+func TestSubscriberRoute_RejectsUnknownTopic(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	server := httptest.NewServer(setupMowgliNextRouter(mock))
+	defer server.Close()
+	conn := dialSubscribe(t, server, "not_a_real_topic")
+	defer conn.Close()
+
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	_, _, err := conn.ReadMessage()
+	assert.Error(t, err, "connection should close without ever subscribing")
 }
 
 func TestMapWriteBudget(t *testing.T) {

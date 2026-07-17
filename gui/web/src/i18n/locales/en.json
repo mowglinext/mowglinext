@@ -405,6 +405,9 @@
     "running": "running",
     "saveGraph": "Save graph",
     "clearGraph": "Clear graph",
+    "clearGraphConfirmTitle": "Clear the fusion graph?",
+    "clearGraphConfirmBody": "This discards all accumulated nodes, loop closures, and covariance — the localizer restarts from scratch. This cannot be undone.",
+    "clearGraphConfirmOk": "Clear graph",
     "nodesInGraph": "Nodes in graph",
     "withScans": "{{count}} with scans",
     "loopClosures": "Loop closures",
@@ -2700,7 +2703,11 @@
     "clearAll": "Clear all",
     "nothingRightNow": "Nothing right now.",
     "criticalEventsHint": "Critical events (emergency, rain, completion) will land here.",
-    "dismiss": "Dismiss"
+    "dismiss": "Dismiss",
+    "levelError": "Error",
+    "levelWarning": "Warning",
+    "levelSuccess": "Success",
+    "levelInfo": "Info"
   },
   "iosInstallBanner": {
     "title": "Install MowgliNext",

@@ -405,6 +405,9 @@
     "running": "en marche",
     "saveGraph": "Enregistrer le graphe",
     "clearGraph": "Effacer le graphe",
+    "clearGraphConfirmTitle": "Effacer le graphe de fusion ?",
+    "clearGraphConfirmBody": "Cette action supprime tous les nœuds accumulés, les fermetures de boucle et la covariance — le localisateur repart de zéro. Cette action est irréversible.",
+    "clearGraphConfirmOk": "Effacer le graphe",
     "nodesInGraph": "Nœuds dans le graphe",
     "withScans": "{{count}} avec scans",
     "loopClosures": "Fermetures de boucle",
@@ -2696,7 +2699,11 @@
     "clearAll": "Tout effacer",
     "nothingRightNow": "Rien pour le moment.",
     "criticalEventsHint": "Les événements critiques (urgence, pluie, fin de tonte) apparaîtront ici.",
-    "dismiss": "Ignorer"
+    "dismiss": "Ignorer",
+    "levelError": "Erreur",
+    "levelWarning": "Avertissement",
+    "levelSuccess": "Succès",
+    "levelInfo": "Info"
   },
   "iosInstallBanner": {
     "title": "Installer MowgliNext",

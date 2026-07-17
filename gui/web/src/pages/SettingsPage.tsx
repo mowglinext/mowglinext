@@ -112,7 +112,16 @@ export const SettingsPage = () => {
     const renderSection = () => {
         switch (activeSection) {
             case "hardware":
-                return <HardwareSection values={values} onChange={handleChange} onBulkChange={handleBulkChange} />;
+                return (
+                    <HardwareSection
+                        values={values}
+                        onChange={handleChange}
+                        onBulkChange={handleBulkChange}
+                        isOverridden={isOverridden}
+                        hasDefault={hasDefault}
+                        onReset={resetToDefault}
+                    />
+                );
             case "drive_motor":
                 return (
                     <DriveMotorSection
@@ -154,9 +163,25 @@ export const SettingsPage = () => {
                     />
                 );
             case "docking":
-                return <DockingSection values={values} onChange={handleChange} />;
+                return (
+                    <DockingSection
+                        values={values}
+                        onChange={handleChange}
+                        isOverridden={isOverridden}
+                        hasDefault={hasDefault}
+                        onReset={resetToDefault}
+                    />
+                );
             case "battery":
-                return <BatterySection values={values} onChange={handleChange} />;
+                return (
+                    <BatterySection
+                        values={values}
+                        onChange={handleChange}
+                        isOverridden={isOverridden}
+                        hasDefault={hasDefault}
+                        onReset={resetToDefault}
+                    />
+                );
             case "safety":
                 return <SafetySection values={values} onChange={handleChange} />;
             case "obstacles":

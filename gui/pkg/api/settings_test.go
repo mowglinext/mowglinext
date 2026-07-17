@@ -667,7 +667,7 @@ func TestApplyUniversalGnssCompatibility_NormalizesProfileKeys(t *testing.T) {
 		"ntrip_mountpoint":     "NEAR",
 	}
 
-	compat := applyUniversalGnssCompatibility(flat)
+	compat := applyUniversalGnssCompatibility(flat, nil)
 
 	assert.Equal(t, "rover_high_precision_debug", compat["GNSS_PROFILE"])
 	assert.Equal(t, "high_precision", compat["GNSS_SIGNAL_PROFILE"])
@@ -690,9 +690,129 @@ func TestApplyUniversalGnssCompatibility_NormalizesSignalGroupSeparators(t *test
 			"gnss_signal_group":    input,
 		}
 
-		applyUniversalGnssCompatibility(flat)
+		applyUniversalGnssCompatibility(flat, nil)
 
 		assert.Equal(t, "3 6", flat["gnss_signal_group"])
+	}
+}
+
+// gnssTestSchemaDefaults mirrors the subset of asserts/mower_config.schema.json
+// that gnssCompatFromFlat/applyUniversalGnssCompatibility consult, so unit
+// tests can exercise the schema-default-routing behavior without loading the
+// real schema file from disk.
+func gnssTestSchemaDefaults() map[string]any {
+	return map[string]any{
+		"gnss_receiver_family": "auto",
+		"gnss_serial_device":   "/dev/ttyAMA4",
+		"gnss_serial_baud":     float64(921600),
+		"gnss_config_baud":     float64(921600),
+		"gnss_profile":         "runtime_only",
+		"gnss_signal_profile":  "balanced",
+		"gnss_profile_rate_hz": float64(5),
+	}
+}
+
+func TestApplyUniversalGnssCompatibility_LeavesAbsentDefaultsUnmaterialized(t *testing.T) {
+	flat := map[string]any{
+		"datum_lat": 48.5,
+	}
+
+	applyUniversalGnssCompatibility(flat, gnssTestSchemaDefaults())
+
+	// None of these were operator-provided and each computed value equals its
+	// schema default, so materializing them would inject a spurious explicit
+	// key into an otherwise-sparse config (Invariant 15) — gnss_signal_group
+	// in particular has NO schema default, so once written it could never be
+	// pruned back out.
+	for _, key := range []string{
+		"gnss_receiver_family",
+		"gnss_serial_device",
+		"gnss_serial_baud",
+		"gnss_config_baud",
+		"gnss_profile",
+		"gnss_signal_profile",
+		"gnss_profile_rate_hz",
+		"gnss_signal_group",
+	} {
+		_, exists := flat[key]
+		assert.Falsef(t, exists, "expected %s to stay absent, got %v", key, flat[key])
+	}
+}
+
+func TestApplyUniversalGnssCompatibility_MaterializesConfigBaudInheritedFromNonDefaultSerialBaud(t *testing.T) {
+	// gnss_config_baud is absent, but it inherits from gnss_serial_baud, which
+	// the operator set away from its default. The inherited value differs
+	// from the gnss_config_baud schema default, so it must still be written —
+	// silently falling through to the template default (921600) here would be
+	// wrong, not sparse.
+	flat := map[string]any{
+		"gnss_serial_baud": 115200,
+	}
+
+	applyUniversalGnssCompatibility(flat, gnssTestSchemaDefaults())
+
+	assert.Equal(t, 115200, flat["gnss_config_baud"])
+}
+
+func TestApplyUniversalGnssCompatibility_DeletesEmptyNormalizedReceiverModel(t *testing.T) {
+	// gnss_receiver_model has no schema default either; normalizing an
+	// "auto"-ish operator value down to "" must delete the key rather than
+	// leave it as an explicit empty string that can never be pruned.
+	flat := map[string]any{
+		"gnss_receiver_model": "auto",
+	}
+
+	applyUniversalGnssCompatibility(flat, gnssTestSchemaDefaults())
+
+	_, exists := flat["gnss_receiver_model"]
+	assert.False(t, exists)
+}
+
+func TestPostSettingsYAML_DoesNotMaterializeAbsentGnssDefaults(t *testing.T) {
+	// Use the real schema so this proves the fix against the actual schema
+	// defaults, not a test stub.
+	yamlFile := createTempYAMLFile(t, "")
+	envFile := createTempConfigFile(t, "")
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+
+	router := setupSettingsRouter(db)
+
+	payload := map[string]any{
+		"datum_lat": 48.5,
+	}
+	body, _ := json.Marshal(payload)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/yaml", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	content, err := os.ReadFile(yamlFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "datum_lat: 48.5")
+	// The operator never touched GNSS settings; none of them should have been
+	// materialized into the installed config. gnss_signal_group is the key
+	// regression case: it has no schema default, so once written it could
+	// never be pruned back out.
+	for _, key := range []string{
+		"gnss_signal_group",
+		"gnss_receiver_family",
+		"gnss_serial_device",
+		"gnss_serial_baud",
+		"gnss_config_baud",
+		"gnss_profile",
+		"gnss_signal_profile",
+		"gnss_profile_rate_hz",
+	} {
+		assert.NotContainsf(t, string(content), key, "expected %s to stay out of the installed config", key)
 	}
 }
 
