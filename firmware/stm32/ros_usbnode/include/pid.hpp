@@ -95,6 +95,13 @@ public:
 
     float getIntegral() { return _integral; }
     void resetIntegral() { _integral = 0.f; }
+    /* Directly set the integral state — used for a controlled fast-decay/leak of
+     * accumulated wind-up (e.g. the yaw loop's low-speed/turn-exit leak) without
+     * a hard reset to zero. Re-clamped to the integral limit. */
+    void setIntegral(const float value)
+    {
+        _integral = pid_constrain(value, -_limit_integral, _limit_integral);
+    }
     void resetDerivative() { _last_feedback = NAN; }
 
 private:

@@ -157,6 +157,25 @@ static volatile float g_pwm_per_mps = (float)PWM_PER_MPS;
 #define YAW_PI_KP_DEFAULT 0.30f          /* m/s trim per rad/s yaw error */
 #define YAW_PI_KI_DEFAULT 0.40f          /* m/s trim per (rad/s·s) */
 #define YAW_TRIM_LIMIT_MPS_DEFAULT 0.15f /* clamp on |differential trim| [m/s] */
+/* Integral term is clamped TIGHTER than the total trim (leaves headroom for the
+ * P term and limits integral-driven overshoot/hunting). */
+#define YAW_INT_LIMIT_FRAC 0.60f
+/* Turn-exit anti-windup (task #37): when |commanded wz| falls from clearly
+ * turning (> HI) to nearly straight (< LO) in one step, dump the integrator so
+ * the wind-up built up through a U-turn doesn't drive a lingering differential
+ * on the straight that follows (the reported post-U-turn wiggle). */
+#define YAW_TURN_EXIT_HI_RADPS 0.40f
+#define YAW_TURN_EXIT_LO_RADPS 0.15f
+/* Low-speed authority scaling (task #37): below REF forward speed the yaw
+ * correction (trim + a per-cycle integral leak) is scaled toward FLOOR so the
+ * loop doesn't hunt on gyro noise when nearly stopped at the dock. The base
+ * rotation still comes from the IK feedforward (snap targets), so an in-place
+ * PRE_ROTATE pivot — commanded vx≈0 — is unaffected; only the closed-loop
+ * correction is de-rated. On straights (vx ≥ REF) the scale is 1.0, so the
+ * working straight-line weave rejection is untouched. */
+#define YAW_LOWSPEED_REF_MPS 0.15f
+#define YAW_LOWSPEED_FLOOR 0.25f
+#define YAW_INT_LEAK_AT_FLOOR 0.90f /* per-cycle integral retain factor at FLOOR authority */
 static PID yaw_pid;
 static float prev_yaw_trim_mps = 0.0f;
 static float prev_cmd_wz = 0.0f;
@@ -436,7 +455,7 @@ static void on_set_yaw_pid(const uint8_t *data, size_t len) {
    * clamp. Same __disable_irq guard as on_set_drive_pid. */
   __disable_irq();
   yaw_pid.setGains(kp, ki, 0.0f);
-  yaw_pid.setIntegralLimit(tl);
+  yaw_pid.setIntegralLimit(tl * YAW_INT_LIMIT_FRAC);
   yaw_pid.setOutputLimit(tl);
   g_yaw_trim_limit_mps = tl;
   g_yaw_gyro_sign = sign;
@@ -658,17 +677,34 @@ extern "C" void motors_handler() {
      * the bounded-failure argument. */
     float yaw_trim_mps = 0.0f;
     const bool yaw_loop_active = (g_yaw_loop_enabled != 0u) && !hard_stop;
-    /* Reset the yaw integrator on stop / yaw-direction reversal — mirrors the
-     * per-wheel integrator resets so built-up correction doesn't kick the
-     * chassis when it next starts or reverses its turn. */
+    /* Reset the yaw integrator on stop / yaw-direction reversal (mirrors the
+     * per-wheel resets) AND at turn-exit — a sharp drop in |commanded wz| from
+     * turning to straight (task #37). Dumping the wind-up here is what kills the
+     * reported post-U-turn wiggle: without it the integral accumulated while
+     * holding the turn keeps driving a differential onto the following straight. */
+    const bool yaw_turn_exit = (fabsf(prev_cmd_wz) > YAW_TURN_EXIT_HI_RADPS &&
+                                fabsf(snap_cmd_wz) < YAW_TURN_EXIT_LO_RADPS);
     const bool yaw_reset = !yaw_loop_active ||
                            (snap_cmd_wz == 0.0f && prev_cmd_wz != 0.0f) ||
-                           (snap_cmd_wz * prev_cmd_wz < 0.0f);
+                           (snap_cmd_wz * prev_cmd_wz < 0.0f) || yaw_turn_exit;
     if (yaw_reset) {
       yaw_pid.resetIntegral();
       yaw_pid.resetDerivative();
     }
     prev_cmd_wz = snap_cmd_wz;
+
+    /* Low-speed authority scale from COMMANDED mean forward speed: 1.0 at/above
+     * REF, ramping down to FLOOR as vx→0. Uses the commanded (not measured)
+     * speed so a momentary stall doesn't collapse authority, and so an in-place
+     * pivot (vx≈0) is de-rated to FLOOR rather than zeroed — the pivot itself
+     * still comes from the IK feedforward. On straights this is 1.0, leaving the
+     * (working) weave rejection untouched. */
+    const float yaw_vx_cmd = 0.5f * (snap_left_target + snap_right_target);
+    float yaw_speed_scale = fabsf(yaw_vx_cmd) / YAW_LOWSPEED_REF_MPS;
+    if (yaw_speed_scale > 1.0f)
+      yaw_speed_scale = 1.0f;
+    yaw_speed_scale =
+        YAW_LOWSPEED_FLOOR + (1.0f - YAW_LOWSPEED_FLOOR) * yaw_speed_scale;
 
     if (yaw_loop_active) {
       float gx = 0.0f, gy = 0.0f, gz = 0.0f;
@@ -681,23 +717,39 @@ extern "C" void motors_handler() {
         const float yaw_err = snap_cmd_wz - meas_wz;
         /* Conditional-integration anti-windup: freeze the integrator only in
          * the direction that would push |trim| further past the clamp (same
-         * pattern as the per-wheel loop). */
+         * pattern as the per-wheel loop). Keyed on the RAW (unscaled) trim so
+         * the low-speed scaling below doesn't defeat the saturation test. */
         const bool yaw_update_integral =
             !((prev_yaw_trim_mps >= g_yaw_trim_limit_mps && yaw_err > 0.0f) ||
               (prev_yaw_trim_mps <= -g_yaw_trim_limit_mps && yaw_err < 0.0f));
         yaw_pid.setSetpoint(snap_cmd_wz);
-        yaw_trim_mps =
+        float raw_trim =
             yaw_pid.update(meas_wz, WHEEL_PI_DT_S, yaw_update_integral);
         /* Hard clamp (belt-and-suspenders over the PID output limit) — the
          * differential correction is bounded so a wrong gyro_sign can only veer,
          * never spin unbounded. */
-        if (yaw_trim_mps > g_yaw_trim_limit_mps)
-          yaw_trim_mps = g_yaw_trim_limit_mps;
-        if (yaw_trim_mps < -g_yaw_trim_limit_mps)
-          yaw_trim_mps = -g_yaw_trim_limit_mps;
+        if (raw_trim > g_yaw_trim_limit_mps)
+          raw_trim = g_yaw_trim_limit_mps;
+        if (raw_trim < -g_yaw_trim_limit_mps)
+          raw_trim = -g_yaw_trim_limit_mps;
+        prev_yaw_trim_mps = raw_trim; /* anti-windup uses the unscaled value */
+
+        /* Low-speed integral leak: bleed the integrator toward 0 when authority
+         * is de-rated (retain=1.0 at full speed → no leak; approaches
+         * YAW_INT_LEAK_AT_FLOOR near the dock) so accumulated bias can't sit and
+         * hunt while nearly stopped. */
+        const float yaw_int_retain =
+            YAW_INT_LEAK_AT_FLOOR +
+            (1.0f - YAW_INT_LEAK_AT_FLOOR) * yaw_speed_scale;
+        yaw_pid.setIntegral(yaw_pid.getIntegral() * yaw_int_retain);
+
+        /* Apply the low-speed authority scale to the correction actually
+         * injected (base rotation is unaffected — it rides the IK feedforward). */
+        yaw_trim_mps = raw_trim * yaw_speed_scale;
       }
+    } else {
+      prev_yaw_trim_mps = 0.0f;
     }
-    prev_yaw_trim_mps = yaw_trim_mps;
 
     /* Apply the symmetric differential trim to the per-wheel setpoints
      * (+right / −left increases yaw rate, matching the IK in on_cmd_vel), then
@@ -1189,7 +1241,7 @@ extern "C" void init_ROS() {
   /* Gyro yaw-rate loop (Option C). Output/integral both clamped to the trim
    * limit so the differential correction is bounded regardless of gains. */
   yaw_pid.setGains(YAW_PI_KP_DEFAULT, YAW_PI_KI_DEFAULT, 0.0f);
-  yaw_pid.setIntegralLimit(YAW_TRIM_LIMIT_MPS_DEFAULT);
+  yaw_pid.setIntegralLimit(YAW_TRIM_LIMIT_MPS_DEFAULT * YAW_INT_LIMIT_FRAC);
   yaw_pid.setOutputLimit(YAW_TRIM_LIMIT_MPS_DEFAULT);
 #endif
 
