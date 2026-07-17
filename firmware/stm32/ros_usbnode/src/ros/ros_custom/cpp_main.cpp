@@ -134,6 +134,38 @@ static float prev_right_target_mps = 0.0f;
 static volatile float g_pwm_per_mps = (float)PWM_PER_MPS;
 
 /* ---------------------------------------------------------------------------
+ * Gyro-local closed yaw-rate loop (Option C).
+ *
+ * The per-wheel PIs below regulate each wheel's SPEED independently, so the
+ * chassis yaw rate was only their emergent difference — on soft/uneven turf the
+ * actual yaw lagged/overshot the commanded wz (the weave). This loop closes a
+ * real regulator on (commanded wz − measured gyro wz) at the 50 Hz motor
+ * cadence and injects the correction as a SYMMETRIC differential velocity trim
+ * (+right / −left), i.e. it rotates the robot WITHOUT changing mean forward
+ * speed. Consequences of "symmetric": it never fights the host-side
+ * anti-wheelspin forward-speed easing (that only scales vx), and it only shifts
+ * the per-wheel PI setpoints (their deadband-bridging integrators still run).
+ *
+ * SAFETY: firmware stays the sole blade authority; this loop only shapes drive.
+ * Fail-safe by construction — on gyro read failure, hard_stop, or disable, the
+ * trim is 0 and the yaw integrator is reset, degrading to today's open-diff
+ * behaviour. The trim is hard-clamped to ±g_yaw_trim_limit_mps (also the PID
+ * output limit), so even a wrong gyro_sign (positive feedback) can only add a
+ * bounded differential the per-wheel loops still cap at ±MAX_MPS — a bounded
+ * veer, never an unbounded spin. Gains/sign/enable are runtime-tunable via
+ * PKT_ID_SET_YAW_PID. */
+#define YAW_PI_KP_DEFAULT 0.30f          /* m/s trim per rad/s yaw error */
+#define YAW_PI_KI_DEFAULT 0.40f          /* m/s trim per (rad/s·s) */
+#define YAW_TRIM_LIMIT_MPS_DEFAULT 0.15f /* clamp on |differential trim| [m/s] */
+static PID yaw_pid;
+static float prev_yaw_trim_mps = 0.0f;
+static float prev_cmd_wz = 0.0f;
+static volatile float cmd_wz = 0.0f; /* commanded yaw rate [rad/s], set by on_cmd_vel */
+static volatile uint8_t g_yaw_loop_enabled = 1;   /* default on for A/B */
+static volatile float g_yaw_gyro_sign = 1.0f;     /* gyro Z sign vs robot +yaw */
+static volatile float g_yaw_trim_limit_mps = YAW_TRIM_LIMIT_MPS_DEFAULT;
+
+/* ---------------------------------------------------------------------------
  * Blade motor control state
  * ---------------------------------------------------------------------------*/
 static volatile uint8_t target_blade_on_off = 0;
@@ -297,6 +329,11 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
   const float vx = pkt->linear_x;
   const float wz = pkt->angular_z;
 
+  /* Commanded yaw rate for the firmware yaw-rate loop (Option C), read in the
+   * motor timebase by motors_handler. Stored raw (pre-IK) so the loop tracks
+   * the operator/Nav2 intent, not the clamped per-wheel reconstruction. */
+  cmd_wz = wz;
+
   /* Differential-drive inverse kinematics — per-wheel linear speed. */
   float left_mps = vx - wz * WHEEL_BASE * 0.5f;
   float right_mps = vx + wz * WHEEL_BASE * 0.5f;
@@ -370,6 +407,43 @@ static void on_set_drive_pid(const uint8_t *data, size_t len) {
    * enough to starve the main loop and re-trigger the watchdog reboot loop. */
 }
 
+static void on_set_yaw_pid(const uint8_t *data, size_t len) {
+  if (len < sizeof(pkt_set_yaw_pid_t) - 2u) {
+    return;
+  }
+
+  const pkt_set_yaw_pid_t *pkt =
+      reinterpret_cast<const pkt_set_yaw_pid_t *>(data);
+
+  /* Yaw regulation is safety-relevant (it steers the chassis): reject the whole
+   * packet if any gain/limit is non-finite, then clamp before applying so a bad
+   * host value can never make the yaw loop diverge. */
+  if (!std::isfinite(pkt->yaw_kp) || !std::isfinite(pkt->yaw_ki) ||
+      !std::isfinite(pkt->trim_limit_mps)) {
+    debug_printf("set_yaw_pid rejected: non-finite field\r\n");
+    return;
+  }
+
+  const float kp = pid_constrain(pkt->yaw_kp, 0.0f, 5.0f);
+  const float ki = pid_constrain(pkt->yaw_ki, 0.0f, 20.0f);
+  const float tl = pid_constrain(pkt->trim_limit_mps, 0.0f, (float)MAX_MPS);
+  const uint8_t en = (pkt->enabled != 0) ? 1u : 0u;
+  const float sign = (pkt->gyro_sign < 0) ? -1.0f : 1.0f;
+
+  /* Apply atomically w.r.t. motors_handler() (reads these at 50 Hz); this
+   * handler runs in USB RX interrupt context. The integral limit is pinned to
+   * the trim limit so the integrator alone can never exceed the differential
+   * clamp. Same __disable_irq guard as on_set_drive_pid. */
+  __disable_irq();
+  yaw_pid.setGains(kp, ki, 0.0f);
+  yaw_pid.setIntegralLimit(tl);
+  yaw_pid.setOutputLimit(tl);
+  g_yaw_trim_limit_mps = tl;
+  g_yaw_gyro_sign = sign;
+  g_yaw_loop_enabled = en;
+  __enable_irq();
+}
+
 static void on_hl_state(const uint8_t *data, size_t len) {
   if (len < sizeof(pkt_hl_state_t) - 2u) {
     return;
@@ -416,6 +490,7 @@ static void on_hl_state(const uint8_t *data, size_t len) {
     PANEL_Set_LED(PANEL_LED_8H, PANEL_LED_OFF);
     main_eOpenmowerStatus = OPENMOWER_STATUS_IDLE;
     left_target_mps = right_target_mps = 0.0f;
+    cmd_wz = 0.0f;
     blade_on_off = target_blade_on_off = 0;
     break;
   }
@@ -536,6 +611,7 @@ extern "C" void motors_handler() {
     __disable_irq();
     float snap_left_target = left_target_mps;
     float snap_right_target = right_target_mps;
+    float snap_cmd_wz = cmd_wz;
     uint8_t snap_target_blade = target_blade_on_off;
     uint32_t snap_heartbeat = last_heartbeat_tick;
     uint32_t snap_cmd_vel = last_cmd_vel_tick;
@@ -574,8 +650,72 @@ extern "C" void motors_handler() {
       }
     }
 
-    const float l_target = hard_stop ? 0.0f : snap_left_target;
-    const float r_target = hard_stop ? 0.0f : snap_right_target;
+    /* --- Option C: gyro-local closed yaw-rate loop ---
+     * Regulate (commanded wz − measured gyro wz) and fold the output in as a
+     * symmetric differential velocity trim on the per-wheel setpoints (below).
+     * Runs before the per-wheel PIs so their integrators track the trimmed
+     * setpoint. See the block comment at the yaw-loop globals for rationale and
+     * the bounded-failure argument. */
+    float yaw_trim_mps = 0.0f;
+    const bool yaw_loop_active = (g_yaw_loop_enabled != 0u) && !hard_stop;
+    /* Reset the yaw integrator on stop / yaw-direction reversal — mirrors the
+     * per-wheel integrator resets so built-up correction doesn't kick the
+     * chassis when it next starts or reverses its turn. */
+    const bool yaw_reset = !yaw_loop_active ||
+                           (snap_cmd_wz == 0.0f && prev_cmd_wz != 0.0f) ||
+                           (snap_cmd_wz * prev_cmd_wz < 0.0f);
+    if (yaw_reset) {
+      yaw_pid.resetIntegral();
+      yaw_pid.resetDerivative();
+    }
+    prev_cmd_wz = snap_cmd_wz;
+
+    if (yaw_loop_active) {
+      float gx = 0.0f, gy = 0.0f, gz = 0.0f;
+      /* Fresh gyro read in the motor timebase. On I2C failure hold trim at 0
+       * (degrade to open-diff) rather than injecting a stale/bogus correction.
+       * Both this and the IMU broadcast read run in the cooperative main loop,
+       * so there is no re-entrancy on the software-I2C bus. */
+      if (IMU_TryReadGyro(&gx, &gy, &gz)) {
+        const float meas_wz = g_yaw_gyro_sign * gz; /* rad/s, robot +yaw = CCW */
+        const float yaw_err = snap_cmd_wz - meas_wz;
+        /* Conditional-integration anti-windup: freeze the integrator only in
+         * the direction that would push |trim| further past the clamp (same
+         * pattern as the per-wheel loop). */
+        const bool yaw_update_integral =
+            !((prev_yaw_trim_mps >= g_yaw_trim_limit_mps && yaw_err > 0.0f) ||
+              (prev_yaw_trim_mps <= -g_yaw_trim_limit_mps && yaw_err < 0.0f));
+        yaw_pid.setSetpoint(snap_cmd_wz);
+        yaw_trim_mps =
+            yaw_pid.update(meas_wz, WHEEL_PI_DT_S, yaw_update_integral);
+        /* Hard clamp (belt-and-suspenders over the PID output limit) — the
+         * differential correction is bounded so a wrong gyro_sign can only veer,
+         * never spin unbounded. */
+        if (yaw_trim_mps > g_yaw_trim_limit_mps)
+          yaw_trim_mps = g_yaw_trim_limit_mps;
+        if (yaw_trim_mps < -g_yaw_trim_limit_mps)
+          yaw_trim_mps = -g_yaw_trim_limit_mps;
+      }
+    }
+    prev_yaw_trim_mps = yaw_trim_mps;
+
+    /* Apply the symmetric differential trim to the per-wheel setpoints
+     * (+right / −left increases yaw rate, matching the IK in on_cmd_vel), then
+     * re-clamp to the physical wheel-speed limit. hard_stop forces 0. */
+    float l_target = snap_left_target - yaw_trim_mps;
+    float r_target = snap_right_target + yaw_trim_mps;
+    if (hard_stop) {
+      l_target = 0.0f;
+      r_target = 0.0f;
+    }
+    if (l_target > MAX_MPS)
+      l_target = MAX_MPS;
+    if (l_target < -MAX_MPS)
+      l_target = -MAX_MPS;
+    if (r_target > MAX_MPS)
+      r_target = MAX_MPS;
+    if (r_target < -MAX_MPS)
+      r_target = -MAX_MPS;
 
 #if USE_WHEEL_PI
     /* Wheel-level PI loop.
@@ -1020,6 +1160,7 @@ extern "C" void init_ROS() {
   mowgli_comms_register_handler(PKT_ID_CMD_BLADE, on_cmd_blade);
   mowgli_comms_register_handler(PKT_ID_REBOOT, on_reboot);
   mowgli_comms_register_handler(PKT_ID_SET_DRIVE_PID, on_set_drive_pid);
+  mowgli_comms_register_handler(PKT_ID_SET_YAW_PID, on_set_yaw_pid);
   mowgli_comms_register_handler(PKT_ID_CONFIG_REQ, on_config_req);
 
   // Initialise timers
@@ -1044,6 +1185,12 @@ extern "C" void init_ROS() {
                            0.0f);
   right_wheel_pid.setIntegralLimit(WHEEL_PI_INT_MAX_PWM);
   right_wheel_pid.setOutputLimit(255.0f);
+
+  /* Gyro yaw-rate loop (Option C). Output/integral both clamped to the trim
+   * limit so the differential correction is bounded regardless of gains. */
+  yaw_pid.setGains(YAW_PI_KP_DEFAULT, YAW_PI_KI_DEFAULT, 0.0f);
+  yaw_pid.setIntegralLimit(YAW_TRIM_LIMIT_MPS_DEFAULT);
+  yaw_pid.setOutputLimit(YAW_TRIM_LIMIT_MPS_DEFAULT);
 #endif
 
   last_odom_tick = HAL_GetTick();

@@ -120,6 +120,12 @@ extern "C" {
  *  the power-on fallback. */
 #define PKT_ID_SET_DRIVE_PID 0x54u
 
+/** Gyro yaw-rate loop gains/enable (Host -> Firmware). Retunes the firmware
+ *  closed yaw-rate loop (Option C) that trims the per-wheel setpoints from the
+ *  onboard gyro. Validated + clamped; compile-time defaults are the power-on
+ *  fallback. */
+#define PKT_ID_SET_YAW_PID 0x55u
+
 /* ---------------------------------------------------------------------------
  * status_bitmask bit definitions  (pkt_status_t::status_bitmask)
  * ---------------------------------------------------------------------------*/
@@ -450,6 +456,35 @@ typedef struct {
 } pkt_set_drive_pid_t;
 
 /**
+ * @brief Gyro yaw-rate loop tuning packet — Host -> Firmware
+ * (PKT_ID_SET_YAW_PID = 0x55).
+ *
+ * Retunes the firmware closed yaw-rate loop (Option C): at the 50 Hz motor
+ * cadence the firmware regulates (commanded wz − measured gyro wz) and injects
+ * a SYMMETRIC differential velocity trim (±trim_limit_mps) onto the per-wheel
+ * setpoints before the per-wheel PIs. The firmware rejects the packet if
+ * yaw_kp/yaw_ki/trim_limit_mps is non-finite and clamps every field to a safe
+ * range before applying.
+ *
+ * gyro_sign (+1/-1) selects the sign of the onboard gyro's Z axis relative to
+ * robot +yaw (CCW). It is exposed at runtime because the correct sign depends
+ * on the physical IMU mounting — flipping it is the field sign-check remedy if
+ * the loop diverges (see firmware tuning notes). enabled=0 disables the loop
+ * (pure open-diff passthrough) for A/B without a reflash.
+ *
+ * Wire size: 17 bytes (must match sizeof(LlSetYawPid) in ll_datatypes.hpp).
+ */
+typedef struct {
+  uint8_t type;           /**< PKT_ID_SET_YAW_PID */
+  float yaw_kp;           /**< P gain [m/s trim per rad/s yaw error] */
+  float yaw_ki;           /**< I gain [m/s trim per (rad/s·s)] */
+  float trim_limit_mps;   /**< Clamp on |differential trim| [m/s] */
+  uint8_t enabled;        /**< 1 = closed yaw loop on, 0 = open-diff passthrough */
+  int8_t gyro_sign;       /**< +1 / -1: gyro Z sign vs robot +yaw (CCW) */
+  uint16_t crc;           /**< CRC-16 CCITT over preceding bytes */
+} pkt_set_yaw_pid_t;
+
+/**
  * @brief Blade motor status packet — Firmware -> Host (PKT_ID_BLADE_STATUS =
  * 0x05).
  *
@@ -586,6 +621,23 @@ _Static_assert(offsetof(pkt_set_drive_pid_t, pwm_per_mps) == 21u,
                "pkt_set_drive_pid_t.pwm_per_mps offset unexpected");
 _Static_assert(offsetof(pkt_set_drive_pid_t, crc) == 25u,
                "pkt_set_drive_pid_t.crc offset unexpected");
+
+_Static_assert(sizeof(pkt_set_yaw_pid_t) == 17u,
+               "pkt_set_yaw_pid_t layout unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, type) == 0u,
+               "pkt_set_yaw_pid_t.type offset unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, yaw_kp) == 1u,
+               "pkt_set_yaw_pid_t.yaw_kp offset unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, yaw_ki) == 5u,
+               "pkt_set_yaw_pid_t.yaw_ki offset unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, trim_limit_mps) == 9u,
+               "pkt_set_yaw_pid_t.trim_limit_mps offset unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, enabled) == 13u,
+               "pkt_set_yaw_pid_t.enabled offset unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, gyro_sign) == 14u,
+               "pkt_set_yaw_pid_t.gyro_sign offset unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, crc) == 15u,
+               "pkt_set_yaw_pid_t.crc offset unexpected");
 #endif
 
 #ifdef __cplusplus
