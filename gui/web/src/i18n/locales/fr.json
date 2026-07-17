@@ -1620,8 +1620,12 @@
       "description": "Hauteur du LiDAR au-dessus du sol, utilisée par le filtre de sol."
     },
     "obstacle_inflation_radius": {
-      "label": "Rayon d'inflation des obstacles",
-      "description": "Marge conservée par rapport aux obstacles détectés par le LiDAR dans la costmap locale. Une valeur plus élevée fait réagir le robot plus tôt, de plus loin."
+      "label": "Rayon d'inflation des obstacles (transit uniquement)",
+      "description": "Marge conservée par rapport aux obstacles détectés par le LiDAR dans la costmap locale, pendant les trajets point à point. Une valeur plus élevée fait réagir le robot plus tôt, de plus loin. N'affecte PAS l'évitement pendant la tonte — voir « Portée de détection des obstacles (tonte) » pour cela."
+    },
+    "obstacle_detection_range_m": {
+      "label": "Portée de détection des obstacles (tonte)",
+      "description": "Distance à laquelle le robot repère un obstacle le long de la trajectoire de tonte avant de commencer à le contourner. Une valeur plus élevée réagit plus tôt mais sacrifie une plus grande partie de la bande à l'évitement."
     },
     "obstacle_wait_timeout_s": {
       "label": "Délai d'attente devant un obstacle",

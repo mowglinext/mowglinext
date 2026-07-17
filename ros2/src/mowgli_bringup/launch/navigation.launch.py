@@ -443,6 +443,14 @@ def generate_launch_description() -> LaunchDescription:
     # smoothly. See nav2_params_base.yaml's local_costmap.inflation_layer
     # comment for the full rationale; clamped to [0.58, 1.50] below.
     obstacle_inflation_radius = 0.80
+    # obstacle_detection_range_m (task #51): the real "avoid from further out
+    # during mowing" knob — inflation_radius above only affects Nav2 transit
+    # (MPPI/RPP's cost-gradient), not FTC's coverage-time deviation, which
+    # checks raw lethal cells only (see obstacle_inflation_radius's own
+    # comment in the template for the full #49 rationale). Converted to a
+    # FollowCoveragePath.obstacle_lookahead POSE COUNT at injection below
+    # (kF2CSamplingM).
+    obstacle_detection_range_m = 1.5
     obstacle_margin = 0.0
     obstacle_slowdown_ratio = 0.3
     enable_mag_cal = False
@@ -509,6 +517,8 @@ def generate_launch_description() -> LaunchDescription:
             "max_obstacle_avoidance_distance", max_obstacle_avoidance_distance))
         obstacle_inflation_radius = float(rt_rp.get(
             "obstacle_inflation_radius", obstacle_inflation_radius))
+        obstacle_detection_range_m = float(rt_rp.get(
+            "obstacle_detection_range_m", obstacle_detection_range_m))
         obstacle_margin = float(rt_rp.get("obstacle_margin", obstacle_margin))
         obstacle_slowdown_ratio = float(rt_rp.get(
             "obstacle_slowdown_ratio", obstacle_slowdown_ratio))
@@ -663,6 +673,18 @@ def generate_launch_description() -> LaunchDescription:
         # One knob now drives both consumers.
         fcp["max_lateral_deviation"] = min(
             10.0, max(0.5, max_obstacle_avoidance_distance))
+        # obstacle_lookahead (task #51): how far AHEAD along the coverage
+        # path FTC scans for a lethal cell — the real "avoid from further
+        # out" knob (max_lateral_deviation above only controls how FAR
+        # sideways it's willing to skirt once it's already reacting).
+        # obstacle_detection_range_m is operator-facing in metres; F2C
+        # samples the coverage path at kF2CSamplingM spacing, so convert to
+        # a pose count. Floored at 4 poses — findFirstObstacleIndex needs a
+        # non-trivial window to be useful, and the line-fit-style scan
+        # degenerates below that.
+        kF2CSamplingM = 0.05
+        fcp["obstacle_lookahead"] = max(4, round(
+            min(5.0, max(0.2, obstacle_detection_range_m)) / kF2CSamplingM))
         # LOCAL costmap inflation only. Floor 0.58: the nav2 inflation layer
         # degrades footprint-cost semantics below the chassis circumscribed
         # radius (~0.572 m) and FTC's deviation detector (threshold 253)

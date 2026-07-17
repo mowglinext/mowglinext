@@ -1624,8 +1624,12 @@
       "description": "Height of the LiDAR above ground, used by the ground filter."
     },
     "obstacle_inflation_radius": {
-      "label": "Obstacle inflation radius",
-      "description": "Buffer kept from LiDAR-detected obstacles in the local costmap. Larger values make the robot start avoiding obstacles sooner, from further away."
+      "label": "Obstacle inflation radius (transit only)",
+      "description": "Buffer kept from LiDAR-detected obstacles in the local costmap during point-to-point transit driving. Larger values make the robot start avoiding obstacles sooner, from further away. Does NOT affect avoidance while mowing — see \"Obstacle detection range (mowing)\" for that."
+    },
+    "obstacle_detection_range_m": {
+      "label": "Obstacle detection range (mowing)",
+      "description": "How far ahead along the coverage path the robot looks for an obstacle before it starts skirting around it while mowing. Larger values react sooner but give up more of the swath to the deviation."
     },
     "obstacle_wait_timeout_s": {
       "label": "Obstacle wait timeout",

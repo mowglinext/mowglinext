@@ -390,7 +390,12 @@ controller_server:
       # in the no-LiDAR overlay (no obstacle_layer to read) — that variant tracks
       # the path only and relies on collision_monitor + firmware for safety.
       check_obstacles: true
-      obstacle_lookahead: 30           # ≈1.5 m at F2C 0.05 m sampling → ~7 s warning at 0.20 m/s
+      # OVERRIDDEN AT LAUNCH (task #51) by mowgli_robot.yaml's
+      # obstacle_detection_range_m (default 1.5 m), converted to poses —
+      # see navigation.launch.py. 30 poses ≈ 1.5 m at F2C 0.05 m sampling →
+      # ~7 s warning at 0.20 m/s. This static value only governs a raw
+      # `ros2 launch` of this file with no robot-config injection.
+      obstacle_lookahead: 30
       obstacle_footprint: true
       # Body half-width for the lateral obstacle-detection sweep. 2026-06-25
       # FIELD: the detection threshold is 253 (lethal OR inscribed), and the
@@ -689,13 +694,15 @@ local_costmap:
         # jerking at the last moment. (factor 10 decayed to ~0 within ~0.1 m, so
         # even a wide radius had no usable slope.)
         cost_scaling_factor: 3.5
-        # 0.80 m (was 0.60, was 0.10 before that — task #35, 2026-07-17 field
-        # analysis: the robot let obstacles get to 0.4-0.6 m forward before
-        # reacting, at ~0.17 m/s that's under 4 s of margin). 0.60 m already
-        # sat ABOVE the chassis circumscribed radius (~0.572 m), which clears
-        # the "inflation radius is smaller than circumscribed radius" error —
-        # restoring MPPI/FTC CostCritic's potential-field fast path (no
-        # full-footprint check = less ARM CPU) — 0.80 m keeps that margin and
+        # 1.0 m (was 0.80, was 0.60, was 0.10 before that — task #35,
+        # 2026-07-17 field analysis: the robot let obstacles get to 0.4-0.6 m
+        # forward before reacting, at ~0.17 m/s that's under 4 s of margin;
+        # task #43, same day: folded in the user's field-converged value,
+        # superseding #35's 0.80). 0.60 m already sat ABOVE the chassis
+        # circumscribed radius (~0.572 m), which clears the "inflation
+        # radius is smaller than circumscribed radius" error — restoring
+        # MPPI/FTC CostCritic's potential-field fast path (no full-footprint
+        # check = less ARM CPU) — raising this further keeps that margin and
         # extends the gradient's lead distance without changing its steepness
         # (cost_scaling_factor unchanged): the fix here is DISTANCE, not
         # shape — obstacles start pushing the path sooner, not harder.
@@ -706,7 +713,9 @@ local_costmap:
         # (mowgli_robot.yaml, clamped to [0.58, 1.50] — see
         # navigation.launch.py's _inject_dock_pose_and_speeds); it only governs
         # a raw `ros2 launch` of this file with no robot-config injection.
-        inflation_radius: 0.80
+        # Kept in sync with the template default (test_nav2_params.py's
+        # test_obstacle_template_defaults_match_static_yaml enforces this).
+        inflation_radius: 1.0
 
 # ---------------------------------------------------------------------------
 # Map server / AMCL (unused — map->odom is published by fusion_graph_node;

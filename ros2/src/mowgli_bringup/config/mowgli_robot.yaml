@@ -347,7 +347,24 @@ mowgli:
     # ~0.17 m/s, reacting too late for a smooth deviation; 0.80 was the
     # first bump. Task #43, same day: the user's own field-converged value
     # is 1.0, superseding #35's 0.80 — folded in as the new template default.
+    # NAV2-TRANSIT ONLY (task #49, 2026-07-17): only MPPI/RPP's cost-based
+    # potential field (point-to-point transit driving) reads the inflation
+    # GRADIENT this radius controls. FTC (the coverage/mowing controller)
+    # checks raw LETHAL cells only (obstacle_deviation.hpp kLethalThreshold),
+    # never the inflated gradient — this knob has NO effect on how far out
+    # the robot starts avoiding an obstacle WHILE MOWING. For that, see
+    # obstacle_detection_range_m below.
     obstacle_inflation_radius: 1.0
+    # How far ahead along the coverage path (m) FTC scans for a lethal
+    # obstacle cell before starting to skirt it — the real "avoid from
+    # further out during mowing" knob (task #49; obstacle_inflation_radius
+    # above does NOT affect this, see its comment). Injected into
+    # FollowCoveragePath.obstacle_lookahead (nav2_params_base.yaml) as a
+    # pose count: poses = round(this / kF2CSamplingM), kF2CSamplingM=0.05
+    # (navigation.launch.py). 1.5 m = 30 poses = the prior static default,
+    # ≈7 s of warning at mowing_speed 0.2 m/s. Clamped to [0.2, 5.0] m
+    # (>=4 poses so the detector always has a usable lookahead window).
+    obstacle_detection_range_m: 1.5
     # Extra margin (m) grown around DRAWN map obstacle polygons, applied in
     # BOTH the coverage planner (F2C holes are buffered outward before swath
     # planning) and the keepout mask (cells within the margin of an obstacle
