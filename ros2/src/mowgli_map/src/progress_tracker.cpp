@@ -23,6 +23,7 @@
 
 #include <std_msgs/msg/bool.hpp>
 
+#include "mowgli_map/boundary_classifier.hpp"
 #include "mowgli_map/internal_helpers.hpp"
 #include "mowgli_map/map_server_node.hpp"
 
@@ -99,27 +100,22 @@ void MapServerNode::check_boundary_violation(double x, double y)
   // coverage. Require boundary_debounce_samples_ consecutive bad
   // samples before asserting; reset to 0 on the first inside-polygon
   // sample. The lethal escalation is intentionally NOT debounced —
-  // if we're really 0.5 m outside, the blade has to stop *now*.
-  const bool soft_outside = !inside_any && (min_edge_dist > soft_boundary_margin_m_);
-  if (soft_outside)
-  {
-    if (consecutive_outside_samples_ < std::numeric_limits<int>::max())
-    {
-      ++consecutive_outside_samples_;
-    }
-  }
-  else
-  {
-    consecutive_outside_samples_ = 0;
-  }
+  // if we're really 0.5 m outside, the blade has to stop *now*. See
+  // boundary_classifier.hpp for the pure decision function + unit tests
+  // (test_boundary_classifier.cpp).
+  const BoundaryClassification classification = ClassifyBoundary(inside_any,
+                                                                  min_edge_dist,
+                                                                  soft_boundary_margin_m_,
+                                                                  lethal_boundary_margin_m_,
+                                                                  boundary_debounce_samples_,
+                                                                  consecutive_outside_samples_);
 
   std_msgs::msg::Bool soft_msg;
-  soft_msg.data = soft_outside &&
-                  (consecutive_outside_samples_ >= boundary_debounce_samples_);
+  soft_msg.data = classification.soft;
   boundary_violation_pub_->publish(soft_msg);
 
   std_msgs::msg::Bool lethal_msg;
-  lethal_msg.data = !inside_any && (min_edge_dist > lethal_boundary_margin_m_);
+  lethal_msg.data = classification.lethal;
   lethal_boundary_violation_pub_->publish(lethal_msg);
 
   // Only escalate logging when the blade is actively running. When the blade

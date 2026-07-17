@@ -28,6 +28,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
+#include "mowgli_nav2_plugins/ftc_stall.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 
 namespace mowgli_nav2_plugins
@@ -988,17 +989,13 @@ void FTCController::update_control_point(double dt)
       // wheels and digs holes in soft turf (operator report) — ease the target
       // down to a slow crawl until traction returns, so the robot pushes gently
       // instead of accelerating hard into the obstruction.
-      if (config_.stall_speed_ratio > 0.0)
-      {
-        const double actual_fwd = std::abs(last_measured_fwd_speed_);
-        const bool stalling = current_movement_speed_ > config_.stall_crawl_speed &&
-                              actual_fwd < config_.stall_speed_ratio * current_movement_speed_;
-        stall_time_ = stalling ? (stall_time_ + dt) : 0.0;
-        if (stall_time_ > config_.stall_grace_s)
-        {
-          target_speed = std::min(target_speed, config_.stall_crawl_speed);
-        }
-      }
+      // See ftc_stall.hpp for the pure decision function + unit tests
+      // (test_ftc_stall.cpp).
+      const FtcStallCfg stall_cfg{
+          config_.stall_speed_ratio, config_.stall_grace_s, config_.stall_crawl_speed};
+      target_speed = StallDecision(
+          target_speed, current_movement_speed_, last_measured_fwd_speed_, dt, stall_cfg,
+          stall_time_);
 
       // Smooth speed ramp (acceleration / deceleration).
       if (target_speed > current_movement_speed_)
