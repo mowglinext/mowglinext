@@ -20,12 +20,14 @@ namespace mower_msgs
       _stamp_type stamp;
       typedef uint8_t _mower_status_type;
       _mower_status_type mower_status;
+      typedef uint8_t _reset_cause_type;
+      _reset_cause_type reset_cause;
+      typedef const char* _reset_cause_name_type;
+      _reset_cause_name_type reset_cause_name;
       typedef bool _raspberry_pi_power_type;
       _raspberry_pi_power_type raspberry_pi_power;
       typedef bool _is_charging_type;
       _is_charging_type is_charging;
-      typedef bool _esc_power_type;
-      _esc_power_type esc_power;
       typedef bool _rain_detected_type;
       _rain_detected_type rain_detected;
       typedef bool _sound_module_available_type;
@@ -36,6 +38,8 @@ namespace mower_msgs
       _ui_board_available_type ui_board_available;
       typedef bool _mow_enabled_type;
       _mow_enabled_type mow_enabled;
+      typedef bool _firmware_debug_enabled_type;
+      _firmware_debug_enabled_type firmware_debug_enabled;
       typedef uint8_t _mower_esc_status_type;
       _mower_esc_status_type mower_esc_status;
       typedef float _mower_esc_temperature_type;
@@ -46,25 +50,44 @@ namespace mower_msgs
       _mower_motor_temperature_type mower_motor_temperature;
       typedef float _mower_motor_rpm_type;
       _mower_motor_rpm_type mower_motor_rpm;
+      typedef const char* _firmware_version_type;
+      _firmware_version_type firmware_version;
+      typedef uint8_t _firmware_protocol_version_type;
+      _firmware_protocol_version_type firmware_protocol_version;
+      typedef bool _firmware_compatible_type;
+      _firmware_compatible_type firmware_compatible;
       enum { MOWER_STATUS_INITIALIZING = 0 };
       enum { MOWER_STATUS_OK = 255 };
+      enum { RESET_CAUSE_UNKNOWN = 0 };
+      enum { RESET_CAUSE_PIN = 1 };
+      enum { RESET_CAUSE_POR_PDR = 2 };
+      enum { RESET_CAUSE_BOR = 3 };
+      enum { RESET_CAUSE_SFTRST = 4 };
+      enum { RESET_CAUSE_IWDG = 5 };
+      enum { RESET_CAUSE_WWDG = 6 };
+      enum { RESET_CAUSE_LPWR = 7 };
 
     Status():
       stamp(),
       mower_status(0),
+      reset_cause(0),
+      reset_cause_name(""),
       raspberry_pi_power(0),
       is_charging(0),
-      esc_power(0),
       rain_detected(0),
       sound_module_available(0),
       sound_module_busy(0),
       ui_board_available(0),
       mow_enabled(0),
+      firmware_debug_enabled(0),
       mower_esc_status(0),
       mower_esc_temperature(0),
       mower_esc_current(0),
       mower_motor_temperature(0),
-      mower_motor_rpm(0)
+      mower_motor_rpm(0),
+      firmware_version(""),
+      firmware_protocol_version(0),
+      firmware_compatible(0)
     {
     }
 
@@ -74,6 +97,13 @@ namespace mower_msgs
       offset += this->stamp.serialize(outbuffer + offset);
       *(outbuffer + offset + 0) = (this->mower_status >> (8 * 0)) & 0xFF;
       offset += sizeof(this->mower_status);
+      *(outbuffer + offset + 0) = (this->reset_cause >> (8 * 0)) & 0xFF;
+      offset += sizeof(this->reset_cause);
+      uint32_t length_reset_cause_name = strlen(this->reset_cause_name);
+      varToArr(outbuffer + offset, length_reset_cause_name);
+      offset += 4;
+      memcpy(outbuffer + offset, this->reset_cause_name, length_reset_cause_name);
+      offset += length_reset_cause_name;
       union {
         bool real;
         uint8_t base;
@@ -88,13 +118,6 @@ namespace mower_msgs
       u_is_charging.real = this->is_charging;
       *(outbuffer + offset + 0) = (u_is_charging.base >> (8 * 0)) & 0xFF;
       offset += sizeof(this->is_charging);
-      union {
-        bool real;
-        uint8_t base;
-      } u_esc_power;
-      u_esc_power.real = this->esc_power;
-      *(outbuffer + offset + 0) = (u_esc_power.base >> (8 * 0)) & 0xFF;
-      offset += sizeof(this->esc_power);
       union {
         bool real;
         uint8_t base;
@@ -130,6 +153,13 @@ namespace mower_msgs
       u_mow_enabled.real = this->mow_enabled;
       *(outbuffer + offset + 0) = (u_mow_enabled.base >> (8 * 0)) & 0xFF;
       offset += sizeof(this->mow_enabled);
+      union {
+        bool real;
+        uint8_t base;
+      } u_firmware_debug_enabled;
+      u_firmware_debug_enabled.real = this->firmware_debug_enabled;
+      *(outbuffer + offset + 0) = (u_firmware_debug_enabled.base >> (8 * 0)) & 0xFF;
+      offset += sizeof(this->firmware_debug_enabled);
       *(outbuffer + offset + 0) = (this->mower_esc_status >> (8 * 0)) & 0xFF;
       offset += sizeof(this->mower_esc_status);
       union {
@@ -172,6 +202,20 @@ namespace mower_msgs
       *(outbuffer + offset + 2) = (u_mower_motor_rpm.base >> (8 * 2)) & 0xFF;
       *(outbuffer + offset + 3) = (u_mower_motor_rpm.base >> (8 * 3)) & 0xFF;
       offset += sizeof(this->mower_motor_rpm);
+      uint32_t length_firmware_version = strlen(this->firmware_version);
+      varToArr(outbuffer + offset, length_firmware_version);
+      offset += 4;
+      memcpy(outbuffer + offset, this->firmware_version, length_firmware_version);
+      offset += length_firmware_version;
+      *(outbuffer + offset + 0) = (this->firmware_protocol_version >> (8 * 0)) & 0xFF;
+      offset += sizeof(this->firmware_protocol_version);
+      union {
+        bool real;
+        uint8_t base;
+      } u_firmware_compatible;
+      u_firmware_compatible.real = this->firmware_compatible;
+      *(outbuffer + offset + 0) = (u_firmware_compatible.base >> (8 * 0)) & 0xFF;
+      offset += sizeof(this->firmware_compatible);
       return offset;
     }
 
@@ -181,6 +225,17 @@ namespace mower_msgs
       offset += this->stamp.deserialize(inbuffer + offset);
       this->mower_status =  ((uint8_t) (*(inbuffer + offset)));
       offset += sizeof(this->mower_status);
+      this->reset_cause =  ((uint8_t) (*(inbuffer + offset)));
+      offset += sizeof(this->reset_cause);
+      uint32_t length_reset_cause_name;
+      arrToVar(length_reset_cause_name, (inbuffer + offset));
+      offset += 4;
+      for(unsigned int k= offset; k< offset+length_reset_cause_name; ++k){
+          inbuffer[k-1]=inbuffer[k];
+      }
+      inbuffer[offset+length_reset_cause_name-1]=0;
+      this->reset_cause_name = (char *)(inbuffer + offset-1);
+      offset += length_reset_cause_name;
       union {
         bool real;
         uint8_t base;
@@ -197,14 +252,6 @@ namespace mower_msgs
       u_is_charging.base |= ((uint8_t) (*(inbuffer + offset + 0))) << (8 * 0);
       this->is_charging = u_is_charging.real;
       offset += sizeof(this->is_charging);
-      union {
-        bool real;
-        uint8_t base;
-      } u_esc_power;
-      u_esc_power.base = 0;
-      u_esc_power.base |= ((uint8_t) (*(inbuffer + offset + 0))) << (8 * 0);
-      this->esc_power = u_esc_power.real;
-      offset += sizeof(this->esc_power);
       union {
         bool real;
         uint8_t base;
@@ -245,6 +292,14 @@ namespace mower_msgs
       u_mow_enabled.base |= ((uint8_t) (*(inbuffer + offset + 0))) << (8 * 0);
       this->mow_enabled = u_mow_enabled.real;
       offset += sizeof(this->mow_enabled);
+      union {
+        bool real;
+        uint8_t base;
+      } u_firmware_debug_enabled;
+      u_firmware_debug_enabled.base = 0;
+      u_firmware_debug_enabled.base |= ((uint8_t) (*(inbuffer + offset + 0))) << (8 * 0);
+      this->firmware_debug_enabled = u_firmware_debug_enabled.real;
+      offset += sizeof(this->firmware_debug_enabled);
       this->mower_esc_status =  ((uint8_t) (*(inbuffer + offset)));
       offset += sizeof(this->mower_esc_status);
       union {
@@ -291,11 +346,30 @@ namespace mower_msgs
       u_mower_motor_rpm.base |= ((uint32_t) (*(inbuffer + offset + 3))) << (8 * 3);
       this->mower_motor_rpm = u_mower_motor_rpm.real;
       offset += sizeof(this->mower_motor_rpm);
+      uint32_t length_firmware_version;
+      arrToVar(length_firmware_version, (inbuffer + offset));
+      offset += 4;
+      for(unsigned int k= offset; k< offset+length_firmware_version; ++k){
+          inbuffer[k-1]=inbuffer[k];
+      }
+      inbuffer[offset+length_firmware_version-1]=0;
+      this->firmware_version = (char *)(inbuffer + offset-1);
+      offset += length_firmware_version;
+      this->firmware_protocol_version =  ((uint8_t) (*(inbuffer + offset)));
+      offset += sizeof(this->firmware_protocol_version);
+      union {
+        bool real;
+        uint8_t base;
+      } u_firmware_compatible;
+      u_firmware_compatible.base = 0;
+      u_firmware_compatible.base |= ((uint8_t) (*(inbuffer + offset + 0))) << (8 * 0);
+      this->firmware_compatible = u_firmware_compatible.real;
+      offset += sizeof(this->firmware_compatible);
      return offset;
     }
 
     virtual const char * getType() override { return "mower_msgs/Status"; };
-    virtual const char * getMD5() override { return "4ca4fe1c87f756de06bc5f120fd5e5be"; };
+    virtual const char * getMD5() override { return "9cc5d2e56ad4f6861c1e301c5903a3bb"; };
 
   };
 

@@ -18,7 +18,7 @@ namespace mower_msgs
     public:
       typedef ros::Time _stamp_type;
       _stamp_type stamp;
-      typedef uint32_t _wheel_tick_factor_type;
+      typedef float _wheel_tick_factor_type;
       _wheel_tick_factor_type wheel_tick_factor;
       typedef uint8_t _valid_wheels_type;
       _valid_wheels_type valid_wheels;
@@ -63,7 +63,7 @@ namespace mower_msgs
       int offset = 0;
       offset += this->stamp.serialize(outbuffer + offset);
       union {
-        uint32_t real;
+        float real;
         uint32_t base;
       } u_wheel_tick_factor;
       u_wheel_tick_factor.real = this->wheel_tick_factor;
@@ -130,7 +130,7 @@ namespace mower_msgs
       int offset = 0;
       offset += this->stamp.deserialize(inbuffer + offset);
       union {
-        uint32_t real;
+        float real;
         uint32_t base;
       } u_wheel_tick_factor;
       u_wheel_tick_factor.base = 0;
@@ -198,7 +198,7 @@ namespace mower_msgs
     }
 
     virtual const char * getType() override { return "mower_msgs/WheelTick"; };
-    virtual const char * getMD5() override { return "2d9cde8418db096b6a7dcbe3bafba284"; };
+    virtual const char * getMD5() override { return "0a456294b4f707f3dbae296410dccae4"; };
 
   };
 
