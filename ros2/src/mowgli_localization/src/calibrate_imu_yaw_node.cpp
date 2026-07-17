@@ -35,6 +35,7 @@
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
+#include "mowgli_interfaces/robot_yaml_scalar.hpp"
 #include "mowgli_interfaces/srv/calibrate_imu_yaw.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -77,85 +78,10 @@ void sleep_for(double sec)
       std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(sec)));
 }
 
-// Splice a new numeric value into a "<indent><key>:<spaces><number><rest>"
-// line, anchored on the indent so a key whose name happens to contain
-// ours (e.g. dock_pose_x_offset) is not matched.
-void splice_yaml_scalar(std::string& content, const std::string& key, const std::string& new_value)
-{
-  size_t scan = 0;
-  while (scan < content.size())
-  {
-    const size_t line_start = scan;
-    size_t cursor = line_start;
-    while (cursor < content.size() && (content[cursor] == ' ' || content[cursor] == '\t'))
-      ++cursor;
-    const size_t indent_end = cursor;
-    if (indent_end > line_start && cursor + key.size() < content.size() &&
-        content.compare(cursor, key.size(), key) == 0 && content[cursor + key.size()] == ':')
-    {
-      cursor += key.size() + 1;
-      while (cursor < content.size() && (content[cursor] == ' ' || content[cursor] == '\t'))
-        ++cursor;
-      const size_t val_start = cursor;
-      while (cursor < content.size())
-      {
-        const char c = content[cursor];
-        const bool is_num =
-            (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E';
-        if (!is_num)
-          break;
-        ++cursor;
-      }
-      if (cursor > val_start)
-      {
-        content.replace(val_start, cursor - val_start, new_value);
-        return;
-      }
-    }
-    const size_t nl = content.find('\n', line_start);
-    if (nl == std::string::npos)
-      break;
-    scan = nl + 1;
-  }
-}
-
-// Update dock_pose_x/y/yaw values in mowgli_robot.yaml in place via
-// per-line substring splicing — preserves comments and surrounding
-// structure (yaml-cpp would round-trip and strip them). Atomic via
-// tmp+rename. Returns false if the file can't be read or written.
-bool update_dock_pose_in_robot_yaml(const std::string& path, double x, double y, double yaw_rad)
-{
-  std::ifstream in(path);
-  if (!in.good())
-    return false;
-  std::stringstream buf;
-  buf << in.rdbuf();
-  std::string content = buf.str();
-  in.close();
-
-  auto fmt = [](double v)
-  {
-    std::ostringstream s;
-    s << std::fixed << std::setprecision(6) << v;
-    return s.str();
-  };
-  splice_yaml_scalar(content, "dock_pose_x", fmt(x));
-  splice_yaml_scalar(content, "dock_pose_y", fmt(y));
-  splice_yaml_scalar(content, "dock_pose_yaw", fmt(yaw_rad));
-
-  const std::string tmp_path = path + ".tmp";
-  {
-    std::ofstream out(tmp_path, std::ios::trunc);
-    if (!out.good())
-      return false;
-    out << content;
-    if (!out.good())
-      return false;
-  }
-  std::error_code ec;
-  std::filesystem::rename(tmp_path, path, ec);
-  return !ec;
-}
+// dock_pose_x/y/yaw writeback moved to mowgli_interfaces::robot_yaml_scalar
+// (task #42) — was a byte-for-byte-identical copy of the same splice logic
+// duplicated across this file, mowgli_map/area_manager.cpp, and
+// mowgli_behavior/calibration_nodes.cpp.
 
 std::string utc_iso8601_now()
 {
@@ -609,10 +535,10 @@ private:
     result.yaw_sigma_deg = sigma_yaw_rad * 180.0 / M_PI;
     result.speed_ms = dock_undock_speed_;
 
-    if (!update_dock_pose_in_robot_yaml(MOWGLI_ROBOT_YAML_PATH,
-                                        result.dock_pose_x,
-                                        result.dock_pose_y,
-                                        result.dock_pose_yaw_rad))
+    if (!mowgli_interfaces::robot_yaml_scalar::UpdateDockPose(MOWGLI_ROBOT_YAML_PATH,
+                                                               result.dock_pose_x,
+                                                               result.dock_pose_y,
+                                                               result.dock_pose_yaw_rad))
     {
       RCLCPP_ERROR(get_logger(),
                    "Failed to persist dock pose to %s — file missing or "

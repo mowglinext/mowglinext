@@ -17,9 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <fstream>
-#include <iomanip>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -27,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "mowgli_interfaces/robot_yaml_scalar.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 
 namespace mowgli_behavior
@@ -108,47 +107,12 @@ double ema_yaw(double current, double measured, double weight)
 }
 
 // -------------------------------------------------------------------------
-// In-place YAML splice for a single scalar key. Mirrors the helper in
-// mowgli_map::area_manager.cpp — keeps comments + structure intact (yaml-cpp
-// would strip them).
+// dock_pose_yaw splice/persist moved to mowgli_interfaces::robot_yaml_scalar
+// (task #42) — was a byte-for-byte-identical copy of the same splice logic
+// duplicated across this file, mowgli_localization/calibrate_imu_yaw_node.cpp,
+// and mowgli_map/area_manager.cpp.
 // -------------------------------------------------------------------------
 constexpr const char* kRuntimeRobotYaml = "/ros2_ws/config/mowgli_robot.yaml";
-
-bool splice_yaml_scalar(std::string& content, const std::string& key, const std::string& new_value)
-{
-  size_t scan = 0;
-  while (scan < content.size()) {
-    const size_t line_start = scan;
-    size_t cursor = line_start;
-    while (cursor < content.size() && (content[cursor] == ' ' || content[cursor] == '\t')) {
-      ++cursor;
-    }
-    if (cursor > line_start && cursor + key.size() < content.size() &&
-        content.compare(cursor, key.size(), key) == 0 && content[cursor + key.size()] == ':')
-    {
-      cursor += key.size() + 1;
-      while (cursor < content.size() && (content[cursor] == ' ' || content[cursor] == '\t')) {
-        ++cursor;
-      }
-      const size_t val_start = cursor;
-      while (cursor < content.size()) {
-        const char c = content[cursor];
-        const bool is_num =
-            (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E';
-        if (!is_num) break;
-        ++cursor;
-      }
-      if (cursor > val_start) {
-        content.replace(val_start, cursor - val_start, new_value);
-        return true;
-      }
-    }
-    const size_t nl = content.find('\n', line_start);
-    if (nl == std::string::npos) break;
-    scan = nl + 1;
-  }
-  return false;
-}
 
 // Read the current `dock_pose_yaw` from the runtime YAML so we can EMA-blend
 // against it. Returns nullopt if the key isn't found or the file can't be
@@ -187,31 +151,11 @@ std::optional<double> read_dock_pose_yaw_from_yaml()
   return std::nullopt;
 }
 
-// Atomic-rename writeback of a single yaml scalar. Mirrors the safety
-// pattern of mowgli_map's update_dock_pose_in_robot_yaml.
+// Atomic-rename writeback of dock_pose_yaw specifically.
 bool persist_dock_pose_yaw(double yaw_rad)
 {
-  std::ifstream in(kRuntimeRobotYaml);
-  if (!in.good()) return false;
-  std::stringstream buf;
-  buf << in.rdbuf();
-  std::string content = buf.str();
-  in.close();
-
-  std::ostringstream s;
-  s << std::fixed << std::setprecision(6) << yaw_rad;
-  if (!splice_yaml_scalar(content, "dock_pose_yaw", s.str())) {
-    return false;
-  }
-
-  const std::string tmp_path = std::string(kRuntimeRobotYaml) + ".tmp";
-  {
-    std::ofstream out(tmp_path, std::ios::trunc);
-    if (!out.good()) return false;
-    out << content;
-    if (!out.good()) return false;
-  }
-  return std::rename(tmp_path.c_str(), kRuntimeRobotYaml) == 0;
+  return mowgli_interfaces::robot_yaml_scalar::PersistScalar(
+      kRuntimeRobotYaml, "dock_pose_yaw", yaw_rad);
 }
 
 // Fill the covariance block for a yaw-plus-xy seed: tight trust on the
