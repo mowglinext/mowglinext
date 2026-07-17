@@ -991,11 +991,15 @@ void FTCController::update_control_point(double dt)
       // instead of accelerating hard into the obstruction.
       // See ftc_stall.hpp for the pure decision function + unit tests
       // (test_ftc_stall.cpp).
-      const FtcStallCfg stall_cfg{
-          config_.stall_speed_ratio, config_.stall_grace_s, config_.stall_crawl_speed};
-      target_speed = StallDecision(
-          target_speed, current_movement_speed_, last_measured_fwd_speed_, dt, stall_cfg,
-          stall_time_);
+      const FtcStallCfg stall_cfg{config_.stall_speed_ratio,
+                                  config_.stall_grace_s,
+                                  config_.stall_crawl_speed};
+      target_speed = StallDecision(target_speed,
+                                   current_movement_speed_,
+                                   last_measured_fwd_speed_,
+                                   dt,
+                                   stall_cfg,
+                                   stall_time_);
 
       // Smooth speed ramp (acceleration / deceleration).
       if (target_speed > current_movement_speed_)

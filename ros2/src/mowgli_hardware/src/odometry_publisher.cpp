@@ -50,8 +50,10 @@ void OdometryPublisher::reset()
   wheels_stationary_ = true;
 }
 
-void OdometryPublisher::handle_packet(const LlOdometry& pkt, double ticks_per_meter,
-                                       double wheel_track, bool is_charging)
+void OdometryPublisher::handle_packet(const LlOdometry& pkt,
+                                      double ticks_per_meter,
+                                      double wheel_track,
+                                      bool is_charging)
 {
   // Signed tick deltas since last firmware packet (polarity = direction).
   int32_t d_left = pkt.left_ticks - prev_left_ticks_;

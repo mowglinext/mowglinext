@@ -20,7 +20,7 @@
 TEST(CoverageTransitGap, ExecutionSideMatchesSharedConstant)
 {
   EXPECT_DOUBLE_EQ(mowgli_behavior::FollowStrip::kSegmentTransitGap,
-                    mowgli_interfaces::coverage_geometry::kSegmentTransitGapM);
+                   mowgli_interfaces::coverage_geometry::kSegmentTransitGapM);
 }
 
 TEST(CoverageTransitGap, ValueIsPinnedAndSane)

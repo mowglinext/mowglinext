@@ -111,9 +111,12 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
                                    cog_flip_min_interval_s_};
       // See cog_flip_recovery.hpp for the pure decision function + unit
       // tests (test_cog_flip_recovery.cpp).
-      const CogFlipRecoveryResult flip = CogFlipRecoveryFeed(
-          yaw, snap->pose.theta(), seconds_since_last_recovery, cfg, cog_flip_count_,
-          cog_flip_prev_yaw_);
+      const CogFlipRecoveryResult flip = CogFlipRecoveryFeed(yaw,
+                                                             snap->pose.theta(),
+                                                             seconds_since_last_recovery,
+                                                             cfg,
+                                                             cog_flip_count_,
+                                                             cog_flip_prev_yaw_);
       if (flip.should_anchor)
       {
         last_flip_recovery_stamp_ = this->now();

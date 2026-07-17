@@ -23,10 +23,10 @@ namespace fusion_graph
 
 struct CogFlipRecoveryCfg
 {
-  double flip_threshold_rad = 2.618;    // ~150° disagreement to suspect a flip
-  double flip_consistency_rad = 0.52;   // ~30° — consecutive COGs must agree within this
-  int flip_consecutive_n = 3;           // consistent flipped samples required before anchoring
-  double flip_min_interval_s = 10.0;    // rate limit between recoveries
+  double flip_threshold_rad = 2.618;  // ~150° disagreement to suspect a flip
+  double flip_consistency_rad = 0.52;  // ~30° — consecutive COGs must agree within this
+  int flip_consecutive_n = 3;  // consistent flipped samples required before anchoring
+  double flip_min_interval_s = 10.0;  // rate limit between recoveries
 };
 
 struct CogFlipRecoveryResult
@@ -43,11 +43,11 @@ struct CogFlipRecoveryResult
 // has ever fired (the rate limit always passes then); the caller computes it
 // from its own clock so this function stays clock-agnostic.
 inline CogFlipRecoveryResult CogFlipRecoveryFeed(double yaw,
-                                                  double current_yaw,
-                                                  std::optional<double> seconds_since_last_recovery,
-                                                  const CogFlipRecoveryCfg& cfg,
-                                                  int& count,
-                                                  std::optional<double>& prev_yaw)
+                                                 double current_yaw,
+                                                 std::optional<double> seconds_since_last_recovery,
+                                                 const CogFlipRecoveryCfg& cfg,
+                                                 int& count,
+                                                 std::optional<double>& prev_yaw)
 {
   const double d = yaw - current_yaw;
   const double err = std::fabs(std::atan2(std::sin(d), std::cos(d)));

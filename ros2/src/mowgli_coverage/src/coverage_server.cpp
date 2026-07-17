@@ -37,12 +37,14 @@ nav2_util::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::S
   // "parameter 'robot_width' has already been declared" and left coverage_server
   // stuck unconfigured — taking the whole Nav2 bringup down with it. Declare each
   // only if absent, then read the live value, so configure is idempotent.
-  auto declare_double = [this](const std::string& name, double def) {
+  auto declare_double = [this](const std::string& name, double def)
+  {
     if (!has_parameter(name))
       declare_parameter<double>(name, def);
     return get_parameter(name).as_double();
   };
-  auto declare_int = [this](const std::string& name, int def) {
+  auto declare_int = [this](const std::string& name, int def)
+  {
     if (!has_parameter(name))
       declare_parameter<int>(name, def);
     return static_cast<int>(get_parameter(name).as_int());

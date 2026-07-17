@@ -25,8 +25,10 @@ constexpr double kDt = 0.02;  // 50 Hz, matches sim_actuation_node control_hz_.
 
 // Run the model to steady state for a sustained (vx, wz) command and return
 // the final achievable body twist.
-std::pair<double, double> settle(double cmd_vx, double cmd_wz,
-                                  const ms::FirmwareWheelModelParams& p, int ticks = 500)
+std::pair<double, double> settle(double cmd_vx,
+                                 double cmd_wz,
+                                 const ms::FirmwareWheelModelParams& p,
+                                 int ticks = 500)
 {
   ms::FirmwareWheelState st{};
   double vx = 0.0, wz = 0.0;

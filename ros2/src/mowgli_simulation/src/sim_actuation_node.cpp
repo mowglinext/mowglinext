@@ -67,40 +67,43 @@ public:
     wheel_.max_mps = declare_parameter<double>("firmware_max_mps", 0.5);
     wheel_.pwm_per_mps = declare_parameter<double>("firmware_pwm_per_mps", 300.0);
     wheel_.pwm_max = declare_parameter<double>("firmware_pwm_max", 255.0);
-    wheel_.deadband_pwm_static =
-        declare_parameter<double>("firmware_deadband_pwm_static", 40.0);
-    wheel_.deadband_pwm_kinetic =
-        declare_parameter<double>("firmware_deadband_pwm_kinetic", 30.0);
+    wheel_.deadband_pwm_static = declare_parameter<double>("firmware_deadband_pwm_static", 40.0);
+    wheel_.deadband_pwm_kinetic = declare_parameter<double>("firmware_deadband_pwm_kinetic", 30.0);
     wheel_.pi_kp_pwm_per_mps = declare_parameter<double>("firmware_pi_kp_pwm_per_mps", 30.0);
-    wheel_.pi_ki_pwm_per_mps_s =
-        declare_parameter<double>("firmware_pi_ki_pwm_per_mps_s", 5000.0);
+    wheel_.pi_ki_pwm_per_mps_s = declare_parameter<double>("firmware_pi_ki_pwm_per_mps_s", 5000.0);
     wheel_.pi_int_max_pwm = declare_parameter<double>("firmware_pi_int_max_pwm", 100.0);
-    wheel_.pi_hold_thresh_mps =
-        declare_parameter<double>("firmware_pi_hold_thresh_mps", 0.02);
+    wheel_.pi_hold_thresh_mps = declare_parameter<double>("firmware_pi_hold_thresh_mps", 0.02);
     min_linear_vel_ = declare_parameter<double>("min_linear_vel", 0.05);
 
     control_hz_ = declare_parameter<double>("control_hz", 50.0);
 
-    pub_ = create_publisher<geometry_msgs::msg::TwistStamped>(
-        "/cmd_vel_wheels", rclcpp::SystemDefaultsQoS());
+    pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel_wheels",
+                                                              rclcpp::SystemDefaultsQoS());
     sub_cmd_ = create_subscription<geometry_msgs::msg::TwistStamped>(
-        "/cmd_vel", rclcpp::SystemDefaultsQoS(),
-        [this](geometry_msgs::msg::TwistStamped::ConstSharedPtr m) {
+        "/cmd_vel",
+        rclcpp::SystemDefaultsQoS(),
+        [this](geometry_msgs::msg::TwistStamped::ConstSharedPtr m)
+        {
           last_vx_ = m->twist.linear.x;
           last_wz_ = m->twist.angular.z;
           last_cmd_stamp_ = this->now();
         });
     last_tick_ = this->now();
     last_cmd_stamp_ = this->now();
-    timer_ = create_wall_timer(
-        std::chrono::duration<double>(1.0 / control_hz_), [this]() { tick(); });
+    timer_ = create_wall_timer(std::chrono::duration<double>(1.0 / control_hz_),
+                               [this]()
+                               {
+                                 tick();
+                               });
 
     RCLCPP_INFO(get_logger(),
                 "sim_actuation: per-wheel model %s (static=%.0f "
                 "kinetic=%.0f PWM, min_vx=%.2f), wz passthrough (Option C, "
                 "firmware owns the yaw loop) — /cmd_vel -> /cmd_vel_wheels",
-                deadband_enabled_ ? "ON" : "OFF", wheel_.deadband_pwm_static,
-                wheel_.deadband_pwm_kinetic, min_linear_vel_);
+                deadband_enabled_ ? "ON" : "OFF",
+                wheel_.deadband_pwm_static,
+                wheel_.deadband_pwm_kinetic,
+                min_linear_vel_);
   }
 
 private:

@@ -59,16 +59,16 @@ namespace mowgli_simulation
 
 struct FirmwareWheelModelParams
 {
-  double wheel_separation = 0.325;      ///< m, track width (board.h WHEEL_BASE).
-  double max_mps = 0.5;                 ///< per-wheel saturation (board.h MAX_MPS).
-  double pwm_per_mps = 300.0;           ///< feedforward gain (board.h PWM_PER_MPS).
-  double pwm_max = 255.0;               ///< PAC5210 magnitude clamp.
-  double deadband_pwm_static = 40.0;    ///< breakaway PWM from rest (measured, ~PWM 40).
-  double deadband_pwm_kinetic = 30.0;   ///< kinetic hold-on threshold (hysteresis).
-  double pi_kp_pwm_per_mps = 30.0;      ///< WHEEL_PI_KP_PWM_PER_MPS.
+  double wheel_separation = 0.325;  ///< m, track width (board.h WHEEL_BASE).
+  double max_mps = 0.5;  ///< per-wheel saturation (board.h MAX_MPS).
+  double pwm_per_mps = 300.0;  ///< feedforward gain (board.h PWM_PER_MPS).
+  double pwm_max = 255.0;  ///< PAC5210 magnitude clamp.
+  double deadband_pwm_static = 40.0;  ///< breakaway PWM from rest (measured, ~PWM 40).
+  double deadband_pwm_kinetic = 30.0;  ///< kinetic hold-on threshold (hysteresis).
+  double pi_kp_pwm_per_mps = 30.0;  ///< WHEEL_PI_KP_PWM_PER_MPS.
   double pi_ki_pwm_per_mps_s = 5000.0;  ///< WHEEL_PI_KI_PWM_PER_MPS_S.
-  double pi_int_max_pwm = 100.0;        ///< WHEEL_PI_INT_MAX_PWM.
-  double pi_hold_thresh_mps = 0.02;     ///< |actual|<this and target==0 -> force PWM=0.
+  double pi_int_max_pwm = 100.0;  ///< WHEEL_PI_INT_MAX_PWM.
+  double pi_hold_thresh_mps = 0.02;  ///< |actual|<this and target==0 -> force PWM=0.
 };
 
 struct FirmwareWheelState
@@ -91,8 +91,12 @@ inline bool wheel_needs_integrator_reset(double target, double prev)
 
 // One wheel's PI-in-PWM-space + static/kinetic stiction. Updates `actual_mps`,
 // `pi_int_pwm` and `prev_target_mps` in place to the new state after one dt.
-inline void step_wheel(double target_mps, double& actual_mps, double& pi_int_pwm,
-                        double& prev_target_mps, double dt, const FirmwareWheelModelParams& p)
+inline void step_wheel(double target_mps,
+                       double& actual_mps,
+                       double& pi_int_pwm,
+                       double& prev_target_mps,
+                       double dt,
+                       const FirmwareWheelModelParams& p)
 {
   target_mps = std::clamp(target_mps, -p.max_mps, p.max_mps);
 
@@ -103,8 +107,9 @@ inline void step_wheel(double target_mps, double& actual_mps, double& pi_int_pwm
   prev_target_mps = target_mps;
 
   const double err = target_mps - actual_mps;
-  pi_int_pwm = std::clamp(pi_int_pwm + p.pi_ki_pwm_per_mps_s * err * dt, -p.pi_int_max_pwm,
-                           p.pi_int_max_pwm);
+  pi_int_pwm = std::clamp(pi_int_pwm + p.pi_ki_pwm_per_mps_s * err * dt,
+                          -p.pi_int_max_pwm,
+                          p.pi_int_max_pwm);
 
   double pwm = target_mps * p.pwm_per_mps + p.pi_kp_pwm_per_mps * err + pi_int_pwm;
   pwm = std::clamp(pwm, -p.pwm_max, p.pwm_max);
@@ -139,19 +144,22 @@ inline void step_wheel(double target_mps, double& actual_mps, double& pi_int_pwm
 /// \param st          caller-owned per-wheel PI + stiction state.
 /// \param[out] achievable_vx forward velocity the chassis actually achieves.
 /// \param[out] achievable_wz yaw rate the chassis actually achieves.
-inline void step_firmware_wheel_model(double cmd_vx, double cmd_wz, double dt,
-                                       const FirmwareWheelModelParams& p,
-                                       FirmwareWheelState& st, double& achievable_vx,
-                                       double& achievable_wz)
+inline void step_firmware_wheel_model(double cmd_vx,
+                                      double cmd_wz,
+                                      double dt,
+                                      const FirmwareWheelModelParams& p,
+                                      FirmwareWheelState& st,
+                                      double& achievable_vx,
+                                      double& achievable_wz)
 {
   const double half_track = p.wheel_separation * 0.5;
   const double left_target = cmd_vx - cmd_wz * half_track;
   const double right_target = cmd_vx + cmd_wz * half_track;
 
-  detail::step_wheel(left_target, st.left_actual_mps, st.left_pi_int_pwm,
-                      st.prev_left_target_mps, dt, p);
-  detail::step_wheel(right_target, st.right_actual_mps, st.right_pi_int_pwm,
-                      st.prev_right_target_mps, dt, p);
+  detail::step_wheel(
+      left_target, st.left_actual_mps, st.left_pi_int_pwm, st.prev_left_target_mps, dt, p);
+  detail::step_wheel(
+      right_target, st.right_actual_mps, st.right_pi_int_pwm, st.prev_right_target_mps, dt, p);
 
   achievable_vx = 0.5 * (st.left_actual_mps + st.right_actual_mps);
   achievable_wz = (st.right_actual_mps - st.left_actual_mps) / p.wheel_separation;

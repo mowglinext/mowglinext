@@ -149,10 +149,12 @@ TEST(RtkWrongFixGate, AccumulatorRunsAwayIfResetOnlyOnAccept)
     runaway_wheel_dist_m += per_interval_wheel_travel_m;
 
     double unused_dtheta = 0.0;
-    fg::ResetRtkWrongFixAccumulators(bounded_wheel_dist_m, unused_dtheta);  // unconditional (fixed gate).
+    fg::ResetRtkWrongFixAccumulators(bounded_wheel_dist_m,
+                                     unused_dtheta);  // unconditional (fixed gate).
     if (!kEveryFixRejected)
     {
-      fg::ResetRtkWrongFixAccumulators(runaway_wheel_dist_m, unused_dtheta);  // accept-only (reverted gate).
+      fg::ResetRtkWrongFixAccumulators(runaway_wheel_dist_m,
+                                       unused_dtheta);  // accept-only (reverted gate).
     }
   }
 

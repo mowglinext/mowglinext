@@ -32,10 +32,10 @@ namespace fusion_graph
 // slack budget `max_jump_m` — i.e. the fix should be dropped as a likely
 // wrong-fix rather than fused.
 inline bool GpsJumpImplausible(double jump_m,
-                                double max_jump_m,
-                                double lever_arm_radius_m,
-                                double abs_dtheta_rad,
-                                double wheel_dist_m)
+                               double max_jump_m,
+                               double lever_arm_radius_m,
+                               double abs_dtheta_rad,
+                               double wheel_dist_m)
 {
   const double expected_pivot_jump_m = lever_arm_radius_m * abs_dtheta_rad;
   const double jump_budget_m = max_jump_m + expected_pivot_jump_m + wheel_dist_m;

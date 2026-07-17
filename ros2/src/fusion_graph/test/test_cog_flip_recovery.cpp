@@ -25,8 +25,12 @@ TEST(CogFlipRecoveryFeed, SmallDisagreementNeverAnchors)
 
   // Estimate and COG agree closely (10°) — nowhere near a flip.
   const auto r = fg::CogFlipRecoveryFeed(
-      /*yaw=*/10.0 * kDeg, /*current_yaw=*/0.0, /*seconds_since_last_recovery=*/std::nullopt, cfg,
-      count, prev_yaw);
+      /*yaw=*/10.0 * kDeg,
+      /*current_yaw=*/0.0,
+      /*seconds_since_last_recovery=*/std::nullopt,
+      cfg,
+      count,
+      prev_yaw);
   EXPECT_FALSE(r.should_anchor);
   EXPECT_EQ(count, 0);
   EXPECT_FALSE(prev_yaw.has_value());
@@ -39,8 +43,7 @@ TEST(CogFlipRecoveryFeed, SingleFlippedSampleBelowConsecutiveThreshold)
   fg::CogFlipRecoveryCfg cfg;
 
   // ~180° disagreement, but only one sample so far — must not anchor yet.
-  const auto r = fg::CogFlipRecoveryFeed(
-      M_PI, 0.0, std::nullopt, cfg, count, prev_yaw);
+  const auto r = fg::CogFlipRecoveryFeed(M_PI, 0.0, std::nullopt, cfg, count, prev_yaw);
   EXPECT_FALSE(r.should_anchor);
   EXPECT_EQ(r.count, 1);
   EXPECT_EQ(count, 1);
@@ -126,8 +129,8 @@ TEST(CogFlipRecoveryFeed, RateLimitClearsAfterInterval)
   fg::CogFlipRecoveryFeed(flipped_yaw, current_yaw, std::nullopt, cfg, count, prev_yaw);
   fg::CogFlipRecoveryFeed(flipped_yaw, current_yaw, std::nullopt, cfg, count, prev_yaw);
   // 15 s since the last recovery — past the 10 s interval.
-  const auto r = fg::CogFlipRecoveryFeed(flipped_yaw, current_yaw, /*seconds_since_last_recovery=*/15.0,
-                                         cfg, count, prev_yaw);
+  const auto r = fg::CogFlipRecoveryFeed(
+      flipped_yaw, current_yaw, /*seconds_since_last_recovery=*/15.0, cfg, count, prev_yaw);
   EXPECT_TRUE(r.should_anchor);
 }
 
@@ -139,8 +142,8 @@ TEST(CogFlipRecoveryFeed, ExactlyAtThresholdDoesNotCountAsFlip)
 
   // err == flip_threshold_rad exactly must NOT trigger (strict > only,
   // mirrors GpsJumpImplausible's strict boundary convention).
-  const auto r = fg::CogFlipRecoveryFeed(cfg.flip_threshold_rad, 0.0, std::nullopt, cfg, count,
-                                         prev_yaw);
+  const auto r =
+      fg::CogFlipRecoveryFeed(cfg.flip_threshold_rad, 0.0, std::nullopt, cfg, count, prev_yaw);
   EXPECT_FALSE(r.should_anchor);
   EXPECT_EQ(count, 0);
 }
@@ -153,8 +156,8 @@ TEST(CogFlipRecoveryFeed, AngleWrapsCorrectlyNearPiBoundary)
 
   // current_yaw near +π, COG near -π: the raw difference is ~2π but the
   // wrapped disagreement is tiny (~0) — must NOT be treated as a flip.
-  const auto r = fg::CogFlipRecoveryFeed(-179.0 * kDeg, 179.0 * kDeg, std::nullopt, cfg, count,
-                                         prev_yaw);
+  const auto r =
+      fg::CogFlipRecoveryFeed(-179.0 * kDeg, 179.0 * kDeg, std::nullopt, cfg, count, prev_yaw);
   EXPECT_FALSE(r.should_anchor);
   EXPECT_EQ(count, 0);
   EXPECT_NEAR(r.err_rad, 2.0 * kDeg, 1e-9);

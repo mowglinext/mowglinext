@@ -104,11 +104,11 @@ void MapServerNode::check_boundary_violation(double x, double y)
   // boundary_classifier.hpp for the pure decision function + unit tests
   // (test_boundary_classifier.cpp).
   const BoundaryClassification classification = ClassifyBoundary(inside_any,
-                                                                  min_edge_dist,
-                                                                  soft_boundary_margin_m_,
-                                                                  lethal_boundary_margin_m_,
-                                                                  boundary_debounce_samples_,
-                                                                  consecutive_outside_samples_);
+                                                                 min_edge_dist,
+                                                                 soft_boundary_margin_m_,
+                                                                 lethal_boundary_margin_m_,
+                                                                 boundary_debounce_samples_,
+                                                                 consecutive_outside_samples_);
 
   std_msgs::msg::Bool soft_msg;
   soft_msg.data = classification.soft;

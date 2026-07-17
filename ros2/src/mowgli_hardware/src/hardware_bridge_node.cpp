@@ -507,10 +507,8 @@ private:
             }
             else if (name == "yaw_trim_limit_mps")
             {
-              if (reject_invalid_double(name,
-                                        p.as_double(),
-                                        kMinRuntimeYawTrimLimitMps,
-                                        kMaxRuntimeYawTrimLimitMps))
+              if (reject_invalid_double(
+                      name, p.as_double(), kMinRuntimeYawTrimLimitMps, kMaxRuntimeYawTrimLimitMps))
               {
                 break;
               }

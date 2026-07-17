@@ -64,8 +64,10 @@ public:
    *                        forces the published velocity (and its
    *                        covariance) to reflect certain-stationary.
    */
-  void handle_packet(const LlOdometry& pkt, double ticks_per_meter, double wheel_track,
-                      bool is_charging);
+  void handle_packet(const LlOdometry& pkt,
+                     double ticks_per_meter,
+                     double wheel_track,
+                     bool is_charging);
 
   /// True once the most recent aggregation window saw zero net wheel ticks.
   [[nodiscard]] bool wheels_stationary() const

@@ -30,7 +30,7 @@ namespace mowgli_map
 
 struct BoundaryClassification
 {
-  bool soft = false;    // published on /boundary_violation
+  bool soft = false;  // published on /boundary_violation
   bool lethal = false;  // published on /lethal_boundary_violation
 };
 

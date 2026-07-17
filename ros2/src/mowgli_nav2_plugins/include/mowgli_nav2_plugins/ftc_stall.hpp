@@ -33,11 +33,11 @@ struct FtcStallCfg
 // debounce state (mirrors AnchorSlewStep's in-place mutation), accumulated
 // while stalling and reset to 0 the instant traction returns.
 inline double StallDecision(double target_speed,
-                             double cmd_speed,
-                             double measured_fwd_speed,
-                             double dt,
-                             const FtcStallCfg& cfg,
-                             double& stall_time)
+                            double cmd_speed,
+                            double measured_fwd_speed,
+                            double dt,
+                            const FtcStallCfg& cfg,
+                            double& stall_time)
 {
   if (cfg.stall_speed_ratio <= 0.0)
   {
@@ -45,8 +45,8 @@ inline double StallDecision(double target_speed,
   }
 
   const double actual_fwd = std::abs(measured_fwd_speed);
-  const bool stalling = cmd_speed > cfg.stall_crawl_speed &&
-                        actual_fwd < cfg.stall_speed_ratio * cmd_speed;
+  const bool stalling =
+      cmd_speed > cfg.stall_crawl_speed && actual_fwd < cfg.stall_speed_ratio * cmd_speed;
   stall_time = stalling ? (stall_time + dt) : 0.0;
 
   if (stall_time > cfg.stall_grace_s)
