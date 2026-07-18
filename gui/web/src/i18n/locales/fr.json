@@ -209,6 +209,17 @@
     "stateCoverageFailed": "Échec couverture"
   },
   "flashBoard": {
+    "prebuiltInfoTitle": "Nous flasherons le firmware précompilé pour votre modèle",
+    "prebuiltInfoDesc": "Choisissez votre carte et votre panneau ci-dessus, puis cliquez sur Flasher. Le binaire précompilé correspondant, vérifié par somme de contrôle, est téléchargé et écrit — aucune compilation nécessaire. N'ouvrez la section experte ci-dessous que si vous avez besoin d'un build personnalisé.",
+    "noPrebuiltTitle": "Pas encore de firmware précompilé pour ce modèle",
+    "noPrebuiltDesc": "Aucun binaire précompilé testé n'existe pour la carte sélectionnée. Ouvrez « Expert : compiler un firmware personnalisé » ci-dessous et activez « Compiler depuis les sources » pour le compiler et le flasher.",
+    "expertBuildLabel": "Expert : compiler un firmware personnalisé",
+    "expertBuildAlertMessage": "Uniquement pour les builds personnalisés",
+    "expertBuildAlertDescription": "Ces réglages compilent le firmware depuis les sources au lieu de flasher le binaire précompilé testé. De mauvaises valeurs peuvent endommager la batterie ou désactiver une sécurité physique. Laissez « Compiler depuis les sources » décoché pour flasher le binaire précompilé.",
+    "expertBuildToggleTitle": "Compiler depuis les sources au lieu de flasher le binaire précompilé",
+    "expertBuildToggleTooltip": "Si coché, le firmware est compilé depuis le dépôt/la branche ci-dessous avec les paramètres indiqués. Sinon, le binaire précompilé testé de votre carte est flashé.",
+    "confirmPrebuiltDesc": "Ceci flashe le firmware précompilé testé pour la carte et le panneau sélectionnés. Le binaire est vérifié par somme de contrôle avant écriture, et la liaison firmware est vérifiée après redémarrage.",
+    "confirmPrebuiltWarning": "Ceci réécrit la carte de sécurité des lames. Assurez-vous d'avoir sélectionné la bonne carte pour votre matériel.",
     "advancedParamsLabel": "Paramètres firmware avancés (peuvent endommager le matériel)",
     "advancedAlertMessage": "Ces réglages contrôlent la charge de la batterie et les sécurités physiques",
     "advancedAlertDescription": "Des valeurs de tension ou de courant incorrectes peuvent endommager la batterie ou la carte. Ne modifiez ces champs que si vous savez précisément ce que vous faites.",

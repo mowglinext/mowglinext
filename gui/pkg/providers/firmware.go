@@ -3,12 +3,16 @@ package providers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"regexp"
+	"sync"
 	"text/template"
+	"time"
 
 	"github.com/mowglinext/mowglinext/pkg/types"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"golang.org/x/sys/execabs"
@@ -17,11 +21,17 @@ import (
 
 type FirmwareProvider struct {
 	db types.IDBProvider
+	// ros is used ONLY for the post-flash wrong-binary guard: after a prebuilt
+	// flash it subscribes to /hardware_bridge/status to read the firmware's
+	// reported protocol/version handshake. May be nil (e.g. in unit tests), in
+	// which case the live check is skipped with a warning.
+	ros types.IRosProvider
 }
 
-func NewFirmwareProvider(db types.IDBProvider) *FirmwareProvider {
+func NewFirmwareProvider(db types.IDBProvider, ros types.IRosProvider) *FirmwareProvider {
 	u := &FirmwareProvider{
-		db: db,
+		db:  db,
+		ros: ros,
 	}
 	return u
 }
@@ -56,25 +66,31 @@ func (fp *FirmwareProvider) buildBoardHeader(templateFile string, config types.F
 }
 
 func (fp *FirmwareProvider) FlashFirmware(writer io.Writer, config types.FirmwareConfig) error {
-	if config.Repository == "" && config.File == "" {
-		return xerrors.Errorf("repository or file is required")
-	}
-	if config.Branch == "" && config.Repository != "" {
-		return xerrors.Errorf("branch is empty")
-	}
 	configJson, err := json.Marshal(config)
 	if err != nil {
 		return err
 	}
-	err = fp.db.Set("gui.firmware.config", configJson)
-	if err != nil {
+	if err = fp.db.Set("gui.firmware.config", configJson); err != nil {
 		return err
 	}
-	switch config.BoardType {
-	case "BOARD_VERMUT_YARDFORCE500":
+	switch {
+	case config.BoardType == "BOARD_VERMUT_YARDFORCE500":
+		// RP2040-based Vermut board: its own prebuilt-download path (unchanged).
 		return fp.flashVermut(writer, config)
-	default:
+	case config.ExpertBuild:
+		// Expert "build your own": compile from source with the full board.h
+		// param surface. This is the ONLY path that can set DisableEmergency,
+		// so it stays behind the explicit expert flag.
+		if config.Repository == "" {
+			return xerrors.Errorf("repository is required for an expert build")
+		}
+		if config.Branch == "" {
+			return xerrors.Errorf("branch is required for an expert build")
+		}
 		return fp.flashMowgli(writer, config)
+	default:
+		// New-user default: flash the matching prebuilt binary, no compile.
+		return fp.flashPrebuilt(writer, config)
 	}
 }
 
@@ -190,4 +206,140 @@ func (fp *FirmwareProvider) flashVermut(writer io.Writer, config types.FirmwareC
 	}
 	_, _ = writer.Write([]byte("------> Firmware flashed\n"))
 	return nil
+}
+
+// openocdTargetCfg maps a board to its OpenOCD target config. YardForce 500 is a
+// STM32F103 (f1x); the 500B is a STM32F401 (f4x). Different MCU family = different
+// target cfg, so flashing with the wrong one simply fails — itself a guard.
+func openocdTargetCfg(board string) string {
+	switch board {
+	case "BOARD_YARDFORCE500B":
+		return "target/stm32f4x.cfg"
+	default:
+		return "target/stm32f1x.cfg"
+	}
+}
+
+// flashPrebuilt is the default new-user path: resolve the prebuilt binary for
+// the selected board from the release manifest, download + sha256-verify it,
+// SWD-flash it with openocd (program+verify+reset at the STM32 flash base), then
+// run the wrong-binary guard against the firmware's reported handshake.
+//
+// SAFETY (this changes what lands on the blade-safety MCU) — defenses in order:
+//  1. sha256 verify of the download (a wrong/corrupt binary never reaches flash);
+//  2. openocd `verify` (the flashed bytes must match the .bin);
+//  3. post-flash protocol/version check vs the manifest (the wrong-for-board net,
+//     the strongest available since the firmware carries no board self-ID).
+func (fp *FirmwareProvider) flashPrebuilt(writer io.Writer, config types.FirmwareConfig) error {
+	_, _ = writer.Write([]byte("------> Fetching firmware manifest...\n"))
+	manifest, err := fetchFirmwareManifest(DefaultFirmwareManifestURL)
+	if err != nil {
+		_, _ = fmt.Fprintf(writer, "------> Error fetching manifest: %v\n", err)
+		return xerrors.Errorf("fetching firmware manifest: %w", err)
+	}
+
+	entry, err := resolveManifestEntry(manifest, config.BoardType, config.PanelType)
+	if err != nil {
+		_, _ = fmt.Fprintf(writer, "------> %v — use the Expert build path for this board.\n", err)
+		return xerrors.Errorf("resolving prebuilt firmware: %w", err)
+	}
+	_, _ = fmt.Fprintf(writer, "------> Selected %s (board %s, protocol %d, fw %s)\n",
+		entry.File, entry.Board, entry.ProtocolVersion, entry.FwVersion)
+
+	binPath := os.TempDir() + "/firmware_prebuilt.bin"
+	_, _ = fmt.Fprintf(writer, "------> Downloading + verifying (sha256) %s...\n", entry.URL)
+	if err := downloadAndVerify(entry, binPath); err != nil {
+		_, _ = fmt.Fprintf(writer, "------> %v\n", err)
+		return xerrors.Errorf("downloading prebuilt firmware: %w", err)
+	}
+	_, _ = writer.Write([]byte("------> Firmware downloaded and checksum verified\n"))
+
+	_, _ = writer.Write([]byte("------> Flashing firmware (openocd program+verify)...\n"))
+	// SWD over the Pi GPIO header, same prelude as flashVermut. The raw .bin is
+	// programmed at the STM32 flash base (0x08000000); `verify` re-reads it back.
+	openocdCmd := "echo \"10\" > /sys/class/gpio/export && " +
+		"echo \"out\" > /sys/class/gpio/gpio10/direction && " +
+		"echo \"1\" > /sys/class/gpio/gpio10/value && " +
+		"openocd -f interface/raspberrypi-swd.cfg -f " + openocdTargetCfg(entry.Board) +
+		" -c \"program " + binPath + " 0x08000000 verify reset exit\""
+	cmd := execabs.Command("/bin/bash", "-c", openocdCmd)
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	if err := cmd.Run(); err != nil {
+		_, _ = fmt.Fprintf(writer, "------> Error while flashing firmware: %v\n", err)
+		return xerrors.Errorf("error while flashing firmware: %w", err)
+	}
+	_, _ = writer.Write([]byte("------> Firmware flashed and byte-verified\n"))
+
+	fp.postFlashProtocolCheck(writer, entry)
+	return nil
+}
+
+// postFlashSettleWindow is how long we let the freshly-flashed firmware reboot
+// and reconnect (via the ROS2 hardware_bridge) before reading its handshake.
+const postFlashSettleWindow = 30 * time.Second
+
+// postFlashProtocolCheck is the wrong-binary safety net. After a prebuilt flash
+// it watches /hardware_bridge/status and asserts the firmware's reported
+// protocol_version + fw_version match the manifest entry we flashed, and that the
+// host considers it compatible. The firmware carries NO board self-ID, so this
+// protocol/version match is the strongest post-flash check available. It only
+// WARNS (loudly) — the flash itself already succeeded and was byte-verified, and
+// SWD is re-flashable, so a mismatch is recoverable, not a brick.
+//
+// Caveat: the ROS layer replays the last cached Status on subscribe, so we watch
+// for the whole settle window and evaluate the most recent sample rather than the
+// first (which may pre-date the reboot). The authoritative live verdict remains
+// the dashboard's firmware-compatibility indicator.
+func (fp *FirmwareProvider) postFlashProtocolCheck(writer io.Writer, entry firmwareManifestEntry) {
+	if fp.ros == nil {
+		_, _ = writer.Write([]byte("------> WARNING: skipping live firmware verification (no ROS link).\n"))
+		return
+	}
+	_, _ = writer.Write([]byte("------> Verifying the firmware handshake (waiting for reboot)...\n"))
+
+	var mu sync.Mutex
+	var latest *mowgli.Status
+	const subID = "firmware-postflash-check"
+	err := fp.ros.Subscribe("status", subID, 0, func(msg []byte) {
+		var s mowgli.Status
+		if err := json.Unmarshal(msg, &s); err != nil {
+			return
+		}
+		mu.Lock()
+		latest = &s
+		mu.Unlock()
+	})
+	if err != nil {
+		_, _ = fmt.Fprintf(writer, "------> WARNING: could not verify firmware handshake: %v\n", err)
+		return
+	}
+	defer fp.ros.UnSubscribe("status", subID)
+
+	time.Sleep(postFlashSettleWindow)
+
+	mu.Lock()
+	s := latest
+	mu.Unlock()
+
+	if s == nil {
+		_, _ = writer.Write([]byte("------> WARNING: could not confirm the firmware handshake in time. The flash + byte-verify succeeded; check the dashboard for firmware compatibility once the robot reconnects.\n"))
+		return
+	}
+	if int(s.FirmwareProtocolVersion) != entry.ProtocolVersion {
+		_, _ = fmt.Fprintf(writer, "------> WARNING: firmware reports protocol %d but the flashed binary is protocol %d — possible WRONG BINARY for this board. Re-flash carefully.\n",
+			s.FirmwareProtocolVersion, entry.ProtocolVersion)
+		return
+	}
+	if !s.FirmwareCompatible {
+		_, _ = fmt.Fprintf(writer, "------> WARNING: the host reports this firmware as INCOMPATIBLE (fw %s). Check that the ROS2 image and firmware are from the same release.\n", s.FirmwareVersion)
+		return
+	}
+	if entry.FwVersion != "" && s.FirmwareVersion != entry.FwVersion {
+		_, _ = fmt.Fprintf(writer, "------> Note: firmware version %s differs from the manifest's %s (protocol matches, so likely OK).\n",
+			s.FirmwareVersion, entry.FwVersion)
+		return
+	}
+	_, _ = fmt.Fprintf(writer, "------> OK: firmware verified — protocol %d, version %s, compatible.\n",
+		s.FirmwareProtocolVersion, s.FirmwareVersion)
 }
