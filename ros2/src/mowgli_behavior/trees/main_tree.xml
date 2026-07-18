@@ -88,16 +88,28 @@
              polygon. No reason to run any boundary handler in that state. -->
         <IsCharging/>
         <!-- Short-circuit during manual mowing (COMMAND_MANUAL_MOW = 7),
-             area recording (COMMAND_RECORD_AREA = 3), and going home
-             (COMMAND_HOME = 2). In all three modes the destination is
-             expected to lie outside the mowing polygon (joystick area
-             for manual/record, dock for home), so a boundary handler
-             would fire spuriously and cancel DockRobot mid-approach,
-             which is what was breaking auto-redock. The blade is still
-             governed by firmware safety, and collision_monitor still
-             stops for physical obstacles. -->
+             the WHOLE area-recording lifecycle (COMMAND_RECORD_AREA = 3,
+             COMMAND_RECORD_FINISH = 5, COMMAND_RECORD_CANCEL = 6), and going
+             home (COMMAND_HOME = 2). In all these modes the robot is expected
+             to lie outside the mowing polygon (joystick area for manual/record,
+             dock for home), so a boundary handler would fire spuriously and
+             cancel DockRobot mid-approach, which is what was breaking
+             auto-redock. The blade is still governed by firmware safety, and
+             collision_monitor still stops for physical obstacles.
+
+             5 and 6 MUST be whitelisted alongside 3: recording drives a new
+             perimeter OUTSIDE the existing mowing polygon, so IsBoundaryViolation
+             is true by the time the user finishes/cancels. Without 5/6 here, the
+             instant the command flips from 3, this ReactiveFallback stops
+             short-circuiting, engages SoftBoundaryHandler, and halts the Root
+             ReactiveSequence before MainLogic -> RecordingSequence is reached —
+             halting RecordArea (onHalted clears trajectory_) so the finish/cancel
+             is never processed and the recorded area is silently lost. Matches
+             the RecordingCommandGuard below, which already accepts 3/5/6. -->
         <IsCommand command="7"/>
         <IsCommand command="3"/>
+        <IsCommand command="5"/>
+        <IsCommand command="6"/>
         <IsCommand command="2"/>
         <Inverter><IsBoundaryViolation/></Inverter>
 
