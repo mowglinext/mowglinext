@@ -1041,9 +1041,9 @@ func TestGetSettingsYAMLDefaults_ReturnsSchemaDefaults(t *testing.T) {
 	var result map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
 	// Schema defaults are reconciled to the package template (the robot's real
-	// default source): mowing_speed 0.2, transit_speed 0.25.
+	// default source): mowing_speed 0.2, transit_speed 0.2.
 	assert.Equal(t, 0.2, result["mowing_speed"])
-	assert.Equal(t, 0.25, result["transit_speed"])
+	assert.Equal(t, 0.2, result["transit_speed"])
 }
 
 func TestValuesEqual(t *testing.T) {

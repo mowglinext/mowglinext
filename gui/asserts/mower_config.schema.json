@@ -428,7 +428,7 @@
         "undock_distance": {
           "type": "number",
           "title": "Undock Distance",
-          "default": 1.0,
+          "default": 1.5,
           "description": "Reverse distance when undocking (metres)."
         },
         "undock_speed": {
@@ -488,7 +488,7 @@
         "transit_speed": {
           "type": "number",
           "title": "Transit Speed",
-          "default": 0.25,
+          "default": 0.2,
           "description": "Robot speed when transiting between zones and to dock (m/s)."
         },
         "outline_passes": {
@@ -560,7 +560,7 @@
         "battery_full_voltage": {
           "type": "number",
           "title": "Full Voltage",
-          "default": 28.5,
+          "default": 28.0,
           "description": "Voltage at which battery is considered full. Default 28.0 matches YardForce500 SLA packs on the dock; raise if your pack genuinely reaches a higher resting voltage."
         },
         "battery_empty_voltage": {
@@ -638,13 +638,13 @@
         "obstacle_inflation_radius": {
           "type": "number",
           "title": "Obstacle Inflation Radius",
-          "default": 0.6,
+          "default": 1.0,
           "description": "Buffer (m) kept around LiDAR-detected obstacles in the local costmap. Raise if the robot passes too close to trees it can see. Clamped to [0.58, 1.5] at launch."
         },
         "max_obstacle_avoidance_distance": {
           "type": "number",
           "title": "Max Obstacle Detour",
-          "default": 2.0,
+          "default": 3.0,
           "description": "Maximum lateral detour (m) around obstacles — drives both the coverage controller's skirting and the bypass give-up threshold."
         },
         "obstacle_margin": {
@@ -726,13 +726,13 @@
         "xy_goal_tolerance": {
           "type": "number",
           "title": "XY Goal Tolerance",
-          "default": 0.3,
+          "default": 0.1,
           "description": "Acceptable position error at goal (metres)."
         },
         "yaw_goal_tolerance": {
           "type": "number",
           "title": "Yaw Goal Tolerance",
-          "default": 0.1,
+          "default": 0.2,
           "description": "Acceptable heading error at goal (radians)."
         },
         "coverage_xy_tolerance": {
@@ -744,7 +744,7 @@
         "progress_timeout_sec": {
           "type": "number",
           "title": "Progress Timeout",
-          "default": 60.0,
+          "default": 10.0,
           "description": "Seconds without progress before recovery."
         }
       }
