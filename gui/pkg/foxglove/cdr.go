@@ -49,19 +49,39 @@ func ParseSchema(schemaText string) (*msgSchema, error) {
 	}
 
 	// Build a map of type name → fields for referenced sub-messages.
-	// Process in reverse order since dependencies (e.g. builtin_interfaces/Time)
-	// are listed after the types that reference them (e.g. std_msgs/Header).
+	//
+	// Sub-block ordering is NOT guaranteed to be dependency-last: foxglove_bridge
+	// emits referenced types in first-appearance order, so a type used only by a
+	// LATER block can be listed BEFORE it. Example (mowgli_interfaces/ObstacleArray):
+	// std_msgs/Header appears first, so builtin_interfaces/Time is emitted right
+	// after it — BEFORE mowgli_interfaces/TrackedObstacle, which also uses Time.
+	// A single reverse pass left TrackedObstacle.first_seen (a nested Time) with
+	// EMPTY subfields, so it consumed 0 bytes on the wire and every field after
+	// it (observation_count, status) was read from the wrong offset — which made
+	// promoted obstacles deserialize with a garbage status and vanish from the
+	// GUI (frontend filters `o.status === 1`).
+	//
+	// Resolve to a fixpoint instead: re-parse every sub-block until the map stops
+	// growing in resolved depth. len(blocks) passes is the worst case (a linear
+	// dependency chain) and the schemas are tiny, so O(N²) parsing is negligible.
 	subTypes := make(map[string][]schemaField)
-	for i := len(blocks) - 1; i >= 1; i-- {
-		_, fields, err := parseMsgBlock(blocks[i].body, subTypes)
-		if err != nil {
-			return nil, fmt.Errorf("parse sub-message %q: %w", blocks[i].typeName, err)
+	store := func(typeName string, fields []schemaField) {
+		subTypes[typeName] = fields
+		if idx := strings.Index(typeName, "/"); idx >= 0 {
+			subTypes[typeName[idx+1:]] = fields // also the short (package-less) name
 		}
-		subTypes[blocks[i].typeName] = fields
-		// Also store short name (without package prefix)
-		if idx := strings.Index(blocks[i].typeName, "/"); idx >= 0 {
-			short := blocks[i].typeName[idx+1:]
-			subTypes[short] = fields
+	}
+	for pass := 0; pass < len(blocks); pass++ {
+		before := countResolvedSubFields(subTypes)
+		for i := 1; i < len(blocks); i++ {
+			_, fields, err := parseMsgBlock(blocks[i].body, subTypes)
+			if err != nil {
+				return nil, fmt.Errorf("parse sub-message %q: %w", blocks[i].typeName, err)
+			}
+			store(blocks[i].typeName, fields)
+		}
+		if countResolvedSubFields(subTypes) == before && pass > 0 {
+			break // fixpoint reached — no reference resolved to more fields this pass
 		}
 	}
 
@@ -121,6 +141,29 @@ func splitMsgBlocks(text string) []msgBlock {
 		blocks = append(blocks, msgBlock{typeName: typeName, body: body})
 	}
 	return blocks
+}
+
+// countResolvedSubFields totals the resolved nested sub-fields across every
+// message-typed field in the map (recursively). The fixpoint loop in
+// ParseSchema uses it to detect when another pass filled in a previously-empty
+// nested reference (e.g. a first_seen Time that was parsed before its
+// definition was known), which manifests as this count growing.
+func countResolvedSubFields(subTypes map[string][]schemaField) int {
+	var count func(fields []schemaField) int
+	count = func(fields []schemaField) int {
+		n := 0
+		for _, f := range fields {
+			if len(f.SubFields) > 0 {
+				n += len(f.SubFields) + count(f.SubFields)
+			}
+		}
+		return n
+	}
+	total := 0
+	for _, fields := range subTypes {
+		total += count(fields)
+	}
+	return total
 }
 
 func parseMsgBlock(body string, subTypes map[string][]schemaField) (string, []schemaField, error) {
