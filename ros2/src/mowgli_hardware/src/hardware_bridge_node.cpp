@@ -350,6 +350,12 @@ private:
     // STM32 so the firmware wheel PI / odom share the same tuned value.
     wheel_track_ = declare_parameter<double>("wheel_track", 0.325);
     ticks_per_meter_ = declare_parameter<double>("ticks_per_meter", 300.0);
+    // Runtime max wheel-speed cap pushed to the STM32 (PACKET_ID_LL_SET_KINEMATICS)
+    // alongside wheel_track_ as the wheel base, so both can be retuned without a
+    // reflash. Default mirrors the firmware compile-time MAX_MPS fallback; the
+    // firmware clamps the cap to at most its own compiled MAX_MPS (wire can only
+    // LOWER it). Sourced from the sparse mowgli_robot.yaml (Invariant 15).
+    max_mps_ = declare_parameter<double>("max_mps", 0.5);
     // Drive-motor wheel-velocity PID gains + feedforward. Pushed to the STM32
     // firmware (PACKET_ID_LL_SET_DRIVE_PID) so the GUI can retune the per-wheel
     // loop without reflashing. Defaults mirror the firmware compile-time
@@ -803,6 +809,10 @@ private:
                             {
                               send_drive_pid();
                               send_yaw_pid();
+                              // Runtime kinematics (max-speed cap + wheel base),
+                              // same reconnect burst — protocol v4. Old firmware
+                              // ignores the unknown packet ID.
+                              send_kinematics();
                               --pid_resend_count_;
                             }
                             // Firmware version handshake: ask the
@@ -2005,6 +2015,33 @@ private:
     }
   }
 
+  // Push the runtime kinematics (max-speed cap + wheel base) to the firmware
+  // (PACKET_ID_LL_SET_KINEMATICS, protocol v4). Same "re-send on (re)connect via
+  // pid_resend_count_" burst as send_drive_pid()/send_yaw_pid() — the board has
+  // no config persistence. The firmware clamps max_mps to at most its compiled
+  // MAX_MPS (the wire can only LOWER the cap) and wheel_base to a sane range.
+  // Older firmware (protocol < 4) simply ignores the unknown packet ID and keeps
+  // its compile-time MAX_MPS/WHEEL_BASE.
+  void send_kinematics()
+  {
+    if (!serial_)
+    {
+      return;
+    }
+    LlSetKinematics pkt{};
+    pkt.type = PACKET_ID_LL_SET_KINEMATICS;
+    pkt.max_mps = static_cast<float>(max_mps_);
+    pkt.wheel_base = static_cast<float>(wheel_track_);
+    if (send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
+                        sizeof(LlSetKinematics) - sizeof(uint16_t)))
+    {
+      RCLCPP_INFO(get_logger(),
+                  "Sent kinematics: max_mps=%.3f wheel_base=%.3f",
+                  max_mps_,
+                  wheel_track_);
+    }
+  }
+
   void on_reboot_board(const std::shared_ptr<std_srvs::srv::Trigger::Request>,
                        std::shared_ptr<std_srvs::srv::Trigger::Response> res)
   {
@@ -2493,6 +2530,10 @@ private:
   double dock_yaw_{0.0};
   double wheel_track_{0.325};
   double ticks_per_meter_{300.0};
+  // Runtime max wheel-speed cap pushed to the STM32 (PACKET_ID_LL_SET_KINEMATICS)
+  // with wheel_track_ as the wheel base. Default mirrors the firmware compile-time
+  // MAX_MPS fallback; the firmware clamps it to at most its own compiled MAX_MPS.
+  double max_mps_{0.5};
   // Drive-motor wheel-velocity PID gains + feedforward, pushed to the STM32
   // (PACKET_ID_LL_SET_DRIVE_PID). Defaults mirror the firmware compile-time
   // fallback. The board has no persistence, so the bridge re-sends on every

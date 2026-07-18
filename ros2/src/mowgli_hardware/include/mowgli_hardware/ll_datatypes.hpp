@@ -48,7 +48,7 @@ namespace mowgli_hardware
 // formats and the operator must reflash. Bump this in lockstep with
 // MOWGLI_PROTOCOL_VERSION in mowgli_protocol.h when an incompatible wire
 // change requires a hard compatibility break.
-static constexpr uint8_t kMowgliProtocolVersion = 3u;
+static constexpr uint8_t kMowgliProtocolVersion = 4u;
 
 // ---------------------------------------------------------------------------
 // Packet type identifiers
@@ -73,6 +73,7 @@ enum PacketId : uint8_t
   PACKET_ID_LL_SET_DRIVE_PID =
       0x54,  ///< Pi → STM32: drive-motor runtime tuning (PID/FF + ticks_per_meter)
   PACKET_ID_LL_SET_YAW_PID = 0x55,  ///< Pi → STM32: firmware yaw-rate loop tuning (Option C)
+  PACKET_ID_LL_SET_KINEMATICS = 0x56,  ///< Pi → STM32: runtime max-speed cap + wheel base
 };
 
 /// Magic byte in LlReboot — a dedicated reboot packet plus this confirmation
@@ -390,6 +391,30 @@ static_assert(offsetof(LlSetYawPid, gyro_sign) == 14u, "LlSetYawPid.gyro_sign of
 static_assert(offsetof(LlSetYawPid, crc) == 15u, "LlSetYawPid.crc offset drifted");
 
 /**
+ * @brief Runtime kinematics packet sent by the Pi (PACKET_ID_LL_SET_KINEMATICS = 0x56).
+ *
+ * Retunes the runtime max wheel-speed cap and wheel base without a reflash. The
+ * firmware clamps max_mps to at most its compile-time MAX_MPS (the wire can only
+ * LOWER the motion cap, never raise it above the compiled safety ceiling) and
+ * wheel_base to a sane range; the compile-time MAX_MPS/WHEEL_BASE remain the
+ * power-on fallback. The firmware validates/clamps every field before applying.
+ */
+struct LlSetKinematics
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_SET_KINEMATICS
+  float max_mps;  ///< Runtime max wheel speed cap [m/s]; clamped ≤ firmware MAX_MPS
+  float wheel_base;  ///< Wheel track (centre-to-centre) [m]
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+
+static_assert(offsetof(LlSetKinematics, type) == 0u, "LlSetKinematics.type offset drifted");
+static_assert(offsetof(LlSetKinematics, max_mps) == 1u,
+              "LlSetKinematics.max_mps offset drifted");
+static_assert(offsetof(LlSetKinematics, wheel_base) == 5u,
+              "LlSetKinematics.wheel_base offset drifted");
+static_assert(offsetof(LlSetKinematics, crc) == 9u, "LlSetKinematics.crc offset drifted");
+
+/**
  * @brief Blade motor status packet from STM32 (PACKET_ID_LL_BLADE_STATUS = 0x05).
  */
 struct LlBladeStatus
@@ -456,5 +481,6 @@ static_assert(sizeof(LlConfigReq) == 4u, "LlConfigReq layout mismatch");
 static_assert(sizeof(LlConfigRsp) == 8u, "LlConfigRsp layout mismatch");
 static_assert(sizeof(LlSetDrivePid) == 27u, "LlSetDrivePid layout mismatch");
 static_assert(sizeof(LlSetYawPid) == 17u, "LlSetYawPid layout mismatch");
+static_assert(sizeof(LlSetKinematics) == 11u, "LlSetKinematics layout mismatch");
 
 }  // namespace mowgli_hardware

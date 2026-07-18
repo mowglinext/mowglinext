@@ -55,6 +55,8 @@ extern uint8_t left_power;
 extern uint32_t DRIVEMOTOR_u32ErrorCnt;
 extern volatile float g_ticks_per_meter; // runtime encoder scale; board.h
                                          // TICKS_PER_M is the fallback
+extern volatile float g_max_mps; // runtime max wheel-speed cap; board.h MAX_MPS
+                                 // is the fallback AND the ceiling (wire-lower-only)
 
 /******************************************************************************
  * PUBLIC Function Prototypes
@@ -73,6 +75,10 @@ void DRIVEMOTOR_SetSpeedSigned(int16_t left_pwm_signed,
                                int16_t right_pwm_signed);
 void DRIVEMOTOR_SetTicksPerMeter(float ticks_per_meter);
 float DRIVEMOTOR_GetTicksPerMeter(void);
+/* Runtime max wheel-speed cap. The setter clamps to (0, compile-time MAX_MPS];
+ * the wire (PKT_ID_SET_KINEMATICS) can only LOWER the cap, never raise it. */
+void DRIVEMOTOR_SetMaxMps(float max_mps);
+float DRIVEMOTOR_GetMaxMps(void);
 
 /** Legacy 4-arg API kept as a shim over DRIVEMOTOR_SetSpeedSigned. */
 void DRIVEMOTOR_SetSpeed(uint8_t left_speed, uint8_t right_speed,

@@ -155,6 +155,13 @@ static bool r_dig_latched = false;
  * persistence; the bridge re-sends the gains on every reconnect). */
 static volatile float g_pwm_per_mps = (float)PWM_PER_MPS;
 
+/* Runtime wheel base (centre-to-centre track) used by the differential-drive
+ * inverse kinematics. Seeded with the board.h/template WHEEL_BASE, which remains
+ * the power-on fallback; retunable via PKT_ID_SET_KINEMATICS without a reflash.
+ * The runtime max-speed cap lives in drivemotor.c (g_max_mps / DRIVEMOTOR_*MaxMps)
+ * because it is also consumed there for the anti-dig frame ceiling. */
+static volatile float g_wheel_base = (float)WHEEL_BASE;
+
 /* ---------------------------------------------------------------------------
  * Gyro-local closed yaw-rate loop (Option C).
  *
@@ -391,18 +398,23 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
    * the operator/Nav2 intent, not the clamped per-wheel reconstruction. */
   cmd_wz = wz;
 
-  /* Differential-drive inverse kinematics — per-wheel linear speed. */
-  float left_mps = vx - wz * WHEEL_BASE * 0.5f;
-  float right_mps = vx + wz * WHEEL_BASE * 0.5f;
+  /* Differential-drive inverse kinematics — per-wheel linear speed. Wheel base
+   * and the ±cap are runtime values (PKT_ID_SET_KINEMATICS); the compile-time
+   * WHEEL_BASE/MAX_MPS remain the power-on fallback. The cap can only be lowered
+   * below the compiled MAX_MPS ceiling (DRIVEMOTOR_GetMaxMps clamps it). */
+  const float wheel_base = g_wheel_base;
+  const float max_mps = DRIVEMOTOR_GetMaxMps();
+  float left_mps = vx - wz * wheel_base * 0.5f;
+  float right_mps = vx + wz * wheel_base * 0.5f;
 
-  if (left_mps > MAX_MPS)
-    left_mps = MAX_MPS;
-  if (left_mps < -MAX_MPS)
-    left_mps = -MAX_MPS;
-  if (right_mps > MAX_MPS)
-    right_mps = MAX_MPS;
-  if (right_mps < -MAX_MPS)
-    right_mps = -MAX_MPS;
+  if (left_mps > max_mps)
+    left_mps = max_mps;
+  if (left_mps < -max_mps)
+    left_mps = -max_mps;
+  if (right_mps > max_mps)
+    right_mps = max_mps;
+  if (right_mps < -max_mps)
+    right_mps = -max_mps;
 
   /* Hand the target wheel velocities to the PI loop in motors_handler.
    * The mapping to PWM (feedforward + closed-loop correction) lives
@@ -483,7 +495,8 @@ static void on_set_yaw_pid(const uint8_t *data, size_t len) {
 
   const float kp = pid_constrain(pkt->yaw_kp, 0.0f, 5.0f);
   const float ki = pid_constrain(pkt->yaw_ki, 0.0f, 20.0f);
-  const float tl = pid_constrain(pkt->trim_limit_mps, 0.0f, (float)MAX_MPS);
+  const float tl =
+      pid_constrain(pkt->trim_limit_mps, 0.0f, DRIVEMOTOR_GetMaxMps());
   const uint8_t en = (pkt->enabled != 0) ? 1u : 0u;
   const float sign = (pkt->gyro_sign < 0) ? -1.0f : 1.0f;
 
@@ -498,6 +511,33 @@ static void on_set_yaw_pid(const uint8_t *data, size_t len) {
   g_yaw_trim_limit_mps = tl;
   g_yaw_gyro_sign = sign;
   g_yaw_loop_enabled = en;
+  __enable_irq();
+}
+
+static void on_set_kinematics(const uint8_t *data, size_t len) {
+  if (len < sizeof(pkt_set_kinematics_t) - 2u) {
+    return;
+  }
+
+  const pkt_set_kinematics_t *pkt =
+      reinterpret_cast<const pkt_set_kinematics_t *>(data);
+
+  /* Motion caps are safety-relevant: reject the whole packet if any field is
+   * non-finite, then clamp before applying. max_mps is clamped by
+   * DRIVEMOTOR_SetMaxMps to (0, compile-time MAX_MPS] — the wire can only LOWER
+   * the cap, never raise it above the compiled ceiling. wheel_base is clamped to
+   * a sane physical range. Applied atomically w.r.t. motors_handler() (50 Hz);
+   * this handler runs in USB RX interrupt context. */
+  if (!std::isfinite(pkt->max_mps) || !std::isfinite(pkt->wheel_base)) {
+    debug_printf("set_kinematics rejected: non-finite field\r\n");
+    return;
+  }
+
+  const float wb = pid_constrain(pkt->wheel_base, 0.15f, 0.60f);
+
+  __disable_irq();
+  DRIVEMOTOR_SetMaxMps(pkt->max_mps); /* clamps to (0, MAX_MPS] internally */
+  g_wheel_base = wb;
   __enable_irq();
 }
 
@@ -858,14 +898,15 @@ extern "C" void motors_handler() {
       l_target = 0.0f;
       r_target = 0.0f;
     }
-    if (l_target > MAX_MPS)
-      l_target = MAX_MPS;
-    if (l_target < -MAX_MPS)
-      l_target = -MAX_MPS;
-    if (r_target > MAX_MPS)
-      r_target = MAX_MPS;
-    if (r_target < -MAX_MPS)
-      r_target = -MAX_MPS;
+    const float max_mps = DRIVEMOTOR_GetMaxMps();
+    if (l_target > max_mps)
+      l_target = max_mps;
+    if (l_target < -max_mps)
+      l_target = -max_mps;
+    if (r_target > max_mps)
+      r_target = max_mps;
+    if (r_target < -max_mps)
+      r_target = -max_mps;
 
 #if USE_WHEEL_PI
     /* Wheel-level PI loop.
@@ -1327,6 +1368,7 @@ extern "C" void init_ROS() {
   mowgli_comms_register_handler(PKT_ID_REBOOT, on_reboot);
   mowgli_comms_register_handler(PKT_ID_SET_DRIVE_PID, on_set_drive_pid);
   mowgli_comms_register_handler(PKT_ID_SET_YAW_PID, on_set_yaw_pid);
+  mowgli_comms_register_handler(PKT_ID_SET_KINEMATICS, on_set_kinematics);
   mowgli_comms_register_handler(PKT_ID_CONFIG_REQ, on_config_req);
 
   // Initialise timers

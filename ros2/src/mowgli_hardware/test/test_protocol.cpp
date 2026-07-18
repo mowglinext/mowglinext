@@ -104,6 +104,14 @@ TEST(ProtocolSizes, SetYawPidPacketSize)
   EXPECT_EQ(sizeof(LlSetYawPid), 17u);
 }
 
+TEST(ProtocolSizes, SetKinematicsPacketSize)
+{
+  // type(1) + max_mps(4) + wheel_base(4) + crc(2) = 11. Protocol v4 (runtime
+  // MaxMps/WheelBase migration) — must match the firmware pkt_set_kinematics_t
+  // asserts in mowgli_protocol.h.
+  EXPECT_EQ(sizeof(LlSetKinematics), 11u);
+}
+
 TEST(ProtocolSizes, ConfigPacketSizes)
 {
   // Firmware version handshake / runtime config. Req carries flags; Rsp

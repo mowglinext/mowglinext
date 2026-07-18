@@ -41,6 +41,12 @@ mowgli:
     # host connects. board.h TICKS_PER_M remains only the brief power-on
     # fallback before ROS re-applies the saved runtime value.
     ticks_per_meter: 399.0
+    # Runtime max wheel-speed cap [m/s], consumed by hardware_bridge_node and
+    # pushed to the STM32 (PACKET_ID_LL_SET_KINEMATICS) with wheel_track as the
+    # wheel base, so both can be retuned without reflashing. The firmware clamps
+    # this to at most its compiled MAX_MPS (board.h/template) — the wire can only
+    # LOWER the cap, never raise it above the compiled safety ceiling.
+    max_mps: 0.5
     # Drive-motor wheel-velocity PID + feedforward (consumed by
     # hardware_bridge_node, pushed to the STM32 firmware over the serial link so
     # the GUI can retune the per-wheel loop without reflashing). Defaults mirror

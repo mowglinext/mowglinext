@@ -39,9 +39,12 @@ extern "C" {
  * see which main-loop section was running when the WWDG fired. The same v3
  * diagnostic stack also uses the config request/response flags byte to gate
  * optional firmware diagnostics/breadcrumb detail on demand.
+ * v4 adds packet 0x56 (pkt_set_kinematics_t) so the host can retune the runtime
+ * max wheel-speed cap and wheel base without a reflash; old firmware safely
+ * ignores the new packet ID (its compile-time MAX_MPS/WHEEL_BASE stay in force).
  * ---------------------------------------------------------------------------*/
 
-#define MOWGLI_PROTOCOL_VERSION 3u
+#define MOWGLI_PROTOCOL_VERSION 4u
 
 /* ---------------------------------------------------------------------------
  * Firmware version (semantic version of THIS firmware build).
@@ -136,6 +139,13 @@ extern "C" {
  *  onboard gyro. Validated + clamped; compile-time defaults are the power-on
  *  fallback. */
 #define PKT_ID_SET_YAW_PID 0x55u
+
+/** Runtime kinematics (max wheel-speed cap + wheel base) (Host -> Firmware).
+ *  Lets the ROS 2 host retune the motion cap and wheel base without reflashing.
+ *  The firmware clamps max_mps to at most the compile-time MAX_MPS (the wire can
+ *  only LOWER the cap, never raise it) and wheel_base to a sane range; the
+ *  compile-time MAX_MPS/WHEEL_BASE remain the power-on fallback. */
+#define PKT_ID_SET_KINEMATICS 0x56u
 
 /* ---------------------------------------------------------------------------
  * status_bitmask bit definitions  (pkt_status_t::status_bitmask)
@@ -496,6 +506,27 @@ typedef struct {
 } pkt_set_yaw_pid_t;
 
 /**
+ * @brief Runtime kinematics packet — Host -> Firmware
+ * (PKT_ID_SET_KINEMATICS = 0x56).
+ *
+ * Retunes the runtime max wheel-speed cap and wheel base without a reflash. The
+ * firmware rejects the packet if any field is non-finite and clamps each before
+ * applying: max_mps to (0, compile-time MAX_MPS] — the wire can only LOWER the
+ * motion cap, never raise it above the compiled safety ceiling — and wheel_base
+ * to a sane physical range. The compile-time MAX_MPS/WHEEL_BASE remain the
+ * power-on fallback (this board has no config persistence; the host re-sends on
+ * every reconnect).
+ *
+ * Wire size: 11 bytes (must match sizeof(LlSetKinematics) in ll_datatypes.hpp).
+ */
+typedef struct {
+  uint8_t type;      /**< PKT_ID_SET_KINEMATICS */
+  float max_mps;     /**< Runtime max wheel speed cap [m/s]; clamped ≤ MAX_MPS */
+  float wheel_base;  /**< Wheel track (centre-to-centre) [m] */
+  uint16_t crc;      /**< CRC-16 CCITT over preceding bytes */
+} pkt_set_kinematics_t;
+
+/**
  * @brief Blade motor status packet — Firmware -> Host (PKT_ID_BLADE_STATUS =
  * 0x05).
  *
@@ -649,6 +680,17 @@ _Static_assert(offsetof(pkt_set_yaw_pid_t, gyro_sign) == 14u,
                "pkt_set_yaw_pid_t.gyro_sign offset unexpected");
 _Static_assert(offsetof(pkt_set_yaw_pid_t, crc) == 15u,
                "pkt_set_yaw_pid_t.crc offset unexpected");
+
+_Static_assert(sizeof(pkt_set_kinematics_t) == 11u,
+               "pkt_set_kinematics_t layout unexpected");
+_Static_assert(offsetof(pkt_set_kinematics_t, type) == 0u,
+               "pkt_set_kinematics_t.type offset unexpected");
+_Static_assert(offsetof(pkt_set_kinematics_t, max_mps) == 1u,
+               "pkt_set_kinematics_t.max_mps offset unexpected");
+_Static_assert(offsetof(pkt_set_kinematics_t, wheel_base) == 5u,
+               "pkt_set_kinematics_t.wheel_base offset unexpected");
+_Static_assert(offsetof(pkt_set_kinematics_t, crc) == 9u,
+               "pkt_set_kinematics_t.crc offset unexpected");
 #endif
 
 #ifdef __cplusplus
