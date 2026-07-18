@@ -541,6 +541,32 @@ static void on_set_kinematics(const uint8_t *data, size_t len) {
   __enable_irq();
 }
 
+static void on_set_safety_limits(const uint8_t *data, size_t len) {
+  if (len < sizeof(pkt_set_safety_limits_t) - 2u) {
+    return;
+  }
+
+  const pkt_set_safety_limits_t *pkt =
+      reinterpret_cast<const pkt_set_safety_limits_t *>(data);
+
+  /* Charge/e-stop limits are safety-critical: reject the whole packet if a charge
+   * field is non-finite. charger.c / emergency.c then clamp EVERY field so the
+   * wire can only make protection STRONGER (lower charge ceiling, faster trips,
+   * harder emergency-clear), never weaker; the compile-time board_defaults values
+   * remain the power-on fallback (an unconnected host = full vetted safety).
+   * emergency_set_timeouts self-guards its group apply; the two charge stores are
+   * individually atomic (single 32-bit writes on Cortex-M3). */
+  if (!std::isfinite(pkt->max_charge_voltage) ||
+      !std::isfinite(pkt->max_charge_current)) {
+    debug_printf("set_safety_limits rejected: non-finite charge field\r\n");
+    return;
+  }
+
+  charger_set_charge_limits(pkt->max_charge_voltage, pkt->max_charge_current);
+  emergency_set_timeouts(pkt->one_wheel_lift_ms, pkt->both_wheels_lift_ms,
+                         pkt->tilt_ms, pkt->stop_button_ms, pkt->play_clear_ms);
+}
+
 static void on_hl_state(const uint8_t *data, size_t len) {
   if (len < sizeof(pkt_hl_state_t) - 2u) {
     return;
@@ -1369,6 +1395,7 @@ extern "C" void init_ROS() {
   mowgli_comms_register_handler(PKT_ID_SET_DRIVE_PID, on_set_drive_pid);
   mowgli_comms_register_handler(PKT_ID_SET_YAW_PID, on_set_yaw_pid);
   mowgli_comms_register_handler(PKT_ID_SET_KINEMATICS, on_set_kinematics);
+  mowgli_comms_register_handler(PKT_ID_SET_SAFETY_LIMITS, on_set_safety_limits);
   mowgli_comms_register_handler(PKT_ID_CONFIG_REQ, on_config_req);
 
   // Initialise timers

@@ -42,9 +42,14 @@ extern "C" {
  * v4 adds packet 0x56 (pkt_set_kinematics_t) so the host can retune the runtime
  * max wheel-speed cap and wheel base without a reflash; old firmware safely
  * ignores the new packet ID (its compile-time MAX_MPS/WHEEL_BASE stay in force).
+ * v5 adds packet 0x57 (pkt_set_safety_limits_t) so the host can TIGHTEN the
+ * charge-voltage/current ceiling and the emergency-sensor timeouts without a
+ * reflash. Every field is clamped so the wire can only make protection stronger
+ * (lower charge limits, faster e-stop trips, harder emergency-clear), never
+ * weaker; old firmware ignores the new ID and keeps its compile-time limits.
  * ---------------------------------------------------------------------------*/
 
-#define MOWGLI_PROTOCOL_VERSION 4u
+#define MOWGLI_PROTOCOL_VERSION 5u
 
 /* ---------------------------------------------------------------------------
  * Firmware version (semantic version of THIS firmware build).
@@ -146,6 +151,13 @@ extern "C" {
  *  only LOWER the cap, never raise it) and wheel_base to a sane range; the
  *  compile-time MAX_MPS/WHEEL_BASE remain the power-on fallback. */
 #define PKT_ID_SET_KINEMATICS 0x56u
+
+/** Runtime safety limits (charge V/I ceiling + emergency-sensor timeouts)
+ *  (Host -> Firmware). Lets the host TIGHTEN battery/e-stop protection without a
+ *  reflash. The firmware clamps every field so the wire can only make protection
+ *  stronger, never weaker (see pkt_set_safety_limits_t); the compile-time
+ *  board_defaults.h values remain the power-on fallback. */
+#define PKT_ID_SET_SAFETY_LIMITS 0x57u
 
 /* ---------------------------------------------------------------------------
  * status_bitmask bit definitions  (pkt_status_t::status_bitmask)
@@ -527,6 +539,37 @@ typedef struct {
 } pkt_set_kinematics_t;
 
 /**
+ * @brief Runtime safety-limits packet — Host -> Firmware
+ * (PKT_ID_SET_SAFETY_LIMITS = 0x57).
+ *
+ * Retunes the battery charge ceiling and the emergency-sensor timeouts without a
+ * reflash. The firmware rejects the packet if a charge field is non-finite and
+ * clamps EVERY field so the wire can only make protection STRONGER, never weaker:
+ *   - max_charge_voltage / max_charge_current: clamped to (0, compiled ceiling]
+ *     — can only LOWER the charge envelope (can't overcharge).
+ *   - one_wheel_lift/both_wheels_lift/tilt/stop_button timeouts: clamped to
+ *     [min, compiled] — can only SHORTEN (faster e-stop).
+ *   - play_clear_ms (hold-to-clear-emergency): clamped to [compiled, max] — can
+ *     only LENGTHEN (harder to un-latch); shortening it would WEAKEN the latch,
+ *     so that direction is forbidden.
+ * The compile-time board_defaults.h values remain the power-on fallback: an
+ * unconnected/silent host runs the vetted safe defaults.
+ *
+ * Wire size: 21 bytes (must match sizeof(LlSetSafetyLimits) in ll_datatypes.hpp).
+ */
+typedef struct {
+  uint8_t type;                 /**< PKT_ID_SET_SAFETY_LIMITS */
+  float max_charge_voltage;     /**< Charge voltage ceiling [V]; clamped ≤ compiled */
+  float max_charge_current;     /**< Charge current ceiling [A]; clamped ≤ compiled */
+  uint16_t one_wheel_lift_ms;   /**< One-wheel-lift trip [ms]; clamped ≤ compiled */
+  uint16_t both_wheels_lift_ms; /**< Both-wheels-lift trip [ms]; clamped ≤ compiled */
+  uint16_t tilt_ms;             /**< Tilt trip [ms]; clamped ≤ compiled */
+  uint16_t stop_button_ms;      /**< Stop-button trip [ms]; clamped ≤ compiled */
+  uint16_t play_clear_ms;       /**< Hold-to-clear-emergency [ms]; clamped ≥ compiled */
+  uint16_t crc;                 /**< CRC-16 CCITT over preceding bytes */
+} pkt_set_safety_limits_t;
+
+/**
  * @brief Blade motor status packet — Firmware -> Host (PKT_ID_BLADE_STATUS =
  * 0x05).
  *
@@ -691,6 +734,27 @@ _Static_assert(offsetof(pkt_set_kinematics_t, wheel_base) == 5u,
                "pkt_set_kinematics_t.wheel_base offset unexpected");
 _Static_assert(offsetof(pkt_set_kinematics_t, crc) == 9u,
                "pkt_set_kinematics_t.crc offset unexpected");
+
+_Static_assert(sizeof(pkt_set_safety_limits_t) == 21u,
+               "pkt_set_safety_limits_t layout unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, type) == 0u,
+               "pkt_set_safety_limits_t.type offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, max_charge_voltage) == 1u,
+               "pkt_set_safety_limits_t.max_charge_voltage offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, max_charge_current) == 5u,
+               "pkt_set_safety_limits_t.max_charge_current offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, one_wheel_lift_ms) == 9u,
+               "pkt_set_safety_limits_t.one_wheel_lift_ms offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, both_wheels_lift_ms) == 11u,
+               "pkt_set_safety_limits_t.both_wheels_lift_ms offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, tilt_ms) == 13u,
+               "pkt_set_safety_limits_t.tilt_ms offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, stop_button_ms) == 15u,
+               "pkt_set_safety_limits_t.stop_button_ms offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, play_clear_ms) == 17u,
+               "pkt_set_safety_limits_t.play_clear_ms offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, crc) == 19u,
+               "pkt_set_safety_limits_t.crc offset unexpected");
 #endif
 
 #ifdef __cplusplus

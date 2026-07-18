@@ -47,6 +47,20 @@ mowgli:
     # this to at most its compiled MAX_MPS (board.h/template) — the wire can only
     # LOWER the cap, never raise it above the compiled safety ceiling.
     max_mps: 0.5
+    # Runtime SAFETY limits pushed to the STM32 (PACKET_ID_LL_SET_SAFETY_LIMITS)
+    # so the charge ceiling + e-stop timeouts can be TIGHTENED without reflashing.
+    # Defaults mirror the firmware compile-time board_defaults.h values. The
+    # firmware clamps every field so the wire can only make protection STRONGER:
+    # charge V/I clamped <= compiled ceiling; the four trip timeouts clamped
+    # <= compiled (faster e-stop); play_button_clear clamped >= compiled (harder
+    # to un-latch the emergency). An unconnected host runs the compiled defaults.
+    max_charge_voltage: 29.4          # [V] charge voltage ceiling
+    max_charge_current: 1.2           # [A] charge current ceiling
+    one_wheel_lift_emergency_ms: 2000 # [ms] one-wheel-lift trip
+    both_wheels_lift_emergency_ms: 1000 # [ms] both-wheels-lift trip
+    tilt_emergency_ms: 500            # [ms] tilt trip (mechanical + accelerometer)
+    stop_button_emergency_ms: 100     # [ms] stop-button trip
+    play_button_clear_emergency_ms: 2000 # [ms] hold-PLAY-to-clear-emergency
     # Drive-motor wheel-velocity PID + feedforward (consumed by
     # hardware_bridge_node, pushed to the STM32 firmware over the serial link so
     # the GUI can retune the per-wheel loop without reflashing). Defaults mirror

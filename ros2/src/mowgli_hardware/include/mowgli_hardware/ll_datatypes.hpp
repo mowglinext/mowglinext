@@ -48,7 +48,7 @@ namespace mowgli_hardware
 // formats and the operator must reflash. Bump this in lockstep with
 // MOWGLI_PROTOCOL_VERSION in mowgli_protocol.h when an incompatible wire
 // change requires a hard compatibility break.
-static constexpr uint8_t kMowgliProtocolVersion = 4u;
+static constexpr uint8_t kMowgliProtocolVersion = 5u;
 
 // ---------------------------------------------------------------------------
 // Packet type identifiers
@@ -74,6 +74,7 @@ enum PacketId : uint8_t
       0x54,  ///< Pi → STM32: drive-motor runtime tuning (PID/FF + ticks_per_meter)
   PACKET_ID_LL_SET_YAW_PID = 0x55,  ///< Pi → STM32: firmware yaw-rate loop tuning (Option C)
   PACKET_ID_LL_SET_KINEMATICS = 0x56,  ///< Pi → STM32: runtime max-speed cap + wheel base
+  PACKET_ID_LL_SET_SAFETY_LIMITS = 0x57,  ///< Pi → STM32: runtime charge ceiling + e-stop timeouts
 };
 
 /// Magic byte in LlReboot — a dedicated reboot packet plus this confirmation
@@ -415,6 +416,46 @@ static_assert(offsetof(LlSetKinematics, wheel_base) == 5u,
 static_assert(offsetof(LlSetKinematics, crc) == 9u, "LlSetKinematics.crc offset drifted");
 
 /**
+ * @brief Runtime safety-limits packet sent by the Pi (PACKET_ID_LL_SET_SAFETY_LIMITS = 0x57).
+ *
+ * Retunes the battery charge ceiling + emergency-sensor timeouts without a
+ * reflash. The firmware clamps EVERY field so the wire can only make protection
+ * STRONGER, never weaker: charge V/I clamped ≤ compiled ceiling; the four trip
+ * timeouts clamped ≤ compiled (faster e-stop); play_clear_ms clamped ≥ compiled
+ * (harder to un-latch). Compile-time board_defaults.h values stay the power-on
+ * fallback. The firmware validates/clamps every field before applying.
+ */
+struct LlSetSafetyLimits
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_SET_SAFETY_LIMITS
+  float max_charge_voltage;  ///< Charge voltage ceiling [V]; clamped ≤ compiled
+  float max_charge_current;  ///< Charge current ceiling [A]; clamped ≤ compiled
+  uint16_t one_wheel_lift_ms;  ///< One-wheel-lift trip [ms]; clamped ≤ compiled
+  uint16_t both_wheels_lift_ms;  ///< Both-wheels-lift trip [ms]; clamped ≤ compiled
+  uint16_t tilt_ms;  ///< Tilt trip [ms]; clamped ≤ compiled
+  uint16_t stop_button_ms;  ///< Stop-button trip [ms]; clamped ≤ compiled
+  uint16_t play_clear_ms;  ///< Hold-to-clear-emergency [ms]; clamped ≥ compiled
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+
+static_assert(offsetof(LlSetSafetyLimits, type) == 0u, "LlSetSafetyLimits.type offset drifted");
+static_assert(offsetof(LlSetSafetyLimits, max_charge_voltage) == 1u,
+              "LlSetSafetyLimits.max_charge_voltage offset drifted");
+static_assert(offsetof(LlSetSafetyLimits, max_charge_current) == 5u,
+              "LlSetSafetyLimits.max_charge_current offset drifted");
+static_assert(offsetof(LlSetSafetyLimits, one_wheel_lift_ms) == 9u,
+              "LlSetSafetyLimits.one_wheel_lift_ms offset drifted");
+static_assert(offsetof(LlSetSafetyLimits, both_wheels_lift_ms) == 11u,
+              "LlSetSafetyLimits.both_wheels_lift_ms offset drifted");
+static_assert(offsetof(LlSetSafetyLimits, tilt_ms) == 13u,
+              "LlSetSafetyLimits.tilt_ms offset drifted");
+static_assert(offsetof(LlSetSafetyLimits, stop_button_ms) == 15u,
+              "LlSetSafetyLimits.stop_button_ms offset drifted");
+static_assert(offsetof(LlSetSafetyLimits, play_clear_ms) == 17u,
+              "LlSetSafetyLimits.play_clear_ms offset drifted");
+static_assert(offsetof(LlSetSafetyLimits, crc) == 19u, "LlSetSafetyLimits.crc offset drifted");
+
+/**
  * @brief Blade motor status packet from STM32 (PACKET_ID_LL_BLADE_STATUS = 0x05).
  */
 struct LlBladeStatus
@@ -482,5 +523,6 @@ static_assert(sizeof(LlConfigRsp) == 8u, "LlConfigRsp layout mismatch");
 static_assert(sizeof(LlSetDrivePid) == 27u, "LlSetDrivePid layout mismatch");
 static_assert(sizeof(LlSetYawPid) == 17u, "LlSetYawPid layout mismatch");
 static_assert(sizeof(LlSetKinematics) == 11u, "LlSetKinematics layout mismatch");
+static_assert(sizeof(LlSetSafetyLimits) == 21u, "LlSetSafetyLimits layout mismatch");
 
 }  // namespace mowgli_hardware

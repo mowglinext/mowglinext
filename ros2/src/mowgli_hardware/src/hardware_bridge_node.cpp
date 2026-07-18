@@ -356,6 +356,19 @@ private:
     // firmware clamps the cap to at most its own compiled MAX_MPS (wire can only
     // LOWER it). Sourced from the sparse mowgli_robot.yaml (Invariant 15).
     max_mps_ = declare_parameter<double>("max_mps", 0.5);
+    // Runtime safety limits pushed to the STM32 (PACKET_ID_LL_SET_SAFETY_LIMITS)
+    // so the charge ceiling + e-stop timeouts can be TIGHTENED without a reflash.
+    // Defaults mirror the firmware compile-time board_defaults.h values; the
+    // firmware clamps each so the wire can only make protection stronger (charge
+    // ≤ compiled, trips ≤ compiled, play-clear ≥ compiled). Sourced from the
+    // sparse mowgli_robot.yaml (Invariant 15).
+    max_charge_voltage_ = declare_parameter<double>("max_charge_voltage", 29.4);
+    max_charge_current_ = declare_parameter<double>("max_charge_current", 1.2);
+    one_wheel_lift_ms_ = declare_parameter<int>("one_wheel_lift_emergency_ms", 2000);
+    both_wheels_lift_ms_ = declare_parameter<int>("both_wheels_lift_emergency_ms", 1000);
+    tilt_emergency_ms_ = declare_parameter<int>("tilt_emergency_ms", 500);
+    stop_button_ms_ = declare_parameter<int>("stop_button_emergency_ms", 100);
+    play_clear_ms_ = declare_parameter<int>("play_button_clear_emergency_ms", 2000);
     // Drive-motor wheel-velocity PID gains + feedforward. Pushed to the STM32
     // firmware (PACKET_ID_LL_SET_DRIVE_PID) so the GUI can retune the per-wheel
     // loop without reflashing. Defaults mirror the firmware compile-time
@@ -813,6 +826,9 @@ private:
                               // same reconnect burst — protocol v4. Old firmware
                               // ignores the unknown packet ID.
                               send_kinematics();
+                              // Runtime safety limits (charge ceiling + e-stop
+                              // timeouts) — protocol v5, same burst.
+                              send_safety_limits();
                               --pid_resend_count_;
                             }
                             // Firmware version handshake: ask the
@@ -2042,6 +2058,39 @@ private:
     }
   }
 
+  // Push the runtime safety limits (charge V/I ceiling + e-stop timeouts) to the
+  // firmware (PACKET_ID_LL_SET_SAFETY_LIMITS, protocol v5). Same reconnect burst
+  // as the other runtime-param packets. The firmware clamps every field so the
+  // wire can only TIGHTEN protection (charge ≤ compiled, trips ≤ compiled,
+  // play-clear ≥ compiled); older firmware (protocol < 5) ignores the unknown ID
+  // and keeps its compile-time board_defaults limits.
+  void send_safety_limits()
+  {
+    if (!serial_)
+    {
+      return;
+    }
+    LlSetSafetyLimits pkt{};
+    pkt.type = PACKET_ID_LL_SET_SAFETY_LIMITS;
+    pkt.max_charge_voltage = static_cast<float>(max_charge_voltage_);
+    pkt.max_charge_current = static_cast<float>(max_charge_current_);
+    pkt.one_wheel_lift_ms = static_cast<uint16_t>(one_wheel_lift_ms_);
+    pkt.both_wheels_lift_ms = static_cast<uint16_t>(both_wheels_lift_ms_);
+    pkt.tilt_ms = static_cast<uint16_t>(tilt_emergency_ms_);
+    pkt.stop_button_ms = static_cast<uint16_t>(stop_button_ms_);
+    pkt.play_clear_ms = static_cast<uint16_t>(play_clear_ms_);
+    if (send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
+                        sizeof(LlSetSafetyLimits) - sizeof(uint16_t)))
+    {
+      RCLCPP_INFO(
+          get_logger(),
+          "Sent safety limits: charge<=%.2fV/%.2fA trips[ms]=%d/%d/%d/%d play_clear=%d",
+          max_charge_voltage_, max_charge_current_, one_wheel_lift_ms_,
+          both_wheels_lift_ms_, tilt_emergency_ms_, stop_button_ms_,
+          play_clear_ms_);
+    }
+  }
+
   void on_reboot_board(const std::shared_ptr<std_srvs::srv::Trigger::Request>,
                        std::shared_ptr<std_srvs::srv::Trigger::Response> res)
   {
@@ -2534,6 +2583,16 @@ private:
   // with wheel_track_ as the wheel base. Default mirrors the firmware compile-time
   // MAX_MPS fallback; the firmware clamps it to at most its own compiled MAX_MPS.
   double max_mps_{0.5};
+  // Runtime safety limits pushed to the STM32 (PACKET_ID_LL_SET_SAFETY_LIMITS).
+  // Defaults mirror the firmware compile-time board_defaults.h values; the
+  // firmware clamps each so the wire can only TIGHTEN protection.
+  double max_charge_voltage_{29.4};
+  double max_charge_current_{1.2};
+  int one_wheel_lift_ms_{2000};
+  int both_wheels_lift_ms_{1000};
+  int tilt_emergency_ms_{500};
+  int stop_button_ms_{100};
+  int play_clear_ms_{2000};
   // Drive-motor wheel-velocity PID gains + feedforward, pushed to the STM32
   // (PACKET_ID_LL_SET_DRIVE_PID). Defaults mirror the firmware compile-time
   // fallback. The board has no persistence, so the bridge re-sends on every

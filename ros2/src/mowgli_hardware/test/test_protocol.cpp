@@ -112,6 +112,14 @@ TEST(ProtocolSizes, SetKinematicsPacketSize)
   EXPECT_EQ(sizeof(LlSetKinematics), 11u);
 }
 
+TEST(ProtocolSizes, SetSafetyLimitsPacketSize)
+{
+  // type(1) + max_charge_voltage/current(2*4=8) + 5*uint16 timeouts(10) +
+  // crc(2) = 21. Protocol v5 (runtime charge/emergency-limit migration) — must
+  // match the firmware pkt_set_safety_limits_t asserts in mowgli_protocol.h.
+  EXPECT_EQ(sizeof(LlSetSafetyLimits), 21u);
+}
+
 TEST(ProtocolSizes, ConfigPacketSizes)
 {
   // Firmware version handshake / runtime config. Req carries flags; Rsp

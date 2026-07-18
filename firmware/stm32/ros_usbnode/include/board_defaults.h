@@ -47,9 +47,16 @@
 #ifndef MAX_CHARGE_VOLTAGE
 #define MAX_CHARGE_VOLTAGE 29.4f
 #endif
+// DEAD: no firmware code reads LIMIT_VOLTAGE_150MA (defined only here + in the
+// template). NOT runtime-migrated (P4) — a runtime knob would do nothing. Left
+// in place; removing the dead #define is separate cleanup.
 #ifndef LIMIT_VOLTAGE_150MA
 #define LIMIT_VOLTAGE_150MA 28.8f
 #endif
+// SEED-ONLY: this only initialises charger.c's charge_end_voltage; that variable
+// is overwritten every charger tick (charger.c:173, to `v` clamped to
+// MAX_CHARGE_VOLTAGE at charger.c:164). NOT runtime-migrated (P4) — a runtime
+// value would not persist. The live charge ceiling is MAX_CHARGE_VOLTAGE.
 #ifndef BAT_CHARGE_CUTOFF_VOLTAGE
 #define BAT_CHARGE_CUTOFF_VOLTAGE 29.2f
 #endif
