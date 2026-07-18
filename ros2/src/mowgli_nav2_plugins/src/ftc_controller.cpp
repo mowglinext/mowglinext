@@ -786,8 +786,7 @@ FTCController::PlannerState FTCController::update_planner_state()
       // overshoots and oscillates during PRE_ROTATE — staying gated on
       // it would keep PRE_ROTATE alive forever even after the robot is
       // physically aligned with the carrot.
-      const double angle_wrapped =
-          std::atan2(std::sin(angle_error_), std::cos(angle_error_));
+      const double angle_wrapped = std::atan2(std::sin(angle_error_), std::cos(angle_error_));
       if (std::abs(angle_wrapped) * (180.0 / M_PI) < config_.max_goal_angle_error)
       {
         RCLCPP_INFO(logger_, "FTCController: PRE_ROTATE done, starting FOLLOWING.");
@@ -874,11 +873,11 @@ FTCController::PlannerState FTCController::update_planner_state()
         // → next strip). Without it the FTC would silently sit in FINISHED
         // emitting zero velocity, leaving the action open while the goal
         // checker waits for a tolerance the robot will never meet.
-        RCLCPP_WARN(
-            logger_,
-            "FTCController: timeout in WAITING_FOR_GOAL_APPROACH (dist=%.3fm > "
-            "max_goal_distance_error=%.3fm); aborting strip.",
-            distance, config_.max_goal_distance_error);
+        RCLCPP_WARN(logger_,
+                    "FTCController: timeout in WAITING_FOR_GOAL_APPROACH (dist=%.3fm > "
+                    "max_goal_distance_error=%.3fm); aborting strip.",
+                    distance,
+                    config_.max_goal_distance_error);
         is_crashed_ = true;
         return PlannerState::FINISHED;
       }
@@ -1274,8 +1273,7 @@ void FTCController::calculate_velocity_commands(double dt,
     // setPlan exceeds π: kp_ang × (-3π) saturates angular cmd at the
     // wrong sign, so the robot keeps spinning the wrong way and the
     // accumulator drifts further away from zero each tick.
-    const double angle_for_pid =
-        std::atan2(std::sin(angle_error_), std::cos(angle_error_));
+    const double angle_for_pid = std::atan2(std::sin(angle_error_), std::cos(angle_error_));
     double ang_speed =
         angle_for_pid * config_.kp_ang + i_angle_error_ * config_.ki_ang + d_angle * config_.kd_ang;
 
@@ -1420,15 +1418,16 @@ bool FTCController::waitOrThrowForObstacle(const std::string& reason)
     obstacle_wait_start_ = clock_->now();
     RCLCPP_INFO(logger_,
                 "FTCController: %s — holding zero velocity up to %.1fs for the costmap to clear.",
-                reason.c_str(), config_.obstacle_wait_timeout_s);
+                reason.c_str(),
+                config_.obstacle_wait_timeout_s);
   }
   const double elapsed = (clock_->now() - obstacle_wait_start_.value()).seconds();
   if (elapsed > config_.obstacle_wait_timeout_s)
   {
     is_crashed_ = true;
-    throw nav2_core::ControllerException(
-        std::string("FTCController: ") + reason + ", aborting strip after " +
-        std::to_string(static_cast<int>(elapsed)) + "s wait.");
+    throw nav2_core::ControllerException(std::string("FTCController: ") + reason +
+                                         ", aborting strip after " +
+                                         std::to_string(static_cast<int>(elapsed)) + "s wait.");
   }
   obstacle_waiting_ = true;
   return true;
@@ -1447,8 +1446,8 @@ void FTCController::updateLateralDeviation(double dt)
   // all read costmap cells and would otherwise race the costmap update thread.
   std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> costmap_lock(*costmap_map_->getMutex());
 
-  const std::size_t start_idx = std::min(static_cast<std::size_t>(current_index_),
-                                         global_plan_.size() - 1);
+  const std::size_t start_idx =
+      std::min(static_cast<std::size_t>(current_index_), global_plan_.size() - 1);
 
   // Sample obstacles in the COSTMAP frame, not the path frame. global_plan_ is
   // in the plan frame (map); costmap_map_ is the local costmap in its own

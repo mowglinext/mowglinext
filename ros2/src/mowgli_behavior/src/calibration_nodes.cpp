@@ -67,29 +67,40 @@ constexpr const char* kRuntimeRobotYaml = "/ros2_ws/config/mowgli_robot.yaml";
 std::optional<double> read_dock_pose_yaw_from_yaml()
 {
   std::ifstream in(kRuntimeRobotYaml);
-  if (!in.good()) {
+  if (!in.good())
+  {
     return std::nullopt;
   }
   std::string line;
-  while (std::getline(in, line)) {
+  while (std::getline(in, line))
+  {
     size_t cursor = 0;
-    while (cursor < line.size() && (line[cursor] == ' ' || line[cursor] == '\t')) ++cursor;
+    while (cursor < line.size() && (line[cursor] == ' ' || line[cursor] == '\t'))
+      ++cursor;
     static const std::string kKey = "dock_pose_yaw:";
-    if (cursor + kKey.size() <= line.size() && line.compare(cursor, kKey.size(), kKey) == 0) {
+    if (cursor + kKey.size() <= line.size() && line.compare(cursor, kKey.size(), kKey) == 0)
+    {
       cursor += kKey.size();
-      while (cursor < line.size() && (line[cursor] == ' ' || line[cursor] == '\t')) ++cursor;
+      while (cursor < line.size() && (line[cursor] == ' ' || line[cursor] == '\t'))
+        ++cursor;
       const size_t val_start = cursor;
-      while (cursor < line.size()) {
+      while (cursor < line.size())
+      {
         const char c = line[cursor];
         const bool is_num =
             (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E';
-        if (!is_num) break;
+        if (!is_num)
+          break;
         ++cursor;
       }
-      if (cursor > val_start) {
-        try {
+      if (cursor > val_start)
+      {
+        try
+        {
           return std::stod(line.substr(val_start, cursor - val_start));
-        } catch (...) {
+        }
+        catch (...)
+        {
           return std::nullopt;
         }
       }
@@ -101,8 +112,9 @@ std::optional<double> read_dock_pose_yaw_from_yaml()
 // Atomic-rename writeback of dock_pose_yaw specifically.
 bool persist_dock_pose_yaw(double yaw_rad)
 {
-  return mowgli_interfaces::robot_yaml_scalar::PersistScalar(
-      kRuntimeRobotYaml, "dock_pose_yaw", yaw_rad);
+  return mowgli_interfaces::robot_yaml_scalar::PersistScalar(kRuntimeRobotYaml,
+                                                             "dock_pose_yaw",
+                                                             yaw_rad);
 }
 
 // Fill the covariance block for a yaw-plus-xy seed: tight trust on the
@@ -220,21 +232,26 @@ BT::NodeStatus CalibrateHeadingFromUndock::tick()
   // during the straight reverse so it equals the dock_pose_yaw, which
   // is what we want to persist.
   const auto& samples = ctx->undock_gps_samples;
-  const bool have_line_fit_samples = samples.size() >= 4u &&
-      std::hypot(samples.back().first  - samples.front().first,
-                 samples.back().second - samples.front().second) >= 0.5;
+  const bool have_line_fit_samples =
+      samples.size() >= 4u && std::hypot(samples.back().first - samples.front().first,
+                                         samples.back().second - samples.front().second) >= 0.5;
   double yaw = 0.0;
   double sigma_yaw = 0.0;
   const char* method = "endpoint";
-  if (have_line_fit_samples) {
+  if (have_line_fit_samples)
+  {
     const auto [motion_yaw, motion_sigma] = FitMotionYaw(samples);
     // Robot heading points opposite the motion (BackUp reverses).
     yaw = motion_yaw + M_PI;
-    while (yaw >  M_PI) yaw -= 2.0 * M_PI;
-    while (yaw < -M_PI) yaw += 2.0 * M_PI;
+    while (yaw > M_PI)
+      yaw -= 2.0 * M_PI;
+    while (yaw < -M_PI)
+      yaw += 2.0 * M_PI;
     sigma_yaw = std::max(motion_sigma, 0.001);  // floor at ~0.06°
     method = "line_fit";
-  } else {
+  }
+  else
+  {
     // Endpoint fallback. Motion vector (dx, dy) points OPPOSITE the
     // robot's heading so heading = atan2(-dy, -dx).
     yaw = std::atan2(-dy, -dx);
@@ -278,22 +295,22 @@ BT::NodeStatus CalibrateHeadingFromUndock::tick()
   // stay as the live /set_pose seed but don't pollute the persisted
   // value with a noisy update.
   constexpr double kEmaWeight = 0.30;
-  constexpr double kMaxSigmaForPersist = 0.02;   // ~1.15°
+  constexpr double kMaxSigmaForPersist = 0.02;  // ~1.15°
   bool persisted = false;
-  if (have_line_fit_samples && sigma_yaw <= kMaxSigmaForPersist) {
+  if (have_line_fit_samples && sigma_yaw <= kMaxSigmaForPersist)
+  {
     const auto current_yaml = read_dock_pose_yaw_from_yaml();
-    const double blended = current_yaml.has_value()
-                              ? ema_yaw(current_yaml.value(), yaw, kEmaWeight)
-                              : yaw;
+    const double blended =
+        current_yaml.has_value() ? ema_yaw(current_yaml.value(), yaw, kEmaWeight) : yaw;
     persisted = persist_dock_pose_yaw(blended);
-    if (!persisted) {
-      RCLCPP_WARN_THROTTLE(
-          ctx->node->get_logger(),
-          *ctx->node->get_clock(),
-          5000,
-          "CalibrateHeadingFromUndock: could not persist dock_pose_yaw to %s — "
-          "file missing or not writable. /set_pose seed still applied.",
-          kRuntimeRobotYaml);
+    if (!persisted)
+    {
+      RCLCPP_WARN_THROTTLE(ctx->node->get_logger(),
+                           *ctx->node->get_clock(),
+                           5000,
+                           "CalibrateHeadingFromUndock: could not persist dock_pose_yaw to %s — "
+                           "file missing or not writable. /set_pose seed still applied.",
+                           kRuntimeRobotYaml);
     }
   }
 

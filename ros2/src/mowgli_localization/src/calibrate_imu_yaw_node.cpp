@@ -554,9 +554,8 @@ private:
     // start/end displacement above cleared min_displacement, e.g. sparse
     // GPS arrivals near dock_undock_speed_'s low end).
     const bool have_line_fit_samples =
-        samples.size() >= 4u &&
-        std::hypot(samples.back().first - samples.front().first,
-                  samples.back().second - samples.front().second) >= 0.5;
+        samples.size() >= 4u && std::hypot(samples.back().first - samples.front().first,
+                                           samples.back().second - samples.front().second) >= 0.5;
     double dock_yaw;
     double sigma_yaw_rad;
     const char* yaw_method = "endpoint";
@@ -591,9 +590,9 @@ private:
     result.speed_ms = dock_undock_speed_;
 
     if (!mowgli_interfaces::robot_yaml_scalar::UpdateDockPose(MOWGLI_ROBOT_YAML_PATH,
-                                                               result.dock_pose_x,
-                                                               result.dock_pose_y,
-                                                               result.dock_pose_yaw_rad))
+                                                              result.dock_pose_x,
+                                                              result.dock_pose_y,
+                                                              result.dock_pose_yaw_rad))
     {
       RCLCPP_ERROR(get_logger(),
                    "Failed to persist dock pose to %s — file missing or "

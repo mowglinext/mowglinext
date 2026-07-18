@@ -143,7 +143,9 @@ inline bool PersistScalar(const std::string& path, const std::string& key, doubl
 {
   return ReadEditWrite(path,
                        [&](std::string& content)
-                       { return SpliceScalar(content, key, FormatScalar(value)); });
+                       {
+                         return SpliceScalar(content, key, FormatScalar(value));
+                       });
 }
 
 }  // namespace mowgli_interfaces::robot_yaml_scalar
