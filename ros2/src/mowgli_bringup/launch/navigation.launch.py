@@ -522,14 +522,18 @@ def generate_launch_description() -> LaunchDescription:
         obstacle_margin = float(rt_rp.get("obstacle_margin", obstacle_margin))
         obstacle_slowdown_ratio = float(rt_rp.get(
             "obstacle_slowdown_ratio", obstacle_slowdown_ratio))
-        # Operator override wins; otherwise fall back to chassis_width/2
-        # (cw was already read above from the same runtime config).
+        # Operator override wins; otherwise fall back to 0.0 (below).
         if "chassis_safety_inset" in rt_rp:
             chassis_safety_inset = float(rt_rp["chassis_safety_inset"])
     if chassis_safety_inset is None:
-        # cw is the chassis width read from the same runtime config a few
-        # lines above; default the inset to half of it.
-        chassis_safety_inset = cw / 2.0
+        # Default 0.0: the outermost headland ring rides ON the recorded line
+        # (the perimeter the operator drove), so the blade mows to the edge and
+        # the chassis is allowed to straddle the boundary. coverage_server treats
+        # chassis_safety_inset as "how far inside the recorded line the outermost
+        # ring centerline sits" and applies the op_width/2 outward expansion
+        # itself. An operator who wants the whole chassis kept inside can set
+        # chassis_safety_inset = chassis_width/2 in mowgli_robot.yaml.
+        chassis_safety_inset = 0.0
 
     # Compute BT XML paths from installed package shares (not hardcoded).
     bt_nav_to_pose_xml = os.path.join(

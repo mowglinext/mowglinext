@@ -403,26 +403,19 @@ void CoverageServer::planCoverage()
     const double mow_angle_rad =
         (goal->mow_angle_deg < 0.0) ? -1.0 : goal->mow_angle_deg * M_PI / 180.0;
 
-    // SAFETY FLOOR: the boundary buffer must be at least the chassis half-width,
-    // or worst-case tracking error pushes a spinning blade past the operator
-    // polygon. chassis_safety_inset is field-tunable and has drifted to 0.0/0.08
-    // on deployed configs, which (with a 0.40 m chassis) let the robot excurse
-    // 0.32-0.39 m outside a concave boundary. Floor the planning inset at
-    // robot_width/2 regardless of the configured value.
-    const double inset_floor = robot_width_ * 0.5;
-    const double effective_inset = std::max(configured_inset, inset_floor);
-    if (effective_inset > configured_inset + 1e-9 && !inset_floor_warned_)
-    {
-      inset_floor_warned_ = true;
-      RCLCPP_WARN(get_logger(),
-                  "chassis_safety_inset=%.3fm is below the safety floor robot_width/2=%.3fm "
-                  "(robot_width=%.2fm) — planning at %.3fm so the chassis cannot cross the "
-                  "boundary. The chassis half-width is governing the boundary margin.",
-                  configured_inset,
-                  inset_floor,
-                  robot_width_,
-                  effective_inset);
-    }
+    // chassis_safety_inset is how far INSIDE the recorded boundary the
+    // OUTERMOST headland ring's centerline sits. Default 0 = the ring rides ON
+    // the recorded line (the perimeter the operator drove), so the blade mows to
+    // the edge and the chassis is allowed to straddle the boundary — bounded by
+    // the half-chassis-width lethal band the map_server keepout mask places
+    // OUTSIDE the line (enforce_boundary_margin_m). There is deliberately NO
+    // robot_width/2 floor: flooring the inset at the chassis half-width kept the
+    // whole chassis inside but left a ~0.20 m uncut perimeter border, which is
+    // exactly what this change removes. An operator who wants the chassis to
+    // stay fully inside can set chassis_safety_inset = chassis_width/2 in
+    // mowgli_robot.yaml. Negative values are nonsensical (the on-the-line
+    // outward expansion is applied inside planBoustrophedon), so clamp at 0.
+    const double effective_inset = std::max(configured_inset, 0.0);
 
     // Drawn-obstacle margin, read live like the other geometry knobs. Clamp
     // mirrors the launch-injection band so a stray `ros2 param set` cannot

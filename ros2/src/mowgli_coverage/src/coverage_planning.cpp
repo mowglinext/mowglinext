@@ -691,6 +691,25 @@ std::vector<std::pair<double, double>> densifyPolyline(
 
 }  // namespace
 
+// Expand a cell's exterior ring outward by `margin`, preserving its holes.
+// Used to place the outermost headland ring ON the recorded boundary (the
+// perimeter the operator drove) instead of the op_width/2 inside it that
+// generateHeadlandSwaths would otherwise produce. Holes (drawn obstacles) are
+// carried over unchanged — the outer buffer does not move them.
+static f2c::types::Cell expandCellOutward(const f2c::types::Cell& in, double margin)
+{
+  if (in.size() == 0)
+  {
+    return in;
+  }
+  f2c::types::Cell out(bufferRingOutward(in.getGeometry(0), margin));
+  for (std::size_t r = 1; r < in.size(); ++r)  // ring 0 = exterior, 1.. = holes
+  {
+    out.addRing(in.getGeometry(r));
+  }
+  return out;
+}
+
 BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double op_width,
                                     double headland_width,
@@ -724,20 +743,47 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   f2c::types::Cells cells;
   cells.addGeometry(field_cell);
 
-  // (1) Chassis-safety pre-inset: everything (rings AND swaths) is planned at
-  // least this far inside the operator polygon, so tracking error can't push
-  // the chassis over the boundary.
+  // (1) Boundary offset so the OUTERMOST headland ring's centerline sits
+  // `chassis_safety_inset` inside the recorded line. generateHeadlandSwaths
+  // (below) places ring 0 at op_width/2 inside the planning boundary, so shift
+  // the planning field by (chassis_safety_inset - op_width/2):
+  //   > 0  shrink INWARD  — operator asked to keep the chassis further inside
+  //                         (chassis_safety_inset > op_width/2);
+  //   < 0  expand OUTWARD — DEFAULT (inset 0): ring 0 rides ON the recorded
+  //                         line, so the blade mows to the edge and the chassis
+  //                         straddles the boundary. The half-chassis-width lethal
+  //                         band the keepout mask places outside the line is the
+  //                         safety stop, replacing the old inset floor.
+  const double field_offset = chassis_safety_inset - 0.5 * op_width;
   f2c::types::Cells safe_cells = cells;
-  if (chassis_safety_inset > 1e-3)
+  bool boundary_offset_applied = false;
+  if (field_offset > 1e-3)
   {
-    safe_cells = hl.generateHeadlands(cells, chassis_safety_inset);
+    safe_cells = hl.generateHeadlands(cells, field_offset);
     if (safe_cells.size() == 0 || safe_cells.area() < 1e-6)
     {
       return plan;  // inset consumed the field
     }
-    // Expose the inset outer ring so the continuous-path connectors/fillets are
-    // bounded by the SAME polygon the rings/swaths are planned against (not the
-    // raw operator boundary). If the inset split the field, take the largest
+    boundary_offset_applied = true;
+  }
+  else if (field_offset < -1e-3)
+  {
+    // Expand the field exterior outward so ring 0 lands on the recorded line.
+    f2c::types::Cells expanded;
+    expanded.addGeometry(expandCellOutward(field_cell, -field_offset));
+    if (expanded.size() > 0 && expanded.area() > 1e-6)
+    {
+      safe_cells = expanded;
+      boundary_offset_applied = true;
+    }
+    // else: buffer degeneracy — fall back to the raw field (safe_cells = cells).
+  }
+
+  if (boundary_offset_applied)
+  {
+    // Expose the planning outer ring so the continuous-path connectors/fillets
+    // are bounded by the SAME polygon the rings/swaths are planned against (not
+    // the raw operator boundary). If an inset split the field, take the largest
     // cell's exterior ring (the dominant drivable region).
     std::size_t largest = 0;
     double largest_area = -1.0;
@@ -760,13 +806,14 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   }
 
   // Expose the interior hole rings the continuous-path connectors/fillets must
-  // stay OUT of (issue #333). Use the INSET field's holes when an inset was
-  // applied (they are grown outward by the inset, so the blade clears an
-  // obstacle by the same margin it clears the outer boundary); otherwise the raw
-  // operator holes. Collect across every cell (the inset may have split the
-  // field) so a connector near any hole is caught.
+  // stay OUT of (issue #333). Use safe_cells' holes: when an inward inset was
+  // applied they are grown outward by the inset (so the blade clears an obstacle
+  // by the same margin it clears the outer boundary); when the field was
+  // expanded outward (ring on the line) or left unchanged, safe_cells carries
+  // the raw operator holes. Collect across every cell (the inset may have split
+  // the field) so a connector near any hole is caught.
   {
-    const f2c::types::Cells& hole_src = (chassis_safety_inset > 1e-3) ? safe_cells : cells;
+    const f2c::types::Cells& hole_src = safe_cells;
     for (std::size_t i = 0; i < hole_src.size(); ++i)
     {
       const auto& cell = hole_src.getGeometry(i);
