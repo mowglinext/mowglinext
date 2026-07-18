@@ -70,7 +70,8 @@ inline double compute_cog_body_yaw(double dx,
 {
   const double drift_corr = omega_avg * dt_baseline * 0.5;
   // SIGNED vx: forward → small +offset; reverse → near ±π.
-  const double lever_full = std::atan2(omega_avg * lever_arm_x, vx_signed - omega_avg * lever_arm_y);
+  const double lever_full =
+      std::atan2(omega_avg * lever_arm_x, vx_signed - omega_avg * lever_arm_y);
 
   double base_yaw;
   double lever_corr;
@@ -96,11 +97,8 @@ inline double compute_cog_body_yaw(double dx,
 // Uses |vx| (effective speed magnitude) for the denominator regardless of
 // travel direction — the |∂lever/∂ω| magnitude is symmetric in vx sign, so
 // the σ inflation is identical forward and reverse.
-inline double compute_lever_sigma(double omega_avg,
-                                  double v_eff,
-                                  double lever_arm_x,
-                                  double lever_arm_y,
-                                  double omega_noise_rps)
+inline double compute_lever_sigma(
+    double omega_avg, double v_eff, double lever_arm_x, double lever_arm_y, double omega_noise_rps)
 {
   const double denom_lever =
       std::pow(v_eff - omega_avg * lever_arm_y, 2.0) + std::pow(omega_avg * lever_arm_x, 2.0);
@@ -133,8 +131,7 @@ inline double compute_lever_sigma(double omega_avg,
 // ratio ~1.0 means "reject once the antenna's rotational speed exceeds the
 // chassis forward speed". Gentle curved driving (high vx, low omega) passes;
 // in-place / rotation-dominant pivots (low vx, any omega) are rejected.
-inline bool cog_sweep_dominates(double omega, double lever_radius, double vx,
-                                double ratio)
+inline bool cog_sweep_dominates(double omega, double lever_radius, double vx, double ratio)
 {
   const double sweep_speed = std::abs(omega) * lever_radius;
   return sweep_speed > ratio * std::abs(vx);

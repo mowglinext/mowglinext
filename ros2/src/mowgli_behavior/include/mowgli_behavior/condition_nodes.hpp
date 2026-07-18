@@ -573,9 +573,7 @@ public:
                               5.0,
                               "Seconds collision_monitor must be in STOP before tripping"),
         BT::InputPort<int>("max_count", 3, "Per-session cap on obstacle-backoff firings"),
-        BT::InputPort<double>("cooldown_sec",
-                              8.0,
-                              "Minimum gap between obstacle-backoff firings"),
+        BT::InputPort<double>("cooldown_sec", 8.0, "Minimum gap between obstacle-backoff firings"),
     };
   }
 

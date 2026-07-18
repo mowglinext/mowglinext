@@ -110,8 +110,7 @@ TEST(ClockFit, JitterAveragedOut)
   const int64_t expected_ns = perfect_ref.host_ns;
   const int64_t got_ns = stamp.nanoseconds();
   const int64_t err_ns = std::abs(got_ns - expected_ns);
-  EXPECT_LT(err_ns, 1'000'000)
-      << "fit produced jittered stamp: err=" << err_ns << " ns";
+  EXPECT_LT(err_ns, 1'000'000) << "fit produced jittered stamp: err=" << err_ns << " ns";
 }
 
 // ─────────────────────────────────────────────────────────────────────

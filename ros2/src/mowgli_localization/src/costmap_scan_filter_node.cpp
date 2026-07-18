@@ -133,17 +133,26 @@ public:
     sub_scan_ = create_subscription<sensor_msgs::msg::LaserScan>(
         input_topic,
         qos_sensor,
-        [this](sensor_msgs::msg::LaserScan::ConstSharedPtr msg) { on_scan(*msg); });
+        [this](sensor_msgs::msg::LaserScan::ConstSharedPtr msg)
+        {
+          on_scan(*msg);
+        });
 
     sub_status_ = create_subscription<mowgli_interfaces::msg::Status>(
         status_topic,
         qos_reliable,
-        [this](mowgli_interfaces::msg::Status::ConstSharedPtr msg) { on_status(*msg); });
+        [this](mowgli_interfaces::msg::Status::ConstSharedPtr msg)
+        {
+          on_status(*msg);
+        });
 
-    sub_imu_ = create_subscription<sensor_msgs::msg::Imu>(
-        imu_topic,
-        qos_sensor,
-        [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) { on_imu(*msg); });
+    sub_imu_ =
+        create_subscription<sensor_msgs::msg::Imu>(imu_topic,
+                                                   qos_sensor,
+                                                   [this](sensor_msgs::msg::Imu::ConstSharedPtr msg)
+                                                   {
+                                                     on_imu(*msg);
+                                                   });
 
     RCLCPP_INFO(get_logger(),
                 "costmap_scan_filter started — %s -> %s, chassis_blank_range=%.2f m, "
@@ -379,8 +388,8 @@ private:
     // currently-active values, so a single pass through filter_scan
     // suffices.
     const bool dock_active = is_blank_active();
-    const double effective_blank = std::max(
-        chassis_blank_range_, dock_active ? dock_blank_range_ : 0.0);
+    const double effective_blank =
+        std::max(chassis_blank_range_, dock_active ? dock_blank_range_ : 0.0);
     sensor_msgs::msg::LaserScan out = filter_scan(msg, effective_blank, effective_blank > 0.0);
 
     // SAFETY: collision_monitor gets the scan with chassis/dock self-returns

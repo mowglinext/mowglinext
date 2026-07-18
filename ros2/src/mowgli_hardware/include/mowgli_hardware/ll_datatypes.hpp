@@ -409,8 +409,7 @@ struct LlSetKinematics
 };
 
 static_assert(offsetof(LlSetKinematics, type) == 0u, "LlSetKinematics.type offset drifted");
-static_assert(offsetof(LlSetKinematics, max_mps) == 1u,
-              "LlSetKinematics.max_mps offset drifted");
+static_assert(offsetof(LlSetKinematics, max_mps) == 1u, "LlSetKinematics.max_mps offset drifted");
 static_assert(offsetof(LlSetKinematics, wheel_base) == 5u,
               "LlSetKinematics.wheel_base offset drifted");
 static_assert(offsetof(LlSetKinematics, crc) == 9u, "LlSetKinematics.crc offset drifted");

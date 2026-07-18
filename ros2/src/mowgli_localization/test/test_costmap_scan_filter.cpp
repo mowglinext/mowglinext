@@ -164,7 +164,7 @@ TEST(CostmapScanFilter, LeavesNonFiniteValuesAlone)
   auto out = mowgli_localization::filter_scan_for_test(in, 0.70, true);
   ASSERT_EQ(out.ranges.size(), in.ranges.size());
   EXPECT_FALSE(std::isfinite(out.ranges[0]));  // was inf
-  EXPECT_TRUE(std::isnan(out.ranges[1]));      // NaN preserved
+  EXPECT_TRUE(std::isnan(out.ranges[1]));  // NaN preserved
   EXPECT_FALSE(std::isfinite(out.ranges[2]));  // 0.20 < 0.70 → +inf
   EXPECT_FLOAT_EQ(out.ranges[3], 2.0f);
 }
@@ -203,8 +203,7 @@ TEST(CostmapScanFilterGround, NoOpWhenDisabled)
 {
   // Even with a steep nose-down pitch, disabled filter must not touch ranges.
   auto in = make_forward_only_scan(2.0f);
-  mowgli_localization::GroundFilterConfigForTest cfg{
-      false, 0.08, 1.5, 0.22};
+  mowgli_localization::GroundFilterConfigForTest cfg{false, 0.08, 1.5, 0.22};
   std::optional<mowgli_localization::Vec3ForTest> u =
       mowgli_localization::up_from_pitch_rad(0.30);  // ~17° nose-down
   mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
@@ -215,8 +214,7 @@ TEST(CostmapScanFilterGround, NoOpWhenNoImu)
 {
   // Filter enabled but no IMU sample → pass-through (failsafe).
   auto in = make_forward_only_scan(2.0f);
-  mowgli_localization::GroundFilterConfigForTest cfg{
-      true, 0.08, 1.5, 0.22};
+  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 0.22};
   std::optional<mowgli_localization::Vec3ForTest> u;  // empty
   mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FLOAT_EQ(in.ranges[0], 2.0f);
@@ -227,8 +225,7 @@ TEST(CostmapScanFilterGround, FlatGroundReturnPassesThroughOnLevelRobot)
   // Level robot — up vector is +Z, beam Z component is 0. Forward beam
   // at 2 m projects to Z = 0.22 + 2·0 = 0.22 m, in [0.08, 1.5] → kept.
   auto in = make_forward_only_scan(2.0f);
-  mowgli_localization::GroundFilterConfigForTest cfg{
-      true, 0.08, 1.5, 0.22};
+  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 0.22};
   std::optional<mowgli_localization::Vec3ForTest> u =
       mowgli_localization::Vec3ForTest{0.0, 0.0, 1.0};  // level
   mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
@@ -256,8 +253,7 @@ TEST(CostmapScanFilterGround, NearObstacleSurvivesNoseDownSlope)
   // Same 10° nose-down pitch but the return is at 0.5 m. Z = 0.22 +
   // 0.5·(-0.174) = 0.133 m, still above 0.08 floor → keep as obstacle.
   auto in = make_forward_only_scan(0.5f);
-  mowgli_localization::GroundFilterConfigForTest cfg{
-      true, 0.08, 1.5, 0.22};
+  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 0.22};
   const double pitch_rad = 10.0 * M_PI / 180.0;
   std::optional<mowgli_localization::Vec3ForTest> u =
       mowgli_localization::up_from_pitch_rad(pitch_rad);
@@ -272,8 +268,7 @@ TEST(CostmapScanFilterGround, OverheadReturnFilteredOnLevelRobot)
   // Push the LIDAR origin to 1.55 m: a 2 m return projects to Z = 1.55 m
   // (level robot), above the 1.5 m ceiling → filtered.
   auto in = make_forward_only_scan(2.0f);
-  mowgli_localization::GroundFilterConfigForTest cfg{
-      true, 0.08, 1.5, 1.55};
+  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 1.55};
   std::optional<mowgli_localization::Vec3ForTest> u =
       mowgli_localization::Vec3ForTest{0.0, 0.0, 1.0};  // level
   mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
@@ -394,10 +389,8 @@ TEST(CostmapScanFilterGround, NonFiniteRangesUntouched)
   in.angle_increment = static_cast<float>(M_PI / 2.0);
   in.range_min = 0.05f;
   in.range_max = 12.0f;
-  mowgli_localization::GroundFilterConfigForTest cfg{
-      true, 0.08, 1.5, 0.22};
-  std::optional<mowgli_localization::Vec3ForTest> u =
-      mowgli_localization::up_from_pitch_rad(0.30);
+  mowgli_localization::GroundFilterConfigForTest cfg{true, 0.08, 1.5, 0.22};
+  std::optional<mowgli_localization::Vec3ForTest> u = mowgli_localization::up_from_pitch_rad(0.30);
   mowgli_localization::apply_ground_filter_for_test(in, cfg, u);
   EXPECT_FALSE(std::isfinite(in.ranges[0]));
   EXPECT_TRUE(std::isnan(in.ranges[1]));

@@ -113,7 +113,8 @@ TEST(GyroBias, RealMotionDoesNotUpdateBias)
 
   auto stats = gm.Stats();
   std::printf("[GyroBias] rotation phase: bias_est=%.5f, updates=%lu\n",
-              stats.gyro_bias_z, static_cast<unsigned long>(stats.gyro_bias_updates));
+              stats.gyro_bias_z,
+              static_cast<unsigned long>(stats.gyro_bias_updates));
   // No stationary windows → no bias updates.
   EXPECT_EQ(stats.gyro_bias_updates, 0u);
   EXPECT_NEAR(stats.gyro_bias_z, 0.0, 1.0e-9);
@@ -157,7 +158,8 @@ TEST(GyroBias, BiasAppliedToSubsequentMotion)
   ASSERT_TRUE(snap.has_value());
   const double expected = kRealWz * kDt * 40.0;  // 2.0 rad
   std::printf("[GyroBias] post-stationary rotation: expected=%.3f, got=%.3f\n",
-              expected, snap->pose.theta());
+              expected,
+              snap->pose.theta());
   // 10 % tolerance — the bias estimator captured the offset cleanly.
   EXPECT_NEAR(snap->pose.theta(), expected, 0.10 * expected);
 }

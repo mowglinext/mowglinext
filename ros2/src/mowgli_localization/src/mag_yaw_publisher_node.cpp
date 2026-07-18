@@ -132,7 +132,7 @@ private:
     RCLCPP_INFO(get_logger(), "Mag calibration appeared — subscriptions activated.");
   }
 
-  std::optional<MagCalibration> load_calibration(const std::string &path)
+  std::optional<MagCalibration> load_calibration(const std::string& path)
   {
     namespace fs = std::filesystem;
     if (!fs::exists(path))
@@ -158,7 +158,7 @@ private:
       out.magnitude_mean_uT = cal["magnitude_mean_uT"].as<double>(0.0);
       return out;
     }
-    catch (const std::exception &exc)
+    catch (const std::exception& exc)
     {
       RCLCPP_ERROR(get_logger(), "Failed to load %s: %s", path.c_str(), exc.what());
       return std::nullopt;
@@ -170,7 +170,7 @@ private:
     latest_imu_ = msg;
   }
 
-  void on_mag(const sensor_msgs::msg::MagneticField &msg)
+  void on_mag(const sensor_msgs::msg::MagneticField& msg)
   {
     if (!cal_)
     {
@@ -209,7 +209,7 @@ private:
                                        tf2::TimePointZero,
                                        tf2::durationFromSec(0.2));
     }
-    catch (const std::exception &)
+    catch (const std::exception&)
     {
       ++rejected_no_tf_;
       return;
@@ -244,10 +244,10 @@ private:
   static void rotate_by_quat(double vx,
                              double vy,
                              double vz,
-                             const geometry_msgs::msg::Quaternion &q,
-                             double &xp,
-                             double &yp,
-                             double &zp)
+                             const geometry_msgs::msg::Quaternion& q,
+                             double& xp,
+                             double& yp,
+                             double& zp)
   {
     const double qw = q.w, qx = q.x, qy = q.y, qz = q.z;
     const double tx = 2.0 * (qy * vz - qz * vy);
@@ -258,7 +258,7 @@ private:
     zp = vz + qw * tz + (qx * ty - qy * tx);
   }
 
-  void publish_imu(const builtin_interfaces::msg::Time &stamp, double yaw)
+  void publish_imu(const builtin_interfaces::msg::Time& stamp, double yaw)
   {
     sensor_msgs::msg::Imu imu;
     imu.header.stamp = stamp;
@@ -267,13 +267,13 @@ private:
     imu.orientation.x = 0.0;
     imu.orientation.y = 0.0;
     imu.orientation.z = std::sin(yaw / 2.0);
-    for (auto &v : imu.orientation_covariance)
+    for (auto& v : imu.orientation_covariance)
       v = 0.0;
     imu.orientation_covariance[8] = yaw_var_;
-    for (auto &v : imu.angular_velocity_covariance)
+    for (auto& v : imu.angular_velocity_covariance)
       v = 0.0;
     imu.angular_velocity_covariance[0] = -1.0;
-    for (auto &v : imu.linear_acceleration_covariance)
+    for (auto& v : imu.linear_acceleration_covariance)
       v = 0.0;
     imu.linear_acceleration_covariance[0] = -1.0;
     pub_->publish(imu);
@@ -318,7 +318,7 @@ private:
 
 }  // namespace mowgli_localization
 
-int main(int argc, char **argv)
+int main(int argc, char** argv)
 {
   rclcpp::init(argc, argv);
   rclcpp::spin(std::make_shared<mowgli_localization::MagYawPublisherNode>());

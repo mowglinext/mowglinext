@@ -102,10 +102,9 @@ protected:
   void setStuckFor(double seconds_ago)
   {
     ctx->collision_action_type = CollisionMonitorState::STOP;
-    ctx->collision_stop_since =
-        std::chrono::steady_clock::now() -
-        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-            std::chrono::duration<double>(seconds_ago));
+    ctx->collision_stop_since = std::chrono::steady_clock::now() -
+                                std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                    std::chrono::duration<double>(seconds_ago));
   }
 
   void clearStop()
@@ -188,8 +187,7 @@ TEST_F(IsObstacleStuckTest, SucceedsAgainAfterCooldownElapsed)
 {
   // Pretend the previous backoff was 9 s ago (>cooldown=8 s).
   ctx->obstacle_backoff_count = 1;
-  ctx->last_obstacle_backoff_time =
-      std::chrono::steady_clock::now() - std::chrono::seconds(9);
+  ctx->last_obstacle_backoff_time = std::chrono::steady_clock::now() - std::chrono::seconds(9);
 
   setStuckFor(6.0);
   EXPECT_EQ(tick(), BT::NodeStatus::SUCCESS);
@@ -201,8 +199,7 @@ TEST_F(IsObstacleStuckTest, FailsWhenAtMaxCount)
   // Already hit cap — and pretend cooldown long expired so only the cap
   // matters.
   ctx->obstacle_backoff_count = 3;
-  ctx->last_obstacle_backoff_time =
-      std::chrono::steady_clock::now() - std::chrono::seconds(60);
+  ctx->last_obstacle_backoff_time = std::chrono::steady_clock::now() - std::chrono::seconds(60);
 
   setStuckFor(60.0);  // wedged for a minute, doesn't matter
   EXPECT_EQ(tick(), BT::NodeStatus::FAILURE);
@@ -257,10 +254,9 @@ protected:
   {
     ctx->collision_action_type = CollisionMonitorState::DO_NOTHING;
     ctx->collision_stop_since = std::chrono::steady_clock::time_point{};
-    ctx->last_collision_stop_end =
-        std::chrono::steady_clock::now() -
-        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-            std::chrono::duration<double>(seconds_ago));
+    ctx->last_collision_stop_end = std::chrono::steady_clock::now() -
+                                   std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                       std::chrono::duration<double>(seconds_ago));
   }
 
   BT::NodeStatus tick()

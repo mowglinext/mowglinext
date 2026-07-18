@@ -13,10 +13,10 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <unistd.h>
 
 #include "fusion_graph/graph_manager.hpp"
 #include <gtest/gtest.h>
+#include <unistd.h>
 
 namespace fg = fusion_graph;
 namespace fs = std::filesystem;
@@ -25,8 +25,8 @@ namespace
 {
 std::string TempPrefix(const char* tag)
 {
-  auto base = fs::temp_directory_path() / (std::string("fg_test_") + tag + "_" +
-                                           std::to_string(::getpid()));
+  auto base = fs::temp_directory_path() /
+              (std::string("fg_test_") + tag + "_" + std::to_string(::getpid()));
   return base.string();
 }
 

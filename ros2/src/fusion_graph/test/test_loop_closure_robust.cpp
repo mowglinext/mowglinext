@@ -65,7 +65,9 @@ TEST(RobustLoopClosure, OutlierLcDoesNotShiftTrajectory)
   auto x4_before = gm.GetPose(4);
   ASSERT_TRUE(x4_before.has_value());
   std::printf("[RobustLC] X4 pre-LC: (%.3f, %.3f, %.3f)\n",
-              x4_before->x(), x4_before->y(), x4_before->theta());
+              x4_before->x(),
+              x4_before->y(),
+              x4_before->theta());
   ASSERT_NEAR(x4_before->x(), 0.10, 0.02);
 
   // Inject a deliberately bad loop closure: claim node 1 is at (5, 5)
@@ -82,7 +84,9 @@ TEST(RobustLoopClosure, OutlierLcDoesNotShiftTrajectory)
   auto x4_after = gm.GetPose(4);
   ASSERT_TRUE(x4_after.has_value());
   std::printf("[RobustLC] X4 post-LC: (%.3f, %.3f, %.3f)\n",
-              x4_after->x(), x4_after->y(), x4_after->theta());
+              x4_after->x(),
+              x4_after->y(),
+              x4_after->theta());
 
   // Without DCS, x4_after would drift metres toward (5, 5). With DCS the
   // factor is downweighted to near-zero contribution and the trajectory

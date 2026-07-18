@@ -59,12 +59,10 @@ class ScanDeskewNode : public rclcpp::Node
 public:
   ScanDeskewNode() : Node("scan_deskew")
   {
-    const std::string input_topic =
-        declare_parameter<std::string>("input_topic", "/scan");
+    const std::string input_topic = declare_parameter<std::string>("input_topic", "/scan");
     const std::string output_topic =
         declare_parameter<std::string>("output_topic", "/scan_deskewed");
-    const std::string imu_topic =
-        declare_parameter<std::string>("imu_topic", "/imu/data");
+    const std::string imu_topic = declare_parameter<std::string>("imu_topic", "/imu/data");
 
     // Reference time for the deskewed output. "end" keeps the same
     // header.stamp as the input (= timestamp of the last ray); "start"
@@ -80,8 +78,7 @@ public:
     // IMU buffer depth in seconds. Should cover one scan window plus
     // some margin (LiDAR end-stamp is the last ray; the first ray is
     // scan_duration before that, plus any IMU-to-scan publish lag).
-    imu_buffer_horizon_s_ =
-        declare_parameter<double>("imu_buffer_horizon_s", 0.5);
+    imu_buffer_horizon_s_ = declare_parameter<double>("imu_buffer_horizon_s", 0.5);
 
     rclcpp::QoS qos_sensor = rclcpp::SensorDataQoS();
     pub_ = create_publisher<sensor_msgs::msg::LaserScan>(output_topic, qos_sensor);
@@ -89,12 +86,18 @@ public:
     sub_scan_ = create_subscription<sensor_msgs::msg::LaserScan>(
         input_topic,
         qos_sensor,
-        [this](sensor_msgs::msg::LaserScan::ConstSharedPtr msg) { on_scan(*msg); });
+        [this](sensor_msgs::msg::LaserScan::ConstSharedPtr msg)
+        {
+          on_scan(*msg);
+        });
 
-    sub_imu_ = create_subscription<sensor_msgs::msg::Imu>(
-        imu_topic,
-        qos_sensor,
-        [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) { on_imu(*msg); });
+    sub_imu_ =
+        create_subscription<sensor_msgs::msg::Imu>(imu_topic,
+                                                   qos_sensor,
+                                                   [this](sensor_msgs::msg::Imu::ConstSharedPtr msg)
+                                                   {
+                                                     on_imu(*msg);
+                                                   });
 
     // ── Linear (translation) deskew (opt-in) ─────────────────────────
     // The rotation deskew above ignores the chassis's FORWARD motion during
@@ -121,14 +124,18 @@ public:
     skipped_count_ = 0;
     interp_misses_ = 0;
     create_wall_timer(std::chrono::seconds(15),
-                      [this]() {
+                      [this]()
+                      {
                         RCLCPP_INFO(get_logger(),
                                     "scan_deskew stats: published=%zu, "
                                     "passthrough(stale-IMU)=%zu, "
                                     "interp_misses=%zu, last_ω_z=%.3f rad/s, "
                                     "buf_size=%zu",
-                                    pub_count_, skipped_count_, interp_misses_,
-                                    latest_omega_z_, imu_buffer_.size());
+                                    pub_count_,
+                                    skipped_count_,
+                                    interp_misses_,
+                                    latest_omega_z_,
+                                    imu_buffer_.size());
                       });
 
     RCLCPP_INFO(get_logger(),
@@ -145,8 +152,8 @@ public:
 private:
   struct ImuSample
   {
-    double t_s;     // ROS seconds
-    double omega_z; // rad/s
+    double t_s;  // ROS seconds
+    double omega_z;  // rad/s
   };
 
   void on_imu(const sensor_msgs::msg::Imu& msg)
@@ -165,8 +172,7 @@ private:
     have_imu_ = true;
 
     // Trim entries older than imu_buffer_horizon_s_ before the newest.
-    while (!imu_buffer_.empty() &&
-           (t - imu_buffer_.front().t_s) > imu_buffer_horizon_s_)
+    while (!imu_buffer_.empty() && (t - imu_buffer_.front().t_s) > imu_buffer_horizon_s_)
     {
       imu_buffer_.pop_front();
     }
@@ -364,8 +370,8 @@ private:
       // and matches the previous algebra; the buffer-driven ω is the
       // dominant accuracy gain. Switch to trapezoidal in a follow-up
       // if residual smear during fast ω transients is still visible.
-      const double alpha = static_cast<double>(ang_min) +
-                           static_cast<double>(ang_inc) * static_cast<double>(i);
+      const double alpha =
+          static_cast<double>(ang_min) + static_cast<double>(ang_inc) * static_cast<double>(i);
       // dt is t_ray - t_ref (negative for "end" mode early rays). The
       // ray's endpoint angle expressed in the scan-stamp lidar frame
       // is shifted by -(θ_ref - θ_i) = -ω·(t_ref - t_ray) = +ω·dt.
@@ -401,8 +407,8 @@ private:
       if (r_out < static_cast<double>(out.ranges[bin]))
       {
         out.ranges[bin] = static_cast<float>(r_out);
-        if (!in.intensities.empty() && i < in.intensities.size() &&
-            !out.intensities.empty() && bin < static_cast<int>(out.intensities.size()))
+        if (!in.intensities.empty() && i < in.intensities.size() && !out.intensities.empty() &&
+            bin < static_cast<int>(out.intensities.size()))
         {
           out.intensities[bin] = in.intensities[i];
         }

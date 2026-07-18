@@ -391,9 +391,9 @@ private:
     // (the legacy behaviour). When enabled, the carrot is laterally offset
     // until the path is clear, then blended back once the obstacle is past.
     bool enable_obstacle_deviation{true};
-    double max_lateral_deviation{1.5};   // m, abort if needed offset exceeds this
-    double deviation_step{0.05};         // m, search increment
-    double deviation_blend_rate{0.5};    // m/s, slew rate for lateral_deviation_
+    double max_lateral_deviation{1.5};  // m, abort if needed offset exceeds this
+    double deviation_step{0.05};  // m, search increment
+    double deviation_blend_rate{0.5};  // m/s, slew rate for lateral_deviation_
     /// Minimum committed offset magnitude (m) once AVOIDANCE is entered.
     /// growDeviationUntilClear() only checks the path CENTERLINE sample
     /// per pose, so a tiny offset (e.g. one deviation_step) can clear the

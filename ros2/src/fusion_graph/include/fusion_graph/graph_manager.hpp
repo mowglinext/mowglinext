@@ -70,7 +70,7 @@ struct GraphStats
   uint64_t gps_rejects_wrongfix = 0;  // jump in /fix > thresh with stationary wheel
   uint64_t icp_rejects_rmse = 0;
   uint64_t icp_rejects_inliers = 0;  // ScanMatcher returned ok=false (min_inliers)
-  uint64_t icp_rejects_sanity = 0;   // unphysical delta magnitude
+  uint64_t icp_rejects_sanity = 0;  // unphysical delta magnitude
   uint64_t icp_rejects_divergence = 0;  // result far from initial guess
   uint64_t stationary_hand_push = 0;  // wheel stationary but gyro disagrees
   uint64_t slip_veto = 0;  // ticks where wheel translation was vetoed by gyro
@@ -167,10 +167,7 @@ public:
   // previous node creates a far better start than Pose2() for ICP's
   // brute-force NN search — especially under fast pivots where the
   // identity-init guess sends ICP looking 30°+ off true rotation.
-  void PeekAccumulator(double& dx,
-                       double& dy,
-                       double& dtheta_gyro,
-                       double& dtheta_wheel) const;
+  void PeekAccumulator(double& dx, double& dy, double& dtheta_gyro, double& dtheta_wheel) const;
 
   // Health counters. fusion_graph_node calls these from its OnGnss
   // (wrong-fix detection) and OnTimer (ICP guard rails) paths. Each
@@ -305,7 +302,8 @@ public:
   // (which is what a Reset() would throw away). The latest node also
   // receives a tighter prior (5 mm / 0.3°) so future GPS factors take
   // longer to drift it back off the dock anchor.
-  void RigidTransformAll(const gtsam::Pose2& correction, double latest_node_sigma_xy = 0.005,
+  void RigidTransformAll(const gtsam::Pose2& correction,
+                         double latest_node_sigma_xy = 0.005,
                          double latest_node_sigma_theta = 0.005);
 
   // Add a loop-closure between-factor between two existing nodes.

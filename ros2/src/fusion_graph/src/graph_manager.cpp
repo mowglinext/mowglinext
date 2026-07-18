@@ -140,9 +140,9 @@ void GraphManager::AddGyroDelta(double wz, double dt)
   // GyroPreintFactor. We still apply the latest bias_estimate_at_node
   // (stored in current_bias_estimate_) so the integrated ω is in the
   // right ballpark for iSAM2's linearisation point.
-  const double bias_correction =
-      params_.use_imu_preint ? current_bias_estimate_
-      : (params_.gyro_bias_estimation_enabled ? gyro_bias_z_ : 0.0);
+  const double bias_correction = params_.use_imu_preint
+                                     ? current_bias_estimate_
+                                     : (params_.gyro_bias_estimation_enabled ? gyro_bias_z_ : 0.0);
   const double wz_corrected = wz - bias_correction;
   accum_.dtheta_gyro += wz_corrected * dt;
 
@@ -221,8 +221,7 @@ void GraphManager::Initialize(const gtsam::Pose2& X0,
     new_values_.insert(k_bias0, 0.0);
     auto bias_prior_noise = gtsam::noiseModel::Diagonal::Sigmas(
         gtsam::Vector1(params_.gyro_bias_prior_sigma_rad_per_s));
-    new_factors_.add(
-        gtsam::PriorFactor<double>(k_bias0, 0.0, bias_prior_noise));
+    new_factors_.add(gtsam::PriorFactor<double>(k_bias0, 0.0, bias_prior_noise));
   }
 
   isam_.update(new_factors_, new_values_);

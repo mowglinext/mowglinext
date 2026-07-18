@@ -220,12 +220,8 @@ TEST(GyroPreintFactor, BiasCancelsCorrectly)
 
 TEST(GyroPreintFactor, JacobianMatchesNumeric)
 {
-  GyroPreintFactor f(gtsam::Symbol('x', 0),
-                     gtsam::Symbol('x', 1),
-                     gtsam::Symbol('b', 1),
-                     0.15,
-                     0.5,
-                     UnitDiag1());
+  GyroPreintFactor f(
+      gtsam::Symbol('x', 0), gtsam::Symbol('x', 1), gtsam::Symbol('b', 1), 0.15, 0.5, UnitDiag1());
   const gtsam::Pose2 X_prev(0.5, 0.2, 0.3);
   const gtsam::Pose2 X_curr(0.7, 0.1, 0.45);
   const double bias = 0.02;
@@ -250,10 +246,9 @@ TEST(GyroPreintFactor, JacobianMatchesNumeric)
     auto e_minus2 = f.evaluateError(X_prev, X_curr.retract(-d_curr), bias);
     H2_num(0, i) = (e_plus2[0] - e_minus2[0]) / (2.0 * eps);
   }
-  H3_num(0, 0) =
-      (f.evaluateError(X_prev, X_curr, bias + eps)[0] -
-       f.evaluateError(X_prev, X_curr, bias - eps)[0]) /
-      (2.0 * eps);
+  H3_num(0, 0) = (f.evaluateError(X_prev, X_curr, bias + eps)[0] -
+                  f.evaluateError(X_prev, X_curr, bias - eps)[0]) /
+                 (2.0 * eps);
 
   for (int j = 0; j < 3; ++j)
   {
@@ -268,12 +263,8 @@ TEST(GyroPreintFactor, WrapsAroundPi)
   // X_prev.theta = π−0.05, X_curr.theta = -π+0.05 → actual Δθ = 0.10
   // (crosses ±π). Preint = 0.10, bias = 0 → residual must be 0
   // (NOT 2π − 0.10).
-  GyroPreintFactor f(gtsam::Symbol('x', 0),
-                     gtsam::Symbol('x', 1),
-                     gtsam::Symbol('b', 1),
-                     0.10,
-                     0.1,
-                     UnitDiag1());
+  GyroPreintFactor f(
+      gtsam::Symbol('x', 0), gtsam::Symbol('x', 1), gtsam::Symbol('b', 1), 0.10, 0.1, UnitDiag1());
   const gtsam::Pose2 X_prev(0.0, 0.0, M_PI - 0.05);
   const gtsam::Pose2 X_curr(0.0, 0.0, -M_PI + 0.05);
   EXPECT_NEAR(f.evaluateError(X_prev, X_curr, 0.0)[0], 0.0, 1e-9);

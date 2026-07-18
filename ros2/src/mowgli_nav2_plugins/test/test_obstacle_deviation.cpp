@@ -5,17 +5,17 @@
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-#include "mowgli_nav2_plugins/obstacle_deviation.hpp"
-
 #include <cmath>
 #include <vector>
 
-#include <gtest/gtest.h>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <nav2_costmap_2d/cost_values.hpp>
 #include <nav2_costmap_2d/costmap_2d.hpp>
 #include <tf2/utils.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+
+#include "mowgli_nav2_plugins/obstacle_deviation.hpp"
+#include <gtest/gtest.h>
 
 namespace mowgli_nav2_plugins
 {
@@ -32,8 +32,8 @@ protected:
   static constexpr double kOriginX = -10.0;
   static constexpr double kOriginY = -10.0;
 
-  nav2_costmap_2d::Costmap2D costmap_{kSize, kSize, kResolution, kOriginX, kOriginY,
-                                      nav2_costmap_2d::FREE_SPACE};
+  nav2_costmap_2d::Costmap2D costmap_{
+      kSize, kSize, kResolution, kOriginX, kOriginY, nav2_costmap_2d::FREE_SPACE};
 
   /// Stamp a square block of LETHAL cells centred on (cx, cy) with half-side
   /// `half` metres.
@@ -56,8 +56,10 @@ protected:
 
   /// Build a straight horizontal path (along +X) from (start_x, y) for n
   /// poses spaced `step` apart. All poses face +X (yaw=0).
-  std::vector<geometry_msgs::msg::PoseStamped>
-  makeStraightPath(double start_x, double y, std::size_t n, double step)
+  std::vector<geometry_msgs::msg::PoseStamped> makeStraightPath(double start_x,
+                                                                double y,
+                                                                std::size_t n,
+                                                                double step)
   {
     std::vector<geometry_msgs::msg::PoseStamped> path;
     path.reserve(n);
@@ -173,7 +175,7 @@ TEST_F(ObstacleDeviationTest, ChooseSide_BlockedLeft_PicksRight)
 TEST_F(ObstacleDeviationTest, ChooseSide_BlockedBoth_ReturnsZero)
 {
   // Block both sides within the search radius.
-  stampBlock(0.0, 0.4, 0.4);   // left
+  stampBlock(0.0, 0.4, 0.4);  // left
   stampBlock(0.0, -0.4, 0.4);  // right
   geometry_msgs::msg::PoseStamped p;
   p.pose.position.x = 0.0;
@@ -253,8 +255,8 @@ TEST_F(ObstacleDeviationTest, GrowDeviation_StartsClear_KeepsInitial)
 {
   const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
   // No obstacle, should keep initial value (or step minimum if 0).
-  const double dev = ObstacleDeviation::growDeviationUntilClear(
-      costmap_, path, 0, 10, 0.0, 1.5, 0.05);
+  const double dev =
+      ObstacleDeviation::growDeviationUntilClear(costmap_, path, 0, 10, 0.0, 1.5, 0.05);
   EXPECT_LE(std::abs(dev), 0.05 + 1e-9);
 }
 
@@ -264,10 +266,10 @@ TEST_F(ObstacleDeviationTest, GrowDeviation_FindsClearance)
   stampBlock(0.5, 0.0, 0.2);  // covers Y=[-0.2, 0.2]
   const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
   // Initial sign = positive (left), grow until clear.
-  const double dev = ObstacleDeviation::growDeviationUntilClear(
-      costmap_, path, 0, 10, 0.05, 1.5, 0.05);
-  EXPECT_GT(dev, 0.20);          // must clear block edge
-  EXPECT_LE(dev, 0.30);          // doesn't grow more than necessary
+  const double dev =
+      ObstacleDeviation::growDeviationUntilClear(costmap_, path, 0, 10, 0.05, 1.5, 0.05);
+  EXPECT_GT(dev, 0.20);  // must clear block edge
+  EXPECT_LE(dev, 0.30);  // doesn't grow more than necessary
   // And the resulting path should now be clear.
   EXPECT_TRUE(ObstacleDeviation::isPathClearWithDeviation(costmap_, path, 0, 10, dev));
 }
@@ -278,8 +280,8 @@ TEST_F(ObstacleDeviationTest, GrowDeviation_NoClearanceWithinCap_ReturnsOverCap)
   stampBlock(0.5, 0.0, 2.0);  // covers Y=[-2.0, 2.0]
   const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
   const double max_dev = 1.5;
-  const double dev = ObstacleDeviation::growDeviationUntilClear(
-      costmap_, path, 0, 10, 0.05, max_dev, 0.05);
+  const double dev =
+      ObstacleDeviation::growDeviationUntilClear(costmap_, path, 0, 10, 0.05, max_dev, 0.05);
   EXPECT_GT(std::abs(dev), max_dev);  // Caller will see this and abort.
 }
 
@@ -288,8 +290,8 @@ TEST_F(ObstacleDeviationTest, GrowDeviation_PreservesSign)
   // Block on path. Negative initial deviation should grow in negative direction.
   stampBlock(0.5, 0.0, 0.2);
   const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
-  const double dev = ObstacleDeviation::growDeviationUntilClear(
-      costmap_, path, 0, 10, -0.05, 1.5, 0.05);
+  const double dev =
+      ObstacleDeviation::growDeviationUntilClear(costmap_, path, 0, 10, -0.05, 1.5, 0.05);
   EXPECT_LT(dev, -0.20);  // negative side
 }
 

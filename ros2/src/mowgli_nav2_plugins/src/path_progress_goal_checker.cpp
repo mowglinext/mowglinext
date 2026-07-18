@@ -22,13 +22,13 @@ void PathProgressGoalChecker::initialize(
   auto node = parent.lock();
   if (!node)
   {
-    throw std::runtime_error(
-        "PathProgressGoalChecker: failed to lock parent LifecycleNode");
+    throw std::runtime_error("PathProgressGoalChecker: failed to lock parent LifecycleNode");
   }
   logger_ = node->get_logger();
   clock_ = node->get_clock();
 
-  auto declare = [&](const std::string& key, auto default_value) {
+  auto declare = [&](const std::string& key, auto default_value)
+  {
     const std::string full = plugin_name + "." + key;
     if (!node->has_parameter(full))
     {
@@ -50,8 +50,7 @@ void PathProgressGoalChecker::initialize(
   // advances ≤ 10 poses per second; the goal checker is consulted
   // at ≤ 20 Hz so ≤ 1 pose per call is the physical bound, with
   // wide safety margin baked into the default.
-  max_idx_advance_per_call_ =
-      static_cast<size_t>(declare("max_idx_advance_per_call", 10).as_int());
+  max_idx_advance_per_call_ = static_cast<size_t>(declare("max_idx_advance_per_call", 10).as_int());
   // Short paths (<= this many poses) complete on proximity, not progress —
   // per-swath DISCONTINUOUS coverage feeds short swaths + tiny turn-connectors
   // that the 95%-progress gate can't reliably register (stall). See header.
@@ -61,15 +60,19 @@ void PathProgressGoalChecker::initialize(
   // FollowCoveragePath FTC slot from nav2_params.yaml. If you have a
   // controller publishing under a different name, override via
   // `<this_checker_name>.plan_topic: /controller_server/<name>/global_plan`.
-  plan_topic_ = declare("plan_topic",
-                        std::string("/controller_server/FollowCoveragePath/global_plan"))
-                    .as_string();
+  plan_topic_ =
+      declare("plan_topic", std::string("/controller_server/FollowCoveragePath/global_plan"))
+          .as_string();
 
   rclcpp::QoS qos(rclcpp::KeepLast(1));
   qos.reliable();
-  path_sub_ = node->create_subscription<nav_msgs::msg::Path>(
-      plan_topic_, qos,
-      [this](nav_msgs::msg::Path::SharedPtr msg) { onPath(msg); });
+  path_sub_ =
+      node->create_subscription<nav_msgs::msg::Path>(plan_topic_,
+                                                     qos,
+                                                     [this](nav_msgs::msg::Path::SharedPtr msg)
+                                                     {
+                                                       onPath(msg);
+                                                     });
 
   RCLCPP_INFO(logger_,
               "PathProgressGoalChecker[%s]: progress_threshold=%.2f, "
@@ -118,8 +121,7 @@ void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
   //   2. Front pose moved by MORE than 2 m (a real new strip start;
   //      republish wobble is a few cm at most).
   const bool size_changed = (n != last_path_size_);
-  const bool start_moved_far = std::hypot(fx - last_path_first_x_,
-                                           fy - last_path_first_y_) > 2.0;
+  const bool start_moved_far = std::hypot(fx - last_path_first_x_, fy - last_path_first_y_) > 2.0;
   if (size_changed || start_moved_far)
   {
     path_poses_ = msg->poses;
@@ -130,7 +132,9 @@ void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
     RCLCPP_INFO(logger_,
                 "PathProgressGoalChecker: new path with %zu poses, "
                 "start=(%.2f,%.2f), end=(%.2f,%.2f) — reset progress",
-                n, fx, fy,
+                n,
+                fx,
+                fy,
                 msg->poses.back().pose.position.x,
                 msg->poses.back().pose.position.y);
   }
@@ -144,10 +148,9 @@ void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
   }
 }
 
-bool PathProgressGoalChecker::isGoalReached(
-    const geometry_msgs::msg::Pose& query_pose,
-    const geometry_msgs::msg::Pose& goal_pose,
-    const geometry_msgs::msg::Twist& /*velocity*/)
+bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& query_pose,
+                                            const geometry_msgs::msg::Pose& goal_pose,
+                                            const geometry_msgs::msg::Twist& /*velocity*/)
 {
   std::lock_guard<std::mutex> lock(mutex_);
 
@@ -174,12 +177,14 @@ bool PathProgressGoalChecker::isGoalReached(
     {
       return false;
     }
-    RCLCPP_WARN_THROTTLE(
-        logger_, *clock_, 5000,
-        "PathProgressGoalChecker: no global_plan after %.1fs on %s — "
-        "falling back to SimpleGoalChecker semantics. Check controller "
-        "plugin_name vs plan_topic.",
-        age, plan_topic_.c_str());
+    RCLCPP_WARN_THROTTLE(logger_,
+                         *clock_,
+                         5000,
+                         "PathProgressGoalChecker: no global_plan after %.1fs on %s — "
+                         "falling back to SimpleGoalChecker semantics. Check controller "
+                         "plugin_name vs plan_topic.",
+                         age,
+                         plan_topic_.c_str());
     const double dx = query_pose.position.x - goal_pose.position.x;
     const double dy = query_pose.position.y - goal_pose.position.y;
     if (std::hypot(dx, dy) > xy_goal_tolerance_)
@@ -188,8 +193,7 @@ bool PathProgressGoalChecker::isGoalReached(
     }
     const double yaw_q = tf2::getYaw(query_pose.orientation);
     const double yaw_g = tf2::getYaw(goal_pose.orientation);
-    const double yaw_err = std::atan2(std::sin(yaw_q - yaw_g),
-                                      std::cos(yaw_q - yaw_g));
+    const double yaw_err = std::atan2(std::sin(yaw_q - yaw_g), std::cos(yaw_q - yaw_g));
     return std::abs(yaw_err) <= yaw_goal_tolerance_;
   }
 
@@ -212,8 +216,7 @@ bool PathProgressGoalChecker::isGoalReached(
     }
     const double yaw_q = tf2::getYaw(query_pose.orientation);
     const double yaw_g = tf2::getYaw(goal_pose.orientation);
-    const double yaw_err = std::atan2(std::sin(yaw_q - yaw_g),
-                                      std::cos(yaw_q - yaw_g));
+    const double yaw_err = std::atan2(std::sin(yaw_q - yaw_g), std::cos(yaw_q - yaw_g));
     return std::abs(yaw_err) <= yaw_goal_tolerance_;
   }
 
@@ -234,8 +237,7 @@ bool PathProgressGoalChecker::isGoalReached(
   // max_idx_advance_per_call_ (default 10) for a safety margin
   // against tick-rate jitter and shorter-than-expected path steps.
   const size_t start = std::min(max_reached_index_, n - 1);
-  const size_t end_exclusive =
-      std::min(start + max_idx_advance_per_call_ + 1, n);
+  const size_t end_exclusive = std::min(start + max_idx_advance_per_call_ + 1, n);
   double best_d2 = std::numeric_limits<double>::infinity();
   size_t best_idx = max_reached_index_;
   for (size_t i = start; i < end_exclusive; ++i)
@@ -254,8 +256,7 @@ bool PathProgressGoalChecker::isGoalReached(
     max_reached_index_ = best_idx;
   }
 
-  const double progress = static_cast<double>(max_reached_index_) /
-                          static_cast<double>(n - 1);
+  const double progress = static_cast<double>(max_reached_index_) / static_cast<double>(n - 1);
   if (progress < progress_threshold_)
   {
     return false;
@@ -274,8 +275,7 @@ bool PathProgressGoalChecker::isGoalReached(
 
   const double yaw_q = tf2::getYaw(query_pose.orientation);
   const double yaw_g = tf2::getYaw(goal_pose.orientation);
-  double yaw_err = std::atan2(std::sin(yaw_q - yaw_g),
-                              std::cos(yaw_q - yaw_g));
+  double yaw_err = std::atan2(std::sin(yaw_q - yaw_g), std::cos(yaw_q - yaw_g));
   if (std::abs(yaw_err) > yaw_goal_tolerance_)
   {
     return false;
@@ -284,14 +284,16 @@ bool PathProgressGoalChecker::isGoalReached(
   RCLCPP_INFO(logger_,
               "PathProgressGoalChecker: goal reached — progress=%.1f%% "
               "(idx %zu/%zu), xy_err=%.3fm, yaw_err=%.3frad",
-              progress * 100.0, max_reached_index_, n - 1,
-              xy_err, yaw_err);
+              progress * 100.0,
+              max_reached_index_,
+              n - 1,
+              xy_err,
+              yaw_err);
   return true;
 }
 
-bool PathProgressGoalChecker::getTolerances(
-    geometry_msgs::msg::Pose& pose_tolerance,
-    geometry_msgs::msg::Twist& vel_tolerance)
+bool PathProgressGoalChecker::getTolerances(geometry_msgs::msg::Pose& pose_tolerance,
+                                            geometry_msgs::msg::Twist& vel_tolerance)
 {
   // Report XY + yaw tolerance for upstream (e.g., bt_navigator). Velocity
   // tolerance is unused — we don't gate on velocity at all.
@@ -312,5 +314,4 @@ bool PathProgressGoalChecker::getTolerances(
 
 }  // namespace mowgli_nav2_plugins
 
-PLUGINLIB_EXPORT_CLASS(mowgli_nav2_plugins::PathProgressGoalChecker,
-                       nav2_core::GoalChecker)
+PLUGINLIB_EXPORT_CLASS(mowgli_nav2_plugins::PathProgressGoalChecker, nav2_core::GoalChecker)

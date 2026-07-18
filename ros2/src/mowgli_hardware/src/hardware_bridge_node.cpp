@@ -2082,12 +2082,15 @@ private:
     if (send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
                         sizeof(LlSetSafetyLimits) - sizeof(uint16_t)))
     {
-      RCLCPP_INFO(
-          get_logger(),
-          "Sent safety limits: charge<=%.2fV/%.2fA trips[ms]=%d/%d/%d/%d play_clear=%d",
-          max_charge_voltage_, max_charge_current_, one_wheel_lift_ms_,
-          both_wheels_lift_ms_, tilt_emergency_ms_, stop_button_ms_,
-          play_clear_ms_);
+      RCLCPP_INFO(get_logger(),
+                  "Sent safety limits: charge<=%.2fV/%.2fA trips[ms]=%d/%d/%d/%d play_clear=%d",
+                  max_charge_voltage_,
+                  max_charge_current_,
+                  one_wheel_lift_ms_,
+                  both_wheels_lift_ms_,
+                  tilt_emergency_ms_,
+                  stop_button_ms_,
+                  play_clear_ms_);
     }
   }
 

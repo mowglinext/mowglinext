@@ -75,10 +75,10 @@ TEST(SlipPivot, WheelOnlyMotionIsRejectedByGyroVeto)
   const gtsam::Pose2 X0(5.0, 3.0, 0.7);
   gm.Initialize(X0, 0.0);
 
-  constexpr int kTicks = 60;       // 6 s @ 10 Hz
+  constexpr int kTicks = 60;  // 6 s @ 10 Hz
   constexpr double kDt = 0.1;
-  constexpr double kPhantomVx = 0.10;       // m/s — slipping wheels
-  constexpr double kPhantomWz = 0.30;       // rad/s — diff-drive guess
+  constexpr double kPhantomVx = 0.10;  // m/s — slipping wheels
+  constexpr double kPhantomWz = 0.30;  // rad/s — diff-drive guess
   // Gyro residual within stationary_gyro_thresh_rad_per_s — chassis
   // is really still.
   constexpr double kGyroResidual = 0.02;

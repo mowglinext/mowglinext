@@ -22,9 +22,8 @@
 #include <cmath>
 #include <tuple>
 
-#include <gtest/gtest.h>
-
 #include "mowgli_localization/cog_yaw_math.hpp"
+#include <gtest/gtest.h>
 
 using mowgli_localization::compute_cog_body_yaw;
 using mowgli_localization::wrap_angle;
@@ -45,12 +44,8 @@ double ang_diff(double a, double b)
 // the anchor sample and the current sample.
 //
 // Antenna body-frame velocity = (vx - omega*ry, omega*rx) with SIGNED vx.
-std::tuple<double, double> simulate_baseline(double vx,
-                                             double omega,
-                                             double rx,
-                                             double ry,
-                                             double psi_end,
-                                             double dt)
+std::tuple<double, double> simulate_baseline(
+    double vx, double omega, double rx, double ry, double psi_end, double dt)
 {
   const double vant_bx = vx - omega * ry;
   const double vant_by = omega * rx;
@@ -71,8 +66,8 @@ std::tuple<double, double> simulate_baseline(double vx,
 
 // Run the full estimator over a simulated baseline and return the recovered
 // body yaw. lever arm rx/ry default to the YardForce 500 mount.
-double recover_yaw(double vx, double omega, double psi_end, double rx = 0.30, double ry = 0.0,
-                   double dt = 0.5)
+double recover_yaw(
+    double vx, double omega, double psi_end, double rx = 0.30, double ry = 0.0, double dt = 0.5)
 {
   const auto [dx, dy] = simulate_baseline(vx, omega, rx, ry, psi_end, dt);
   const int wheel_sign = (vx >= 0.0) ? 1 : -1;

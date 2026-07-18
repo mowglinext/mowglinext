@@ -740,8 +740,7 @@ BT::NodeStatus WasRecentlyInCollisionStop::tick()
   }
 
   const auto now = std::chrono::steady_clock::now();
-  const double age_sec =
-      std::chrono::duration<double>(now - ctx->last_collision_stop_end).count();
+  const double age_sec = std::chrono::duration<double>(now - ctx->last_collision_stop_end).count();
   if (age_sec <= max_age_sec)
   {
     RCLCPP_INFO(ctx->node->get_logger(),
