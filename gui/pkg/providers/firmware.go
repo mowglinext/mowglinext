@@ -196,7 +196,13 @@ func (fp *FirmwareProvider) flashVermut(writer io.Writer, config types.FirmwareC
 	_, _ = writer.Write([]byte("------> Firmware unzipped\n"))
 
 	_, _ = writer.Write([]byte("------> Flashing firmware...\n"))
-	cmd = execabs.Command("/bin/bash", "-c", "echo \"10\" > /sys/class/gpio/export && echo \"out\" > /sys/class/gpio/gpio10/direction && echo \"1\" > /sys/class/gpio/gpio10/value && openocd -f interface/raspberrypi-swd.cfg -f target/rp2040.cfg -c \"program "+os.TempDir()+"/firmware/firmware/"+config.Version+"/firmware.elf verify reset exit\"")
+	ifaceCfg, err := writeSysfsgpioCfg()
+	if err != nil {
+		_, _ = writer.Write([]byte("------> Error preparing OpenOCD interface config: " + err.Error() + "\n"))
+		return xerrors.Errorf("error while flashing firmware: %w", err)
+	}
+	defer os.Remove(ifaceCfg)
+	cmd = execabs.Command("/bin/bash", "-c", "echo \"10\" > /sys/class/gpio/export && echo \"out\" > /sys/class/gpio/gpio10/direction && echo \"1\" > /sys/class/gpio/gpio10/value && openocd -f "+ifaceCfg+" -f target/rp2040.cfg -c \"program "+os.TempDir()+"/firmware/firmware/"+config.Version+"/firmware.elf verify reset exit\"")
 	cmd.Stdout = writer
 	cmd.Stderr = writer
 	err = cmd.Run()
@@ -206,6 +212,38 @@ func (fp *FirmwareProvider) flashVermut(writer io.Writer, config types.FirmwareC
 	}
 	_, _ = writer.Write([]byte("------> Firmware flashed\n"))
 	return nil
+}
+
+// sysfsgpioSWDCfg is an inline OpenOCD interface config that uses the kernel
+// sysfs GPIO interface (sysfsgpio driver) for SWD. It replaces the
+// raspberrypi-swd.cfg that relied on the BCM2835 GPIO driver and /dev/gpiomem,
+// which is unavailable or inaccessible on Pi OS Bookworm (kernel 6.6+).
+//
+// Pin assignment matches the raspberrypi-swd.cfg shipped with the RPi OpenOCD
+// fork (rpi-common branch):
+//   - SWCLK = BCM GPIO 11 (Pi header pin 23)
+//   - SWDIO = BCM GPIO 8  (Pi header pin 24)
+//     (OpenOCD logs "TMS/SWDIO moved to GPIO 8 (pin 24)" when using that cfg)
+const sysfsgpioSWDCfg = `
+adapter driver sysfsgpio
+sysfsgpio_swclk_num 11
+sysfsgpio_swdio_num 8
+transport select swd
+adapter speed 1000
+`
+
+// writeSysfsgpioCfg writes the sysfsgpio SWD interface config to a temp file
+// and returns the path. The caller is responsible for removing it afterwards.
+func writeSysfsgpioCfg() (string, error) {
+	f, err := os.CreateTemp("", "openocd-sysfsgpio-*.cfg")
+	if err != nil {
+		return "", xerrors.Errorf("creating sysfsgpio cfg: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(sysfsgpioSWDCfg); err != nil {
+		return "", xerrors.Errorf("writing sysfsgpio cfg: %w", err)
+	}
+	return f.Name(), nil
 }
 
 // openocdTargetCfg maps a board to its OpenOCD target config. YardForce 500 is a
@@ -255,12 +293,19 @@ func (fp *FirmwareProvider) flashPrebuilt(writer io.Writer, config types.Firmwar
 	_, _ = writer.Write([]byte("------> Firmware downloaded and checksum verified\n"))
 
 	_, _ = writer.Write([]byte("------> Flashing firmware (openocd program+verify)...\n"))
-	// SWD over the Pi GPIO header, same prelude as flashVermut. The raw .bin is
-	// programmed at the STM32 flash base (0x08000000); `verify` re-reads it back.
+	// SWD over the Pi GPIO header. Use sysfsgpio (sysfs-based GPIO) instead of
+	// raspberrypi-swd.cfg (BCM2835 direct-memory GPIO) so flashing works on Pi OS
+	// Bookworm (kernel 6.6+) where /dev/gpiomem is unavailable or inaccessible.
+	ifaceCfg, err := writeSysfsgpioCfg()
+	if err != nil {
+		_, _ = fmt.Fprintf(writer, "------> Error preparing OpenOCD interface config: %v\n", err)
+		return xerrors.Errorf("error while flashing firmware: %w", err)
+	}
+	defer os.Remove(ifaceCfg)
 	openocdCmd := "echo \"10\" > /sys/class/gpio/export && " +
 		"echo \"out\" > /sys/class/gpio/gpio10/direction && " +
 		"echo \"1\" > /sys/class/gpio/gpio10/value && " +
-		"openocd -f interface/raspberrypi-swd.cfg -f " + openocdTargetCfg(entry.Board) +
+		"openocd -f " + ifaceCfg + " -f " + openocdTargetCfg(entry.Board) +
 		" -c \"program " + binPath + " 0x08000000 verify reset exit\""
 	cmd := execabs.Command("/bin/bash", "-c", openocdCmd)
 	cmd.Stdout = writer
