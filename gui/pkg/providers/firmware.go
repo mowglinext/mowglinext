@@ -164,7 +164,7 @@ var safeShellArgRe = regexp.MustCompile(`^[a-zA-Z0-9._:/-]+$`)
 func (fp *FirmwareProvider) flashVermut(writer io.Writer, config types.FirmwareConfig) error {
 	// Download the firmware from https://github.com/ClemensElflein/MowgliNext/releases/download/latest/firmware.zip to /tmp/firmware.zip
 	// Unzip /tmp/firmware.zip to /tmp/firmware
-	// Flash the firmware by running command openocd -f interface/raspberrypi-swd.cfg -f target/rp2040.cfg -c "program ./firmware_download/firmware/$OM_HARDWARE_VERSION/firmware.elf verify reset exit"
+	// Flash the firmware by running command openocd -f interface/stlink.cfg -f target/rp2040.cfg -c "program ./firmware_download/firmware/$OM_HARDWARE_VERSION/firmware.elf verify reset exit"
 
 	if !safeShellArgRe.MatchString(config.Version) {
 		return xerrors.Errorf("invalid firmware version: %q", config.Version)
@@ -196,13 +196,12 @@ func (fp *FirmwareProvider) flashVermut(writer io.Writer, config types.FirmwareC
 	_, _ = writer.Write([]byte("------> Firmware unzipped\n"))
 
 	_, _ = writer.Write([]byte("------> Flashing firmware...\n"))
-	ifaceCfg, err := writeSysfsgpioCfg()
-	if err != nil {
-		_, _ = writer.Write([]byte("------> Error preparing OpenOCD interface config: " + err.Error() + "\n"))
-		return xerrors.Errorf("error while flashing firmware: %w", err)
-	}
-	defer os.Remove(ifaceCfg)
-	cmd = execabs.Command("/bin/bash", "-c", "echo \"10\" > /sys/class/gpio/export && echo \"out\" > /sys/class/gpio/gpio10/direction && echo \"1\" > /sys/class/gpio/gpio10/value && openocd -f "+ifaceCfg+" -f target/rp2040.cfg -c \"program "+os.TempDir()+"/firmware/firmware/"+config.Version+"/firmware.elf verify reset exit\"")
+	// Flash over the ST-Link/V2 USB dongle (interface/stlink.cfg), the same
+	// transport the proven `platformio run -t upload` path uses. Do NOT bit-bang
+	// SWD over the SBC GPIO header: this robot runs on an Orange Pi 5B (RK3588),
+	// not a Raspberry Pi, so the raspberrypi-swd/bcm2835gpio and sysfsgpio pin
+	// numbers are wrong and /dev/gpiomem does not exist.
+	cmd = execabs.Command("/bin/bash", "-c", "openocd -f interface/stlink.cfg -f target/rp2040.cfg -c \"program "+os.TempDir()+"/firmware/firmware/"+config.Version+"/firmware.elf verify reset exit\"")
 	cmd.Stdout = writer
 	cmd.Stderr = writer
 	err = cmd.Run()
@@ -212,38 +211,6 @@ func (fp *FirmwareProvider) flashVermut(writer io.Writer, config types.FirmwareC
 	}
 	_, _ = writer.Write([]byte("------> Firmware flashed\n"))
 	return nil
-}
-
-// sysfsgpioSWDCfg is an inline OpenOCD interface config that uses the kernel
-// sysfs GPIO interface (sysfsgpio driver) for SWD. It replaces the
-// raspberrypi-swd.cfg that relied on the BCM2835 GPIO driver and /dev/gpiomem,
-// which is unavailable or inaccessible on Pi OS Bookworm (kernel 6.6+).
-//
-// Pin assignment matches the raspberrypi-swd.cfg shipped with the RPi OpenOCD
-// fork (rpi-common branch):
-//   - SWCLK = BCM GPIO 11 (Pi header pin 23)
-//   - SWDIO = BCM GPIO 8  (Pi header pin 24)
-//     (OpenOCD logs "TMS/SWDIO moved to GPIO 8 (pin 24)" when using that cfg)
-const sysfsgpioSWDCfg = `
-adapter driver sysfsgpio
-sysfsgpio_swclk_num 11
-sysfsgpio_swdio_num 8
-transport select swd
-adapter speed 1000
-`
-
-// writeSysfsgpioCfg writes the sysfsgpio SWD interface config to a temp file
-// and returns the path. The caller is responsible for removing it afterwards.
-func writeSysfsgpioCfg() (string, error) {
-	f, err := os.CreateTemp("", "openocd-sysfsgpio-*.cfg")
-	if err != nil {
-		return "", xerrors.Errorf("creating sysfsgpio cfg: %w", err)
-	}
-	defer f.Close()
-	if _, err := f.WriteString(sysfsgpioSWDCfg); err != nil {
-		return "", xerrors.Errorf("writing sysfsgpio cfg: %w", err)
-	}
-	return f.Name(), nil
 }
 
 // openocdTargetCfg maps a board to its OpenOCD target config. YardForce 500 is a
@@ -293,19 +260,15 @@ func (fp *FirmwareProvider) flashPrebuilt(writer io.Writer, config types.Firmwar
 	_, _ = writer.Write([]byte("------> Firmware downloaded and checksum verified\n"))
 
 	_, _ = writer.Write([]byte("------> Flashing firmware (openocd program+verify)...\n"))
-	// SWD over the Pi GPIO header. Use sysfsgpio (sysfs-based GPIO) instead of
-	// raspberrypi-swd.cfg (BCM2835 direct-memory GPIO) so flashing works on Pi OS
-	// Bookworm (kernel 6.6+) where /dev/gpiomem is unavailable or inaccessible.
-	ifaceCfg, err := writeSysfsgpioCfg()
-	if err != nil {
-		_, _ = fmt.Fprintf(writer, "------> Error preparing OpenOCD interface config: %v\n", err)
-		return xerrors.Errorf("error while flashing firmware: %w", err)
-	}
-	defer os.Remove(ifaceCfg)
-	openocdCmd := "echo \"10\" > /sys/class/gpio/export && " +
-		"echo \"out\" > /sys/class/gpio/gpio10/direction && " +
-		"echo \"1\" > /sys/class/gpio/gpio10/value && " +
-		"openocd -f " + ifaceCfg + " -f " + openocdTargetCfg(entry.Board) +
+	// Flash over the ST-Link/V2 USB dongle (interface/stlink.cfg), the same
+	// transport the proven `platformio run -t upload` path uses (platformio.ini:
+	// upload_protocol = stlink). Do NOT bit-bang SWD over the SBC GPIO header:
+	// this robot runs on an Orange Pi 5B (RK3588), not a Raspberry Pi, so the
+	// raspberrypi-swd/bcm2835gpio and sysfsgpio pin numbers (SWCLK=11/SWDIO=8/
+	// reset=10) are Broadcom BCM numbers that land on the wrong RK3588 pins, and
+	// /dev/gpiomem does not exist. The GPIO `export` also fails EBUSY on retry
+	// because sysfs export state is kernel-global and leaks across attempts.
+	openocdCmd := "openocd -f interface/stlink.cfg -f " + openocdTargetCfg(entry.Board) +
 		" -c \"program " + binPath + " 0x08000000 verify reset exit\""
 	cmd := execabs.Command("/bin/bash", "-c", openocdCmd)
 	cmd.Stdout = writer
