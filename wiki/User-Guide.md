@@ -31,18 +31,18 @@ If you only need the technical reference, head to the [Wiki](https://github.com/
 
 1. Power the dock and place the robot on it. Wait for the green charging LED.
 2. From any device on the same network, open `http://<robot-ip>:4006`. The IP is printed by the install script and is also visible from the dock's Wi-Fi access point label.
-3. The GUI auto-redirects you to **Onboarding** the very first time (`gui/web/src/routes/root.tsx:73-79`). Follow the 5-step wizard — see [§2 Onboarding](#23-onboarding-page).
+3. The GUI auto-redirects you to **Onboarding** the very first time (`gui/web/src/routes/root.tsx:73-79`). Follow the 9-step wizard (Welcome → Robot Model → Firmware → NTRIP → GPS → Datum → Sensors → Calibration → Complete) — see [§2 Onboarding](#23-onboarding-page).
 4. After onboarding, ROS2 restarts so the new `mowgli_robot.yaml` is reloaded. You land on the Dashboard.
 
 ### What "ready to mow" actually requires
 
-Even after the wizard finishes, several calibration artefacts must exist before the robot will mow well. The wizard does **not** produce all of them today (this is the gap covered in [`ONBOARDING_IMPROVEMENTS.md`](ONBOARDING_IMPROVEMENTS.md)). Concretely you need:
+Even after the wizard finishes, several calibration artefacts must exist before the robot will mow well. The wizard does **not** produce all of them today (see the post-onboarding checklist in [`docs/FIRST_BOOT.md`](FIRST_BOOT.md)). Concretely you need:
 
 | Artefact | Where to confirm | How to produce it today |
 |---|---|---|
-| `mowgli_robot.yaml` exists with `datum_lat/lon` set | Settings → GPS & Positioning, lat/lon non-zero | Onboarding step 2, **OR** Settings → GPS → "Use current GPS position" |
+| `mowgli_robot.yaml` exists with `datum_lat/lon` set | Settings → GPS & Positioning, lat/lon non-zero | Onboarding **Datum** step, **OR** Settings → GPS → "Use current GPS position" |
 | `imu_calibration.txt` (gyro/accel bias) | Diagnostics → IMU bias calibration shows **Present** | Automatic — runs every time the robot returns to dock |
-| `imu_yaw` solved + persisted to `mowgli_robot.yaml` | Sensors editor IMU Yaw value matches reality (typically 90° ± 90°) | Diagnostics → "Run calibration" on IMU panel, **OR** the compass icon next to IMU Yaw in the Sensors editor |
+| `imu_yaw` solved + persisted to `mowgli_robot.yaml` | Sensors editor IMU Yaw value matches reality (typically 90° ± 90°) | Onboarding **Calibration** step, **OR** Diagnostics → "Run calibration" on IMU panel, **OR** the compass icon next to IMU Yaw in the Sensors editor |
 | `dock_pose_x/y/yaw` non-zero in `mowgli_robot.yaml` | Diagnostics → Dock calibration shows **Present** with a yaw value | Calibration drives 0.6 m + reverse during IMU yaw calibration; **OR** map editor → pin/environment icon "Set docking point" with the robot manually placed on the dock |
 | At least one mowing area | Map page → Areas list shows ≥ 1 area | Map → "More" → "Area Recording", drive boundary, "Record finish" |
 | RTK-Fixed (Fix type = `RTK FIX`) | Dashboard → GPS card says "RTK fix" / Diagnostics → GPS panel | Working NTRIP credentials + clear sky |
@@ -133,7 +133,7 @@ If you try to leave edit mode with unsaved changes you get a confirmation:
 
 ### 2.3 Onboarding page
 
-The 5-step wizard (`gui/web/src/pages/OnboardingPage.tsx:551-654`). The sequence is:
+The wizard (`gui/web/src/pages/OnboardingPage.tsx`) now runs **9 steps**: Welcome → Robot Model → Firmware → NTRIP → GPS → Datum → Sensors → **Calibration** → Complete. GPS/datum/NTRIP were split into separate steps and IMU/dock calibration was promoted from a compass icon inside Sensors to its own **Calibration** step. The screenshots and sub-sections below predate that reorganization and are indicative of each panel's content rather than the exact step order:
 
 #### Step 0 — Welcome
 ![Welcome](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/01-welcome.png)
@@ -159,7 +159,7 @@ Three panels:
 
 Visual robot editor (`gui/web/src/components/RobotComponentEditor.tsx`) with drag-to-place LiDAR / IMU / GPS markers on a top-down rectangle representing your chassis. Numeric inputs on the right side give precision for X (forward), Y (left), Z (height), Yaw.
 
-> **Critical:** the small **compass icon** next to **IMU Yaw** triggers `POST /api/calibration/imu-yaw` (`gui/pkg/api/calibration.go:63-122`). The robot drives ~0.6 m forward then back — do **not** click it indoors, on a slope, or near furniture. The service blocks for up to 150 s and writes `imu_yaw` (and pitch/roll if the stationary baseline is good enough) directly into `mowgli_robot.yaml`.
+> **Critical:** IMU/dock calibration is now its own **Calibration** step (after Sensors), not a compass icon buried in the Sensors editor. Its **Start IMU Yaw Calibration** button triggers `POST /api/calibration/imu-yaw` (`gui/pkg/api/calibration.go`). The robot drives a short distance forward then back — do **not** start it indoors, on a slope, or near furniture. The service blocks for up to 150 s and writes `imu_yaw` (and pitch/roll if the stationary baseline is good enough) into `mowgli_robot.yaml`; if the robot is on the dock and charging it also captures the dock pose. The same compass-icon control still exists next to IMU Yaw in Settings → Sensors for re-runs.
 
 #### Step 4 — Firmware
 ![Firmware step](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/05-firmware.png)
@@ -173,7 +173,7 @@ If your firmware is already up-to-date, click **Skip — Already Flashed**.
 #### Step 5 — Complete
 The CompleteStep (lines 457-528) marks `onboarding_completed=true` in the GUI's SQLite DB (`POST /api/settings/status`) and then triggers `restartRos2()` + `restartGui()` so the new YAML is reloaded.
 
-> **Gap (not produced by the wizard):** dock pose, IMU yaw calibration result (unless the operator triggered it manually in step 3), magnetometer calibration, RTK-Fixed verification. See [`ONBOARDING_IMPROVEMENTS.md`](ONBOARDING_IMPROVEMENTS.md).
+> **Gap (not guaranteed by the wizard):** the dedicated **Calibration** step produces IMU yaw and, when run with the robot on the dock and charging, the dock pose — but if it runs off-dock the dock pose is still missing. Magnetometer calibration, drive/feed-forward tuning, and an RTK-Fixed datum are **not** produced by the wizard at all. See the post-onboarding checklist in [`docs/FIRST_BOOT.md`](FIRST_BOOT.md).
 
 ### 2.4 Settings page
 
@@ -231,11 +231,11 @@ This is the most information-dense page in the app. It is a near-superset of wha
 - *Configuration cross-checks*: the warning bar across the top — checks that the dock pose isn't all-zero, that the datum lat/lon is set, etc.
 - *Dock calibration* — Present/Missing tag, `dock_pose_x/y/yaw_rad` from `mowgli_robot.yaml`. **Run calibration** kicks off the IMU yaw calibration service (which includes a dock pre-phase if the robot is charging).
 - *IMU bias calibration* — read from `/ros2_ws/maps/imu_calibration.txt`. Shows calibrated-at timestamp, sample count (1000 in the live session), gyro bias vector, and implied pitch/roll. The hardware bridge auto-runs this every time the robot returns to the dock.
-- *Magnetometer calibration* — read from `/ros2_ws/maps/mag_calibration.yaml`. Shows |B| mean / std / sample count. The **Enable & run** button currently only opens a notification telling you to flip the `do_mag_calibration` parameter on `calibrate_imu_yaw_node` — it is **not yet a one-click operation** (see `DiagnosticsPage.tsx:896-902` and `ONBOARDING_IMPROVEMENTS.md` gap #4).
+- *Magnetometer calibration* — read from `/ros2_ws/maps/mag_calibration.yaml`. Shows |B| mean / std / sample count. The **Enable & run** button currently only opens a notification telling you to flip the `do_mag_calibration` parameter on `calibrate_imu_yaw_node` — it is **not yet a one-click operation** (see `DiagnosticsPage.tsx:896-902`).
 
 ![ROS Diagnostics](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/diagnostics/04-imu-wheel-bottom.png)
 
-**Hardware Status + ROS Diagnostics**: the bottom is the canonical `diagnostic_msgs/DiagnosticArray` view. Click any row to expand the per-key/value detail. In our live session, `ekf_odom_node: odometry/filtered topic status = ERROR — No events recorded` is visible — this is expected when `use_fusion_graph=true` and `ekf_odom_node` is disabled, and the GUI doesn't yet know to suppress it.
+**Hardware Status + ROS Diagnostics**: the bottom is the canonical `diagnostic_msgs/DiagnosticArray` view. Click any row to expand the per-key/value detail. The localizer is `fusion_graph` (the sole map+odom localizer — the old `ekf_map_node`/`ekf_odom_node` dual-EKF was removed, and there is no `use_fusion_graph` toggle); expect `fusion_graph` diagnostics here rather than any `ekf_*` rows.
 
 ### 2.6 Schedule
 
@@ -389,5 +389,4 @@ The Wiki [FAQ](https://github.com/mowglinext/mowglinext/wiki/FAQ) is the long ve
 - **Wiki — Architecture:** https://github.com/mowglinext/mowglinext/wiki/Architecture (deep dive into TF chain, fusion_graph, BT, coverage)
 - **Wiki — Configuration:** https://github.com/mowglinext/mowglinext/wiki/Configuration (every YAML key)
 - **Wiki — FAQ:** https://github.com/mowglinext/mowglinext/wiki/FAQ
-- **First-boot checklist:** [`docs/FIRST_BOOT.md`](FIRST_BOOT.md)
-- **Onboarding gaps + roadmap:** [`docs/ONBOARDING_IMPROVEMENTS.md`](ONBOARDING_IMPROVEMENTS.md)
+- **First-boot checklist (incl. post-onboarding gaps):** [`docs/FIRST_BOOT.md`](FIRST_BOOT.md)

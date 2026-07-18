@@ -533,8 +533,9 @@ check_lidar() {
 }
 
 # check_slam() — REMOVED. SLAM (slam_toolbox, Cartographer, etc.) has been
-# removed from the MowgliNext stack. The map frame is provided by
-# navsat_transform + RTK GPS via robot_localization's dual EKF.
+# removed from the MowgliNext stack. The map+odom frames are provided by the
+# fusion_graph GTSAM localizer (sole and default; it owns both map->odom and
+# odom->base_footprint). The old robot_localization dual EKF was also removed.
 # See CLAUDE.md "Architecture Invariants" for details.
 
 check_rangefinders() {

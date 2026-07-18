@@ -89,7 +89,7 @@ done
 for owned_elsewhere in "two_d_mode" "base_footprint" "publish_tf"; do
   if grep -qE "^[[:space:]]+${owned_elsewhere}:" "$YAML"; then
     fail "no override of $owned_elsewhere in user yaml" \
-      "$owned_elsewhere belongs in robot_localization.yaml, not site config"
+      "$owned_elsewhere is a localizer/TF-ownership param (fusion_graph owns the TF tree), not site config"
   else
     pass "no override of $owned_elsewhere in user yaml"
   fi
