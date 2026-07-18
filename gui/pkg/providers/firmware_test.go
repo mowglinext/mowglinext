@@ -15,11 +15,12 @@ func TestBuildBoard(t *testing.T) {
 	// working directory; run from the gui root where asserts/ lives.
 	chdirToGuiRoot(t)
 	dbProvider := NewDBProvider()
-	firmwareProvider := NewFirmwareProvider(dbProvider)
+	// Post-flash handshake verification needs a ROS link; nil is fine here
+	// (buildBoardHeader is what this test exercises, not a live flash).
+	firmwareProvider := NewFirmwareProvider(dbProvider, nil)
 	config := types.FirmwareConfig{
 		BoardType:                      "BOARD_YARDFORCE500",
 		PanelType:                      "PANEL_TYPE_YARDFORCE_500_CLASSIC",
-		DebugType:                      "NONE",
 		MaxChargeCurrent:               1.5,
 		LimitVoltage150MA:              29,
 		MaxChargeVoltage:               29,
@@ -32,7 +33,6 @@ func TestBuildBoard(t *testing.T) {
 		ImuOnboardInclinationThreshold: 0x38,
 		ExternalImuAcceleration:        true,
 		ExternalImuAngular:             true,
-		MasterJ18:                      true,
 		MaxMps:                         0.6,
 	}
 	res, err := firmwareProvider.buildBoardHeader("./asserts/board.h.template", config)

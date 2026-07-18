@@ -16,7 +16,9 @@ type FirmwareConfig struct {
 	Version                        string  `json:"version"`
 	BoardType                      string  `json:"boardType"`
 	PanelType                      string  `json:"panelType"`
-	DebugType                      string  `json:"debugType"`
+	// ExpertBuild routes the flash to the compile-from-source path
+	// (flashMowgli); the default (false) flashes a prebuilt binary.
+	ExpertBuild                    bool    `json:"expertBuild"`
 	DisableEmergency               bool    `json:"disableEmergency"`
 	MaxMps                         float32 `json:"maxMps"`
 	MaxChargeCurrent               float32 `json:"maxChargeCurrent"`

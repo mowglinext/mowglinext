@@ -39,9 +39,17 @@ extern "C" {
  * see which main-loop section was running when the WWDG fired. The same v3
  * diagnostic stack also uses the config request/response flags byte to gate
  * optional firmware diagnostics/breadcrumb detail on demand.
+ * v4 adds packet 0x56 (pkt_set_kinematics_t) so the host can retune the runtime
+ * max wheel-speed cap and wheel base without a reflash; old firmware safely
+ * ignores the new packet ID (its compile-time MAX_MPS/WHEEL_BASE stay in force).
+ * v5 adds packet 0x57 (pkt_set_safety_limits_t) so the host can TIGHTEN the
+ * charge-voltage/current ceiling and the emergency-sensor timeouts without a
+ * reflash. Every field is clamped so the wire can only make protection stronger
+ * (lower charge limits, faster e-stop trips, harder emergency-clear), never
+ * weaker; old firmware ignores the new ID and keeps its compile-time limits.
  * ---------------------------------------------------------------------------*/
 
-#define MOWGLI_PROTOCOL_VERSION 3u
+#define MOWGLI_PROTOCOL_VERSION 5u
 
 /* ---------------------------------------------------------------------------
  * Firmware version (semantic version of THIS firmware build).
@@ -54,9 +62,20 @@ extern "C" {
  * notable changes.
  * ---------------------------------------------------------------------------*/
 
+/* Injected at compile time from git by git_build_id.py (PlatformIO pre-build
+ * hook) so every commit auto-bumps the reported firmware_version with no manual
+ * step. These #ifndef fallbacks apply only to builds where the hook did not run
+ * (e.g. a source-tarball build with no git). Display/identity only — the
+ * host↔firmware COMPATIBILITY key is MOWGLI_PROTOCOL_VERSION, never this. */
+#ifndef MOWGLI_FW_VERSION_MAJOR
 #define MOWGLI_FW_VERSION_MAJOR 1u
+#endif
+#ifndef MOWGLI_FW_VERSION_MINOR
 #define MOWGLI_FW_VERSION_MINOR 0u
+#endif
+#ifndef MOWGLI_FW_VERSION_PATCH
 #define MOWGLI_FW_VERSION_PATCH 0u
+#endif
 
 /* ---------------------------------------------------------------------------
  * Packet IDs
@@ -119,6 +138,26 @@ extern "C" {
  *  firmware validates and clamps every field; its compile-time defaults remain
  *  the power-on fallback. */
 #define PKT_ID_SET_DRIVE_PID 0x54u
+
+/** Gyro yaw-rate loop gains/enable (Host -> Firmware). Retunes the firmware
+ *  closed yaw-rate loop (Option C) that trims the per-wheel setpoints from the
+ *  onboard gyro. Validated + clamped; compile-time defaults are the power-on
+ *  fallback. */
+#define PKT_ID_SET_YAW_PID 0x55u
+
+/** Runtime kinematics (max wheel-speed cap + wheel base) (Host -> Firmware).
+ *  Lets the ROS 2 host retune the motion cap and wheel base without reflashing.
+ *  The firmware clamps max_mps to at most the compile-time MAX_MPS (the wire can
+ *  only LOWER the cap, never raise it) and wheel_base to a sane range; the
+ *  compile-time MAX_MPS/WHEEL_BASE remain the power-on fallback. */
+#define PKT_ID_SET_KINEMATICS 0x56u
+
+/** Runtime safety limits (charge V/I ceiling + emergency-sensor timeouts)
+ *  (Host -> Firmware). Lets the host TIGHTEN battery/e-stop protection without a
+ *  reflash. The firmware clamps every field so the wire can only make protection
+ *  stronger, never weaker (see pkt_set_safety_limits_t); the compile-time
+ *  board_defaults.h values remain the power-on fallback. */
+#define PKT_ID_SET_SAFETY_LIMITS 0x57u
 
 /* ---------------------------------------------------------------------------
  * status_bitmask bit definitions  (pkt_status_t::status_bitmask)
@@ -450,6 +489,87 @@ typedef struct {
 } pkt_set_drive_pid_t;
 
 /**
+ * @brief Gyro yaw-rate loop tuning packet — Host -> Firmware
+ * (PKT_ID_SET_YAW_PID = 0x55).
+ *
+ * Retunes the firmware closed yaw-rate loop (Option C): at the 50 Hz motor
+ * cadence the firmware regulates (commanded wz − measured gyro wz) and injects
+ * a SYMMETRIC differential velocity trim (±trim_limit_mps) onto the per-wheel
+ * setpoints before the per-wheel PIs. The firmware rejects the packet if
+ * yaw_kp/yaw_ki/trim_limit_mps is non-finite and clamps every field to a safe
+ * range before applying.
+ *
+ * gyro_sign (+1/-1) selects the sign of the onboard gyro's Z axis relative to
+ * robot +yaw (CCW). It is exposed at runtime because the correct sign depends
+ * on the physical IMU mounting — flipping it is the field sign-check remedy if
+ * the loop diverges (see firmware tuning notes). enabled=0 disables the loop
+ * (pure open-diff passthrough) for A/B without a reflash.
+ *
+ * Wire size: 17 bytes (must match sizeof(LlSetYawPid) in ll_datatypes.hpp).
+ */
+typedef struct {
+  uint8_t type;           /**< PKT_ID_SET_YAW_PID */
+  float yaw_kp;           /**< P gain [m/s trim per rad/s yaw error] */
+  float yaw_ki;           /**< I gain [m/s trim per (rad/s·s)] */
+  float trim_limit_mps;   /**< Clamp on |differential trim| [m/s] */
+  uint8_t enabled;        /**< 1 = closed yaw loop on, 0 = open-diff passthrough */
+  int8_t gyro_sign;       /**< +1 / -1: gyro Z sign vs robot +yaw (CCW) */
+  uint16_t crc;           /**< CRC-16 CCITT over preceding bytes */
+} pkt_set_yaw_pid_t;
+
+/**
+ * @brief Runtime kinematics packet — Host -> Firmware
+ * (PKT_ID_SET_KINEMATICS = 0x56).
+ *
+ * Retunes the runtime max wheel-speed cap and wheel base without a reflash. The
+ * firmware rejects the packet if any field is non-finite and clamps each before
+ * applying: max_mps to (0, compile-time MAX_MPS] — the wire can only LOWER the
+ * motion cap, never raise it above the compiled safety ceiling — and wheel_base
+ * to a sane physical range. The compile-time MAX_MPS/WHEEL_BASE remain the
+ * power-on fallback (this board has no config persistence; the host re-sends on
+ * every reconnect).
+ *
+ * Wire size: 11 bytes (must match sizeof(LlSetKinematics) in ll_datatypes.hpp).
+ */
+typedef struct {
+  uint8_t type;      /**< PKT_ID_SET_KINEMATICS */
+  float max_mps;     /**< Runtime max wheel speed cap [m/s]; clamped ≤ MAX_MPS */
+  float wheel_base;  /**< Wheel track (centre-to-centre) [m] */
+  uint16_t crc;      /**< CRC-16 CCITT over preceding bytes */
+} pkt_set_kinematics_t;
+
+/**
+ * @brief Runtime safety-limits packet — Host -> Firmware
+ * (PKT_ID_SET_SAFETY_LIMITS = 0x57).
+ *
+ * Retunes the battery charge ceiling and the emergency-sensor timeouts without a
+ * reflash. The firmware rejects the packet if a charge field is non-finite and
+ * clamps EVERY field so the wire can only make protection STRONGER, never weaker:
+ *   - max_charge_voltage / max_charge_current: clamped to (0, compiled ceiling]
+ *     — can only LOWER the charge envelope (can't overcharge).
+ *   - one_wheel_lift/both_wheels_lift/tilt/stop_button timeouts: clamped to
+ *     [min, compiled] — can only SHORTEN (faster e-stop).
+ *   - play_clear_ms (hold-to-clear-emergency): clamped to [compiled, max] — can
+ *     only LENGTHEN (harder to un-latch); shortening it would WEAKEN the latch,
+ *     so that direction is forbidden.
+ * The compile-time board_defaults.h values remain the power-on fallback: an
+ * unconnected/silent host runs the vetted safe defaults.
+ *
+ * Wire size: 21 bytes (must match sizeof(LlSetSafetyLimits) in ll_datatypes.hpp).
+ */
+typedef struct {
+  uint8_t type;                 /**< PKT_ID_SET_SAFETY_LIMITS */
+  float max_charge_voltage;     /**< Charge voltage ceiling [V]; clamped ≤ compiled */
+  float max_charge_current;     /**< Charge current ceiling [A]; clamped ≤ compiled */
+  uint16_t one_wheel_lift_ms;   /**< One-wheel-lift trip [ms]; clamped ≤ compiled */
+  uint16_t both_wheels_lift_ms; /**< Both-wheels-lift trip [ms]; clamped ≤ compiled */
+  uint16_t tilt_ms;             /**< Tilt trip [ms]; clamped ≤ compiled */
+  uint16_t stop_button_ms;      /**< Stop-button trip [ms]; clamped ≤ compiled */
+  uint16_t play_clear_ms;       /**< Hold-to-clear-emergency [ms]; clamped ≥ compiled */
+  uint16_t crc;                 /**< CRC-16 CCITT over preceding bytes */
+} pkt_set_safety_limits_t;
+
+/**
  * @brief Blade motor status packet — Firmware -> Host (PKT_ID_BLADE_STATUS =
  * 0x05).
  *
@@ -586,6 +706,55 @@ _Static_assert(offsetof(pkt_set_drive_pid_t, pwm_per_mps) == 21u,
                "pkt_set_drive_pid_t.pwm_per_mps offset unexpected");
 _Static_assert(offsetof(pkt_set_drive_pid_t, crc) == 25u,
                "pkt_set_drive_pid_t.crc offset unexpected");
+
+_Static_assert(sizeof(pkt_set_yaw_pid_t) == 17u,
+               "pkt_set_yaw_pid_t layout unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, type) == 0u,
+               "pkt_set_yaw_pid_t.type offset unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, yaw_kp) == 1u,
+               "pkt_set_yaw_pid_t.yaw_kp offset unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, yaw_ki) == 5u,
+               "pkt_set_yaw_pid_t.yaw_ki offset unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, trim_limit_mps) == 9u,
+               "pkt_set_yaw_pid_t.trim_limit_mps offset unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, enabled) == 13u,
+               "pkt_set_yaw_pid_t.enabled offset unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, gyro_sign) == 14u,
+               "pkt_set_yaw_pid_t.gyro_sign offset unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, crc) == 15u,
+               "pkt_set_yaw_pid_t.crc offset unexpected");
+
+_Static_assert(sizeof(pkt_set_kinematics_t) == 11u,
+               "pkt_set_kinematics_t layout unexpected");
+_Static_assert(offsetof(pkt_set_kinematics_t, type) == 0u,
+               "pkt_set_kinematics_t.type offset unexpected");
+_Static_assert(offsetof(pkt_set_kinematics_t, max_mps) == 1u,
+               "pkt_set_kinematics_t.max_mps offset unexpected");
+_Static_assert(offsetof(pkt_set_kinematics_t, wheel_base) == 5u,
+               "pkt_set_kinematics_t.wheel_base offset unexpected");
+_Static_assert(offsetof(pkt_set_kinematics_t, crc) == 9u,
+               "pkt_set_kinematics_t.crc offset unexpected");
+
+_Static_assert(sizeof(pkt_set_safety_limits_t) == 21u,
+               "pkt_set_safety_limits_t layout unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, type) == 0u,
+               "pkt_set_safety_limits_t.type offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, max_charge_voltage) == 1u,
+               "pkt_set_safety_limits_t.max_charge_voltage offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, max_charge_current) == 5u,
+               "pkt_set_safety_limits_t.max_charge_current offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, one_wheel_lift_ms) == 9u,
+               "pkt_set_safety_limits_t.one_wheel_lift_ms offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, both_wheels_lift_ms) == 11u,
+               "pkt_set_safety_limits_t.both_wheels_lift_ms offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, tilt_ms) == 13u,
+               "pkt_set_safety_limits_t.tilt_ms offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, stop_button_ms) == 15u,
+               "pkt_set_safety_limits_t.stop_button_ms offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, play_clear_ms) == 17u,
+               "pkt_set_safety_limits_t.play_clear_ms offset unexpected");
+_Static_assert(offsetof(pkt_set_safety_limits_t, crc) == 19u,
+               "pkt_set_safety_limits_t.crc offset unexpected");
 #endif
 
 #ifdef __cplusplus

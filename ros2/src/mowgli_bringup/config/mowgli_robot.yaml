@@ -41,6 +41,26 @@ mowgli:
     # host connects. board.h TICKS_PER_M remains only the brief power-on
     # fallback before ROS re-applies the saved runtime value.
     ticks_per_meter: 399.0
+    # Runtime max wheel-speed cap [m/s], consumed by hardware_bridge_node and
+    # pushed to the STM32 (PACKET_ID_LL_SET_KINEMATICS) with wheel_track as the
+    # wheel base, so both can be retuned without reflashing. The firmware clamps
+    # this to at most its compiled MAX_MPS (board.h/template) — the wire can only
+    # LOWER the cap, never raise it above the compiled safety ceiling.
+    max_mps: 0.5
+    # Runtime SAFETY limits pushed to the STM32 (PACKET_ID_LL_SET_SAFETY_LIMITS)
+    # so the charge ceiling + e-stop timeouts can be TIGHTENED without reflashing.
+    # Defaults mirror the firmware compile-time board_defaults.h values. The
+    # firmware clamps every field so the wire can only make protection STRONGER:
+    # charge V/I clamped <= compiled ceiling; the four trip timeouts clamped
+    # <= compiled (faster e-stop); play_button_clear clamped >= compiled (harder
+    # to un-latch the emergency). An unconnected host runs the compiled defaults.
+    max_charge_voltage: 29.4          # [V] charge voltage ceiling
+    max_charge_current: 1.2           # [A] charge current ceiling
+    one_wheel_lift_emergency_ms: 2000 # [ms] one-wheel-lift trip
+    both_wheels_lift_emergency_ms: 1000 # [ms] both-wheels-lift trip
+    tilt_emergency_ms: 500            # [ms] tilt trip (mechanical + accelerometer)
+    stop_button_emergency_ms: 100     # [ms] stop-button trip
+    play_button_clear_emergency_ms: 2000 # [ms] hold-PLAY-to-clear-emergency
     # Drive-motor wheel-velocity PID + feedforward (consumed by
     # hardware_bridge_node, pushed to the STM32 firmware over the serial link so
     # the GUI can retune the per-wheel loop without reflashing). Defaults mirror
@@ -52,6 +72,21 @@ mowgli:
     wheel_pid_kd: 0.0            # derivative gain [PWM per (m/s²)] (0 = off)
     wheel_pid_integral_limit: 100.0  # anti-windup clamp on the integral term [PWM]
     wheel_pid_pwm_per_mps: 300.0     # open-loop feedforward velocity→PWM scale
+    # Firmware gyro yaw-rate loop (Option C, 2026-07-17, task #33/#34 —
+    # replaces the removed host-side angular_rate_* PI). Consumed by
+    # hardware_bridge_node, pushed to the STM32 over PACKET_ID_LL_SET_YAW_PID
+    # (a separate packet from SET_DRIVE_PID). Defaults are the firmware's own
+    # power-on fallback (Firmware-2's #33 report). The firmware re-validates
+    # and clamps every value on receipt (yaw_kp 0-5, yaw_ki 0-20,
+    # yaw_trim_limit_mps 0-MAX_MPS=0.5).
+    yaw_kp: 0.12                  # P gain [m/s differential trim per rad/s yaw error]
+    yaw_ki: 0.40                  # I gain [m/s trim per (rad/s·s)]
+    yaw_trim_limit_mps: 0.15      # clamp on |differential trim| [m/s]
+    yaw_loop_enabled: true        # 1 = closed yaw loop on, 0 = open-diff passthrough
+    # gyro_sign (+1/-1): sign of the onboard gyro's Z axis vs robot +yaw (CCW).
+    # UNVALIDATED default (+1) — the field sign-check remedy if the loop
+    # diverges is to flip this without a firmware reflash.
+    yaw_gyro_sign: 1
     # Behavior tree tuning (consumed by behavior_tree_node)
     tick_rate: 10.0
     bt_debug_logging: false
@@ -122,7 +157,6 @@ mowgli:
     # true), and GNSS lever-arm + COG / mag unaries. Equivalent
     # functionality to the legacy ekf_map_node, with the option to
     # enable scan-matching + loop closure on LiDAR-equipped robots.
-    use_fusion_graph: true
 
     # use_magnetometer (default false): subscribe to /imu/mag_yaw and
     # let it influence the map-frame yaw. The chassis motor field
@@ -174,7 +208,7 @@ mowgli:
     # -----------------------------------------------------------------
     # Battery
     # -----------------------------------------------------------------
-    battery_full_voltage: 28.5     # consider fully charged above this
+    battery_full_voltage: 28.0     # consider fully charged above this
     battery_empty_voltage: 24.0    # dock if below for sustained period
     battery_critical_voltage: 23.0 # immediate dock
     battery_full_percent: 95.0     # resume mowing above this %
@@ -188,7 +222,7 @@ mowgli:
     # -----------------------------------------------------------------
     mowing_enabled: true           # enable blade motor during mowing
     mowing_speed: 0.2              # m/s during coverage paths (field-validated comfortable cut speed)
-    transit_speed: 0.25            # m/s during point-to-point navigation (→ RPP desired_linear_vel)
+    transit_speed: 0.2             # m/s during point-to-point navigation (→ RPP desired_linear_vel)
     # NOTE: the former outline_passes / outline_overlap / outline_offset /
     # mow_angle_offset_deg / mow_angle_increment_deg knobs were REMOVED — no ros2
     # node read them (navigation.launch.py forwards only the keys below to
@@ -246,7 +280,7 @@ mowgli:
     # -----------------------------------------------------------------
     # Docking
     # -----------------------------------------------------------------
-    dock_pose_x: 0.0              # dock position in map frame (set per-site)
+    dock_pose_x: 0.0             # sim: robot at world origin; area is centred on origin instead
     dock_pose_y: 0.0
     # dock_pose_yaw MUST be a map-frame ENU yaw (rad) — opennav_docking
     # consumes it directly as the dock heading. Set it via the GUI
@@ -256,8 +290,8 @@ mowgli:
     # /odometry/filtered_map yaw equals this. NOTE: 4.17 below is a stale
     # hand-entered phone-compass seed (239°) — NOT a valid ENU yaw;
     # recalibrate per-site before relying on docking.
-    dock_pose_yaw: 4.17
-    undock_distance: 1.0           # reverse distance when undocking (m); must be > 0.5 m for CalibrateHeadingFromUndock
+    dock_pose_yaw: 0.0             # sim: match MowgliMower world rotation (yaw 0, facing +X/east)
+    undock_distance: 1.5           # reverse distance when undocking (m); must be > 0.5 m for CalibrateHeadingFromUndock
     undock_speed: 0.16             # reverse speed (m/s) — above kMinLinVel=0.15 host clamp
     # Distance (m) to the staging pose behind the dock — the final
     # straight-in approach runway. Injected as opennav_docking
@@ -318,7 +352,7 @@ mowgli:
     #   - map_server bypass_max_length (give-up threshold for the mow-progress
     #     bypass corridor)
     # Clamped to [0.5, 10.0] by navigation.launch.py.
-    max_obstacle_avoidance_distance: 2.0
+    max_obstacle_avoidance_distance: 3.0
     # Inflation radius (m) around LiDAR-detected obstacles in the LOCAL
     # costmap — the buffer FTC/RPP keep from trunks, legs, walls seen by the
     # scan. Injected into local_costmap.inflation_layer.inflation_radius.
@@ -328,7 +362,29 @@ mowgli:
     # the inscribed band exists. Raise this if the robot passes too close to
     # trees it can see. Does NOT affect the global costmap (its 0.20 m radius
     # is pinned — larger values blocked transit paths, see nav2_params_base).
-    obstacle_inflation_radius: 0.60
+    # 1.0 (was 0.80, was 0.60 before that) — task #35, 2026-07-17: field
+    # analysis showed obstacles only pushing the path from 0.4-0.6 m out at
+    # ~0.17 m/s, reacting too late for a smooth deviation; 0.80 was the
+    # first bump. Task #43, same day: the user's own field-converged value
+    # is 1.0, superseding #35's 0.80 — folded in as the new template default.
+    # NAV2-TRANSIT ONLY (task #49, 2026-07-17): only MPPI/RPP's cost-based
+    # potential field (point-to-point transit driving) reads the inflation
+    # GRADIENT this radius controls. FTC (the coverage/mowing controller)
+    # checks raw LETHAL cells only (obstacle_deviation.hpp kLethalThreshold),
+    # never the inflated gradient — this knob has NO effect on how far out
+    # the robot starts avoiding an obstacle WHILE MOWING. For that, see
+    # obstacle_detection_range_m below.
+    obstacle_inflation_radius: 1.0
+    # How far ahead along the coverage path (m) FTC scans for a lethal
+    # obstacle cell before starting to skirt it — the real "avoid from
+    # further out during mowing" knob (task #49; obstacle_inflation_radius
+    # above does NOT affect this, see its comment). Injected into
+    # FollowCoveragePath.obstacle_lookahead (nav2_params_base.yaml) as a
+    # pose count: poses = round(this / kF2CSamplingM), kF2CSamplingM=0.05
+    # (navigation.launch.py). 1.5 m = 30 poses = the prior static default,
+    # ≈7 s of warning at mowing_speed 0.2 m/s. Clamped to [0.2, 5.0] m
+    # (>=4 poses so the detector always has a usable lookahead window).
+    obstacle_detection_range_m: 1.5
     # Extra margin (m) grown around DRAWN map obstacle polygons, applied in
     # BOTH the coverage planner (F2C holes are buffered outward before swath
     # planning) and the keepout mask (cells within the margin of an obstacle
@@ -345,11 +401,18 @@ mowgli:
     # -----------------------------------------------------------------
     # Navigation tolerances (garden terrain)
     # -----------------------------------------------------------------
-    # 0.30 m / 0.10 rad (was 0.75 / 1.0). The previous values let FTC
-    # report SUCCESS with the chassis 25-40° off the goal yaw, which
-    # made opennav_docking attack the cradle "en biais" (sideways). 0.10
-    # rad (≈5.7°) forces a final in-place pivot before the dock approach.
-    xy_goal_tolerance: 0.30        # metres — acceptable goal position error
-    yaw_goal_tolerance: 0.10       # radians — acceptable heading error
+    # History: 0.75/1.0 rad let FTC report SUCCESS with the chassis 25-40°
+    # off the goal yaw, which made opennav_docking attack the cradle
+    # "en biais" (sideways) — tightened to 0.30 m / 0.10 rad to force a
+    # final in-place pivot before the dock approach.
+    # Task #43, 2026-07-17: folded in the user's field-converged values,
+    # tighter on position (0.10 m) but LOOSER on yaw (0.20 rad ≈ 11.4°)
+    # than the 0.10 rad fix above. FLAGGED to team-lead/user: re-verify
+    # docking approach heading is still square (not "en biais") with the
+    # looser yaw tolerance — the #37/#39 firmware yaw-loop fixes (same
+    # session) may be why 0.20 rad is now safe, but this reopens the exact
+    # failure mode the 0.10 rad value was chosen to close.
+    xy_goal_tolerance: 0.1         # metres — acceptable goal position error
+    yaw_goal_tolerance: 0.2        # radians — acceptable heading error
     coverage_xy_tolerance: 0.50    # metres — must be >= FTC max_goal_distance_error (0.50): FTC parks that far short of the goal, so a tighter gate never completes the area (re-mow). Floored at FTC's value by navigation.launch.py.
-    progress_timeout_sec: 60.0     # seconds without progress before recovery
+    progress_timeout_sec: 10.0     # seconds without progress before recovery

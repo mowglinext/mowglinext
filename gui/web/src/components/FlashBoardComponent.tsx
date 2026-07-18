@@ -37,7 +37,7 @@ type Config = {
     version: string,
     boardType: string,
     panelType: string,
-    debugType: string,
+    expertBuild: boolean,
     disableEmergency: boolean,
     maxMps: number,
     maxChargeCurrent: number,
@@ -52,26 +52,44 @@ type Config = {
     imuOnboardInclinationThreshold: number,
     externalImuAcceleration: boolean,
     externalImuAngular: boolean,
-    masterJ18: boolean,
     tickPerM: number,
     wheelBase: number
     perimeterWire: boolean
 }
 
+// Boards that flash WITHOUT compiling: Vermut has its own release-zip path, and
+// the Mowgli STM32 boards have prebuilt binaries in the release manifest (mirrors
+// firmware/scripts/package_release.py's PERMUTATIONS). A board absent here (e.g.
+// LUV1000RI) has no prebuilt yet and must use the Expert compile path — the UI
+// steers the user there instead of letting the flash fail at runtime.
+const PREBUILT_BOARDS = new Set<string>([
+    "BOARD_VERMUT_YARDFORCE500",
+    "BOARD_YARDFORCE500",
+    "BOARD_YARDFORCE500B",
+]);
+
 export const FlashBoardComponent = (props: { onNext: () => void }) => {
     const isMobile = useIsMobile();
     const {colors} = useThemeMode();
     const {t} = useTranslation();
+    // Mirror the two fields that gate the default-vs-expert flash affordance into
+    // React state so the button + guidance can react without a Formily observer.
+    const [selectedBoard, setSelectedBoard] = useState("BOARD_VERMUT_YARDFORCE500");
+    const [isExpert, setIsExpert] = useState(false);
     const form = useMemo(() => createForm({
         validateFirst: true,
         effects: (form) => {
             onFieldValueChange('boardType', (field) => {
-                form.setFieldState('*(panelType,tickPerM,wheelBase,directory,branch,repository,debugType,disableEmergency,maxMps,maxChargeCurrent,limitVoltage150MA,maxChargeVoltage,batChargeCutoffVoltage,oneWheelLiftEmergencyMillis,bothWheelsLiftEmergencyMillis,tiltEmergencyMillis,stopButtonEmergencyMillis,playButtonClearEmergencyMillis,imuOnboardInclinationThreshold,externalImuAcceleration,externalImuAngular,masterJ18,perimeterWire)', (state) => {
+                setSelectedBoard(String(field.value));
+                form.setFieldState('*(tickPerM,wheelBase,directory,branch,repository,disableEmergency,maxMps,maxChargeCurrent,limitVoltage150MA,maxChargeVoltage,batChargeCutoffVoltage,oneWheelLiftEmergencyMillis,bothWheelsLiftEmergencyMillis,tiltEmergencyMillis,stopButtonEmergencyMillis,playButtonClearEmergencyMillis,imuOnboardInclinationThreshold,externalImuAcceleration,externalImuAngular,perimeterWire)', (state) => {
                     state.display = field.value !== "BOARD_VERMUT_YARDFORCE500" ? "visible" : "hidden";
                 })
                 form.setFieldState('*(version,file)', (state) => {
                     state.display = field.value === "BOARD_VERMUT_YARDFORCE500" ? "visible" : "hidden";
                 })
+            })
+            onFieldValueChange('expertBuild', (field) => {
+                setIsExpert(Boolean(field.value));
             })
         },
     }), [])
@@ -194,21 +212,30 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
     };
 
     const flashFirmware = (values: Config) => {
+        // The prebuilt (default) path doesn't expose the charge/IMU params, so
+        // its confirmation is a simple "flash the blessed binary" prompt. The
+        // expert compile path keeps the detailed value-verification list.
+        const content = values.expertBuild ? (
+            <div>
+                <p><strong>{t('flashBoard.confirmVerifyParams')}</strong></p>
+                <ul style={{listStyle: "none", padding: 0}}>
+                    <li>{t('flashBoard.maxChargeCurrentLabel')}: <strong>{values.maxChargeCurrent} A</strong></li>
+                    <li>{t('flashBoard.maxChargeVoltageLabel')}: <strong>{values.maxChargeVoltage} V</strong></li>
+                    <li>{t('flashBoard.batChargeCutoffVoltageLabel')}: <strong>{values.batChargeCutoffVoltage} V</strong></li>
+                    <li>{t('flashBoard.limitVoltage150MALabel')}: <strong>{values.limitVoltage150MA} V</strong></li>
+                    <li>{t('flashBoard.imuInclinationThresholdLabel')}: <strong>0x{(values.imuOnboardInclinationThreshold ?? 0x38).toString(16).toUpperCase().padStart(2, "0")}</strong></li>
+                </ul>
+                <p style={{color: colors.danger}}><strong>{t('flashBoard.confirmWrongValuesWarning')}</strong></p>
+            </div>
+        ) : (
+            <div>
+                <p>{t('flashBoard.confirmPrebuiltDesc')}</p>
+                <p style={{color: colors.danger}}><strong>{t('flashBoard.confirmPrebuiltWarning')}</strong></p>
+            </div>
+        );
         const confirmModal = modal.confirm({
             title: t('flashBoard.confirmFlashTitle'),
-            content: (
-                <div>
-                    <p><strong>{t('flashBoard.confirmVerifyParams')}</strong></p>
-                    <ul style={{listStyle: "none", padding: 0}}>
-                        <li>{t('flashBoard.maxChargeCurrentLabel')}: <strong>{values.maxChargeCurrent} A</strong></li>
-                        <li>{t('flashBoard.maxChargeVoltageLabel')}: <strong>{values.maxChargeVoltage} V</strong></li>
-                        <li>{t('flashBoard.batChargeCutoffVoltageLabel')}: <strong>{values.batChargeCutoffVoltage} V</strong></li>
-                        <li>{t('flashBoard.limitVoltage150MALabel')}: <strong>{values.limitVoltage150MA} V</strong></li>
-                        <li>{t('flashBoard.imuInclinationThresholdLabel')}: <strong>0x{(values.imuOnboardInclinationThreshold ?? 0x38).toString(16).toUpperCase().padStart(2, "0")}</strong></li>
-                    </ul>
-                    <p style={{color: colors.danger}}><strong>{t('flashBoard.confirmWrongValuesWarning')}</strong></p>
-                </div>
-            ),
+            content,
             okText: t('flashBoard.flash'),
             okType: "danger",
             cancelText: t('flashBoard.cancel'),
@@ -305,6 +332,56 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                         ]} x-component="Select"
                         x-decorator="FormItem"/></SchemaField>
                     <SchemaField><SchemaField.String
+                        name={"panelType"}
+                        title={t('flashBoard.panelSelectionTitle')}
+                        default={"PANEL_TYPE_YARDFORCE_500_CLASSIC"}
+                        enum={[
+                            {label: "YardForce 500 Classic", value: "PANEL_TYPE_YARDFORCE_500_CLASSIC"},
+                            {label: "YardForce LUV1000RI", value: "PANEL_TYPE_YARDFORCE_LUV1000RI"},
+                            {label: "YardForce 500B Classic", value: "PANEL_TYPE_YARDFORCE_500B_CLASSIC"},
+                            {label: "YardForce 900 ECO", value: "PANEL_TYPE_YARDFORCE_900_ECO"},
+                        ]} x-component="Select"
+                        x-decorator="FormItem"/></SchemaField>
+
+                    <Alert
+                        type="info"
+                        showIcon
+                        style={{marginBottom: 12}}
+                        message={t('flashBoard.prebuiltInfoTitle')}
+                        description={t('flashBoard.prebuiltInfoDesc')}
+                    />
+
+                    {/* Expert disclosure: everything inside flashes a CUSTOM,
+                        compiled-from-source build (expertBuild=true) instead of the
+                        prebuilt binary. The default (collapsed) flow flashes the
+                        matching prebuilt for the board/panel selected above — a new
+                        user never opens this. forceRender keeps the Formily fields
+                        mounted so their `default` values are always registered and
+                        submitted with the payload. */}
+                    <Collapse
+                        ghost
+                        style={{marginBottom: 8}}
+                        items={[{
+                            key: "expert",
+                            forceRender: true,
+                            label: (
+                                <Typography.Text strong style={{color: colors.warning}}>
+                                    {t('flashBoard.expertBuildLabel')}
+                                </Typography.Text>
+                            ),
+                            children: (
+                                <FormLayout layout="vertical">
+                                    <Alert
+                                        type="warning"
+                                        showIcon
+                                        style={{marginBottom: 12}}
+                                        message={t('flashBoard.expertBuildAlertMessage')}
+                                        description={t('flashBoard.expertBuildAlertDescription')}
+                                    />
+                                    <SchemaField><SchemaField.Boolean name={"expertBuild"} title={t('flashBoard.expertBuildToggleTitle')} default={false}
+                                        x-decorator-props={{tooltip: t('flashBoard.expertBuildToggleTooltip')}}
+                                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
+                    <SchemaField><SchemaField.String
                         name={"version"}
                         title={t('flashBoard.versionTitle')}
                         default={"0_13_X"}
@@ -373,28 +450,7 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                         x-decorator-props={{tooltip: t('flashBoard.firmwareDirectoryTooltip')}}
                         x-component="Input"
                         x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.String
-                        name={"panelType"}
-                        title={t('flashBoard.panelSelectionTitle')}
-                        default={"PANEL_TYPE_YARDFORCE_500_CLASSIC"}
-                        enum={[
-                            {label: "YardForce 500 Classic", value: "PANEL_TYPE_YARDFORCE_500_CLASSIC"},
-                            {label: "YardForce LUV1000RI", value: "PANEL_TYPE_YARDFORCE_LUV1000RI"},
-                            {label: "YardForce 500B Classic", value: "PANEL_TYPE_YARDFORCE_500B_CLASSIC"},
-                            {label: "YardForce 900 ECO", value: "PANEL_TYPE_YARDFORCE_900_ECO"},
-                        ]} x-component="Select"
-                        x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.String
-                        name={"debugType"}
-                        title={t('flashBoard.debugTypeTitle')}
-                        default={"DEBUG_TYPE_UART"}
-                        enum={[
-                            {label: t('flashBoard.debugTypeNone'), value: "DEBUG_TYPE_NONE"},
-                            {label: "Uart", value: "DEBUG_TYPE_UART"},
-                            {label: "Swo", value: "DEBUG_TYPE_SWO"},
-                        ]} x-component="Select"
-                        x-decorator="FormItem"/></SchemaField>
-                    <SchemaField><SchemaField.Number name={"maxMps"} title={t('flashBoard.maxMpsTitle')} default={0.5}
+                                    <SchemaField><SchemaField.Number name={"maxMps"} title={t('flashBoard.maxMpsTitle')} default={0.5}
                         x-decorator-props={{tooltip: t('flashBoard.maxMpsTooltip')}}
                         x-component-props={{step: 0.1, max: 1.0}}
                         x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
@@ -454,23 +510,26 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                                             {t('flashBoard.disableEmergencyWarning')}
                                         </Typography.Text>
                                     </div>
-                                    <SchemaField><SchemaField.Number name={"maxChargeCurrent"} title={t('flashBoard.maxChargeCurrentTitle')} default={1.0}
+                                    {/* Defaults below mirror firmware board_defaults.h
+                                        (the blessed prebuilt values) — keep them in sync;
+                                        they feed only this expert compile path. */}
+                                    <SchemaField><SchemaField.Number name={"maxChargeCurrent"} title={t('flashBoard.maxChargeCurrentTitle')} default={1.2}
                                         x-component-props={{step: 0.1, max: 5.0}}
                                         x-decorator-props={{tooltip: t('flashBoard.maxChargeCurrentTooltip')}}
                                         x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                                    <SchemaField><SchemaField.Number name={"limitVoltage150MA"} title={t('flashBoard.limitVoltage150MATitle')} default={28.0}
+                                    <SchemaField><SchemaField.Number name={"limitVoltage150MA"} title={t('flashBoard.limitVoltage150MATitle')} default={28.8}
                                         x-decorator-props={{tooltip: t('flashBoard.limitVoltage150MATooltip')}}
                                         x-component-props={{step: 0.1, max: 30.0}}
                                         x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                                    <SchemaField><SchemaField.Number name={"maxChargeVoltage"} title={t('flashBoard.maxChargeVoltageTitle')} default={29.0}
+                                    <SchemaField><SchemaField.Number name={"maxChargeVoltage"} title={t('flashBoard.maxChargeVoltageTitle')} default={29.4}
                                         x-decorator-props={{tooltip: t('flashBoard.maxChargeVoltageTooltip')}}
                                         x-component-props={{step: 0.1, max: 30.0}}
                                         x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                                    <SchemaField><SchemaField.Number name={"batChargeCutoffVoltage"} title={t('flashBoard.batChargeCutoffVoltageTitle')} default={28.0}
+                                    <SchemaField><SchemaField.Number name={"batChargeCutoffVoltage"} title={t('flashBoard.batChargeCutoffVoltageTitle')} default={29.2}
                                         x-decorator-props={{tooltip: t('flashBoard.batChargeCutoffVoltageTooltip')}}
                                         x-component-props={{step: 0.1, max: 30.0}}
                                         x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
-                                    <SchemaField><SchemaField.Number name={"oneWheelLiftEmergencyMillis"} title={t('flashBoard.oneWheelLiftEmergencyMillisTitle')} default={10000}
+                                    <SchemaField><SchemaField.Number name={"oneWheelLiftEmergencyMillis"} title={t('flashBoard.oneWheelLiftEmergencyMillisTitle')} default={2000}
                                         x-decorator-props={{tooltip: t('flashBoard.oneWheelLiftEmergencyMillisTooltip')}}
                                         x-component-props={{step: 1}}
                                         x-component="NumberPicker" x-decorator="FormItem"/></SchemaField>
@@ -500,12 +559,13 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                                     <SchemaField><SchemaField.Boolean name={"externalImuAngular"} title={t('flashBoard.externalImuAngularTitle')} default={true}
                                         x-decorator-props={{tooltip: t('flashBoard.externalImuAngularTooltip')}}
                                         x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
-                                    <SchemaField><SchemaField.Boolean name={"masterJ18"} title={t('flashBoard.masterJ18Title')} default={true}
-                                        x-decorator-props={{tooltip: t('flashBoard.masterJ18Tooltip')}}
-                                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
                                     <SchemaField><SchemaField.Boolean name={"perimeterWire"} title={t('flashBoard.perimeterWireTitle')} default={true}
                                         x-decorator-props={{tooltip: t('flashBoard.perimeterWireTooltip')}}
                                         x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
+                                </FormLayout>
+                            ),
+                        }]}
+                    />
                                 </FormLayout>
                             ),
                         }]}
@@ -522,19 +582,33 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                 borderTop: isMobile ? `1px solid ${colors.border}` : undefined,
                 zIndex: 50,
             }}>
-                <FormButtonGroup>
-                    <Button type="primary" onClick={() => {
-                        form.submit(flashFirmware).catch((err: unknown) => {
-                            if (err instanceof Error) {
-                                notification.error({
-                                    message: t('flashBoard.validationFailed'),
-                                    description: err.message,
+                <div style={{width: "100%"}}>
+                    {!isExpert && !PREBUILT_BOARDS.has(selectedBoard) && (
+                        <Alert
+                            type="warning"
+                            showIcon
+                            style={{marginBottom: 8, textAlign: "left"}}
+                            message={t('flashBoard.noPrebuiltTitle')}
+                            description={t('flashBoard.noPrebuiltDesc')}
+                        />
+                    )}
+                    <FormButtonGroup>
+                        <Button
+                            type="primary"
+                            disabled={!isExpert && !PREBUILT_BOARDS.has(selectedBoard)}
+                            onClick={() => {
+                                form.submit(flashFirmware).catch((err: unknown) => {
+                                    if (err instanceof Error) {
+                                        notification.error({
+                                            message: t('flashBoard.validationFailed'),
+                                            description: err.message,
+                                        });
+                                    }
                                 });
-                            }
-                        });
-                    }}>{t('flashBoard.flashFirmware')}</Button>
-                    <Button onClick={props.onNext}>{t('flashBoard.skip')}</Button>
-                </FormButtonGroup>
+                            }}>{t('flashBoard.flashFirmware')}</Button>
+                        <Button onClick={props.onNext}>{t('flashBoard.skip')}</Button>
+                    </FormButtonGroup>
+                </div>
             </Col>
         </Row>
     </Form>;

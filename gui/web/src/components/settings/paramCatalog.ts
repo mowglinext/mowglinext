@@ -73,10 +73,34 @@ const CATALOG: Record<string, ParamMeta> = {
   max_obstacle_z_m: {label: "paramCatalog.max_obstacle_z_m.label", description: "paramCatalog.max_obstacle_z_m.description", tier: "expert", group: "LiDAR", unit: "m"},
   lidar_height_m: {label: "paramCatalog.lidar_height_m.label", description: "paramCatalog.lidar_height_m.description", tier: "expert", group: "LiDAR", unit: "m"},
 
+  // ── Obstacles (local_costmap avoidance tuning) ────────────────────────────
+  // task #35, 2026-07-17 field analysis: obstacles only pushed the path from
+  // 0.4-0.6 m out at ~0.17 m/s — too late for a smooth deviation.
+  // task #49/#51, 2026-07-17: this only affects Nav2 TRANSIT (MPPI/RPP read
+  // the inflation gradient) — FTC's coverage/mowing deviation checks raw
+  // lethal cells only and never reads this radius. See
+  // obstacle_detection_range_m below for the mowing-time equivalent.
+  obstacle_inflation_radius: {label: "paramCatalog.obstacle_inflation_radius.label", description: "paramCatalog.obstacle_inflation_radius.description", tier: "middle", group: "Obstacles", unit: "m"},
+  // task #51: the real "avoid from further out" knob for MOWING/coverage —
+  // how far ahead along the path FTC scans for a lethal cell before it
+  // starts skirting. Injected into FollowCoveragePath.obstacle_lookahead as
+  // a pose count (navigation.launch.py, F2C 0.05 m sampling).
+  obstacle_detection_range_m: {label: "paramCatalog.obstacle_detection_range_m.label", description: "paramCatalog.obstacle_detection_range_m.description", tier: "middle", group: "Obstacles", unit: "m"},
+  // task #36, 2026-07-17 field analysis: a wait-clock reset bug let the
+  // coverage controller hold zero velocity ~40s (vs. the intended
+  // obstacle_wait_timeout_s cap) when skirting a marginal obstacle. Fixed
+  // in ftc_controller.cpp; surfacing the timeout itself as GUI-tunable.
+  obstacle_wait_timeout_s: {label: "paramCatalog.obstacle_wait_timeout_s.label", description: "paramCatalog.obstacle_wait_timeout_s.description", tier: "middle", group: "Obstacles", unit: "s"},
+
   // ── Motor control (firmware-adjacent PID) ────────────────────────────────
-  angular_rate_kp: {label: "paramCatalog.angular_rate_kp.label", description: "paramCatalog.angular_rate_kp.description", tier: "expert", group: "Motor control"},
-  angular_rate_ki: {label: "paramCatalog.angular_rate_ki.label", description: "paramCatalog.angular_rate_ki.description", tier: "expert", group: "Motor control"},
-  angular_rate_kff: {label: "paramCatalog.angular_rate_kff.label", description: "paramCatalog.angular_rate_kff.description", tier: "expert", group: "Motor control"},
+  // 2026-07-17 Option C (task #34): angular_rate_kp/ki/kff (the host-side
+  // yaw-rate PI, Option B task #24) are removed — the loop now runs in
+  // firmware (task #33), tuned via these params (PACKET_ID_LL_SET_YAW_PID).
+  yaw_kp: {label: "paramCatalog.yaw_kp.label", description: "paramCatalog.yaw_kp.description", tier: "expert", group: "Motor control"},
+  yaw_ki: {label: "paramCatalog.yaw_ki.label", description: "paramCatalog.yaw_ki.description", tier: "expert", group: "Motor control"},
+  yaw_trim_limit_mps: {label: "paramCatalog.yaw_trim_limit_mps.label", description: "paramCatalog.yaw_trim_limit_mps.description", tier: "expert", group: "Motor control", unit: "m/s"},
+  yaw_loop_enabled: {label: "paramCatalog.yaw_loop_enabled.label", description: "paramCatalog.yaw_loop_enabled.description", tier: "expert", group: "Motor control"},
+  yaw_gyro_sign: {label: "paramCatalog.yaw_gyro_sign.label", description: "paramCatalog.yaw_gyro_sign.description", tier: "expert", group: "Motor control"},
 
   // ── IMU calibration ──────────────────────────────────────────────────────
   imu_cal_samples: {label: "paramCatalog.imu_cal_samples.label", description: "paramCatalog.imu_cal_samples.description", tier: "expert", group: "IMU"},

@@ -276,7 +276,6 @@ func SetDockingPointRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 // @Router /mowglinext/subscribe/{topic} [get]
 func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 	group.GET("/subscribe/:topic", func(c *gin.Context) {
-		var err error
 		topic := c.Param("topic")
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
@@ -284,66 +283,15 @@ func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		}
 		defer conn.Close()
 
-		var def func()
-		switch topic {
-		case "diagnostics":
-			def, err = subscribe(provider, c, conn, "diagnostics", -1)
-		case "status":
-			def, err = subscribe(provider, c, conn, "status", -1)
-		case "highLevelStatus":
-			def, err = subscribe(provider, c, conn, "highLevelStatus", -1)
-		case "gps":
-			def, err = subscribe(provider, c, conn, "gps", 100)
-		case "gnssStatus":
-			def, err = subscribe(provider, c, conn, "gnssStatus", 100)
-		case "pose":
-			def, err = subscribe(provider, c, conn, "pose", 100)
-		case "fusionRaw":
-			def, err = subscribe(provider, c, conn, "fusionRaw", 200)
-		case "btLog":
-			def, err = subscribe(provider, c, conn, "btLog", -1)
-		case "imu":
-			def, err = subscribe(provider, c, conn, "imu", 100)
-		case "ticks":
-			def, err = subscribe(provider, c, conn, "ticks", 100)
-		case "wheelOdom":
-			def, err = subscribe(provider, c, conn, "wheelOdom", 100)
-		case "map":
-			def, err = subscribe(provider, c, conn, "map", -1)
-		case "path":
-			def, err = subscribe(provider, c, conn, "path", -1)
-		case "plan":
-			def, err = subscribe(provider, c, conn, "plan", -1)
-		case "coverageResumeAvailable":
-			def, err = subscribe(provider, c, conn, "coverageResumeAvailable", -1)
-		case "power":
-			def, err = subscribe(provider, c, conn, "power", -1)
-		case "emergency":
-			def, err = subscribe(provider, c, conn, "emergency", -1)
-		case "dockingSensor":
-			def, err = subscribe(provider, c, conn, "dockingSensor", -1)
-		case "lidar":
-			def, err = subscribe(provider, c, conn, "lidar", 100)
-		case "mowProgress":
-			def, err = subscribe(provider, c, conn, "mowProgress", 500)
-		case "robotDescription":
-			def, err = subscribe(provider, c, conn, "robotDescription", -1)
-		case "recordingTrajectory":
-			def, err = subscribe(provider, c, conn, "recordingTrajectory", -1)
-		case "obstacles":
-			def, err = subscribe(provider, c, conn, "obstacles", 200) // match topicSubscribeInterval (multiplex path)
-		case "cogHeading":
-			def, err = subscribe(provider, c, conn, "cogHeading", 200)
-		case "magYaw":
-			def, err = subscribe(provider, c, conn, "magYaw", 200)
-		case "fusionDiag":
-			def, err = subscribe(provider, c, conn, "fusionDiag", -1)
-		case "icpOdom":
-			def, err = subscribe(provider, c, conn, "icpOdom", 200)
-		default:
+		// Single-sourced from topicSubscribeInterval so this dedicated-connection
+		// path and the MultiplexRoute path can never drift on a topic's throttle
+		// interval or its set of known topics (see TestTopicSubscribeInterval_*).
+		interval, known := topicSubscribeInterval(topic)
+		if !known {
 			log.Printf("SubscriberRoute: unknown topic %q", topic)
 			return
 		}
+		def, err := subscribe(provider, c, conn, topic, interval)
 		if err != nil {
 			log.Println(err.Error())
 			return

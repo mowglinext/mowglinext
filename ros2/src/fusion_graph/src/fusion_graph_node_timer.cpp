@@ -18,6 +18,7 @@
 
 #include "fusion_graph/fusion_graph_node.hpp"
 #include "fusion_graph/fusion_graph_node_util.hpp"
+#include "fusion_graph/yaw_gates.hpp"
 
 namespace fusion_graph
 {
@@ -25,6 +26,37 @@ namespace fusion_graph
 void FusionGraphNode::OnTimer()
 {
   const double now_s = this->now().seconds();
+
+  // Boot dock-seed fallback. The normal init paths are (a) is_charging →
+  // SeedFromDockPose, and (b) GPS xy + COG/mag yaw → TrySeedInitialPose.
+  // Both can silently fail on a fresh boot on the dock: is_charging may
+  // never be delivered (degraded DDS discovery), and a parked chassis
+  // produces no COG heading, so seed_yaw_ stays empty. When that happens
+  // the graph never initializes, no map→odom TF is published, and Nav2's
+  // planner_server aborts activation (global_costmap can't get map→base),
+  // taking the whole lifecycle bringup down with it. If we're still
+  // uninitialized a few seconds after boot, fall back to the calibrated
+  // dock pose — the robot normally boots parked on the dock. Suppressed
+  // when hardware status has been seen AND reports NOT charging, so a
+  // robot that boots away from the dock is left to GPS-based init.
+  constexpr double kDockSeedFallbackS = 6.0;
+  if (!graph_->IsInitialized())
+  {
+    if (boot_stamp_s_ < 0.0)
+    {
+      boot_stamp_s_ = now_s;
+    }
+    else if (!dock_seed_fallback_done_ && (now_s - boot_stamp_s_) > kDockSeedFallbackS &&
+             (!last_is_charging_valid_ || last_is_charging_))
+    {
+      RCLCPP_WARN(get_logger(),
+                  "fusion_graph: still uninitialized %.1fs after boot "
+                  "(is_charging/COG unavailable) — seeding from dock pose",
+                  now_s - boot_stamp_s_);
+      SeedFromDockPose();
+      dock_seed_fallback_done_ = true;
+    }
+  }
 
   // Run scan-matching against the previous-node scan and queue the
   // resulting between-factor before Tick — Tick consumes the queue
@@ -119,6 +151,9 @@ void FusionGraphNode::OnTimer()
         sm_sigma_xy = std::max(sm_sigma_xy, scan_yield_sigma_xy_);
         sm_sigma_theta = std::max(sm_sigma_theta, scan_yield_sigma_theta_);
       }
+      // Level 2: floor the scan yaw σ so LiDAR yields yaw to the gyro (keeps
+      // σ_xy tight → still carries POSITION through Float). See header.
+      sm_sigma_theta = ScanYawSigma(sm_sigma_theta, scan_yaw_sigma_floor_rad_);
       graph_->QueueScanBetween(res.delta, sm_sigma_xy, sm_sigma_theta);
       ++scan_matches_ok_;
       // ICP-only odometry: cache the latest accepted scan-between delta (motion
@@ -354,6 +389,8 @@ void FusionGraphNode::OnTimer()
           lc_sigma_xy = std::max(lc_sigma_xy, scan_yield_sigma_xy_);
           lc_sigma_theta = std::max(lc_sigma_theta, scan_yield_sigma_theta_);
         }
+        // Level 2: floor the loop-closure yaw σ too (yield yaw to gyro).
+        lc_sigma_theta = ScanYawSigma(lc_sigma_theta, scan_yaw_sigma_floor_rad_);
         graph_->AddLoopClosure(cand_idx, out->node_index, res.delta, lc_sigma_xy, lc_sigma_theta);
         RCLCPP_INFO(get_logger(),
                     "fusion_graph: loop closure %lu -> %lu accepted "
@@ -403,6 +440,26 @@ void FusionGraphNode::OnTimer()
       t_map_odom_anchor_ = snap->pose.compose(dr_at_node.inverse());
       last_anchored_node_index_ = snap->node_index;
       t_map_odom_anchor_valid_ = true;
+    }
+    // Odom re-base: once the robot has driven odom_rebase_dist_m from the odom
+    // origin, reset the odom POSITION onto the robot (heading kept) and shift
+    // the anchor so map→base is unchanged. This keeps the lever arm |dr| small
+    // so graph-yaw jitter can't rotate it into large map→odom position steps.
+    // OnImu (same executor thread) can't interrupt; the lock guards the TF
+    // reader thread. force_pub_resync_ makes the slew snap the published anchor
+    // to the new (coordinated) target so map→base stays continuous.
+    if (odom_rebase_dist_m_ > 0.0 && t_map_odom_anchor_valid_)
+    {
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
+      if (std::hypot(dr_x_, dr_y_) > odom_rebase_dist_m_)
+      {
+        const gtsam::Pose2 map_base =
+            t_map_odom_anchor_.compose(gtsam::Pose2(dr_x_, dr_y_, dr_yaw_));
+        dr_x_ = 0.0;
+        dr_y_ = 0.0;
+        t_map_odom_anchor_ = map_base.compose(gtsam::Pose2(0.0, 0.0, dr_yaw_).inverse());
+        force_pub_resync_.store(true, std::memory_order_release);
+      }
     }
     PublishOutputs(*snap);
   }

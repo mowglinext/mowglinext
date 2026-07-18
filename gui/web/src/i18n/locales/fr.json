@@ -209,6 +209,17 @@
     "stateCoverageFailed": "Échec couverture"
   },
   "flashBoard": {
+    "prebuiltInfoTitle": "Nous flasherons le firmware précompilé pour votre modèle",
+    "prebuiltInfoDesc": "Choisissez votre carte et votre panneau ci-dessus, puis cliquez sur Flasher. Le binaire précompilé correspondant, vérifié par somme de contrôle, est téléchargé et écrit — aucune compilation nécessaire. N'ouvrez la section experte ci-dessous que si vous avez besoin d'un build personnalisé.",
+    "noPrebuiltTitle": "Pas encore de firmware précompilé pour ce modèle",
+    "noPrebuiltDesc": "Aucun binaire précompilé testé n'existe pour la carte sélectionnée. Ouvrez « Expert : compiler un firmware personnalisé » ci-dessous et activez « Compiler depuis les sources » pour le compiler et le flasher.",
+    "expertBuildLabel": "Expert : compiler un firmware personnalisé",
+    "expertBuildAlertMessage": "Uniquement pour les builds personnalisés",
+    "expertBuildAlertDescription": "Ces réglages compilent le firmware depuis les sources au lieu de flasher le binaire précompilé testé. De mauvaises valeurs peuvent endommager la batterie ou désactiver une sécurité physique. Laissez « Compiler depuis les sources » décoché pour flasher le binaire précompilé.",
+    "expertBuildToggleTitle": "Compiler depuis les sources au lieu de flasher le binaire précompilé",
+    "expertBuildToggleTooltip": "Si coché, le firmware est compilé depuis le dépôt/la branche ci-dessous avec les paramètres indiqués. Sinon, le binaire précompilé testé de votre carte est flashé.",
+    "confirmPrebuiltDesc": "Ceci flashe le firmware précompilé testé pour la carte et le panneau sélectionnés. Le binaire est vérifié par somme de contrôle avant écriture, et la liaison firmware est vérifiée après redémarrage.",
+    "confirmPrebuiltWarning": "Ceci réécrit la carte de sécurité des lames. Assurez-vous d'avoir sélectionné la bonne carte pour votre matériel.",
     "advancedParamsLabel": "Paramètres firmware avancés (peuvent endommager le matériel)",
     "advancedAlertMessage": "Ces réglages contrôlent la charge de la batterie et les sécurités physiques",
     "advancedAlertDescription": "Des valeurs de tension ou de courant incorrectes peuvent endommager la batterie ou la carte. Ne modifiez ces champs que si vous savez précisément ce que vous faites.",
@@ -405,6 +416,9 @@
     "running": "en marche",
     "saveGraph": "Enregistrer le graphe",
     "clearGraph": "Effacer le graphe",
+    "clearGraphConfirmTitle": "Effacer le graphe de fusion ?",
+    "clearGraphConfirmBody": "Cette action supprime tous les nœuds accumulés, les fermetures de boucle et la covariance — le localisateur repart de zéro. Cette action est irréversible.",
+    "clearGraphConfirmOk": "Effacer le graphe",
     "nodesInGraph": "Nœuds dans le graphe",
     "withScans": "{{count}} avec scans",
     "loopClosures": "Fermetures de boucle",
@@ -734,8 +748,8 @@
     "calibFailedTitle": "Échec de la calibration",
     "calibFailedHint": "Astuce : roulez plus vite ou plus longtemps pour que l'accéléromètre voie une impulsion avant et arrière nette le long de l'axe X du corps.",
     "reset": "Réinitialiser",
-    "skipStepTitle": "Vous pouvez ignorer cette étape",
-    "skipStepDesc": "Si vous avez déjà calibré ce robot depuis la page Diagnostic (ou si vous connaissez votre valeur imu_yaw), utilisez le bouton Suivant. L'étape Terminé vous avertira si la calibration est toujours manquante.",
+    "skipStepTitle": "Vous pouvez calibrer plus tard",
+    "skipStepDesc": "Si vous avez déjà calibré ce robot depuis la page Diagnostic (ou si vous connaissez votre valeur imu_yaw), utilisez le bouton Suivant. Sinon, vous pourrez calibrer plus tard depuis Diagnostic — mais d'ici là, le robot dérivera en odométrie et pourra s'amarrer de travers. La vérification de l'état à la dernière étape le signalera comme toujours requis.",
     "flashFirmware": "Flasher le firmware",
     "firmwareTitle": "Firmware",
     "firmwareIntro": "S'il s'agit d'un nouveau montage, vous devez flasher le firmware Mowgli sur votre carte mère. Si votre firmware est déjà à jour, vous pouvez ignorer cette étape.",
@@ -773,7 +787,44 @@
     "saveAndFinish": "Enregistrer et terminer",
     "next": "Suivant",
     "stepCounter": "Étape {{current}} sur {{total}}",
-    "calibPendingSuffix": "({{count}} en attente)"
+    "calibPendingSuffix": "({{count}} en attente)",
+    "skipWithoutVerifying": "Ignorer sans vérifier",
+    "firmwareCompatibleLive": "Firmware v{{version}} — compatible",
+    "firmwareIncompatibleLive": "Firmware incompatible (v{{version}}) — reflashez pour continuer",
+    "firmwareWaitingHandshake": "En attente que la carte indique son firmware…",
+    "gpsCorrectionsActive": "Réception des corrections RTCM",
+    "gpsCorrectionsInactive": "Aucune correction RTCM — vérifiez vos réglages NTRIP",
+    "datumRequiredTitle": "Origine de la carte non définie",
+    "datumRequiredHelp": "Définissez l'origine de la carte avant de continuer — capturez-la avec une position RTK-Fixe.",
+    "readinessTitle": "Vérification de l'état",
+    "readinessIntro": "Avant de terminer, confirmons que votre tondeuse est réellement prête à travailler.",
+    "readinessCheckRtk": "GPS RTK-Fixe",
+    "readinessCheckCorrections": "Corrections NTRIP",
+    "readinessCheckDatum": "Origine de la carte (datum) définie",
+    "readinessCheckLocalizer": "Localisation active",
+    "readinessCheckLocalizerConf": "Confiance de la localisation",
+    "readinessCheckFirmware": "Firmware compatible",
+    "readinessCheckDock": "Position de la station capturée",
+    "readinessCheckImuBias": "IMU calibrée",
+    "readinessCheckImuYaw": "Lacet de montage de l'IMU résolu",
+    "readinessCheckMag": "Magnétomètre calibré",
+    "readinessCheckArea": "Au moins une zone de tonte",
+    "readinessStatePass": "Prêt",
+    "readinessStatePending": "En attente…",
+    "readinessStateFail": "Action requise",
+    "readinessOptional": "Facultatif",
+    "readinessGatedTitle": "Pas encore prêt à terminer",
+    "readinessGatedDesc": "{{count}} vérification(s) requise(s) nécessitent encore votre attention. Corrigez-les ci-dessous, ou terminez quand même si vous en comprenez le risque.",
+    "readinessFinishApply": "Terminer et appliquer",
+    "readinessFinishAnyway": "Terminer quand même (déconseillé)",
+    "readinessFinishAnywayConfirm": "Ces éléments ne sont pas prêts : {{items}}. Terminer quand même ? La tondeuse peut dériver ou refuser de tondre tant qu'ils ne sont pas corrigés.",
+    "readinessCtaFixGps": "Corriger le GPS",
+    "readinessCtaFixNtrip": "Vérifier NTRIP",
+    "readinessCtaSetDatum": "Définir le datum",
+    "readinessCtaDiagnostics": "Ouvrir Diagnostic",
+    "readinessCtaCalibrate": "Calibrer",
+    "readinessCtaReflash": "Reflasher le firmware",
+    "readinessCtaDrawArea": "Dessiner une zone"
   },
   "settingsPage": {
     "ros2Restarting": "Redémarrage ROS2…",
@@ -1616,17 +1667,37 @@
       "label": "Hauteur de montage du LiDAR",
       "description": "Hauteur du LiDAR au-dessus du sol, utilisée par le filtre de sol."
     },
-    "angular_rate_kp": {
-      "label": "Kp de vitesse angulaire",
-      "description": "Gain proportionnel de la boucle d'assistance de vitesse angulaire côté ROS."
+    "obstacle_inflation_radius": {
+      "label": "Rayon d'inflation des obstacles (transit uniquement)",
+      "description": "Marge conservée par rapport aux obstacles détectés par le LiDAR dans la costmap locale, pendant les trajets point à point. Une valeur plus élevée fait réagir le robot plus tôt, de plus loin. N'affecte PAS l'évitement pendant la tonte — voir « Portée de détection des obstacles (tonte) » pour cela."
     },
-    "angular_rate_ki": {
-      "label": "Ki de vitesse angulaire",
-      "description": "Gain intégral de la boucle d'assistance de vitesse angulaire."
+    "obstacle_detection_range_m": {
+      "label": "Portée de détection des obstacles (tonte)",
+      "description": "Distance à laquelle le robot repère un obstacle le long de la trajectoire de tonte avant de commencer à le contourner. Une valeur plus élevée réagit plus tôt mais sacrifie une plus grande partie de la bande à l'évitement."
     },
-    "angular_rate_kff": {
-      "label": "Kff de vitesse angulaire",
-      "description": "Gain d'anticipation de la boucle d'assistance de vitesse angulaire."
+    "obstacle_wait_timeout_s": {
+      "label": "Délai d'attente devant un obstacle",
+      "description": "Durée pendant laquelle le robot reste immobile pour tenter de contourner un obstacle bloqué avant d'abandonner la bande. Une valeur plus longue tolère les blocages passagers (ex. une personne qui passe) ; une valeur plus courte abandonne plus vite une bande bloquée."
+    },
+    "yaw_kp": {
+      "label": "Kp de boucle de lacet",
+      "description": "Gain proportionnel du régulateur de vitesse de lacet en boucle fermée du firmware."
+    },
+    "yaw_ki": {
+      "label": "Ki de boucle de lacet",
+      "description": "Gain intégral du régulateur de vitesse de lacet en boucle fermée du firmware."
+    },
+    "yaw_trim_limit_mps": {
+      "label": "Limite de correction de lacet",
+      "description": "Limite de la correction différentielle de vitesse par roue appliquée par la boucle de lacet."
+    },
+    "yaw_loop_enabled": {
+      "label": "Boucle de lacet activée",
+      "description": "Active le régulateur de vitesse de lacet en boucle fermée du firmware. Désactivée, les roues fonctionnent en différentiel ouvert (sans correction gyroscopique)."
+    },
+    "yaw_gyro_sign": {
+      "label": "Signe du gyroscope de lacet",
+      "description": "Signe de l'axe Z du gyroscope embarqué par rapport au lacet du robot (+1/-1). À inverser si la boucle de lacet diverge au lieu de corriger."
     },
     "imu_cal_samples": {
       "label": "Échantillons de calibration IMU",
@@ -2540,17 +2611,17 @@
     "unknownError": "Erreur inconnue",
     "failedToSetDockPose": "Échec de la définition de la pose de la base",
     "noRobotPoseYet": "Aucune pose du robot disponible pour l'instant",
-    "setDockFromPoseTitle": "Définir la pose de la base depuis la position actuelle du robot ?",
-    "setDockPose": "Définir la pose de la base",
+    "setDockFromPoseTitle": "Définir la position de la base depuis la position actuelle du robot ?",
+    "setDockPose": "Définir la position de la base",
     "cancel": "Annuler",
-    "setDockConfirmIntro1": "Cela capture les",
-    "setDockConfirmXYHeading": "x, y ET le cap",
-    "setDockConfirmIntro2": "du robot maintenant et les écrit dans",
-    "setDockConfirmIntro3": "comme nouvelle pose de la base. L'auto-calibration de l'IMU exécutée au prochain accostage affinera le lacet s'il dérive.",
+    "setDockConfirmIntro1": "Cela capture uniquement la",
+    "setDockConfirmXYHeading": "position x, y",
+    "setDockConfirmIntro2": "du robot maintenant et l'écrit dans",
+    "setDockConfirmIntro3": "comme nouvelle position de la base. Le cap n'est PAS modifié par cette action — le cap fusionné est verrouillé sur le cap de base existant pendant la charge, donc une capture en direct ne pourrait jamais le corriger. Recalibrez le cap séparément via « Lancer la calibration » (basé sur le mouvement, non affecté par ce verrouillage).",
     "currentRobot": "Robot actuel",
     "bearing": "cap",
-    "savedDock": "Base enregistrée",
-    "setDockConfirmFooter": "Assurez-vous que le robot est posé sur la base et orienté dans la direction d'approche souhaitée. La nouvelle pose persiste au redémarrage des conteneurs.",
+    "savedDock": "Base enregistrée (cap non modifié par cette action)",
+    "setDockConfirmFooter": "Assurez-vous que le robot est posé sur la base afin que la capture de position corresponde au point de contact de charge réel. La nouvelle position persiste au redémarrage des conteneurs.",
     "sensorPlacement": "Placement des capteurs",
     "metersFromUrdf": "m (depuis l'URDF)",
     "dragSensorsHint": "Faites glisser les capteurs sur la vue de dessus du robot pour définir leur position X/Y. Utilisez la poignée de rotation (petit cercle) pour régler le lacet du capteur. L'espacement de la grille est de 5 cm. Les dimensions du robot sont lues depuis le topic /robot_description.",
@@ -2696,7 +2767,11 @@
     "clearAll": "Tout effacer",
     "nothingRightNow": "Rien pour le moment.",
     "criticalEventsHint": "Les événements critiques (urgence, pluie, fin de tonte) apparaîtront ici.",
-    "dismiss": "Ignorer"
+    "dismiss": "Ignorer",
+    "levelError": "Erreur",
+    "levelWarning": "Avertissement",
+    "levelSuccess": "Succès",
+    "levelInfo": "Info"
   },
   "iosInstallBanner": {
     "title": "Installer MowgliNext",

@@ -57,6 +57,7 @@ const ToolButton = ({icon, tooltip, onClick, disabled, danger, primary, glow}: T
         <button
             onClick={onClick}
             disabled={disabled}
+            aria-label={tooltip}
             style={{
                 width: 40,
                 height: 40,
@@ -133,6 +134,7 @@ export const MapEditorToolbar = ({
                     type="text"
                     icon={<SaveOutlined/>}
                     onAsyncClick={onSaveMap}
+                    aria-label={hasUnsavedChanges ? t('mapEditorToolbar.saveMapUnsaved') : t('mapEditorToolbar.saveMap')}
                     style={{
                         ...btnStyle,
                         color: hasUnsavedChanges ? colors.danger : colors.success,
@@ -156,6 +158,7 @@ export const MapEditorToolbar = ({
         <ShapePickerDropdown onDrawShape={onDrawShape} onDrawEmoji={onDrawEmoji} placement="bottomLeft">
             <Tooltip title={t('mapEditorToolbar.addShape')} placement="right">
                 <button
+                    aria-label={t('mapEditorToolbar.addShape')}
                     style={btnStyle}
                     onMouseOver={(e) => {
                         e.currentTarget.style.background = colors.bgElevated;

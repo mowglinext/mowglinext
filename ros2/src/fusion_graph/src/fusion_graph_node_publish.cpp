@@ -16,6 +16,7 @@
 #include <tf2/exceptions.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+#include "fusion_graph/anchor_slew.hpp"
 #include "fusion_graph/fusion_graph_node.hpp"
 #include "fusion_graph/fusion_graph_node_util.hpp"
 
@@ -262,6 +263,48 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   t_map_odom.child_frame_id = odom_frame_;
   t_map_odom.transform = tf2::toMsg(T_map_odom);
   tf_broadcaster_->sendTransform(t_map_odom);
+}
+
+gtsam::Pose2 FusionGraphNode::SlewPublishedAnchor(const gtsam::Pose2& target,
+                                                  bool anchor_valid,
+                                                  double dt)
+{
+  // An odom re-base (OnTimer) sets force_pub_resync_: the target anchor just
+  // jumped by a coordinated amount that leaves map→base UNCHANGED, so the
+  // published anchor must snap to it (not ramp) or map→base would move. Drop
+  // pub_valid so AnchorSlewStep snaps on this cycle.
+  if (force_pub_resync_.exchange(false, std::memory_order_acq_rel))
+    t_map_odom_pub_valid_ = false;
+
+  // Thin wrapper over the pure AnchorSlewStep (anchor_slew.hpp). Single
+  // writer of t_map_odom_pub_ per run mode (TF thread when the broadcast
+  // thread runs, executor otherwise) → no lock taken here.
+  const AnchorSlewCfg cfg{anchor_slew_enabled_,
+                          anchor_max_lin_slew_mps_,
+                          anchor_max_ang_slew_radps_,
+                          anchor_snap_dist_m_,
+                          anchor_snap_yaw_rad_};
+  double px = t_map_odom_pub_.x();
+  double py = t_map_odom_pub_.y();
+  double pyaw = t_map_odom_pub_.theta();
+  double ox = 0.0;
+  double oy = 0.0;
+  double oyaw = 0.0;
+  AnchorSlewStep(t_map_odom_pub_valid_,
+                 px,
+                 py,
+                 pyaw,
+                 anchor_valid,
+                 target.x(),
+                 target.y(),
+                 target.theta(),
+                 dt,
+                 cfg,
+                 ox,
+                 oy,
+                 oyaw);
+  t_map_odom_pub_ = gtsam::Pose2(px, py, pyaw);
+  return gtsam::Pose2(ox, oy, oyaw);
 }
 
 void FusionGraphNode::TfBroadcastLoop()

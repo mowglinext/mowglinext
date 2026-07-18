@@ -89,6 +89,17 @@ void FusionGraphNode::DeclareParameters()
   cog_flip_require_rtk_ = declare_parameter<bool>("cog_flip_require_rtk", true);
   cog_flip_min_interval_s_ = declare_parameter<double>("cog_flip_min_interval_s", 10.0);
   cog_flip_consistency_rad_ = declare_parameter<double>("cog_flip_consistency_rad", 0.52);
+  // Gate the COG yaw factor itself on RTK-Fixed (see fusion_graph_node.hpp):
+  // a Float/NO_FIX-derived COG is garbage and corrupts the yaw.
+  cog_require_rtk_ = declare_parameter<bool>("cog_require_rtk", true);
+  cog_rtk_max_age_s_ = declare_parameter<double>("cog_rtk_max_age_s", 2.0);
+  // OpenMower-style heading discipline (see fusion_graph_node.hpp): forward-speed
+  // gate + σ floor so a slow/reverse/noisy COG can't yank the yaw.
+  cog_min_speed_mps_ = declare_parameter<double>("cog_min_speed_mps", 0.08);
+  cog_min_sigma_rad_ = declare_parameter<double>("cog_min_sigma_rad", 0.15);
+  // Level 2: floor the LiDAR scan/loop-closure yaw σ so it can't bake a wrong
+  // heading (keeps LiDAR position carry). 0 = disabled.
+  scan_yaw_sigma_floor_rad_ = declare_parameter<double>("scan_yaw_sigma_floor_rad", 0.30);
 
   // ── Magnetometer (off by default) ───────────────────────────────
   // Motors near the chassis induce a heading-dependent bias on the

@@ -45,6 +45,34 @@ install(TARGETS
 )
 
 # ---------------------------------------------------------------------------
+# Sim actuation model — per-wheel firmware motor model (firmware_wheel_model.hpp)
+# so the sim reproduces the per-wheel PWM stiction the ideal diff_drive cannot.
+# 2026-07-17 Option C (task #34): no longer depends on mowgli_hardware — the
+# host-side angular-rate PI it used to reuse (angular_rate_controller.hpp) was
+# removed (the yaw-rate loop moved into firmware, task #33); wz now passes
+# through unshaped, so no IMU feedback is needed here either.
+# ---------------------------------------------------------------------------
+add_executable(sim_actuation_node
+  src/sim_actuation_node.cpp
+)
+
+target_include_directories(sim_actuation_node
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+
+ament_target_dependencies(sim_actuation_node
+  rclcpp
+  geometry_msgs
+)
+
+install(TARGETS
+  sim_actuation_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# ---------------------------------------------------------------------------
 # Python helpers (sim-only)
 # ---------------------------------------------------------------------------
 install(
@@ -85,6 +113,18 @@ if(BUILD_TESTING)
   # Exclude uncrustify — we use clang-format (see .clang-format)
   set(ament_cmake_uncrustify_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+
+  # ---- test_firmware_wheel_model ----
+  # firmware_wheel_model.hpp is header-only and ROS-free; no ROS deps needed.
+  ament_add_gtest(test_firmware_wheel_model
+    test/test_firmware_wheel_model.cpp
+  )
+  target_include_directories(test_firmware_wheel_model
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
 endif()
 
 ament_package()

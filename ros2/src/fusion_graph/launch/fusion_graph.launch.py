@@ -9,6 +9,7 @@ datum and antenna lever-arm from install/config/mowgli/mowgli_robot.yaml
 (falls back to the in-package template) and forwards them as parameters.
 """
 
+import copy
 import os
 
 import yaml
@@ -20,18 +21,56 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge ``override`` into a copy of ``base`` (override wins).
+
+    Local copy of robot_config_util.deep_merge's semantics (task #50). NOT
+    importing that module: fusion_graph has no build/exec dependency on
+    mowgli_bringup, and mowgli_bringup already exec_depends on fusion_graph
+    (navigation.launch.py includes this file) — adding the reverse would be
+    a circular package dependency. Keep this in sync with
+    mowgli_bringup/launch/robot_config_util.py's deep_merge if that changes.
+    """
+    out = copy.deepcopy(base)
+    for key, value in (override or {}).items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
 def _read_robot_config() -> dict:
-    """Load mowgli_robot.yaml and return the inner mower section."""
+    """Load mowgli_robot.yaml and return the merged mower section.
+
+    Task #50 fix: the installed mowgli_robot.yaml (/ros2_ws/config/...) is
+    SPARSE (Invariant 15) — it holds only install/site choices + calibration
+    outputs, not every default. The previous version of this function picked
+    EITHER the installed file OR the template (whichever existed) instead of
+    deep-merging, so on any real robot (installed file always present) a key
+    absent from the sparse file — like gps_x/gps_y, usually left at their
+    template default — silently read as the Python .get() fallback (0.0)
+    instead of the template's real default (0.3), unlike navigation.launch.py's
+    load_robot_params() (the canonical Inv-15 helper), which correctly falls
+    through. This is exactly why the fused lever_arm_x/y showed 0.0 in the
+    field while cog_to_imu (fed via navigation.launch.py) correctly showed
+    0.3 (task #48). Deep-merge the template UNDER the installed file, same
+    order/semantics as robot_config_util.load_robot_params.
+    """
     runtime = "/ros2_ws/config/mowgli_robot.yaml"
     fallback = os.path.join(
         get_package_share_directory("mowgli_bringup"),
         "config", "mowgli_robot.yaml",
     )
-    path = runtime if os.path.exists(runtime) else fallback
-    if not os.path.exists(path):
-        return {}
-    with open(path, "r") as f:
-        data = yaml.safe_load(f) or {}
+
+    def _load(path: str) -> dict:
+        if not os.path.exists(path):
+            return {}
+        with open(path, "r") as f:
+            return yaml.safe_load(f) or {}
+
+    data = _deep_merge(_load(fallback), _load(runtime))
+
     # Schema: mowgli.<model>.<field>
     mower = data.get("mowgli", {})
     if not isinstance(mower, dict):

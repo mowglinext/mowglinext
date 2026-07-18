@@ -50,6 +50,35 @@ uint8_t  chargecontrol_is_charging  = 0;
 static CHARGER_STATE_e charger_state = CHARGER_STATE_IDLE;
 static float charge_end_voltage=BAT_CHARGE_CUTOFF_VOLTAGE ;
 
+/* Runtime charge ceiling (PKT_ID_SET_SAFETY_LIMITS). Seeded with the compile-time
+ * board_defaults.h values, which stay the power-on fallback AND the hard upper
+ * bound the wire can never exceed (see charger_clamp_*): the host can only LOWER
+ * the charge envelope, never overcharge. An unconnected host runs these vetted
+ * defaults. */
+static volatile float g_max_charge_voltage = (float)MAX_CHARGE_VOLTAGE;
+static volatile float g_max_charge_current = (float)MAX_CHARGE_CURRENT;
+
+/* Lower-only clamp to (floor, compiled ceiling]. Non-finite is rejected upstream
+ * in the packet handler; an out-of-range value here falls back to the compiled
+ * ceiling (invalid) or is capped to it (too high) — never above it. */
+static float charger_clamp_voltage(float v) {
+  if (v <= 0.0f) return (float)MAX_CHARGE_VOLTAGE;
+  if (v < LOW_BAT_THRESHOLD) return (float)LOW_BAT_THRESHOLD;
+  if (v > (float)MAX_CHARGE_VOLTAGE) return (float)MAX_CHARGE_VOLTAGE;
+  return v;
+}
+static float charger_clamp_current(float i) {
+  if (i <= 0.0f) return (float)MAX_CHARGE_CURRENT;
+  if (i < 0.1f) return 0.1f;
+  if (i > (float)MAX_CHARGE_CURRENT) return (float)MAX_CHARGE_CURRENT;
+  return i;
+}
+
+void charger_set_charge_limits(float max_voltage, float max_current) {
+  g_max_charge_voltage = charger_clamp_voltage(max_voltage);
+  g_max_charge_current = charger_clamp_current(max_current);
+}
+
 /******************************************************************************
  * Function Prototypes
  *******************************************************************************/
@@ -161,8 +190,8 @@ static float charge_end_voltage=BAT_CHARGE_CUTOFF_VOLTAGE ;
 
  void charger_set_end_voltage(float v) {
     /* Limit input to reasonable values. */
-    if (v>MAX_CHARGE_VOLTAGE) {
-      v=MAX_CHARGE_VOLTAGE;
+    if (v>g_max_charge_voltage) {
+      v=g_max_charge_voltage;
     } else if (v<LOW_BAT_THRESHOLD) {
       v=LOW_BAT_THRESHOLD;
     }
@@ -211,11 +240,11 @@ void ChargeController(void)
 
     case CHARGER_STATE_CHARGING_CC:
         // cap charge current at 1.5 Amps
-        if ((battery_voltage > charge_end_voltage && (chargecontrol_pwm_val > 0)) || ((current > MAX_CHARGE_CURRENT) && (chargecontrol_pwm_val > 39)))
+        if ((battery_voltage > charge_end_voltage && (chargecontrol_pwm_val > 0)) || ((current > g_max_charge_current) && (chargecontrol_pwm_val > 39)))
         {
             chargecontrol_pwm_val--;
         }
-        if ((battery_voltage < charge_end_voltage) && (current < MAX_CHARGE_CURRENT) && (chargecontrol_pwm_val < 1350))
+        if ((battery_voltage < charge_end_voltage) && (current < g_max_charge_current) && (chargecontrol_pwm_val < 1350))
         {
             chargecontrol_pwm_val++;
         }
@@ -228,17 +257,17 @@ void ChargeController(void)
 
     case CHARGER_STATE_CHARGING_CV:
         // set PWM to approach 29.4V  charge voltage
-        if ((battery_voltage < charge_end_voltage) && (charge_voltage < (MAX_CHARGE_VOLTAGE)) && (chargecontrol_pwm_val < 1350))
+        if ((battery_voltage < charge_end_voltage) && (charge_voltage < (g_max_charge_voltage)) && (chargecontrol_pwm_val < 1350))
         {
           chargecontrol_pwm_val++;
-        }            
-        if ((battery_voltage > charge_end_voltage && (chargecontrol_pwm_val > 0)) || (charge_voltage > (MAX_CHARGE_VOLTAGE) && (chargecontrol_pwm_val > 39)))
+        }
+        if ((battery_voltage > charge_end_voltage && (chargecontrol_pwm_val > 0)) || (charge_voltage > (g_max_charge_voltage) && (chargecontrol_pwm_val > 39)))
         {
           chargecontrol_pwm_val--;
         }
 
         /* the current is limited to 150ma */
-        if ((current > (MAX_CHARGE_CURRENT/10)) && chargecontrol_pwm_val > 0)
+        if ((current > (g_max_charge_current/10)) && chargecontrol_pwm_val > 0)
         {
             chargecontrol_pwm_val--;
         }

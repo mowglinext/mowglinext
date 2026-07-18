@@ -213,7 +213,22 @@ private:
           // Drop samples that haven't moved at least 5 cm so a stalled
           // chassis doesn't bloat the buffer; cap the buffer to
           // kUndockGpsSamplesCap and drop the oldest on overflow.
-          if (context_->undock_start_recorded)
+          // Gated on gps_is_fixed (task #41, from the #40 dock-calibration
+          // audit): this is the only one of the three dock_pose_yaw writers
+          // that lacked an RTK-Fixed gate — CalibrateHeadingFromUndock's only
+          // quality check was fit-tightness (sigma_yaw <= 0.02 rad), which
+          // measures precision, not accuracy. A smoothly-converging RTK-Float
+          // solution can produce a tight-looking line fit while still biased
+          // away from the true heading. gps_is_fixed is the same debounced,
+          // authoritative RTK-Fixed+quality signal SetNavMode already gates
+          // on (mowgli_interfaces::gnss_status_utils::BehaviorTreeRtkFixed —
+          // fix_type>=4 AND normalized quality>=0.9), matching writers 1
+          // (calibrate_imu_yaw_node's wait_for_rtk_fixed) and 2
+          // (map_server's set_docking_point covariance gate). A sample
+          // dropped here just means the line fit has fewer points (or falls
+          // back to endpoint / skips persistence for lack of samples) — it
+          // does not touch dock_pose_x/y and does not fail the undock.
+          if (context_->undock_start_recorded && context_->gps_is_fixed)
           {
             auto& buf = context_->undock_gps_samples;
             const double x = context_->gps_x;
@@ -693,6 +708,7 @@ private:
       context_->area_swath_count.clear();
       context_->area_resume_pose_index.clear();
       context_->area_path_pose_count.clear();
+      context_->area_plan_fingerprint.clear();
       context_->completed_areas.clear();
       context_->attempted_areas.clear();
       context_->area_attempt_count.clear();

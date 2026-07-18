@@ -138,6 +138,15 @@ if(BUILD_TESTING)
     tf2
     tf2_geometry_msgs
   )
+
+  ament_add_gtest(test_ftc_stall
+    test/test_ftc_stall.cpp
+  )
+
+  target_include_directories(test_ftc_stall
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
 endif()
 
 # ---------------------------------------------------------------------------

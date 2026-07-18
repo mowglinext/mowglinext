@@ -16,8 +16,10 @@
 #include <tf2/exceptions.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+#include "fusion_graph/cog_flip_recovery.hpp"
 #include "fusion_graph/fusion_graph_node.hpp"
 #include "fusion_graph/fusion_graph_node_util.hpp"
+#include "fusion_graph/yaw_gates.hpp"
 
 namespace fusion_graph
 {
@@ -52,12 +54,24 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
   {
     return;
   }
+  // OpenMower-style single-antenna heading discipline (yaw_gates.hpp,
+  // unit-tested). A COG derived from Float/NO_FIX GPS or from slow/reverse
+  // motion is heading-garbage and corrupts the weakly-observable yaw (map→odom
+  // balloons → lever-arm amplifies jitter into position jumps → robot drives
+  // out of bounds). Apply it only when RTK-Fixed AND translating forward; else
+  // the gyro carries yaw. Before init the seed always needs it.
+  const bool rtk_fresh = last_rtk_fixed_stamp_ &&
+                         (this->now() - *last_rtk_fixed_stamp_).seconds() < cog_rtk_max_age_s_;
+  if (!CogShouldApply(
+          graph_->IsInitialized(), rtk_fresh, wheel_vx_, cog_require_rtk_, cog_min_speed_mps_))
+  {
+    ++cog_rtk_gated_;
+    return;
+  }
   const double yaw = YawFromQuat(msg->orientation);
-  // covariance[8] is yaw variance.
-  double var = msg->orientation_covariance[8];
-  if (!std::isfinite(var) || var <= 0.0)
-    var = 0.05 * 0.05;
-  const double sigma = std::sqrt(var);
+  // Soft σ (floored): COG only TRENDS the gyro heading, never snaps to a noisy
+  // per-fix course. covariance[8] is the message yaw variance.
+  const double sigma = CogEffectiveSigma(msg->orientation_covariance[8], cog_min_sigma_rad_);
   graph_->QueueYaw(yaw, sigma);
   seed_yaw_ = yaw;
 
@@ -86,63 +100,55 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
     }
     else
     {
-      const double d = yaw - snap->pose.theta();
-      const double err = std::fabs(std::atan2(std::sin(d), std::cos(d)));
-      if (err > cog_flip_threshold_rad_)
+      std::optional<double> seconds_since_last_recovery;
+      if (last_flip_recovery_stamp_)
       {
-        // Consecutive flipped COGs must agree WITH EACH OTHER, else the COG
-        // is jittering and snapping to it would amplify rather than fix.
-        bool consistent = true;
-        if (cog_flip_prev_yaw_)
-        {
-          const double dd = yaw - *cog_flip_prev_yaw_;
-          consistent =
-              std::fabs(std::atan2(std::sin(dd), std::cos(dd))) < cog_flip_consistency_rad_;
-        }
-        cog_flip_count_ = consistent ? (cog_flip_count_ + 1) : 1;
-        cog_flip_prev_yaw_ = yaw;
-        const bool rate_ok =
-            !last_flip_recovery_stamp_ ||
-            (this->now() - *last_flip_recovery_stamp_).seconds() > cog_flip_min_interval_s_;
-        if (cog_flip_count_ >= cog_flip_consecutive_n_ && rate_ok)
-        {
-          last_flip_recovery_stamp_ = this->now();
-          const gtsam::Pose2 anchor(snap->pose.x(), snap->pose.y(), yaw);
-          // Tight yaw (1°) — we are deliberately overriding the flipped
-          // estimate with the physics-grounded COG heading. Keep xy at its
-          // current σ-equivalent (5 mm) since only yaw is wrong.
-          graph_->ForceAnchor(snap->node_index, anchor, 0.005, 1.0 * M_PI / 180.0);
-          // Re-datum dead reckoning to the re-anchored node. dr_* carries the
-          // OLD (flipped) heading lineage; without this reset the map→odom
-          // recompute cancels against the stale dr_yaw_ and odom→base keeps
-          // publishing the flipped heading — the two TF legs disagree by 180°
-          // the moment the robot moves. SeedFromDockPose does the same after
-          // a large yaw change (the RTK-override path doesn't, because it only
-          // shifts xy and dr_yaw_ stays valid there).
-          {
-            // tf_state_mu_: dr_* / anchor are read concurrently by
-            // TfBroadcastLoop.
-            std::lock_guard<std::mutex> lock(tf_state_mu_);
-            dr_x_ = 0.0;
-            dr_y_ = 0.0;
-            dr_yaw_ = 0.0;
-            t_map_odom_anchor_valid_ = false;
-          }
-          ++cog_flip_recoveries_;
-          cog_flip_count_ = 0;
-          RCLCPP_WARN(get_logger(),
-                      "fusion_graph: 180° yaw-flip recovery — estimate %.1f° vs "
-                      "COG %.1f° (Δ=%.0f°); re-anchored yaw to COG on node %lu.",
-                      snap->pose.theta() * 180.0 / M_PI,
-                      yaw * 180.0 / M_PI,
-                      err * 180.0 / M_PI,
-                      static_cast<unsigned long>(snap->node_index));
-        }
+        seconds_since_last_recovery = (this->now() - *last_flip_recovery_stamp_).seconds();
       }
-      else
+      const CogFlipRecoveryCfg cfg{cog_flip_threshold_rad_,
+                                   cog_flip_consistency_rad_,
+                                   cog_flip_consecutive_n_,
+                                   cog_flip_min_interval_s_};
+      // See cog_flip_recovery.hpp for the pure decision function + unit
+      // tests (test_cog_flip_recovery.cpp).
+      const CogFlipRecoveryResult flip = CogFlipRecoveryFeed(yaw,
+                                                             snap->pose.theta(),
+                                                             seconds_since_last_recovery,
+                                                             cfg,
+                                                             cog_flip_count_,
+                                                             cog_flip_prev_yaw_);
+      if (flip.should_anchor)
       {
-        cog_flip_count_ = 0;
-        cog_flip_prev_yaw_.reset();
+        last_flip_recovery_stamp_ = this->now();
+        const gtsam::Pose2 anchor(snap->pose.x(), snap->pose.y(), yaw);
+        // Tight yaw (1°) — we are deliberately overriding the flipped
+        // estimate with the physics-grounded COG heading. Keep xy at its
+        // current σ-equivalent (5 mm) since only yaw is wrong.
+        graph_->ForceAnchor(snap->node_index, anchor, 0.005, 1.0 * M_PI / 180.0);
+        // Re-datum dead reckoning to the re-anchored node. dr_* carries the
+        // OLD (flipped) heading lineage; without this reset the map→odom
+        // recompute cancels against the stale dr_yaw_ and odom→base keeps
+        // publishing the flipped heading — the two TF legs disagree by 180°
+        // the moment the robot moves. SeedFromDockPose does the same after
+        // a large yaw change (the RTK-override path doesn't, because it only
+        // shifts xy and dr_yaw_ stays valid there).
+        {
+          // tf_state_mu_: dr_* / anchor are read concurrently by
+          // TfBroadcastLoop.
+          std::lock_guard<std::mutex> lock(tf_state_mu_);
+          dr_x_ = 0.0;
+          dr_y_ = 0.0;
+          dr_yaw_ = 0.0;
+          t_map_odom_anchor_valid_ = false;
+        }
+        ++cog_flip_recoveries_;
+        RCLCPP_WARN(get_logger(),
+                    "fusion_graph: 180° yaw-flip recovery — estimate %.1f° vs "
+                    "COG %.1f° (Δ=%.0f°); re-anchored yaw to COG on node %lu.",
+                    snap->pose.theta() * 180.0 / M_PI,
+                    yaw * 180.0 / M_PI,
+                    flip.err_rad * 180.0 / M_PI,
+                    static_cast<unsigned long>(snap->node_index));
       }
     }
   }

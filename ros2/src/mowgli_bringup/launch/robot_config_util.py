@@ -22,26 +22,52 @@
 # Older FULL installed configs keep working unchanged (every key overrides its
 # identical template default; a no-op merge).
 
+import copy
 import os
 
 import yaml
 
 DEFAULT_RUNTIME_PATH = "/ros2_ws/config/mowgli_robot.yaml"
 
+# Fallback used ONLY if load_robot_params() itself can't find a "tool_width"
+# key at all (missing/unreadable template — load_robot_params() otherwise
+# always returns a complete parameter set per its docstring above, so this
+# should never actually fire in a working install). Single-sourced here so
+# full_system.launch.py (map_server.tool_width — mark_cells_mowed stamp
+# radius / sliver detection) and navigation.launch.py (feeds
+# coverage_server.operation_width = tool_width - swath_overlap, F2C's swath
+# spacing) can't silently diverge by each hardcoding their own literal — that
+# divergence (mower_width=0.18 vs a separately-hardcoded operation_width=0.20)
+# is what caused the 54% coverage regression (see CLAUDE.md Invariant 6).
+# The LIVE default in normal operation is still mowgli_bringup/config/
+# mowgli_robot.yaml's tool_width (Invariant 15) — this constant is the
+# last-resort floor beneath that, not a second source of truth for it, which
+# is why it's expected to match the template's value (see
+# test_tool_width_single_source.py).
+DEFAULT_TOOL_WIDTH_M = 0.18
 
-def _deep_merge(base, override):
+
+def deep_merge(base, override):
     """Recursively merge ``override`` into a copy of ``base`` (override wins).
 
     Only dict-vs-dict collisions recurse; any scalar/list in ``override``
     replaces the base value wholesale (robot params are flat scalars, so this
     is just the nested ros__parameters block being merged key-by-key).
+
+    Deep-copies throughout (not just ``dict(base)``) so the result shares no
+    mutable nested dict with either input — a shallow ``dict(base)`` copy
+    still aliases any nested dict ``override`` doesn't touch, so mutating the
+    merged result in place would silently corrupt the source ``base`` (e.g.
+    the in-package template). This is the single canonical implementation —
+    also imported by navigation.launch.py, compute_nav2_params.py and
+    test_nav2_params.py, which each used to carry their own (drifted) copy.
     """
-    out = dict(base)
+    out = copy.deepcopy(base)
     for key, value in (override or {}).items():
         if isinstance(value, dict) and isinstance(out.get(key), dict):
-            out[key] = _deep_merge(out[key], value)
+            out[key] = deep_merge(out[key], value)
         else:
-            out[key] = value
+            out[key] = copy.deepcopy(value)
     return out
 
 
@@ -60,7 +86,7 @@ def load_robot_config(bringup_dir, runtime_path=DEFAULT_RUNTIME_PATH):
     if os.path.isfile(runtime_path):
         with open(runtime_path, "r") as handle:
             runtime = yaml.safe_load(handle) or {}
-    return _deep_merge(template, runtime)
+    return deep_merge(template, runtime)
 
 
 def load_robot_params(bringup_dir, runtime_path=DEFAULT_RUNTIME_PATH):

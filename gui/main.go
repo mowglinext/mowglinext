@@ -19,7 +19,7 @@ func main() {
 	dbProvider := providers.NewDBProvider()
 	dockerProvider := providers.NewDockerProvider()
 	rosProvider := providers.NewRosProvider(dbProvider)
-	firmwareProvider := providers.NewFirmwareProvider(dbProvider)
+	firmwareProvider := providers.NewFirmwareProvider(dbProvider, rosProvider)
 	homekitEnabled, err := dbProvider.Get("system.homekit.enabled")
 	if err != nil {
 		panic(err)

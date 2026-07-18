@@ -51,6 +51,17 @@ const levelColor = (lvl: NotificationItem['level'], colors: ReturnType<typeof us
     }
 };
 
+// The severity dot is color-only — give it a text alternative (i18n key per
+// level) so the signal survives for screen readers / color-blind users.
+const levelLabelKey = (lvl: NotificationItem['level']): string => {
+    switch (lvl) {
+        case 'error': return 'notificationBell.levelError';
+        case 'warning': return 'notificationBell.levelWarning';
+        case 'success': return 'notificationBell.levelSuccess';
+        default: return 'notificationBell.levelInfo';
+    }
+};
+
 export function NotificationBell() {
     const {colors} = useThemeMode();
     const {t} = useTranslation();
@@ -166,11 +177,14 @@ export function NotificationBell() {
                                             transition: 'background 0.15s',
                                         }}
                                     >
-                                        <span style={{
-                                            width: 6, height: 6, borderRadius: 3, marginTop: 6,
-                                            background: accent, flexShrink: 0,
-                                            boxShadow: item.read ? 'none' : `0 0 6px ${accent}`,
-                                        }}/>
+                                        <span
+                                            role="img"
+                                            aria-label={t(levelLabelKey(item.level))}
+                                            style={{
+                                                width: 6, height: 6, borderRadius: 3, marginTop: 6,
+                                                background: accent, flexShrink: 0,
+                                                boxShadow: item.read ? 'none' : `0 0 6px ${accent}`,
+                                            }}/>
                                         <div style={{flex: 1, minWidth: 0}}>
                                             <div style={{
                                                 fontSize: 13, fontWeight: item.read ? 500 : 700,

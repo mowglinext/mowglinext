@@ -18,6 +18,7 @@
 
 #include "fusion_graph/fusion_graph_node.hpp"
 #include "fusion_graph/fusion_graph_node_util.hpp"
+#include "fusion_graph/rtk_wrongfix_gate.hpp"
 
 namespace fusion_graph
 {
@@ -136,29 +137,24 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   if (last_gps_map_xy_)
   {
     const double jump = std::hypot(mx - (*last_gps_map_xy_).x(), my - (*last_gps_map_xy_).y());
-    // Lever-arm sweep budget. A pure body rotation by |Δθ| shifts the
-    // antenna in the map frame by up to lever_arm_radius·|Δθ| with no
-    // chassis translation; without this slack the gate rejects every
-    // GPS sample taken while the controller is pivoting in place
-    // (PRE_ROTATE, headland turn), starving the graph of corrections
-    // exactly when σ_x has nothing else pinning it. NOT applied to
-    // mx/my themselves — the graph's GnssLeverArmFactor handles the
-    // offset; we only loosen the gate threshold.
-    const double expected_pivot_jump_m = lever_arm_radius_m_ * abs_dtheta_since_last_gps_rad_;
     // Motion-consistent gate: the GPS step must be explainable by how far the
     // chassis ACTUALLY travelled since the last fix (wheel arc + lever-arm
-    // sweep) plus a fixed slack budget. The previous gate only fired when the
-    // wheel said "barely moved" (wheel_dist < rtk_wrongfix_max_wheel_m), so at
-    // 0.20 m/s with 5 Hz GNSS — ~4 cm of real travel between fixes — a several-
-    // cm wrong-fix jump DURING MOWING slipped through as "plausible motion" and
-    // rebased map→odom (field: 3-11 cm map→odom steps while raw RTK jitter was
-    // only σ≈1.4 cm). Comparing the jump against actual wheel travel makes the
-    // gate effective at any speed and reduces to the old fixed budget when
-    // stationary (wheel_dist ≈ 0). rtk_wrongfix_max_jump_m is now the slack on
-    // top of travel — size it to a few × the raw GNSS jitter σ.
-    const double jump_budget =
-        rtk_wrongfix_max_jump_m_ + expected_pivot_jump_m + wheel_dist_since_last_gps_m_;
-    if (jump > jump_budget)
+    // sweep from in-place rotation) plus a fixed slack budget. The previous
+    // gate only fired when the wheel said "barely moved" (wheel_dist <
+    // rtk_wrongfix_max_wheel_m), so at 0.20 m/s with 5 Hz GNSS — ~4 cm of real
+    // travel between fixes — a several-cm wrong-fix jump DURING MOWING
+    // slipped through as "plausible motion" and rebased map→odom (field: 3-11
+    // cm map→odom steps while raw RTK jitter was only σ≈1.4 cm). Comparing the
+    // jump against actual wheel travel makes the gate effective at any speed
+    // and reduces to the old fixed budget when stationary (wheel_dist ≈ 0).
+    // rtk_wrongfix_max_jump_m is the slack on top of travel — size it to a
+    // few × the raw GNSS jitter σ. See rtk_wrongfix_gate.hpp for the pure
+    // decision function + unit tests (test_rtk_wrongfix_gate.cpp).
+    if (GpsJumpImplausible(jump,
+                           rtk_wrongfix_max_jump_m_,
+                           lever_arm_radius_m_,
+                           abs_dtheta_since_last_gps_rad_,
+                           wheel_dist_since_last_gps_m_))
     {
       graph_->RecordGpsRejectWrongFix();
       RCLCPP_WARN_THROTTLE(get_logger(),
@@ -168,19 +164,20 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
                            "sweep_budget=%.3f m — sample dropped",
                            jump,
                            wheel_dist_since_last_gps_m_,
-                           expected_pivot_jump_m);
+                           lever_arm_radius_m_ * abs_dtheta_since_last_gps_rad_);
       // Reset accumulators + cache so a repeated wrong-fix doesn't
       // permanently lock us out — once two consecutive samples agree,
-      // last_gps_map_xy_ updates and we resume normal flow.
+      // last_gps_map_xy_ updates and we resume normal flow. See
+      // rtk_wrongfix_gate.hpp's header comment: this reset MUST happen on
+      // reject as well as accept, or the gate becomes the reverted
+      // GnssMobileGate's reject-forever failure mode.
       last_gps_map_xy_ = gtsam::Vector2(mx, my);
-      wheel_dist_since_last_gps_m_ = 0.0;
-      abs_dtheta_since_last_gps_rad_ = 0.0;
+      ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
       return;
     }
   }
   last_gps_map_xy_ = gtsam::Vector2(mx, my);
-  wheel_dist_since_last_gps_m_ = 0.0;
-  abs_dtheta_since_last_gps_rad_ = 0.0;
+  ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
 
   // covariance[0] is variance of east; take sqrt for sigma. Use the
   // diagonal mean for a single sigma_xy (factor model is isotropic).

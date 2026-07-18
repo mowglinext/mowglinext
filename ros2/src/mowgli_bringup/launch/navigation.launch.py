@@ -68,8 +68,11 @@ from nav2_common.launch import RewrittenYaml
 # Shared robot-config loader (sibling module installed alongside this launch
 # file). Deep-merges the SPARSE installed mowgli_robot.yaml over the in-package
 # template defaults, so a missing key falls through to its versioned default.
+# deep_merge is the same helper, reused below to compose nav2_params_base.yaml
+# with the selected lidar/no-lidar overlay — one tested recursive-merge
+# implementation instead of a per-file copy that can drift.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from robot_config_util import load_robot_params  # noqa: E402
+from robot_config_util import DEFAULT_TOOL_WIDTH_M, deep_merge, load_robot_params  # noqa: E402
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -343,8 +346,13 @@ def generate_launch_description() -> LaunchDescription:
     # operation_width=0.20), which made map_server's stamp radius
     # narrower than F2C's swath spacing — every gap between adjacent
     # swaths had a strip of cells that map_server never marked as
-    # mowed. Sharing the one number fixes that by construction.
-    tool_width = 0.18
+    # mowed. Sharing the one number fixes that by construction. The
+    # fallback default itself is also single-sourced (robot_config_util.
+    # DEFAULT_TOOL_WIDTH_M) instead of hardcoded here AND in
+    # full_system.launch.py — that duplication is the exact class of bug
+    # (mower_width=0.18 vs a separately-hardcoded operation_width=0.20)
+    # that caused the 54% coverage regression this comment describes.
+    tool_width = DEFAULT_TOOL_WIDTH_M
     # F2C v2 coverage tuning. Operator-tunable via the GUI's Mowing
     # section; injected into coverage_server's parameters at launch
     # so changes via mowgli_robot.yaml take effect on next bringup.
@@ -430,7 +438,19 @@ def generate_launch_description() -> LaunchDescription:
     # max_obstacle_avoidance_distance drives BOTH FTC max_lateral_deviation
     # (here) and map_server bypass_max_length (full_system.launch.py).
     max_obstacle_avoidance_distance = 2.0
-    obstacle_inflation_radius = 0.60
+    # 0.80 (was 0.60) — task #35, 2026-07-17 field analysis: obstacles were
+    # only pushing the path from 0.4-0.6 m out at ~0.17 m/s, too late to react
+    # smoothly. See nav2_params_base.yaml's local_costmap.inflation_layer
+    # comment for the full rationale; clamped to [0.58, 1.50] below.
+    obstacle_inflation_radius = 0.80
+    # obstacle_detection_range_m (task #51): the real "avoid from further out
+    # during mowing" knob — inflation_radius above only affects Nav2 transit
+    # (MPPI/RPP's cost-gradient), not FTC's coverage-time deviation, which
+    # checks raw lethal cells only (see obstacle_inflation_radius's own
+    # comment in the template for the full #49 rationale). Converted to a
+    # FollowCoveragePath.obstacle_lookahead POSE COUNT at injection below
+    # (kF2CSamplingM).
+    obstacle_detection_range_m = 1.5
     obstacle_margin = 0.0
     obstacle_slowdown_ratio = 0.3
     enable_mag_cal = False
@@ -497,6 +517,8 @@ def generate_launch_description() -> LaunchDescription:
             "max_obstacle_avoidance_distance", max_obstacle_avoidance_distance))
         obstacle_inflation_radius = float(rt_rp.get(
             "obstacle_inflation_radius", obstacle_inflation_radius))
+        obstacle_detection_range_m = float(rt_rp.get(
+            "obstacle_detection_range_m", obstacle_detection_range_m))
         obstacle_margin = float(rt_rp.get("obstacle_margin", obstacle_margin))
         obstacle_slowdown_ratio = float(rt_rp.get(
             "obstacle_slowdown_ratio", obstacle_slowdown_ratio))
@@ -530,19 +552,6 @@ def generate_launch_description() -> LaunchDescription:
     # those tmp files to RewrittenYaml as its sources. RewrittenYaml then
     # handles the remaining scalar rewrites (use_sim_time, footprint, BT XML
     # paths) without touching the pose list.
-    def _deep_merge(base, overlay):
-        """Recursively merge overlay into base: nested dicts merge key-by-key,
-        lists and scalars replace wholesale. Used to compose the shared
-        nav2_params_base.yaml with the selected lidar/no-lidar overlay."""
-        import copy
-        out = copy.deepcopy(base)
-        for k, v in overlay.items():
-            if k in out and isinstance(out[k], dict) and isinstance(v, dict):
-                out[k] = _deep_merge(out[k], v)
-            else:
-                out[k] = copy.deepcopy(v)
-        return out
-
     def _inject_dock_pose_and_speeds(overlay_path: str) -> str:
         """Merge nav2_params_base.yaml with the given variant overlay, write
         mowgli_robot.yaml-derived values into the result, and return the temp
@@ -560,7 +569,7 @@ def generate_launch_description() -> LaunchDescription:
             base_doc = yaml.safe_load(fh) or {}
         with open(overlay_path, "r") as fh:
             overlay_doc = yaml.safe_load(fh) or {}
-        doc = _deep_merge(base_doc, overlay_doc)
+        doc = deep_merge(base_doc, overlay_doc)
         # home_dock.pose must be a YAML list (PARAMETER_DOUBLE_ARRAY).
         home_dock = (doc.setdefault("docking_server", {})
                         .setdefault("ros__parameters", {})
@@ -664,6 +673,18 @@ def generate_launch_description() -> LaunchDescription:
         # One knob now drives both consumers.
         fcp["max_lateral_deviation"] = min(
             10.0, max(0.5, max_obstacle_avoidance_distance))
+        # obstacle_lookahead (task #51): how far AHEAD along the coverage
+        # path FTC scans for a lethal cell — the real "avoid from further
+        # out" knob (max_lateral_deviation above only controls how FAR
+        # sideways it's willing to skirt once it's already reacting).
+        # obstacle_detection_range_m is operator-facing in metres; F2C
+        # samples the coverage path at kF2CSamplingM spacing, so convert to
+        # a pose count. Floored at 4 poses — findFirstObstacleIndex needs a
+        # non-trivial window to be useful, and the line-fit-style scan
+        # degenerates below that.
+        kF2CSamplingM = 0.05
+        fcp["obstacle_lookahead"] = max(4, round(
+            min(5.0, max(0.2, obstacle_detection_range_m)) / kF2CSamplingM))
         # LOCAL costmap inflation only. Floor 0.58: the nav2 inflation layer
         # degrades footprint-cost semantics below the chassis circumscribed
         # radius (~0.572 m) and FTC's deviation detector (threshold 253)

@@ -192,6 +192,7 @@ BT::NodeStatus EndSession::tick()
   ctx->area_swath_count.clear();
   ctx->area_resume_pose_index.clear();
   ctx->area_path_pose_count.clear();
+  ctx->area_plan_fingerprint.clear();
   ctx->completed_areas.clear();
   // Remove the on-disk resume snapshot too: this is a real session boundary, so
   // the next COMMAND_START must start fresh rather than resume a finished (or

@@ -28,13 +28,16 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "geometry_msgs/msg/twist_stamped.hpp"
+#include "mowgli_interfaces/motion_yaw_fit.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
+#include "mowgli_interfaces/robot_yaml_scalar.hpp"
 #include "mowgli_interfaces/srv/calibrate_imu_yaw.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -77,85 +80,10 @@ void sleep_for(double sec)
       std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(sec)));
 }
 
-// Splice a new numeric value into a "<indent><key>:<spaces><number><rest>"
-// line, anchored on the indent so a key whose name happens to contain
-// ours (e.g. dock_pose_x_offset) is not matched.
-void splice_yaml_scalar(std::string& content, const std::string& key, const std::string& new_value)
-{
-  size_t scan = 0;
-  while (scan < content.size())
-  {
-    const size_t line_start = scan;
-    size_t cursor = line_start;
-    while (cursor < content.size() && (content[cursor] == ' ' || content[cursor] == '\t'))
-      ++cursor;
-    const size_t indent_end = cursor;
-    if (indent_end > line_start && cursor + key.size() < content.size() &&
-        content.compare(cursor, key.size(), key) == 0 && content[cursor + key.size()] == ':')
-    {
-      cursor += key.size() + 1;
-      while (cursor < content.size() && (content[cursor] == ' ' || content[cursor] == '\t'))
-        ++cursor;
-      const size_t val_start = cursor;
-      while (cursor < content.size())
-      {
-        const char c = content[cursor];
-        const bool is_num =
-            (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E';
-        if (!is_num)
-          break;
-        ++cursor;
-      }
-      if (cursor > val_start)
-      {
-        content.replace(val_start, cursor - val_start, new_value);
-        return;
-      }
-    }
-    const size_t nl = content.find('\n', line_start);
-    if (nl == std::string::npos)
-      break;
-    scan = nl + 1;
-  }
-}
-
-// Update dock_pose_x/y/yaw values in mowgli_robot.yaml in place via
-// per-line substring splicing — preserves comments and surrounding
-// structure (yaml-cpp would round-trip and strip them). Atomic via
-// tmp+rename. Returns false if the file can't be read or written.
-bool update_dock_pose_in_robot_yaml(const std::string& path, double x, double y, double yaw_rad)
-{
-  std::ifstream in(path);
-  if (!in.good())
-    return false;
-  std::stringstream buf;
-  buf << in.rdbuf();
-  std::string content = buf.str();
-  in.close();
-
-  auto fmt = [](double v)
-  {
-    std::ostringstream s;
-    s << std::fixed << std::setprecision(6) << v;
-    return s.str();
-  };
-  splice_yaml_scalar(content, "dock_pose_x", fmt(x));
-  splice_yaml_scalar(content, "dock_pose_y", fmt(y));
-  splice_yaml_scalar(content, "dock_pose_yaw", fmt(yaw_rad));
-
-  const std::string tmp_path = path + ".tmp";
-  {
-    std::ofstream out(tmp_path, std::ios::trunc);
-    if (!out.good())
-      return false;
-    out << content;
-    if (!out.good())
-      return false;
-  }
-  std::error_code ec;
-  std::filesystem::rename(tmp_path, path, ec);
-  return !ec;
-}
+// dock_pose_x/y/yaw writeback moved to mowgli_interfaces::robot_yaml_scalar
+// (task #42) — was a byte-for-byte-identical copy of the same splice logic
+// duplicated across this file, mowgli_map/area_manager.cpp, and
+// mowgli_behavior/calibration_nodes.cpp.
 
 std::string utc_iso8601_now()
 {
@@ -544,6 +472,15 @@ private:
                 x0,
                 y0);
 
+    // Buffer GPS samples across the whole reverse (task #47) so the heading
+    // can be fit through the entire trajectory instead of just its two
+    // endpoints — see the line-fit block after the reverse below. Drop
+    // samples that haven't moved at least 5 cm since the last kept one so a
+    // near-stationary tail doesn't bloat the buffer with noise (mirrors
+    // CalibrateHeadingFromUndock's buffering in behavior_tree_node.cpp).
+    std::vector<std::pair<double, double>> samples;
+    samples.emplace_back(x0, y0);
+
     const double period = 1.0 / CMD_RATE_HZ;
     const double t_deadline = monotonic() + DOCK_UNDOCK_TIMEOUT_SEC;
     double displacement = 0.0;
@@ -561,6 +498,12 @@ private:
         const double dx = latest_gps_x_ - x0;
         const double dy = latest_gps_y_ - y0;
         displacement = std::hypot(dx, dy);
+        const double sdx = latest_gps_x_ - samples.back().first;
+        const double sdy = latest_gps_y_ - samples.back().second;
+        if ((sdx * sdx + sdy * sdy) >= (0.05 * 0.05))
+        {
+          samples.emplace_back(latest_gps_x_, latest_gps_y_);
+        }
         if (displacement >= dock_undock_distance_)
           break;
       }
@@ -595,9 +538,47 @@ private:
       return std::nullopt;
     }
 
-    const double dock_yaw = std::atan2(-dy, -dx);
-    const double sigma_pos = std::max(static_cast<double>(gps_position_accuracy_.load()), 0.003);
-    const double sigma_yaw_rad = std::atan2(2.0 * sigma_pos, displacement);
+    // Task #47: prefer a total-least-squares line fit through the WHOLE
+    // buffered reverse trajectory over the endpoint-only atan2(-dy,-dx)
+    // below. An endpoint-only bearing assumes the reverse was perfectly
+    // straight; any curvature (e.g. yaw-loop wiggle before #37/#39) biases
+    // that single atan2 by a few degrees with no way to detect it, and
+    // fusion_graph's own dock unary factor (σ floor 0.035 rad, ~2°) then
+    // holds the whole session to that bias — enough to miss the ~0.4 m
+    // docking corridor over a ~1.5 m approach. The line fit is robust to
+    // curvature and gives a tighter σ_yaw from the SAME baseline (σ shrinks
+    // ~1/√n instead of being limited to the two endpoints). Same gate as
+    // CalibrateHeadingFromUndock (calibration_nodes.cpp): >=4 samples
+    // spanning >=0.5 m; below that, fall back to the endpoint bearing (the
+    // sample buffer's own span may be short even if the tracked
+    // start/end displacement above cleared min_displacement, e.g. sparse
+    // GPS arrivals near dock_undock_speed_'s low end).
+    const bool have_line_fit_samples =
+        samples.size() >= 4u &&
+        std::hypot(samples.back().first - samples.front().first,
+                  samples.back().second - samples.front().second) >= 0.5;
+    double dock_yaw;
+    double sigma_yaw_rad;
+    const char* yaw_method = "endpoint";
+    if (have_line_fit_samples)
+    {
+      const auto [motion_yaw, motion_sigma] =
+          mowgli_interfaces::motion_yaw_fit::FitMotionYaw(samples);
+      // Robot heading points opposite the motion (the maneuver reverses).
+      dock_yaw = motion_yaw + M_PI;
+      while (dock_yaw > M_PI)
+        dock_yaw -= 2.0 * M_PI;
+      while (dock_yaw < -M_PI)
+        dock_yaw += 2.0 * M_PI;
+      sigma_yaw_rad = std::max(motion_sigma, 0.001);  // floor at ~0.06°
+      yaw_method = "line_fit";
+    }
+    else
+    {
+      dock_yaw = std::atan2(-dy, -dx);
+      const double sigma_pos = std::max(static_cast<double>(gps_position_accuracy_.load()), 0.003);
+      sigma_yaw_rad = std::atan2(2.0 * sigma_pos, displacement);
+    }
 
     DockYawResult result;
     result.dock_pose_x = x0;
@@ -609,10 +590,10 @@ private:
     result.yaw_sigma_deg = sigma_yaw_rad * 180.0 / M_PI;
     result.speed_ms = dock_undock_speed_;
 
-    if (!update_dock_pose_in_robot_yaml(MOWGLI_ROBOT_YAML_PATH,
-                                        result.dock_pose_x,
-                                        result.dock_pose_y,
-                                        result.dock_pose_yaw_rad))
+    if (!mowgli_interfaces::robot_yaml_scalar::UpdateDockPose(MOWGLI_ROBOT_YAML_PATH,
+                                                               result.dock_pose_x,
+                                                               result.dock_pose_y,
+                                                               result.dock_pose_yaw_rad))
     {
       RCLCPP_ERROR(get_logger(),
                    "Failed to persist dock pose to %s — file missing or "
@@ -623,13 +604,15 @@ private:
 
     RCLCPP_INFO(get_logger(),
                 "Dock yaw calibration: start=(%+.3f, %+.3f) end=(%+.3f, "
-                "%+.3f) displacement=%.3f m dock_yaw=%+.2f° (σ=%.2f°). "
-                "Saved to %s.",
+                "%+.3f) displacement=%.3f m method=%s (n=%zu) dock_yaw=%+.2f° "
+                "(σ=%.2f°). Saved to %s.",
                 x0,
                 y0,
                 x1,
                 y1,
                 displacement,
+                yaw_method,
+                samples.size(),
                 result.dock_pose_yaw_deg,
                 result.yaw_sigma_deg,
                 MOWGLI_ROBOT_YAML_PATH);

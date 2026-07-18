@@ -141,7 +141,13 @@ extern "C"
 #define TILT_EMERGENCY_MILLIS {{.TiltEmergencyMillis}} // used for both the mechanical and accelerometer based detection
 #define STOP_BUTTON_EMERGENCY_MILLIS {{.StopButtonEmergencyMillis}}
 #define PLAY_BUTTON_CLEAR_EMERGENCY_MILLIS {{.PlayButtonClearEmergencyMillis}}
-#define IMU_ONBOARD_INCLINATION_THRESHOLD 0x38 // stock firmware uses 0x2C (way more allowed inclination)
+#define IMU_ONBOARD_INCLINATION_THRESHOLD {{.ImuOnboardInclinationThreshold}} // operator-configurable; clamped to a safe envelope in board_defaults.h (fallback 0x38)
+
+// Single-sourced blessed defaults + the tilt-threshold safety clamp. Included
+// AFTER the GUI-substituted values above so a supplied value WINS (the #ifndef
+// fallbacks only fire for anything the GUI left unset), and the inclination
+// clamp constrains whatever value was substituted. See board_defaults.h.
+#include "board_defaults.h"
 
 // Enable Emergency debugging
 //#define EMERGENCY_DEBUG

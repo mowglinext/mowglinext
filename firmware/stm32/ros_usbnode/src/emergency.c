@@ -25,11 +25,12 @@
 
 //#define EMERGENCY_DEBUG 1
 
-#define EMERGENCY_CHECKING_DISABLE 2
-#define EMERGENCY_CHECKING_ENABLE 3
-
-static bool emergency_checking_disabled = false;
-static uint8_t emergency_state = 0;
+/* Written by EmergencyController() in the main loop (bit-OR of sensor flags)
+ * AND by Emergency_SetState() from the USB RX interrupt (host assert/release).
+ * volatile so neither context caches a stale copy; a plain uint8_t load/store
+ * is already atomic on Cortex-M3, but the read-modify-write |= is NOT, so
+ * every OR is done under a __disable_irq guard (see emergency_set_bits). */
+static volatile uint8_t emergency_state = 0;
 static uint32_t stop_emergency_started = 0;
 static uint32_t blue_wheel_lift_emergency_started = 0;
 static uint32_t red_wheel_lift_emergency_started = 0;
@@ -37,6 +38,56 @@ static uint32_t both_wheels_lift_emergency_started = 0;
 static uint32_t tilt_emergency_started = 0;
 static uint32_t accelerometer_int_emergency_started = 0;
 static uint32_t play_button_started = 0;
+
+/* Runtime emergency-sensor timeouts [ms] (PKT_ID_SET_SAFETY_LIMITS). Seeded with
+ * the compile-time board_defaults values, which stay the power-on fallback so an
+ * unconnected host runs the vetted safe defaults. The four TRIP timeouts can only
+ * be SHORTENED (faster e-stop); the play-button CLEAR hold can only be LENGTHENED
+ * (harder to un-latch). See emergency_set_timeouts(). */
+static volatile uint32_t g_one_wheel_lift_ms = ONE_WHEEL_LIFT_EMERGENCY_MILLIS;
+static volatile uint32_t g_both_wheels_lift_ms = BOTH_WHEELS_LIFT_EMERGENCY_MILLIS;
+static volatile uint32_t g_tilt_ms = TILT_EMERGENCY_MILLIS;
+static volatile uint32_t g_stop_button_ms = STOP_BUTTON_EMERGENCY_MILLIS;
+static volatile uint32_t g_play_clear_ms = PLAY_BUTTON_CLEAR_EMERGENCY_MILLIS;
+
+#define EMERGENCY_MIN_TRIP_MS 10u
+#define EMERGENCY_MAX_CLEAR_MS 10000u
+
+/* Trip timeouts clamp to [MIN, compiled] — the wire can only SHORTEN them (a
+ * faster e-stop is safer); it can never make a fault take longer to trip. */
+static uint32_t emergency_clamp_trip(uint32_t v, uint32_t compiled) {
+  if (v < EMERGENCY_MIN_TRIP_MS) return EMERGENCY_MIN_TRIP_MS;
+  if (v > compiled) return compiled;
+  return v;
+}
+/* The clear-hold clamps to [compiled, MAX] — the wire can only LENGTHEN it
+ * (harder to un-latch the emergency). Shortening it would make accidental
+ * clearing of the e-stop EASIER = weaker protection, so that direction is
+ * forbidden (the one field whose safe direction is the opposite of the trips). */
+static uint32_t emergency_clamp_clear(uint32_t v, uint32_t compiled) {
+  if (v < compiled) return compiled;
+  if (v > EMERGENCY_MAX_CLEAR_MS) return EMERGENCY_MAX_CLEAR_MS;
+  return v;
+}
+
+void emergency_set_timeouts(uint32_t one_wheel_lift_ms,
+                            uint32_t both_wheels_lift_ms, uint32_t tilt_ms,
+                            uint32_t stop_button_ms, uint32_t play_clear_ms) {
+  /* EmergencyController() reads these in the main loop; this runs in USB RX
+   * interrupt context. uint32 stores are atomic on Cortex-M3, but apply the set
+   * as a group under the same guard the module uses elsewhere. */
+  __disable_irq();
+  g_one_wheel_lift_ms =
+      emergency_clamp_trip(one_wheel_lift_ms, ONE_WHEEL_LIFT_EMERGENCY_MILLIS);
+  g_both_wheels_lift_ms = emergency_clamp_trip(
+      both_wheels_lift_ms, BOTH_WHEELS_LIFT_EMERGENCY_MILLIS);
+  g_tilt_ms = emergency_clamp_trip(tilt_ms, TILT_EMERGENCY_MILLIS);
+  g_stop_button_ms =
+      emergency_clamp_trip(stop_button_ms, STOP_BUTTON_EMERGENCY_MILLIS);
+  g_play_clear_ms =
+      emergency_clamp_clear(play_clear_ms, PLAY_BUTTON_CLEAR_EMERGENCY_MILLIS);
+  __enable_irq();
+}
 
 
 /**
@@ -49,22 +100,30 @@ uint8_t Emergency_State(void)
 }
 
 /**
- * @brief Set Emergency State bits
+ * @brief Set Emergency State (host/ROS API, runs in USB RX interrupt context)
+ * @note  Only assert (any non-zero -> 1) or release (0). The former
+ *        EMERGENCY_CHECKING_DISABLE/ENABLE opcodes let a host packet globally
+ *        disable ALL physical safety sensors (e-stop, wheel-lift, tilt) — that
+ *        bypass has been removed. Firmware is the sole safety authority and its
+ *        sensor checking must never be disableable over comms. A single-byte
+ *        store to the volatile state is atomic on Cortex-M3.
  * @retval none
  */
 void  Emergency_SetState(uint8_t new_emergency_state)
 {
-    switch (new_emergency_state)  {
-        case EMERGENCY_CHECKING_DISABLE:
-            emergency_checking_disabled = true;
-            emergency_state = 0;
-            break;
-        case EMERGENCY_CHECKING_ENABLE:
-            emergency_checking_disabled = false;
-            break;
-        default:
-            emergency_state = new_emergency_state;
-    }
+    emergency_state = (new_emergency_state != 0) ? 1u : 0u;
+}
+
+/**
+ * @brief OR sensor bits into the emergency state atomically w.r.t. the USB RX
+ *        interrupt (Emergency_SetState). Without the guard, the load-OR-store
+ *        could drop a concurrent host assert/release.
+ */
+static void emergency_set_bits(uint8_t bits)
+{
+    __disable_irq();
+    emergency_state |= bits;
+    __enable_irq();
 }
 
 /**
@@ -149,11 +208,6 @@ void EmergencyController(void)
     debug_printf("  >> play_button: %d\r\n",play_button);
 #endif
 
-    if (emergency_checking_disabled) {
-        emergency_state = 0;
-        return;
-    }
-
     if (stop_button_yellow || stop_button_white)
     {
         if (stop_emergency_started == 0)
@@ -162,15 +216,15 @@ void EmergencyController(void)
         }
         else
         {
-            if (now - stop_emergency_started >= STOP_BUTTON_EMERGENCY_MILLIS)
+            if (now - stop_emergency_started >= g_stop_button_ms)
             {
                 if (stop_button_yellow)
                 {
-                    emergency_state |= 0b00010;
+                    emergency_set_bits(0b00010);
                     debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - STOP BUTTON (\e[33myellow\e[0m) triggered\r\n");
                 }
                 if (stop_button_white) {
-                    emergency_state |= 0b00100;
+                    emergency_set_bits(0b00100);
                     debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - STOP BUTTON (\e[37m0mwhite\e[) triggered\r\n");
                 }
             }
@@ -187,9 +241,9 @@ void EmergencyController(void)
         {
             both_wheels_lift_emergency_started=now;
         }
-        else if (now-both_wheels_lift_emergency_started>=BOTH_WHEELS_LIFT_EMERGENCY_MILLIS)
+        else if (now-both_wheels_lift_emergency_started>=g_both_wheels_lift_ms)
         {
-            emergency_state |= 0b11000;
+            emergency_set_bits(0b11000);
             debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - WHEEL LIFT (\e[31mred\e[0m and \e[34mblue\e[0m) triggered\r\n");
         }
     } else {
@@ -201,9 +255,9 @@ void EmergencyController(void)
         {
             blue_wheel_lift_emergency_started=now;
         }
-        else if (now-blue_wheel_lift_emergency_started>=ONE_WHEEL_LIFT_EMERGENCY_MILLIS)
+        else if (now-blue_wheel_lift_emergency_started>=g_one_wheel_lift_ms)
         {
-            emergency_state |= 0b01000;
+            emergency_set_bits(0b01000);
             debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - WHEEL LIFT (\e[34mblue\e[0m) triggered\r\n");
         }
     } else {
@@ -215,9 +269,9 @@ void EmergencyController(void)
         {
             red_wheel_lift_emergency_started=now;
         }
-        else if (now-red_wheel_lift_emergency_started>=ONE_WHEEL_LIFT_EMERGENCY_MILLIS)
+        else if (now-red_wheel_lift_emergency_started>=g_one_wheel_lift_ms)
         {
-            emergency_state |= 0b10000;
+            emergency_set_bits(0b10000);
             debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - WHEEL LIFT (\e[31mred\e[0m) triggered\r\n");
         }
     } else {
@@ -232,8 +286,8 @@ void EmergencyController(void)
         }
         else
         {
-            if (now - accelerometer_int_emergency_started >= TILT_EMERGENCY_MILLIS) {
-                emergency_state |= 0b100000;
+            if (now - accelerometer_int_emergency_started >= g_tilt_ms) {
+                emergency_set_bits(0b100000);
                 debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - ACCELEROMETER TILT triggered\r\n");
             }
         }     
@@ -251,8 +305,8 @@ void EmergencyController(void)
         }
         else
         {
-            if (now - tilt_emergency_started >= TILT_EMERGENCY_MILLIS) {
-                emergency_state |= 0b100000;
+            if (now - tilt_emergency_started >= g_tilt_ms) {
+                emergency_set_bits(0b100000);
                 debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - MECHANICAL TILT triggered\r\n");
             }
         }
@@ -270,7 +324,7 @@ void EmergencyController(void)
         }
         else
         {
-            if (now - play_button_started >= PLAY_BUTTON_CLEAR_EMERGENCY_MILLIS) {
+            if (now - play_button_started >= g_play_clear_ms) {
                 emergency_state = 0;
                 debug_printf(" \e[01;31m## EMERGENCY ##\e[0m - manual reset\r\n");
 				StatusLEDUpdate();

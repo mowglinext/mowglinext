@@ -171,6 +171,11 @@ FROM ros:kilted-ros-base AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# LOCAL-ONLY (do not commit): this Docker host has no IPv6 route, so apt's
+# default IPv6-first to ports.ubuntu.com times out. Force IPv4 for all apt in
+# the base-derived stages.
+RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Navigation
     ros-kilted-nav2-bringup \
@@ -394,9 +399,10 @@ RUN /bin/bash -c "\
     source /opt/ros/kilted/setup.bash && \
     source install/setup.bash && \
     export CMAKE_PREFIX_PATH=/opt/fields2cover-300:/opt/gtsam:\${CMAKE_PREFIX_PATH:-} && \
+    export MAKEFLAGS=-j3 && \
     colcon build \
       --cmake-args -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTING=OFF \
-      --parallel-workers \$(nproc) \
+      --parallel-workers 2 \
       --event-handlers console_cohesion+ \
     "
 
@@ -446,7 +452,6 @@ COPY ros2/src/mowgli_bringup/config/    /ros2_ws/install/mowgli_bringup/share/mo
 COPY ros2/src/mowgli_localization/config/  /ros2_ws/install/mowgli_localization/share/mowgli_localization/config/
 
 # fusion_graph ships its own launch + config used by navigation.launch.py
-# when use_fusion_graph:=true.
 COPY ros2/src/fusion_graph/launch/  /ros2_ws/install/fusion_graph/share/fusion_graph/launch/
 COPY ros2/src/fusion_graph/config/  /ros2_ws/install/fusion_graph/share/fusion_graph/config/
 

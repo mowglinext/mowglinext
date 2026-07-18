@@ -19,3 +19,10 @@ hardware_bridge:
     # curve — the residual bias stays elevated. 20 s puts us past the Allan
     # minimum for the WT901, giving ~√5 ≈ 2.2× tighter gyro/accel offsets.
     imu_cal_samples: 1000
+
+    # 2026-07-17 Option C (task #34): the host-side closed-loop angular-rate
+    # (yaw) controller that used to be configured here (Option B, task #24 —
+    # angular_rate_ki/_kff/_kp/_loop_enabled) is REMOVED. The yaw-rate loop
+    # now runs in firmware (task #33), closing on the same gyro without the
+    # host's USB round-trip latency; tune it via yaw_kp/yaw_ki (SET_DRIVE_PID)
+    # instead.

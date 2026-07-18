@@ -279,13 +279,22 @@ void PANEL_Tick(void)
     /* add Start and Home at the end the tab*/
     buttonstate[PANEL_BUTTON_DEF_START] = !HAL_GPIO_ReadPin(PLAY_BUTTON_PORT, PLAY_BUTTON_PIN); // pullup, active low    
     buttonstate[PANEL_BUTTON_DEF_HOME]  = !HAL_GPIO_ReadPin(HOME_BUTTON_PORT, HOME_BUTTON_PIN); // pullup, active low    
-    /* Click detected */
+    /* Click detected.
+     * START/HOME are dedicated GPIO buttons, not part of the UART panel frame.
+     * The consumer (panel_handler) only forwards an update when buttoncleared==0
+     * (i.e. the update is a fresh PRESS, not the UART "first release" clear).
+     * buttoncleared is a latch driven ONLY by the UART buttons and sits at 1 in
+     * the idle steady state, so without clearing it here a GPIO rising edge sets
+     * buttonupdated=1 but stays gated out — START/HOME presses never emit a UI
+     * event. Mark the edge as a fresh press so it is delivered. */
     if( (buttonstate[PANEL_BUTTON_DEF_START] != panel_u8OldStateButtonStart) && buttonstate[PANEL_BUTTON_DEF_START]){
         buttonupdated = 1;
+        buttoncleared = 0;
     }
 
     if( (buttonstate[PANEL_BUTTON_DEF_HOME] != panel_u8OldStateButtonHome) && buttonstate[PANEL_BUTTON_DEF_HOME]){
         buttonupdated = 1;
+        buttoncleared = 0;
     }
 
     panel_u8OldStateButtonStart = buttonstate[PANEL_BUTTON_DEF_START];

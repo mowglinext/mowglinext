@@ -21,7 +21,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -34,6 +33,7 @@
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 
+#include "mowgli_interfaces/robot_yaml_scalar.hpp"
 #include "mowgli_map/map_server_node.hpp"
 #include <grid_map_core/iterators/PolygonIterator.hpp>
 #include <grid_map_ros/GridMapRosConverter.hpp>
@@ -43,92 +43,14 @@ namespace mowgli_map
 
 // Path to the runtime mowgli_robot.yaml — bind-mounted into the container
 // so writes survive across redeploys. mowgli_robot.yaml is the single
-// source of truth for dock_pose_x/y/yaw; this helper rewrites the three
-// scalar values in place via per-line substring splicing so comments
-// and surrounding structure are preserved (yaml-cpp would round-trip
-// and strip them).
+// source of truth for dock_pose_x/y/yaw.
 constexpr const char* kRuntimeRobotYaml = "/ros2_ws/config/mowgli_robot.yaml";
 
-// Splice a new numeric value into a "<indent><key>:<spaces><number><rest>"
-// line, anchored on the indent so a key whose name happens to contain ours
-// (e.g. dock_pose_x_offset) is not matched.
-inline void splice_yaml_scalar(std::string& content,
-                               const std::string& key,
-                               const std::string& new_value)
-{
-  size_t scan = 0;
-  while (scan < content.size())
-  {
-    const size_t line_start = scan;
-    size_t cursor = line_start;
-    while (cursor < content.size() && (content[cursor] == ' ' || content[cursor] == '\t'))
-      ++cursor;
-    const size_t indent_end = cursor;
-    if (indent_end > line_start && cursor + key.size() < content.size() &&
-        content.compare(cursor, key.size(), key) == 0 && content[cursor + key.size()] == ':')
-    {
-      cursor += key.size() + 1;
-      while (cursor < content.size() && (content[cursor] == ' ' || content[cursor] == '\t'))
-        ++cursor;
-      const size_t val_start = cursor;
-      while (cursor < content.size())
-      {
-        const char c = content[cursor];
-        const bool is_num =
-            (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E';
-        if (!is_num)
-          break;
-        ++cursor;
-      }
-      if (cursor > val_start)
-      {
-        content.replace(val_start, cursor - val_start, new_value);
-        return;
-      }
-    }
-    const size_t nl = content.find('\n', line_start);
-    if (nl == std::string::npos)
-      break;
-    scan = nl + 1;
-  }
-}
-
-inline bool update_dock_pose_in_robot_yaml(const std::string& path,
-                                           double x,
-                                           double y,
-                                           double yaw_rad)
-{
-  std::ifstream in(path);
-  if (!in.good())
-    return false;
-  std::stringstream buf;
-  buf << in.rdbuf();
-  std::string content = buf.str();
-  in.close();
-
-  auto fmt = [](double v)
-  {
-    std::ostringstream s;
-    s << std::fixed << std::setprecision(6) << v;
-    return s.str();
-  };
-  splice_yaml_scalar(content, "dock_pose_x", fmt(x));
-  splice_yaml_scalar(content, "dock_pose_y", fmt(y));
-  splice_yaml_scalar(content, "dock_pose_yaw", fmt(yaw_rad));
-
-  const std::string tmp_path = path + ".tmp";
-  {
-    std::ofstream out(tmp_path, std::ios::trunc);
-    if (!out.good())
-      return false;
-    out << content;
-    if (!out.good())
-      return false;
-  }
-  std::error_code ec;
-  std::filesystem::rename(tmp_path, path, ec);
-  return !ec;
-}
+// The x/y/yaw splice-in-place writer moved to mowgli_interfaces::
+// robot_yaml_scalar::UpdateDockPose (task #42) — was a byte-for-byte-
+// identical copy of the same logic duplicated across this file,
+// mowgli_localization/calibrate_imu_yaw_node.cpp, and
+// mowgli_behavior/calibration_nodes.cpp.
 
 geometry_msgs::msg::Polygon MapServerNode::parse_polygon_string(const std::string& s)
 {
@@ -796,11 +718,29 @@ void MapServerNode::on_set_docking_point(
   //           free of that circularity; averaging kills the ~1-3 cm RTK jitter.
   //   false — manual map-drag / settings edit: the operator specified the
   //           location directly, so use req->docking_pose.position as given.
-  // Yaw always comes from the request (single-antenna GPS gives no heading;
-  // the yaw-convergence gate above validated it).
-  docking_pose_ = req->docking_pose;  // yaw/orientation (and position if !gps)
+  //
+  // Orientation (task #45, from #44's circularity trace): the SAME gauge-
+  // reset circularity that poisons the fused POSITION while charging also
+  // poisons the fused YAW — fusion_graph pins the fused yaw to the EXISTING
+  // dock_pose_yaw via a tight (~2°) unary factor plus a periodic gauge
+  // reset, so req->docking_pose.orientation is just as circular as its
+  // position would be in the use_gps_position=true case (confirmed #44: no
+  // independent yaw source is observable at standstill on the dock). A
+  // few-degree bad heading could therefore never self-correct via a live
+  // GUI re-capture, and #44 traced this as the likely cause of a consistent
+  // ~10cm-right dock miss (yaw_err × ~1.5m approach distance). PRESERVE the
+  // existing dock_pose_yaw for a live GPS capture — it comes from the
+  // motion-derived, RTK-gated writers (calibrate_imu_yaw_node's reverse
+  // maneuver + per-undock CalibrateHeadingFromUndock, both confirmed NOT
+  // circular in #40/#44). For a manual map-drag (use_gps_position=false)
+  // the operator is explicitly setting orientation by hand, so honor the
+  // request as before — that path was never circular (no fused-yaw readback
+  // involved).
+  const auto preserved_orientation = docking_pose_.orientation;
+  docking_pose_ = req->docking_pose;  // orientation (and position if !gps)
   if (req->use_gps_position)
   {
+    docking_pose_.orientation = preserved_orientation;
     double gps_x_mean = 0.0;
     double gps_y_mean = 0.0;
     {
@@ -832,7 +772,8 @@ void MapServerNode::on_set_docking_point(
     docking_pose_.position.z = 0.0;
     RCLCPP_INFO(get_logger(),
                 "Docking point captured from averaged GPS: (%.3f, %.3f) over %zu "
-                "samples; request fused position was (%.3f, %.3f) — Δ=(%.3f, %.3f) m",
+                "samples; request fused position was (%.3f, %.3f) — Δ=(%.3f, %.3f) m. "
+                "Orientation UNCHANGED (kept existing dock_pose_yaw — see task #45).",
                 gps_x_mean,
                 gps_y_mean,
                 recent_gps_xy_.size(),
@@ -875,7 +816,7 @@ void MapServerNode::on_set_docking_point(
   {
     const double yaw_rad =
         2.0 * std::atan2(docking_pose_.orientation.z, docking_pose_.orientation.w);
-    if (!update_dock_pose_in_robot_yaml(
+    if (!mowgli_interfaces::robot_yaml_scalar::UpdateDockPose(
             kRuntimeRobotYaml, docking_pose_.position.x, docking_pose_.position.y, yaw_rad))
     {
       RCLCPP_WARN(get_logger(),

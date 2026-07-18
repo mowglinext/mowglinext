@@ -1423,7 +1423,6 @@ EOF
     lidar_on="true"
   fi
   _yaml_patch_key "$yaml_file" lidar_enabled     "$lidar_on"
-  _yaml_patch_key "$yaml_file" use_fusion_graph  "$lidar_on"
   _yaml_patch_key "$yaml_file" use_scan_matching "$lidar_on"
   _yaml_patch_key "$yaml_file" use_loop_closure  "$lidar_on"
 

@@ -209,6 +209,17 @@
     "stateCoverageFailed": "Coverage failed"
   },
   "flashBoard": {
+    "prebuiltInfoTitle": "We'll flash the prebuilt firmware for your model",
+    "prebuiltInfoDesc": "Pick your board and panel above, then Flash. The matching prebuilt, checksum-verified binary is downloaded and written — no compiling needed. Only open the expert section below if you know you need a custom build.",
+    "noPrebuiltTitle": "No prebuilt firmware for this model yet",
+    "noPrebuiltDesc": "There's no tested prebuilt binary for the selected board. Open 'Expert: build custom firmware' below and enable 'Build from source' to compile and flash it instead.",
+    "expertBuildLabel": "Expert: build custom firmware",
+    "expertBuildAlertMessage": "Only for custom builds",
+    "expertBuildAlertDescription": "These settings compile firmware from source instead of flashing the tested prebuilt binary. Wrong values here can damage the battery or disable physical safety. Leave 'Build from source' unchecked to flash the prebuilt binary.",
+    "expertBuildToggleTitle": "Build from source instead of flashing the prebuilt binary",
+    "expertBuildToggleTooltip": "When checked, the firmware is compiled from the repository/branch below with the parameters here. When unchecked, the tested prebuilt binary for your board is flashed.",
+    "confirmPrebuiltDesc": "This flashes the tested prebuilt firmware for the selected board and panel. The binary is checksum-verified before writing, and the firmware handshake is verified after reboot.",
+    "confirmPrebuiltWarning": "This rewrites the blade-safety board. Make sure you selected the correct board for your hardware.",
     "advancedParamsLabel": "Advanced firmware parameters (can damage hardware)",
     "advancedAlertMessage": "These settings control battery charging and the physical safety limits",
     "advancedAlertDescription": "Incorrect voltage or current values can damage the battery or the board. Only change these fields if you know exactly what you are doing.",
@@ -405,6 +416,9 @@
     "running": "running",
     "saveGraph": "Save graph",
     "clearGraph": "Clear graph",
+    "clearGraphConfirmTitle": "Clear the fusion graph?",
+    "clearGraphConfirmBody": "This discards all accumulated nodes, loop closures, and covariance — the localizer restarts from scratch. This cannot be undone.",
+    "clearGraphConfirmOk": "Clear graph",
     "nodesInGraph": "Nodes in graph",
     "withScans": "{{count}} with scans",
     "loopClosures": "Loop closures",
@@ -734,8 +748,8 @@
     "calibFailedTitle": "Calibration failed",
     "calibFailedHint": "Hint: drive faster or longer so the accelerometer sees a clear forward and backward impulse along the body X axis.",
     "reset": "Reset",
-    "skipStepTitle": "You can skip this step",
-    "skipStepDesc": "If you have already calibrated this robot from the Diagnostics page (or know your imu_yaw value), use the Next button. The Complete step will warn you if calibration is still missing.",
+    "skipStepTitle": "You can calibrate this later",
+    "skipStepDesc": "If you have already calibrated this robot from the Diagnostics page (or know your imu_yaw value), use the Next button. Otherwise you can calibrate later from Diagnostics — but until you do, the robot will drift in odom and may dock at an angle. The readiness check on the final step flags this as still required.",
     "flashFirmware": "Flash Firmware",
     "firmwareTitle": "Firmware",
     "firmwareIntro": "If this is a new build, you need to flash the Mowgli firmware onto your motherboard. If your firmware is already up to date, you can skip this step.",
@@ -773,7 +787,44 @@
     "saveAndFinish": "Save & Finish",
     "next": "Next",
     "stepCounter": "Step {{current}} of {{total}}",
-    "calibPendingSuffix": "({{count}} pending)"
+    "calibPendingSuffix": "({{count}} pending)",
+    "skipWithoutVerifying": "Skip without verifying",
+    "firmwareCompatibleLive": "Firmware v{{version}} — compatible",
+    "firmwareIncompatibleLive": "Incompatible firmware (v{{version}}) — re-flash to continue",
+    "firmwareWaitingHandshake": "Waiting for the board to report its firmware…",
+    "gpsCorrectionsActive": "Receiving RTCM corrections",
+    "gpsCorrectionsInactive": "No RTCM corrections — check your NTRIP settings",
+    "datumRequiredTitle": "Map origin not set",
+    "datumRequiredHelp": "Set the map origin before continuing — capture it with an RTK-Fixed position.",
+    "readinessTitle": "Readiness check",
+    "readinessIntro": "Before finishing, let's confirm your mower is actually ready to work.",
+    "readinessCheckRtk": "RTK-Fixed GPS",
+    "readinessCheckCorrections": "NTRIP corrections",
+    "readinessCheckDatum": "Map origin (datum) set",
+    "readinessCheckLocalizer": "Localizer running",
+    "readinessCheckLocalizerConf": "Localizer confidence",
+    "readinessCheckFirmware": "Firmware compatible",
+    "readinessCheckDock": "Dock pose captured",
+    "readinessCheckImuBias": "IMU calibrated",
+    "readinessCheckImuYaw": "IMU mounting yaw solved",
+    "readinessCheckMag": "Magnetometer calibrated",
+    "readinessCheckArea": "At least one mowing area",
+    "readinessStatePass": "Ready",
+    "readinessStatePending": "Waiting…",
+    "readinessStateFail": "Action needed",
+    "readinessOptional": "Optional",
+    "readinessGatedTitle": "Not ready to finish yet",
+    "readinessGatedDesc": "{{count}} required check(s) still need attention. Fix them below, or finish anyway if you understand the risk.",
+    "readinessFinishApply": "Finish & apply",
+    "readinessFinishAnyway": "Finish anyway (not recommended)",
+    "readinessFinishAnywayConfirm": "These aren't ready yet: {{items}}. Finish anyway? The mower may drift or refuse to mow until they're fixed.",
+    "readinessCtaFixGps": "Fix GPS",
+    "readinessCtaFixNtrip": "Check NTRIP",
+    "readinessCtaSetDatum": "Set datum",
+    "readinessCtaDiagnostics": "Open Diagnostics",
+    "readinessCtaCalibrate": "Calibrate",
+    "readinessCtaReflash": "Re-flash firmware",
+    "readinessCtaDrawArea": "Draw area"
   },
   "settingsPage": {
     "ros2Restarting": "Restarting ROS2…",
@@ -1620,17 +1671,37 @@
       "label": "LiDAR mount height",
       "description": "Height of the LiDAR above ground, used by the ground filter."
     },
-    "angular_rate_kp": {
-      "label": "Angular rate Kp",
-      "description": "Proportional gain of the ROS-side angular-rate assist loop."
+    "obstacle_inflation_radius": {
+      "label": "Obstacle inflation radius (transit only)",
+      "description": "Buffer kept from LiDAR-detected obstacles in the local costmap during point-to-point transit driving. Larger values make the robot start avoiding obstacles sooner, from further away. Does NOT affect avoidance while mowing — see \"Obstacle detection range (mowing)\" for that."
     },
-    "angular_rate_ki": {
-      "label": "Angular rate Ki",
-      "description": "Integral gain of the angular-rate assist loop."
+    "obstacle_detection_range_m": {
+      "label": "Obstacle detection range (mowing)",
+      "description": "How far ahead along the coverage path the robot looks for an obstacle before it starts skirting around it while mowing. Larger values react sooner but give up more of the swath to the deviation."
     },
-    "angular_rate_kff": {
-      "label": "Angular rate Kff",
-      "description": "Feed-forward gain of the angular-rate assist loop."
+    "obstacle_wait_timeout_s": {
+      "label": "Obstacle wait timeout",
+      "description": "How long the robot holds still trying to skirt a blocked obstacle before giving up on the strip. Longer values ride out transient blockages (e.g. a person passing); shorter values abandon a stuck strip sooner."
+    },
+    "yaw_kp": {
+      "label": "Yaw loop Kp",
+      "description": "Proportional gain of the firmware's closed-loop yaw-rate controller."
+    },
+    "yaw_ki": {
+      "label": "Yaw loop Ki",
+      "description": "Integral gain of the firmware's closed-loop yaw-rate controller."
+    },
+    "yaw_trim_limit_mps": {
+      "label": "Yaw trim limit",
+      "description": "Clamp on the per-wheel differential velocity trim the yaw loop may apply."
+    },
+    "yaw_loop_enabled": {
+      "label": "Yaw loop enabled",
+      "description": "Enable the firmware's closed-loop yaw-rate controller. When off, the wheels run open-diff (no gyro-based trim)."
+    },
+    "yaw_gyro_sign": {
+      "label": "Yaw gyro sign",
+      "description": "Sign of the onboard gyro's Z axis relative to robot yaw (+1/-1). Flip this if the yaw loop diverges instead of correcting."
     },
     "imu_cal_samples": {
       "label": "IMU cal samples",
@@ -2544,17 +2615,17 @@
     "unknownError": "Unknown error",
     "failedToSetDockPose": "Failed to set dock pose",
     "noRobotPoseYet": "No robot pose available yet",
-    "setDockFromPoseTitle": "Set dock pose from current robot position?",
-    "setDockPose": "Set dock pose",
+    "setDockFromPoseTitle": "Set dock position from current robot position?",
+    "setDockPose": "Set dock position",
     "cancel": "Cancel",
     "setDockConfirmIntro1": "This captures the robot's",
-    "setDockConfirmXYHeading": "x, y AND heading",
-    "setDockConfirmIntro2": "right now and writes them to",
-    "setDockConfirmIntro3": "as the new dock pose. The IMU auto-calibration that runs on the next docking will refine the yaw if it drifts.",
+    "setDockConfirmXYHeading": "x, y position only",
+    "setDockConfirmIntro2": "right now and writes it to",
+    "setDockConfirmIntro3": "as the new dock position. Heading is NOT changed by this action — the fused heading is locked to the existing dock heading while charging, so a live capture could never correct it. Recalibrate heading separately via \"Run Calibration\" (motion-based, not affected by this).",
     "currentRobot": "Current robot",
     "bearing": "bearing",
-    "savedDock": "Saved dock",
-    "setDockConfirmFooter": "Make sure the robot is sitting on the dock and facing the direction it should approach from. The new pose persists across container restarts.",
+    "savedDock": "Saved dock (heading unchanged by this action)",
+    "setDockConfirmFooter": "Make sure the robot is sitting on the dock so the position capture reflects the true charging-contact point. The new position persists across container restarts.",
     "sensorPlacement": "Sensor Placement",
     "metersFromUrdf": "m (from URDF)",
     "dragSensorsHint": "Drag sensors on the top-down robot view to set their X/Y position. Use the rotation handle (small circle) to set sensor yaw. The grid spacing is 5 cm. Robot dimensions are read from the /robot_description topic.",
@@ -2700,7 +2771,11 @@
     "clearAll": "Clear all",
     "nothingRightNow": "Nothing right now.",
     "criticalEventsHint": "Critical events (emergency, rain, completion) will land here.",
-    "dismiss": "Dismiss"
+    "dismiss": "Dismiss",
+    "levelError": "Error",
+    "levelWarning": "Warning",
+    "levelSuccess": "Success",
+    "levelInfo": "Info"
   },
   "iosInstallBanner": {
     "title": "Install MowgliNext",

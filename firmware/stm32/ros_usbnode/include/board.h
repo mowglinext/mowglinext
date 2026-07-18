@@ -104,33 +104,12 @@ extern "C"
 // given chassis lacks those sensors.
 // #define I_DONT_NEED_MY_FINGERS           1      // disables EmergencyController()
 
-/// nominal max charge current is 1.0 Amp
-#define MAX_CHARGE_CURRENT 1.2f
-/// Max voltage allowed
-#define MAX_CHARGE_VOLTAGE 29.4f
-/// Voltage threshold for CC to CV transition
-#define LIMIT_VOLTAGE_150MA 28.8f
-/// Default max battery voltage allowed
-#define BAT_CHARGE_CUTOFF_VOLTAGE  29.2f
-/// We consider the battery is full when in CV mode the current below 0.1A
-#define CHARGE_END_LIMIT_CURRENT 0.08f
-// if voltage is greater than this assume we are docked
-#define MIN_DOCKED_VOLTAGE 20.0f
-// if voltage is lower this assume battery is disconnected
-#define MIN_BATTERY_VOLTAGE 5.0f
-
-// if current is greater than this assume the battery is charging
-#define MIN_CHARGE_CURRENT 0.1f
-#define LOW_BAT_THRESHOLD 25.2f /* near 20% SOC */
-#define LOW_CRI_THRESHOLD 23.5f /* near 0% SOC */
-
-// Emergency sensor timeouts
-#define ONE_WHEEL_LIFT_EMERGENCY_MILLIS 2000
-#define BOTH_WHEELS_LIFT_EMERGENCY_MILLIS 1000
-#define TILT_EMERGENCY_MILLIS 500 // used for both the mechanical and accelerometer based detection
-#define STOP_BUTTON_EMERGENCY_MILLIS 100
-#define PLAY_BUTTON_CLEAR_EMERGENCY_MILLIS 2000
-#define IMU_ONBOARD_INCLINATION_THRESHOLD 0x38 // stock firmware uses 0x2C (way more allowed inclination)
+// Battery/charge envelope, emergency-sensor timeouts and the onboard-IMU tilt
+// threshold are single-sourced in board_defaults.h (shared with board.h.template
+// so CI and the GUI-flashed firmware can never drift). This file defines none of
+// them itself; the #ifndef fallbacks in board_defaults.h supply the blessed
+// values. To change one, edit board_defaults.h (NOT here).
+#include "board_defaults.h"
 
 // Enable Emergency debugging
 //#define EMERGENCY_DEBUG

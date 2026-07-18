@@ -104,7 +104,11 @@ def generate_launch_description():
         # /diffdrive_controller/odom. Map them onto the topics the rest
         # of the Mowgli stack expects.
         remappings=[
-            ("/diffdrive_controller/cmd_vel", "/cmd_vel"),
+            # /cmd_vel_wheels (not /cmd_vel) so the sim_actuation node can insert
+            # the firmware deadband + angular-rate PI between the nav command
+            # (/cmd_vel) and the wheels — reproducing the real actuation limit
+            # cycle. sim_actuation republishes /cmd_vel → /cmd_vel_wheels.
+            ("/diffdrive_controller/cmd_vel", "/cmd_vel_wheels"),
             ("/diffdrive_controller/odom", "/wheel_odom_raw"),
         ],
         # respawn=True: webots-controller has a hardcoded 30 s connect

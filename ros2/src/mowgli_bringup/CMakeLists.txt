@@ -70,6 +70,12 @@ if(BUILD_TESTING)
     TIMEOUT 30
   )
 
+  # Static guard for Inv 2 (TF sole ownership) — greps sources/configs, no
+  # nodes spun up.
+  ament_add_pytest_test(test_tf_ownership test/test_tf_ownership.py
+    TIMEOUT 30
+  )
+
 endif()
 
 ament_package()

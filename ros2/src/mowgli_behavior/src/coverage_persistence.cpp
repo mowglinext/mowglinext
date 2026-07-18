@@ -31,7 +31,7 @@ namespace
 {
 // Bump when the on-disk layout changes incompatibly; an unrecognised header is
 // treated as "no state" (start fresh) rather than a parse error.
-constexpr const char* kHeader = "mowgli_coverage_resume v1";
+constexpr const char* kHeader = "mowgli_coverage_resume v2";
 }  // namespace
 
 bool saveCoverageResumeState(const BTContext& ctx)
@@ -44,6 +44,8 @@ bool saveCoverageResumeState(const BTContext& ctx)
   // Union of every area index that carries any resume-relevant state.
   std::set<uint32_t> areas;
   for (const auto& [idx, _] : ctx.area_path_pose_count)
+    areas.insert(idx);
+  for (const auto& [idx, _] : ctx.area_plan_fingerprint)
     areas.insert(idx);
   for (const auto& [idx, _] : ctx.area_resume_pose_index)
     areas.insert(idx);
@@ -64,12 +66,19 @@ bool saveCoverageResumeState(const BTContext& ctx)
     std::size_t pose_count = 0;
     if (auto it = ctx.area_path_pose_count.find(idx); it != ctx.area_path_pose_count.end())
       pose_count = it->second;
+    // Plan-geometry fingerprint (0 = none recorded). The resume-cursor staleness
+    // key: a persisted cursor is only reused when this matches the re-planned
+    // geometry (see FollowStrip::onStart / hashPlanGeometry).
+    uint64_t fingerprint = 0;
+    if (auto it = ctx.area_plan_fingerprint.find(idx); it != ctx.area_plan_fingerprint.end())
+      fingerprint = it->second;
     // -1 sentinel = no live resume cursor (area finished or never interrupted).
     int64_t resume = -1;
     if (auto it = ctx.area_resume_pose_index.find(idx); it != ctx.area_resume_pose_index.end())
       resume = static_cast<int64_t>(it->second);
 
-    out << "area " << idx << ' ' << pose_count << ' ' << resume << " completed";
+    out << "area " << idx << ' ' << pose_count << ' ' << fingerprint << ' ' << resume
+        << " completed";
     if (auto it = ctx.area_completed_swaths.find(idx); it != ctx.area_completed_swaths.end())
       for (std::size_t s : it->second)
         out << ' ' << s;
@@ -138,13 +147,18 @@ bool loadCoverageResumeState(BTContext& ctx)
     {
       uint32_t idx;
       std::size_t pose_count;
+      uint64_t fingerprint;
       int64_t resume;
       std::string completed_tag;
-      if (!(ls >> idx >> pose_count >> resume >> completed_tag))
+      if (!(ls >> idx >> pose_count >> fingerprint >> resume >> completed_tag))
       {
         continue;  // malformed row — skip, don't abort the whole load
       }
       ctx.area_path_pose_count[idx] = pose_count;
+      if (fingerprint != 0)
+      {
+        ctx.area_plan_fingerprint[idx] = fingerprint;
+      }
       if (resume >= 0)
       {
         ctx.area_resume_pose_index[idx] = static_cast<std::size_t>(resume);

@@ -17,9 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <fstream>
-#include <iomanip>
 #include <limits>
 #include <optional>
 #include <sstream>
@@ -27,6 +25,8 @@
 #include <utility>
 #include <vector>
 
+#include "mowgli_interfaces/motion_yaw_fit.hpp"
+#include "mowgli_interfaces/robot_yaml_scalar.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 
 namespace mowgli_behavior
@@ -35,65 +35,11 @@ namespace mowgli_behavior
 namespace
 {
 
-// -------------------------------------------------------------------------
-// Total-least-squares line fit through a chronological sequence of
-// (x, y) GPS samples. Returns (yaw, sigma_yaw): yaw is the chronological
-// motion direction (NOT yet flipped to robot heading), sigma_yaw is the
-// 1σ angular uncertainty derived from perpendicular residuals.
-// -------------------------------------------------------------------------
-std::pair<double, double> fit_motion_yaw(const std::vector<std::pair<double, double>>& s)
-{
-  const size_t n = s.size();
-  if (n < 2u) {
-    return {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
-  }
-
-  double xsum = 0.0;
-  double ysum = 0.0;
-  for (const auto& p : s) { xsum += p.first; ysum += p.second; }
-  const double xbar = xsum / static_cast<double>(n);
-  const double ybar = ysum / static_cast<double>(n);
-
-  double Sxx = 0.0;
-  double Syy = 0.0;
-  double Sxy = 0.0;
-  for (const auto& p : s) {
-    const double dx = p.first - xbar;
-    const double dy = p.second - ybar;
-    Sxx += dx * dx;
-    Syy += dy * dy;
-    Sxy += dx * dy;
-  }
-
-  // Principal axis of the centred 2×2 covariance: yaw = ½·atan2(2·Sxy, Sxx−Syy).
-  // This gives the line direction up to a ±π ambiguity.
-  double yaw = 0.5 * std::atan2(2.0 * Sxy, Sxx - Syy);
-
-  // Resolve sign by chronological order: motion is from samples.front to
-  // samples.back, dot with the current yaw vector must be positive.
-  const double dx_chron = s.back().first  - s.front().first;
-  const double dy_chron = s.back().second - s.front().second;
-  if (dx_chron * std::cos(yaw) + dy_chron * std::sin(yaw) < 0.0) {
-    yaw += M_PI;
-  }
-  while (yaw >  M_PI) yaw -= 2.0 * M_PI;
-  while (yaw < -M_PI) yaw += 2.0 * M_PI;
-
-  // Perpendicular residuals → σ_yaw ≈ rms_perp / baseline.
-  const double cy = std::cos(yaw);
-  const double sy = std::sin(yaw);
-  double sum_perp2 = 0.0;
-  for (const auto& p : s) {
-    const double dx = p.first - xbar;
-    const double dy = p.second - ybar;
-    const double perp = -dx * sy + dy * cy;
-    sum_perp2 += perp * perp;
-  }
-  const double rms_perp = std::sqrt(sum_perp2 / static_cast<double>(n));
-  const double baseline = std::hypot(dx_chron, dy_chron);
-  const double sigma_yaw = (baseline > 0.01) ? (rms_perp / baseline) : 0.1;
-  return {yaw, sigma_yaw};
-}
+// fit_motion_yaw moved to mowgli_interfaces::motion_yaw_fit::FitMotionYaw
+// (task #47) — mowgli_localization/calibrate_imu_yaw_node.cpp's dock-yaw
+// reverse maneuver now reuses the exact same total-least-squares fit
+// instead of an endpoint-only atan2.
+using mowgli_interfaces::motion_yaw_fit::FitMotionYaw;
 
 // -------------------------------------------------------------------------
 // Angular EMA: blend two yaws by working in the (cos, sin) plane to avoid
@@ -108,47 +54,12 @@ double ema_yaw(double current, double measured, double weight)
 }
 
 // -------------------------------------------------------------------------
-// In-place YAML splice for a single scalar key. Mirrors the helper in
-// mowgli_map::area_manager.cpp — keeps comments + structure intact (yaml-cpp
-// would strip them).
+// dock_pose_yaw splice/persist moved to mowgli_interfaces::robot_yaml_scalar
+// (task #42) — was a byte-for-byte-identical copy of the same splice logic
+// duplicated across this file, mowgli_localization/calibrate_imu_yaw_node.cpp,
+// and mowgli_map/area_manager.cpp.
 // -------------------------------------------------------------------------
 constexpr const char* kRuntimeRobotYaml = "/ros2_ws/config/mowgli_robot.yaml";
-
-bool splice_yaml_scalar(std::string& content, const std::string& key, const std::string& new_value)
-{
-  size_t scan = 0;
-  while (scan < content.size()) {
-    const size_t line_start = scan;
-    size_t cursor = line_start;
-    while (cursor < content.size() && (content[cursor] == ' ' || content[cursor] == '\t')) {
-      ++cursor;
-    }
-    if (cursor > line_start && cursor + key.size() < content.size() &&
-        content.compare(cursor, key.size(), key) == 0 && content[cursor + key.size()] == ':')
-    {
-      cursor += key.size() + 1;
-      while (cursor < content.size() && (content[cursor] == ' ' || content[cursor] == '\t')) {
-        ++cursor;
-      }
-      const size_t val_start = cursor;
-      while (cursor < content.size()) {
-        const char c = content[cursor];
-        const bool is_num =
-            (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E';
-        if (!is_num) break;
-        ++cursor;
-      }
-      if (cursor > val_start) {
-        content.replace(val_start, cursor - val_start, new_value);
-        return true;
-      }
-    }
-    const size_t nl = content.find('\n', line_start);
-    if (nl == std::string::npos) break;
-    scan = nl + 1;
-  }
-  return false;
-}
 
 // Read the current `dock_pose_yaw` from the runtime YAML so we can EMA-blend
 // against it. Returns nullopt if the key isn't found or the file can't be
@@ -187,31 +98,11 @@ std::optional<double> read_dock_pose_yaw_from_yaml()
   return std::nullopt;
 }
 
-// Atomic-rename writeback of a single yaml scalar. Mirrors the safety
-// pattern of mowgli_map's update_dock_pose_in_robot_yaml.
+// Atomic-rename writeback of dock_pose_yaw specifically.
 bool persist_dock_pose_yaw(double yaw_rad)
 {
-  std::ifstream in(kRuntimeRobotYaml);
-  if (!in.good()) return false;
-  std::stringstream buf;
-  buf << in.rdbuf();
-  std::string content = buf.str();
-  in.close();
-
-  std::ostringstream s;
-  s << std::fixed << std::setprecision(6) << yaw_rad;
-  if (!splice_yaml_scalar(content, "dock_pose_yaw", s.str())) {
-    return false;
-  }
-
-  const std::string tmp_path = std::string(kRuntimeRobotYaml) + ".tmp";
-  {
-    std::ofstream out(tmp_path, std::ios::trunc);
-    if (!out.good()) return false;
-    out << content;
-    if (!out.good()) return false;
-  }
-  return std::rename(tmp_path.c_str(), kRuntimeRobotYaml) == 0;
+  return mowgli_interfaces::robot_yaml_scalar::PersistScalar(
+      kRuntimeRobotYaml, "dock_pose_yaw", yaw_rad);
 }
 
 // Fill the covariance block for a yaw-plus-xy seed: tight trust on the
@@ -336,7 +227,7 @@ BT::NodeStatus CalibrateHeadingFromUndock::tick()
   double sigma_yaw = 0.0;
   const char* method = "endpoint";
   if (have_line_fit_samples) {
-    const auto [motion_yaw, motion_sigma] = fit_motion_yaw(samples);
+    const auto [motion_yaw, motion_sigma] = FitMotionYaw(samples);
     // Robot heading points opposite the motion (BackUp reverses).
     yaw = motion_yaw + M_PI;
     while (yaw >  M_PI) yaw -= 2.0 * M_PI;

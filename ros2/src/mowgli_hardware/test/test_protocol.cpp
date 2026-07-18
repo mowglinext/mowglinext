@@ -96,6 +96,30 @@ TEST(ProtocolSizes, SetDrivePidPacketSize)
   EXPECT_EQ(sizeof(LlSetDrivePid), 27u);
 }
 
+TEST(ProtocolSizes, SetYawPidPacketSize)
+{
+  // type(1) + yaw_kp/yaw_ki/trim_limit_mps(3*4=12) + enabled(1) +
+  // gyro_sign(1) + crc(2) = 17. Option C (task #33/#34) — verified against
+  // Firmware-2's #33 report and the firmware's own pkt_set_yaw_pid_t asserts.
+  EXPECT_EQ(sizeof(LlSetYawPid), 17u);
+}
+
+TEST(ProtocolSizes, SetKinematicsPacketSize)
+{
+  // type(1) + max_mps(4) + wheel_base(4) + crc(2) = 11. Protocol v4 (runtime
+  // MaxMps/WheelBase migration) — must match the firmware pkt_set_kinematics_t
+  // asserts in mowgli_protocol.h.
+  EXPECT_EQ(sizeof(LlSetKinematics), 11u);
+}
+
+TEST(ProtocolSizes, SetSafetyLimitsPacketSize)
+{
+  // type(1) + max_charge_voltage/current(2*4=8) + 5*uint16 timeouts(10) +
+  // crc(2) = 21. Protocol v5 (runtime charge/emergency-limit migration) — must
+  // match the firmware pkt_set_safety_limits_t asserts in mowgli_protocol.h.
+  EXPECT_EQ(sizeof(LlSetSafetyLimits), 21u);
+}
+
 TEST(ProtocolSizes, ConfigPacketSizes)
 {
   // Firmware version handshake / runtime config. Req carries flags; Rsp

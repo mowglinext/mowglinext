@@ -218,7 +218,7 @@ def generate_launch_description() -> LaunchDescription:
             # whatever appears in the world file.
             {
                 "area_names": ["main_mow"],
-                "area_polygons": ["-7.0,-3.0;2.0,-3.0;2.0,3.0;-7.0,3.0"],
+                "area_polygons": ["-4.5,-3.0;4.5,-3.0;4.5,3.0;-4.5,3.0"],
                 "area_is_navigation": [False],
                 "area_obstacles": [""],
             },
@@ -398,10 +398,11 @@ def generate_launch_description() -> LaunchDescription:
                 "output_topic": "/wheel_odom",
                 "slip_period_s": 30.0,
                 "slip_duration_s": 1.0,
-                # Bias temporarily zeroed for fusion_graph debugging —
-                # we want to isolate algorithm behaviour from sensor
-                # noise. Reset to 0.05 once the baseline is clean.
-                "slip_vx_bias": 0.0,
+                # Enabled for actuation-fidelity testing (operator wants slip):
+                # periodic wheel-slip events over-report /wheel_odom vx, so the
+                # encoder-vs-GPS mismatch the anti-wheelspin FTC guard reacts to
+                # actually occurs in sim. Set 0.0 for a slip-free A/B baseline.
+                "slip_vx_bias": 0.05,
             }
         ],
     )
@@ -456,6 +457,47 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ------------------------------------------------------------------
+    # Sim actuation model — inserts the per-wheel firmware motor model
+    # (firmware_wheel_model.hpp: inverse kinematics, two per-wheel PIs,
+    # per-wheel PWM stiction, forward kinematics) between the nav command
+    # (/cmd_vel) and the Webots wheels (/cmd_vel_wheels), so the sim
+    # reproduces the per-wheel PWM stiction the ideal diff_drive cannot.
+    # Set deadband_enabled:=false for an ideal-actuation baseline.
+    # Wheel-model gains mirror firmware/stm32/ros_usbnode/{include/board.h,
+    # src/ros/ros_custom/cpp_main.cpp} and MUST stay in lockstep with
+    # mowgli_simulation/kinematic_drive.py's identical Python copy.
+    #
+    # 2026-07-17 Option C (task #34): this used to ALSO insert a host-side
+    # angular-rate PI (Option B, task #24) ahead of the per-wheel model —
+    # that stage is removed. wz now passes straight through, matching
+    # hardware_bridge's new behaviour (the yaw-rate loop moved into
+    # firmware, task #33).
+    # ------------------------------------------------------------------
+    sim_actuation_node = Node(
+        package="mowgli_simulation",
+        executable="sim_actuation_node",
+        name="sim_actuation",
+        output="screen",
+        parameters=[
+            {
+                "use_sim_time": True,
+                "deadband_enabled": True,
+                "wheel_separation": 0.325,
+                "firmware_max_mps": 0.5,
+                "firmware_pwm_per_mps": 300.0,
+                "firmware_pwm_max": 255.0,
+                "firmware_deadband_pwm_static": 40.0,
+                "firmware_deadband_pwm_kinetic": 30.0,
+                "firmware_pi_kp_pwm_per_mps": 30.0,
+                "firmware_pi_ki_pwm_per_mps_s": 5000.0,
+                "firmware_pi_int_max_pwm": 100.0,
+                "firmware_pi_hold_thresh_mps": 0.02,
+                "min_linear_vel": 0.05,
+            }
+        ],
+    )
+
+    # ------------------------------------------------------------------
     # LaunchDescription
     # ------------------------------------------------------------------
     return LaunchDescription(
@@ -476,6 +518,7 @@ def generate_launch_description() -> LaunchDescription:
             twist_mux_node,
             sim_wheel_slip_node,
             sim_imu_noise_node,
+            sim_actuation_node,
             behavior_tree_node,
             map_server_node,
             obstacle_tracker_node,

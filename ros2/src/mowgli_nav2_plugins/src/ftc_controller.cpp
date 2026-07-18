@@ -28,6 +28,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
+#include "mowgli_nav2_plugins/ftc_stall.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 
 namespace mowgli_nav2_plugins
@@ -167,6 +168,9 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.speed_slow = declare_double("speed_slow", 0.2);
   config_.speed_angular = declare_double("speed_angular", 20.0);
   config_.acceleration = declare_double("acceleration", 1.0);
+  config_.stall_speed_ratio = declare_double("stall_speed_ratio", 0.35);
+  config_.stall_grace_s = declare_double("stall_grace_s", 0.6);
+  config_.stall_crawl_speed = declare_double("stall_crawl_speed", 0.08);
 
   // PID longitudinal
   config_.kp_lon = declare_double("kp_lon", 1.0);
@@ -282,6 +286,18 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     else if (key == "acceleration")
     {
       config_.acceleration = p.as_double();
+    }
+    else if (key == "stall_speed_ratio")
+    {
+      config_.stall_speed_ratio = p.as_double();
+    }
+    else if (key == "stall_grace_s")
+    {
+      config_.stall_grace_s = p.as_double();
+    }
+    else if (key == "stall_crawl_speed")
+    {
+      config_.stall_crawl_speed = p.as_double();
     }
     else if (key == "kp_lon")
     {
@@ -598,7 +614,7 @@ void FTCController::setSpeedLimit(const double& speed_limit, const bool& percent
 
 geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     const geometry_msgs::msg::PoseStamped& /*pose*/,
-    const geometry_msgs::msg::Twist& /*velocity*/,
+    const geometry_msgs::msg::Twist& velocity,
     nav2_core::GoalChecker* goal_checker)
 {
   geometry_msgs::msg::TwistStamped cmd_vel;
@@ -620,6 +636,10 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   //     and silently drops it — leaving the strip un-driven for the
   //     entire goal_timeout window.
   const double safe_dt = std::clamp(dt, 0.01, 0.5);
+
+  // Cache the measured forward speed (odom feedback) for update_control_point's
+  // anti-wheelspin stall detection.
+  last_measured_fwd_speed_ = velocity.linear.x;
 
   if (is_crashed_)
   {
@@ -959,8 +979,27 @@ void FTCController::update_control_point(double dt)
 
       // Compute target speed based on how much straight path lies ahead.
       const double straight_dist = distanceLookahead();
-      const double target_speed =
+      double target_speed =
           (straight_dist >= config_.speed_fast_threshold) ? config_.speed_fast : config_.speed_slow;
+
+      // Anti-wheelspin traction control. If the carrot is already commanding a
+      // meaningful forward speed but the robot's ACTUAL forward speed (odom
+      // feedback) stays well below it, the wheels are slipping or the chassis is
+      // blocked. Rather than ramp to speed_fast and floor it — which spins the
+      // wheels and digs holes in soft turf (operator report) — ease the target
+      // down to a slow crawl until traction returns, so the robot pushes gently
+      // instead of accelerating hard into the obstruction.
+      // See ftc_stall.hpp for the pure decision function + unit tests
+      // (test_ftc_stall.cpp).
+      const FtcStallCfg stall_cfg{config_.stall_speed_ratio,
+                                  config_.stall_grace_s,
+                                  config_.stall_crawl_speed};
+      target_speed = StallDecision(target_speed,
+                                   current_movement_speed_,
+                                   last_measured_fwd_speed_,
+                                   dt,
+                                   stall_cfg,
+                                   stall_time_);
 
       // Smooth speed ramp (acceleration / deceleration).
       if (target_speed > current_movement_speed_)
@@ -1578,6 +1617,27 @@ void FTCController::updateLateralDeviation(double dt)
     }
     else
     {
+      // Not avoiding, but possibly WAITING (both-sides-blocked / needs-more-
+      // than-max, set by waitOrThrowForObstacle below). Same window-edge
+      // flicker risk as the is_avoiding_ branch above — the observation_
+      // persistence:0 costmap can transiently miss the obstacle cell for one
+      // tick. Require a sustained clear (obstacle_clear_hold_s, same field as
+      // the avoidance case) before releasing the wait; otherwise a single-
+      // tick flicker falls through to the obstacle_waiting_ clear below and
+      // resets obstacle_wait_start_, deferring the abort indefinitely.
+      if (obstacle_waiting_)
+      {
+        if (!avoidance_clear_start_.has_value())
+        {
+          avoidance_clear_start_ = clock_->now();
+        }
+        const double clear_for = (clock_->now() - avoidance_clear_start_.value()).seconds();
+        if (clear_for < config_.obstacle_clear_hold_s)
+        {
+          return;  // still holding zero velocity via obstacle_waiting_
+        }
+        avoidance_clear_start_.reset();
+      }
       // Not avoiding and the path is clear: nominal line tracking.
       target_lateral_deviation_ = 0.0;
     }
@@ -1627,8 +1687,17 @@ void FTCController::updateLateralDeviation(double dt)
       // nonzero here (the both-sides-blocked path above either waits and
       // returns or throws, so we never reach this with target == 0).
       avoid_sign_ = (target_lateral_deviation_ >= 0.0) ? 1.0 : -1.0;
-      obstacle_wait_start_.reset();
-      obstacle_waiting_ = false;
+      // Do NOT clear obstacle_wait_start_/obstacle_waiting_ here. Finding a
+      // candidate side only means we skip the both-sides-blocked wait call
+      // below (line ~1659 above) — growDeviationUntilClear (below) can still
+      // reject this same candidate for exceeding max_lateral_deviation and
+      // re-enter waitOrThrowForObstacle. Clearing the clock here first would
+      // hand that second call a fresh 5s window every time chooseDeviationSide
+      // flip-flops between "found a side" and "both sides blocked" near a
+      // marginal gap — silently deferring the abort indefinitely (field:
+      // observed ~40s stall, cmd_vel pinned at zero, vs. the intended 5s cap).
+      // The wait state is cleared once, below, only after a candidate has
+      // genuinely passed the max_lateral_deviation check.
       RCLCPP_INFO(logger_,
                   "FTCController: entering AVOIDANCE (target_dev=%.2fm at idx=%d)",
                   target_lateral_deviation_,

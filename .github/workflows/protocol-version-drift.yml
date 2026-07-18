@@ -1,0 +1,43 @@
+name: Protocol Version Drift
+
+on:
+  push:
+    branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
+    paths:
+      - 'firmware/stm32/ros_usbnode/include/mowgli_protocol.h'
+      - 'ros2/src/mowgli_hardware/include/mowgli_hardware/ll_datatypes.hpp'
+      - 'firmware/scripts/protocol_version_guard.py'
+      - 'firmware/scripts/protocol_baseline.json'
+      - '.github/workflows/protocol-version-drift.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'firmware/stm32/ros_usbnode/include/mowgli_protocol.h'
+      - 'ros2/src/mowgli_hardware/include/mowgli_hardware/ll_datatypes.hpp'
+      - 'firmware/scripts/protocol_version_guard.py'
+      - 'firmware/scripts/protocol_baseline.json'
+      - '.github/workflows/protocol-version-drift.yml'
+
+concurrency:
+  group: protocol-version-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── Protocol Version Drift Gate ──────────────────────────────────────────────
+  # The COBS wire between the STM32 firmware and the ROS 2 host is versioned by
+  # MOWGLI_PROTOCOL_VERSION (mowgli_protocol.h), mirrored by the host as
+  # kMowgliProtocolVersion (ll_datatypes.hpp); PreFlightCheck refuses to run when
+  # they differ. If a pkt_*_t struct or PKT_ID_* id changes but the version is not
+  # bumped, an old host silently mis-parses a new firmware's packets (offsets shift
+  # byte-for-byte past the divergence). This gate fingerprints the wire-defining
+  # region and FAILS if it changed without a version bump, or if firmware/host
+  # versions fell out of lockstep. Pure Python, runs in seconds — no toolchain.
+  protocol-version-drift:
+    name: Protocol Version Drift (COBS wire vs MOWGLI_PROTOCOL_VERSION)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check protocol version vs wire fingerprint
+        run: python3 firmware/scripts/protocol_version_guard.py --check

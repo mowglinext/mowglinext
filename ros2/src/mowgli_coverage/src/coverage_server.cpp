@@ -31,21 +31,40 @@ nav2_util::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::S
 {
   RCLCPP_INFO(get_logger(), "Configuring %s", get_name());
 
-  robot_width_ = declare_parameter<double>("robot_width", 0.40);
-  operation_width_ = declare_parameter<double>("operation_width", 0.18);
-  default_headland_width_ = declare_parameter<double>("default_headland_width", 0.20);
-  num_headland_passes_ = declare_parameter<int>("num_headland_passes", 0);
+  // on_configure may run AGAIN after on_cleanup (a lifecycle RESET→STARTUP, or a
+  // bond-loss recovery under CPU load). declare_parameter THROWS if the parameter
+  // is already declared, which previously aborted the second configure with
+  // "parameter 'robot_width' has already been declared" and left coverage_server
+  // stuck unconfigured — taking the whole Nav2 bringup down with it. Declare each
+  // only if absent, then read the live value, so configure is idempotent.
+  auto declare_double = [this](const std::string& name, double def)
+  {
+    if (!has_parameter(name))
+      declare_parameter<double>(name, def);
+    return get_parameter(name).as_double();
+  };
+  auto declare_int = [this](const std::string& name, int def)
+  {
+    if (!has_parameter(name))
+      declare_parameter<int>(name, def);
+    return static_cast<int>(get_parameter(name).as_int());
+  };
+
+  robot_width_ = declare_double("robot_width", 0.40);
+  operation_width_ = declare_double("operation_width", 0.18);
+  default_headland_width_ = declare_double("default_headland_width", 0.20);
+  num_headland_passes_ = declare_int("num_headland_passes", 0);
   // Declared here, READ LIVE in planCoverage — both are field-tuned between
   // plans with `ros2 param set` (no node restart).
-  declare_parameter<double>("chassis_safety_inset", 0.0);
-  declare_parameter<double>("min_swath_length", 0.15);
+  declare_double("chassis_safety_inset", 0.0);
+  declare_double("min_swath_length", 0.15);
   // Perimeter/headland travel winding (#335): 0 = planner default (F2C natural),
   // 1 = clockwise, 2 = counter-clockwise. Read live in planCoverage.
-  declare_parameter<int>("ring_direction", 0);
+  declare_int("ring_direction", 0);
   // Hard floor on every turn-around / fillet arc in the continuous path: the
   // robot's minimum MPPI-trackable turning radius (mowgli_robot.yaml). Read live
   // in planCoverage so it can be field-tuned between plans.
-  declare_parameter<double>("min_turning_radius", 0.15);
+  declare_double("min_turning_radius", 0.15);
   // Nominal turn-around arc radius for the continuous-path connectors. A forward
   // 180° swath-to-swath reversal at op_width spacing (~0.18 m) cannot avoid a
   // loop (a clean U needs r ≤ op_width/2 ≈ 0.09 m, below the min_turning_radius
@@ -58,19 +77,18 @@ nav2_util::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::S
   // TUNING TRADE-OFF: smaller = compact turns but nearer the trackable floor
   // (a deadband diff-drive may track a 0.30 m arc more smoothly than a 0.18 m
   // one); raise toward 0.30 if tight turns induce hesitation. Read live.
-  declare_parameter<double>("connector_turn_radius", 0.18);
+  declare_double("connector_turn_radius", 0.18);
   // Extra buffer (m) grown around drawn map-obstacle polygons (holes) before
   // planning — keeps swaths/connectors off root zones the 2D LiDAR cannot see.
   // Injected at launch from mowgli_robot.yaml.obstacle_margin (GUI: Settings →
   // Obstacles); map_server applies the same key to its keepout mask so transit
   // and coverage keep the same distance. Read LIVE per plan.
-  declare_parameter<double>("obstacle_margin", 0.0);
+  declare_double("obstacle_margin", 0.0);
 
   // Action server result timeout. Keep this >= the BT client's per-plan wait
   // (PlanCoverageArea, 12 s): if the server expires the result first the
   // client's goal handle is invalidated underneath it. 15 s clears the client.
-  double action_server_result_timeout =
-      declare_parameter<double>("action_server_result_timeout", 15.0);
+  double action_server_result_timeout = declare_double("action_server_result_timeout", 15.0);
   rcl_action_server_options_t server_options = rcl_action_server_get_default_options();
   server_options.result_timeout.nanoseconds = RCL_S_TO_NS(action_server_result_timeout);
 

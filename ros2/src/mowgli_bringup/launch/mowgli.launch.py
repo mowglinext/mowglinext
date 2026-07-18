@@ -228,16 +228,21 @@ def generate_launch_description() -> LaunchDescription:
             {"lift_recovery_mode": bool(robot_params.get("lift_recovery_mode", False))},
             {"lift_blade_resume_delay_sec": float(robot_params.get(
                 "lift_blade_resume_delay_sec", 1.0))},
-            # Gyro angular-rate loop — now operator-tunable via the GUI config
-            # (was only in hardware_bridge.yaml / the node default). Set
-            # angular_rate_loop_enabled:false in mowgli_robot.yaml for plain wz
-            # passthrough (the firmware per-wheel velocity PID then owns wheel
-            # control) when the loop oscillates in yaw. Default keeps the prior
-            # behaviour (enabled) so sim / other configs are unchanged.
-            {"angular_rate_loop_enabled": bool(robot_params.get(
-                "angular_rate_loop_enabled", True))},
-            {"angular_rate_kp": float(robot_params.get("angular_rate_kp", 0.4))},
-            {"angular_rate_ki": float(robot_params.get("angular_rate_ki", 2.0))},
+            # 2026-07-17 Option C (task #34): the host-side gyro angular-rate
+            # loop (angular_rate_loop_enabled/_kp/_ki/_kff, Option B task #24)
+            # is REMOVED — the yaw-rate loop now runs in firmware (task #33),
+            # closing on the same gyro without the host's USB round-trip
+            # latency. hardware_bridge now sends wz straight through; these
+            # tune the firmware loop instead, pushed via PACKET_ID_LL_SET_YAW_PID
+            # (a separate packet from SET_DRIVE_PID — Firmware-2's #33 report).
+            # Defaults match the firmware's own power-on fallback.
+            {"yaw_kp": float(robot_params.get("yaw_kp", 0.12))},
+            {"yaw_ki": float(robot_params.get("yaw_ki", 0.40))},
+            {"yaw_trim_limit_mps": float(robot_params.get("yaw_trim_limit_mps", 0.15))},
+            {"yaw_loop_enabled": bool(robot_params.get("yaw_loop_enabled", True))},
+            # gyro_sign is the field sign-check remedy for the physical IMU
+            # mounting (UNVALIDATED default +1) — see send_yaw_pid().
+            {"yaw_gyro_sign": int(robot_params.get("yaw_gyro_sign", 1))},
         ],
         # The node publishes on ~/topic (e.g. /hardware_bridge/wheel_odom).
         # behavior_tree_node subscribes to /hardware_bridge/status etc.

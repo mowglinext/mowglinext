@@ -67,6 +67,29 @@ struct BTContext
 
   /// Mutex protecting fields written by subscriber callbacks and read by
   /// BT condition/action nodes.  Use std::lock_guard for RAII locking.
+  ///
+  /// Does NOT cover the coverage-tracking fields below (command state +
+  /// swath-completion model: target_area_index, attempted_areas,
+  /// area_attempt_count, area_last_coverage, area_completed_swaths,
+  /// area_swath_count, area_resume_pose_index, area_path_pose_count,
+  /// area_plan_fingerprint, completed_areas, coverage_all_complete). Those
+  /// are mutated ONLY from this node's own BT action-node callbacks
+  /// (FollowStrip, GetNextUnmowedArea, EndSession) and the deferred
+  /// ~/clear_coverage_resume handling in tickTree() — every callback of
+  /// behavior_tree_node shares its default MutuallyExclusive callback group,
+  /// so the tick thread and every service/timer callback are already
+  /// serialized against each other even under the MultiThreadedExecutor (see
+  /// behavior_tree_node.cpp's ~/clear_coverage_resume comment for the full
+  /// rationale). Locking context_mutex around them is therefore redundant —
+  /// and 2026-07-17 (task #15) was actively HARMFUL: GetNextUnmowedArea was
+  /// the one place still taking it inconsistently, which is what produced
+  /// the non-recursive-mutex deadlock documented at
+  /// GetNextUnmowedArea::processResponse (advanceAndProbe() re-locking from
+  /// inside an already-held lock). Do not add locking back here without
+  /// first re-deriving why the MutuallyExclusive guarantee no longer holds
+  /// (e.g. a future Reentrant-group conversion) — see the atomic-future-
+  /// proofing note on behavior_tree_node's clear_resume_requested_ for the
+  /// pattern to follow instead of a mutex if that ever happens.
   mutable std::mutex context_mutex;
 
   // -----------------------------------------------------------------------
@@ -144,6 +167,16 @@ struct BTContext
   /// Total pose count of the area's continuous full_path (the denominator for
   /// the resume-cursor coverage_percent). Set by FollowStrip at dispatch.
   std::map<uint32_t, std::size_t> area_path_pose_count;
+  /// Plan-GEOMETRY fingerprint of the area's freshly-planned drivable units
+  /// (hash of every unit's quantized pose positions + per-unit counts). This is
+  /// the resume-cursor STALENESS key: the pose COUNT alone is not sufficient
+  /// because the AUTO mow-angle tie-break (longest-edge, coverage_planning.cpp)
+  /// or the sub-path split can yield a geometrically DIFFERENT concatenation with
+  /// the SAME pose count — resuming a cursor against that different geometry would
+  /// re-enable the blade at the wrong location. On re-plan, FollowStrip discards
+  /// the persisted resume state when this fingerprint no longer matches. Set at
+  /// dispatch; persisted with the area row; cleared with the other resume maps.
+  std::map<uint32_t, uint64_t> area_plan_fingerprint;
   /// Areas whose every swath is completed-or-skipped this session. Skipped by
   /// GetNextUnmowedArea. Cleared by EndSession.
   std::set<uint32_t> completed_areas;

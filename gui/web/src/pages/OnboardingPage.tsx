@@ -1,16 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
     App,
     Button, Card, Col, Row, Steps, Typography, Select, Space, Alert,
-    InputNumber, Switch, Form, Divider, Tag, Result,
+    InputNumber, Switch, Form, Divider, Tag,
 } from "antd";
 import {
     RocketOutlined, SettingOutlined, GlobalOutlined,
     AimOutlined, ThunderboltOutlined, CheckCircleOutlined,
     ArrowLeftOutlined, ArrowRightOutlined, SaveOutlined,
-    EnvironmentOutlined, WifiOutlined,
+    EnvironmentOutlined, WifiOutlined, CheckOutlined,
 } from "@ant-design/icons";
 import { useThemeMode } from "../theme/ThemeContext.tsx";
 import { useIsMobile } from "../hooks/useIsMobile";
@@ -19,20 +18,23 @@ import { useApi } from "../hooks/useApi.ts";
 import { useGnssStatus } from "../hooks/useGnssStatus.ts";
 import { useCalibrationStatus } from "../hooks/useCalibrationStatus.ts";
 import { useImuYawCalibration } from "../hooks/useImuYawCalibration.ts";
+import { useFirmwareStatus } from "../hooks/useFirmwareStatus.ts";
 import { GnssStatusConstants } from "../types/ros.ts";
 import { CompassOutlined } from "@ant-design/icons";
 import { deriveGpsStatus, gnssReceiverLabel } from "../utils/gpsStatus.ts";
+import { ReadinessStep } from "../components/onboarding/ReadinessStep.tsx";
+import {
+    STEP_FIRMWARE, STEP_NTRIP, STEP_GPS, STEP_DATUM,
+    STEP_CALIBRATION, STEP_COMPLETE, STEP_COUNT,
+} from "../components/onboarding/steps.ts";
 import { RobotComponentEditor } from "../components/RobotComponentEditor.tsx";
 import { FlashBoardComponent } from "../components/FlashBoardComponent.tsx";
 import { MOWER_MODELS } from "../constants/mowerModels.ts";
 import {
-    restartRos2,
-    restartGui,
     restartGps,
     GPS_RESTART_KEYS,
 } from "../utils/containers.ts";
 import { useContainerRestart } from "../hooks/useContainerRestart.ts";
-import { httpBase } from "../utils/apiHost.ts";
 import {
     GNSS_BAUD_OPTIONS,
     GNSS_ACTION_SETTINGS_KEYS,
@@ -171,7 +173,7 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                 {t("onboardingPage.robotModelIntro")}
             </Paragraph>
 
-            <Row gutter={[12, 12]}>
+            <Row gutter={[12, 12]} role="radiogroup" aria-label={t("onboardingPage.robotModelTitle")}>
                 {MOWER_MODELS.map((model) => {
                     const isSelected = selectedModel === model.value;
                     return (
@@ -179,7 +181,17 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                             <Card
                                 hoverable
                                 size="small"
+                                role="radio"
+                                tabIndex={0}
+                                aria-checked={isSelected}
+                                aria-label={t(model.label)}
                                 onClick={() => handleModelSelect(model.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                        e.preventDefault();
+                                        handleModelSelect(model.value);
+                                    }
+                                }}
                                 style={{
                                     border: isSelected
                                         ? `2px solid ${colors.primary}`
@@ -191,6 +203,8 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                             >
                                 <Space direction="vertical" size={4} style={{ width: "100%" }}>
                                     <Space>
+                                        {/* Checkmark is a non-color-only selected affordance. */}
+                                        {isSelected && <CheckOutlined style={{ color: colors.primary }} aria-hidden />}
                                         <Text strong>{t(model.label)}</Text>
                                         {(model as any).tag && (
                                             <Tag color="green">{t((model as any).tag)}</Tag>
@@ -278,14 +292,19 @@ const NtripStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => {
 type GpsStepProps = RobotModelStepProps & {
     gpsRestarting?: boolean;
     onPersistGnssSettings: (settings: Record<string, any>) => Promise<boolean>;
+    onJumpToNtrip: () => void;
 };
 
-const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPersistGnssSettings }) => {
+const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPersistGnssSettings, onJumpToNtrip }) => {
     const { t } = useTranslation();
     const [expertMode, setExpertMode] = useState(false);
     const gnssStatus = useGnssStatus();
     const gpsStatus = deriveGpsStatus(gnssStatus);
     const detectedReceiver = gnssReceiverLabel(gnssStatus);
+    // A typo'd NTRIP credential otherwise reads as "GPS FIX" forever with no
+    // explanation — surface whether RTCM corrections are actually flowing.
+    const correctionsActive =
+        gnssStatus?.correction_stream_status === GnssStatusConstants.CORRECTION_STREAM_STATUS_ACTIVE;
     const selectedSignalProfile = normalizeGnssSignalProfile(values.gnss_signal_profile);
     const selectedExecutionBaud = (() => {
         const value = normalizeGnssString(values.gnss_execution_baud).toLowerCase();
@@ -337,6 +356,20 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                 showIcon
                 message={t("onboardingPage.detectedReceiver", { receiver: detectedReceiver })}
                 description={t("onboardingPage.liveGnssStatus", { status: gpsStatus.label })}
+                style={{ marginBottom: 12 }}
+            />
+
+            <Alert
+                type={correctionsActive ? "success" : "warning"}
+                showIcon
+                message={correctionsActive
+                    ? t("onboardingPage.gpsCorrectionsActive")
+                    : t("onboardingPage.gpsCorrectionsInactive")}
+                action={correctionsActive ? undefined : (
+                    <Button type="link" size="small" onClick={onJumpToNtrip}>
+                        {t("onboardingPage.readinessCtaFixNtrip")}
+                    </Button>
+                )}
                 style={{ marginBottom: 12 }}
             />
 
@@ -543,9 +576,9 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
 // position" button stays gated on GnssStatus.FIX_TYPE_RTK_FIXED — the step
 // inherently waits for the receiver to settle before it will let you anchor.
 
-type DatumStepProps = RobotModelStepProps & { gpsRestarting?: boolean };
+type DatumStepProps = RobotModelStepProps & { gpsRestarting?: boolean; requiredError?: boolean };
 
-const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting }) => {
+const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting, requiredError }) => {
     const { t } = useTranslation();
     const guiApi = useApi();
     const { notification } = App.useApp();
@@ -595,7 +628,11 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting }
                 <Form layout="vertical">
                     <Row gutter={16}>
                         <Col xs={12}>
-                            <Form.Item label={t("onboardingPage.latitudeLabel")}>
+                            <Form.Item
+                                label={t("onboardingPage.latitudeLabel")}
+                                validateStatus={requiredError ? "error" : undefined}
+                                help={requiredError ? t("onboardingPage.datumRequiredHelp") : undefined}
+                            >
                                 <InputNumber
                                     value={values.datum_lat ?? 0}
                                     onChange={(v) => onChange("datum_lat", v)}
@@ -605,7 +642,10 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting }
                             </Form.Item>
                         </Col>
                         <Col xs={12}>
-                            <Form.Item label={t("onboardingPage.longitudeLabel")}>
+                            <Form.Item
+                                label={t("onboardingPage.longitudeLabel")}
+                                validateStatus={requiredError ? "error" : undefined}
+                            >
                                 <InputNumber
                                     value={values.datum_lon ?? 0}
                                     onChange={(v) => onChange("datum_lon", v)}
@@ -849,6 +889,7 @@ const FirmwareStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
     const { t } = useTranslation();
     const { colors } = useThemeMode();
     const [showFlash, setShowFlash] = useState(false);
+    const { firmwareCompatible, firmwareVersion } = useFirmwareStatus();
 
     if (showFlash) {
         return (
@@ -857,6 +898,17 @@ const FirmwareStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
             </Card>
         );
     }
+
+    // Live handshake readback so the operator learns compatibility here rather
+    // than six steps later on the dashboard. `null` = board hasn't reported yet.
+    const firmwareAlertType: "success" | "error" | "info" =
+        firmwareCompatible === true ? "success" : firmwareCompatible === false ? "error" : "info";
+    const firmwareAlertMessage =
+        firmwareCompatible === true
+            ? t("onboardingPage.firmwareCompatibleLive", { version: firmwareVersion || "?" })
+            : firmwareCompatible === false
+                ? t("onboardingPage.firmwareIncompatibleLive", { version: firmwareVersion || "?" })
+                : t("onboardingPage.firmwareWaitingHandshake");
 
     return (
         <div style={{ maxWidth: 760, margin: "0 auto", textAlign: "center", padding: "24px 0" }}>
@@ -873,12 +925,21 @@ const FirmwareStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
                 {t("onboardingPage.firmwareIntro")}
             </Paragraph>
 
+            <Alert
+                type={firmwareAlertType}
+                showIcon
+                message={firmwareAlertMessage}
+                style={{ marginBottom: 24, textAlign: "left" }}
+            />
+
             <Space size="middle">
                 <Button type="primary" size="large" onClick={() => setShowFlash(true)}>
                     {t("onboardingPage.flashFirmware")}
                 </Button>
                 <Button size="large" onClick={onNext}>
-                    {t("onboardingPage.skipAlreadyFlashed")}
+                    {firmwareCompatible === true
+                        ? t("onboardingPage.skipAlreadyFlashed")
+                        : t("onboardingPage.skipWithoutVerifying")}
                 </Button>
             </Space>
 
@@ -893,122 +954,14 @@ const FirmwareStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
     );
 };
 
-// ── Step 5: Complete ────────────────────────────────────────────────────
-
-const CompleteStep: React.FC = () => {
-    const { t } = useTranslation();
-    const { colors } = useThemeMode();
-    const guiApi = useApi();
-    const navigate = useNavigate();
-    const [restarting, setRestarting] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
-    // Calibration completeness check — see docs/ONBOARDING_IMPROVEMENTS.md
-    // gap analysis. The wizard never gates on these, so a brand-new robot
-    // can finish "configured" with no dock pose, no IMU mounting calibration
-    // and no magnetometer. Here we surface what is actually missing and
-    // deep-link the operator to the Diagnostics page where they can run
-    // each calibration without restarting the wizard.
-    const { status: calibrationStatus } = useCalibrationStatus();
-    const missingCalibrations: string[] = [];
-    if (calibrationStatus) {
-        if (!calibrationStatus.dock?.present) missingCalibrations.push(t("onboardingPage.missingDockPose"));
-        if (!calibrationStatus.imu?.present) missingCalibrations.push(t("onboardingPage.missingImuBias"));
-        // Magnetometer is optional — only warn when use_magnetometer is on
-        // (no good signal client-side yet, so we just don't flag mag here).
-    }
-
-    useEffect(() => {
-        // Mark onboarding as completed and restart ROS2 + GUI containers
-        (async () => {
-            setRestarting(true);
-            try {
-                // Mark onboarding done in DB so we don't redirect again
-                await fetch(`${httpBase()}/api/settings/status`, { method: 'POST' });
-
-                // Restart ROS2 container first (picks up new mowgli_robot.yaml)
-                await restartRos2(guiApi);
-                // Then restart GUI container
-                await restartGui(guiApi);
-            } catch (e: any) {
-                setError(e.message);
-            } finally {
-                setRestarting(false);
-            }
-        })();
-    }, []);
-
-    if (restarting) {
-        return (
-            <Result
-                icon={<RocketOutlined style={{ color: colors.primary }} spin />}
-                title={t("onboardingPage.applyingConfigTitle")}
-                subTitle={t("onboardingPage.applyingConfigSubtitle")}
-            />
-        );
-    }
-
-    return (
-        <Result
-            icon={<CheckCircleOutlined style={{ color: colors.primary }} />}
-            title={t("onboardingPage.allSetTitle")}
-            subTitle={t("onboardingPage.allSetSubtitle")}
-            extra={[
-                <Button
-                    key="map"
-                    type="primary"
-                    size="large"
-                    icon={<EnvironmentOutlined />}
-                    onClick={() => navigate("/map")}
-                >
-                    {t("onboardingPage.drawMowingArea")}
-                </Button>,
-                <Button
-                    key="dashboard"
-                    size="large"
-                    onClick={() => navigate("/mowglinext")}
-                >
-                    {t("onboardingPage.goToDashboard")}
-                </Button>,
-            ]}
-        >
-            {missingCalibrations.length > 0 && (
-                <Alert
-                    type="warning"
-                    showIcon
-                    message={t("onboardingPage.calibPendingTitle")}
-                    description={
-                        <>
-                            <Text>
-                                {t("onboardingPage.calibPendingPrefix")}{" "}
-                                <Text strong>{missingCalibrations.join(t("onboardingPage.calibPendingJoin"))}</Text>{" "}
-                                {t("onboardingPage.calibPendingSuffix", { count: missingCalibrations.length })}
-                            </Text>
-                            <br />
-                            <Button
-                                type="link"
-                                style={{ paddingLeft: 0 }}
-                                onClick={() => navigate("/diagnostics")}
-                            >
-                                {t("onboardingPage.openDiagnosticsRunCalibrations")}
-                            </Button>
-                        </>
-                    }
-                    style={{ maxWidth: 540, margin: "0 auto 12px", textAlign: "left" }}
-                />
-            )}
-            {error && (
-                <Alert
-                    type="warning"
-                    showIcon
-                    message={t("onboardingPage.restartFailedTitle")}
-                    description={`${error}. ${t("onboardingPage.restartFailedDesc")}`}
-                    style={{ maxWidth: 500, margin: "0 auto" }}
-                />
-            )}
-        </Result>
-    );
-};
+// ── Step 8: Complete ────────────────────────────────────────────────────
+//
+// The final "Complete" step is now the readiness gate — see
+// components/onboarding/ReadinessStep.tsx. It runs a live checklist, blocks
+// "Finish & apply" until every REQUIRED check passes (with an explicit
+// "Finish anyway" escape hatch), and only THEN commits onboarding
+// (POST settings/status → restartRos2 → restartGui). Committing no longer
+// fires from a mount effect.
 
 // ── Main Setup Wizard ───────────────────────────────────────────────────
 
@@ -1060,6 +1013,7 @@ const STEP_TITLES = [
 const OnboardingWizard: React.FC = () => {
     const { t } = useTranslation();
     const { colors } = useThemeMode();
+    const { notification } = App.useApp();
     const isMobile = useIsMobile();
     const { values: savedValues, saveValues, savePartialValues, loading } = useSettingsSchema();
     const guiApi = useApi();
@@ -1094,32 +1048,41 @@ const OnboardingWizard: React.FC = () => {
         }
     }, [currentStep]);
 
+    // Set when the operator tries to leave the Datum step with an unset/(0,0)
+    // origin — DatumStep reads it to show an inline required-field error.
+    const [datumError, setDatumError] = useState(false);
+
     const handleChange = useCallback((key: string, value: any) => {
         setLocalValues((prev) => ({ ...prev, [key]: value }));
     }, []);
 
-    // Step indices:
-    //   0 Welcome
-    //   1 Robot Model
-    //   2 Firmware            (custom navigation, no Save & Continue)
-    //   3 NTRIP Corrections   (network + base station, set before GPS)
-    //   4 GPS Configuration
-    //   5 Datum
-    //   6 Sensors
-    //   7 IMU / Sensor Calibration
-    //   8 Complete
-    const STEP_FIRMWARE = 2;
-    const STEP_NTRIP = 3;
-    const STEP_GPS = 4;
-    const STEP_DATUM = 5;
-    const STEP_CALIBRATION = 7;
-    const STEP_COMPLETE = STEP_TITLES.length - 1;
+    // Deep-links back into an in-wizard step (used by the readiness CTAs).
+    const jumpToStep = useCallback((idx: number) => setCurrentStep(idx), []);
 
+    // Step indices are single-sourced in components/onboarding/steps.ts so the
+    // wizard and the readiness gate never drift.
     const handleNext = useCallback(async () => {
         // Save settings when leaving any config step that mutates settings
         // values: Robot Model (1), NTRIP (3), GPS (4), Datum (5), Sensors (6),
         // Calibration (7). Apply-from-calibration writes through onChange but
         // does not auto-save; this is the one batch save point.
+        // Datum required-guard: a (0,0) or unset origin silently breaks every
+        // later mow, so block leaving the Datum step until it is captured.
+        if (currentStep === STEP_DATUM) {
+            const lat = localValues.datum_lat;
+            const lon = localValues.datum_lon;
+            const datumSet =
+                Number.isFinite(lat) && lat !== 0 && Number.isFinite(lon) && lon !== 0;
+            if (!datumSet) {
+                setDatumError(true);
+                notification.warning({
+                    message: t("onboardingPage.datumRequiredTitle"),
+                    description: t("onboardingPage.datumRequiredHelp"),
+                });
+                return;
+            }
+            setDatumError(false);
+        }
         const isConfigStep =
             currentStep === 1 ||
             (currentStep >= STEP_NTRIP && currentStep <= STEP_CALIBRATION);
@@ -1146,7 +1109,7 @@ const OnboardingWizard: React.FC = () => {
             }
         }
         setCurrentStep((s) => Math.min(s + 1, STEP_TITLES.length - 1));
-    }, [currentStep, localValues, saveValues, guiApi, gpsRestart, STEP_GPS, STEP_CALIBRATION]);
+    }, [currentStep, localValues, saveValues, guiApi, gpsRestart, notification, t]);
 
     const handlePrev = useCallback(() => {
         setCurrentStep((s) => Math.max(s - 1, 0));
@@ -1169,16 +1132,17 @@ const OnboardingWizard: React.FC = () => {
                     values={localValues}
                     onChange={handleChange}
                     gpsRestarting={gpsRestarting}
+                    onJumpToNtrip={() => jumpToStep(STEP_NTRIP)}
                     onPersistGnssSettings={(settings) => savePartialValues(settings, {
                         silentSuccess: true,
                         errorMessage: t("onboardingPage.persistGnssError"),
                     })}
                 />
             )}
-            {currentStep === 5 && <DatumStep values={localValues} onChange={handleChange} gpsRestarting={gpsRestarting} />}
+            {currentStep === 5 && <DatumStep values={localValues} onChange={handleChange} gpsRestarting={gpsRestarting} requiredError={datumError} />}
             {currentStep === 6 && <SensorStep values={localValues} onChange={handleChange} />}
             {currentStep === 7 && <ImuYawStep values={localValues} onChange={handleChange} />}
-            {currentStep === 8 && <CompleteStep />}
+            {currentStep === 8 && <ReadinessStep values={localValues} onJumpToStep={jumpToStep} />}
         </>
     );
 
@@ -1233,7 +1197,14 @@ const OnboardingWizard: React.FC = () => {
                                 {t("onboardingPage.stepCounter", { current: currentStep + 1, total: STEP_TITLES.length })}
                             </Text>
                         </div>
-                        <div style={{ height: 4, borderRadius: 2, background: colors.border, overflow: "hidden" }}>
+                        <div
+                            role="progressbar"
+                            aria-label={t("onboardingPage.stepCounter", { current: currentStep + 1, total: STEP_COUNT })}
+                            aria-valuenow={currentStep + 1}
+                            aria-valuemin={1}
+                            aria-valuemax={STEP_COUNT}
+                            style={{ height: 4, borderRadius: 2, background: colors.border, overflow: "hidden" }}
+                        >
                             <div style={{ height: "100%", width: `${pct}%`, background: colors.accent, transition: "width .3s ease" }} />
                         </div>
                     </div>

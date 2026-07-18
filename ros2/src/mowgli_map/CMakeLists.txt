@@ -204,6 +204,11 @@ if(BUILD_TESTING)
     tf2_ros
     tf2_geometry_msgs
   )
+
+  # Pure logic, no ROS deps — mirrors fusion_graph's header-only gate tests.
+  ament_add_gtest(test_boundary_classifier
+    test/test_boundary_classifier.cpp
+  )
 endif()
 
 # ---------------------------------------------------------------------------

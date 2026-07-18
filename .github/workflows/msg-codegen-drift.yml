@@ -1,0 +1,70 @@
+name: Msg Codegen Drift
+
+on:
+  push:
+    branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
+    paths:
+      - 'ros2/src/mowgli_interfaces/**'
+      - 'gui/generate_go_msgs.sh'
+      - 'gui/generate_ts_types.sh'
+      - 'gui/pkg/msgs/**'
+      - 'gui/web/src/types/ros.generated.ts'
+      - 'firmware/scripts/sync_ros_lib.py'
+      - 'firmware/stm32/ros_usbnode/src/ros/ros_lib/mower_msgs/**'
+      - '.github/workflows/msg-codegen-drift.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'ros2/src/mowgli_interfaces/**'
+      - 'gui/generate_go_msgs.sh'
+      - 'gui/generate_ts_types.sh'
+      - 'gui/pkg/msgs/**'
+      - 'gui/web/src/types/ros.generated.ts'
+      - 'firmware/scripts/sync_ros_lib.py'
+      - 'firmware/stm32/ros_usbnode/src/ros/ros_lib/mower_msgs/**'
+      - '.github/workflows/msg-codegen-drift.yml'
+
+concurrency:
+  group: msg-codegen-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── Codegen Drift Gate ───────────────────────────────────────────────────────
+  # The GUI's Go/TS message types (gui/pkg/msgs, gui/web/src/types/ros.generated.ts)
+  # and the STM32 firmware's generated COBS message structs (firmware/.../ros_lib/mower_msgs)
+  # are all generated from ros2/src/mowgli_interfaces/msg — but none of the three
+  # regenerate automatically. A .msg field added/renamed/retyped without re-running
+  # the generators leaves the GUI silently reading/writing the wrong JSON keys, or
+  # the firmware silently (de)serializing a message with the wrong field layout
+  # (offsets shift, byte-for-byte, past the divergence point) — the same class of
+  # silent drift ros2/scripts/check_config_drift.py guards for mowgli_robot.yaml.
+  # No ROS2/Go/Node toolchain needed for any of the three checks; runs in seconds.
+  codegen-drift:
+    name: Codegen Drift (Go / TS / firmware msg types)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check firmware ros_lib headers (sync_ros_lib.py --check)
+        run: python3 firmware/scripts/sync_ros_lib.py --check
+
+      - name: Regenerate Go msg types and check for drift
+        run: |
+          cd gui
+          ./generate_go_msgs.sh
+          cd ..
+          git diff --exit-code -- gui/pkg/msgs || {
+            echo "::error::gui/pkg/msgs is out of sync with ros2/src/mowgli_interfaces — run gui/generate_go_msgs.sh and commit the result."
+            exit 1
+          }
+
+      - name: Regenerate TS msg types and check for drift
+        run: |
+          cd gui
+          ./generate_ts_types.sh
+          cd ..
+          git diff --exit-code -- gui/web/src/types/ros.generated.ts || {
+            echo "::error::gui/web/src/types/ros.generated.ts is out of sync with ros2/src/mowgli_interfaces — run gui/generate_ts_types.sh and commit the result."
+            exit 1
+          }

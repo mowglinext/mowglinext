@@ -19,6 +19,8 @@ import {
 } from "antd";
 import {
     ApiOutlined,
+    CheckCircleOutlined,
+    CloseCircleOutlined,
     CloudServerOutlined,
     CompassOutlined,
     DashboardOutlined,
@@ -106,6 +108,17 @@ const ESC_STATUS: Record<number, {labelKey: string; color: string}> = {
 
 function HealthBadge({label, color}: {label: string; color: string}) {
     return <Tag color={color} style={{fontSize: 12, padding: "2px 8px"}}>{label}</Tag>;
+}
+
+// A Tag whose color is not the sole signal: the label text never changes
+// (e.g. "ESC power"), so pair it with a check/cross icon whose SHAPE (not
+// just color) carries the on/off state for color-blind / low-vision users.
+function BoolStatusTag({label, ok}: {label: string; ok: boolean}) {
+    return (
+        <Tag color={ok ? "success" : "default"} icon={ok ? <CheckCircleOutlined/> : <CloseCircleOutlined/>}>
+            {label}
+        </Tag>
+    );
 }
 
 // ── main page ────────────────────────────────────────────────────────────────
@@ -611,6 +624,17 @@ export const DiagnosticsPage = () => {
         }
     };
 
+    const confirmClearGraph = () => {
+        modal.confirm({
+            title: t('diagnosticsPage.clearGraphConfirmTitle'),
+            content: t('diagnosticsPage.clearGraphConfirmBody'),
+            okText: t('diagnosticsPage.clearGraphConfirmOk'),
+            cancelText: t('diagnosticsPage.calibrationCancel'),
+            okButtonProps: {danger: true},
+            onOk: () => callFusionService("fusion_graph_clear"),
+        });
+    };
+
     const fusionAgeS = fusionStats ? Math.floor((nowMs - fusionStats.receivedAt) / 1000) : null;
     const fusionStale = fusionAgeS === null || fusionAgeS > 5;
     const fv = fusionStats?.values ?? {};
@@ -699,7 +723,7 @@ export const DiagnosticsPage = () => {
                             <Button
                                 size="small"
                                 danger
-                                onClick={() => callFusionService("fusion_graph_clear")}
+                                onClick={confirmClearGraph}
                                 loading={fusionBusy === "clear"}
                                 disabled={fusionBusy !== null}
                             >
@@ -1569,11 +1593,11 @@ export const DiagnosticsPage = () => {
                         </Col>
                     </Row>
                     <Flex wrap gap="small" style={{marginTop: 12}}>
-                        <Tag color={status.raspberry_pi_power ? "success" : "default"}>{t('diagnosticsPage.rpiPower')}</Tag>
-                        <Tag color={status.esc_power ? "success" : "default"}>{t('diagnosticsPage.escPower')}</Tag>
-                        <Tag color={status.ui_board_available ? "success" : "default"}>{t('diagnosticsPage.uiBoard')}</Tag>
-                        <Tag color={status.sound_module_available ? "success" : "default"}>{t('diagnosticsPage.soundModule')}</Tag>
-                        <Tag color={status.mow_enabled ? "success" : "default"}>{t('diagnosticsPage.mowEnabled')}</Tag>
+                        <BoolStatusTag label={t('diagnosticsPage.rpiPower')} ok={!!status.raspberry_pi_power}/>
+                        <BoolStatusTag label={t('diagnosticsPage.escPower')} ok={!!status.esc_power}/>
+                        <BoolStatusTag label={t('diagnosticsPage.uiBoard')} ok={!!status.ui_board_available}/>
+                        <BoolStatusTag label={t('diagnosticsPage.soundModule')} ok={!!status.sound_module_available}/>
+                        <BoolStatusTag label={t('diagnosticsPage.mowEnabled')} ok={!!status.mow_enabled}/>
                     </Flex>
                 </Card>
             </Col>

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MowgliNext — Open-Source ROS2 Robot Mower</title>
-  <meta name="description" content="Autonomous robot mower built on ROS2 Kilted with RTK-GPS + IMU + wheel fusion (robot_localization EKF or opt-in GTSAM iSAM2 factor graph), behavior trees, and coverage planning. Open source, community driven.">
+  <meta name="description" content="Autonomous robot mower built on ROS2 Kilted with RTK-GPS + IMU + wheel fusion through a GTSAM iSAM2 factor-graph localizer, behavior trees, and coverage planning. Open source, community driven.">
   <link rel="icon" type="image/svg+xml" href="icon.svg">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -143,7 +143,7 @@
       <div class="flow-step">
         <div class="flow-icon">📡</div>
         <h3>See</h3>
-        <p>LiDAR scans the surroundings 10x/second. Required for obstacle avoidance and optional Kinematic-ICP drift correction. RTK-GPS pinpoints position to centimeter accuracy.</p>
+        <p>LiDAR scans the surroundings 10x/second. Required for obstacle avoidance and optional scan-matching + loop-closure factors in the localizer. RTK-GPS pinpoints position to centimeter accuracy.</p>
       </div>
       <div class="flow-arrow">→</div>
       <div class="flow-step">
@@ -169,14 +169,14 @@
 
       <div class="feature-card">
         <div class="icon">🗺️</div>
-        <h3>RTK Localization, Two Backends</h3>
-        <p>No SLAM needed. By default robot_localization's dual EKF fuses RTK-GPS + IMU + wheel odometry under REP-105. For RTK-Float windows or GPS-denied corners, switch on the opt-in GTSAM iSAM2 factor-graph localizer (<code>fusion_graph</code>) — same inputs, plus LiDAR scan-matching and loop-closure factors. Optional Kinematic-ICP gives an extra LiDAR drift-correction layer to the local EKF in either mode.</p>
+        <h3>RTK Localization, No SLAM</h3>
+        <p>No SLAM needed. A single GTSAM iSAM2 factor-graph localizer (<code>fusion_graph</code>) fuses RTK-GPS + IMU + wheel odometry under REP-105, holding a centimetre-accurate map pose. In RTK-Float windows or GPS-denied corners it folds LiDAR scan-matching and loop-closure factors into the same graph to keep the estimate stable.</p>
       </div>
 
       <div class="feature-card">
         <div class="icon">📡</div>
-        <h3>Dual-EKF Sensor Fusion</h3>
-        <p>Standard robot_localization stack: local EKF for continuous odometry, global EKF for GPS-anchored map pose. Battle-tested, under <code>two_d_mode</code>, with a tight non-holonomic constraint on the wheel input.</p>
+        <h3>Factor-Graph Sensor Fusion</h3>
+        <p>One iSAM2 factor graph owns both the odometry and map frames. RTK-GPS, IMU heading, wheel odometry, and optional LiDAR all enter as factors — with a tight non-holonomic constraint on the wheel input for smooth, drift-resistant tracking.</p>
       </div>
 
       <div class="feature-card">
@@ -257,15 +257,15 @@
 │  <span class="highlight">ROS2 Kilted Stack</span>                                     │
 │                                                      │
 │  ┌─────────────┐  ┌──────────┐  ┌─────────────────┐ │
-│  │  <span class="highlight">Nav2</span>        │  │<span class="highlight">Kinematic</span> │  │  <span class="highlight">Behavior Tree</span>  │ │
-│  │  navigate    │  │  <span class="highlight">ICP</span>     │  │  main_tree.xml  │ │
+│  │  <span class="highlight">Nav2</span>        │  │<span class="highlight">ScanMatch</span> │  │  <span class="highlight">Behavior Tree</span>  │ │
+│  │  navigate    │  │  <span class="highlight">loop</span>    │  │  main_tree.xml  │ │
 │  │  dock/undock │  │ (LiDAR)  │  │  10 Hz tick     │ │
 │  │  coverage    │  │          │  │                 │ │
 │  └─────────────┘  └──────────┘  └─────────────────┘ │
 │  ┌─────────────┐  ┌──────────┐  ┌─────────────────┐ │
-│  │  <span class="highlight">Coverage</span>    │  │<span class="highlight">robot_loc</span>│  │  <span class="highlight">Hardware</span>       │ │
-│  │  Planner     │  │ Dual EKF │  │  Bridge         │ │
-│  │  (cell-based)│  │GPS+IMU+Odometry│  │  COBS serial    │ │
+│  │  <span class="highlight">Coverage</span>    │  │<span class="highlight">fusion_gr</span>│  │  <span class="highlight">Hardware</span>       │ │
+│  │  Planner     │  │ iSAM2 FG │  │  Bridge         │ │
+│  │  (cell-based)│  │GPS+IMU+LiDAR│  │  COBS serial    │ │
 │  └─────────────┘  └──────────┘  └────────┬────────┘ │
 └───────────────────────────────────────────┼──────────┘
           │                │                │
@@ -349,7 +349,7 @@
       <!-- LiDAR -->
       <div class="composer-group">
         <h3>LiDAR Sensor</h3>
-        <p class="composer-hint">Required for obstacle avoidance and optional Kinematic-ICP drift correction</p>
+        <p class="composer-hint">Required for obstacle avoidance and optional scan-matching + loop-closure localization</p>
         <div class="composer-options" data-group="lidar">
           <button class="composer-option active" data-value="ldlidar-uart">
             <span class="option-icon">🔴</span>

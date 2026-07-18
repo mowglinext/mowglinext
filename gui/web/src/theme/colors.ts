@@ -125,7 +125,11 @@ const LIGHT: ColorTokens = {
   success: '#1B9D52',
   text: '#141614',
   textSecondary: 'rgba(20, 22, 20, 0.62)',
-  muted: '#9E9E9E',
+  // #9E9E9E only hit ~2.7:1 on card/page backgrounds (WCAG AA needs 4.5:1 for
+  // text) — darkened to keep the "muted" feel while passing contrast; this
+  // token is used for real caption/label text in several places, not just
+  // decorative icons.
+  muted: '#707070',
   border: 'rgba(0, 0, 0, 0.08)',
   borderSubtle: 'rgba(0, 0, 0, 0.05)',
   glassBackground: 'rgba(255, 255, 255, 0.85)',
@@ -141,7 +145,10 @@ const LIGHT: ColorTokens = {
   amberSoft: 'rgba(232, 160, 40, 0.12)',
   pink: '#E07598',
   textDim: 'rgba(20, 22, 20, 0.62)',
-  textMuted: 'rgba(20, 22, 20, 0.40)',
+  // 0.40 only hit ~2.6:1 against card/page backgrounds (WCAG AA needs
+  // 4.5:1); bumped to 0.60, which measures ~4.7:1 while still reading
+  // lighter than textDim (0.62) for the caption/body distinction.
+  textMuted: 'rgba(20, 22, 20, 0.60)',
 
   mint: '#2CC76B',
   emeraldDeep: '#14853F',
@@ -170,7 +177,9 @@ const DARK: ColorTokens = {
   success: PALETTE.lime,
   text: PALETTE.ink,                // papier-vert chaud
   textSecondary: inkAlpha(0.66),
-  muted: inkAlpha(0.42),
+  // 0.42 only hit ~4.0:1 on card backgrounds (WCAG AA needs 4.5:1 for text,
+  // and this token is used for real caption text, not just icons).
+  muted: inkAlpha(0.50),
   border: inkAlpha(0.07),
   borderSubtle: inkAlpha(0.04),
   glassBackground: 'rgba(11, 24, 20, 0.78)',
@@ -186,7 +195,9 @@ const DARK: ColorTokens = {
   amberSoft: 'rgba(243, 168, 92, 0.14)',
   pink: PALETTE.rose,
   textDim: inkAlpha(0.62),
-  textMuted: inkAlpha(0.40),
+  // 0.40 only hit ~3.7:1 on card backgrounds (WCAG AA needs 4.5:1); bumped
+  // to 0.48 (~4.8:1), still visibly lighter than textDim (0.62).
+  textMuted: inkAlpha(0.48),
 
   mint: PALETTE.mint,
   emeraldDeep: PALETTE.emeraldDeep,

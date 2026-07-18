@@ -234,6 +234,62 @@ private:
   // map→odom broadcast for one cycle, which is the intent.
   std::atomic<bool> t_map_odom_anchor_valid_{false};
 
+  // ── map→odom slew-rate limiter (continuity restoration) ─────────
+  // t_map_odom_anchor_ above is the RAW target: it steps discontinuously
+  // whenever a new node lands with a graph correction (GPS innovation,
+  // loop closure, scan-match, or the accumulated refinement snapped in at
+  // the end of a stationary_node_period_s window). Publishing it directly
+  // pushes those steps straight into map→base = anchor ⊙ odom→base, and
+  // Nav2's controller tracks a teleporting pose → left/right weave and
+  // in-place hunting. REP-105 requires the map-frame correction to be
+  // applied CONTINUOUSLY. So the TF thread eases a PUBLISHED anchor toward
+  // the raw target at a bounded rate: a few-cm RTK correction becomes a
+  // sub-second ramp instead of a step; a genuine relocalization (target
+  // jumps past anchor_snap_dist_m / anchor_snap_yaw_rad — re-seed, first
+  // fix after a long Float, big loop closure) snaps immediately so we never
+  // lag reality. Set anchor_slew_enabled=false to reproduce the pre-slew
+  // step behaviour exactly (A/B validation).
+  //
+  // t_map_odom_pub_ is written ONLY by the TF broadcast thread (single
+  // writer → no lock for its own state). t_map_odom_pub_shared_ is a copy
+  // published back under tf_state_mu_ so PublishOutputs (executor thread)
+  // serves /odometry/filtered_map + /imu/fg_yaw from the SAME smoothed
+  // anchor as the TF, keeping viz and TF consistent.
+  bool anchor_slew_enabled_ = true;
+  double anchor_max_lin_slew_mps_ = 0.10;
+  double anchor_max_ang_slew_radps_ = 0.20;
+  double anchor_snap_dist_m_ = 0.50;
+  double anchor_snap_yaw_rad_ = 0.35;
+  gtsam::Pose2 t_map_odom_pub_{0.0, 0.0, 0.0};
+  bool t_map_odom_pub_valid_ = false;
+  // Smoothed anchor mirrored under tf_state_mu_ for PublishOutputs
+  // (/odometry/filtered_map + /imu/fg_yaw) to match the TF exactly.
+  gtsam::Pose2 t_map_odom_pub_shared_{0.0, 0.0, 0.0};
+  bool t_map_odom_pub_shared_valid_ = false;
+  // Wall-clock of the last inline map-frame publish, for the slew dt when
+  // the dedicated TF thread is disabled (observer / tf_broadcast_rate<=0).
+  double last_map_pub_s_ = -1.0;
+
+  // ── Odom re-base (lever-arm limiter) ────────────────────────────
+  // map→odom = graph_pose ⊙ dr⁻¹, so a small graph YAW jitter rotates the
+  // odom→base offset and becomes a map→odom POSITION step proportional to
+  // |dr| (distance from the odom origin). As the robot drives away from
+  // that origin the same jitter produces ever-larger position jumps → the
+  // fused pose teleports vs the smooth odom trail and the controller can't
+  // track. When |dr| exceeds odom_rebase_dist_m we reset the odom POSITION
+  // origin onto the robot (dr_x/y→0, heading kept) and shift the anchor so
+  // map→base is unchanged — keeping the lever arm small. 0 = disabled.
+  double odom_rebase_dist_m_ = 0.0;
+  // Set by OnTimer at a re-base; SlewPublishedAnchor snaps the published
+  // anchor to the (coordinated) new target so map→base stays continuous
+  // across the reset instead of the slew ramping it.
+  std::atomic<bool> force_pub_resync_{false};
+
+  // Advance t_map_odom_pub_ toward the raw target anchor by at most
+  // anchor_max_{lin,ang}_slew over dt; snap on relocalization-scale jumps.
+  // Returns the anchor to broadcast. Single-writer per run mode.
+  gtsam::Pose2 SlewPublishedAnchor(const gtsam::Pose2& target, bool anchor_valid, double dt);
+
   // Latched seeds for initialization.
   std::optional<gtsam::Vector2> seed_xy_;  // from latest GPS
   std::optional<double> seed_yaw_;  // from latest COG/mag
@@ -264,6 +320,36 @@ private:
   double cog_flip_min_interval_s_ = 10.0;
   double cog_flip_consistency_rad_ = 0.52;  // ~30°
   std::optional<double> cog_flip_prev_yaw_;
+  // Gate the COG yaw FACTOR (not just the flip recovery) on RTK-Fixed. COG is
+  // the GPS travel direction; under RTK-Float/NO_FIX a few-cm-to-m displacement
+  // error over the ~20 cm inter-fix baseline becomes a huge heading error, so
+  // the COG turns to garbage and corrupts the weakly-observable yaw (map→odom
+  // then balloons and the lever arm amplifies graph jitter into position jumps
+  // → the robot drives out of bounds). Gyro + scan-matching carry yaw through
+  // the Float window. NEVER gate before init — TrySeedInitialPose needs the seed.
+  bool cog_require_rtk_ = true;
+  double cog_rtk_max_age_s_ = 2.0;
+  uint64_t cog_rtk_gated_ = 0;  // diagnostic counter
+  // OpenMower-style heading discipline (Level 1). COG = GPS travel direction,
+  // so it is meaningless/ambiguous below a forward-speed floor (undefined at
+  // rest, noise-dominated when slow, 180°-flipped in reverse). Gate it to
+  // forward motion above cog_min_speed_mps and FLOOR its σ at cog_min_sigma_rad
+  // so it TRENDS the gyro-integrated heading rather than snapping to a noisy
+  // per-fix course — the gyro carries yaw short-term, COG only anchors it long
+  // term. Mirrors xbot_positioning's min_speed gate + cov=1e4 soft update.
+  double cog_min_speed_mps_ = 0.08;
+  double cog_min_sigma_rad_ = 0.15;  // ~8.6° floor
+
+  // ── LiDAR yaw yield (Level 2) ───────────────────────────────────
+  // Scan-matching (and loop closure) between-factors carry BOTH position and
+  // yaw. In feature-poor / symmetric scenery the ICP yaw can converge wrong
+  // with a confident (tight) σ_theta and BAKE a wrong heading into the graph
+  // that later GPS can't undo — reproduced as a stuck, oscillating yaw. Floor
+  // the scan/loop-closure σ_theta so LiDAR's yaw only weakly nudges the graph
+  // (the gyro carries yaw), while σ_xy stays tight so LiDAR still CARRIES
+  // POSITION through RTK-Float windows — its essential role we must keep for
+  // canopy dropout. 0 = disabled (old behaviour, LiDAR yaw fully trusted).
+  double scan_yaw_sigma_floor_rad_ = 0.30;  // ~17°
   std::optional<rclcpp::Time> last_flip_recovery_stamp_;
   // True when seed_xy_ was set from an RTK-Fixed fix (carr_soln=2).
   // Drives the prior sigma at Initialize: tight (sub-cm) when set,
@@ -418,6 +504,16 @@ private:
   // catch the moment gps_seen_once_ flips true. Reset on undock so
   // the next dock arrival re-seeds.
   bool dock_seeded_this_session_ = false;
+
+  // Boot dock-seed fallback: if the graph is still uninitialized a few
+  // seconds after boot (is_charging never arrived — e.g. degraded DDS
+  // discovery — AND no COG yaw is available while parked), seed from the
+  // calibrated dock pose so a fresh boot on the dock always yields a map
+  // frame. Without this, Nav2's planner_server aborts activation when
+  // map→base_footprint never appears, cascading the whole bringup down.
+  // boot_stamp_s_ is latched on the first uninitialized OnTimer tick.
+  double boot_stamp_s_ = -1.0;
+  bool dock_seed_fallback_done_ = false;
 
   // Dock-arrival pose seed (formerly the dock_yaw_to_set_pose node).
   // On the rising edge of is_charging we anchor the graph at the

@@ -51,7 +51,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 # file). Deep-merges the SPARSE installed mowgli_robot.yaml over the in-package
 # template defaults, so a missing key falls through to its versioned default.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from robot_config_util import load_robot_params  # noqa: E402
+from robot_config_util import DEFAULT_TOOL_WIDTH_M, load_robot_params  # noqa: E402
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -151,10 +151,8 @@ def generate_launch_description() -> LaunchDescription:
     # use_fusion_graph and use_magnetometer are NOT declared here —
     # navigation.launch.py reads them from mowgli_robot.yaml directly
     # so the operator flips them via the runtime config (and a
-    # container restart picks the change up). CLI override on the
-    # top-level launch (`... use_fusion_graph:=true`) still works
-    # because the arg is declared in navigation.launch.py and CLI
-    # values propagate to all included files.
+    # container restart picks the change up). There is no CLI override
+    # for use_fusion_graph (the launch arg was removed).
 
     # ------------------------------------------------------------------
     # Resolved substitutions
@@ -329,7 +327,7 @@ def generate_launch_description() -> LaunchDescription:
             # static map_server.yaml default — otherwise an operator who changes
             # tool_width moves the F2C swath spacing while this stamp radius
             # stays frozen, re-opening the un-mowed-strip / under-coverage gap.
-            {"tool_width": float(robot_params.get("tool_width", 0.18))},
+            {"tool_width": float(robot_params.get("tool_width", DEFAULT_TOOL_WIDTH_M))},
         ],
     )
 

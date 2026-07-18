@@ -520,14 +520,18 @@
               <!-- Multi-area coverage loop.
                    Outer loop: iterate through all mowing areas.
                    Per area: PlanCoverageArea asks mowgli_coverage's
-                   plan_coverage action for an EXPLICIT segment list
-                   (headland rings + straight serpentine swaths — no turn
-                   geometry); FollowStrip dispatches one segment per
-                   FollowCoveragePath goal (RotationShim pivots in place
-                   at each segment start, MPPI tracks the segment).
-                   Segment completion is recorded per index, so a
-                   FollowStrip retry resumes at the first un-mowed
-                   segment of the SAME deterministic plan.
+                   plan_coverage action for the plan. The result carries an
+                   EXPLICIT segment list (headland rings + straight
+                   serpentine swaths — GUI/resume bookkeeping only) AND the
+                   hole-free, continuous drivable_subpaths that FollowStrip
+                   actually drives: mowgli_nav2_plugins/FTCController tracks
+                   each sub-path end-to-end as ONE FollowCoveragePath goal
+                   (one PRE_ROTATE pivot to the sub-path-start heading, then
+                   FTC tracks tightly through the connector arcs), using a
+                   pose cursor — not per-segment dispatch. Progress is
+                   recorded per pose index, so a FollowStrip retry resumes
+                   mid-sub-path from the furthest pose reached, not from a
+                   segment boundary.
                    GetNextUnmowedArea returns FAILURE when all areas are
                    done. PlanCoverageArea on a too-small/planning-failed
                    area returns FAILURE → outer AreaUnreachable → AreaLoop
@@ -537,11 +541,11 @@
                   <GetNextUnmowedArea area_index="{current_area_index}"/>
                   <!-- ONE PlanCoverageArea per area per session (no
                        replan), but multiple FollowStrip retries on the
-                       SAME segment list (resume at the first un-mowed
-                       segment index). The coverage geometry
-                       (operation_width, headland_width, passes, insets)
-                       lives in coverage_server's parameters, injected at
-                       launch from mowgli_robot.yaml. -->
+                       SAME plan (resume at the furthest pose reached along
+                       the drivable_subpaths concatenation). The coverage
+                       geometry (operation_width, headland_width, passes,
+                       insets) lives in coverage_server's parameters,
+                       injected at launch from mowgli_robot.yaml. -->
                   <Fallback name="MowOrSkipArea">
                     <Sequence name="PlanThenFollow">
                       <PublishHighLevelStatus state="2" state_name="PLANNING"/>
@@ -584,7 +588,8 @@
                         <!-- Obstacle wedge recovery: BackUp + ClearCostmap
                              then bubble up FAILURE so RetryUntilSuccessful
                              re-ticks FollowStrip, which resumes at the
-                             first un-mowed segment index. -->
+                             furthest pose reached along the current
+                             drivable_subpaths sub-path. -->
                         <Sequence name="StuckBackoff">
                           <IsObstacleStuck min_duration_sec="4.0"
                                            max_count="3"

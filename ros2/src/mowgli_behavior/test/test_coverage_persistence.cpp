@@ -44,6 +44,8 @@ void seedContext(BTContext& ctx, const std::string& path)
   ctx.current_area = 2;
   ctx.area_path_pose_count[0] = 1000;
   ctx.area_path_pose_count[2] = 3500;
+  ctx.area_plan_fingerprint[0] = 0x0123456789abcdefULL;
+  ctx.area_plan_fingerprint[2] = 0xfedcba9876543210ULL;  // staleness key
   ctx.area_resume_pose_index[2] = 1234;  // area 2 interrupted mid-path
   ctx.area_completed_swaths[0] = {0};  // area 0 fully done
   ctx.area_completed_swaths[2] = {};  // present but empty
@@ -67,6 +69,9 @@ TEST(CoveragePersistence, RoundTripsAllResumeState)
   EXPECT_EQ(loaded.current_area, 2);
   EXPECT_EQ(loaded.area_path_pose_count[0], 1000u);
   EXPECT_EQ(loaded.area_path_pose_count[2], 3500u);
+  // Plan-geometry fingerprints (the staleness key) round-trip exactly.
+  EXPECT_EQ(loaded.area_plan_fingerprint[0], 0x0123456789abcdefULL);
+  EXPECT_EQ(loaded.area_plan_fingerprint[2], 0xfedcba9876543210ULL);
   ASSERT_EQ(loaded.area_resume_pose_index.count(2), 1u);
   EXPECT_EQ(loaded.area_resume_pose_index[2], 1234u);
   // area 0 has no live cursor (fully mowed) → must NOT be resurrected.
@@ -115,10 +120,11 @@ TEST(CoveragePersistence, MalformedRowIsSkippedNotFatal)
   const std::string path = tempPath("coverage_resume_partial.txt");
   {
     std::ofstream f(path, std::ios::trunc);
-    f << "mowgli_coverage_resume v1\n";
+    f << "mowgli_coverage_resume v2\n";
     f << "current_area 1\n";
     f << "area not_a_number garbage\n";  // malformed → skipped
-    f << "area 1 2048 512 completed 0 1 2\n";  // valid → loaded
+    // v2 row: area idx pose_count fingerprint resume completed ...
+    f << "area 1 2048 777 512 completed 0 1 2\n";  // valid → loaded
   }
   BTContext ctx;
   ctx.coverage_resume_path = path;
@@ -126,6 +132,7 @@ TEST(CoveragePersistence, MalformedRowIsSkippedNotFatal)
   EXPECT_EQ(ctx.current_area, 1);
   ASSERT_EQ(ctx.area_path_pose_count.count(1), 1u);
   EXPECT_EQ(ctx.area_path_pose_count[1], 2048u);
+  EXPECT_EQ(ctx.area_plan_fingerprint[1], 777u);
   EXPECT_EQ(ctx.area_resume_pose_index[1], 512u);
   EXPECT_EQ(ctx.area_completed_swaths[1], (std::set<std::size_t>{0, 1, 2}));
   std::remove(path.c_str());

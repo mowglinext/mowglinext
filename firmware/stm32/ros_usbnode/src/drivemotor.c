@@ -21,6 +21,7 @@
 
 #include "adc.h"
 #include "board.h"
+#include "emergency.h"
 #include "main.h"
 #include "ros/ros_custom/cpp_main.h"
 
@@ -41,6 +42,10 @@
  */
 #define DRIVEMOTOR_MIN_TICKS_PER_M 50.0f
 #define DRIVEMOTOR_MAX_TICKS_PER_M 5000.0f
+/* Floor for the runtime max-speed cap. The CEILING is the compile-time MAX_MPS
+ * (board.h / template) — the runtime value (PKT_ID_SET_KINEMATICS) can only
+ * LOWER the motion cap, never raise it above the compiled safety limit. */
+#define DRIVEMOTOR_MIN_MAX_MPS 0.1f
 /******************************************************************************
  * Module Preprocessor Macros
  *******************************************************************************/
@@ -130,6 +135,10 @@ uint8_t left_power = 0;
 
 uint32_t DRIVEMOTOR_u32ErrorCnt = 0;
 volatile float g_ticks_per_meter = (float)TICKS_PER_M;
+/* Runtime max wheel-speed cap. Seeded with the compile-time MAX_MPS, which
+ * therefore remains the power-on fallback AND the hard ceiling the wire cannot
+ * exceed (see drivemotor_clamp_max_mps). Retunable via PKT_ID_SET_KINEMATICS. */
+volatile float g_max_mps = (float)MAX_MPS;
 
 static float drivemotor_clamp_ticks_per_meter(float ticks_per_meter) {
   if (!isfinite(ticks_per_meter) || ticks_per_meter <= 0.0f) {
@@ -144,10 +153,27 @@ static float drivemotor_clamp_ticks_per_meter(float ticks_per_meter) {
   return ticks_per_meter;
 }
 
+/* Clamp the runtime max-speed cap to (0, compile-time MAX_MPS]. An invalid or
+ * unset value falls back to the compiled MAX_MPS; a value above it is capped to
+ * it, so the wire can never raise the motion cap past the compiled ceiling. */
+static float drivemotor_clamp_max_mps(float max_mps) {
+  if (!isfinite(max_mps) || max_mps <= 0.0f) {
+    return (float)MAX_MPS;
+  }
+  if (max_mps < DRIVEMOTOR_MIN_MAX_MPS) {
+    return DRIVEMOTOR_MIN_MAX_MPS;
+  }
+  if (max_mps > (float)MAX_MPS) {
+    return (float)MAX_MPS;
+  }
+  return max_mps;
+}
+
 static uint32_t drivemotor_max_ticks_per_frame(void) {
   const float ticks_per_meter =
       drivemotor_clamp_ticks_per_meter(g_ticks_per_meter);
-  return (uint32_t)(MAX_MPS * ticks_per_meter * 0.02f * 3.0f);
+  return (uint32_t)(drivemotor_clamp_max_mps(g_max_mps) * ticks_per_meter *
+                    0.02f * 3.0f);
 }
 
 static uint8_t left_speed_req;
@@ -368,15 +394,26 @@ void DRIVEMOTOR_App_10ms(void) {
     HAL_UART_Receive_DMA(&DRIVEMOTORS_USART_Handler,
                          (uint8_t *)&drivemotor_psReceivedData,
                          sizeof(DRIVEMOTORS_data_t));
-    drivemotor_prepareMsg(100, 100, 0, 0); /* set to -0.33m/s  */
+
+    /* SAFETY: the collision auto-reverse drives the wheels open-loop at
+     * 100 PWM. It must NEVER run while an emergency (e-stop button, wheel
+     * lift, tilt, accelerometer, heartbeat-loss) is asserted. If emergency
+     * fires mid-reverse, hard-stop the wheels this frame and abandon the
+     * maneuver back to RUN (where cmd_vel drive is itself gated to 0 by the
+     * hard_stop path in cpp_main). */
+    if (Emergency_State() != 0) {
+      drivemotor_prepareMsg(0, 0, 0, 0);
+      drivemotor_eState = DRIVEMOTOR_RUN;
+    } else {
+      drivemotor_prepareMsg(100, 100, 0, 0); /* set to -0.33m/s  */
+      if ((HAL_GetTick() - l_u32Timestamp) > 2000) {
+        drivemotor_eState = DRIVEMOTOR_WAIT;
+        l_u32Timestamp = HAL_GetTick();
+      }
+    }
     HAL_UART_Transmit_DMA(&DRIVEMOTORS_USART_Handler,
                           (uint8_t *)drivemotor_pu8RqstMessage,
                           DRIVEMOTOR_LENGTH_RQST_MSG);
-
-    if ((HAL_GetTick() - l_u32Timestamp) > 2000) {
-      drivemotor_eState = DRIVEMOTOR_WAIT;
-      l_u32Timestamp = HAL_GetTick();
-    }
 
     break;
 
@@ -390,7 +427,13 @@ void DRIVEMOTOR_App_10ms(void) {
                           (uint8_t *)drivemotor_pu8RqstMessage,
                           DRIVEMOTOR_LENGTH_RQST_MSG);
 
-    if ((HAL_GetTick() - l_u32Timestamp) > 1000) {
+    /* SAFETY: bail out of the post-reverse settle immediately on emergency
+     * so the state machine returns to the (emergency-gated) RUN state
+     * instead of holding here. WAIT already commands 0, so this only shortens
+     * the dwell — it never drives. */
+    if (Emergency_State() != 0) {
+      drivemotor_eState = DRIVEMOTOR_RUN;
+    } else if ((HAL_GetTick() - l_u32Timestamp) > 1000) {
       drivemotor_eState = DRIVEMOTOR_RUN;
     }
 
@@ -582,6 +625,12 @@ void DRIVEMOTOR_SetTicksPerMeter(float ticks_per_meter) {
 float DRIVEMOTOR_GetTicksPerMeter(void) {
   return drivemotor_clamp_ticks_per_meter(g_ticks_per_meter);
 }
+
+void DRIVEMOTOR_SetMaxMps(float max_mps) {
+  g_max_mps = drivemotor_clamp_max_mps(max_mps);
+}
+
+float DRIVEMOTOR_GetMaxMps(void) { return drivemotor_clamp_max_mps(g_max_mps); }
 
 /**
  * @brief  Set drive motor speeds from a signed PWM command per wheel.

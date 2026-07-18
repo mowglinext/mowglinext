@@ -6,14 +6,33 @@ on:
     # source via `platformio run`, so a branch must compile before it can be
     # flashed). Mirrors ros2-ci.yml's branch set.
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
+    # Tag pushes additionally publish prebuilt binaries (see the `release` job).
+    tags:
+      - "v*.*.*"
     paths:
       - 'firmware/**'
       - '.github/workflows/firmware-ci.yml'
   pull_request:
     paths:
       - 'firmware/**'
+      - '.github/workflows/firmware-ci.yml'
 
 jobs:
+  # Guard: board.h and board.h.template must consume the single-source safety
+  # defaults from board_defaults.h and never re-hardcode them, so the committed
+  # firmware (what CI builds / what prebuilt binaries ship) and the GUI-rendered
+  # firmware can never silently drift apart on a safety value.
+  defaults-parity:
+    name: board_defaults single-source guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Check board.h/template consume board_defaults.h
+        run: python3 firmware/scripts/board_defaults_parity.py
+
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -41,3 +60,64 @@ jobs:
       - name: Build firmware (${{ matrix.environment }})
         run: pio run -e ${{ matrix.environment }}
         working-directory: firmware/stm32/ros_usbnode
+
+  # ─── Publish prebuilt binaries on a version tag ────────────────────────────
+  # Phase 1 of the precompiled-firmware plan. On a `v*.*.*` tag, build every
+  # default permutation and attach the stamped, checksummed .bin/.elf plus a
+  # manifest.json to the GitHub Release, so onboarding can flash a prebuilt
+  # binary WITHOUT compiling (Phase 2 wiring is separate). These are the exact
+  # artifacts the per-push matrix already build-checks (committed board.h,
+  # unchanged) — nothing is re-tuned here; this job only packages.
+  release:
+    name: Publish prebuilt firmware
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Full history so package_release.py's git rev-list count (and the
+      # git_build_id.py version baked into the binary) resolve to the real
+      # commit count, not the shallow-clone default of 1.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-release-${{ hashFiles('firmware/stm32/ros_usbnode/platformio.ini') }}
+          restore-keys: |
+            pio-release-
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build all default permutations
+        working-directory: firmware/stm32/ros_usbnode
+        run: |
+          pio run -e Yardforce500
+          pio run -e Yardforce500B
+
+      - name: Package binaries + manifest
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 firmware/scripts/package_release.py \
+            --build-root firmware/stm32/ros_usbnode \
+            --tag "$TAG" \
+            --repo "$REPO" \
+            --out-dir dist
+
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.bin
+            dist/*.elf
+            dist/manifest.json

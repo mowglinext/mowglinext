@@ -87,6 +87,38 @@ BoustrophedonPlan planDefault(const f2c::types::Cell& cell)
   return planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15);
 }
 
+// Rectangle Cell centred on the origin, matching the sim's area_polygons.
+f2c::types::Cell makeRectCentered(double w, double h)
+{
+  f2c::types::LinearRing ring;
+  ring.addPoint(f2c::types::Point(-w / 2, -h / 2));
+  ring.addPoint(f2c::types::Point(w / 2, -h / 2));
+  ring.addPoint(f2c::types::Point(w / 2, h / 2));
+  ring.addPoint(f2c::types::Point(-w / 2, h / 2));
+  ring.addPoint(f2c::types::Point(-w / 2, -h / 2));  // closed
+  return f2c::types::Cell(ring);
+}
+
+// Reproduces the SIM coverage_server pipeline that SEGFAULTS on result delivery
+// (exit -11, heap-corruption signature). The distinguishing knob vs planDefault
+// is the chassis inset = robot_width/2 = 0.20 m (the sim clamps
+// chassis_safety_inset up to that), with connector turn_radius = 0.18 m, on the
+// exact rectangle sizes that crashed. Built under ASAN this pinpoints the
+// out-of-bounds write in the plan / continuous-path construction.
+TEST(CoverageRepro, SimGeometryDoesNotCorruptHeap)
+{
+  std::vector<std::pair<double, double>> sizes = {{9.0, 6.0}, {5.0, 4.0}, {3.0, 2.0}};
+  for (const auto& wh : sizes)
+  {
+    const auto cell = makeRectCentered(wh.first, wh.second);
+    const auto plan = planBoustrophedon(cell, 0.16, 0.18, 0, 0.20, -1.0, 0.15);
+    const auto subs = buildContinuousSubPaths(plan, plan.safe_boundary, 0.18, 0.18, 0.05);
+    const auto full = buildContinuousPath(plan, plan.safe_boundary, 0.18, 0.18, 0.05);
+    (void)subs;
+    (void)full;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Integration fixture: the operator's REAL recorded area (areas.dat,
 // recorded_area_1) — an elongated, concave ~26 m² garden. Coordinates copied

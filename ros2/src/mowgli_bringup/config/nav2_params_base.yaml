@@ -325,6 +325,14 @@ controller_server:
       speed_slow: 0.16                 # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
       speed_angular: 45.0
       acceleration: 0.2
+      # Anti-wheelspin / traction control. When the carrot commands forward speed
+      # but the ACTUAL forward speed (odom) stays below stall_speed_ratio × the
+      # command for stall_grace_s, the wheels are slipping / the chassis is
+      # blocked. Ease the carrot to stall_crawl_speed instead of flooring it —
+      # which digs holes in soft turf (operator report). Set ratio ≤ 0 to disable.
+      stall_speed_ratio: 0.35
+      stall_grace_s: 0.6
+      stall_crawl_speed: 0.08
       # Decoupled PID gains. 2026-06-19: the straight-swath weave (a ~0.5 Hz
       # left-right limit cycle) was the FOLLOWING heading gain saturating
       # max_cmd_vel_ang — the wheel-velocity PID was exonerated (byte-identical
@@ -382,7 +390,12 @@ controller_server:
       # in the no-LiDAR overlay (no obstacle_layer to read) — that variant tracks
       # the path only and relies on collision_monitor + firmware for safety.
       check_obstacles: true
-      obstacle_lookahead: 30           # ≈1.5 m at F2C 0.05 m sampling → ~7 s warning at 0.20 m/s
+      # OVERRIDDEN AT LAUNCH (task #51) by mowgli_robot.yaml's
+      # obstacle_detection_range_m (default 1.5 m), converted to poses —
+      # see navigation.launch.py. 30 poses ≈ 1.5 m at F2C 0.05 m sampling →
+      # ~7 s warning at 0.20 m/s. This static value only governs a raw
+      # `ros2 launch` of this file with no robot-config injection.
+      obstacle_lookahead: 30
       obstacle_footprint: true
       # Body half-width for the lateral obstacle-detection sweep. 2026-06-25
       # FIELD: the detection threshold is 253 (lethal OR inscribed), and the
@@ -404,6 +417,15 @@ controller_server:
       max_lateral_deviation: 1.5
       deviation_step: 0.05
       deviation_blend_rate: 0.5
+      # How long to hold zero velocity on a blocked/over-max deviation before
+      # aborting the strip (field: "15x deviation > max -> hold 5s stalls per
+      # mow" above), and how long the path must read continuously clear before
+      # releasing that hold / declaring AVOIDANCE complete — both debounce the
+      # observation_persistence:0 costmap's window-edge flicker. Listed
+      # explicitly (GUI-tunable) alongside their siblings above; previously
+      # only the C++ declare_double default applied.
+      obstacle_wait_timeout_s: 5.0
+      obstacle_clear_hold_s: 1.5
 
 # ---------------------------------------------------------------------------
 # Planner server
@@ -672,19 +694,31 @@ local_costmap:
         # jerking at the last moment. (factor 10 decayed to ~0 within ~0.1 m, so
         # even a wide radius had no usable slope.)
         cost_scaling_factor: 3.5
-        # 0.60 m (was 0.10). 0.10 gave MPPI no potential field around obstacles
-        # → late, sharp, hesitant avoidance. 0.60 m also sits ABOVE the chassis
-        # circumscribed radius (~0.572 m), which clears the "inflation radius is
-        # smaller than circumscribed radius" error — restoring MPPI CostCritic's
-        # potential-field fast path (no full-footprint check = less ARM CPU).
+        # 1.0 m (was 0.80, was 0.60, was 0.10 before that — task #35,
+        # 2026-07-17 field analysis: the robot let obstacles get to 0.4-0.6 m
+        # forward before reacting, at ~0.17 m/s that's under 4 s of margin;
+        # task #43, same day: folded in the user's field-converged value,
+        # superseding #35's 0.80). 0.60 m already sat ABOVE the chassis
+        # circumscribed radius (~0.572 m), which clears the "inflation
+        # radius is smaller than circumscribed radius" error — restoring
+        # MPPI/FTC CostCritic's potential-field fast path (no full-footprint
+        # check = less ARM CPU) — raising this further keeps that margin and
+        # extends the gradient's lead distance without changing its steepness
+        # (cost_scaling_factor unchanged): the fix here is DISTANCE, not
+        # shape — obstacles start pushing the path sooner, not harder.
         # SAFE for boundary U-turns: the LOCAL costmap carries NO keepout layer
         # (boundary enforcement is the planner + collision_monitor), so this
         # inflates only real LiDAR obstacles, not the boundary edge.
-        inflation_radius: 0.60
+        # This value is OVERWRITTEN at launch by obstacle_inflation_radius
+        # (mowgli_robot.yaml, clamped to [0.58, 1.50] — see
+        # navigation.launch.py's _inject_dock_pose_and_speeds); it only governs
+        # a raw `ros2 launch` of this file with no robot-config injection.
+        # Kept in sync with the template default (test_nav2_params.py's
+        # test_obstacle_template_defaults_match_static_yaml enforces this).
+        inflation_radius: 1.0
 
 # ---------------------------------------------------------------------------
-# Map server / AMCL (unused — map->odom is published by ekf_map_node
-# (default) or fusion_graph_node (opt-in via use_fusion_graph);
+# Map server / AMCL (unused — map->odom is published by fusion_graph_node;
 # kept for completeness / Nav2 lifecycle compatibility)
 # ---------------------------------------------------------------------------
 map_server:
@@ -717,6 +751,12 @@ docking_server:
     # the param name is nested under `controller` — bare
     # `transform_tolerance` at this level is silently dropped.
     controller.transform_tolerance: 0.5
+    # Give the graceful dock controller velocity feedback (CLAUDE.md invariant 16
+    # — controller_server has this, docking_server was missing it, so the
+    # controller ran velocity-blind and couldn't damp its own near-dock heading
+    # corrections → the left-right hunt at the cradle). /wheel_odom carries the
+    # measured body twist (wheel vx + gyro wz); /odometry/filtered is equivalent.
+    controller.odom_topic: /wheel_odom
     # 10 Hz (was 2 Hz): tighter approach control + faster polling of
     # isDocked()/isCharging() so the robot stops within ~100 ms of the
     # charging signal arriving rather than up to ~500 ms. Not high
