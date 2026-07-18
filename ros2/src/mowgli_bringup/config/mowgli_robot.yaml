@@ -244,18 +244,19 @@ mowgli:
     # side-mounted blade stays on the cut side. navigation.launch.py injects this
     # into coverage_server.ring_direction; swaths/connectors follow the rings.
     mow_direction: 0
-    # chassis_safety_inset: planning-time pull-back of the polygon edge before
-    # the headland rings/swaths are generated, so the OUTERMOST mowed ring sits
-    # (chassis_safety_inset + op_width/2) inside the boundary. This is the
-    # robot's margin for tracking error: too small and the veering drivetrain
-    # crosses the boundary during the outer ring, tripping the soft BoundaryGuard
-    # which HALTS and restarts coverage (field 2026-06-12: 0.08 m → robot 0.39 m
-    # out of bounds, coverage never advanced past the outer ring). 0.15 m keeps
-    # the chassis centre clear with room for the ~0.1–0.2 m lateral tracking
-    # error on this base, at the cost of a ~0.23 m uncut perimeter band. Lower it
-    # toward 0.08 only once tracking is confirmed tight; raise it near hard
-    # fences. Read LIVE by coverage_server (ros2-param-set-tunable).
-    chassis_safety_inset: 0.15
+    # chassis_safety_inset: how far INSIDE the recorded boundary the OUTERMOST
+    # headland ring's centerline sits. 0.0 (default) = the ring rides ON the
+    # recorded line — the perimeter the operator drove — so the blade mows to the
+    # edge and the chassis is allowed to STRADDLE the boundary. coverage_server
+    # applies the op_width/2 outward expansion itself (generateHeadlandSwaths puts
+    # ring 0 op_width/2 inside the planning field), so a value of 0 lands ring 0
+    # exactly on the line. The safety stop is the half-chassis-width LETHAL band
+    # the keepout mask places OUTSIDE the line (enforce_boundary_margin_m), not an
+    # inward inset. Raise this to keep the chassis further inside (e.g.
+    # chassis_width/2 = 0.20 to keep the WHOLE chassis inside, the old behaviour,
+    # at the cost of a ~0.20 m uncut perimeter band). Read LIVE by coverage_server
+    # (ros2-param-set-tunable).
+    chassis_safety_inset: 0.0
     # path_spacing: DEPRECATED / informational — no ROS2 node reads it. F2C swath
     # spacing is driven by tool_width (coverage_server.operation_width); a separate
     # spacing value re-opens the swath-gap bug, so this only mirrors tool_width.

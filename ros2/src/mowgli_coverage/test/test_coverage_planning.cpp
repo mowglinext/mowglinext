@@ -596,7 +596,12 @@ TEST(CoverageContinuousPath, NotchFieldLobeChainedNoMidFieldJoins)
   const auto subs =
       buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
   ASSERT_GE(subs.size(), 2u) << "the bite must split at least one lobe change";
-  EXPECT_LE(subs.size(), 5u) << subs.size()
+  // With the outermost ring now on the recorded line (chassis_safety_inset is
+  // the ring-centerline inset, so the planning field is only shrunk by
+  // inset − op_width/2 = 0.07 m here instead of the old 0.15 m), the left bite
+  // stays sharper and the notch chains into one extra lobe. Still a handful of
+  // relocations, not a per-column explosion.
+  EXPECT_LE(subs.size(), 6u) << subs.size()
                              << " sub-paths — one split per column instead of per lobe";
 
   // Every plan primitive as a segment list (swaths + densified ring edges), to
@@ -766,22 +771,26 @@ TEST(CoveragePlanning, HeadlandPassOverride)
 // sits closer than robot_width/2 to the boundary. We mirror the server's floor
 // expression (max(configured, robot_width/2)) so the planner is exercised with
 // exactly the value the server would pass.
-TEST(CoveragePlanning, InsetFloorKeepsBladesInsideHalfWidth)
+// OPT-IN: setting chassis_safety_inset = chassis_width/2 keeps the WHOLE chassis
+// inside the boundary (the pre-2026-07 default). There is no longer an automatic
+// robot_width/2 floor — the default rides the outermost ring ON the recorded
+// line (see RingRidesOnLineWhenInsetZero) — but an operator near hard fences can
+// still request the old keep-fully-inside behaviour with this explicit value.
+TEST(CoveragePlanning, ChassisInsetOptInKeepsBladesInsideHalfWidth)
 {
   constexpr double kRobotWidth = 0.40;  // 0.40 m chassis (the field excursion case)
   constexpr double kOpWidth = 0.16;
   constexpr double kHeadland = 0.18;
   constexpr double kMinSwath = 0.15;
-  // The deployed-drift value that caused the 0.32-0.39 m boundary excursion:
-  // configured well below the chassis half-width.
-  constexpr double kConfiguredInset = 0.0;
-  // Server's floor: max(configured, robot_width/2).
-  const double effective_inset = std::max(kConfiguredInset, kRobotWidth * 0.5);
-  ASSERT_NEAR(effective_inset, 0.20, 1e-9) << "floor must be robot_width/2 = 0.20 m";
+  // Explicit opt-in to keep the whole chassis inside: chassis_safety_inset =
+  // chassis_width/2. The outermost ring centerline then sits robot_width/2
+  // inside the raw line, so the chassis edge just touches it.
+  const double chassis_inset = kRobotWidth * 0.5;
+  ASSERT_NEAR(chassis_inset, 0.20, 1e-9);
 
   const auto cell = makeSquare(6.0);  // big enough to still plan after a 0.20 m inset
   const auto plan =
-      planBoustrophedon(cell, kOpWidth, kHeadland, 0, effective_inset, -1.0, kMinSwath);
+      planBoustrophedon(cell, kOpWidth, kHeadland, 0, chassis_inset, -1.0, kMinSwath);
   ASSERT_FALSE(plan.rings.empty()) << "no rings after the floored inset";
   ASSERT_FALSE(plan.swaths.empty()) << "no swaths after the floored inset";
 
@@ -814,6 +823,35 @@ TEST(CoveragePlanning, InsetFloorKeepsBladesInsideHalfWidth)
           << ") is closer than robot_width/2 to the boundary";
     }
   }
+}
+
+// Headland-on-the-line: with chassis_safety_inset = 0 (the new default) the
+// OUTERMOST ring rides ON the recorded boundary — the perimeter the operator
+// drove — so its centerline comes within a densify step of the line instead of
+// the ~op_width/2 (or old robot_width/2) inset that left an uncut perimeter band.
+TEST(CoveragePlanning, RingRidesOnLineWhenInsetZero)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeadland = 0.18;
+  constexpr double kMinSwath = 0.15;
+  const auto cell = makeSquare(6.0);
+  const auto plan = planBoustrophedon(cell, kOpWidth, kHeadland, 0, 0.0, -1.0, kMinSwath);
+  ASSERT_FALSE(plan.rings.empty());
+  const auto boundary = squareRing(6.0);
+  double min_dist = std::numeric_limits<double>::max();
+  for (const auto& loop : plan.rings)
+  {
+    for (const auto& p : loop)
+    {
+      min_dist = std::min(min_dist, distanceToRing(p.first, p.second, boundary));
+    }
+  }
+  // Straight ring edges land on the line; corner fillets pull in slightly. The
+  // OLD behaviour put every ring point >= op_width/2 (0.08 m) — with the removed
+  // floor >= 0.20 m — inside, so this bound both proves on-the-line and guards
+  // against the inset silently regressing.
+  EXPECT_LT(min_dist, 0.05) << "outermost ring is " << min_dist
+                            << " m inside the recorded line, not on it";
 }
 
 // INSTRUMENTATION (Bug A): planBoustrophedon reports a planned-coverage fraction
@@ -1056,9 +1094,12 @@ TEST(CoverageContinuousPath, RecordedArea1NoCuspInBounds)
     // corners the rings inherit from a rectangular boundary. Bound the WORST
     // turn well below a reversal (120°).
     worst_turn = std::max(worst_turn, maxTurnDeg(path));
-    // (2) Every point inside the chassis-safety-inset ring AND no closer than
-    // (inset − one densify step) to the RAW operator boundary, so the spinning
-    // blade can never cross it even on the turn-around connectors/fillets.
+    // (2) Every point inside the planning boundary ring (safe_boundary) AND no
+    // closer than (effective inset − one densify step) to the RAW operator
+    // boundary. chassis_safety_inset is now the OUTERMOST-RING-CENTERLINE inset,
+    // so generateHeadlandSwaths' built-in op_width/2 offset means the planning
+    // field is shrunk by only (inset − op_width/2); the connectors/fillets ride
+    // that much inside the raw boundary.
     for (const auto& p : path)
     {
       if (!pointInRing(p.first, p.second, connector_boundary))
@@ -1088,10 +1129,15 @@ TEST(CoverageContinuousPath, RecordedArea1NoCuspInBounds)
                                << "° turn — a near-reversal cusp MPPI will dither at";
   EXPECT_EQ(oob, 0u) << oob << "/" << total_poses
                      << " continuous-path points are outside the safety-inset ring";
-  EXPECT_GE(min_clearance, kInset - kStep - 1e-6)
+  // Effective planning inset = chassis_safety_inset − op_width/2 (the outermost
+  // ring centerline sits `kInset` inside the raw line; the field it is planned
+  // in is shrunk by that much less). Connectors/fillets ride the planning
+  // boundary, so they stay at least (kEffInset − one densify step) inside.
+  constexpr double kEffInset = kInset - kOpWidth / 2.0;
+  EXPECT_GE(min_clearance, kEffInset - kStep - 1e-6)
       << "a continuous-path pose sits " << min_clearance
-      << " m from the raw operator boundary — closer than the chassis-safety inset (" << kInset
-      << " m); a connector/fillet can push the blade across the boundary";
+      << " m from the raw operator boundary — closer than the effective planning inset ("
+      << kEffInset << " m); a connector/fillet can push the blade past the planning boundary";
   EXPECT_LT(tight_run, 3u) << "found a run of " << tight_run
                            << " consecutive steps tighter than min_turning_radius ("
                            << kMinTurnRadius << " m) — an untrackable loop";
