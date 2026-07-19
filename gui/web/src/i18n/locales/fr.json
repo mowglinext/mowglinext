@@ -1679,6 +1679,10 @@
       "label": "Délai d'attente devant un obstacle",
       "description": "Durée pendant laquelle le robot reste immobile pour tenter de contourner un obstacle bloqué avant d'abandonner la bande. Une valeur plus longue tolère les blocages passagers (ex. une personne qui passe) ; une valeur plus courte abandonne plus vite une bande bloquée."
     },
+    "obstacle_clearance_margin": {
+      "label": "Marge de dégagement d'obstacle",
+      "description": "Espace latéral supplémentaire laissé au-delà du châssis lors du contournement d'un obstacle pendant la tonte. Augmentez si le robot contourne les obstacles en les frôlant. L'inflation du costmap ne peut pas fournir cette marge — le test de contournement ne lit que les cellules létales/inscrites."
+    },
     "yaw_kp": {
       "label": "Kp de boucle de lacet",
       "description": "Gain proportionnel du régulateur de vitesse de lacet en boucle fermée du firmware."
@@ -2262,11 +2266,17 @@
     "avoidanceMargins": "Marges d'évitement",
     "avoidanceMarginsDescription": "Distance que le robot conserve vis-à-vis des obstacles. Les changements prennent effet après un redémarrage ROS2.",
     "inflationRadius": "Rayon d'inflation obstacles",
-    "inflationRadiusTooltip": "Tampon autour des obstacles détectés au LiDAR (troncs, murs) dans le costmap local. Augmentez si le robot passe trop près des arbres qu'il voit.",
+    "inflationRadiusTooltip": "Tampon autour des obstacles détectés au LiDAR (troncs, murs) dans le costmap local. N'affecte que le coût des trajets de TRANSIT — ne change PAS la distance de contournement pendant la tonte (utilisez la Marge de dégagement).",
     "maxDetourDistance": "Distance max de détour",
     "maxDetourDistanceTooltip": "Détour latéral maximal autour d'un obstacle avant d'abandonner — pilote l'évitement en tonte et le seuil d'abandon du contournement",
     "drawnObstacleMargin": "Marge des obstacles dessinés",
     "drawnObstacleMarginTooltip": "Marge supplémentaire autour des obstacles dessinés sur la carte, appliquée à la tonte et aux transits. À utiliser pour les zones de racines invisibles au LiDAR.",
+    "clearanceMargin": "Marge de dégagement",
+    "clearanceMarginTooltip": "Espace latéral laissé au-delà du châssis lors du contournement d'un obstacle pendant la tonte. Augmentez si le robot contourne les obstacles en les frôlant. Le rayon d'inflation ne fait PAS cela.",
+    "detectionRange": "Portée de détection",
+    "detectionRangeTooltip": "Distance d'anticipation le long du chemin de tonte pour détecter un obstacle avant de commencer à le contourner. Augmentez pour réagir plus tôt et plus souplement.",
+    "waitTimeout": "Délai d'attente",
+    "waitTimeoutTooltip": "Durée d'attente sur place lorsqu'un obstacle bloque tous les contournements, avant d'abandonner la bande en cours. Permet d'absorber les blocages transitoires (une personne qui passe).",
     "approachSlowdown": "Ralentissement à l'approche",
     "approachSlowdownDescription": "Le moniteur de collision ralentit le robot quand un retour de scan entre dans la boîte d'approche autour du châssis (variante LiDAR).",
     "slowdownRatio": "Facteur de ralentissement",

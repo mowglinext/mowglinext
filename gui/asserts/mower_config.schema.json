@@ -639,7 +639,25 @@
           "type": "number",
           "title": "Obstacle Inflation Radius",
           "default": 1.0,
-          "description": "Buffer (m) kept around LiDAR-detected obstacles in the local costmap. Raise if the robot passes too close to trees it can see. Clamped to [0.58, 1.5] at launch."
+          "description": "Buffer (m) kept around LiDAR-detected obstacles in the local costmap. Affects TRANSIT path costing only — it does NOT change how closely the robot skirts obstacles while mowing (use Obstacle Clearance Margin for that). Clamped to [0.58, 1.5] at launch."
+        },
+        "obstacle_clearance_margin": {
+          "type": "number",
+          "title": "Obstacle Clearance Margin",
+          "default": 0.1,
+          "description": "Sideways room (m) left beyond the chassis when skirting an obstacle while mowing. Raise this if the robot goes around obstacles but shaves past them. Clamped to [0.0, 0.5] at launch."
+        },
+        "obstacle_detection_range_m": {
+          "type": "number",
+          "title": "Obstacle Detection Range",
+          "default": 1.5,
+          "description": "How far ahead (m) the coverage controller looks for obstacles before starting to skirt. Raise to react earlier and more smoothly. Clamped to [0.2, 5.0] at launch."
+        },
+        "obstacle_wait_timeout_s": {
+          "type": "number",
+          "title": "Obstacle Wait Timeout",
+          "default": 5.0,
+          "description": "How long (s) to wait in place when an obstacle blocks every detour before giving up on the current strip. Lets transient blockages (a person walking past) clear without aborting. Clamped to [0.5, 60.0] at launch."
         },
         "max_obstacle_avoidance_distance": {
           "type": "number",

@@ -228,6 +228,7 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.obstacle_lookahead = declare_int("obstacle_lookahead", 5);
   config_.obstacle_footprint = declare_bool("obstacle_footprint", true);
   config_.obstacle_body_half_width = declare_double("obstacle_body_half_width", 0.20);
+  config_.obstacle_clearance_margin = declare_double("obstacle_clearance_margin", 0.0);
 
   // Obstacle deviation
   config_.enable_obstacle_deviation = declare_bool("enable_obstacle_deviation", true);
@@ -428,6 +429,10 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     else if (key == "obstacle_body_half_width")
     {
       config_.obstacle_body_half_width = p.as_double();
+    }
+    else if (key == "obstacle_clearance_margin")
+    {
+      config_.obstacle_clearance_margin = p.as_double();
     }
     else if (key == "enable_obstacle_deviation")
     {
@@ -1662,13 +1667,16 @@ void FTCController::updateLateralDeviation(double dt)
         // to robot from a transient scan return) — nothing to deviate around.
         return;
       }
+      // Side choice is a CLEARANCE question ("which side has room for the
+      // body plus margin to pass"), so it uses the widened half-width — not
+      // the bare detection width used by findFirstObstacleIndex above.
       target_lateral_deviation_ =
           ObstacleDeviation::chooseDeviationSide(*costmap_map_,
                                                  window[static_cast<std::size_t>(obs_idx)],
                                                  config_.max_lateral_deviation,
                                                  config_.deviation_step,
                                                  guard,
-                                                 config_.obstacle_body_half_width);
+                                                 clearanceHalfWidth());
       if (target_lateral_deviation_ == 0.0)
       {
         // Both sides blocked at the obstacle pose. Before bailing, hold a
@@ -1736,7 +1744,7 @@ void FTCController::updateLateralDeviation(double dt)
                                                    config_.max_lateral_deviation,
                                                    config_.deviation_step,
                                                    guard,
-                                                   config_.obstacle_body_half_width);
+                                                   clearanceHalfWidth());
 
     if (std::abs(target_lateral_deviation_) > config_.max_lateral_deviation)
     {

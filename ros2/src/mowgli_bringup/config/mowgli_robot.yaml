@@ -386,6 +386,25 @@ mowgli:
     # ≈7 s of warning at mowing_speed 0.2 m/s. Clamped to [0.2, 5.0] m
     # (>=4 poses so the detector always has a usable lookahead window).
     obstacle_detection_range_m: 1.5
+    # How much SIDEWAYS room (m) FTC leaves beyond the chassis when it skirts a
+    # detected obstacle. Raise this if the robot goes around obstacles but
+    # shaves past them. Added to FTC's obstacle_body_half_width for the
+    # clearance search ONLY — detection reach (obstacle_detection_range_m
+    # above) is unaffected, which is why this is a separate knob: widening the
+    # body half-width instead would also widen detection and re-open the
+    # "deviation > max -> hold 5 s" stalls that drove it to 0.12 on 2026-06-25.
+    # NOTE obstacle_inflation_radius canNOT buy this margin — the deviation
+    # checks threshold at cost 253, whose band width comes from the footprint's
+    # inscribed radius, not from inflation_radius; raising inflation only grows
+    # the 1..252 decay region, which those checks ignore. Clamped [0.0, 0.50]
+    # (above ~0.5 the widened sweep trips the mowing-zone guard on headland
+    # rings that hug the boundary, converting skirts into stalls).
+    obstacle_clearance_margin: 0.10
+    # How long (s) FTC holds zero velocity on a blocked or over-max deviation
+    # before aborting the strip and handing back to the BT. Debounces transient
+    # LiDAR returns (a person crossing) so they don't burn a BT retry.
+    # Clamped [0.5, 60.0].
+    obstacle_wait_timeout_s: 5.0
     # Extra margin (m) grown around DRAWN map obstacle polygons, applied in
     # BOTH the coverage planner (F2C holes are buffered outward before swath
     # planning) and the keepout mask (cells within the margin of an obstacle

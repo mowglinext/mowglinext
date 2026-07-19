@@ -100,6 +100,47 @@ export const ObstaclesSection: React.FC<Props> = ({
                             </Form.Item>
                         </Col>
                     </Row>
+                    <Row gutter={[16, 0]}>
+                        <Col xs={12} sm={8}>
+                            <Form.Item
+                                label={fieldLabel("obstacle_clearance_margin", t("settingsObstacles.clearanceMargin"))}
+                                tooltip={t("settingsObstacles.clearanceMarginTooltip")}
+                            >
+                                <InputNumber
+                                    value={values.obstacle_clearance_margin}
+                                    onChange={(v) => onChange("obstacle_clearance_margin", v)}
+                                    min={0} max={0.5} step={0.05} precision={2}
+                                    style={{ width: "100%" }} addonAfter="m"
+                                />
+                            </Form.Item>
+                        </Col>
+                        <Col xs={12} sm={8}>
+                            <Form.Item
+                                label={fieldLabel("obstacle_detection_range_m", t("settingsObstacles.detectionRange"))}
+                                tooltip={t("settingsObstacles.detectionRangeTooltip")}
+                            >
+                                <InputNumber
+                                    value={values.obstacle_detection_range_m}
+                                    onChange={(v) => onChange("obstacle_detection_range_m", v)}
+                                    min={0.2} max={5} step={0.1} precision={2}
+                                    style={{ width: "100%" }} addonAfter="m"
+                                />
+                            </Form.Item>
+                        </Col>
+                        <Col xs={12} sm={8}>
+                            <Form.Item
+                                label={fieldLabel("obstacle_wait_timeout_s", t("settingsObstacles.waitTimeout"))}
+                                tooltip={t("settingsObstacles.waitTimeoutTooltip")}
+                            >
+                                <InputNumber
+                                    value={values.obstacle_wait_timeout_s}
+                                    onChange={(v) => onChange("obstacle_wait_timeout_s", v)}
+                                    min={0.5} max={60} step={0.5} precision={1}
+                                    style={{ width: "100%" }} addonAfter="s"
+                                />
+                            </Form.Item>
+                        </Col>
+                    </Row>
                 </Form>
             </Card>
 
