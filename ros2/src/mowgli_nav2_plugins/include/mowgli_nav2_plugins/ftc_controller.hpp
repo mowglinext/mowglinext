@@ -16,6 +16,7 @@
 #ifndef MOWGLI_NAV2_PLUGINS__FTC_CONTROLLER_HPP_
 #define MOWGLI_NAV2_PLUGINS__FTC_CONTROLLER_HPP_
 
+#include <algorithm>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -386,6 +387,27 @@ private:
     /// resolution) closes that gap. 0 = legacy centerline-only sampling.
     double obstacle_body_half_width{0.20};
 
+    /// Extra lateral clearance (m) demanded when SKIRTING an obstacle, on top
+    /// of obstacle_body_half_width. Applied ONLY to the clearance search
+    /// (chooseDeviationSide / growDeviationUntilClear) — never to detection
+    /// (findFirstObstacleIndex / the clear_at_zero test), which stays at the
+    /// bare body half-width.
+    ///
+    /// Why a separate knob: obstacle_body_half_width does double duty as
+    /// "how far ahead do I notice an obstacle" AND "how wide must the gap be
+    /// to pass". Widening it to buy pass-by margin also widens detection,
+    /// which is exactly the over-reach that caused the 15x
+    /// "deviation > max -> hold 5 s" stalls per mow (see the 2026-06-25 note
+    /// on obstacle_body_half_width in nav2_params_base.yaml). Splitting the
+    /// two lets margin grow without touching detection reach.
+    ///
+    /// Note this is NOT obtainable via costmap inflation: the deviation checks
+    /// threshold at 253 (INSCRIBED_INFLATED_OBSTACLE), a band whose width is
+    /// set by the footprint's inscribed radius, not by inflation_radius — so
+    /// raising inflation_radius grows only the 1..252 decay region, which
+    /// these checks ignore entirely.
+    double obstacle_clearance_margin{0.0};
+
     // Obstacle deviation (FTC's "skirt the obstacle" behaviour). When
     // disabled, hitting an obstacle in lookahead throws ControllerException
     // (the legacy behaviour). When enabled, the carrot is laterally offset
@@ -428,6 +450,15 @@ private:
   };
 
   Config config_;
+
+  /// Half-width used by the CLEARANCE checks (which side to skirt, and how far
+  /// out the offset path must sit) — the body half-width plus the operator's
+  /// clearance margin. Detection deliberately does NOT use this; see
+  /// Config::obstacle_clearance_margin.
+  double clearanceHalfWidth() const
+  {
+    return config_.obstacle_body_half_width + std::max(0.0, config_.obstacle_clearance_margin);
+  }
 
   /// Speed limit applied via setSpeedLimit(). -1.0 means "no external limit".
   double speed_limit_{-1.0};

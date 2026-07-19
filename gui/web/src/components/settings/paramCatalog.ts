@@ -91,6 +91,13 @@ const CATALOG: Record<string, ParamMeta> = {
   // obstacle_wait_timeout_s cap) when skirting a marginal obstacle. Fixed
   // in ftc_controller.cpp; surfacing the timeout itself as GUI-tunable.
   obstacle_wait_timeout_s: {label: "paramCatalog.obstacle_wait_timeout_s.label", description: "paramCatalog.obstacle_wait_timeout_s.description", tier: "middle", group: "Obstacles", unit: "s"},
+  // Sideways room left beyond the chassis when skirting. Separate from
+  // obstacle_body_half_width on purpose: that one also sets DETECTION reach,
+  // and widening it re-opens the over-reach stalls. Injected into
+  // FollowCoveragePath.obstacle_clearance_margin (navigation.launch.py).
+  // Note obstacle_inflation_radius cannot substitute — the deviation checks
+  // threshold at cost 253, a band sized by the footprint inscribed radius.
+  obstacle_clearance_margin: {label: "paramCatalog.obstacle_clearance_margin.label", description: "paramCatalog.obstacle_clearance_margin.description", tier: "middle", group: "Obstacles", unit: "m"},
 
   // ── Motor control (firmware-adjacent PID) ────────────────────────────────
   // 2026-07-17 Option C (task #34): angular_rate_kp/ki/kff (the host-side

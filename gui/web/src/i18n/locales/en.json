@@ -1683,6 +1683,10 @@
       "label": "Obstacle wait timeout",
       "description": "How long the robot holds still trying to skirt a blocked obstacle before giving up on the strip. Longer values ride out transient blockages (e.g. a person passing); shorter values abandon a stuck strip sooner."
     },
+    "obstacle_clearance_margin": {
+      "label": "Obstacle clearance margin",
+      "description": "Extra sideways room left beyond the chassis when skirting an obstacle while mowing. Raise if the robot goes around obstacles but shaves past them. Costmap inflation cannot provide this margin — the skirting check reads only lethal/inscribed cells."
+    },
     "yaw_kp": {
       "label": "Yaw loop Kp",
       "description": "Proportional gain of the firmware's closed-loop yaw-rate controller."
@@ -2266,11 +2270,17 @@
     "avoidanceMargins": "Avoidance Margins",
     "avoidanceMarginsDescription": "How much distance the robot keeps from obstacles. Changes take effect after a ROS2 restart.",
     "inflationRadius": "Obstacle Inflation Radius",
-    "inflationRadiusTooltip": "Buffer around LiDAR-detected obstacles (trunks, walls) in the local costmap. Raise if the robot passes too close to trees it can see.",
+    "inflationRadiusTooltip": "Buffer around LiDAR-detected obstacles (trunks, walls) in the local costmap. Affects TRANSIT path costing only — it does NOT change how closely the robot skirts obstacles while mowing (use Clearance Margin for that).",
     "maxDetourDistance": "Max Detour Distance",
     "maxDetourDistanceTooltip": "Maximum lateral detour around an obstacle before giving up — drives both coverage skirting and the bypass give-up threshold",
     "drawnObstacleMargin": "Drawn Obstacle Margin",
     "drawnObstacleMarginTooltip": "Extra margin around obstacles drawn on the map, applied to both coverage and transit planning. Use for root zones invisible to the LiDAR.",
+    "clearanceMargin": "Clearance Margin",
+    "clearanceMarginTooltip": "Sideways room left beyond the chassis when skirting an obstacle while mowing. Raise this if the robot goes around obstacles but shaves past them. Inflation Radius does NOT do this.",
+    "detectionRange": "Detection Range",
+    "detectionRangeTooltip": "How far ahead along the mowing path the robot looks for obstacles before starting to skirt. Raise to react earlier and more smoothly.",
+    "waitTimeout": "Wait Timeout",
+    "waitTimeoutTooltip": "How long to wait in place when an obstacle blocks every detour, before giving up on the current strip. Rides out transient blockages such as a person walking past.",
     "approachSlowdown": "Approach Slowdown",
     "approachSlowdownDescription": "The collision monitor slows the robot when a scan return enters the approach box around the chassis (LiDAR variant).",
     "slowdownRatio": "Slowdown Ratio",

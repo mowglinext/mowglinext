@@ -408,6 +408,16 @@ controller_server:
       # > max → hold 5 s" stalls per mow. 0.12 (≈ footprint_half − inscribed)
       # gives effective reach 0.12+0.14 ≈ 0.26 m ≈ the full footprint, no over-reach.
       obstacle_body_half_width: 0.12
+      # Extra lateral clearance demanded when SKIRTING, on top of the body
+      # half-width above. Applied to the clearance search only — detection
+      # stays at 0.12, so margin grows without re-opening the over-reach
+      # stalls that drove that value down. This is the knob to raise if the
+      # robot passes obstacles too closely; costmap inflation_radius CANNOT
+      # do it (the deviation checks threshold at 253, whose band is set by the
+      # footprint's inscribed radius, not by inflation_radius).
+      # OVERRIDDEN AT LAUNCH by mowgli_robot.yaml's obstacle_clearance_margin,
+      # clamped [0.0, 0.50] — see navigation.launch.py.
+      obstacle_clearance_margin: 0.10
       enable_obstacle_deviation: true
       # OVERRIDDEN AT LAUNCH: navigation.launch.py injects
       # mowgli_robot.yaml.max_obstacle_avoidance_distance (default 2.0,

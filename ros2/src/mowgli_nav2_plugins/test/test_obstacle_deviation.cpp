@@ -379,4 +379,52 @@ TEST_F(BoundaryGuardTest, ChooseSide_OtherSideOutOfZone_PicksInZoneSide)
   EXPECT_LT(dev, 0.0);  // right side (in-zone), even though left is locally free
 }
 
+// ── Clearance margin (obstacle_clearance_margin) ──────────────────────────────
+//
+// FTC buys pass-by margin by handing the CLEARANCE checks a widened
+// half-width (obstacle_body_half_width + obstacle_clearance_margin) while
+// DETECTION keeps the bare body half-width. These pin the property that makes
+// that work: a wider half-width forces a strictly larger skirt, and the
+// detection entry point is unaffected by the widening.
+
+TEST_F(ObstacleDeviationTest, GrowDeviation_WiderHalfWidth_ForcesLargerSkirt)
+{
+  // Obstacle straddling the path. With a bare body half-width the search stops
+  // as soon as the body edge grazes clear; adding margin must push it further.
+  stampBlock(0.5, 0.0, 0.20);
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+
+  const double kBodyHalf = 0.12;
+  const double kMargin = 0.15;
+  const double bare = ObstacleDeviation::growDeviationUntilClear(
+      costmap_, path, 0, 10, 0.0, 1.5, 0.05, ObstacleDeviation::BoundaryGuard{}, kBodyHalf);
+  const double with_margin = ObstacleDeviation::growDeviationUntilClear(
+      costmap_, path, 0, 10, 0.0, 1.5, 0.05, ObstacleDeviation::BoundaryGuard{},
+      kBodyHalf + kMargin);
+
+  ASSERT_LE(std::abs(bare), 1.5) << "bare search should have found clearance";
+  ASSERT_LE(std::abs(with_margin), 1.5) << "margin search should have found clearance";
+  EXPECT_GT(std::abs(with_margin), std::abs(bare))
+      << "clearance margin must widen the skirt, not just the sampling";
+  // The extra skirt should be on the order of the margin (within one step).
+  EXPECT_GE(std::abs(with_margin) - std::abs(bare), kMargin - 0.05);
+}
+
+TEST_F(ObstacleDeviationTest, DetectionUnaffectedByClearanceWidening)
+{
+  // An obstacle offset laterally so it sits OUTSIDE the bare body band but
+  // INSIDE the widened clearance band. Detection (findFirstObstacleIndex) is
+  // called with the bare half-width and must NOT see it — that separation is
+  // the whole reason clearance margin is a distinct parameter from
+  // obstacle_body_half_width (widening the latter re-opens the over-reach
+  // stalls documented in nav2_params_base.yaml).
+  stampBlock(0.5, 0.22, 0.03);
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+
+  EXPECT_EQ(-1, ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.12))
+      << "bare detection width must not reach an obstacle 0.22 m off the line";
+  EXPECT_GE(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.27), 0)
+      << "the widened band does cover it — confirming the two widths differ";
+}
+
 }  // namespace mowgli_nav2_plugins

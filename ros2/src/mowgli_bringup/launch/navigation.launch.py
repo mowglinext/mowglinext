@@ -451,6 +451,11 @@ def generate_launch_description() -> LaunchDescription:
     # FollowCoveragePath.obstacle_lookahead POSE COUNT at injection below
     # (kF2CSamplingM).
     obstacle_detection_range_m = 1.5
+    # Extra lateral clearance when skirting an obstacle, on top of FTC's
+    # obstacle_body_half_width. Clearance-only (detection reach unchanged).
+    obstacle_clearance_margin = 0.10
+    # Hold time on a blocked/over-max deviation before aborting the strip.
+    obstacle_wait_timeout_s = 5.0
     obstacle_margin = 0.0
     obstacle_slowdown_ratio = 0.3
     enable_mag_cal = False
@@ -519,6 +524,10 @@ def generate_launch_description() -> LaunchDescription:
             "obstacle_inflation_radius", obstacle_inflation_radius))
         obstacle_detection_range_m = float(rt_rp.get(
             "obstacle_detection_range_m", obstacle_detection_range_m))
+        obstacle_clearance_margin = float(rt_rp.get(
+            "obstacle_clearance_margin", obstacle_clearance_margin))
+        obstacle_wait_timeout_s = float(rt_rp.get(
+            "obstacle_wait_timeout_s", obstacle_wait_timeout_s))
         obstacle_margin = float(rt_rp.get("obstacle_margin", obstacle_margin))
         obstacle_slowdown_ratio = float(rt_rp.get(
             "obstacle_slowdown_ratio", obstacle_slowdown_ratio))
@@ -689,6 +698,21 @@ def generate_launch_description() -> LaunchDescription:
         kF2CSamplingM = 0.05
         fcp["obstacle_lookahead"] = max(4, round(
             min(5.0, max(0.2, obstacle_detection_range_m)) / kF2CSamplingM))
+        # obstacle_clearance_margin: extra lateral room demanded when skirting,
+        # on top of obstacle_body_half_width. Clearance-only — detection reach
+        # is unchanged, which is the whole point of it being separate from
+        # obstacle_body_half_width. Capped at 0.50: beyond that the widened
+        # sweep starts colliding with the zone guard on headland rings that
+        # hug the boundary, turning avoidance into "deviation > max" holds.
+        fcp["obstacle_clearance_margin"] = min(
+            0.50, max(0.0, obstacle_clearance_margin))
+        # obstacle_wait_timeout_s: how long FTC holds zero velocity on a
+        # blocked/over-max deviation before aborting the strip. Previously
+        # present in the GUI param catalog but never injected here, so the
+        # operator-facing value was inert and the static base-yaml value
+        # always won.
+        fcp["obstacle_wait_timeout_s"] = min(
+            60.0, max(0.5, obstacle_wait_timeout_s))
         # LOCAL costmap inflation only. Floor 0.58: the nav2 inflation layer
         # degrades footprint-cost semantics below the chassis circumscribed
         # radius (~0.572 m) and FTC's deviation detector (threshold 253)

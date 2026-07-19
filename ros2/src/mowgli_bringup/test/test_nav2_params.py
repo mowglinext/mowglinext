@@ -280,6 +280,56 @@ def test_navigation_launch_injects_ftc_max_lateral_deviation() -> None:
     )
 
 
+def test_navigation_launch_injects_ftc_clearance_margin() -> None:
+    """obstacle_clearance_margin must reach FollowCoveragePath.
+
+    This is the ONLY operator knob that widens the pass-by gap when skirting:
+    obstacle_inflation_radius cannot do it (FTC's deviation checks threshold at
+    cost 253, whose band is sized by the footprint inscribed radius, not by
+    inflation_radius — raising inflation only grows the 1..252 decay region the
+    checks ignore). If this injection is dropped the GUI slider goes inert and
+    the robot silently returns to grazing past obstacles."""
+    src = _read_text("launch/navigation.launch.py")
+    assert re.search(
+        r"fcp\[.obstacle_clearance_margin.\]\s*=.*obstacle_clearance_margin",
+        src, re.DOTALL), (
+        "navigation.launch.py must inject obstacle_clearance_margin into "
+        "FollowCoveragePath.obstacle_clearance_margin."
+    )
+
+
+def test_navigation_launch_injects_ftc_wait_timeout() -> None:
+    """obstacle_wait_timeout_s must reach FollowCoveragePath.
+
+    It shipped in the GUI param catalog with full i18n but was never injected,
+    so the operator-facing value was inert and the static base.yaml 5.0 always
+    won. Guard against that regressing."""
+    src = _read_text("launch/navigation.launch.py")
+    assert re.search(
+        r"fcp\[.obstacle_wait_timeout_s.\]\s*=.*obstacle_wait_timeout_s",
+        src, re.DOTALL), (
+        "navigation.launch.py must inject obstacle_wait_timeout_s into "
+        "FollowCoveragePath.obstacle_wait_timeout_s."
+    )
+
+
+def test_clearance_margin_is_distinct_from_body_half_width() -> None:
+    """The clearance margin must NOT be folded into obstacle_body_half_width.
+
+    That parameter does double duty as detection reach; widening it to buy
+    pass-by margin re-opens the over-reach that caused ~15x
+    'deviation > max -> hold 5 s' stalls per mow (2026-06-25 field note in
+    nav2_params_base.yaml). Both keys must exist independently."""
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        assert "obstacle_body_half_width" in fcp
+        assert "obstacle_clearance_margin" in fcp
+        assert fcp["obstacle_body_half_width"] == 0.12, (
+            "detection half-width must stay at the tuned 0.12 — raise "
+            "obstacle_clearance_margin for pass-by margin instead"
+        )
+
+
 def test_navigation_launch_injects_local_inflation_with_floor() -> None:
     """obstacle_inflation_radius reaches ONLY the local costmap, floored at
     0.58 m (chassis circumscribed radius ~0.572 — below it the inflation
