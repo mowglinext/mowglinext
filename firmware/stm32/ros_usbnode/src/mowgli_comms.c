@@ -273,8 +273,20 @@ void mowgli_comms_register_handler(uint8_t packet_id,
         s_handlers[s_handler_count].id      = packet_id;
         s_handlers[s_handler_count].handler = handler;
         ++s_handler_count;
+        return;
     }
-    /* If the table is full, silently discard (caller can check capacity). */
+
+    /* Table full — the packet would go unanswered at runtime with no other
+     * symptom. Do NOT fail silently: this previously cost a long debug session
+     * (MAX_HANDLERS=8 vs 10 registrations dropped SET_SAFETY_LIMITS and
+     * CONFIG_REQ, so the firmware never answered the version handshake and the
+     * GUI showed "incompatible / vunknown" no matter how often it was
+     * reflashed). Bump MOWGLI_COMMS_MAX_HANDLERS in mowgli_comms.h. */
+    debug_printf("mowgli_comms: handler table FULL (%u) — packet id 0x%02X "
+                 "DROPPED, it will never be answered. Raise "
+                 "MOWGLI_COMMS_MAX_HANDLERS.\r\n",
+                 (unsigned)MOWGLI_COMMS_MAX_HANDLERS,
+                 (unsigned)packet_id);
 }
 
 void mowgli_comms_send_status(const pkt_status_t *status)
