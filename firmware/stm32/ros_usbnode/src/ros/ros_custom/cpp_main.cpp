@@ -228,6 +228,10 @@ static volatile float cmd_wz = 0.0f; /* commanded yaw rate [rad/s], set by on_cm
 static volatile uint8_t g_yaw_loop_enabled = 1;   /* default on for A/B */
 static volatile float g_yaw_gyro_sign = 1.0f;     /* gyro Z sign vs robot +yaw */
 static volatile float g_yaw_trim_limit_mps = YAW_TRIM_LIMIT_MPS_DEFAULT;
+/* Host-measured mean at-rest gyro-Z bias [rad/s], raw sensor frame. Subtracted
+ * before the sign multiply so open-loop moves (BackUp) hold a true straight line
+ * instead of tracing the bias as an arc. 0 until the host sends SET_YAW_PID. */
+static volatile float g_yaw_gyro_bias = 0.0f;
 
 /* ---------------------------------------------------------------------------
  * Blade motor control state
@@ -488,7 +492,8 @@ static void on_set_yaw_pid(const uint8_t *data, size_t len) {
    * packet if any gain/limit is non-finite, then clamp before applying so a bad
    * host value can never make the yaw loop diverge. */
   if (!std::isfinite(pkt->yaw_kp) || !std::isfinite(pkt->yaw_ki) ||
-      !std::isfinite(pkt->trim_limit_mps)) {
+      !std::isfinite(pkt->trim_limit_mps) ||
+      !std::isfinite(pkt->gyro_bias_radps)) {
     debug_printf("set_yaw_pid rejected: non-finite field\r\n");
     return;
   }
@@ -499,6 +504,10 @@ static void on_set_yaw_pid(const uint8_t *data, size_t len) {
       pid_constrain(pkt->trim_limit_mps, 0.0f, DRIVEMOTOR_GetMaxMps());
   const uint8_t en = (pkt->enabled != 0) ? 1u : 0u;
   const float sign = (pkt->gyro_sign < 0) ? -1.0f : 1.0f;
+  /* A physical at-rest gyro bias is small (WT901: a few deg/s). Clamp hard so a
+   * bad host value can only nudge, not steer — and the differential trim clamp
+   * below bounds the yaw correction regardless. */
+  const float bias = pid_constrain(pkt->gyro_bias_radps, -0.5f, 0.5f);
 
   /* Apply atomically w.r.t. motors_handler() (reads these at 50 Hz); this
    * handler runs in USB RX interrupt context. The integral limit is pinned to
@@ -510,6 +519,7 @@ static void on_set_yaw_pid(const uint8_t *data, size_t len) {
   yaw_pid.setOutputLimit(tl);
   g_yaw_trim_limit_mps = tl;
   g_yaw_gyro_sign = sign;
+  g_yaw_gyro_bias = bias;
   g_yaw_loop_enabled = en;
   __enable_irq();
 }
@@ -855,8 +865,12 @@ extern "C" void motors_handler() {
        * Both this and the IMU broadcast read run in the cooperative main loop,
        * so there is no re-entrancy on the software-I2C bus. */
       if (IMU_TryReadGyro(&gx, &gy, &gz)) {
+        /* Subtract the host-measured at-rest gyro-Z bias BEFORE the sign
+         * multiply — meas = sign*(gz - bias) — so nulling the loop drives the
+         * TRUE yaw rate to the setpoint. Without this, an open-loop BackUp
+         * (wz=0) would hold sign*gz=0, i.e. true_rate=-bias, a constant arc. */
         const float meas_wz_raw =
-            g_yaw_gyro_sign * gz; /* rad/s, robot +yaw = CCW */
+            g_yaw_gyro_sign * (gz - g_yaw_gyro_bias); /* rad/s, robot +yaw = CCW */
         /* 1st-order IIR low-pass on the gyro feedback (seeded on the first
          * sample after a reset to avoid a startup transient) so the loop stops
          * chasing the 2-4 Hz self-oscillation. */
