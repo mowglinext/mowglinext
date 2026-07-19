@@ -16,8 +16,13 @@ type FirmwareConfig struct {
 	Version                        string  `json:"version"`
 	BoardType                      string  `json:"boardType"`
 	PanelType                      string  `json:"panelType"`
+	// FirmwareSource is the GUI dropdown selector: "custom" compiles from
+	// source (the expert path), "prebuilt" (or empty, for older payloads)
+	// flashes the tested prebuilt binary.
+	FirmwareSource                 string  `json:"firmwareSource"`
 	// ExpertBuild routes the flash to the compile-from-source path
-	// (flashMowgli); the default (false) flashes a prebuilt binary.
+	// (flashMowgli); the default (false) flashes a prebuilt binary. Kept for
+	// backward compatibility — FirmwareSource == "custom" implies it.
 	ExpertBuild                    bool    `json:"expertBuild"`
 	DisableEmergency               bool    `json:"disableEmergency"`
 	MaxMps                         float32 `json:"maxMps"`

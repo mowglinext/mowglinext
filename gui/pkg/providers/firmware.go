@@ -65,7 +65,24 @@ func (fp *FirmwareProvider) buildBoardHeader(templateFile string, config types.F
 	return buffer.Bytes(), nil
 }
 
+// FirmwareSource values from the GUI dropdown. "custom" selects the expert
+// compile-from-source path; "prebuilt" (or an empty legacy value) flashes the
+// tested prebuilt binary.
+const (
+	FirmwareSourcePrebuilt = "prebuilt"
+	FirmwareSourceCustom   = "custom"
+)
+
 func (fp *FirmwareProvider) FlashFirmware(writer io.Writer, config types.FirmwareConfig) error {
+	// Validate the build-mode selector at the boundary — never route on an
+	// unrecognized dropdown value.
+	switch config.FirmwareSource {
+	case "", FirmwareSourcePrebuilt, FirmwareSourceCustom:
+		// ok
+	default:
+		return xerrors.Errorf("invalid firmwareSource %q (want %q or %q)",
+			config.FirmwareSource, FirmwareSourcePrebuilt, FirmwareSourceCustom)
+	}
 	configJson, err := json.Marshal(config)
 	if err != nil {
 		return err
@@ -73,19 +90,22 @@ func (fp *FirmwareProvider) FlashFirmware(writer io.Writer, config types.Firmwar
 	if err = fp.db.Set("gui.firmware.config", configJson); err != nil {
 		return err
 	}
+	// "custom" is the explicit expert selection; the legacy ExpertBuild flag is
+	// still honored so older payloads keep working.
+	isCustomBuild := config.FirmwareSource == FirmwareSourceCustom || config.ExpertBuild
 	switch {
 	case config.BoardType == "BOARD_VERMUT_YARDFORCE500":
 		// RP2040-based Vermut board: its own prebuilt-download path (unchanged).
 		return fp.flashVermut(writer, config)
-	case config.ExpertBuild:
+	case isCustomBuild:
 		// Expert "build your own": compile from source with the full board.h
 		// param surface. This is the ONLY path that can set DisableEmergency,
-		// so it stays behind the explicit expert flag.
+		// so it stays behind the explicit custom/expert selection.
 		if config.Repository == "" {
-			return xerrors.Errorf("repository is required for an expert build")
+			return xerrors.Errorf("repository is required for a custom build")
 		}
 		if config.Branch == "" {
-			return xerrors.Errorf("branch is required for an expert build")
+			return xerrors.Errorf("branch is required for a custom build")
 		}
 		return fp.flashMowgli(writer, config)
 	default:

@@ -37,6 +37,9 @@ type Config = {
     version: string,
     boardType: string,
     panelType: string,
+    // "prebuilt" (default) flashes the tested binary; "custom" enables the
+    // expert compile-from-source path. This is the single control that decides.
+    firmwareSource: string,
     expertBuild: boolean,
     disableEmergency: boolean,
     maxMps: number,
@@ -88,8 +91,11 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                     state.display = field.value === "BOARD_VERMUT_YARDFORCE500" ? "visible" : "hidden";
                 })
             })
-            onFieldValueChange('expertBuild', (field) => {
-                setIsExpert(Boolean(field.value));
+            onFieldValueChange('firmwareSource', (field) => {
+                // The Firmware source dropdown is the single control that enables
+                // the expert compile-and-flash path: "custom" compiles from
+                // source, every other value flashes the prebuilt binary.
+                setIsExpert(field.value === "custom");
             })
         },
     }), [])
@@ -110,7 +116,14 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                 })
                 const jsonConfig = config.data["gui.firmware.config"]
                 if (jsonConfig) {
-                    form.setInitialValues(JSON.parse(jsonConfig))
+                    const saved = JSON.parse(jsonConfig)
+                    // Back-compat: a config saved before the Firmware source
+                    // dropdown existed only carried `expertBuild`. Map it so a
+                    // returning user's custom-build choice stays preselected.
+                    if (saved.firmwareSource === undefined) {
+                        saved.firmwareSource = saved.expertBuild ? "custom" : "prebuilt"
+                    }
+                    form.setInitialValues(saved)
                 }
             } catch (e: any) {
                 notification.error({
@@ -212,10 +225,15 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
     };
 
     const flashFirmware = (values: Config) => {
+        const isCustomBuild = values.firmwareSource === "custom";
+        // Derive the backend's expert flag straight from the dropdown so the
+        // payload can never disagree with what the user selected — selecting
+        // "custom" is what routes the backend to compile-from-source.
+        const payload: Config = {...values, expertBuild: isCustomBuild};
         // The prebuilt (default) path doesn't expose the charge/IMU params, so
         // its confirmation is a simple "flash the blessed binary" prompt. The
-        // expert compile path keeps the detailed value-verification list.
-        const content = values.expertBuild ? (
+        // custom compile path keeps the detailed value-verification list.
+        const content = isCustomBuild ? (
             <div>
                 <p><strong>{t('flashBoard.confirmVerifyParams')}</strong></p>
                 <ul style={{listStyle: "none", padding: 0}}>
@@ -241,7 +259,7 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
             cancelText: t('flashBoard.cancel'),
             onOk: () => {
                 confirmModal.destroy();
-                doFlashFirmware(values);
+                doFlashFirmware(payload);
             },
         });
     };
@@ -343,6 +361,25 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                         ]} x-component="Select"
                         x-decorator="FormItem"/></SchemaField>
 
+                    {/* Firmware source is the ONE control that chooses between
+                        flashing the tested prebuilt binary (default) and the
+                        expert compile-from-source path. Selecting "custom" sets
+                        expertBuild on the payload, which routes the backend to
+                        flashMowgli (git clone + platformio build + upload). */}
+                    <SchemaField><SchemaField.String
+                        name={"firmwareSource"}
+                        title={t('flashBoard.firmwareSourceTitle')}
+                        default={"prebuilt"}
+                        x-decorator-props={{tooltip: t('flashBoard.firmwareSourceTooltip')}}
+                        enum={[{
+                            label: t('flashBoard.firmwareSourcePrebuilt'),
+                            value: "prebuilt"
+                        }, {
+                            label: t('flashBoard.firmwareSourceCustom'),
+                            value: "custom"
+                        }]} x-component="Select"
+                        x-decorator="FormItem"/></SchemaField>
+
                     <Alert
                         type="info"
                         showIcon
@@ -378,9 +415,6 @@ export const FlashBoardComponent = (props: { onNext: () => void }) => {
                                         message={t('flashBoard.expertBuildAlertMessage')}
                                         description={t('flashBoard.expertBuildAlertDescription')}
                                     />
-                                    <SchemaField><SchemaField.Boolean name={"expertBuild"} title={t('flashBoard.expertBuildToggleTitle')} default={false}
-                                        x-decorator-props={{tooltip: t('flashBoard.expertBuildToggleTooltip')}}
-                                        x-component="Checkbox" x-decorator="FormItem"/></SchemaField>
                     <SchemaField><SchemaField.String
                         name={"version"}
                         title={t('flashBoard.versionTitle')}
