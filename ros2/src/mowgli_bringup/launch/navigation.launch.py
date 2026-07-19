@@ -872,6 +872,13 @@ def generate_launch_description() -> LaunchDescription:
     nav2_navigation_group = GroupAction(
         actions=[
             SetParameter("bond_timeout", 10.0),
+            # Slow the lifecycle bond heartbeat from the Nav2 default 10 Hz to
+            # 2 Hz on every managed server. 9 nodes × 10 Hz = ~90 bond msgs/s was
+            # the lifecycle_manager's only steady-state load on the Pi; 2 Hz keeps
+            # crash/liveness detection (manager still tears down a dead node) at
+            # ~1/5 the executor churn. Set here (like bond_timeout) so it applies
+            # to all managed nodes from one place instead of 9 yaml blocks.
+            SetParameter("bond_heartbeat_period", 0.5),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     os.path.join(
