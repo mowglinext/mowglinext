@@ -23,13 +23,13 @@
 #include <vector>
 
 #include <geometry_msgs/msg/point.hpp>
-#include <map_msgs/msg/occupancy_grid_update.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
+#include <map_msgs/msg/occupancy_grid_update.hpp>
 #include <mowgli_interfaces/msg/obstacle_array.hpp>
 #include <mowgli_interfaces/srv/clear_obstacle.hpp>
 #include <mowgli_interfaces/srv/get_mowing_area.hpp>

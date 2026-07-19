@@ -201,8 +201,7 @@ void ObstacleTrackerNode::on_costmap(nav_msgs::msg::OccupancyGrid::ConstSharedPt
   process_costmap();
 }
 
-void ObstacleTrackerNode::on_costmap_update(
-    map_msgs::msg::OccupancyGridUpdate::ConstSharedPtr msg)
+void ObstacleTrackerNode::on_costmap_update(map_msgs::msg::OccupancyGridUpdate::ConstSharedPtr msg)
 {
   {
     std::lock_guard<std::mutex> lock(costmap_mutex_);
