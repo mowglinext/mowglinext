@@ -312,6 +312,36 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// IsDocking
+// ---------------------------------------------------------------------------
+
+/// Returns SUCCESS while a DockRobot action is actively running
+/// (ctx->docking_active, maintained by the DockRobot node's onStart/onRunning/
+/// onHalted lifecycle). Pure read — no side effects on the context.
+///
+/// Used by BoundaryGuard to exempt the blade-OFF dock transit under
+/// command 1 from the SoftBoundaryHandler: docking is always preceded by
+/// SetMowerEnabled(false) and can never overlap the blade-on FollowStrip
+/// subtree, so this can never be true during blade-on mowing. See the
+/// docking_active comment in bt_context.hpp and the BoundaryGuard block in
+/// main_tree.xml.
+class IsDocking : public BT::ConditionNode
+{
+public:
+  IsDocking(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
 // IsNewRain
 // ---------------------------------------------------------------------------
 

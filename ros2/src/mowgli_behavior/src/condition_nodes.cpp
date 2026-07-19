@@ -234,6 +234,16 @@ BT::NodeStatus IsLethalBoundaryViolation::tick()
 }
 
 // ---------------------------------------------------------------------------
+// IsDocking
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus IsDocking::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  return ctx->docking_active ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+// ---------------------------------------------------------------------------
 // IsNewRain
 // ---------------------------------------------------------------------------
 

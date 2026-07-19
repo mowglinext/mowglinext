@@ -156,6 +156,35 @@ if(BUILD_TESTING)
     tf2_geometry_msgs
   )
 
+  # ---- test_docking_boundary_exempt ----
+  # Regression for "Mowing Complete → robot stops short of the dock": exercises
+  # the IsDocking condition and the BoundaryGuard whitelist logic that exempts
+  # the blade-off dock transit (command 1 + IsDocking) while keeping full
+  # boundary protection during blade-on mowing.
+  ament_add_gtest(test_docking_boundary_exempt
+    test/test_docking_boundary_exempt.cpp
+    src/condition_nodes.cpp
+  )
+
+  target_include_directories(test_docking_boundary_exempt PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_docking_boundary_exempt
+    rclcpp
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+  )
+
   # ---- test_set_nav2_lifecycle ----
   # Exercises the SetNav2Lifecycle action node's idle-suspend gating
   # (disabled = no-op, PAUSE refused off-dock, idempotent transitions) and,

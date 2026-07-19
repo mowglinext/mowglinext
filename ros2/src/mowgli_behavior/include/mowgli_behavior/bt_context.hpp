@@ -336,6 +336,26 @@ struct BTContext
   bool yaw_seeded_this_session{false};
 
   // -----------------------------------------------------------------------
+  // Docking transit lifecycle (owned by the DockRobot action node)
+  // -----------------------------------------------------------------------
+
+  /// True while a DockRobot action is actively running (between onStart's
+  /// RUNNING return and its terminal SUCCESS/FAILURE or a parent halt).
+  /// Maintained SOLELY by DockRobot (onStart sets true, onRunning clears on
+  /// any terminal status, onHalted clears unconditionally) so the flag can
+  /// never stick true — BehaviorTree.CPP guarantees onHalted() is invoked
+  /// whenever a RUNNING StatefulActionNode is halted by a parent.
+  ///
+  /// Consumed by IsDocking, which BoundaryGuard uses to EXEMPT the blade-off
+  /// dock transit (command 1) from the SoftBoundaryHandler: every DockRobot
+  /// is entered only after SetMowerEnabled(false) and can never overlap the
+  /// blade-on FollowStrip subtree, so "docking_active under command 1" is
+  /// provably a blade-OFF transit — the boundary handler must NOT cancel it.
+  /// Blade-ON mowing (FollowStrip) keeps full boundary protection because
+  /// docking_active is false there. See main_tree.xml BoundaryGuard.
+  bool docking_active{false};
+
+  // -----------------------------------------------------------------------
   // Docking point (set from parameter or service call)
   // -----------------------------------------------------------------------
 

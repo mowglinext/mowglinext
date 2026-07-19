@@ -111,6 +111,29 @@
         <IsCommand command="5"/>
         <IsCommand command="6"/>
         <IsCommand command="2"/>
+        <!-- Short-circuit the BLADE-OFF dock transit at the END of a mowing
+             run (COMMAND_START = 1). When mowing completes (or a rain /
+             low-battery dock fires mid-run) the tree runs DockRobot while
+             current_command is STILL 1 — ClearCommand only fires after the
+             robot is docked. The dock sits at/outside the perimeter, so the
+             dock APPROACH asserts /boundary_violation; without this exemption
+             the ReactiveFallback stops short-circuiting, engages
+             SoftBoundaryHandler, and halts the Root ReactiveSequence before
+             MainLogic — which cancels the in-flight DockRobot (onHalted) and
+             strands the robot short of the dock. This is the command-1 analogue
+             of the command-2 (HOME) whitelist above.
+
+             SAFETY: this is provably limited to the blade-OFF transit. IsDocking
+             is true ONLY while a DockRobot action is running (its onStart→
+             onHalted lifecycle owns ctx->docking_active); every DockRobot is
+             entered only after SetMowerEnabled(false) and can NEVER overlap the
+             blade-on FollowStrip subtree. So blade-ON mowing keeps FULL boundary
+             protection (IsDocking is false there → this child fails → the guard
+             falls through to Soft/LethalBoundaryHandler as before). -->
+        <Sequence name="DockTransitExempt">
+          <IsCommand command="1"/>
+          <IsDocking/>
+        </Sequence>
         <Inverter><IsBoundaryViolation/></Inverter>
 
         <!-- Lethal path: stop immediately, latch -->
