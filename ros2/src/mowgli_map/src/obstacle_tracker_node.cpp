@@ -99,6 +99,19 @@ ObstacleTrackerNode::ObstacleTrackerNode(const rclcpp::NodeOptions& options)
         on_costmap(std::move(msg));
       });
 
+  // The global costmap runs in delta mode (always_send_full_costmap:false),
+  // so the full grid above is latched once at connect and every subsequent
+  // change arrives here as an OccupancyGridUpdate. Subscribing to both keeps
+  // the tracker's observation cadence at ~publish_frequency — required for
+  // promotion to ever fire.
+  costmap_update_sub_ = create_subscription<map_msgs::msg::OccupancyGridUpdate>(
+      "/global_costmap/costmap_updates",
+      rclcpp::QoS(1),
+      [this](map_msgs::msg::OccupancyGridUpdate::ConstSharedPtr msg)
+      {
+        on_costmap_update(std::move(msg));
+      });
+
   // map_server_node publishes with a transient-local QoS so late
   // subscribers receive the last map immediately on connect.
   {
@@ -180,11 +193,64 @@ ObstacleTrackerNode::ObstacleTrackerNode(const rclcpp::NodeOptions& options)
 
 void ObstacleTrackerNode::on_costmap(nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg)
 {
-  const int w = static_cast<int>(msg->info.width);
-  const int h = static_cast<int>(msg->info.height);
-  const double res = msg->info.resolution;
-  const double ox = msg->info.origin.position.x;
-  const double oy = msg->info.origin.position.y;
+  {
+    std::lock_guard<std::mutex> lock(costmap_mutex_);
+    latest_costmap_ = *msg;  // Full snapshot replaces the cache.
+    have_costmap_ = true;
+  }
+  process_costmap();
+}
+
+void ObstacleTrackerNode::on_costmap_update(map_msgs::msg::OccupancyGridUpdate::ConstSharedPtr msg)
+{
+  {
+    std::lock_guard<std::mutex> lock(costmap_mutex_);
+    if (!have_costmap_)
+      return;  // No base grid yet — wait for the first full snapshot.
+
+    const int gw = static_cast<int>(latest_costmap_.info.width);
+    const int gh = static_cast<int>(latest_costmap_.info.height);
+    const int ux = msg->x;
+    const int uy = msg->y;
+    const int uw = static_cast<int>(msg->width);
+    const int uh = static_cast<int>(msg->height);
+
+    // Reject an update that doesn't fit the cached grid. A costmap resize
+    // always republishes the full grid on /global_costmap/costmap, so it is
+    // safe to drop the delta and wait for that next full snapshot.
+    if (ux < 0 || uy < 0 || uw <= 0 || uh <= 0 || ux + uw > gw || uy + uh > gh ||
+        static_cast<int>(msg->data.size()) != uw * uh)
+      return;
+
+    for (int row = 0; row < uh; ++row)
+    {
+      const int dst_off = (uy + row) * gw + ux;
+      const int src_off = row * uw;
+      for (int col = 0; col < uw; ++col)
+        latest_costmap_.data[dst_off + col] = msg->data[src_off + col];
+    }
+    // Keep the cached grid's stamp fresh so obstacle aging/promotion in
+    // associate_clusters()/promote_persistent() advances with each delta.
+    latest_costmap_.header.stamp = msg->header.stamp;
+  }
+  process_costmap();
+}
+
+void ObstacleTrackerNode::process_costmap()
+{
+  nav_msgs::msg::OccupancyGrid msg;
+  {
+    std::lock_guard<std::mutex> lock(costmap_mutex_);
+    if (!have_costmap_)
+      return;
+    msg = latest_costmap_;  // Copy so the flood-fill runs without the lock.
+  }
+
+  const int w = static_cast<int>(msg.info.width);
+  const int h = static_cast<int>(msg.info.height);
+  const double res = msg.info.resolution;
+  const double ox = msg.info.origin.position.x;
+  const double oy = msg.info.origin.position.y;
 
   if (w == 0 || h == 0)
     return;
@@ -202,7 +268,7 @@ void ObstacleTrackerNode::on_costmap(nav_msgs::msg::OccupancyGrid::ConstSharedPt
     for (int x = 0; x < w; ++x)
     {
       const int idx = y * w + x;
-      if (visited[idx] || msg->data[idx] < OBSTACLE_COST)
+      if (visited[idx] || msg.data[idx] < OBSTACLE_COST)
         continue;
 
       // BFS flood-fill
@@ -228,7 +294,7 @@ void ObstacleTrackerNode::on_costmap(nav_msgs::msg::OccupancyGrid::ConstSharedPt
           if (nx >= 0 && nx < w && ny >= 0 && ny < h)
           {
             int nidx = ny * w + nx;
-            if (!visited[nidx] && msg->data[nidx] >= OBSTACLE_COST)
+            if (!visited[nidx] && msg.data[nidx] >= OBSTACLE_COST)
             {
               visited[nidx] = true;
               queue.emplace_back(nx, ny);
@@ -244,7 +310,7 @@ void ObstacleTrackerNode::on_costmap(nav_msgs::msg::OccupancyGrid::ConstSharedPt
     }
   }
 
-  const rclcpp::Time stamp(msg->header.stamp);
+  const rclcpp::Time stamp(msg.header.stamp);
   std::lock_guard<std::mutex> lock(mutex_);
   associate_clusters(clusters, stamp);
 }

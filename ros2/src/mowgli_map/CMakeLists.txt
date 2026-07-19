@@ -22,6 +22,7 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(map_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(grid_map_core REQUIRED)
 find_package(grid_map_ros REQUIRED)
@@ -86,6 +87,7 @@ ament_target_dependencies(mowgli_obstacle_tracker_lib
   rclcpp
   std_srvs
   nav_msgs
+  map_msgs
   geometry_msgs
   sensor_msgs
   visualization_msgs
@@ -197,6 +199,7 @@ if(BUILD_TESTING)
     rclcpp
     std_srvs
     nav_msgs
+    map_msgs
     geometry_msgs
     sensor_msgs
     visualization_msgs
@@ -221,6 +224,7 @@ ament_export_dependencies(
   rclcpp
   std_srvs
   nav_msgs
+  map_msgs
   geometry_msgs
   grid_map_core
   grid_map_ros
