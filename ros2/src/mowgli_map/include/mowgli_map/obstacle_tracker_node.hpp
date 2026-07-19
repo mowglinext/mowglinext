@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <geometry_msgs/msg/point.hpp>
+#include <map_msgs/msg/occupancy_grid_update.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
@@ -96,9 +97,25 @@ private:
 
   // ── ROS callbacks ─────────────────────────────────────────────────────────
 
-  /// Extract obstacle cells from the global costmap, cluster with flood-fill,
-  /// and associate clusters with existing tracked obstacles.
+  /// Seed the cached full costmap from a full snapshot, then re-cluster.
+  /// The global costmap runs with always_send_full_costmap:false, so this
+  /// full grid on /global_costmap/costmap only arrives on first connect (and
+  /// on a costmap resize) — subsequent obstacle changes come via
+  /// on_costmap_update.
   void on_costmap(nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg);
+
+  /// Apply an incremental costmap update (delta mode) to the cached full grid,
+  /// then re-cluster. Without this the tracker would see the costmap exactly
+  /// once at startup and no obstacle would ever accumulate the ~observations
+  /// needed to promote to PERSISTENT (the promotion coverage metric assumes a
+  /// ~publish_rate cadence of observations).
+  void on_costmap_update(map_msgs::msg::OccupancyGridUpdate::ConstSharedPtr msg);
+
+  /// Flood-fill the cached costmap into clusters and feed associate_clusters().
+  /// Shared by the full-snapshot (on_costmap) and delta (on_costmap_update)
+  /// paths. Copies the cached grid under costmap_mutex_ so the flood-fill runs
+  /// lock-free.
+  void process_costmap();
 
   /// Extract occupied cells from the OccupancyGrid (published by
   /// map_server_node), filter by boundary distance, cluster with DBSCAN,
@@ -213,7 +230,14 @@ private:
 
   // ── Subscribers ───────────────────────────────────────────────────────────
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
+  rclcpp::Subscription<map_msgs::msg::OccupancyGridUpdate>::SharedPtr costmap_update_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
+
+  /// Cached full global costmap. Seeded by on_costmap (full snapshot) and
+  /// patched in place by on_costmap_update (delta). Guarded by costmap_mutex_.
+  nav_msgs::msg::OccupancyGrid latest_costmap_;
+  bool have_costmap_{false};
+  mutable std::mutex costmap_mutex_;
 
   // ── Services ──────────────────────────────────────────────────────────────
   rclcpp::Service<mowgli_interfaces::srv::ClearObstacle>::SharedPtr clear_obstacle_srv_;
