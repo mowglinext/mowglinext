@@ -24,7 +24,7 @@
  * Design constraints (STM32F103, 64 KB RAM, 256 KB Flash):
  *   - Zero dynamic allocation. All buffers are statically sized.
  *   - RX accumulation buffer: MOWGLI_COMMS_RX_BUF_SIZE bytes (default 512).
- *   - Maximum registered handlers: MOWGLI_COMMS_MAX_HANDLERS (default 8).
+ *   - Maximum registered handlers: MOWGLI_COMMS_MAX_HANDLERS (default 16).
  *   - The TX encode buffer is allocated on the call stack of
  *     mowgli_comms_send(). Worst-case size for the largest packet
  *     (pkt_imu_t = 40 bytes): COBS_MAX_ENCODED_SIZE(40) = 41 bytes.
@@ -69,10 +69,18 @@ extern "C" {
  * @brief Maximum number of simultaneously registered packet handlers.
  *
  * One slot per distinct PKT_ID_* that the firmware wishes to receive.
- * The default of 8 covers all current PKT_ID values with room to spare.
+ *
+ * MUST be >= the number of mowgli_comms_register_handler() calls in
+ * cpp_main.cpp. Registrations past the cap are DROPPED, and the packet simply
+ * goes unanswered at runtime — there is no link-time or boot-time error. This
+ * bit us at 8: cpp_main.cpp registers 10 handlers, so SET_SAFETY_LIMITS and
+ * CONFIG_REQ (the last two) were never dispatched. The firmware therefore never
+ * answered the host's version handshake, and the GUI reported "Firmware
+ * incompatible / vunknown" forever — reflashing could not fix it, because the
+ * binary itself was fine. Keep headroom here (each slot is a few bytes of .bss).
  */
 #ifndef MOWGLI_COMMS_MAX_HANDLERS
-#define MOWGLI_COMMS_MAX_HANDLERS  8u
+#define MOWGLI_COMMS_MAX_HANDLERS  16u
 #endif
 
 /* ---------------------------------------------------------------------------
