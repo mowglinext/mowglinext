@@ -50,6 +50,8 @@ jobs:
         ros2 pkg list | grep -x universal_gnss_ros2
         ros2 pkg executables universal_gnss_ros2 | grep -x "universal_gnss_ros2 receiver_node"
         ros2 pkg executables universal_gnss_ros2 | grep -x "universal_gnss_ros2 ntrip_node"
+        ros2 pkg list | grep -x mowgli_gnss_bridge
+        ros2 pkg executables mowgli_gnss_bridge | grep -x "mowgli_gnss_bridge universal_gnss_topic_bridge"
         test -x /universal_gnss_topic_bridge.py
         python3 -m py_compile /universal_gnss_topic_bridge.py
         python3 - <<'PY'
