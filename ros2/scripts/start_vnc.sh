@@ -3,7 +3,7 @@
 # start_vnc.sh
 #
 # Starts a VNC server + noVNC web proxy inside the simulation container.
-# Access Gazebo GUI from your browser at http://localhost:6080/vnc.html
+# Access the simulator GUI from your browser at http://localhost:6080/vnc.html
 #
 # This script is meant to be run inside the Docker container, typically via:
 #   docker exec mowgli-sim /ros2_ws/scripts/start_vnc.sh
@@ -43,7 +43,7 @@ websockify \
 
 echo ""
 echo "========================================================"
-echo "  Gazebo GUI available at:"
+echo "  Simulator GUI available at:"
 echo "    http://localhost:${NOVNC_PORT}/vnc.html"
 echo ""
 echo "  Foxglove Studio connects to:"
@@ -57,7 +57,8 @@ if [ -f /ros2_ws/install/setup.bash ]; then
     source /ros2_ws/install/setup.bash
 fi
 
-# Launch the full simulation with Gazebo GUI (not headless)
+# Launch the full simulation (not headless). This script is the sole
+# simulation launcher for the Compose GUI service.
 exec ros2 launch mowgli_bringup sim_full_system.launch.py \
     headless:=false \
     use_rviz:=false

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface autodetermine="true"/>
+      </Interfaces>
+    </General>
+    <Discovery>
+      <MaxAutoParticipantIndex>500</MaxAutoParticipantIndex>
+    </Discovery>
+  </Domain>
+</CycloneDDS>
