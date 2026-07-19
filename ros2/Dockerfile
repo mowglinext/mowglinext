@@ -475,14 +475,17 @@ CMD ["ros2", "launch", "mowgli_bringup", "mowgli.launch.py"]
 # Stage 6: simulation
 # Extends runtime with the Webots simulator for headless/web simulation.
 #
-# NOTE: This stage is mid-migration from Gazebo Ignition to Webots. The
-# Gazebo apt packages have been removed; the Webots binary + ROS2 driver
-# install steps are TODO (Phase 2 of the Webots migration). Running the
-# simulation image as-is will fail until Webots is installed here.
+# Webots R2025a is the minimum version required by the ROS 2 Kilted driver.
+# Pin the vendor package so a clean checkout builds the same simulator image.
+# Cyberbotics publishes this Linux package for amd64 only; the regular runtime
+# target remains architecture-neutral, while this simulator target fails early
+# and clearly on unsupported Linux architectures.
 # =============================================================================
 FROM runtime AS simulation
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG TARGETARCH
+ARG WEBOTS_VERSION=R2025a
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Headless rendering (sensors need a virtual display when no GPU)
@@ -495,8 +498,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openbox \
     xterm \
     x11-utils \
-    # TODO(webots): install Webots binary + ros-kilted-webots-ros2-driver
+    wget \
+    ca-certificates \
+    # Webots ROS 2 launcher, controller and driver
+    ros-kilted-webots-ros2 \
+ && test "${TARGETARCH}" = "amd64" \
+ && wget -q "https://github.com/cyberbotics/webots/releases/download/${WEBOTS_VERSION}/webots_2025a_amd64.deb" -O /tmp/webots.deb \
+ && apt-get install -y --no-install-recommends /tmp/webots.deb \
+ && rm -f /tmp/webots.deb \
  && rm -rf /var/lib/apt/lists/*
+
+ENV WEBOTS_HOME=/usr/local/webots
+
+# Docker Desktop's Linux VM kernel identifies as microsoft-standard. The
+# upstream driver therefore selects its native-WSL path and attempts to use a
+# Windows-side Webots install. In this Linux container Webots is installed at
+# WEBOTS_HOME, so only the driver's Docker execution needs to opt out of that
+# detection. Native WSL remains unchanged.
+RUN python3 - <<'PY'
+from pathlib import Path
+
+path = Path('/opt/ros/kilted/lib/python3.12/site-packages/webots_ros2_driver/utils.py')
+old = "def is_wsl():\n    return 'microsoft-standard' in uname().release\n"
+new = (
+    "def is_wsl():\n"
+    "    return False if os.path.exists('/.dockerenv') else "
+    "'microsoft-standard' in uname().release\n"
+)
+text = path.read_text()
+if old not in text:
+    raise SystemExit(f'Unexpected webots_ros2_driver is_wsl() implementation: {path}')
+path.write_text(text.replace(old, new))
+PY
 
 # Copy VNC startup script
 COPY ros2/scripts/start_vnc.sh /ros2_ws/scripts/start_vnc.sh
