@@ -644,6 +644,7 @@
     "firmwareIncompatible": "Firmware incompatible",
     "firmwareVersion": "v{{version}}",
     "firmwareReflash": "v{{version}} — reflash firmware to mow",
+    "firmwareFlashCta": "Flash firmware",
     "coverageToday": "Coverage today · {{pct}} %"
   },
   "onboardingPage": {

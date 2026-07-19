@@ -1,4 +1,5 @@
-import {App} from "antd";
+import type {ReactNode} from "react";
+import {App, Button} from "antd";
 import {motion} from "framer-motion";
 import {useNavigate} from "react-router-dom";
 import {useTranslation} from "react-i18next";
@@ -573,10 +574,13 @@ function StatTile({label, value, unit, hint, accent, icon}: StatTileProps) {
   );
 }
 
+type HealthRow = {k: string; ok: boolean; note: string; action?: ReactNode};
+
 function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
   const {t} = useTranslation();
+  const navigate = useNavigate();
   const weather = useWeather();
-  const rows = [
+  const rows: HealthRow[] = [
     {k: t('mowgliNextPage.gpsSignal'),         ok: data.gps > 0,           note: data.gpsLabel},
     {k: data.rain ? t('mowgliNextPage.rainDetectedRow') : t('mowgliNextPage.noRain'),
                               ok: !data.rain,             note: data.rain ? t('mowgliNextPage.mowingPausedShort') : t('mowgliNextPage.conditionsOk')},
@@ -597,6 +601,17 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
       note: data.firmwareCompatible
         ? t('mowgliNextPage.firmwareVersion', {version: data.firmwareVersion || '?'})
         : t('mowgliNextPage.firmwareReflash', {version: data.firmwareVersion || '?'}),
+      // When incompatible, offer a one-click jump to the flash screen (opens the
+      // onboarding firmware step with the prebuilt flash form ready to go).
+      action: data.firmwareCompatible ? undefined : (
+        <Button
+          type="primary"
+          size="small"
+          onClick={() => navigate('/onboarding?step=firmware&flash=1')}
+        >
+          {t('mowgliNextPage.firmwareFlashCta')}
+        </Button>
+      ),
     });
   }
   return (
@@ -628,6 +643,7 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
               <div style={{fontSize: 13, fontWeight: 600, color: 'var(--ink, #ECFFF4)'}}>{r.k}</div>
               <div style={{fontSize: 11, color: 'rgba(236,255,244,0.42)'}}>{r.note}</div>
             </div>
+            {r.action && <div style={{flexShrink: 0}}>{r.action}</div>}
           </div>
         ))}
       </div>

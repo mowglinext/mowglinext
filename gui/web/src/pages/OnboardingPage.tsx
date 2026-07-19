@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
     App,
@@ -885,10 +886,13 @@ const ImuYawStep: React.FC<RobotModelStepProps> = ({values, onChange}) => {
 
 // ── Step 5: Firmware ────────────────────────────────────────────────────
 
-const FirmwareStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
+const FirmwareStep: React.FC<{ onNext: () => void; autoFlash?: boolean }> = ({ onNext, autoFlash = false }) => {
     const { t } = useTranslation();
     const { colors } = useThemeMode();
-    const [showFlash, setShowFlash] = useState(false);
+    // `autoFlash` (set by the dashboard deep-link when firmware is incompatible)
+    // skips the intro screen and drops the operator straight onto the prebuilt
+    // flash form — the one-click path from the "reflash to mow" warning.
+    const [showFlash, setShowFlash] = useState(autoFlash);
     const { firmwareCompatible, firmwareVersion } = useFirmwareStatus();
 
     if (showFlash) {
@@ -1017,7 +1021,14 @@ const OnboardingWizard: React.FC = () => {
     const isMobile = useIsMobile();
     const { values: savedValues, saveValues, savePartialValues, loading } = useSettingsSchema();
     const guiApi = useApi();
-    const [currentStep, setCurrentStep] = useState(0);
+    // Deep-link support: the dashboard's "Flash firmware" CTA (shown when the
+    // firmware handshake reports incompatible) lands here with
+    // `?step=firmware&flash=1`, opening the wizard directly on the firmware step
+    // with the flash panel already expanded — no hunting for the flash screen.
+    const [searchParams] = useSearchParams();
+    const deepLinkFirmware = searchParams.get("step") === "firmware";
+    const autoFlash = deepLinkFirmware && searchParams.get("flash") === "1";
+    const [currentStep, setCurrentStep] = useState(deepLinkFirmware ? STEP_FIRMWARE : 0);
     const [localValues, setLocalValues] = useState<Record<string, any>>({});
     const [saving, setSaving] = useState(false);
     const gpsRestart = useContainerRestart({
@@ -1125,7 +1136,7 @@ const OnboardingWizard: React.FC = () => {
         <>
             {currentStep === 0 && <WelcomeStep onNext={handleNext} />}
             {currentStep === 1 && <RobotModelStep values={localValues} onChange={handleChange} />}
-            {currentStep === 2 && <FirmwareStep onNext={handleNext} />}
+            {currentStep === 2 && <FirmwareStep onNext={handleNext} autoFlash={autoFlash} />}
             {currentStep === 3 && <NtripStep values={localValues} onChange={handleChange} />}
             {currentStep === 4 && (
                 <GpsStep

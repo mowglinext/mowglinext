@@ -641,6 +641,7 @@
     "firmwareIncompatible": "Firmware incompatible",
     "firmwareVersion": "v{{version}}",
     "firmwareReflash": "v{{version}} — reflashez le firmware pour tondre",
+    "firmwareFlashCta": "Flasher le firmware",
     "coverageProgress": "Couverture de la zone · {{pct}} %",
     "bladesOff": "arrêt",
     "areaN": "Zone {{number}}",
