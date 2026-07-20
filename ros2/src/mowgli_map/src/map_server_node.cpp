@@ -64,8 +64,7 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   map_file_path_ = declare_parameter<std::string>("map_file_path", "");
   areas_file_path_ = declare_parameter<std::string>("areas_file_path", "");
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
-  mow_progress_publish_period_s_ =
-      declare_parameter<double>("mow_progress_publish_period_s", 2.0);
+  mow_progress_publish_period_s_ = declare_parameter<double>("mow_progress_publish_period_s", 2.0);
   keepout_nav_margin_ = declare_parameter<double>("keepout_nav_margin", 1.5);
   // Hard area-boundary enforcement: when true (operator default), the keepout
   // mask marks every cell OUTSIDE the union of all areas (mowing + navigation)

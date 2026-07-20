@@ -741,7 +741,9 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // a plan — expected: the AUTO swath-angle sweep. Pure accounting.
   using Clock = std::chrono::steady_clock;
   auto elapsedMs = [](Clock::time_point t0)
-  { return std::chrono::duration<double, std::milli>(Clock::now() - t0).count(); };
+  {
+    return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+  };
   double t_headland_ms = 0.0;
   double t_mainland_ms = 0.0;
   double t_swaths_ms = 0.0;
