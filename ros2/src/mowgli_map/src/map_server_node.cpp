@@ -169,8 +169,6 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   init_map();
 
   // ── Publishers ───────────────────────────────────────────────────────────
-  grid_map_pub_ = create_publisher<grid_map_msgs::msg::GridMap>("~/grid_map", rclcpp::QoS(1));
-
   // Mowed-area progress overlay. transient_local so the GUI receives the latest
   // accumulated coverage immediately on (re)connect.
   mow_progress_pub_ =
@@ -186,11 +184,6 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
 
   keepout_mask_pub_ =
       create_publisher<nav_msgs::msg::OccupancyGrid>("/keepout_mask", transient_qos);
-
-  speed_filter_info_pub_ =
-      create_publisher<nav2_msgs::msg::CostmapFilterInfo>("/speed_filter_info", transient_qos);
-
-  speed_mask_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>("/speed_mask", transient_qos);
 
   // ── Subscribers ──────────────────────────────────────────────────────────
   occupancy_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
@@ -754,9 +747,6 @@ void MapServerNode::on_publish_timer()
   {
     std::lock_guard<std::mutex> lock(map_mutex_);
 
-    auto grid_map_msg = grid_map::GridMapRosConverter::toMessage(map_);
-    grid_map_pub_->publish(std::move(grid_map_msg));
-
     // Only publish masks when something changed. The publishers use
     // transient_local QoS so late subscribers (e.g. costmap_filter)
     // automatically receive the most recent mask. Republishing a
@@ -767,7 +757,6 @@ void MapServerNode::on_publish_timer()
     if (masks_dirty_)
     {
       publish_keepout_mask();
-      publish_speed_mask();
       masks_dirty_ = false;
     }
 

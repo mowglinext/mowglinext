@@ -13,11 +13,12 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Costmap filter mask publishers (keepout + speed) split out of
-// map_server_node.cpp. ROS interface is unchanged: same /keepout_mask,
-// /speed_mask, /costmap_filter_info, /speed_filter_info topics, same
-// transient_local QoS, same X→col / Y→row OccupancyGrid convention
-// (see CLAUDE.md invariant #14 — width=nx, height=ny, never swap).
+// Costmap filter mask publisher (keepout) split out of map_server_node.cpp.
+// ROS interface is unchanged: same /keepout_mask + /costmap_filter_info
+// topics, same transient_local QoS, same X→col / Y→row OccupancyGrid
+// convention (see CLAUDE.md invariant #14 — width=nx, height=ny, never swap).
+// The speed-mask publisher was removed: nothing consumed /speed_mask (no
+// SpeedFilter plugin in the Nav2 global or local costmap).
 
 #include <algorithm>
 #include <cmath>
@@ -281,122 +282,6 @@ void MapServerNode::publish_keepout_mask()
     info.multiplier = 1.0F;
     keepout_filter_info_pub_->publish(info);
     keepout_filter_info_sent_ = true;
-  }
-}
-
-void MapServerNode::publish_speed_mask()
-{
-  if (areas_.empty())
-  {
-    return;
-  }
-
-  // See publish_keepout_mask for the X/Y→OccupancyGrid convention.
-  const int nx = map_.getSize()(0);  // cells along X
-  const int ny = map_.getSize()(1);  // cells along Y
-  const float res = static_cast<float>(resolution_);
-
-  const double headland_radius = tool_width_;
-
-  nav_msgs::msg::OccupancyGrid mask;
-  mask.header.stamp = now();
-  mask.header.frame_id = map_frame_;
-  mask.info.resolution = res;
-  mask.info.width = static_cast<uint32_t>(nx);
-  mask.info.height = static_cast<uint32_t>(ny);
-  mask.info.origin.position.x = map_.getPosition().x() - map_.getLength().x() * 0.5;
-  mask.info.origin.position.y = map_.getPosition().y() - map_.getLength().y() * 0.5;
-  mask.info.origin.position.z = 0.0;
-  mask.info.origin.orientation.w = 1.0;
-  mask.data.resize(static_cast<std::size_t>(nx * ny), 0);  // default: full speed
-
-  for (const auto& area : areas_)
-  {
-    const auto& pts = area.polygon.points;
-    const std::size_t n = pts.size();
-    if (n < 3)
-      continue;
-
-    for (int r = 0; r < nx; ++r)
-    {
-      for (int c = 0; c < ny; ++c)
-      {
-        grid_map::Position pos;
-        const grid_map::Index idx(r, c);
-        if (!map_.getPosition(idx, pos))
-        {
-          continue;
-        }
-
-        geometry_msgs::msg::Point32 pt;
-        pt.x = static_cast<float>(pos.x());
-        pt.y = static_cast<float>(pos.y());
-        pt.z = 0.0F;
-
-        if (!point_in_polygon(pt, area.polygon))
-        {
-          continue;
-        }
-
-        double min_dist_sq = std::numeric_limits<double>::max();
-
-        for (std::size_t i = 0, j = n - 1; i < n; j = i++)
-        {
-          const double ax = static_cast<double>(pts[j].x);
-          const double ay = static_cast<double>(pts[j].y);
-          const double bx = static_cast<double>(pts[i].x);
-          const double by = static_cast<double>(pts[i].y);
-
-          const double dx = bx - ax;
-          const double dy = by - ay;
-          const double len_sq = dx * dx + dy * dy;
-
-          double dist_sq = 0.0;
-          if (len_sq < 1e-12)
-          {
-            const double ex = pos.x() - ax;
-            const double ey = pos.y() - ay;
-            dist_sq = ex * ex + ey * ey;
-          }
-          else
-          {
-            const double t =
-                std::clamp(((pos.x() - ax) * dx + (pos.y() - ay) * dy) / len_sq, 0.0, 1.0);
-            const double proj_x = ax + t * dx - pos.x();
-            const double proj_y = ay + t * dy - pos.y();
-            dist_sq = proj_x * proj_x + proj_y * proj_y;
-          }
-
-          if (dist_sq < min_dist_sq)
-          {
-            min_dist_sq = dist_sq;
-          }
-        }
-
-        if (min_dist_sq <= headland_radius * headland_radius)
-        {
-          const int og_col = nx - 1 - r;
-          const int og_row = ny - 1 - c;
-          mask.data[static_cast<std::size_t>(og_row * nx + og_col)] = 50;
-        }
-      }
-    }
-  }
-
-  cached_speed_mask_ = mask;
-  speed_mask_pub_->publish(mask);
-
-  if (!speed_filter_info_sent_)
-  {
-    nav2_msgs::msg::CostmapFilterInfo info;
-    info.header.stamp = mask.header.stamp;
-    info.header.frame_id = map_frame_;
-    info.type = 1;  // SPEED_LIMIT = 1 (percentage mode)
-    info.filter_mask_topic = "/speed_mask";
-    info.base = 100.0F;
-    info.multiplier = -1.0F;
-    speed_filter_info_pub_->publish(info);
-    speed_filter_info_sent_ = true;
   }
 }
 
