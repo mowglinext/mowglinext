@@ -27,6 +27,7 @@ set(msg_files
   "msg/MapArea.msg"
   "msg/ObstacleArray.msg"
   "msg/TrackedObstacle.msg"
+  "msg/DockCalibrationStatus.msg"
 )
 
 # Declare service files
@@ -51,6 +52,7 @@ set(srv_files
 set(action_files
   "action/CoverageTask.action"
   "action/PlanCoverage.action"
+  "action/CalibrateDock.action"
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}

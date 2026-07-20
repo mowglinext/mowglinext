@@ -387,6 +387,26 @@ def generate_launch_description() -> LaunchDescription:
             {"use_sim_time": use_sim_time},
             {"undock_distance": float(robot_params.get("undock_distance", 2.0))},
             {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
+            # One-click dock calibration (CalibrateDock action). Defaults come
+            # from the mowgli_bringup template (Invariant 15) via robot_params.
+            {"dock_calib_reverse_distance_m": float(
+                robot_params.get("dock_calib_reverse_distance_m", 2.0))},
+            {"dock_calib_reverse_speed_ms": float(
+                robot_params.get("dock_calib_reverse_speed_ms", 0.15))},
+            {"dock_calib_redock_overshoot_m": float(
+                robot_params.get("dock_calib_redock_overshoot_m", 0.30))},
+            {"dock_calib_rtk_wait_timeout_s": float(
+                robot_params.get("dock_calib_rtk_wait_timeout_s", 10.0))},
+            {"dock_calib_redock_charge_timeout_s": float(
+                robot_params.get("dock_calib_redock_charge_timeout_s", 30.0))},
+            {"dock_calib_cog_min_samples": int(
+                robot_params.get("dock_calib_cog_min_samples", 8))},
+            {"dock_calib_cog_std_max_rad": float(
+                robot_params.get("dock_calib_cog_std_max_rad", 0.0524))},
+            {"dock_calib_cog_bearing_match_max_rad": float(
+                robot_params.get("dock_calib_cog_bearing_match_max_rad", 0.1047))},
+            {"dock_calib_min_baseline_displacement_m": float(
+                robot_params.get("dock_calib_min_baseline_displacement_m", 0.5))},
         ],
     )
 

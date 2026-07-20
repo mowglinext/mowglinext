@@ -741,11 +741,39 @@ void MapServerNode::on_set_docking_point(
   // the operator is explicitly setting orientation by hand, so honor the
   // request as before — that path was never circular (no fused-yaw readback
   // involved).
+  // ── Orientation capture — keyed on req->yaw_source, DECOUPLED from the
+  // position source. PRESERVE keeps the existing persisted dock_pose_yaw
+  // (safe default: a live on-dock capture cannot observe an independent yaw —
+  // see the circularity note above). REQUEST honours the request quaternion
+  // (manual map-drag / settings edit — never circular). MOTION takes the
+  // RTK-gated, COG-derived yaw_rad from the one-click dock-calibration action
+  // — the ONLY non-circular way to correct a stale dock heading (task #45).
+  using SetDockReq = mowgli_interfaces::srv::SetDockingPoint::Request;
   const auto preserved_orientation = docking_pose_.orientation;
-  docking_pose_ = req->docking_pose;  // orientation (and position if !gps)
+  docking_pose_ = req->docking_pose;  // request position (+ request orientation for REQUEST)
+  const char* yaw_src_desc = "request";
+  switch (req->yaw_source)
+  {
+    case SetDockReq::MOTION:
+      docking_pose_.orientation.x = 0.0;
+      docking_pose_.orientation.y = 0.0;
+      docking_pose_.orientation.z = std::sin(req->yaw_rad * 0.5);
+      docking_pose_.orientation.w = std::cos(req->yaw_rad * 0.5);
+      yaw_src_desc = "motion (COG-derived)";
+      break;
+    case SetDockReq::REQUEST:
+      // orientation already assigned from req->docking_pose above.
+      yaw_src_desc = "request (manual)";
+      break;
+    case SetDockReq::PRESERVE:
+    default:
+      docking_pose_.orientation = preserved_orientation;
+      yaw_src_desc = "preserved (existing dock_pose_yaw)";
+      break;
+  }
+
   if (req->use_gps_position)
   {
-    docking_pose_.orientation = preserved_orientation;
     double gps_x_mean = 0.0;
     double gps_y_mean = 0.0;
     {
@@ -778,21 +806,24 @@ void MapServerNode::on_set_docking_point(
     RCLCPP_INFO(get_logger(),
                 "Docking point captured from averaged GPS: (%.3f, %.3f) over %zu "
                 "samples; request fused position was (%.3f, %.3f) — Δ=(%.3f, %.3f) m. "
-                "Orientation UNCHANGED (kept existing dock_pose_yaw — see task #45).",
+                "Orientation source: %s.",
                 gps_x_mean,
                 gps_y_mean,
                 recent_gps_xy_.size(),
                 req->docking_pose.position.x,
                 req->docking_pose.position.y,
                 req->docking_pose.position.x - gps_x_mean,
-                req->docking_pose.position.y - gps_y_mean);
+                req->docking_pose.position.y - gps_y_mean,
+                yaw_src_desc);
   }
   else
   {
     RCLCPP_INFO(get_logger(),
-                "Docking point set from request position (manual): (%.3f, %.3f)",
+                "Docking point set from request position (manual): (%.3f, %.3f). "
+                "Orientation source: %s.",
                 docking_pose_.position.x,
-                docking_pose_.position.y);
+                docking_pose_.position.y,
+                yaw_src_desc);
   }
   docking_pose_set_ = true;
 

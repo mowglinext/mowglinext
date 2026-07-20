@@ -113,6 +113,10 @@ export interface MowgliReplaceMapReq {
 export interface MowgliSetDockingPointReq {
   docking_pose?: GeometryPose;
   use_gps_position?: boolean;
+  /** Yaw source: 0=PRESERVE (keep stored yaw), 1=REQUEST (use docking_pose orientation), 2=MOTION (use yaw_rad). */
+  yaw_source?: number;
+  /** ENU chassis yaw (rad); used only when yaw_source === 2 (MOTION). */
+  yaw_rad?: number;
 }
 
 export interface TypesFirmwareConfig {

@@ -28,6 +28,9 @@ type topicDef struct {
 var topicMap = map[string]topicDef{
 	"status":          {"/hardware_bridge/status", "mowgli_interfaces/msg/Status"},
 	"highLevelStatus": {"/behavior_tree_node/high_level_status", "mowgli_interfaces/msg/HighLevelStatus"},
+	// One-click dock calibration live status (the GUI's foxglove-friendly
+	// window into the CalibrateDock action — foxglove_bridge has no action op).
+	"dockCalibrationStatus": {"/calibrate_imu_yaw_node/dock_calibration/status", "mowgli_interfaces/msg/DockCalibrationStatus"},
 	"gps":             {"/gps/fix", "sensor_msgs/msg/NavSatFix"},
 	"gnssStatus":      {"/gps/status", "mowgli_interfaces/msg/GnssStatus"},
 	// The robot's global pose comes from fusion_graph_node, the sole

@@ -4,6 +4,7 @@ import { HomeOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
+import { DockCalibrationCard } from "./DockCalibrationCard.tsx";
 
 const { Text, Paragraph } = Typography;
 
@@ -29,6 +30,9 @@ export const DockingSection: React.FC<Props> = ({ values, onChange, isOverridden
     );
     return (
         <div>
+            {/* One-click dock calibration — the unified surface that replaces the
+                old separate IMU-yaw modal + onboarding ImuYawStep. */}
+            <DockCalibrationCard />
             <Card size="small" style={{ marginBottom: 16 }}>
                 <Space direction="vertical" size={12} style={{ width: "100%" }}>
                     <div>

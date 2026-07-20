@@ -3,15 +3,35 @@
 # use_gps_position selects how the POSITION is captured:
 #   true  — ignore docking_pose.position and capture the dock position from
 #           the averaged independent GPS projection (/gps/pose_cov, GPS-vs-
-#           datum + lever-arm). Used by the "capture current robot position"
-#           button when the robot is physically seated on the dock: the fused
-#           pose is gauge-reset onto the existing dock_pose while charging, so
-#           capturing it would be circular — the GPS projection is not.
+#           datum + lever-arm). Used when the robot is physically seated on
+#           the dock: the fused pose is gauge-reset onto the existing
+#           dock_pose while charging, so capturing it would be circular —
+#           the GPS projection is not.
 #   false — use docking_pose.position as given (manual map-drag / settings
 #           edit, where the operator specifies the location directly).
-# docking_pose.orientation (yaw) is always taken from the request; single-
-# antenna GPS gives no heading, and the yaw-convergence gate validates it.
+#
+# yaw_source selects how the ORIENTATION (yaw) is captured, INDEPENDENTLY of
+# the position source. Callers MUST set it explicitly; PRESERVE (0) is the
+# safe default (never corrupts a good stored yaw):
+#   PRESERVE (0) — keep the existing persisted dock_pose_yaw unchanged. Used
+#                  for a live on-dock GPS capture: single-antenna GPS gives no
+#                  standstill heading and the fused yaw is gauge-pinned to the
+#                  existing dock_pose_yaw, so any yaw read back on the dock is
+#                  circular (see area_manager.cpp on_set_docking_point notes).
+#   REQUEST  (1) — take the yaw from docking_pose.orientation as given. Used
+#                  for manual map-drag / settings edit, where the operator is
+#                  explicitly setting the heading by hand.
+#   MOTION   (2) — take the yaw from the yaw_rad field: a motion-derived,
+#                  RTK-gated heading produced by the one-click dock-calibration
+#                  action (straight-line reverse under RTK-Fixed). This is the
+#                  ONLY non-circular way to correct a stale dock heading.
+uint8 PRESERVE=0
+uint8 REQUEST=1
+uint8 MOTION=2
+
 geometry_msgs/Pose docking_pose
 bool use_gps_position
+uint8 yaw_source
+float64 yaw_rad          # ENU map-frame chassis yaw (rad); used only when yaw_source == MOTION
 ---
 bool success

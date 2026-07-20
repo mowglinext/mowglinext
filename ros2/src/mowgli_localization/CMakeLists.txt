@@ -19,6 +19,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(ament_cmake        REQUIRED)
 find_package(rclcpp             REQUIRED)
+find_package(rclcpp_action      REQUIRED)
 find_package(nav_msgs           REQUIRED)
 find_package(geometry_msgs      REQUIRED)
 find_package(sensor_msgs        REQUIRED)
@@ -147,9 +148,11 @@ add_executable(calibrate_imu_yaw_node
 
 ament_target_dependencies(calibrate_imu_yaw_node
   rclcpp
+  rclcpp_action
   geometry_msgs
   sensor_msgs
   nav_msgs
+  std_srvs
   mowgli_interfaces
 )
 
@@ -302,6 +305,31 @@ if(BUILD_TESTING)
   ament_target_dependencies(test_navsat_projection_utils
     mowgli_interfaces
     sensor_msgs
+  )
+
+  # ---- test_dock_cog_gate ----
+  # Pure C++ test of the one-click dock-calibration COG-coherence gate
+  # (dock_cog_gate.hpp): Resolution A — dock_yaw = circular_mean of the
+  # /imu/cog_heading body-heading samples (NO +pi), cross-checked against the
+  # reversed GPS travel bearing. No ROS2 deps, link gtest.
+  ament_add_gtest(test_dock_cog_gate
+    test/test_dock_cog_gate.cpp
+  )
+  target_include_directories(test_dock_cog_gate PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
+  # ---- test_robot_yaml_scalar ----
+  # Guards the ONE canonical dock_pose persist path (Invariant 6): the
+  # motion-derived (yaw_source=MOTION) write must splice only the dock_pose_*
+  # values, preserve every comment (Invariant 15 sparse config), skip the
+  # dock_pose_yaw_sigma_rad lookalike key, and write atomically once. The
+  # header lives in mowgli_interfaces; this package already depends on it.
+  ament_add_gtest(test_robot_yaml_scalar
+    test/test_robot_yaml_scalar.cpp
+  )
+  ament_target_dependencies(test_robot_yaml_scalar
+    mowgli_interfaces
   )
 
 endif()

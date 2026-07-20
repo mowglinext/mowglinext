@@ -1,0 +1,70 @@
+# One-click unified dock calibration.
+#
+# Served by dock_calibration_node (`~/calibrate_dock`). Runs the whole
+# sequence in one action so the GUI shows live progress and a single
+# retry surface (replaces the old blocking CalibrateImuYaw service +
+# the map_server /set_docking_point "capture from robot" button):
+#
+#   1. Wait for RTK-Fixed (σ(xy) gate on /gps/pose_cov).
+#   2. Reverse in a STRAIGHT line under RTK-Fixed on /cmd_vel_docking
+#      (blade OFF, collision_monitor active), monitoring COG.
+#   3. Gate COG coherence (circular std + bearing match + min displacement);
+#      derive the dock chassis yaw from the reverse leg.
+#   4. Drive FORWARD along the same line until the firmware reports charging
+#      (re-dock), or fail.
+#   5. Persist the dock pose via map_server /set_docking_point (the single
+#      canonical writer): averaged GPS x/y + the motion-derived yaw.
+#
+# The dock pose is persisted ONLY after a verified re-dock (charging), so an
+# aborted / incoherent / non-charging run never corrupts mowgli_robot.yaml.
+
+# ── Goal ──────────────────────────────────────────────────────────────────
+bool include_imu_yaw     # also solve the IMU mounting-yaw offset from the straight legs
+bool include_mag         # also refresh the magnetometer calibration (figure-8 pass)
+---
+# ── Result ────────────────────────────────────────────────────────────────
+# retry_reason enumerates why a run failed so the GUI can show a specific,
+# actionable message and offer Retry. RETRY_NONE (0) accompanies success.
+uint8 RETRY_NONE=0
+uint8 RETRY_NO_RTK=1                # never reached RTK-Fixed within the timeout
+uint8 RETRY_COG_INCOHERENT=2       # COG std too high / bearing mismatch / RTK not truly fixed
+uint8 RETRY_INSUFFICIENT_DISPLACEMENT=3  # reverse leg did not travel far enough for a yaw fit
+uint8 RETRY_NO_CHARGE_ON_REDOCK=4  # forward re-dock did not re-engage the charger
+uint8 RETRY_EMERGENCY=5            # emergency latched / triggered mid-sequence
+uint8 RETRY_WRONG_STATE=6          # robot not on dock at start, or in AUTONOMOUS/mowing
+uint8 RETRY_PERSIST_FAILED=7       # set_docking_point rejected or file not writable
+
+bool success
+uint8 retry_reason
+string message
+
+# Persisted dock pose (valid only when success == true)
+float64 dock_pose_x            # ENU map-frame x of the dock contact (m)
+float64 dock_pose_y            # ENU map-frame y of the dock contact (m)
+float64 dock_pose_yaw_rad      # chassis heading when docked (ENU, rad)
+float64 dock_pose_yaw_deg      # same in degrees
+float64 dock_yaw_sigma_deg     # 1σ on the computed dock yaw (deg)
+float64 cog_std_deg            # circular std of the COG samples over the reverse leg
+float64 reverse_displacement_m # GPS-measured reverse distance
+
+# Optional IMU mounting-offset result (valid only when include_imu_yaw and success)
+bool imu_yaw_valid
+float64 imu_yaw_rad
+float64 imu_yaw_deg
+float64 imu_pitch_rad
+float64 imu_roll_rad
+---
+# ── Feedback ──────────────────────────────────────────────────────────────
+uint8 PHASE_WAIT_RTK=0
+uint8 PHASE_REVERSING=1
+uint8 PHASE_CHECK_COG=2
+uint8 PHASE_REDOCKING=3
+uint8 PHASE_VERIFY_CHARGE=4
+uint8 PHASE_PERSIST=5
+
+uint8 phase
+float32 progress          # 0.0 .. 1.0 over the whole sequence
+float32 cog_std_deg       # running circular std of COG samples (deg)
+float32 displacement_m    # GPS displacement so far on the current leg (m)
+bool charging             # latest firmware charging state
+string message
