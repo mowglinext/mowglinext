@@ -35,9 +35,10 @@ services:
     environment:
       <<: *ros2-env
     command: >
-      ros2 launch mowgli_bringup sim_full_system.launch.py
+      bash -lc 'Xvfb :99 -screen 0 1280x720x24 -nolisten tcp &
+      export DISPLAY=:99; sleep 1; exec ros2 launch mowgli_bringup sim_full_system.launch.py
       headless:=true
-      use_rviz:=false
+      use_rviz:=false'
     volumes:
       - ./config/cyclonedds.xml:/cyclonedds.xml:ro
       - mowgli_sim_maps:/ros2_ws/maps
@@ -63,9 +64,10 @@ services:
     environment:
       <<: *ros2-env
     command: >
-      ros2 launch mowgli_bringup sim_full_system.launch.py
+      bash -lc 'Xvfb :99 -screen 0 1280x720x24 -nolisten tcp &
+      export DISPLAY=:99; sleep 1; exec ros2 launch mowgli_bringup sim_full_system.launch.py
       headless:=true
-      use_rviz:=false
+      use_rviz:=false'
     volumes:
       - ./config/cyclonedds.xml:/cyclonedds.xml:ro
       - mowgli_sim_maps:/ros2_ws/maps
