@@ -406,9 +406,9 @@ def test_obstacle_template_defaults_match_static_yaml() -> None:
         f"template obstacle_slowdown_ratio={rp['obstacle_slowdown_ratio']} != "
         f"lidar overlay PolygonSlow.slowdown_ratio={slow}."
     )
-    assert float(rp["obstacle_margin"]) == 0.0, (
-        "template obstacle_margin must default to 0.0 (no margin) so existing "
-        "sites' plans are unchanged until the operator opts in."
+    assert float(rp["obstacle_margin"]) == 0.15, (
+        "template obstacle_margin must default to 0.15 m — tight pinch-point "
+        "avoidance without compromising pass-through."
     )
 
 

@@ -269,7 +269,7 @@ def generate_launch_description() -> LaunchDescription:
     # inverts the front/back ground-filter sign on a slope). imu_yaw is
     # subtracted because the gravity "up" vector is expressed in the IMU
     # frame; it is 0 on this stack but kept general.
-    lidar_height_m = 0.22
+    lidar_height_m = 0.30
     lidar_mount_yaw = 0.0
     if rp:
         lidar_height_m = float(rp.get("lidar_z", lidar_height_m))
@@ -455,9 +455,9 @@ def generate_launch_description() -> LaunchDescription:
     # obstacle_body_half_width. Clearance-only (detection reach unchanged).
     obstacle_clearance_margin = 0.10
     # Hold time on a blocked/over-max deviation before aborting the strip.
-    obstacle_wait_timeout_s = 5.0
-    obstacle_margin = 0.0
-    obstacle_slowdown_ratio = 0.3
+    obstacle_wait_timeout_s = 2.5
+    obstacle_margin = 0.15
+    obstacle_slowdown_ratio = 0.5
     enable_mag_cal = False
     mag_cal_path = "/ros2_ws/maps/mag_calibration.yaml"
     declination_deg = 1.5

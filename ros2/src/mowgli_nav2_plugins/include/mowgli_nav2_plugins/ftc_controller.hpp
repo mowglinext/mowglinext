@@ -429,7 +429,7 @@ private:
     /// offset exceeds the cap). During the wait the robot stops; if the
     /// costmap clears before the timeout, the controller resumes. After
     /// the timeout we throw a ControllerException as before.
-    double obstacle_wait_timeout_s{5.0};
+    double obstacle_wait_timeout_s{2.5};
     /// Hysteresis hold (s) before declaring AVOIDANCE complete. Once
     /// avoiding, the nominal path must read CLEAR continuously for this long
     /// before the skirt is blended back to the line. Without it, the

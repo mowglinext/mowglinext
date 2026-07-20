@@ -45,7 +45,7 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   lever_arm_radius_m_ = std::hypot(gp.lever_arm_x, gp.lever_arm_y);
   gp.cov_update_every_n = declare_parameter<int>("cov_update_every_n", 10);
   gp.isam2_relinearize_skip = declare_parameter<int>("isam2_relinearize_skip", 5);
-  gp.max_graph_nodes = static_cast<uint64_t>(declare_parameter<int>("max_graph_nodes", 3000));
+  gp.max_graph_nodes = static_cast<uint64_t>(declare_parameter<int>("max_graph_nodes", 6000));
   gp.stationary_motion_thresh_m = declare_parameter<double>("stationary_motion_thresh_m", 0.02);
   gp.stationary_motion_thresh_theta =
       declare_parameter<double>("stationary_motion_thresh_theta", 0.01);
@@ -105,8 +105,6 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   docking_active_timeout_s_ = declare_parameter<double>("docking_active_timeout_s", 1.0);
   gate_cog_during_docking_ = declare_parameter<bool>("gate_cog_during_docking", true);
   gate_float_gps_during_docking_ = declare_parameter<bool>("gate_float_gps_during_docking", true);
-  rtk_wrongfix_max_wheel_m_ = declare_parameter<double>("rtk_wrongfix_max_wheel_m", 0.02);
-
   datum_lat_ = declare_parameter<double>("datum_lat", 0.0);
   datum_lon_ = declare_parameter<double>("datum_lon", 0.0);
   datum_cos_lat_ = std::cos(datum_lat_ * M_PI / 180.0);
@@ -124,7 +122,7 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   map_frame_ = declare_parameter<std::string>("map_frame", "map");
   odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
   base_frame_ = declare_parameter<std::string>("base_frame", "base_footprint");
-  tf_publish_lead_s_ = declare_parameter<double>("tf_publish_lead_s", 0.0);
+  tf_publish_lead_s_ = declare_parameter<double>("tf_publish_lead_s", 0.05);
   // Dedicated TF-broadcast thread rate (see fusion_graph_node.hpp). 20 Hz
   // halves worst-case TF staleness vs the 25 Hz tick cadence while staying
   // cheap (constant anchor + integrated dr_*). <= 0 disables the thread and

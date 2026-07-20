@@ -31,7 +31,7 @@ global_costmap:
           # min_obstacle_height band below CANNOT filter tilt-induced
           # ground hits on its own. robot_localization runs in two_d_mode,
           # which forces pitch=roll=0 in TF, so a 2D LaserScan always
-          # projects to ~lidar_z (0.22 m) regardless of the real chassis
+          # projects to ~lidar_z (0.30 m) regardless of the real chassis
           # tilt — every ground return on a slope sails through the
           # [0.12, 1.5] band and lands as a phantom lethal obstacle (a
           # tiny pivot on uneven garden terrain was enough to paint
@@ -95,7 +95,7 @@ local_costmap:
           topic: /scan_costmap
           # Same height band as the global obstacle_layer — filter ground
           # hits when the mower pitches on uneven terrain.
-          # 2D LaserScan rays sit at lidar_link.z (≈0.22 m); after TF to
+          # 2D LaserScan rays sit at lidar_link.z (≈0.30 m); after TF to
           # the costmap frame each point's Z ≈ lidar height on level
           # ground. min_obstacle_height: 0.12 rejects returns whose Z has
           # dropped toward ground level — which happens when the mower
@@ -103,7 +103,7 @@ local_costmap:
           # tilt down into the lawn. At 0.0 those ground hits were marked
           # as phantom lethal obstacles, blocking the planner mid-swath
           # and walling off the dock approach (controller_server "Failed
-          # to make progress"). The real 0.22 m scan plane stays well
+          # to make progress"). The real 0.30 m scan plane stays well
           # inside [0.12, 1.5] so genuine obstacles are still marked.
           # NOTE: this does NOT reduce collision safety — collision_monitor
           # polls /scan_collision (self-return-blanked, NOT ground-filtered)
@@ -117,7 +117,7 @@ local_costmap:
           data_type: "LaserScan"
           raytrace_max_range: 6.0
           raytrace_min_range: 0.0
-          # 4.0 → 2.5 m (2026-06-12): at >2.5 m the 0.22 m-high scan plane
+          # 4.0 → 2.5 m (2026-06-12): at >2.5 m the 0.30 m-high scan plane
           # grazes the lawn at <5°, so most far returns on non-flat ground
           # are ground strikes, not obstacles — they walled the robot in
           # with phantom lethal cells. The local controller only needs
@@ -164,7 +164,7 @@ collision_monitor:
       # Chassis + 15 cm — slow to 30% when obstacle is close
       points: "[[0.65, 0.35], [0.65, -0.35], [-0.25, -0.35], [-0.25, 0.35]]"
       action_type: "slowdown"
-      slowdown_ratio: 0.3
+      slowdown_ratio: 0.5
       # 12 points: the dock structure sits near the polygon boundary
       # when charging, causing rapid slow/normal flapping at 10 Hz.
       # Higher min_points adds hysteresis against that edge noise.

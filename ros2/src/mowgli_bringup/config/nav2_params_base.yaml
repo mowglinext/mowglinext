@@ -434,7 +434,7 @@ controller_server:
       # observation_persistence:0 costmap's window-edge flicker. Listed
       # explicitly (GUI-tunable) alongside their siblings above; previously
       # only the C++ declare_double default applied.
-      obstacle_wait_timeout_s: 5.0
+      obstacle_wait_timeout_s: 2.5
       obstacle_clear_hold_s: 1.5
 
 # ---------------------------------------------------------------------------

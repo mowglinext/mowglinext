@@ -507,10 +507,10 @@ TEST_F(ObstacleMarginTest, DrawnObstacleGetsLethalMarginBand)
   EXPECT_EQ(mask_at(mask, 1.5, 0.0), 0) << "lawn beyond the margin band must stay free";
 }
 
-TEST_F(AreaTypeTest, DrawnObstacleWithoutMarginIsEdgeTight)
+TEST_F(AreaTypeTest, DrawnObstacleWithDefaultMarginIsEdgeTight)
 {
-  // Default node (obstacle_margin = 0): the drawn obstacle is lethal but
-  // projects NO margin band — pre-existing behaviour preserved.
+  // Default node (obstacle_margin = 0.15): the drawn obstacle is lethal and
+  // projects a 0.15 m margin band.
   auto req = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
   req->area.name = "lawn_with_tree";
   req->area.area = make_rect(-4, -4, 4, 4);

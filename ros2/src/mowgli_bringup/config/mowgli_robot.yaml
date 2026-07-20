@@ -133,7 +133,7 @@ mowgli:
     # -----------------------------------------------------------------
     lidar_x: 0.0               # forward offset from wheel axis (m)
     lidar_y: 0.024             # lateral offset (m)
-    lidar_z: 0.22              # vertical offset (m)
+    lidar_z: 0.30              # vertical offset (m)
     lidar_yaw: 3.1408          # heading offset (rad) — ~π for 180°-rotated mount
 
     # IMU mounting (relative to base_link = wheel axis centre)
@@ -435,7 +435,7 @@ mowgli:
     # before aborting the strip and handing back to the BT. Debounces transient
     # LiDAR returns (a person crossing) so they don't burn a BT retry.
     # Clamped [0.5, 60.0].
-    obstacle_wait_timeout_s: 5.0
+    obstacle_wait_timeout_s: 2.5
     # Extra margin (m) grown around DRAWN map obstacle polygons, applied in
     # BOTH the coverage planner (F2C holes are buffered outward before swath
     # planning) and the keepout mask (cells within the margin of an obstacle
@@ -443,11 +443,11 @@ mowgli:
     # root zones: draw the tree trunk as an obstacle and set the margin to
     # cover the roots (the 2D LiDAR cannot see them — they are below the
     # scan plane). Clamped to [0.0, 1.0].
-    obstacle_margin: 0.0
+    obstacle_margin: 0.15
     # collision_monitor PolygonSlow slowdown factor when a scan return is
     # inside the chassis+15 cm approach box (LiDAR variant only). 0.3 = slow
     # to 30 % of commanded speed. Clamped to [0.05, 1.0].
-    obstacle_slowdown_ratio: 0.3
+    obstacle_slowdown_ratio: 0.5
 
     # -----------------------------------------------------------------
     # Navigation tolerances (garden terrain)
@@ -464,6 +464,6 @@ mowgli:
     # session) may be why 0.20 rad is now safe, but this reopens the exact
     # failure mode the 0.10 rad value was chosen to close.
     xy_goal_tolerance: 0.1         # metres — acceptable goal position error
-    yaw_goal_tolerance: 0.2        # radians — acceptable heading error
+    yaw_goal_tolerance: 0.1        # radians — acceptable heading error
     coverage_xy_tolerance: 0.50    # metres — must be >= FTC max_goal_distance_error (0.50): FTC parks that far short of the goal, so a tighter gate never completes the area (re-mow). Floored at FTC's value by navigation.launch.py.
     progress_timeout_sec: 10.0     # seconds without progress before recovery

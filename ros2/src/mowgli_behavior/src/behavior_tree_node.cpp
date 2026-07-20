@@ -598,7 +598,7 @@ private:
     // Stored on the shared BTContext so SetNavMode's tick is a pure read.
     // Previously SetNavMode hardcoded 0.5 (precise) / 0.25 (degraded), which
     // stomped the launch-injected values — the configured speeds never applied.
-    context_->transit_speed = declare_parameter<double>("transit_speed", 0.25);
+    context_->transit_speed = declare_parameter<double>("transit_speed", 0.2);
     context_->mowing_speed = declare_parameter<double>("mowing_speed", 0.2);
 
     // Rain delay: parameter in minutes, blackboard in seconds.

@@ -126,6 +126,7 @@ static const char* high_level_mode_name(const uint8_t mode)
 #include "mowgli_interfaces/srv/high_level_control.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "rcl_interfaces/msg/parameter_descriptor.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/battery_state.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -349,13 +350,28 @@ private:
     // scale used by this bridge for host-side odometry and re-sent to the
     // STM32 so the firmware wheel PI / odom share the same tuned value.
     wheel_track_ = declare_parameter<double>("wheel_track", 0.325);
-    ticks_per_meter_ = declare_parameter<double>("ticks_per_meter", 300.0);
+    // Helper for declaring doubles with a floating_point_range descriptor so
+    // ros2 param set rejects out-of-bounds values at the framework level before
+    // the set-parameters callback fires. Ranges mirror the firmware validation.
+    auto bounded_double =
+        [this](const std::string& name, double default_val, double min, double max) -> double
+    {
+      rcl_interfaces::msg::ParameterDescriptor desc;
+      desc.floating_point_range.resize(1);
+      desc.floating_point_range[0].from_value = min;
+      desc.floating_point_range[0].to_value = max;
+      return declare_parameter<double>(name, default_val, desc);
+    };
+    ticks_per_meter_ = bounded_double("ticks_per_meter",
+                                      300.0,
+                                      kMinRuntimeTicksPerMeter,
+                                      kMaxRuntimeTicksPerMeter);
     // Runtime max wheel-speed cap pushed to the STM32 (PACKET_ID_LL_SET_KINEMATICS)
     // alongside wheel_track_ as the wheel base, so both can be retuned without a
     // reflash. Default mirrors the firmware compile-time MAX_MPS fallback; the
     // firmware clamps the cap to at most its own compiled MAX_MPS (wire can only
     // LOWER it). Sourced from the sparse mowgli_robot.yaml (Invariant 15).
-    max_mps_ = declare_parameter<double>("max_mps", 0.5);
+    max_mps_ = bounded_double("max_mps", 0.5, 0.01, 0.5);
     // Runtime safety limits pushed to the STM32 (PACKET_ID_LL_SET_SAFETY_LIMITS)
     // so the charge ceiling + e-stop timeouts can be TIGHTENED without a reflash.
     // Defaults mirror the firmware compile-time board_defaults.h values; the
@@ -374,12 +390,20 @@ private:
     // loop without reflashing. Fallback defaults match the mowgli_bringup
     // template (pre-calibration field defaults; a per-robot auto-tune overrides
     // them). Live-tunable via the set-parameters callback below; the firmware
-    // re-clamps every value.
-    wheel_pid_kp_ = declare_parameter<double>("wheel_pid_kp", 0.2);
-    wheel_pid_ki_ = declare_parameter<double>("wheel_pid_ki", 0.092);
-    wheel_pid_kd_ = declare_parameter<double>("wheel_pid_kd", 0.01);
-    wheel_pid_integral_limit_ = declare_parameter<double>("wheel_pid_integral_limit", 15.0);
-    wheel_pid_pwm_per_mps_ = declare_parameter<double>("wheel_pid_pwm_per_mps", 282.135);
+    // re-clamps every value. The floating_point_range on these parameters
+    // mirrors the firmware validation bounds so ros2 param set rejects
+    // out-of-range values at the framework level before the callback fires.
+    wheel_pid_kp_ = bounded_double("wheel_pid_kp", 0.2, kMinRuntimeWheelKp, kMaxRuntimeWheelKp);
+    wheel_pid_ki_ = bounded_double("wheel_pid_ki", 0.092, kMinRuntimeWheelKi, kMaxRuntimeWheelKi);
+    wheel_pid_kd_ = bounded_double("wheel_pid_kd", 0.01, kMinRuntimeWheelKd, kMaxRuntimeWheelKd);
+    wheel_pid_integral_limit_ = bounded_double("wheel_pid_integral_limit",
+                                               15.0,
+                                               kMinRuntimeWheelIntegralLimit,
+                                               kMaxRuntimeWheelIntegralLimit);
+    wheel_pid_pwm_per_mps_ = bounded_double("wheel_pid_pwm_per_mps",
+                                            282.135,
+                                            kMinRuntimePwmPerMps,
+                                            kMaxRuntimePwmPerMps);
     // Firmware gyro yaw-rate loop (Option C, task #33/#34 — replaces the
     // removed host-side angular_rate_controller.hpp). Pushed to the STM32 via
     // PACKET_ID_LL_SET_YAW_PID (see send_yaw_pid()). Defaults are the
@@ -390,15 +414,18 @@ private:
     // trim_limit∈[0,0.5]); loop_enabled/gyro_sign are read once at startup —
     // gyro_sign is the field sign-check remedy for the physical IMU mounting
     // (UNVALIDATED default +1) and is not expected to change at runtime.
-    yaw_kp_ = declare_parameter<double>("yaw_kp", 0.12);
-    yaw_ki_ = declare_parameter<double>("yaw_ki", 0.40);
-    yaw_trim_limit_mps_ = declare_parameter<double>("yaw_trim_limit_mps", 0.15);
+    yaw_kp_ = bounded_double("yaw_kp", 0.12, kMinRuntimeYawKp, kMaxRuntimeYawKp);
+    yaw_ki_ = bounded_double("yaw_ki", 0.40, kMinRuntimeYawKi, kMaxRuntimeYawKi);
+    yaw_trim_limit_mps_ = bounded_double("yaw_trim_limit_mps",
+                                         0.15,
+                                         kMinRuntimeYawTrimLimitMps,
+                                         kMaxRuntimeYawTrimLimitMps);
     yaw_loop_enabled_ = declare_parameter<bool>("yaw_loop_enabled", true);
     yaw_gyro_sign_ = declare_parameter<int>("yaw_gyro_sign", 1);
     // Sub-deadband forward-velocity clamp threshold (see min_linear_vel_).
     // Default 0.05 (was a hardcoded 0.15) — the PX4 PID firmware can track
     // slow setpoints now. Live-tunable via the callback below.
-    min_linear_vel_ = declare_parameter<double>("min_linear_vel", 0.05);
+    min_linear_vel_ = bounded_double("min_linear_vel", 0.05, 0.0, 1.0);
     min_lin_vel_cb_handle_ = add_on_set_parameters_callback(
         [this](const std::vector<rclcpp::Parameter>& params)
         {

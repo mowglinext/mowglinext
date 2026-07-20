@@ -65,7 +65,7 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   areas_file_path_ = declare_parameter<std::string>("areas_file_path", "");
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
   mow_progress_publish_period_s_ = declare_parameter<double>("mow_progress_publish_period_s", 2.0);
-  keepout_nav_margin_ = declare_parameter<double>("keepout_nav_margin", 1.5);
+  keepout_nav_margin_ = declare_parameter<double>("keepout_nav_margin", 0.45);
   // Hard area-boundary enforcement: when true (operator default), the keepout
   // mask marks every cell OUTSIDE the union of all areas (mowing + navigation)
   // as LETHAL — the planner cannot route there and MPPI cannot steer out of
@@ -108,8 +108,8 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   boundary_debounce_samples_ =
       static_cast<int>(declare_parameter<int>("boundary_debounce_samples", 3));
   boundary_recovery_offset_m_ = declare_parameter<double>("boundary_recovery_offset_m", 0.8);
-  boundary_inner_margin_m_ = declare_parameter<double>("boundary_inner_margin_m", 0.3);
-  strip_boundary_margin_m_ = declare_parameter<double>("strip_boundary_margin_m", 0.5);
+  boundary_inner_margin_m_ = declare_parameter<double>("boundary_inner_margin_m", 0.0);
+  strip_boundary_margin_m_ = declare_parameter<double>("strip_boundary_margin_m", 1.20);
   mow_angle_override_deg_ =
       declare_parameter<double>("mow_angle_deg", std::numeric_limits<double>::quiet_NaN());
 
@@ -125,7 +125,7 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   // Extra LETHAL band around drawn obstacle polygons in the keepout mask.
   // Same key drives coverage_server's F2C hole buffering (injected at launch
   // from mowgli_robot.yaml.obstacle_margin) — keep the two in lockstep.
-  obstacle_margin_m_ = std::clamp(declare_parameter<double>("obstacle_margin", 0.0), 0.0, 1.0);
+  obstacle_margin_m_ = std::clamp(declare_parameter<double>("obstacle_margin", 0.15), 0.0, 1.0);
 
   // Dock body (physical structure the robot cannot drive into). Cells
   // inside are marked OBSTACLE_PERMANENT — F2C strips stop at the body
@@ -220,7 +220,7 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   // obstacles (separate concern: review/approve + survive restarts).
   const auto costmap_topic =
       declare_parameter<std::string>("costmap_topic", "/global_costmap/costmap");
-  costmap_obstacle_threshold_ = declare_parameter<int>("costmap_obstacle_threshold", 80);
+  costmap_obstacle_threshold_ = declare_parameter<int>("costmap_obstacle_threshold", 99);
   costmap_max_age_s_ = declare_parameter<double>("costmap_max_age_s", 2.0);
   costmap_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
       costmap_topic,

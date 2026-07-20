@@ -122,7 +122,7 @@ void FusionGraphNode::DeclareParameters()
   // long IDLE windows produces O(N²) LC factors with the lower 30/120s
   // defaults. Real revisits across a mowing pattern are minutes apart,
   // so 600s is a comfortable floor. Override per-test if needed.
-  lc_min_age_s_ = declare_parameter<double>("lc_min_age_s", 600.0);
+  lc_min_age_s_ = declare_parameter<double>("lc_min_age_s", 30.0);
   lc_max_candidates_ = static_cast<size_t>(declare_parameter<int>("lc_max_candidates", 3));
   lc_min_delta_m_ = declare_parameter<double>("lc_min_delta_m", 0.05);
   lc_min_delta_theta_ = declare_parameter<double>("lc_min_delta_theta", 0.05);

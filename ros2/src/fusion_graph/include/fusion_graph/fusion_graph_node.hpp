@@ -565,13 +565,11 @@ private:
   // the check.
   std::optional<gtsam::Vector2> last_gps_map_xy_;
   double wheel_dist_since_last_gps_m_ = 0.0;
-  // GPS jump (m) above which the sample is rejected when the wheel
-  // accumulator stayed under rtk_wrongfix_max_wheel_m_. Picked to be
-  // well above the σ ~1 cm noise floor we measured 2026-05-17 (8-12
-  // mm σ on raw /gps/fix stationary), and below the smallest
-  // legitimate motion the robot can produce in one GPS period
-  // (vx_max ≈ 0.30 m/s × 0.1 s = 30 mm). 50 mm leaves headroom for
-  // 1-2σ outliers while still catching ≥0.5σ wrong-fix jumps.
+  // GPS jump (m) above which the sample is rejected as a wrong-fix (motion-
+  // consistent gate: compare jump against actual wheel travel since last fix).
+  // 50 mm sits above the σ~1 cm noise floor (2026-05-17: 8-12 mm σ on raw
+  // /gps/fix stationary) and below vx_max≈0.30 m/s × 0.1 s = 30 mm of
+  // legitimate motion. See rtk_wrongfix_gate.hpp for the decision function.
   double rtk_wrongfix_max_jump_m_ = 0.05;
   // Dock-pose hold while charging: re-assert a firm ForceAnchor at the FULL
   // dock_pose (x,y,yaw) ONCE PER NEW NODE, replacing the weak live-GPS factor
@@ -596,13 +594,6 @@ private:
   bool gate_cog_during_docking_ = true;
   bool gate_float_gps_during_docking_ = true;
   std::optional<rclcpp::Time> last_docking_cmd_stamp_;
-  // Wheel-derived distance (m) traveled since the last GPS sample,
-  // below which a GPS jump > rtk_wrongfix_max_jump_m_ is judged
-  // inconsistent. 20 mm sits just above the per-tick encoder noise
-  // floor — at 0.30 m/s the robot covers 30 mm in 100 ms (one fix
-  // period), so a real motion easily clears 20 mm.
-  double rtk_wrongfix_max_wheel_m_ = 0.02;
-
   // ICP guard-rail thresholds — see GraphParams comments for the
   // physical intuition. Declared as ROS params so we can tighten or
   // loosen them in mowgli_robot.yaml without a rebuild.

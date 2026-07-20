@@ -236,7 +236,7 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.deviation_step = declare_double("deviation_step", 0.05);
   config_.deviation_blend_rate = declare_double("deviation_blend_rate", 0.5);
   config_.min_lateral_deviation = declare_double("min_lateral_deviation", 0.30);
-  config_.obstacle_wait_timeout_s = declare_double("obstacle_wait_timeout_s", 5.0);
+  config_.obstacle_wait_timeout_s = declare_double("obstacle_wait_timeout_s", 2.5);
   config_.obstacle_clear_hold_s = declare_double("obstacle_clear_hold_s", 1.5);
   config_.confine_deviation_to_zone = declare_bool("confine_deviation_to_zone", true);
 
@@ -254,6 +254,19 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
   rcl_interfaces::msg::SetParametersResult result;
   result.successful = true;
 
+  auto reject_invalid =
+      [&result](const std::string& name, double value, double min, double max) -> bool
+  {
+    if (!std::isfinite(value) || value < min || value > max)
+    {
+      result.successful = false;
+      result.reason = name + " must be finite and within [" + std::to_string(min) + ", " +
+                      std::to_string(max) + "]";
+      return true;
+    }
+    return false;
+  };
+
   for (const auto& p : params)
   {
     // Strip the plugin namespace prefix before comparing.
@@ -266,119 +279,177 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
 
     if (key == "speed_fast")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 2.0))
+        break;
       config_.speed_fast = p.as_double();
     }
     else if (key == "speed_fast_threshold")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 10.0))
+        break;
       config_.speed_fast_threshold = p.as_double();
     }
     else if (key == "speed_fast_threshold_angle")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 180.0))
+        break;
       config_.speed_fast_threshold_angle = p.as_double();
     }
     else if (key == "speed_slow")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 2.0))
+        break;
       config_.speed_slow = p.as_double();
     }
     else if (key == "speed_angular")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 180.0))
+        break;
       config_.speed_angular = p.as_double();
     }
     else if (key == "acceleration")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 10.0))
+        break;
       config_.acceleration = p.as_double();
     }
     else if (key == "stall_speed_ratio")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 1.0))
+        break;
       config_.stall_speed_ratio = p.as_double();
     }
     else if (key == "stall_grace_s")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 30.0))
+        break;
       config_.stall_grace_s = p.as_double();
     }
     else if (key == "stall_crawl_speed")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 2.0))
+        break;
       config_.stall_crawl_speed = p.as_double();
     }
     else if (key == "kp_lon")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 100.0))
+        break;
       config_.kp_lon = p.as_double();
     }
     else if (key == "ki_lon")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 100.0))
+        break;
       config_.ki_lon = p.as_double();
     }
     else if (key == "ki_lon_max")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 100.0))
+        break;
       config_.ki_lon_max = p.as_double();
     }
     else if (key == "kd_lon")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 100.0))
+        break;
       config_.kd_lon = p.as_double();
     }
     else if (key == "kp_lat")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 100.0))
+        break;
       config_.kp_lat = p.as_double();
     }
     else if (key == "ki_lat")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 100.0))
+        break;
       config_.ki_lat = p.as_double();
     }
     else if (key == "ki_lat_max")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 100.0))
+        break;
       config_.ki_lat_max = p.as_double();
     }
     else if (key == "kd_lat")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 100.0))
+        break;
       config_.kd_lat = p.as_double();
     }
     else if (key == "kp_ang")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 100.0))
+        break;
       config_.kp_ang = p.as_double();
     }
     else if (key == "kp_ang_following")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 100.0))
+        break;
       config_.kp_ang_following = p.as_double();
     }
     else if (key == "ki_ang")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 100.0))
+        break;
       config_.ki_ang = p.as_double();
     }
     else if (key == "ki_ang_max")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 100.0))
+        break;
       config_.ki_ang_max = p.as_double();
     }
     else if (key == "kd_ang")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 100.0))
+        break;
       config_.kd_ang = p.as_double();
     }
     else if (key == "derivative_filter_tau")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 5.0))
+        break;
       config_.derivative_filter_tau = p.as_double();
     }
     else if (key == "max_cmd_vel_speed")
     {
+      if (reject_invalid(key, p.as_double(), 0.01, 10.0))
+        break;
       config_.max_cmd_vel_speed = p.as_double();
       base_max_cmd_vel_speed_ = config_.max_cmd_vel_speed;
     }
     else if (key == "max_cmd_vel_ang")
     {
+      if (reject_invalid(key, p.as_double(), 0.01, 10.0))
+        break;
       config_.max_cmd_vel_ang = p.as_double();
     }
     else if (key == "max_goal_distance_error")
     {
+      if (reject_invalid(key, p.as_double(), 0.01, 10.0))
+        break;
       config_.max_goal_distance_error = p.as_double();
     }
     else if (key == "max_goal_angle_error")
     {
+      if (reject_invalid(key, p.as_double(), 0.01, 180.0))
+        break;
       config_.max_goal_angle_error = p.as_double();
     }
     else if (key == "goal_timeout")
     {
+      if (reject_invalid(key, p.as_double(), 0.1, 300.0))
+        break;
       config_.goal_timeout = p.as_double();
     }
     else if (key == "max_follow_distance")
     {
+      if (reject_invalid(key, p.as_double(), 0.01, 50.0))
+        break;
       config_.max_follow_distance = p.as_double();
     }
     else if (key == "forward_only")
@@ -399,14 +470,20 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     }
     else if (key == "oscillation_v_eps")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 1.0))
+        break;
       config_.oscillation_v_eps = p.as_double();
     }
     else if (key == "oscillation_omega_eps")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 1.0))
+        break;
       config_.oscillation_omega_eps = p.as_double();
     }
     else if (key == "oscillation_recovery_min_duration")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 300.0))
+        break;
       config_.oscillation_recovery_min_duration = p.as_double();
       {
         std::lock_guard<std::mutex> fd_lock(failure_detector_mutex_);
@@ -428,10 +505,14 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     }
     else if (key == "obstacle_body_half_width")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 2.0))
+        break;
       config_.obstacle_body_half_width = p.as_double();
     }
     else if (key == "obstacle_clearance_margin")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 2.0))
+        break;
       config_.obstacle_clearance_margin = p.as_double();
     }
     else if (key == "enable_obstacle_deviation")
@@ -440,10 +521,14 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     }
     else if (key == "max_lateral_deviation")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 10.0))
+        break;
       config_.max_lateral_deviation = p.as_double();
     }
     else if (key == "deviation_step")
     {
+      if (reject_invalid(key, p.as_double(), 0.001, 1.0))
+        break;
       config_.deviation_step = p.as_double();
     }
     else if (key == "deviation_blend_rate")
@@ -460,6 +545,8 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     }
     else if (key == "obstacle_clear_hold_s")
     {
+      if (reject_invalid(key, p.as_double(), 0.0, 30.0))
+        break;
       config_.obstacle_clear_hold_s = p.as_double();
     }
     else if (key == "confine_deviation_to_zone")

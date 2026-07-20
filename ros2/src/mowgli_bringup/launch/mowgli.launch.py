@@ -106,7 +106,7 @@ def generate_launch_description() -> LaunchDescription:
     # Sensor positions from config
     lidar_x   = str(robot_params.get("lidar_x", 0.38))
     lidar_y   = str(robot_params.get("lidar_y", 0.0))
-    lidar_z   = str(robot_params.get("lidar_z", 0.22))
+    lidar_z   = str(robot_params.get("lidar_z", 0.30))
     lidar_yaw = str(robot_params.get("lidar_yaw", 0.0))
     imu_x     = str(robot_params.get("imu_x", 0.18))
     imu_y     = str(robot_params.get("imu_y", 0.0))

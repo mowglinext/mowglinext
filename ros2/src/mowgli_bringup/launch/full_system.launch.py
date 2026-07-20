@@ -307,7 +307,7 @@ def generate_launch_description() -> LaunchDescription:
             # by navigation.launch.py) so the transit planner and the swath
             # planner keep the same distance from a drawn tree/root zone.
             {"obstacle_margin": min(1.0, max(0.0, float(
-                robot_params.get("obstacle_margin", 0.0))))},
+                robot_params.get("obstacle_margin", 0.15))))},
             # Hard area-boundary enforcement (operator intent: "lethal area
             # where there is no navigation or mowing area"). When true (default)
             # the keepout mask marks every cell outside the union of all areas
