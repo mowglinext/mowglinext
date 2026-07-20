@@ -1049,7 +1049,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // Coarsen the AUTO best-angle sweep from F2C's 1° default to kAutoAngleStepRad
   // (5°) — ~5× fewer candidate angles at a negligible plan-quality change (see
   // the constant). No effect on fixed-angle plans (they skip the sweep).
-  bf.step_angle = kAutoAngleStepRad;
+  bf.setStepAngle(kAutoAngleStepRad);
   f2c::obj::NSwath n_swath_obj;
   f2c::rp::BoustrophedonOrder order;
   double swath_strip_area = 0.0;  // Σ length·op_width of KEPT swaths (for the fraction)
