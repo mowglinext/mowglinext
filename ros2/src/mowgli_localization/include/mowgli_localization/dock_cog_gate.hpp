@@ -46,18 +46,18 @@ enum class DockCogReason : std::uint8_t
 {
   OK = 0,
   INSUFFICIENT_DISPLACEMENT = 1,  // reverse leg too short to fit a heading
-  INSUFFICIENT_SAMPLES = 2,       // too few valid /imu/cog_heading samples
-  HIGH_STD = 3,                   // COG scattered — RTK not truly fixed / noisy
-  BEARING_MISMATCH = 4,           // COG mean disagrees with the GPS travel bearing
+  INSUFFICIENT_SAMPLES = 2,  // too few valid /imu/cog_heading samples
+  HIGH_STD = 3,  // COG scattered — RTK not truly fixed / noisy
+  BEARING_MISMATCH = 4,  // COG mean disagrees with the GPS travel bearing
 };
 
 struct DockCogGateResult
 {
   bool coherent = false;
   DockCogReason reason = DockCogReason::INSUFFICIENT_SAMPLES;
-  double dock_yaw_rad = 0.0;    // circular_mean(headings) — Resolution A, NO +pi
-  double cog_std_rad = 0.0;     // circular std of the heading samples
-  double bearing_err_rad = 0.0; // |mean_heading − expected_heading_from_gps|
+  double dock_yaw_rad = 0.0;  // circular_mean(headings) — Resolution A, NO +pi
+  double cog_std_rad = 0.0;  // circular std of the heading samples
+  double bearing_err_rad = 0.0;  // |mean_heading − expected_heading_from_gps|
   double displacement_m = 0.0;  // net GPS displacement of the reverse leg
 };
 

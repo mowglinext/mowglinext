@@ -35,8 +35,8 @@
 #include "mowgli_interfaces/action/calibrate_dock.hpp"
 #include "mowgli_interfaces/motion_yaw_fit.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
-#include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/dock_calibration_status.hpp"
+#include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/robot_yaml_scalar.hpp"
@@ -236,8 +236,8 @@ public:
     dc_cog_std_max_rad_ = declare_parameter<double>("dock_calib_cog_std_max_rad", 0.0524);
     dc_cog_bearing_match_max_rad_ =
         declare_parameter<double>("dock_calib_cog_bearing_match_max_rad", 0.1047);
-    dc_min_baseline_disp_m_ = declare_parameter<double>("dock_calib_min_baseline_displacement_m",
-                                                        0.5);
+    dc_min_baseline_disp_m_ =
+        declare_parameter<double>("dock_calib_min_baseline_displacement_m", 0.5);
 
     // COG body-heading feed (already lever-arm-corrected + reverse-aware —
     // Resolution A: consume as-is, NO +pi). Sampled only while the reverse
@@ -252,14 +252,15 @@ public:
         sub_opts);
 
     // The ONE canonical dock_pose writer (Invariant 6): persist via map_server.
-    set_dock_client_ = create_client<mowgli_interfaces::srv::SetDockingPoint>(
-        "/map_server_node/set_docking_point", rclcpp::ServicesQoS(), cb_group_);
+    set_dock_client_ =
+        create_client<mowgli_interfaces::srv::SetDockingPoint>("/map_server_node/set_docking_point",
+                                                               rclcpp::ServicesQoS(),
+                                                               cb_group_);
 
     dock_action_ = rclcpp_action::create_server<CalibrateDock>(
         this,
         "~/calibrate_dock",
-        [this](const rclcpp_action::GoalUUID& uuid,
-               std::shared_ptr<const CalibrateDock::Goal> goal)
+        [this](const rclcpp_action::GoalUUID& uuid, std::shared_ptr<const CalibrateDock::Goal> goal)
         {
           return dock_handle_goal(uuid, goal);
         },
@@ -276,8 +277,9 @@ public:
 
     // Foxglove-friendly façade (the GUI transport has no ROS-action support):
     // a non-blocking start service + a live status topic mirroring the action.
-    status_pub_ = create_publisher<mowgli_interfaces::msg::DockCalibrationStatus>(
-        "~/dock_calibration/status", state_qos);
+    status_pub_ =
+        create_publisher<mowgli_interfaces::msg::DockCalibrationStatus>("~/dock_calibration/status",
+                                                                        state_qos);
     dock_start_srv_ = create_service<std_srvs::srv::Trigger>(
         "~/dock_calibration/start",
         [this](const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
@@ -989,8 +991,11 @@ private:
                         "CalibrateDock: include_mag ignored — mag calibration needs rotation "
                         "that would break the straight re-dock. Use ~/calibrate (mag_only=true).");
           }
-          const DockOutcome out = run_dock_calibration_core(
-              goal->include_imu_yaw, [gh]() { return gh->is_canceling(); });
+          const DockOutcome out = run_dock_calibration_core(goal->include_imu_yaw,
+                                                            [gh]()
+                                                            {
+                                                              return gh->is_canceling();
+                                                            });
           auto res = std::make_shared<CalibrateDock::Result>();
           res->success = out.success;
           res->retry_reason = out.retry_reason;
@@ -1057,7 +1062,11 @@ private:
     std::thread(
         [this]()
         {
-          run_dock_calibration_core(/*include_imu_yaw=*/false, []() { return false; });
+          run_dock_calibration_core(/*include_imu_yaw=*/false,
+                                    []()
+                                    {
+                                      return false;
+                                    });
         })
         .detach();
     res->success = true;
@@ -1156,8 +1165,13 @@ private:
         out.imu_valid = true;
         out.imu = *imu;
       }
-      publish_status(DockStatus::PHASE_DONE, success ? 1.0f : 0.0f, 0.0f, /*running=*/false,
-                     success, reason, msg);
+      publish_status(DockStatus::PHASE_DONE,
+                     success ? 1.0f : 0.0f,
+                     0.0f,
+                     /*running=*/false,
+                     success,
+                     reason,
+                     msg);
       dock_action_busy_ = false;
       return out;
     };
@@ -1165,28 +1179,42 @@ private:
     // ── Guards ──
     if (emergency_active_)
     {
-      return finish(false, CalibrateDock::Result::RETRY_EMERGENCY,
-                    "Emergency active/latched — clear it, then retry.", false, nullptr, nullptr);
+      return finish(false,
+                    CalibrateDock::Result::RETRY_EMERGENCY,
+                    "Emergency active/latched — clear it, then retry.",
+                    false,
+                    nullptr,
+                    nullptr);
     }
     if (bt_state_ == HL_STATE_AUTONOMOUS)
     {
-      return finish(false, CalibrateDock::Result::RETRY_WRONG_STATE,
-                    "Robot is mowing (AUTONOMOUS). Send HOME first, then retry.", false, nullptr,
+      return finish(false,
+                    CalibrateDock::Result::RETRY_WRONG_STATE,
+                    "Robot is mowing (AUTONOMOUS). Send HOME first, then retry.",
+                    false,
+                    nullptr,
                     nullptr);
     }
     if (!is_charging_)
     {
-      return finish(false, CalibrateDock::Result::RETRY_WRONG_STATE,
-                    "Robot is not on the dock (not charging). Dock it, then retry.", false, nullptr,
+      return finish(false,
+                    CalibrateDock::Result::RETRY_WRONG_STATE,
+                    "Robot is not on the dock (not charging). Dock it, then retry.",
+                    false,
+                    nullptr,
                     nullptr);
     }
 
     // ── (1) Wait for RTK-Fixed ──
-    publish_status(DockStatus::PHASE_WAIT_RTK, 0.05f, 0.0f, true, false, 0, "waiting for RTK-Fixed");
+    publish_status(
+        DockStatus::PHASE_WAIT_RTK, 0.05f, 0.0f, true, false, 0, "waiting for RTK-Fixed");
     if (!wait_for_rtk_fixed(dc_rtk_wait_timeout_s_))
     {
-      return finish(false, CalibrateDock::Result::RETRY_NO_RTK,
-                    "No RTK-Fixed within timeout — wait for a fix, then retry.", false, nullptr,
+      return finish(false,
+                    CalibrateDock::Result::RETRY_NO_RTK,
+                    "No RTK-Fixed within timeout — wait for a fix, then retry.",
+                    false,
+                    nullptr,
                     nullptr);
     }
 
@@ -1196,8 +1224,12 @@ private:
       if (!call_hlc(HL_CMD_RECORD_AREA, "enter recording") ||
           !wait_for_bt_state(HL_STATE_RECORDING, 15.0))
       {
-        return finish(false, CalibrateDock::Result::RETRY_WRONG_STATE,
-                      "Could not enter RECORDING via BT.", false, nullptr, nullptr);
+        return finish(false,
+                      CalibrateDock::Result::RETRY_WRONG_STATE,
+                      "Could not enter RECORDING via BT.",
+                      false,
+                      nullptr,
+                      nullptr);
       }
       need_exit_recording = true;
     }
@@ -1228,22 +1260,34 @@ private:
       {
         if (is_canceled())
         {
-          return finish(false, CalibrateDock::Result::RETRY_WRONG_STATE,
-                        "Canceled during reverse.", true, nullptr, nullptr);
+          return finish(false,
+                        CalibrateDock::Result::RETRY_WRONG_STATE,
+                        "Canceled during reverse.",
+                        true,
+                        nullptr,
+                        nullptr);
         }
         if (emergency_active_)
         {
-          return finish(false, CalibrateDock::Result::RETRY_EMERGENCY,
-                        "Emergency during reverse.", false, nullptr, nullptr);
+          return finish(false,
+                        CalibrateDock::Result::RETRY_EMERGENCY,
+                        "Emergency during reverse.",
+                        false,
+                        nullptr,
+                        nullptr);
         }
         publish_vx(-dc_reverse_speed_ms_);
         sleep_for(period);
         disp = std::hypot(latest_gps_x_.load() - x0, latest_gps_y_.load() - y0);
-        publish_status(
-            DockStatus::PHASE_REVERSING,
-            0.10f + 0.30f * static_cast<float>(
-                                std::min(1.0, disp / std::max(dc_reverse_distance_m_, 1e-3))),
-            static_cast<float>(disp), true, false, 0, "reversing (blade off)");
+        publish_status(DockStatus::PHASE_REVERSING,
+                       0.10f + 0.30f * static_cast<float>(
+                                           std::min(1.0,
+                                                    disp / std::max(dc_reverse_distance_m_, 1e-3))),
+                       static_cast<float>(disp),
+                       true,
+                       false,
+                       0,
+                       "reversing (blade off)");
         if (disp >= dc_reverse_distance_m_ || monotonic() > t_deadline)
           break;
       }
@@ -1258,7 +1302,12 @@ private:
     const double y1 = latest_gps_y_.load();
 
     // ── (7) COG-coherence gate + dock yaw (Resolution A: circular_mean, NO +pi) ──
-    publish_status(DockStatus::PHASE_CHECK_COG, 0.45f, static_cast<float>(disp), true, false, 0,
+    publish_status(DockStatus::PHASE_CHECK_COG,
+                   0.45f,
+                   static_cast<float>(disp),
+                   true,
+                   false,
+                   0,
                    "checking COG coherence");
     std::vector<double> cog_snap;
     {
@@ -1266,14 +1315,20 @@ private:
       cog_snap = cog_samples_;
     }
     const DockCogGateResult gate =
-        evaluate_dock_cog_gate(cog_snap, x1 - x0, y1 - y0,
+        evaluate_dock_cog_gate(cog_snap,
+                               x1 - x0,
+                               y1 - y0,
                                static_cast<std::size_t>(std::max(0, dc_cog_min_samples_)),
-                               dc_cog_std_max_rad_, dc_cog_bearing_match_max_rad_,
+                               dc_cog_std_max_rad_,
+                               dc_cog_bearing_match_max_rad_,
                                dc_min_baseline_disp_m_);
     if (!gate.coherent)
     {
-      return finish(false, cog_reason_to_retry(gate.reason),
-                    "COG incoherent (RTK not truly fixed / GPS noisy) — retry.", false, &gate,
+      return finish(false,
+                    cog_reason_to_retry(gate.reason),
+                    "COG incoherent (RTK not truly fixed / GPS noisy) — retry.",
+                    false,
+                    &gate,
                     nullptr);
     }
 
@@ -1306,23 +1361,35 @@ private:
       {
         if (is_canceled())
         {
-          return finish(false, CalibrateDock::Result::RETRY_WRONG_STATE,
-                        "Canceled during re-dock.", true, &gate, nullptr);
+          return finish(false,
+                        CalibrateDock::Result::RETRY_WRONG_STATE,
+                        "Canceled during re-dock.",
+                        true,
+                        &gate,
+                        nullptr);
         }
         if (emergency_active_)
         {
-          return finish(false, CalibrateDock::Result::RETRY_EMERGENCY,
-                        "Emergency during re-dock.", false, &gate, nullptr);
+          return finish(false,
+                        CalibrateDock::Result::RETRY_EMERGENCY,
+                        "Emergency during re-dock.",
+                        false,
+                        &gate,
+                        nullptr);
         }
         if (is_charging_)
           break;
         publish_vx(+dc_reverse_speed_ms_);
         sleep_for(period);
         const double fdisp = std::hypot(latest_gps_x_.load() - xr, latest_gps_y_.load() - yr);
-        publish_status(
-            DockStatus::PHASE_REDOCKING,
-            0.60f + 0.25f * static_cast<float>(std::min(1.0, fdisp / std::max(max_fwd, 1e-3))),
-            static_cast<float>(fdisp), true, false, 0, "re-docking (blade off)");
+        publish_status(DockStatus::PHASE_REDOCKING,
+                       0.60f + 0.25f * static_cast<float>(
+                                           std::min(1.0, fdisp / std::max(max_fwd, 1e-3))),
+                       static_cast<float>(fdisp),
+                       true,
+                       false,
+                       0,
+                       "re-docking (blade off)");
         if (fdisp >= max_fwd || monotonic() > fwd_deadline)
           break;
       }
@@ -1330,12 +1397,15 @@ private:
     publish_vx(0.0);
 
     // ── (5) Verify charging ──
-    publish_status(DockStatus::PHASE_VERIFY_CHARGE, 0.85f, 0.0f, true, false, 0,
-                   "verifying charge");
+    publish_status(
+        DockStatus::PHASE_VERIFY_CHARGE, 0.85f, 0.0f, true, false, 0, "verifying charge");
     if (!is_charging_)
     {
-      return finish(false, CalibrateDock::Result::RETRY_NO_CHARGE_ON_REDOCK,
-                    "Re-dock did not re-engage the charger — retry.", false, &gate,
+      return finish(false,
+                    CalibrateDock::Result::RETRY_NO_CHARGE_ON_REDOCK,
+                    "Re-dock did not re-engage the charger — retry.",
+                    false,
+                    &gate,
                     have_imu ? &imu_result : nullptr);
     }
 
@@ -1345,13 +1415,20 @@ private:
     std::string perr;
     if (!persist_dock_via_map_server(gate.dock_yaw_rad, perr))
     {
-      return finish(false, CalibrateDock::Result::RETRY_PERSIST_FAILED, perr, false, &gate,
+      return finish(false,
+                    CalibrateDock::Result::RETRY_PERSIST_FAILED,
+                    perr,
+                    false,
+                    &gate,
                     have_imu ? &imu_result : nullptr);
     }
 
-    return finish(true, CalibrateDock::Result::RETRY_NONE,
+    return finish(true,
+                  CalibrateDock::Result::RETRY_NONE,
                   "Dock calibrated: position from averaged GPS, yaw from COG, re-dock verified.",
-                  false, &gate, have_imu ? &imu_result : nullptr);
+                  false,
+                  &gate,
+                  have_imu ? &imu_result : nullptr);
   }
 
   // ── Service handler ─────────────────────────────────────────────────

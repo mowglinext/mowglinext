@@ -146,6 +146,8 @@ add_executable(calibrate_imu_yaw_node
   src/calibrate_imu_yaw_node.cpp
 )
 
+target_include_directories(calibrate_imu_yaw_node PUBLIC ${INCLUDE_DIR})
+
 ament_target_dependencies(calibrate_imu_yaw_node
   rclcpp
   rclcpp_action

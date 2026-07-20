@@ -122,7 +122,7 @@ TEST(SwathProgress, ResetsAcrossAreas)
 TEST(CoveragePercent, ZeroAtStartAndForEmptyPlan)
 {
   EXPECT_FLOAT_EQ(coveragePercentFromCursor(0, 1000), 0.0f);
-  EXPECT_FLOAT_EQ(coveragePercentFromCursor(0, 0), 0.0f);    // no poses → 0, no div0
+  EXPECT_FLOAT_EQ(coveragePercentFromCursor(0, 0), 0.0f);  // no poses → 0, no div0
   EXPECT_FLOAT_EQ(coveragePercentFromCursor(500, 0), 0.0f);  // guard dominates
 }
 

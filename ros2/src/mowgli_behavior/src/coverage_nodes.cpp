@@ -83,8 +83,7 @@ float coveragePercentFromCursor(std::size_t absolute_cursor, std::size_t total_p
   {
     return 0.0f;
   }
-  const float pct =
-      100.0f * static_cast<float>(absolute_cursor) / static_cast<float>(total_poses);
+  const float pct = 100.0f * static_cast<float>(absolute_cursor) / static_cast<float>(total_poses);
   return std::clamp(pct, 0.0f, 100.0f);
 }
 

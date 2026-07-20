@@ -941,24 +941,24 @@ TEST(CoveragePlanning, TurnArcFootprintStaysInsideRecordedBoundary)
   // ring — the fix's actual contract (connectors must not push the path past the
   // perimeter ring the robot already drives). Ring/swath poses sit on/inside it by
   // construction, so this measures the connector/fillet outward bulge directly.
-  auto centrelineExcursion =
-      [&](const std::vector<std::vector<std::pair<double, double>>>& subs)
+  auto centrelineExcursion = [&](const std::vector<std::vector<std::pair<double, double>>>& subs)
   {
     double m = 0.0;
     for (const auto& sub : subs)
     {
       for (const auto& p : sub)
       {
-        m = std::max(m, pointInRing(p.first, p.second, clearance)
-                            ? 0.0
-                            : distanceToRing(p.first, p.second, clearance));
+        m = std::max(m,
+                     pointInRing(p.first, p.second, clearance)
+                         ? 0.0
+                         : distanceToRing(p.first, p.second, clearance));
       }
     }
     return m;
   };
 
-  const auto unsafe = buildContinuousSubPaths(
-      plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
+  const auto unsafe =
+      buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
   const auto fixed = buildContinuousSubPaths(plan, clearance, kTurnRadius, kMinTurnRadius, kStep);
 
   // (1) Bug reachable — HARD guard (ASSERT, not EXPECT) so a vacuous green is
@@ -972,8 +972,8 @@ TEST(CoveragePlanning, TurnArcFootprintStaysInsideRecordedBoundary)
   // field and the regression is untested — fail loudly rather than pass hollowly.
   const double unsafe_centreline_ex = centrelineExcursion(unsafe);
   ASSERT_GT(unsafe_centreline_ex, kSlack)
-      << "pre-fix connectors stayed within the clearance ring (excursion "
-      << unsafe_centreline_ex << " m ≤ " << kSlack
+      << "pre-fix connectors stayed within the clearance ring (excursion " << unsafe_centreline_ex
+      << " m ≤ " << kSlack
       << ") — the bug is not exercised on this field; choose one whose turns reach the boundary";
 
   // (2) Fix contract: every connector centreline stays within the clearance ring.

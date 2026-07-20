@@ -27,9 +27,9 @@ constexpr double kRad = M_PI / 180.0;
 
 // Default thresholds (mirror the mowgli_robot.yaml template defaults).
 constexpr std::size_t kMinSamples = 8;
-constexpr double kMaxStd = 3.0 * kRad;      // ~3°
+constexpr double kMaxStd = 3.0 * kRad;  // ~3°
 constexpr double kMaxBearingErr = 6.0 * kRad;  // ~6°
-constexpr double kMinDisp = 0.5;            // m
+constexpr double kMinDisp = 0.5;  // m
 
 double ang_diff(double a, double b)
 {
@@ -95,8 +95,8 @@ TEST(DockCogGate, DockYawIsBodyHeadingMeanNoPiOffset)
   const auto samples = body_headings(heading, 20, 0.5 * kRad);
   const auto [dx, dy] = reverse_gps(heading);
 
-  const auto r = evaluate_dock_cog_gate(
-      samples, dx, dy, kMinSamples, kMaxStd, kMaxBearingErr, kMinDisp);
+  const auto r =
+      evaluate_dock_cog_gate(samples, dx, dy, kMinSamples, kMaxStd, kMaxBearingErr, kMinDisp);
 
   EXPECT_TRUE(r.coherent);
   EXPECT_EQ(r.reason, DockCogReason::OK);
@@ -111,8 +111,8 @@ TEST(DockCogGate, CoherentAcrossHeadingsIncludingWrap)
   {
     const auto samples = body_headings(heading, 20, 0.5 * kRad);
     const auto [dx, dy] = reverse_gps(heading);
-    const auto r = evaluate_dock_cog_gate(
-        samples, dx, dy, kMinSamples, kMaxStd, kMaxBearingErr, kMinDisp);
+    const auto r =
+        evaluate_dock_cog_gate(samples, dx, dy, kMinSamples, kMaxStd, kMaxBearingErr, kMinDisp);
     EXPECT_TRUE(r.coherent) << "heading=" << heading;
     EXPECT_NEAR(ang_diff(r.dock_yaw_rad, heading), 0.0, 1.0 * kRad) << "heading=" << heading;
   }
@@ -125,8 +125,8 @@ TEST(DockCogGate, RejectsHighStd)
   const double heading = 0.5;
   const auto samples = body_headings(heading, 20, 10.0 * kRad);  // ~10° jitter
   const auto [dx, dy] = reverse_gps(heading);
-  const auto r = evaluate_dock_cog_gate(
-      samples, dx, dy, kMinSamples, kMaxStd, kMaxBearingErr, kMinDisp);
+  const auto r =
+      evaluate_dock_cog_gate(samples, dx, dy, kMinSamples, kMaxStd, kMaxBearingErr, kMinDisp);
   EXPECT_FALSE(r.coherent);
   EXPECT_EQ(r.reason, DockCogReason::HIGH_STD);
 }
@@ -138,8 +138,8 @@ TEST(DockCogGate, RejectsBearingMismatch)
   const double cog_heading = 0.5;
   const auto samples = body_headings(cog_heading, 20, 0.3 * kRad);
   const auto [dx, dy] = reverse_gps(1.5);
-  const auto r = evaluate_dock_cog_gate(
-      samples, dx, dy, kMinSamples, kMaxStd, kMaxBearingErr, kMinDisp);
+  const auto r =
+      evaluate_dock_cog_gate(samples, dx, dy, kMinSamples, kMaxStd, kMaxBearingErr, kMinDisp);
   EXPECT_FALSE(r.coherent);
   EXPECT_EQ(r.reason, DockCogReason::BEARING_MISMATCH);
 }
@@ -149,8 +149,8 @@ TEST(DockCogGate, RejectsInsufficientDisplacement)
   const double heading = 0.5;
   const auto samples = body_headings(heading, 20, 0.3 * kRad);
   const auto [dx, dy] = reverse_gps(heading, 0.2);  // only 0.2 m < 0.5 m gate
-  const auto r = evaluate_dock_cog_gate(
-      samples, dx, dy, kMinSamples, kMaxStd, kMaxBearingErr, kMinDisp);
+  const auto r =
+      evaluate_dock_cog_gate(samples, dx, dy, kMinSamples, kMaxStd, kMaxBearingErr, kMinDisp);
   EXPECT_FALSE(r.coherent);
   EXPECT_EQ(r.reason, DockCogReason::INSUFFICIENT_DISPLACEMENT);
 }
@@ -160,8 +160,8 @@ TEST(DockCogGate, RejectsInsufficientSamples)
   const double heading = 0.5;
   const auto samples = body_headings(heading, 3, 0.3 * kRad);  // < kMinSamples
   const auto [dx, dy] = reverse_gps(heading);
-  const auto r = evaluate_dock_cog_gate(
-      samples, dx, dy, kMinSamples, kMaxStd, kMaxBearingErr, kMinDisp);
+  const auto r =
+      evaluate_dock_cog_gate(samples, dx, dy, kMinSamples, kMaxStd, kMaxBearingErr, kMinDisp);
   EXPECT_FALSE(r.coherent);
   EXPECT_EQ(r.reason, DockCogReason::INSUFFICIENT_SAMPLES);
 }
@@ -171,8 +171,8 @@ TEST(DockCogGate, RejectsInsufficientSamples)
 TEST(DockCogGate, DisplacementCheckedBeforeSamples)
 {
   const auto samples = body_headings(0.5, 50, 0.3 * kRad);
-  const auto r = evaluate_dock_cog_gate(
-      samples, 0.01, 0.0, kMinSamples, kMaxStd, kMaxBearingErr, kMinDisp);
+  const auto r =
+      evaluate_dock_cog_gate(samples, 0.01, 0.0, kMinSamples, kMaxStd, kMaxBearingErr, kMinDisp);
   EXPECT_EQ(r.reason, DockCogReason::INSUFFICIENT_DISPLACEMENT);
 }
 

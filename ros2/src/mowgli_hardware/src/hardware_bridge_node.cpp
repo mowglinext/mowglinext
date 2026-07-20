@@ -2028,8 +2028,7 @@ private:
     // subtracted before the /imu publish) so the firmware yaw loop regulates the
     // TRUE rate — otherwise an open-loop BackUp arcs by the bias. 0 until the IMU
     // has calibrated; the firmware clamps it hard before applying.
-    pkt.gyro_bias_radps =
-      imu_cal_ready_ ? static_cast<float>(imu_cal_offset_gz_) : 0.0f;
+    pkt.gyro_bias_radps = imu_cal_ready_ ? static_cast<float>(imu_cal_offset_gz_) : 0.0f;
     if (send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
                         sizeof(LlSetYawPid) - sizeof(uint16_t)))
     {

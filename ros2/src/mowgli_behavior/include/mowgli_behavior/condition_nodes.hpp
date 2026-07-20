@@ -328,8 +328,7 @@ public:
 class IsDocking : public BT::ConditionNode
 {
 public:
-  IsDocking(const std::string& name, const BT::NodeConfig& config)
-      : BT::ConditionNode(name, config)
+  IsDocking(const std::string& name, const BT::NodeConfig& config) : BT::ConditionNode(name, config)
   {
   }
 
