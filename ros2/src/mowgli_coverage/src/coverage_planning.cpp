@@ -1076,9 +1076,54 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
   // ring's end: concentric rings are locally parallel there, so the junction
   // becomes a gentle ~op_width sideways shift the connector joins tangentially.
   // The first ring keeps F2C's start (TransitToStrip already targets it).
-  std::vector<std::vector<std::pair<double, double>>> segs;
-  for (const auto& loop_in : plan.rings)
+  // Ring DRIVE-ORDER grouping. F2C's generateHeadlandSwaths emits ring loops PER
+  // PASS as [outer, hole, outer, hole, …], so consecutive concentric OUTER rings
+  // are interleaved with the field-centre hole rings. Driven in that raw order the
+  // path jumps outer-ring → hole-ring → outer-ring every pass, and each jump is a
+  // field-crossing relocation the join-gap split below (Split A) turns into a
+  // spurious blade-off Nav2 transit (3–4 extra transits, purely an ordering
+  // artifact). Partition into outer-boundary rings FIRST (outermost-first order
+  // preserved) then the obstacle-encircling rings, so each group drives
+  // contiguously and only ONE relocation separates the two. A ring is an OUTER
+  // ring iff it encloses a MAINLAND point (a swath endpoint): the mainland lies
+  // inside every nested outer ring and outside every small hole ring. Falls back
+  // to the raw order when there are no swaths (rings-only field: no mainland probe,
+  // and a fully-consumed field rarely carries hole rings worth reordering). Ring
+  // GEOMETRY is untouched — only the order the loops are appended.
+  std::vector<std::size_t> ring_order;
+  ring_order.reserve(plan.rings.size());
+  if (!plan.swaths.empty())
   {
+    const double probe_x =
+        0.5 * (plan.swaths.front().first.first + plan.swaths.front().second.first);
+    const double probe_y =
+        0.5 * (plan.swaths.front().first.second + plan.swaths.front().second.second);
+    std::vector<std::size_t> hole_rings;
+    for (std::size_t i = 0; i < plan.rings.size(); ++i)
+    {
+      if (pointInRing(probe_x, probe_y, plan.rings[i]))
+      {
+        ring_order.push_back(i);  // outer ring (encloses the mainland)
+      }
+      else
+      {
+        hole_rings.push_back(i);  // encircles a hole
+      }
+    }
+    ring_order.insert(ring_order.end(), hole_rings.begin(), hole_rings.end());
+  }
+  else
+  {
+    for (std::size_t i = 0; i < plan.rings.size(); ++i)
+    {
+      ring_order.push_back(i);
+    }
+  }
+
+  std::vector<std::vector<std::pair<double, double>>> segs;
+  for (const std::size_t ring_idx : ring_order)
+  {
+    const auto& loop_in = plan.rings[ring_idx];
     if (loop_in.size() < 2)
     {
       continue;
@@ -1272,8 +1317,8 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
         // large interior hole. If no in-bounds, hole-free arc fit, buildConnector
         // returned a straight fallback; keep it only when that straight is itself
         // safe (a short join that happens to clear everything — its V-cusp is
-        // rounded by roundSharpCorners below, or split off by the residual-cusp
-        // pass when the fillet can't fit). Otherwise BREAK the path here:
+        // rounded by roundSharpCorners below when a fillet >= min_radius fits, else
+        // left as a sharp corner FTC pivots through). Otherwise BREAK the path here:
         // finalize this sub-path and start a fresh one at segs[i], so FollowStrip
         // bridges the gap with a blade-off, costmap-aware Nav2 transit that
         // routes around the obstacle (issue #333).
@@ -1335,40 +1380,19 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     }
     auto rounded = roundSharpCorners(
         sp, boundary, plan.safe_holes, kCornerThreshold, fillet_r, min_radius, step);
-    // Residual-cusp split: roundSharpCorners leaves a corner SHARP when no
-    // in-bounds fillet of radius >= min_radius fits (typically the V-cusp of a
-    // kept straight-fallback join squeezed against the safety inset — measured
-    // 147.8° on the recorded garden). A >115° corner is a near-reversal MPPI
-    // dithers at, so SPLIT the sub-path there instead: the next FollowPath goal
-    // starts at the corner and RotationShim pivots in place to the new heading —
-    // exactly the right maneuver for a sharp corner this chassis can't arc
-    // through. Gentle (<=115°) corners stay: MPPI turns through those fine.
-    constexpr double kCuspSplitCos = -0.42261826174;  // cos(115°)
-    std::size_t begin = 0;
-    for (std::size_t i = 1; i + 1 < rounded.size(); ++i)
+    // Emit each rounded sub-path WHOLE — sub-paths split ONLY at Split A (a real
+    // obstacle-gap / relocation), never at an interior cusp. FTC (restored
+    // 2026-06-19, reverting MPPI) tracks the continuous full_path through the
+    // forward turn-around arcs with a single PRE_ROTATE, so a residual sharp
+    // U-turn between antiparallel swaths that no forward teardrop can fit (op_width
+    // ~0.16 m apart, needs ~2·r) must stay in ONE sub-path: its cusp tip lies in
+    // already-mowed headland (no coverage lost), and cutting there would fragment
+    // the plan into a blade-off Nav2 transit PER U-turn (measured 18 sub-paths /
+    // 17 transits on a 1-hole 72 m² field). The old MPPI-era residual-cusp split
+    // (>115° corners) was removed with the MPPI revert.
+    if (rounded.size() >= 2)
     {
-      const double ax = rounded[i].first - rounded[i - 1].first;
-      const double ay = rounded[i].second - rounded[i - 1].second;
-      const double bx = rounded[i + 1].first - rounded[i].first;
-      const double by = rounded[i + 1].second - rounded[i].second;
-      const double na = std::hypot(ax, ay), nb = std::hypot(bx, by);
-      if (na < 1e-9 || nb < 1e-9)
-      {
-        continue;
-      }
-      if ((ax * bx + ay * by) / (na * nb) < kCuspSplitCos)
-      {
-        if (i + 1 - begin >= 2)
-        {
-          out.emplace_back(rounded.begin() + static_cast<std::ptrdiff_t>(begin),
-                           rounded.begin() + static_cast<std::ptrdiff_t>(i + 1));
-        }
-        begin = i;  // corner pose starts the next run (pivot happens here)
-      }
-    }
-    if (rounded.size() - begin >= 2)
-    {
-      out.emplace_back(rounded.begin() + static_cast<std::ptrdiff_t>(begin), rounded.end());
+      out.emplace_back(std::move(rounded));
     }
   }
 

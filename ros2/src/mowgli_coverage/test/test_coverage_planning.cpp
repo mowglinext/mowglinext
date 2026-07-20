@@ -408,6 +408,13 @@ TEST(CoverageContinuousPath, ContinuousPathAvoidsHole)
   ASSERT_GE(subs.size(), 2u)
       << "a central hole must split the path into >=2 sub-paths (else a connector "
          "cut through the hole)";
+  // Upper bound: a single hole must NOT over-fragment. Sub-paths split ONLY at
+  // real obstacle-gap relocations (Split A) — not at every serpentine U-turn cusp
+  // (the removed MPPI-era Split B), and not at the per-pass outer↔hole ring
+  // ping-pong (rings are grouped outer-first). One central hole ⇒ ~2 sub-paths.
+  EXPECT_LE(subs.size(), 3u) << subs.size()
+                             << " sub-paths for ONE hole — over-fragmentation regression "
+                                "(residual-cusp split or interleaved rings)";
 
   // The RAW hole ring: sub-paths are validated against the GROWN (inset) hole,
   // so the raw hole is cleared with margin. Any sub-path pose inside it is a real
@@ -431,6 +438,51 @@ TEST(CoverageContinuousPath, ContinuousPathAvoidsHole)
   }
   EXPECT_EQ(in_hole, 0u) << in_hole << "/" << total_pts
                          << " sub-path poses fall inside the obstacle hole";
+}
+
+// A hole-free field must yield EXACTLY ONE continuous sub-path — nothing splits it
+// (no obstacle gap to route around, so Split A never fires), and no interior
+// serpentine U-turn cusp splits it either (the removed MPPI-era Split B). One
+// sub-path means the whole field is driven blade-on end-to-end with zero blade-off
+// transits, which is the point of the continuous full_path.
+TEST(CoverageContinuousPath, HoleFreeFieldIsOneSubPath)
+{
+  // Deployed connector knobs (turn 0.18, min_turn 0.15) on a hole-free rectangle.
+  const auto cell = makeRectCentered(9.0, 6.0);
+  const auto plan = planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15);
+  ASSERT_FALSE(plan.rings.empty());
+  ASSERT_TRUE(plan.safe_holes.empty()) << "test field must be hole-free";
+  const auto subs = buildContinuousSubPaths(plan, plan.safe_boundary, 0.18, 0.15, 0.05);
+  EXPECT_EQ(subs.size(), 1u) << subs.size()
+                             << " sub-paths on a HOLE-FREE field — a spurious split "
+                                "(residual-cusp or ring-ordering artifact)";
+}
+
+// Repro of the field-reported over-fragmentation: a ~10.5 m square with a single
+// ~1 m central hole over a 72 m² field split into 18 sub-paths / 17 blade-off
+// transits. With Split B removed and rings grouped outer-first it must collapse to
+// ~2 (one blade-off transit around the single obstacle), bounded here at 3.
+TEST(CoverageContinuousPath, SingleCentralHoleDoesNotOverFragment)
+{
+  constexpr double kSide = 10.5;
+  f2c::types::Cell cell = makeSquare(kSide);
+  const double c = kSide / 2.0;  // centre; ~1 m square hole about it
+  f2c::types::LinearRing hole;
+  hole.addPoint(f2c::types::Point(c - 0.5, c - 0.5));
+  hole.addPoint(f2c::types::Point(c + 0.5, c - 0.5));
+  hole.addPoint(f2c::types::Point(c + 0.5, c + 0.5));
+  hole.addPoint(f2c::types::Point(c - 0.5, c + 0.5));
+  hole.addPoint(f2c::types::Point(c - 0.5, c - 0.5));
+  cell.addRing(hole);
+
+  const auto plan = planBoustrophedon(cell, 0.16, 0.18, 0, 0.0, -1.0, 0.15);
+  ASSERT_FALSE(plan.rings.empty());
+  // inset 0.0 leaves safe_boundary empty → fall back to the raw field ring.
+  const auto boundary = plan.safe_boundary.empty() ? squareRing(kSide) : plan.safe_boundary;
+  const auto subs = buildContinuousSubPaths(plan, boundary, 0.18, 0.15, 0.05);
+  EXPECT_GE(subs.size(), 2u) << "the central hole must still split the path (safety)";
+  EXPECT_LE(subs.size(), 3u) << subs.size()
+                             << " sub-paths — over-fragmentation regression (was 18)";
 }
 
 // Sub-path DRIVE ORDER: on a multi-lobe field the sub-paths are reordered by
