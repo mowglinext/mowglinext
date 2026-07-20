@@ -906,6 +906,24 @@ private:
   using DockGoalHandle = rclcpp_action::ServerGoalHandle<CalibrateDock>;
   using DockStatus = mowgli_interfaces::msg::DockCalibrationStatus;
 
+  // Result of the IMU-yaw numerical solve. Declared here (before DockOutcome,
+  // which embeds a ComputeResult) so the type is visible at that point.
+  struct ComputeResult
+  {
+    bool success{false};
+    std::string message;
+    double imu_yaw_rad{0.0};
+    double imu_yaw_deg{0.0};
+    int samples_used{0};
+    double std_dev_deg{0.0};
+    double imu_pitch_rad{0.0};
+    double imu_pitch_deg{0.0};
+    double imu_roll_rad{0.0};
+    double imu_roll_deg{0.0};
+    int stationary_samples_used{0};
+    double gravity_mag_mps2{0.0};
+  };
+
   // Outcome of one calibration run, returned by run_dock_calibration_core so
   // the action wrapper can build a CalibrateDock::Result and the service façade
   // can ignore it (it reports via the status topic instead).
@@ -1020,7 +1038,7 @@ private:
           if (out.canceled)
             gh->canceled(res);
           else if (out.success)
-            gh->succeeded(res);
+            gh->succeed(res);
           else
             gh->abort(res);
         })
@@ -1771,22 +1789,6 @@ private:
   }
 
   // ── Numerical core ──────────────────────────────────────────────────
-  struct ComputeResult
-  {
-    bool success{false};
-    std::string message;
-    double imu_yaw_rad{0.0};
-    double imu_yaw_deg{0.0};
-    int samples_used{0};
-    double std_dev_deg{0.0};
-    double imu_pitch_rad{0.0};
-    double imu_pitch_deg{0.0};
-    double imu_roll_rad{0.0};
-    double imu_roll_deg{0.0};
-    int stationary_samples_used{0};
-    double gravity_mag_mps2{0.0};
-  };
-
   ComputeResult compute_imu_yaw(std::vector<std::tuple<double, double, double, double>> imu_samples,
                                 std::vector<std::tuple<double, double, double>> odom_samples,
                                 int baseline_count)
