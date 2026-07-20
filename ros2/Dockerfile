@@ -71,6 +71,7 @@ RUN . /opt/ros/kilted/setup.sh && \
         -DBUILD_TUTORIALS=OFF \
         -DBUILD_DOC=OFF \
         -DALLOW_PARALLELIZATION=ON \
+        -DCMAKE_CXX_FLAGS=-DALLOW_PARALLELIZATION \
         -DBUILD_SHARED_LIBS=ON \
  && make -j$(nproc) install
 
