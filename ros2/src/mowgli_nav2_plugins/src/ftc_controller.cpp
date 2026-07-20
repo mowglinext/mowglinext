@@ -168,6 +168,7 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.speed_slow = declare_double("speed_slow", 0.2);
   config_.speed_angular = declare_double("speed_angular", 20.0);
   config_.acceleration = declare_double("acceleration", 1.0);
+  config_.min_speed_mps = declare_double("min_speed_mps", 0.15);
   config_.stall_speed_ratio = declare_double("stall_speed_ratio", 0.35);
   config_.stall_grace_s = declare_double("stall_grace_s", 0.6);
   config_.stall_crawl_speed = declare_double("stall_crawl_speed", 0.08);
@@ -312,6 +313,12 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
       if (reject_invalid(key, p.as_double(), 0.0, 10.0))
         break;
       config_.acceleration = p.as_double();
+    }
+    else if (key == "min_speed_mps")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, 2.0))
+        break;
+      config_.min_speed_mps = p.as_double();
     }
     else if (key == "stall_speed_ratio")
     {
@@ -1326,6 +1333,8 @@ void FTCController::calculate_velocity_commands(double dt,
       lin_speed = std::clamp(lin_speed, -config_.max_cmd_vel_speed, config_.max_cmd_vel_speed);
     }
 
+    if (lin_speed > 0.0 && lin_speed < config_.min_speed_mps)
+      lin_speed = config_.min_speed_mps;
     cmd_vel.twist.linear.x = lin_speed;
   }
   else

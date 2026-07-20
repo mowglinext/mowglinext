@@ -325,6 +325,7 @@ controller_server:
       speed_slow: 0.16                 # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
       speed_angular: 45.0
       acceleration: 0.2
+      min_speed_mps: 0.15
       # Anti-wheelspin / traction control. When the carrot commands forward speed
       # but the ACTUAL forward speed (odom) stays below stall_speed_ratio × the
       # command for stall_grace_s, the wheels are slipping / the chassis is

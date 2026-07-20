@@ -310,6 +310,7 @@ private:
     double speed_slow{0.2};
     double speed_angular{20.0};
     double acceleration{1.0};
+    double min_speed_mps{0.15};
 
     // Anti-wheelspin / traction control. When the carrot commands a forward
     // speed but the robot's ACTUAL forward speed (odom feedback) stays below
