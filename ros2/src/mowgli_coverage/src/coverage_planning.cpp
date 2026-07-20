@@ -7,6 +7,7 @@
 #include "mowgli_coverage/coverage_planning.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -54,6 +55,16 @@ std::string fmtDrop(const char* what, double value, const char* cmp, double thre
 // timeout. Keeping the gate at 400 m² guarantees AUTO planning never times out
 // on hardware; larger lawns simply use the (near-optimal) longest-edge angle.
 constexpr double kAutoAngleMaxAreaM2 = 400.0;  // ~20 × 20 m
+
+// AUTO swath-angle search resolution (radians). f2c::sg::BruteForce defaults to
+// a 1° step, which — sweeping the FULL 2π — regenerates the entire swath set 360
+// times per plan (the dominant coverage-planning cost, and single-threaded on
+// the Pi4 / Cortex-A72 target). The swath-count objective (NSwath) is near-flat
+// within a few degrees of the optimum, so a 5° step (72 candidates over 2π) cuts
+// that cost ~5× while leaving the chosen angle — and thus the whole plan —
+// essentially unchanged. It is a FIXED constant (not tuned per plan) so the
+// argmin is deterministic across re-plans, which the resume cursor relies on.
+constexpr double kAutoAngleStepRad = 5.0 * M_PI / 180.0;
 
 // Orientation (radians) of the longest edge of a cell's outer ring. A cheap,
 // deterministic AUTO swath angle for large fields. Falls back to 0 (sweep along
@@ -725,6 +736,18 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // authorised area, before any inset). Instrumentation only.
   plan.diagnostics.field_area = field_cell.area();
 
+  // Per-stage wall-clock instrumentation (surfaced as a diagnostics note the
+  // server logs). Lets the maintainer see, on the Pi4, which F2C stage dominates
+  // a plan — expected: the AUTO swath-angle sweep. Pure accounting.
+  using Clock = std::chrono::steady_clock;
+  auto elapsedMs = [](Clock::time_point t0)
+  { return std::chrono::duration<double, std::milli>(Clock::now() - t0).count(); };
+  double t_headland_ms = 0.0;
+  double t_mainland_ms = 0.0;
+  double t_swaths_ms = 0.0;
+  int swath_angle_candidates = 1;  // 1 = fixed/longest-edge; >1 = exhaustive sweep
+  double mainland_area_m2 = 0.0;
+
   // Raw operator boundary as (x, y) pairs — the ring-corner fillet's in-bounds
   // fallback when no chassis-safety inset was applied (plan.safe_boundary empty).
   std::vector<std::pair<double, double>> field_outer_pts;
@@ -881,8 +904,10 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       (num_headland_passes_override > 0)
           ? num_headland_passes_override
           : std::max(1, static_cast<int>(std::ceil(headland_width / op_width - 1e-9)));
+  const auto t_headland0 = Clock::now();
   const auto headland_passes =
       hl.generateHeadlandSwaths(safe_cells, op_width, n_rings, /*dir_out2in=*/true);
+  t_headland_ms = elapsedMs(t_headland0);
   // Drop degenerate micro-loops (a near-consumed tiny field can yield a
   // centimetre-scale innermost ring that isn't worth driving).
   constexpr double kMinRingPerimeter = 1.0;  // m
@@ -997,7 +1022,10 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
 
   // (3) Mainland: what's left inside the rings' cut band. May be empty on a
   // small field (rings-only plan — still valid coverage).
+  const auto t_mainland0 = Clock::now();
   f2c::types::Cells mainland = hl.generateHeadlands(safe_cells, n_rings * op_width);
+  t_mainland_ms = elapsedMs(t_mainland0);
+  mainland_area_m2 = mainland.area();
   if (mainland.size() == 0 || mainland.area() < 1e-6)
   {
     // Rings-only is a valid plan — still report the planned fraction it covers.
@@ -1016,9 +1044,14 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // swath-count-minimising angle, which is equally deterministic for a fixed
   // polygon.
   f2c::sg::BruteForce bf;
+  // Coarsen the AUTO best-angle sweep from F2C's 1° default to kAutoAngleStepRad
+  // (5°) — ~5× fewer candidate angles at a negligible plan-quality change (see
+  // the constant). No effect on fixed-angle plans (they skip the sweep).
+  bf.step_angle = kAutoAngleStepRad;
   f2c::obj::NSwath n_swath_obj;
   f2c::rp::BoustrophedonOrder order;
   double swath_strip_area = 0.0;  // Σ length·op_width of KEPT swaths (for the fraction)
+  const auto t_swaths0 = Clock::now();
   for (std::size_t i = 0; i < mainland.size(); ++i)
   {
     const auto cell = mainland.getGeometry(i);
@@ -1044,6 +1077,14 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                     kAutoAngleMaxAreaM2,
                     cell_angle * 180.0 / M_PI);
       plan.diagnostics.notes.push_back(std::string(buf));
+    }
+    if (cell_angle < 0.0)
+    {
+      // Exhaustive sweep actually runs on this cell — record its candidate count
+      // (2π / step) for the timing note.
+      swath_angle_candidates =
+          std::max(swath_angle_candidates,
+                   static_cast<int>(std::lround(2.0 * M_PI / kAutoAngleStepRad)));
     }
     f2c::types::Swaths swaths = (cell_angle >= 0.0)
                                     ? bf.generateSwaths(cell_angle, op_width, cell)
@@ -1076,6 +1117,24 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       swath_strip_area += len * op_width;
       plan.swaths.push_back({{p0.getX(), p0.getY()}, {p1.getX(), p1.getY()}});
     }
+  }
+
+  t_swaths_ms = elapsedMs(t_swaths0);
+
+  // Per-stage timing note (server logs it). "swaths" is the dominant stage — the
+  // AUTO best-angle sweep over `angles` candidates.
+  {
+    char buf[200];
+    std::snprintf(buf,
+                  sizeof(buf),
+                  "timing: headland=%.0fms mainland=%.0fms swaths=%.0fms "
+                  "(angles=%d, mainland_area=%.1f m²)",
+                  t_headland_ms,
+                  t_mainland_ms,
+                  t_swaths_ms,
+                  swath_angle_candidates,
+                  mainland_area_m2);
+    plan.diagnostics.notes.push_back(std::string(buf));
   }
 
   // Planned-coverage fraction: strip areas of the kept rings + swaths over the

@@ -433,6 +433,7 @@ void CoverageServer::planCoverage()
     // live so it stays field-tunable per plan.
     const double min_turning_radius = get_parameter("min_turning_radius").as_double();
 
+    const auto t_plan0 = now();
     BoustrophedonPlan plan = planBoustrophedon(cell,
                                                operation_width_,
                                                default_headland_width_,
@@ -442,6 +443,7 @@ void CoverageServer::planCoverage()
                                                min_swath_length,
                                                ring_direction,
                                                min_turning_radius);
+    const double plan_ms = 1e3 * (now() - t_plan0).seconds();
 
     // Instrumentation (no behaviour change): surface every piece the planner
     // dropped (slivers, tiny rings, micro-cells) and the planned-coverage
@@ -550,8 +552,10 @@ void CoverageServer::planCoverage()
     // sub-path with MPPI and bridges the gaps with a blade-off Nav2 transit that
     // routes around the obstacle (issue #333). full_path is their concatenation
     // (GUI viz); drivable_subpaths is what the BT follows.
+    const auto t_subpaths0 = now();
     const auto subpaths = buildContinuousSubPaths(
         plan, connector_boundary, connector_turn_radius, min_turning_radius, kConnectorStep);
+    const double subpaths_ms = 1e3 * (now() - t_subpaths0).seconds();
 
     result->full_path.header = header;
     result->drivable_subpaths.clear();
@@ -574,6 +578,7 @@ void CoverageServer::planCoverage()
     // count a pose whose distance PAST the boundary exceeds this — a real
     // connector excursion is op_width/2 (~0.08 m) or more, well above it.
     constexpr double kBoundarySlackM = 0.05;
+    const auto t_verify0 = now();
     for (const auto& sub : subpaths)
     {
       nav_msgs::msg::Path spath;
@@ -642,6 +647,18 @@ void CoverageServer::planCoverage()
         result->drivable_subpaths.push_back(std::move(spath));
       }
     }
+    const double verify_ms = 1e3 * (now() - t_verify0).seconds();
+    // Per-stage timing (Pi4 profiling). planBoustrophedon dominates via the AUTO
+    // swath sweep; its own per-stage breakdown rides in the diagnostics notes
+    // logged above. subpaths = connector/fillet build; verify = the per-pose
+    // in-bounds/hole check over full_path.
+    RCLCPP_INFO(get_logger(),
+                "PlanCoverage timing: planBoustrophedon=%.0fms subpaths=%.0fms verify=%.0fms "
+                "(%zu path poses)",
+                plan_ms,
+                subpaths_ms,
+                verify_ms,
+                result->full_path.poses.size());
     if (result->drivable_subpaths.size() > 1)
     {
       RCLCPP_INFO(get_logger(),
