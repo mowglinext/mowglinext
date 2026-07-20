@@ -359,6 +359,39 @@ TEST_F(AreaTypeTest, NavigationAreaSurvivesSaveLoadRoundTrip)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Promotion idempotency (FIX B): a single promote → exactly one permanent
+// obstacle; a re-promote of the same keepout is a no-op; a genuinely distinct
+// obstacle is still added.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_F(AreaTypeTest, PromoteObstacleIsIdempotent)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
+
+  const auto obs = make_rect(0.0, 0.0, 0.5, 0.5);  // centroid (0.25, 0.25)
+  EXPECT_TRUE(node_->apply_promoted_obstacle_for_test(0, obs));
+  EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 1u);
+  EXPECT_EQ(node_->area_obstacle_count_for_test(0), 1u);
+
+  // Re-promote the identical polygon — must be a no-op (no stacking).
+  EXPECT_TRUE(node_->apply_promoted_obstacle_for_test(0, obs));
+  EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 1u) << "re-promote stacked a duplicate";
+  EXPECT_EQ(node_->area_obstacle_count_for_test(0), 1u) << "re-promote stacked a duplicate";
+
+  // A near-identical polygon (centroid within kObstacleDedupEpsilonM) is also
+  // treated as the same keepout.
+  const auto obs_shifted = make_rect(0.02, 0.02, 0.52, 0.52);  // centroid (0.27, 0.27)
+  EXPECT_TRUE(node_->apply_promoted_obstacle_for_test(0, obs_shifted));
+  EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 1u) << "near-duplicate stacked";
+
+  // A genuinely distinct obstacle (centroid well beyond the epsilon) is added.
+  const auto obs2 = make_rect(1.5, 1.5, 2.0, 2.0);  // centroid (1.75, 1.75)
+  EXPECT_TRUE(node_->apply_promoted_obstacle_for_test(0, obs2));
+  EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 2u) << "distinct obstacle was wrongly merged";
+  EXPECT_EQ(node_->area_obstacle_count_for_test(0), 2u);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Keepout mask — lethal-outside-areas boundary policy + index convention.
 //
 // Worked example mirroring areas.dat's quadrilateral shape: a single mowing

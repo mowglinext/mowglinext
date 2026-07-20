@@ -285,6 +285,24 @@ bool MapServerNode::apply_promoted_obstacle(size_t area_index,
     if (polygon.points.size() < 3)
       return false;
 
+    // Idempotent promotion. Promoting an obstacle writes its polygon into the
+    // keepout mask (→ lethal costmap cells); the obstacle_tracker re-clusters
+    // that same costmap and can re-promote the SAME region. Without a dedup
+    // guard every re-promote (and every YAML reload) push_back'd an identical
+    // polygon, stacking unbounded duplicates. Skip when a polygon with a
+    // near-identical centroid already exists — a true no-op (no reclassify, no
+    // replan trigger). One promote → exactly one permanent obstacle.
+    if (has_duplicate_obstacle(obstacle_polygons_, polygon, kObstacleDedupEpsilonM) ||
+        has_duplicate_obstacle(areas_[area_index].obstacles, polygon, kObstacleDedupEpsilonM))
+    {
+      const auto c = polygon_centroid(polygon);
+      RCLCPP_INFO(get_logger(),
+                  "apply_promoted_obstacle: duplicate keepout near (%.2f, %.2f) ignored (no-op)",
+                  static_cast<double>(c.x),
+                  static_cast<double>(c.y));
+      return true;
+    }
+
     areas_[area_index].obstacles.push_back(polygon);
     obstacle_polygons_.push_back(polygon);
     masks_dirty_ = true;

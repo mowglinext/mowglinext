@@ -62,6 +62,8 @@ ObstacleTrackerNode::ObstacleTrackerNode(const rclcpp::NodeOptions& options)
   map_obstacle_min_dist_from_boundary_ =
       declare_parameter<double>("map_obstacle_min_dist_from_boundary", 0.5);
   boundary_margin_ = declare_parameter<double>("boundary_margin", 0.3);
+  keepout_topic_ = declare_parameter<std::string>("keepout_topic", "/keepout_mask");
+  keepout_lethal_threshold_ = declare_parameter<int>("keepout_lethal_threshold", 100);
 
   RCLCPP_INFO(get_logger(),
               "ObstacleTrackerNode: cluster_tolerance=%.3f m, min_pts=%d, "
@@ -123,6 +125,23 @@ ObstacleTrackerNode::ObstacleTrackerNode(const rclcpp::NodeOptions& options)
         [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg)
         {
           on_map(std::move(msg));
+        });
+  }
+
+  // The keepout mask is published transient-local (latched) by
+  // map_server_node — match that durability so a late-joining tracker still
+  // receives the most recent mask. It is used to suppress re-detections of
+  // already-promoted keepout regions (see associate_clusters), which would
+  // otherwise re-cluster into fresh phantom obstacles and re-promote forever.
+  {
+    rclcpp::QoS keepout_qos(rclcpp::KeepLast(1));
+    keepout_qos.transient_local();
+    keepout_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
+        keepout_topic_,
+        keepout_qos,
+        [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg)
+        {
+          on_keepout_mask(std::move(msg));
         });
   }
 
@@ -443,6 +462,54 @@ void ObstacleTrackerNode::on_map(nav_msgs::msg::OccupancyGrid::ConstSharedPtr ms
 
   std::lock_guard<std::mutex> lock(mutex_);
   associate_clusters(clusters, map_stamp);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Keepout mask callback + lethal-cell lookup
+// ─────────────────────────────────────────────────────────────────────────────
+
+void ObstacleTrackerNode::on_keepout_mask(nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg)
+{
+  std::lock_guard<std::mutex> lock(keepout_mutex_);
+  keepout_mask_ = *msg;
+  have_keepout_mask_ = true;
+}
+
+bool ObstacleTrackerNode::centroid_in_keepout_lethal(double x, double y) const
+{
+  std::lock_guard<std::mutex> lock(keepout_mutex_);
+
+  // Fail open: without a mask we cannot know which regions are promoted
+  // keepouts, so never suppress a detection.
+  if (!have_keepout_mask_)
+  {
+    return false;
+  }
+
+  const auto& info = keepout_mask_.info;
+  if (info.width == 0 || info.height == 0 || info.resolution <= 0.0)
+  {
+    return false;
+  }
+
+  // map_server_node builds the mask with the standard OccupancyGrid
+  // convention: col=0 ↔ origin.x (X_min), row=0 ↔ origin.y (Y_min),
+  // row-major data[row*width + col] (see publish_keepout_mask + CLAUDE.md
+  // invariant 14). Map the centroid back through the same convention.
+  const int col = static_cast<int>(std::floor((x - info.origin.position.x) / info.resolution));
+  const int row = static_cast<int>(std::floor((y - info.origin.position.y) / info.resolution));
+  if (col < 0 || row < 0 || col >= static_cast<int>(info.width) ||
+      row >= static_cast<int>(info.height))
+  {
+    return false;  // Outside the mask footprint — cannot be a promoted keepout.
+  }
+
+  const size_t idx = static_cast<size_t>(row) * info.width + static_cast<size_t>(col);
+  // Promote to int before comparing: mask cells are int8_t (0 free, 100
+  // keepout, -1 unknown). Sign-safe; unknown/free (< threshold) fails open to
+  // detection.
+  const int val = static_cast<int>(keepout_mask_.data[idx]);
+  return val >= keepout_lethal_threshold_;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1093,6 +1160,21 @@ void ObstacleTrackerNode::associate_clusters(
 
     // Filter by mowing area boundary: reject clusters outside or near the edge.
     if (boundary_loaded_ && !point_in_polygon(cx, cy, boundary_inset_))
+    {
+      continue;
+    }
+
+    // Suppress re-detections of promoted keepout regions. Promoting an
+    // obstacle writes its polygon into /keepout_mask, which the global costmap
+    // (the source we cluster) renders as lethal cells — so the promoted
+    // keepout is otherwise re-clustered as a fresh candidate, gets a new id,
+    // and re-promotes forever (feedback loop introduced by 5c6debb1). We test
+    // the centroid against the actual keepout MASK cell, NOT a radius
+    // blocklist: inside a mowing area the mask is FREE (0) everywhere EXCEPT
+    // promoted-obstacle / no-go polygons, so a genuinely new physical obstacle
+    // (lethal only in the costmap, still free in the mask) is NOT suppressed.
+    // Fails open when the mask has not been received yet.
+    if (centroid_in_keepout_lethal(cx, cy))
     {
       continue;
     }

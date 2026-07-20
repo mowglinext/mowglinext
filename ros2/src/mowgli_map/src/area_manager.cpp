@@ -34,6 +34,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 
 #include "mowgli_interfaces/robot_yaml_scalar.hpp"
+#include "mowgli_map/internal_helpers.hpp"
 #include "mowgli_map/map_server_node.hpp"
 #include <grid_map_core/iterators/PolygonIterator.hpp>
 #include <grid_map_ros/GridMapRosConverter.hpp>
@@ -132,7 +133,11 @@ void MapServerNode::load_areas_from_params()
       while (std::getline(obs_stream, obs_str, '|'))
       {
         auto obs_poly = parse_polygon_string(obs_str);
-        if (obs_poly.points.size() >= 3)
+        // Dedup on load so pre-existing stacked duplicates (from the old
+        // no-dedup promote path) collapse to a single keepout.
+        if (obs_poly.points.size() >= 3 &&
+            !has_duplicate_obstacle(entry.obstacles, obs_poly, kObstacleDedupEpsilonM) &&
+            !has_duplicate_obstacle(obstacle_polygons_, obs_poly, kObstacleDedupEpsilonM))
         {
           entry.obstacles.push_back(obs_poly);
           obstacle_polygons_.push_back(obs_poly);
@@ -1105,7 +1110,9 @@ void MapServerNode::load_areas_from_file(const std::string& path)
     for (int j = 0; j < obs_count; ++j)
     {
       auto obs_poly = parse_polygon_string(get_str(prefix + "_obstacle_" + std::to_string(j)));
-      if (obs_poly.points.size() >= 3)
+      // Dedup on load so pre-existing stacked duplicates collapse to one.
+      if (obs_poly.points.size() >= 3 &&
+          !has_duplicate_obstacle(entry.obstacles, obs_poly, kObstacleDedupEpsilonM))
       {
         entry.obstacles.push_back(obs_poly);
       }

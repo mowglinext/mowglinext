@@ -122,6 +122,16 @@ private:
   /// and associate clusters.  Primary source.
   void on_map(nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg);
 
+  /// Cache the latest keepout mask (transient-local /keepout_mask from
+  /// map_server_node). Used by associate_clusters to drop re-detections of
+  /// already-promoted keepout regions (see centroid_in_keepout_lethal).
+  void on_keepout_mask(nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg);
+
+  /// True when map-frame point (x, y) falls on a lethal cell of the cached
+  /// keepout mask. Fails open (returns false) when no mask has arrived yet, so
+  /// a genuine new obstacle is never suppressed before the mask is known.
+  bool centroid_in_keepout_lethal(double x, double y) const;
+
   /// Promote/expire obstacles, then publish ObstacleArray and MarkerArray.
   void on_publish_timer();
 
@@ -208,6 +218,8 @@ private:
   int occupied_threshold_{65};  ///< Cells >= this value are treated as occupied
   double map_obstacle_min_dist_from_boundary_{0.2};  ///< Min distance from boundary edge (m)
   double boundary_margin_{0.3};  ///< Reject clusters within this margin of boundary edge (m)
+  std::string keepout_topic_{"/keepout_mask"};  ///< Keepout-filter mask (map_server_node)
+  int keepout_lethal_threshold_{100};  ///< Mask cells >= this value are lethal keepout
 
   // ── State ─────────────────────────────────────────────────────────────────
   std::vector<TrackedObstacle> tracked_;  ///< All currently tracked obstacles
@@ -232,6 +244,13 @@ private:
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
   rclcpp::Subscription<map_msgs::msg::OccupancyGridUpdate>::SharedPtr costmap_update_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
+  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr keepout_sub_;
+
+  /// Latest keepout mask from map_server_node (transient-local). Guarded by
+  /// keepout_mutex_. Promoted-obstacle polygons render as lethal cells here.
+  nav_msgs::msg::OccupancyGrid keepout_mask_;
+  bool have_keepout_mask_{false};
+  mutable std::mutex keepout_mutex_;
 
   /// Cached full global costmap. Seeded by on_costmap (full snapshot) and
   /// patched in place by on_costmap_update (delta). Guarded by costmap_mutex_.

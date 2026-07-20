@@ -118,6 +118,18 @@ public:
     return apply_promoted_obstacle(area_index, polygon);
   }
 
+  /// Test-only: obstacle-store sizes, to assert promotion / load is
+  /// idempotent (one keepout → one entry in each store). Single-threaded test
+  /// use only — no locking.
+  size_t obstacle_polygon_count_for_test() const
+  {
+    return obstacle_polygons_.size();
+  }
+  size_t area_obstacle_count_for_test(size_t area_index) const
+  {
+    return area_index < areas_.size() ? areas_[area_index].obstacles.size() : 0;
+  }
+
   /// Test-only: directly invoke the add_area service handler.
   void add_area_for_test(const mowgli_interfaces::srv::AddMowingArea::Request::SharedPtr req,
                          mowgli_interfaces::srv::AddMowingArea::Response::SharedPtr res);
