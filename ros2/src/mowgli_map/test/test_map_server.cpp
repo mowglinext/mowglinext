@@ -398,7 +398,10 @@ TEST_F(AreaTypeTest, PromoteObstacleIsIdempotent)
 // rectangle from (-3,-2) to (3,2). With the default lethal_outside_areas=true
 // and enforce_boundary_margin_m=0.25, the mask must be:
 //   * FREE (0) for a point well INSIDE the rectangle,
-//   * FREE (0) for a point just OUTSIDE the edge but within 0.25 m,
+//   * HIGH-COST (90, non-lethal) just OUTSIDE the edge within 0.25 m — the
+//     RTK-drift slack must not read as collision, but leaving it FREE created
+//     phantom corridors between close-running areas (the planner shortcut
+//     through the slack instead of the operator's navigation areas),
 //   * LETHAL (100) for a point far OUTSIDE the rectangle (> 0.25 m past edge).
 // The mask is read back with the independent OccupancyGrid convention in
 // mask_at(), so a swapped width/height (the historical 90°-rotation bug,
@@ -417,12 +420,39 @@ TEST_F(AreaTypeTest, KeepoutMaskMarksOutsideAreasLethal)
   EXPECT_EQ(mask_at(mask, 0.0, 0.0), 0) << "interior of mowing area must be free";
   EXPECT_EQ(mask_at(mask, 2.0, 1.0), 0) << "interior corner of mowing area must be free";
 
-  // Just outside the +X edge but within enforce_boundary_margin_m (0.25) → FREE.
-  EXPECT_EQ(mask_at(mask, 3.10, 0.0), 0) << "RTK-drift slack band outside edge must be free";
+  // Just outside the +X edge but within enforce_boundary_margin_m (0.25):
+  // HIGH-COST (90) — traversable as a last resort, never preferred over a
+  // navigation-area route, and non-lethal so boundary RTK drift doesn't
+  // self-reject (phantom-corridor fix, field report 2026-07).
+  EXPECT_EQ(mask_at(mask, 3.10, 0.0), 90)
+      << "RTK-drift slack band outside edge must be high-cost, not free";
 
   // Far outside the rectangle (> 0.25 m past the edge) → LETHAL.
   EXPECT_EQ(mask_at(mask, 4.0, 0.0), 100) << "cell well outside all areas must be lethal";
   EXPECT_EQ(mask_at(mask, 0.0, 3.5), 100) << "cell well outside all areas must be lethal";
+}
+
+// PHANTOM-CORRIDOR regression (field report 2026-07): two mowing areas whose
+// edges run within 2×enforce_boundary_margin_m of each other used to expose a
+// FREE strip between them (each area's slack band overlapping), and the
+// planner shortcut through it instead of routing via the operator's
+// navigation areas. The strip must now be HIGH-COST (90): still non-lethal,
+// never preferred over a real route.
+TEST_F(AreaTypeTest, KeepoutMaskNoFreePhantomCorridorBetweenCloseAreas)
+{
+  // Two rectangles separated by a 0.30 m gap along X (< 2 × 0.25 m margin).
+  ASSERT_TRUE(add_area("west", make_rect(-3, -2, -0.15, 2), /*is_navigation=*/false));
+  ASSERT_TRUE(add_area("east", make_rect(0.15, -2, 3, 2), /*is_navigation=*/false));
+
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_GT(mask.info.width, 0u);
+
+  // Inside both areas: free.
+  EXPECT_EQ(mask_at(mask, -1.5, 0.0), 0);
+  EXPECT_EQ(mask_at(mask, 1.5, 0.0), 0);
+  // The gap between them (covered by both slack bands) must be HIGH-COST —
+  // a free cell here is the phantom corridor.
+  EXPECT_EQ(mask_at(mask, 0.0, 0.0), 90) << "gap between close areas must not be a free corridor";
 }
 
 // Navigation areas count toward the allowed (free) region just like mowing
