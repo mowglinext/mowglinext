@@ -498,6 +498,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openbox \
     xterm \
     x11-utils \
+    # Required by Qt 6's xcb platform plugin in the headless Linux image.
+    libxcb-cursor0 \
     wget \
     ca-certificates \
     # Webots ROS 2 launcher, controller and driver
@@ -509,6 +511,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 ENV WEBOTS_HOME=/usr/local/webots
+ENV USER=root
 
 # Docker Desktop's Linux VM kernel identifies as microsoft-standard. The
 # upstream driver therefore selects its native-WSL path and attempts to use a
@@ -530,6 +533,12 @@ if old not in text:
     raise SystemExit(f'Unexpected webots_ros2_driver is_wsl() implementation: {path}')
 path.write_text(text.replace(old, new))
 PY
+
+# Windows checkouts can retain CRLF in Python script shebangs.  These
+# executable simulation helpers are copied into the colcon install tree before
+# this stage; Linux would otherwise interpret their interpreter as `python3\r`.
+RUN find /ros2_ws/install/mowgli_simulation/lib/mowgli_simulation \
+      -type f -name '*.py' -exec sed -i 's/\r$//' {} +
 
 # Copy VNC startup script
 COPY ros2/scripts/start_vnc.sh /ros2_ws/scripts/start_vnc.sh
