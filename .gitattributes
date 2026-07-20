@@ -1,3 +1,5 @@
 # Shell entrypoints run inside Linux containers must keep a valid shebang when
 # the repository is checked out on Windows with core.autocrlf enabled.
 *.sh text eol=lf
+# Python simulation nodes are executable inside Linux containers as well.
+*.py text eol=lf
