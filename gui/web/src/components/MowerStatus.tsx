@@ -95,10 +95,22 @@ export const MowerStatus = () => {
             : 'none';
 
     const hasArea = highLevelStatus.current_area !== undefined && highLevelStatus.current_area >= 0;
-    const hasProgress = isMowing && highLevelStatus.current_path_index !== undefined && highLevelStatus.current_path !== undefined && highLevelStatus.current_path > 0;
-    const progressPercent = hasProgress
-        ? Math.round(((highLevelStatus.current_path_index ?? 0) / (highLevelStatus.current_path ?? 1)) * 100)
-        : null;
+    // Coarse sub-path X/Y — the secondary readout.
+    const totalSwaths = highLevelStatus.current_path ?? 0;
+    const completedSwaths = highLevelStatus.current_path_index ?? 0;
+    const hasSwaths = isMowing && totalSwaths > 0;
+    // Smooth pose-cursor coverage percent — the PRIMARY %. Read defensively so
+    // this compiles before the ROS TS types are regenerated from the updated
+    // HighLevelStatus.msg (field added this change).
+    const coveragePercent = (highLevelStatus as {coverage_percent?: number}).coverage_percent;
+    const hasCoveragePercent = isMowing && coveragePercent !== undefined && coveragePercent > 0;
+    // Prefer the smooth coverage_percent; fall back to the coarse swath ratio
+    // when it is 0/unset (e.g. at pass start or an older backend).
+    const progressPercent = hasCoveragePercent
+        ? Math.round(coveragePercent as number)
+        : hasSwaths
+            ? Math.round((completedSwaths / totalSwaths) * 100)
+            : null;
 
     // Long-running: container restart + rosbridge reconnect. Lock the menu
     // item until ROS2 is reachable again to prevent duplicate-click storms.
@@ -209,6 +221,7 @@ export const MowerStatus = () => {
                     <Typography.Text style={{fontSize: 11, color: colors.primary, whiteSpace: 'nowrap'}}>
                         A{(highLevelStatus.current_area ?? 0) + 1}
                         {progressPercent !== null ? ` ${progressPercent}%` : ''}
+                        {hasSwaths ? ` · ${completedSwaths}/${totalSwaths}` : ''}
                     </Typography.Text>
                 )}
                 <Tooltip title={`GPS: ${gpsStatus.label}`}>

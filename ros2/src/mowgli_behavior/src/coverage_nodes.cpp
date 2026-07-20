@@ -67,6 +67,27 @@ uint64_t hashPlanGeometry(const std::vector<nav_msgs::msg::Path>& units)
 
 }  // namespace
 
+void refreshSwathProgress(BTContext& ctx, uint32_t area_idx, std::size_t unit_count)
+{
+  // Denominator = drivable units in the plan; numerator = units recorded mowed
+  // so far for this area. operator[] default-inserts an empty set for a not-yet-
+  // seen area (matching the existing area_completed_swaths access pattern), so a
+  // fresh area reads 0 completed. Display-only — no blade/motion effect.
+  ctx.total_swaths = static_cast<int>(unit_count);
+  ctx.completed_swaths = static_cast<int>(ctx.area_completed_swaths[area_idx].size());
+}
+
+float coveragePercentFromCursor(std::size_t absolute_cursor, std::size_t total_poses)
+{
+  if (total_poses == 0)
+  {
+    return 0.0f;
+  }
+  const float pct =
+      100.0f * static_cast<float>(absolute_cursor) / static_cast<float>(total_poses);
+  return std::clamp(pct, 0.0f, 100.0f);
+}
+
 // ===========================================================================
 // FollowStrip — execute the coverage plan as ONE CONTINUOUS joined path
 // ===========================================================================
@@ -273,6 +294,10 @@ BT::NodeStatus FollowStrip::onStart()
   // deterministic for a fixed area+params, so indices are stable across the
   // re-plan that a recharge/preempt resume triggers.
   ctx->area_swath_count[area_idx_] = swaths_.size();
+  // Seed the GUI's live swath progress from the START of the pass (total > 0,
+  // completed = whatever this area already had mowed on a resume) so the
+  // percentage renders immediately instead of only at the terminal branch.
+  refreshSwathProgress(*ctx, area_idx_, swaths_.size());
   swath_idx_ = 0;
   {
     const auto& done = ctx->area_completed_swaths[area_idx_];
@@ -283,10 +308,10 @@ BT::NodeStatus FollowStrip::onStart()
     if (swath_idx_ >= swaths_.size())
     {
       // Every swath already mowed this session — nothing left for this area.
+      // total/completed swaths were already seeded by refreshSwathProgress above
+      // (both == swaths_.size() here); just finalise the percentage.
       ctx->completed_areas.insert(area_idx_);
       saveCoverageResumeState(*ctx);
-      ctx->total_swaths = static_cast<int>(swaths_.size());
-      ctx->completed_swaths = static_cast<int>(done.size());
       ctx->coverage_percent = 100.0f;
       RCLCPP_INFO(ctx->node->get_logger(),
                   "FollowStrip: area %u already fully mowed (%zu/%zu swaths) — nothing to do",
@@ -330,6 +355,11 @@ BT::NodeStatus FollowStrip::onStart()
               swaths_.size(),
               ctx->area_completed_swaths[area_idx_].size(),
               kBladeSpinupDelaySec);
+
+  // Seed the smooth GUI percent for THIS area: 0 % for a fresh area, or the
+  // resumed fraction if resuming mid-path. Resets the value per area so it does
+  // not carry the previous area's 100 % into the next area's first ticks.
+  ctx->coverage_percent = livePercent();
 
   return BT::NodeStatus::RUNNING;
 }
@@ -398,6 +428,16 @@ void FollowStrip::updateProgress(const std::shared_ptr<BTContext>& ctx)
   }
 }
 
+float FollowStrip::livePercent() const
+{
+  // Cursor is an index into the CONCATENATION of all units: the current unit's
+  // base offset + how far into that (possibly trimmed) unit we got. Monotonic as
+  // the robot advances across sub-paths, so the percentage climbs smoothly.
+  const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
+  const std::size_t absolute = base + resume_start_idx_ + path_progress_idx_;
+  return coveragePercentFromCursor(absolute, total_path_poses_);
+}
+
 void FollowStrip::persistResumeCursor(const std::shared_ptr<BTContext>& ctx)
 {
   if (total_path_poses_ == 0)
@@ -408,7 +448,7 @@ void FollowStrip::persistResumeCursor(const std::shared_ptr<BTContext>& ctx)
   // base offset + how far into that (possibly trimmed) unit we got.
   const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
   const std::size_t absolute = base + resume_start_idx_ + path_progress_idx_;
-  const double pct = 100.0 * static_cast<double>(absolute) / static_cast<double>(total_path_poses_);
+  const double pct = coveragePercentFromCursor(absolute, total_path_poses_);
 
   // Near-complete acceptance. The coverage_goal_checker already treats
   // >= 95 % monotonic path traversal as goal-reached; if a reactive guard
@@ -578,15 +618,17 @@ BT::NodeStatus FollowStrip::onRunning()
     {
       ++swath_idx_;
     }
+    // Refresh the GUI's live swath progress on every boundary (the swath that
+    // just completed was inserted into area_completed_swaths before advance()
+    // ran), so completed_swaths climbs during the pass rather than only at its
+    // end. total_swaths stays == swaths_.size() throughout this pass.
+    refreshSwathProgress(*ctx, area_idx_, swaths_.size());
     if (swath_idx_ < swaths_.size())
     {
       sendCurrentSwath(ctx);
       return BT::NodeStatus::RUNNING;
     }
     setBladeEnabled(false);
-    // Update the GUI swath-progress scalars (previously hardcoded to 0).
-    ctx->total_swaths = static_cast<int>(swaths_.size());
-    ctx->completed_swaths = static_cast<int>(done.size());
     // Coverage % is the MAX of the per-segment done fraction and the continuous
     // resume cursor's fraction (set on a mid-path abort/halt). On full success
     // done_pct=100 dominates; on a partial abort done_pct=0 but the resume cursor
@@ -723,6 +765,12 @@ BT::NodeStatus FollowStrip::onRunning()
   // Track how far along the continuous path the robot has driven, every tick,
   // so an abort/halt can persist an accurate resume cursor.
   updateProgress(ctx);
+
+  // Smooth live coverage percent for the GUI, refreshed on every following tick
+  // (not only on abort/pass-end). Monotonic within the area; reset per area by
+  // the onStart seed. This is the PRIMARY GUI %; the swath X/Y counters remain a
+  // secondary readout.
+  ctx->coverage_percent = livePercent();
 
   if (status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED)
   {
@@ -1570,9 +1618,9 @@ BT::NodeStatus PlanCoverageArea::onRunning()
     {
       // The simple planner (no OR-Tools, no decomposition) finishes in well
       // under a second even on a large field; 12 s is a generous backstop.
-      if (std::chrono::steady_clock::now() - phase_start_ > std::chrono::seconds(12))
+      if (std::chrono::steady_clock::now() - phase_start_ > std::chrono::seconds(60))
       {
-        RCLCPP_ERROR(ctx->node->get_logger(), "PlanCoverageArea: result timeout (12s)");
+        RCLCPP_ERROR(ctx->node->get_logger(), "PlanCoverageArea: result timeout (60s)");
         return BT::NodeStatus::FAILURE;
       }
       return BT::NodeStatus::RUNNING;

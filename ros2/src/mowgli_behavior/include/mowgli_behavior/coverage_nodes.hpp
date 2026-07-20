@@ -41,6 +41,32 @@ namespace mowgli_behavior
 {
 
 // ---------------------------------------------------------------------------
+// refreshSwathProgress — publish the GUI-facing live swath progress for the
+// area currently being mown.
+//
+// Sets ctx.total_swaths (the number of drivable UNITS in the current plan — the
+// denominator behind HighLevelStatus.current_path) and ctx.completed_swaths
+// (how many of those units are recorded mowed so far — the numerator behind
+// current_path_index). Called at pass START and on EVERY swath boundary, not
+// only when a whole area pass finishes, so current_path is > 0 throughout the
+// mow and the GUI %-readout (current_path_index / current_path) renders and
+// climbs live. Previously these scalars were written only at the terminal
+// branch, so they stayed 0 during mowing and the GUI showed no percentage.
+// Display-only: touches no blade/motion state.
+// ---------------------------------------------------------------------------
+void refreshSwathProgress(BTContext& ctx, uint32_t area_idx, std::size_t unit_count);
+
+// ---------------------------------------------------------------------------
+// coveragePercentFromCursor — smooth mowing progress (0..100) from the pose
+// cursor: 100 * absolute_cursor / total_poses, clamped to [0, 100]. absolute is
+// the index into the concatenation of all drivable units, so it is monotonic as
+// the robot drives forward across sub-paths within an area — giving a smooth
+// live percentage (vs the coarse unit-count ratio in refreshSwathProgress).
+// total_poses == 0 yields 0. Pure/free so it is unit-testable without ROS.
+// ---------------------------------------------------------------------------
+float coveragePercentFromCursor(std::size_t absolute_cursor, std::size_t total_poses);
+
+// ---------------------------------------------------------------------------
 // FollowStrip — execute the planned coverage path, blade ON.
 //
 // Consumes ctx->current_strip_subpaths (the hole-free, continuous drivable
@@ -115,6 +141,11 @@ private:
   // restarting the whole path (and so GetNextUnmowedArea sees the progress and
   // does not abandon the area).
   void persistResumeCursor(const std::shared_ptr<BTContext>& ctx);
+  // Smooth live coverage percent (0..100) from the current pose cursor
+  // (swath_base_[swath_idx_] + resume_start_idx_ + path_progress_idx_) over
+  // total_path_poses_. Monotonic within an area; recomputed every following tick
+  // so the GUI %-readout climbs smoothly rather than jumping per sub-path.
+  float livePercent() const;
 
   rclcpp_action::Client<Nav2FollowPath>::SharedPtr follow_client_;
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;

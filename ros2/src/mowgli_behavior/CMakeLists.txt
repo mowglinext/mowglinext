@@ -315,6 +315,39 @@ if(BUILD_TESTING)
     action_msgs
   )
 
+  # ---- test_swath_progress ----
+  # Regression: the GUI live mowing-progress scalars (ctx.total_swaths /
+  # ctx.completed_swaths, behind HighLevelStatus.current_path / current_path_index)
+  # must be > 0 and climb during a pass, not stay 0 until the terminal branch.
+  # Drives refreshSwathProgress through a simulated pass on a plain BTContext.
+  ament_add_gtest(test_swath_progress
+    test/test_swath_progress.cpp
+    src/coverage_nodes.cpp
+    src/coverage_persistence.cpp
+  )
+
+  target_include_directories(test_swath_progress PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_swath_progress
+    rclcpp
+    rclcpp_action
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+    rcl_interfaces
+    action_msgs
+  )
+
 endif()
 
 ament_package()

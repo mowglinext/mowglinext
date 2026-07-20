@@ -99,6 +99,9 @@ BT::NodeStatus PublishHighLevelStatus::tick()
   msg.total_swaths = static_cast<int16_t>(ctx->total_swaths);
   msg.completed_swaths = static_cast<int16_t>(ctx->completed_swaths);
   msg.skipped_swaths = static_cast<int16_t>(ctx->skipped_swaths);
+  // Smooth pose-cursor-based progress for the current area (primary GUI %); the
+  // swath counts above are the coarse secondary "sub-path X/Y" readout.
+  msg.coverage_percent = ctx->coverage_percent;
   msg.gps_quality_percent = ctx->gps_quality;
   msg.battery_percent = ctx->battery_percent;
   msg.is_charging = ctx->latest_power.charger_enabled;
