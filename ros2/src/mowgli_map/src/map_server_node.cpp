@@ -64,6 +64,8 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   map_file_path_ = declare_parameter<std::string>("map_file_path", "");
   areas_file_path_ = declare_parameter<std::string>("areas_file_path", "");
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
+  mow_progress_publish_period_s_ =
+      declare_parameter<double>("mow_progress_publish_period_s", 2.0);
   keepout_nav_margin_ = declare_parameter<double>("keepout_nav_margin", 1.5);
   // Hard area-boundary enforcement: when true (operator default), the keepout
   // mask marks every cell OUTSIDE the union of all areas (mowing + navigation)
@@ -760,12 +762,22 @@ void MapServerNode::on_publish_timer()
       masks_dirty_ = false;
     }
 
-    // Republish the mowed overlay only when it grew this period (transient_local
-    // keeps late subscribers up to date without re-sending an unchanged grid).
+    // Republish the mowed overlay only when it grew, and at most once per
+    // mow_progress_publish_period_s_. Re-serializing the full-extent overlay on
+    // every tick is O(cells) per second while mowing — the dominant steady cost
+    // on a large map. transient_local keeps late subscribers up to date, and
+    // mow_progress_dirty_ stays set until we actually publish, so no growth is
+    // lost between throttled publishes.
     if (mow_progress_dirty_)
     {
-      publish_mow_progress();
-      mow_progress_dirty_ = false;
+      const rclcpp::Time now_t = now();
+      if (last_mow_progress_pub_time_.nanoseconds() == 0 ||
+          (now_t - last_mow_progress_pub_time_).seconds() >= mow_progress_publish_period_s_)
+      {
+        publish_mow_progress();
+        last_mow_progress_pub_time_ = now_t;
+        mow_progress_dirty_ = false;
+      }
     }
   }
 }

@@ -456,6 +456,13 @@ private:
   /// occupancy/classification lifecycle. Guarded by map_mutex_.
   grid_map::GridMap mow_progress_map_;
   bool mow_progress_dirty_{false};
+  /// Throttle for the mowed-overlay publish. The overlay is re-serialized (an
+  /// O(cells) full-grid pass that scales with map extent) at most once per this
+  /// period while mowing, instead of on every timer tick — the dominant steady
+  /// cost on a large map. transient_local keeps late subscribers current, and
+  /// mow_progress_dirty_ stays set until an actual publish, so no growth is lost.
+  double mow_progress_publish_period_s_{2.0};
+  rclcpp::Time last_mow_progress_pub_time_{0, 0, RCL_ROS_TIME};
 
   bool mow_blade_enabled_{false};
 

@@ -81,9 +81,86 @@ void MapServerNode::publish_keepout_mask()
   //     keepout_nav_margin_ free band is honoured.
   const double outside_free_margin =
       lethal_outside_areas_ ? enforce_boundary_margin_m_ : keepout_nav_margin_;
-  for (int r = 0; r < nx; ++r)
+
+  // Perf: the passes below are per-cell over the grid, whose count scales with
+  // the map EXTENT (extent/resolution²) and is dominated by the empty margin
+  // around a small polygon on a large map. Restrict iteration to the grid-index
+  // bounding box that could hold a non-default cell: the union of every
+  // area/obstacle/dock polygon, expanded by the free/obstacle margins (+1 cell).
+  // Every cell outside the box keeps the default 100 (lethal) — identical to
+  // what the full loop computes, because a cell only turns free (0) when inside
+  // an area, within outside_free_margin of an area edge, or inside the dock
+  // corridor, all of which lie within the box. Output is bit-identical; only the
+  // iteration range shrinks. The Invariant-14 mapping below still uses nx/ny.
+  double bx_min = std::numeric_limits<double>::max();
+  double bx_max = std::numeric_limits<double>::lowest();
+  double by_min = std::numeric_limits<double>::max();
+  double by_max = std::numeric_limits<double>::lowest();
+  const auto accumulate_polygon = [&](const geometry_msgs::msg::Polygon& poly)
   {
-    for (int c = 0; c < ny; ++c)
+    for (const auto& p : poly.points)
+    {
+      bx_min = std::min(bx_min, static_cast<double>(p.x));
+      bx_max = std::max(bx_max, static_cast<double>(p.x));
+      by_min = std::min(by_min, static_cast<double>(p.y));
+      by_max = std::max(by_max, static_cast<double>(p.y));
+    }
+  };
+  for (const auto& area : areas_)
+  {
+    accumulate_polygon(area.polygon);
+    for (const auto& obs : area.obstacles)
+    {
+      accumulate_polygon(obs);
+    }
+  }
+  for (const auto& obs : obstacle_polygons_)
+  {
+    accumulate_polygon(obs);
+  }
+  if (has_dock_exclusion_)
+  {
+    accumulate_polygon(dock_body_polygon_);
+    accumulate_polygon(dock_corridor_polygon_);
+    accumulate_polygon(dock_exclusion_polygon_);
+  }
+
+  // Full-grid fallback (used if no polygon accumulated or a corner fails to map).
+  int r0 = 0;
+  int r1 = nx - 1;
+  int c0 = 0;
+  int c1 = ny - 1;
+  if (bx_max >= bx_min)  // at least one polygon vertex accumulated
+  {
+    const double margin_expand = std::max(outside_free_margin, obstacle_margin_m_) + resolution_;
+    const double cx = map_.getPosition().x();
+    const double cy = map_.getPosition().y();
+    const double hx = map_.getLength().x() * 0.5;
+    const double hy = map_.getLength().y() * 0.5;
+    const double eps = resolution_ * 0.5;
+    const auto to_index = [&](double wx, double wy, grid_map::Index& out) -> bool
+    {
+      const grid_map::Position q(std::clamp(wx, cx - hx + eps, cx + hx - eps),
+                                 std::clamp(wy, cy - hy + eps, cy + hy - eps));
+      return map_.getIndex(q, out);
+    };
+    grid_map::Index i_a;
+    grid_map::Index i_b;
+    // grid_map r increases as X decreases, c as Y decreases; the two diagonal
+    // world corners bound both axes after min/max.
+    if (to_index(bx_min - margin_expand, by_min - margin_expand, i_a) &&
+        to_index(bx_max + margin_expand, by_max + margin_expand, i_b))
+    {
+      r0 = std::clamp(std::min(i_a(0), i_b(0)), 0, nx - 1);
+      r1 = std::clamp(std::max(i_a(0), i_b(0)), 0, nx - 1);
+      c0 = std::clamp(std::min(i_a(1), i_b(1)), 0, ny - 1);
+      c1 = std::clamp(std::max(i_a(1), i_b(1)), 0, ny - 1);
+    }
+  }
+
+  for (int r = r0; r <= r1; ++r)
+  {
+    for (int c = c0; c <= c1; ++c)
     {
       grid_map::Position pos;
       const grid_map::Index idx(r, c);
@@ -171,9 +248,9 @@ void MapServerNode::publish_keepout_mask()
            point_to_polygon_distance(static_cast<double>(pt.x), static_cast<double>(pt.y), obs) <=
                obstacle_margin_m_;
   };
-  for (int r = 0; r < nx; ++r)
+  for (int r = r0; r <= r1; ++r)
   {
-    for (int c = 0; c < ny; ++c)
+    for (int c = c0; c <= c1; ++c)
     {
       grid_map::Position pos;
       const grid_map::Index idx(r, c);
@@ -219,9 +296,9 @@ void MapServerNode::publish_keepout_mask()
   // Overlay no-go zones from classification layer.
   const auto& cls = map_[std::string(layers::CLASSIFICATION)];
   const float no_go_val = static_cast<float>(CellType::NO_GO_ZONE);
-  for (int r = 0; r < nx; ++r)
+  for (int r = r0; r <= r1; ++r)
   {
-    for (int c = 0; c < ny; ++c)
+    for (int c = c0; c <= c1; ++c)
     {
       if (cls(r, c) == no_go_val)
       {
@@ -240,9 +317,9 @@ void MapServerNode::publish_keepout_mask()
   // itself is NOT carved — it stays lethal via OBSTACLE_PERMANENT.
   if (has_dock_exclusion_ && dock_corridor_polygon_.points.size() >= 3)
   {
-    for (int r = 0; r < nx; ++r)
+    for (int r = r0; r <= r1; ++r)
     {
-      for (int c = 0; c < ny; ++c)
+      for (int c = c0; c <= c1; ++c)
       {
         grid_map::Position pos;
         const grid_map::Index idx(r, c);
