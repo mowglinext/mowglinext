@@ -17,6 +17,7 @@ import {
     MowerFeatureBase,
     RobotPartFeature,
     PathFeature,
+    DynObstacleFeature,
 } from "../../../types/map.ts";
 import { drawLine, drawRobotSilhouette, transpose } from "../../../utils/map.tsx";
 import { rasterizeMowProgress } from "../../../utils/mowProgress.ts";
@@ -272,13 +273,12 @@ export function useMapStreams({
                             const coords = obs.polygon.points.map(p =>
                                 transpose(offsetX, offsetY, datum, p.y ?? 0, p.x ?? 0)
                             );
-                            // Close the polygon
+                            // Close the polygon ring (GeoJSON requires first == last)
                             coords.push(coords[0]);
-                            newFeatures["dyn-obs-" + obs.id] = new PathFeature(
+                            newFeatures["dyn-obs-" + obs.id] = new DynObstacleFeature(
                                 "dyn-obs-" + obs.id,
                                 coords,
-                                "rgba(255, 100, 100, 0.4)",
-                                2
+                                obs.id ?? 0
                             );
                         }
                     });

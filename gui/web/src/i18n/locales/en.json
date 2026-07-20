@@ -1471,6 +1471,7 @@
     "outsideAreaDescription": "Draw a mowing area that covers this obstacle before promoting it.",
     "areaFallback": "area {{index}}",
     "confirmTitle": "Promote obstacle to permanent keepout?",
+    "confirmTitleWithId": "Promote obstacle #{{id}} to permanent keepout?",
     "confirmBodyPrefix": "This adds the polygon as a permanent keepout in",
     "confirmBodySuffix": "The robot will plan around it from now on (until you remove it).",
     "trackerId": "Tracker id: {{id}}",

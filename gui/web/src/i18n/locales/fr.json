@@ -1467,6 +1467,7 @@
     "outsideAreaDescription": "Tracez une zone de tonte qui couvre cet obstacle avant de le promouvoir.",
     "areaFallback": "zone {{index}}",
     "confirmTitle": "Promouvoir l'obstacle en exclusion permanente ?",
+    "confirmTitleWithId": "Promouvoir l'obstacle n°{{id}} en exclusion permanente ?",
     "confirmBodyPrefix": "Cela ajoute le polygone comme exclusion permanente dans",
     "confirmBodySuffix": "Le robot planifiera son trajet autour de lui désormais (jusqu'à ce que vous le retiriez).",
     "trackerId": "Id du traceur : {{id}}",

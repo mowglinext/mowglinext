@@ -44,6 +44,12 @@ import {useThemeMode} from "../theme/ThemeContext.tsx";
 // (blank) map, so the misconfiguration is obvious rather than silent.
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined || "pk.eyJ1IjoiY2VkYm9zc25lbyIsImEiOiJjbGxldjB4aDEwOW5vM3BxamkxeWRwb2VoIn0.WOccbQZZyO1qfAgNxnHAnA";
 
+// Layers the full map queries on hover to drive the two-way obstacle
+// highlight (map polygon → panel row). Module-level so the array identity is
+// stable across renders and react-map-gl does not re-bind the query on every
+// render.
+const DYN_OBSTACLE_INTERACTIVE_LAYERS = ['dyn-obstacle-fill'];
+
 export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const {notification} = App.useApp();
     const {t} = useTranslation();
@@ -77,6 +83,12 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const guiApi = useApi()
     const [tileUri, setTileUri] = useState<string | undefined>()
     const [editMap, setEditMap] = useState<boolean>(false)
+    // Shared hover/selection link between the tracked-obstacles panel and the
+    // map. Hovering a panel row (or a map polygon) sets this id; both the
+    // Mapbox highlight layer (via its filter) and the panel read it, so the
+    // operator sees exactly which obstacle they're about to promote. null =
+    // nothing highlighted.
+    const [selectedObstacleId, setSelectedObstacleId] = useState<number | null>(null);
     const [features, setFeatures] = useState<Record<string, MowingFeature>>({});
     const [dockPlacementMode, setDockPlacementMode] = useState<boolean>(false);
     // OpenMower import preview — populated by handleImportOpenMower after
@@ -183,6 +195,45 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
 
         return {type: "FeatureCollection", features: feats};
     }, [features, offsetX, offsetY, datum, LAYER_COLORS]);
+
+    // Layers for the persistent tracked-obstacle polygons (feature_type
+    // 'dyn-obstacle', carried in the same display-features source). Rendered as
+    // a translucent fill + rose outline + an id label, so the map and the
+    // TrackedObstaclesPanel share one visible identifier. `withHighlight` adds
+    // an amber outline on the currently selected/hovered obstacle — its filter
+    // reads selectedObstacleId, so a hover only re-binds this one layer's
+    // filter (no feature rebuild). Only the full map passes withHighlight; the
+    // compact overview just shows the fill/outline/label.
+    const renderDynObstacleLayers = (withHighlight: boolean) => (
+        <>
+            <Layer type={"fill"} id={"dyn-obstacle-fill"}
+                filter={['==', ['get', 'feature_type'], 'dyn-obstacle']}
+                paint={{'fill-color': ['get', 'color']}}/>
+            <Layer type={"line"} id={"dyn-obstacle-outline"}
+                filter={['==', ['get', 'feature_type'], 'dyn-obstacle']}
+                paint={{'line-color': LAYER_COLORS.lidarHit, 'line-width': 2}}/>
+            {withHighlight && (
+                <Layer type={"line"} id={"dyn-obstacle-highlight"}
+                    filter={['all',
+                        ['==', ['get', 'feature_type'], 'dyn-obstacle'],
+                        ['==', ['get', 'obs_id'], selectedObstacleId ?? -1]]}
+                    paint={{'line-color': LAYER_COLORS.lidarMiss, 'line-width': 4}}/>
+            )}
+            <Layer type={"symbol"} id={"dyn-obstacle-label"}
+                filter={['==', ['get', 'feature_type'], 'dyn-obstacle']}
+                layout={{
+                    'text-field': ['concat', '#', ['get', 'obs_label']],
+                    'text-size': 13,
+                    'text-font': ['Open Sans Bold'],
+                    'text-allow-overlap': true,
+                }}
+                paint={{
+                    'text-color': LAYER_COLORS.labelText,
+                    'text-halo-color': LAYER_COLORS.labelHalo,
+                    'text-halo-width': 1.5,
+                }}/>
+        </>
+    );
 
     const [mowingAreas, setMowingAreas] = useState<{ key: string, label: string, feat: Feature }[]>([])
 
@@ -548,6 +599,19 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         setDockDirty(true);
     }, [dockPlacementMode, setHasUnsavedChanges]);
 
+    // Map → panel side of the two-way obstacle highlight: while the cursor is
+    // over a tracked-obstacle polygon, mirror its id into selectedObstacleId so
+    // the matching panel row lights up. e.features only carries the interactive
+    // layers (DYN_OBSTACLE_INTERACTIVE_LAYERS); when the cursor leaves every
+    // obstacle it is empty → clears the highlight. Hovering the overlay panel
+    // does not reach the map canvas, so panel-driven highlights are never
+    // clobbered here.
+    const handleMapMouseMove = useCallback((e: {features?: Array<{properties?: Record<string, unknown> | null}>}) => {
+        const hit = e.features?.find(f => f.properties?.feature_type === 'dyn-obstacle');
+        const id = hit ? (hit.properties?.obs_id as number) : null;
+        setSelectedObstacleId(prev => (prev === id ? prev : id));
+    }, []);
+
     // Belt-and-suspenders: any time dockDirty flips to true, ensure
     // hasUnsavedChanges is also true so the Save Map button glows. The
     // inline setHasUnsavedChanges(true) above + the useMapEditHistory
@@ -746,6 +810,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 'circle-radius': 5,
                                 'circle-color': ['get', 'color'],
                             }}/>
+                        {/* Persistent tracked-obstacle polygons + id labels (compact overview: no highlight) */}
+                        {renderDynObstacleLayers(false)}
                     </Source>
                 </Map> : <Spinner/>}
             </div>
@@ -807,6 +873,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                                              m.on('rotateend', onRotateEnd);
                                                          }}
                                                          onClick={handleMapClick}
+                                                         interactiveLayerIds={DYN_OBSTACLE_INTERACTIVE_LAYERS}
+                                                         onMouseMove={handleMapMouseMove}
                                                          cursor={dockPlacementMode ? 'crosshair' : undefined}
                 >
                     {tileUri ? <Source type={"raster"} id={"custom-raster"} tiles={[tileUri]} tileSize={256}/> : null}
@@ -913,6 +981,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                 'circle-radius': 5,
                                 'circle-color': ['get', 'color'],
                             }}/>
+                        {/* Persistent tracked-obstacle polygons + id labels + hover/select highlight */}
+                        {renderDynObstacleLayers(true)}
                     </Source>
                     {mowProgressImage && (
                         <Source type={"image"} id={"mow-progress"} url={mowProgressImage.url} coordinates={mowProgressImage.coordinates}>
@@ -1055,6 +1125,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                     obstacles={dynamicObstacles}
                                     obstacleAreaIndex={obstacleAreaIndex}
                                     areaNames={obstacleAreaNames}
+                                    selectedObstacleId={selectedObstacleId}
+                                    onHoverObstacle={setSelectedObstacleId}
                                 />
                             </div>
                         )}
