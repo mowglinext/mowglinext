@@ -805,6 +805,45 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
     }
   }
 
+  // Turn-around connectors/fillets are bounded by the OUTERMOST RING's centerline,
+  // NOT safe_boundary. generateHeadlandSwaths places ring 0 op_width/2 inside the
+  // planning field (safe_cells), so eroding safe_cells inward by op_width/2 yields
+  // exactly that centerline (== the recorded line eroded by chassis_safety_inset).
+  // allInside() only tests the path CENTERLINE, so validating connectors against
+  // safe_boundary let a turn arc's centerline ride op_width/2 further out than any
+  // ring/swath, pushing the swept chassis/blade footprint that far past the
+  // operator boundary (excursion grew with the turn radius). Bounding connectors
+  // to this ring instead caps a turn's footprint at the perimeter ring the robot
+  // already drives. op_width/2 (NOT robot_width/2): eroding by the chassis
+  // half-width would keep turns robot_width/2 − op_width/2 TIGHTER than the
+  // perimeter ring → edge turn-arounds forced below min_turning_radius → straight
+  // fallback → sub-path fragmentation. On degeneracy (tiny field) leave it empty;
+  // the caller falls back to safe_boundary (the pre-fix, looser bound).
+  {
+    const f2c::types::Cells clearance_cells = hl.generateHeadlands(safe_cells, 0.5 * op_width);
+    if (clearance_cells.size() > 0 && clearance_cells.area() > 1e-6)
+    {
+      std::size_t largest = 0;
+      double largest_area = -1.0;
+      for (std::size_t i = 0; i < clearance_cells.size(); ++i)
+      {
+        const double a = clearance_cells.getGeometry(i).area();
+        if (a > largest_area)
+        {
+          largest_area = a;
+          largest = i;
+        }
+      }
+      const auto clr_ring = clearance_cells.getGeometry(largest).getGeometry(0);  // exterior
+      plan.connector_clearance_boundary.reserve(clr_ring.size());
+      for (std::size_t i = 0; i < clr_ring.size(); ++i)
+      {
+        const auto p = clr_ring.getGeometry(i);
+        plan.connector_clearance_boundary.emplace_back(p.getX(), p.getY());
+      }
+    }
+  }
+
   // Expose the interior hole rings the continuous-path connectors/fillets must
   // stay OUT of (issue #333). Use safe_cells' holes: when an inward inset was
   // applied they are grown outward by the inset (so the blade clears an obstacle

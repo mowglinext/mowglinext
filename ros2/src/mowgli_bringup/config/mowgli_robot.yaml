@@ -256,8 +256,12 @@ mowgli:
     # the keepout mask places OUTSIDE the line (enforce_boundary_margin_m), not an
     # inward inset. Raise this to keep the chassis further inside (e.g.
     # chassis_width/2 = 0.20 to keep the WHOLE chassis inside, the old behaviour,
-    # at the cost of a ~0.20 m uncut perimeter band). Read LIVE by coverage_server
-    # (ros2-param-set-tunable).
+    # at the cost of a ~0.20 m uncut perimeter band). This keep-inside guarantee
+    # now holds through TURNS as well: the turn-around connectors are clipped to
+    # the outermost-ring centerline (recorded line minus this inset), so a U-turn
+    # arc's chassis no longer bulges ~op_width/2 past the perimeter ring the way it
+    # did before (that outward bulge grew with the turn radius). Read LIVE by
+    # coverage_server (ros2-param-set-tunable).
     chassis_safety_inset: 0.0
     # path_spacing: DEPRECATED / informational — no ROS2 node reads it. F2C swath
     # spacing is driven by tool_width (coverage_server.operation_width); a separate

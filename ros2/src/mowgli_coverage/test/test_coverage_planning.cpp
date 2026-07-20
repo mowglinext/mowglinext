@@ -815,19 +815,16 @@ TEST(CoveragePlanning, HeadlandPassOverride)
   EXPECT_EQ(plan.rings.size(), 3u);
 }
 
-// SAFETY FLOOR (Bug C1): the coverage server floors the planning inset at
-// robot_width/2 before calling planBoustrophedon, so a too-small configured
-// chassis_safety_inset can't let a blade cross the boundary. The floor itself
-// lives in coverage_server.cpp; here we assert the GEOMETRIC GUARANTEE it
-// provides — given the floored inset, NO planned ring point or swath endpoint
-// sits closer than robot_width/2 to the boundary. We mirror the server's floor
-// expression (max(configured, robot_width/2)) so the planner is exercised with
-// exactly the value the server would pass.
-// OPT-IN: setting chassis_safety_inset = chassis_width/2 keeps the WHOLE chassis
-// inside the boundary (the pre-2026-07 default). There is no longer an automatic
-// robot_width/2 floor — the default rides the outermost ring ON the recorded
-// line (see RingRidesOnLineWhenInsetZero) — but an operator near hard fences can
-// still request the old keep-fully-inside behaviour with this explicit value.
+// OPT-IN keep-inside: the coverage server does NOT floor the inset (it clamps
+// only at 0.0 — the default rides the outermost ring ON the recorded line, see
+// RingRidesOnLineWhenInsetZero); an operator near hard fences opts the WHOLE
+// chassis inside by setting chassis_safety_inset = chassis_width/2 explicitly.
+// This test passes that value and asserts the GEOMETRIC GUARANTEE it provides on
+// the STRAIGHT passes: no planned ring point or swath endpoint sits closer than
+// robot_width/2 to the boundary. The turn-around CONNECTORS (which used to bulge
+// op_width/2 further out than the rings) are covered separately by
+// TurnArcFootprintStaysInsideRecordedBoundary — this test only exercises the
+// discrete ring/swath geometry.
 TEST(CoveragePlanning, ChassisInsetOptInKeepsBladesInsideHalfWidth)
 {
   constexpr double kRobotWidth = 0.40;  // 0.40 m chassis (the field excursion case)
@@ -875,6 +872,128 @@ TEST(CoveragePlanning, ChassisInsetOptInKeepsBladesInsideHalfWidth)
           << ") is closer than robot_width/2 to the boundary";
     }
   }
+}
+
+// SAFETY REGRESSION (turn-arc footprint): the pre-fix connectors were validated
+// (allInside) only on the path CENTERLINE against plan.safe_boundary, which sits
+// op_width/2 OUTSIDE the outermost ring's centerline. So a forward turn-around
+// arc's centerline could reach op_width/2 further out than any ring/swath, and
+// buildConnector picks the LARGEST radius whose centerline still fits — pushing
+// the swept CHASSIS footprint (± robot_width/2) that much past the operator
+// boundary, an excursion that GROWS with the turn radius. The fix bounds
+// connectors to plan.connector_clearance_boundary (the outermost-ring centerline
+// == recorded eroded by chassis_safety_inset), so a turn's footprint is never
+// worse than the perimeter ring the robot already drives.
+//
+// With chassis_safety_inset = robot_width/2 the straight passes keep the whole
+// chassis inside the recorded line; this test asserts the TURN arcs do too, via
+// the centreline↔footprint identity (footprint_outer = centreline + robot_width/2,
+// clearance ring = perimeter-ring centreline, so centreline ⊂ clearance ⟺ the
+// swept footprint is no worse than the perimeter pass). It (1) HARD-asserts the
+// pre-fix safe_boundary bound drives a connector centreline > slack (≈ op_width/2)
+// past the clearance ring (bug reachable — a vacuous green is impossible), (2)
+// requires every centreline of the clearance-bounded plan to stay within that
+// ring, and (3) checks the plan is not fragmented into disconnected segments
+// (which would satisfy (2) vacuously).
+TEST(CoveragePlanning, TurnArcFootprintStaysInsideRecordedBoundary)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeadland = 0.18;
+  constexpr double kMinSwath = 0.15;
+  constexpr double kRobotWidth = 0.40;  // chassis width (footprint is ± half this)
+  constexpr double kInset = kRobotWidth * 0.5;  // opt-in: keep whole chassis inside
+  constexpr double kTurnRadius = 0.18;
+  constexpr double kMinTurnRadius = 0.15;
+  constexpr double kStep = 0.03;
+  // Densification / discrete-normal estimate slack. Well under the ~op_width/2
+  // (0.08 m) breach the bug produces.
+  constexpr double kSlack = 0.05;
+
+  // The operator's REAL recorded garden (recorded_area_1) — the elongated concave
+  // field where the maintainer observes turns crossing the boundary. Its many
+  // edge U-turns ride the connector bound: RecordedArea1NoCuspInBounds proves the
+  // pre-fix connectors reach within (inset − op_width/2) of the raw line, i.e.
+  // op_width/2 (0.08 m) PAST the outermost-ring clearance ring — so the RED guard
+  // below (≥ 0.05 m) is provable, not incidental to a synthetic shape.
+  const auto cell = makeRecordedArea1();
+
+  const auto plan =
+      planBoustrophedon(cell, kOpWidth, kHeadland, 0, kInset, -1.0, kMinSwath, 0, kMinTurnRadius);
+  ASSERT_FALSE(plan.swaths.empty()) << "no swaths to turn between";
+  ASSERT_GE(plan.safe_boundary.size(), 3u);
+
+  auto poseCount = [](const std::vector<std::vector<std::pair<double, double>>>& subs)
+  {
+    std::size_t n = 0;
+    for (const auto& sub : subs)
+    {
+      n += sub.size();
+    }
+    return n;
+  };
+
+  // fix (a) must have populated the outermost-ring clearance ring.
+  ASSERT_GE(plan.connector_clearance_boundary.size(), 3u)
+      << "connector_clearance_boundary not populated — fix (a) missing";
+  const std::vector<std::pair<double, double>>& clearance = plan.connector_clearance_boundary;
+
+  // Max distance any CENTRELINE pose lies OUTSIDE the outermost-ring clearance
+  // ring — the fix's actual contract (connectors must not push the path past the
+  // perimeter ring the robot already drives). Ring/swath poses sit on/inside it by
+  // construction, so this measures the connector/fillet outward bulge directly.
+  auto centrelineExcursion =
+      [&](const std::vector<std::vector<std::pair<double, double>>>& subs)
+  {
+    double m = 0.0;
+    for (const auto& sub : subs)
+    {
+      for (const auto& p : sub)
+      {
+        m = std::max(m, pointInRing(p.first, p.second, clearance)
+                            ? 0.0
+                            : distanceToRing(p.first, p.second, clearance));
+      }
+    }
+    return m;
+  };
+
+  const auto unsafe = buildContinuousSubPaths(
+      plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
+  const auto fixed = buildContinuousSubPaths(plan, clearance, kTurnRadius, kMinTurnRadius, kStep);
+
+  // (1) Bug reachable — HARD guard (ASSERT, not EXPECT) so a vacuous green is
+  // impossible: bounding connectors to safe_boundary lets a centreline ride up to
+  // op_width/2 (0.08 m) past the outermost-ring envelope — the extra outward bulge
+  // that (per buildConnector's accept-largest-radius) grows with the turn radius.
+  // RecordedArea1NoCuspInBounds independently measures this: its connectors reach
+  // within (inset − op_width/2) of the raw line, i.e. op_width/2 past the
+  // clearance ring, so this excursion is ~0.08 m here — comfortably over kSlack.
+  // If this ever fails, the pre-fix path did NOT exceed the clearance ring on this
+  // field and the regression is untested — fail loudly rather than pass hollowly.
+  const double unsafe_centreline_ex = centrelineExcursion(unsafe);
+  ASSERT_GT(unsafe_centreline_ex, kSlack)
+      << "pre-fix connectors stayed within the clearance ring (excursion "
+      << unsafe_centreline_ex << " m ≤ " << kSlack
+      << ") — the bug is not exercised on this field; choose one whose turns reach the boundary";
+
+  // (2) Fix contract: every connector centreline stays within the clearance ring.
+  // This is the precise chassis guarantee — centreline ⊂ clearance ⟺ the swept
+  // footprint is no worse than the perimeter ring the robot already drives, which
+  // (at chassis_safety_inset = robot_width/2) is the whole chassis inside the
+  // recorded line. We do NOT assert an ABSOLUTE "every footprint inside recorded"
+  // here: a ±robot_width/2 footprint can cross the raw line near a sharp CONCAVE
+  // vertex of the real garden no matter how the path is routed — that is a field
+  // property, not the turn-arc bug, and it appears equally in both builds.
+  EXPECT_LE(centrelineExcursion(fixed), kSlack)
+      << "a connector centreline still exceeds the outermost-ring clearance ring";
+  // (3) The fix must not reach clearance by shredding the plan into disconnected
+  // segments (dropping connectors would satisfy (2) vacuously). The op_width/2
+  // tightening should shrink a few edge turns, not fragment the plan.
+  const std::size_t unsafe_poses = poseCount(unsafe);
+  const std::size_t fixed_poses = poseCount(fixed);
+  EXPECT_GE(fixed_poses, static_cast<std::size_t>(0.75 * unsafe_poses))
+      << "clearance bound over-fragmented the plan (" << fixed_poses << " vs " << unsafe_poses
+      << " poses) — edge turns forced below min_turning_radius into straight-fallback splits";
 }
 
 // Headland-on-the-line: with chassis_safety_inset = 0 (the new default) the
