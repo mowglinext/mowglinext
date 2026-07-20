@@ -371,14 +371,15 @@ private:
     play_clear_ms_ = declare_parameter<int>("play_button_clear_emergency_ms", 2000);
     // Drive-motor wheel-velocity PID gains + feedforward. Pushed to the STM32
     // firmware (PACKET_ID_LL_SET_DRIVE_PID) so the GUI can retune the per-wheel
-    // loop without reflashing. Defaults mirror the firmware compile-time
-    // fallback (cpp_main.cpp WHEEL_PI_* / board.h PWM_PER_MPS). Live-tunable via
-    // the set-parameters callback below; the firmware re-clamps every value.
-    wheel_pid_kp_ = declare_parameter<double>("wheel_pid_kp", 30.0);
-    wheel_pid_ki_ = declare_parameter<double>("wheel_pid_ki", 5000.0);
-    wheel_pid_kd_ = declare_parameter<double>("wheel_pid_kd", 0.0);
-    wheel_pid_integral_limit_ = declare_parameter<double>("wheel_pid_integral_limit", 100.0);
-    wheel_pid_pwm_per_mps_ = declare_parameter<double>("wheel_pid_pwm_per_mps", 300.0);
+    // loop without reflashing. Fallback defaults match the mowgli_bringup
+    // template (pre-calibration field defaults; a per-robot auto-tune overrides
+    // them). Live-tunable via the set-parameters callback below; the firmware
+    // re-clamps every value.
+    wheel_pid_kp_ = declare_parameter<double>("wheel_pid_kp", 0.2);
+    wheel_pid_ki_ = declare_parameter<double>("wheel_pid_ki", 0.092);
+    wheel_pid_kd_ = declare_parameter<double>("wheel_pid_kd", 0.01);
+    wheel_pid_integral_limit_ = declare_parameter<double>("wheel_pid_integral_limit", 15.0);
+    wheel_pid_pwm_per_mps_ = declare_parameter<double>("wheel_pid_pwm_per_mps", 282.135);
     // Firmware gyro yaw-rate loop (Option C, task #33/#34 — replaces the
     // removed host-side angular_rate_controller.hpp). Pushed to the STM32 via
     // PACKET_ID_LL_SET_YAW_PID (see send_yaw_pid()). Defaults are the
@@ -2615,11 +2616,11 @@ private:
   // (re)connect; pid_resend_count_ > 0 makes send_drive_pid() fire on the next
   // N heartbeat ticks (seeded so the first packet survives USB re-enumeration /
   // firmware boot even if one is dropped).
-  double wheel_pid_kp_{30.0};
-  double wheel_pid_ki_{5000.0};
-  double wheel_pid_kd_{0.0};
-  double wheel_pid_integral_limit_{100.0};
-  double wheel_pid_pwm_per_mps_{300.0};
+  double wheel_pid_kp_{0.2};
+  double wheel_pid_ki_{0.092};
+  double wheel_pid_kd_{0.01};
+  double wheel_pid_integral_limit_{15.0};
+  double wheel_pid_pwm_per_mps_{282.135};
   int pid_resend_count_{5};
 
   // Firmware gyro yaw-rate loop (Option C, task #33/#34). Defaults are the

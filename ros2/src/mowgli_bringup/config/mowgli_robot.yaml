@@ -63,15 +63,17 @@ mowgli:
     play_button_clear_emergency_ms: 2000 # [ms] hold-PLAY-to-clear-emergency
     # Drive-motor wheel-velocity PID + feedforward (consumed by
     # hardware_bridge_node, pushed to the STM32 firmware over the serial link so
-    # the GUI can retune the per-wheel loop without reflashing). Defaults mirror
-    # the firmware compile-time fallback (cpp_main.cpp WHEEL_PI_* / board.h
-    # PWM_PER_MPS). The firmware re-validates and clamps every value on receipt
-    # (kp 0-200, ki 0-20000, kd 0-500, integral_limit 0-255, pwm_per_mps 50-600).
-    wheel_pid_kp: 30.0            # proportional gain [PWM per m/s]
-    wheel_pid_ki: 5000.0         # integral gain [PWM per (m/s·s)]
-    wheel_pid_kd: 0.0            # derivative gain [PWM per (m/s²)] (0 = off)
-    wheel_pid_integral_limit: 100.0  # anti-windup clamp on the integral term [PWM]
-    wheel_pid_pwm_per_mps: 300.0     # open-loop feedforward velocity→PWM scale
+    # the GUI can retune the per-wheel loop without reflashing). These are the
+    # pre-calibration field defaults (surfaced in the GUI as "PID de vitesse des
+    # roues" / "Anticipation"); a per-robot auto-tune result overrides them in the
+    # sparse installed config. The firmware re-validates and clamps every value on
+    # receipt (kp 0-200, ki 0-20000, kd 0-500, integral_limit 0-255,
+    # pwm_per_mps 50-600).
+    wheel_pid_kp: 0.2            # proportional gain [PWM per m/s]
+    wheel_pid_ki: 0.092         # integral gain [PWM per (m/s·s)]
+    wheel_pid_kd: 0.01          # derivative gain [PWM per (m/s²)] (0 = off)
+    wheel_pid_integral_limit: 15.0   # anti-windup clamp on the integral term [PWM]
+    wheel_pid_pwm_per_mps: 282.135   # open-loop feedforward velocity→PWM scale
     # Firmware gyro yaw-rate loop (Option C, 2026-07-17, task #33/#34 —
     # replaces the removed host-side angular_rate_* PI). Consumed by
     # hardware_bridge_node, pushed to the STM32 over PACKET_ID_LL_SET_YAW_PID

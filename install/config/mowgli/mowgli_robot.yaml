@@ -58,14 +58,6 @@ mowgli:
         # Calibrated per robot (drive-a-known-distance). Template default 399.0.
         ticks_per_meter: 399.0
 
-        # Drive-motor wheel-velocity PID + feedforward, pushed to the STM32.
-        # Retuned per robot via the GUI; values here mirror the template.
-        wheel_pid_kp: 30.0
-        wheel_pid_ki: 5000.0
-        wheel_pid_kd: 0.0
-        wheel_pid_integral_limit: 100.0
-        wheel_pid_pwm_per_mps: 300.0
-
         # IMU mounting yaw offset (rad) — solved by the GUI's Auto-calibrate
         # button. 0 = uncalibrated.
         imu_yaw: 0.0
