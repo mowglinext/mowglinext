@@ -19,6 +19,7 @@ import {
     PathFeature,
 } from "../../../types/map.ts";
 import { drawLine, drawRobotSilhouette, transpose } from "../../../utils/map.tsx";
+import { rasterizeMowProgress } from "../../../utils/mowProgress.ts";
 import { useRobotDescription } from "../../../hooks/useRobotDescription.ts";
 
 export type MowProgressImage = {
@@ -26,12 +27,11 @@ export type MowProgressImage = {
     coordinates: [[number, number], [number, number], [number, number], [number, number]];
 };
 
-// Rasterize the mow-progress OccupancyGrid (100 = mowed, 0 = unmowed) to a
-// Mapbox image source. This is the single most expensive per-message operation
-// in the map view (allocates a width×height canvas, loops every cell, then
-// PNG+base64-encodes the whole thing via toDataURL). It is a free function so it
-// captures nothing and is only ever invoked from a coalesced rAF, never on the
-// WebSocket message handler — so a burst of grids can't stall the pump.
+// Rasterize the mow-progress OccupancyGrid to a Mapbox image source. The heavy
+// per-cell pixel pass lives in the shared rasterizeMowProgress util (reused by
+// the dashboard mini-map); this only maps the resulting canvas to Mapbox
+// lon/lat corners. Invoked from a coalesced rAF, never on the WebSocket message
+// handler — so a burst of grids can't stall the pump.
 function renderMowProgress(
     grid: OccupancyGrid,
     offsetX: number,
@@ -39,49 +39,19 @@ function renderMowProgress(
     datum: [number, number, number],
     setImage: (v: MowProgressImage | null) => void,
 ) {
-    if (!grid.info || !grid.data) return;
-    const width = grid.info.width ?? 0;
-    const height = grid.info.height ?? 0;
-    const resolution = grid.info.resolution ?? 0.1;
-    const originX = grid.info.origin?.position?.x ?? 0;
-    const originY = grid.info.origin?.position?.y ?? 0;
-    if (width === 0 || height === 0) return;
+    const raster = rasterizeMowProgress(grid);
+    if (!raster) return;
 
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const imageData = ctx.createImageData(width, height);
-    for (let row = 0; row < height; row++) {
-        for (let col = 0; col < width; col++) {
-            // OccupancyGrid row 0 = bottom, canvas row 0 = top -> flip vertically.
-            const gridIdx = row * width + col;
-            const canvasIdx = ((height - 1 - row) * width + col) * 4;
-            if (grid.data[gridIdx] >= 100) {
-                // Mowed: translucent lime overlay.
-                imageData.data[canvasIdx] = 124;
-                imageData.data[canvasIdx + 1] = 255;
-                imageData.data[canvasIdx + 2] = 178;
-                imageData.data[canvasIdx + 3] = 150;
-            } else {
-                // Unmowed / unknown: transparent.
-                imageData.data[canvasIdx + 3] = 0;
-            }
-        }
-    }
-    ctx.putImageData(imageData, 0, 0);
-
-    const gridWidth = width * resolution;
-    const gridHeight = height * resolution;
+    const {originX, originY, resolution} = raster;
+    const gridWidth = raster.width * resolution;
+    const gridHeight = raster.height * resolution;
     // Mapbox image source coords: [top-left, top-right, bottom-right, bottom-left].
     const topLeft = transpose(offsetX, offsetY, datum, originY + gridHeight, originX);
     const topRight = transpose(offsetX, offsetY, datum, originY + gridHeight, originX + gridWidth);
     const bottomRight = transpose(offsetX, offsetY, datum, originY, originX + gridWidth);
     const bottomLeft = transpose(offsetX, offsetY, datum, originY, originX);
 
-    setImage({url: canvas.toDataURL(), coordinates: [topLeft, topRight, bottomRight, bottomLeft]});
+    setImage({url: raster.dataUrl, coordinates: [topLeft, topRight, bottomRight, bottomLeft]});
 }
 
 interface UseMapStreamsOptions {

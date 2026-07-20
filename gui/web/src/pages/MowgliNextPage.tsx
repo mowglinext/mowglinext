@@ -1,4 +1,5 @@
 import type {ReactNode} from "react";
+import {useMemo} from "react";
 import {App, Button} from "antd";
 import {motion} from "framer-motion";
 import {useNavigate} from "react-router-dom";
@@ -15,7 +16,9 @@ import {useEmergency} from "../hooks/useEmergency.ts";
 import {useSettings} from "../hooks/useSettings.ts";
 import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
 import {useMowingMap} from "../hooks/useMowingMap.ts";
+import {useMowProgress} from "../hooks/useMowProgress.ts";
 import {useFusionOdom} from "../hooks/useFusionOdom.ts";
+import {rasterizeMowProgress} from "../utils/mowProgress.ts";
 import {useMowerAction} from "../components/MowerActions.tsx";
 import {computeBatteryPercent} from "../utils/battery.ts";
 import {deriveGpsStatus} from "../utils/gpsStatus.ts";
@@ -25,6 +28,7 @@ import {BatteryRing} from "../concept/components/BatteryRing.tsx";
 import {StatusOrb} from "../concept/components/StatusOrb.tsx";
 import {ActionCluster} from "../concept/components/ActionCluster.tsx";
 import {LiveMapMini} from "../concept/components/LiveMapMini.tsx";
+import type {MiniArea, MiniProgress} from "../concept/components/LiveMapMini.tsx";
 import {ProgressRibbon} from "../concept/components/ProgressRibbon.tsx";
 import {WeatherChip} from "../concept/components/WeatherChip.tsx";
 import {useWeather} from "../hooks/useWeather.ts";
@@ -118,13 +122,39 @@ export const MowgliNextPage = () => {
   const totalArea = activeArea ? activeArea.total_cells : 0;
   const coveragePct = totalArea > 0 ? todayMowedM2 / totalArea : 0;
 
-  // Pose normalised to map bbox -- LiveMapMini handles default polygons; we
-  // pass an approximated robot dot when we have data.
-  const polygonAreas = map.working_area ?? [];
-  const polyPoints = polygonAreas[0]?.area?.points ?? [];
-  const polygonNormalised = polyPoints.length >= 3
-    ? polyPoints.map(p => ({x: p.x ?? 0, y: p.y ?? 0}))
-    : undefined;
+  // ── Normalised garden view (ALL areas + robot + mow progress) ──
+  //
+  // Build ONE bbox over every recorded area's outer ring, then map areas,
+  // holes, the robot and the mow-progress grid through the SAME transform so
+  // they overlay coherently. Was previously working_area[0] only, which made a
+  // multi-area field render just the first zone on the dashboard.
+  const workingAreas = map.working_area ?? [];
+  const validAreas = workingAreas.filter(a => (a.area?.points?.length ?? 0) >= 3);
+  const bbox = (() => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    validAreas.forEach(a => (a.area?.points ?? []).forEach(p => {
+      const x = p.x ?? 0, y = p.y ?? 0;
+      if (x < x0) x0 = x;
+      if (y < y0) y0 = y;
+      if (x > x1) x1 = x;
+      if (y > y1) y1 = y;
+    }));
+    if (!isFinite(x0)) return null;
+    return {x0, y0, dx: (x1 - x0) || 1, dy: (y1 - y0) || 1};
+  })();
+  // Map frame -> unit square with a 10 % inset (matches the old look). Non-
+  // uniform per-axis scale — the robot dot, area rings and mow-progress raster
+  // all ride the same distortion, so they stay aligned.
+  const norm = (x: number, y: number): {x: number; y: number} => bbox
+    ? {x: (x - bbox.x0) / bbox.dx * 0.8 + 0.1, y: 1 - ((y - bbox.y0) / bbox.dy * 0.8 + 0.1)}
+    : {x: 0.5, y: 0.5};
+
+  const polygons: MiniArea[] = bbox ? validAreas.map(a => ({
+    outer: (a.area?.points ?? []).map(p => norm(p.x ?? 0, p.y ?? 0)),
+    holes: (a.obstacles ?? [])
+      .filter(h => (h.points?.length ?? 0) >= 3)
+      .map(h => (h.points ?? []).map(p => norm(p.x ?? 0, p.y ?? 0))),
+  })) : [];
 
   const pose = odom?.pose?.pose?.position;
   const ori = odom?.pose?.pose?.orientation;
@@ -132,23 +162,27 @@ export const MowgliNextPage = () => {
     ? (Math.atan2(2 * (ori.w * ori.z + ori.x * ori.y),
                   1 - 2 * (ori.y * ori.y + ori.z * ori.z)) * 180) / Math.PI
     : 0;
-  // normalise within bbox
-  const bbox = (() => {
-    if (!polygonNormalised) return null;
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    polygonNormalised.forEach(p => {
-      if (p.x < x0) x0 = p.x; if (p.y < y0) y0 = p.y;
-      if (p.x > x1) x1 = p.x; if (p.y > y1) y1 = p.y;
-    });
-    return {x0: x0 - 1, y0: y0 - 1, x1: x1 + 1, y1: y1 + 1};
-  })();
   const robotNormalised = (pose && bbox)
-    ? {
-        x: (pose.x - bbox.x0) / (bbox.x1 - bbox.x0),
-        y: 1 - (pose.y - bbox.y0) / (bbox.y1 - bbox.y0),
-        heading: robotYawDeg,
-      }
+    ? {...norm(pose.x ?? 0, pose.y ?? 0), heading: robotYawDeg}
     : undefined;
+
+  // Real mowed-cell overlay: same OccupancyGrid MapPage renders, rasterised
+  // once per grid message (throttled to ~1 Hz) and placed in the same unit
+  // space. The raster (heavy) is memoised on grid identity; the unit-rect math
+  // (cheap) re-runs when the bbox moves.
+  const mowGrid = useMowProgress();
+  const raster = useMemo(() => rasterizeMowProgress(mowGrid), [mowGrid]);
+  const progress: MiniProgress | null = (raster && bbox)
+    ? (() => {
+        const gW = raster.width * raster.resolution;
+        const gH = raster.height * raster.resolution;
+        const left = norm(raster.originX, 0).x;
+        const right = norm(raster.originX + gW, 0).x;
+        const top = norm(0, raster.originY + gH).y;   // max map-y -> smaller unit-y
+        const bottom = norm(0, raster.originY).y;
+        return {url: raster.dataUrl, x: left, y: top, w: right - left, h: bottom - top};
+      })()
+    : null;
 
   const phase: "idle" | "playing" | "returning" | "alert" =
     data.emergency ? "alert" :
@@ -290,7 +324,7 @@ export const MowgliNextPage = () => {
                 todayMowedM2={todayMowedM2} totalArea={totalArea}
               />
             </motion.div>
-            <motion.div variants={riseFade}><LiveMapCard polygon={polygonNormalised} robot={robotNormalised} coverage={coveragePct} onViewMap={() => navigate("/map")}/></motion.div>
+            <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} coverage={coveragePct} onViewMap={() => navigate("/map")}/></motion.div>
             <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
             <motion.div variants={riseFade}><HealthCard data={data}/></motion.div>
           </div>
@@ -309,7 +343,7 @@ export const MowgliNextPage = () => {
               <motion.div variants={riseFade}><HealthCard data={data}/></motion.div>
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
-              <motion.div variants={riseFade}><LiveMapCard polygon={polygonNormalised} robot={robotNormalised} coverage={coveragePct} height={300} onViewMap={() => navigate("/map")}/></motion.div>
+              <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} coverage={coveragePct} height={300} onViewMap={() => navigate("/map")}/></motion.div>
               <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
             </div>
           </div>
@@ -432,17 +466,17 @@ function HeroCard({
 }
 
 interface LiveMapCardProps {
-  polygon?: {x: number; y: number}[];
+  polygons: MiniArea[];
+  progress: MiniProgress | null;
   robot?: {x: number; y: number; heading: number};
   coverage: number;
   height?: number;
   onViewMap?: () => void;
 }
 
-function LiveMapCard({polygon, robot, coverage, height = 220, onViewMap}: LiveMapCardProps) {
+function LiveMapCard({polygons, progress, robot, coverage, height = 220, onViewMap}: LiveMapCardProps) {
   const {t} = useTranslation();
-  // LiveMapMini expects 0..1 normalised; we pass an empty/default if no
-  // recorded area yet.
+  const hasArea = polygons.length > 0;
   return (
     <GlassCard padding={0} style={{overflow: 'hidden'}}>
       <div style={{
@@ -472,9 +506,10 @@ function LiveMapCard({polygon, robot, coverage, height = 220, onViewMap}: LiveMa
           <ChevronRight size={14} strokeWidth={2.4}/>
         </button>
       </div>
-      {polygon && polygon.length > 0 ? (
+      {hasArea ? (
         <LiveMapMini
-          polygon={normaliseToUnit(polygon)}
+          polygons={polygons}
+          progress={progress}
           robot={robot}
           coverage={coverage}
           height={height}
@@ -661,20 +696,6 @@ function greetingFor(t: TFunction) {
   if (h < 12) return t('mowgliNextPage.greetingMorning');
   if (h < 18) return t('mowgliNextPage.greetingAfternoon');
   return t('mowgliNextPage.greetingEvening');
-}
-
-function normaliseToUnit(pts: {x: number; y: number}[]): {x: number; y: number}[] {
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  pts.forEach(p => {
-    if (p.x < x0) x0 = p.x; if (p.y < y0) y0 = p.y;
-    if (p.x > x1) x1 = p.x; if (p.y > y1) y1 = p.y;
-  });
-  const dx = (x1 - x0) || 1;
-  const dy = (y1 - y0) || 1;
-  return pts.map(p => ({
-    x: (p.x - x0) / dx * 0.8 + 0.1,
-    y: 1 - ((p.y - y0) / dy * 0.8 + 0.1),
-  }));
 }
 
 export default MowgliNextPage;
