@@ -41,6 +41,14 @@ namespace mowgli_behavior
 {
 
 // ---------------------------------------------------------------------------
+// Swath (mow) angle sentinel. Any negative value = AUTO: the coverage server
+// picks the swath-count-minimising angle (F2C NSwath). 0..179 selects a fixed
+// swath angle in degrees. Operator-tunable end to end via mowgli_robot.yaml
+// (mow_angle_deg) → behavior_tree_node blackboard → PlanCoverageArea goal.
+// ---------------------------------------------------------------------------
+inline constexpr double kMowAngleAutoDeg = -1.0;
+
+// ---------------------------------------------------------------------------
 // refreshSwathProgress — publish the GUI-facing live swath progress for the
 // area currently being mown.
 //

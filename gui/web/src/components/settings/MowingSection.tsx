@@ -7,6 +7,12 @@ import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 
 const { Text, Paragraph } = Typography;
 
+// Swath-angle sentinel: any negative value means AUTO (the coverage server
+// picks the swath-count-minimising angle). 0..179 selects a fixed swath angle
+// in degrees. Mirrors kMowAngleAutoDeg on the ROS2 side.
+const MOW_ANGLE_AUTO = -1;
+const MOW_ANGLE_MAX_DEG = 179;
+
 type Props = {
     values: Record<string, any>;
     onChange: (key: string, value: any) => void;
@@ -157,6 +163,10 @@ export const MowingSection: React.FC<Props> = ({
     const pathSpacing = values.tool_width ?? 0.18;
     const toolWidth = values.tool_width ?? 0.18;
     const headlandWidth = values.headland_width ?? 0.18;
+    // AUTO is modelled as a negative sentinel (-1). The Auto switch toggles
+    // between the sentinel and a concrete 0..179° angle; the degrees input is
+    // disabled while Auto is on.
+    const mowAngleIsAuto = (values.mow_angle_deg ?? MOW_ANGLE_AUTO) < 0;
 
     return (
         <div>
@@ -273,6 +283,26 @@ export const MowingSection: React.FC<Props> = ({
                                                 { value: 2, label: t("settingsMowing.mowDirectionCcw") },
                                             ]}
                                         />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={12}>
+                                    <Form.Item label={fieldLabel("mow_angle_deg", t("settingsMowing.mowAngleDeg"))} tooltip={t("settingsMowing.mowAngleDegTooltip")}>
+                                        <Space>
+                                            <Switch
+                                                checkedChildren={t("settingsMowing.mowAngleAuto")}
+                                                unCheckedChildren={t("settingsMowing.mowAngleFixed")}
+                                                checked={mowAngleIsAuto}
+                                                onChange={(auto) => onChange("mow_angle_deg", auto ? MOW_ANGLE_AUTO : 0)}
+                                            />
+                                            <InputNumber
+                                                value={mowAngleIsAuto ? undefined : values.mow_angle_deg}
+                                                onChange={(v) => onChange("mow_angle_deg", v ?? 0)}
+                                                disabled={mowAngleIsAuto}
+                                                min={0} max={MOW_ANGLE_MAX_DEG} step={1} precision={0}
+                                                placeholder={t("settingsMowing.mowAngleAuto")}
+                                                style={{ width: "100%" }} addonAfter="°"
+                                            />
+                                        </Space>
                                     </Form.Item>
                                 </Col>
                             </Row>

@@ -1403,10 +1403,15 @@ PlanCoverageArea::PlanCoverage::Goal PlanCoverageArea::buildGoal(
       goal.obstacles.push_back(hole);
     }
   }
-  // < 0 = auto (the server picks the swath-count-minimising angle). The
+  // Swath angle: < 0 = auto (the server picks the swath-count-minimising
+  // angle); 0..179 = a fixed swath angle in degrees. The operator picks this
+  // via the GUI (mow_angle_deg) → behavior_tree_node blackboard, so read it
+  // from the blackboard here, falling back to AUTO if unset. The rest of the
   // coverage geometry (operation_width, headland, insets) lives in the
   // coverage server's parameters, injected at launch from mowgli_robot.yaml.
-  goal.mow_angle_deg = -1.0;
+  double mow_angle_deg = kMowAngleAutoDeg;
+  config().blackboard->get<double>("mow_angle_deg", mow_angle_deg);
+  goal.mow_angle_deg = mow_angle_deg;
   return goal;
 }
 

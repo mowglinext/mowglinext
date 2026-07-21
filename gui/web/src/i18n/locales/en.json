@@ -1585,6 +1585,10 @@
       "label": "Swath overlap",
       "description": "Extra overlap between adjacent swaths to avoid thin un-mowed strips."
     },
+    "mow_angle_deg": {
+      "label": "Mow angle",
+      "description": "Fixed swath direction in degrees (0–179°), or Auto to let the planner minimise the swath count."
+    },
     "swath_angle": {
       "label": "Swath angle",
       "description": "Fixed mowing-line angle. Leave at auto unless you need a specific stripe direction."
@@ -2315,6 +2319,10 @@
     "chassisSafetyInsetTooltip": "Pre-shrink the operator polygon by this many metres before F2C plans. Defaults to chassis_width / 2 so the chassis edge stays inside the polygon under perfect tracking. Wired to coverage_server.chassis_safety_inset.",
     "minTurningRadius": "Min Turning Radius",
     "minTurningRadiusTooltip": "F2C Robot::setMinTurningRadius — bounds the CC-Dubins arc radius between swaths. Coverage runs CONTINUOUS arcs, so this must be wide enough for MPPI to TRACK the turnaround: too small (~0.05 m) is a near-cusp the controller hitches on; ~0.12 m is a gentle Ω-turn that fits the headland band. Wired to coverage_server.min_turning_radius.",
+    "mowAngleDeg": "Mow Angle",
+    "mowAngleDegTooltip": "Swath (mowing line) direction. Enable Auto to let the planner pick the swath-count-minimising angle, or set a fixed angle of 0–179°.",
+    "mowAngleAuto": "Auto",
+    "mowAngleFixed": "Fixed",
     "mowAngle": "Mow Angle",
     "mowAngleTooltip": "Mowing angle offset in degrees (-1 = auto)",
     "angleIncrement": "Angle Increment",

@@ -241,6 +241,11 @@ def generate_launch_description() -> LaunchDescription:
             # hardcoded 0.5/0.25 and the configured speeds never took effect.
             {"transit_speed": float(robot_params.get("transit_speed", 0.25))},
             {"mowing_speed": float(robot_params.get("mowing_speed", 0.2))},
+            # mow_angle_deg: operator swath direction. -1 (negative) = AUTO
+            # (coverage server picks the swath-count-minimising angle); 0..179 =
+            # fixed swath angle in degrees. Read by PlanCoverageArea::buildGoal
+            # off the BT blackboard into the plan_coverage action goal.
+            {"mow_angle_deg": float(robot_params.get("mow_angle_deg", -1.0))},
             # Battery thresholds — operator-tunable in mowgli_robot.yaml and
             # surfaced on the GUI Settings page. Forwarded here under the C++
             # parameter names the behavior node declares (behavior_tree.yaml

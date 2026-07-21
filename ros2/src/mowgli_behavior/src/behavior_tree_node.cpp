@@ -28,6 +28,7 @@
 #include "mowgli_behavior/action_nodes.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
+#include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_interfaces/gnss_status_utils.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
@@ -82,13 +83,30 @@ public:
         declare_parameter<std::string>("coverage_resume_path", "/ros2_ws/maps/coverage_resume.txt");
     if (loadCoverageResumeState(*context_))
     {
+      // Auto-continue after a mid-run container restart: the loader also restored
+      // current_command from disk, but only leave it active (so MowingSequence
+      // auto-re-enters) when it was a mow command (COMMAND_START == 1) AND a
+      // resumable snapshot genuinely exists. Any other restored command, or an
+      // empty snapshot, falls back to IDLE so the robot never starts moving on
+      // boot without real resume state. A terminal EndSession deletes the file,
+      // so this branch is only reached for a truly interrupted session.
+      constexpr uint8_t kCommandStart = 1;  // HighLevelControl::Request::COMMAND_START
+      const bool has_resumable_state =
+          !context_->area_resume_pose_index.empty() || !context_->completed_areas.empty();
+      const bool auto_continue =
+          context_->current_command == kCommandStart && has_resumable_state;
+      if (!auto_continue)
+      {
+        context_->current_command = 0;  // IDLE — require an explicit operator start
+      }
       RCLCPP_INFO(get_logger(),
                   "Restored coverage resume state from %s (current_area=%d, %zu area(s) with a "
-                  "resume cursor, %zu completed)",
+                  "resume cursor, %zu completed, auto_continue=%s)",
                   context_->coverage_resume_path.c_str(),
                   context_->current_area,
                   context_->area_resume_pose_index.size(),
-                  context_->completed_areas.size());
+                  context_->completed_areas.size(),
+                  auto_continue ? "true" : "false");
     }
 
     setupSubscribers();
@@ -666,6 +684,14 @@ private:
     blackboard_->set("battery_critical_voltage", static_cast<float>(battery_critical_voltage));
     blackboard_->set("battery_critical_recovery_pct",
                      static_cast<float>(battery_critical_recovery_pct));
+
+    // Swath (mow) angle — operator-tunable in mowgli_robot.yaml and surfaced
+    // on the GUI Mowing settings. < 0 = AUTO (coverage server picks the
+    // swath-count-minimising angle); 0..179 = a fixed swath angle in degrees.
+    // Pushed onto the blackboard so PlanCoverageArea::buildGoal reads it into
+    // the plan_coverage action goal (mow_angle_deg).
+    const double mow_angle_deg = declare_parameter<double>("mow_angle_deg", kMowAngleAutoDeg);
+    blackboard_->set("mow_angle_deg", mow_angle_deg);
 
     tree_ = factory_.createTreeFromFile(tree_file, blackboard_);
 

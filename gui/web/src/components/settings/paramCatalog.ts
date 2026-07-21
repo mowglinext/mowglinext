@@ -41,6 +41,7 @@ const CATALOG: Record<string, ParamMeta> = {
   num_headland_passes: {label: "paramCatalog.num_headland_passes.label", description: "paramCatalog.num_headland_passes.description", tier: "basic", group: "Coverage"},
   headland_width: {label: "paramCatalog.headland_width.label", description: "paramCatalog.headland_width.description", tier: "middle", group: "Coverage", unit: "m"},
   swath_overlap: {label: "paramCatalog.swath_overlap.label", description: "paramCatalog.swath_overlap.description", tier: "middle", group: "Coverage", unit: "m"},
+  mow_angle_deg: {label: "paramCatalog.mow_angle_deg.label", description: "paramCatalog.mow_angle_deg.description", tier: "basic", group: "Coverage", unit: "°"},
   swath_angle: {label: "paramCatalog.swath_angle.label", description: "paramCatalog.swath_angle.description", tier: "middle", group: "Coverage", unit: "rad"},
   chassis_safety_inset: {label: "paramCatalog.chassis_safety_inset.label", description: "paramCatalog.chassis_safety_inset.description", tier: "middle", group: "Coverage", unit: "m"},
   progress_timeout_sec: {label: "paramCatalog.progress_timeout_sec.label", description: "paramCatalog.progress_timeout_sec.description", tier: "middle", group: "Coverage", unit: "s"},

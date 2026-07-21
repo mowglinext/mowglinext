@@ -1581,6 +1581,10 @@
       "label": "Chevauchement des bandes",
       "description": "Chevauchement supplémentaire entre bandes adjacentes pour éviter de fines bandes non tondues."
     },
+    "mow_angle_deg": {
+      "label": "Angle de tonte",
+      "description": "Direction fixe des bandes en degrés (0–179°), ou Auto pour laisser le planificateur minimiser le nombre de bandes."
+    },
     "swath_angle": {
       "label": "Angle des bandes",
       "description": "Angle fixe des lignes de tonte. Laissez en automatique sauf si vous avez besoin d'une direction de rayure spécifique."
@@ -2311,6 +2315,10 @@
     "chassisSafetyInsetTooltip": "Réduit au préalable le polygone d'opération de ce nombre de mètres avant que F2C ne planifie. Par défaut chassis_width / 2 afin que le bord du châssis reste à l'intérieur du polygone en suivi parfait. Relié à coverage_server.chassis_safety_inset.",
     "minTurningRadius": "Rayon de braquage minimal",
     "minTurningRadiusTooltip": "F2C Robot::setMinTurningRadius — borne le rayon des arcs CC-Dubins entre les bandes. La couverture utilise des arcs CONTINUS, donc il doit être assez large pour que le MPPI SUIVE le demi-tour : trop petit (~0,05 m) crée un quasi-rebroussement sur lequel le contrôleur accroche ; ~0,12 m donne un demi-tour en Ω doux qui tient dans la bande de tournière. Relié à coverage_server.min_turning_radius.",
+    "mowAngleDeg": "Angle de tonte",
+    "mowAngleDegTooltip": "Direction des bandes de tonte. Activez Auto pour laisser le planificateur choisir l'angle qui minimise le nombre de bandes, ou fixez un angle de 0 à 179°.",
+    "mowAngleAuto": "Auto",
+    "mowAngleFixed": "Fixe",
     "mowAngle": "Angle de tonte",
     "mowAngleTooltip": "Décalage de l'angle de tonte en degrés (-1 = auto)",
     "angleIncrement": "Incrément d'angle",
