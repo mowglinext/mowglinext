@@ -1520,19 +1520,29 @@ TEST(CoveragePlanning, LargeFieldUsesLongestEdgeAngleFallback)
 {
   const auto plan = planDefault(makeSquare(30.0));  // 900 m² > 400 m² gate
   EXPECT_FALSE(plan.swaths.empty()) << "large field produced no swaths";
-  ASSERT_FALSE(plan.diagnostics.notes.empty())
-      << "expected an auto-angle fallback note on a large field";
-  EXPECT_NE(plan.diagnostics.notes[0].find("auto-angle"), std::string::npos);
+  // The always-on "timing:" note means notes is never empty and the auto-angle
+  // note is not guaranteed to be first — search for it explicitly.
+  const bool has_auto_angle =
+      std::any_of(plan.diagnostics.notes.begin(),
+                  plan.diagnostics.notes.end(),
+                  [](const std::string& n) { return n.find("auto-angle") != std::string::npos; });
+  EXPECT_TRUE(has_auto_angle) << "expected an auto-angle fallback note on a large field";
 }
 
-// A field under the threshold keeps the exhaustive best-angle search (no note),
-// so small lawns get the optimum swath orientation as before.
+// A field under the threshold keeps the exhaustive best-angle search, so small
+// lawns get the optimum swath orientation as before. planBoustrophedon always
+// records a per-stage "timing:" diagnostics note (see coverage_planning.cpp), so
+// the contract is specifically that NO "auto-angle" fallback note is present —
+// not that notes is empty.
 TEST(CoveragePlanning, SmallFieldKeepsExhaustiveAngleSearch)
 {
   const auto plan = planDefault(makeSquare(18.0));  // 324 m² < 400 m² gate
   EXPECT_FALSE(plan.swaths.empty());
-  EXPECT_TRUE(plan.diagnostics.notes.empty())
-      << "small field should not trigger the large-field angle fallback";
+  for (const auto& note : plan.diagnostics.notes)
+  {
+    EXPECT_EQ(note.find("auto-angle"), std::string::npos)
+        << "small field should not trigger the large-field angle fallback: " << note;
+  }
 }
 
 // The fallback is deterministic (longest-edge angle of a fixed polygon), so the

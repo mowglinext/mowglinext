@@ -16,6 +16,7 @@
 #include "mowgli_behavior/coverage_nodes.hpp"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cmath>
 #include <limits>
 
@@ -205,12 +206,13 @@ BT::NodeStatus FollowStrip::onStart()
         has_persisted_state)
     {
       RCLCPP_WARN(ctx->node->get_logger(),
-                  "FollowStrip: area %u persisted plan fingerprint 0x%016llx != re-plan 0x%016llx "
-                  "(%zu poses) — area/params changed, discarding stale resume state and mowing "
+                  "FollowStrip: area %u persisted plan fingerprint 0x%016" PRIx64
+                  " != re-plan 0x%016" PRIx64
+                  " (%zu poses) — area/params changed, discarding stale resume state and mowing "
                   "fresh",
                   area_idx_,
-                  static_cast<unsigned long long>(fpit->second),
-                  static_cast<unsigned long long>(plan_fingerprint),
+                  fpit->second,
+                  plan_fingerprint,
                   total_path_poses_);
       ctx->area_resume_pose_index.erase(area_idx_);
       ctx->area_completed_swaths.erase(area_idx_);
