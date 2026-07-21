@@ -30,7 +30,11 @@ namespace
 fg::GraphParams MakeParams()
 {
   fg::GraphParams gp;
-  gp.node_period_s = 0.1;
+  // Run at the 25 Hz tuning reference so the per-tick gate scaling factor is
+  // exactly 1.0 and the slip thresholds below apply at face value (the twist is
+  // still fed at kDt=0.1 s per tick — node_period only gates the MINIMUM node
+  // spacing, so one node is created per Tick as before).
+  gp.node_period_s = fg::kTunedNodePeriodS;  // 0.04
   gp.wheel_sigma_x = 0.05;
   gp.wheel_sigma_y = 0.005;
   gp.wheel_sigma_theta = 0.01;
@@ -49,8 +53,9 @@ fg::GraphParams MakeParams()
   // rather than the EMA's σ_x inflation, which has its own dedicated
   // test in test_adaptive_noise.
   gp.adaptive_noise_enabled_gain = 0.0;
-  // Slip-veto thresholds: must hold for both scenarios. With node_period
-  // 0.1 s, kPhantomWz=0.30 rad/s, gyro residual=0.02 rad/s:
+  // Slip-veto thresholds: must hold for both scenarios. Twist fed at kDt=0.1 s,
+  // kPhantomWz=0.30 rad/s, gyro residual=0.02 rad/s; scaling factor 1.0 at the
+  // 25 Hz reference so thresholds apply at face value:
   //   wheel_dtheta = 0.030 / tick, gyro_dtheta = 0.002 / tick
   //   residual = 0.028 / tick → comfortably above 0.01 threshold.
   //   gyro_dtheta = 0.002 < 0.005 slip_gyro_max.
@@ -139,4 +144,44 @@ TEST(SlipPivot, TruePivotStillTracksWithoutPhantomTranslation)
 
   EXPECT_LT(drift_m, 0.05);
   EXPECT_NEAR(yaw, kWz * kDt * kTicks, 0.1 * kWz * kDt * kTicks);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Cadence invariance of the per-tick slip gate. The thresholds are tuned at
+// 25 Hz but the robot can run at 50 Hz. This slip's RATE (0.30 rad/s residual)
+// is above the tuned trip point (0.01 rad / 0.04 s = 0.25 rad/s), but at 50 Hz
+// its PER-TICK residual (0.006 rad) is BELOW the raw 0.01 rad threshold — so it
+// is vetoed ONLY because CreateNodeLocked scales the threshold down with the
+// cadence (0.01 * 0.02/0.04 = 0.005 rad). Without the scaling the phantom vx
+// would leak straight through and drive the pose ~0.20 m.
+// ─────────────────────────────────────────────────────────────────────
+TEST(SlipPivot, SlipVetoScalesWithCadence)
+{
+  auto gp = MakeParams();
+  gp.node_period_s = 0.02;  // 50 Hz — half the tuned reference (scale 0.5)
+  fg::GraphManager gm(gp);
+  const gtsam::Pose2 X0(5.0, 3.0, 0.7);
+  gm.Initialize(X0, 0.0);
+
+  constexpr int kTicks = 100;             // 2 s @ 50 Hz
+  constexpr double kDt = 0.02;
+  constexpr double kPhantomVx = 0.10;     // m/s — slipping wheels
+  constexpr double kPhantomWz = 0.32;     // rad/s — diff-drive guess
+  constexpr double kGyroResidual = 0.02;  // rad/s — chassis really still
+  // Per tick: wheel_dtheta=0.0064, gyro_dtheta=0.0004, residual=0.0060 rad.
+  //   scaled slip_residual = 0.01  * 0.5 = 0.0050 → 0.0060 > 0.0050 → detected.
+  //   scaled slip_gyro_max = 0.005 * 0.5 = 0.0025 → 0.0004 < 0.0025 ✓.
+  //   scaled slip_wheel_min = 0.005 * 0.5 = 0.0025 → 0.0064 > 0.0025 ✓.
+  for (int i = 0; i < kTicks; ++i)
+  {
+    gm.AddWheelTwist(kPhantomVx, 0.0, kPhantomWz, kDt);
+    gm.AddGyroDelta(kGyroResidual, kDt);
+    gm.Tick(kDt * (i + 1));
+  }
+
+  auto snap = gm.LatestSnapshot();
+  ASSERT_TRUE(snap.has_value());
+  const double drift_m = std::hypot(snap->pose.x() - X0.x(), snap->pose.y() - X0.y());
+  std::printf("[SlipPivot] 50 Hz cadence-scaled slip veto, drift=%.3f m\n", drift_m);
+  EXPECT_LT(drift_m, 0.05);
 }

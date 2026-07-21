@@ -274,11 +274,12 @@ TEST(GyroPreintFactor, WrapsAroundPi)
 // PoseTranslationPrior — availability + convention guard
 // ─────────────────────────────────────────────────────────────────────
 //
-// The keyframe layer uses GTSAM's built-in PoseTranslationPrior<Pose2>
-// as the scan-to-keyframe ABSOLUTE xy constraint (a prior on the current
-// node's translation), instead of a custom factor. This test (a) confirms
-// the header exists/links in this GTSAM 4.3a1 build, and (b) locks the
-// residual shape (2D xy) + analytic Jacobian against a wrong GTSAM bump.
+// GTSAM version/convention guard for PoseTranslationPrior<Pose2>. The
+// scan-to-keyframe constraint has since moved to a full PriorFactor<Pose2>
+// (xy + yaw — see graph_manager_node.cpp), so this is no longer the live
+// keyframe factor; the test is retained to (a) confirm the header exists/links
+// in this GTSAM 4.3a1 build, and (b) lock the residual shape (2D xy) + analytic
+// Jacobian against a wrong GTSAM bump, in case the xy-only prior is reused.
 TEST(PoseTranslationPrior, AvailableAndWellFormed)
 {
   gtsam::PoseTranslationPrior<gtsam::Pose2> f(gtsam::Symbol('x', 0),

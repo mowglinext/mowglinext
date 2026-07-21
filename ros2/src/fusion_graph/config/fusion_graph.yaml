@@ -6,17 +6,20 @@
 fusion_graph_node:
   ros__parameters:
     # ── Graph cadence ──────────────────────────────────────────────────
-    # 50 Hz default. Earlier 25 Hz (0.04) was technically sufficient for
-    # the 5 Hz controller queries, but the operator could see a 5-10°
-    # yaw lag in the GUI during in-place pivots (gyro_z is 91 Hz on
-    # /imu/data but fusion only republished its absorbed value every
-    # 40 ms, layered with 80-100 ms of rosbridge + WebSocket + render
-    # latency downstream). Bumping the optimiser to 50 Hz halves the
-    # fusion-side contribution to that lag at modest CPU cost (iSAM2
-    # incremental updates are sub-millisecond on this graph size).
-    # If CPU pressure becomes visible (Nav2 controller frequency
-    # tanks, ekf_odom_node misses cycles), drop back to 0.03 (33 Hz).
-    # Override key (set by navigation.launch.py): fusion_graph_node_period_s.
+    # 50 Hz default here, but navigation.launch.py OVERRIDES this via
+    # fusion_graph_node_period_s — 25 Hz (0.04) is the real deployed cadence.
+    # Earlier 25 Hz was technically sufficient for the 5 Hz controller
+    # queries, but the operator could see a 5-10° yaw lag in the GUI during
+    # in-place pivots (gyro_z is 91 Hz on /imu/data but fusion only
+    # republished its absorbed value every 40 ms, layered with 80-100 ms of
+    # rosbridge + WebSocket + render latency downstream). Bumping the
+    # optimiser to 50 Hz halves the fusion-side contribution to that lag at
+    # modest CPU cost (iSAM2 incremental updates are sub-millisecond on this
+    # graph size). If CPU pressure becomes visible (Nav2 controller frequency
+    # tanks), drop back to 0.03 (33 Hz).
+    # The per-tick dead-reckoning gates (stationary / slip / pivot) below are
+    # tuned at 25 Hz and auto-scale off this value (graph_params.hpp
+    # kTunedNodePeriodS = 0.04), so their rad/s trip points hold at any cadence.
     node_period_s: 0.02
 
     # ── Wheel between-factor noise ─────────────────────────────────────
@@ -42,6 +45,9 @@ fusion_graph_node:
     # stationary_sigma_theta regardless of gyro noise. Encoders cannot
     # slip into stationary, so a zero wheel reading is treated as
     # ground truth.
+    # Per-tick thresholds tuned at the 25 Hz reference; CreateNodeLocked scales
+    # them by node_period_s / 0.04 so the m/s and rad/s trip points hold at any
+    # cadence.
     stationary_thresh_xy_m: 0.001
     stationary_thresh_theta: 0.002
     # 2026-05-27: relax 0.001 → 0.01 rad. The original tight value gave
@@ -72,9 +78,12 @@ fusion_graph_node:
     # bias in BOTH CW and CCW spins — measured at ~+0.025 m/s on
     # 2026-05-14 with a 1 rad/s spin, drifting fusion's base_link by
     # 0.2-0.4 m per spin and tripping Nav2 replans).
-    # Default 0.012 rad/tick = 0.3 rad/s at 25 Hz; pivot_wheel_sigma_x
-    # 0.5 m effectively releases the X constraint without disconnecting
-    # the graph (sigma_y stays tight so non-holo is preserved).
+    # Value is a PER-TICK radian threshold tuned at the 25 Hz reference
+    # (0.012 rad/tick = 0.3 rad/s); CreateNodeLocked scales it by
+    # node_period_s / 0.04 so that 0.3 rad/s trip point is preserved at 50 Hz
+    # or 10 Hz too. pivot_wheel_sigma_x 0.5 m effectively releases the X
+    # constraint without disconnecting the graph (sigma_y stays tight so
+    # non-holo is preserved).
     pivot_gate_dtheta_rad: 0.012
     pivot_wheel_sigma_x: 0.5
 
@@ -94,10 +103,12 @@ fusion_graph_node:
     # producing encoder readings that say "I moved forward and turned"
     # while the chassis sits still. Treat the wheel (dx, dy) as a lie
     # in that case; the gyro still feeds the yaw and GPS / scans pull
-    # (x, y). All three thresholds are *per-tick* radians so they
-    # scale with node_period_s automatically.
+    # (x, y). All three are *per-tick* radian thresholds tuned at the 25 Hz
+    # reference; CreateNodeLocked scales them by node_period_s / 0.04 so the
+    # rad/s trip points below hold at any cadence (a fixed per-tick threshold
+    # would otherwise change its rad/s meaning with node_period_s).
     slip_residual_thresh_rad: 0.01    # |wheel_dθ − gyro_dθ| limit (≈14°/s @25 Hz)
-    slip_gyro_max_rad: 0.005          # gyro must read near-still
+    slip_gyro_max_rad: 0.005          # gyro must read near-still (≈7°/s @25 Hz)
     slip_wheel_min_rad: 0.005         # wheel must claim non-trivial rotation
 
     # ── Sliding-window cap on the factor graph ───────────────────────
@@ -320,15 +331,18 @@ fusion_graph_node:
     # The mechanism for holding <2 cm absolute DURING RTK-Float windows. Under
     # stable RTK-Fixed, freeze {GPS-fused pose, scan} keyframes (the absolute
     # map). During Float, ICP-match the live scan to nearby keyframes and pin
-    # absolute xy with a PoseTranslationPrior — bounding error to ~keyframe ⊕ ICP
-    # instead of letting dead-reckoning drift. REQUIRES use_scan_matching:=true
+    # absolute pose with a PriorFactor<Pose2> (xy + yaw) — bounding error to
+    # ~keyframe ⊕ ICP instead of letting dead-reckoning drift. The yaw component
+    # is floored (kf_apply_yaw_sigma_floor_rad) and mirror-guarded
+    # (kf_match_max_yaw_dev_rad) so LiDAR heading only weakly corrects gyro drift.
+    # REQUIRES use_scan_matching:=true
     # (reuses the scan matcher + subscription + ICP guard rails) and LiDAR. Only
     # delivers <2 cm where the LiDAR sees stable structure (fence/tree/dock);
-    # open lawn degrades to dead-reckoning by design. Default OFF — field-validate
-    # with the GPS-off coast-drift probe before enabling.
-    use_keyframe_map: false
+    # open lawn degrades to dead-reckoning by design. Enabled by default —
+    # field-validate the coast-drift behaviour with the GPS-off probe.
+    use_keyframe_map: true
     # Capture gates (build the map):
-    kf_capture_sigma_max_m: 0.01    # only capture when the fix is mm-accurate
+    kf_capture_sigma_max_m: 0.04    # only capture when the fix is <4 cm (RTK precision is ~2 cm)
     kf_capture_rtk_debounce: 3      # consecutive RTK-Fixed epochs before a capture
     kf_capture_max_omega: 0.10      # rad/s — skip capture while pivoting (smeared scan)
     kf_spacing_m: 0.5               # min spacing between keyframes (also store decimation)
@@ -336,5 +350,26 @@ fusion_graph_node:
     # Apply gates (use the map during Float):
     kf_match_max_dist_m: 3.0        # keyframe search radius around the predicted pose
     kf_max_candidates: 5
-    kf_apply_sigma_floor_m: 0.02    # floor on the absolute-prior σ (never overclaim)
+    # ICP-realism floor on the positional σ; at apply time it is additionally
+    # raised to kf_capture_sigma_max_m (a keyframe frozen up to 4 cm off must not
+    # be trusted tighter than that error).
+    kf_apply_sigma_floor_m: 0.02
+    # ICP-realism floor on the yaw σ (~3°). The EFFECTIVE yaw floor is the larger
+    # kf_apply_yaw_sigma_floor_rad below — this only bites if that is set to 0.
+    kf_apply_sigma_theta_rad: 0.05
+    # Hard yaw-σ floor (rad, ~17°) on the absolute keyframe prior — mirrors the
+    # scan/loop-closure LiDAR-yaw floor (scan_yaw_sigma_floor_rad). Keeps heading
+    # owned by the gyro: the keyframe yaw only weakly corrects slow drift, never
+    # snaps heading to a single cross-viewpoint ICP match. 0 disables the floor.
+    kf_apply_yaw_sigma_floor_rad: 0.30
     kf_engage_age_s: 0.3            # engage apply once RTK-Fixed is older than this
+    # Relaxed ICP guard rails for keyframe matching (cross-viewpoint, not
+    # incremental). The icp_max_* checks (0.30 m / 0.50 rad) are too tight
+    # because res.delta is the full transform to a keyframe (up to 3 m).
+    kf_match_max_rmse_m: 0.15
+    kf_match_max_divergence_xy_m: 0.30
+    kf_match_max_divergence_theta_rad: 0.50
+    # Absolute-yaw mirror-guard (rad): reject a keyframe match whose implied
+    # map-frame yaw is more than this off the gyro-predicted yaw. Catches
+    # mirrored / 180°-flipped ICP that the xy guard and Huber let through.
+    kf_match_max_yaw_dev_rad: 0.5

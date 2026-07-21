@@ -13,10 +13,22 @@
 namespace fusion_graph
 {
 
+// Reference node cadence (s) the per-tick dead-reckoning gates were tuned at
+// (25 Hz). Several gates in CreateNodeLocked compare the PER-TICK accumulated
+// wheel/gyro deltas against fixed radian/metre thresholds; the effective rad/s
+// (or m/s) trip point of such a gate is threshold / node_period_s, so it drifts
+// with cadence unless the threshold is scaled. CreateNodeLocked multiplies those
+// thresholds by (node_period_s / kTunedNodePeriodS) so the tuned trip points hold
+// at any cadence (real robots run 25 Hz via the launch override, the in-repo yaml
+// default is 50 Hz, some setups 10 Hz). At 25 Hz the factor is 1.0 (no change).
+inline constexpr double kTunedNodePeriodS = 0.04;
+
 struct GraphParams
 {
   // Node creation cadence — one Pose2 per node_period_s of wall-clock.
-  // 10 Hz default per the plan.
+  // 10 Hz default per the plan; navigation.launch.py overrides to 25 Hz and
+  // the in-repo yaml to 50 Hz. The per-tick gates below scale off this via
+  // kTunedNodePeriodS so their rad/s meaning is cadence-invariant.
   double node_period_s = 0.1;
 
   // Wheel between-factor noise (sigmas, body-frame). Tight vy enforces
@@ -65,6 +77,17 @@ struct GraphParams
   // RTK-Float; see graph_manager_keyframe.cpp.
   double kf_spacing_m = 0.5;
   uint64_t max_keyframes = 2000;
+  // Hard floor (rad) on the yaw σ of the scan-to-keyframe absolute
+  // PriorFactor<Pose2>, enforced in CreateNodeLocked — the LAST gate before the
+  // factor enters iSAM2. The keyframe prior carries an ABSOLUTE, LiDAR-derived
+  // map-frame yaw and engages during RTK-Float, exactly when COG yaw is gated
+  // off and nothing else could correct a wrong ICP rotation. Mirrors the node's
+  // scan/loop-closure LiDAR-yaw floor (scan_yaw_sigma_floor_rad, ~0.30 rad):
+  // heading stays owned by the gyro between-factors and the keyframe prior may
+  // only WEAKLY correct slow yaw drift across many nodes, never snap heading to
+  // a single cross-viewpoint ICP match. 0 disables the floor (yaw σ then set by
+  // the node-side ICP-realism floor kf_apply_sigma_theta_rad alone).
+  double kf_yaw_sigma_floor_rad = 0.30;
 
   // ── Performance ─────────────────────────────────────────────────
   // Recompute the per-tick marginal covariance only every Nth tick.
