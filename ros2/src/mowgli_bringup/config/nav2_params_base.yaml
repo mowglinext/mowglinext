@@ -268,12 +268,25 @@ controller_server:
       # --- RegulatedPurePursuitController (primary) params ---
       transform_tolerance: 0.3            # ARM TF jitter envelope
       desired_linear_vel: 0.30            # transit speed cap (m/s)
-      min_approach_linear_velocity: 0.16  # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
+      # 0.16 kept conservative. The old host clamp (kMinLinVel=0.15) is gone:
+      # hardware_bridge now floors |vx| at the RUNTIME param min_linear_vel
+      # (hardware_bridge_node.cpp, default 0.05), so this MAY be lowered.
+      min_approach_linear_velocity: 0.16
       approach_velocity_scaling_dist: 0.6
-      # Lookahead: velocity-scaled. At 0.30 m/s → 0.45 m, at 0.13 m/s → 0.20 m.
+      # Lookahead: velocity-scaled = lookahead_time × v, clamped to
+      # [min_lookahead_dist, max_lookahead_dist]. At 0.30 m/s → 0.60 m; floored
+      # at 0.45 m below ~0.225 m/s.
+      # 2026-07-21 FIELD TUNING: raised lookahead_time 1.5→2.0 and
+      # min_lookahead_dist 0.30→0.45 to kill a slow (meter-scale) S-weave on
+      # transits. Diagnosing transit oscillation: a FAST 2–4 Hz buzz is the
+      # firmware yaw-rate loop (Option C) lagging the wheel command — tune that
+      # in FIRMWARE, not here; a SLOW, meter-scale S is the pure-pursuit limit
+      # cycle (lookahead too short for the lagged yaw loop → RPP overshoots each
+      # carrot then corrects), which lengthening the lookahead damps (this
+      # change). Field-tunable: shorten again only if near-dock cornering slops.
       use_velocity_scaled_lookahead_dist: true
-      lookahead_time: 1.5
-      min_lookahead_dist: 0.30            # short-radius near goal
+      lookahead_time: 2.0
+      min_lookahead_dist: 0.45            # long enough to damp the pursuit S-weave
       max_lookahead_dist: 0.90
       # Curvature-based slowdown: when steering radius < 0.9 m, drop to
       # min 0.20 m/s. Keeps tight turns controllable without stalling.
@@ -322,7 +335,10 @@ controller_server:
       speed_fast: 0.20
       speed_fast_threshold: 0.5
       speed_fast_threshold_angle: 10.0
-      speed_slow: 0.16                 # ≥ kMinLinVel=0.15 host clamp (hardware_bridge on_cmd_vel)
+      # 0.16 kept conservative. The host clamp is now the RUNTIME param
+      # min_linear_vel (hardware_bridge_node.cpp, default 0.05 — not the old
+      # kMinLinVel=0.15), so this MAY be lowered.
+      speed_slow: 0.16
       speed_angular: 45.0
       acceleration: 0.2
       min_speed_mps: 0.15
@@ -955,12 +971,25 @@ collision_monitor:
     base_shift_correction: true
     stop_pub_timeout: 2.0
     # The active `polygons`, the polygon definitions, and `observation_sources`
-    # are variant-specific and live in the overlay (LiDAR: PolygonSlow soft
-    # slowdown on /scan_costmap; no-LiDAR: pass-through with scan disabled).
-    # Common note: PolygonStop is intentionally NOT in the active set — it kept
-    # firing on obstacles already steered-around lingering in the chassis box,
-    # freezing cmd_vel. The STM32 firmware remains the sole emergency-stop
-    # authority (CLAUDE.md invariant 9); collision_monitor is the soft layer.
+    # are variant-specific and live in the overlay (LiDAR: a velocity-projected
+    # FootprintApproach hard-stop + a PolygonSlow soft slowdown on
+    # /scan_collision; no-LiDAR: pass-through with scan disabled).
+    # HISTORY (LiDAR): the original hard stop was a STATIC PolygonStop box
+    # around the chassis. It kept firing on obstacles already steered-around
+    # that lingered inside that fixed box, freezing cmd_vel mid-skirt (the FTC
+    # lateral-deviation manoeuvre parks the obstacle abeam the robot, still
+    # geometrically inside a static box even though there is no collision
+    # course). It was therefore disabled, which left ROS2 with NO stop layer —
+    # the robot drove into undetected/low obstacles at ≥half speed and dug in.
+    # 2026-07-21 REPLACEMENT: an `approach`-type polygon (FootprintApproach)
+    # projects the published footprint forward along the CURRENT velocity for
+    # time_before_collision and scales the command so the robot halts just short
+    # of a predicted contact. Because it keys on the velocity vector, a skirted
+    # obstacle now abeam/behind is no longer on the forward projection, so it
+    # does NOT freeze cmd_vel — the exact flap the static box caused. min_points
+    # adds hysteresis against single stray returns. See the LiDAR overlay.
+    # The STM32 firmware remains the SOLE emergency-stop authority (CLAUDE.md
+    # invariant 9); collision_monitor is only the soft pre-contact layer.
 
 # ---------------------------------------------------------------------------
 # Coverage server (mowgli_coverage, Fields2Cover v3 backend)

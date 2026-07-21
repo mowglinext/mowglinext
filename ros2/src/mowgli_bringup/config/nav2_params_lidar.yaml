@@ -136,29 +136,60 @@ local_costmap:
 
 collision_monitor:
   ros__parameters:
-    polygons: ["PolygonSlow"]
-    PolygonStop:
+    # FootprintApproach is the hard-stop layer, PolygonSlow the soft slowdown.
+    # Order: the approach (pre-contact halt) is evaluated first, then the
+    # slowdown. See the base-file collision_monitor comment for the full
+    # history of why the static PolygonStop was replaced.
+    polygons: ["FootprintApproach", "PolygonSlow"]
+    # HARD STOP — velocity-projected, NOT a static box. Projects the published
+    # footprint forward along the CURRENT command for time_before_collision and
+    # scales the output so the chassis halts just short of a predicted contact.
+    # This REPLACES the old static PolygonStop (kept disabled below for the
+    # record): because it keys on the velocity vector, an obstacle FTC has
+    # already skirted — now abeam/behind the robot — is off the forward
+    # projection and does NOT re-trigger, so it can't freeze cmd_vel mid-skirt
+    # the way the static box did. Reads /scan_collision (self-return + dock
+    # blanked, NOT ground-filtered) so a real near return always stops us.
+    # 2026-07-21: restored ROS2's pre-contact stop layer (there had been NONE
+    # since PolygonStop was disabled — the robot drove into low/undetected
+    # obstacles at ≥half speed). Firmware stays the sole e-stop authority
+    # (CLAUDE.md invariant 9); this is a soft layer.
+    FootprintApproach:
       type: "polygon"
-      # INSIDE the chassis on Y (chassis half-width 0.20, polygon at
-      # ±0.18) so any LiDAR return from our own chassis edge falls
-      # OUTSIDE the polygon and doesn't trip a stop. Forward extent
-      # still well past the chassis front (chassis front edge at
-      # base_link +0.48). Coords are
-      # [forward_left, forward_right, rear_right, rear_left] in
-      # base_footprint frame.
-      # NOTE: this loses some real-obstacle protection vs. the
-      # production "chassis + 5 cm" target (originally ±0.25). The
-      # right long-term fix is a chassis-blank filter on /scan,
-      # tracked separately.
-      points: "[[0.55, 0.18], [0.55, -0.18], [-0.15, -0.18], [-0.15, 0.18]]"
-      action_type: "stop"
-      # 8 points: tight enough that a single stray return doesn't trip
-      # a stop, loose enough that a real obstacle (legs, dock) reliably
-      # does. Tuned vs the LD19's 7 Hz × ~455-bin sweep.
+      action_type: "approach"
+      # Uses the live footprint the local costmap publishes (chassis polygon),
+      # so the projection matches the real robot outline, not a hand-tuned box.
+      footprint_topic: "/local_costmap/published_footprint"
+      # Look-ahead horizon. At the 0.20 m/s mow speed this projects ~0.24 m
+      # ahead; at the 0.30 m/s transit cap ~0.36 m — short enough to sit inside
+      # PolygonSlow's chassis+15 cm slow zone (obstacle already slowed us first),
+      # long enough to stop before the chassis front (base_link +0.48) touches.
+      time_before_collision: 1.2
+      simulation_time_step: 0.1
+      # 8 points hysteresis: a single stray return can't trip a stop, a real
+      # obstacle (legs, dock) reliably does. Tuned vs the LD19 7 Hz × ~455-bin
+      # sweep (same rationale as the old PolygonStop / PolygonSlow).
       min_points: 8
       visualize: true
-      polygon_pub_topic: "polygon_stop"
+      polygon_pub_topic: "polygon_approach"
       enabled: true
+    # DISABLED — retained for history. This was the original hard stop: a STATIC
+    # box around the chassis. It kept firing on obstacles already steered-around
+    # that lingered inside the fixed box, freezing cmd_vel mid-skirt, so it was
+    # disabled — which left ROS2 with no stop layer at all until FootprintApproach
+    # above replaced it (2026-07-21). Do NOT re-activate without re-reading that
+    # history: the velocity-projected approach is the deliberate replacement.
+    # Coords are [forward_left, forward_right, rear_right, rear_left] in
+    # base_footprint; ±0.18 sat INSIDE the chassis half-width (0.20) so our own
+    # chassis edge fell outside the box.
+    PolygonStop:
+      type: "polygon"
+      points: "[[0.55, 0.18], [0.55, -0.18], [-0.15, -0.18], [-0.15, 0.18]]"
+      action_type: "stop"
+      min_points: 8
+      visualize: false
+      polygon_pub_topic: "polygon_stop"
+      enabled: false
     PolygonSlow:
       type: "polygon"
       # Chassis + 15 cm — slow to 30% when obstacle is close

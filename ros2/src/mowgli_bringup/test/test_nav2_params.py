@@ -667,5 +667,71 @@ def test_coverage_is_ftc_transit_is_not() -> None:
         )
 
 
+def test_lidar_collision_monitor_has_active_hard_stop() -> None:
+    """The LiDAR variant MUST carry an ACTIVE pre-contact hard-stop layer.
+
+    2026-07-21: the static PolygonStop was disabled long ago (it froze cmd_vel
+    on skirted obstacles lingering in its fixed box), which left ROS2 with NO
+    stop layer — the robot drove into low/undetected obstacles at >=half speed.
+    It was replaced by a velocity-projected `approach` polygon (FootprintApproach)
+    that keys on the current velocity vector, so a skirted obstacle now abeam is
+    off the forward projection and can't re-freeze cmd_vel. Guard that the active
+    set contains an enabled `approach` polygon, that it reads the published
+    footprint, and that the old static PolygonStop stays disabled. (Firmware is
+    still the sole e-stop authority — this is only the soft layer.)
+    """
+    cmon = _load_yaml("nav2_params_lidar.yaml")["collision_monitor"]["ros__parameters"]
+    active = cmon["polygons"]
+    approach = [
+        name for name in active
+        if cmon.get(name, {}).get("action_type") == "approach"
+        and cmon.get(name, {}).get("enabled") is True
+    ]
+    assert approach, (
+        "LiDAR collision_monitor has no ACTIVE approach-type (velocity-projected) "
+        "hard-stop polygon — ROS2 would have no pre-contact stop layer."
+    )
+    fa = cmon[approach[0]]
+    assert fa.get("footprint_topic"), (
+        "the approach polygon must use a footprint_topic so the projection "
+        "matches the real chassis outline"
+    )
+    assert fa.get("min_points", 0) >= 2, "approach polygon needs stray-return hysteresis"
+    # The static box must NOT be re-activated — that is the regression this guards.
+    if "PolygonStop" in cmon:
+        assert cmon["PolygonStop"].get("enabled") is False, (
+            "static PolygonStop must stay DISABLED — the velocity-projected "
+            "FootprintApproach is its deliberate replacement (froze cmd_vel on "
+            "skirted obstacles)."
+        )
+        assert "PolygonStop" not in active, (
+            "static PolygonStop must not be in the active polygons list"
+        )
+
+
+def test_transit_lookahead_damps_pursuit_weave() -> None:
+    """RPP transit lookahead must stay long enough to damp the slow S-weave.
+
+    2026-07-21: with the firmware yaw-rate loop (Option C) lagging the wheel
+    command, a short lookahead let RPP overshoot each carrot and set up a
+    meter-scale pursuit limit cycle on transits. Raised lookahead_time 1.5->2.0
+    and min_lookahead_dist 0.30->0.45. Pin the floors so a revert re-opens the
+    weave loudly. (A fast 2-4 Hz buzz is the firmware loop, tuned in firmware,
+    NOT here.)
+    """
+    fp = _controller_section(_load_params())["FollowPath"]
+    assert float(fp["lookahead_time"]) >= 2.0, (
+        f"FollowPath.lookahead_time={fp['lookahead_time']} < 2.0 — too short, "
+        "re-opens the pursuit S-weave with the lagged firmware yaw loop."
+    )
+    assert float(fp["min_lookahead_dist"]) >= 0.45, (
+        f"FollowPath.min_lookahead_dist={fp['min_lookahead_dist']} < 0.45 — too "
+        "short at low speed, re-opens the pursuit S-weave."
+    )
+    assert float(fp["min_lookahead_dist"]) <= float(fp["max_lookahead_dist"]), (
+        "min_lookahead_dist must not exceed max_lookahead_dist"
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
