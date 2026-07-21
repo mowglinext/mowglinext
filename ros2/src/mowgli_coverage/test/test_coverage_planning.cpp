@@ -503,8 +503,13 @@ TEST(CoverageContinuousPath, SubPathReorderStaysHoleFreeAndDeterministic)
   constexpr double kMinTurnRadius = 0.15;
   constexpr double kStep = 0.03;
 
-  // 10 m square with two separated holes → several lobes, so the driver relocates
-  // between them and the NN reorder is exercised (> 2 sub-paths).
+  // 10 m square with two separated holes. Sub-paths split ONLY where a blade-on
+  // connector cannot clear a hole (obstacle-driven, issue #333) — a lobe change
+  // that passes to the SIDE of a hole stays blade-on, so this field yields a
+  // small number of hole-free lobes (>= 2), enough to exercise the NN reorder.
+  // The reorder's SAFETY contract (every sub-path stays hole-free; the order is
+  // deterministic for BT resume-by-index) is what this test guards, not a
+  // specific lobe count.
   f2c::types::Cell cell = makeSquare(10.0);
   auto add_hole = [&cell](double cx, double cy, double h)
   {
@@ -523,7 +528,7 @@ TEST(CoverageContinuousPath, SubPathReorderStaysHoleFreeAndDeterministic)
   ASSERT_GE(plan.safe_holes.size(), 2u) << "both holes must reach the plan as safe_holes";
   const auto subs =
       buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
-  ASSERT_GE(subs.size(), 3u) << "two holes should split the plan into >=3 lobes to reorder";
+  ASSERT_GE(subs.size(), 2u) << "holes must split the plan into >=2 hole-free lobes to reorder";
 
   // (1) Hole-free preserved after reorder/reversal.
   std::size_t in_hole = 0, total = 0;
@@ -1522,10 +1527,12 @@ TEST(CoveragePlanning, LargeFieldUsesLongestEdgeAngleFallback)
   EXPECT_FALSE(plan.swaths.empty()) << "large field produced no swaths";
   // The always-on "timing:" note means notes is never empty and the auto-angle
   // note is not guaranteed to be first — search for it explicitly.
-  const bool has_auto_angle =
-      std::any_of(plan.diagnostics.notes.begin(),
-                  plan.diagnostics.notes.end(),
-                  [](const std::string& n) { return n.find("auto-angle") != std::string::npos; });
+  const bool has_auto_angle = std::any_of(plan.diagnostics.notes.begin(),
+                                          plan.diagnostics.notes.end(),
+                                          [](const std::string& n)
+                                          {
+                                            return n.find("auto-angle") != std::string::npos;
+                                          });
   EXPECT_TRUE(has_auto_angle) << "expected an auto-angle fallback note on a large field";
 }
 

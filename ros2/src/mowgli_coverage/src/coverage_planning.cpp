@@ -781,7 +781,6 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   //                         safety stop, replacing the old inset floor.
   const double field_offset = chassis_safety_inset - 0.5 * op_width;
   f2c::types::Cells safe_cells = cells;
-  bool boundary_offset_applied = false;
   if (field_offset > 1e-3)
   {
     safe_cells = hl.generateHeadlands(cells, field_offset);
@@ -789,7 +788,6 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
     {
       return plan;  // inset consumed the field
     }
-    boundary_offset_applied = true;
   }
   else if (field_offset < -1e-3)
   {
@@ -799,17 +797,23 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
     if (expanded.size() > 0 && expanded.area() > 1e-6)
     {
       safe_cells = expanded;
-      boundary_offset_applied = true;
     }
     // else: buffer degeneracy — fall back to the raw field (safe_cells = cells).
   }
 
-  if (boundary_offset_applied)
+  // Expose the planning outer ring so the continuous-path connectors/fillets are
+  // bounded by the SAME polygon the rings/swaths are planned against (not the raw
+  // operator boundary). If an inset split the field, take the largest cell's
+  // exterior ring (the dominant drivable region). Populated UNCONDITIONALLY from
+  // safe_cells: when no boundary offset was applied (chassis_safety_inset ==
+  // op_width/2 exactly → field_offset == 0, or a buffer degeneracy) safe_cells ==
+  // the raw field, so safe_boundary becomes the raw operator ring — which is
+  // still the correct drivable envelope (the outermost ring rides on it). Gating
+  // this on boundary_offset_applied left safe_boundary EMPTY in the field_offset
+  // ≈ 0 case, and buildContinuousSubPaths then validated every turn-around
+  // connector against an empty polygon (allInside always false) → a split at
+  // every segment → gross sub-path over-fragmentation.
   {
-    // Expose the planning outer ring so the continuous-path connectors/fillets
-    // are bounded by the SAME polygon the rings/swaths are planned against (not
-    // the raw operator boundary). If an inset split the field, take the largest
-    // cell's exterior ring (the dominant drivable region).
     std::size_t largest = 0;
     double largest_area = -1.0;
     for (std::size_t i = 0; i < safe_cells.size(); ++i)
@@ -821,12 +825,15 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
         largest = i;
       }
     }
-    const auto safe_ring = safe_cells.getGeometry(largest).getGeometry(0);  // exterior
-    plan.safe_boundary.reserve(safe_ring.size());
-    for (std::size_t i = 0; i < safe_ring.size(); ++i)
+    if (safe_cells.size() > 0)
     {
-      const auto p = safe_ring.getGeometry(i);
-      plan.safe_boundary.emplace_back(p.getX(), p.getY());
+      const auto safe_ring = safe_cells.getGeometry(largest).getGeometry(0);  // exterior
+      plan.safe_boundary.reserve(safe_ring.size());
+      for (std::size_t i = 0; i < safe_ring.size(); ++i)
+      {
+        const auto p = safe_ring.getGeometry(i);
+        plan.safe_boundary.emplace_back(p.getX(), p.getY());
+      }
     }
   }
 
@@ -1406,22 +1413,28 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
       // transit. Single-sourced from mowgli_interfaces so this matches the BT's
       // FollowStrip::kSegmentTransitGap for the same decision — see
       // coverage_geometry.hpp for why the two sides must agree.
-      const double join_gap = std::hypot(goal.x - start.x, goal.y - start.y);
+      // Attempt a blade-on connector for EVERY segment join, regardless of length.
+      // buildConnector fits a forward turn-around arc when one fits (adjacent
+      // passes ~op_width apart) and otherwise falls back to a straight join. The
+      // sub-path is BROKEN — finalized here, the next started fresh at segs[i], so
+      // FollowStrip bridges the gap with a blade-off, costmap-aware Nav2 transit —
+      // ONLY when that connector is genuinely un-drivable blade-on: empty, or a
+      // straight fallback that leaves the boundary OR crosses an interior hole
+      // (issue #333, the split's sole purpose — routing AROUND an obstacle).
+      //
+      // A long but CLEAR join (e.g. innermost-ring → first-swath on a hole-free
+      // field, or a lobe change that passes to the side of a hole) is kept blade-on
+      // as ONE continuous sub-path. The earlier length gate (join_gap >
+      // kSegmentTransitGapM ⇒ split) fragmented such clear joins into needless
+      // blade-off transits — a hole-free field split into 2+ sub-paths, and every
+      // one-hole field carried an extra ring→swath transit. kSegmentTransitGapM
+      // remains the BT-side FollowStrip threshold for classifying the gaps BETWEEN
+      // the sub-paths this function emits; it no longer drives the split decision.
       bool conn_safe = false;
-      if (join_gap <= mowgli_interfaces::coverage_geometry::kSegmentTransitGapM)
       {
         bool fallback = false;
         auto conn = buildConnector(
             start, goal, boundary, plan.safe_holes, turn_radius, min_radius, step, fallback);
-        // A forward Dubins connector is a LOCAL arc — it cannot route around a
-        // large interior hole. If no in-bounds, hole-free arc fit, buildConnector
-        // returned a straight fallback; keep it only when that straight is itself
-        // safe (a short join that happens to clear everything — its V-cusp is
-        // rounded by roundSharpCorners below when a fillet >= min_radius fits, else
-        // left as a sharp corner FTC pivots through). Otherwise BREAK the path here:
-        // finalize this sub-path and start a fresh one at segs[i], so FollowStrip
-        // bridges the gap with a blade-off, costmap-aware Nav2 transit that
-        // routes around the obstacle (issue #333).
         conn_safe =
             !conn.empty() &&
             (!fallback || (allInside(conn, boundary) && clearOfHoles(conn, plan.safe_holes)));
