@@ -348,6 +348,36 @@ if(BUILD_TESTING)
     action_msgs
   )
 
+  # ---- test_battery_critical_resume ----
+  # Regression for "robot stuck after a critical-battery charge": the
+  # CriticalBatteryDock tail must AUTO-CONTINUE on recovery (undock, keep
+  # current_command + resume cursor) and only EndSession on a dead charger.
+  ament_add_gtest(test_battery_critical_resume
+    test/test_battery_critical_resume.cpp
+    src/condition_nodes.cpp
+    src/status_nodes.cpp
+    src/coverage_persistence.cpp
+  )
+
+  target_include_directories(test_battery_critical_resume PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_battery_critical_resume
+    rclcpp
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+  )
+
 endif()
 
 ament_package()
