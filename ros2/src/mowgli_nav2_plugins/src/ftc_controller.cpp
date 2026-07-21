@@ -632,6 +632,8 @@ void FTCController::setPlan(const nav_msgs::msg::Path& path)
 
   last_time_ = clock_->now();
   current_movement_speed_ = config_.speed_slow;
+  stall_time_ = 0.0;
+  is_stalled_ = false;
 
   lat_error_ = 0.0;
   lon_error_ = 0.0;
@@ -1085,19 +1087,25 @@ void FTCController::update_control_point(double dt)
       // feedback) stays well below it, the wheels are slipping or the chassis is
       // blocked. Rather than ramp to speed_fast and floor it — which spins the
       // wheels and digs holes in soft turf (operator report) — ease the target
-      // down to a slow crawl until traction returns, so the robot pushes gently
-      // instead of accelerating hard into the obstruction.
-      // See ftc_stall.hpp for the pure decision function + unit tests
-      // (test_ftc_stall.cpp).
+      // down to a slow crawl until traction returns. Easing the carrot's target
+      // speed alone is not enough: the lon PID would still be floored up to
+      // min_speed_mps and push into the obstruction, so while `in_stall` we also
+      // freeze the carrot (below) and cap the commanded velocity at the crawl
+      // speed (calculate_velocity_commands). See ftc_stall.hpp for the pure
+      // decision function + unit tests (test_ftc_stall.cpp).
       const FtcStallCfg stall_cfg{config_.stall_speed_ratio,
                                   config_.stall_grace_s,
                                   config_.stall_crawl_speed};
-      target_speed = StallDecision(target_speed,
-                                   current_movement_speed_,
-                                   last_measured_fwd_speed_,
-                                   dt,
-                                   stall_cfg,
-                                   stall_time_);
+      const FtcStallResult stall = StallDecision(target_speed,
+                                                 current_movement_speed_,
+                                                 last_measured_fwd_speed_,
+                                                 dt,
+                                                 stall_cfg,
+                                                 stall_time_);
+      target_speed = stall.target_speed;
+      // calculate_velocity_commands reads this to cap the commanded velocity
+      // at the crawl speed (bypassing the min_speed_mps floor) while blocked.
+      is_stalled_ = stall.in_stall;
 
       // Smooth speed ramp (acceleration / deceleration).
       if (target_speed > current_movement_speed_)
@@ -1119,6 +1127,16 @@ void FTCController::update_control_point(double dt)
 
       double distance_to_move = dt * current_movement_speed_;
       double angle_to_move = dt * config_.speed_angular * (M_PI / 180.0);
+
+      // While stalled (blocked or slipping) freeze the carrot in place. The
+      // robot isn't moving, so advancing the carrot would only grow lon_error
+      // ahead of the chassis and make the lon PID push harder into the
+      // obstruction — the runaway that dug holes.
+      if (is_stalled_)
+      {
+        distance_to_move = 0.0;
+        angle_to_move = 0.0;
+      }
 
       // Advance the carrot along path segments.
       Eigen::Affine3d nextPose, currentPose;
@@ -1333,9 +1351,22 @@ void FTCController::calculate_velocity_commands(double dt,
       lin_speed = std::clamp(lin_speed, -config_.max_cmd_vel_speed, config_.max_cmd_vel_speed);
     }
 
-    if (lin_speed > 0.0 && lin_speed < config_.min_speed_mps)
-      lin_speed = config_.min_speed_mps;
-    cmd_vel.twist.linear.x = lin_speed;
+    if (is_stalled_)
+    {
+      // Blocked or slipping: bound the OUTPUT to the crawl speed and skip the
+      // min_speed_mps floor. The floor keeps normal driving smooth, but here
+      // it would command 0.15-0.30 m/s straight into the obstruction (the lon
+      // PID stays positive because the carrot is ahead), digging holes in soft
+      // turf. A negative lin_speed (reversing away, forward_only off) passes
+      // through unclamped.
+      cmd_vel.twist.linear.x = std::min(lin_speed, config_.stall_crawl_speed);
+    }
+    else
+    {
+      if (lin_speed > 0.0 && lin_speed < config_.min_speed_mps)
+        lin_speed = config_.min_speed_mps;
+      cmd_vel.twist.linear.x = lin_speed;
+    }
   }
   else
   {

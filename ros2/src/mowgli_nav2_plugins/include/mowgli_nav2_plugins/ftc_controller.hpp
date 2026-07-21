@@ -124,6 +124,11 @@ private:
   // Seconds the robot has been stalling (actual forward speed << commanded).
   // Drives the anti-wheelspin crawl (see Config::stall_*).
   double stall_time_{0.0};
+  // True once stall_time_ passes the grace period: set in update_control_point
+  // and read in calculate_velocity_commands to cap the commanded velocity at
+  // the crawl speed (bypassing the min_speed_mps floor) so a blocked robot
+  // pushes gently instead of digging in. See ftc_stall.hpp.
+  bool is_stalled_{false};
   // Latest measured forward speed (odom feedback), cached from
   // computeVelocityCommands so update_control_point can detect a stall.
   double last_measured_fwd_speed_{0.0};

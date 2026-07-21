@@ -9,6 +9,13 @@
 // the chassis is blocked. Rather than ramp to speed_fast and floor it —
 // which spins the wheels and digs holes in soft turf (operator report) —
 // ease the target down to a slow crawl until traction returns.
+//
+// The decision also reports `in_stall` so the caller can bound the actual
+// COMMANDED velocity: easing the carrot's target speed alone is not enough,
+// because the lon PID is floored up to min_speed_mps for smooth normal
+// driving and would still push forward into the obstruction. While in_stall
+// the caller caps cmd_vel at stall_crawl_speed (bypassing that floor) and
+// freezes the carrot so lon_error can't run away ahead of a stuck robot.
 
 #pragma once
 
@@ -25,23 +32,31 @@ struct FtcStallCfg
   double stall_crawl_speed = 0.08;
 };
 
+struct FtcStallResult
+{
+  double target_speed;  ///< Path speed after crawl easing.
+  bool in_stall;  ///< True while the crawl clamp is active (past the grace).
+};
+
 // Apply stall easing to `target_speed` (the speed already computed from the
 // path's straight-ahead lookahead). `cmd_speed` is the controller's
 // currently-commanded, already-ramped movement speed — the reference the
 // stall check compares the odom-measured forward speed against ("we told
 // it to go this fast; is it actually?"). `stall_time` is caller-owned
 // debounce state (mirrors AnchorSlewStep's in-place mutation), accumulated
-// while stalling and reset to 0 the instant traction returns.
-inline double StallDecision(double target_speed,
-                            double cmd_speed,
-                            double measured_fwd_speed,
-                            double dt,
-                            const FtcStallCfg& cfg,
-                            double& stall_time)
+// while stalling and reset to 0 the instant traction returns. Returns the
+// eased target plus `in_stall` so the caller can also bound the commanded
+// velocity and freeze the carrot (see the header comment above).
+inline FtcStallResult StallDecision(double target_speed,
+                                    double cmd_speed,
+                                    double measured_fwd_speed,
+                                    double dt,
+                                    const FtcStallCfg& cfg,
+                                    double& stall_time)
 {
   if (cfg.stall_speed_ratio <= 0.0)
   {
-    return target_speed;  // feature disabled.
+    return {target_speed, false};  // feature disabled.
   }
 
   const double actual_fwd = std::abs(measured_fwd_speed);
@@ -51,9 +66,9 @@ inline double StallDecision(double target_speed,
 
   if (stall_time > cfg.stall_grace_s)
   {
-    return std::min(target_speed, cfg.stall_crawl_speed);
+    return {std::min(target_speed, cfg.stall_crawl_speed), true};
   }
-  return target_speed;
+  return {target_speed, false};
 }
 
 }  // namespace mowgli_nav2_plugins
