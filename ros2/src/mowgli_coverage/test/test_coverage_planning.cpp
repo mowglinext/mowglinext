@@ -1545,3 +1545,109 @@ TEST(CoveragePlanning, LargeFieldFallbackIsDeterministic)
   ASSERT_EQ(a.swaths.size(), b.swaths.size());
   EXPECT_NEAR(a.swath_angle_rad, b.swath_angle_rad, 1e-9);
 }
+
+// GEOMETRY SANITIZATION (field-reported partial coverage): an operator-recorded
+// 252 m² boundary whose ring is geometrically DEGENERATE — a ~1.2 mm near-
+// duplicate closure vertex plus several 1–10 mm sliver edges. The 68 vertices are
+// verbatim from map (4).json → working_area[0].area.points. These points are
+// EXACT enough that boost::geometry (F2C's backend) accepts them, yet degenerate
+// enough that generateHeadlands / BruteForce silently produced PARTIAL coverage
+// on a fresh plan. dedupClosedRing must (a) strip the mm degeneracies and (b)
+// yield a cell the planner covers in full again.
+TEST(CoveragePlanning, DegenerateRecordedRingSanitizedToFullCoverage)
+{
+  // NOT closed on purpose — the last vertex is ~1.2 mm from the first (the
+  // recorded closure seam), and several consecutive vertices are 1–10 mm apart.
+  const std::vector<std::pair<double, double>> pts = {
+      {-0.1468, 1.8471},   {-6.5998, 23.0608},  {-6.6046, 23.0691},  {-6.6104, 23.0731},
+      {-6.6178, 23.0743},  {-18.0979, 19.4606}, {-18.1731, 19.4307}, {-18.2238, 19.3894},
+      {-18.2655, 19.3284}, {-18.3162, 19.2429}, {-18.3168, 19.1411}, {-17.1843, 16.0394},
+      {-17.0688, 15.99},   {-16.9131, 15.9514}, {-16.8322, 15.9453}, {-16.7189, 15.952},
+      {-16.6073, 15.9903}, {-16.4939, 16.0335}, {-16.3954, 16.0579}, {-16.2647, 16.0626},
+      {-16.1277, 16.021},  {-16.0434, 15.9435}, {-15.9782, 15.8541}, {-15.9184, 15.7451},
+      {-15.8716, 15.6532}, {-15.8313, 15.5422}, {-15.7997, 15.4433}, {-15.7889, 15.3582},
+      {-15.8092, 15.2467}, {-15.8614, 15.1469}, {-15.9637, 15.0745}, {-16.0734, 15.0063},
+      {-16.1273, 14.9349}, {-16.1976, 14.8194}, {-16.219, 14.7384},  {-16.237, 14.6354},
+      {-16.2368, 14.5039}, {-16.2014, 14.3504}, {-16.0401, 13.7975}, {-11.8444, -0.8705},
+      {-11.8026, -0.9601}, {-11.7139, -1.0434}, {-11.6045, -1.0228}, {-11.4932, -1.0051},
+      {-11.3939, -1.024},  {-11.29, -1.0601},   {-11.1989, -1.1268}, {-11.1094, -1.1825},
+      {-10.9994, -1.2351}, {-10.8877, -1.2878}, {-10.8178, -1.2811}, {-10.7607, -1.2553},
+      {-10.7413, -1.2112}, {-10.14, -0.1519},   {-10.0367, -0.0724}, {-4.9679, 1.5848},
+      {-4.8472, 1.6154},   {-4.7325, 1.6342},   {-2.335, 2.2454},    {-2.1199, 2.2914},
+      {-1.9402, 2.2562},   {-1.8679, 2.1138},   {-1.7507, 1.9035},   {-1.6768, 1.7029},
+      {-1.5999, 1.5751},   {-1.4961, 1.4756},   {-1.361, 1.4318},    {-0.148, 1.8469}};
+
+  f2c::types::LinearRing raw;
+  for (const auto& p : pts)
+  {
+    raw.addPoint(f2c::types::Point(p.first, p.second));
+  }
+
+  // Shortest cyclic edge, skipping the exact zero-length wrap of an already-closed
+  // ring (first == last) so the metric works on both the OPEN raw ring — where the
+  // wrap IS the 1.2 mm closure seam we want to catch — and the CLOSED clean ring.
+  auto minCyclicEdge = [](const f2c::types::LinearRing& r)
+  {
+    double m = std::numeric_limits<double>::max();
+    const std::size_t n = r.size();
+    for (std::size_t i = 0; i < n; ++i)
+    {
+      const auto a = r.getGeometry(i);
+      const auto b = r.getGeometry((i + 1) % n);
+      const double d = std::hypot(b.getX() - a.getX(), b.getY() - a.getY());
+      if (d > 1e-9)
+      {
+        m = std::min(m, d);
+      }
+    }
+    return m;
+  };
+
+  // (a) The raw ring is degenerate: its shortest cyclic edge is the ~1.2 mm
+  // closure seam — the very degeneracy boost accepts but F2C mis-clips. Guards
+  // the regression: if the fixture ever loses its slivers the test is vacuous.
+  EXPECT_LT(minCyclicEdge(raw), 0.002) << "fixture is not degenerate — regression untestable";
+
+  const auto clean = dedupClosedRing(raw);
+  // Sanitized ring is closed, has strictly fewer vertices (slivers removed), and
+  // carries no sub-cm edge left for F2C to choke on.
+  ASSERT_GE(clean.size(), 4u);
+  EXPECT_NEAR(clean.getGeometry(0).getX(), clean.getGeometry(clean.size() - 1).getX(), 1e-9);
+  EXPECT_NEAR(clean.getGeometry(0).getY(), clean.getGeometry(clean.size() - 1).getY(), 1e-9);
+  EXPECT_LT(clean.size(), raw.size()) << "no degenerate vertices were removed";
+  EXPECT_GT(minCyclicEdge(clean), 0.008) << "a mm-scale sliver survived sanitization";
+
+  // (b) Planning the SANITIZED cell covers the whole field again. planned_fraction
+  // is a coarse strip estimate, so a healthy full plan scores ~0.9+ while the
+  // degenerate/partial plan scored far lower.
+  const f2c::types::Cell cell(clean);
+  const auto plan = planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15);
+  ASSERT_FALSE(plan.rings.empty());
+  ASSERT_GE(plan.swaths.size(), 20u);
+  EXPECT_GT(plan.diagnostics.planned_fraction, 0.85)
+      << "sanitized field still plans as PARTIAL coverage (" << plan.diagnostics.planned_fraction
+      << ")";
+
+  // Swaths must tile the field's full x-extent — partial coverage left a whole
+  // sub-region unmowed, collapsing the swath x-span.
+  double field_min_x = std::numeric_limits<double>::max();
+  double field_max_x = std::numeric_limits<double>::lowest();
+  for (std::size_t i = 0; i < clean.size(); ++i)
+  {
+    const double x = clean.getGeometry(i).getX();
+    field_min_x = std::min(field_min_x, x);
+    field_max_x = std::max(field_max_x, x);
+  }
+  double swath_min_x = std::numeric_limits<double>::max();
+  double swath_max_x = std::numeric_limits<double>::lowest();
+  for (const auto& s : plan.swaths)
+  {
+    swath_min_x = std::min({swath_min_x, s.first.first, s.second.first});
+    swath_max_x = std::max({swath_max_x, s.first.first, s.second.first});
+  }
+  const double field_span = field_max_x - field_min_x;
+  const double swath_span = swath_max_x - swath_min_x;
+  EXPECT_GT(swath_span, 0.7 * field_span)
+      << "swaths span only " << swath_span << " m of the field's " << field_span
+      << " m x-extent — coverage is still partial";
+}

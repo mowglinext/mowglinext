@@ -1707,38 +1707,159 @@ f2c::types::LinearRing bufferRingOutward(const f2c::types::LinearRing& in, doubl
   return dedupClosedRing(out);
 }
 
-f2c::types::LinearRing dedupClosedRing(const f2c::types::LinearRing& in)
+namespace
 {
-  f2c::types::LinearRing out;
-  bool have_prev = false;
-  double px = 0.0, py = 0.0;
+
+// Ring sanitization tolerances. Operator-recorded field boundaries carry
+// mm-scale geometric degeneracies (a real 252 m² field had a 1.2 mm near-
+// duplicate closure vertex and several 1–10 mm sliver edges). These are EXACT
+// enough that boost::geometry accepts the points yet degenerate enough that
+// F2C's generateHeadlands offset and BruteForce swath clip silently produce
+// PARTIAL coverage. Both tolerances sit safely below op_width (0.16 m) so no
+// real corner is ever removed.
+constexpr double kRingDedupTolM = 0.01;  // drop a vertex within 1 cm of the last kept one
+constexpr double kRingSpikeTolM = 0.005;  // drop a vertex within 5 mm of its neighbours' chord
+
+// Repair a ring into a boost::geometry-valid one via F2C's own OGR backend.
+// Buffer-by-zero is the standard OGR self-intersection fix (the same Buffer call
+// bufferRingOutward already relies on); it returns the valid equivalent of a
+// self-touching / sliver-laden ring. Keep the largest resulting polygon's
+// exterior. Any degeneracy (null buffer, empty result, collapsed ring) returns
+// the input unchanged — the planner must NEVER drop the field.
+f2c::types::LinearRing makeRingValid(const f2c::types::LinearRing& in)
+{
+  if (in.size() < 4)
+  {
+    return in;
+  }
+  OGRLinearRing ogr_ring;
   for (std::size_t i = 0; i < in.size(); ++i)
   {
     const auto p = in.getGeometry(i);
-    const double x = p.getX();
-    const double y = p.getY();
-    if (have_prev && std::fabs(x - px) < 1e-9 && std::fabs(y - py) < 1e-9)
-    {
-      continue;  // zero-length edge — boost/F2C would reject the ring
-    }
-    out.addPoint(f2c::types::Point(x, y));
-    px = x;
-    py = y;
-    have_prev = true;
+    ogr_ring.addPoint(p.getX(), p.getY());
   }
-  // Close the ring (F2C wants first == last). The closing seam is the ring's
-  // standard representation, not a degenerate interior edge.
-  if (out.size() >= 2)
+  ogr_ring.closeRings();
+  OGRPolygon poly;
+  poly.addRing(&ogr_ring);
+  std::unique_ptr<OGRGeometry> fixed(poly.Buffer(0.0));
+  if (!fixed)
   {
-    const auto first = out.getGeometry(0);
-    const auto last = out.getGeometry(out.size() - 1);
-    if (std::fabs(first.getX() - last.getX()) > 1e-9 ||
-        std::fabs(first.getY() - last.getY()) > 1e-9)
+    return in;
+  }
+  const OGRPolygon* fixed_poly = nullptr;
+  const auto flat_type = wkbFlatten(fixed->getGeometryType());
+  if (flat_type == wkbPolygon)
+  {
+    fixed_poly = fixed->toPolygon();
+  }
+  else if (flat_type == wkbMultiPolygon)
+  {
+    // Repair can split a bow-tie ring into several parts; keep the field body.
+    double best_area = -1.0;
+    for (const auto* part : *fixed->toMultiPolygon())
     {
-      out.addPoint(f2c::types::Point(first.getX(), first.getY()));
+      const double a = part->get_Area();
+      if (a > best_area)
+      {
+        best_area = a;
+        fixed_poly = part;
+      }
     }
+  }
+  if (!fixed_poly || !fixed_poly->getExteriorRing() ||
+      fixed_poly->getExteriorRing()->getNumPoints() < 4)
+  {
+    return in;
+  }
+  const OGRLinearRing* ext = fixed_poly->getExteriorRing();
+  f2c::types::LinearRing out;
+  for (int i = 0; i < ext->getNumPoints(); ++i)
+  {
+    out.addPoint(f2c::types::Point(ext->getX(i), ext->getY(i)));
   }
   return out;
+}
+
+}  // namespace
+
+f2c::types::LinearRing dedupClosedRing(const f2c::types::LinearRing& in)
+{
+  // 1. Metric dedup: drop any vertex within kRingDedupTolM of the previous kept
+  // vertex. A 1e-9 (nanometre) tolerance let mm-scale near-duplicates through —
+  // boost accepts the points but F2C's headland offset / swath clip then drop
+  // whole swaths. 1 cm is well below op_width, so real corners are preserved.
+  std::vector<f2c::types::Point> pts;
+  for (std::size_t i = 0; i < in.size(); ++i)
+  {
+    const auto p = in.getGeometry(i);
+    if (!pts.empty() &&
+        std::hypot(p.getX() - pts.back().getX(), p.getY() - pts.back().getY()) < kRingDedupTolM)
+    {
+      continue;  // near-zero-length edge — boost/F2C would reject or mis-clip it
+    }
+    pts.push_back(f2c::types::Point(p.getX(), p.getY()));
+  }
+  // Drop a near-duplicate closing vertex (the 1.2 mm seam) so the open vertex
+  // list carries no first≈last pair; the ring is re-closed explicitly below.
+  while (pts.size() >= 2 && std::hypot(pts.front().getX() - pts.back().getX(),
+                                       pts.front().getY() - pts.back().getY()) < kRingDedupTolM)
+  {
+    pts.pop_back();
+  }
+
+  // 2. Spike / near-collinear removal: drop any vertex whose perpendicular
+  // distance to the chord between its PREVIOUS KEPT vertex and its next neighbour
+  // is below kRingSpikeTolM. This clears both exactly-collinear points and
+  // mm-scale hooks (a 1 mm needle is invalid to boost even when each of its edges
+  // exceeds kRingDedupTolM). Chaining off the last kept vertex (rather than the
+  // raw predecessor) bounds the total deviation along a genuine curve to
+  // kRingSpikeTolM, so a rounded corner from an OGR buffer is simplified — not
+  // collapsed to a chamfer. Single deterministic pass (resume-by-index depends
+  // on the plan being reproducible).
+  if (pts.size() >= 4)
+  {
+    std::vector<f2c::types::Point> kept;
+    const std::size_t n = pts.size();
+    for (std::size_t i = 0; i < n; ++i)
+    {
+      const f2c::types::Point& a = kept.empty() ? pts[n - 1] : kept.back();
+      const f2c::types::Point& b = pts[i];
+      const f2c::types::Point& c = pts[(i + 1) % n];
+      const double dx = c.getX() - a.getX();
+      const double dy = c.getY() - a.getY();
+      const double len2 = dx * dx + dy * dy;
+      const double cross = dx * (a.getY() - b.getY()) - dy * (a.getX() - b.getX());
+      double perp = std::hypot(b.getX() - a.getX(), b.getY() - a.getY());
+      if (len2 > 0.0)
+      {
+        perp = std::fabs(cross) / std::sqrt(len2);
+      }
+      if (perp >= kRingSpikeTolM)
+      {
+        kept.push_back(b);
+      }
+    }
+    if (kept.size() >= 3)  // never collapse the field below a triangle
+    {
+      pts = kept;
+    }
+  }
+
+  // Re-close the ring (F2C wants first == last).
+  f2c::types::LinearRing out;
+  for (const auto& p : pts)
+  {
+    out.addPoint(p);
+  }
+  if (pts.size() >= 2)
+  {
+    out.addPoint(f2c::types::Point(pts.front().getX(), pts.front().getY()));
+  }
+
+  // 3. OGR validity repair: even after the metric/spike passes a ring can retain
+  // a self-touch boost::geometry rejects. makeRingValid returns the boost-valid
+  // equivalent, or the deduped ring unchanged if the repair degenerates.
+  return makeRingValid(out);
 }
 
 }  // namespace mowgli_coverage
