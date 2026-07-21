@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-sim_navsat_rtk_fix.py — SIMULATION ONLY
+sim_navsat_rtk_fix.py — SIMULATION ONLY.
 
 Programmable GPS-quality controller for the simulator. Subscribes to a
 raw Gazebo NavSatFix and republishes on the production topic with
@@ -77,7 +77,8 @@ def _parse_pattern(spec: str) -> List[_Segment]:
     """Parse "30,RTK_FIXED;15,RTK_FLOAT" into a list of segments.
 
     Whitespace tolerant; raises ValueError on bad regime names.
-    Empty input returns []."""
+    Empty input returns [].
+    """
     if not spec.strip():
         return []
     out: List[_Segment] = []

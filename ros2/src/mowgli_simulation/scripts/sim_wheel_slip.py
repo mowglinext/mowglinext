@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-sim_wheel_slip.py — SIMULATION ONLY
+sim_wheel_slip.py — SIMULATION ONLY.
 
 Relays /wheel_odom_raw (Gazebo ground-truth) → /wheel_odom (what the EKF
 sees), with periodic short slip events that briefly inflate the reported

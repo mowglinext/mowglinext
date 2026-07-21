@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-sim_imu_noise.py — SIMULATION ONLY
+sim_imu_noise.py — SIMULATION ONLY.
 
 Adds realistic noise + bias-random-walk to the perfect IMU stream that
 Gazebo's gz-sim-imu-system emits, so the dual-EKF, slam_toolbox motion

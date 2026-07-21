@@ -290,9 +290,11 @@ class KinematicDrive:
         self.__last_cmd_time_s = time.monotonic()
 
     def __simulate_firmware_motor_model(self, cmd_vx: float, cmd_wz: float):
-        """Project a (cmd_vx, cmd_wz) twist through the same wheel-level
-        pipeline the real firmware applies, return the achievable body
-        twist for this sim step.
+        """Project a twist through the firmware wheel pipeline.
+
+        Runs the (cmd_vx, cmd_wz) twist through the same wheel-level
+        pipeline the real firmware applies, and returns the achievable
+        body twist for this sim step.
 
         The pipeline (mirroring firmware/.../cpp_main.cpp::on_cmd_vel +
         motors_handler):
