@@ -184,8 +184,10 @@ void GraphManager::QueueScanBetween(const gtsam::Pose2& delta, double sigma_xy, 
   queue_.scan_between = UnaryQueue::ScanBetween{delta, sigma_xy, sigma_theta};
 }
 
-void GraphManager::QueueScanToKeyframe(const gtsam::Pose2& abs_pose, double sigma_xy,
-                                       double sigma_theta, bool robust)
+void GraphManager::QueueScanToKeyframe(const gtsam::Pose2& abs_pose,
+                                       double sigma_xy,
+                                       double sigma_theta,
+                                       bool robust)
 {
   std::lock_guard<std::mutex> lock(mu_);
   if (sigma_xy <= 0.0)

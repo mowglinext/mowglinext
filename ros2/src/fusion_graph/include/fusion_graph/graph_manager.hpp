@@ -127,8 +127,10 @@ public:
   // yaw σ is additionally floored at params_.kf_yaw_sigma_floor_rad in
   // CreateNodeLocked so the LiDAR-derived absolute heading can only weakly
   // correct gyro drift, never override it.
-  void QueueScanToKeyframe(const gtsam::Pose2& abs_pose, double sigma_xy,
-                           double sigma_theta, bool robust = true);
+  void QueueScanToKeyframe(const gtsam::Pose2& abs_pose,
+                           double sigma_xy,
+                           double sigma_theta,
+                           bool robust = true);
 
   // Initial-pose seed. Required before the first tick if no GPS has
   // arrived yet — sets the prior on X_0. Must be called exactly once

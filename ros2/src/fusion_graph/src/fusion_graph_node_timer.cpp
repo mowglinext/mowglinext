@@ -264,8 +264,7 @@ void FusionGraphNode::OnTimer()
         }
         if (have_best)
         {
-          graph_->QueueScanToKeyframe(best_abs_meas, best_sigma,
-                                      best_sigma_theta, /*robust=*/true);
+          graph_->QueueScanToKeyframe(best_abs_meas, best_sigma, best_sigma_theta, /*robust=*/true);
           ++kf_matches_ok_;
         }
         else if (!cand.empty())

@@ -93,8 +93,7 @@ public:
       constexpr uint8_t kCommandStart = 1;  // HighLevelControl::Request::COMMAND_START
       const bool has_resumable_state =
           !context_->area_resume_pose_index.empty() || !context_->completed_areas.empty();
-      const bool auto_continue =
-          context_->current_command == kCommandStart && has_resumable_state;
+      const bool auto_continue = context_->current_command == kCommandStart && has_resumable_state;
       if (!auto_continue)
       {
         context_->current_command = 0;  // IDLE — require an explicit operator start

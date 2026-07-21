@@ -8,6 +8,7 @@
 
 #define _USE_MATH_DEFINES
 #include <cmath>
+
 #include "fusion_graph/rtk_wrongfix_gate.hpp"
 #include <gtest/gtest.h>
 

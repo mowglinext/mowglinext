@@ -163,10 +163,10 @@ TEST(SlipPivot, SlipVetoScalesWithCadence)
   const gtsam::Pose2 X0(5.0, 3.0, 0.7);
   gm.Initialize(X0, 0.0);
 
-  constexpr int kTicks = 100;             // 2 s @ 50 Hz
+  constexpr int kTicks = 100;  // 2 s @ 50 Hz
   constexpr double kDt = 0.02;
-  constexpr double kPhantomVx = 0.10;     // m/s — slipping wheels
-  constexpr double kPhantomWz = 0.32;     // rad/s — diff-drive guess
+  constexpr double kPhantomVx = 0.10;  // m/s — slipping wheels
+  constexpr double kPhantomWz = 0.32;  // rad/s — diff-drive guess
   constexpr double kGyroResidual = 0.02;  // rad/s — chassis really still
   // Per tick: wheel_dtheta=0.0064, gyro_dtheta=0.0004, residual=0.0060 rad.
   //   scaled slip_residual = 0.01  * 0.5 = 0.0050 → 0.0060 > 0.0050 → detected.

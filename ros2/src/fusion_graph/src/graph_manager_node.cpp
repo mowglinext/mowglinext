@@ -375,9 +375,9 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     // an ICP-realism floor (kf_apply_sigma_theta_rad) upstream; the max of the
     // two governs.
     const double sx = std::max(queue_.scan_to_keyframe->sigma_xy, 1.0e-4);
-    const double st = std::max(std::max(queue_.scan_to_keyframe->sigma_theta,
-                                        params_.kf_yaw_sigma_floor_rad),
-                               1.0e-4);
+    const double st =
+        std::max(std::max(queue_.scan_to_keyframe->sigma_theta, params_.kf_yaw_sigma_floor_rad),
+                 1.0e-4);
     gtsam::SharedNoiseModel noise = MakeDiagonal({sx, sx, st});
     if (queue_.scan_to_keyframe->robust)
     {
@@ -385,8 +385,8 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
                                                     params_.huber_k_gps),
                                                 noise);
     }
-    new_factors_.add(gtsam::PriorFactor<gtsam::Pose2>(
-        k_curr, queue_.scan_to_keyframe->abs_pose, noise));
+    new_factors_.add(
+        gtsam::PriorFactor<gtsam::Pose2>(k_curr, queue_.scan_to_keyframe->abs_pose, noise));
   }
 
   // 4. iSAM2 update. Mark the cached full estimate dirty — callers

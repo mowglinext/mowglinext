@@ -204,18 +204,20 @@ TEST(KeyframeApply, AbsoluteConstraintPullsYaw)
   // prior (σ 0.03) beats wheel_sigma_x (0.05). The PriorFactor<Pose2> yaw term
   // must pull the node's heading clearly off zero toward the target, without
   // overshooting it.
-  const double dr6_x = x_dr + 0.05;   // pure dead reckoning x for node 6
-  const double target_theta = 0.10;   // keyframe heading, 0.10 rad off DR
+  const double dr6_x = x_dr + 0.05;  // pure dead reckoning x for node 6
+  const double target_theta = 0.10;  // keyframe heading, 0.10 rad off DR
   gm.AddWheelTwist(0.5, 0.0, 0.0, 0.1);
   gm.AddGyroDelta(0.0, 0.1);
-  gm.QueueScanToKeyframe(gtsam::Pose2(dr6_x, 0.0, target_theta), 0.03, 0.002,
+  gm.QueueScanToKeyframe(gtsam::Pose2(dr6_x, 0.0, target_theta),
+                         0.03,
+                         0.002,
                          /*robust=*/false);
   auto out = gm.Tick(0.1 * 6);
   ASSERT_TRUE(out.has_value());
 
   const double theta_after = out->pose.theta();
-  EXPECT_GT(theta_after, 0.03) << "yaw constraint did not pull heading: theta_after="
-                               << theta_after << " target=" << target_theta;
+  EXPECT_GT(theta_after, 0.03) << "yaw constraint did not pull heading: theta_after=" << theta_after
+                               << " target=" << target_theta;
   EXPECT_LT(theta_after, target_theta + 0.03) << "node overshot the yaw prior";
 }
 
@@ -228,7 +230,8 @@ TEST(KeyframeApply, YawSigmaFloorCapsKeyframeAuthority)
   // and disabled; the floored run must barely move while the unfloored run snaps
   // toward the target — proving the FLOOR, not the caller's σ, governs authority.
   const double target_theta = 0.30;
-  auto run = [&](double floor) {
+  auto run = [&](double floor)
+  {
     auto gp = TickParams();
     gp.kf_yaw_sigma_floor_rad = floor;
     fg::GraphManager gm(gp);
@@ -243,13 +246,15 @@ TEST(KeyframeApply, YawSigmaFloorCapsKeyframeAuthority)
     gm.AddWheelTwist(0.5, 0.0, 0.0, 0.1);
     gm.AddGyroDelta(0.0, 0.1);
     // Tight claimed yaw σ (0.002) — the caller "over-trusts" the ICP yaw.
-    gm.QueueScanToKeyframe(gtsam::Pose2(dr6_x, 0.0, target_theta), 0.03, 0.002,
+    gm.QueueScanToKeyframe(gtsam::Pose2(dr6_x, 0.0, target_theta),
+                           0.03,
+                           0.002,
                            /*robust=*/false);
     return gm.Tick(0.1 * 6)->pose.theta();
   };
 
-  const double floored = run(0.30);    // default protective floor
-  const double unfloored = run(0.0);   // floor off → caller's tight σ wins
+  const double floored = run(0.30);  // default protective floor
+  const double unfloored = run(0.0);  // floor off → caller's tight σ wins
 
   EXPECT_LT(floored, 0.03) << "floor failed to cap keyframe yaw: floored=" << floored;
   EXPECT_GT(unfloored, 0.10) << "unfloored yaw did not pull: unfloored=" << unfloored;

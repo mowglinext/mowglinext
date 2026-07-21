@@ -83,8 +83,7 @@ void FusionGraphNode::DeclareParameters()
     kf_apply_sigma_theta_rad_ = declare_parameter<double>("kf_apply_sigma_theta_rad", 0.05);
     kf_engage_age_s_ = declare_parameter<double>("kf_engage_age_s", 0.3);
     kf_match_max_rmse_m_ = declare_parameter<double>("kf_match_max_rmse_m", 0.15);
-    kf_match_max_divergence_xy_m_ =
-        declare_parameter<double>("kf_match_max_divergence_xy_m", 0.30);
+    kf_match_max_divergence_xy_m_ = declare_parameter<double>("kf_match_max_divergence_xy_m", 0.30);
     kf_match_max_divergence_theta_rad_ =
         declare_parameter<double>("kf_match_max_divergence_theta_rad", 0.50);
     // Absolute-yaw mirror-guard bound (see fusion_graph_node.hpp): reject a
