@@ -28,6 +28,7 @@
 
 #include "geometry_msgs/msg/point32.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
+#include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
 #include "nav_msgs/msg/path.hpp"
@@ -429,6 +430,21 @@ struct BTContext
   int total_swaths{0};
   int completed_swaths{0};
   int skipped_swaths{0};
+
+  // -----------------------------------------------------------------------
+  // High-level status publishing (shared publisher + last-published cache)
+  // -----------------------------------------------------------------------
+  // PublishHighLevelStatus is a SyncActionNode that only ticks on tree
+  // transitions, so during a multi-minute FollowStrip (which sits RUNNING with
+  // no transitions) the topic goes SILENT for the whole traversal. The
+  // publisher is volatile and the GUI frontend starts from an empty status and
+  // only updates on live messages, so a dashboard opened/refreshed mid-mow
+  // receives nothing and renders "idle". To keep the topic fresh, the publisher
+  // is owned here and the behavior_tree_node re-publishes last_high_level_status
+  // on a periodic timer. Protected by context_mutex.
+  rclcpp::Publisher<mowgli_interfaces::msg::HighLevelStatus>::SharedPtr high_level_status_pub;
+  mowgli_interfaces::msg::HighLevelStatus last_high_level_status;
+  bool has_high_level_status{false};
 
   // -----------------------------------------------------------------------
   // TF buffer (shared across all BT nodes)

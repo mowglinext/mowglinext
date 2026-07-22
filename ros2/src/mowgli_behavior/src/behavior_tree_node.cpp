@@ -112,6 +112,7 @@ public:
     setupServiceServer();
     setupBehaviorTree();
     setupTimer();
+    setupHighLevelStatusRepublish();
     startNav2WaitTimer();
 
     RCLCPP_INFO(get_logger(), "mowgli_behavior_node ready");
@@ -465,6 +466,33 @@ private:
     RCLCPP_DEBUG(get_logger(), "~/clear_coverage_resume service + resume-available signal created");
   }
 
+  // Re-publish the last HighLevelStatus at a steady cadence. PublishHighLevelStatus
+  // is a SyncActionNode that only fires on tree transitions, so during a
+  // multi-minute FollowStrip the topic would otherwise go silent for the whole
+  // traversal — a GUI opened/refreshed mid-mow then receives nothing and renders
+  // "idle". This keeps a fresh status flowing regardless of tree activity. It runs
+  // on the same default (MutuallyExclusive) callback group as the BT tick, so it
+  // never races the tick's own publish; context_mutex still guards the shared
+  // publisher/cache for defence in depth.
+  void setupHighLevelStatusRepublish()
+  {
+    high_level_status_timer_ = create_wall_timer(1s,
+                                                 [this]()
+                                                 {
+                                                   republishHighLevelStatus();
+                                                 });
+  }
+
+  void republishHighLevelStatus()
+  {
+    std::lock_guard<std::mutex> lock(context_->context_mutex);
+    if (!context_->has_high_level_status || !context_->high_level_status_pub)
+    {
+      return;
+    }
+    context_->high_level_status_pub->publish(context_->last_high_level_status);
+  }
+
   // Publish whether a coverage session can be resumed (a persisted resume cursor
   // or completed-area set survives from an interrupted session). Republished on
   // change; latched so a late GUI subscriber always gets the current value.
@@ -791,6 +819,9 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_coverage_resume_srv_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr resume_available_pub_;
   rclcpp::TimerBase::SharedPtr resume_available_timer_;
+  // Periodic re-publish of the last HighLevelStatus so the topic stays fresh
+  // during long-running actions (see setupHighLevelStatusRepublish).
+  rclcpp::TimerBase::SharedPtr high_level_status_timer_;
   // Set by the ~/clear_coverage_resume service, consumed by tickTree() so the
   // actual map clearing happens on the BT tick thread (see the service comment).
   std::atomic<bool> clear_resume_requested_{false};

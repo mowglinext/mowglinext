@@ -52,8 +52,6 @@ public:
   BT::NodeStatus tick() override;
 
 private:
-  rclcpp::Publisher<mowgli_interfaces::msg::HighLevelStatus>::SharedPtr pub_;
-
   // --- Transient-IDLE debounce -------------------------------------------
   // The published state is recomputed from tree traversal every tick with no
   // latch, so a one-tick reactive deselection of MowingSequence (or a cleared
