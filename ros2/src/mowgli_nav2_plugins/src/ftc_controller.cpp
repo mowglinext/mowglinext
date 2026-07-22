@@ -1363,6 +1363,19 @@ void FTCController::calculate_velocity_commands(double dt,
     }
     else
     {
+      // Cap forward catch-up at the ramped target speed. lin_speed is a pure-P
+      // carrot-follow term (kp_lon·lon_error), and the carrot advances OPEN-LOOP
+      // at current_movement_speed_ (see update_control_point). Whenever the
+      // robot's real motion transiently lags that open-loop carrot — exiting a
+      // turn as the target ramps speed_slow→speed_fast, or a downstream
+      // collision_monitor slowdown the controller can't see — lon_error grows and
+      // the raw term surges toward max_cmd_vel_speed (0.30), well above the mowing
+      // speed (~0.20). That is the "slows a little, then accelerates a lot, then
+      // settles" the operator sees. Clamping the forward output to the
+      // acceleration-limited current_movement_speed_ closes the lag at the ramp
+      // rate instead of leaping; max_cmd_vel_speed stays as the absolute cap only.
+      if (lin_speed > current_movement_speed_)
+        lin_speed = current_movement_speed_;
       if (lin_speed > 0.0 && lin_speed < config_.min_speed_mps)
         lin_speed = config_.min_speed_mps;
       cmd_vel.twist.linear.x = lin_speed;
