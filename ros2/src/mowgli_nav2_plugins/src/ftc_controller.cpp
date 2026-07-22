@@ -243,6 +243,9 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
 
   // Footprint-polygon clearance + bounded reverse-escape.
   config_.use_footprint_clearance = declare_bool("use_footprint_clearance", false);
+  config_.obstacle_footprint_front_length_m =
+      declare_double("obstacle_footprint_front_length_m", 0.30);
+  config_.require_clear_exit = declare_bool("require_clear_exit", true);
   config_.obstacle_reverse_enabled = declare_bool("obstacle_reverse_enabled", false);
   config_.obstacle_reverse_max_dist_m = declare_double("obstacle_reverse_max_dist_m", 0.30);
   config_.obstacle_reverse_speed_mps = declare_double("obstacle_reverse_speed_mps", 0.10);
@@ -569,6 +572,14 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     else if (key == "use_footprint_clearance")
     {
       config_.use_footprint_clearance = p.as_bool();
+    }
+    else if (key == "obstacle_footprint_front_length_m")
+    {
+      config_.obstacle_footprint_front_length_m = std::max(0.0, p.as_double());
+    }
+    else if (key == "require_clear_exit")
+    {
+      config_.require_clear_exit = p.as_bool();
     }
     else if (key == "obstacle_reverse_enabled")
     {
@@ -1850,9 +1861,13 @@ void FTCController::updateLateralDeviation(double dt)
   if (config_.use_footprint_clearance)
   {
     detect_footprint = costmap_ros_->getRobotFootprint();
-    clearance_footprint =
-        ObstacleDeviation::expandFootprintLateral(detect_footprint,
-                                                  std::max(0.0, config_.obstacle_clearance_margin));
+    // Clearance (skirt) search probes only the FRONT of the chassis, then
+    // widens it laterally by the margin — the "less-conservative footprint"
+    // middle ground (spec Part A). Detection keeps the full footprint above.
+    clearance_footprint = ObstacleDeviation::expandFootprintLateral(
+        ObstacleDeviation::clipFootprintFront(detect_footprint,
+                                              config_.obstacle_footprint_front_length_m),
+        std::max(0.0, config_.obstacle_clearance_margin));
   }
 
   // The decision to STOP avoiding must be gated on whether the NOMINAL path
@@ -1970,6 +1985,33 @@ void FTCController::updateLateralDeviation(double dt)
       {
         // Footprint collision but no path-pose hit (e.g. inflated cell next
         // to robot from a transient scan return) — nothing to deviate around.
+        return;
+      }
+      // Cul-de-sac guard (spec Part A): only skirt an obstacle whose FAR edge is
+      // visible inside the lookahead. If the obstacle stays blocked to the end of
+      // the window (a wall / pocket), skirting sideways boxes the robot in — the
+      // exact wedge this spec targets. Refuse the skirt and hand off to the
+      // bounded reverse-escape / wait-or-abort path; the coverage detour-and-
+      // continue net (decideDetour) then routes a blade-off transit around it.
+      if (config_.require_clear_exit &&
+          !ObstacleDeviation::hasClearExit(*costmap_map_,
+                                           window,
+                                           0,
+                                           config_.obstacle_lookahead,
+                                           config_.obstacle_body_half_width,
+                                           detect_footprint))
+      {
+        if (reverseEscapeOrWait("no clear exit past obstacle — refusing to skirt into a pocket",
+                                detect_footprint,
+                                dt))
+        {
+          return;
+        }
+        // Wait window elapsed without the far edge appearing — throw to abort the
+        // strip (waitOrThrowForObstacle throws once past the timeout), letting the
+        // BT escalate to the coverage detour. Returning here would re-enter this
+        // same branch every tick. reverseEscapeOrWait only returns false after it
+        // has thrown, so this line is unreachable, but keep the return for safety.
         return;
       }
       // Side choice is a CLEARANCE question ("which side has room for the

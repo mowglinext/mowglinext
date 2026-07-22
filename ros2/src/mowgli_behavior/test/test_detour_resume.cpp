@@ -206,6 +206,78 @@ TEST(DetourResume, SearchWindowIsBounded)
 }
 
 // ---------------------------------------------------------------------------
+// Wedge check (spec Part B): stalled BESIDE an obstacle, nothing dead-ahead.
+// ---------------------------------------------------------------------------
+
+// A lethal cluster hugging the robot's ACTUAL (stuck) pose but NOT on the
+// forward path confirms the abort is obstacle-related and yields a forward
+// resume past min_skip — so the robot detours OUT of the wedge instead of
+// re-aborting in place. Before Part B this returned obstacle_confirmed=false
+// (no dead-ahead blockage) and the coverage loop froze.
+TEST(DetourResume, WedgeBesideStuckPoseConfirmsAndResumes)
+{
+  DetourCostmap cm = makeGrid();
+  // Path runs along y=0.5; the robot is stuck at x≈1.0 (idx 10). Place a lethal
+  // patch just ABOVE the path beside the stuck pose (rows 8..9 ≈ y 0.8..0.9,
+  // cols 9..11 ≈ x 0.9..1.1) — within wedge_radius_m (0.35) of (1.0, 0.5) but
+  // clear of the y=0.5 centerline itself, so no forward path pose is lethal.
+  for (uint32_t row = 7; row <= 8; ++row)
+  {
+    for (uint32_t col = 9; col <= 11; ++col)
+    {
+      cm.data[static_cast<std::size_t>(row) * cm.width + col] = 100;
+    }
+  }
+  const auto poses = straightPath(40);
+
+  DetourResumeCfg c = cfg(/*min_skip=*/0.8, /*radius=*/0.15);  // footprint tight
+  c.wedge_radius_m = 0.35;
+  const DetourDecision d = decideDetour(cm, poses, /*stuck=*/10, c);
+
+  EXPECT_TRUE(d.obstacle_confirmed);
+  ASSERT_TRUE(d.resume_idx.has_value());
+  // Resume is forward of the stuck pose by at least min_skip.
+  EXPECT_GE(poses[*d.resume_idx].pose.position.x - poses[10].pose.position.x, 0.8);
+}
+
+// With the wedge check DISABLED (radius 0), the same beside-obstacle stall is
+// NOT confirmed (nothing dead-ahead) — the pre-Part-B behaviour.
+TEST(DetourResume, WedgeDisabledDoesNotConfirmBesideObstacle)
+{
+  DetourCostmap cm = makeGrid();
+  for (uint32_t row = 7; row <= 8; ++row)
+  {
+    for (uint32_t col = 9; col <= 11; ++col)
+    {
+      cm.data[static_cast<std::size_t>(row) * cm.width + col] = 100;
+    }
+  }
+  const auto poses = straightPath(40);
+
+  DetourResumeCfg c = cfg(/*min_skip=*/0.8, /*radius=*/0.15);
+  c.wedge_radius_m = 0.0;  // disabled
+  const DetourDecision d = decideDetour(cm, poses, /*stuck=*/10, c);
+
+  EXPECT_FALSE(d.obstacle_confirmed);
+  EXPECT_FALSE(d.resume_idx.has_value());
+}
+
+// The wedge check must NOT fire in open space (no lethal cell near the stuck
+// pose) — otherwise every non-obstacle abort would trigger a blade-off detour.
+TEST(DetourResume, WedgeDoesNotFireInOpenSpace)
+{
+  DetourCostmap cm = makeGrid();  // all free
+  const auto poses = straightPath(40);
+
+  DetourResumeCfg c = cfg();
+  c.wedge_radius_m = 0.35;
+  const DetourDecision d = decideDetour(cm, poses, /*stuck=*/10, c);
+
+  EXPECT_FALSE(d.obstacle_confirmed);
+  EXPECT_FALSE(d.resume_idx.has_value());
+}
+
+// ---------------------------------------------------------------------------
 // footprintClear
 // ---------------------------------------------------------------------------
 

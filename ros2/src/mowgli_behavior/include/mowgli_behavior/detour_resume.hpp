@@ -89,6 +89,17 @@ struct DetourResumeCfg
   // planner handles unmapped space; forbidding resumes near unmapped edges would
   // be too conservative and strand the segment).
   int8_t lethal_cost = 90;
+  // Radius (m) of the "stalled BESIDE an obstacle" wedge check around the stuck
+  // pose. FTC can abort on "failed to make progress" while boxed in next to an
+  // obstacle whose lethal cells hug the robot's ACTUAL pose but do NOT lie
+  // dead-ahead on the nominal path — so the forward-only obstacle_confirmed scan
+  // misses it and the detour never fires (spec Part B). When any lethal cell
+  // lies within this radius of the stuck pose, the abort is confirmed
+  // obstacle-related and the forward resume search is allowed to pick the first
+  // clear pose past min_skip_dist_m even with no dead-ahead blockage. Kept tight
+  // (chassis half-width + a small margin) so it fires only on a genuine wedge,
+  // never on a localization/goal-checker abort in open space. <= 0 disables.
+  double wedge_radius_m = 0.35;
 };
 
 // ---------------------------------------------------------------------------
@@ -169,7 +180,15 @@ inline DetourDecision decideDetour(const DetourCostmap& cm,
     return d;
   }
   const auto& s = poses[stuck_idx].pose.position;
-  bool blocked_seen = false;
+  // "Stalled BESIDE an obstacle" wedge check (spec Part B): lethal cells hugging
+  // the robot's ACTUAL pose confirm the abort is obstacle-related even when
+  // nothing lies dead-ahead on the nominal path. Seeding blocked_seen lets the
+  // forward search adopt the first clear pose past min_skip_dist_m as the resume
+  // point, so a blade-off transit drives the robot OUT of the wedge instead of
+  // the coverage loop endlessly re-aborting in place.
+  const bool wedged = cfg.wedge_radius_m > 0.0 &&
+                      !footprintClear(cm, s.x, s.y, cfg.wedge_radius_m, cfg.lethal_cost);
+  bool blocked_seen = wedged;
   double arc = 0.0;
   for (std::size_t i = stuck_idx; i < poses.size(); ++i)
   {

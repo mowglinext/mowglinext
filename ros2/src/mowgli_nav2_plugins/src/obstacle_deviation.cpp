@@ -261,6 +261,70 @@ ObstacleDeviation::Footprint ObstacleDeviation::expandFootprintLateral(const Foo
   return out;
 }
 
+ObstacleDeviation::Footprint ObstacleDeviation::clipFootprintFront(const Footprint& footprint,
+                                                                   double front_length_m)
+{
+  if (front_length_m <= 0.0 || footprint.empty())
+  {
+    return footprint;
+  }
+  double max_x = std::numeric_limits<double>::lowest();
+  double min_x = std::numeric_limits<double>::max();
+  for (const auto& v : footprint)
+  {
+    max_x = std::max(max_x, v.x);
+    min_x = std::min(min_x, v.x);
+  }
+  // Requested front length covers the whole body — nothing to clip.
+  if (front_length_m >= (max_x - min_x))
+  {
+    return footprint;
+  }
+  const double cut = max_x - front_length_m;
+  Footprint out;
+  out.reserve(footprint.size());
+  for (const auto& v : footprint)
+  {
+    geometry_msgs::msg::Point p = v;
+    p.x = std::max(p.x, cut);  // project rear vertices onto the cut plane
+    out.push_back(p);
+  }
+  return out;
+}
+
+bool ObstacleDeviation::hasClearExit(const nav2_costmap_2d::Costmap2D& costmap,
+                                     const std::vector<geometry_msgs::msg::PoseStamped>& path,
+                                     std::size_t start_idx,
+                                     int lookahead_count,
+                                     double half_width,
+                                     const Footprint& footprint)
+{
+  if (lookahead_count <= 0 || path.empty())
+  {
+    return true;  // nothing ahead to trap us
+  }
+  const std::size_t end_idx =
+      std::min(path.size(), start_idx + static_cast<std::size_t>(lookahead_count));
+  bool obstacle_seen = false;
+  for (std::size_t i = start_idx; i < end_idx; ++i)
+  {
+    // Nominal (zero-deviation) body sample — no zone guard (see doc comment).
+    const bool blocked = regionBlocked(costmap, path[i], 0.0, half_width, footprint, BoundaryGuard{});
+    if (blocked)
+    {
+      obstacle_seen = true;
+      continue;
+    }
+    if (obstacle_seen)
+    {
+      return true;  // clear pose past the obstacle → the far edge is in view
+    }
+  }
+  // No obstacle at all → trivially has an exit. Obstacle that never reopened
+  // within the window → no visible far edge → refuse to skirt into it.
+  return !obstacle_seen;
+}
+
 int ObstacleDeviation::findFirstObstacleIndex(
     const nav2_costmap_2d::Costmap2D& costmap,
     const std::vector<geometry_msgs::msg::PoseStamped>& path,

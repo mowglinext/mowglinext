@@ -93,6 +93,36 @@ public:
   /// `footprint` unchanged.
   static Footprint expandFootprintLateral(const Footprint& footprint, double margin);
 
+  /// Return a copy of `footprint` clipped to its FRONT `front_length_m` metres
+  /// (base-frame x). Every vertex whose x is behind `max_x - front_length_m` is
+  /// projected forward onto that cut plane, so the rear of the body is dropped
+  /// from the polygon. This is the "less-conservative footprint" middle ground
+  /// (spec Part A): probing the leading part of the chassis for the SKIRT
+  /// clearance search — instead of the full 0.60 m length — stops the footprint
+  /// model refusing every skirtable obstacle (the trailing body always
+  /// overlapping something it has already passed). `front_length_m <= 0`, an
+  /// empty footprint, or a length ≥ the body length returns `footprint`
+  /// unchanged. Detection deliberately keeps the FULL footprint; only the
+  /// clearance search uses the clipped copy.
+  static Footprint clipFootprintFront(const Footprint& footprint, double front_length_m);
+
+  /// Cul-de-sac guard (spec Part A): is the obstacle's FAR edge visible inside
+  /// the lookahead window? Scans path poses [start_idx, start_idx +
+  /// lookahead_count) sampling the NOMINAL (zero-deviation) body (footprint if
+  /// given, else ±half_width line). Returns true when EITHER no obstacle is on
+  /// the nominal line (nothing to skirt) OR a clear pose exists AFTER the first
+  /// blocked pose (the obstacle ends within the window, so a lateral skirt has a
+  /// forward exit). Returns false only when an obstacle is present and stays
+  /// blocked to the end of the window — the wall/pocket case where skirting
+  /// sideways boxes the robot in. No zone guard: this asks purely "does the
+  /// nominal corridor reopen ahead", independent of the mowing-zone boundary.
+  static bool hasClearExit(const nav2_costmap_2d::Costmap2D& costmap,
+                           const std::vector<geometry_msgs::msg::PoseStamped>& path,
+                           std::size_t start_idx,
+                           int lookahead_count,
+                           double half_width = 0.0,
+                           const Footprint& footprint = {});
+
   /// Scan path poses [start_idx, start_idx + lookahead_count) and return the
   /// first index whose costmap cell is blocked. Returns -1 if none / costmap
   /// lookup fails. When `footprint` is non-empty, the actual chassis polygon is

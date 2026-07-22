@@ -960,6 +960,7 @@ bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
   cfg.max_search_dist_m = kDetourMaxSearchM;
   cfg.footprint_radius_m = detour_footprint_radius_m_;
   cfg.lethal_cost = kDetourLethalCost;
+  cfg.wedge_radius_m = kDetourWedgeRadiusM;
 
   const auto& poses = swaths_[swath_idx_].poses;
   const std::size_t stuck = std::min(path_progress_idx_, poses.size() - 1);

@@ -628,4 +628,84 @@ TEST_F(ObstacleDeviationTest, ExpandedFootprint_ForcesLargerSkirt)
       << "lateral footprint expansion must widen the skirt";
 }
 
+// ── clipFootprintFront (spec Part A: less-conservative footprint) ─────────────
+
+TEST_F(ObstacleDeviationTest, ClipFront_KeepsOnlyLeadingSection)
+{
+  // Chassis x∈[-0.10, 0.50] (0.60 m long). Clip to the front 0.30 m → every
+  // vertex behind x=0.20 is projected forward onto x=0.20.
+  const auto fp = makeChassisFootprint();
+  const auto front = ObstacleDeviation::clipFootprintFront(fp, 0.30);
+  ASSERT_EQ(front.size(), fp.size());
+  double min_x = 1e9;
+  double max_x = -1e9;
+  for (const auto& v : front)
+  {
+    min_x = std::min(min_x, v.x);
+    max_x = std::max(max_x, v.x);
+  }
+  EXPECT_DOUBLE_EQ(max_x, 0.50);  // leading edge preserved
+  EXPECT_DOUBLE_EQ(min_x, 0.20);  // rear projected onto the cut plane
+}
+
+TEST_F(ObstacleDeviationTest, ClipFront_NoOpWhenLengthCoversBody)
+{
+  const auto fp = makeChassisFootprint();
+  // 0.60 m clip == full body length → unchanged; 0 → unchanged.
+  const auto whole = ObstacleDeviation::clipFootprintFront(fp, 0.60);
+  const auto zero = ObstacleDeviation::clipFootprintFront(fp, 0.0);
+  ASSERT_EQ(whole.size(), fp.size());
+  for (std::size_t i = 0; i < fp.size(); ++i)
+  {
+    EXPECT_DOUBLE_EQ(whole[i].x, fp[i].x);
+    EXPECT_DOUBLE_EQ(zero[i].x, fp[i].x);
+  }
+}
+
+TEST_F(ObstacleDeviationTest, ClipFront_LessConservativeThanFull)
+{
+  // An obstacle grazing only the REAR of the full footprint blocks the full body
+  // but NOT the front-clipped body — the middle ground that lets FTC skirt an
+  // obstacle the full-length footprint would refuse. Robot at origin facing +X;
+  // block behind the front section (x≈0.0, within the full body x∈[-0.10,0.50]
+  // but behind the front-clip cut at x=0.20).
+  stampBlock(0.0, 0.30, 0.05);  // lethal patch beside the rear-left of the body
+  const auto pose = poseAt(0.0, 0.0);
+  const auto fp = makeChassisFootprint();
+  const auto front = ObstacleDeviation::clipFootprintFront(fp, 0.30);
+  // Skirt LEFT by 0.10 so the rear-left corner of the FULL body reaches the patch
+  // but the front-clipped body (rear dropped) does not.
+  const bool full_blocked = ObstacleDeviation::footprintBlocked(costmap_, pose, 0.10, fp);
+  const bool front_blocked = ObstacleDeviation::footprintBlocked(costmap_, pose, 0.10, front);
+  EXPECT_TRUE(full_blocked);
+  EXPECT_FALSE(front_blocked);
+}
+
+// ── hasClearExit (spec Part A: cul-de-sac guard) ──────────────────────────────
+
+TEST_F(ObstacleDeviationTest, HasClearExit_TrueWhenNoObstacle)
+{
+  const auto path = makeStraightPath(0.0, 0.0, 20, 0.1);
+  EXPECT_TRUE(ObstacleDeviation::hasClearExit(costmap_, path, 0, 20, 0.20));
+}
+
+TEST_F(ObstacleDeviationTest, HasClearExit_TrueWhenObstacleFarEdgeVisible)
+{
+  // A finite obstacle mid-window: nominal path is blocked, then reopens → the
+  // far edge is in view → skirting is safe (has an exit).
+  stampBlock(0.6, 0.0, 0.10);  // x≈0.5..0.7 on the path centerline
+  const auto path = makeStraightPath(0.0, 0.0, 20, 0.1);  // out to x=1.9
+  EXPECT_TRUE(ObstacleDeviation::hasClearExit(costmap_, path, 0, 20, 0.20));
+}
+
+TEST_F(ObstacleDeviationTest, HasClearExit_FalseWhenObstacleFillsWindow)
+{
+  // A wall that stays blocked to the end of the lookahead → no far edge in view
+  // → skirting sideways would box the robot in → NO clear exit.
+  const auto path = makeStraightPath(0.0, 0.0, 12, 0.1);  // out to x=1.1
+  // Block from x≈0.4 to well past the window end.
+  stampBlock(1.2, 0.0, 0.90);  // covers x≈0.3..2.1 across the whole tail
+  EXPECT_FALSE(ObstacleDeviation::hasClearExit(costmap_, path, 0, 12, 0.20));
+}
+
 }  // namespace mowgli_nav2_plugins

@@ -432,6 +432,24 @@ controller_server:
       # footprint sweep is made less conservative (probe the front of the
       # footprint, not its full length) and field-validated.
       use_footprint_clearance: false
+      # Front-clip length (m) for the SKIRT clearance footprint when
+      # use_footprint_clearance is true (OBSTACLE_WEDGE_RECOVERY_SPEC.md Part A
+      # middle ground). Only the leading 0.30 m of the 0.60 m chassis is probed
+      # for a clear side — the full-length footprint proved too conservative live
+      # (found NO clear side even at max_lateral_deviation = 3.0 m for skirtable
+      # obstacles, so FTC flip-flopped hold/resume and aborted whole segments).
+      # Detection still uses the FULL footprint. 0 disables the clip.
+      obstacle_footprint_front_length_m: 0.30
+      # Cul-de-sac guard (OBSTACLE_WEDGE_RECOVERY_SPEC.md Part A, highest
+      # leverage). Before committing to a lateral skirt, require the obstacle's
+      # FAR edge to be visible inside the obstacle_lookahead window. An obstacle
+      # that stays blocked to the end of the lookahead (a wall / pocket) is NOT
+      # skirted sideways — that is exactly how the robot boxed ITSELF in beside
+      # obstacles and then could not recover. Instead FTC holds / (opt-in)
+      # reverse-escapes / aborts, and the coverage detour-and-continue net routes
+      # a blade-off transit around it. Model-independent (works with the
+      # half-width line model below AND the footprint model). true = wedge-safe.
+      require_clear_exit: true
       # FALLBACK-ONLY body half-width for the lateral obstacle sweep, used when
       # use_footprint_clearance is false. 2026-06-25 FIELD (line model): the
       # detection threshold is 253 (lethal OR inscribed) and the costmap already

@@ -259,6 +259,11 @@ private:
   static constexpr double kDetourMaxSearchM = 8.0;
   // OccupancyGrid cost at/above which a cell is lethal for the clearance test.
   static constexpr int8_t kDetourLethalCost = 90;
+  // Radius of the "stalled beside an obstacle" wedge check around the stuck pose
+  // (spec Part B). Fires the detour when lethal cells hug the robot even with no
+  // dead-ahead blockage. Chassis half-width (~0.20 m) + margin; tight enough to
+  // never fire on an open-space abort.
+  static constexpr double kDetourWedgeRadiusM = 0.35;
 
   // Max time to hold (blade off) waiting for navigate_to_pose to become ready to
   // run a required inter-swath transit. If the server never comes up in this

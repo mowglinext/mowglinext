@@ -487,6 +487,27 @@ private:
     /// the obstacle_body_half_width line model at threshold 253.
     bool use_footprint_clearance{true};
 
+    /// Front-clip length (m) applied to the footprint used for the SKIRT
+    /// clearance search when use_footprint_clearance is on (spec Part A middle
+    /// ground). Only the leading `obstacle_footprint_front_length_m` of the
+    /// chassis is probed for a clear side, instead of the full 0.60 m body — the
+    /// full-length footprint proved too conservative live (found NO clear side
+    /// even at max_lateral_deviation = 3.0 m for skirtable obstacles). Detection
+    /// still uses the FULL footprint. 0 (or a length ≥ the body length) disables
+    /// the clip (full-length clearance probe, the prior behaviour).
+    double obstacle_footprint_front_length_m{0.30};
+
+    /// Cul-de-sac guard (spec Part A, highest leverage). Before committing to a
+    /// lateral skirt, require the obstacle's FAR edge to be visible inside the
+    /// lookahead window (a clear nominal-path pose exists past the first blocked
+    /// pose). When true, an obstacle that stays blocked to the end of the
+    /// lookahead — a wall or a pocket — is NOT skirted sideways (which is how the
+    /// robot boxes itself in); instead FTC reverse-escapes / waits / aborts, and
+    /// the coverage detour-and-continue safety net takes over. Model-independent
+    /// (works with the half-width line model AND the footprint model). Default
+    /// true. Set false to restore the prior skirt-anything behaviour.
+    bool require_clear_exit{true};
+
     /// Bounded reverse-escape for the WEDGED case (both sides of an obstacle
     /// blocked, or the skirt needed exceeds max_lateral_deviation). Before
     /// holding/aborting, FTC backs STRAIGHT up (no rotation) a bounded distance

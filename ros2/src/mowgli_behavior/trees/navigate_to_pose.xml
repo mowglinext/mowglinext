@@ -63,12 +63,23 @@
         </Fallback>
         <ReactiveFallback name="RecoveryFallback">
           <GoalUpdated/>
+          <!--
+            Wedge-safe recovery (OBSTACLE_WEDGE_RECOVERY_SPEC.md, Part B). When a
+            transit fails "collision ahead" because the robot has boxed itself in
+            beside an obstacle, a blind Spin just drives the robot in circles with
+            NO planned path on the map (the operator-visible "tourne en rond / pas
+            de trajectoire"). Spin is REMOVED here: it neither clears the costmap
+            nor moves the robot toward a valid plan, and on a wedged robot it only
+            twitches erratically. The remaining actions cycle (RoundRobin) as
+            costmap-clear → wait-for-costmap-to-settle → bounded reverse-out (back
+            the way it came, the only motion that actually escapes a wedge), then
+            replanning is retried. BackUp is the deliberate, bounded reverse-out.
+          -->
           <RoundRobin name="RecoveryActions">
             <Sequence name="ClearingActions">
               <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
               <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
             </Sequence>
-            <Spin spin_dist="1.57" error_code_id="{spin_error_code}"/>
             <Wait wait_duration="5.0"/>
             <BackUp backup_dist="0.30" backup_speed="0.15" error_code_id="{backup_code_id}"/>
           </RoundRobin>
