@@ -1,5 +1,17 @@
 // Copyright 2026 Mowgli Project
-// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
 // Pure "detour-and-continue" resume-pose search, factored out of FollowStrip so
 // the core decision is unit-testable without ROS, action servers, or a live
@@ -107,18 +119,18 @@ inline bool footprintClear(const DetourCostmap& cm, double x, double y, double r
   const double inv = 1.0 / cm.resolution;
   const double r2 = r * r;
   // Bounding box of the disc in cell coordinates, clamped to the grid.
-  long col_lo = static_cast<long>(std::floor((x - r - cm.origin_x) * inv));
-  long col_hi = static_cast<long>(std::floor((x + r - cm.origin_x) * inv));
-  long row_lo = static_cast<long>(std::floor((y - r - cm.origin_y) * inv));
-  long row_hi = static_cast<long>(std::floor((y + r - cm.origin_y) * inv));
-  col_lo = std::max<long>(col_lo, 0);
-  row_lo = std::max<long>(row_lo, 0);
-  col_hi = std::min<long>(col_hi, static_cast<long>(cm.width) - 1);
-  row_hi = std::min<long>(row_hi, static_cast<long>(cm.height) - 1);
-  for (long row = row_lo; row <= row_hi; ++row)
+  int64_t col_lo = static_cast<int64_t>(std::floor((x - r - cm.origin_x) * inv));
+  int64_t col_hi = static_cast<int64_t>(std::floor((x + r - cm.origin_x) * inv));
+  int64_t row_lo = static_cast<int64_t>(std::floor((y - r - cm.origin_y) * inv));
+  int64_t row_hi = static_cast<int64_t>(std::floor((y + r - cm.origin_y) * inv));
+  col_lo = std::max<int64_t>(col_lo, 0);
+  row_lo = std::max<int64_t>(row_lo, 0);
+  col_hi = std::min<int64_t>(col_hi, static_cast<int64_t>(cm.width) - 1);
+  row_hi = std::min<int64_t>(row_hi, static_cast<int64_t>(cm.height) - 1);
+  for (int64_t row = row_lo; row <= row_hi; ++row)
   {
     const double cy = cm.origin_y + (static_cast<double>(row) + 0.5) * cm.resolution;
-    for (long col = col_lo; col <= col_hi; ++col)
+    for (int64_t col = col_lo; col <= col_hi; ++col)
     {
       const double cx = cm.origin_x + (static_cast<double>(col) + 0.5) * cm.resolution;
       const double dx = cx - x;
