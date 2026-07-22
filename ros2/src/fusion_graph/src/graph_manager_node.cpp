@@ -25,6 +25,7 @@
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Values.h>
 #include <gtsam/slam/BetweenFactor.h>
+#include <gtsam/slam/PoseTranslationPrior.h>
 #include <gtsam/slam/PriorFactor.h>
 
 namespace fusion_graph
@@ -360,33 +361,32 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   }
   if (queue_.scan_to_keyframe)
   {
-    // ABSOLUTE full-pose constraint on the current node from an RTK-anchored
-    // keyframe match. PriorFactor<Pose2> pins X_curr to abs_pose (xy + yaw),
-    // bounding both translation and heading drift during RTK-Float windows.
-    // Huber-wrapped so a single biased match is down-weighted.
+    // ABSOLUTE XY-ONLY constraint on the current node from an RTK-anchored
+    // keyframe match. PoseTranslationPrior pins X_curr.translation() to
+    // abs_pose's xy (heading UNTOUCHED), bounding position drift during RTK-Float
+    // windows while yaw stays owned by the gyro between-factors and the loose
+    // (σ≥0.30 rad) scan-between yaw. Huber-wrapped so a single biased match is
+    // down-weighted.
     //
-    // Yaw σ is floored at kf_yaw_sigma_floor_rad (~0.30 rad) HERE, the last gate
-    // before iSAM2: the keyframe yaw is an absolute, LiDAR-derived heading that
-    // engages exactly when COG yaw is gated off, so a wrong cross-viewpoint ICP
-    // rotation would have nothing to correct it. The floor keeps heading owned
-    // by the gyro between-factors (which run ~0.005 rad/node) — the keyframe
-    // prior may only WEAKLY correct slow yaw drift, never snap heading. Mirrors
-    // the node's scan/loop-closure ScanYawSigma() floor. The node also applies
-    // an ICP-realism floor (kf_apply_sigma_theta_rad) upstream; the max of the
-    // two governs.
-    const double sx = std::max(queue_.scan_to_keyframe->sigma_xy, 1.0e-4);
-    const double st =
-        std::max(std::max(queue_.scan_to_keyframe->sigma_theta, params_.kf_yaw_sigma_floor_rad),
-                 1.0e-4);
-    gtsam::SharedNoiseModel noise = MakeDiagonal({sx, sx, st});
+    // 2026-07-22: reverted from the PriorFactor<Pose2> (xy+yaw) variant. A
+    // keyframe yaw prior — even σ-floored — can inject a mirrored / 180°-flipped
+    // cross-viewpoint ICP heading, which corrupted map→odom on the robot (yaw
+    // flip ~180°, kf_matches_fail spiking, robot fought the path and dug). The
+    // yaw mirror-guard in fusion_graph_node OnTimer still REJECTS such matches
+    // before they are queued (so the xy anchor is protected from a mirror too),
+    // but no keyframe heading is ever fed into the graph. This keeps the Float
+    // position-holding benefit without the heading-flip risk. abs_pose still
+    // carries yaw for that guard; only its translation is used here.
+    const double s = std::max(queue_.scan_to_keyframe->sigma_xy, 1.0e-4);
+    gtsam::SharedNoiseModel noise = MakeDiagonal({s, s});
     if (queue_.scan_to_keyframe->robust)
     {
       noise = gtsam::noiseModel::Robust::Create(gtsam::noiseModel::mEstimator::Huber::Create(
                                                     params_.huber_k_gps),
                                                 noise);
     }
-    new_factors_.add(
-        gtsam::PriorFactor<gtsam::Pose2>(k_curr, queue_.scan_to_keyframe->abs_pose, noise));
+    new_factors_.add(gtsam::PoseTranslationPrior<gtsam::Pose2>(
+        k_curr, gtsam::Point2(queue_.scan_to_keyframe->abs_pose.translation()), noise));
   }
 
   // 4. iSAM2 update. Mark the cached full estimate dirty — callers

@@ -176,14 +176,14 @@ TEST(KeyframeApply, AbsoluteConstraintPullsNode)
   EXPECT_LT(x_after, target_x + 0.03) << "node overshot the prior";
 }
 
-TEST(KeyframeApply, AbsoluteConstraintPullsYaw)
+TEST(KeyframeApply, KeyframePriorLeavesYawToGyro)
 {
-  // Floor DISABLED here to isolate the PriorFactor<Pose2> yaw MECHANISM (that a
-  // tight keyframe yaw σ can move heading). The floor's protective capping is
-  // covered by YawSigmaFloorCapsKeyframeAuthority below.
-  auto gp = TickParams();
-  gp.kf_yaw_sigma_floor_rad = 0.0;
-  fg::GraphManager gm(gp);
+  // The scan-to-keyframe constraint is XY-ONLY (PoseTranslationPrior): it must
+  // NOT move heading, even when the matched keyframe pose carries a large yaw
+  // offset. Heading stays owned by the gyro/wheel between-factors — this is the
+  // 2026-07-22 revert of the (risky) keyframe yaw prior that could inject a
+  // mirrored / 180°-flipped ICP heading and corrupt map→odom.
+  fg::GraphManager gm(TickParams());
   gm.Initialize(gtsam::Pose2(0, 0, 0), 0.0);
 
   // Drive straight 5 ticks (heading dead-reckons to ~0).
@@ -193,22 +193,15 @@ TEST(KeyframeApply, AbsoluteConstraintPullsYaw)
     gm.AddGyroDelta(0.0, 0.1);
     gm.Tick(0.1 * i);
   }
-  auto before = gm.LatestSnapshot();
-  ASSERT_TRUE(before.has_value());
-  const double x_dr = before->pose.x();
+  const double x_dr = gm.LatestSnapshot()->pose.x();
 
-  // The 6th node dead-reckons straight (yaw ~0). Queue a keyframe prior at the
-  // dead-reckoned xy but with a 0.10 rad heading offset. The prior yaw sigma
-  // (0.002) is TIGHTER than the combined gyro+wheel between-factor yaw noise
-  // (σ_eff ~0.0045 rad) so the prior dominates — mirroring how the xy test's
-  // prior (σ 0.03) beats wheel_sigma_x (0.05). The PriorFactor<Pose2> yaw term
-  // must pull the node's heading clearly off zero toward the target, without
-  // overshooting it.
-  const double dr6_x = x_dr + 0.05;  // pure dead reckoning x for node 6
-  const double target_theta = 0.10;  // keyframe heading, 0.10 rad off DR
+  // Queue a keyframe at the dead-reckoned xy but with a large 0.30 rad heading
+  // offset and a very tight claimed yaw σ. With the xy-only prior the heading
+  // must stay pinned near the dead-reckoned ~0 regardless.
+  const double dr6_x = x_dr + 0.05;
   gm.AddWheelTwist(0.5, 0.0, 0.0, 0.1);
   gm.AddGyroDelta(0.0, 0.1);
-  gm.QueueScanToKeyframe(gtsam::Pose2(dr6_x, 0.0, target_theta),
+  gm.QueueScanToKeyframe(gtsam::Pose2(dr6_x, 0.0, /*yaw offset=*/0.30),
                          0.03,
                          0.002,
                          /*robust=*/false);
@@ -216,49 +209,8 @@ TEST(KeyframeApply, AbsoluteConstraintPullsYaw)
   ASSERT_TRUE(out.has_value());
 
   const double theta_after = out->pose.theta();
-  EXPECT_GT(theta_after, 0.03) << "yaw constraint did not pull heading: theta_after=" << theta_after
-                               << " target=" << target_theta;
-  EXPECT_LT(theta_after, target_theta + 0.03) << "node overshot the yaw prior";
-}
-
-TEST(KeyframeApply, YawSigmaFloorCapsKeyframeAuthority)
-{
-  // The keyframe yaw σ floor (GraphParams::kf_yaw_sigma_floor_rad, enforced in
-  // CreateNodeLocked) keeps heading owned by the gyro: even with a deliberately
-  // TIGHT claimed yaw σ, a keyframe prior 0.30 rad off the dead-reckoned heading
-  // may only weakly nudge yaw. Run the identical scenario with the floor engaged
-  // and disabled; the floored run must barely move while the unfloored run snaps
-  // toward the target — proving the FLOOR, not the caller's σ, governs authority.
-  const double target_theta = 0.30;
-  auto run = [&](double floor)
-  {
-    auto gp = TickParams();
-    gp.kf_yaw_sigma_floor_rad = floor;
-    fg::GraphManager gm(gp);
-    gm.Initialize(gtsam::Pose2(0, 0, 0), 0.0);
-    for (int i = 1; i <= 5; ++i)
-    {
-      gm.AddWheelTwist(0.5, 0.0, 0.0, 0.1);
-      gm.AddGyroDelta(0.0, 0.1);
-      gm.Tick(0.1 * i);
-    }
-    const double dr6_x = gm.LatestSnapshot()->pose.x() + 0.05;
-    gm.AddWheelTwist(0.5, 0.0, 0.0, 0.1);
-    gm.AddGyroDelta(0.0, 0.1);
-    // Tight claimed yaw σ (0.002) — the caller "over-trusts" the ICP yaw.
-    gm.QueueScanToKeyframe(gtsam::Pose2(dr6_x, 0.0, target_theta),
-                           0.03,
-                           0.002,
-                           /*robust=*/false);
-    return gm.Tick(0.1 * 6)->pose.theta();
-  };
-
-  const double floored = run(0.30);  // default protective floor
-  const double unfloored = run(0.0);  // floor off → caller's tight σ wins
-
-  EXPECT_LT(floored, 0.03) << "floor failed to cap keyframe yaw: floored=" << floored;
-  EXPECT_GT(unfloored, 0.10) << "unfloored yaw did not pull: unfloored=" << unfloored;
-  EXPECT_LT(floored, unfloored) << "floor did not reduce the yaw pull";
+  EXPECT_LT(std::abs(theta_after), 0.02)
+      << "xy-only keyframe prior moved heading (should be gyro-owned): theta_after=" << theta_after;
 }
 
 // ── Phase D: keyframe persistence (round-trip, back-compat, datum guard) ──
