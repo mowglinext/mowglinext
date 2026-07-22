@@ -348,6 +348,25 @@ if(BUILD_TESTING)
     action_msgs
   )
 
+  # ---- test_detour_resume ----
+  # Unit tests for the pure detour-and-continue resume-pose search
+  # (detour_resume.hpp): when FTC is blocked by an un-skirtable obstacle,
+  # FollowStrip must find a clear pose past it and detour (blade-off) instead of
+  # abandoning the whole swath. Header-only helper → no coverage_nodes.cpp link.
+  ament_add_gtest(test_detour_resume
+    test/test_detour_resume.cpp
+  )
+
+  target_include_directories(test_detour_resume PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_detour_resume
+    geometry_msgs
+    mowgli_interfaces
+  )
+
   # ---- test_battery_critical_resume ----
   # Regression for "robot stuck after a critical-battery charge": the
   # CriticalBatteryDock tail must AUTO-CONTINUE on recovery (undock, keep

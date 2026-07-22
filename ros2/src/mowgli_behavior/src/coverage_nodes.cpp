@@ -339,6 +339,26 @@ BT::NodeStatus FollowStrip::onStart()
     coverage_plan_pub_ = ctx->node->create_publisher<nav_msgs::msg::Path>(
         "/controller_server/FollowCoveragePath/global_plan", rclcpp::QoS(1).transient_local());
   }
+  // Detour-and-continue: subscribe (latched) to the global costmap so an
+  // obstacle-abort can be confirmed and a clear resume pose found. Created once.
+  if (!costmap_sub_)
+  {
+    costmap_sub_ = ctx->node->create_subscription<nav_msgs::msg::OccupancyGrid>(
+        "/global_costmap/costmap",
+        rclcpp::QoS(1).transient_local().reliable(),
+        [this](nav_msgs::msg::OccupancyGrid::SharedPtr msg)
+        {
+          latest_costmap_ = std::move(msg);
+        });
+  }
+  // Per-segment detour budget + footprint radius from ports (see providedPorts).
+  {
+    int max_detours = 5;
+    getInput<int>("max_detours_per_segment", max_detours);
+    max_detours_per_segment_ = max_detours > 0 ? static_cast<std::size_t>(max_detours) : 0;
+    getInput<double>("detour_footprint_radius_m", detour_footprint_radius_m_);
+  }
+  detours_used_ = 0;
   if (!follow_client_->wait_for_action_server(std::chrono::seconds(5)))
   {
     RCLCPP_ERROR(ctx->node->get_logger(), "FollowStrip: follow_path not available");
@@ -613,6 +633,8 @@ BT::NodeStatus FollowStrip::onRunning()
     // the persisted resume index.
     path_progress_idx_ = 0;
     resume_start_idx_ = 0;
+    // The detour budget is per-segment — a fresh unit gets its own full budget.
+    detours_used_ = 0;
     // Skip any swaths already mowed in an earlier pass (resume).
     const auto& done = ctx->area_completed_swaths[area_idx_];
     while (swath_idx_ < swaths_.size() && done.count(swath_idx_) > 0)
@@ -824,6 +846,19 @@ BT::NodeStatus FollowStrip::onRunning()
       follow_handle_.reset();
       return advance();
     }
+    // DETOUR-AND-CONTINUE: FTC likely aborted because it is blocked by an
+    // obstacle it cannot skirt laterally. Rather than abandon the whole segment,
+    // try to drive a BLADE-OFF transit around the obstacle to a clear pose
+    // further along THIS segment and resume mowing the remainder. Only taken
+    // when the abort is confirmed obstacle-related, a clear resume exists, and
+    // the per-segment budget is not spent — otherwise fall through to the
+    // existing skip. tryStartDetour reuses the inter-segment transit machinery,
+    // so the blade is provably OFF for the crossing (structural gap guard).
+    if (tryStartDetour(ctx))
+    {
+      follow_handle_.reset();
+      return BT::NodeStatus::RUNNING;
+    }
     RCLCPP_WARN(ctx->node->get_logger(),
                 "FollowStrip: unit %zu/%zu aborted/canceled at %.0f%% of the unit (area %u) — "
                 "saving resume cursor",
@@ -883,6 +918,115 @@ void FollowStrip::setBladeEnabled(bool enabled)
   auto req = std::make_shared<mowgli_interfaces::srv::MowerControl::Request>();
   req->mow_enabled = enabled ? 1u : 0u;
   blade_client_->async_send_request(req);
+}
+
+bool FollowStrip::tryStartDetour(const std::shared_ptr<BTContext>& ctx)
+{
+  // Budget: never loop forever detouring obstacle after obstacle on one segment.
+  if (detours_used_ >= max_detours_per_segment_)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowStrip: detour budget (%zu) exhausted on unit %zu/%zu — falling back to skip",
+                max_detours_per_segment_,
+                swath_idx_ + 1,
+                swaths_.size());
+    return false;
+  }
+  if (swath_idx_ >= swaths_.size() || swaths_[swath_idx_].poses.size() < 2)
+  {
+    return false;
+  }
+
+  // Snapshot the latest global costmap into the ROS-free view. No costmap yet
+  // (subscription just settling / global_costmap silent) → cannot confirm an
+  // obstacle → fall back (never detour blind).
+  auto grid = latest_costmap_;
+  if (!grid || grid->info.width == 0 || grid->info.height == 0)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowStrip: no global costmap available — cannot detour, falling back to skip");
+    return false;
+  }
+  DetourCostmap cm;
+  cm.origin_x = grid->info.origin.position.x;
+  cm.origin_y = grid->info.origin.position.y;
+  cm.resolution = grid->info.resolution;
+  cm.width = grid->info.width;
+  cm.height = grid->info.height;
+  cm.data = grid->data;  // copy (global costmap is a bounded, modest grid)
+
+  DetourResumeCfg cfg;
+  cfg.min_skip_dist_m = kDetourMinSkipM;
+  cfg.max_search_dist_m = kDetourMaxSearchM;
+  cfg.footprint_radius_m = detour_footprint_radius_m_;
+  cfg.lethal_cost = kDetourLethalCost;
+
+  const auto& poses = swaths_[swath_idx_].poses;
+  const std::size_t stuck = std::min(path_progress_idx_, poses.size() - 1);
+  const DetourDecision d = decideDetour(cm, poses, stuck, cfg);
+
+  if (!d.obstacle_confirmed)
+  {
+    // No lethal cell ahead — the abort was NOT an un-skirtable obstacle
+    // (localization flicker, goal-checker quirk, ...). Do not detour.
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "FollowStrip: abort on unit %zu/%zu not obstacle-related (no lethal cell ahead) — "
+                "not detouring",
+                swath_idx_ + 1,
+                swaths_.size());
+    return false;
+  }
+  if (!d.resume_idx.has_value())
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowStrip: obstacle blocks unit %zu/%zu but no clear resume within %.1fm — "
+                "falling back to skip",
+                swath_idx_ + 1,
+                swaths_.size(),
+                kDetourMaxSearchM);
+    return false;
+  }
+  const std::size_t idx = *d.resume_idx;
+
+  // Trim the current unit to [idx, end): poses [stuck..idx) span the obstacle gap
+  // and are left un-mowed this pass (physically unreachable). Fold idx into
+  // resume_start_idx_ so the absolute cursor (swath_base + resume_start_idx +
+  // progress) stays a consistent index into the concatenation.
+  resume_start_idx_ += idx;
+  nav_msgs::msg::Path remainder;
+  remainder.header = swaths_[swath_idx_].header;
+  remainder.poses.assign(poses.begin() + static_cast<std::ptrdiff_t>(idx), poses.end());
+  swaths_[swath_idx_] = std::move(remainder);
+  path_progress_idx_ = 0;
+  ++detours_used_;
+
+  // Persist the moved cursor now: onHalted cannot persist during the detour
+  // transit (follow_handle_ is null then), so a preempt mid-detour must still
+  // resume PAST the obstacle rather than back at the stuck pose.
+  const std::size_t base = (swath_idx_ < swath_base_.size()) ? swath_base_[swath_idx_] : 0;
+  ctx->area_resume_pose_index[area_idx_] = base + resume_start_idx_;
+  saveCoverageResumeState(*ctx);
+
+  RCLCPP_WARN(ctx->node->get_logger(),
+              "FollowStrip: obstacle blocked unit %zu/%zu — DETOUR %zu/%zu: blade-off transit "
+              "around it to resume pose (skipped %zu poses), then resuming coverage",
+              swath_idx_ + 1,
+              swaths_.size(),
+              detours_used_,
+              max_detours_per_segment_,
+              idx);
+
+  // Reuse the EXISTING blade-off inter-segment transit machinery. The resume
+  // pose is >= kDetourMinSkipM (> kSegmentTransitGap) from the robot, so
+  // sendCurrentSwath's structural gap guard forces the blade OFF and a
+  // NavigateToPose transit that the Nav2 global planner routes AROUND the
+  // obstacle. The transit_active_ handler then re-dispatches FollowCoveragePath
+  // (blade back on) for the trimmed remainder. If that transit itself fails, the
+  // handler skips the unit — the same fail-safe as any inter-segment transit.
+  swath_goal_sent_ = false;
+  transit_pending_ = false;
+  transit_active_ = false;
+  return sendCurrentSwath(ctx);
 }
 
 // ===========================================================================
