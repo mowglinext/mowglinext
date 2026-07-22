@@ -63,35 +63,14 @@
         </Fallback>
         <ReactiveFallback name="RecoveryFallback">
           <GoalUpdated/>
-          <!--
-            Wedge-safe, dock-safe recovery (OBSTACLE_WEDGE_RECOVERY_SPEC.md,
-            Part B). This tree is shared by EVERY NavigateToPose: coverage
-            transit, HOME, AND opennav_docking's nav-to-staging approach. NO blind
-            MOTION recovery belongs here — each one breaks a different consumer:
-              * Spin drives the robot in circles with NO planned path on the map
-                (operator-visible "tourne en rond / pas de trajectoire") when it is
-                boxed in beside an obstacle during coverage/transit.
-              * BackUp backs the robot AWAY from its goal. During the dock-staging
-                approach the dock sits amid obstacle inflation, so the approach
-                intermittently aborts "collision ahead"; a reverse-out then retreats
-                from the dock and it never seats (field 2026-07-22: "the docking
-                server avoids the obstacles / cannot dock").
-            So recovery is costmap-clear → wait-for-the-costmap-to-settle → retry
-            planning, with no erratic motion. A genuinely un-plannable wedge simply
-            exhausts the RecoveryNode retries and fails the action, which the
-            higher-level BT handles per consumer: coverage escalates to the
-            detour-and-continue net (decideDetour, which DOES route a blade-off
-            transit around the obstacle with full global-costmap knowledge), HOME
-            retries, and DockRobot retries the whole dock. The wedge reverse-out
-            lives ONLY where it is destination-aware — the coverage controller's
-            opt-in FTC obstacle_reverse — never in this goal-blind shared tree.
-          -->
           <RoundRobin name="RecoveryActions">
             <Sequence name="ClearingActions">
               <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
               <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
             </Sequence>
+            <Spin spin_dist="1.57" error_code_id="{spin_error_code}"/>
             <Wait wait_duration="5.0"/>
+            <BackUp backup_dist="0.30" backup_speed="0.15" error_code_id="{backup_code_id}"/>
           </RoundRobin>
         </ReactiveFallback>
       </Sequence>
