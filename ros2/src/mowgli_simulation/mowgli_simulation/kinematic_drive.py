@@ -113,8 +113,8 @@ from __future__ import annotations
 import math
 import time
 
-import rclpy
 from geometry_msgs.msg import PoseStamped, TwistStamped
+import rclpy
 
 
 class KinematicDrive:
@@ -144,18 +144,18 @@ class KinematicDrive:
     # Values mirror firmware/stm32/ros_usbnode/{include/board.h,
     # src/ros/ros_custom/cpp_main.cpp}. Keep them in lockstep — if
     # the firmware gains change, change them here too.
-    FIRMWARE_MAX_MPS              = 0.5
-    FIRMWARE_PWM_PER_MPS          = 300.0
-    FIRMWARE_PWM_MAX              = 255.0
-    FIRMWARE_DEADBAND_PWM_STATIC  = 40.0   # PWM needed to break static friction from rest
+    FIRMWARE_MAX_MPS = 0.5
+    FIRMWARE_PWM_PER_MPS = 300.0
+    FIRMWARE_PWM_MAX = 255.0
+    FIRMWARE_DEADBAND_PWM_STATIC = 40.0   # PWM needed to break static friction from rest
     FIRMWARE_DEADBAND_PWM_KINETIC = 30.0   # lower threshold once moving (hysteresis)
-    FIRMWARE_PI_KP_PWM_PER_MPS    = 30.0
-    FIRMWARE_PI_KI_PWM_PER_MPS_S  = 5000.0
-    FIRMWARE_PI_INT_MAX_PWM       = 100.0
-    FIRMWARE_PI_HOLD_THRESH_MPS   = 0.02   # actual<this AND target==0 → force PWM=0
+    FIRMWARE_PI_KP_PWM_PER_MPS = 30.0
+    FIRMWARE_PI_KI_PWM_PER_MPS_S = 5000.0
+    FIRMWARE_PI_INT_MAX_PWM = 100.0
+    FIRMWARE_PI_HOLD_THRESH_MPS = 0.02   # actual<this AND target==0 → force PWM=0
 
     # Topic the rest of the stack uses for the post-mux velocity command.
-    DEFAULT_CMD_VEL_TOPIC = "/cmd_vel"
+    DEFAULT_CMD_VEL_TOPIC = '/cmd_vel'
 
     # If we receive no fresh cmd_vel within this **wall-clock** window,
     # command zero velocity. Wall-clock (not sim-time) is critical
@@ -182,18 +182,18 @@ class KinematicDrive:
         self.__robot_node = self.__supervisor.getSelf()
         if self.__robot_node is None or self.__robot_node._ref is None:
             raise RuntimeError(
-                "KinematicDrive: Supervisor.getSelf() returned a NULL node. "
-                "The Robot must be supervisor=TRUE in both the PROTO and the "
-                "world instantiation."
+                'KinematicDrive: Supervisor.getSelf() returned a NULL node. '
+                'The Robot must be supervisor=TRUE in both the PROTO and the '
+                'world instantiation.'
             )
 
         # Pose fields: we set translation + rotation directly each step.
-        self.__translation_field = self.__robot_node.getField("translation")
-        self.__rotation_field = self.__robot_node.getField("rotation")
+        self.__translation_field = self.__robot_node.getField('translation')
+        self.__rotation_field = self.__robot_node.getField('rotation')
         if self.__translation_field is None or self.__rotation_field is None:
             raise RuntimeError(
-                "KinematicDrive: failed to resolve translation/rotation "
-                "fields on the Robot node."
+                'KinematicDrive: failed to resolve translation/rotation '
+                'fields on the Robot node.'
             )
 
         # Seed the integrated pose from whatever the world placed the
@@ -231,11 +231,11 @@ class KinematicDrive:
             rclpy.init(args=None)
 
         # Use a unique node name per Robot — supports multi-robot worlds.
-        node_name = f"{self.__supervisor.getName()}_kinematic_drive"
-        node_name = node_name.replace(" ", "_").replace("-", "_")
+        node_name = f'{self.__supervisor.getName()}_kinematic_drive'
+        node_name = node_name.replace(' ', '_').replace('-', '_')
         self.__node = rclpy.create_node(node_name)
 
-        topic = properties.get("cmdVelTopic", self.DEFAULT_CMD_VEL_TOPIC)
+        topic = properties.get('cmdVelTopic', self.DEFAULT_CMD_VEL_TOPIC)
         # TwistStamped to match twist_mux output and the diff_drive
         # controller's use_stamped_vel: true.
         self.__node.create_subscription(
@@ -250,7 +250,7 @@ class KinematicDrive:
         # physical-contact charging signal — not a pose-estimate
         # derivation that could lie when the localizer is wobbling).
         self.__gt_pose_pub = self.__node.create_publisher(
-            PoseStamped, "/sim/ground_truth_pose", 10
+            PoseStamped, '/sim/ground_truth_pose', 10
         )
 
         # Latest commanded velocity. Default to zero so the robot is at
@@ -263,11 +263,11 @@ class KinematicDrive:
         # firmware/.../cpp_main.cpp::motors_handler so sub-deadband
         # commands stall (briefly) and the PI integrator pushes through
         # static friction exactly as the real chassis does.
-        self.__left_actual_mps  = 0.0
+        self.__left_actual_mps = 0.0
         self.__right_actual_mps = 0.0
-        self.__left_pi_int_pwm  = 0.0
+        self.__left_pi_int_pwm = 0.0
         self.__right_pi_int_pwm = 0.0
-        self.__prev_left_target_mps  = 0.0
+        self.__prev_left_target_mps = 0.0
         self.__prev_right_target_mps = 0.0
 
         # Reset physics ONCE at boot so any settling-impulse buildup
@@ -277,10 +277,10 @@ class KinematicDrive:
         self.__node.get_logger().info(
             f"KinematicDrive initialised. Robot='{self.__supervisor.getName()}', "
             f"cmd_vel topic='{topic}', timestep={self.__timestep_ms} ms, "
-            f"wheel_separation={self.WHEEL_SEPARATION} m, "
-            f"wheel_radius={self.WHEEL_RADIUS} m, "
-            f"initial_pose=(x={self.__x:.3f}, y={self.__y:.3f}, "
-            f"z={self.__z:.3f}, yaw={self.__yaw:.3f})."
+            f'wheel_separation={self.WHEEL_SEPARATION} m, '
+            f'wheel_radius={self.WHEEL_RADIUS} m, '
+            f'initial_pose=(x={self.__x:.3f}, y={self.__y:.3f}, '
+            f'z={self.__z:.3f}, yaw={self.__yaw:.3f}).'
         )
 
     def __cmd_vel_callback(self, msg: TwistStamped) -> None:
@@ -290,7 +290,8 @@ class KinematicDrive:
         self.__last_cmd_time_s = time.monotonic()
 
     def __simulate_firmware_motor_model(self, cmd_vx: float, cmd_wz: float):
-        """Project a twist through the firmware wheel pipeline.
+        """
+        Project a twist through the firmware wheel pipeline.
 
         Runs the (cmd_vx, cmd_wz) twist through the same wheel-level
         pipeline the real firmware applies, and returns the achievable
@@ -336,11 +337,11 @@ class KinematicDrive:
         half_track = self.WHEEL_SEPARATION * 0.5
 
         # 1. Per-wheel targets via diff-drive inverse kinematics.
-        left_target  = cmd_vx - cmd_wz * half_track
+        left_target = cmd_vx - cmd_wz * half_track
         right_target = cmd_vx + cmd_wz * half_track
 
         # 2. Saturate.
-        left_target  = max(-self.FIRMWARE_MAX_MPS, min(self.FIRMWARE_MAX_MPS, left_target))
+        left_target = max(-self.FIRMWARE_MAX_MPS, min(self.FIRMWARE_MAX_MPS, left_target))
         right_target = max(-self.FIRMWARE_MAX_MPS, min(self.FIRMWARE_MAX_MPS, right_target))
 
         # 3. Integrator resets on sign flip or stop-to-go.
@@ -351,36 +352,36 @@ class KinematicDrive:
             self.__left_pi_int_pwm = 0.0
         if _need_reset(right_target, self.__prev_right_target_mps):
             self.__right_pi_int_pwm = 0.0
-        self.__prev_left_target_mps  = left_target
+        self.__prev_left_target_mps = left_target
         self.__prev_right_target_mps = right_target
 
         # 4. PI loop in PWM space.
-        left_err  = left_target  - self.__left_actual_mps
+        left_err = left_target - self.__left_actual_mps
         right_err = right_target - self.__right_actual_mps
 
-        self.__left_pi_int_pwm  += self.FIRMWARE_PI_KI_PWM_PER_MPS_S * left_err  * dt
+        self.__left_pi_int_pwm += self.FIRMWARE_PI_KI_PWM_PER_MPS_S * left_err * dt
         self.__right_pi_int_pwm += self.FIRMWARE_PI_KI_PWM_PER_MPS_S * right_err * dt
-        self.__left_pi_int_pwm  = max(-self.FIRMWARE_PI_INT_MAX_PWM,
-                                       min(self.FIRMWARE_PI_INT_MAX_PWM,
-                                           self.__left_pi_int_pwm))
+        self.__left_pi_int_pwm = max(-self.FIRMWARE_PI_INT_MAX_PWM,
+                                     min(self.FIRMWARE_PI_INT_MAX_PWM,
+                                         self.__left_pi_int_pwm))
         self.__right_pi_int_pwm = max(-self.FIRMWARE_PI_INT_MAX_PWM,
-                                       min(self.FIRMWARE_PI_INT_MAX_PWM,
-                                           self.__right_pi_int_pwm))
+                                      min(self.FIRMWARE_PI_INT_MAX_PWM,
+                                          self.__right_pi_int_pwm))
 
-        left_pwm  = (left_target  * self.FIRMWARE_PWM_PER_MPS
-                     + self.FIRMWARE_PI_KP_PWM_PER_MPS * left_err
-                     + self.__left_pi_int_pwm)
+        left_pwm = (left_target * self.FIRMWARE_PWM_PER_MPS
+                    + self.FIRMWARE_PI_KP_PWM_PER_MPS * left_err
+                    + self.__left_pi_int_pwm)
         right_pwm = (right_target * self.FIRMWARE_PWM_PER_MPS
                      + self.FIRMWARE_PI_KP_PWM_PER_MPS * right_err
                      + self.__right_pi_int_pwm)
 
         # 5. Hard-clip to PAC5210 magnitude.
-        left_pwm  = max(-self.FIRMWARE_PWM_MAX, min(self.FIRMWARE_PWM_MAX, left_pwm))
+        left_pwm = max(-self.FIRMWARE_PWM_MAX, min(self.FIRMWARE_PWM_MAX, left_pwm))
         right_pwm = max(-self.FIRMWARE_PWM_MAX, min(self.FIRMWARE_PWM_MAX, right_pwm))
 
         # 7. Force-zero on a stopped wheel with target=0 (cuts residual hum).
         if left_target == 0.0 and abs(self.__left_actual_mps) < self.FIRMWARE_PI_HOLD_THRESH_MPS:
-            left_pwm  = 0.0
+            left_pwm = 0.0
         if right_target == 0.0 and abs(self.__right_actual_mps) < self.FIRMWARE_PI_HOLD_THRESH_MPS:
             right_pwm = 0.0
 
@@ -397,7 +398,7 @@ class KinematicDrive:
                     return 0.0
             return pwm / self.FIRMWARE_PWM_PER_MPS
 
-        self.__left_actual_mps  = _wheel_motor(left_pwm,  self.__left_actual_mps)
+        self.__left_actual_mps = _wheel_motor(left_pwm, self.__left_actual_mps)
         self.__right_actual_mps = _wheel_motor(right_pwm, self.__right_actual_mps)
 
         # 8. Re-derive the achievable body twist from the actual
@@ -460,7 +461,7 @@ class KinematicDrive:
         # actually rendering.
         gt = PoseStamped()
         gt.header.stamp = self.__node.get_clock().now().to_msg()
-        gt.header.frame_id = "map"
+        gt.header.frame_id = 'map'
         gt.pose.position.x = self.__x
         gt.pose.position.y = self.__y
         gt.pose.position.z = self.__z
