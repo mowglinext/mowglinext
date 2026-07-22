@@ -40,6 +40,8 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/buffer.hpp>
 
+#include "mowgli_nav2_plugins/ftc_reverse_escape.hpp"
+#include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 #include "mowgli_nav2_plugins/oscillation_detector.hpp"
 #include <Eigen/Geometry>
 #include <visualization_msgs/msg/marker.hpp>
@@ -203,6 +205,27 @@ private:
   /// still waiting, never returns false on the throw path (the throw
   /// unwinds the stack instead).
   bool waitOrThrowForObstacle(const std::string& reason);
+
+  /// Bounded reverse-escape gate for the WEDGED case. Called from
+  /// updateLateralDeviation instead of waitOrThrowForObstacle when the skirt
+  /// search runs out of headroom. If reverse-escape is enabled, a footprint is
+  /// available, budget remains, AND the rear footprint is clear of lethal cells,
+  /// it engages a straight reverse (sets reverse_escape_active_) and returns
+  /// true (caller returns; computeVelocityCommands emits the reverse). Otherwise
+  /// it clears the reverse state and forwards to waitOrThrowForObstacle(reason).
+  /// SAFETY-CRITICAL: probes the rear footprint at the ACTUAL robot pose
+  /// (costmap_ros_->getRobotPose) and never reverses when it would hit lethal or
+  /// the pose is unavailable.
+  bool reverseEscapeOrWait(const std::string& reason,
+                           const ObstacleDeviation::Footprint& footprint,
+                           double dt);
+
+  /// True while backing straight up as an obstacle-escape maneuver. Read in
+  /// computeVelocityCommands to emit the reverse command (bypassing the PID).
+  bool reverse_escape_active_{false};
+  /// Odom-integrated reversed distance for the current escape (m), hard-capped
+  /// at config_.obstacle_reverse_max_dist_m. Reset when the wedge clears.
+  double reverse_distance_done_{0.0};
 
   bool is_avoiding_{false};
   double target_lateral_deviation_{0.0};
@@ -453,6 +476,33 @@ private:
     /// (near-edge swaths legitimately run inside the keepout margin). When
     /// false, behaves exactly as before.
     bool confine_deviation_to_zone{true};
+
+    /// Model the robot as its actual rectangular chassis FOOTPRINT (from
+    /// costmap_ros_->getRobotFootprint()) for obstacle detection and the
+    /// deviation-clearance search, instead of a swept ±half_width line. The
+    /// footprint is rasterised against the local costmap at ≤ resolution spacing
+    /// and thresholds on TRUE lethal (254) — it models the body explicitly, so
+    /// FTC no longer leans on the costmap's inscribed-inflation band (253) as a
+    /// body-width proxy. When false (or no footprint available), falls back to
+    /// the obstacle_body_half_width line model at threshold 253.
+    bool use_footprint_clearance{true};
+
+    /// Bounded reverse-escape for the WEDGED case (both sides of an obstacle
+    /// blocked, or the skirt needed exceeds max_lateral_deviation). Before
+    /// holding/aborting, FTC backs STRAIGHT up (no rotation) a bounded distance
+    /// and re-attempts the deviation search from the new pose. SAFETY-CRITICAL
+    /// (blades + reversing): the rear footprint is checked against lethal cells
+    /// before every reverse tick and the maneuver fails safe (stops) on any
+    /// ambiguity. This is a distinct escape sub-state — it does NOT relax the
+    /// forward_only semantics of normal path following. OPT-IN (default false):
+    /// this drives the bladed robot BACKWARDS and has not been field-validated —
+    /// enable only after a supervised field test. When false the wedged case
+    /// holds/aborts exactly as before.
+    bool obstacle_reverse_enabled{false};
+    /// Hard cap on total reversed distance (m) per escape. Never exceeded.
+    double obstacle_reverse_max_dist_m{0.30};
+    /// Straight reverse speed (m/s). Must clear the firmware deadband (~0.05).
+    double obstacle_reverse_speed_mps{0.10};
   };
 
   Config config_;

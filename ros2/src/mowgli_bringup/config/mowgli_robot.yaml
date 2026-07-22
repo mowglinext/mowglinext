@@ -418,29 +418,53 @@ mowgli:
     # above does NOT affect this, see its comment). Injected into
     # FollowCoveragePath.obstacle_lookahead (nav2_params_base.yaml) as a
     # pose count: poses = round(this / kF2CSamplingM), kF2CSamplingM=0.05
-    # (navigation.launch.py). 1.5 m = 30 poses = the prior static default,
-    # ≈7 s of warning at mowing_speed 0.2 m/s. Clamped to [0.2, 5.0] m
-    # (>=4 poses so the detector always has a usable lookahead window).
-    obstacle_detection_range_m: 1.5
+    # (navigation.launch.py). 1.0 m = 20 poses, ≈5 s of warning at mowing_speed
+    # 0.2 m/s. Clamped to [0.2, 5.0] m (>=4 poses so the detector always has a
+    # usable lookahead window). 1.0 (was 1.5): FTC now models the true chassis
+    # FOOTPRINT (use_footprint_clearance in nav2_params_base.yaml) rather than a
+    # swept ±half_width line, so it reacts on the real body edge and needs less
+    # forward warning to skirt smoothly.
+    obstacle_detection_range_m: 1.0
     # How much SIDEWAYS room (m) FTC leaves beyond the chassis when it skirts a
     # detected obstacle. Raise this if the robot goes around obstacles but
-    # shaves past them. Added to FTC's obstacle_body_half_width for the
-    # clearance search ONLY — detection reach (obstacle_detection_range_m
-    # above) is unaffected, which is why this is a separate knob: widening the
-    # body half-width instead would also widen detection and re-open the
-    # "deviation > max -> hold 5 s" stalls that drove it to 0.12 on 2026-06-25.
-    # NOTE obstacle_inflation_radius canNOT buy this margin — the deviation
-    # checks threshold at cost 253, whose band width comes from the footprint's
-    # inscribed radius, not from inflation_radius; raising inflation only grows
-    # the 1..252 decay region, which those checks ignore. Clamped [0.0, 0.50]
-    # (above ~0.5 the widened sweep trips the mowing-zone guard on headland
-    # rings that hug the boundary, converting skirts into stalls).
-    obstacle_clearance_margin: 0.10
+    # shaves past them. With the footprint model, the chassis FOOTPRINT is
+    # expanded LATERALLY by this margin for the clearance search ONLY — detection
+    # reach (obstacle_detection_range_m above) is unaffected, which is why this
+    # is a separate knob: widening the body instead would also widen detection
+    # and re-open the "deviation > max -> hold 5 s" stalls. NOTE
+    # obstacle_inflation_radius canNOT buy this margin — the footprint checks
+    # threshold at cost 254 (TRUE lethal), above the inflation band entirely, so
+    # raising inflation only grows the 1..253 region the check ignores. Clamped
+    # [0.0, 0.50] (above ~0.5 the widened footprint trips the mowing-zone guard
+    # on headland rings that hug the boundary, converting skirts into stalls).
+    # 0.05 (was 0.10): the footprint already models the true body edge, so the
+    # old margin — sized to cover the line model's centerline-miss gap — is now
+    # double what's needed; halved to keep skirts tight while still clearing.
+    obstacle_clearance_margin: 0.05
     # How long (s) FTC holds zero velocity on a blocked or over-max deviation
     # before aborting the strip and handing back to the BT. Debounces transient
     # LiDAR returns (a person crossing) so they don't burn a BT retry.
     # Clamped [0.5, 60.0].
     obstacle_wait_timeout_s: 2.5
+    # Bounded reverse-escape (SAFETY-CRITICAL). When BOTH sides of an obstacle
+    # are blocked — or the skirt needed exceeds max_lateral_deviation — FTC backs
+    # STRAIGHT up (no rotation) a bounded distance and re-attempts the deviation
+    # search from the new pose, BEFORE holding zero velocity and aborting the
+    # strip. The rear chassis footprint is checked against TRUE-lethal cells
+    # before every reverse tick; the maneuver fails safe (stops → wait/abort) on
+    # any ambiguity (no footprint, rear obstacle, budget spent). This is a
+    # distinct escape sub-state and does NOT relax the forward-only behaviour of
+    # normal path following. OPT-IN — bounded reverse-escape drives the robot
+    # BACKWARDS; enable only after a supervised field test (see PR notes). Fails
+    # safe when false (wedged → hold/abort as before). Set to true only once the
+    # operator has validated it near the dock / people.
+    obstacle_reverse_enabled: false
+    # Hard cap on total reversed distance (m) per escape. Odom-integrated, never
+    # exceeded. Clamped [0.0, 1.0] by navigation.launch.py.
+    obstacle_reverse_max_dist_m: 0.30
+    # Straight reverse speed (m/s). Must clear the firmware ~0.05 deadband to
+    # move at all. Clamped [0.0, 0.30] by navigation.launch.py.
+    obstacle_reverse_speed_mps: 0.10
     # Extra margin (m) grown around DRAWN map obstacle polygons, applied in
     # BOTH the coverage planner (F2C holes are buffered outward before swath
     # planning) and the keepout mask (cells within the margin of an obstacle

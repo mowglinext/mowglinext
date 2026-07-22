@@ -414,27 +414,39 @@ controller_server:
       # `ros2 launch` of this file with no robot-config injection.
       obstacle_lookahead: 30
       obstacle_footprint: true
-      # Body half-width for the lateral obstacle-detection sweep. 2026-06-25
-      # FIELD: the detection threshold is 253 (lethal OR inscribed), and the
-      # costmap ALREADY inflates every obstacle by the inscribed radius (~0.14 m)
-      # — so a sample already "sees" obstacles 0.14 m out. Footprint half-width is
-      # 0.25 m, so the real centerline-miss gap is only 0.25−0.14 ≈ 0.11 m. The
-      # first cut (0.20) double-counted the inscribed radius → effective reach
-      # 0.20+0.14 ≈ 0.34 m, ~0.09 m too wide. That over-reach caught boundary
-      # structures / inflation halos the rings intentionally hug → 15× "deviation
-      # > max → hold 5 s" stalls per mow. 0.12 (≈ footprint_half − inscribed)
-      # gives effective reach 0.12+0.14 ≈ 0.26 m ≈ the full footprint, no over-reach.
+      # Model the robot as its actual rectangular chassis FOOTPRINT (from the
+      # costmap's robot_footprint, 0.60 m × 0.40 m) for BOTH detection and the
+      # deviation-clearance search, instead of the swept ±half_width line below.
+      # The footprint is rasterised against the local costmap at cell resolution
+      # and thresholds on TRUE LETHAL (254) only: it models the body explicitly,
+      # so FTC no longer leans on the inscribed-inflation band (253) as a
+      # body-width proxy — decoupling coverage-time avoidance from the costmap
+      # footprint/inflation radius entirely. When false (or no footprint
+      # published) it falls back to the obstacle_body_half_width line model at
+      # threshold 253 (the prior behaviour). true is the default.
+      use_footprint_clearance: true
+      # FALLBACK-ONLY body half-width for the lateral obstacle sweep, used when
+      # use_footprint_clearance is false. 2026-06-25 FIELD (line model): the
+      # detection threshold is 253 (lethal OR inscribed) and the costmap already
+      # inflates obstacles by the inscribed radius (~0.14 m), so 0.12 (≈
+      # footprint_half − inscribed) gave effective reach ≈ the full footprint
+      # without the over-reach that 0.20 caused. With the footprint model above
+      # this knob no longer governs coverage-time avoidance; kept for the
+      # fallback path only.
       obstacle_body_half_width: 0.12
-      # Extra lateral clearance demanded when SKIRTING, on top of the body
-      # half-width above. Applied to the clearance search only — detection
-      # stays at 0.12, so margin grows without re-opening the over-reach
-      # stalls that drove that value down. This is the knob to raise if the
-      # robot passes obstacles too closely; costmap inflation_radius CANNOT
-      # do it (the deviation checks threshold at 253, whose band is set by the
-      # footprint's inscribed radius, not by inflation_radius).
+      # Extra lateral room demanded when SKIRTING, on top of the body. With the
+      # footprint model the footprint is expanded LATERALLY by this margin for
+      # the clearance search only — detection reach is unchanged, so pass-by
+      # margin grows without re-opening the over-reach stalls that plagued the
+      # line model. 0.05 (was 0.10): the footprint already models the true body
+      # edge, so the old 0.10 (chosen to cover the line model's centerline-miss
+      # gap) is now double margin — halved to keep skirts tight to obstacles
+      # while still clearing them. This is the knob to raise if the robot passes
+      # obstacles too closely; costmap inflation_radius CANNOT do it (the
+      # footprint checks threshold at 254, above the inflation band entirely).
       # OVERRIDDEN AT LAUNCH by mowgli_robot.yaml's obstacle_clearance_margin,
       # clamped [0.0, 0.50] — see navigation.launch.py.
-      obstacle_clearance_margin: 0.10
+      obstacle_clearance_margin: 0.05
       enable_obstacle_deviation: true
       # OVERRIDDEN AT LAUNCH: navigation.launch.py injects
       # mowgli_robot.yaml.max_obstacle_avoidance_distance (default 2.0,
@@ -453,6 +465,24 @@ controller_server:
       # only the C++ declare_double default applied.
       obstacle_wait_timeout_s: 2.5
       obstacle_clear_hold_s: 1.5
+      # Bounded reverse-escape for the WEDGED case (both sides of an obstacle
+      # blocked, or the skirt needed exceeds max_lateral_deviation). Before
+      # holding zero velocity and aborting the strip, FTC backs STRAIGHT up (no
+      # rotation — a turning reverse re-creates the ±180° pirouette deadlock that
+      # forward_only avoids) a bounded distance, then re-attempts the deviation
+      # search from the new pose. SAFETY-CRITICAL (blades + reversing): the rear
+      # footprint is checked against TRUE-lethal cells before every reverse tick
+      # and the maneuver fails safe (stops → wait/abort) on any ambiguity (no
+      # footprint, rear blocked, budget spent). It is a distinct escape sub-state
+      # and does NOT relax forward_only for normal path following. Reversed
+      # distance is odom-integrated and hard-capped at obstacle_reverse_max_dist_m.
+      # OPT-IN — bounded reverse-escape drives the robot BACKWARDS; enable only
+      # after a supervised field test (see PR notes). Fails safe when false
+      # (wedged → hold/abort as before).
+      # OVERRIDDEN AT LAUNCH by mowgli_robot.yaml (see navigation.launch.py).
+      obstacle_reverse_enabled: false
+      obstacle_reverse_max_dist_m: 0.30
+      obstacle_reverse_speed_mps: 0.10   # must clear the firmware deadband (~0.05)
 
 # ---------------------------------------------------------------------------
 # Planner server
