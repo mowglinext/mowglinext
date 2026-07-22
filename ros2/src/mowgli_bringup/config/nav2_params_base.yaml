@@ -423,8 +423,15 @@ controller_server:
       # body-width proxy — decoupling coverage-time avoidance from the costmap
       # footprint/inflation radius entirely. When false (or no footprint
       # published) it falls back to the obstacle_body_half_width line model at
-      # threshold 253 (the prior behaviour). true is the default.
-      use_footprint_clearance: true
+      # threshold 253 (the prior behaviour).
+      # 2026-07-22 FIELD: defaulted to FALSE. The footprint model proved TOO
+      # conservative live — it found NO clear side even at max_lateral_deviation
+      # = 3.0 m for skirtable obstacles, so FTC flip-flopped hold/resume and the
+      # progress-checker aborted whole segments. The half-width line model
+      # (below) skirts those obstacles cleanly. Re-enable only after the
+      # footprint sweep is made less conservative (probe the front of the
+      # footprint, not its full length) and field-validated.
+      use_footprint_clearance: false
       # FALLBACK-ONLY body half-width for the lateral obstacle sweep, used when
       # use_footprint_clearance is false. 2026-06-25 FIELD (line model): the
       # detection threshold is 253 (lethal OR inscribed) and the costmap already

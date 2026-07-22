@@ -242,7 +242,7 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.confine_deviation_to_zone = declare_bool("confine_deviation_to_zone", true);
 
   // Footprint-polygon clearance + bounded reverse-escape.
-  config_.use_footprint_clearance = declare_bool("use_footprint_clearance", true);
+  config_.use_footprint_clearance = declare_bool("use_footprint_clearance", false);
   config_.obstacle_reverse_enabled = declare_bool("obstacle_reverse_enabled", false);
   config_.obstacle_reverse_max_dist_m = declare_double("obstacle_reverse_max_dist_m", 0.30);
   config_.obstacle_reverse_speed_mps = declare_double("obstacle_reverse_speed_mps", 0.10);
