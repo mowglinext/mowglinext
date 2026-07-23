@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Check firmware ros_lib headers (sync_ros_lib.py --check)
         run: python3 firmware/scripts/sync_ros_lib.py --check

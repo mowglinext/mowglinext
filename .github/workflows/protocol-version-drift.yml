@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Check protocol version vs wire fingerprint
         run: python3 firmware/scripts/protocol_version_guard.py --check
