@@ -37,7 +37,14 @@ What this script does
   propagate-a-new-default property (Invariant 15).
 - For each USER_OVERRIDE / calibration-output field, expects them to
   differ (or only exist in the installed file) and is silent.
-- Prints a diff and exits non-zero if any structural field has drifted.
+- Flags ANY field present in the installed file whose value EQUALS the
+  template default (issue #381). Such a key is a no-op at merge time, but
+  it masks future template-default changes (Invariant 15's propagate-a-
+  new-default property) — the fix is to delete the line, not to keep it in
+  sync. Calibration outputs and install-time seed keys (INSTALL_SEED) are
+  exempt: the committed sparse file deliberately carries those as
+  placeholders for the installer / GUI / calibration to fill in.
+- Prints a diff and exits non-zero on any of the above.
 
 User-tunable fields (datum, dock pose, IMU mounting calibration, GNSS
 transport, NTRIP creds…) and calibration outputs (ticks_per_meter, wheel
@@ -110,13 +117,29 @@ USER_OVERRIDE = {
 }
 
 # Per-robot calibration outputs written back into the sparse installed file
-# (Invariant 15). These legitimately live only in the installed file and are
-# expected to differ from any template seed — never treated as drift or orphans.
+# (Invariant 15, Bucket B). These legitimately live only in the installed file
+# and are expected to differ from any template seed — never treated as drift or
+# orphans. A template-equal value is also benign: it just means a
+# freshly-uncalibrated robot (e.g. dock_pose 0/0/0, imu_yaw 0.0).
 CALIBRATION_OUTPUT = {
     "ticks_per_meter",
     "wheel_pid_kp", "wheel_pid_ki", "wheel_pid_kd",
     "wheel_pid_integral_limit", "wheel_pid_pwm_per_mps",
     "imu_yaw", "declination_deg", "enable_mag_cal", "mag_calibration_path",
+    "dock_pose_x", "dock_pose_y", "dock_pose_yaw",
+}
+
+# Install-time choices (Invariant 15, Bucket A) the committed sparse file
+# deliberately carries as PLACEHOLDERS equal to the template defaults (datum
+# 0/0, empty NTRIP, default GNSS serial). The installer / onboarding GUI fills
+# them in via line-splice, so the lines must exist even while still holding the
+# default value — exempt from the padded-default check below.
+INSTALL_SEED = {
+    "mower_model", "lidar_enabled", "use_lidar",
+    "gnss_receiver_family", "gnss_serial_device", "gnss_serial_baud",
+    "datum_lat", "datum_lon", "datum_alt",
+    "ntrip_enabled", "ntrip_host", "ntrip_port",
+    "ntrip_user", "ntrip_password", "ntrip_mountpoint",
 }
 
 
@@ -124,6 +147,42 @@ def load(p: Path) -> dict:
     with p.open() as f:
         data = yaml.safe_load(f) or {}
     return data.get("mowgli", {}).get("ros__parameters", {})
+
+
+def find_structural_issues(tpl: dict, rt: dict) -> tuple[list, list]:
+    """Return (drift, no_default) for STRUCTURAL fields.
+
+    drift      — field present in BOTH files with differing values.
+    no_default — field present ONLY in the installed file (no template
+                 default → breaks reset-to-default).
+    """
+    drift = []
+    no_default = []
+    for k in sorted(STRUCTURAL):
+        if k in CALIBRATION_OUTPUT:
+            continue
+        in_tpl, in_rt = k in tpl, k in rt
+        if in_tpl and in_rt and tpl[k] != rt[k]:
+            drift.append((k, tpl[k], rt[k]))
+        elif in_rt and not in_tpl:
+            no_default.append((k, rt[k]))
+    return drift, no_default
+
+
+def find_padded_defaults(tpl: dict, rt: dict) -> list:
+    """Return keys in the installed file that duplicate the template default
+    (Invariant 15 violation: a no-op line that masks future template-default
+    changes). Applies to EVERY key — USER_OVERRIDE, STRUCTURAL, and
+    uncategorized alike — so newly-added template tunables are covered without
+    maintaining a list. Calibration outputs and install-time seed placeholders
+    are exempt.
+    """
+    exempt = CALIBRATION_OUTPUT | INSTALL_SEED
+    return [
+        (k, rt[k])
+        for k in sorted(rt)
+        if k not in exempt and k in tpl and tpl[k] == rt[k]
+    ]
 
 
 def main() -> int:
@@ -140,22 +199,17 @@ def main() -> int:
     # Structural drift under the sparse-config model (Invariant 15). The
     # installed file inherits every absent key from the template via
     # load_robot_params' deep-merge, so a structural field that lives ONLY in
-    # the template is the healthy, expected state — NOT drift. We flag:
-    #   * drift        — field present in BOTH files with differing values.
-    #   * no_default   — structural field present ONLY in the installed file
-    #                    (no template default → breaks reset-to-default).
+    # the template is the healthy, expected state — NOT drift.
     # Calibration outputs (ticks_per_meter, wheel PID…) are excluded: they are
     # per-robot and legitimately diverge from any template seed.
-    drift = []
-    no_default = []
-    for k in sorted(STRUCTURAL):
-        if k in CALIBRATION_OUTPUT:
-            continue
-        in_tpl, in_rt = k in tpl, k in rt
-        if in_tpl and in_rt and tpl[k] != rt[k]:
-            drift.append((k, tpl[k], rt[k]))
-        elif in_rt and not in_tpl:
-            no_default.append((k, rt[k]))
+    drift, no_default = find_structural_issues(tpl, rt)
+
+    # Keys in the sparse file that duplicate the template default (issue
+    # #381). Such a key is a no-op (deep-merge produces the same result with
+    # or without it) but breaks the propagate-a-new-template-default property
+    # (Invariant 15): when a maintainer later corrects the template default,
+    # the committed copy silently pins every robot to the stale value.
+    padded = find_padded_defaults(tpl, rt)
 
     # Surface orphan keys in the installed file — not on any known list and
     # absent from the template. Likely a typo or a stray default. Keys that
@@ -184,13 +238,25 @@ def main() -> int:
         print("Structural fields: in sync.")
         print()
 
+    if padded:
+        print(f"KEYS THAT DUPLICATE THE TEMPLATE DEFAULT ({len(padded)}):")
+        print("  Delete these lines from the installed file; the template "
+              "default is inherited automatically (Invariant 15). Keeping "
+              "the copy would mask future template-default changes.")
+        for k, v in padded:
+            print(f"  {k}: {v}")
+        print()
+    else:
+        print("Padded template defaults: none.")
+        print()
+
     if unexpected_in_runtime:
         print("Keys in installed file not categorized (treat as orphans?):")
         for k in unexpected_in_runtime:
             print(f"  {k} = {rt[k]}")
         print()
 
-    return 1 if (drift or no_default) else 0
+    return 1 if (drift or no_default or padded) else 0
 
 
 if __name__ == "__main__":

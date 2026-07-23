@@ -343,7 +343,21 @@ private:
         [this](nav2_msgs::msg::CollisionMonitorState::ConstSharedPtr msg)
         {
           std::lock_guard<std::mutex> lock(context_->context_mutex);
+          const auto now = std::chrono::steady_clock::now();
           const uint8_t prev = context_->collision_action_type;
+          // Detect a re-start of the stream after a silent gap: the monitor
+          // only publishes while cmd_vel_nav flows, so after a tree halt the
+          // latched action is stale. A message arriving after > kStaleGapSec
+          // of silence is a FRESH episode — re-stamp collision_stop_since even
+          // if the latched action was already STOP, so the SensorSafetyGuard
+          // hands the recovery machinery a full new window instead of firing
+          // instantly on the pre-halt timestamp (field 2026-07-23 deadlock).
+          constexpr double kStaleGapSec = 3.0;
+          const bool stream_was_stale =
+              context_->last_collision_state_time.time_since_epoch().count() != 0 &&
+              std::chrono::duration<double>(now - context_->last_collision_state_time).count() >
+                  kStaleGapSec;
+          context_->last_collision_state_time = now;
           context_->collision_action_type = msg->action_type;
 
           // Stamp the entry-into-STOP transition so IsObstacleStuck can
@@ -354,9 +368,9 @@ private:
           // robot for a few seconds and then walked off.
           if (msg->action_type == nav2_msgs::msg::CollisionMonitorState::STOP)
           {
-            if (prev != nav2_msgs::msg::CollisionMonitorState::STOP)
+            if (prev != nav2_msgs::msg::CollisionMonitorState::STOP || stream_was_stale)
             {
-              context_->collision_stop_since = std::chrono::steady_clock::now();
+              context_->collision_stop_since = now;
             }
           }
           else

@@ -715,12 +715,29 @@ public:
 /// IsObstacleStuck's min_duration_sec plus its backoff time, so the backoff
 /// recovery gets its chance first.
 ///
-/// Source signal: ctx->collision_action_type + ctx->collision_stop_since,
-/// maintained by the /collision_monitor_state subscriber. Pure read.
+/// Source signal: ctx->collision_action_type + ctx->collision_stop_since +
+/// ctx->last_collision_state_time, maintained by the /collision_monitor_state
+/// subscriber. Pure read.
+///
+/// FRESHNESS (field 2026-07-23 deadlock): the monitor only publishes state
+/// while cmd_vel_nav flows, so once this guard halts the tree the latched
+/// action goes stale — the first deployment held the robot forever (268 s
+/// observed) because the STOP could never clear. The guard therefore requires
+/// the state to be FRESH (≤ max_state_age_sec); a stale latch releases it,
+/// and if the obstacle is real the resumed cmd_vel flow re-publishes STOP
+/// within one monitor cycle (the subscriber then re-stamps a fresh episode,
+/// handing the recovery machinery a full new window).
+///
+/// min_duration_sec must exceed IsObstacleStuck's FULL backoff sequence —
+/// 3 attempts × (5 s STOP + backoff + 8 s cooldown) ≈ 45–50 s — or this
+/// guard preempts the recovery machinery before it can free the robot.
 ///
 /// Input ports:
-///   min_duration_sec (double, default 15.0) — continuous STOP duration
-///                                             before the guard trips.
+///   min_duration_sec  (double, default 60.0) — continuous STOP duration
+///                                              before the guard trips.
+///   max_state_age_sec (double, default 3.0)  — /collision_monitor_state
+///                                              freshness bound; older = the
+///                                              latch is stale → guard inert.
 class IsCollisionStopSustained : public BT::ConditionNode
 {
 public:
@@ -733,8 +750,11 @@ public:
   {
     return {
         BT::InputPort<double>("min_duration_sec",
-                              15.0,
+                              60.0,
                               "Continuous STOP duration (s) before the guard trips"),
+        BT::InputPort<double>("max_state_age_sec",
+                              3.0,
+                              "collision_monitor_state freshness bound (s); stale = inert"),
     };
   }
 
