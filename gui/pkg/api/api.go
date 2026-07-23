@@ -54,6 +54,7 @@ func NewAPI(dbProvider types.IDBProvider, dockerProvider types.IDockerProvider, 
 	SetupRoutes(apiGroup, firmwareProvider)
 	SystemRoutes(apiGroup)
 	DiagnosticsRoutes(apiGroup, dockerProvider, rosProvider, dbProvider)
+	RosbagRoutes(apiGroup, dockerProvider)
 	WeatherRoutes(apiGroup, dbProvider)
 	ParamsRoutes(apiGroup, rosProvider)
 	NtripRoutes(apiGroup)

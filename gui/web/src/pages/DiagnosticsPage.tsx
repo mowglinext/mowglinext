@@ -24,10 +24,15 @@ import {
     CloudServerOutlined,
     CompassOutlined,
     DashboardOutlined,
+    DeleteOutlined,
+    DownloadOutlined,
+    PlayCircleOutlined,
     ReloadOutlined,
     SettingOutlined,
     SoundOutlined,
+    StopOutlined,
     ThunderboltOutlined,
+    VideoCameraOutlined,
     WarningOutlined,
 } from "@ant-design/icons";
 import {ContentType} from "../api/Api.ts";
@@ -62,6 +67,7 @@ import {computeBatteryPercent, getBatteryLevel} from "../utils/battery.ts";
 import {yawFromQuaternion, rollFromQuaternion, pitchFromQuaternion, wrapDeg180} from "../utils/quaternion.ts";
 import {useApi} from "../hooks/useApi.ts";
 import {useFusionGraphDiagnostics} from "../hooks/useFusionGraphDiagnostics.ts";
+import {useRosbag, RosbagRecording} from "../hooks/useRosbag.ts";
 import {useFirmwareDebugLogs} from "../hooks/useFirmwareDebugLogs.ts";
 import {useMowerAction} from "../components/MowerActions.tsx";
 import {useImuYawCalibration} from "../hooks/useImuYawCalibration.ts";
@@ -78,6 +84,18 @@ import {groupAlertsByComponent} from "../utils/diagnosticsAlerts.ts";
 import {useValueSince} from "../hooks/useValueSince.ts";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
+
+function formatBytes(bytes: number): string {
+    if (!bytes || bytes < 0) return "0 B";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let value = bytes;
+    let i = 0;
+    while (value >= 1024 && i < units.length - 1) {
+        value /= 1024;
+        i++;
+    }
+    return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
 
 function secondsAgo(timestamp: string): number {
     return Math.floor((Date.now() - new Date(timestamp).getTime()) / 1000);
@@ -167,6 +185,7 @@ export const DiagnosticsPage = () => {
     const guiApi = useApi();
     const wheelRpm = useWheelRpm({wheelRadiusM: settings?.wheel_radius ?? 0.04475});
     const {stats: fusionStats} = useFusionGraphDiagnostics();
+    const rosbag = useRosbag(true);
 
     // ── derived values ───────────────────────────────────────────────────────
 
@@ -637,6 +656,160 @@ export const DiagnosticsPage = () => {
     // Wrap angle difference into (-180, 180] via the shared quaternion util.
     const deltaFilterMag = (!magStale && magYawDeg !== null) ? wrapDeg180(yaw - magYawDeg) : null;
     const deltaFilterCog = (!cogStale && cogYawDeg !== null) ? wrapDeg180(yaw - cogYawDeg) : null;
+
+    // ── Rosbag recording panel ───────────────────────────────────────────────
+    // One-click "record all topics" for field debugging: start a capture, drive
+    // the robot to reproduce the issue, stop, then download the .tar.gz to send
+    // back for offline analysis. The recorder runs inside mowgli-ros2.
+
+    const handleRosbagStart = async () => {
+        try {
+            const r = await rosbag.start();
+            notification.success({message: t('diagnosticsPage.rosbagStarted'), description: r?.name});
+        } catch (e: any) {
+            notification.error({message: t('diagnosticsPage.rosbagStartFailed'), description: e.message});
+        }
+    };
+    const handleRosbagStop = async () => {
+        try {
+            const r = await rosbag.stop();
+            notification.success({message: t('diagnosticsPage.rosbagStopped'), description: r?.stopped_name});
+        } catch (e: any) {
+            notification.error({message: t('diagnosticsPage.rosbagStopFailed'), description: e.message});
+        }
+    };
+    const confirmRosbagDelete = (name: string) => {
+        modal.confirm({
+            title: t('diagnosticsPage.rosbagDeleteConfirmTitle'),
+            content: t('diagnosticsPage.rosbagDeleteConfirmBody', {name}),
+            okText: t('diagnosticsPage.rosbagDelete'),
+            cancelText: t('diagnosticsPage.calibrationCancel'),
+            okButtonProps: {danger: true},
+            onOk: async () => {
+                try {
+                    await rosbag.remove(name);
+                    notification.success({message: t('diagnosticsPage.rosbagDeleted'), description: name});
+                } catch (e: any) {
+                    notification.error({message: t('diagnosticsPage.rosbagDeleteFailed'), description: e.message});
+                }
+            },
+        });
+    };
+
+    const rosbagActive = rosbag.status?.active ?? false;
+    const rosbagRecordings = rosbag.status?.recordings ?? [];
+
+    const sectionRosbag = (
+        <Row gutter={[12, 12]}>
+            <Col span={24}>
+                <Card
+                    title={
+                        <Space>
+                            <VideoCameraOutlined/>
+                            {t('diagnosticsPage.rosbagTitle')}
+                            {rosbagActive && (
+                                <Tag color="processing">
+                                    {t('diagnosticsPage.rosbagRecordingTag', {name: rosbag.status?.active_name ?? ""})}
+                                </Tag>
+                            )}
+                        </Space>
+                    }
+                    size="small"
+                    extra={
+                        <Space>
+                            <Button
+                                size="small"
+                                type="primary"
+                                icon={<PlayCircleOutlined/>}
+                                onClick={handleRosbagStart}
+                                loading={rosbag.busy === "start"}
+                                disabled={rosbagActive || rosbag.busy !== null}
+                            >
+                                {t('diagnosticsPage.rosbagStart')}
+                            </Button>
+                            <Button
+                                size="small"
+                                danger
+                                icon={<StopOutlined/>}
+                                onClick={handleRosbagStop}
+                                loading={rosbag.busy === "stop"}
+                                disabled={!rosbagActive || rosbag.busy !== null}
+                            >
+                                {t('diagnosticsPage.rosbagStop')}
+                            </Button>
+                        </Space>
+                    }
+                >
+                    <Space direction="vertical" size="small" style={{width: "100%"}}>
+                        <Alert
+                            type="info"
+                            showIcon
+                            message={t('diagnosticsPage.rosbagHint')}
+                        />
+                        {rosbag.error && (
+                            <Alert type="warning" showIcon message={rosbag.error}/>
+                        )}
+                        <Table<RosbagRecording>
+                            size="small"
+                            rowKey="name"
+                            dataSource={rosbagRecordings}
+                            pagination={false}
+                            locale={{emptyText: t('diagnosticsPage.rosbagEmpty')}}
+                            columns={[
+                                {
+                                    title: t('diagnosticsPage.rosbagColName'),
+                                    dataIndex: "name",
+                                    key: "name",
+                                    render: (name: string, row: RosbagRecording) => (
+                                        <Space>
+                                            <Typography.Text>{name}</Typography.Text>
+                                            {row.active && <Tag color="processing">{t('diagnosticsPage.rosbagLive')}</Tag>}
+                                        </Space>
+                                    ),
+                                },
+                                {
+                                    title: t('diagnosticsPage.rosbagColSize'),
+                                    dataIndex: "size_bytes",
+                                    key: "size_bytes",
+                                    render: (size: number) => formatBytes(size),
+                                },
+                                {
+                                    title: t('diagnosticsPage.rosbagColDate'),
+                                    dataIndex: "modified_at",
+                                    key: "modified_at",
+                                    render: (d: string) => (d ? new Date(d).toLocaleString() : "—"),
+                                },
+                                {
+                                    title: t('diagnosticsPage.rosbagColActions'),
+                                    key: "actions",
+                                    render: (_: unknown, row: RosbagRecording) => (
+                                        <Space>
+                                            <Button
+                                                size="small"
+                                                icon={<DownloadOutlined/>}
+                                                href={rosbag.downloadUrl(row.name)}
+                                                disabled={row.active}
+                                                target="_blank"
+                                            >
+                                                {t('diagnosticsPage.rosbagDownload')}
+                                            </Button>
+                                            <Button
+                                                size="small"
+                                                danger
+                                                icon={<DeleteOutlined/>}
+                                                onClick={() => confirmRosbagDelete(row.name)}
+                                                disabled={row.active}
+                                            />
+                                        </Space>
+                                    ),
+                                },
+                            ]}
+                        />
+                    </Space>
+                </Card>
+            </Col>
+        </Row>
+    );
 
     // ── Fusion Graph (iSAM2) panel ───────────────────────────────────────────
     // fusion_graph_node is the sole map-frame localizer; the panel
@@ -1737,6 +1910,11 @@ export const DiagnosticsPage = () => {
                             children: sectionSensors,
                         },
                         {
+                            key: "rosbag",
+                            label: <Space><VideoCameraOutlined/> {t('diagnosticsPage.rosbagTitle')}</Space>,
+                            children: sectionRosbag,
+                        },
+                        {
                             key: "ros",
                             label: t('diagnosticsPage.rosDiagnostics'),
                             children: sectionRosDiagnostics,
@@ -1756,6 +1934,7 @@ export const DiagnosticsPage = () => {
             label: <Space><CloudServerOutlined/> {t('diagnosticsPage.tabSystem')}</Space>,
             children: <Space direction="vertical" size="middle" style={{width: "100%"}}>
                 {sectionSystem}
+                {sectionRosbag}
                 {sectionRosDiagnostics}
             </Space>,
         },
