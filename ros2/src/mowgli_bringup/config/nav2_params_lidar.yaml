@@ -136,10 +136,13 @@ local_costmap:
 
 collision_monitor:
   ros__parameters:
-    # FootprintApproach is the hard-stop layer, PolygonSlow the soft slowdown.
-    # Order: the approach (pre-contact halt) is evaluated first, then the
-    # slowdown. See the base-file collision_monitor comment for the full
-    # history of why the static PolygonStop was replaced.
+    # FootprintApproach + PolygonStopNarrow are the pre-contact stop layers
+    # (both velocity-projected `approach`), PolygonSlow the soft slowdown. Every
+    # active gate is direction-aware: none is a static `stop` box, because a
+    # static stop freezes a REVERSE-escape command (issue #393). Order: the
+    # approach halts are evaluated first, then the slowdown. See the base-file
+    # collision_monitor comment for the full history of why the static
+    # PolygonStop was replaced.
     polygons: ["FootprintApproach", "PolygonStopNarrow", "PolygonSlow"]
     # HARD STOP — velocity-projected, NOT a static box. Projects the published
     # footprint forward along the CURRENT command for time_before_collision and
@@ -179,21 +182,46 @@ collision_monitor:
       visualize: true
       polygon_pub_topic: "polygon_approach"
       enabled: true
-    # NARROW near-field hard stop (SAFETY_REVIEW_2026-07-23 A-C1): last-ditch
-    # catcher for thin obstacles dead ahead of the chassis front. Unlike the
-    # old full-chassis static PolygonStop (disabled below — it froze cmd_vel
-    # mid-skirt on obstacles already steered around), this box covers ONLY the
-    # band immediately IN FRONT of the chassis leading edge (x 0.48→0.62), so
-    # an obstacle FTC has skirted — abeam or behind — can never re-trigger it.
-    # min_points 2: at 0.6 m even a 2 cm cane subtends ~2 bins; anything
-    # physically inside this 14 cm band on a collision course must stop us.
-    # If it flaps at the dock approach, note docking cmd_vel bypasses
-    # collision_monitor (twist_mux /cmd_vel_docking lane) — only nav motion
-    # is gated.
+    # NARROW near-field catcher (SAFETY_REVIEW_2026-07-23 A-C1): last-ditch
+    # catcher for thin obstacles dead ahead of the chassis front, covering ONLY
+    # the band immediately IN FRONT of the chassis leading edge (x 0.48→0.62).
+    #
+    # VELOCITY-PROJECTED (`approach`), NOT a static `stop` (issue #393,
+    # 2026-07-23). A-C1 originally shipped this as a static `stop` box — but a
+    # `stop` polygon zeroes the ENTIRE twist whenever ≥min_points fall inside it,
+    # with NO regard for the command's DIRECTION. So when the robot wedged
+    # nose-to-obstacle and Nav2's recovery BackUp (or the FTC reverse-escape from
+    # #391) commanded a REVERSE to back out, this front box saw the obstacle and
+    # froze the escape command — BackUp never moved, timed out (err 711) even with
+    # the rear FULLY OPEN, and the robot looped spin(703)/backup forever. Both the
+    # recovery BackUp AND the FTC reverse-escape route the same way
+    # (behavior/controller → cmd_vel_nav → collision_monitor → cmd_vel_monitored),
+    # so this one static box defeated every reverse-out path.
+    #
+    # As `approach` the box is swept along the CURRENT command instead: driving
+    # FORWARD it still catches a thin post and eases the robot to a stop just short
+    # of contact (the A-C1 intent); commanding REVERSE projects the box BACKWARD,
+    # so a front obstacle is off the sweep and can no longer freeze the escape.
+    # This is the SAME lesson that retired the static full-chassis PolygonStop
+    # (disabled below): static stop boxes freeze cmd_vel; velocity-projected
+    # approach polygons don't. FootprintApproach's own backward projection still
+    # halts a reverse before a REAR obstacle, so the escape stays rear-safe.
+    #
+    # min_points 2 keeps the thin-obstacle sensitivity A-C1 wanted (at 0.6 m a
+    # 2 cm cane subtends ~2 bins); the narrow box just past the footprint front
+    # (0.50) gives a slightly longer forward reach than FootprintApproach's
+    # real-footprint sweep. If it flaps at the dock approach, note docking cmd_vel
+    # bypasses collision_monitor (twist_mux /cmd_vel_docking lane) — only nav
+    # motion is gated.
     PolygonStopNarrow:
       type: "polygon"
       points: "[[0.62, 0.20], [0.62, -0.20], [0.48, -0.20], [0.48, 0.20]]"
-      action_type: "stop"
+      action_type: "approach"
+      # Match FootprintApproach's projection horizon (1.2 s) so the two front
+      # catchers agree on when to start easing off; 0.1 s step is fine for a
+      # near-field box.
+      time_before_collision: 1.2
+      simulation_time_step: 0.1
       min_points: 2
       visualize: true
       polygon_pub_topic: "polygon_stop_narrow"

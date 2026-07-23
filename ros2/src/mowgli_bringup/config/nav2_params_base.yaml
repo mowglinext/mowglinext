@@ -531,7 +531,19 @@ planner_server:
       max_iterations: 1000000
       max_on_approach_iterations: 1000
       max_planning_time: 8.0
-      cost_travel_multiplier: 2.0
+      # 3.0 (was 2.0, issue #393, 2026-07-23): weight of the costmap cell cost in
+      # A*'s traversal term. Higher = the transit planner prefers routes with more
+      # BERTH from obstacle-adjacent (inflated) cells, so a blade-off transit hop is
+      # less likely to be handed an un-followable approach that noses the chassis to
+      # within ~0.7 m of a lethal cell in a pocket (the RPP transit-wedge). This is
+      # the SAFE berth lever: it only re-weights already-traversable cells, so a
+      # tight gap between areas stays plannable — unlike raising global inflation_radius,
+      # which is a documented landmine (0.30/0.40 m made the footprint corners land in
+      # the inscribed band → Smac "Start occupied" → 9-min TRANSIT stalls, see
+      # global_costmap.inflation_layer below). Berth here is still bounded by the
+      # 0.20 m global inflation gradient, so it is a NUDGE — the #393 reverse-escape
+      # (collision_monitor PolygonStopNarrow → approach) is the real wedge safety net.
+      cost_travel_multiplier: 3.0
       use_final_approach_orientation: false
       smoother:
         max_iterations: 1000
