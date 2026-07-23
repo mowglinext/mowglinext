@@ -160,22 +160,27 @@ export const MapToolbar = ({
                         {t("mapToolbar.cancelRecording")}
                     </AsyncButton>
                 </>
-            ) : isIdle ? (
-                <AsyncButton
-                    type="primary"
-                    icon={<PlayCircleOutlined />}
-                    onAsyncClick={onStart!}
-                >
-                    {t("mapToolbar.start")}
-                </AsyncButton>
             ) : (
-                <AsyncButton
-                    type="primary"
-                    icon={<HomeOutlined />}
-                    onAsyncClick={onHome!}
-                >
-                    {t("mapToolbar.home")}
-                </AsyncButton>
+                <>
+                    {isIdle && (
+                        <AsyncButton
+                            type="primary"
+                            icon={<PlayCircleOutlined />}
+                            onAsyncClick={onStart!}
+                        >
+                            {t("mapToolbar.start")}
+                        </AsyncButton>
+                    )}
+                    {/* Home (return-to-dock) is always available outside recording
+                        so the robot can be sent back even while idle off-dock. */}
+                    <AsyncButton
+                        type={isIdle ? "default" : "primary"}
+                        icon={<HomeOutlined />}
+                        onAsyncClick={onHome!}
+                    >
+                        {t("mapToolbar.home")}
+                    </AsyncButton>
+                </>
             )}
 
             {!emergency ? (

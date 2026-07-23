@@ -46,14 +46,23 @@ describe('MapToolbar', () => {
         expect(screen.getByText(en.mapToolbar.editMap)).toBeInTheDocument();
     });
 
-    it('shows Start button when IDLE', () => {
+    it('shows both Start and Home buttons when IDLE', () => {
         render(<MapToolbar {...defaultProps} stateName="IDLE" />);
         expect(screen.getByText(en.mapToolbar.start)).toBeInTheDocument();
+        expect(screen.getByText(en.mapToolbar.home)).toBeInTheDocument();
     });
 
-    it('shows Home button when not IDLE', () => {
+    it('shows Home but not Start when not IDLE', () => {
         render(<MapToolbar {...defaultProps} stateName="MOWING" />);
         expect(screen.getByText(en.mapToolbar.home)).toBeInTheDocument();
+        expect(screen.queryByText(en.mapToolbar.start)).not.toBeInTheDocument();
+    });
+
+    it('calls onHome when Home clicked', async () => {
+        const user = userEvent.setup();
+        render(<MapToolbar {...defaultProps} stateName="IDLE" />);
+        await user.click(screen.getByText(en.mapToolbar.home));
+        expect(defaultProps.onHome).toHaveBeenCalled();
     });
 
     it('shows Emergency On when no emergency', () => {
