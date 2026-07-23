@@ -508,4 +508,19 @@ mowgli:
     xy_goal_tolerance: 0.1         # metres — acceptable goal position error
     yaw_goal_tolerance: 0.1        # radians — acceptable heading error
     coverage_xy_tolerance: 0.50    # metres — must be >= FTC max_goal_distance_error (0.50): FTC parks that far short of the goal, so a tighter gate never completes the area (re-mow). Floored at FTC's value by navigation.launch.py.
-    progress_timeout_sec: 10.0     # seconds without progress before recovery
+    # Feeds controller_server progress_checker.movement_time_allowance (via
+    # navigation.launch.py — it OVERWRITES the value in nav2_params_base.yaml).
+    # How long the robot may fail to move required_movement_radius (0.15 m) on a
+    # FollowCoveragePath strip before Nav2 aborts it (err 105 "Failed to make
+    # progress"). On abort the coverage BT steps the resume cursor ~0.80 m past
+    # the stall and skips that span, leaving an un-mowed band.
+    # 2026-07-23 (#396): raised 10.0 → 30.0. At 10 s a transient localization
+    # jump (RTK wrong-fix rejection flood + snap) coinciding with a
+    # collision_monitor approach-slow near a boundary reliably stalled the strip
+    # long enough to abort mid-swath, producing ~0.80 m un-mowed bands after an
+    # otherwise-successful mow. The robot recovers from these jumps within
+    # ~12-15 s; 30 s rides through them with margin while still catching a truly
+    # stuck robot. Genuine wedges are handled by collision_monitor + FTC
+    # obstacle-deviation + reverse-escape, not this timer, so the longer wait is
+    # a coverage-completeness gain, not a safety regression.
+    progress_timeout_sec: 30.0     # seconds without progress before a strip is aborted+skipped

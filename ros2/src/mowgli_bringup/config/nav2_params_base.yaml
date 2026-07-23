@@ -120,6 +120,12 @@ controller_server:
       plugin: "nav2_controller::PoseProgressChecker"
       required_movement_radius: 0.15
       required_movement_angle: 0.5     # rad (~28°), gates corner pivots
+      # NOTE: this value is OVERWRITTEN at launch by navigation.launch.py from
+      # mowgli_robot.yaml's operator knob `progress_timeout_sec` (default 30.0
+      # s). Change the timeout THERE, not here — editing this line has no
+      # effect on the running robot. Kept in sync only to avoid confusion.
+      # See #396: 10 s was too tight to ride through a transient RTK-jump +
+      # collision-slow stall and aborted mowing strips mid-swath (~0.80 m bands).
       movement_time_allowance: 30.0
 
     stopped_goal_checker:
