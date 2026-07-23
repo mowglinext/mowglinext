@@ -12,6 +12,8 @@ import {useThemeMode} from "../theme/ThemeContext.tsx";
 
 interface BTStateGraphProps {
   current: string | undefined;
+  /** Optional detail appended to the current-state pill (e.g. "12 min"). */
+  detail?: string;
 }
 
 interface Node {
@@ -40,10 +42,12 @@ const NODES: Node[] = [
   {key: 'CHARGING',      labelKey: 'nodeCharge',   x: 720, y: 70, group: 'cycle'},
 
   // fault row (below)
+  {key: 'OBSTACLE_BACKOFF',          labelKey: 'nodeObstacle', x: 170, y: 140, group: 'fault'},
   {key: 'RAIN_DETECTED_DOCKING',     labelKey: 'nodeRainDock', x: 280, y: 140, group: 'fault'},
   {key: 'LOW_BATTERY_DOCKING',       labelKey: 'nodeLowBatt',  x: 390, y: 140, group: 'fault'},
   {key: 'BOUNDARY_RECOVERY',         labelKey: 'nodeRecovery', x: 500, y: 140, group: 'fault'},
   {key: 'EMERGENCY',                 labelKey: 'nodeEstop',    x: 610, y: 140, group: 'fault'},
+  {key: 'FAILURE',                   labelKey: 'nodeFailure',  x: 720, y: 140, group: 'fault'},
 
   // manual row (above)
   {key: 'MANUAL_MOWING',  labelKey: 'nodeManual',    x: 390, y: 20,  group: 'manual'},
@@ -65,14 +69,17 @@ const EDGES: Edge[] = [
 ];
 
 // Aliases — the high-level status can report finer states; collapse them
-// to the diagram's canonical node for highlighting purposes.
+// to the diagram's canonical node for highlighting purposes. Keep this in
+// sync with the state_name values in mowgli_behavior's BT XML files.
 const STATE_ALIASES: Record<string, string> = {
   'IDLE': 'IDLE_DOCKED',
   'RESUMING_UNDOCKING': 'UNDOCKING',
   'RESUMING_AFTER_RAIN': 'TRANSIT',
   'CRITICAL_BATTERY_DOCKING': 'LOW_BATTERY_DOCKING',
+  'CRITICAL_BATTERY_CHARGING': 'CHARGING',
   'COVERAGE_FAILED_DOCKING': 'RETURNING_HOME',
-  'SKIP_STRIP': 'MOWING',
+  'PLANNING': 'MOWING',
+  'DYNAMIC_OBSTACLE_CLEARED': 'OBSTACLE_BACKOFF',
   'PREFLIGHT_CHECK': 'UNDOCKING',
   'CALIBRATING_HEADING': 'TRANSIT',
   'BOUNDARY_EMERGENCY_STOP': 'EMERGENCY',
@@ -82,10 +89,15 @@ const STATE_ALIASES: Record<string, string> = {
   'RAIN_TIMEOUT': 'IDLE_DOCKED',
 };
 
-function nodeFor(state: string | undefined): string | null {
+export function nodeFor(state: string | undefined): string | null {
   if (!state) return null;
   if (NODES.some(n => n.key === state)) return state;
-  return STATE_ALIASES[state] ?? null;
+  const alias = STATE_ALIASES[state];
+  if (alias) return alias;
+  // Terminal-failure states (NAV_TO_DOCK_FAILED, CHARGER_FAILED, …) collapse
+  // onto the generic failure node so a fault is never rendered as "nothing".
+  if (/(_FAILED|_UNREACHABLE)$/.test(state)) return 'FAILURE';
+  return null;
 }
 
 const keyframes = `
@@ -103,7 +115,7 @@ const NODE_H = 28;
 // Cycle order used to highlight the path the robot has already passed through.
 const CYCLE_ORDER = ['IDLE_DOCKED', 'UNDOCKING', 'TRANSIT', 'MOWING', 'RETURNING_HOME', 'DOCKING', 'CHARGING'];
 
-export function BTStateGraph({current}: BTStateGraphProps) {
+export function BTStateGraph({current, detail}: BTStateGraphProps) {
   const {t} = useTranslation();
   const {colors} = useThemeMode();
   const activeKey = nodeFor(current);
@@ -170,7 +182,7 @@ export function BTStateGraph({current}: BTStateGraphProps) {
               fontSize: 11, fontWeight: 700, color: colors.accent,
               letterSpacing: '0.04em',
             }}>
-              {current}
+              {detail ? `${current} · ${detail}` : current}
             </span>
           </div>
         )}

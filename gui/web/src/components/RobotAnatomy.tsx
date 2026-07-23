@@ -220,9 +220,11 @@ export function RobotAnatomy({inputs}: RobotAnatomyProps) {
         <div className="mn-display" style={{fontSize: 24, color: colors.text, marginTop: 4, lineHeight: 1.1}}>
           {info.label}
         </div>
-        <div className="mn-num" style={{
-          fontSize: 20, color: toneColor(info.tone),
-          marginTop: 8, lineHeight: 1,
+        <div style={{
+          fontSize: 18, color: toneColor(info.tone),
+          marginTop: 8, lineHeight: 1.1,
+          fontFamily: "'Space Grotesk', 'Inter', sans-serif",
+          fontVariantNumeric: "tabular-nums",
         }}>
           {info.value}
         </div>
