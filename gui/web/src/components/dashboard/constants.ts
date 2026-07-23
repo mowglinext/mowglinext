@@ -180,10 +180,11 @@ export const KEYFRAMES_CSS = `
   text-transform: uppercase;
   font-weight: 600 !important;
 }
+/* Data numerals use Space Grotesk: Instrument Serif's zero glyph reads as
+   "()" at statistic sizes, which looks like a broken value. */
 .ant-statistic-content-value,
-.ant-statistic-content-prefix,
-.ant-statistic-content-suffix {
-  font-family: 'Instrument Serif', 'Iowan Old Style', Georgia, serif !important;
+.ant-statistic-content-prefix {
+  font-family: 'Space Grotesk', 'Inter', sans-serif !important;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.015em;
 }
