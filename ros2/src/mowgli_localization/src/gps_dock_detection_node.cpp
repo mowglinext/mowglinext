@@ -79,7 +79,11 @@
  *     Δ is STABILISED: a jump larger than cog_yaw_max_jump_deg is rejected (for
  *     the TF source this guards a corrupt-reload yaw step; for COG, the
  *     reverse-flip), survivors EMA-smoothed, first sample seeds. Set
- *     delta_from_map_odom:=false to fall back to the COG estimator.
+ *     delta_from_map_odom:=false to fall back to the COG estimator. The gate
+ *     ALSO self-heals a STALE latch (issue #390): if it rejects a MUTUALLY
+ *     consistent offset for reseed_after_s it re-seeds Δ to it, so a bad Δ
+ *     slewed in during the docked mag/IMU recal cannot lock out recovery
+ *     forever. See delta_gate.hpp.
  *
  * opennav re-transforms the odom-frame dock pose into base_footprint every
  * control loop via the (trusted, continuous) odom→base_footprint TF.
@@ -108,6 +112,7 @@
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
+#include "mowgli_localization/delta_gate.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -187,6 +192,19 @@ public:
     // surviving noise with cog_yaw_ema_alpha. The first sample seeds Δ directly.
     cog_yaw_max_jump_deg_ = declare_parameter<double>("cog_yaw_max_jump_deg", 25.0);
     cog_yaw_ema_alpha_ = declare_parameter<double>("cog_yaw_ema_alpha", 0.15);
+
+    // Stale-latch recovery (issue #390). The jump gate above holds the last good
+    // Δ across a transient, but must NOT latch a stale baseline forever: if the
+    // docked IMU/mag recal slews Δ off truth, every correct sample afterwards
+    // looks like a >max_jump jump and is rejected indefinitely. So if rejected
+    // samples stay MUTUALLY consistent for reseed_after_s, the held baseline is
+    // the outlier and Δ is re-seeded to the settled candidate. A flapping
+    // transient never accumulates the window, so a glitch cannot re-latch. Set
+    // <= 0 to disable (legacy hold-forever behaviour).
+    reseed_after_s_ = declare_parameter<double>("reseed_after_s", 5.0);
+
+    gate_ = mowgli_localization::DeltaGate(mowgli_localization::DeltaGateConfig{
+        cog_yaw_max_jump_deg_ * M_PI / 180.0, cog_yaw_ema_alpha_, reseed_after_s_});
 
     detection_pub_ =
         create_publisher<geometry_msgs::msg::PoseStamped>("detected_dock_pose", rclcpp::QoS(1));
@@ -273,21 +291,22 @@ private:
     // start heading, so a yaw offset Δ (often tens of degrees) separates map and
     // odom. The displacement is computed in map (from GPS) and MUST be rotated by
     // −Δ into odom; otherwise, far from the dock (large displacement during the
-    // approach) the target is flung to the wrong side. Δ = map_to_odom_yaw_, the
+    // approach) the target is flung to the wrong side. Δ = gate_.value(), the
     // SAME offset the orientation below uses, so the two stay consistent.
+    const double delta = gate_.value();  // Δ = map→odom yaw (stabilised by gate_)
     const double dx = dock_pose_x_ - msg->pose.pose.position.x;  // dock − robot, in map
     const double dy = dock_pose_y_ - msg->pose.pose.position.y;
-    const double c = std::cos(map_to_odom_yaw_);  // R(−Δ): map displacement → odom
-    const double s = std::sin(map_to_odom_yaw_);
+    const double c = std::cos(delta);  // R(−Δ): map displacement → odom
+    const double s = std::sin(delta);
     const double dx_odom = c * dx + s * dy;
     const double dy_odom = -s * dx + c * dy;
     const double dock_x_odom = robot_odom.getOrigin().x() + dx_odom;
     const double dock_y_odom = robot_odom.getOrigin().y() + dy_odom;
 
-    // ORIENTATION: map dock yaw minus the (graph-independent) map→odom yaw Δ.
-    // Δ comes from /imu/cog_heading (see on_cog_heading); default 0 until a COG
-    // sample arrives (map/odom heading aligned right after a clean seed).
-    const double dock_yaw_odom = dock_pose_yaw_ - map_to_odom_yaw_;
+    // ORIENTATION: map dock yaw minus the map→odom yaw Δ. Δ comes from the live
+    // map→odom TF (default) or /imu/cog_heading, stabilised by gate_; 0 until the
+    // first sample seeds it (map/odom heading aligned right after a clean seed).
+    const double dock_yaw_odom = dock_pose_yaw_ - delta;
 
     last_dock_odom_ = make_planar_transform(dock_x_odom, dock_y_odom, dock_yaw_odom);
     have_detection_ = true;
@@ -319,51 +338,41 @@ private:
     apply_delta_sample(yaw_cog_map - yaw_robot_odom, "COG");
   }
 
-  // Fold a Δ (map→odom yaw) measurement into map_to_odom_yaw_: seed on the
-  // first sample, else reject a jump larger than cog_yaw_max_jump_deg (guards a
-  // corrupt-reload TF step / COG reverse-flip) and EMA-smooth the remainder.
+  // Fold a Δ (map→odom yaw) measurement through the stabilisation gate (seed /
+  // jump-reject+EMA / stale-latch re-seed) and log the outcome. All the math
+  // lives in delta_gate.hpp so it unit-tests without ROS.
   void apply_delta_sample(double delta, const char* source)
   {
-    while (delta > M_PI)
-      delta -= 2.0 * M_PI;
-    while (delta <= -M_PI)
-      delta += 2.0 * M_PI;
-
-    if (!have_yaw_offset_)
+    const double deg = 180.0 / M_PI;
+    switch (gate_.update(delta, now().seconds()))
     {
-      map_to_odom_yaw_ = delta;
-      have_yaw_offset_ = true;
-      RCLCPP_INFO(get_logger(),
-                  "Acquired map→odom yaw offset Δ=%.1f° from %s.",
-                  delta * 180.0 / M_PI,
-                  source);
-      return;
+      case mowgli_localization::DeltaGateAction::SEEDED:
+        RCLCPP_INFO(get_logger(),
+                    "Acquired map→odom yaw offset Δ=%.1f° from %s.",
+                    gate_.value() * deg,
+                    source);
+        break;
+      case mowgli_localization::DeltaGateAction::RESEEDED:
+        RCLCPP_WARN(get_logger(),
+                    "Re-seeding stale map→odom Δ from %s: held baseline rejected a consistent "
+                    "offset for ≥%.1f s — adopting Δ=%.1f° (stale-latch recovery, issue #390).",
+                    source,
+                    reseed_after_s_,
+                    gate_.value() * deg);
+        break;
+      case mowgli_localization::DeltaGateAction::REJECTED:
+        RCLCPP_WARN_THROTTLE(get_logger(),
+                             *get_clock(),
+                             5000,
+                             "Rejecting Δ jump of %.0f° from %s (corrupt-reload / crawl noise); "
+                             "holding Δ=%.1f°.",
+                             gate_.last_jump_rad() * deg,
+                             source,
+                             gate_.value() * deg);
+        break;
+      case mowgli_localization::DeltaGateAction::ACCEPTED:
+        break;
     }
-
-    double jump = delta - map_to_odom_yaw_;
-    while (jump > M_PI)
-      jump -= 2.0 * M_PI;
-    while (jump <= -M_PI)
-      jump += 2.0 * M_PI;
-
-    if (std::abs(jump) > cog_yaw_max_jump_deg_ * M_PI / 180.0)
-    {
-      RCLCPP_WARN_THROTTLE(get_logger(),
-                           *get_clock(),
-                           5000,
-                           "Rejecting Δ jump of %.0f° from %s (corrupt-reload / crawl noise); "
-                           "holding Δ=%.1f°.",
-                           jump * 180.0 / M_PI,
-                           source,
-                           map_to_odom_yaw_ * 180.0 / M_PI);
-      return;
-    }
-
-    map_to_odom_yaw_ += cog_yaw_ema_alpha_ * jump;
-    while (map_to_odom_yaw_ > M_PI)
-      map_to_odom_yaw_ -= 2.0 * M_PI;
-    while (map_to_odom_yaw_ <= -M_PI)
-      map_to_odom_yaw_ += 2.0 * M_PI;
   }
 
   // Δ = yaw of the live map→odom TF (the EXACT map→odom offset). Returns false
@@ -441,14 +450,15 @@ private:
   bool delta_from_map_odom_{true};
   double cog_yaw_max_jump_deg_{25.0};
   double cog_yaw_ema_alpha_{0.15};
+  double reseed_after_s_{5.0};
 
   // State
   tf2::Transform last_dock_odom_;
   bool have_detection_{false};
-  // map→odom yaw offset Δ. By default read from the live map→odom TF
-  // (delta_from_map_odom_); legacy COG estimator when false. 0 until first seed.
-  double map_to_odom_yaw_{0.0};
-  bool have_yaw_offset_{false};
+  // map→odom yaw offset Δ estimator. By default fed from the live map→odom TF
+  // (delta_from_map_odom_); legacy COG estimator when false. Owns the seed /
+  // jump-reject+EMA / stale-latch re-seed logic (delta_gate.hpp). 0 until seeded.
+  mowgli_localization::DeltaGate gate_{};
 
   // ROS
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr detection_pub_;

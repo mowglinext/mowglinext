@@ -321,6 +321,18 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
+  # ---- test_delta_gate ----
+  # Pure C++ test of the map→odom yaw (Δ) stabilisation gate used by
+  # gps_dock_detection (delta_gate.hpp): jump-reject + EMA, and the issue #390
+  # stale-latch recovery (a sustained mutually-consistent rejection re-seeds Δ;
+  # a flapping transient never does). No ROS2 deps, link gtest.
+  ament_add_gtest(test_delta_gate
+    test/test_delta_gate.cpp
+  )
+  target_include_directories(test_delta_gate PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
   # ---- test_robot_yaml_scalar ----
   # Guards the ONE canonical dock_pose persist path (Invariant 6): the
   # motion-derived (yaw_source=MOTION) write must splice only the dock_pose_*
