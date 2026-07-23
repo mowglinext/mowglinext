@@ -41,6 +41,7 @@
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav2_msgs/action/undock_robot.hpp"
 #include "nav2_msgs/msg/collision_monitor_state.hpp"
+#include "sensor_msgs/msg/laser_scan.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/bool.hpp"
@@ -366,6 +367,21 @@ private:
             }
             context_->collision_stop_since = std::chrono::steady_clock::time_point{};
           }
+        });
+
+    // Scan-stream liveness (SAFETY_REVIEW_2026-07-23 A-C2) — stamp every
+    // /scan_collision arrival so IsScanStale can detect a dead LiDAR /
+    // scan-filter chain and the SensorSafetyGuard can halt mowing (blade off).
+    // The payload is ignored; only the arrival time matters. SensorDataQoS
+    // matches the publisher (best-effort). On a no-LiDAR install nothing ever
+    // arrives and the default-constructed last_scan_time keeps the guard inert.
+    scan_liveness_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
+        "/scan_collision",
+        rclcpp::SensorDataQoS(),
+        [this](sensor_msgs::msg::LaserScan::ConstSharedPtr /*msg*/)
+        {
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          context_->last_scan_time = std::chrono::steady_clock::now();
         });
 
     RCLCPP_DEBUG(get_logger(), "Topic subscribers created");
@@ -812,6 +828,7 @@ private:
   rclcpp::Subscription<mowgli_interfaces::msg::AbsolutePose>::SharedPtr gps_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr gnss_status_sub_;
   rclcpp::Subscription<nav2_msgs::msg::CollisionMonitorState>::SharedPtr collision_monitor_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_liveness_sub_;
 
   // Service server
   rclcpp::Service<mowgli_interfaces::srv::HighLevelControl>::SharedPtr high_level_control_srv_;

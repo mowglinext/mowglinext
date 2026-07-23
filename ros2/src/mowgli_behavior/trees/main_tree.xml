@@ -60,6 +60,48 @@
       </Fallback>
 
       <!-- ================================================================
+           GUARD 1.5: Sensor safety (SAFETY_REVIEW_2026-07-23 A-C2 + A-H1)
+           Two faults, one response — halt mowing with the blade OFF:
+             * IsScanStale: the LiDAR / scan-filter chain died mid-mow.
+               collision_monitor's source_timeout zeroes cmd_vel but nothing
+               cut the blade or told the tree — the robot idled blade-on and
+               blind. Inert on no-LiDAR installs (no scan ever received).
+             * IsCollisionStopSustained (15 s): collision_monitor has held
+               STOP long past IsObstacleStuck's backoff window — the robot is
+               parked against something (possibly someone) with the blade
+               still spinning, because the monitor raises no firmware
+               emergency and FollowStrip::onHalted never ran.
+           Halting the Root here runs FollowStrip::onHalted (goal cancel +
+           blade off); when the fault clears the tree resumes and the next
+           dispatch re-enables the blade. Short-circuits (like BoundaryGuard)
+           while charging, docking, and in operator-driven modes (manual mow 7,
+           recording 3/5/6) — halting Root there breaks docking/recording, and
+           the operator is the safety in manual modes. Firmware remains the
+           sole hard e-stop authority (invariant 9); this guard is the
+           software-side blade-off that was missing.
+           ================================================================ -->
+      <ReactiveFallback name="SensorSafetyGuard">
+        <IsCharging/>
+        <IsDocking/>
+        <IsCommand command="7"/>
+        <IsCommand command="3"/>
+        <IsCommand command="5"/>
+        <IsCommand command="6"/>
+        <Inverter>
+          <Fallback name="SensorFault">
+            <IsScanStale max_age_sec="1.0"/>
+            <IsCollisionStopSustained min_duration_sec="15.0"/>
+          </Fallback>
+        </Inverter>
+        <Sequence name="SensorFaultHandler">
+          <SetMowerEnabled enabled="false"/>
+          <StopMoving/>
+          <WaitForDuration duration_sec="1.0"/>
+          <AlwaysFailure/>
+        </Sequence>
+      </ReactiveFallback>
+
+      <!-- ================================================================
            GUARD 2: Two-tier boundary violation
              * Lethal violation (outside area by more than
                lethal_boundary_margin_m, default 0.5m in map_server_node):

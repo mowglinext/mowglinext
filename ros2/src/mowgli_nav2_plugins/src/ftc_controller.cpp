@@ -843,6 +843,22 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   // BT then aborts the strip and requests the next one.
   if (config_.enable_obstacle_deviation)
   {
+    // SAFETY (SAFETY_REVIEW_2026-07-23 F-C1): before anything else, check the
+    // robot's ACTUAL current footprint. The deviation machinery below only
+    // samples path poses AHEAD — during PRE_ROTATE pivots, stall-crawl pushes
+    // and lateral blends nothing ever asked "is my body in a lethal cell right
+    // now?", leaving collision_monitor as the sole guard (and it misses thin /
+    // sub-scan-plane obstacles). A true-lethal cell INSIDE the chassis outline
+    // means actual or imminent contact: hold zero velocity via the standard
+    // wait gate (transient scan noise clears within obstacle_wait_timeout_s;
+    // a real contact throws → the BT aborts the strip and the detour net
+    // routes around). Skipped while reverse-escaping — backing OUT of the
+    // contact is exactly what we want then.
+    if (!reverse_escape_active_ && currentBodyInLethal())
+    {
+      waitOrThrowForObstacle("chassis footprint overlaps a lethal obstacle cell");
+      return cmd_vel;  // zero-velocity hold (waitOrThrow throws after timeout)
+    }
     updateLateralDeviation(safe_dt);
     // updateLateralDeviation engaged the bounded reverse-escape sub-state
     // (both sides of an obstacle blocked / skirt over cap, rear footprint
@@ -1592,6 +1608,34 @@ bool FTCController::checkCollision(int max_points)
   }
 
   return false;
+}
+
+bool FTCController::currentBodyInLethal()
+{
+  if (costmap_map_ == nullptr || costmap_ros_ == nullptr)
+  {
+    return false;
+  }
+  const ObstacleDeviation::Footprint footprint = costmap_ros_->getRobotFootprint();
+  if (footprint.size() < 3)
+  {
+    return false;  // no polygon to rasterise — cannot assert
+  }
+  geometry_msgs::msg::PoseStamped robot_pose;
+  if (!costmap_ros_->getRobotPose(robot_pose))
+  {
+    return false;  // pose unavailable this tick
+  }
+  // getRobotPose returns the pose in the costmap's global frame (odom), the
+  // same frame as costmap_map_ — no transform needed. Lock against the costmap
+  // update thread for the rasterised read.
+  std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*costmap_map_->getMutex());
+  return ObstacleDeviation::footprintBlocked(*costmap_map_,
+                                             robot_pose,
+                                             0.0,
+                                             footprint,
+                                             ObstacleDeviation::BoundaryGuard{},
+                                             ObstacleDeviation::kLethalOnlyThreshold);
 }
 
 // ── Lateral deviation (skirt obstacles) ───────────────────────────────────────

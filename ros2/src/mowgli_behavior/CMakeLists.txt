@@ -26,6 +26,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(action_msgs REQUIRED)
@@ -67,6 +68,7 @@ ament_target_dependencies(behavior_tree_node
   tf2_ros
   tf2_geometry_msgs
   nav2_msgs
+  sensor_msgs
   nav_msgs
   geometry_msgs
   action_msgs

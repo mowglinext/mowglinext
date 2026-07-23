@@ -324,6 +324,14 @@ struct BTContext
   /// the BackUp + costmap clear is still settling.
   std::chrono::steady_clock::time_point last_obstacle_backoff_time{};
 
+  /// Scan-stream liveness (SAFETY_REVIEW_2026-07-23 A-C2). Stamped by the
+  /// /scan_collision subscriber in behavior_tree_node on every message.
+  /// Default-constructed = no scan EVER received this session — IsScanStale
+  /// treats that as "no LiDAR install" and stays inert, so no lidar_enabled
+  /// plumbing is needed: the guard only arms once a real scan stream has
+  /// existed and then died (LiDAR container crash, filter-chain death).
+  std::chrono::steady_clock::time_point last_scan_time{};
+
   // -----------------------------------------------------------------------
   // Per-session flags reset by ClearCommand at session end
   // -----------------------------------------------------------------------

@@ -176,6 +176,19 @@ private:
                      unsigned char cost,
                      int max_ids);
 
+  /// SAFETY (SAFETY_REVIEW_2026-07-23 F-C1): is the robot's ACTUAL current
+  /// footprint overlapping a TRUE-LETHAL costmap cell right now? The
+  /// deviation-enabled path only ever samples path poses AHEAD of the carrot,
+  /// so during PRE_ROTATE pivots, stall-crawl pushes, and lateral blends
+  /// nothing checked the body itself — collision_monitor was the sole guard.
+  /// Samples the chassis polygon (costmap_ros_->getRobotFootprint()) at the
+  /// live robot pose against the local costmap at kLethalOnlyThreshold (254):
+  /// a scan return INSIDE the chassis outline means actual/imminent contact.
+  /// True-lethal only — inflation halos the robot legitimately hugs must not
+  /// trip it. Returns false when pose/footprint/costmap are unavailable
+  /// (cannot assert either way; the forward checks still run).
+  bool currentBodyInLethal();
+
   // ── Obstacle deviation ────────────────────────────────────────────────────
   //
   // When checkCollision() reports a lethal cell in the lookahead window,

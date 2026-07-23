@@ -22,6 +22,21 @@ fusion_graph_node:
     # kTunedNodePeriodS = 0.04), so their rad/s trip points hold at any cadence.
     node_period_s: 0.02
 
+    # ── Odom re-base (map→odom lever-arm bound) ────────────────────────
+    # SAFETY (SAFETY_REVIEW_2026-07-23 G-C1): the map→odom anchor is
+    # `graph_pose ∘ dr⁻¹`, so any graph YAW correction Δθ not mirrored in the
+    # gyro-integrated dead-reckoning becomes a map-pose POSITION step of
+    # |dr|·sin(Δθ) — and |dr| grows to the full distance driven since the last
+    # re-seed. At |dr| = 25 m, a 2° COG/keyframe/loop-closure correction
+    # teleports the believed map pose ~0.87 m in ONE TF cycle. The coverage
+    # path and its obstacle holes live in the MAP frame, so that step lands
+    # the blade off-lane over excluded obstacles. Re-basing the odom origin
+    # onto the robot every 6 m keeps |dr| ≤ 6 m, capping the same 2°
+    # correction at ~0.21 m. map→base stays continuous across a re-base by
+    # construction (anchor shifted in the same locked update). 0 disables
+    # (the pre-review behaviour).
+    odom_rebase_dist_m: 6.0
+
     # ── Wheel between-factor noise ─────────────────────────────────────
     # Per-node sigmas in body frame. wheel_sigma_y << wheel_sigma_x is
     # the non-holonomic constraint: the robot doesn't slide sideways.
@@ -367,7 +382,15 @@ fusion_graph_node:
     # incremental). The icp_max_* checks (0.30 m / 0.50 rad) are too tight
     # because res.delta is the full transform to a keyframe (up to 3 m).
     kf_match_max_rmse_m: 0.15
-    kf_match_max_divergence_xy_m: 0.30
+    # 0.10 (was 0.30 — SAFETY_REVIEW_2026-07-23 G-H2): the keyframe absolute
+    # prior engages precisely during RTK-Float windows, when no RTK-Fixed GPS
+    # is present to out-vote a wrong match. At 0.30 a cross-viewpoint ICP
+    # match wrong by up to 30 cm passed this guard and PINNED the map pose
+    # 30 cm off truth — enough to put the blade over an excluded obstacle
+    # hole. 0.10 bounds the worst accepted pin to ~10 cm; matches that
+    # diverge more are dropped (the graph coasts on wheel+gyro instead,
+    # which is the safer failure).
+    kf_match_max_divergence_xy_m: 0.10
     kf_match_max_divergence_theta_rad: 0.50
     # Absolute-yaw mirror-guard (rad): reject a keyframe match whose implied
     # map-frame yaw is more than this off the gyro-predicted yaw. Catches

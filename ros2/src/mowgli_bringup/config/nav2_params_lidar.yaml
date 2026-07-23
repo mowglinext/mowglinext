@@ -140,7 +140,7 @@ collision_monitor:
     # Order: the approach (pre-contact halt) is evaluated first, then the
     # slowdown. See the base-file collision_monitor comment for the full
     # history of why the static PolygonStop was replaced.
-    polygons: ["FootprintApproach", "PolygonSlow"]
+    polygons: ["FootprintApproach", "PolygonStopNarrow", "PolygonSlow"]
     # HARD STOP — velocity-projected, NOT a static box. Projects the published
     # footprint forward along the CURRENT command for time_before_collision and
     # scales the output so the chassis halts just short of a predicted contact.
@@ -166,12 +166,37 @@ collision_monitor:
       # long enough to stop before the chassis front (base_link +0.48) touches.
       time_before_collision: 1.2
       simulation_time_step: 0.1
-      # 8 points hysteresis: a single stray return can't trip a stop, a real
-      # obstacle (legs, dock) reliably does. Tuned vs the LD19 7 Hz × ~455-bin
-      # sweep (same rationale as the old PolygonStop / PolygonSlow).
-      min_points: 8
+      # 3 points (was 8 — SAFETY_REVIEW_2026-07-23 A-C1): the LD19's 455
+      # bins/rev = 0.79°/bin, so requiring 8 returns means an obstacle must
+      # subtend ≥6.3° — width ≥ 0.11·distance. A 3 cm fence post was INVISIBLE
+      # to this hard stop beyond 0.27 m; field reports of the blade hitting
+      # thin obstacles match exactly. At 3 points a 3 cm post trips the stop
+      # out to ~0.7 m. The velocity-projected approach polygon self-limits
+      # false trips (a stray return must land ON the projected footprint sweep,
+      # not merely nearby), so the anti-noise argument for 8 no longer
+      # outweighs the miss risk.
+      min_points: 3
       visualize: true
       polygon_pub_topic: "polygon_approach"
+      enabled: true
+    # NARROW near-field hard stop (SAFETY_REVIEW_2026-07-23 A-C1): last-ditch
+    # catcher for thin obstacles dead ahead of the chassis front. Unlike the
+    # old full-chassis static PolygonStop (disabled below — it froze cmd_vel
+    # mid-skirt on obstacles already steered around), this box covers ONLY the
+    # band immediately IN FRONT of the chassis leading edge (x 0.48→0.62), so
+    # an obstacle FTC has skirted — abeam or behind — can never re-trigger it.
+    # min_points 2: at 0.6 m even a 2 cm cane subtends ~2 bins; anything
+    # physically inside this 14 cm band on a collision course must stop us.
+    # If it flaps at the dock approach, note docking cmd_vel bypasses
+    # collision_monitor (twist_mux /cmd_vel_docking lane) — only nav motion
+    # is gated.
+    PolygonStopNarrow:
+      type: "polygon"
+      points: "[[0.62, 0.20], [0.62, -0.20], [0.48, -0.20], [0.48, 0.20]]"
+      action_type: "stop"
+      min_points: 2
+      visualize: true
+      polygon_pub_topic: "polygon_stop_narrow"
       enabled: true
     # DISABLED — retained for history. This was the original hard stop: a STATIC
     # box around the chassis. It kept firing on obstacles already steered-around

@@ -1020,9 +1020,15 @@ collision_monitor:
     state_topic: collision_monitor_state
     controller.transform_tolerance: 0.5
     # Source timeout: how long before stale sensor data triggers a stop.
-    # ARM boards can have TF/scan timing jitter — 5s avoids false stops
-    # while still catching genuinely dead sensors.
-    source_timeout: 5.0
+    # 1.5 s (was 5.0 — SAFETY_REVIEW_2026-07-23 A-C2): at the 0.20 m/s mow
+    # speed a 5 s stale window let a dead LiDAR/scan-filter chain mow BLIND for
+    # a full metre before the stop fired. 1.5 s caps the blind run at ~0.3 m
+    # while still riding through ARM TF/scan timing jitter (LD19 publishes at
+    # ~10 Hz; 1.5 s = 15 missed scans, far beyond any observed jitter). The
+    # BT-side IsScanStale guard (main_tree.xml SensorSafetyGuard) additionally
+    # cuts the BLADE when the scan stream dies — this timeout only zeroes
+    # cmd_vel.
+    source_timeout: 1.5
     base_shift_correction: true
     stop_pub_timeout: 2.0
     # The active `polygons`, the polygon definitions, and `observation_sources`
