@@ -1246,7 +1246,9 @@ void MapServerNode::migrate_areas_datum(double file_datum_lat,
     }
     catch (const std::exception& ex)
     {
-      RCLCPP_WARN(get_logger(), "Could not re-save %s with datum stamp: %s", path.c_str(),
+      RCLCPP_WARN(get_logger(),
+                  "Could not re-save %s with datum stamp: %s",
+                  path.c_str(),
                   ex.what());
     }
     return;
@@ -1288,8 +1290,8 @@ void MapServerNode::migrate_areas_datum(double file_datum_lat,
   // sanity-check the move against how far they physically moved the base.
   double shift_east = 0.0;
   double shift_north = 0.0;
-  wgs84::ReprojectEnu(file_datum_lat, file_datum_lon, datum_lat_, datum_lon_, shift_east,
-                      shift_north);
+  wgs84::ReprojectEnu(
+      file_datum_lat, file_datum_lon, datum_lat_, datum_lon_, shift_east, shift_north);
 
   // The dock pose rides with the map. Yaw is unchanged — both old and new
   // frames are north-aligned ENU, so a datum move is a pure translation.

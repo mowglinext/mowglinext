@@ -35,24 +35,16 @@ constexpr double DEG_TO_RAD = M_PI / 180.0;
 constexpr double METERS_PER_DEG = EARTH_RADIUS_M * DEG_TO_RAD;
 
 /// Project a WGS84 coordinate into datum-relative ENU metres.
-inline void ToEnu(double lat,
-                  double lon,
-                  double datum_lat,
-                  double datum_lon,
-                  double& east,
-                  double& north)
+inline void ToEnu(
+    double lat, double lon, double datum_lat, double datum_lon, double& east, double& north)
 {
   east = (lon - datum_lon) * std::cos(datum_lat * DEG_TO_RAD) * METERS_PER_DEG;
   north = (lat - datum_lat) * METERS_PER_DEG;
 }
 
 /// Invert ToEnu: recover the WGS84 coordinate of a datum-relative ENU point.
-inline void FromEnu(double east,
-                    double north,
-                    double datum_lat,
-                    double datum_lon,
-                    double& lat,
-                    double& lon)
+inline void FromEnu(
+    double east, double north, double datum_lat, double datum_lon, double& lat, double& lon)
 {
   lat = datum_lat + north / METERS_PER_DEG;
   lon = datum_lon + east / (std::cos(datum_lat * DEG_TO_RAD) * METERS_PER_DEG);

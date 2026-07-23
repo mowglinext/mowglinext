@@ -548,12 +548,8 @@ namespace
 // test is to catch a regression in the production math).
 constexpr double kTestMetersPerDeg = 6378137.0 * M_PI / 180.0;
 
-void expected_reproject(double old_lat,
-                        double old_lon,
-                        double new_lat,
-                        double new_lon,
-                        double& x,
-                        double& y)
+void expected_reproject(
+    double old_lat, double old_lon, double new_lat, double new_lon, double& x, double& y)
 {
   const double lat = old_lat + y / kTestMetersPerDeg;
   const double lon = old_lon + x / (kTestMetersPerDeg * std::cos(old_lat * M_PI / 180.0));
@@ -593,8 +589,7 @@ protected:
 
   void SetUp() override
   {
-    const std::string tmp_dir =
-        std::getenv("TEST_TMPDIR") ? std::getenv("TEST_TMPDIR") : "/tmp";
+    const std::string tmp_dir = std::getenv("TEST_TMPDIR") ? std::getenv("TEST_TMPDIR") : "/tmp";
     areas_path_ = tmp_dir + "/mowgli_datum_migration_areas.dat";
     yaml_path_ = tmp_dir + "/mowgli_datum_migration_robot.yaml";
     std::remove(areas_path_.c_str());
@@ -617,8 +612,7 @@ protected:
         << "    dock_pose_yaw: " << yaw << "\n";
   }
 
-  std::shared_ptr<mowgli_map::MapServerNode> make_node(double datum_lat,
-                                                       double datum_lon) const
+  std::shared_ptr<mowgli_map::MapServerNode> make_node(double datum_lat, double datum_lon) const
   {
     rclcpp::NodeOptions opts;
     opts.append_parameter_override("resolution", 0.1);
@@ -674,8 +668,7 @@ protected:
     ASSERT_TRUE(res->success);
   }
 
-  static geometry_msgs::msg::Polygon area_polygon(mowgli_map::MapServerNode& node,
-                                                  uint32_t index)
+  static geometry_msgs::msg::Polygon area_polygon(mowgli_map::MapServerNode& node, uint32_t index)
   {
     auto req = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
     req->index = index;
