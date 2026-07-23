@@ -646,8 +646,8 @@
         "obstacle_inflation_radius": {
           "type": "number",
           "title": "Obstacle Inflation Radius",
-          "default": 1.0,
-          "description": "Buffer (m) kept around LiDAR-detected obstacles in the local costmap. Affects TRANSIT path costing only — it does NOT change how closely the robot skirts obstacles while mowing (use Obstacle Clearance Margin for that). Clamped to [0.58, 1.5] at launch."
+          "default": 0.58,
+          "description": "Buffer (m) kept around LiDAR-detected obstacles in the local costmap. Affects TRANSIT path costing only — it does NOT change how closely the robot skirts obstacles while mowing (use Obstacle Clearance Margin for that). Clamped to [0.58, 1.5] at launch. 0.58 (was 1.0): a wider halo smeared side obstacles across a narrow gap's whole front and wedged the robot; kept in sync with the ROS2 template default (mowgli_bringup/config/mowgli_robot.yaml)."
         },
         "obstacle_clearance_margin": {
           "type": "number",
