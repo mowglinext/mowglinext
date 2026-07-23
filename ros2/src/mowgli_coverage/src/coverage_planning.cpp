@@ -1162,6 +1162,76 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
 
 // ── Continuous cusp-free path (forward turn-around connectors) ───────────────
 
+namespace
+{
+
+// How far INSIDE the clearance ring a clamped (previously out-of-bounds) pose is
+// placed. The clearance ring is the outermost headland ring's centerline (== the
+// recorded line eroded by chassis_safety_inset). A pose that pokes PAST it — the
+// only source being the F2C offset mismatch between generateHeadlandSwaths (the
+// ring) and generateHeadlands (the clearance boundary), which round convex
+// corners differently — is projected back to `kClearanceClampMarginM` inside the
+// nearest ring edge. Small enough that the local deformation stays trackable, and
+// far below the server's kBoundarySlackM (0.05 m) verify slack so the clamped
+// path passes the in-bounds check. See issue #388.
+constexpr double kClearanceClampMarginM = 0.02;
+
+// Project a pose that lies OUTSIDE `ring` back to `margin` inside the nearest ring
+// edge. Poses already inside are returned unchanged, so applying this to a whole
+// path only nudges the out-of-bounds convex-corner pokes and is a no-op for every
+// ring/swath/connector pose the planner already kept in-bounds.
+std::pair<double, double> clampInsideRing(double x,
+                                          double y,
+                                          const std::vector<std::pair<double, double>>& ring,
+                                          double margin)
+{
+  if (ring.size() < 3 || pointInRing(x, y, ring))
+  {
+    return {x, y};
+  }
+  // Nearest point on the ring boundary.
+  const std::size_t n = ring.size();
+  double best_d2 = std::numeric_limits<double>::max();
+  double px = x, py = y;
+  for (std::size_t i = 0, j = n - 1; i < n; j = i++)
+  {
+    const double ax = ring[j].first, ay = ring[j].second;
+    const double bx = ring[i].first, by = ring[i].second;
+    const double dx = bx - ax, dy = by - ay;
+    const double len2 = dx * dx + dy * dy;
+    double t = (len2 > 0.0) ? ((x - ax) * dx + (y - ay) * dy) / len2 : 0.0;
+    t = std::max(0.0, std::min(1.0, t));
+    const double qx = ax + t * dx, qy = ay + t * dy;
+    const double d2 = (x - qx) * (x - qx) + (y - qy) * (y - qy);
+    if (d2 < best_d2)
+    {
+      best_d2 = d2;
+      px = qx;
+      py = qy;
+    }
+  }
+  // The direction from the exterior pose toward its nearest boundary projection
+  // points INTO the polygon; stepping `margin` past the projection lands inside
+  // (unless the ring is thinner than the margin there, in which case snap to the
+  // boundary rather than risk crossing to the far side).
+  double inx = px - x, iny = py - y;
+  const double inl = std::hypot(inx, iny);
+  if (inl < 1e-9)
+  {
+    return {px, py};
+  }
+  inx /= inl;
+  iny /= inl;
+  const double cx = px + margin * inx, cy = py + margin * iny;
+  if (pointInRing(cx, cy, ring))
+  {
+    return {cx, cy};
+  }
+  return {px, py};
+}
+
+}  // namespace
+
 std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     const BoustrophedonPlan& plan,
     const std::vector<std::pair<double, double>>& boundary,
@@ -1493,6 +1563,23 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     }
     auto rounded = roundSharpCorners(
         sp, boundary, plan.safe_holes, kCornerThreshold, fillet_r, min_radius, step);
+    // SAFETY (#388): the ring/swath poses are appended verbatim from F2C, and the
+    // OUTERMOST ring's convex-corner vertices can poke a few cm PAST the clearance
+    // ring — generateHeadlandSwaths (the ring) and generateHeadlands (this
+    // `boundary`) round corners differently, so the two nominally-coincident
+    // offsets disagree at corners. Left uncorrected, the first such pose is the
+    // seg-1 start TransitToStrip drives to; sitting outside the recorded line (in
+    // the keepout mask's lethal band) it made the blade-off transit un-drivable
+    // and the whole sub-path was skipped. Project every out-of-bounds pose back
+    // just inside the clearance ring so the path — and its start — stay drivable.
+    // A no-op for the in-bounds majority.
+    if (boundary.size() >= 3)
+    {
+      for (auto& pt : rounded)
+      {
+        pt = clampInsideRing(pt.first, pt.second, boundary, kClearanceClampMarginM);
+      }
+    }
     // Emit each rounded sub-path WHOLE — sub-paths split ONLY at Split A (a real
     // obstacle-gap / relocation), never at an interior cusp. FTC (restored
     // 2026-06-19, reverting MPPI) tracks the continuous full_path through the
