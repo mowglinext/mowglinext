@@ -407,8 +407,8 @@ void CoverageServer::planCoverage()
     // OUTERMOST headland ring's centerline sits. Default 0 = the ring rides ON
     // the recorded line (the perimeter the operator drove), so the blade mows to
     // the edge and the chassis is allowed to straddle the boundary — bounded by
-    // the half-chassis-width lethal band the map_server keepout mask places
-    // OUTSIDE the line (enforce_boundary_margin_m). There is deliberately NO
+    // the lethal band the map_server keepout mask places 0.40 m OUTSIDE the
+    // line (enforce_boundary_margin_m). There is deliberately NO
     // robot_width/2 floor: flooring the inset at the chassis half-width kept the
     // whole chassis inside but left a ~0.20 m uncut perimeter border, which is
     // exactly what this change removes. An operator who wants the chassis to

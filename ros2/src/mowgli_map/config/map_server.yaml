@@ -64,15 +64,18 @@ map_server_node:
     # Free slack (m) left OUTSIDE each area edge even when lethal_outside_areas
     # is on. Absorbs RTK/pose drift so a start pose a few cm past the recorded
     # CENTRE line is not rejected as "Start occupied", and lets the footprint
-    # overhang the line. Kept ~robot radius (small) so the planner cannot draft
-    # transit detours far outside the polygon — the regression the 0.45 m
-    # keepout_nav_margin reopened. The global costmap lists keepout_filter
-    # BEFORE inflation_layer, so this lethal wall is inflated inward by only
-    # inflation_radius (0.20 m): wall at 0.25 m outside the centre line → bite
-    # ~0.05 m inside it, well clear of the swath centres (~0.29 m inside via
-    # chassis_safety_inset). Raise toward keepout_nav_margin if a tight dock
-    # sits just outside the polygon and a navigation area cannot cover it.
-    enforce_boundary_margin_m: 0.25
+    # overhang the line. 0.40 = chassis half-width (0.225) + one global-costmap
+    # cell (0.08) + drift headroom: at the previous 0.25 (~robot radius), a
+    # robot riding the outer headland ring (centerline ON the recorded line)
+    # kept only ~5 cm between its centre cell and the inscribed-cost band —
+    # under one 0.08 m cell — so Smac transits sporadically failed "Start
+    # occupied" and FollowStrip skipped whole sub-paths (headland rings). The
+    # global costmap lists keepout_filter BEFORE inflation_layer, so this
+    # lethal wall is inflated inward by only inflation_radius (0.20 m): wall at
+    # 0.40 m outside the centre line → the inflated band now ends 0.20 m
+    # OUTSIDE it, no bite inside the ring. Stays under lethal_boundary_margin_m
+    # (0.5) so the planner wall engages before the e-stop tripwire.
+    enforce_boundary_margin_m: 0.40
 
     # /local_costmap published values are 0–100 (OccupancyGrid units, with
     # the Nav2 costmap_2d → OccupancyGrid mapping: internal 254/253 →

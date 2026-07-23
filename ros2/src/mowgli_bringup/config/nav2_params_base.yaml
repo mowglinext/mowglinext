@@ -690,7 +690,7 @@ global_costmap:
       # FREE (0), area obstacle holes are LETHAL. The operator draws navigation
       # areas as the transit/dock corridors, so the dock + approach fall inside
       # an allowed (free) region; the dock corridor is also explicitly carved
-      # back to free in map_server. enforce_boundary_margin_m (default 0.25 m)
+      # back to free in map_server. enforce_boundary_margin_m (default 0.40 m)
       # leaves a small free slack outside each edge for RTK drift; disable the
       # whole hard boundary via map_server lethal_outside_areas:=false if a
       # site has no navigation area over the dock (legacy wide keepout_nav_margin
@@ -700,8 +700,11 @@ global_costmap:
       # don't trip MPPI/RPP "collision ahead" and Nav2 local recoveries (spin,
       # backup) still function near edges.
       # inflation_layer is listed AFTER keepout so keepout lethals are inflated
-      # by inflation_radius (0.20 m) only — wall 0.25 m outside the centre line
-      # → ~0.05 m bite inside it, clear of the swath centres.
+      # by inflation_radius (0.20 m) only — wall 0.40 m outside the centre line
+      # → the inflated band ends 0.20 m OUTSIDE it, so a robot riding the
+      # outer headland ring (centerline ON the recorded line) keeps its centre
+      # cell clear of the inscribed-cost band and Smac transits no longer
+      # sporadically fail "Start occupied" at the boundary.
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 10.0

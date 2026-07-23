@@ -324,7 +324,7 @@ def generate_launch_description() -> LaunchDescription:
             {"lethal_outside_areas": bool(
                 robot_params.get("lethal_outside_areas", True))},
             {"enforce_boundary_margin_m": float(
-                robot_params.get("enforce_boundary_margin_m", 0.25))},
+                robot_params.get("enforce_boundary_margin_m", 0.40))},
             # tool_width is the SINGLE source of truth (mowgli_robot.yaml) for
             # both the mark_cells_mowed stamp radius / sliver detection here AND
             # coverage_server.operation_width (injected by navigation.launch.py).

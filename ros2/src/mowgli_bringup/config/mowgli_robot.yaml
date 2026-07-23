@@ -257,8 +257,8 @@ mowgli:
     # edge and the chassis is allowed to STRADDLE the boundary. coverage_server
     # applies the op_width/2 outward expansion itself (generateHeadlandSwaths puts
     # ring 0 op_width/2 inside the planning field), so a value of 0 lands ring 0
-    # exactly on the line. The safety stop is the half-chassis-width LETHAL band
-    # the keepout mask places OUTSIDE the line (enforce_boundary_margin_m), not an
+    # exactly on the line. The safety stop is the LETHAL band the keepout mask
+    # places OUTSIDE the line (0.40 m out, enforce_boundary_margin_m), not an
     # inward inset. Raise this to keep the chassis further inside (e.g.
     # chassis_width/2 = 0.20 to keep the WHOLE chassis inside, the old behaviour,
     # at the cost of a ~0.20 m uncut perimeter band). This keep-inside guarantee

@@ -74,7 +74,7 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   // the legacy keepout_nav_margin_ free band governs. See the field note on the
   // 0.32 m concave-boundary excursion (project_coverage_boundary_excursion).
   lethal_outside_areas_ = declare_parameter<bool>("lethal_outside_areas", true);
-  enforce_boundary_margin_m_ = declare_parameter<double>("enforce_boundary_margin_m", 0.25);
+  enforce_boundary_margin_m_ = declare_parameter<double>("enforce_boundary_margin_m", 0.40);
   // Two-tier boundary: if the robot is outside every defined area, we
   // publish /boundary_violation (BT attempts a recovery back inside). If
   // the robot is further than lethal_boundary_margin beyond any area

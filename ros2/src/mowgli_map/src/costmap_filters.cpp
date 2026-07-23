@@ -31,6 +31,18 @@
 namespace mowgli_map
 {
 
+// Mask value for the outside-slack band (cells beyond every area polygon but
+// within enforce_boundary_margin_m of an edge). NON-ZERO so the band is
+// traversable-but-penalised: with CostmapFilterInfo base=0/multiplier=1 the
+// KeepoutFilter turns 50 into cost ~127 — far below Smac's INSCRIBED(253)
+// validity cutoff, so a start/goal pose in the band never fails "Start
+// occupied", while A* only routes THROUGH the band when the inside route is
+// much longer. A free (0) band would invite corner-cutting transits up to
+// enforce_boundary_margin_m (0.40 m) outside the polygon — past the 0.30 m
+// soft_boundary_margin_m deadband — firing spurious /boundary_violation
+// recoveries mid-transit.
+constexpr int8_t kOutsideSlackMaskCost = 50;
+
 void MapServerNode::publish_keepout_mask()
 {
   if (areas_.empty())
@@ -66,13 +78,16 @@ void MapServerNode::publish_keepout_mask()
 
   // A cell inside ANY area (mowing or navigation) is free (0).
   // A cell outside all areas but within `outside_free_margin` of any area
-  // polygon edge is also free (0) — this prevents "Start occupied" when
-  // the robot is near the boundary.
+  // polygon edge is mid-cost (kOutsideSlackMaskCost) — traversable for a
+  // start/goal pose near the boundary (prevents "Start occupied") but
+  // penalised so the planner does not draft corner-cutting routes outside
+  // the polygon.
   // Cells beyond the margin stay 100 (keepout/lethal).
   //
   // outside_free_margin selects the boundary policy:
   //   * lethal_outside_areas_ = true  (default, operator intent): use the
-  //     small enforce_boundary_margin_m_ (~robot radius). Everything beyond
+  //     small enforce_boundary_margin_m_ (0.40 m — chassis half-width plus
+  //     costmap-cell/drift headroom). Everything beyond
   //     that slack is LETHAL, so the planner never routes outside the union
   //     of areas and MPPI never steers the robot out of the authorised zone
   //     (fixes the 0.32 m concave-boundary excursion). The dock corridor
@@ -221,9 +236,16 @@ void MapServerNode::publish_keepout_mask()
       bool inner_buffer = inside_any && boundary_inner_margin_m_ > 0.0 &&
                           inside_min_edge_dist < boundary_inner_margin_m_;
 
-      if ((inside_any || within_outside_margin) && !inner_buffer)
+      if (inside_any)
       {
-        mask.data[flat_idx] = 0;
+        if (!inner_buffer)
+        {
+          mask.data[flat_idx] = 0;
+        }
+      }
+      else if (within_outside_margin)
+      {
+        mask.data[flat_idx] = kOutsideSlackMaskCost;
       }
     }
   }
