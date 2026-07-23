@@ -258,11 +258,21 @@ private:
   // fall back (skip the segment) instead of scanning the whole field.
   static constexpr double kDetourMaxSearchM = 8.0;
   // OccupancyGrid cost at/above which a cell is lethal for the clearance test.
-  static constexpr int8_t kDetourLethalCost = 90;
+  // MUST be 100 (TRUE lethal only): the published /global_costmap/costmap maps
+  // LETHAL(254)->100 and INSCRIBED(253)->99, and the inscribed band extends
+  // inflation_radius (0.20 m) from every keepout wall BY DESIGN. The outer
+  // headland ring rides ON the recorded line (chassis_safety_inset 0), i.e.
+  // permanently within 0.20 m of the boundary band — a 90 threshold counted
+  // those 99-cells as lethal, so EVERY outer-ring abort was "obstacle
+  // confirmed" (wedge) and NO ring pose was ever footprint-clear, which made
+  // decideDetour return no-resume and FollowStrip skip the ENTIRE sub-path
+  // (the whole field on a hole-free area). Field regression 2026-07-2x.
+  static constexpr int8_t kDetourLethalCost = 100;
   // Radius of the "stalled beside an obstacle" wedge check around the stuck pose
   // (spec Part B). Fires the detour when lethal cells hug the robot even with no
-  // dead-ahead blockage. Chassis half-width (~0.20 m) + margin; tight enough to
-  // never fire on an open-space abort.
+  // dead-ahead blockage. Chassis half-width (~0.20 m) + margin. Safe against the
+  // boundary band only because kDetourLethalCost is 100 and the TRUE lethal wall
+  // sits enforce_boundary_margin_m (0.40 m) outside the outer ring (> 0.35).
   static constexpr double kDetourWedgeRadiusM = 0.35;
 
   // Max time to hold (blade off) waiting for navigate_to_pose to become ready to
