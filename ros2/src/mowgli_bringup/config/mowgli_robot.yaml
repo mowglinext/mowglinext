@@ -411,7 +411,14 @@ mowgli:
     # never the inflated gradient — this knob has NO effect on how far out
     # the robot starts avoiding an obstacle WHILE MOWING. For that, see
     # obstacle_detection_range_m below.
-    obstacle_inflation_radius: 1.0
+    # 0.58 (was 1.0, 2026-07-23): a 1.0 m halo smeared a side obstacle's cost
+    # across the whole front of a narrow (0.5-1.0 m) gap, so RPP transit saw
+    # "collision ahead" and Nav2 backup/spin recoveries could not back out of a
+    # physically-passable pocket (obstacle-wedge). Clamp-floored at 0.58 in
+    # navigation.launch.py (chassis circumscribed radius ~0.572); this is the
+    # smallest value the inflation layer supports without degrading footprint-
+    # cost semantics. Values below 0.58 are raised to 0.58 at launch.
+    obstacle_inflation_radius: 0.58
     # How far ahead along the coverage path (m) FTC scans for a lethal
     # obstacle cell before starting to skirt it — the real "avoid from
     # further out during mowing" knob (task #49; obstacle_inflation_radius
@@ -456,9 +463,15 @@ mowgli:
     # distinct escape sub-state and does NOT relax the forward-only behaviour of
     # normal path following. OPT-IN — bounded reverse-escape drives the robot
     # BACKWARDS; enable only after a supervised field test (see PR notes). Fails
-    # safe when false (wedged → hold/abort as before). Set to true only once the
-    # operator has validated it near the dock / people.
-    obstacle_reverse_enabled: false
+    # safe (wedged → hold/abort as before) when it cannot find a lethal-clear
+    # rear corridor.
+    # true (was false, 2026-07-23): a blade-on coverage wedge (FTC 'Failed to
+    # make progress' beside an obstacle with both skirt sides blocked) has no
+    # forward escape; the bounded rear-lethal-gated reverse is the only self-
+    # recovery. SAFETY: still requires a supervised field test near the dock /
+    # people — the maneuver is fail-safe by construction (0.30 m cap, rear
+    # TRUE-lethal check every tick, stop on any ambiguity).
+    obstacle_reverse_enabled: true
     # Hard cap on total reversed distance (m) per escape. Odom-integrated, never
     # exceeded. Clamped [0.0, 1.0] by navigation.launch.py.
     obstacle_reverse_max_dist_m: 0.30

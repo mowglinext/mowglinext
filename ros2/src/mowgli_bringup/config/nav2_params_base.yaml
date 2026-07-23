@@ -505,7 +505,9 @@ controller_server:
       # after a supervised field test (see PR notes). Fails safe when false
       # (wedged → hold/abort as before).
       # OVERRIDDEN AT LAUNCH by mowgli_robot.yaml (see navigation.launch.py).
-      obstacle_reverse_enabled: false
+      # Static default kept in sync with the template (true, 2026-07-23) so a
+      # raw `ros2 launch` with no robot-config injection is behaviour-preserving.
+      obstacle_reverse_enabled: true
       obstacle_reverse_max_dist_m: 0.30
       obstacle_reverse_speed_mps: 0.10   # must clear the firmware deadband (~0.05)
 
@@ -800,7 +802,13 @@ local_costmap:
         # a raw `ros2 launch` of this file with no robot-config injection.
         # Kept in sync with the template default (test_nav2_params.py's
         # test_obstacle_template_defaults_match_static_yaml enforces this).
-        inflation_radius: 1.0
+        # 0.58 (was 1.0, 2026-07-23): the 1.0 m halo smeared a side obstacle's
+        # cost across the WHOLE front of a 0.5-1.0 m gap, so RPP transit read
+        # "collision ahead" and Nav2 backup/spin recoveries could not escape a
+        # physically-passable pocket (obstacle-wedge). 0.58 == the clamp floor
+        # (chassis circumscribed radius ~0.572) — the smallest inflation that
+        # keeps footprint-cost semantics intact.
+        inflation_radius: 0.58
 
 # ---------------------------------------------------------------------------
 # Map server / AMCL (unused — map->odom is published by fusion_graph_node;
