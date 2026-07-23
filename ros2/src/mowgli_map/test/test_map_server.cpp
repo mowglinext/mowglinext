@@ -494,3 +494,311 @@ TEST_F(AreaTypeTest, DrawnObstacleWithoutMarginIsEdgeTight)
   EXPECT_EQ(mask_at(mask, 0.75, 0.0), 0)
       << "without obstacle_margin the band outside the polygon stays free";
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Datum-change migration (issue #216) — areas.dat is stamped with the datum
+// its metre coordinates were recorded against; on load under a DIFFERENT
+// datum, every polygon and the dock pose must be re-projected into the new
+// frame (old-ENU → WGS84 → new-ENU) instead of silently shifting across the
+// garden, and both areas.dat and mowgli_robot.yaml must be re-persisted.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#include <cstdio>
+#include <fstream>
+#include <sstream>
+
+namespace
+{
+
+// Independent re-implementation of the equirectangular reprojection chain
+// (NOT reusing mowgli_interfaces/wgs84_projection.hpp — the point of the
+// test is to catch a regression in the production math).
+constexpr double kTestMetersPerDeg = 6378137.0 * M_PI / 180.0;
+
+void expected_reproject(double old_lat,
+                        double old_lon,
+                        double new_lat,
+                        double new_lon,
+                        double& x,
+                        double& y)
+{
+  const double lat = old_lat + y / kTestMetersPerDeg;
+  const double lon = old_lon + x / (kTestMetersPerDeg * std::cos(old_lat * M_PI / 180.0));
+  x = (lon - new_lon) * kTestMetersPerDeg * std::cos(new_lat * M_PI / 180.0);
+  y = (lat - new_lat) * kTestMetersPerDeg;
+}
+
+std::string read_file(const std::string& path)
+{
+  std::ifstream in(path);
+  std::stringstream buf;
+  buf << in.rdbuf();
+  return buf.str();
+}
+
+double yaml_scalar(const std::string& content, const std::string& key)
+{
+  const auto pos = content.find(key + ":");
+  if (pos == std::string::npos)
+  {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  return std::stod(content.substr(pos + key.size() + 1));
+}
+
+}  // namespace
+
+class DatumMigrationTest : public ::testing::Test
+{
+protected:
+  // Munich sim datum as the "recorded against" anchor; the second datum is
+  // 1e-5° north / 2e-5° west of it — a ~1.1 m / ~1.5 m base relocation.
+  static constexpr double kOldLat = 48.137154;
+  static constexpr double kOldLon = 11.576124;
+  static constexpr double kNewLat = 48.137164;
+  static constexpr double kNewLon = 11.576104;
+
+  void SetUp() override
+  {
+    const std::string tmp_dir =
+        std::getenv("TEST_TMPDIR") ? std::getenv("TEST_TMPDIR") : "/tmp";
+    areas_path_ = tmp_dir + "/mowgli_datum_migration_areas.dat";
+    yaml_path_ = tmp_dir + "/mowgli_datum_migration_robot.yaml";
+    std::remove(areas_path_.c_str());
+    write_robot_yaml(1.0, 2.0, 0.5);
+  }
+
+  void TearDown() override
+  {
+    std::remove(areas_path_.c_str());
+    std::remove(yaml_path_.c_str());
+  }
+
+  void write_robot_yaml(double x, double y, double yaw) const
+  {
+    std::ofstream out(yaml_path_, std::ios::trunc);
+    out << "/**:\n"
+        << "  ros__parameters:\n"
+        << "    dock_pose_x: " << x << "\n"
+        << "    dock_pose_y: " << y << "\n"
+        << "    dock_pose_yaw: " << yaw << "\n";
+  }
+
+  std::shared_ptr<mowgli_map::MapServerNode> make_node(double datum_lat,
+                                                       double datum_lon) const
+  {
+    rclcpp::NodeOptions opts;
+    opts.append_parameter_override("resolution", 0.1);
+    opts.append_parameter_override("map_size_x", 10.0);
+    opts.append_parameter_override("map_size_y", 10.0);
+    opts.append_parameter_override("map_frame", "map");
+    opts.append_parameter_override("tool_width", 0.2);
+    opts.append_parameter_override("map_file_path", "");
+    opts.append_parameter_override("areas_file_path", "");
+    opts.append_parameter_override("publish_rate", 1.0);
+    opts.append_parameter_override("datum_lat", datum_lat);
+    opts.append_parameter_override("datum_lon", datum_lon);
+    opts.append_parameter_override("robot_yaml_path", yaml_path_);
+    opts.append_parameter_override("dock_pose_x", 1.0);
+    opts.append_parameter_override("dock_pose_y", 2.0);
+    opts.append_parameter_override("dock_pose_yaw", 0.5);
+    return std::make_shared<mowgli_map::MapServerNode>(opts);
+  }
+
+  static geometry_msgs::msg::Polygon make_rect(double x0, double y0, double x1, double y1)
+  {
+    geometry_msgs::msg::Polygon p;
+    auto add = [&](double x, double y)
+    {
+      geometry_msgs::msg::Point32 pt;
+      pt.x = static_cast<float>(x);
+      pt.y = static_cast<float>(y);
+      pt.z = 0.0F;
+      p.points.push_back(pt);
+    };
+    add(x0, y0);
+    add(x1, y0);
+    add(x1, y1);
+    add(x0, y1);
+    return p;
+  }
+
+  static void add_area(mowgli_map::MapServerNode& node,
+                       const std::string& name,
+                       const geometry_msgs::msg::Polygon& poly,
+                       const geometry_msgs::msg::Polygon* obstacle = nullptr)
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+    req->area.name = name;
+    req->area.area = poly;
+    if (obstacle != nullptr)
+    {
+      req->area.obstacles.push_back(*obstacle);
+    }
+    req->is_navigation_area = false;
+    auto res = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+    node.add_area_for_test(req, res);
+    ASSERT_TRUE(res->success);
+  }
+
+  static geometry_msgs::msg::Polygon area_polygon(mowgli_map::MapServerNode& node,
+                                                  uint32_t index)
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
+    req->index = index;
+    auto res = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Response>();
+    node.get_mowing_area_for_test(req, res);
+    EXPECT_TRUE(res->success);
+    return res->area.area;
+  }
+
+  std::string areas_path_;
+  std::string yaml_path_;
+};
+
+TEST_F(DatumMigrationTest, SaveStampsCurrentDatum)
+{
+  auto node = make_node(kOldLat, kOldLon);
+  add_area(*node, "lawn", make_rect(-2, -2, 2, 2));
+  node->save_areas_for_test(areas_path_);
+
+  const std::string content = read_file(areas_path_);
+  EXPECT_NEAR(yaml_scalar(content, "datum_lat"), kOldLat, 1e-9);
+  EXPECT_NEAR(yaml_scalar(content, "datum_lon"), kOldLon, 1e-9);
+}
+
+TEST_F(DatumMigrationTest, LoadWithSameDatumLeavesEverythingUntouched)
+{
+  {
+    auto node = make_node(kOldLat, kOldLon);
+    add_area(*node, "lawn", make_rect(-2, -2, 2, 2));
+    node->save_areas_for_test(areas_path_);
+  }
+
+  auto node = make_node(kOldLat, kOldLon);
+  node->load_areas_for_test(areas_path_);
+
+  const auto poly = area_polygon(*node, 0);
+  ASSERT_EQ(poly.points.size(), 4U);
+  EXPECT_NEAR(poly.points[0].x, -2.0, 1e-4);
+  EXPECT_NEAR(poly.points[0].y, -2.0, 1e-4);
+  EXPECT_NEAR(node->docking_pose_for_test().position.x, 1.0, 1e-9);
+  EXPECT_NEAR(node->docking_pose_for_test().position.y, 2.0, 1e-9);
+}
+
+TEST_F(DatumMigrationTest, DatumChangeReprojectsAreasObstaclesAndDock)
+{
+  const auto obstacle = make_rect(-0.5, -0.5, 0.5, 0.5);
+  {
+    auto node = make_node(kOldLat, kOldLon);
+    const auto poly = make_rect(-2, -2, 2, 2);
+    add_area(*node, "lawn", poly, &obstacle);
+    node->save_areas_for_test(areas_path_);
+  }
+
+  // Same persisted state, but the stack now boots with a MOVED datum.
+  auto node = make_node(kNewLat, kNewLon);
+  node->load_areas_for_test(areas_path_);
+
+  // Every vertex must land where the independent reprojection chain puts it.
+  const auto poly = area_polygon(*node, 0);
+  ASSERT_EQ(poly.points.size(), 4U);
+  double ex = -2.0;
+  double ey = -2.0;
+  expected_reproject(kOldLat, kOldLon, kNewLat, kNewLon, ex, ey);
+  EXPECT_NEAR(poly.points[0].x, ex, 1e-3);
+  EXPECT_NEAR(poly.points[0].y, ey, 1e-3);
+  // Sanity: the shift is metre-scale, not a no-op (≈ +1.48 m E, −1.11 m N).
+  EXPECT_GT(std::abs(poly.points[0].x - (-2.0)), 1.0);
+  EXPECT_GT(std::abs(poly.points[0].y - (-2.0)), 1.0);
+
+  // Obstacle holes ride along with the same shift.
+  auto req = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
+  req->index = 0;
+  auto res = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Response>();
+  node->get_mowing_area_for_test(req, res);
+  ASSERT_TRUE(res->success);
+  ASSERT_EQ(res->area.obstacles.size(), 1U);
+  double ox = -0.5;
+  double oy = -0.5;
+  expected_reproject(kOldLat, kOldLon, kNewLat, kNewLon, ox, oy);
+  EXPECT_NEAR(res->area.obstacles[0].points[0].x, ox, 1e-3);
+  EXPECT_NEAR(res->area.obstacles[0].points[0].y, oy, 1e-3);
+
+  // Dock pose migrated in-memory, yaw untouched (pure translation)…
+  double dx = 1.0;
+  double dy = 2.0;
+  expected_reproject(kOldLat, kOldLon, kNewLat, kNewLon, dx, dy);
+  const auto& dock = node->docking_pose_for_test();
+  EXPECT_TRUE(node->docking_pose_set_for_test());
+  EXPECT_NEAR(dock.position.x, dx, 1e-6);
+  EXPECT_NEAR(dock.position.y, dy, 1e-6);
+  const double yaw = 2.0 * std::atan2(dock.orientation.z, dock.orientation.w);
+  EXPECT_NEAR(yaw, 0.5, 1e-9);
+
+  // …and spliced back into mowgli_robot.yaml (6-decimal persist precision).
+  const std::string yaml = read_file(yaml_path_);
+  EXPECT_NEAR(yaml_scalar(yaml, "dock_pose_x"), dx, 1e-5);
+  EXPECT_NEAR(yaml_scalar(yaml, "dock_pose_y"), dy, 1e-5);
+  EXPECT_NEAR(yaml_scalar(yaml, "dock_pose_yaw"), 0.5, 1e-5);
+
+  // areas.dat re-stamped with the new datum → the migration runs once.
+  const std::string content = read_file(areas_path_);
+  EXPECT_NEAR(yaml_scalar(content, "datum_lat"), kNewLat, 1e-9);
+  EXPECT_NEAR(yaml_scalar(content, "datum_lon"), kNewLon, 1e-9);
+
+  // Idempotence: a second load under the same datum must not move anything.
+  node->load_areas_for_test(areas_path_);
+  const auto poly2 = area_polygon(*node, 0);
+  EXPECT_NEAR(poly2.points[0].x, poly.points[0].x, 1e-4);
+  EXPECT_NEAR(poly2.points[0].y, poly.points[0].y, 1e-4);
+}
+
+TEST_F(DatumMigrationTest, UnstampedLegacyFileIsAdoptedWithoutShift)
+{
+  // Pre-#216 areas.dat: no datum stamp. Simulate by saving from a node whose
+  // datum is unset (stamp is only written when a datum is configured).
+  {
+    auto node = make_node(0.0, 0.0);
+    add_area(*node, "lawn", make_rect(-2, -2, 2, 2));
+    node->save_areas_for_test(areas_path_);
+  }
+  ASSERT_TRUE(read_file(areas_path_).find("datum_lat") == std::string::npos);
+
+  auto node = make_node(kNewLat, kNewLon);
+  node->load_areas_for_test(areas_path_);
+
+  // Coordinates adopted as-is (they are anchored to the current datum by
+  // definition — there is no old datum to migrate from)…
+  const auto poly = area_polygon(*node, 0);
+  EXPECT_NEAR(poly.points[0].x, -2.0, 1e-4);
+  EXPECT_NEAR(poly.points[0].y, -2.0, 1e-4);
+  EXPECT_NEAR(node->docking_pose_for_test().position.x, 1.0, 1e-9);
+
+  // …but the file gains a stamp so the NEXT datum change migrates correctly.
+  const std::string content = read_file(areas_path_);
+  EXPECT_NEAR(yaml_scalar(content, "datum_lat"), kNewLat, 1e-9);
+  EXPECT_NEAR(yaml_scalar(content, "datum_lon"), kNewLon, 1e-9);
+}
+
+TEST_F(DatumMigrationTest, NodeWithoutDatumNeverMigrates)
+{
+  {
+    auto node = make_node(kOldLat, kOldLon);
+    add_area(*node, "lawn", make_rect(-2, -2, 2, 2));
+    node->save_areas_for_test(areas_path_);
+  }
+
+  // Datum unset (0/0 template default) — the stamped file must be loaded
+  // verbatim and left untouched on disk.
+  auto node = make_node(0.0, 0.0);
+  node->load_areas_for_test(areas_path_);
+
+  const auto poly = area_polygon(*node, 0);
+  EXPECT_NEAR(poly.points[0].x, -2.0, 1e-4);
+  EXPECT_NEAR(poly.points[0].y, -2.0, 1e-4);
+
+  const std::string content = read_file(areas_path_);
+  EXPECT_NEAR(yaml_scalar(content, "datum_lat"), kOldLat, 1e-9);
+  EXPECT_NEAR(yaml_scalar(content, "datum_lon"), kOldLon, 1e-9);
+}

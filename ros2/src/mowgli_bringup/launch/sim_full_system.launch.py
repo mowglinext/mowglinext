@@ -222,6 +222,13 @@ def generate_launch_description() -> LaunchDescription:
                 "area_is_navigation": [False],
                 "area_obstacles": [""],
             },
+            # Same datum the sim navsat converter projects with (below) —
+            # keeps the areas.dat datum stamp / datum-change migration
+            # (issue #216) consistent in simulation.
+            {
+                "datum_lat": 48.137154000,
+                "datum_lon": 11.576124000,
+            },
         ],
     )
 

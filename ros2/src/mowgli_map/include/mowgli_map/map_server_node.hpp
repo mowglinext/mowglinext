@@ -57,6 +57,12 @@
 namespace mowgli_map
 {
 
+/// Default path to the runtime mowgli_robot.yaml — bind-mounted into the
+/// container so writes survive across redeploys. mowgli_robot.yaml is the
+/// single source of truth for dock_pose_x/y/yaw. Overridable via the
+/// `robot_yaml_path` parameter (tests point it at a temp file).
+inline constexpr const char* kRuntimeRobotYaml = "/ros2_ws/config/mowgli_robot.yaml";
+
 /// @brief Multi-layer map service node for the Mowgli robot mower.
 ///
 /// Maintains a grid_map::GridMap with two semantic layers:
@@ -129,6 +135,16 @@ public:
   /// Test-only: round-trip persistence through save/load_areas_to_file.
   void save_areas_for_test(const std::string& path);
   void load_areas_for_test(const std::string& path);
+
+  /// Test-only: inspect the in-memory dock pose after a datum migration.
+  const geometry_msgs::msg::Pose& docking_pose_for_test() const
+  {
+    return docking_pose_;
+  }
+  bool docking_pose_set_for_test() const
+  {
+    return docking_pose_set_;
+  }
 
   /// Test-only: build the keepout mask and return a copy. Exercises
   /// publish_keepout_mask() (which caches into cached_keepout_mask_) without
@@ -281,6 +297,21 @@ private:
   /// Load areas and docking point from a YAML file.
   void load_areas_from_file(const std::string& path);
 
+  /// Datum-change migration (issue #216). areas.dat is stamped with the
+  /// datum its metre coordinates were recorded against. When the stamp
+  /// differs from the datum this node was launched with (operator moved the
+  /// base / re-centred the datum), every persisted polygon and the dock pose
+  /// are re-projected into the new datum frame (old-ENU → WGS84 → new-ENU,
+  /// the exact inverse/forward of the localizer's projection), the dock pose
+  /// is spliced back into mowgli_robot.yaml, and areas.dat is re-saved with
+  /// the new stamp — so the map stays glued to the physical garden instead
+  /// of shifting with the datum.
+  ///
+  /// @param file_datum_lat/lon  Stamp parsed from areas.dat (NaN if absent).
+  /// @param path                areas.dat path, for the re-stamping save.
+  /// Caller must NOT hold map_mutex_.
+  void migrate_areas_datum(double file_datum_lat, double file_datum_lon, const std::string& path);
+
   /// Reapply area classifications to the map grid (called after loading areas).
   void apply_area_classifications();
 
@@ -310,6 +341,18 @@ private:
   double tool_width_;
   std::string map_file_path_;
   std::string areas_file_path_;
+
+  /// WGS84 datum this session's map frame is anchored to (from
+  /// mowgli_robot.yaml, injected at launch — same values
+  /// navsat_to_absolute_pose_node projects GPS fixes with). Used to stamp
+  /// areas.dat on save and to detect+migrate a datum change on load
+  /// (see migrate_areas_datum). 0/0 = unset (no GPS site configured yet).
+  double datum_lat_{0.0};
+  double datum_lon_{0.0};
+
+  /// Runtime mowgli_robot.yaml path for dock-pose splice-back writes.
+  /// Defaults to kRuntimeRobotYaml; tests override it to a temp file.
+  std::string robot_yaml_path_{kRuntimeRobotYaml};
   double publish_rate_;
   double keepout_nav_margin_;
   /// When true (default — operator intent "lethal area where there is no
