@@ -524,13 +524,13 @@
         "num_headland_passes": {
           "type": "integer",
           "title": "Headland Passes",
-          "default": 0,
+          "default": 2,
           "description": "Number of concentric perimeter rings before the inner field. 0 = auto (ceil(headland_width / tool_width)); >0 forces exactly that count."
         },
         "chassis_safety_inset": {
           "type": "number",
           "title": "Chassis Safety Inset",
-          "default": 0.15,
+          "default": 0.2,
           "description": "Pre-shrink the operator polygon by this many metres before F2C plans anything. Defaults to chassis_width / 2 so the chassis edge stays inside the polygon under perfect FTC tracking."
         },
         "min_turning_radius": {
@@ -652,13 +652,13 @@
         "obstacle_clearance_margin": {
           "type": "number",
           "title": "Obstacle Clearance Margin",
-          "default": 0.1,
+          "default": 0.2,
           "description": "Sideways room (m) left beyond the chassis when skirting an obstacle while mowing. Raise this if the robot goes around obstacles but shaves past them. Clamped to [0.0, 0.5] at launch."
         },
         "obstacle_detection_range_m": {
           "type": "number",
           "title": "Obstacle Detection Range",
-          "default": 1.5,
+          "default": 2,
           "description": "How far ahead (m) the coverage controller looks for obstacles before starting to skirt. Raise to react earlier and more smoothly. Clamped to [0.2, 5.0] at launch."
         },
         "obstacle_wait_timeout_s": {
@@ -670,19 +670,19 @@
         "max_obstacle_avoidance_distance": {
           "type": "number",
           "title": "Max Obstacle Detour",
-          "default": 3.0,
+          "default": 1,
           "description": "Maximum lateral detour (m) around obstacles — drives both the coverage controller's skirting and the bypass give-up threshold."
         },
         "obstacle_margin": {
           "type": "number",
           "title": "Drawn Obstacle Margin",
-          "default": 0.0,
+          "default": 0.2,
           "description": "Extra margin (m) around obstacles drawn on the map, applied to both coverage and transit planning. Draw a tree trunk and set this to cover its roots (invisible to the 2D LiDAR)."
         },
         "obstacle_slowdown_ratio": {
           "type": "number",
           "title": "Approach Slowdown Ratio",
-          "default": 0.3,
+          "default": 0.7,
           "description": "Speed factor when a scan return enters the chassis+15 cm approach box (LiDAR variant). 0.3 = slow to 30% of commanded speed."
         }
       }

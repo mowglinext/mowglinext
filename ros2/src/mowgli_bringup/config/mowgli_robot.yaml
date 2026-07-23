@@ -245,7 +245,7 @@ mowgli:
     # num_headland_passes: 0 = auto (= ceil(headland_width / tool_width)).
     # >0 forces exactly that many concentric perimeter rings, e.g. 1 for a
     # single perimeter pass, 2 for double, regardless of headland_width.
-    num_headland_passes: 0
+    num_headland_passes: 2         # 2026-07-23: field-validated default (was 0=auto)
     # mow_direction: perimeter/headland travel winding (issue #335). 0 = planner
     # default (F2C natural), 1 = clockwise, 2 = counter-clockwise. Set it so a
     # side-mounted blade stays on the cut side. navigation.launch.py injects this
@@ -267,7 +267,7 @@ mowgli:
     # arc's chassis no longer bulges ~op_width/2 past the perimeter ring the way it
     # did before (that outward bulge grew with the turn radius). Read LIVE by
     # coverage_server (ros2-param-set-tunable).
-    chassis_safety_inset: 0.0
+    chassis_safety_inset: 0.2       # 2026-07-23: field-validated default (was 0.0) — keep whole chassis inside the boundary, un-wedges the outermost ring
     # path_spacing: DEPRECATED / informational — no ROS2 node reads it. F2C swath
     # spacing is driven by tool_width (coverage_server.operation_width); a separate
     # spacing value re-opens the swath-gap bug, so this only mirrors tool_width.
@@ -389,7 +389,7 @@ mowgli:
     #   - map_server bypass_max_length (give-up threshold for the mow-progress
     #     bypass corridor)
     # Clamped to [0.5, 10.0] by navigation.launch.py.
-    max_obstacle_avoidance_distance: 3.0
+    max_obstacle_avoidance_distance: 1.0   # 2026-07-23: field-validated default (was 3.0)
     # Inflation radius (m) around LiDAR-detected obstacles in the LOCAL
     # costmap — the buffer FTC/RPP keep from trunks, legs, walls seen by the
     # scan. Injected into local_costmap.inflation_layer.inflation_radius.
@@ -431,7 +431,7 @@ mowgli:
     # FOOTPRINT (use_footprint_clearance in nav2_params_base.yaml) rather than a
     # swept ±half_width line, so it reacts on the real body edge and needs less
     # forward warning to skirt smoothly.
-    obstacle_detection_range_m: 1.0
+    obstacle_detection_range_m: 2.0        # 2026-07-23: field-validated default (was 1.0) — earlier obstacle warning
     # How much SIDEWAYS room (m) FTC leaves beyond the chassis when it skirts a
     # detected obstacle. Raise this if the robot goes around obstacles but
     # shaves past them. With the footprint model, the chassis FOOTPRINT is
@@ -447,7 +447,7 @@ mowgli:
     # 0.05 (was 0.10): the footprint already models the true body edge, so the
     # old margin — sized to cover the line model's centerline-miss gap — is now
     # double what's needed; halved to keep skirts tight while still clearing.
-    obstacle_clearance_margin: 0.05
+    obstacle_clearance_margin: 0.2         # 2026-07-23: field-validated default (was 0.05) — wider sideways room past obstacles
     # How long (s) FTC holds zero velocity on a blocked or over-max deviation
     # before aborting the strip and handing back to the BT. Debounces transient
     # LiDAR returns (a person crossing) so they don't burn a BT retry.
@@ -477,7 +477,7 @@ mowgli:
     obstacle_reverse_max_dist_m: 0.30
     # Straight reverse speed (m/s). Must clear the firmware ~0.05 deadband to
     # move at all. Clamped [0.0, 0.30] by navigation.launch.py.
-    obstacle_reverse_speed_mps: 0.10
+    obstacle_reverse_speed_mps: 0.15       # 2026-07-23: field-validated default (was 0.10) — clears firmware deadband to actually move
     # Extra margin (m) grown around DRAWN map obstacle polygons, applied in
     # BOTH the coverage planner (F2C holes are buffered outward before swath
     # planning) and the keepout mask (cells within the margin of an obstacle
@@ -485,11 +485,11 @@ mowgli:
     # root zones: draw the tree trunk as an obstacle and set the margin to
     # cover the roots (the 2D LiDAR cannot see them — they are below the
     # scan plane). Clamped to [0.0, 1.0].
-    obstacle_margin: 0.15
+    obstacle_margin: 0.2                    # 2026-07-23: field-validated default (was 0.15) — wider buffer around drawn obstacles
     # collision_monitor PolygonSlow slowdown factor when a scan return is
     # inside the chassis+15 cm approach box (LiDAR variant only). 0.3 = slow
     # to 30 % of commanded speed. Clamped to [0.05, 1.0].
-    obstacle_slowdown_ratio: 0.5
+    obstacle_slowdown_ratio: 0.7           # 2026-07-23: field-validated default (was 0.5)
 
     # -----------------------------------------------------------------
     # Navigation tolerances (garden terrain)
