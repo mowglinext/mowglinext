@@ -90,7 +90,11 @@
         <Inverter>
           <Fallback name="SensorFault">
             <IsScanStale max_age_sec="1.0"/>
-            <IsCollisionStopSustained min_duration_sec="15.0"/>
+            <!-- 60 s (was 15 — field 2026-07-23): must exceed IsObstacleStuck's
+                 full backoff sequence (~45-50 s) or this guard preempts the
+                 recovery machinery. Freshness-gated (max_state_age_sec) so a
+                 halted tree can't deadlock on the stale STOP latch. -->
+            <IsCollisionStopSustained min_duration_sec="60.0" max_state_age_sec="3.0"/>
           </Fallback>
         </Inverter>
         <Sequence name="SensorFaultHandler">

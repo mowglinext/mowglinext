@@ -309,6 +309,16 @@ struct BTContext
   /// flags "not currently in STOP".
   std::chrono::steady_clock::time_point collision_stop_since{};
 
+  /// Arrival time of the most recent /collision_monitor_state message —
+  /// ANY action_type. collision_monitor only processes (and republishes
+  /// state) while cmd_vel_nav flows; once the tree halts, the stream goes
+  /// silent and collision_action_type is a STALE LATCH, not live state.
+  /// Field 2026-07-23: the first SensorSafetyGuard deployment deadlocked on
+  /// exactly this — guard halts tree → Nav2 stops publishing → monitor stops
+  /// publishing → STOP latched forever → guard never releases (268 s observed).
+  /// Consumers MUST treat a stale latch as "unknown", not "still stopped".
+  std::chrono::steady_clock::time_point last_collision_state_time{};
+
   /// Time of the most recent STOP→non-STOP transition. Default-constructed
   /// = no STOP has ever ended this session. Used by WasRecentlyInCollisionStop
   /// so transient obstacles that clear between FollowStrip retry attempts

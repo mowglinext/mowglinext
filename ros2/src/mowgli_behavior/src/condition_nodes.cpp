@@ -803,10 +803,15 @@ BT::NodeStatus IsCollisionStopSustained::tick()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
 
-  double min_duration_sec = 15.0;
+  double min_duration_sec = 60.0;
   if (auto res = getInput<double>("min_duration_sec"))
   {
     min_duration_sec = res.value();
+  }
+  double max_state_age_sec = 3.0;
+  if (auto res = getInput<double>("max_state_age_sec"))
+  {
+    max_state_age_sec = res.value();
   }
 
   std::lock_guard<std::mutex> lock(ctx->context_mutex);
@@ -822,6 +827,23 @@ BT::NodeStatus IsCollisionStopSustained::tick()
   }
 
   const auto now = std::chrono::steady_clock::now();
+
+  // FRESHNESS GATE (field 2026-07-23 deadlock): collision_monitor only
+  // processes — and republishes state — while cmd_vel_nav flows. Once this
+  // guard halts the tree, Nav2 goes silent, the monitor goes silent, and
+  // collision_action_type becomes a stale latch: without this gate the STOP
+  // held forever (268 s observed) and the guard never released. A stale
+  // latch is "unknown", not "still stopped" — release the guard; if the
+  // obstacle is still there, the resumed cmd_vel flow makes the monitor
+  // re-publish STOP within one cycle and the subscriber re-stamps a fresh
+  // episode (see the stale-gap re-stamp in behavior_tree_node.cpp).
+  if (ctx->last_collision_state_time.time_since_epoch().count() == 0 ||
+      std::chrono::duration<double>(now - ctx->last_collision_state_time).count() >
+          max_state_age_sec)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+
   const double stop_age_sec =
       std::chrono::duration<double>(now - ctx->collision_stop_since).count();
   if (stop_age_sec >= min_duration_sec)
