@@ -206,12 +206,18 @@ export const MowgliNextPage = () => {
     ? Math.max(1, Math.round(remainingM2 / rateM2PerSec / 60))
     : 0;
 
-  const headline = data.isMoving && remainingMin > 0
-    ? <>{t('mowgliNextPage.headlineUntilHomePrefix')}<span style={{
-        background: 'var(--grad-primary, linear-gradient(135deg, #7CFFB2, #2BAA66))',
-        WebkitBackgroundClip: 'text', backgroundClip: 'text',
-        WebkitTextFillColor: 'transparent', color: 'transparent',
-      }}>{t('mowgliNextPage.headlineMinutes', {value: remainingMin})}</span>{t('mowgliNextPage.headlineUntilHomeSuffix')}</>
+  // Headline mirrors the subline's branch ORDER (moving first) so the two never
+  // contradict. When moving WITH a usable ETA we show the countdown; when moving
+  // but the coverage snapshot hasn't arrived yet (remainingMin === 0) we still
+  // say "en tonte" instead of falling through to the idle "au repos" text.
+  const headline = data.isMoving
+    ? (remainingMin > 0
+        ? <>{t('mowgliNextPage.headlineUntilHomePrefix')}<span style={{
+            background: 'var(--grad-primary, linear-gradient(135deg, #7CFFB2, #2BAA66))',
+            WebkitBackgroundClip: 'text', backgroundClip: 'text',
+            WebkitTextFillColor: 'transparent', color: 'transparent',
+          }}>{t('mowgliNextPage.headlineMinutes', {value: remainingMin})}</span>{t('mowgliNextPage.headlineUntilHomeSuffix')}</>
+        : <>{t('mowgliNextPage.headlineMowingPrefix')}<em style={{fontStyle: 'italic', color: 'var(--lime, #7CFFB2)'}}>{t('mowgliNextPage.headlineMowingEmphasis')}</em>{t('mowgliNextPage.headlineMowingSuffix')}</>)
     : data.state === "CHARGING"
       ? <>{t('mowgliNextPage.headlineChargingPrefix')}<span style={{
           background: 'var(--grad-primary, linear-gradient(135deg, #7CFFB2, #2BAA66))',
