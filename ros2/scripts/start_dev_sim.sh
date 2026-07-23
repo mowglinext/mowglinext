@@ -3,7 +3,7 @@
 # start_dev_sim.sh
 #
 # Dev simulation entrypoint: builds the workspace from mounted sources if
-# needed, then starts VNC + Gazebo GUI + full Nav2 stack.
+# needed, then starts VNC + Webots GUI + full Nav2 stack.
 #
 # Usage (via docker compose):
 #   docker compose up dev-sim
@@ -57,7 +57,7 @@ echo ""
 echo "========================================================"
 echo "  DEV SIMULATION"
 echo ""
-echo "  Gazebo GUI:      http://localhost:${NOVNC_PORT}/vnc.html"
+echo "  Webots GUI:      http://localhost:${NOVNC_PORT}/vnc.html"
 echo "  Foxglove Studio: ws://localhost:8765"
 echo ""
 echo "  Rebuild:  make dev-build"
@@ -68,7 +68,7 @@ echo "========================================================"
 echo ""
 
 # Launch file is configurable via LAUNCH_FILE env var.
-# Default: sim_full_system.launch.py with Gazebo GUI.
+# Default: sim_full_system.launch.py with Webots GUI.
 LAUNCH_FILE="${LAUNCH_FILE:-sim_full_system.launch.py}"
 LAUNCH_ARGS="${LAUNCH_ARGS:-headless:=false use_rviz:=false}"
 

@@ -63,6 +63,13 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
       static_cast<size_t>(declare_parameter<int>("yaw_convergence_min_samples", 20));
   map_file_path_ = declare_parameter<std::string>("map_file_path", "");
   areas_file_path_ = declare_parameter<std::string>("areas_file_path", "");
+  // WGS84 datum the map frame is anchored to — injected at launch from
+  // mowgli_robot.yaml (same source navsat_to_absolute_pose_node projects
+  // GPS fixes with). Drives the areas.dat datum stamp and the on-load
+  // datum-change migration (issue #216). 0/0 = unset.
+  datum_lat_ = declare_parameter<double>("datum_lat", 0.0);
+  datum_lon_ = declare_parameter<double>("datum_lon", 0.0);
+  robot_yaml_path_ = declare_parameter<std::string>("robot_yaml_path", kRuntimeRobotYaml);
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
   mow_progress_publish_period_s_ = declare_parameter<double>("mow_progress_publish_period_s", 2.0);
   keepout_nav_margin_ = declare_parameter<double>("keepout_nav_margin", 0.45);
@@ -368,30 +375,12 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
         on_promote_obstacle(req, res);
       });
 
-  // ── Load pre-defined areas from parameters ────────────────────────────
-  load_areas_from_params();
-
-  // ── Auto-load persisted areas from file (overrides parameter areas) ───
-  if (!areas_file_path_.empty())
-  {
-    try
-    {
-      load_areas_from_file(areas_file_path_);
-      RCLCPP_INFO(get_logger(), "Loaded persisted areas from %s", areas_file_path_.c_str());
-    }
-    catch (const std::exception& ex)
-    {
-      RCLCPP_WARN(get_logger(), "No persisted areas to load: %s", ex.what());
-    }
-  }
-
-  // Resize map to fit loaded areas (if any).
-  resize_map_to_areas();
-
   // Dock pose: single source of truth is mowgli_robot.yaml. Calibration
   // (calibrate_imu_yaw_node) and manual GUI placement (~/set_docking_point
   // below) write back to that file, so the parameters declared here are
-  // always the latest persisted values.
+  // always the latest persisted values. Read BEFORE the areas-file load so
+  // the datum-change migration inside load_areas_from_file can re-project
+  // the dock pose together with the area polygons (issue #216).
   double dock_x = declare_parameter<double>("dock_pose_x", 0.0);
   double dock_y = declare_parameter<double>("dock_pose_y", 0.0);
   double dock_yaw = declare_parameter<double>("dock_pose_yaw", 0.0);
@@ -412,6 +401,26 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
                 dock_y,
                 dock_yaw);
   }
+
+  // ── Load pre-defined areas from parameters ────────────────────────────
+  load_areas_from_params();
+
+  // ── Auto-load persisted areas from file (overrides parameter areas) ───
+  if (!areas_file_path_.empty())
+  {
+    try
+    {
+      load_areas_from_file(areas_file_path_);
+      RCLCPP_INFO(get_logger(), "Loaded persisted areas from %s", areas_file_path_.c_str());
+    }
+    catch (const std::exception& ex)
+    {
+      RCLCPP_WARN(get_logger(), "No persisted areas to load: %s", ex.what());
+    }
+  }
+
+  // Resize map to fit loaded areas (if any).
+  resize_map_to_areas();
 
   // Publish docking pose if available (transient_local ensures late subscribers get it).
   if (docking_pose_set_)

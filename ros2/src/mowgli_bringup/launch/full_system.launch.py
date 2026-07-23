@@ -272,6 +272,13 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # 4. Map server
     # ------------------------------------------------------------------
+    # WGS84 datum — shared by navsat_to_absolute_pose (GPS→map projection)
+    # and map_server (areas.dat datum stamp + datum-change migration of the
+    # persisted map + dock pose, issue #216). Extracted once so both nodes
+    # are guaranteed the same anchor.
+    datum_lat = float(robot_params.get("datum_lat", 0.000000000))
+    datum_lon = float(robot_params.get("datum_lon", 0.000000000))
+
     map_server_node = Node(
         package="mowgli_map",
         executable="map_server_node",
@@ -333,6 +340,14 @@ def generate_launch_description() -> LaunchDescription:
             # tool_width moves the F2C swath spacing while this stamp radius
             # stays frozen, re-opening the un-mowed-strip / under-coverage gap.
             {"tool_width": float(robot_params.get("tool_width", DEFAULT_TOOL_WIDTH_M))},
+            # Datum anchor for the persisted map (issue #216): map_server
+            # stamps areas.dat with the datum its metre coordinates were
+            # recorded against, and on a datum change re-projects the whole
+            # map + dock pose into the new frame instead of letting them
+            # shift across the garden. MUST match navsat_to_absolute_pose's
+            # datum (same robot_params read).
+            {"datum_lat": datum_lat},
+            {"datum_lon": datum_lon},
         ],
     )
 
@@ -350,8 +365,8 @@ def generate_launch_description() -> LaunchDescription:
     # this node keeps /gps/absolute_pose for legacy consumers and emits
     # /gps/pose_cov for ekf_map_node fusion. Universal GNSS owns /gps/status.
     # ------------------------------------------------------------------
-    datum_lat = float(robot_params.get("datum_lat", 0.000000000))
-    datum_lon = float(robot_params.get("datum_lon", 0.000000000))
+    # (datum_lat / datum_lon extracted above, next to map_server — the two
+    # nodes must share the same anchor.)
     navsat_converter_node = Node(
         package="mowgli_localization",
         executable="navsat_to_absolute_pose_node",
