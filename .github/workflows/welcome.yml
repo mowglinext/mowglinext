@@ -25,10 +25,8 @@ jobs:
           pr-message: |
             Welcome to MowgliNext! Thanks for your first pull request. 👋
 
-            Our CI will run automated checks, and Claude will provide an AI code review.
-            A maintainer will review shortly after.
+            Our CI will run automated checks. A maintainer will review shortly after.
 
             Please make sure:
             - [ ] CI checks pass
-            - [ ] You've addressed any AI review feedback
             - [ ] The PR description explains what and why

@@ -13,8 +13,8 @@
 <!-- ─── Beta Banner ─────────────────────────────────── -->
 <div class="beta-banner">
   <span class="beta-tag">BETA</span>
-  MowgliNext is under active development — not yet ready for production use.
-  <a href="https://github.com/mowglinext/mowglinext">Follow progress on GitHub</a>
+  First public beta — running on real hardware and open to testers.
+  <a href="https://github.com/mowglinext/mowglinext">Join the testers on GitHub</a>
 </div>
 
 <!-- ─── Navigation ──────────────────────────────────── -->
@@ -391,37 +391,6 @@
         </div>
       </div>
 
-      <!-- Rangefinders -->
-      <div class="composer-group disabled" id="tfluna-group" aria-disabled="true">
-        <h3>TF-Luna Rangefinders <span class="option-badge coming-soon">Unavailable</span></h3>
-        <p class="composer-hint">Temporarily disabled on this branch. The installer keeps TF-Luna support off until the runtime services are production-ready again.</p>
-        <div class="composer-options" data-group="tfluna">
-          <button class="composer-option active" data-value="none">
-            <span class="option-icon">❌</span>
-            <span class="option-label">None</span>
-            <span class="option-desc">No rangefinders</span>
-          </button>
-          <button class="composer-option" data-value="front">
-            <span class="option-icon">📏</span>
-            <span class="option-badge">Experimental</span>
-            <span class="option-label">Front only</span>
-            <span class="option-desc">Front obstacle sensor — data publishes, not yet fused</span>
-          </button>
-          <button class="composer-option" data-value="edge">
-            <span class="option-icon">📏</span>
-            <span class="option-badge">Experimental</span>
-            <span class="option-label">Edge only</span>
-            <span class="option-desc">Ground edge detector — data publishes, not yet fused</span>
-          </button>
-          <button class="composer-option" data-value="both">
-            <span class="option-icon">📏</span>
-            <span class="option-badge">Experimental</span>
-            <span class="option-label">Front + Edge</span>
-            <span class="option-desc">Both sensors — data publishes, not yet fused</span>
-          </button>
-        </div>
-      </div>
-
       <!-- Image channel -->
       <div class="composer-group" id="channel-group">
         <h3>Release Channel</h3>
@@ -483,7 +452,7 @@
 <!-- ─── Composer JS ─────────────────────────────────── -->
 <script>
 (function() {
-  var state = { backend: 'mowgli', gnssReceiverFamily: 'auto', gnssConnection: 'uart', lidar: 'ldlidar-uart', tfluna: 'none', channel: 'main' };
+  var state = { backend: 'mowgli', gnssReceiverFamily: 'auto', gnssConnection: 'uart', lidar: 'ldlidar-uart', channel: 'main' };
   var baseUrl = 'https://mowgli.garden/install.sh';
   var defaultGnssHint = 'Universal GNSS is the only supported direct GNSS path. Pick first-boot GNSS defaults here; the installer will ask for the exact serial device and detect baud, while the active runtime configuration later lives in the GUI/YAML.';
   var mavrosGnssHint = 'MAVROS uses the flight controller telemetry link. Direct Universal GNSS selection is disabled for this backend.';
@@ -527,7 +496,6 @@
     }
 
     parts.push('--lidar=' + state.lidar);
-    parts.push('--tfluna=' + state.tfluna);
 
     // Channel: only emit when non-default. --branch is used by both the
     // bootstrap (git clone) and the installer (image tag), keeping them

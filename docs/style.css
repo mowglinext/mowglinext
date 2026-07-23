@@ -409,7 +409,7 @@ nav .links a:hover { color: var(--text-heading); text-decoration: none; }
   text-align: center;
 }
 
-/* "Experimental" / "Coming soon" badge above the option label */
+/* "Experimental" / "Advanced" badge above the option label */
 .option-badge {
   display: inline-block;
   margin-bottom: 4px;
@@ -421,10 +421,6 @@ nav .links a:hover { color: var(--text-heading); text-decoration: none; }
   border-radius: 4px;
   background: var(--accent-muted, #fcecd6);
   color: var(--accent, #8a5400);
-}
-.option-badge.coming-soon {
-  background: #e6e6e6;
-  color: #555;
 }
 
 .composer-result {

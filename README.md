@@ -60,9 +60,9 @@
 
 ---
 
-> **Beta — Work in Progress**
+> ## 🌱 First Public Beta — Open to Testers
 >
-> MowgliNext is under active development and **not ready for production use**. We're building in the open and welcome early adopters.
+> MowgliNext has reached its **first beta**: a complete autonomous mowing stack running on real hardware — undock, mow, avoid obstacles, dock, resume. We're now inviting testers to run it on their own mowers and help us harden it. Expect rough edges, and tell us what breaks: [open an issue](https://github.com/mowglinext/mowglinext/issues) or [join the discussion](https://github.com/mowglinext/mowglinext/discussions).
 
 ---
 
