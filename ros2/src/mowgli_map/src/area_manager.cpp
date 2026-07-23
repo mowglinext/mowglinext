@@ -1454,3 +1454,4 @@ void MapServerNode::load_areas_for_test(const std::string& path)
 }
 
 }  // namespace mowgli_map
+// (validation branch build trigger)
