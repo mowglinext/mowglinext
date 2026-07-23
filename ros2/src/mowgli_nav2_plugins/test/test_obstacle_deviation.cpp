@@ -54,6 +54,51 @@ protected:
     }
   }
 
+  /// Stamp a square block at a SPECIFIC cost (e.g. 253 = inscribed vs
+  /// 254 = lethal) to exercise the footprint-vs-line threshold split.
+  void stampBlockCost(double cx, double cy, double half, unsigned char cost)
+  {
+    unsigned int mx0 = 0;
+    unsigned int my0 = 0;
+    unsigned int mx1 = 0;
+    unsigned int my1 = 0;
+    ASSERT_TRUE(costmap_.worldToMap(cx - half, cy - half, mx0, my0));
+    ASSERT_TRUE(costmap_.worldToMap(cx + half, cy + half, mx1, my1));
+    for (unsigned int x = mx0; x <= mx1; ++x)
+    {
+      for (unsigned int y = my0; y <= my1; ++y)
+      {
+        costmap_.setCost(x, y, cost);
+      }
+    }
+  }
+
+  /// The real chassis footprint (base frame): 0.60 m long × 0.40 m wide, rear
+  /// axle at x=-0.10. Matches nav2_params_base.yaml.
+  ObstacleDeviation::Footprint makeChassisFootprint()
+  {
+    auto pt = [](double x, double y)
+    {
+      geometry_msgs::msg::Point p;
+      p.x = x;
+      p.y = y;
+      return p;
+    };
+    return {pt(0.50, 0.20), pt(0.50, -0.20), pt(-0.10, -0.20), pt(-0.10, 0.20)};
+  }
+
+  /// A pose at (x, y) facing +X (yaw=0).
+  geometry_msgs::msg::PoseStamped poseAt(double x, double y)
+  {
+    geometry_msgs::msg::PoseStamped p;
+    p.pose.position.x = x;
+    p.pose.position.y = y;
+    tf2::Quaternion q;
+    q.setRPY(0.0, 0.0, 0.0);
+    p.pose.orientation = tf2::toMsg(q);
+    return p;
+  }
+
   /// Build a straight horizontal path (along +X) from (start_x, y) for n
   /// poses spaced `step` apart. All poses face +X (yaw=0).
   std::vector<geometry_msgs::msg::PoseStamped> makeStraightPath(double start_x,
@@ -398,9 +443,16 @@ TEST_F(ObstacleDeviationTest, GrowDeviation_WiderHalfWidth_ForcesLargerSkirt)
   const double kMargin = 0.15;
   const double bare = ObstacleDeviation::growDeviationUntilClear(
       costmap_, path, 0, 10, 0.0, 1.5, 0.05, ObstacleDeviation::BoundaryGuard{}, kBodyHalf);
-  const double with_margin = ObstacleDeviation::growDeviationUntilClear(
-      costmap_, path, 0, 10, 0.0, 1.5, 0.05, ObstacleDeviation::BoundaryGuard{},
-      kBodyHalf + kMargin);
+  const double with_margin =
+      ObstacleDeviation::growDeviationUntilClear(costmap_,
+                                                 path,
+                                                 0,
+                                                 10,
+                                                 0.0,
+                                                 1.5,
+                                                 0.05,
+                                                 ObstacleDeviation::BoundaryGuard{},
+                                                 kBodyHalf + kMargin);
 
   ASSERT_LE(std::abs(bare), 1.5) << "bare search should have found clearance";
   ASSERT_LE(std::abs(with_margin), 1.5) << "margin search should have found clearance";
@@ -425,6 +477,235 @@ TEST_F(ObstacleDeviationTest, DetectionUnaffectedByClearanceWidening)
       << "bare detection width must not reach an obstacle 0.22 m off the line";
   EXPECT_GE(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.27), 0)
       << "the widened band does cover it — confirming the two widths differ";
+}
+
+// ── footprintBlocked (explicit chassis polygon) ───────────────────────────────
+
+TEST_F(ObstacleDeviationTest, Footprint_ObstacleInsideBody_Blocked)
+{
+  // Robot at (0.5, 0) facing +X. Chassis spans world x∈[0.4,1.0], y∈[-0.2,0.2].
+  // A lethal block at (0.6, 0.18) sits INSIDE that rectangle → blocked.
+  stampBlock(0.6, 0.18, 0.02);
+  const auto fp = makeChassisFootprint();
+  EXPECT_TRUE(ObstacleDeviation::footprintBlocked(costmap_, poseAt(0.5, 0.0), 0.0, fp));
+}
+
+TEST_F(ObstacleDeviationTest, Footprint_ObstacleOutsideBody_Clear)
+{
+  // Same robot pose, block at y=0.30 — OUTSIDE the ±0.20 chassis half-width →
+  // the footprint must read clear (no over-trigger).
+  stampBlock(0.6, 0.30, 0.02);
+  const auto fp = makeChassisFootprint();
+  EXPECT_FALSE(ObstacleDeviation::footprintBlocked(costmap_, poseAt(0.5, 0.0), 0.0, fp));
+}
+
+TEST_F(ObstacleDeviationTest, Footprint_ObstacleBehindRearAxle_Clear)
+{
+  // Block behind the rear edge (x < -0.10 from robot at origin) is outside the
+  // footprint's longitudinal extent → clear. Robot at (0,0): footprint x∈[-0.1,0.5].
+  stampBlock(-0.30, 0.0, 0.05);
+  const auto fp = makeChassisFootprint();
+  EXPECT_FALSE(ObstacleDeviation::footprintBlocked(costmap_, poseAt(0.0, 0.0), 0.0, fp));
+}
+
+TEST_F(ObstacleDeviationTest, Footprint_LateralOffsetShiftsBody)
+{
+  // Block at (0.6, 0.30). At center_dev=0 the body (y∈[-0.2,0.2]) misses it.
+  // Offsetting the body LEFT by +0.15 shifts it to y∈[-0.05,0.35] → now hits.
+  stampBlock(0.6, 0.30, 0.02);
+  const auto fp = makeChassisFootprint();
+  EXPECT_FALSE(ObstacleDeviation::footprintBlocked(costmap_, poseAt(0.5, 0.0), 0.0, fp));
+  EXPECT_TRUE(ObstacleDeviation::footprintBlocked(costmap_, poseAt(0.5, 0.0), 0.15, fp));
+}
+
+TEST_F(ObstacleDeviationTest, Footprint_EmptyPolygon_NeverBlocks)
+{
+  // An empty footprint is not rasterisable — footprintBlocked returns false so
+  // callers fall back to the half_width line model.
+  stampBlock(0.5, 0.0, 0.5);
+  EXPECT_FALSE(ObstacleDeviation::footprintBlocked(
+      costmap_, poseAt(0.5, 0.0), 0.0, ObstacleDeviation::Footprint{}));
+}
+
+// ── 254-vs-253 threshold (footprint = lethal-only, line = lethal-or-inscribed) ─
+
+TEST_F(ObstacleDeviationTest, Footprint_InscribedCell_NotBlocked_ButLethalIs)
+{
+  // Cost-253 (INSCRIBED_INFLATED_OBSTACLE) cells fill the body. The footprint
+  // model thresholds at 254, so it reads CLEAR — it models the body explicitly
+  // and no longer needs the inscribed band as a proxy.
+  stampBlockCost(0.6, 0.0, 0.05, nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);  // 253
+  const auto fp = makeChassisFootprint();
+  EXPECT_FALSE(ObstacleDeviation::footprintBlocked(costmap_, poseAt(0.5, 0.0), 0.0, fp));
+
+  // A true lethal (254) cell at the same spot IS blocked.
+  stampBlockCost(0.6, 0.0, 0.05, nav2_costmap_2d::LETHAL_OBSTACLE);  // 254
+  EXPECT_TRUE(ObstacleDeviation::footprintBlocked(costmap_, poseAt(0.5, 0.0), 0.0, fp));
+}
+
+TEST_F(ObstacleDeviationTest, LineModel_InscribedCell_IsBlocked)
+{
+  // The FALLBACK half_width line model keeps the legacy 253 threshold, so the
+  // same inscribed (253) cell the footprint ignored DOES block the line sample.
+  stampBlockCost(0.5, 0.0, 0.05, nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE);  // 253
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  EXPECT_FALSE(ObstacleDeviation::isPathClearWithDeviation(
+      costmap_, path, 0, 10, 0.0, ObstacleDeviation::BoundaryGuard{}, 0.20));
+}
+
+// ── Helper dispatch: footprint arg overrides half_width path ───────────────────
+
+TEST_F(ObstacleDeviationTest, IsPathClear_FootprintCatchesOffCenterlineLethal)
+{
+  // Lethal off the centerline (y=0.15) inside the chassis half-width. The line
+  // model at half_width=0 misses it; supplying the footprint catches it.
+  stampBlock(0.5, 0.15, 0.02);
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  const auto fp = makeChassisFootprint();
+  EXPECT_TRUE(ObstacleDeviation::isPathClearWithDeviation(costmap_, path, 0, 10, 0.0));
+  EXPECT_FALSE(ObstacleDeviation::isPathClearWithDeviation(
+      costmap_, path, 0, 10, 0.0, ObstacleDeviation::BoundaryGuard{}, 0.0, fp));
+}
+
+TEST_F(ObstacleDeviationTest, FindFirstObstacle_FootprintArgUsed)
+{
+  // Obstacle at (0.5, 0.18) — inside the ±0.20 chassis, off centerline.
+  // half_width=0 (bare centerline) misses it entirely. Supplying the footprint
+  // detects it: because the 0.50 m-long footprint reaches FORWARD, an obstacle
+  // at x=0.5 is seen from a pose at or before idx 5 (the pose closest to it).
+  stampBlock(0.5, 0.18, 0.02);
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  const auto fp = makeChassisFootprint();
+  EXPECT_EQ(-1, ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.0));
+  const int idx = ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.0, fp);
+  EXPECT_GE(idx, 0) << "footprint must detect the off-centerline obstacle";
+  EXPECT_LE(idx, 5) << "detected no later than the pose nearest the obstacle";
+}
+
+// ── expandFootprintLateral ────────────────────────────────────────────────────
+
+TEST_F(ObstacleDeviationTest, ExpandFootprintLateral_WidensYOnly)
+{
+  const auto fp = makeChassisFootprint();  // y∈{-0.20, 0.20}, x∈{-0.10, 0.50}
+  const auto wide = ObstacleDeviation::expandFootprintLateral(fp, 0.10);
+  ASSERT_EQ(wide.size(), fp.size());
+  for (std::size_t i = 0; i < fp.size(); ++i)
+  {
+    EXPECT_DOUBLE_EQ(wide[i].x, fp[i].x) << "x (longitudinal) must be untouched";
+    const double expected_y = fp[i].y + (fp[i].y >= 0.0 ? 0.10 : -0.10);
+    EXPECT_DOUBLE_EQ(wide[i].y, expected_y) << "y widens outward by the margin";
+  }
+}
+
+TEST_F(ObstacleDeviationTest, ExpandFootprintLateral_NonPositiveMarginNoOp)
+{
+  const auto fp = makeChassisFootprint();
+  const auto same = ObstacleDeviation::expandFootprintLateral(fp, 0.0);
+  ASSERT_EQ(same.size(), fp.size());
+  for (std::size_t i = 0; i < fp.size(); ++i)
+  {
+    EXPECT_DOUBLE_EQ(same[i].y, fp[i].y);
+  }
+}
+
+TEST_F(ObstacleDeviationTest, ExpandedFootprint_ForcesLargerSkirt)
+{
+  // The footprint-model equivalent of GrowDeviation_WiderHalfWidth: an expanded
+  // footprint must grow a strictly larger skirt around a straddling obstacle.
+  stampBlock(0.5, 0.0, 0.20);
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  const auto fp = makeChassisFootprint();
+  const auto wide = ObstacleDeviation::expandFootprintLateral(fp, 0.15);
+
+  const double bare = ObstacleDeviation::growDeviationUntilClear(
+      costmap_, path, 0, 10, 0.0, 1.5, 0.05, ObstacleDeviation::BoundaryGuard{}, 0.0, fp);
+  const double with_margin = ObstacleDeviation::growDeviationUntilClear(
+      costmap_, path, 0, 10, 0.0, 1.5, 0.05, ObstacleDeviation::BoundaryGuard{}, 0.0, wide);
+
+  ASSERT_LE(std::abs(bare), 1.5);
+  ASSERT_LE(std::abs(with_margin), 1.5);
+  EXPECT_GT(std::abs(with_margin), std::abs(bare))
+      << "lateral footprint expansion must widen the skirt";
+}
+
+// ── clipFootprintFront (spec Part A: less-conservative footprint) ─────────────
+
+TEST_F(ObstacleDeviationTest, ClipFront_KeepsOnlyLeadingSection)
+{
+  // Chassis x∈[-0.10, 0.50] (0.60 m long). Clip to the front 0.30 m → every
+  // vertex behind x=0.20 is projected forward onto x=0.20.
+  const auto fp = makeChassisFootprint();
+  const auto front = ObstacleDeviation::clipFootprintFront(fp, 0.30);
+  ASSERT_EQ(front.size(), fp.size());
+  double min_x = 1e9;
+  double max_x = -1e9;
+  for (const auto& v : front)
+  {
+    min_x = std::min(min_x, v.x);
+    max_x = std::max(max_x, v.x);
+  }
+  EXPECT_DOUBLE_EQ(max_x, 0.50);  // leading edge preserved
+  EXPECT_DOUBLE_EQ(min_x, 0.20);  // rear projected onto the cut plane
+}
+
+TEST_F(ObstacleDeviationTest, ClipFront_NoOpWhenLengthCoversBody)
+{
+  const auto fp = makeChassisFootprint();
+  // 0.60 m clip == full body length → unchanged; 0 → unchanged.
+  const auto whole = ObstacleDeviation::clipFootprintFront(fp, 0.60);
+  const auto zero = ObstacleDeviation::clipFootprintFront(fp, 0.0);
+  ASSERT_EQ(whole.size(), fp.size());
+  for (std::size_t i = 0; i < fp.size(); ++i)
+  {
+    EXPECT_DOUBLE_EQ(whole[i].x, fp[i].x);
+    EXPECT_DOUBLE_EQ(zero[i].x, fp[i].x);
+  }
+}
+
+TEST_F(ObstacleDeviationTest, ClipFront_LessConservativeThanFull)
+{
+  // An obstacle grazing only the REAR of the full footprint blocks the full body
+  // but NOT the front-clipped body — the middle ground that lets FTC skirt an
+  // obstacle the full-length footprint would refuse. Robot at origin facing +X;
+  // block behind the front section (x≈0.0, within the full body x∈[-0.10,0.50]
+  // but behind the front-clip cut at x=0.20).
+  stampBlock(0.0, 0.30, 0.05);  // lethal patch beside the rear-left of the body
+  const auto pose = poseAt(0.0, 0.0);
+  const auto fp = makeChassisFootprint();
+  const auto front = ObstacleDeviation::clipFootprintFront(fp, 0.30);
+  // Skirt LEFT by 0.10 so the rear-left corner of the FULL body reaches the patch
+  // but the front-clipped body (rear dropped) does not.
+  const bool full_blocked = ObstacleDeviation::footprintBlocked(costmap_, pose, 0.10, fp);
+  const bool front_blocked = ObstacleDeviation::footprintBlocked(costmap_, pose, 0.10, front);
+  EXPECT_TRUE(full_blocked);
+  EXPECT_FALSE(front_blocked);
+}
+
+// ── hasClearExit (spec Part A: cul-de-sac guard) ──────────────────────────────
+
+TEST_F(ObstacleDeviationTest, HasClearExit_TrueWhenNoObstacle)
+{
+  const auto path = makeStraightPath(0.0, 0.0, 20, 0.1);
+  EXPECT_TRUE(ObstacleDeviation::hasClearExit(costmap_, path, 0, 20, 0.20));
+}
+
+TEST_F(ObstacleDeviationTest, HasClearExit_TrueWhenObstacleFarEdgeVisible)
+{
+  // A finite obstacle mid-window: nominal path is blocked, then reopens → the
+  // far edge is in view → skirting is safe (has an exit).
+  stampBlock(0.6, 0.0, 0.10);  // x≈0.5..0.7 on the path centerline
+  const auto path = makeStraightPath(0.0, 0.0, 20, 0.1);  // out to x=1.9
+  EXPECT_TRUE(ObstacleDeviation::hasClearExit(costmap_, path, 0, 20, 0.20));
+}
+
+TEST_F(ObstacleDeviationTest, HasClearExit_FalseWhenObstacleFillsWindow)
+{
+  // A wall that stays blocked to the end of the lookahead → no far edge in view
+  // → skirting sideways would box the robot in → NO clear exit.
+  const auto path = makeStraightPath(0.0, 0.0, 12, 0.1);  // out to x=1.1
+  // Block from x≈0.4 to well past the window end.
+  stampBlock(1.2, 0.0, 0.90);  // covers x≈0.3..2.1 across the whole tail
+  EXPECT_FALSE(ObstacleDeviation::hasClearExit(costmap_, path, 0, 12, 0.20));
 }
 
 }  // namespace mowgli_nav2_plugins

@@ -29,6 +29,19 @@ type CoveragePath struct {
 	Path                      nav.Path                       `json:"path"`
 }
 
+// DockCalibrationStatus matches mowgli_interfaces/msg/DockCalibrationStatus.
+type DockCalibrationStatus struct {
+	Phase                     uint8                          `json:"phase"`
+	Progress                  float32                        `json:"progress"`
+	CogStdDeg                 float32                        `json:"cog_std_deg"`
+	DisplacementM             float32                        `json:"displacement_m"`
+	Charging                  bool                           `json:"charging"`
+	Running                   bool                           `json:"running"`
+	Success                   bool                           `json:"success"`
+	RetryReason               uint8                          `json:"retry_reason"`
+	Message                   string                         `json:"message"`
+}
+
 // ESCStatus matches mowgli_interfaces/msg/ESCStatus.
 type ESCStatus struct {
 	Status                    uint8                          `json:"status"`
@@ -109,6 +122,7 @@ type HighLevelStatus struct {
 	TotalSwaths               int16                          `json:"total_swaths"`
 	CompletedSwaths           int16                          `json:"completed_swaths"`
 	SkippedSwaths             int16                          `json:"skipped_swaths"`
+	CoveragePercent           float32                        `json:"coverage_percent"`
 	GpsQualityPercent         float32                        `json:"gps_quality_percent"`
 	BatteryPercent            float32                        `json:"battery_percent"`
 	IsCharging                bool                           `json:"is_charging"`

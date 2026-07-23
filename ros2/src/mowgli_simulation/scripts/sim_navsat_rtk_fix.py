@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-sim_navsat_rtk_fix.py — SIMULATION ONLY
+sim_navsat_rtk_fix.py — SIMULATION ONLY.
 
 Programmable GPS-quality controller for the simulator. Subscribes to a
 raw Gazebo NavSatFix and republishes on the production topic with
@@ -25,7 +25,7 @@ The `quality_pattern` parameter is a string of `duration_s,REGIME`
 segments separated by `;`. Empty (default) means always RTK_FIXED, which
 matches the previous behaviour (`sim_navsat_rtk_fix` legacy mode).
 
-Examples:
+Pattern examples:
   ""                                       always RTK-Fixed
   "30,RTK_FIXED;15,RTK_FLOAT;5,NO_FIX"     30 s fixed, 15 s float, 5 s
                                             no-fix, then loops
@@ -42,9 +42,9 @@ single sensor topic. No drive commands, no TF, no safety topic.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
 import random
-from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import rclpy
@@ -61,9 +61,9 @@ from sensor_msgs.msg import NavSatFix, NavSatStatus
 # Quality regime -> (status code, sigma_xy meters, sigma_z meters).
 # sigma_xy doubles as the position noise std-dev added to lat/lon.
 QUALITY_REGIMES: dict[str, Tuple[int, float, float]] = {
-    "RTK_FIXED": (NavSatStatus.STATUS_GBAS_FIX, 0.003, 0.006),
-    "RTK_FLOAT": (NavSatStatus.STATUS_SBAS_FIX, 0.30, 0.60),
-    "NO_FIX":    (NavSatStatus.STATUS_NO_FIX,   2.0,  4.0),
+    'RTK_FIXED': (NavSatStatus.STATUS_GBAS_FIX, 0.003, 0.006),
+    'RTK_FLOAT': (NavSatStatus.STATUS_SBAS_FIX, 0.30, 0.60),
+    'NO_FIX': (NavSatStatus.STATUS_NO_FIX, 2.0, 4.0),
 }
 
 
@@ -74,20 +74,22 @@ class _Segment:
 
 
 def _parse_pattern(spec: str) -> List[_Segment]:
-    """Parse "30,RTK_FIXED;15,RTK_FLOAT" into a list of segments.
+    """
+    Parse "30,RTK_FIXED;15,RTK_FLOAT" into a list of segments.
 
     Whitespace tolerant; raises ValueError on bad regime names.
-    Empty input returns []."""
+    Empty input returns [].
+    """
     if not spec.strip():
         return []
     out: List[_Segment] = []
-    for raw in spec.split(";"):
+    for raw in spec.split(';'):
         part = raw.strip()
         if not part:
             continue
-        if "," not in part:
+        if ',' not in part:
             raise ValueError(f"bad segment '{part}': expected 'duration,REGIME'")
-        dur_s, name = part.split(",", 1)
+        dur_s, name = part.split(',', 1)
         regime = name.strip().upper()
         if regime not in QUALITY_REGIMES:
             raise ValueError(
@@ -95,28 +97,29 @@ def _parse_pattern(spec: str) -> List[_Segment]:
             )
         out.append(_Segment(float(dur_s.strip()), regime))
     if any(s.duration_s <= 0.0 for s in out):
-        raise ValueError("segment durations must be > 0")
+        raise ValueError('segment durations must be > 0')
     return out
 
 
 class SimNavSatRtkFix(Node):
+
     def __init__(self) -> None:
-        super().__init__("sim_navsat_rtk_fix")
+        super().__init__('sim_navsat_rtk_fix')
 
         self._input_topic = self.declare_parameter(
-            "input_topic", "/gps/fix_raw"
+            'input_topic', '/gps/fix_raw'
         ).value
         self._output_topic = self.declare_parameter(
-            "output_topic", "/gps/fix"
+            'output_topic', '/gps/fix'
         ).value
         # Programmable cycle. Empty means always RTK_FIXED (legacy mode).
         pattern_spec = str(
-            self.declare_parameter("quality_pattern", "").value
+            self.declare_parameter('quality_pattern', '').value
         )
         # Noise reproducibility — lets us compare two sessions with the
         # same quality cycle.
         self._rng = random.Random(
-            int(self.declare_parameter("noise_seed", 42).value)
+            int(self.declare_parameter('noise_seed', 42).value)
         )
 
         try:
@@ -161,11 +164,11 @@ class SimNavSatRtkFix(Node):
         self.create_timer(15.0, self._log_stats)
 
         if self._segments:
-            pattern_str = " -> ".join(
-                f"{s.duration_s:.0f}s {s.regime}" for s in self._segments
+            pattern_str = ' -> '.join(
+                f'{s.duration_s:.0f}s {s.regime}' for s in self._segments
             )
             self.get_logger().info(
-                "sim_navsat_rtk_fix ready: %s -> %s; cycle (%.0f s): %s"
+                'sim_navsat_rtk_fix ready: %s -> %s; cycle (%.0f s): %s'
                 % (
                     self._input_topic,
                     self._output_topic,
@@ -175,7 +178,7 @@ class SimNavSatRtkFix(Node):
             )
         else:
             self.get_logger().info(
-                "sim_navsat_rtk_fix ready: %s -> %s; always RTK_FIXED"
+                'sim_navsat_rtk_fix ready: %s -> %s; always RTK_FIXED'
                 % (self._input_topic, self._output_topic)
             )
 
@@ -185,7 +188,7 @@ class SimNavSatRtkFix(Node):
 
     def _current_regime(self, ros_now_s: float) -> str:
         if not self._segments:
-            return "RTK_FIXED"
+            return 'RTK_FIXED'
         if self._start_t is None:
             self._start_t = ros_now_s
         elapsed = (ros_now_s - self._start_t) % self._cycle_total_s
@@ -202,9 +205,9 @@ class SimNavSatRtkFix(Node):
         var_xy = sigma_xy * sigma_xy
         var_z = sigma_z * sigma_z
         return [
-            var_xy, 0.0,    0.0,
-            0.0,    var_xy, 0.0,
-            0.0,    0.0,    var_z,
+            var_xy, 0.0, 0.0,
+            0.0, var_xy, 0.0,
+            0.0, 0.0, var_z,
         ]
 
     # ------------------------------------------------------------------
@@ -246,11 +249,11 @@ class SimNavSatRtkFix(Node):
         total = sum(self._regime_counts.values())
         if total == 0:
             return
-        parts = ", ".join(
-            f"{k}={v} ({100*v/total:.0f}%)"
+        parts = ', '.join(
+            f'{k}={v} ({100 * v / total:.0f}%)'
             for k, v in self._regime_counts.items()
         )
-        self.get_logger().info("regime distribution: " + parts)
+        self.get_logger().info('regime distribution: ' + parts)
         for k in self._regime_counts:
             self._regime_counts[k] = 0
 
@@ -267,5 +270,5 @@ def main(args=None) -> None:
         rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

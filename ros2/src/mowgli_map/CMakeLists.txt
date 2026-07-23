@@ -212,6 +212,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_boundary_classifier
     test/test_boundary_classifier.cpp
   )
+  target_include_directories(test_boundary_classifier PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${Boost_INCLUDE_DIRS}
+  )
 endif()
 
 # ---------------------------------------------------------------------------

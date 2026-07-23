@@ -119,12 +119,18 @@ public:
   // their respective covariances.
   void QueueScanBetween(const gtsam::Pose2& delta, double sigma_xy, double sigma_theta);
 
-  // Scan-to-keyframe ABSOLUTE xy constraint to apply at next node creation as a
-  // PoseTranslationPrior(X_curr, abs_xy). `abs_xy` is the map-frame position the
-  // current node should have per an ICP match to a frozen keyframe. `robust`
-  // wraps the noise model in Huber (a keyframe match on symmetric scenery can be
-  // a gross outlier, like a wrong-fix GPS sample).
-  void QueueScanToKeyframe(const gtsam::Vector2& abs_xy, double sigma_xy, bool robust = true);
+  // Scan-to-keyframe ABSOLUTE full-pose constraint to apply at next node creation
+  // as a PriorFactor<Pose2>(X_curr, abs_pose). `abs_pose` is the map-frame pose
+  // (xy + yaw) the current node should have per an ICP match to a frozen
+  // keyframe. `robust` wraps the noise model in Huber (a keyframe match on
+  // symmetric scenery can be a gross outlier, like a wrong-fix GPS sample). The
+  // yaw σ is additionally floored at params_.kf_yaw_sigma_floor_rad in
+  // CreateNodeLocked so the LiDAR-derived absolute heading can only weakly
+  // correct gyro drift, never override it.
+  void QueueScanToKeyframe(const gtsam::Pose2& abs_pose,
+                           double sigma_xy,
+                           double sigma_theta,
+                           bool robust = true);
 
   // Initial-pose seed. Required before the first tick if no GPS has
   // arrived yet — sets the prior on X_0. Must be called exactly once
@@ -400,15 +406,17 @@ private:
       double sigma_theta;
     };
     std::optional<ScanBetween> scan_between;
-    // Scan-to-keyframe ABSOLUTE constraint: the pre-computed map-frame xy the
-    // current node should have, derived from an ICP match to a frozen keyframe
-    // (abs_xy = kf.abs_pose.compose(delta.inverse()).translation()). Applied as
-    // a PoseTranslationPrior on X_curr — xy-only, so yaw stays owned by the
-    // gyro/COG factors. Engaged only during RTK-Float (see fusion_graph_node).
+    // Scan-to-keyframe ABSOLUTE constraint: the pre-computed map-frame full pose
+    // the current node should have, derived from an ICP match to a frozen keyframe
+    // (abs_pose = kf.abs_pose.compose(delta.inverse())). Applied as a
+    // PriorFactor<Pose2> on X_curr — xy + yaw, so the keyframe constrains heading
+    // during RTK-Float windows instead of letting it drift. Engaged only during
+    // RTK-Float (see fusion_graph_node).
     struct ScanToKeyframe
     {
-      gtsam::Vector2 abs_xy;
+      gtsam::Pose2 abs_pose;
       double sigma_xy;
+      double sigma_theta;
       bool robust;
     };
     std::optional<ScanToKeyframe> scan_to_keyframe;

@@ -174,7 +174,7 @@ void FusionGraphNode::OnTimer()
 
   // ── Scan-to-keyframe ABSOLUTE constraint (the RTK-Float carry) ───────
   // Match the live scan to nearby frozen RTK-anchored keyframes and queue a
-  // PoseTranslationPrior that pins absolute xy — this is what holds <2 cm
+  // PriorFactor<Pose2> that pins absolute xy + yaw — this is what holds <2 cm
   // through a Float window where dead-reckoning would otherwise drift. ENGAGE
   // only when RTK-Fixed is NOT recent (during Float / no-fix): under Fixed the
   // GnssLeverArmFactor owns absolute position and double-counting would
@@ -198,8 +198,9 @@ void FusionGraphNode::OnTimer()
                                                       kf_match_max_dist_m_,
                                                       kf_max_candidates_);
         double best_rmse = 1e9;
-        gtsam::Vector2 best_xy;
+        gtsam::Pose2 best_abs_meas;
         double best_sigma = 0.0;
+        double best_sigma_theta = 0.0;
         bool have_best = false;
         for (uint64_t kid : cand)
         {
@@ -220,42 +221,50 @@ void FusionGraphNode::OnTimer()
             graph_->RecordIcpRejectInliers();
             continue;
           }
-          if (res.rmse > icp_max_rmse_m_)
+          if (res.rmse > kf_match_max_rmse_m_)
           {
             graph_->RecordIcpRejectRmse();
             continue;
           }
-          if (std::abs(res.delta.x()) > icp_max_delta_xy_m_ ||
-              std::abs(res.delta.y()) > icp_max_delta_xy_m_ ||
-              std::abs(res.delta.theta()) > icp_max_delta_theta_rad_)
-          {
-            graph_->RecordIcpRejectSanity();
-            continue;
-          }
+          // NOTE: icp_max_delta_* sanity check SKIPPED here — res.delta is
+          // the full cross-viewpoint transform (keyframe → live scan), not
+          // an incremental between two consecutive scans ~50ms apart. The
+          // divergence check below already guards against pathological ICP.
           const gtsam::Pose2 dev = init.between(res.delta);
-          if (std::hypot(dev.x(), dev.y()) > icp_max_divergence_xy_m_ ||
-              std::abs(dev.theta()) > icp_max_divergence_theta_rad_)
+          if (std::hypot(dev.x(), dev.y()) > kf_match_max_divergence_xy_m_ ||
+              std::abs(dev.theta()) > kf_match_max_divergence_theta_rad_)
           {
             graph_->RecordIcpRejectDivergence();
             continue;
           }
           const gtsam::Pose2 abs_meas = kf->abs_pose.compose(res.delta.inverse());
-          // Mirror-guard: a swapped/mirror match lands far from the
+          // Mirror-guard (xy): a swapped/mirror match lands far from the
           // wheel-predicted pose (Huber can't reject a low-rmse mirror).
           if (std::hypot(abs_meas.x() - pred.x(), abs_meas.y() - pred.y()) >
-              icp_max_divergence_xy_m_)
+              kf_match_max_divergence_xy_m_)
+            continue;
+          // Mirror-guard (yaw): reject a match whose implied ABSOLUTE yaw is far
+          // from the gyro-predicted yaw — a mirrored/flipped ICP solution can
+          // sit within the xy bound yet carry a grossly wrong heading, and this
+          // prior engages during Float where COG yaw can't correct it.
+          if (!KeyframeYawWithinGate(abs_meas.theta(), pred.theta(), kf_match_max_yaw_dev_rad_))
             continue;
           if (res.rmse < best_rmse)
           {
             best_rmse = res.rmse;
-            best_xy = gtsam::Vector2(abs_meas.x(), abs_meas.y());
-            best_sigma = std::max(res.sigma_xy, kf_apply_sigma_floor_m_);
+            best_abs_meas = abs_meas;
+            // Positional σ can never be tighter than the capture gate: a
+            // keyframe frozen up to kf_capture_sigma_max_m off its true pose
+            // must not be applied as a tighter anchor than that error.
+            best_sigma =
+                std::max(res.sigma_xy, std::max(kf_apply_sigma_floor_m_, kf_capture_sigma_max_m_));
+            best_sigma_theta = std::max(res.sigma_theta, kf_apply_sigma_theta_rad_);
             have_best = true;
           }
         }
         if (have_best)
         {
-          graph_->QueueScanToKeyframe(best_xy, best_sigma, /*robust=*/true);
+          graph_->QueueScanToKeyframe(best_abs_meas, best_sigma, best_sigma_theta, /*robust=*/true);
           ++kf_matches_ok_;
         }
         else if (!cand.empty())

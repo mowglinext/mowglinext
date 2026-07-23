@@ -56,6 +56,13 @@ bool saveCoverageResumeState(const BTContext& ctx)
 
   std::ostringstream out;
   out << kHeader << '\n';
+  // The active high-level command (COMMAND_START etc.). Persisted so a mid-run
+  // container restart can auto-re-enter MowingSequence instead of coming up IDLE
+  // (current_command defaults to 0). Cast through unsigned so the uint8_t is
+  // written as a number, not a raw char. A terminal EndSession removes the whole
+  // file (clearCoverageResumeState), so a stale active command is never left on
+  // disk.
+  out << "current_command " << static_cast<unsigned>(ctx.current_command) << '\n';
   out << "current_area " << ctx.current_area << '\n';
   out << "completed_areas";
   for (uint32_t idx : ctx.completed_areas)
@@ -131,7 +138,15 @@ bool loadCoverageResumeState(BTContext& ctx)
     {
       continue;
     }
-    if (tag == "current_area")
+    if (tag == "current_command")
+    {
+      // Backward-compatible: older files predate this line, so an absent tag
+      // simply leaves current_command at its default (0 / IDLE).
+      unsigned v;
+      if (ls >> v)
+        ctx.current_command = static_cast<uint8_t>(v);
+    }
+    else if (tag == "current_area")
     {
       int v;
       if (ls >> v)

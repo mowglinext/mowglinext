@@ -312,6 +312,35 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// IsDocking
+// ---------------------------------------------------------------------------
+
+/// Returns SUCCESS while a DockRobot action is actively running
+/// (ctx->docking_active, maintained by the DockRobot node's onStart/onRunning/
+/// onHalted lifecycle). Pure read — no side effects on the context.
+///
+/// Used by BoundaryGuard to exempt the blade-OFF dock transit under
+/// command 1 from the SoftBoundaryHandler: docking is always preceded by
+/// SetMowerEnabled(false) and can never overlap the blade-on FollowStrip
+/// subtree, so this can never be true during blade-on mowing. See the
+/// docking_active comment in bt_context.hpp and the BoundaryGuard block in
+/// main_tree.xml.
+class IsDocking : public BT::ConditionNode
+{
+public:
+  IsDocking(const std::string& name, const BT::NodeConfig& config) : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
 // IsNewRain
 // ---------------------------------------------------------------------------
 
@@ -619,6 +648,113 @@ public:
         BT::InputPort<double>("max_age_sec",
                               10.0,
                               "Seconds since last STOP exit to still count as recent"),
+    };
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
+// IsScanStale
+// ---------------------------------------------------------------------------
+
+/// SAFETY (SAFETY_REVIEW_2026-07-23 A-C2). Returns SUCCESS when the LiDAR
+/// scan stream has DIED: at least one /scan_collision message was received
+/// this session AND the most recent one is older than max_age_sec. Returns
+/// FAILURE while the stream is healthy — or when NO scan has ever been
+/// received (a no-LiDAR install publishes nothing; the guard must stay inert
+/// there, which also spares us lidar_enabled plumbing into the BT).
+///
+/// Field problem this solves: when the LiDAR container (or the scan-filter
+/// chain feeding /scan_collision) dies mid-mow, collision_monitor's
+/// source_timeout zeroes cmd_vel but nothing CUTS THE BLADE or tells the
+/// tree — the robot sat blade-on, with zero reactive obstacle detection.
+/// Consumed by the SensorSafetyGuard in main_tree.xml, which halts mowing
+/// (blade off via FollowStrip::onHalted) until the stream returns.
+///
+/// Source signal: ctx->last_scan_time, stamped by the /scan_collision
+/// subscriber in behavior_tree_node. Pure read — no side effects.
+///
+/// Input ports:
+///   max_age_sec (double, default 1.0) — scan age beyond which the stream
+///                                       is declared dead (LD19 ≈ 10 Hz →
+///                                       1 s = ~10 missed scans).
+class IsScanStale : public BT::ConditionNode
+{
+public:
+  IsScanStale(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {
+        BT::InputPort<double>("max_age_sec",
+                              1.0,
+                              "Scan age (s) beyond which the LiDAR stream is declared dead"),
+    };
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
+// IsCollisionStopSustained
+// ---------------------------------------------------------------------------
+
+/// SAFETY (SAFETY_REVIEW_2026-07-23 A-H1). Returns SUCCESS when
+/// collision_monitor has been in STOP continuously for at least
+/// min_duration_sec. Unlike IsObstacleStuck (which fires ONCE to trigger a
+/// bounded backoff recovery, with a per-session cap and cooldown), this is a
+/// pure stateless read used by the SensorSafetyGuard: a sustained STOP means
+/// the robot is parked against something the monitor refuses to approach —
+/// and without this guard it sat there with the BLADE STILL SPINNING (the
+/// monitor only zeroes cmd_vel; it raises no firmware emergency, so
+/// FollowStrip::onHalted never ran). The guard threshold must exceed
+/// IsObstacleStuck's min_duration_sec plus its backoff time, so the backoff
+/// recovery gets its chance first.
+///
+/// Source signal: ctx->collision_action_type + ctx->collision_stop_since +
+/// ctx->last_collision_state_time, maintained by the /collision_monitor_state
+/// subscriber. Pure read.
+///
+/// FRESHNESS (field 2026-07-23 deadlock): the monitor only publishes state
+/// while cmd_vel_nav flows, so once this guard halts the tree the latched
+/// action goes stale — the first deployment held the robot forever (268 s
+/// observed) because the STOP could never clear. The guard therefore requires
+/// the state to be FRESH (≤ max_state_age_sec); a stale latch releases it,
+/// and if the obstacle is real the resumed cmd_vel flow re-publishes STOP
+/// within one monitor cycle (the subscriber then re-stamps a fresh episode,
+/// handing the recovery machinery a full new window).
+///
+/// min_duration_sec must exceed IsObstacleStuck's FULL backoff sequence —
+/// 3 attempts × (5 s STOP + backoff + 8 s cooldown) ≈ 45–50 s — or this
+/// guard preempts the recovery machinery before it can free the robot.
+///
+/// Input ports:
+///   min_duration_sec  (double, default 60.0) — continuous STOP duration
+///                                              before the guard trips.
+///   max_state_age_sec (double, default 3.0)  — /collision_monitor_state
+///                                              freshness bound; older = the
+///                                              latch is stale → guard inert.
+class IsCollisionStopSustained : public BT::ConditionNode
+{
+public:
+  IsCollisionStopSustained(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {
+        BT::InputPort<double>("min_duration_sec",
+                              60.0,
+                              "Continuous STOP duration (s) before the guard trips"),
+        BT::InputPort<double>("max_state_age_sec",
+                              3.0,
+                              "collision_monitor_state freshness bound (s); stale = inert"),
     };
   }
 

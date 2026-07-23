@@ -27,7 +27,7 @@
        at runtime from the operator's calibrated yaml. -->
   <xacro:arg name="lidar_x"   default="0.0"/>
   <xacro:arg name="lidar_y"   default="0.024"/>
-  <xacro:arg name="lidar_z"   default="0.22"/>
+  <xacro:arg name="lidar_z"   default="0.30"/>
   <xacro:arg name="lidar_yaw" default="3.1408"/>
 
   <xacro:arg name="imu_x"     default="0.18"/>

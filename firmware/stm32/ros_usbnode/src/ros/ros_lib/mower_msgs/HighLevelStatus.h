@@ -33,6 +33,8 @@ namespace mower_msgs
       _completed_swaths_type completed_swaths;
       typedef int16_t _skipped_swaths_type;
       _skipped_swaths_type skipped_swaths;
+      typedef float _coverage_percent_type;
+      _coverage_percent_type coverage_percent;
       typedef float _gps_quality_percent_type;
       _gps_quality_percent_type gps_quality_percent;
       typedef float _battery_percent_type;
@@ -57,6 +59,7 @@ namespace mower_msgs
       total_swaths(0),
       completed_swaths(0),
       skipped_swaths(0),
+      coverage_percent(0),
       gps_quality_percent(0),
       battery_percent(0),
       is_charging(0),
@@ -127,6 +130,16 @@ namespace mower_msgs
       *(outbuffer + offset + 0) = (u_skipped_swaths.base >> (8 * 0)) & 0xFF;
       *(outbuffer + offset + 1) = (u_skipped_swaths.base >> (8 * 1)) & 0xFF;
       offset += sizeof(this->skipped_swaths);
+      union {
+        float real;
+        uint32_t base;
+      } u_coverage_percent;
+      u_coverage_percent.real = this->coverage_percent;
+      *(outbuffer + offset + 0) = (u_coverage_percent.base >> (8 * 0)) & 0xFF;
+      *(outbuffer + offset + 1) = (u_coverage_percent.base >> (8 * 1)) & 0xFF;
+      *(outbuffer + offset + 2) = (u_coverage_percent.base >> (8 * 2)) & 0xFF;
+      *(outbuffer + offset + 3) = (u_coverage_percent.base >> (8 * 3)) & 0xFF;
+      offset += sizeof(this->coverage_percent);
       union {
         float real;
         uint32_t base;
@@ -244,6 +257,17 @@ namespace mower_msgs
       union {
         float real;
         uint32_t base;
+      } u_coverage_percent;
+      u_coverage_percent.base = 0;
+      u_coverage_percent.base |= ((uint32_t) (*(inbuffer + offset + 0))) << (8 * 0);
+      u_coverage_percent.base |= ((uint32_t) (*(inbuffer + offset + 1))) << (8 * 1);
+      u_coverage_percent.base |= ((uint32_t) (*(inbuffer + offset + 2))) << (8 * 2);
+      u_coverage_percent.base |= ((uint32_t) (*(inbuffer + offset + 3))) << (8 * 3);
+      this->coverage_percent = u_coverage_percent.real;
+      offset += sizeof(this->coverage_percent);
+      union {
+        float real;
+        uint32_t base;
       } u_gps_quality_percent;
       u_gps_quality_percent.base = 0;
       u_gps_quality_percent.base |= ((uint32_t) (*(inbuffer + offset + 0))) << (8 * 0);
@@ -283,7 +307,7 @@ namespace mower_msgs
     }
 
     virtual const char * getType() override { return "mower_msgs/HighLevelStatus"; };
-    virtual const char * getMD5() override { return "1f02876b184fe06f0c0f408686e2b433"; };
+    virtual const char * getMD5() override { return "14974e4fd4dd241ab72394ba95ad123f"; };
 
   };
 

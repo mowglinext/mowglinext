@@ -107,7 +107,7 @@
         "wheel_pid_kp": {
           "type": "number",
           "title": "Drive PID — Kp",
-          "default": 30.0,
+          "default": 0.2,
           "minimum": 0,
           "maximum": 200,
           "description": "Proportional gain of the firmware per-wheel velocity loop (PWM per m/s). Applied live; higher = stiffer tracking, too high oscillates."
@@ -115,7 +115,7 @@
         "wheel_pid_ki": {
           "type": "number",
           "title": "Drive PID — Ki",
-          "default": 5000.0,
+          "default": 0.092,
           "minimum": 0,
           "maximum": 20000,
           "description": "Integral gain of the firmware per-wheel velocity loop (PWM per m/s·s). Bridges the static-friction deadband; too high overshoots."
@@ -123,7 +123,7 @@
         "wheel_pid_kd": {
           "type": "number",
           "title": "Drive PID — Kd",
-          "default": 0.0,
+          "default": 0.01,
           "minimum": 0,
           "maximum": 500,
           "description": "Derivative gain of the firmware per-wheel velocity loop (PWM per m/s²). 0 = disabled (default)."
@@ -131,7 +131,7 @@
         "wheel_pid_integral_limit": {
           "type": "number",
           "title": "Drive PID — Integral Limit",
-          "default": 100.0,
+          "default": 15.0,
           "minimum": 0,
           "maximum": 255,
           "description": "Anti-windup clamp on the integral term (PWM units, motor max 255)."
@@ -139,7 +139,7 @@
         "wheel_pid_pwm_per_mps": {
           "type": "number",
           "title": "Drive Feedforward (PWM per m/s)",
-          "default": 300.0,
+          "default": 282.135,
           "minimum": 50,
           "maximum": 600,
           "description": "Open-loop velocity→PWM feedforward scale. Dominant drive term; sets the deadband/idle mapping. Change with care."
@@ -538,6 +538,14 @@
           "title": "Min Turning Radius",
           "default": 0.15,
           "description": "Minimum turning radius for coverage path (metres). Skid-steer pivots in place; large values force wide F2C U-turns."
+        },
+        "mow_angle_deg": {
+          "type": "number",
+          "title": "Mow Angle",
+          "minimum": -1,
+          "maximum": 179,
+          "default": -1.0,
+          "description": "Swath (mowing line) direction. -1 (or any negative) = auto: the coverage server picks the swath-count-minimising angle. 0..179 forces a fixed swath angle in degrees."
         },
         "mow_angle_offset_deg": {
           "type": "number",

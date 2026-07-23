@@ -565,13 +565,11 @@ private:
   // the check.
   std::optional<gtsam::Vector2> last_gps_map_xy_;
   double wheel_dist_since_last_gps_m_ = 0.0;
-  // GPS jump (m) above which the sample is rejected when the wheel
-  // accumulator stayed under rtk_wrongfix_max_wheel_m_. Picked to be
-  // well above the σ ~1 cm noise floor we measured 2026-05-17 (8-12
-  // mm σ on raw /gps/fix stationary), and below the smallest
-  // legitimate motion the robot can produce in one GPS period
-  // (vx_max ≈ 0.30 m/s × 0.1 s = 30 mm). 50 mm leaves headroom for
-  // 1-2σ outliers while still catching ≥0.5σ wrong-fix jumps.
+  // GPS jump (m) above which the sample is rejected as a wrong-fix (motion-
+  // consistent gate: compare jump against actual wheel travel since last fix).
+  // 50 mm sits above the σ~1 cm noise floor (2026-05-17: 8-12 mm σ on raw
+  // /gps/fix stationary) and below vx_max≈0.30 m/s × 0.1 s = 30 mm of
+  // legitimate motion. See rtk_wrongfix_gate.hpp for the decision function.
   double rtk_wrongfix_max_jump_m_ = 0.05;
   // Dock-pose hold while charging: re-assert a firm ForceAnchor at the FULL
   // dock_pose (x,y,yaw) ONCE PER NEW NODE, replacing the weak live-GPS factor
@@ -596,13 +594,6 @@ private:
   bool gate_cog_during_docking_ = true;
   bool gate_float_gps_during_docking_ = true;
   std::optional<rclcpp::Time> last_docking_cmd_stamp_;
-  // Wheel-derived distance (m) traveled since the last GPS sample,
-  // below which a GPS jump > rtk_wrongfix_max_jump_m_ is judged
-  // inconsistent. 20 mm sits just above the per-tick encoder noise
-  // floor — at 0.30 m/s the robot covers 30 mm in 100 ms (one fix
-  // period), so a real motion easily clears 20 mm.
-  double rtk_wrongfix_max_wheel_m_ = 0.02;
-
   // ICP guard-rail thresholds — see GraphParams comments for the
   // physical intuition. Declared as ROS params so we can tighten or
   // loosen them in mowgli_robot.yaml without a rebuild.
@@ -636,9 +627,12 @@ private:
   // + the ICP guard rails). CAPTURE: under stable RTK-Fixed, freeze the
   // GPS-fused node pose + scan as a keyframe (builds the absolute map). APPLY:
   // during RTK-Float, match the live scan to nearby keyframes and queue a
-  // PoseTranslationPrior that pins absolute xy — the mechanism that holds <2 cm
-  // through a Float window where dead-reckoning would otherwise drift. Default
-  // OFF. See graph_manager_keyframe.cpp + the OnScan capture/apply blocks.
+  // PriorFactor<Pose2> that pins absolute xy + yaw — the mechanism that holds
+  // <2 cm through a Float window where dead-reckoning would otherwise drift.
+  // The yaw component is protected by the kf_yaw_sigma_floor (GraphManager)
+  // and the yaw mirror-guard below so LiDAR heading can't override the gyro.
+  // Code default OFF; the in-repo yaml enables it. See graph_manager_keyframe.cpp
+  // + the OnTimer capture/apply blocks.
   bool use_keyframe_map_ = false;
   double kf_capture_sigma_max_m_ = 0.01;  // max GPS σ to allow a capture
   int kf_capture_rtk_debounce_ = 3;  // consecutive RTK-Fixed epochs first
@@ -646,8 +640,30 @@ private:
   double kf_spacing_m_ = 0.5;  // min move between captures
   double kf_match_max_dist_m_ = 3.0;  // apply-side keyframe search radius
   size_t kf_max_candidates_ = 5;
-  double kf_apply_sigma_floor_m_ = 0.02;  // floor on the PoseTranslationPrior σ
+  // Apply-side σ floors. The positional floor is raised to the capture gate
+  // (kf_capture_sigma_max_m_) at apply time so a keyframe frozen up to that far
+  // off its true pose can never be trusted TIGHTER than its own capture error.
+  double kf_apply_sigma_floor_m_ = 0.02;  // ICP-realism floor on the positional σ
+  double kf_apply_sigma_theta_rad_ = 0.05;  // ICP-realism floor on the yaw σ (~3°);
+                                            // GraphManager's kf_yaw_sigma_floor
+                                            // (~0.30 rad) is the effective floor
   double kf_engage_age_s_ = 0.3;  // engage apply when Fixed older than this
+  // Relaxed ICP guard rails for keyframe matching (cross-viewpoint, not
+  // incremental). Matches the shared scan_matcher_'s internal min_inliers
+  // but overrides RMSE / divergence thresholds. The icp_max_delta_* checks
+  // (0.30 m / 0.50 rad) are inappropriate here — res.delta is the full
+  // transform between keyframe and live scan (up to kf_match_max_dist_m_).
+  double kf_match_max_rmse_m_ = 0.15;
+  double kf_match_max_divergence_xy_m_ = 0.30;
+  double kf_match_max_divergence_theta_rad_ = 0.50;
+  // Absolute-yaw mirror-guard (KeyframeYawWithinGate): reject a keyframe match
+  // whose implied ABSOLUTE map-frame yaw deviates from the gyro-predicted yaw by
+  // more than this. Catches mirrored / 180°-flipped ICP solutions on symmetric
+  // scenery that the xy mirror-guard and Huber let through — the keyframe prior
+  // engages during RTK-Float where COG is gated off, so this is the only guard
+  // on its heading. Sized to reject gross flips while leaving room for the
+  // keyframe to correct genuine slow gyro drift (< a few ° over a Float window).
+  double kf_match_max_yaw_dev_rad_ = 0.5;
   // Latches updated in OnGnss for the capture gate.
   double last_gps_sigma_ = -1.0;  // most-recent valid GPS σ (m); <0 = none
   int rtk_fixed_streak_ = 0;  // consecutive RTK-Fixed epochs

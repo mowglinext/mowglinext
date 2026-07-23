@@ -147,6 +147,15 @@ if(BUILD_TESTING)
     PRIVATE
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
+
+  ament_add_gtest(test_ftc_reverse_escape
+    test/test_ftc_reverse_escape.cpp
+  )
+
+  target_include_directories(test_ftc_reverse_escape
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
 endif()
 
 # ---------------------------------------------------------------------------

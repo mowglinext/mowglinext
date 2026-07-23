@@ -86,3 +86,29 @@ TEST(ScanYawSigma, ZeroFloorIsPassthrough)
 {
   EXPECT_NEAR(fg::ScanYawSigma(0.005, 0.0), 0.005, 1e-9);
 }
+
+// ── KeyframeYawWithinGate (absolute-yaw mirror-guard) ───────────────────
+TEST(KeyframeYawWithinGate, AcceptsSmallDeviation)
+{
+  // 0.1 rad off the predicted yaw, well inside a 0.5 rad bound.
+  EXPECT_TRUE(fg::KeyframeYawWithinGate(/*kf=*/0.1, /*pred=*/0.0, /*max=*/0.5));
+}
+
+TEST(KeyframeYawWithinGate, RejectsJustOutside)
+{
+  EXPECT_FALSE(fg::KeyframeYawWithinGate(0.6, 0.0, 0.5));
+}
+
+TEST(KeyframeYawWithinGate, RejectsMirrorFlip)
+{
+  // A 180° ICP flip is the canonical failure this guards against.
+  EXPECT_FALSE(fg::KeyframeYawWithinGate(M_PI, 0.0, 0.5));
+}
+
+TEST(KeyframeYawWithinGate, WrapsAcrossPiSeam)
+{
+  // 3.0 and -3.0 rad are only ~0.283 rad apart across the ±π seam, not ~6 rad.
+  EXPECT_TRUE(fg::KeyframeYawWithinGate(3.0, -3.0, 0.5));
+  // Same magnitude the other side of the seam is still rejected past the bound.
+  EXPECT_FALSE(fg::KeyframeYawWithinGate(3.0, -3.0, 0.2));
+}

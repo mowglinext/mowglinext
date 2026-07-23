@@ -69,8 +69,10 @@ void FusionGraphNode::DeclareParameters()
     scan_yield_sigma_theta_ = declare_parameter<double>("scan_yield_sigma_theta", 0.3);
 
     // ── RTK-anchored keyframe map (absolute scan-to-keyframe localization) ──
-    // Requires scan matching (this block). Default OFF. CAPTURE under stable
-    // RTK-Fixed; APPLY a PoseTranslationPrior during RTK-Float to hold <2 cm.
+    // Requires scan matching (this block). Code default OFF (yaml enables).
+    // CAPTURE under stable RTK-Fixed; APPLY a PriorFactor<Pose2> (xy + yaw)
+    // during RTK-Float to hold <2 cm. Yaw is protected by the GraphManager
+    // kf_yaw_sigma_floor + the mirror-guard below.
     use_keyframe_map_ = declare_parameter<bool>("use_keyframe_map", false);
     kf_capture_sigma_max_m_ = declare_parameter<double>("kf_capture_sigma_max_m", 0.01);
     kf_capture_rtk_debounce_ = declare_parameter<int>("kf_capture_rtk_debounce", 3);
@@ -78,7 +80,16 @@ void FusionGraphNode::DeclareParameters()
     kf_match_max_dist_m_ = declare_parameter<double>("kf_match_max_dist_m", 3.0);
     kf_max_candidates_ = static_cast<size_t>(declare_parameter<int>("kf_max_candidates", 5));
     kf_apply_sigma_floor_m_ = declare_parameter<double>("kf_apply_sigma_floor_m", 0.02);
+    kf_apply_sigma_theta_rad_ = declare_parameter<double>("kf_apply_sigma_theta_rad", 0.05);
     kf_engage_age_s_ = declare_parameter<double>("kf_engage_age_s", 0.3);
+    kf_match_max_rmse_m_ = declare_parameter<double>("kf_match_max_rmse_m", 0.15);
+    kf_match_max_divergence_xy_m_ = declare_parameter<double>("kf_match_max_divergence_xy_m", 0.30);
+    kf_match_max_divergence_theta_rad_ =
+        declare_parameter<double>("kf_match_max_divergence_theta_rad", 0.50);
+    // Absolute-yaw mirror-guard bound (see fusion_graph_node.hpp): reject a
+    // keyframe match whose implied map-frame yaw is more than this off the
+    // gyro-predicted yaw — catches mirrored / flipped ICP the xy guard misses.
+    kf_match_max_yaw_dev_rad_ = declare_parameter<double>("kf_match_max_yaw_dev_rad", 0.5);
   }
 
   // 180° yaw-flip recovery (see fusion_graph_node.hpp). Declared outside the
@@ -122,7 +133,7 @@ void FusionGraphNode::DeclareParameters()
   // long IDLE windows produces O(N²) LC factors with the lower 30/120s
   // defaults. Real revisits across a mowing pattern are minutes apart,
   // so 600s is a comfortable floor. Override per-test if needed.
-  lc_min_age_s_ = declare_parameter<double>("lc_min_age_s", 600.0);
+  lc_min_age_s_ = declare_parameter<double>("lc_min_age_s", 30.0);
   lc_max_candidates_ = static_cast<size_t>(declare_parameter<int>("lc_max_candidates", 3));
   lc_min_delta_m_ = declare_parameter<double>("lc_min_delta_m", 0.05);
   lc_min_delta_theta_ = declare_parameter<double>("lc_min_delta_theta", 0.05);

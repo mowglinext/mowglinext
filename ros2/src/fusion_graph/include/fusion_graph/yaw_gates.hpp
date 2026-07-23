@@ -51,4 +51,18 @@ inline double ScanYawSigma(double raw_sigma_theta, double floor_rad)
   return std::max(raw_sigma_theta, floor_rad);
 }
 
+// Keyframe absolute-yaw mirror-guard. A scan-to-keyframe ICP match implies an
+// ABSOLUTE map-frame yaw (kf.abs_pose ⊕ delta). On symmetric / sparse-outdoor
+// scenery ICP can converge to a mirrored or 180°-flipped alignment whose xy
+// lands plausibly but whose yaw is grossly wrong — and the keyframe prior
+// engages during RTK-Float where COG yaw is gated off, so nothing downstream
+// would catch it (Huber can't reject a low-rmse mirror). Accept the match only
+// when its implied yaw is within max_dev_rad of the gyro-predicted yaw; both
+// angles are wrapped so the comparison is correct across the ±π seam.
+inline bool KeyframeYawWithinGate(double kf_abs_yaw, double pred_yaw, double max_dev_rad)
+{
+  const double d = std::atan2(std::sin(kf_abs_yaw - pred_yaw), std::cos(kf_abs_yaw - pred_yaw));
+  return std::abs(d) <= max_dev_rad;
+}
+
 }  // namespace fusion_graph

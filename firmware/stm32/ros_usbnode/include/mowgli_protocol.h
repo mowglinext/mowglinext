@@ -47,9 +47,16 @@ extern "C" {
  * reflash. Every field is clamped so the wire can only make protection stronger
  * (lower charge limits, faster e-stop trips, harder emergency-clear), never
  * weaker; old firmware ignores the new ID and keeps its compile-time limits.
+ * v6 GROWS pkt_set_yaw_pid_t (0x55) by one float (gyro_bias_radps, 17->21 B) so
+ * the host can forward the freshly-measured gyro-Z bias into the firmware yaw
+ * loop, which subtracts it before regulation. Unlike v4/v5 (new packet IDs that
+ * old firmware ignores), this is a BREAKING layout change to an EXISTING packet:
+ * host and firmware MUST match. The compat gate (MOWGLI_PROTOCOL_VERSION) blocks
+ * mowing on a mismatch, and the CRC over the grown body means a v5 firmware fed
+ * a 21-byte packet fails the CRC and safely drops it rather than misapplying it.
  * ---------------------------------------------------------------------------*/
 
-#define MOWGLI_PROTOCOL_VERSION 5u
+#define MOWGLI_PROTOCOL_VERSION 6u
 
 /* ---------------------------------------------------------------------------
  * Firmware version (semantic version of THIS firmware build).
@@ -505,7 +512,13 @@ typedef struct {
  * the loop diverges (see firmware tuning notes). enabled=0 disables the loop
  * (pure open-diff passthrough) for A/B without a reflash.
  *
- * Wire size: 17 bytes (must match sizeof(LlSetYawPid) in ll_datatypes.hpp).
+ * gyro_bias_radps is the host-measured mean at-rest gyro-Z offset (raw sensor
+ * frame, same value the host subtracts before its own /imu publish). The
+ * firmware subtracts it BEFORE the gyro_sign multiply — meas = sign*(gz - bias)
+ * — so the open-loop reverse (BackUp: wz=0) holds a true straight line instead
+ * of tracing the bias as a constant-radius arc. Sign-safe for either gyro_sign.
+ *
+ * Wire size: 21 bytes (must match sizeof(LlSetYawPid) in ll_datatypes.hpp).
  */
 typedef struct {
   uint8_t type;           /**< PKT_ID_SET_YAW_PID */
@@ -514,6 +527,7 @@ typedef struct {
   float trim_limit_mps;   /**< Clamp on |differential trim| [m/s] */
   uint8_t enabled;        /**< 1 = closed yaw loop on, 0 = open-diff passthrough */
   int8_t gyro_sign;       /**< +1 / -1: gyro Z sign vs robot +yaw (CCW) */
+  float gyro_bias_radps;  /**< mean at-rest gyro-Z bias [rad/s], raw sensor frame */
   uint16_t crc;           /**< CRC-16 CCITT over preceding bytes */
 } pkt_set_yaw_pid_t;
 
@@ -707,7 +721,7 @@ _Static_assert(offsetof(pkt_set_drive_pid_t, pwm_per_mps) == 21u,
 _Static_assert(offsetof(pkt_set_drive_pid_t, crc) == 25u,
                "pkt_set_drive_pid_t.crc offset unexpected");
 
-_Static_assert(sizeof(pkt_set_yaw_pid_t) == 17u,
+_Static_assert(sizeof(pkt_set_yaw_pid_t) == 21u,
                "pkt_set_yaw_pid_t layout unexpected");
 _Static_assert(offsetof(pkt_set_yaw_pid_t, type) == 0u,
                "pkt_set_yaw_pid_t.type offset unexpected");
@@ -721,7 +735,9 @@ _Static_assert(offsetof(pkt_set_yaw_pid_t, enabled) == 13u,
                "pkt_set_yaw_pid_t.enabled offset unexpected");
 _Static_assert(offsetof(pkt_set_yaw_pid_t, gyro_sign) == 14u,
                "pkt_set_yaw_pid_t.gyro_sign offset unexpected");
-_Static_assert(offsetof(pkt_set_yaw_pid_t, crc) == 15u,
+_Static_assert(offsetof(pkt_set_yaw_pid_t, gyro_bias_radps) == 15u,
+               "pkt_set_yaw_pid_t.gyro_bias_radps offset unexpected");
+_Static_assert(offsetof(pkt_set_yaw_pid_t, crc) == 19u,
                "pkt_set_yaw_pid_t.crc offset unexpected");
 
 _Static_assert(sizeof(pkt_set_kinematics_t) == 11u,

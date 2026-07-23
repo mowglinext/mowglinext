@@ -106,7 +106,7 @@ def generate_launch_description() -> LaunchDescription:
     # Sensor positions from config
     lidar_x   = str(robot_params.get("lidar_x", 0.38))
     lidar_y   = str(robot_params.get("lidar_y", 0.0))
-    lidar_z   = str(robot_params.get("lidar_z", 0.22))
+    lidar_z   = str(robot_params.get("lidar_z", 0.30))
     lidar_yaw = str(robot_params.get("lidar_yaw", 0.0))
     imu_x     = str(robot_params.get("imu_x", 0.18))
     imu_y     = str(robot_params.get("imu_y", 0.0))
@@ -208,14 +208,14 @@ def generate_launch_description() -> LaunchDescription:
             {"ticks_per_meter": float(robot_params.get("ticks_per_meter", 300.0))},
             # Drive-motor wheel-velocity PID + feedforward, pushed to the STM32
             # firmware so the GUI can retune the per-wheel loop without
-            # reflashing. Defaults mirror the firmware compile-time fallback.
-            {"wheel_pid_kp": float(robot_params.get("wheel_pid_kp", 30.0))},
-            {"wheel_pid_ki": float(robot_params.get("wheel_pid_ki", 5000.0))},
-            {"wheel_pid_kd": float(robot_params.get("wheel_pid_kd", 0.0))},
+            # reflashing. Fallback defaults match the mowgli_bringup template.
+            {"wheel_pid_kp": float(robot_params.get("wheel_pid_kp", 0.2))},
+            {"wheel_pid_ki": float(robot_params.get("wheel_pid_ki", 0.092))},
+            {"wheel_pid_kd": float(robot_params.get("wheel_pid_kd", 0.01))},
             {"wheel_pid_integral_limit": float(robot_params.get(
-                "wheel_pid_integral_limit", 100.0))},
+                "wheel_pid_integral_limit", 15.0))},
             {"wheel_pid_pwm_per_mps": float(robot_params.get(
-                "wheel_pid_pwm_per_mps", 300.0))},
+                "wheel_pid_pwm_per_mps", 282.135))},
             # IMU calibration tuning (operator-tunable via the GUI).
             {"imu_cal_samples": int(robot_params.get("imu_cal_samples", 200))},
             {"imu_cal_persist_path": str(robot_params.get(

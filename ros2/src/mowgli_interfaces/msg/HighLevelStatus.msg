@@ -13,6 +13,9 @@ int16 current_path_index
 int16 total_swaths
 int16 completed_swaths
 int16 skipped_swaths
+# Smooth mowing progress for the current area, 0..100. Pose-cursor based
+# (primary GUI %); total_swaths/completed_swaths are the coarse sub-path X/Y.
+float32 coverage_percent
 float32 gps_quality_percent
 float32 battery_percent
 bool is_charging

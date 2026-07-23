@@ -48,7 +48,7 @@ namespace mowgli_hardware
 // formats and the operator must reflash. Bump this in lockstep with
 // MOWGLI_PROTOCOL_VERSION in mowgli_protocol.h when an incompatible wire
 // change requires a hard compatibility break.
-static constexpr uint8_t kMowgliProtocolVersion = 5u;
+static constexpr uint8_t kMowgliProtocolVersion = 6u;
 
 // ---------------------------------------------------------------------------
 // Packet type identifiers
@@ -370,6 +370,12 @@ static_assert(offsetof(LlSetDrivePid, crc) == 25u, "LlSetDrivePid.crc offset dri
  * ±trim_limit_mps) onto the per-wheel setpoints before the per-wheel PIs.
  * This is a SEPARATE packet from LlSetDrivePid — it does not extend it.
  * The firmware validates/clamps every field before applying.
+ *
+ * gyro_bias_radps (protocol v6): the host-measured mean at-rest gyro-Z offset
+ * (imu_cal_offset_gz_, raw sensor frame — the same value the host subtracts
+ * before its /imu publish). The firmware subtracts it before the gyro_sign
+ * multiply so open-loop moves (BackUp: wz=0) hold a straight line instead of
+ * tracing the bias as a constant-radius arc.
  */
 struct LlSetYawPid
 {
@@ -379,6 +385,7 @@ struct LlSetYawPid
   float trim_limit_mps;  ///< Clamp on |differential trim| [m/s]
   uint8_t enabled;  ///< 1 = closed yaw loop on, 0 = open-diff passthrough
   int8_t gyro_sign;  ///< +1 / -1: gyro Z sign vs robot +yaw (CCW) — field sign-check remedy
+  float gyro_bias_radps;  ///< mean at-rest gyro-Z bias [rad/s], raw sensor frame (v6)
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
 
@@ -389,7 +396,9 @@ static_assert(offsetof(LlSetYawPid, trim_limit_mps) == 9u,
               "LlSetYawPid.trim_limit_mps offset drifted");
 static_assert(offsetof(LlSetYawPid, enabled) == 13u, "LlSetYawPid.enabled offset drifted");
 static_assert(offsetof(LlSetYawPid, gyro_sign) == 14u, "LlSetYawPid.gyro_sign offset drifted");
-static_assert(offsetof(LlSetYawPid, crc) == 15u, "LlSetYawPid.crc offset drifted");
+static_assert(offsetof(LlSetYawPid, gyro_bias_radps) == 15u,
+              "LlSetYawPid.gyro_bias_radps offset drifted");
+static_assert(offsetof(LlSetYawPid, crc) == 19u, "LlSetYawPid.crc offset drifted");
 
 /**
  * @brief Runtime kinematics packet sent by the Pi (PACKET_ID_LL_SET_KINEMATICS = 0x56).
@@ -520,7 +529,7 @@ static_assert(sizeof(LlBladeStatus) == 16u, "LlBladeStatus layout mismatch");
 static_assert(sizeof(LlConfigReq) == 4u, "LlConfigReq layout mismatch");
 static_assert(sizeof(LlConfigRsp) == 8u, "LlConfigRsp layout mismatch");
 static_assert(sizeof(LlSetDrivePid) == 27u, "LlSetDrivePid layout mismatch");
-static_assert(sizeof(LlSetYawPid) == 17u, "LlSetYawPid layout mismatch");
+static_assert(sizeof(LlSetYawPid) == 21u, "LlSetYawPid layout mismatch");
 static_assert(sizeof(LlSetKinematics) == 11u, "LlSetKinematics layout mismatch");
 static_assert(sizeof(LlSetSafetyLimits) == 21u, "LlSetSafetyLimits layout mismatch");
 

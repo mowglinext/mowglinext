@@ -135,16 +135,31 @@ static float prev_right_target_mps = 0.0f;
  * anti-wheelspin (host, coverage-only) never sees. Per wheel: if it is
  * COMMANDED to move (|target| > MIN_TARGET) and the loop is actually PUSHING
  * (|PWM| > MIN_ABS_PWM — the PI integrator has wound past the deadband) but the
- * encoder logs < MIN_PROGRESS_M of real travel over WINDOW_MS, latch the wheel
- * OFF (force PWM 0) until the command clears. Only ever REDUCES output. */
-#define ANTIDIG_WINDOW_MS 2500u       /* persistent stall before cut [ms] */
-#define ANTIDIG_MIN_TARGET_MPS 0.02f  /* below this the wheel isn't "commanded" */
-#define ANTIDIG_MIN_ABS_PWM 60        /* below this it isn't really "pushing" (deadband ~40) */
-#define ANTIDIG_MIN_PROGRESS_M 0.03f  /* real travel over the window that counts as "moving" */
+ * encoder logs LESS THAN PROGRESS_FRACTION of the travel the COMMANDED speed
+ * implies over WINDOW_MS, latch the wheel OFF (force PWM 0) until the command
+ * clears. Only ever REDUCES output.
+ *
+ * 2026-07-21: the test is now EXPECTED-vs-ACTUAL, not an absolute floor. The
+ * old gate reset the window whenever the wheel travelled >= a fixed 0.03 m
+ * within it, so a robot slowly PLOWING an obstacle (any creep above that floor,
+ * trivially reachable on soft turf) reset forever and never latched -> it dug
+ * continuously. Comparing actual travel to the distance the *commanded* speed
+ * implies closes that loophole: a wheel plowing at a small fraction of its
+ * command never clears PROGRESS_FRACTION and therefore latches, while a wheel
+ * that keeps up with its command (any speed, any load) is left alone. The
+ * fraction (not an absolute distance) is also self-scaling to the command, so a
+ * slow legitimate dock creep at, say, 0.03 m/s is judged against 0.03 m/s of
+ * expected travel — not against a fixed bar it would fail. */
+#define ANTIDIG_WINDOW_MS 1500u          /* sustained plow/stall before cut [ms] (was 2500) */
+#define ANTIDIG_MIN_TARGET_MPS 0.02f     /* below this the wheel isn't "commanded" */
+#define ANTIDIG_MIN_ABS_PWM 60           /* below this it isn't really "pushing" (deadband ~40) */
+#define ANTIDIG_PROGRESS_FRACTION 0.30f  /* latch if actual travel < 30% of commanded travel over the window */
 static uint32_t l_dig_stall_ms = 0u;
 static uint32_t r_dig_stall_ms = 0u;
-static int32_t l_dig_stall_ticks = 0;
+static int32_t l_dig_stall_ticks = 0;     /* actual |ticks| accumulated over the window */
 static int32_t r_dig_stall_ticks = 0;
+static float l_dig_exp_ticks = 0.0f;      /* commanded-speed "expected" ticks over the window */
+static float r_dig_exp_ticks = 0.0f;
 static bool l_dig_latched = false;
 static bool r_dig_latched = false;
 
@@ -228,6 +243,10 @@ static volatile float cmd_wz = 0.0f; /* commanded yaw rate [rad/s], set by on_cm
 static volatile uint8_t g_yaw_loop_enabled = 1;   /* default on for A/B */
 static volatile float g_yaw_gyro_sign = 1.0f;     /* gyro Z sign vs robot +yaw */
 static volatile float g_yaw_trim_limit_mps = YAW_TRIM_LIMIT_MPS_DEFAULT;
+/* Host-measured mean at-rest gyro-Z bias [rad/s], raw sensor frame. Subtracted
+ * before the sign multiply so open-loop moves (BackUp) hold a true straight line
+ * instead of tracing the bias as an arc. 0 until the host sends SET_YAW_PID. */
+static volatile float g_yaw_gyro_bias = 0.0f;
 
 /* ---------------------------------------------------------------------------
  * Blade motor control state
@@ -488,7 +507,8 @@ static void on_set_yaw_pid(const uint8_t *data, size_t len) {
    * packet if any gain/limit is non-finite, then clamp before applying so a bad
    * host value can never make the yaw loop diverge. */
   if (!std::isfinite(pkt->yaw_kp) || !std::isfinite(pkt->yaw_ki) ||
-      !std::isfinite(pkt->trim_limit_mps)) {
+      !std::isfinite(pkt->trim_limit_mps) ||
+      !std::isfinite(pkt->gyro_bias_radps)) {
     debug_printf("set_yaw_pid rejected: non-finite field\r\n");
     return;
   }
@@ -499,6 +519,10 @@ static void on_set_yaw_pid(const uint8_t *data, size_t len) {
       pid_constrain(pkt->trim_limit_mps, 0.0f, DRIVEMOTOR_GetMaxMps());
   const uint8_t en = (pkt->enabled != 0) ? 1u : 0u;
   const float sign = (pkt->gyro_sign < 0) ? -1.0f : 1.0f;
+  /* A physical at-rest gyro bias is small (WT901: a few deg/s). Clamp hard so a
+   * bad host value can only nudge, not steer — and the differential trim clamp
+   * below bounds the yaw correction regardless. */
+  const float bias = pid_constrain(pkt->gyro_bias_radps, -0.5f, 0.5f);
 
   /* Apply atomically w.r.t. motors_handler() (reads these at 50 Hz); this
    * handler runs in USB RX interrupt context. The integral limit is pinned to
@@ -510,6 +534,7 @@ static void on_set_yaw_pid(const uint8_t *data, size_t len) {
   yaw_pid.setOutputLimit(tl);
   g_yaw_trim_limit_mps = tl;
   g_yaw_gyro_sign = sign;
+  g_yaw_gyro_bias = bias;
   g_yaw_loop_enabled = en;
   __enable_irq();
 }
@@ -726,17 +751,34 @@ extern "C" void chatter_handler() {
 }
 
 /* Anti-dig per-wheel step (task #46). Returns true when the wheel must be cut
- * (caller forces PWM 0 + resets that wheel's integrator). Accumulates real
- * travel over the window so a slow-but-progressing creep (normal dock approach)
- * is NOT flagged — only a commanded, pushing, non-progressing wheel latches.
- * Clears the latch the instant the command drops below MIN_TARGET. */
-static bool antidig_step(uint32_t *stall_ms, int32_t *stall_ticks, bool *latched,
-                         float target, int16_t pwm, int32_t dticks,
-                         int32_t min_ticks) {
+ * (caller forces PWM 0 + resets that wheel's integrator). Over each window it
+ * accumulates BOTH the actual travel (|dticks|) AND the travel the commanded
+ * speed implies (|target| × ticks_per_meter × dt); at window end it latches iff
+ * the wheel kept less than PROGRESS_FRACTION of that commanded travel while
+ * pushing. Comparing to the *command* (not a fixed distance) means a wheel that
+ * keeps up with its setpoint — fast or slow, light or heavy load — is never
+ * flagged, while a wheel PLOWING at a small fraction of its command latches
+ * even if its absolute creep is non-trivial (the loophole in the old fixed-
+ * 0.03 m floor, which reset forever on any creep above it). Clears the latch
+ * the instant the command drops below MIN_TARGET.
+ *
+ * MANUAL FIELD TEST (supervised, 2026-07-21 — no host test harness for this
+ * TU): 1) On turf, command a straight drive into a fixed obstacle (wall/post)
+ * so both wheels stall while cmd_vel keeps requesting ~0.15 m/s. Expect BOTH
+ * wheels to cut within ~WINDOW_MS (~1.5 s) — verify no continued grinding.
+ * 2) Back off; confirm the latch clears (wheels drive again) once cmd_vel
+ * returns to ~0. 3) Regression: a full normal mow + a slow dock approach must
+ * NOT trip the latch (heavy grass load and slope climbing keep >30% of the
+ * commanded travel). 4) Half-block ONE wheel (e.g. against a low kerb) and
+ * confirm only that wheel latches. */
+static bool antidig_step(uint32_t *stall_ms, int32_t *stall_ticks,
+                         float *exp_ticks, bool *latched, float target,
+                         int16_t pwm, int32_t dticks, float ticks_per_meter) {
   const bool commanded = fabsf(target) > ANTIDIG_MIN_TARGET_MPS;
   if (!commanded) {
     *stall_ms = 0u;
     *stall_ticks = 0;
+    *exp_ticks = 0.0f;
     *latched = false;
     return false;
   }
@@ -747,16 +789,19 @@ static bool antidig_step(uint32_t *stall_ms, int32_t *stall_ticks, bool *latched
   if (!pushing) {
     *stall_ms = 0u;
     *stall_ticks = 0;
+    *exp_ticks = 0.0f;
     return false;
   }
   *stall_ms += MOTORS_NBT_TIME_MS;
   *stall_ticks += (dticks < 0) ? -dticks : dticks;
+  *exp_ticks += fabsf(target) * ticks_per_meter * WHEEL_PI_DT_S;
   if (*stall_ms >= ANTIDIG_WINDOW_MS) {
-    if (*stall_ticks < min_ticks) {
-      *latched = true; /* pushed hard for the whole window, barely moved → dig */
+    if ((float)(*stall_ticks) < ANTIDIG_PROGRESS_FRACTION * (*exp_ticks)) {
+      *latched = true; /* pushed the whole window, kept <30% of commanded travel → dig */
     } else {
-      *stall_ms = 0u; /* actually progressing — reset the window */
+      *stall_ms = 0u; /* keeping up with the command — reset the window */
       *stall_ticks = 0;
+      *exp_ticks = 0.0f;
     }
   }
   return *latched;
@@ -855,8 +900,12 @@ extern "C" void motors_handler() {
        * Both this and the IMU broadcast read run in the cooperative main loop,
        * so there is no re-entrancy on the software-I2C bus. */
       if (IMU_TryReadGyro(&gx, &gy, &gz)) {
+        /* Subtract the host-measured at-rest gyro-Z bias BEFORE the sign
+         * multiply — meas = sign*(gz - bias) — so nulling the loop drives the
+         * TRUE yaw rate to the setpoint. Without this, an open-loop BackUp
+         * (wz=0) would hold sign*gz=0, i.e. true_rate=-bias, a constant arc. */
         const float meas_wz_raw =
-            g_yaw_gyro_sign * gz; /* rad/s, robot +yaw = CCW */
+            g_yaw_gyro_sign * (gz - g_yaw_gyro_bias); /* rad/s, robot +yaw = CCW */
         /* 1st-order IIR low-pass on the gyro feedback (seeded on the first
          * sample after a reset to avoid a startup transient) so the loop stops
          * chasing the 2-4 Hz self-oscillation. */
@@ -1027,18 +1076,19 @@ extern "C" void motors_handler() {
                            ? 0
                            : (int16_t)r_pwm_f;
 
-    /* Anti-dig cutout (always active, all modes). min_ticks derived from the
-     * live ticks_per_meter so the "is it progressing?" test tracks calibration.
+    /* Anti-dig cutout (always active, all modes). The step compares actual
+     * travel to the travel the commanded speed implies, using the live
+     * ticks_per_meter so both sides of the ratio track calibration.
      * dleft/dright_ticks and left/right_pwm_signed are this cycle's values. */
-    const int32_t antidig_min_ticks =
-        (int32_t)(ANTIDIG_MIN_PROGRESS_M * snap_ticks_per_meter);
-    if (antidig_step(&l_dig_stall_ms, &l_dig_stall_ticks, &l_dig_latched, l_target,
-                     left_pwm_signed, dleft_ticks, antidig_min_ticks)) {
+    if (antidig_step(&l_dig_stall_ms, &l_dig_stall_ticks, &l_dig_exp_ticks,
+                     &l_dig_latched, l_target, left_pwm_signed, dleft_ticks,
+                     snap_ticks_per_meter)) {
       left_pwm_signed = 0;
       left_wheel_pid.resetIntegral();
     }
-    if (antidig_step(&r_dig_stall_ms, &r_dig_stall_ticks, &r_dig_latched, r_target,
-                     right_pwm_signed, dright_ticks, antidig_min_ticks)) {
+    if (antidig_step(&r_dig_stall_ms, &r_dig_stall_ticks, &r_dig_exp_ticks,
+                     &r_dig_latched, r_target, right_pwm_signed, dright_ticks,
+                     snap_ticks_per_meter)) {
       right_pwm_signed = 0;
       right_wheel_pid.resetIntegral();
     }

@@ -139,14 +139,9 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
     const double jump = std::hypot(mx - (*last_gps_map_xy_).x(), my - (*last_gps_map_xy_).y());
     // Motion-consistent gate: the GPS step must be explainable by how far the
     // chassis ACTUALLY travelled since the last fix (wheel arc + lever-arm
-    // sweep from in-place rotation) plus a fixed slack budget. The previous
-    // gate only fired when the wheel said "barely moved" (wheel_dist <
-    // rtk_wrongfix_max_wheel_m), so at 0.20 m/s with 5 Hz GNSS — ~4 cm of real
-    // travel between fixes — a several-cm wrong-fix jump DURING MOWING
-    // slipped through as "plausible motion" and rebased map→odom (field: 3-11
-    // cm map→odom steps while raw RTK jitter was only σ≈1.4 cm). Comparing the
-    // jump against actual wheel travel makes the gate effective at any speed
-    // and reduces to the old fixed budget when stationary (wheel_dist ≈ 0).
+    // sweep from in-place rotation) plus a fixed slack budget. The motion-
+    // consistent gate compares the jump against actual wheel travel at any
+    // speed and reduces to the old fixed budget when stationary (wheel_dist≈0).
     // rtk_wrongfix_max_jump_m is the slack on top of travel — size it to a
     // few × the raw GNSS jitter σ. See rtk_wrongfix_gate.hpp for the pure
     // decision function + unit tests (test_rtk_wrongfix_gate.cpp).

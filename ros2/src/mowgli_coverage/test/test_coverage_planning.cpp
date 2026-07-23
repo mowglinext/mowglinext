@@ -408,6 +408,13 @@ TEST(CoverageContinuousPath, ContinuousPathAvoidsHole)
   ASSERT_GE(subs.size(), 2u)
       << "a central hole must split the path into >=2 sub-paths (else a connector "
          "cut through the hole)";
+  // Upper bound: a single hole must NOT over-fragment. Sub-paths split ONLY at
+  // real obstacle-gap relocations (Split A) — not at every serpentine U-turn cusp
+  // (the removed MPPI-era Split B), and not at the per-pass outer↔hole ring
+  // ping-pong (rings are grouped outer-first). One central hole ⇒ ~2 sub-paths.
+  EXPECT_LE(subs.size(), 3u) << subs.size()
+                             << " sub-paths for ONE hole — over-fragmentation regression "
+                                "(residual-cusp split or interleaved rings)";
 
   // The RAW hole ring: sub-paths are validated against the GROWN (inset) hole,
   // so the raw hole is cleared with margin. Any sub-path pose inside it is a real
@@ -433,6 +440,51 @@ TEST(CoverageContinuousPath, ContinuousPathAvoidsHole)
                          << " sub-path poses fall inside the obstacle hole";
 }
 
+// A hole-free field must yield EXACTLY ONE continuous sub-path — nothing splits it
+// (no obstacle gap to route around, so Split A never fires), and no interior
+// serpentine U-turn cusp splits it either (the removed MPPI-era Split B). One
+// sub-path means the whole field is driven blade-on end-to-end with zero blade-off
+// transits, which is the point of the continuous full_path.
+TEST(CoverageContinuousPath, HoleFreeFieldIsOneSubPath)
+{
+  // Deployed connector knobs (turn 0.18, min_turn 0.15) on a hole-free rectangle.
+  const auto cell = makeRectCentered(9.0, 6.0);
+  const auto plan = planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15);
+  ASSERT_FALSE(plan.rings.empty());
+  ASSERT_TRUE(plan.safe_holes.empty()) << "test field must be hole-free";
+  const auto subs = buildContinuousSubPaths(plan, plan.safe_boundary, 0.18, 0.15, 0.05);
+  EXPECT_EQ(subs.size(), 1u) << subs.size()
+                             << " sub-paths on a HOLE-FREE field — a spurious split "
+                                "(residual-cusp or ring-ordering artifact)";
+}
+
+// Repro of the field-reported over-fragmentation: a ~10.5 m square with a single
+// ~1 m central hole over a 72 m² field split into 18 sub-paths / 17 blade-off
+// transits. With Split B removed and rings grouped outer-first it must collapse to
+// ~2 (one blade-off transit around the single obstacle), bounded here at 3.
+TEST(CoverageContinuousPath, SingleCentralHoleDoesNotOverFragment)
+{
+  constexpr double kSide = 10.5;
+  f2c::types::Cell cell = makeSquare(kSide);
+  const double c = kSide / 2.0;  // centre; ~1 m square hole about it
+  f2c::types::LinearRing hole;
+  hole.addPoint(f2c::types::Point(c - 0.5, c - 0.5));
+  hole.addPoint(f2c::types::Point(c + 0.5, c - 0.5));
+  hole.addPoint(f2c::types::Point(c + 0.5, c + 0.5));
+  hole.addPoint(f2c::types::Point(c - 0.5, c + 0.5));
+  hole.addPoint(f2c::types::Point(c - 0.5, c - 0.5));
+  cell.addRing(hole);
+
+  const auto plan = planBoustrophedon(cell, 0.16, 0.18, 0, 0.0, -1.0, 0.15);
+  ASSERT_FALSE(plan.rings.empty());
+  // inset 0.0 leaves safe_boundary empty → fall back to the raw field ring.
+  const auto boundary = plan.safe_boundary.empty() ? squareRing(kSide) : plan.safe_boundary;
+  const auto subs = buildContinuousSubPaths(plan, boundary, 0.18, 0.15, 0.05);
+  EXPECT_GE(subs.size(), 2u) << "the central hole must still split the path (safety)";
+  EXPECT_LE(subs.size(), 3u) << subs.size()
+                             << " sub-paths — over-fragmentation regression (was 18)";
+}
+
 // Sub-path DRIVE ORDER: on a multi-lobe field the sub-paths are reordered by
 // nearest-neighbour (entering each at whichever end is nearer) to cut the
 // blade-off Nav2 transit between them — measured 77 → 47 m on the recorded
@@ -451,8 +503,13 @@ TEST(CoverageContinuousPath, SubPathReorderStaysHoleFreeAndDeterministic)
   constexpr double kMinTurnRadius = 0.15;
   constexpr double kStep = 0.03;
 
-  // 10 m square with two separated holes → several lobes, so the driver relocates
-  // between them and the NN reorder is exercised (> 2 sub-paths).
+  // 10 m square with two separated holes. Sub-paths split ONLY where a blade-on
+  // connector cannot clear a hole (obstacle-driven, issue #333) — a lobe change
+  // that passes to the SIDE of a hole stays blade-on, so this field yields a
+  // small number of hole-free lobes (>= 2), enough to exercise the NN reorder.
+  // The reorder's SAFETY contract (every sub-path stays hole-free; the order is
+  // deterministic for BT resume-by-index) is what this test guards, not a
+  // specific lobe count.
   f2c::types::Cell cell = makeSquare(10.0);
   auto add_hole = [&cell](double cx, double cy, double h)
   {
@@ -471,7 +528,7 @@ TEST(CoverageContinuousPath, SubPathReorderStaysHoleFreeAndDeterministic)
   ASSERT_GE(plan.safe_holes.size(), 2u) << "both holes must reach the plan as safe_holes";
   const auto subs =
       buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
-  ASSERT_GE(subs.size(), 3u) << "two holes should split the plan into >=3 lobes to reorder";
+  ASSERT_GE(subs.size(), 2u) << "holes must split the plan into >=2 hole-free lobes to reorder";
 
   // (1) Hole-free preserved after reorder/reversal.
   std::size_t in_hole = 0, total = 0;
@@ -763,19 +820,16 @@ TEST(CoveragePlanning, HeadlandPassOverride)
   EXPECT_EQ(plan.rings.size(), 3u);
 }
 
-// SAFETY FLOOR (Bug C1): the coverage server floors the planning inset at
-// robot_width/2 before calling planBoustrophedon, so a too-small configured
-// chassis_safety_inset can't let a blade cross the boundary. The floor itself
-// lives in coverage_server.cpp; here we assert the GEOMETRIC GUARANTEE it
-// provides — given the floored inset, NO planned ring point or swath endpoint
-// sits closer than robot_width/2 to the boundary. We mirror the server's floor
-// expression (max(configured, robot_width/2)) so the planner is exercised with
-// exactly the value the server would pass.
-// OPT-IN: setting chassis_safety_inset = chassis_width/2 keeps the WHOLE chassis
-// inside the boundary (the pre-2026-07 default). There is no longer an automatic
-// robot_width/2 floor — the default rides the outermost ring ON the recorded
-// line (see RingRidesOnLineWhenInsetZero) — but an operator near hard fences can
-// still request the old keep-fully-inside behaviour with this explicit value.
+// OPT-IN keep-inside: the coverage server does NOT floor the inset (it clamps
+// only at 0.0 — the default rides the outermost ring ON the recorded line, see
+// RingRidesOnLineWhenInsetZero); an operator near hard fences opts the WHOLE
+// chassis inside by setting chassis_safety_inset = chassis_width/2 explicitly.
+// This test passes that value and asserts the GEOMETRIC GUARANTEE it provides on
+// the STRAIGHT passes: no planned ring point or swath endpoint sits closer than
+// robot_width/2 to the boundary. The turn-around CONNECTORS (which used to bulge
+// op_width/2 further out than the rings) are covered separately by
+// TurnArcFootprintStaysInsideRecordedBoundary — this test only exercises the
+// discrete ring/swath geometry.
 TEST(CoveragePlanning, ChassisInsetOptInKeepsBladesInsideHalfWidth)
 {
   constexpr double kRobotWidth = 0.40;  // 0.40 m chassis (the field excursion case)
@@ -823,6 +877,128 @@ TEST(CoveragePlanning, ChassisInsetOptInKeepsBladesInsideHalfWidth)
           << ") is closer than robot_width/2 to the boundary";
     }
   }
+}
+
+// SAFETY REGRESSION (turn-arc footprint): the pre-fix connectors were validated
+// (allInside) only on the path CENTERLINE against plan.safe_boundary, which sits
+// op_width/2 OUTSIDE the outermost ring's centerline. So a forward turn-around
+// arc's centerline could reach op_width/2 further out than any ring/swath, and
+// buildConnector picks the LARGEST radius whose centerline still fits — pushing
+// the swept CHASSIS footprint (± robot_width/2) that much past the operator
+// boundary, an excursion that GROWS with the turn radius. The fix bounds
+// connectors to plan.connector_clearance_boundary (the outermost-ring centerline
+// == recorded eroded by chassis_safety_inset), so a turn's footprint is never
+// worse than the perimeter ring the robot already drives.
+//
+// With chassis_safety_inset = robot_width/2 the straight passes keep the whole
+// chassis inside the recorded line; this test asserts the TURN arcs do too, via
+// the centreline↔footprint identity (footprint_outer = centreline + robot_width/2,
+// clearance ring = perimeter-ring centreline, so centreline ⊂ clearance ⟺ the
+// swept footprint is no worse than the perimeter pass). It (1) HARD-asserts the
+// pre-fix safe_boundary bound drives a connector centreline > slack (≈ op_width/2)
+// past the clearance ring (bug reachable — a vacuous green is impossible), (2)
+// requires every centreline of the clearance-bounded plan to stay within that
+// ring, and (3) checks the plan is not fragmented into disconnected segments
+// (which would satisfy (2) vacuously).
+TEST(CoveragePlanning, TurnArcFootprintStaysInsideRecordedBoundary)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeadland = 0.18;
+  constexpr double kMinSwath = 0.15;
+  constexpr double kRobotWidth = 0.40;  // chassis width (footprint is ± half this)
+  constexpr double kInset = kRobotWidth * 0.5;  // opt-in: keep whole chassis inside
+  constexpr double kTurnRadius = 0.18;
+  constexpr double kMinTurnRadius = 0.15;
+  constexpr double kStep = 0.03;
+  // Densification / discrete-normal estimate slack. Well under the ~op_width/2
+  // (0.08 m) breach the bug produces.
+  constexpr double kSlack = 0.05;
+
+  // The operator's REAL recorded garden (recorded_area_1) — the elongated concave
+  // field where the maintainer observes turns crossing the boundary. Its many
+  // edge U-turns ride the connector bound: RecordedArea1NoCuspInBounds proves the
+  // pre-fix connectors reach within (inset − op_width/2) of the raw line, i.e.
+  // op_width/2 (0.08 m) PAST the outermost-ring clearance ring — so the RED guard
+  // below (≥ 0.05 m) is provable, not incidental to a synthetic shape.
+  const auto cell = makeRecordedArea1();
+
+  const auto plan =
+      planBoustrophedon(cell, kOpWidth, kHeadland, 0, kInset, -1.0, kMinSwath, 0, kMinTurnRadius);
+  ASSERT_FALSE(plan.swaths.empty()) << "no swaths to turn between";
+  ASSERT_GE(plan.safe_boundary.size(), 3u);
+
+  auto poseCount = [](const std::vector<std::vector<std::pair<double, double>>>& subs)
+  {
+    std::size_t n = 0;
+    for (const auto& sub : subs)
+    {
+      n += sub.size();
+    }
+    return n;
+  };
+
+  // fix (a) must have populated the outermost-ring clearance ring.
+  ASSERT_GE(plan.connector_clearance_boundary.size(), 3u)
+      << "connector_clearance_boundary not populated — fix (a) missing";
+  const std::vector<std::pair<double, double>>& clearance = plan.connector_clearance_boundary;
+
+  // Max distance any CENTRELINE pose lies OUTSIDE the outermost-ring clearance
+  // ring — the fix's actual contract (connectors must not push the path past the
+  // perimeter ring the robot already drives). Ring/swath poses sit on/inside it by
+  // construction, so this measures the connector/fillet outward bulge directly.
+  auto centrelineExcursion = [&](const std::vector<std::vector<std::pair<double, double>>>& subs)
+  {
+    double m = 0.0;
+    for (const auto& sub : subs)
+    {
+      for (const auto& p : sub)
+      {
+        m = std::max(m,
+                     pointInRing(p.first, p.second, clearance)
+                         ? 0.0
+                         : distanceToRing(p.first, p.second, clearance));
+      }
+    }
+    return m;
+  };
+
+  const auto unsafe =
+      buildContinuousSubPaths(plan, plan.safe_boundary, kTurnRadius, kMinTurnRadius, kStep);
+  const auto fixed = buildContinuousSubPaths(plan, clearance, kTurnRadius, kMinTurnRadius, kStep);
+
+  // (1) Bug reachable — HARD guard (ASSERT, not EXPECT) so a vacuous green is
+  // impossible: bounding connectors to safe_boundary lets a centreline ride up to
+  // op_width/2 (0.08 m) past the outermost-ring envelope — the extra outward bulge
+  // that (per buildConnector's accept-largest-radius) grows with the turn radius.
+  // RecordedArea1NoCuspInBounds independently measures this: its connectors reach
+  // within (inset − op_width/2) of the raw line, i.e. op_width/2 past the
+  // clearance ring, so this excursion is ~0.08 m here — comfortably over kSlack.
+  // If this ever fails, the pre-fix path did NOT exceed the clearance ring on this
+  // field and the regression is untested — fail loudly rather than pass hollowly.
+  const double unsafe_centreline_ex = centrelineExcursion(unsafe);
+  ASSERT_GT(unsafe_centreline_ex, kSlack)
+      << "pre-fix connectors stayed within the clearance ring (excursion " << unsafe_centreline_ex
+      << " m ≤ " << kSlack
+      << ") — the bug is not exercised on this field; choose one whose turns reach the boundary";
+
+  // (2) Fix contract: every connector centreline stays within the clearance ring.
+  // This is the precise chassis guarantee — centreline ⊂ clearance ⟺ the swept
+  // footprint is no worse than the perimeter ring the robot already drives, which
+  // (at chassis_safety_inset = robot_width/2) is the whole chassis inside the
+  // recorded line. We do NOT assert an ABSOLUTE "every footprint inside recorded"
+  // here: a ±robot_width/2 footprint can cross the raw line near a sharp CONCAVE
+  // vertex of the real garden no matter how the path is routed — that is a field
+  // property, not the turn-arc bug, and it appears equally in both builds.
+  EXPECT_LE(centrelineExcursion(fixed), kSlack)
+      << "a connector centreline still exceeds the outermost-ring clearance ring";
+  // (3) The fix must not reach clearance by shredding the plan into disconnected
+  // segments (dropping connectors would satisfy (2) vacuously). The op_width/2
+  // tightening should shrink a few edge turns, not fragment the plan.
+  const std::size_t unsafe_poses = poseCount(unsafe);
+  const std::size_t fixed_poses = poseCount(fixed);
+  EXPECT_GE(fixed_poses, static_cast<std::size_t>(0.75 * unsafe_poses))
+      << "clearance bound over-fragmented the plan (" << fixed_poses << " vs " << unsafe_poses
+      << " poses) — edge turns forced below min_turning_radius into straight-fallback splits";
 }
 
 // Headland-on-the-line: with chassis_safety_inset = 0 (the new default) the
@@ -1349,19 +1525,31 @@ TEST(CoveragePlanning, LargeFieldUsesLongestEdgeAngleFallback)
 {
   const auto plan = planDefault(makeSquare(30.0));  // 900 m² > 400 m² gate
   EXPECT_FALSE(plan.swaths.empty()) << "large field produced no swaths";
-  ASSERT_FALSE(plan.diagnostics.notes.empty())
-      << "expected an auto-angle fallback note on a large field";
-  EXPECT_NE(plan.diagnostics.notes[0].find("auto-angle"), std::string::npos);
+  // The always-on "timing:" note means notes is never empty and the auto-angle
+  // note is not guaranteed to be first — search for it explicitly.
+  const bool has_auto_angle = std::any_of(plan.diagnostics.notes.begin(),
+                                          plan.diagnostics.notes.end(),
+                                          [](const std::string& n)
+                                          {
+                                            return n.find("auto-angle") != std::string::npos;
+                                          });
+  EXPECT_TRUE(has_auto_angle) << "expected an auto-angle fallback note on a large field";
 }
 
-// A field under the threshold keeps the exhaustive best-angle search (no note),
-// so small lawns get the optimum swath orientation as before.
+// A field under the threshold keeps the exhaustive best-angle search, so small
+// lawns get the optimum swath orientation as before. planBoustrophedon always
+// records a per-stage "timing:" diagnostics note (see coverage_planning.cpp), so
+// the contract is specifically that NO "auto-angle" fallback note is present —
+// not that notes is empty.
 TEST(CoveragePlanning, SmallFieldKeepsExhaustiveAngleSearch)
 {
   const auto plan = planDefault(makeSquare(18.0));  // 324 m² < 400 m² gate
   EXPECT_FALSE(plan.swaths.empty());
-  EXPECT_TRUE(plan.diagnostics.notes.empty())
-      << "small field should not trigger the large-field angle fallback";
+  for (const auto& note : plan.diagnostics.notes)
+  {
+    EXPECT_EQ(note.find("auto-angle"), std::string::npos)
+        << "small field should not trigger the large-field angle fallback: " << note;
+  }
 }
 
 // The fallback is deterministic (longest-edge angle of a fixed polygon), so the
@@ -1373,4 +1561,110 @@ TEST(CoveragePlanning, LargeFieldFallbackIsDeterministic)
   const auto b = planDefault(makeSquare(30.0));
   ASSERT_EQ(a.swaths.size(), b.swaths.size());
   EXPECT_NEAR(a.swath_angle_rad, b.swath_angle_rad, 1e-9);
+}
+
+// GEOMETRY SANITIZATION (field-reported partial coverage): an operator-recorded
+// 252 m² boundary whose ring is geometrically DEGENERATE — a ~1.2 mm near-
+// duplicate closure vertex plus several 1–10 mm sliver edges. The 68 vertices are
+// verbatim from map (4).json → working_area[0].area.points. These points are
+// EXACT enough that boost::geometry (F2C's backend) accepts them, yet degenerate
+// enough that generateHeadlands / BruteForce silently produced PARTIAL coverage
+// on a fresh plan. dedupClosedRing must (a) strip the mm degeneracies and (b)
+// yield a cell the planner covers in full again.
+TEST(CoveragePlanning, DegenerateRecordedRingSanitizedToFullCoverage)
+{
+  // NOT closed on purpose — the last vertex is ~1.2 mm from the first (the
+  // recorded closure seam), and several consecutive vertices are 1–10 mm apart.
+  const std::vector<std::pair<double, double>> pts = {
+      {-0.1468, 1.8471},   {-6.5998, 23.0608},  {-6.6046, 23.0691},  {-6.6104, 23.0731},
+      {-6.6178, 23.0743},  {-18.0979, 19.4606}, {-18.1731, 19.4307}, {-18.2238, 19.3894},
+      {-18.2655, 19.3284}, {-18.3162, 19.2429}, {-18.3168, 19.1411}, {-17.1843, 16.0394},
+      {-17.0688, 15.99},   {-16.9131, 15.9514}, {-16.8322, 15.9453}, {-16.7189, 15.952},
+      {-16.6073, 15.9903}, {-16.4939, 16.0335}, {-16.3954, 16.0579}, {-16.2647, 16.0626},
+      {-16.1277, 16.021},  {-16.0434, 15.9435}, {-15.9782, 15.8541}, {-15.9184, 15.7451},
+      {-15.8716, 15.6532}, {-15.8313, 15.5422}, {-15.7997, 15.4433}, {-15.7889, 15.3582},
+      {-15.8092, 15.2467}, {-15.8614, 15.1469}, {-15.9637, 15.0745}, {-16.0734, 15.0063},
+      {-16.1273, 14.9349}, {-16.1976, 14.8194}, {-16.219, 14.7384},  {-16.237, 14.6354},
+      {-16.2368, 14.5039}, {-16.2014, 14.3504}, {-16.0401, 13.7975}, {-11.8444, -0.8705},
+      {-11.8026, -0.9601}, {-11.7139, -1.0434}, {-11.6045, -1.0228}, {-11.4932, -1.0051},
+      {-11.3939, -1.024},  {-11.29, -1.0601},   {-11.1989, -1.1268}, {-11.1094, -1.1825},
+      {-10.9994, -1.2351}, {-10.8877, -1.2878}, {-10.8178, -1.2811}, {-10.7607, -1.2553},
+      {-10.7413, -1.2112}, {-10.14, -0.1519},   {-10.0367, -0.0724}, {-4.9679, 1.5848},
+      {-4.8472, 1.6154},   {-4.7325, 1.6342},   {-2.335, 2.2454},    {-2.1199, 2.2914},
+      {-1.9402, 2.2562},   {-1.8679, 2.1138},   {-1.7507, 1.9035},   {-1.6768, 1.7029},
+      {-1.5999, 1.5751},   {-1.4961, 1.4756},   {-1.361, 1.4318},    {-0.148, 1.8469}};
+
+  f2c::types::LinearRing raw;
+  for (const auto& p : pts)
+  {
+    raw.addPoint(f2c::types::Point(p.first, p.second));
+  }
+
+  // Shortest cyclic edge, skipping the exact zero-length wrap of an already-closed
+  // ring (first == last) so the metric works on both the OPEN raw ring — where the
+  // wrap IS the 1.2 mm closure seam we want to catch — and the CLOSED clean ring.
+  auto minCyclicEdge = [](const f2c::types::LinearRing& r)
+  {
+    double m = std::numeric_limits<double>::max();
+    const std::size_t n = r.size();
+    for (std::size_t i = 0; i < n; ++i)
+    {
+      const auto a = r.getGeometry(i);
+      const auto b = r.getGeometry((i + 1) % n);
+      const double d = std::hypot(b.getX() - a.getX(), b.getY() - a.getY());
+      if (d > 1e-9)
+      {
+        m = std::min(m, d);
+      }
+    }
+    return m;
+  };
+
+  // (a) The raw ring is degenerate: its shortest cyclic edge is the ~1.2 mm
+  // closure seam — the very degeneracy boost accepts but F2C mis-clips. Guards
+  // the regression: if the fixture ever loses its slivers the test is vacuous.
+  EXPECT_LT(minCyclicEdge(raw), 0.002) << "fixture is not degenerate — regression untestable";
+
+  const auto clean = dedupClosedRing(raw);
+  // Sanitized ring is closed, has strictly fewer vertices (slivers removed), and
+  // carries no sub-cm edge left for F2C to choke on.
+  ASSERT_GE(clean.size(), 4u);
+  EXPECT_NEAR(clean.getGeometry(0).getX(), clean.getGeometry(clean.size() - 1).getX(), 1e-9);
+  EXPECT_NEAR(clean.getGeometry(0).getY(), clean.getGeometry(clean.size() - 1).getY(), 1e-9);
+  EXPECT_LT(clean.size(), raw.size()) << "no degenerate vertices were removed";
+  EXPECT_GT(minCyclicEdge(clean), 0.008) << "a mm-scale sliver survived sanitization";
+
+  // (b) Planning the SANITIZED cell covers the whole field again. planned_fraction
+  // is a coarse strip estimate, so a healthy full plan scores ~0.9+ while the
+  // degenerate/partial plan scored far lower.
+  const f2c::types::Cell cell(clean);
+  const auto plan = planBoustrophedon(cell, 0.16, 0.18, 0, 0.08, -1.0, 0.15);
+  ASSERT_FALSE(plan.rings.empty());
+  ASSERT_GE(plan.swaths.size(), 20u);
+  EXPECT_GT(plan.diagnostics.planned_fraction, 0.85)
+      << "sanitized field still plans as PARTIAL coverage (" << plan.diagnostics.planned_fraction
+      << ")";
+
+  // Swaths must tile the field's full x-extent — partial coverage left a whole
+  // sub-region unmowed, collapsing the swath x-span.
+  double field_min_x = std::numeric_limits<double>::max();
+  double field_max_x = std::numeric_limits<double>::lowest();
+  for (std::size_t i = 0; i < clean.size(); ++i)
+  {
+    const double x = clean.getGeometry(i).getX();
+    field_min_x = std::min(field_min_x, x);
+    field_max_x = std::max(field_max_x, x);
+  }
+  double swath_min_x = std::numeric_limits<double>::max();
+  double swath_max_x = std::numeric_limits<double>::lowest();
+  for (const auto& s : plan.swaths)
+  {
+    swath_min_x = std::min({swath_min_x, s.first.first, s.second.first});
+    swath_max_x = std::max({swath_max_x, s.first.first, s.second.first});
+  }
+  const double field_span = field_max_x - field_min_x;
+  const double swath_span = swath_max_x - swath_min_x;
+  EXPECT_GT(swath_span, 0.7 * field_span)
+      << "swaths span only " << swath_span << " m of the field's " << field_span
+      << " m x-extent — coverage is still partial";
 }

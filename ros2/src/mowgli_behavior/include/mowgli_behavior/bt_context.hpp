@@ -28,6 +28,7 @@
 
 #include "geometry_msgs/msg/point32.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
+#include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
 #include "nav_msgs/msg/path.hpp"
@@ -308,6 +309,16 @@ struct BTContext
   /// flags "not currently in STOP".
   std::chrono::steady_clock::time_point collision_stop_since{};
 
+  /// Arrival time of the most recent /collision_monitor_state message —
+  /// ANY action_type. collision_monitor only processes (and republishes
+  /// state) while cmd_vel_nav flows; once the tree halts, the stream goes
+  /// silent and collision_action_type is a STALE LATCH, not live state.
+  /// Field 2026-07-23: the first SensorSafetyGuard deployment deadlocked on
+  /// exactly this — guard halts tree → Nav2 stops publishing → monitor stops
+  /// publishing → STOP latched forever → guard never releases (268 s observed).
+  /// Consumers MUST treat a stale latch as "unknown", not "still stopped".
+  std::chrono::steady_clock::time_point last_collision_state_time{};
+
   /// Time of the most recent STOP→non-STOP transition. Default-constructed
   /// = no STOP has ever ended this session. Used by WasRecentlyInCollisionStop
   /// so transient obstacles that clear between FollowStrip retry attempts
@@ -323,6 +334,14 @@ struct BTContext
   /// the BackUp + costmap clear is still settling.
   std::chrono::steady_clock::time_point last_obstacle_backoff_time{};
 
+  /// Scan-stream liveness (SAFETY_REVIEW_2026-07-23 A-C2). Stamped by the
+  /// /scan_collision subscriber in behavior_tree_node on every message.
+  /// Default-constructed = no scan EVER received this session — IsScanStale
+  /// treats that as "no LiDAR install" and stays inert, so no lidar_enabled
+  /// plumbing is needed: the guard only arms once a real scan stream has
+  /// existed and then died (LiDAR container crash, filter-chain death).
+  std::chrono::steady_clock::time_point last_scan_time{};
+
   // -----------------------------------------------------------------------
   // Per-session flags reset by ClearCommand at session end
   // -----------------------------------------------------------------------
@@ -334,6 +353,26 @@ struct BTContext
   /// halts MowingSequence (e.g., BoundaryGuard or GpsMode transition) and
   /// later re-enters it from the top.
   bool yaw_seeded_this_session{false};
+
+  // -----------------------------------------------------------------------
+  // Docking transit lifecycle (owned by the DockRobot action node)
+  // -----------------------------------------------------------------------
+
+  /// True while a DockRobot action is actively running (between onStart's
+  /// RUNNING return and its terminal SUCCESS/FAILURE or a parent halt).
+  /// Maintained SOLELY by DockRobot (onStart sets true, onRunning clears on
+  /// any terminal status, onHalted clears unconditionally) so the flag can
+  /// never stick true — BehaviorTree.CPP guarantees onHalted() is invoked
+  /// whenever a RUNNING StatefulActionNode is halted by a parent.
+  ///
+  /// Consumed by IsDocking, which BoundaryGuard uses to EXEMPT the blade-off
+  /// dock transit (command 1) from the SoftBoundaryHandler: every DockRobot
+  /// is entered only after SetMowerEnabled(false) and can never overlap the
+  /// blade-on FollowStrip subtree, so "docking_active under command 1" is
+  /// provably a blade-OFF transit — the boundary handler must NOT cancel it.
+  /// Blade-ON mowing (FollowStrip) keeps full boundary protection because
+  /// docking_active is false there. See main_tree.xml BoundaryGuard.
+  bool docking_active{false};
 
   // -----------------------------------------------------------------------
   // Docking point (set from parameter or service call)
@@ -409,6 +448,21 @@ struct BTContext
   int total_swaths{0};
   int completed_swaths{0};
   int skipped_swaths{0};
+
+  // -----------------------------------------------------------------------
+  // High-level status publishing (shared publisher + last-published cache)
+  // -----------------------------------------------------------------------
+  // PublishHighLevelStatus is a SyncActionNode that only ticks on tree
+  // transitions, so during a multi-minute FollowStrip (which sits RUNNING with
+  // no transitions) the topic goes SILENT for the whole traversal. The
+  // publisher is volatile and the GUI frontend starts from an empty status and
+  // only updates on live messages, so a dashboard opened/refreshed mid-mow
+  // receives nothing and renders "idle". To keep the topic fresh, the publisher
+  // is owned here and the behavior_tree_node re-publishes last_high_level_status
+  // on a periodic timer. Protected by context_mutex.
+  rclcpp::Publisher<mowgli_interfaces::msg::HighLevelStatus>::SharedPtr high_level_status_pub;
+  mowgli_interfaces::msg::HighLevelStatus last_high_level_status;
+  bool has_high_level_status{false};
 
   // -----------------------------------------------------------------------
   // TF buffer (shared across all BT nodes)

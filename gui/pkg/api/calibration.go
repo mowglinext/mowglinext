@@ -54,7 +54,45 @@ func CalibrationRoutes(r *gin.RouterGroup, rosProvider types.IRosProvider, dbPro
 	group := r.Group("/calibration")
 	group.POST("/imu-yaw", postCalibrateImuYaw(rosProvider))
 	group.POST("/magnetometer", postCalibrateMagnetometer(rosProvider))
+	group.POST("/dock/start", postStartDockCalibration(rosProvider))
 	registerCalibrationStatusRoute(group, dbProvider)
+}
+
+// ---------------------------------------------------------------------------
+// POST /calibration/dock/start
+// ---------------------------------------------------------------------------
+
+// postStartDockCalibration triggers the one-click dock calibration via the
+// node's NON-BLOCKING start service (std_srvs/Trigger). It returns immediately
+// (accepted/rejected); the GUI watches the /calibration status via the
+// "dockCalibrationStatus" subscribe stream for live phase/progress + the
+// terminal outcome. Rejections (AUTONOMOUS / emergency / not-charging /
+// already-running) come back as success=false with a message.
+func postStartDockCalibration(rosProvider types.IRosProvider) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+		defer cancel()
+
+		// std_srvs/Trigger has no generated Go type; use the codebase idiom of
+		// an empty request struct + a local response shape (see mowglinext.go).
+		var res struct {
+			Success bool   `json:"success"`
+			Message string `json:"message"`
+		}
+		if err := rosProvider.CallService(
+			ctx,
+			"/calibrate_imu_yaw_node/dock_calibration/start",
+			&struct{}{},
+			&res,
+			"std_srvs/srv/Trigger",
+		); err != nil {
+			c.JSON(http.StatusInternalServerError, ErrorResponse{
+				Error: "Failed to start dock calibration: " + err.Error(),
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"success": res.Success, "message": res.Message})
+	}
 }
 
 // ---------------------------------------------------------------------------

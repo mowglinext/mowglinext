@@ -241,6 +241,11 @@ def generate_launch_description() -> LaunchDescription:
             # hardcoded 0.5/0.25 and the configured speeds never took effect.
             {"transit_speed": float(robot_params.get("transit_speed", 0.25))},
             {"mowing_speed": float(robot_params.get("mowing_speed", 0.2))},
+            # mow_angle_deg: operator swath direction. -1 (negative) = AUTO
+            # (coverage server picks the swath-count-minimising angle); 0..179 =
+            # fixed swath angle in degrees. Read by PlanCoverageArea::buildGoal
+            # off the BT blackboard into the plan_coverage action goal.
+            {"mow_angle_deg": float(robot_params.get("mow_angle_deg", -1.0))},
             # Battery thresholds — operator-tunable in mowgli_robot.yaml and
             # surfaced on the GUI Settings page. Forwarded here under the C++
             # parameter names the behavior node declares (behavior_tree.yaml
@@ -314,7 +319,7 @@ def generate_launch_description() -> LaunchDescription:
             # by navigation.launch.py) so the transit planner and the swath
             # planner keep the same distance from a drawn tree/root zone.
             {"obstacle_margin": min(1.0, max(0.0, float(
-                robot_params.get("obstacle_margin", 0.0))))},
+                robot_params.get("obstacle_margin", 0.15))))},
             # Hard area-boundary enforcement (operator intent: "lethal area
             # where there is no navigation or mowing area"). When true (default)
             # the keepout mask marks every cell outside the union of all areas
@@ -402,6 +407,26 @@ def generate_launch_description() -> LaunchDescription:
             {"use_sim_time": use_sim_time},
             {"undock_distance": float(robot_params.get("undock_distance", 2.0))},
             {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
+            # One-click dock calibration (CalibrateDock action). Defaults come
+            # from the mowgli_bringup template (Invariant 15) via robot_params.
+            {"dock_calib_reverse_distance_m": float(
+                robot_params.get("dock_calib_reverse_distance_m", 2.0))},
+            {"dock_calib_reverse_speed_ms": float(
+                robot_params.get("dock_calib_reverse_speed_ms", 0.15))},
+            {"dock_calib_redock_overshoot_m": float(
+                robot_params.get("dock_calib_redock_overshoot_m", 0.30))},
+            {"dock_calib_rtk_wait_timeout_s": float(
+                robot_params.get("dock_calib_rtk_wait_timeout_s", 10.0))},
+            {"dock_calib_redock_charge_timeout_s": float(
+                robot_params.get("dock_calib_redock_charge_timeout_s", 30.0))},
+            {"dock_calib_cog_min_samples": int(
+                robot_params.get("dock_calib_cog_min_samples", 8))},
+            {"dock_calib_cog_std_max_rad": float(
+                robot_params.get("dock_calib_cog_std_max_rad", 0.0524))},
+            {"dock_calib_cog_bearing_match_max_rad": float(
+                robot_params.get("dock_calib_cog_bearing_match_max_rad", 0.1047))},
+            {"dock_calib_min_baseline_displacement_m": float(
+                robot_params.get("dock_calib_min_baseline_displacement_m", 0.5))},
         ],
     )
 

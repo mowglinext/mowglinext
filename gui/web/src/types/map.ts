@@ -96,6 +96,28 @@ export class RobotPartFeature extends MowingFeature implements Feature<Polygon> 
     }
 }
 
+// A persistent tracked-obstacle observation (/obstacle_tracker/obstacles,
+// status=PERSISTENT) rendered on the live map. Modelled as a closed Polygon
+// ring so it draws as a translucent fill + outline with a large hover/click
+// target, and carries the tracker `obs_id` + a display `obs_label` so the map
+// and the TrackedObstaclesPanel share one visible identifier. feature_type
+// 'dyn-obstacle' drives its own fill / outline / highlight / label layers in
+// MapPage — it rides the same display-features source as mower-footprint, so
+// there is no second rendering path.
+export class DynObstacleFeature extends MowingFeature implements Feature<Polygon> {
+    declare geometry: Polygon;
+    constructor(id: string, ring: Position[], obstacleId: number, color = 'rgba(255, 100, 100, 0.4)') {
+        super(id);
+        this.geometry = { type: 'Polygon', coordinates: [ring] };
+        this.properties = {
+            color,
+            feature_type: 'dyn-obstacle',
+            obs_id: obstacleId,
+            obs_label: String(obstacleId),
+        };
+    }
+}
+
 export class DockFeatureBase extends PointFeatureBase  {
     declare properties: {
         color: string;

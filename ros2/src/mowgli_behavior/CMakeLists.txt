@@ -26,6 +26,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(action_msgs REQUIRED)
@@ -67,6 +68,7 @@ ament_target_dependencies(behavior_tree_node
   tf2_ros
   tf2_geometry_msgs
   nav2_msgs
+  sensor_msgs
   nav_msgs
   geometry_msgs
   action_msgs
@@ -143,6 +145,35 @@ if(BUILD_TESTING)
   )
 
   ament_target_dependencies(test_obstacle_recovery
+    rclcpp
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+  )
+
+  # ---- test_docking_boundary_exempt ----
+  # Regression for "Mowing Complete → robot stops short of the dock": exercises
+  # the IsDocking condition and the BoundaryGuard whitelist logic that exempts
+  # the blade-off dock transit (command 1 + IsDocking) while keeping full
+  # boundary protection during blade-on mowing.
+  ament_add_gtest(test_docking_boundary_exempt
+    test/test_docking_boundary_exempt.cpp
+    src/condition_nodes.cpp
+  )
+
+  target_include_directories(test_docking_boundary_exempt PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_docking_boundary_exempt
     rclcpp
     behaviortree_cpp
     mowgli_interfaces
@@ -284,6 +315,88 @@ if(BUILD_TESTING)
     tf2_geometry_msgs
     rcl_interfaces
     action_msgs
+  )
+
+  # ---- test_swath_progress ----
+  # Regression: the GUI live mowing-progress scalars (ctx.total_swaths /
+  # ctx.completed_swaths, behind HighLevelStatus.current_path / current_path_index)
+  # must be > 0 and climb during a pass, not stay 0 until the terminal branch.
+  # Drives refreshSwathProgress through a simulated pass on a plain BTContext.
+  ament_add_gtest(test_swath_progress
+    test/test_swath_progress.cpp
+    src/coverage_nodes.cpp
+    src/coverage_persistence.cpp
+  )
+
+  target_include_directories(test_swath_progress PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_swath_progress
+    rclcpp
+    rclcpp_action
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+    rcl_interfaces
+    action_msgs
+  )
+
+  # ---- test_detour_resume ----
+  # Unit tests for the pure detour-and-continue resume-pose search
+  # (detour_resume.hpp): when FTC is blocked by an un-skirtable obstacle,
+  # FollowStrip must find a clear pose past it and detour (blade-off) instead of
+  # abandoning the whole swath. Header-only helper → no coverage_nodes.cpp link.
+  ament_add_gtest(test_detour_resume
+    test/test_detour_resume.cpp
+  )
+
+  target_include_directories(test_detour_resume PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_detour_resume
+    geometry_msgs
+    mowgli_interfaces
+  )
+
+  # ---- test_battery_critical_resume ----
+  # Regression for "robot stuck after a critical-battery charge": the
+  # CriticalBatteryDock tail must AUTO-CONTINUE on recovery (undock, keep
+  # current_command + resume cursor) and only EndSession on a dead charger.
+  ament_add_gtest(test_battery_critical_resume
+    test/test_battery_critical_resume.cpp
+    src/condition_nodes.cpp
+    src/status_nodes.cpp
+    src/coverage_persistence.cpp
+  )
+
+  target_include_directories(test_battery_critical_resume PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_battery_critical_resume
+    rclcpp
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
   )
 
 endif()

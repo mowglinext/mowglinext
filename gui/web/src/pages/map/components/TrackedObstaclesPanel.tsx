@@ -14,6 +14,12 @@ interface TrackedObstaclesPanelProps {
     obstacleAreaIndex: Record<number, number | null>;
     /// Human-readable area name per area_index, for the confirm dialog.
     areaNames: Record<number, string>;
+    /// Currently hovered/selected obstacle id (shared with the map layer so the
+    /// matching row + polygon highlight together). null = nothing highlighted.
+    selectedObstacleId: number | null;
+    /// Report a row hover so the map can highlight the matching polygon. Pass
+    /// the obstacle id on enter, null on leave.
+    onHoverObstacle: (id: number | null) => void;
 }
 
 /// Lists tracked obstacles published by /obstacle_tracker/obstacles. Each row
@@ -21,7 +27,7 @@ interface TrackedObstaclesPanelProps {
 /// transient observation becomes a permanent keepout for the containing area.
 /// After the obstacle-tracker decouple (#6), this is the only path that
 /// adds entries to obstacle_polygons_ at runtime — auto-promotion is gone.
-export const TrackedObstaclesPanel = ({obstacles, obstacleAreaIndex, areaNames}: TrackedObstaclesPanelProps) => {
+export const TrackedObstaclesPanel = ({obstacles, obstacleAreaIndex, areaNames, selectedObstacleId, onHoverObstacle}: TrackedObstaclesPanelProps) => {
     const {colors} = useThemeMode();
     const {t} = useTranslation();
     const {modal, notification} = App.useApp();
@@ -42,7 +48,7 @@ export const TrackedObstaclesPanel = ({obstacles, obstacleAreaIndex, areaNames}:
         const areaLabel = areaNames[areaIdx] ?? t('mapTrackedObstacles.areaFallback', {index: areaIdx});
 
         modal.confirm({
-            title: t('mapTrackedObstacles.confirmTitle'),
+            title: t('mapTrackedObstacles.confirmTitleWithId', {id}),
             content: (
                 <div>
                     <p>
@@ -94,13 +100,20 @@ export const TrackedObstaclesPanel = ({obstacles, obstacleAreaIndex, areaNames}:
                     const id = obs.id ?? 0;
                     const areaIdx = obstacleAreaIndex[id];
                     const areaLabel = areaIdx == null ? t('mapTrackedObstacles.noArea') : (areaNames[areaIdx] ?? t('mapTrackedObstacles.areaFallback', {index: areaIdx}));
+                    const isSelected = selectedObstacleId === id;
                     return (
-                        <div key={id} style={{
+                        <div key={id}
+                            onMouseEnter={() => onHoverObstacle(id)}
+                            onMouseLeave={() => onHoverObstacle(null)}
+                            style={{
                             display: 'flex',
                             alignItems: 'center',
                             gap: 10,
                             padding: '10px 12px',
-                            borderLeft: `3px solid #bf0000`,
+                            cursor: 'default',
+                            background: isSelected ? colors.bgElevated : 'transparent',
+                            borderLeft: `3px solid ${isSelected ? '#ff4d4f' : '#bf0000'}`,
+                            transition: 'background 0.12s ease',
                         }}>
                             <span style={{color: '#bf0000', fontSize: 16, flexShrink: 0, width: 20}}>
                                 <StopOutlined />

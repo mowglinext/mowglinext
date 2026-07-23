@@ -209,13 +209,17 @@
     "stateCoverageFailed": "Échec couverture"
   },
   "flashBoard": {
+    "firmwareSourceTitle": "Source du firmware",
+    "firmwareSourcePrebuilt": "Image précompilée (recommandé)",
+    "firmwareSourceCustom": "Personnalisé — compiler depuis les sources (expert)",
+    "firmwareSourceTooltip": "« Image précompilée » flashe le binaire testé et vérifié par somme de contrôle pour votre carte. « Personnalisé » compile le firmware depuis le dépôt/la branche ci-dessous avec les paramètres de la section experte et flashe ce build.",
     "prebuiltInfoTitle": "Nous flasherons le firmware précompilé pour votre modèle",
-    "prebuiltInfoDesc": "Choisissez votre carte et votre panneau ci-dessus, puis cliquez sur Flasher. Le binaire précompilé correspondant, vérifié par somme de contrôle, est téléchargé et écrit — aucune compilation nécessaire. N'ouvrez la section experte ci-dessous que si vous avez besoin d'un build personnalisé.",
+    "prebuiltInfoDesc": "Choisissez votre carte et votre panneau ci-dessus, laissez Source du firmware sur « Image précompilée », puis cliquez sur Flasher. Le binaire précompilé correspondant, vérifié par somme de contrôle, est téléchargé et écrit — aucune compilation nécessaire. Ne choisissez « Personnalisé » que si vous avez besoin de compiler depuis les sources.",
     "noPrebuiltTitle": "Pas encore de firmware précompilé pour ce modèle",
-    "noPrebuiltDesc": "Aucun binaire précompilé testé n'existe pour la carte sélectionnée. Ouvrez « Expert : compiler un firmware personnalisé » ci-dessous et activez « Compiler depuis les sources » pour le compiler et le flasher.",
-    "expertBuildLabel": "Expert : compiler un firmware personnalisé",
-    "expertBuildAlertMessage": "Uniquement pour les builds personnalisés",
-    "expertBuildAlertDescription": "Ces réglages compilent le firmware depuis les sources au lieu de flasher le binaire précompilé testé. De mauvaises valeurs peuvent endommager la batterie ou désactiver une sécurité physique. Laissez « Compiler depuis les sources » décoché pour flasher le binaire précompilé.",
+    "noPrebuiltDesc": "Aucun binaire précompilé testé n'existe pour la carte sélectionnée. Réglez Source du firmware sur « Personnalisé — compiler depuis les sources » et renseignez la section experte ci-dessous pour le compiler et le flasher.",
+    "expertBuildLabel": "Expert : paramètres du build personnalisé",
+    "expertBuildAlertMessage": "Utilisé uniquement quand Source du firmware est « Personnalisé »",
+    "expertBuildAlertDescription": "Ces réglages compilent le firmware depuis les sources au lieu de flasher le binaire précompilé testé. De mauvaises valeurs peuvent endommager la batterie ou désactiver une sécurité physique. Ils ne prennent effet que lorsque Source du firmware ci-dessus est réglé sur « Personnalisé — compiler depuis les sources ».",
     "expertBuildToggleTitle": "Compiler depuis les sources au lieu de flasher le binaire précompilé",
     "expertBuildToggleTooltip": "Si coché, le firmware est compilé depuis le dépôt/la branche ci-dessous avec les paramètres indiqués. Sinon, le binaire précompilé testé de votre carte est flashé.",
     "confirmPrebuiltDesc": "Ceci flashe le firmware précompilé testé pour la carte et le panneau sélectionnés. Le binaire est vérifié par somme de contrôle avant écriture, et la liaison firmware est vérifiée après redémarrage.",
@@ -637,6 +641,7 @@
     "firmwareIncompatible": "Firmware incompatible",
     "firmwareVersion": "v{{version}}",
     "firmwareReflash": "v{{version}} — reflashez le firmware pour tondre",
+    "firmwareFlashCta": "Flasher le firmware",
     "coverageProgress": "Couverture de la zone · {{pct}} %",
     "bladesOff": "arrêt",
     "areaN": "Zone {{number}}",
@@ -1462,6 +1467,7 @@
     "outsideAreaDescription": "Tracez une zone de tonte qui couvre cet obstacle avant de le promouvoir.",
     "areaFallback": "zone {{index}}",
     "confirmTitle": "Promouvoir l'obstacle en exclusion permanente ?",
+    "confirmTitleWithId": "Promouvoir l'obstacle n°{{id}} en exclusion permanente ?",
     "confirmBodyPrefix": "Cela ajoute le polygone comme exclusion permanente dans",
     "confirmBodySuffix": "Le robot planifiera son trajet autour de lui désormais (jusqu'à ce que vous le retiriez).",
     "trackerId": "Id du traceur : {{id}}",
@@ -1574,6 +1580,10 @@
     "swath_overlap": {
       "label": "Chevauchement des bandes",
       "description": "Chevauchement supplémentaire entre bandes adjacentes pour éviter de fines bandes non tondues."
+    },
+    "mow_angle_deg": {
+      "label": "Angle de tonte",
+      "description": "Direction fixe des bandes en degrés (0–179°), ou Auto pour laisser le planificateur minimiser le nombre de bandes."
     },
     "swath_angle": {
       "label": "Angle des bandes",
@@ -2305,6 +2315,10 @@
     "chassisSafetyInsetTooltip": "Réduit au préalable le polygone d'opération de ce nombre de mètres avant que F2C ne planifie. Par défaut chassis_width / 2 afin que le bord du châssis reste à l'intérieur du polygone en suivi parfait. Relié à coverage_server.chassis_safety_inset.",
     "minTurningRadius": "Rayon de braquage minimal",
     "minTurningRadiusTooltip": "F2C Robot::setMinTurningRadius — borne le rayon des arcs CC-Dubins entre les bandes. La couverture utilise des arcs CONTINUS, donc il doit être assez large pour que le MPPI SUIVE le demi-tour : trop petit (~0,05 m) crée un quasi-rebroussement sur lequel le contrôleur accroche ; ~0,12 m donne un demi-tour en Ω doux qui tient dans la bande de tournière. Relié à coverage_server.min_turning_radius.",
+    "mowAngleDeg": "Angle de tonte",
+    "mowAngleDegTooltip": "Direction des bandes de tonte. Activez Auto pour laisser le planificateur choisir l'angle qui minimise le nombre de bandes, ou fixez un angle de 0 à 179°.",
+    "mowAngleAuto": "Auto",
+    "mowAngleFixed": "Fixe",
     "mowAngle": "Angle de tonte",
     "mowAngleTooltip": "Décalage de l'angle de tonte en degrés (-1 = auto)",
     "angleIncrement": "Incrément d'angle",

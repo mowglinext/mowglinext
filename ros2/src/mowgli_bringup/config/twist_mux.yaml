@@ -8,7 +8,13 @@ twist_mux:
     topics:
       navigation:
         topic: /cmd_vel_monitored
-        timeout: 2.0      # seconds – must exceed controller period (0.5s at 2 Hz)
+        # 0.6 s (was 2.0 — SAFETY_REVIEW_2026-07-23 A-M4): if collision_monitor
+        # dies, twist_mux kept republishing the LAST nav command for up to 2 s,
+        # refreshing the firmware's 200 ms cmd_vel watchdog and letting the
+        # robot coast ~0.4 m on a stale command AFTER the safety filter was
+        # gone. 0.6 s still covers 6 periods of the 10 Hz controller (no false
+        # lane drops) while shrinking the stale-coast window to ~0.12 m.
+        timeout: 0.6
         # collision_monitor IS working — it stops the robot when PolygonStop triggers.
         priority: 10      # lowest priority – autonomous navigation (post collision_monitor)
 

@@ -413,7 +413,10 @@ void CoverageServer::planCoverage()
     // whole chassis inside but left a ~0.20 m uncut perimeter border, which is
     // exactly what this change removes. An operator who wants the chassis to
     // stay fully inside can set chassis_safety_inset = chassis_width/2 in
-    // mowgli_robot.yaml. Negative values are nonsensical (the on-the-line
+    // mowgli_robot.yaml; the turn-around connectors are clipped to the SAME
+    // outermost-ring envelope (connector_clearance_boundary), so that keep-inside
+    // guarantee holds through U-turns too (a turn no longer bulges op_width/2 past
+    // the perimeter ring). Negative values are nonsensical (the on-the-line
     // outward expansion is applied inside planBoustrophedon), so clamp at 0.
     const double effective_inset = std::max(configured_inset, 0.0);
 
@@ -430,6 +433,7 @@ void CoverageServer::planCoverage()
     // live so it stays field-tunable per plan.
     const double min_turning_radius = get_parameter("min_turning_radius").as_double();
 
+    const auto t_plan0 = now();
     BoustrophedonPlan plan = planBoustrophedon(cell,
                                                operation_width_,
                                                default_headland_width_,
@@ -439,6 +443,7 @@ void CoverageServer::planCoverage()
                                                min_swath_length,
                                                ring_direction,
                                                min_turning_radius);
+    const double plan_ms = 1e3 * (now() - t_plan0).seconds();
 
     // Instrumentation (no behaviour change): surface every piece the planner
     // dropped (slivers, tiny rings, micro-cells) and the planned-coverage
@@ -521,15 +526,20 @@ void CoverageServer::planCoverage()
     {
       outer.emplace_back(p.x, p.y);
     }
-    // SAFETY: the connectors/fillets that join the (already-inset) rings+swaths
-    // must stay inside the chassis-safety-inset polygon, NOT the raw operator
-    // boundary — otherwise a turn-around loop or corner fillet near a field edge
-    // can push the spinning blade across the operator boundary while base_link
-    // stays inside (so the map_server soft-boundary monitor never fires). Bound
-    // and VERIFY against the same inset ring the discrete segments use; fall back
-    // to the raw boundary only when no inset was applied.
+    // SAFETY: the connectors/fillets that join the rings+swaths must stay inside
+    // the OUTERMOST-RING centerline (connector_clearance_boundary), NOT the raw
+    // operator boundary and NOT safe_boundary. allInside() only tests the path
+    // CENTERLINE, and safe_boundary sits op_width/2 OUTSIDE that ring — so
+    // bounding to safe_boundary let a turn-around arc's centerline (and hence its
+    // swept blade/chassis footprint) ride op_width/2 past the outermost ring
+    // toward the operator boundary, an excursion that grew with the turn radius
+    // while base_link stayed inside (so the map_server soft-boundary monitor never
+    // fired). Bound and VERIFY against the clearance ring; fall back to
+    // safe_boundary, then the raw boundary, only if it degenerated.
     const std::vector<std::pair<double, double>>& connector_boundary =
-        plan.safe_boundary.size() >= 3 ? plan.safe_boundary : outer;
+        plan.connector_clearance_boundary.size() >= 3 ? plan.connector_clearance_boundary
+        : plan.safe_boundary.size() >= 3              ? plan.safe_boundary
+                                                      : outer;
     // Nominal turn-around arc radius (m), read live. Smaller => compact U-turns
     // instead of big teardrop loops; floored at min_turning_radius by
     // buildConnector. See the connector_turn_radius declaration for the tuning
@@ -542,14 +552,33 @@ void CoverageServer::planCoverage()
     // sub-path with MPPI and bridges the gaps with a blade-off Nav2 transit that
     // routes around the obstacle (issue #333). full_path is their concatenation
     // (GUI viz); drivable_subpaths is what the BT follows.
+    const auto t_subpaths0 = now();
     const auto subpaths = buildContinuousSubPaths(
         plan, connector_boundary, connector_turn_radius, min_turning_radius, kConnectorStep);
+    const double subpaths_ms = 1e3 * (now() - t_subpaths0).seconds();
 
     result->full_path.header = header;
     result->drivable_subpaths.clear();
     double total = 0.0;
     std::size_t out_of_bounds = 0;
     std::size_t in_hole = 0;
+    // Swept-CHASSIS-footprint check vs the RAW operator polygon. The centreline
+    // check above only proves the path stays within the outermost-ring envelope;
+    // this proves the CHASSIS (± robot_width/2 about the path) stays inside the
+    // recorded line. It is meaningful ONLY when the operator opted the whole
+    // chassis inside (chassis_safety_inset >= robot_width/2) — the default rides
+    // the outermost ring ON the line so the chassis STRADDLES it by design, and
+    // flagging that intended straddle would be pure noise.
+    std::size_t footprint_out = 0;
+    const double robot_half = 0.5 * robot_width_;
+    const bool check_footprint = effective_inset >= robot_half - 1e-6;
+    // Densification / on-the-line tolerance: the outermost ring's poses sit
+    // exactly ON the clearance ring (and, in keep-inside mode, its footprint sits
+    // exactly on the operator line), where ray-cast pointInRing is unstable. Only
+    // count a pose whose distance PAST the boundary exceeds this — a real
+    // connector excursion is op_width/2 (~0.08 m) or more, well above it.
+    constexpr double kBoundarySlackM = 0.05;
+    const auto t_verify0 = now();
     for (const auto& sub : subpaths)
     {
       nav_msgs::msg::Path spath;
@@ -574,14 +603,32 @@ void CoverageServer::planCoverage()
         const auto pose = makePose(header, x, y, yaw);
         spath.poses.push_back(pose);
         result->full_path.poses.push_back(pose);
-        // Verify against the SAME inset ring the connectors are bounded by: any
-        // pose outside it means a fallback straight connector left the safe inset
-        // (the only way the blade can approach the operator boundary), so it is
-        // the safety-relevant residual to surface — not merely outside the raw
-        // polygon.
-        if (connector_boundary.size() >= 3 && !pointInRing(x, y, connector_boundary))
+        // Verify the CENTRELINE against the outermost-ring clearance ring the
+        // connectors are bounded by: a pose outside it means a fallback straight
+        // connector left that envelope (the only way the blade/chassis can push
+        // past the perimeter ring toward the operator boundary) — the
+        // safety-relevant residual to surface, not merely outside the raw polygon.
+        if (connector_boundary.size() >= 3 && !pointInRing(x, y, connector_boundary) &&
+            distanceToRing(x, y, connector_boundary) > kBoundarySlackM)
         {
           ++out_of_bounds;
+        }
+        // Swept-footprint check (opt-in keep-inside mode only): the chassis edges
+        // are the pose offset ± robot_width/2 along the path normal. If either
+        // crosses the raw operator polygon (beyond the on-line slack) the whole
+        // chassis left the field.
+        if (check_footprint && outer.size() >= 3)
+        {
+          const double nx = -std::sin(yaw), ny = std::cos(yaw);  // unit left normal
+          for (const double s : {robot_half, -robot_half})
+          {
+            const double fx = x + s * nx, fy = y + s * ny;
+            if (!pointInRing(fx, fy, outer) && distanceToRing(fx, fy, outer) > kBoundarySlackM)
+            {
+              ++footprint_out;
+              break;
+            }
+          }
         }
         // Sub-paths are split so none crosses a hole; a residual pose inside one
         // means even a straight fallback couldn't be avoided (degenerate
@@ -600,6 +647,18 @@ void CoverageServer::planCoverage()
         result->drivable_subpaths.push_back(std::move(spath));
       }
     }
+    const double verify_ms = 1e3 * (now() - t_verify0).seconds();
+    // Per-stage timing (Pi4 profiling). planBoustrophedon dominates via the AUTO
+    // swath sweep; its own per-stage breakdown rides in the diagnostics notes
+    // logged above. subpaths = connector/fillet build; verify = the per-pose
+    // in-bounds/hole check over full_path.
+    RCLCPP_INFO(get_logger(),
+                "PlanCoverage timing: planBoustrophedon=%.0fms subpaths=%.0fms verify=%.0fms "
+                "(%zu path poses)",
+                plan_ms,
+                subpaths_ms,
+                verify_ms,
+                result->full_path.poses.size());
     if (result->drivable_subpaths.size() > 1)
     {
       RCLCPP_INFO(get_logger(),
@@ -611,13 +670,26 @@ void CoverageServer::planCoverage()
     if (out_of_bounds > 0)
     {
       // The continuous path is built from in-bounds insets + clipped connectors,
-      // so any pose outside the safety-inset ring is a connector-geometry bug
-      // (the test guards it) and means the blade may approach the boundary.
+      // so any pose outside the outermost-ring clearance ring is a connector
+      // geometry bug (the test guards it) and means the blade/chassis may push
+      // past the perimeter ring toward the operator boundary.
       RCLCPP_ERROR(get_logger(),
-                   "PlanCoverage: %zu/%zu continuous-path poses outside the chassis-safety "
-                   "inset — connector geometry bug (blade may approach the operator boundary)",
+                   "PlanCoverage: %zu/%zu continuous-path poses outside the outermost-ring "
+                   "clearance ring — connector geometry bug (blade may approach the boundary)",
                    out_of_bounds,
                    result->full_path.poses.size());
+    }
+    if (footprint_out > 0)
+    {
+      // Opt-in keep-inside mode (chassis_safety_inset >= robot_width/2): the whole
+      // chassis is contracted to stay inside the operator polygon, so a footprint
+      // crossing it is a real safety residual (spinning blade over the boundary).
+      RCLCPP_ERROR(get_logger(),
+                   "PlanCoverage: %zu/%zu continuous-path poses whose chassis footprint "
+                   "(±%.2fm) crosses the operator boundary despite keep-inside inset",
+                   footprint_out,
+                   result->full_path.poses.size(),
+                   robot_half);
     }
     if (in_hole > 0)
     {

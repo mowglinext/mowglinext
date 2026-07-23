@@ -429,6 +429,9 @@ export const useSettingsManager = () => {
                         // Manual settings edit: use the typed dock_pose_x/y as-is
                         // (operator entered the value explicitly — no GPS override).
                         use_gps_position: false,
+                        // Honour the typed heading (SetDockingPoint yaw_source REQUEST=1);
+                        // an operator-entered yaw is explicit, never circular.
+                        yaw_source: 1,
                     });
                 } catch (e: any) {
                     notification.warning({

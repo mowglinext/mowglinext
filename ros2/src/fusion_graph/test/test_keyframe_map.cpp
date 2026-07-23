@@ -166,7 +166,7 @@ TEST(KeyframeApply, AbsoluteConstraintPullsNode)
   const double target_x = dr6 + 0.10;  // prior pulls 0.10 m further
   gm.AddWheelTwist(0.5, 0.0, 0.0, 0.1);
   gm.AddGyroDelta(0.0, 0.1);
-  gm.QueueScanToKeyframe(gtsam::Vector2(target_x, 0.0), 0.03, /*robust=*/false);
+  gm.QueueScanToKeyframe(gtsam::Pose2(target_x, 0.0, 0.0), 0.03, 0.05, /*robust=*/false);
   auto out = gm.Tick(0.1 * 6);
   ASSERT_TRUE(out.has_value());
 
@@ -174,6 +174,43 @@ TEST(KeyframeApply, AbsoluteConstraintPullsNode)
   EXPECT_GT(x_after, dr6 + 0.03) << "constraint did not pull the node: x_after=" << x_after
                                  << " dr6=" << dr6 << " target=" << target_x;
   EXPECT_LT(x_after, target_x + 0.03) << "node overshot the prior";
+}
+
+TEST(KeyframeApply, KeyframePriorLeavesYawToGyro)
+{
+  // The scan-to-keyframe constraint is XY-ONLY (PoseTranslationPrior): it must
+  // NOT move heading, even when the matched keyframe pose carries a large yaw
+  // offset. Heading stays owned by the gyro/wheel between-factors — this is the
+  // 2026-07-22 revert of the (risky) keyframe yaw prior that could inject a
+  // mirrored / 180°-flipped ICP heading and corrupt map→odom.
+  fg::GraphManager gm(TickParams());
+  gm.Initialize(gtsam::Pose2(0, 0, 0), 0.0);
+
+  // Drive straight 5 ticks (heading dead-reckons to ~0).
+  for (int i = 1; i <= 5; ++i)
+  {
+    gm.AddWheelTwist(0.5, 0.0, 0.0, 0.1);
+    gm.AddGyroDelta(0.0, 0.1);
+    gm.Tick(0.1 * i);
+  }
+  const double x_dr = gm.LatestSnapshot()->pose.x();
+
+  // Queue a keyframe at the dead-reckoned xy but with a large 0.30 rad heading
+  // offset and a very tight claimed yaw σ. With the xy-only prior the heading
+  // must stay pinned near the dead-reckoned ~0 regardless.
+  const double dr6_x = x_dr + 0.05;
+  gm.AddWheelTwist(0.5, 0.0, 0.0, 0.1);
+  gm.AddGyroDelta(0.0, 0.1);
+  gm.QueueScanToKeyframe(gtsam::Pose2(dr6_x, 0.0, /*yaw offset=*/0.30),
+                         0.03,
+                         0.002,
+                         /*robust=*/false);
+  auto out = gm.Tick(0.1 * 6);
+  ASSERT_TRUE(out.has_value());
+
+  const double theta_after = out->pose.theta();
+  EXPECT_LT(std::abs(theta_after), 0.02)
+      << "xy-only keyframe prior moved heading (should be gyro-owned): theta_after=" << theta_after;
 }
 
 // ── Phase D: keyframe persistence (round-trip, back-compat, datum guard) ──

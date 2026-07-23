@@ -40,6 +40,8 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/buffer.hpp>
 
+#include "mowgli_nav2_plugins/ftc_reverse_escape.hpp"
+#include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 #include "mowgli_nav2_plugins/oscillation_detector.hpp"
 #include <Eigen/Geometry>
 #include <visualization_msgs/msg/marker.hpp>
@@ -124,6 +126,11 @@ private:
   // Seconds the robot has been stalling (actual forward speed << commanded).
   // Drives the anti-wheelspin crawl (see Config::stall_*).
   double stall_time_{0.0};
+  // True once stall_time_ passes the grace period: set in update_control_point
+  // and read in calculate_velocity_commands to cap the commanded velocity at
+  // the crawl speed (bypassing the min_speed_mps floor) so a blocked robot
+  // pushes gently instead of digging in. See ftc_stall.hpp.
+  bool is_stalled_{false};
   // Latest measured forward speed (odom feedback), cached from
   // computeVelocityCommands so update_control_point can detect a stall.
   double last_measured_fwd_speed_{0.0};
@@ -169,6 +176,19 @@ private:
                      unsigned char cost,
                      int max_ids);
 
+  /// SAFETY (SAFETY_REVIEW_2026-07-23 F-C1): is the robot's ACTUAL current
+  /// footprint overlapping a TRUE-LETHAL costmap cell right now? The
+  /// deviation-enabled path only ever samples path poses AHEAD of the carrot,
+  /// so during PRE_ROTATE pivots, stall-crawl pushes, and lateral blends
+  /// nothing checked the body itself — collision_monitor was the sole guard.
+  /// Samples the chassis polygon (costmap_ros_->getRobotFootprint()) at the
+  /// live robot pose against the local costmap at kLethalOnlyThreshold (254):
+  /// a scan return INSIDE the chassis outline means actual/imminent contact.
+  /// True-lethal only — inflation halos the robot legitimately hugs must not
+  /// trip it. Returns false when pose/footprint/costmap are unavailable
+  /// (cannot assert either way; the forward checks still run).
+  bool currentBodyInLethal();
+
   // ── Obstacle deviation ────────────────────────────────────────────────────
   //
   // When checkCollision() reports a lethal cell in the lookahead window,
@@ -198,6 +218,27 @@ private:
   /// still waiting, never returns false on the throw path (the throw
   /// unwinds the stack instead).
   bool waitOrThrowForObstacle(const std::string& reason);
+
+  /// Bounded reverse-escape gate for the WEDGED case. Called from
+  /// updateLateralDeviation instead of waitOrThrowForObstacle when the skirt
+  /// search runs out of headroom. If reverse-escape is enabled, a footprint is
+  /// available, budget remains, AND the rear footprint is clear of lethal cells,
+  /// it engages a straight reverse (sets reverse_escape_active_) and returns
+  /// true (caller returns; computeVelocityCommands emits the reverse). Otherwise
+  /// it clears the reverse state and forwards to waitOrThrowForObstacle(reason).
+  /// SAFETY-CRITICAL: probes the rear footprint at the ACTUAL robot pose
+  /// (costmap_ros_->getRobotPose) and never reverses when it would hit lethal or
+  /// the pose is unavailable.
+  bool reverseEscapeOrWait(const std::string& reason,
+                           const ObstacleDeviation::Footprint& footprint,
+                           double dt);
+
+  /// True while backing straight up as an obstacle-escape maneuver. Read in
+  /// computeVelocityCommands to emit the reverse command (bypassing the PID).
+  bool reverse_escape_active_{false};
+  /// Odom-integrated reversed distance for the current escape (m), hard-capped
+  /// at config_.obstacle_reverse_max_dist_m. Reset when the wedge clears.
+  double reverse_distance_done_{0.0};
 
   bool is_avoiding_{false};
   double target_lateral_deviation_{0.0};
@@ -310,6 +351,7 @@ private:
     double speed_slow{0.2};
     double speed_angular{20.0};
     double acceleration{1.0};
+    double min_speed_mps{0.15};
 
     // Anti-wheelspin / traction control. When the carrot commands a forward
     // speed but the robot's ACTUAL forward speed (odom feedback) stays below
@@ -429,7 +471,7 @@ private:
     /// offset exceeds the cap). During the wait the robot stops; if the
     /// costmap clears before the timeout, the controller resumes. After
     /// the timeout we throw a ControllerException as before.
-    double obstacle_wait_timeout_s{5.0};
+    double obstacle_wait_timeout_s{2.5};
     /// Hysteresis hold (s) before declaring AVOIDANCE complete. Once
     /// avoiding, the nominal path must read CLEAR continuously for this long
     /// before the skirt is blended back to the line. Without it, the
@@ -447,6 +489,54 @@ private:
     /// (near-edge swaths legitimately run inside the keepout margin). When
     /// false, behaves exactly as before.
     bool confine_deviation_to_zone{true};
+
+    /// Model the robot as its actual rectangular chassis FOOTPRINT (from
+    /// costmap_ros_->getRobotFootprint()) for obstacle detection and the
+    /// deviation-clearance search, instead of a swept ±half_width line. The
+    /// footprint is rasterised against the local costmap at ≤ resolution spacing
+    /// and thresholds on TRUE lethal (254) — it models the body explicitly, so
+    /// FTC no longer leans on the costmap's inscribed-inflation band (253) as a
+    /// body-width proxy. When false (or no footprint available), falls back to
+    /// the obstacle_body_half_width line model at threshold 253.
+    bool use_footprint_clearance{true};
+
+    /// Front-clip length (m) applied to the footprint used for the SKIRT
+    /// clearance search when use_footprint_clearance is on (spec Part A middle
+    /// ground). Only the leading `obstacle_footprint_front_length_m` of the
+    /// chassis is probed for a clear side, instead of the full 0.60 m body — the
+    /// full-length footprint proved too conservative live (found NO clear side
+    /// even at max_lateral_deviation = 3.0 m for skirtable obstacles). Detection
+    /// still uses the FULL footprint. 0 (or a length ≥ the body length) disables
+    /// the clip (full-length clearance probe, the prior behaviour).
+    double obstacle_footprint_front_length_m{0.30};
+
+    /// Cul-de-sac guard (spec Part A, highest leverage). Before committing to a
+    /// lateral skirt, require the obstacle's FAR edge to be visible inside the
+    /// lookahead window (a clear nominal-path pose exists past the first blocked
+    /// pose). When true, an obstacle that stays blocked to the end of the
+    /// lookahead — a wall or a pocket — is NOT skirted sideways (which is how the
+    /// robot boxes itself in); instead FTC reverse-escapes / waits / aborts, and
+    /// the coverage detour-and-continue safety net takes over. Model-independent
+    /// (works with the half-width line model AND the footprint model). Default
+    /// true. Set false to restore the prior skirt-anything behaviour.
+    bool require_clear_exit{true};
+
+    /// Bounded reverse-escape for the WEDGED case (both sides of an obstacle
+    /// blocked, or the skirt needed exceeds max_lateral_deviation). Before
+    /// holding/aborting, FTC backs STRAIGHT up (no rotation) a bounded distance
+    /// and re-attempts the deviation search from the new pose. SAFETY-CRITICAL
+    /// (blades + reversing): the rear footprint is checked against lethal cells
+    /// before every reverse tick and the maneuver fails safe (stops) on any
+    /// ambiguity. This is a distinct escape sub-state — it does NOT relax the
+    /// forward_only semantics of normal path following. OPT-IN (default false):
+    /// this drives the bladed robot BACKWARDS and has not been field-validated —
+    /// enable only after a supervised field test. When false the wedged case
+    /// holds/aborts exactly as before.
+    bool obstacle_reverse_enabled{false};
+    /// Hard cap on total reversed distance (m) per escape. Never exceeded.
+    double obstacle_reverse_max_dist_m{0.30};
+    /// Straight reverse speed (m/s). Must clear the firmware deadband (~0.05).
+    double obstacle_reverse_speed_mps{0.10};
   };
 
   Config config_;

@@ -387,8 +387,20 @@ receiver_node_cmd=(
   -r "rtcm:=${internal_rtcm_topic}"
 )
 
-bridge_cmd=(
-  "$PYTHON3_BIN" "$UNIVERSAL_BRIDGE_SCRIPT" --ros-args
+# Topic bridge ("topic manager"): C++ (mowgli_gnss_bridge) by default — a
+# behaviour-exact, lower-CPU port of universal_gnss_topic_bridge.py. Set
+# GNSS_BRIDGE_IMPL=python to fall back to the retained Python script (identical
+# --ros-args), e.g. for A/B comparison or if the C++ build is unavailable.
+if [ "$(normalize_lower "${GNSS_BRIDGE_IMPL:-cpp}")" = "python" ]; then
+  bridge_cmd=(
+    "$PYTHON3_BIN" "$UNIVERSAL_BRIDGE_SCRIPT" --ros-args
+  )
+else
+  bridge_cmd=(
+    "$ROS2_BIN" run mowgli_gnss_bridge universal_gnss_topic_bridge --ros-args
+  )
+fi
+bridge_cmd+=(
   -p "backend:=universal"
   -p "receiver_family:=${receiver_family}"
   -p "frame_id:=${frame_id}"

@@ -82,6 +82,23 @@ struct BoustrophedonPlan
   // when no inset was applied (chassis_safety_inset <= 0) — the caller then
   // falls back to the raw boundary. (x, y) pairs, first == last.
   std::vector<std::pair<double, double>> safe_boundary;
+  // Closed outer ring the turn-around CONNECTORS/FILLETS must stay inside — the
+  // outermost headland RING's centerline (== safe_boundary eroded inward by
+  // op_width/2, == the recorded line eroded by chassis_safety_inset). This is
+  // TIGHTER than safe_boundary by op_width/2 and exists to close a spinning-blade
+  // safety gap: allInside() only tests the path CENTERLINE, so bounding it to
+  // safe_boundary let a turn-around arc's centerline reach op_width/2 FURTHER out
+  // than the outermost ring's, pushing the chassis (± robot_width/2) and blade
+  // that much past the operator boundary — and the excursion grew with the turn
+  // radius (buildConnector accepts the largest radius whose centerline still
+  // fits). Bounding connectors to the outermost-ring centerline instead makes a
+  // turn's footprint no worse than the perimeter ring the robot already drives.
+  // Deliberately op_width/2 (NOT robot_width/2): eroding by the chassis
+  // half-width would keep turns robot_width/2 − op_width/2 TIGHTER than the
+  // perimeter ring, forcing every edge turn-around below min_turning_radius →
+  // straight fallback → sub-path fragmentation. Empty when the erosion degenerates
+  // (tiny field) — the caller then falls back to safe_boundary. (x, y), first==last.
+  std::vector<std::pair<double, double>> connector_clearance_boundary;
   // Inset ("grown") interior hole rings the continuous-path connectors and
   // corner fillets must stay OUT of, mirroring how safe_boundary is the ring
   // they must stay INSIDE. When the chassis-safety inset is applied these are
@@ -122,9 +139,12 @@ struct BoustrophedonPlan
 // rings, micro-cells) and the planned-coverage fraction — instrumentation the
 // caller logs; no drop threshold is altered.
 //
-// chassis_safety_inset is taken as-is here: the caller is responsible for
-// flooring it at robot_width/2 (a SAFETY margin — blades must not cross the
-// boundary) before calling, so this function plans against the effective inset.
+// chassis_safety_inset is taken as-is here: the caller clamps it only at 0.0 (the
+// default rides the outermost ring ON the recorded line, chassis straddling by
+// design). The returned plan also carries connector_clearance_boundary (the
+// outermost-ring centerline) so the turn-around connectors can be bounded to the
+// perimeter ring rather than to safe_boundary — otherwise a turn arc's centerline
+// (and its swept footprint) rides op_width/2 past the rings toward the boundary.
 BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double op_width,
                                     double headland_width,

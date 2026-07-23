@@ -148,6 +148,8 @@ type PromoteObstacleRes struct {
 type SetDockingPointReq struct {
 	DockingPose               geometry.Pose                  `json:"docking_pose"`
 	UseGpsPosition            bool                           `json:"use_gps_position"`
+	YawSource                 uint8                          `json:"yaw_source"`
+	YawRad                    float64                        `json:"yaw_rad"`
 }
 
 // SetDockingPointRes for mowgli_interfaces/srv/SetDockingPoint response.

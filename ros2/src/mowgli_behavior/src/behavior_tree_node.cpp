@@ -28,6 +28,7 @@
 #include "mowgli_behavior/action_nodes.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
+#include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_interfaces/gnss_status_utils.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
@@ -40,6 +41,7 @@
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav2_msgs/action/undock_robot.hpp"
 #include "nav2_msgs/msg/collision_monitor_state.hpp"
+#include "sensor_msgs/msg/laser_scan.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/bool.hpp"
@@ -82,19 +84,36 @@ public:
         declare_parameter<std::string>("coverage_resume_path", "/ros2_ws/maps/coverage_resume.txt");
     if (loadCoverageResumeState(*context_))
     {
+      // Auto-continue after a mid-run container restart: the loader also restored
+      // current_command from disk, but only leave it active (so MowingSequence
+      // auto-re-enters) when it was a mow command (COMMAND_START == 1) AND a
+      // resumable snapshot genuinely exists. Any other restored command, or an
+      // empty snapshot, falls back to IDLE so the robot never starts moving on
+      // boot without real resume state. A terminal EndSession deletes the file,
+      // so this branch is only reached for a truly interrupted session.
+      constexpr uint8_t kCommandStart = 1;  // HighLevelControl::Request::COMMAND_START
+      const bool has_resumable_state =
+          !context_->area_resume_pose_index.empty() || !context_->completed_areas.empty();
+      const bool auto_continue = context_->current_command == kCommandStart && has_resumable_state;
+      if (!auto_continue)
+      {
+        context_->current_command = 0;  // IDLE — require an explicit operator start
+      }
       RCLCPP_INFO(get_logger(),
                   "Restored coverage resume state from %s (current_area=%d, %zu area(s) with a "
-                  "resume cursor, %zu completed)",
+                  "resume cursor, %zu completed, auto_continue=%s)",
                   context_->coverage_resume_path.c_str(),
                   context_->current_area,
                   context_->area_resume_pose_index.size(),
-                  context_->completed_areas.size());
+                  context_->completed_areas.size(),
+                  auto_continue ? "true" : "false");
     }
 
     setupSubscribers();
     setupServiceServer();
     setupBehaviorTree();
     setupTimer();
+    setupHighLevelStatusRepublish();
     startNav2WaitTimer();
 
     RCLCPP_INFO(get_logger(), "mowgli_behavior_node ready");
@@ -324,7 +343,21 @@ private:
         [this](nav2_msgs::msg::CollisionMonitorState::ConstSharedPtr msg)
         {
           std::lock_guard<std::mutex> lock(context_->context_mutex);
+          const auto now = std::chrono::steady_clock::now();
           const uint8_t prev = context_->collision_action_type;
+          // Detect a re-start of the stream after a silent gap: the monitor
+          // only publishes while cmd_vel_nav flows, so after a tree halt the
+          // latched action is stale. A message arriving after > kStaleGapSec
+          // of silence is a FRESH episode — re-stamp collision_stop_since even
+          // if the latched action was already STOP, so the SensorSafetyGuard
+          // hands the recovery machinery a full new window instead of firing
+          // instantly on the pre-halt timestamp (field 2026-07-23 deadlock).
+          constexpr double kStaleGapSec = 3.0;
+          const bool stream_was_stale =
+              context_->last_collision_state_time.time_since_epoch().count() != 0 &&
+              std::chrono::duration<double>(now - context_->last_collision_state_time).count() >
+                  kStaleGapSec;
+          context_->last_collision_state_time = now;
           context_->collision_action_type = msg->action_type;
 
           // Stamp the entry-into-STOP transition so IsObstacleStuck can
@@ -335,9 +368,9 @@ private:
           // robot for a few seconds and then walked off.
           if (msg->action_type == nav2_msgs::msg::CollisionMonitorState::STOP)
           {
-            if (prev != nav2_msgs::msg::CollisionMonitorState::STOP)
+            if (prev != nav2_msgs::msg::CollisionMonitorState::STOP || stream_was_stale)
             {
-              context_->collision_stop_since = std::chrono::steady_clock::now();
+              context_->collision_stop_since = now;
             }
           }
           else
@@ -348,6 +381,21 @@ private:
             }
             context_->collision_stop_since = std::chrono::steady_clock::time_point{};
           }
+        });
+
+    // Scan-stream liveness (SAFETY_REVIEW_2026-07-23 A-C2) — stamp every
+    // /scan_collision arrival so IsScanStale can detect a dead LiDAR /
+    // scan-filter chain and the SensorSafetyGuard can halt mowing (blade off).
+    // The payload is ignored; only the arrival time matters. SensorDataQoS
+    // matches the publisher (best-effort). On a no-LiDAR install nothing ever
+    // arrives and the default-constructed last_scan_time keeps the guard inert.
+    scan_liveness_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
+        "/scan_collision",
+        rclcpp::SensorDataQoS(),
+        [this](sensor_msgs::msg::LaserScan::ConstSharedPtr /*msg*/)
+        {
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          context_->last_scan_time = std::chrono::steady_clock::now();
         });
 
     RCLCPP_DEBUG(get_logger(), "Topic subscribers created");
@@ -446,6 +494,33 @@ private:
                                                 });
 
     RCLCPP_DEBUG(get_logger(), "~/clear_coverage_resume service + resume-available signal created");
+  }
+
+  // Re-publish the last HighLevelStatus at a steady cadence. PublishHighLevelStatus
+  // is a SyncActionNode that only fires on tree transitions, so during a
+  // multi-minute FollowStrip the topic would otherwise go silent for the whole
+  // traversal — a GUI opened/refreshed mid-mow then receives nothing and renders
+  // "idle". This keeps a fresh status flowing regardless of tree activity. It runs
+  // on the same default (MutuallyExclusive) callback group as the BT tick, so it
+  // never races the tick's own publish; context_mutex still guards the shared
+  // publisher/cache for defence in depth.
+  void setupHighLevelStatusRepublish()
+  {
+    high_level_status_timer_ = create_wall_timer(1s,
+                                                 [this]()
+                                                 {
+                                                   republishHighLevelStatus();
+                                                 });
+  }
+
+  void republishHighLevelStatus()
+  {
+    std::lock_guard<std::mutex> lock(context_->context_mutex);
+    if (!context_->has_high_level_status || !context_->high_level_status_pub)
+    {
+      return;
+    }
+    context_->high_level_status_pub->publish(context_->last_high_level_status);
   }
 
   // Publish whether a coverage session can be resumed (a persisted resume cursor
@@ -598,7 +673,7 @@ private:
     // Stored on the shared BTContext so SetNavMode's tick is a pure read.
     // Previously SetNavMode hardcoded 0.5 (precise) / 0.25 (degraded), which
     // stomped the launch-injected values — the configured speeds never applied.
-    context_->transit_speed = declare_parameter<double>("transit_speed", 0.25);
+    context_->transit_speed = declare_parameter<double>("transit_speed", 0.2);
     context_->mowing_speed = declare_parameter<double>("mowing_speed", 0.2);
 
     // Rain delay: parameter in minutes, blackboard in seconds.
@@ -666,6 +741,14 @@ private:
     blackboard_->set("battery_critical_voltage", static_cast<float>(battery_critical_voltage));
     blackboard_->set("battery_critical_recovery_pct",
                      static_cast<float>(battery_critical_recovery_pct));
+
+    // Swath (mow) angle — operator-tunable in mowgli_robot.yaml and surfaced
+    // on the GUI Mowing settings. < 0 = AUTO (coverage server picks the
+    // swath-count-minimising angle); 0..179 = a fixed swath angle in degrees.
+    // Pushed onto the blackboard so PlanCoverageArea::buildGoal reads it into
+    // the plan_coverage action goal (mow_angle_deg).
+    const double mow_angle_deg = declare_parameter<double>("mow_angle_deg", kMowAngleAutoDeg);
+    blackboard_->set("mow_angle_deg", mow_angle_deg);
 
     tree_ = factory_.createTreeFromFile(tree_file, blackboard_);
 
@@ -759,6 +842,7 @@ private:
   rclcpp::Subscription<mowgli_interfaces::msg::AbsolutePose>::SharedPtr gps_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr gnss_status_sub_;
   rclcpp::Subscription<nav2_msgs::msg::CollisionMonitorState>::SharedPtr collision_monitor_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_liveness_sub_;
 
   // Service server
   rclcpp::Service<mowgli_interfaces::srv::HighLevelControl>::SharedPtr high_level_control_srv_;
@@ -766,6 +850,9 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_coverage_resume_srv_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr resume_available_pub_;
   rclcpp::TimerBase::SharedPtr resume_available_timer_;
+  // Periodic re-publish of the last HighLevelStatus so the topic stays fresh
+  // during long-running actions (see setupHighLevelStatusRepublish).
+  rclcpp::TimerBase::SharedPtr high_level_status_timer_;
   // Set by the ~/clear_coverage_resume service, consumed by tickTree() so the
   // actual map clearing happens on the BT tick thread (see the service comment).
   std::atomic<bool> clear_resume_requested_{false};

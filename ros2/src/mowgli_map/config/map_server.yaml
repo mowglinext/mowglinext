@@ -15,6 +15,13 @@ map_server_node:
     map_file_path: ""
     areas_file_path: "/ros2_ws/maps/areas.dat"
     publish_rate: 1.0
+    # Minimum seconds between mowed-overlay (~/mow_progress) republishes. The
+    # overlay is re-serialized as a full-extent OccupancyGrid (O(cells), scales
+    # with map size), so on a large map publishing it every tick while mowing is
+    # the dominant steady cost. 2 s keeps the GUI overlay responsive while
+    # cutting that serialization ~publish_rate× (transient_local still delivers
+    # the latest grid to late subscribers immediately).
+    mow_progress_publish_period_s: 2.0
     # Navigation margin around area boundaries for keepout mask.
     # Cells outside the area but within this distance of the boundary
     # edge are marked FREE (not lethal) in the keepout mask. Needed so

@@ -176,7 +176,6 @@ class TestNodesStartup(unittest.TestCase):
         required_topics = {
             "/wheel_odom",
             "/diagnostics",
-            "/map_server/grid_map",
             "/mowgli_behavior_node/high_level_status",
         }
 

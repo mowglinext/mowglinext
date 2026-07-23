@@ -155,6 +155,48 @@ TEST(CoveragePersistence, ClearRemovesFile)
   EXPECT_FALSE(loadCoverageResumeState(reloaded));
 }
 
+TEST(CoveragePersistence, RoundTripsCurrentCommand)
+{
+  // The active high-level command must survive a restart so the node can
+  // auto-re-enter MowingSequence instead of coming up IDLE (issue: mowing
+  // restarts from scratch after a container restart).
+  const std::string path = tempPath("coverage_resume_command.txt");
+  std::remove(path.c_str());
+
+  BTContext saved;
+  seedContext(saved, path);
+  saved.current_command = 1;  // COMMAND_START — a mow was running
+  ASSERT_TRUE(saveCoverageResumeState(saved));
+
+  BTContext loaded;
+  loaded.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  EXPECT_EQ(loaded.current_command, 1);
+  // The resume cursor still round-trips alongside the command.
+  EXPECT_EQ(loaded.area_resume_pose_index[2], 1234u);
+
+  std::remove(path.c_str());
+}
+
+TEST(CoveragePersistence, AbsentCurrentCommandDefaultsToIdle)
+{
+  // Older files (and terminal/empty snapshots) predate the current_command line;
+  // an absent tag must leave current_command at its default 0 (IDLE) so a fresh
+  // install never starts moving on boot without a real command on disk.
+  const std::string path = tempPath("coverage_resume_no_command.txt");
+  {
+    std::ofstream f(path, std::ios::trunc);
+    f << "mowgli_coverage_resume v2\n";
+    f << "current_area 0\n";
+    f << "area 0 1000 5 512 completed 0 1\n";  // resumable, but no command line
+  }
+  BTContext ctx;
+  ctx.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(ctx));
+  EXPECT_EQ(ctx.current_command, 0);  // default preserved — start IDLE
+  std::remove(path.c_str());
+}
+
 int main(int argc, char** argv)
 {
   ::testing::InitGoogleTest(&argc, argv);

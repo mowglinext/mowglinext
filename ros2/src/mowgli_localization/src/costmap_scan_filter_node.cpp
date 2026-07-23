@@ -97,7 +97,7 @@ public:
     enable_ground_filter_ = declare_parameter<bool>("enable_ground_filter", true);
     min_obstacle_z_m_ = declare_parameter<double>("min_obstacle_z_m", 0.08);
     max_obstacle_z_m_ = declare_parameter<double>("max_obstacle_z_m", 1.5);
-    lidar_height_m_ = declare_parameter<double>("lidar_height_m", 0.22);
+    lidar_height_m_ = declare_parameter<double>("lidar_height_m", 0.30);
     // Yaw of the LIDAR frame relative to the IMU/base_link frame
     // (= lidar_yaw − imu_yaw from mowgli_robot.yaml). Needed to rotate a
     // beam's index angle into the gravity frame before the ground
@@ -195,7 +195,7 @@ public:
     bool enabled{false};
     double min_obstacle_z_m{0.08};
     double max_obstacle_z_m{1.5};
-    double lidar_height_m{0.22};
+    double lidar_height_m{0.30};
     /// Yaw of the LIDAR frame relative to base_link/IMU (rad). A beam at
     /// LIDAR index angle α points along base bearing α + lidar_mount_yaw.
     double lidar_mount_yaw{0.0};
@@ -466,7 +466,7 @@ private:
   bool enable_ground_filter_{true};
   double min_obstacle_z_m_{0.08};
   double max_obstacle_z_m_{1.5};
-  double lidar_height_m_{0.22};
+  double lidar_height_m_{0.30};
   double lidar_mount_yaw_{0.0};
   int min_ground_run_{8};
   double imu_max_age_s_{0.5};

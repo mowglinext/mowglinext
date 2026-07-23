@@ -7,14 +7,43 @@ import {motion} from "framer-motion";
  * lives in the surrounding glass card.
  */
 
+export interface MiniArea {
+  /** Outer ring in normalised units (0..1). */
+  outer: {x: number; y: number}[];
+  /** Obstacle holes in normalised units (0..1) — punched out via even-odd. */
+  holes?: {x: number; y: number}[][];
+}
+
+/** Mow-progress overlay image placed in the same normalised 0..1 space. */
+export interface MiniProgress {
+  /** PNG data URL (mowed cells lime, unmowed transparent). */
+  url: string;
+  /** Rect in normalised units (0..1): top-left corner + size. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 interface LiveMapMiniProps {
-  /** Polygon in normalised units (0..1). Designed for the demo path. */
+  /** Polygon in normalised units (0..1). Legacy single-area / demo path. */
   polygon?: {x: number; y: number}[];
+  /** All recorded areas (outer ring + holes), normalised 0..1. Takes
+   *  precedence over `polygon` when non-empty. */
+  polygons?: MiniArea[];
+  /** Mow-progress overlay. When set, replaces the synthetic coverage band. */
+  progress?: MiniProgress | null;
   /** Robot position 0..1. */
   robot?:   {x: number; y: number; heading: number};
-  /** Coverage fraction 0..1 -- drawn as a shaded overlay band. */
+  /** Coverage fraction 0..1 -- synthetic band drawn only when no `progress`. */
   coverage?: number;
   height?: number;
+}
+
+/** Build an SVG path (M/L … Z) from a normalised ring. */
+function ringPath(ring: {x: number; y: number}[], toX: (x: number) => number, toY: (y: number) => number): string {
+  if (ring.length === 0) return "";
+  return ring.map((p, i) => `${i === 0 ? "M" : "L"} ${toX(p.x).toFixed(1)} ${toY(p.y).toFixed(1)}`).join(" ") + " Z";
 }
 
 const DEFAULT_POLY = [
@@ -29,18 +58,30 @@ const DEFAULT_POLY = [
 
 export function LiveMapMini({
   polygon = DEFAULT_POLY,
+  polygons,
+  progress = null,
   robot   = {x: 0.62, y: 0.46, heading: 30},
   coverage = 0.42,
   height = 200,
 }: LiveMapMiniProps) {
   const w = 600;
   const h = height * (w / 600);
-  // Build polygon path
   const toX = (x: number) => x * w;
   const toY = (y: number) => y * h;
-  const polyPath = polygon
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${toX(p.x).toFixed(1)} ${toY(p.y).toFixed(1)}`)
-    .join(" ") + " Z";
+
+  // Prefer the real multi-area set; fall back to the single legacy polygon.
+  const areas: MiniArea[] = (polygons && polygons.length > 0)
+    ? polygons
+    : [{outer: polygon}];
+
+  // One even-odd path per area (outer ring + hole rings) so obstacles are
+  // punched out. The union drives the clip for the coverage/progress overlay.
+  const areaPaths = areas.map(a =>
+    [ringPath(a.outer, toX, toY), ...(a.holes ?? []).map(hole => ringPath(hole, toX, toY))]
+      .filter(Boolean)
+      .join(" ")
+  );
+  const clipPathD = areaPaths.join(" ");
 
   return (
     <div style={{position: "relative", width: "100%", height, overflow: "hidden"}}>
@@ -73,32 +114,51 @@ export function LiveMapMini({
           <path d={`M -20 ${h * 0.7} Q ${w * 0.4} ${h * 0.62}, ${w * 0.65} ${h * 0.76} T ${w + 20} ${h * 0.7}`}/>
         </g>
 
-        {/* polygon -- soft fill + clean edge */}
-        <motion.path
-          d={polyPath}
-          fill="url(#lawnFill)"
-          stroke="url(#lawnEdge)"
-          strokeWidth={1.4}
-          strokeLinejoin="round"
-          initial={{pathLength: 0, opacity: 0}}
-          animate={{pathLength: 1, opacity: 1}}
-          transition={{duration: 1.2, ease: [0.2, 0.7, 0.2, 1], delay: 0.2}}
-        />
+        {/* areas -- soft fill + clean edge, holes punched via even-odd */}
+        {areaPaths.map((d, i) => (
+          <motion.path
+            key={i}
+            d={d}
+            fillRule="evenodd"
+            fill="url(#lawnFill)"
+            stroke="url(#lawnEdge)"
+            strokeWidth={1.4}
+            strokeLinejoin="round"
+            initial={{pathLength: 0, opacity: 0}}
+            animate={{pathLength: 1, opacity: 1}}
+            transition={{duration: 1.2, ease: [0.2, 0.7, 0.2, 1], delay: 0.2}}
+          />
+        ))}
 
-        {/* coverage swath -- diagonal lines clipped to polygon */}
+        {/* overlay clipped to the union of all areas */}
         <defs>
           <pattern id="cov" patternUnits="userSpaceOnUse" width={8} height={8} patternTransform="rotate(35)">
             <line x1={0} y1={0} x2={0} y2={8} stroke="rgba(124,255,178,0.18)" strokeWidth={1.4}/>
           </pattern>
-          <clipPath id="polyClip"><path d={polyPath}/></clipPath>
+          <clipPath id="polyClip"><path d={clipPathD} clipRule="evenodd"/></clipPath>
         </defs>
         <g clipPath="url(#polyClip)">
-          <motion.rect
-            x={0} y={0} width={w * coverage} height={h}
-            fill="url(#cov)"
-            initial={{opacity: 0}} animate={{opacity: 1}}
-            transition={{delay: 0.7, duration: 0.6}}
-          />
+          {progress ? (
+            // Real mowed-cell overlay (same raster MapPage draws). Non-uniform
+            // scale matches the page's per-axis normalisation, so preserve none.
+            <motion.image
+              href={progress.url}
+              x={toX(progress.x)} y={toY(progress.y)}
+              width={progress.w * w} height={progress.h * h}
+              preserveAspectRatio="none"
+              style={{imageRendering: "pixelated"}}
+              initial={{opacity: 0}} animate={{opacity: 1}}
+              transition={{duration: 0.4}}
+            />
+          ) : (
+            // No grid yet -- synthetic coverage band as a lightweight proxy.
+            <motion.rect
+              x={0} y={0} width={w * coverage} height={h}
+              fill="url(#cov)"
+              initial={{opacity: 0}} animate={{opacity: 1}}
+              transition={{delay: 0.7, duration: 0.6}}
+            />
+          )}
         </g>
 
         {/* robot dot */}

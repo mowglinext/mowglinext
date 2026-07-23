@@ -159,6 +159,29 @@ export type CoveragePath = {
   path?: Path;
 };
 
+export const enum DockCalibrationStatusConstants {
+  PHASE_WAIT_RTK = 0,
+  PHASE_REVERSING = 1,
+  PHASE_CHECK_COG = 2,
+  PHASE_REDOCKING = 3,
+  PHASE_VERIFY_CHARGE = 4,
+  PHASE_PERSIST = 5,
+  PHASE_IDLE = 6,
+  PHASE_DONE = 7,
+};
+
+export type DockCalibrationStatus = {
+  phase?: number;
+  progress?: number;
+  cog_std_deg?: number;
+  displacement_m?: number;
+  charging?: boolean;
+  running?: boolean;
+  success?: boolean;
+  retry_reason?: number;
+  message?: string;
+};
+
 export const enum ESCStatusConstants {
   ESC_STATUS_DISCONNECTED = 99,
   ESC_STATUS_ERROR = 100,
@@ -302,6 +325,7 @@ export type HighLevelStatus = {
   total_swaths?: number;
   completed_swaths?: number;
   skipped_swaths?: number;
+  coverage_percent?: number;
   gps_quality_percent?: number;
   battery_percent?: number;
   is_charging?: boolean;

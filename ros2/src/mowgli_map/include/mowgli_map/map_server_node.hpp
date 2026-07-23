@@ -124,6 +124,18 @@ public:
     return apply_promoted_obstacle(area_index, polygon);
   }
 
+  /// Test-only: obstacle-store sizes, to assert promotion / load is
+  /// idempotent (one keepout → one entry in each store). Single-threaded test
+  /// use only — no locking.
+  size_t obstacle_polygon_count_for_test() const
+  {
+    return obstacle_polygons_.size();
+  }
+  size_t area_obstacle_count_for_test(size_t area_index) const
+  {
+    return area_index < areas_.size() ? areas_[area_index].obstacles.size() : 0;
+  }
+
   /// Test-only: directly invoke the add_area service handler.
   void add_area_for_test(const mowgli_interfaces::srv::AddMowingArea::Request::SharedPtr req,
                          mowgli_interfaces::srv::AddMowingArea::Response::SharedPtr res);
@@ -487,6 +499,13 @@ private:
   /// occupancy/classification lifecycle. Guarded by map_mutex_.
   grid_map::GridMap mow_progress_map_;
   bool mow_progress_dirty_{false};
+  /// Throttle for the mowed-overlay publish. The overlay is re-serialized (an
+  /// O(cells) full-grid pass that scales with map extent) at most once per this
+  /// period while mowing, instead of on every timer tick — the dominant steady
+  /// cost on a large map. transient_local keeps late subscribers current, and
+  /// mow_progress_dirty_ stays set until an actual publish, so no growth is lost.
+  double mow_progress_publish_period_s_{2.0};
+  rclcpp::Time last_mow_progress_pub_time_{0, 0, RCL_ROS_TIME};
 
   bool mow_blade_enabled_{false};
 

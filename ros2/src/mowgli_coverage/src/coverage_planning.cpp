@@ -7,6 +7,7 @@
 #include "mowgli_coverage/coverage_planning.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -54,6 +55,16 @@ std::string fmtDrop(const char* what, double value, const char* cmp, double thre
 // timeout. Keeping the gate at 400 m² guarantees AUTO planning never times out
 // on hardware; larger lawns simply use the (near-optimal) longest-edge angle.
 constexpr double kAutoAngleMaxAreaM2 = 400.0;  // ~20 × 20 m
+
+// AUTO swath-angle search resolution (radians). f2c::sg::BruteForce defaults to
+// a 1° step, which — sweeping the FULL 2π — regenerates the entire swath set 360
+// times per plan (the dominant coverage-planning cost, and single-threaded on
+// the Pi4 / Cortex-A72 target). The swath-count objective (NSwath) is near-flat
+// within a few degrees of the optimum, so a 5° step (72 candidates over 2π) cuts
+// that cost ~5× while leaving the chosen angle — and thus the whole plan —
+// essentially unchanged. It is a FIXED constant (not tuned per plan) so the
+// argmin is deterministic across re-plans, which the resume cursor relies on.
+constexpr double kAutoAngleStepRad = 5.0 * M_PI / 180.0;
 
 // Orientation (radians) of the longest edge of a cell's outer ring. A cheap,
 // deterministic AUTO swath angle for large fields. Falls back to 0 (sweep along
@@ -725,6 +736,20 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // authorised area, before any inset). Instrumentation only.
   plan.diagnostics.field_area = field_cell.area();
 
+  // Per-stage wall-clock instrumentation (surfaced as a diagnostics note the
+  // server logs). Lets the maintainer see, on the Pi4, which F2C stage dominates
+  // a plan — expected: the AUTO swath-angle sweep. Pure accounting.
+  using Clock = std::chrono::steady_clock;
+  auto elapsedMs = [](Clock::time_point t0)
+  {
+    return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+  };
+  double t_headland_ms = 0.0;
+  double t_mainland_ms = 0.0;
+  double t_swaths_ms = 0.0;
+  int swath_angle_candidates = 1;  // 1 = fixed/longest-edge; >1 = exhaustive sweep
+  double mainland_area_m2 = 0.0;
+
   // Raw operator boundary as (x, y) pairs — the ring-corner fillet's in-bounds
   // fallback when no chassis-safety inset was applied (plan.safe_boundary empty).
   std::vector<std::pair<double, double>> field_outer_pts;
@@ -756,7 +781,6 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   //                         safety stop, replacing the old inset floor.
   const double field_offset = chassis_safety_inset - 0.5 * op_width;
   f2c::types::Cells safe_cells = cells;
-  bool boundary_offset_applied = false;
   if (field_offset > 1e-3)
   {
     safe_cells = hl.generateHeadlands(cells, field_offset);
@@ -764,7 +788,6 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
     {
       return plan;  // inset consumed the field
     }
-    boundary_offset_applied = true;
   }
   else if (field_offset < -1e-3)
   {
@@ -774,17 +797,23 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
     if (expanded.size() > 0 && expanded.area() > 1e-6)
     {
       safe_cells = expanded;
-      boundary_offset_applied = true;
     }
     // else: buffer degeneracy — fall back to the raw field (safe_cells = cells).
   }
 
-  if (boundary_offset_applied)
+  // Expose the planning outer ring so the continuous-path connectors/fillets are
+  // bounded by the SAME polygon the rings/swaths are planned against (not the raw
+  // operator boundary). If an inset split the field, take the largest cell's
+  // exterior ring (the dominant drivable region). Populated UNCONDITIONALLY from
+  // safe_cells: when no boundary offset was applied (chassis_safety_inset ==
+  // op_width/2 exactly → field_offset == 0, or a buffer degeneracy) safe_cells ==
+  // the raw field, so safe_boundary becomes the raw operator ring — which is
+  // still the correct drivable envelope (the outermost ring rides on it). Gating
+  // this on boundary_offset_applied left safe_boundary EMPTY in the field_offset
+  // ≈ 0 case, and buildContinuousSubPaths then validated every turn-around
+  // connector against an empty polygon (allInside always false) → a split at
+  // every segment → gross sub-path over-fragmentation.
   {
-    // Expose the planning outer ring so the continuous-path connectors/fillets
-    // are bounded by the SAME polygon the rings/swaths are planned against (not
-    // the raw operator boundary). If an inset split the field, take the largest
-    // cell's exterior ring (the dominant drivable region).
     std::size_t largest = 0;
     double largest_area = -1.0;
     for (std::size_t i = 0; i < safe_cells.size(); ++i)
@@ -796,12 +825,54 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
         largest = i;
       }
     }
-    const auto safe_ring = safe_cells.getGeometry(largest).getGeometry(0);  // exterior
-    plan.safe_boundary.reserve(safe_ring.size());
-    for (std::size_t i = 0; i < safe_ring.size(); ++i)
+    if (safe_cells.size() > 0)
     {
-      const auto p = safe_ring.getGeometry(i);
-      plan.safe_boundary.emplace_back(p.getX(), p.getY());
+      const auto safe_ring = safe_cells.getGeometry(largest).getGeometry(0);  // exterior
+      plan.safe_boundary.reserve(safe_ring.size());
+      for (std::size_t i = 0; i < safe_ring.size(); ++i)
+      {
+        const auto p = safe_ring.getGeometry(i);
+        plan.safe_boundary.emplace_back(p.getX(), p.getY());
+      }
+    }
+  }
+
+  // Turn-around connectors/fillets are bounded by the OUTERMOST RING's centerline,
+  // NOT safe_boundary. generateHeadlandSwaths places ring 0 op_width/2 inside the
+  // planning field (safe_cells), so eroding safe_cells inward by op_width/2 yields
+  // exactly that centerline (== the recorded line eroded by chassis_safety_inset).
+  // allInside() only tests the path CENTERLINE, so validating connectors against
+  // safe_boundary let a turn arc's centerline ride op_width/2 further out than any
+  // ring/swath, pushing the swept chassis/blade footprint that far past the
+  // operator boundary (excursion grew with the turn radius). Bounding connectors
+  // to this ring instead caps a turn's footprint at the perimeter ring the robot
+  // already drives. op_width/2 (NOT robot_width/2): eroding by the chassis
+  // half-width would keep turns robot_width/2 − op_width/2 TIGHTER than the
+  // perimeter ring → edge turn-arounds forced below min_turning_radius → straight
+  // fallback → sub-path fragmentation. On degeneracy (tiny field) leave it empty;
+  // the caller falls back to safe_boundary (the pre-fix, looser bound).
+  {
+    const f2c::types::Cells clearance_cells = hl.generateHeadlands(safe_cells, 0.5 * op_width);
+    if (clearance_cells.size() > 0 && clearance_cells.area() > 1e-6)
+    {
+      std::size_t largest = 0;
+      double largest_area = -1.0;
+      for (std::size_t i = 0; i < clearance_cells.size(); ++i)
+      {
+        const double a = clearance_cells.getGeometry(i).area();
+        if (a > largest_area)
+        {
+          largest_area = a;
+          largest = i;
+        }
+      }
+      const auto clr_ring = clearance_cells.getGeometry(largest).getGeometry(0);  // exterior
+      plan.connector_clearance_boundary.reserve(clr_ring.size());
+      for (std::size_t i = 0; i < clr_ring.size(); ++i)
+      {
+        const auto p = clr_ring.getGeometry(i);
+        plan.connector_clearance_boundary.emplace_back(p.getX(), p.getY());
+      }
     }
   }
 
@@ -842,8 +913,10 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       (num_headland_passes_override > 0)
           ? num_headland_passes_override
           : std::max(1, static_cast<int>(std::ceil(headland_width / op_width - 1e-9)));
+  const auto t_headland0 = Clock::now();
   const auto headland_passes =
       hl.generateHeadlandSwaths(safe_cells, op_width, n_rings, /*dir_out2in=*/true);
+  t_headland_ms = elapsedMs(t_headland0);
   // Drop degenerate micro-loops (a near-consumed tiny field can yield a
   // centimetre-scale innermost ring that isn't worth driving).
   constexpr double kMinRingPerimeter = 1.0;  // m
@@ -958,7 +1031,10 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
 
   // (3) Mainland: what's left inside the rings' cut band. May be empty on a
   // small field (rings-only plan — still valid coverage).
+  const auto t_mainland0 = Clock::now();
   f2c::types::Cells mainland = hl.generateHeadlands(safe_cells, n_rings * op_width);
+  t_mainland_ms = elapsedMs(t_mainland0);
+  mainland_area_m2 = mainland.area();
   if (mainland.size() == 0 || mainland.area() < 1e-6)
   {
     // Rings-only is a valid plan — still report the planned fraction it covers.
@@ -977,9 +1053,14 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // swath-count-minimising angle, which is equally deterministic for a fixed
   // polygon.
   f2c::sg::BruteForce bf;
+  // Coarsen the AUTO best-angle sweep from F2C's 1° default to kAutoAngleStepRad
+  // (5°) — ~5× fewer candidate angles at a negligible plan-quality change (see
+  // the constant). No effect on fixed-angle plans (they skip the sweep).
+  bf.setStepAngle(kAutoAngleStepRad);
   f2c::obj::NSwath n_swath_obj;
   f2c::rp::BoustrophedonOrder order;
   double swath_strip_area = 0.0;  // Σ length·op_width of KEPT swaths (for the fraction)
+  const auto t_swaths0 = Clock::now();
   for (std::size_t i = 0; i < mainland.size(); ++i)
   {
     const auto cell = mainland.getGeometry(i);
@@ -1005,6 +1086,14 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                     kAutoAngleMaxAreaM2,
                     cell_angle * 180.0 / M_PI);
       plan.diagnostics.notes.push_back(std::string(buf));
+    }
+    if (cell_angle < 0.0)
+    {
+      // Exhaustive sweep actually runs on this cell — record its candidate count
+      // (2π / step) for the timing note.
+      swath_angle_candidates =
+          std::max(swath_angle_candidates,
+                   static_cast<int>(std::lround(2.0 * M_PI / kAutoAngleStepRad)));
     }
     f2c::types::Swaths swaths = (cell_angle >= 0.0)
                                     ? bf.generateSwaths(cell_angle, op_width, cell)
@@ -1037,6 +1126,24 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       swath_strip_area += len * op_width;
       plan.swaths.push_back({{p0.getX(), p0.getY()}, {p1.getX(), p1.getY()}});
     }
+  }
+
+  t_swaths_ms = elapsedMs(t_swaths0);
+
+  // Per-stage timing note (server logs it). "swaths" is the dominant stage — the
+  // AUTO best-angle sweep over `angles` candidates.
+  {
+    char buf[200];
+    std::snprintf(buf,
+                  sizeof(buf),
+                  "timing: headland=%.0fms mainland=%.0fms swaths=%.0fms "
+                  "(angles=%d, mainland_area=%.1f m²)",
+                  t_headland_ms,
+                  t_mainland_ms,
+                  t_swaths_ms,
+                  swath_angle_candidates,
+                  mainland_area_m2);
+    plan.diagnostics.notes.push_back(std::string(buf));
   }
 
   // Planned-coverage fraction: strip areas of the kept rings + swaths over the
@@ -1076,9 +1183,54 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
   // ring's end: concentric rings are locally parallel there, so the junction
   // becomes a gentle ~op_width sideways shift the connector joins tangentially.
   // The first ring keeps F2C's start (TransitToStrip already targets it).
-  std::vector<std::vector<std::pair<double, double>>> segs;
-  for (const auto& loop_in : plan.rings)
+  // Ring DRIVE-ORDER grouping. F2C's generateHeadlandSwaths emits ring loops PER
+  // PASS as [outer, hole, outer, hole, …], so consecutive concentric OUTER rings
+  // are interleaved with the field-centre hole rings. Driven in that raw order the
+  // path jumps outer-ring → hole-ring → outer-ring every pass, and each jump is a
+  // field-crossing relocation the join-gap split below (Split A) turns into a
+  // spurious blade-off Nav2 transit (3–4 extra transits, purely an ordering
+  // artifact). Partition into outer-boundary rings FIRST (outermost-first order
+  // preserved) then the obstacle-encircling rings, so each group drives
+  // contiguously and only ONE relocation separates the two. A ring is an OUTER
+  // ring iff it encloses a MAINLAND point (a swath endpoint): the mainland lies
+  // inside every nested outer ring and outside every small hole ring. Falls back
+  // to the raw order when there are no swaths (rings-only field: no mainland probe,
+  // and a fully-consumed field rarely carries hole rings worth reordering). Ring
+  // GEOMETRY is untouched — only the order the loops are appended.
+  std::vector<std::size_t> ring_order;
+  ring_order.reserve(plan.rings.size());
+  if (!plan.swaths.empty())
   {
+    const double probe_x =
+        0.5 * (plan.swaths.front().first.first + plan.swaths.front().second.first);
+    const double probe_y =
+        0.5 * (plan.swaths.front().first.second + plan.swaths.front().second.second);
+    std::vector<std::size_t> hole_rings;
+    for (std::size_t i = 0; i < plan.rings.size(); ++i)
+    {
+      if (pointInRing(probe_x, probe_y, plan.rings[i]))
+      {
+        ring_order.push_back(i);  // outer ring (encloses the mainland)
+      }
+      else
+      {
+        hole_rings.push_back(i);  // encircles a hole
+      }
+    }
+    ring_order.insert(ring_order.end(), hole_rings.begin(), hole_rings.end());
+  }
+  else
+  {
+    for (std::size_t i = 0; i < plan.rings.size(); ++i)
+    {
+      ring_order.push_back(i);
+    }
+  }
+
+  std::vector<std::vector<std::pair<double, double>>> segs;
+  for (const std::size_t ring_idx : ring_order)
+  {
+    const auto& loop_in = plan.rings[ring_idx];
     if (loop_in.size() < 2)
     {
       continue;
@@ -1261,22 +1413,28 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
       // transit. Single-sourced from mowgli_interfaces so this matches the BT's
       // FollowStrip::kSegmentTransitGap for the same decision — see
       // coverage_geometry.hpp for why the two sides must agree.
-      const double join_gap = std::hypot(goal.x - start.x, goal.y - start.y);
+      // Attempt a blade-on connector for EVERY segment join, regardless of length.
+      // buildConnector fits a forward turn-around arc when one fits (adjacent
+      // passes ~op_width apart) and otherwise falls back to a straight join. The
+      // sub-path is BROKEN — finalized here, the next started fresh at segs[i], so
+      // FollowStrip bridges the gap with a blade-off, costmap-aware Nav2 transit —
+      // ONLY when that connector is genuinely un-drivable blade-on: empty, or a
+      // straight fallback that leaves the boundary OR crosses an interior hole
+      // (issue #333, the split's sole purpose — routing AROUND an obstacle).
+      //
+      // A long but CLEAR join (e.g. innermost-ring → first-swath on a hole-free
+      // field, or a lobe change that passes to the side of a hole) is kept blade-on
+      // as ONE continuous sub-path. The earlier length gate (join_gap >
+      // kSegmentTransitGapM ⇒ split) fragmented such clear joins into needless
+      // blade-off transits — a hole-free field split into 2+ sub-paths, and every
+      // one-hole field carried an extra ring→swath transit. kSegmentTransitGapM
+      // remains the BT-side FollowStrip threshold for classifying the gaps BETWEEN
+      // the sub-paths this function emits; it no longer drives the split decision.
       bool conn_safe = false;
-      if (join_gap <= mowgli_interfaces::coverage_geometry::kSegmentTransitGapM)
       {
         bool fallback = false;
         auto conn = buildConnector(
             start, goal, boundary, plan.safe_holes, turn_radius, min_radius, step, fallback);
-        // A forward Dubins connector is a LOCAL arc — it cannot route around a
-        // large interior hole. If no in-bounds, hole-free arc fit, buildConnector
-        // returned a straight fallback; keep it only when that straight is itself
-        // safe (a short join that happens to clear everything — its V-cusp is
-        // rounded by roundSharpCorners below, or split off by the residual-cusp
-        // pass when the fillet can't fit). Otherwise BREAK the path here:
-        // finalize this sub-path and start a fresh one at segs[i], so FollowStrip
-        // bridges the gap with a blade-off, costmap-aware Nav2 transit that
-        // routes around the obstacle (issue #333).
         conn_safe =
             !conn.empty() &&
             (!fallback || (allInside(conn, boundary) && clearOfHoles(conn, plan.safe_holes)));
@@ -1335,40 +1493,19 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     }
     auto rounded = roundSharpCorners(
         sp, boundary, plan.safe_holes, kCornerThreshold, fillet_r, min_radius, step);
-    // Residual-cusp split: roundSharpCorners leaves a corner SHARP when no
-    // in-bounds fillet of radius >= min_radius fits (typically the V-cusp of a
-    // kept straight-fallback join squeezed against the safety inset — measured
-    // 147.8° on the recorded garden). A >115° corner is a near-reversal MPPI
-    // dithers at, so SPLIT the sub-path there instead: the next FollowPath goal
-    // starts at the corner and RotationShim pivots in place to the new heading —
-    // exactly the right maneuver for a sharp corner this chassis can't arc
-    // through. Gentle (<=115°) corners stay: MPPI turns through those fine.
-    constexpr double kCuspSplitCos = -0.42261826174;  // cos(115°)
-    std::size_t begin = 0;
-    for (std::size_t i = 1; i + 1 < rounded.size(); ++i)
+    // Emit each rounded sub-path WHOLE — sub-paths split ONLY at Split A (a real
+    // obstacle-gap / relocation), never at an interior cusp. FTC (restored
+    // 2026-06-19, reverting MPPI) tracks the continuous full_path through the
+    // forward turn-around arcs with a single PRE_ROTATE, so a residual sharp
+    // U-turn between antiparallel swaths that no forward teardrop can fit (op_width
+    // ~0.16 m apart, needs ~2·r) must stay in ONE sub-path: its cusp tip lies in
+    // already-mowed headland (no coverage lost), and cutting there would fragment
+    // the plan into a blade-off Nav2 transit PER U-turn (measured 18 sub-paths /
+    // 17 transits on a 1-hole 72 m² field). The old MPPI-era residual-cusp split
+    // (>115° corners) was removed with the MPPI revert.
+    if (rounded.size() >= 2)
     {
-      const double ax = rounded[i].first - rounded[i - 1].first;
-      const double ay = rounded[i].second - rounded[i - 1].second;
-      const double bx = rounded[i + 1].first - rounded[i].first;
-      const double by = rounded[i + 1].second - rounded[i].second;
-      const double na = std::hypot(ax, ay), nb = std::hypot(bx, by);
-      if (na < 1e-9 || nb < 1e-9)
-      {
-        continue;
-      }
-      if ((ax * bx + ay * by) / (na * nb) < kCuspSplitCos)
-      {
-        if (i + 1 - begin >= 2)
-        {
-          out.emplace_back(rounded.begin() + static_cast<std::ptrdiff_t>(begin),
-                           rounded.begin() + static_cast<std::ptrdiff_t>(i + 1));
-        }
-        begin = i;  // corner pose starts the next run (pivot happens here)
-      }
-    }
-    if (rounded.size() - begin >= 2)
-    {
-      out.emplace_back(rounded.begin() + static_cast<std::ptrdiff_t>(begin), rounded.end());
+      out.emplace_back(std::move(rounded));
     }
   }
 
@@ -1583,38 +1720,159 @@ f2c::types::LinearRing bufferRingOutward(const f2c::types::LinearRing& in, doubl
   return dedupClosedRing(out);
 }
 
-f2c::types::LinearRing dedupClosedRing(const f2c::types::LinearRing& in)
+namespace
 {
-  f2c::types::LinearRing out;
-  bool have_prev = false;
-  double px = 0.0, py = 0.0;
+
+// Ring sanitization tolerances. Operator-recorded field boundaries carry
+// mm-scale geometric degeneracies (a real 252 m² field had a 1.2 mm near-
+// duplicate closure vertex and several 1–10 mm sliver edges). These are EXACT
+// enough that boost::geometry accepts the points yet degenerate enough that
+// F2C's generateHeadlands offset and BruteForce swath clip silently produce
+// PARTIAL coverage. Both tolerances sit safely below op_width (0.16 m) so no
+// real corner is ever removed.
+constexpr double kRingDedupTolM = 0.01;  // drop a vertex within 1 cm of the last kept one
+constexpr double kRingSpikeTolM = 0.005;  // drop a vertex within 5 mm of its neighbours' chord
+
+// Repair a ring into a boost::geometry-valid one via F2C's own OGR backend.
+// Buffer-by-zero is the standard OGR self-intersection fix (the same Buffer call
+// bufferRingOutward already relies on); it returns the valid equivalent of a
+// self-touching / sliver-laden ring. Keep the largest resulting polygon's
+// exterior. Any degeneracy (null buffer, empty result, collapsed ring) returns
+// the input unchanged — the planner must NEVER drop the field.
+f2c::types::LinearRing makeRingValid(const f2c::types::LinearRing& in)
+{
+  if (in.size() < 4)
+  {
+    return in;
+  }
+  OGRLinearRing ogr_ring;
   for (std::size_t i = 0; i < in.size(); ++i)
   {
     const auto p = in.getGeometry(i);
-    const double x = p.getX();
-    const double y = p.getY();
-    if (have_prev && std::fabs(x - px) < 1e-9 && std::fabs(y - py) < 1e-9)
-    {
-      continue;  // zero-length edge — boost/F2C would reject the ring
-    }
-    out.addPoint(f2c::types::Point(x, y));
-    px = x;
-    py = y;
-    have_prev = true;
+    ogr_ring.addPoint(p.getX(), p.getY());
   }
-  // Close the ring (F2C wants first == last). The closing seam is the ring's
-  // standard representation, not a degenerate interior edge.
-  if (out.size() >= 2)
+  ogr_ring.closeRings();
+  OGRPolygon poly;
+  poly.addRing(&ogr_ring);
+  std::unique_ptr<OGRGeometry> fixed(poly.Buffer(0.0));
+  if (!fixed)
   {
-    const auto first = out.getGeometry(0);
-    const auto last = out.getGeometry(out.size() - 1);
-    if (std::fabs(first.getX() - last.getX()) > 1e-9 ||
-        std::fabs(first.getY() - last.getY()) > 1e-9)
+    return in;
+  }
+  const OGRPolygon* fixed_poly = nullptr;
+  const auto flat_type = wkbFlatten(fixed->getGeometryType());
+  if (flat_type == wkbPolygon)
+  {
+    fixed_poly = fixed->toPolygon();
+  }
+  else if (flat_type == wkbMultiPolygon)
+  {
+    // Repair can split a bow-tie ring into several parts; keep the field body.
+    double best_area = -1.0;
+    for (const auto* part : *fixed->toMultiPolygon())
     {
-      out.addPoint(f2c::types::Point(first.getX(), first.getY()));
+      const double a = part->get_Area();
+      if (a > best_area)
+      {
+        best_area = a;
+        fixed_poly = part;
+      }
     }
+  }
+  if (!fixed_poly || !fixed_poly->getExteriorRing() ||
+      fixed_poly->getExteriorRing()->getNumPoints() < 4)
+  {
+    return in;
+  }
+  const OGRLinearRing* ext = fixed_poly->getExteriorRing();
+  f2c::types::LinearRing out;
+  for (int i = 0; i < ext->getNumPoints(); ++i)
+  {
+    out.addPoint(f2c::types::Point(ext->getX(i), ext->getY(i)));
   }
   return out;
+}
+
+}  // namespace
+
+f2c::types::LinearRing dedupClosedRing(const f2c::types::LinearRing& in)
+{
+  // 1. Metric dedup: drop any vertex within kRingDedupTolM of the previous kept
+  // vertex. A 1e-9 (nanometre) tolerance let mm-scale near-duplicates through —
+  // boost accepts the points but F2C's headland offset / swath clip then drop
+  // whole swaths. 1 cm is well below op_width, so real corners are preserved.
+  std::vector<f2c::types::Point> pts;
+  for (std::size_t i = 0; i < in.size(); ++i)
+  {
+    const auto p = in.getGeometry(i);
+    if (!pts.empty() &&
+        std::hypot(p.getX() - pts.back().getX(), p.getY() - pts.back().getY()) < kRingDedupTolM)
+    {
+      continue;  // near-zero-length edge — boost/F2C would reject or mis-clip it
+    }
+    pts.push_back(f2c::types::Point(p.getX(), p.getY()));
+  }
+  // Drop a near-duplicate closing vertex (the 1.2 mm seam) so the open vertex
+  // list carries no first≈last pair; the ring is re-closed explicitly below.
+  while (pts.size() >= 2 && std::hypot(pts.front().getX() - pts.back().getX(),
+                                       pts.front().getY() - pts.back().getY()) < kRingDedupTolM)
+  {
+    pts.pop_back();
+  }
+
+  // 2. Spike / near-collinear removal: drop any vertex whose perpendicular
+  // distance to the chord between its PREVIOUS KEPT vertex and its next neighbour
+  // is below kRingSpikeTolM. This clears both exactly-collinear points and
+  // mm-scale hooks (a 1 mm needle is invalid to boost even when each of its edges
+  // exceeds kRingDedupTolM). Chaining off the last kept vertex (rather than the
+  // raw predecessor) bounds the total deviation along a genuine curve to
+  // kRingSpikeTolM, so a rounded corner from an OGR buffer is simplified — not
+  // collapsed to a chamfer. Single deterministic pass (resume-by-index depends
+  // on the plan being reproducible).
+  if (pts.size() >= 4)
+  {
+    std::vector<f2c::types::Point> kept;
+    const std::size_t n = pts.size();
+    for (std::size_t i = 0; i < n; ++i)
+    {
+      const f2c::types::Point& a = kept.empty() ? pts[n - 1] : kept.back();
+      const f2c::types::Point& b = pts[i];
+      const f2c::types::Point& c = pts[(i + 1) % n];
+      const double dx = c.getX() - a.getX();
+      const double dy = c.getY() - a.getY();
+      const double len2 = dx * dx + dy * dy;
+      const double cross = dx * (a.getY() - b.getY()) - dy * (a.getX() - b.getX());
+      double perp = std::hypot(b.getX() - a.getX(), b.getY() - a.getY());
+      if (len2 > 0.0)
+      {
+        perp = std::fabs(cross) / std::sqrt(len2);
+      }
+      if (perp >= kRingSpikeTolM)
+      {
+        kept.push_back(b);
+      }
+    }
+    if (kept.size() >= 3)  // never collapse the field below a triangle
+    {
+      pts = kept;
+    }
+  }
+
+  // Re-close the ring (F2C wants first == last).
+  f2c::types::LinearRing out;
+  for (const auto& p : pts)
+  {
+    out.addPoint(p);
+  }
+  if (pts.size() >= 2)
+  {
+    out.addPoint(f2c::types::Point(pts.front().getX(), pts.front().getY()));
+  }
+
+  // 3. OGR validity repair: even after the metric/spike passes a ring can retain
+  // a self-touch boost::geometry rejects. makeRingValid returns the boost-valid
+  // equivalent, or the deduped ring unchanged if the repair degenerates.
+  return makeRingValid(out);
 }
 
 }  // namespace mowgli_coverage

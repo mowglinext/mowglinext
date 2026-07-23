@@ -79,6 +79,16 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     return latest_.value_or(TickOutput{});
   }
 
+  // Cadence scaling for the per-tick dead-reckoning gates below. Each gate
+  // compares the PER-TICK accumulated wheel/gyro delta against a fixed radian/
+  // metre threshold, so its effective rad/s (or m/s) trip point is
+  // threshold / node_period_s and would drift with cadence. Multiplying the
+  // thresholds by this factor keeps the tuned trip points invariant across the
+  // 25 Hz (launch default), 50 Hz (yaml default) and 10 Hz configurations.
+  // At the 25 Hz reference the factor is exactly 1.0 (no behaviour change on
+  // the deployed robot). See kTunedNodePeriodS in graph_params.hpp.
+  const double tick_scale = params_.node_period_s / kTunedNodePeriodS;
+
   // 1. Build the wheel between-factor: relative pose from X_{k-1} to X_k.
   //    Yaw selection rules:
   //    a. Wheel encoder is ground truth when it reads zero. Encoders
@@ -104,9 +114,11 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   //       estimate is dominated by encoder slip and the gyro is strictly
   //       better. The wheel sigma_theta path only fires when no gyro
   //       sample arrived this tick (pre-cog seed window, IMU restart).
-  const bool wheel_stationary = std::abs(accum_.dx) < params_.stationary_thresh_xy_m &&
-                                std::abs(accum_.dy) < params_.stationary_thresh_xy_m &&
-                                std::abs(accum_.dtheta_wheel) < params_.stationary_thresh_theta;
+  const double stationary_thresh_xy_m = params_.stationary_thresh_xy_m * tick_scale;
+  const double stationary_thresh_theta = params_.stationary_thresh_theta * tick_scale;
+  const bool wheel_stationary = std::abs(accum_.dx) < stationary_thresh_xy_m &&
+                                std::abs(accum_.dy) < stationary_thresh_xy_m &&
+                                std::abs(accum_.dtheta_wheel) < stationary_thresh_theta;
   // Publish to AddGyroDelta so it can decide whether to EMA-update
   // the bias estimate from incoming samples. wheel_stationary_now_
   // stays at the latest tick's value until the next tick, so the
@@ -180,9 +192,10 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   // happens on every normal turn. The combination "wheels rotating
   // hard, gyro near zero" is the genuine slip signature.
   const double wheel_gyro_residual = std::abs(accum_.dtheta_wheel - accum_.dtheta_gyro);
-  const bool slip_detected = wheel_gyro_residual > params_.slip_residual_thresh_rad &&
-                             std::abs(accum_.dtheta_gyro) < params_.slip_gyro_max_rad &&
-                             std::abs(accum_.dtheta_wheel) > params_.slip_wheel_min_rad;
+  const bool slip_detected =
+      wheel_gyro_residual > params_.slip_residual_thresh_rad * tick_scale &&
+      std::abs(accum_.dtheta_gyro) < params_.slip_gyro_max_rad * tick_scale &&
+      std::abs(accum_.dtheta_wheel) > params_.slip_wheel_min_rad * tick_scale;
   double dx_eff = accum_.dx;
   double dy_eff = accum_.dy;
   if (slip_detected)
@@ -221,9 +234,10 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   // comment) so swap to a loose sigma and let GPS / scan-matching
   // constrain XY. Gating on the gyro (not wheel-derived) dtheta
   // avoids feedback from the same encoder that's misreporting.
-  double wheel_sigma_x_eff = std::abs(accum_.dtheta_gyro) > params_.pivot_gate_dtheta_rad
-                                 ? params_.pivot_wheel_sigma_x
-                                 : params_.wheel_sigma_x;
+  double wheel_sigma_x_eff =
+      std::abs(accum_.dtheta_gyro) > params_.pivot_gate_dtheta_rad * tick_scale
+          ? params_.pivot_wheel_sigma_x
+          : params_.wheel_sigma_x;
 
   // Adaptive σ_x inflation from wheel↔gyro residual EMA. Skipped
   // entirely when adaptive_noise_enabled_gain == 0 (the parameter
@@ -347,12 +361,22 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   }
   if (queue_.scan_to_keyframe)
   {
-    // ABSOLUTE xy constraint on the current node from a frozen RTK-anchored
-    // keyframe match. PoseTranslationPrior pins X_curr.translation() to abs_xy
-    // (yaw untouched). Huber-wrapped like the GPS factor so a single biased
-    // keyframe match is down-weighted, not trusted. This is the factor that
-    // bounds absolute error during RTK-Float; rides the same new_factors_ batch
-    // through ApplyIsamUpdateLocked so it's rebase-safe.
+    // ABSOLUTE XY-ONLY constraint on the current node from an RTK-anchored
+    // keyframe match. PoseTranslationPrior pins X_curr.translation() to
+    // abs_pose's xy (heading UNTOUCHED), bounding position drift during RTK-Float
+    // windows while yaw stays owned by the gyro between-factors and the loose
+    // (σ≥0.30 rad) scan-between yaw. Huber-wrapped so a single biased match is
+    // down-weighted.
+    //
+    // 2026-07-22: reverted from the PriorFactor<Pose2> (xy+yaw) variant. A
+    // keyframe yaw prior — even σ-floored — can inject a mirrored / 180°-flipped
+    // cross-viewpoint ICP heading, which corrupted map→odom on the robot (yaw
+    // flip ~180°, kf_matches_fail spiking, robot fought the path and dug). The
+    // yaw mirror-guard in fusion_graph_node OnTimer still REJECTS such matches
+    // before they are queued (so the xy anchor is protected from a mirror too),
+    // but no keyframe heading is ever fed into the graph. This keeps the Float
+    // position-holding benefit without the heading-flip risk. abs_pose still
+    // carries yaw for that guard; only its translation is used here.
     const double s = std::max(queue_.scan_to_keyframe->sigma_xy, 1.0e-4);
     gtsam::SharedNoiseModel noise = MakeDiagonal({s, s});
     if (queue_.scan_to_keyframe->robust)
@@ -362,7 +386,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
                                                 noise);
     }
     new_factors_.add(gtsam::PoseTranslationPrior<gtsam::Pose2>(
-        k_curr, gtsam::Point2(queue_.scan_to_keyframe->abs_xy), noise));
+        k_curr, gtsam::Point2(queue_.scan_to_keyframe->abs_pose.translation()), noise));
   }
 
   // 4. iSAM2 update. Mark the cached full estimate dirty — callers

@@ -65,6 +65,10 @@ BT::NodeStatus DockRobot::onStart()
               dock_id.c_str(),
               dock_type.c_str());
 
+  // Mark the blade-off dock transit active ONLY on the RUNNING path (the
+  // action-server-unavailable early return above leaves this false). Read by
+  // IsDocking so BoundaryGuard exempts this transit — see bt_context.hpp.
+  ctx->docking_active = true;
   return BT::NodeStatus::RUNNING;
 }
 
@@ -82,6 +86,7 @@ BT::NodeStatus DockRobot::onRunning()
     if (!goal_handle_)
     {
       RCLCPP_ERROR(ctx->node->get_logger(), "DockRobot: goal was rejected by the action server");
+      ctx->docking_active = false;
       return BT::NodeStatus::FAILURE;
     }
   }
@@ -92,14 +97,17 @@ BT::NodeStatus DockRobot::onRunning()
   {
     case action_msgs::msg::GoalStatus::STATUS_SUCCEEDED:
       RCLCPP_INFO(ctx->node->get_logger(), "DockRobot: docking succeeded");
+      ctx->docking_active = false;
       return BT::NodeStatus::SUCCESS;
 
     case action_msgs::msg::GoalStatus::STATUS_ABORTED:
       RCLCPP_WARN(ctx->node->get_logger(), "DockRobot: docking aborted");
+      ctx->docking_active = false;
       return BT::NodeStatus::FAILURE;
 
     case action_msgs::msg::GoalStatus::STATUS_CANCELED:
       RCLCPP_WARN(ctx->node->get_logger(), "DockRobot: docking canceled");
+      ctx->docking_active = false;
       return BT::NodeStatus::FAILURE;
 
     default:
@@ -109,9 +117,15 @@ BT::NodeStatus DockRobot::onRunning()
 
 void DockRobot::onHalted()
 {
+  // Clear the dock-transit flag UNCONDITIONALLY (even if goal_handle_ was not
+  // yet confirmed): BehaviorTree.CPP invokes onHalted() whenever a RUNNING
+  // DockRobot is halted by a parent (e.g. a new operator command, or the root
+  // ReactiveSequence re-priority), and the flag must never survive that halt —
+  // otherwise BoundaryGuard would stay exempted after the transit ended.
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  ctx->docking_active = false;
   if (goal_handle_)
   {
-    auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
     RCLCPP_INFO(ctx->node->get_logger(), "DockRobot: canceling active goal");
     action_client_->async_cancel_goal(goal_handle_);
     goal_handle_.reset();

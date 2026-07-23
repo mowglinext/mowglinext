@@ -46,11 +46,17 @@ BT::NodeStatus PublishHighLevelStatus::tick()
     return BT::NodeStatus::FAILURE;
   }
 
-  if (!pub_)
+  // Shared publisher owned by the context so the behavior_tree_node's periodic
+  // timer can re-publish the last status while a long-running FollowStrip keeps
+  // this SyncActionNode from ticking (see BTContext::last_high_level_status).
   {
-    pub_ =
-        ctx->node->create_publisher<mowgli_interfaces::msg::HighLevelStatus>("~/high_level_status",
-                                                                             10);
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    if (!ctx->high_level_status_pub)
+    {
+      ctx->high_level_status_pub =
+          ctx->node->create_publisher<mowgli_interfaces::msg::HighLevelStatus>(
+              "~/high_level_status", 10);
+    }
   }
 
   // Debounce transient IDLE. The requested state is recomputed from tree
@@ -99,12 +105,22 @@ BT::NodeStatus PublishHighLevelStatus::tick()
   msg.total_swaths = static_cast<int16_t>(ctx->total_swaths);
   msg.completed_swaths = static_cast<int16_t>(ctx->completed_swaths);
   msg.skipped_swaths = static_cast<int16_t>(ctx->skipped_swaths);
+  // Smooth pose-cursor-based progress for the current area (primary GUI %); the
+  // swath counts above are the coarse secondary "sub-path X/Y" readout.
+  msg.coverage_percent = ctx->coverage_percent;
   msg.gps_quality_percent = ctx->gps_quality;
   msg.battery_percent = ctx->battery_percent;
   msg.is_charging = ctx->latest_power.charger_enabled;
   msg.emergency = ctx->latest_emergency.active_emergency;
 
-  pub_->publish(msg);
+  // Cache the message so the behavior_tree_node timer can re-publish it while
+  // the tree is parked in a long-running action with no further transitions.
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->last_high_level_status = msg;
+    ctx->has_high_level_status = true;
+    ctx->high_level_status_pub->publish(msg);
+  }
 
   RCLCPP_DEBUG(ctx->node->get_logger(),
                "PublishHighLevelStatus: state=%u name='%s'",

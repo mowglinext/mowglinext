@@ -31,7 +31,7 @@ global_costmap:
           # min_obstacle_height band below CANNOT filter tilt-induced
           # ground hits on its own. robot_localization runs in two_d_mode,
           # which forces pitch=roll=0 in TF, so a 2D LaserScan always
-          # projects to ~lidar_z (0.22 m) regardless of the real chassis
+          # projects to ~lidar_z (0.30 m) regardless of the real chassis
           # tilt — every ground return on a slope sails through the
           # [0.12, 1.5] band and lands as a phantom lethal obstacle (a
           # tiny pivot on uneven garden terrain was enough to paint
@@ -95,7 +95,7 @@ local_costmap:
           topic: /scan_costmap
           # Same height band as the global obstacle_layer — filter ground
           # hits when the mower pitches on uneven terrain.
-          # 2D LaserScan rays sit at lidar_link.z (≈0.22 m); after TF to
+          # 2D LaserScan rays sit at lidar_link.z (≈0.30 m); after TF to
           # the costmap frame each point's Z ≈ lidar height on level
           # ground. min_obstacle_height: 0.12 rejects returns whose Z has
           # dropped toward ground level — which happens when the mower
@@ -103,7 +103,7 @@ local_costmap:
           # tilt down into the lawn. At 0.0 those ground hits were marked
           # as phantom lethal obstacles, blocking the planner mid-swath
           # and walling off the dock approach (controller_server "Failed
-          # to make progress"). The real 0.22 m scan plane stays well
+          # to make progress"). The real 0.30 m scan plane stays well
           # inside [0.12, 1.5] so genuine obstacles are still marked.
           # NOTE: this does NOT reduce collision safety — collision_monitor
           # polls /scan_collision (self-return-blanked, NOT ground-filtered)
@@ -117,7 +117,7 @@ local_costmap:
           data_type: "LaserScan"
           raytrace_max_range: 6.0
           raytrace_min_range: 0.0
-          # 4.0 → 2.5 m (2026-06-12): at >2.5 m the 0.22 m-high scan plane
+          # 4.0 → 2.5 m (2026-06-12): at >2.5 m the 0.30 m-high scan plane
           # grazes the lawn at <5°, so most far returns on non-flat ground
           # are ground strikes, not obstacles — they walled the robot in
           # with phantom lethal cells. The local controller only needs
@@ -136,35 +136,91 @@ local_costmap:
 
 collision_monitor:
   ros__parameters:
-    polygons: ["PolygonSlow"]
+    # FootprintApproach is the hard-stop layer, PolygonSlow the soft slowdown.
+    # Order: the approach (pre-contact halt) is evaluated first, then the
+    # slowdown. See the base-file collision_monitor comment for the full
+    # history of why the static PolygonStop was replaced.
+    polygons: ["FootprintApproach", "PolygonStopNarrow", "PolygonSlow"]
+    # HARD STOP — velocity-projected, NOT a static box. Projects the published
+    # footprint forward along the CURRENT command for time_before_collision and
+    # scales the output so the chassis halts just short of a predicted contact.
+    # This REPLACES the old static PolygonStop (kept disabled below for the
+    # record): because it keys on the velocity vector, an obstacle FTC has
+    # already skirted — now abeam/behind the robot — is off the forward
+    # projection and does NOT re-trigger, so it can't freeze cmd_vel mid-skirt
+    # the way the static box did. Reads /scan_collision (self-return + dock
+    # blanked, NOT ground-filtered) so a real near return always stops us.
+    # 2026-07-21: restored ROS2's pre-contact stop layer (there had been NONE
+    # since PolygonStop was disabled — the robot drove into low/undetected
+    # obstacles at ≥half speed). Firmware stays the sole e-stop authority
+    # (CLAUDE.md invariant 9); this is a soft layer.
+    FootprintApproach:
+      type: "polygon"
+      action_type: "approach"
+      # Uses the live footprint the local costmap publishes (chassis polygon),
+      # so the projection matches the real robot outline, not a hand-tuned box.
+      footprint_topic: "/local_costmap/published_footprint"
+      # Look-ahead horizon. At the 0.20 m/s mow speed this projects ~0.24 m
+      # ahead; at the 0.30 m/s transit cap ~0.36 m — short enough to sit inside
+      # PolygonSlow's chassis+15 cm slow zone (obstacle already slowed us first),
+      # long enough to stop before the chassis front (base_link +0.48) touches.
+      time_before_collision: 1.2
+      simulation_time_step: 0.1
+      # 3 points (was 8 — SAFETY_REVIEW_2026-07-23 A-C1): the LD19's 455
+      # bins/rev = 0.79°/bin, so requiring 8 returns means an obstacle must
+      # subtend ≥6.3° — width ≥ 0.11·distance. A 3 cm fence post was INVISIBLE
+      # to this hard stop beyond 0.27 m; field reports of the blade hitting
+      # thin obstacles match exactly. At 3 points a 3 cm post trips the stop
+      # out to ~0.7 m. The velocity-projected approach polygon self-limits
+      # false trips (a stray return must land ON the projected footprint sweep,
+      # not merely nearby), so the anti-noise argument for 8 no longer
+      # outweighs the miss risk.
+      min_points: 3
+      visualize: true
+      polygon_pub_topic: "polygon_approach"
+      enabled: true
+    # NARROW near-field hard stop (SAFETY_REVIEW_2026-07-23 A-C1): last-ditch
+    # catcher for thin obstacles dead ahead of the chassis front. Unlike the
+    # old full-chassis static PolygonStop (disabled below — it froze cmd_vel
+    # mid-skirt on obstacles already steered around), this box covers ONLY the
+    # band immediately IN FRONT of the chassis leading edge (x 0.48→0.62), so
+    # an obstacle FTC has skirted — abeam or behind — can never re-trigger it.
+    # min_points 2: at 0.6 m even a 2 cm cane subtends ~2 bins; anything
+    # physically inside this 14 cm band on a collision course must stop us.
+    # If it flaps at the dock approach, note docking cmd_vel bypasses
+    # collision_monitor (twist_mux /cmd_vel_docking lane) — only nav motion
+    # is gated.
+    PolygonStopNarrow:
+      type: "polygon"
+      points: "[[0.62, 0.20], [0.62, -0.20], [0.48, -0.20], [0.48, 0.20]]"
+      action_type: "stop"
+      min_points: 2
+      visualize: true
+      polygon_pub_topic: "polygon_stop_narrow"
+      enabled: true
+    # DISABLED — retained for history. This was the original hard stop: a STATIC
+    # box around the chassis. It kept firing on obstacles already steered-around
+    # that lingered inside the fixed box, freezing cmd_vel mid-skirt, so it was
+    # disabled — which left ROS2 with no stop layer at all until FootprintApproach
+    # above replaced it (2026-07-21). Do NOT re-activate without re-reading that
+    # history: the velocity-projected approach is the deliberate replacement.
+    # Coords are [forward_left, forward_right, rear_right, rear_left] in
+    # base_footprint; ±0.18 sat INSIDE the chassis half-width (0.20) so our own
+    # chassis edge fell outside the box.
     PolygonStop:
       type: "polygon"
-      # INSIDE the chassis on Y (chassis half-width 0.20, polygon at
-      # ±0.18) so any LiDAR return from our own chassis edge falls
-      # OUTSIDE the polygon and doesn't trip a stop. Forward extent
-      # still well past the chassis front (chassis front edge at
-      # base_link +0.48). Coords are
-      # [forward_left, forward_right, rear_right, rear_left] in
-      # base_footprint frame.
-      # NOTE: this loses some real-obstacle protection vs. the
-      # production "chassis + 5 cm" target (originally ±0.25). The
-      # right long-term fix is a chassis-blank filter on /scan,
-      # tracked separately.
       points: "[[0.55, 0.18], [0.55, -0.18], [-0.15, -0.18], [-0.15, 0.18]]"
       action_type: "stop"
-      # 8 points: tight enough that a single stray return doesn't trip
-      # a stop, loose enough that a real obstacle (legs, dock) reliably
-      # does. Tuned vs the LD19's 7 Hz × ~455-bin sweep.
       min_points: 8
-      visualize: true
+      visualize: false
       polygon_pub_topic: "polygon_stop"
-      enabled: true
+      enabled: false
     PolygonSlow:
       type: "polygon"
       # Chassis + 15 cm — slow to 30% when obstacle is close
       points: "[[0.65, 0.35], [0.65, -0.35], [-0.25, -0.35], [-0.25, 0.35]]"
       action_type: "slowdown"
-      slowdown_ratio: 0.3
+      slowdown_ratio: 0.5
       # 12 points: the dock structure sits near the polygon boundary
       # when charging, causing rapid slow/normal flapping at 10 Hz.
       # Higher min_points adds hysteresis against that edge noise.

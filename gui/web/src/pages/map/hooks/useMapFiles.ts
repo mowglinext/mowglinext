@@ -195,6 +195,9 @@ export function useMapFiles({
                     // Manual map-drag: use the dragged coordinates as-is (operator
                     // placed the dock marker explicitly — do NOT override with GPS).
                     use_gps_position: false,
+                    // Honour the dragged heading (SetDockingPoint yaw_source REQUEST=1);
+                    // the map-drag yaw is operator-set, never circular.
+                    yaw_source: 1,
                 });
                 setDockDirty(false);
             }
