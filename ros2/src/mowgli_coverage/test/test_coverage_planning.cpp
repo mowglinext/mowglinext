@@ -1001,6 +1001,69 @@ TEST(CoveragePlanning, TurnArcFootprintStaysInsideRecordedBoundary)
       << " poses) — edge turns forced below min_turning_radius into straight-fallback splits";
 }
 
+// SAFETY REGRESSION (#388): outermost-ring connector start outside the clearance
+// ring. With the DEFAULT chassis_safety_inset = 0 the outermost headland ring
+// rides ON the recorded line, and F2C rounds the ring (generateHeadlandSwaths)
+// and the clearance boundary (generateHeadlands) differently at convex corners —
+// so a few outermost-ring vertices poke a few cm PAST the clearance ring. The
+// first such pose is the seg-1 start TransitToStrip drives to; sitting outside
+// the recorded line (in the keepout mask's lethal band) it made the blade-off
+// transit un-drivable and the whole sub-path was skipped, collapsing coverage to
+// the outer rings. buildContinuousSubPaths now projects every out-of-bounds pose
+// back just inside the clearance ring. This asserts the continuous path — every
+// pose, on the operator's REAL boundary-hugging recorded garden — stays inside
+// the clearance ring the connectors are bounded to.
+TEST(CoverageContinuousPath, OutermostRingStaysInsideClearanceRingOnTheLine)
+{
+  constexpr double kOpWidth = 0.16;
+  constexpr double kHeadland = 0.18;
+  constexpr double kMinSwath = 0.15;
+  constexpr double kInset = 0.0;  // DEFAULT: outermost ring rides ON the recorded line
+  constexpr double kTurnRadius = 0.18;
+  constexpr double kMinTurnRadius = 0.15;
+  constexpr double kStep = 0.03;
+  // Matches the server's kBoundarySlackM verify slack (coverage_server.cpp): a
+  // pose within this of the ring from outside is on-the-line densification noise,
+  // not a real excursion. The clamp places poses strictly INSIDE, so the check
+  // below (pointInRing OR within slack) is met with room to spare.
+  constexpr double kBoundarySlack = 0.05;
+
+  const auto cell = makeRecordedArea1();
+  const auto plan =
+      planBoustrophedon(cell, kOpWidth, kHeadland, 0, kInset, -1.0, kMinSwath, 0, kMinTurnRadius);
+  ASSERT_FALSE(plan.rings.empty()) << "no rings planned";
+  ASSERT_GE(plan.connector_clearance_boundary.size(), 3u)
+      << "connector_clearance_boundary not populated";
+  const std::vector<std::pair<double, double>>& clearance = plan.connector_clearance_boundary;
+
+  // The server bounds/verifies against connector_clearance_boundary — mirror that.
+  const auto subs =
+      buildContinuousSubPaths(plan, clearance, kTurnRadius, kMinTurnRadius, kStep);
+  ASSERT_FALSE(subs.empty()) << "no continuous sub-paths built";
+
+  std::size_t out_of_bounds = 0;
+  double worst = 0.0;
+  for (const auto& sub : subs)
+  {
+    for (const auto& p : sub)
+    {
+      if (!pointInRing(p.first, p.second, clearance))
+      {
+        const double d = distanceToRing(p.first, p.second, clearance);
+        worst = std::max(worst, d);
+        if (d > kBoundarySlack)
+        {
+          ++out_of_bounds;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(out_of_bounds, 0u)
+      << out_of_bounds
+      << " continuous-path pose(s) outside the outermost-ring clearance ring (worst " << worst
+      << " m past it) — the connector/ring geometry escaped the safety inset (#388)";
+}
+
 // Headland-on-the-line: with chassis_safety_inset = 0 (the new default) the
 // OUTERMOST ring rides ON the recorded boundary — the perimeter the operator
 // drove — so its centerline comes within a densify step of the line instead of
