@@ -317,6 +317,39 @@ if(BUILD_TESTING)
     action_msgs
   )
 
+  # ---- test_coverage_resume_location ----
+  # Regression: resolveResumeLocation is the SHARED resume-cursor mapping used by
+  # both FollowStrip (trim/mark driven units) and PlanCoverageArea (aim the
+  # blade-off transit at the resume point). If they disagreed, the robot would
+  # arrive at one place then re-transit elsewhere. Pins the mapping + guards.
+  ament_add_gtest(test_coverage_resume_location
+    test/test_coverage_resume_location.cpp
+    src/coverage_nodes.cpp
+    src/coverage_persistence.cpp
+  )
+
+  target_include_directories(test_coverage_resume_location PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_coverage_resume_location
+    rclcpp
+    rclcpp_action
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+    rcl_interfaces
+    action_msgs
+  )
+
   # ---- test_swath_progress ----
   # Regression: the GUI live mowing-progress scalars (ctx.total_swaths /
   # ctx.completed_swaths, behind HighLevelStatus.current_path / current_path_index)

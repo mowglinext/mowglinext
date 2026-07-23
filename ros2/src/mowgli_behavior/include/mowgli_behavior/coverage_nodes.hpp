@@ -51,6 +51,30 @@ namespace mowgli_behavior
 inline constexpr double kMowAngleAutoDeg = -1.0;
 
 // ---------------------------------------------------------------------------
+// Resume-cursor resolution — shared between FollowStrip (which trims the driven
+// prefix and marks fully-driven sub-paths done) and PlanCoverageArea (which aims
+// the blade-off transit at the resume point instead of the ring start). Both MUST
+// agree on WHERE a resume begins; if they don't, the robot arrives at one place
+// and then re-transits to another (the "arrive, wait, drive off elsewhere" bug).
+// Keeping the mapping in ONE function is what guarantees they can't drift apart.
+// ---------------------------------------------------------------------------
+struct ResumeLocation
+{
+  bool valid = false;    ///< false → no resumable cursor; mow fresh from pose 0.
+  std::size_t unit = 0;  ///< index of the sub-path the cursor lands in (units 0..unit-1 are done).
+  std::size_t local = 0;  ///< local offset to trim to; 0 → resume at the unit's front pose.
+};
+
+/// Map an absolute resume cursor (index into the sub-path concatenation) to the
+/// sub-path unit and local offset at which mowing resumes. Applies the guards
+/// FollowStrip uses: a cursor of 0 (or within 2 poses of the very end) is not
+/// resumable, and a landing offset is only trimmed mid-unit when it is strictly
+/// interior (local > 0 and at least 2 poses before the unit end) — otherwise the
+/// resume snaps to the unit's front. `total_poses` is the sum of unit sizes.
+ResumeLocation resolveResumeLocation(const std::vector<nav_msgs::msg::Path>& units,
+                                     std::size_t cursor, std::size_t total_poses);
+
+// ---------------------------------------------------------------------------
 // refreshSwathProgress — publish the GUI-facing live swath progress for the
 // area currently being mown.
 //

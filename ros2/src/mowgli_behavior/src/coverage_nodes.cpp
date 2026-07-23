@@ -68,6 +68,35 @@ uint64_t hashPlanGeometry(const std::vector<nav_msgs::msg::Path>& units)
 
 }  // namespace
 
+ResumeLocation resolveResumeLocation(const std::vector<nav_msgs::msg::Path>& units,
+                                     std::size_t cursor, std::size_t total_poses)
+{
+  ResumeLocation loc;
+  // A cursor at 0 (never interrupted) or within 2 poses of the very end (whole
+  // path effectively done) is not worth resuming — mow fresh from the start.
+  if (cursor == 0 || cursor + 2 >= total_poses)
+  {
+    return loc;
+  }
+  std::size_t k = 0;
+  std::size_t local = cursor;
+  while (k < units.size() && local >= units[k].poses.size())
+  {
+    local -= units[k].poses.size();
+    ++k;
+  }
+  if (k >= units.size())
+  {
+    return loc;  // cursor ran past the concatenation (stale/mismatched) — fresh start
+  }
+  loc.valid = true;
+  loc.unit = k;
+  // Only trim mid-unit when the landing offset is strictly interior; otherwise
+  // snap to the unit's front (a near-boundary trim would leave a 1-2 pose stub).
+  loc.local = (local > 0 && local + 2 < units[k].poses.size()) ? local : 0;
+  return loc;
+}
+
 void refreshSwathProgress(BTContext& ctx, uint32_t area_idx, std::size_t unit_count)
 {
   // Denominator = drivable units in the plan; numerator = units recorded mowed
@@ -232,31 +261,27 @@ BT::NodeStatus FollowStrip::onStart()
   // already-driven prefix. Guard against a stale/last-pose cursor.
   {
     auto it = ctx->area_resume_pose_index.find(area_idx_);
-    if (it != ctx->area_resume_pose_index.end() && it->second > 0 &&
-        it->second + 2 < total_path_poses_)
+    if (it != ctx->area_resume_pose_index.end())
     {
       const std::size_t cursor = it->second;
-      std::size_t k = 0;
-      std::size_t local = cursor;
-      while (k < units.size() && local >= units[k].poses.size())
+      // Shared with PlanCoverageArea's transit goal (resolveResumeLocation) so the
+      // transit lands EXACTLY where we resume — no redundant second hop.
+      const ResumeLocation rl = resolveResumeLocation(units, cursor, total_path_poses_);
+      if (rl.valid)
       {
-        local -= units[k].poses.size();
-        ++k;
-      }
-      if (k < units.size())
-      {
-        for (std::size_t j = 0; j < k; ++j)
+        for (std::size_t j = 0; j < rl.unit; ++j)
         {
           ctx->area_completed_swaths[area_idx_].insert(j);  // fully-driven units
         }
-        if (local > 0 && local + 2 < units[k].poses.size())
+        if (rl.local > 0)
         {
-          resume_start_idx_ = local;
+          resume_start_idx_ = rl.local;
           nav_msgs::msg::Path trimmed;
-          trimmed.header = units[k].header;
-          trimmed.poses.assign(units[k].poses.begin() + static_cast<std::ptrdiff_t>(local),
-                               units[k].poses.end());
-          units[k] = std::move(trimmed);
+          trimmed.header = units[rl.unit].header;
+          trimmed.poses.assign(
+              units[rl.unit].poses.begin() + static_cast<std::ptrdiff_t>(rl.local),
+              units[rl.unit].poses.end());
+          units[rl.unit] = std::move(trimmed);
         }
         RCLCPP_INFO(ctx->node->get_logger(),
                     "FollowStrip: RESUMING area %u at pose %zu/%zu (%.0f%% already driven) — "
@@ -265,7 +290,7 @@ BT::NodeStatus FollowStrip::onStart()
                     cursor,
                     total_path_poses_,
                     100.0 * static_cast<double>(cursor) / static_cast<double>(total_path_poses_),
-                    k + 1,
+                    rl.unit + 1,
                     units.size());
       }
     }
@@ -1817,12 +1842,65 @@ BT::NodeStatus PlanCoverageArea::onRunning()
     }
     full_plan_pub_->publish(ctx->current_strip_path);
 
-    // Transit goal = the start of the sub-path FollowStrip will actually
-    // drive first (NOT segments.front() — segments is bookkeeping and, per
-    // the guard above, could theoretically diverge from drivable_subpaths).
-    // TransitToStrip (Nav2 Smac, obstacle/boundary-aware) drives the robot
-    // there blade-off; FollowStrip then mows from exactly that pose.
-    ctx->current_transit_goal = wrapped.result->drivable_subpaths.front().poses.front();
+    // Transit goal = the pose FollowStrip will ACTUALLY start driving from.
+    // TransitToStrip (Nav2 Smac, obstacle/boundary-aware) drives the robot there
+    // blade-off; FollowStrip then mows from exactly that pose.
+    //
+    // Normally that is the start of the first sub-path (pose 0). On a RESUME,
+    // however, FollowStrip trims INTO the sub-path concatenation at the persisted
+    // cursor (see FollowStrip::onStart), so pose 0 is the WRONG target: the robot
+    // would arrive at the ring start and FollowStrip would then fire a SECOND,
+    // redundant blade-off transit to the resume point — the observed "arrive,
+    // wait for spin-up, then drive ~10 m off elsewhere". Resolve the resume point
+    // here so TransitToStrip goes straight to it and FollowStrip's first-segment
+    // gap collapses to ~0 (ONE transit, not two).
+    //
+    // This mirrors FollowStrip::onStart's resume mapping + plan-fingerprint
+    // staleness guard, but READ-ONLY: FollowStrip stays the sole authority (it
+    // still discards stale state, marks driven units, and trims). If the two ever
+    // disagree at an edge, the worst case degrades to today's redundant blade-off
+    // transit — never a blade-on crossing.
+    const uint32_t area_idx =
+        (ctx->current_area >= 0) ? static_cast<uint32_t>(ctx->current_area) : 0u;
+    auto transit_goal = wrapped.result->drivable_subpaths.front().poses.front();
+    {
+      // Build the drivable units EXACTLY as FollowStrip does (poses.size() >= 2),
+      // so the fingerprint and the resume mapping match its authoritative pass.
+      std::vector<nav_msgs::msg::Path> units;
+      std::size_t total = 0;
+      for (const auto& sp : wrapped.result->drivable_subpaths)
+      {
+        if (sp.poses.size() >= 2)
+        {
+          total += sp.poses.size();
+          units.push_back(sp);
+        }
+      }
+      auto cit = ctx->area_resume_pose_index.find(area_idx);
+      auto fpit = ctx->area_plan_fingerprint.find(area_idx);
+      // Honor a persisted cursor only when the re-planned geometry still matches
+      // (same staleness key FollowStrip uses); otherwise FollowStrip will mow
+      // fresh from pose 0 and the transit must stay at pose 0 too.
+      const bool fingerprint_ok =
+          fpit == ctx->area_plan_fingerprint.end() || fpit->second == hashPlanGeometry(units);
+      if (cit != ctx->area_resume_pose_index.end() && fingerprint_ok)
+      {
+        const ResumeLocation rl = resolveResumeLocation(units, cit->second, total);
+        if (rl.valid)
+        {
+          transit_goal = units[rl.unit].poses[rl.local];
+          RCLCPP_INFO(ctx->node->get_logger(),
+                      "PlanCoverageArea: resume cursor %zu/%zu → transit straight to the resume "
+                      "point (sub-path %zu/%zu, local pose %zu) — no redundant strip-start hop",
+                      cit->second,
+                      total,
+                      rl.unit + 1,
+                      units.size(),
+                      rl.local);
+        }
+      }
+    }
+    ctx->current_transit_goal = transit_goal;
     ctx->current_transit_goal.header = wrapped.result->full_path.header;
 
     RCLCPP_INFO(ctx->node->get_logger(),
