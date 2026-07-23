@@ -4,4 +4,8 @@
 	branch = main
 [submodule "ros2/src/external/universal-gnss"]
 	path = ros2/src/external/universal-gnss
-	url = https://github.com/pepeuch/universal-gnss.git
+	# Pinned to the mowglinext fork while Pepeuch/universal-gnss#4 (GLONASS 1230
+	# optional-for-RTK correction-health fix, issue #395) is pending upstream
+	# review. Revert to https://github.com/pepeuch/universal-gnss.git once merged.
+	url = https://github.com/mowglinext/universal-gnss.git
+	branch = fix/glonass-1230-optional-correction-health
