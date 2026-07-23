@@ -117,7 +117,7 @@ jobs:
       # same recipe here, cached so subsequent runs are instant.
       - name: Cache GTSAM build
         id: cache-gtsam
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /opt/gtsam
           key: gtsam-4.3a1-${{ runner.os }}-noble
@@ -171,7 +171,7 @@ jobs:
       # invalidates when the pin moves.
       - name: Cache Fields2Cover build
         id: cache-f2c
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /opt/fields2cover-300
           key: f2c-3.0.0-884d895-${{ runner.os }}-noble
@@ -219,7 +219,7 @@ jobs:
           echo "CMAKE_PREFIX_PATH=/opt/fields2cover-300:$CMAKE_PREFIX_PATH" >> $GITHUB_ENV
 
       - name: Cache rosdep
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.ros/rosdep
           key: rosdep-${{ matrix.ros_distro }}-${{ hashFiles('ros2/src/**/package.xml', 'tools/motor/package.xml') }}
@@ -254,7 +254,7 @@ jobs:
             -y
 
       - name: Cache colcon workspace
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ros2/build

@@ -43,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.platformio
           key: pio-${{ matrix.environment }}-${{ hashFiles('firmware/stm32/ros_usbnode/platformio.ini') }}
@@ -83,7 +83,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.platformio
           key: pio-release-${{ hashFiles('firmware/stm32/ros_usbnode/platformio.ini') }}
