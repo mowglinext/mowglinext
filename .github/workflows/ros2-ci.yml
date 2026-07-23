@@ -6,12 +6,14 @@ on:
     paths:
       - 'ros2/**'
       - 'tools/motor/**'
+      - 'install/config/mowgli/**'
       - '.github/workflows/ros2-ci.yml'
   pull_request:
     branches: [main]
     paths:
       - 'ros2/**'
       - 'tools/motor/**'
+      - 'install/config/mowgli/**'
       - '.github/workflows/ros2-ci.yml'
 
 concurrency:
@@ -28,7 +30,10 @@ jobs:
   # field (chassis geometry, wheel kinematics, sensor mounts) is defined in both
   # files with divergent values, or added to the installed file with no template
   # default — either of which silently gives Nav2/URDF/coverage the wrong
-  # chassis. No ROS2 setup needed; runs in seconds as a hard gate.
+  # chassis. It also fails (issue #381) if the committed sparse file pads a key
+  # with a value EQUAL to its template default — a no-op at merge time that
+  # silently pins robots to a stale value when the template default is later
+  # changed. No ROS2 setup needed; runs in seconds as a hard gate.
   config-drift:
     name: Config Drift (mowgli_robot.yaml)
     runs-on: ubuntu-24.04
@@ -36,10 +41,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Check mowgli_robot.yaml structural drift
+      - name: Check mowgli_robot.yaml drift + padded defaults
         run: |
           python3 -m pip install --quiet pyyaml
           python3 ros2/scripts/check_config_drift.py
+
+      - name: Unit-test check_config_drift.py
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest -q ros2/scripts/test_check_config_drift.py
 
   # ─── Build & Test ────────────────────────────────────────────────────────────
   build-and-test:
