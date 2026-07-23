@@ -26,7 +26,7 @@ jobs:
     name: board_defaults single-source guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
@@ -41,7 +41,7 @@ jobs:
           - Yardforce500
           - Yardforce500B
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/cache@v4
         with:
@@ -79,7 +79,7 @@ jobs:
       # Full history so package_release.py's git rev-list count (and the
       # git_build_id.py version baked into the binary) resolve to the real
       # commit count, not the shallow-clone default of 1.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
