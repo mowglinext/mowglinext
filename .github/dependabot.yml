@@ -3,6 +3,7 @@ updates:
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
+    target-branch: "dev"
     schedule:
       interval: "weekly"
     labels:
@@ -12,6 +13,7 @@ updates:
   # Go (GUI)
   - package-ecosystem: "gomod"
     directory: "/gui"
+    target-branch: "dev"
     schedule:
       interval: "weekly"
     labels:
@@ -21,6 +23,7 @@ updates:
   # npm (GUI frontend)
   - package-ecosystem: "npm"
     directory: "/gui/web"
+    target-branch: "dev"
     schedule:
       interval: "weekly"
     labels:
@@ -30,6 +33,7 @@ updates:
   # Docker (ROS2)
   - package-ecosystem: "docker"
     directory: "/ros2"
+    target-branch: "dev"
     schedule:
       interval: "monthly"
     labels:
@@ -39,6 +43,7 @@ updates:
   # Docker (sensors)
   - package-ecosystem: "docker"
     directory: "/sensors/gps"
+    target-branch: "dev"
     schedule:
       interval: "monthly"
     labels:
@@ -47,6 +52,7 @@ updates:
 
   - package-ecosystem: "docker"
     directory: "/sensors/lidar"
+    target-branch: "dev"
     schedule:
       interval: "monthly"
     labels:
