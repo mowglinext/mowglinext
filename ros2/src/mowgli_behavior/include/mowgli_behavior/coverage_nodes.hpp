@@ -101,6 +101,21 @@ void refreshSwathProgress(BTContext& ctx, uint32_t area_idx, std::size_t unit_co
 float coveragePercentFromCursor(std::size_t absolute_cursor, std::size_t total_poses);
 
 // ---------------------------------------------------------------------------
+// forwardSkipIndex — smallest index > `from` whose cumulative path arc-length
+// from poses[from] is at least `skip_dist_m`, bounded to poses.size()-1. Returns
+// `from` unchanged when the path is too short, `from` is out of range, or
+// skip_dist_m <= 0. Pure/free so it is unit-testable without ROS.
+//
+// Used to step the resume cursor PAST a non-obstacle FTC abort (issue #389): a
+// re-dispatch that resumes ON the identical abort pose re-aborts there forever
+// (deterministic ~20 % stall). Skipping a bounded arc-length ahead lands the
+// resume beyond the offending path feature (curvature spike / connector arc /
+// goal-checker quirk) and guarantees the cursor advances monotonically.
+// ---------------------------------------------------------------------------
+std::size_t forwardSkipIndex(const std::vector<geometry_msgs::msg::PoseStamped>& poses,
+                             std::size_t from, double skip_dist_m);
+
+// ---------------------------------------------------------------------------
 // FollowStrip — execute the planned coverage path, blade ON.
 //
 // Consumes ctx->current_strip_subpaths (the hole-free, continuous drivable
@@ -298,6 +313,18 @@ private:
   // boundary band only because kDetourLethalCost is 100 and the TRUE lethal wall
   // sits enforce_boundary_margin_m (0.40 m) outside the outer ring (> 0.35).
   static constexpr double kDetourWedgeRadiusM = 0.35;
+
+  // Arc-length the resume cursor is stepped FORWARD past a NON-obstacle FTC abort
+  // (issue #389). When tryStartDetour declines (no lethal cell ahead / budget
+  // spent / no costmap) the abort is not a skirtable obstacle, so persisting the
+  // cursor AT the abort pose makes the next dispatch resume on the identical pose
+  // and re-abort there forever (deterministic ~20 % stall, capping every
+  // sub-path). Skipping this far ahead lands the re-dispatch beyond the offending
+  // path feature and guarantees the cursor advances monotonically on every such
+  // abort. MUST exceed kSegmentTransitGap (0.6 m) so the resume reaches the
+  // skipped span as a blade-off transit (see sendCurrentSwath's gap guard) rather
+  // than driving through it blade-on. Matches kDetourMinSkipM for the same reason.
+  static constexpr double kNonObstacleAbortSkipM = 0.8;
 
   // Max time to hold (blade off) waiting for navigate_to_pose to become ready to
   // run a required inter-swath transit. If the server never comes up in this

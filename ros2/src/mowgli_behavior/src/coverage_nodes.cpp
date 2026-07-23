@@ -117,6 +117,27 @@ float coveragePercentFromCursor(std::size_t absolute_cursor, std::size_t total_p
   return std::clamp(pct, 0.0f, 100.0f);
 }
 
+std::size_t forwardSkipIndex(const std::vector<geometry_msgs::msg::PoseStamped>& poses,
+                             std::size_t from, double skip_dist_m)
+{
+  if (poses.size() < 2 || from + 1 >= poses.size() || skip_dist_m <= 0.0)
+  {
+    return from;
+  }
+  double arc = 0.0;
+  for (std::size_t i = from; i + 1 < poses.size(); ++i)
+  {
+    const auto& a = poses[i].pose.position;
+    const auto& b = poses[i + 1].pose.position;
+    arc += std::hypot(b.x - a.x, b.y - a.y);
+    if (arc >= skip_dist_m)
+    {
+      return i + 1;
+    }
+  }
+  return poses.size() - 1;  // whole remaining unit shorter than the skip → snap to end
+}
+
 // ===========================================================================
 // FollowStrip — execute the coverage plan as ONE CONTINUOUS joined path
 // ===========================================================================
@@ -884,16 +905,42 @@ BT::NodeStatus FollowStrip::onRunning()
       follow_handle_.reset();
       return BT::NodeStatus::RUNNING;
     }
+    // NON-OBSTACLE / un-detourable abort (issue #389). tryStartDetour declined
+    // (no lethal cell ahead, budget spent, or no costmap), so the abort is not a
+    // skirtable obstacle. Persisting the resume cursor AT the abort pose makes the
+    // next dispatch resume on the identical pose and re-abort there — a
+    // deterministic stall that caps the sub-path at the abort fraction forever
+    // (observed ~20 %). Step the cursor PAST the abort pose by kNonObstacleAbortSkipM
+    // of arc-length so the re-dispatch lands beyond the offending path feature (a
+    // curvature spike / connector arc / goal-checker quirk); the skip exceeds
+    // kSegmentTransitGap, so the resume reaches it as a blade-off transit that
+    // routes around the skipped span. Advancing path_progress_idx_ (the furthest
+    // pose reached in the trimmed current unit) before persisting is what moves the
+    // saved absolute cursor forward — guaranteeing monotonic progress on every
+    // non-obstacle abort. The cost is a small un-mowed gap at the abort feature
+    // (acceptance criteria (b) of #389). advance() resets path_progress_idx_ for
+    // the next unit, so this local bump does not leak.
+    const std::size_t reached_idx = path_progress_idx_;
+    if (swath_idx_ < swaths_.size())
+    {
+      path_progress_idx_ =
+          forwardSkipIndex(swaths_[swath_idx_].poses, path_progress_idx_, kNonObstacleAbortSkipM);
+    }
     RCLCPP_WARN(ctx->node->get_logger(),
-                "FollowStrip: unit %zu/%zu aborted/canceled at %.0f%% of the unit (area %u) — "
-                "saving resume cursor",
+                "FollowStrip: unit %zu/%zu aborted/canceled at %.0f%% of the unit (area %u), not "
+                "obstacle-related — stepping resume cursor %zu→%zu poses (~%.2fm) past the abort "
+                "to break the deterministic re-abort loop",
                 swath_idx_ + 1,
                 swaths_.size(),
                 100.0 * frac,
-                area_idx_);
-    // Persist where we got to so the next dispatch resumes here instead of
-    // re-mowing from the start, and so the partial coverage_percent keeps
-    // GetNextUnmowedArea from abandoning a still-progressing area.
+                area_idx_,
+                reached_idx,
+                path_progress_idx_,
+                kNonObstacleAbortSkipM);
+    // Persist the (advanced) cursor so the next dispatch resumes past the abort
+    // feature instead of re-mowing from the start or re-aborting in place, and so
+    // the partial coverage_percent keeps GetNextUnmowedArea from abandoning a
+    // still-progressing area.
     persistResumeCursor(ctx);
     follow_handle_.reset();
     ++swaths_skipped_;
