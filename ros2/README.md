@@ -118,7 +118,7 @@ Originally inspired by the [OpenMower](https://github.com/ClemensElflein/open_mo
 | `mowgli_map` | `map_server_node` `obstacle_tracker_node` | GridMap with 4 layers, area CRUD services, keepout/speed filter masks, mow progress tracking (`~/get_coverage_status`). Persistent LiDAR obstacle detection |
 | `mowgli_nav2_plugins` | — | `FTCController` Nav2 controller plugin library loaded by `controller_server` |
 | `mowgli_monitoring` | `diagnostics_node` `mqtt_bridge_node` | Diagnostics aggregator monitoring 8 subsystems at 1 Hz. Optional MQTT bridge |
-| `mowgli_simulation` | `gps_degradation_sim_node` `navsat_to_pose_node` | Gazebo Harmonic worlds, SDF mower model, GPS degradation simulator |
+| `mowgli_simulation` | `gps_degradation_sim_node` `navsat_to_pose_node` | Webots worlds and controllers, simulated mower sensors, GPS degradation simulator |
 
 ---
 
@@ -163,7 +163,7 @@ Frame conventions follow REP-105: `map` (global, GPS-anchored via fixed datum), 
 | `/odometry/filtered` | `nav_msgs/msg/Odometry` | `fusion_graph_node` (local, odom frame — dead reckoning) | node rate |
 | `/odometry/filtered_map` | `nav_msgs/msg/Odometry` | `fusion_graph_node` (global, map frame) | node rate |
 | `/fusion_graph/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | `fusion_graph_node` | ~1 Hz |
-| `/scan` | `sensor_msgs/msg/LaserScan` | LiDAR driver or Gazebo bridge | ~10 Hz |
+| `/scan` | `sensor_msgs/msg/LaserScan` | LiDAR driver or Webots bridge | ~10 Hz |
 | `/behavior_tree_node/high_level_status` | `mowgli_interfaces/msg/HighLevelStatus` | `behavior_tree_node` | on BT tick |
 | `/map_server_node/coverage_cells` | `nav_msgs/msg/OccupancyGrid` | `map_server_node` | on change |
 | `/map_server_node/grid_map` | `grid_map_msgs/msg/GridMap` | `map_server_node` | configurable |
@@ -461,15 +461,15 @@ INCLUDE_OPENNAV_COVERAGE_STACK=1 ./scripts/build.sh
 | `build-interfaces` | `deps` | `mowgli_interfaces` compiled only (cached layer, rarely rebuilt) |
 | `build` | `build-interfaces` | All remaining packages compiled, unit tests run |
 | `runtime` | `base` | Compiled install tree + rosbridge CBOR patch applied. Sets `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` |
-| `simulation` | `runtime` | Gazebo Harmonic + TigerVNC + noVNC for GUI access |
+| `simulation` | `runtime` | Webots + TigerVNC + noVNC for GUI access |
 
 ### Docker Compose Services
 
 | Service | Image | Ports | Use case |
 |---------|-------|-------|----------|
 | `mowgli` | `runtime` | — | Real hardware — requires `/dev/mowgli` serial device |
-| `simulation` | `simulation` | `8765` | Headless Gazebo + full nav stack |
-| `simulation-gui` | `simulation` | `8765`, `6080` | Gazebo GUI via noVNC |
+| `simulation` | `simulation` | `8765` | Headless Webots + full nav stack |
+| `simulation-gui` | `simulation` | `8765`, `6080` | Webots GUI via noVNC |
 | `nav` | `runtime` | — | Navigation stack only (no hardware bridge) |
 | `dev-sim` | `dev` | `8765`, `6080` | Development with bind-mounted source tree |
 | `dev-sim-small` | `dev` | `8765`, `6080` | Small 10m x 8m garden for fast iteration |
@@ -498,14 +498,43 @@ uses a dedicated tuning lane: the tuner publishes `TwistStamped` commands on
 docker compose up mowgli
 ```
 
-### Running Simulation
+### Running Webots Simulation
+
+From a clean checkout, initialise submodules before building the GUI image:
 
 ```bash
-# Headless — connect Foxglove Studio to ws://localhost:8765
-make run-sim
+git clone --recurse-submodules https://github.com/mowglinext/mowglinext.git
+cd mowglinext
+git submodule update --init --recursive
+docker compose -f docker/docker-compose.simulation.yaml build simulation-gui
+docker compose -f docker/docker-compose.simulation.yaml up -d simulation-gui
+```
 
-# With Gazebo GUI — open http://localhost:6080/vnc.html
-make run-sim-gui
+Open the Webots display through noVNC at
+`http://localhost:6080/vnc.html`, and connect Foxglove Studio to
+`ws://localhost:8765`.
+
+On Windows Docker Desktop the GUI can use CPU software rendering. This is
+functional but may be slower than native rendering. GPU acceleration has not
+been verified by this project documentation. The GUI workflow has been
+verified on Windows Docker Desktop; native Linux, macOS, ARM, and Raspberry Pi
+GUI simulation have not been verified here. The normal runtime image remains
+architecture-neutral, while the Webots simulation image requires the official
+Linux amd64 Webots package.
+
+To stop the GUI service and inspect it:
+
+```bash
+docker compose -f docker/docker-compose.simulation.yaml logs --tail=300 simulation-gui
+docker compose -f docker/docker-compose.simulation.yaml down
+```
+
+For local ROS 2 development on a Linux ROS workspace, the headless Make target
+is available from `ros2/`:
+
+```bash
+cd ros2
+make sim
 ```
 
 ### Development Workflow
@@ -568,7 +597,7 @@ A `systemd/mowgli.service` unit file is provided for running the stack as a syst
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `use_sim_time` | `false` | Use Gazebo simulation clock |
+| `use_sim_time` | `false` | Use the simulation clock |
 | `serial_port` | `/dev/mowgli` | Hardware bridge serial device |
 | `use_lidar` | `true` | Launch LiDAR-dependent nodes (fusion_graph scan-matching + loop-closure, obstacle layer, collision-monitor scan). `false` runs a GPS-only configuration |
 | `enable_mqtt` | `false` | Launch MQTT bridge node |
@@ -581,7 +610,7 @@ A `systemd/mowgli.service` unit file is provided for running the stack as a syst
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `use_sim_time` | `false` | Use Gazebo simulation clock |
+| `use_sim_time` | `false` | Use the simulation clock |
 | `use_lidar` | `true` | Launch LiDAR-aware Nav2 config (base params + `nav2_params_lidar.yaml` overlay). `false` uses the `nav2_params_no_lidar.yaml` overlay |
 | `use_scan_matching` | from `mowgli_robot.yaml` | Add LiDAR scan-matching between-factors to the `fusion_graph` graph |
 | `use_loop_closure` | from `mowgli_robot.yaml` | Add loop-closure factors to the `fusion_graph` graph (also gated on a persisted graph file existing) |
@@ -590,9 +619,9 @@ A `systemd/mowgli.service` unit file is provided for running the stack as a syst
 
 | File | Description |
 |------|-------------|
-| `sim_full_system.launch.py` | Full stack with Gazebo Harmonic (headless by default) |
+| `sim_full_system.launch.py` | Full stack with Webots (headless by default) |
 | `sim_small_garden.launch.py` | 10m x 8m garden for boundary and path testing |
-| `simulation.launch.py` | Gazebo and `ros_gz_bridge` only |
+| `simulation.launch.py` | Webots controller integration only |
 
 ---
 
@@ -727,17 +756,18 @@ MowingSequence
 
 ## Simulation
 
-Gazebo Harmonic worlds in `src/mowgli_simulation/worlds/`:
+The default Webots world is
+`src/mowgli_simulation/worlds_webots/mowgli_garden.wbt`. Select another
+available world with the `world` launch argument.
 
 | World | Size | Use |
 |-------|------|-----|
-| `garden.sdf` | Full garden | End-to-end coverage testing |
-| `small_garden.sdf` | 10m x 8m | Boundary and path testing (fast iteration) |
-| `empty_garden.sdf` | Flat plane | Controller and localization testing |
+| `mowgli_garden.wbt` | Default garden | End-to-end coverage testing |
 
-The SDF model in `src/mowgli_simulation/models/mowgli_mower/model.sdf` provides a differential drive plugin, 360-degree LiDAR (range_min=0.35m to suppress chassis self-reflections), IMU, and GPS. Sensor data is bridged to ROS2 via `ros_gz_bridge`.
-
-Changes to `model.sdf` require a Docker image rebuild. Bind-mounting the models directory breaks Gazebo sensor initialization.
+The `MowgliMower.proto` robot and `Ros2Supervisor` controller provide
+differential drive, LiDAR, IMU, GPS, and simulated sensor interfaces to ROS 2.
+Rebuild the Docker image after changing simulation assets that are copied into
+the image.
 
 ### Foxglove Studio
 
