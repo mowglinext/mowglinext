@@ -317,3 +317,49 @@ TEST(DetourResume, MinSkipExceedsTransitGap)
   EXPECT_GT(DetourResumeCfg{}.min_skip_dist_m,
             mowgli_interfaces::coverage_geometry::kSegmentTransitGapM);
 }
+
+// ---------------------------------------------------------------------------
+// REGRESSION 2026-07: outer-ring rides ON the recorded boundary
+// (chassis_safety_inset 0). The keepout wall is LETHAL(100) 0.40 m outside the
+// line and its inflated INSCRIBED band (published value 99) reaches 0.20 m
+// outside the line — i.e. permanently within the wedge radius (0.35) and the
+// resume footprint radius (0.25) of EVERY outer-ring pose. With the old
+// lethal_cost = 90 the 99-band (a) wedge-confirmed a phantom obstacle on any
+// outer-ring abort and (b) rejected every ring pose as a resume candidate, so
+// decideDetour returned {confirmed, no-resume} and FollowStrip skipped the
+// WHOLE sub-path (the entire field on a hole-free area). The default threshold
+// must treat only TRUE lethal (100) as blocking.
+// ---------------------------------------------------------------------------
+TEST(DetourResume, InscribedBoundaryBandIsNotAnObstacleAtDefaultThreshold)
+{
+  DetourCostmap cm = makeGrid();
+  // Path rides the "recorded line" at y = 0.5. Model the by-design boundary
+  // stack above it: inscribed 99-cells at y ∈ [0.7, 0.9) (0.20 m away), the
+  // TRUE lethal wall at y ∈ [0.9, 1.0) (0.40 m away).
+  for (uint32_t row = 7; row < 9; ++row)
+  {
+    for (uint32_t col = 0; col < cm.width; ++col)
+    {
+      cm.data[static_cast<std::size_t>(row) * cm.width + col] = 99;
+    }
+  }
+  for (uint32_t col = 0; col < cm.width; ++col)
+  {
+    cm.data[static_cast<std::size_t>(9) * cm.width + col] = 100;
+  }
+  const auto poses = straightPath(40);
+
+  DetourResumeCfg c;  // library DEFAULTS — this is what the regression pins
+  c.wedge_radius_m = 0.35;
+
+  const DetourDecision d = decideDetour(cm, poses, /*stuck=*/10, c);
+
+  // No phantom obstacle: neither the wedge nor the forward scan may treat the
+  // inscribed band as lethal, and no resume/trim may be produced.
+  EXPECT_FALSE(d.obstacle_confirmed);
+  EXPECT_FALSE(d.resume_idx.has_value());
+  // And every on-the-line pose stays a valid resume candidate (footprint 0.25).
+  EXPECT_TRUE(footprintClear(cm, 2.0, 0.5, 0.25, c.lethal_cost));
+  // Sanity: the old 90 threshold is exactly what broke — it saw the 99-band.
+  EXPECT_FALSE(footprintClear(cm, 2.0, 0.5, 0.35, 90));
+}

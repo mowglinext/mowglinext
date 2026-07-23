@@ -88,7 +88,13 @@ struct DetourResumeCfg
   // (-1) is below any positive threshold, so it counts as CLEAR (the global
   // planner handles unmapped space; forbidding resumes near unmapped edges would
   // be too conservative and strand the segment).
-  int8_t lethal_cost = 90;
+  // 100 = TRUE lethal only. The published costmap maps LETHAL(254)->100 and
+  // INSCRIBED(253)->99; the inscribed band hugs every keepout wall out to
+  // inflation_radius (0.20 m) BY DESIGN, and the outer headland ring rides ON
+  // the recorded boundary line — so any threshold <= 99 confirms a phantom
+  // obstacle on every outer-ring abort and rejects every ring pose as a resume
+  // candidate (whole-sub-path skips; field regression 2026-07-2x).
+  int8_t lethal_cost = 100;
   // Radius (m) of the "stalled BESIDE an obstacle" wedge check around the stuck
   // pose. FTC can abort on "failed to make progress" while boxed in next to an
   // obstacle whose lethal cells hug the robot's ACTUAL pose but do NOT lie
