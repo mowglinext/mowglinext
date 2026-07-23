@@ -709,6 +709,45 @@ def test_lidar_collision_monitor_has_active_hard_stop() -> None:
         )
 
 
+def test_lidar_collision_monitor_has_no_active_static_stop() -> None:
+    """No ACTIVE collision_monitor polygon may be a static `stop` (issue #393).
+
+    A `stop`-type polygon zeroes the ENTIRE twist whenever ≥min_points fall
+    inside it, with NO regard for the command's direction. A front-facing static
+    stop box therefore freezes a REVERSE-escape command (Nav2 recovery BackUp and
+    the FTC reverse-escape both route through collision_monitor via cmd_vel_nav),
+    so a robot wedged nose-to-obstacle could never back out — BackUp timed out
+    (err 711) even with the rear fully open. Every active gate must instead be
+    velocity-projected (`approach`) or non-freezing (`slowdown`/`limit`) so it can
+    only ever act in the direction of travel. This guards against re-introducing a
+    static front stop (the A-C1 PolygonStopNarrow regression that caused #393).
+    """
+    cmon = _load_yaml("nav2_params_lidar.yaml")["collision_monitor"]["ros__parameters"]
+    active = cmon["polygons"]
+    static_stops = [
+        name for name in active
+        if cmon.get(name, {}).get("action_type") == "stop"
+    ]
+    assert not static_stops, (
+        f"active collision_monitor polygons must not be static `stop` type "
+        f"(they freeze the reverse-escape command — issue #393): {static_stops}. "
+        "Use `approach` (velocity-projected) so a front box can't zero a reverse."
+    )
+
+
+def test_transit_planner_prefers_berth() -> None:
+    """Smac transit planner must weight costmap cost enough to keep berth from
+    obstacle-adjacent cells (issue #393). Raising cost_travel_multiplier biases
+    the blade-off transit hop away from nose-into-pocket approaches WITHOUT
+    raising global inflation_radius (a documented "Start occupied" landmine)."""
+    base = _load_yaml("nav2_params_base.yaml")
+    mult = base["planner_server"]["ros__parameters"]["GridBased"]["cost_travel_multiplier"]
+    assert float(mult) >= 3.0, (
+        f"SmacPlanner2D cost_travel_multiplier={mult} — must stay ≥3.0 so transit "
+        "paths keep berth from obstacles (issue #393 transit-wedge)."
+    )
+
+
 def test_transit_lookahead_damps_pursuit_weave() -> None:
     """RPP transit lookahead must stay long enough to damp the slow S-weave.
 
