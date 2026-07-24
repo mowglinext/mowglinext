@@ -33,6 +33,17 @@ mowgli:
         gnss_serial_device: /dev/ttyAMA4
         gnss_serial_baud: 921600
 
+        # Receiver profile auto-apply (issue #395). The GPS sidecar applies this
+        # profile to the receiver at every startup (runtime-only, non-persistent),
+        # so the receiver is driven into high-precision rover mode automatically
+        # instead of requiring the GUI's "Apply configuration" button. Set
+        # gnss_config_apply_enabled: false to leave the receiver's own config
+        # untouched (e.g. an externally managed receiver). gnss_signal_profile:
+        # balanced|high_precision|low_power.
+        gnss_config_apply_enabled: true
+        gnss_config_profile: rover_high_precision
+        gnss_signal_profile: balanced
+
         # Datum — map origin in WGS84 lat/lon. Set per-site by the installer or
         # the GUI's "Auto-detect from GPS" button. 0/0 = not yet set.
         datum_lat: 0.000000000

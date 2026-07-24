@@ -293,6 +293,72 @@ resolve_publish_rate_hz() {
   printf '5\n'
 }
 
+# Automatic receiver-profile apply (issue #395). MowgliNext's runtime receiver
+# node never configures the receiver, so a UM980 whose persisted config isn't a
+# high-precision rover sits at DGPS even while valid RTCM is being forwarded —
+# unlike OpenMower, whose driver pushes the rover config on every boot. Applying
+# the `rover_high_precision` profile in runtime-only mode at startup restores
+# that behaviour (re-applied each boot, no persistent NVM changes).
+resolve_config_apply_enabled() {
+  local yaml_enabled
+  yaml_enabled="$(parse_yaml_any gnss_config_apply_enabled)"
+  if [ -n "$yaml_enabled" ]; then
+    normalize_bool "$yaml_enabled"
+    return 0
+  fi
+
+  if [ -n "${GNSS_CONFIG_APPLY_ENABLED:-}" ]; then
+    normalize_bool "$GNSS_CONFIG_APPLY_ENABLED"
+    return 0
+  fi
+
+  printf 'true\n'
+}
+
+resolve_config_profile() {
+  local yaml_profile
+  yaml_profile="$(parse_yaml_any gnss_config_profile)"
+  if [ -n "$yaml_profile" ]; then
+    printf '%s\n' "$yaml_profile"
+    return 0
+  fi
+
+  printf '%s\n' "${GNSS_CONFIG_PROFILE:-rover_high_precision}"
+}
+
+resolve_signal_profile() {
+  local yaml_signal_profile
+  yaml_signal_profile="$(parse_yaml_any gnss_signal_profile)"
+  if [ -n "$yaml_signal_profile" ]; then
+    printf '%s\n' "$yaml_signal_profile"
+    return 0
+  fi
+
+  printf '%s\n' "${GNSS_SIGNAL_PROFILE:-balanced}"
+}
+
+resolve_receiver_model() {
+  local yaml_model
+  yaml_model="$(parse_yaml_any gnss_receiver_model)"
+  if [ -n "$yaml_model" ]; then
+    printf '%s\n' "$yaml_model"
+    return 0
+  fi
+
+  printf '%s\n' "${GNSS_RECEIVER_MODEL:-}"
+}
+
+resolve_signal_group() {
+  local yaml_signal_group
+  yaml_signal_group="$(parse_yaml_any gnss_signal_group)"
+  if [ -n "$yaml_signal_group" ]; then
+    printf '%s\n' "$yaml_signal_group"
+    return 0
+  fi
+
+  printf '%s\n' "${GNSS_SIGNAL_GROUP:-}"
+}
+
 print_command() {
   local label="$1"
   shift
@@ -367,11 +433,64 @@ ntrip_password="$(resolve_ntrip_password)"
 ntrip_mountpoint="$(resolve_ntrip_mountpoint)"
 ntrip_gga_enabled="$(resolve_ntrip_gga_enabled)"
 ntrip_gga_interval_s="$(resolve_ntrip_gga_interval_s)"
+config_apply_enabled="$(resolve_config_apply_enabled)"
+config_profile="$(resolve_config_profile)"
+signal_profile="$(resolve_signal_profile)"
+receiver_model="$(resolve_receiver_model)"
+signal_group="$(resolve_signal_group)"
 
 if [ "$transport" = "serial" ] && [ ! -e "$serial_device" ]; then
   echo "[start_gps.sh] ERROR: selected GNSS serial device does not exist: ${serial_device}"
   exit 1
 fi
+
+# Build the receiver-profile apply command (issue #395). Runs synchronously
+# BEFORE receiver_node opens the serial device — the receiver can only be held
+# open by one process at a time, and the apply must finish and release the port.
+GNSS_CONFIG_APPLY_BIN="${GNSS_CONFIG_APPLY_BIN:-gnss_config_apply}"
+GNSS_CONFIG_APPLY_TIMEOUT_MS="${GNSS_CONFIG_APPLY_TIMEOUT_MS:-5000}"
+config_apply_cmd=(
+  "$GNSS_CONFIG_APPLY_BIN"
+  --json
+  --family "$receiver_family"
+  --device "$serial_device"
+  --baud "$serial_baud"
+  --config-baud "$serial_baud"
+  --profile "$config_profile"
+  --apply-mode runtime-only
+  --rate-hz "$publish_rate_hz"
+  --timeout-ms "$GNSS_CONFIG_APPLY_TIMEOUT_MS"
+  --signal-profile "$signal_profile"
+  --confirm
+)
+if [ -n "$receiver_model" ]; then
+  config_apply_cmd+=(--model "$receiver_model")
+fi
+if [ -n "$signal_group" ]; then
+  config_apply_cmd+=(--signal-group "$signal_group")
+fi
+
+# Apply the receiver profile synchronously (serial transport only). A failure is
+# non-fatal: the receiver keeps whatever config it already holds, so a
+# pre-configured receiver still runs. The apply must complete before
+# receiver_node opens the device.
+apply_receiver_profile() {
+  if [ "$config_apply_enabled" != "true" ]; then
+    echo "[start_gps.sh] Receiver profile auto-apply disabled (gnss_config_apply_enabled=false); leaving receiver config unchanged."
+    return 0
+  fi
+  if [ "$transport" != "serial" ]; then
+    echo "[start_gps.sh] Receiver profile auto-apply skipped for non-serial transport '${transport}'."
+    return 0
+  fi
+
+  echo "[start_gps.sh] Applying receiver profile '${config_profile}' (runtime-only, family=${receiver_family}, signal_profile=${signal_profile}) before starting receiver_node"
+  if "${config_apply_cmd[@]}"; then
+    echo "[start_gps.sh] Receiver profile apply succeeded"
+  else
+    echo "[start_gps.sh] WARNING: receiver profile apply failed; continuing with the receiver's existing configuration"
+  fi
+}
 
 receiver_node_cmd=(
   "$ROS2_BIN" run universal_gnss_ros2 receiver_node --ros-args
@@ -429,6 +548,9 @@ ntrip_cmd=(
 echo "[start_gps.sh] Runtime=universal receiver_family=${receiver_family} transport=${transport} device=${serial_device} baud=${serial_baud} rate_hz=${publish_rate_hz}"
 
 if [ "$GNSS_DRY_RUN" = "true" ]; then
+  if [ "$config_apply_enabled" = "true" ] && [ "$transport" = "serial" ]; then
+    print_command "config_apply" "${config_apply_cmd[@]}"
+  fi
   print_command "receiver_node" "${receiver_node_cmd[@]}"
   print_command "topic_bridge" "${bridge_cmd[@]}"
   if [ "$ntrip_enabled" = "true" ]; then
@@ -436,6 +558,8 @@ if [ "$GNSS_DRY_RUN" = "true" ]; then
   fi
   exit 0
 fi
+
+apply_receiver_profile
 
 "${receiver_node_cmd[@]}" &
 GPS_PID=$!
