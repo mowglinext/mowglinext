@@ -1,5 +1,5 @@
 import {useState} from "react";
-import {Alert, InputNumber, Modal, Space, Statistic, Table, Tag, Typography} from "antd";
+import {Alert, Checkbox, InputNumber, Modal, Space, Statistic, Table, Tag, Typography} from "antd";
 import {useTranslation} from "react-i18next";
 import type {ImportOpenMowerSummary} from "../hooks/useMapFiles.ts";
 
@@ -11,8 +11,12 @@ interface ImportOpenMowerModalProps {
      * loading + error UI but not the fetch itself. Returning a rejected
      * promise here surfaces the error inline (we don't auto-close — the
      * user can read the message and cancel).
+     *
+     * `importDatum` is true when the operator confirmed adopting the
+     * OpenMower datum as this robot's datum (only offered on a fresh
+     * install with no existing datum).
      */
-    onApply: (omDatumLat?: number, omDatumLon?: number) => Promise<void>;
+    onApply: (omDatumLat?: number, omDatumLon?: number, importDatum?: boolean) => Promise<void>;
     /**
      * Re-run the preview with the OpenMower datum. The modal calls this
      * after the user fills (or clears) both datum fields; the returned
@@ -41,21 +45,32 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
     const [omLat, setOmLat] = useState<number | null>(null);
     const [omLon, setOmLon] = useState<number | null>(null);
     const [reprojecting, setReprojecting] = useState(false);
+    // Whether to also write the OpenMower datum into mowgli_robot.yaml.
+    // Defaults on: the checkbox is only shown on a fresh install (no
+    // existing datum), where adopting the source datum is the right thing.
+    const [importDatum, setImportDatum] = useState(true);
 
     const datumPair = (lat: number | null, lon: number | null): [number?, number?] =>
         lat !== null && lon !== null ? [lat, lon] : [undefined, undefined];
+
+    // The datum can be imported only when the operator supplied it AND this
+    // robot has no datum yet (a set datum was already used to reproject the
+    // geometry — overwriting it would misalign the just-imported map).
+    const datumProvided = omLat !== null && omLon !== null;
+    const datumImportable = datumProvided && summary?.mn_datum_configured === false;
 
     const handleOk = async () => {
         setApplying(true);
         setApplyError(null);
         try {
             const [lat, lon] = datumPair(omLat, omLon);
-            await onApply(lat, lon);
+            await onApply(lat, lon, datumImportable && importDatum);
             // Reset local state before the parent clears `preview`, so
             // the next import session starts clean.
             setApplying(false);
             setOmLat(null);
             setOmLon(null);
+            setImportDatum(true);
             onClose();
         } catch (e: any) {
             setApplyError(e?.message ?? String(e));
@@ -84,6 +99,7 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
         setApplyError(null);
         setOmLat(null);
         setOmLon(null);
+        setImportDatum(true);
         onClose();
     };
 
@@ -147,6 +163,26 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
                                 placeholder="OM_DATUM_LONG"
                             />
                         </Space>
+                        {datumImportable ? (
+                            <div style={{marginTop: 8}}>
+                                <Checkbox
+                                    checked={importDatum}
+                                    onChange={(e) => setImportDatum(e.target.checked)}
+                                    disabled={applying || reprojecting}
+                                >
+                                    {t('mapImportOpenMower.importDatumLabel')}
+                                </Checkbox>
+                                <Typography.Paragraph type="secondary" style={{marginTop: 4, marginBottom: 0}}>
+                                    {t('mapImportOpenMower.importDatumHelp')}
+                                </Typography.Paragraph>
+                            </div>
+                        ) : datumProvided && summary.mn_datum_configured ? (
+                            <Alert
+                                style={{marginTop: 8}}
+                                type="info"
+                                message={t('mapImportOpenMower.datumAlreadySet')}
+                            />
+                        ) : null}
                     </div>
 
                     <div style={{display: "flex", gap: 32, flexWrap: "wrap"}}>
@@ -164,7 +200,7 @@ export function ImportOpenMowerModal({preview, onApply, onReproject, onClose}: I
                             <div style={{display: "flex", gap: 24, marginTop: 4}}>
                                 <Statistic title={t('mapImportOpenMower.xMeters')} value={summary.dock_pose.x} precision={3} />
                                 <Statistic title={t('mapImportOpenMower.yMeters')} value={summary.dock_pose.y} precision={3} />
-                                <Statistic title={t('mapImportOpenMower.yawRad')} value={summary.dock_pose.yaw_rad} precision={4} />
+                                <Statistic title={t('mapImportOpenMower.yawDeg')} value={summary.dock_pose.yaw_rad * 180 / Math.PI} precision={1} suffix="°" />
                             </div>
                         </div>
                     ) : (

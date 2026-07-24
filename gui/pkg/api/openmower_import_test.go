@@ -7,6 +7,8 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mowglinext/mowglinext/pkg/types"
@@ -413,9 +415,36 @@ func TestPostImportOpenMower_PreviewReturnsSummary(t *testing.T) {
 	assert.Equal(t, 1, resp.NavigationAreas)
 	assert.Equal(t, 1, resp.Obstacles)
 	assert.False(t, resp.Applied, "preview-only run must not be marked applied")
+	assert.False(t, resp.MnDatumConfigured, "nil dbProvider ⇒ no datum ⇒ mn_datum_configured must be false")
 
 	// No ROS service calls should fire in preview mode.
 	assert.Empty(t, mock.ServiceCalls)
+}
+
+func TestPostImportOpenMower_MnDatumConfiguredWhenDatumSet(t *testing.T) {
+	// A robot that already has datum_lat/datum_lon must report
+	// mn_datum_configured=true so the GUI hides the "import the datum"
+	// option (the geometry was reprojected INTO this datum).
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "mowgli_robot.yaml")
+	require.NoError(t, os.WriteFile(yamlPath, []byte("mowgli:\n  ros__parameters:\n    datum_lat: 48.5\n    datum_lon: 11.5\n"), 0o644))
+
+	db := types.NewMockDBProvider()
+	require.NoError(t, db.Set("system.mower.yamlConfigFile", []byte(yamlPath)))
+
+	mock := types.NewMockRosProvider()
+	router := setupImportRouter(mock, db)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/import/openmower", bytes.NewReader([]byte(sampleOpenMowerMap)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var resp ImportOpenMowerSummary
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.MnDatumConfigured, "datum present in yaml ⇒ mn_datum_configured must be true")
 }
 
 func TestPostImportOpenMower_ApplyCallsClearAddSaveAndDock(t *testing.T) {

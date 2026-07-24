@@ -85,9 +85,11 @@ type openMowerMap struct {
 //
 // Apply: when false (the default), the handler runs in **preview-only**
 // mode — parse + validate + summary, no writes. When true, the handler
-// will perform the write. The write path is currently stubbed (logs
-// only) per the design doc; flipping `Apply` to true today still does
-// not mutate the live map. See applyImport() for the TODO.
+// runs the live write path (clear_map → add_area×N → save_areas, then
+// set_docking_point) via applyImport(). The datum is NOT written here —
+// it is imported separately by the GUI through the settings write path
+// (see MnDatumConfigured), keeping this importer's map/dock write and the
+// datum write independently confirmable.
 type ImportOpenMowerRequest struct {
 	Map        json.RawMessage `json:"map"`
 	OmDatumLat *float64        `json:"om_datum_lat,omitempty"`
@@ -108,6 +110,14 @@ type ImportOpenMowerSummary struct {
 	Warnings         []string            `json:"warnings"`
 	Areas            []ImportedAreaBrief `json:"areas"`
 	Applied          bool                `json:"applied"`
+	// MnDatumConfigured is true when mowgli_robot.yaml already has a
+	// datum_lat/datum_lon set. The GUI uses this to decide whether to
+	// offer the "import the datum too" step: on a fresh install (false)
+	// the OpenMower datum can be adopted as the robot's datum; when a
+	// datum already exists (true) the geometry was reprojected INTO it,
+	// so overwriting it would misalign the just-imported map — the GUI
+	// then hides the datum-import option.
+	MnDatumConfigured bool `json:"mn_datum_configured"`
 }
 
 // ImportedAreaBrief is one row in the per-area preview table.
@@ -164,8 +174,8 @@ func ImportRoutes(r *gin.RouterGroup, rosProvider types.IRosProvider, dbProvider
 // @Summary import an OpenMower map.json (preview-only by default)
 // @Description Parse a user-supplied OpenMower map.json, translate it
 // @Description into MowgliNext's coordinate frame, and return a summary
-// @Description for confirmation. Setting `apply=true` is currently a
-// @Description no-op stub — see docs/IMPORT_OPENMOWER_MAP.md.
+// @Description for confirmation. Setting `apply=true` runs the live write
+// @Description path (areas + dock pose). See docs/IMPORT_OPENMOWER_MAP.md.
 // @Tags import
 // @Accept  json
 // @Produce json
@@ -201,6 +211,7 @@ func postImportOpenMower(rosProvider types.IRosProvider, dbProvider types.IDBPro
 		reproj, datumWarn := resolveReprojection(req.OmDatumLat, req.OmDatumLon, mnLat, mnLon, datumErr)
 
 		summary := buildImportSummary(omMap, reproj)
+		summary.MnDatumConfigured = datumErr == nil
 		if datumWarn != "" {
 			summary.Warnings = append([]string{datumWarn}, summary.Warnings...)
 		}
