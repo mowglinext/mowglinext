@@ -621,6 +621,13 @@ nav .links a:hover { color: var(--text-heading); text-decoration: none; }
   line-height: 1.6;
 }
 
+.thanks-all {
+  margin-top: 28px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
 /* ─── Community ───────────────────────────────────── */
 .community {
   padding: 80px 0;
