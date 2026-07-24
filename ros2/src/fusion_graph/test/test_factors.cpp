@@ -159,6 +159,24 @@ TEST(ScanMatcher, ConvergesWithWarmStart)
   EXPECT_NEAR(res.delta.theta(), T_truth.theta(), 0.03);
 }
 
+TEST(ScanMatcher, MinInliersOverrideGatesAcceptance)
+{
+  // The per-call min_inliers override must replace params.min_inliers at BOTH
+  // the in-loop early-abort and the final ok gate — this is what lets the
+  // keyframe path (kf_min_inliers) accept partial-overlap matches the shared
+  // scan-to-scan default (30) rejects. Full-overlap scans give many inliers, so
+  // the default and a lower override both accept; an override higher than any
+  // achievable inlier count must reject the same match.
+  const gtsam::Pose2 T_truth(0.03, 0.02, 0.02);
+  auto src = SyntheticScan(200, gtsam::Pose2());
+  auto tgt = SyntheticScan(200, T_truth);
+
+  fusion_graph::ScanMatcher matcher;
+  EXPECT_TRUE(matcher.Match(src, tgt, gtsam::Pose2()).ok);            // default (30)
+  EXPECT_TRUE(matcher.Match(src, tgt, gtsam::Pose2(), 16).ok);        // looser override accepts
+  EXPECT_FALSE(matcher.Match(src, tgt, gtsam::Pose2(), 100000).ok);   // impossibly-high override rejects
+}
+
 TEST(ScanMatcher, EmptyInputsFail)
 {
   fusion_graph::ScanMatcher matcher;

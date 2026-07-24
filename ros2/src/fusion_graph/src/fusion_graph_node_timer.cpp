@@ -215,7 +215,7 @@ void FusionGraphNode::OnTimer()
           // direction locked by test_factors.cpp::ScanToKeyframeComposition and
           // stays unchanged.
           const gtsam::Pose2 init = pred.between(kf->abs_pose);
-          const auto res = scan_matcher_->Match(kf->scan_body, curr_scan, init);
+          const auto res = scan_matcher_->Match(kf->scan_body, curr_scan, init, kf_min_inliers_);
           if (!res.ok)
           {
             graph_->RecordIcpRejectInliers();

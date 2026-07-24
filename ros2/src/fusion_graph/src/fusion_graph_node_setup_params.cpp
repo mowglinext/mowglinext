@@ -49,6 +49,10 @@ void FusionGraphNode::DeclareParameters()
     // 40 source points keeps ICP rmse within a few mm of the 60-pt
     // result while halving inner-loop NN cost. ARM hot-path saving.
     sp.source_subsample = static_cast<size_t>(declare_parameter<int>("icp_source_subsample", 40));
+    // Inlier floor for the scan-to-scan between-factor (near-total overlap, so
+    // 30/40 subsampled points is easy). Keyframe matching uses its own, looser
+    // kf_min_inliers below (cross-viewpoint overlap is partial).
+    sp.min_inliers = declare_parameter<int>("scan_min_inliers", 30);
     sp.sigma_xy_base = declare_parameter<double>("icp_sigma_xy_base", 0.02);
     sp.sigma_theta_base = declare_parameter<double>("icp_sigma_theta_base", 0.005);
     scan_matcher_ = std::make_unique<ScanMatcher>(sp);
@@ -77,6 +81,13 @@ void FusionGraphNode::DeclareParameters()
     kf_capture_sigma_max_m_ = declare_parameter<double>("kf_capture_sigma_max_m", 0.01);
     kf_capture_rtk_debounce_ = declare_parameter<int>("kf_capture_rtk_debounce", 3);
     kf_capture_max_omega_ = declare_parameter<double>("kf_capture_max_omega", 0.10);
+    // Looser inlier floor for cross-viewpoint scan-to-keyframe ICP. The
+    // scan-to-scan default (scan_min_inliers=30) assumes near-total overlap;
+    // a keyframe is an older scan from a different pose, so 30/40 is rarely
+    // reachable and was rejecting ~99.7% of keyframe matches at the min_inliers
+    // early-abort. 16 keeps a genuine geometric lock while letting the RTK-Float
+    // anchor actually engage.
+    kf_min_inliers_ = declare_parameter<int>("kf_min_inliers", 16);
     kf_match_max_dist_m_ = declare_parameter<double>("kf_match_max_dist_m", 3.0);
     kf_max_candidates_ = static_cast<size_t>(declare_parameter<int>("kf_max_candidates", 5));
     kf_apply_sigma_floor_m_ = declare_parameter<double>("kf_apply_sigma_floor_m", 0.02);
