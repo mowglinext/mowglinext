@@ -4,7 +4,7 @@
 #   docker compose -f docker-compose.simulation.yaml up dev-sim
 #
 # Foxglove Studio: ws://localhost:8765
-# noVNC (Gazebo GUI): http://localhost:6080
+# noVNC (simulation GUI): http://localhost:6080
 #
 # Run E2E test:
 #   docker compose -f docker-compose.simulation.yaml exec dev-sim \
@@ -35,9 +35,10 @@ services:
     environment:
       <<: *ros2-env
     command: >
-      ros2 launch mowgli_bringup sim_full_system.launch.py
+      bash -lc 'Xvfb :99 -screen 0 1280x720x24 -nolisten tcp &
+      export DISPLAY=:99; sleep 1; exec ros2 launch mowgli_bringup sim_full_system.launch.py
       headless:=true
-      use_rviz:=false
+      use_rviz:=false'
     volumes:
       - ./config/cyclonedds.xml:/cyclonedds.xml:ro
       - mowgli_sim_maps:/ros2_ws/maps
@@ -63,9 +64,10 @@ services:
     environment:
       <<: *ros2-env
     command: >
-      ros2 launch mowgli_bringup sim_full_system.launch.py
+      bash -lc 'Xvfb :99 -screen 0 1280x720x24 -nolisten tcp &
+      export DISPLAY=:99; sleep 1; exec ros2 launch mowgli_bringup sim_full_system.launch.py
       headless:=true
-      use_rviz:=false
+      use_rviz:=false'
     volumes:
       - ./config/cyclonedds.xml:/cyclonedds.xml:ro
       - mowgli_sim_maps:/ros2_ws/maps
@@ -98,17 +100,17 @@ services:
       context: ..
       dockerfile: ros2/Dockerfile
       target: simulation
-    network_mode: host
     ipc: host
+    ports:
+      - "6080:6080"
+      - "8765:8765"
     environment:
       <<: *ros2-env
       DISPLAY: ":1"
-    command: >
-      bash -c "/ros2_ws/scripts/start_vnc.sh &
-      sleep 3 &&
-      ros2 launch mowgli_bringup sim_full_system.launch.py
-      headless:=false
-      use_rviz:=false"
+    # start_vnc.sh owns the GUI lifecycle: VNC/noVNC plus the single simulator
+    # ROS launch. Keeping Compose to one entrypoint prevents two simulators
+    # from racing for the same controller and ROS graph.
+    command: ["/bin/bash", "/ros2_ws/scripts/start_vnc.sh"]
     volumes:
       - ./config/cyclonedds.xml:/cyclonedds.xml:ro
       - mowgli_sim_maps:/ros2_ws/maps

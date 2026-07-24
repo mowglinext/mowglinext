@@ -374,7 +374,10 @@ def generate_launch_description() -> LaunchDescription:
     # Injected into coverage_server.connector_turn_radius; operator-tunable via
     # mowgli_robot.yaml (raise toward 0.30 if the tighter turns hesitate).
     connector_turn_radius = 0.18
-    progress_timeout_sec = 300.0
+    # Fallback if progress_timeout_sec is absent from the resolved robot config
+    # (normally the mowgli_robot.yaml template supplies it — default 30.0, see
+    # #396). Kept equal to that default so the effective timeout is one number.
+    progress_timeout_sec = 30.0
     # num_headland_passes: 0 = auto (ceil(headland_width / tool_width)),
     # >0 forces exactly that many concentric perimeter rings.
     num_headland_passes = 0

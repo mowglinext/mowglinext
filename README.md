@@ -60,9 +60,9 @@
 
 ---
 
-> **Beta — Work in Progress**
+> ## 🌱 First Public Beta — Open to Testers
 >
-> MowgliNext is under active development and **not ready for production use**. We're building in the open and welcome early adopters.
+> MowgliNext has reached its **first beta**: a complete autonomous mowing stack running on real hardware — undock, mow, avoid obstacles, dock, resume. We're now inviting testers to run it on their own mowers and help us harden it. Expect rough edges, and tell us what breaks: [open an issue](https://github.com/mowglinext/mowglinext/issues) or [join the discussion](https://github.com/mowglinext/mowglinext/discussions).
 
 ---
 
@@ -98,6 +98,12 @@ The website composer and bootstrap installer now target the Universal GNSS runti
 
 GUI at `http://<mower-ip>:4006` · See **[Getting Started](https://github.com/mowglinext/mowglinext/wiki/Getting-Started)** for full setup.
 
+### Local Webots simulation
+
+The ROS 2 stack also has a Webots simulation for development and integration
+testing. See the [ROS 2 simulation instructions](ros2/README.md#running-webots-simulation)
+for a clean Docker checkout, browser access, and platform notes.
+
 ## Monorepo
 
 | Directory | Description |
@@ -116,6 +122,7 @@ GUI at `http://<mower-ip>:4006` · See **[Getting Started](https://github.com/mo
 | **[Wiki](https://github.com/mowglinext/mowglinext/wiki)** | Architecture, configuration, deployment, sensors, firmware, BT, GUI, FAQ |
 | **[Website](https://mowgli.garden)** | Landing page, install composer, features overview |
 | **[First Boot](docs/FIRST_BOOT.md)** | Post-install checklist |
+| **[ROS 2 simulation](ros2/README.md#running-webots-simulation)** | Local Webots simulation with Docker |
 
 ## A Word About OpenMower
 

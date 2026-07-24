@@ -336,6 +336,13 @@ func (r *RosProvider) fanOut(logicalKey string, msg []byte) {
 		msgCopy := append([]byte(nil), msg...)
 		r.sessionTracker.Enqueue(msgCopy)
 	}
+	// Feed wheel odometry to the session odometer (total distance / blade-wear
+	// proxy). Kept alive by the MQTT persistent "wheelOdom" subscription, same as
+	// highLevelStatus above.
+	if logicalKey == "wheelOdom" && r.sessionTracker != nil {
+		msgCopy := append([]byte(nil), msg...)
+		r.sessionTracker.EnqueueOdometry(msgCopy)
+	}
 }
 
 // initDockPoseSubscription subscribes to the map_server_node's docking_pose
