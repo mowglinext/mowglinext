@@ -648,9 +648,15 @@ private:
                                             // GraphManager's kf_yaw_sigma_floor
                                             // (~0.30 rad) is the effective floor
   double kf_engage_age_s_ = 0.3;  // engage apply when Fixed older than this
+  // Looser inlier floor for cross-viewpoint scan-to-keyframe ICP, passed as a
+  // per-call override to scan_matcher_->Match. The shared scan-to-scan default
+  // (scan_min_inliers=30) assumes near-total overlap and rejected ~99.7% of
+  // keyframe matches at the in-loop min_inliers early-abort; 16 lets the
+  // RTK-Float keyframe anchor actually engage.
+  int kf_min_inliers_ = 16;
   // Relaxed ICP guard rails for keyframe matching (cross-viewpoint, not
-  // incremental). Matches the shared scan_matcher_'s internal min_inliers
-  // but overrides RMSE / divergence thresholds. The icp_max_delta_* checks
+  // incremental). Overrides min_inliers (kf_min_inliers_ above) plus the
+  // RMSE / divergence thresholds. The icp_max_delta_* checks
   // (0.30 m / 0.50 rad) are inappropriate here — res.delta is the full
   // transform between keyframe and live scan (up to kf_match_max_dist_m_).
   double kf_match_max_rmse_m_ = 0.15;

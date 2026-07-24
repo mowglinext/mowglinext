@@ -62,9 +62,16 @@ public:
   // Both scans are in the same body frame (no map/odom transforms
   // applied — the caller is expected to have pulled raw 2D points in
   // base_footprint with the lidar_link extrinsic).
+  //
+  // min_inliers_override: when >= 0, use this inlier threshold instead of
+  // params.min_inliers for BOTH the in-loop early-abort and the final ok
+  // gate. Lets cross-viewpoint scan-to-keyframe matching accept fewer
+  // correspondences than the (near-total-overlap) scan-to-scan path
+  // without changing the shared matcher's default. <0 keeps the default.
   ScanMatcherResult Match(const std::vector<Eigen::Vector2d>& source,
                           const std::vector<Eigen::Vector2d>& target,
-                          const gtsam::Pose2& init_guess) const;
+                          const gtsam::Pose2& init_guess,
+                          int min_inliers_override = -1) const;
 
 private:
   ScanMatcherParams p_;

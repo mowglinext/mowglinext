@@ -64,11 +64,16 @@ gtsam::Pose2 ScanMatcher::RigidAlign2D(const std::vector<Eigen::Vector2d>& src_c
 
 ScanMatcherResult ScanMatcher::Match(const std::vector<Eigen::Vector2d>& source,
                                      const std::vector<Eigen::Vector2d>& target,
-                                     const gtsam::Pose2& init_guess) const
+                                     const gtsam::Pose2& init_guess,
+                                     int min_inliers_override) const
 {
   ScanMatcherResult res;
   if (source.empty() || target.empty())
     return res;
+
+  // Per-call inlier threshold: keyframe matching passes a looser value than
+  // the shared scan-to-scan default (see ScanMatcherParams::min_inliers).
+  const int min_inliers = (min_inliers_override >= 0) ? min_inliers_override : p_.min_inliers;
 
   // Subsample source for speed. Stride-pick keeps angular coverage.
   std::vector<Eigen::Vector2d> src;
@@ -127,7 +132,7 @@ ScanMatcherResult ScanMatcher::Match(const std::vector<Eigen::Vector2d>& source,
       }
     }
 
-    if (static_cast<int>(src_corr.size()) < p_.min_inliers)
+    if (static_cast<int>(src_corr.size()) < min_inliers)
     {
       // Too few correspondences. Bail out with current T but flag fail.
       res.iterations = iter;
@@ -154,7 +159,7 @@ ScanMatcherResult ScanMatcher::Match(const std::vector<Eigen::Vector2d>& source,
   res.delta = T;
   res.inliers = static_cast<int>(src_corr.size());
   res.rmse = last_rmse;
-  res.ok = res.inliers >= p_.min_inliers;
+  res.ok = res.inliers >= min_inliers;
 
   // Noise model: sigma scales with rmse. Tight floors so we don't
   // outdrive the wheel between-factor when ICP looks great.

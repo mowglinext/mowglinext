@@ -365,6 +365,17 @@ fusion_graph_node:
     # Apply gates (use the map during Float):
     kf_match_max_dist_m: 3.0        # keyframe search radius around the predicted pose
     kf_max_candidates: 5
+    # Inlier floor for the cross-viewpoint scan-to-keyframe ICP, passed as a
+    # per-call override to the shared matcher. The scan-to-scan default
+    # (scan_min_inliers: 30, near-total overlap) was ALSO applied to keyframe
+    # matches, whose overlap is partial — it rejected ~99.7% of them at the
+    # in-loop min_inliers early-abort (observed kf_matches_fail 88278 vs ok 287),
+    # so the RTK-Float keyframe anchor almost never engaged. 16 keeps a genuine
+    # geometric lock (still gated by kf_match_max_rmse_m / divergence / yaw-dev
+    # below) while letting the anchor actually fire during Float. Lower if the
+    # anchor still rarely engages on sparse/structure-poor lawn; raise toward 30
+    # if false locks appear.
+    kf_min_inliers: 16
     # ICP-realism floor on the positional σ; at apply time it is additionally
     # raised to kf_capture_sigma_max_m (a keyframe frozen up to 4 cm off must not
     # be trusted tighter than that error).
