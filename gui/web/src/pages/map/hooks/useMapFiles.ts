@@ -401,11 +401,20 @@ export function useMapFiles({
      * the existing websocket stream — no manual refetch needed. We do
      * drop the dirty / editMap flags so a previous in-progress local
      * edit doesn't reappear over the freshly imported areas.
+     *
+     * When `importDatum` is true (a fresh install, where the operator
+     * confirmed adopting the OpenMower datum), the OM datum is also
+     * persisted to mowgli_robot.yaml through the standard settings write
+     * path (`POST /api/settings/yaml`) AFTER the map/dock apply succeeds.
+     * The importer itself stays side-effect-free on the datum; the datum
+     * write is a separate, independently-confirmed step so the two never
+     * get entangled (and a datum failure can't roll back the imported map).
      */
     const handleApplyOpenMowerImport = async (
         importFileText: string,
         omDatumLat?: number,
         omDatumLon?: number,
+        importDatum?: boolean,
     ): Promise<void> => {
         if (!importFileText) {
             throw new Error("no stashed map text — preview must run before apply");
@@ -424,6 +433,24 @@ export function useMapFiles({
             const errBody = await res.text();
             throw new Error(`HTTP ${res.status}: ${errBody}`);
         }
+
+        // Persist the datum only after the map/dock apply succeeded, and only
+        // when the operator opted in. Uses the settings write path so the
+        // sparse-config + fixed-precision handling stays in one place.
+        if (importDatum && omDatumLat !== undefined && omDatumLon !== undefined) {
+            const datumRes = await fetch("/api/settings/yaml", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({datum_lat: omDatumLat, datum_lon: omDatumLon}),
+            });
+            if (!datumRes.ok) {
+                const errBody = await datumRes.text();
+                // The map imported fine; surface the datum failure without
+                // pretending the whole import failed.
+                throw new Error(`map imported, but writing the datum failed — HTTP ${datumRes.status}: ${errBody}`);
+            }
+        }
+
         // Drop any in-progress edit so the freshly-imported map shows clean.
         setEditMap(false);
         setHasUnsavedChanges(false);
@@ -530,6 +557,12 @@ export interface ImportOpenMowerSummary {
     dock_pose?: {x: number; y: number; yaw_rad: number} | null;
     datum_shift_east_m: number;
     datum_shift_north_m: number;
+    /**
+     * True when mowgli_robot.yaml already has a datum_lat/datum_lon.
+     * Drives whether the modal offers "import the datum too": only a
+     * fresh install (false) can safely adopt the OpenMower datum.
+     */
+    mn_datum_configured?: boolean;
     warnings: string[];
     areas: Array<{
         name: string;

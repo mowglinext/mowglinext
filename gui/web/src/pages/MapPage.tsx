@@ -1145,11 +1145,11 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             </div>
             <ImportOpenMowerModal
                 preview={importPreview}
-                onApply={async (omDatumLat, omDatumLon) => {
+                onApply={async (omDatumLat, omDatumLon, importDatum) => {
                     if (!importFileText) {
                         throw new Error("No imported map text in memory — re-select the file.");
                     }
-                    await handleApplyOpenMowerImport(importFileText, omDatumLat, omDatumLon);
+                    await handleApplyOpenMowerImport(importFileText, omDatumLat, omDatumLon, importDatum);
                 }}
                 onReproject={async (omDatumLat, omDatumLon) => {
                     if (!importFileText) {
