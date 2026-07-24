@@ -34,6 +34,9 @@ function ChassisPreview({values}: {values: Record<string, unknown>}) {
   const toolWidth = m(values.tool_width, 0.18);
   const bladeRadius = m(values.blade_radius, 0.09);
   const wheelRadius = m(values.wheel_radius, 0.045);
+  const wheelWidth = m(values.wheel_width, 0.04);
+  const chassisCenterX = m(values.chassis_center_x, 0.18);
+  const wheelXOffset = m(values.wheel_x_offset, 0);
 
   // Scale so the longest dimension fits the SVG, with padding.
   const longest = Math.max(length, width) || 1;
@@ -47,6 +50,10 @@ function ChassisPreview({values}: {values: Record<string, unknown>}) {
   const svgH = 220;
   const cx = svgW / 2;
   const cy = svgH / 2;
+  // base_link is the rear drive-wheel axle, offset toward the rear (down in
+  // this forward-up view) from the chassis centre by chassis_center_x. The
+  // drive wheels sit there (shifted forward by wheel_x_offset when set).
+  const axleY = cy + px(chassisCenterX - wheelXOffset);
 
   const labelStyle = {fontSize: 9, fill: colors.textDim};
 
@@ -72,26 +79,33 @@ function ChassisPreview({values}: {values: Record<string, unknown>}) {
               width={cw} height={cl} rx={Math.min(cw, cl) * 0.12}
               fill={colors.bgElevated} stroke={colors.text} strokeWidth={1.5}/>
 
-        {/* wheel track */}
-        <rect x={cx - px(wheelTrack) / 2 - 4} y={cy - 4}
+        {/* wheel track (dashed band across the rear axle) */}
+        <rect x={cx - px(wheelTrack) / 2 - 4} y={axleY - 4}
               width={px(wheelTrack) + 8} height={8}
               fill="none" stroke={colors.amber} strokeWidth={0.8} strokeDasharray="2 2"/>
-        <text x={cx - px(wheelTrack) / 2 - 6} y={cy + 18} textAnchor="end" {...labelStyle}>
+        <text x={cx - px(wheelTrack) / 2 - 6} y={axleY + 18} textAnchor="end" {...labelStyle}>
           {t("settingsPreview.trackLabel", {cm: (wheelTrack * 100).toFixed(0)})}
         </text>
 
-        {/* wheels (left + right at rear axle) */}
-        <rect x={cx - px(wheelTrack) / 2 - px(wheelRadius)} y={cy - px(wheelRadius)}
-              width={px(wheelRadius) * 2} height={px(wheelRadius) * 2}
-              rx={px(wheelRadius) * 0.5}
-              fill={colors.text}/>
-        <rect x={cx + px(wheelTrack) / 2 - px(wheelRadius)} y={cy - px(wheelRadius)}
-              width={px(wheelRadius) * 2} height={px(wheelRadius) * 2}
-              rx={px(wheelRadius) * 0.5}
-              fill={colors.text}/>
+        {/* drive wheels at the rear axle. Seen from above, a wheel's diameter
+            runs along the forward (vertical) axis and the tyre width laterally,
+            so each is a tall rectangle — not a square. */}
+        <rect x={cx - px(wheelTrack) / 2 - px(wheelWidth) / 2} y={axleY - px(wheelRadius)}
+              width={px(wheelWidth)} height={px(wheelRadius) * 2}
+              rx={2} fill={colors.text}/>
+        <rect x={cx + px(wheelTrack) / 2 - px(wheelWidth) / 2} y={axleY - px(wheelRadius)}
+              width={px(wheelWidth)} height={px(wheelRadius) * 2}
+              rx={2} fill={colors.text}/>
 
-        {/* blade */}
-        <circle cx={cx} cy={cy + cl * 0.18} r={px(bladeRadius)}
+        {/* base_link marker at the rear axle */}
+        <circle cx={cx} cy={axleY} r={2} fill={colors.textDim}/>
+        <text x={cx} y={axleY + px(wheelRadius) + 9} textAnchor="middle"
+              fontSize={7} fill={colors.textDim} fontFamily="monospace">
+          base_link
+        </text>
+
+        {/* blade (centred under the chassis, per the URDF) */}
+        <circle cx={cx} cy={cy} r={px(bladeRadius)}
                 fill={colors.amberSoft} stroke={colors.amber}/>
 
         {/* length / width labels */}
