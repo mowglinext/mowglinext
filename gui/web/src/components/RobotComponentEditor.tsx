@@ -86,15 +86,18 @@ const SENSORS: SensorMeta[] = [
     },
 ];
 
-// Convert robot metres to SVG coordinates
-// Robot frame: X = forward, Y = left
-// SVG: robot faces right (+X to right, +Y down = robot's -Y)
+// Convert robot metres to SVG coordinates.
+// Robot frame (REP-103): X = forward, Y = left.
+// SVG is a top-down view with the robot facing UP (matching RobotAnatomy and
+// the URDF's natural orientation): +X (forward) → up, +Y (left) → left. Drawing
+// the robot facing right made the drive-wheel discs — whose diameter runs along
+// the rolling/forward axis — appear as horizontal bars (issue #404).
 const toSvg = (rx: number, ry: number, cx: number, cy: number): [number, number] => {
-    return [cx + rx * SCALE, cy - ry * SCALE];
+    return [cx - ry * SCALE, cy - rx * SCALE];
 };
 
 const fromSvg = (sx: number, sy: number, cx: number, cy: number): [number, number] => {
-    return [(sx - cx) / SCALE, -(sy - cy) / SCALE];
+    return [(cy - sy) / SCALE, (cx - sx) / SCALE];
 };
 
 const roundTo = (v: number, decimals: number): number => {
@@ -332,7 +335,12 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
     const svgWidth = isMobile ? 340 : 520;
     const svgHeight = isMobile ? 380 : 480;
     const cx = svgWidth / 2;
-    const cy = svgHeight / 2;
+    // Facing-up view: the chassis extends forward (up) from base_link by
+    // chassis_center_x + baseLength/2, and the dock is drawn further in front.
+    // Push the base_link origin down so that forward extent + dock stay on
+    // canvas while keeping the rear axle above the bottom edge.
+    const forwardExtentPx = (robot.chassisCenterX + robot.baseLength / 2 + 0.16) * SCALE;
+    const cy = Math.min(svgHeight - 40, Math.max(svgHeight / 2, 24 + forwardExtentPx));
 
     const getSensorValue = useCallback(
         (meta: SensorMeta): SensorConfig => ({
@@ -385,7 +393,10 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             if (rotating && meta.yawKey) {
                 const sensorVal = getSensorValue(meta);
                 const [ssx, ssy] = toSvg(sensorVal.x, sensorVal.y, cx, cy);
-                const angle = Math.atan2(-(sy - ssy), sx - ssx);
+                // Facing-up frame: yaw is CCW from +X (up). A pointer offset
+                // (dx, dy) in SVG maps back to robot X = -dy, Y = -dx, so
+                // yaw = atan2(-dx, -dy) = atan2(ssx - sx, ssy - sy).
+                const angle = Math.atan2(ssx - sx, ssy - sy);
                 onChange(meta.yawKey, roundTo(angle, 4));
             }
         };
@@ -449,15 +460,20 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
         const bladeColor = colors.muted;
         const casterColor = mode === "dark" ? inkAlpha(0.25) : inkAlpha(0.55);
 
-        // Chassis rect offset by chassisCenterX (base_link is at wheel axis, not chassis centre)
-        const [bx, by] = toSvg(ccx - halfL, halfW, cx, cy);
-        const bw = robot.baseLength * SCALE;
-        const bh = robot.baseWidth * SCALE;
+        // Chassis rect offset by chassisCenterX (base_link is at the rear wheel
+        // axis, not the chassis centre). Facing up, the front-left corner maps
+        // to the SVG top-left; the box spans baseWidth horizontally and
+        // baseLength vertically.
+        const [bx, by] = toSvg(ccx + halfL, halfW, cx, cy);
+        const bw = robot.baseWidth * SCALE;
+        const bh = robot.baseLength * SCALE;
 
         const leftWheel = toSvg(robot.wheelXOffset, robot.wheelTrack / 2, cx, cy);
         const rightWheel = toSvg(robot.wheelXOffset, -robot.wheelTrack / 2, cx, cy);
-        const ww = robot.wheelRadius * 2 * SCALE;
-        const wh = robot.wheelWidth * SCALE;
+        // Drive-wheel disc seen from above: its diameter runs along the forward
+        // (vertical) axis, the thin tyre width runs laterally (horizontal).
+        const ww = robot.wheelWidth * SCALE;
+        const wh = robot.wheelRadius * 2 * SCALE;
 
         const leftCaster = toSvg(robot.casterXOffset, robot.casterTrack / 2, cx, cy);
         const rightCaster = toSvg(robot.casterXOffset, -robot.casterTrack / 2, cx, cy);
@@ -476,50 +492,55 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
         const dockStroke = mode === "dark" ? inkAlpha(0.3) : inkAlpha(0.45);
         const contactColor = colors.warning;
         const dockLabelColor = mode === "dark" ? inkAlpha(0.4) : "rgba(0,0,0,0.35)";
-        // Base plate in front of chassis
+        // Dock station drawn in FRONT of the robot (forward = up). All
+        // positions are expressed in robot metres and projected through toSvg
+        // so the dock rotates with the facing-up view like the rest of the body.
         const frontEdge = ccx + halfL;
-        const plateW = (robot.baseWidth + 0.08) * SCALE;
-        const plateH = 0.12 * SCALE;
-        const plateX = cx + (frontEdge + 0.02) * SCALE; // just in front of robot
-        const plateY = cy - plateW / 2;
-        // Back wall (the wall the robot pushes against)
-        const wallH = 0.02 * SCALE;
-        const wallTall = plateW * 0.6;
-        const wallX = plateX + plateH; // far edge of plate
-        // Charging contacts (two copper strips on the dock face)
-        const contactW = 0.015 * SCALE;
-        const contactH = 0.04 * SCALE;
-        const contactGap = robot.wheelTrack * 0.35 * SCALE;
-        const contactX = plateX + plateH * 0.1; // near the robot-facing edge
+        const plateSpan = robot.baseWidth + 0.08;    // lateral extent (horizontal)
+        const plateDepth = 0.12;                     // forward extent (vertical)
+        const plateNear = frontEdge + 0.02;          // edge nearest the robot
+        const plateFar = plateNear + plateDepth;
+        const [plateX, plateY] = toSvg(plateFar, plateSpan / 2, cx, cy); // top-left
+        const plateWpx = plateSpan * SCALE;
+        const plateHpx = plateDepth * SCALE;
+        // Back wall (the wall the robot pushes against) at the far edge.
+        const [wallX] = toSvg(plateFar, plateSpan * 0.3, cx, cy);
+        const wallWpx = plateSpan * 0.6 * SCALE;
+        const wallHpx = 0.02 * SCALE;
+        // Charging contacts: two copper strips on the robot-facing edge.
+        const contactWpx = 0.04 * SCALE;             // lateral width (horizontal)
+        const contactHpx = 0.015 * SCALE;            // forward depth (vertical)
+        const [contactLX, contactLY] = toSvg(plateNear + 0.01, robot.wheelTrack * 0.35, cx, cy);
+        const [contactRX, contactRY] = toSvg(plateNear + 0.01, -robot.wheelTrack * 0.35, cx, cy);
 
         return (
             <g>
                 {/* Dock base plate */}
                 <rect
-                    x={plateX} y={plateY} width={plateH} height={plateW}
+                    x={plateX} y={plateY} width={plateWpx} height={plateHpx}
                     rx={4} ry={4}
                     fill={dockFill} stroke={dockStroke} strokeWidth={1.5} opacity={0.55}
                 />
                 {/* Back wall (far edge the robot pushes against) */}
                 <rect
-                    x={wallX} y={cy - wallTall / 2}
-                    width={wallH} height={wallTall}
+                    x={wallX} y={plateY - wallHpx}
+                    width={wallWpx} height={wallHpx}
                     rx={2} ry={2}
                     fill={dockStroke} opacity={0.7}
                 />
                 {/* Charging contacts (two copper strips facing the robot) */}
                 <rect
-                    x={contactX} y={cy - contactGap - contactH / 2}
-                    width={contactW} height={contactH}
+                    x={contactLX - contactWpx / 2} y={contactLY - contactHpx / 2}
+                    width={contactWpx} height={contactHpx}
                     rx={1} fill={contactColor} opacity={0.85}
                 />
                 <rect
-                    x={contactX} y={cy + contactGap - contactH / 2}
-                    width={contactW} height={contactH}
+                    x={contactRX - contactWpx / 2} y={contactRY - contactHpx / 2}
+                    width={contactWpx} height={contactHpx}
                     rx={1} fill={contactColor} opacity={0.85}
                 />
                 <text
-                    x={plateX + plateH / 2} y={plateY - 5}
+                    x={cx} y={plateY - 5}
                     textAnchor="middle" fontSize={7}
                     fill={dockLabelColor} fontFamily="monospace"
                 >
@@ -559,7 +580,8 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                     base_link
                 </text>
                 <text
-                    x={arrowTip[0] + 6} y={arrowTip[1] + 4}
+                    x={arrowTip[0] - 8} y={arrowTip[1] + 4}
+                    textAnchor="end"
                     fontSize={10} fill={arrowColor} fontFamily="monospace"
                 >
                     +X
@@ -578,13 +600,16 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             const isHovered = hoveredSensor === meta.id;
             const sensorColor = mode === "dark" ? meta.colorDark : meta.color;
 
+            // Facing-up frame: a heading yaw θ (CCW from +X/up) points along the
+            // robot vector (cos θ, sin θ) in (X, Y), which projects to the SVG
+            // delta (-sin θ, -cos θ).
             const yawLineLen = 0.06 * SCALE;
-            const yawEndX = sx + Math.cos(val.yaw) * yawLineLen;
-            const yawEndY = sy - Math.sin(val.yaw) * yawLineLen;
+            const yawEndX = sx - Math.sin(val.yaw) * yawLineLen;
+            const yawEndY = sy - Math.cos(val.yaw) * yawLineLen;
 
             const handleDist = 0.08 * SCALE;
-            const handleX = sx + Math.cos(val.yaw) * handleDist;
-            const handleY = sy - Math.sin(val.yaw) * handleDist;
+            const handleX = sx - Math.sin(val.yaw) * handleDist;
+            const handleY = sy - Math.cos(val.yaw) * handleDist;
 
             // Transparent ≥44px touch target behind the small visible glyph so
             // dragging works on phones (Apple HIG / Material both call for 44px
@@ -645,11 +670,13 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                             <polygon
                                 points={(() => {
                                     const as = 5;
-                                    const a = val.yaw;
-                                    const p1x = yawEndX + as * Math.cos(Math.PI - a + 0.4);
-                                    const p1y = yawEndY + as * Math.sin(Math.PI - a + 0.4);
-                                    const p2x = yawEndX + as * Math.cos(Math.PI - a - 0.4);
-                                    const p2y = yawEndY + as * Math.sin(Math.PI - a - 0.4);
+                                    // Arrowhead from the on-screen line direction,
+                                    // independent of the frame projection.
+                                    const ang = Math.atan2(yawEndY - sy, yawEndX - sx);
+                                    const p1x = yawEndX - as * Math.cos(ang - 0.4);
+                                    const p1y = yawEndY - as * Math.sin(ang - 0.4);
+                                    const p2x = yawEndX - as * Math.cos(ang + 0.4);
+                                    const p2y = yawEndY - as * Math.sin(ang + 0.4);
                                     return `${yawEndX},${yawEndY} ${p1x},${p1y} ${p2x},${p2y}`;
                                 })()}
                                 fill={sensorColor}
@@ -691,18 +718,22 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
         const labels: React.ReactNode[] = [];
         const labelColor = mode === "dark" ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.25)";
         const step = 0.10;
+        // Forward (X) axis runs vertically → label down the left margin.
+        // Lateral (Y) axis runs horizontally → label along the bottom margin.
+        const leftX = cx - robot.baseWidth / 2 * SCALE - 12;
+        const bottomY = cy + (robot.baseLength / 2 - robot.chassisCenterX) * SCALE + 18;
         for (let v = -0.3; v <= 0.3 + 0.001; v += step) {
             const r = roundTo(v, 2);
             if (Math.abs(r) < 0.001) continue;
-            const [lx] = toSvg(r, 0, cx, cy);
+            const [, ly] = toSvg(r, 0, cx, cy);
             labels.push(
-                <text key={`xl${r}`} x={lx} y={cy + robot.baseWidth / 2 * SCALE + 20} textAnchor="middle" fontSize={8} fill={labelColor} fontFamily="monospace">
+                <text key={`xl${r}`} x={leftX} y={ly + 3} textAnchor="end" fontSize={8} fill={labelColor} fontFamily="monospace">
                     {r.toFixed(1)}m
                 </text>
             );
-            const [, ly] = toSvg(0, r, cx, cy);
+            const [lx] = toSvg(0, r, cx, cy);
             labels.push(
-                <text key={`yl${r}`} x={cx - robot.baseLength / 2 * SCALE - 10} y={ly + 3} textAnchor="end" fontSize={8} fill={labelColor} fontFamily="monospace">
+                <text key={`yl${r}`} x={lx} y={bottomY} textAnchor="middle" fontSize={8} fill={labelColor} fontFamily="monospace">
                     {r.toFixed(1)}m
                 </text>
             );
