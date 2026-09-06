@@ -86,6 +86,15 @@ void FusionGraphNode::RebuildLidarAnchorMap()
         beluga::LikelihoodFieldModel<beluga_ros::OccupancyGrid>{sensor, grid},
         amcl,
         std::execution::seq);
+    // Warm-up: beluga_ros::Amcl keeps a 2-pose rolling window of odometry
+    // for its motion model and has no special case for the first update —
+    // the "previous" pose is then the identity, so the first update applies
+    // the WHOLE odom pose (metres, after minutes of driving) to every
+    // particle instead of a delta. Replay 2026-09-07: a 3.2 m jump on the
+    // first update after a 0.10 m seed, never after a re-seed. One discarded
+    // update with the current odom pose and no measurement fills the window;
+    // the seed that follows then sees a zero delta.
+    lidar_anchor_filter_->update(Sophus::SE2d(dr_yaw_, Eigen::Vector2d(dr_x_, dr_y_)), {});
   }
   else
   {
