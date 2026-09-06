@@ -184,106 +184,13 @@ void FusionGraphNode::OnTimer()
     scan_match_dedup_.RecordOutcome(curr_scan_seq, prev_node_scan_gen_, !drop);
   }
 
-  // ── Scan-to-keyframe ABSOLUTE constraint (the RTK-Float carry) ───────
-  // Match the live scan to nearby frozen RTK-anchored keyframes and queue a
-  // PriorFactor<Pose2> that pins absolute xy + yaw — this is what holds <2 cm
-  // through a Float window where dead-reckoning would otherwise drift. ENGAGE
-  // only when RTK-Fixed is NOT recent (during Float / no-fix): under Fixed the
-  // GnssLeverArmFactor owns absolute position and double-counting would
-  // over-constrain. Reuses scan_matcher_ + the same ICP guard rails as
-  // scan-between. abs_meas = kf.abs_pose.compose(delta.inverse()) — composition
-  // direction locked by test_factors.cpp::ScanToKeyframeComposition.
-  if (use_keyframe_map_ && scan_matcher_ && curr_valid)
+  // ── LiDAR map anchor (Beluga): absolute XY during RTK-Float ──────────
+  // Builds the georeferenced occupancy grid under fresh RTK-Fixed and, once the
+  // fix goes stale, localises against it and queues an XY-only prior. See
+  // fusion_graph_node_lidar_anchor.cpp.
+  if (use_lidar_map_anchor_)
   {
-    const bool rtk_recent = RtkFixedReceiptIsFresh(kf_engage_age_s_);
-    if (!rtk_recent)
-    {
-      if (auto cur = graph_->LatestSnapshot())
-      {
-        double dx, dy, dtg, dtw;
-        graph_->PeekAccumulator(dx, dy, dtg, dtw);
-        const double dth = (std::abs(dtg) > 1e-9) ? dtg : dtw;
-        const gtsam::Pose2 pred = cur->pose.compose(gtsam::Pose2(dx, dy, dth));
-        const auto cand = graph_->FindKeyframesNearXY(pred.x(),
-                                                      pred.y(),
-                                                      kf_match_max_dist_m_,
-                                                      kf_max_candidates_);
-        double best_rmse = 1e9;
-        gtsam::Pose2 best_abs_meas;
-        double best_sigma = 0.0;
-        double best_sigma_theta = 0.0;
-        bool have_best = false;
-        for (uint64_t kid : cand)
-        {
-          auto kf = graph_->GetKeyframe(kid);
-          if (!kf || kf->scan_body.empty())
-            continue;
-          // Warm start ICP toward the value it actually converges to:
-          // Match(kf, curr) returns curr.between(kf), so seed with
-          // pred.between(kf) (≈ curr.between(kf)), NOT kf.between(pred) (its
-          // inverse — which sent the brute-force NN the wrong way during pivots).
-          // The composition below (kf.abs_pose.compose(delta.inverse())) is the
-          // direction locked by test_factors.cpp::ScanToKeyframeComposition and
-          // stays unchanged.
-          const gtsam::Pose2 init = pred.between(kf->abs_pose);
-          const auto res = scan_matcher_->Match(kf->scan_body, curr_scan, init, kf_min_inliers_);
-          if (!res.ok)
-          {
-            graph_->RecordIcpRejectInliers();
-            continue;
-          }
-          if (res.rmse > kf_match_max_rmse_m_)
-          {
-            graph_->RecordIcpRejectRmse();
-            continue;
-          }
-          // NOTE: icp_max_delta_* sanity check SKIPPED here — res.delta is
-          // the full cross-viewpoint transform (keyframe → live scan), not
-          // an incremental between two consecutive scans ~50ms apart. The
-          // divergence check below already guards against pathological ICP.
-          const gtsam::Pose2 dev = init.between(res.delta);
-          if (std::hypot(dev.x(), dev.y()) > kf_match_max_divergence_xy_m_ ||
-              std::abs(dev.theta()) > kf_match_max_divergence_theta_rad_)
-          {
-            graph_->RecordIcpRejectDivergence();
-            continue;
-          }
-          const gtsam::Pose2 abs_meas = kf->abs_pose.compose(res.delta.inverse());
-          // Mirror-guard (xy): a swapped/mirror match lands far from the
-          // wheel-predicted pose (Huber can't reject a low-rmse mirror).
-          if (std::hypot(abs_meas.x() - pred.x(), abs_meas.y() - pred.y()) >
-              kf_match_max_divergence_xy_m_)
-            continue;
-          // Mirror-guard (yaw): reject a match whose implied ABSOLUTE yaw is far
-          // from the gyro-predicted yaw — a mirrored/flipped ICP solution can
-          // sit within the xy bound yet carry a grossly wrong heading, and this
-          // prior engages during Float where COG yaw can't correct it.
-          if (!KeyframeYawWithinGate(abs_meas.theta(), pred.theta(), kf_match_max_yaw_dev_rad_))
-            continue;
-          if (res.rmse < best_rmse)
-          {
-            best_rmse = res.rmse;
-            best_abs_meas = abs_meas;
-            // Positional σ can never be tighter than the capture gate: a
-            // keyframe frozen up to kf_capture_sigma_max_m off its true pose
-            // must not be applied as a tighter anchor than that error.
-            best_sigma =
-                std::max(res.sigma_xy, std::max(kf_apply_sigma_floor_m_, kf_capture_sigma_max_m_));
-            best_sigma_theta = std::max(res.sigma_theta, kf_apply_sigma_theta_rad_);
-            have_best = true;
-          }
-        }
-        if (have_best)
-        {
-          graph_->QueueScanToKeyframe(best_abs_meas, best_sigma, best_sigma_theta, /*robust=*/true);
-          ++kf_matches_ok_;
-        }
-        else if (!cand.empty())
-        {
-          ++kf_matches_fail_;
-        }
-      }
-    }
+    LidarMapAnchorStep(curr_scan, curr_valid);
   }
 
   auto out = graph_->Tick(now_s);
@@ -315,29 +222,6 @@ void FusionGraphNode::OnTimer()
       }
       PublishIcpOdom();
       last_scan_between_valid_ = false;
-    }
-
-    // ── Keyframe capture (build the absolute map under stable RTK-Fixed) ──
-    // Freeze the GPS-fused node pose (out->pose — NEVER the raw antenna ENU,
-    // which is lever-offset) + scan as a keyframe when: the fix is mm-accurate
-    // and stable (debounced ≥N epochs — a single carrSoln flicker would freeze a
-    // wrong anchor), the robot has moved ≥ kf_spacing_m, and it isn't pivoting
-    // (a smeared scan makes a bad map tile). The streak gate resets to 0 the
-    // instant a non-Fixed epoch arrives, so capture (Fixed) and the apply block
-    // above (Float) never both fire.
-    if (use_keyframe_map_ && curr_valid && curr_scan.size() >= 10)
-    {
-      const bool rtk_fresh = RtkFixedReceiptIsFresh(1.0);
-      const bool moved = !last_kf_capture_xy_ ||
-                         std::hypot(out->pose.x() - last_kf_capture_xy_->x(),
-                                    out->pose.y() - last_kf_capture_xy_->y()) >= kf_spacing_m_;
-      if (rtk_fresh && rtk_fixed_streak_ >= kf_capture_rtk_debounce_ && last_gps_sigma_ >= 0.0 &&
-          last_gps_sigma_ <= kf_capture_sigma_max_m_ &&
-          std::abs(wheel_wz_) < kf_capture_max_omega_ && moved)
-      {
-        if (graph_->AddKeyframe(out->pose, curr_scan))
-          last_kf_capture_xy_ = gtsam::Vector2(out->pose.x(), out->pose.y());
-      }
     }
 
     // Loop closure search — gated on loop_closure_enabled_ and on

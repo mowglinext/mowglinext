@@ -245,6 +245,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # the exported Fields2Cover CMake target.
     libgdal-dev libgeos++-dev libtinyxml2-dev libtbb12 \
     ros-kilted-ortools-vendor \
+    # LiDAR map anchor: Beluga MCL (header-only) + its ROS adapters
+    ros-kilted-beluga-ros \
     # Utilities
     python3-argcomplete \
     # WebSocket server for cmd_vel_ws_relay (manual mowing low-latency path)
@@ -289,6 +291,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-vcstool \
     ros-kilted-ament-cmake \
     ros-kilted-rosidl-default-generators \
+    ros-kilted-beluga-ros \
     build-essential \
     cmake \
     git \

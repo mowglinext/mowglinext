@@ -364,17 +364,6 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
   // Loop-closure edges collapsed into priors during the rebuild.
   loop_closure_edges_.clear();
 
-  // Co-transform the frozen keyframe map by the SAME correction so the absolute
-  // keyframe constraints stay consistent with the rigidly-corrected live frame.
-  // Keyframes are NOT iSAM2 variables (untouched by the pose loop above), so
-  // without this the map and the live trajectory desync by `correction` and the
-  // scan-to-keyframe factor would then drag the robot off-truth — a silent gauge
-  // break. scan_body is body-frame and gauge-invariant; only abs_pose moves.
-  // Ordered BEFORE the D2 cleanup below (same mu_ section) so a late async
-  // rebase cannot revert the shift.
-  for (auto& [id, kf] : keyframes_)
-    kf.abs_pose = correction * kf.abs_pose;
-
   // Cancel any in-flight async rebase (D2 race, field 2026-06-10 dock walk).
   // RebaseISAM2 phase 2 builds its fresh tree WITHOUT the lock from a snapshot
   // of the PRE-transform poses, leaving rebase_in_progress_ true. If it lands

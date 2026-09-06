@@ -149,6 +149,8 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `use_magnetometer` (L238) | `false` | launch-arg default `navigation.launch.py:133` → `fusion_graph.launch.py:148` | no | launch |
 | `use_scan_matching` (L251) | `true` | `navigation.launch.py:135`; **ANDed with `use_lidar`** by `lidar_gated()` L237 | no | launch |
 | `use_loop_closure` (L264) | `true` | `navigation.launch.py:137`; ANDed with `use_lidar` **and** force-off on first boot when `/ros2_ws/maps/fusion_graph.graph` is absent (L150–154) | no | launch |
+| `use_lidar_map_anchor` | `false` | `navigation.launch.py` → `fusion_graph.launch.py` → node; ANDed with `use_lidar`. Scan-to-map particle-filter anchor for RTK-Float (grid on `/fusion_graph/lidar_map`, XY-only factors, per-estimate validation — `codemaps/fusion_graph.md`) | no | launch |
+| `lidar_anchor_shadow_mode` | `false` | same path; with the anchor on, ALSO run/score/publish the filter under RTK-Fixed, never apply — the field measurement of anchor vs RTK (`/fusion_graph/lidar_anchor_candidate`, diagnostics `lidar_anchor_*`) | no | launch |
 | `use_gps_dock_detection` (L467) | `true` | `navigation.launch.py:141` → launches `gps_dock_detection_node` + `simple_charging_dock.use_external_detection_pose` | no | launch |
 
 ### GNSS / NTRIP — consumed by the **GPS sidecar and the GUI**, not by ROS2
@@ -430,7 +432,6 @@ There is **no `use_fusion_graph` arg** — it was removed with the dual EKF (Inv
 | Frames | 329–333 | `map_frame` / `odom_frame` / `base_frame` (Invariant 2) |
 | TF publish | 334–373 | `fast_pose_publish_rate_hz`, `tf_publish_lead_s` 0.05 (launch-overridden), `tf_broadcast_rate_hz` 20 |
 | Docking | 374–415 | `docking_active_timeout_s`, `gate_cog_during_docking`, `dock_reanchor_sigma_xy_m` 0.03, `dock_prior_max_gps_disagreement_m` 0.50, `dock_prior_max_gps_sigma_m` 0.05 (issue #512) |
-| Keyframe map | 416–480 | `use_keyframe_map`, `kf_capture_sigma_max_m` 0.04, `kf_spacing_m` 0.5, `max_keyframes` 2000, `kf_min_inliers` 16, `kf_apply_*`, `kf_match_*` |
 
 Declared **without** a yaml line (code defaults only, tune via `ros2 param set` or add a line): `anchor_*` (5), `auto_save_enabled`, `autoload_graph`, `cog_*` (10), `cov_update_every_n`, `dr_slip_*`, `gps_max_sigma_reject_m`, `graph_save_prefix`, `icp_max_iter`/`icp_max_corresp_dist`/`icp_sigma_*`/`icp_source_subsample`, `isam2_*`, `lc_max_candidates`/`lc_max_dist_m`/`lc_max_rmse`/`lc_min_delta_*`/`lc_sigma_*`, `periodic_save_period_s`, `rtk_autoload_override_threshold_m`, `scan_min_inliers`, `scan_retention_nodes`, `scan_topic`, `scan_yaw_sigma_floor_rad`, `scan_yield_*`, `stationary_motion_thresh_*`, `stationary_node_period_s`. Eight more come only from launch arguments: `primary_mode`, `use_scan_matching`, `use_loop_closure`, `use_magnetometer`, `dock_pose_x`/`_y`/`_yaw`, `dock_pose_yaw_sigma_rad`.
 

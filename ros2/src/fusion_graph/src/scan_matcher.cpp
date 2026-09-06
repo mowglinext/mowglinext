@@ -64,16 +64,13 @@ gtsam::Pose2 ScanMatcher::RigidAlign2D(const std::vector<Eigen::Vector2d>& src_c
 
 ScanMatcherResult ScanMatcher::Match(const std::vector<Eigen::Vector2d>& source,
                                      const std::vector<Eigen::Vector2d>& target,
-                                     const gtsam::Pose2& init_guess,
-                                     int min_inliers_override) const
+                                     const gtsam::Pose2& init_guess) const
 {
   ScanMatcherResult res;
   if (source.empty() || target.empty())
     return res;
 
-  // Per-call inlier threshold: keyframe matching passes a looser value than
-  // the shared scan-to-scan default (see ScanMatcherParams::min_inliers).
-  const int min_inliers = (min_inliers_override >= 0) ? min_inliers_override : p_.min_inliers;
+  const int min_inliers = p_.min_inliers;
 
   // Subsample source for speed. Stride-pick keeps angular coverage.
   std::vector<Eigen::Vector2d> src;

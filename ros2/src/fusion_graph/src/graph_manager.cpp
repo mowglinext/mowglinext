@@ -189,17 +189,12 @@ void GraphManager::QueueScanBetween(const gtsam::Pose2& delta, double sigma_xy, 
   queue_.scan_between = UnaryQueue::ScanBetween{delta, sigma_xy, sigma_theta};
 }
 
-void GraphManager::QueueScanToKeyframe(const gtsam::Pose2& abs_pose,
-                                       double sigma_xy,
-                                       double sigma_theta,
-                                       bool robust)
+void GraphManager::QueueLidarMapXy(const gtsam::Vector2& xy,
+                                   const Eigen::Matrix2d& cov,
+                                   bool robust)
 {
   std::lock_guard<std::mutex> lock(mu_);
-  if (sigma_xy <= 0.0)
-    sigma_xy = 0.1;
-  if (sigma_theta <= 0.0)
-    sigma_theta = 0.1;
-  queue_.scan_to_keyframe = UnaryQueue::ScanToKeyframe{abs_pose, sigma_xy, sigma_theta, robust};
+  queue_.lidar_map_xy = UnaryQueue::LidarMapXy{xy, cov, robust};
 }
 
 void GraphManager::Initialize(const gtsam::Pose2& X0,

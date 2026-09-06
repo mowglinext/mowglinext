@@ -133,7 +133,6 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   if (observation_update == ObservationUpdate::kRosTimeDiscontinuity)
   {
     last_rtk_fixed_stamp_.reset();
-    rtk_fixed_streak_ = 0;
     last_gps_sigma_ = -1.0;
     last_gps_map_xy_.reset();
     ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
@@ -250,7 +249,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
                          msg->position_covariance_type,
                          var_x,
                          var_y);
-    last_gps_sigma_ = -1.0;  // no usable σ this epoch (keyframe gate stays closed)
+    last_gps_sigma_ = -1.0;  // no usable σ this epoch (LC σ floor has nothing to use)
     return;
   }
   if (gps_sigma_speed_coeff_ > 0.0)
@@ -319,8 +318,6 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
     {
       last_rtk_fixed_stamp_ = receipt_stamp;
     }
-    // Debounce only genuinely new, accepted receiver observations.
-    rtk_fixed_streak_ = rtk_fixed ? (rtk_fixed_streak_ + 1) : 0;
     last_gps_sigma_ = sigma;
   };
   // During the dock approach, hold position through the RTK fixed↔float

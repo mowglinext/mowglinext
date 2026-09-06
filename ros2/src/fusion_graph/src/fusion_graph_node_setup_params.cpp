@@ -49,9 +49,8 @@ void FusionGraphNode::DeclareParameters()
     // 40 source points keeps ICP rmse within a few mm of the 60-pt
     // result while halving inner-loop NN cost. ARM hot-path saving.
     sp.source_subsample = static_cast<size_t>(declare_parameter<int>("icp_source_subsample", 40));
-    // Inlier floor for the scan-to-scan between-factor (near-total overlap, so
-    // 30/40 subsampled points is easy). Keyframe matching uses its own, looser
-    // kf_min_inliers below (cross-viewpoint overlap is partial).
+    // Inlier floor for the scan-to-scan between-factor and the loop-closure /
+    // cold-boot matches (near-total overlap, so 30/40 subsampled points is easy).
     sp.min_inliers = declare_parameter<int>("scan_min_inliers", 30);
     sp.sigma_xy_base = declare_parameter<double>("icp_sigma_xy_base", 0.02);
     sp.sigma_theta_base = declare_parameter<double>("icp_sigma_theta_base", 0.005);
@@ -72,35 +71,81 @@ void FusionGraphNode::DeclareParameters()
     scan_yield_sigma_xy_ = declare_parameter<double>("scan_yield_sigma_xy", 0.5);
     scan_yield_sigma_theta_ = declare_parameter<double>("scan_yield_sigma_theta", 0.3);
 
-    // ── RTK-anchored keyframe map (absolute scan-to-keyframe localization) ──
-    // Requires scan matching (this block). Code default OFF (yaml enables).
-    // CAPTURE under stable RTK-Fixed; APPLY a PriorFactor<Pose2> (xy + yaw)
-    // during RTK-Float to hold <2 cm. Yaw is protected by the GraphManager
-    // kf_yaw_sigma_floor + the mirror-guard below.
-    use_keyframe_map_ = declare_parameter<bool>("use_keyframe_map", false);
-    kf_capture_sigma_max_m_ = declare_parameter<double>("kf_capture_sigma_max_m", 0.01);
-    kf_capture_rtk_debounce_ = declare_parameter<int>("kf_capture_rtk_debounce", 3);
-    kf_capture_max_omega_ = declare_parameter<double>("kf_capture_max_omega", 0.10);
-    // Looser inlier floor for cross-viewpoint scan-to-keyframe ICP. The
-    // scan-to-scan default (scan_min_inliers=30) assumes near-total overlap;
-    // a keyframe is an older scan from a different pose, so 30/40 is rarely
-    // reachable and was rejecting ~99.7% of keyframe matches at the min_inliers
-    // early-abort. 16 keeps a genuine geometric lock while letting the RTK-Float
-    // anchor actually engage.
-    kf_min_inliers_ = declare_parameter<int>("kf_min_inliers", 16);
-    kf_match_max_dist_m_ = declare_parameter<double>("kf_match_max_dist_m", 3.0);
-    kf_max_candidates_ = static_cast<size_t>(declare_parameter<int>("kf_max_candidates", 5));
-    kf_apply_sigma_floor_m_ = declare_parameter<double>("kf_apply_sigma_floor_m", 0.02);
-    kf_apply_sigma_theta_rad_ = declare_parameter<double>("kf_apply_sigma_theta_rad", 0.05);
-    kf_engage_age_s_ = declare_parameter<double>("kf_engage_age_s", 0.3);
-    kf_match_max_rmse_m_ = declare_parameter<double>("kf_match_max_rmse_m", 0.15);
-    kf_match_max_divergence_xy_m_ = declare_parameter<double>("kf_match_max_divergence_xy_m", 0.30);
-    kf_match_max_divergence_theta_rad_ =
-        declare_parameter<double>("kf_match_max_divergence_theta_rad", 0.50);
-    // Absolute-yaw mirror-guard bound (see fusion_graph_node.hpp): reject a
-    // keyframe match whose implied map-frame yaw is more than this off the
-    // gyro-predicted yaw — catches mirrored / flipped ICP the xy guard misses.
-    kf_match_max_yaw_dev_rad_ = declare_parameter<double>("kf_match_max_yaw_dev_rad", 0.5);
+    // LiDAR map anchor (Beluga particle filter against a grid built under
+    // RTK-Fixed). Off by default until the field A/B validates it.
+    use_lidar_map_anchor_ = declare_parameter<bool>("use_lidar_map_anchor", false);
+    lidar_map_resolution_m_ = declare_parameter<double>("lidar_map_resolution_m", 0.10);
+    lidar_map_half_extent_m_ = declare_parameter<double>("lidar_map_half_extent_m", 40.0);
+    lidar_map_insert_period_s_ = declare_parameter<double>("lidar_map_insert_period_s", 0.5);
+    lidar_map_rebuild_period_s_ = declare_parameter<double>("lidar_map_rebuild_period_s", 5.0);
+    // 1.0 s, not 0.3: a 5 Hz receiver whose stamps arrive ~80 ms old sits at
+    // ~0.28 s of age just before every next fix — 0.3 flapped on timer phase.
+    lidar_anchor_engage_age_s_ = declare_parameter<double>("lidar_anchor_engage_age_s", 1.0);
+    lidar_anchor_disengage_dwell_s_ =
+        declare_parameter<double>("lidar_anchor_disengage_dwell_s", 1.0);
+    lidar_anchor_max_beams_ = declare_parameter<int>("lidar_anchor_max_beams", 60);
+    lidar_anchor_min_particles_ = declare_parameter<int>("lidar_anchor_min_particles", 300);
+    lidar_anchor_max_particles_ = declare_parameter<int>("lidar_anchor_max_particles", 1500);
+    lidar_anchor_update_min_d_ = declare_parameter<double>("lidar_anchor_update_min_d", 0.05);
+    lidar_anchor_update_min_a_ = declare_parameter<double>("lidar_anchor_update_min_a", 0.05);
+    lidar_anchor_seed_sigma_xy_m_ = declare_parameter<double>("lidar_anchor_seed_sigma_xy_m", 0.10);
+    lidar_anchor_seed_sigma_theta_rad_ =
+        declare_parameter<double>("lidar_anchor_seed_sigma_theta_rad", 0.10);
+    lidar_anchor_z_hit_ = declare_parameter<double>("lidar_anchor_z_hit", 0.7);
+    lidar_anchor_z_rand_ = declare_parameter<double>("lidar_anchor_z_rand", 0.3);
+    lidar_anchor_sigma_hit_m_ = declare_parameter<double>("lidar_anchor_sigma_hit_m", 0.15);
+    lidar_anchor_max_laser_distance_m_ =
+        declare_parameter<double>("lidar_anchor_max_laser_distance_m", 12.0);
+    lidar_anchor_odom_alpha_rot_ = declare_parameter<double>("lidar_anchor_odom_alpha_rot", 0.05);
+    lidar_anchor_odom_alpha_trans_ =
+        declare_parameter<double>("lidar_anchor_odom_alpha_trans", 0.05);
+    // AMCL's augmented-MCL recovery (alpha_slow / alpha_fast > 0) injects
+    // RANDOM particles across the whole map whenever the average weight drops
+    // — on open lawn it drops every time, the injected particles that land
+    // near saturated clutter (the terrace) win, and the estimate teleports:
+    // replay 2026-09-07 showed a 2.7 m jump on the FIRST update after a
+    // 0.10 m seed. Our seed is always trustworthy (fused pose or dead
+    // reckoning), so global relocalisation is never wanted: both OFF.
+    lidar_anchor_alpha_slow_ = declare_parameter<double>("lidar_anchor_alpha_slow", 0.0);
+    lidar_anchor_alpha_fast_ = declare_parameter<double>("lidar_anchor_alpha_fast", 0.0);
+    lidar_anchor_selective_resampling_ =
+        declare_parameter<bool>("lidar_anchor_selective_resampling", true);
+    // Per-estimate trust. Defaults sized on the 2026-09-06 replay: the lost
+    // filter scored 0.13 while a healthy one scores ≥ 0.9; wheels + gyro
+    // drifted < 0.4 m over 2.7 min and a U-turn.
+    lidar_anchor_validator_.min_hit_ratio =
+        declare_parameter<double>("lidar_anchor_min_hit_ratio", 0.5);
+    lidar_anchor_validator_.min_hit_count =
+        declare_parameter<int>("lidar_anchor_min_hit_count", 30);
+    lidar_anchor_validator_.max_sigma_m =
+        declare_parameter<double>("lidar_anchor_max_sigma_m", 0.5);
+    lidar_anchor_validator_.dr_budget_m =
+        declare_parameter<double>("lidar_anchor_dr_budget_m", 0.3);
+    lidar_anchor_validator_.dr_drift_frac =
+        declare_parameter<double>("lidar_anchor_dr_drift_frac", 0.02);
+    lidar_anchor_reseed_after_s_ = declare_parameter<double>("lidar_anchor_reseed_after_s", 5.0);
+    lidar_anchor_shadow_mode_ = declare_parameter<bool>("lidar_anchor_shadow_mode", false);
+    lidar_map_import_topic_ = declare_parameter<std::string>("lidar_map_import_topic", "");
+    lidar_anchor_shadow_ref_period_s_ =
+        declare_parameter<double>("lidar_anchor_shadow_ref_period_s", 20.0);
+    if (use_lidar_map_anchor_)
+    {
+      LidarOccupancyMapperParams mp;
+      mp.resolution_m = lidar_map_resolution_m_;
+      mp.half_extent_m = lidar_map_half_extent_m_;
+      mp.max_range_m = lidar_anchor_max_laser_distance_m_;
+      lidar_mapper_.emplace(mp);
+      lidar_anchor_gate_.emplace(true,
+                                 lidar_anchor_engage_age_s_,
+                                 lidar_map_insert_period_s_,
+                                 lidar_anchor_disengage_dwell_s_);
+      RCLCPP_INFO(get_logger(),
+                  "LiDAR map anchor ENABLED: grid %.2f m over ±%.0f m, engage when RTK-Fixed older "
+                  "than %.2f s",
+                  lidar_map_resolution_m_,
+                  lidar_map_half_extent_m_,
+                  lidar_anchor_engage_age_s_);
+    }
   }
 
   // 180° yaw-flip recovery (see fusion_graph_node.hpp). Declared outside the

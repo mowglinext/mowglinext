@@ -12,7 +12,7 @@
 
 | Area | Test files | Framework | Exact local command | CI workflow |
 |---|---|---|---|---|
-| `fusion_graph` (22 suites) | `ros2/src/fusion_graph/test/test_*.cpp` | GoogleTest (`ament_add_gtest`, `CMakeLists.txt:145–252`) | `cd /ros2_ws && colcon test --packages-select fusion_graph --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
+| `fusion_graph` (27 suites) | `ros2/src/fusion_graph/test/test_*.cpp` | GoogleTest (`ament_add_gtest`, `CMakeLists.txt:145–252`) | `cd /ros2_ws && colcon test --packages-select fusion_graph --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_behavior` (19 suites) | `ros2/src/mowgli_behavior/test/test_*.cpp` | GoogleTest (`CMakeLists.txt:116–601`) | `colcon test --packages-select mowgli_behavior --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_hardware` (9) | `ros2/src/mowgli_hardware/test/test_*.cpp` — incl. `test_dig_detector.cpp` + `test_dig_escalation.cpp` (Invariant 16), `test_cobs.cpp`, `test_protocol.cpp`, `test_blade_gate.cpp` | GoogleTest (`CMakeLists.txt:114–190`) | `colcon test --packages-select mowgli_hardware --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_localization` (7) | `ros2/src/mowgli_localization/test/test_*.cpp` | GoogleTest (`CMakeLists.txt:271–342`) | `colcon test --packages-select mowgli_localization --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |

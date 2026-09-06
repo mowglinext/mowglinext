@@ -15,6 +15,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -26,6 +27,7 @@
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
+#include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -37,14 +39,20 @@
 
 #include "fusion_graph/dr_slip_veto.hpp"
 #include "fusion_graph/graph_manager.hpp"
+#include "fusion_graph/lidar_anchor_validator.hpp"
+#include "fusion_graph/lidar_map_anchor_gate.hpp"
+#include "fusion_graph/lidar_occupancy_mapper.hpp"
 #include "fusion_graph/pose_extrapolator.hpp"
 #include "fusion_graph/scan_match_dedup.hpp"
 #include "fusion_graph/scan_matcher.hpp"
 #include <Eigen/Core>
+#include <beluga_ros/amcl.hpp>
+#include <beluga_ros/occupancy_grid.hpp>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <mowgli_interfaces/gnss_observation_freshness.hpp>
 #include <mowgli_interfaces/msg/high_level_status.hpp>
 #include <mowgli_interfaces/msg/status.hpp>
+#include <sophus/se2.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
@@ -394,6 +402,86 @@ private:
   uint64_t prev_node_scan_gen_ = 0;  // bumped when Tick stores prev_node_scan_
   ScanMatchDedupGate scan_match_dedup_;
 
+  // ── LiDAR map anchor (Beluga) ─────────────────────────────────────
+  // Under fresh RTK-Fixed the scans build a georeferenced occupancy grid at
+  // the trusted fused pose; once Fixed goes stale the particle filter
+  // localises against that grid and its XY + covariance becomes a unary
+  // factor. This is the only LiDAR-derived ABSOLUTE constraint in the graph
+  // (XY-only — heading stays with the gyro/COG factors).
+  bool use_lidar_map_anchor_ = false;
+  double lidar_map_resolution_m_ = 0.10;
+  double lidar_map_half_extent_m_ = 40.0;
+  double lidar_map_insert_period_s_ = 0.5;
+  double lidar_map_rebuild_period_s_ = 5.0;
+  double lidar_anchor_engage_age_s_ = 1.0;
+  double lidar_anchor_disengage_dwell_s_ = 1.0;
+  int lidar_anchor_max_beams_ = 60;
+  int lidar_anchor_min_particles_ = 300;
+  int lidar_anchor_max_particles_ = 1500;
+  double lidar_anchor_update_min_d_ = 0.05;
+  double lidar_anchor_update_min_a_ = 0.05;
+  double lidar_anchor_seed_sigma_xy_m_ = 0.10;
+  double lidar_anchor_seed_sigma_theta_rad_ = 0.10;
+  double lidar_anchor_z_hit_ = 0.7;
+  double lidar_anchor_z_rand_ = 0.3;
+  double lidar_anchor_sigma_hit_m_ = 0.15;
+  double lidar_anchor_max_laser_distance_m_ = 12.0;
+  double lidar_anchor_odom_alpha_rot_ = 0.05;
+  double lidar_anchor_odom_alpha_trans_ = 0.05;
+  double lidar_anchor_alpha_slow_ = 0.0;  // AMCL random-injection recovery: OFF (see setup_params)
+  double lidar_anchor_alpha_fast_ = 0.0;
+  bool lidar_anchor_selective_resampling_ = true;
+  LidarAnchorValidatorParams lidar_anchor_validator_;  // per-estimate trust (see validator header)
+  double lidar_anchor_reseed_after_s_ =
+      5.0;  // lost this long → re-seed the cloud from dead reckoning
+  bool lidar_anchor_shadow_mode_ = false;  // run + score + publish under RTK, never apply
+  double lidar_anchor_shadow_ref_period_s_ =
+      20.0;  // shadow: refresh the DR reference from the fused pose
+  std::optional<LidarOccupancyMapper> lidar_mapper_;
+  std::optional<LidarMapAnchorGate> lidar_anchor_gate_;
+  std::unique_ptr<beluga_ros::Amcl> lidar_anchor_filter_;
+  // Latched so a late subscriber (Foxglove, the GUI) gets the current grid.
+  rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr lidar_map_pub_;
+  // Optional one-shot import of a previously published grid (harness replay of
+  // a recorded /fusion_graph/lidar_map, or a persisted map): the FIRST message
+  // seeds the mapper, later ones are ignored so the live inserts own the map.
+  std::string lidar_map_import_topic_;
+  bool lidar_map_imported_ = false;
+  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr lidar_map_import_sub_;
+  void OnLidarMapImport(nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg);
+  double lidar_map_last_rebuild_s_ = -1.0e9;
+  std::size_t lidar_map_scans_at_rebuild_ = 0;
+  std::size_t lidar_map_occupied_cells_ = 0;
+  uint64_t lidar_anchor_updates_ = 0;  // filter updates that produced an estimate
+  uint64_t lidar_anchor_seeds_ = 0;  // MAPPING→ANCHORING seeds
+  uint64_t lidar_anchor_skipped_ = 0;  // filter ran but declined (no motion)
+  uint64_t lidar_anchor_rej_score_ = 0;  // estimates refused: scan does not fit the map there
+  uint64_t lidar_anchor_rej_spread_ = 0;  // estimates refused: particle cloud too wide
+  uint64_t lidar_anchor_rej_dr_ = 0;  // estimates refused: implausible vs dead reckoning
+  uint64_t lidar_anchor_reseeds_ = 0;  // cloud re-seeded from dead reckoning after being lost
+  double lidar_anchor_last_hit_ratio_ = 0.0;
+  double lidar_anchor_last_sigma_m_ = 0.0;
+  LidarAnchorVerdict lidar_anchor_last_verdict_ = LidarAnchorVerdict::kAccepted;
+  double lidar_anchor_lost_since_s_ = -1.0;  // monotonic; <0 = not lost
+  bool lidar_anchor_shadow_seeded_ = false;
+  // Dead-reckoning witness reference: map pose at seed, odom pose at seed,
+  // path driven since, and when the reference was last set.
+  Sophus::SE2d lidar_anchor_seed_pose_;
+  Sophus::SE2d lidar_anchor_seed_dr_;
+  Sophus::SE2d lidar_anchor_last_dr_;
+  double lidar_anchor_dr_path_m_ = 0.0;
+  double lidar_anchor_dr_ref_s_ = -1.0e9;
+  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
+      lidar_anchor_candidate_pub_;
+  void SeedLidarAnchorFilter(const Sophus::SE2d& pose, double sigma_x, double sigma_y);
+  void ResetLidarAnchorDeadReckoningReference(const Sophus::SE2d& pose);
+  void PublishLidarAnchorCandidate(const Sophus::SE2d& pose,
+                                   const Eigen::Matrix2d& cov2,
+                                   LidarAnchorVerdict verdict,
+                                   bool applied);
+  void LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& curr_scan, bool curr_valid);
+  void RebuildLidarAnchorMap();
+
   // Frame names.
   std::string map_frame_ = "map";
   std::string odom_frame_ = "odom";
@@ -495,6 +583,9 @@ private:
   double wheel_dist_since_last_lc_m_ = 0.0;
   std::optional<rclcpp::Time> last_lc_accept_stamp_;
   uint64_t lc_rate_gated_ = 0;  // diagnostic: nodes where the gate blocked the search
+  // Most-recent valid GPS σ (m), latched in OnGnss; <0 = none yet. Feeds
+  // LoopClosureSigmaFloor so an LC is never tighter than the last GNSS fix.
+  double last_gps_sigma_ = -1.0;
 
   // Publishers.
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;
@@ -685,61 +776,6 @@ private:
   double scan_yield_sigma_xy_ = 0.5;
   double scan_yield_sigma_theta_ = 0.3;
   std::optional<rclcpp::Time> last_rtk_fixed_stamp_;
-
-  // ── RTK-anchored keyframe map (scan-to-keyframe absolute localization) ──
-  // Requires use_scan_matching_ (reuses scan_matcher_ + the scan subscription
-  // + the ICP guard rails). CAPTURE: under stable RTK-Fixed, freeze the
-  // GPS-fused node pose + scan as a keyframe (builds the absolute map). APPLY:
-  // during RTK-Float, match the live scan to nearby keyframes and queue a
-  // PriorFactor<Pose2> that pins absolute xy + yaw — the mechanism that holds
-  // <2 cm through a Float window where dead-reckoning would otherwise drift.
-  // The yaw component is protected by the kf_yaw_sigma_floor (GraphManager)
-  // and the yaw mirror-guard below so LiDAR heading can't override the gyro.
-  // Code default OFF; the in-repo yaml enables it. See graph_manager_keyframe.cpp
-  // + the OnTimer capture/apply blocks.
-  bool use_keyframe_map_ = false;
-  double kf_capture_sigma_max_m_ = 0.01;  // max GPS σ to allow a capture
-  int kf_capture_rtk_debounce_ = 3;  // consecutive RTK-Fixed epochs first
-  double kf_capture_max_omega_ = 0.10;  // rad/s — no capture while pivoting
-  double kf_spacing_m_ = 0.5;  // min move between captures
-  double kf_match_max_dist_m_ = 3.0;  // apply-side keyframe search radius
-  size_t kf_max_candidates_ = 5;
-  // Apply-side σ floors. The positional floor is raised to the capture gate
-  // (kf_capture_sigma_max_m_) at apply time so a keyframe frozen up to that far
-  // off its true pose can never be trusted TIGHTER than its own capture error.
-  double kf_apply_sigma_floor_m_ = 0.02;  // ICP-realism floor on the positional σ
-  double kf_apply_sigma_theta_rad_ = 0.05;  // ICP-realism floor on the yaw σ (~3°);
-                                            // GraphManager's kf_yaw_sigma_floor
-                                            // (~0.30 rad) is the effective floor
-  double kf_engage_age_s_ = 0.3;  // engage apply when Fixed older than this
-  // Looser inlier floor for cross-viewpoint scan-to-keyframe ICP, passed as a
-  // per-call override to scan_matcher_->Match. The shared scan-to-scan default
-  // (scan_min_inliers=30) assumes near-total overlap and rejected ~99.7% of
-  // keyframe matches at the in-loop min_inliers early-abort; 16 lets the
-  // RTK-Float keyframe anchor actually engage.
-  int kf_min_inliers_ = 16;
-  // Relaxed ICP guard rails for keyframe matching (cross-viewpoint, not
-  // incremental). Overrides min_inliers (kf_min_inliers_ above) plus the
-  // RMSE / divergence thresholds. The icp_max_delta_* checks
-  // (0.30 m / 0.50 rad) are inappropriate here — res.delta is the full
-  // transform between keyframe and live scan (up to kf_match_max_dist_m_).
-  double kf_match_max_rmse_m_ = 0.15;
-  double kf_match_max_divergence_xy_m_ = 0.30;
-  double kf_match_max_divergence_theta_rad_ = 0.50;
-  // Absolute-yaw mirror-guard (KeyframeYawWithinGate): reject a keyframe match
-  // whose implied ABSOLUTE map-frame yaw deviates from the gyro-predicted yaw by
-  // more than this. Catches mirrored / 180°-flipped ICP solutions on symmetric
-  // scenery that the xy mirror-guard and Huber let through — the keyframe prior
-  // engages during RTK-Float where COG is gated off, so this is the only guard
-  // on its heading. Sized to reject gross flips while leaving room for the
-  // keyframe to correct genuine slow gyro drift (< a few ° over a Float window).
-  double kf_match_max_yaw_dev_rad_ = 0.5;
-  // Latches updated in OnGnss for the capture gate.
-  double last_gps_sigma_ = -1.0;  // most-recent valid GPS σ (m); <0 = none
-  int rtk_fixed_streak_ = 0;  // consecutive RTK-Fixed epochs
-  std::optional<gtsam::Vector2> last_kf_capture_xy_;
-  uint64_t kf_matches_ok_ = 0;
-  uint64_t kf_matches_fail_ = 0;
 
   // In-flight guards for the async maintenance jobs. Save and rebase
   // each run in a detached worker so the executor callback returns

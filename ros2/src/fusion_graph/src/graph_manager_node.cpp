@@ -458,34 +458,38 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     new_factors_.add(
         gtsam::BetweenFactor<gtsam::Pose2>(k_prev, k_curr, queue_.scan_between->delta, noise));
   }
-  if (queue_.scan_to_keyframe)
+  if (queue_.lidar_map_xy)
   {
-    // ABSOLUTE XY-ONLY constraint on the current node from an RTK-anchored
-    // keyframe match. PoseTranslationPrior pins X_curr.translation() to
-    // abs_pose's xy (heading UNTOUCHED), bounding position drift during RTK-Float
-    // windows while yaw stays owned by the gyro between-factors and the loose
-    // (σ≥0.30 rad) scan-between yaw. Huber-wrapped so a single biased match is
-    // down-weighted.
-    //
-    // 2026-07-22: reverted from the PriorFactor<Pose2> (xy+yaw) variant. A
-    // keyframe yaw prior — even σ-floored — can inject a mirrored / 180°-flipped
-    // cross-viewpoint ICP heading, which corrupted map→odom on the robot (yaw
-    // flip ~180°, kf_matches_fail spiking, robot fought the path and dug). The
-    // yaw mirror-guard in fusion_graph_node OnTimer still REJECTS such matches
-    // before they are queued (so the xy anchor is protected from a mirror too),
-    // but no keyframe heading is ever fed into the graph. This keeps the Float
-    // position-holding benefit without the heading-flip risk. abs_pose still
-    // carries yaw for that guard; only its translation is used here.
-    const double s = std::max(queue_.scan_to_keyframe->sigma_xy, 1.0e-4);
-    gtsam::SharedNoiseModel noise = MakeDiagonal({s, s});
-    if (queue_.scan_to_keyframe->robust)
+    // LiDAR map anchor: ABSOLUTE XY-ONLY constraint from the particle filter
+    // localising against the occupancy grid built under RTK-Fixed. The filter
+    // returns a full covariance: along a lone wall it is wide, across it
+    // narrow — exactly the partial constraint a factor graph wants, so the
+    // matrix is used as-is (floored) rather than collapsed to one sigma.
+    // Heading is deliberately NOT constrained: a LiDAR-derived yaw prior once
+    // injected a mirrored / 180°-flipped ICP heading that corrupted map→odom
+    // on the robot (2026-07-22), so no LiDAR heading is ever fed into the
+    // graph — yaw stays owned by the gyro between-factors and the loose
+    // (σ≥0.30 rad) scan-between yaw. Huber-wrapped so a single biased
+    // localisation is down-weighted.
+    Eigen::Matrix2d cov = queue_.lidar_map_xy->cov;
+    const double floor_var =
+        params_.lidar_anchor_sigma_floor_m * params_.lidar_anchor_sigma_floor_m;
+    cov(0, 0) = std::max(cov(0, 0), floor_var);
+    cov(1, 1) = std::max(cov(1, 1), floor_var);
+    // Symmetrise and keep it positive definite even if the filter's estimate
+    // was numerically off.
+    cov = 0.5 * (cov + cov.transpose());
+    if (cov.determinant() <= 0.0)
+      cov = Eigen::Matrix2d::Identity() * floor_var;
+    gtsam::SharedNoiseModel noise = gtsam::noiseModel::Gaussian::Covariance(cov);
+    if (queue_.lidar_map_xy->robust)
     {
-      noise = gtsam::noiseModel::Robust::Create(gtsam::noiseModel::mEstimator::Huber::Create(
-                                                    params_.huber_k_gps),
+      noise = gtsam::noiseModel::Robust::Create(gtsam::noiseModel::mEstimator::Huber::Create(1.345),
                                                 noise);
     }
     new_factors_.add(gtsam::PoseTranslationPrior<gtsam::Pose2>(
-        k_curr, gtsam::Point2(queue_.scan_to_keyframe->abs_pose.translation()), noise));
+        k_curr, gtsam::Point2(queue_.lidar_map_xy->xy), noise));
+    ++lidar_anchor_factors_;
   }
 
   // 4. iSAM2 update. Mark the cached full estimate dirty — callers
@@ -566,7 +570,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   queue_.gnss.reset();
   queue_.yaw.reset();
   queue_.scan_between.reset();
-  queue_.scan_to_keyframe.reset();
+  queue_.lidar_map_xy.reset();
 
   return out;
 }

@@ -100,32 +100,17 @@ struct GraphParams
   double lever_arm_y = 0.0;
 
   // ── Datum (WGS84) ───────────────────────────────────────────────
-  // Tags persisted maps so a keyframe map captured at one garden is
-  // rejected at another (cross-site safety). (0,0) = unset → the
-  // datum check is skipped (preserves self-seeded bootstrap reload).
+  // Tags the persisted graph (`<prefix>.meta`) so a graph saved at one
+  // garden is rejected at another (cross-site safety, see
+  // graph_manager_persistence.cpp Load). (0,0) = unset → the datum
+  // check is skipped (preserves self-seeded bootstrap reload).
   double datum_lat = 0.0;
   double datum_lon = 0.0;
 
-  // ── RTK-anchored keyframe map ───────────────────────────────────
-  // kf_spacing_m: minimum spacing between captured keyframes (spatial
-  // decimation — a new keyframe within kf_spacing_m/2 of an existing
-  // one is rejected). max_keyframes: hard cap on the stored map size
-  // (0 = unbounded); oldest evicted when exceeded. The keyframe map is
-  // the rebase-exempt absolute reference used to hold <2 cm during
-  // RTK-Float; see graph_manager_keyframe.cpp.
-  double kf_spacing_m = 0.5;
-  uint64_t max_keyframes = 2000;
-  // Hard floor (rad) on the yaw σ of the scan-to-keyframe absolute
-  // PriorFactor<Pose2>, enforced in CreateNodeLocked — the LAST gate before the
-  // factor enters iSAM2. The keyframe prior carries an ABSOLUTE, LiDAR-derived
-  // map-frame yaw and engages during RTK-Float, exactly when COG yaw is gated
-  // off and nothing else could correct a wrong ICP rotation. Mirrors the node's
-  // scan/loop-closure LiDAR-yaw floor (scan_yaw_sigma_floor_rad, ~0.30 rad):
-  // heading stays owned by the gyro between-factors and the keyframe prior may
-  // only WEAKLY correct slow yaw drift across many nodes, never snap heading to
-  // a single cross-viewpoint ICP match. 0 disables the floor (yaw σ then set by
-  // the node-side ICP-realism floor kf_apply_sigma_theta_rad alone).
-  double kf_yaw_sigma_floor_rad = 0.30;
+  // LiDAR map anchor: floor on the per-axis sigma of the particle filter's XY
+  // covariance before it becomes a PoseTranslationPrior. A converged filter
+  // on a 0.10 m grid cannot honestly claim better than about half a cell.
+  double lidar_anchor_sigma_floor_m = 0.05;
 
   // ── Performance ─────────────────────────────────────────────────
   // Recompute the per-tick marginal covariance only every Nth tick.

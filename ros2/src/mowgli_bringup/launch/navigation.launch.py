@@ -137,6 +137,10 @@ def generate_launch_description() -> LaunchDescription:
         _rp.get("use_scan_matching", False)) else "false"
     _early_use_loop_closure = "true" if bool(
         _rp.get("use_loop_closure", False)) else "false"
+    _early_use_lidar_map_anchor = "true" if bool(
+        _rp.get("use_lidar_map_anchor", False)) else "false"
+    _early_lidar_anchor_shadow_mode = "true" if bool(
+        _rp.get("lidar_anchor_shadow_mode", False)) else "false"
     _early_fusion_graph_period = str(
         float(_rp.get("fusion_graph_node_period_s", 0.04)))
     _early_use_gps_dock_detection = "true" if bool(
@@ -189,6 +193,16 @@ def generate_launch_description() -> LaunchDescription:
         description="Loop-closure search against earlier graph nodes (fusion_graph). Default read from mowgli_robot.yaml AND gated on a persisted graph file existing on disk — first session can't loop-close against itself. Also ANDed with use_lidar before it reaches fusion_graph_node.",
     )
 
+    use_lidar_map_anchor_arg = DeclareLaunchArgument(
+        "use_lidar_map_anchor",
+        default_value=_early_use_lidar_map_anchor,
+        description="LiDAR map anchor (fusion_graph): occupancy grid built under RTK-Fixed, Beluga particle filter against it once Fixed goes stale, XY-only factor. Default read from mowgli_robot.yaml. ANDed with use_lidar like the other scan-driven flags.",
+    )
+    lidar_anchor_shadow_mode_arg = DeclareLaunchArgument(
+        "lidar_anchor_shadow_mode",
+        default_value=_early_lidar_anchor_shadow_mode,
+        description="LiDAR map anchor SHADOW mode (fusion_graph): run, score and publish the particle filter under RTK-Fixed as well, never apply a factor — the field measurement of the anchor against RTK. Default read from mowgli_robot.yaml. LiDAR-gated.",
+    )
     use_gps_dock_detection_arg = DeclareLaunchArgument(
         "use_gps_dock_detection",
         default_value=_early_use_gps_dock_detection,
@@ -232,6 +246,8 @@ def generate_launch_description() -> LaunchDescription:
     use_magnetometer = LaunchConfiguration("use_magnetometer")
     use_scan_matching = LaunchConfiguration("use_scan_matching")
     use_loop_closure = LaunchConfiguration("use_loop_closure")
+    use_lidar_map_anchor = LaunchConfiguration("use_lidar_map_anchor")
+    lidar_anchor_shadow_mode = LaunchConfiguration("lidar_anchor_shadow_mode")
     use_gps_dock_detection = LaunchConfiguration("use_gps_dock_detection")
     fusion_graph_tf_lead_s = LaunchConfiguration("fusion_graph_tf_lead_s")
     fusion_graph_node_period_s = LaunchConfiguration("fusion_graph_node_period_s")
@@ -1113,6 +1129,8 @@ def generate_launch_description() -> LaunchDescription:
             # a topic nothing publishes. See lidar_gated() above.
             "use_scan_matching": lidar_gated(use_scan_matching),
             "use_loop_closure": lidar_gated(use_loop_closure),
+            "use_lidar_map_anchor": lidar_gated(use_lidar_map_anchor),
+            "lidar_anchor_shadow_mode": lidar_gated(lidar_anchor_shadow_mode),
             "primary_mode": "true",
             "tf_publish_lead_s": fusion_graph_tf_lead_s,
             "node_period_s": fusion_graph_node_period_s,
@@ -1325,6 +1343,8 @@ def generate_launch_description() -> LaunchDescription:
             use_magnetometer_arg,
             use_scan_matching_arg,
             use_loop_closure_arg,
+            use_lidar_map_anchor_arg,
+            lidar_anchor_shadow_mode_arg,
             use_gps_dock_detection_arg,
             cog_stationary_seed_rate_hz_arg,
             fusion_graph_tf_lead_arg,

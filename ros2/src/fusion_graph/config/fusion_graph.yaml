@@ -27,7 +27,7 @@ fusion_graph_node:
     # `graph_pose ∘ dr⁻¹`, so any graph YAW correction Δθ not mirrored in the
     # gyro-integrated dead-reckoning becomes a map-pose POSITION step of
     # |dr|·sin(Δθ) — and |dr| grows to the full distance driven since the last
-    # re-seed. At |dr| = 25 m, a 2° COG/keyframe/loop-closure correction
+    # re-seed. At |dr| = 25 m, a 2° COG/loop-closure correction
     # teleports the believed map pose ~0.87 m in ONE TF cycle. The coverage
     # path and its obstacle holes live in the MAP frame, so that step lands
     # the blade off-lane over excluded obstacles. Re-basing the odom origin
@@ -413,68 +413,66 @@ fusion_graph_node:
     dock_prior_max_gps_disagreement_m: 0.50
     dock_prior_max_gps_sigma_m: 0.05
 
-    # ── RTK-anchored keyframe map (scan-to-keyframe absolute localization) ──
-    # The mechanism for holding <2 cm absolute DURING RTK-Float windows. Under
-    # stable RTK-Fixed, freeze {GPS-fused pose, scan} keyframes (the absolute
-    # map). During Float, ICP-match the live scan to nearby keyframes and pin
-    # absolute pose with a PriorFactor<Pose2> (xy + yaw) — bounding error to
-    # ~keyframe ⊕ ICP instead of letting dead-reckoning drift. The yaw component
-    # is floored (kf_apply_yaw_sigma_floor_rad) and mirror-guarded
-    # (kf_match_max_yaw_dev_rad) so LiDAR heading only weakly corrects gyro drift.
-    # REQUIRES use_scan_matching:=true
-    # (reuses the scan matcher + subscription + ICP guard rails) and LiDAR. Only
-    # delivers <2 cm where the LiDAR sees stable structure (fence/tree/dock);
-    # open lawn degrades to dead-reckoning by design. Enabled by default —
-    # field-validate the coast-drift behaviour with the GPS-off probe.
-    use_keyframe_map: true
-    # Capture gates (build the map):
-    kf_capture_sigma_max_m: 0.04    # only capture when the fix is <4 cm (RTK precision is ~2 cm)
-    kf_capture_rtk_debounce: 3      # consecutive RTK-Fixed epochs before a capture
-    kf_capture_max_omega: 0.10      # rad/s — skip capture while pivoting (smeared scan)
-    kf_spacing_m: 0.5               # min spacing between keyframes (also store decimation)
-    max_keyframes: 2000             # hard cap (oldest evicted)
-    # Apply gates (use the map during Float):
-    kf_match_max_dist_m: 3.0        # keyframe search radius around the predicted pose
-    kf_max_candidates: 5
-    # Inlier floor for the cross-viewpoint scan-to-keyframe ICP, passed as a
-    # per-call override to the shared matcher. The scan-to-scan default
-    # (scan_min_inliers: 30, near-total overlap) was ALSO applied to keyframe
-    # matches, whose overlap is partial — it rejected ~99.7% of them at the
-    # in-loop min_inliers early-abort (observed kf_matches_fail 88278 vs ok 287),
-    # so the RTK-Float keyframe anchor almost never engaged. 16 keeps a genuine
-    # geometric lock (still gated by kf_match_max_rmse_m / divergence / yaw-dev
-    # below) while letting the anchor actually fire during Float. Lower if the
-    # anchor still rarely engages on sparse/structure-poor lawn; raise toward 30
-    # if false locks appear.
-    kf_min_inliers: 16
-    # ICP-realism floor on the positional σ; at apply time it is additionally
-    # raised to kf_capture_sigma_max_m (a keyframe frozen up to 4 cm off must not
-    # be trusted tighter than that error).
-    kf_apply_sigma_floor_m: 0.02
-    # ICP-realism floor on the yaw σ (~3°). The EFFECTIVE yaw floor is the larger
-    # kf_apply_yaw_sigma_floor_rad below — this only bites if that is set to 0.
-    kf_apply_sigma_theta_rad: 0.05
-    # Hard yaw-σ floor (rad, ~17°) on the absolute keyframe prior — mirrors the
-    # scan/loop-closure LiDAR-yaw floor (scan_yaw_sigma_floor_rad). Keeps heading
-    # owned by the gyro: the keyframe yaw only weakly corrects slow drift, never
-    # snaps heading to a single cross-viewpoint ICP match. 0 disables the floor.
-    kf_apply_yaw_sigma_floor_rad: 0.30
-    kf_engage_age_s: 0.3            # engage apply once RTK-Fixed is older than this
-    # Relaxed ICP guard rails for keyframe matching (cross-viewpoint, not
-    # incremental). The icp_max_* checks (0.30 m / 0.50 rad) are too tight
-    # because res.delta is the full transform to a keyframe (up to 3 m).
-    kf_match_max_rmse_m: 0.15
-    # 0.10 (was 0.30 — SAFETY_REVIEW_2026-07-23 G-H2): the keyframe absolute
-    # prior engages precisely during RTK-Float windows, when no RTK-Fixed GPS
-    # is present to out-vote a wrong match. At 0.30 a cross-viewpoint ICP
-    # match wrong by up to 30 cm passed this guard and PINNED the map pose
-    # 30 cm off truth — enough to put the blade over an excluded obstacle
-    # hole. 0.10 bounds the worst accepted pin to ~10 cm; matches that
-    # diverge more are dropped (the graph coasts on wheel+gyro instead,
-    # which is the safer failure).
-    kf_match_max_divergence_xy_m: 0.10
-    kf_match_max_divergence_theta_rad: 0.50
-    # Absolute-yaw mirror-guard (rad): reject a keyframe match whose implied
-    # map-frame yaw is more than this off the gyro-predicted yaw. Catches
-    # mirrored / 180°-flipped ICP that the xy guard and Huber let through.
-    kf_match_max_yaw_dev_rad: 0.5
+    # ── LiDAR map anchor (Beluga) ─────────────────────────────────────
+    # Scan-to-MAP localisation for RTK-Float. Under fresh RTK-Fixed every
+    # scan is ray-cast into a georeferenced occupancy grid at the trusted
+    # fused pose (no factor is produced — the GPS already pins the pose).
+    # Once RTK-Fixed is older than lidar_anchor_engage_age_s a particle
+    # filter (beluga_ros::Amcl, likelihood field) localises against that
+    # grid, seeded from the last fused pose, and its XY + full covariance
+    # becomes a PoseTranslationPrior on the node. XY only: heading stays
+    # with the gyro (2026-07-22 yaw-flip incident). This is the only
+    # LiDAR-derived ABSOLUTE constraint in the graph. OFF until the field
+    # A/B (Float while driving, gap at re-Fix) validates it.
+    use_lidar_map_anchor: false
+    lidar_map_resolution_m: 0.10
+    lidar_map_half_extent_m: 40.0         # grid spans ±40 m around the datum
+    lidar_map_insert_period_s: 0.5        # insert a scan into the grid at most every 0.5 s
+    lidar_map_rebuild_period_s: 5.0       # push the grid to the filter at most every 5 s
+    lidar_anchor_engage_age_s: 1.0        # engage once RTK-Fixed is older than this (~5 missed fixes at 5 Hz; 0.3 flapped)
+    lidar_anchor_disengage_dwell_s: 1.0   # once anchoring, Fixed must be fresh this long before mapping resumes
+    lidar_anchor_max_beams: 60            # AMCL-class beam subsampling
+    lidar_anchor_min_particles: 300
+    lidar_anchor_max_particles: 1500
+    lidar_anchor_update_min_d: 0.05       # m of motion before the filter updates
+    lidar_anchor_update_min_a: 0.05       # rad
+    lidar_anchor_seed_sigma_xy_m: 0.10    # floor on the seed spread at engage
+    lidar_anchor_seed_sigma_theta_rad: 0.10
+    lidar_anchor_z_hit: 0.7
+    lidar_anchor_z_rand: 0.3              # tolerance to returns absent from the map (grass, people)
+    lidar_anchor_sigma_hit_m: 0.15
+    lidar_anchor_max_laser_distance_m: 12.0
+    lidar_anchor_odom_alpha_rot: 0.05
+    lidar_anchor_odom_alpha_trans: 0.05
+    # AMCL random-injection recovery (augmented MCL). OFF: on open lawn the
+    # average weight drops every update, injected particles near saturated
+    # clutter win, and the estimate teleports (2.7 m on the first update in
+    # the 2026-09-07 replay). The seed is always trustworthy here.
+    lidar_anchor_alpha_slow: 0.0
+    lidar_anchor_alpha_fast: 0.0
+    lidar_anchor_selective_resampling: true   # resample only when the effective sample size halves
+    # Per-estimate trust (lidar_anchor_validator.hpp). An estimate becomes a
+    # factor only if (1) ≥ min_hit_ratio of the scan's returns (and ≥
+    # min_hit_count of them) land on mapped occupied cells AT THE ESTIMATE,
+    # (2) the particle cloud's largest 1σ is ≤ max_sigma_m, and (3) it lies
+    # within dead reckoning's drift budget (dr_budget_m + dr_drift_frac ×
+    # path since seed) of the wheels+gyro prediction. Field 2026-09-06: the
+    # lost filter scored 0.13 and put the pose 10 m off; DR alone was 0.39 m.
+    lidar_anchor_min_hit_ratio: 0.5
+    lidar_anchor_min_hit_count: 30
+    lidar_anchor_max_sigma_m: 0.5
+    lidar_anchor_dr_budget_m: 0.3
+    lidar_anchor_dr_drift_frac: 0.02
+    lidar_anchor_reseed_after_s: 5.0    # rejected this long → cloud re-seeded at the DR prediction
+    # Shadow mode: run, score and publish the filter under RTK-Fixed too
+    # (/fusion_graph/lidar_anchor_candidate, diagnostics counters) without
+    # ever applying a factor — how the anchor is measured against RTK in the
+    # field. The DR reference is refreshed from the fused pose every
+    # lidar_anchor_shadow_ref_period_s while Fixed.
+    lidar_anchor_shadow_mode: false
+    # One-shot import of a previously published grid (first message only) —
+    # replay harness / persisted map seed. Empty = off.
+    lidar_map_import_topic: ""
+    lidar_anchor_shadow_ref_period_s: 20.0
+    lidar_anchor_sigma_floor_m: 0.05      # floor on the factor's per-axis sigma (half a cell)
+

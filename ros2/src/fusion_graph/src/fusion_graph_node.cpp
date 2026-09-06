@@ -141,19 +141,11 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   datum_lon_ = declare_parameter<double>("datum_lon", 0.0);
   datum_cos_lat_ = std::cos(datum_lat_ * M_PI / 180.0);
 
-  // Keyframe-map GraphParams (used by the GraphManager store/persistence;
-  // the node-side capture/apply params are declared in the scan-matching
-  // block below). datum tags persisted maps to their garden (cross-site
-  // guard on Load).
+  // The datum tags the persisted graph to its garden (cross-site guard on
+  // Load, see graph_manager_persistence.cpp).
   gp.datum_lat = datum_lat_;
   gp.datum_lon = datum_lon_;
-  gp.kf_spacing_m = declare_parameter<double>("kf_spacing_m", 0.5);
-  gp.max_keyframes = static_cast<uint64_t>(declare_parameter<int>("max_keyframes", 2000));
-  // Hard yaw-σ floor on the scan-to-keyframe absolute prior (GraphManager-side,
-  // enforced in CreateNodeLocked). Mirrors the scan/loop-closure LiDAR-yaw floor
-  // so the keyframe heading can only weakly correct gyro drift. See graph_params.
-  gp.kf_yaw_sigma_floor_rad = declare_parameter<double>("kf_apply_yaw_sigma_floor_rad", 0.30);
-  kf_spacing_m_ = gp.kf_spacing_m;  // node reuses for the capture-spacing gate
+  gp.lidar_anchor_sigma_floor_m = declare_parameter<double>("lidar_anchor_sigma_floor_m", 0.05);
 
   map_frame_ = declare_parameter<std::string>("map_frame", "map");
   odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");

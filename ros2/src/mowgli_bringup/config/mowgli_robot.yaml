@@ -333,6 +333,20 @@ mowgli:
     # navigation.launch.py, same as use_scan_matching above) and on the
     # first boot, when no persisted graph exists to close against.
     use_loop_closure: true
+    # use_lidar_map_anchor: scan-to-MAP localisation for RTK-Float. Under
+    # fresh RTK-Fixed every scan is ray-cast into a georeferenced occupancy
+    # grid at the trusted fused pose; once Fixed goes stale a particle filter
+    # (Beluga) localises against that grid and its XY + covariance becomes a
+    # unary factor. Heading stays with the gyro. Grid published latched on
+    # /fusion_graph/lidar_map. ANDed with use_lidar like the two flags above.
+    # OFF until the field A/B (Float while driving) validates it.
+    use_lidar_map_anchor: false
+    # lidar_anchor_shadow_mode: with the anchor enabled, ALSO run, score and
+    # publish the particle filter under RTK-Fixed, never applying a factor —
+    # /fusion_graph/lidar_anchor_candidate + diagnostics counters give the
+    # anchor-vs-RTK comparison in the field. Costs one particle filter update
+    # per 5 cm of travel. OFF by default.
+    lidar_anchor_shadow_mode: false
 
     # -----------------------------------------------------------------
     # GPS / Positioning

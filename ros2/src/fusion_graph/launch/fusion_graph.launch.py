@@ -95,6 +95,12 @@ def generate_launch_description() -> LaunchDescription:
         "use_scan_matching", default_value="false",
         description="Per-tick ICP between consecutive node scans → BetweenFactor. Required for GPS-loss tolerance.",
     )
+    use_lidar_map_anchor_arg = DeclareLaunchArgument(
+        "use_lidar_map_anchor", default_value="false",
+        description="LiDAR map anchor: build a georeferenced occupancy grid under RTK-Fixed and localise against it (Beluga MCL) once Fixed goes stale; XY-only unary factor.")
+    lidar_anchor_shadow_mode_arg = DeclareLaunchArgument(
+        "lidar_anchor_shadow_mode", default_value="false",
+        description="LiDAR map anchor shadow mode: run, score and publish the particle filter under RTK-Fixed too, never apply a factor. Field measurement of the anchor against RTK.")
     use_loop_closure_arg = DeclareLaunchArgument(
         "use_loop_closure", default_value="false",
         description="Loop-closure search against earlier nodes; resets accumulated drift on revisits.",
@@ -122,6 +128,8 @@ def generate_launch_description() -> LaunchDescription:
     use_magnetometer = LaunchConfiguration("use_magnetometer")
     use_scan_matching = LaunchConfiguration("use_scan_matching")
     use_loop_closure = LaunchConfiguration("use_loop_closure")
+    use_lidar_map_anchor = LaunchConfiguration("use_lidar_map_anchor")
+    lidar_anchor_shadow_mode = LaunchConfiguration("lidar_anchor_shadow_mode")
     primary_mode = LaunchConfiguration("primary_mode")
     tf_publish_lead_s = LaunchConfiguration("tf_publish_lead_s")
     node_period_s = LaunchConfiguration("node_period_s")
@@ -148,6 +156,8 @@ def generate_launch_description() -> LaunchDescription:
             "use_magnetometer": use_magnetometer,
             "use_scan_matching": use_scan_matching,
             "use_loop_closure": use_loop_closure,
+            "use_lidar_map_anchor": use_lidar_map_anchor,
+            "lidar_anchor_shadow_mode": lidar_anchor_shadow_mode,
             "dock_pose_x": float(cfg.get("dock_pose_x", 0.0) or 0.0),
             "dock_pose_y": float(cfg.get("dock_pose_y", 0.0) or 0.0),
             "dock_pose_yaw": float(cfg.get("dock_pose_yaw", 0.0) or 0.0),
@@ -187,6 +197,8 @@ def generate_launch_description() -> LaunchDescription:
         use_magnetometer_arg,
         use_scan_matching_arg,
         use_loop_closure_arg,
+        use_lidar_map_anchor_arg,
+        lidar_anchor_shadow_mode_arg,
         primary_mode_arg,
         tf_publish_lead_s_arg,
         node_period_s_arg,

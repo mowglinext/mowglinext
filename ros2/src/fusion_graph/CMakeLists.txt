@@ -33,6 +33,10 @@ find_package(Eigen3             REQUIRED)
 # API). On Kilted the Docker image builds GTSAM from source.
 find_package(GTSAM CONFIG REQUIRED)
 
+# LiDAR map anchor: Beluga particle filter (header-only MCL toolkit; the
+# beluga_ros wrapper brings the Amcl engine and the OccupancyGrid adapter).
+find_package(beluga_ros REQUIRED)
+
 # ---------------------------------------------------------------------------
 # Library: fusion_graph_core (factors + graph manager, header-light)
 # ---------------------------------------------------------------------------
@@ -43,7 +47,6 @@ add_library(fusion_graph_core
   src/graph_manager_node.cpp
   src/graph_manager_rebase.cpp
   src/graph_manager_persistence.cpp
-  src/graph_manager_keyframe.cpp
   src/scan_matcher.cpp
 )
 
@@ -89,11 +92,13 @@ add_executable(fusion_graph_node
   src/fusion_graph_node_misc.cpp
   src/fusion_graph_node_timer.cpp
   src/fusion_graph_node_publish.cpp
+  src/fusion_graph_node_lidar_anchor.cpp
 )
 
 target_link_libraries(fusion_graph_node
   fusion_graph_core
 )
+ament_target_dependencies(fusion_graph_node beluga_ros)
 
 # ---------------------------------------------------------------------------
 # Install
@@ -217,6 +222,20 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_slip_window fusion_graph_core)
 
+  ament_add_gtest(test_lidar_occupancy_mapper
+    test/test_lidar_occupancy_mapper.cpp
+  )
+  target_link_libraries(test_lidar_occupancy_mapper fusion_graph_core)
+
+  ament_add_gtest(test_lidar_map_anchor_gate
+    test/test_lidar_map_anchor_gate.cpp
+  )
+  target_link_libraries(test_lidar_map_anchor_gate fusion_graph_core)
+  ament_add_gtest(test_lidar_anchor_validator
+    test/test_lidar_anchor_validator.cpp
+  )
+  target_link_libraries(test_lidar_anchor_validator fusion_graph_core)
+
   ament_add_gtest(test_scan_match_dedup
     test/test_scan_match_dedup.cpp
   )
@@ -242,10 +261,15 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_gyro_bias fusion_graph_core)
 
-  ament_add_gtest(test_keyframe_map
-    test/test_keyframe_map.cpp
+  ament_add_gtest(test_rigid_transform
+    test/test_rigid_transform.cpp
   )
-  target_link_libraries(test_keyframe_map fusion_graph_core)
+  target_link_libraries(test_rigid_transform fusion_graph_core)
+
+  ament_add_gtest(test_lidar_map_xy_prior
+    test/test_lidar_map_xy_prior.cpp
+  )
+  target_link_libraries(test_lidar_map_xy_prior fusion_graph_core)
 
   ament_add_gtest(test_gnss_timestamp
     test/test_gnss_timestamp.cpp
