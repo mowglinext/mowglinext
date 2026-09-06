@@ -402,6 +402,29 @@ mowgli:
     # at FollowCoveragePath.min_speed_mps, below which FTC's own floor would
     # override it anyway (and the wheels stall under the firmware deadband).
     turn_speed_ratio: 0.8
+    # Blade-load slowdown: slow the coverage controller down when the blade
+    # motor bogs down in thick or wet grass, so the blade gets time to chew
+    # through instead of stalling or leaving an uncut strip. The STM32 reports
+    # the blade RPM at 4 Hz (/hardware_bridge/status mower_motor_rpm); FTC
+    # scales its carrot speed on a LINEAR RAMP between the two thresholds:
+    #   rpm >= blade_load_rpm_full  → full mowing_speed
+    #   rpm <= blade_load_rpm_min   → mowing_speed * blade_load_min_speed_ratio
+    # (never below FollowCoveragePath.stall_crawl_speed, 0.08 m/s, so the
+    # wheels always clear the firmware deadband). A ramp rather than a step lets
+    # the feed rate settle where the blade keeps up instead of bang-banging.
+    # FAIL-OPEN: an inactive blade (dry run, spin-up) or stale telemetry never
+    # slows the robot; this is a cut-quality feature, not a safety interlock.
+    # OFF by default because the no-load RPM differs per blade motor: read yours
+    # off Diagnostics ("Motor RPM") while mowing, put blade_load_rpm_full a
+    # little below the no-load figure and blade_load_rpm_min where the cut
+    # audibly labours, then enable. Injected at launch into
+    # FollowCoveragePath.blade_load_* (navigation.launch.py); a change needs a
+    # ROS2 restart (or `ros2 param set` live). Coverage lane only — manual
+    # (teleop) mowing is not shaped.
+    blade_load_slowdown_enabled: false
+    blade_load_rpm_full: 2500.0        # rpm at/above which no slowdown applies
+    blade_load_rpm_min: 1800.0         # rpm at/below which the minimum speed applies
+    blade_load_min_speed_ratio: 0.4    # slowest feed as a fraction of mowing_speed
     # mow_angle_deg: swath direction. -1 (or any negative) = AUTO — the coverage
     # server picks the swath-count-minimising angle (F2C NSwath). 0..179 forces a
     # fixed swath angle in degrees. Flows to the BT (behavior_tree_node blackboard)

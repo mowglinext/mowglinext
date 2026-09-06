@@ -96,6 +96,21 @@ void FTCController::configure(const rclcpp_lifecycle::LifecycleNode::WeakPtr& pa
         boundary_frame_ = og->header.frame_id;
       });
 
+  // Blade telemetry for the blade-load slowdown (ftc_blade_load.hpp). Always
+  // subscribed — the feature can be switched on live via the
+  // blade_load_slowdown_enabled parameter — and cheap: one struct copy per
+  // status message. Reliable QoS matches the bridge's publisher (QoS(10)).
+  blade_status_sub_ = node->create_subscription<mowgli_interfaces::msg::Status>(
+      "/hardware_bridge/status",
+      rclcpp::QoS(1),
+      [this](const mowgli_interfaces::msg::Status::SharedPtr msg)
+      {
+        std::lock_guard<std::mutex> lock(blade_mutex_);
+        blade_active_ = msg->mower_esc_status != 0u;
+        blade_rpm_ = static_cast<double>(msg->mower_motor_rpm);
+        blade_status_time_ = rclcpp::Time(msg->blade_status_stamp, RCL_ROS_TIME);
+      });
+
   current_state_ = PlannerState::PRE_ROTATE;
   last_time_ = clock_->now();
   time_last_oscillation_ = clock_->now();
@@ -113,6 +128,7 @@ void FTCController::cleanup()
   global_plan_pub_.reset();
   obstacle_marker_pub_.reset();
   boundary_costmap_sub_.reset();
+  blade_status_sub_.reset();
   {
     std::lock_guard<std::mutex> lock(boundary_mutex_);
     boundary_costmap_.reset();
@@ -174,6 +190,15 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.stall_speed_ratio = declare_double("stall_speed_ratio", 0.35);
   config_.stall_grace_s = declare_double("stall_grace_s", 0.6);
   config_.stall_crawl_speed = declare_double("stall_crawl_speed", 0.08);
+
+  // Blade-load slowdown (ftc_blade_load.hpp). Operator knobs are injected from
+  // mowgli_robot.yaml by navigation.launch.py; the telemetry age is a static
+  // nav2_params_base.yaml value.
+  config_.blade_load_slowdown_enabled = declare_bool("blade_load_slowdown_enabled", false);
+  config_.blade_load_rpm_full = declare_double("blade_load_rpm_full", 2500.0);
+  config_.blade_load_rpm_min = declare_double("blade_load_rpm_min", 1800.0);
+  config_.blade_load_min_speed_ratio = declare_double("blade_load_min_speed_ratio", 0.4);
+  config_.blade_load_telemetry_max_age_s = declare_double("blade_load_telemetry_max_age_s", 1.0);
 
   // PID longitudinal
   config_.kp_lon = declare_double("kp_lon", 1.0);
@@ -352,6 +377,34 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
       if (reject_invalid(key, p.as_double(), 0.0, 2.0))
         break;
       config_.stall_crawl_speed = p.as_double();
+    }
+    else if (key == "blade_load_slowdown_enabled")
+    {
+      config_.blade_load_slowdown_enabled = p.as_bool();
+    }
+    else if (key == "blade_load_rpm_full")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, 20000.0))
+        break;
+      config_.blade_load_rpm_full = p.as_double();
+    }
+    else if (key == "blade_load_rpm_min")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, 20000.0))
+        break;
+      config_.blade_load_rpm_min = p.as_double();
+    }
+    else if (key == "blade_load_min_speed_ratio")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, 1.0))
+        break;
+      config_.blade_load_min_speed_ratio = p.as_double();
+    }
+    else if (key == "blade_load_telemetry_max_age_s")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, 60.0))
+        break;
+      config_.blade_load_telemetry_max_age_s = p.as_double();
     }
     else if (key == "kp_lon")
     {
@@ -722,6 +775,8 @@ void FTCController::setPlan(const nav_msgs::msg::Path& path)
   current_movement_speed_ = config_.speed_slow;
   stall_time_ = 0.0;
   is_stalled_ = false;
+  is_blade_limited_ = false;
+  blade_load_scale_ = 1.0;
 
   lat_error_ = 0.0;
   lon_error_ = 0.0;
@@ -764,6 +819,56 @@ void FTCController::setPlan(const nav_msgs::msg::Path& path)
   RCLCPP_INFO(logger_,
               "FTCController: received new global plan with %zu points.",
               path.poses.size());
+}
+
+// ── applyBladeLoad ────────────────────────────────────────────────────────────
+
+double FTCController::applyBladeLoad(double target_speed)
+{
+  bool active = false;
+  double rpm = 0.0;
+  double age_s = -1.0;  // never received
+  {
+    std::lock_guard<std::mutex> lock(blade_mutex_);
+    active = blade_active_;
+    rpm = blade_rpm_;
+    if (blade_status_time_.nanoseconds() > 0)
+    {
+      age_s = (clock_->now() - blade_status_time_).seconds();
+    }
+  }
+
+  const FtcBladeLoadCfg cfg{config_.blade_load_slowdown_enabled,
+                            config_.blade_load_rpm_full,
+                            config_.blade_load_rpm_min,
+                            config_.blade_load_min_speed_ratio,
+                            config_.blade_load_telemetry_max_age_s};
+  const FtcBladeLoadResult out =
+      BladeLoadDecision(target_speed, active, rpm, age_s, config_.stall_crawl_speed, cfg);
+
+  if (out.is_limited != is_blade_limited_)
+  {
+    if (out.is_limited)
+    {
+      RCLCPP_INFO(logger_,
+                  "FTCController: blade load slowdown ENGAGED — blade %.0f rpm (ramp %.0f..%.0f), "
+                  "speed scale %.2f → %.3f m/s.",
+                  rpm,
+                  cfg.rpm_min,
+                  cfg.rpm_full,
+                  out.scale,
+                  out.target_speed);
+    }
+    else
+    {
+      RCLCPP_INFO(logger_,
+                  "FTCController: blade load slowdown released — blade %.0f rpm, full speed.",
+                  rpm);
+    }
+  }
+  is_blade_limited_ = out.is_limited;
+  blade_load_scale_ = out.scale;
+  return out.target_speed;
 }
 
 // ── setSpeedLimit ─────────────────────────────────────────────────────────────
@@ -1223,6 +1328,12 @@ void FTCController::update_control_point(double dt)
       // at the crawl speed (bypassing the min_speed_mps floor) while blocked.
       is_stalled_ = stall.in_stall;
 
+      // Blade-load slowdown: scale the (possibly stall-eased) target by the
+      // blade motor's RPM sag so a bogged blade gets fed slower. Sets
+      // is_blade_limited_ for calculate_velocity_commands. Pure decision +
+      // unit tests in ftc_blade_load.hpp / test_ftc_blade_load.cpp.
+      target_speed = applyBladeLoad(target_speed);
+
       // Smooth speed ramp (acceleration / deceleration).
       if (target_speed > current_movement_speed_)
       {
@@ -1492,8 +1603,17 @@ void FTCController::calculate_velocity_commands(double dt,
       // rate instead of leaping; max_cmd_vel_speed stays as the absolute cap only.
       if (lin_speed > current_movement_speed_)
         lin_speed = current_movement_speed_;
-      if (lin_speed > 0.0 && lin_speed < config_.min_speed_mps)
-        lin_speed = config_.min_speed_mps;
+      // The min_speed_mps floor keeps normal driving smooth through the
+      // accel ramp, but it would also undo any blade-load slowdown below
+      // 0.15 m/s (0.20 × 0.4 = 0.08). While the blade load is limiting, floor
+      // at the slowed carrot speed instead — never below stall_crawl_speed by
+      // construction (BladeLoadDecision floors there), which still clears the
+      // firmware wheel deadband.
+      const double speed_floor = is_blade_limited_
+                                     ? std::min(config_.min_speed_mps, current_movement_speed_)
+                                     : config_.min_speed_mps;
+      if (lin_speed > 0.0 && lin_speed < speed_floor)
+        lin_speed = speed_floor;
       cmd_vel.twist.linear.x = lin_speed;
     }
   }

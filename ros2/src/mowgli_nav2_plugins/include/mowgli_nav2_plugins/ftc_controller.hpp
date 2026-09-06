@@ -40,6 +40,8 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/buffer.hpp>
 
+#include "mowgli_interfaces/msg/status.hpp"
+#include "mowgli_nav2_plugins/ftc_blade_load.hpp"
 #include "mowgli_nav2_plugins/ftc_reverse_escape.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 #include "mowgli_nav2_plugins/oscillation_detector.hpp"
@@ -134,6 +136,18 @@ private:
   // Latest measured forward speed (odom feedback), cached from
   // computeVelocityCommands so update_control_point can detect a stall.
   double last_measured_fwd_speed_{0.0};
+  // True while the blade-load slowdown is holding the carrot's target speed
+  // below the path speed: set in update_control_point, read in
+  // calculate_velocity_commands to let the commanded speed follow the slowed
+  // carrot under the min_speed_mps floor. See ftc_blade_load.hpp.
+  bool is_blade_limited_{false};
+  // Last applied blade-load scale (1.0 = not limiting); kept for the
+  // limit-engaged/released log lines.
+  double blade_load_scale_{1.0};
+
+  /// Apply the blade-load slowdown (Config::blade_load_*) to a carrot target
+  /// speed, reading the latest blade telemetry under blade_mutex_.
+  double applyBladeLoad(double target_speed);
 
   // ── PID state ────────────────────────────────────────────────────────────
 
@@ -322,6 +336,22 @@ private:
   std::string boundary_frame_;  ///< frame_id of the global costmap (e.g. "map").
   std::mutex boundary_mutex_;
 
+  // ── Blade-load slowdown telemetry (blade_load_slowdown_enabled) ───────────
+  //
+  // hardware_bridge republishes the STM32's 4 Hz blade-controller report in
+  // /hardware_bridge/status (mower_esc_status = is_active, mower_motor_rpm,
+  // blade_status_stamp = time of the last DIRECT blade report — NOT the
+  // message stamp, which refreshes on every mainboard packet even when the
+  // blade stream has died). update_control_point reads the trio under
+  // blade_mutex_ and scales the carrot speed by the RPM sag; a stale stamp
+  // fails OPEN (no slowdown). Written by the subscription callback on the
+  // controller_server executor, read on the control-loop thread.
+  rclcpp::Subscription<mowgli_interfaces::msg::Status>::SharedPtr blade_status_sub_;
+  std::mutex blade_mutex_;
+  bool blade_active_{false};
+  double blade_rpm_{0.0};
+  rclcpp::Time blade_status_time_{0, 0, RCL_ROS_TIME};
+
   std::string plugin_name_;
 
   // Publishers (lifecycle-aware)
@@ -363,6 +393,23 @@ private:
     double stall_speed_ratio{0.35};
     double stall_grace_s{0.6};
     double stall_crawl_speed{0.08};
+
+    // Blade-load slowdown. When the blade motor's reported RPM sags under
+    // load (thick / wet grass), scale the carrot's target speed down on a
+    // linear ramp from 1.0 at blade_load_rpm_full to blade_load_min_speed_ratio
+    // at blade_load_rpm_min, floored at stall_crawl_speed, so the blade gets
+    // time to chew through instead of stalling or leaving an uncut strip.
+    // Fail-open: an inactive blade or telemetry older than
+    // blade_load_telemetry_max_age_s never slows the robot. Operator knobs
+    // flow from mowgli_robot.yaml (GUI Mowing section) via
+    // navigation.launch.py; OFF by default because the no-load RPM differs per
+    // blade motor and the thresholds must be read off the Diagnostics page
+    // first. See ftc_blade_load.hpp.
+    bool blade_load_slowdown_enabled{false};
+    double blade_load_rpm_full{2500.0};
+    double blade_load_rpm_min{1800.0};
+    double blade_load_min_speed_ratio{0.4};
+    double blade_load_telemetry_max_age_s{1.0};
 
     // PID longitudinal
     double kp_lon{1.0};

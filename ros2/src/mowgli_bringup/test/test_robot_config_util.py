@@ -640,3 +640,76 @@ def test_circumscribed_radius_encloses_every_footprint_corner():
     for x in (front, rear):
         for y in (half_width, -half_width):
             assert math.hypot(x, y) <= radius + 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Blade-load slowdown (FollowCoveragePath.blade_load_*)
+#
+# The FTC decision itself is unit-tested in mowgli_nav2_plugins
+# (test_ftc_blade_load.cpp); these cover the launch-side validation that turns
+# the operator's four mowgli_robot.yaml keys into the injected FTC params.
+
+
+class TestDeriveBladeLoadParams:
+    """navigation.launch.py injection of the blade-load slowdown knobs."""
+
+    def test_passes_a_valid_config_through_unchanged(self):
+        # Arrange / Act
+        params, warnings = _util.derive_blade_load_params(True, 2500.0, 1800.0, 0.4)
+
+        # Assert
+        assert warnings == []
+        assert params == {
+            "blade_load_slowdown_enabled": True,
+            "blade_load_rpm_full": 2500.0,
+            "blade_load_rpm_min": 1800.0,
+            "blade_load_min_speed_ratio": 0.4,
+        }
+
+    def test_template_defaults_are_disabled_and_warning_free(self):
+        params, warnings = _util.derive_blade_load_params(
+            False,
+            _util.DEFAULT_BLADE_LOAD_RPM_FULL,
+            _util.DEFAULT_BLADE_LOAD_RPM_MIN,
+            _util.DEFAULT_BLADE_LOAD_MIN_SPEED_RATIO,
+        )
+        assert warnings == []
+        assert params["blade_load_slowdown_enabled"] is False
+        # A disabled feature must still ship a usable ramp so flipping the GUI
+        # toggle alone engages it.
+        assert params["blade_load_rpm_full"] > params["blade_load_rpm_min"]
+
+    def test_accepts_yaml_string_booleans(self):
+        # The sparse installed file may carry the key as a string token.
+        params, _ = _util.derive_blade_load_params("true", 2500.0, 1800.0, 0.4)
+        assert params["blade_load_slowdown_enabled"] is True
+        params, _ = _util.derive_blade_load_params("false", 2500.0, 1800.0, 0.4)
+        assert params["blade_load_slowdown_enabled"] is False
+
+    def test_empty_ramp_disables_with_a_warning(self):
+        # rpm_full == rpm_min: FTC would fail open silently — say so and disable.
+        params, warnings = _util.derive_blade_load_params(True, 2000.0, 2000.0, 0.4)
+        assert params["blade_load_slowdown_enabled"] is False
+        assert len(warnings) == 1
+        assert "ramp is empty" in warnings[0]
+
+    def test_inverted_ramp_disables_with_a_warning(self):
+        params, warnings = _util.derive_blade_load_params(True, 1500.0, 2500.0, 0.4)
+        assert params["blade_load_slowdown_enabled"] is False
+        assert any("DISABLED" in w for w in warnings)
+
+    def test_bad_ramp_is_silent_when_the_feature_is_off(self):
+        # Nothing to warn about: the thresholds are inert while disabled.
+        _, warnings = _util.derive_blade_load_params(False, 1500.0, 2500.0, 0.4)
+        assert warnings == []
+
+    def test_ratio_above_one_is_clamped(self):
+        params, warnings = _util.derive_blade_load_params(True, 2500.0, 1800.0, 1.5)
+        assert params["blade_load_min_speed_ratio"] == 1.0
+        assert any("clamped" in w for w in warnings)
+
+    def test_ratio_floor_prevents_parking_the_robot(self):
+        params, warnings = _util.derive_blade_load_params(True, 2500.0, 1800.0, 0.0)
+        assert params["blade_load_min_speed_ratio"] == pytest.approx(
+            _util.BLADE_LOAD_MIN_SPEED_RATIO_FLOOR)
+        assert any("clamped" in w for w in warnings)

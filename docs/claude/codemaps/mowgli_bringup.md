@@ -160,6 +160,7 @@ All injection is READ ONCE at launch (container restart required); exceptions: `
 | `led_*` (12 keys) | led_ring_node | `full_system.launch.py` L679–704 |
 | `transit_speed` | `FollowPath.desired_linear_vel` | `navigation.launch.py` L745 |
 | `mowing_speed`, `turn_speed_ratio` | `FollowCoveragePath.speed_fast`, `.speed_slow` (= `derive_turn_speed`), raises `.max_cmd_vel_speed` if needed | L755–781 |
+| `blade_load_slowdown_enabled`, `blade_load_rpm_full`, `blade_load_rpm_min`, `blade_load_min_speed_ratio` [0.1,1] (= `derive_blade_load_params`; empty ramp → disabled + WARN) | `FollowCoveragePath.blade_load_*` | after `speed_slow` |
 | `max_obstacle_avoidance_distance` [0.5,10], `obstacle_detection_range_m` [0.2,5]→poses/0.05 (≥4), `obstacle_clearance_margin` [0,0.5], `obstacle_wait_timeout_s` [0.5,60], `obstacle_reverse_enabled`, `obstacle_reverse_max_dist_m` [0,1], `obstacle_reverse_speed_mps` [0,0.3] | `FollowCoveragePath.max_lateral_deviation`, `.obstacle_lookahead`, `.obstacle_clearance_margin`, `.obstacle_wait_timeout_s`, `.obstacle_reverse_*` | L811–848 |
 | `obstacle_inflation_radius` [0.58,1.5] | `local_costmap.inflation_layer.inflation_radius` ONLY (global 0.20 pinned) | L855–860 |
 | `obstacle_slowdown_ratio` [0.05,1] | `collision_monitor.PolygonSlow.slowdown_ratio` (LiDAR merge only) | L864–868 |

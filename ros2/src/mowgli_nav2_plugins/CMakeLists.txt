@@ -31,6 +31,7 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_eigen REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(mowgli_interfaces REQUIRED)
 find_package(Eigen3 REQUIRED)
 
 # ---------------------------------------------------------------------------
@@ -70,6 +71,7 @@ ament_target_dependencies(${PROJECT_NAME}
   tf2_geometry_msgs
   tf2_eigen
   visualization_msgs
+  mowgli_interfaces
 )
 
 # pluginlib needs the export macro defined.
@@ -157,6 +159,15 @@ if(BUILD_TESTING)
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 
+  ament_add_gtest(test_ftc_blade_load
+    test/test_ftc_blade_load.cpp
+  )
+
+  target_include_directories(test_ftc_blade_load
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
   ament_add_gtest(test_ftc_reverse_escape
     test/test_ftc_reverse_escape.cpp
   )
@@ -187,6 +198,7 @@ ament_export_dependencies(
   tf2_geometry_msgs
   tf2_eigen
   visualization_msgs
+  mowgli_interfaces
 )
 
 ament_package()

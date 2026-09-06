@@ -1649,6 +1649,26 @@
       "label": "Vitesse de tonte",
       "description": "Vitesse en marche avant pendant la tonte d'une bande."
     },
+    "blade_load_slowdown_enabled": {
+      "label": "Ralentissement selon la charge de la lame",
+      "description": "Réduit la vitesse de tonte quand le régime de la lame chute sous la charge."
+    },
+    "blade_load_rpm_full": {
+      "label": "Régime lame pleine vitesse",
+      "description": "Régime de lame à partir duquel aucun ralentissement ne s'applique."
+    },
+    "blade_load_rpm_min": {
+      "label": "Régime lame vitesse minimale",
+      "description": "Régime de lame en dessous duquel le ratio de vitesse minimale s'applique."
+    },
+    "blade_load_min_speed_ratio": {
+      "label": "Ratio de vitesse minimale sous charge",
+      "description": "Avance la plus lente sous charge de lame, en fraction de la vitesse de tonte."
+    },
+    "blade_load_telemetry_max_age_s": {
+      "label": "Âge max de la télémétrie lame",
+      "description": "Les rapports de lame plus anciens sont ignorés (pas de ralentissement)."
+    },
     "num_headland_passes": {
       "label": "Passes de bordure",
       "description": "Nombre d'anneaux de bordure concentriques tondus avant les bandes en va-et-vient. Une valeur négative (« aucune ») désactive complètement les anneaux de bordure : les bandes deviennent la passe la plus extérieure et leur axe suit exactement la ligne qu'aurait parcourue l'anneau extérieur, la bande non tondue latérale reste donc inchangée (environ 12 cm avec le retrait de sécurité châssis par défaut de 0,20 m). En revanche les EXTRÉMITÉS des bandes atteignent cette limite, soit environ 8 cm plus près de la bordure que n'importe quelle passe d'anneau, et sans tablier tondu les demi-tours en bout de rang deviennent des pivots à angle vif au lieu d'arcs réguliers."
@@ -2395,6 +2415,15 @@
     "mowingSpeedTooltip": "Vitesse pendant les bandes de tonte (m/s)",
     "transitSpeed": "Vitesse de transit",
     "transitSpeedTooltip": "Vitesse lors des trajets vers/depuis la base ou entre les zones",
+    "bladeLoad": "Ralentissement selon la charge de la lame",
+    "bladeLoadDescription": "Ralentit l’avance de tonte quand le régime du moteur de lame chute sous la charge (herbe épaisse ou mouillée), pour laisser à la lame le temps de couper au lieu de caler ou de laisser une bande non tondue. La vitesse varie linéairement entre les deux seuils de régime. Sécurité positive : une lame inactive ou une télémétrie périmée ne ralentit jamais le robot. Trajets de tonte uniquement. Relevez le régime à vide de votre lame dans Diagnostics → Régime moteur avant d’activer. Prend effet après un redémarrage de ROS2.",
+    "bladeLoadRpmFull": "Pleine vitesse au-dessus de",
+    "bladeLoadRpmFullTooltip": "Régime de lame (tr/min) à partir duquel la pleine vitesse de tonte s’applique. Réglez-le un peu sous le régime à vide affiché dans Diagnostics.",
+    "bladeLoadRpmMin": "Vitesse minimale en dessous de",
+    "bladeLoadRpmMinTooltip": "Régime de lame (tr/min) en dessous duquel l’avance minimale s’applique. Réglez-le là où la coupe peine audiblement ; doit être inférieur au seuil de pleine vitesse.",
+    "bladeLoadMinSpeedRatio": "Ratio de vitesse minimale",
+    "bladeLoadMinSpeedRatioTooltip": "Avance la plus lente sous charge de lame, en fraction de la vitesse de tonte. Jamais sous les 0,08 m/s de vitesse de rampement du contrôleur.",
+    "bladeLoadRampInvalid": "Le régime de pleine vitesse doit être supérieur au régime de vitesse minimale — avec une rampe vide, le ralentissement est désactivé au lancement.",
     "mowingPattern": "Motif de tonte",
     "headlandWidth": "Largeur de tournière",
     "headlandWidthTooltip": "Largeur de la bande périmétrique tondue avant le champ intérieur (retrait ConstHL de F2C). Reliée à coverage_server.default_headland_width, où elle ne sert qu'à UNE chose : le nombre d'anneaux automatique, ceil(largeur de tournière / espacement des passes). Elle n'a donc d'effet que si Passes de tournière est sur Auto — avec un nombre de passes imposé (2 par défaut), cette valeur est ignorée.",

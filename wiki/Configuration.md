@@ -1034,6 +1034,7 @@ Rerun with adjusted parameters, observe results, adjust again.
 | `desired_linear_vel` (transit, RPP) | 0.30 | m/s | `nav2_params_base.yaml` → `FollowPath` |
 | `min_lookahead_dist` / `max_lookahead_dist` | 0.45 / 0.90 | m | `nav2_params_base.yaml` → `FollowPath` |
 | `speed_fast` (mowing, FTC) | 0.20 | m/s | injected from `mowgli_robot.yaml.mowing_speed` |
+| `blade_load_slowdown_enabled` / `blade_load_rpm_full` / `blade_load_rpm_min` / `blade_load_min_speed_ratio` (FTC) | off / 2500 / 1800 / 0.4 | –, rpm, rpm, fraction | `mowgli_robot.yaml` (GUI Settings → Mowing → *Blade Load Slowdown*): when enabled, the mowing feed ramps linearly from full speed at `rpm_full` down to `min_speed_ratio × mowing_speed` at `rpm_min` as the blade RPM sags in thick grass. Fail-open (inactive blade or stale telemetry never slows the robot). Read your blade's no-load RPM on the Diagnostics page first. |
 | `tool_width` | 0.18 | m | `mowgli_robot.yaml` (drives `operation_width = tool_width − swath_overlap`) |
 | `swath_overlap` | 0.02 | m | `mowgli_robot.yaml` |
 | `global_costmap.resolution` / window | 0.08 / 70×70 | m, m | `nav2_params_base.yaml` |

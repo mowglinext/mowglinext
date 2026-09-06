@@ -13,6 +13,7 @@
 | FSM transitions / timeouts (`PRE_ROTATE → FOLLOWING → WAITING_FOR_GOAL_APPROACH → POST_ROTATE → FINISHED`) | `ftc_controller.cpp` `update_planner_state()` (L987); enum at `include/mowgli_nav2_plugins/ftc_controller.hpp:93` |
 | Where a fresh plan starts tracking (idx 0 vs legacy nearest snap) | `ftc_controller.cpp` `setPlan()` (L616) + `include/mowgli_nav2_plugins/ftc_start_index.hpp` `ChooseStartIndex` |
 | Anti-wheelspin stall (crawl at `stall_crawl_speed`, freeze carrot) | `include/mowgli_nav2_plugins/ftc_stall.hpp` `StallDecision`; consumed in `update_control_point()` and `calculate_velocity_commands()` (`is_stalled_`) |
+| Blade-load slowdown (scale carrot speed by blade RPM sag, fail-open) | `include/mowgli_nav2_plugins/ftc_blade_load.hpp` `BladeLoadDecision`; `applyBladeLoad()` in `update_control_point()`, `is_blade_limited_` lowers the `min_speed_mps` floor in `calculate_velocity_commands()`; telemetry from `/hardware_bridge/status` |
 | Obstacle skirt policy: side choice, grow, min floor, clear-hold, wait-or-abort | `ftc_controller.cpp` `updateLateralDeviation()` (L1821); pure helpers `src/obstacle_deviation.cpp` |
 | Zone confine (offset must stay in-zone) / zone mask (#517, out-of-zone lethal is not an obstacle) | `BoundaryGuard` in `include/mowgli_nav2_plugins/obstacle_deviation.hpp`; built in `updateLateralDeviation()` from `boundary_costmap_` (sub `/global_costmap/costmap`, `ftc_controller.cpp:75`) |
 | Footprint vs half-width line model, front clip, lateral expand | `obstacle_deviation.cpp` `footprintBlocked` / `clipFootprintFront` / `expandFootprintLateral`; toggled by `use_footprint_clearance` |
@@ -45,6 +46,7 @@
 | **`include/mowgli_nav2_plugins/`** | | |
 | `ftc_controller.hpp` | 581 | `FTCController` class: FSM enum, carrot/PID/deviation/reverse/oscillation state, `struct Config` (all params + C++ defaults) |
 | `ftc_stall.hpp` | 74 | Pure `StallDecision()` — stall_time debounce, crawl easing, `in_stall` flag |
+| `ftc_blade_load.hpp` | 105 | Pure `BladeLoadScale()` / `BladeLoadDecision()` — linear RPM→speed ramp, inactive/stale/degenerate gates fail OPEN, `stall_crawl_speed` floor |
 | `ftc_reverse_escape.hpp` | 83 | Pure `ReverseEscapeDecide()` / `ReverseEscapeAdvance()` — opt-in, budget cap, rear-clear gate |
 | `ftc_start_index.hpp` | 80 | Pure `ChooseStartIndex()` — idx 0 by default; legacy nearest snap breaks ties to the earlier index |
 | `obstacle_deviation.hpp` | 236 | `BoundaryGuard` (zone guard + zone mask) and `ObstacleDeviation` static helpers; thresholds `kLethalThreshold=253`, `kLethalOnlyThreshold=254` |
@@ -58,6 +60,7 @@
 | `path_progress_goal_checker.cpp` | 317 | `initialize` (params + plan sub), `onPath` fingerprint, `isGoalReached`, `getTolerances`; `PLUGINLIB_EXPORT_CLASS` at bottom |
 | **`test/`** | | |
 | `test_ftc_stall.cpp` | 160 | 10 cases on `StallDecision` (disable, grace, crawl, reset, cap-not-floor) |
+| `test_ftc_blade_load.cpp` | 180 | 17 cases on `BladeLoadScale` / `BladeLoadDecision` (disabled/inactive/stale/degenerate fail open, ramp endpoints + midpoint, floor never raises speed, immediate recovery) |
 | `test_ftc_reverse_escape.cpp` | 108 | 10 cases: opt-in default, rear-blocked never reverses, budget cap, advance arithmetic |
 | `test_ftc_start_index.cpp` | 77 | 4 cases: fresh plan → 0, closed ring never resolves to its end, legacy snap, empty plan |
 | `test_obstacle_deviation.cpp` | 823 | ~50 cases on a 400×400 @0.05 m synthetic costmap: detection, side choice (left bias), grow, boundary guard, zone mask (#517), footprint model, clip/expand, `hasClearExit`, lookahead clamp |
@@ -75,6 +78,7 @@ None. Both classes are pluginlib plugins loaded by Nav2's `controller_server` (l
 | `/controller_server/FollowCoveragePath/global_plan` | `nav_msgs/Path` | pub | `QoS(1).transient_local()` | Published ONCE per `setPlan` with the tail pose duplicated (`ftc_controller.cpp:762`). Sub: `PathProgressGoalChecker` (`KeepLast(1).reliable()`, `path_progress_goal_checker.cpp:67-70`). ALSO published by BT `FollowStrip` (`ros2/src/mowgli_behavior/src/coverage_nodes.cpp:391`, same QoS) |
 | `/controller_server/FollowCoveragePath/costmap_marker` | `visualization_msgs/Marker` | pub | depth 10 | Only when `debug_obstacle` and deviation OFF (`debugObstacle`) |
 | `/global_costmap/costmap` | `nav_msgs/OccupancyGrid` | sub | `QoS(1).transient_local()` | Rebuilt into `boundary_costmap_` (`data >= 99 → 254`, else 0) for the zone guard/mask (`ftc_controller.cpp:75-96`) |
+| `/hardware_bridge/status` | `mowgli_interfaces/Status` | sub | `QoS(1)` | `mower_esc_status` / `mower_motor_rpm` / `blade_status_stamp` → `blade_active_` / `blade_rpm_` / `blade_status_time_` under `blade_mutex_` for the blade-load slowdown (always subscribed; inert unless `blade_load_slowdown_enabled`) |
 | (via controller_server) `odom_topic` = `/wheel_odom` | `nav_msgs/Odometry` | in | — | `velocity.linear.x` feeds stall detection + reverse-escape budget (`nav2_params_base.yaml:77`) |
 
 ### Services & actions
@@ -90,6 +94,7 @@ FTC: all `FollowCoveragePath.*` keys are declared in `declareParameters()`; all 
 | `max_cmd_vel_speed` / `max_cmd_vel_ang` | L403 = 0.30 / L404 = 0.8 | 2.0 / 2.0 | L764 raised to `mowing_speed` if larger |
 | `min_speed_mps` | L360 = 0.15 | 0.15 | — (read back at L778 as `derive_turn_speed`'s floor) |
 | `stall_speed_ratio` / `stall_grace_s` / `stall_crawl_speed` | L366–368 = 0.35 / 0.6 / 0.08 | same | — (pinned by `test_ftc_stall_trio_present_in_both_variants`) |
+| `blade_load_slowdown_enabled` / `blade_load_rpm_full` / `blade_load_rpm_min` / `blade_load_min_speed_ratio` / `blade_load_telemetry_max_age_s` | false / 2500 / 1800 / 0.4 / 1.0 | same | first four from template `blade_load_*` via `derive_blade_load_params` (`navigation.launch.py`, after `speed_slow`); pinned by `test_ftc_blade_load_keys_present_in_both_variants` + `test_navigation_launch_injects_ftc_blade_load` |
 | `kp_lat` / `kd_lat` / `kp_ang` / `kp_ang_following` / `derivative_filter_tau` | L388 0.8 / L390 0.5 / L391 1.5 / L392 1.0 / L402 0.2 | 1.0 / 0 / 1.0 / =kp_ang / 0 | — |
 | `max_goal_distance_error` | L410 = 0.50 | 1.0 | — but FLOORS `coverage_goal_checker.xy_goal_tolerance` (L890–905) |
 | `max_goal_angle_error` / `goal_timeout` / `max_follow_distance` | L411 30.0 / L412 10.0 / L413 2.0 | 10.0 / 5.0 / 1.0 | — |
@@ -130,6 +135,7 @@ colcon test --packages-select mowgli_bringup       # runs test/test_nav2_params.
 
 Unit tests (all ROS-free gtests, registered in `CMakeLists.txt`):
 - `test/test_ftc_stall.cpp` — `StallDecision` disable/grace/crawl/reset; stall flag caps output instead of flooring.
+- `test/test_ftc_blade_load.cpp` — `BladeLoadDecision` fails open on disabled/inactive/stale/degenerate; linear ramp endpoints; floor never raises the speed; no hysteresis.
 - `test/test_ftc_reverse_escape.cpp` — default is opt-in OFF; rear-blocked never reverses; budget hard cap; negative dt ignored.
 - `test/test_ftc_start_index.cpp` — fresh plan starts at 0; closed ring never resolves to its last index.
 - `test/test_obstacle_deviation.cpp` — detection reach vs clearance reach are separate; left bias on ties; boundary guard rejects out-of-zone offsets; zone mask ignores out-of-zone lethal but keeps in-zone; footprint model thresholds 254 while line model 253; `hasClearExit` false when obstacle fills the window.

@@ -1,6 +1,6 @@
 import React, { useMemo } from "react";
-import { Card, Col, Form, InputNumber, Row, Select, Space, Switch, Typography } from "antd";
-import { ScissorOutlined } from "@ant-design/icons";
+import { Alert, Card, Col, Form, InputNumber, Row, Select, Space, Switch, Typography } from "antd";
+import { DashboardOutlined, ScissorOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
@@ -34,6 +34,19 @@ const HEADLAND_PASS_OPTIONS = [
     HEADLAND_PASSES_AUTO,
     ...Array.from({ length: HEADLAND_PASSES_MAX }, (_, i) => i + 1),
 ];
+
+// Blade-load slowdown (FollowCoveragePath.blade_load_*, injected by
+// navigation.launch.py). Template defaults mirrored here because the installed
+// yaml is SPARSE (Invariant 15): an untouched robot sends none of these keys.
+// The ratio floor mirrors robot_config_util.BLADE_LOAD_MIN_SPEED_RATIO_FLOOR —
+// below it the launch clamps anyway, and near 0 the robot would park with the
+// blade grinding one spot.
+const BLADE_LOAD_ENABLED_DEFAULT = false;
+const BLADE_LOAD_RPM_FULL_DEFAULT = 2500;
+const BLADE_LOAD_RPM_MIN_DEFAULT = 1800;
+const BLADE_LOAD_MIN_SPEED_RATIO_DEFAULT = 0.4;
+const BLADE_LOAD_MIN_SPEED_RATIO_FLOOR = 0.1;
+const BLADE_RPM_MAX = 10000;
 
 type Props = {
     values: Record<string, any>;
@@ -189,6 +202,13 @@ export const MowingSection: React.FC<Props> = ({
     // between the sentinel and a concrete 0..179° angle; the degrees input is
     // disabled while Auto is on.
     const mowAngleIsAuto = (values.mow_angle_deg ?? MOW_ANGLE_AUTO) < 0;
+    const bladeLoadEnabled = values.blade_load_slowdown_enabled ?? BLADE_LOAD_ENABLED_DEFAULT;
+    const bladeLoadRpmFull = values.blade_load_rpm_full ?? BLADE_LOAD_RPM_FULL_DEFAULT;
+    const bladeLoadRpmMin = values.blade_load_rpm_min ?? BLADE_LOAD_RPM_MIN_DEFAULT;
+    // navigation.launch.py disables the feature (with a warning) on an empty or
+    // inverted ramp; surface that here instead of letting the operator save a
+    // toggle that silently never engages.
+    const bladeLoadRampInvalid = bladeLoadEnabled && !(bladeLoadRpmFull > bladeLoadRpmMin);
 
     return (
         <div>
@@ -236,6 +256,71 @@ export const MowingSection: React.FC<Props> = ({
                                         onChange={(v) => onChange("transit_speed", v)}
                                         min={0.05} max={0.6} step={0.05} precision={2}
                                         style={{ width: "100%" }} addonAfter="m/s"
+                                    />
+                                </Form.Item>
+                            </Col>
+                        </Row>
+                    </Form>
+                </Space>
+            </Card>
+
+            {/* Blade-load slowdown: feed the blade slower when its RPM sags */}
+            <Card size="small" style={{ marginBottom: 16 }}>
+                <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div>
+                            {fieldLabel(
+                                "blade_load_slowdown_enabled",
+                                <Text strong style={{ fontSize: 14 }}>
+                                    <DashboardOutlined style={{ marginRight: 6 }} />
+                                    {t("settingsMowing.bladeLoad")}
+                                </Text>,
+                            )}
+                            <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
+                                {t("settingsMowing.bladeLoadDescription")}
+                            </Paragraph>
+                        </div>
+                        <Switch
+                            checked={bladeLoadEnabled}
+                            onChange={(v) => onChange("blade_load_slowdown_enabled", v)}
+                            aria-label={t("settingsMowing.bladeLoad")}
+                        />
+                    </div>
+                    {bladeLoadRampInvalid && (
+                        <Alert type="warning" showIcon message={t("settingsMowing.bladeLoadRampInvalid")} />
+                    )}
+                    <Form layout="vertical" size="small">
+                        <Row gutter={[16, 0]}>
+                            <Col xs={12} sm={8}>
+                                <Form.Item label={fieldLabel("blade_load_rpm_full", t("settingsMowing.bladeLoadRpmFull"))} tooltip={t("settingsMowing.bladeLoadRpmFullTooltip")}>
+                                    <InputNumber
+                                        value={bladeLoadRpmFull}
+                                        onChange={(v) => onChange("blade_load_rpm_full", v)}
+                                        disabled={!bladeLoadEnabled}
+                                        min={0} max={BLADE_RPM_MAX} step={50} precision={0}
+                                        style={{ width: "100%" }} addonAfter="rpm"
+                                    />
+                                </Form.Item>
+                            </Col>
+                            <Col xs={12} sm={8}>
+                                <Form.Item label={fieldLabel("blade_load_rpm_min", t("settingsMowing.bladeLoadRpmMin"))} tooltip={t("settingsMowing.bladeLoadRpmMinTooltip")}>
+                                    <InputNumber
+                                        value={bladeLoadRpmMin}
+                                        onChange={(v) => onChange("blade_load_rpm_min", v)}
+                                        disabled={!bladeLoadEnabled}
+                                        min={0} max={BLADE_RPM_MAX} step={50} precision={0}
+                                        style={{ width: "100%" }} addonAfter="rpm"
+                                    />
+                                </Form.Item>
+                            </Col>
+                            <Col xs={12} sm={8}>
+                                <Form.Item label={fieldLabel("blade_load_min_speed_ratio", t("settingsMowing.bladeLoadMinSpeedRatio"))} tooltip={t("settingsMowing.bladeLoadMinSpeedRatioTooltip")}>
+                                    <InputNumber
+                                        value={values.blade_load_min_speed_ratio ?? BLADE_LOAD_MIN_SPEED_RATIO_DEFAULT}
+                                        onChange={(v) => onChange("blade_load_min_speed_ratio", v)}
+                                        disabled={!bladeLoadEnabled}
+                                        min={BLADE_LOAD_MIN_SPEED_RATIO_FLOOR} max={1.0} step={0.05} precision={2}
+                                        style={{ width: "100%" }}
                                     />
                                 </Form.Item>
                             </Col>
