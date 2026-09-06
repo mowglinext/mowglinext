@@ -141,6 +141,48 @@ public:
   }
 
   // Test / diagnostics access.
+  struct ScanScore
+  {
+    int hits = 0;  // returns whose 3×3 cell neighbourhood holds an occupied cell
+    int total = 0;  // returns inside max_range and inside the grid
+  };
+
+  // Scan-vs-map consistency at a candidate pose: how many of this scan's
+  // returns land on (or next to) a mapped occupied cell when placed at
+  // (px, py, pyaw). Independent of the particle filter's own weighting —
+  // it is the witness that catches a tight-but-wrong cloud.
+  ScanScore ScoreScan(double px,
+                      double py,
+                      double pyaw,
+                      const std::vector<std::pair<double, double>>& points_body) const
+  {
+    ScanScore s;
+    const double c = std::cos(pyaw), sn = std::sin(pyaw);
+    for (const auto& [bx, by] : points_body)
+    {
+      const double range = std::hypot(bx, by);
+      if (!(range > 0.05) || range > p_.max_range_m)
+        continue;
+      int ex = 0, ey = 0;
+      if (!ToCell(px + c * bx - sn * by, py + sn * bx + c * by, ex, ey))
+        continue;
+      ++s.total;
+      bool hit = false;
+      for (int dy = -1; dy <= 1 && !hit; ++dy)
+        for (int dx = -1; dx <= 1 && !hit; ++dx)
+        {
+          const int x = ex + dx, y = ey + dy;
+          if (x < 0 || y < 0 || static_cast<std::size_t>(x) >= n_ ||
+              static_cast<std::size_t>(y) >= n_)
+            continue;
+          hit = log_odds_[Index(x, y)] >= p_.occupied_threshold;
+        }
+      if (hit)
+        ++s.hits;
+    }
+    return s;
+  }
+
   double LogOddsAt(double wx, double wy) const
   {
     int x, y;

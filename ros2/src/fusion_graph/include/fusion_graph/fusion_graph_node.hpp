@@ -39,6 +39,7 @@
 
 #include "fusion_graph/dr_slip_veto.hpp"
 #include "fusion_graph/graph_manager.hpp"
+#include "fusion_graph/lidar_anchor_validator.hpp"
 #include "fusion_graph/lidar_map_anchor_gate.hpp"
 #include "fusion_graph/lidar_occupancy_mapper.hpp"
 #include "fusion_graph/pose_extrapolator.hpp"
@@ -419,6 +420,12 @@ private:
   double lidar_anchor_max_laser_distance_m_ = 12.0;
   double lidar_anchor_odom_alpha_rot_ = 0.05;
   double lidar_anchor_odom_alpha_trans_ = 0.05;
+  LidarAnchorValidatorParams lidar_anchor_validator_;  // per-estimate trust (see validator header)
+  double lidar_anchor_reseed_after_s_ =
+      5.0;  // lost this long → re-seed the cloud from dead reckoning
+  bool lidar_anchor_shadow_mode_ = false;  // run + score + publish under RTK, never apply
+  double lidar_anchor_shadow_ref_period_s_ =
+      20.0;  // shadow: refresh the DR reference from the fused pose
   std::optional<LidarOccupancyMapper> lidar_mapper_;
   std::optional<LidarMapAnchorGate> lidar_anchor_gate_;
   std::unique_ptr<beluga_ros::Amcl> lidar_anchor_filter_;
@@ -430,6 +437,30 @@ private:
   uint64_t lidar_anchor_updates_ = 0;  // filter updates that produced an estimate
   uint64_t lidar_anchor_seeds_ = 0;  // MAPPING→ANCHORING seeds
   uint64_t lidar_anchor_skipped_ = 0;  // filter ran but declined (no motion)
+  uint64_t lidar_anchor_rej_score_ = 0;  // estimates refused: scan does not fit the map there
+  uint64_t lidar_anchor_rej_spread_ = 0;  // estimates refused: particle cloud too wide
+  uint64_t lidar_anchor_rej_dr_ = 0;  // estimates refused: implausible vs dead reckoning
+  uint64_t lidar_anchor_reseeds_ = 0;  // cloud re-seeded from dead reckoning after being lost
+  double lidar_anchor_last_hit_ratio_ = 0.0;
+  double lidar_anchor_last_sigma_m_ = 0.0;
+  LidarAnchorVerdict lidar_anchor_last_verdict_ = LidarAnchorVerdict::kAccepted;
+  double lidar_anchor_lost_since_s_ = -1.0;  // monotonic; <0 = not lost
+  bool lidar_anchor_shadow_seeded_ = false;
+  // Dead-reckoning witness reference: map pose at seed, odom pose at seed,
+  // path driven since, and when the reference was last set.
+  Sophus::SE2d lidar_anchor_seed_pose_;
+  Sophus::SE2d lidar_anchor_seed_dr_;
+  Sophus::SE2d lidar_anchor_last_dr_;
+  double lidar_anchor_dr_path_m_ = 0.0;
+  double lidar_anchor_dr_ref_s_ = -1.0e9;
+  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
+      lidar_anchor_candidate_pub_;
+  void SeedLidarAnchorFilter(const Sophus::SE2d& pose, double sigma_x, double sigma_y);
+  void ResetLidarAnchorDeadReckoningReference(const Sophus::SE2d& pose);
+  void PublishLidarAnchorCandidate(const Sophus::SE2d& pose,
+                                   const Eigen::Matrix2d& cov2,
+                                   LidarAnchorVerdict verdict,
+                                   bool applied);
   void LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& curr_scan, bool curr_valid);
   void RebuildLidarAnchorMap();
 

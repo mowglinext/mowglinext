@@ -982,3 +982,10 @@ def test_lidar_map_anchor_flag_is_plumbed_end_to_end() -> None:
     assert template.get("use_lidar_map_anchor") is False, (
         "template default must be false until the field A/B validates the anchor"
     )
+    # Shadow mode rides the same path: config -> navigation.launch.py
+    # (LiDAR-gated) -> fusion_graph.launch.py -> node.
+    assert re.search(r'_rp\.get\("lidar_anchor_shadow_mode", False\)', nav)
+    assert re.search(r'"lidar_anchor_shadow_mode":\s*lidar_gated\(lidar_anchor_shadow_mode\)', nav)
+    assert re.search(r'DeclareLaunchArgument\(\s*"lidar_anchor_shadow_mode"', fg)
+    assert re.search(r'"lidar_anchor_shadow_mode":\s*lidar_anchor_shadow_mode', fg)
+    assert template.get("lidar_anchor_shadow_mode") is False

@@ -341,6 +341,12 @@ mowgli:
     # /fusion_graph/lidar_map. ANDed with use_lidar like the two flags above.
     # OFF until the field A/B (Float while driving) validates it.
     use_lidar_map_anchor: false
+    # lidar_anchor_shadow_mode: with the anchor enabled, ALSO run, score and
+    # publish the particle filter under RTK-Fixed, never applying a factor —
+    # /fusion_graph/lidar_anchor_candidate + diagnostics counters give the
+    # anchor-vs-RTK comparison in the field. Costs one particle filter update
+    # per 5 cm of travel. OFF by default.
+    lidar_anchor_shadow_mode: false
 
     # -----------------------------------------------------------------
     # GPS / Positioning

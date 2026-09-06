@@ -100,3 +100,26 @@ TEST(LidarOccupancyMapper, PoseOutsideGridIsIgnored)
   EXPECT_EQ(m.inserted_scans(), 0u);
   EXPECT_EQ(m.Export().occupied, 0u);
 }
+
+// A scan placed at the true pose scores ~1; the same scan half a metre off
+// scores low — this is the witness that distinguishes a lost filter.
+TEST(LidarOccupancyMapper, ScoreScanSeparatesTruePoseFromShiftedPose)
+{
+  LidarOccupancyMapperParams p;
+  p.resolution_m = 0.10;
+  p.half_extent_m = 10.0;
+  LidarOccupancyMapper m(p);
+  // A straight wall 3 m ahead (x = 3, y in [-2, 2]) seen from the origin, 3 scans.
+  std::vector<std::pair<double, double>> wall;
+  for (double y = -2.0; y <= 2.0; y += 0.05)
+    wall.emplace_back(3.0, y);
+  for (int i = 0; i < 3; ++i)
+    m.Insert(0.0, 0.0, 0.0, wall);
+  const auto at_truth = m.ScoreScan(0.0, 0.0, 0.0, wall);
+  EXPECT_EQ(at_truth.total, static_cast<int>(wall.size()));
+  EXPECT_GT(static_cast<double>(at_truth.hits) / at_truth.total, 0.95);
+  const auto shifted = m.ScoreScan(0.5, 0.0, 0.0, wall);  // wall would be at x = 3.5
+  EXPECT_LT(static_cast<double>(shifted.hits) / shifted.total, 0.2);
+  const auto empty = m.ScoreScan(0.0, 0.0, 0.0, {});
+  EXPECT_EQ(empty.total, 0);
+}

@@ -457,6 +457,26 @@ fusion_graph_node:
     lidar_anchor_max_laser_distance_m: 12.0
     lidar_anchor_odom_alpha_rot: 0.05
     lidar_anchor_odom_alpha_trans: 0.05
+    # Per-estimate trust (lidar_anchor_validator.hpp). An estimate becomes a
+    # factor only if (1) ≥ min_hit_ratio of the scan's returns (and ≥
+    # min_hit_count of them) land on mapped occupied cells AT THE ESTIMATE,
+    # (2) the particle cloud's largest 1σ is ≤ max_sigma_m, and (3) it lies
+    # within dead reckoning's drift budget (dr_budget_m + dr_drift_frac ×
+    # path since seed) of the wheels+gyro prediction. Field 2026-09-06: the
+    # lost filter scored 0.13 and put the pose 10 m off; DR alone was 0.39 m.
+    lidar_anchor_min_hit_ratio: 0.5
+    lidar_anchor_min_hit_count: 30
+    lidar_anchor_max_sigma_m: 0.5
+    lidar_anchor_dr_budget_m: 0.3
+    lidar_anchor_dr_drift_frac: 0.02
+    lidar_anchor_reseed_after_s: 5.0    # rejected this long → cloud re-seeded at the DR prediction
+    # Shadow mode: run, score and publish the filter under RTK-Fixed too
+    # (/fusion_graph/lidar_anchor_candidate, diagnostics counters) without
+    # ever applying a factor — how the anchor is measured against RTK in the
+    # field. The DR reference is refreshed from the fused pose every
+    # lidar_anchor_shadow_ref_period_s while Fixed.
+    lidar_anchor_shadow_mode: false
+    lidar_anchor_shadow_ref_period_s: 20.0
     lidar_anchor_sigma_floor_m: 0.05      # floor on the factor's per-axis sigma (half a cell)
 
     use_keyframe_map: true

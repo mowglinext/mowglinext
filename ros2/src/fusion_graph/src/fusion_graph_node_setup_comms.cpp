@@ -147,6 +147,8 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
     lidar_map_pub_ =
         create_publisher<nav_msgs::msg::OccupancyGrid>("/fusion_graph/lidar_map",
                                                        rclcpp::QoS(1).transient_local());
+    lidar_anchor_candidate_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+        "/fusion_graph/lidar_anchor_candidate", rclcpp::QoS(10));
   }
 
   // /hardware_bridge/status is always subscribed — OnHardwareStatus
@@ -386,6 +388,19 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         add("lidar_anchor_seeds", std::to_string(lidar_anchor_seeds_));
         add("lidar_anchor_skipped", std::to_string(lidar_anchor_skipped_));
         add("lidar_anchor_factors", std::to_string(graph_->LidarAnchorFactorCount()));
+        {
+          char b[64];
+          std::snprintf(b, sizeof(b), "%.3f", lidar_anchor_last_hit_ratio_);
+          add("lidar_anchor_hit_ratio", b);
+          std::snprintf(b, sizeof(b), "%.3f", lidar_anchor_last_sigma_m_);
+          add("lidar_anchor_sigma_m", b);
+        }
+        add("lidar_anchor_verdict", ToString(lidar_anchor_last_verdict_));
+        add("lidar_anchor_rej_score", std::to_string(lidar_anchor_rej_score_));
+        add("lidar_anchor_rej_spread", std::to_string(lidar_anchor_rej_spread_));
+        add("lidar_anchor_rej_dr", std::to_string(lidar_anchor_rej_dr_));
+        add("lidar_anchor_reseeds", std::to_string(lidar_anchor_reseeds_));
+        add("lidar_anchor_shadow", lidar_anchor_shadow_mode_ ? "1" : "0");
         add("scan_matches_fail", std::to_string(scan_matches_fail_));
         // RTK-anchored keyframe map (use_keyframe_map): map
         // size + scan-to-keyframe absolute-match health.

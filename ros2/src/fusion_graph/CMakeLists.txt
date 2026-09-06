@@ -232,6 +232,10 @@ if(BUILD_TESTING)
     test/test_lidar_map_anchor_gate.cpp
   )
   target_link_libraries(test_lidar_map_anchor_gate fusion_graph_core)
+  ament_add_gtest(test_lidar_anchor_validator
+    test/test_lidar_anchor_validator.cpp
+  )
+  target_link_libraries(test_lidar_anchor_validator fusion_graph_core)
 
   ament_add_gtest(test_loop_closure_gate
     test/test_loop_closure_gate.cpp

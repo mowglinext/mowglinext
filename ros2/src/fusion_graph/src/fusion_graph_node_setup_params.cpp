@@ -122,6 +122,23 @@ void FusionGraphNode::DeclareParameters()
     lidar_anchor_odom_alpha_rot_ = declare_parameter<double>("lidar_anchor_odom_alpha_rot", 0.05);
     lidar_anchor_odom_alpha_trans_ =
         declare_parameter<double>("lidar_anchor_odom_alpha_trans", 0.05);
+    // Per-estimate trust. Defaults sized on the 2026-09-06 replay: the lost
+    // filter scored 0.13 while a healthy one scores ≥ 0.9; wheels + gyro
+    // drifted < 0.4 m over 2.7 min and a U-turn.
+    lidar_anchor_validator_.min_hit_ratio =
+        declare_parameter<double>("lidar_anchor_min_hit_ratio", 0.5);
+    lidar_anchor_validator_.min_hit_count =
+        declare_parameter<int>("lidar_anchor_min_hit_count", 30);
+    lidar_anchor_validator_.max_sigma_m =
+        declare_parameter<double>("lidar_anchor_max_sigma_m", 0.5);
+    lidar_anchor_validator_.dr_budget_m =
+        declare_parameter<double>("lidar_anchor_dr_budget_m", 0.3);
+    lidar_anchor_validator_.dr_drift_frac =
+        declare_parameter<double>("lidar_anchor_dr_drift_frac", 0.02);
+    lidar_anchor_reseed_after_s_ = declare_parameter<double>("lidar_anchor_reseed_after_s", 5.0);
+    lidar_anchor_shadow_mode_ = declare_parameter<bool>("lidar_anchor_shadow_mode", false);
+    lidar_anchor_shadow_ref_period_s_ =
+        declare_parameter<double>("lidar_anchor_shadow_ref_period_s", 20.0);
     if (use_lidar_map_anchor_)
     {
       LidarOccupancyMapperParams mp;
