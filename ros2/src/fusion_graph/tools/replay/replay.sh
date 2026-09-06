@@ -27,6 +27,7 @@ python3 /data/replay_log.py "$OUT/log.csv" > "$OUT/log.txt" 2>&1 &
 LOG=$!
 wait $PLAY
 sleep 2
+echo "node cpu: $(ps -eo etimes=,times=,rss=,args= | grep "[f]usion_graph_node" | grep -v "ros2 run" | awk '{print $1, $2, $3}' | head -1)  (elapsed s, cpu s, rss kB)"
 kill -INT $LOG $NODE $SEED 2>/dev/null; sleep 2; kill -9 $LOG $NODE $SEED 2>/dev/null
 echo "rows: $(wc -l < "$OUT/log.csv")"; cat "$OUT/seed.log"; grep -E "bootstrap|seeding from dock|wrong-fix" "$OUT/node.log" | cut -c1-160 | head -5
 python3 /data/replay_eval.py "$OUT/log.csv"

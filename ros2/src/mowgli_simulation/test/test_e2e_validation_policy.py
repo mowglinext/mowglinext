@@ -108,13 +108,15 @@ def test_simulation_reset_preserves_persisted_area_geometry():
 
     for generated_file in (
         'fusion_graph.graph',
-        'fusion_graph.keyframes',
         'fusion_graph.meta',
         'fusion_graph.scans',
         'coverage_resume.txt',
     ):
         assert f'/ros2_ws/maps/{generated_file}' in reset_source
 
+    # The keyframe map (.keyframes) was removed 2026-09-07 with the keyframe
+    # anchor; the reset must not reference a file the stack no longer writes.
+    assert 'fusion_graph.keyframes' not in reset_source
     assert '/ros2_ws/maps/areas.dat' not in reset_source
     assert '/ros2_ws/maps/*' not in reset_source
 

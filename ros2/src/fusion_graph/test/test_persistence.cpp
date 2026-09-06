@@ -125,3 +125,52 @@ TEST(Persistence, NonEmptyRoundTrip)
 
   CleanupPrefix(prefix);
 }
+
+// Cross-garden guard: `.meta` carries the datum the graph was saved under.
+// A graph persisted at one garden must be refused when the node is configured
+// for another (its node poses and scans would inject wrong absolute factors),
+// while the same datum — and an unset (0,0) datum, the self-seeded bootstrap
+// case — still load. Ported from the removed keyframe-map persistence test.
+TEST(Persistence, LoadRefusesGraphSavedUnderAnotherDatum)
+{
+  const auto prefix = TempPrefix("datum_guard");
+  CleanupPrefix(prefix);
+
+  // Arrange: save a small graph tagged with datum A.
+  {
+    fg::GraphParams gp;
+    gp.datum_lat = 48.0;
+    gp.datum_lon = 2.0;
+    fg::GraphManager gm(gp);
+    gm.Initialize(gtsam::Pose2(0.0, 0.0, 0.0), 0.0);
+    gm.AddWheelTwist(0.5, 0.0, 0.0, 0.1);
+    ASSERT_TRUE(gm.Tick(0.2).has_value());
+    ASSERT_TRUE(gm.Save(prefix));
+  }
+
+  // Act + Assert: same datum → loads.
+  {
+    fg::GraphParams gp;
+    gp.datum_lat = 48.0;
+    gp.datum_lon = 2.0;
+    fg::GraphManager gm(gp);
+    EXPECT_TRUE(gm.Load(prefix));
+    EXPECT_TRUE(gm.IsInitialized());
+  }
+  // Different garden (datum B) → rejected, manager stays uninitialized.
+  {
+    fg::GraphParams gp;
+    gp.datum_lat = 49.0;
+    gp.datum_lon = 3.0;
+    fg::GraphManager gm(gp);
+    EXPECT_FALSE(gm.Load(prefix));
+    EXPECT_FALSE(gm.IsInitialized());
+  }
+  // Unset configured datum (0,0) skips the check — bootstrap reload path.
+  {
+    fg::GraphManager gm(fg::GraphParams{});
+    EXPECT_TRUE(gm.Load(prefix));
+  }
+
+  CleanupPrefix(prefix);
+}

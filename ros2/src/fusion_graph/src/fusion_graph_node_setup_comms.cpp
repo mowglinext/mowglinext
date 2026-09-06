@@ -247,11 +247,6 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
              std::shared_ptr<std_srvs::srv::Trigger::Response> resp)
       {
         graph_->Reset();
-        // clear_graph is the explicit operator full-wipe — also drop the
-        // RTK-anchored keyframe map (Reset() alone preserves it, since it is
-        // the self-heal path). Re-arm capture spacing.
-        graph_->ClearKeyframes();
-        last_kf_capture_xy_.reset();
         // Drop the latched seed too, otherwise a stale GPS / yaw seed
         // from before the clear would re-initialize the graph at the
         // old position the operator was trying to escape.
@@ -260,7 +255,6 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         seed_xy_rtk_fixed_ = false;
         gnss_observation_tracker_.Reset();
         last_rtk_fixed_stamp_.reset();
-        rtk_fixed_streak_ = 0;
         last_gps_sigma_ = -1.0;
         last_gps_map_xy_.reset();
         ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
@@ -409,11 +403,6 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         add("lidar_anchor_reseeds", std::to_string(lidar_anchor_reseeds_));
         add("lidar_anchor_shadow", lidar_anchor_shadow_mode_ ? "1" : "0");
         add("scan_matches_fail", std::to_string(scan_matches_fail_));
-        // RTK-anchored keyframe map (use_keyframe_map): map
-        // size + scan-to-keyframe absolute-match health.
-        add("keyframes_total", std::to_string(graph_->KeyframeCount()));
-        add("kf_matches_ok", std::to_string(kf_matches_ok_));
-        add("kf_matches_fail", std::to_string(kf_matches_fail_));
         // Robustness-pass health counters. Each is a
         // cumulative count since process start; the
         // session monitor diffs consecutive samples

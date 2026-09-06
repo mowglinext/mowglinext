@@ -118,11 +118,9 @@ void GraphManager::ResetLocked()
   ticks_since_cov_ = 0;
   loop_closure_edges_.clear();
   scans_.clear();
-  // keyframes_ is deliberately NOT cleared here. This reset is the live-graph
-  // self-heal path (IndeterminateSystem catch) — the keyframe map is the
-  // reset-exempt ABSOLUTE reference (datum-anchored, captured only under stable
-  // RTK-Fixed) and stays valid after the live graph re-seeds in the same datum
-  // frame. A user-triggered full wipe clears it via ClearKeyframes().
+  // This reset is the live-graph self-heal path (IndeterminateSystem catch):
+  // the graph re-seeds in the same datum frame. The LiDAR occupancy grid the
+  // map anchor localises against lives in the node, not here, and survives.
 
   // Cancel any in-flight async rebase: phase 3 of RebaseISAM2 checks
   // this flag before swapping isam_, so clearing it here makes the
@@ -146,7 +144,6 @@ bool GraphManager::Save(const std::string& prefix) const
   // while the bytes hit disk.
   gtsam::Values estimate_snapshot;
   std::map<uint64_t, std::vector<Eigen::Vector2d>> scans_snapshot;
-  std::map<uint64_t, Keyframe> keyframes_snapshot;
   uint64_t next_index_snapshot = 0;
   double last_node_time_s_snapshot = 0.0;
   {
@@ -164,7 +161,6 @@ bool GraphManager::Save(const std::string& prefix) const
     RefreshEstimateLocked();
     estimate_snapshot = current_estimate_;
     scans_snapshot = scans_;
-    keyframes_snapshot = keyframes_;  // write-once entries → consistent copy
     next_index_snapshot = next_index_;
     last_node_time_s_snapshot = last_node_time_s_;
   }
@@ -184,20 +180,12 @@ bool GraphManager::Save(const std::string& prefix) const
     SerializeScansBinary(scans_snapshot, scans_os);
     scans_os.close();
 
-    // Keyframe map (4th file). Written even when empty (a valid header + 0
-    // count) so the on-disk set is always complete.
-    std::ofstream kf_os(prefix + ".keyframes", std::ios::binary);
-    if (!kf_os)
-      return false;
-    SerializeKeyframesBinary(kf_os, keyframes_snapshot);
-    kf_os.close();
-
     std::ofstream meta_os(prefix + ".meta");
     if (!meta_os)
       return false;
     meta_os << "next_index=" << next_index_snapshot << "\n";
-    // Datum (WGS84) tags the map to its garden so a keyframe map is rejected
-    // at a different site on Load. 9 decimals ≈ 0.1 mm at lat/lon scale.
+    // Datum (WGS84) tags the graph to its garden so a graph saved at one site
+    // is rejected at another on Load. 9 decimals ≈ 0.1 mm at lat/lon scale.
     meta_os << "datum_lat=" << std::fixed << std::setprecision(9) << params_.datum_lat << "\n";
     meta_os << "datum_lon=" << std::fixed << std::setprecision(9) << params_.datum_lon << "\n";
     // Wall-clock seconds need ≥10 integer digits + a few fractional, so
@@ -249,21 +237,6 @@ bool GraphManager::Load(const std::string& prefix)
     return false;
   }
 
-  // Keyframe map (4th file). ABSENT is fine — pre-feature on-disk triples
-  // ({.graph,.scans,.meta}) must still load. A present-but-corrupt/old-version
-  // file degrades to an empty map rather than failing the whole restore.
-  std::map<uint64_t, Keyframe> loaded_keyframes;
-  try
-  {
-    std::ifstream kf_is(prefix + ".keyframes", std::ios::binary);
-    if (kf_is && !DeserializeKeyframesBinary(kf_is, loaded_keyframes))
-      loaded_keyframes.clear();
-  }
-  catch (const std::exception&)
-  {
-    loaded_keyframes.clear();
-  }
-
   uint64_t next_idx = 0;
   double last_t = 0.0;
   double loaded_datum_lat = 0.0;
@@ -297,9 +270,10 @@ bool GraphManager::Load(const std::string& prefix)
   }
 
   // Cross-garden guard: if BOTH the configured and the persisted datum are set,
-  // reject a map whose datum differs — its keyframe absolute poses (and graph)
-  // belong to a different site and would inject wrong absolute factors. Skipped
-  // when the configured datum is unset (0,0) so self-seeded bootstrap reloads.
+  // reject a graph whose datum differs — its node poses (and the scans used
+  // for loop closure / cold-boot relocalization) belong to a different site
+  // and would inject wrong absolute factors. Skipped when the configured datum
+  // is unset (0,0) so self-seeded bootstrap reloads.
   const bool have_cfg_datum =
       std::abs(params_.datum_lat) > 1.0e-9 || std::abs(params_.datum_lon) > 1.0e-9;
   const bool have_persisted_datum =
@@ -383,10 +357,6 @@ bool GraphManager::Load(const std::string& prefix)
         ++it;
     }
   }
-  // Keyframes are the durable absolute map — restored WHOLE (no window cutoff),
-  // independent of the pose window. Resume the id counter past the highest id.
-  keyframes_ = std::move(loaded_keyframes);
-  next_keyframe_id_ = keyframes_.empty() ? 0 : (keyframes_.rbegin()->first + 1);
   next_index_ = next_idx;
   // Clamp loaded timestamp to "now" so a meta written with stale
   // precision (legacy iostream default, e.g. "1.7774e+09") doesn't

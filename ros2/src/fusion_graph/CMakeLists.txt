@@ -47,7 +47,6 @@ add_library(fusion_graph_core
   src/graph_manager_node.cpp
   src/graph_manager_rebase.cpp
   src/graph_manager_persistence.cpp
-  src/graph_manager_keyframe.cpp
   src/scan_matcher.cpp
 )
 
@@ -257,10 +256,15 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_gyro_bias fusion_graph_core)
 
-  ament_add_gtest(test_keyframe_map
-    test/test_keyframe_map.cpp
+  ament_add_gtest(test_rigid_transform
+    test/test_rigid_transform.cpp
   )
-  target_link_libraries(test_keyframe_map fusion_graph_core)
+  target_link_libraries(test_rigid_transform fusion_graph_core)
+
+  ament_add_gtest(test_lidar_map_xy_prior
+    test/test_lidar_map_xy_prior.cpp
+  )
+  target_link_libraries(test_lidar_map_xy_prior fusion_graph_core)
 
   ament_add_gtest(test_gnss_timestamp
     test/test_gnss_timestamp.cpp

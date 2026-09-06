@@ -49,9 +49,8 @@ void FusionGraphNode::DeclareParameters()
     // 40 source points keeps ICP rmse within a few mm of the 60-pt
     // result while halving inner-loop NN cost. ARM hot-path saving.
     sp.source_subsample = static_cast<size_t>(declare_parameter<int>("icp_source_subsample", 40));
-    // Inlier floor for the scan-to-scan between-factor (near-total overlap, so
-    // 30/40 subsampled points is easy). Keyframe matching uses its own, looser
-    // kf_min_inliers below (cross-viewpoint overlap is partial).
+    // Inlier floor for the scan-to-scan between-factor and the loop-closure /
+    // cold-boot matches (near-total overlap, so 30/40 subsampled points is easy).
     sp.min_inliers = declare_parameter<int>("scan_min_inliers", 30);
     sp.sigma_xy_base = declare_parameter<double>("icp_sigma_xy_base", 0.02);
     sp.sigma_theta_base = declare_parameter<double>("icp_sigma_theta_base", 0.005);
@@ -71,28 +70,6 @@ void FusionGraphNode::DeclareParameters()
     scan_yield_timeout_s_ = declare_parameter<double>("scan_yield_timeout_s", 2.0);
     scan_yield_sigma_xy_ = declare_parameter<double>("scan_yield_sigma_xy", 0.5);
     scan_yield_sigma_theta_ = declare_parameter<double>("scan_yield_sigma_theta", 0.3);
-
-    // ── RTK-anchored keyframe map (absolute scan-to-keyframe localization) ──
-    // Requires scan matching (this block). Code default OFF (yaml enables).
-    // CAPTURE under stable RTK-Fixed; APPLY a PriorFactor<Pose2> (xy + yaw)
-    // during RTK-Float to hold <2 cm. Yaw is protected by the GraphManager
-    // kf_yaw_sigma_floor + the mirror-guard below.
-    use_keyframe_map_ = declare_parameter<bool>("use_keyframe_map", false);
-    kf_capture_sigma_max_m_ = declare_parameter<double>("kf_capture_sigma_max_m", 0.01);
-    kf_capture_rtk_debounce_ = declare_parameter<int>("kf_capture_rtk_debounce", 3);
-    kf_capture_max_omega_ = declare_parameter<double>("kf_capture_max_omega", 0.10);
-    // Looser inlier floor for cross-viewpoint scan-to-keyframe ICP. The
-    // scan-to-scan default (scan_min_inliers=30) assumes near-total overlap;
-    // a keyframe is an older scan from a different pose, so 30/40 is rarely
-    // reachable and was rejecting ~99.7% of keyframe matches at the min_inliers
-    // early-abort. 16 keeps a genuine geometric lock while letting the RTK-Float
-    // anchor actually engage.
-    kf_min_inliers_ = declare_parameter<int>("kf_min_inliers", 16);
-    kf_match_max_dist_m_ = declare_parameter<double>("kf_match_max_dist_m", 3.0);
-    kf_max_candidates_ = static_cast<size_t>(declare_parameter<int>("kf_max_candidates", 5));
-    kf_apply_sigma_floor_m_ = declare_parameter<double>("kf_apply_sigma_floor_m", 0.02);
-    kf_apply_sigma_theta_rad_ = declare_parameter<double>("kf_apply_sigma_theta_rad", 0.05);
-    kf_engage_age_s_ = declare_parameter<double>("kf_engage_age_s", 0.3);
 
     // LiDAR map anchor (Beluga particle filter against a grid built under
     // RTK-Fixed). Off by default until the field A/B validates it.
@@ -169,14 +146,6 @@ void FusionGraphNode::DeclareParameters()
                   lidar_map_half_extent_m_,
                   lidar_anchor_engage_age_s_);
     }
-    kf_match_max_rmse_m_ = declare_parameter<double>("kf_match_max_rmse_m", 0.15);
-    kf_match_max_divergence_xy_m_ = declare_parameter<double>("kf_match_max_divergence_xy_m", 0.30);
-    kf_match_max_divergence_theta_rad_ =
-        declare_parameter<double>("kf_match_max_divergence_theta_rad", 0.50);
-    // Absolute-yaw mirror-guard bound (see fusion_graph_node.hpp): reject a
-    // keyframe match whose implied map-frame yaw is more than this off the
-    // gyro-predicted yaw — catches mirrored / flipped ICP the xy guard misses.
-    kf_match_max_yaw_dev_rad_ = declare_parameter<double>("kf_match_max_yaw_dev_rad", 0.5);
   }
 
   // 180° yaw-flip recovery (see fusion_graph_node.hpp). Declared outside the

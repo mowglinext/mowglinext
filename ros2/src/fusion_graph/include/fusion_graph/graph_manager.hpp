@@ -127,18 +127,6 @@ public:
   // their respective covariances.
   void QueueScanBetween(const gtsam::Pose2& delta, double sigma_xy, double sigma_theta);
 
-  // Scan-to-keyframe ABSOLUTE full-pose constraint to apply at next node creation
-  // as a PriorFactor<Pose2>(X_curr, abs_pose). `abs_pose` is the map-frame pose
-  // (xy + yaw) the current node should have per an ICP match to a frozen
-  // keyframe. `robust` wraps the noise model in Huber (a keyframe match on
-  // symmetric scenery can be a gross outlier, like a wrong-fix GPS sample). The
-  // yaw σ is additionally floored at params_.kf_yaw_sigma_floor_rad in
-  // CreateNodeLocked so the LiDAR-derived absolute heading can only weakly
-  // correct gyro drift, never override it.
-  void QueueScanToKeyframe(const gtsam::Pose2& abs_pose,
-                           double sigma_xy,
-                           double sigma_theta,
-                           bool robust = true);
   // LiDAR map anchor: absolute XY (map frame) with its 2x2 covariance from the
   // particle filter, applied at the next node as a PoseTranslationPrior. The
   // covariance diagonal is floored at params_.lidar_anchor_sigma_floor_m^2.
@@ -236,49 +224,6 @@ public:
                                         double y,
                                         double max_dist_m,
                                         size_t max_candidates) const;
-
-  // ── RTK-anchored keyframe map ────────────────────────────────────
-  //
-  // A frozen keyframe: the absolute (map-frame) base_footprint pose at
-  // RTK-Fixed capture time, plus the body-frame scan observed there.
-  // Keyframes are NOT iSAM2 variables and live in a separate store, so
-  // RebaseISAM2 / RigidTransformAll / PruneOldScans / the sliding-window
-  // cutoff never touch them — their ~3 mm RTK precision survives by
-  // construction. They are the absolute reference the scan-to-keyframe
-  // factor uses to hold <2 cm during RTK-Float. Implemented in
-  // graph_manager_keyframe.cpp.
-  struct Keyframe
-  {
-    gtsam::Pose2 abs_pose;  // frozen GPS-fused map pose
-    std::vector<Eigen::Vector2d> scan_body;  // base_footprint-frame points
-  };
-
-  // Capture a keyframe. `abs_pose` MUST be the GPS-fused node pose
-  // (out->pose), never the raw antenna ENU. Enforces spatial decimation
-  // (rejects within kf_spacing_m/2 of an existing keyframe) and the
-  // max_keyframes cap. Returns the assigned id, or nullopt if decimated.
-  std::optional<uint64_t> AddKeyframe(const gtsam::Pose2& abs_pose,
-                                      const std::vector<Eigen::Vector2d>& scan_body);
-
-  // Value-copy of a keyframe by id (lock-free use by the matcher), or
-  // nullopt if the id is unknown.
-  std::optional<Keyframe> GetKeyframe(uint64_t kf_id) const;
-
-  // Up to `max_candidates` keyframe ids whose frozen abs_pose is within
-  // `max_dist_m` (xy) of the query, sorted by ascending distance. No age
-  // gate, no window cutoff — keyframes are the durable absolute map.
-  std::vector<uint64_t> FindKeyframesNearXY(double x,
-                                            double y,
-                                            double max_dist_m,
-                                            size_t max_candidates) const;
-
-  // Number of keyframes currently stored (diagnostics).
-  size_t KeyframeCount() const;
-
-  // Drop the entire keyframe map. NOT called by the live-graph self-heal
-  // reset (keyframes are reset-exempt) — only by an explicit operator
-  // "delete maps" / clear_graph action.
-  void ClearKeyframes();
 
   // Force-anchor the current trajectory at `pose` by adding a tight
   // PriorFactor on the latest loaded node. Used after a successful
@@ -424,8 +369,9 @@ private:
     std::optional<Yaw> yaw;
     // LiDAR map anchor: ABSOLUTE XY from the particle filter localising
     // against the occupancy grid, with its full 2x2 covariance (anisotropic:
-    // a single wall constrains across, not along). XY-ONLY on purpose — see
-    // the scan_to_keyframe consumer for the 2026-07-22 yaw-flip incident.
+    // a single wall constrains across, not along). XY-ONLY on purpose: a
+    // LiDAR-derived yaw once flipped map→odom ~180° (2026-07-22), which is
+    // why this prior is XY-only and heading stays with the gyro/COG factors.
     struct LidarMapXy
     {
       gtsam::Vector2 xy;
@@ -442,20 +388,6 @@ private:
       double sigma_theta;
     };
     std::optional<ScanBetween> scan_between;
-    // Scan-to-keyframe ABSOLUTE constraint: the pre-computed map-frame full pose
-    // the current node should have, derived from an ICP match to a frozen keyframe
-    // (abs_pose = kf.abs_pose.compose(delta.inverse())). Applied as a
-    // PriorFactor<Pose2> on X_curr — xy + yaw, so the keyframe constrains heading
-    // during RTK-Float windows instead of letting it drift. Engaged only during
-    // RTK-Float (see fusion_graph_node).
-    struct ScanToKeyframe
-    {
-      gtsam::Pose2 abs_pose;
-      double sigma_xy;
-      double sigma_theta;
-      bool robust;
-    };
-    std::optional<ScanToKeyframe> scan_to_keyframe;
   };
 
   GraphParams params_;
@@ -565,22 +497,8 @@ private:
   // Vector2d (8-byte alignment is fine on common targets).
   std::map<uint64_t, std::vector<Eigen::Vector2d>> scans_;
 
-  // RTK-anchored keyframe map (see the public Keyframe API). Keyed by an
-  // independent monotonic id because keyframes outlive the sliding pose
-  // window and must not be coupled to next_index_ or the window cutoff.
-  // Defined in graph_manager_keyframe.cpp; persisted in graph_manager.cpp.
-  std::map<uint64_t, Keyframe> keyframes_;
-  uint64_t next_keyframe_id_ = 0;
-
   // Helper — create a NoiseModel with diagonal sigmas.
   static gtsam::SharedNoiseModel MakeDiagonal(const std::vector<double>& sigmas);
-
-  // Keyframe-map binary (de)serialization (defined in
-  // graph_manager_keyframe.cpp). The <prefix>.keyframes file carries an
-  // 'FGKF' magic + version header (unlike .scans) so it is self-describing.
-  static void SerializeKeyframesBinary(std::ostream& os,
-                                       const std::map<uint64_t, Keyframe>& keyframes);
-  static bool DeserializeKeyframesBinary(std::istream& is, std::map<uint64_t, Keyframe>& keyframes);
 
   // Internal — actually creates the node and runs iSAM2. Caller must
   // hold mu_.

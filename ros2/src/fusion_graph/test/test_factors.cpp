@@ -159,25 +159,6 @@ TEST(ScanMatcher, ConvergesWithWarmStart)
   EXPECT_NEAR(res.delta.theta(), T_truth.theta(), 0.03);
 }
 
-TEST(ScanMatcher, MinInliersOverrideGatesAcceptance)
-{
-  // The per-call min_inliers override must replace params.min_inliers at BOTH
-  // the in-loop early-abort and the final ok gate — this is what lets the
-  // keyframe path (kf_min_inliers) accept partial-overlap matches the shared
-  // scan-to-scan default (30) rejects. Full-overlap scans give many inliers, so
-  // the default and a lower override both accept; an override higher than any
-  // achievable inlier count must reject the same match.
-  const gtsam::Pose2 T_truth(0.03, 0.02, 0.02);
-  auto src = SyntheticScan(200, gtsam::Pose2());
-  auto tgt = SyntheticScan(200, T_truth);
-
-  fusion_graph::ScanMatcher matcher;
-  EXPECT_TRUE(matcher.Match(src, tgt, gtsam::Pose2()).ok);  // default (30)
-  EXPECT_TRUE(matcher.Match(src, tgt, gtsam::Pose2(), 16).ok);  // looser override accepts
-  EXPECT_FALSE(
-      matcher.Match(src, tgt, gtsam::Pose2(), 100000).ok);  // impossibly-high override rejects
-}
-
 TEST(ScanMatcher, EmptyInputsFail)
 {
   fusion_graph::ScanMatcher matcher;
@@ -293,12 +274,11 @@ TEST(GyroPreintFactor, WrapsAroundPi)
 // PoseTranslationPrior — availability + convention guard
 // ─────────────────────────────────────────────────────────────────────
 //
-// GTSAM version/convention guard for PoseTranslationPrior<Pose2>. The
-// scan-to-keyframe constraint has since moved to a full PriorFactor<Pose2>
-// (xy + yaw — see graph_manager_node.cpp), so this is no longer the live
-// keyframe factor; the test is retained to (a) confirm the header exists/links
-// in this GTSAM 4.3a1 build, and (b) lock the residual shape (2D xy) + analytic
-// Jacobian against a wrong GTSAM bump, in case the xy-only prior is reused.
+// GTSAM version/convention guard for PoseTranslationPrior<Pose2> — the
+// XY-only unary factor the LiDAR map anchor queues (QueueLidarMapXy, consumed
+// in graph_manager_node.cpp). (a) confirms the header exists/links in this
+// GTSAM 4.3a1 build, and (b) locks the residual shape (2D xy) + analytic
+// Jacobian against a wrong GTSAM bump.
 TEST(PoseTranslationPrior, AvailableAndWellFormed)
 {
   gtsam::PoseTranslationPrior<gtsam::Pose2> f(gtsam::Symbol('x', 0),
@@ -326,20 +306,23 @@ TEST(PoseTranslationPrior, AvailableAndWellFormed)
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Scan-to-keyframe composition direction (THE mirror trap)
+// Scan-to-reference composition direction (THE mirror trap)
 // ─────────────────────────────────────────────────────────────────────
 //
-// Empirically resolves: given a keyframe at kf_pose with a frozen
-// body-frame scan, and a live body-frame scan at curr_pose, which
-// composition of the ICP delta recovers the true current absolute pose?
+// Empirically resolves: given a stored reference node at ref_pose with its
+// body-frame scan, and a live body-frame scan at curr_pose, which composition
+// of the ICP delta recovers the true current absolute pose? This is the
+// convention the cold-boot scan-match relocalization relies on
+// (fusion_graph_node_callbacks_b.cpp: Match(cand_scan, latest_scan_) →
+// cand_pose.compose(delta.inverse())).
 //
 // Scans are stored in body frame: s_i = P.transformTo(W_i) = P^-1 * W_i
 // (exactly as fusion_graph_node::OnScan builds them — base_footprint
 // points). ScanMatcher returns `delta` s.t. target = delta * source.
-// With source=kf_scan, target=curr_scan:
-//   curr^-1 * W = delta * kf^-1 * W  ∀W  ⟹  delta = curr.between(kf)
-//   ⟹  curr = kf.compose(delta.inverse())
-// This test proves it and asserts the negative control (kf.compose(delta))
+// With source=ref_scan, target=curr_scan:
+//   curr^-1 * W = delta * ref^-1 * W  ∀W  ⟹  delta = curr.between(ref)
+//   ⟹  curr = ref.compose(delta.inverse())
+// This test proves it and asserts the negative control (ref.compose(delta))
 // is clearly wrong, so the implementation cannot silently use the mirror.
 namespace
 {
@@ -358,7 +341,7 @@ std::vector<Eigen::Vector2d> ScanFromPose(const std::vector<gtsam::Point2>& map_
 }
 }  // namespace
 
-TEST(ScanToKeyframeComposition, RecoversTruePose)
+TEST(ScanToReferenceComposition, RecoversTruePose)
 {
   // Asymmetric L of landmarks a few metres in front of the robot (map frame).
   std::vector<gtsam::Point2> map_pts;
@@ -373,26 +356,26 @@ TEST(ScanToKeyframeComposition, RecoversTruePose)
     map_pts.emplace_back(8.0, 4.0 + t);  // side wall (shorter, offset)
   }
 
-  const gtsam::Pose2 kf_pose(5.0, 3.0, 0.4);
+  const gtsam::Pose2 ref_pose(5.0, 3.0, 0.4);
   // ~5 cm translation + ~1.4° rotation relative motion — within ICP's
   // no-warmstart capture range from an identity init (cf. RecoversKnownTransform).
   const gtsam::Pose2 curr_pose(5.05, 3.0, 0.4 + 0.025);
 
-  const auto kf_scan = ScanFromPose(map_pts, kf_pose);
+  const auto ref_scan = ScanFromPose(map_pts, ref_pose);
   const auto curr_scan = ScanFromPose(map_pts, curr_pose);
 
   fusion_graph::ScanMatcher matcher;
-  // source=keyframe, target=current (the order the apply-side will use).
-  auto res = matcher.Match(kf_scan, curr_scan, gtsam::Pose2());
+  // source=reference, target=current (the order the relocalizer uses).
+  auto res = matcher.Match(ref_scan, curr_scan, gtsam::Pose2());
   ASSERT_TRUE(res.ok);
 
-  const gtsam::Pose2 via_inv = kf_pose.compose(res.delta.inverse());
-  const gtsam::Pose2 via_fwd = kf_pose.compose(res.delta);
+  const gtsam::Pose2 via_inv = ref_pose.compose(res.delta.inverse());
+  const gtsam::Pose2 via_fwd = ref_pose.compose(res.delta);
   const double err_inv = (via_inv.translation() - curr_pose.translation()).norm();
   const double err_fwd = (via_fwd.translation() - curr_pose.translation()).norm();
 
-  // Derived + asserted: curr = kf.compose(delta.inverse()).
-  EXPECT_LT(err_inv, 0.03) << "kf.compose(delta.inverse()) must recover curr_pose; "
+  // Derived + asserted: curr = ref.compose(delta.inverse()).
+  EXPECT_LT(err_inv, 0.03) << "ref.compose(delta.inverse()) must recover curr_pose; "
                            << "err_inv=" << err_inv << " err_fwd=" << err_fwd;
   // Negative control: the forward composition is the mirror — must be far off.
   EXPECT_GT(err_fwd, 0.05) << "forward composition unexpectedly close — convention ambiguous; "
@@ -401,7 +384,7 @@ TEST(ScanToKeyframeComposition, RecoversTruePose)
 
 TEST(ScanBetweenConvention, MatchesBetweenFactorDirection)
 {
-  // Same asymmetric landmark set as ScanToKeyframeComposition.
+  // Same asymmetric landmark set as ScanToReferenceComposition.
   std::vector<gtsam::Point2> map_pts;
   for (int i = 0; i < 40; ++i)
   {
@@ -431,7 +414,7 @@ TEST(ScanBetweenConvention, MatchesBetweenFactorDirection)
   // BetweenFactor(k_prev, k_curr) composes as X_curr = X_prev.compose(delta),
   // so the FORWARD composition must recover curr; the inverse (the old buggy
   // direction, where delta was curr.between(prev)) must land far off. This
-  // mirrors ScanToKeyframeComposition's robust negative-control style and is
+  // mirrors ScanToReferenceComposition's robust negative-control style and is
   // insensitive to ICP's rotation precision from an identity init.
   const gtsam::Pose2 via_fwd = prev_pose.compose(res.delta);
   const gtsam::Pose2 via_inv = prev_pose.compose(res.delta.inverse());

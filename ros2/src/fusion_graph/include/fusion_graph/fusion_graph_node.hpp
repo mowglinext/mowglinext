@@ -399,7 +399,8 @@ private:
   // Under fresh RTK-Fixed the scans build a georeferenced occupancy grid at
   // the trusted fused pose; once Fixed goes stale the particle filter
   // localises against that grid and its XY + covariance becomes a unary
-  // factor. Replaces the scan-to-single-keyframe ICP for the Float case.
+  // factor. This is the only LiDAR-derived ABSOLUTE constraint in the graph
+  // (XY-only — heading stays with the gyro/COG factors).
   bool use_lidar_map_anchor_ = false;
   double lidar_map_resolution_m_ = 0.10;
   double lidar_map_half_extent_m_ = 40.0;
@@ -575,6 +576,9 @@ private:
   double wheel_dist_since_last_lc_m_ = 0.0;
   std::optional<rclcpp::Time> last_lc_accept_stamp_;
   uint64_t lc_rate_gated_ = 0;  // diagnostic: nodes where the gate blocked the search
+  // Most-recent valid GPS σ (m), latched in OnGnss; <0 = none yet. Feeds
+  // LoopClosureSigmaFloor so an LC is never tighter than the last GNSS fix.
+  double last_gps_sigma_ = -1.0;
 
   // Publishers.
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;
@@ -764,61 +768,6 @@ private:
   double scan_yield_sigma_xy_ = 0.5;
   double scan_yield_sigma_theta_ = 0.3;
   std::optional<rclcpp::Time> last_rtk_fixed_stamp_;
-
-  // ── RTK-anchored keyframe map (scan-to-keyframe absolute localization) ──
-  // Requires use_scan_matching_ (reuses scan_matcher_ + the scan subscription
-  // + the ICP guard rails). CAPTURE: under stable RTK-Fixed, freeze the
-  // GPS-fused node pose + scan as a keyframe (builds the absolute map). APPLY:
-  // during RTK-Float, match the live scan to nearby keyframes and queue a
-  // PriorFactor<Pose2> that pins absolute xy + yaw — the mechanism that holds
-  // <2 cm through a Float window where dead-reckoning would otherwise drift.
-  // The yaw component is protected by the kf_yaw_sigma_floor (GraphManager)
-  // and the yaw mirror-guard below so LiDAR heading can't override the gyro.
-  // Code default OFF; the in-repo yaml enables it. See graph_manager_keyframe.cpp
-  // + the OnTimer capture/apply blocks.
-  bool use_keyframe_map_ = false;
-  double kf_capture_sigma_max_m_ = 0.01;  // max GPS σ to allow a capture
-  int kf_capture_rtk_debounce_ = 3;  // consecutive RTK-Fixed epochs first
-  double kf_capture_max_omega_ = 0.10;  // rad/s — no capture while pivoting
-  double kf_spacing_m_ = 0.5;  // min move between captures
-  double kf_match_max_dist_m_ = 3.0;  // apply-side keyframe search radius
-  size_t kf_max_candidates_ = 5;
-  // Apply-side σ floors. The positional floor is raised to the capture gate
-  // (kf_capture_sigma_max_m_) at apply time so a keyframe frozen up to that far
-  // off its true pose can never be trusted TIGHTER than its own capture error.
-  double kf_apply_sigma_floor_m_ = 0.02;  // ICP-realism floor on the positional σ
-  double kf_apply_sigma_theta_rad_ = 0.05;  // ICP-realism floor on the yaw σ (~3°);
-                                            // GraphManager's kf_yaw_sigma_floor
-                                            // (~0.30 rad) is the effective floor
-  double kf_engage_age_s_ = 0.3;  // engage apply when Fixed older than this
-  // Looser inlier floor for cross-viewpoint scan-to-keyframe ICP, passed as a
-  // per-call override to scan_matcher_->Match. The shared scan-to-scan default
-  // (scan_min_inliers=30) assumes near-total overlap and rejected ~99.7% of
-  // keyframe matches at the in-loop min_inliers early-abort; 16 lets the
-  // RTK-Float keyframe anchor actually engage.
-  int kf_min_inliers_ = 16;
-  // Relaxed ICP guard rails for keyframe matching (cross-viewpoint, not
-  // incremental). Overrides min_inliers (kf_min_inliers_ above) plus the
-  // RMSE / divergence thresholds. The icp_max_delta_* checks
-  // (0.30 m / 0.50 rad) are inappropriate here — res.delta is the full
-  // transform between keyframe and live scan (up to kf_match_max_dist_m_).
-  double kf_match_max_rmse_m_ = 0.15;
-  double kf_match_max_divergence_xy_m_ = 0.30;
-  double kf_match_max_divergence_theta_rad_ = 0.50;
-  // Absolute-yaw mirror-guard (KeyframeYawWithinGate): reject a keyframe match
-  // whose implied ABSOLUTE map-frame yaw deviates from the gyro-predicted yaw by
-  // more than this. Catches mirrored / 180°-flipped ICP solutions on symmetric
-  // scenery that the xy mirror-guard and Huber let through — the keyframe prior
-  // engages during RTK-Float where COG is gated off, so this is the only guard
-  // on its heading. Sized to reject gross flips while leaving room for the
-  // keyframe to correct genuine slow gyro drift (< a few ° over a Float window).
-  double kf_match_max_yaw_dev_rad_ = 0.5;
-  // Latches updated in OnGnss for the capture gate.
-  double last_gps_sigma_ = -1.0;  // most-recent valid GPS σ (m); <0 = none
-  int rtk_fixed_streak_ = 0;  // consecutive RTK-Fixed epochs
-  std::optional<gtsam::Vector2> last_kf_capture_xy_;
-  uint64_t kf_matches_ok_ = 0;
-  uint64_t kf_matches_fail_ = 0;
 
   // In-flight guards for the async maintenance jobs. Save and rebase
   // each run in a detached worker so the executor callback returns

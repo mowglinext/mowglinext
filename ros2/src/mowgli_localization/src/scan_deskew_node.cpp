@@ -105,7 +105,7 @@ public:
     // ── Linear (translation) deskew (opt-in) ─────────────────────────
     // The rotation deskew above ignores the chassis's FORWARD motion during
     // the sweep. At ≤0.3 m/s × ≤0.1 s that's <30 mm — negligible for the
-    // costmap, but it matters for the <2 cm scan-to-keyframe matcher. When
+    // costmap, but it matters for the <2 cm fusion_graph scan matcher. When
     // enabled, each ray's endpoint is additionally shifted by the forward
     // displacement -v·dt (vy is non-holonomically ~0). Off by default so the
     // safety/costmap path is unchanged until validated.

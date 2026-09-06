@@ -915,11 +915,6 @@ export const DiagnosticsPage = () => {
     const scanRate = scanTotal > 0 ? Math.round(((scanOk ?? 0) / scanTotal) * 100) : null;
 
     // ICP / scan-matching detail (live LiDAR monitor).
-    const keyframesTotal = num("keyframes_total");
-    const kfOk = num("kf_matches_ok");
-    const kfFail = num("kf_matches_fail");
-    const kfTotal = (kfOk ?? 0) + (kfFail ?? 0);
-    const kfRate = kfTotal > 0 ? Math.round(((kfOk ?? 0) / kfTotal) * 100) : null;
     const rejRmse = num("icp_rejects_rmse");
     const rejInliers = num("icp_rejects_inliers");
     const rejSanity = num("icp_rejects_sanity");
@@ -1002,15 +997,6 @@ export const DiagnosticsPage = () => {
                         />
                     </Row>
                     <Row gutter={[12, 12]} style={{marginTop: 4}}>
-                        <TelemetryStat
-                            xs={12} md={6} large
-                            title={t('diagnosticsPage.icpKeyframes')}
-                            value={keyframesTotal}
-                            tone={(keyframesTotal ?? 0) > 0 ? "ok" : "warn"}
-                            hint={kfTotal > 0
-                                ? t('diagnosticsPage.icpKfMatches', {rate: kfRate ?? 0, ok: kfOk ?? 0, total: kfTotal})
-                                : t('diagnosticsPage.icpNoKeyframes')}
-                        />
                         <TelemetryStat
                             xs={12} md={6} large
                             title={t('diagnosticsPage.icpRejects')}
