@@ -28,6 +28,11 @@
 *******************************************************************************/
 #define BLADEMOTOR_LENGTH_INIT_MSG 22
 #define BLADEMOTOR_LENGTH_RQST_MSG 7
+/* Reversal is allowed only after an accepted OFF transmission and fresh
+ * stopped feedback. These are minimum guards, not a mechanical stop-time model. */
+#define BLADEMOTOR_REVERSE_OFF_MS 1000u
+#define BLADEMOTOR_ZERO_CONFIRM_MS 300u
+#define BLADEMOTOR_FEEDBACK_MAX_AGE_MS 300u
 /******************************************************************************
 * Module Preprocessor Macros
 *******************************************************************************/
@@ -59,6 +64,24 @@ uint32_t BLADEMOTOR_u32Error = 0;
 static uint8_t blademotor_pu8ReceivedData[BLADEMOTOR_LENGTH_RECEIVED_MSG] = {0};
 static uint8_t blademotor_pu8RqstMessage[BLADEMOTOR_LENGTH_RQST_MSG]  = {0x55, 0xaa, 0x03, 0x20, 0x80, 0x00, 0xA2};
 static uint8_t blademotor_u8OnOff = 0;
+static uint8_t blademotor_u8Direction = 0;
+static uint8_t blademotor_u8RunDirection = 0;
+static bool blademotor_reverse_pending = false;
+static bool blademotor_off_sent = false;
+static bool blademotor_zero_seen = false;
+static uint32_t blademotor_stop_since, blademotor_zero_since;
+static uint32_t blademotor_last_feedback_seq;
+static uint32_t blademotor_zero_epoch;
+
+typedef struct {
+    uint32_t seq, tick, zero_epoch;
+    uint16_t rpm;
+    uint8_t valid, activated, error;
+} blademotor_feedback_t;
+/* Updated only after RX completion; snapshot with IRQs masked in the foreground.
+ * Never use the public cached RPM alone: startup zero or a stale reply is not
+ * evidence that it is safe to reverse. Invalid replies break qualification. */
+static volatile blademotor_feedback_t blademotor_feedback;
 
 const uint8_t blademotor_pcu8Preamble[5]  = {0x55,0xAA,0x0A,0x2,0xD0};
 const uint8_t blademotor_pcu8InitMsg[BLADEMOTOR_LENGTH_INIT_MSG] =  { 0x55, 0xaa, 0x12, 0x20, 0x80, 0x00, 0xac, 0x0d, 0x00, 0x02, 0x32, 0x50, 0x1e, 0x04, 0x00, 0x15, 0x21, 0x05, 0x0a, 0x19, 0x3c, 0xaa };
@@ -70,18 +93,70 @@ const uint8_t blademotor_pcu8InitMsg[BLADEMOTOR_LENGTH_INIT_MSG] =  { 0x55, 0xaa
 *  Public Functions
 *******************************************************************************/
 
-void blademotor_prepareMsg(void)
-{    
-    if (blademotor_u8OnOff)
+static bool blademotor_stopped_for_reverse(uint32_t now)
+{
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    blademotor_feedback_t feedback = blademotor_feedback;
+    __set_PRIMASK(primask);
+
+    /* Do not miss a bad/nonzero reply overwritten by a later good reply before
+     * this foreground cycle. RX also breaks the epoch across a feedback gap. */
+    if (feedback.zero_epoch != blademotor_zero_epoch)
     {
-        blademotor_pu8RqstMessage[5] = 0x80; /* change speed Motor */
-        blademotor_pu8RqstMessage[6] = 0x22; /* change CRC */
+        blademotor_zero_seen = false;
+        blademotor_zero_epoch = feedback.zero_epoch;
+    }
+    if (!blademotor_off_sent || !feedback.valid || feedback.activated ||
+        feedback.error || feedback.rpm != 0 ||
+        (uint32_t)(now - feedback.tick) > BLADEMOTOR_FEEDBACK_MAX_AGE_MS)
+    {
+        blademotor_zero_seen = false;
+        blademotor_last_feedback_seq = feedback.seq;
+        return false;
+    }
+    if (feedback.seq != blademotor_last_feedback_seq)
+    {
+        blademotor_last_feedback_seq = feedback.seq;
+        if (!blademotor_zero_seen)
+        {
+            blademotor_zero_since = feedback.tick;
+            blademotor_zero_seen = true;
+        }
+    }
+    /* Use the span of received zero-RPM samples, not time since one old zero. */
+    return blademotor_zero_seen &&
+        (uint32_t)(feedback.tick - blademotor_zero_since) >= BLADEMOTOR_ZERO_CONFIRM_MS &&
+        (uint32_t)(now - blademotor_stop_since) >= BLADEMOTOR_REVERSE_OFF_MS;
+}
+
+void blademotor_prepareMsg(void)
+{
+    uint8_t command = 0;
+    if (!blademotor_u8OnOff)
+    {
+        /* OFF from the existing emergency/idle/heartbeat gates cancels a
+         * pending start. Never retain a queued enable across that request. */
+        blademotor_reverse_pending = false;
+        blademotor_off_sent = blademotor_zero_seen = false;
     }
     else
     {
-        blademotor_pu8RqstMessage[5] = 0x00; /* change speed Motor */
-        blademotor_pu8RqstMessage[6] = 0xa2; /* change CRC */
+        if (!blademotor_reverse_pending &&
+            blademotor_u8Direction != blademotor_u8RunDirection)
+        {
+            blademotor_reverse_pending = true;
+            blademotor_off_sent = blademotor_zero_seen = false;
+        }
+        if (!blademotor_reverse_pending || blademotor_stopped_for_reverse(HAL_GetTick()))
+            command = blademotor_u8Direction ? 0xC0 : 0x80;
     }
+    /* Adapted from jeremysalwen/Mowgli dd6c01b6: decide direction here, where
+     * every transmitted frame is built, rather than overwrite it after Set().
+     * crcCalc is an additive checksum: reverse 0xC0 needs 0x62, NOT 0xE2.
+     * Physical reverse rotation remains hardware-unverified; see BLADE-REVERSE.md. */
+    blademotor_pu8RqstMessage[5] = command;
+    blademotor_pu8RqstMessage[6] = crcCalc(blademotor_pu8RqstMessage, BLADEMOTOR_LENGTH_RQST_MSG - 1);
 }
 
 /**
@@ -224,6 +299,8 @@ void  BLADEMOTOR_App(void){
     
     case BLADEMOTOR_RUN:
 
+        /* Do not rewrite a request buffer still owned by the UART DMA. */
+        if (BLADEMOTOR_USART_Handler.gState != HAL_UART_STATE_READY) break;
         /*error detected*/
         if(blademotor_pu8ReceivedData[6] != 0){
             blademotor_u8OnOff = 0;
@@ -233,7 +310,23 @@ void  BLADEMOTOR_App(void){
         /* prepare to receive the message before to launch the command */        
         HAL_UART_Receive_DMA(&BLADEMOTOR_USART_Handler, blademotor_pu8ReceivedData, BLADEMOTOR_LENGTH_RECEIVED_MSG);
                   
-        HAL_UART_Transmit_DMA(&BLADEMOTOR_USART_Handler, (uint8_t*)blademotor_pu8RqstMessage, BLADEMOTOR_LENGTH_RQST_MSG);    
+        if (HAL_UART_Transmit_DMA(&BLADEMOTOR_USART_Handler, (uint8_t*)blademotor_pu8RqstMessage,
+                BLADEMOTOR_LENGTH_RQST_MSG) == HAL_OK)
+        {
+            if (blademotor_pu8RqstMessage[5] & 0x80)
+            {
+                blademotor_u8RunDirection = blademotor_u8Direction;
+                blademotor_reverse_pending = false;
+            }
+            else if (blademotor_reverse_pending && !blademotor_off_sent)
+            {
+                /* A failed/busy transmission must not start the stop timer.
+                 * Only subsequent feedback can qualify this direction change. */
+                blademotor_stop_since = HAL_GetTick();
+                blademotor_last_feedback_seq = blademotor_feedback.seq;
+                blademotor_off_sent = true;
+            }
+        }
         break;
     
     default:
@@ -244,22 +337,14 @@ void  BLADEMOTOR_App(void){
 /// @brief control blade motor (there is no speed control for this motor)
 /// @param on_off 1 to turn on, 0 to turn off
 void BLADEMOTOR_Set(uint8_t on_off, uint8_t direction)
-{       
-    blademotor_u8OnOff = on_off;
-    if (on_off)
+{
+    /* Latch the gated request; never modify the DMA-owned message here. */
+    blademotor_u8OnOff = on_off != 0;
+    blademotor_u8Direction = direction != 0;
+    if (!blademotor_u8OnOff)
     {
-        /*if (direction) {
-            blademotor_pu8RqstMessage[5] = 0xC0;
-            blademotor_pu8RqstMessage[6] = 0xE2;
-        } else {*/
-            blademotor_pu8RqstMessage[5] = 0x80; /* change speed Motor */
-            blademotor_pu8RqstMessage[6] = 0x22; /* change CRC */
-        //}
-    }
-    else
-    {
-        blademotor_pu8RqstMessage[5] = 0x00; /* change speed Motor */
-        blademotor_pu8RqstMessage[6] = 0xa2; /* change CRC */
+        blademotor_reverse_pending = false;
+        blademotor_off_sent = blademotor_zero_seen = false;
     }
 }
 
@@ -267,6 +352,7 @@ void BLADEMOTOR_Set(uint8_t on_off, uint8_t direction)
 /// @param  
 void BLADEMOTOR_ReceiveIT(void)
 {
+    blademotor_feedback.valid = 0;
     /* decode the frame */    
     if(memcmp(blademotor_pcu8Preamble, blademotor_pu8ReceivedData, 2) == 0){        
         uint8_t l_u8crc = crcCalc(blademotor_pu8ReceivedData, BLADEMOTOR_LENGTH_RECEIVED_MSG-1);
@@ -280,9 +366,20 @@ void BLADEMOTOR_ReceiveIT(void)
             }
             BLADEMOTOR_u16RPM = blademotor_pu8ReceivedData[7] + (blademotor_pu8ReceivedData[8]<<8);
             BLADEMOTOR_u16Power = blademotor_pu8ReceivedData[9] + (blademotor_pu8ReceivedData[10]<<8) ;           
+            blademotor_feedback.rpm = BLADEMOTOR_u16RPM;
+            blademotor_feedback.activated = BLADEMOTOR_bActivated;
+            blademotor_feedback.error = blademotor_pu8ReceivedData[6];
+            blademotor_feedback.valid = 1;
         }
   
     }
+    uint32_t now = HAL_GetTick();
+    if (!blademotor_feedback.valid || blademotor_feedback.activated ||
+        blademotor_feedback.error || blademotor_feedback.rpm != 0 ||
+        (uint32_t)(now - blademotor_feedback.tick) > BLADEMOTOR_FEEDBACK_MAX_AGE_MS)
+        blademotor_feedback.zero_epoch++;
+    blademotor_feedback.tick = now;
+    blademotor_feedback.seq++;
 }
 
 /******************************************************************************
