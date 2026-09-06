@@ -74,6 +74,9 @@ void FusionGraphNode::RebuildLidarAnchorMap()
     beluga_ros::AmclParams amcl;
     amcl.update_min_d = lidar_anchor_update_min_d_;
     amcl.update_min_a = lidar_anchor_update_min_a_;
+    amcl.alpha_slow = lidar_anchor_alpha_slow_;
+    amcl.alpha_fast = lidar_anchor_alpha_fast_;
+    amcl.selective_resampling = lidar_anchor_selective_resampling_;
     amcl.min_particles = static_cast<std::size_t>(std::max(1, lidar_anchor_min_particles_));
     amcl.max_particles = static_cast<std::size_t>(
         std::max(lidar_anchor_min_particles_, lidar_anchor_max_particles_));

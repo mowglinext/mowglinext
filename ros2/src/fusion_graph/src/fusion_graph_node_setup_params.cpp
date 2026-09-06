@@ -122,6 +122,17 @@ void FusionGraphNode::DeclareParameters()
     lidar_anchor_odom_alpha_rot_ = declare_parameter<double>("lidar_anchor_odom_alpha_rot", 0.05);
     lidar_anchor_odom_alpha_trans_ =
         declare_parameter<double>("lidar_anchor_odom_alpha_trans", 0.05);
+    // AMCL's augmented-MCL recovery (alpha_slow / alpha_fast > 0) injects
+    // RANDOM particles across the whole map whenever the average weight drops
+    // — on open lawn it drops every time, the injected particles that land
+    // near saturated clutter (the terrace) win, and the estimate teleports:
+    // replay 2026-09-07 showed a 2.7 m jump on the FIRST update after a
+    // 0.10 m seed. Our seed is always trustworthy (fused pose or dead
+    // reckoning), so global relocalisation is never wanted: both OFF.
+    lidar_anchor_alpha_slow_ = declare_parameter<double>("lidar_anchor_alpha_slow", 0.0);
+    lidar_anchor_alpha_fast_ = declare_parameter<double>("lidar_anchor_alpha_fast", 0.0);
+    lidar_anchor_selective_resampling_ =
+        declare_parameter<bool>("lidar_anchor_selective_resampling", true);
     // Per-estimate trust. Defaults sized on the 2026-09-06 replay: the lost
     // filter scored 0.13 while a healthy one scores ≥ 0.9; wheels + gyro
     // drifted < 0.4 m over 2.7 min and a U-turn.

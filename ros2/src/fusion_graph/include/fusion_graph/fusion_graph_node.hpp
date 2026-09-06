@@ -420,6 +420,9 @@ private:
   double lidar_anchor_max_laser_distance_m_ = 12.0;
   double lidar_anchor_odom_alpha_rot_ = 0.05;
   double lidar_anchor_odom_alpha_trans_ = 0.05;
+  double lidar_anchor_alpha_slow_ = 0.0;  // AMCL random-injection recovery: OFF (see setup_params)
+  double lidar_anchor_alpha_fast_ = 0.0;
+  bool lidar_anchor_selective_resampling_ = true;
   LidarAnchorValidatorParams lidar_anchor_validator_;  // per-estimate trust (see validator header)
   double lidar_anchor_reseed_after_s_ =
       5.0;  // lost this long → re-seed the cloud from dead reckoning

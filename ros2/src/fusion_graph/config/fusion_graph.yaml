@@ -457,6 +457,13 @@ fusion_graph_node:
     lidar_anchor_max_laser_distance_m: 12.0
     lidar_anchor_odom_alpha_rot: 0.05
     lidar_anchor_odom_alpha_trans: 0.05
+    # AMCL random-injection recovery (augmented MCL). OFF: on open lawn the
+    # average weight drops every update, injected particles near saturated
+    # clutter win, and the estimate teleports (2.7 m on the first update in
+    # the 2026-09-07 replay). The seed is always trustworthy here.
+    lidar_anchor_alpha_slow: 0.0
+    lidar_anchor_alpha_fast: 0.0
+    lidar_anchor_selective_resampling: true   # resample only when the effective sample size halves
     # Per-estimate trust (lidar_anchor_validator.hpp). An estimate becomes a
     # factor only if (1) ≥ min_hit_ratio of the scan's returns (and ≥
     # min_hit_count of them) land on mapped occupied cells AT THE ESTIMATE,
