@@ -33,6 +33,9 @@ jobs:
       - name: Check board.h/template consume board_defaults.h
         run: python3 firmware/scripts/board_defaults_parity.py
 
+      - name: Test blade direction and stopped reversal on both board variants
+        run: python3 firmware/scripts/test_blade_reverse.py
+
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -42,6 +45,10 @@ jobs:
           - Yardforce500B
     steps:
       - uses: actions/checkout@v6
+        with:
+          # git_build_id.py encodes the commit count in the reported version.
+          # A shallow checkout otherwise reports 1.0.1 for every firmware build.
+          fetch-depth: 0
 
       - uses: actions/cache@v4
         with:
