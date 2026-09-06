@@ -149,6 +149,13 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
                                                        rclcpp::QoS(1).transient_local());
     lidar_anchor_candidate_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
         "/fusion_graph/lidar_anchor_candidate", rclcpp::QoS(10));
+    if (!lidar_map_import_topic_.empty())
+    {
+      lidar_map_import_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
+          lidar_map_import_topic_,
+          rclcpp::QoS(1).transient_local(),
+          std::bind(&FusionGraphNode::OnLidarMapImport, this, std::placeholders::_1));
+    }
   }
 
   // /hardware_bridge/status is always subscribed — OnHardwareStatus

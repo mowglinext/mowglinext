@@ -431,6 +431,13 @@ private:
   std::unique_ptr<beluga_ros::Amcl> lidar_anchor_filter_;
   // Latched so a late subscriber (Foxglove, the GUI) gets the current grid.
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr lidar_map_pub_;
+  // Optional one-shot import of a previously published grid (harness replay of
+  // a recorded /fusion_graph/lidar_map, or a persisted map): the FIRST message
+  // seeds the mapper, later ones are ignored so the live inserts own the map.
+  std::string lidar_map_import_topic_;
+  bool lidar_map_imported_ = false;
+  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr lidar_map_import_sub_;
+  void OnLidarMapImport(nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg);
   double lidar_map_last_rebuild_s_ = -1.0e9;
   std::size_t lidar_map_scans_at_rebuild_ = 0;
   std::size_t lidar_map_occupied_cells_ = 0;

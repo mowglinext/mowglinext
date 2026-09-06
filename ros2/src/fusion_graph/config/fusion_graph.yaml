@@ -476,6 +476,9 @@ fusion_graph_node:
     # field. The DR reference is refreshed from the fused pose every
     # lidar_anchor_shadow_ref_period_s while Fixed.
     lidar_anchor_shadow_mode: false
+    # One-shot import of a previously published grid (first message only) —
+    # replay harness / persisted map seed. Empty = off.
+    lidar_map_import_topic: ""
     lidar_anchor_shadow_ref_period_s: 20.0
     lidar_anchor_sigma_floor_m: 0.05      # floor on the factor's per-axis sigma (half a cell)
 

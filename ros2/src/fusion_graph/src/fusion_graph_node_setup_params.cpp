@@ -137,6 +137,7 @@ void FusionGraphNode::DeclareParameters()
         declare_parameter<double>("lidar_anchor_dr_drift_frac", 0.02);
     lidar_anchor_reseed_after_s_ = declare_parameter<double>("lidar_anchor_reseed_after_s", 5.0);
     lidar_anchor_shadow_mode_ = declare_parameter<bool>("lidar_anchor_shadow_mode", false);
+    lidar_map_import_topic_ = declare_parameter<std::string>("lidar_map_import_topic", "");
     lidar_anchor_shadow_ref_period_s_ =
         declare_parameter<double>("lidar_anchor_shadow_ref_period_s", 20.0);
     if (use_lidar_map_anchor_)

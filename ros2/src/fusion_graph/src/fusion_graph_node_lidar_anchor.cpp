@@ -143,6 +143,29 @@ void FusionGraphNode::PublishLidarAnchorCandidate(const Sophus::SE2d& pose,
   lidar_anchor_candidate_pub_->publish(m);
 }
 
+void FusionGraphNode::OnLidarMapImport(nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg)
+{
+  if (lidar_map_imported_ || !lidar_mapper_)
+    return;
+  lidar_mapper_->ImportCells(msg->info.resolution,
+                             msg->info.origin.position.x,
+                             msg->info.origin.position.y,
+                             static_cast<int>(msg->info.width),
+                             static_cast<int>(msg->info.height),
+                             msg->data);
+  lidar_map_imported_ = true;
+  RebuildLidarAnchorMap();
+  lidar_map_last_rebuild_s_ = MonotonicSeconds();
+  lidar_map_scans_at_rebuild_ = lidar_mapper_->inserted_scans();
+  RCLCPP_INFO(get_logger(),
+              "fusion_graph: LiDAR map imported from %s (%u x %u @ %.2f m, %zu occupied)",
+              lidar_map_import_topic_.c_str(),
+              msg->info.width,
+              msg->info.height,
+              msg->info.resolution,
+              lidar_map_occupied_cells_);
+}
+
 void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& curr_scan,
                                          bool curr_valid)
 {

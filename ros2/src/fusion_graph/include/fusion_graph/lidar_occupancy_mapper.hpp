@@ -183,6 +183,39 @@ public:
     return s;
   }
 
+  // Import a previously exported grid (same convention as Export: 0 free,
+  // 100 occupied, -1 unknown; origin = lower-left corner). Cells are placed
+  // by WORLD coordinate, so a grid of a different extent or resolution still
+  // lands where it belongs. Occupied cells load at the occupied threshold and
+  // free cells at the free threshold: known, but not saturated, so live
+  // scans can still overturn them. Counts as one inserted scan.
+  void ImportCells(double resolution_m,
+                   double origin_x,
+                   double origin_y,
+                   int width,
+                   int height,
+                   const std::vector<int8_t>& data)
+  {
+    if (width <= 0 || height <= 0 || data.size() != static_cast<std::size_t>(width) * height)
+      return;
+    for (int r = 0; r < height; ++r)
+      for (int c = 0; c < width; ++c)
+      {
+        const int8_t v = data[static_cast<std::size_t>(r) * width + c];
+        if (v < 0)
+          continue;
+        const double wx = origin_x + (c + 0.5) * resolution_m;
+        const double wy = origin_y + (r + 0.5) * resolution_m;
+        int x = 0, y = 0;
+        if (!ToCell(wx, wy, x, y))
+          continue;
+        const std::size_t i = Index(x, y);
+        log_odds_[i] = (v >= 50) ? p_.occupied_threshold : p_.free_threshold;
+        touched_[i] = 1;
+      }
+    ++inserted_;
+  }
+
   double LogOddsAt(double wx, double wy) const
   {
     int x, y;

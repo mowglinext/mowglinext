@@ -123,3 +123,30 @@ TEST(LidarOccupancyMapper, ScoreScanSeparatesTruePoseFromShiftedPose)
   const auto empty = m.ScoreScan(0.0, 0.0, 0.0, {});
   EXPECT_EQ(empty.total, 0);
 }
+
+// Export → Import → Export is the identity on the known cells, so a map
+// saved by one node (or recorded in a bag) can seed another.
+TEST(LidarOccupancyMapper, ImportCellsRoundTripsAnExportedGrid)
+{
+  LidarOccupancyMapperParams p;
+  p.resolution_m = 0.10;
+  p.half_extent_m = 5.0;
+  LidarOccupancyMapper a(p);
+  std::vector<std::pair<double, double>> wall;
+  for (double y = -1.0; y <= 1.0; y += 0.05)
+    wall.emplace_back(2.0, y);
+  for (int i = 0; i < 4; ++i)
+    a.Insert(0.0, 0.0, 0.0, wall);
+  const auto ea = a.Export();
+  ASSERT_GT(ea.occupied, 0);
+  LidarOccupancyMapper b(p);
+  b.ImportCells(ea.resolution_m, ea.origin_x, ea.origin_y, ea.width, ea.height, ea.data);
+  const auto eb = b.Export();
+  EXPECT_EQ(eb.occupied, ea.occupied);
+  EXPECT_EQ(eb.free, ea.free);
+  EXPECT_EQ(eb.data, ea.data);
+  EXPECT_EQ(b.inserted_scans(), 1u);
+  // a scan at the true pose scores as well against the imported map
+  const auto sc = b.ScoreScan(0.0, 0.0, 0.0, wall);
+  EXPECT_GT(static_cast<double>(sc.hits) / sc.total, 0.95);
+}
