@@ -1653,6 +1653,26 @@
       "label": "Mowing speed",
       "description": "Forward speed while mowing a swath."
     },
+    "blade_load_slowdown_enabled": {
+      "label": "Blade load slowdown",
+      "description": "Scale the coverage speed down when the blade RPM sags under load."
+    },
+    "blade_load_rpm_full": {
+      "label": "Blade RPM full speed",
+      "description": "Blade RPM at or above which no slowdown applies."
+    },
+    "blade_load_rpm_min": {
+      "label": "Blade RPM min speed",
+      "description": "Blade RPM at or below which the minimum speed ratio applies."
+    },
+    "blade_load_min_speed_ratio": {
+      "label": "Blade load min speed ratio",
+      "description": "Slowest feed under blade load as a fraction of the mowing speed."
+    },
+    "blade_load_telemetry_max_age_s": {
+      "label": "Blade telemetry max age",
+      "description": "Blade reports older than this are ignored (no slowdown)."
+    },
     "num_headland_passes": {
       "label": "Headland passes",
       "description": "Number of concentric border rings mowed before the back-and-forth swaths. A negative value ('none') disables the perimeter rings entirely: the swaths become the outermost pass and their centreline lands on exactly the line the outermost ring would have driven, so sideways the uncut band is unchanged (about 12 cm at the default 0.20 m chassis safety inset). The swath ENDS do reach that band, roughly 8 cm closer to the boundary than any ring pass gets, and with no mowed apron the row-end U-turns become pivot-through corners instead of smooth arcs."
@@ -2399,6 +2419,15 @@
     "mowingSpeedTooltip": "Speed during mowing strips (m/s)",
     "transitSpeed": "Transit Speed",
     "transitSpeedTooltip": "Speed when going to/from dock or between zones",
+    "bladeLoad": "Blade Load Slowdown",
+    "bladeLoadDescription": "Slow the mowing feed down when the blade motor's RPM sags under load (thick or wet grass), so the blade gets time to cut instead of stalling or leaving an uncut strip. The speed ramps linearly between the two RPM thresholds. Fail-open: an inactive blade or stale telemetry never slows the robot. Coverage paths only. Read your blade's no-load RPM off Diagnostics → Motor RPM before enabling. Takes effect after a ROS2 restart.",
+    "bladeLoadRpmFull": "Full speed above",
+    "bladeLoadRpmFullTooltip": "Blade RPM at or above which the full mowing speed applies. Set it a little below the no-load RPM shown on Diagnostics.",
+    "bladeLoadRpmMin": "Min speed below",
+    "bladeLoadRpmMinTooltip": "Blade RPM at or below which the minimum feed applies. Set it where the cut audibly labours; must be below the full-speed threshold.",
+    "bladeLoadMinSpeedRatio": "Min speed ratio",
+    "bladeLoadMinSpeedRatioTooltip": "Slowest feed under blade load, as a fraction of Mowing Speed. Never below the controller's 0.08 m/s crawl speed.",
+    "bladeLoadRampInvalid": "The full-speed RPM must be above the min-speed RPM — with an empty ramp the slowdown is disabled at launch.",
     "mowingPattern": "Mowing Pattern",
     "headlandWidth": "Headland Width",
     "headlandWidthTooltip": "Width of the perimeter strip mowed before the inner field (F2C ConstHL inset). Wired to coverage_server.default_headland_width, where it is used for ONE thing: the automatic ring count, ceil(headland width / swath spacing). It therefore only has an effect when Headland Passes is set to Auto — with a forced pass count (the shipped default is 2) this value is ignored.",

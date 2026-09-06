@@ -497,6 +497,30 @@
           "default": 0.2,
           "description": "Robot speed when transiting between zones and to dock (m/s)."
         },
+        "blade_load_slowdown_enabled": {
+          "type": "boolean",
+          "title": "Blade Load Slowdown",
+          "default": false,
+          "description": "Slow the mowing speed down when the blade motor's RPM sags under load (thick or wet grass), so the blade gets time to cut instead of stalling or leaving an uncut strip. Off by default: read your blade's no-load RPM off Diagnostics first and set the two thresholds. Fail-open \u2014 an inactive blade or stale telemetry never slows the robot. Coverage paths only; takes effect after a ROS2 restart."
+        },
+        "blade_load_rpm_full": {
+          "type": "number",
+          "title": "Blade RPM Full Speed",
+          "default": 2500,
+          "description": "Blade RPM at or above which the full mowing speed applies. Set it a little below the no-load RPM shown on Diagnostics."
+        },
+        "blade_load_rpm_min": {
+          "type": "number",
+          "title": "Blade RPM Min Speed",
+          "default": 1800,
+          "description": "Blade RPM at or below which the minimum mowing speed applies. Set it where the cut audibly labours; must be below Blade RPM Full Speed. The speed ramps linearly between the two."
+        },
+        "blade_load_min_speed_ratio": {
+          "type": "number",
+          "title": "Blade Load Min Speed Ratio",
+          "default": 0.4,
+          "description": "Slowest mowing feed under blade load, as a fraction of Mowing Speed (0.1\u20131.0). Never below the controller's 0.08 m/s crawl speed."
+        },
         "path_spacing": {
           "type": "number",
           "title": "Path Spacing",

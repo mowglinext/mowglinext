@@ -75,11 +75,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import (
     chassis_circumscribed_radius,
     chassis_footprint,  # noqa: E402
+    DEFAULT_BLADE_LOAD_MIN_SPEED_RATIO,
+    DEFAULT_BLADE_LOAD_RPM_FULL,
+    DEFAULT_BLADE_LOAD_RPM_MIN,
     DEFAULT_TOOL_WIDTH_M,
     DEFAULT_WHEEL_TRACK_M,
     TRUE_TOKENS,
     check_turn_geometry,
     deep_merge,
+    derive_blade_load_params,
     derive_turn_speed,
     load_robot_params,
     resolve_lidar_enabled,
@@ -408,6 +412,13 @@ def generate_launch_description() -> LaunchDescription:
     # (issue #499 — speed_slow used to be static, so turns ran FASTER than the
     # straights whenever the operator lowered mowing_speed).
     turn_speed_ratio = 0.8
+    # Blade-load slowdown (FollowCoveragePath.blade_load_*): fallbacks mirror the
+    # template. OFF by default — the no-load blade RPM differs per motor, so the
+    # operator reads it off Diagnostics and sets the ramp before enabling.
+    blade_load_slowdown_enabled = False
+    blade_load_rpm_full = DEFAULT_BLADE_LOAD_RPM_FULL
+    blade_load_rpm_min = DEFAULT_BLADE_LOAD_RPM_MIN
+    blade_load_min_speed_ratio = DEFAULT_BLADE_LOAD_MIN_SPEED_RATIO
     # Fallback if progress_timeout_sec is absent from the resolved robot config
     # (normally the mowgli_robot.yaml template supplies it — default 30.0, see
     # #396). Kept equal to that default so the effective timeout is one number.
@@ -596,6 +607,14 @@ def generate_launch_description() -> LaunchDescription:
         swath_overlap = float(rt_rp.get("swath_overlap", swath_overlap))
         wheel_track = float(rt_rp.get("wheel_track", wheel_track))
         turn_speed_ratio = float(rt_rp.get("turn_speed_ratio", turn_speed_ratio))
+        blade_load_slowdown_enabled = rt_rp.get(
+            "blade_load_slowdown_enabled", blade_load_slowdown_enabled)
+        blade_load_rpm_full = float(rt_rp.get(
+            "blade_load_rpm_full", blade_load_rpm_full))
+        blade_load_rpm_min = float(rt_rp.get(
+            "blade_load_rpm_min", blade_load_rpm_min))
+        blade_load_min_speed_ratio = float(rt_rp.get(
+            "blade_load_min_speed_ratio", blade_load_min_speed_ratio))
         min_turning_radius = float(rt_rp.get(
             "min_turning_radius", min_turning_radius))
         connector_turn_radius = float(rt_rp.get(
@@ -789,6 +808,24 @@ def generate_launch_description() -> LaunchDescription:
         for line in turn_speed_warnings:
             print(line)
         fcp["speed_slow"] = turn_speed
+
+        # ── Blade-load slowdown: feed the blade slower when its RPM sags ──
+        #
+        # FTC scales its carrot speed on a linear ramp between the two RPM
+        # thresholds (ftc_blade_load.hpp); the operator's four mowgli_robot.yaml
+        # keys are validated by robot_config_util.derive_blade_load_params (pure,
+        # unit-tested) and injected here. Without this injection the GUI's Mowing
+        # → Blade load toggle would be inert (the FTC declare_parameter default,
+        # false, would win).
+        blade_load_params, blade_load_warnings = derive_blade_load_params(
+            blade_load_slowdown_enabled, blade_load_rpm_full, blade_load_rpm_min,
+            blade_load_min_speed_ratio)
+        for line in blade_load_warnings:
+            print(line)
+        fcp["blade_load_slowdown_enabled"] = blade_load_params["blade_load_slowdown_enabled"]
+        fcp["blade_load_rpm_full"] = blade_load_params["blade_load_rpm_full"]
+        fcp["blade_load_rpm_min"] = blade_load_params["blade_load_rpm_min"]
+        fcp["blade_load_min_speed_ratio"] = blade_load_params["blade_load_min_speed_ratio"]
 
         # Effective turn radii — the CLAMPED values actually injected into
         # coverage_server further down. Computed here so the geometry check below

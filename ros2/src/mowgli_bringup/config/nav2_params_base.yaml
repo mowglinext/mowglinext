@@ -366,6 +366,21 @@ controller_server:
       stall_speed_ratio: 0.35
       stall_grace_s: 0.6
       stall_crawl_speed: 0.08
+      # Blade-load slowdown (ftc_blade_load.hpp). When the blade motor's RPM
+      # (/hardware_bridge/status mower_motor_rpm) sags under load, the carrot
+      # speed is scaled on a linear ramp: 1.0 at/above blade_load_rpm_full down
+      # to blade_load_min_speed_ratio at/below blade_load_rpm_min, floored at
+      # stall_crawl_speed. Fail-open on an inactive blade or telemetry older
+      # than blade_load_telemetry_max_age_s (the STM32 reports at 4 Hz). The
+      # four operator knobs below are OVERRIDDEN at launch from mowgli_robot.yaml
+      # (blade_load_* keys, GUI Mowing section) — these are the fallbacks the
+      # template defaults mirror. OFF by default: the no-load RPM differs per
+      # blade motor, so read it off Diagnostics before setting the thresholds.
+      blade_load_slowdown_enabled: false
+      blade_load_rpm_full: 2500.0
+      blade_load_rpm_min: 1800.0
+      blade_load_min_speed_ratio: 0.4
+      blade_load_telemetry_max_age_s: 1.0
       # Decoupled PID gains. 2026-06-19: the straight-swath weave (a ~0.5 Hz
       # left-right limit cycle) was the FOLLOWING heading gain saturating
       # max_cmd_vel_ang — the wheel-velocity PID was exonerated (byte-identical

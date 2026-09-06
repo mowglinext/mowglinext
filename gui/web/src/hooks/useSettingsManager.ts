@@ -141,6 +141,10 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             // so they were dead controls. swath_overlap (a real coverage_server
             // param) is surfaced here instead.
             "mowing_enabled", "mowing_speed", "transit_speed",
+            // Blade-load slowdown (FollowCoveragePath.blade_load_*, injected by
+            // navigation.launch.py): slow the feed when the blade RPM sags.
+            "blade_load_slowdown_enabled", "blade_load_rpm_full",
+            "blade_load_rpm_min", "blade_load_min_speed_ratio",
             "headland_width", "num_headland_passes", "swath_overlap",
             "chassis_safety_inset", "min_turning_radius", "mow_direction",
         ],

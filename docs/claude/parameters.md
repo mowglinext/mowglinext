@@ -200,6 +200,9 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `min_turning_radius` (L416) | 0.15 | clamped to [0.10, 0.50] → `coverage_server.min_turning_radius` L944; also drives the `check_turn_geometry` warning (issue #499: 0.15 is **below** the 0.1625 m half-track) | Mowing | dynamic |
 | `connector_turn_radius` — **not in the template**; launch fallback 0.18 (`navigation.launch.py:403`), node default `coverage_server.cpp:94` | 0.18 | clamped ≥ `min_turning_radius`, ≤ 0.50 → `coverage_server.connector_turn_radius` L948 | no | dynamic |
 | `turn_speed_ratio` (L333) | 0.8 | `FollowCoveragePath.speed_slow = clamp(mowing_speed × ratio, min_speed_mps, mowing_speed)` via `derive_turn_speed` (`robot_config_util.py:268`), injected L781 | no | launch |
+| `blade_load_slowdown_enabled` | `false` | `FollowCoveragePath.blade_load_slowdown_enabled` via `derive_blade_load_params` (`robot_config_util.py`) — disabled with a WARN when the ramp is empty (`rpm_full <= rpm_min`); FTC scales the carrot speed by the blade RPM sag (`mowgli_nav2_plugins/ftc_blade_load.hpp`), fail-open on an inactive blade / telemetry older than the static `FollowCoveragePath.blade_load_telemetry_max_age_s` (1.0 s) | Mowing | dynamic |
+| `blade_load_rpm_full` / `blade_load_rpm_min` | 2500 / 1800 | `FollowCoveragePath.blade_load_rpm_full` / `.blade_load_rpm_min` — ends of the linear speed ramp (full speed at/above `rpm_full`, `min_speed_ratio` at/below `rpm_min`) | Mowing | dynamic |
+| `blade_load_min_speed_ratio` | 0.4 | `FollowCoveragePath.blade_load_min_speed_ratio`, clamped to [0.1, 1.0] at launch; the slowed speed is additionally floored at `stall_crawl_speed` in FTC. Pinned by `test_ftc_blade_load_keys_present_in_both_variants`, `test_blade_load_template_defaults_match_static_yaml`, `test_navigation_launch_injects_ftc_blade_load` | Mowing | dynamic |
 
 ### Docking (→ `docking_server` / `simple_charging_dock`, `navigation.launch.py:665–739`)
 
