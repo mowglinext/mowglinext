@@ -43,6 +43,7 @@
 #include "fusion_graph/lidar_map_anchor_gate.hpp"
 #include "fusion_graph/lidar_occupancy_mapper.hpp"
 #include "fusion_graph/pose_extrapolator.hpp"
+#include "fusion_graph/scan_match_dedup.hpp"
 #include "fusion_graph/scan_matcher.hpp"
 #include <Eigen/Core>
 #include <beluga_ros/amcl.hpp>
@@ -394,6 +395,12 @@ private:
   bool latest_scan_valid_ = false;
   std::vector<Eigen::Vector2d> prev_node_scan_;  // scan stored at last node
   bool prev_node_scan_valid_ = false;
+  // Identity of the scan-between ICP inputs, so OnTimer (25 Hz) does not
+  // realign the same (scan, prev-node scan) pair it already matched — the
+  // LiDAR runs at ~10 Hz. See scan_match_dedup.hpp.
+  uint64_t latest_scan_seq_ = 0;  // bumped in OnScan, under scan_mu_
+  uint64_t prev_node_scan_gen_ = 0;  // bumped when Tick stores prev_node_scan_
+  ScanMatchDedupGate scan_match_dedup_;
 
   // ── LiDAR map anchor (Beluga) ─────────────────────────────────────
   // Under fresh RTK-Fixed the scans build a georeferenced occupancy grid at
@@ -659,6 +666,7 @@ private:
   uint64_t scans_received_ = 0;
   uint64_t scan_matches_ok_ = 0;
   uint64_t scan_matches_fail_ = 0;
+  uint64_t scan_matches_skipped_ = 0;  // ticks where the ICP inputs were unchanged
 
   // ICP-only odometry integration (see pub_icp_odom_). Seeded from the graph
   // pose at the first node with a scan-between, then advanced ONCE PER NODE by

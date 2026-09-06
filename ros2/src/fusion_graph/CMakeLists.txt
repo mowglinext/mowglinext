@@ -236,6 +236,11 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_lidar_anchor_validator fusion_graph_core)
 
+  ament_add_gtest(test_scan_match_dedup
+    test/test_scan_match_dedup.cpp
+  )
+  target_link_libraries(test_scan_match_dedup fusion_graph_core)
+
   ament_add_gtest(test_loop_closure_gate
     test/test_loop_closure_gate.cpp
   )

@@ -381,6 +381,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         }
         add("scans_received", std::to_string(scans_received_));
         add("scan_matches_ok", std::to_string(scan_matches_ok_));
+        add("scan_matches_skipped", std::to_string(scan_matches_skipped_));
         add("lidar_anchor_state",
             std::to_string(static_cast<int>(lidar_anchor_gate_ ? lidar_anchor_gate_->state()
                                                                : LidarAnchorState::kDisabled)));
