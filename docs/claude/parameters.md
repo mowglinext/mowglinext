@@ -149,6 +149,8 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `use_magnetometer` (L238) | `false` | launch-arg default `navigation.launch.py:133` → `fusion_graph.launch.py:148` | no | launch |
 | `use_scan_matching` (L251) | `true` | `navigation.launch.py:135`; **ANDed with `use_lidar`** by `lidar_gated()` L237 | no | launch |
 | `use_loop_closure` (L264) | `true` | `navigation.launch.py:137`; ANDed with `use_lidar` **and** force-off on first boot when `/ros2_ws/maps/fusion_graph.graph` is absent (L150–154) | no | launch |
+| `use_lidar_map_anchor` | `false` | `navigation.launch.py` → `fusion_graph.launch.py` → node; ANDed with `use_lidar`. Scan-to-map particle-filter anchor for RTK-Float (grid on `/fusion_graph/lidar_map`, XY-only factors, per-estimate validation — `codemaps/fusion_graph.md`) | no | launch |
+| `lidar_anchor_shadow_mode` | `false` | same path; with the anchor on, ALSO run/score/publish the filter under RTK-Fixed, never apply — the field measurement of anchor vs RTK (`/fusion_graph/lidar_anchor_candidate`, diagnostics `lidar_anchor_*`) | no | launch |
 | `use_gps_dock_detection` (L467) | `true` | `navigation.launch.py:141` → launches `gps_dock_detection_node` + `simple_charging_dock.use_external_detection_pose` | no | launch |
 
 ### GNSS / NTRIP — consumed by the **GPS sidecar and the GUI**, not by ROS2
