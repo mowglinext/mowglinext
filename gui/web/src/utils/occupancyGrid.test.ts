@@ -1,7 +1,7 @@
 import {describe, expect, it} from "vitest";
 import {paintOccupancyGrid} from "./occupancyGrid.ts";
 import {mowProgressPaint} from "./mowProgress.ts";
-import {lidarMapPaint} from "./lidarMap.ts";
+import {lidarMapHasStructure, lidarMapPaint, rasterizeLidarMap} from "./lidarMap.ts";
 import {OccupancyGrid} from "../types/ros.ts";
 
 function grid(width: number, height: number, data: number[]): OccupancyGrid {
@@ -54,5 +54,17 @@ describe("lidarMapPaint", () => {
     it("treats the 50 % mark as occupied", () => {
         expect(lidarMapPaint(50)).toEqual(lidarMapPaint(100));
         expect(lidarMapPaint(49)).toEqual(lidarMapPaint(0));
+    });
+});
+
+describe("lidarMapHasStructure / rasterizeLidarMap", () => {
+    it("treats a grid with only free and unknown cells as no map yet", () => {
+        const empty = grid(2, 2, [0, -1, 0, -1]);
+        expect(lidarMapHasStructure(empty)).toBe(false);
+        expect(rasterizeLidarMap(empty)).toBeNull();
+    });
+
+    it("recognises a single occupied cell as a map", () => {
+        expect(lidarMapHasStructure(grid(2, 2, [0, -1, 100, -1]))).toBe(true);
     });
 });

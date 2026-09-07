@@ -244,6 +244,18 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   const bool map_has_structure = lidar_map_occupied_cells_ > 0;
   const auto d = lidar_anchor_gate_->Step(rtk_age_s, map_has_structure, now_s);
 
+  // Publish the grid once at startup, whatever the state: it is latched, and
+  // the GUI map page draws the map instead of the raw scan points only once a
+  // grid exists. Nothing is inserted while charging, so a node restarted on
+  // the dock would otherwise never publish (field 2026-09-08).
+  if (!lidar_map_published_once_)
+  {
+    lidar_map_published_once_ = true;
+    RebuildLidarAnchorMap();
+    lidar_map_last_rebuild_s_ = now_s;
+    lidar_map_scans_at_rebuild_ = lidar_mapper_->inserted_scans();
+  }
+
   auto snapshot = graph_->LatestSnapshot();
   if (!snapshot)
     return;

@@ -442,6 +442,8 @@ private:
   double lidar_anchor_undock_dwell_s_ = 10.0;  // no anchor work while charging, nor this long after
   double lidar_anchor_undocked_s_ = -1.0e9;  // monotonic: when charging last dropped
   bool lidar_anchor_was_docked_ = false;
+  bool lidar_map_published_once_ =
+      false;  // the latched grid must exist even before the first insert
   std::optional<LidarOccupancyMapper> lidar_mapper_;
   LidarOccupancyMapperParams
       lidar_mapper_params_;  // kept so ~/clear_lidar_map can rebuild an empty grid

@@ -16,6 +16,21 @@ export function lidarMapPaint(value: number): Rgba | null {
     return value >= OCCUPIED_MIN ? OCCUPIED_RGBA : FREE_RGBA;
 }
 
+/** True when at least one cell is occupied — an empty grid is "no map yet". */
+export function lidarMapHasStructure(grid: OccupancyGrid): boolean {
+    if (!grid.data) return false;
+    for (let i = 0; i < grid.data.length; i++) {
+        if (grid.data[i] >= OCCUPIED_MIN) return true;
+    }
+    return false;
+}
+
+/**
+ * Rasterize the anchor map, or null while it has no occupied cell: the map
+ * page replaces the raw scan points with the map only once there is a map,
+ * otherwise a fresh (empty, latched) grid would blank the points for nothing.
+ */
 export function rasterizeLidarMap(grid: OccupancyGrid): RasterizedGrid | null {
+    if (!lidarMapHasStructure(grid)) return null;
     return rasterizeOccupancyGrid(grid, lidarMapPaint);
 }
