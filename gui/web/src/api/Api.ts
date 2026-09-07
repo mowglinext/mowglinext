@@ -1243,6 +1243,52 @@ export class Api<
     /**
      * No description
      *
+     * @tags updates
+     * @name UpdaterStateList
+     * @summary Read cached host updater status
+     * @request GET:/system/updater/state
+     */
+    updaterStateList: (params: RequestParams = {}) =>
+      this.request<Record<string, any>, ApiErrorResponse>({
+        path: `/system/updater/state`,
+        method: "GET",
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Same-origin JSON and X-Mowgli-Update: 1 are required. See docs/UPDATES.md for the operation contract.
+     *
+     * @tags updates
+     * @name UpdaterCreate
+     * @summary Review or control a coordinated software update
+     * @request POST:/system/updater/{operation}
+     */
+    updaterCreate: (
+      operation:
+        | "policy"
+        | "check"
+        | "plan"
+        | "apply"
+        | "rollback"
+        | "recover"
+        | "notice"
+        | "agent-update",
+      request: Record<string, any>,
+      params: RequestParams = {},
+    ) =>
+      this.request<Record<string, any>, ApiErrorResponse>({
+        path: `/system/updater/${operation}`,
+        method: "POST",
+        body: request,
+        type: ContentType.Json,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * No description
+     *
      * @tags system
      * @name UpdatesList
      * @summary Check available software versions

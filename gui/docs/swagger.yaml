@@ -1297,6 +1297,84 @@ paths:
       summary: shutdown the system
       tags:
       - system
+  /system/updater/{operation}:
+    post:
+      consumes:
+      - application/json
+      description: 'Same-origin JSON and X-Mowgli-Update: 1 are required. See docs/UPDATES.md
+        for the operation contract.'
+      parameters:
+      - description: Operation
+        enum:
+        - policy
+        - check
+        - plan
+        - apply
+        - rollback
+        - recover
+        - notice
+        - agent-update
+        in: path
+        name: operation
+        required: true
+        type: string
+      - description: Must be 1
+        in: header
+        name: X-Mowgli-Update
+        required: true
+        type: string
+      - description: Operation-specific request
+        in: body
+        name: request
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Review or control a coordinated software update
+      tags:
+      - updates
+  /system/updater/state:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Read cached host updater status
+      tags:
+      - updates
   /system/updates:
     get:
       parameters:

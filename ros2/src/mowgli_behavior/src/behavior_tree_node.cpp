@@ -46,6 +46,7 @@
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
 #include "mowgli_interfaces/srv/start_in_area.hpp"
+#include "mowgli_interfaces/update_maintenance.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav2_msgs/action/undock_robot.hpp"
 #include "nav2_msgs/msg/collision_monitor_state.hpp"
@@ -591,6 +592,12 @@ private:
                HighLevelControl::Response::SharedPtr resp)
         {
           RCLCPP_INFO(get_logger(), "HighLevelControl: received command=%u", req->command);
+          if (mowgli_interfaces::updateMaintenanceActive() &&
+              req->command != HighLevelControl::Request::COMMAND_STOP)
+          {
+            resp->success = false;
+            return;
+          }
           // COMMAND_S2 (4, "mow next area" — the GUI's onMowNextArea button) has
           // no dedicated MainLogic branch: in this architecture mowing always
           // resumes from the next UN-mowed area (GetNextUnmowedArea), so "mow
@@ -640,6 +647,11 @@ private:
         [this](const StartInArea::Request::SharedPtr req, StartInArea::Response::SharedPtr resp)
         {
           RCLCPP_INFO(get_logger(), "StartInArea: received area=%u", req->area);
+          if (mowgli_interfaces::updateMaintenanceActive())
+          {
+            resp->success = false;
+            return;
+          }
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
             context_->target_area_index = static_cast<int>(req->area);
@@ -1062,6 +1074,10 @@ private:
   {
     {
       std::lock_guard<std::mutex> lock(context_->context_mutex);
+      if (mowgli_interfaces::updateMaintenanceActive())
+      {
+        context_->current_command = 8;  // COMMAND_STOP: hold position, never auto-resume.
+      }
       updateLocalizationHealthLocked();
     }
 

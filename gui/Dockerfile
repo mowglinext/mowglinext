@@ -84,6 +84,7 @@ RUN pio pkg install -g \
     || true
 
 FROM deps
+LABEL garden.mowgli.maintenance-api="1"
 COPY --from=build-web /web/dist /app/web
 COPY --from=build-go /app/mowglinext /app/mowglinext
 COPY asserts /app/asserts

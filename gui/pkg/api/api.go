@@ -28,6 +28,7 @@ func NewAPI(dbProvider types.IDBProvider, dockerProvider types.IDockerProvider, 
 	config.AllowAllOrigins = true
 	config.AllowWebSockets = true
 	r.Use(cors.New(config))
+	r.Use(updateMaintenanceMiddleware)
 	webDirectory, err := dbProvider.Get("system.api.webDirectory")
 	if err != nil {
 		log.Fatal(err)
@@ -44,6 +45,7 @@ func NewAPI(dbProvider types.IDBProvider, dockerProvider types.IDockerProvider, 
 	SystemRoutes(apiGroup)
 	VersionsRoutes(apiGroup, dockerProvider)
 	UpdatesRoutes(apiGroup, dockerProvider)
+	UpdaterRoutes(apiGroup, rosProvider)
 	DiagnosticsRoutes(apiGroup, dockerProvider, rosProvider, dbProvider)
 	RosbagRoutes(apiGroup, dockerProvider)
 	WeatherRoutes(apiGroup, dbProvider)
