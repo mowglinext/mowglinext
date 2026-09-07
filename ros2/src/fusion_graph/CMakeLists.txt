@@ -240,6 +240,10 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_lidar_anchor_odom fusion_graph_core)
   ament_target_dependencies(test_lidar_anchor_odom beluga_ros)  # Sophus comes with beluga_ros
+  ament_add_gtest(test_lidar_map_file
+    test/test_lidar_map_file.cpp
+  )
+  target_link_libraries(test_lidar_map_file fusion_graph_core)
 
   ament_add_gtest(test_scan_match_dedup
     test/test_scan_match_dedup.cpp

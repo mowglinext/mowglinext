@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <execution>
 #include <utility>
 #include <vector>
@@ -153,6 +154,52 @@ void FusionGraphNode::PublishLidarAnchorCandidate(const Sophus::SE2d& pose,
   m.pose.covariance[14] = applied ? 1.0 : 0.0;
   m.pose.covariance[35] = static_cast<double>(static_cast<int>(verdict));
   lidar_anchor_candidate_pub_->publish(m);
+}
+
+bool FusionGraphNode::LoadLidarMapFile()
+{
+  const auto m = ReadLidarMapFile(graph_save_prefix_ + ".lidarmap");
+  if (!m)
+    return false;
+  double lat = 0.0, lon = 0.0;
+  get_parameter("datum_lat", lat);
+  get_parameter("datum_lon", lon);
+  if (!LidarMapDatumMatches(*m, lat, lon))
+  {
+    RCLCPP_WARN(get_logger(),
+                "fusion_graph: persisted LiDAR map was built under datum (%.7f, %.7f), current is "
+                "(%.7f, %.7f) — ignored",
+                m->datum_lat,
+                m->datum_lon,
+                lat,
+                lon);
+    return false;
+  }
+  lidar_mapper_->ImportCells(m->grid.resolution_m,
+                             m->grid.origin_x,
+                             m->grid.origin_y,
+                             static_cast<int>(m->grid.width),
+                             static_cast<int>(m->grid.height),
+                             m->grid.data);
+  RebuildLidarAnchorMap();
+  lidar_map_last_rebuild_s_ = MonotonicSeconds();
+  lidar_map_scans_at_rebuild_ = lidar_mapper_->inserted_scans();
+  return lidar_map_occupied_cells_ > 0;
+}
+
+// Operator's "start the LiDAR map over": empty grid, no filter, no file.
+void FusionGraphNode::ClearLidarMap()
+{
+  if (!lidar_mapper_)
+    return;
+  lidar_mapper_.emplace(lidar_mapper_params_);
+  lidar_anchor_filter_.reset();
+  lidar_map_imported_ = false;
+  lidar_anchor_shadow_seeded_ = false;
+  lidar_map_scans_at_rebuild_ = 0;
+  std::remove((graph_save_prefix_ + ".lidarmap").c_str());
+  RebuildLidarAnchorMap();  // publishes the (now empty) grid so the GUI clears too
+  lidar_map_last_rebuild_s_ = MonotonicSeconds();
 }
 
 void FusionGraphNode::OnLidarMapImport(nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg)

@@ -480,6 +480,9 @@ fusion_graph_node:
     # field. The DR reference is refreshed from the fused pose every
     # lidar_anchor_shadow_ref_period_s while Fixed.
     lidar_anchor_shadow_mode: false
+    # Persistence: the grid is saved next to the graph as <prefix>.lidarmap on
+    # every graph save (service / periodic / dock) and reloaded at startup when
+    # its datum matches; ~/clear_lidar_map wipes grid, filter and file.
     # One-shot import of a previously published grid (first message only) —
     # replay harness / persisted map seed. Empty = off.
     lidar_map_import_topic: ""

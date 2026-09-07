@@ -241,6 +241,25 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
   // session (e.g. after relocating to a new garden) without restarting
   // the whole stack:
   //   ros2 service call /fusion_graph_node/clear_graph std_srvs/Trigger
+  // Operator's "start the LiDAR map over" (GUI Diagnostics → Fusion Graph):
+  //   ros2 service call /fusion_graph_node/clear_lidar_map std_srvs/Trigger
+  srv_clear_lidar_map_ = create_service<std_srvs::srv::Trigger>(
+      "~/clear_lidar_map",
+      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+             std::shared_ptr<std_srvs::srv::Trigger::Response> resp)
+      {
+        if (!lidar_mapper_)
+        {
+          resp->success = false;
+          resp->message = "LiDAR map anchor is disabled (use_lidar_map_anchor=false)";
+          return;
+        }
+        ClearLidarMap();
+        resp->success = true;
+        resp->message = "LiDAR map cleared; " + graph_save_prefix_ + ".lidarmap removed";
+        RCLCPP_INFO(get_logger(), "fusion_graph: %s", resp->message.c_str());
+      });
+
   srv_clear_ = create_service<std_srvs::srv::Trigger>(
       "~/clear_graph",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,

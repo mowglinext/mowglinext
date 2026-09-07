@@ -144,6 +144,7 @@ void FusionGraphNode::DeclareParameters()
       mp.occupied_threshold =
           declare_parameter<double>("lidar_map_occupied_threshold", 2.0 * mp.log_odds_hit);
       mp.free_threshold = declare_parameter<double>("lidar_map_free_threshold", mp.free_threshold);
+      lidar_mapper_params_ = mp;
       lidar_mapper_.emplace(mp);
       lidar_anchor_gate_.emplace(true,
                                  lidar_anchor_engage_age_s_,
@@ -252,6 +253,16 @@ void FusionGraphNode::DeclareParameters()
                   "fusion_graph: loaded persisted graph from '%s.*'",
                   graph_save_prefix_.c_str());
     }
+  }
+
+  // The LiDAR anchor map is persisted next to the graph (<prefix>.lidarmap)
+  // and reloaded here when it was built in this garden (datum match).
+  if (lidar_mapper_ && LoadLidarMapFile())
+  {
+    RCLCPP_INFO(get_logger(),
+                "fusion_graph: loaded persisted LiDAR map from '%s.lidarmap' (%zu occupied cells)",
+                graph_save_prefix_.c_str(),
+                lidar_map_occupied_cells_);
   }
 
   // ── Auto-checkpoint configuration ───────────────────────────────

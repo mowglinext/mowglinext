@@ -379,14 +379,29 @@ void FusionGraphNode::DispatchAsyncSave(const char* reason)
                 reason);
     return;
   }
+  // The LiDAR anchor map rides along: exported here on the executor (the
+  // mapper is not thread-safe; the export is a ~640 KB copy), written on the
+  // worker next to the graph files.
+  std::optional<LidarMapFile> map_file;
+  if (lidar_mapper_ && lidar_mapper_->inserted_scans() > 0)
+  {
+    LidarMapFile m;
+    get_parameter("datum_lat", m.datum_lat);
+    get_parameter("datum_lon", m.datum_lon);
+    m.grid = lidar_mapper_->Export();
+    map_file = std::move(m);
+  }
   std::thread(
       [graph = graph_,
        logger = get_logger(),
        prefix = graph_save_prefix_,
        reason = std::string(reason),
-       flag = save_in_flight_]()
+       flag = save_in_flight_,
+       map_file = std::move(map_file)]()
       {
-        const bool ok = graph->Save(prefix);
+        bool ok = graph->Save(prefix);
+        if (map_file)
+          ok = WriteLidarMapFile(prefix + ".lidarmap", *map_file) && ok;
         RCLCPP_INFO(logger,
                     "fusion_graph: %s auto-save → %s",
                     reason.c_str(),

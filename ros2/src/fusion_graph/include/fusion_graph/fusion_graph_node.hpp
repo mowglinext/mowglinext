@@ -42,6 +42,7 @@
 #include "fusion_graph/lidar_anchor_odom.hpp"
 #include "fusion_graph/lidar_anchor_validator.hpp"
 #include "fusion_graph/lidar_map_anchor_gate.hpp"
+#include "fusion_graph/lidar_map_file.hpp"
 #include "fusion_graph/lidar_occupancy_mapper.hpp"
 #include "fusion_graph/pose_extrapolator.hpp"
 #include "fusion_graph/scan_match_dedup.hpp"
@@ -442,6 +443,11 @@ private:
   double lidar_anchor_undocked_s_ = -1.0e9;  // monotonic: when charging last dropped
   bool lidar_anchor_was_docked_ = false;
   std::optional<LidarOccupancyMapper> lidar_mapper_;
+  LidarOccupancyMapperParams
+      lidar_mapper_params_;  // kept so ~/clear_lidar_map can rebuild an empty grid
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_clear_lidar_map_;
+  bool LoadLidarMapFile();  // startup: <graph_save_prefix>.lidarmap if the datum matches
+  void ClearLidarMap();
   std::optional<LidarMapAnchorGate> lidar_anchor_gate_;
   std::unique_ptr<beluga_ros::Amcl> lidar_anchor_filter_;
   // Latched so a late subscriber (Foxglove, the GUI) gets the current grid.

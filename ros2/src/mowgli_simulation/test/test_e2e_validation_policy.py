@@ -110,6 +110,7 @@ def test_simulation_reset_preserves_persisted_area_geometry():
         'fusion_graph.graph',
         'fusion_graph.meta',
         'fusion_graph.scans',
+        'fusion_graph.lidarmap',
         'coverage_resume.txt',
     ):
         assert f'/ros2_ws/maps/{generated_file}' in reset_source
