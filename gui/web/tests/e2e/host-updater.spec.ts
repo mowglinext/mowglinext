@@ -68,11 +68,11 @@ for(const track of ['dev','stable'])for(const mobile of [false,true])test(`${tra
     await expect(panel.getByText('Installed',{exact:true})).toBeVisible();
     await expect(panel.getByText('After update',{exact:false})).toHaveCount(0);
     if(track==='stable')await expect(panel.locator('.available-release')).toHaveText('v1.3.0');
-    await expect(panel.getByRole('button',{name:'Review changes',exact:true})).toBeInViewport();
+    await expect(panel.getByRole('button',{name:'Review update',exact:true})).toBeInViewport();
     if(!mobile)await expect(page.getByTestId('running-version-summary')).toContainText(track==='stable'?'v1.2.0':devPrevious.slice(0,8));
     await shot(page,prefix,mobile);
     await page.route('**/api/system/updater/plan',r=>r.fulfill({json:plan(data.state.releases[0])}));
-    await panel.getByRole('button',{name:'Review changes',exact:true}).click();await expect(page.getByRole('dialog')).toBeVisible();
+    await panel.getByRole('button',{name:'Review update',exact:true}).click();await expect(page.getByRole('dialog')).toBeVisible();
     await expect(page.getByRole('dialog').getByRole('button',{name:'Install reviewed deployment'})).toBeInViewport();
     await shot(page,prefix+'-review',mobile);await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();
     expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:'release-new',pinned:true}}]);
@@ -87,7 +87,7 @@ for(const mobile of [false,true])test(`unpublished source ${mobile?'mobile':'des
     const {panel,posts}=await open(page,data,mobile);await advanced(page);
     await expect(panel.getByRole('combobox',{name:'Release version',exact:true})).toBeDisabled();
     for(const name of ['Robot software','Web interface','GPS'])await expect(panel.getByRole('combobox',{name:name+' version',exact:true})).toBeDisabled();
-    await expect(panel.getByRole('button',{name:'Review changes',exact:true})).toBeDisabled();
+    await expect(panel.getByRole('button',{name:'Review update',exact:true})).toBeDisabled();
     await expect(panel.getByRole('button',{name:'Check for updates',exact:true})).toBeEnabled();
     await expect(panel.getByText('No installable build published for this source.')).toBeVisible();
     await shot(page,'host-updater-no-versions',mobile,'stack-mowgli');expect(posts).toEqual([]);
@@ -96,7 +96,7 @@ for(const mobile of [false,true])test(`unpublished source ${mobile?'mobile':'des
 for(const mobile of [false,true])test(`stack membership review ${mobile?'mobile':'desktop'}`,async({page})=>{
     const data=fixture('stable');const {panel,posts}=await open(page,data,mobile);
     await page.route('**/api/system/updater/plan',r=>r.fulfill({json:{...plan(data.state.releases[0]),stack:{selection:{options:{gnss:'universal',lidar:'none'}},changes:[{service:'mowgli',action:'update'},{service:'gui',action:'update'},{service:'gps',action:'keep'},{service:'navigation-helper',action:'add'},{service:'legacy-helper',action:'remove'},{service:'mqtt',action:'unmanaged'}]}}}));
-    await panel.getByRole('button',{name:'Review changes',exact:true}).click();const dialog=page.getByRole('dialog');
+    await panel.getByRole('button',{name:'Review update',exact:true}).click();const dialog=page.getByRole('dialog');
     await expect(dialog.getByText('GPS: On',{exact:true})).toBeVisible();await expect(dialog.getByText('LiDAR: Off',{exact:true})).toBeVisible();
     for(const text of ['Add','Remove','Keep · local'])await expect(dialog.getByText(text,{exact:true})).toBeVisible();
     await expect(dialog.getByRole('button',{name:'Install reviewed deployment'})).toBeInViewport();await shot(page,'host-updater-stack-review',mobile);
@@ -113,7 +113,7 @@ for(const mobile of [false,true])test(`independent components and matched reset 
     await shot(page,'host-updater-gui-override',mobile,'stack-gui');await shot(page,'host-updater-component-overrides',mobile,'stack-gps');
     const overrides=Object.fromEntries(['mowgli','gui','gps','lidar','camera'].map(name=>[name,alternative]));
     await page.route('**/api/system/updater/plan',r=>r.fulfill({json:plan(data.state.releases[0],overrides)}));
-    expect(posts).toEqual([]);await panel.getByRole('button',{name:'Review changes',exact:true}).click();
+    expect(posts).toEqual([]);await panel.getByRole('button',{name:'Review update',exact:true}).click();
     expect(posts[0].body).toEqual({deployment:'release-new',pinned:true,component_deployments:{mowgli:alternative.id,gui:alternative.id,gps:alternative.id,lidar:alternative.id,camera:alternative.id}});
     await expect(page.getByRole('dialog').getByText('Robot software: custom version v1.2.1')).toBeVisible();
     await expect(page.getByRole('dialog').getByText('GPS: custom version v1.2.1')).toBeVisible();
@@ -122,7 +122,7 @@ for(const mobile of [false,true])test(`independent components and matched reset 
     await panel.getByRole('button',{name:'Reset all to release versions'}).click();
     await expect(panel.getByRole('button',{name:'Reset all to release versions'})).toHaveCount(0);
     await choose(page,'GPS version','v1.2.1');await page.locator('.ant-segmented').getByText('Simple',{exact:true}).click();
-    await panel.getByRole('button',{name:'Review matched release',exact:true}).click();expect(posts[1].body).toEqual({deployment:'release-new',pinned:true});expect(errors).toEqual([]);
+    await panel.getByRole('button',{name:'Review update',exact:true}).click();expect(posts[1].body).toEqual({deployment:'release-new',pinned:true});expect(errors).toEqual([]);
 });
 
 test('preferences stay separate and source changes never install',async({page})=>{
@@ -130,7 +130,7 @@ test('preferences stay separate and source changes never install',async({page})=
     await panel.getByText('Update settings',{exact:true}).click();await choose(page,'Update source','Custom branch');
     await panel.getByRole('textbox',{name:'Custom branch',exact:true}).fill('feature/test');
     await choose(page,'Repository','wjcloudy/mowglinext');
-    expect(posts).toEqual([]);await expect(panel.getByRole('button',{name:'Review changes',exact:true})).toBeDisabled();
+    expect(posts).toEqual([]);await expect(panel.getByRole('button',{name:'Review update',exact:true})).toBeDisabled();
     await page.route('**/api/system/updater/policy',r=>r.fulfill({json:{ok:true}}));await page.route('**/api/system/updater/check',r=>r.fulfill({status:202,body:''}));
     await panel.getByRole('button',{name:'Save settings',exact:true}).click();await expect.poll(()=>posts.length).toBe(2);
     expect(posts.map(p=>p.path)).toEqual(['/api/system/updater/policy','/api/system/updater/check']);
@@ -146,14 +146,14 @@ test('host updater selection has its own reviewed action',async({page})=>{
 test('unknown health and runtime drift remain distinct',async({page})=>{
     const data=fixture();data.runtime.identity='drifted';data.runtime.health='healthy';const {panel}=await open(page,data);
     await expect(panel.getByText('Installation changed',{exact:true})).toBeVisible();await expect(panel.getByText(/Container health: Running/)).toBeVisible();
-    await expect(panel.getByRole('button',{name:'Review matched release',exact:true})).toBeEnabled();
+    await expect(panel.getByRole('button',{name:'Review update',exact:true})).toBeEnabled();
 });
 
 
 test('cached progress survives GUI reconnect without a new check',async({page})=>{
     const data=fixture(); const {panel,posts}=await open(page,data);
     await page.route('**/api/system/updater/state',r=>r.fulfill({json:{...data,state:{...data.state,job:{id:'job-1',phase:'verifying',started_at:'2026-09-07T09:30:00Z',plan:plan(data.state.releases[0])}}}}));
-    await expect(panel.getByRole('button',{name:'Review changes',exact:true})).toBeDisabled({timeout:10000});
+    await expect(panel.getByRole('button',{name:'Review update',exact:true})).toBeDisabled({timeout:10000});
     await page.route('**/api/system/updater/state',r=>r.fulfill({status:503,json:{error:'restarting'}}));
     await expect(panel.getByText(/reconnecting to the GUI/)).toBeVisible({timeout:10000});expect(posts).toEqual([]);
 });
@@ -161,9 +161,9 @@ test('cached progress survives GUI reconnect without a new check',async({page})=
 test('pending installer choices can be reviewed on the current release',async({page})=>{
     const data=fixture();data.state.releases=[data.state.active];Object.assign(data.runtime,{selection_pending:true});
     const {panel,posts}=await open(page,data);
-    await expect(panel.getByRole('button',{name:'Review changes',exact:true})).toBeEnabled();
+    await expect(panel.getByRole('button',{name:'Review update',exact:true})).toBeEnabled();
     await page.route('**/api/system/updater/plan',r=>r.fulfill({json:plan(data.state.active)}));
-    await panel.getByRole('button',{name:'Review changes',exact:true}).click();
+    await panel.getByRole('button',{name:'Review update',exact:true}).click();
     expect(posts[0].body).toEqual({deployment:data.state.active.id,pinned:true});
 });
 
@@ -265,7 +265,7 @@ for(const mobile of [false,true])test(`real upstream custom branch with one comp
     const preview=plan(base,{gui:next});
     preview.images.mowgli=preview.previous.mowgli;preview.images.gps=preview.previous.gps;
     await page.route('**/api/system/updater/plan',r=>r.fulfill({json:{...preview,stack:{selection:{options:{gnss:'universal',lidar:'none'}},changes:[{service:'mowgli',action:'keep'},{service:'gui',action:'update'},{service:'gps',action:'keep'}]}}}));
-    await panel.getByRole('button',{name:'Review changes',exact:true}).click();
+    await panel.getByRole('button',{name:'Review update',exact:true}).click();
     await expect(page.getByRole('dialog').getByText(`Web interface: custom version ${customBranch} · f7e6f75a`)).toBeVisible();
     await shot(page,'host-updater-custom-review',mobile);
     expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:base.id,pinned:true,component_deployments:{gui:next.id}}}]);

@@ -3405,7 +3405,7 @@
     "version": "Release version",
     "latest": "Latest published",
     "pin": "Pin this deployment; continue notifying about newer builds",
-    "review": "Review changes",
+    "review": "Review update",
     "updateAgent": "Update the update service",
     "agentHelp": "The updater will restart separately from the containers. Its launcher retains the previous binary if the new version fails to start.",
     "history": "Deployment history",

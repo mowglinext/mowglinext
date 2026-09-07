@@ -13,7 +13,7 @@ base release or available update is running. This reads local cached status only
 
 The screen opens in **Simple**. It shows the installed version and pin, the source
 being checked and the available release once. **Check for updates** and
-**Review changes** sit directly below, before the list of running components.
+**Review update** sit directly below, before the list of running components.
 Simple rows do not repeat a target release number beside each container. Firmware health, errors, active update/recovery
 status and recovery actions remain visible. The updater service offers its own
 update action only when a different published binary is available.
@@ -167,7 +167,7 @@ The last recorded base and component versions remain visible as reference. Older
 journals lacking recorded IDs show unverified until a coordinated installation.
 A custom installation is never inferred to be an upstream release from tags alone.
 
-Simple shows one installed stack and one Check for updates / Review changes flow.
+Simple shows one installed stack and one Check for updates / Review update flow.
 Advanced adds a **Release version** selector, pin, and a version selector beside
 **every managed service**: ROS2, GUI, GPS, the selected LiDAR driver and future
 first-party helpers. Each follows the selected release by default. **Reset all to
@@ -212,7 +212,7 @@ accepted; specifying GUI in both fields is rejected. Capability
 `service-version-overrides` advertises general selection to clients.
 
 Simple mode always reviews the latest **matched** deployment and never carries a
-hidden Advanced override. **Review matched release** clears exceptions after
+hidden Advanced override. **Review update** in Simple (or **Review matched release** in Advanced) clears exceptions after
 successful installation. History and rollback track transaction IDs, base release,
 overrides, image IDs and policy, so two installations sharing the same base release
 can be restored independently. Firmware is not part of a component override.
@@ -247,7 +247,7 @@ calibration, database and maps remain mounted from their current locations.
 
 After a published deployment is installed, installer reruns retain that installed
 bundle and definition, even when the checkout is older. They save changed choices
-for **Review changes**, including when staying on the same release. Startup
+for **Review update**, including when staying on the same release. Startup
 continues using the existing definition until the coordinated transaction applies
 the new selection. No hidden removal happens during selection. A rollback restores
 the prior applied selection; a still-requested hardware change remains pending.

@@ -77,7 +77,7 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                     <Button disabled={pending} loading={busy} onClick={() => void act(async () => {if (dirty && policy) {await updaterRequest('policy',policy);setSelected(undefined);setComponentSelected({});} await updaterRequest('check', {});})}>{t('hostUpdater.checkNow')}</Button>
                     <Button type="primary" disabled={pending || !target || dirty || (sameDeployment && (!advanced || pinned === installedPin))} loading={busy} onClick={() => void act(async () => {
                         if (target) setPlan(await updaterRequest<UpdatePlan>('plan', {deployment: target.id, pinned: advanced ? pinned : installedPin, ...(hasOverrides ? (data.capabilities?.includes('service-version-overrides') ? {component_deployments:Object.fromEntries(Object.entries(overrides).map(([name,r]) => [name,r.id]))} : {gui_deployment:overrides.gui?.id}) : {})}));
-                    })}>{['mixed', 'drifted'].includes(identity) && !hasOverrides ? t('hostUpdater.returnMatched') : t('hostUpdater.review')}</Button>
+                    })}>{advanced && ['mixed', 'drifted'].includes(identity) && !hasOverrides ? t('hostUpdater.returnMatched') : t('hostUpdater.review')}</Button>
                 </Space>
                 <Typography.Text type="secondary">{t('hostUpdater.lastCheck', {time: date(data.state.last_check)})}</Typography.Text>
                 {!advanced && <Typography.Text type="secondary">{t('hostUpdater.simpleHelp')}</Typography.Text>}
