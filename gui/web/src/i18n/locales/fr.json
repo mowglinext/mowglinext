@@ -3321,6 +3321,7 @@
     }
   },
   "hostUpdater": {
+    "componentSourceHelp": "Les versions des composants doivent provenir du même dépôt et de la même branche que la version sélectionnée.",
     "summaryUnknown": "Inconnu",
     "summaryCustom": "Personnalisé",
     "runningSummary": "Version en cours : {{version}} · {{track}}. Ouvrir les mises à jour",

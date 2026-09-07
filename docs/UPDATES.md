@@ -178,7 +178,15 @@ Unmanaged MQTT has a local badge, and the host updater has a separate reviewed a
 
 The installed base remains selectable when it has aged out of the release list and
 belongs to the selected source. Individual choices come from complete published
-releases in that same repository/track/branch. Both releases must have the same
+releases in that same repository/track/branch. A branch is entered in Advanced →
+Update settings → Custom branch using its full upstream name, for example
+`feat/gui-dashboard-improvements`. Saving selects the checking source; choose a
+published release and review separately to install. For a single-container change,
+keep the installed base release selected and choose a compatible build beside
+that container. The other image versions remain on the base (the coordinated
+backup/restart still covers the stack). Keeping the base on `dev` while selecting
+only GUI from `feat/gui-dashboard-improvements` is not currently supported.
+Branch names and matching contracts alone do not bypass that source restriction. Both releases must have the same
 nonempty `component_compatibility[image-family]`, layout, data schema, updater API,
 maintenance API and firmware protocol. The chosen image must support the host's
 platform. Missing/incompatible contracts disable mixing, not whole releases.

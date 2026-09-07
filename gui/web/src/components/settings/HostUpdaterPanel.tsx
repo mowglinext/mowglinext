@@ -49,7 +49,7 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
     const canRestore = data?.state.history.some(j => j.phase === 'succeeded' && j.plan.target.id === data.state.active?.id && (!data.state.active_job_id || j.id === data.state.active_job_id));
     const date = (value?: string) => value && !value.startsWith('0001') ? new Date(value).toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'}) : t('updates.unknown');
     const label = (deployment?: Deployment) => !deployment ? t('hostUpdater.customInstalled') : deployment.source.track === 'stable'
-        ? deployment.release_tag || deployment.id : `${t(`hostUpdater.tracks.${deployment.source.track}`)} · ${deployment.revision.slice(0, 8)}`;
+        ? deployment.release_tag || deployment.id : `${deployment.source.track === 'custom' ? deployment.source.branch : t(`hostUpdater.tracks.${deployment.source.track}`)} · ${deployment.revision.slice(0, 8)}`;
     const component = (service: string) => t(`updates.components.${service === 'mowgli' ? 'robot' : service}`, {defaultValue: service});
     return <Card title={t('hostUpdater.softwareUpdates')} size="small" data-testid="host-updater" className={advanced ? undefined : "updates-simple"}>
         <Space direction="vertical" size="middle" style={{width: '100%', overflowWrap: 'anywhere'}}>
@@ -94,6 +94,7 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                     <div className="update-stack-title"><Typography.Title level={5}>{t('hostUpdater.stack')}</Typography.Title>
                         {advanced && hasOverrides && <Button size="small" onClick={() => setComponentSelected({})}>{t('hostUpdater.resetComponents')}</Button>}
                     </div>
+                    {advanced && <Typography.Paragraph type="secondary">{t('hostUpdater.componentSourceHelp')}</Typography.Paragraph>}
                     {serviceNames.length === 0 && <Typography.Text type="secondary">{t('hostUpdater.stackUnavailable')}</Typography.Text>}
                     {serviceNames.map(name => {
                         const running = runtime?.components?.[name]; const family = families[name];

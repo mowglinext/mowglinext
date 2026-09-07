@@ -3,10 +3,17 @@ import {installMockBackend} from './mock/mockBackend';
 import {SCENARIOS} from './mock/scenarios';
 
 const source = {repository:'mowglinext/mowglinext',track:'dev',branch:'dev'};
+// Real upstream refs verified through GitHub on 2026-09-07. Deployment assets,
+// compatibility contracts and installed versions below remain simulated.
+const devHead='4fc91c4fe15d3bdaaab7f12503c3646c94162187';
+const devPrevious='1076cdebaecd0f18dd4509c7d90edd33aa0ede14';
+const customBranch='feat/gui-dashboard-improvements';
+const customHead='f7e6f75ab8405c43ee1ddda3d946e029759b47d6';
+const customPrevious='30b3faa9a7aea7ea7aea20deab06c5f9cc24939f';
 const familyMap = {mowgli:'mowgli-ros2',gui:'mowglinext-gui',gps:'gps',lidar:'lidar-ldlidar',camera:'camera'};
 const contracts = Object.fromEntries(Object.values(familyMap).map(f=>[f,`${f}-contract-1`]));
 function release(id:string, track='dev', tag='') {
-    return {id,source:{...source,track,branch:track==='stable'?'main':'dev'},release_tag:tag,revision:(id.includes('new')?'a':'b').repeat(40),published_at:'2026-09-07T09:00:00Z',
+    return {id,source:{...source,track,branch:track==='stable'?'main':'dev'},release_tag:tag,revision:id.includes('new')?devHead:devPrevious,published_at:track==='stable'?'2026-09-07T09:00:00Z':id.includes('new')?'2026-09-06T23:29:38Z':'2026-09-06T18:38:03Z',
         layout:1,data_schema:1,updater_api:1,maintenance_api:1,firmware_protocol:6,component_compatibility:contracts,
         service_choices:[{service:'mowgli',image:'mowgli-ros2'},{service:'gui',image:'mowglinext-gui'},{service:'gps',image:'gps',when:{gnss:'universal'}},{service:'lidar',image:'lidar-ldlidar',when:{lidar:'ldlidar'}}],
         images:Object.fromEntries(Object.values(familyMap).map(f=>[f,{repository:`ghcr.io/${source.repository}/${f}`,platforms:{'linux/arm64':{manifest:'sha256:'+'1'.repeat(64)}}}])),
@@ -16,21 +23,21 @@ function fixture(track='dev', mixed=false, expanded=false) {
     const base=release('release-base',track,'v1.2.0');const next=release('release-new',track,'v1.3.0');const alternative=release('release-alternative',track,'v1.2.1');
     if(expanded) {base.service_choices.push({service:'camera',image:'camera'});next.service_choices.push({service:'camera',image:'camera'});}
     const names=expanded?['mowgli','gui','gps','lidar','camera']:['mowgli','gui','gps'];
-    const components=Object.fromEntries(names.map(name=>[name,{name:`mowgli-${name}`,family:familyMap[name as keyof typeof familyMap],reference:`ghcr.io/${source.repository}/${familyMap[name as keyof typeof familyMap]}:dev`,version:track==='stable'?(mixed&&['mowgli','gui'].includes(name)?'v1.2.1':'v1.2.0'):'dev',revision:'1944f97d'.padEnd(40,'a'),image:`sha256:installed-${name}`,healthy:true,healthcheck:false}]));
+    const components=Object.fromEntries(names.map(name=>[name,{name:`mowgli-${name}`,family:familyMap[name as keyof typeof familyMap],reference:`ghcr.io/${source.repository}/${familyMap[name as keyof typeof familyMap]}:dev`,version:track==='stable'?(mixed&&['mowgli','gui'].includes(name)?'v1.2.1':'v1.2.0'):'dev',revision:devPrevious,image:`sha256:installed-${name}`,healthy:true,healthcheck:false}]));
     return {api:1,capabilities:['component-overrides','declared-services','release-compose','service-version-overrides'],
         runtime:{identity:mixed?'mixed':'matched',health:'healthy',checked_at:'2026-09-07T09:30:00Z',selection:{gnss:'universal',lidar:expanded?'ldlidar':'none'},components},
-        agent:{version:'updater-current',revision:'1944f97d',platform:'linux/arm64'},trusted_repositories:[source.repository],
+        agent:{version:'updater-current',revision:devPrevious,platform:'linux/arm64'},trusted_repositories:[source.repository],
         state:{policy:{source:base.source,interval_hours:4,pinned:false},installed_policy:{source:base.source,interval_hours:4,pinned:true},active:base,
             overrides:mixed?{gui:alternative,mowgli:alternative}:{},last_check:'2026-09-07T09:30:00Z',next_check:'2026-09-07T13:35:00Z',last_success:'2026-09-07T09:30:00Z',releases:[next,base,alternative],notices:[],history:[]}};
 }
 const inventory={docker_available:true,server:{version:'dev'},components:[
-    ...['mowgli','gui','gps','lidar','camera'].map(name=>({name:`mowgli-${name}`,component:name==='mowgli'?'robot':name,version:'dev',revision:'1944f97d',state:'running',image:`ghcr.io/${source.repository}/${familyMap[name as keyof typeof familyMap]}:dev`,image_id:`sha256:installed-${name}`})),
+    ...['mowgli','gui','gps','lidar','camera'].map(name=>({name:`mowgli-${name}`,component:name==='mowgli'?'robot':name,version:'dev',revision:devPrevious,state:'running',image:`ghcr.io/${source.repository}/${familyMap[name as keyof typeof familyMap]}:dev`,image_id:`sha256:installed-${name}`})),
     {name:'mowgli-mqtt',component:'mqtt',version:'2.0.22',state:'running',image:'eclipse-mosquitto:2.0.22'},
 ]};
 async function open(page:Page, data:ReturnType<typeof fixture>, mobile=false) {
     await page.setViewportSize(mobile?{width:390,height:844}:{width:1440,height:1800});
     const names=new Set(Object.values(data.runtime.components).map(c=>c.name));
-    await installMockBackend(page,{...SCENARIOS[0],rest:{'/api/system/updater/state':data,'/api/system/versions':{...inventory,components:inventory.components.filter(c=>c.component==='mqtt'||names.has(c.name)).map(c=>({...c,version:Object.values(data.runtime.components).find(r=>r.name===c.name)?.version??c.version}))}}});
+    await installMockBackend(page,{...SCENARIOS[0],rest:{'/api/system/updater/state':data,'/api/system/versions':{...inventory,components:inventory.components.filter(c=>c.component==='mqtt'||names.has(c.name)).map(c=>({...c,version:Object.values(data.runtime.components).find(r=>r.name===c.name)?.version??c.version,revision:Object.values(data.runtime.components).find(r=>r.name===c.name)?.revision}))}}});
     const posts:{path:string;body:Record<string,unknown>}[]=[];const errors:string[]=[];
     page.on('pageerror',e=>errors.push(e.message));
     page.on('request',r=>{if(r.method()==='POST'&&r.url().includes('/system/updater/'))posts.push({path:new URL(r.url()).pathname,body:r.postDataJSON()});});
@@ -38,7 +45,7 @@ async function open(page:Page, data:ReturnType<typeof fixture>, mobile=false) {
     return {panel:page.getByTestId('host-updater'),posts,errors};
 }
 async function advanced(page:Page) {await page.locator('.ant-segmented').getByText('Advanced',{exact:true}).click();}
-async function choose(page:Page,name:string,text:string) {
+async function choose(page:Page,name:string,text:string|RegExp) {
     await page.getByRole('combobox',{name,exact:true}).locator('..').locator('..').click();
     await page.locator('.ant-select-dropdown:visible').last().locator('.ant-select-item-option-content').getByText(text,{exact:true}).click();
     await expect(page.locator('.ant-select-dropdown:visible')).toHaveCount(0);
@@ -62,7 +69,7 @@ for(const track of ['dev','stable'])for(const mobile of [false,true])test(`${tra
     await expect(panel.getByText('After update',{exact:false})).toHaveCount(0);
     if(track==='stable')await expect(panel.locator('.available-release')).toHaveText('v1.3.0');
     await expect(panel.getByRole('button',{name:'Review changes',exact:true})).toBeInViewport();
-    if(!mobile)await expect(page.getByTestId('running-version-summary')).toContainText(track==='stable'?'v1.2.0':'bbbbbbbb');
+    if(!mobile)await expect(page.getByTestId('running-version-summary')).toContainText(track==='stable'?'v1.2.0':devPrevious.slice(0,8));
     await shot(page,prefix,mobile);
     await page.route('**/api/system/updater/plan',r=>r.fulfill({json:plan(data.state.releases[0])}));
     await panel.getByRole('button',{name:'Review changes',exact:true}).click();await expect(page.getByRole('dialog')).toBeVisible();
@@ -171,7 +178,7 @@ test('missing platform and disabled sensors cannot be selected',async({page})=>{
 for(const mobile of [false,true])test(`upstream custom branch settings ${mobile?'mobile':'desktop'}`,async({page})=>{
     const data=fixture(); const {panel,posts}=await open(page,data,mobile);await advanced(page);
     const preferences=panel.locator('.update-preferences');await preferences.locator(':scope > summary').click();
-    await choose(page,'Update source','Custom branch');await panel.getByRole('textbox',{name:'Custom branch',exact:true}).fill('feat/example-update');
+    await choose(page,'Update source','Custom branch');await panel.getByRole('textbox',{name:'Custom branch',exact:true}).fill(customBranch);
     await preferences.evaluate(el=>el.scrollIntoView({block:'center'}));
     await shot(page,'host-updater-preferences',mobile);expect(posts).toEqual([]);
 });
@@ -232,4 +239,35 @@ test('mobile More shows the running version',async({page})=>{
     const summary=page.getByTestId('running-version-summary');await expect(summary).toContainText('v1.2.0');
     await shot(page,'host-updater-more',true);
     await summary.click();await expect(summary).toHaveCount(0);expect(posts).toEqual([]);
+});
+
+for(const mobile of [false,true])test(`real upstream custom branch with one component override ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture('custom');
+    const base=data.state.active;const next=data.state.releases[0];
+    data.state.releases=[next,base];
+    for(const r of data.state.releases) {
+        r.source.branch=customBranch;r.release_tag='';
+        r.revision=r===next?customHead:customPrevious;
+        r.published_at=r===next?'2026-05-03T10:17:49Z':'2026-05-03T10:10:38Z';
+    }
+    for(const c of Object.values(data.runtime.components)) {c.version=customBranch;c.revision=customPrevious;}
+    const {panel,posts,errors}=await open(page,data,mobile);
+    await expect(panel.locator('.available-release')).toHaveText(`${customBranch} · f7e6f75a`);
+    await shot(page,'host-updater-custom-branch',mobile);
+    await advanced(page);
+    // Retain the installed base for the stack, change only the GUI to a newer
+    // compatible build from that SAME branch. Cross-branch mixing is unsupported.
+    await choose(page,'Release version',new RegExp(`${customBranch} · 30b3faa9`));
+    await choose(page,'Web interface version',`${customBranch} · f7e6f75a`);
+    await expect(page.getByTestId('stack-mowgli')).toContainText('Selected: '+customBranch+' · 30b3faa9');
+    await expect(page.getByTestId('stack-gui')).toContainText('Selected: '+customBranch+' · f7e6f75a');
+    await shot(page,'host-updater-custom-component',mobile,'stack-gui');
+    const preview=plan(base,{gui:next});
+    preview.images.mowgli=preview.previous.mowgli;preview.images.gps=preview.previous.gps;
+    await page.route('**/api/system/updater/plan',r=>r.fulfill({json:{...preview,stack:{selection:{options:{gnss:'universal',lidar:'none'}},changes:[{service:'mowgli',action:'keep'},{service:'gui',action:'update'},{service:'gps',action:'keep'}]}}}));
+    await panel.getByRole('button',{name:'Review changes',exact:true}).click();
+    await expect(page.getByRole('dialog').getByText(`Web interface: custom version ${customBranch} · f7e6f75a`)).toBeVisible();
+    await shot(page,'host-updater-custom-review',mobile);
+    expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:base.id,pinned:true,component_deployments:{gui:next.id}}}]);
+    expect(errors).toEqual([]);
 });

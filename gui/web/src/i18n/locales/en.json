@@ -3321,6 +3321,7 @@
     }
   },
   "hostUpdater": {
+    "componentSourceHelp": "Component versions must come from the same repository and branch as the selected release.",
     "summaryUnknown": "Unknown",
     "summaryCustom": "Custom",
     "runningSummary": "Running {{version}} · {{track}}. Open Updates",
