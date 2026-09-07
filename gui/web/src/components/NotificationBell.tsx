@@ -190,6 +190,7 @@ export function NotificationBell() {
                                                 fontSize: 13, fontWeight: item.read ? 500 : 700,
                                                 color: colors.text,
                                             }}>{item.title}</div>
+                                            {item.href && <a href={item.href} onClick={() => markRead(item.id)}>{t('hostUpdater.open')}</a>}
                                             {item.body && (
                                                 <div style={{fontSize: 12, color: colors.textDim, marginTop: 2, lineHeight: 1.4}}>
                                                     {item.body}

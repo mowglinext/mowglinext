@@ -3159,7 +3159,7 @@
     "modeIdleDescription": "Tout l'anneau en blanc atténué, sans mouvement. Alimenté et éveillé, sans activité."
   },
   "settingsSections": {
-    "updates": {"label": "Mises à jour", "description": "Logiciels installés, versions web et firmware de la carte principale"},
+    "updates": {"label": "Mises à jour", "description": "Versions installées, sources des mises à jour et récupération"},
     "appearance": {
       "label": "Apparence",
       "description": "Richesse visuelle, consommation d'énergie et affichage des horodatages sur cet appareil"
@@ -3318,5 +3318,62 @@
       "label": "UTC",
       "description": "Le fuseau des conteneurs du robot. Idéal pour comparer des journaux à plusieurs."
     }
+  },
+  "hostUpdater": {
+    "agentNotice": "Une nouvelle version du programme de mise à jour est disponible",
+    "title": "Mises à jour et récupération",
+    "agent": "Programme de mise à jour",
+    "installed": "Déploiement installé",
+    "customInstalled": "Installation existante / personnalisée",
+    "pinned": "Version épinglée",
+    "lastCheck": "Dernière vérification : {{time}}",
+    "nextCheck": "Prochaine vérification : {{time}}",
+    "manual": "Manuellement",
+    "checkFailed": "Échec de vérification ; dernier résultat enregistré affiché",
+    "unavailable": "Programme de mise à jour indisponible",
+    "reconnecting": "Mise à jour en cours — reconnexion à l’interface",
+    "source": "Source des mises à jour",
+    "repository": "Dépôt",
+    "branch": "Branche personnalisée",
+    "interval": "Fréquence de vérification",
+    "hours_one": "Toutes les heures",
+    "hours_other": "Toutes les {{count}} heures",
+    "saveCheck": "Enregistrer et vérifier",
+    "sourceHelp": "Sélectionne les notifications et versions disponibles. L’installation nécessite une vérification séparée. Les branches personnalisées doivent publier des versions complètes.",
+    "noBuild": "Aucune version installable publiée pour cette source.",
+    "version": "Version du déploiement",
+    "latest": "Dernière publication",
+    "pin": "Épingler ce déploiement et signaler les nouvelles versions",
+    "review": "Vérifier l’installation",
+    "updateAgent": "Mettre à jour le programme",
+    "agentHelp": "Le programme redémarre séparément des conteneurs. Son lanceur conserve le binaire précédent si la nouvelle version ne démarre pas.",
+    "history": "Historique des déploiements",
+    "rollback": "Restaurer le déploiement précédent",
+    "rollbackHelp": "Restaure les images et données sauvegardées. Le robot doit être au repos, lame arrêtée.",
+    "install": "Installer le déploiement vérifié",
+    "interruption": "Le robot doit être immobile, au repos, lame arrêtée. Les services et cette interface redémarreront. Les modifications locales peuvent être remplacées ou les logiciels rétrogradés.",
+    "expires": "Vérification valable jusqu’à {{time}}",
+    "notice": "Une mise à jour est disponible",
+    "reviewNotice": "Un déploiement publié est disponible pour vérification",
+    "open": "Ouvrir les mises à jour",
+    "tracks": {
+      "stable": "Production (Stable)",
+      "dev": "Développement",
+      "custom": "Branche personnalisée"
+    },
+    "phases": {
+      "planned": "Mise à jour en attente",
+      "downloading": "Téléchargement des images",
+      "quiescing": "Activation de la maintenance",
+      "backing_up": "Sauvegarde des données",
+      "applying": "Remplacement des conteneurs",
+      "verifying": "Vérification du déploiement",
+      "succeeded": "Mise à jour terminée",
+      "rolling_back": "Restauration du déploiement précédent",
+      "rolled_back": "Déploiement précédent restauré",
+      "recovery_required": "Récupération nécessaire — robot inhibé",
+      "failed": "Mise à jour arrêtée avant activation"
+    },
+    "recover": "Réessayer la récupération"
   }
 }

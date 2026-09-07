@@ -3163,7 +3163,7 @@
     "modeIdleDescription": "Whole ring dim white, not moving. Powered and awake, doing nothing."
   },
   "settingsSections": {
-    "updates": {"label": "Updates", "description": "Installed versions and read-only update checks"},
+    "updates": {"label": "Updates", "description": "Installed versions, update sources and recovery"},
     "appearance": {
       "label": "Appearance",
       "description": "Visual richness, energy use and timestamp display on this device"
@@ -3318,5 +3318,62 @@
       "label": "UTC",
       "description": "The zone the robot containers run in. Best for comparing logs with a colleague."
     }
+  },
+  "hostUpdater": {
+    "agentNotice": "An update to the host updater is available",
+    "title": "Updates and recovery",
+    "agent": "Host updater",
+    "installed": "Installed deployment",
+    "customInstalled": "Existing / custom installation",
+    "pinned": "Pinned",
+    "lastCheck": "Last check: {{time}}",
+    "nextCheck": "Next check: {{time}}",
+    "manual": "Manual only",
+    "checkFailed": "Check failed; showing the last saved result",
+    "unavailable": "Host updater unavailable",
+    "reconnecting": "Update in progress — reconnecting to the GUI",
+    "source": "Update source",
+    "repository": "Repository",
+    "branch": "Custom branch",
+    "interval": "Check interval",
+    "hours_one": "Every hour",
+    "hours_other": "Every {{count}} hours",
+    "saveCheck": "Save and check",
+    "sourceHelp": "This selects notifications and available builds. Installation requires a separate review. Custom branches must publish complete builds.",
+    "noBuild": "No installable build published for this source.",
+    "version": "Deployment version",
+    "latest": "Latest published",
+    "pin": "Pin this deployment; continue notifying about newer builds",
+    "review": "Review installation",
+    "updateAgent": "Update host updater",
+    "agentHelp": "The updater will restart separately from the containers. Its launcher retains the previous binary if the new version fails to start.",
+    "history": "Deployment history",
+    "rollback": "Restore previous deployment",
+    "rollbackHelp": "Restore the previous container images and saved application data. The mower must be idle with its blade stopped.",
+    "install": "Install reviewed deployment",
+    "interruption": "The mower must be idle and stationary with its blade stopped. Services, including this GUI, will restart. This can replace custom patches or downgrade software.",
+    "expires": "Review expires: {{time}}",
+    "notice": "An update is available",
+    "reviewNotice": "A published deployment is available to review",
+    "open": "Open Updates",
+    "tracks": {
+      "stable": "Production (Stable)",
+      "dev": "Development",
+      "custom": "Custom branch"
+    },
+    "phases": {
+      "planned": "Update queued",
+      "downloading": "Downloading images",
+      "quiescing": "Entering maintenance",
+      "backing_up": "Backing up application data",
+      "applying": "Replacing containers",
+      "verifying": "Verifying the deployment",
+      "succeeded": "Update completed",
+      "rolling_back": "Restoring previous deployment",
+      "rolled_back": "Previous deployment restored",
+      "recovery_required": "Recovery required — mower remains inhibited",
+      "failed": "Update stopped before activation"
+    },
+    "recover": "Retry recovery"
   }
 }
