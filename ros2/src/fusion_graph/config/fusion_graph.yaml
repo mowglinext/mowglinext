@@ -429,6 +429,16 @@ fusion_graph_node:
     lidar_map_half_extent_m: 40.0         # grid spans ±40 m around the datum
     lidar_map_insert_period_s: 0.5        # insert a scan into the grid at most every 0.5 s
     lidar_map_rebuild_period_s: 5.0       # push the grid to the filter at most every 5 s
+    # Log-odds evidence: a return adds log_odds_hit to its cell, every cell the
+    # ray crossed gets log_odds_miss; a cell is exported OCCUPIED at or above
+    # occupied_threshold, FREE at or below free_threshold. With the defaults ONE
+    # hit already marks a cell occupied — right for walls, optimistic for a
+    # garden where foliage moves; raise the occupied threshold to ~2x
+    # log_odds_hit to demand two concordant hits (tune on the replay harness).
+    lidar_map_log_odds_hit: 0.85
+    lidar_map_log_odds_miss: -0.40
+    lidar_map_occupied_threshold: 0.85
+    lidar_map_free_threshold: -0.40
     lidar_anchor_engage_age_s: 1.0        # engage once RTK-Fixed is older than this (~5 missed fixes at 5 Hz; 0.3 flapped)
     lidar_anchor_disengage_dwell_s: 1.0   # once anchoring, Fixed must be fresh this long before mapping resumes
     lidar_anchor_max_beams: 60            # AMCL-class beam subsampling

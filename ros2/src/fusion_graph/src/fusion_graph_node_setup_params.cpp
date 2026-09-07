@@ -134,6 +134,15 @@ void FusionGraphNode::DeclareParameters()
       mp.resolution_m = lidar_map_resolution_m_;
       mp.half_extent_m = lidar_map_half_extent_m_;
       mp.max_range_m = lidar_anchor_max_laser_distance_m_;
+      // Evidence weights. Defaults = one hit marks a cell occupied; a garden
+      // (foliage, wind) wants a higher occupied threshold so a cell needs
+      // several concordant hits before the filter may trust it — tuned on
+      // the replay harness, not by hand.
+      mp.log_odds_hit = declare_parameter<double>("lidar_map_log_odds_hit", mp.log_odds_hit);
+      mp.log_odds_miss = declare_parameter<double>("lidar_map_log_odds_miss", mp.log_odds_miss);
+      mp.occupied_threshold =
+          declare_parameter<double>("lidar_map_occupied_threshold", mp.occupied_threshold);
+      mp.free_threshold = declare_parameter<double>("lidar_map_free_threshold", mp.free_threshold);
       lidar_mapper_.emplace(mp);
       lidar_anchor_gate_.emplace(true,
                                  lidar_anchor_engage_age_s_,
