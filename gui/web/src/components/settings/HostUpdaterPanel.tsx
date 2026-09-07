@@ -109,8 +109,8 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                                     {overrides[name] && <Tag color="gold">{t('hostUpdater.customComponent')}</Tag>}
                                     {!supported && <Typography.Text type="secondary">{t('hostUpdater.serviceSelectionUnsupported')}</Typography.Text>}
                                     {target && supported && noAlternatives && <Typography.Text type="secondary">{t('hostUpdater.noCompatibleComponent')}</Typography.Text>}
-                                </> : <Typography.Text type="secondary">{family ? t('hostUpdater.followRelease') : t('hostUpdater.removedByRelease')}</Typography.Text>}
-                                {selectedRelease && family && <Typography.Text type="secondary">{t('hostUpdater.selected')}: {label(selectedRelease)}</Typography.Text>}
+                                </> : !family && target && <Typography.Text type="secondary">{t('hostUpdater.removedByRelease')}</Typography.Text>}
+                                {selectedRelease && family && (advanced || !sameDeployment) && <Typography.Text type="secondary">{t(advanced ? 'hostUpdater.selected' : 'hostUpdater.afterUpdate')}: {label(selectedRelease)}</Typography.Text>}
                             </div>
                         </div>;
                     })}

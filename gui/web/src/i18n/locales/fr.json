@@ -3328,6 +3328,7 @@
     "notInstalled": "Non installé",
     "stackUnavailable": "Chargement des services installés.",
     "versionControl": "version",
+    "afterUpdate": "Après la mise à jour",
     "followRelease": "Suivre la version choisie",
     "resetComponents": "Rétablir les versions du déploiement",
     "customComponent": "Version personnalisée",

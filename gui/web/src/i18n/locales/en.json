@@ -3328,6 +3328,7 @@
     "notInstalled": "Not installed",
     "stackUnavailable": "Waiting for the installed stack.",
     "versionControl": "version",
+    "afterUpdate": "After update",
     "followRelease": "Follow selected release",
     "resetComponents": "Reset all to release versions",
     "customComponent": "Custom version",
