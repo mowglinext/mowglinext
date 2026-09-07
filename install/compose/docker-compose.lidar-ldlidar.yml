@@ -17,6 +17,8 @@ services:
 
   lidar:
     container_name: mowgli-lidar
+    labels:
+      garden.mowgli.update.image: lidar-ldlidar
     image: ${LIDAR_IMAGE}
     network_mode: host
     ipc: host

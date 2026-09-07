@@ -89,13 +89,10 @@ func (m *Manager) UpgradeAgent(ctx context.Context, c HostConfig, id string) err
 	if err != nil {
 		return err
 	}
-	var info struct {
-		Version string `json:"version"`
-		API     int    `json:"api"`
+	if err = validateWorkerProbe(output, binary.Version); err != nil {
+		return err
 	}
-	if err = json.Unmarshal(output, &info); err != nil || info.Version != binary.Version || info.API != APIVersion {
-		return errors.New("updater version/API probe failed")
-	}
+
 	current, err := os.Executable()
 	if err != nil {
 		return err
@@ -231,4 +228,16 @@ func supervise(ctx context.Context, configPath string, c HostConfig, original st
 			break
 		}
 	}
+}
+
+func validateWorkerProbe(output []byte, expectedVersion string) error {
+	var info struct {
+		Version     string `json:"version"`
+		API         int    `json:"api"`
+		StateSchema int    `json:"state_schema"`
+	}
+	if err := json.Unmarshal(output, &info); err != nil || info.Version != expectedVersion || info.API != APIVersion || info.StateSchema != StateSchema {
+		return errors.New("updater version/API/state-schema probe failed")
+	}
+	return nil
 }

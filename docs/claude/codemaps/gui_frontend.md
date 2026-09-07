@@ -6,6 +6,9 @@
 
 ## Where to look
 
+Settings updates: `components/settings/HostUpdaterPanel.tsx` and `hooks/useHostUpdater.ts` implement Simple/matched updates, Advanced compatible GUI overrides, cached runtime identity/health and source selection. Fixture screenshots and behavior coverage: `tests/e2e/host-updater.spec.ts`.
+
+
 | Task | Start here |
 |------|------------|
 | Add a route / page | `gui/web/src/main.tsx` L15–24 (`React.lazy` imports) + L26–75 (`createHashRouter`); then `components/AppShell.tsx` `NAV` L46–56 and `PAGE_META` L60–70 |

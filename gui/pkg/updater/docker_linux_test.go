@@ -23,7 +23,7 @@ type integrationBackend struct {
 }
 
 func (b *integrationBackend) PlanImages(context.Context, Deployment) (map[string]string, error) {
-	return map[string]string{"gui": b.target, "mowgli": b.target}, nil
+	return map[string]string{"gui": b.target, "mowgli": b.target, "metrics": b.target}, nil
 }
 func (b *integrationBackend) Verify(ctx context.Context, images map[string]string, d *Deployment) error {
 	if b.failVerification && images["gui"] == b.target {
@@ -59,8 +59,11 @@ func TestDockerTransactionRestoresImagesAndData(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(runtimeDir, ".env"), nil, 0600)
 	project := fmt.Sprintf("updater-test-%d", time.Now().UnixNano())
 	services := map[string]any{}
-	for _, name := range []string{"gui", "mowgli"} {
+	for _, name := range []string{"gui", "mowgli", "metrics"} {
 		s := map[string]any{"image": "busybox:1.36", "container_name": project + "-" + name, "command": []string{"sleep", "3600"}, "user": fmt.Sprint(os.Getuid()), "labels": map[string]string{"garden.mowgli.maintenance-api": "1"}}
+		if name == "metrics" {
+			s["labels"] = map[string]string{updateLabel + "image": "metrics", updateLabel + "after": "mowgli"}
+		}
 		if name == "gui" {
 			s["volumes"] = []string{db + ":/db"}
 		}

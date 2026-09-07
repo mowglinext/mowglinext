@@ -22,7 +22,11 @@ jobs:
       release: ${{ steps.identity.outputs.release }}
       branch: ${{ steps.identity.outputs.branch }}
       track: ${{ steps.identity.outputs.track }}
+      components: ${{ steps.components.outputs.value }}
     steps:
+      - uses: actions/checkout@v6
+      - id: components
+        run: echo "value=$(jq -c '.components' install/deployment.json)" >> "$GITHUB_OUTPUT"
       - id: identity
         env:
           REF: ${{ github.ref_name }}
@@ -42,7 +46,7 @@ jobs:
       fail-fast: false
       matrix:
         arch: [amd64, arm64]
-        component: [mowgli-ros2, mowglinext-gui, gps, lidar-ldlidar, lidar-rplidar, lidar-stl27l]
+        component: ${{ fromJSON(needs.identity.outputs.components) }}
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     permissions:
       contents: read
@@ -59,20 +63,16 @@ jobs:
           password: ${{ github.token }}
       - id: config
         env:
-          COMPONENT: ${{ matrix.component }}
+          COMPONENT: ${{ matrix.component.name }}
           REPO: ${{ github.repository }}
         run: |
-          context="sensors/$COMPONENT"; target=""; file="$context/Dockerfile"
-          if [[ "$COMPONENT" == mowgli-ros2 ]]; then context=.; file=ros2/Dockerfile; target=runtime; fi
-          if [[ "$COMPONENT" == gps ]]; then context=.; file=sensors/gps/Dockerfile; fi
-          if [[ "$COMPONENT" == mowglinext-gui ]]; then context=gui; file=gui/Dockerfile; fi
-          printf 'context=%s\nfile=%s\ntarget=%s\nimage=ghcr.io/%s/%s\n' "$context" "$file" "$target" "${REPO,,}" "$COMPONENT" >> "$GITHUB_OUTPUT"
+          printf 'image=ghcr.io/%s/%s\n' "${REPO,,}" "$COMPONENT" >> "$GITHUB_OUTPUT"
       - id: image
         uses: docker/build-push-action@v7
         with:
-          context: ${{ steps.config.outputs.context }}
-          file: ${{ steps.config.outputs.file }}
-          target: ${{ steps.config.outputs.target }}
+          context: ${{ matrix.component.context }}
+          file: ${{ matrix.component.file }}
+          target: ${{ matrix.component.target }}
           platforms: linux/${{ matrix.arch }}
           build-args: |
             BUILD_REVISION=${{ github.sha }}
@@ -85,14 +85,14 @@ jobs:
           cache-to: type=registry,ref=${{ steps.config.outputs.image }}:deployment-cache-${{ matrix.arch }},mode=max
       - env:
           DIGEST: ${{ steps.image.outputs.digest }}
-          COMPONENT: ${{ matrix.component }}
+          COMPONENT: ${{ matrix.component.name }}
           ARCH: ${{ matrix.arch }}
         run: |
           mkdir -p digests
           printf '%s' "$DIGEST" > "digests/$COMPONENT-$ARCH"
       - uses: actions/upload-artifact@v7
         with:
-          name: deployment-${{ matrix.component }}-${{ matrix.arch }}
+          name: deployment-${{ matrix.component.name }}-${{ matrix.arch }}
           path: digests/*
   publish:
     needs: [identity, build, quality-ros2, quality-gui]
@@ -127,7 +127,7 @@ jobs:
           BRANCH: ${{ needs.identity.outputs.branch }}
           TRACK: ${{ needs.identity.outputs.track }}
         run: |
-          for component in mowgli-ros2 mowglinext-gui gps lidar-ldlidar lidar-rplidar lidar-stl27l; do
+          for component in $(jq -r '.components[].name' install/deployment.json); do
             image="ghcr.io/${REPO,,}/$component"
             docker buildx imagetools create -t "$image:$DEPLOYMENT" "$image@$(cat "digests/$component-amd64")" "$image@$(cat "digests/$component-arm64")"
           done
@@ -138,7 +138,7 @@ jobs:
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w -X github.com/mowglinext/mowglinext/pkg/updater.Version=$DEPLOYMENT -X github.com/mowglinext/mowglinext/pkg/updater.Revision=$REVISION" -o "../dist/mowgli-updater-linux-$arch" ./cmd/mowgli-updater
           done
-          go run ./cmd/publish-deployment --repository "$REPO" --branch "$BRANCH" --track "$TRACK" --revision "$REVISION" --id "$DEPLOYMENT" --release "$RELEASE" --assets ../dist --protocol "$protocol"
+          go run ./cmd/publish-deployment --repository "$REPO" --branch "$BRANCH" --track "$TRACK" --revision "$REVISION" --id "$DEPLOYMENT" --release "$RELEASE" --assets ../dist --protocol "$protocol" --images "$(jq -r '.components | map(.name) | join(",")' ../install/deployment.json)" --gui-compatibility "$(jq -r .gui_compatibility ../install/deployment.json)"
           cd ../dist
           sha256sum mowgli-updater-linux-* > updater-SHA256SUMS
           if [[ "$TRACK" == stable ]]; then

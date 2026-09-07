@@ -1,0 +1,41 @@
+{
+  "gui_compatibility": "ros-gui-1",
+  "components": [
+    {
+      "name": "mowgli-ros2",
+      "context": ".",
+      "file": "ros2/Dockerfile",
+      "target": "runtime"
+    },
+    {
+      "name": "mowglinext-gui",
+      "context": "gui",
+      "file": "gui/Dockerfile",
+      "target": ""
+    },
+    {
+      "name": "gps",
+      "context": ".",
+      "file": "sensors/gps/Dockerfile",
+      "target": ""
+    },
+    {
+      "name": "lidar-ldlidar",
+      "context": "sensors/lidar-ldlidar",
+      "file": "sensors/lidar-ldlidar/Dockerfile",
+      "target": ""
+    },
+    {
+      "name": "lidar-rplidar",
+      "context": "sensors/lidar-rplidar",
+      "file": "sensors/lidar-rplidar/Dockerfile",
+      "target": ""
+    },
+    {
+      "name": "lidar-stl27l",
+      "context": "sensors/lidar-stl27l",
+      "file": "sensors/lidar-stl27l/Dockerfile",
+      "target": ""
+    }
+  ]
+}

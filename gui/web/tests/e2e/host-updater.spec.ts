@@ -3,9 +3,9 @@ import {SCENARIOS} from './mock/scenarios';
 import {installMockBackend} from './mock/mockBackend';
 
 const source = {repository: 'mowglinext/mowglinext', track: 'dev', branch: 'dev'};
-const target = {id: 'deployment-a9132f4e-274-1', source, revision: 'a9132f4e'.padEnd(40, 'a'), published_at: '2026-09-07T09:00:00Z', updater: {'linux/arm64': {version: 'deployment-a9132f4e-274-1'}}};
+const target = {gui_compatibility: 'ros-gui-1', layout: 1, data_schema: 1, updater_api: 1, maintenance_api: 1, firmware_protocol: 6, id: 'deployment-a9132f4e-274-1', source, revision: 'a9132f4e'.padEnd(40, 'a'), published_at: '2026-09-07T09:00:00Z', updater: {'linux/arm64': {version: 'deployment-a9132f4e-274-1'}}};
 const status = {
-    api: 1, agent: {version: 'updater-1944f97d', revision: '1944f97d', platform: 'linux/arm64'}, trusted_repositories: [source.repository, 'wjcloudy/mowglinext'],
+    api: 1, capabilities: ['component-overrides', 'declared-services'], runtime: {identity: 'matched', health: 'healthy', checked_at: '2026-09-07T09:30:00Z'}, agent: {version: 'updater-1944f97d', revision: '1944f97d', platform: 'linux/arm64'}, trusted_repositories: [source.repository, 'wjcloudy/mowglinext'],
     state: {policy: {source, interval_hours: 4, pinned: false}, installed_policy: {source, interval_hours: 4, pinned: true},
         active: {...target, id: 'deployment-1944f97d-231-1', revision: '1944f97d'.padEnd(40, 'a')}, last_check: '2026-09-07T09:30:00Z', next_check: '2026-09-07T13:35:00Z', last_success: '2026-09-07T09:30:00Z',
         releases: [target], notices: [{id: 'sha256:notice', deployment: target.id, kind: 'available', read: false, dismissed: false, created_at: '2026-09-07T09:30:00Z'}], history: [],
@@ -41,8 +41,9 @@ for (const fixture of [
         await expect(page.getByTestId('update-checks')).toHaveCount(0);
         await expect(panel.getByText('Pinned', {exact: true})).toBeVisible();
         expect(requests).toEqual([]);
+        await expect(page.locator('.ant-select-dropdown:visible')).toHaveCount(0);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-        await page.screenshot({path: `tests/e2e/.artifacts/${fixture.prefix}-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true});
+        await page.screenshot({path: `tests/e2e/.artifacts/${fixture.prefix}-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
         await panel.getByRole('button', {name: 'Review installation', exact: true}).click();
         const review = page.getByRole('dialog');
         await expect(review.getByText(fixture.available, {exact: true})).toBeVisible();
@@ -52,7 +53,9 @@ for (const fixture of [
         expect(requests).toEqual(['/api/system/updater/plan']);
         await expect(page.locator('.ant-modal')).not.toHaveClass(/ant-zoom/);
         await expect(review).toHaveCSS('opacity', '1');
-        await page.screenshot({path: `tests/e2e/.artifacts/${fixture.prefix}-review-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true});
+        await expect(review).toHaveCSS('opacity', '1');
+        await expect(panel.getByRole('button', {name: 'Check now', exact: true})).not.toHaveClass(/ant-btn-loading/);
+        await page.screenshot({path: `tests/e2e/.artifacts/${fixture.prefix}-review-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
         await review.getByRole('button', {name: 'Cancel', exact: true}).click();
         expect(requests).not.toContain('/api/system/updater/apply');
         await page.locator('.ant-segmented').getByText('Advanced', {exact: true}).click();
@@ -69,7 +72,7 @@ for (const fixture of [
         await expect(page.locator('.ant-segmented-thumb')).toHaveCount(0);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
         expect(await panel.evaluate(e => e.getBoundingClientRect().left)).toBeGreaterThanOrEqual(0);
-        await page.screenshot({path: `tests/e2e/.artifacts/${fixture.prefix}-advanced-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true});
+        await page.screenshot({path: `tests/e2e/.artifacts/${fixture.prefix}-advanced-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
         expect(errors).toEqual([]);
     });
 }
@@ -110,4 +113,65 @@ test('custom fork selection is saved explicitly and never installs on selection'
     await page.locator('.ant-segmented').getByText('Simple', {exact: true}).click();
     await expect(panel.getByText(/wjcloudy\/mowglinext \/ feat\/settings-updates/)).toBeVisible();
     await expect(panel.getByRole('button', {name: 'Review installation', exact: true})).toBeDisabled();
+});
+
+for (const mobile of [false, true]) {
+    test(`advanced GUI override and matched return ${mobile ? 'mobile' : 'desktop'}`, async ({page}) => {
+        await page.setViewportSize(mobile ? {width: 390, height: 844} : {width: 1440, height: 1100});
+        if (!mobile) await page.setViewportSize({width: 1440, height: 1400});
+        const base = {...productionTarget, id: 'deployment-prod-120', release_tag: 'v1.2.0'};
+        const gui = {...productionTarget, id: 'deployment-prod-121', release_tag: 'v1.2.1', revision: 'b'.repeat(40)};
+        const incompatible = {...productionTarget, id: 'deployment-prod-130', release_tag: 'v1.3.0', gui_compatibility: 'ros-gui-2'};
+        const mixed = {...productionStatus, runtime: {...status.runtime, identity: 'mixed'}, state: {...productionStatus.state,
+            active: base, overrides: {gui}, releases: [gui, base, incompatible]}};
+        const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+        await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/updater/state': mixed,
+            '/api/system/versions': {docker_available: true, components: [], server: {version: 'dev'}}}});
+        const requests: Record<string, unknown>[] = [];
+        await page.route('**/api/system/updater/plan', route => {
+            const body = route.request().postDataJSON(); requests.push(body);
+            const selectedBase = body.deployment === base.id ? base : gui;
+            return route.fulfill({json: {id: 'plan-mixed', target: selectedBase, overrides: body.gui_deployment ? {gui} : {},
+                previous: {gui: 'sha256:old-gui', mowgli: 'sha256:base-ros'},
+                images: {gui: 'ghcr.io/mowglinext/mowglinext/mowglinext-gui@sha256:' + 'a'.repeat(64), mowgli: 'ghcr.io/mowglinext/mowglinext/mowgli-ros2@sha256:' + 'b'.repeat(64)},
+                expires_at: '2026-09-07T09:45:00Z'}});
+        });
+        await page.goto('/#/settings?section=updates');
+        const panel = page.getByTestId('host-updater');
+        await expect(panel.getByText('Custom combination', {exact: true})).toBeVisible();
+        await expect(panel.getByText(/Container health: Running/)).toBeVisible();
+        await page.screenshot({path: `tests/e2e/.artifacts/host-updater-mixed-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
+        await page.locator('.ant-segmented').getByText('Advanced', {exact: true}).click();
+        await panel.getByRole('combobox', {name: 'Deployment version', exact: true}).locator('..').locator('..').click();
+        await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter({hasText: 'v1.2.0'}).click();
+        await panel.getByRole('combobox', {name: 'GUI version', exact: true}).locator('..').locator('..').click();
+        await expect(page.locator('.ant-select-dropdown:visible').getByText('v1.3.0', {exact: true})).toHaveCount(0);
+        await page.locator('.ant-select-dropdown:visible').getByText('v1.2.1', {exact: true}).click();
+        await expect(page.locator('.ant-select-dropdown:visible')).toHaveCount(0);
+        if (mobile) await panel.getByRole('combobox', {name: 'GUI version', exact: true}).scrollIntoViewIfNeeded();
+        expect(requests).toEqual([]);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        await page.screenshot({path: `tests/e2e/.artifacts/host-updater-gui-override-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
+        await panel.getByRole('button', {name: 'Review installation', exact: true}).click();
+        await expect(page.getByRole('dialog').getByText('Custom combination: GUI v1.2.1; other components use the base release.')).toBeVisible();
+        expect(requests[0]).toEqual({deployment: base.id, pinned: true, gui_deployment: gui.id});
+        await expect(page.getByRole('dialog')).toHaveCSS('opacity', '1');
+        await expect(panel.getByRole('button', {name: 'Check now', exact: true})).not.toHaveClass(/ant-btn-loading/);
+        await page.screenshot({path: `tests/e2e/.artifacts/host-updater-gui-review-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
+        await page.getByRole('dialog').getByRole('button', {name: 'Cancel', exact: true}).click();
+        await page.locator('.ant-segmented').getByText('Simple', {exact: true}).click();
+        await panel.getByRole('button', {name: 'Review matched release', exact: true}).click();
+        expect(requests[1]).toEqual({deployment: gui.id, pinned: true});
+        expect(errors).toEqual([]);
+    });
+}
+
+test('manual Docker drift is visible independently of container health', async ({page}) => {
+    const drifted = {...status, runtime: {...status.runtime, identity: 'drifted', health: 'healthy'}};
+    await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/updater/state': drifted}});
+    await page.goto('/#/settings?section=updates');
+    const panel = page.getByTestId('host-updater');
+    await expect(panel.getByText('Installation changed', {exact: true})).toBeVisible();
+    await expect(panel.getByText(/Container health: Running/)).toBeVisible();
+    await expect(panel.getByRole('button', {name: 'Review matched release'})).toBeEnabled();
 });

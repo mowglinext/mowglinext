@@ -13,7 +13,7 @@ status and recovery actions remain visible. The updater service offers its own
 update action only when a different published binary is available.
 
 **Advanced** adds source, repository, branch, check frequency, retained-version
-selection and pin controls. Installed container identities, web build details,
+selection, compatible GUI overrides and pin controls. Installed container identities, web build details,
 manual per-image comparisons and deployment history also live here. The view
 switch changes presentation only: it does not check remotely, install anything
 or change policy. Unsaved source edits must be saved or reset before review.
@@ -126,20 +126,113 @@ shown for review; a date alone never proves that source code is newer.
    and a stopped blade. Write the persistent maintenance marker. ROS2 rejects
    starts and inhibits outgoing wheel/blade commands while it exists, including
    after reboot. This does not replace firmware safety or emergency stop.
-4. Retain old image IDs, stop GUI/ROS writers and archive the GUI database,
+4. Retain old image IDs, stop all managed writers and archive the GUI database,
    configuration and maps, syncing and checksumming each archive. Require space for backups and failed-deployment data.
-5. Replace installed GPS/LiDAR dependencies, ROS2 and GUI in order. Verify actual
+5. Replace managed containers in their declared dependency order (sensors before
+   ROS2, then GUI by default). Verify actual
    image IDs, container state, fresh application readiness, firmware protocol
    and installed sensor publishers before committing. Charging current and RTK
    fix quality are not readiness requirements.
 6. On failure, restore previous configuration/data and images. Retain failed data
    for diagnosis. Release maintenance only after verified success or recovery.
 
-Only ROS2, GUI, GPS and the installed supported LiDAR variant participate.
-Other services remain outside this transaction. Firmware, host OS and Docker
+ROS2, GUI, GPS and the installed supported LiDAR variant participate by default.
+Additional installed first-party services opt in through Compose labels (below).
+Unmanaged services, including MQTT by default, remain outside this transaction. Firmware, host OS and Docker
 upgrades are excluded; custom/LFP firmware is not flashed. Targets requiring a
 different firmware protocol, updater API, layout or data schema are rejected.
 Older releases without a deployment descriptor are comparison-only.
+
+## Installed identity, health and GUI overrides
+
+The updater samples **local Docker state every 15 seconds**, independently of
+remote update checks. Page loads read that cache. Samples older than one minute,
+failed inspections and active transactions report unknown status. Container
+health means running and, when Docker defines a healthcheck, healthy; it does
+not claim field readiness, positioning accuracy or that the mower is idle.
+The stricter application/sensor readiness gates still control installation.
+
+A successful transaction records every managed container's actual image ID.
+The current label is a matched release only while those IDs and service membership
+still match. A deliberately selected GUI override shows **Custom combination**;
+manually changed images or managed membership show **Installation changed**.
+The last recorded base and GUI versions remain visible as reference. Older
+journals lacking recorded IDs show unverified until a coordinated installation.
+A custom installation is never inferred to be an upstream release from tags alone.
+
+In Advanced, select the base **Deployment version**, then **GUI version**. The
+installed base remains selectable when it has aged out of the release list and
+belongs to the selected source. GUI choices come from complete published releases
+in the same selected repository/track/branch. Both releases must declare the same
+nonempty `gui_compatibility`, layout, data schema, updater API, maintenance API
+and firmware protocol. No arbitrary image URL, unverified tag or cross-repository
+GUI override is accepted. Missing contracts disable mixing, not whole releases.
+
+The other containers use the selected base's images. Select the currently installed
+base to keep their versions. This is still a coordinated operation: all managed
+writers stop for a consistent backup, and the stack restarts and verifies together.
+It is not a zero-downtime GUI restart. The confirmation names the GUI exception and
+retains exact image identities. Overrides are immutable selections, not moving tags.
+A deployment pin applies to the whole selected combination; checks continue to notify.
+
+Simple mode always reviews the latest **matched** deployment and never carries a
+hidden Advanced override. **Review matched release** clears exceptions after
+successful installation. History and rollback track transaction IDs, base release,
+overrides, image IDs and policy, so two installations sharing the same base release
+can be restored independently. Firmware is not part of a GUI override.
+
+## Adding a managed or optional container
+
+Membership comes from the installed Compose configuration, not a release manifest.
+A release can replace images of installed services; it cannot add services, devices,
+mounts, commands or privileges. Absent optional services are skipped. Newly selected
+hardware/services still require installer configuration before updating.
+
+For an additional first-party service, add its image build definition to
+`install/deployment.json` and its installer Compose fragment, for example:
+
+```yaml
+services:
+  camera:
+    container_name: mowgli-camera
+    image: ghcr.io/mowglinext/mowglinext/camera:dev
+    labels:
+      garden.mowgli.update.image: camera
+      garden.mowgli.update.after: mowgli
+      garden.mowgli.update.health: container
+```
+
+`image` opts in and identifies a first-party image family in the release asset.
+`after` is a comma-separated list of installed managed dependencies; missing
+references and cycles reject the plan. Core sensor → ROS2 → GUI ordering cannot
+be disabled. Shutdown reverses that order. `health` supports `container`, `gps`
+and `lidar`; sensor modes additionally require the corresponding fresh application
+observation. Add a Docker healthcheck for a service-specific startup check. Existing
+unlabelled standard installations retain their original role mappings.
+
+Every installed managed service must have a target image for the host architecture
+in the reviewed release. An unknown/missing image fails the plan before pulling or
+stopping containers. Images must remain in the trusted source's GHCR namespace.
+The workflow uses the single build-definition list for its matrix, image merging
+and publication. No updater source edit is needed for a new stateless first-party
+container with an existing health contract.
+
+Persistent services need more care: additional managed services may write only the
+already supported data destinations (`/db`, `/mowgli_config`, `/ros2_ws/maps`,
+`/ros2_ws/config`), which are archived and restored. Other writable mounts reject
+the plan. Container writable layers are disposable. Unmanaged containers must not
+write shared managed data. New persistence or application-health contracts require
+an explicit updater implementation and recovery tests; labels are not arbitrary
+backup paths or executable hooks. Adding unrelated third-party image namespaces
+is intentionally outside this first-party release model.
+
+`install/deployment.json` also declares `gui_compatibility` (currently `ros-gui-1`).
+This is a maintainer-reviewed compatibility promise covering the GUI/backend's ROS
+messages, services, topic names and semantics, plus persisted GUI/config formats.
+Changing those incompatibly requires a new contract before publication. Remove or
+empty the contract to disable mixing when uncertain. Matching commit dates, tags
+or firmware protocol numbers alone do not establish GUI compatibility. Mixed-version
+integration testing is still required when maintaining this promise.
 
 ## Recovery and updater self-updates
 
@@ -163,7 +256,7 @@ administrator Docker commands can bypass that coordination.
 
 The UI also reports the running updater version and offers the selected
 deployment's updater binary. It validates the checksum and version/API probe,
-then stages the replacement. The installer-managed supervisor starts it and
+and journal schema, then stages the replacement. The installer-managed supervisor starts it and
 requires three successful API health samples. Startup failure or a 45-second
 health timeout restores the previous binary and reports an error. The worker
 cannot replace itself during a container transaction. The supervisor itself is
@@ -178,7 +271,8 @@ update; they never trigger deletion of recovery data.
 
 ## Publishing and contributor reference
 
-`.github/workflows/deployment-release.yml` builds all six first-party images for
+`.github/workflows/deployment-release.yml` builds the images declared in
+`install/deployment.json` (currently six first-party images) for
 both architectures from the same commit, waits for GUI/ROS2 quality gates, and
 publishes `mowgli-deployment.json` plus updater binaries only when complete. It
 runs for main/dev/release tags, or by manual dispatch on a custom branch. A fork
@@ -206,3 +300,32 @@ validation, API origin/readiness gates, supervisor success/crash recovery and a
 disposable Docker transaction with injected application failure/data rollback.
 Desktop/mobile Playwright cases use fixtures. Physical mower validation and a
 complete published ARM64 deployment remain required before field rollout.
+
+### Journal compatibility
+
+The HTTP API remains version 1 with explicit feature capabilities. Journal schema 2
+adds installed image identities, component provenance and exact rollback transaction
+identity. This worker reads schema 1 journals and writes schema 2 on the next state
+mutation, preserving existing recovery history. Older workers reject schema 2 rather
+than silently discarding the new information. Self-update probes require schema 2;
+downgrading to an older worker is refused. Keep the current worker/backup for recovery
+and use an explicit installer migration for incompatible journal formats.
+
+### Remaining physical acceptance — HARDWARE_REQUIRED
+
+Software tests and screenshots do not establish physical update acceptance. A
+complete published ARM64 test deployment remains a prerequisite. Before a trial,
+record the exact PR/combined commit, robot unit, firmware binary hash/protocol,
+submodule gitlinks, receiver/driver revisions, Compose configuration, image digests
+and updater checksum. The existing private hardware baseline is not evidence for
+this extension; no robot was changed during this PR extension.
+
+On a parked mower with blade stopped, stationary wheels, no due mission/schedule,
+a supervising operator and physical emergency stop available: install a matched
+release; select a compatible GUI on the same base; verify every resulting image;
+return to matched; roll back each transaction; then test an installed optional
+service and failure recovery. Perform a supervised interruption test only after
+verifying the manual recovery route and safe power conditions. Pass requires no
+actuation or firmware change, the reviewed image combination, preserved/restored
+data and maintenance retained until application verification. Any unexpected motion,
+image, data loss, stale-observation acceptance or premature gate release is a failure.

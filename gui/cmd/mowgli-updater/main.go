@@ -39,7 +39,7 @@ func main() {
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "version" {
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"version": updater.Version, "revision": updater.Revision, "api": updater.APIVersion})
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"version": updater.Version, "revision": updater.Revision, "api": updater.APIVersion, "state_schema": updater.StateSchema})
 		return
 	}
 	mode := "supervise"

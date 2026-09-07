@@ -6,6 +6,9 @@
 
 ## Where to look
 
+Host update service membership and ordering: `gui/pkg/updater/services.go`; cached Docker identity/health reconciliation: `runtime.go`; component plans, schema migration and exact transaction rollback: `manager.go`. Publication build definitions: `install/deployment.json`. See `docs/UPDATES.md` before extending persistence or health contracts.
+
+
 Installed version and update discovery: `pkg/api/versions.go`, `pkg/api/updates.go`,
 `pkg/updates/{image,registry,revisions}.go`. Checks resolve Stable/Dev tags and compare
 immutable image identities, then optionally compare source ancestry using GitHub.

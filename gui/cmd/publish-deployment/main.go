@@ -32,13 +32,15 @@ func publish() error {
 	id := flag.String("id", "", "immutable deployment ID and image tag")
 	release := flag.String("release", "", "release tag")
 	dir := flag.String("assets", "", "binary asset directory")
+	images := flag.String("images", strings.Join(updates.ImageNames, ","), "comma-separated published first-party image families")
+	guiCompatibility := flag.String("gui-compatibility", "", "reviewed GUI/ROS API compatibility contract; empty disables mixed releases")
 	protocol := flag.Int("protocol", 0, "firmware protocol")
 	flag.Parse()
-	d := updater.Deployment{Schema: 1, ID: *id, Source: updater.Source{Repository: *repo, Branch: *branch, Track: *track}, Revision: *revision, PublishedAt: time.Now().UTC(), ReleaseTag: *release, Layout: 1, DataSchema: 1, UpdaterAPI: 1, MaintenanceAPI: 1, FirmwareProtocol: *protocol, Images: map[string]updates.Image{}, Updater: map[string]updater.Binary{}}
+	d := updater.Deployment{Schema: 1, ID: *id, Source: updater.Source{Repository: *repo, Branch: *branch, Track: *track}, Revision: *revision, PublishedAt: time.Now().UTC(), ReleaseTag: *release, Layout: 1, DataSchema: 1, UpdaterAPI: 1, MaintenanceAPI: 1, GUICompatibility: *guiCompatibility, FirmwareProtocol: *protocol, Images: map[string]updates.Image{}, Updater: map[string]updater.Binary{}}
 	registry := updates.NewRegistry()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	for _, name := range updates.ImageNames {
+	for _, name := range strings.Split(*images, ",") {
 		image, err := registry.Resolve(ctx, "ghcr.io/"+strings.ToLower(*repo)+"/"+name, *id)
 		if err != nil {
 			return err

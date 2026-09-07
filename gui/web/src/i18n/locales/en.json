@@ -3320,6 +3320,18 @@
     }
   },
   "hostUpdater": {
+    "baseVersion": "Base release",
+    "guiVersion": "GUI version",
+    "containerHealth": "Container health",
+    "matchedGUI": "Use the matched release",
+    "guiHelp": "Choose a compatible published GUI for the selected base release. Other images follow the base release. The coordinated backup and restart still apply.",
+    "noCompatibleGUI": "No other published GUI declares a matching compatibility contract.",
+    "mixedHelp": "This installation uses a custom combination. Return to a matched release to align all managed components.",
+    "returnMatched": "Review matched release",
+    "mixedReview": "Custom combination: GUI {{version}}; other components use the base release.",
+    "observedAt": "Docker observed: {{time}}",
+    "identities": {"matched": "Matched release", "mixed": "Custom combination", "drifted": "Installation changed", "custom": "Existing/custom installation", "unverified": "Installed version unverified", "unknown": "Installed version unavailable"},
+    "health": {"healthy": "Running / checks passing", "degraded": "Stopped or unhealthy", "unknown": "Unknown"},
     "resetSource": "Reset changes",
     "agentNotice": "An update to the host updater is available",
     "title": "Updates and recovery",

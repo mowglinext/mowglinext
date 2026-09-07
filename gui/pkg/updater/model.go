@@ -17,6 +17,7 @@ import (
 
 const APIVersion = 1
 const LayoutVersion = 1
+const StateSchema = 2
 
 var Version = "development"
 var Revision = ""
@@ -68,6 +69,7 @@ type Deployment struct {
 	UpdaterAPI       int                      `json:"updater_api"`
 	FirmwareProtocol int                      `json:"firmware_protocol"`
 	MaintenanceAPI   int                      `json:"maintenance_api"`
+	GUICompatibility string                   `json:"gui_compatibility,omitempty"`
 	Images           map[string]updates.Image `json:"images"`
 	Updater          map[string]Binary        `json:"updater"`
 }
@@ -84,14 +86,11 @@ func (d Deployment) Validate(trusted []string) error {
 	if d.Layout != LayoutVersion || d.DataSchema != 1 || d.UpdaterAPI > APIVersion || d.MaintenanceAPI != 1 || d.FirmwareProtocol < 1 {
 		return errors.New("deployment requires unsupported layout, data schema or updater")
 	}
+	if d.GUICompatibility != "" && !idPattern.MatchString(d.GUICompatibility) {
+		return errors.New("invalid GUI compatibility contract")
+	}
 	for name, image := range d.Images {
-		known := false
-		for _, n := range updates.ImageNames {
-			if n == name {
-				known = true
-			}
-		}
-		if !known || image.Repository != "ghcr.io/"+strings.ToLower(d.Source.Repository)+"/"+name || !updates.DigestPattern.MatchString(image.Digest) {
+		if !imageNamePattern.MatchString(name) || image.Repository != "ghcr.io/"+strings.ToLower(d.Source.Repository)+"/"+name || !updates.DigestPattern.MatchString(image.Digest) {
 			return fmt.Errorf("invalid image %s", name)
 		}
 		for platform, p := range image.Platforms {
@@ -127,25 +126,29 @@ type Notice struct {
 	Dismissed  bool      `json:"dismissed"`
 }
 type Plan struct {
-	ID          string            `json:"id"`
-	Target      Deployment        `json:"target"`
-	Policy      Policy            `json:"policy"`
-	Fingerprint string            `json:"fingerprint"`
-	ExpiresAt   time.Time         `json:"expires_at"`
-	Images      map[string]string `json:"images"`
-	Previous    map[string]string `json:"previous"`
+	ID          string                `json:"id"`
+	Target      Deployment            `json:"target"`
+	Policy      Policy                `json:"policy"`
+	Fingerprint string                `json:"fingerprint"`
+	ExpiresAt   time.Time             `json:"expires_at"`
+	Images      map[string]string     `json:"images"`
+	Previous    map[string]string     `json:"previous"`
+	Overrides   map[string]Deployment `json:"overrides,omitempty"`
 }
 type Job struct {
-	ID             string      `json:"id"`
-	Kind           string      `json:"kind"`
-	Phase          string      `json:"phase"`
-	Committed      string      `json:"committed,omitempty"`
-	Error          string      `json:"error,omitempty"`
-	StartedAt      time.Time   `json:"started_at"`
-	Plan           Plan        `json:"plan"`
-	Backup         string      `json:"backup,omitempty"`
-	PreviousPolicy Policy      `json:"previous_policy"`
-	PreviousActive *Deployment `json:"previous_active,omitempty"`
+	ID                string                `json:"id"`
+	Kind              string                `json:"kind"`
+	Phase             string                `json:"phase"`
+	Committed         string                `json:"committed,omitempty"`
+	Error             string                `json:"error,omitempty"`
+	StartedAt         time.Time             `json:"started_at"`
+	Plan              Plan                  `json:"plan"`
+	Backup            string                `json:"backup,omitempty"`
+	PreviousPolicy    Policy                `json:"previous_policy"`
+	PreviousActive    *Deployment           `json:"previous_active,omitempty"`
+	PreviousOverrides map[string]Deployment `json:"previous_overrides,omitempty"`
+	PreviousImages    map[string]string     `json:"previous_images,omitempty"`
+	PreviousJobID     string                `json:"previous_job_id,omitempty"`
 }
 
 func (j *Job) Pending() bool {
@@ -153,19 +156,22 @@ func (j *Job) Pending() bool {
 }
 
 type State struct {
-	Schema          int          `json:"schema"`
-	Policy          Policy       `json:"policy"`
-	Active          *Deployment  `json:"active,omitempty"`
-	InstalledPolicy *Policy      `json:"installed_policy,omitempty"`
-	LastCheck       time.Time    `json:"last_check"`
-	LastSuccess     time.Time    `json:"last_success"`
-	NextCheck       time.Time    `json:"next_check"`
-	CheckError      string       `json:"check_error,omitempty"`
-	Releases        []Deployment `json:"releases"`
-	Notices         []Notice     `json:"notices"`
-	Plans           []Plan       `json:"plans"`
-	Job             *Job         `json:"job,omitempty"`
-	History         []Job        `json:"history"`
+	Schema          int                   `json:"schema"`
+	Policy          Policy                `json:"policy"`
+	Active          *Deployment           `json:"active,omitempty"`
+	InstalledPolicy *Policy               `json:"installed_policy,omitempty"`
+	Overrides       map[string]Deployment `json:"overrides,omitempty"`
+	InstalledImages map[string]string     `json:"installed_images,omitempty"`
+	ActiveJobID     string                `json:"active_job_id,omitempty"`
+	LastCheck       time.Time             `json:"last_check"`
+	LastSuccess     time.Time             `json:"last_success"`
+	NextCheck       time.Time             `json:"next_check"`
+	CheckError      string                `json:"check_error,omitempty"`
+	Releases        []Deployment          `json:"releases"`
+	Notices         []Notice              `json:"notices"`
+	Plans           []Plan                `json:"plans"`
+	Job             *Job                  `json:"job,omitempty"`
+	History         []Job                 `json:"history"`
 }
 
 // AtomicJSON commits a complete state before any destructive step. Syncing the

@@ -6,6 +6,9 @@
 
 ## Where to look
 
+Coordinated updates: `install/deployment.json` owns the publication build list and GUI compatibility contract. Installed Compose fragments declare `garden.mowgli.update.*` labels; absent optional services stay absent. See `docs/UPDATES.md` for dependency, health and supported persistence contracts.
+
+
 | Task | Start here |
 |------|------------|
 | Trace an install end-to-end (15 steps) | `install/mowglinext.sh` `main()` L88–199 (each `progress_run*` names the lib function) |

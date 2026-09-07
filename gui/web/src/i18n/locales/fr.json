@@ -3320,6 +3320,18 @@
     }
   },
   "hostUpdater": {
+    "baseVersion": "Version de base",
+    "guiVersion": "Version de l’interface",
+    "containerHealth": "État des conteneurs",
+    "matchedGUI": "Utiliser la version coordonnée",
+    "guiHelp": "Choisissez une interface publiée compatible avec la version de base. Les autres images suivent la version de base. La sauvegarde et le redémarrage coordonnés restent nécessaires.",
+    "noCompatibleGUI": "Aucune autre interface publiée ne déclare un contrat de compatibilité correspondant.",
+    "mixedHelp": "Cette installation utilise une combinaison personnalisée. Revenez à une version coordonnée pour aligner tous les composants gérés.",
+    "returnMatched": "Examiner la version coordonnée",
+    "mixedReview": "Combinaison personnalisée : interface {{version}} ; les autres composants suivent la version de base.",
+    "observedAt": "Observation Docker : {{time}}",
+    "identities": {"matched": "Version coordonnée", "mixed": "Combinaison personnalisée", "drifted": "Installation modifiée", "custom": "Installation existante/personnalisée", "unverified": "Version installée non vérifiée", "unknown": "Version installée indisponible"},
+    "health": {"healthy": "En cours / contrôles réussis", "degraded": "Arrêté ou défaillant", "unknown": "Inconnu"},
     "resetSource": "Annuler les modifications",
     "agentNotice": "Une nouvelle version du programme de mise à jour est disponible",
     "title": "Mises à jour et récupération",

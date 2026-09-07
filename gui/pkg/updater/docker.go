@@ -35,8 +35,9 @@ func (b DockerBackend) Lock() (func(), error) {
 }
 
 type serviceConfig struct {
-	Image         string `json:"image"`
-	ContainerName string `json:"container_name"`
+	Image         string            `json:"image"`
+	ContainerName string            `json:"container_name"`
+	Labels        map[string]string `json:"labels"`
 }
 type composeConfig struct {
 	Services map[string]serviceConfig `json:"services"`
@@ -88,6 +89,20 @@ func (b DockerBackend) model(ctx context.Context) (composeConfig, []byte, error)
 	if err == nil {
 		err = json.Unmarshal(data, &c)
 	}
+	if err == nil && c.Services["lidar"].Labels[updateLabel+"image"] == "" {
+		baseData, e := b.composeWithOverride(ctx, false, "config", "--format", "json")
+		if e != nil {
+			return c, data, e
+		}
+		var base composeConfig
+		if e = json.Unmarshal(baseData, &base); e != nil {
+			return c, data, e
+		}
+		if sc, ok := c.Services["lidar"]; ok {
+			sc.Image = base.Services["lidar"].Image
+			c.Services["lidar"] = sc
+		}
+	}
 	return c, data, err
 }
 func (b DockerBackend) inspect(ctx context.Context, name string) (containerInfo, error) {
@@ -109,6 +124,10 @@ func (b DockerBackend) Inventory(ctx context.Context) (string, map[string]string
 	if err != nil {
 		return "", nil, err
 	}
+	managed, err := managedServices(c)
+	if err != nil {
+		return "", nil, err
+	}
 	images := map[string]string{}
 	keys := []string{}
 	for s := range c.Services {
@@ -116,7 +135,7 @@ func (b DockerBackend) Inventory(ctx context.Context) (string, map[string]string
 	}
 	sort.Strings(keys)
 	for _, s := range keys {
-		if _, ok := Services[s]; !ok {
+		if _, ok := managed[s]; !ok {
 			continue
 		}
 		ci, e := b.inspect(ctx, c.Services[s].ContainerName)
@@ -149,8 +168,13 @@ func (b DockerBackend) PlanImages(ctx context.Context, d Deployment) (map[string
 	if err != nil {
 		return nil, err
 	}
+	managed, err := managedServices(c)
+	if err != nil {
+		return nil, err
+	}
 	result := map[string]string{}
-	for service, name := range Services {
+	for service, contract := range managed {
+		name := contract.Image
 		sc, exists := c.Services[service]
 		if !exists {
 			continue
@@ -159,28 +183,14 @@ func (b DockerBackend) PlanImages(ctx context.Context, d Deployment) (map[string
 		if e != nil {
 			return nil, e
 		}
+		if err := validateManagedMounts(service, ci); err != nil {
+			return nil, err
+		}
 		// Legacy images cannot promise a maintenance gate on reboot or rollback.
 		if (service == "mowgli" || service == "gui") && ci.Config.Labels["garden.mowgli.maintenance-api"] != "1" {
 			return nil, errors.New("run the installer upgrade first: installed GUI/ROS2 lacks update maintenance support")
 		}
-		if service == "lidar" {
-			// Recovery overrides may use bare local image IDs. The generated base
-			// Compose file retains the operator's actual LiDAR model selection.
-			baseData, e := b.composeWithOverride(ctx, false, "config", "--format", "json")
-			if e != nil {
-				return nil, e
-			}
-			var base composeConfig
-			if e = json.Unmarshal(baseData, &base); e != nil {
-				return nil, e
-			}
-			sc = base.Services[service]
-			for _, candidate := range []string{"lidar-ldlidar", "lidar-rplidar", "lidar-stl27l"} {
-				if strings.Contains(sc.Image, "/"+candidate+":") || strings.Contains(sc.Image, "/"+candidate+"@") {
-					name = candidate
-				}
-			}
-		}
+
 		image, ok := d.Images[name]
 		if !ok {
 			return nil, fmt.Errorf("deployment does not cover %s", service)
@@ -295,6 +305,10 @@ func (b DockerBackend) Backup(ctx context.Context, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	managed, err := managedServices(c)
+	if err != nil {
+		return "", err
+	}
 	record := backupRecord{}
 	record.Override, _ = os.ReadFile(b.override())
 	record.Compose, err = os.ReadFile(filepath.Join(b.Config.Directory, "docker-compose.yaml"))
@@ -306,7 +320,7 @@ func (b DockerBackend) Backup(ctx context.Context, id string) (string, error) {
 		return "", err
 	}
 	sources := map[string]bool{}
-	for s := range Services {
+	for s := range managed {
 		sc, ok := c.Services[s]
 		if !ok {
 			continue
@@ -319,6 +333,9 @@ func (b DockerBackend) Backup(ctx context.Context, id string) (string, error) {
 		// the only recovery copy of a locally patched image.
 		if _, e = command(ctx, "docker", "tag", ci.Image, "mowgli-rollback:"+id+"-"+s); e != nil {
 			return "", e
+		}
+		if err := validateManagedMounts(s, ci); err != nil {
+			return "", err
 		}
 		for _, mount := range ci.Mounts {
 			if mount.RW && (mount.Destination == "/db" || mount.Destination == "/mowgli_config" || mount.Destination == "/ros2_ws/maps" || mount.Destination == "/ros2_ws/config") {
@@ -353,7 +370,7 @@ func (b DockerBackend) Backup(ctx context.Context, id string) (string, error) {
 	if free < size*2+256*1024*1024 {
 		return "", errors.New("insufficient space for a backup and failed-deployment data")
 	}
-	if _, err = b.compose(ctx, "stop", "gui", "mowgli"); err != nil {
+	if _, err = b.stopManaged(ctx); err != nil {
 		return "", err
 	}
 	// Persist the backup inventory only after every archive completed. Failure
@@ -379,9 +396,17 @@ func (b DockerBackend) Apply(ctx context.Context, images map[string]string) erro
 	if err != nil {
 		return err
 	}
+	managed, err := managedServices(c)
+	if err != nil {
+		return err
+	}
+	order, err := serviceOrder(managed)
+	if err != nil {
+		return err
+	}
 	override := map[string]any{}
 	for s, image := range images {
-		if _, ok := Services[s]; !ok {
+		if _, ok := managed[s]; !ok {
 			return errors.New("unsupported service")
 		}
 		if _, ok := c.Services[s]; !ok {
@@ -398,10 +423,10 @@ func (b DockerBackend) Apply(ctx context.Context, images map[string]string) erro
 	}
 	// Consumers are stopped before dependencies are recreated. No orphan/volume
 	// removal and no generated configuration reset occurs here.
-	if _, err = b.compose(ctx, "stop", "gui", "mowgli"); err != nil {
+	if _, err = b.stopManaged(ctx); err != nil {
 		return err
 	}
-	for _, s := range []string{"gps", "lidar", "mowgli", "gui"} {
+	for _, s := range order {
 		if _, ok := images[s]; !ok {
 			continue
 		}
@@ -447,11 +472,15 @@ func (b DockerBackend) Verify(ctx context.Context, images map[string]string, d *
 		if d != nil && ready.FirmwareProtocol != d.FirmwareProtocol {
 			ok = false
 		}
-		if _, exists := images["gps"]; exists && !ready.GPSFresh {
+		managed, contractErr := managedServices(c)
+		if contractErr != nil {
 			ok = false
 		}
-		if _, exists := images["lidar"]; exists && !ready.LidarFresh {
-			ok = false
+		for service := range images {
+			contract := managed[service]
+			if contract.Health == "gps" && !ready.GPSFresh || contract.Health == "lidar" && !ready.LidarFresh {
+				ok = false
+			}
 		}
 		if ok {
 			stable++
@@ -495,7 +524,7 @@ func (b DockerBackend) Restore(ctx context.Context, path string) error {
 			return errors.New("backup archive checksum mismatch; current data retained")
 		}
 	}
-	if _, err = b.compose(ctx, "stop", "gui", "mowgli"); err != nil {
+	if _, err = b.stopManaged(ctx); err != nil {
 		return err
 	}
 	for i, source := range r.Sources {
@@ -558,4 +587,41 @@ func archiveHash(path string, sync bool) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// Stop every managed writer before archiving shared data. External/unmanaged
+// services must not write managed data; the installed configuration owns this.
+func (b DockerBackend) stopManaged(ctx context.Context) ([]byte, error) {
+	c, _, err := b.model(ctx)
+	if err != nil {
+		return nil, err
+	}
+	managed, err := managedServices(c)
+	if err != nil {
+		return nil, err
+	}
+	order, err := serviceOrder(managed)
+	if err != nil {
+		return nil, err
+	}
+	for i := len(order) - 1; i >= 0; i-- {
+		// Compose may stop multiple arguments concurrently. One invocation per
+		// service enforces the declared reverse dependency order.
+		if _, err := b.compose(ctx, "stop", order[i]); err != nil {
+			return nil, err
+		}
+	}
+	return nil, nil
+}
+
+func validateManagedMounts(service string, ci containerInfo) error {
+	if _, legacy := Services[service]; legacy {
+		return nil
+	}
+	for _, mount := range ci.Mounts {
+		if mount.RW && mount.Destination != "/db" && mount.Destination != "/mowgli_config" && mount.Destination != "/ros2_ws/maps" && mount.Destination != "/ros2_ws/config" {
+			return fmt.Errorf("managed service %s has an unsupported writable mount %s", service, mount.Destination)
+		}
+	}
+	return nil
 }

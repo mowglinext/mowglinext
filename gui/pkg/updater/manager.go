@@ -28,6 +28,7 @@ type ReleaseSource interface {
 	List(context.Context, Source) ([]Deployment, error)
 }
 type Manager struct {
+	runtime  RuntimeStatus
 	mu       sync.Mutex
 	state    State
 	path     string
@@ -44,10 +45,10 @@ func Open(dir string, trusted []string, b Backend, source ReleaseSource) (*Manag
 		return nil, errors.New("no trusted sources configured")
 	}
 	m := &Manager{path: filepath.Join(dir, "state.json"), trusted: trusted, backend: b, source: source, now: time.Now}
-	m.state = State{Schema: 1, Policy: Policy{Source: Source{Repository: trusted[0], Track: "dev", Branch: "dev"}, IntervalHours: 4}, Releases: []Deployment{}, Notices: []Notice{}, Plans: []Plan{}, History: []Job{}}
+	m.state = State{Schema: StateSchema, Policy: Policy{Source: Source{Repository: trusted[0], Track: "dev", Branch: "dev"}, IntervalHours: 4}, Releases: []Deployment{}, Notices: []Notice{}, Plans: []Plan{}, History: []Job{}}
 	data, err := os.ReadFile(m.path)
 	if err == nil {
-		if err = json.Unmarshal(data, &m.state); err != nil || m.state.Schema != 1 {
+		if err = json.Unmarshal(data, &m.state); err != nil || (m.state.Schema != 1 && m.state.Schema != StateSchema) {
 			return nil, errors.New("invalid updater state; refusing to reset recovery history")
 		}
 	} else if !os.IsNotExist(err) {
@@ -58,7 +59,12 @@ func Open(dir string, trusted []string, b Backend, source ReleaseSource) (*Manag
 	}
 	return m, nil
 }
-func (m *Manager) save() error { return AtomicJSON(m.path, m.state) }
+func (m *Manager) save() error {
+	// Older workers must refuse this journal rather than discard component
+	// provenance or select a rollback by the base release ID alone.
+	m.state.Schema = StateSchema
+	return AtomicJSON(m.path, m.state)
+}
 func (m *Manager) Snapshot() State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -142,7 +148,7 @@ func (m *Manager) Check(ctx context.Context, force bool) error {
 				m.state.Notices[i].Dismissed = true
 			}
 		}
-		if len(releases) > 0 && (m.state.Active == nil || m.state.Active.ID != releases[0].ID) {
+		if len(releases) > 0 && (m.state.Active == nil || m.state.Active.ID != releases[0].ID || len(m.state.Overrides) > 0 || m.runtime.Identity == "drifted") {
 			target := releases[0]
 			kind := "review"
 			if relation == "newer" {
@@ -210,6 +216,9 @@ func (m *Manager) Acknowledge(id string, dismiss bool) error {
 	return errors.New("notice not found")
 }
 func (m *Manager) MakePlan(ctx context.Context, id string, pinned bool) (Plan, error) {
+	return m.MakeComponentPlan(ctx, id, pinned, "")
+}
+func (m *Manager) MakeComponentPlan(ctx context.Context, id string, pinned bool, guiID string) (Plan, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.busy || m.state.Job.Pending() {
@@ -221,6 +230,9 @@ func (m *Manager) MakePlan(ctx context.Context, id string, pinned bool) (Plan, e
 			target = &m.state.Releases[i]
 			break
 		}
+	}
+	if target == nil && m.state.Active != nil && m.state.Active.ID == id {
+		target = m.state.Active
 	}
 	if target == nil {
 		return Plan{}, errors.New("deployment not found; check published versions first")
@@ -235,11 +247,40 @@ func (m *Manager) MakePlan(ctx context.Context, id string, pinned bool) (Plan, e
 	if err != nil {
 		return Plan{}, err
 	}
+	overrides := map[string]Deployment{}
+	if guiID != "" && guiID != target.ID {
+		var gui *Deployment
+		for i := range m.state.Releases {
+			if m.state.Releases[i].ID == guiID {
+				gui = &m.state.Releases[i]
+				break
+			}
+		}
+		if gui == nil {
+			return Plan{}, errors.New("GUI deployment not found; check published versions first")
+		}
+		if err := gui.Validate(m.trusted); err != nil {
+			return Plan{}, err
+		}
+		if gui.Source != m.state.Policy.Source || !compatibleGUI(*target, *gui) {
+			return Plan{}, errors.New("GUI override lacks a matching published compatibility contract")
+		}
+		// Each published release was validated independently above. The backend
+		// validates the base, then resolves the separately validated GUI image.
+		overrides["gui"] = *gui
+	}
 	images, err := m.backend.PlanImages(ctx, *target)
 	if err != nil {
 		return Plan{}, err
 	}
-	p := Plan{Target: *target, Policy: m.state.Policy, Fingerprint: fingerprint, ExpiresAt: m.now().Add(15 * time.Minute), Images: images, Previous: previous}
+	if gui, ok := overrides["gui"]; ok {
+		guiImages, e := m.backend.PlanImages(ctx, gui)
+		if e != nil {
+			return Plan{}, e
+		}
+		images["gui"] = guiImages["gui"]
+	}
+	p := Plan{Overrides: overrides, Target: *target, Policy: m.state.Policy, Fingerprint: fingerprint, ExpiresAt: m.now().Add(15 * time.Minute), Images: images, Previous: previous}
 	p.Policy.Pinned = pinned
 	p.ID = fmt.Sprintf("plan-%d", m.now().UnixNano())
 	m.state.Plans = []Plan{p}
@@ -260,7 +301,7 @@ func (m *Manager) Start(id string) (string, error) {
 	if plan == nil || m.now().After(plan.ExpiresAt) {
 		return "", errors.New("plan expired; review again")
 	}
-	j := Job{ID: fmt.Sprintf("job-%d", m.now().UnixNano()), Kind: "containers", Phase: "planned", StartedAt: m.now(), Plan: *plan, PreviousPolicy: m.state.Policy, PreviousActive: m.state.Active}
+	j := Job{ID: fmt.Sprintf("job-%d", m.now().UnixNano()), Kind: "containers", Phase: "planned", StartedAt: m.now(), Plan: *plan, PreviousPolicy: m.state.Policy, PreviousActive: m.state.Active, PreviousOverrides: m.state.Overrides, PreviousImages: m.state.InstalledImages, PreviousJobID: m.state.ActiveJobID}
 	if m.state.InstalledPolicy != nil {
 		j.PreviousPolicy = *m.state.InstalledPolicy
 	}
@@ -299,6 +340,9 @@ func (m *Manager) Rollback() (string, error) {
 	}
 	for i := len(m.state.History) - 1; i >= 0; i-- {
 		old := m.state.History[i]
+		if m.state.ActiveJobID != "" && old.ID != m.state.ActiveJobID {
+			continue
+		}
 		if old.Phase != "succeeded" || old.Backup == "" || m.state.Active == nil || old.Plan.Target.ID != m.state.Active.ID {
 			continue
 		}
@@ -437,8 +481,15 @@ func (m *Manager) run(recovery bool) {
 		if err == nil {
 			err = m.backend.Verify(ctx, j.Plan.Images, &j.Plan.Target)
 		}
+		var installed map[string]string
+		if err == nil {
+			_, installed, err = m.backend.Inventory(ctx)
+		}
 		if err == nil {
 			m.mu.Lock()
+			m.state.ActiveJobID = j.ID
+			m.state.Overrides = j.Plan.Overrides
+			m.state.InstalledImages = installed
 			m.state.Active = &j.Plan.Target
 			m.state.Policy = j.Plan.Policy
 			m.state.InstalledPolicy = &j.Plan.Policy
@@ -485,6 +536,9 @@ func (m *Manager) run(recovery bool) {
 	}
 	m.mu.Lock()
 	m.state.Active = j.PreviousActive
+	m.state.ActiveJobID = j.PreviousJobID
+	m.state.Overrides = j.PreviousOverrides
+	m.state.InstalledImages = j.PreviousImages
 	if m.state.Policy.Source != j.PreviousPolicy.Source {
 		m.state.Releases = []Deployment{}
 		m.state.LastCheck = time.Time{}

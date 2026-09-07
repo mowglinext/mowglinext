@@ -44,7 +44,7 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 		if data, err := os.ReadFile(filepath.Join(config.StateDir, "agent-active.json")); err == nil {
 			_ = json.Unmarshal(data, &selection)
 		}
-		respond(w, map[string]any{"api": APIVersion, "agent": map[string]string{"version": Version, "revision": Revision, "platform": runtime.GOOS + "/" + runtime.GOARCH, "error": selection.Error}, "state": m.Snapshot(), "trusted_repositories": config.Trusted}, nil)
+		respond(w, map[string]any{"api": APIVersion, "agent": map[string]string{"version": Version, "revision": Revision, "platform": runtime.GOOS + "/" + runtime.GOARCH, "error": selection.Error}, "state": m.Snapshot(), "runtime": m.Runtime(), "capabilities": []string{"component-overrides", "declared-services"}, "trusted_repositories": config.Trusted}, nil)
 	})
 	mux.HandleFunc("POST /v1/policy", func(w http.ResponseWriter, r *http.Request) {
 		var p Policy
@@ -64,9 +64,10 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 		var req struct {
 			Deployment string `json:"deployment"`
 			Pinned     bool   `json:"pinned"`
+			GUI        string `json:"gui_deployment"`
 		}
 		if decode(w, r, &req) {
-			p, e := m.MakePlan(r.Context(), req.Deployment, req.Pinned)
+			p, e := m.MakeComponentPlan(r.Context(), req.Deployment, req.Pinned, req.GUI)
 			respond(w, p, e)
 		}
 	})
@@ -160,6 +161,16 @@ func Serve(config HostConfig) error {
 		}
 	}
 	m.Recover()
+	go func() {
+		tick := time.NewTicker(15 * time.Second)
+		defer tick.Stop()
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			m.RefreshRuntime(ctx)
+			cancel()
+			<-tick.C
+		}
+	}()
 	go func() {
 		tick := time.NewTicker(time.Minute)
 		defer tick.Stop()
