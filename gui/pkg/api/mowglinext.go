@@ -79,7 +79,7 @@ func topicSubscribeInterval(topic string) (int, bool) {
 		return 100, true
 	case "fusionRaw", "cogHeading", "magYaw", "obstacles", "icpOdom":
 		return 200, true
-	case "mowProgress":
+	case "mowProgress", "lidarMap":
 		return 500, true // large OccupancyGrid — throttle hard
 	case "diagnostics", "status", "highLevelStatus", "btLog", "map",
 		"path", "plan", "power", "emergency", "dockingSensor",

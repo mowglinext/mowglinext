@@ -343,7 +343,7 @@ func TestTopicSubscribeInterval_CoversKnownSubscriberRouteTopics(t *testing.T) {
 	knownTopics := []string{
 		"gps", "gnssStatus", "pose", "imu", "ticks", "wheelOdom", "lidar",
 		"fusionRaw", "cogHeading", "magYaw", "obstacles", "icpOdom",
-		"mowProgress",
+		"mowProgress", "lidarMap",
 		"diagnostics", "status", "highLevelStatus", "btLog", "map",
 		"path", "plan", "power", "emergency", "dockingSensor",
 		"robotDescription", "recordingTrajectory",

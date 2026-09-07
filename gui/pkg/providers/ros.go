@@ -51,6 +51,7 @@ var topicMap = map[string]topicDef{
 	"emergency":           {"/hardware_bridge/emergency", "mowgli_interfaces/msg/Emergency"}, // safety-critical
 	"lidar":               {"/scan", "sensor_msgs/msg/LaserScan"},                            // large message
 	"mowProgress":         {"/map_server_node/mow_progress", "nav_msgs/msg/OccupancyGrid"},   // mowed-area overlay (large)
+	"lidarMap":            {"/fusion_graph/lidar_map", "nav_msgs/msg/OccupancyGrid"},         // fusion_graph LiDAR anchor map (large, latched)
 	"diagnostics":         {"/diagnostics", "diagnostic_msgs/msg/DiagnosticArray"},
 	"fusionDiag":          {"/fusion_graph/diagnostics", "diagnostic_msgs/msg/DiagnosticArray"},
 	"icpOdom":             {"/fusion_graph/icp_odometry", "nav_msgs/msg/Odometry"}, // LiDAR-only odom (ICP monitor)

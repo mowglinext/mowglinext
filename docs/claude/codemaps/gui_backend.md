@@ -173,6 +173,7 @@
 | `path` / `plan` | `/coverage/full_plan` / `/plan` | `nav_msgs/msg/Path` | unthrottled |
 | `power`, `emergency` | `/hardware_bridge/power`, `/hardware_bridge/emergency` | `mowgli_interfaces/msg/{Power,Emergency}` | unthrottled |
 | `mowProgress` | `/map_server_node/mow_progress` | `nav_msgs/msg/OccupancyGrid` | 500 ms |
+| `lidarMap` | `/fusion_graph/lidar_map` | `nav_msgs/msg/OccupancyGrid` | 500 ms — fusion_graph's LiDAR anchor map; the map page draws it INSTEAD of the raw `/scan` points once it exists |
 | `diagnostics`, `fusionDiag` | `/diagnostics`, `/fusion_graph/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | unthrottled |
 | `icpOdom` | `/fusion_graph/icp_odometry` | `nav_msgs/msg/Odometry` | 200 ms |
 | `obstacles` | `/obstacle_tracker/obstacles` | `mowgli_interfaces/msg/ObstacleArray` | 200 ms |

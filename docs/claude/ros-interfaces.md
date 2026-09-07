@@ -71,6 +71,7 @@ Sorted by resolved name. Mowgli-owned message definitions live in `ros2/src/mowg
 | `/map_server_node/docking_pose` | `geometry_msgs/PoseStamped` | `map_server_node` · `map_server_node.cpp:370` | GUI (`gui/pkg/providers/ros.go:360`) | QoS(1) transient_local. |
 | `/map_server_node/lethal_boundary_violation` | `std_msgs/Bool` | `map_server_node` · `map_server_node.cpp:367` | `behavior_tree_node` · `behavior_tree_node.cpp:262` | QoS(1). |
 | `/map_server_node/mow_progress` | `nav_msgs/OccupancyGrid` | `map_server_node` · `map_server_node.cpp:201` | GUI (`ros.go:53`) | QoS(1) transient_local — the GUI gets accumulated coverage immediately on (re)connect. Large message. |
+| `/fusion_graph/lidar_map` | `nav_msgs/OccupancyGrid` | `fusion_graph_node` (`fusion_graph_node_lidar_anchor.cpp`, only with `use_lidar_map_anchor`) | GUI (`ros.go` `lidarMap`) | QoS(1) transient_local, republished every `lidar_map_rebuild_period_s`. 800×800 @ 0.10 m log-odds export (0 free / 100 occupied / −1 unknown). |
 | `/map_server_node/replan_needed` | `std_msgs/Bool` | `map_server_node` · `map_server_node.cpp:363` | `behavior_tree_node` · `behavior_tree_node.cpp:233` | QoS(1). |
 | `/mowgli/localization/mode` | `std_msgs/String` | `localization_monitor_node` · `mowgli_localization/src/localization_monitor_node.cpp:85` | — (Foxglove/CLI) | QoS(1) transient_local (latched). |
 | `/mowgli/localization/mode_id` | `std_msgs/Int32` | `localization_monitor_node` · `localization_monitor_node.cpp:87` | — | QoS(1) transient_local. Numeric twin of the above. |
