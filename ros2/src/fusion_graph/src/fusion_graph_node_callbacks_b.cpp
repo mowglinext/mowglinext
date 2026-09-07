@@ -389,7 +389,11 @@ void FusionGraphNode::DispatchAsyncSave(const char* reason)
     get_parameter("datum_lat", m.datum_lat);
     get_parameter("datum_lon", m.datum_lon);
     m.grid = lidar_mapper_->Export();
-    map_file = std::move(m);
+    // Never overwrite a good persisted map with an empty one: the dock
+    // checkpoint fires on the charging edge right after boot, before a
+    // single scan was inserted (nothing is inserted while charging).
+    if (m.grid.occupied > 0)
+      map_file = std::move(m);
   }
   std::thread(
       [graph = graph_,
