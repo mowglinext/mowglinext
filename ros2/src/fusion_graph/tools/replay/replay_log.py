@@ -51,6 +51,7 @@ class L(Node):
         self.w.writerow([f"{self.now():.2f}", *[f"{v:.3f}" for v in self.pose], *[f"{v:.3f}" for v in self.mo], *[f"{v:.3f}" for v in self.ob],
                          f"{g[0]:.3f}", f"{g[1]:.3f}", f"{age:.1f}", self.st.get("rtk_mode", ""), self.st.get("hacc", ""), f"{c[0]:.3f}", f"{c[1]:.3f}", c[2]]
                         + [self.d.get(k, "") for k in DIAG]); self.f.flush()
+        self.cand = None  # one row per candidate: a stale candidate must not be re-scored against a moving fused pose
 rclpy.init(); n = L()
 try: rclpy.spin(n)
 except KeyboardInterrupt: pass

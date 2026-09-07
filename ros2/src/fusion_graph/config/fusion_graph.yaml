@@ -437,7 +437,7 @@ fusion_graph_node:
     # log_odds_hit to demand two concordant hits (tune on the replay harness).
     lidar_map_log_odds_hit: 0.85
     lidar_map_log_odds_miss: -0.40
-    lidar_map_occupied_threshold: 0.85
+    lidar_map_occupied_threshold: 1.7      # two concordant hits — garden default (replay sweep 2026-09-07)
     lidar_map_free_threshold: -0.40
     lidar_anchor_engage_age_s: 1.0        # engage once RTK-Fixed is older than this (~5 missed fixes at 5 Hz; 0.3 flapped)
     lidar_anchor_disengage_dwell_s: 1.0   # once anchoring, Fixed must be fresh this long before mapping resumes

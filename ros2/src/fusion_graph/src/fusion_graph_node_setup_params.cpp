@@ -142,7 +142,7 @@ void FusionGraphNode::DeclareParameters()
       mp.log_odds_hit = declare_parameter<double>("lidar_map_log_odds_hit", mp.log_odds_hit);
       mp.log_odds_miss = declare_parameter<double>("lidar_map_log_odds_miss", mp.log_odds_miss);
       mp.occupied_threshold =
-          declare_parameter<double>("lidar_map_occupied_threshold", mp.occupied_threshold);
+          declare_parameter<double>("lidar_map_occupied_threshold", 2.0 * mp.log_odds_hit);
       mp.free_threshold = declare_parameter<double>("lidar_map_free_threshold", mp.free_threshold);
       lidar_mapper_.emplace(mp);
       lidar_anchor_gate_.emplace(true,
