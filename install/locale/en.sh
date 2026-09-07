@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+MSG_UPDATER_UNSUPPORTED="Automatic updates require Linux amd64/arm64, systemd and Docker Compose. Version viewing remains available."
+MSG_UPDATER_RECOVERY="An update is in maintenance/recovery. Resolve it before rerunning the installer."
+MSG_UPDATER_SOURCE="Unsupported updater source repository."
+MSG_UPDATER_UNPUBLISHED="No updater binary is published for this checkout yet. Version viewing remains available."
+MSG_UPDATER_CHECKSUM="Updater checksum verification failed."
+MSG_UPDATER_INSTALLED="Host updater installed. Settings > Updates shows its version, checks and deployments."
 # English locale (default)
 
 # ── Common ──

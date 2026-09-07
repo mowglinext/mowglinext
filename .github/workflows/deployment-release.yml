@@ -1,0 +1,151 @@
+name: Complete deployment
+on:
+  push:
+    branches: [main, dev]
+    tags: ['v*.*.*']
+    paths: ['gui/**', 'ros2/**', 'sensors/**', 'install/**', '.github/workflows/deployment-release.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: deployment-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  quality-ros2:
+    uses: ./.github/workflows/ros2-ci.yml
+  quality-gui:
+    uses: ./.github/workflows/gui-ci.yml
+  identity:
+    runs-on: ubuntu-24.04
+    outputs:
+      id: ${{ steps.identity.outputs.id }}
+      release: ${{ steps.identity.outputs.release }}
+      branch: ${{ steps.identity.outputs.branch }}
+      track: ${{ steps.identity.outputs.track }}
+    steps:
+      - id: identity
+        env:
+          REF: ${{ github.ref_name }}
+          TYPE: ${{ github.ref_type }}
+          SHA: ${{ github.sha }}
+          RUN: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          id="deployment-${SHA:0:12}-${RUN}-${ATTEMPT}"
+          track=custom; branch="$REF"; release="$id"
+          if [[ "$TYPE" == tag && "$REF" == v* ]]; then track=stable; branch=main; release="$REF";
+          elif [[ "$REF" == dev ]]; then track=dev; fi
+          printf 'id=%s\nrelease=%s\nbranch=%s\ntrack=%s\n' "$id" "$release" "$branch" "$track" >> "$GITHUB_OUTPUT"
+  build:
+    needs: identity
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        component: [mowgli-ros2, mowglinext-gui, gps, lidar-ldlidar, lidar-rplidar, lidar-stl27l]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: config
+        env:
+          COMPONENT: ${{ matrix.component }}
+          REPO: ${{ github.repository }}
+        run: |
+          context="sensors/$COMPONENT"; target=""; file="$context/Dockerfile"
+          if [[ "$COMPONENT" == mowgli-ros2 ]]; then context=.; file=ros2/Dockerfile; target=runtime; fi
+          if [[ "$COMPONENT" == gps ]]; then context=.; file=sensors/gps/Dockerfile; fi
+          if [[ "$COMPONENT" == mowglinext-gui ]]; then context=gui; file=gui/Dockerfile; fi
+          printf 'context=%s\nfile=%s\ntarget=%s\nimage=ghcr.io/%s/%s\n' "$context" "$file" "$target" "${REPO,,}" "$COMPONENT" >> "$GITHUB_OUTPUT"
+      - id: image
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ steps.config.outputs.context }}
+          file: ${{ steps.config.outputs.file }}
+          target: ${{ steps.config.outputs.target }}
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            BUILD_REVISION=${{ github.sha }}
+            BUILD_VERSION=${{ needs.identity.outputs.id }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.identity.outputs.id }}
+          outputs: type=image,name=${{ steps.config.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=registry,ref=${{ steps.config.outputs.image }}:deployment-cache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ steps.config.outputs.image }}:deployment-cache-${{ matrix.arch }},mode=max
+      - env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          COMPONENT: ${{ matrix.component }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p digests
+          printf '%s' "$DIGEST" > "digests/$COMPONENT-$ARCH"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deployment-${{ matrix.component }}-${{ matrix.arch }}
+          path: digests/*
+  publish:
+    needs: [identity, build, quality-ros2, quality-gui]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: deployment-*
+          merge-multiple: true
+          path: digests
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: gui/go.mod
+          cache-dependency-path: gui/go.sum
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Publish complete image sets and descriptor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+          DEPLOYMENT: ${{ needs.identity.outputs.id }}
+          RELEASE: ${{ needs.identity.outputs.release }}
+          BRANCH: ${{ needs.identity.outputs.branch }}
+          TRACK: ${{ needs.identity.outputs.track }}
+        run: |
+          for component in mowgli-ros2 mowglinext-gui gps lidar-ldlidar lidar-rplidar lidar-stl27l; do
+            image="ghcr.io/${REPO,,}/$component"
+            docker buildx imagetools create -t "$image:$DEPLOYMENT" "$image@$(cat "digests/$component-amd64")" "$image@$(cat "digests/$component-arm64")"
+          done
+          mkdir -p dist
+          protocol=$(sed -nE 's/^#define MOWGLI_PROTOCOL_VERSION +([0-9]+).*/\1/p' firmware/stm32/ros_usbnode/include/mowgli_protocol.h)
+          cd gui
+          go test ./pkg/updater
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w -X github.com/mowglinext/mowglinext/pkg/updater.Version=$DEPLOYMENT -X github.com/mowglinext/mowglinext/pkg/updater.Revision=$REVISION" -o "../dist/mowgli-updater-linux-$arch" ./cmd/mowgli-updater
+          done
+          go run ./cmd/publish-deployment --repository "$REPO" --branch "$BRANCH" --track "$TRACK" --revision "$REVISION" --id "$DEPLOYMENT" --release "$RELEASE" --assets ../dist --protocol "$protocol"
+          cd ../dist
+          sha256sum mowgli-updater-linux-* > updater-SHA256SUMS
+          if [[ "$TRACK" == stable ]]; then
+            # Existing firmware release creation owns the stable release. Never
+            # overwrite an already published software deployment descriptor.
+            gh release view "$RELEASE" --repo "$REPO"
+            gh release upload "$RELEASE" ./* --repo "$REPO"
+          else
+            gh release create "$RELEASE" ./* --repo "$REPO" --target "$REVISION" --prerelease --title "$BRANCH $DEPLOYMENT" --notes 'Complete container deployment; see mowgli-deployment.json for source, compatibility and immutable image identities.'
+          fi

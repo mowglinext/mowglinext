@@ -114,10 +114,13 @@ regen() {
 # name from .env (preserves the install_mowgli_maps volume) and the repo as
 # project directory (resolves the fragments' relative bind paths).
 compose() {
+  local update_args=()
+  [[ ! -f "$DOCKER_DIR/update-images.json" ]] || update_args=(-f "$DOCKER_DIR/update-images.json")
   docker_compose_cmd \
     --project-name "$COMPOSE_PROJECT_NAME" \
     --project-directory "$REPO_DIR" \
     -f "$FINAL_COMPOSE_FILE" \
+    "${update_args[@]}" \
     --env-file "$FINAL_ENV_FILE" \
     "$@"
 }
@@ -128,6 +131,24 @@ require_compose_file() {
 
 cmd="${1:-}"
 [[ $# -gt 0 ]] && shift || true
+
+if [[ -f "$DOCKER_DIR/.updater-managed" ]]; then
+  case "$cmd" in
+    ps|logs|config|help|-h|--help|"") ;;
+    *)
+      exec 9<"$DOCKER_DIR/.deployment.lock"
+      flock -n -x 9 || { echo "Another deployment operation is running." >&2; exit 1; }
+      if [[ -e /var/lib/mowgli-updater/maintenance ]]; then
+        echo "Update recovery is pending; use Settings > Updates or the host updater logs." >&2
+        exit 1
+      fi
+      ;;
+  esac
+  if [[ "$cmd" == update || "$cmd" == pull ]]; then
+    echo "This stack is updater-managed. Select a deployment in Settings > Updates." >&2
+    exit 1
+  fi
+fi
 
 case "$cmd" in
   regen)

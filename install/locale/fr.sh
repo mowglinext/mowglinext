@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+MSG_UPDATER_UNSUPPORTED="Les mises à jour automatiques nécessitent Linux amd64/arm64, systemd et Docker Compose. Les versions restent consultables."
+MSG_UPDATER_RECOVERY="Une mise à jour est en maintenance/récupération. Terminez-la avant de relancer l'installation."
+MSG_UPDATER_SOURCE="Dépôt source du programme de mise à jour non pris en charge."
+MSG_UPDATER_UNPUBLISHED="Aucun programme de mise à jour n'est publié pour cette révision. Les versions restent consultables."
+MSG_UPDATER_CHECKSUM="Échec de vérification du programme de mise à jour."
+MSG_UPDATER_INSTALLED="Programme de mise à jour installé. Consultez sa version dans Paramètres > Mises à jour."
 # French locale
 
 # ── Common ──

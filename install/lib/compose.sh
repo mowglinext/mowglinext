@@ -94,7 +94,13 @@ build_compose_stack() {
     fi
   fi
 
-  COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.watchtower.yml")
+  if [[ ! -f "$DOCKER_DIR/.updater-managed" ]]; then
+    COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.watchtower.yml")
+  fi
+
+  if [[ -f "$DOCKER_DIR/.updater-managed" ]]; then
+    COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.updater.yml")
+  fi
 
   # Foxglove bridge is controlled via the ENABLE_FOXGLOVE env var passed
   # to the ROS2 container (see docker-compose.base.yml).  No separate
@@ -236,6 +242,10 @@ write_compose_merged() {
       "${compose_args[@]}" \
       config --no-interpolate > "$FINAL_COMPOSE_FILE"
   ) || [[ ! -s "$FINAL_COMPOSE_FILE" ]]; then
+    if [[ -f "$DOCKER_DIR/.updater-managed" ]]; then
+      error "Managed updates require Docker Compose; refusing an ambiguous fallback merge."
+      return 1
+    fi
     warn "docker compose config unavailable — generating a fallback merged compose for local validation"
     write_compose_merged_fallback
   fi
@@ -244,6 +254,10 @@ write_compose_merged() {
 }
 
 run_compose_stack() {
+  if [[ -e /var/lib/mowgli-updater/maintenance ]]; then
+    error "Update recovery is pending; resolve it before changing the stack."
+    return 1
+  fi
   ensure_default_configs
   build_compose_stack
   write_compose_merged
@@ -252,10 +266,12 @@ run_compose_stack() {
   info "Env file: $FINAL_ENV_FILE"
 
   info "Pulling selected images..."
-  docker_compose_cmd -f "$FINAL_COMPOSE_FILE" --env-file "$FINAL_ENV_FILE" pull
+  local update_args=()
+  [[ ! -f "$DOCKER_DIR/update-images.json" ]] || update_args=(-f "$DOCKER_DIR/update-images.json")
+  docker_compose_cmd -f "$FINAL_COMPOSE_FILE" "${update_args[@]}" --env-file "$FINAL_ENV_FILE" pull
   echo ""
   info "Starting stack..."
-  docker_compose_cmd -f "$FINAL_COMPOSE_FILE" --env-file "$FINAL_ENV_FILE" up -d
+  docker_compose_cmd -f "$FINAL_COMPOSE_FILE" "${update_args[@]}" --env-file "$FINAL_ENV_FILE" up -d
   echo ""
   info "Current containers:"
   docker_compose_cmd -f "$FINAL_COMPOSE_FILE" --env-file "$FINAL_ENV_FILE" ps

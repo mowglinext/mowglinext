@@ -144,14 +144,17 @@ install_mowgli_helpers() {
   local dc="docker compose --env-file \"$project_dir/.env\""
 
   create_helper_script "/usr/local/bin/mowgli-up" "#!/usr/bin/env bash
+if [[ -f \"$project_dir/.updater-managed\" ]]; then exec bash \"$REPO_DIR/docker/stack.sh\" up \"\$@\"; fi
 cd \"$project_dir\" || exit 1
 exec $dc up -d \"\$@\""
 
   create_helper_script "/usr/local/bin/mowgli-down" "#!/usr/bin/env bash
+if [[ -f \"$project_dir/.updater-managed\" ]]; then exec bash \"$REPO_DIR/docker/stack.sh\" down \"\$@\"; fi
 cd \"$project_dir\" || exit 1
 exec $dc down \"\$@\""
 
   create_helper_script "/usr/local/bin/mowgli-restart" "#!/usr/bin/env bash
+if [[ -f \"$project_dir/.updater-managed\" ]]; then exec bash \"$REPO_DIR/docker/stack.sh\" restart \"\$@\"; fi
 cd \"$project_dir\" || exit 1
 exec $dc restart \"\$@\""
 
@@ -164,6 +167,7 @@ cd \"$project_dir\" || exit 1
 exec $dc ps"
 
   create_helper_script "/usr/local/bin/mowgli-pull" "#!/usr/bin/env bash
+if [[ -f \"$project_dir/.updater-managed\" ]]; then exec bash \"$REPO_DIR/docker/stack.sh\" pull \"\$@\"; fi
 cd \"$project_dir\" || exit 1
 $dc pull \"\$@\"
 rc=\$?

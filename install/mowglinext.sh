@@ -37,6 +37,7 @@ source "${INSTALL_LIB_DIR}/rc_local.sh"
 source "${INSTALL_LIB_DIR}/checks.sh"
 source "${INSTALL_LIB_DIR}/compose.sh"
 source "${INSTALL_LIB_DIR}/tools.sh"
+source "${INSTALL_LIB_DIR}/updater.sh"
 
 
 load_preset() {
@@ -93,6 +94,11 @@ main() {
   print_platform_summary
 
   if ! $CHECK_ONLY; then
+    if [[ -f "$DOCKER_DIR/.updater-managed" ]]; then
+      exec 9<"$DOCKER_DIR/.deployment.lock"
+      flock -n -x 9 || { error "Another deployment operation is running."; return 1; }
+      [[ ! -e /var/lib/mowgli-updater/maintenance ]] || { error "$MSG_UPDATER_RECOVERY"; return 1; }
+    fi
     # Pre-acquire sudo credentials once for the entire install session
     if command -v sudo >/dev/null 2>&1; then
       echo ""
@@ -159,6 +165,8 @@ main() {
 
     progress_run 14 "$TOTAL_STEPS" "Installing MOTD" \
       'install_motd'
+
+    install_host_updater
 
     progress_run_live 15 "$TOTAL_STEPS" "Starting containers" \
       run_startup_step_live

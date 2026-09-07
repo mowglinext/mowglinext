@@ -11,6 +11,7 @@ name: GUI — CI
 # well under a minute.
 
 on:
+  workflow_call:
   push:
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
@@ -44,7 +45,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: gui-ci-${{ github.ref }}
+  group: gui-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 defaults:

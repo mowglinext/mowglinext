@@ -1,0 +1,16 @@
+# Host directories are created by the updater installer before Compose runs.
+services:
+  gui:
+    environment:
+      MOWGLI_UPDATER_SOCKET: /run/mowgli-updater/updater.sock
+      MOWGLI_UPDATE_MAINTENANCE: /var/lib/mowgli-updater/maintenance
+    volumes:
+      - /var/lib/mowgli-updater/run:/run/mowgli-updater
+      - /var/lib/mowgli-updater:/var/lib/mowgli-updater:ro
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+  mowgli:
+    environment:
+      MOWGLI_UPDATE_MAINTENANCE: /var/lib/mowgli-updater/maintenance
+    volumes:
+      - /var/lib/mowgli-updater:/var/lib/mowgli-updater:ro
