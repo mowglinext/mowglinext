@@ -21,6 +21,27 @@ const productionStatus = {...status, trusted_repositories: [source.repository], 
     releases: [productionTarget],
 }};
 for (const mobile of [false, true]) {
+    test(`unpublished versions remain discoverable ${mobile ? 'mobile' : 'desktop'}`, async ({page}) => {
+        await page.setViewportSize(mobile ? {width: 390, height: 844} : {width: 1440, height: 1400});
+        const fixture = {...status, trusted_repositories: [source.repository], runtime: {...status.runtime, identity: 'custom'},
+            state: {...status.state, active: undefined, installed_policy: undefined, releases: [], notices: []}};
+        const posts: string[] = [];
+        await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/updater/state': fixture, '/api/system/versions': {docker_available: true, components: [], server: {version: 'dev'}}}});
+        page.on('request', r => {if (r.method() === 'POST' && r.url().includes('/system/updater/')) posts.push(r.url());});
+        await page.goto('/#/settings?section=updates');
+        await page.locator('.ant-segmented').getByText('Advanced', {exact: true}).click();
+        const panel = page.getByTestId('host-updater');
+        await expect(panel.getByRole('combobox', {name: 'Deployment version', exact: true})).toBeDisabled();
+        await expect(panel.getByRole('combobox', {name: 'GUI version', exact: true})).toBeDisabled();
+        await expect(panel.getByText(/Version choices require a compatible complete build/)).toBeVisible();
+        await expect(panel.getByRole('button', {name: 'Review installation', exact: true})).toBeDisabled();
+        await expect(panel.getByRole('button', {name: 'Check now', exact: true})).toBeEnabled();
+        await expect(panel.getByRole('checkbox')).toBeDisabled();
+        if (mobile) await panel.getByText('No installable build published for this source.', {exact: true}).scrollIntoViewIfNeeded();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        await page.screenshot({path: `tests/e2e/.artifacts/host-updater-no-versions-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
+        expect(posts).toEqual([]);
+    });
     test(`release stack membership review ${mobile ? 'mobile' : 'desktop'}`, async ({page}) => {
         await page.setViewportSize(mobile ? {width: 390, height: 844} : {width: 1440, height: 1100});
         const next = {...productionTarget, id: 'illustration-production-130', release_tag: 'v1.3.0'};

@@ -89,20 +89,23 @@ export function HostUpdaterPanel({advanced = false}: {advanced?: boolean}) {
                     <Typography.Text strong>{sameDeployment ? t('hostUpdater.latestInstalled') : t('hostUpdater.availableVersion')}</Typography.Text>
                     {!sameDeployment && <div>{label(target)} · {date(target.published_at)}</div>}
                 </div> : <Typography.Text>{t(data.state.last_check && !data.state.last_check.startsWith('0001') ? 'hostUpdater.noBuild' : 'hostUpdater.notChecked')}</Typography.Text>}
-                {advanced && releases.length > 0 && <>
+                {advanced && <Form layout="vertical" style={{width: '100%', display: 'flex', flexDirection: 'column', gap: 16}}>
                     <Form.Item label={t('hostUpdater.version')} style={{width: '100%', marginBottom: 0}}>
-                        <Select aria-label={t('hostUpdater.version')} value={target?.id} disabled={pending || busy || dirty}
+                        <Select aria-label={t('hostUpdater.version')} value={target?.id} placeholder={t('hostUpdater.noVersions')} disabled={pending || busy || dirty || versions.length === 0}
                             options={versions.map((r, i) => ({value: r.id, label: `${i === 0 ? t('hostUpdater.latest') + ' · ' : ''}${label(r)} · ${date(r.published_at)}`}))} onChange={value => {setSelected(value); setGUISelected(undefined);}}/>
+                        {versions.length === 0 && <Typography.Paragraph type="secondary" style={{marginTop: 8, marginBottom: 0}}>{t('hostUpdater.noVersionsHelp')}</Typography.Paragraph>}
                     </Form.Item>
-                    {data.capabilities?.includes('component-overrides') && <Form.Item label={t('hostUpdater.guiVersion')} style={{width: '100%', marginBottom: 0}}>
-                        <Select aria-label={t('hostUpdater.guiVersion')} value={guiOverride?.id ?? ''} disabled={pending || busy || dirty}
+                    <Form.Item label={t('hostUpdater.guiVersion')} style={{width: '100%', marginBottom: 0}}>
+                        <Select aria-label={t('hostUpdater.guiVersion')} value={target ? guiOverride?.id ?? '' : undefined} placeholder={t('hostUpdater.selectBaseFirst')} disabled={pending || busy || dirty || !target || !data.capabilities?.includes('component-overrides') || guiOptions.length === 0}
                             options={[{value: '', label: t('hostUpdater.matchedGUI')}, ...guiOptions.map(r => ({value: r.id, label: label(r)}))]}
                             onChange={setGUISelected}/>
                         <Typography.Paragraph type="secondary" style={{marginTop: 8, marginBottom: 0}}>{t('hostUpdater.guiHelp')}</Typography.Paragraph>
-                        {guiOptions.length === 0 && <Typography.Text type="secondary">{t('hostUpdater.noCompatibleGUI')}</Typography.Text>}
-                    </Form.Item>}
-                    <Checkbox checked={pinned} disabled={pending || busy || dirty} onChange={e => setPinned(e.target.checked)}>{t('hostUpdater.pin')}</Checkbox>
-                </>}
+                        {!target ? <Typography.Text type="secondary">{t('hostUpdater.selectBaseFirst')}</Typography.Text>
+                            : !data.capabilities?.includes('component-overrides') ? <Typography.Text type="secondary">{t('hostUpdater.guiSelectionUnsupported')}</Typography.Text>
+                                : guiOptions.length === 0 && <Typography.Text type="secondary">{t('hostUpdater.noCompatibleGUI')}</Typography.Text>}
+                    </Form.Item>
+                    <Checkbox checked={pinned} disabled={pending || busy || dirty || !target} onChange={e => setPinned(e.target.checked)}>{t('hostUpdater.pin')}</Checkbox>
+                </Form>}
                 {dirty && <Typography.Text type="warning">{t('hostUpdater.unsavedSource')}</Typography.Text>}
                 <Space wrap>
                     <Button disabled={pending || dirty} loading={busy} onClick={() => void act(async () => {await updaterRequest('check', {});})}>{t('hostUpdater.checkNow')}</Button>
