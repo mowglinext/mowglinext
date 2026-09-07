@@ -3321,6 +3321,10 @@
     }
   },
   "hostUpdater": {
+    "summaryUnknown": "Unknown",
+    "summaryCustom": "Custom",
+    "runningSummary": "Running {{version}} · {{track}}. Open Updates",
+    "bundleHelp": "One release for your installed components. Review the changes before installing.",
     "preferences": "Update settings",
     "saveSettings": "Save settings",
     "stack": "Installed stack",
@@ -3375,7 +3379,7 @@
     "agentNotice": "An update to the host updater is available",
     "title": "Updates and recovery",
     "agent": "Host updater",
-    "installed": "Installed deployment",
+    "installed": "Installed",
     "customInstalled": "Existing / custom installation",
     "pinned": "Pinned",
     "lastCheck": "Last check: {{time}}",
@@ -3441,7 +3445,7 @@
     "latestInstalled": "Selected version is already installed",
     "notChecked": "Check for available software updates.",
     "checkNow": "Check for updates",
-    "simpleHelp": "Change channel, choose an older version or manage pins in Advanced. Updates always need your confirmation.",
+    "simpleHelp": "Choose other versions or change the update source in Advanced.",
     "unsavedSource": "Save source settings before reviewing an update.",
     "forkHelpTitle": "Using another repository or fork",
     "forkHelp": "Choose a repository enabled by your administrator, then Production, Development or Custom branch. Enter the full branch name, including slashes. A branch must publish a complete deployment before it can be installed. Forks are added to trusted_repositories in /etc/mowgli-updater.json on the host.",

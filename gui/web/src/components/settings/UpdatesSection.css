@@ -41,3 +41,10 @@
  .update-actions .ant-space-item { flex:1; }
  .update-actions button { width:100%; }
 }
+
+.available-release { font-size:24px; font-weight:700; color:#7cffb2; margin:4px 0; }
+.updates-simple .update-stack-row { grid-template-columns:minmax(0,1fr) auto; gap:8px; }
+.updates-simple .stack-target:empty { display:none; }
+.updates-simple .stack-image-details { display:none; }
+.updates-simple .stack-version { margin-top:2px; }
+.updates-simple .update-actions { position:static; border:0; padding:0; }

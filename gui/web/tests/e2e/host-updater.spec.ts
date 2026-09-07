@@ -58,7 +58,12 @@ for(const track of ['dev','stable'])for(const mobile of [false,true])test(`${tra
     const data=fixture(track);const {panel,posts,errors}=await open(page,data,mobile);const prefix=track==='dev'?'host-updater':'host-updater-production';
     await expect(panel.getByText('Installed stack',{exact:true})).toBeVisible();await expect(panel.getByText('MQTT',{exact:true})).toBeVisible();
     await expect(panel.getByRole('combobox')).toHaveCount(0);await expect(page.getByTestId('update-checks')).toHaveCount(0);
-    await shot(page,prefix,mobile,'stack-mowgli');
+    await expect(panel.getByText('Installed',{exact:true})).toBeVisible();
+    await expect(panel.getByText('After update',{exact:false})).toHaveCount(0);
+    if(track==='stable')await expect(panel.locator('.available-release')).toHaveText('v1.3.0');
+    await expect(panel.getByRole('button',{name:'Review changes',exact:true})).toBeInViewport();
+    if(!mobile)await expect(page.getByTestId('running-version-summary')).toContainText(track==='stable'?'v1.2.0':'bbbbbbbb');
+    await shot(page,prefix,mobile);
     await page.route('**/api/system/updater/plan',r=>r.fulfill({json:plan(data.state.releases[0])}));
     await panel.getByRole('button',{name:'Review changes',exact:true}).click();await expect(page.getByRole('dialog')).toBeVisible();
     await expect(page.getByRole('dialog').getByRole('button',{name:'Install reviewed deployment'})).toBeInViewport();
@@ -93,7 +98,7 @@ for(const mobile of [false,true])test(`stack membership review ${mobile?'mobile'
 
 for(const mobile of [false,true])test(`independent components and matched reset ${mobile?'mobile':'desktop'}`,async({page})=>{
     const data=fixture('stable',true,true);const alternative=data.state.releases[2];const incompatible={...release('incompatible','stable','v2.0.0'),component_compatibility:{}};data.state.releases.push(incompatible);
-    const {panel,posts,errors}=await open(page,data,mobile);await shot(page,'host-updater-mixed',mobile,'stack-mowgli');await advanced(page);
+    const {panel,posts,errors}=await open(page,data,mobile);await shot(page,'host-updater-mixed',mobile);await advanced(page);
     for(const name of ['Robot software','Web interface','GPS','LiDAR','camera'])await choose(page,name+' version','v1.2.1');
     await expect(panel.getByRole('button',{name:'Reset all to release versions'})).toBeVisible();
     await panel.getByRole('combobox',{name:'GPS version',exact:true}).locator('..').locator('..').click();
@@ -183,6 +188,19 @@ for(const mobile of [false,true])test(`update notification bell ${mobile?'mobile
     await page.goto('/#/mowglinext');
     const bell=page.getByRole('button',{name:'Notifications (2 unread)',exact:true});await expect(bell).toBeVisible();
     await expect(page.getByTestId('host-updater')).toHaveCount(0);
+    // Lazy route loading can temporarily replace the entire shell with Suspense.
+    // Wait for actual dashboard content and its entrance animation, not just the bell.
+    await expect(page.getByText('idle',{exact:true})).toBeVisible();
+    await expect(page.getByText('Firmware OK',{exact:true})).toBeVisible();
+    await expect(page.locator('main').getByText('100',{exact:true})).toBeVisible();
+    await expect(page.getByText('No area recorded yet',{exact:true})).toHaveCount(0);
+    await expect(page.locator('main > div')).toHaveCSS('opacity','1');
+    await page.evaluate(()=>document.fonts.ready);
+    await expect(page.locator('circle[stroke="url(#concept-batt)"]').last()).toHaveCSS('stroke-dashoffset','0px');
+    await expect(page.locator('path[stroke="url(#lawnEdge)"]').first()).toHaveCSS('opacity','1');
+    await expect(bell).toBeInViewport();
+    const header=page.locator('header').filter({has:bell});
+    expect(await header.evaluate(el=>Array.from(el.querySelectorAll('button')).every(b=>b.getBoundingClientRect().right<=innerWidth))).toBe(true);
     await expect(page.getByText('An update is available',{exact:true})).toHaveCount(0);
     await shot(page,'host-updater-notification-badge',mobile);
     await bell.click();
@@ -197,4 +215,21 @@ for(const mobile of [false,true])test(`update notification bell ${mobile?'mobile
     await page.getByRole('link',{name:'Open Updates',exact:true}).first().click();
     await expect(page.getByTestId('host-updater')).toBeVisible();
     expect(posts.every(p=>p.path==='/api/system/updater/notice')).toBe(true);expect(errors).toEqual([]);
+});
+
+for(const identity of ['matched','mixed','drifted','custom','unverified'])test(`running summary reports ${identity}, never the available version`,async({page})=>{
+    const data=fixture('stable');data.runtime.identity=identity;
+    const {posts}=await open(page,data);
+    const summary=page.getByTestId('running-version-summary');
+    await expect(summary).toContainText(identity==='matched'?'v1.2.0':identity==='unverified'?'Unknown':'Custom');
+    await expect(summary).not.toContainText('v1.3.0');
+    await summary.click();await expect(page).toHaveURL(/settings\?section=updates/);
+    expect(posts).toEqual([]);
+});
+test('mobile More shows the running version',async({page})=>{
+    const {posts}=await open(page,fixture('stable'),true);
+    await page.getByRole('button',{name:'More',exact:true}).click();
+    const summary=page.getByTestId('running-version-summary');await expect(summary).toContainText('v1.2.0');
+    await shot(page,'host-updater-more',true);
+    await summary.click();await expect(summary).toHaveCount(0);expect(posts).toEqual([]);
 });

@@ -4,16 +4,22 @@ Settings → Updates reports installed software, mainboard firmware and web buil
 identities. On a managed installation it also checks for complete deployments and
 installs a reviewed selection. Updates are never installed automatically.
 
+The desktop rail footer shows the verified running version and track; mobile
+shows the same summary in More. Clicking it opens Updates. Custom combinations
+and unverified installations are labelled explicitly instead of claiming the
+base release or available update is running. This reads local cached status only.
+
 ## Simple and Advanced views
 
 The screen opens in **Simple**. It shows the installed version and pin, the source
-being checked, the available version and last check, followed by **Check now**
-and **Review changes**. Firmware health, errors, active update/recovery
+being checked and the available release once. **Check for updates** and
+**Review changes** sit directly below, before the list of running components.
+Simple rows do not repeat a target release number beside each container. Firmware health, errors, active update/recovery
 status and recovery actions remain visible. The updater service offers its own
 update action only when a different published binary is available.
 
 **Advanced** adds source, repository, branch, check frequency, retained-version
-selection, compatible GUI overrides and pin controls. Installed container identities, web build details,
+selection, compatible per-service overrides and pin controls. Installed container identities, web build details,
 manual per-image comparisons and deployment history also live here. The view
 switch changes presentation only: it does not check remotely, install anything
 or change policy. Unsaved source edits must be saved or reset before review.

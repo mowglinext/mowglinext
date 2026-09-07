@@ -51,13 +51,13 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
     const label = (deployment?: Deployment) => !deployment ? t('hostUpdater.customInstalled') : deployment.source.track === 'stable'
         ? deployment.release_tag || deployment.id : `${t(`hostUpdater.tracks.${deployment.source.track}`)} · ${deployment.revision.slice(0, 8)}`;
     const component = (service: string) => t(`updates.components.${service === 'mowgli' ? 'robot' : service}`, {defaultValue: service});
-    return <Card title={t('hostUpdater.softwareUpdates')} size="small" data-testid="host-updater">
+    return <Card title={t('hostUpdater.softwareUpdates')} size="small" data-testid="host-updater" className={advanced ? undefined : "updates-simple"}>
         <Space direction="vertical" size="middle" style={{width: '100%', overflowWrap: 'anywhere'}}>
             {error && <Alert type="warning" showIcon message={t(pending ? 'hostUpdater.reconnecting' : 'hostUpdater.unavailable')} description={pending ? undefined : t('hostUpdater.unavailableHelp')}/>}
             {failure && <Alert type="error" showIcon message={failure}/>}
             {data && policy && <>
                 <div className="installed-version-heading">
-                    <div><Typography.Text type="secondary">{t('hostUpdater.currentVersion')}</Typography.Text><div><Typography.Text strong>{matched ? label(data.state.active) : t(`hostUpdater.identities.${identity}`, {defaultValue: t('hostUpdater.customInstalled')})}</Typography.Text></div></div>
+                    <div><Typography.Text type="secondary">{t('hostUpdater.installed')}</Typography.Text><div><Typography.Text strong>{matched ? label(data.state.active) : t(`hostUpdater.identities.${identity}`, {defaultValue: t('hostUpdater.customInstalled')})}</Typography.Text></div></div>
                     {installedPin && <Tag>{t('hostUpdater.pinned')}</Tag>}
                 </div>
                 {!matched && active && <Typography.Text type="secondary">{t('hostUpdater.baseVersion')}: {label(active)}</Typography.Text>}
@@ -70,8 +70,18 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                 {data.state.check_error && <Alert type="warning" showIcon message={t('hostUpdater.checkFailed')} description={advanced ? data.state.check_error : undefined}/>}
                 {target ? <div>
                     <Typography.Text strong>{sameDeployment ? t('hostUpdater.latestInstalled') : t('hostUpdater.availableVersion')}</Typography.Text>
-                    {!sameDeployment && <div>{label(target)} · {date(target.published_at)}</div>}
+                    {!sameDeployment && <><div className="available-release">{label(target)}</div><Typography.Text type="secondary">{date(target.published_at)}</Typography.Text><div>{t('hostUpdater.bundleHelp')}</div></>}
                 </div> : <Typography.Text>{t(data.state.last_check && !data.state.last_check.startsWith('0001') ? 'hostUpdater.noBuild' : 'hostUpdater.notChecked')}</Typography.Text>}
+                {dirty && <Typography.Text type="warning">{t('hostUpdater.unsavedSource')}</Typography.Text>}
+                <Space wrap className="update-actions">
+                    <Button disabled={pending} loading={busy} onClick={() => void act(async () => {if (dirty && policy) {await updaterRequest('policy',policy);setSelected(undefined);setComponentSelected({});} await updaterRequest('check', {});})}>{t('hostUpdater.checkNow')}</Button>
+                    <Button type="primary" disabled={pending || !target || dirty || (sameDeployment && (!advanced || pinned === installedPin))} loading={busy} onClick={() => void act(async () => {
+                        if (target) setPlan(await updaterRequest<UpdatePlan>('plan', {deployment: target.id, pinned: advanced ? pinned : installedPin, ...(hasOverrides ? (data.capabilities?.includes('service-version-overrides') ? {component_deployments:Object.fromEntries(Object.entries(overrides).map(([name,r]) => [name,r.id]))} : {gui_deployment:overrides.gui?.id}) : {})}));
+                    })}>{['mixed', 'drifted'].includes(identity) && !hasOverrides ? t('hostUpdater.returnMatched') : t('hostUpdater.review')}</Button>
+                </Space>
+                <Typography.Text type="secondary">{t('hostUpdater.lastCheck', {time: date(data.state.last_check)})}</Typography.Text>
+                {!advanced && <Typography.Text type="secondary">{t('hostUpdater.simpleHelp')}</Typography.Text>}
+                {advanced && <Typography.Text type="secondary">{t('hostUpdater.nextCheck', {time: policy.interval_hours ? date(data.state.next_check) : t('hostUpdater.manual')})}</Typography.Text>}
                 {advanced && <Form layout="vertical" className="release-selection">
                     <Form.Item label={t('hostUpdater.version')}>
                         <Select aria-label={t('hostUpdater.version')} value={target?.id} placeholder={t('hostUpdater.noVersions')} disabled={pending || busy || dirty || versions.length === 0}
@@ -99,7 +109,7 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                             <div><Typography.Text strong>{component(name)}</Typography.Text> {running && <Tag color={runtime?.health === 'unknown' ? undefined : running.healthy ? 'green' : 'orange'}>{runtime?.health === 'unknown' ? t('updates.unknown') : t(`hostUpdater.health.${running.healthy ? 'healthy' : 'degraded'}`)}</Tag>}
                                 <div className="stack-version"><Typography.Text type="secondary">{t('hostUpdater.running')}: </Typography.Text>{running ? runningVersion : t('hostUpdater.notInstalled')}</div>
                                 {data.state.overrides?.[name] && <Tag>{t('hostUpdater.customComponent')}</Tag>}
-                                <details><summary>{t('updates.details')}</summary><Typography.Paragraph code>{running?.reference ?? info?.image ?? family}</Typography.Paragraph><Typography.Paragraph code>{running?.image ?? info?.image_id}</Typography.Paragraph></details>
+                                <details className="stack-image-details"><summary>{t('updates.details')}</summary><Typography.Paragraph code>{running?.reference ?? info?.image ?? family}</Typography.Paragraph><Typography.Paragraph code>{running?.image ?? info?.image_id}</Typography.Paragraph></details>
                             </div>
                             <div className="stack-target">
                                 {advanced && family ? <><Select aria-label={`${component(name)} ${t('hostUpdater.versionControl')}`} value={overrides[name]?.id ?? ''}
@@ -110,7 +120,7 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                                     {!supported && <Typography.Text type="secondary">{t('hostUpdater.serviceSelectionUnsupported')}</Typography.Text>}
                                     {target && supported && noAlternatives && <Typography.Text type="secondary">{t('hostUpdater.noCompatibleComponent')}</Typography.Text>}
                                 </> : !family && target && <Typography.Text type="secondary">{t('hostUpdater.removedByRelease')}</Typography.Text>}
-                                {selectedRelease && family && (advanced || !sameDeployment) && <Typography.Text type="secondary">{t(advanced ? 'hostUpdater.selected' : 'hostUpdater.afterUpdate')}: {label(selectedRelease)}</Typography.Text>}
+                                {selectedRelease && family && advanced && <Typography.Text type="secondary">{t('hostUpdater.selected')}: {label(selectedRelease)}</Typography.Text>}
                             </div>
                         </div>;
                     })}
@@ -122,16 +132,6 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                         </div>
                     </div>
                 </section>
-                {dirty && <Typography.Text type="warning">{t('hostUpdater.unsavedSource')}</Typography.Text>}
-                <Space wrap className="update-actions">
-                    <Button disabled={pending} loading={busy} onClick={() => void act(async () => {if (dirty && policy) {await updaterRequest('policy',policy);setSelected(undefined);setComponentSelected({});} await updaterRequest('check', {});})}>{t('hostUpdater.checkNow')}</Button>
-                    <Button type="primary" disabled={pending || !target || dirty || (sameDeployment && (!advanced || pinned === installedPin))} loading={busy} onClick={() => void act(async () => {
-                        if (target) setPlan(await updaterRequest<UpdatePlan>('plan', {deployment: target.id, pinned: advanced ? pinned : installedPin, ...(hasOverrides ? (data.capabilities?.includes('service-version-overrides') ? {component_deployments:Object.fromEntries(Object.entries(overrides).map(([name,r]) => [name,r.id]))} : {gui_deployment:overrides.gui?.id}) : {})}));
-                    })}>{['mixed', 'drifted'].includes(identity) && !hasOverrides ? t('hostUpdater.returnMatched') : t('hostUpdater.review')}</Button>
-                </Space>
-                <Typography.Text type="secondary">{t('hostUpdater.lastCheck', {time: date(data.state.last_check)})}</Typography.Text>
-                {!advanced && <Typography.Text type="secondary">{t('hostUpdater.simpleHelp')}</Typography.Text>}
-                {advanced && <Typography.Text type="secondary">{t('hostUpdater.nextCheck', {time: policy.interval_hours ? date(data.state.next_check) : t('hostUpdater.manual')})}</Typography.Text>}
                 {data.agent.error && <Alert type="warning" showIcon message={data.agent.error}/>}
                 {advanced && <details className="update-preferences"><summary>{t('hostUpdater.preferences')}</summary><Form layout="vertical" className="updater-options">
                     <Form.Item label={t('hostUpdater.source')}>

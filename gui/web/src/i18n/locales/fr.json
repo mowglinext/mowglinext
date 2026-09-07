@@ -3321,6 +3321,10 @@
     }
   },
   "hostUpdater": {
+    "summaryUnknown": "Inconnu",
+    "summaryCustom": "Personnalisé",
+    "runningSummary": "Version en cours : {{version}} · {{track}}. Ouvrir les mises à jour",
+    "bundleHelp": "Une version pour vos composants installés. Vérifiez les changements avant de l’installer.",
     "preferences": "Options de mise à jour",
     "saveSettings": "Enregistrer les options",
     "stack": "Services installés",
@@ -3375,7 +3379,7 @@
     "agentNotice": "Une nouvelle version du programme de mise à jour est disponible",
     "title": "Mises à jour et récupération",
     "agent": "Programme de mise à jour",
-    "installed": "Déploiement installé",
+    "installed": "Installé",
     "customInstalled": "Installation existante / personnalisée",
     "pinned": "Version épinglée",
     "lastCheck": "Dernière vérification : {{time}}",
@@ -3441,7 +3445,7 @@
     "latestInstalled": "La version sélectionnée est déjà installée",
     "notChecked": "Rechercher les mises à jour logicielles disponibles.",
     "checkNow": "Vérifier maintenant",
-    "simpleHelp": "Changez de canal, choisissez une ancienne version ou gérez les versions épinglées en mode Avancé. Les mises à jour nécessitent toujours votre confirmation.",
+    "simpleHelp": "Choisissez d’autres versions ou modifiez la source des mises à jour en mode Avancé.",
     "unsavedSource": "Enregistrez la source avant de préparer une mise à jour.",
     "forkHelpTitle": "Utiliser un autre dépôt ou fork",
     "forkHelp": "Choisissez un dépôt autorisé par votre administrateur, puis Production, Développement ou Branche personnalisée. Saisissez le nom complet de la branche, barres obliques comprises. Elle doit publier un déploiement complet pour être installable. Les forks sont ajoutés à trusted_repositories dans /etc/mowgli-updater.json sur l’hôte.",
