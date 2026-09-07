@@ -170,3 +170,31 @@ for(const mobile of [false,true])test(`upstream custom branch settings ${mobile?
     await preferences.evaluate(el=>el.scrollIntoView({block:'center'}));
     await shot(page,'host-updater-preferences',mobile);expect(posts).toEqual([]);
 });
+
+
+for(const mobile of [false,true])test(`update notification bell ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture('stable');
+    Object.assign(data.state,{notices:[
+        {id:'production-update',kind:'available',deployment:'v1.3.0',created_at:new Date().toISOString(),read:false,dismissed:false},
+        {id:'updater-update',kind:'updater',deployment:'v1.3.0',created_at:new Date().toISOString(),read:false,dismissed:false},
+    ]});
+    const {posts,errors}=await open(page,data,mobile);
+    if(!mobile)await page.setViewportSize({width:1440,height:1000});
+    await page.goto('/#/mowglinext');
+    const bell=page.getByRole('button',{name:'Notifications (2 unread)',exact:true});await expect(bell).toBeVisible();
+    await expect(page.getByTestId('host-updater')).toHaveCount(0);
+    await expect(page.getByText('An update is available',{exact:true})).toHaveCount(0);
+    await shot(page,'host-updater-notification-badge',mobile);
+    await bell.click();
+    await expect(page.getByText('An update is available',{exact:true})).toBeVisible();
+    await expect(page.getByText('An update to the host updater is available',{exact:true})).toBeVisible();
+    await shot(page,'host-updater-notification-panel',mobile);
+    const bounds=await page.getByText('Notifications',{exact:true}).locator('..').locator('..').boundingBox();
+    expect(bounds).not.toBeNull();expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x+bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    expect(posts).toEqual([]);
+    await page.route('**/api/system/updater/notice',r=>r.fulfill({json:{ok:true}}));
+    await page.getByRole('link',{name:'Open Updates',exact:true}).first().click();
+    await expect(page.getByTestId('host-updater')).toBeVisible();
+    expect(posts.every(p=>p.path==='/api/system/updater/notice')).toBe(true);expect(errors).toEqual([]);
+});
