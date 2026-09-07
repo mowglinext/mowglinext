@@ -63,6 +63,8 @@ const CATALOG: Record<string, ParamMeta> = {
   node_period_s: {label: "paramCatalog.node_period_s.label", description: "paramCatalog.node_period_s.description", tier: "expert", group: "Localization", unit: "s"},
   use_scan_matching: {label: "paramCatalog.use_scan_matching.label", description: "paramCatalog.use_scan_matching.description", tier: "middle", group: "Localization"},
   use_loop_closure: {label: "paramCatalog.use_loop_closure.label", description: "paramCatalog.use_loop_closure.description", tier: "middle", group: "Localization"},
+  use_lidar_map_anchor: {label: "paramCatalog.use_lidar_map_anchor.label", description: "paramCatalog.use_lidar_map_anchor.description", tier: "middle", group: "Localization"},
+  lidar_anchor_shadow_mode: {label: "paramCatalog.lidar_anchor_shadow_mode.label", description: "paramCatalog.lidar_anchor_shadow_mode.description", tier: "middle", group: "Localization"},
   icp_max_iter: {label: "paramCatalog.icp_max_iter.label", description: "paramCatalog.icp_max_iter.description", tier: "expert", group: "Localization"},
   icp_max_corresp_dist: {label: "paramCatalog.icp_max_corresp_dist.label", description: "paramCatalog.icp_max_corresp_dist.description", tier: "expert", group: "Localization", unit: "m"},
   icp_max_rmse_m: {label: "paramCatalog.icp_max_rmse_m.label", description: "paramCatalog.icp_max_rmse_m.description", tier: "expert", group: "Localization", unit: "m"},
