@@ -17,6 +17,7 @@ import (
 
 const APIVersion = 1
 const LayoutVersion = 1
+const DataSchemaVersion = 1
 const StateSchema = 3
 
 var Version = "development"
@@ -58,21 +59,23 @@ type Binary struct {
 	Version string `json:"version"`
 }
 type Deployment struct {
-	Bundle           *BundleAsset             `json:"compose_bundle,omitempty"`
-	Schema           int                      `json:"schema"`
-	ID               string                   `json:"id"`
-	Source           Source                   `json:"source"`
-	Revision         string                   `json:"revision"`
-	PublishedAt      time.Time                `json:"published_at"`
-	ReleaseTag       string                   `json:"release_tag"`
-	Layout           int                      `json:"layout"`
-	DataSchema       int                      `json:"data_schema"`
-	UpdaterAPI       int                      `json:"updater_api"`
-	FirmwareProtocol int                      `json:"firmware_protocol"`
-	MaintenanceAPI   int                      `json:"maintenance_api"`
-	GUICompatibility string                   `json:"gui_compatibility,omitempty"`
-	Images           map[string]updates.Image `json:"images"`
-	Updater          map[string]Binary        `json:"updater"`
+	Bundle                 *BundleAsset             `json:"compose_bundle,omitempty"`
+	Schema                 int                      `json:"schema"`
+	ID                     string                   `json:"id"`
+	Source                 Source                   `json:"source"`
+	Revision               string                   `json:"revision"`
+	PublishedAt            time.Time                `json:"published_at"`
+	ReleaseTag             string                   `json:"release_tag"`
+	Layout                 int                      `json:"layout"`
+	DataSchema             int                      `json:"data_schema"`
+	UpdaterAPI             int                      `json:"updater_api"`
+	FirmwareProtocol       int                      `json:"firmware_protocol"`
+	MaintenanceAPI         int                      `json:"maintenance_api"`
+	ComponentCompatibility map[string]string        `json:"component_compatibility,omitempty"`
+	ServiceChoices         []ServiceChoice          `json:"service_choices,omitempty"`
+	GUICompatibility       string                   `json:"gui_compatibility,omitempty"`
+	Images                 map[string]updates.Image `json:"images"`
+	Updater                map[string]Binary        `json:"updater"`
 }
 
 var Services = map[string]string{"mowgli": "mowgli-ros2", "gui": "mowglinext-gui", "gps": "gps", "lidar": ""}
@@ -90,11 +93,29 @@ func (d Deployment) Validate(trusted []string) error {
 	if d.Schema == 1 && d.Bundle != nil {
 		return errors.New("Compose bundles require deployment schema 2")
 	}
-	if d.Layout != LayoutVersion || d.DataSchema != 1 || d.UpdaterAPI > APIVersion || d.MaintenanceAPI != 1 || d.FirmwareProtocol < 1 {
+	if d.Layout != LayoutVersion || d.DataSchema != DataSchemaVersion || d.UpdaterAPI > APIVersion || d.MaintenanceAPI != 1 || d.FirmwareProtocol < 1 {
 		return errors.New("deployment requires unsupported layout, data schema or updater")
 	}
 	if d.GUICompatibility != "" && !idPattern.MatchString(d.GUICompatibility) {
 		return errors.New("invalid GUI compatibility contract")
+	}
+	for family, contract := range d.ComponentCompatibility {
+		if _, ok := d.Images[family]; !ok || !idPattern.MatchString(contract) {
+			return fmt.Errorf("invalid component compatibility contract for %s", family)
+		}
+	}
+	for _, choice := range d.ServiceChoices {
+		if !idPattern.MatchString(choice.Service) {
+			return errors.New("invalid release service choice")
+		}
+		if _, ok := d.Images[choice.Image]; !ok {
+			return errors.New("release service choice has no image")
+		}
+		for key, value := range choice.When {
+			if !idPattern.MatchString(key) || !idPattern.MatchString(value) {
+				return errors.New("invalid hardware selection")
+			}
+		}
 	}
 	for name, image := range d.Images {
 		if !imageNamePattern.MatchString(name) || image.Repository != "ghcr.io/"+strings.ToLower(d.Source.Repository)+"/"+name || !updates.DigestPattern.MatchString(image.Digest) {

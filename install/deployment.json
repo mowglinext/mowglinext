@@ -1,4 +1,12 @@
 {
+  "component_compatibility": {
+    "mowgli-ros2": "ros-stack-1",
+    "mowglinext-gui": "ros-gui-1",
+    "gps": "gnss-contract-1",
+    "lidar-ldlidar": "scan-contract-1",
+    "lidar-rplidar": "scan-contract-1",
+    "lidar-stl27l": "scan-contract-1"
+  },
   "gui_compatibility": "ros-gui-1",
   "components": [
     {

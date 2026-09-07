@@ -97,6 +97,7 @@ type containerInfo struct {
 	ID     string `json:"Id"`
 	Image  string `json:"Image"`
 	Config struct {
+		Image  string            `json:"Image"`
 		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
 	State struct {
@@ -212,6 +213,9 @@ func (b DockerBackend) Inventory(ctx context.Context) (string, map[string]string
 	return updates.Hash(data), images, nil
 }
 func (b DockerBackend) PlanImages(ctx context.Context, d Deployment) (map[string]string, error) {
+	return b.PlanSelectedImages(ctx, d, nil)
+}
+func (b DockerBackend) PlanSelectedImages(ctx context.Context, d Deployment, overrides map[string]Deployment) (map[string]string, error) {
 	if err := d.Validate(b.Config.Trusted); err != nil {
 		return nil, err
 	}
@@ -228,6 +232,9 @@ func (b DockerBackend) PlanImages(ctx context.Context, d Deployment) (map[string
 	}
 	managed, err := managedServices(c)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateOverrides(d, overrides, managed); err != nil {
 		return nil, err
 	}
 	result := map[string]string{}
@@ -249,7 +256,11 @@ func (b DockerBackend) PlanImages(ctx context.Context, d Deployment) (map[string
 			return nil, errors.New("run the installer upgrade first: installed GUI/ROS2 lacks update maintenance support")
 		}
 
-		image, ok := d.Images[name]
+		selected := d
+		if override, exists := overrides[service]; exists {
+			selected = override
+		}
+		image, ok := selected.Images[name]
 		if !ok {
 			return nil, fmt.Errorf("deployment does not cover %s", service)
 		}

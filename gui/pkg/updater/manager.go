@@ -219,6 +219,13 @@ func (m *Manager) MakePlan(ctx context.Context, id string, pinned bool) (Plan, e
 	return m.MakeComponentPlan(ctx, id, pinned, "")
 }
 func (m *Manager) MakeComponentPlan(ctx context.Context, id string, pinned bool, guiID string) (Plan, error) {
+	requested := map[string]string{}
+	if guiID != "" {
+		requested["gui"] = guiID
+	}
+	return m.MakeServicePlan(ctx, id, pinned, requested)
+}
+func (m *Manager) MakeServicePlan(ctx context.Context, id string, pinned bool, requested map[string]string) (Plan, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.busy || m.state.Job.Pending() {
@@ -248,27 +255,32 @@ func (m *Manager) MakeComponentPlan(ctx context.Context, id string, pinned bool,
 		return Plan{}, err
 	}
 	overrides := map[string]Deployment{}
-	if guiID != "" && guiID != target.ID {
-		var gui *Deployment
+	for service, releaseID := range requested {
+		if !idPattern.MatchString(service) {
+			return Plan{}, errors.New("invalid service override")
+		}
+		var selected *Deployment
 		for i := range m.state.Releases {
-			if m.state.Releases[i].ID == guiID {
-				gui = &m.state.Releases[i]
+			if m.state.Releases[i].ID == releaseID {
+				selected = &m.state.Releases[i]
 				break
 			}
 		}
-		if gui == nil {
-			return Plan{}, errors.New("GUI deployment not found; check published versions first")
+		if selected == nil && target.ID == releaseID {
+			selected = target
 		}
-		if err := gui.Validate(m.trusted); err != nil {
+		if selected == nil {
+			return Plan{}, fmt.Errorf("%s: version not found; check published versions first", service)
+		}
+		if err := selected.Validate(m.trusted); err != nil {
 			return Plan{}, err
 		}
-		if gui.Source != m.state.Policy.Source || !compatibleGUI(*target, *gui) {
-			return Plan{}, errors.New("GUI override lacks a matching published compatibility contract")
+		if selected.Source != target.Source {
+			return Plan{}, errors.New("component version belongs to another update source")
 		}
-		// Each published release was validated independently above. The backend
-		// validates the base, then resolves the separately validated GUI image.
-		overrides["gui"] = *gui
+		overrides[service] = *selected
 	}
+
 	var images map[string]string
 	var stack *StackPlan
 	if target.Bundle != nil {
@@ -280,19 +292,24 @@ func (m *Manager) MakeComponentPlan(ctx context.Context, id string, pinned bool,
 		}
 		images, stack, err = planner.PlanStack(ctx, *target, overrides)
 	} else {
-		images, err = m.backend.PlanImages(ctx, *target)
-		if err == nil {
-			if gui, ok := overrides["gui"]; ok {
-				var guiImages map[string]string
-				guiImages, err = m.backend.PlanImages(ctx, gui)
-				if err == nil {
-					images["gui"] = guiImages["gui"]
-				}
-			}
+		if len(overrides) == 0 {
+			images, err = m.backend.PlanImages(ctx, *target)
+		} else if planner, ok := m.backend.(interface {
+			PlanSelectedImages(context.Context, Deployment, map[string]Deployment) (map[string]string, error)
+		}); ok {
+			images, err = planner.PlanSelectedImages(ctx, *target, overrides)
+		} else {
+			return Plan{}, errors.New("backend does not support component selection")
 		}
+
 	}
 	if err != nil {
 		return Plan{}, err
+	}
+	for service, override := range overrides {
+		if override.ID == target.ID {
+			delete(overrides, service)
+		}
 	}
 	p := Plan{Stack: stack, Overrides: overrides, Target: *target, Policy: m.state.Policy, Fingerprint: fingerprint, ExpiresAt: m.now().Add(15 * time.Minute), Images: images, Previous: previous}
 	p.Policy.Pinned = pinned

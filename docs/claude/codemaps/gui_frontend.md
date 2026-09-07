@@ -6,7 +6,7 @@
 
 ## Where to look
 
-Settings updates: `components/settings/HostUpdaterPanel.tsx` and `hooks/useHostUpdater.ts` implement Simple/matched updates, Advanced compatible GUI overrides, cached runtime identity/health and source selection. Fixture screenshots and behavior coverage: `tests/e2e/host-updater.spec.ts`.
+Settings updates: `components/settings/HostUpdaterPanel.tsx` and `hooks/useHostUpdater.ts` implement Simple/matched updates, Advanced compatible versions for every managed service, collapsed preferences/history/diagnostics, cached runtime identity/health and source selection. Fixture screenshots and behavior coverage: `tests/e2e/host-updater.spec.ts`.
 
 
 | Task | Start here |

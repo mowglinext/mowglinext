@@ -44,7 +44,7 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 		if data, err := os.ReadFile(filepath.Join(config.StateDir, "agent-active.json")); err == nil {
 			_ = json.Unmarshal(data, &selection)
 		}
-		respond(w, map[string]any{"api": APIVersion, "agent": map[string]string{"version": Version, "revision": Revision, "platform": runtime.GOOS + "/" + runtime.GOARCH, "error": selection.Error}, "state": PublicState(m.Snapshot()), "runtime": m.Runtime(), "capabilities": []string{"component-overrides", "declared-services", "release-compose"}, "trusted_repositories": config.Trusted}, nil)
+		respond(w, map[string]any{"api": APIVersion, "agent": map[string]string{"version": Version, "revision": Revision, "platform": runtime.GOOS + "/" + runtime.GOARCH, "error": selection.Error}, "state": PublicState(m.Snapshot()), "runtime": m.Runtime(), "capabilities": []string{"component-overrides", "declared-services", "release-compose", "service-version-overrides"}, "trusted_repositories": config.Trusted}, nil)
 	})
 	mux.HandleFunc("POST /v1/policy", func(w http.ResponseWriter, r *http.Request) {
 		var p Policy
@@ -62,12 +62,23 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 	})
 	mux.HandleFunc("POST /v1/plan", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Deployment string `json:"deployment"`
-			Pinned     bool   `json:"pinned"`
-			GUI        string `json:"gui_deployment"`
+			Deployment string            `json:"deployment"`
+			Pinned     bool              `json:"pinned"`
+			GUI        string            `json:"gui_deployment"`
+			Components map[string]string `json:"component_deployments"`
 		}
 		if decode(w, r, &req) {
-			p, e := m.MakeComponentPlan(r.Context(), req.Deployment, req.Pinned, req.GUI)
+			if req.Components == nil {
+				req.Components = map[string]string{}
+			}
+			if req.GUI != "" {
+				if _, exists := req.Components["gui"]; exists {
+					respond(w, nil, fmt.Errorf("GUI selection provided twice"))
+					return
+				}
+				req.Components["gui"] = req.GUI
+			}
+			p, e := m.MakeServicePlan(r.Context(), req.Deployment, req.Pinned, req.Components)
 			respond(w, PublicPlan(p), e)
 		}
 	})

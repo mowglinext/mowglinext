@@ -35,9 +35,15 @@ func publish() error {
 	images := flag.String("images", strings.Join(updates.ImageNames, ","), "comma-separated published first-party image families")
 	guiCompatibility := flag.String("gui-compatibility", "", "reviewed GUI/ROS API compatibility contract; empty disables mixed releases")
 	composeDir := flag.String("compose-dir", "../install/compose", "release Compose fragments and shared selection map")
+	contracts := flag.String("component-contracts", "", "JSON map of reviewed per-image drop-in compatibility contracts")
 	protocol := flag.Int("protocol", 0, "firmware protocol")
 	flag.Parse()
-	d := updater.Deployment{Schema: 2, ID: *id, Source: updater.Source{Repository: *repo, Branch: *branch, Track: *track}, Revision: *revision, PublishedAt: time.Now().UTC(), ReleaseTag: *release, Layout: 1, DataSchema: 2, UpdaterAPI: 1, MaintenanceAPI: 1, GUICompatibility: *guiCompatibility, FirmwareProtocol: *protocol, Images: map[string]updates.Image{}, Updater: map[string]updater.Binary{}}
+	d := updater.Deployment{Schema: 2, ID: *id, Source: updater.Source{Repository: *repo, Branch: *branch, Track: *track}, Revision: *revision, PublishedAt: time.Now().UTC(), ReleaseTag: *release, Layout: 1, DataSchema: updater.DataSchemaVersion, UpdaterAPI: 1, MaintenanceAPI: 1, GUICompatibility: *guiCompatibility, FirmwareProtocol: *protocol, Images: map[string]updates.Image{}, Updater: map[string]updater.Binary{}}
+	if *contracts != "" {
+		if err := json.Unmarshal([]byte(*contracts), &d.ComponentCompatibility); err != nil {
+			return err
+		}
+	}
 	registry := updates.NewRegistry()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -68,6 +74,10 @@ func publish() error {
 		return err
 	}
 	if err = bundle.ValidateImages(d); err != nil {
+		return err
+	}
+	d.ServiceChoices, err = bundle.ServiceChoices()
+	if err != nil {
 		return err
 	}
 	bundleData, err := json.MarshalIndent(bundle, "", "  ")

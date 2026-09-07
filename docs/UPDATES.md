@@ -8,7 +8,7 @@ installs a reviewed selection. Updates are never installed automatically.
 
 The screen opens in **Simple**. It shows the installed version and pin, the source
 being checked, the available version and last check, followed by **Check now**
-and **Review installation**. Firmware health, errors, active update/recovery
+and **Review changes**. Firmware health, errors, active update/recovery
 status and recovery actions remain visible. The updater service offers its own
 update action only when a different published binary is available.
 
@@ -102,7 +102,7 @@ requires an explicit configuration migration.
 - **Custom branch** uses the full branch name in a trusted repository. Forks must
   first be added by an administrator to `trusted_repositories` in the host config.
 
-Save and check changes the notification source, not the running deployment.
+Save settings changes the notification source, not the running deployment.
 Choose the latest published snapshot or a specific retained version, optionally
 pin it, then review and install. The installed source and pin change only after
 successful activation. A pin does not suppress notifications or explicit changes.
@@ -144,7 +144,7 @@ upgrades are excluded; custom/LFP firmware is not flashed. Targets requiring a
 different firmware protocol, updater API, layout or data schema are rejected.
 Older releases without a deployment descriptor are comparison-only.
 
-## Installed identity, health and GUI overrides
+## Installed stack, health and component versions
 
 The updater samples **local Docker state every 15 seconds**, independently of
 remote update checks. Page loads read that cache. Samples older than one minute,
@@ -155,32 +155,53 @@ The stricter application/sensor readiness gates still control installation.
 
 A successful transaction records every managed container's actual image ID.
 The current label is a matched release only while those IDs and service membership
-still match. A deliberately selected GUI override shows **Custom combination**;
+still match. A deliberately selected component override shows **Custom combination**;
 manually changed images or managed membership show **Installation changed**.
-The last recorded base and GUI versions remain visible as reference. Older
+The last recorded base and component versions remain visible as reference. Older
 journals lacking recorded IDs show unverified until a coordinated installation.
 A custom installation is never inferred to be an upstream release from tags alone.
 
-In Advanced, select the base **Deployment version**, then **GUI version**. The
-installed base remains selectable when it has aged out of the release list and
-belongs to the selected source. GUI choices come from complete published releases
-in the same selected repository/track/branch. Both releases must declare the same
-nonempty `gui_compatibility`, layout, data schema, updater API, maintenance API
-and firmware protocol. No arbitrary image URL, unverified tag or cross-repository
-GUI override is accepted. Missing contracts disable mixing, not whole releases.
+Simple shows one installed stack and one Check for updates / Review changes flow.
+Advanced adds a **Release version** selector, pin, and a version selector beside
+**every managed service**: ROS2, GUI, GPS, the selected LiDAR driver and future
+first-party helpers. Each follows the selected release by default. **Reset all to
+release versions** clears the draft exceptions. Settings for source, repository,
+branch and frequency are collapsed under **Update settings**; history and diagnostics
+are separate. Mobile stacks each service's controls beneath its running version.
+Unmanaged MQTT has a local badge, and the host updater has a separate reviewed action.
 
-The other containers use the selected base's images. Select the currently installed
-base to keep their versions. This is still a coordinated operation: all managed
-writers stop for a consistent backup, and the stack restarts and verifies together.
-It is not a zero-downtime GUI restart. The confirmation names the GUI exception and
-retains exact image identities. Overrides are immutable selections, not moving tags.
-A deployment pin applies to the whole selected combination; checks continue to notify.
+The installed base remains selectable when it has aged out of the release list and
+belongs to the selected source. Individual choices come from complete published
+releases in that same repository/track/branch. Both releases must have the same
+nonempty `component_compatibility[image-family]`, layout, data schema, updater API,
+maintenance API and firmware protocol. The chosen image must support the host's
+platform. Missing/incompatible contracts disable mixing, not whole releases.
+Legacy GUI assets retain `gui_compatibility` fallback only when neither asset has
+a GUI component contract. No arbitrary image URL, moving tag or cross-source override
+is accepted. This is image selection; a GPS/LiDAR driver change still follows the
+installer options and selected release bundle.
+
+The publisher derives `service_choices` from that bundle. These provide the UI's
+service/image-family/installer-option projection, including newly introduced services.
+Planning compares it with the verified bundle and rejects disagreement. Only managed
+services in the selected target can receive overrides; removed, disabled and local
+services reject them. Older assets without the projection use installed membership
+for the UI; the server remains authoritative.
+
+Other containers follow the selected base. Choose the installed base to retain their
+versions. All managed writers still stop for a consistent backup, then the stack
+restarts and verifies together. The confirmation names every exception and retains
+exact image identities. A deployment pin applies to the whole selected combination;
+checks continue to notify. `POST /v1/plan` accepts `component_deployments`, a map from
+Compose service to published release ID. The legacy `gui_deployment` alias remains
+accepted; specifying GUI in both fields is rejected. Capability
+`service-version-overrides` advertises general selection to clients.
 
 Simple mode always reviews the latest **matched** deployment and never carries a
 hidden Advanced override. **Review matched release** clears exceptions after
 successful installation. History and rollback track transaction IDs, base release,
 overrides, image IDs and policy, so two installations sharing the same base release
-can be restored independently. Firmware is not part of a GUI override.
+can be restored independently. Firmware is not part of a component override.
 
 ## Adding a managed or optional container
 
@@ -212,7 +233,7 @@ calibration, database and maps remain mounted from their current locations.
 
 After a published deployment is installed, installer reruns retain that installed
 bundle and definition, even when the checkout is older. They save changed choices
-for **Review installation**, including when staying on the same release. Startup
+for **Review changes**, including when staying on the same release. Startup
 continues using the existing definition until the coordinated transaction applies
 the new selection. No hidden removal happens during selection. A rollback restores
 the prior applied selection; a still-requested hardware change remains pending.
@@ -273,13 +294,16 @@ an explicit updater implementation and recovery tests; labels are not arbitrary
 backup paths or executable hooks. Adding unrelated third-party image namespaces
 is intentionally outside this first-party release model.
 
-`install/deployment.json` also declares `gui_compatibility` (currently `ros-gui-1`).
-This is a maintainer-reviewed compatibility promise covering the GUI/backend's ROS
-messages, services, topic names and semantics, plus persisted GUI/config formats.
-Changing those incompatibly requires a new contract before publication. Remove or
-empty the contract to disable mixing when uncertain. Matching commit dates, tags
-or firmware protocol numbers alone do not establish GUI compatibility. Mixed-version
-integration testing is still required when maintaining this promise.
+`install/deployment.json` also declares `component_compatibility` per image family.
+These are maintainer-reviewed drop-in compatibility promises covering **all consumed
+and provided interfaces**, ROS messages/services/topic semantics, configuration and
+persisted formats. A family with incompatible changes needs a new contract before
+publication; remove its entry to disable mixing when uncertain. GUI retains the
+legacy `gui_compatibility` field for older consumers. Matching dates, tags or firmware
+protocols alone never establish compatibility. Maintaining these promises requires
+mixed-version integration tests, including changed consumers and producers. A new
+service can join whole releases without a contract; it needs one for independent
+version selection.
 
 ## Recovery and updater self-updates
 
@@ -371,7 +395,7 @@ this extension; no robot was changed during this PR extension.
 
 On a parked mower with blade stopped, stationary wheels, no due mission/schedule,
 a supervising operator and physical emergency stop available: install a matched
-release; select a compatible GUI on the same base; verify every resulting image;
+release; select compatible ROS2, GUI and an enabled sensor on the same base; verify every resulting image;
 return to matched; roll back each transaction; then test an installed optional
 service addition/retirement and failure recovery, checking MQTT identity, retained
 volumes and desired/applied installer selections. Perform a supervised interruption

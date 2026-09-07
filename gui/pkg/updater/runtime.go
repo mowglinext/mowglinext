@@ -2,15 +2,24 @@ package updater
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"time"
 )
 
 type RunningComponent struct {
 	Image       string `json:"image"`
+	Name        string `json:"name,omitempty"`
+	Family      string `json:"family,omitempty"`
+	Reference   string `json:"reference,omitempty"`
+	Version     string `json:"version,omitempty"`
+	Revision    string `json:"revision,omitempty"`
 	Healthy     bool   `json:"healthy"`
 	Healthcheck bool   `json:"healthcheck"`
 }
 type RuntimeStatus struct {
+	Selection        map[string]string           `json:"selection,omitempty"`
 	SelectionPending bool                        `json:"selection_pending,omitempty"`
 	Identity         string                      `json:"identity"`
 	Health           string                      `json:"health"`
@@ -29,12 +38,12 @@ func (b DockerBackend) Observe(ctx context.Context) (map[string]RunningComponent
 		return nil, err
 	}
 	result := map[string]RunningComponent{}
-	for name := range managed {
+	for name, contract := range managed {
 		ci, e := b.inspect(ctx, c.Services[name].ContainerName)
 		if e != nil {
 			return nil, e
 		}
-		result[name] = RunningComponent{Image: ci.Image,
+		result[name] = RunningComponent{Image: ci.Image, Name: c.Services[name].ContainerName, Family: contract.Image, Reference: ci.Config.Image, Version: ci.Config.Labels["org.opencontainers.image.version"], Revision: ci.Config.Labels["org.opencontainers.image.revision"],
 			Healthy:     ci.Config.Labels["com.docker.compose.project"] == b.Config.Project && ci.State.Running && (ci.State.Health == nil || ci.State.Health.Status == "healthy"),
 			Healthcheck: ci.State.Health != nil}
 	}
@@ -90,6 +99,12 @@ func (m *Manager) RefreshRuntime(ctx context.Context) {
 	if selector, ok := m.backend.(interface{ SelectionPending() (bool, error) }); ok && err == nil {
 		selectionPending, err = selector.SelectionPending()
 	}
+	var selection map[string]string
+	if reader, ok := m.backend.(interface {
+		InstallerSelection() (map[string]string, error)
+	}); ok && err == nil {
+		selection, err = reader.InstallerSelection()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.busy || m.state.Job.Pending() || generation != m.state.ActiveJobID {
@@ -97,6 +112,7 @@ func (m *Manager) RefreshRuntime(ctx context.Context) {
 	}
 	m.runtime = reconcile(m.state, components)
 	m.runtime.SelectionPending = selectionPending
+	m.runtime.Selection = selection
 	m.runtime.CheckedAt = m.now()
 	if err != nil {
 		m.runtime.Identity = "unknown"
@@ -114,4 +130,17 @@ func (m *Manager) Runtime() RuntimeStatus {
 		r.Health = "unknown"
 	}
 	return r
+}
+
+func (b DockerBackend) InstallerSelection() (map[string]string, error) {
+	data, err := os.ReadFile(filepath.Join(b.Config.Directory, "stack-selection.json"))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var selection StackSelection
+	err = json.Unmarshal(data, &selection)
+	return selection.Options, err
 }

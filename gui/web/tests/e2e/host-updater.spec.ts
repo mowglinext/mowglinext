@@ -1,243 +1,172 @@
-import {test, expect} from '@playwright/test';
-import {SCENARIOS} from './mock/scenarios';
+import {expect, test, type Page} from '@playwright/test';
 import {installMockBackend} from './mock/mockBackend';
+import {SCENARIOS} from './mock/scenarios';
 
-const source = {repository: 'mowglinext/mowglinext', track: 'dev', branch: 'dev'};
-const target = {gui_compatibility: 'ros-gui-1', layout: 1, data_schema: 1, updater_api: 1, maintenance_api: 1, firmware_protocol: 6, id: 'deployment-a9132f4e-274-1', source, revision: 'a9132f4e'.padEnd(40, 'a'), published_at: '2026-09-07T09:00:00Z', updater: {'linux/arm64': {version: 'deployment-a9132f4e-274-1'}}};
-const status = {
-    api: 1, capabilities: ['component-overrides', 'declared-services'], runtime: {identity: 'matched', health: 'healthy', checked_at: '2026-09-07T09:30:00Z'}, agent: {version: 'updater-1944f97d', revision: '1944f97d', platform: 'linux/arm64'}, trusted_repositories: [source.repository, 'wjcloudy/mowglinext'],
-    state: {policy: {source, interval_hours: 4, pinned: false}, installed_policy: {source, interval_hours: 4, pinned: true},
-        active: {...target, id: 'deployment-1944f97d-231-1', revision: '1944f97d'.padEnd(40, 'a')}, last_check: '2026-09-07T09:30:00Z', next_check: '2026-09-07T13:35:00Z', last_success: '2026-09-07T09:30:00Z',
-        releases: [target], notices: [{id: 'sha256:notice', deployment: target.id, kind: 'available', read: false, dismissed: false, created_at: '2026-09-07T09:30:00Z'}], history: [],
-    },
-};
-// Screenshot releases are illustrative fixtures, not claims about published upstream builds.
-const productionSource = {...source, track: 'stable', branch: 'main'};
-const productionTarget = {...target, source: productionSource, release_tag: 'v1.2.0'};
-const productionStatus = {...status, trusted_repositories: [source.repository], state: {...status.state,
-    policy: {...status.state.policy, source: productionSource},
-    installed_policy: {...status.state.installed_policy, source: productionSource},
-    active: {...status.state.active, source: productionSource, release_tag: 'v1.1.0'},
-    releases: [productionTarget],
-}};
-for (const mobile of [false, true]) {
-    test(`unpublished versions remain discoverable ${mobile ? 'mobile' : 'desktop'}`, async ({page}) => {
-        await page.setViewportSize(mobile ? {width: 390, height: 844} : {width: 1440, height: 1400});
-        const fixture = {...status, trusted_repositories: [source.repository], runtime: {...status.runtime, identity: 'custom'},
-            state: {...status.state, active: undefined, installed_policy: undefined, releases: [], notices: []}};
-        const posts: string[] = [];
-        await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/updater/state': fixture, '/api/system/versions': {docker_available: true, components: [], server: {version: 'dev'}}}});
-        page.on('request', r => {if (r.method() === 'POST' && r.url().includes('/system/updater/')) posts.push(r.url());});
-        await page.goto('/#/settings?section=updates');
-        await page.locator('.ant-segmented').getByText('Advanced', {exact: true}).click();
-        const panel = page.getByTestId('host-updater');
-        await expect(panel.getByRole('combobox', {name: 'Deployment version', exact: true})).toBeDisabled();
-        await expect(panel.getByRole('combobox', {name: 'GUI version', exact: true})).toBeDisabled();
-        await expect(panel.getByText(/Version choices require a compatible complete build/)).toBeVisible();
-        await expect(panel.getByRole('button', {name: 'Review installation', exact: true})).toBeDisabled();
-        await expect(panel.getByRole('button', {name: 'Check now', exact: true})).toBeEnabled();
-        await expect(panel.getByRole('checkbox')).toBeDisabled();
-        if (mobile) await panel.getByText('No installable build published for this source.', {exact: true}).scrollIntoViewIfNeeded();
-        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-        await page.screenshot({path: `tests/e2e/.artifacts/host-updater-no-versions-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
-        expect(posts).toEqual([]);
-    });
-    test(`release stack membership review ${mobile ? 'mobile' : 'desktop'}`, async ({page}) => {
-        await page.setViewportSize(mobile ? {width: 390, height: 844} : {width: 1440, height: 1100});
-        const next = {...productionTarget, id: 'illustration-production-130', release_tag: 'v1.3.0'};
-        const fixture = {...productionStatus, capabilities: [...status.capabilities, 'release-compose'], state: {...productionStatus.state, releases: [next], active: {...productionTarget, release_tag: 'v1.2.0'}}};
-        const posts: string[] = [];
-        await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/updater/state': fixture, '/api/system/versions': {docker_available: true, components: [], server: {version: 'dev'}}}});
-        page.on('request', r => {if (r.method() === 'POST' && r.url().includes('/system/updater/')) posts.push(new URL(r.url()).pathname);});
-        await page.route('**/api/system/updater/plan', route => route.fulfill({json: {
-            id: 'illustration-stack-plan', target: next, expires_at: '2026-09-07T09:45:00Z', previous: {}, images: {gui: 'fixture-gui', mowgli: 'fixture-ros', gps: 'fixture-gps', 'navigation-helper': 'fixture-helper'},
-            stack: {selection: {options: {gnss: 'universal', lidar: 'none'}}, changes: [
-                {service: 'mowgli', action: 'update'}, {service: 'gui', action: 'update'}, {service: 'gps', action: 'keep'},
-                {service: 'navigation-helper', action: 'add'}, {service: 'legacy-helper', action: 'remove'}, {service: 'mqtt', action: 'unmanaged'},
-            ]},
-        }}));
-        await page.goto('/#/settings?section=updates');
-        const panel = page.getByTestId('host-updater');
-        await expect(panel.getByText('v1.3.0')).toBeVisible();
-        expect(posts).toEqual([]);
-        await panel.getByRole('button', {name: 'Review installation', exact: true}).click();
-        const review = page.getByRole('dialog');
-        await expect(review.getByText('GPS: On', {exact: true})).toBeVisible();
-        await expect(review.getByText('LiDAR: Off', {exact: true})).toBeVisible();
-        await expect(review.getByText('Add', {exact: true})).toBeVisible();
-        await expect(review.getByText('Remove', {exact: true})).toBeVisible();
-        await expect(review.getByText('Keep · local', {exact: true})).toBeVisible();
-        await expect(review.getByText(/Removed containers retain their data/)).toBeVisible();
-        await expect(review).toHaveCSS('opacity', '1');
-        await expect(review.getByRole('button', {name: 'Install reviewed deployment', exact: true})).toBeInViewport();
-        await expect(panel.locator('button').filter({hasText: 'Check now'})).not.toHaveClass(/ant-btn-loading/);
-        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-        await page.screenshot({path: `tests/e2e/.artifacts/host-updater-stack-review-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
-        await review.getByRole('button', {name: 'Cancel', exact: true}).click();
-        expect(posts).toEqual(['/api/system/updater/plan']);
-    });
+const source = {repository:'mowglinext/mowglinext',track:'dev',branch:'dev'};
+const familyMap = {mowgli:'mowgli-ros2',gui:'mowglinext-gui',gps:'gps',lidar:'lidar-ldlidar',camera:'camera'};
+const contracts = Object.fromEntries(Object.values(familyMap).map(f=>[f,`${f}-contract-1`]));
+function release(id:string, track='dev', tag='') {
+    return {id,source:{...source,track,branch:track==='stable'?'main':'dev'},release_tag:tag,revision:(id.includes('new')?'a':'b').repeat(40),published_at:'2026-09-07T09:00:00Z',
+        layout:1,data_schema:1,updater_api:1,maintenance_api:1,firmware_protocol:6,component_compatibility:contracts,
+        service_choices:[{service:'mowgli',image:'mowgli-ros2'},{service:'gui',image:'mowglinext-gui'},{service:'gps',image:'gps',when:{gnss:'universal'}},{service:'lidar',image:'lidar-ldlidar',when:{lidar:'ldlidar'}}],
+        images:Object.fromEntries(Object.values(familyMap).map(f=>[f,{repository:`ghcr.io/${source.repository}/${f}`,platforms:{'linux/arm64':{manifest:'sha256:'+'1'.repeat(64)}}}])),
+        updater:{'linux/arm64':{version:'updater-current'}}};
+}
+function fixture(track='dev', mixed=false, expanded=false) {
+    const base=release('release-base',track,'v1.2.0');const next=release('release-new',track,'v1.3.0');const alternative=release('release-alternative',track,'v1.2.1');
+    if(expanded) {base.service_choices.push({service:'camera',image:'camera'});next.service_choices.push({service:'camera',image:'camera'});}
+    const names=expanded?['mowgli','gui','gps','lidar','camera']:['mowgli','gui','gps'];
+    const components=Object.fromEntries(names.map(name=>[name,{name:`mowgli-${name}`,family:familyMap[name as keyof typeof familyMap],reference:`ghcr.io/${source.repository}/${familyMap[name as keyof typeof familyMap]}:dev`,version:track==='stable'?(mixed&&['mowgli','gui'].includes(name)?'v1.2.1':'v1.2.0'):'dev',revision:'1944f97d'.padEnd(40,'a'),image:`sha256:installed-${name}`,healthy:true,healthcheck:false}]));
+    return {api:1,capabilities:['component-overrides','declared-services','release-compose','service-version-overrides'],
+        runtime:{identity:mixed?'mixed':'matched',health:'healthy',checked_at:'2026-09-07T09:30:00Z',selection:{gnss:'universal',lidar:expanded?'ldlidar':'none'},components},
+        agent:{version:'updater-current',revision:'1944f97d',platform:'linux/arm64'},trusted_repositories:[source.repository],
+        state:{policy:{source:base.source,interval_hours:4,pinned:false},installed_policy:{source:base.source,interval_hours:4,pinned:true},active:base,
+            overrides:mixed?{gui:alternative,mowgli:alternative}:{},last_check:'2026-09-07T09:30:00Z',next_check:'2026-09-07T13:35:00Z',last_success:'2026-09-07T09:30:00Z',releases:[next,base,alternative],notices:[],history:[]}};
+}
+const inventory={docker_available:true,server:{version:'dev'},components:[
+    ...['mowgli','gui','gps','lidar','camera'].map(name=>({name:`mowgli-${name}`,component:name==='mowgli'?'robot':name,version:'dev',revision:'1944f97d',state:'running',image:`ghcr.io/${source.repository}/${familyMap[name as keyof typeof familyMap]}:dev`,image_id:`sha256:installed-${name}`})),
+    {name:'mowgli-mqtt',component:'mqtt',version:'2.0.22',state:'running',image:'eclipse-mosquitto:2.0.22'},
+]};
+async function open(page:Page, data:ReturnType<typeof fixture>, mobile=false) {
+    await page.setViewportSize(mobile?{width:390,height:844}:{width:1440,height:1800});
+    const names=new Set(Object.values(data.runtime.components).map(c=>c.name));
+    await installMockBackend(page,{...SCENARIOS[0],rest:{'/api/system/updater/state':data,'/api/system/versions':{...inventory,components:inventory.components.filter(c=>c.component==='mqtt'||names.has(c.name)).map(c=>({...c,version:Object.values(data.runtime.components).find(r=>r.name===c.name)?.version??c.version}))}}});
+    const posts:{path:string;body:Record<string,unknown>}[]=[];const errors:string[]=[];
+    page.on('pageerror',e=>errors.push(e.message));
+    page.on('request',r=>{if(r.method()==='POST'&&r.url().includes('/system/updater/'))posts.push({path:new URL(r.url()).pathname,body:r.postDataJSON()});});
+    await page.goto('/#/settings?section=updates');await expect(page.getByTestId('host-updater')).toBeVisible();
+    return {panel:page.getByTestId('host-updater'),posts,errors};
+}
+async function advanced(page:Page) {await page.locator('.ant-segmented').getByText('Advanced',{exact:true}).click();}
+async function choose(page:Page,name:string,text:string) {
+    await page.getByRole('combobox',{name,exact:true}).locator('..').locator('..').click();
+    await page.locator('.ant-select-dropdown:visible').last().locator('.ant-select-item-option-content').getByText(text,{exact:true}).click();
+    await expect(page.locator('.ant-select-dropdown:visible')).toHaveCount(0);
+}
+async function shot(page:Page,name:string,mobile:boolean,focus?:string) {
+    if(mobile&&focus)await page.getByTestId(focus).evaluate(el=>el.scrollIntoView({block:'start'}));
+    await page.waitForTimeout(250);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await page.screenshot({path:`tests/e2e/.artifacts/${name}-${mobile?'mobile':'desktop'}.png`,fullPage:true,animations:'disabled'});
+}
+function plan(base:ReturnType<typeof release>, overrides:Record<string,ReturnType<typeof release>>={}) {
+    const names=[...new Set(['mowgli','gui','gps',...Object.keys(overrides)])];
+    return {id:'review-plan',target:base,overrides,previous:Object.fromEntries(names.map(n=>[n,'sha256:old-'+n])),images:Object.fromEntries(names.map(n=>[n,'sha256:new-'+n])),expires_at:'2026-09-07T09:45:00Z'};
 }
 
-test('changed installer selection can review the installed release without a new version', async ({page}) => {
-    const fixture = {...productionStatus, runtime: {...status.runtime, selection_pending: true}, state: {...productionStatus.state, releases: []}};
-    await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/updater/state': fixture}});
-    await page.goto('/#/settings?section=updates');
-    const panel = page.getByTestId('host-updater');
-    await expect(panel.getByText(/Installer hardware choices have changed/)).toBeVisible();
-    await expect(panel.getByRole('button', {name: 'Review installation', exact: true})).toBeEnabled();
-});
-for (const fixture of [
-    {name: 'development', prefix: 'host-updater', status: {...status, trusted_repositories: [source.repository]}, target, installed: 'Development · 1944f97d', available: 'Development · a9132f4e'},
-    {name: 'production', prefix: 'host-updater-production', status: productionStatus, target: productionTarget, installed: 'v1.1.0', available: 'v1.2.0'},
-]) for (const mobile of [false, true]) {
-    test(`coordinated ${fixture.name} update review ${mobile ? 'mobile' : 'desktop'}`, async ({page}) => {
-        await page.setViewportSize(mobile ? {width: 390, height: 844} : {width: 1440, height: 1100});
-        const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-        await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/updater/state': fixture.status, '/api/system/versions': {docker_available: true, components: [], server: {version: 'dev'}}}});
-        const requests: string[] = [];
-        page.on('request', r => {if (r.method() === 'POST' && r.url().includes('/system/updater/')) requests.push(new URL(r.url()).pathname);});
-        const digest = 'sha256:' + '1'.repeat(64);
-        await page.route('**/api/system/updater/plan', route => {expect(route.request().postDataJSON()).toEqual({deployment: fixture.target.id, pinned: true}); return route.fulfill({json: {id: 'plan-123', target: fixture.target, previous: {gui: 'sha256:previous-gui', mowgli: 'sha256:previous-ros'}, images: {gui: `ghcr.io/mowglinext/mowglinext/mowglinext-gui@${digest}`, mowgli: `ghcr.io/mowglinext/mowglinext/mowgli-ros2@${digest}`}, expires_at: '2026-09-07T09:45:00Z'}});});
-        await page.goto('/#/settings?section=updates');
-        const panel = page.getByTestId('host-updater');
-        await expect(panel.getByText(fixture.installed, {exact: true})).toBeVisible();
-        await expect(panel.getByText(fixture.available)).toBeVisible();
-        await expect(panel.getByRole('combobox')).toHaveCount(0);
-        await expect(panel.getByText(/wjcloudy/)).toHaveCount(0);
-        await expect(page.getByTestId('update-checks')).toHaveCount(0);
-        await expect(panel.getByText('Pinned', {exact: true})).toBeVisible();
-        expect(requests).toEqual([]);
-        await expect(page.locator('.ant-select-dropdown:visible')).toHaveCount(0);
-        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-        await page.screenshot({path: `tests/e2e/.artifacts/${fixture.prefix}-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
-        await panel.getByRole('button', {name: 'Review installation', exact: true}).click();
-        const review = page.getByRole('dialog');
-        await expect(review.getByText(fixture.available, {exact: true})).toBeVisible();
-        await expect(review.getByText(`${source.repository} · ${fixture.target.source.branch}`, {exact: true})).toBeVisible();
-        await expect(review.getByText('sha256:previous-gui', {exact: true})).not.toBeVisible();
-        await expect(review.getByText('Settings and maps are backed up before installation. Mainboard firmware is unchanged.')).toBeVisible();
-        expect(requests).toEqual(['/api/system/updater/plan']);
-        await expect(page.locator('.ant-modal')).not.toHaveClass(/ant-zoom/);
-        await expect(review).toHaveCSS('opacity', '1');
-        await expect(review).toHaveCSS('opacity', '1');
-        await expect(panel.locator('button').filter({hasText: 'Check now'})).not.toHaveClass(/ant-btn-loading/);
-        await page.screenshot({path: `tests/e2e/.artifacts/${fixture.prefix}-review-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
-        await review.getByRole('button', {name: 'Cancel', exact: true}).click();
-        expect(requests).not.toContain('/api/system/updater/apply');
-        await page.locator('.ant-segmented').getByText('Advanced', {exact: true}).click();
-        await expect(panel.getByRole('combobox', {name: 'Repository', exact: true})).toBeVisible();
-        await expect(panel.getByRole('checkbox')).toBeChecked();
-        if (fixture.name === 'development') {
-            await panel.getByRole('combobox', {name: 'Update source', exact: true}).locator('..').locator('..').click();
-            await page.locator('.ant-select-dropdown:visible').getByText('Custom branch', {exact: true}).click();
-            await panel.getByRole('textbox', {name: 'Custom branch', exact: true}).fill('feat/example-update');
-            await expect(panel.getByRole('button', {name: 'Review installation', exact: true})).toBeDisabled();
-        }
-        await expect(panel.getByText(/wjcloudy/)).toHaveCount(0);
-        await expect(page.locator('.ant-select-dropdown:visible')).toHaveCount(0);
-        await expect(page.locator('.ant-segmented-thumb')).toHaveCount(0);
-        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-        expect(await panel.evaluate(e => e.getBoundingClientRect().left)).toBeGreaterThanOrEqual(0);
-        await page.screenshot({path: `tests/e2e/.artifacts/${fixture.prefix}-advanced-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
-        expect(errors).toEqual([]);
-    });
-}
-test('reconnect preserves job status and never repeats an installation', async ({page}) => {
-    await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/updater/state': {...status, state: {...status.state, job: {id: 'job-123', kind: 'containers', phase: 'applying', plan: {target}}}}}});
-    await page.goto('/#/settings?section=updates');
-    const panel = page.getByTestId('host-updater');
-    await expect(panel.getByText('Replacing containers')).toBeVisible();
-    await page.route('**/api/system/updater/state', route => route.fulfill({status: 503, json: {error: 'GUI restarting'}}));
-    await expect(panel.getByText('Update in progress — reconnecting to the GUI')).toBeVisible({timeout: 12000});
-    await expect(panel.getByRole('button', {name: 'Review installation', exact: true})).toBeDisabled();
+for(const track of ['dev','stable'])for(const mobile of [false,true])test(`${track} release flow ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture(track);const {panel,posts,errors}=await open(page,data,mobile);const prefix=track==='dev'?'host-updater':'host-updater-production';
+    await expect(panel.getByText('Installed stack',{exact:true})).toBeVisible();await expect(panel.getByText('MQTT',{exact:true})).toBeVisible();
+    await expect(panel.getByRole('combobox')).toHaveCount(0);await expect(page.getByTestId('update-checks')).toHaveCount(0);
+    await shot(page,prefix,mobile,'stack-mowgli');
+    await page.route('**/api/system/updater/plan',r=>r.fulfill({json:plan(data.state.releases[0])}));
+    await panel.getByRole('button',{name:'Review changes',exact:true}).click();await expect(page.getByRole('dialog')).toBeVisible();
+    await expect(page.getByRole('dialog').getByRole('button',{name:'Install reviewed deployment'})).toBeInViewport();
+    await shot(page,prefix+'-review',mobile);await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();
+    expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:'release-new',pinned:true}}]);
+    await advanced(page);await expect(panel.getByRole('combobox',{name:'Robot software version',exact:true})).toBeEnabled();
+    await expect(panel.getByRole('combobox',{name:'GPS version',exact:true})).toBeEnabled();
+    await expect(panel.getByRole('combobox',{name:'Repository',exact:true})).not.toBeVisible();
+    await shot(page,prefix+'-advanced',mobile,'stack-mowgli');expect(errors).toEqual([]);
 });
 
-test('custom fork selection is saved explicitly and never installs on selection', async ({page}) => {
-    let current = structuredClone(status);
-    const posts: {path: string; body: unknown}[] = [];
-    await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/updater/state': current}});
-    await page.route('**/api/system/updater/state', route => route.fulfill({json: current}));
-    await page.route('**/api/system/updater/policy', async route => {
-        const body = route.request().postDataJSON();
-        posts.push({path: 'policy', body});
-        current = {...current, state: {...current.state, policy: body, releases: []}};
-        await route.fulfill({json: {ok: true}});
-    });
-    await page.route('**/api/system/updater/check', route => {posts.push({path: 'check', body: route.request().postDataJSON()}); return route.fulfill({status: 202});});
-    await page.goto('/#/settings?section=updates');
-    await page.locator('.ant-segmented').getByText('Advanced', {exact: true}).click();
-    const panel = page.getByTestId('host-updater');
-    await panel.getByRole('combobox', {name: 'Update source', exact: true}).locator('..').locator('..').click();
-    await page.locator('.ant-select-dropdown:visible').getByText('Custom branch', {exact: true}).click();
-    await panel.getByRole('textbox', {name: 'Custom branch', exact: true}).fill('feat/settings-updates');
-    await panel.getByRole('combobox', {name: 'Repository', exact: true}).locator('..').locator('..').click();
-    await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter({hasText: 'wjcloudy/mowglinext'}).click();
-    expect(posts).toEqual([]);
-    await panel.getByRole('button', {name: 'Save and check', exact: true}).click();
+for(const mobile of [false,true])test(`unpublished source ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture();data.runtime.identity='custom';data.state.releases=[];data.state.active=undefined as never;data.state.installed_policy=undefined as never;
+    const {panel,posts}=await open(page,data,mobile);await advanced(page);
+    await expect(panel.getByRole('combobox',{name:'Release version',exact:true})).toBeDisabled();
+    for(const name of ['Robot software','Web interface','GPS'])await expect(panel.getByRole('combobox',{name:name+' version',exact:true})).toBeDisabled();
+    await expect(panel.getByRole('button',{name:'Review changes',exact:true})).toBeDisabled();
+    await expect(panel.getByRole('button',{name:'Check for updates',exact:true})).toBeEnabled();
     await expect(panel.getByText('No installable build published for this source.')).toBeVisible();
-    expect(posts).toEqual([{path: 'policy', body: {source: {repository: 'wjcloudy/mowglinext', track: 'custom', branch: 'feat/settings-updates'}, interval_hours: 4, pinned: false}}, {path: 'check', body: {}}]);
-    await page.locator('.ant-segmented').getByText('Simple', {exact: true}).click();
-    await expect(panel.getByText(/wjcloudy\/mowglinext \/ feat\/settings-updates/)).toBeVisible();
-    await expect(panel.getByRole('button', {name: 'Review installation', exact: true})).toBeDisabled();
+    await shot(page,'host-updater-no-versions',mobile,'stack-mowgli');expect(posts).toEqual([]);
 });
 
-for (const mobile of [false, true]) {
-    test(`advanced GUI override and matched return ${mobile ? 'mobile' : 'desktop'}`, async ({page}) => {
-        await page.setViewportSize(mobile ? {width: 390, height: 844} : {width: 1440, height: 1100});
-        if (!mobile) await page.setViewportSize({width: 1440, height: 1400});
-        const base = {...productionTarget, id: 'deployment-prod-120', release_tag: 'v1.2.0'};
-        const gui = {...productionTarget, id: 'deployment-prod-121', release_tag: 'v1.2.1', revision: 'b'.repeat(40)};
-        const incompatible = {...productionTarget, id: 'deployment-prod-130', release_tag: 'v1.3.0', gui_compatibility: 'ros-gui-2'};
-        const mixed = {...productionStatus, runtime: {...status.runtime, identity: 'mixed'}, state: {...productionStatus.state,
-            active: base, overrides: {gui}, releases: [gui, base, incompatible]}};
-        const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-        await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/updater/state': mixed,
-            '/api/system/versions': {docker_available: true, components: [], server: {version: 'dev'}}}});
-        const requests: Record<string, unknown>[] = [];
-        await page.route('**/api/system/updater/plan', route => {
-            const body = route.request().postDataJSON(); requests.push(body);
-            const selectedBase = body.deployment === base.id ? base : gui;
-            return route.fulfill({json: {id: 'plan-mixed', target: selectedBase, overrides: body.gui_deployment ? {gui} : {},
-                previous: {gui: 'sha256:old-gui', mowgli: 'sha256:base-ros'},
-                images: {gui: 'ghcr.io/mowglinext/mowglinext/mowglinext-gui@sha256:' + 'a'.repeat(64), mowgli: 'ghcr.io/mowglinext/mowglinext/mowgli-ros2@sha256:' + 'b'.repeat(64)},
-                expires_at: '2026-09-07T09:45:00Z'}});
-        });
-        await page.goto('/#/settings?section=updates');
-        const panel = page.getByTestId('host-updater');
-        await expect(panel.getByText('Custom combination', {exact: true})).toBeVisible();
-        await expect(panel.getByText(/Container health: Running/)).toBeVisible();
-        await page.screenshot({path: `tests/e2e/.artifacts/host-updater-mixed-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
-        await page.locator('.ant-segmented').getByText('Advanced', {exact: true}).click();
-        await panel.getByRole('combobox', {name: 'Deployment version', exact: true}).locator('..').locator('..').click();
-        await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter({hasText: 'v1.2.0'}).click();
-        await panel.getByRole('combobox', {name: 'GUI version', exact: true}).locator('..').locator('..').click();
-        await expect(page.locator('.ant-select-dropdown:visible').getByText('v1.3.0', {exact: true})).toHaveCount(0);
-        await page.locator('.ant-select-dropdown:visible').getByText('v1.2.1', {exact: true}).click();
-        await expect(page.locator('.ant-select-dropdown:visible')).toHaveCount(0);
-        if (mobile) await panel.getByRole('combobox', {name: 'GUI version', exact: true}).scrollIntoViewIfNeeded();
-        expect(requests).toEqual([]);
-        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-        await page.screenshot({path: `tests/e2e/.artifacts/host-updater-gui-override-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
-        await panel.getByRole('button', {name: 'Review installation', exact: true}).click();
-        await expect(page.getByRole('dialog').getByText('Custom combination: GUI v1.2.1; other components use the base release.')).toBeVisible();
-        expect(requests[0]).toEqual({deployment: base.id, pinned: true, gui_deployment: gui.id});
-        await expect(page.getByRole('dialog')).toHaveCSS('opacity', '1');
-        await expect(panel.locator('button').filter({hasText: 'Check now'})).not.toHaveClass(/ant-btn-loading/);
-        await page.screenshot({path: `tests/e2e/.artifacts/host-updater-gui-review-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
-        await page.getByRole('dialog').getByRole('button', {name: 'Cancel', exact: true}).click();
-        await page.locator('.ant-segmented').getByText('Simple', {exact: true}).click();
-        await panel.getByRole('button', {name: 'Review matched release', exact: true}).click();
-        expect(requests[1]).toEqual({deployment: gui.id, pinned: true});
-        expect(errors).toEqual([]);
-    });
-}
+for(const mobile of [false,true])test(`stack membership review ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture('stable');const {panel,posts}=await open(page,data,mobile);
+    await page.route('**/api/system/updater/plan',r=>r.fulfill({json:{...plan(data.state.releases[0]),stack:{selection:{options:{gnss:'universal',lidar:'none'}},changes:[{service:'mowgli',action:'update'},{service:'gui',action:'update'},{service:'gps',action:'keep'},{service:'navigation-helper',action:'add'},{service:'legacy-helper',action:'remove'},{service:'mqtt',action:'unmanaged'}]}}}));
+    await panel.getByRole('button',{name:'Review changes',exact:true}).click();const dialog=page.getByRole('dialog');
+    await expect(dialog.getByText('GPS: On',{exact:true})).toBeVisible();await expect(dialog.getByText('LiDAR: Off',{exact:true})).toBeVisible();
+    for(const text of ['Add','Remove','Keep · local'])await expect(dialog.getByText(text,{exact:true})).toBeVisible();
+    await expect(dialog.getByRole('button',{name:'Install reviewed deployment'})).toBeInViewport();await shot(page,'host-updater-stack-review',mobile);
+    expect(posts.map(p=>p.path)).toEqual(['/api/system/updater/plan']);
+});
 
-test('manual Docker drift is visible independently of container health', async ({page}) => {
-    const drifted = {...status, runtime: {...status.runtime, identity: 'drifted', health: 'healthy'}};
-    await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/updater/state': drifted}});
-    await page.goto('/#/settings?section=updates');
-    const panel = page.getByTestId('host-updater');
-    await expect(panel.getByText('Installation changed', {exact: true})).toBeVisible();
-    await expect(panel.getByText(/Container health: Running/)).toBeVisible();
-    await expect(panel.getByRole('button', {name: 'Review matched release'})).toBeEnabled();
+for(const mobile of [false,true])test(`independent components and matched reset ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture('stable',true,true);const alternative=data.state.releases[2];const incompatible={...release('incompatible','stable','v2.0.0'),component_compatibility:{}};data.state.releases.push(incompatible);
+    const {panel,posts,errors}=await open(page,data,mobile);await shot(page,'host-updater-mixed',mobile,'stack-mowgli');await advanced(page);
+    for(const name of ['Robot software','Web interface','GPS','LiDAR','camera'])await choose(page,name+' version','v1.2.1');
+    await expect(panel.getByRole('button',{name:'Reset all to release versions'})).toBeVisible();
+    await panel.getByRole('combobox',{name:'GPS version',exact:true}).locator('..').locator('..').click();
+    await expect(page.locator('.ant-select-dropdown:visible .ant-select-item-option-disabled').filter({hasText:'v2.0.0'})).toBeVisible();await page.keyboard.press('Escape');
+    await shot(page,'host-updater-gui-override',mobile,'stack-gui');await shot(page,'host-updater-component-overrides',mobile,'stack-gps');
+    const overrides=Object.fromEntries(['mowgli','gui','gps','lidar','camera'].map(name=>[name,alternative]));
+    await page.route('**/api/system/updater/plan',r=>r.fulfill({json:plan(data.state.releases[0],overrides)}));
+    expect(posts).toEqual([]);await panel.getByRole('button',{name:'Review changes',exact:true}).click();
+    expect(posts[0].body).toEqual({deployment:'release-new',pinned:true,component_deployments:{mowgli:alternative.id,gui:alternative.id,gps:alternative.id,lidar:alternative.id,camera:alternative.id}});
+    await expect(page.getByRole('dialog').getByText('Robot software: custom version v1.2.1')).toBeVisible();
+    await expect(page.getByRole('dialog').getByText('GPS: custom version v1.2.1')).toBeVisible();
+    await shot(page,'host-updater-gui-review',mobile);await shot(page,'host-updater-component-review',mobile);
+    await page.getByRole('dialog').getByRole('button',{name:'Cancel',exact:true}).click();
+    await panel.getByRole('button',{name:'Reset all to release versions'}).click();
+    await expect(panel.getByRole('button',{name:'Reset all to release versions'})).toHaveCount(0);
+    await choose(page,'GPS version','v1.2.1');await page.locator('.ant-segmented').getByText('Simple',{exact:true}).click();
+    await panel.getByRole('button',{name:'Review matched release',exact:true}).click();expect(posts[1].body).toEqual({deployment:'release-new',pinned:true});expect(errors).toEqual([]);
+});
+
+test('preferences stay separate and source changes never install',async({page})=>{
+    const data=fixture();data.trusted_repositories.push('wjcloudy/mowglinext');const {panel,posts}=await open(page,data);await advanced(page);
+    await panel.getByText('Update settings',{exact:true}).click();await choose(page,'Update source','Custom branch');
+    await panel.getByRole('textbox',{name:'Custom branch',exact:true}).fill('feature/test');
+    await choose(page,'Repository','wjcloudy/mowglinext');
+    expect(posts).toEqual([]);await expect(panel.getByRole('button',{name:'Review changes',exact:true})).toBeDisabled();
+    await page.route('**/api/system/updater/policy',r=>r.fulfill({json:{ok:true}}));await page.route('**/api/system/updater/check',r=>r.fulfill({status:202,body:''}));
+    await panel.getByRole('button',{name:'Save settings',exact:true}).click();await expect.poll(()=>posts.length).toBe(2);
+    expect(posts.map(p=>p.path)).toEqual(['/api/system/updater/policy','/api/system/updater/check']);
+    expect(posts[0].body).toMatchObject({source:{repository:'wjcloudy/mowglinext',track:'custom',branch:'feature/test'}});
+});
+
+test('host updater selection has its own reviewed action',async({page})=>{
+    const data=fixture('stable');data.state.releases[2].updater['linux/arm64'].version='updater-alternative';const {panel,posts}=await open(page,data);await advanced(page);
+    await choose(page,'Update service version','v1.2.1');expect(posts).toEqual([]);
+    await panel.getByRole('button',{name:'Update the update service'}).click();await expect(page.getByRole('dialog')).toBeVisible();expect(posts).toEqual([]);
+});
+
+test('unknown health and runtime drift remain distinct',async({page})=>{
+    const data=fixture();data.runtime.identity='drifted';data.runtime.health='healthy';const {panel}=await open(page,data);
+    await expect(panel.getByText('Installation changed',{exact:true})).toBeVisible();await expect(panel.getByText(/Container health: Running/)).toBeVisible();
+    await expect(panel.getByRole('button',{name:'Review matched release',exact:true})).toBeEnabled();
+});
+
+
+test('cached progress survives GUI reconnect without a new check',async({page})=>{
+    const data=fixture(); const {panel,posts}=await open(page,data);
+    await page.route('**/api/system/updater/state',r=>r.fulfill({json:{...data,state:{...data.state,job:{id:'job-1',phase:'verifying',started_at:'2026-09-07T09:30:00Z',plan:plan(data.state.releases[0])}}}}));
+    await expect(panel.getByRole('button',{name:'Review changes',exact:true})).toBeDisabled({timeout:10000});
+    await page.route('**/api/system/updater/state',r=>r.fulfill({status:503,json:{error:'restarting'}}));
+    await expect(panel.getByText(/reconnecting to the GUI/)).toBeVisible({timeout:10000});expect(posts).toEqual([]);
+});
+
+test('pending installer choices can be reviewed on the current release',async({page})=>{
+    const data=fixture();data.state.releases=[data.state.active];Object.assign(data.runtime,{selection_pending:true});
+    const {panel,posts}=await open(page,data);
+    await expect(panel.getByRole('button',{name:'Review changes',exact:true})).toBeEnabled();
+    await page.route('**/api/system/updater/plan',r=>r.fulfill({json:plan(data.state.active)}));
+    await panel.getByRole('button',{name:'Review changes',exact:true}).click();
+    expect(posts[0].body).toEqual({deployment:data.state.active.id,pinned:true});
+});
+
+test('missing platform and disabled sensors cannot be selected',async({page})=>{
+    const data=fixture('stable');delete data.state.releases[2].images.gps.platforms['linux/arm64'];
+    const {panel}=await open(page,data);await advanced(page);
+    await expect(panel.getByRole('combobox',{name:'LiDAR version',exact:true})).toHaveCount(0);
+    await panel.getByRole('combobox',{name:'GPS version',exact:true}).locator('..').locator('..').click();
+    await expect(page.locator('.ant-select-dropdown:visible .ant-select-item-option-disabled').filter({hasText:'v1.2.1'})).toBeVisible();
+});
+
+for(const mobile of [false,true])test(`upstream custom branch settings ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture(); const {panel,posts}=await open(page,data,mobile);await advanced(page);
+    const preferences=panel.locator('.update-preferences');await preferences.locator(':scope > summary').click();
+    await choose(page,'Update source','Custom branch');await panel.getByRole('textbox',{name:'Custom branch',exact:true}).fill('feat/example-update');
+    await preferences.evaluate(el=>el.scrollIntoView({block:'center'}));
+    await shot(page,'host-updater-preferences',mobile);expect(posts).toEqual([]);
 });

@@ -210,6 +210,15 @@ func (b DockerBackend) PlanStack(ctx context.Context, d Deployment, overrides ma
 }
 
 func (b DockerBackend) planBundle(ctx context.Context, d Deployment, overrides map[string]Deployment, bundle ComposeBundle, selection StackSelection) (map[string]string, *StackPlan, error) {
+	if d.ServiceChoices != nil {
+		choices, err := bundle.ServiceChoices()
+		if err != nil {
+			return nil, nil, err
+		}
+		if !reflect.DeepEqual(choices, d.ServiceChoices) {
+			return nil, nil, errors.New("release service choices disagree with verified Compose bundle")
+		}
+	}
 	ready, err := b.readiness(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -286,6 +295,9 @@ func (b DockerBackend) planBundle(ctx context.Context, d Deployment, overrides m
 	}
 	if len(nextManaged) != len(releaseManaged) {
 		return nil, nil, errors.New("local overrides cannot add undeclared managed services")
+	}
+	if err := validateOverrides(d, overrides, nextManaged); err != nil {
+		return nil, nil, err
 	}
 	images := map[string]string{}
 	for name, contract := range nextManaged {

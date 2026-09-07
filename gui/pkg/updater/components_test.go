@@ -208,7 +208,8 @@ func TestGUIOverrideRejectsMissingOrIncompatibleContracts(t *testing.T) {
 		func(d *Deployment) { d.DataSchema++ },
 		func(d *Deployment) { d.Source.Track = "custom"; d.Source.Branch = "feature" },
 	} {
-		m, _, _ := setup(t, "")
+		m, fake, _ := setup(t, "")
+		m.backend = &componentBackend{fakeBackend: fake, images: map[string]string{"gui": "old-gui", "mowgli": "old-ros"}}
 		base := fixture()
 		base.GUICompatibility = "ros-gui-1"
 		gui := guiFixture()
@@ -221,7 +222,8 @@ func TestGUIOverrideRejectsMissingOrIncompatibleContracts(t *testing.T) {
 }
 
 func TestComponentPlanHTTPAndReadOnlyRuntime(t *testing.T) {
-	m, _, source := setup(t, "")
+	m, fake, source := setup(t, "")
+	m.backend = &componentBackend{fakeBackend: fake, images: map[string]string{"gui": "old-gui", "mowgli": "old-ros"}}
 	base := fixture()
 	base.GUICompatibility = "ros-gui-1"
 	gui := guiFixture()
@@ -295,4 +297,17 @@ func TestWorkerDowngradeCannotDiscardComponentProvenance(t *testing.T) {
 	if err := validateWorkerProbe([]byte(`{"version":"candidate","api":1,"state_schema":3}`), "candidate"); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func (b *componentBackend) PlanSelectedImages(ctx context.Context, d Deployment, overrides map[string]Deployment) (map[string]string, error) {
+	services := map[string]managedService{"gui": {Image: "mowglinext-gui"}, "mowgli": {Image: "mowgli-ros2"}}
+	if err := validateOverrides(d, overrides, services); err != nil {
+		return nil, err
+	}
+	images, _ := b.PlanImages(ctx, d)
+	for service, selected := range overrides {
+		values, _ := b.PlanImages(ctx, selected)
+		images[service] = values[service]
+	}
+	return images, nil
 }
