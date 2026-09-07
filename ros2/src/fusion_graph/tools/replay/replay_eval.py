@@ -7,6 +7,11 @@ LEVER = 0.3
 def base_from_gps(r):  # antenna sits LEVER m ahead of base along the fused yaw
     th = math.radians(f(r, "fyaw")); return (f(r, "gx") - LEVER * math.cos(th), f(r, "gy") - LEVER * math.sin(th))
 # outage = rows where gps_age > 3 s
+# shadow / anchoring candidates vs fused, under RTK Fixed
+cand = [(math.hypot(f(r, "cand_x") - f(r, "fx"), f(r, "cand_y") - f(r, "fy")), r["cand_ok"]) for r in rows if r["rtk_mode"] == "3" and not math.isnan(f(r, "cand_x"))]
+if cand:
+    d = sorted(c[0] for c in cand)
+    print(f"candidates under RTK Fixed: n={len(d)} |cand-fused| p50={d[len(d)//2]:.2f} p90={d[int(0.9*(len(d)-1))]:.2f} max={d[-1]:.2f} m; >1 m: {sum(1 for x in d if x > 1.0)}; accepted&>1m: {sum(1 for x, v in cand if x > 1.0 and v == '0.0')}")
 out = [i for i, r in enumerate(rows) if f(r, "gps_age") > 3.0]
 if not out: print("no outage found"); sys.exit(0)
 i0, i1 = out[0], out[-1]

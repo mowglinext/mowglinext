@@ -94,7 +94,7 @@ void FusionGraphNode::RebuildLidarAnchorMap()
     // first update after a 0.10 m seed, never after a re-seed. One discarded
     // update with the current odom pose and no measurement fills the window;
     // the seed that follows then sees a zero delta.
-    lidar_anchor_filter_->update(Sophus::SE2d(dr_yaw_, Eigen::Vector2d(dr_x_, dr_y_)), {});
+    lidar_anchor_filter_->update(lidar_anchor_odom_.pose(), {});
   }
   else
   {
@@ -123,7 +123,7 @@ void FusionGraphNode::SeedLidarAnchorFilter(const Sophus::SE2d& pose,
 void FusionGraphNode::ResetLidarAnchorDeadReckoningReference(const Sophus::SE2d& pose)
 {
   lidar_anchor_seed_pose_ = pose;
-  lidar_anchor_seed_dr_ = Sophus::SE2d(dr_yaw_, Eigen::Vector2d(dr_x_, dr_y_));
+  lidar_anchor_seed_dr_ = lidar_anchor_odom_.pose();
   lidar_anchor_last_dr_ = lidar_anchor_seed_dr_;
   lidar_anchor_dr_path_m_ = 0.0;
   lidar_anchor_dr_ref_s_ = MonotonicSeconds();
@@ -189,6 +189,11 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   {
     rtk_age_s = std::max(0.0, (this->now() - *last_rtk_fixed_stamp_).seconds());
   }
+  // Continuous dead reckoning: the node's dr_* re-bases every
+  // odom_rebase_dist_m and resets on set_pose / dock re-anchor; the filter
+  // and the plausibility witness must never see those steps.
+  const Sophus::SE2d dr_now =
+      lidar_anchor_odom_.Advance(Sophus::SE2d(dr_yaw_, Eigen::Vector2d(dr_x_, dr_y_)));
   const bool map_has_structure = lidar_map_occupied_cells_ > 0;
   const auto d = lidar_anchor_gate_->Step(rtk_age_s, map_has_structure, now_s);
 
@@ -240,7 +245,6 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
     ResetLidarAnchorDeadReckoningReference(fused);
   }
 
-  const Sophus::SE2d dr_now(dr_yaw_, Eigen::Vector2d(dr_x_, dr_y_));
   lidar_anchor_dr_path_m_ += (dr_now.translation() - lidar_anchor_last_dr_.translation()).norm();
   lidar_anchor_last_dr_ = dr_now;
   const Sophus::SE2d dr_pred = lidar_anchor_seed_pose_ * lidar_anchor_seed_dr_.inverse() * dr_now;

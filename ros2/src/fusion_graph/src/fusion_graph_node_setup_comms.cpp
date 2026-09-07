@@ -403,6 +403,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         add("lidar_anchor_rej_dr", std::to_string(lidar_anchor_rej_dr_));
         add("lidar_anchor_reseeds", std::to_string(lidar_anchor_reseeds_));
         add("lidar_anchor_shadow", lidar_anchor_shadow_mode_ ? "1" : "0");
+        add("lidar_anchor_odom_rebases", std::to_string(lidar_anchor_odom_.rebases()));
         add("scan_matches_fail", std::to_string(scan_matches_fail_));
         // Robustness-pass health counters. Each is a
         // cumulative count since process start; the

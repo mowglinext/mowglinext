@@ -39,6 +39,7 @@
 
 #include "fusion_graph/dr_slip_veto.hpp"
 #include "fusion_graph/graph_manager.hpp"
+#include "fusion_graph/lidar_anchor_odom.hpp"
 #include "fusion_graph/lidar_anchor_validator.hpp"
 #include "fusion_graph/lidar_map_anchor_gate.hpp"
 #include "fusion_graph/lidar_occupancy_mapper.hpp"
@@ -466,6 +467,7 @@ private:
   bool lidar_anchor_shadow_seeded_ = false;
   // Dead-reckoning witness reference: map pose at seed, odom pose at seed,
   // path driven since, and when the reference was last set.
+  ContinuousOdom lidar_anchor_odom_;  // re-base-proof dead reckoning fed to the filter + witness
   Sophus::SE2d lidar_anchor_seed_pose_;
   Sophus::SE2d lidar_anchor_seed_dr_;
   Sophus::SE2d lidar_anchor_last_dr_;
