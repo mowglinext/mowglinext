@@ -16,3 +16,7 @@
     .installed-versions dd { margin-bottom: 9px; }
     .installed-versions summary { min-height: 44px; }
 }
+
+.updater-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; width: 100%; }
+.updater-options-help { grid-column: 1 / -1; }
+@media (max-width: 600px) { .updater-options { grid-template-columns: minmax(0, 1fr); } }

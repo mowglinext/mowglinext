@@ -4,6 +4,60 @@ Settings → Updates reports installed software, mainboard firmware and web buil
 identities. On a managed installation it also checks for complete deployments and
 installs a reviewed selection. Updates are never installed automatically.
 
+## Simple and Advanced views
+
+The screen opens in **Simple**. It shows the installed version and pin, the source
+being checked, the available version and last check, followed by **Check now**
+and **Review installation**. Firmware health, errors, active update/recovery
+status and recovery actions remain visible. The updater service offers its own
+update action only when a different published binary is available.
+
+**Advanced** adds source, repository, branch, check frequency, retained-version
+selection and pin controls. Installed container identities, web build details,
+manual per-image comparisons and deployment history also live here. The view
+switch changes presentation only: it does not check remotely, install anything
+or change policy. Unsaved source edits must be saved or reset before review.
+Simple always reviews the latest published deployment and preserves an existing
+pin; switching back from Advanced cannot install a hidden older selection.
+
+The confirmation names the version, repository/branch and affected components.
+It explains downtime, backups and firmware scope. Exact before/after image
+identities are under **Container image details**. This keeps the ordinary path
+short while preserving the information needed to assess custom builds or
+troubleshoot recovery. The same control and order are used on desktop and mobile;
+Advanced fields stack into one column on narrow screens.
+
+### Selecting another branch or fork
+
+1. Open **Advanced** and choose **Production**, **Development** or **Custom branch**.
+2. Choose an enabled repository. For Custom branch, type the full name, for
+   example `feat/settings-updates`; slashes are preserved. This is a branch-name
+   field, not a list of every GitHub branch.
+3. Click **Save and check**. Choose Latest or a retained deployment, then Review
+   installation. Selecting a source alone never replaces containers.
+
+An administrator enables a fork by adding it to the existing host config's list
+(preserve the other settings), for example:
+
+```json
+"trusted_repositories": [
+  "mowglinext/mowglinext",
+  "wjcloudy/mowglinext"
+]
+```
+
+The file is `/etc/mowgli-updater.json`. Restart `mowgli-updater.service` while no
+update/recovery is in progress to load the new list. The repository picker is
+populated from that list; the browser cannot add arbitrary repositories.
+
+Each selected source must publish the same complete deployment format with
+readable release assets and GHCR images for the host architecture. A forked branch
+with code but no complete published deployment shows **No installable build**.
+Production/dev tracks can also be selected within a trusted fork. The upstream
+source remains available for switching back. The current PR branch has not yet
+completed an end-to-end deployment publication/field trial; ordinary branch image
+builds by themselves do not make it installable through this screen.
+
 ## Supported installations
 
 The host updater is a static Go executable for **Linux ARM64 or AMD64**, supervised

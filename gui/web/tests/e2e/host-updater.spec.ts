@@ -5,9 +5,9 @@ import {installMockBackend} from './mock/mockBackend';
 const source = {repository: 'mowglinext/mowglinext', track: 'dev', branch: 'dev'};
 const target = {id: 'deployment-a9132f4e-274-1', source, revision: 'a9132f4e'.padEnd(40, 'a'), published_at: '2026-09-07T09:00:00Z', updater: {'linux/arm64': {version: 'deployment-a9132f4e-274-1'}}};
 const status = {
-    api: 1, agent: {version: 'updater-1944f97d', revision: '1944f97d', platform: 'linux/arm64'}, trusted_repositories: [source.repository],
+    api: 1, agent: {version: 'updater-1944f97d', revision: '1944f97d', platform: 'linux/arm64'}, trusted_repositories: [source.repository, 'wjcloudy/mowglinext'],
     state: {policy: {source, interval_hours: 4, pinned: false}, installed_policy: {source, interval_hours: 4, pinned: true},
-        active: {...target, id: 'deployment-1944f97d-231-1'}, last_check: '2026-09-07T09:30:00Z', next_check: '2026-09-07T13:35:00Z', last_success: '2026-09-07T09:30:00Z',
+        active: {...target, id: 'deployment-1944f97d-231-1', revision: '1944f97d'.padEnd(40, 'a')}, last_check: '2026-09-07T09:30:00Z', next_check: '2026-09-07T13:35:00Z', last_success: '2026-09-07T09:30:00Z',
         releases: [target], notices: [{id: 'sha256:notice', deployment: target.id, kind: 'available', read: false, dismissed: false, created_at: '2026-09-07T09:30:00Z'}], history: [],
     },
 };
@@ -19,23 +19,39 @@ for (const mobile of [false, true]) {
         const requests: string[] = [];
         page.on('request', r => {if (r.method() === 'POST' && r.url().includes('/system/updater/')) requests.push(new URL(r.url()).pathname);});
         const digest = 'sha256:' + '1'.repeat(64);
-        await page.route('**/api/system/updater/plan', route => route.fulfill({json: {id: 'plan-123', target, previous: {gui: 'sha256:previous-gui', mowgli: 'sha256:previous-ros'}, images: {gui: `ghcr.io/mowglinext/mowglinext/mowglinext-gui@${digest}`, mowgli: `ghcr.io/mowglinext/mowglinext/mowgli-ros2@${digest}`}, expires_at: '2026-09-07T09:45:00Z'}}));
+        await page.route('**/api/system/updater/plan', route => {expect(route.request().postDataJSON()).toEqual({deployment: target.id, pinned: true}); return route.fulfill({json: {id: 'plan-123', target, previous: {gui: 'sha256:previous-gui', mowgli: 'sha256:previous-ros'}, images: {gui: `ghcr.io/mowglinext/mowglinext/mowglinext-gui@${digest}`, mowgli: `ghcr.io/mowglinext/mowglinext/mowgli-ros2@${digest}`}, expires_at: '2026-09-07T09:45:00Z'}});});
         await page.goto('/#/settings?section=updates');
         const panel = page.getByTestId('host-updater');
-        await expect(panel.getByText('updater-1944f97d', {exact: true})).toBeVisible();
+        await expect(panel.getByText('Development · 1944f97d', {exact: true})).toBeVisible();
+        await expect(panel.getByRole('combobox')).toHaveCount(0);
+        await expect(page.getByTestId('update-checks')).toHaveCount(0);
         await expect(panel.getByText('Pinned', {exact: true})).toBeVisible();
         expect(requests).toEqual([]);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
         await page.screenshot({path: `tests/e2e/.artifacts/host-updater-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true});
         await panel.getByRole('button', {name: 'Review installation', exact: true}).click();
         const review = page.getByRole('dialog');
-        await expect(review.getByText('sha256:previous-gui', {exact: true})).toBeVisible();
+        await expect(review.getByText('sha256:previous-gui', {exact: true})).not.toBeVisible();
+        await expect(review.getByText('Settings and maps are backed up before installation. Mainboard firmware is unchanged.')).toBeVisible();
         expect(requests).toEqual(['/api/system/updater/plan']);
         await expect(page.locator('.ant-modal')).not.toHaveClass(/ant-zoom/);
         await expect(review).toHaveCSS('opacity', '1');
         await page.screenshot({path: `tests/e2e/.artifacts/host-updater-review-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true});
         await review.getByRole('button', {name: 'Cancel', exact: true}).click();
         expect(requests).not.toContain('/api/system/updater/apply');
+        await page.locator('.ant-segmented').getByText('Advanced', {exact: true}).click();
+        await expect(panel.getByRole('combobox', {name: 'Repository', exact: true})).toBeVisible();
+        await expect(panel.getByRole('checkbox')).toBeChecked();
+        await panel.getByRole('combobox', {name: 'Update source', exact: true}).locator('..').locator('..').click();
+        await page.locator('.ant-select-dropdown:visible').getByText('Custom branch', {exact: true}).click();
+        await panel.getByRole('textbox', {name: 'Custom branch', exact: true}).fill('feat/settings-updates');
+        await panel.getByRole('combobox', {name: 'Repository', exact: true}).locator('..').locator('..').click();
+        await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter({hasText: 'wjcloudy/mowglinext'}).click();
+        await expect(panel.getByRole('button', {name: 'Review installation', exact: true})).toBeDisabled();
+        await expect(page.locator('.ant-select-dropdown:visible')).toHaveCount(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        expect(await panel.evaluate(e => e.getBoundingClientRect().left)).toBeGreaterThanOrEqual(0);
+        await page.screenshot({path: `tests/e2e/.artifacts/host-updater-advanced-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true});
         expect(errors).toEqual([]);
     });
 }
@@ -46,5 +62,34 @@ test('reconnect preserves job status and never repeats an installation', async (
     await expect(panel.getByText('Replacing containers')).toBeVisible();
     await page.route('**/api/system/updater/state', route => route.fulfill({status: 503, json: {error: 'GUI restarting'}}));
     await expect(panel.getByText('Update in progress — reconnecting to the GUI')).toBeVisible({timeout: 12000});
+    await expect(panel.getByRole('button', {name: 'Review installation', exact: true})).toBeDisabled();
+});
+
+test('custom fork selection is saved explicitly and never installs on selection', async ({page}) => {
+    let current = structuredClone(status);
+    const posts: {path: string; body: unknown}[] = [];
+    await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/updater/state': current}});
+    await page.route('**/api/system/updater/state', route => route.fulfill({json: current}));
+    await page.route('**/api/system/updater/policy', async route => {
+        const body = route.request().postDataJSON();
+        posts.push({path: 'policy', body});
+        current = {...current, state: {...current.state, policy: body, releases: []}};
+        await route.fulfill({json: {ok: true}});
+    });
+    await page.route('**/api/system/updater/check', route => {posts.push({path: 'check', body: route.request().postDataJSON()}); return route.fulfill({status: 202});});
+    await page.goto('/#/settings?section=updates');
+    await page.locator('.ant-segmented').getByText('Advanced', {exact: true}).click();
+    const panel = page.getByTestId('host-updater');
+    await panel.getByRole('combobox', {name: 'Update source', exact: true}).locator('..').locator('..').click();
+    await page.locator('.ant-select-dropdown:visible').getByText('Custom branch', {exact: true}).click();
+    await panel.getByRole('textbox', {name: 'Custom branch', exact: true}).fill('feat/settings-updates');
+    await panel.getByRole('combobox', {name: 'Repository', exact: true}).locator('..').locator('..').click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter({hasText: 'wjcloudy/mowglinext'}).click();
+    expect(posts).toEqual([]);
+    await panel.getByRole('button', {name: 'Save and check', exact: true}).click();
+    await expect(panel.getByText('No installable build published for this source.')).toBeVisible();
+    expect(posts).toEqual([{path: 'policy', body: {source: {repository: 'wjcloudy/mowglinext', track: 'custom', branch: 'feat/settings-updates'}, interval_hours: 4, pinned: false}}, {path: 'check', body: {}}]);
+    await page.locator('.ant-segmented').getByText('Simple', {exact: true}).click();
+    await expect(panel.getByText(/wjcloudy\/mowglinext \/ feat\/settings-updates/)).toBeVisible();
     await expect(panel.getByRole('button', {name: 'Review installation', exact: true})).toBeDisabled();
 });

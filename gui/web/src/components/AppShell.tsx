@@ -133,7 +133,9 @@ export function AppShell() {
     return (
       <div data-concept style={{
         display: 'flex', flexDirection: 'column',
-        height: '100%', background: colors.bgBase, overflow: 'hidden',
+        // The frame never scrolls; only main does. Unlike hidden, clip also
+        // prevents focused selects from shifting this frame horizontally.
+        height: '100%', background: colors.bgBase, overflow: 'clip',
       }}>
         <style>{KEYFRAMES_CSS}</style>
         <AuroraBackdrop/>

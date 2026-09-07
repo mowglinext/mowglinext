@@ -3320,6 +3320,7 @@
     }
   },
   "hostUpdater": {
+    "resetSource": "Reset changes",
     "agentNotice": "An update to the host updater is available",
     "title": "Updates and recovery",
     "agent": "Host updater",
@@ -3345,7 +3346,7 @@
     "latest": "Latest published",
     "pin": "Pin this deployment; continue notifying about newer builds",
     "review": "Review installation",
-    "updateAgent": "Update host updater",
+    "updateAgent": "Update the update service",
     "agentHelp": "The updater will restart separately from the containers. Its launcher retains the previous binary if the new version fails to start.",
     "history": "Deployment history",
     "rollback": "Restore previous deployment",
@@ -3374,6 +3375,25 @@
       "recovery_required": "Recovery required — mower remains inhibited",
       "failed": "Update stopped before activation"
     },
-    "recover": "Retry recovery"
+    "recover": "Retry recovery",
+    "softwareUpdates": "Software updates",
+    "simple": "Simple",
+    "advanced": "Advanced",
+    "viewMode": "Update view",
+    "currentVersion": "Current version",
+    "checkingSource": "Checking",
+    "availableVersion": "Available to install",
+    "latestInstalled": "Selected version is already installed",
+    "notChecked": "Check for available software updates.",
+    "checkNow": "Check now",
+    "simpleHelp": "Change channel, choose an older version or manage pins in Advanced. Updates always need your confirmation.",
+    "unsavedSource": "Save source settings before reviewing an update.",
+    "forkHelpTitle": "Using another repository or fork",
+    "forkHelp": "Choose a repository enabled by your administrator, then Production, Development or Custom branch. Enter the full branch name, including slashes. A branch must publish a complete deployment before it can be installed. Forks are added to trusted_repositories in /etc/mowgli-updater.json on the host.",
+    "technicalDetails": "Version details and history",
+    "imageDetails": "Container image details",
+    "componentsToUpdate": "Components",
+    "backupHelp": "Settings and maps are backed up before installation. Mainboard firmware is unchanged.",
+    "unavailableHelp": "Automatic updates need the host updater installed. Advanced contains installed versions and manual image comparisons."
   }
 }

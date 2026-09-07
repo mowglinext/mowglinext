@@ -29,6 +29,7 @@ for (const mobile of [false, true]) {
         }
         await expect(page).toHaveURL(/section=updates/);
         const panel = page.getByTestId('installed-versions');
+        await page.locator('.ant-segmented').getByText('Advanced', {exact: true}).click();
         await expect(panel.getByText('dev · 5cb07fab', {exact: true})).toBeVisible();
         await expect(panel.getByText('Protocol compatible', {exact: true})).toBeVisible();
         await expect(panel.getByText('1.8.213', {exact: true})).toBeVisible();
@@ -47,6 +48,7 @@ test('Docker unavailable and a cached firmware sample never claim live compatibi
     await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/versions': {...inventory, docker_available: false, components: []}}, topics: {status: {stamp: {sec: 1, nanosec: 0}, firmware_version: '1.8.213', firmware_protocol_version: 6, firmware_compatible: true}}});
     await page.goto('/#/settings?section=updates');
     const panel = page.getByTestId('installed-versions');
+        await page.locator('.ant-segmented').getByText('Advanced', {exact: true}).click();
     await expect(panel.getByText(/Docker is unavailable/)).toBeVisible();
     await expect(panel.getByText('Waiting for live status', {exact: true})).toBeVisible();
     await expect(panel.getByText('Protocol compatible', {exact: true})).toHaveCount(0);

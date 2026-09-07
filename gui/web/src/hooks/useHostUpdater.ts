@@ -2,7 +2,7 @@ import {useCallback, useEffect, useState} from 'react';
 
 export interface UpdateSource {repository: string; track: 'stable' | 'dev' | 'custom'; branch: string}
 export interface UpdatePolicy {source: UpdateSource; interval_hours: number; pinned: boolean}
-export interface Deployment {id: string; source: UpdateSource; revision: string; published_at: string; updater: Record<string, {version: string}>}
+export interface Deployment {release_tag?: string; id: string; source: UpdateSource; revision: string; published_at: string; updater: Record<string, {version: string}>}
 export interface UpdatePlan {id: string; target: Deployment; images: Record<string, string>; previous: Record<string, string>; expires_at: string}
 export interface UpdateJob {id: string; kind: string; phase: string; error?: string; started_at: string; plan: UpdatePlan}
 export interface UpdateNotice {id: string; kind: string; deployment: string; created_at: string; read: boolean; dismissed: boolean}

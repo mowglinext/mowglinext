@@ -25,6 +25,7 @@ for (const mobile of [false,true]) {
             }});
         });
         await page.goto('/#/settings?section=updates');
+        await page.locator('.ant-segmented').getByText('Advanced', {exact: true}).click();
         const card = page.getByTestId('update-checks');
         await expect(card.getByText('Not checked yet', {exact:true})).toBeVisible();
         await card.getByRole('button', {name:'Check now'}).click();

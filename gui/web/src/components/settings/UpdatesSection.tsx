@@ -1,4 +1,5 @@
-import {Alert, Button, Card, Empty, Space, Spin, Tag, Typography} from 'antd';
+import {useState} from 'react';
+import {Alert, Button, Card, Empty, Segmented, Space, Spin, Tag, Typography} from 'antd';
 import {ReloadOutlined} from '@ant-design/icons';
 import {useTranslation} from 'react-i18next';
 import {useNavigate} from 'react-router-dom';
@@ -16,6 +17,7 @@ const order = ['robot', 'gui', 'gps', 'lidar', 'tfluna-front', 'tfluna-edge', 'm
 export function UpdatesSection({configuredModel}: {configuredModel?: string}) {
     const {t} = useTranslation();
     const navigate = useNavigate();
+    const [advanced, setAdvanced] = useState(false);
     const {data, loading, error, refresh} = useInstalledVersions();
     const firmware = useFirmwareInventory();
     const components = [...(data?.components ?? [])].sort((a, b) => order.indexOf(a.component ?? '') - order.indexOf(b.component ?? ''));
@@ -40,28 +42,31 @@ export function UpdatesSection({configuredModel}: {configuredModel?: string}) {
     );
     return (
         <div className="installed-versions" data-testid="installed-versions">
-            <HostUpdaterPanel/>
-            <UpdateChecks/>
-            <div className="installed-version-toolbar"><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => void refresh()}>{t('updates.refresh')}</Button>{data && <Typography.Paragraph style={{margin: 0}} copyable={{text: versionDetails, tooltips: [t('updates.copy'), t('updates.copied')]}}>{t('updates.copy')}</Typography.Paragraph>}</div>
+            <Segmented aria-label={t('hostUpdater.viewMode')} value={advanced ? 'advanced' : 'simple'}
+                onChange={value => setAdvanced(value === 'advanced')} style={{alignSelf: 'flex-start'}}
+                options={[{value: 'simple', label: t('hostUpdater.simple')}, {value: 'advanced', label: t('hostUpdater.advanced')}]}/>
+            <HostUpdaterPanel advanced={advanced}/>
+            {advanced && <UpdateChecks/>}
+            {advanced && <div className="installed-version-toolbar"><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => void refresh()}>{t('updates.refresh')}</Button>{data && <Typography.Paragraph style={{margin: 0}} copyable={{text: versionDetails, tooltips: [t('updates.copy'), t('updates.copied')]}}>{t('updates.copy')}</Typography.Paragraph>}</div>}
             {error && <Alert type="warning" showIcon message={t('updates.fetchFailed')} description={data ? t('updates.showingPrevious') : undefined}/>}
             {data && !data.docker_available && <Alert type="warning" showIcon message={t('updates.dockerUnavailable')}/>}
             {data && browserBuildDiffers(browserBuild, data.server ?? {}) && <Alert type="warning" showIcon message={t('updates.browserStale')} action={<Button onClick={() => window.location.reload()}>{t('updates.reloadBrowser')}</Button>}/>}
-            <Card title={t('updates.installedSoftware')} size="small">
+            {advanced && <Card title={t('updates.installedSoftware')} size="small">
                 {loading && !data ? <Spin/> : components.length ? components.map(componentCard) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('updates.noContainers')}/>}
-            </Card>
+            </Card>}
             <Card title={t('updates.mainboard')} size="small">
                 <Space direction="vertical" style={{width: '100%'}}>
                     <div className="installed-version-heading"><Text code>{firmware.data.firmware_version || unknown}</Text><Tag color={firmware.state === 'compatible' ? 'success' : firmware.state === 'incompatible' ? 'error' : 'default'}>{t(`updates.firmwareStates.${firmware.state}`)}</Tag></div>
                     <Text type="secondary">{t('updates.firmwareMeaning')}</Text>
-                    <dl><dt>{t('updates.protocol')}</dt><dd>{firmware.data.firmware_protocol_version || unknown}</dd><dt>{t('updates.configuredModel')}</dt><dd>{configuredModel || unknown}</dd><dt>{t('updates.boardRevision')}</dt><dd>{t('updates.notReported')}</dd></dl>
+                    {advanced && <dl><dt>{t('updates.protocol')}</dt><dd>{firmware.data.firmware_protocol_version || unknown}</dd><dt>{t('updates.configuredModel')}</dt><dd>{configuredModel || unknown}</dd><dt>{t('updates.boardRevision')}</dt><dd>{t('updates.notReported')}</dd></dl>}
                     {firmware.state === 'incompatible' && <Button danger onClick={() => void navigate('/onboarding?step=firmware&flash=1')}>{t('mowgliNextPage.firmwareFlashCta')}</Button>}
                 </Space>
             </Card>
-            <Card title={t('updates.webBuild')} size="small"><dl>
+            {advanced && <Card title={t('updates.webBuild')} size="small"><dl>
                 <dt>{t('updates.server')}</dt><dd>{buildLabel(data?.server?.revision, data?.server?.version)}{data?.server?.modified && <Tag>{t('updates.modified')}</Tag>}</dd>
                 <dt>{t('updates.browser')}</dt><dd>{buildLabel(browserBuild.revision, browserBuild.version)}</dd>
-            </dl><Text type="secondary">{t('updates.browserMeaning')}</Text></Card>
-            {data?.observed_at && <Text type="secondary">{t('updates.observed', {time: new Date(data.observed_at).toLocaleString()})}</Text>}
+            </dl><Text type="secondary">{t('updates.browserMeaning')}</Text></Card>}
+            {advanced && data?.observed_at && <Text type="secondary">{t('updates.observed', {time: new Date(data.observed_at).toLocaleString()})}</Text>}
         </div>
     );
 }

@@ -3320,6 +3320,7 @@
     }
   },
   "hostUpdater": {
+    "resetSource": "Annuler les modifications",
     "agentNotice": "Une nouvelle version du programme de mise à jour est disponible",
     "title": "Mises à jour et récupération",
     "agent": "Programme de mise à jour",
@@ -3345,7 +3346,7 @@
     "latest": "Dernière publication",
     "pin": "Épingler ce déploiement et signaler les nouvelles versions",
     "review": "Vérifier l’installation",
-    "updateAgent": "Mettre à jour le programme",
+    "updateAgent": "Mettre à jour le service de mise à jour",
     "agentHelp": "Le programme redémarre séparément des conteneurs. Son lanceur conserve le binaire précédent si la nouvelle version ne démarre pas.",
     "history": "Historique des déploiements",
     "rollback": "Restaurer le déploiement précédent",
@@ -3374,6 +3375,25 @@
       "recovery_required": "Récupération nécessaire — robot inhibé",
       "failed": "Mise à jour arrêtée avant activation"
     },
-    "recover": "Réessayer la récupération"
+    "recover": "Réessayer la récupération",
+    "softwareUpdates": "Mises à jour logicielles",
+    "simple": "Simple",
+    "advanced": "Avancé",
+    "viewMode": "Vue des mises à jour",
+    "currentVersion": "Version actuelle",
+    "checkingSource": "Recherche sur",
+    "availableVersion": "Version disponible",
+    "latestInstalled": "La version sélectionnée est déjà installée",
+    "notChecked": "Rechercher les mises à jour logicielles disponibles.",
+    "checkNow": "Vérifier maintenant",
+    "simpleHelp": "Changez de canal, choisissez une ancienne version ou gérez les versions épinglées en mode Avancé. Les mises à jour nécessitent toujours votre confirmation.",
+    "unsavedSource": "Enregistrez la source avant de préparer une mise à jour.",
+    "forkHelpTitle": "Utiliser un autre dépôt ou fork",
+    "forkHelp": "Choisissez un dépôt autorisé par votre administrateur, puis Production, Développement ou Branche personnalisée. Saisissez le nom complet de la branche, barres obliques comprises. Elle doit publier un déploiement complet pour être installable. Les forks sont ajoutés à trusted_repositories dans /etc/mowgli-updater.json sur l’hôte.",
+    "technicalDetails": "Détails des versions et historique",
+    "imageDetails": "Détails des images des conteneurs",
+    "componentsToUpdate": "Composants",
+    "backupHelp": "Les réglages et les cartes sont sauvegardés avant l’installation. Le firmware de la carte principale reste inchangé.",
+    "unavailableHelp": "Les mises à jour automatiques nécessitent le service de mise à jour hôte. Le mode Avancé affiche les versions installées et les comparaisons manuelles."
   }
 }
