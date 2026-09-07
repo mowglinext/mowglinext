@@ -128,6 +128,7 @@ void FusionGraphNode::DeclareParameters()
     lidar_map_import_topic_ = declare_parameter<std::string>("lidar_map_import_topic", "");
     lidar_anchor_shadow_ref_period_s_ =
         declare_parameter<double>("lidar_anchor_shadow_ref_period_s", 20.0);
+    lidar_anchor_undock_dwell_s_ = declare_parameter<double>("lidar_anchor_undock_dwell_s", 10.0);
     if (use_lidar_map_anchor_)
     {
       LidarOccupancyMapperParams mp;

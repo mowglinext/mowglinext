@@ -484,5 +484,9 @@ fusion_graph_node:
     # replay harness / persisted map seed. Empty = off.
     lidar_map_import_topic: ""
     lidar_anchor_shadow_ref_period_s: 20.0
+    # No anchor work (no scan insert, no filter) while charging — the fused
+    # pose is gauge-pinned to the dock during the BackUp undock — nor for
+    # this long after charging drops, so the next seed starts from a live pose.
+    lidar_anchor_undock_dwell_s: 10.0
     lidar_anchor_sigma_floor_m: 0.05      # floor on the factor's per-axis sigma (half a cell)
 

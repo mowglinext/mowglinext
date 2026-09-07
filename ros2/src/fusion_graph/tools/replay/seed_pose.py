@@ -22,6 +22,9 @@ pub = n.create_publisher(PoseWithCovarianceStamped, "/fusion_graph_node/set_pose
 m = PoseWithCovarianceStamped(); m.header.frame_id = "map"; m.pose.pose = first.pose.pose
 m.pose.covariance[0] = 0.01; m.pose.covariance[7] = 0.01; m.pose.covariance[35] = 0.01
 p = m.pose.pose.position; print(f"seed pose from bag: ({p.x:.2f}, {p.y:.2f}) q=({m.pose.pose.orientation.z:.3f},{m.pose.pose.orientation.w:.3f})", flush=True)
+# Publish ONCE: the topic is transient_local, so a late subscriber still gets it. Re-publishing
+# re-anchors node 0 every second and freezes the fused pose at the seed while the robot moves.
+pub.publish(m)
 t0 = time.time()
 while time.time() - t0 < HOLD:
-    pub.publish(m); rclpy.spin_once(n, timeout_sec=1.0)
+    rclpy.spin_once(n, timeout_sec=1.0)

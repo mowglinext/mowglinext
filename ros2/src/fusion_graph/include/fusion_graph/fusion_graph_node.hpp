@@ -438,6 +438,9 @@ private:
   bool lidar_anchor_shadow_mode_ = false;  // run + score + publish under RTK, never apply
   double lidar_anchor_shadow_ref_period_s_ =
       20.0;  // shadow: refresh the DR reference from the fused pose
+  double lidar_anchor_undock_dwell_s_ = 10.0;  // no anchor work while charging, nor this long after
+  double lidar_anchor_undocked_s_ = -1.0e9;  // monotonic: when charging last dropped
+  bool lidar_anchor_was_docked_ = false;
   std::optional<LidarOccupancyMapper> lidar_mapper_;
   std::optional<LidarMapAnchorGate> lidar_anchor_gate_;
   std::unique_ptr<beluga_ros::Amcl> lidar_anchor_filter_;

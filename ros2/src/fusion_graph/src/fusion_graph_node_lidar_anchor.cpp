@@ -201,6 +201,27 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   if (!snapshot)
     return;
 
+  // On the charger the fused pose is gauge-pinned to the dock while the
+  // BackUp undock actually moves the robot 1.5 m (field 2026-09-07, t+9..38 s:
+  // scans inserted at a frozen pose, then a seed with the dock heading while
+  // the robot had already turned — the cloud diverged to 5 m). No anchor
+  // work while charging, nor for a dwell after it drops; the next seed then
+  // starts from a live, re-anchored fused pose.
+  const bool docked = last_is_charging_valid_ && last_is_charging_;
+  if (docked)
+  {
+    lidar_anchor_was_docked_ = true;
+    lidar_anchor_shadow_seeded_ = false;
+    return;
+  }
+  if (lidar_anchor_was_docked_)
+  {
+    lidar_anchor_was_docked_ = false;
+    lidar_anchor_undocked_s_ = now_s;
+  }
+  if ((now_s - lidar_anchor_undocked_s_) < lidar_anchor_undock_dwell_s_)
+    return;
+
   if (d.insert_scan)
   {
     std::vector<std::pair<double, double>> pts;
