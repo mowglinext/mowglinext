@@ -42,6 +42,34 @@ uint8 CORRECTION_STREAM_STATUS_ACTIVE=3
 uint8 CORRECTION_STREAM_STATUS_UNAVAILABLE=4
 uint8 CORRECTION_STREAM_STATUS_ERROR=5
 
+# Correction transport is owned by the configured NTRIP source. STREAMING
+# means the caster response was accepted; it does not imply valid RTCM.
+uint8 CORRECTION_TRANSPORT_STATUS_UNKNOWN=0
+uint8 CORRECTION_TRANSPORT_STATUS_DISCONNECTED=1
+uint8 CORRECTION_TRANSPORT_STATUS_CONNECTING=2
+uint8 CORRECTION_TRANSPORT_STATUS_CONNECTED=3
+uint8 CORRECTION_TRANSPORT_STATUS_STREAMING=4
+uint8 CORRECTION_TRANSPORT_STATUS_RECONNECTING=5
+uint8 CORRECTION_TRANSPORT_STATUS_FAILED=6
+
+# Correction flow describes complete integrity-valid RTCM frame activity.
+# It is deliberately separate from forwarding and semantic health.
+uint8 CORRECTION_FLOW_STATUS_UNKNOWN=0
+uint8 CORRECTION_FLOW_STATUS_IDLE=1
+uint8 CORRECTION_FLOW_STATUS_WAITING=2
+uint8 CORRECTION_FLOW_STATUS_ACTIVE=3
+uint8 CORRECTION_FLOW_STATUS_STALE=4
+uint8 CORRECTION_FLOW_STATUS_INVALID=5
+
+# Semantic health requires current portable-RTK correction truth: a valid base
+# plus usable dynamic MSM corrections. RTCM 1230 is optional.
+uint8 CORRECTION_SEMANTIC_STATUS_UNKNOWN=0
+uint8 CORRECTION_SEMANTIC_STATUS_UNAVAILABLE=1
+uint8 CORRECTION_SEMANTIC_STATUS_WAITING=2
+uint8 CORRECTION_SEMANTIC_STATUS_HEALTHY=3
+uint8 CORRECTION_SEMANTIC_STATUS_STALE=4
+uint8 CORRECTION_SEMANTIC_STATUS_INVALID=5
+
 uint32 CAP_RTK_MODE=1
 uint32 CAP_HDOP=2
 uint32 CAP_VDOP=4
@@ -67,6 +95,9 @@ uint32 CAP_BASELINE_LENGTH=2097152
 uint32 CAP_BASELINE_SOLUTION_STATUS=4194304
 uint32 CAP_CORRECTION_STREAM=8388608
 uint32 CAP_MSM_SUMMARY=16777216
+uint32 CAP_CORRECTION_TRANSPORT=33554432
+uint32 CAP_CORRECTION_FLOW=67108864
+uint32 CAP_CORRECTION_SEMANTIC=134217728
 
 std_msgs/Header header
 string backend
@@ -129,3 +160,13 @@ float32 msm_summary_age_s
 # Kept at the end of the message to preserve existing field ordering as far as
 # ROS interface evolution permits.
 uint64 position_observation_sequence
+
+# Source-owned correction provenance. These fields use correction diagnostic
+# receipt lifetime, not the position-observation header stamp above.
+uint8 correction_transport_status
+bool correction_response_accepted
+uint8 correction_flow_status
+uint8 correction_semantic_status
+string correction_source
+string correction_forwarding_source
+string msm_summary_source

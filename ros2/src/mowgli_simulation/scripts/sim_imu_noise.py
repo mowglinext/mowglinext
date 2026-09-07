@@ -110,16 +110,18 @@ class SimImuNoise(Node):
         ]
         self._prev_t: Optional[float] = None
 
-        # Optional perfect-IMU mode (sim only). When enabled, the script
+        # Optional kinematic-IMU mode (sim only). When enabled, the script
         # ignores the Webots-side gyro/accel readings entirely and emits
-        # an IMU synthesized from the latest /cmd_vel: gyro_z = cmd.az,
-        # gx/gy = 0, accel = (0, 0, g) in IMU frame, orientation = identity.
+        # an IMU synthesized from a configured achievable-twist topic:
+        # gyro_z = twist.az, gx/gy = 0, accel = (0, 0, g) in IMU frame,
+        # orientation = identity.
         # Webots' kinematic teleport leaks ODE physics noise (~0.03 rad/s
         # gyro_z drift) between teleport ticks; with EKF process noise on
         # yaw at 0.06, this bias accumulates into a 5°/s yaw drift on
         # /odometry/filtered_map even when the robot is stationary, which
         # makes obstacles drift on the map and FTC PRE_ROTATE diverge.
-        # This mode bypasses that by using cmd_vel as the source of truth.
+        # The full-system launch points this at /cmd_vel_wheels, the
+        # post-firmware-model twist KinematicDrive actually integrates.
         self._synth_from_cmd = bool(
             self.declare_parameter('synthesize_from_cmd_vel', False).value
         )

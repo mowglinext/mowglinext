@@ -593,34 +593,19 @@ void MapServerNode::on_get_mowing_area(
       res->area.obstacle_info.push_back(info);
     }
 
-    // Also include persistent tracked obstacles from the obstacle tracker
-    // so the coverage planner can avoid them in the initial plan. Skip the
-    // ones already listed above: apply_promoted_obstacle writes a promoted
-    // keepout into BOTH stores, so without this the same hole was handed to
-    // F2C twice — and with obstacle_info it would also arrive a second time
-    // wearing the wrong identity (a pending dig looking like an accepted
-    // tracker obstacle).
-    const auto n_static = res->area.obstacles.size();
-    for (const auto& obs_poly : obstacle_polygons_)
-    {
-      if (obs_poly.points.size() >= 3 &&
-          !has_duplicate_obstacle(res->area.obstacles, obs_poly, kObstacleDedupEpsilonM))
-      {
-        res->area.obstacles.push_back(obs_poly);
-        mowgli_interfaces::msg::MapObstacleInfo info;
-        info.source = mowgli_interfaces::msg::MapObstacleInfo::SOURCE_TRACKER;
-        res->area.obstacle_info.push_back(info);
-      }
-    }
+    // Area entries own every obstacle, including pending digs and promoted
+    // tracker observations. obstacle_polygons_ is only a flat keepout cache
+    // for navigation; appending it here leaks other areas' obstacles into
+    // this response. With three lawns that drew one dig three times, and the
+    // extra copies lost their id/name/pending provenance. Return the owning
+    // area's entries only; the global keepout mask still protects every spot.
 
     res->success = true;
     RCLCPP_INFO(get_logger(),
-                "GetMowingArea[%u]: area='%s', %zu obstacles (%zu static + %zu tracked)",
+                "GetMowingArea[%u]: area='%s', %zu obstacles",
                 req->index,
                 entry.name.c_str(),
-                res->area.obstacles.size(),
-                n_static,
-                res->area.obstacles.size() - n_static);
+                res->area.obstacles.size());
   }
   else
   {

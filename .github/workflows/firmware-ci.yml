@@ -61,6 +61,23 @@ jobs:
         run: pio run -e ${{ matrix.environment }}
         working-directory: firmware/stm32/ros_usbnode
 
+  test:
+    name: Firmware safety unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Run native firmware unit tests
+        run: pio test -e native
+        working-directory: firmware/stm32/ros_usbnode
+
   # ─── Publish prebuilt binaries on a version tag ────────────────────────────
   # Phase 1 of the precompiled-firmware plan. On a `v*.*.*` tag, build every
   # default permutation and attach the stamped, checksummed .bin/.elf plus a

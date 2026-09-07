@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/types"
 )
 
 // ---------------------------------------------------------------------------
@@ -146,7 +146,40 @@ func (m *rosbagManager) containerID(ctx context.Context) (string, error) {
 // is still alive, probed inside the ROS2 container. Any `.rosbag.pid` whose
 // process is gone is pruned so a crashed recorder does not read as "recording"
 // forever.
+// anyPidFilePresent reports whether at least one recording directory under
+// recordingsDir carries a pid file. The recordings root is the shared
+// mowgli_maps volume, mounted at the same path in both containers, so the
+// GUI can answer "could anything be recording?" with a local directory read
+// instead of a docker exec. The second return is false when the directory
+// cannot be read at all (volume not mounted, permissions), in which case the
+// caller must fall back to probing the ros2 container rather than reporting
+// "nothing is recording" on no evidence.
+func (m *rosbagManager) anyPidFilePresent() (bool, bool) {
+	entries, err := os.ReadDir(m.recordingsDir)
+	if err != nil {
+		return false, false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(m.recordingsDir, e.Name(), rosbagPidFile)); err == nil {
+			return true, true
+		}
+	}
+	return false, true
+}
+
 func (m *rosbagManager) activeRecordingNames(ctx context.Context) ([]string, error) {
+	// The status endpoint is polled every 4 s by every open tab, and each call
+	// used to cost a docker exec session (~85 ms on the robot, measured
+	// 2026-09-06) just to run `kill -0` on pid files that, on an idle robot,
+	// do not exist. Only pay for the exec when a pid file is actually there;
+	// liveness and stale-pidfile cleanup still happen inside the ros2
+	// container, whose pid namespace owns the recorder.
+	if present, known := m.anyPidFilePresent(); known && !present {
+		return nil, nil
+	}
 	containerID, err := m.containerID(ctx)
 	if err != nil {
 		return nil, err

@@ -201,6 +201,9 @@ def generate_launch_description() -> LaunchDescription:
             # Allow command-line override of the serial port.
             {"serial_port": serial_port},
             {"use_sim_time": use_sim_time},
+            # Forward configured charge ceilings; firmware enforces its board limits.
+            {"max_charge_voltage": float(robot_params.get("max_charge_voltage", 29.4))},
+            {"max_charge_current": float(robot_params.get("max_charge_current", 1.2))},
             # Pass dock pose from robot config for dock position anchoring
             {"dock_pose_x": float(robot_params.get("dock_pose_x", 0.0))},
             {"dock_pose_y": float(robot_params.get("dock_pose_y", 0.0))},

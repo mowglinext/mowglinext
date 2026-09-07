@@ -119,6 +119,13 @@ type GnssStatus struct {
 	MsmSummaryCellCount       uint16                         `json:"msm_summary_cell_count"`
 	MsmSummaryAgeS            float32                        `json:"msm_summary_age_s"`
 	PositionObservationSequence uint64                         `json:"position_observation_sequence"`
+	CorrectionTransportStatus uint8                          `json:"correction_transport_status"`
+	CorrectionResponseAccepted bool                           `json:"correction_response_accepted"`
+	CorrectionFlowStatus      uint8                          `json:"correction_flow_status"`
+	CorrectionSemanticStatus  uint8                          `json:"correction_semantic_status"`
+	CorrectionSource          string                         `json:"correction_source"`
+	CorrectionForwardingSource string                         `json:"correction_forwarding_source"`
+	MsmSummarySource          string                         `json:"msm_summary_source"`
 }
 
 // HighLevelStatus matches mowgli_interfaces/msg/HighLevelStatus.

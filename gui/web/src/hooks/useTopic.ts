@@ -16,6 +16,16 @@ export interface UseTopicOptions<T> {
      * message, so closures over refs are safe.
      */
     select?: (raw: unknown) => T | undefined;
+    /**
+     * When false, hold no subscription at all. The upstream foxglove
+     * subscription is opened on the first subscriber for a topic and closed
+     * on the last, so a page that only needs a topic while one panel is
+     * visible should gate it here rather than subscribe unconditionally —
+     * foxglove_bridge serialises high-rate topics (e.g. /imu/data at 90 Hz)
+     * at full rate for as long as anyone is subscribed, whatever the
+     * client-side throttle. Defaults to true.
+     */
+    enabled?: boolean;
 }
 
 export interface TopicState<T> {
@@ -43,7 +53,14 @@ export const useTopic = <T>(
     const optsRef = useRef(opts);
     optsRef.current = opts;
 
+    const enabled = opts?.enabled !== false;
     useEffect(() => {
+        if (!enabled) {
+            // Drop back to the initial value so a hidden panel does not keep
+            // showing the last live sample as if it were current.
+            setState({data: initial, lastMessageAt: null});
+            return;
+        }
         let lastEmitAt = 0;
         let pendingTimer: number | null = null;
         let latest: { data: T; at: number } | null = null;
@@ -87,7 +104,8 @@ export const useTopic = <T>(
             if (pendingTimer !== null) window.clearTimeout(pendingTimer);
             unsubscribe();
         };
-    }, [topic]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `initial` is a literal at every call site
+    }, [topic, enabled]);
 
     return state;
 };

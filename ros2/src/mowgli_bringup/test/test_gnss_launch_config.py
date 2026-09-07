@@ -59,3 +59,12 @@ def test_full_system_no_longer_passes_legacy_gnss_status_params() -> None:
 def test_sim_full_system_no_longer_passes_legacy_gnss_status_params() -> None:
     launch_source = _read_launch_source("sim_full_system.launch.py")
     assert "publish_" "gnss_status" not in launch_source
+
+
+def test_sim_uses_hardware_factor_graph_cadence() -> None:
+    launch_source = _read_launch_source("sim_full_system.launch.py")
+    navigation_args = launch_source.split("navigation_launch =", 1)[1].split(
+        "behavior_tree_node =", 1
+    )[0]
+
+    assert '"fusion_graph_node_period_s": "0.04"' in navigation_args

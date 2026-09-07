@@ -29,18 +29,18 @@ std::shared_ptr<mowgli_gnss_bridge::UniversalGnssTopicBridge> makeBridge()
 {
   rclcpp::NodeOptions options;
   options.parameter_overrides({
-    {"receiver_family", std::string("ublox")},
-    {"frame_id", std::string("gps_link")},
-    {"input_status_topic", std::string("/test/universal/status")},
-    {"output_status_topic", std::string("/test/gps/status")},
-    {"input_diagnostics_topic", std::string("/test/diagnostics")},
-    {"input_rtcm_topic", std::string("/test/universal/rtcm")},
-    {"output_rtcm_topic", std::string("/test/rtcm")},
+      {"receiver_family", std::string("ublox")},
+      {"frame_id", std::string("gps_link")},
+      {"input_status_topic", std::string("/test/universal/status")},
+      {"output_status_topic", std::string("/test/gps/status")},
+      {"input_diagnostics_topic", std::string("/test/diagnostics")},
+      {"input_rtcm_topic", std::string("/test/universal/rtcm")},
+      {"output_rtcm_topic", std::string("/test/rtcm")},
   });
   return std::make_shared<mowgli_gnss_bridge::UniversalGnssTopicBridge>(options);
 }
 
-template <typename PredT>
+template<typename PredT>
 bool spinUntil(rclcpp::executors::SingleThreadedExecutor & exec, PredT pred)
 {
   const auto deadline = std::chrono::steady_clock::now() + 5s;
@@ -99,8 +99,8 @@ TEST_F(BridgeTest, StatusIsMappedToPublicContract)
 
   // Republish until the reliable link is established.
   spinUntil(exec, [&]() {
-    status_pub->publish(in);
-    return got;
+      status_pub->publish(in);
+      return got;
   });
 
   ASSERT_TRUE(got);
@@ -148,8 +148,8 @@ TEST_F(BridgeTest, RtcmFrameIsForwardedByteExact)
   frame.data = std::vector<uint8_t>{0xD3, 0x00, 0x13, 0x3E, 0xD7};
 
   spinUntil(exec, [&]() {
-    rtcm_pub->publish(frame);
-    return got;
+      rtcm_pub->publish(frame);
+      return got;
   });
 
   ASSERT_TRUE(got);
@@ -192,8 +192,8 @@ TEST_F(BridgeTest, PositionObservationSequenceIsForwardedVerbatim)
   in.position_observation_sequence = 4242U;
 
   spinUntil(exec, [&]() {
-    status_pub->publish(in);
-    return got;
+      status_pub->publish(in);
+      return got;
   });
   ASSERT_TRUE(got);
   EXPECT_EQ(received.position_observation_sequence, 4242U);
@@ -202,8 +202,8 @@ TEST_F(BridgeTest, PositionObservationSequenceIsForwardedVerbatim)
   // through as the NEW sequence — the payload is deliberately not the identity.
   in.position_observation_sequence = 4243U;
   const bool advanced = spinUntil(exec, [&]() {
-    status_pub->publish(in);
-    return received.position_observation_sequence == 4243U;
+        status_pub->publish(in);
+        return received.position_observation_sequence == 4243U;
   });
   EXPECT_TRUE(advanced) << "bridge latched the observation sequence instead of forwarding it";
 

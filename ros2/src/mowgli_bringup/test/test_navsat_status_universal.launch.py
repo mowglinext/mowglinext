@@ -11,6 +11,7 @@ import launch_testing
 import launch_testing.actions
 import pytest
 import rclpy
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from mowgli_interfaces.msg import AbsolutePose
 from rclpy.executors import SingleThreadedExecutor
 from sensor_msgs.msg import NavSatFix, NavSatStatus
@@ -101,14 +102,22 @@ class TestNavSatUniversalStatus(unittest.TestCase):
 
     def test_fix_still_updates_absolute_pose_without_local_status_publish(self) -> None:
         absolute_pose = []
+        pose_cov = []
         pose_sub = self.node.create_subscription(
             AbsolutePose,
             "/gps/absolute_pose",
             lambda msg: absolute_pose.append(msg),
             10,
         )
+        pose_cov_sub = self.node.create_subscription(
+            PoseWithCovarianceStamped,
+            "/gps/pose_cov",
+            lambda msg: pose_cov.append(msg),
+            10,
+        )
         fix_pub = self.node.create_publisher(NavSatFix, "/gps/fix", 10)
         self.addCleanup(self.node.destroy_subscription, pose_sub)
+        self.addCleanup(self.node.destroy_subscription, pose_cov_sub)
         self.addCleanup(self.node.destroy_publisher, fix_pub)
 
         self._spin_until(
@@ -117,7 +126,9 @@ class TestNavSatUniversalStatus(unittest.TestCase):
             message="navsat node did not subscribe to /gps/fix",
         )
 
-        fix_pub.publish(_make_fix())
+        fix = _make_fix()
+        fix.header.stamp = self.node.get_clock().now().to_msg()
+        fix_pub.publish(fix)
 
         self._spin_until(
             lambda: len(absolute_pose) > 0,
@@ -125,6 +136,8 @@ class TestNavSatUniversalStatus(unittest.TestCase):
             message="navsat node stopped publishing /gps/absolute_pose in universal mode",
         )
         self._spin_for(1.0)
+        self.assertEqual(len(absolute_pose), 1)
+        self.assertEqual(len(pose_cov), 0)
         self.assertEqual(self.node.count_publishers("/gps/status"), 0)
 
 

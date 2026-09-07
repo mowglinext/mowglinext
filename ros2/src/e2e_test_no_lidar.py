@@ -23,6 +23,7 @@ Or self-contained via: make e2e-test-no-lidar
 """
 
 import math
+import os
 import signal
 import sys
 import time
@@ -473,8 +474,9 @@ def main():
         rclpy.shutdown()
         sys.exit(1)
 
-    # Spin until test completes or timeout (20 min)
-    timeout = 1200.0
+    # Match the LiDAR E2E budget: the 54 m² field cannot physically reach the
+    # coverage target in 20 minutes at the configured mower speed.
+    timeout = float(os.getenv("E2E_MOWING_TIMEOUT_S", "3000"))
     start = time.time()
 
     def _on_signal(sig, frame):

@@ -10,11 +10,11 @@
 #define MOWGLI_GNSS_BRIDGE__UNIVERSAL_GNSS_TOPIC_BRIDGE_HPP_
 
 #include <cstdint>
-#include <map>
+#include <memory>
 #include <string>
-#include <unordered_map>
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
+#include "mowgli_gnss_bridge/correction_diagnostic_tracker.hpp"
 #include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rtcm_msgs/msg/message.hpp"
@@ -42,28 +42,18 @@ public:
     const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
 private:
-  /// Cached (message, key/value) pair for one DiagnosticStatus entry.
-  struct DiagnosticEntry
-  {
-    std::string message;
-    std::unordered_map<std::string, std::string> values;
-  };
-
   void onStatus(const UniversalGnssStatus & msg);
   void onDiagnostics(const diagnostic_msgs::msg::DiagnosticArray & msg);
   void onRtcm(const RtcmFrame & msg);
 
   void applyDiagnosticProjection(PublicGnssStatus & public_msg) const;
 
-  const DiagnosticEntry * pickDiagnosticEntry(
-    std::initializer_list<const char *> names) const;
-
   std::string backend_;
   std::string receiver_vendor_;
   std::string frame_id_;
 
-  // status.name -> latest cached diagnostic entry.
-  std::map<std::string, DiagnosticEntry> diagnostic_entries_;
+  // Bounded, source-owned correction-diagnostics projection.
+  std::unique_ptr<CorrectionDiagnosticTracker> correction_diagnostics_;
 
   rclcpp::Publisher<PublicGnssStatus>::SharedPtr status_pub_;
   rclcpp::Publisher<PublicRtcmMessage>::SharedPtr rtcm_pub_;

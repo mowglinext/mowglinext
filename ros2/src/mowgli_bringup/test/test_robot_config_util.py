@@ -1,7 +1,8 @@
+import math
 # Copyright 2026 Mowgli Project
 # SPDX-License-Identifier: GPL-3.0
 #
-# Unit tests for robot_config_util.load_robot_params — the deep-merge that
+# Unit tests for _util.load_robot_params — the deep-merge that
 # lets the INSTALLED mowgli_robot.yaml be sparse (install choices + calibration
 # outputs only) while every other default falls through to the in-package
 # template. These run without any ROS deps — only PyYAML is required.
@@ -173,7 +174,7 @@ def test_default_tool_width_matches_template():
 def test_map_server_and_coverage_launch_share_tool_width_default():
     """Regression guard: full_system.launch.py (map_server.tool_width) and
     navigation.launch.py (feeds coverage_server.operation_width) must both
-    fall back to robot_config_util.DEFAULT_TOOL_WIDTH_M — not each hardcode
+    fall back to _util.DEFAULT_TOOL_WIDTH_M — not each hardcode
     their own literal. This is a source-text check (launch files pull in the
     full `launch`/`launch_ros`/ament ROS2 packages via generate_launch_description,
     so they cannot be imported directly in a plain-Python test); it fails
@@ -379,7 +380,7 @@ def _find_schema_property(node, name):
 
 
 class TestLidarEnabledResolution:
-    """robot_config_util.resolve_lidar_enabled + its absent-key warning."""
+    """_util.resolve_lidar_enabled + its absent-key warning."""
 
     def setup_method(self):
         # warn_lidar_key_absent dedupes per process; clear between tests.
@@ -590,3 +591,52 @@ class TestScanFactorsFollowLidar:
         watchdog = src.split("void on_scan_watchdog()")[1].split("void on_scan(")[0]
         assert "rclcpp::shutdown()" not in watchdog
         assert "throw " not in watchdog
+
+
+# ---------------------------------------------------------------------------
+# Chassis footprint geometry
+#
+# The local-costmap inflation floor is DERIVED from these, because chassis
+# dimensions are operator-editable in the GUI. Before 2026-09-05 the floor was
+# a literal (0.58) that had drifted below the real circumscribed radius
+# (0.586 m at the then-shipped chassis_width 0.40) without anyone noticing.
+# These pin the derivation so that cannot recur.
+# ---------------------------------------------------------------------------
+
+def test_chassis_footprint_uses_template_defaults_when_params_empty():
+    front, rear, half_width = _util.chassis_footprint({})
+    assert front == pytest.approx(0.18 + 0.60 / 2 + 0.05)
+    assert rear == pytest.approx(0.18 - 0.60 / 2 - 0.05)
+    assert half_width == pytest.approx(0.45 / 2 + 0.05)
+
+
+def test_chassis_footprint_follows_the_params():
+    front, rear, half_width = _util.chassis_footprint(
+        {"chassis_length": 0.50, "chassis_width": 0.30, "chassis_center_x": 0.10}
+    )
+    assert front == pytest.approx(0.10 + 0.25 + 0.05)
+    assert rear == pytest.approx(0.10 - 0.25 - 0.05)
+    assert half_width == pytest.approx(0.15 + 0.05)
+
+
+def test_circumscribed_radius_at_shipped_dimensions():
+    # sqrt(0.530^2 + 0.275^2); the shipped inflation floor must not sit below it.
+    assert _util.chassis_circumscribed_radius({}) == pytest.approx(0.5971, abs=1e-4)
+
+
+def test_circumscribed_radius_grows_with_a_wider_chassis():
+    narrow = _util.chassis_circumscribed_radius({"chassis_width": 0.40})
+    wide = _util.chassis_circumscribed_radius({"chassis_width": 0.45})
+    assert wide > narrow
+    # The regression this guards: 0.58 was shipped as the floor while the real
+    # radius at chassis_width 0.40 was already 0.586 m.
+    assert narrow == pytest.approx(0.5860, abs=1e-4)
+
+
+def test_circumscribed_radius_encloses_every_footprint_corner():
+    params = {"chassis_length": 0.72, "chassis_width": 0.51, "chassis_center_x": 0.22}
+    front, rear, half_width = _util.chassis_footprint(params)
+    radius = _util.chassis_circumscribed_radius(params)
+    for x in (front, rear):
+        for y in (half_width, -half_width):
+            assert math.hypot(x, y) <= radius + 1e-9

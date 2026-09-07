@@ -21,6 +21,7 @@ import {MowingFeature, MowingAreaFeature, DockFeatureBase, MowingFeatureBase, Na
 import {useMapEditHistory} from "./map/hooks/useMapEditHistory.ts";
 import {useMapOffset} from "./map/hooks/useMapOffset.ts";
 import {useMapBearing} from "./map/hooks/useMapBearing.ts";
+import {useMapBearingCamera} from "./map/hooks/useMapBearingCamera.ts";
 import {useManualMode} from "./map/hooks/useManualMode.ts";
 import {useMapEditing} from "./map/hooks/useMapEditing.ts";
 import {useMapStreams} from "./map/hooks/useMapStreams.ts";
@@ -121,9 +122,6 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const robotPoseRef = useRef<{ x: number; y: number; heading: number } | null>(null)
     const mapInstanceRef = useRef<MapboxMap | null>(null)
     const drawRef = useRef<import('@mapbox/mapbox-gl-draw').default | null>(null);
-    // Stable ref to the 'rotateend' listener so it can be removed on unmount
-    // (StrictMode mounts twice, otherwise the handler stacks).
-    const rotateEndHandlerRef = useRef<(() => void) | null>(null);
 
     // Only include editable polygon features for DrawControl — exclude mower,
     // paths, and other display-only features so that frequent pose updates don't
@@ -146,17 +144,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const {offsetX, offsetY, handleOffsetX, handleOffsetY} = useMapOffset({config, setConfig, notification});
     const {bearing, handleBearing} = useMapBearing({config, setConfig, notification});
 
-    // Apply bearing imperatively when the user edits it from the rotation
-    // panel (slider/input/reset button). Mapbox-GL's `setBearing` rotates
-    // the camera without remounting the Map; using initialViewState alone
-    // would freeze the rotation at first paint and ignore later changes.
-    useEffect(() => {
-        const m = mapInstanceRef.current;
-        if (!m) return;
-        if (Math.abs(m.getBearing() - bearing) > 0.5) {
-            m.easeTo({bearing, duration: 200});
-        }
-    }, [bearing]);
+    const onMapLoad = useMapBearingCamera({mapInstanceRef, bearing, onBearingChange: handleBearing, interactive: !compact});
 
     const _datumLon = parseFloat(settings["datum_lon"] ?? 0)
     const _datumLat = parseFloat(settings["datum_lat"] ?? 0)
@@ -625,16 +613,6 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         return () => window.removeEventListener("keydown", onKeyDown);
     }, [dockPlacementMode]);
 
-    // Remove the map's 'rotateend' listener on unmount (added in onLoad).
-    useEffect(() => {
-        return () => {
-            const m = mapInstanceRef.current;
-            if (m && rotateEndHandlerRef.current) {
-                m.off('rotateend', rotateEndHandlerRef.current);
-                rotateEndHandlerRef.current = null;
-            }
-        };
-    }, []);
 
     const handleMapClick = useCallback((e: {lngLat: {lng: number; lat: number}}) => {
         if (!dockPlacementMode) return;
@@ -755,6 +733,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                                          style={{width: '100%', height: '100%'}}
                                                          mapStyle={useSatellite ? "mapbox://styles/mapbox/satellite-streets-v12" : "mapbox://styles/mapbox/dark-v11"}
                                                          interactive={false}
+                                                         onLoad={onMapLoad}
                                                          attributionControl={false}
                 >
                     {tileUri ? <Source type={"raster"} id={"custom-raster"} tiles={[tileUri]} tileSize={256}/> : null}
@@ -909,19 +888,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                                          }}
                                                          style={{width: '100%', height: '100%'}}
                                                          mapStyle={useSatellite ? "mapbox://styles/mapbox/satellite-streets-v12" : "mapbox://styles/mapbox/dark-v11"}
-                                                         onLoad={(e) => {
-                                                             const m = e.target as unknown as MapboxMap;
-                                                             mapInstanceRef.current = m;
-                                                             // Capture user-driven rotation (right-click drag on
-                                                             // desktop, two-finger rotate on touch — both enabled
-                                                             // by default in mapbox-gl) and persist via the same
-                                                             // debounced handler the slider uses. Keep a stable ref
-                                                             // so the unmount effect can remove it (StrictMode
-                                                             // mounts twice, otherwise the handler stacks).
-                                                             const onRotateEnd = () => handleBearing(m.getBearing());
-                                                             rotateEndHandlerRef.current = onRotateEnd;
-                                                             m.on('rotateend', onRotateEnd);
-                                                         }}
+                                                         onLoad={onMapLoad}
                                                          onClick={handleMapClick}
                                                          interactiveLayerIds={DYN_OBSTACLE_INTERACTIVE_LAYERS}
                                                          onMouseMove={handleMapMouseMove}

@@ -897,11 +897,15 @@ export function useMapEditing({
     }, [drawRef, mapInstanceRef, notification, t]);
 
     const handleTrash = useCallback(() => {
-        // Deleting an area is destructive and (until saved) only reversible via
-        // undo — gate it behind a confirm so a mistap can't wipe a zone.
+        const draw = drawRef.current;
+        if (!draw) return;
+        // Draw's trash action depends on its mode: direct_select removes
+        // selected vertices; simple_select removes complete features.
+        const deletingPoints = draw.getMode() === 'direct_select';
+        if (!deletingPoints && draw.getSelectedIds().length === 0) return;
         modal.confirm({
-            title: t('mapEditing.deleteAreaConfirmTitle'),
-            content: t('mapEditing.deleteAreaConfirmBody'),
+            title: t(deletingPoints ? 'mapEditing.deletePointsConfirmTitle' : 'mapEditing.deleteAreaConfirmTitle'),
+            content: t(deletingPoints ? 'mapEditing.deletePointsConfirmBody' : 'mapEditing.deleteAreaConfirmBody'),
             okText: t('mapEditing.deleteAreaConfirmOk'),
             okType: 'danger',
             cancelText: t('mapEditing.deleteAreaConfirmCancel'),

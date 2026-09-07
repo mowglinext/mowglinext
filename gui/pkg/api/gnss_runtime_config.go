@@ -218,6 +218,18 @@ func applyGNSSRuntimeFallback(flat map[string]any, explicitFlat map[string]any, 
 			return
 		}
 	}
+	if envKey == "GNSS_NTRIP_ENABLED" || envKey == "GNSS_NTRIP_GGA_ENABLED" {
+		// Environment values are strings, but settings switches require JSON
+		// booleans: the string "false" is truthy in JavaScript. Match the GPS
+		// startup script's normalize_bool, including its accepted spellings.
+		switch strings.ToLower(envValue) {
+		case "1", "true", "yes", "y", "on":
+			flat[targetKey] = true
+		default:
+			flat[targetKey] = false
+		}
+		return
+	}
 	flat[targetKey] = envValue
 }
 

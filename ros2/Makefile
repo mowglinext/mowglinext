@@ -91,41 +91,65 @@ sim: sim-stop
 e2e-test: sim-stop build
 	@echo "Starting simulation + E2E test..."
 	@echo ""
-	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
-	source install/setup.bash && \
-	export DISPLAY=:99 && \
+	set -e; \
+	source /opt/ros/$(ROS_DISTRO)/setup.bash; \
+	source install/setup.bash; \
+	export DISPLAY=:99; \
+	../docker/reset-simulation-run-state.sh; \
+	SIM_LOG=/tmp/mowgli-e2e-sim.log; \
+	: > "$$SIM_LOG"; \
 	ros2 launch mowgli_bringup sim_full_system.launch.py \
-	  headless:=true use_rviz:=false &
+	  headless:=true use_rviz:=false > >(tee "$$SIM_LOG") 2>&1 & \
 	SIM_PID=$$!; \
 	echo "Simulation PID: $$SIM_PID"; \
-	echo "Waiting 90s for Nav2 to activate..."; \
-	sleep 90; \
+	echo "Waiting for Nav2 lifecycle activation..."; \
+	if ! scripts/wait_for_nav2_active.sh "$$SIM_PID" "$$SIM_LOG"; then \
+	  kill -INT $$SIM_PID 2>/dev/null || true; \
+	  $(MAKE) sim-stop; \
+	  exit 1; \
+	fi; \
 	echo "Running E2E test..."; \
+	set +e; \
 	python3 src/e2e_test.py; \
 	TEST_EXIT=$$?; \
+	set -e; \
 	echo "Stopping simulation..."; \
-	kill $$SIM_PID 2>/dev/null; \
+	kill -INT $$SIM_PID 2>/dev/null || true; \
+	sleep 3; \
 	$(MAKE) sim-stop; \
+	wait $$SIM_PID 2>/dev/null || true; \
 	exit $$TEST_EXIT
 
 e2e-test-no-lidar: sim-stop build
 	@echo "Starting no-LiDAR E2E test (GPS-only simulation)..."
 	@echo ""
-	source /opt/ros/$(ROS_DISTRO)/setup.bash && \
-	source install/setup.bash && \
+	set -e; \
+	source /opt/ros/$(ROS_DISTRO)/setup.bash; \
+	source install/setup.bash; \
+	../docker/reset-simulation-run-state.sh; \
+	SIM_LOG=/tmp/mowgli-e2e-no-lidar-sim.log; \
+	: > "$$SIM_LOG"; \
 	ros2 launch mowgli_bringup sim_full_system.launch.py \
 	  headless:=true use_rviz:=false use_lidar:=false \
-	  simulate_gps_degradation:=false &
+	  simulate_gps_degradation:=false > >(tee "$$SIM_LOG") 2>&1 & \
 	SIM_PID=$$!; \
 	echo "Simulation PID: $$SIM_PID"; \
-	echo "Waiting 90s for Nav2 to activate..."; \
-	sleep 90; \
+	echo "Waiting for Nav2 lifecycle activation..."; \
+	if ! scripts/wait_for_nav2_active.sh "$$SIM_PID" "$$SIM_LOG"; then \
+	  kill -INT $$SIM_PID 2>/dev/null || true; \
+	  $(MAKE) sim-stop; \
+	  exit 1; \
+	fi; \
 	echo "Running no-LiDAR E2E test..."; \
+	set +e; \
 	python3 src/e2e_test_no_lidar.py; \
 	TEST_EXIT=$$?; \
+	set -e; \
 	echo "Stopping simulation..."; \
-	kill $$SIM_PID 2>/dev/null; \
+	kill -INT $$SIM_PID 2>/dev/null || true; \
+	sleep 3; \
 	$(MAKE) sim-stop; \
+	wait $$SIM_PID 2>/dev/null || true; \
 	exit $$TEST_EXIT
 
 # ─── Docker Images (CI / production) ──────────────────────────────────────────

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -878,6 +878,65 @@ func TestGetSettingsYAML_UsesEnvFallbackForFamilyDeviceAndBaudWhenYAMLIsMissing(
 	assert.Equal(t, "unicore", response["gnss_receiver_family"])
 	assert.Equal(t, "/dev/serial/by-id/usb-fallback", response["gnss_serial_device"])
 	assert.Equal(t, float64(460800), response["gnss_serial_baud"])
+}
+
+func TestGetSettingsYAML_NTRIPEnvFallbackIsBoolean(t *testing.T) {
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"false", false}, {"0", false}, {"off", false}, {"no", false},
+		{"true", true}, {"1", true}, {" ON ", true}, {"yes", true}, {"Y", true},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			yamlFile := createTempYAMLFile(t, "")
+			envFile := createTempConfigFile(t, "GNSS_NTRIP_ENABLED="+tc.value+"\nGNSS_NTRIP_GGA_ENABLED="+tc.value+"\n")
+			db := types.NewMockDBProvider()
+			db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+			db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/api/settings/yaml", nil)
+			setupSettingsRouter(db).ServeHTTP(w, req)
+			require.Equal(t, http.StatusOK, w.Code)
+			var response map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+			assert.Equal(t, tc.want, response["ntrip_enabled"])
+			assert.Equal(t, tc.want, response["gnss_ntrip_gga_enabled"])
+		})
+	}
+}
+
+func TestPostSettingsYAML_NTRIPDisableSurvivesReloadAfterDefaultPruning(t *testing.T) {
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+	yamlFile := createTempYAMLFileAtGuiRoot(t, "mowgli:\n  ros__parameters:\n    ntrip_enabled: true\n")
+	envFile := createTempConfigFileAtGuiRoot(t, "GNSS_NTRIP_ENABLED=true\n")
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+	router := setupSettingsRouter(db)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/yaml", strings.NewReader(`{"ntrip_enabled":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	content, err := os.ReadFile(yamlFile)
+	require.NoError(t, err)
+	assert.NotContains(t, string(content), "ntrip_enabled:")
+	env, err := os.ReadFile(envFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(env), "GNSS_NTRIP_ENABLED=false")
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/api/settings/yaml", nil)
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, false, response["ntrip_enabled"])
 }
 
 func TestGetSettingsYAML_KeepsExplicitNTRIPDisableOverEnvFallback(t *testing.T) {

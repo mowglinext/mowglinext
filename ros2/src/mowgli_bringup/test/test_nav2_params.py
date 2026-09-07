@@ -22,7 +22,10 @@ import yaml
 # actually performs, instead of a parallel (and previously shallow-copy,
 # aliasing-prone) reimplementation.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "launch"))
-from robot_config_util import deep_merge as _deep_merge  # noqa: E402
+from robot_config_util import (  # noqa: E402
+    chassis_circumscribed_radius as _chassis_circumscribed_radius,
+    deep_merge as _deep_merge,
+)
 
 
 def _config_path(name: str) -> str:
@@ -331,25 +334,47 @@ def test_clearance_margin_is_distinct_from_body_half_width() -> None:
 
 
 def test_navigation_launch_injects_local_inflation_with_floor() -> None:
-    """obstacle_inflation_radius reaches ONLY the local costmap, floored at
-    0.58 m (chassis circumscribed radius ~0.572 — below it the inflation
-    layer degrades footprint-cost semantics and FTC's threshold-253 deviation
-    detector loses its inscribed band)."""
+    """obstacle_inflation_radius reaches ONLY the local costmap, floored at the
+    chassis circumscribed radius. Below that radius the inflation layer loses
+    its inscribed band, so footprint-cost semantics degrade and FTC's
+    threshold-253 deviation detector has nothing to read.
+
+    The floor is DERIVED from the live chassis parameters, never a literal.
+    Chassis dimensions are operator-editable in the GUI, so a literal goes
+    stale the moment someone edits them — which is exactly what happened: the
+    old hardcoded 0.58 quoted a ~0.572 m radius taken from chassis_length 0.54
+    and was already below the real radius at the then-current chassis_width
+    0.40, let alone the measured 0.45."""
     src = _read_text("launch/navigation.launch.py")
     m = re.search(
-        r"lc_infl\[.inflation_radius.\]\s*=\s*min\(\s*([\d.]+),\s*max\(([\d.]+),"
-        r"\s*obstacle_inflation_radius", src)
+        r"lc_infl\[.inflation_radius.\]\s*=\s*min\(\s*([\d.]+),\s*"
+        r"max\(\s*infl_floor,\s*obstacle_inflation_radius", src)
     assert m, (
         "navigation.launch.py must clamp-inject obstacle_inflation_radius into the "
-        "local costmap inflation_layer (lc_infl['inflation_radius'] = min(hi, "
-        "max(lo, obstacle_inflation_radius)))."
+        "local costmap inflation_layer (lc_infl['inflation_radius'] = min(cap, "
+        "max(infl_floor, obstacle_inflation_radius)))."
     )
-    assert float(m.group(2)) >= 0.58, (
-        f"inflation floor {m.group(2)} is below the chassis circumscribed radius "
-        "(~0.572 m) — footprint-cost semantics degrade below it."
+    assert float(m.group(1)) == 1.50, (
+        f"inflation cap {m.group(1)} — the upper clamp is pinned at 1.50 m."
+    )
+    assert re.search(r"infl_floor\s*=\s*chassis_circumscribed_radius\(", src), (
+        "the inflation floor must be DERIVED via "
+        "robot_config_util.chassis_circumscribed_radius(), not hardcoded — a "
+        "literal goes stale when the operator edits the chassis in the GUI."
+    )
+    # And that derivation, on the shipped template, must still clear the old
+    # hand-tuned 0.58 floor. If a future chassis default makes it smaller, the
+    # inflation layer stops covering the footprint and this must be revisited
+    # deliberately rather than silently.
+    template = _load_yaml("mowgli_robot.yaml")["mowgli"]["ros__parameters"]
+    derived = _chassis_circumscribed_radius(template)
+    assert derived >= 0.58, (
+        f"template chassis derives an inflation floor of {derived:.3f} m, below "
+        "the 0.58 m the local costmap was tuned against — footprint-cost "
+        "semantics degrade below the circumscribed radius."
     )
     # The GLOBAL costmap radius is pinned at 0.20 (0.30 blocked all transit
-    # paths on a 9×6 m polygon) — the LOCAL chain must be the only
+    # paths on a 9x6 m polygon) — the LOCAL chain must be the only
     # inflation_radius writer in the launch script.
     writers = re.findall(r"(\w+)\[.inflation_radius.\]\s*=", src)
     assert writers == ["lc_infl"], (

@@ -60,8 +60,11 @@
 
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
+#include "mowgli_hardware/battery_state_semantics.hpp"
 #include "mowgli_hardware/blade_gate.hpp"
+#include "mowgli_hardware/blade_telemetry.hpp"
 #include "mowgli_hardware/clock_fit.hpp"
+#include "mowgli_hardware/cmd_vel_validation.hpp"
 #include "mowgli_hardware/dig_detector.hpp"
 #include "mowgli_hardware/dig_escalation.hpp"
 #include "mowgli_hardware/gnss_hardware_status.hpp"
@@ -70,6 +73,7 @@
 #include "mowgli_hardware/odometry_publisher.hpp"
 #include "mowgli_hardware/packet_handler.hpp"
 #include "mowgli_hardware/serial_port.hpp"
+#include "mowgli_hardware/timer_period.hpp"
 
 // High-level mode constants — must match HighLevelStatus.msg and the
 // HL_MODE_* defines in firmware/mowgli_protocol.h. Declared locally to
@@ -309,6 +313,7 @@ public:
       : Node("hardware_bridge", options), odometry_publisher_(*this)
   {
     declare_parameters();
+    validate_startup_parameters();
     create_publishers();
     create_subscribers();
     create_services();
@@ -335,8 +340,33 @@ private:
   {
     serial_port_path_ = declare_parameter<std::string>("serial_port", "/dev/mowgli");
     baud_rate_ = declare_parameter<int>("baud_rate", 115200);
-    heartbeat_rate_ = declare_parameter<double>("heartbeat_rate", 4.0);
-    publish_rate_ = declare_parameter<double>("publish_rate", 100.0);
+    // These values are consumed only while constructing the timers and
+    // kinematics, so ROS must reject runtime updates. Invalid startup values
+    // are checked explicitly below; descriptors cannot express finite-only or
+    // an open strictly-positive interval without a misleading pseudo-bound.
+    auto startup_double = [this](const std::string& name,
+                                 double default_val,
+                                 const std::string& description) -> double
+    {
+      rcl_interfaces::msg::ParameterDescriptor desc;
+      desc.description = description;
+      desc.read_only = true;
+      return declare_parameter<double>(name, default_val, desc);
+    };
+    auto timer_rate = [&startup_double](const std::string& name,
+                                        double default_val,
+                                        TimerRateRange preferred_range) -> double
+    {
+      return startup_double(
+          name,
+          default_val,
+          "Finite startup-only timer cadence in Hz with a representable period of at least 1 ns. "
+          "Usable values outside the preferred [" +
+              std::to_string(preferred_range.minimum_hz) + ", " +
+              std::to_string(preferred_range.maximum_hz) + "] Hz range are clamped at startup.");
+    };
+    heartbeat_rate_ = timer_rate("heartbeat_rate", 4.0, kHeartbeatRateRange);
+    publish_rate_ = timer_rate("publish_rate", 100.0, kPublishRateRange);
     // Serial-link watchdog: if no bytes arrive for this long while the port is
     // open, treat the link as dead and reopen it. The STM32 streams status
     // (~4 Hz) + odom (~20 Hz) + IMU (~50-100 Hz) continuously whenever it is
@@ -345,8 +375,13 @@ private:
     // OS leaves the stale fd "open" (reads just return nothing), so without
     // this the bridge would sit forever writing into a dead fd. Reopening
     // re-resolves /dev/mowgli to the new ttyACM.
-    serial_rx_timeout_s_ = declare_parameter<double>("serial_rx_timeout_s", 2.0);
-    high_level_rate_ = declare_parameter<double>("high_level_rate", 2.0);
+    // Zero intentionally disables the RX watchdog; non-finite and negative
+    // values have no useful or safe watchdog meaning.
+    serial_rx_timeout_s_ = startup_double(
+        "serial_rx_timeout_s",
+        2.0,
+        "Finite non-negative startup-only RX watchdog timeout in seconds; zero disables it.");
+    high_level_rate_ = timer_rate("high_level_rate", 2.0, kHighLevelRateRange);
     dock_x_ = declare_parameter<double>("dock_pose_x", 0.0);
     dock_y_ = declare_parameter<double>("dock_pose_y", 0.0);
     dock_yaw_ = declare_parameter<double>("dock_pose_yaw", 0.0);
@@ -358,7 +393,11 @@ private:
     // centre drive-wheel distance; ticks_per_meter is the runtime encoder
     // scale used by this bridge for host-side odometry and re-sent to the
     // STM32 so the firmware wheel PI / odom share the same tuned value.
-    wheel_track_ = declare_parameter<double>("wheel_track", 0.325);
+    wheel_track_ =
+        startup_double("wheel_track",
+                       0.325,
+                       "Finite startup-only wheel track in metres. Values outside the firmware "
+                       "range [0.15, 0.60] are clamped at startup.");
     // Helper for declaring doubles with a floating_point_range descriptor so
     // ros2 param set rejects out-of-bounds values at the framework level before
     // the set-parameters callback fires. Ranges mirror the firmware validation.
@@ -681,16 +720,31 @@ private:
     // RTK-Float the map pose cannot distinguish slip from GNSS noise, and a
     // false dig would hard-stop a perfectly healthy robot mid-mow.
     dig_cfg_.max_pos_sigma = declare_parameter<double>("dig_max_pos_sigma", 0.10);
-    dig_gnss_timeout_s_ = declare_parameter<double>("dig_gnss_timeout_s", 2.0);
+    // Zero freshness windows would permanently stand the detector down, and a
+    // zero escape timeout would suppress its reverse manoeuvre. Require each
+    // dig timeout to be strictly positive instead.
+    dig_gnss_timeout_s_ = startup_double(
+        "dig_gnss_timeout_s",
+        2.0,
+        "Finite strictly-positive startup-only dig GNSS freshness timeout in seconds.");
     dig_cfg_.max_yaw_rate = declare_parameter<double>("dig_max_yaw_rate", 0.20);
-    dig_gyro_timeout_s_ = declare_parameter<double>("dig_gyro_timeout_s", 0.5);
+    dig_gyro_timeout_s_ = startup_double(
+        "dig_gyro_timeout_s",
+        0.5,
+        "Finite strictly-positive startup-only dig gyro freshness timeout in seconds.");
     dig_escape_cfg_.reverse_speed = declare_parameter<double>("dig_reverse_speed", 0.12);
     dig_escape_cfg_.reverse_dist = declare_parameter<double>("dig_reverse_dist", 0.30);
-    dig_escape_cfg_.timeout_s = declare_parameter<double>("dig_reverse_timeout_s", 4.0);
-    dig_monitor_rate_ = declare_parameter<double>("dig_monitor_rate", 10.0);
+    dig_escape_cfg_.timeout_s =
+        startup_double("dig_reverse_timeout_s",
+                       4.0,
+                       "Finite strictly-positive startup-only dig reverse timeout in seconds.");
+    dig_monitor_rate_ = timer_rate("dig_monitor_rate", 10.0, kDigMonitorRateRange);
     // Fused pose older than this is treated as absent (detector stands down)
     // rather than compared against stale coordinates.
-    dig_pose_timeout_s_ = declare_parameter<double>("dig_pose_timeout_s", 1.0);
+    dig_pose_timeout_s_ = startup_double(
+        "dig_pose_timeout_s",
+        1.0,
+        "Finite strictly-positive startup-only dig pose freshness timeout in seconds.");
     dig_cfg_.enabled = dig_detect_enabled_;
 
     // ── Repeat-dig escalation (see mowgli_hardware/dig_escalation.hpp) ─────
@@ -716,6 +770,41 @@ private:
                 heartbeat_rate_,
                 publish_rate_,
                 high_level_rate_);
+  }
+
+  void validate_startup_parameters()
+  {
+    auto normalize_timer = [this](const char* name, double& requested, TimerRateRange range)
+    {
+      const double effective = normalize_operational_timer_rate(requested, range);
+      if (effective != requested)
+      {
+        RCLCPP_WARN(get_logger(),
+                    "%s requested %.17g Hz is outside the preferred range; using %.17g Hz",
+                    name,
+                    requested,
+                    effective);
+        requested = effective;
+      }
+    };
+    normalize_timer("heartbeat_rate", heartbeat_rate_, kHeartbeatRateRange);
+    normalize_timer("publish_rate", publish_rate_, kPublishRateRange);
+    normalize_timer("high_level_rate", high_level_rate_, kHighLevelRateRange);
+    normalize_timer("dig_monitor_rate", dig_monitor_rate_, kDigMonitorRateRange);
+    const double effective_wheel_track = normalize_runtime_wheel_track(wheel_track_);
+    if (effective_wheel_track != wheel_track_)
+    {
+      RCLCPP_WARN(get_logger(),
+                  "wheel_track requested %.17g m is outside the firmware range; using %.17g m",
+                  wheel_track_,
+                  effective_wheel_track);
+      wheel_track_ = effective_wheel_track;
+    }
+    require_finite_nonnegative_timeout(serial_rx_timeout_s_, "serial_rx_timeout_s");
+    require_finite_positive(dig_gnss_timeout_s_, "dig_gnss_timeout_s");
+    require_finite_positive(dig_gyro_timeout_s_, "dig_gyro_timeout_s");
+    require_finite_positive(dig_escape_cfg_.timeout_s, "dig_reverse_timeout_s");
+    require_finite_positive(dig_pose_timeout_s_, "dig_pose_timeout_s");
   }
 
   void create_publishers()
@@ -936,17 +1025,17 @@ private:
   void create_timers()
   {
     // Serial read / packet dispatch.
-    const auto read_period_ms = std::chrono::milliseconds(static_cast<int>(1000.0 / publish_rate_));
-    timer_read_ = create_wall_timer(read_period_ms,
+    const auto read_period = timer_period_from_rate_hz(publish_rate_);
+    timer_read_ = create_wall_timer(read_period,
                                     [this]()
                                     {
                                       read_serial_tick();
                                     });
 
     // Heartbeat.
-    const auto hb_period_ms = std::chrono::milliseconds(static_cast<int>(1000.0 / heartbeat_rate_));
+    const auto hb_period = timer_period_from_rate_hz(heartbeat_rate_);
     timer_heartbeat_ =
-        create_wall_timer(hb_period_ms,
+        create_wall_timer(hb_period,
                           [this]()
                           {
                             // On startup, send emergency release for the first few
@@ -992,9 +1081,8 @@ private:
                           });
 
     // High-level state.
-    const auto hl_period_ms =
-        std::chrono::milliseconds(static_cast<int>(1000.0 / high_level_rate_));
-    timer_high_level_ = create_wall_timer(hl_period_ms,
+    const auto hl_period = timer_period_from_rate_hz(high_level_rate_);
+    timer_high_level_ = create_wall_timer(hl_period,
                                           [this]()
                                           {
                                             send_high_level_state();
@@ -1007,9 +1095,8 @@ private:
     // still sitting in the hole it dug).
     if (dig_detect_enabled_)
     {
-      const auto dig_period_ms =
-          std::chrono::milliseconds(static_cast<int>(1000.0 / std::max(1.0, dig_monitor_rate_)));
-      timer_dig_monitor_ = create_wall_timer(dig_period_ms,
+      const auto dig_period = timer_period_from_rate_hz(dig_monitor_rate_);
+      timer_dig_monitor_ = create_wall_timer(dig_period,
                                              [this]()
                                              {
                                                dig_monitor_tick();
@@ -1473,7 +1560,7 @@ private:
       // 0.0 when not charging so hasStoppedCharging() detects the
       // transition after undocking.
       msg.current = is_charging_ ? std::abs(pkt.charging_current) : 0.0f;
-      msg.percentage = static_cast<float>(pkt.batt_percentage) / 100.0f;
+      msg.percentage = battery_percentage_from_firmware(pkt.batt_percentage);
       msg.power_supply_status =
           is_charging_ ? sensor_msgs::msg::BatteryState::POWER_SUPPLY_STATUS_CHARGING
                        : sensor_msgs::msg::BatteryState::POWER_SUPPLY_STATUS_DISCHARGING;
@@ -2523,7 +2610,7 @@ private:
     blade_rpm_ = static_cast<float>(pkt.rpm);
     blade_status_time_ = now();
     blade_temperature_ = pkt.temperature;
-    blade_esc_current_ = static_cast<float>(pkt.power_watts);
+    blade_esc_current_ = blade_current_amps(pkt);
   }
 
   // ---------------------------------------------------------------------------
@@ -2715,6 +2802,23 @@ private:
   {
     double vx = msg->twist.linear.x;
     double wz = msg->twist.angular.z;
+
+    // Reject non-finite input before any shaping, mode inference, or state
+    // bookkeeping.  Discarding it lets the firmware's existing 200 ms
+    // cmd_vel watchdog deterministically stop the mower without refreshing
+    // the valid-command heartbeat.  The warning is throttled because this
+    // callback runs at command rate.
+    if (!mowgli_hardware::is_finite_velocity_command(vx, wz))
+    {
+      RCLCPP_WARN_THROTTLE(
+          get_logger(),
+          *get_clock(),
+          5000,
+          "Rejecting non-finite cmd_vel (linear.x=%f, angular.z=%f); command discarded.",
+          vx,
+          wz);
+      return;
+    }
 
     // The firmware ignores cmd_vel when mode is IDLE.  When velocity commands
     // arrive before the BT publishes any high-level state, ensure the firmware
@@ -3087,10 +3191,31 @@ private:
   /// Single point where a velocity command reaches the firmware.
   void send_cmd_vel_packet(double vx, double wz)
   {
+    // Keep this final construction boundary defensive as well: callers such
+    // as the bounded dig escape pass doubles.  Check float32 representability
+    // before narrowing: converting an out-of-range double is not a safe way
+    // to detect wire overflow.
+    if (!mowgli_hardware::is_float32_representable_velocity_command(vx, wz))
+    {
+      RCLCPP_WARN_THROTTLE(get_logger(),
+                           *get_clock(),
+                           5000,
+                           "Refusing non-finite or out-of-range LlCmdVel values "
+                           "(linear.x=%f, angular.z=%f).",
+                           vx,
+                           wz);
+      return;
+    }
+
+    // The pre-check establishes that both conversions are within float32's
+    // finite range.
+    const float wire_vx = static_cast<float>(vx);
+    const float wire_wz = static_cast<float>(wz);
+
     LlCmdVel pkt{};
     pkt.type = PACKET_ID_LL_CMD_VEL;
-    pkt.linear_x = static_cast<float>(vx);
-    pkt.angular_z = static_cast<float>(wz);
+    pkt.linear_x = wire_vx;
+    pkt.angular_z = wire_wz;
 
     send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt), sizeof(LlCmdVel) - sizeof(uint16_t));
   }

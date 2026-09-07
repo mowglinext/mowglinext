@@ -23,18 +23,12 @@ mowgli:
     # and was restored on 2026-04-26.
     chassis_length: 0.60
     #
-    # chassis_width — UNRECONCILED, two claimed measurements (2026-09-05):
-    #   0.40 m — this template's long-standing value, whose comment claimed it
-    #            was "physically measured on the actual YardForce 500". It is
-    #            also what gui/web/src/constants/mowerModels.ts and the GUI JSON
-    #            schema default carry for every YardForce preset.
-    #   0.45 m — measured by the maintainer on HIS YardForce 500 and set in his
-    #            installed (sparse) mowgli_robot.yaml.
-    # Neither has been re-measured against the other, so the template default is
-    # LEFT AT 0.40: silently replacing one claimed measurement with another only
-    # moves the unverified number. A site whose chassis is genuinely wider MUST
-    # override chassis_width in its installed mowgli_robot.yaml (Invariant 15) —
-    # that override is the supported path and already works.
+    # chassis_width — 0.45 m, confirmed by the maintainer on the physical
+    # YardForce 500 (2026-09-05). This replaces a long-standing 0.40 whose
+    # comment claimed it too was "physically measured"; that claim could not be
+    # traced to any measurement record, and the one machine anybody has put a
+    # tape on reads 0.45. A site whose chassis differs MUST override this in its
+    # installed mowgli_robot.yaml (Invariant 15).
     #
     # What rides on this key, so the cost of getting it wrong is explicit:
     #   * Nav2/URDF footprint half-width — mowgli.launch.py:128 (fp_half_w =
@@ -46,14 +40,16 @@ mowgli:
     #   * coverage_server.robot_width (navigation.launch.py:930) — F2C
     #     Robot::getWidth(), used by the connector footprint check.
     #   * The URDF chassis box, hence every sensor's lateral placement.
-    #   * FTC's obstacle_body_half_width reasoning (0.20 ≈ chassis_width/2,
-    #     nav2_params_base.yaml — a HARDCODED 0.12 today, not injected from
-    #     here, so it does NOT follow a chassis_width change).
-    #   * The obstacle_inflation_radius clamp floor (0.58) is derived from the
-    #     circumscribed radius of the footprint above: at 0.40 that is
-    #     sqrt(0.53² + 0.25²) ≈ 0.586 m; at 0.45 it grows to ≈ 0.597 m, i.e. a
-    #     wider chassis makes the shipped floor slightly UNDER-sized.
-    chassis_width: 0.40
+    #   * FTC's obstacle_body_half_width (nav2_params_base.yaml) is a HARDCODED
+    #     0.12 and is NOT injected from here, so it does not follow this key.
+    #   * The obstacle_inflation_radius clamp floor in navigation.launch.py is
+    #     derived from the circumscribed radius of the footprint above. With
+    #     chassis_length 0.60 and chassis_center_x 0.18 the footprint is
+    #     x[-0.170, 0.530] y±(w/2 + 0.05), so that radius is
+    #     sqrt(0.530² + 0.275²) ≈ 0.597 m at this width (it was ≈ 0.586 m at
+    #     0.40 — i.e. the shipped floor of 0.58 was ALREADY marginally under
+    #     the radius before this change). The floor is raised to 0.60 with it.
+    chassis_width: 0.45
     chassis_height: 0.19
     chassis_mass_kg: 8.76
 

@@ -59,7 +59,7 @@
         "chassis_width": {
           "type": "number",
           "title": "Chassis Width",
-          "default": 0.4,
+          "default": 0.45,
           "description": "Chassis width in metres."
         },
         "chassis_height": {

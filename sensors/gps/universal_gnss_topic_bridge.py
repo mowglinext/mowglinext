@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import math
+import time
 from typing import Any
 
 from diagnostic_msgs.msg import DiagnosticArray
@@ -143,7 +146,7 @@ def _diagnostic_value_map(status: Any) -> dict[str, str]:
 
 def _correction_stream_status_from_message(message: str) -> int:
     normalized = message.strip().lower()
-    if "write error" in normalized or normalized.endswith("error"):
+    if "write error" in normalized or "write errors" in normalized or normalized.endswith("error"):
         return PublicGnssStatus.CORRECTION_STREAM_STATUS_ERROR
     if "unavailable" in normalized:
         return PublicGnssStatus.CORRECTION_STREAM_STATUS_UNAVAILABLE
@@ -151,9 +154,323 @@ def _correction_stream_status_from_message(message: str) -> int:
         return PublicGnssStatus.CORRECTION_STREAM_STATUS_WAITING
     if "active" in normalized:
         return PublicGnssStatus.CORRECTION_STREAM_STATUS_ACTIVE
-    if "idle" in normalized:
+    if "stale" in normalized or "idle" in normalized:
         return PublicGnssStatus.CORRECTION_STREAM_STATUS_IDLE
     return PublicGnssStatus.CORRECTION_STREAM_STATUS_UNKNOWN
+
+
+@dataclass
+class _CorrectionSnapshot:
+    valid: bool
+    source: str
+    entries: dict[str, tuple[str, dict[str, str]]]
+    received_at: float
+
+
+class CorrectionDiagnosticTracker:
+    """Bounded, source-owned Universal GNSS correction projection.
+
+    Arrays that contain an owner prefix replace that owner's complete snapshot,
+    while unrelated arrays are OMIT. Monotonic receipt time owns liveness; the
+    ROS diagnostic stamp is ordering evidence only.
+    """
+
+    _NTRIP_PREFIX = "universal_gnss_ntrip/"
+    _RECEIVER_PREFIX = "universal_gnss/"
+    _SEMANTIC_FRESHNESS_S = 5.0
+
+    def __init__(self, timeout_s: float) -> None:
+        if not math.isfinite(timeout_s) or timeout_s <= 0.0:
+            raise ValueError("correction diagnostic timeout must be finite and positive")
+        self._timeout_s = timeout_s
+        self._ntrip: _CorrectionSnapshot | None = None
+        self._receiver: _CorrectionSnapshot | None = None
+        self._ntrip_stamp_watermark_ns: int | None = None
+        self._receiver_stamp_watermark_ns: int | None = None
+
+    @staticmethod
+    def _stamp_ns(msg: DiagnosticArray) -> int | None:
+        stamp = getattr(getattr(msg, "header", None), "stamp", None)
+        sec = int(getattr(stamp, "sec", 0))
+        nanosec = int(getattr(stamp, "nanosec", 0))
+        return None if sec == 0 and nanosec == 0 else sec * 1_000_000_000 + nanosec
+
+    def _replace_owner(
+        self,
+        msg: DiagnosticArray,
+        prefix: str,
+        received_at: float,
+        snapshot_attr: str,
+        watermark_attr: str,
+    ) -> None:
+        represented = False
+        source_ids: set[str] = set()
+        entries: dict[str, tuple[str, dict[str, str]]] = {}
+        for status in msg.status:
+            if not status.name.startswith(prefix):
+                continue
+            represented = True
+            hardware_id = status.hardware_id.strip()
+            if hardware_id:
+                source_ids.add(hardware_id)
+            entries[status.name] = (status.message.strip(), _diagnostic_value_map(status))
+
+        if not represented:
+            return
+
+        stamp_ns = self._stamp_ns(msg)
+        watermark = getattr(self, watermark_attr)
+        if stamp_ns is not None and watermark is not None and stamp_ns < watermark:
+            return
+        if stamp_ns is not None and (watermark is None or stamp_ns > watermark):
+            setattr(self, watermark_attr, stamp_ns)
+
+        valid = len(source_ids) == 1
+        setattr(
+            self,
+            snapshot_attr,
+            _CorrectionSnapshot(
+                valid=valid,
+                source=next(iter(source_ids)) if valid else "",
+                entries=entries if valid else {},
+                received_at=received_at,
+            ),
+        )
+
+    def update(self, msg: DiagnosticArray, received_at: float | None = None) -> None:
+        now = time.monotonic() if received_at is None else received_at
+        self._replace_owner(
+            msg,
+            self._NTRIP_PREFIX,
+            now,
+            "_ntrip",
+            "_ntrip_stamp_watermark_ns",
+        )
+        self._replace_owner(
+            msg,
+            self._RECEIVER_PREFIX,
+            now,
+            "_receiver",
+            "_receiver_stamp_watermark_ns",
+        )
+
+    def _current(self, snapshot: _CorrectionSnapshot | None, now: float) -> _CorrectionSnapshot | None:
+        if snapshot is None or not snapshot.valid or now < snapshot.received_at:
+            return None
+        return snapshot if now - snapshot.received_at < self._timeout_s else None
+
+    @staticmethod
+    def _transport_status(snapshot: _CorrectionSnapshot) -> int:
+        names = snapshot.entries
+        if "universal_gnss_ntrip/ntrip_failed" in names:
+            return PublicGnssStatus.CORRECTION_TRANSPORT_STATUS_FAILED
+        if "universal_gnss_ntrip/ntrip_reconnecting" in names:
+            return PublicGnssStatus.CORRECTION_TRANSPORT_STATUS_RECONNECTING
+        if "universal_gnss_ntrip/ntrip_streaming" in names:
+            return PublicGnssStatus.CORRECTION_TRANSPORT_STATUS_STREAMING
+        if "universal_gnss_ntrip/ntrip_connected" in names:
+            return PublicGnssStatus.CORRECTION_TRANSPORT_STATUS_CONNECTED
+        if "universal_gnss_ntrip/ntrip_connecting" in names:
+            return PublicGnssStatus.CORRECTION_TRANSPORT_STATUS_CONNECTING
+        if "universal_gnss_ntrip/ntrip_disconnected" in names:
+            return PublicGnssStatus.CORRECTION_TRANSPORT_STATUS_DISCONNECTED
+        return PublicGnssStatus.CORRECTION_TRANSPORT_STATUS_UNKNOWN
+
+    @staticmethod
+    def _observation(entry: tuple[str, dict[str, str]] | None) -> dict[str, Any]:
+        if entry is None:
+            return {"present": False, "has_value": False}
+        values = entry[1]
+        parsed = {
+            "present": True,
+            "seen": _parse_diagnostic_bool(values.get("seen")),
+            "decoded": _parse_diagnostic_bool(values.get("decoded")),
+            "valid": _parse_diagnostic_bool(values.get("valid")),
+            "message_type": _parse_diagnostic_uint(values.get("message_type")),
+            "station_id": _parse_diagnostic_uint(values.get("station_id")),
+            "satellite_count": _parse_diagnostic_uint(values.get("satellite_count")),
+            "signal_count": _parse_diagnostic_uint(values.get("signal_count")),
+            "cell_count": _parse_diagnostic_uint(values.get("cell_count")),
+            "decode_failure_count": _parse_diagnostic_uint(values.get("decode_failure_count")),
+            "malformed_count": _parse_diagnostic_uint(values.get("malformed_count")),
+            "age_s": _parse_diagnostic_float(values.get("age_s")),
+            "constellations_seen": values.get("constellations_seen", ""),
+        }
+        parsed["has_value"] = any(
+            value is not None and value != ""
+            for key, value in parsed.items()
+            if key not in ("present", "has_value")
+        )
+        return parsed
+
+    @staticmethod
+    def _flow_status(snapshot: _CorrectionSnapshot, transport: int) -> int:
+        if transport != PublicGnssStatus.CORRECTION_TRANSPORT_STATUS_STREAMING:
+            return PublicGnssStatus.CORRECTION_FLOW_STATUS_IDLE
+        summary = snapshot.entries.get("universal_gnss_ntrip/summary")
+        values = {} if summary is None else summary[1]
+        if _parse_diagnostic_bool(values.get("parser_healthy")) is False:
+            return PublicGnssStatus.CORRECTION_FLOW_STATUS_INVALID
+        if (
+            _parse_diagnostic_bool(values.get("stale_data")) is True
+            or "universal_gnss_ntrip/rtcm.stream_stale" in snapshot.entries
+        ):
+            return PublicGnssStatus.CORRECTION_FLOW_STATUS_STALE
+        if "universal_gnss_ntrip/correction_flowing" in snapshot.entries:
+            return PublicGnssStatus.CORRECTION_FLOW_STATUS_ACTIVE
+        return PublicGnssStatus.CORRECTION_FLOW_STATUS_WAITING
+
+    @classmethod
+    def _semantic_status(cls, snapshot: _CorrectionSnapshot, transport: int) -> int:
+        if transport != PublicGnssStatus.CORRECTION_TRANSPORT_STATUS_STREAMING:
+            return PublicGnssStatus.CORRECTION_SEMANTIC_STATUS_UNAVAILABLE
+        summary = snapshot.entries.get("universal_gnss_ntrip/summary")
+        if summary is None:
+            return PublicGnssStatus.CORRECTION_SEMANTIC_STATUS_WAITING
+        values = summary[1]
+        parser_healthy = _parse_diagnostic_bool(values.get("parser_healthy"))
+        if parser_healthy is False:
+            return PublicGnssStatus.CORRECTION_SEMANTIC_STATUS_INVALID
+        if _parse_diagnostic_bool(values.get("stale_data")) is True:
+            return PublicGnssStatus.CORRECTION_SEMANTIC_STATUS_STALE
+
+        correction_available = _parse_diagnostic_bool(values.get("correction_available"))
+        base = cls._observation(
+            snapshot.entries.get("universal_gnss_ntrip/rtcm_semantic/base_station_arp")
+        )
+        msm = cls._observation(
+            snapshot.entries.get("universal_gnss_ntrip/rtcm_semantic/msm_summary")
+        )
+        base_usable = (
+            base["present"]
+            and base.get("seen") is True
+            and base.get("decoded") is True
+            and base.get("valid") is True
+        )
+        age_s = msm.get("age_s")
+        msm_fresh = age_s is not None and 0.0 <= age_s <= cls._SEMANTIC_FRESHNESS_S
+        msm_usable = (
+            msm["present"]
+            and msm.get("seen") is True
+            and msm.get("decoded") is True
+            and msm.get("valid") is True
+            and (msm.get("cell_count") or 0) > 0
+            and msm_fresh
+            and (msm.get("malformed_count") or 0) == 0
+        )
+        station_matches = (
+            (base.get("station_id") or 0) > 0
+            and base.get("station_id") == msm.get("station_id")
+        )
+        if correction_available is True and parser_healthy is True and base_usable and msm_usable and station_matches:
+            return PublicGnssStatus.CORRECTION_SEMANTIC_STATUS_HEALTHY
+        if (
+            (msm["present"] and msm.get("seen") is True and (
+                msm.get("decoded") is not True
+                or msm.get("valid") is not True
+                or (msm.get("cell_count") or 0) == 0
+                or (msm.get("malformed_count") or 0) > 0
+            ))
+            or (base["present"] and base.get("seen") is True and (
+                base.get("decoded") is not True or base.get("valid") is not True
+            ))
+            or (base_usable and msm_usable and not station_matches)
+            or correction_available is True
+        ):
+            return PublicGnssStatus.CORRECTION_SEMANTIC_STATUS_INVALID
+        if msm["present"] and msm.get("seen") is True and not msm_fresh:
+            return PublicGnssStatus.CORRECTION_SEMANTIC_STATUS_STALE
+        return PublicGnssStatus.CORRECTION_SEMANTIC_STATUS_WAITING
+
+    @classmethod
+    def _apply_msm(
+        cls,
+        snapshot: _CorrectionSnapshot,
+        name: str,
+        public_msg: PublicGnssStatus,
+    ) -> None:
+        msm = cls._observation(snapshot.entries.get(name))
+        if not msm["present"]:
+            return
+        public_msg.msm_summary_seen = bool(msm.get("seen"))
+        public_msg.msm_summary_decoded = bool(msm.get("decoded"))
+        public_msg.msm_summary_valid = bool(msm.get("valid"))
+        public_msg.msm_summary_message_type = msm.get("message_type") or 0
+        public_msg.msm_summary_station_id = msm.get("station_id") or 0
+        public_msg.msm_summary_constellations_seen = msm.get("constellations_seen") or ""
+        public_msg.msm_summary_satellite_count = msm.get("satellite_count") or 0
+        public_msg.msm_summary_signal_count = msm.get("signal_count") or 0
+        public_msg.msm_summary_cell_count = msm.get("cell_count") or 0
+        public_msg.msm_summary_age_s = msm.get("age_s") or 0.0
+        public_msg.msm_summary_source = snapshot.source
+        if msm["has_value"]:
+            public_msg.value_flags |= PublicGnssStatus.CAP_MSM_SUMMARY
+
+    def apply(self, public_msg: PublicGnssStatus, now: float | None = None) -> None:
+        current_time = time.monotonic() if now is None else now
+        correction_capabilities = (
+            PublicGnssStatus.CAP_CORRECTION_STREAM
+            | PublicGnssStatus.CAP_MSM_SUMMARY
+            | PublicGnssStatus.CAP_CORRECTION_TRANSPORT
+            | PublicGnssStatus.CAP_CORRECTION_FLOW
+            | PublicGnssStatus.CAP_CORRECTION_SEMANTIC
+        )
+        public_msg.capability_flags |= correction_capabilities
+        public_msg.value_flags &= ~correction_capabilities
+        public_msg.correction_stream_status = PublicGnssStatus.CORRECTION_STREAM_STATUS_UNKNOWN
+        public_msg.correction_transport_status = PublicGnssStatus.CORRECTION_TRANSPORT_STATUS_UNKNOWN
+        public_msg.correction_response_accepted = False
+        public_msg.correction_flow_status = PublicGnssStatus.CORRECTION_FLOW_STATUS_UNKNOWN
+        public_msg.correction_semantic_status = PublicGnssStatus.CORRECTION_SEMANTIC_STATUS_UNKNOWN
+        public_msg.correction_source = ""
+        public_msg.correction_forwarding_source = ""
+        public_msg.msm_summary_source = ""
+
+        ntrip = self._current(self._ntrip, current_time)
+        receiver = self._current(self._receiver, current_time)
+        forwarding_owner = receiver
+        forwarding = None if receiver is None else receiver.entries.get("universal_gnss/rtcm_forwarding")
+        if receiver is None:
+            forwarding_owner = ntrip
+            forwarding = None if ntrip is None else ntrip.entries.get(
+                "universal_gnss_ntrip/rtcm_forwarding"
+            )
+        if forwarding is not None and forwarding_owner is not None:
+            public_msg.correction_stream_status = _correction_stream_status_from_message(forwarding[0])
+            public_msg.correction_forwarding_source = forwarding_owner.source
+            if public_msg.correction_stream_status != PublicGnssStatus.CORRECTION_STREAM_STATUS_UNKNOWN:
+                public_msg.value_flags |= PublicGnssStatus.CAP_CORRECTION_STREAM
+
+        if ntrip is not None:
+            transport = self._transport_status(ntrip)
+            public_msg.correction_transport_status = transport
+            public_msg.correction_response_accepted = (
+                transport == PublicGnssStatus.CORRECTION_TRANSPORT_STATUS_STREAMING
+            )
+            public_msg.correction_flow_status = self._flow_status(ntrip, transport)
+            public_msg.correction_semantic_status = self._semantic_status(ntrip, transport)
+            public_msg.correction_source = ntrip.source
+            if transport != PublicGnssStatus.CORRECTION_TRANSPORT_STATUS_UNKNOWN:
+                public_msg.value_flags |= PublicGnssStatus.CAP_CORRECTION_TRANSPORT
+            public_msg.value_flags |= PublicGnssStatus.CAP_CORRECTION_FLOW
+            public_msg.value_flags |= PublicGnssStatus.CAP_CORRECTION_SEMANTIC
+
+        if (
+            ntrip is not None
+            and public_msg.correction_transport_status
+            == PublicGnssStatus.CORRECTION_TRANSPORT_STATUS_STREAMING
+        ):
+            self._apply_msm(
+                ntrip,
+                "universal_gnss_ntrip/rtcm_semantic/msm_summary",
+                public_msg,
+            )
+        elif receiver is not None:
+            self._apply_msm(
+                receiver,
+                "universal_gnss/rtcm_semantic/msm_summary",
+                public_msg,
+            )
 
 
 class UniversalGnssTopicBridge(Node):
@@ -168,6 +485,7 @@ class UniversalGnssTopicBridge(Node):
         self.declare_parameter("input_diagnostics_topic", "/diagnostics")
         self.declare_parameter("input_rtcm_topic", "/_gps_internal/universal/rtcm")
         self.declare_parameter("output_rtcm_topic", "/rtcm")
+        self.declare_parameter("correction_diagnostic_timeout_s", 2.0)
 
         self._backend = str(self.get_parameter("backend").value)
         self._receiver_family = str(self.get_parameter("receiver_family").value)
@@ -180,7 +498,9 @@ class UniversalGnssTopicBridge(Node):
         input_rtcm_topic = str(self.get_parameter("input_rtcm_topic").value)
         output_rtcm_topic = str(self.get_parameter("output_rtcm_topic").value)
 
-        self._diagnostic_entries: dict[str, tuple[str, dict[str, str]]] = {}
+        self._correction_diagnostics = CorrectionDiagnosticTracker(
+            float(self.get_parameter("correction_diagnostic_timeout_s").value)
+        )
 
         reliable_qos = QoSProfile(
             depth=10,
@@ -289,106 +609,10 @@ class UniversalGnssTopicBridge(Node):
         self._status_pub.publish(public_msg)
 
     def _on_diagnostics(self, msg: DiagnosticArray) -> None:
-        for status in msg.status:
-            self._diagnostic_entries[status.name] = (
-                status.message.strip(),
-                _diagnostic_value_map(status),
-            )
-
-    def _pick_diagnostic_entry(
-        self,
-        *names: str,
-    ) -> tuple[str, dict[str, str]] | None:
-        for name in names:
-            entry = self._diagnostic_entries.get(name)
-            if entry is not None:
-                return entry
-        return None
+        self._correction_diagnostics.update(msg)
 
     def _apply_diagnostic_projection(self, public_msg: PublicGnssStatus) -> None:
-        correction_stream = self._derive_correction_stream()
-        if correction_stream is not None:
-            public_msg.capability_flags |= PublicGnssStatus.CAP_CORRECTION_STREAM
-            public_msg.correction_stream_status = correction_stream["correction_stream_status"]
-            if correction_stream["has_value"]:
-                public_msg.value_flags |= PublicGnssStatus.CAP_CORRECTION_STREAM
-
-        msm_summary = self._derive_msm_summary()
-        if msm_summary is not None:
-            public_msg.capability_flags |= PublicGnssStatus.CAP_MSM_SUMMARY
-            public_msg.msm_summary_seen = msm_summary["seen"]
-            public_msg.msm_summary_decoded = msm_summary["decoded"]
-            public_msg.msm_summary_valid = msm_summary["valid"]
-            public_msg.msm_summary_message_type = msm_summary["message_type"]
-            public_msg.msm_summary_station_id = msm_summary["station_id"]
-            public_msg.msm_summary_constellations_seen = msm_summary["constellations_seen"]
-            public_msg.msm_summary_satellite_count = msm_summary["satellite_count"]
-            public_msg.msm_summary_signal_count = msm_summary["signal_count"]
-            public_msg.msm_summary_cell_count = msm_summary["cell_count"]
-            public_msg.msm_summary_age_s = msm_summary["age_s"]
-            if msm_summary["has_value"]:
-                public_msg.value_flags |= PublicGnssStatus.CAP_MSM_SUMMARY
-
-    def _derive_correction_stream(self) -> dict[str, Any] | None:
-        entry = self._pick_diagnostic_entry(
-            "universal_gnss_ntrip/rtcm_forwarding",
-            "universal_gnss/rtcm_forwarding",
-        )
-        if entry is None:
-            return None
-
-        correction_stream_status = _correction_stream_status_from_message(entry[0])
-        return {
-            "correction_stream_status": correction_stream_status,
-            "has_value": correction_stream_status != PublicGnssStatus.CORRECTION_STREAM_STATUS_UNKNOWN,
-        }
-
-    def _derive_msm_summary(self) -> dict[str, Any] | None:
-        entry = self._pick_diagnostic_entry(
-            "universal_gnss_ntrip/rtcm_semantic/msm_summary",
-            "universal_gnss/rtcm_semantic/msm_summary",
-        )
-        if entry is None:
-            return None
-
-        values = entry[1]
-        seen = _parse_diagnostic_bool(values.get("seen"))
-        decoded = _parse_diagnostic_bool(values.get("decoded"))
-        valid = _parse_diagnostic_bool(values.get("valid"))
-        message_type = _parse_diagnostic_uint(values.get("message_type"))
-        station_id = _parse_diagnostic_uint(values.get("station_id"))
-        satellite_count = _parse_diagnostic_uint(values.get("satellite_count"))
-        signal_count = _parse_diagnostic_uint(values.get("signal_count"))
-        cell_count = _parse_diagnostic_uint(values.get("cell_count"))
-        age_s = _parse_diagnostic_float(values.get("age_s"))
-        constellations_seen = values.get("constellations_seen", "")
-
-        has_value = any((
-            seen is not None,
-            decoded is not None,
-            valid is not None,
-            message_type is not None,
-            station_id is not None,
-            bool(constellations_seen),
-            satellite_count is not None,
-            signal_count is not None,
-            cell_count is not None,
-            age_s is not None,
-        ))
-
-        return {
-            "seen": bool(seen),
-            "decoded": bool(decoded),
-            "valid": bool(valid),
-            "message_type": 0 if message_type is None else message_type,
-            "station_id": 0 if station_id is None else station_id,
-            "constellations_seen": constellations_seen,
-            "satellite_count": 0 if satellite_count is None else satellite_count,
-            "signal_count": 0 if signal_count is None else signal_count,
-            "cell_count": 0 if cell_count is None else cell_count,
-            "age_s": 0.0 if age_s is None else age_s,
-            "has_value": has_value,
-        }
+        self._correction_diagnostics.apply(public_msg)
 
     def _on_rtcm(self, msg: RtcmFrame) -> None:
         public_msg = PublicRtcmMessage()

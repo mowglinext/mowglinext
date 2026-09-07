@@ -11,8 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/systemmetrics"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
@@ -40,7 +41,8 @@ type ContainerHealth struct {
 
 // SystemHealth holds host-level health metrics.
 type SystemHealth struct {
-	CpuTemperature float64 `json:"cpu_temperature"`
+	CpuTemperature float64  `json:"cpu_temperature"`
+	CpuUsage       *float64 `json:"cpu_usage"` // host-wide 0–100%; nil while unavailable/warming up
 }
 
 // AreaCoverageInfo holds per-area coverage data returned by the ROS service.
@@ -175,6 +177,7 @@ func setFirmwareDebug(rosProvider types.IRosProvider) gin.HandlerFunc {
 // ---------------------------------------------------------------------------
 
 func getDiagnosticsSnapshot(dockerProvider types.IDockerProvider, rosProvider types.IRosProvider, dbProvider types.IDBProvider) gin.HandlerFunc {
+	cpuUsage := systemmetrics.NewCPUUsageSampler()
 	return func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 		defer cancel()
@@ -203,6 +206,7 @@ func getDiagnosticsSnapshot(dockerProvider types.IDockerProvider, rosProvider ty
 		}
 
 		// --- System ---
+		snapshot.System.CpuUsage = cpuUsage.Usage()
 		if data, err := os.ReadFile("/sys/class/thermal/thermal_zone0/temp"); err == nil {
 			tempStr := strings.TrimSpace(string(data))
 			if tempMilliC, err := strconv.ParseFloat(tempStr, 64); err == nil {

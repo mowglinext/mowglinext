@@ -26,6 +26,7 @@
 #include "charger.h"
 #include "drivemotor.h"
 #include "emergency.h"
+#include "heartbeat_emergency_policy.hpp"
 #include "nbt.h"
 #include "panel.h"
 #include "pid.hpp"
@@ -39,6 +40,7 @@
 // COBS protocol (replaces rosserial)
 #include "mowgli_comms.h"
 #include "mowgli_protocol.h"
+#include "cmd_vel_safety.hpp"
 
 // Math
 #include <cmath>
@@ -362,37 +364,43 @@ static void on_heartbeat(const uint8_t *data, size_t len) {
 
   last_heartbeat_tick = HAL_GetTick();
 
-  /* Comms restored. If the active emergency was a PURE comms-loss watchdog latch
-   * (no physical trigger) and no sensor is asserted now, auto-clear it so a brief
-   * host/USB stall doesn't strand the robot until a manual reset. A physical
-   * trigger that appeared in the meantime asserts a sensor (handled below) and
-   * clears heartbeat_only_latch, so this never auto-clears a physical e-stop. */
-  if (heartbeat_only_latch && Emergency_State()) {
-    if (!any_physical_emergency()) {
+  const bool emergency_requested = pkt->emergency_requested != 0u;
+  const bool emergency_release_requested =
+      pkt->emergency_release_requested != 0u;
+  const bool watchdog_latch_active =
+      heartbeat_only_latch && Emergency_State();
+  /* A STOP request needs no sensor read: it always wins. This preserves the
+   * previous sensor-read conditions for all other inputs. */
+  const bool physical_emergency =
+      !emergency_requested &&
+      (watchdog_latch_active || emergency_release_requested) &&
+      any_physical_emergency();
+  const HeartbeatEmergencyDecision decision = decide_heartbeat_emergency(
+      emergency_requested, emergency_release_requested, physical_emergency,
+      watchdog_latch_active);
+
+  switch (decision.action) {
+    case HeartbeatEmergencyAction::Assert:
+      Emergency_SetState(1);
+      break;
+    case HeartbeatEmergencyAction::Release:
       Emergency_SetState(0);
-      heartbeat_only_latch = false;
+      break;
+    case HeartbeatEmergencyAction::AutoClearWatchdog:
+      Emergency_SetState(0);
       debug_printf("heartbeat resumed: comms-loss emergency auto-cleared\r\n");
-    } else {
-      /* A physical sensor is now asserted — this is no longer a pure comms
-       * latch; require an explicit operator release. */
-      heartbeat_only_latch = false;
-    }
+      break;
+    case HeartbeatEmergencyAction::Unchanged:
+      break;
   }
 
-  if (pkt->emergency_requested) {
-    heartbeat_only_latch = false;  /* host-commanded e-stop is not comms-loss */
-    Emergency_SetState(1);
+  if (decision.clear_heartbeat_only_latch) {
+    heartbeat_only_latch = false;
   }
-  if (pkt->emergency_release_requested) {
-    /* Only clear emergency if no physical sensor is still asserted.
-     * Firmware is the sole safety authority — never bypass hardware. */
-    if (!any_physical_emergency()) {
-      Emergency_SetState(0);
-      heartbeat_only_latch = false;
-    } else {
-      debug_printf(
-          "emergency release rejected: physical sensor still active\r\n");
-    }
+
+  if (emergency_release_requested && !emergency_requested &&
+      physical_emergency) {
+    debug_printf("emergency release rejected: physical sensor still active\r\n");
   }
 }
 
@@ -403,14 +411,28 @@ static void on_cmd_vel(const uint8_t *data, size_t len) {
 
   const pkt_cmd_vel_t *pkt = reinterpret_cast<const pkt_cmd_vel_t *>(data);
 
-  last_cmd_vel_tick = HAL_GetTick();
+  const float vx = pkt->linear_x;
+  const float wz = pkt->angular_z;
+
+  /* Firmware is the final safety authority.  Validate before refreshing the
+   * watchdog: NaN defeats ordinary >/< clamps, and an invalid packet must
+   * never preserve or refresh a motion target.  Clear all command state so a
+   * malformed packet deterministically stops the next motor cycle. */
+  mowgli_cmd_vel::SafetyState safety_state{
+      cmd_wz, left_target_mps, right_target_mps, last_cmd_vel_tick};
+  if (!mowgli_cmd_vel::apply_safety(vx, wz, HAL_GetTick(), safety_state)) {
+    cmd_wz = safety_state.cmd_wz;
+    left_target_mps = safety_state.left_target_mps;
+    right_target_mps = safety_state.right_target_mps;
+    return;
+  }
+
+  /* Only a validated command is a new cmd_vel heartbeat. */
+  last_cmd_vel_tick = safety_state.last_valid_tick;
 
   if (main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE) {
     return;
   }
-
-  const float vx = pkt->linear_x;
-  const float wz = pkt->angular_z;
 
   /* Commanded yaw rate for the firmware yaw-rate loop (Option C), read in the
    * motor timebase by motors_handler. Stored raw (pre-IK) so the loop tracks
@@ -1315,7 +1337,10 @@ extern "C" void broadcast_handler() {
     status_pkt.v_charge = charge_voltage;
     status_pkt.v_system = battery_voltage;
     status_pkt.charging_current = current;
-    status_pkt.batt_percentage = 0; // TODO: compute from voltage curve
+    // No verified SoC source exists.  Keep the legacy byte for wire
+    // compatibility; the ROS bridge publishes percentage as unknown (NaN),
+    // not 0 %.  Do not infer SoC from voltage here.
+    status_pkt.batt_percentage = 0;
 
     pkt_reset_cause_t reset_pkt;
     reset_pkt.type = PKT_ID_RESET_CAUSE;

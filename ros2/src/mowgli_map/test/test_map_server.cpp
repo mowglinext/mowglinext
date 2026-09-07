@@ -1032,6 +1032,33 @@ protected:
     node_->on_dig_event_for_test(msg);
   }
 
+  void add_other_areas()
+  {
+    // Three lawns reproduce the three GUI copies. Include an overlapping
+    // navigation area too: ownership must not depend on geometric containment.
+    for (uint32_t i = 1; i <= 3; ++i)
+    {
+      auto req = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+      req->area.name = "other_" + std::to_string(i);
+      req->is_navigation_area = i == 3;
+      req->area.area = i == 3 ? make_rect(-2, -2, 2, 2) : make_rect(4 * i, -3, 4 * i + 3, 3);
+      auto res = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+      node_->add_area_for_test(req, res);
+      ASSERT_TRUE(res->success);
+    }
+  }
+
+  void expect_other_areas_empty()
+  {
+    for (uint32_t i = 1; i <= 3; ++i)
+    {
+      SCOPED_TRACE(i);
+      const auto area = fetch_area(i);
+      EXPECT_TRUE(area.obstacles.empty()) << "another area's keepout leaked into this response";
+      EXPECT_TRUE(area.obstacle_info.empty());
+    }
+  }
+
   mowgli_interfaces::msg::MapArea fetch_area(uint32_t index)
   {
     auto req = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
@@ -1081,6 +1108,80 @@ TEST_F(DigProposalTest, PendingDigStillProtectsTheSpotThisSession)
   const auto mask = node_->build_keepout_mask_for_test();
   ASSERT_FALSE(mask.data.empty());
   EXPECT_EQ(mask_at(mask, 1.0, 1.0), 100) << "the dig spot must be lethal for this session";
+}
+
+TEST_F(DigProposalTest, PendingDigIsReturnedOnlyWithItsOwningArea)
+{
+  add_lawn();
+  add_other_areas();
+  dig_at(1.0, 1.0);
+  const auto info = node_->obstacle_info_for_test(0, 0);
+
+  // Repeated GUI polls must return one polygon with its original identity.
+  for (int poll = 0; poll < 2; ++poll)
+  {
+    const auto owner = fetch_area(0);
+    ASSERT_EQ(owner.obstacles.size(), 1u);
+    ASSERT_EQ(owner.obstacle_info.size(), 1u);
+    EXPECT_EQ(owner.obstacle_info[0].id, info.id);
+    EXPECT_EQ(owner.obstacle_info[0].name, info.name);
+    EXPECT_EQ(owner.obstacle_info[0].source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG);
+    EXPECT_TRUE(owner.obstacle_info[0].pending);
+    expect_other_areas_empty();
+  }
+  EXPECT_EQ(mask_at(node_->build_keepout_mask_for_test(), 1.0, 1.0), 100);
+
+  auto req = std::make_shared<mowgli_interfaces::srv::ClearObstacle::Request>();
+  req->obstacle_id = info.id;
+  auto res = std::make_shared<mowgli_interfaces::srv::ClearObstacle::Response>();
+  node_->discard_obstacle_for_test(req, res);
+  ASSERT_TRUE(res->success);
+  EXPECT_TRUE(fetch_area(0).obstacles.empty());
+  expect_other_areas_empty();
+  EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 0u);
+}
+
+TEST_F(DigProposalTest, AcceptedDigKeepsItsAreaAndProvenanceBeforeAndAfterReload)
+{
+  add_lawn();
+  add_other_areas();
+  dig_at(1.0, 1.0);
+  auto req = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Request>();
+  req->pending_id = node_->obstacle_info_for_test(0, 0).id;
+  req->name = "dig patch";
+  auto res = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Response>();
+  node_->promote_obstacle_for_test(req, res);
+  ASSERT_TRUE(res->success);
+
+  for (bool reload : {false, true})
+  {
+    if (reload)
+      node_->load_areas_for_test(areas_path_);
+    const auto owner = fetch_area(0);
+    ASSERT_EQ(owner.obstacles.size(), 1u);
+    ASSERT_EQ(owner.obstacle_info.size(), 1u);
+    EXPECT_FALSE(owner.obstacle_info[0].pending);
+    EXPECT_EQ(owner.obstacle_info[0].name, "dig patch");
+    EXPECT_EQ(owner.obstacle_info[0].source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG);
+    expect_other_areas_empty();
+    EXPECT_EQ(mask_at(node_->build_keepout_mask_for_test(), 1.0, 1.0), 100);
+  }
+}
+
+TEST_F(DigProposalTest, PromotedPolygonIsReturnedOnlyWithItsOwningArea)
+{
+  add_lawn();
+  add_other_areas();
+  const auto polygon = make_rect(0.5, 0.5, 1.5, 1.5);
+  ASSERT_TRUE(node_->apply_promoted_obstacle_for_test(0, polygon));
+  const auto owner = fetch_area(0);
+  ASSERT_EQ(owner.obstacles.size(), 1u);
+  EXPECT_EQ(owner.obstacles[0], polygon);
+  ASSERT_EQ(owner.obstacle_info.size(), 1u);
+  EXPECT_EQ(owner.obstacle_info[0].source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER);
+  EXPECT_FALSE(owner.obstacle_info[0].pending);
+  expect_other_areas_empty();
+  EXPECT_EQ(mask_at(node_->build_keepout_mask_for_test(), 1.0, 1.0), 100);
 }
 
 TEST_F(DigProposalTest, AcceptingAProposalPersistsItWithItsProvenance)

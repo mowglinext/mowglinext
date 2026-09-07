@@ -312,7 +312,7 @@ typedef struct {
   float v_charge;                       /**< Charge input voltage [V] */
   float v_system;                       /**< Battery / system voltage [V] */
   float charging_current;               /**< Charging current [A] */
-  uint8_t batt_percentage;              /**< Battery state of charge [0-100] */
+  uint8_t batt_percentage;              /**< Reserved until a verified SoC provider exists; currently 0. */
   uint16_t crc; /**< CRC-16 CCITT over preceding bytes */
 } pkt_status_t;
 
@@ -595,7 +595,7 @@ typedef struct {
   uint8_t type;         /**< PKT_ID_BLADE_STATUS */
   uint8_t is_active;    /**< 1=running, 0=stopped */
   uint16_t rpm;         /**< Blade motor RPM */
-  uint16_t power_watts; /**< Power consumption [W] */
+  uint16_t power_watts; /**< ESC current [mA]; legacy field name, not watts */
   float temperature;    /**< Blade/motor temperature [C] */
   uint32_t error_count; /**< Cumulative error counter */
   uint16_t crc;         /**< CRC-16 CCITT over preceding bytes */

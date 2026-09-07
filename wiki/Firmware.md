@@ -251,6 +251,12 @@ Current wire version: `MOWGLI_PROTOCOL_VERSION` **6**.
 | `0x06` | `pkt_reset_cause_t` | 5 | `reset_cause` (`RESET_CAUSE_*`), `last_stage_before_reset` (WWDG breadcrumb) |
 | `0x12` | `pkt_config_rsp_t` | 8 | `protocol_version`, `active_flags`, `fw_version_{major,minor,patch}` |
 
+The blade packet's legacy `power_watts` field contains **ESC current in milliamps**,
+not watts. Both Yardforce 500 and 500B forward ESC UART bytes 9–10 unchanged.
+The ROS2 hardware bridge divides this value by 1,000 for `Status.mower_esc_current`
+in amperes, matching the ROS1 bridge. The wire name and 16-byte layout are retained
+for compatibility; no firmware update or protocol version change is required.
+
 ### Host → Firmware
 
 | ID | Struct | Bytes | Contents |

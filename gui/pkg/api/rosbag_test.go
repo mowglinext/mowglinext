@@ -13,9 +13,11 @@ import (
 	"strings"
 	"testing"
 
-	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/gin-gonic/gin"
+	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // rosbagFakeDocker is a minimal IDockerProvider whose ContainerExec is driven
@@ -119,6 +121,11 @@ func TestRosbagStatus_ReportsActiveFromProbe(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "rosbag_live"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A live recorder always has its pid file (buildRosbagStartCommand writes
+	// and verifies it); the status probe only execs when one exists.
+	if err := os.WriteFile(filepath.Join(dir, "rosbag_live", rosbagPidFile), []byte("4242\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/tools/rosbag/status", nil))
@@ -138,7 +145,15 @@ func TestRosbagStart_RejectsWhenAlreadyRecording(t *testing.T) {
 	docker.execFn = func(pkgtypes.ContainerExecSpec) (pkgtypes.ContainerExecResult, error) {
 		return pkgtypes.ContainerExecResult{ExitCode: 0, Stdout: "rosbag_busy\n"}, nil
 	}
-	r, _ := setupRosbagRouter(t, docker)
+	r, dir := setupRosbagRouter(t, docker)
+	if err := os.MkdirAll(filepath.Join(dir, "rosbag_busy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A live recorder always has its pid file (buildRosbagStartCommand writes
+	// and verifies it); the status probe only execs when one exists.
+	if err := os.WriteFile(filepath.Join(dir, "rosbag_busy", rosbagPidFile), []byte("4242\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/tools/rosbag/start", nil))
@@ -178,13 +193,14 @@ func TestRosbagStart_LaunchesRecordAndReturnsName(t *testing.T) {
 
 func TestRosbagStart_SurfacesRecorderFailure(t *testing.T) {
 	docker := rosbagWithContainer()
-	calls := 0
-	docker.execFn = func(pkgtypes.ContainerExecSpec) (pkgtypes.ContainerExecResult, error) {
-		calls++
-		if calls == 1 {
-			return pkgtypes.ContainerExecResult{ExitCode: 0, Stdout: ""}, nil
+	// Key the fake on what is being executed rather than on call order: the
+	// liveness probe is skipped entirely when no pid file exists, so the start
+	// command may well be the first exec this handler issues.
+	docker.execFn = func(spec pkgtypes.ContainerExecSpec) (pkgtypes.ContainerExecResult, error) {
+		if strings.Contains(strings.Join(spec.Cmd, " "), "ros2 bag record") {
+			return pkgtypes.ContainerExecResult{ExitCode: 1, Stdout: "recorder exited immediately\n"}, nil
 		}
-		return pkgtypes.ContainerExecResult{ExitCode: 1, Stdout: "recorder exited immediately\n"}, nil
+		return pkgtypes.ContainerExecResult{ExitCode: 0, Stdout: ""}, nil
 	}
 	r, _ := setupRosbagRouter(t, docker)
 
@@ -294,6 +310,13 @@ func TestRosbagDelete_RefusesActiveRecording(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A live recording always carries its pid file: buildRosbagStartCommand
+	// writes `echo $! > .rosbag.pid` and refuses to report success without it.
+	// The status probe now only execs into the ros2 container when a pid file
+	// exists, so the fixture must reflect that invariant.
+	if err := os.WriteFile(filepath.Join(dir, name, rosbagPidFile), []byte("4242\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/tools/rosbag/"+name, nil))
@@ -321,4 +344,45 @@ func tarEntryNames(t *testing.T, body []byte) map[string]bool {
 		names[hdr.Name] = true
 	}
 	return names
+}
+
+// The status endpoint is polled every 4 s per tab. On an idle robot there is
+// no pid file anywhere under the recordings root, and the probe must not cost
+// a docker exec just to discover that.
+func TestRosbagStatus_SkipsExecWhenNoPidFileExists(t *testing.T) {
+	execCalls := 0
+	docker := &rosbagFakeDocker{
+		containers: []dockertypes.Container{{ID: "abc123", Names: []string{"/mowgli-ros2"}}},
+		execFn: func(spec pkgtypes.ContainerExecSpec) (pkgtypes.ContainerExecResult, error) {
+			execCalls++
+			return pkgtypes.ContainerExecResult{}, nil
+		},
+	}
+	r, dir := setupRosbagRouter(t, docker)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "finished_run", rosbagBagSubdir), 0o755))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/tools/rosbag/status", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 0, execCalls, "no pid file anywhere: the probe must not exec into the ros2 container")
+}
+
+// With a pid file present the recorder may still be alive, and only the ros2
+// container's pid namespace can say — the exec must still happen.
+func TestRosbagStatus_ExecsWhenAPidFileExists(t *testing.T) {
+	execCalls := 0
+	docker := &rosbagFakeDocker{
+		containers: []dockertypes.Container{{ID: "abc123", Names: []string{"/mowgli-ros2"}}},
+		execFn: func(spec pkgtypes.ContainerExecSpec) (pkgtypes.ContainerExecResult, error) {
+			execCalls++
+			return pkgtypes.ContainerExecResult{Stdout: "live_run\n"}, nil
+		},
+	}
+	r, dir := setupRosbagRouter(t, docker)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "live_run", rosbagBagSubdir), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "live_run", rosbagPidFile), []byte("4242\n"), 0o644))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/tools/rosbag/status", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 1, execCalls, "a pid file exists: liveness must still be probed in the ros2 container")
+	assert.Contains(t, w.Body.String(), `"active":true`)
 }

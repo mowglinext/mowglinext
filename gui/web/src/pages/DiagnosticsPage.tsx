@@ -44,7 +44,6 @@ import {useGPS} from "../hooks/useGPS.ts";
 import {useGnssStatus} from "../hooks/useGnssStatus.ts";
 import {useFusionOdom} from "../hooks/useFusionOdom.ts";
 import {useBTLog, isBTNodeStale} from "../hooks/useBTLog.ts";
-import {useImu} from "../hooks/useImu.ts";
 import {useCogHeading} from "../hooks/useCogHeading.ts";
 import {useMagYaw} from "../hooks/useMagYaw.ts";
 import {useCalibrationStatus} from "../hooks/useCalibrationStatus.ts";
@@ -71,6 +70,7 @@ import {useFusionGraphDiagnostics} from "../hooks/useFusionGraphDiagnostics.ts";
 import {useRosbag, RosbagRecording} from "../hooks/useRosbag.ts";
 import {useFirmwareDebugLogs} from "../hooks/useFirmwareDebugLogs.ts";
 import {useMowerAction} from "../components/MowerActions.tsx";
+import {useImu} from "../hooks/useImu.ts";
 import {useImuYawCalibration} from "../hooks/useImuYawCalibration.ts";
 import {AsyncButton} from "../components/AsyncButton.tsx";
 import {TelemetryStat} from "../components/TelemetryStat.tsx";
@@ -166,7 +166,6 @@ export const DiagnosticsPage = () => {
     const gnssStatus = useGnssStatus();
     const pose = useFusionOdom();
     const btNodeStates = useBTLog();
-    const imu = useImu();
     const {imu: cogImu, lastMessageAt: cogLastAt} = useCogHeading();
     const {imu: magImu, lastMessageAt: magLastAt} = useMagYaw();
     const wheelOdom = useWheelOdom();
@@ -183,6 +182,11 @@ export const DiagnosticsPage = () => {
     const {modal} = App.useApp();
     const {snapshot, loading, error: snapshotError, refresh} = useDiagnosticsSnapshot();
     const {diagnostics} = useDiagnostics();
+    // Panels are collapsed by default; track which are open so high-rate
+    // sensor subscriptions exist only while their panel is on screen.
+    const [openPanels, setOpenPanels] = useState<string[]>([]);
+    const sensorsPanelOpen = openPanels.includes("sensors");
+    const imu = useImu(sensorsPanelOpen);
     const {settings} = useSettings();
     const guiApi = useApi();
     const wheelRpm = useWheelRpm({wheelRadiusM: settings?.wheel_radius ?? 0.04475});
@@ -215,6 +219,7 @@ export const DiagnosticsPage = () => {
     const gpsOk = gpsFixValid && gpsAccuracy !== undefined && gpsAccuracy <= 0.1;
     const gpsWarn = gpsFixValid && (gpsAccuracy === undefined || gpsAccuracy > 0.1);
     const cpuTemp = snapshot?.system?.cpu_temperature ?? 0;
+    const cpuUsage = snapshot?.system?.cpu_usage;
 
     const alerts = useMemo(
         () => (diagnostics.status ?? []).filter(s =>
@@ -336,6 +341,10 @@ export const DiagnosticsPage = () => {
                     label={cpuTemp > 0 ? t('diagnosticsPage.cpuTemp', {value: cpuTemp.toFixed(1)}) : t('diagnosticsPage.cpuTempUnknown')}
                     color={cpuTemp > 70 ? "error" : cpuTemp > 55 ? "warning" : "success"}
                 />
+                <HealthBadge
+                    label={cpuUsage != null ? t('diagnosticsPage.cpuUsageBadge', {value: cpuUsage.toFixed(0)}) : t('diagnosticsPage.cpuUsageUnknown')}
+                    color="default"
+                />
             </Flex>
         </Card>
     );
@@ -383,6 +392,19 @@ export const DiagnosticsPage = () => {
     const scansReceivedRaw = fusionStats?.values?.["scans_received"];
     const scansReceivedSince = useValueSince(scansReceivedRaw);
     const lidarStreaming = scansReceivedSince !== null && (nowMs - scansReceivedSince) < 15_000;
+    // IMU liveness comes from diagnostics_node's 1 Hz "IMU" status, not from a
+    // live /imu/data subscription. This page only ever needed a boolean, yet
+    // useImu() held a 90 Hz upstream foxglove subscription open for as long as
+    // the page was, and that stream is serialised by foxglove_bridge at full
+    // rate regardless of client-side decimation. Measured on the docked robot
+    // 2026-09-06 it was a visible slice of GUI + bridge CPU. The diagnostics
+    // status is also more honest: useTopic kept the last IMU message forever,
+    // so imuOk stayed true after the IMU died until a page reload.
+    const imuStatus = diagnostics?.status?.find((s) => s.name === "IMU");
+    const imuAlive =
+        imuStatus != null &&
+        imuStatus.level < 2 && // OK or WARN; ERROR (2) / STALE (3) mean no fresh data
+        (nowMs - imuStatus.receivedAt) < 15_000;
     const anatomyInputs = {
         batteryPct: batteryPercent,
         vBattery: power.v_battery ?? 0,
@@ -391,7 +413,7 @@ export const DiagnosticsPage = () => {
         gpsLabel: anatomyGps.label,
         gpsOk: anatomyGps.percent >= 50,
         imuYawDeg: yaw,
-        imuOk: imu != null && imu.angular_velocity != null,
+        imuOk: imuAlive,
         lidarOk: lidarEnabled === false ? false : (lidarStreaming ? true : undefined),
         // Mowgli is rear-axle drive: only the rear wheels are encoded (the
         // fronts are unencoded casters whose RPM is always 0).
@@ -493,6 +515,15 @@ export const DiagnosticsPage = () => {
             </Col>
             <Col xs={24} lg={8}>
                 <Card title={<Space><DashboardOutlined/> CPU</Space>} size="small" style={{height: "100%"}}>
+                    <Statistic
+                        title={t('diagnosticsPage.cpuUsage')}
+                        value={cpuUsage ?? "—"}
+                        precision={1}
+                        suffix={cpuUsage != null ? "%" : undefined}
+                    />
+                    <Typography.Paragraph type="secondary" style={{fontSize: 12, marginTop: 4}}>
+                        {t('diagnosticsPage.cpuUsageHint')}
+                    </Typography.Paragraph>
                     <Statistic
                         title={t('diagnosticsPage.temperature')}
                         value={cpuTemp > 0 ? cpuTemp : undefined}
@@ -1867,7 +1898,8 @@ export const DiagnosticsPage = () => {
                 {healthBar}
                 {sectionAlerts}
                 <Collapse
-                    defaultActiveKey={[]}
+                    activeKey={openPanels}
+                    onChange={(keys) => setOpenPanels(Array.isArray(keys) ? keys.map(String) : [String(keys)])}
                     size="small"
                     items={[
                         {

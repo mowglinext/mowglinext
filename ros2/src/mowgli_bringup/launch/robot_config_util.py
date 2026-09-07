@@ -22,6 +22,7 @@
 # Older FULL installed configs keep working unchanged (every key overrides its
 # identical template default; a no-op merge).
 
+import math
 import copy
 import os
 import sys
@@ -62,6 +63,61 @@ DEFAULT_TOOL_WIDTH_M = 0.18
 # HALF-track: an arc of radius <= track/2 needs the inner wheel to stop or
 # reverse, which is the swath-end carving in issue #499.
 DEFAULT_WHEEL_TRACK_M = 0.325
+
+# ---------------------------------------------------------------------------
+# Chassis footprint geometry
+# ---------------------------------------------------------------------------
+#
+# The Nav2 footprint and everything derived from it must follow the chassis
+# dimensions, because those are operator-editable in the GUI (Settings ->
+# Hardware). Before 2026-09-05 the footprint was built inline in
+# navigation.launch.py while the local-costmap inflation floor that depends on
+# it was a hardcoded literal, so the two silently drifted apart: the floor's
+# own comment justified 0.58 with a circumscribed radius of "~0.572 m", which
+# is what you get with chassis_length 0.54 — a value the template abandoned on
+# 2026-04-26. The floor had been describing a chassis that no longer existed,
+# and was below the real radius (0.586 m) even at the old chassis_width 0.40.
+#
+# These helpers are pure so both call sites read the same geometry and a test
+# can pin it.
+
+# Costmap planning clearance added around the physical chassis.
+CHASSIS_FOOTPRINT_MARGIN_M = 0.05
+
+DEFAULT_CHASSIS_LENGTH_M = 0.60
+DEFAULT_CHASSIS_WIDTH_M = 0.45
+DEFAULT_CHASSIS_CENTER_X_M = 0.18
+
+
+def chassis_footprint(params, margin=CHASSIS_FOOTPRINT_MARGIN_M):
+    """Nav2 footprint extents in base_link, as (front_x, rear_x, half_width).
+
+    `params` is the merged robot config. Missing keys fall back to the
+    in-package template values, so a sparse installed config still yields the
+    shipped chassis rather than zeros.
+    """
+    params = params or {}
+    length = float(params.get("chassis_length", DEFAULT_CHASSIS_LENGTH_M))
+    width = float(params.get("chassis_width", DEFAULT_CHASSIS_WIDTH_M))
+    center_x = float(params.get("chassis_center_x", DEFAULT_CHASSIS_CENTER_X_M))
+    return (
+        center_x + length / 2.0 + margin,
+        center_x - length / 2.0 - margin,
+        width / 2.0 + margin,
+    )
+
+
+def chassis_circumscribed_radius(params, margin=CHASSIS_FOOTPRINT_MARGIN_M):
+    """Radius of the smallest circle centred on base_link enclosing the footprint.
+
+    Nav2's inflation layer degrades footprint-cost semantics below this radius,
+    and FTC's obstacle-deviation detector (cost threshold 253) assumes the
+    inscribed band exists — so it is the floor for the local-costmap
+    inflation_radius, not a nicety.
+    """
+    front, rear, half_width = chassis_footprint(params, margin)
+    return math.hypot(max(abs(front), abs(rear)), half_width)
+
 
 
 def deep_merge(base, override):

@@ -48,7 +48,8 @@ var modelPresetDivergesFromTemplate = map[string]string{
 
 	// Unreconciled measurements, out of scope for the config-template fix that
 	// added this guard. Each needs someone to measure the actual machine.
-	"chassis_length": "unreconciled: preset 0.54 vs template 0.60 — the template comment says 0.54 was the value that wrongly diverged and 0.60 was restored 2026-04-26, but nobody has re-measured",
+	// (chassis_length and chassis_width were reconciled on 2026-09-05 by the
+	// maintainer measuring his YardForce 500: 0.60 and 0.45; both removed.)
 	"imu_x":          "unreconciled: preset 0.187 vs template 0.18 (7 mm)",
 	"imu_z":          "unreconciled: preset 0.0 vs template 0.095 (template says base_height/2; preset 0.0 puts the IMU on the wheel axis plane)",
 	"lidar_y":        "unreconciled: preset 0.025 vs template 0.024 (1 mm)",

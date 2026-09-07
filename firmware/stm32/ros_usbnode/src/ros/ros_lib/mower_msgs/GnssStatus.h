@@ -108,6 +108,20 @@ namespace mower_msgs
       _msm_summary_age_s_type msm_summary_age_s;
       typedef uint64_t _position_observation_sequence_type;
       _position_observation_sequence_type position_observation_sequence;
+      typedef uint8_t _correction_transport_status_type;
+      _correction_transport_status_type correction_transport_status;
+      typedef bool _correction_response_accepted_type;
+      _correction_response_accepted_type correction_response_accepted;
+      typedef uint8_t _correction_flow_status_type;
+      _correction_flow_status_type correction_flow_status;
+      typedef uint8_t _correction_semantic_status_type;
+      _correction_semantic_status_type correction_semantic_status;
+      typedef const char* _correction_source_type;
+      _correction_source_type correction_source;
+      typedef const char* _correction_forwarding_source_type;
+      _correction_forwarding_source_type correction_forwarding_source;
+      typedef const char* _msm_summary_source_type;
+      _msm_summary_source_type msm_summary_source;
       enum { FIX_TYPE_NO_FIX = 0 };
       enum { FIX_TYPE_GPS_FIX = 1 };
       enum { FIX_TYPE_RTK_FLOAT = 2 };
@@ -131,6 +145,25 @@ namespace mower_msgs
       enum { CORRECTION_STREAM_STATUS_ACTIVE = 3 };
       enum { CORRECTION_STREAM_STATUS_UNAVAILABLE = 4 };
       enum { CORRECTION_STREAM_STATUS_ERROR = 5 };
+      enum { CORRECTION_TRANSPORT_STATUS_UNKNOWN = 0 };
+      enum { CORRECTION_TRANSPORT_STATUS_DISCONNECTED = 1 };
+      enum { CORRECTION_TRANSPORT_STATUS_CONNECTING = 2 };
+      enum { CORRECTION_TRANSPORT_STATUS_CONNECTED = 3 };
+      enum { CORRECTION_TRANSPORT_STATUS_STREAMING = 4 };
+      enum { CORRECTION_TRANSPORT_STATUS_RECONNECTING = 5 };
+      enum { CORRECTION_TRANSPORT_STATUS_FAILED = 6 };
+      enum { CORRECTION_FLOW_STATUS_UNKNOWN = 0 };
+      enum { CORRECTION_FLOW_STATUS_IDLE = 1 };
+      enum { CORRECTION_FLOW_STATUS_WAITING = 2 };
+      enum { CORRECTION_FLOW_STATUS_ACTIVE = 3 };
+      enum { CORRECTION_FLOW_STATUS_STALE = 4 };
+      enum { CORRECTION_FLOW_STATUS_INVALID = 5 };
+      enum { CORRECTION_SEMANTIC_STATUS_UNKNOWN = 0 };
+      enum { CORRECTION_SEMANTIC_STATUS_UNAVAILABLE = 1 };
+      enum { CORRECTION_SEMANTIC_STATUS_WAITING = 2 };
+      enum { CORRECTION_SEMANTIC_STATUS_HEALTHY = 3 };
+      enum { CORRECTION_SEMANTIC_STATUS_STALE = 4 };
+      enum { CORRECTION_SEMANTIC_STATUS_INVALID = 5 };
       enum { CAP_RTK_MODE = 1 };
       enum { CAP_HDOP = 2 };
       enum { CAP_VDOP = 4 };
@@ -156,6 +189,9 @@ namespace mower_msgs
       enum { CAP_BASELINE_SOLUTION_STATUS = 4194304 };
       enum { CAP_CORRECTION_STREAM = 8388608 };
       enum { CAP_MSM_SUMMARY = 16777216 };
+      enum { CAP_CORRECTION_TRANSPORT = 33554432 };
+      enum { CAP_CORRECTION_FLOW = 67108864 };
+      enum { CAP_CORRECTION_SEMANTIC = 134217728 };
 
     GnssStatus():
       header(),
@@ -203,7 +239,14 @@ namespace mower_msgs
       msm_summary_signal_count(0),
       msm_summary_cell_count(0),
       msm_summary_age_s(0),
-      position_observation_sequence(0)
+      position_observation_sequence(0),
+      correction_transport_status(0),
+      correction_response_accepted(0),
+      correction_flow_status(0),
+      correction_semantic_status(0),
+      correction_source(""),
+      correction_forwarding_source(""),
+      msm_summary_source("")
     {
     }
 
@@ -559,6 +602,34 @@ namespace mower_msgs
       *(outbuffer + offset + 6) = (u_position_observation_sequence.base >> (8 * 6)) & 0xFF;
       *(outbuffer + offset + 7) = (u_position_observation_sequence.base >> (8 * 7)) & 0xFF;
       offset += sizeof(this->position_observation_sequence);
+      *(outbuffer + offset + 0) = (this->correction_transport_status >> (8 * 0)) & 0xFF;
+      offset += sizeof(this->correction_transport_status);
+      union {
+        bool real;
+        uint8_t base;
+      } u_correction_response_accepted;
+      u_correction_response_accepted.real = this->correction_response_accepted;
+      *(outbuffer + offset + 0) = (u_correction_response_accepted.base >> (8 * 0)) & 0xFF;
+      offset += sizeof(this->correction_response_accepted);
+      *(outbuffer + offset + 0) = (this->correction_flow_status >> (8 * 0)) & 0xFF;
+      offset += sizeof(this->correction_flow_status);
+      *(outbuffer + offset + 0) = (this->correction_semantic_status >> (8 * 0)) & 0xFF;
+      offset += sizeof(this->correction_semantic_status);
+      uint32_t length_correction_source = strlen(this->correction_source);
+      varToArr(outbuffer + offset, length_correction_source);
+      offset += 4;
+      memcpy(outbuffer + offset, this->correction_source, length_correction_source);
+      offset += length_correction_source;
+      uint32_t length_correction_forwarding_source = strlen(this->correction_forwarding_source);
+      varToArr(outbuffer + offset, length_correction_forwarding_source);
+      offset += 4;
+      memcpy(outbuffer + offset, this->correction_forwarding_source, length_correction_forwarding_source);
+      offset += length_correction_forwarding_source;
+      uint32_t length_msm_summary_source = strlen(this->msm_summary_source);
+      varToArr(outbuffer + offset, length_msm_summary_source);
+      offset += 4;
+      memcpy(outbuffer + offset, this->msm_summary_source, length_msm_summary_source);
+      offset += length_msm_summary_source;
       return offset;
     }
 
@@ -970,11 +1041,52 @@ namespace mower_msgs
       u_position_observation_sequence.base |= ((uint64_t) (*(inbuffer + offset + 7))) << (8 * 7);
       this->position_observation_sequence = u_position_observation_sequence.real;
       offset += sizeof(this->position_observation_sequence);
+      this->correction_transport_status =  ((uint8_t) (*(inbuffer + offset)));
+      offset += sizeof(this->correction_transport_status);
+      union {
+        bool real;
+        uint8_t base;
+      } u_correction_response_accepted;
+      u_correction_response_accepted.base = 0;
+      u_correction_response_accepted.base |= ((uint8_t) (*(inbuffer + offset + 0))) << (8 * 0);
+      this->correction_response_accepted = u_correction_response_accepted.real;
+      offset += sizeof(this->correction_response_accepted);
+      this->correction_flow_status =  ((uint8_t) (*(inbuffer + offset)));
+      offset += sizeof(this->correction_flow_status);
+      this->correction_semantic_status =  ((uint8_t) (*(inbuffer + offset)));
+      offset += sizeof(this->correction_semantic_status);
+      uint32_t length_correction_source;
+      arrToVar(length_correction_source, (inbuffer + offset));
+      offset += 4;
+      for(unsigned int k= offset; k< offset+length_correction_source; ++k){
+          inbuffer[k-1]=inbuffer[k];
+      }
+      inbuffer[offset+length_correction_source-1]=0;
+      this->correction_source = (char *)(inbuffer + offset-1);
+      offset += length_correction_source;
+      uint32_t length_correction_forwarding_source;
+      arrToVar(length_correction_forwarding_source, (inbuffer + offset));
+      offset += 4;
+      for(unsigned int k= offset; k< offset+length_correction_forwarding_source; ++k){
+          inbuffer[k-1]=inbuffer[k];
+      }
+      inbuffer[offset+length_correction_forwarding_source-1]=0;
+      this->correction_forwarding_source = (char *)(inbuffer + offset-1);
+      offset += length_correction_forwarding_source;
+      uint32_t length_msm_summary_source;
+      arrToVar(length_msm_summary_source, (inbuffer + offset));
+      offset += 4;
+      for(unsigned int k= offset; k< offset+length_msm_summary_source; ++k){
+          inbuffer[k-1]=inbuffer[k];
+      }
+      inbuffer[offset+length_msm_summary_source-1]=0;
+      this->msm_summary_source = (char *)(inbuffer + offset-1);
+      offset += length_msm_summary_source;
      return offset;
     }
 
     virtual const char * getType() override { return "mower_msgs/GnssStatus"; };
-    virtual const char * getMD5() override { return "2abb8ee551e47aac5db970d0e1a1740b"; };
+    virtual const char * getMD5() override { return "a8334728d1511fd48b6b5c85cf2a331e"; };
 
   };
 

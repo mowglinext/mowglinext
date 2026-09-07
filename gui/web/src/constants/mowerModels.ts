@@ -47,7 +47,7 @@ export const MOWER_MODELS: MowerModel[] = [
             gps_x: 0.3, gps_y: 0.0, gps_z: 0.2,
             imu_x: 0.187, imu_y: -0.195, imu_z: 0.0, imu_yaw: 0.0,
             lidar_x: 0.0, lidar_y: 0.025, lidar_z: 0.3, lidar_yaw: -3.1416,
-            chassis_length: 0.54, chassis_width: 0.40, chassis_center_x: 0.18,
+            chassis_length: 0.60, chassis_width: 0.45, chassis_center_x: 0.18,
         },
     },
     {
@@ -64,7 +64,7 @@ export const MOWER_MODELS: MowerModel[] = [
             gps_x: 0.3, gps_y: 0.0, gps_z: 0.2,
             imu_x: 0.187, imu_y: -0.195, imu_z: 0.0, imu_yaw: 0.0,
             lidar_x: 0.0, lidar_y: 0.025, lidar_z: 0.3, lidar_yaw: -3.1416,
-            chassis_length: 0.54, chassis_width: 0.40, chassis_center_x: 0.18,
+            chassis_length: 0.60, chassis_width: 0.45, chassis_center_x: 0.18,
         },
     },
     {
