@@ -3321,6 +3321,10 @@
     }
   },
   "hostUpdater": {
+    "built": "Compilé",
+    "published": "Publié",
+    "buildDatesHelp": "Compilé indique la date de construction de l’image installée ; Publié indique la date de publication de la version.",
+
     "componentSourceHelp": "Les versions des composants doivent provenir du même dépôt et de la même branche que la version sélectionnée.",
     "summaryUnknown": "Inconnu",
     "summaryCustom": "Personnalisé",

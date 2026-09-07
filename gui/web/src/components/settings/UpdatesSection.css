@@ -48,3 +48,6 @@
 .updates-simple .stack-image-details { display:none; }
 .updates-simple .stack-version { margin-top:2px; }
 .updates-simple .update-actions { position:static; border:0; padding:0; }
+
+.update-version-menu .ant-select-item-option-content { white-space:normal; overflow-wrap:anywhere; }
+.stack-build-date { margin-top:4px; }

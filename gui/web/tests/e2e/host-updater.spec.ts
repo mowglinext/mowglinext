@@ -13,7 +13,7 @@ const customPrevious='30b3faa9a7aea7ea7aea20deab06c5f9cc24939f';
 const familyMap = {mowgli:'mowgli-ros2',gui:'mowglinext-gui',gps:'gps',lidar:'lidar-ldlidar',camera:'camera'};
 const contracts = Object.fromEntries(Object.values(familyMap).map(f=>[f,`${f}-contract-1`]));
 function release(id:string, track='dev', tag='') {
-    return {id,source:{...source,track,branch:track==='stable'?'main':'dev'},release_tag:tag,revision:id.includes('new')?devHead:devPrevious,published_at:track==='stable'?'2026-09-07T09:00:00Z':id.includes('new')?'2026-09-06T23:29:38Z':'2026-09-06T18:38:03Z',
+    return {id,source:{...source,track,branch:track==='stable'?'main':'dev'},release_tag:tag,revision:id.includes('new')?devHead:id.includes('alternative')?'a8447afc4d554fc70141f2a12ea0f3e30c15955c':devPrevious,published_at:track==='stable'?'2026-09-07T09:00:00Z':id.includes('new')?'2026-09-06T23:29:38Z':id.includes('alternative')?'2026-09-06T18:36:53Z':'2026-09-06T18:38:03Z',
         layout:1,data_schema:1,updater_api:1,maintenance_api:1,firmware_protocol:6,component_compatibility:contracts,
         service_choices:[{service:'mowgli',image:'mowgli-ros2'},{service:'gui',image:'mowglinext-gui'},{service:'gps',image:'gps',when:{gnss:'universal'}},{service:'lidar',image:'lidar-ldlidar',when:{lidar:'ldlidar'}}],
         images:Object.fromEntries(Object.values(familyMap).map(f=>[f,{repository:`ghcr.io/${source.repository}/${f}`,platforms:{'linux/arm64':{manifest:'sha256:'+'1'.repeat(64)}}}])),
@@ -37,7 +37,7 @@ const inventory={docker_available:true,server:{version:'dev'},components:[
 async function open(page:Page, data:ReturnType<typeof fixture>, mobile=false) {
     await page.setViewportSize(mobile?{width:390,height:844}:{width:1440,height:1800});
     const names=new Set(Object.values(data.runtime.components).map(c=>c.name));
-    await installMockBackend(page,{...SCENARIOS[0],rest:{'/api/system/updater/state':data,'/api/system/versions':{...inventory,components:inventory.components.filter(c=>c.component==='mqtt'||names.has(c.name)).map(c=>({...c,version:Object.values(data.runtime.components).find(r=>r.name===c.name)?.version??c.version,revision:Object.values(data.runtime.components).find(r=>r.name===c.name)?.revision}))}}});
+    await installMockBackend(page,{...SCENARIOS[0],rest:{'/api/system/updater/state':data,'/api/system/versions':{...inventory,components:inventory.components.filter(c=>c.component==='mqtt'||names.has(c.name)).map(c=>({...c,version:Object.values(data.runtime.components).find(r=>r.name===c.name)?.version??c.version,revision:Object.values(data.runtime.components).find(r=>r.name===c.name)?.revision,built_at:data.state.active?.published_at ? new Date(Date.parse(data.state.active.published_at)-60000).toISOString() : undefined}))}}});
     const posts:{path:string;body:Record<string,unknown>}[]=[];const errors:string[]=[];
     page.on('pageerror',e=>errors.push(e.message));
     page.on('request',r=>{if(r.method()==='POST'&&r.url().includes('/system/updater/'))posts.push({path:new URL(r.url()).pathname,body:r.postDataJSON()});});
@@ -47,7 +47,7 @@ async function open(page:Page, data:ReturnType<typeof fixture>, mobile=false) {
 async function advanced(page:Page) {await page.locator('.ant-segmented').getByText('Advanced',{exact:true}).click();}
 async function choose(page:Page,name:string,text:string|RegExp) {
     await page.getByRole('combobox',{name,exact:true}).locator('..').locator('..').click();
-    await page.locator('.ant-select-dropdown:visible').last().locator('.ant-select-item-option-content').getByText(text,{exact:true}).click();
+    await page.locator('.ant-select-dropdown:visible').last().locator('.ant-select-item-option-content').getByText(text,{exact:false}).click();
     await expect(page.locator('.ant-select-dropdown:visible')).toHaveCount(0);
 }
 async function shot(page:Page,name:string,mobile:boolean,focus?:string) {
@@ -79,6 +79,8 @@ for(const track of ['dev','stable'])for(const mobile of [false,true])test(`${tra
     await advanced(page);await expect(panel.getByRole('combobox',{name:'Robot software version',exact:true})).toBeEnabled();
     await expect(panel.getByRole('combobox',{name:'GPS version',exact:true})).toBeEnabled();
     await expect(panel.getByRole('combobox',{name:'Repository',exact:true})).not.toBeVisible();
+    await expect(page.getByTestId('stack-mowgli')).toContainText('Built:');
+    await expect(page.getByTestId('stack-mowgli')).toContainText('Published:');
     await shot(page,prefix+'-advanced',mobile,'stack-mowgli');expect(errors).toEqual([]);
 });
 
@@ -270,4 +272,14 @@ for(const mobile of [false,true])test(`real upstream custom branch with one comp
     await shot(page,'host-updater-custom-review',mobile);
     expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:base.id,pinned:true,component_deployments:{gui:next.id}}}]);
     expect(errors).toEqual([]);
+});
+
+for(const mobile of [false,true])test(`dated dev build choices ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const {panel,posts}=await open(page,fixture(),mobile);await advanced(page);
+    const row=page.getByTestId('stack-gui');
+    if(mobile)await row.evaluate(el=>el.scrollIntoView({block:'start'}));
+    await panel.getByRole('combobox',{name:'Web interface version',exact:true}).locator('..').locator('..').click();
+    const options=page.locator('.ant-select-dropdown:visible');
+    await expect(options).toContainText('Published:');await expect(options).toContainText('1076cdeb');
+    await shot(page,'host-updater-build-dates',mobile);expect(posts).toEqual([]);
 });

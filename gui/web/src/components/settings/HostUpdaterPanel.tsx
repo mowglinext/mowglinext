@@ -47,9 +47,11 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
     const dirty = !!policy && JSON.stringify(policy) !== savedPolicy;
     const sameDeployment = !!target && target.id === active?.id && matched && !hasOverrides && !runtime?.selection_pending;
     const canRestore = data?.state.history.some(j => j.phase === 'succeeded' && j.plan.target.id === data.state.active?.id && (!data.state.active_job_id || j.id === data.state.active_job_id));
-    const date = (value?: string) => value && !value.startsWith('0001') ? new Date(value).toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'}) : t('updates.unknown');
+    const date = (value?: string) => value && !value.startsWith('0001') && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString(undefined, {year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}) : t('updates.unknown');
     const label = (deployment?: Deployment) => !deployment ? t('hostUpdater.customInstalled') : deployment.source.track === 'stable'
         ? deployment.release_tag || deployment.id : `${deployment.source.track === 'custom' ? deployment.source.branch : t(`hostUpdater.tracks.${deployment.source.track}`)} · ${deployment.revision.slice(0, 8)}`;
+    const published = (deployment?: Deployment) => `${t('hostUpdater.published')}: ${date(deployment?.published_at)}`;
+    const datedLabel = (deployment: Deployment) => `${label(deployment)} · ${published(deployment)}`;
     const component = (service: string) => t(`updates.components.${service === 'mowgli' ? 'robot' : service}`, {defaultValue: service});
     return <Card title={t('hostUpdater.softwareUpdates')} size="small" data-testid="host-updater" className={advanced ? undefined : "updates-simple"}>
         <Space direction="vertical" size="middle" style={{width: '100%', overflowWrap: 'anywhere'}}>
@@ -60,6 +62,7 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                     <div><Typography.Text type="secondary">{t('hostUpdater.installed')}</Typography.Text><div><Typography.Text strong>{matched ? label(data.state.active) : t(`hostUpdater.identities.${identity}`, {defaultValue: t('hostUpdater.customInstalled')})}</Typography.Text></div></div>
                     {installedPin && <Tag>{t('hostUpdater.pinned')}</Tag>}
                 </div>
+                {advanced && matched && active && <Typography.Text type="secondary">{published(active)}</Typography.Text>}
                 {!matched && active && <Typography.Text type="secondary">{t('hostUpdater.baseVersion')}: {label(active)}</Typography.Text>}
                 <Typography.Text type={runtime?.health === 'degraded' ? 'warning' : 'secondary'}>{t('hostUpdater.containerHealth')}: {t(`hostUpdater.health.${runtime?.health ?? 'unknown'}`)}</Typography.Text>
                 {['mixed', 'drifted'].includes(identity) && <Typography.Text type="secondary">{t('hostUpdater.mixedHelp')}</Typography.Text>}
@@ -84,8 +87,8 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                 {advanced && <Typography.Text type="secondary">{t('hostUpdater.nextCheck', {time: policy.interval_hours ? date(data.state.next_check) : t('hostUpdater.manual')})}</Typography.Text>}
                 {advanced && <Form layout="vertical" className="release-selection">
                     <Form.Item label={t('hostUpdater.version')}>
-                        <Select aria-label={t('hostUpdater.version')} value={target?.id} placeholder={t('hostUpdater.noVersions')} disabled={pending || busy || dirty || versions.length === 0}
-                            options={versions.map((r,i) => ({value:r.id,label:`${i === 0 && releases.length ? t('hostUpdater.latest')+' · ' : ''}${label(r)} · ${date(r.published_at)}`}))}
+                        <Select classNames={{popup:{root:'update-version-menu'}}} aria-label={t('hostUpdater.version')} value={target?.id} placeholder={t('hostUpdater.noVersions')} disabled={pending || busy || dirty || versions.length === 0}
+                            options={versions.map((r,i) => ({value:r.id,label:`${i === 0 && releases.length ? t('hostUpdater.latest')+' · ' : ''}${datedLabel(r)}`}))}
                             onChange={value => {setSelected(value);setComponentSelected({});}}/>
                     </Form.Item>
                     <Checkbox checked={pinned} disabled={pending || busy || dirty || !target} onChange={e => setPinned(e.target.checked)}>{t('hostUpdater.pin')}</Checkbox>
@@ -94,7 +97,7 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                     <div className="update-stack-title"><Typography.Title level={5}>{t('hostUpdater.stack')}</Typography.Title>
                         {advanced && hasOverrides && <Button size="small" onClick={() => setComponentSelected({})}>{t('hostUpdater.resetComponents')}</Button>}
                     </div>
-                    {advanced && <Typography.Paragraph type="secondary">{t('hostUpdater.componentSourceHelp')}</Typography.Paragraph>}
+                    {advanced && <Typography.Paragraph type="secondary">{t('hostUpdater.componentSourceHelp')} {t('hostUpdater.buildDatesHelp')}</Typography.Paragraph>}
                     {serviceNames.length === 0 && <Typography.Text type="secondary">{t('hostUpdater.stackUnavailable')}</Typography.Text>}
                     {serviceNames.map(name => {
                         const running = runtime?.components?.[name]; const family = families[name];
@@ -109,26 +112,28 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                         return <div className="update-stack-row" key={name} data-testid={`stack-${name}`}>
                             <div><Typography.Text strong>{component(name)}</Typography.Text> {running && <Tag color={runtime?.health === 'unknown' ? undefined : running.healthy ? 'green' : 'orange'}>{runtime?.health === 'unknown' ? t('updates.unknown') : t(`hostUpdater.health.${running.healthy ? 'healthy' : 'degraded'}`)}</Tag>}
                                 <div className="stack-version"><Typography.Text type="secondary">{t('hostUpdater.running')}: </Typography.Text>{running ? runningVersion : t('hostUpdater.notInstalled')}</div>
+                                {advanced && running && <div className="stack-build-date"><Typography.Text type="secondary">{t('hostUpdater.built')}: {date(info?.built_at)}</Typography.Text></div>}
                                 {data.state.overrides?.[name] && <Tag>{t('hostUpdater.customComponent')}</Tag>}
                                 <details className="stack-image-details"><summary>{t('updates.details')}</summary><Typography.Paragraph code>{running?.reference ?? info?.image ?? family}</Typography.Paragraph><Typography.Paragraph code>{running?.image ?? info?.image_id}</Typography.Paragraph></details>
                             </div>
                             <div className="stack-target">
-                                {advanced && family ? <><Select aria-label={`${component(name)} ${t('hostUpdater.versionControl')}`} value={overrides[name]?.id ?? ''}
+                                {advanced && family ? <><Select classNames={{popup:{root:'update-version-menu'}}} aria-label={`${component(name)} ${t('hostUpdater.versionControl')}`} value={overrides[name]?.id ?? ''}
                                     disabled={pending || busy || dirty || !target || !supported || noAlternatives}
-                                    options={[{value:'',label:t('hostUpdater.followRelease')},...choices.map(({release,reason}) => ({value:release.id,disabled:!!reason,label:label(release)+(reason ? ` · ${t('hostUpdater.compatibility.'+reason)}` : '')}))]}
+                                    options={[{value:'',label:t('hostUpdater.followRelease')},...choices.map(({release,reason}) => ({value:release.id,disabled:!!reason,label:datedLabel(release)+(reason ? ` · ${t('hostUpdater.compatibility.'+reason)}` : '')}))]}
                                     onChange={id => setComponentSelected(current => {const next={...current};if(id)next[name]=id;else delete next[name];return next;})}/>
                                     {overrides[name] && <Tag color="gold">{t('hostUpdater.customComponent')}</Tag>}
                                     {!supported && <Typography.Text type="secondary">{t('hostUpdater.serviceSelectionUnsupported')}</Typography.Text>}
                                     {target && supported && noAlternatives && <Typography.Text type="secondary">{t('hostUpdater.noCompatibleComponent')}</Typography.Text>}
                                 </> : !family && target && <Typography.Text type="secondary">{t('hostUpdater.removedByRelease')}</Typography.Text>}
-                                {selectedRelease && family && advanced && <Typography.Text type="secondary">{t('hostUpdater.selected')}: {label(selectedRelease)}</Typography.Text>}
+                                {selectedRelease && family && advanced && <Typography.Text type="secondary">{t('hostUpdater.selected')}: {label(selectedRelease)}<div>{published(selectedRelease)}</div></Typography.Text>}
                             </div>
                         </div>;
                     })}
                     {localComponents.map(c => <div className="update-stack-row local" key={c.name}><div><Typography.Text strong>{t(`updates.components.${c.component}`, {defaultValue:c.name})}</Typography.Text><div>{c.version || imageVersion(c.image ?? '') || t('updates.unknown')}</div></div><Tag>{t('hostUpdater.localService')}</Tag></div>)}
                     <div className="update-stack-row"><div><Typography.Text strong>{t('hostUpdater.agent')}</Typography.Text><div>{data.agent.version}</div><Typography.Text type="secondary">{t('hostUpdater.separateUpdate')}</Typography.Text></div>
-                        <div className="stack-target">{advanced && <Select aria-label={t('hostUpdater.agentVersion')} value={agentTarget?.id} disabled={pending || busy || dirty || releases.length === 0} placeholder={t('hostUpdater.noVersions')}
-                            options={releases.filter(r => r.updater[data.agent.platform]).map(r => ({value:r.id,label:label(r)}))} onChange={setAgentSelected}/>}
+                        <div className="stack-target">{advanced && <Select classNames={{popup:{root:'update-version-menu'}}} aria-label={t('hostUpdater.agentVersion')} value={agentTarget?.id} disabled={pending || busy || dirty || releases.length === 0} placeholder={t('hostUpdater.noVersions')}
+                            options={releases.filter(r => r.updater[data.agent.platform]).map(r => ({value:r.id,label:datedLabel(r)}))} onChange={setAgentSelected}/>}
+                            {advanced && agentTarget && <Typography.Text type="secondary">{published(agentTarget)}</Typography.Text>}
                             {agentTarget?.updater[data.agent.platform] && agentTarget.updater[data.agent.platform].version !== data.agent.version && <Button disabled={pending || busy || dirty} onClick={() => setAgentPlan(agentTarget)}>{t('hostUpdater.updateAgent')}</Button>}
                         </div>
                     </div>

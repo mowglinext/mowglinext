@@ -3321,6 +3321,10 @@
     }
   },
   "hostUpdater": {
+    "built": "Built",
+    "published": "Published",
+    "buildDatesHelp": "Built is the installed image timestamp; Published is when the release was published.",
+
     "componentSourceHelp": "Component versions must come from the same repository and branch as the selected release.",
     "summaryUnknown": "Unknown",
     "summaryCustom": "Custom",

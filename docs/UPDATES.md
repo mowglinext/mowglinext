@@ -174,6 +174,11 @@ first-party helpers. Each follows the selected release by default. **Reset all t
 release versions** clears the draft exceptions. Settings for source, repository,
 branch and frequency are collapsed under **Update settings**; history and diagnostics
 are separate. Mobile stacks each service's controls beneath its running version.
+Advanced shows **Built** from the installed container image metadata and
+**Published** from the deployment descriptor, including date, time and timezone.
+Release, component and updater choices include publication dates; the full selected
+date remains visible below component selectors on mobile. Missing or invalid image
+build timestamps show Unknown, never the release publication date as a substitute.
 Unmanaged MQTT has a local badge, and the host updater has a separate reviewed action.
 
 The installed base remains selectable when it has aged out of the release list and
