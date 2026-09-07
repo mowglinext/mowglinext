@@ -51,6 +51,16 @@ func TestUpdateReadinessRequiresLiveStoppedHardware(t *testing.T) {
 	if read().Ready {
 		t.Fatal("missing telemetry accepted")
 	}
+	emit("gps", map[string]any{"header": map[string]any{"stamp": stamp}})
+	if !read().GPSFresh {
+		t.Fatal("fresh GPS observation rejected")
+	}
+	for i := 0; i < 2; i++ {
+		emit("gps", map[string]any{"header": map[string]any{"stamp": map[string]any{"sec": 1}}})
+		if read().GPSFresh {
+			t.Fatal("republication refreshed an old GPS observation")
+		}
+	}
 	emit("highLevelStatus", map[string]any{"state": 1, "state_name": "CHARGING"})
 	emit("wheelOdom", map[string]any{"header": map[string]any{"stamp": stamp}, "twist": map[string]any{"twist": map[string]any{"linear": map[string]any{"x": 0}, "angular": map[string]any{"z": 0}}}})
 	status := map[string]any{"stamp": stamp, "blade_status_stamp": stamp, "firmware_protocol_version": 6, "firmware_compatible": true, "mow_enabled": false, "mower_motor_rpm": 0, "is_charging": false}
