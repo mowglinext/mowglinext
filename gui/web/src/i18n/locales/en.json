@@ -3320,6 +3320,22 @@
     }
   },
   "hostUpdater": {
+    "selectionPending": "Installer hardware choices have changed. Review installation to apply the container changes.",
+    "selectionHelp": "Containers follow your saved installer hardware choices.",
+    "hardware": {
+      "gnss": "GPS",
+      "lidar": "LiDAR"
+    },
+    "disabled": "Off",
+    "enabled": "On",
+    "stackActions": {
+      "add": "Add",
+      "remove": "Remove",
+      "update": "Update",
+      "keep": "Keep",
+      "unmanaged": "Keep · local"
+    },
+    "retainedData": "Removed containers retain their data. Rollback restores the previous stack and its saved data.",
     "baseVersion": "Base release",
     "guiVersion": "GUI version",
     "containerHealth": "Container health",

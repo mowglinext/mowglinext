@@ -3,13 +3,13 @@ import {useCallback, useEffect, useState} from 'react';
 export interface UpdateSource {repository: string; track: 'stable' | 'dev' | 'custom'; branch: string}
 export interface UpdatePolicy {source: UpdateSource; interval_hours: number; pinned: boolean}
 export interface Deployment {gui_compatibility?: string; layout?: number; data_schema?: number; updater_api?: number; maintenance_api?: number; firmware_protocol?: number; release_tag?: string; id: string; source: UpdateSource; revision: string; published_at: string; updater: Record<string, {version: string}>}
-export interface UpdatePlan {overrides?: Record<string, Deployment>; id: string; target: Deployment; images: Record<string, string>; previous: Record<string, string>; expires_at: string}
+export interface UpdatePlan {stack?: {changes: {service: string; action: string}[]; selection: {options: Record<string, string>}}; overrides?: Record<string, Deployment>; id: string; target: Deployment; images: Record<string, string>; previous: Record<string, string>; expires_at: string}
 export interface UpdateJob {id: string; kind: string; phase: string; error?: string; started_at: string; plan: UpdatePlan}
 export interface UpdateNotice {id: string; kind: string; deployment: string; created_at: string; read: boolean; dismissed: boolean}
 export interface HostUpdater {
     api: number;
     capabilities?: string[];
-    runtime?: {identity: string; health: string; checked_at: string; error?: string; components?: Record<string, {image: string; healthy: boolean; healthcheck: boolean}>};
+    runtime?: {selection_pending?: boolean; identity: string; health: string; checked_at: string; error?: string; components?: Record<string, {image: string; healthy: boolean; healthcheck: boolean}>};
     agent: {version: string; revision: string; platform: string; error?: string};
     trusted_repositories: string[];
     state: {active_job_id?: string; policy: UpdatePolicy; installed_policy?: UpdatePolicy; overrides?: Record<string, Deployment>; active?: Deployment; last_check: string; last_success: string; next_check: string; check_error?: string; releases: Deployment[]; notices: UpdateNotice[]; job?: UpdateJob; history: UpdateJob[]};

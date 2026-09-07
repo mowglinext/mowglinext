@@ -177,7 +177,7 @@ else
 fi
 
 section "Managed updater Compose layout"
-if real_docker_compose_available; then
+if real_docker_compose_available && [[ -x "${MOWGLI_UPDATER_STACK_BINARY:-/usr/local/bin/mowgli-updater}" ]]; then
   touch "$DOCKER_DIR/.updater-managed"
   if build_compose_stack && write_compose_merged; then
     pass "managed Compose generated"
@@ -186,6 +186,21 @@ if real_docker_compose_available; then
     if printf '%s' "$MANAGED" | python3 -c 'import json,sys; s=json.load(sys.stdin)["services"]; assert s["gui"]["labels"]["com.centurylinklabs.watchtower.enable"]=="false"; assert all(s[k]["environment"]["MOWGLI_UPDATE_MAINTENANCE"]=="/var/lib/mowgli-updater/maintenance" for k in ("gui","mowgli")); assert "GPS_PROTOCOL" in s["mowgli"]["environment"]; assert "GPS_PROTOCOL" not in s["gps"]["environment"]'; then
       pass "maintenance gates, Watchtower opt-out and GNSS environment scope"
     else fail "managed Compose contract"; fi
+    cp "$COMPOSE_FILE" "$SANDBOX/applied-compose.json"
+    printf '{"id":"fixture-release"}\n' > "$DOCKER_DIR/stack-release.json"
+    LIDAR_ENABLED=false
+    if write_compose_merged && cmp -s "$COMPOSE_FILE" "$SANDBOX/applied-compose.json"; then
+      pass "published stack survives installer reconfiguration"
+    else fail "published stack survives installer reconfiguration"; fi
+    if python3 - "$DOCKER_DIR" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+wanted = json.loads((root / 'stack-selection.json').read_text())
+applied = json.loads((root / 'stack-applied-selection.json').read_text())
+assert wanted['options']['lidar'] == 'none'
+assert applied['options']['lidar'] == 'ldlidar'
+PY
+    then pass "new installer selection remains pending until reviewed"; else fail "pending installer selection"; fi
   else fail "managed Compose generated"; fi
 fi
 

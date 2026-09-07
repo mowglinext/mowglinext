@@ -217,6 +217,24 @@ write_compose_merged() {
 # needing to understand Docker Compose include/project mechanics.
   mkdir -p "$DOCKER_DIR"
 
+  if [[ -f "$DOCKER_DIR/.updater-managed" ]]; then
+    if [[ "${HARDWARE_BACKEND:-mowgli}" != "mowgli" ]]; then
+      error "$MSG_UPDATER_STACK_BACKEND"
+      return 1
+    fi
+    local selected_gnss="none" selected_lidar="none"
+    if [[ "$(effective_gnss_stack)" != "disabled" && "$(effective_gnss_backend)" != "disabled" ]]; then
+      selected_gnss="universal"
+    fi
+    if [[ "${LIDAR_ENABLED:-true}" == "true" ]]; then selected_lidar="${LIDAR_TYPE:-none}"; fi
+    "${MOWGLI_UPDATER_STACK_BINARY:-/usr/local/bin/mowgli-updater}" installer-stack \
+      "$DOCKER_DIR" "${COMPOSE_PROJECT_NAME:-install}" "$COMPOSE_SRC_DIR" "$selected_gnss" "$selected_lidar" || return 1
+    if [[ -s "$DOCKER_DIR/stack-release.json" ]] && [[ "$(cat "$DOCKER_DIR/stack-release.json")" != "null" ]]; then
+      info "$MSG_UPDATER_STACK_REVIEW"
+    fi
+    return 0
+  fi
+
   local compose_args=()
   local f
 

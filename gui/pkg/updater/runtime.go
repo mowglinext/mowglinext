@@ -11,11 +11,12 @@ type RunningComponent struct {
 	Healthcheck bool   `json:"healthcheck"`
 }
 type RuntimeStatus struct {
-	Identity   string                      `json:"identity"`
-	Health     string                      `json:"health"`
-	CheckedAt  time.Time                   `json:"checked_at"`
-	Error      string                      `json:"error,omitempty"`
-	Components map[string]RunningComponent `json:"components,omitempty"`
+	SelectionPending bool                        `json:"selection_pending,omitempty"`
+	Identity         string                      `json:"identity"`
+	Health           string                      `json:"health"`
+	CheckedAt        time.Time                   `json:"checked_at"`
+	Error            string                      `json:"error,omitempty"`
+	Components       map[string]RunningComponent `json:"components,omitempty"`
 }
 
 func (b DockerBackend) Observe(ctx context.Context) (map[string]RunningComponent, error) {
@@ -85,12 +86,17 @@ func (m *Manager) RefreshRuntime(ctx context.Context) {
 	generation := m.state.ActiveJobID
 	m.mu.Unlock()
 	components, err := b.Observe(ctx)
+	selectionPending := false
+	if selector, ok := m.backend.(interface{ SelectionPending() (bool, error) }); ok && err == nil {
+		selectionPending, err = selector.SelectionPending()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.busy || m.state.Job.Pending() || generation != m.state.ActiveJobID {
 		return
 	}
 	m.runtime = reconcile(m.state, components)
+	m.runtime.SelectionPending = selectionPending
 	m.runtime.CheckedAt = m.now()
 	if err != nil {
 		m.runtime.Identity = "unknown"

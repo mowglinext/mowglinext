@@ -17,7 +17,7 @@ import (
 
 const APIVersion = 1
 const LayoutVersion = 1
-const StateSchema = 2
+const StateSchema = 3
 
 var Version = "development"
 var Revision = ""
@@ -58,6 +58,7 @@ type Binary struct {
 	Version string `json:"version"`
 }
 type Deployment struct {
+	Bundle           *BundleAsset             `json:"compose_bundle,omitempty"`
 	Schema           int                      `json:"schema"`
 	ID               string                   `json:"id"`
 	Source           Source                   `json:"source"`
@@ -80,8 +81,14 @@ func (d Deployment) Validate(trusted []string) error {
 	if err := d.Source.Validate(trusted); err != nil {
 		return err
 	}
-	if d.Schema != 1 || !idPattern.MatchString(d.ID) || !revisionPattern.MatchString(d.Revision) || d.PublishedAt.IsZero() || !idPattern.MatchString(d.ReleaseTag) {
+	if (d.Schema != 1 && d.Schema != 2) || !idPattern.MatchString(d.ID) || !revisionPattern.MatchString(d.Revision) || d.PublishedAt.IsZero() || !idPattern.MatchString(d.ReleaseTag) {
 		return errors.New("invalid deployment identity or schema")
+	}
+	if d.Schema == 2 && (d.Bundle == nil || d.Bundle.Asset != "mowgli-compose.json" || !updates.DigestPattern.MatchString("sha256:"+d.Bundle.SHA256)) {
+		return errors.New("deployment requires a valid Compose bundle")
+	}
+	if d.Schema == 1 && d.Bundle != nil {
+		return errors.New("Compose bundles require deployment schema 2")
 	}
 	if d.Layout != LayoutVersion || d.DataSchema != 1 || d.UpdaterAPI > APIVersion || d.MaintenanceAPI != 1 || d.FirmwareProtocol < 1 {
 		return errors.New("deployment requires unsupported layout, data schema or updater")
@@ -99,7 +106,7 @@ func (d Deployment) Validate(trusted []string) error {
 			}
 		}
 	}
-	for _, name := range []string{"mowgli-ros2", "mowglinext-gui", "gps"} {
+	for _, name := range []string{"mowgli-ros2", "mowglinext-gui"} {
 		if _, ok := d.Images[name]; !ok {
 			return fmt.Errorf("missing image %s", name)
 		}
@@ -126,6 +133,7 @@ type Notice struct {
 	Dismissed  bool      `json:"dismissed"`
 }
 type Plan struct {
+	Stack       *StackPlan            `json:"stack,omitempty"`
 	ID          string                `json:"id"`
 	Target      Deployment            `json:"target"`
 	Policy      Policy                `json:"policy"`
@@ -192,7 +200,10 @@ func AtomicWrite(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	defer os.Remove(f.Name())
-	if err = f.Chmod(mode); err == nil {
+	if err = inheritFileOwner(f, path); err == nil {
+		err = f.Chmod(mode)
+	}
+	if err == nil {
 		_, err = f.Write(data)
 	}
 	if err == nil {

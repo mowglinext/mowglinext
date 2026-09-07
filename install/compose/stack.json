@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "required": ["docker-compose.base.yml", "docker-compose.gui.yml", "docker-compose.updater.yml"],
+  "options": {
+    "gnss": {
+      "none": [],
+      "universal": ["docker-compose.gps.yml"]
+    },
+    "lidar": {
+      "none": [],
+      "ldlidar": ["docker-compose.lidar-ldlidar.yml"],
+      "rplidar": ["docker-compose.lidar-rplidar.yml"],
+      "stl27l": ["docker-compose.lidar-stl27l.yml"]
+    }
+  }
+}

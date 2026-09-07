@@ -77,3 +77,6 @@ MSG_MOTD_PACKAGES="paquet(s)"
 MSG_MOTD_LOCAL_IP="IP locale"
 MSG_MOTD_NOT_SET="non defini"
 MSG_MOTD_RUNNING="actif(s)"
+
+MSG_UPDATER_STACK_BACKEND="Les mises à jour gérées prennent en charge le matériel Mowgli."
+MSG_UPDATER_STACK_REVIEW="Choix matériels enregistrés. Consultez les mises à jour logicielles pour appliquer les changements de conteneurs ; la définition installée a été conservée."

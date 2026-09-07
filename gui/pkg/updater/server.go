@@ -44,7 +44,7 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 		if data, err := os.ReadFile(filepath.Join(config.StateDir, "agent-active.json")); err == nil {
 			_ = json.Unmarshal(data, &selection)
 		}
-		respond(w, map[string]any{"api": APIVersion, "agent": map[string]string{"version": Version, "revision": Revision, "platform": runtime.GOOS + "/" + runtime.GOARCH, "error": selection.Error}, "state": m.Snapshot(), "runtime": m.Runtime(), "capabilities": []string{"component-overrides", "declared-services"}, "trusted_repositories": config.Trusted}, nil)
+		respond(w, map[string]any{"api": APIVersion, "agent": map[string]string{"version": Version, "revision": Revision, "platform": runtime.GOOS + "/" + runtime.GOARCH, "error": selection.Error}, "state": PublicState(m.Snapshot()), "runtime": m.Runtime(), "capabilities": []string{"component-overrides", "declared-services", "release-compose"}, "trusted_repositories": config.Trusted}, nil)
 	})
 	mux.HandleFunc("POST /v1/policy", func(w http.ResponseWriter, r *http.Request) {
 		var p Policy
@@ -68,7 +68,7 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 		}
 		if decode(w, r, &req) {
 			p, e := m.MakeComponentPlan(r.Context(), req.Deployment, req.Pinned, req.GUI)
-			respond(w, p, e)
+			respond(w, PublicPlan(p), e)
 		}
 	})
 	mux.HandleFunc("POST /v1/apply", func(w http.ResponseWriter, r *http.Request) {

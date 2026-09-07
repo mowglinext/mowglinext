@@ -3320,6 +3320,22 @@
     }
   },
   "hostUpdater": {
+    "selectionPending": "Les choix matériels ont changé dans l’installateur. Vérifiez l’installation pour appliquer les changements de conteneurs.",
+    "selectionHelp": "Les conteneurs suivent les choix matériels enregistrés par l’installateur.",
+    "hardware": {
+      "gnss": "GPS",
+      "lidar": "LiDAR"
+    },
+    "disabled": "Désactivé",
+    "enabled": "Activé",
+    "stackActions": {
+      "add": "Ajouter",
+      "remove": "Retirer",
+      "update": "Mettre à jour",
+      "keep": "Conserver",
+      "unmanaged": "Conserver · local"
+    },
+    "retainedData": "Les données des conteneurs retirés sont conservées. Le retour arrière restaure la pile précédente et ses données sauvegardées.",
     "baseVersion": "Version de base",
     "guiVersion": "Version de l’interface",
     "containerHealth": "État des conteneurs",

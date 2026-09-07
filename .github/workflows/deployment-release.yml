@@ -138,7 +138,7 @@ jobs:
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w -X github.com/mowglinext/mowglinext/pkg/updater.Version=$DEPLOYMENT -X github.com/mowglinext/mowglinext/pkg/updater.Revision=$REVISION" -o "../dist/mowgli-updater-linux-$arch" ./cmd/mowgli-updater
           done
-          go run ./cmd/publish-deployment --repository "$REPO" --branch "$BRANCH" --track "$TRACK" --revision "$REVISION" --id "$DEPLOYMENT" --release "$RELEASE" --assets ../dist --protocol "$protocol" --images "$(jq -r '.components | map(.name) | join(",")' ../install/deployment.json)" --gui-compatibility "$(jq -r .gui_compatibility ../install/deployment.json)"
+          go run ./cmd/publish-deployment --repository "$REPO" --branch "$BRANCH" --track "$TRACK" --revision "$REVISION" --id "$DEPLOYMENT" --release "$RELEASE" --assets ../dist --compose-dir ../install/compose --protocol "$protocol" --images "$(jq -r '.components | map(.name) | join(",")' ../install/deployment.json)" --gui-compatibility "$(jq -r .gui_compatibility ../install/deployment.json)"
           cd ../dist
           sha256sum mowgli-updater-linux-* > updater-SHA256SUMS
           if [[ "$TRACK" == stable ]]; then
@@ -147,5 +147,5 @@ jobs:
             gh release view "$RELEASE" --repo "$REPO"
             gh release upload "$RELEASE" ./* --repo "$REPO"
           else
-            gh release create "$RELEASE" ./* --repo "$REPO" --target "$REVISION" --prerelease --title "$BRANCH $DEPLOYMENT" --notes 'Complete container deployment; see mowgli-deployment.json for source, compatibility and immutable image identities.'
+            gh release create "$RELEASE" ./* --repo "$REPO" --target "$REVISION" --prerelease --title "$BRANCH $DEPLOYMENT" --notes 'Complete stack deployment; mowgli-compose.json defines required/optional services and mowgli-deployment.json pins source, compatibility, images and the bundle checksum.'
           fi

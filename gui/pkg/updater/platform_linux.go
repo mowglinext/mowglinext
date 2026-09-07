@@ -5,6 +5,7 @@ package updater
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
 )
 
@@ -23,4 +24,24 @@ func processLock(path string) (func(), error) {
 		return nil, fmt.Errorf("another updater owns this installation: %w", err)
 	}
 	return func() { f.Close() }, nil
+}
+
+// The privileged runtime must keep installer-owned files readable/editable by
+// their existing owner. Private state inherits its root-owned state directory.
+func inheritFileOwner(f *os.File, path string) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		info, err = os.Stat(filepath.Dir(path))
+	}
+	if err != nil {
+		return err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("cannot determine configuration owner")
+	}
+	return f.Chown(int(stat.Uid), int(stat.Gid))
 }

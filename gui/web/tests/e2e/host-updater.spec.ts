@@ -20,6 +20,51 @@ const productionStatus = {...status, trusted_repositories: [source.repository], 
     active: {...status.state.active, source: productionSource, release_tag: 'v1.1.0'},
     releases: [productionTarget],
 }};
+for (const mobile of [false, true]) {
+    test(`release stack membership review ${mobile ? 'mobile' : 'desktop'}`, async ({page}) => {
+        await page.setViewportSize(mobile ? {width: 390, height: 844} : {width: 1440, height: 1100});
+        const next = {...productionTarget, id: 'illustration-production-130', release_tag: 'v1.3.0'};
+        const fixture = {...productionStatus, capabilities: [...status.capabilities, 'release-compose'], state: {...productionStatus.state, releases: [next], active: {...productionTarget, release_tag: 'v1.2.0'}}};
+        const posts: string[] = [];
+        await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/updater/state': fixture, '/api/system/versions': {docker_available: true, components: [], server: {version: 'dev'}}}});
+        page.on('request', r => {if (r.method() === 'POST' && r.url().includes('/system/updater/')) posts.push(new URL(r.url()).pathname);});
+        await page.route('**/api/system/updater/plan', route => route.fulfill({json: {
+            id: 'illustration-stack-plan', target: next, expires_at: '2026-09-07T09:45:00Z', previous: {}, images: {gui: 'fixture-gui', mowgli: 'fixture-ros', gps: 'fixture-gps', 'navigation-helper': 'fixture-helper'},
+            stack: {selection: {options: {gnss: 'universal', lidar: 'none'}}, changes: [
+                {service: 'mowgli', action: 'update'}, {service: 'gui', action: 'update'}, {service: 'gps', action: 'keep'},
+                {service: 'navigation-helper', action: 'add'}, {service: 'legacy-helper', action: 'remove'}, {service: 'mqtt', action: 'unmanaged'},
+            ]},
+        }}));
+        await page.goto('/#/settings?section=updates');
+        const panel = page.getByTestId('host-updater');
+        await expect(panel.getByText('v1.3.0')).toBeVisible();
+        expect(posts).toEqual([]);
+        await panel.getByRole('button', {name: 'Review installation', exact: true}).click();
+        const review = page.getByRole('dialog');
+        await expect(review.getByText('GPS: On', {exact: true})).toBeVisible();
+        await expect(review.getByText('LiDAR: Off', {exact: true})).toBeVisible();
+        await expect(review.getByText('Add', {exact: true})).toBeVisible();
+        await expect(review.getByText('Remove', {exact: true})).toBeVisible();
+        await expect(review.getByText('Keep · local', {exact: true})).toBeVisible();
+        await expect(review.getByText(/Removed containers retain their data/)).toBeVisible();
+        await expect(review).toHaveCSS('opacity', '1');
+        await expect(review.getByRole('button', {name: 'Install reviewed deployment', exact: true})).toBeInViewport();
+        await expect(panel.locator('button').filter({hasText: 'Check now'})).not.toHaveClass(/ant-btn-loading/);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        await page.screenshot({path: `tests/e2e/.artifacts/host-updater-stack-review-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
+        await review.getByRole('button', {name: 'Cancel', exact: true}).click();
+        expect(posts).toEqual(['/api/system/updater/plan']);
+    });
+}
+
+test('changed installer selection can review the installed release without a new version', async ({page}) => {
+    const fixture = {...productionStatus, runtime: {...status.runtime, selection_pending: true}, state: {...productionStatus.state, releases: []}};
+    await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/system/updater/state': fixture}});
+    await page.goto('/#/settings?section=updates');
+    const panel = page.getByTestId('host-updater');
+    await expect(panel.getByText(/Installer hardware choices have changed/)).toBeVisible();
+    await expect(panel.getByRole('button', {name: 'Review installation', exact: true})).toBeEnabled();
+});
 for (const fixture of [
     {name: 'development', prefix: 'host-updater', status: {...status, trusted_repositories: [source.repository]}, target, installed: 'Development · 1944f97d', available: 'Development · a9132f4e'},
     {name: 'production', prefix: 'host-updater-production', status: productionStatus, target: productionTarget, installed: 'v1.1.0', available: 'v1.2.0'},
@@ -54,7 +99,7 @@ for (const fixture of [
         await expect(page.locator('.ant-modal')).not.toHaveClass(/ant-zoom/);
         await expect(review).toHaveCSS('opacity', '1');
         await expect(review).toHaveCSS('opacity', '1');
-        await expect(panel.getByRole('button', {name: 'Check now', exact: true})).not.toHaveClass(/ant-btn-loading/);
+        await expect(panel.locator('button').filter({hasText: 'Check now'})).not.toHaveClass(/ant-btn-loading/);
         await page.screenshot({path: `tests/e2e/.artifacts/${fixture.prefix}-review-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
         await review.getByRole('button', {name: 'Cancel', exact: true}).click();
         expect(requests).not.toContain('/api/system/updater/apply');
@@ -156,7 +201,7 @@ for (const mobile of [false, true]) {
         await expect(page.getByRole('dialog').getByText('Custom combination: GUI v1.2.1; other components use the base release.')).toBeVisible();
         expect(requests[0]).toEqual({deployment: base.id, pinned: true, gui_deployment: gui.id});
         await expect(page.getByRole('dialog')).toHaveCSS('opacity', '1');
-        await expect(panel.getByRole('button', {name: 'Check now', exact: true})).not.toHaveClass(/ant-btn-loading/);
+        await expect(panel.locator('button').filter({hasText: 'Check now'})).not.toHaveClass(/ant-btn-loading/);
         await page.screenshot({path: `tests/e2e/.artifacts/host-updater-gui-review-${mobile ? 'mobile' : 'desktop'}.png`, fullPage: true, animations: 'disabled'});
         await page.getByRole('dialog').getByRole('button', {name: 'Cancel', exact: true}).click();
         await page.locator('.ant-segmented').getByText('Simple', {exact: true}).click();

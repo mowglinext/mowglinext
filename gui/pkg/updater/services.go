@@ -18,8 +18,8 @@ type managedService struct {
 	Health string
 }
 
-// The installed Compose file owns membership, dependency order and data mounts.
-// Release descriptors can supply images, never new containers or host commands.
+// Managed membership and ordering come from the selected release Compose bundle.
+// Legacy image-only releases retain the installed definition.
 func managedServices(c composeConfig) (map[string]managedService, error) {
 	result := map[string]managedService{}
 	for name, sc := range c.Services {

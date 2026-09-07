@@ -128,7 +128,8 @@ shown for review; a date alone never proves that source code is newer.
    after reboot. This does not replace firmware safety or emergency stop.
 4. Retain old image IDs, stop all managed writers and archive the GUI database,
    configuration and maps, syncing and checksumming each archive. Require space for backups and failed-deployment data.
-5. Replace managed containers in their declared dependency order (sensors before
+5. Activate the reviewed Compose definition, retire owned services without deleting
+   volumes, and replace managed containers in their declared dependency order (sensors before
    ROS2, then GUI by default). Verify actual
    image IDs, container state, fresh application readiness, firmware protocol
    and installed sensor publishers before committing. Charging current and RTK
@@ -183,13 +184,59 @@ can be restored independently. Firmware is not part of a GUI override.
 
 ## Adding a managed or optional container
 
-Membership comes from the installed Compose configuration, not a release manifest.
-A release can replace images of installed services; it cannot add services, devices,
-mounts, commands or privileges. Absent optional services are skipped. Newly selected
-hardware/services still require installer configuration before updating.
+Each production, dev or custom deployment now carries `mowgli-compose.json`, a
+self-contained bundle of the versioned installer Compose fragments. Its SHA-256
+is pinned by deployment schema 2 in `mowgli-deployment.json`. The shared
+`install/compose/stack.json` map defines required fragments and hardware options:
+
+| Saved installer choice | Selected fragment |
+|---|---|
+| GNSS disabled | No GPS service |
+| Universal GNSS | `docker-compose.gps.yml` |
+| LiDAR disabled | No LiDAR service |
+| LiDAR enabled | The chosen ldlidar/rplidar/stl27l fragment |
+
+The installer and updater use the same Go selector. New required fragments enter
+the reviewed target stack; new optional groups default to an empty `none` choice.
+An unsupported previously selected device blocks the plan instead of silently
+being disabled. Core GUI/ROS2 remain required. The release's selected fragments,
+saved installer options, retained local services and explicit
+`docker/stack-overrides.yaml` produce the desired Compose definition.
+
+`stack-selection.json` records desired hardware options and the identity of the
+membership-related installer `.env` values. `stack-applied-selection.json` records
+what was last applied. Changes to those `.env` choices invalidate an old plan;
+rerun the installer to reconcile them. Ordinary environment/config changes do not
+select extra containers. `.env` references remain live; existing robot YAML,
+calibration, database and maps remain mounted from their current locations.
+
+After a published deployment is installed, installer reruns retain that installed
+bundle and definition, even when the checkout is older. They save changed choices
+for **Review installation**, including when staying on the same release. Startup
+continues using the existing definition until the coordinated transaction applies
+the new selection. No hidden removal happens during selection. A rollback restores
+the prior applied selection; a still-requested hardware change remains pending.
+
+The review lists **Add, Remove, Update, Keep** and **Keep / local**. Only containers
+identified by the reviewed project/service/ID may be retired; new containers are
+labelled for ownership-checked rollback removal. There is no broad orphan removal
+and no volume deletion. Local services such as MQTT are preserved and not restarted
+by the update transaction. Existing physical volume/network names are retained for
+the same logical resource keys. Driver/resource changes or new writable storage
+require an explicit migration. Reusing an occupied container name for another
+service is rejected; such renames need separate releases or a migration.
+
+The updater saves the full previous Compose definition, image overrides, environment,
+bundle, selections, local overrides and supported data before activation. Membership
+and immutable image references switch together in one atomic Compose replacement;
+the durable journal can restore them after interruption. Private Compose/recovery
+payloads are removed from browser responses, which expose only choices and changes.
+The generated-file checksum rejects manual edits; reviewed customizations belong in
+`stack-overrides.yaml`. Legacy adoption also refuses unexplained manual differences.
 
 For an additional first-party service, add its image build definition to
-`install/deployment.json` and its installer Compose fragment, for example:
+`install/deployment.json`, add its installer Compose fragment to the required list
+or an optional group in `install/compose/stack.json`, for example:
 
 ```yaml
 services:
@@ -217,7 +264,7 @@ The workflow uses the single build-definition list for its matrix, image merging
 and publication. No updater source edit is needed for a new stateless first-party
 container with an existing health contract.
 
-Persistent services need more care: additional managed services may write only the
+Persistent services need more care: additional managed services may write only existing writable mounts at the
 already supported data destinations (`/db`, `/mowgli_config`, `/ros2_ws/maps`,
 `/ros2_ws/config`), which are archived and restored. Other writable mounts reject
 the plan. Container writable layers are disposable. Unmanaged containers must not
@@ -274,7 +321,8 @@ update; they never trigger deletion of recovery data.
 `.github/workflows/deployment-release.yml` builds the images declared in
 `install/deployment.json` (currently six first-party images) for
 both architectures from the same commit, waits for GUI/ROS2 quality gates, and
-publishes `mowgli-deployment.json` plus updater binaries only when complete. It
+publishes `mowgli-deployment.json`, its checksummed `mowgli-compose.json` bundle
+and updater binaries only when complete. All optional image variants are checked. It
 runs for main/dev/release tags, or by manual dispatch on a custom branch. A fork
 must enable the workflow and publish readable GHCR images and release assets.
 The separate `updater.yml` publishes installer bootstrap binaries.
@@ -303,13 +351,14 @@ complete published ARM64 deployment remain required before field rollout.
 
 ### Journal compatibility
 
-The HTTP API remains version 1 with explicit feature capabilities. Journal schema 2
-adds installed image identities, component provenance and exact rollback transaction
-identity. This worker reads schema 1 journals and writes schema 2 on the next state
-mutation, preserving existing recovery history. Older workers reject schema 2 rather
-than silently discarding the new information. Self-update probes require schema 2;
-downgrading to an older worker is refused. Keep the current worker/backup for recovery
-and use an explicit installer migration for incompatible journal formats.
+The HTTP API remains version 1 with explicit feature capabilities (`release-compose`
+adds topology planning). Journal schema 3 adds private stack/recovery payloads;
+this worker reads schema 1/2 journals and writes schema 3 on mutation, preserving
+history. Older workers reject schema 3. Self-update probes require schema 3 and
+refuse unsafe worker downgrades. Deployment schema 2 requires the Compose bundle;
+legacy schema 1 remains image-only. Workers predating schema 2 releases need the
+installer bootstrap upgrade before discovering those deployments. Keep the current
+worker/backup for recovery; incompatible layouts/data formats require migrations.
 
 ### Remaining physical acceptance — HARDWARE_REQUIRED
 
@@ -324,7 +373,9 @@ On a parked mower with blade stopped, stationary wheels, no due mission/schedule
 a supervising operator and physical emergency stop available: install a matched
 release; select a compatible GUI on the same base; verify every resulting image;
 return to matched; roll back each transaction; then test an installed optional
-service and failure recovery. Perform a supervised interruption test only after
+service addition/retirement and failure recovery, checking MQTT identity, retained
+volumes and desired/applied installer selections. Perform a supervised interruption
+test only after
 verifying the manual recovery route and safe power conditions. Pass requires no
 actuation or firmware change, the reviewed image combination, preserved/restored
 data and maintenance retained until application verification. Any unexpected motion,

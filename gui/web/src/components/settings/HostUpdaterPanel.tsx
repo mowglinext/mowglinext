@@ -27,14 +27,14 @@ export function HostUpdaterPanel({advanced = false}: {advanced?: boolean}) {
     const active = data?.state.active;
     const versions = active && !releases.some(r => r.id === active.id) && JSON.stringify(active.source) === JSON.stringify(data?.state.policy.source)
         ? [...releases, active] : releases;
-    const target = (advanced && versions.find(r => r.id === selected)) || releases[0];
+    const target = (advanced && versions.find(r => r.id === selected)) || releases[0] || (data?.runtime?.selection_pending ? versions.find(r => r.id === active?.id) : undefined);
     const guiOptions = target ? releases.filter(r => r.id !== target.id && compatibleGUI(target, r)) : [];
     const guiOverride = advanced ? guiOptions.find(r => r.id === guiSelected) : undefined;
     const runtime = error ? undefined : data?.runtime;
     const identity = runtime?.identity ?? 'unverified';
     const matched = identity === 'matched';
     const dirty = !!policy && JSON.stringify(policy) !== savedPolicy;
-    const sameDeployment = !!target && target.id === active?.id && matched && !guiOverride;
+    const sameDeployment = !!target && target.id === active?.id && matched && !guiOverride && !runtime?.selection_pending;
     const canRestore = data?.state.history.some(j => j.phase === 'succeeded' && j.plan.target.id === data.state.active?.id && (!data.state.active_job_id || j.id === data.state.active_job_id));
     const date = (value?: string) => value && !value.startsWith('0001') ? new Date(value).toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'}) : t('updates.unknown');
     const label = (deployment?: Deployment) => !deployment ? t('hostUpdater.customInstalled') : deployment.source.track === 'stable'
@@ -55,6 +55,7 @@ export function HostUpdaterPanel({advanced = false}: {advanced?: boolean}) {
                 <Typography.Text type="secondary">{t('hostUpdater.checkingSource')}: {t(`hostUpdater.tracks.${data.state.policy.source.track}`)}
                     {(data.state.policy.source.track === 'custom' || data.state.policy.source.repository !== 'mowglinext/mowglinext') && <> · {data.state.policy.source.repository} / {data.state.policy.source.branch}</>}
                 </Typography.Text>
+                {runtime?.selection_pending && <Alert type="info" showIcon message={t('hostUpdater.selectionPending')}/>}
                 {data.state.check_error && <Alert type="warning" showIcon message={t('hostUpdater.checkFailed')} description={advanced ? data.state.check_error : undefined}/>}
                 {advanced && <Form layout="vertical" className="updater-options">
                     <Form.Item label={t('hostUpdater.source')}>
@@ -133,12 +134,21 @@ export function HostUpdaterPanel({advanced = false}: {advanced?: boolean}) {
             </>}
         </Space>
         <Modal title={t('hostUpdater.review')} open={!!plan} onCancel={() => setPlan(undefined)} okText={t('hostUpdater.install')} confirmLoading={busy}
+            style={{top: 24, paddingBottom: 24}} styles={{body: {maxHeight: 'calc(100dvh - 180px)', overflowY: 'auto'}}}
             onOk={() => void act(async () => {if (plan) {await updaterRequest('apply', {plan: plan.id}); setPlan(undefined);}})}>
             {plan && <Space direction="vertical" size="middle" style={{width: '100%', overflowWrap: 'anywhere'}}>
                 <Typography.Text strong>{label(plan.target)}</Typography.Text>
                 {plan.overrides?.gui && <Alert type="info" showIcon message={t('hostUpdater.mixedReview', {version: label(plan.overrides.gui)})}/>}
                 <Typography.Text type="secondary">{plan.target.source.repository} · {plan.target.source.branch}</Typography.Text>
-                <Typography.Text>{t('hostUpdater.componentsToUpdate')}: {Object.keys(plan.images).map(component).join(', ')}</Typography.Text>
+                {plan.stack ? <>
+                    <Typography.Text type="secondary">{t('hostUpdater.selectionHelp')}</Typography.Text>
+                    <div>{Object.entries(plan.stack.selection.options).map(([key, value]) => <Tag key={key}>{t(`hostUpdater.hardware.${key}`, {defaultValue: key})}: {value === 'none' ? t('hostUpdater.disabled') : value === 'universal' ? t('hostUpdater.enabled') : value}</Tag>)}</div>
+                    <div data-testid="stack-changes">{plan.stack.changes.map(change => <div key={change.service} style={{display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6}}>
+                        <Typography.Text>{component(change.service)}</Typography.Text>
+                        <Tag color={change.action === 'add' ? 'green' : change.action === 'remove' ? 'orange' : undefined}>{t(`hostUpdater.stackActions.${change.action}`)}</Tag>
+                    </div>)}</div>
+                    {plan.stack.changes.some(change => change.action === 'remove') && <Typography.Text type="secondary">{t('hostUpdater.retainedData')}</Typography.Text>}
+                </> : <Typography.Text>{t('hostUpdater.componentsToUpdate')}: {Object.keys(plan.images).map(component).join(', ')}</Typography.Text>}
                 <Alert type="warning" showIcon message={t('hostUpdater.interruption')}/>
                 <Typography.Text>{t('hostUpdater.backupHelp')}</Typography.Text>
                 <details><summary>{t('hostUpdater.imageDetails')}</summary>

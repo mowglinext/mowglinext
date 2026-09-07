@@ -26,6 +26,8 @@ jobs:
           /tmp/test-update-maintenance
           cd gui
           go test -race ./pkg/updater ./pkg/api
+          go build -o "$RUNNER_TEMP/mowgli-updater-installer-test" ./cmd/mowgli-updater
+          export MOWGLI_UPDATER_STACK_BINARY="$RUNNER_TEMP/mowgli-updater-installer-test"
           cd ..
           bash install/tests/test_updater.sh
           bash install/tests/test_compose_validity.sh

@@ -48,7 +48,7 @@ func Open(dir string, trusted []string, b Backend, source ReleaseSource) (*Manag
 	m.state = State{Schema: StateSchema, Policy: Policy{Source: Source{Repository: trusted[0], Track: "dev", Branch: "dev"}, IntervalHours: 4}, Releases: []Deployment{}, Notices: []Notice{}, Plans: []Plan{}, History: []Job{}}
 	data, err := os.ReadFile(m.path)
 	if err == nil {
-		if err = json.Unmarshal(data, &m.state); err != nil || (m.state.Schema != 1 && m.state.Schema != StateSchema) {
+		if err = json.Unmarshal(data, &m.state); err != nil || (m.state.Schema < 1 || m.state.Schema > StateSchema) {
 			return nil, errors.New("invalid updater state; refusing to reset recovery history")
 		}
 	} else if !os.IsNotExist(err) {
@@ -148,7 +148,7 @@ func (m *Manager) Check(ctx context.Context, force bool) error {
 				m.state.Notices[i].Dismissed = true
 			}
 		}
-		if len(releases) > 0 && (m.state.Active == nil || m.state.Active.ID != releases[0].ID || len(m.state.Overrides) > 0 || m.runtime.Identity == "drifted") {
+		if len(releases) > 0 && (m.state.Active == nil || m.state.Active.ID != releases[0].ID || len(m.state.Overrides) > 0 || m.runtime.Identity == "drifted" || m.runtime.SelectionPending) {
 			target := releases[0]
 			kind := "review"
 			if relation == "newer" {
@@ -269,18 +269,32 @@ func (m *Manager) MakeComponentPlan(ctx context.Context, id string, pinned bool,
 		// validates the base, then resolves the separately validated GUI image.
 		overrides["gui"] = *gui
 	}
-	images, err := m.backend.PlanImages(ctx, *target)
+	var images map[string]string
+	var stack *StackPlan
+	if target.Bundle != nil {
+		planner, ok := m.backend.(interface {
+			PlanStack(context.Context, Deployment, map[string]Deployment) (map[string]string, *StackPlan, error)
+		})
+		if !ok {
+			return Plan{}, errors.New("backend does not support release Compose bundles")
+		}
+		images, stack, err = planner.PlanStack(ctx, *target, overrides)
+	} else {
+		images, err = m.backend.PlanImages(ctx, *target)
+		if err == nil {
+			if gui, ok := overrides["gui"]; ok {
+				var guiImages map[string]string
+				guiImages, err = m.backend.PlanImages(ctx, gui)
+				if err == nil {
+					images["gui"] = guiImages["gui"]
+				}
+			}
+		}
+	}
 	if err != nil {
 		return Plan{}, err
 	}
-	if gui, ok := overrides["gui"]; ok {
-		guiImages, e := m.backend.PlanImages(ctx, gui)
-		if e != nil {
-			return Plan{}, e
-		}
-		images["gui"] = guiImages["gui"]
-	}
-	p := Plan{Overrides: overrides, Target: *target, Policy: m.state.Policy, Fingerprint: fingerprint, ExpiresAt: m.now().Add(15 * time.Minute), Images: images, Previous: previous}
+	p := Plan{Stack: stack, Overrides: overrides, Target: *target, Policy: m.state.Policy, Fingerprint: fingerprint, ExpiresAt: m.now().Add(15 * time.Minute), Images: images, Previous: previous}
 	p.Policy.Pinned = pinned
 	p.ID = fmt.Sprintf("plan-%d", m.now().UnixNano())
 	m.state.Plans = []Plan{p}
@@ -458,7 +472,19 @@ func (m *Manager) run(recovery bool) {
 		if err = m.phase("backing_up", nil); err != nil {
 			return
 		}
-		backup, err := m.backend.Backup(ctx, j.ID)
+		var backup string
+		if j.Plan.Stack != nil {
+			backend, ok := m.backend.(interface {
+				BackupStack(context.Context, string, *StackPlan) (string, error)
+			})
+			if !ok {
+				err = errors.New("backend cannot back up stack topology")
+			} else {
+				backup, err = backend.BackupStack(ctx, j.ID, j.Plan.Stack)
+			}
+		} else {
+			backup, err = m.backend.Backup(ctx, j.ID)
+		}
 		if err != nil {
 			_ = m.phase("recovery_required", err)
 			return
@@ -474,7 +500,18 @@ func (m *Manager) run(recovery bool) {
 		if err = m.phase("applying", nil); err != nil {
 			return
 		}
-		err = m.backend.Apply(ctx, j.Plan.Images)
+		if j.Plan.Stack != nil {
+			backend, ok := m.backend.(interface {
+				ApplyStack(context.Context, Plan) error
+			})
+			if !ok {
+				err = errors.New("backend cannot activate stack topology")
+			} else {
+				err = backend.ApplyStack(ctx, j.Plan)
+			}
+		} else {
+			err = m.backend.Apply(ctx, j.Plan.Images)
+		}
 		if err == nil {
 			err = m.phase("verifying", nil)
 		}

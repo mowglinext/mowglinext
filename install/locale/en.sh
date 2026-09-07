@@ -77,3 +77,6 @@ MSG_MOTD_PACKAGES="package(s)"
 MSG_MOTD_LOCAL_IP="Local IP"
 MSG_MOTD_NOT_SET="not set"
 MSG_MOTD_RUNNING="running"
+
+MSG_UPDATER_STACK_BACKEND="Managed release updates support the Mowgli hardware backend."
+MSG_UPDATER_STACK_REVIEW="Saved hardware choices. Review Software updates to apply container changes; the installed release definition has been retained."

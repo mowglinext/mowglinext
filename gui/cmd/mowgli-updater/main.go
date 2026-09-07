@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -13,6 +14,15 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 7 && os.Args[1] == "installer-stack" {
+		b := updater.DockerBackend{Config: updater.HostConfig{Directory: os.Args[2], Project: os.Args[3]}}
+		err := b.InstallStack(context.Background(), os.Args[4], map[string]string{"gnss": os.Args[5], "lidar": os.Args[6]})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 8 && os.Args[1] == "installer-config" {
 		source := updater.Source{Repository: os.Args[4], Track: "custom", Branch: os.Args[7]}
 		if os.Args[6] == "main" {

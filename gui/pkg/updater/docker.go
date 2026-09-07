@@ -34,11 +34,62 @@ func (b DockerBackend) Lock() (func(), error) {
 	return processLock(filepath.Join(b.Config.Directory, ".deployment.lock"))
 }
 
+type composeVolume struct {
+	Type     string `json:"type"`
+	Source   string `json:"source"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"read_only"`
+}
 type serviceConfig struct {
+	Raw           json.RawMessage   `json:"-"`
+	Environment   map[string]string `json:"environment"`
+	Volumes       []composeVolume   `json:"volumes"`
 	Image         string            `json:"image"`
 	ContainerName string            `json:"container_name"`
 	Labels        map[string]string `json:"labels"`
 }
+
+func (s *serviceConfig) UnmarshalJSON(data []byte) error {
+	type plain serviceConfig
+	// config --no-interpolate may preserve environments in list form.
+	aux := struct {
+		*plain
+		Environment json.RawMessage `json:"environment"`
+		Labels      json.RawMessage `json:"labels"`
+	}{plain: (*plain)(s)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	s.Environment = map[string]string{}
+	s.Labels = map[string]string{}
+	if len(aux.Labels) > 0 {
+		if err := json.Unmarshal(aux.Labels, &s.Labels); err != nil {
+			var entries []string
+			if err = json.Unmarshal(aux.Labels, &entries); err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				key, value, _ := strings.Cut(entry, "=")
+				s.Labels[key] = value
+			}
+		}
+	}
+	if len(aux.Environment) > 0 {
+		if err := json.Unmarshal(aux.Environment, &s.Environment); err != nil {
+			var entries []string
+			if err = json.Unmarshal(aux.Environment, &entries); err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				key, value, _ := strings.Cut(entry, "=")
+				s.Environment[key] = value
+			}
+		}
+	}
+	s.Raw = append([]byte{}, data...)
+	return nil
+}
+
 type composeConfig struct {
 	Services map[string]serviceConfig `json:"services"`
 }
@@ -150,6 +201,13 @@ func (b DockerBackend) Inventory(ctx context.Context) (string, map[string]string
 	}
 	if len(images) < 2 || images["mowgli"] == "" || images["gui"] == "" {
 		return "", nil, errors.New("unsupported Compose layout")
+	}
+	for _, name := range append([]string{".env"}, stackFiles...) {
+		content, e := os.ReadFile(filepath.Join(b.Config.Directory, name))
+		if e != nil && !os.IsNotExist(e) {
+			return "", nil, e
+		}
+		data = append(data, []byte(name+":"+updates.Hash(content))...)
 	}
 	return updates.Hash(data), images, nil
 }
@@ -286,11 +344,13 @@ func (b DockerBackend) Maintenance(ctx context.Context, enable bool) error {
 }
 
 type backupRecord struct {
-	Sources   []string `json:"sources"`
-	Checksums []string `json:"checksums"`
-	Override  []byte   `json:"override,omitempty"`
-	Compose   []byte   `json:"compose"`
-	Env       []byte   `json:"env"`
+	Files     map[string][]byte `json:"files,omitempty"`
+	Created   map[string]string `json:"created,omitempty"`
+	Sources   []string          `json:"sources"`
+	Checksums []string          `json:"checksums"`
+	Override  []byte            `json:"override,omitempty"`
+	Compose   []byte            `json:"compose"`
+	Env       []byte            `json:"env"`
 }
 
 func (b DockerBackend) Backup(ctx context.Context, id string) (string, error) {
@@ -309,7 +369,14 @@ func (b DockerBackend) Backup(ctx context.Context, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	record := backupRecord{}
+	record := backupRecord{Files: map[string][]byte{}}
+	for _, name := range stackFiles {
+		content, e := os.ReadFile(filepath.Join(b.Config.Directory, name))
+		if e != nil && !os.IsNotExist(e) {
+			return "", e
+		}
+		record.Files[name] = content
+	}
 	record.Override, _ = os.ReadFile(b.override())
 	record.Compose, err = os.ReadFile(filepath.Join(b.Config.Directory, "docker-compose.yaml"))
 	if err != nil {
@@ -527,6 +594,30 @@ func (b DockerBackend) Restore(ctx context.Context, path string) error {
 	if _, err = b.stopManaged(ctx); err != nil {
 		return err
 	}
+	for name, service := range r.Created {
+		ids, e := command(ctx, "docker", "ps", "-aq", "--filter", "name=^/"+name+"$")
+		if e != nil {
+			return e
+		}
+		if strings.TrimSpace(string(ids)) == "" {
+			continue
+		}
+		ci, e := b.inspect(ctx, name)
+		if e != nil {
+			return e
+		}
+		if ci.Config.Labels["com.docker.compose.project"] != b.Config.Project || ci.Config.Labels["com.docker.compose.service"] != service || ci.Config.Labels[updateLabel+"owner"] != b.Config.Project {
+			return errors.New("rollback refuses to remove a container with unexpected ownership")
+		}
+		if ci.State.Running {
+			if _, e = command(ctx, "docker", "stop", ci.ID); e != nil {
+				return e
+			}
+		}
+		if _, e = command(ctx, "docker", "rm", ci.ID); e != nil {
+			return e
+		}
+	}
 	for i, source := range r.Sources {
 		// Preserve the failed data instead of recursively deleting it. Refuse a
 		// symlink or an unexpected source, and restore into the same mounted dir.
@@ -551,20 +642,36 @@ func (b DockerBackend) Restore(ctx context.Context, path string) error {
 			return e
 		}
 	}
-	if len(r.Override) > 0 {
-		if err = AtomicWrite(b.override(), r.Override, 0644); err != nil {
-			return err
-		}
-	} else if err = os.Remove(b.override()); err != nil && !os.IsNotExist(err) {
+	if err = removeFile(b.override()); err != nil {
 		return err
 	}
 	if len(r.Compose) > 0 {
-		if err = AtomicWrite(filepath.Join(b.Config.Directory, "docker-compose.yaml"), r.Compose, 0644); err != nil {
+		if err = AtomicWrite(filepath.Join(b.Config.Directory, "docker-compose.yaml"), r.Compose, 0600); err != nil {
+			return err
+		}
+	}
+	if len(r.Override) > 0 {
+		if err = AtomicWrite(b.override(), r.Override, 0644); err != nil {
 			return err
 		}
 	}
 	if len(r.Env) > 0 {
 		if err = AtomicWrite(filepath.Join(b.Config.Directory, ".env"), r.Env, 0600); err != nil {
+			return err
+		}
+	}
+	for _, name := range stackFiles {
+		content, recorded := r.Files[name]
+		if !recorded {
+			continue
+		}
+		path := filepath.Join(b.Config.Directory, name)
+		if content == nil {
+			err = removeFile(path)
+		} else {
+			err = AtomicWrite(path, content, 0600)
+		}
+		if err != nil {
 			return err
 		}
 	}

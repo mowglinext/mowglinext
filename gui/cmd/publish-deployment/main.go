@@ -34,9 +34,10 @@ func publish() error {
 	dir := flag.String("assets", "", "binary asset directory")
 	images := flag.String("images", strings.Join(updates.ImageNames, ","), "comma-separated published first-party image families")
 	guiCompatibility := flag.String("gui-compatibility", "", "reviewed GUI/ROS API compatibility contract; empty disables mixed releases")
+	composeDir := flag.String("compose-dir", "../install/compose", "release Compose fragments and shared selection map")
 	protocol := flag.Int("protocol", 0, "firmware protocol")
 	flag.Parse()
-	d := updater.Deployment{Schema: 1, ID: *id, Source: updater.Source{Repository: *repo, Branch: *branch, Track: *track}, Revision: *revision, PublishedAt: time.Now().UTC(), ReleaseTag: *release, Layout: 1, DataSchema: 1, UpdaterAPI: 1, MaintenanceAPI: 1, GUICompatibility: *guiCompatibility, FirmwareProtocol: *protocol, Images: map[string]updates.Image{}, Updater: map[string]updater.Binary{}}
+	d := updater.Deployment{Schema: 2, ID: *id, Source: updater.Source{Repository: *repo, Branch: *branch, Track: *track}, Revision: *revision, PublishedAt: time.Now().UTC(), ReleaseTag: *release, Layout: 1, DataSchema: 2, UpdaterAPI: 1, MaintenanceAPI: 1, GUICompatibility: *guiCompatibility, FirmwareProtocol: *protocol, Images: map[string]updates.Image{}, Updater: map[string]updater.Binary{}}
 	registry := updates.NewRegistry()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -61,6 +62,22 @@ func publish() error {
 		}
 		sum := sha256.Sum256(data)
 		d.Updater["linux/"+arch] = updater.Binary{Asset: asset, SHA256: hex.EncodeToString(sum[:]), Version: *id}
+	}
+	bundle, err := updater.ReadComposeBundle(*composeDir)
+	if err != nil {
+		return err
+	}
+	if err = bundle.ValidateImages(d); err != nil {
+		return err
+	}
+	bundleData, err := json.MarshalIndent(bundle, "", "  ")
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(bundleData)
+	d.Bundle = &updater.BundleAsset{Asset: "mowgli-compose.json", SHA256: hex.EncodeToString(sum[:])}
+	if err = os.WriteFile(filepath.Join(*dir, d.Bundle.Asset), bundleData, 0644); err != nil {
+		return err
 	}
 	if err := d.Validate([]string{*repo}); err != nil {
 		return err

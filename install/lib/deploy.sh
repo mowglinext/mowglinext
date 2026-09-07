@@ -277,7 +277,13 @@ migrate_runtime_paths() {
   # Keep the current conservative behavior during installer hardening.
   # Only runtime files under docker/
   backup_path_if_exists "$DOCKER_DIR/.env"
-  backup_path_if_exists "$DOCKER_DIR/docker-compose.yaml"
+  # Keep the installed definition available for release ownership/baseline
+  # validation. Moving it away would let regeneration bypass that check.
+  if [[ -f "$DOCKER_DIR/docker-compose.yaml" ]]; then
+    cp -p "$DOCKER_DIR/docker-compose.yaml" "$DOCKER_DIR/docker-compose.yaml.old.$(date +%Y%m%d_%H%M%S)"
+  else
+    backup_path_if_exists "$DOCKER_DIR/docker-compose.yaml"
+  fi
 
   # Optional: backup generated runtime config folders only if you want a clean regen
   # backup_path_if_exists "$DOCKER_DIR/config/mqtt"
