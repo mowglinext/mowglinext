@@ -51,6 +51,7 @@
     "fetchFailed": "Version information could not be refreshed",
     "showingPrevious": "Showing the previous observation. These versions may have changed.",
     "dockerUnavailable": "Docker is unavailable. Installed container versions cannot be confirmed.",
+    "servedWeb": "Web build on server",
     "browserStale": "This browser is using a different web build from the server",
     "reloadBrowser": "Refresh browser",
     "installedSoftware": "Installed software",

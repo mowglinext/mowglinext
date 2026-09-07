@@ -51,6 +51,7 @@
     "fetchFailed": "Impossible d'actualiser les informations de version",
     "showingPrevious": "Affichage de l'observation précédente. Les versions ont peut-être changé.",
     "dockerUnavailable": "Docker est indisponible. Les versions des conteneurs ne peuvent pas être confirmées.",
+    "servedWeb": "Version web sur le serveur",
     "browserStale": "Ce navigateur utilise une version web différente de celle du serveur",
     "reloadBrowser": "Actualiser le navigateur",
     "installedSoftware": "Logiciels installés",

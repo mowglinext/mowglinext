@@ -3,7 +3,7 @@ import {Alert, Button, Card, Empty, Segmented, Space, Spin, Tag, Typography} fro
 import {ReloadOutlined} from '@ant-design/icons';
 import {useTranslation} from 'react-i18next';
 import {useNavigate} from 'react-router-dom';
-import {browserBuild, useInstalledVersions} from '../../hooks/useInstalledVersions';
+import {browserBuild, useInstalledVersions, useServedWebBuild} from '../../hooks/useInstalledVersions';
 import {useFirmwareInventory} from '../../hooks/useFirmwareInventory';
 import {browserBuildDiffers, imageVersion} from '../../utils/versions';
 import type {ApiInstalledComponent} from '../../api/Api';
@@ -20,10 +20,11 @@ export function UpdatesSection({configuredModel}: {configuredModel?: string}) {
     const [advanced, setAdvanced] = useState(false);
     const {data, loading, error, refresh} = useInstalledVersions();
     const firmware = useFirmwareInventory();
+    const servedBuild = useServedWebBuild();
     const components = [...(data?.components ?? [])].sort((a, b) => order.indexOf(a.component ?? '') - order.indexOf(b.component ?? ''));
     const unknown = t('updates.unknown');
     const buildLabel = (revision?: string, version?: string) => [version, revision?.slice(0, 8)].filter(Boolean).join(' · ') || unknown;
-    const versionDetails = JSON.stringify({inventory: data, browser: browserBuild, firmware: {version: firmware.data.firmware_version, protocol: firmware.data.firmware_protocol_version, state: firmware.state}, configured_model: configuredModel}, null, 2);
+    const versionDetails = JSON.stringify({inventory: data, browser: browserBuild, served_web: servedBuild, firmware: {version: firmware.data.firmware_version, protocol: firmware.data.firmware_protocol_version, state: firmware.state}, configured_model: configuredModel}, null, 2);
     const componentCard = (component: ApiInstalledComponent) => (
         <div className="installed-version-row" key={component.name} data-testid={`version-${component.component}`}>
             <div className="installed-version-heading">
@@ -47,7 +48,7 @@ export function UpdatesSection({configuredModel}: {configuredModel?: string}) {
                 options={[{value: 'simple', label: t('hostUpdater.simple')}, {value: 'advanced', label: t('hostUpdater.advanced')}]}/>
             {error && <Alert type="warning" showIcon message={t('updates.fetchFailed')} description={data ? t('updates.showingPrevious') : undefined}/>}
             {data && !data.docker_available && <Alert type="warning" showIcon message={t('updates.dockerUnavailable')}/>}
-            {data && browserBuildDiffers(browserBuild, data.server ?? {}) && <Alert type="warning" showIcon message={t('updates.browserStale')} action={<Button onClick={() => window.location.reload()}>{t('updates.reloadBrowser')}</Button>}/>}
+            {browserBuildDiffers(browserBuild, servedBuild ?? {}) && <Alert type="warning" showIcon message={t('updates.browserStale')} action={<Button onClick={() => window.location.reload()}>{t('updates.reloadBrowser')}</Button>}/>}
             <HostUpdaterPanel advanced={advanced} inventory={components}/>
             {advanced && <details className="update-diagnostics"><summary>{t('hostUpdater.diagnostics')}</summary><UpdateChecks/>
             {advanced && <div className="installed-version-toolbar"><Button icon={<ReloadOutlined/>} loading={loading} onClick={() => void refresh()}>{t('updates.refresh')}</Button>{data && <Typography.Paragraph style={{margin: 0}} copyable={{text: versionDetails, tooltips: [t('updates.copy'), t('updates.copied')]}}>{t('updates.copy')}</Typography.Paragraph>}</div>}
@@ -56,6 +57,7 @@ export function UpdatesSection({configuredModel}: {configuredModel?: string}) {
             </Card>}
             {advanced && <Card title={t('updates.webBuild')} size="small"><dl>
                 <dt>{t('updates.server')}</dt><dd>{buildLabel(data?.server?.revision, data?.server?.version)}{data?.server?.modified && <Tag>{t('updates.modified')}</Tag>}</dd>
+                <dt>{t('updates.servedWeb')}</dt><dd>{buildLabel(servedBuild?.revision, servedBuild?.version)}</dd>
                 <dt>{t('updates.browser')}</dt><dd>{buildLabel(browserBuild.revision, browserBuild.version)}</dd>
             </dl><Text type="secondary">{t('updates.browserMeaning')}</Text></Card>}
             {advanced && data?.observed_at && <Text type="secondary">{t('updates.observed', {time: new Date(data.observed_at).toLocaleString()})}</Text>}

@@ -12,9 +12,8 @@ export function firmwareInventoryState(status: Status, connected: boolean, lastA
     return status.firmware_compatible ? 'compatible' : 'incompatible';
 }
 
-export function browserBuildDiffers(browser: {revision?: string; built_at?: string}, server: {revision?: string; built_at?: string}): boolean {
-    if (!browser.revision || !server.revision) return false;
-    return browser.revision !== server.revision || Boolean(browser.built_at && server.built_at && browser.built_at !== server.built_at);
+export function browserBuildDiffers(browser: {id?: string}, served: {id?: string}): boolean {
+    return Boolean(browser.id && served.id && browser.id !== served.id);
 }
 
 export function imageVersion(image: string): string {

@@ -404,3 +404,15 @@ verifying the manual recovery route and safe power conditions. Pass requires no
 actuation or firmware change, the reviewed image combination, preserved/restored
 data and maintenance retained until application verification. Any unexpected motion,
 image, data loss, stale-observation acceptance or premature gate release is a failure.
+
+
+### Browser build freshness
+
+Every web build emits `web-build.json` with an identity also embedded in its
+JavaScript. The page reads that manifest without caching and compares web-build
+IDs, independently of the Go backend revision. Web-only development patches can
+therefore keep the previous backend without a permanent reload warning. Different
+rebuilds of the same commit still differ. Missing or invalid manifests mean unknown;
+backend source revisions are not a substitute for served-web identity. Deploy the
+manifest and assets together. Diagnostics retain backend, served web and browser
+provenance separately.

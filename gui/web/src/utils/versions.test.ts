@@ -2,11 +2,11 @@ import {describe, expect, it} from 'vitest';
 import {browserBuildDiffers, firmwareInventoryState, imageVersion} from './versions';
 
 describe('installed version identity', () => {
-    it('does not compare missing build identities or treat package versions as revisions', () => {
-        expect(browserBuildDiffers({}, {revision: 'abc'})).toBe(false);
-        expect(browserBuildDiffers({revision: 'abc'}, {revision: 'abc'})).toBe(false);
-        expect(browserBuildDiffers({revision: 'abc'}, {revision: 'def'})).toBe(true);
-        expect(browserBuildDiffers({revision: 'abc', built_at: 'old'}, {revision: 'abc', built_at: 'new'})).toBe(true);
+    it('compares the browser to served web assets, not backend source or dates', () => {
+        expect(browserBuildDiffers({}, {id: 'build-a'})).toBe(false);
+        expect(browserBuildDiffers({id:'build-a'}, {})).toBe(false);
+        expect(browserBuildDiffers({id:'build-a'}, {id:'build-a'})).toBe(false);
+        expect(browserBuildDiffers({id:'build-a'}, {id:'build-b'})).toBe(true);
     });
     it('handles registry ports and digest-pinned references without inventing tags', () => {
         expect(imageVersion('localhost:5000/gui:feat-test')).toBe('feat-test');
