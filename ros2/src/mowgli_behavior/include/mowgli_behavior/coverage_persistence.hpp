@@ -15,6 +15,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace mowgli_behavior
 {
 
@@ -44,6 +46,9 @@ struct BTContext;
 /// No-op (returns false) when the path is empty. Returns true on a successful
 /// write.
 bool saveCoverageResumeState(const BTContext& ctx);
+
+bool beginCoverageOrientation(BTContext& ctx, uint32_t area);
+void markCoverageStarted(BTContext& ctx, uint32_t area);
 
 /// Load coverage resume state from ctx.coverage_resume_path INTO ctx.
 /// Returns false (leaving ctx unchanged) when the path is empty, the file is

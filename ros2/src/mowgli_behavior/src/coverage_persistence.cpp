@@ -43,7 +43,8 @@ void writeCrossHatch(std::ostream& out, const std::map<uint32_t, CrossHatch>& ar
     out << "cross_hatch_area " << index << ' ' << state.next_perpendicular << ' '
         << (state.session_perpendicular ? static_cast<int>(*state.session_perpendicular) : -1)
         << ' ' << state.alternate_session << ' ' << state.used << ' '
-        << (state.next_override ? static_cast<int>(*state.next_override) : -1) << '\n';
+        << (state.next_override ? static_cast<int>(*state.next_override) : -1) << ' '
+        << state.failed_sessions << ' ' << state.planning_failed << '\n';
   }
 }
 
@@ -69,6 +70,43 @@ bool writeSnapshot(const BTContext& ctx, const std::string& contents)
 }
 }  // namespace
 
+bool beginCoverageOrientation(BTContext& ctx, uint32_t area)
+{
+  auto it = ctx.cross_hatch.find(area);
+  if (it == ctx.cross_hatch.end() &&
+      (!ctx.mow_cross_hatch || ctx.base_orientation_areas.count(area)))
+  {
+    ctx.base_orientation_areas.insert(area);
+    return false;
+  }
+  if (it == ctx.cross_hatch.end())
+    it = ctx.cross_hatch.emplace(area, CrossHatch{}).first;
+  const bool first = !it->second.session_perpendicular.has_value();
+  const bool perpendicular =
+      it->second.begin(ctx.mow_cross_hatch && !ctx.base_orientation_areas.count(area));
+  if (first && !ctx.coverage_resume_path.empty() && !saveCoverageResumeState(ctx) && ctx.node)
+    RCLCPP_WARN(ctx.node->get_logger(),
+                "Cross-hatch area %u: could not persist session orientation to '%s'",
+                area,
+                ctx.coverage_resume_path.c_str());
+  return perpendicular;
+}
+
+void markCoverageStarted(BTContext& ctx, uint32_t area)
+{
+  const auto it = ctx.cross_hatch.find(area);
+  if (it == ctx.cross_hatch.end() || !it->second.session_perpendicular || it->second.used)
+    return;
+  it->second.used = true;
+  it->second.failed_sessions = 0;
+  it->second.planning_failed = false;
+  if (!ctx.coverage_resume_path.empty() && !saveCoverageResumeState(ctx) && ctx.node)
+    RCLCPP_WARN(ctx.node->get_logger(),
+                "Cross-hatch area %u: could not persist coverage start to '%s'",
+                area,
+                ctx.coverage_resume_path.c_str());
+}
+
 bool saveCoverageResumeState(const BTContext& ctx)
 {
   if (ctx.coverage_resume_path.empty())
@@ -92,6 +130,8 @@ bool saveCoverageResumeState(const BTContext& ctx)
   std::ostringstream out;
   out << kHeader << '\n';
   writeCrossHatch(out, ctx.cross_hatch);
+  for (const auto area : ctx.base_orientation_areas)
+    out << "base_orientation_area " << area << '\n';
   // The active high-level command (COMMAND_START etc.). Persisted so a mid-run
   // container restart can auto-re-enter MowingSequence instead of coming up IDLE
   // (current_command defaults to 0). Cast through unsigned so the uint8_t is
@@ -181,7 +221,20 @@ bool loadCoverageResumeState(BTContext& ctx)
         state.used = used != 0;
         state.next_override =
             override_next < 0 ? std::nullopt : std::optional<bool>(override_next != 0);
+        unsigned failures = 0;
+        int failed = 0;
+        if (ls >> failures >> failed && failures <= 1000 && (failed == 0 || failed == 1))
+        {
+          state.failed_sessions = failures;
+          state.planning_failed = failed != 0;
+        }
       }
+    }
+    else if (tag == "base_orientation_area")
+    {
+      uint32_t area;
+      if (ls >> area)
+        ctx.base_orientation_areas.insert(area);
     }
     else if (tag == "current_command")
     {
@@ -255,11 +308,13 @@ bool clearCoverageResumeState(const BTContext& ctx)
   {
     return false;
   }
-  if (!ctx.cross_hatch.empty())
+  if (!ctx.cross_hatch.empty() || !ctx.base_orientation_areas.empty())
   {
     std::ostringstream out;
     out << kHeader << '\n';
     writeCrossHatch(out, ctx.cross_hatch);
+    for (const auto area : ctx.base_orientation_areas)
+      out << "base_orientation_area " << area << '\n';
     return writeSnapshot(ctx, out.str());
   }
   // A leftover temp file is never loaded; cleanup is best-effort.

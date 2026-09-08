@@ -1063,6 +1063,7 @@ private:
 
   void tickTree()
   {
+    coverage_orientation_service_->processPending();
     {
       std::lock_guard<std::mutex> lock(context_->context_mutex);
       updateLocalizationHealthLocked();

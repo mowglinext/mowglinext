@@ -313,6 +313,9 @@ struct BTContext
   std::string coverage_resume_path;
   bool mow_cross_hatch{false};
   std::map<uint32_t, CrossHatch> cross_hatch;
+  // Disabled sessions still latch their base orientation for resume, but do not
+  // create persistent alternation history or trigger EndSession metadata writes.
+  std::set<uint32_t> base_orientation_areas;
   /// True when GetNextUnmowedArea exhausted the area list because every area is
   /// genuinely DONE (not because of a transient service error / timeout / no
   /// areas defined). The coverage subtree reads this (IsCoverageComplete) to

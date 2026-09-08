@@ -29,6 +29,86 @@
 
 using mowgli_behavior::BTContext;
 
+TEST(CoveragePersistence, NeverEnabledHasNoCompletedPhaseHistory)
+{
+  BTContext ctx;
+  ctx.coverage_resume_path = ::testing::TempDir() + "/cross_hatch_disabled.txt";
+  EXPECT_FALSE(mowgli_behavior::beginCoverageOrientation(ctx, 2));
+  mowgli_behavior::markCoverageStarted(ctx, 2);
+  EXPECT_TRUE(ctx.cross_hatch.empty());
+  ASSERT_TRUE(saveCoverageResumeState(ctx));
+  BTContext loaded;
+  loaded.coverage_resume_path = ctx.coverage_resume_path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  loaded.mow_cross_hatch = true;  // changing config cannot rotate this resumed run
+  EXPECT_FALSE(mowgli_behavior::beginCoverageOrientation(loaded, 2));
+  EXPECT_TRUE(loaded.cross_hatch.empty());
+  ASSERT_TRUE(clearCoverageResumeState(loaded));  // progress reset retains latch
+  BTContext reset;
+  reset.coverage_resume_path = ctx.coverage_resume_path;
+  ASSERT_TRUE(loadCoverageResumeState(reset));
+  EXPECT_EQ(reset.base_orientation_areas.count(2), 1u);
+  reset.base_orientation_areas.clear();  // EndSession clears the temporary latch
+  ASSERT_TRUE(clearCoverageResumeState(reset));
+  EXPECT_FALSE(std::filesystem::exists(ctx.coverage_resume_path));
+  EXPECT_FALSE(std::filesystem::exists(ctx.coverage_resume_path + ".tmp"));
+}
+
+TEST(CoveragePersistence, DisablingDuringResumeRetainsPerpendicularAndHistory)
+{
+  BTContext ctx;
+  ctx.coverage_resume_path = ::testing::TempDir() + "/cross_hatch_toggle.txt";
+  ctx.mow_cross_hatch = true;
+  ctx.cross_hatch[2].next_perpendicular = true;
+  ASSERT_TRUE(mowgli_behavior::beginCoverageOrientation(ctx, 2));
+  BTContext loaded;
+  loaded.coverage_resume_path = ctx.coverage_resume_path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  EXPECT_FALSE(loaded.mow_cross_hatch);
+  EXPECT_TRUE(mowgli_behavior::beginCoverageOrientation(loaded, 2));
+  mowgli_behavior::markCoverageStarted(loaded, 2);
+  mowgli_behavior::markCoverageStarted(loaded, 2);
+  loaded.cross_hatch[2].finish();
+  loaded.cross_hatch[2].finish();
+  EXPECT_FALSE(loaded.cross_hatch[2].next());
+  ASSERT_TRUE(clearCoverageResumeState(loaded));
+  EXPECT_TRUE(std::filesystem::exists(ctx.coverage_resume_path));
+  std::remove(ctx.coverage_resume_path.c_str());
+}
+
+TEST(CoveragePersistence, FailedPlanningCountsSessionsAndSurvivesRestart)
+{
+  BTContext ctx;
+  ctx.coverage_resume_path = ::testing::TempDir() + "/cross_hatch_failures.txt";
+  auto& state = ctx.cross_hatch[2];
+  state.next_perpendicular = true;
+  for (unsigned count = 1; count <= 3; ++count)
+  {
+    ASSERT_TRUE(state.begin(true));
+    state.planning_failed = true;
+    state.begin(true);  // retry is not a new failed session
+    state.finish();
+    state.finish();
+    EXPECT_EQ(state.failed_sessions, count);
+    EXPECT_TRUE(state.next());
+  }
+  ASSERT_TRUE(saveCoverageResumeState(ctx));
+  BTContext loaded;
+  loaded.coverage_resume_path = ctx.coverage_resume_path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  ASSERT_EQ(loaded.cross_hatch.at(2).failed_sessions, 3u);
+  loaded.cross_hatch[2].begin(true);
+  mowgli_behavior::markCoverageStarted(loaded, 2);
+  EXPECT_EQ(loaded.cross_hatch[2].failed_sessions, 0u);
+  loaded.cross_hatch[2].finish();
+  EXPECT_FALSE(loaded.cross_hatch[2].next());
+  state.next_override = false;
+  state.finish();
+  EXPECT_EQ(state.failed_sessions, 0u);
+  EXPECT_FALSE(state.next());
+  std::remove(ctx.coverage_resume_path.c_str());
+}
+
 namespace
 {
 std::string tempPath(const std::string& name)

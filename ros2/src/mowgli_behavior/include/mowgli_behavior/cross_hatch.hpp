@@ -29,6 +29,8 @@ struct CrossHatch
   bool alternate_session{false};
   bool used{false};
   std::optional<bool> next_override;
+  unsigned failed_sessions{0};
+  bool planning_failed{false};
 
   bool next() const
   {
@@ -50,12 +52,17 @@ struct CrossHatch
       session_perpendicular = enabled && next_perpendicular;
       alternate_session = enabled;
       used = false;
+      planning_failed = false;
     }
     return *session_perpendicular;
   }
 
   void finish()
   {
+    if (used || next_override)
+      failed_sessions = 0;
+    else if (alternate_session && planning_failed && failed_sessions < 1000)
+      ++failed_sessions;
     // A failed plan, manual-only run or repeated EndSession does not consume
     // an orientation. A coverage run that started and was then abandoned does.
     next_perpendicular = next();
@@ -63,6 +70,7 @@ struct CrossHatch
     session_perpendicular.reset();
     alternate_session = false;
     used = false;
+    planning_failed = false;
   }
 };
 

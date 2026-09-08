@@ -220,8 +220,18 @@ BT::NodeStatus EndSession::tick()
   // phase. This is a real session boundary, so
   // the next COMMAND_START must start fresh rather than resume a finished (or
   // aborted-and-docked) session from the persisted cursor.
+  ctx->base_orientation_areas.clear();
   for (auto& [area, orientation] : ctx->cross_hatch)
+  {
+    const auto previous_failures = orientation.failed_sessions;
     orientation.finish();
+    if (orientation.failed_sessions >= 3 && orientation.failed_sessions != previous_failures)
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "Cross-hatch area %u: orientation has failed in %u sessions; "
+                  "review the plan or override Next stripe direction by area.",
+                  area,
+                  orientation.failed_sessions);
+  }
   if (!clearCoverageResumeState(*ctx))
   {
     RCLCPP_ERROR(ctx->node->get_logger(),
