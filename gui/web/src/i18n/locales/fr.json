@@ -1,4 +1,23 @@
 {
+  "systemPower": {
+    "cancel": "Annuler",
+    "title": "Raspberry Pi",
+    "description": "Redémarrez ou éteignez l’ordinateur qui exécute les services du robot et l’interface web.",
+    "reboot": "Redémarrer le Pi",
+    "shutdown": "Éteindre le Pi",
+    "rebootTitle": "Redémarrer le Raspberry Pi ?",
+    "shutdownTitle": "Éteindre le Raspberry Pi ?",
+    "rebootConfirm": "Cette action redémarre tout le Raspberry Pi et les services du robot. L’interface web sera déconnectée pendant le redémarrage.",
+    "shutdownConfirm": "Cette action éteint tout le Raspberry Pi et les services du robot. L’interface web sera déconnectée. Un accès physique sera nécessaire pour le rallumer.",
+    "parkFirst": "Garez le robot et arrêtez la lame avant de continuer. N’interrompez pas une mise à jour ou un flashage du firmware.",
+    "rebootRequested": "Redémarrage demandé",
+    "shutdownRequested": "Arrêt demandé",
+    "rebootResult": "Le redémarrage du Raspberry Pi peut prendre une à deux minutes. Rechargez cette page lorsqu’il sera de nouveau en ligne.",
+    "shutdownResult": "Le Raspberry Pi est en cours d’arrêt. Un accès physique sera nécessaire pour le rallumer.",
+    "reload": "Recharger la page",
+    "unconfirmed": "La demande n’a pas pu être confirmée",
+    "unconfirmedHint": "La connexion a peut-être été coupée parce que le Pi redémarre ou s’éteint déjà. Vérifiez son état avant de réessayer ; la demande ne sera pas renvoyée automatiquement."
+  },
   "language": {
     "label": "Langue",
     "fr": "Français",
