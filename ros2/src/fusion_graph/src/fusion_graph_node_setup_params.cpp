@@ -70,93 +70,92 @@ void FusionGraphNode::DeclareParameters()
     scan_yield_timeout_s_ = declare_parameter<double>("scan_yield_timeout_s", 2.0);
     scan_yield_sigma_xy_ = declare_parameter<double>("scan_yield_sigma_xy", 0.5);
     scan_yield_sigma_theta_ = declare_parameter<double>("scan_yield_sigma_theta", 0.3);
+  }
 
-    // LiDAR map anchor (Beluga particle filter against a grid built under
-    // RTK-Fixed). Off by default until the field A/B validates it.
-    use_lidar_map_anchor_ = declare_parameter<bool>("use_lidar_map_anchor", false);
-    lidar_map_resolution_m_ = declare_parameter<double>("lidar_map_resolution_m", 0.10);
-    lidar_map_half_extent_m_ = declare_parameter<double>("lidar_map_half_extent_m", 40.0);
-    lidar_map_insert_period_s_ = declare_parameter<double>("lidar_map_insert_period_s", 0.5);
-    lidar_map_rebuild_period_s_ = declare_parameter<double>("lidar_map_rebuild_period_s", 5.0);
-    // 1.0 s, not 0.3: a 5 Hz receiver whose stamps arrive ~80 ms old sits at
-    // ~0.28 s of age just before every next fix — 0.3 flapped on timer phase.
-    lidar_anchor_engage_age_s_ = declare_parameter<double>("lidar_anchor_engage_age_s", 1.0);
-    lidar_anchor_disengage_dwell_s_ =
-        declare_parameter<double>("lidar_anchor_disengage_dwell_s", 1.0);
-    lidar_anchor_max_beams_ = declare_parameter<int>("lidar_anchor_max_beams", 60);
-    lidar_anchor_min_particles_ = declare_parameter<int>("lidar_anchor_min_particles", 300);
-    lidar_anchor_max_particles_ = declare_parameter<int>("lidar_anchor_max_particles", 1500);
-    lidar_anchor_update_min_d_ = declare_parameter<double>("lidar_anchor_update_min_d", 0.05);
-    lidar_anchor_update_min_a_ = declare_parameter<double>("lidar_anchor_update_min_a", 0.05);
-    lidar_anchor_seed_sigma_xy_m_ = declare_parameter<double>("lidar_anchor_seed_sigma_xy_m", 0.10);
-    lidar_anchor_seed_sigma_theta_rad_ =
-        declare_parameter<double>("lidar_anchor_seed_sigma_theta_rad", 0.10);
-    lidar_anchor_z_hit_ = declare_parameter<double>("lidar_anchor_z_hit", 0.7);
-    lidar_anchor_z_rand_ = declare_parameter<double>("lidar_anchor_z_rand", 0.3);
-    lidar_anchor_sigma_hit_m_ = declare_parameter<double>("lidar_anchor_sigma_hit_m", 0.15);
-    lidar_anchor_max_laser_distance_m_ =
-        declare_parameter<double>("lidar_anchor_max_laser_distance_m", 12.0);
-    lidar_anchor_odom_alpha_rot_ = declare_parameter<double>("lidar_anchor_odom_alpha_rot", 0.05);
-    lidar_anchor_odom_alpha_trans_ =
-        declare_parameter<double>("lidar_anchor_odom_alpha_trans", 0.05);
-    // AMCL's augmented-MCL recovery (alpha_slow / alpha_fast > 0) injects
-    // RANDOM particles across the whole map whenever the average weight drops
-    // — on open lawn it drops every time, the injected particles that land
-    // near saturated clutter (the terrace) win, and the estimate teleports:
-    // replay 2026-09-07 showed a 2.7 m jump on the FIRST update after a
-    // 0.10 m seed. Our seed is always trustworthy (fused pose or dead
-    // reckoning), so global relocalisation is never wanted: both OFF.
-    lidar_anchor_alpha_slow_ = declare_parameter<double>("lidar_anchor_alpha_slow", 0.0);
-    lidar_anchor_alpha_fast_ = declare_parameter<double>("lidar_anchor_alpha_fast", 0.0);
-    lidar_anchor_selective_resampling_ =
-        declare_parameter<bool>("lidar_anchor_selective_resampling", true);
-    // Per-estimate trust. Defaults sized on the 2026-09-06 replay: the lost
-    // filter scored 0.13 while a healthy one scores ≥ 0.9; wheels + gyro
-    // drifted < 0.4 m over 2.7 min and a U-turn.
-    lidar_anchor_validator_.min_hit_ratio =
-        declare_parameter<double>("lidar_anchor_min_hit_ratio", 0.5);
-    lidar_anchor_validator_.min_hit_count =
-        declare_parameter<int>("lidar_anchor_min_hit_count", 30);
-    lidar_anchor_validator_.max_sigma_m =
-        declare_parameter<double>("lidar_anchor_max_sigma_m", 0.5);
-    lidar_anchor_validator_.dr_budget_m =
-        declare_parameter<double>("lidar_anchor_dr_budget_m", 0.3);
-    lidar_anchor_validator_.dr_drift_frac =
-        declare_parameter<double>("lidar_anchor_dr_drift_frac", 0.02);
-    lidar_anchor_reseed_after_s_ = declare_parameter<double>("lidar_anchor_reseed_after_s", 5.0);
-    lidar_anchor_shadow_mode_ = declare_parameter<bool>("lidar_anchor_shadow_mode", false);
-    lidar_map_import_topic_ = declare_parameter<std::string>("lidar_map_import_topic", "");
-    lidar_anchor_shadow_ref_period_s_ =
-        declare_parameter<double>("lidar_anchor_shadow_ref_period_s", 20.0);
-    lidar_anchor_undock_dwell_s_ = declare_parameter<double>("lidar_anchor_undock_dwell_s", 10.0);
-    if (use_lidar_map_anchor_)
-    {
-      LidarOccupancyMapperParams mp;
-      mp.resolution_m = lidar_map_resolution_m_;
-      mp.half_extent_m = lidar_map_half_extent_m_;
-      mp.max_range_m = lidar_anchor_max_laser_distance_m_;
-      // Evidence weights. Defaults = one hit marks a cell occupied; a garden
-      // (foliage, wind) wants a higher occupied threshold so a cell needs
-      // several concordant hits before the filter may trust it — tuned on
-      // the replay harness, not by hand.
-      mp.log_odds_hit = declare_parameter<double>("lidar_map_log_odds_hit", mp.log_odds_hit);
-      mp.log_odds_miss = declare_parameter<double>("lidar_map_log_odds_miss", mp.log_odds_miss);
-      mp.occupied_threshold =
-          declare_parameter<double>("lidar_map_occupied_threshold", 2.0 * mp.log_odds_hit);
-      mp.free_threshold = declare_parameter<double>("lidar_map_free_threshold", mp.free_threshold);
-      lidar_mapper_params_ = mp;
-      lidar_mapper_.emplace(mp);
-      lidar_anchor_gate_.emplace(true,
-                                 lidar_anchor_engage_age_s_,
-                                 lidar_map_insert_period_s_,
-                                 lidar_anchor_disengage_dwell_s_);
-      RCLCPP_INFO(get_logger(),
-                  "LiDAR map anchor ENABLED: grid %.2f m over ±%.0f m, engage when RTK-Fixed older "
-                  "than %.2f s",
-                  lidar_map_resolution_m_,
-                  lidar_map_half_extent_m_,
-                  lidar_anchor_engage_age_s_);
-    }
+  // LiDAR map anchor — declared OUTSIDE the scan_matching gate: it is a scan
+  // consumer of its own (field 2026-09-08: an anchor-only configuration
+  // silently never enabled the anchor).
+  // LiDAR map anchor (Beluga particle filter against a grid built under
+  // RTK-Fixed). Off by default until the field A/B validates it.
+  use_lidar_map_anchor_ = declare_parameter<bool>("use_lidar_map_anchor", false);
+  lidar_map_resolution_m_ = declare_parameter<double>("lidar_map_resolution_m", 0.10);
+  lidar_map_half_extent_m_ = declare_parameter<double>("lidar_map_half_extent_m", 40.0);
+  lidar_map_insert_period_s_ = declare_parameter<double>("lidar_map_insert_period_s", 0.5);
+  lidar_map_rebuild_period_s_ = declare_parameter<double>("lidar_map_rebuild_period_s", 5.0);
+  // 1.0 s, not 0.3: a 5 Hz receiver whose stamps arrive ~80 ms old sits at
+  // ~0.28 s of age just before every next fix — 0.3 flapped on timer phase.
+  lidar_anchor_engage_age_s_ = declare_parameter<double>("lidar_anchor_engage_age_s", 1.0);
+  lidar_anchor_disengage_dwell_s_ =
+      declare_parameter<double>("lidar_anchor_disengage_dwell_s", 1.0);
+  lidar_anchor_max_beams_ = declare_parameter<int>("lidar_anchor_max_beams", 60);
+  lidar_anchor_min_particles_ = declare_parameter<int>("lidar_anchor_min_particles", 300);
+  lidar_anchor_max_particles_ = declare_parameter<int>("lidar_anchor_max_particles", 1500);
+  lidar_anchor_update_min_d_ = declare_parameter<double>("lidar_anchor_update_min_d", 0.05);
+  lidar_anchor_update_min_a_ = declare_parameter<double>("lidar_anchor_update_min_a", 0.05);
+  lidar_anchor_seed_sigma_xy_m_ = declare_parameter<double>("lidar_anchor_seed_sigma_xy_m", 0.10);
+  lidar_anchor_seed_sigma_theta_rad_ =
+      declare_parameter<double>("lidar_anchor_seed_sigma_theta_rad", 0.10);
+  lidar_anchor_z_hit_ = declare_parameter<double>("lidar_anchor_z_hit", 0.7);
+  lidar_anchor_z_rand_ = declare_parameter<double>("lidar_anchor_z_rand", 0.3);
+  lidar_anchor_sigma_hit_m_ = declare_parameter<double>("lidar_anchor_sigma_hit_m", 0.15);
+  lidar_anchor_max_laser_distance_m_ =
+      declare_parameter<double>("lidar_anchor_max_laser_distance_m", 12.0);
+  lidar_anchor_odom_alpha_rot_ = declare_parameter<double>("lidar_anchor_odom_alpha_rot", 0.05);
+  lidar_anchor_odom_alpha_trans_ = declare_parameter<double>("lidar_anchor_odom_alpha_trans", 0.05);
+  // AMCL's augmented-MCL recovery (alpha_slow / alpha_fast > 0) injects
+  // RANDOM particles across the whole map whenever the average weight drops
+  // — on open lawn it drops every time, the injected particles that land
+  // near saturated clutter (the terrace) win, and the estimate teleports:
+  // replay 2026-09-07 showed a 2.7 m jump on the FIRST update after a
+  // 0.10 m seed. Our seed is always trustworthy (fused pose or dead
+  // reckoning), so global relocalisation is never wanted: both OFF.
+  lidar_anchor_alpha_slow_ = declare_parameter<double>("lidar_anchor_alpha_slow", 0.0);
+  lidar_anchor_alpha_fast_ = declare_parameter<double>("lidar_anchor_alpha_fast", 0.0);
+  lidar_anchor_selective_resampling_ =
+      declare_parameter<bool>("lidar_anchor_selective_resampling", true);
+  // Per-estimate trust. Defaults sized on the 2026-09-06 replay: the lost
+  // filter scored 0.13 while a healthy one scores ≥ 0.9; wheels + gyro
+  // drifted < 0.4 m over 2.7 min and a U-turn.
+  lidar_anchor_validator_.min_hit_ratio =
+      declare_parameter<double>("lidar_anchor_min_hit_ratio", 0.5);
+  lidar_anchor_validator_.min_hit_count = declare_parameter<int>("lidar_anchor_min_hit_count", 30);
+  lidar_anchor_validator_.max_sigma_m = declare_parameter<double>("lidar_anchor_max_sigma_m", 0.5);
+  lidar_anchor_validator_.dr_budget_m = declare_parameter<double>("lidar_anchor_dr_budget_m", 0.3);
+  lidar_anchor_validator_.dr_drift_frac =
+      declare_parameter<double>("lidar_anchor_dr_drift_frac", 0.02);
+  lidar_anchor_reseed_after_s_ = declare_parameter<double>("lidar_anchor_reseed_after_s", 5.0);
+  lidar_anchor_shadow_mode_ = declare_parameter<bool>("lidar_anchor_shadow_mode", false);
+  lidar_map_import_topic_ = declare_parameter<std::string>("lidar_map_import_topic", "");
+  lidar_anchor_shadow_ref_period_s_ =
+      declare_parameter<double>("lidar_anchor_shadow_ref_period_s", 20.0);
+  lidar_anchor_undock_dwell_s_ = declare_parameter<double>("lidar_anchor_undock_dwell_s", 10.0);
+  if (use_lidar_map_anchor_)
+  {
+    LidarOccupancyMapperParams mp;
+    mp.resolution_m = lidar_map_resolution_m_;
+    mp.half_extent_m = lidar_map_half_extent_m_;
+    mp.max_range_m = lidar_anchor_max_laser_distance_m_;
+    // Evidence weights. Defaults = one hit marks a cell occupied; a garden
+    // (foliage, wind) wants a higher occupied threshold so a cell needs
+    // several concordant hits before the filter may trust it — tuned on
+    // the replay harness, not by hand.
+    mp.log_odds_hit = declare_parameter<double>("lidar_map_log_odds_hit", mp.log_odds_hit);
+    mp.log_odds_miss = declare_parameter<double>("lidar_map_log_odds_miss", mp.log_odds_miss);
+    mp.occupied_threshold =
+        declare_parameter<double>("lidar_map_occupied_threshold", 2.0 * mp.log_odds_hit);
+    mp.free_threshold = declare_parameter<double>("lidar_map_free_threshold", mp.free_threshold);
+    lidar_mapper_params_ = mp;
+    lidar_mapper_.emplace(mp);
+    lidar_anchor_gate_.emplace(true,
+                               lidar_anchor_engage_age_s_,
+                               lidar_map_insert_period_s_,
+                               lidar_anchor_disengage_dwell_s_);
+    RCLCPP_INFO(get_logger(),
+                "LiDAR map anchor ENABLED: grid %.2f m over ±%.0f m, engage when RTK-Fixed older "
+                "than %.2f s",
+                lidar_map_resolution_m_,
+                lidar_map_half_extent_m_,
+                lidar_anchor_engage_age_s_);
   }
 
   // 180° yaw-flip recovery (see fusion_graph_node.hpp). Declared outside the
