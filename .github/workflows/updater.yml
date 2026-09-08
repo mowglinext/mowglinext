@@ -1,11 +1,13 @@
 name: Host updater
 on:
   push:
-    branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
-    paths: ['gui/**', 'install/**', 'ros2/**', 'docker/**', '.github/workflows/updater.yml']
+    # Bootstrap addresses the exact checkout SHA, including docs/sensor-only
+    # commits and custom branches. Every installable revision needs an asset.
+    branches: ['**']
+    tags: ['v*.*.*']
   pull_request:
     branches: [main, dev]
-    paths: ['gui/**', 'install/**', 'ros2/**', 'docker/**', '.github/workflows/updater.yml']
+    paths: ['gui/**', 'install/**', 'ros2/**', 'docker/**', '.github/workflows/updater.yml', '.github/workflows/deployment-release.yml', '.github/scripts/publish-stable-deployment.sh']
   workflow_dispatch:
 permissions:
   contents: read
@@ -30,6 +32,7 @@ jobs:
           export MOWGLI_UPDATER_STACK_BINARY="$RUNNER_TEMP/mowgli-updater-installer-test"
           cd ..
           bash install/tests/test_updater.sh
+          bash install/tests/test_deployment_publication.sh
           bash install/tests/test_compose_validity.sh
           bash install/tests/test_idempotency.sh
       - name: Cross-build static host binaries

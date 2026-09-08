@@ -22,6 +22,122 @@ type AgentSelection struct {
 	Error    string `json:"error,omitempty"`
 }
 
+// Installer upgrades may cross journal schemas, so they must select the new
+// worker explicitly and retain the old executable together with its journal.
+// Unlike online self-update, recovery across schemas is an installer operation.
+func CheckInstallerState(c HostConfig) error {
+	if active, err := (DockerBackend{c}).MaintenanceSet(); err != nil || active {
+		return errors.New("resolve update maintenance before upgrading the installer worker")
+	}
+	if _, err := os.Stat(filepath.Join(c.StateDir, "agent-pending.json")); !os.IsNotExist(err) {
+		return errors.New("resolve the pending worker replacement first")
+	}
+	m, err := Open(c.StateDir, c.Trusted, nil, nil)
+	if err != nil {
+		return err
+	}
+	if m.Snapshot().Job.Pending() {
+		return errors.New("resolve the pending deployment before upgrading the installer worker")
+	}
+	return nil
+}
+
+func SelectInstallerWorker(c HostConfig, bootstrap string, candidate []byte) error {
+	if !filepath.IsAbs(bootstrap) {
+		return errors.New("installer executable must be an absolute path")
+	}
+	if len(candidate) == 0 {
+		return errors.New("installer executable is empty")
+	}
+	unlock, err := processLock(filepath.Join(c.StateDir, "worker.lock"))
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err = CheckInstallerState(c); err != nil {
+		return err
+	}
+	previous := AgentSelection{Path: bootstrap}
+	files := map[string][]byte{}
+	for _, name := range []string{"state.json", "agent-active.json"} {
+		data, err := os.ReadFile(filepath.Join(c.StateDir, name))
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		files[name] = data
+		if name == "agent-active.json" && data != nil {
+			if err = json.Unmarshal(data, &previous); err != nil {
+				return err
+			}
+		}
+	}
+	if previous.Path != bootstrap && filepath.Dir(previous.Path) != filepath.Join(c.StateDir, "bin") {
+		return errors.New("invalid previous worker path")
+	}
+	data, err := os.ReadFile(previous.Path)
+	if err != nil && (!os.IsNotExist(err) || files["agent-active.json"] != nil) {
+		return err
+	}
+	retained := ""
+	if err == nil {
+		sum := sha256.Sum256(data)
+		retained = filepath.Join(c.StateDir, "bin", hex.EncodeToString(sum[:]))
+		if err = AtomicWrite(retained, data, 0755); err != nil {
+			return err
+		}
+	}
+	backup := filepath.Join(c.StateDir, "installer-backups", fmt.Sprintf("%d", time.Now().UnixNano()), "restore.json")
+	if err = AtomicJSON(backup, map[string]any{"files": files, "worker": retained, "selection": previous}); err != nil {
+		return err
+	}
+	// Replace the launcher before selecting it. A crash between these writes
+	// leaves the old active worker selected (or the new launcher on first boot),
+	// never a selection pointing at an older bootstrap that cannot read state.
+	if err = AtomicWrite(bootstrap, candidate, 0755); err != nil {
+		return err
+	}
+	return AtomicJSON(filepath.Join(c.StateDir, "agent-active.json"), AgentSelection{Path: bootstrap, Previous: retained, Version: Version})
+}
+
+func WaitInstallerWorker(ctx context.Context, c HostConfig) error {
+	client := Client(filepath.Join(c.StateDir, "run", "updater.sock"))
+	client.Timeout = 2 * time.Second
+	samples := 0
+	for {
+		req, err := http.NewRequestWithContext(ctx, "GET", "http://updater/v1/state", nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		good := false
+		if err == nil {
+			var status struct {
+				API   int `json:"api"`
+				Agent struct {
+					Version  string `json:"version"`
+					Revision string `json:"revision"`
+				} `json:"agent"`
+			}
+			err = json.NewDecoder(io.LimitReader(resp.Body, 4*1024*1024)).Decode(&status)
+			resp.Body.Close()
+			good = err == nil && resp.StatusCode == 200 && status.API == APIVersion && status.Agent.Version == Version && status.Agent.Revision == Revision
+		}
+		if good {
+			samples++
+		} else {
+			samples = 0
+		}
+		if samples >= 3 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("installer replacement did not become healthy: %w", ctx.Err())
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 func (m *Manager) UpgradeAgent(ctx context.Context, c HostConfig, id string) error {
 	m.mu.Lock()
 	if m.busy || m.checking || m.state.Job.Pending() {

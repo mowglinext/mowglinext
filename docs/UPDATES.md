@@ -25,6 +25,9 @@ switch changes presentation only: it does not check remotely, install anything
 or change policy. Unsaved source edits must be saved or reset before review.
 Simple always reviews the latest published deployment and preserves an existing
 pin; switching back from Advanced cannot install a hidden older selection.
+Production selects the highest `vMAJOR.MINOR.PATCH`, so a later-published backport
+does not replace a newer version. Development and custom snapshots use publication
+time. Older compatible versions remain selectable explicitly in Advanced.
 
 The confirmation names the version, repository/branch and affected components.
 It explains downtime, backups and firmware scope. Exact before/after image
@@ -482,6 +485,27 @@ cannot replace itself during a container transaction. The supervisor itself is
 refreshed by the normal installer; incompatible API/schema changes require an
 installer migration rather than in-place worker replacement.
 
+The installer checks for pending jobs, maintenance and worker replacement before
+stopping the service. It saves the previous executable and paired journal/selection
+under `installer-backups/` in the updater state directory, atomically replaces the
+launcher, and explicitly selects that worker instead of retaining an older
+self-updated selection. Three matching version/revision/API samples are required
+before marking a new installation managed or retiring its Watchtower instance.
+Schema-crossing recovery uses the retained worker **and its paired journal**;
+restoring only an older executable is unsafe.
+
+Fresh MAVROS, TF-Luna or VESC configurations use the existing installer path and
+keep their selected containers. They are not silently enrolled into coordinated
+updates: the current release selector covers the Mowgli backend, GNSS and LiDAR.
+An already managed installation rejects these unsupported selections before
+regenerating runtime files. These integrations need explicit release/health/storage
+contracts before they can participate in coordinated updates.
+
+Every downloaded target image, including release-approved external images, is
+checked for Dockerfile `VOLUME` declarations against the **target** Compose mounts
+before entering maintenance. Undeclared volumes are rejected before containers
+stop; being absent from Compose does not make image-created storage stateless.
+
 The status/history view retains the most recent 20 completed transactions.
 Recovery archives and tagged previous images are retained, not automatically
 pruned in this first implementation. Monitor storage and keep the backups/tags
@@ -497,11 +521,18 @@ publishes `mowgli-deployment.json`, its checksummed `mowgli-compose.json` bundle
 and updater binaries only when complete. All optional image variants are checked. It
 runs for main/dev/release tags, or by manual dispatch on a custom branch. A fork
 must enable the workflow and publish readable GHCR images and release assets.
-The separate `updater.yml` publishes installer bootstrap binaries.
+The separate `updater.yml` publishes exact-commit installer bootstrap binaries on
+every branch push (including documentation-only commits) and version-tag push.
+If the asset is unavailable or CI has not finished, supported installation stops
+with an actionable error; it does not enable Watchtower as a fallback. A locally
+built `MOWGLI_UPDATER_BINARY` remains available for unpublished checkouts.
 
-The descriptor is a release asset, not a catalogue service. Stable assets attach
-to the firmware workflow's stable release; development/custom snapshots use
-prereleases. The picker returns up to 30 deployments, scanning at most 1,000
+The descriptor is a release asset, not a catalogue service. Firmware and software
+may create the tagged production release in either order; a competing creation
+is accepted only after verifying the release exists. Software uploads its descriptor
+last, after the bundle and binaries, without overwriting firmware assets or an
+existing deployment. Development/custom snapshots use prereleases.
+The picker returns up to 30 deployments, scanning at most 1,000
 release headers. Hitting the scan limit reports an error. Publication and storage
 retention remain maintainer responsibilities. HTTPS and trusted repository
 configuration establish provenance; SHA-256 checks detect corruption, not an

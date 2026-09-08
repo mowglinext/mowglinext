@@ -294,6 +294,52 @@ func (b DockerBackend) Pull(ctx context.Context, images map[string]string) error
 	return nil
 }
 
+// Image-declared volumes are invisible to Compose config. Check downloaded
+// images against the target mounts before maintenance, backup or activation.
+func (b DockerBackend) ValidateImageStorage(ctx context.Context, p Plan) error {
+	var target composeConfig
+	var err error
+	if p.Stack != nil {
+		err = json.Unmarshal(p.Stack.Compose, &target)
+	} else {
+		target, _, err = b.model(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	for service, image := range p.Images {
+		sc, exists := target.Services[service]
+		if !exists {
+			return fmt.Errorf("target service %s is missing", service)
+		}
+		data, err := command(ctx, "docker", "image", "inspect", image)
+		if err != nil {
+			return err
+		}
+		var images []struct {
+			Config struct {
+				Volumes map[string]json.RawMessage `json:"Volumes"`
+			} `json:"Config"`
+		}
+		if err = json.Unmarshal(data, &images); err != nil || len(images) != 1 {
+			return fmt.Errorf("cannot inspect target storage for %s", service)
+		}
+		for destination := range images[0].Config.Volumes {
+			declared := false
+			for _, mount := range sc.Volumes {
+				if mount.Target == destination {
+					declared = true
+					break
+				}
+			}
+			if !declared {
+				return fmt.Errorf("%s image introduces untracked volume %s; explicit storage migration required", service, destination)
+			}
+		}
+	}
+	return nil
+}
+
 type Readiness struct {
 	Ready            bool   `json:"ready"`
 	Maintenance      bool   `json:"maintenance"`

@@ -3,7 +3,7 @@ on:
   push:
     branches: [main, dev]
     tags: ['v*.*.*']
-    paths: ['gui/**', 'ros2/**', 'sensors/**', 'install/**', '.github/workflows/deployment-release.yml']
+    paths: ['gui/**', 'ros2/**', 'sensors/**', 'install/**', '.github/workflows/deployment-release.yml', '.github/scripts/publish-stable-deployment.sh']
   workflow_dispatch:
 permissions:
   contents: read
@@ -164,10 +164,7 @@ jobs:
           cd ../dist
           sha256sum mowgli-updater-linux-* > updater-SHA256SUMS
           if [[ "$TRACK" == stable ]]; then
-            # Existing firmware release creation owns the stable release. Never
-            # overwrite an already published software deployment descriptor.
-            gh release view "$RELEASE" --repo "$REPO"
-            gh release upload "$RELEASE" ./* --repo "$REPO"
+            bash ../.github/scripts/publish-stable-deployment.sh
           else
             gh release create "$RELEASE" ./* --repo "$REPO" --target "$REVISION" --prerelease --title "$BRANCH $DEPLOYMENT" --notes 'Complete stack deployment; mowgli-compose.json defines required/optional services and mowgli-deployment.json pins source, compatibility, images and the bundle checksum.'
           fi

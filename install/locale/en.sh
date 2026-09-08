@@ -2,7 +2,7 @@
 MSG_UPDATER_UNSUPPORTED="Automatic updates require Linux amd64/arm64, systemd and Docker Compose. Version viewing remains available."
 MSG_UPDATER_RECOVERY="An update is in maintenance/recovery. Resolve it before rerunning the installer."
 MSG_UPDATER_SOURCE="Unsupported updater source repository."
-MSG_UPDATER_UNPUBLISHED="No updater binary is published for this checkout yet. Version viewing remains available."
+MSG_UPDATER_UNPUBLISHED="The updater binary for this checkout is unavailable. Wait for its Host updater workflow to finish, or provide MOWGLI_UPDATER_BINARY from this checkout. Installation stopped; Watchtower was not enabled as a fallback."
 MSG_UPDATER_CHECKSUM="Updater checksum verification failed."
 MSG_UPDATER_INSTALLED="Host updater installed. Settings > Updates shows its version, checks and deployments."
 # English locale (default)
@@ -79,4 +79,6 @@ MSG_MOTD_NOT_SET="not set"
 MSG_MOTD_RUNNING="running"
 
 MSG_UPDATER_STACK_BACKEND="Managed release updates support the Mowgli hardware backend."
+MSG_UPDATER_HARDWARE_LEGACY="These hardware choices require the existing installer path (MAVROS, TF-Luna or VESC). Keeping their selected containers; coordinated release updates are not enabled."
+MSG_UPDATER_HARDWARE_MANAGED="This installation already uses managed updates. MAVROS, TF-Luna and VESC selections require an explicit stack migration; runtime files have not been regenerated."
 MSG_UPDATER_STACK_REVIEW="Saved hardware choices. Review Software updates to apply container changes; the installed release definition has been retained."

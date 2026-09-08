@@ -479,6 +479,14 @@ func (m *Manager) run(recovery bool) {
 			failed(err)
 			return
 		}
+		if validator, ok := m.backend.(interface {
+			ValidateImageStorage(context.Context, Plan) error
+		}); ok {
+			if err = validator.ValidateImageStorage(ctx, j.Plan); err != nil {
+				failed(err)
+				return
+			}
+		}
 		// Recheck after potentially lengthy pulls, before entering maintenance.
 		fingerprint, _, err = m.backend.Inventory(ctx)
 		if err != nil || fingerprint != j.Plan.Fingerprint {

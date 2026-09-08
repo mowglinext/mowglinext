@@ -11,9 +11,50 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "installer-health" {
+		data, err := os.ReadFile(os.Args[2])
+		var config updater.HostConfig
+		if err == nil {
+			err = json.Unmarshal(data, &config)
+		}
+		if err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			err = updater.WaitInstallerWorker(ctx, config)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) == 4 && os.Args[1] == "installer-select" {
+		data, err := os.ReadFile(os.Args[2])
+		var config updater.HostConfig
+		if err == nil {
+			err = json.Unmarshal(data, &config)
+		}
+		if err == nil {
+			var executable string
+			executable, err = os.Executable()
+			if err == nil {
+				var candidate []byte
+				candidate, err = os.ReadFile(executable)
+				if err == nil {
+					err = updater.SelectInstallerWorker(config, os.Args[3], candidate)
+				}
+			}
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 7 && os.Args[1] == "installer-stack" {
 		b := updater.DockerBackend{Config: updater.HostConfig{Directory: os.Args[2], Project: os.Args[3]}}
 		err := b.InstallStack(context.Background(), os.Args[4], map[string]string{"gnss": os.Args[5], "lidar": os.Args[6]})
@@ -44,6 +85,10 @@ func main() {
 		}
 		if err != nil || config.Directory != os.Args[3] || config.Project != os.Args[4] || config.Platform != os.Args[5] {
 			fmt.Fprintln(os.Stderr, "Existing updater configuration belongs to a different installation; migrate it explicitly")
+			os.Exit(1)
+		}
+		if err = updater.CheckInstallerState(config); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		return

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mowglinext/mowglinext/pkg/updates"
+	"golang.org/x/mod/semver"
 )
 
 type GitHubSource struct {
@@ -37,6 +38,7 @@ func (g GitHubSource) List(ctx context.Context, source Source) ([]Deployment, er
 		} `json:"assets"`
 	}
 	result := []Deployment{}
+	headers := []releaseHeader{}
 	for page := 1; page <= 10; page++ {
 		data, err := updates.Read(ctx, g.Client, fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=100&page=%d", source.Repository, page), "")
 		if err != nil {
@@ -53,6 +55,9 @@ func (g GitHubSource) List(ctx context.Context, source Source) ([]Deployment, er
 			if source.Track != "stable" && !strings.HasPrefix(r.Name, source.Branch+" deployment-") {
 				continue
 			}
+			if source.Track == "stable" && !stableVersion.MatchString(r.Tag) {
+				continue
+			}
 			found := false
 			for _, a := range r.Assets {
 				if a.Name == "mowgli-deployment.json" {
@@ -62,33 +67,51 @@ func (g GitHubSource) List(ctx context.Context, source Source) ([]Deployment, er
 			if !found {
 				continue
 			}
-			body, e := updates.Read(ctx, g.Client, assetURL(source.Repository, r.Tag, "mowgli-deployment.json"), "")
-			if e != nil {
-				return nil, e
-			}
-			var d Deployment
-			if e = json.Unmarshal(body, &d); e != nil {
-				return nil, e
-			}
-			if d.Source != source {
-				continue
-			}
-			if d.ReleaseTag != r.Tag {
-				return nil, fmt.Errorf("release identity mismatch")
-			}
-			if e = d.Validate(g.Trusted); e != nil {
-				return nil, e
-			}
-			result = append(result, d)
+			headers = append(headers, r)
 		}
-		if len(releases) < 100 || len(result) >= 30 {
+		if len(releases) < 100 || (source.Track != "stable" && len(headers) >= 30) {
 			break
 		}
 		if page == 10 {
 			return nil, fmt.Errorf("release scan limit reached; narrow or archive obsolete publications")
 		}
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].PublishedAt.After(result[j].PublishedAt) })
+	// Backports may occupy newer pages than the highest production version.
+	// Rank headers across the scan window before limiting descriptor downloads.
+	if source.Track == "stable" {
+		sort.Slice(headers, func(i, j int) bool { return semver.Compare(headers[i].Tag, headers[j].Tag) > 0 })
+	}
+	for _, r := range headers {
+		body, err := updates.Read(ctx, g.Client, assetURL(source.Repository, r.Tag, "mowgli-deployment.json"), "")
+		if err != nil {
+			return nil, err
+		}
+		var d Deployment
+		if err = json.Unmarshal(body, &d); err != nil {
+			return nil, err
+		}
+		if d.Source != source {
+			continue
+		}
+		if d.ReleaseTag != r.Tag {
+			return nil, fmt.Errorf("release identity mismatch")
+		}
+		if err = d.Validate(g.Trusted); err != nil {
+			return nil, err
+		}
+		result = append(result, d)
+		if len(result) == 30 {
+			break
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if source.Track == "stable" {
+			if order := semver.Compare(result[i].ReleaseTag, result[j].ReleaseTag); order != 0 {
+				return order > 0
+			}
+		}
+		return result[i].PublishedAt.After(result[j].PublishedAt)
+	})
 	if len(result) > 30 {
 		result = result[:30]
 	}

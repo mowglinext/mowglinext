@@ -145,6 +145,8 @@ main() {
     progress_run_interactive 7 "$TOTAL_STEPS" "Configuring rangefinders" \
       run_range_configuration_step
 
+    check_updater_hardware || return 1
+
     progress_run_interactive 8 "$TOTAL_STEPS" "Preparing repository" \
       setup_directory
 
