@@ -425,6 +425,16 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         add("lidar_anchor_reseeds", std::to_string(lidar_anchor_reseeds_));
         add("lidar_anchor_shadow", lidar_anchor_shadow_mode_ ? "1" : "0");
         add("lidar_anchor_odom_rebases", std::to_string(lidar_anchor_odom_.rebases()));
+        {
+          char b[64];
+          std::snprintf(b, sizeof(b), "%.3f", lidar_anchor_floor_eff_m_);
+          add("lidar_anchor_floor_eff_m", b);
+          std::snprintf(b, sizeof(b), "%.3f", lidar_anchor_shadow_stats_.Quantile(0.9));
+          add("lidar_anchor_shadow_p90_m", b);
+          std::snprintf(b, sizeof(b), "%.3f", lidar_anchor_shadow_stats_.Quantile(0.5));
+          add("lidar_anchor_shadow_p50_m", b);
+          add("lidar_anchor_shadow_n", std::to_string(lidar_anchor_shadow_stats_.total()));
+        }
         add("scan_matches_fail", std::to_string(scan_matches_fail_));
         // Robustness-pass health counters. Each is a
         // cumulative count since process start; the

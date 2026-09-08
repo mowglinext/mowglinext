@@ -129,6 +129,15 @@ void FusionGraphNode::DeclareParameters()
   lidar_anchor_shadow_ref_period_s_ =
       declare_parameter<double>("lidar_anchor_shadow_ref_period_s", 20.0);
   lidar_anchor_undock_dwell_s_ = declare_parameter<double>("lidar_anchor_undock_dwell_s", 10.0);
+  // Self-calibrated σ floor: shadow-mode error vs RTK-Fixed, rolling window,
+  // served as a quantile (field 2026-09-08: p90 0.15 m vs a fixed 0.05).
+  lidar_anchor_adaptive_floor_ = declare_parameter<bool>("lidar_anchor_adaptive_floor", true);
+  lidar_anchor_floor_quantile_ = declare_parameter<double>("lidar_anchor_floor_quantile", 0.9);
+  lidar_anchor_shadow_stats_ = LidarAnchorShadowStats(
+      static_cast<std::size_t>(
+          std::max<int64_t>(1, declare_parameter<int64_t>("lidar_anchor_shadow_window", 300))),
+      static_cast<std::size_t>(
+          std::max<int64_t>(1, declare_parameter<int64_t>("lidar_anchor_shadow_min_samples", 50))));
   if (use_lidar_map_anchor_)
   {
     LidarOccupancyMapperParams mp;

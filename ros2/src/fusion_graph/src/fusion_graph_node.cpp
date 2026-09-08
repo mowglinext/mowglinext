@@ -146,6 +146,7 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   gp.datum_lat = datum_lat_;
   gp.datum_lon = datum_lon_;
   gp.lidar_anchor_sigma_floor_m = declare_parameter<double>("lidar_anchor_sigma_floor_m", 0.05);
+  lidar_anchor_sigma_floor_param_m_ = gp.lidar_anchor_sigma_floor_m;
 
   map_frame_ = declare_parameter<std::string>("map_frame", "map");
   odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");

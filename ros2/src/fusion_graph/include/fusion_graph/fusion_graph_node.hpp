@@ -40,6 +40,7 @@
 #include "fusion_graph/dr_slip_veto.hpp"
 #include "fusion_graph/graph_manager.hpp"
 #include "fusion_graph/lidar_anchor_odom.hpp"
+#include "fusion_graph/lidar_anchor_shadow_stats.hpp"
 #include "fusion_graph/lidar_anchor_validator.hpp"
 #include "fusion_graph/lidar_map_anchor_gate.hpp"
 #include "fusion_graph/lidar_map_file.hpp"
@@ -440,6 +441,13 @@ private:
   double lidar_anchor_shadow_ref_period_s_ =
       20.0;  // shadow: refresh the DR reference from the fused pose
   double lidar_anchor_undock_dwell_s_ = 10.0;  // no anchor work while charging, nor this long after
+  // Self-calibrated σ floor from shadow-mode error under RTK-Fixed (see
+  // lidar_anchor_shadow_stats.hpp). Effective floor = clamp(quantile, floor, max_sigma).
+  bool lidar_anchor_adaptive_floor_ = true;
+  double lidar_anchor_floor_quantile_ = 0.9;
+  LidarAnchorShadowStats lidar_anchor_shadow_stats_{300, 50};
+  double lidar_anchor_floor_eff_m_ = 0.05;
+  double lidar_anchor_sigma_floor_param_m_ = 0.05;  // copy of gp.lidar_anchor_sigma_floor_m
   double lidar_anchor_undocked_s_ = -1.0e9;  // monotonic: when charging last dropped
   bool lidar_anchor_was_docked_ = false;
   bool lidar_map_published_once_ =

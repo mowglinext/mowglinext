@@ -244,6 +244,10 @@ if(BUILD_TESTING)
     test/test_lidar_map_file.cpp
   )
   target_link_libraries(test_lidar_map_file fusion_graph_core)
+  ament_add_gtest(test_lidar_anchor_shadow_stats
+    test/test_lidar_anchor_shadow_stats.cpp
+  )
+  target_link_libraries(test_lidar_anchor_shadow_stats fusion_graph_core)
 
   ament_add_gtest(test_scan_match_dedup
     test/test_scan_match_dedup.cpp

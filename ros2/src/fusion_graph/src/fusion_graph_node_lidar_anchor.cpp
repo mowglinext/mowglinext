@@ -384,6 +384,19 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
     case LidarAnchorVerdict::kAccepted:
       break;
   }
+  // Shadow under RTK-Fixed: the fused pose is the truth, so this estimate's
+  // error calibrates the trust the anchor gets when it is applied for real.
+  if (shadow && verdict == LidarAnchorVerdict::kAccepted)
+  {
+    lidar_anchor_shadow_stats_.Push(
+        std::hypot(cand.x - fused.translation().x(), cand.y - fused.translation().y()));
+  }
+  lidar_anchor_floor_eff_m_ =
+      lidar_anchor_adaptive_floor_
+          ? lidar_anchor_shadow_stats_.EffectiveFloor(lidar_anchor_floor_quantile_,
+                                                      lidar_anchor_sigma_floor_param_m_,
+                                                      lidar_anchor_validator_.max_sigma_m)
+          : lidar_anchor_sigma_floor_param_m_;
   const bool apply = verdict == LidarAnchorVerdict::kAccepted && !shadow;
   PublishLidarAnchorCandidate(pose, cov2, verdict, apply);
 
@@ -415,7 +428,13 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   lidar_anchor_lost_since_s_ = -1.0;
   if (!apply)
     return;
-  graph_->QueueLidarMapXy(gtsam::Vector2(cand.x, cand.y), cov2, /*robust=*/true);
+  // Trust no better than the anchor's measured accuracy: inflate to the
+  // effective floor (the graph consumer still applies the parameter floor).
+  Eigen::Matrix2d cov_applied = cov2;
+  const double f2 = lidar_anchor_floor_eff_m_ * lidar_anchor_floor_eff_m_;
+  cov_applied(0, 0) = std::max(cov_applied(0, 0), f2);
+  cov_applied(1, 1) = std::max(cov_applied(1, 1), f2);
+  graph_->QueueLidarMapXy(gtsam::Vector2(cand.x, cand.y), cov_applied, /*robust=*/true);
   ++lidar_anchor_updates_;
 }
 

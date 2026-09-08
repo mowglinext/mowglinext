@@ -491,5 +491,15 @@ fusion_graph_node:
     # pose is gauge-pinned to the dock during the BackUp undock — nor for
     # this long after charging drops, so the next seed starts from a live pose.
     lidar_anchor_undock_dwell_s: 10.0
+    # Self-calibrated σ floor. In shadow mode under RTK-Fixed every anchor
+    # estimate's error vs the fused pose is known; the rolling
+    # lidar_anchor_floor_quantile of the last lidar_anchor_shadow_window
+    # samples (once lidar_anchor_shadow_min_samples exist) becomes the floor
+    # on the applied factor's σ, clamped to [lidar_anchor_sigma_floor_m,
+    # lidar_anchor_max_sigma_m]. Field 2026-09-08: p90 0.15 m vs a fixed 0.05.
+    lidar_anchor_adaptive_floor: true
+    lidar_anchor_floor_quantile: 0.9
+    lidar_anchor_shadow_window: 300
+    lidar_anchor_shadow_min_samples: 50
     lidar_anchor_sigma_floor_m: 0.05      # floor on the factor's per-axis sigma (half a cell)
 
