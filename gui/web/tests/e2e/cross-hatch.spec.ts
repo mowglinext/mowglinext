@@ -13,7 +13,7 @@ for (const angle of [25, -1]) {
             name: "cross-hatch-two-areas",
             rest: {"/api/settings/yaml": {mow_cross_hatch: true, mow_angle_deg: angle,
                 headland_width: 0.4, min_turning_radius: 0.3, tool_width: 0.18,
-                chassis_inset: 0.1, swath_overlap: 0.02}},
+                chassis_safety_inset: 0.1, swath_overlap: 0.02}},
             topics: {map: {
                 working_area: [{name: "Front lawn"}, {name: "Back lawn"}],
                 // A navigation area occupies ROS index 1; Back lawn must use 2.

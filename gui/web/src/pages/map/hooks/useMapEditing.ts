@@ -307,7 +307,7 @@ export function useMapEditing({
                         : `${areaSqm.toFixed(0)} m²`;
                 centroidPt.properties.title =
                     feature.getLabel() + `\n${areaLabel}`;
-                centroidPt.properties.index = feature.getIndex();
+                centroidPt.properties.index = feature.properties.source_working_area_index;
             }
             centroidPt.id = feature.id;
             return [centroidPt];

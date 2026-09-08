@@ -450,12 +450,12 @@ func (r *RosProvider) pollMap() {
 	}
 
 	mapData := mowgli.Map{
-		MapWidth:        20.0,
-		MapHeight:       20.0,
-		MapCenterX:      0.0,
-		MapCenterY:      0.0,
-		NavigationAreas: navAreas,
-		WorkingArea:     workingAreas,
+		MapWidth:           20.0,
+		MapHeight:          20.0,
+		MapCenterX:         0.0,
+		MapCenterY:         0.0,
+		NavigationAreas:    navAreas,
+		WorkingArea:        workingAreas,
 		WorkingAreaIndices: workingIndices,
 	}
 	r.addDockPose(&mapData)
