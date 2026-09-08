@@ -58,7 +58,7 @@ The other four specs are targeted regressions rather than a matrix:
 | `log-stream.spec.ts` | 1 000 high-rate container log lines all reach the live tail; a docker RFC3339Nano stamp is shown in the timestamp column and stripped from the body. |
 | `map-console.spec.ts` | map layers mount with **no** `missing required property "source"` / `React.Fragment` console errors. |
 | `reset-mowing-progress.spec.ts` | "Reset mowing progress" confirms first, then calls **only** `coverage_clear_resume`; the menu item is disabled while mowing. |
-| `system-power.spec.ts` | Diagnostics → System power confirmations: cancel sends nothing, confirmation sends one host-power request, mobile shutdown explains physical restart, and a lost response is not retried automatically. Captures desktop/mobile PR screenshots. |
+| `system-power.spec.ts` | Diagnostics → System power confirmations: cancel sends nothing, confirmation sends one host-power request, mobile shutdown explains physical restart, and lost or unanswered responses release the dialog without an automatic retry. Captures desktop/mobile PR screenshots. |
 | `visual-effects.spec.ts` | Balanced/Efficient display modes run zero backdrop-blur and zero infinite animations; Visual restores them; emergency emphasis is kept but yields to `prefers-reduced-motion`. |
 | `diagnostics-mobile.spec.ts` | Final accordion headers clear the fixed mobile navigation and support touch expansion/collapse in portrait and landscape. |
 | `mobile-page-clearance.spec.ts` | Home and Settings scroll their final content above mobile navigation; map and logs retain their viewport height on mobile and desktop. |

@@ -479,9 +479,6 @@ export const DiagnosticsPage = () => {
     const sectionSystem = (
         <Row gutter={[12, 12]}>
             <Col span={24}>
-                <SystemPowerCard/>
-            </Col>
-            <Col span={24}>
                 <RobotAnatomy inputs={anatomyInputs}/>
             </Col>
             <Col span={24}>
@@ -620,6 +617,9 @@ export const DiagnosticsPage = () => {
                     </Typography.Text>
                 </Col>
             )}
+            <Col span={24}>
+                <SystemPowerCard/>
+            </Col>
         </Row>
     );
 

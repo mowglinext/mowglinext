@@ -20,8 +20,12 @@ export function SystemPowerCard() {
         inFlight.current = true;
         setPending(true);
         setError(false);
+        // Power loss can leave fetch waiting for the browser's TCP timeout.
+        // Stop waiting after 30s; aborting HTTP does not cancel a host action.
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 30_000);
         try {
-            await api.request({path: `/system/${action}`, method: "POST"});
+            await api.request({path: `/system/${action}`, method: "POST", signal: controller.signal});
             setSubmitted(action);
             setAction(null);
         } catch {
@@ -29,6 +33,7 @@ export function SystemPowerCard() {
             // Do not claim failure or automatically resend a destructive request.
             setError(true);
         } finally {
+            window.clearTimeout(timeout);
             inFlight.current = false;
             setPending(false);
         }

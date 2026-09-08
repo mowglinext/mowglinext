@@ -28,6 +28,7 @@ async function openSystem(page: Page, mobile = false) {
     await expect(page.getByRole("button", {name: "Reboot Pi", exact: true})).toBeVisible();
     await expect(page.getByText("GPS: RTK Fixed", {exact: true})).toBeVisible();
     await expect(page.getByRole("button", {name: "Battery and power menu"})).toContainText("100%");
+    await page.getByRole("button", {name: "Reboot Pi", exact: true}).scrollIntoViewIfNeeded();
 }
 
 async function screenshot(page: Page, name: string) {
@@ -106,4 +107,24 @@ test("a lost response is reported as unconfirmed and never retried automatically
     await expect(page.getByText("Reboot requested", {exact: true})).not.toBeVisible();
     await dialog.getByRole("button", {name: "Cancel", exact: true}).click();
     expect(requests).toBe(1);
+});
+
+test("an unanswered power request releases the dialog after 30 seconds without retrying", async ({page}) => {
+    await openSystem(page);
+    await page.clock.install();
+    let requests = 0;
+    await page.route("**/api/system/shutdown", () => { requests++; });
+    await page.getByRole("button", {name: "Shut down Pi", exact: true}).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", {name: "Shut down Pi", exact: true}).click();
+    await expect.poll(() => requests).toBe(1);
+    await expect(dialog.getByRole("button", {name: "Cancel", exact: true})).toBeDisabled();
+    await page.clock.fastForward(30_000);
+    await expect(dialog.getByText("Request could not be confirmed", {exact: true})).toBeVisible();
+    await expect(dialog.getByRole("button", {name: "Shut down Pi", exact: true})).toBeDisabled();
+    await expect(dialog.getByRole("button", {name: "Cancel", exact: true})).toBeEnabled();
+    await dialog.getByRole("button", {name: "Cancel", exact: true}).click();
+    await expect(dialog).not.toBeVisible();
+    expect(requests).toBe(1);
+    await expect(page.getByText("Shutdown requested", {exact: true})).not.toBeVisible();
 });
