@@ -1,22 +1,22 @@
 {
   "systemPower": {
     "cancel": "Cancel",
-    "title": "Raspberry Pi",
+    "title": "Host",
     "description": "Restart or shut down the computer running the mower and web interface.",
-    "reboot": "Reboot Pi",
-    "shutdown": "Shut down Pi",
-    "rebootTitle": "Reboot the Raspberry Pi?",
-    "shutdownTitle": "Shut down the Raspberry Pi?",
-    "rebootConfirm": "This restarts the whole Raspberry Pi and all mower services. The web interface will disconnect while it restarts.",
-    "shutdownConfirm": "This shuts down the whole Raspberry Pi and all mower services. The web interface will disconnect. Physical access is required to power it back on.",
+    "reboot": "Reboot Host",
+    "shutdown": "Shut down Host",
+    "rebootTitle": "Reboot the host?",
+    "shutdownTitle": "Shut down the host?",
+    "rebootConfirm": "This restarts the whole host and all mower services. The web interface will disconnect while it restarts.",
+    "shutdownConfirm": "This shuts down the whole host and all mower services. The web interface will disconnect. Physical access is required to power it back on.",
     "parkFirst": "Park the mower and stop the blade before continuing. Do not interrupt an update or firmware flash.",
     "rebootRequested": "Reboot requested",
     "shutdownRequested": "Shutdown requested",
-    "rebootResult": "The Raspberry Pi may take a minute or two to restart. Reload this page when it is back online.",
-    "shutdownResult": "The Raspberry Pi is shutting down. Physical access is required to power it back on.",
+    "rebootResult": "The host may take a minute or two to restart. Reload this page when it is back online.",
+    "shutdownResult": "The host is shutting down. Physical access is required to power it back on.",
     "reload": "Reload page",
     "unconfirmed": "Request could not be confirmed",
-    "unconfirmedHint": "The connection may have closed because the Pi is already restarting or shutting down. Check its status before trying again; this request will not be resent automatically."
+    "unconfirmedHint": "The connection may have closed because the host is already restarting or shutting down. Check its status before trying again; this request will not be resent automatically."
   },
   "language": {
     "label": "Language",

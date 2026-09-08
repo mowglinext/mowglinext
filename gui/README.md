@@ -29,9 +29,9 @@ cd gui && make build      # docker build -t mowglinext .
 Once the container is running, you can access the GUI by opening a browser and going
 to `http://<ip of the machine running the container>:4006`
 
-### Pi reboot and shutdown permissions
+### Host reboot and shutdown permissions
 
-**Diagnostics → System** provides confirmed reboot and shutdown actions for the whole Pi.
+**Diagnostics → System** provides confirmed reboot and shutdown actions for the whole host.
 The existing backend enters the host's namespaces with `nsenter`, then runs the host's
 `systemctl reboot` or `systemctl poweroff`. This requires all of the following:
 
@@ -42,7 +42,7 @@ The existing backend enters the host's namespaces with `nsenter`, then runs the 
 - `nsenter` in the GUI image, already installed through `util-linux` in its Dockerfile.
 
 The installer and `docker/stack.sh` both generate the service from that fragment.
-No Pi-user sudoers entry, extra daemon or additional package on the host is needed for
+No host-user sudoers entry, extra daemon or additional package on the host is needed for
 the standard installation. Rootless Docker, non-systemd hosts and custom non-root or
 unprivileged GUI containers do not support this execution path.
 

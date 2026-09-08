@@ -25,10 +25,10 @@ async function openSystem(page: Page, mobile = false) {
     });
     await page.goto("/#/diagnostics");
     if (mobile) await page.getByRole("button", {name: /System$/}).click();
-    await expect(page.getByRole("button", {name: "Reboot Pi", exact: true})).toBeVisible();
+    await expect(page.getByRole("button", {name: "Reboot Host", exact: true})).toBeVisible();
     await expect(page.getByText("GPS: RTK Fixed", {exact: true})).toBeVisible();
     await expect(page.getByRole("button", {name: "Battery and power menu"})).toContainText("100%");
-    await page.getByRole("button", {name: "Reboot Pi", exact: true}).scrollIntoViewIfNeeded();
+    await page.getByRole("button", {name: "Reboot Host", exact: true}).scrollIntoViewIfNeeded();
 }
 
 async function screenshot(page: Page, name: string) {
@@ -49,25 +49,25 @@ test("reboot confirms, cancels without a request, and submits only once", async 
         await route.fulfill({json: {}});
     });
     await screenshot(page, "system-power-desktop");
-    await page.getByRole("button", {name: "Reboot Pi", exact: true}).click();
+    await page.getByRole("button", {name: "Reboot Host", exact: true}).click();
     let dialog = page.getByRole("dialog");
-    await expect(dialog.getByText("Reboot the Raspberry Pi?")).toBeVisible();
+    await expect(dialog.getByText("Reboot the host?")).toBeVisible();
     expect(requests).toEqual([]);
     await dialog.getByRole("button", {name: "Cancel", exact: true}).click();
     await expect(dialog).not.toBeVisible();
     expect(requests).toEqual([]);
-    await page.getByRole("button", {name: "Reboot Pi", exact: true}).click();
+    await page.getByRole("button", {name: "Reboot Host", exact: true}).click();
     dialog = page.getByRole("dialog");
     await screenshot(page, "system-power-reboot-confirmation");
-    await dialog.getByRole("button", {name: "Reboot Pi", exact: true}).click();
+    await dialog.getByRole("button", {name: "Reboot Host", exact: true}).click();
     await expect.poll(() => requests.length).toBe(1);
     await expect(dialog.getByRole("button", {name: "Cancel", exact: true})).toBeDisabled();
-    await expect(dialog.getByRole("button", {name: "Reboot Pi", exact: true})).toHaveClass(/ant-btn-loading/);
+    await expect(dialog.getByRole("button", {name: "Reboot Host", exact: true})).toHaveClass(/ant-btn-loading/);
     release!();
     await expect(page.getByText("Reboot requested", {exact: true})).toBeVisible();
     expect(requests).toEqual(["POST /api/system/reboot"]);
     await expect(page.getByRole("button", {name: "Reload page"})).toBeVisible();
-    await expect(page.getByRole("button", {name: "Shut down Pi", exact: true})).not.toBeVisible();
+    await expect(page.getByRole("button", {name: "Shut down Host", exact: true})).not.toBeVisible();
 });
 
 test("mobile shutdown confirms the need for physical access and calls the shutdown endpoint", async ({page}) => {
@@ -78,14 +78,14 @@ test("mobile shutdown confirms the need for physical access and calls the shutdo
         requests.push(route.request().method() + " " + new URL(route.request().url()).pathname);
         await route.fulfill({json: {}});
     });
-    await page.getByRole("button", {name: "Shut down Pi", exact: true}).scrollIntoViewIfNeeded();
+    await page.getByRole("button", {name: "Shut down Host", exact: true}).scrollIntoViewIfNeeded();
     await screenshot(page, "system-power-mobile");
-    await page.getByRole("button", {name: "Shut down Pi", exact: true}).click();
+    await page.getByRole("button", {name: "Shut down Host", exact: true}).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByText(/Physical access is required to power it back on/)).toBeVisible();
     expect(requests).toEqual([]);
     await screenshot(page, "system-power-shutdown-mobile");
-    await dialog.getByRole("button", {name: "Shut down Pi", exact: true}).click();
+    await dialog.getByRole("button", {name: "Shut down Host", exact: true}).click();
     await expect(page.getByText("Shutdown requested", {exact: true})).toBeVisible();
     expect(requests).toEqual(["POST /api/system/shutdown"]);
     await expect(page.getByRole("button", {name: "Reload page"})).not.toBeVisible();
@@ -98,11 +98,11 @@ test("a lost response is reported as unconfirmed and never retried automatically
         requests++;
         await route.abort("connectionreset");
     });
-    await page.getByRole("button", {name: "Reboot Pi", exact: true}).click();
+    await page.getByRole("button", {name: "Reboot Host", exact: true}).click();
     const dialog = page.getByRole("dialog");
-    await dialog.getByRole("button", {name: "Reboot Pi", exact: true}).click();
+    await dialog.getByRole("button", {name: "Reboot Host", exact: true}).click();
     await expect(dialog.getByText("Request could not be confirmed", {exact: true})).toBeVisible();
-    await expect(dialog.getByRole("button", {name: "Reboot Pi", exact: true})).toBeDisabled();
+    await expect(dialog.getByRole("button", {name: "Reboot Host", exact: true})).toBeDisabled();
     expect(requests).toBe(1);
     await expect(page.getByText("Reboot requested", {exact: true})).not.toBeVisible();
     await dialog.getByRole("button", {name: "Cancel", exact: true}).click();
@@ -114,14 +114,14 @@ test("an unanswered power request releases the dialog after 30 seconds without r
     await page.clock.install();
     let requests = 0;
     await page.route("**/api/system/shutdown", () => { requests++; });
-    await page.getByRole("button", {name: "Shut down Pi", exact: true}).click();
+    await page.getByRole("button", {name: "Shut down Host", exact: true}).click();
     const dialog = page.getByRole("dialog");
-    await dialog.getByRole("button", {name: "Shut down Pi", exact: true}).click();
+    await dialog.getByRole("button", {name: "Shut down Host", exact: true}).click();
     await expect.poll(() => requests).toBe(1);
     await expect(dialog.getByRole("button", {name: "Cancel", exact: true})).toBeDisabled();
     await page.clock.fastForward(30_000);
     await expect(dialog.getByText("Request could not be confirmed", {exact: true})).toBeVisible();
-    await expect(dialog.getByRole("button", {name: "Shut down Pi", exact: true})).toBeDisabled();
+    await expect(dialog.getByRole("button", {name: "Shut down Host", exact: true})).toBeDisabled();
     await expect(dialog.getByRole("button", {name: "Cancel", exact: true})).toBeEnabled();
     await dialog.getByRole("button", {name: "Cancel", exact: true}).click();
     await expect(dialog).not.toBeVisible();

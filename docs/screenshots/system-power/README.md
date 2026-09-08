@@ -1,4 +1,4 @@
-# Diagnostics: Raspberry Pi power controls
+# Diagnostics: Host power controls
 
 Desktop (1440 × 1000) and mobile (390 × 844) screenshots from
 `gui/web/tests/e2e/system-power.spec.ts`. All telemetry and power endpoints are
