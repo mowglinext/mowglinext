@@ -265,8 +265,11 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   // scans inserted at a frozen pose, then a seed with the dock heading while
   // the robot had already turned — the cloud diverged to 5 m). No anchor
   // work while charging, nor for a dwell after it drops; the next seed then
-  // starts from a live, re-anchored fused pose.
-  const bool docked = last_is_charging_valid_ && last_is_charging_;
+  // starts from a live, re-anchored fused pose. An UNKNOWN charger state
+  // (no hardware_bridge status yet) counts as docked: a node restarted on the
+  // dock otherwise applied one factor in the seconds before the first status
+  // (2026-09-08, factors=1 at 15 s after boot).
+  const bool docked = !last_is_charging_valid_ || last_is_charging_;
   if (docked)
   {
     lidar_anchor_was_docked_ = true;
