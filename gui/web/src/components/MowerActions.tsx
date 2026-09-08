@@ -27,8 +27,11 @@ export const useMowerAction = () => {
             if (res.error) {
                 throw new Error(res.error.error)
             }
-        } catch (e: any) {
-            throw new Error(e.message)
+        } catch (e: unknown) {
+            // The generated client throws an HttpResponse for non-2xx replies;
+            // the server's reason is in error.error, not Error.message.
+            const failure = e as {error?: {error?: string}; message?: string; statusText?: string} | null;
+            throw new Error(failure?.error?.error || failure?.message || failure?.statusText || String(e))
         }
     };
 };
