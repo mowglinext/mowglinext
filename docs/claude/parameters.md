@@ -35,6 +35,16 @@ Operator-facing rule of thumb: **the GUI only ever writes `mowgli_robot.yaml`.**
 
 All 158 template keys. `L###` = line in `ros2/src/mowgli_bringup/config/mowgli_robot.yaml`. **GUI** = present in `mower_config.schema.json` (section name), or `no` — a `no` key still shows up in Settings → *Advanced* once it exists in the installed file (`gui/web/src/hooks/useSettingsManager.ts:679` `advancedKeys`). **Life** = `launch` (injected at launch, restart to apply), `dynamic` (also honoured live via `ros2 param set`), `INERT` (never injected — node compiled default wins), `sidecar` (consumed outside ROS2).
 
+### Dig obstacle proposals
+
+| Key | Default | Consumer · where read | GUI | Life |
+|---|---|---|---|---|
+| `dig_obstacle_enabled` | true | `full_system.launch.py` → `map_server_node` subscription gate | Obstacles | launch |
+
+Disabling automatic dig keepouts prevents new session-only map proposals. Hardware dig
+stopping, bounded reverse and repeat-dig escalation remain active. Enabled proposals
+still require operator acceptance to persist. Save and restart ROS2 to apply.
+
 ### Chassis, wheels, encoder — feed the URDF and the Nav2 footprint
 
 | Key (L) | Default | Consumer · where read | GUI | Life |

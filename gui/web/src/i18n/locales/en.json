@@ -2371,6 +2371,9 @@
     "temperatureThresholdsNote": "Blade-motor temperature is measured and reported only — no layer of the stack stops the blade on temperature. The warning and error thresholds used by the diagnostics (motor_temp_warn_c and motor_temp_error_c, in mowgli_monitoring/config/diagnostics.yaml) can be edited on the Parameters page."
   },
   "settingsObstacles": {
+    "digKeepouts": "Dig obstacles",
+    "digAutoPromotion": "Automatically create dig keepouts",
+    "digKeepoutsDescription": "Create a temporary keepout when wheel slip is detected in a mowing area. Accept the proposal on the map to keep it permanently. When disabled, no dig keepouts are created; dig detection, stopping and recovery remain active. Save and restart ROS2 to apply.",
     "rootZoneHintTitle": "Trees with large roots?",
     "rootZoneHintDescription": "The 2D LiDAR cannot see roots below its scan plane (~10–20 cm). Draw the tree as an obstacle in the map editor and raise the drawn obstacle margin so mowing and transit keep off the root zone.",
     "avoidanceMargins": "Avoidance Margins",

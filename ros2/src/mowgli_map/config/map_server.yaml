@@ -31,6 +31,8 @@ map_server_node:
     # A dig outside every mowing area (transit / docking) is logged but NOT
     # stamped — there is no area to attach it to, and coverage never plans
     # there anyway.
+    # Overridden from mowgli_robot.yaml by full_system.launch.py; exposed in
+    # GUI Settings → Obstacles. False leaves dig detection/recovery active.
     dig_obstacle_enabled: true
     # Side of the square keepout stamped at the dig [m]. One chassis LENGTH
     # (the Nav2 footprint is 0.60 × 0.40 m). It used to be one tool width

@@ -669,6 +669,10 @@ mowgli:
     # -----------------------------------------------------------------
     # Obstacles (GUI: Settings → Obstacles)
     # -----------------------------------------------------------------
+    # Automatically create session-only PENDING keepouts from dig events.
+    # False disables map proposals, not hardware dig detection or recovery.
+    # Permanent persistence still requires operator acceptance. Restart ROS2.
+    dig_obstacle_enabled: true
     # How far the robot may deviate laterally from its path to skirt an
     # obstacle. ONE knob, TWO consumers (injected at launch):
     #   - FTCController max_lateral_deviation (coverage-time skirting)

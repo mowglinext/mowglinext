@@ -64,16 +64,27 @@ void FusionGraphNode::OnTimer()
   // when it creates a new node.
   std::vector<Eigen::Vector2d> curr_scan;
   bool curr_valid = false;
+  uint64_t curr_scan_seq = 0;
   {
     std::lock_guard<std::mutex> lock(scan_mu_);
     if (latest_scan_valid_)
     {
       curr_scan = latest_scan_;
       curr_valid = true;
+      curr_scan_seq = latest_scan_seq_;
     }
   }
 
-  if (use_scan_matching_ && scan_matcher_ && curr_valid && prev_node_scan_valid_)
+  // Skip the ICP when neither of its inputs moved since the last SUCCESSFUL
+  // match: this timer runs at 25 Hz against a ~10 Hz LiDAR, so most ticks
+  // would realign the same two point clouds. A failed match is retried.
+  const bool scan_match_ready =
+      use_scan_matching_ && scan_matcher_ && curr_valid && prev_node_scan_valid_;
+  if (scan_match_ready && !scan_match_dedup_.ShouldMatch(curr_scan_seq, prev_node_scan_gen_))
+  {
+    ++scan_matches_skipped_;
+  }
+  else if (scan_match_ready)
   {
     // ICP init guess: wheel translation + gyro rotation accumulated
     // since the previous node. PeekAccumulator returns the current
@@ -170,6 +181,7 @@ void FusionGraphNode::OnTimer()
     {
       ++scan_matches_fail_;
     }
+    scan_match_dedup_.RecordOutcome(curr_scan_seq, prev_node_scan_gen_, !drop);
   }
 
   // ── Scan-to-keyframe ABSOLUTE constraint (the RTK-Float carry) ───────
@@ -443,6 +455,7 @@ void FusionGraphNode::OnTimer()
     {
       prev_node_scan_ = std::move(curr_scan);
       prev_node_scan_valid_ = true;
+      ++prev_node_scan_gen_;  // the next ICP targets a different scan
     }
   }
 

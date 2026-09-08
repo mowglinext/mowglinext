@@ -373,6 +373,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
                           }
                           add("scans_received", std::to_string(scans_received_));
                           add("scan_matches_ok", std::to_string(scan_matches_ok_));
+                          add("scan_matches_skipped", std::to_string(scan_matches_skipped_));
                           add("scan_matches_fail", std::to_string(scan_matches_fail_));
                           // RTK-anchored keyframe map (use_keyframe_map): map
                           // size + scan-to-keyframe absolute-match health.
