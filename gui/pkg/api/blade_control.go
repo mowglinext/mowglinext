@@ -64,7 +64,7 @@ func handleBladeControl(c *gin.Context, provider types.IRosProvider) {
 	case latchErr == nil && offErr == nil:
 		c.JSON(http.StatusOK, gin.H{"message": "Blade OFF latched and requested; physical stoppage is not confirmed"})
 	case latchErr != nil && offErr == nil:
-		c.JSON(http.StatusOK, gin.H{"warning": "Blade OFF requested, but persistent inhibition is unavailable. The behavior tree may re-enable it. Check the ROS connection and update ROS and GUI together."})
+		c.JSON(http.StatusOK, gin.H{"warning": "OFF requested. The mower may turn the blade back on."})
 	case latchErr == nil:
 		c.JSON(http.StatusOK, gin.H{"warning": fmt.Sprintf("Blade OFF is latched, but the hardware OFF request could not be confirmed: %v", offErr)})
 	default:

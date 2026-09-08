@@ -38,7 +38,7 @@ func TestBladeControlOutcomes(t *testing.T) {
 		{"queue failure", `{"mow_enabled":1,"mow_direction":1}`, true, false, true, false, 200, "warning", 1},
 		{"off", `{"mow_enabled":0,"mow_direction":0}`, true, true, true, false, 200, "latched and requested", 2},
 		{"off unused direction", `{"mow_enabled":0,"mow_direction":255}`, true, true, true, false, 200, "latched and requested", 2},
-		{"old ROS OFF", `{"mow_enabled":0}`, false, false, true, true, 200, "may re-enable", 2},
+		{"old ROS OFF", `{"mow_enabled":0}`, false, false, true, true, 200, "may turn the blade back on", 2},
 		{"hardware failure", `{"mow_enabled":0}`, true, false, false, false, 200, "OFF is latched", 2},
 		{"both failures", `{"mow_enabled":0}`, false, false, false, true, 503, "Session controller", 2},
 		{"bad ON direction", `{"mow_enabled":1,"mow_direction":255}`, false, false, false, false, 400, "ON direction", 0},
@@ -109,6 +109,6 @@ func TestBladeOffFallbackHasIndependentBudgetAndSurvivesBrowserClose(t *testing.
 		cancel()
 		require.Equal(t, 200, w.Code)
 		require.Equal(t, 2, calls)
-		require.Contains(t, w.Body.String(), "persistent inhibition is unavailable")
+		require.Contains(t, w.Body.String(), "may turn the blade back on")
 	}
 }

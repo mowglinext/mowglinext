@@ -18,11 +18,11 @@ describe('map blade controls', () => {
     beforeEach(() => callCreate.mockReset().mockResolvedValue({}));
 
     it('shows partial OFF success as a warning', async () => {
-        callCreate.mockResolvedValue({data: {warning: 'OFF requested; persistent inhibition is unavailable'}});
+        callCreate.mockResolvedValue({data: {warning: 'OFF requested. The mower may turn the blade back on.'}});
         render(<App><MowerActions bare/></App>);
         fireEvent.click(screen.getByText(en.mowerActions.more));
         fireEvent.click(await screen.findByText(en.mowerActions.bladeOff));
-        expect(await screen.findByText('OFF requested; persistent inhibition is unavailable')).toBeVisible();
+        expect(await screen.findByText('OFF requested. The mower may turn the blade back on.')).toBeVisible();
     });
 
     it.each([

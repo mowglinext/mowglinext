@@ -52,7 +52,7 @@ for (const mobile of [false, true]) {
                 ...scenario,
                 rest: {...scenario.rest, "/api/settings/yaml": {datum_lat: 48.1, datum_lon: 11.5}},
             });
-            const warning = "Blade OFF requested, but persistent inhibition is unavailable. The behavior tree may re-enable it. Check the ROS connection and update ROS and GUI together.";
+            const warning = "OFF requested. The mower may turn the blade back on.";
             await page.route(/\/api\/mowglinext\/call\/blade_control/, async route => {
                 await route.fulfill({json: {warning}});
             });
