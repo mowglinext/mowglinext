@@ -1112,6 +1112,10 @@ private:
   void reset_serial_dependent_state()
   {
     blade_requested_direction_ = "unknown";
+    // Reconnect must not revive an old delayed blade-enable request.
+    mow_enabled_ = false;
+    lift_detected_ = false;
+    cancelBladeResume();
     packet_handler_.reset_receive_state();
     odometry_publisher_.reset();
   }
@@ -1474,6 +1478,7 @@ private:
         // Track lift duration
         if (!lift_detected_)
         {
+          waiting_blade_resume_ = false;  // A second lift restarts the delay.
           lift_detected_ = true;
           lift_start_time_ = now();
           blade_was_enabled_before_lift_ = mow_enabled_;
@@ -1509,11 +1514,15 @@ private:
           msg.reason = "Latched (press play button to release)";
       }
 
+      // A delayed recovery must never undo a newer stop or an emergency.
+      if (stop_active || (!lift_recovery_mode_ && (lift_active || latch_active)))
+        cancelBladeResume();
+
       // Lift cleared — resume blade after delay
       if (lift_detected_ && !lift_active)
       {
         lift_detected_ = false;
-        if (blade_was_enabled_before_lift_)
+        if (blade_was_enabled_before_lift_ && mow_enabled_ && !stop_active)
         {
           lift_cleared_time_ = now();
           waiting_blade_resume_ = true;
@@ -1523,12 +1532,13 @@ private:
         }
       }
 
-      if (waiting_blade_resume_)
+      if (waiting_blade_resume_ && !lift_active && !stop_active && !latch_active)
       {
         const double since_clear = (now() - lift_cleared_time_).seconds();
         if (since_clear >= lift_blade_resume_delay_sec_)
         {
-          send_blade_command(1, 0);
+          if (mow_enabled_ && mowing_enabled_)
+            send_blade_command(1, desired_blade_direction_);
           blade_was_enabled_before_lift_ = false;
           waiting_blade_resume_ = false;
           RCLCPP_INFO(get_logger(), "LIFT recovery — blade re-enabled");
@@ -2382,6 +2392,8 @@ private:
     // separate from RPM/activity while firmware performs its stopped reversal.
     const bool written = send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
                                          sizeof(LlCmdBlade) - sizeof(uint16_t));
+    if (!written)
+      cancelBladeResume();
     blade_requested_direction_ = !written   ? "unknown"
                                  : on == 0  ? "off"
                                  : dir == 0 ? "forward"
@@ -3256,12 +3268,29 @@ private:
                 mow_enabled_ ? "true" : "false",
                 req->mow_direction);
 
-    // Send blade command to STM32
-    send_blade_command(mow_enabled_ ? 1u : 0u, req->mow_direction);
+    if (mow_enabled_)
+    {
+      desired_blade_direction_ = req->mow_direction;
+      if (lift_detected_)
+        blade_was_enabled_before_lift_ = true;
+    }
+    else
+      cancelBladeResume();
+
+    // Repeated BT ONs must not bypass the lift-clear delay. Protective OFFs
+    // leave the desired direction intact; explicit OFF cancels recovery above.
+    const bool enable_now = mow_enabled_ && !lift_detected_ && !waiting_blade_resume_;
+    send_blade_command(enable_now ? 1u : 0u, desired_blade_direction_);
 
     // The request was accepted and acted on — a suppressed enable is a
     // configured behaviour, not a failure.
     res->success = true;
+  }
+
+  void cancelBladeResume()
+  {
+    blade_was_enabled_before_lift_ = false;
+    waiting_blade_resume_ = false;
   }
 
   void on_emergency_stop(const std::shared_ptr<mowgli_interfaces::srv::EmergencyStop::Request> req,
@@ -3269,6 +3298,7 @@ private:
   {
     if (req->emergency != 0u)
     {
+      cancelBladeResume();
       RCLCPP_WARN(get_logger(), "Emergency stop requested via service.");
       emergency_active_ = true;
     }
@@ -3438,6 +3468,7 @@ private:
   bool mowing_enabled_{true};
   bool lift_detected_{false};
   rclcpp::Time lift_start_time_;
+  uint8_t desired_blade_direction_{0};
   bool blade_was_enabled_before_lift_{false};
   rclcpp::Time lift_cleared_time_;
   bool waiting_blade_resume_{false};

@@ -1,4 +1,4 @@
-import {act, cleanup, render, screen} from '@testing-library/react';
+import {act, cleanup, fireEvent, render, screen} from '@testing-library/react';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {BladeDirectionDisplay} from './BladeDirectionDisplay';
 import type {Status} from '../types/ros';
@@ -15,6 +15,13 @@ describe('blade direction display', () => {
         expect(screen.getByText('Requested blade direction')).toBeInTheDocument();
         expect(screen.getByText(direction[0].toUpperCase() + direction.slice(1))).toBeInTheDocument();
         expect(screen.getByText(/physical rotation is not reported/)).toBeInTheDocument();
+    });
+    it('provides firmware help by touch in compact mode', async () => {
+        render(<BladeDirectionDisplay compact/>);
+        fireEvent.click(screen.getByRole('button', {name: 'Requested direction: Unknown'}));
+        // jsdom has no popup layout; the mobile browser test verifies visibility.
+        expect(await screen.findByText(/Older firmware may still run forward/)).toBeInTheDocument();
+        expect(screen.getByRole('button')).toHaveAttribute('aria-describedby');
     });
     it('does not guess forward on an old stack or on missing/invalid telemetry', () => {
         topic.data = {mower_motor_rpm: 3200}; topic.lastMessageAt = Date.now();

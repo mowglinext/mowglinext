@@ -1117,11 +1117,12 @@ void FollowStrip::onHalted()
 void FollowStrip::setBladeEnabled(bool enabled)
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  // Selection records tree intent even if discovery/send is unavailable; a
+  // retry must keep the same direction, and an undelivered OFF still wins.
   const auto command = ctx->blade_direction.forMowerCommand(enabled, ctx->blade_auto_reverse);
   if (!blade_client_)
   {
-    blade_client_ = ctx->node->create_client<mowgli_interfaces::srv::MowerControl>(
-        "/hardware_bridge/mower_control");
+    blade_client_ = ctx->bladeClient();
   }
   if (!blade_client_->wait_for_service(std::chrono::milliseconds(200)))
     return;

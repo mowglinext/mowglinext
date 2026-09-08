@@ -17,6 +17,14 @@ vi.mock('../theme/ThemeContext.tsx', () => ({useThemeMode: () => ({colors: {}})}
 describe('map blade controls', () => {
     beforeEach(() => callCreate.mockReset().mockResolvedValue({}));
 
+    it('shows partial OFF success as a warning', async () => {
+        callCreate.mockResolvedValue({data: {warning: 'OFF requested; persistent inhibition is unavailable'}});
+        render(<App><MowerActions bare/></App>);
+        fireEvent.click(screen.getByText(en.mowerActions.more));
+        fireEvent.click(await screen.findByText(en.mowerActions.bladeOff));
+        expect(await screen.findByText('OFF requested; persistent inhibition is unavailable')).toBeVisible();
+    });
+
     it.each([
         [en.mowerActions.bladeForward, 1, 0],
         [en.mowerActions.bladeBackward, 1, 1],

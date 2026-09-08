@@ -66,11 +66,20 @@ public:
   {
     // An explicit menu choice wins over the random selection until EndSession.
     // It cannot override a tree OFF (idle, transit, docking or safety guard).
+    // Choosing Forward/Reverse while idle deliberately preselects the next
+    // enable direction; it never starts an idle blade.
     operator_inhibit_ = !enabled;
     if (enabled)
       direction_ = direction;
     return {static_cast<uint8_t>(requested_enabled_ && !operator_inhibit_),
             direction_.value_or(0u)};
+  }
+
+  // An explicit mowing start renews tree permission, without rerolling the
+  // session direction. Automatic continuations must never clear operator OFF.
+  void clearOperatorInhibit()
+  {
+    operator_inhibit_ = false;
   }
 
   void endSession()

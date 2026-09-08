@@ -136,7 +136,7 @@ Blackboard: `"context"` = `std::shared_ptr<BTContext>`; keys seeded at startup (
 | `/cmd_vel_nav` | `geometry_msgs/msg/TwistStamped` | pub | 10 | `EscapeStartBlocked` (`escape_nodes.cpp` :160) — lowest twist_mux lane, through collision_monitor |
 
 ### Services & actions
-Served (`behavior_tree_node.cpp`, with blade control in `blade_control_service.hpp`): `~/mower_control` (`mowgli_interfaces/srv/MowerControl`, map-menu session override shared with BT blade actions), `~/high_level_control` (`mowgli_interfaces/srv/HighLevelControl`), `~/start_in_area` (`mowgli_interfaces/srv/StartInArea`), `~/clear_coverage_resume` (`std_srvs/srv/Trigger`, applied at the top of `tickTree` :1004). GUI callers: `gui/pkg/api/mowglinext.go` :564/:594/:691, `gui/pkg/providers/scheduler.go` :166, `homekit.go` :44, `mqtt.go` :118.
+Served (`behavior_tree_node.cpp`, with blade control in `blade_control_service.hpp`): `~/blade_control` (`mowgli_interfaces/srv/BladeControl`, map-menu policy acceptance/forwarding/message), legacy `~/mower_control` adapter (`mowgli_interfaces/srv/MowerControl`), `~/high_level_control` (`mowgli_interfaces/srv/HighLevelControl`), `~/start_in_area` (`mowgli_interfaces/srv/StartInArea`), `~/clear_coverage_resume` (`std_srvs/srv/Trigger`, applied at the top of `tickTree` :1004). GUI callers: `gui/pkg/api/mowglinext.go` :564/:594/:691, `gui/pkg/providers/scheduler.go` :166, `homekit.go` :44, `mqtt.go` :118.
 
 Clients (node → file:line):
 | Target | Type | Used by |

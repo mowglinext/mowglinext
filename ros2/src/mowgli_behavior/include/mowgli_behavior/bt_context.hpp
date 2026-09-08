@@ -33,6 +33,7 @@
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
+#include "mowgli_interfaces/srv/mower_control.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "tf2_ros/buffer.hpp"
@@ -113,10 +114,22 @@ struct BTContext
   /// COMMAND_RESET_EMERGENCY=254, …).
   uint8_t current_command{0};
 
-  /// Startup configuration and tick-thread-owned session direction. Never reset
-  /// on a temporary blade OFF or ClearCommand; EndSession is the boundary.
+  /// Blade policy is owned by the default MutuallyExclusive group: tick,
+  /// operator service and explicit start handlers. Direction resets only at
+  /// EndSession; operator inhibition also clears on an explicit mowing start.
   bool blade_auto_reverse{false};
   BladeDirection blade_direction;
+  // One DDS request writer preserves ordering between coverage, manual and
+  // operator blade requests. Access only from the owning callback group.
+  rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr blade_command_client;
+
+  rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr bladeClient()
+  {
+    if (!blade_command_client)
+      blade_command_client = node->create_client<mowgli_interfaces::srv::MowerControl>(
+          "/hardware_bridge/mower_control");
+    return blade_command_client;
+  }
   /// Operator-forced resume from a mid-session charge hold. Set by the
   /// ~/high_level_control handler when a COMMAND_START arrives while the tree
   /// is parked in a charge hold (last published state_name CHARGING or

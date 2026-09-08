@@ -2,7 +2,7 @@
   "bladeDirection": {
     "title": "Requested blade direction",
     "summary": "Requested direction: {{direction}}",
-    "help": "Command only; physical rotation is not reported by the firmware.",
+    "help": "Command only; physical rotation is not reported by the firmware. Reverse requires compatible firmware with stopped reversal and a bidirectional blade assembly. Older firmware may still run forward.",
     "forward": "Forward",
     "reverse": "Reverse",
     "off": "Off",
@@ -2409,7 +2409,7 @@
   },
   "settingsMowing": {
     "bladeAutoReverse": "Automatic blade direction",
-    "bladeAutoReverseDescription": "Randomly choose a blade direction for each mowing session, including manual mowing. Keep it through pauses and charging stops. Consecutive sessions may use the same direction. Requires blades suitable for both directions and firmware with safe reversal support. Takes effect after restarting ROS2, which also starts a new direction selection.",
+    "bladeAutoReverseDescription": "Randomly choose a blade direction for each mowing session, including manual mowing. Keep it through pauses and charging stops. Consecutive sessions may use the same direction. Requires blades suitable for both directions and firmware with safe reversal support. Takes effect after restarting ROS2, which also starts a new direction selection. Firmware must stop the blade before reversing.",
     "mowingMotor": "Mowing Motor",
     "mowingMotorDescription": "Off = dry run: the robot mows the full path with the blade never spinning. A convenience inhibit, NOT a safety cut-out — the firmware remains the blade safety authority. Takes effect after a ROS2 restart.",
     "mowingSpeed": "Mowing Speed",

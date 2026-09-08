@@ -1,4 +1,5 @@
 import {useEffect, useState} from 'react';
+import {Popover} from 'antd';
 import {useTranslation} from 'react-i18next';
 import {useTopic} from '../hooks/useTopic';
 import type {Status} from '../types/ros';
@@ -18,7 +19,13 @@ export function BladeDirectionDisplay({compact = false}: {compact?: boolean}) {
     const label = t(`bladeDirection.${key}`);
     const description = t('bladeDirection.summary', {direction: label});
     return compact ? (
-        <span title={t('bladeDirection.help')} aria-label={description}>{description}</span>
+        <Popover content={<span style={{display: 'block', maxWidth: 280}}>{t('bladeDirection.help')}</span>}
+                 trigger="click">
+            <button type="button" aria-label={description}
+                    style={{color: 'inherit', background: 'none', border: 0, padding: 0, font: 'inherit', cursor: 'help'}}>
+                {description}
+            </button>
+        </Popover>
     ) : (
         <div title={t('bladeDirection.help')} aria-label={description}>
             <div style={{fontSize: 14, opacity: 0.65, marginBottom: 4}}>{t('bladeDirection.title')}</div>

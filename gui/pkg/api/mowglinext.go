@@ -583,29 +583,8 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			}
 			err = provider.CallService(ctx, "/hardware_bridge/mower_control", &CallReq, &mowgli.MowerControlRes{}, "mowgli_interfaces/srv/MowerControl")
 		case "blade_control":
-			var callReq mowgli.MowerControlReq
-			if err = c.BindJSON(&callReq); err != nil {
-				c.JSON(400, ErrorResponse{Error: err.Error()})
-				return
-			}
-			if callReq.MowEnabled > 1 || callReq.MowDirection > 1 {
-				c.JSON(400, ErrorResponse{Error: "blade enable and direction must be 0 or 1"})
-				return
-			}
-			// OFF still reaches hardware if the behavior tree is unavailable.
-			// Bound this attempt so it cannot consume the BT latch's timeout.
-			if callReq.MowEnabled == 0 {
-				offCtx, cancelOff := context.WithTimeout(ctx, 2*time.Second)
-				_ = provider.CallService(offCtx, "/hardware_bridge/mower_control", &callReq, &mowgli.MowerControlRes{}, "mowgli_interfaces/srv/MowerControl")
-				cancelOff()
-			}
-			// The tree remembers the operator choice; a direct ON would be
-			// overwritten by its next tick and could bypass tree blade guards.
-			var res mowgli.MowerControlRes
-			err = provider.CallService(ctx, "/behavior_tree_node/mower_control", &callReq, &res, "mowgli_interfaces/srv/MowerControl")
-			if err == nil && !res.Success {
-				err = errors.New("blade control request was not accepted")
-			}
+			handleBladeControl(c, provider)
+			return
 		case "start_in_area":
 			var CallReq mowgli.StartInAreaReq
 			err = c.BindJSON(&CallReq)

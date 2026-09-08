@@ -16,51 +16,96 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 #include "mowgli_behavior/bt_context.hpp"
+#include "mowgli_interfaces/srv/blade_control.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
 
 namespace mowgli_behavior
 {
 
-/// Operator and tick callbacks MUST share the owner's default mutually-exclusive
-/// group: both update the session policy, and ordering matters for blade OFF.
+/// Shares the tick/start handlers' default MutuallyExclusive group. Policy
+/// mutation AND command dispatch must be serialized, not separately locked.
 class BladeControlService
 {
 public:
+  using Control = mowgli_interfaces::srv::BladeControl;
+  using Hardware = mowgli_interfaces::srv::MowerControl;
+
   BladeControlService(rclcpp::Node& owner, const std::shared_ptr<BTContext>& context)
   {
-    using Control = mowgli_interfaces::srv::MowerControl;
-    auto client = owner.create_client<Control>("/hardware_bridge/mower_control");
+    auto handle = [weak = std::weak_ptr<BTContext>(
+                       context)](uint8_t enabled, uint8_t direction, Control::Response& resp)
+    {
+      auto ctx = weak.lock();
+      if (!ctx)
+      {
+        resp.message = "Blade controller is unavailable";
+        return;
+      }
+      if (enabled > 1u || (enabled != 0u && direction > 1u))
+      {
+        resp.message = "Blade enable and ON direction must be 0 or 1";
+        return;
+      }
+      auto client = ctx->bladeClient();
+      if (enabled && !client->service_is_ready())
+      {
+        resp.message = "Hardware bridge is unavailable; direction was not changed";
+        return;
+      }
+      // OFF ignores direction and always latches, including during an outage.
+      const auto command = ctx->blade_direction.forOperatorCommand(enabled != 0u, direction);
+      resp.success = true;
+      resp.message =
+          enabled ? (command.enabled
+                         ? "Blade direction requested"
+                         : "Direction saved; the behavior tree currently keeps the blade off")
+                  : "Blade OFF latched";
+      if (!client->service_is_ready())
+      {
+        resp.message = "Blade OFF latched; hardware bridge is unavailable";
+        return;
+      }
+      auto request = std::make_shared<Hardware::Request>();
+      request->mow_enabled = command.enabled;
+      request->mow_direction = command.direction;
+      try
+      {
+        client->async_send_request(request);
+        resp.forwarded = true;
+      }
+      catch (const std::exception& e)
+      {
+        resp.message += std::string("; hardware request could not be queued: ") + e.what();
+      }
+    };
+    auto group = owner.get_node_base_interface()->get_default_callback_group();
     service_ = owner.create_service<Control>(
-        "~/mower_control",
-        [weak = std::weak_ptr<BTContext>(context), client](const Control::Request::SharedPtr req,
-                                                           Control::Response::SharedPtr resp)
+        "~/blade_control",
+        [handle](const Control::Request::SharedPtr req, Control::Response::SharedPtr resp)
         {
-          auto ctx = weak.lock();
-          if (!ctx || req->mow_enabled > 1u || req->mow_direction > 1u)
-            return;
-          // Always latch OFF, including during a hardware-bridge outage. Do not
-          // accept a new ON/direction choice if it cannot be forwarded.
-          const bool ready = client->service_is_ready();
-          if (req->mow_enabled && !ready)
-            return;
-          const auto command =
-              ctx->blade_direction.forOperatorCommand(req->mow_enabled != 0u, req->mow_direction);
-          if (!ready)
-            return;
-          auto forward = std::make_shared<Control::Request>();
-          forward->mow_enabled = command.enabled;
-          forward->mow_direction = command.direction;
-          client->async_send_request(forward);
-          // Acknowledges the accepted request, not measured blade rotation.
-          // Firmware owns emergency checks and stopped reversal sequencing.
-          resp->success = true;
-        });
+          handle(req->mow_enabled, req->mow_direction, *resp);
+        },
+        rclcpp::ServicesQoS(),
+        group);
+    // Compatibility for the earlier combined test GUI. Both endpoints use
+    // exactly the same policy; the hardware MowerControl schema stays stable.
+    legacy_service_ = owner.create_service<Hardware>(
+        "~/mower_control",
+        [handle](const Hardware::Request::SharedPtr req, Hardware::Response::SharedPtr resp)
+        {
+          Control::Response result;
+          handle(req->mow_enabled, req->mow_direction, result);
+          resp->success = result.success;
+        },
+        rclcpp::ServicesQoS(),
+        group);
   }
 
 private:
-  rclcpp::Service<mowgli_interfaces::srv::MowerControl>::SharedPtr service_;
+  rclcpp::Service<Control>::SharedPtr service_;
+  rclcpp::Service<Hardware>::SharedPtr legacy_service_;
 };
-
 }  // namespace mowgli_behavior

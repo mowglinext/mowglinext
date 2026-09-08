@@ -46,6 +46,24 @@ for (const mobile of [false, true]) {
             });
         }
 
+        test("OFF partial success warns when the ROS latch is unavailable", async ({page}) => {
+            const scenario = SCENARIOS.find(s => s.name === "mowing-area2-rtk-fixed")!;
+            await installMockBackend(page, {
+                ...scenario,
+                rest: {...scenario.rest, "/api/settings/yaml": {datum_lat: 48.1, datum_lon: 11.5}},
+            });
+            const warning = "Blade OFF requested, but persistent inhibition is unavailable. The behavior tree may re-enable it. Check the ROS connection and update ROS and GUI together.";
+            await page.route(/\/api\/mowglinext\/call\/blade_control/, async route => {
+                await route.fulfill({json: {warning}});
+            });
+            await page.goto("/#/map");
+            await page.getByRole("main").getByRole("button", {name: /More$/}).click();
+            await page.getByRole("menuitem", {name: /Blade Off/i}).click();
+            await expect(page.getByText(warning, {exact: true})).toBeVisible();
+            await expect(page.getByRole("menuitem", {name: /Blade Off/i})).toBeHidden();
+            await page.screenshot({animations: 'disabled', path: `tests/e2e/.artifacts/blade-off-warning-${mobile ? 'mobile' : 'desktop'}.png`});
+        });
+
         test("a rejected direction reports failure without a direct ON fallback", async ({page}) => {
             const scenario = SCENARIOS.find(s => s.name === "mowing-area2-rtk-fixed")!;
             await installMockBackend(page, {

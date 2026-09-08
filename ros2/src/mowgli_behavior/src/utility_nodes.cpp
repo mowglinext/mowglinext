@@ -57,12 +57,13 @@ BT::NodeStatus SetMowerEnabled::tick()
     return BT::NodeStatus::FAILURE;
   }
   const bool enabled = res.value();
+  // Selection records tree intent even if discovery/send is unavailable; a
+  // retry must keep the same direction, and an undelivered OFF still wins.
   const auto command = ctx->blade_direction.forMowerCommand(enabled, ctx->blade_auto_reverse);
 
   if (!client_)
   {
-    client_ = ctx->node->create_client<mowgli_interfaces::srv::MowerControl>(
-        "/hardware_bridge/mower_control");
+    client_ = ctx->bladeClient();
   }
 
   if (!waitForService(client_, ctx->node))

@@ -20,6 +20,7 @@ const ActionsCard = styled(Card)`
 `;
 
 export const useMowerAction = () => {
+    const {message} = App.useApp();
     const guiApi = useApi()
     return (command: string, args: Record<string, any> = {}) => async () => {
         try {
@@ -27,6 +28,8 @@ export const useMowerAction = () => {
             if (res.error) {
                 throw new Error(res.error.error)
             }
+            const outcome = res.data as {warning?: string} | undefined;
+            if (outcome?.warning) void message.warning(outcome.warning, 10);
         } catch (e: unknown) {
             // The generated client throws an HttpResponse for non-2xx replies;
             // the server's reason is in error.error, not Error.message.

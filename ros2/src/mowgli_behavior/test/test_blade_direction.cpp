@@ -259,3 +259,73 @@ TEST_F(BladeDirectionNodes, MenuCannotStartIdleBladeAndEndSessionClearsOverride)
   EXPECT_EQ(manual.tickOnce(), BT::NodeStatus::SUCCESS);
   expectRequest(1u, 0u);
 }
+
+TEST(BladeDirection, ExplicitStartClearsOnlyInhibition)
+{
+  BladeDirection policy(42);
+  policy.forOperatorCommand(true, 1);
+  policy.forOperatorCommand(false, 255);
+  EXPECT_EQ(policy.forMowerCommand(true, true).enabled, 0u);
+  policy.clearOperatorInhibit();
+  const auto command = policy.forMowerCommand(true, true);
+  EXPECT_EQ(command.enabled, 1u);
+  EXPECT_EQ(command.direction, 1u);
+}
+
+TEST_F(BladeDirectionNodes, OffIgnoresDirectionAndSurvivesMissingHardware)
+{
+  auto client = server->create_client<mowgli_interfaces::srv::BladeControl>(
+      "/blade_direction_test/blade_control");
+  ASSERT_TRUE(client->wait_for_service(std::chrono::seconds(5)));
+  for (const auto direction : {2u, 255u})
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::BladeControl::Request>();
+    req->mow_enabled = 0;
+    req->mow_direction = direction;
+    auto future = client->async_send_request(req);
+    ASSERT_EQ(executor.spin_until_future_complete(future, std::chrono::seconds(5)),
+              rclcpp::FutureReturnCode::SUCCESS);
+    const auto result = future.get();
+    EXPECT_TRUE(result->success);
+    EXPECT_FALSE(result->message.empty());
+    expectRequest(0, 1);
+  }
+  blade_service.reset();
+  auto hardware_client = ctx->bladeClient();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (hardware_client->service_is_ready() && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_FALSE(hardware_client->service_is_ready());
+  for (const auto enabled : {0u, 1u})
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::BladeControl::Request>();
+    req->mow_enabled = enabled;
+    req->mow_direction = 0;
+    auto future = client->async_send_request(req);
+    ASSERT_EQ(executor.spin_until_future_complete(future, std::chrono::seconds(5)),
+              rclcpp::FutureReturnCode::SUCCESS);
+    const auto result = future.get();
+    EXPECT_EQ(result->success, enabled == 0);
+    EXPECT_FALSE(result->forwarded);
+    EXPECT_FALSE(result->message.empty());
+  }
+  EXPECT_EQ(ctx->blade_direction.forMowerCommand(true, true).enabled, 0u);
+}
+
+TEST_F(BladeDirectionNodes, DelayedHardwareReadsReceiveTreeOnBeforeOperatorOff)
+{
+  // Queue ON without spinning the hardware. The operator callback and the
+  // tree must use one client/writer so the later OFF cannot overtake this ON.
+  auto manual = tree("<SetMowerEnabled enabled=\"true\"/>");
+  EXPECT_EQ(manual.tickOnce(), BT::NodeStatus::SUCCESS);
+  operatorCommand(0, 0);
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (requests.size() < 2 && std::chrono::steady_clock::now() < deadline)
+    executor.spin_some();
+  ASSERT_EQ(requests.size(), 2u);
+  EXPECT_EQ(requests[0].mow_enabled, 1u);
+  EXPECT_EQ(requests[1].mow_enabled, 0u);
+  requests.clear();
+  EXPECT_EQ(manual.tickOnce(), BT::NodeStatus::SUCCESS);
+  expectRequest(0, 1);
+}

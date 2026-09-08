@@ -14,7 +14,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -353,51 +352,4 @@ func TestMapWriteBudget(t *testing.T) {
 	assert.Equal(t, 6*time.Minute, mapWriteBudget(1000))
 	// The old fixed 30 s is always exceeded now, even for zero areas.
 	assert.Greater(t, mapWriteBudget(0), 30*time.Second)
-}
-
-func TestServiceRoute_BladeControl(t *testing.T) {
-	for _, tc := range []struct {
-		name, body            string
-		enabled, direction    uint8
-		accepted, unavailable bool
-		status                int
-		calls                 int
-	}{
-		{"forward", `{"mow_enabled":1,"mow_direction":0}`, 1, 0, true, false, 200, 1},
-		{"reverse", `{"mow_enabled":1,"mow_direction":1}`, 1, 1, true, false, 200, 1},
-		{"off", `{"mow_enabled":0,"mow_direction":0}`, 0, 0, true, false, 200, 2},
-		{"rejected", `{"mow_enabled":1,"mow_direction":1}`, 1, 1, false, false, 500, 1},
-		{"unavailable", `{"mow_enabled":1,"mow_direction":1}`, 1, 1, false, true, 500, 1},
-		{"off unavailable", `{"mow_enabled":0,"mow_direction":0}`, 0, 0, false, true, 500, 2},
-		{"invalid direction", `{"mow_enabled":1,"mow_direction":2}`, 0, 0, false, false, 400, 0},
-		{"invalid enabled", `{"mow_enabled":2,"mow_direction":0}`, 0, 0, false, false, 400, 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mock := types.NewMockRosProvider()
-			mock.ServiceResponder = func(_ string, _ any, res any) {
-				res.(*mowgli.MowerControlRes).Success = tc.accepted
-			}
-			if tc.unavailable {
-				mock.ServiceErr = assert.AnError
-			}
-			router := setupMowgliNextRouter(mock)
-			w := httptest.NewRecorder()
-			req := httptest.NewRequest("POST", "/api/mowglinext/call/blade_control", strings.NewReader(tc.body))
-			req.Header.Set("Content-Type", "application/json")
-			router.ServeHTTP(w, req)
-			assert.Equal(t, tc.status, w.Code)
-			require.Len(t, mock.ServiceCalls, tc.calls)
-			if tc.calls == 0 {
-				return
-			}
-			if tc.calls == 2 {
-				assert.Equal(t, "/hardware_bridge/mower_control", mock.ServiceCalls[0].Service)
-			}
-			last := mock.ServiceCalls[tc.calls-1]
-			assert.Equal(t, "/behavior_tree_node/mower_control", last.Service)
-			control := last.Req.(*mowgli.MowerControlReq)
-			assert.Equal(t, tc.enabled, control.MowEnabled)
-			assert.Equal(t, tc.direction, control.MowDirection)
-		})
-	}
 }
