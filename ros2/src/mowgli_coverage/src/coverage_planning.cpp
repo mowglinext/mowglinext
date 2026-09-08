@@ -427,8 +427,12 @@ Pose dubinsStep(const Pose& p, SegKind kind, double u)
 // (start inclusive, goal exclusive — the caller chains to goal). `out_len`
 // receives the world-frame path length. If no word solves, returns empty and
 // out_len = +inf.
-std::vector<std::pair<double, double>> sampleDubins(
-    const Pose& start, const Pose& goal, double radius, double step, double& out_len)
+std::vector<std::pair<double, double>> sampleDubins(const Pose& start,
+                                                    const Pose& goal,
+                                                    double radius,
+                                                    double step,
+                                                    double& out_len,
+                                                    std::size_t word_index = 6)
 {
   out_len = std::numeric_limits<double>::max();
   std::vector<std::pair<double, double>> pts;
@@ -454,6 +458,8 @@ std::vector<std::pair<double, double>> sampleDubins(
   const DubinsWord* best = nullptr;
   for (const auto& w : words)
   {
+    if (word_index < 6 && &w != &words[word_index])
+      continue;
     if (w.valid && (best == nullptr || w.length() < best->length()))
     {
       best = &w;
@@ -559,11 +565,36 @@ std::vector<std::pair<double, double>> buildConnector(
   {
     double len = 0.0;
     auto pts = sampleDubins(start, goal, r, step, len);
-    // Accept the largest radius whose arc is both inside the boundary AND clear
-    // of every hole → smoothest turn-around that stays out of obstacles (#333).
     if (!pts.empty() && allInside(pts, boundary) && clearOfHoles(pts, holes))
-    {
       return pts;
+  }
+  const double dx = goal.x - start.x, dy = goal.y - start.y;
+  const double distance = std::hypot(dx, dy);
+  // Preserve pivotable corners up to the existing 120-degree continuous-path
+  // quality ceiling; only near-reversal joins need the longer curved option.
+  constexpr double kMaxPivotTurnCos = -0.5;
+  const bool reversing_join =
+      dx * std::cos(start.theta) + dy * std::sin(start.theta) < kMaxPivotTurnCos * distance ||
+      dx * std::cos(goal.theta) + dy * std::sin(goal.theta) < kMaxPivotTurnCos * distance;
+  // Before accepting a near-reversal straight fallback, try the other Dubins words:
+  // the unconstrained shortest word can leave the field while another fits.
+  // This avoids replacing every compact pivot with a longer loop.
+  for (double r = turn_radius; reversing_join && r >= min_radius - 1e-9; r -= 0.02)
+  {
+    double best_length = std::numeric_limits<double>::max();
+    for (std::size_t word = 0; word < 6; ++word)
+    {
+      double len = 0.0;
+      auto pts = sampleDubins(start, goal, r, step, len, word);
+      if (len < best_length && !pts.empty() && allInside(pts, boundary) && clearOfHoles(pts, holes))
+      {
+        best_length = len;
+        best_pts = std::move(pts);
+      }
+    }
+    if (!best_pts.empty())
+    {
+      return best_pts;
     }
   }
   // Last resort: straight blind connector (may leave the boundary OR cross a
@@ -753,6 +784,29 @@ static f2c::types::Cell expandCellOutward(const f2c::types::Cell& in, double mar
     out.addRing(in.getGeometry(r));
   }
   return out;
+}
+
+std::optional<double> longestValidSwathAngle(const f2c::types::Swaths& swaths)
+{
+  std::optional<double> angle;
+  double longest = 1e-9;
+  for (std::size_t i = 0; i < swaths.size(); ++i)
+  {
+    const auto line = swaths[i].getPath();
+    if (line.size() < 2)
+      continue;
+    const auto a = line.getGeometry(0);
+    const auto b = line.getGeometry(line.size() - 1);
+    const double dx = b.getX() - a.getX(), dy = b.getY() - a.getY();
+    const double length = std::hypot(dx, dy);
+    if (std::isfinite(dx) && std::isfinite(dy) && std::isfinite(length) && length > longest)
+    {
+      longest = length;
+      double heading = std::fmod(std::atan2(dy, dx), M_PI);
+      angle = heading < 0.0 ? heading + M_PI : heading;
+    }
+  }
+  return angle;
 }
 
 BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
@@ -1208,14 +1262,22 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
     {
       // Resolve AUTO normally, then rotate that result. Optimising again at
       // the rotated heading would just undo the cross-hatch selection.
-      const auto line = swaths[0].getPath();
-      const auto a = line.getGeometry(0);
-      const auto b = line.getGeometry(line.size() - 1);
-      double angle =
-          std::fmod(std::atan2(b.getY() - a.getY(), b.getX() - a.getX()) + M_PI / 2.0, M_PI);
+      const auto base =
+          cell_angle >= 0.0 ? std::optional<double>(cell_angle) : longestValidSwathAngle(swaths);
+      if (!base || !std::isfinite(*base))
+      {
+        plan.diagnostics.drops.push_back("cross-hatch: no valid Auto swath heading for cell");
+        continue;
+      }
+      double angle = std::fmod(*base + M_PI / 2.0, M_PI);
       if (angle < 0.0)
         angle += M_PI;
       swaths = bf.generateSwaths(angle, op_width, cell);
+      if (swaths.size() == 0)
+      {
+        plan.diagnostics.drops.push_back("cross-hatch: rotated cell has no swaths");
+        continue;
+      }
     }
     f2c::types::Swaths ordered = order.genSortedSwaths(swaths);
     for (std::size_t s = 0; s < ordered.size(); ++s)

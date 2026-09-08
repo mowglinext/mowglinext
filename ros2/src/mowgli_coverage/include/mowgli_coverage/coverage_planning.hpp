@@ -25,6 +25,7 @@
 #define MOWGLI_COVERAGE__COVERAGE_PLANNING_HPP_
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -175,6 +176,9 @@ struct BoustrophedonPlan
 // outermost-ring centerline) so the turn-around connectors can be bounded to the
 // perimeter ring rather than to safe_boundary — otherwise a turn arc's centerline
 // (and its swept footprint) rides op_width/2 past the rings toward the boundary.
+// Deterministic Auto heading; degenerate clips never define an angle.
+std::optional<double> longestValidSwathAngle(const f2c::types::Swaths& swaths);
+
 BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                                     double op_width,
                                     double headland_width,
