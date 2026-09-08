@@ -2,6 +2,7 @@
 
 > Every knob on this robot, where its default lives, which node consumes it, and whether the GUI can edit it.
 > Index generated 2026-09-03 at f21729e9; regenerate when config files or launch injections change.
+> Template-key count can be refreshed from YAML with `python3 ros2/scripts/refresh_parameter_summary.py` (`--check` to verify); this does not regenerate the audited consumer descriptions below.
 > Read this with CLAUDE.md **Invariant 15** (sparse installed config over an in-package template) open — it is the rule this whole file describes.
 
 **The one-sentence model:** defaults live in the in-package template `ros2/src/mowgli_bringup/config/mowgli_robot.yaml`; the *installed* `/ros2_ws/config/mowgli_robot.yaml` is SPARSE and holds only install choices + calibration outputs + genuine overrides; `robot_config_util.load_robot_params()` deep-merges installed OVER template at launch; each launch file then **injects** individual keys into node parameters. **A key that no launch file injects is inert** — the node silently runs its compiled `declare_parameter` default no matter what the yaml says. Those are marked `INERT` below.
