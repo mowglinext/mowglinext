@@ -19,6 +19,7 @@ const APIVersion = 1
 const LayoutVersion = 1
 const DataSchemaVersion = 1
 const StateSchema = 3
+const DefaultCheckIntervalHours = 24
 
 var Version = "development"
 var Revision = ""

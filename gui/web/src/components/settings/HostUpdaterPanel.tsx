@@ -117,11 +117,12 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                                 <details className="stack-image-details"><summary>{t('updates.details')}</summary><Typography.Paragraph code>{running?.reference ?? info?.image ?? family}</Typography.Paragraph><Typography.Paragraph code>{running?.image ?? info?.image_id}</Typography.Paragraph></details>
                             </div>
                             <div className="stack-target">
-                                {advanced && family ? <><Select classNames={{popup:{root:'update-version-menu'}}} aria-label={`${component(name)} ${t('hostUpdater.versionControl')}`} value={overrides[name]?.id ?? ''}
+                                {advanced && family ? <><Select classNames={{popup:{root:'update-version-menu'}}} aria-label={`${component(name)} ${t('hostUpdater.versionControl')}`} value={target ? overrides[name]?.id ?? '' : undefined} placeholder={t('hostUpdater.noVersions')}
                                     disabled={pending || busy || dirty || !target || !supported || noAlternatives}
                                     options={[{value:'',label:t('hostUpdater.followRelease')},...choices.map(({release,reason}) => ({value:release.id,disabled:!!reason,label:datedLabel(release)+(reason ? ` · ${t('hostUpdater.compatibility.'+reason)}` : '')}))]}
                                     onChange={id => setComponentSelected(current => {const next={...current};if(id)next[name]=id;else delete next[name];return next;})}/>
                                     {overrides[name] && <Tag color="gold">{t('hostUpdater.customComponent')}</Tag>}
+                                    {!target && <Typography.Text type="secondary">{t('hostUpdater.noVersionsHelp')}</Typography.Text>}
                                     {!supported && <Typography.Text type="secondary">{t('hostUpdater.serviceSelectionUnsupported')}</Typography.Text>}
                                     {target && supported && noAlternatives && <Typography.Text type="secondary">{t('hostUpdater.noCompatibleComponent')}</Typography.Text>}
                                 </> : !family && target && <Typography.Text type="secondary">{t('hostUpdater.removedByRelease')}</Typography.Text>}

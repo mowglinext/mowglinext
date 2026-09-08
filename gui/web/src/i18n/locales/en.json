@@ -3325,7 +3325,7 @@
     "published": "Published",
     "buildDatesHelp": "Built is the installed image timestamp; Published is when the release was published.",
 
-    "componentSourceHelp": "Component versions must come from the same repository and branch as the selected release.",
+    "componentSourceHelp": "Choose compatible component versions from published releases in the same repository and branch. Entering a Docker tag or image URL directly is not supported.",
     "summaryUnknown": "Unknown",
     "summaryCustom": "Custom",
     "runningSummary": "Running {{version}} · {{track}}. Open Updates",

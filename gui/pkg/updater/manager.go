@@ -45,7 +45,7 @@ func Open(dir string, trusted []string, b Backend, source ReleaseSource) (*Manag
 		return nil, errors.New("no trusted sources configured")
 	}
 	m := &Manager{path: filepath.Join(dir, "state.json"), trusted: trusted, backend: b, source: source, now: time.Now}
-	m.state = State{Schema: StateSchema, Policy: Policy{Source: Source{Repository: trusted[0], Track: "dev", Branch: "dev"}, IntervalHours: 4}, Releases: []Deployment{}, Notices: []Notice{}, Plans: []Plan{}, History: []Job{}}
+	m.state = State{Schema: StateSchema, Policy: Policy{Source: Source{Repository: trusted[0], Track: "dev", Branch: "dev"}, IntervalHours: DefaultCheckIntervalHours}, Releases: []Deployment{}, Notices: []Notice{}, Plans: []Plan{}, History: []Job{}}
 	data, err := os.ReadFile(m.path)
 	if err == nil {
 		if err = json.Unmarshal(data, &m.state); err != nil || (m.state.Schema < 1 || m.state.Schema > StateSchema) {

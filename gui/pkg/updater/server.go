@@ -157,7 +157,7 @@ func Serve(config HostConfig) error {
 		return err
 	}
 	if _, err = os.Stat(filepath.Join(config.StateDir, "state.json")); os.IsNotExist(err) && config.InitialSource.Validate(config.Trusted) == nil {
-		if err = m.Configure(Policy{Source: config.InitialSource, IntervalHours: 4}); err != nil {
+		if err = m.Configure(Policy{Source: config.InitialSource, IntervalHours: DefaultCheckIntervalHours}); err != nil {
 			return err
 		}
 	}

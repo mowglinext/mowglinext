@@ -27,8 +27,8 @@ function fixture(track='dev', mixed=false, expanded=false) {
     return {api:1,capabilities:['component-overrides','declared-services','release-compose','service-version-overrides'],
         runtime:{identity:mixed?'mixed':'matched',health:'healthy',checked_at:'2026-09-07T09:30:00Z',selection:{gnss:'universal',lidar:expanded?'ldlidar':'none'},components},
         agent:{version:'updater-current',revision:devPrevious,platform:'linux/arm64'},trusted_repositories:[source.repository],
-        state:{policy:{source:base.source,interval_hours:4,pinned:false},installed_policy:{source:base.source,interval_hours:4,pinned:true},active:base,
-            overrides:mixed?{gui:alternative,mowgli:alternative}:{},last_check:'2026-09-07T09:30:00Z',next_check:'2026-09-07T13:35:00Z',last_success:'2026-09-07T09:30:00Z',releases:[next,base,alternative],notices:[],history:[]}};
+        state:{policy:{source:base.source,interval_hours:24,pinned:false},installed_policy:{source:base.source,interval_hours:24,pinned:true},active:base,
+            overrides:mixed?{gui:alternative,mowgli:alternative}:{},last_check:'2026-09-07T09:30:00Z',next_check:'2026-09-08T09:35:00Z',last_success:'2026-09-07T09:30:00Z',releases:[next,base,alternative],notices:[],history:[]}};
 }
 const inventory={docker_available:true,server:{version:'dev'},components:[
     ...['mowgli','gui','gps','lidar','camera'].map(name=>({name:`mowgli-${name}`,component:name==='mowgli'?'robot':name,version:'dev',revision:devPrevious,state:'running',image:`ghcr.io/${source.repository}/${familyMap[name as keyof typeof familyMap]}:dev`,image_id:`sha256:installed-${name}`})),
@@ -92,6 +92,9 @@ for(const mobile of [false,true])test(`unpublished source ${mobile?'mobile':'des
     await expect(panel.getByRole('button',{name:'Review update',exact:true})).toBeDisabled();
     await expect(panel.getByRole('button',{name:'Check for updates',exact:true})).toBeEnabled();
     await expect(panel.getByText('No installable build published for this source.')).toBeVisible();
+    await expect(page.getByTestId('stack-gui')).not.toContainText('Follow selected release');
+    await expect(page.getByTestId('stack-gui')).toContainText('No compatible versions available');
+    await expect(page.getByTestId('stack-gui')).toContainText('Version choices require a compatible complete build from this source.');
     await shot(page,'host-updater-no-versions',mobile,'stack-mowgli');expect(posts).toEqual([]);
 });
 

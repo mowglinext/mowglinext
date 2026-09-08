@@ -114,8 +114,9 @@ pin it, then review and install. The installed source and pin change only after
 successful activation. A pin does not suppress notifications or explicit changes.
 Production/dev/custom switching uses the same reviewed installation path.
 
-Checks run every four hours by default, with up to 15 minutes of persisted jitter.
-Hourly, daily and manual-only checks are available. A failed check retains the
+Checks run every 24 hours by default, with up to 15 minutes of persisted jitter.
+Hourly, four-hourly and manual-only checks are also available. Existing saved
+intervals are preserved on upgrade. A failed check retains the
 previous successful results and retries after 15 minutes plus jitter. UI status
 polls read local state; opening a page does not start a remote check. Notification
 read/dismiss state survives GUI and host restarts. Different source histories are
