@@ -79,6 +79,7 @@ tree at f21729e9; regenerate when files are added or removed rather than hand-pa
 | [`gui/README.md`](../../gui/README.md) | contributor/operator | GUI install (Docker / MowgliNextOS podman unit), usage, dev workflow. |
 | [`gui/web/tests/e2e/README.md`](../../gui/web/tests/e2e/README.md) | contributor | Playwright E2E: fully mocked data, scenario matrix, what each spec asserts. |
 | [`docs/WEBOTS_SIM.md`](../WEBOTS_SIM.md) | contributor | **Read before editing the sim.** Five load-bearing ODE workarounds, each as RULE → ANCHOR → SYMPTOM. |
+| [`docs/MAVROS_EXTERNAL_BACKEND_MIGRATION.md`](../MAVROS_EXTERNAL_BACKEND_MIGRATION.md) | contributor | **Active migration checkpoint.** Historical `mavrosdev` audit, current-vs-external backend contract, exact minimal integration plan, and explicit software/hardware gates. It does not claim actuator safety or deployment readiness. |
 | [`docs/IMPORT_OPENMOWER_MAP.md`](../IMPORT_OPENMOWER_MAP.md) | contributor | OpenMower `map.json` import — live and wired (`openmower_import.go` + `ImportOpenMowerModal.tsx`). §6 (`.bag`) is design-only. |
 | [`ros2/scripts/compute_nav2_params.md`](../../ros2/scripts/compute_nav2_params.md) | contributor | Design note for the physics-derived Nav2 param calculator. Its § *Future: launch injection* is still aspirational — the script has no caller in the tree. |
 | [`ros2/scripts/diagnostics/README.md`](../../ros2/scripts/diagnostics/README.md) | contributor | Single-shot drivetrain/localization characterisation scripts; all five files still present. |
