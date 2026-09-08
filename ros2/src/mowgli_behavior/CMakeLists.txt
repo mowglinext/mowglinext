@@ -525,6 +525,43 @@ if(BUILD_TESTING)
     tf2_geometry_msgs
   )
 
+  # ---- test_manual_resume ----
+  # Operator-forced resume out of a mid-session charge hold: Play
+  # (COMMAND_START) while CHARGING / CRITICAL_BATTERY_CHARGING sets
+  # BTContext::manual_resume_requested, and IsManualResumeRequested in both
+  # wait loops consumes it above battery_manual_resume_pct. Pins the node's
+  # consume/refuse/stale semantics, the handler's decision helper, the wait
+  # loop's exit order, and structurally that BOTH loops in main_tree.xml carry
+  # the node, poll at <= 5 s, and still bound at 8 h.
+  ament_add_gtest(test_manual_resume
+    test/test_manual_resume.cpp
+    src/condition_nodes.cpp
+  )
+
+  target_include_directories(test_manual_resume PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  # The structural half reads the real tree from the source tree.
+  target_compile_definitions(test_manual_resume PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
+  )
+
+  ament_target_dependencies(test_manual_resume
+    rclcpp
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+  )
+
   # ---- test_guard_fallthrough ----
   # Regression for the "blocking guard falls through into MainLogic" bug
   # class (issues #459, #445). LocalizationGuard's handler ended with a

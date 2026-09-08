@@ -62,6 +62,11 @@ using namespace std::chrono_literals;
 namespace mowgli_behavior
 {
 
+/// Margin (battery %) that battery_manual_resume_percent is clamped ABOVE
+/// battery_low_percent when an installed config inverts the two: resuming at
+/// or below the dock threshold re-docks on the next NeedsDocking tick.
+constexpr double kManualResumeMinMarginPct = 5.0;
+
 // ---------------------------------------------------------------------------
 // BehaviorTreeNode
 // ---------------------------------------------------------------------------
@@ -609,6 +614,24 @@ private:
           }
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
+            // Play pressed while parked in a charge hold (CHARGING /
+            // CRITICAL_BATTERY_CHARGING): current_command is already 1 there,
+            // so the assignment below is a no-op and the tree would keep
+            // waiting for battery_full_pct. Flag an operator-forced resume
+            // instead; IsManualResumeRequested in the wait loops consumes it,
+            // honouring it only above {battery_manual_resume_pct}. Decided on
+            // the last PUBLISHED state_name, not on the charger bit, so a START
+            // from IDLE_DOCKED (a fresh session) is untouched.
+            if (cmd == HighLevelControl::Request::COMMAND_START &&
+                isChargeHoldState(context_->last_high_level_status.state_name))
+            {
+              context_->manual_resume_requested = true;
+              context_->manual_resume_requested_time = std::chrono::steady_clock::now();
+              RCLCPP_INFO(get_logger(),
+                          "HighLevelControl: manual resume requested while charging "
+                          "(battery %.1f %%)",
+                          static_cast<double>(context_->battery_percent));
+            }
             context_->current_command = cmd;
             // A plain COMMAND_START means "mow the lawn", so it must cancel any
             // single-area clip still latched from an earlier ~/start_in_area run.
@@ -998,12 +1021,30 @@ private:
                   battery_critical_pct,
                   battery_critical_recovery_pct);
     }
+    // Floor for an operator-forced resume out of a charge hold (Play pressed
+    // while CHARGING / CRITICAL_BATTERY_CHARGING — IsManualResumeRequested).
+    // It must sit above battery_low_percent: resuming at or below the dock
+    // threshold makes NeedsDocking fire on the very next tick, so the robot
+    // would undock, drive off, and turn straight back within minutes. Clamp
+    // rather than reject so a mis-set installed value degrades to a sane band.
+    double battery_manual_resume_pct =
+        declare_parameter<double>("battery_manual_resume_percent", 30.0);
+    if (battery_manual_resume_pct <= battery_low_pct)
+    {
+      battery_manual_resume_pct = battery_low_pct + kManualResumeMinMarginPct;
+      RCLCPP_WARN(get_logger(),
+                  "battery_manual_resume_percent must exceed battery_low_percent "
+                  "(%.1f); clamped to %.1f",
+                  battery_low_pct,
+                  battery_manual_resume_pct);
+    }
     blackboard_->set("battery_low_pct", static_cast<float>(battery_low_pct));
     blackboard_->set("battery_critical_pct", static_cast<float>(battery_critical_pct));
     blackboard_->set("battery_full_pct", static_cast<float>(battery_full_pct));
     blackboard_->set("battery_critical_voltage", static_cast<float>(battery_critical_voltage));
     blackboard_->set("battery_critical_recovery_pct",
                      static_cast<float>(battery_critical_recovery_pct));
+    blackboard_->set("battery_manual_resume_pct", static_cast<float>(battery_manual_resume_pct));
 
     // Swath (mow) angle — operator-tunable in mowgli_robot.yaml and surfaced
     // on the GUI Mowing settings. < 0 = AUTO (coverage server picks the
@@ -1087,6 +1128,8 @@ private:
       context_->coverage_start_blocked = false;
       context_->start_blocked_area.reset();
       context_->area_start_blocked_count.clear();
+      context_->guard_halted_reason.reset();
+      context_->area_guard_halt_count.clear();
       // Disarm the #487 escape motion too — see EndSession for why.
       context_->start_blocked_escape_armed = false;
       clearCoverageResumeState(*context_);

@@ -589,6 +589,12 @@
           "title": "Critical Recovery Percent",
           "default": 30.0,
           "description": "Leave the critical-battery state once recharged above this percentage. Hysteresis upper bound, must be greater than Critical Percent."
+        },
+        "battery_manual_resume_percent": {
+          "type": "number",
+          "title": "Manual Resume Percent",
+          "default": 30.0,
+          "description": "Floor for an operator-forced resume from the charger: pressing Play while the robot is charging mid-session resumes mowing only above this percentage. Must be greater than Low Percent or the robot re-docks within minutes."
         }
       }
     },
@@ -643,6 +649,12 @@
           "title": "Max Obstacle Detour",
           "default": 1,
           "description": "Maximum lateral detour (m) around obstacles — drives both the coverage controller's skirting and the bypass give-up threshold."
+        },
+        "dig_obstacle_enabled": {
+          "type": "boolean",
+          "default": true,
+          "title": "Automatically create dig keepouts",
+          "description": "Create temporary keepout proposals for detected wheel-slip digs. Disabling this leaves dig detection and recovery active. Restart ROS2 to apply."
         },
         "obstacle_margin": {
           "type": "number",

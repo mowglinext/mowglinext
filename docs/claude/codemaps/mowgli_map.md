@@ -126,7 +126,7 @@ Defaults: `ros2/src/mowgli_map/config/map_server.yaml` (`map_params`, `full_syst
 |-----------|---------|-------------|-------|
 | `resolution`, `map_size_x`, `map_size_y`, `map_frame` | 0.05, 20, 20, `map` | L55-58 | size overridden by `resize_map_to_areas` (+5 m margin) |
 | `tool_width` | 0.18 | L59 | mow-progress disc radius = `tool_width/2` (see CLAUDE.md Invariant 6) |
-| `dig_obstacle_enabled`, `dig_obstacle_size` | true, 0.60 | L70-71 | subscription only created when enabled; size floored at 0.05 |
+| `dig_obstacle_enabled`, `dig_obstacle_size` | true, 0.60 | L70-71 | subscription only created when enabled; `dig_obstacle_enabled` is injected from the robot template/GUI Settings → Obstacles by `full_system.launch.py` (restart required); size floored at 0.05 |
 | `areas_file_path` | `""` (yaml: `/ros2_ws/maps/areas.dat`) | L78 | empty = no persistence at all |
 | `datum_lat`, `datum_lon` | 0/0 | L83-84 | 0/0 disables stamp + migration |
 | `robot_yaml_path` | `/ros2_ws/config/mowgli_robot.yaml` | L85 | dock-pose splice target; tests redirect |

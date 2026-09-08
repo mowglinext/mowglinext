@@ -51,6 +51,7 @@ using mowgli_behavior::BTContext;
 using mowgli_behavior::clearSingleAreaMode;
 using mowgli_behavior::EndSession;
 using mowgli_behavior::GetNextUnmowedArea;
+using mowgli_behavior::MarkGuardHalt;
 using GetMowingArea = mowgli_interfaces::srv::GetMowingArea;
 
 // ---------------------------------------------------------------------------
@@ -108,6 +109,7 @@ protected:
 
     factory.registerNodeType<GetNextUnmowedArea>("GetNextUnmowedArea");
     factory.registerNodeType<EndSession>("EndSession");
+    factory.registerNodeType<MarkGuardHalt>("MarkGuardHalt");
 
     server_node = rclcpp::Node::make_shared("fake_map_server");
     service = server_node->create_service<GetMowingArea>(
@@ -188,6 +190,27 @@ protected:
         "<EndSession/>"
         "</BehaviorTree></root>";
     return factory.createTreeFromText(xml, blackboard);
+  }
+
+  /// A bare <MarkGuardHalt reason="..."/> tree — the real guard-handler node,
+  /// so the guard-halted exemption is driven the way main_tree.xml drives it.
+  BT::Tree makeMarkGuardHaltTree(const std::string& reason)
+  {
+    const std::string xml =
+        "<root BTCPP_format=\"4\"><BehaviorTree ID=\"MainTree\">"
+        "<MarkGuardHalt reason=\"" +
+        reason +
+        "\"/>"
+        "</BehaviorTree></root>";
+    return factory.createTreeFromText(xml, blackboard);
+  }
+
+  /// Simulate "a guard halted the tree mid-pass": tick the real MarkGuardHalt
+  /// node the way SensorFaultHandler / LocalizationDegradedHandler do.
+  void guardHaltsTree(const std::string& reason = "scan_stale")
+  {
+    auto halt_tree = makeMarkGuardHaltTree(reason);
+    ASSERT_EQ(halt_tree.tickOnce(), BT::NodeStatus::SUCCESS);
   }
 };
 
@@ -310,6 +333,184 @@ TEST_F(GetNextUnmowedAreaTest, StartBlockedFlagIsConsumedByOneDispatch)
   EXPECT_EQ(ctx->area_start_blocked_count[0u], 1u);
   EXPECT_EQ(ctx->area_attempt_count[0u], 0u)
       << "the exempted dispatch must not have advanced the no-progress counter";
+}
+
+// ---------------------------------------------------------------------------
+// Field 2026-09-07/08 — a pass INTERRUPTED by a Root guard must not retire
+// the area.
+//
+// With an intermittent LiDAR serial link IsScanStale (SensorSafetyGuard)
+// halted the Root every few seconds. Each halt interrupts FollowStrip ("area 0
+// interrupted at pose N — resume cursor saved") and the next dispatch charged
+// the re-dispatch to the no-progress budget: three scan-stale halts in 25 s
+// exhausted kMaxAreaAttempts, the mow "completed" with 0 swaths and the robot
+// sat on the lawn. LocalizationGuard pauses did the same. The guard handlers
+// now tick MarkGuardHalt, which GetNextUnmowedArea consumes as "this pass was
+// a pause, not a failure".
+// ---------------------------------------------------------------------------
+
+// MarkGuardHalt records its reason in the context and always succeeds; it is
+// idempotent across the handler's per-tick re-runs.
+TEST_F(GetNextUnmowedAreaTest, MarkGuardHaltRecordsTheReason)
+{
+  ASSERT_FALSE(ctx->guard_halted_reason.has_value());
+
+  guardHaltsTree("scan_stale");
+  ASSERT_TRUE(ctx->guard_halted_reason.has_value());
+  EXPECT_EQ(*ctx->guard_halted_reason, "scan_stale");
+
+  // The handler re-ticks every cycle while the fault holds — same result.
+  guardHaltsTree("scan_stale");
+  ASSERT_TRUE(ctx->guard_halted_reason.has_value());
+  EXPECT_EQ(*ctx->guard_halted_reason, "scan_stale");
+
+  // A different guard overwrites the tag (the last halt describes the pass).
+  guardHaltsTree("localization_degraded");
+  ASSERT_TRUE(ctx->guard_halted_reason.has_value());
+  EXPECT_EQ(*ctx->guard_halted_reason, "localization_degraded");
+}
+
+// (a) A single guard-halted pass is not charged and re-selects the same area.
+TEST_F(GetNextUnmowedAreaTest, GuardHaltedPassIsNotChargedAndReselectsTheArea)
+{
+  areas[0] = {"lawn", /*is_navigation_area=*/false};
+  waitForService();
+
+  // First dispatch of the session — the normal charging path (attempt 1/5).
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+    ASSERT_EQ(ctx->current_area, 0);
+    ASSERT_EQ(ctx->area_attempt_count[0u], 1u);
+  }
+
+  // IsScanStale halts the Root mid-pass; FollowStrip saves its cursor.
+  guardHaltsTree("scan_stale");
+
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  uint32_t selected = 99;
+  ASSERT_TRUE(blackboard->get("area_index", selected));
+  EXPECT_EQ(selected, 0u) << "the interrupted area must be re-dispatched";
+  EXPECT_EQ(ctx->current_area, 0);
+  EXPECT_EQ(ctx->area_attempt_count[0u], 1u)
+      << "a guard-interrupted pass must NOT advance the no-progress counter";
+  EXPECT_EQ(ctx->area_guard_halt_count[0u], 1u);
+}
+
+// (b) The field incident: FIVE consecutive guard-halted passes (one more than
+// the three that killed the 2026-09-07 mow) still do not retire the area.
+TEST_F(GetNextUnmowedAreaTest, RepeatedGuardHaltsDoNotBurnTheNoProgressBudget)
+{
+  areas[0] = {"lawn", /*is_navigation_area=*/false};
+  waitForService();
+
+  for (uint32_t halt = 0; halt < BTContext::kMaxAreaAttempts; ++halt)
+  {
+    guardHaltsTree(halt % 2 == 0 ? "scan_stale" : "localization_degraded");
+    auto tree = makeTree(/*max_areas=*/5);
+    EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS)
+        << "dispatch after guard halt " << halt << " must still select the area";
+    EXPECT_EQ(ctx->current_area, 0) << "halt " << halt;
+  }
+  EXPECT_EQ(ctx->attempted_areas.count(0u), 0u)
+      << "a run of guard pauses must not retire a mowable area";
+  EXPECT_LT(ctx->area_attempt_count[0u], BTContext::kMaxAreaAttempts);
+  EXPECT_EQ(ctx->area_attempt_count[0u], 0u)
+      << "none of the guard-interrupted passes may be charged";
+  EXPECT_EQ(ctx->area_guard_halt_count[0u], BTContext::kMaxAreaAttempts);
+}
+
+// (c) The flag describes ONE finished pass: it is consumed by the dispatch
+// that reads it, and the following (uninterrupted) no-progress pass IS
+// charged as before.
+TEST_F(GetNextUnmowedAreaTest, GuardHaltFlagIsConsumedSoTheNextPlainPassIsCharged)
+{
+  areas[0] = {"lawn", /*is_navigation_area=*/false};
+  waitForService();
+
+  guardHaltsTree("scan_stale");
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  }
+  EXPECT_FALSE(ctx->guard_halted_reason.has_value()) << "must be consumed by the dispatch";
+  EXPECT_EQ(ctx->area_attempt_count[0u], 0u);
+
+  // The pass that follows ends without a guard halt and without progress.
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  }
+  EXPECT_EQ(ctx->area_attempt_count[0u], 1u)
+      << "an ordinary no-progress pass must still be charged (first dispatch counts 1)";
+
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  }
+  EXPECT_EQ(ctx->area_attempt_count[0u], 2u)
+      << "the exemption must not linger past the one dispatch that consumed it";
+}
+
+// (d) ...and the exemption is BOUNDED by kMaxGuardHaltedPasses: past it the
+// normal charging path takes over so a pathological flap cannot loop forever.
+// (A permanently dead sensor never reaches this — the guard holds the tree.)
+TEST_F(GetNextUnmowedAreaTest, GuardHaltExemptionStopsAtTheCap)
+{
+  areas[0] = {"lawn", /*is_navigation_area=*/false};
+  waitForService();
+
+  for (uint32_t halt = 0; halt < BTContext::kMaxGuardHaltedPasses; ++halt)
+  {
+    guardHaltsTree("scan_stale");
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS) << "exempted halt " << halt;
+  }
+  ASSERT_EQ(ctx->area_guard_halt_count[0u], BTContext::kMaxGuardHaltedPasses);
+  ASSERT_EQ(ctx->area_attempt_count[0u], 0u);
+
+  // Cap reached: guard-halted passes now fall through to the charging path.
+  const uint32_t kMaxDispatches = BTContext::kMaxAreaAttempts + 2;
+  bool retired = false;
+  for (uint32_t attempt = 0; attempt < kMaxDispatches && !retired; ++attempt)
+  {
+    guardHaltsTree("scan_stale");
+    auto tree = makeTree(/*max_areas=*/5);
+    tickToCompletion(tree);
+    EXPECT_FALSE(ctx->guard_halted_reason.has_value())
+        << "the flag must be consumed on the charging path too (attempt " << attempt << ")";
+    retired = ctx->attempted_areas.count(0u) > 0;
+  }
+  EXPECT_TRUE(retired) << "past kMaxGuardHaltedPasses the no-progress budget must apply again";
+  EXPECT_EQ(ctx->area_guard_halt_count[0u], BTContext::kMaxGuardHaltedPasses)
+      << "the exemption counter must not grow past the cap";
+}
+
+// EndSession is the session boundary: a guard halt that ended one session
+// must not exempt the next session's first dispatch.
+TEST_F(GetNextUnmowedAreaTest, EndSessionClearsGuardHaltBookkeeping)
+{
+  areas[0] = {"lawn", /*is_navigation_area=*/false};
+  waitForService();
+
+  guardHaltsTree("localization_degraded");
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  }
+  ASSERT_EQ(ctx->area_guard_halt_count[0u], 1u);
+  guardHaltsTree("localization_degraded");  // halted again on the way to the dock
+
+  auto end_tree = makeEndSessionTree();
+  ASSERT_EQ(end_tree.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_FALSE(ctx->guard_halted_reason.has_value());
+  EXPECT_TRUE(ctx->area_guard_halt_count.empty());
+
+  // Next session: the first dispatch is charged normally (1/5).
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->area_attempt_count[0u], 1u);
 }
 
 // ---------------------------------------------------------------------------
