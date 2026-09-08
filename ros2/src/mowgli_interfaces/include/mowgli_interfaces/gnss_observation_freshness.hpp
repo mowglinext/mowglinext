@@ -84,8 +84,17 @@ public:
     {
       if (sequence == last_sequence_)
       {
-        return receipt_time_ns == *last_receipt_time_ns_ ? ObservationUpdate::kCachedPublication
-                                                         : ObservationUpdate::kInvalidProvenance;
+        // Same observation again, whatever the stamp says. The universal_gnss
+        // receiver stamps its status with the publication time and carries
+        // the observation COUNT as the sequence, so a status published twice
+        // between two receiver observations repeats the sequence under a
+        // newer stamp several times an hour. That is a cached publication,
+        // not evidence of anything: it neither refreshes the deadline nor
+        // invalidates authority. A frozen receiver still fails closed when
+        // the deadline (maximum_age) runs out with no new sequence. Field
+        // 2026-09-08: classifying it as invalid provenance paused the mow
+        // for 2 s every few minutes and exhausted the five dispatch attempts.
+        return ObservationUpdate::kCachedPublication;
       }
 
       if (sequence > last_sequence_)
