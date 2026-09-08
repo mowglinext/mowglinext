@@ -281,6 +281,12 @@ func (b DockerBackend) Pull(ctx context.Context, images map[string]string) error
 		return errors.New("less than 2 GiB free; free storage before downloading updates")
 	}
 	for _, image := range images {
+		if updates.DigestPattern.MatchString(image) {
+			if _, err := command(ctx, "docker", "image", "inspect", image); err != nil {
+				return err
+			}
+			continue
+		}
 		if _, err := command(ctx, "docker", "pull", "--platform", b.Config.Platform, image); err != nil {
 			return err
 		}

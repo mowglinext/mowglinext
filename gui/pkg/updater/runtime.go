@@ -52,9 +52,9 @@ func (b DockerBackend) Observe(ctx context.Context) (map[string]RunningComponent
 
 func reconcile(s State, components map[string]RunningComponent) RuntimeStatus {
 	r := RuntimeStatus{Identity: "custom", Health: "healthy", Components: components}
-	if s.Active != nil {
+	if s.Active != nil || len(s.CustomImages) > 0 {
 		r.Identity = "matched"
-		if len(s.Overrides) > 0 {
+		if len(s.Overrides) > 0 || len(s.CustomImages) > 0 {
 			r.Identity = "mixed"
 		}
 		if len(s.InstalledImages) == 0 {

@@ -24,7 +24,7 @@ function fixture(track='dev', mixed=false, expanded=false) {
     if(expanded) {base.service_choices.push({service:'camera',image:'camera'});next.service_choices.push({service:'camera',image:'camera'});}
     const names=expanded?['mowgli','gui','gps','lidar','camera']:['mowgli','gui','gps'];
     const components=Object.fromEntries(names.map(name=>[name,{name:`mowgli-${name}`,family:familyMap[name as keyof typeof familyMap],reference:`ghcr.io/${source.repository}/${familyMap[name as keyof typeof familyMap]}:dev`,version:track==='stable'?(mixed&&['mowgli','gui'].includes(name)?'v1.2.1':'v1.2.0'):'dev',revision:devPrevious,image:`sha256:installed-${name}`,healthy:true,healthcheck:false}]));
-    return {api:1,capabilities:['component-overrides','declared-services','release-compose','service-version-overrides'],
+    return {api:1,capabilities:['component-overrides','declared-services','release-compose','service-version-overrides','custom-images'],
         runtime:{identity:mixed?'mixed':'matched',health:'healthy',checked_at:'2026-09-07T09:30:00Z',selection:{gnss:'universal',lidar:expanded?'ldlidar':'none'},components},
         agent:{version:'updater-current',revision:devPrevious,platform:'linux/arm64'},trusted_repositories:[source.repository],
         state:{policy:{source:base.source,interval_hours:24,pinned:false},installed_policy:{source:base.source,interval_hours:24,pinned:true},active:base,
@@ -285,4 +285,55 @@ for(const mobile of [false,true])test(`dated dev build choices ${mobile?'mobile'
     const options=page.locator('.ant-select-dropdown:visible');
     await expect(options).toContainText('Published:');await expect(options).toContainText('1076cdeb');
     await shot(page,'host-updater-build-dates',mobile);expect(posts).toEqual([]);
+});
+
+for(const mobile of [false,true])test(`custom images without a published deployment ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture();data.state.releases=[];data.state.active=undefined as never;data.runtime.identity='custom';
+    const {panel,posts,errors}=await open(page,data,mobile);await advanced(page);
+    await panel.getByText('Custom images',{exact:true}).click();
+    const refs={mowgli:'ghcr.io/mowglinext/mowglinext/mowgli-ros2:dev',gui:'ghcr.io/mowglinext/mowglinext/mowglinext-gui:feat-gui-dashboard-improvements'};
+    for(const [service,name] of [['mowgli','Robot software'],['gui','Web interface']]) {
+        const row=page.getByTestId('stack-'+service);
+        await row.getByRole('checkbox',{name:name+' image choice'}).check();
+        await row.getByRole('textbox',{name:name+' image reference'}).fill(refs[service as keyof typeof refs]);
+    }
+    await expect(page.getByTestId('stack-gps')).toContainText('Keep current image');
+    await expect(panel.getByRole('button',{name:'Download and review images'})).toBeDisabled();
+    await panel.getByRole('checkbox',{name:'I trust these images and understand compatibility is unverified.'}).check();
+    expect(posts).toEqual([]);
+    await shot(page,'host-updater-custom-images',mobile,'stack-mowgli');
+    const prepared={...plan(release('custom-plan')),custom_images:Object.fromEntries(Object.entries(refs).map(([name,requested])=>[name,{requested,reference:requested.split(':')[0]+'@sha256:'+'1'.repeat(64),image_id:'sha256:'+'2'.repeat(64),repository:'mowglinext/mowglinext',release_tag:'deployment-f7e6f75ab840-42-1',version:'deployment-f7e6f75ab840-42-1',built_at:'2026-09-08T09:00:00Z'}]))};
+    await page.route('**/api/system/updater/custom-plan',r=>r.fulfill({json:prepared}));
+    await page.route('**/api/system/updater/apply',r=>r.fulfill({json:{job:'custom-job'}}));
+    await panel.getByRole('button',{name:'Download and review images'}).click();
+    const dialog=page.getByRole('dialog');await expect(dialog).toContainText('Custom mix');
+    await expect(dialog).toContainText('Keep current image');
+    await expect(dialog.getByRole('button',{name:'Install reviewed deployment'})).toBeDisabled();
+    await shot(page,'host-updater-custom-images-review',mobile);
+    await dialog.getByRole('checkbox',{name:'Install this custom mix. I understand the risks and have recovery access.'}).check();
+    await dialog.getByRole('button',{name:'Install reviewed deployment'}).click();
+    expect(posts).toEqual([{path:'/api/system/updater/custom-plan',body:{images:refs,acknowledged:true}},{path:'/api/system/updater/apply',body:{plan:'review-plan',custom_acknowledged:true}}]);
+    expect(errors).toEqual([]);
+});
+
+test('custom drafts cannot leak into Simple installation',async({page})=>{
+    const {panel,posts}=await open(page,fixture());await advanced(page);
+    await panel.getByText('Custom images',{exact:true}).click();
+    await page.locator('.ant-segmented').getByText('Simple',{exact:true}).click();
+    await expect(panel.getByText('Custom images',{exact:true})).toHaveCount(0);
+    await page.route('**/api/system/updater/plan',r=>r.fulfill({json:plan(release('release-new'))}));
+    await panel.getByRole('button',{name:'Review update',exact:true}).click();
+    expect(posts).toEqual([{path:'/api/system/updater/plan',body:{deployment:'release-new',pinned:true}}]);
+});
+
+for(const mobile of [false,true])test(`standard branch versus custom image identity ${mobile?'mobile':'desktop'}`,async({page})=>{
+    const data=fixture();for(const r of [data.state.active,...data.state.releases])r.source={...source,track:'custom',branch:customBranch};
+    const {panel}=await open(page,data,mobile);
+    await expect(panel).toContainText('Standard deployment');await expect(panel).toContainText(customBranch);
+    await shot(page,'host-updater-standard-branch',mobile);
+    const mixed={...data,runtime:{...data.runtime,identity:'mixed'},state:{...data.state,custom_images:{gui:{requested:'ghcr.io/mowglinext/mowglinext/mowglinext-gui:dev',reference:'ghcr.io/mowglinext/mowglinext/mowglinext-gui@sha256:'+'1'.repeat(64),image_id:'sha256:'+'2'.repeat(64)}}}};
+    await page.route('**/api/system/updater/state',r=>r.fulfill({json:mixed}));await page.reload();await expect(panel).toContainText('Custom mix');
+    await expect(panel.getByText('Standard deployment',{exact:true})).toHaveCount(0);
+    await expect(page.getByTestId('stack-gui')).toContainText(mixed.state.custom_images.gui.requested);
+    await shot(page,'host-updater-custom-mix',mobile);
 });

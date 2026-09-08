@@ -1,7 +1,7 @@
 import type {ApiInstalledComponent} from '../../api/Api';
 import {imageVersion} from '../../utils/versions';
 import {useEffect, useState} from 'react';
-import {Alert, Button, Card, Checkbox, Form, Input, Modal, Select, Space, Tag, Typography} from 'antd';
+import {Alert, Button, Card, Checkbox, Form, Input, Modal, Select, Segmented, Space, Tag, Typography} from 'antd';
 import {useTranslation} from 'react-i18next';
 import {type Deployment, type UpdatePlan, type UpdatePolicy, componentCompatibility, updaterRequest, useHostUpdater} from '../../hooks/useHostUpdater';
 
@@ -18,6 +18,12 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
     const [rollbackOpen, setRollbackOpen] = useState(false);
     const [busy, setBusy] = useState(false);
     const [failure, setFailure] = useState<string>();
+    const [customMode, setCustomMode] = useState(false);
+    const [customImages, setCustomImages] = useState<Record<string,string>>({});
+    const [customAccepted, setCustomAccepted] = useState(false);
+    const [reviewAccepted, setReviewAccepted] = useState(false);
+    const custom = advanced && customMode;
+    useEffect(() => {if (!advanced) {setCustomMode(false);setCustomImages({});setCustomAccepted(false);setPlan(undefined);}}, [advanced]);
     const savedPolicy = data ? JSON.stringify(data.state.policy) : undefined;
     const installedPin = data?.state.installed_policy?.pinned ?? false;
     useEffect(() => {if (savedPolicy) setPolicy(JSON.parse(savedPolicy) as UpdatePolicy);}, [savedPolicy]);
@@ -38,7 +44,7 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
     const agentTarget = releases.find(r => r.id === agentSelected) ?? target;
     const serviceChoices = target?.service_choices?.filter(c => Object.entries(c.when ?? {}).every(([key,value]) => (data?.runtime?.selection?.[key] ?? 'none') === value));
     const families: Record<string,string> = serviceChoices ? Object.fromEntries(serviceChoices.map(c => [c.service,c.image])) : Object.fromEntries(Object.entries(data?.runtime?.components ?? {}).map(([name,c]) => [name,c.family ?? ({mowgli:'mowgli-ros2',gui:'mowglinext-gui',gps:'gps'} as Record<string,string>)[name] ?? '']));
-    const serviceNames = [...new Set([...Object.keys(data?.runtime?.components ?? {}), ...Object.keys(families)])].sort((a,b) => {const order = ['mowgli','gui','gps','lidar']; return (order.includes(a) ? order.indexOf(a) : 99) - (order.includes(b) ? order.indexOf(b) : 99) || a.localeCompare(b);});
+    const serviceNames = [...new Set([...Object.keys(data?.runtime?.components ?? {}), ...(custom ? [] : Object.keys(families))])].sort((a,b) => {const order = ['mowgli','gui','gps','lidar']; return (order.includes(a) ? order.indexOf(a) : 99) - (order.includes(b) ? order.indexOf(b) : 99) || a.localeCompare(b);});
     const managedNames = new Set(Object.values(data?.runtime?.components ?? {}).map(c => c.name));
     const localComponents = data?.runtime?.components ? inventory.filter(c => !managedNames.has(c.name)) : [];
     const runtime = error ? undefined : data?.runtime;
@@ -46,7 +52,7 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
     const matched = identity === 'matched';
     const dirty = !!policy && JSON.stringify(policy) !== savedPolicy;
     const sameDeployment = !!target && target.id === active?.id && matched && !hasOverrides && !runtime?.selection_pending;
-    const canRestore = data?.state.history.some(j => j.phase === 'succeeded' && j.plan.target.id === data.state.active?.id && (!data.state.active_job_id || j.id === data.state.active_job_id));
+    const canRestore = data?.state.history.some(j => j.phase === 'succeeded' && (data.state.active_job_id ? j.id === data.state.active_job_id : j.plan.target.id === data.state.active?.id));
     const date = (value?: string) => value && !value.startsWith('0001') && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString(undefined, {year:'numeric',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'}) : t('updates.unknown');
     const label = (deployment?: Deployment) => !deployment ? t('hostUpdater.customInstalled') : deployment.source.track === 'stable'
         ? deployment.release_tag || deployment.id : `${deployment.source.track === 'custom' ? deployment.source.branch : t(`hostUpdater.tracks.${deployment.source.track}`)} · ${deployment.revision.slice(0, 8)}`;
@@ -60,6 +66,7 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
             {data && policy && <>
                 <div className="installed-version-heading">
                     <div><Typography.Text type="secondary">{t('hostUpdater.installed')}</Typography.Text><div><Typography.Text strong>{matched ? label(data.state.active) : t(`hostUpdater.identities.${identity}`, {defaultValue: t('hostUpdater.customInstalled')})}</Typography.Text></div></div>
+                    {matched && <Tag color="green">{t('hostUpdater.standardStack')}</Tag>}
                     {installedPin && <Tag>{t('hostUpdater.pinned')}</Tag>}
                 </div>
                 {advanced && matched && active && <Typography.Text type="secondary">{published(active)}</Typography.Text>}
@@ -71,21 +78,31 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                 </Typography.Text>
                 {runtime?.selection_pending && <Alert type="info" showIcon message={t('hostUpdater.selectionPending')}/>}
                 {data.state.check_error && <Alert type="warning" showIcon message={t('hostUpdater.checkFailed')} description={advanced ? data.state.check_error : undefined}/>}
-                {target ? <div>
+                {!custom && (target ? <div>
                     <Typography.Text strong>{sameDeployment ? t('hostUpdater.latestInstalled') : t('hostUpdater.availableVersion')}</Typography.Text>
                     {!sameDeployment && <><div className="available-release">{label(target)}</div><Typography.Text type="secondary">{date(target.published_at)}</Typography.Text><div>{t('hostUpdater.bundleHelp')}</div></>}
-                </div> : <Typography.Text>{t(data.state.last_check && !data.state.last_check.startsWith('0001') ? 'hostUpdater.noBuild' : 'hostUpdater.notChecked')}</Typography.Text>}
+                </div> : <Typography.Text>{t(data.state.last_check && !data.state.last_check.startsWith('0001') ? 'hostUpdater.noBuild' : 'hostUpdater.notChecked')}</Typography.Text>)}
                 {dirty && <Typography.Text type="warning">{t('hostUpdater.unsavedSource')}</Typography.Text>}
+                {advanced && <Segmented block aria-label={t('hostUpdater.imageMode')} value={custom ? 'custom' : 'published'} disabled={pending || busy}
+                    options={[{value:'published',label:t('hostUpdater.publishedMode')},{value:'custom',label:t('hostUpdater.customMode')}]}
+                    onChange={value => {setCustomMode(value === 'custom');setCustomImages({});setCustomAccepted(false);setPlan(undefined);}}/>}
+                {custom && <><Alert type="warning" showIcon message={t('hostUpdater.customWarning')} description={t('hostUpdater.customWarningHelp')}/>
+                    <Typography.Text>{t('hostUpdater.customHelp')}</Typography.Text>
+                    {!data.capabilities?.includes('custom-images') && <Alert type="info" message={t('hostUpdater.customUnsupported')}/>}
+                    <Checkbox checked={customAccepted} onChange={e => setCustomAccepted(e.target.checked)}>{t('hostUpdater.customAccept')}</Checkbox>
+                </>}
                 <Space wrap className="update-actions">
                     <Button disabled={pending} loading={busy} onClick={() => void act(async () => {if (dirty && policy) {await updaterRequest('policy',policy);setSelected(undefined);setComponentSelected({});} await updaterRequest('check', {});})}>{t('hostUpdater.checkNow')}</Button>
-                    <Button type="primary" disabled={pending || !target || dirty || (sameDeployment && (!advanced || pinned === installedPin))} loading={busy} onClick={() => void act(async () => {
-                        if (target) setPlan(await updaterRequest<UpdatePlan>('plan', {deployment: target.id, pinned: advanced ? pinned : installedPin, ...(hasOverrides ? (data.capabilities?.includes('service-version-overrides') ? {component_deployments:Object.fromEntries(Object.entries(overrides).map(([name,r]) => [name,r.id]))} : {gui_deployment:overrides.gui?.id}) : {})}));
-                    })}>{advanced && ['mixed', 'drifted'].includes(identity) && !hasOverrides ? t('hostUpdater.returnMatched') : t('hostUpdater.review')}</Button>
+                    <Button type="primary" disabled={pending || (custom ? !data.capabilities?.includes('custom-images') || !customAccepted || Object.keys(customImages).length === 0 || Object.values(customImages).some(v => !v.trim()) : !target || dirty || (sameDeployment && (!advanced || pinned === installedPin)))} loading={busy} onClick={() => void act(async () => {
+                        setReviewAccepted(false);
+                        if (custom) setPlan(await updaterRequest<UpdatePlan>('custom-plan', {images:customImages,acknowledged:customAccepted}));
+                        else if (target) setPlan(await updaterRequest<UpdatePlan>('plan', {deployment: target.id, pinned: advanced ? pinned : installedPin, ...(hasOverrides ? (data.capabilities?.includes('service-version-overrides') ? {component_deployments:Object.fromEntries(Object.entries(overrides).map(([name,r]) => [name,r.id]))} : {gui_deployment:overrides.gui?.id}) : {})}));
+                    })}>{custom ? t('hostUpdater.downloadReview') : advanced && ['mixed', 'drifted'].includes(identity) && !hasOverrides ? t('hostUpdater.returnMatched') : t('hostUpdater.review')}</Button>
                 </Space>
                 <Typography.Text type="secondary">{t('hostUpdater.lastCheck', {time: date(data.state.last_check)})}</Typography.Text>
                 {!advanced && <Typography.Text type="secondary">{t('hostUpdater.simpleHelp')}</Typography.Text>}
                 {advanced && <Typography.Text type="secondary">{t('hostUpdater.nextCheck', {time: policy.interval_hours ? date(data.state.next_check) : t('hostUpdater.manual')})}</Typography.Text>}
-                {advanced && <Form layout="vertical" className="release-selection">
+                {advanced && !custom && <Form layout="vertical" className="release-selection">
                     <Form.Item label={t('hostUpdater.version')}>
                         <Select classNames={{popup:{root:'update-version-menu'}}} aria-label={t('hostUpdater.version')} value={target?.id} placeholder={t('hostUpdater.noVersions')} disabled={pending || busy || dirty || versions.length === 0}
                             options={versions.map((r,i) => ({value:r.id,label:`${i === 0 && releases.length ? t('hostUpdater.latest')+' · ' : ''}${datedLabel(r)}`}))}
@@ -97,7 +114,7 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                     <div className="update-stack-title"><Typography.Title level={5}>{t('hostUpdater.stack')}</Typography.Title>
                         {advanced && hasOverrides && <Button size="small" onClick={() => setComponentSelected({})}>{t('hostUpdater.resetComponents')}</Button>}
                     </div>
-                    {advanced && <Typography.Paragraph type="secondary">{t('hostUpdater.componentSourceHelp')} {t('hostUpdater.buildDatesHelp')}</Typography.Paragraph>}
+                    {advanced && <Typography.Paragraph type="secondary">{t(custom ? 'hostUpdater.customReferenceHelp' : 'hostUpdater.componentSourceHelp')} {t('hostUpdater.buildDatesHelp')}</Typography.Paragraph>}
                     {serviceNames.length === 0 && <Typography.Text type="secondary">{t('hostUpdater.stackUnavailable')}</Typography.Text>}
                     {serviceNames.map(name => {
                         const running = runtime?.components?.[name]; const family = families[name];
@@ -113,11 +130,15 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                             <div><Typography.Text strong>{component(name)}</Typography.Text> {running && <Tag color={runtime?.health === 'unknown' ? undefined : running.healthy ? 'green' : 'orange'}>{runtime?.health === 'unknown' ? t('updates.unknown') : t(`hostUpdater.health.${running.healthy ? 'healthy' : 'degraded'}`)}</Tag>}
                                 <div className="stack-version"><Typography.Text type="secondary">{t('hostUpdater.running')}: </Typography.Text>{running ? runningVersion : t('hostUpdater.notInstalled')}</div>
                                 {advanced && running && <div className="stack-build-date"><Typography.Text type="secondary">{t('hostUpdater.built')}: {date(info?.built_at)}</Typography.Text></div>}
+                                {data.state.custom_images?.[name] && <div><Tag color="gold">{t('hostUpdater.customMix')}</Tag><Typography.Text code>{data.state.custom_images[name].requested}</Typography.Text></div>}
                                 {data.state.overrides?.[name] && <Tag>{t('hostUpdater.customComponent')}</Tag>}
                                 <details className="stack-image-details"><summary>{t('updates.details')}</summary><Typography.Paragraph code>{running?.reference ?? info?.image ?? family}</Typography.Paragraph><Typography.Paragraph code>{running?.image ?? info?.image_id}</Typography.Paragraph></details>
                             </div>
                             <div className="stack-target">
-                                {advanced && family ? <><Select classNames={{popup:{root:'update-version-menu'}}} aria-label={`${component(name)} ${t('hostUpdater.versionControl')}`} value={target ? overrides[name]?.id ?? '' : undefined} placeholder={t('hostUpdater.noVersions')}
+                                {custom && running ? <><Checkbox aria-label={`${component(name)} ${t('hostUpdater.imageChoice')}`} checked={name in customImages} disabled={pending || busy || !data.capabilities?.includes('custom-images')}
+                                    onChange={e => setCustomImages(current => {const next={...current};if(e.target.checked)next[name]='';else delete next[name];return next;})}>{t('hostUpdater.enterImage')}</Checkbox>
+                                    {name in customImages ? <Input.TextArea autoSize={{minRows:2,maxRows:4}} aria-label={`${component(name)} ${t('hostUpdater.imageReference')}`} placeholder="ghcr.io/owner/repository/image:tag" value={customImages[name]} disabled={pending || busy} onChange={e => setCustomImages(current => ({...current,[name]:e.target.value}))}/> : <Typography.Text type="secondary">{t('hostUpdater.keepImage')}</Typography.Text>}
+                                </> : advanced && family ? <><Select classNames={{popup:{root:'update-version-menu'}}} aria-label={`${component(name)} ${t('hostUpdater.versionControl')}`} value={target ? overrides[name]?.id ?? '' : undefined} placeholder={t('hostUpdater.noVersions')}
                                     disabled={pending || busy || dirty || !target || !supported || noAlternatives}
                                     options={[{value:'',label:t('hostUpdater.followRelease')},...choices.map(({release,reason}) => ({value:release.id,disabled:!!reason,label:datedLabel(release)+(reason ? ` · ${t('hostUpdater.compatibility.'+reason)}` : '')}))]}
                                     onChange={id => setComponentSelected(current => {const next={...current};if(id)next[name]=id;else delete next[name];return next;})}/>
@@ -126,16 +147,16 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                                     {!supported && <Typography.Text type="secondary">{t('hostUpdater.serviceSelectionUnsupported')}</Typography.Text>}
                                     {target && supported && noAlternatives && <Typography.Text type="secondary">{t('hostUpdater.noCompatibleComponent')}</Typography.Text>}
                                 </> : !family && target && <Typography.Text type="secondary">{t('hostUpdater.removedByRelease')}</Typography.Text>}
-                                {selectedRelease && family && advanced && <Typography.Text type="secondary">{t('hostUpdater.selected')}: {label(selectedRelease)}<div>{published(selectedRelease)}</div></Typography.Text>}
+                                {selectedRelease && family && advanced && !custom && <Typography.Text type="secondary">{t('hostUpdater.selected')}: {label(selectedRelease)}<div>{published(selectedRelease)}</div></Typography.Text>}
                             </div>
                         </div>;
                     })}
                     {localComponents.map(c => <div className="update-stack-row local" key={c.name}><div><Typography.Text strong>{t(`updates.components.${c.component}`, {defaultValue:c.name})}</Typography.Text><div>{c.version || imageVersion(c.image ?? '') || t('updates.unknown')}</div></div><Tag>{t('hostUpdater.localService')}</Tag></div>)}
                     <div className="update-stack-row"><div><Typography.Text strong>{t('hostUpdater.agent')}</Typography.Text><div>{data.agent.version}</div><Typography.Text type="secondary">{t('hostUpdater.separateUpdate')}</Typography.Text></div>
-                        <div className="stack-target">{advanced && <Select classNames={{popup:{root:'update-version-menu'}}} aria-label={t('hostUpdater.agentVersion')} value={agentTarget?.id} disabled={pending || busy || dirty || releases.length === 0} placeholder={t('hostUpdater.noVersions')}
+                        <div className="stack-target">{advanced && !custom && <Select classNames={{popup:{root:'update-version-menu'}}} aria-label={t('hostUpdater.agentVersion')} value={agentTarget?.id} disabled={pending || busy || dirty || releases.length === 0} placeholder={t('hostUpdater.noVersions')}
                             options={releases.filter(r => r.updater[data.agent.platform]).map(r => ({value:r.id,label:datedLabel(r)}))} onChange={setAgentSelected}/>}
-                            {advanced && agentTarget && <Typography.Text type="secondary">{published(agentTarget)}</Typography.Text>}
-                            {agentTarget?.updater[data.agent.platform] && agentTarget.updater[data.agent.platform].version !== data.agent.version && <Button disabled={pending || busy || dirty} onClick={() => setAgentPlan(agentTarget)}>{t('hostUpdater.updateAgent')}</Button>}
+                            {advanced && !custom && agentTarget && <Typography.Text type="secondary">{published(agentTarget)}</Typography.Text>}
+                            {!custom && agentTarget?.updater[data.agent.platform] && agentTarget.updater[data.agent.platform].version !== data.agent.version && <Button disabled={pending || busy || dirty} onClick={() => setAgentPlan(agentTarget)}>{t('hostUpdater.updateAgent')}</Button>}
                         </div>
                     </div>
                 </section>
@@ -175,7 +196,8 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
                 {advanced && <details><summary>{t('hostUpdater.history')}</summary>
                     <Typography.Paragraph>{t('hostUpdater.observedAt', {time: date(runtime?.checked_at)})}</Typography.Paragraph>
                     {runtime?.error && <Typography.Paragraph type="warning">{runtime.error}</Typography.Paragraph>}
-                    {data.state.history.map(j => <div key={j.id} className="update-history-entry"><Typography.Text>{date(j.started_at)} · {label(j.plan.target)} · {t(`hostUpdater.phases.${j.phase}`, {defaultValue: j.phase})}</Typography.Text>
+                    {data.state.history.map(j => <div key={j.id} className="update-history-entry"><Typography.Text>{date(j.started_at)} · {j.plan.custom_images ? t('hostUpdater.customMix') : label(j.plan.target)} · {t(`hostUpdater.phases.${j.phase}`, {defaultValue: j.phase})}</Typography.Text>
+                        {Object.entries(j.plan.custom_images ?? {}).map(([name,image]) => <div key={name}>{component(name)}: {image.requested}</div>)}
                         {Object.entries(j.plan.overrides ?? {}).map(([name,r]) => <div key={name}>{component(name)}: {label(r)}</div>)}
                     </div>)}
                 </details>}
@@ -190,13 +212,17 @@ export function HostUpdaterPanel({advanced = false, inventory = []}: {advanced?:
             onOk={() => void act(async () => {await updaterRequest('rollback', {}); setRollbackOpen(false);})}>
             {t('hostUpdater.rollbackHelp')}
         </Modal>
-        <Modal title={t('hostUpdater.review')} open={!!plan} onCancel={() => setPlan(undefined)} okText={t('hostUpdater.install')} confirmLoading={busy}
+        <Modal title={t(plan?.custom_images ? 'hostUpdater.reviewCustom' : 'hostUpdater.review')} open={!!plan} onCancel={() => setPlan(undefined)} okText={t('hostUpdater.install')} confirmLoading={busy} okButtonProps={{disabled: !!plan?.custom_images && !reviewAccepted}}
             style={{top: 24, paddingBottom: 24}} styles={{body: {maxHeight: 'calc(100dvh - 180px)', overflowY: 'auto'}}}
-            onOk={() => void act(async () => {if (plan) {await updaterRequest('apply', {plan: plan.id}); setPlan(undefined);}})}>
+            onOk={() => void act(async () => {if (plan) {await updaterRequest('apply', {plan: plan.id, ...(plan.custom_images ? {custom_acknowledged:reviewAccepted} : {})}); setPlan(undefined);}})}>
             {plan && <Space direction="vertical" size="middle" style={{width: '100%', overflowWrap: 'anywhere'}}>
-                <Typography.Text strong>{label(plan.target)}</Typography.Text>
+                <Typography.Text strong>{plan.custom_images ? t('hostUpdater.customMix') : label(plan.target)}</Typography.Text>
+                {plan.custom_images && <><Alert type="warning" showIcon message={t('hostUpdater.customWarning')} description={t('hostUpdater.customWarningHelp')}/>
+                    {Object.entries(plan.images).map(([name]) => {const image=plan.custom_images?.[name];return <div key={name}><Typography.Text strong>{component(name)}</Typography.Text><div>{image ? image.requested : t('hostUpdater.keepImage')}</div>{image && <><div>{image.version} · {image.repository}</div><Typography.Text code>{image.reference}</Typography.Text><div>{t('hostUpdater.built')}: {date(image.built_at)}</div></>}</div>;})}
+                    <Checkbox checked={reviewAccepted} onChange={e => setReviewAccepted(e.target.checked)}>{t('hostUpdater.customInstallAccept')}</Checkbox>
+                </>}
                 {Object.entries(plan.overrides ?? {}).map(([name,r]) => <Alert key={name} type="info" showIcon message={t('hostUpdater.componentReview',{component:component(name),version:label(r)})}/>)}
-                <Typography.Text type="secondary">{plan.target.source.repository} · {plan.target.source.branch}</Typography.Text>
+                {!plan.custom_images && <Typography.Text type="secondary">{plan.target.source.repository} · {plan.target.source.branch}</Typography.Text>}
                 {plan.stack ? <>
                     <Typography.Text type="secondary">{t('hostUpdater.selectionHelp')}</Typography.Text>
                     <div>{Object.entries(plan.stack.selection.options).map(([key, value]) => <Tag key={key}>{t(`hostUpdater.hardware.${key}`, {defaultValue: key})}: {value === 'none' ? t('hostUpdater.disabled') : value === 'universal' ? t('hostUpdater.enabled') : value}</Tag>)}</div>

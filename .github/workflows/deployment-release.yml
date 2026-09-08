@@ -19,6 +19,9 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       id: ${{ steps.identity.outputs.id }}
+      version: ${{ steps.identity.outputs.version }}
+      built_at: ${{ steps.identity.outputs.built_at }}
+      protocol: ${{ steps.identity.outputs.protocol }}
       release: ${{ steps.identity.outputs.release }}
       branch: ${{ steps.identity.outputs.branch }}
       track: ${{ steps.identity.outputs.track }}
@@ -39,6 +42,15 @@ jobs:
           track=custom; branch="$REF"; release="$id"
           if [[ "$TYPE" == tag && "$REF" == v* ]]; then track=stable; branch=main; release="$REF";
           elif [[ "$REF" == dev ]]; then track=dev; fi
+          version="$id"
+          if [[ "$track" == stable ]]; then
+            [[ "$release" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo 'Production requires vMAJOR.MINOR.PATCH'; exit 1; }
+            version="$release"
+          fi
+          printf 'version=%s\nbuilt_at=%s\n' "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          protocol=$(sed -nE 's/^#define MOWGLI_PROTOCOL_VERSION +([0-9]+).*/\1/p' firmware/stm32/ros_usbnode/include/mowgli_protocol.h)
+          [[ "$protocol" =~ ^[0-9]+$ ]] || exit 1
+          printf 'protocol=%s\n' "$protocol" >> "$GITHUB_OUTPUT"
           printf 'id=%s\nrelease=%s\nbranch=%s\ntrack=%s\n' "$id" "$release" "$branch" "$track" >> "$GITHUB_OUTPUT"
   build:
     needs: identity
@@ -76,10 +88,18 @@ jobs:
           platforms: linux/${{ matrix.arch }}
           build-args: |
             BUILD_REVISION=${{ github.sha }}
-            BUILD_VERSION=${{ needs.identity.outputs.id }}
+            BUILD_VERSION=${{ needs.identity.outputs.version }}
+            BUILD_TIME=${{ needs.identity.outputs.built_at }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.identity.outputs.id }}
+            org.opencontainers.image.version=${{ needs.identity.outputs.version }}
+            org.opencontainers.image.created=${{ needs.identity.outputs.built_at }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            garden.mowgli.image-contract=1
+            garden.mowgli.image-family=${{ matrix.component.name }}
+            garden.mowgli.release=${{ needs.identity.outputs.release }}
+            garden.mowgli.deployment=${{ needs.identity.outputs.id }}
+            garden.mowgli.firmware-protocol=${{ needs.identity.outputs.protocol }}
           outputs: type=image,name=${{ steps.config.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=registry,ref=${{ steps.config.outputs.image }}:deployment-cache-${{ matrix.arch }}
           cache-to: type=registry,ref=${{ steps.config.outputs.image }}:deployment-cache-${{ matrix.arch }},mode=max

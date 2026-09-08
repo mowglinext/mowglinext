@@ -4,6 +4,8 @@
 > Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
 > Loaded on demand from `CLAUDE.md`.
 
+Complete deployment image metadata/versioning: `.github/workflows/deployment-release.yml`, validated before descriptor publication by `gui/cmd/publish-deployment/main.go`. Image contract 1 links immutable bytes to release/version/source/component/protocol; custom-image verification lives in `gui/pkg/updater/image_release.go`.
+
 ## Where to look
 
 | Task | Start here |

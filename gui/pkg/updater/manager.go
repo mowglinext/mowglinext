@@ -148,7 +148,7 @@ func (m *Manager) Check(ctx context.Context, force bool) error {
 				m.state.Notices[i].Dismissed = true
 			}
 		}
-		if len(releases) > 0 && (m.state.Active == nil || m.state.Active.ID != releases[0].ID || len(m.state.Overrides) > 0 || m.runtime.Identity == "drifted" || m.runtime.SelectionPending) {
+		if len(releases) > 0 && (m.state.Active == nil || m.state.Active.ID != releases[0].ID || len(m.state.Overrides) > 0 || len(m.state.CustomImages) > 0 || m.runtime.Identity == "drifted" || m.runtime.SelectionPending) {
 			target := releases[0]
 			kind := "review"
 			if relation == "newer" {
@@ -318,6 +318,9 @@ func (m *Manager) MakeServicePlan(ctx context.Context, id string, pinned bool, r
 	return p, m.save()
 }
 func (m *Manager) Start(id string) (string, error) {
+	return m.StartAcknowledged(id, false)
+}
+func (m *Manager) StartAcknowledged(id string, customAcknowledged bool) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.busy || m.checking || m.state.Job.Pending() {
@@ -332,7 +335,10 @@ func (m *Manager) Start(id string) (string, error) {
 	if plan == nil || m.now().After(plan.ExpiresAt) {
 		return "", errors.New("plan expired; review again")
 	}
-	j := Job{ID: fmt.Sprintf("job-%d", m.now().UnixNano()), Kind: "containers", Phase: "planned", StartedAt: m.now(), Plan: *plan, PreviousPolicy: m.state.Policy, PreviousActive: m.state.Active, PreviousOverrides: m.state.Overrides, PreviousImages: m.state.InstalledImages, PreviousJobID: m.state.ActiveJobID}
+	if len(plan.CustomImages) > 0 && !customAcknowledged {
+		return "", errors.New("confirm the custom image warning before installation")
+	}
+	j := Job{PreviousCustomImages: m.state.CustomImages, ID: fmt.Sprintf("job-%d", m.now().UnixNano()), Kind: "containers", Phase: "planned", StartedAt: m.now(), Plan: *plan, PreviousPolicy: m.state.Policy, PreviousActive: m.state.Active, PreviousOverrides: m.state.Overrides, PreviousImages: m.state.InstalledImages, PreviousJobID: m.state.ActiveJobID}
 	if m.state.InstalledPolicy != nil {
 		j.PreviousPolicy = *m.state.InstalledPolicy
 	}
@@ -374,7 +380,7 @@ func (m *Manager) Rollback() (string, error) {
 		if m.state.ActiveJobID != "" && old.ID != m.state.ActiveJobID {
 			continue
 		}
-		if old.Phase != "succeeded" || old.Backup == "" || m.state.Active == nil || old.Plan.Target.ID != m.state.Active.ID {
+		if old.Phase != "succeeded" || old.Backup == "" || (m.state.ActiveJobID == "" && (m.state.Active == nil || old.Plan.Target.ID != m.state.Active.ID)) {
 			continue
 		}
 		old.ID = fmt.Sprintf("restore-%d", m.now().UnixNano())
@@ -545,6 +551,18 @@ func (m *Manager) run(recovery bool) {
 			m.state.Overrides = j.Plan.Overrides
 			m.state.InstalledImages = installed
 			m.state.Active = &j.Plan.Target
+			m.state.CustomImages = nil
+			if len(j.Plan.CustomImages) > 0 {
+				m.state.Active = j.PreviousActive
+				m.state.Overrides = j.PreviousOverrides
+				m.state.CustomImages = map[string]CustomImage{}
+				for name, image := range j.PreviousCustomImages {
+					m.state.CustomImages[name] = image
+				}
+				for name, image := range j.Plan.CustomImages {
+					m.state.CustomImages[name] = image
+				}
+			}
 			m.state.Policy = j.Plan.Policy
 			m.state.InstalledPolicy = &j.Plan.Policy
 			err = m.save()
@@ -592,6 +610,7 @@ func (m *Manager) run(recovery bool) {
 	m.state.Active = j.PreviousActive
 	m.state.ActiveJobID = j.PreviousJobID
 	m.state.Overrides = j.PreviousOverrides
+	m.state.CustomImages = j.PreviousCustomImages
 	m.state.InstalledImages = j.PreviousImages
 	if m.state.Policy.Source != j.PreviousPolicy.Source {
 		m.state.Releases = []Deployment{}

@@ -38,7 +38,7 @@ func publish() error {
 	contracts := flag.String("component-contracts", "", "JSON map of reviewed per-image drop-in compatibility contracts")
 	protocol := flag.Int("protocol", 0, "firmware protocol")
 	flag.Parse()
-	d := updater.Deployment{Schema: 2, ID: *id, Source: updater.Source{Repository: *repo, Branch: *branch, Track: *track}, Revision: *revision, PublishedAt: time.Now().UTC(), ReleaseTag: *release, Layout: 1, DataSchema: updater.DataSchemaVersion, UpdaterAPI: 1, MaintenanceAPI: 1, GUICompatibility: *guiCompatibility, FirmwareProtocol: *protocol, Images: map[string]updates.Image{}, Updater: map[string]updater.Binary{}}
+	d := updater.Deployment{ImageContract: 1, Schema: 2, ID: *id, Source: updater.Source{Repository: *repo, Branch: *branch, Track: *track}, Revision: *revision, PublishedAt: time.Now().UTC(), ReleaseTag: *release, Layout: 1, DataSchema: updater.DataSchemaVersion, UpdaterAPI: 1, MaintenanceAPI: 1, GUICompatibility: *guiCompatibility, FirmwareProtocol: *protocol, Images: map[string]updates.Image{}, Updater: map[string]updater.Binary{}}
 	if *contracts != "" {
 		if err := json.Unmarshal([]byte(*contracts), &d.ComponentCompatibility); err != nil {
 			return err
@@ -54,7 +54,13 @@ func publish() error {
 		}
 		for _, platform := range []string{"linux/arm64", "linux/amd64"} {
 			p, ok := image.Platforms[platform]
-			if !ok || p.Revision != *revision {
+			expectedVersion := *id
+			if *track == "stable" {
+				expectedVersion = *release
+			}
+			labels := p.Labels
+			_, dateErr := time.Parse(time.RFC3339, labels["org.opencontainers.image.created"])
+			if !ok || p.Revision != *revision || p.Version != expectedVersion || labels["garden.mowgli.image-contract"] != "1" || labels["garden.mowgli.release"] != *release || labels["garden.mowgli.deployment"] != *id || labels["garden.mowgli.image-family"] != name || labels["org.opencontainers.image.source"] != "https://github.com/"+*repo || labels["garden.mowgli.firmware-protocol"] != fmt.Sprint(*protocol) || dateErr != nil || (name == "mowglinext-gui" && labels["garden.mowgli.updater-ui"] != "1") {
 				return fmt.Errorf("incomplete %s %s build", name, platform)
 			}
 		}

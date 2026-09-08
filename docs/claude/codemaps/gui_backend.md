@@ -6,9 +6,9 @@
 
 ## Where to look
 
-Release-owned stack definitions and installer selection: `bundle.go`, `stack.go`, `installer_stack.go`; private topology journals use schema 3.
+Release-owned stack definitions and installer selection: `bundle.go`, `stack.go`, `installer_stack.go`; private topology journals use schema 4.
 
-Host update service membership and ordering: `gui/pkg/updater/services.go`; cached Docker identity/health reconciliation: `runtime.go`; per-family compatibility and release service projection: `component_selection.go`; component plans, schema migration and exact transaction rollback: `manager.go`. Publication build definitions: `install/deployment.json`. See `docs/UPDATES.md` before extending persistence or health contracts.
+Host update service membership and ordering: `gui/pkg/updater/services.go`; cached Docker identity/health reconciliation: `runtime.go`; per-family compatibility and release service projection: `component_selection.go`; component plans, schema migration and exact transaction rollback: `manager.go`. Explicit current-stack image resolution, validation and planning: `custom_images.go`; published descriptor/digest/version verification: `image_release.go`; custom provenance persists separately from the published base. Publication build definitions: `install/deployment.json`. See `docs/UPDATES.md` before extending persistence or health contracts.
 
 
 Installed version and update discovery: `pkg/api/versions.go`, `pkg/api/updates.go`,

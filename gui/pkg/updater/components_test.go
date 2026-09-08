@@ -287,14 +287,15 @@ func TestWorkerDowngradeCannotDiscardComponentProvenance(t *testing.T) {
 	for _, probe := range []string{
 		`{"version":"candidate","api":1}`,
 		`{"version":"candidate","api":1,"state_schema":1}`,
-		`{"version":"wrong","api":1,"state_schema":3}`,
-		`{"version":"candidate","api":2,"state_schema":3}`,
+		`{"version":"candidate","api":1,"state_schema":3}`,
+		`{"version":"wrong","api":1,"state_schema":4}`,
+		`{"version":"candidate","api":2,"state_schema":4}`,
 	} {
 		if validateWorkerProbe([]byte(probe), "candidate") == nil {
 			t.Fatal("accepted incompatible worker", probe)
 		}
 	}
-	if err := validateWorkerProbe([]byte(`{"version":"candidate","api":1,"state_schema":3}`), "candidate"); err != nil {
+	if err := validateWorkerProbe([]byte(`{"version":"candidate","api":1,"state_schema":4}`), "candidate"); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -10,11 +10,12 @@ var RepositoryPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0
 var DigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
 type Platform struct {
-	Manifest string `json:"manifest"`
-	Config   string `json:"config"`
-	Revision string `json:"revision"`
-	Version  string `json:"version,omitempty"`
-	BuiltAt  string `json:"built_at,omitempty"`
+	Labels   map[string]string `json:"labels,omitempty"`
+	Manifest string            `json:"manifest"`
+	Config   string            `json:"config"`
+	Revision string            `json:"revision"`
+	Version  string            `json:"version,omitempty"`
+	BuiltAt  string            `json:"built_at,omitempty"`
 }
 
 type Image struct {

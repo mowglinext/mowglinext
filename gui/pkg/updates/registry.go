@@ -122,7 +122,7 @@ func (r *Registry) Resolve(ctx context.Context, repository, ref string) (Image, 
 		if e = json.Unmarshal(config, &c); e != nil {
 			return "", Platform{}, e
 		}
-		return c.OS + "/" + c.Architecture, Platform{Manifest: digest, Config: m.Config.Digest, Revision: c.Config.Labels["org.opencontainers.image.revision"], Version: c.Config.Labels["org.opencontainers.image.version"], BuiltAt: c.Config.Labels["org.opencontainers.image.created"]}, nil
+		return c.OS + "/" + c.Architecture, Platform{Labels: c.Config.Labels, Manifest: digest, Config: m.Config.Digest, Revision: c.Config.Labels["org.opencontainers.image.revision"], Version: c.Config.Labels["org.opencontainers.image.version"], BuiltAt: c.Config.Labels["org.opencontainers.image.created"]}, nil
 	}
 	if len(index.Manifests) == 0 {
 		arch, p, e := readPlatform(data, image.Digest)

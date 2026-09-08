@@ -19,7 +19,7 @@ status and recovery actions remain visible. The updater service offers its own
 update action only when a different published binary is available.
 
 **Advanced** adds source, repository, branch, check frequency, retained-version
-selection, compatible per-service overrides and pin controls. Installed container identities, web build details,
+selection, compatible per-service overrides and pin controls. Advanced separates **Published releases** from **Custom images**. Installed container identities, web build details,
 manual per-image comparisons and deployment history also live here. The view
 switch changes presentation only: it does not check remotely, install anything
 or change policy. Unsaved source edits must be saved or reset before review.
@@ -197,9 +197,66 @@ nonempty `component_compatibility[image-family]`, layout, data schema, updater A
 maintenance API and firmware protocol. The chosen image must support the host's
 platform. Missing/incompatible contracts disable mixing, not whole releases.
 Legacy GUI assets retain `gui_compatibility` fallback only when neither asset has
-a GUI component contract. No arbitrary image URL, moving tag or cross-source override
-is accepted. This is image selection; a GPS/LiDAR driver change still follows the
+a GUI component contract. This published-release selector never accepts raw image references. Cross-source images use the separate Custom images path described below. This is image selection; a GPS/LiDAR driver change still follows the
 installer options and selected release bundle.
+
+### Advanced custom images
+
+**Custom images** starts from the installed stack, even when no release descriptor
+is available. Each installed managed container has **Keep current image** or
+**Choose custom image**. Enter an explicit Docker tag for its current repository,
+a complete `registry/repository:tag`, or `registry/repository@sha256:digest`.
+`https://` and `docker://` prefixes on registry image paths are accepted;
+web pages, embedded credentials, query strings and insecure HTTP URLs are not.
+Use a branch's **published image tag**, not a GitHub branch page. Branch images
+may come from another repository or registry, but must match an accessible published MowgliNext deployment descriptor. Unpublished branch builds and legacy rolling images are rejected.
+Registry authentication uses the updater service account's Docker configuration;
+there is no browser credential form and no extra registry client dependency.
+
+The user acknowledges image trust and unverified compatibility, then chooses
+**Download and review images**. Docker downloads for the host platform without
+starting candidate containers. The returned digest is inspected instead of the
+mutable tag. OCI source/revision/build time, component family, image contract 1,
+release and deployment identifiers are mandatory. The published, non-draft GitHub
+release descriptor must match the image bytes, platform, family, version, source
+revision and firmware protocol. Production uses `vMAJOR.MINOR.PATCH`; dev/custom
+uses `deployment-<12-char-sha>-<run>-<attempt>`. GUI also requires updater UI 1,
+so an old GUI cannot remove the update interface. Missing or forged-looking
+metadata, a tag alone, or an unrelated image named like a release is insufficient.
+The review pins that immutable reference and shows requested names,
+build dates and kept/changed images. A second explicit acknowledgement enables
+installation. A tag does not become an automatic tracking rule. Scheduled checks
+continue checking published deployments from the configured source.
+
+Custom mode changes images only: installed Compose, hardware selection, services,
+mounts and non-selected image IDs are retained. The whole managed stack still
+stops for consistent backup and restarts/verifies together. GUI/ROS candidates and
+installed rollback images must declare maintenance API 1. Wrong architectures,
+untracked image VOLUME storage, pending installer changes, unmanaged/absent services,
+and a changed review baseline are rejected. Existing fresh readiness, mainboard
+protocol verification, backup, rollback and maintenance recovery remain mandatory.
+The complete-deployment publisher supplies the metadata and validates it on both
+architectures before writing an `image_contract: 1` descriptor. Older component-only
+workflows do not qualify simply because they publish a `dev` or semantic-version
+tag. Use a qualifying complete-deployment image/tag or digest; its version label is
+the production release number or immutable snapshot number. The first release
+containing this publisher and GUI marker establishes the minimum support boundary,
+without guessing an unreleased version number.
+
+No cross-release compatibility contract is invented: image authors must be
+trusted, and checks cannot guarantee API/data-format compatibility or safe behavior.
+Custom images have the container's existing access to hardware, Docker and saved
+state; this is stated before download and again before installation.
+
+A verified complete release is **Standard deployment**, including a complete dev
+or custom-branch release. Published per-component overrides or explicit custom
+image selections are **Custom mix**, with base release (if known) and individual image
+provenance. Manual drift and unknown state remain distinct. Even manually choosing
+the same digest stays a custom selection until a complete published deployment is
+reviewed/installed. Simple cannot inherit custom drafts. Installing a published
+release clears custom overrides; successive custom transactions and rollback retain
+and restore the exact previous mix, including installations without a base release.
+The host updater and unmanaged services such as MQTT use their separate paths.
 
 The publisher derives `service_choices` from that bundle. These provide the UI's
 service/image-family/installer-option projection, including newly introduced services.
@@ -396,10 +453,10 @@ complete published ARM64 deployment remain required before field rollout.
 ### Journal compatibility
 
 The HTTP API remains version 1 with explicit feature capabilities (`release-compose`
-adds topology planning). Journal schema 3 adds private stack/recovery payloads;
-this worker reads schema 1/2 journals and writes schema 3 on mutation, preserving
-history. Older workers reject schema 3. Self-update probes require schema 3 and
-refuse unsafe worker downgrades. Deployment schema 2 requires the Compose bundle;
+adds topology planning; `custom-images` adds explicit image selection). Journal schema 4 adds custom-image provenance and rollback state to schema 3 topology payloads;
+this worker reads schema 1/2/3 journals and writes schema 4 on mutation, preserving
+history. Older workers reject schema 4. Self-update probes require schema 4 and
+refuse unsafe worker downgrades. Existing schema-3 workers require an installer/bootstrap upgrade to this worker before using custom images. Deployment schema 2 requires the Compose bundle;
 legacy schema 1 remains image-only. Workers predating schema 2 releases need the
 installer bootstrap upgrade before discovering those deployments. Keep the current
 worker/backup for recovery; incompatible layouts/data formats require migrations.
@@ -416,7 +473,7 @@ this extension; no robot was changed during this PR extension.
 On a parked mower with blade stopped, stationary wheels, no due mission/schedule,
 a supervising operator and physical emergency stop available: install a matched
 release; select compatible ROS2, GUI and an enabled sensor on the same base; verify every resulting image;
-return to matched; roll back each transaction; then test an installed optional
+return to matched; test a reviewed cross-branch custom GUI/ROS/sensor mix, repeated custom changes and rollback with/without a published base; return to a standard deployment and verify provenance resets; roll back each transaction; then test an installed optional
 service addition/retirement and failure recovery, checking MQTT identity, retained
 volumes and desired/applied installer selections. Perform a supervised interruption
 test only after

@@ -76,7 +76,7 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider) {
 		allowed := op == "state" && c.Request.Method == "GET"
 		if c.Request.Method == "POST" {
 			switch op {
-			case "policy", "check", "plan", "apply", "rollback", "recover", "notice", "agent-update":
+			case "policy", "check", "plan", "custom-plan", "apply", "rollback", "recover", "notice", "agent-update":
 				allowed = true
 			}
 			if !updaterOriginAllowed(c.Request) {
