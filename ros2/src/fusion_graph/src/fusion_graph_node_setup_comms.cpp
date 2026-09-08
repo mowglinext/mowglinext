@@ -133,7 +133,9 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
                                                                     std::placeholders::_1));
   }
 
-  if (use_scan_matching_ || loop_closure_enabled_)
+  // The scan feeds three consumers — consecutive-scan ICP, loop closure and
+  // the LiDAR map anchor — any one of them needs the subscription.
+  if (use_scan_matching_ || loop_closure_enabled_ || use_lidar_map_anchor_)
   {
     // Default to the deskewed scan so the matcher gets rotation-deskew (and,
     // once scan_deskew_node's linear comp is enabled, translation-deskew too).
