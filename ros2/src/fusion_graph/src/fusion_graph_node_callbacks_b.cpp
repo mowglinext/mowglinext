@@ -219,6 +219,7 @@ void FusionGraphNode::OnScan(sensor_msgs::msg::LaserScan::ConstSharedPtr msg)
   std::lock_guard<std::mutex> lock(scan_mu_);
   latest_scan_ = std::move(pts);
   latest_scan_valid_ = !latest_scan_.empty();
+  ++latest_scan_seq_;
   ++scans_received_;
 
   // Cold-boot relocalization: if we autoloaded a graph but never had

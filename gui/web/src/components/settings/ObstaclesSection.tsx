@@ -1,6 +1,7 @@
 import React from "react";
-import { Alert, Card, Col, Form, InputNumber, Row, Typography } from "antd";
+import { Alert, Card, Col, Form, InputNumber, Row, Switch, Typography } from "antd";
 import { useTranslation } from "react-i18next";
+import { parseBoolish } from "../../utils/settingsValues.ts";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 
 const { Paragraph } = Typography;
@@ -14,7 +15,7 @@ type Props = {
 };
 
 /**
- * Obstacles section — operator-tunable obstacle-avoidance margins:
+ * Obstacles section — automatic dig keepouts and obstacle-avoidance margins:
  *   - obstacle_inflation_radius: local-costmap buffer around LiDAR-seen
  *     obstacles (trunks, legs, walls),
  *   - max_obstacle_avoidance_distance: max lateral detour for coverage
@@ -23,7 +24,7 @@ type Props = {
  *     coverage and transit planning (root zones the 2D LiDAR cannot see),
  *   - obstacle_slowdown_ratio: collision_monitor approach slowdown factor.
  * All keys live in mowgli_robot.yaml (sparse over template) and are injected
- * into Nav2/coverage params at launch — changes need a ROS2 restart.
+ * into map server/Nav2/coverage params at launch — changes need a ROS2 restart.
  */
 export const ObstaclesSection: React.FC<Props> = ({
     values,
@@ -52,6 +53,21 @@ export const ObstaclesSection: React.FC<Props> = ({
                 description={t("settingsObstacles.rootZoneHintDescription")}
                 style={{ marginBottom: 16 }}
             />
+
+            <Card size="small" title={t("settingsObstacles.digKeepouts")} style={{ marginBottom: 16 }}>
+                <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
+                    {t("settingsObstacles.digKeepoutsDescription")}
+                </Paragraph>
+                <Form layout="vertical" size="small">
+                    <Form.Item label={fieldLabel("dig_obstacle_enabled", t("settingsObstacles.digAutoPromotion"))}>
+                        <Switch
+                            aria-label={t("settingsObstacles.digAutoPromotion")}
+                            checked={parseBoolish(values.dig_obstacle_enabled) ?? false}
+                            onChange={(enabled) => onChange("dig_obstacle_enabled", enabled)}
+                        />
+                    </Form.Item>
+                </Form>
+            </Card>
 
             {/* Avoidance margins */}
             <Card size="small" title={t("settingsObstacles.avoidanceMargins")} style={{ marginBottom: 16 }}>

@@ -640,3 +640,36 @@ def test_circumscribed_radius_encloses_every_footprint_corner():
     for x in (front, rear):
         for y in (half_width, -half_width):
             assert math.hypot(x, y) <= radius + 1e-9
+
+
+@pytest.mark.parametrize("override", [None, False, True])
+def test_dig_keepout_toggle_reaches_map_server(override):
+    """The GUI's sparse boolean must override map_server.yaml's enabled default."""
+    import ast
+
+    path = _write_sparse({} if override is None else {"dig_obstacle_enabled": override})
+    try:
+        merged = load_robot_params(str(_PKG_DIR), runtime_path=path)
+    finally:
+        os.unlink(path)
+    expected = True if override is None else override
+    assert merged["dig_obstacle_enabled"] is expected
+
+    tree = ast.parse(_MAP_SERVER_LAUNCH.read_text())
+    map_server = next(
+        node.value for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "map_server_node"
+                for target in node.targets)
+    )
+    parameters = next(kw.value for kw in map_server.keywords if kw.arg == "parameters")
+    injected = {}
+    for parameter in parameters.elts:
+        if isinstance(parameter, ast.Dict):
+            for key, value in zip(parameter.keys, parameter.values):
+                if isinstance(key, ast.Constant) and key.value == "dig_obstacle_enabled":
+                    injected[key.value] = eval(
+                        compile(ast.Expression(value), "<launch parameter>", "eval"),
+                        {"robot_params": merged, "bool": bool},
+                    )
+    assert injected["dig_obstacle_enabled"] is expected
