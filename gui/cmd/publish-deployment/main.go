@@ -32,6 +32,7 @@ func publish() error {
 	id := flag.String("id", "", "immutable deployment ID and image tag")
 	release := flag.String("release", "", "release tag")
 	dir := flag.String("assets", "", "binary asset directory")
+	definition := flag.String("definition", "", "build and external component definition JSON")
 	images := flag.String("images", strings.Join(updates.ImageNames, ","), "comma-separated published first-party image families")
 	guiCompatibility := flag.String("gui-compatibility", "", "reviewed GUI/ROS API compatibility contract; empty disables mixed releases")
 	composeDir := flag.String("compose-dir", "../install/compose", "release Compose fragments and shared selection map")
@@ -47,7 +48,29 @@ func publish() error {
 	registry := updates.NewRegistry()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	for _, name := range strings.Split(*images, ",") {
+	components := []componentDefinition{}
+	if *definition != "" {
+		var err error
+		components, err = readComponents(*definition)
+		if err != nil {
+			return err
+		}
+	} else {
+		for _, name := range strings.Split(*images, ",") {
+			components = append(components, componentDefinition{Name: name})
+		}
+	}
+	for _, component := range components {
+		name := component.Name
+		if component.Type == "external" {
+			image, err := resolveExternal(ctx, registry, component)
+			if err != nil {
+				return err
+			}
+			d.Schema = 3
+			d.Images[name] = image
+			continue
+		}
 		image, err := registry.Resolve(ctx, "ghcr.io/"+strings.ToLower(*repo)+"/"+name, *id)
 		if err != nil {
 			return err

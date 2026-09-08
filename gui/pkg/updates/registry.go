@@ -51,18 +51,37 @@ func Read(ctx context.Context, client *http.Client, address, token string) ([]by
 	return data, err
 }
 
-var imagePathPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$`)
+var registryPathPattern = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$`)
+
+// Registry hosts are deliberately bounded; repository metadata cannot redirect authentication.
+func RegistryLocation(repository string) (host, tokenURL, path string, err error) {
+	host, path, ok := strings.Cut(repository, "/")
+	if !ok || !registryPathPattern.MatchString(path) {
+		return "", "", "", fmt.Errorf("unsupported image repository")
+	}
+	switch host {
+	case "ghcr.io":
+		tokenURL = "https://ghcr.io/token?service=ghcr.io"
+	case "docker.io":
+		host = "registry-1.docker.io"
+		tokenURL = "https://auth.docker.io/token?service=registry.docker.io"
+	default:
+		return "", "", "", fmt.Errorf("unsupported image registry")
+	}
+	return host, tokenURL, path, nil
+}
+
 var tagPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
 
 // Resolve reads only registry manifests and image configuration, never layers.
 // Registry and token hosts are fixed; callers cannot supply an arbitrary URL.
 func (r *Registry) Resolve(ctx context.Context, repository, ref string) (Image, error) {
 	image := Image{Repository: repository, Platforms: map[string]Platform{}}
-	path := strings.TrimPrefix(repository, "ghcr.io/")
-	if !strings.HasPrefix(repository, "ghcr.io/") || !imagePathPattern.MatchString(path) || (!tagPattern.MatchString(ref) && !DigestPattern.MatchString(ref)) {
+	host, tokenURL, path, err := RegistryLocation(repository)
+	if err != nil || (!tagPattern.MatchString(ref) && !DigestPattern.MatchString(ref)) {
 		return image, fmt.Errorf("unsupported image reference")
 	}
-	auth, err := Read(ctx, r.Client, "https://ghcr.io/token?service=ghcr.io&scope="+url.QueryEscape("repository:"+path+":pull"), "")
+	auth, err := Read(ctx, r.Client, tokenURL+"&scope="+url.QueryEscape("repository:"+path+":pull"), "")
 	if err != nil {
 		return image, err
 	}
@@ -73,7 +92,7 @@ func (r *Registry) Resolve(ctx context.Context, repository, ref string) (Image, 
 		return image, fmt.Errorf("registry authentication unavailable")
 	}
 	get := func(kind, reference string) ([]byte, error) {
-		data, e := Read(ctx, r.Client, "https://ghcr.io/v2/"+path+"/"+kind+"/"+reference, credentials.Token)
+		data, e := Read(ctx, r.Client, "https://"+host+"/v2/"+path+"/"+kind+"/"+reference, credentials.Token)
 		if e == nil && DigestPattern.MatchString(reference) && Hash(data) != reference {
 			e = fmt.Errorf("registry digest mismatch")
 		}

@@ -44,7 +44,7 @@ func (m *Manager) Handler(config HostConfig) http.Handler {
 		if data, err := os.ReadFile(filepath.Join(config.StateDir, "agent-active.json")); err == nil {
 			_ = json.Unmarshal(data, &selection)
 		}
-		respond(w, map[string]any{"api": APIVersion, "agent": map[string]string{"version": Version, "revision": Revision, "platform": runtime.GOOS + "/" + runtime.GOARCH, "error": selection.Error}, "state": PublicState(m.Snapshot()), "runtime": m.Runtime(), "capabilities": []string{"component-overrides", "declared-services", "release-compose", "service-version-overrides", "custom-images"}, "trusted_repositories": config.Trusted}, nil)
+		respond(w, map[string]any{"api": APIVersion, "agent": map[string]string{"version": Version, "revision": Revision, "platform": runtime.GOOS + "/" + runtime.GOARCH, "error": selection.Error}, "state": PublicState(m.Snapshot()), "runtime": m.Runtime(), "capabilities": []string{"component-overrides", "declared-services", "release-compose", "service-version-overrides", "custom-images", "external-images"}, "trusted_repositories": config.Trusted}, nil)
 	})
 	mux.HandleFunc("POST /v1/policy", func(w http.ResponseWriter, r *http.Request) {
 		var p Policy

@@ -3,6 +3,7 @@ package updater
 import (
 	"context"
 	"encoding/json"
+	"github.com/mowglinext/mowglinext/pkg/updates"
 	"os"
 	"path/filepath"
 	"time"
@@ -67,6 +68,28 @@ func reconcile(s State, components map[string]RunningComponent) RuntimeStatus {
 				if components[name].Image != image {
 					r.Identity = "drifted"
 				}
+			}
+		}
+	}
+	// Upstream images need not carry OCI version labels. Use the release's
+	// approved upstream version only when the actual image matches its bytes.
+	for name, component := range components {
+		selected := s.Active
+		if override, ok := s.Overrides[name]; ok {
+			selected = &override
+		}
+		if selected == nil || s.CustomImages[name].ImageID != "" || component.Version != "" {
+			continue
+		}
+		image := selected.Images[component.Family]
+		if image.Type != "external" {
+			continue
+		}
+		for platform := range image.Platforms {
+			if updates.Matches(image, platform, component.Image, nil) {
+				component.Version = image.Version
+				components[name] = component
+				break
 			}
 		}
 	}

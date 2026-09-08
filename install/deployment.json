@@ -11,36 +11,42 @@
   "components": [
     {
       "name": "mowgli-ros2",
+      "type": "built",
       "context": ".",
       "file": "ros2/Dockerfile",
       "target": "runtime"
     },
     {
       "name": "mowglinext-gui",
+      "type": "built",
       "context": "gui",
       "file": "gui/Dockerfile",
       "target": ""
     },
     {
       "name": "gps",
+      "type": "built",
       "context": ".",
       "file": "sensors/gps/Dockerfile",
       "target": ""
     },
     {
       "name": "lidar-ldlidar",
+      "type": "built",
       "context": "sensors/lidar-ldlidar",
       "file": "sensors/lidar-ldlidar/Dockerfile",
       "target": ""
     },
     {
       "name": "lidar-rplidar",
+      "type": "built",
       "context": "sensors/lidar-rplidar",
       "file": "sensors/lidar-rplidar/Dockerfile",
       "target": ""
     },
     {
       "name": "lidar-stl27l",
+      "type": "built",
       "context": "sensors/lidar-stl27l",
       "file": "sensors/lidar-stl27l/Dockerfile",
       "target": ""

@@ -18,7 +18,7 @@ import (
 const APIVersion = 1
 const LayoutVersion = 1
 const DataSchemaVersion = 1
-const StateSchema = 4
+const StateSchema = 5
 const DefaultCheckIntervalHours = 24
 
 var Version = "development"
@@ -86,10 +86,10 @@ func (d Deployment) Validate(trusted []string) error {
 	if err := d.Source.Validate(trusted); err != nil {
 		return err
 	}
-	if (d.Schema != 1 && d.Schema != 2) || !idPattern.MatchString(d.ID) || !revisionPattern.MatchString(d.Revision) || d.PublishedAt.IsZero() || !idPattern.MatchString(d.ReleaseTag) {
+	if (d.Schema != 1 && d.Schema != 2 && d.Schema != 3) || !idPattern.MatchString(d.ID) || !revisionPattern.MatchString(d.Revision) || d.PublishedAt.IsZero() || !idPattern.MatchString(d.ReleaseTag) {
 		return errors.New("invalid deployment identity or schema")
 	}
-	if d.Schema == 2 && (d.Bundle == nil || d.Bundle.Asset != "mowgli-compose.json" || !updates.DigestPattern.MatchString("sha256:"+d.Bundle.SHA256)) {
+	if d.Schema >= 2 && (d.Bundle == nil || d.Bundle.Asset != "mowgli-compose.json" || !updates.DigestPattern.MatchString("sha256:"+d.Bundle.SHA256)) {
 		return errors.New("deployment requires a valid Compose bundle")
 	}
 	if d.Schema == 1 && d.Bundle != nil {
@@ -120,11 +120,30 @@ func (d Deployment) Validate(trusted []string) error {
 		}
 	}
 	for name, image := range d.Images {
-		if !imageNamePattern.MatchString(name) || image.Repository != "ghcr.io/"+strings.ToLower(d.Source.Repository)+"/"+name || !updates.DigestPattern.MatchString(image.Digest) {
+		if !imageNamePattern.MatchString(name) || !updates.DigestPattern.MatchString(image.Digest) {
+			return fmt.Errorf("invalid image %s", name)
+		}
+		external := image.Type == "external"
+		if image.Type != "" && image.Type != "built" && !external {
+			return fmt.Errorf("unknown image type for %s", name)
+		}
+		if external {
+			if d.Schema < 3 || name == "mowgli-ros2" || name == "mowglinext-gui" || !idPattern.MatchString(image.Version) {
+				return fmt.Errorf("invalid external component %s", name)
+			}
+			if _, _, _, err := updates.RegistryLocation(image.Repository); err != nil {
+				return err
+			}
+			for _, arch := range []string{"linux/amd64", "linux/arm64"} {
+				if _, ok := image.Platforms[arch]; !ok {
+					return fmt.Errorf("missing external platform %s", arch)
+				}
+			}
+		} else if image.Repository != "ghcr.io/"+strings.ToLower(d.Source.Repository)+"/"+name {
 			return fmt.Errorf("invalid image %s", name)
 		}
 		for platform, p := range image.Platforms {
-			if platform != "linux/arm64" && platform != "linux/amd64" || !updates.DigestPattern.MatchString(p.Manifest) || !updates.DigestPattern.MatchString(p.Config) || p.Revision != d.Revision {
+			if platform != "linux/arm64" && platform != "linux/amd64" || !updates.DigestPattern.MatchString(p.Manifest) || !updates.DigestPattern.MatchString(p.Config) || (!external && p.Revision != d.Revision) {
 				return fmt.Errorf("invalid platform or source for %s", name)
 			}
 		}

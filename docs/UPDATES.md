@@ -347,7 +347,7 @@ services:
       garden.mowgli.update.health: container
 ```
 
-`image` opts in and identifies a first-party image family in the release asset.
+`image` opts in and identifies a declared image family in the release asset.
 `after` is a comma-separated list of installed managed dependencies; missing
 references and cycles reject the plan. Core sensor → ROS2 → GUI ordering cannot
 be disabled. Shutdown reverses that order. `health` supports `container`, `gps`
@@ -357,7 +357,7 @@ unlabelled standard installations retain their original role mappings.
 
 Every installed managed service must have a target image for the host architecture
 in the reviewed release. An unknown/missing image fails the plan before pulling or
-stopping containers. Images must remain in the trusted source's GHCR namespace.
+stopping containers. Built images must remain in the trusted source's GHCR namespace; explicitly declared external images use their release-approved upstream repository and digest.
 The workflow uses the single build-definition list for its matrix, image merging
 and publication. No updater source edit is needed for a new stateless first-party
 container with an existing health contract.
@@ -368,8 +368,7 @@ already supported data destinations (`/db`, `/mowgli_config`, `/ros2_ws/maps`,
 the plan. Container writable layers are disposable. Unmanaged containers must not
 write shared managed data. New persistence or application-health contracts require
 an explicit updater implementation and recovery tests; labels are not arbitrary
-backup paths or executable hooks. Adding unrelated third-party image namespaces
-is intentionally outside this first-party release model.
+backup paths or executable hooks. External image declarations do not expand these storage or health contracts.
 
 `install/deployment.json` also declares `component_compatibility` per image family.
 These are maintainer-reviewed drop-in compatibility promises covering **all consumed
@@ -381,6 +380,78 @@ protocols alone never establish compatibility. Maintaining these promises requir
 mixed-version integration tests, including changed consumers and producers. A new
 service can join whole releases without a contract; it needs one for independent
 version selection.
+
+## External images in standard deployments
+
+`install/deployment.json` accepts two component types. `type: "built"` (also the
+legacy default when omitted) builds from `context`, `file` and optional `target`.
+`type: "external"` approves an existing upstream image without rebuilding or
+relabeling it. Add an entry to `components`, for example (replace placeholders
+with the reviewed upstream version and 64-character SHA-256 index digest):
+
+```json
+{
+  "name": "helper",
+  "type": "external",
+  "image": "docker.io/library/<image-name>",
+  "version": "<approved-upstream-version>",
+  "digest": "sha256:<approved-index-digest>"
+}
+```
+
+Use a canonical repository without tag, scheme or credentials. Public Docker Hub
+(`docker.io/library/name` or `docker.io/owner/name`) and GHCR (`ghcr.io/owner/name`,
+including nested paths) are supported. Other registries and private authenticated
+publication require a separate extension. The digest is mandatory: the publisher
+never resolves `latest` or another floating tag for external components.
+
+Add the service's Compose fragment to the required list or an optional group in
+`install/compose/stack.json`, with `garden.mowgli.update.image: helper` identifying
+this component. Configuration, device access, dependency ordering, health and
+storage are reviewed in that fragment using the same existing constraints as
+built services. A component definition alone does not enable a container.
+The installer continues selecting the same release-owned Compose bundle; no
+separate installer-only container list is introduced.
+
+The workflow excludes external entries from build/merge jobs. Before publishing,
+`publish-deployment --definition ../install/deployment.json` resolves each approved
+index, checks manifest/config hashes and requires both linux/amd64 and linux/arm64.
+It retains original OCI labels, revision, version and build time when supplied,
+and separately records the maintainer-approved upstream `version`. External images
+need not impersonate our source revision, firmware protocol or updater UI labels.
+Core GUI and ROS2 cannot be declared external; their existing updater/maintenance
+requirements remain enforced. All images must validate before the descriptor is
+published. No upstream container code runs during this metadata check.
+
+A release containing external components uses deployment schema 3. Each external
+`images` entry records `type`, approved `version`, upstream `repository`, index
+`digest` and platform manifest/config identities. The trusted MowgliNext release
+approves those exact bytes; upstream labels alone do not establish eligibility.
+Older workers reject the new deployment schema. Journal schema 5 prevents older
+workers from discarding this provenance when saving or recovering state; upgrade
+the worker with the installer/bootstrap path first and preserve its paired state
+backup when reverting to an older worker.
+
+Matching every installed managed image to that release is still **Standard
+deployment**. An external component without an OCI version label displays the
+approved upstream version only after its actual image identity matches the
+installed release (or its recorded component override). Drift does not acquire
+that version. Build dates are never synthesized from publication dates.
+
+Scheduled checks follow complete MowgliNext releases, not upstream tags. A new
+external version is proposed by changing its approved version/digest in the build
+definition and publishing a new deployment. Independent published component choices
+still require the existing compatibility contract. Raw Custom images retain their
+first-party release eligibility rules; declaring an external component does not
+create a general-purpose third-party image installation endpoint.
+
+External services participate in the same reviewed add/update/remove transaction,
+backup, verification and rollback. Existing local services cannot be silently
+adopted. This adds no default MQTT/MAVROS service and does not make their existing
+persistence/hardware integrations update-compatible: MQTT data storage needs a
+reviewed supported migration; MAVROS needs its backend/maintenance integration.
+Before physical use of any new component, follow the acceptance procedure below,
+recording its index/platform/config digests and relevant hardware baseline.
 
 ## Recovery and updater self-updates
 
@@ -453,10 +524,10 @@ complete published ARM64 deployment remain required before field rollout.
 ### Journal compatibility
 
 The HTTP API remains version 1 with explicit feature capabilities (`release-compose`
-adds topology planning; `custom-images` adds explicit image selection). Journal schema 4 adds custom-image provenance and rollback state to schema 3 topology payloads;
-this worker reads schema 1/2/3 journals and writes schema 4 on mutation, preserving
-history. Older workers reject schema 4. Self-update probes require schema 4 and
-refuse unsafe worker downgrades. Existing schema-3 workers require an installer/bootstrap upgrade to this worker before using custom images. Deployment schema 2 requires the Compose bundle;
+adds topology planning; `custom-images` adds explicit image selection; `external-images` supports release-approved upstream images). Journal schema 5 preserves external-image type and approved upstream version alongside custom-image provenance and topology recovery payloads.
+This worker reads schema 1/2/3/4 journals and writes schema 5 on mutation, preserving
+history. Older workers reject schema 5. Self-update probes require schema 5 and
+refuse unsafe worker downgrades. Existing workers using earlier journal schemas require an installer/bootstrap upgrade before using this extension. Deployment schemas 2 and 3 require the Compose bundle; schema 3 adds managed external images and is rejected by older workers.
 legacy schema 1 remains image-only. Workers predating schema 2 releases need the
 installer bootstrap upgrade before discovering those deployments. Keep the current
 worker/backup for recovery; incompatible layouts/data formats require migrations.

@@ -19,6 +19,8 @@ type Platform struct {
 }
 
 type Image struct {
+	Type       string              `json:"type,omitempty"`
+	Version    string              `json:"version,omitempty"`
 	Repository string              `json:"repository"`
 	Digest     string              `json:"digest"`
 	Platforms  map[string]Platform `json:"platforms"`

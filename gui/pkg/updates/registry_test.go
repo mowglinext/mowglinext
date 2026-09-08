@@ -72,3 +72,46 @@ func TestImageComparisonNeverUsesSourceRevisionAsIdentity(t *testing.T) {
 		t.Fatal("compared unrelated identities/platforms")
 	}
 }
+
+func TestDockerHubResolutionChecksEveryDigest(t *testing.T) {
+	config := `{"architecture":"amd64","os":"linux","config":{}}`
+	manifest := `{"config":{"digest":"` + Hash([]byte(config)) + `"}}`
+	digest := Hash([]byte(manifest))
+	tamper := false
+	registry := Registry{Client: &http.Client{Transport: transportFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "auth.docker.io" && req.URL.Path == "/token" {
+			if req.Header.Get("Authorization") != "" || req.URL.Query().Get("scope") != "repository:library/example:pull" {
+				t.Fatal("incorrect authentication scope")
+			}
+			return response(`{"token":"example"}`), nil
+		}
+		if req.URL.Host != "registry-1.docker.io" || req.Header.Get("Authorization") != "Bearer example" {
+			t.Fatal("unexpected authenticated endpoint", req.URL)
+		}
+		switch req.URL.Path {
+		case "/v2/library/example/manifests/" + digest:
+			if tamper {
+				return response(manifest + " "), nil
+			}
+			return response(manifest), nil
+		case "/v2/library/example/blobs/" + Hash([]byte(config)):
+			return response(config), nil
+		default:
+			t.Fatal("unexpected request", req.URL)
+			return nil, nil
+		}
+	})}}
+	got, err := registry.Resolve(context.Background(), "docker.io/library/example", digest)
+	if err != nil || got.Platforms["linux/amd64"].Config != Hash([]byte(config)) {
+		t.Fatal(got, err)
+	}
+	tamper = true
+	if _, err = registry.Resolve(context.Background(), "docker.io/library/example", digest); err == nil {
+		t.Fatal("accepted changed index bytes")
+	}
+	for _, repo := range []string{"localhost/library/image", "docker.io/library/image:latest", "docker.io/library/image?x=1", "docker.io/../image", "docker.io/user@host/image", "https://docker.io/library/image"} {
+		if _, _, _, err := RegistryLocation(repo); err == nil {
+			t.Fatal("accepted invalid repository", repo)
+		}
+	}
+}

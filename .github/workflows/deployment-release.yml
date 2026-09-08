@@ -29,7 +29,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - id: components
-        run: echo "value=$(jq -c '.components' install/deployment.json)" >> "$GITHUB_OUTPUT"
+        run: |
+          components=$(jq -c '[.components[] | select(.type == null or .type == "" or .type == "built")]' install/deployment.json)
+          echo "value=$components" >> "$GITHUB_OUTPUT"
       - id: identity
         env:
           REF: ${{ github.ref_name }}
@@ -147,7 +149,7 @@ jobs:
           BRANCH: ${{ needs.identity.outputs.branch }}
           TRACK: ${{ needs.identity.outputs.track }}
         run: |
-          for component in $(jq -r '.components[].name' install/deployment.json); do
+          for component in $(jq -r '.components[] | select(.type == null or .type == "" or .type == "built") | .name' install/deployment.json); do
             image="ghcr.io/${REPO,,}/$component"
             docker buildx imagetools create -t "$image:$DEPLOYMENT" "$image@$(cat "digests/$component-amd64")" "$image@$(cat "digests/$component-arm64")"
           done
@@ -158,7 +160,7 @@ jobs:
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w -X github.com/mowglinext/mowglinext/pkg/updater.Version=$DEPLOYMENT -X github.com/mowglinext/mowglinext/pkg/updater.Revision=$REVISION" -o "../dist/mowgli-updater-linux-$arch" ./cmd/mowgli-updater
           done
-          go run ./cmd/publish-deployment --repository "$REPO" --branch "$BRANCH" --track "$TRACK" --revision "$REVISION" --id "$DEPLOYMENT" --release "$RELEASE" --assets ../dist --compose-dir ../install/compose --protocol "$protocol" --images "$(jq -r '.components | map(.name) | join(",")' ../install/deployment.json)" --component-contracts "$(jq -c .component_compatibility ../install/deployment.json)" --gui-compatibility "$(jq -r .gui_compatibility ../install/deployment.json)"
+          go run ./cmd/publish-deployment --repository "$REPO" --branch "$BRANCH" --track "$TRACK" --revision "$REVISION" --id "$DEPLOYMENT" --release "$RELEASE" --assets ../dist --compose-dir ../install/compose --protocol "$protocol" --definition ../install/deployment.json --component-contracts "$(jq -c .component_compatibility ../install/deployment.json)" --gui-compatibility "$(jq -r .gui_compatibility ../install/deployment.json)"
           cd ../dist
           sha256sum mowgli-updater-linux-* > updater-SHA256SUMS
           if [[ "$TRACK" == stable ]]; then
