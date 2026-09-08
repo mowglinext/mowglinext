@@ -31,8 +31,8 @@ var topicMap = map[string]topicDef{
 	// One-click dock calibration live status (the GUI's foxglove-friendly
 	// window into the CalibrateDock action — foxglove_bridge has no action op).
 	"dockCalibrationStatus": {"/calibrate_imu_yaw_node/dock_calibration/status", "mowgli_interfaces/msg/DockCalibrationStatus"},
-	"gps":             {"/gps/fix", "sensor_msgs/msg/NavSatFix"},
-	"gnssStatus":      {"/gps/status", "mowgli_interfaces/msg/GnssStatus"},
+	"gps":                   {"/gps/fix", "sensor_msgs/msg/NavSatFix"},
+	"gnssStatus":            {"/gps/status", "mowgli_interfaces/msg/GnssStatus"},
 	// The robot's global pose comes from fusion_graph_node, the sole
 	// map-frame localizer. "pose" and "fusionRaw" both point at
 	// /odometry/filtered_map; the duplicate key is kept for backwards
@@ -440,13 +440,6 @@ func (r *RosProvider) pollMap() {
 		navAreas = []mowgli.MapArea{}
 	}
 
-	// Read cached docking pose (written by initDockPoseSubscription)
-	r.mtx.Lock()
-	dockX := r.dockX
-	dockY := r.dockY
-	dockHeading := r.dockHeading
-	r.mtx.Unlock()
-
 	mapData := mowgli.Map{
 		MapWidth:        20.0,
 		MapHeight:       20.0,
@@ -454,10 +447,8 @@ func (r *RosProvider) pollMap() {
 		MapCenterY:      0.0,
 		NavigationAreas: navAreas,
 		WorkingArea:     workingAreas,
-		DockX:           dockX,
-		DockY:           dockY,
-		DockHeading:     dockHeading,
 	}
+	r.addDockPose(&mapData)
 
 	data, err := json.Marshal(mapData)
 	if err != nil {
