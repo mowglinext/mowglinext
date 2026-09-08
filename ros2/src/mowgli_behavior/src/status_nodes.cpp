@@ -153,6 +153,34 @@ BT::NodeStatus ClearCommand::tick()
 }
 
 // ---------------------------------------------------------------------------
+// MarkGuardHalt
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus MarkGuardHalt::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  auto reason = getInput<std::string>("reason");
+  if (!reason)
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "MarkGuardHalt: missing required port 'reason': %s",
+                 reason.error().c_str());
+    return BT::NodeStatus::FAILURE;
+  }
+  // Log only on the first tick of a halt — the handler re-runs every tick
+  // while the fault holds, and the guard already logs its own condition.
+  if (!ctx->guard_halted_reason.has_value())
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "MarkGuardHalt: guard '%s' is halting the tree — the interrupted pass will "
+                "not be charged to the area's no-progress budget",
+                reason.value().c_str());
+  }
+  ctx->guard_halted_reason = reason.value();
+  return BT::NodeStatus::SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
 // EndSession
 // ---------------------------------------------------------------------------
 
@@ -190,6 +218,11 @@ BT::NodeStatus EndSession::tick()
   ctx->coverage_start_blocked = false;
   ctx->start_blocked_area.reset();
   ctx->area_start_blocked_count.clear();
+  // Guard-halted bookkeeping is per-session for the same reason: a stale
+  // guard_halted_reason would exempt the new session's first dispatch for a
+  // pause that happened last session.
+  ctx->guard_halted_reason.reset();
+  ctx->area_guard_halt_count.clear();
   // SAFETY (issue #487 escape motion): disarm the escape and forget the
   // last-motion direction at the session boundary. A token or a direction that
   // survived into the next session would describe a pose the robot may no

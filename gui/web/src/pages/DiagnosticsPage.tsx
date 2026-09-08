@@ -183,10 +183,11 @@ export const DiagnosticsPage = () => {
     const {modal} = App.useApp();
     const {snapshot, loading, error: snapshotError, refresh} = useDiagnosticsSnapshot();
     const {diagnostics} = useDiagnostics();
-    // Panels are collapsed by default; track which are open so high-rate
-    // sensor subscriptions exist only while their panel is on screen.
+    // Mobile uses collapsible panels; desktop shows sensors in the Robot tab.
+    // Subscribe to the high-rate IMU stream only in the visible sensor view.
     const [openPanels, setOpenPanels] = useState<string[]>([]);
-    const sensorsPanelOpen = openPanels.includes("sensors");
+    const [activeTab, setActiveTab] = useState("system");
+    const sensorsPanelOpen = isMobile ? openPanels.includes("sensors") : activeTab === "robot";
     const imu = useImu(sensorsPanelOpen);
     const {settings} = useSettings();
     const guiApi = useApi();
@@ -2099,7 +2100,7 @@ export const DiagnosticsPage = () => {
             {healthHero}
             {healthBar}
             {sectionAlerts}
-            <Tabs defaultActiveKey="system" items={tabItems} size="large"/>
+            <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} size="large"/>
         </Space>
     );
 };

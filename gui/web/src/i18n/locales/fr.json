@@ -2399,6 +2399,9 @@
     "temperatureThresholdsNote": "La température du moteur de lame est uniquement mesurée et rapportée — aucune couche de la pile n’arrête la lame en fonction de la température. Les seuils d’alerte et d’erreur utilisés par les diagnostics (motor_temp_warn_c et motor_temp_error_c, dans mowgli_monitoring/config/diagnostics.yaml) se modifient sur la page Paramètres."
   },
   "settingsObstacles": {
+    "digKeepouts": "Obstacles de patinage",
+    "digAutoPromotion": "Créer automatiquement des zones d’exclusion de patinage",
+    "digKeepoutsDescription": "Crée une zone d’exclusion temporaire lorsqu’un patinage est détecté dans une zone de tonte. Acceptez la proposition sur la carte pour la conserver. Si désactivé, aucune zone d’exclusion de patinage n’est créée ; la détection, l’arrêt et la récupération restent actifs. Enregistrez et redémarrez ROS2 pour appliquer.",
     "rootZoneHintTitle": "Arbres avec de grosses racines ?",
     "rootZoneHintDescription": "Le LiDAR 2D ne voit pas les racines sous son plan de scan (~10–20 cm). Dessinez l'arbre comme obstacle dans l'éditeur de carte et augmentez la marge des obstacles dessinés pour que la tonte et les transits restent hors de la zone de racines.",
     "avoidanceMargins": "Marges d'évitement",

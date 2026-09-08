@@ -79,6 +79,13 @@
            the operator is the safety in manual modes. Firmware remains the
            sole hard e-stop authority (invariant 9); this guard is the
            software-side blade-off that was missing.
+           The halt is a PAUSE, not a failure: MarkGuardHalt flags the
+           interrupted pass so GetNextUnmowedArea does not charge the
+           re-dispatch to the per-area no-progress budget. Field 2026-09-07/08:
+           a flaky LiDAR serial link tripped IsScanStale every few seconds and
+           three halts in 25 s exhausted the five attempts — the mow
+           "completed" with 0 swaths. A permanently dead scanner is still held
+           here, blade off, for as long as the fault lasts.
            ================================================================ -->
       <ReactiveFallback name="SensorSafetyGuard">
         <IsCharging/>
@@ -98,6 +105,13 @@
           </Fallback>
         </Inverter>
         <Sequence name="SensorFaultHandler">
+          <!-- FIRST child on purpose: the Root is already halted the tick
+               this handler starts, but the ReactiveFallback halts this
+               Sequence the moment the fault clears — a sub-1.5 s blip would
+               never get past StopMoving (0.5 s) + WaitForDuration (1 s) to a
+               marker placed at the end, and the pass would be charged after
+               all. Pure context write, no motion; idempotent across re-ticks. -->
+          <MarkGuardHalt reason="scan_stale"/>
           <SetMowerEnabled enabled="false"/>
           <StopMoving/>
           <WaitForDuration duration_sec="1.0"/>
@@ -256,6 +270,11 @@
            operator-supervised; HOME + the blade-off dock transit must not
            be stranded mid-return by a GPS outage (docking itself is
            charger-detection based).
+           Like SensorSafetyGuard, this pause must never FAIL the mow:
+           MarkGuardHalt flags the interrupted pass so GetNextUnmowedArea
+           re-dispatches the area without charging its no-progress budget
+           (field 2026-09-07/08 — repeated "Localization degraded … pausing"
+           halts retired the area at 0 swaths).
            ================================================================ -->
       <ReactiveFallback name="LocalizationGuard">
         <IsCharging/>
@@ -275,6 +294,11 @@
              tick, so the guard releases within one tick of the hysteresis
              clearing and the resume-cursor machinery continues the strip. -->
         <Sequence name="LocalizationDegradedHandler">
+          <!-- FIRST child, same reasoning as SensorFaultHandler: the
+               ReactiveFallback halts this Sequence as soon as σ recovers, so
+               a marker after the 2 s WaitForDuration would miss every short
+               pause. Pure context write, no motion; idempotent. -->
+          <MarkGuardHalt reason="localization_degraded"/>
           <SetMowerEnabled enabled="false"/>
           <StopMoving/>
           <PublishHighLevelStatus state="2" state_name="WAITING_FOR_RTK"/>

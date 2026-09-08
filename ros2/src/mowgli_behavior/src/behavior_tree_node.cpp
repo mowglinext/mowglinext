@@ -1084,6 +1084,8 @@ private:
       context_->coverage_start_blocked = false;
       context_->start_blocked_area.reset();
       context_->area_start_blocked_count.clear();
+      context_->guard_halted_reason.reset();
+      context_->area_guard_halt_count.clear();
       // Disarm the #487 escape motion too — see EndSession for why.
       context_->start_blocked_escape_armed = false;
       clearCoverageResumeState(*context_);

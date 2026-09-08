@@ -1776,6 +1776,44 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
                 blocked_n);
   }
 
+  // Field 2026-09-07/08: the PREVIOUS pass was not aborted by the field but
+  // INTERRUPTED by a Root guard (IsScanStale on a flaky LiDAR serial link,
+  // LocalizationGuard on a σ spike) halting the tree — FollowStrip saved its
+  // resume cursor and the guard released. That pass never had a chance to make
+  // progress either, and charging it retired a mowable field after three
+  // scan-stale halts in 25 s ("completed" with 0 swaths). A transient sensor
+  // fault must PAUSE a mow, never fail it. Exempt it — bounded only by the
+  // generous kMaxGuardHaltedPasses (a dead sensor is held by the guard itself;
+  // this cap merely stops a pathological flap from re-dispatching forever).
+  const std::optional<std::string> guard_reason = ctx->guard_halted_reason;
+  ctx->guard_halted_reason.reset();  // consume: it describes ONE finished pass
+  if (guard_reason.has_value())
+  {
+    auto& halted_n = ctx->area_guard_halt_count[current_area_idx_];
+    if (halted_n < BTContext::kMaxGuardHaltedPasses)
+    {
+      halted_n++;
+      setOutput("area_index", current_area_idx_);
+      ctx->current_area = static_cast<int>(current_area_idx_);
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "GetNextUnmowedArea: area %u re-dispatched after a pass interrupted by guard "
+                  "'%s' (%u/%u) — no-progress budget NOT charged (still %u/%u)",
+                  current_area_idx_,
+                  guard_reason->c_str(),
+                  halted_n,
+                  BTContext::kMaxGuardHaltedPasses,
+                  ctx->area_attempt_count[current_area_idx_],
+                  BTContext::kMaxAreaAttempts);
+      return BT::NodeStatus::SUCCESS;
+    }
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "GetNextUnmowedArea: area %u interrupted by guard '%s' again after %u exempted "
+                "passes — charging it to the no-progress budget from now on",
+                current_area_idx_,
+                guard_reason->c_str(),
+                halted_n);
+  }
+
   auto& n = ctx->area_attempt_count[current_area_idx_];
   auto last_it = ctx->area_last_coverage.find(current_area_idx_);
   const bool made_progress = (last_it == ctx->area_last_coverage.end()) ||

@@ -198,7 +198,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             "obstacle_inflation_radius", "max_obstacle_avoidance_distance",
             "obstacle_clearance_margin", "obstacle_detection_range_m",
             "obstacle_wait_timeout_s",
-            "obstacle_margin", "obstacle_slowdown_ratio",
+            "obstacle_margin", "obstacle_slowdown_ratio", "dig_obstacle_enabled",
         ],
     },
     {

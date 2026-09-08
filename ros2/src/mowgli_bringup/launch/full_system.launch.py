@@ -398,6 +398,10 @@ def generate_launch_description() -> LaunchDescription:
                     float(robot_params.get("chassis_width", 0.40)) / 2.0))},
             {"max_obstacle_avoidance_distance":
                 float(robot_params.get("max_obstacle_avoidance_distance", 2.0))},
+            # GUI toggle for session-only dig proposals; detection/recovery
+            # remain owned by hardware_bridge regardless of this map setting.
+            {"dig_obstacle_enabled": bool(
+                robot_params.get("dig_obstacle_enabled", True))},
             # Extra LETHAL margin grown around drawn obstacle polygons in the
             # keepout mask — mirrors coverage_server.obstacle_margin (injected
             # by navigation.launch.py) so the transit planner and the swath

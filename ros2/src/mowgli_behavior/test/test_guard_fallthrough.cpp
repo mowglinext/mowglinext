@@ -57,6 +57,7 @@
 #include <regex>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
@@ -323,6 +324,47 @@ TEST(GuardFallthroughTest, AllBlockingGuardsTerminateWithFailure)
            "handler can return SUCCESS lets the Root ReactiveSequence advance "
            "into MainLogic for one tick per cycle, restarting MowingSequence "
            "from PREFLIGHT_CHECK/UNDOCKING (issues #459, #445).";
+  }
+}
+
+// The guards whose halt interrupts a mowing PASS (as opposed to ending the
+// session — emergency, boundary, rain, battery, dig obstruction) must tick
+// <MarkGuardHalt/> as the FIRST child of their handler Sequence, or every
+// pause is charged to GetNextUnmowedArea's per-area no-progress budget and a
+// flapping sensor fails the mow at 0 swaths (field 2026-09-07 / 2026-09-08:
+// three IsScanStale halts in 25 s exhausted the five attempts). First, not
+// merely before <AlwaysFailure/>: the ReactiveFallback halts the handler the
+// moment the fault clears, so a marker behind StopMoving + WaitForDuration
+// would miss every pause shorter than their combined duration.
+TEST(GuardFallthroughTest, PausingGuardsMarkTheHaltFirst)
+{
+  const std::string xml = ReadMainTree();
+  ASSERT_FALSE(xml.empty());
+
+  for (const auto& [guard, reason] : std::vector<std::pair<std::string, std::string>>{
+           {"SensorSafetyGuard", "scan_stale"}, {"LocalizationGuard", "localization_degraded"}})
+  {
+    const std::string block = ExtractGuardBlock(xml, guard);
+    ASSERT_FALSE(block.empty()) << "Guard not found in main_tree.xml: " << guard;
+    const std::size_t mark = block.find("<MarkGuardHalt reason=\"" + reason + "\"/>");
+    ASSERT_NE(mark, std::string::npos)
+        << guard << " does not tick <MarkGuardHalt reason=\"" << reason
+        << "\"/> — its pauses would be charged to the no-progress budget and retire the area.";
+    // Nothing that can return RUNNING or FAILURE may precede the marker: the
+    // handler's other children (SetMowerEnabled, StopMoving, WaitForDuration,
+    // PublishHighLevelStatus) must all come after it.
+    const std::size_t handler = block.find("Handler\">");
+    ASSERT_NE(handler, std::string::npos) << guard << ": no *Handler Sequence found";
+    ASSERT_LT(handler, mark) << guard << ": <MarkGuardHalt/> is outside the handler Sequence";
+    const std::string between = block.substr(handler, mark - handler);
+    for (const std::string preceding :
+         {"<SetMowerEnabled", "<StopMoving", "<WaitForDuration", "<PublishHighLevelStatus"})
+    {
+      EXPECT_EQ(between.find(preceding), std::string::npos)
+          << guard << ": " << preceding << " runs before <MarkGuardHalt/> — a fault that clears "
+          << "while it is RUNNING (or a service call that FAILS) skips the marker and the "
+          << "interrupted pass is charged after all.";
+    }
   }
 }
 

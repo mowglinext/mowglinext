@@ -116,6 +116,40 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// MarkGuardHalt
+// ---------------------------------------------------------------------------
+
+/// Records in BTContext that a Root guard is halting the tree (sets
+/// ctx->guard_halted_reason), so the next GetNextUnmowedArea dispatch of the
+/// interrupted area is NOT charged to the no-progress retirement budget. Place
+/// it as the FIRST child of the handler Sequence of every guard whose pause
+/// interrupts a mowing pass (SensorFaultHandler, LocalizationDegradedHandler):
+/// the enclosing ReactiveFallback halts the handler the moment the fault
+/// clears, so a marker behind StopMoving / WaitForDuration misses every short
+/// pause. A guard that halts the Root without it lets a flapping sensor exhaust
+/// the five dispatch attempts and fail the mow at 0 swaths (field 2026-09-07 /
+/// 2026-09-08). Idempotent: the handler re-runs every tick while the fault
+/// holds. Always returns SUCCESS.
+///
+/// Input ports:
+///   reason (string) – short tag naming the guard, for the dispatch log line.
+class MarkGuardHalt : public BT::SyncActionNode
+{
+public:
+  MarkGuardHalt(const std::string& name, const BT::NodeConfig& config)
+      : BT::SyncActionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<std::string>("reason", "Guard tag, e.g. scan_stale")};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
 // EndSession
 // ---------------------------------------------------------------------------
 

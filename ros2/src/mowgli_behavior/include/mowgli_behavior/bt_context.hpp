@@ -202,6 +202,38 @@ struct BTContext
   static constexpr uint32_t kMaxStartBlockedAttempts = 3;
 
   // -----------------------------------------------------------------------
+  // Guard-halted passes (field 2026-09-07 / 2026-09-08)
+  // -----------------------------------------------------------------------
+  /// Set by MarkGuardHalt from a Root guard handler (SensorFaultHandler,
+  /// LocalizationDegradedHandler) while that guard is halting the tree.
+  /// Halting the Root interrupts FollowStrip ("area N interrupted at pose K —
+  /// resume cursor saved"), and the next GetNextUnmowedArea dispatch of that
+  /// area used to charge the re-dispatch to the no-progress budget exactly as
+  /// if the pass had aborted at an obstacle. With an intermittent LiDAR serial
+  /// link IsScanStale halted the Root every few seconds: three scan-stale
+  /// halts in 25 s burnt the five kMaxAreaAttempts, the mow "completed" with
+  /// ZERO swaths and the robot sat on the lawn. LocalizationGuard pauses did
+  /// the same. A transient sensor / localization fault must PAUSE a mow,
+  /// never fail it — the pass never had a chance to make progress.
+  ///
+  /// Carries the guard's reason string ("scan_stale", "localization_degraded")
+  /// for the log line. Consumed (reset) by the next GetNextUnmowedArea
+  /// dispatch: it describes ONE finished pass. Cleared by EndSession.
+  std::optional<std::string> guard_halted_reason;
+  /// Per-area count of dispatches that were EXEMPTED from the no-progress
+  /// retirement counter because the previous pass was interrupted by a guard.
+  /// Cleared by EndSession.
+  std::map<uint32_t, uint32_t> area_guard_halt_count;
+  /// Maximum guard-halted dispatches exempted from area_attempt_count per
+  /// area. Deliberately GENEROUS: a permanently dead sensor is not this cap's
+  /// problem — the guard itself holds the whole tree (blade off, stopped) for
+  /// as long as the fault lasts, so nothing dispatches at all. The cap only
+  /// bounds the FLAPPING case (a fault that clears and re-trips every few
+  /// seconds) so a pathological flap cannot re-dispatch the same area forever;
+  /// past it the normal no-progress budget takes over and the area retires.
+  static constexpr uint32_t kMaxGuardHaltedPasses = 200;
+
+  // -----------------------------------------------------------------------
   // Start-pose escape motion (issue #487, follow-up to the above)
   // -----------------------------------------------------------------------
   //
