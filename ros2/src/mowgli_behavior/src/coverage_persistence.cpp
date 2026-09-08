@@ -15,6 +15,7 @@
 
 #include "mowgli_behavior/coverage_persistence.hpp"
 
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -246,6 +247,14 @@ bool clearCoverageResumeState(const BTContext& ctx)
   {
     return true;
   }
+  // Invalidate the old START command/cursors BEFORE trying to retain metadata.
+  // An atomic replacement alone leaves the active snapshot intact if the disk
+  // is full or the temp file cannot be written. A restart would then resume a
+  // session which has already ended. Losing phase history is safer than that.
+  if (std::remove(ctx.coverage_resume_path.c_str()) != 0 && errno != ENOENT)
+  {
+    return false;
+  }
   if (!ctx.cross_hatch.empty())
   {
     std::ostringstream out;
@@ -253,8 +262,7 @@ bool clearCoverageResumeState(const BTContext& ctx)
     writeCrossHatch(out, ctx.cross_hatch);
     return writeSnapshot(ctx, out.str());
   }
-  // std::remove returns non-zero if the file was already absent, which is fine.
-  std::remove(ctx.coverage_resume_path.c_str());
+  // A leftover temp file is never loaded; cleanup is best-effort.
   std::remove((ctx.coverage_resume_path + ".tmp").c_str());
   return true;
 }

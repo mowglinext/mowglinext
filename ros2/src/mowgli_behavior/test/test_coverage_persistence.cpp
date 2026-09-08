@@ -19,6 +19,7 @@
 // changed map is detected as stale.
 
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -153,6 +154,60 @@ TEST(CoveragePersistence, ClearRemovesFile)
   BTContext reloaded;
   reloaded.coverage_resume_path = path;
   EXPECT_FALSE(loadCoverageResumeState(reloaded));
+}
+
+TEST(CoveragePersistence, FailedPhaseWriteCannotRestoreAnEndedSession)
+{
+  for (bool enabled : {false, true})
+  {
+    const auto path = tempPath(enabled ? "clear_phase_enabled.txt" : "clear_phase_disabled.txt");
+    BTContext ctx;
+    seedContext(ctx, path);
+    ctx.current_command = 1;  // COMMAND_START with resumable progress
+    ctx.single_area_target = 2;
+    ctx.cross_hatch[2].begin(enabled);  // also populated when cross-hatch is disabled
+    ctx.cross_hatch[2].used = true;
+    ASSERT_TRUE(saveCoverageResumeState(ctx));
+    ctx.cross_hatch[2].finish();
+
+    // Force the phase-only replacement to fail to open. The old snapshot is
+    // still readable/removable; clearing safety state must not depend on a write.
+    const auto tmp = path + ".tmp";
+    ASSERT_TRUE(std::filesystem::create_directory(tmp));
+    EXPECT_FALSE(clearCoverageResumeState(ctx));  // report the lost metadata
+    EXPECT_TRUE(std::filesystem::remove(tmp));
+
+    BTContext restarted;
+    restarted.coverage_resume_path = path;
+    EXPECT_FALSE(loadCoverageResumeState(restarted));
+    EXPECT_EQ(restarted.current_command, 0);
+    EXPECT_TRUE(restarted.area_resume_pose_index.empty());
+    EXPECT_TRUE(restarted.completed_areas.empty());
+    EXPECT_FALSE(restarted.single_area_target.has_value());
+    const bool auto_continue =
+        restarted.current_command == 1 &&
+        (!restarted.area_resume_pose_index.empty() || !restarted.completed_areas.empty());
+    EXPECT_FALSE(auto_continue);
+    std::remove(path.c_str());
+  }
+}
+
+TEST(CoveragePersistence, ClearReportsRemovalFailure)
+{
+  // A non-empty directory cannot be removed as a resume file. Unlike ENOENT,
+  // this must be reported as a failure, even without cross-hatch metadata.
+  const auto path = tempPath("clear_resume_remove_failure");
+  ASSERT_TRUE(std::filesystem::create_directory(path));
+  const auto child = path + "/keep";
+  {
+    std::ofstream file(child);
+  }
+  BTContext ctx;
+  ctx.coverage_resume_path = path;
+  EXPECT_FALSE(clearCoverageResumeState(ctx));
+  EXPECT_TRUE(std::filesystem::remove(child));
+  EXPECT_TRUE(std::filesystem::remove(path));
+  EXPECT_TRUE(clearCoverageResumeState(ctx));  // absent is already clear
 }
 
 TEST(CoveragePersistence, RoundTripsCurrentCommand)

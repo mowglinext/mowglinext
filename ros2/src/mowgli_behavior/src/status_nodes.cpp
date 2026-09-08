@@ -222,7 +222,14 @@ BT::NodeStatus EndSession::tick()
   // aborted-and-docked) session from the persisted cursor.
   for (auto& [area, orientation] : ctx->cross_hatch)
     orientation.finish();
-  clearCoverageResumeState(*ctx);
+  if (!clearCoverageResumeState(*ctx))
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "EndSession: could not clear resume file or save cross-hatch history at '%s'. "
+                 "Check storage before restarting; persisted state may be stale or missing.",
+                 ctx->coverage_resume_path.c_str());
+  }
+  // Always let the following ClearCommand run, even on a storage failure.
   return BT::NodeStatus::SUCCESS;
 }
 

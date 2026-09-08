@@ -677,7 +677,7 @@ private:
           RCLCPP_INFO(get_logger(),
                       "Coverage resume clear requested — applied before the next BT tick");
           resp->success = true;
-          resp->message = "coverage resume state cleared";
+          resp->message = "coverage resume clear queued for the next behavior-tree tick";
         });
 
     // Latched signal the GUI reads to decide whether to offer "Resume vs Start
@@ -1089,9 +1089,18 @@ private:
       context_->area_start_blocked_count.clear();
       // Disarm the #487 escape motion too — see EndSession for why.
       context_->start_blocked_escape_armed = false;
-      clearCoverageResumeState(*context_);
-      RCLCPP_INFO(get_logger(),
-                  "Cleared coverage resume state on request — next start begins fresh");
+      if (clearCoverageResumeState(*context_))
+      {
+        RCLCPP_INFO(get_logger(),
+                    "Cleared coverage resume state on request — next start begins fresh");
+      }
+      else
+      {
+        RCLCPP_ERROR(get_logger(),
+                     "Could not clear resume file or save cross-hatch history at '%s'. "
+                     "Check storage before restarting; persisted state may be stale or missing.",
+                     context_->coverage_resume_path.c_str());
+      }
     }
     try
     {

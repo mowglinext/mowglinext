@@ -33,6 +33,7 @@
  */
 
 #include <chrono>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <string>
@@ -44,6 +45,7 @@
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_behavior/coverage_orientation_service.hpp"
+#include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_behavior/status_nodes.hpp"
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include <gtest/gtest.h>
@@ -431,6 +433,37 @@ TEST_F(GetNextUnmowedAreaTest, PlainStartAfterATargetedRunIteratesAllAreas)
   auto tree = makeTree(/*max_areas=*/5);
   EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
   EXPECT_EQ(ctx->current_area, 0) << "a plain start must resume normal all-areas iteration";
+}
+
+TEST_F(GetNextUnmowedAreaTest, EndSessionStillClearsCommandWhenPhasePersistenceFails)
+{
+  const auto path = std::string(::testing::TempDir()) + "/end_session_phase_failure.txt";
+  ctx->coverage_resume_path = path;
+  ctx->current_command = 1;
+  ctx->area_resume_pose_index[0] = 42;
+  ctx->cross_hatch[0].begin(true);
+  ctx->cross_hatch[0].used = true;
+  ASSERT_TRUE(mowgli_behavior::saveCoverageResumeState(*ctx));
+  ASSERT_TRUE(std::filesystem::create_directory(path + ".tmp"));
+
+  factory.registerNodeType<mowgli_behavior::ClearCommand>("ClearCommand");
+  auto end_tree = factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"End\">"
+      "<Sequence><EndSession/><ClearCommand/></Sequence>"
+      "</BehaviorTree></root>",
+      blackboard);
+  EXPECT_EQ(end_tree.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->current_command, 0);
+  EXPECT_TRUE(ctx->area_resume_pose_index.empty());
+  EXPECT_TRUE(ctx->cross_hatch[0].next_perpendicular);
+  EXPECT_TRUE(std::filesystem::remove(path + ".tmp"));
+
+  BTContext restarted;
+  restarted.coverage_resume_path = path;
+  EXPECT_FALSE(mowgli_behavior::loadCoverageResumeState(restarted));
+  EXPECT_EQ(restarted.current_command, 0);
+  EXPECT_TRUE(restarted.area_resume_pose_index.empty());
+  std::filesystem::remove(path);
 }
 
 // EndSession is the session boundary: the single-area clip dies there with the
