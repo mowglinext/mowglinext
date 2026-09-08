@@ -12,7 +12,8 @@ from mowgli_interfaces.msg import GnssStatus
 from diagnostic_msgs.msg import DiagnosticArray
 OUT = sys.argv[1]; LAT0, LON0 = 48.879649550, 2.172814460; R = 6371000.0
 DIAG = ["lidar_anchor_state", "lidar_map_occupied_cells", "lidar_anchor_updates", "lidar_anchor_seeds", "lidar_anchor_factors", "lidar_anchor_hit_ratio",
-        "lidar_anchor_rej_score", "lidar_anchor_rej_spread", "lidar_anchor_rej_dr", "lidar_anchor_reseeds", "cov_xx", "gps_rejects_wrongfix"]
+        "lidar_anchor_rej_score", "lidar_anchor_rej_spread", "lidar_anchor_rej_dr", "lidar_anchor_reseeds", "cov_xx", "gps_rejects_wrongfix",
+        "lidar_anchor_floor_eff_m", "lidar_anchor_shadow_p90_m", "lidar_anchor_shadow_n"]
 def yaw(q): return math.degrees(math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z)))
 class L(Node):
     def __init__(self):

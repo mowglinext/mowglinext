@@ -301,7 +301,10 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   // scored, published and counted exactly as it would be when anchoring, but
   // never becomes a factor. It is how the anchor is measured against RTK in
   // the field before it is trusted.
-  const bool shadow = lidar_anchor_shadow_mode_ && d.state == LidarAnchorState::kMapping;
+  // Under RTK-Fixed the filter runs without being applied when shadow mode
+  // asks for it OR when the adaptive floor needs its calibration samples.
+  const bool shadow = (lidar_anchor_shadow_mode_ || lidar_anchor_adaptive_floor_) &&
+                      d.state == LidarAnchorState::kMapping;
   if (!(d.run_filter || shadow) || !lidar_anchor_filter_)
     return;
 

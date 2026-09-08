@@ -497,6 +497,8 @@ fusion_graph_node:
     # samples (once lidar_anchor_shadow_min_samples exist) becomes the floor
     # on the applied factor's σ, clamped to [lidar_anchor_sigma_floor_m,
     # lidar_anchor_max_sigma_m]. Field 2026-09-08: p90 0.15 m vs a fixed 0.05.
+    # With it on, the filter also runs (unapplied) under RTK-Fixed even when
+    # lidar_anchor_shadow_mode is off, to collect those samples.
     lidar_anchor_adaptive_floor: true
     lidar_anchor_floor_quantile: 0.9
     lidar_anchor_shadow_window: 300
