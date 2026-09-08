@@ -112,6 +112,25 @@ struct BTContext
   /// COMMAND_RESET_EMERGENCY=254, …).
   uint8_t current_command{0};
 
+  /// Operator-forced resume from a mid-session charge hold. Set by the
+  /// ~/high_level_control handler when a COMMAND_START arrives while the tree
+  /// is parked in a charge hold (last published state_name CHARGING or
+  /// CRITICAL_BATTERY_CHARGING — see isChargeHoldState()), where
+  /// current_command is ALREADY 1 and a plain START would otherwise be a
+  /// no-op. Consumed (cleared) by IsManualResumeRequested inside both charge
+  /// wait loops of main_tree.xml, which honours it only above
+  /// {battery_manual_resume_pct}. Protected by context_mutex.
+  ///
+  /// Stamped so a request the wait loop never consumed (e.g. Play pressed
+  /// during ManualChargeGuard's CHARGING, whose exit is the operator lifting
+  /// the mower off, not this flag) cannot survive to a LATER low-battery dock
+  /// and cut that charge short: IsManualResumeRequested refuses a request
+  /// older than kManualResumeMaxAgeSec. The loops poll every 5 s, so the
+  /// window is generous for the intended path and tight for the stale one.
+  bool manual_resume_requested{false};
+  std::chrono::steady_clock::time_point manual_resume_requested_time{};
+  static constexpr double kManualResumeMaxAgeSec = 30.0;
+
   /// Set by the ~/start_in_area service to REQUEST mowing a single, specific
   /// area instead of iterating all areas. This is the one-shot *request*:
   /// GetNextUnmowedArea consumes it on the next onStart() and latches the
@@ -683,6 +702,17 @@ inline void clearSingleAreaMode(BTContext& ctx)
 {
   ctx.single_area_target.reset();
   ctx.target_area_index.reset();
+}
+
+/// True for the HighLevelStatus state_name values published while the tree
+/// is parked in a battery charge hold: BatteryDockAndResume's "CHARGING" and
+/// CriticalBatteryDock's "CRITICAL_BATTERY_CHARGING" (main_tree.xml). A
+/// COMMAND_START received in one of these states is an operator asking to
+/// resume the mow before the pack reaches battery_full_pct — see
+/// BTContext::manual_resume_requested.
+inline bool isChargeHoldState(const std::string& state_name)
+{
+  return state_name == "CHARGING" || state_name == "CRITICAL_BATTERY_CHARGING";
 }
 
 }  // namespace mowgli_behavior

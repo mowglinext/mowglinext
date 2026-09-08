@@ -210,6 +210,42 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// IsManualResumeRequested
+// ---------------------------------------------------------------------------
+
+/// Operator-forced exit from a charge hold. Returns SUCCESS — and CONSUMES
+/// BTContext::manual_resume_requested — when the ~/high_level_control handler
+/// has flagged a COMMAND_START received during CHARGING /
+/// CRITICAL_BATTERY_CHARGING AND the battery is at or above min_battery_pct.
+///
+/// A request below the floor is REFUSED: logged once at WARN, cleared, and the
+/// node returns FAILURE so the wait loop keeps charging. A request older than
+/// BTContext::kManualResumeMaxAgeSec is dropped the same way (stale token from
+/// a branch that never consumed it). With no request pending it is a plain
+/// FAILURE, so the enclosing Fallback falls through to the timed wait.
+///
+/// Input ports:
+///   min_battery_pct (float): floor below which a manual resume is refused;
+///                            the tree pulls {battery_manual_resume_pct}.
+class IsManualResumeRequested : public BT::ConditionNode
+{
+public:
+  IsManualResumeRequested(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<float>("min_battery_pct",
+                                 30.0f,
+                                 "Battery percent floor for an operator-forced resume")};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
 // IsCommand
 // ---------------------------------------------------------------------------
 

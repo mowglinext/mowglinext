@@ -197,6 +197,7 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `battery_low_percent` (L292) | 20.0 | Battery | launch |
 | `battery_critical_percent` (L293) | 10.0 | Battery | launch |
 | `battery_critical_recovery_percent` (L294) | 30.0 (hysteresis out of critical; node clamps it above `battery_critical_percent`) | Battery | launch |
+| `battery_manual_resume_percent` (L296) | 30.0 (floor for an operator-forced resume — Play/`COMMAND_START` while `CHARGING` / `CRITICAL_BATTERY_CHARGING`; blackboard `battery_manual_resume_pct` → `IsManualResumeRequested`; node clamps it above `battery_low_percent`) | Battery | launch |
 
 > `mowgli_behavior/config/behavior_tree.yaml` still carries `battery_low_pct` / `battery_critical_pct` — **aliases that do not match the node's parameter names**; the injections above are what actually reach the node.
 
