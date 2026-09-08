@@ -44,3 +44,12 @@ Never `set -u` around ROS `setup.bash`.
 Bag topics to record next time: `/scan /wheel_odom /imu/data /imu/cog_heading
 /gps/fix /gps/status /hardware_bridge/status /fusion_graph/lidar_map
 /fusion_graph/diagnostics /odometry/filtered_map /tf /tf_static`.
+
+**Un-finalised bags.** A recorder killed through its `bash -lc` wrapper leaves
+the mcap without `metadata.yaml` (and without a message index). Inside the
+image: `ros2 bag reindex -s mcap <bag dir>` — it then plays in file order.
+
+**The robot's map.** Copy `/ros2_ws/maps/fusion_graph.lidarmap` from the robot
+into an empty directory and mount it read-only at `/ros2_ws/maps` (sweep.sh:
+`EXTRA_MOUNT=<dir>:/ros2_ws/maps:ro`); the replayed node loads it at startup
+when the datum matches, exactly like the robot did.

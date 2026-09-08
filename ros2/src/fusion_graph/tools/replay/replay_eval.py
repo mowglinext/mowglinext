@@ -12,6 +12,27 @@ cand = [(math.hypot(f(r, "cand_x") - f(r, "fx"), f(r, "cand_y") - f(r, "fy")), r
 if cand:
     d = sorted(c[0] for c in cand)
     print(f"candidates under RTK Fixed: n={len(d)} |cand-fused| p50={d[len(d)//2]:.2f} p90={d[int(0.9*(len(d)-1))]:.2f} max={d[-1]:.2f} m; >1 m: {sum(1 for x in d if x > 1.0)}; accepted&>1m: {sum(1 for x, v in cand if x > 1.0 and v == '0.0')}")
+# Float episodes (rtk_mode 2 for >= 5 s): hold vs dead reckoning during, and the fused correction after Fixed returns
+eps = []; cur = None
+for i, r in enumerate(rows):
+    if r["rtk_mode"] == "2":
+        if cur is None: cur = i
+    else:
+        if cur is not None and f(rows[i-1], "t") - f(rows[cur], "t") >= 5.0: eps.append((cur, i-1))
+        cur = None
+for (a, b) in eps:
+    pre = rows[a-1]; mo = (f(pre, "mo_x"), f(pre, "mo_y"), math.radians(f(pre, "mo_yaw")))
+    def drp(r):
+        c, s = math.cos(mo[2]), math.sin(mo[2]); ox, oy = f(r, "ob_x"), f(r, "ob_y"); return (mo[0] + c*ox - s*oy, mo[1] + s*ox + c*oy)
+    div = [math.hypot(f(r, "fx") - drp(r)[0], f(r, "fy") - drp(r)[1]) for r in rows[a:b+1]]
+    after = rows[b+1:b+21]
+    step = max((math.hypot(f(y, "fx") - f(x, "fx"), f(y, "fy") - f(x, "fy")) for x, y in zip(after, after[1:])), default=float("nan"))
+    # correction = distance between fused at end of Float and fused 10 s later, minus DR motion over the same span
+    if len(after) >= 20:
+        e = rows[b]; l = after[-1]; dre = drp(e); drl = drp(l)
+        corr = math.hypot((f(l,"fx")-f(e,"fx")) - (drl[0]-dre[0]), (f(l,"fy")-f(e,"fy")) - (drl[1]-dre[1]))
+    else: corr = float("nan")
+    print(f"FLOAT t+{f(rows[a],'t')-f(rows[0],'t'):.0f}s dur={f(rows[b],'t')-f(rows[a],'t'):.0f}s max|fused-DR|={max(div):.2f} end={div[-1]:.2f} correction_after_fixed={corr:.2f} m max_step_after={step:.2f}")
 out = [i for i, r in enumerate(rows) if f(r, "gps_age") > 3.0]
 if not out: print("no outage found"); sys.exit(0)
 i0, i1 = out[0], out[-1]
