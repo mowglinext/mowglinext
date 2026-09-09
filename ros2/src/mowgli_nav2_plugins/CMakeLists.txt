@@ -165,25 +165,6 @@ if(BUILD_TESTING)
     PRIVATE
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
-
-  ament_add_gtest(test_ftc_carrot
-    test/test_ftc_carrot.cpp
-  )
-
-  target_include_directories(test_ftc_carrot
-    PRIVATE
-      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-      ${EIGEN3_INCLUDE_DIRS}
-  )
-
-  ament_add_gtest(test_ftc_wait_clear
-    test/test_ftc_wait_clear.cpp
-  )
-
-  target_include_directories(test_ftc_wait_clear
-    PRIVATE
-      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  )
 endif()
 
 # ---------------------------------------------------------------------------

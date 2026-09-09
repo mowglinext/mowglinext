@@ -953,7 +953,7 @@ ros2 launch mowgli_bringup navigation.launch.py use_scan_matching:=false
 - **`/fusion_graph/markers`** (`visualization_msgs/MarkerArray`, 1 Hz, transient_local) — node positions, trajectory, loop-closure edges. Visible in Foxglove with no extra setup.
 - **`/imu/fg_yaw`** (`sensor_msgs/Imu`) — yaw-only output of the graph, published for downstream consumers and for debugging against `/imu/mag_yaw` / `/imu/cog_heading`.
 - **`~/save_graph`** (`std_srvs/Trigger`) — persists the graph immediately. Wired to the *Save graph* button in the GUI.
-- **`~/clear_graph`** (`std_srvs/Trigger`) — wipes the graph. The next valid pose seed (GPS, set_pose, or scan-match relocalization) re-initializes. Wired to the *Clear graph* button in the GUI.
+- **`~/clear_graph`** (`std_srvs/Trigger`) — while the robot is IDLE and stationary, wipes both the live and persisted graph and re-bases odometry. At the station it immediately re-seeds from the calibrated dock pose; elsewhere a fresh GPS position re-initializes it using the retained heading. Wired to the *Clear graph* button in the GUI.
 
 ### Persistence
 

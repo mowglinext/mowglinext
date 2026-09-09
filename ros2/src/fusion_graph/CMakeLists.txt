@@ -202,6 +202,11 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_yaw_gates fusion_graph_core)
 
+  ament_add_gtest(test_clear_graph_gate
+    test/test_clear_graph_gate.cpp
+  )
+  target_link_libraries(test_clear_graph_gate fusion_graph_core)
+
   ament_add_gtest(test_dr_slip_veto
     test/test_dr_slip_veto.cpp
   )

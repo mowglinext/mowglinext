@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
+#include <exception>
 #include <limits>
 
 #include "action_msgs/msg/goal_status.hpp"
@@ -1088,23 +1089,41 @@ BT::NodeStatus FollowStrip::onRunning()
 
 void FollowStrip::onHalted()
 {
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   // Preempt (recharge, e-stop, command change) mid-path: capture how far we got
   // and persist the resume cursor so the next dispatch continues from here
   // rather than re-mowing the whole area from the start.
   if (follow_handle_ && total_path_poses_ > 0)
   {
-    auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
     updateProgress(ctx);
     persistResumeCursor(ctx);
   }
   if (follow_handle_)
   {
-    follow_client_->async_cancel_goal(follow_handle_);
+    try
+    {
+      follow_client_->async_cancel_goal(follow_handle_);
+    }
+    catch (const std::exception& ex)
+    {
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "FollowStrip: follow goal was already gone while halting: %s",
+                  ex.what());
+    }
   }
   follow_handle_.reset();
   if (nav_handle_ && nav_client_)
   {
-    nav_client_->async_cancel_goal(nav_handle_);
+    try
+    {
+      nav_client_->async_cancel_goal(nav_handle_);
+    }
+    catch (const std::exception& ex)
+    {
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "FollowStrip: transit goal was already gone while halting: %s",
+                  ex.what());
+    }
   }
   nav_handle_.reset();
   transit_active_ = false;

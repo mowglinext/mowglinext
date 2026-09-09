@@ -598,6 +598,7 @@ private:
   // Auto-checkpoint state.
   bool auto_save_enabled_ = true;
   uint8_t last_hl_state_ = 0;  // HighLevelStatus.state
+  std::string last_hl_state_name_;
   bool last_hl_state_valid_ = false;
   bool last_is_charging_ = false;
   bool last_is_charging_valid_ = false;

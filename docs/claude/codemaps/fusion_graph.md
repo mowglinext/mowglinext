@@ -136,7 +136,7 @@ Diagnostics keys (`setup_comms.cpp:349-412`): `total_nodes scans_attached loop_c
 | Service | Type | Where | Caller |
 |---------|------|-------|--------|
 | `~/save_graph` (`/fusion_graph_node/save_graph`) | `std_srvs/Trigger` | `setup_comms.cpp:205` — async `DispatchAsyncSave("manual-service")` | GUI `gui/pkg/api/mowglinext.go:668` (`fusion_graph_save`) |
-| `~/clear_graph` (`/fusion_graph_node/clear_graph`) | `std_srvs/Trigger` | `setup_comms.cpp:229` — `Reset()` + seeds + DR zeroed | GUI `mowglinext.go:670` (`fusion_graph_clear`) |
+| `~/clear_graph` (`/fusion_graph_node/clear_graph`) | `std_srvs/Trigger` | `setup_comms.cpp` — exact IDLE + stationary gate; `Reset()`, persisted `.graph/.meta` deletion and DR zeroing; immediate dock-pose re-seed when charging, otherwise fresh-GPS re-init with retained heading | GUI `mowglinext.go:670` (`fusion_graph_clear`) |
 
 No actions. Auto-save triggers: RECORDING exit (`callbacks_b.cpp:276`), `is_charging` rising edge / boot-docked (`callbacks_b.cpp:404`), `periodic_save_period_s` (300 s) while `HIGH_LEVEL_STATE_AUTONOMOUS` (`misc.cpp:126`).
 
@@ -201,7 +201,7 @@ All read ONCE at construction (`declare_parameter`, no dynamic reconfigure). Pre
 - While `is_charging` the node suppresses live GPS factors and re-asserts the dock prior once per node, and `seed_xy_` is NOT updated from the docked fix — the dock bootstrap is `SeedFromDockPose` (`misc.cpp:25`), not `TrySeedInitialPose`, which needs a GPS `seed_xy_` + COG/mag `seed_yaw_` (`publish.cpp:27-33`). A yielded node (#512) still marks `last_dock_reanchor_node_` (`callbacks_a.cpp:343-364`).
 - `Save()` refuses an empty graph (`graph_manager_persistence.cpp:159`) — a Reset followed by auto-save used to persist `next_index=0` and crash the next boot (`test_persistence.cpp`).
 - `Load()` rejects a map whose `.meta` datum differs from the configured one (cross-garden guard, `graph_manager_persistence.cpp:300-309`); (0,0) datum skips the check (`test_persistence.cpp` `LoadRefusesGraphSavedUnderAnotherDatum`).
-- `clear_graph` zeroes `dr_*` and invalidates the anchor (`setup_comms.cpp:246-266`); an odom→base discontinuity is expected — only call it parked.
+- `clear_graph` rejects unless the high-level state is exactly `IDLE`/`IDLE_DOCKED`, wheel speeds are within 0.02 m/s and 0.05 rad/s, and no save/rebase is active. It deletes the persisted graph, zeroes `dr_*`, and invalidates the anchor; while charging it immediately seeds the calibrated dock pose, otherwise it retains the last heading and waits for a fresh GPS position.
 - Per-tick gates (`stationary_thresh_*`, `pivot_gate_dtheta_rad`, `slip_*`) are tuned at 25 Hz and multiplied by `tick_scale` (`graph_manager_node.cpp:98`); raising the per-frame slip thresholds instead of using `slip_window_s` blinds the veto (`fusion_graph.yaml:141-160`).
 - `dr_slip_wheel_min_rad_per_s` must exceed 2× the wheel yaw-rate quantum (`dr_slip_veto.hpp:10-32`, #488) — a lower value zeroes DR translation on straight drives and breaks Nav2 BackUp distances (Invariant 10).
 - Heavy work off the executor: `RebaseISAM2` (maintenance timer, detached thread, `setup_comms.cpp:292-325`) and `Save` (`DispatchAsyncSave`) — never call them inline; TF has its own thread for the same reason (`fusion_graph_node.hpp:401-424`).

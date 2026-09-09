@@ -231,12 +231,14 @@ void FusionGraphNode::OnHighLevelStatus(mowgli_interfaces::msg::HighLevelStatus:
   {
     constexpr uint8_t kRecording =
         mowgli_interfaces::msg::HighLevelStatus::HIGH_LEVEL_STATE_RECORDING;
-    if (last_hl_state_ == kRecording && msg->state != kRecording && graph_->IsInitialized())
+    if (auto_save_enabled_ && last_hl_state_ == kRecording && msg->state != kRecording &&
+        graph_->IsInitialized())
     {
       DispatchAsyncSave("recording-exit");
     }
   }
   last_hl_state_ = msg->state;
+  last_hl_state_name_ = msg->state_name;
   last_hl_state_valid_ = true;
 }
 

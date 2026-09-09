@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <thread>
 
@@ -16,6 +17,7 @@
 #include <tf2/exceptions.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+#include "fusion_graph/clear_graph_gate.hpp"
 #include "fusion_graph/fusion_graph_node.hpp"
 #include "fusion_graph/fusion_graph_node_util.hpp"
 #include "fusion_graph/rtk_wrongfix_gate.hpp"
@@ -171,12 +173,15 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
       rclcpp::SensorDataQoS(),
       std::bind(&FusionGraphNode::OnDockingCmd, this, std::placeholders::_1));
 
+  // Always observe the state: clear_graph uses it as a motion-safety gate even
+  // when graph auto-save is disabled.
+  sub_hl_status_ = create_subscription<mowgli_interfaces::msg::HighLevelStatus>(
+      "/behavior_tree_node/high_level_status",
+      10,
+      std::bind(&FusionGraphNode::OnHighLevelStatus, this, std::placeholders::_1));
+
   if (auto_save_enabled_)
   {
-    sub_hl_status_ = create_subscription<mowgli_interfaces::msg::HighLevelStatus>(
-        "/behavior_tree_node/high_level_status",
-        10,
-        std::bind(&FusionGraphNode::OnHighLevelStatus, this, std::placeholders::_1));
     if (periodic_save_period_s > 0.0)
     {
       periodic_save_timer_ =
@@ -259,12 +264,50 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
              std::shared_ptr<std_srvs::srv::Trigger::Response> resp)
       {
+        constexpr uint8_t kIdle = mowgli_interfaces::msg::HighLevelStatus::HIGH_LEVEL_STATE_IDLE;
+        const bool idle_hold = last_hl_state_ == kIdle && (last_hl_state_name_ == "IDLE" ||
+                                                           last_hl_state_name_ == "IDLE_DOCKED");
+        if (!ClearGraphAllowed(last_hl_state_valid_, idle_hold, wheel_vx_, wheel_wz_))
+        {
+          resp->success = false;
+          resp->message = "clear_graph rejected: robot must be IDLE and stationary";
+          RCLCPP_ERROR(get_logger(),
+                       "fusion_graph: %s (state_known=%s state=%u/%s vx=%.3f wz=%.3f)",
+                       resp->message.c_str(),
+                       last_hl_state_valid_ ? "true" : "false",
+                       static_cast<unsigned>(last_hl_state_),
+                       last_hl_state_name_.c_str(),
+                       wheel_vx_,
+                       wheel_wz_);
+          return;
+        }
+        if (save_in_flight_->load() || rebase_in_flight_->load())
+        {
+          resp->success = false;
+          resp->message = "clear_graph rejected: graph maintenance is still in progress; retry";
+          RCLCPP_WARN(get_logger(), "fusion_graph: %s", resp->message.c_str());
+          return;
+        }
+
+        // A stationary robot produces no COG. Keep the graph's last heading so
+        // the next accepted GPS position can restore map->odom immediately;
+        // subsequent COG/mag factors still refine this bootstrap yaw.
+        const auto pre_clear_snapshot = graph_->LatestSnapshot();
         graph_->Reset();
-        // Drop the latched seed too, otherwise a stale GPS / yaw seed
-        // from before the clear would re-initialize the graph at the
-        // old position the operator was trying to escape.
+        // The clear operation must survive a container restart. Previously it
+        // reset RAM only, so the next boot silently loaded the old graph and
+        // restored the localization state the operator had just discarded.
+        // The LiDAR tile store is intentionally separate and remains intact.
+        std::remove((graph_save_prefix_ + ".graph").c_str());
+        std::remove((graph_save_prefix_ + ".meta").c_str());
+        std::remove((graph_save_prefix_ + ".scans").c_str());  // legacy format
+        // Drop the latched position seed so a pre-clear GPS fix cannot put the
+        // new graph back at the position the operator was trying to escape.
+        // Heading is safe to retain: a stationary robot cannot produce a new
+        // COG, and it is refined as soon as COG/magnetometer observations resume.
         seed_xy_.reset();
-        seed_yaw_.reset();
+        seed_yaw_ = pre_clear_snapshot ? std::optional<double>(pre_clear_snapshot->pose.theta())
+                                       : std::nullopt;
         seed_xy_rtk_fixed_ = false;
         gnss_observation_tracker_.Reset();
         last_rtk_fixed_stamp_.reset();
@@ -292,8 +335,18 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
           ResetLidarTiming();
           t_map_odom_anchor_valid_ = false;
         }
+        // A docked graph does not consume live GPS as a bootstrap position: the
+        // calibrated dock pose is authoritative. Re-seed it synchronously so a
+        // clear at the station never leaves map->odom absent indefinitely.
+        if (last_is_charging_valid_ && last_is_charging_)
+        {
+          SeedFromDockPose();
+          dock_seeded_this_session_ = true;
+        }
         resp->success = true;
-        resp->message = "graph cleared + odom re-based (waiting for re-initialization)";
+        resp->message = graph_->IsInitialized()
+                            ? "graph cleared + re-seeded from dock pose"
+                            : "graph cleared + odom re-based (waiting for fresh GPS position)";
         RCLCPP_WARN(get_logger(), "fusion_graph: %s", resp->message.c_str());
       });
 
