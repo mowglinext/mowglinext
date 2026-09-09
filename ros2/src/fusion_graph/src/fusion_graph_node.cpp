@@ -19,6 +19,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include "fusion_graph/fusion_graph_node_util.hpp"
+#include <beluga_ros/amcl.hpp>
 
 namespace fusion_graph
 {

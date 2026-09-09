@@ -916,11 +916,6 @@ export const DiagnosticsPage = () => {
         return Number.isFinite(n) ? n : null;
     };
     const totalNodes = num("total_nodes");
-    const scansAttached = num("scans_attached");
-    const loopClosures = num("loop_closures");
-    const scansReceived = num("scans_received");
-    const scanOk = num("scan_matches_ok");
-    const scanFail = num("scan_matches_fail");
     const covXX = num("cov_xx");
     const covYY = num("cov_yy");
     const covYaw = num("cov_yawyaw");
@@ -930,23 +925,8 @@ export const DiagnosticsPage = () => {
     const sigmaYawDeg = (covYaw !== null && covYaw >= 0)
         ? Math.sqrt(covYaw) * (180 / Math.PI)
         : null;
-    const scanTotal = (scanOk ?? 0) + (scanFail ?? 0);
-    const scanRate = scanTotal > 0 ? Math.round(((scanOk ?? 0) / scanTotal) * 100) : null;
-
-    // ICP / scan-matching detail (live LiDAR monitor).
-    const rejRmse = num("icp_rejects_rmse");
-    const rejInliers = num("icp_rejects_inliers");
-    const rejSanity = num("icp_rejects_sanity");
-    const rejDiverge = num("icp_rejects_divergence");
-    const rejTotal = (rejRmse ?? 0) + (rejInliers ?? 0) + (rejSanity ?? 0) + (rejDiverge ?? 0);
     const gpsRejWrongfix = num("gps_rejects_wrongfix");
     const stationaryHandPush = num("stationary_hand_push");
-    // Fraction of received scans that actually became graph factors. The two
-    // counters have slightly different lifecycles (attached counts nodes,
-    // received counts messages), so cap at 100% to avoid nonsense like 108%.
-    const attachRate = (scansReceived !== null && scansReceived > 0 && scansAttached !== null)
-        ? Math.min(100, Math.round((scansAttached / scansReceived) * 100))
-        : null;
 
     // LiDAR map anchor (optional scan-to-map particle filter). null when the
     // running node predates it, in which case the tile group is not rendered.
@@ -1020,21 +1000,6 @@ export const DiagnosticsPage = () => {
                             xs={12} md={6} large
                             title={t('diagnosticsPage.nodesInGraph')}
                             value={totalNodes}
-                            hint={scansAttached !== null ? t('diagnosticsPage.withScans', {count: scansAttached}) : ""}
-                        />
-                        <TelemetryStat
-                            xs={12} md={6} large
-                            title={t('diagnosticsPage.loopClosures')}
-                            value={loopClosures}
-                            tone={(loopClosures ?? 0) > 0 ? "ok" : "default"}
-                        />
-                        <TelemetryStat
-                            xs={12} md={6} large
-                            title={t('diagnosticsPage.icpSuccessRate')}
-                            value={scanRate}
-                            suffix="%"
-                            precision={0}
-                            hint={scanTotal > 0 ? t('diagnosticsPage.matches', {ok: scanOk ?? 0, total: scanTotal}) : t('diagnosticsPage.scansReceived', {count: scansReceived ?? 0})}
                         />
                         <TelemetryStat
                             xs={12} md={6} large
@@ -1049,30 +1014,10 @@ export const DiagnosticsPage = () => {
                     <Row gutter={[12, 12]} style={{marginTop: 4}}>
                         <TelemetryStat
                             xs={12} md={6} large
-                            title={t('diagnosticsPage.icpRejects')}
-                            value={rejTotal}
-                            tone={rejTotal > 0 ? "warn" : "ok"}
-                            hint={t('diagnosticsPage.icpRejectBreakdown', {
-                                rmse: rejRmse ?? 0,
-                                inliers: rejInliers ?? 0,
-                                sanity: rejSanity ?? 0,
-                                diverge: rejDiverge ?? 0,
-                            })}
-                        />
-                        <TelemetryStat
-                            xs={12} md={6} large
-                            title={t('diagnosticsPage.attachRateTitle')}
-                            value={attachRate}
-                            suffix="%"
-                            precision={0}
-                            hint={t('diagnosticsPage.scansReceived', {count: scansReceived ?? 0})}
-                        />
-                        <TelemetryStat
-                            xs={12} md={6} large
                             title={t('diagnosticsPage.handPushTitle')}
                             value={stationaryHandPush}
                             tone={(stationaryHandPush ?? 0) > 0 ? "warn" : "default"}
-                            hint={t('diagnosticsPage.icpGpsWrongfix', {count: gpsRejWrongfix ?? 0})}
+                            hint={t('diagnosticsPage.gpsWrongfix', {count: gpsRejWrongfix ?? 0})}
                         />
                     </Row>
                     {lidarAnchor !== null && (

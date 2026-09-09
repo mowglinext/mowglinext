@@ -150,3 +150,14 @@ TEST(LidarOccupancyMapper, ImportCellsRoundTripsAnExportedGrid)
   const auto sc = b.ScoreScan(0.0, 0.0, 0.0, wall);
   EXPECT_GT(static_cast<double>(sc.hits) / sc.total, 0.95);
 }
+
+TEST(LidarOccupancyMapper, RejectsIncompatibleResolutionWithoutMutation)
+{
+  fusion_graph::LidarOccupancyMapperParams p;
+  p.resolution_m = 0.05;
+  fusion_graph::LidarOccupancyMapper mapper(p);
+  const auto before = mapper.Export();
+  EXPECT_FALSE(mapper.ImportCells(0.1, 0, 0, 2, 2, {100, 100, 100, 100}));
+  EXPECT_EQ(mapper.Export().data, before.data);
+  EXPECT_EQ(mapper.inserted_scans(), 0u);
+}

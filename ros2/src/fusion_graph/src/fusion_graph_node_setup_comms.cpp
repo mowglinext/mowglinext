@@ -39,12 +39,6 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
   // sees GPS, never jumps. Nav2's odom_topic in nav2_params.yaml still
   // points here.
   pub_local_odom_ = create_publisher<nav_msgs::msg::Odometry>("/odometry/filtered", 10);
-  // LiDAR-only odometry (scan-match deltas integrated from the graph pose at
-  // the first accepted match). Diagnostic/visualisation only — the GUI overlays
-  // it to compare ICP heading & pose drift vs the fused/GPS estimate. Only
-  // emits when use_scan_matching is on (no matches → nothing to integrate).
-  pub_icp_odom_ = create_publisher<nav_msgs::msg::Odometry>("/fusion_graph/icp_odometry", 10);
-
   // High-rate extrapolated pose (item #15). Off by default — set
   // fast_pose_publish_rate_hz > 0 in yaml to enable. 100 Hz is the
   // intended use; the publisher reuses the latest fusion pose and
@@ -133,9 +127,8 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
                                                                     std::placeholders::_1));
   }
 
-  // The scan feeds three consumers — consecutive-scan ICP, loop closure and
-  // the LiDAR map anchor — any one of them needs the subscription.
-  if (use_scan_matching_ || loop_closure_enabled_ || use_lidar_map_anchor_)
+  // The scan feeds the tiled map anchor.
+  if (use_lidar_map_anchor_)
   {
     // Default to the deskewed scan so the matcher gets rotation-deskew (and,
     // once scan_deskew_node's linear comp is enabled, translation-deskew too).
@@ -236,9 +229,8 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
       });
 
   // ── Clear-graph service ─────────────────────────────────────────
-  // Wipes iSAM2 + accumulated factors + per-node scans + loop-closure
-  // edges. The node stays alive; the next valid pose seed (GPS, set_pose
-  // or scan-match relocalization) re-initializes the graph.
+  // Wipes iSAM2 and accumulated factors. The next GPS or set_pose seed
+  // re-initializes the graph.
   // Trigger from the GUI when the operator wants to start a clean
   // session (e.g. after relocating to a new garden) without restarting
   // the whole stack:
@@ -250,7 +242,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
              std::shared_ptr<std_srvs::srv::Trigger::Response> resp)
       {
-        if (!lidar_mapper_)
+        if (!lidar_submaps_)
         {
           resp->success = false;
           resp->message = "LiDAR map anchor is disabled (use_lidar_map_anchor=false)";
@@ -258,7 +250,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         }
         ClearLidarMap();
         resp->success = true;
-        resp->message = "LiDAR map cleared; " + graph_save_prefix_ + ".lidarmap removed";
+        resp->message = "LiDAR map clear requested (async); monitor lidar_map_io_error diagnostics";
         RCLCPP_INFO(get_logger(), "fusion_graph: %s", resp->message.c_str());
       });
 
@@ -276,7 +268,6 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         seed_xy_rtk_fixed_ = false;
         gnss_observation_tracker_.Reset();
         last_rtk_fixed_stamp_.reset();
-        last_gps_sigma_ = -1.0;
         last_gps_map_xy_.reset();
         ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
         // Re-zero the dead-reckoning frame. Without this the odom→base
@@ -298,6 +289,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
           dr_x_ = 0.0;
           dr_y_ = 0.0;
           dr_yaw_ = 0.0;
+          ResetLidarTiming();
           t_map_odom_anchor_valid_ = false;
         }
         resp->success = true;
@@ -306,18 +298,12 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
       });
 
   // ── Tick timer ────────────────────────────────────────────────────
-  // Run at 1× node rate. Earlier 2× oversampling existed "to never
-  // miss a node window" but doubled per-Tick CPU (ICP runs every
-  // OnTimer call) for no functional gain — Tick() short-circuits when
-  // dt < node_period_s, so a late wall_timer just creates the next
-  // node a few ms late, with no graph-level effect.
+  // Run at the graph node rate.
   const double timer_period_s = node_period_s;
   tick_timer_ = create_wall_timer(std::chrono::duration<double>(timer_period_s),
                                   std::bind(&FusionGraphNode::OnTimer, this));
 
-  // Maintenance timer at 30 s: prune old scans + check if iSAM2
-  // needs to be rebased. PruneOldScans is cheap (just erasing old
-  // entries under the lock) and stays inline. The rebase, however,
+  // Maintenance timer at 30 s: dispatch iSAM2 rebasing. This operation
   // rebuilds the Bayes tree from ~50k PriorFactors — ~1 s of CPU
   // that used to block the executor and stall the map→odom TF
   // (observed 2026-05-14, caused DockRobot to abort with
@@ -331,7 +317,6 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
                         {
                           if (!graph_->IsInitialized())
                             return;
-                          graph_->PruneOldScans(scan_retention_nodes_);
                           const auto stats = graph_->Stats();
                           if (stats.total_nodes - last_rebase_index_ < isam2_rebase_every_nodes_)
                             return;
@@ -383,12 +368,6 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
           s.values.push_back(kv);
         };
         add("total_nodes", std::to_string(stats.total_nodes));
-        add("scans_attached", std::to_string(stats.scans_attached));
-        add("loop_closures", std::to_string(stats.loop_closures));
-        // Nodes where the #513 rate/travel gate blocked the LC
-        // search (cumulative). Diff against loop_closures to
-        // see the gate working.
-        add("lc_rate_gated", std::to_string(lc_rate_gated_));
         // Dock-prior vs RTK-Fixed GPS consistency (#512):
         // latest disagreement while charging (0 when
         // not) + nodes the dock prior yielded on.
@@ -401,12 +380,20 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
           add("dock_prior_yielded", std::to_string(dock_prior_yielded_));
         }
         add("scans_received", std::to_string(scans_received_));
-        add("scan_matches_ok", std::to_string(scan_matches_ok_));
-        add("scan_matches_skipped", std::to_string(scan_matches_skipped_));
         add("lidar_anchor_state",
             std::to_string(static_cast<int>(lidar_anchor_gate_ ? lidar_anchor_gate_->state()
                                                                : LidarAnchorState::kDisabled)));
         add("lidar_map_occupied_cells", std::to_string(lidar_map_occupied_cells_));
+        add("lidar_filter_calls", std::to_string(lidar_filter_calls_));
+        add("lidar_filter_compute_ms", std::to_string(lidar_filter_compute_ms_));
+        add("lidar_filter_map_builds", std::to_string(lidar_filter_map_builds_));
+        add("lidar_filter_map_build_ms", std::to_string(lidar_filter_map_build_ms_));
+        add("lidar_map_window_cells",
+            std::to_string(lidar_submaps_
+                               ? lidar_submaps_->window_cells() * lidar_submaps_->window_cells()
+                               : 0));
+        add("lidar_map_io_busy", lidar_submaps_ && lidar_submaps_->busy() ? "1" : "0");
+        add("lidar_map_io_error", lidar_submaps_ ? lidar_submaps_->last_error() : "");
         add("lidar_anchor_updates", std::to_string(lidar_anchor_updates_));
         add("lidar_anchor_seeds", std::to_string(lidar_anchor_seeds_));
         add("lidar_anchor_skipped", std::to_string(lidar_anchor_skipped_));
@@ -435,17 +422,12 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
           add("lidar_anchor_shadow_p50_m", b);
           add("lidar_anchor_shadow_n", std::to_string(lidar_anchor_shadow_stats_.total()));
         }
-        add("scan_matches_fail", std::to_string(scan_matches_fail_));
         // Robustness-pass health counters. Each is a
         // cumulative count since process start; the
         // session monitor diffs consecutive samples
         // to get a rate. A spike on any of these is
         // worth surfacing — see PR notes.
         add("gps_rejects_wrongfix", std::to_string(stats.gps_rejects_wrongfix));
-        add("icp_rejects_rmse", std::to_string(stats.icp_rejects_rmse));
-        add("icp_rejects_inliers", std::to_string(stats.icp_rejects_inliers));
-        add("icp_rejects_sanity", std::to_string(stats.icp_rejects_sanity));
-        add("icp_rejects_divergence", std::to_string(stats.icp_rejects_divergence));
         add("stationary_hand_push", std::to_string(stats.stationary_hand_push));
         add("slip_veto", std::to_string(stats.slip_veto));
         add("live_nodes", std::to_string(graph_->LiveNodeCount()));
@@ -478,15 +460,13 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         pub_diag_->publish(msg);
 
         // ── Pose-graph viz ────────────────────────────────────────
-        // Emits a single MarkerArray with three markers, each owning
+        // Emits a single MarkerArray with two markers, each owning
         // its own id so subsequent publishes overwrite cleanly:
         //   id=0  SPHERE_LIST  — every node's optimized xy
         //   id=1  LINE_STRIP   — trajectory through nodes by index
-        //   id=2  LINE_LIST    — accepted loop-closure edges
         // All in map_frame_; transient-local QoS so a Foxglove client
         // joining mid-session sees the whole graph immediately.
         const auto poses = graph_->GetAllPoses();
-        const auto loops = graph_->GetLoopClosureEdges();
         const rclcpp::Time stamp = this->now();
 
         visualization_msgs::msg::MarkerArray ma;
@@ -541,34 +521,6 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         }
         ma.markers.push_back(nodes);
         ma.markers.push_back(traj);
-
-        visualization_msgs::msg::Marker lc;
-        lc.header = nodes.header;
-        lc.ns = "fusion_graph";
-        lc.id = 2;
-        lc.type = visualization_msgs::msg::Marker::LINE_LIST;
-        lc.action = visualization_msgs::msg::Marker::ADD;
-        lc.scale.x = 0.04;
-        lc.color.r = 1.0f;
-        lc.color.g = 0.2f;
-        lc.color.b = 0.2f;
-        lc.color.a = 0.9f;
-        lc.pose.orientation.w = 1.0;
-        for (const auto& [a, b] : loops)
-        {
-          auto ia = poses.find(a);
-          auto ib = poses.find(b);
-          if (ia == poses.end() || ib == poses.end())
-            continue;
-          geometry_msgs::msg::Point pa, pb;
-          pa.x = ia->second.x();
-          pa.y = ia->second.y();
-          pb.x = ib->second.x();
-          pb.y = ib->second.y();
-          lc.points.push_back(pa);
-          lc.points.push_back(pb);
-        }
-        ma.markers.push_back(lc);
 
         pub_markers_->publish(ma);
       });

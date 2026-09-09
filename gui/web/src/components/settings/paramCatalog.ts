@@ -4,7 +4,7 @@
 // a handful of developers, so each known parameter is tagged with a tier:
 //   - basic:  things a normal operator may reasonably want to change
 //   - middle: tuning that affects behaviour but needs some understanding
-//   - expert: deep internals (estimator gains, scan-match thresholds, PID, ...)
+//   - expert: deep internals (estimator gains, localization thresholds, PID, ...)
 // Parameters not listed here default to the "expert" tier and the "Other" group,
 // so nothing is ever hidden from the expert view — the catalog only curates the
 // label, description and grouping for the ones we understand.
@@ -61,13 +61,8 @@ const CATALOG: Record<string, ParamMeta> = {
 
   // ── Fusion graph (localizer) ─────────────────────────────────────────────
   node_period_s: {label: "paramCatalog.node_period_s.label", description: "paramCatalog.node_period_s.description", tier: "expert", group: "Localization", unit: "s"},
-  use_scan_matching: {label: "paramCatalog.use_scan_matching.label", description: "paramCatalog.use_scan_matching.description", tier: "middle", group: "Localization"},
-  use_loop_closure: {label: "paramCatalog.use_loop_closure.label", description: "paramCatalog.use_loop_closure.description", tier: "middle", group: "Localization"},
   use_lidar_map_anchor: {label: "paramCatalog.use_lidar_map_anchor.label", description: "paramCatalog.use_lidar_map_anchor.description", tier: "middle", group: "Localization"},
   lidar_anchor_shadow_mode: {label: "paramCatalog.lidar_anchor_shadow_mode.label", description: "paramCatalog.lidar_anchor_shadow_mode.description", tier: "middle", group: "Localization"},
-  icp_max_iter: {label: "paramCatalog.icp_max_iter.label", description: "paramCatalog.icp_max_iter.description", tier: "expert", group: "Localization"},
-  icp_max_corresp_dist: {label: "paramCatalog.icp_max_corresp_dist.label", description: "paramCatalog.icp_max_corresp_dist.description", tier: "expert", group: "Localization", unit: "m"},
-  icp_max_rmse_m: {label: "paramCatalog.icp_max_rmse_m.label", description: "paramCatalog.icp_max_rmse_m.description", tier: "expert", group: "Localization", unit: "m"},
 
   // ── LiDAR filtering ──────────────────────────────────────────────────────
   dock_blank_range: {label: "paramCatalog.dock_blank_range.label", description: "paramCatalog.dock_blank_range.description", tier: "expert", group: "LiDAR", unit: "m"},

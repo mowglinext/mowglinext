@@ -16,6 +16,7 @@
 
 #include "fusion_graph/factors.hpp"
 #include "fusion_graph/graph_manager.hpp"
+#include "fusion_graph/lidar_covariance.hpp"
 #include <gtsam/base/GenericValue.h>
 #include <gtsam/base/serialization.h>
 #include <gtsam/linear/NoiseModel.h>
@@ -46,6 +47,7 @@ std::optional<TickOutput> GraphManager::Tick(double now_s)
   // entries after a bag loop / simulation reset.
   if (last_node_time_s_ > now_s)
   {
+    queue_.lidar_map_xy.reset();
     last_node_time_s_ = now_s;
     node_time_index_.clear();
     if (latest_ && HasPoseAt(latest_->node_index))
@@ -58,7 +60,7 @@ std::optional<TickOutput> GraphManager::Tick(double now_s)
   // meaningful motion since the last node, drop the node period to
   // 1 / stationary_node_period_s. Stops the graph from inflating by
   // ~10 nodes/s while parked at the dock — both for memory bound
-  // and to keep iSAM2 / LC search bounded.
+  // and to keep iSAM2 updates bounded.
   const double motion_xy_sq = accum_.dx * accum_.dx + accum_.dy * accum_.dy;
   const double abs_dtheta =
       std::abs(std::abs(accum_.dtheta_gyro) > 1e-9 ? accum_.dtheta_gyro : accum_.dtheta_wheel);
@@ -186,7 +188,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   // Rule: when |dtheta_wheel - dtheta_gyro| is large enough that the
   // wheel-reported rotation can't be explained by gyro noise, zero
   // out the BetweenFactor's translation. The pose still advances in
-  // yaw (from the gyro), and any GPS / scan-matching unary will pull
+  // yaw (from the gyro), and any GPS / LiDAR map unary will pull
   // (x,y) in the right direction; without the veto the wheel
   // integration carries the pose along the phantom slip path
   // unopposed. The slip_sigma_xy floor keeps sigma_x/sigma_y tight
@@ -301,7 +303,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   // themselves. That is deliberate: they do not model a distance-driven
   // random walk, they model a wheel FAULT — a measurement that is wrong in a
   // way unrelated to how far the encoders say we went — and their job is to
-  // RELEASE the X constraint so GPS / scan-matching set XY.
+  // RELEASE the X constraint so GPS / LiDAR map set XY.
   //
   // Scaling them per-distance would defeat them precisely in the case they
   // exist for. During a pivot the encoders report ~0.8 mm of phantom
@@ -318,7 +320,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   //
   // sigma_x gates on the per-tick gyro yaw delta: during fast pivots
   // the wheels report phantom forward velocity (see GraphParams
-  // comment) so swap to a loose sigma and let GPS / scan-matching
+  // comment) so swap to a loose sigma and let GPS / LiDAR map
   // constrain XY. Gating on the gyro (not wheel-derived) dtheta
   // avoids feedback from the same encoder that's misreporting.
   double wheel_sigma_x_release =
@@ -448,48 +450,25 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     }
     new_factors_.add(YawUnaryFactor(k_curr, queue_.yaw->yaw, noise));
   }
-  if (queue_.scan_between)
-  {
-    auto noise = MakeDiagonal({
-        queue_.scan_between->sigma_xy,
-        queue_.scan_between->sigma_xy,
-        queue_.scan_between->sigma_theta,
-    });
-    new_factors_.add(
-        gtsam::BetweenFactor<gtsam::Pose2>(k_prev, k_curr, queue_.scan_between->delta, noise));
-  }
   if (queue_.lidar_map_xy)
   {
-    // LiDAR map anchor: ABSOLUTE XY-ONLY constraint from the particle filter
-    // localising against the occupancy grid built under RTK-Fixed. The filter
-    // returns a full covariance: along a lone wall it is wide, across it
-    // narrow — exactly the partial constraint a factor graph wants, so the
-    // matrix is used as-is (floored) rather than collapsed to one sigma.
-    // Heading is deliberately NOT constrained: a LiDAR-derived yaw prior once
-    // injected a mirrored / 180°-flipped ICP heading that corrupted map→odom
-    // on the robot (2026-07-22), so no LiDAR heading is ever fed into the
-    // graph — yaw stays owned by the gyro between-factors and the loose
-    // (σ≥0.30 rad) scan-between yaw. Huber-wrapped so a single biased
-    // localisation is down-weighted.
-    Eigen::Matrix2d cov = queue_.lidar_map_xy->cov;
-    const double floor_var =
-        params_.lidar_anchor_sigma_floor_m * params_.lidar_anchor_sigma_floor_m;
-    cov(0, 0) = std::max(cov(0, 0), floor_var);
-    cov(1, 1) = std::max(cov(1, 1), floor_var);
-    // Symmetrise and keep it positive definite even if the filter's estimate
-    // was numerically off.
-    cov = 0.5 * (cov + cov.transpose());
-    if (cov.determinant() <= 0.0)
-      cov = Eigen::Matrix2d::Identity() * floor_var;
-    gtsam::SharedNoiseModel noise = gtsam::noiseModel::Gaussian::Covariance(cov);
-    if (queue_.lidar_map_xy->robust)
+    const auto& q = *queue_.lidar_map_xy;
+    const auto target = q.target.value_or(next_index_);
+    const auto cov = FloorLidarCovariance(q.cov, params_.lidar_anchor_sigma_floor_m);
+    if (now_s <= q.expires_at && cov && q.xy.allFinite() && q.node_to_scan.allFinite() &&
+        (target == next_index_ || HasPoseAt(target)))
     {
-      noise = gtsam::noiseModel::Robust::Create(gtsam::noiseModel::mEstimator::Huber::Create(1.345),
-                                                noise);
+      gtsam::SharedNoiseModel noise = gtsam::noiseModel::Gaussian::Covariance(*cov);
+      if (q.robust)
+        noise =
+            gtsam::noiseModel::Robust::Create(gtsam::noiseModel::mEstimator::Huber::Create(1.345),
+                                              noise);
+      // Same XY measurement geometry as a GNSS lever arm: observe the body
+      // origin at scan time, displaced from this node by measured odometry.
+      // This supplies no absolute LiDAR heading observation.
+      new_factors_.add(GnssLeverArmFactor(PoseKey(target), q.xy, q.node_to_scan, noise));
+      ++lidar_anchor_factors_;
     }
-    new_factors_.add(gtsam::PoseTranslationPrior<gtsam::Pose2>(
-        k_curr, gtsam::Point2(queue_.lidar_map_xy->xy), noise));
-    ++lidar_anchor_factors_;
   }
 
   // 4. iSAM2 update. Mark the cached full estimate dirty — callers
@@ -569,7 +548,6 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   accum_.Reset();
   queue_.gnss.reset();
   queue_.yaw.reset();
-  queue_.scan_between.reset();
   queue_.lidar_map_xy.reset();
 
   return out;

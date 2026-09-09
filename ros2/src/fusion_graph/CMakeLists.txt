@@ -47,7 +47,7 @@ add_library(fusion_graph_core
   src/graph_manager_node.cpp
   src/graph_manager_rebase.cpp
   src/graph_manager_persistence.cpp
-  src/scan_matcher.cpp
+  src/lidar_submap_store.cpp
 )
 
 target_include_directories(fusion_graph_core PUBLIC
@@ -249,25 +249,18 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_lidar_anchor_shadow_stats fusion_graph_core)
 
-  ament_add_gtest(test_scan_match_dedup
-    test/test_scan_match_dedup.cpp
-  )
-  target_link_libraries(test_scan_match_dedup fusion_graph_core)
+  ament_add_gtest(test_lidar_submap_store test/test_lidar_submap_store.cpp)
+  target_link_libraries(test_lidar_submap_store fusion_graph_core)
+  ament_add_gtest(test_lidar_compute_gate test/test_lidar_compute_gate.cpp)
+  target_link_libraries(test_lidar_compute_gate fusion_graph_core)
 
-  ament_add_gtest(test_loop_closure_gate
-    test/test_loop_closure_gate.cpp
-  )
-  target_link_libraries(test_loop_closure_gate fusion_graph_core)
+  ament_add_gtest(test_lidar_scan_history test/test_lidar_scan_history.cpp)
+  target_link_libraries(test_lidar_scan_history fusion_graph_core)
 
   ament_add_gtest(test_cog_flip_recovery
     test/test_cog_flip_recovery.cpp
   )
   target_link_libraries(test_cog_flip_recovery fusion_graph_core)
-
-  ament_add_gtest(test_loop_closure_robust
-    test/test_loop_closure_robust.cpp
-  )
-  target_link_libraries(test_loop_closure_robust fusion_graph_core)
 
   ament_add_gtest(test_gyro_bias
     test/test_gyro_bias.cpp

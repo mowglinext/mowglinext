@@ -120,7 +120,6 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         icon: "node-index",
         description: "settingsSections.localization.description",
         keys: [
-            "use_scan_matching", "use_loop_closure",
             "use_lidar_map_anchor", "lidar_anchor_shadow_mode",
             "use_magnetometer",
             "enable_mag_cal", "declination_deg", "min_horizontal_uT", "mag_yaw_variance",

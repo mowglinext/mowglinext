@@ -137,8 +137,7 @@ struct GraphParams
   // kept stale far-away nodes anchoring the trajectory shape. 0 means
   // "no cap" (legacy behaviour: rebase keeps everything). At the 25 Hz
   // node rate, 3000 nodes ≈ 2 min of trajectory, which comfortably
-  // covers a single mowing pass; LiDAR loop closures within that
-  // window still function. Combined with isam2_rebase_every_nodes the
+  // covers a single mowing pass. Combined with isam2_rebase_every_nodes the
   // live graph oscillates in [max_graph_nodes, max_graph_nodes +
   // rebase_interval].
   uint64_t max_graph_nodes = 3000;
@@ -179,7 +178,7 @@ struct GraphParams
   // deviation and re-plans on. When |per-tick gyro dtheta| crosses
   // pivot_gate_dtheta_rad, swap wheel_sigma_x for
   // pivot_wheel_sigma_x (effectively releasing the X constraint) so
-  // GPS + scan-matching set XY. The gate scales with node_period_s
+  // GPS + LiDAR map set XY. The gate scales with node_period_s
   // implicitly because dtheta = omega * dt; defaults are tuned for
   // 25 Hz (gate fires above ~0.3 rad/s) and remain reasonable for
   // 10 Hz (gate fires above ~0.12 rad/s).
@@ -327,32 +326,6 @@ struct GraphParams
   // 0.005 rad sits at the typical gyro noise floor — anything below
   // this is dominated by sensor jitter, not real slip.
   double adaptive_noise_residual_floor_rad = 0.005;
-
-  // ICP scan-match quality gates. Result is dropped if any of these
-  // fail. Defaults are conservative — drop a few good matches in the
-  // sparse-outdoor edge case rather than absorb a degenerate one,
-  // because a single bad ICP delta corrupts iSAM2 trajectory for
-  // many subsequent nodes.
-  // icp_max_rmse_m: maximum acceptable RMS error over inliers (m).
-  //   At our 50 Hz cadence with the 0.10 default, scans need ~3-10 cm
-  //   of consistent matched-pair noise to be accepted — well within
-  //   LiDAR distance accuracy on dock/tree/chassis features.
-  // icp_max_delta_xy_m: per-node ICP delta (m) above which we treat
-  //   the match as unphysical. At 50 Hz a 0.3 m delta implies ≥15 m/s
-  //   robot velocity — impossible on a mower.
-  // icp_max_delta_theta_rad: same idea, on rotation. 0.5 rad/tick at
-  //   50 Hz = 25 rad/s, again physically impossible.
-  // icp_max_divergence_xy_m / icp_max_divergence_theta_rad: maximum
-  //   Mahalanobis-ish deviation of ICP result from its initial guess.
-  //   When wheel+gyro init is good (per ICP init upgrade in same PR),
-  //   ICP should refine it by mm — large divergences signal degenerate
-  //   scenery (symmetric haie / pure-grass fields where any rotation
-  //   has comparable score).
-  double icp_max_rmse_m = 0.10;
-  double icp_max_delta_xy_m = 0.30;
-  double icp_max_delta_theta_rad = 0.50;
-  double icp_max_divergence_xy_m = 0.15;
-  double icp_max_divergence_theta_rad = 0.35;
 };
 
 }  // namespace fusion_graph

@@ -65,7 +65,7 @@ TEST(Persistence, LoadOfEmptyMetaIsRefused)
   const auto prefix = TempPrefix("load_empty");
   CleanupPrefix(prefix);
 
-  // Hand-craft the empty file triple a pre-fix binary would produce.
+  // Hand-craft the empty files a pre-fix binary would produce.
   {
     std::ofstream g(prefix + ".graph");
     g << "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>\n"
@@ -78,11 +78,6 @@ TEST(Persistence, LoadOfEmptyMetaIsRefused)
          "  </values_>\n"
          "</data>\n"
          "</boost_serialization>\n";
-  }
-  {
-    std::ofstream s(prefix + ".scans", std::ios::binary);
-    const uint64_t zero = 0;
-    s.write(reinterpret_cast<const char*>(&zero), sizeof(zero));
   }
   {
     std::ofstream m(prefix + ".meta");
@@ -116,6 +111,7 @@ TEST(Persistence, NonEmptyRoundTrip)
     auto out = gm.Tick(0.2);
     ASSERT_TRUE(out.has_value());
     EXPECT_TRUE(gm.Save(prefix));
+    EXPECT_FALSE(fs::exists(prefix + ".scans"));
   }
   {
     fg::GraphManager gm(fg::GraphParams{});
@@ -128,7 +124,7 @@ TEST(Persistence, NonEmptyRoundTrip)
 
 // Cross-garden guard: `.meta` carries the datum the graph was saved under.
 // A graph persisted at one garden must be refused when the node is configured
-// for another (its node poses and scans would inject wrong absolute factors),
+// for another (its node poses would inject wrong absolute factors),
 // while the same datum — and an unset (0,0) datum, the self-seeded bootstrap
 // case — still load. Ported from the removed keyframe-map persistence test.
 TEST(Persistence, LoadRefusesGraphSavedUnderAnotherDatum)
@@ -172,5 +168,29 @@ TEST(Persistence, LoadRefusesGraphSavedUnderAnotherDatum)
     EXPECT_TRUE(gm.Load(prefix));
   }
 
+  CleanupPrefix(prefix);
+}
+
+// The historical .scans sidecar is obsolete. Existing pose archives remain
+// loadable even if that optional old blob is absent or damaged.
+TEST(Persistence, LegacyScanSidecarIsIgnored)
+{
+  const auto prefix = TempPrefix("legacy_scan_sidecar");
+  CleanupPrefix(prefix);
+  {
+    fg::GraphManager gm(fg::GraphParams{});
+    gm.Initialize(gtsam::Pose2(1.0, 2.0, 0.5), 0.0);
+    ASSERT_TRUE(gm.Save(prefix));
+  }
+  {
+    std::ofstream old_sidecar(prefix + ".scans", std::ios::binary);
+    old_sidecar << "obsolete unreadable scan archive";
+  }
+  fg::GraphManager loaded(fg::GraphParams{});
+  ASSERT_TRUE(loaded.Load(prefix));
+  const auto latest = loaded.LatestSnapshot();
+  ASSERT_TRUE(latest);
+  EXPECT_NEAR(latest->pose.x(), 1.0, 1e-9);
+  EXPECT_NEAR(latest->pose.y(), 2.0, 1e-9);
   CleanupPrefix(prefix);
 }

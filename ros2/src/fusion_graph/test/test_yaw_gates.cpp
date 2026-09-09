@@ -70,19 +70,3 @@ TEST(CogEffectiveSigma, HandlesInvalidVariance)
   EXPECT_NEAR(fg::CogEffectiveSigma(-1.0, 0.15), 0.15, 1e-9);
   EXPECT_NEAR(fg::CogEffectiveSigma(std::nan(""), 0.02), 0.05, 1e-9);
 }
-
-// ── ScanYawSigma ────────────────────────────────────────────────────────
-TEST(ScanYawSigma, FloorsTightScanYaw)
-{
-  EXPECT_NEAR(fg::ScanYawSigma(0.005, 0.30), 0.30, 1e-9);
-}
-
-TEST(ScanYawSigma, KeepsLooseScanYaw)
-{
-  EXPECT_NEAR(fg::ScanYawSigma(0.50, 0.30), 0.50, 1e-9);
-}
-
-TEST(ScanYawSigma, ZeroFloorIsPassthrough)
-{
-  EXPECT_NEAR(fg::ScanYawSigma(0.005, 0.0), 0.005, 1e-9);
-}

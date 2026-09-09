@@ -127,3 +127,51 @@ TEST(LidarMapXyPrior, CovarianceIsFlooredAtSigmaFloor)
       << "1 m covariance pulled almost as hard as the floor: huge=" << moved_huge
       << " floor=" << moved_floor;
 }
+
+TEST(LidarMapXyPrior, DelayedObservationUsesHistoricalNodeAndMotionOffset)
+{
+  fg::GraphManager gm(TickParams());
+  DriveFiveNodes(gm);
+  auto before = gm.LatestSnapshot();
+  ASSERT_TRUE(before);
+  const auto offset = gtsam::Vector2(0.02, 0.0);
+  gm.QueueLidarMapXy(before->pose.translation() + offset,
+                     Eigen::Matrix2d::Identity() * 0.0025,
+                     false,
+                     before->node_index,
+                     offset);
+  gm.AddWheelTwist(0.5, 0.0, 0.0, 0.1);
+  gm.AddGyroDelta(0.0, 0.1);
+  auto out = gm.Tick(0.7);
+  ASSERT_TRUE(out);
+  EXPECT_EQ(gm.LidarAnchorFactorCount(), 1u);
+  EXPECT_NEAR(out->pose.x(), before->pose.x() + 0.05, 1e-5);
+}
+TEST(LidarMapXyPrior, MissingHistoricalNodeDoesNotFallForward)
+{
+  fg::GraphManager gm(TickParams());
+  DriveFiveNodes(gm);
+  gm.QueueLidarMapXy(gtsam::Vector2(10, 10), Eigen::Matrix2d::Identity() * 0.0025, false, 999999);
+  gm.AddWheelTwist(0.5, 0.0, 0.0, 0.1);
+  ASSERT_TRUE(gm.Tick(0.7));
+  EXPECT_EQ(gm.LidarAnchorFactorCount(), 0u);
+}
+
+TEST(LidarMapXyPrior, ExpiredOrCancelledObservationDoesNotApply)
+{
+  fg::GraphManager gm(TickParams());
+  DriveFiveNodes(gm);
+  gm.QueueLidarMapXy(gtsam::Vector2(10, 10),
+                     Eigen::Matrix2d::Identity() * 0.0025,
+                     false,
+                     std::nullopt,
+                     gtsam::Vector2::Zero(),
+                     0.55);
+  gm.AddWheelTwist(0.5, 0.0, 0.0, 0.1);
+  ASSERT_TRUE(gm.Tick(0.7));
+  EXPECT_EQ(gm.LidarAnchorFactorCount(), 0u);
+  gm.QueueLidarMapXy(gtsam::Vector2(10, 10), Eigen::Matrix2d::Identity() * 0.0025);
+  gm.ClearLidarObservations();
+  ASSERT_TRUE(gm.Tick(0.9));
+  EXPECT_EQ(gm.LidarAnchorFactorCount(), 0u);
+}

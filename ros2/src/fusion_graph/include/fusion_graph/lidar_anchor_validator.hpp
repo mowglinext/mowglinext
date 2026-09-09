@@ -37,6 +37,14 @@ struct LidarAnchorValidatorParams
   double dr_drift_frac = 0.02;  // ... plus this fraction of the distance driven since seed
 };
 
+inline bool ValidLidarAnchorParams(const LidarAnchorValidatorParams& p)
+{
+  return std::isfinite(p.min_hit_ratio) && p.min_hit_ratio > 0.0 && p.min_hit_ratio <= 1.0 &&
+         p.min_hit_count > 0 && std::isfinite(p.max_sigma_m) && p.max_sigma_m > 0.0 &&
+         std::isfinite(p.dr_budget_m) && p.dr_budget_m >= 0.0 && std::isfinite(p.dr_drift_frac) &&
+         p.dr_drift_frac >= 0.0;
+}
+
 struct LidarAnchorCandidate
 {
   double x = 0.0;
@@ -65,9 +73,10 @@ inline double DeadReckoningBudgetM(const LidarAnchorValidatorParams& p, double d
 inline LidarAnchorVerdict ValidateLidarAnchor(const LidarAnchorCandidate& c,
                                               const LidarAnchorValidatorParams& p)
 {
-  if (c.hit_ratio < p.min_hit_ratio || c.hit_count < p.min_hit_count)
+  if (!ValidLidarAnchorParams(p) || !std::isfinite(c.hit_ratio) || c.hit_ratio > 1.0 ||
+      c.hit_ratio < p.min_hit_ratio || c.hit_count < p.min_hit_count)
     return LidarAnchorVerdict::kRejectedScore;
-  if (!(c.sigma_m <= p.max_sigma_m))  // also rejects NaN
+  if (!(c.sigma_m >= 0.0 && c.sigma_m <= p.max_sigma_m))  // also rejects NaN
     return LidarAnchorVerdict::kRejectedSpread;
   const double d = std::hypot(c.x - c.dr_x, c.y - c.dr_y);
   if (!(d <= DeadReckoningBudgetM(p, c.dist_since_seed_m)))

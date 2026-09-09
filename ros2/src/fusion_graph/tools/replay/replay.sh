@@ -19,7 +19,7 @@ sleep 1
 ros2 run fusion_graph fusion_graph_node --ros-args -r __node:=fusion_graph_node --params-file "$PF" \
   -p use_sim_time:=true -p datum_lat:=48.879649550 -p datum_lon:=2.172814460 -p lever_arm_x:=0.3 -p lever_arm_y:=0.0 \
   -p dock_pose_x:=6.272769 -p dock_pose_y:=2.798334 -p dock_pose_yaw:=-0.934583 \
-  -p use_scan_matching:=true -p use_loop_closure:=true -p use_lidar_map_anchor:=${ANCHOR:-true} -p scan_topic:=/scan ${EXTRA:-} \
+  -p use_lidar_map_anchor:=${ANCHOR:-true} -p scan_topic:=/scan ${EXTRA:-} \
   > "$OUT/node.log" 2>&1 &
 NODE=$!
 sleep 1

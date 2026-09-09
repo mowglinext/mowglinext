@@ -168,70 +168,7 @@ fusion_graph_node:
     # ~1 m and the map→odom estimate started jumping metres while the
     # robot sat still. Set to 0 to restore legacy keep-everything.
     #
-    # 2026-06-04: raised 3000 → 6000. Loop closure was structurally dead
-    # with 3000: FindLoopClosureCandidates requires a candidate that is
-    # BOTH ≥ lc_min_age_s old AND still has a pose in the graph
-    # (HasPoseAt). The age gate in node-indices is ceil(lc_min_age_s /
-    # node_period_s); with the old lc_min_age_s=600 @ 0.04 s that was
-    # 15000 indices, but poses are pruned after max_graph_nodes=3000, so
-    # any age-eligible node had already been dropped → candidate set
-    # always empty → loop_closures stuck at 0 forever (confirmed on-robot
-    # 2026-06-04: 153 578 total nodes, 0 loop closures, 0 log lines). For
-    # loop closure to EVER fire the pose window must outlast the age gate:
-    # 6000 nodes ≈ 4 min @ 25 Hz vs the new lc_min_age_s=30 (≈ 750
-    # indices), leaving a ~5000-node band of revisitable candidates.
     max_graph_nodes: 6000
-
-    # ── Loop-closure candidate age gate ──────────────────────────────
-    # A node must be at least this many seconds old to be a loop-closure
-    # candidate (FindLoopClosureCandidates, converted to node-indices via
-    # node_period_s). MUST stay well under max_graph_nodes·node_period_s
-    # or loop closure can never fire (see the max_graph_nodes note). The
-    # node's declare default is 600 s, which silently disabled the feature
-    # under the 3000-node window. 30 s ≈ 750 indices @ 25 Hz — long enough
-    # to skip the just-visited neighbours, short enough that a
-    # boustrophedon swath turnaround (adjacent swath ~30-90 s earlier,
-    # within lc_max_dist_m=5 m) registers as a revisit.
-    #
-    # The earlier claim that the stationary throttle + lc_max_candidates=3 bound
-    # dock-IDLE closures was WRONG: a long mowing session leaves thousands of
-    # nearby nodes, and a robot parked among them loop-closes every new stationary
-    # node against fresh candidates indefinitely → unbounded iSAM2 factor growth
-    # that OOM-killed the node 2026-06-09. The real bound is now
-    # lc_skip_when_rtk_fixed (below) + the max_graph_nodes window restriction in
-    # FindLoopClosureCandidates — NOT this age gate. Keep lc_min_age_s=30 so LC
-    # still fires within the window during genuine RTK-Float (tree-cover) windows.
-    lc_min_age_s: 30.0
-
-    # Skip loop-closure GENERATION while an RTK-Fixed sample is fresh (within
-    # scan_yield_timeout_s). Under RTK-Fixed the GPS factor is already absolute
-    # and mm-accurate, so each LC adds an iSAM2 factor for ~no information — an
-    # unbounded leak over a long stationary dwell (dock IDLE / charging). This is
-    # the primary fix for the 2026-06-09 OOM. LC re-enables once the fix goes
-    # stale, so no-fix windows still get global consistency. Default true.
-    lc_skip_when_rtk_fixed: true
-
-    # Loop-closure rate/travel gate + GPS σ floor (issue #513). Because
-    # lc_skip_when_rtk_fixed disables LC under Fixed, the search runs exactly
-    # when GPS is Float or absent — and there the scan_yield σ inflation never
-    # applies. Unbounded it fires up to 1/node_period_s × lc_max_candidates =
-    # 25 Hz × 3 = 75 /s; measured live 2026-09-02 (mow #1, 100 % Float): 13.7
-    # accepted LC/s (5194 over 1900 samples at 5 Hz), 3816 in the 286 s MOWING
-    # phase, 0 under Fixed — each a 5 cm/0.02 rad factor to the ADJACENT swath
-    # (ICP on featureless grass converges to something with 10-20 cm RMSE
-    # almost every time), i.e. a lateral snap of one swath spacing ~13× per
-    # second. Fix: at most ONE accepted LC per node, and none until BOTH
-    # lc_min_interval_s has elapsed AND lc_min_travel_m of wheel travel has
-    # accrued since the last ACCEPTED LC (accumulators reset on accept only —
-    # see loop_closure_gate.hpp). <= 0 disables either half.
-    lc_min_travel_m: 1.0
-    lc_min_interval_s: 2.0
-    # lc_sigma_xy = max(lc_sigma_xy, lc_gps_sigma_ratio × σ of the last accepted
-    # GPS sample): an LC can never be tighter than the most recent GNSS fix.
-    # Under Float (σ ≈ 0.3 m) LC becomes advisory; under Fixed (σ ≈ 3 mm) the
-    # floor is below lc_sigma_xy and nothing changes; with no GPS ever seen the
-    # floor is skipped. <= 0 disables.
-    lc_gps_sigma_ratio: 1.0
 
     # ── Online gyro bias estimation (item #3, pragmatic) ─────────────
     # During wheel-only stationary windows, EMA-update an estimate of
@@ -292,18 +229,6 @@ fusion_graph_node:
     # over-correct map→odom. coeff ≈ effective GPS latency in seconds; at
     # 0.20 m/s a coeff of 0.1 adds ~2 cm of σ. 0 = disabled (raw receiver σ).
     gps_sigma_speed_coeff: 0.0
-
-    # ── ICP scan-match guard rails ─────────────────────────────────────
-    # Applied to every scan_matcher_->Match result before queueing it
-    # as a graph factor. See fusion_graph_node.hpp comments for the
-    # physical rationale. Tune up (relax) if scan_matches_fail spikes
-    # on otherwise-OK outdoor matches; tune down (tighten) if degenerate
-    # matches corrupt iSAM2 trajectory.
-    icp_max_rmse_m: 0.10
-    icp_max_delta_xy_m: 0.30
-    icp_max_delta_theta_rad: 0.50
-    icp_max_divergence_xy_m: 0.15
-    icp_max_divergence_theta_rad: 0.35
 
     # ── GPS unary noise floor ──────────────────────────────────────────
     # Below this sigma, NavSatFix.covariance is treated as unrealistic
@@ -426,9 +351,14 @@ fusion_graph_node:
     # A/B (Float while driving, gap at re-Fix) validates it.
     use_lidar_map_anchor: false
     lidar_map_resolution_m: 0.10
-    lidar_map_half_extent_m: 40.0         # grid spans ±40 m around the datum
+    lidar_map_tile_size_m: 10.0          # persistent tiles in datum coordinates
+    lidar_map_radius_tiles: 2           # bounded 5 x 5 tiles, 50 x 50 m at defaults
     lidar_map_insert_period_s: 0.5        # insert a scan into the grid at most every 0.5 s
-    lidar_map_rebuild_period_s: 5.0       # push the grid to the filter at most every 5 s
+    lidar_map_rebuild_period_s: 5.0       # publish local grid; PF rebuild deferred until computation
+    lidar_anchor_max_rate_hz: 5.0
+    lidar_anchor_calibration_period_s: 60.0
+    lidar_anchor_calibration_burst_s: 10.0
+    lidar_anchor_warmup_s: 5.0           # start PF this long before apply_age_s
     # Log-odds evidence: a return adds log_odds_hit to its cell, every cell the
     # ray crossed gets log_odds_miss; a cell is exported OCCUPIED at or above
     # occupied_threshold, FREE at or below free_threshold. With the defaults ONE
@@ -439,6 +369,8 @@ fusion_graph_node:
     lidar_map_log_odds_miss: -0.40
     lidar_map_occupied_threshold: 1.7      # two concordant hits — garden default (replay sweep 2026-09-07)
     lidar_map_free_threshold: -0.40
+    lidar_scan_max_age_s: 0.5             # discard stale scans; never reuse an acquisition
+    lidar_anchor_apply_age_s: 20.0        # XY application delay, independent of map-learning freshness
     lidar_anchor_engage_age_s: 1.0        # engage once RTK-Fixed is older than this (~5 missed fixes at 5 Hz; 0.3 flapped)
     lidar_anchor_disengage_dwell_s: 1.0   # once anchoring, Fixed must be fresh this long before mapping resumes
     lidar_anchor_max_beams: 60            # AMCL-class beam subsampling
@@ -480,9 +412,9 @@ fusion_graph_node:
     # field. The DR reference is refreshed from the fused pose every
     # lidar_anchor_shadow_ref_period_s while Fixed.
     lidar_anchor_shadow_mode: false
-    # Persistence: the grid is saved next to the graph as <prefix>.lidarmap on
-    # every graph save (service / periodic / dock) and reloaded at startup when
-    # its datum matches; ~/clear_lidar_map wipes grid, filter and file.
+    # Persistence: <prefix>.lidartiles, exact evidence, async on window changes
+    # and graph-save requests. Old .lidarmap is migrated once, with datum and
+    # resolution checks. clear_lidar_map queues deletion of the whole archive.
     # One-shot import of a previously published grid (first message only) —
     # replay harness / persisted map seed. Empty = off.
     lidar_map_import_topic: ""
@@ -497,8 +429,7 @@ fusion_graph_node:
     # samples (once lidar_anchor_shadow_min_samples exist) becomes the floor
     # on the applied factor's σ, clamped to [lidar_anchor_sigma_floor_m,
     # lidar_anchor_max_sigma_m]. Field 2026-09-08: p90 0.15 m vs a fixed 0.05.
-    # With it on, the filter also runs (unapplied) under RTK-Fixed even when
-    # lidar_anchor_shadow_mode is off, to collect those samples.
+    # With it on, short periodic RTK-Fixed calibration bursts collect samples.
     lidar_anchor_adaptive_floor: true
     lidar_anchor_floor_quantile: 0.9
     lidar_anchor_shadow_window: 300

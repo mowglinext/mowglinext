@@ -31,6 +31,13 @@ public:
     buf_.reserve(window_);
   }
 
+  void Clear()
+  {
+    buf_.clear();
+    next_ = 0;
+    total_ = 0;
+  }
+
   void Push(double err_m)
   {
     if (!(err_m >= 0.0))

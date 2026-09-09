@@ -514,19 +514,7 @@ class TestLidarEnabledResolution:
 
 
 class TestScanFactorsFollowLidar:
-    """use_scan_matching / use_loop_closure must follow use_lidar.
-
-    The gating leaked: both default from the TEMPLATE (`true` for each), which
-    has no relation to `lidar_enabled`, so a GPS-only stack still handed
-    fusion_graph use_scan_matching=True. Observed live 2026-08-31 with
-    use_lidar=false: use_scan_matching=True, use_loop_closure=True,
-    /scan_deskewed publisher count 0, scans_received 0.
-
-    navigation.launch.py ANDs each flag with use_lidar at SUBSTITUTION time (so
-    a CLI `use_lidar:=` override is covered too). These tests evaluate the same
-    expression the launch file builds, and pin that it is actually applied to
-    both flags.
-    """
+    """The active scan-to-map anchor follows hardware; retired ICP stays off."""
 
     @staticmethod
     def _gate(lidar_text, flag_text):
@@ -544,30 +532,42 @@ class TestScanFactorsFollowLidar:
                 + " else 'false'")
         return eval(expr, {"__builtins__": {}})  # noqa: S307
 
-    @pytest.mark.parametrize("flag", ["use_scan_matching", "use_loop_closure"])
+    @pytest.mark.parametrize("flag", ["use_lidar_map_anchor"])
     def test_lidar_off_forces_flag_off(self, flag):
         """No scanner -> no scan factors, whatever the yaml asked for."""
         # Arrange / Act / Assert
         assert self._gate("false", "true") == "false", flag
         assert self._gate("false", "false") == "false", flag
 
-    @pytest.mark.parametrize("flag", ["use_scan_matching", "use_loop_closure"])
+    @pytest.mark.parametrize("flag", ["use_lidar_map_anchor"])
     def test_lidar_on_passes_the_operator_choice_through(self, flag):
         """The gate must not become an override: with a LiDAR present the
-        operator's own use_scan_matching / use_loop_closure still decides."""
+        operator's own use_lidar_map_anchor still decides."""
         # Arrange / Act / Assert
         assert self._gate("true", "true") == "true", flag
         assert self._gate("true", "false") == "false", flag
 
-    def test_navigation_launch_gates_both_flags(self):
-        """Source-text guard that the gate is wired to BOTH flags where they are
-        handed to fusion_graph (a pure truth-table test cannot see that)."""
-        # Arrange / Act
+    def test_navigation_gates_anchor_and_disables_retired_icp(self):
         src = _COVERAGE_LAUNCH.read_text()
+        assert '"use_lidar_map_anchor": lidar_gated(use_lidar_map_anchor)' in src
+        assert "use_scan_matching" not in src
+        assert "use_loop_closure" not in src
 
-        # Assert
-        assert '"use_scan_matching": lidar_gated(use_scan_matching)' in src
-        assert '"use_loop_closure": lidar_gated(use_loop_closure)' in src
+    def test_standalone_disables_retired_icp_and_requires_anchor_opt_in(self):
+        import ast
+        path = _PKG_DIR.parent / "fusion_graph" / "launch" / "fusion_graph.launch.py"
+        tree = ast.parse(path.read_text())
+        for key in ("use_scan_matching", "use_loop_closure"):
+            assert key not in path.read_text()
+        declarations = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name)
+                        and node.func.id == "DeclareLaunchArgument" and node.args
+                        and isinstance(node.args[0], ast.Constant)
+                        and node.args[0].value == "use_lidar_map_anchor"]
+        assert len(declarations) == 1
+        defaults = [kw.value for kw in declarations[0].keywords if kw.arg == "default_value"]
+        assert len(defaults) == 1
+        assert isinstance(defaults[0], ast.Constant) and defaults[0].value == "false"
 
     def test_scan_deskew_warns_when_lidar_on_but_no_scans(self):
         """The opposite mismatch: config says LiDAR on, the mowgli-lidar

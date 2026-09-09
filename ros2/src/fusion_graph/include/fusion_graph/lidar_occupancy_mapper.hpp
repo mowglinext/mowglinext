@@ -3,7 +3,7 @@
 //
 // Georeferenced 2D occupancy grid built from LiDAR scans at TRUSTED poses.
 // Pure — no ROS / GTSAM / Beluga — so it is unit-testable, same shape as
-// slip_window.hpp and scan_match_dedup.hpp.
+// slip_window.hpp and lidar_scan_history.hpp.
 //
 // Role in the LiDAR map anchor: while RTK is Fixed the fused pose is
 // centimetre-accurate, so every scan can be ray-cast into a map-frame grid
@@ -24,6 +24,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -62,9 +63,47 @@ public:
   explicit LidarOccupancyMapper(const LidarOccupancyMapperParams& p) : p_(p)
   {
     const double extent = 2.0 * p_.half_extent_m;
-    n_ = static_cast<std::size_t>(std::max(1.0, std::ceil(extent / p_.resolution_m)));
+    const double cells = extent / p_.resolution_m;
+    const double rounded = std::round(cells);
+    n_ = static_cast<std::size_t>(
+        std::max(1.0, std::abs(cells - rounded) < 1e-9 ? rounded : std::ceil(cells)));
+    origin_x_ = origin_y_ = -static_cast<double>(n_) * p_.resolution_m / 2.0;
     log_odds_.assign(n_ * n_, 0.0);
     touched_.assign(n_ * n_, 0);
+  }
+
+  // Window geometry is immutable after construction; evidence is indexed in this frame.
+  LidarOccupancyMapper(const LidarOccupancyMapperParams& p, double origin_x, double origin_y)
+      : LidarOccupancyMapper(p)
+  {
+    origin_x_ = origin_x;
+    origin_y_ = origin_y;
+  }
+
+  struct Evidence
+  {
+    double log_odds = 0.0;
+    uint8_t touched = 0;
+  };
+
+  Evidence EvidenceAt(std::size_t x, std::size_t y) const
+  {
+    if (x >= n_ || y >= n_)
+      throw std::out_of_range("LiDAR evidence cell");
+    const auto i = y * n_ + x;
+    return {log_odds_.at(i), touched_.at(i)};
+  }
+
+  bool SetEvidence(std::size_t x, std::size_t y, Evidence value)
+  {
+    if (x >= n_ || y >= n_ || !std::isfinite(value.log_odds) || value.touched > 1 ||
+        value.log_odds < p_.log_odds_min || value.log_odds > p_.log_odds_max ||
+        (!value.touched && value.log_odds != 0.0))
+      return false;
+    const auto i = y * n_ + x;
+    log_odds_[i] = value.log_odds;
+    touched_[i] = value.touched;
+    return true;
   }
 
   std::size_t size() const
@@ -113,8 +152,8 @@ public:
   {
     ExportedOccupancyGrid g;
     g.resolution_m = p_.resolution_m;
-    g.origin_x = -static_cast<double>(n_) * p_.resolution_m / 2.0;
-    g.origin_y = g.origin_x;
+    g.origin_x = origin_x_;
+    g.origin_y = origin_y_;
     g.width = n_;
     g.height = n_;
     g.data.assign(n_ * n_, -1);
@@ -185,19 +224,22 @@ public:
 
   // Import a previously exported grid (same convention as Export: 0 free,
   // 100 occupied, -1 unknown; origin = lower-left corner). Cells are placed
-  // by WORLD coordinate, so a grid of a different extent or resolution still
-  // lands where it belongs. Occupied cells load at the occupied threshold and
+  // by WORLD coordinate, so a grid of a different extent still
+  // lands where it belongs. Incompatible resolutions are rejected without mutation.
+  // Occupied cells load at the occupied threshold and
   // free cells at the free threshold: known, but not saturated, so live
   // scans can still overturn them. Counts as one inserted scan.
-  void ImportCells(double resolution_m,
+  bool ImportCells(double resolution_m,
                    double origin_x,
                    double origin_y,
                    int width,
                    int height,
                    const std::vector<int8_t>& data)
   {
-    if (width <= 0 || height <= 0 || data.size() != static_cast<std::size_t>(width) * height)
-      return;
+    if (!std::isfinite(resolution_m) || std::abs(resolution_m - p_.resolution_m) > 1e-6 ||
+        !std::isfinite(origin_x) || !std::isfinite(origin_y) || width <= 0 || height <= 0 ||
+        data.size() != static_cast<std::size_t>(width) * height)
+      return false;
     for (int r = 0; r < height; ++r)
       for (int c = 0; c < width; ++c)
       {
@@ -214,6 +256,7 @@ public:
         touched_[i] = 1;
       }
     ++inserted_;
+    return true;
   }
 
   double LogOddsAt(double wx, double wy) const
@@ -227,10 +270,10 @@ public:
 private:
   bool ToCell(double wx, double wy, int& x, int& y) const
   {
-    const double origin = -static_cast<double>(n_) * p_.resolution_m / 2.0;
-    const double fx = (wx - origin) / p_.resolution_m;
-    const double fy = (wy - origin) / p_.resolution_m;
-    if (fx < 0.0 || fy < 0.0)
+    const double fx = (wx - origin_x_) / p_.resolution_m;
+    const double fy = (wy - origin_y_) / p_.resolution_m;
+    if (!std::isfinite(fx) || !std::isfinite(fy) || fx < 0.0 || fy < 0.0 ||
+        fx >= static_cast<double>(n_) || fy >= static_cast<double>(n_))
       return false;
     x = static_cast<int>(fx);
     y = static_cast<int>(fy);
@@ -250,11 +293,10 @@ private:
   // cell BEFORE the end cell as a miss. Stops at the grid border.
   void TraceFree(int x0, int y0, double wx, double wy, std::pair<int, int> end)
   {
-    const double origin = -static_cast<double>(n_) * p_.resolution_m / 2.0;
     // Clip the endpoint to a far point on the same ray so the walk has a
     // finite integer target even when the true end lies outside the grid.
-    int x1 = static_cast<int>(std::floor((wx - origin) / p_.resolution_m));
-    int y1 = static_cast<int>(std::floor((wy - origin) / p_.resolution_m));
+    int x1 = static_cast<int>(std::floor((wx - origin_x_) / p_.resolution_m));
+    int y1 = static_cast<int>(std::floor((wy - origin_y_) / p_.resolution_m));
     const int dx = std::abs(x1 - x0), dy = -std::abs(y1 - y0);
     const int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
     int err = dx + dy;
@@ -284,6 +326,8 @@ private:
   }
 
   LidarOccupancyMapperParams p_;
+  double origin_x_ = 0.0;
+  double origin_y_ = 0.0;
   std::size_t n_ = 0;
   std::vector<double> log_odds_;
   std::vector<uint8_t> touched_;

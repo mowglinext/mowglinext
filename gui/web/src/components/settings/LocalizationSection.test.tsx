@@ -5,7 +5,7 @@ import {LocalizationSection} from "./LocalizationSection.tsx";
 
 // The two LiDAR map-anchor keys (use_lidar_map_anchor,
 // lidar_anchor_shadow_mode) are template keys in mowgli_robot.yaml with no
-// schema entry, written straight through like use_scan_matching. Shadow mode
+// schema entry, written straight through. Shadow mode
 // is meaningless with the anchor off, so its switch is locked until the anchor
 // is on.
 vi.mock("../../hooks/useDiagnostics.ts", () => ({
@@ -32,10 +32,10 @@ describe("LocalizationSection LiDAR map anchor toggles", () => {
         return sw as HTMLElement;
     }
 
-    it("renders both anchor toggles next to scan matching and loop closure", () => {
-        renderSection({lidar_enabled: true, use_scan_matching: true, use_loop_closure: true});
-        expect(screen.getByText(/LiDAR scan matching/)).toBeInTheDocument();
-        expect(screen.getByText(/^Loop closure$/)).toBeInTheDocument();
+    it("renders only the scan-to-map localization toggles", () => {
+        renderSection({lidar_enabled: true});
+        expect(screen.queryByText(/LiDAR scan matching/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/^Loop closure$/)).not.toBeInTheDocument();
         expect(screen.getByText(/^LiDAR map anchor$/)).toBeInTheDocument();
         expect(screen.getByText(/^Anchor shadow mode$/)).toBeInTheDocument();
     });

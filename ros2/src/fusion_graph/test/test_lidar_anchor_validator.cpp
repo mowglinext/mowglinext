@@ -87,3 +87,24 @@ TEST(LidarAnchorValidator, ScoreIsCheckedBeforeSpreadAndDeadReckoning)
   c.dr_x = 100.0;
   EXPECT_EQ(ValidateLidarAnchor(c, {}), LidarAnchorVerdict::kRejectedScore);
 }
+
+TEST(LidarAnchorValidator, InvalidConfigurationCannotDisableTrustChecks)
+{
+  auto p = LidarAnchorValidatorParams{};
+  p.min_hit_ratio = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(fusion_graph::ValidLidarAnchorParams(p));
+  EXPECT_NE(ValidateLidarAnchor(Good(), p), LidarAnchorVerdict::kAccepted);
+  p = {};
+  p.dr_budget_m = std::numeric_limits<double>::infinity();
+  EXPECT_FALSE(fusion_graph::ValidLidarAnchorParams(p));
+  p = {};
+  p.min_hit_count = 0;
+  EXPECT_FALSE(fusion_graph::ValidLidarAnchorParams(p));
+}
+
+TEST(LidarAnchorValidator, NonfiniteSupportIsNotEvidence)
+{
+  auto c = Good();
+  c.hit_ratio = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_EQ(ValidateLidarAnchor(c, {}), LidarAnchorVerdict::kRejectedScore);
+}

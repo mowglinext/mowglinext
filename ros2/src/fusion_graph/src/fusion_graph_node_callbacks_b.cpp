@@ -99,7 +99,7 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
     // (RTK-Fixed fresh). With cog_to_imu's straight-baseline gate the COGs
     // that arrive are already clean; requiring RTK-Fixed avoids snapping the
     // yaw onto a Float-era COG.
-    const bool rtk_fresh = !cog_flip_require_rtk_ || RtkFixedReceiptIsFresh(scan_yield_timeout_s_);
+    const bool rtk_fresh = !cog_flip_require_rtk_ || RtkFixedReceiptIsFresh(cog_rtk_max_age_s_);
     auto snap = graph_->LatestSnapshot();
     if (!rtk_fresh || !snap)
     {
@@ -147,6 +147,7 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
           dr_x_ = 0.0;
           dr_y_ = 0.0;
           dr_yaw_ = 0.0;
+          ResetLidarTiming();
           t_map_odom_anchor_valid_ = false;
         }
         ++cog_flip_recoveries_;
@@ -219,67 +220,8 @@ void FusionGraphNode::OnScan(sensor_msgs::msg::LaserScan::ConstSharedPtr msg)
   std::lock_guard<std::mutex> lock(scan_mu_);
   latest_scan_ = std::move(pts);
   latest_scan_valid_ = !latest_scan_.empty();
-  ++latest_scan_seq_;
+  latest_scan_stamp_s_ = rclcpp::Time(msg->header.stamp).seconds();
   ++scans_received_;
-
-  // Cold-boot relocalization: if we autoloaded a graph but never had
-  // a fresh GPS+COG to validate the live pose, ICP-match this first
-  // scan against scans of nodes near the dock and force-anchor the
-  // last loaded node at the matched pose. This unsticks the case
-  // "GPS dead since boot, robot was placed back on dock manually
-  // between sessions".
-  if (autoload_succeeded_ && !relocalize_done_ && scan_matcher_ && latest_scan_valid_ &&
-      graph_->IsInitialized())
-  {
-    const auto candidates =
-        graph_->FindNodesNearXY(0.0, 0.0, 5.0, 5);  // dock is map origin (datum)
-    double best_rmse = std::numeric_limits<double>::infinity();
-    gtsam::Pose2 best_pose;
-    uint64_t best_idx = 0;
-    for (uint64_t idx : candidates)
-    {
-      auto cand_scan = graph_->GetScan(idx);
-      auto cand_pose = graph_->GetPose(idx);
-      if (cand_scan.empty() || !cand_pose)
-        continue;
-      // Match returns a RELATIVE body-to-body transform, not an absolute pose,
-      // so seed with a relative init (identity — the robot is expected near the
-      // candidate). Match(cand, latest) returns delta = latest.between(cand);
-      // the live robot's absolute map pose is therefore
-      // cand_pose.compose(delta.inverse()). Seeding ICP with the candidate's
-      // ABSOLUTE pose (metres from origin) used to push the brute-force NN
-      // outside its correspondence gate.
-      auto res = scan_matcher_->Match(cand_scan, latest_scan_, gtsam::Pose2());
-      if (res.ok && res.rmse < best_rmse)
-      {
-        best_rmse = res.rmse;
-        best_pose = cand_pose->compose(res.delta.inverse());
-        best_idx = idx;
-      }
-    }
-    if (std::isfinite(best_rmse) && best_rmse < 0.10)
-    {
-      // Anchor the latest loaded node at the matched ABSOLUTE pose so future
-      // wheel/scan factors compose from a consistent reference.
-      auto snap = graph_->LatestSnapshot();
-      if (snap)
-      {
-        graph_->ForceAnchor(snap->node_index, best_pose, 0.05, 0.05);
-        // ForceAnchor shifts latest_.pose without bumping node_index;
-        // invalidate the cached map→odom anchor so OnTimer recomputes.
-        t_map_odom_anchor_valid_ = false;
-        relocalize_done_ = true;
-        RCLCPP_INFO(get_logger(),
-                    "fusion_graph: relocalized via scan match "
-                    "node=%lu rmse=%.3f → (%.2f, %.2f, %.2f rad)",
-                    static_cast<unsigned long>(best_idx),
-                    best_rmse,
-                    best_pose.x(),
-                    best_pose.y(),
-                    best_pose.theta());
-      }
-    }
-  }
 }
 
 void FusionGraphNode::OnHighLevelStatus(mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
@@ -335,26 +277,16 @@ void FusionGraphNode::OnSetPose(geometry_msgs::msg::PoseWithCovarianceStamped::C
   if (!snap)
     return;
   graph_->ForceAnchor(snap->node_index, pose, sigma_xy, sigma_theta);
+  ResetLidarTiming();
   t_map_odom_anchor_valid_ = false;  // see comment above
 
-  // Suppress the cold-boot scan-match relocalize heuristic. The
-  // explicit seed (typically dock_yaw_to_set_pose firing on a
-  // charging rising edge with the calibrated dock_pose from
-  // mowgli_robot.yaml) is more authoritative than ICP against the
-  // persisted graph's old scans — especially when the operator
-  // has re-calibrated dock_pose since the persisted session, in
-  // which case the scan-match relocalize would pull the trajectory
-  // back to the OLD dock anchor. Mark relocalize_done_ so OnScan
-  // skips the heuristic on the very first incoming scan.
-  relocalize_done_ = true;
-  // Same reasoning for the RTK-autoload override path: the seed
-  // we just applied is the operator's intent, GPS shouldn't fight
-  // it within the threshold window.
+  // The explicit seed is the operator's intent. Suppress the one-shot
+  // RTK-autoload override so it cannot immediately undo this command.
   rtk_autoload_override_done_ = true;
 
   RCLCPP_INFO(get_logger(),
               "fusion_graph: re-anchored node %lu via /set_pose to "
-              "(%.2f, %.2f, %.2f rad) — relocalize suppressed",
+              "(%.2f, %.2f, %.2f rad)",
               static_cast<unsigned long>(snap->node_index),
               pose.x(),
               pose.y(),
@@ -379,33 +311,19 @@ void FusionGraphNode::DispatchAsyncSave(const char* reason)
                 reason);
     return;
   }
-  // The LiDAR anchor map rides along: exported here on the executor (the
-  // mapper is not thread-safe; the export is a ~640 KB copy), written on the
-  // worker next to the graph files.
-  std::optional<LidarMapFile> map_file;
-  if (lidar_mapper_ && lidar_mapper_->inserted_scans() > 0)
+  if (lidar_submaps_)
   {
-    LidarMapFile m;
-    get_parameter("datum_lat", m.datum_lat);
-    get_parameter("datum_lon", m.datum_lon);
-    m.grid = lidar_mapper_->Export();
-    // Never overwrite a good persisted map with an empty one: the dock
-    // checkpoint fires on the charging edge right after boot, before a
-    // single scan was inserted (nothing is inserted while charging).
-    if (m.grid.occupied > 0)
-      map_file = std::move(m);
+    lidar_submaps_->RequestSave();
+    lidar_mapper_ = lidar_submaps_->mapper();
   }
   std::thread(
       [graph = graph_,
        logger = get_logger(),
        prefix = graph_save_prefix_,
        reason = std::string(reason),
-       flag = save_in_flight_,
-       map_file = std::move(map_file)]()
+       flag = save_in_flight_]()
       {
         bool ok = graph->Save(prefix);
-        if (map_file)
-          ok = WriteLidarMapFile(prefix + ".lidarmap", *map_file) && ok;
         RCLCPP_INFO(logger,
                     "fusion_graph: %s auto-save → %s",
                     reason.c_str(),

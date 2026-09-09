@@ -28,25 +28,8 @@ type Toggle = {
     dependsOn?: string;
 };
 
-// Optional LiDAR factors that live in the same fusion_graph_node now
-// that ekf_map_node is gone. Both default off; turning them on costs a
-// few ms/tick but lets the map-frame estimate ride through multi-minute
-// RTK-Float windows.
+// Scan-to-map localization supplies XY factors when GPS becomes stale.
 const LIDAR_FACTOR_TOGGLES: Toggle[] = [
-    {
-        key: "use_scan_matching",
-        title: "settingsLocalization.scanMatchingTitle",
-        summary: "settingsLocalization.scanMatchingSummary",
-        detail: "settingsLocalization.scanMatchingDetail",
-    },
-    {
-        key: "use_loop_closure",
-        title: "settingsLocalization.loopClosureTitle",
-        summary: "settingsLocalization.loopClosureSummary",
-        detail: "settingsLocalization.loopClosureDetail",
-    },
-    // Scan-to-map particle filter (XY only) that holds the position once
-    // RTK Fixed drops. ANDed with use_lidar at launch like the two above.
     {
         key: "use_lidar_map_anchor",
         title: "settingsLocalization.lidarMapAnchorTitle",

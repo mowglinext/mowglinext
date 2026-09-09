@@ -50,6 +50,12 @@ public:
     return pose_;
   }
 
+  void RebaseRaw(const Sophus::SE2d& raw)
+  {
+    prev_raw_ = raw;
+    ++rebases_;
+  }
+
   const Sophus::SE2d& pose() const
   {
     return pose_;

@@ -48,9 +48,6 @@ void FusionGraphNode::OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
       // test, only how far the chassis travelled.
       const double speed = std::hypot(msg->twist.twist.linear.x, msg->twist.twist.linear.y);
       wheel_dist_since_last_gps_m_ += speed * dt;
-      // Same scalar for the loop-closure travel gate (issue #513); reset only
-      // when a loop closure is ACCEPTED in OnTimer.
-      wheel_dist_since_last_lc_m_ += speed * dt;
     }
   }
   last_wheel_stamp_ = stamp;
@@ -59,6 +56,8 @@ void FusionGraphNode::OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
 void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
 {
   const rclcpp::Time stamp(msg->header.stamp);
+  if (last_imu_stamp_ && stamp == *last_imu_stamp_)
+    return;
   if (last_imu_stamp_)
   {
     double dt = (stamp - *last_imu_stamp_).seconds();
@@ -98,6 +97,14 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
       abs_dtheta_since_last_gps_rad_ += std::abs(gz) * dt;
     }
   }
+  if (last_imu_stamp_ && stamp <= *last_imu_stamp_)
+    ResetLidarTiming();
+  const auto odom =
+      lidar_anchor_odom_.Advance(Sophus::SE2d(dr_yaw_, Eigen::Vector2d(dr_x_, dr_y_)));
+  lidar_scan_history_.Push(stamp.seconds(),
+                           gtsam::Pose2(odom.translation().x(),
+                                        odom.translation().y(),
+                                        odom.so2().log()));
   last_imu_stamp_ = stamp;
   // Feed the high-rate extrapolator (item #15) too. Safe even when
   // fast_pose_timer_ is null — the extrapolator is just a value
@@ -133,7 +140,6 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   if (observation_update == ObservationUpdate::kRosTimeDiscontinuity)
   {
     last_rtk_fixed_stamp_.reset();
-    last_gps_sigma_ = -1.0;
     last_gps_map_xy_.reset();
     ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
     RCLCPP_WARN(get_logger(), "fusion_graph: ROS time moved backward; GNSS evidence epoch reset");
@@ -249,7 +255,6 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
                          msg->position_covariance_type,
                          var_x,
                          var_y);
-    last_gps_sigma_ = -1.0;  // no usable σ this epoch (LC σ floor has nothing to use)
     return;
   }
   if (gps_sigma_speed_coeff_ > 0.0)
@@ -279,7 +284,6 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
                          "sample dropped",
                          sigma,
                          gps_max_sigma_reject_m_);
-    last_gps_sigma_ = -1.0;
     return;
   }
   // Robust noise model on GPS — applied unconditionally now (was
@@ -310,7 +314,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
     return;
   }
 
-  const auto commit_current_gnss_evidence = [this, rtk_fixed, receipt_stamp, sigma]()
+  const auto commit_current_gnss_evidence = [this, rtk_fixed, receipt_stamp]()
   {
     // Receipt time, not callback time, is the freshness basis. Downstream gates
     // additionally reject negative age via IsReceiptFresh.
@@ -318,7 +322,6 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
     {
       last_rtk_fixed_stamp_ = receipt_stamp;
     }
-    last_gps_sigma_ = sigma;
   };
   // During the dock approach, hold position through the RTK fixed↔float
   // per-epoch flicker: drop non-Fixed epochs entirely so the dock controller's
@@ -528,6 +531,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
         // enough to let COG correct it without fighting if the
         // autoloaded yaw is wrong.
         graph_->ForceAnchor(snap->node_index, anchor, 0.005, 5.0 * M_PI / 180.0);
+        ResetLidarTiming();
         // ForceAnchor shifts latest_.pose without bumping node_index;
         // OnTimer's "node_index changed" check would miss it, leaving
         // map→odom anchored at the pre-override correction. Force a

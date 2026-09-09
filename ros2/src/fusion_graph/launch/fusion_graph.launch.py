@@ -91,20 +91,12 @@ def generate_launch_description() -> LaunchDescription:
         "use_magnetometer", default_value="false",
         description="Subscribe to /imu/mag_yaw and feed it into the graph (Huber-robustified). OFF by default; mag is corrupted by motor magnetic field on this chassis.",
     )
-    use_scan_matching_arg = DeclareLaunchArgument(
-        "use_scan_matching", default_value="false",
-        description="Per-tick ICP between consecutive node scans → BetweenFactor. Required for GPS-loss tolerance.",
-    )
     use_lidar_map_anchor_arg = DeclareLaunchArgument(
         "use_lidar_map_anchor", default_value="false",
         description="LiDAR map anchor: build a georeferenced occupancy grid under RTK-Fixed and localise against it (Beluga MCL) once Fixed goes stale; XY-only unary factor.")
     lidar_anchor_shadow_mode_arg = DeclareLaunchArgument(
         "lidar_anchor_shadow_mode", default_value="false",
         description="LiDAR map anchor shadow mode: run, score and publish the particle filter under RTK-Fixed too, never apply a factor. Field measurement of the anchor against RTK.")
-    use_loop_closure_arg = DeclareLaunchArgument(
-        "use_loop_closure", default_value="false",
-        description="Loop-closure search against earlier nodes; resets accumulated drift on revisits.",
-    )
     primary_mode_arg = DeclareLaunchArgument(
         "primary_mode", default_value="true",
         description="True: fusion_graph owns the map→odom TF and /odometry/filtered_map (replaces ekf_map_node). False: observer mode — output is remapped to /fusion_graph/odometry, no TF broadcast (ekf_map_node keeps owning the map frame). Set by navigation.launch.py based on whether a persisted graph file already exists.",
@@ -126,8 +118,6 @@ def generate_launch_description() -> LaunchDescription:
     )
     use_sim_time = LaunchConfiguration("use_sim_time")
     use_magnetometer = LaunchConfiguration("use_magnetometer")
-    use_scan_matching = LaunchConfiguration("use_scan_matching")
-    use_loop_closure = LaunchConfiguration("use_loop_closure")
     use_lidar_map_anchor = LaunchConfiguration("use_lidar_map_anchor")
     lidar_anchor_shadow_mode = LaunchConfiguration("lidar_anchor_shadow_mode")
     primary_mode = LaunchConfiguration("primary_mode")
@@ -154,8 +144,6 @@ def generate_launch_description() -> LaunchDescription:
             "lever_arm_x": lever_x,
             "lever_arm_y": lever_y,
             "use_magnetometer": use_magnetometer,
-            "use_scan_matching": use_scan_matching,
-            "use_loop_closure": use_loop_closure,
             "use_lidar_map_anchor": use_lidar_map_anchor,
             "lidar_anchor_shadow_mode": lidar_anchor_shadow_mode,
             "dock_pose_x": float(cfg.get("dock_pose_x", 0.0) or 0.0),
@@ -195,8 +183,6 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
         use_sim_time_arg,
         use_magnetometer_arg,
-        use_scan_matching_arg,
-        use_loop_closure_arg,
         use_lidar_map_anchor_arg,
         lidar_anchor_shadow_mode_arg,
         primary_mode_arg,

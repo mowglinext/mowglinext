@@ -31,8 +31,8 @@ var topicMap = map[string]topicDef{
 	// One-click dock calibration live status (the GUI's foxglove-friendly
 	// window into the CalibrateDock action — foxglove_bridge has no action op).
 	"dockCalibrationStatus": {"/calibrate_imu_yaw_node/dock_calibration/status", "mowgli_interfaces/msg/DockCalibrationStatus"},
-	"gps":             {"/gps/fix", "sensor_msgs/msg/NavSatFix"},
-	"gnssStatus":      {"/gps/status", "mowgli_interfaces/msg/GnssStatus"},
+	"gps":                   {"/gps/fix", "sensor_msgs/msg/NavSatFix"},
+	"gnssStatus":            {"/gps/status", "mowgli_interfaces/msg/GnssStatus"},
 	// The robot's global pose comes from fusion_graph_node, the sole
 	// map-frame localizer. "pose" and "fusionRaw" both point at
 	// /odometry/filtered_map; the duplicate key is kept for backwards
@@ -54,7 +54,6 @@ var topicMap = map[string]topicDef{
 	"lidarMap":            {"/fusion_graph/lidar_map", "nav_msgs/msg/OccupancyGrid"},         // fusion_graph LiDAR anchor map (large, latched)
 	"diagnostics":         {"/diagnostics", "diagnostic_msgs/msg/DiagnosticArray"},
 	"fusionDiag":          {"/fusion_graph/diagnostics", "diagnostic_msgs/msg/DiagnosticArray"},
-	"icpOdom":             {"/fusion_graph/icp_odometry", "nav_msgs/msg/Odometry"}, // LiDAR-only odom (ICP monitor)
 	"obstacles":           {"/obstacle_tracker/obstacles", "mowgli_interfaces/msg/ObstacleArray"},
 	"robotDescription":    {"/robot_description", "std_msgs/msg/String"},                     // published once
 	"recordingTrajectory": {"/behavior_tree_node/recording_trajectory", "nav_msgs/msg/Path"}, // area recording preview

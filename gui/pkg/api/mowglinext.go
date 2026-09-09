@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
-	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/docker/distribution/uuid"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -77,7 +77,7 @@ func topicSubscribeInterval(topic string) (int, bool) {
 	switch topic {
 	case "gps", "gnssStatus", "pose", "imu", "ticks", "wheelOdom", "lidar":
 		return 100, true
-	case "fusionRaw", "cogHeading", "magYaw", "obstacles", "icpOdom":
+	case "fusionRaw", "cogHeading", "magYaw", "obstacles":
 		return 200, true
 	case "mowProgress", "lidarMap":
 		return 500, true // large OccupancyGrid — throttle hard

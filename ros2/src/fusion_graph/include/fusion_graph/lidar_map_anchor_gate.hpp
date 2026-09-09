@@ -1,27 +1,11 @@
 // Copyright 2026 Mowgli Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Engage / disengage logic for the LiDAR map anchor. Pure — no ROS / GTSAM /
-// Beluga — so it is unit-testable.
-//
-// Two regimes, decided by how stale the last RTK-Fixed receipt is:
-//   MAPPING   — RTK-Fixed is fresh: the fused pose is trusted, scans are
-//               inserted into the occupancy grid, no anchor factor is produced
-//               (the GPS already pins the pose; a LiDAR factor would only add
-//               noise, which is why scan_yield_to_rtk exists).
-//   ANCHORING — RTK-Fixed is stale: the particle filter localises against the
-//               grid and its (xy, covariance) becomes a unary factor.
-// The transition MAPPING→ANCHORING must (re)seed the filter from the last
-// trusted fused pose, so the filter starts converged instead of relocalising
-// globally. The transition back simply stops producing factors.
-//
-// Hysteresis, learned on the dock 2026-09-06: with a 5 Hz receiver whose
-// receipt stamps arrive ~80 ms old, the RTK-Fixed age sits at ~0.28 s just
-// before every next fix. An engage threshold of 0.3 s therefore flapped on
-// timer phase alone — 19 seeds in three minutes, RTK Fixed throughout. So:
-// engage only after engage_age_s (default 1.0 s ≈ five missed fixes), and
-// once anchoring, return to mapping only after Fixed has been fresh for
-// disengage_dwell_s continuously. One late sample never flips the state.
+// Map-learning state and insertion cadence. Pure: no ROS / GTSAM / Beluga.
+// Fresh RTK permits map updates; stale RTK freezes learning. After an outage,
+// require continuously fresh Fixed for the dwell before learning resumes.
+// LidarComputeGate separately owns PF scheduling and reseeding. These states
+// describe mapping availability, not permission to compute or apply a factor.
 
 #pragma once
 
@@ -41,9 +25,7 @@ enum class LidarAnchorState : uint8_t
 struct LidarAnchorDecision
 {
   LidarAnchorState state = LidarAnchorState::kDisabled;
-  bool seed_filter = false;  // true exactly once on the MAPPING→ANCHORING edge
   bool insert_scan = false;  // add this scan to the grid
-  bool run_filter = false;  // run the particle filter update on this scan
 };
 
 class LidarMapAnchorGate
@@ -62,7 +44,8 @@ public:
 
   // rtk_fixed_age_s: seconds since the last accepted RTK-Fixed receipt
   // (a large value when none was ever received). map_has_structure: the grid
-  // exports at least one occupied cell. now_s: monotonic time of this scan.
+  // exports at least one occupied cell. now_s: ROS time; reconstruct this gate
+  // when its clock epoch changes.
   LidarAnchorDecision Step(double rtk_fixed_age_s, bool map_has_structure, double now_s)
   {
     LidarAnchorDecision d;
@@ -82,7 +65,6 @@ public:
           fresh_since_s_ = now_s;
         if ((now_s - fresh_since_s_) < disengage_dwell_s_)
         {
-          d.run_filter = true;
           d.state = state_;
           return d;
         }
@@ -101,9 +83,7 @@ public:
     else
     {
       fresh_since_s_ = -1.0;  // any stale sample resets the disengage dwell
-      d.seed_filter = (state_ != LidarAnchorState::kAnchoring);
       state_ = LidarAnchorState::kAnchoring;
-      d.run_filter = true;
     }
     d.state = state_;
     return d;

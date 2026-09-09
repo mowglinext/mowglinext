@@ -16,20 +16,17 @@
 #include <vector>
 
 #include "fusion_graph/fusion_graph_node.hpp"
+#include "fusion_graph/lidar_covariance.hpp"
 #include <Eigen/Eigenvalues>
 #include <beluga/beluga.hpp>
+#include <beluga_ros/amcl.hpp>
+#include <beluga_ros/occupancy_grid.hpp>
 
 namespace fusion_graph
 {
 
 namespace
 {
-double MonotonicSeconds()
-{
-  using clock = std::chrono::steady_clock;
-  return std::chrono::duration<double>(clock::now().time_since_epoch()).count();
-}
-
 double LargestSigma(const Eigen::Matrix2d& cov)
 {
   Eigen::Matrix2d sym = 0.5 * (cov + cov.transpose());
@@ -40,24 +37,77 @@ double LargestSigma(const Eigen::Matrix2d& cov)
 }
 }  // namespace
 
-void FusionGraphNode::RebuildLidarAnchorMap()
+void FusionGraphNode::ResetLidarTiming()
 {
-  const auto exported = lidar_mapper_->Export();
-  lidar_map_occupied_cells_ = exported.occupied;
-  auto msg = std::make_shared<nav_msgs::msg::OccupancyGrid>();
-  msg->header.frame_id = map_frame_;
-  msg->header.stamp = this->now();
-  msg->info.resolution = static_cast<float>(exported.resolution_m);
-  msg->info.width = static_cast<uint32_t>(exported.width);
-  msg->info.height = static_cast<uint32_t>(exported.height);
-  msg->info.origin.position.x = exported.origin_x;
-  msg->info.origin.position.y = exported.origin_y;
-  msg->info.origin.orientation.w = 1.0;
-  msg->data = exported.data;
-  if (lidar_map_pub_)
-    lidar_map_pub_->publish(*msg);
-  if (exported.occupied == 0)
-    return;  // published for inspection, but nothing to localise against yet
+  lidar_anchor_odom_.RebaseRaw(Sophus::SE2d(dr_yaw_, Eigen::Vector2d(dr_x_, dr_y_)));
+  lidar_scan_history_.Clear();
+  graph_->ClearLidarObservations();
+  consumed_scan_stamp_s_ = 0.0;
+  lidar_anchor_filter_.reset();
+  lidar_compute_gate_.Reset();
+  lidar_anchor_reference_valid_ = false;
+  lidar_filter_map_dirty_ = true;
+  lidar_anchor_shadow_stats_.Clear();
+  lidar_anchor_floor_eff_m_ = lidar_anchor_sigma_floor_param_m_;
+  lidar_anchor_lost_since_s_ = -1.0;
+  lidar_anchor_undocked_s_ = this->now().seconds();
+  lidar_map_last_rebuild_s_ = -1e9;
+  if (lidar_anchor_gate_)
+    lidar_anchor_gate_.emplace(true,
+                               lidar_anchor_engage_age_s_,
+                               lidar_map_insert_period_s_,
+                               lidar_anchor_disengage_dwell_s_);
+}
+
+void FusionGraphNode::PollLidarSubmaps(double x, double y)
+{
+  const bool ready = lidar_submaps_->UpdateWindow(x, y);
+  lidar_mapper_ = ready ? lidar_submaps_->mapper() : nullptr;
+  if (lidar_map_import_pending_ && !lidar_submaps_->busy())
+  {
+    lidar_map_imported_ = lidar_submaps_->last_error().empty();
+    lidar_map_import_pending_ = false;
+  }
+  if (lidar_mapper_ && lidar_submaps_->TakeWindowChanged())
+  {
+    graph_->ClearLidarObservations();
+    lidar_anchor_filter_.reset();
+    lidar_filter_map_dirty_ = true;
+    RebuildLidarAnchorMap();
+    lidar_map_last_rebuild_s_ = this->now().seconds();
+    lidar_map_scans_at_rebuild_ = lidar_mapper_->inserted_scans();
+  }
+}
+
+void FusionGraphNode::RebuildLidarAnchorMap(bool prepare_filter)
+{
+  if (!lidar_mapper_)
+    return;
+  if (!prepare_filter || !lidar_local_grid_)
+  {
+    const auto exported = lidar_mapper_->Export();
+    lidar_map_occupied_cells_ = exported.occupied;
+    auto msg = std::make_shared<nav_msgs::msg::OccupancyGrid>();
+    msg->header.frame_id = map_frame_;
+    msg->header.stamp = this->now();
+    msg->info.resolution = static_cast<float>(exported.resolution_m);
+    msg->info.width = static_cast<uint32_t>(exported.width);
+    msg->info.height = static_cast<uint32_t>(exported.height);
+    msg->info.origin.position.x = exported.origin_x;
+    msg->info.origin.position.y = exported.origin_y;
+    msg->info.origin.orientation.w = 1.0;
+    msg->data = exported.data;
+    lidar_local_grid_ = msg;
+    lidar_filter_map_dirty_ = true;
+    if (lidar_map_pub_)
+      lidar_map_pub_->publish(*msg);
+    lidar_map_published_once_ = true;
+  }
+  if (!prepare_filter || lidar_map_occupied_cells_ == 0 ||
+      (!lidar_filter_map_dirty_ && lidar_anchor_filter_))
+    return;
+  const auto start = std::chrono::steady_clock::now();
+  const auto& msg = lidar_local_grid_;
   beluga_ros::OccupancyGrid grid(msg);
   if (!lidar_anchor_filter_)
   {
@@ -95,12 +145,16 @@ void FusionGraphNode::RebuildLidarAnchorMap()
     // first update after a 0.10 m seed, never after a re-seed. One discarded
     // update with the current odom pose and no measurement fills the window;
     // the seed that follows then sees a zero delta.
-    lidar_anchor_filter_->update(lidar_anchor_odom_.pose(), {});
+    lidar_anchor_filter_->update(lidar_scan_dr_, {});
   }
   else
   {
     lidar_anchor_filter_->update_map(grid);
   }
+  lidar_filter_map_dirty_ = false;
+  ++lidar_filter_map_builds_;
+  lidar_filter_map_build_ms_ +=
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
 // (Re)initialise the particle filter around `pose` and make it the reference
@@ -117,17 +171,22 @@ void FusionGraphNode::SeedLidarAnchorFilter(const Sophus::SE2d& pose,
   cov(0, 0) = sx * sx;
   cov(1, 1) = sy * sy;
   cov(2, 2) = lidar_anchor_seed_sigma_theta_rad_ * lidar_anchor_seed_sigma_theta_rad_;
+  // Align Beluga's rolling odometry window before resetting the particles at
+  // this acquisition. Otherwise the first update moves an already-current seed.
+  lidar_anchor_filter_->force_update();
+  lidar_anchor_filter_->update(lidar_scan_dr_, {});
   lidar_anchor_filter_->initialize(pose, cov);
   ResetLidarAnchorDeadReckoningReference(pose);
 }
 
 void FusionGraphNode::ResetLidarAnchorDeadReckoningReference(const Sophus::SE2d& pose)
 {
+  lidar_anchor_reference_valid_ = true;
   lidar_anchor_seed_pose_ = pose;
-  lidar_anchor_seed_dr_ = lidar_anchor_odom_.pose();
+  lidar_anchor_seed_dr_ = lidar_scan_dr_;
   lidar_anchor_last_dr_ = lidar_anchor_seed_dr_;
   lidar_anchor_dr_path_m_ = 0.0;
-  lidar_anchor_dr_ref_s_ = MonotonicSeconds();
+  lidar_anchor_dr_ref_s_ = this->now().seconds();
 }
 
 void FusionGraphNode::PublishLidarAnchorCandidate(const Sophus::SE2d& pose,
@@ -139,7 +198,8 @@ void FusionGraphNode::PublishLidarAnchorCandidate(const Sophus::SE2d& pose,
     return;
   geometry_msgs::msg::PoseWithCovarianceStamped m;
   m.header.frame_id = map_frame_;
-  m.header.stamp = this->now();
+  m.header.stamp =
+      rclcpp::Time(static_cast<int64_t>(lidar_scan_stamp_s_ * 1e9), get_clock()->get_clock_type());
   m.pose.pose.position.x = pose.translation().x();
   m.pose.pose.position.y = pose.translation().y();
   const double th = pose.so2().log();
@@ -149,98 +209,102 @@ void FusionGraphNode::PublishLidarAnchorCandidate(const Sophus::SE2d& pose,
   m.pose.covariance[1] = cov2(0, 1);
   m.pose.covariance[6] = cov2(1, 0);
   m.pose.covariance[7] = cov2(1, 1);
-  // Out-of-band verdict for tooling: [14] = 1 when the estimate became a
-  // factor, [35] = verdict code (0 accepted, 1 score, 2 spread, 3 dead reckoning).
+  // Out-of-band verdict for tooling: [14] = 1 when accepted for the queue
+  // (expiry/cancellation can still drop it), [35] = verdict code (0 accepted, 1 score, 2 spread, 3
+  // dead reckoning).
   m.pose.covariance[14] = applied ? 1.0 : 0.0;
   m.pose.covariance[35] = static_cast<double>(static_cast<int>(verdict));
   lidar_anchor_candidate_pub_->publish(m);
 }
 
-bool FusionGraphNode::LoadLidarMapFile()
-{
-  const auto m = ReadLidarMapFile(graph_save_prefix_ + ".lidarmap");
-  if (!m)
-    return false;
-  double lat = 0.0, lon = 0.0;
-  get_parameter("datum_lat", lat);
-  get_parameter("datum_lon", lon);
-  if (!LidarMapDatumMatches(*m, lat, lon))
-  {
-    RCLCPP_WARN(get_logger(),
-                "fusion_graph: persisted LiDAR map was built under datum (%.7f, %.7f), current is "
-                "(%.7f, %.7f) — ignored",
-                m->datum_lat,
-                m->datum_lon,
-                lat,
-                lon);
-    return false;
-  }
-  lidar_mapper_->ImportCells(m->grid.resolution_m,
-                             m->grid.origin_x,
-                             m->grid.origin_y,
-                             static_cast<int>(m->grid.width),
-                             static_cast<int>(m->grid.height),
-                             m->grid.data);
-  RebuildLidarAnchorMap();
-  lidar_map_last_rebuild_s_ = MonotonicSeconds();
-  lidar_map_scans_at_rebuild_ = lidar_mapper_->inserted_scans();
-  return lidar_map_occupied_cells_ > 0;
-}
-
-// Operator's "start the LiDAR map over": empty grid, no filter, no file.
+// Clear hides the live map immediately; the worker serializes disk deletion
+// behind pending writes so an older save cannot resurrect the cleared tiles.
 void FusionGraphNode::ClearLidarMap()
 {
-  if (!lidar_mapper_)
+  if (!lidar_submaps_)
     return;
-  lidar_mapper_.emplace(lidar_mapper_params_);
+  graph_->ClearLidarObservations();
+  lidar_submaps_->Clear();
+  lidar_mapper_ = nullptr;
   lidar_anchor_filter_.reset();
+  lidar_compute_gate_.Reset();
+  lidar_anchor_reference_valid_ = false;
   lidar_map_imported_ = false;
-  lidar_anchor_shadow_seeded_ = false;
+  lidar_map_import_pending_ = false;
+  lidar_anchor_shadow_stats_.Clear();
+  lidar_anchor_floor_eff_m_ = lidar_anchor_sigma_floor_param_m_;
+  lidar_map_occupied_cells_ = 0;
   lidar_map_scans_at_rebuild_ = 0;
-  std::remove((graph_save_prefix_ + ".lidarmap").c_str());
-  RebuildLidarAnchorMap();  // publishes the (now empty) grid so the GUI clears too
-  lidar_map_last_rebuild_s_ = MonotonicSeconds();
+  lidar_filter_map_dirty_ = true;
+  auto empty = lidar_local_grid_ ? *lidar_local_grid_ : nav_msgs::msg::OccupancyGrid{};
+  std::fill(empty.data.begin(), empty.data.end(), -1);
+  lidar_local_grid_.reset();
+  empty.header.frame_id = map_frame_;
+  empty.header.stamp = this->now();
+  empty.info.origin.orientation.w = 1.0;
+  if (lidar_map_pub_)
+    lidar_map_pub_->publish(empty);
 }
 
 void FusionGraphNode::OnLidarMapImport(nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg)
 {
-  if (lidar_map_imported_ || !lidar_mapper_)
+  if (lidar_map_imported_ || lidar_map_import_pending_ || !lidar_submaps_)
     return;
-  lidar_mapper_->ImportCells(msg->info.resolution,
-                             msg->info.origin.position.x,
-                             msg->info.origin.position.y,
-                             static_cast<int>(msg->info.width),
-                             static_cast<int>(msg->info.height),
-                             msg->data);
-  lidar_map_imported_ = true;
-  RebuildLidarAnchorMap();
-  lidar_map_last_rebuild_s_ = MonotonicSeconds();
-  lidar_map_scans_at_rebuild_ = lidar_mapper_->inserted_scans();
+  if (!std::isfinite(msg->info.origin.orientation.x) ||
+      !std::isfinite(msg->info.origin.orientation.y) ||
+      !std::isfinite(msg->info.origin.orientation.z) ||
+      !std::isfinite(msg->info.origin.orientation.w) || msg->header.frame_id != map_frame_ ||
+      std::abs(msg->info.origin.orientation.x) > 1e-6 ||
+      std::abs(msg->info.origin.orientation.y) > 1e-6 ||
+      std::abs(msg->info.origin.orientation.z) > 1e-6 ||
+      std::abs(std::abs(msg->info.origin.orientation.w) - 1.0) > 1e-6)
+  {
+    RCLCPP_WARN(get_logger(), "LiDAR map import rejected: incompatible frame or rotated origin");
+    return;
+  }
+  ExportedOccupancyGrid imported;
+  imported.resolution_m = msg->info.resolution;
+  imported.origin_x = msg->info.origin.position.x;
+  imported.origin_y = msg->info.origin.position.y;
+  imported.width = msg->info.width;
+  imported.height = msg->info.height;
+  imported.data = msg->data;
+  if (!lidar_submaps_->ImportLegacy(imported))
+  {
+    RCLCPP_WARN(get_logger(), "LiDAR map import rejected: invalid grid or tile I/O busy");
+    return;
+  }
+  lidar_mapper_ = nullptr;
+  lidar_compute_gate_.Reset();
+  lidar_anchor_reference_valid_ = false;
+  lidar_anchor_shadow_stats_.Clear();
+  lidar_anchor_floor_eff_m_ = lidar_anchor_sigma_floor_param_m_;
+  lidar_anchor_filter_.reset();
+  graph_->ClearLidarObservations();
+  if (lidar_anchor_gate_)
+    lidar_anchor_gate_.emplace(true,
+                               lidar_anchor_engage_age_s_,
+                               lidar_map_insert_period_s_,
+                               lidar_anchor_disengage_dwell_s_);
+  lidar_map_import_pending_ = true;
   RCLCPP_INFO(get_logger(),
-              "fusion_graph: LiDAR map imported from %s (%u x %u @ %.2f m, %zu occupied)",
-              lidar_map_import_topic_.c_str(),
+              "LiDAR map import dispatched (%u x %u)",
               msg->info.width,
-              msg->info.height,
-              msg->info.resolution,
-              lidar_map_occupied_cells_);
+              msg->info.height);
 }
 
 void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& curr_scan,
-                                         bool curr_valid)
+                                         const LidarScanHistory::Match& scan_time)
 {
-  if (!lidar_mapper_ || !lidar_anchor_gate_ || !curr_valid)
+  if (!lidar_mapper_ || !lidar_anchor_gate_)
     return;
-  const double now_s = MonotonicSeconds();
+  const double now_s = this->now().seconds();
   double rtk_age_s = 1.0e9;
   if (last_rtk_fixed_stamp_)
   {
     rtk_age_s = std::max(0.0, (this->now() - *last_rtk_fixed_stamp_).seconds());
   }
-  // Continuous dead reckoning: the node's dr_* re-bases every
-  // odom_rebase_dist_m and resets on set_pose / dock re-anchor; the filter
-  // and the plausibility witness must never see those steps.
-  const Sophus::SE2d dr_now =
-      lidar_anchor_odom_.Advance(Sophus::SE2d(dr_yaw_, Eigen::Vector2d(dr_x_, dr_y_)));
+  const Sophus::SE2d dr_now = lidar_scan_dr_;
   const bool map_has_structure = lidar_map_occupied_cells_ > 0;
   const auto d = lidar_anchor_gate_->Step(rtk_age_s, map_has_structure, now_s);
 
@@ -257,8 +321,10 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   }
 
   auto snapshot = graph_->LatestSnapshot();
-  if (!snapshot)
+  const auto node_pose = graph_->GetPose(scan_time.index);
+  if (!snapshot || !node_pose)
     return;
+  const auto pose_at_scan = node_pose->compose(scan_time.offset);
 
   // On the charger the fused pose is gauge-pinned to the dock while the
   // BackUp undock actually moves the robot 1.5 m (field 2026-09-07, t+9..38 s:
@@ -273,7 +339,8 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   if (docked)
   {
     lidar_anchor_was_docked_ = true;
-    lidar_anchor_shadow_seeded_ = false;
+    lidar_compute_gate_.Reset();
+    lidar_anchor_reference_valid_ = false;
     return;
   }
   if (lidar_anchor_was_docked_)
@@ -284,13 +351,204 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   if ((now_s - lidar_anchor_undocked_s_) < lidar_anchor_undock_dwell_s_)
     return;
 
+  // Evaluate against the previous map; only afterwards may this scan teach it.
+  const auto evaluate = [&]()
+  {
+    const bool shadow = rtk_age_s <= lidar_anchor_engage_age_s_;
+    const auto compute =
+        lidar_compute_gate_.Step(now_s,
+                                 rtk_age_s,
+                                 map_has_structure,
+                                 curr_scan.size() >=
+                                     static_cast<std::size_t>(
+                                         std::max(1, lidar_anchor_validator_.min_hit_count)),
+                                 lidar_anchor_shadow_mode_,
+                                 lidar_anchor_adaptive_floor_);
+    if (lidar_anchor_reference_valid_)
+    {
+      lidar_anchor_dr_path_m_ +=
+          (dr_now.translation() - lidar_anchor_last_dr_.translation()).norm();
+      lidar_anchor_last_dr_ = dr_now;
+    }
+    if (!compute.run)
+    {
+      // Retain a trusted start for a future outage even while the PF is asleep.
+      if (shadow)
+        ResetLidarAnchorDeadReckoningReference(
+            Sophus::SE2d(pose_at_scan.theta(), pose_at_scan.translation()));
+      return;
+    }
+    const bool new_filter = !lidar_anchor_filter_;
+    RebuildLidarAnchorMap(true);
+    if (!lidar_anchor_filter_)
+      return;
+
+    const Sophus::SE2d fused(pose_at_scan.theta(), pose_at_scan.translation());
+    // Snapshot covariance is in the node tangent frame: use its largest XY
+    // sigma isotropically, never mistake local X/Y for the map axes.
+    const double fused_sx = LargestSigma(snapshot->covariance.topLeftCorner<2, 2>());
+    const double fused_sy = fused_sx;
+
+    if (compute.reseed || new_filter || !lidar_anchor_reference_valid_)
+    {
+      if (!shadow && lidar_anchor_reference_valid_)
+      {
+        // A tile swap or compute pause must not erase the outage's DR budget.
+        const auto reference_pose = lidar_anchor_seed_pose_;
+        const auto reference_dr = lidar_anchor_seed_dr_;
+        const double reference_time = lidar_anchor_dr_ref_s_;
+        const double path = lidar_anchor_dr_path_m_;
+        const auto predicted = reference_pose * reference_dr.inverse() * dr_now;
+        const double sigma =
+            std::max(fused_sx, DeadReckoningBudgetM(lidar_anchor_validator_, path));
+        SeedLidarAnchorFilter(predicted, sigma, sigma);
+        lidar_anchor_seed_pose_ = reference_pose;
+        lidar_anchor_seed_dr_ = reference_dr;
+        lidar_anchor_dr_ref_s_ = reference_time;
+        lidar_anchor_dr_path_m_ = path;
+      }
+      else
+        SeedLidarAnchorFilter(fused, fused_sx, fused_sy);
+      ++lidar_anchor_seeds_;
+      lidar_anchor_lost_since_s_ = -1.0;
+    }
+    else if (shadow && (now_s - lidar_anchor_dr_ref_s_) >= lidar_anchor_shadow_ref_period_s_)
+    {
+      // Under RTK the fused pose is a reference: refresh the dead-reckoning
+      // reference from it so the plausibility budget stays tight. The filter
+      // itself is left alone — that is the thing being measured.
+      ResetLidarAnchorDeadReckoningReference(fused);
+    }
+
+    const Sophus::SE2d dr_pred = lidar_anchor_seed_pose_ * lidar_anchor_seed_dr_.inverse() * dr_now;
+
+    std::vector<std::pair<double, double>> pts;
+    const std::size_t stride = std::max<std::size_t>(
+        1, curr_scan.size() / static_cast<std::size_t>(std::max(1, lidar_anchor_max_beams_)));
+    pts.reserve(curr_scan.size() / stride + 1);
+    for (std::size_t i = 0; i < curr_scan.size(); i += stride)
+      pts.emplace_back(curr_scan[i].x(), curr_scan[i].y());
+
+    const auto compute_start = std::chrono::steady_clock::now();
+    const auto est = lidar_anchor_filter_->update(dr_now, std::move(pts));
+    ++lidar_filter_calls_;
+    lidar_filter_compute_ms_ +=
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - compute_start)
+            .count();
+    if (!est)
+    {
+      ++lidar_anchor_skipped_;  // below update_min_d / update_min_a: nothing new to say
+      return;
+    }
+    const auto& [pose, cov3] = *est;
+    const Eigen::Matrix2d cov2 = cov3.topLeftCorner<2, 2>();
+
+    // Score the full scan against the map before inserting this acquisition.
+    // This is a support check, not statistically independent PF evidence.
+    std::vector<std::pair<double, double>> full;
+    full.reserve(curr_scan.size());
+    for (const auto& p : curr_scan)
+      full.emplace_back(p.x(), p.y());
+    const auto score = lidar_mapper_->ScoreScan(pose.translation().x(),
+                                                pose.translation().y(),
+                                                pose.so2().log(),
+                                                full);
+
+    LidarAnchorCandidate cand;
+    cand.x = pose.translation().x();
+    cand.y = pose.translation().y();
+    cand.sigma_m = LargestSigma(cov2);
+    cand.hit_ratio = score.total > 0 ? static_cast<double>(score.hits) / score.total : 0.0;
+    cand.hit_count = score.hits;
+    cand.dr_x = dr_pred.translation().x();
+    cand.dr_y = dr_pred.translation().y();
+    cand.dist_since_seed_m = lidar_anchor_dr_path_m_;
+    const LidarAnchorVerdict verdict = ValidateLidarAnchor(cand, lidar_anchor_validator_);
+
+    lidar_anchor_last_hit_ratio_ = cand.hit_ratio;
+    lidar_anchor_last_sigma_m_ = cand.sigma_m;
+    lidar_anchor_last_verdict_ = verdict;
+    switch (verdict)
+    {
+      case LidarAnchorVerdict::kRejectedScore:
+        ++lidar_anchor_rej_score_;
+        break;
+      case LidarAnchorVerdict::kRejectedSpread:
+        ++lidar_anchor_rej_spread_;
+        break;
+      case LidarAnchorVerdict::kRejectedDeadReckoning:
+        ++lidar_anchor_rej_dr_;
+        break;
+      case LidarAnchorVerdict::kAccepted:
+        break;
+    }
+    // Shadow under RTK-Fixed: the fused pose is a correlated reference; its
+    // error calibrates the trust the anchor gets when it is applied for real.
+    if (shadow && verdict == LidarAnchorVerdict::kAccepted)
+    {
+      lidar_anchor_shadow_stats_.Push(
+          std::hypot(cand.x - fused.translation().x(), cand.y - fused.translation().y()));
+    }
+    lidar_anchor_floor_eff_m_ =
+        lidar_anchor_adaptive_floor_
+            ? lidar_anchor_shadow_stats_.EffectiveFloor(lidar_anchor_floor_quantile_,
+                                                        lidar_anchor_sigma_floor_param_m_,
+                                                        lidar_anchor_validator_.max_sigma_m)
+            : lidar_anchor_sigma_floor_param_m_;
+    const auto cov_applied = FloorLidarCovariance(cov2, lidar_anchor_floor_eff_m_);
+    const bool apply =
+        verdict == LidarAnchorVerdict::kAccepted && !shadow &&
+        rtk_age_s >= std::max(lidar_anchor_apply_age_s_, lidar_anchor_engage_age_s_) &&
+        cov_applied.has_value();
+    PublishLidarAnchorCandidate(pose, cov2, verdict, apply);
+
+    if (verdict != LidarAnchorVerdict::kAccepted)
+    {
+      // Lost. Dead reckoning is the better witness now; after a dwell, put the
+      // cloud back where DR says the robot is and let it re-converge.
+      if (lidar_anchor_lost_since_s_ < 0.0)
+        lidar_anchor_lost_since_s_ = now_s;
+      if ((now_s - lidar_anchor_lost_since_s_) >= lidar_anchor_reseed_after_s_)
+      {
+        const double budget =
+            DeadReckoningBudgetM(lidar_anchor_validator_, lidar_anchor_dr_path_m_);
+        // Keep the DR reference (and its grown budget); only the cloud moves.
+        const Sophus::SE2d seed_pose = lidar_anchor_seed_pose_;
+        const Sophus::SE2d seed_dr = lidar_anchor_seed_dr_;
+        const double path = lidar_anchor_dr_path_m_;
+        const double ref_s = lidar_anchor_dr_ref_s_;
+        SeedLidarAnchorFilter(dr_pred, budget, budget);
+        lidar_anchor_seed_pose_ = seed_pose;
+        lidar_anchor_seed_dr_ = seed_dr;
+        lidar_anchor_last_dr_ = dr_now;
+        lidar_anchor_dr_path_m_ = path;
+        lidar_anchor_dr_ref_s_ = ref_s;
+        ++lidar_anchor_reseeds_;
+        lidar_anchor_lost_since_s_ = -1.0;
+      }
+      return;
+    }
+    lidar_anchor_lost_since_s_ = -1.0;
+    if (!apply)
+      return;
+    // Trust no better than the anchor's measured accuracy: inflate to the
+    // effective floor (the graph consumer still applies the parameter floor).
+    graph_->QueueLidarMapXy(gtsam::Vector2(cand.x, cand.y),
+                            *cov_applied,
+                            true,
+                            scan_time.index,
+                            scan_time.offset.translation(),
+                            lidar_scan_stamp_s_ + lidar_scan_max_age_s_);
+    ++lidar_anchor_updates_;
+  };
+  evaluate();
   if (d.insert_scan)
   {
     std::vector<std::pair<double, double>> pts;
     pts.reserve(curr_scan.size());
     for (const auto& p : curr_scan)
       pts.emplace_back(p.x(), p.y());
-    lidar_mapper_->Insert(snapshot->pose.x(), snapshot->pose.y(), snapshot->pose.theta(), pts);
+    lidar_mapper_->Insert(pose_at_scan.x(), pose_at_scan.y(), pose_at_scan.theta(), pts);
     const bool due = (now_s - lidar_map_last_rebuild_s_) >= lidar_map_rebuild_period_s_;
     if (due && lidar_mapper_->inserted_scans() > lidar_map_scans_at_rebuild_)
     {
@@ -299,149 +557,6 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
       lidar_map_scans_at_rebuild_ = lidar_mapper_->inserted_scans();
     }
   }
-
-  // Shadow mode keeps the filter running under RTK too — every estimate is
-  // scored, published and counted exactly as it would be when anchoring, but
-  // never becomes a factor. It is how the anchor is measured against RTK in
-  // the field before it is trusted.
-  // Under RTK-Fixed the filter runs without being applied when shadow mode
-  // asks for it OR when the adaptive floor needs its calibration samples.
-  const bool shadow = (lidar_anchor_shadow_mode_ || lidar_anchor_adaptive_floor_) &&
-                      d.state == LidarAnchorState::kMapping;
-  if (!(d.run_filter || shadow) || !lidar_anchor_filter_)
-    return;
-
-  const Sophus::SE2d fused(snapshot->pose.theta(),
-                           Eigen::Vector2d(snapshot->pose.x(), snapshot->pose.y()));
-  const double fused_sx = std::sqrt(std::max(snapshot->covariance(0, 0), 0.0));
-  const double fused_sy = std::sqrt(std::max(snapshot->covariance(1, 1), 0.0));
-
-  if (d.seed_filter || (shadow && !lidar_anchor_shadow_seeded_))
-  {
-    SeedLidarAnchorFilter(fused, fused_sx, fused_sy);
-    ++lidar_anchor_seeds_;
-    lidar_anchor_shadow_seeded_ = shadow;
-    lidar_anchor_lost_since_s_ = -1.0;
-  }
-  else if (shadow && (now_s - lidar_anchor_dr_ref_s_) >= lidar_anchor_shadow_ref_period_s_)
-  {
-    // Under RTK the fused pose IS the truth: refresh the dead-reckoning
-    // reference from it so the plausibility budget stays tight. The filter
-    // itself is left alone — that is the thing being measured.
-    ResetLidarAnchorDeadReckoningReference(fused);
-  }
-
-  lidar_anchor_dr_path_m_ += (dr_now.translation() - lidar_anchor_last_dr_.translation()).norm();
-  lidar_anchor_last_dr_ = dr_now;
-  const Sophus::SE2d dr_pred = lidar_anchor_seed_pose_ * lidar_anchor_seed_dr_.inverse() * dr_now;
-
-  std::vector<std::pair<double, double>> pts;
-  const std::size_t stride = std::max<std::size_t>(
-      1, curr_scan.size() / static_cast<std::size_t>(std::max(1, lidar_anchor_max_beams_)));
-  pts.reserve(curr_scan.size() / stride + 1);
-  for (std::size_t i = 0; i < curr_scan.size(); i += stride)
-    pts.emplace_back(curr_scan[i].x(), curr_scan[i].y());
-
-  const auto est = lidar_anchor_filter_->update(dr_now, std::move(pts));
-  if (!est)
-  {
-    ++lidar_anchor_skipped_;  // below update_min_d / update_min_a: nothing new to say
-    return;
-  }
-  const auto& [pose, cov3] = *est;
-  const Eigen::Matrix2d cov2 = cov3.topLeftCorner<2, 2>();
-
-  // Score the FULL scan at the estimate, not the decimated beams the filter
-  // weighed: this is an independent witness, so it gets all the evidence.
-  std::vector<std::pair<double, double>> full;
-  full.reserve(curr_scan.size());
-  for (const auto& p : curr_scan)
-    full.emplace_back(p.x(), p.y());
-  const auto score = lidar_mapper_->ScoreScan(pose.translation().x(),
-                                              pose.translation().y(),
-                                              pose.so2().log(),
-                                              full);
-
-  LidarAnchorCandidate cand;
-  cand.x = pose.translation().x();
-  cand.y = pose.translation().y();
-  cand.sigma_m = LargestSigma(cov2);
-  cand.hit_ratio = score.total > 0 ? static_cast<double>(score.hits) / score.total : 0.0;
-  cand.hit_count = score.hits;
-  cand.dr_x = dr_pred.translation().x();
-  cand.dr_y = dr_pred.translation().y();
-  cand.dist_since_seed_m = lidar_anchor_dr_path_m_;
-  const LidarAnchorVerdict verdict = ValidateLidarAnchor(cand, lidar_anchor_validator_);
-
-  lidar_anchor_last_hit_ratio_ = cand.hit_ratio;
-  lidar_anchor_last_sigma_m_ = cand.sigma_m;
-  lidar_anchor_last_verdict_ = verdict;
-  switch (verdict)
-  {
-    case LidarAnchorVerdict::kRejectedScore:
-      ++lidar_anchor_rej_score_;
-      break;
-    case LidarAnchorVerdict::kRejectedSpread:
-      ++lidar_anchor_rej_spread_;
-      break;
-    case LidarAnchorVerdict::kRejectedDeadReckoning:
-      ++lidar_anchor_rej_dr_;
-      break;
-    case LidarAnchorVerdict::kAccepted:
-      break;
-  }
-  // Shadow under RTK-Fixed: the fused pose is the truth, so this estimate's
-  // error calibrates the trust the anchor gets when it is applied for real.
-  if (shadow && verdict == LidarAnchorVerdict::kAccepted)
-  {
-    lidar_anchor_shadow_stats_.Push(
-        std::hypot(cand.x - fused.translation().x(), cand.y - fused.translation().y()));
-  }
-  lidar_anchor_floor_eff_m_ =
-      lidar_anchor_adaptive_floor_
-          ? lidar_anchor_shadow_stats_.EffectiveFloor(lidar_anchor_floor_quantile_,
-                                                      lidar_anchor_sigma_floor_param_m_,
-                                                      lidar_anchor_validator_.max_sigma_m)
-          : lidar_anchor_sigma_floor_param_m_;
-  const bool apply = verdict == LidarAnchorVerdict::kAccepted && !shadow;
-  PublishLidarAnchorCandidate(pose, cov2, verdict, apply);
-
-  if (verdict != LidarAnchorVerdict::kAccepted)
-  {
-    // Lost. Dead reckoning is the better witness now; after a dwell, put the
-    // cloud back where DR says the robot is and let it re-converge.
-    if (lidar_anchor_lost_since_s_ < 0.0)
-      lidar_anchor_lost_since_s_ = now_s;
-    if ((now_s - lidar_anchor_lost_since_s_) >= lidar_anchor_reseed_after_s_)
-    {
-      const double budget = DeadReckoningBudgetM(lidar_anchor_validator_, lidar_anchor_dr_path_m_);
-      // Keep the DR reference (and its grown budget); only the cloud moves.
-      const Sophus::SE2d seed_pose = lidar_anchor_seed_pose_;
-      const Sophus::SE2d seed_dr = lidar_anchor_seed_dr_;
-      const double path = lidar_anchor_dr_path_m_;
-      const double ref_s = lidar_anchor_dr_ref_s_;
-      SeedLidarAnchorFilter(dr_pred, budget, budget);
-      lidar_anchor_seed_pose_ = seed_pose;
-      lidar_anchor_seed_dr_ = seed_dr;
-      lidar_anchor_last_dr_ = dr_now;
-      lidar_anchor_dr_path_m_ = path;
-      lidar_anchor_dr_ref_s_ = ref_s;
-      ++lidar_anchor_reseeds_;
-      lidar_anchor_lost_since_s_ = -1.0;
-    }
-    return;
-  }
-  lidar_anchor_lost_since_s_ = -1.0;
-  if (!apply)
-    return;
-  // Trust no better than the anchor's measured accuracy: inflate to the
-  // effective floor (the graph consumer still applies the parameter floor).
-  Eigen::Matrix2d cov_applied = cov2;
-  const double f2 = lidar_anchor_floor_eff_m_ * lidar_anchor_floor_eff_m_;
-  cov_applied(0, 0) = std::max(cov_applied(0, 0), f2);
-  cov_applied(1, 1) = std::max(cov_applied(1, 1), f2);
-  graph_->QueueLidarMapXy(gtsam::Vector2(cand.x, cand.y), cov_applied, /*robust=*/true);
-  ++lidar_anchor_updates_;
 }
 
 }  // namespace fusion_graph

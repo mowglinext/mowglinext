@@ -1,7 +1,7 @@
 // Copyright 2026 Mowgli Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Pure yaw-robustness gates (Level 1 COG discipline + Level 2 LiDAR yaw yield),
+// Pure COG yaw-robustness gates,
 // factored out of the node so they are unit-testable without ROS/GTSAM.
 // See fusion_graph_node.hpp for the design rationale. The essence, borrowed from
 // OpenMower's xbot_positioning: absolute yaw from a single antenna is weakly
@@ -42,13 +42,6 @@ inline double CogEffectiveSigma(double msg_variance, double min_sigma_rad)
   if (!std::isfinite(var) || var <= 0.0)
     var = 0.05 * 0.05;
   return std::max(std::sqrt(var), min_sigma_rad);
-}
-
-// LiDAR (scan-match / loop-closure) yaw σ: floored so LiDAR yields yaw to the
-// gyro (can't bake a wrong heading), while its position σ stays tight.
-inline double ScanYawSigma(double raw_sigma_theta, double floor_rad)
-{
-  return std::max(raw_sigma_theta, floor_rad);
 }
 
 }  // namespace fusion_graph

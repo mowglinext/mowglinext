@@ -1,7 +1,7 @@
 // Copyright 2026 Mowgli Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// GraphManager implementation — persistence: Save/Load/Reset + binary (de)serializers. (The class
+// GraphManager implementation — persistence: Save/Load/Reset. (The class
 // implementation is split across several translation units to keep each file within the project's
 // 600-line budget; all share graph_manager.hpp + the inline PoseKey().)
 
@@ -33,56 +33,6 @@ BOOST_CLASS_EXPORT_GUID(gtsam::GenericValue<gtsam::Pose2>, "gtsam_GenericValue_P
 
 namespace fusion_graph
 {
-namespace
-{
-
-void SerializeScansBinary(const std::map<uint64_t, std::vector<Eigen::Vector2d>>& scans,
-                          std::ostream& os)
-{
-  uint64_t n = scans.size();
-  os.write(reinterpret_cast<const char*>(&n), sizeof(n));
-  for (const auto& [idx, pts] : scans)
-  {
-    os.write(reinterpret_cast<const char*>(&idx), sizeof(idx));
-    uint64_t m = pts.size();
-    os.write(reinterpret_cast<const char*>(&m), sizeof(m));
-    for (const auto& p : pts)
-    {
-      double xy[2] = {p.x(), p.y()};
-      os.write(reinterpret_cast<const char*>(xy), sizeof(xy));
-    }
-  }
-}
-
-bool DeserializeScansBinary(std::istream& is,
-                            std::map<uint64_t, std::vector<Eigen::Vector2d>>& scans)
-{
-  uint64_t n = 0;
-  if (!is.read(reinterpret_cast<char*>(&n), sizeof(n)))
-    return false;
-  for (uint64_t i = 0; i < n; ++i)
-  {
-    uint64_t idx = 0, m = 0;
-    if (!is.read(reinterpret_cast<char*>(&idx), sizeof(idx)))
-      return false;
-    if (!is.read(reinterpret_cast<char*>(&m), sizeof(m)))
-      return false;
-    std::vector<Eigen::Vector2d> pts;
-    pts.reserve(m);
-    for (uint64_t j = 0; j < m; ++j)
-    {
-      double xy[2];
-      if (!is.read(reinterpret_cast<char*>(xy), sizeof(xy)))
-        return false;
-      pts.emplace_back(xy[0], xy[1]);
-    }
-    scans.emplace(idx, std::move(pts));
-  }
-  return true;
-}
-
-}  // namespace
-
 void GraphManager::Reset()
 {
   std::lock_guard<std::mutex> lock(mu_);
@@ -114,10 +64,7 @@ void GraphManager::ResetLocked()
   queue_ = UnaryQueue{};
 
   latest_.reset();
-  loop_closures_added_ = 0;
   ticks_since_cov_ = 0;
-  loop_closure_edges_.clear();
-  scans_.clear();
   // This reset is the live-graph self-heal path (IndeterminateSystem catch):
   // the graph re-seeds in the same datum frame. The LiDAR occupancy grid the
   // map anchor localises against lives in the node, not here, and survives.
@@ -138,12 +85,9 @@ bool GraphManager::Save(const std::string& prefix) const
   // map→odom TF lookups during periodic 5-min auto-saves on
   // 2026-05-14 — controller_server hit `Transform data too old` and
   // aborted FollowStrip / DockRobot. Copy out everything Save needs
-  // (gtsam::Values is value-copyable; scans_ is write-once after the
-  // entry is inserted, so the map copy is consistent without further
-  // synchronization), then release the lock so Tick can keep running
+  // (gtsam::Values is value-copyable), then release the lock so Tick can keep running
   // while the bytes hit disk.
   gtsam::Values estimate_snapshot;
-  std::map<uint64_t, std::vector<Eigen::Vector2d>> scans_snapshot;
   uint64_t next_index_snapshot = 0;
   double last_node_time_s_snapshot = 0.0;
   {
@@ -160,7 +104,6 @@ bool GraphManager::Save(const std::string& prefix) const
     // RefreshEstimateLocked() call.
     RefreshEstimateLocked();
     estimate_snapshot = current_estimate_;
-    scans_snapshot = scans_;
     next_index_snapshot = next_index_;
     last_node_time_s_snapshot = last_node_time_s_;
   }
@@ -173,12 +116,6 @@ bool GraphManager::Save(const std::string& prefix) const
       return false;
     graph_os << gtsam::serializeXML(estimate_snapshot);
     graph_os.close();
-
-    std::ofstream scans_os(prefix + ".scans", std::ios::binary);
-    if (!scans_os)
-      return false;
-    SerializeScansBinary(scans_snapshot, scans_os);
-    scans_os.close();
 
     std::ofstream meta_os(prefix + ".meta");
     if (!meta_os)
@@ -223,20 +160,6 @@ bool GraphManager::Load(const std::string& prefix)
     return false;
   }
 
-  std::map<uint64_t, std::vector<Eigen::Vector2d>> loaded_scans;
-  try
-  {
-    std::ifstream scans_is(prefix + ".scans", std::ios::binary);
-    if (!scans_is)
-      return false;
-    if (!DeserializeScansBinary(scans_is, loaded_scans))
-      return false;
-  }
-  catch (const std::exception&)
-  {
-    return false;
-  }
-
   uint64_t next_idx = 0;
   double last_t = 0.0;
   double loaded_datum_lat = 0.0;
@@ -270,9 +193,8 @@ bool GraphManager::Load(const std::string& prefix)
   }
 
   // Cross-garden guard: if BOTH the configured and the persisted datum are set,
-  // reject a graph whose datum differs — its node poses (and the scans used
-  // for loop closure / cold-boot relocalization) belong to a different site
-  // and would inject wrong absolute factors. Skipped when the configured datum
+  // reject a graph whose datum differs — its node poses belong to a different
+  // site and would inject wrong absolute factors. Skipped when the configured datum
   // is unset (0,0) so self-seeded bootstrap reloads.
   const bool have_cfg_datum =
       std::abs(params_.datum_lat) > 1.0e-9 || std::abs(params_.datum_lon) > 1.0e-9;
@@ -303,8 +225,7 @@ bool GraphManager::Load(const std::string& prefix)
 
   // Re-seed iSAM2 with each loaded pose pinned by a tight prior; the
   // priors keep optimization stable as new wheel/GPS factors arrive.
-  // The covariances are looser than the live priors so loop-closures
-  // can still re-balance the loaded portion if it was inconsistent.
+  // The covariances allow new absolute observations to refine the loaded poses.
   //
   // Sliding-window cap on RESTORE. RebaseISAM2 caps the LIVE graph at
   // max_graph_nodes, but it only runs from the 30 s maintenance timer — Load()
@@ -343,20 +264,6 @@ bool GraphManager::Load(const std::string& prefix)
   isam_.update(fg, kept_values);
   estimate_dirty_ = true;
 
-  scans_ = std::move(loaded_scans);
-  // Drop scan blobs for nodes outside the restored window — their poses are no
-  // longer in the graph so they can't be loop-closure candidates; keeping them
-  // only wastes RAM.
-  if (cutoff > 0)
-  {
-    for (auto it = scans_.begin(); it != scans_.end();)
-    {
-      if (it->first < cutoff)
-        it = scans_.erase(it);
-      else
-        ++it;
-    }
-  }
   next_index_ = next_idx;
   // Clamp loaded timestamp to "now" so a meta written with stale
   // precision (legacy iostream default, e.g. "1.7774e+09") doesn't

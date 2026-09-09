@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -342,7 +342,7 @@ func TestMultiplexRoute_DropsSubscriptionsOnDisconnect(t *testing.T) {
 func TestTopicSubscribeInterval_CoversKnownSubscriberRouteTopics(t *testing.T) {
 	knownTopics := []string{
 		"gps", "gnssStatus", "pose", "imu", "ticks", "wheelOdom", "lidar",
-		"fusionRaw", "cogHeading", "magYaw", "obstacles", "icpOdom",
+		"fusionRaw", "cogHeading", "magYaw", "obstacles",
 		"mowProgress", "lidarMap",
 		"diagnostics", "status", "highLevelStatus", "btLog", "map",
 		"path", "plan", "power", "emergency", "dockingSensor",

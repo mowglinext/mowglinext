@@ -62,7 +62,7 @@ void GraphManager::RefreshEstimateLocked() const
 {
   // O(N) full extraction. Only called by APIs that genuinely need
   // every pose: GetAllPoses (1 Hz viz markers), Save (manual /
-  // periodic checkpoint), and FindLoopClosureCandidates fallback.
+  // periodic checkpoint).
   if (!estimate_dirty_)
     return;
   current_estimate_ = isam_.calculateEstimate();
@@ -179,22 +179,21 @@ void GraphManager::QueueYaw(double yaw, double sigma_yaw, bool robust)
   queue_.yaw = UnaryQueue::Yaw{yaw, sigma_yaw, robust};
 }
 
-void GraphManager::QueueScanBetween(const gtsam::Pose2& delta, double sigma_xy, double sigma_theta)
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  if (sigma_xy <= 0.0)
-    sigma_xy = 0.5;
-  if (sigma_theta <= 0.0)
-    sigma_theta = 0.1;
-  queue_.scan_between = UnaryQueue::ScanBetween{delta, sigma_xy, sigma_theta};
-}
-
 void GraphManager::QueueLidarMapXy(const gtsam::Vector2& xy,
                                    const Eigen::Matrix2d& cov,
-                                   bool robust)
+                                   bool robust,
+                                   std::optional<uint64_t> target,
+                                   const gtsam::Vector2& node_to_scan,
+                                   double expires_at)
 {
   std::lock_guard<std::mutex> lock(mu_);
-  queue_.lidar_map_xy = UnaryQueue::LidarMapXy{xy, cov, robust};
+  queue_.lidar_map_xy = UnaryQueue::LidarMapXy{xy, cov, robust, target, node_to_scan, expires_at};
+}
+
+void GraphManager::ClearLidarObservations()
+{
+  std::lock_guard<std::mutex> lock(mu_);
+  queue_.lidar_map_xy.reset();
 }
 
 void GraphManager::Initialize(const gtsam::Pose2& X0,
@@ -287,13 +286,7 @@ GraphStats GraphManager::Stats() const
   std::lock_guard<std::mutex> lock(mu_);
   GraphStats s;
   s.total_nodes = next_index_;
-  s.scans_attached = scans_.size();
-  s.loop_closures = loop_closures_added_;
   s.gps_rejects_wrongfix = stats_gps_rejects_wrongfix_;
-  s.icp_rejects_rmse = stats_icp_rejects_rmse_;
-  s.icp_rejects_inliers = stats_icp_rejects_inliers_;
-  s.icp_rejects_sanity = stats_icp_rejects_sanity_;
-  s.icp_rejects_divergence = stats_icp_rejects_divergence_;
   s.stationary_hand_push = stats_hand_push_;
   s.slip_veto = stats_slip_veto_;
   s.residual_ema_rad = residual_ema_;
@@ -303,63 +296,15 @@ GraphStats GraphManager::Stats() const
   return s;
 }
 
-void GraphManager::PeekAccumulator(double& dx,
-                                   double& dy,
-                                   double& dtheta_gyro,
-                                   double& dtheta_wheel) const
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  dx = accum_.dx;
-  dy = accum_.dy;
-  dtheta_gyro = accum_.dtheta_gyro;
-  dtheta_wheel = accum_.dtheta_wheel;
-}
-
 void GraphManager::RecordGpsRejectWrongFix()
 {
   std::lock_guard<std::mutex> lock(mu_);
   ++stats_gps_rejects_wrongfix_;
 }
 
-void GraphManager::RecordIcpRejectRmse()
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  ++stats_icp_rejects_rmse_;
-}
-void GraphManager::RecordIcpRejectInliers()
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  ++stats_icp_rejects_inliers_;
-}
-void GraphManager::RecordIcpRejectSanity()
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  ++stats_icp_rejects_sanity_;
-}
-void GraphManager::RecordIcpRejectDivergence()
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  ++stats_icp_rejects_divergence_;
-}
-
 // ─────────────────────────────────────────────────────────────────────
-// Scan storage + loop closure
+// Pose access and anchoring
 // ─────────────────────────────────────────────────────────────────────
-
-void GraphManager::AttachScan(uint64_t node_index, const std::vector<Eigen::Vector2d>& scan)
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  scans_[node_index] = scan;
-}
-
-std::vector<Eigen::Vector2d> GraphManager::GetScan(uint64_t node_index) const
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  auto it = scans_.find(node_index);
-  if (it == scans_.end())
-    return {};
-  return it->second;
-}
 
 std::optional<gtsam::Pose2> GraphManager::GetPose(uint64_t node_index) const
 {
@@ -367,34 +312,6 @@ std::optional<gtsam::Pose2> GraphManager::GetPose(uint64_t node_index) const
   if (!HasPoseAt(node_index))
     return std::nullopt;
   return PoseAt(node_index);
-}
-
-std::vector<uint64_t> GraphManager::FindNodesNearXY(double x,
-                                                    double y,
-                                                    double max_dist_m,
-                                                    size_t max_candidates) const
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  std::vector<std::pair<double, uint64_t>> hits;
-  hits.reserve(scans_.size());
-  const double max_d2 = max_dist_m * max_dist_m;
-  for (const auto& [idx, _] : scans_)
-  {
-    if (!HasPoseAt(idx))
-      continue;
-    const auto X = PoseAt(idx);
-    const double dx = X.x() - x;
-    const double dy = X.y() - y;
-    const double d2 = dx * dx + dy * dy;
-    if (d2 <= max_d2)
-      hits.emplace_back(d2, idx);
-  }
-  std::sort(hits.begin(), hits.end());
-  std::vector<uint64_t> out;
-  out.reserve(std::min(max_candidates, hits.size()));
-  for (size_t i = 0; i < hits.size() && out.size() < max_candidates; ++i)
-    out.push_back(hits[i].second);
-  return out;
 }
 
 void GraphManager::ForceAnchor(uint64_t node_index,
@@ -441,12 +358,6 @@ std::map<uint64_t, gtsam::Pose2> GraphManager::GetAllPoses() const
   return out;
 }
 
-std::vector<std::pair<uint64_t, uint64_t>> GraphManager::GetLoopClosureEdges() const
-{
-  std::lock_guard<std::mutex> lock(mu_);
-  return loop_closure_edges_;
-}
-
 // ─────────────────────────────────────────────────────────────────────
 // Persistence
 // ─────────────────────────────────────────────────────────────────────
@@ -457,7 +368,6 @@ std::vector<std::pair<uint64_t, uint64_t>> GraphManager::GetLoopClosureEdges() c
 // tree by replaying a single PriorFactor on each node and re-adding
 // the between-factors as we observe new ones.
 //
-// The on-disk format is a 3-tuple of files: .graph (XML, gtsam
-// archive), .scans (binary, our own format), .meta (text key=value).
+// The on-disk files are .graph (XML values archive) and .meta (text metadata).
 
 }  // namespace fusion_graph

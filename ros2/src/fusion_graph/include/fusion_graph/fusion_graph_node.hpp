@@ -42,15 +42,13 @@
 #include "fusion_graph/lidar_anchor_odom.hpp"
 #include "fusion_graph/lidar_anchor_shadow_stats.hpp"
 #include "fusion_graph/lidar_anchor_validator.hpp"
+#include "fusion_graph/lidar_compute_gate.hpp"
 #include "fusion_graph/lidar_map_anchor_gate.hpp"
-#include "fusion_graph/lidar_map_file.hpp"
 #include "fusion_graph/lidar_occupancy_mapper.hpp"
+#include "fusion_graph/lidar_scan_history.hpp"
+#include "fusion_graph/lidar_submap_store.hpp"
 #include "fusion_graph/pose_extrapolator.hpp"
-#include "fusion_graph/scan_match_dedup.hpp"
-#include "fusion_graph/scan_matcher.hpp"
 #include <Eigen/Core>
-#include <beluga_ros/amcl.hpp>
-#include <beluga_ros/occupancy_grid.hpp>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <mowgli_interfaces/gnss_observation_freshness.hpp>
 #include <mowgli_interfaces/msg/high_level_status.hpp>
@@ -58,6 +56,11 @@
 #include <sophus/se2.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
+
+namespace beluga_ros
+{
+class Amcl;
+}
 
 namespace fusion_graph
 {
@@ -123,10 +126,6 @@ private:
   // dead-reckoning state. Called unconditionally from OnTimer so the
   // local frame keeps streaming even before the graph initializes.
   void PublishLocalOdom();
-  // Publishes /fusion_graph/icp_odometry — the LiDAR-only (scan-match
-  // integrated) pose, for GUI comparison against the fused/GPS estimate.
-  void PublishIcpOdom();
-
   // Launch GraphManager::Save on a detached worker. No-op if a
   // previous async save is still running. `reason` is logged.
   void DispatchAsyncSave(const char* reason);
@@ -135,8 +134,6 @@ private:
   // shared_ptr (not unique_ptr) so background save / rebase threads
   // captured by-value keep the GraphManager alive past node teardown.
   std::shared_ptr<GraphManager> graph_;
-  std::unique_ptr<ScanMatcher> scan_matcher_;
-  bool use_scan_matching_ = false;
   bool use_magnetometer_ = false;
   // primary_mode = false → observer: doesn't broadcast map→odom TF
   // (so ekf_map_node can keep owning it). The graph still builds
@@ -146,7 +143,6 @@ private:
 
   // Cold-boot relocalization state.
   bool autoload_succeeded_ = false;
-  bool relocalize_done_ = false;
   // Set true once an RTK-Fixed GPS sample has overridden the autoloaded
   // pose with ForceAnchor. One-shot per boot — subsequent RTK fixes flow
   // through as normal GnssLeverArmFactor observations.
@@ -270,7 +266,7 @@ private:
   // ── map→odom slew-rate limiter (continuity restoration) ─────────
   // t_map_odom_anchor_ above is the RAW target: it steps discontinuously
   // whenever a new node lands with a graph correction (GPS innovation,
-  // loop closure, scan-match, or the accumulated refinement snapped in at
+  // accumulated refinement snapped in at
   // the end of a stationary_node_period_s window). Publishing it directly
   // pushes those steps straight into map→base = anchor ⊙ odom→base, and
   // Nav2's controller tracks a teleporting pose → left/right weave and
@@ -279,7 +275,7 @@ private:
   // the raw target at a bounded rate: a few-cm RTK correction becomes a
   // sub-second ramp instead of a step; a genuine relocalization (target
   // jumps past anchor_snap_dist_m / anchor_snap_yaw_rad — re-seed, first
-  // fix after a long Float, big loop closure) snaps immediately so we never
+  // fix after a long Float) snaps immediately so we never
   // lag reality. Set anchor_slew_enabled=false to reproduce the pre-slew
   // step behaviour exactly (A/B validation).
   //
@@ -358,7 +354,7 @@ private:
   // error over the ~20 cm inter-fix baseline becomes a huge heading error, so
   // the COG turns to garbage and corrupts the weakly-observable yaw (map→odom
   // then balloons and the lever arm amplifies graph jitter into position jumps
-  // → the robot drives out of bounds). Gyro + scan-matching carry yaw through
+  // → the robot drives out of bounds). The gyro carries yaw through
   // the Float window. NEVER gate before init — TrySeedInitialPose needs the seed.
   bool cog_require_rtk_ = true;
   double cog_rtk_max_age_s_ = 2.0;
@@ -373,16 +369,6 @@ private:
   double cog_min_speed_mps_ = 0.08;
   double cog_min_sigma_rad_ = 0.15;  // ~8.6° floor
 
-  // ── LiDAR yaw yield (Level 2) ───────────────────────────────────
-  // Scan-matching (and loop closure) between-factors carry BOTH position and
-  // yaw. In feature-poor / symmetric scenery the ICP yaw can converge wrong
-  // with a confident (tight) σ_theta and BAKE a wrong heading into the graph
-  // that later GPS can't undo — reproduced as a stuck, oscillating yaw. Floor
-  // the scan/loop-closure σ_theta so LiDAR's yaw only weakly nudges the graph
-  // (the gyro carries yaw), while σ_xy stays tight so LiDAR still CARRIES
-  // POSITION through RTK-Float windows — its essential role we must keep for
-  // canopy dropout. 0 = disabled (old behaviour, LiDAR yaw fully trusted).
-  double scan_yaw_sigma_floor_rad_ = 0.30;  // ~17°
   std::optional<rclcpp::Time> last_flip_recovery_stamp_;
   // True when seed_xy_ was set from an RTK-Fixed fix (carr_soln=2).
   // Drives the prior sigma at Initialize: tight (sub-cm) when set,
@@ -392,18 +378,17 @@ private:
   // pins the trajectory away from the true GPS position.
   bool seed_xy_rtk_fixed_ = false;
 
-  // Scan matching state.
+  // Latest LiDAR acquisition.
   std::mutex scan_mu_;
   std::vector<Eigen::Vector2d> latest_scan_;  // latest scan in body frame
   bool latest_scan_valid_ = false;
-  std::vector<Eigen::Vector2d> prev_node_scan_;  // scan stored at last node
-  bool prev_node_scan_valid_ = false;
-  // Identity of the scan-between ICP inputs, so OnTimer (25 Hz) does not
-  // realign the same (scan, prev-node scan) pair it already matched — the
-  // LiDAR runs at ~10 Hz. See scan_match_dedup.hpp.
-  uint64_t latest_scan_seq_ = 0;  // bumped in OnScan, under scan_mu_
-  uint64_t prev_node_scan_gen_ = 0;  // bumped when Tick stores prev_node_scan_
-  ScanMatchDedupGate scan_match_dedup_;
+  double latest_scan_stamp_s_ = 0.0;
+  double consumed_scan_stamp_s_ = 0.0;
+  double lidar_scan_max_age_s_ = 0.5;
+  LidarScanHistory lidar_scan_history_;
+  Sophus::SE2d lidar_scan_dr_;
+  double lidar_scan_stamp_s_ = 0.0;
+  void ResetLidarTiming();
 
   // ── LiDAR map anchor (Beluga) ─────────────────────────────────────
   // Under fresh RTK-Fixed the scans build a georeferenced occupancy grid at
@@ -413,10 +398,12 @@ private:
   // (XY-only — heading stays with the gyro/COG factors).
   bool use_lidar_map_anchor_ = false;
   double lidar_map_resolution_m_ = 0.10;
-  double lidar_map_half_extent_m_ = 40.0;
+  double lidar_map_tile_size_m_ = 10.0;
+  int lidar_map_radius_tiles_ = 2;
   double lidar_map_insert_period_s_ = 0.5;
   double lidar_map_rebuild_period_s_ = 5.0;
   double lidar_anchor_engage_age_s_ = 1.0;
+  double lidar_anchor_apply_age_s_ = 20.0;
   double lidar_anchor_disengage_dwell_s_ = 1.0;
   int lidar_anchor_max_beams_ = 60;
   int lidar_anchor_min_particles_ = 300;
@@ -452,11 +439,20 @@ private:
   bool lidar_anchor_was_docked_ = false;
   bool lidar_map_published_once_ =
       false;  // the latched grid must exist even before the first insert
-  std::optional<LidarOccupancyMapper> lidar_mapper_;
+  std::unique_ptr<LidarSubmapStore> lidar_submaps_;
+  LidarOccupancyMapper* lidar_mapper_ = nullptr;
+  LidarComputeGate lidar_compute_gate_;
+  nav_msgs::msg::OccupancyGrid::SharedPtr lidar_local_grid_;
+  bool lidar_filter_map_dirty_ = true;
+  bool lidar_anchor_reference_valid_ = false;
+  uint64_t lidar_filter_calls_ = 0;
+  uint64_t lidar_filter_map_builds_ = 0;
+  double lidar_filter_compute_ms_ = 0.0;
+  double lidar_filter_map_build_ms_ = 0.0;
+  void PollLidarSubmaps(double x, double y);
   LidarOccupancyMapperParams
       lidar_mapper_params_;  // kept so ~/clear_lidar_map can rebuild an empty grid
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_clear_lidar_map_;
-  bool LoadLidarMapFile();  // startup: <graph_save_prefix>.lidarmap if the datum matches
   void ClearLidarMap();
   std::optional<LidarMapAnchorGate> lidar_anchor_gate_;
   std::unique_ptr<beluga_ros::Amcl> lidar_anchor_filter_;
@@ -467,6 +463,7 @@ private:
   // seeds the mapper, later ones are ignored so the live inserts own the map.
   std::string lidar_map_import_topic_;
   bool lidar_map_imported_ = false;
+  bool lidar_map_import_pending_ = false;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr lidar_map_import_sub_;
   void OnLidarMapImport(nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg);
   double lidar_map_last_rebuild_s_ = -1.0e9;
@@ -483,7 +480,6 @@ private:
   double lidar_anchor_last_sigma_m_ = 0.0;
   LidarAnchorVerdict lidar_anchor_last_verdict_ = LidarAnchorVerdict::kAccepted;
   double lidar_anchor_lost_since_s_ = -1.0;  // monotonic; <0 = not lost
-  bool lidar_anchor_shadow_seeded_ = false;
   // Dead-reckoning witness reference: map pose at seed, odom pose at seed,
   // path driven since, and when the reference was last set.
   ContinuousOdom lidar_anchor_odom_;  // re-base-proof dead reckoning fed to the filter + witness
@@ -500,8 +496,9 @@ private:
                                    const Eigen::Matrix2d& cov2,
                                    LidarAnchorVerdict verdict,
                                    bool applied);
-  void LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& curr_scan, bool curr_valid);
-  void RebuildLidarAnchorMap();
+  void LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& curr_scan,
+                          const LidarScanHistory::Match& scan_time);
+  void RebuildLidarAnchorMap(bool prepare_filter = false);
 
   // Frame names.
   std::string map_frame_ = "map";
@@ -560,54 +557,8 @@ private:
   // Clear-graph service handle (wipes iSAM2 + scans, keeps the node alive).
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_clear_;
 
-  // Persistence + loop-closure config.
+  // Graph persistence.
   std::string graph_save_prefix_;
-  bool loop_closure_enabled_ = false;
-  double lc_max_dist_m_ = 5.0;
-  double lc_min_age_s_ = 30.0;
-  size_t lc_max_candidates_ = 3;
-  double lc_max_rmse_ = 0.10;  // ICP RMSE acceptance gate
-  double lc_sigma_xy_ = 0.05;
-  double lc_sigma_theta_ = 0.02;
-  // Skip a loop-closure if its delta is so small it carries no
-  // information (robot was effectively stationary at the candidate's
-  // position) — saves iSAM2 bandwidth on dock-clutter revisits.
-  double lc_min_delta_m_ = 0.05;  // m
-  double lc_min_delta_theta_ = 0.05;  // rad (~3°)
-  // Skip loop-closure GENERATION entirely while an RTK-Fixed sample is fresh
-  // (within scan_yield_timeout_s). Under RTK-Fixed the GPS factor is already an
-  // absolute mm-accurate constraint, so a loop closure carries ~no new
-  // information — but every accepted LC still adds a factor to iSAM2. Over a long
-  // stationary dwell (dock IDLE / charging) that is an UNBOUNDED factor leak: it
-  // OOM-killed the node 2026-06-09 (graph → 10k nodes, 2307 LC factors, SIGKILL).
-  // The scan-yield σ-inflation only stopped LC from biasing the pose; it still
-  // ADDED the factor. Skipping generation bounds memory in the normal
-  // (RTK-Fixed) operating state. When the fix goes stale past the timeout LC
-  // re-enables, so it still carries global consistency through no-fix (tree)
-  // windows. Default true.
-  bool lc_skip_when_rtk_fixed_ = true;
-  // Loop-closure rate/travel gate + GPS σ floor (issue #513, see
-  // loop_closure_gate.hpp). Without it LC ran at 13.7 accepts/s under RTK-Float
-  // (3816 in 286 s of mowing), each a 5 cm factor to the adjacent swath.
-  // At most ONE accepted LC per node, and none until BOTH lc_min_interval_s_
-  // has elapsed AND lc_min_travel_m_ of wheel travel has accrued since the
-  // last ACCEPTED LC. lc_sigma_xy is floored to lc_gps_sigma_ratio_ ×
-  // last_gps_sigma_ so an LC is never tighter than the last GNSS fix.
-  double lc_min_travel_m_ = 1.0;
-  double lc_min_interval_s_ = 2.0;
-  double lc_gps_sigma_ratio_ = 1.0;
-  // Accumulators for the gate — reset on ACCEPT ONLY (a gate rejection must
-  // leave them alone or the gate never opens; loop_closure_gate.hpp explains
-  // why that is the correct polarity here and the wrong one for the RTK
-  // wrong-fix gate). wheel_dist_since_last_lc_m_ is incremented alongside
-  // wheel_dist_since_last_gps_m_ in OnWheel.
-  double wheel_dist_since_last_lc_m_ = 0.0;
-  std::optional<rclcpp::Time> last_lc_accept_stamp_;
-  uint64_t lc_rate_gated_ = 0;  // diagnostic: nodes where the gate blocked the search
-  // Most-recent valid GPS σ (m), latched in OnGnss; <0 = none yet. Feeds
-  // LoopClosureSigmaFloor so an LC is never tighter than the last GNSS fix.
-  double last_gps_sigma_ = -1.0;
-
   // Publishers.
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;
   // /odometry/filtered — local-frame dead reckoning (REP-105 odom),
@@ -622,11 +573,6 @@ private:
   // by the latest IMU gyro sample. Position is the unmodified last
   // fusion-published value. See PoseExtrapolator for the math.
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_fast_;
-  // LiDAR-only odometry: the scan-match deltas integrated from the graph pose
-  // at the first accepted match. Relative (drifts) — published purely so the
-  // GUI can overlay/compare the ICP heading & pose against the fused/GPS
-  // estimate. NOT consumed by any control loop.
-  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_icp_odom_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 
   // TF for odom->base_footprint (we publish map->odom; need to compose
@@ -646,7 +592,6 @@ private:
   double fast_pose_publish_rate_hz_ = 0.0;
 
   // Memory + compute bounding parameters.
-  uint64_t scan_retention_nodes_ = 18000;  // 30 min @ 10 Hz
   uint64_t isam2_rebase_every_nodes_ = 2000;
   uint64_t last_rebase_index_ = 0;
 
@@ -685,21 +630,6 @@ private:
 
   // Per-tick counters for diagnostics.
   uint64_t scans_received_ = 0;
-  uint64_t scan_matches_ok_ = 0;
-  uint64_t scan_matches_fail_ = 0;
-  uint64_t scan_matches_skipped_ = 0;  // ticks where the ICP inputs were unchanged
-
-  // ICP-only odometry integration (see pub_icp_odom_). Seeded from the graph
-  // pose at the first node with a scan-between, then advanced ONCE PER NODE by
-  // the scan-between delta the graph consumed. last_scan_between_delta_ caches
-  // the latest accepted match (motion since the previous node); it is composed
-  // only when Tick() creates the next node. Composing per-tick over-integrates
-  // (~19 ticks/node, delta is cumulative-since-node) → the static-robot drift.
-  gtsam::Pose2 icp_pose_{};
-  bool icp_pose_seeded_ = false;
-  gtsam::Pose2 last_scan_between_delta_{};
-  bool last_scan_between_valid_ = false;
-
   // GPS σ speed inflation: σ_eff = sqrt(σ_msg² + (coeff·v)²). The receiver
   // covariance ignores motion-induced position error (GPS latency × speed,
   // lever-arm sweep during motion). 0 = disabled (raw receiver σ). [seconds]
@@ -770,32 +700,6 @@ private:
   bool gate_cog_during_docking_ = true;
   bool gate_float_gps_during_docking_ = true;
   std::optional<rclcpp::Time> last_docking_cmd_stamp_;
-  // ICP guard-rail thresholds — see GraphParams comments for the
-  // physical intuition. Declared as ROS params so we can tighten or
-  // loosen them in mowgli_robot.yaml without a rebuild.
-  double icp_max_rmse_m_ = 0.10;
-  double icp_max_delta_xy_m_ = 0.30;
-  double icp_max_delta_theta_rad_ = 0.50;
-  double icp_max_divergence_xy_m_ = 0.15;
-  double icp_max_divergence_theta_rad_ = 0.35;
-
-  // --- Scan-match yield-to-RTK gating ---------------------------------------
-  // On a feature-poor open lawn, ICP scan-between factors (σ_xy ≈ 2 cm) are
-  // subtly biased and, chained across many nodes, pull map→odom by 15-60 cm
-  // even while RTK-Fixed GPS (σ ≈ 7 mm) is available — which jitters every
-  // map-frame consumer (dock target, coverage strips) and broke docking
-  // (field 2026-05-29: dock "drove to the side" as the target shifted under
-  // it). Fix: when RTK-Fixed has been seen within scan_yield_timeout_s,
-  // inflate the scan-between σ to scan_yield_sigma_* so GPS dominates and the
-  // map frame stays pinned; once the fix is lost for longer than the timeout,
-  // fall back to the tight ICP σ so scan-matching carries the estimate
-  // through the no-fix window (its whole reason for existing). Set
-  // scan_yield_to_rtk_=false to keep scan-matching always tight (feature-rich
-  // sites). This does NOT affect the use_scan_matching_=false baseline.
-  bool scan_yield_to_rtk_ = true;
-  double scan_yield_timeout_s_ = 2.0;
-  double scan_yield_sigma_xy_ = 0.5;
-  double scan_yield_sigma_theta_ = 0.3;
   std::optional<rclcpp::Time> last_rtk_fixed_stamp_;
 
   // In-flight guards for the async maintenance jobs. Save and rebase
