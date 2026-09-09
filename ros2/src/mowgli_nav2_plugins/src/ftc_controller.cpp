@@ -29,6 +29,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
+#include "mowgli_nav2_plugins/ftc_obstacle_wait.hpp"
 #include "mowgli_nav2_plugins/ftc_stall.hpp"
 #include "mowgli_nav2_plugins/ftc_start_index.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
@@ -624,6 +625,10 @@ void FTCController::setPlan(const nav_msgs::msg::Path& path)
   is_avoiding_ = false;
   target_lateral_deviation_ = 0.0;
   lateral_deviation_ = 0.0;
+  obstacle_wait_start_.reset();
+  obstacle_waiting_ = false;
+  obstacle_followable_time_ = 0.0;
+  avoidance_clear_start_.reset();
 
   // Reset reverse-escape sub-state — a new strip must never inherit a
   // mid-reverse budget from the previous one.
@@ -1183,6 +1188,17 @@ void FTCController::update_control_point(double dt)
 
     case PlannerState::FOLLOWING:
     {
+      // A zero-velocity obstacle hold owns the output. Keep the virtual carrot
+      // fixed as well; otherwise it walks away from the stationary robot and
+      // creates a catch-up surge as soon as one scan looks clear.
+      if (obstacle_waiting_)
+      {
+        current_movement_speed_ = 0.0;
+        stall_time_ = 0.0;
+        is_stalled_ = false;
+        break;
+      }
+
       // Don't advance the carrot if it's already too far ahead of the robot.
       // This prevents the carrot from running away when an external component
       // (e.g. collision_monitor) slows the robot below the carrot's speed.
@@ -1490,11 +1506,8 @@ void FTCController::calculate_velocity_commands(double dt,
       // settles" the operator sees. Clamping the forward output to the
       // acceleration-limited current_movement_speed_ closes the lag at the ramp
       // rate instead of leaping; max_cmd_vel_speed stays as the absolute cap only.
-      if (lin_speed > current_movement_speed_)
-        lin_speed = current_movement_speed_;
-      if (lin_speed > 0.0 && lin_speed < config_.min_speed_mps)
-        lin_speed = config_.min_speed_mps;
-      cmd_vel.twist.linear.x = lin_speed;
+      cmd_vel.twist.linear.x =
+          ClampForwardToMovementRamp(lin_speed, current_movement_speed_, config_.min_speed_mps);
     }
   }
   else
@@ -1702,6 +1715,12 @@ bool FTCController::currentBodyInLethal()
 // log message + is_crashed_ latch.
 bool FTCController::waitOrThrowForObstacle(const std::string& reason)
 {
+  // Any blocked tick breaks the continuous-clear evidence accumulated while
+  // waiting. It also owns a hard zero command, so freeze the carrot/PID state
+  // before returning to computeVelocityCommands.
+  obstacle_followable_time_ = 0.0;
+  holdObstacleMotion();
+
   if (!obstacle_wait_start_.has_value())
   {
     obstacle_wait_start_ = clock_->now();
@@ -1720,6 +1739,27 @@ bool FTCController::waitOrThrowForObstacle(const std::string& reason)
   }
   obstacle_waiting_ = true;
   return true;
+}
+
+void FTCController::holdObstacleMotion()
+{
+  current_movement_speed_ = 0.0;
+  stall_time_ = 0.0;
+  is_stalled_ = false;
+
+  // The controller does not run calculate_velocity_commands() while holding,
+  // so its derivative history would otherwise become stale and the integral
+  // terms would survive the stop. Track the current errors as the new baseline
+  // and clear stored energy on every hold tick.
+  i_lon_error_ = 0.0;
+  i_lat_error_ = 0.0;
+  i_angle_error_ = 0.0;
+  last_lat_error_ = lat_error_;
+  last_lon_error_ = lon_error_;
+  last_angle_error_ = angle_error_;
+  d_lat_filt_ = 0.0;
+  d_lon_filt_ = 0.0;
+  d_angle_filt_ = 0.0;
 }
 
 // Bounded straight reverse-escape for the WEDGED case. SAFETY-CRITICAL: this is
@@ -1801,6 +1841,7 @@ bool FTCController::reverseEscapeOrWait(const std::string& reason,
     // wait state so the two states never fight over cmd_vel.
     obstacle_waiting_ = false;
     obstacle_wait_start_.reset();
+    obstacle_followable_time_ = 0.0;
     return true;  // caller returns; computeVelocityCommands emits the reverse.
   }
 
@@ -2044,36 +2085,19 @@ void FTCController::updateLateralDeviation(double dt)
     }
     else
     {
-      // Not avoiding, but possibly WAITING (both-sides-blocked / needs-more-
-      // than-max, set by waitOrThrowForObstacle below). Same window-edge
-      // flicker risk as the is_avoiding_ branch above — the observation_
-      // persistence:0 costmap can transiently miss the obstacle cell for one
-      // tick. Require a sustained clear (obstacle_clear_hold_s, same field as
-      // the avoidance case) before releasing the wait; otherwise a single-
-      // tick flicker falls through to the obstacle_waiting_ clear below and
-      // resets obstacle_wait_start_, deferring the abort indefinitely.
-      if (obstacle_waiting_)
-      {
-        if (!avoidance_clear_start_.has_value())
-        {
-          avoidance_clear_start_ = clock_->now();
-        }
-        const double clear_for = (clock_->now() - avoidance_clear_start_.value()).seconds();
-        if (clear_for < config_.obstacle_clear_hold_s)
-        {
-          return;  // still holding zero velocity via obstacle_waiting_
-        }
-        avoidance_clear_start_.reset();
-      }
-      // Not avoiding and the path is clear: nominal line tracking.
+      // Not avoiding and the path is clear: nominal line tracking. A pending
+      // wait is released by the single continuous-followable debounce below,
+      // shared with the valid-skirt case.
       target_lateral_deviation_ = 0.0;
     }
   }
   else
   {
-    // Obstacle (re)appeared on the nominal path — still committed. Cancel any
-    // pending clear-hold so a brief clear gap between scans doesn't count
-    // toward completion (the skirt holds until a SUSTAINED clear).
+    // Obstacle (re)appeared on the nominal path — still committed. Cancel the
+    // nominal-path clear hold so a brief clear gap between scans doesn't count
+    // toward avoidance completion. The separate followable-skirt debounce is
+    // reset only if the clearance search fails (inside waitOrThrowForObstacle),
+    // allowing a continuously valid skirt to release a pending wait.
     avoidance_clear_start_.reset();
     // Obstacle present on the nominal path within the lookahead. Commit to a
     // deviation that keeps the OFFSET path clear and HOLD it until the robot
@@ -2221,14 +2245,26 @@ void FTCController::updateLateralDeviation(double dt)
     }
   }
 
-  // Path is now followable inside the deviation cap — we are not wedged. Clear
-  // any pending wait / reverse-escape state so the next blockage starts its own
-  // fresh wait window and full reverse budget.
+  // Path is now followable inside the deviation cap. If a previous tick put us
+  // into a hard zero hold, require this result to remain continuously valid
+  // before moving again. A single scan can momentarily erase an obstacle cell;
+  // immediately clearing the wait here caused the field-observed stop/go loop.
   if (obstacle_waiting_)
   {
+    if (!ObstacleWaitReadyToResume(
+            true, dt, config_.obstacle_clear_hold_s, obstacle_followable_time_))
+    {
+      holdObstacleMotion();
+      return;
+    }
     RCLCPP_INFO(logger_, "FTCController: obstacle cleared, resuming after wait.");
     obstacle_waiting_ = false;
     obstacle_wait_start_.reset();
+    obstacle_followable_time_ = 0.0;
+  }
+  else
+  {
+    obstacle_followable_time_ = 0.0;
   }
   reverse_escape_active_ = false;
   reverse_distance_done_ = 0.0;

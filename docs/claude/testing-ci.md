@@ -1,6 +1,6 @@
 # Testing & CI Index
 
-> Index generated 2026-09-03 at f21729e9.
+> Index updated 2026-09-09 for the FTC obstacle-wait test target.
 >
 > Every test suite in the monorepo, the exact command that runs it, and the workflow (if any) that gates it. Loaded on demand from [`../../CLAUDE.md`](../../CLAUDE.md). Per-package detail lives in [`codemaps/`](codemaps/); this file is the cross-cutting map.
 
@@ -17,7 +17,7 @@
 | `mowgli_hardware` (9) | `ros2/src/mowgli_hardware/test/test_*.cpp` — incl. `test_dig_detector.cpp` + `test_dig_escalation.cpp` (Invariant 16), `test_cobs.cpp`, `test_protocol.cpp`, `test_blade_gate.cpp` | GoogleTest (`CMakeLists.txt:114–190`) | `colcon test --packages-select mowgli_hardware --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_localization` (7) | `ros2/src/mowgli_localization/test/test_*.cpp` | GoogleTest (`CMakeLists.txt:271–342`) | `colcon test --packages-select mowgli_localization --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `universal_gnss_ros2` (6) — vendored submodule | `ros2/src/external/universal-gnss/gnss_ros2/tests/test_*.cpp` | GoogleTest (`CMakeLists.txt:266–386`; `test_ntrip_node` is Linux-only) | `colcon test --packages-select universal_gnss_ros2 --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
-| `mowgli_nav2_plugins` (5) | `ros2/src/mowgli_nav2_plugins/test/test_ftc_*.cpp`, `test_obstacle_deviation.cpp`, `test_oscillation_detector.cpp` | GoogleTest (`CMakeLists.txt:115–160`) | `colcon test --packages-select mowgli_nav2_plugins --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
+| `mowgli_nav2_plugins` (6) | `ros2/src/mowgli_nav2_plugins/test/test_ftc_*.cpp`, `test_obstacle_deviation.cpp`, `test_oscillation_detector.cpp` | GoogleTest (`CMakeLists.txt:115–178`) | `colcon test --packages-select mowgli_nav2_plugins --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_map` (4) | `ros2/src/mowgli_map/test/test_*.cpp` | GoogleTest (`CMakeLists.txt:172–232`) | `colcon test --packages-select mowgli_map --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_leds` (2) | `ros2/src/mowgli_leds/test/test_*.cpp` | GoogleTest (`CMakeLists.txt:96–103`) | `colcon test --packages-select mowgli_leds --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_coverage` (1) | `ros2/src/mowgli_coverage/test/test_coverage_planning.cpp` | GoogleTest (`CMakeLists.txt:129`) | `colcon test --packages-select mowgli_coverage --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
