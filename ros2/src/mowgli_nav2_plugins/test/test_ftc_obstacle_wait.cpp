@@ -39,3 +39,23 @@ TEST(ObstacleWait, AlternatingScansNeverProduceStopGoLoop)
     EXPECT_FALSE(mnp::ObstacleWaitReadyToResume(followable, 0.1, 1.5, clear_s));
   }
 }
+
+TEST(ObstacleWait, AngularRestartIsSlewLimited)
+{
+  double command = 0.0;
+  command = mnp::ClampCommandSlew(command, -0.8, 1.0, 0.1);
+  EXPECT_NEAR(command, -0.1, 1e-9);
+  command = mnp::ClampCommandSlew(command, -0.8, 1.0, 0.1);
+  EXPECT_NEAR(command, -0.2, 1e-9);
+}
+
+TEST(ObstacleWait, AngularRestartDoesNotOvershoot)
+{
+  EXPECT_NEAR(mnp::ClampCommandSlew(0.25, 0.30, 1.0, 0.1), 0.30, 1e-9);
+  EXPECT_NEAR(mnp::ClampCommandSlew(-0.25, -0.30, 1.0, 0.1), -0.30, 1e-9);
+}
+
+TEST(ObstacleWait, NonPositiveRateDisablesAngularSlew)
+{
+  EXPECT_DOUBLE_EQ(mnp::ClampCommandSlew(0.0, -0.8, 0.0, 0.1), -0.8);
+}

@@ -171,6 +171,8 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.speed_slow = declare_double("speed_slow", 0.2);
   config_.speed_angular = declare_double("speed_angular", 20.0);
   config_.acceleration = declare_double("acceleration", 1.0);
+  config_.obstacle_restart_angular_acceleration =
+      declare_double("obstacle_restart_angular_acceleration", 1.0);
   config_.min_speed_mps = declare_double("min_speed_mps", 0.15);
   config_.stall_speed_ratio = declare_double("stall_speed_ratio", 0.35);
   config_.stall_grace_s = declare_double("stall_grace_s", 0.6);
@@ -329,6 +331,12 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
       if (reject_invalid(key, p.as_double(), 0.0, 10.0))
         break;
       config_.acceleration = p.as_double();
+    }
+    else if (key == "obstacle_restart_angular_acceleration")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, 10.0))
+        break;
+      config_.obstacle_restart_angular_acceleration = p.as_double();
     }
     else if (key == "min_speed_mps")
     {
@@ -628,6 +636,8 @@ void FTCController::setPlan(const nav_msgs::msg::Path& path)
   obstacle_wait_start_.reset();
   obstacle_waiting_ = false;
   obstacle_followable_time_ = 0.0;
+  obstacle_recovery_active_ = false;
+  last_recovery_angular_cmd_ = 0.0;
   avoidance_clear_start_.reset();
 
   // Reset reverse-escape sub-state — a new strip must never inherit a
@@ -1572,6 +1582,15 @@ void FTCController::calculate_velocity_commands(double dt,
     }
   }
 
+  if (obstacle_recovery_active_)
+  {
+    cmd_vel.twist.angular.z = ClampCommandSlew(last_recovery_angular_cmd_,
+                                               cmd_vel.twist.angular.z,
+                                               config_.obstacle_restart_angular_acceleration,
+                                               dt);
+    last_recovery_angular_cmd_ = cmd_vel.twist.angular.z;
+  }
+
   if (config_.debug_pid)
   {
     RCLCPP_DEBUG(logger_,
@@ -1746,6 +1765,8 @@ void FTCController::holdObstacleMotion()
   current_movement_speed_ = 0.0;
   stall_time_ = 0.0;
   is_stalled_ = false;
+  obstacle_recovery_active_ = true;
+  last_recovery_angular_cmd_ = 0.0;
 
   // The controller does not run calculate_velocity_commands() while holding,
   // so its derivative history would otherwise become stale and the integral
@@ -2259,8 +2280,23 @@ void FTCController::updateLateralDeviation(double dt)
     }
     RCLCPP_INFO(logger_, "FTCController: obstacle cleared, resuming after wait.");
     obstacle_waiting_ = false;
-    obstacle_wait_start_.reset();
     obstacle_followable_time_ = 0.0;
+  }
+  else if (obstacle_wait_start_.has_value())
+  {
+    // Keep the original wait start through a moving probation window. If the
+    // obstacle reappears before the path has remained stable for a second
+    // clear-hold period, waitOrThrowForObstacle sees the original episode's
+    // deadline instead of granting another complete wait/restart cycle.
+    if (ObstacleWaitReadyToResume(
+            true, dt, config_.obstacle_clear_hold_s, obstacle_followable_time_))
+    {
+      RCLCPP_INFO(logger_, "FTCController: obstacle recovery stable; ending restart limits.");
+      obstacle_wait_start_.reset();
+      obstacle_followable_time_ = 0.0;
+      obstacle_recovery_active_ = false;
+      last_recovery_angular_cmd_ = 0.0;
+    }
   }
   else
   {

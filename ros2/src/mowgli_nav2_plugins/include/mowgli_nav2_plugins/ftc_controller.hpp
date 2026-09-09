@@ -279,6 +279,13 @@ private:
   /// Continuous time for which a valid skirt has existed while
   /// obstacle_waiting_ is active. A blocked tick resets it to zero.
   double obstacle_followable_time_{0.0};
+  /// True from the first hard hold until the path has remained followable
+  /// while moving for obstacle_clear_hold_s. During this probation the angular
+  /// command is slew-limited and a reappearing obstacle keeps the original
+  /// wait timeout instead of opening a fresh stop/restart episode.
+  bool obstacle_recovery_active_{false};
+  /// Last angular command emitted while recovering, used by ClampCommandSlew.
+  double last_recovery_angular_cmd_{0.0};
   /// When the nominal path first read CLEAR during an active AVOIDANCE
   /// episode. The skirt is held until the nominal path has stayed clear
   /// continuously for obstacle_clear_hold_s. Obstacle-wait recovery has its
@@ -353,6 +360,10 @@ private:
     double speed_slow{0.2};
     double speed_angular{20.0};
     double acceleration{1.0};
+    /// Angular acceleration limit (rad/s^2) after an obstacle hard hold. This
+    /// applies until the resumed path has remained stable for
+    /// obstacle_clear_hold_s. 0 disables the limiter.
+    double obstacle_restart_angular_acceleration{1.0};
     double min_speed_mps{0.15};
 
     // Anti-wheelspin / traction control. When the carrot commands a forward

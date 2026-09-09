@@ -357,6 +357,10 @@ controller_server:
       speed_slow: 0.16
       speed_angular: 45.0
       acceleration: 0.2
+      # After a hard obstacle hold, cap steering recovery acceleration so the
+      # freshly recomputed PID cannot jump directly from 0 to ±max_cmd_vel_ang.
+      # At the 10 Hz controller rate, 1.0 rad/s² changes omega by ~0.1 per tick.
+      obstacle_restart_angular_acceleration: 1.0
       min_speed_mps: 0.15
       # Anti-wheelspin / traction control. When the carrot commands forward speed
       # but the ACTUAL forward speed (odom) stays below stall_speed_ratio × the
