@@ -221,6 +221,36 @@ if(BUILD_TESTING)
     action_msgs
   )
 
+  # ---- test_boundary_recovery ----
+  # Verifies the safety-critical keepout filter service sequence used to
+  # recover a robot whose current global-costmap cell is outside the area.
+  ament_add_gtest(test_boundary_recovery
+    test/test_boundary_recovery.cpp
+    src/navigation_nodes.cpp
+  )
+
+  target_include_directories(test_boundary_recovery PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_boundary_recovery
+    rclcpp
+    rclcpp_action
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+    rcl_interfaces
+    action_msgs
+  )
+
   # ---- test_get_next_unmowed_area ----
   # Regression: the mow-selection path SKIPS navigation-only areas. Stands up a
   # real in-process get_mowing_area service returning a nav-only area + a mowing

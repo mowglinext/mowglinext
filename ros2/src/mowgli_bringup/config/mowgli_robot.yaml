@@ -644,9 +644,12 @@ mowgli:
     #
     # If the direction is unknown, stale or ~zero, NOTHING is commanded and the
     # recovery falls back to clear-costmaps-and-retry, then retire + dock.
-    # Set start_blocked_escape_enabled: false to keep that non-motion behaviour
-    # permanently. See mowgli_behavior/start_blocked_escape.hpp.
-    start_blocked_escape_enabled: true
+    # Disabled by default after the 2026-09-09 field bag showed repeated
+    # direction guesses moving the robot from the headland into a boundary
+    # violation. The bounded clear-and-retry path remains active without it.
+    # Enable only for a supervised site where the escape direction has been
+    # validated. See mowgli_behavior/start_blocked_escape.hpp.
+    start_blocked_escape_enabled: false
     start_blocked_escape_speed: 0.10        # m/s — below mowing (0.20) and undock (0.16)
     start_blocked_escape_distance: 0.40     # m — distance budget (hard ceiling 0.60 in code)
     start_blocked_escape_timeout_s: 6.0     # s — hard time bound; ends the move even if the

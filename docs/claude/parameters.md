@@ -248,7 +248,7 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 
 | Key (L) | Default | GUI | Life |
 |---|---|---|---|
-| `start_blocked_escape_enabled` (L546) | `true` | no | launch |
+| `start_blocked_escape_enabled` (L546) | `false` | no | launch |
 | `start_blocked_escape_speed` (L547) | 0.10 | no | launch |
 | `start_blocked_escape_distance` (L548) | 0.40 (hard ceiling 0.60 in code) | no | launch |
 | `start_blocked_escape_timeout_s` (L549) | 6.0 | no | launch |

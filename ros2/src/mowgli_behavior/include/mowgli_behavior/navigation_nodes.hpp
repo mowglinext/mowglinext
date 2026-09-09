@@ -33,6 +33,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_srvs/srv/empty.hpp"
+#include "std_srvs/srv/set_bool.hpp"
 
 namespace mowgli_behavior
 {
@@ -271,11 +272,12 @@ public:
 /// Phases:
 ///   1. Call `/map_server_node/get_recovery_point` for a pose
 ///      ~boundary_recovery_offset_m inside the nearest polygon, facing inward.
-///   2. Temporarily disable the global_costmap's `keepout_filter`. Without
-///      this Smac refuses the plan with `"Start occupied"` because the
-///      robot's current cell is in the keepout-lethal zone (that's exactly
-///      what triggered the recovery — robot drifted past the line). Disable
-///      → clear-costmap → plan-against-clean-costmap → re-enable on exit.
+///   2. Temporarily disable the global_costmap's `keepout_filter` through its
+///      `toggle_filter` service. Without this Smac refuses the plan with
+///      `"Start occupied"` because the robot's current cell is in the
+///      keepout-lethal zone (that's exactly what triggered the recovery —
+///      robot drifted past the line). Disable → clear-costmap →
+///      plan-against-clean-costmap → re-enable on exit.
 ///   3. Hand the recovery pose to Nav2 `/navigate_to_pose`.
 ///   4. On any termination (success / abort / cancel / halt), re-enable
 ///      `keepout_filter` so the boundary safety is back as soon as the
@@ -283,20 +285,17 @@ public:
 ///
 /// Returns FAILURE if the recovery service is unreachable / unhappy, or if
 /// Nav2 aborts/cancels the recovery goal. In that case the BT escalates to
-/// the lethal-boundary emergency path. The keepout toggle is best-effort:
-/// failures to disable/re-enable are logged but do not themselves fail the
-/// recovery — we still try the Nav2 leg, and the next costmap update with
-/// `enabled=true` restores the filter.
+/// the lethal-boundary emergency path. A failed disable aborts without
+/// motion. Re-enabling remains best-effort because the node cannot safely
+/// block forever during a halt.
 class NavigateInsideBoundary : public BT::StatefulActionNode
 {
 public:
   using Nav2Goal = nav2_msgs::action::NavigateToPose;
   using GoalHandle = rclcpp_action::ClientGoalHandle<Nav2Goal>;
-  using BackUpAction = nav2_msgs::action::BackUp;
-  using BackUpGoalHandle = rclcpp_action::ClientGoalHandle<BackUpAction>;
   using RecoverySrv = mowgli_interfaces::srv::GetRecoveryPoint;
   using ClearSrv = nav2_msgs::srv::ClearEntireCostmap;
-  using SetParamsResult = std::vector<rcl_interfaces::msg::SetParametersResult>;
+  using ToggleFilterSrv = std_srvs::srv::SetBool;
 
   NavigateInsideBoundary(const std::string& name, const BT::NodeConfig& config)
       : BT::StatefulActionNode(name, config)
@@ -316,12 +315,11 @@ private:
   enum class Phase
   {
     WaitingForService,  // /map_server_node/get_recovery_point
-    DisablingKeepout,  // global_costmap.set_parameters(keepout_filter.enabled=false)
+    DisablingKeepout,  // /global_costmap/keepout_filter/toggle_filter false
     ClearingCostmap,  // global_costmap/clear_entirely_global_costmap
     WaitingForGoalHandle,  // /navigate_to_pose
     WaitingForResult,
-    FallbackBackingUp,  // /backup (open-loop reverse when Smac aborts)
-    ReEnablingKeepout,  // global_costmap.set_parameters(keepout_filter.enabled=true)
+    ReEnablingKeepout,  // /global_costmap/keepout_filter/toggle_filter true
   };
 
   // Reset Phase + tracking state for a fresh recovery attempt.
@@ -337,33 +335,22 @@ private:
   // if the action server isn't reachable. Always returns a tickable status.
   BT::NodeStatus SendNav2Goal();
 
-  // Kick off the keepout re-enable using AsyncParametersClient and transition
-  // into ReEnablingKeepout. Short-circuits to the pending Nav2 result if
-  // there is nothing to re-enable.
+  // Kick off the keepout re-enable service and transition into
+  // ReEnablingKeepout. Short-circuits to the pending Nav2 result if there is
+  // nothing to re-enable.
   BT::NodeStatus BeginReEnableKeepout();
-
-  // Fire an open-loop BackUp action (~0.5 m reverse) as a fallback when
-  // Smac aborts the recovery plan. Transitions into FallbackBackingUp.
-  // Used at most once per onStart() to break boundary-edge deadlocks
-  // where the planner refuses to plan from the robot's lethal cell even
-  // after the keepout filter has been disabled.
-  BT::NodeStatus BeginFallbackBackup();
 
   rclcpp::Client<RecoverySrv>::SharedPtr service_client_;
   rclcpp::Client<ClearSrv>::SharedPtr clear_client_;
-  rclcpp::AsyncParametersClient::SharedPtr keepout_params_client_;
+  rclcpp::Client<ToggleFilterSrv>::SharedPtr keepout_toggle_client_;
   rclcpp_action::Client<Nav2Goal>::SharedPtr action_client_;
-  rclcpp_action::Client<BackUpAction>::SharedPtr backup_action_client_;
 
   std::shared_future<RecoverySrv::Response::SharedPtr> service_future_;
-  std::shared_future<SetParamsResult> set_param_future_;
+  std::shared_future<ToggleFilterSrv::Response::SharedPtr> toggle_filter_future_;
   std::shared_future<ClearSrv::Response::SharedPtr> clear_future_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;
-  std::shared_future<BackUpGoalHandle::SharedPtr> backup_goal_handle_future_;
-  BackUpGoalHandle::SharedPtr backup_goal_handle_;
-  std::shared_future<BackUpGoalHandle::WrappedResult> backup_result_future_;
-  bool backup_result_requested_{false};
+  std::shared_future<GoalHandle::WrappedResult> goal_result_future_;
 
   // Cached recovery target from the map_server, held across the
   // disable-keepout / clear-costmap phases until we actually send the
@@ -377,12 +364,6 @@ private:
   // Set true between DisablingKeepout and ReEnablingKeepout — onHalted
   // checks this to fire the safety re-enable.
   bool keepout_disabled_{false};
-  // True after we've already used the BackUp fallback once this onStart()
-  // cycle. The outer BT (RetryUntilSuccessful num_attempts="2") gives us a
-  // second cycle if needed, so we don't try to chain multiple backups in
-  // one cycle.
-  bool fallback_attempted_{false};
-
   Phase phase_{Phase::WaitingForService};
 };
 

@@ -147,14 +147,14 @@ Clients (node → file:line):
 | `/map_server_node/add_area` | `mowgli_interfaces/srv/AddMowingArea` | `RecordArea` (`recording_nodes.cpp` :441) |
 | `/map_server_node/get_recovery_point` | `mowgli_interfaces/srv/GetRecoveryPoint` | `NavigateInsideBoundary` (`navigation_nodes.cpp` :415) |
 | `/global_costmap/clear_entirely_global_costmap`, `/local_costmap/clear_entirely_local_costmap` | `nav2_msgs/srv/ClearEntireCostmap` | `ClearCostmap` (:143-148), `NavigateInsideBoundary` (:420) |
-| `/global_costmap/global_costmap` `set_parameters` (`keepout_filter.enabled`) | rcl_interfaces | `NavigateInsideBoundary` (:405, :490, :735) |
+| `/global_costmap/keepout_filter/toggle_filter` | `std_srvs/SetBool` | `NavigateInsideBoundary` — disable before clear/plan, re-enable on every exit |
 | `/controller_server` `set_parameters` | rcl_interfaces | `SetNavMode` (:922-965): `FollowPath.desired_linear_vel`, `FollowCoveragePath.speed_fast` |
 | `/lifecycle_manager_navigation/is_active` | `std_srvs/srv/Trigger` | `Nav2Active` (`condition_nodes.cpp` :605) |
 | `/lifecycle_manager_navigation/manage_nodes` | `nav2_msgs/srv/ManageLifecycleNodes` | `SetNav2Lifecycle` (:226) |
 | `/obstacle_tracker/save_obstacles` | `std_srvs/srv/Trigger` | `SaveObstacles` (`utility_nodes.cpp` :216) — no server exists in the repo; node skips with SUCCESS |
 | `/navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | readiness poll (:758), `NavigateToPose` (:266), `NavigateInsideBoundary` (:430), `FollowStrip` transit (:383), `TransitToStrip` (:1268), `DetourAroundObstacle` (:1398) |
 | `/follow_path` | `nav2_msgs/action/FollowPath` | `FollowStrip` (:379) with `controller_id="FollowCoveragePath"`, `goal_checker_id="coverage_goal_checker"` (:581-582) |
-| `/backup` | `nav2_msgs/action/BackUp` | `BackUp` (:815), `NavigateInsideBoundary` fallback (:434) |
+| `/backup` | `nav2_msgs/action/BackUp` | `BackUp` (:815) |
 | `/dock_robot` / `/undock_robot` | `nav2_msgs/action/DockRobot` / `UndockRobot` | `DockRobot` (`docking_nodes.cpp` :65), `UndockRobot` (:185) + readiness poll (:759) |
 | `/plan_coverage` | `mowgli_interfaces/action/PlanCoverage` | `PlanCoverageArea` (`coverage_nodes.cpp` :1914); server `mowgli_coverage` `coverage_server.cpp` :110 |
 
@@ -190,7 +190,7 @@ All declared in `behavior_tree_node.cpp` with `declare_parameter`, read ONCE at 
 | `battery_low_percent` / `battery_critical_percent` / `battery_full_percent` / `battery_critical_voltage` / `battery_critical_recovery_percent` | 20 / 10 / 95 / 0 / 30 (:913-925) | :290-294 | XML `{battery_low_pct}` `{battery_critical_pct}` `{battery_full_pct}` `{battery_critical_voltage}`; `battery_critical_recovery_pct` is seeded but unused by XML (CriticalBatteryDock resumes at `{battery_full_pct}`, `main_tree.xml` :394) |
 | `battery_manual_resume_percent` | 30.0, clamped to `battery_low_percent + 5` if not above it | :296 | XML `{battery_manual_resume_pct}` → `IsManualResumeRequested` in BOTH charge wait loops (`ChargeOrAbort`, `CriticalChargeOrAbort`); the token is set by the `~/high_level_control` handler on a `COMMAND_START` while `last_high_level_status.state_name` is a charge-hold state (`isChargeHoldState`) |
 | `loc_gnss_acc_pause_m` / `loc_gnss_acc_resume_m` / `loc_gnss_stale_s` / `loc_sigma_pause_persist_s` / `loc_sigma_resume_persist_s` / `loc_sigma_pause_m` / `loc_sigma_resume_m` / `loc_sigma_backstop_persist_s` | 0.30 / 0.15 / 5 / 3 / 2 / 5 / 2 / 10 (:286-294) | :148-163 | `LocalizationHealthMonitor` → `IsLocalizationDegraded` |
-| `start_blocked_escape_enabled` / `_speed` / `_distance` / `_timeout_s` / `_min_signal_speed` / `_signal_max_age_s` | true / 0.10 / 0.40 / 6 / 0.03 / 90 (:309-316), clamped by `SanitizeEscapeCfg` | :546-558 | `EscapeStartBlocked`, `/cmd_vel` tracker |
+| `start_blocked_escape_enabled` / `_speed` / `_distance` / `_timeout_s` / `_min_signal_speed` / `_signal_max_age_s` | false / 0.10 / 0.40 / 6 / 0.03 / 90 (:309-316), clamped by `SanitizeEscapeCfg` | :546-558 | `EscapeStartBlocked`, `/cmd_vel` tracker; motion is opt-in after the 2026-09-09 field failure |
 | `mow_angle_deg` | -1 = AUTO (:947) | :338 | `PlanCoverageArea::buildGoal` → `PlanCoverage.mow_angle_deg` |
 | `area_simplification_tolerance` / `area_record_rate_hz` | 0.05 / 10 (:958-961) | :115 / :129 | `RecordArea` ports via XML |
 | `bt_debug_logging` | false (:973) | :164 | `BT::StdCoutLogger` |

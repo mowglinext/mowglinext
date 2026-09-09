@@ -963,8 +963,11 @@
                              (kMaxStartBlockedAttempts) eventually retires the
                              area rather than looping.
 
-                             SAFETY — the escape motion (issue #487
-                             follow-up, option B): EscapeStartBlocked nudges
+                             SAFETY — the optional escape motion (issue #487
+                             follow-up, option B) is disabled by default after
+                             the 2026-09-09 field bag showed repeated direction
+                             guesses leading into a boundary violation. When a
+                             site explicitly enables it, EscapeStartBlocked nudges
                              the robot OPPOSITE the last motion it was actually
                              commanded to make, bounded to
                              start_blocked_escape_distance (0.40 m default) AND

@@ -331,7 +331,7 @@ private:
     // full_system.launch.py; the values below are only the compile-time
     // fallbacks for a node launched without them.
     StartBlockedEscapeCfg escape_cfg;
-    escape_cfg.enabled = declare_parameter<bool>("start_blocked_escape_enabled", true);
+    escape_cfg.enabled = declare_parameter<bool>("start_blocked_escape_enabled", false);
     escape_cfg.speed = declare_parameter<double>("start_blocked_escape_speed", 0.10);
     escape_cfg.distance = declare_parameter<double>("start_blocked_escape_distance", 0.40);
     escape_cfg.timeout_s = declare_parameter<double>("start_blocked_escape_timeout_s", 6.0);
