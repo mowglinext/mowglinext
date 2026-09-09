@@ -140,6 +140,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   if (observation_update == ObservationUpdate::kRosTimeDiscontinuity)
   {
     last_rtk_fixed_stamp_.reset();
+    last_usable_gnss_stamp_.reset();
     last_gps_map_xy_.reset();
     ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
     RCLCPP_WARN(get_logger(), "fusion_graph: ROS time moved backward; GNSS evidence epoch reset");
@@ -318,6 +319,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   {
     // Receipt time, not callback time, is the freshness basis. Downstream gates
     // additionally reject negative age via IsReceiptFresh.
+    last_usable_gnss_stamp_ = receipt_stamp;
     if (rtk_fixed)
     {
       last_rtk_fixed_stamp_ = receipt_stamp;

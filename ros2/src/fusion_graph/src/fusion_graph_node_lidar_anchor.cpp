@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // LiDAR map anchor: build a georeferenced occupancy grid under fresh RTK-Fixed,
-// localise against it with a Beluga particle filter once Fixed goes stale, and
-// feed the graph an XY-only prior — but ONLY when the estimate earns it (see
-// lidar_anchor_validator.hpp for the 2026-09-06 failure that made this
+// localise against it with a Beluga particle filter only after a complete GNSS
+// outage, and feed the graph an XY-only prior — but ONLY when the estimate earns
+// it (see lidar_anchor_validator.hpp for the 2026-09-06 failure that made this
 // per-estimate validation load-bearing).
 
 #include <algorithm>
@@ -304,6 +304,11 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   {
     rtk_age_s = std::max(0.0, (this->now() - *last_rtk_fixed_stamp_).seconds());
   }
+  double usable_gnss_age_s = 1.0e9;
+  if (last_usable_gnss_stamp_)
+  {
+    usable_gnss_age_s = std::max(0.0, (this->now() - *last_usable_gnss_stamp_).seconds());
+  }
   const Sophus::SE2d dr_now = lidar_scan_dr_;
   const bool map_has_structure = lidar_map_occupied_cells_ > 0;
   const auto d = lidar_anchor_gate_->Step(rtk_age_s, map_has_structure, now_s);
@@ -355,15 +360,22 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
   const auto evaluate = [&]()
   {
     const bool shadow = rtk_age_s <= lidar_anchor_engage_age_s_;
+    // The map anchor is a fallback for a real GNSS outage, not for an
+    // RTK-Fixed -> Float transition. Field run 2026-09-09 showed that the
+    // receiver kept delivering 14-28 mm Float observations while the anchor
+    // applied 102 estimates biased 9 cm median / 23 cm max, producing 12-18 cm
+    // fused-pose steps that FTC chased. Use the age of any accepted GNSS
+    // observation for PF warm-up/application. RTK freshness remains the
+    // authority for map insertion and shadow calibration.
     const auto compute =
         lidar_compute_gate_.Step(now_s,
-                                 rtk_age_s,
+                                 usable_gnss_age_s,
                                  map_has_structure,
                                  curr_scan.size() >=
                                      static_cast<std::size_t>(
                                          std::max(1, lidar_anchor_validator_.min_hit_count)),
-                                 lidar_anchor_shadow_mode_,
-                                 lidar_anchor_adaptive_floor_);
+                                 lidar_anchor_shadow_mode_ && shadow,
+                                 lidar_anchor_adaptive_floor_ && shadow);
     if (lidar_anchor_reference_valid_)
     {
       lidar_anchor_dr_path_m_ +=
@@ -498,7 +510,7 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
     const auto cov_applied = FloorLidarCovariance(cov2, lidar_anchor_floor_eff_m_);
     const bool apply =
         verdict == LidarAnchorVerdict::kAccepted && !shadow &&
-        rtk_age_s >= std::max(lidar_anchor_apply_age_s_, lidar_anchor_engage_age_s_) &&
+        usable_gnss_age_s >= std::max(lidar_anchor_apply_age_s_, lidar_anchor_engage_age_s_) &&
         cov_applied.has_value();
     PublishLidarAnchorCandidate(pose, cov2, verdict, apply);
 

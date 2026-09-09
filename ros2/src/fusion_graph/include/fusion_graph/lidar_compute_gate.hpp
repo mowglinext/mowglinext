@@ -48,14 +48,14 @@ public:
   }
 
   LidarComputeDecision Step(double now_s,
-                            double rtk_age_s,
+                            double usable_gnss_age_s,
                             bool map_has_structure,
                             bool valid_scan,
                             bool shadow_mode = false,
                             bool calibrate = true)
   {
-    if (!std::isfinite(now_s) || now_s < 0.0 || !std::isfinite(rtk_age_s) || rtk_age_s < 0.0 ||
-        !ValidParams())
+    if (!std::isfinite(now_s) || now_s < 0.0 || !std::isfinite(usable_gnss_age_s) ||
+        usable_gnss_age_s < 0.0 || !ValidParams())
       return {};
     if (last_now_ && now_s < *last_now_)
       Reset();
@@ -75,14 +75,14 @@ public:
     const double elapsed = now_s - *epoch_;
     const double burst = std::floor(elapsed / p_.calibration_period_s);
     Phase phase = Phase::kIdle;
-    if (rtk_age_s <= p_.engage_age_s)
+    if (usable_gnss_age_s <= p_.engage_age_s)
     {
       if (shadow_mode)
         phase = Phase::kShadow;
       else if (calibrate && std::fmod(elapsed, p_.calibration_period_s) < p_.calibration_burst_s)
         phase = Phase::kCalibration;
     }
-    else if (rtk_age_s >= std::max(p_.engage_age_s, p_.apply_age_s - p_.warmup_s))
+    else if (usable_gnss_age_s >= std::max(p_.engage_age_s, p_.apply_age_s - p_.warmup_s))
       phase = Phase::kAnchoring;
 
     if (phase == Phase::kIdle)

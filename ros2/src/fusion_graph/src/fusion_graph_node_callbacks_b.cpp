@@ -36,6 +36,18 @@ bool FusionGraphNode::RtkFixedReceiptIsFresh(const double maximum_age_s) const
       last_rtk_fixed_stamp_->nanoseconds(), ros_now.nanoseconds(), maximum_age_ns);
 }
 
+bool FusionGraphNode::UsableGnssReceiptIsFresh(const double maximum_age_s) const
+{
+  if (!last_usable_gnss_stamp_ || !std::isfinite(maximum_age_s) || maximum_age_s < 0.0)
+  {
+    return false;
+  }
+  const auto maximum_age_ns = static_cast<std::int64_t>(maximum_age_s * 1.0e9);
+  const rclcpp::Time ros_now = this->now();
+  return mowgli_interfaces::gnss_observation_freshness::IsReceiptFresh(
+      last_usable_gnss_stamp_->nanoseconds(), ros_now.nanoseconds(), maximum_age_ns);
+}
+
 void FusionGraphNode::OnDockingCmd(geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
 {
   // Stamp only NON-ZERO docking commands — the graceful controller emits ~0

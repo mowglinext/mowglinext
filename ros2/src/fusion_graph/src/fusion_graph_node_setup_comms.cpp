@@ -311,6 +311,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         seed_xy_rtk_fixed_ = false;
         gnss_observation_tracker_.Reset();
         last_rtk_fixed_stamp_.reset();
+        last_usable_gnss_stamp_.reset();
         last_gps_map_xy_.reset();
         ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
         // Re-zero the dead-reckoning frame. Without this the odom→base

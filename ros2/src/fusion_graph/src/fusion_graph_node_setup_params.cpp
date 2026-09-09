@@ -38,7 +38,8 @@ void FusionGraphNode::DeclareParameters()
   dock_pose_yaw_sigma_rad_ = declare_parameter<double>("dock_pose_yaw_sigma_rad", 0.035);
 
   // LiDAR map anchor (Beluga particle filter against a grid built under
-  // RTK-Fixed). Standalone opt-in; navigation enables it only with LiDAR present.
+  // RTK-Fixed). Complete-GNSS-outage fallback; navigation enables it only with
+  // LiDAR present.
   use_lidar_map_anchor_ = declare_parameter<bool>("use_lidar_map_anchor", false);
   lidar_map_resolution_m_ = declare_parameter<double>("lidar_map_resolution_m", 0.10);
   lidar_map_tile_size_m_ = declare_parameter<double>("lidar_map_tile_size_m", 10.0);

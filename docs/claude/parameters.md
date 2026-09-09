@@ -157,9 +157,7 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | Key (L) | Default | Consumer · where read | GUI | Life |
 |---|---|---|---|---|
 | `use_magnetometer` (L238) | `false` | launch-arg default `navigation.launch.py:133` → `fusion_graph.launch.py:148` | no | launch |
-| `use_scan_matching` (L251) | `true` | `navigation.launch.py:135`; **ANDed with `use_lidar`** by `lidar_gated()` L237 | no | launch |
-| `use_loop_closure` (L264) | `true` | `navigation.launch.py:137`; ANDed with `use_lidar` **and** force-off on first boot when `/ros2_ws/maps/fusion_graph.graph` is absent (L150–154) | no | launch |
-| `use_lidar_map_anchor` | `false` | `navigation.launch.py` → `fusion_graph.launch.py` → node; ANDed with `use_lidar`. Scan-to-map particle-filter anchor for RTK-Float (grid on `/fusion_graph/lidar_map`, XY-only factors, per-estimate validation — `codemaps/fusion_graph.md`) | no | launch |
+| `use_lidar_map_anchor` | `true` | `navigation.launch.py` → `fusion_graph.launch.py` → node; ANDed with `use_lidar`. RTK-built persistent scan-to-map fallback for complete GNSS outages; fresh usable Fix or Float keeps it asleep | no | launch |
 | `lidar_anchor_shadow_mode` | `false` | same path; with the anchor on, ALSO run/score/publish the filter under RTK-Fixed, never apply — the field measurement of anchor vs RTK (`/fusion_graph/lidar_anchor_candidate`, diagnostics `lidar_anchor_*`) | no | launch |
 | `use_gps_dock_detection` (L467) | `true` | `navigation.launch.py:141` → launches `gps_dock_detection_node` + `simple_charging_dock.use_external_detection_pose` | no | launch |
 
@@ -328,7 +326,7 @@ These fall back to a literal hardcoded in the launch file. Each is allow-listed 
 
 **Bucket B — per-robot calibration outputs**, written back by nodes/GUI, meaningless as a shared default: `dock_pose_x/y/yaw` (L64–66), `ticks_per_meter` (L70), `imu_yaw` (L74), `enable_mag_cal` + `declination_deg` (L78–79).
 
-The installer additionally patches keys that appear in **neither** the template nor the seed: `gnss_transport`, `gnss_frame_id`, `gnss_ntrip_gga_enabled`, `gnss_ntrip_gga_interval_s`, plus `use_scan_matching`/`use_loop_closure` slaved to the LiDAR choice (`install/lib/config.sh:1400–1441`).
+The installer also removes retired localization keys such as `use_scan_matching`, `use_loop_closure`, `icp_*`, `lc_*`, and the old dense-map extent when upgrading an installed sparse config (`install/lib/config.sh`). This is migration cleanup, not an exposed setting.
 
 **Why sparse matters.** Deleting a key from the installed file is exactly the GUI's "reset to default" — the deep-merge then falls through to the template. `PostSettingsYAML` also prunes any saved key whose value equals its schema default (`settings.go` `sparsifyFlat` L388), so the file stays sparse on its own. Padding it with defaults breaks both that and the propagate-a-new-default-to-every-robot property. `ros2/scripts/check_config_drift.py` is the CI guard: it fails on a structural field present in both files with different values, on an installed key with no template default, and on any installed key whose value merely *equals* the template default (issue #381).
 
@@ -345,7 +343,7 @@ The installer additionally patches keys that appear in **neither** the template 
 | `enable_mqtt` | `false` | launch the MQTT bridge |
 | `enable_foxglove` | `true` | launch `foxglove_bridge` |
 | `foxglove_port` | `8765` | Foxglove WebSocket port |
-| `use_lidar` (L135) | `mowgli_robot.yaml:lidar_enabled`, else `false` + warning | gates LiDAR nodes, the Nav2 overlay choice, and the fusion_graph scan factors. **`LIDAR_ENABLED` in `.env` is NOT consulted** (removed 2026-08-31) |
+| `use_lidar` (L135) | `mowgli_robot.yaml:lidar_enabled`, else `false` + warning | gates LiDAR nodes, the Nav2 overlay choice, and the fusion_graph LiDAR map anchor. **`LIDAR_ENABLED` in `.env` is NOT consulted** (removed 2026-08-31) |
 | `use_obstacle_tracker` (L141) | `true` | persistent `/scan` cluster → `mow_progress` obstacle promotion; also gated on `use_lidar` |
 | `led_enabled` (L147) | `mowgli_robot.yaml:led_enabled` (`false`) | spawn the WS2812 ring node |
 
@@ -356,16 +354,16 @@ There is **no `use_fusion_graph` arg** — it was removed with the dual EKF (Inv
 | Arg | Default | Effect |
 |---|---|---|
 | `use_sim_time` | `false` | — |
-| `use_lidar` (L166) | as above | picks `nav2_params_lidar.yaml` vs `nav2_params_no_lidar.yaml` (L956–962) and force-ANDs the two scan flags |
+| `use_lidar` (L166) | as above | picks `nav2_params_lidar.yaml` vs `nav2_params_no_lidar.yaml` (L956–962) and gates the LiDAR map anchor |
 | `use_magnetometer` (L172) | yaml `use_magnetometer` (`false`) | mag yaw unary factor |
-| `use_scan_matching` (L178) | yaml (`true`) **AND** `use_lidar` | scan between-factors |
-| `use_loop_closure` (L184) | yaml (`true`) AND `use_lidar` AND a persisted `/ros2_ws/maps/fusion_graph.graph` exists (L150–154) | loop-closure search |
+| `use_lidar_map_anchor` | yaml (`true`) AND `use_lidar` | persistent RTK-built tiles; validated XY-only factors only after a complete GNSS outage |
+| `lidar_anchor_shadow_mode` | yaml (`false`) AND `use_lidar` | bounded calibration under RTK-Fixed; publishes candidates but never factors |
 | `use_gps_dock_detection` (L190) | yaml (`true`) | `gps_dock_detection_node` + external detection pose |
 | `cog_stationary_seed_rate_hz` (L196) | `2.0` | `cog_to_imu` stationary anchor. The code comment at `navigation.launch.py:1111–1112` claims sim overrides it to `0.0` — **stale**: no launch file in the repo passes this arg |
 | `fusion_graph_tf_lead_s` (L214) | `0.05` | forward-stamp on BOTH `map→odom` and `odom→base_footprint`; sim passes `0.1` (`sim_full_system.launch.py:182`) |
 | `fusion_graph_node_period_s` (L219) | yaml `fusion_graph_node_period_s`, else `0.04` (25 Hz) | factor-graph cadence; sim passes `0.02` (`sim_full_system.launch.py:183`) |
 
-`mowgli.launch.py` takes `use_sim_time` (L62) and `serial_port` (L68). `fusion_graph.launch.py` takes `use_sim_time`, `use_magnetometer`, `use_scan_matching`, `use_loop_closure` (all default `false`), `primary_mode` (`true`), `tf_publish_lead_s` (`0.0`), `node_period_s` (`0.04`) — L87–118.
+`mowgli.launch.py` takes `use_sim_time` and `serial_port`. `fusion_graph.launch.py` takes `use_sim_time`, `use_magnetometer`, `use_lidar_map_anchor`, `lidar_anchor_shadow_mode`, `primary_mode`, `tf_publish_lead_s`, and `node_period_s`.
 
 ### The remaining launch files in `mowgli_bringup/launch/`
 
@@ -433,18 +431,16 @@ There is **no `use_fusion_graph` arg** — it was removed with the dual EKF (Inv
 | Stationary gate | 118–126 (its `stationary_thresh_xy_m` / `stationary_thresh_theta` / `stationary_sigma_theta` sit at L79–97, inside the gyro block) | `stationary_gyro_thresh_rad_per_s` |
 | **Slip veto** (rotational only — see Invariant 16) | 127–161 | `slip_residual_thresh_rad`, `slip_gyro_max_rad`, `slip_wheel_min_rad`, `slip_window_s` 0.5 (issue #516; `0` = old per-node gate) |
 | Graph size | 162–184 | `max_graph_nodes` 6000 |
-| Loop closure | 185–235 | `lc_min_age_s` 30, `lc_skip_when_rtk_fixed` true, `lc_min_travel_m` 1.0, `lc_min_interval_s` 2.0, `lc_gps_sigma_ratio` 1.0 (issue #513) |
 | Gyro bias | 236–257 | `gyro_bias_estimation_enabled`, `gyro_bias_ema_tau_s` 30, `use_imu_preint` false |
 | Adaptive process noise | 258–269 | `adaptive_noise_enabled_gain` 10.0 |
 | **RTK wrong-fix gate** | 270–295 | `rtk_wrongfix_max_jump_m` 0.05 — bounded per-interval comparison; do NOT replace with an unbounded accumulator (CLAUDE.md *What NOT to Do*) |
-| ICP guard rails | 296–307 | `icp_max_rmse_m`, `icp_max_delta_xy_m`, `icp_max_divergence_*` |
 | GPS noise floor / prior | 308–318 | `gps_sigma_floor` 0.003, `prior_sigma_xy` 0.05 |
 | Lever arm + datum | 319–328 | `lever_arm_x/y`, `datum_lat/lon` — **all four injected from `mowgli_robot.yaml` by `fusion_graph.launch.py:144–147`** |
 | Frames | 329–333 | `map_frame` / `odom_frame` / `base_frame` (Invariant 2) |
 | TF publish | 334–373 | `fast_pose_publish_rate_hz`, `tf_publish_lead_s` 0.05 (launch-overridden), `tf_broadcast_rate_hz` 20 |
 | Docking | 374–415 | `docking_active_timeout_s`, `gate_cog_during_docking`, `dock_reanchor_sigma_xy_m` 0.03, `dock_prior_max_gps_disagreement_m` 0.50, `dock_prior_max_gps_sigma_m` 0.05 (issue #512) |
 
-Declared **without** a yaml line (code defaults only, tune via `ros2 param set` or add a line): `anchor_*` (5), `auto_save_enabled`, `autoload_graph`, `cog_*` (10), `cov_update_every_n`, `dr_slip_*`, `gps_max_sigma_reject_m`, `graph_save_prefix`, `icp_max_iter`/`icp_max_corresp_dist`/`icp_sigma_*`/`icp_source_subsample`, `isam2_*`, `lc_max_candidates`/`lc_max_dist_m`/`lc_max_rmse`/`lc_min_delta_*`/`lc_sigma_*`, `periodic_save_period_s`, `rtk_autoload_override_threshold_m`, `scan_min_inliers`, `scan_retention_nodes`, `scan_topic`, `scan_yaw_sigma_floor_rad`, `scan_yield_*`, `stationary_motion_thresh_*`, `stationary_node_period_s`. Eight more come only from launch arguments: `primary_mode`, `use_scan_matching`, `use_loop_closure`, `use_magnetometer`, `dock_pose_x`/`_y`/`_yaw`, `dock_pose_yaw_sigma_rad`.
+Declared **without** a yaml line (code defaults only, tune via `ros2 param set` or add a line): `anchor_*`, `auto_save_enabled`, `autoload_graph`, `cog_*`, `cov_update_every_n`, `dr_slip_*`, `gps_max_sigma_reject_m`, `graph_save_prefix`, `isam2_*`, `periodic_save_period_s`, `rtk_autoload_override_threshold_m`, `scan_topic`, `stationary_motion_thresh_*`, and `stationary_node_period_s`. Launch-only parameters include `primary_mode`, `use_magnetometer`, `dock_pose_x`/`_y`/`_yaw`, and `dock_pose_yaw_sigma_rad`; the two LiDAR switches are launch-injected and also present in the template.
 
 ## Environment variables
 

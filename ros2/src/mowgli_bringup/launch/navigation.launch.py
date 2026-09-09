@@ -22,7 +22,8 @@ Navigation stack launch file for the Mowgli robot mower.
 Brings up:
   1. Localization — fusion_graph_node (GTSAM iSAM2 factor graph) owns
      both map→odom AND odom→base_footprint. Map-frame inputs: wheel +
-     IMU + GPS + COG (+ optional LiDAR scan-matching and loop-closure).
+     IMU + GPS + COG (+ an optional RTK-built LiDAR map anchor for
+     complete GNSS outages).
      Local-frame: wheel vx + gyro_z integrated at IMU rate (replaces
      the standalone robot_localization ekf_odom_node).
   2. Two helper nodes — cog_to_imu (GPS COG as a continuous absolute-
@@ -152,7 +153,7 @@ def generate_launch_description() -> LaunchDescription:
     use_lidar_arg = DeclareLaunchArgument(
         "use_lidar",
         default_value=_early_use_lidar,
-        description="When false, use nav2_params_no_lidar.yaml (no obstacle layer, collision monitor pass-through) and force fusion_graph scan-matching / loop-closure off. Default read from mowgli_robot.yaml.lidar_enabled ONLY (the LIDAR_ENABLED env var is not consulted); CLI/compose override wins.",
+        description="When false, use nav2_params_no_lidar.yaml (no obstacle layer, collision monitor pass-through) and disable the fusion_graph LiDAR map anchor. Default read from mowgli_robot.yaml.lidar_enabled ONLY (the LIDAR_ENABLED env var is not consulted); CLI/compose override wins.",
     )
 
     use_magnetometer_arg = DeclareLaunchArgument(
@@ -166,7 +167,7 @@ def generate_launch_description() -> LaunchDescription:
     use_lidar_map_anchor_arg = DeclareLaunchArgument(
         "use_lidar_map_anchor",
         default_value=_early_use_lidar_map_anchor,
-        description="LiDAR map anchor (fusion_graph): occupancy grid built under RTK-Fixed, Beluga particle filter against it once Fixed goes stale, XY-only factor. Default read from mowgli_robot.yaml. ANDed with use_lidar; no scan subscription without LiDAR.",
+        description="LiDAR map anchor (fusion_graph): persistent tiles built under RTK-Fixed, with a Beluga particle filter enabled only after a complete GNSS outage; XY-only factor. Default read from mowgli_robot.yaml. ANDed with use_lidar; no scan subscription without LiDAR.",
     )
     lidar_anchor_shadow_mode_arg = DeclareLaunchArgument(
         "lidar_anchor_shadow_mode",

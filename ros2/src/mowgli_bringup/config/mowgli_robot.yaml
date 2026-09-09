@@ -298,8 +298,8 @@ mowgli:
     # is just a Pose2 backbone with wheel between-factors, gyro
     # between-factors (or preintegrated factors when use_imu_preint=
     # true), and GNSS lever-arm + COG / mag unaries. Equivalent
-    # functionality to the legacy ekf_map_node, with the option to
-    # enable scan-matching + loop closure on LiDAR-equipped robots.
+    # functionality to the legacy ekf_map_node, with an optional
+    # persistent LiDAR map anchor for complete GNSS outages.
 
     # use_magnetometer (default false): subscribe to /imu/mag_yaw and
     # let it influence the map-frame yaw. The chassis motor field

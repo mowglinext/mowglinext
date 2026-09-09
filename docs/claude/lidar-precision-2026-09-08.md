@@ -19,10 +19,10 @@ Package configuration and declarations are in `ros2/src/fusion_graph/config/fusi
 | Parameter | Default | Purpose |
 |---|---|---|
 | `lidar_scan_max_age_s` | 0.5 s | Maximum scan age and queued observation lifetime. IMU interpolation gaps above 0.25 s are refused. |
-| `lidar_anchor_apply_age_s` | 20 s | Minimum Fixed age before applying a validated map observation. |
+| `lidar_anchor_apply_age_s` | 20 s | Minimum age of the last usable GNSS observation, including Float, before applying a validated map observation. |
 | `lidar_anchor_engage_age_s` | 1 s | Existing freshness limit for map learning and filter tracking; independent of the application delay. |
 
-The 20 s delay protects short Float episodes observed in the available bags; it does not establish accuracy during longer outages. Candidate covariance slot 14 indicates acceptance into the queue; expiration/cancellation can still prevent insertion. The graph factor counter records actual insertion.
+The 20 s delay now starts from the last usable GNSS observation, so RTK Float keeps the particle filter asleep regardless of duration. It protects only complete GNSS outages and does not establish accuracy on feature-poor ground. Candidate covariance slot 14 indicates acceptance into the queue; expiration/cancellation can still prevent insertion. The graph factor counter records actual insertion.
 
 ## Validation protocol
 
@@ -82,5 +82,3 @@ Corrected candidate timestamps are unique and their observed publication ages re
 | `after_odom` | 790 | 0.432 | 0.646 | 0.752 |
 
 Machine-readable comparison: `fix-comparison.json`. Plots: `fix_precision.png` and `fix_precision.pdf`, in the local validation bundle.
-
-

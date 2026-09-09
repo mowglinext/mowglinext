@@ -93,18 +93,20 @@ void FusionGraphNode::OnTimer()
     lidar_scan_dr_ = Sophus::SE2d(scan_time->odom.theta(), scan_time->odom.translation());
   }
 
-  // ── LiDAR map anchor (Beluga): absolute XY during RTK-Float ──────────
-  // Builds the georeferenced occupancy grid under fresh RTK-Fixed and, once the
-  // fix goes stale, localises against it and queues an XY-only prior. See
+  // ── LiDAR map anchor (Beluga): absolute XY during a GNSS outage ───────
+  // Builds the georeferenced occupancy grid under fresh RTK-Fixed. A usable
+  // GNSS position, including Float, keeps the filter asleep; only a prolonged
+  // absence lets it localise against the grid and queue an XY-only prior. See
   // fusion_graph_node_lidar_anchor.cpp.
   if (use_lidar_map_anchor_ && curr_valid)
   {
     LidarMapAnchorStep(curr_scan, *scan_time);
   }
 
-  // A prior queued during a throttled tick must yield immediately to Fixed,
-  // including when no new scan arrives to run the anchor step.
-  if (RtkFixedReceiptIsFresh(lidar_anchor_engage_age_s_) || !last_is_charging_valid_ ||
+  // A prior queued during a throttled tick must yield immediately to any
+  // usable GNSS observation, including when no new scan arrives to run the
+  // anchor step.
+  if (UsableGnssReceiptIsFresh(lidar_anchor_engage_age_s_) || !last_is_charging_valid_ ||
       last_is_charging_)
     graph_->ClearLidarObservations();
   auto out = graph_->Tick(now_s);

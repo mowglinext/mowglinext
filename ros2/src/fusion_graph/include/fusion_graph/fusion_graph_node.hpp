@@ -117,6 +117,7 @@ private:
   // RTK freshness is based on receiver-receipt provenance in ROS time.
   // Negative age (future stamp / clock rewind) is always not fresh.
   bool RtkFixedReceiptIsFresh(double maximum_age_s) const;
+  bool UsableGnssReceiptIsFresh(double maximum_age_s) const;
 
   // Publish TF map->odom and /odometry/filtered_map.
   void PublishOutputs(const TickOutput& out);
@@ -702,6 +703,10 @@ private:
   bool gate_float_gps_during_docking_ = true;
   std::optional<rclcpp::Time> last_docking_cmd_stamp_;
   std::optional<rclcpp::Time> last_rtk_fixed_stamp_;
+  // Most recent GNSS observation that passed the motion/covariance gates,
+  // including RTK Float. The LiDAR map anchor is an outage fallback: a usable
+  // Float position must keep it asleep instead of competing with GNSS.
+  std::optional<rclcpp::Time> last_usable_gnss_stamp_;
 
   // In-flight guards for the async maintenance jobs. Save and rebase
   // each run in a detached worker so the executor callback returns

@@ -34,9 +34,9 @@ If `lidar_enabled` is **absent** from the installed config, the stack resolves *
 
 `LIDAR_ENABLED` in `.env` still does one real job: it decides whether the **`mowgli-lidar` container** is composed in. So the two can now disagree in the opposite direction (config on, container never started). `scan_deskew_node` — which only runs when `use_lidar` is true — warns loudly if no scan arrives within `scan_watchdog_period_s` (20 s default) and names that cause.
 
-`use_scan_matching` and `use_loop_closure` are **ANDed with `use_lidar`** before they reach `fusion_graph_node`, so the "scan-matching enabled with no scanner" state is unreachable.
+`use_lidar_map_anchor` and `lidar_anchor_shadow_mode` are **ANDed with `use_lidar`**, so a GPS-only stack never subscribes to a missing scanner. Scan-to-scan ICP, loop closure, and their settings were removed.
 
-The **fusion_graph** localizer (GTSAM iSAM2 — see [§7](#7-fusion_graph)) does **not** have a separate config file: its knobs are declared as ros2 parameters on `fusion_graph_node` and the high-level switches (`use_scan_matching`, `use_loop_closure`, `use_magnetometer`, `fusion_graph_node_period_s`) live in `mowgli_robot.yaml`. There is **no** `use_fusion_graph` switch — the node is launched unconditionally. The Settings page exposes the switches under the *Localization* section.
+The **fusion_graph** localizer (GTSAM iSAM2 — see [§7](#7-fusion_graph)) uses `fusion_graph.yaml` for detailed defaults. Its high-level switches (`use_lidar_map_anchor`, `lidar_anchor_shadow_mode`, `use_magnetometer`, `fusion_graph_node_period_s`) live in `mowgli_robot.yaml`. There is **no** `use_fusion_graph` switch — the node is launched unconditionally.
 
 ### Sparse robot config model
 
@@ -754,7 +754,7 @@ The BT side (`PlanCoverageArea`) feeds it the area outer ring + obstacle holes f
 
 ## 5. fusion_graph
 
-`fusion_graph_node` (GTSAM iSAM2) is the **sole and default** localizer: `navigation.launch.py` launches it unconditionally and it publishes **both** `map → odom` **and** `odom → base_footprint`. There is **no** dedicated YAML config — knobs are declared as ROS2 parameters on the node, and the high-level switches (`use_scan_matching`, `use_loop_closure`, `use_magnetometer`, `fusion_graph_node_period_s`) live in `mowgli_robot.yaml`, exposed on the Settings page under *Localization*. `use_scan_matching` / `use_loop_closure` are ANDed with `use_lidar` before they reach the node.
+`fusion_graph_node` (GTSAM iSAM2) is the **sole and default** localizer: `navigation.launch.py` launches it unconditionally and it publishes **both** `map → odom` **and** `odom → base_footprint`. Detailed defaults live in `fusion_graph.yaml`; high-level switches (`use_lidar_map_anchor`, `lidar_anchor_shadow_mode`, `use_magnetometer`, `fusion_graph_node_period_s`) live in `mowgli_robot.yaml`. Both LiDAR map-anchor switches are ANDed with `use_lidar`.
 
 Full parameter table in [§7](#7-fusion_graph); the design is in [Architecture → Factor-Graph Localizer](Architecture#optional-factor-graph-localizer-fusion_graph).
 
@@ -900,77 +900,57 @@ topics:
 
 ## 7. fusion_graph (factor-graph localizer) {#7-fusion_graph}
 
-**Files:** none — `fusion_graph_node` declares all knobs as ros2 parameters at startup. The high-level toggles live in `mowgli_robot.yaml`; runtime overrides are passed on the `navigation.launch.py` command line.
+**Files:** detailed defaults in `ros2/src/fusion_graph/config/fusion_graph.yaml`; site-level switches in `mowgli_robot.yaml`.
 
-**Purpose:** the **sole and default** localizer, built on **GTSAM iSAM2**. It publishes `/odometry/filtered_map` and owns **both** `map → odom` **and** `odom → base_footprint` — the removed `ekf_map_node` / `ekf_odom_node` pair used to own one each. The map-frame estimate is the result of a Pose2 factor graph that carries LiDAR scan-matching and loop-closure factors through extended RTK-Float windows. See [Architecture → Factor-Graph Localizer](Architecture#optional-factor-graph-localizer-fusion_graph) for the steady-state design.
+**Purpose:** the sole map+odom localizer. Its Pose2 graph combines wheel and gyro motion, direct `/gps/fix` observations with antenna lever-arm compensation, and COG/magnetometer yaw. Scan-to-scan ICP and loop closure were removed. On a LiDAR-equipped robot, fresh RTK-Fixed scans build persistent georeferenced tiles. Any usable GNSS observation, including RTK Float, keeps the particle filter asleep; only a complete GNSS outage can activate validated XY-only LiDAR factors.
 
 ### Switches
 
-`navigation.launch.py` launches `fusion_graph_node` **unconditionally** — there is no `use_fusion_graph` argument. What is configurable is the feature set:
-
 ```yaml
-# mowgli_robot.yaml (also exposed in the Settings → Localization section)
+# mowgli_robot.yaml
 mowgli:
   ros__parameters:
-    use_scan_matching: true       # ANDed with lidar_enabled before it reaches the node
-    use_loop_closure: true        # ANDed with lidar_enabled AND a persisted graph on disk
-    use_magnetometer: false       # off on stock chassis (motor field bias)
-    fusion_graph_node_period_s: 0.04   # 25 Hz on hardware; 0.1 (10 Hz) is the Pi-friendly value
+    use_lidar_map_anchor: true       # ANDed with lidar_enabled
+    lidar_anchor_shadow_mode: false # calibration telemetry, never factors under Fixed
+    use_magnetometer: false
+    fusion_graph_node_period_s: 0.04
 ```
 
 ```bash
-# Per-launch override (one-shot)
-ros2 launch mowgli_bringup navigation.launch.py use_scan_matching:=false
+ros2 launch mowgli_bringup navigation.launch.py use_lidar_map_anchor:=false
 ```
 
 ### Key parameters
 
 | Parameter | Default | Notes |
 |---|---|---|
-| `node_period_s` | 0.04 | Graph node creation cadence. The node's own default is 0.1 (10 Hz), but `navigation.launch.py` injects `mowgli_robot.yaml.fusion_graph_node_period_s` (hardware fallback 0.04 = 25 Hz). |
-| `stationary_node_period_s` | 5.0 | Throttled node period when motion is below the stationary threshold — bounds graph growth on the dock. |
-| `wheel_sigma_x_per_sqrt_m / wheel_sigma_y_per_sqrt_m` | 0.05 / 0.005 | Body-frame between-factor **translational** noise, in m/√m. The sigma applied to a node is `k · √(step_m + wheel_creep_speed_mps · dt)` — variance grows with the distance the step covered, so the accumulated uncertainty tracks distance travelled and is invariant to `node_period_s` (issue #491). `sigma_y` ≪ `sigma_x` still enforces non-holonomic motion: both scale by the same `√d`. At 1 m of travel per node these reproduce the old fixed per-node 0.05 / 0.005 m. |
-| `wheel_creep_speed_mps` | 0.04 | Floor on the noise distance above, as a creep *speed*: motion the encoders may have missed (towed, lifted, both wheels skating). Expressed as a distance so the floor stays cadence-invariant. |
-| `wheel_sigma_theta` | 0.01 | Yaw between-factor noise, still a **per-node** sigma — used only when no gyro sample arrived for the tick. |
+| `node_period_s` | deployed 0.04 s | Graph node cadence; injected by `navigation.launch.py`. |
+| `wheel_sigma_x_per_sqrt_m / wheel_sigma_y_per_sqrt_m` | 0.05 / 0.005 | Distance-scaled, non-holonomic wheel noise. |
 | `gyro_sigma_theta` | 0.005 | Yaw between-factor noise from `/imu/data`. |
-| `gps_sigma_floor` | 0.003 | Lower bound for the GPS XY noise (3 mm) — prevents over-trusting RTK-Fixed reports with under-estimated covariance. |
-| `cov_update_every_n` | 10 | Skip-rate for the marginal covariance recompute (the diagonals on `/odometry/filtered_map`). |
-| `isam2_relinearize_skip` | 5 | iSAM2 relinearization throttle. |
-| `isam2_rebase_every_nodes` | 2000 | Periodic iSAM2 rebase to bound per-tick update cost. |
-| `scan_retention_nodes` | 18000 | Drop body-frame scans older than this many nodes (~30 minutes at 10 Hz). |
-| `lc_max_dist_m` / `lc_min_age_s` / `lc_max_candidates` / `lc_max_rmse` | 5.0 / 30.0 / 3 / 0.20 | Loop-closure search/accept gates. |
-| `lc_skip_when_rtk_fixed` / `lc_min_travel_m` / `lc_min_interval_s` / `lc_gps_sigma_ratio` | true / 1.0 / 2.0 / 1.0 | Rate + travel gate on loop closures (issue #513). `lc_skip_when_rtk_fixed` is the bound that stops the stationary-dwell factor leak that OOM-killed the node — leave it on unless a site mows under permanent RTK-Float. |
-| `icp_max_iter` / `icp_max_corresp_dist` / `icp_source_subsample` | 10 / 0.5 / 40 | Per-tick scan matcher; ten iterations converge within 1 mm of the 15-iteration solution on outdoor LiDAR shapes, and 40 source points keep the rmse within a few mm of the 60-point result at half the nearest-neighbour cost. |
-| `scan_min_inliers` / `kf_min_inliers` | 30 / 16 | Inlier floors for the scan-to-scan between-factor and for keyframe (cross-viewpoint) matching. The keyframe floor is looser because the overlap is partial. |
-| `autoload_graph` | true | Resume from `<graph_save_prefix>.{graph,scans,meta}` on startup. |
-| `auto_save_enabled` | true | Auto-checkpoint on RECORDING→IDLE, dock arrival, and every `periodic_save_period_s` during AUTONOMOUS state. |
-| `graph_save_prefix` | `/ros2_ws/maps/fusion_graph` | Base path for the three persistence files. |
-| `primary_mode` | true | Broadcast the TFs. `navigation.launch.py` always passes `true`; the `false` (observer) path exists for the standalone test harness — it dates from when a second localizer could own `map → odom`, which is no longer the case. |
+| `gps_sigma_floor` | 0.003 m | Prevents over-trusting under-reported GNSS covariance. |
+| `isam2_rebase_every_nodes` | 2000 | Asynchronous rebase that bounds accumulated factor cost. |
+| `use_lidar_map_anchor` | true in robot template | Enables tiled map learning and outage fallback when `use_lidar` is also true. |
+| `lidar_map_resolution_m` | 0.10 m package default | Tile resolution; a sparse installed config may override it per robot. |
+| `lidar_map_tile_size_m / lidar_map_radius_tiles` | 10 m / 2 | Persistent tile size and local loaded radius (5 × 5 tiles). |
+| `lidar_anchor_engage_age_s` | 1 s | RTK-Fixed freshness threshold for map learning; it does not trigger fallback compute. |
+| `lidar_anchor_warmup_s / lidar_anchor_apply_age_s` | 5 / 20 s | PF starts after 15 s without any usable GNSS and factors become eligible after 20 s. |
+| `lidar_anchor_max_rate_hz` | 5 Hz | Maximum PF compute rate while active. |
+| `lidar_anchor_min_hit_ratio / min_hit_count / max_sigma_m` | 0.5 / 30 / 0.5 m | Per-estimate validation gates. |
+| `autoload_graph / auto_save_enabled` | true / true | Resume graph and checkpoint on lifecycle events. |
+| `graph_save_prefix` | `/ros2_ws/maps/fusion_graph` | Base path for graph metadata and `.lidartiles`. |
 
-### Topics, services
+### Topics and services
 
-- **`/fusion_graph/diagnostics`** (`diagnostic_msgs/DiagnosticArray`, 1 Hz) — exposes `total_nodes`, `scans_attached`, `loop_closures`, `scans_received`, `scan_matches_ok`, `scan_matches_fail`, `cov_xx`, `cov_yy`, `cov_yawyaw`. Surfaced in the GUI's *Diagnostics → Fusion Graph (iSAM2)* panel.
-- **`/fusion_graph/markers`** (`visualization_msgs/MarkerArray`, 1 Hz, transient_local) — node positions, trajectory, loop-closure edges. Visible in Foxglove with no extra setup.
-- **`/imu/fg_yaw`** (`sensor_msgs/Imu`) — yaw-only output of the graph, published for downstream consumers and for debugging against `/imu/mag_yaw` / `/imu/cog_heading`.
-- **`~/save_graph`** (`std_srvs/Trigger`) — persists the graph immediately. Wired to the *Save graph* button in the GUI.
-- **`~/clear_graph`** (`std_srvs/Trigger`) — while the robot is IDLE and stationary, wipes both the live and persisted graph and re-bases odometry. At the station it immediately re-seeds from the calibrated dock pose; elsewhere a fresh GPS position re-initializes it using the retained heading. Wired to the *Clear graph* button in the GUI.
+- `/fusion_graph/diagnostics` reports graph covariance, GNSS rejects, slip/gyro telemetry, tile I/O, particle-filter work, anchor verdicts and factors.
+- `/fusion_graph/lidar_map` publishes the local tile window; `/fusion_graph/lidar_anchor_candidate` exposes each evaluated candidate and whether it became a factor.
+- `/fusion_graph/markers` publishes nodes and trajectory; `/imu/fg_yaw` publishes graph yaw.
+- `~/save_graph` checkpoints graph and tiles. `~/clear_graph` requires IDLE and stationary state. `~/clear_lidar_map` removes the persistent tiles and resets the filter.
 
-### Persistence
+### Persistence and tuning
 
-Graph state lives on disk under `<graph_save_prefix>.*`:
+Graph state uses `<graph_save_prefix>.graph` and `.meta`; LiDAR submaps live under `<graph_save_prefix>.lidartiles`. Old `.lidarmap` files are read only for migration. Disk operations run asynchronously.
 
-- `.graph` — gtsam factor graph + optimized values (XML).
-- `.scans` — binary blob: per-node body-frame LiDAR points.
-- `.meta` — text: next index, last node time, datum lat/lon.
-
-Idempotent overwrite. Saving from the GUI button is identical to the auto-checkpoint that fires on dock arrival; the operator typically only invokes Save explicitly before manually shutting down ROS2.
-
-### Tuning notes
-
-- **Drift after a long RTK-Float window**: lower `gps_sigma_floor` only if you trust RTK-Fixed bursts more than the wheel/scan factors — most installations should leave it at 3 mm.
-- **CPU budget**: scan-matching costs ~5 ms/tick at 10 Hz on a Pi 4. If you see the maintenance timer overrunning, raise `fusion_graph_node_period_s` to 0.1 (10 Hz) or `isam2_relinearize_skip` to 10, or lower `icp_source_subsample`, before disabling `use_scan_matching` outright.
-- **Graph too large after weeks**: tune `isam2_rebase_every_nodes` down to 1500 — the rebase preserves the optimized values but drops accumulated between-factors.
-- **LiDAR is unreliable in winter (snow on rotor, low visibility)**: leave `use_scan_matching:=true`, just disable `use_loop_closure` to avoid a stale match getting promoted to a loop-closure factor.
+RTK Float remains the absolute-position source even if its covariance grows to decimetres. The LiDAR fallback is reserved for total GNSS absence because outdoor maps may be sparse and a biased scan-to-map factor can make the controller chase a pose jump. If CPU use rises while GNSS is present, inspect `lidar_filter_calls`: it should stay at zero outside bounded Fixed calibration bursts.
 
 ---
 
@@ -980,7 +960,7 @@ Idempotent overwrite. Saving from the GUI button is identical to the auto-checkp
 
 | Issue | Likely Culprit | Action |
 |-------|----------------|--------|
-| Pose drifts through a long RTK-Float window | Graph leaning on the wheel factors | Enable `use_scan_matching` / `use_loop_closure` (needs LiDAR); check `cov_xx`/`cov_yy` on `/fusion_graph/diagnostics` |
+| Position degrades during RTK Float | Receiver covariance / multipath | Inspect `/gps/status` and `/gps/fix`; LiDAR fallback intentionally remains asleep while usable GNSS is present |
 | Pose snaps when a fix arrives | GPS trusted too much relative to the wheels | Raise `gps_sigma_floor`, or lower `wheel_sigma_x_per_sqrt_m` |
 | Slow, metre-scale S-weave on **transit** | Pure-pursuit limit cycle: lookahead too short | Raise `lookahead_time` / `min_lookahead_dist` on `FollowPath` |
 | Fast 2–4 Hz buzz on transit | Firmware yaw-rate loop lagging the wheel command | Tune `yaw_kp`/`yaw_ki` in **firmware**, not here |

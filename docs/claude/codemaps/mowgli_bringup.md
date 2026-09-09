@@ -25,7 +25,7 @@
 | BT operator params (speeds, undock, LocalizationGuard, battery, start-pose escape) | `full_system.launch.py` L216–354 (every `robot_params.get(...)` there is an injection) |
 | Hardware bridge wiring (serial, PID push, dig detector, remaps) | `mowgli.launch.py` L184–268; static `config/hardware_bridge.yaml` (dig detector L44–103) |
 | GUI/Foxglove bridge + manual-mow relay | `full_system.launch.py` L557–583 (foxglove :8765, GNSS-internal topic whitelist L66–68); `scripts/cmd_vel_ws_relay.py` (ws :8766 → `/cmd_vel_teleop`) |
-| fusion_graph launch args from this package | `navigation.launch.py` L1074–1092 (`use_magnetometer`, lidar-gated `use_scan_matching`/`use_loop_closure`, `primary_mode`, `tf_publish_lead_s`, `node_period_s`); first-boot loop-closure gate L150–154 |
+| fusion_graph launch args from this package | `navigation.launch.py`: `use_magnetometer`, LiDAR-gated `use_lidar_map_anchor` / `lidar_anchor_shadow_mode`, `primary_mode`, `tf_publish_lead_s`, `node_period_s` |
 | Simulation stack | `launch/sim_full_system.launch.py` (Webots include L141–153, sim TF/cadence overrides L182–183, injected 9×6 m test polygon L219–231, sim helper nodes L297–505) |
 | LED ring launch gate + params | `full_system.launch.py` L97–100, L147–151, L668–707; template L721–739 |
 | TF sole-ownership guard (Inv 2) | `test/test_tf_ownership.py` `EXPECTED_TF_BROADCASTER_FILES` L52–57 |
@@ -112,7 +112,7 @@
 | | `led_enabled` | `mowgli_robot.yaml.led_enabled` | led_ring_node |
 | `navigation` | `use_lidar` | as above (re-resolved, warning deduped) | overlay pick (`nav2_params_lidar` vs `_no_lidar`), scan_deskew/costmap_scan_filter, empty_static_map_pub, AND-gate on the two scan flags |
 | | `use_magnetometer` | `mowgli_robot.yaml.use_magnetometer` | mag_yaw_publisher gate + fusion_graph arg |
-| | `use_scan_matching` / `use_loop_closure` | template `true`/`true`; loop-closure forced `false` when `/ros2_ws/maps/fusion_graph.graph` absent | fusion_graph args, each `lidar_gated()` |
+| | `use_lidar_map_anchor` / `lidar_anchor_shadow_mode` | template `true` / `false`; both LiDAR-gated | fusion_graph scan-to-map outage fallback and calibration mode |
 | | `use_gps_dock_detection` | `mowgli_robot.yaml.use_gps_dock_detection` (`true`) | gps_dock_detection node + `simple_charging_dock.use_external_detection_pose` and zeroed `external_detection_*` (L712–729) |
 | | `cog_stationary_seed_rate_hz` | `2.0` | `cog_to_imu.stationary_seed_rate_hz` |
 | | `fusion_graph_tf_lead_s` | `0.05` (sim passes `0.1`) | fusion_graph `tf_publish_lead_s` (both TF legs) |

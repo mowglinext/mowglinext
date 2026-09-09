@@ -339,16 +339,15 @@ fusion_graph_node:
     dock_prior_max_gps_sigma_m: 0.05
 
     # ── LiDAR map anchor (Beluga) ─────────────────────────────────────
-    # Scan-to-MAP localisation for RTK-Float. Under fresh RTK-Fixed every
+    # Scan-to-MAP localisation for a complete GNSS outage. Under fresh RTK-Fixed every
     # scan is ray-cast into a georeferenced occupancy grid at the trusted
     # fused pose (no factor is produced — the GPS already pins the pose).
-    # Once RTK-Fixed is older than lidar_anchor_engage_age_s a particle
-    # filter (beluga_ros::Amcl, likelihood field) localises against that
-    # grid, seeded from the last fused pose, and its XY + full covariance
-    # becomes a PoseTranslationPrior on the node. XY only: heading stays
-    # with the gyro (2026-07-22 yaw-flip incident). This is the only
-    # LiDAR-derived ABSOLUTE constraint in the graph. OFF until the field
-    # A/B (Float while driving, gap at re-Fix) validates it.
+    # A fresh usable GNSS observation, including RTK Float, keeps the particle
+    # filter asleep. Once every usable GNSS fix is older than the warm-up /
+    # apply thresholds, beluga_ros::Amcl localises against the grid and its XY
+    # + full covariance becomes a PoseTranslationPrior on the node. XY only:
+    # heading stays with the gyro (2026-07-22 yaw-flip incident). This is the
+    # only LiDAR-derived ABSOLUTE constraint in the graph.
     use_lidar_map_anchor: false
     lidar_map_resolution_m: 0.10
     lidar_map_tile_size_m: 10.0          # persistent tiles in datum coordinates
@@ -370,8 +369,8 @@ fusion_graph_node:
     lidar_map_occupied_threshold: 1.7      # two concordant hits — garden default (replay sweep 2026-09-07)
     lidar_map_free_threshold: -0.40
     lidar_scan_max_age_s: 0.5             # discard stale scans; never reuse an acquisition
-    lidar_anchor_apply_age_s: 20.0        # XY application delay, independent of map-learning freshness
-    lidar_anchor_engage_age_s: 1.0        # engage once RTK-Fixed is older than this (~5 missed fixes at 5 Hz; 0.3 flapped)
+    lidar_anchor_apply_age_s: 20.0        # apply only after this long without any usable GNSS fix
+    lidar_anchor_engage_age_s: 1.0        # Fixed freshness for map learning (0.3 flapped at 5 Hz)
     lidar_anchor_disengage_dwell_s: 1.0   # once anchoring, Fixed must be fresh this long before mapping resumes
     lidar_anchor_max_beams: 60            # AMCL-class beam subsampling
     lidar_anchor_min_particles: 300
@@ -435,4 +434,3 @@ fusion_graph_node:
     lidar_anchor_shadow_window: 300
     lidar_anchor_shadow_min_samples: 50
     lidar_anchor_sigma_floor_m: 0.05      # floor on the factor's per-axis sigma (half a cell)
-

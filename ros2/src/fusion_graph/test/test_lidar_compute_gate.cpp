@@ -37,9 +37,12 @@ TEST(LidarComputeGate, LimitsRateAcrossPhaseTransitionsAndInvalidScans)
   EXPECT_FALSE(gate.Step(100.55, 20.0, true, true).reseed);
 }
 
-TEST(LidarComputeGate, StartsFiveSecondsBeforeApplicationAndStopsWhenFixedReturns)
+TEST(LidarComputeGate, StartsFiveSecondsBeforeApplicationAndStopsWhenUsableGnssReturns)
 {
   fg::LidarComputeGate gate;
+  // A fresh RTK-Float observation is usable GNSS but cannot calibrate the map
+  // anchor. It must keep the filter completely asleep.
+  EXPECT_FALSE(gate.Step(99.0, 0.1, true, true, false, false).run);
   EXPECT_FALSE(gate.Step(100.0, 2.0, true, true, false, false).run);
   EXPECT_FALSE(gate.Step(112.0, 14.0, true, true, false, false).run);
   auto warmup = gate.Step(113.0, 15.0, true, true, false, false);

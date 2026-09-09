@@ -93,7 +93,7 @@ def generate_launch_description() -> LaunchDescription:
     )
     use_lidar_map_anchor_arg = DeclareLaunchArgument(
         "use_lidar_map_anchor", default_value="false",
-        description="LiDAR map anchor: build a georeferenced occupancy grid under RTK-Fixed and localise against it (Beluga MCL) once Fixed goes stale; XY-only unary factor.")
+        description="LiDAR map anchor: build georeferenced tiles under RTK-Fixed and localise against them (Beluga MCL) only after a complete GNSS outage; XY-only unary factor.")
     lidar_anchor_shadow_mode_arg = DeclareLaunchArgument(
         "lidar_anchor_shadow_mode", default_value="false",
         description="LiDAR map anchor shadow mode: run, score and publish the particle filter under RTK-Fixed too, never apply a factor. Field measurement of the anchor against RTK.")
