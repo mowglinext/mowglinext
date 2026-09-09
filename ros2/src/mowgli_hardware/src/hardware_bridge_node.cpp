@@ -26,17 +26,20 @@
  *   ~/status        mowgli_interfaces/msg/Status
  *   ~/emergency     mowgli_interfaces/msg/Emergency
  *   ~/power         mowgli_interfaces/msg/Power
+ *   ~/cmd_vel_applied geometry_msgs/msg/TwistStamped (command encoded for STM32)
  *   ~/imu/data_raw  sensor_msgs/msg/Imu
  *   ~/wheel_odom    nav_msgs/msg/Odometry
  *   ~/dock_heading  sensor_msgs/msg/Imu  (dock yaw while charging, remapped → /gnss/heading)
  *   /battery_state  sensor_msgs/msg/BatteryState  (for opennav_docking)
  *
  * Subscribed topics:
- *   ~/cmd_vel      geometry_msgs/msg/Twist  → LlCmdVel packet to STM32
+ *   ~/cmd_vel      geometry_msgs/msg/TwistStamped → slew limit → LlCmdVel packet to STM32
  *
  * Services:
  *   ~/mower_control  mowgli_interfaces/srv/MowerControl
  *   ~/emergency_stop mowgli_interfaces/srv/EmergencyStop
+ *   ~/reboot_board    std_srvs/srv/Trigger
+ *   ~/set_firmware_debug std_srvs/srv/SetBool
  *
  * Parameters:
  *   serial_port      (string,  default "/dev/mowgli")
@@ -44,6 +47,7 @@
  *   heartbeat_rate   (double,  default 4.0 Hz  → 250 ms period)
  *   publish_rate     (double,  default 100.0 Hz → 10 ms period)
  *   high_level_rate  (double,  default 2.0 Hz   → 500 ms period)
+ *   cmd_vel_{linear,angular}_{accel,decel}_limit (double, startup-only)
  */
 
 #include <chrono>
@@ -64,6 +68,7 @@
 #include "mowgli_hardware/blade_gate.hpp"
 #include "mowgli_hardware/blade_telemetry.hpp"
 #include "mowgli_hardware/clock_fit.hpp"
+#include "mowgli_hardware/cmd_vel_slew.hpp"
 #include "mowgli_hardware/cmd_vel_validation.hpp"
 #include "mowgli_hardware/dig_detector.hpp"
 #include "mowgli_hardware/dig_escalation.hpp"
@@ -474,6 +479,24 @@ private:
     // Default 0.05 (was a hardcoded 0.15) — the PX4 PID firmware can track
     // slow setpoints now. Live-tunable via the callback below.
     min_linear_vel_ = bounded_double("min_linear_vel", 0.05, 0.0, 1.0);
+    cmd_vel_linear_accel_limit_ = startup_double(
+        "cmd_vel_linear_accel_limit",
+        0.30,
+        "Finite strictly-positive startup-only linear command acceleration limit in m/s^2.");
+    cmd_vel_linear_decel_limit_ = startup_double(
+        "cmd_vel_linear_decel_limit",
+        0.60,
+        "Finite strictly-positive startup-only non-zero linear command deceleration limit in "
+        "m/s^2; an explicit zero remains immediate.");
+    cmd_vel_angular_accel_limit_ = startup_double(
+        "cmd_vel_angular_accel_limit",
+        1.0,
+        "Finite strictly-positive startup-only angular command acceleration limit in rad/s^2.");
+    cmd_vel_angular_decel_limit_ = startup_double(
+        "cmd_vel_angular_decel_limit",
+        2.0,
+        "Finite strictly-positive startup-only non-zero angular command deceleration limit in "
+        "rad/s^2; an explicit zero remains immediate.");
     min_lin_vel_cb_handle_ = add_on_set_parameters_callback(
         [this](const std::vector<rclcpp::Parameter>& params)
         {
@@ -805,6 +828,10 @@ private:
     require_finite_positive(dig_gyro_timeout_s_, "dig_gyro_timeout_s");
     require_finite_positive(dig_escape_cfg_.timeout_s, "dig_reverse_timeout_s");
     require_finite_positive(dig_pose_timeout_s_, "dig_pose_timeout_s");
+    require_finite_positive(cmd_vel_linear_accel_limit_, "cmd_vel_linear_accel_limit");
+    require_finite_positive(cmd_vel_linear_decel_limit_, "cmd_vel_linear_decel_limit");
+    require_finite_positive(cmd_vel_angular_accel_limit_, "cmd_vel_angular_accel_limit");
+    require_finite_positive(cmd_vel_angular_decel_limit_, "cmd_vel_angular_decel_limit");
   }
 
   void create_publishers()
@@ -813,6 +840,8 @@ private:
     pub_emergency_ =
         create_publisher<mowgli_interfaces::msg::Emergency>("~/emergency", rclcpp::QoS(10));
     pub_power_ = create_publisher<mowgli_interfaces::msg::Power>("~/power", rclcpp::QoS(10));
+    pub_cmd_vel_applied_ =
+        create_publisher<geometry_msgs::msg::TwistStamped>("~/cmd_vel_applied", rclcpp::QoS(10));
     // RELIABLE, not SensorDataQoS — robot_localization's EKF nodes
     // subscribe RELIABLE and refuse BEST_EFFORT publishers with
     // "incompatible QoS policy", which starves the filter of IMU/wheel data.
@@ -2890,14 +2919,16 @@ private:
     // min_linear_vel:=0.0 to disable the guard entirely, or raise it back
     // toward 0.15 if a given chassis still can't execute slow forward.
     //
-    // wz handling — Option C (task #34): the closed-loop yaw-rate shaping
+    // wz handling — Option C (task #34): the closed-loop yaw-rate control
     // that used to live here (Option B, task #24 — a host-side PI closing
     // on the gyro to absorb the firmware's nonlinear PWM→rotation response)
     // has moved INTO FIRMWARE (task #33), which now runs the same closed
     // loop without the ~50-90 ms USB round-trip latency that limited the
-    // host-side gains. wz is sent straight through, unshaped; see the
-    // firmware's own yaw_kp/yaw_ki (tuned via SET_DRIVE_PID, send_drive_pid())
-    // for the loop that used to be angular_rate_controller.hpp here.
+    // host-side gains. See the firmware's own yaw_kp/yaw_ki (tuned via
+    // SET_YAW_PID, send_yaw_pid()) for the loop that used to be
+    // angular_rate_controller.hpp here. The common open-loop slew cap below
+    // only limits how quickly the requested setpoint changes; it does not
+    // close another yaw feedback loop.
     //
     // The sub-deadband |vx| → 0 guard is unchanged (linear has no clean
     // host-side rate feedback — encoders slip; leave it to Nav2's loops).
@@ -2907,7 +2938,60 @@ private:
       vx = 0.0;
     }
 
-    // Remember what we were actually told to do; the dig monitor compares
+    // While escaping a dig, WE own the wire. Drop the incoming command
+    // entirely instead of forwarding it or advancing the slew state: the
+    // controller that dug the hole is still asking to drive forward into it.
+    if (dig_escaping_)
+    {
+      return;
+    }
+
+    // Every motion lane has now passed through twist_mux, so this is the only
+    // host-side point that can prevent a one-cycle speed or steering reversal
+    // regardless of whether FTC, RPP, docking, or teleop produced it. A
+    // reversal decelerates through zero; explicit zero commands remain
+    // immediate for obstacle and operator stops.
+    const std::int64_t command_now_ns = steadyNowNs();
+    double slew_dt_s = kCmdVelSlewNominalDtSec;
+    if (have_shaped_cmd_vel_)
+    {
+      const double elapsed_s =
+          static_cast<double>(command_now_ns - last_shaped_cmd_vel_ns_) * 1.0e-9;
+      if (elapsed_s > 0.0 && elapsed_s <= kCmdVelSlewResetTimeoutSec)
+      {
+        slew_dt_s = std::min(elapsed_s, kCmdVelSlewMaxDtSec);
+      }
+      else
+      {
+        last_shaped_cmd_vx_ = 0.0;
+        last_shaped_cmd_wz_ = 0.0;
+      }
+    }
+    vx = mowgli_hardware::limit_motion_command_slew(vx,
+                                                    last_shaped_cmd_vx_,
+                                                    slew_dt_s,
+                                                    cmd_vel_linear_accel_limit_,
+                                                    cmd_vel_linear_decel_limit_);
+    wz = mowgli_hardware::limit_motion_command_slew(wz,
+                                                    last_shaped_cmd_wz_,
+                                                    slew_dt_s,
+                                                    cmd_vel_angular_accel_limit_,
+                                                    cmd_vel_angular_decel_limit_);
+    last_shaped_cmd_vx_ = vx;
+    last_shaped_cmd_wz_ = wz;
+    last_shaped_cmd_vel_ns_ = command_now_ns;
+    have_shaped_cmd_vel_ = true;
+
+    // Let the ramp accumulate continuously through the sub-deadband region,
+    // while still preserving the bridge's existing wire-level deadband guard.
+    // Otherwise each zeroed first step would reset the next ramp to zero and a
+    // low acceleration limit could prevent forward motion forever.
+    if (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < min_linear_vel_)
+    {
+      vx = 0.0;
+    }
+
+    // Remember what we actually forward; the dig monitor compares
     // this against real-world progress (see dig_monitor_tick). Stamped
     // because a command that stopped ARRIVING must not keep counting as a
     // command: when a Nav2 goal aborts, cmd_vel simply goes silent, and a
@@ -2917,16 +3001,6 @@ private:
     last_cmd_wz_ = wz;
     last_cmd_vel_time_ = now();
     have_cmd_vel_ = true;
-
-    // While escaping a dig, WE own the wire. Drop the incoming command
-    // entirely instead of forwarding it: the controller that dug the hole is
-    // still asking to drive forward into it, and the escape is a bounded,
-    // deliberately un-overridable manoeuvre. Normal command flow resumes the
-    // moment the budget is spent.
-    if (dig_escaping_)
-    {
-      return;
-    }
 
     send_cmd_vel_packet(vx, wz);
   }
@@ -3220,6 +3294,16 @@ private:
     pkt.angular_z = wire_wz;
 
     send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt), sizeof(LlCmdVel) - sizeof(uint16_t));
+
+    // Exact host command represented by the packet above. The firmware keeps
+    // final authority and may still reject motion because of an emergency or
+    // another board-level safety condition.
+    geometry_msgs::msg::TwistStamped applied;
+    applied.header.stamp = now();
+    applied.header.frame_id = "base_footprint";
+    applied.twist.linear.x = wire_vx;
+    applied.twist.angular.z = wire_wz;
+    pub_cmd_vel_applied_->publish(applied);
   }
 
   // ---------------------------------------------------------------------------
@@ -3282,6 +3366,7 @@ private:
   rclcpp::Publisher<mowgli_interfaces::msg::Status>::SharedPtr pub_status_;
   rclcpp::Publisher<mowgli_interfaces::msg::Emergency>::SharedPtr pub_emergency_;
   rclcpp::Publisher<mowgli_interfaces::msg::Power>::SharedPtr pub_power_;
+  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr pub_cmd_vel_applied_;
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_imu_;
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr pub_mag_raw_;
   // Owns ~/wheel_odom + ~/wheel_ticks and all wheel-tick decode/aggregation
@@ -3336,6 +3421,22 @@ private:
   /// A cmd_vel older than this no longer counts as "commanded to move" [s].
   /// Controllers publish at 10-20 Hz, so this is many missed cycles.
   static constexpr double dig_cmd_timeout_s_ = 0.5;
+
+  // Last command produced by the continuous slew calculation. This is kept
+  // separate from the wire value because the existing linear deadband guard
+  // can suppress an intermediate ramp step. A stale stream resets the next
+  // ramp to rest, matching the firmware watchdog's physical state.
+  double last_shaped_cmd_vx_{0.0};
+  double last_shaped_cmd_wz_{0.0};
+  std::int64_t last_shaped_cmd_vel_ns_{0};
+  bool have_shaped_cmd_vel_{false};
+  double cmd_vel_linear_accel_limit_{0.30};
+  double cmd_vel_linear_decel_limit_{0.60};
+  double cmd_vel_angular_accel_limit_{1.0};
+  double cmd_vel_angular_decel_limit_{2.0};
+  static constexpr double kCmdVelSlewNominalDtSec = 0.1;
+  static constexpr double kCmdVelSlewMaxDtSec = 0.2;
+  static constexpr double kCmdVelSlewResetTimeoutSec = 0.6;
 
   /// Fused-pose (map-frame) tracking.
   bool have_map_pose_{false};

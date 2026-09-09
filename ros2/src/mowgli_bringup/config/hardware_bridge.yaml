@@ -20,6 +20,16 @@ hardware_bridge:
     # minimum for the WT901, giving ~√5 ≈ 2.2× tighter gyro/accel offsets.
     imu_cal_samples: 1000
 
+    # Common motion shaping at the final host -> firmware boundary. Every
+    # source has already passed through twist_mux here, so these limits cover
+    # FTC coverage, RPP transit, docking and teleop without another ROS node.
+    # Exact zero commands bypass the ramp and stop immediately; a direction
+    # reversal decelerates through zero, then accelerates in the new direction.
+    cmd_vel_linear_accel_limit: 0.30    # m/s^2
+    cmd_vel_linear_decel_limit: 0.60    # m/s^2 for non-zero targets
+    cmd_vel_angular_accel_limit: 1.0    # rad/s^2
+    cmd_vel_angular_decel_limit: 2.0    # rad/s^2 for non-zero targets
+
     # 2026-07-17 Option C (task #34): the host-side closed-loop angular-rate
     # (yaw) controller that used to be configured here (Option B, task #24 —
     # angular_rate_ki/_kff/_kp/_loop_enabled) is REMOVED. The yaw-rate loop

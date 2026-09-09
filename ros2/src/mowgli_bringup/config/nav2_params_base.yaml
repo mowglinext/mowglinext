@@ -668,9 +668,10 @@ waypoint_follower:
       waypoint_pause_duration: 200
 
 # velocity_smoother removed 2026-04-26 — caps live in the controllers
-# (RPP desired_linear_vel, MPPI vx_max/wz_max) and the firmware
-# deadband; an extra ramp layer here only added latency and confused
-# tuning. cmd_vel pipeline now skips this hop.
+# (RPP desired_linear_vel, FTC max_cmd_vel_*) and the final common slew
+# limiter lives in hardware_bridge, after twist_mux. Keeping the limiter at
+# that existing chokepoint covers every motion lane without another node;
+# exact-zero safety stops bypass its ramp. cmd_vel skips this Nav2 hop.
 
 # ---------------------------------------------------------------------------
 # Global costmap

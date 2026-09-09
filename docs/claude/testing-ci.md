@@ -1,6 +1,6 @@
 # Testing & CI Index
 
-> Index updated 2026-09-09 for the FTC obstacle-wait test target.
+> Index updated 2026-09-10 for the final merged-command slew limiter.
 >
 > Every test suite in the monorepo, the exact command that runs it, and the workflow (if any) that gates it. Loaded on demand from [`../../CLAUDE.md`](../../CLAUDE.md). Per-package detail lives in [`codemaps/`](codemaps/); this file is the cross-cutting map.
 
@@ -14,7 +14,7 @@
 |---|---|---|---|---|
 | `fusion_graph` (30 suites) | `ros2/src/fusion_graph/test/test_*.cpp` | GoogleTest (`ament_add_gtest`, `CMakeLists.txt:145–252`) | `cd /ros2_ws && colcon test --packages-select fusion_graph --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_behavior` (22 suites) | `ros2/src/mowgli_behavior/test/test_*.cpp` | GoogleTest (`CMakeLists.txt:116–705`) | `colcon test --packages-select mowgli_behavior --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
-| `mowgli_hardware` (9) | `ros2/src/mowgli_hardware/test/test_*.cpp` — incl. `test_dig_detector.cpp` + `test_dig_escalation.cpp` (Invariant 16), `test_cobs.cpp`, `test_protocol.cpp`, `test_blade_gate.cpp` | GoogleTest (`CMakeLists.txt:114–190`) | `colcon test --packages-select mowgli_hardware --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
+| `mowgli_hardware` (15) | `ros2/src/mowgli_hardware/test/test_*.cpp` — incl. dig detection/escalation (Invariant 16), protocol safety, `test_cmd_vel_validation.cpp`, `test_cmd_vel_slew.cpp`, and real node parameter descriptors | GoogleTest (`CMakeLists.txt:114–266`) | `colcon test --packages-select mowgli_hardware --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_localization` (7) | `ros2/src/mowgli_localization/test/test_*.cpp` | GoogleTest (`CMakeLists.txt:271–342`) | `colcon test --packages-select mowgli_localization --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `universal_gnss_ros2` (6) — vendored submodule | `ros2/src/external/universal-gnss/gnss_ros2/tests/test_*.cpp` | GoogleTest (`CMakeLists.txt:266–386`; `test_ntrip_node` is Linux-only) | `colcon test --packages-select universal_gnss_ros2 --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_nav2_plugins` (6) | `ros2/src/mowgli_nav2_plugins/test/test_ftc_*.cpp`, `test_obstacle_deviation.cpp`, `test_oscillation_detector.cpp` | GoogleTest (`CMakeLists.txt:115–178`) | `colcon test --packages-select mowgli_nav2_plugins --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |

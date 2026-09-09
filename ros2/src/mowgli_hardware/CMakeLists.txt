@@ -216,6 +216,15 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 
+  # ---- test_cmd_vel_slew ----
+  ament_add_gtest(test_cmd_vel_slew
+    test/test_cmd_vel_slew.cpp
+  )
+  target_include_directories(test_cmd_vel_slew
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
   # ---- test_battery_state_semantics ----
   ament_add_gtest(test_battery_state_semantics
     test/test_battery_state_semantics.cpp

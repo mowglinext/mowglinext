@@ -23,7 +23,7 @@
 | Why Nav2 waits at startup / bond settings | `scripts/wait_for_tf.py` (gate on `map→odom`, 120 s) via `navigation.launch.py` L987–1034; `bond_timeout` 10 s / `bond_heartbeat_period` 0.5 s L1005–1012 |
 | No-LiDAR global costmap "never current" | `scripts/empty_static_map_pub.py` (`/no_lidar_static_map`, transient_local) launched `navigation.launch.py` L1040–1046; consumed by `nav2_params_no_lidar.yaml` L35–40, L48–53 |
 | BT operator params (speeds, undock, LocalizationGuard, battery, start-pose escape) | `full_system.launch.py` L216–354 (every `robot_params.get(...)` there is an injection) |
-| Hardware bridge wiring (serial, PID push, dig detector, remaps) | `mowgli.launch.py` L184–268; static `config/hardware_bridge.yaml` (dig detector L44–103) |
+| Hardware bridge wiring (serial, final command slew, PID push, dig detector, remaps) | `mowgli.launch.py` L184–268; static `config/hardware_bridge.yaml` |
 | GUI/Foxglove bridge + manual-mow relay | `full_system.launch.py` L557–583 (foxglove :8765, GNSS-internal topic whitelist L66–68); `scripts/cmd_vel_ws_relay.py` (ws :8766 → `/cmd_vel_teleop`) |
 | fusion_graph launch args from this package | `navigation.launch.py`: `use_magnetometer`, LiDAR-gated `use_lidar_map_anchor` / `lidar_anchor_shadow_mode`, `primary_mode`, `tf_publish_lead_s`, `node_period_s` |
 | Simulation stack | `launch/sim_full_system.launch.py` (Webots include L141–153, sim TF/cadence overrides L182–183, injected 9×6 m test polygon L219–231, sim helper nodes L297–505) |
@@ -51,7 +51,7 @@
 | `config/nav2_params_lidar.yaml` | 284 | Overlay: `/scan_costmap` obstacle layers, `/scan_collision` collision_monitor polygons, `FollowPath.use_collision_detection: true` |
 | `config/nav2_params_no_lidar.yaml` | 80 | Overlay: `/no_lidar_static_map` static layers, FTC obstacle flags off, monitor pass-through, planner `costmap_update_timeout: 5.0` |
 | `config/twist_mux.yaml` | 53 | 5 lanes, `use_stamped: true`, deliberately no `locks:` |
-| `config/hardware_bridge.yaml` | 103 | Serial/baud/rates, `imu_cal_samples: 1000`, dig-detector `dig_*` (Invariant 16) |
+| `config/hardware_bridge.yaml` | 158 | Serial/baud/rates, final `cmd_vel_*_{accel,decel}_limit`, `imu_cal_samples: 1000`, dig-detector `dig_*` (Invariant 16) |
 | `config/foxglove_bridge.yaml` | 11 | Foxglove params + GNSS-internal whitelist — **not referenced by any launch file** |
 | **`scripts/`** (installed to `lib/mowgli_bringup/`) | | |
 | `scripts/wait_for_tf.py` | 70 | `--parent map --child odom --timeout 120`; exit 0 when TF resolvable, 1 on timeout |
@@ -130,7 +130,7 @@
 | `/cmd_vel_docking` | TwistStamped | docking_server remap (`nav2_navigation_launch.py` L229) → lane prio 15; bypasses collision_monitor |
 | `/cmd_vel_teleop` | TwistStamped | `cmd_vel_ws_relay.py` (GUI manual mow) → lane prio 20 |
 | `/cmd_vel_tuning`, `/cmd_vel_emergency` | TwistStamped | lanes prio 30 / 100 (timeouts 0.5 / 0.2 s) |
-| `/cmd_vel` | TwistStamped | twist_mux out → `hardware_bridge` `~/cmd_vel` (sim: Webots diff drive) |
+| `/cmd_vel` → `/hardware_bridge/cmd_vel_applied` | TwistStamped | twist_mux out → hardware_bridge common slew limiter → encoded STM32 command diagnostic (sim consumes `/cmd_vel` directly) |
 | `/imu/data`, `/imu/mag_raw`, `/wheel_odom`, `/wheel_ticks`, `/hardware_bridge/{emergency,power,status}`, `/gnss/heading`, `/battery_state` | sensor/status | hardware_bridge remaps (`mowgli.launch.py` L257–267; `/battery_state` absolute, = docking `battery_topic`) |
 | `/scan` → `/scan_deskewed` → `/scan_costmap` / `/scan_collision` | LaserScan | scan_deskew → costmap_scan_filter; costmaps read `/scan_costmap` (lidar overlay L27, L95), collision_monitor reads `/scan_collision` (L273) |
 | `/no_lidar_static_map` | OccupancyGrid (transient_local) | empty_static_map_pub → no-LiDAR static_layers |
@@ -172,7 +172,7 @@ All injection is READ ONCE at launch (container restart required); exceptions: `
 | `enable_mag_cal`, `mag_calibration_path`, `declination_deg`, `min_horizontal_uT`, `mag_yaw_variance` | cog_to_imu (`mag_calibration_path`) / mag_yaw_publisher (`yaw_variance`; its `calibration_path` is the hardcoded L1155 path, NOT the template key) | L1129–1130, L1167–1170 |
 | `lidar_z`, `lidar_yaw`, `imu_yaw` | `costmap_scan_filter.lidar_height_m`, `.lidar_mount_yaw` | L302–303, L1234–1235 |
 
-Static (non-template) defaults that matter: `controller_server.odom_topic: /wheel_odom` (base L77); `controller_frequency: 10` (L83); FTC block L338–546 (`max_goal_distance_error: 0.50` L410, `forward_only: true` L420, `use_footprint_clearance: false` L450, `require_clear_exit: true` L468, `ignore_obstacles_outside_zone: true` L508); RPP lookahead L293–296; `behavior_server.max_rotational_vel: 1.0` / `rotational_acc_lim: 2.0` (L643, L650); global costmap 70×70 m @0.08 (L715, L741–742), `keepout_filter` enabled (L782–785); local 12×12 m @0.05 (L812, L821–822); `docking_server.controller.*` L901–1023; `collision_monitor.source_timeout: 1.5` (L1116); hardware_bridge `dig_*` (`hardware_bridge.yaml` L44–103).
+Static (non-template) defaults that matter: `controller_server.odom_topic: /wheel_odom` (base L77); `controller_frequency: 10` (L83); FTC block L338–546 (`max_goal_distance_error: 0.50` L410, `forward_only: true` L420, `use_footprint_clearance: false` L450, `require_clear_exit: true` L468, `ignore_obstacles_outside_zone: true` L508); RPP lookahead L293–296; `behavior_server.max_rotational_vel: 1.0` / `rotational_acc_lim: 2.0` (L643, L650); global costmap 70×70 m @0.08 (L715, L741–742), `keepout_filter` enabled (L782–785); local 12×12 m @0.05 (L812, L821–822); `docking_server.controller.*` L901–1023; `collision_monitor.source_timeout: 1.5` (L1116); hardware_bridge final command slew and `dig_*` (`hardware_bridge.yaml`).
 
 ### TF frames
 URDF (`urdf/mowgli.urdf.xacro`): `base_footprint` →(z=`wheel_radius`, L142–146) `base_link` → `left/right_wheel_link` (continuous, L199–206), `front_left/right_caster_link` (L250–256), `blade_link` (fixed, at `chassis_center_x`, L293–298), `imu_link` (rpy = `imu_roll/pitch/yaw`, L327–332), `gps_link` (L361–365), `lidar_link` (yaw = `lidar_yaw`, L394–399). `gps_link→gps` identity alias from `navigation.launch.py` L1055. `map→odom` and `odom→base_footprint` come from `fusion_graph_node` (Invariant 2; pinned by `test_tf_ownership.py`). Nav2: global frame `map`, local/behavior/docking frame `odom`, robot frame `base_footprint` everywhere.

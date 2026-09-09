@@ -1,7 +1,7 @@
 # Configuration & Parameter Index
 
 > Every knob on this robot, where its default lives, which node consumes it, and whether the GUI can edit it.
-> Index generated 2026-09-03 at f21729e9; regenerate when config files or launch injections change.
+> Index updated 2026-09-10; regenerate when config files or launch injections change.
 > Read this with CLAUDE.md **Invariant 15** (sparse installed config over an in-package template) open — it is the rule this whole file describes.
 
 **The one-sentence model:** defaults live in the in-package template `ros2/src/mowgli_bringup/config/mowgli_robot.yaml`; the *installed* `/ros2_ws/config/mowgli_robot.yaml` is SPARSE and holds only install choices + calibration outputs + genuine overrides; `robot_config_util.load_robot_params()` deep-merges installed OVER template at launch; each launch file then **injects** individual keys into node parameters. **A key that no launch file injects is inert** — the node silently runs its compiled `declare_parameter` default no matter what the yaml says. Those are marked `INERT` below.
@@ -17,7 +17,7 @@
 | `ros2/src/mowgli_bringup/config/nav2_params_base.yaml` (1193 L) | shared Nav2 params for BOTH LiDAR and no-LiDAR variants | `navigation.launch.py:659` (deep-merge) | maintainer |
 | `ros2/src/mowgli_bringup/config/nav2_params_lidar.yaml` (284 L) | LiDAR-only overlay (scan obstacle layers, scan collision_monitor) | `navigation.launch.py:270`, merged L663 | maintainer |
 | `ros2/src/mowgli_bringup/config/nav2_params_no_lidar.yaml` (80 L) | GPS-only overlay (static layers, pass-through monitor) | `navigation.launch.py:271`, merged L663 | maintainer |
-| `ros2/src/mowgli_bringup/config/hardware_bridge.yaml` (146 L) | serial port/baud/rates, IMU cal count, **dig detector** `dig_*` + repeat-dig escalation `dig_escalate_*` (Invariant 16) | `mowgli.launch.py:185` | maintainer |
+| `ros2/src/mowgli_bringup/config/hardware_bridge.yaml` (158 L) | serial port/baud/rates, final merged-command slew `cmd_vel_*_{accel,decel}_limit`, IMU cal count, **dig detector** `dig_*` + repeat-dig escalation `dig_escalate_*` (Invariant 16) | `mowgli.launch.py:185` | maintainer |
 | `ros2/src/mowgli_bringup/config/twist_mux.yaml` (53 L) | 5 cmd_vel lanes + priorities; deliberately **no `locks:`** | `mowgli.launch.py:271` | maintainer |
 | `ros2/src/mowgli_bringup/config/foxglove_bridge.yaml` (11 L) | Foxglove params + GNSS-internal topic whitelist — **not referenced by any launch file** | nothing | maintainer |
 | `ros2/src/fusion_graph/config/fusion_graph.yaml` (480 L) | 76 of the localizer's 133 declared params | `fusion_graph/launch/fusion_graph.launch.py:137` | maintainer |
