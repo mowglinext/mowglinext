@@ -14,6 +14,7 @@ async function openSystem(page: Page, mobile = false) {
         },
         rest: {
             "/api/diagnostics/snapshot": {
+                timestamp: new Date().toISOString(),
                 system: {cpu_temperature: 43.2, cpu_usage: 14.8},
                 containers: ["mowgli-ros2", "mowgli-gui", "mowgli-gps"].map(name => ({
                     name, state: "running", status: "Up 2 hours", started_at: "2026-09-08T12:00:00Z",

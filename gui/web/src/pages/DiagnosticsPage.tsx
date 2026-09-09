@@ -610,6 +610,9 @@ export const DiagnosticsPage = () => {
                     )}
                 </Card>
             </Col>
+            <Col span={24}>
+                <SystemPowerCard/>
+            </Col>
             {snapshot?.timestamp && (
                 <Col span={24}>
                     <Typography.Text type="secondary" style={{fontSize: 12}}>
@@ -617,9 +620,6 @@ export const DiagnosticsPage = () => {
                     </Typography.Text>
                 </Col>
             )}
-            <Col span={24}>
-                <SystemPowerCard/>
-            </Col>
         </Row>
     );
 
