@@ -84,6 +84,56 @@ TEST(DigDetector, SpinningWheelsWithNoMapProgressTrips)
   EXPECT_EQ(RunDigging(cfg, st, 10.0), mh::DigAction::kDig);
 }
 
+TEST(DigDetector, PurePivotCommandCountsAsTyreMotion)
+{
+  constexpr double kWheelTrack = 0.325;
+  EXPECT_NEAR(mh::WorstCommandedTyreSpeed(0.0, 0.75, kWheelTrack), 0.121875, 1e-12);
+  EXPECT_NEAR(mh::WorstCommandedTyreSpeed(0.3, 0.0, kWheelTrack), 0.3, 1e-12);
+}
+
+TEST(DigDetector, FieldRecordedStalledPurePivotTrips)
+{
+  mh::DigDetectorCfg cfg;
+  mh::DigDetectorState st;
+  constexpr double kCommandedTyreSpeed = 0.121875;  // wz=0.75, track=0.325
+
+  mh::DigAction last = mh::DigAction::kNone;
+  for (int i = 0; i < 20; ++i)
+  {
+    // First field window: 0.189 m of tyre, 0.015 m of map progress and a
+    // near-zero gyro because the chassis did not execute the commanded pivot.
+    last = mh::DigDecide(cfg,
+                         st,
+                         kCommandedTyreSpeed,
+                         0.189 / 12.0,
+                         0.015 * static_cast<double>(i) / 12.0,
+                         0.0,
+                         0.014,
+                         -0.086,
+                         0.1)
+               .action;
+    if (last == mh::DigAction::kDig)
+    {
+      break;
+    }
+  }
+  EXPECT_EQ(last, mh::DigAction::kDig);
+}
+
+TEST(DigDetector, HealthyPurePivotRemainsExcludedByGyro)
+{
+  mh::DigDetectorCfg cfg;
+  mh::DigDetectorState st;
+  constexpr double kCommandedTyreSpeed = 0.121875;
+
+  mh::DigAction last = mh::DigAction::kNone;
+  for (int i = 0; i < 100; ++i)
+  {
+    last = mh::DigDecide(cfg, st, kCommandedTyreSpeed, 0.02, 0.0, 0.0, 0.014, 0.75, 0.1).action;
+  }
+  EXPECT_EQ(last, mh::DigAction::kNone);
+}
+
 TEST(DigDetector, DoesNotTripBeforeTheWindowElapses)
 {
   mh::DigDetectorCfg cfg;  // window_s = 1.2

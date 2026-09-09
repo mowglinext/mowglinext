@@ -2914,6 +2914,7 @@ private:
     // stale non-zero value here would let the detector accumulate evidence
     // against a robot that is no longer being asked to move at all.
     last_cmd_vx_ = vx;
+    last_cmd_wz_ = wz;
     last_cmd_vel_time_ = now();
     have_cmd_vel_ = true;
 
@@ -3052,7 +3053,8 @@ private:
     // Treat a command that has stopped arriving as no command at all.
     const bool cmd_fresh =
         have_cmd_vel_ && (tick_now - last_cmd_vel_time_).seconds() < dig_cmd_timeout_s_;
-    const double cmd_vx = cmd_fresh ? last_cmd_vx_ : 0.0;
+    const double cmd_tyre_speed =
+        cmd_fresh ? WorstCommandedTyreSpeed(last_cmd_vx_, last_cmd_wz_, wheel_track_) : 0.0;
 
     // A stale gyro means the turn exclusion cannot be evaluated. Report a
     // yaw rate above any plausible threshold so DigDecide stands down rather
@@ -3072,7 +3074,7 @@ private:
     // — see dig_detector.hpp.
     const DigVerdict verdict = DigDecide(dig_cfg_,
                                          dig_state_,
-                                         cmd_vx,
+                                         cmd_tyre_speed,
                                          wheel_step,
                                          last_map_pose_x_,
                                          last_map_pose_y_,
@@ -3324,9 +3326,11 @@ private:
   /// robot still sitting against the object cannot quietly resume.
   bool dig_escalated_{false};
 
-  /// Latest commanded forward velocity, captured in on_cmd_vel, with the
-  /// time it arrived — a command that goes silent must stop counting.
+  /// Latest differential-drive command, captured in on_cmd_vel, with the time
+  /// it arrived. Both components are required: a pure pivot has vx == 0 while
+  /// its tyres are still moving across the ground.
   double last_cmd_vx_{0.0};
+  double last_cmd_wz_{0.0};
   bool have_cmd_vel_{false};
   rclcpp::Time last_cmd_vel_time_{0, 0, RCL_ROS_TIME};
   /// A cmd_vel older than this no longer counts as "commanded to move" [s].

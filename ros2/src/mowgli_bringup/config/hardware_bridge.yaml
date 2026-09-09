@@ -48,7 +48,9 @@ hardware_bridge:
                                # 0.47 m/s spin). It is the false-fire guard and
                                # is deliberately not shortened — nothing in the
                                # field logs justifies a shorter one.
-    dig_min_cmd_speed: 0.05    # below this we aren't commanding travel [m/s]
+    dig_min_cmd_speed: 0.05    # below this the fastest commanded tyre is not
+                               # being asked to travel [m/s]. Uses both vx and
+                               # wz, so a stalled pure pivot stays protected.
     dig_min_wheel_dist: 0.15   # the WORST WHEEL must claim this much ground
                                # travel first [m] (without it a BLOCKED wheel —
                                # the firmware's case, not ours — looks

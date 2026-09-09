@@ -29,8 +29,10 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
+#include "mowgli_nav2_plugins/ftc_carrot.hpp"
 #include "mowgli_nav2_plugins/ftc_stall.hpp"
 #include "mowgli_nav2_plugins/ftc_start_index.hpp"
+#include "mowgli_nav2_plugins/ftc_wait_clear.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 
 namespace mowgli_nav2_plugins
@@ -624,6 +626,10 @@ void FTCController::setPlan(const nav_msgs::msg::Path& path)
   is_avoiding_ = false;
   target_lateral_deviation_ = 0.0;
   lateral_deviation_ = 0.0;
+  obstacle_wait_start_.reset();
+  obstacle_waiting_ = false;
+  obstacle_followable_time_s_ = 0.0;
+  avoidance_clear_start_.reset();
 
   // Reset reverse-escape sub-state — a new strip must never inherit a
   // mid-reverse budget from the previous one.
@@ -1051,7 +1057,8 @@ FTCController::PlannerState FTCController::update_planner_state()
                         distance);
             current_index_ = best_idx;
             current_progress_ = 0.0;
-            tf2::fromMsg(global_plan_[current_index_].pose, current_control_point_);
+            tf2::fromMsg(global_plan_[current_index_].pose, nominal_control_point_);
+            current_control_point_ = nominal_control_point_;
           }
           else
           {
@@ -1148,9 +1155,9 @@ double FTCController::distanceLookahead() const
     return 0.0;
   }
 
-  const Eigen::Quaternion<double> current_rot(current_control_point_.linear());
+  const Eigen::Quaternion<double> current_rot(nominal_control_point_.linear());
   double lookahead_distance = 0.0;
-  Eigen::Affine3d last_straight_point = current_control_point_;
+  Eigen::Affine3d last_straight_point = nominal_control_point_;
 
   for (uint32_t i = current_index_ + 1; i < global_plan_.size(); ++i)
   {
@@ -1178,7 +1185,7 @@ void FTCController::update_control_point(double dt)
   switch (current_state_)
   {
     case PlannerState::PRE_ROTATE:
-      tf2::fromMsg(global_plan_[current_index_].pose, current_control_point_);
+      tf2::fromMsg(global_plan_[current_index_].pose, nominal_control_point_);
       break;
 
     case PlannerState::FOLLOWING:
@@ -1186,7 +1193,7 @@ void FTCController::update_control_point(double dt)
       // Don't advance the carrot if it's already too far ahead of the robot.
       // This prevents the carrot from running away when an external component
       // (e.g. collision_monitor) slows the robot below the carrot's speed.
-      const double carrot_dist = local_control_point_.translation().norm();
+      const double carrot_dist = local_nominal_control_point_.translation().norm();
       const double carrot_max_lead = 1.0;  // max metres the carrot may lead
       if (carrot_dist > carrot_max_lead)
       {
@@ -1317,12 +1324,12 @@ void FTCController::update_control_point(double dt)
       result.translation() = (1.0 - current_progress_) * trans1 + current_progress_ * trans2;
       result.linear() = rot1.slerp(current_progress_, rot2).toRotationMatrix();
 
-      current_control_point_ = result;
+      nominal_control_point_ = result;
     }
     break;
 
     case PlannerState::POST_ROTATE:
-      tf2::fromMsg(global_plan_.back().pose, current_control_point_);
+      tf2::fromMsg(global_plan_.back().pose, nominal_control_point_);
       break;
 
     case PlannerState::WAITING_FOR_GOAL_APPROACH:
@@ -1332,6 +1339,11 @@ void FTCController::update_control_point(double dt)
     case PlannerState::FINISHED:
       break;
   }
+
+  // Every control tick starts from the canonical path carrot. Obstacle
+  // deviation is applied later to current_control_point_ as a command-only
+  // copy and must never feed the next tick's advancement or resync decision.
+  current_control_point_ = nominal_control_point_;
 
   // Visualise the carrot in the map frame.
   {
@@ -1351,6 +1363,7 @@ void FTCController::update_control_point(double dt)
                                                          tf2::durationFromSec(1.0));
 
     tf2::doTransform(current_control_point_, local_control_point_, map_to_base);
+    local_nominal_control_point_ = local_control_point_;
   }
   catch (const tf2::TransformException& ex)
   {
@@ -1702,6 +1715,10 @@ bool FTCController::currentBodyInLethal()
 // log message + is_crashed_ latch.
 bool FTCController::waitOrThrowForObstacle(const std::string& reason)
 {
+  // This tick is still blocked. Any partial evidence that the path had become
+  // followable must be discarded before considering release from the wait.
+  (void)ObstacleWaitMustContinue(
+      true, false, 0.0, config_.obstacle_clear_hold_s, obstacle_followable_time_s_);
   if (!obstacle_wait_start_.has_value())
   {
     obstacle_wait_start_ = clock_->now();
@@ -1801,6 +1818,7 @@ bool FTCController::reverseEscapeOrWait(const std::string& reason,
     // wait state so the two states never fight over cmd_vel.
     obstacle_waiting_ = false;
     obstacle_wait_start_.reset();
+    obstacle_followable_time_s_ = 0.0;
     return true;  // caller returns; computeVelocityCommands emits the reverse.
   }
 
@@ -2044,28 +2062,8 @@ void FTCController::updateLateralDeviation(double dt)
     }
     else
     {
-      // Not avoiding, but possibly WAITING (both-sides-blocked / needs-more-
-      // than-max, set by waitOrThrowForObstacle below). Same window-edge
-      // flicker risk as the is_avoiding_ branch above — the observation_
-      // persistence:0 costmap can transiently miss the obstacle cell for one
-      // tick. Require a sustained clear (obstacle_clear_hold_s, same field as
-      // the avoidance case) before releasing the wait; otherwise a single-
-      // tick flicker falls through to the obstacle_waiting_ clear below and
-      // resets obstacle_wait_start_, deferring the abort indefinitely.
-      if (obstacle_waiting_)
-      {
-        if (!avoidance_clear_start_.has_value())
-        {
-          avoidance_clear_start_ = clock_->now();
-        }
-        const double clear_for = (clock_->now() - avoidance_clear_start_.value()).seconds();
-        if (clear_for < config_.obstacle_clear_hold_s)
-        {
-          return;  // still holding zero velocity via obstacle_waiting_
-        }
-        avoidance_clear_start_.reset();
-      }
-      // Not avoiding and the path is clear: nominal line tracking.
+      // Not avoiding and the path is clear: nominal line tracking. A pending
+      // obstacle wait is released by the generic followability debounce below.
       target_lateral_deviation_ = 0.0;
     }
   }
@@ -2221,9 +2219,19 @@ void FTCController::updateLateralDeviation(double dt)
     }
   }
 
-  // Path is now followable inside the deviation cap — we are not wedged. Clear
-  // any pending wait / reverse-escape state so the next blockage starts its own
-  // fresh wait window and full reverse budget.
+  // Path is now followable inside the deviation cap — but a single viable tick
+  // must not release an existing wait. The field bag alternated over-cap and
+  // viable results at 10 Hz, which cleared obstacle_waiting_ every other tick
+  // and prevented its timeout from ever expiring. Demand continuous
+  // followability for the same clear-hold used by avoidance before resuming.
+  if (ObstacleWaitMustContinue(
+          obstacle_waiting_, true, dt, config_.obstacle_clear_hold_s, obstacle_followable_time_s_))
+  {
+    return;
+  }
+
+  // The stable-clear hold elapsed. Clear pending wait / reverse state so the
+  // next blockage starts its own fresh wait window and full reverse budget.
   if (obstacle_waiting_)
   {
     RCLCPP_INFO(logger_, "FTCController: obstacle cleared, resuming after wait.");
@@ -2242,13 +2250,10 @@ void FTCController::updateLateralDeviation(double dt)
 
 void FTCController::applyLateralDeviationToCarrot()
 {
-  if (lateral_deviation_ == 0.0)
-  {
-    return;
-  }
-  // Shift the carrot's translation in its own y-axis (left of heading).
-  const Eigen::Vector3d lateral(0.0, lateral_deviation_, 0.0);
-  current_control_point_.translation() += current_control_point_.linear() * lateral;
+  // Always rebuild from the canonical path carrot. Applying the shift in
+  // place to the prior tick's already-deviated carrot made the offset leak
+  // into advancement and resync, producing the field 2.1 m carrot jump.
+  current_control_point_ = LaterallyDeviatedCarrot(nominal_control_point_, lateral_deviation_);
 }
 
 void FTCController::debugObstacle(

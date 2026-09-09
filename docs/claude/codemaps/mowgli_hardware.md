@@ -6,7 +6,7 @@
 > requests to the board, pushes runtime tuning (drive PID, yaw loop, kinematics, safety limits) on
 > every (re)connect, runs the at-rest IMU bias calibration, and hosts the wheel-slip dig detector
 > (CLAUDE.md Invariant 16). The firmware stays the sole blade/e-stop authority (CLAUDE.md Safety).
-> Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
+> Index updated 2026-09-09; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
 ## Where to look
@@ -29,7 +29,7 @@
 | Dead-IMU (hung WT901 bus) detection | `include/mowgli_hardware/imu_liveness.hpp` (pure); `track_imu_liveness()` (:1709); gates in `handle_imu()` + `load_persisted_imu_calibration()` |
 | Wheel odometry (`/wheel_odom`, `/wheel_ticks`) | `src/odometry_publisher.cpp` `handle_packet()` (:54): 16-bit unwrap (:80), spike limit (:96), 50 ms aggregation (:156), dock force-zero (:228), covariances (:241–251) |
 | Timestamp smoothing (firmware `dt_millis` → host stamp) | `include/mowgli_hardware/clock_fit.hpp` `HostFirmwareClockFit`, `src/clock_fit.cpp` (`Ingest`, reset gap :16, window :29) |
-| Dig detector (wheel-slip) | `include/mowgli_hardware/dig_detector.hpp` (`DigDecide`, `DigTrustSigma`, `DigEscapeStep`); node glue `dig_monitor_tick()` (:2786), `on_dig_detected()` (:2896), `publish_dig_event()` (:2928), `on_filtered_map_odom()` (:2744) |
+| Dig detector (wheel-slip) | `include/mowgli_hardware/dig_detector.hpp` (`WorstCommandedTyreSpeed`, `DigDecide`, `DigTrustSigma`, `DigEscapeStep`); node glue `dig_monitor_tick()`, `on_dig_detected()`, `publish_dig_event()`, `on_filtered_map_odom()` |
 | `cmd_vel` path to the wire | `on_cmd_vel()` (:2622) → `send_cmd_vel_packet()` (:2944); `min_linear_vel` clamp; NULL→AUTONOMOUS fallback |
 | Blade enable / dry-run inhibit | `on_mower_control()` (:2958) + `include/mowgli_hardware/blade_gate.hpp` (`blade_enable_allowed`) → `send_blade_command()` (:2192) |
 | Emergency stop service / heartbeat bits | `on_emergency_stop()` (:2987), `send_heartbeat()` (:2154) (`emergency_requested` / `emergency_release_requested`) |
@@ -57,7 +57,7 @@
 | `ros2/src/mowgli_hardware/src/crc16.cpp` | 47 | `crc16_ccitt` (CCITT-FALSE, poly 0x1021, init 0xFFFF) |
 | **`include/mowgli_hardware/`** | | |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/ll_datatypes.hpp` | 536 | Wire format: `kMowgliProtocolVersion`, `PacketId`, `STATUS_BIT_*`, `EMERGENCY_BIT_*`, `RESET_CAUSE_*`, `WATCHDOG_STAGE_*`, `CONFIG_FLAG_*`, packed `Ll*` structs + size asserts |
-| `ros2/src/mowgli_hardware/include/mowgli_hardware/dig_detector.hpp` | 346 | Pure dig logic: `DigDetectorCfg/State`, `DigDecide`, `DigTrustSigma`, `DigEscapeCfg/State/Step/Done` (+ the field-measured rationale) |
+| `ros2/src/mowgli_hardware/include/mowgli_hardware/dig_detector.hpp` | 360 | Pure dig logic: differential-drive command-to-tyre speed, `DigDetectorCfg/State`, `DigDecide`, `DigTrustSigma`, `DigEscapeCfg/State/Step/Done` (+ the field-measured rationale) |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/imu_liveness.hpp` | 127 | Pure: `IsImuSampleDead`, `UpdateImuLiveness`, `IsCalibrationPlausible`, `IsDeadSensorCovariance`; `kMinPlausibleAccelMps2`=3, `kImuDeadSampleThreshold`=45 |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/blade_gate.hpp` | 49 | Pure: `blade_enable_allowed(requested, mowing_enabled)` — suppresses ENABLE only |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/odometry_publisher.hpp` | 126 | `OdometryPublisher` API (`handle_packet`, `reset`, `wheels_stationary`, `tyre_travelled`) |
@@ -68,7 +68,7 @@
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/crc16.hpp` | 43 | CRC API |
 | **`test/`** (all `ament_add_gtest`) | | |
 | `ros2/src/mowgli_hardware/test/test_protocol.cpp` | 499 | Pins the `Ll*` struct sizes (all but `LlCmdBlade` / `LlBladeStatus`, which only the header's `static_assert`s cover), field offsets (odometry, SetDrivePid), `PacketId` values, bitmask positions, COBS+CRC round-trips |
-| `ros2/src/mowgli_hardware/test/test_dig_detector.cpp` | 498 | `DigDecide` gates (sigma, turn, cmd, window), field-recorded one-wheel slip, worst-wheel vs centre, net-displacement vs summed steps, `DigTrustSigma`, escape budget |
+| `ros2/src/mowgli_hardware/test/test_dig_detector.cpp` | 636 | `DigDecide` gates (sigma, turn, cmd, window), field-recorded one-wheel and pure-pivot slips, worst-wheel vs centre, net-displacement vs summed steps, `DigTrustSigma`, escape budget |
 | `ros2/src/mowgli_hardware/test/test_packet_handler.cpp` | 317 | CRC append/verify, round-trips, chunked feeds, corrupt/oversize/empty frames, counters |
 | `ros2/src/mowgli_hardware/test/test_cobs.cpp` | 232 | COBS edge cases (zero runs, 254/255-byte runs, known vectors, decode rejects) |
 | `ros2/src/mowgli_hardware/test/test_imu_liveness.cpp` | 213 | Dead-sample threshold, debounce/revive, calibration plausibility, dead-covariance file gate, no input mutation |

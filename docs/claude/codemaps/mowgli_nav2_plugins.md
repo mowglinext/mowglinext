@@ -1,14 +1,14 @@
 # Codemap: mowgli_nav2_plugins
 
 > Nav2 plugin library (`libmowgli_nav2_plugins.so`) for the COVERAGE lane of `controller_server`. It owns `mowgli_nav2_plugins/FTCController` (Follow-the-Carrot: 5-state FSM, decoupled lon/lat/ang PID, anti-wheelspin stall crawl, lateral obstacle deviation with zone guard/mask, cul-de-sac guard, bounded reverse-escape, oscillation override) in the `FollowCoveragePath` slot, and `mowgli_nav2_plugins/PathProgressGoalChecker` in the `coverage_goal_checker` slot. Transit (`FollowPath`) is upstream RotationShim+RPP and is NOT in this package (CLAUDE.md Invariant 8). No node of its own — everything runs inside `controller_server`.
-> Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
+> Index updated 2026-09-09; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
 ## Where to look
 
 | Task | Start here |
 |------|------------|
-| Carrot speed target / accel ramp / carrot lead cap (1.0 m) | `ros2/src/mowgli_nav2_plugins/src/ftc_controller.cpp` `update_control_point()` (L1176) + `distanceLookahead()` (L1144) |
+| Carrot speed target / accel ramp / carrot lead cap (1.0 m) | `ros2/src/mowgli_nav2_plugins/src/ftc_controller.cpp` `update_control_point()` + `distanceLookahead()`; nominal/deviated copy helper in `include/mowgli_nav2_plugins/ftc_carrot.hpp` |
 | PID mix, forward_only clamp, min_speed floor, stall cap, oscillation override | `ftc_controller.cpp` `calculate_velocity_commands()` (L1407) |
 | FSM transitions / timeouts (`PRE_ROTATE → FOLLOWING → WAITING_FOR_GOAL_APPROACH → POST_ROTATE → FINISHED`) | `ftc_controller.cpp` `update_planner_state()` (L987); enum at `include/mowgli_nav2_plugins/ftc_controller.hpp:93` |
 | Where a fresh plan starts tracking (idx 0 vs legacy nearest snap) | `ftc_controller.cpp` `setPlan()` (L616) + `include/mowgli_nav2_plugins/ftc_start_index.hpp` `ChooseStartIndex` |
@@ -18,7 +18,7 @@
 | Footprint vs half-width line model, front clip, lateral expand | `obstacle_deviation.cpp` `footprintBlocked` / `clipFootprintFront` / `expandFootprintLateral`; toggled by `use_footprint_clearance` |
 | Cul-de-sac guard (refuse to skirt a wall) | `obstacle_deviation.cpp` `hasClearExit` + `require_clear_exit` branch in `updateLateralDeviation()` |
 | Bounded straight reverse-escape (SAFETY-CRITICAL, only place FTC reverses) | `include/mowgli_nav2_plugins/ftc_reverse_escape.hpp` + `ftc_controller.cpp` `reverseEscapeOrWait()` (L1730); emitted at L921 |
-| Wait-before-abort window (`obstacle_wait_timeout_s`) | `ftc_controller.cpp` `waitOrThrowForObstacle()` (L1703) — the ControllerException throw is L1717 |
+| Wait-before-abort window (`obstacle_wait_timeout_s`) | `ftc_controller.cpp` `waitOrThrowForObstacle()`; continuous followable release debounce in `include/mowgli_nav2_plugins/ftc_wait_clear.hpp` |
 | Body-in-lethal check at the ACTUAL robot pose (SAFETY_REVIEW F-C1) | `ftc_controller.cpp` `currentBodyInLethal()` (L1663), gated at L907 |
 | Legacy collision throw (deviation OFF, e.g. no-LiDAR) | `ftc_controller.cpp` `checkCollision()` (L1577) — frame caveat at L1621 |
 | Oscillation detector (ring buffer, zero-crossings) | `src/oscillation_detector.cpp` `FailureDetector::detect`; wrapper `checkOscillation()` (L2296) |
@@ -38,12 +38,14 @@
 | File | Lines | Purpose |
 |------|-------|---------|
 | **`ros2/src/mowgli_nav2_plugins/`** | | |
-| `CMakeLists.txt` | 192 | One shared lib from 5 .cpp; exports both plugin XMLs to `nav2_core`; 5 gtests |
+| `CMakeLists.txt` | 211 | One shared lib from 5 .cpp; exports both plugin XMLs to `nav2_core`; 7 gtests |
 | `package.xml` | 40 | ament_cmake; deps nav2_core/nav2_costmap_2d/nav2_util/pluginlib/tf2*/Eigen; `<nav2_core plugin=...>` exports |
 | `ftc_controller_plugin.xml` | 12 | pluginlib: `mowgli_nav2_plugins/FTCController` → `nav2_core::Controller`, `<library path="mowgli_nav2_plugins">` |
 | `goal_checker_plugin.xml` | 16 | pluginlib: `mowgli_nav2_plugins/PathProgressGoalChecker` → `nav2_core::GoalChecker` |
 | **`include/mowgli_nav2_plugins/`** | | |
-| `ftc_controller.hpp` | 581 | `FTCController` class: FSM enum, carrot/PID/deviation/reverse/oscillation state, `struct Config` (all params + C++ defaults) |
+| `ftc_controller.hpp` | 580 | `FTCController` class: FSM enum, carrot/PID/deviation/reverse/oscillation state, `struct Config` (all params + C++ defaults) |
+| `ftc_carrot.hpp` | 22 | Pure `LaterallyDeviatedCarrot()` — creates the command carrot without mutating the canonical path carrot |
+| `ftc_wait_clear.hpp` | 46 | Pure continuous-followability debounce for releasing an obstacle wait |
 | `ftc_stall.hpp` | 74 | Pure `StallDecision()` — stall_time debounce, crawl easing, `in_stall` flag |
 | `ftc_reverse_escape.hpp` | 83 | Pure `ReverseEscapeDecide()` / `ReverseEscapeAdvance()` — opt-in, budget cap, rear-clear gate |
 | `ftc_start_index.hpp` | 80 | Pure `ChooseStartIndex()` — idx 0 by default; legacy nearest snap breaks ties to the earlier index |
@@ -60,6 +62,8 @@
 | `test_ftc_stall.cpp` | 160 | 10 cases on `StallDecision` (disable, grace, crawl, reset, cap-not-floor) |
 | `test_ftc_reverse_escape.cpp` | 108 | 10 cases: opt-in default, rear-blocked never reverses, budget cap, advance arithmetic |
 | `test_ftc_start_index.cpp` | 77 | 4 cases: fresh plan → 0, closed ring never resolves to its end, legacy snap, empty plan |
+| `test_ftc_carrot.cpp` | 35 | Pins non-accumulating lateral deviation and heading-relative offset |
+| `test_ftc_wait_clear.cpp` | 44 | Pins continuous-clear release and reset on any blocked tick |
 | `test_obstacle_deviation.cpp` | 823 | ~50 cases on a 400×400 @0.05 m synthetic costmap: detection, side choice (left bias), grow, boundary guard, zone mask (#517), footprint model, clip/expand, `hasClearExit`, lookahead clamp |
 | `test_oscillation_detector.cpp` | 195 | 11 cases: capacity, half-full gate, alternating ω detected, steady motion not |
 

@@ -148,7 +148,8 @@ struct DigDetectorCfg
   bool enabled = true;
   /// Sustained evidence required before latching a dig [s].
   double window_s = 1.2;
-  /// Below this commanded speed the robot isn't being told to travel [m/s].
+  /// Below this worst-wheel commanded speed the robot isn't being told to
+  /// move a tyre across the ground [m/s].
   double min_cmd_speed = 0.05;
   /// The WORST WHEEL must claim at least this much ground travel in the
   /// window before we call it a dig [m]. Without it, a hard stall (wheels not
@@ -167,6 +168,19 @@ struct DigDetectorCfg
   /// above [rad/s].
   double max_yaw_rate = 0.20;
 };
+
+/// Differential-drive command expressed as the speed of the tyre asked to
+/// move fastest. A pure pivot has vx == 0 but still moves both tyres; using
+/// only vx made the field dig at t=639-681 s invisible to the detector.
+inline double WorstCommandedTyreSpeed(const double vx, const double wz, const double wheel_track)
+{
+  if (!std::isfinite(vx) || !std::isfinite(wz) || !std::isfinite(wheel_track) || wheel_track < 0.0)
+  {
+    return 0.0;
+  }
+  const double half_track = 0.5 * wheel_track;
+  return std::max(std::abs(vx - wz * half_track), std::abs(vx + wz * half_track));
+}
 
 /// Position uncertainty the trust gate should use, or +infinity when it cannot
 /// be established — which makes DigDecide stand down rather than guess.
@@ -220,7 +234,7 @@ inline void DigResetWindow(DigDetectorState& st)
 
 /// Feed one control tick.
 ///
-/// @param cmd_speed  commanded forward speed this tick [m/s]
+/// @param cmd_speed  commanded speed of the fastest tyre this tick [m/s]
 /// @param wheel_step WORST WHEEL's ground travel since last tick [m] — not
 ///                   the chassis-centre distance, which cancels the
 ///                   asymmetric spin these digs are made of

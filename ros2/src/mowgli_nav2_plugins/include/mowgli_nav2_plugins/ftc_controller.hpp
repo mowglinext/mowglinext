@@ -117,8 +117,10 @@ private:
   double distanceLookahead() const;
 
   std::vector<geometry_msgs::msg::PoseStamped> global_plan_;
-  Eigen::Affine3d current_control_point_;  ///< Carrot pose in map frame.
-  Eigen::Affine3d local_control_point_;  ///< Carrot pose in base_link frame.
+  Eigen::Affine3d nominal_control_point_{Eigen::Affine3d::Identity()};
+  Eigen::Affine3d current_control_point_{Eigen::Affine3d::Identity()};
+  Eigen::Affine3d local_nominal_control_point_{Eigen::Affine3d::Identity()};
+  Eigen::Affine3d local_control_point_{Eigen::Affine3d::Identity()};
 
   uint32_t current_index_{0};
   double current_progress_{0.0};
@@ -209,7 +211,7 @@ private:
   /// max_lateral_deviation to find clearance.
   void updateLateralDeviation(double dt);
 
-  /// Apply lateral_deviation_ to current_control_point_ in-place.
+  /// Rebuild current_control_point_ from the nominal carrot plus lateral deviation.
   void applyLateralDeviationToCarrot();
 
   /// Wait-before-abort gate for the AVOIDANCE-out-of-headroom path. Sets
@@ -273,15 +275,12 @@ private:
   // ~40s stall with cmd_vel pinned at zero, vs. the intended 5s cap).
   std::optional<rclcpp::Time> obstacle_wait_start_;
   bool obstacle_waiting_{false};
-  /// When the nominal path first read CLEAR — during an active AVOIDANCE
-  /// episode (is_avoiding_) OR during a not-yet-avoiding WAIT
-  /// (obstacle_waiting_). Shared by both: the skirt / the wait is held
-  /// until the path has stayed clear CONTINUOUSLY for
-  /// config_.obstacle_clear_hold_s (debounces the window-edge flicker —
-  /// observation_persistence:0 costmap re-marking a cell — that caused the
-  /// ±step left-right flap in the avoidance case and the same-symptom
-  /// indefinite-wait stall in the waiting case). Reset whenever the
-  /// obstacle re-appears or on a new plan.
+  /// Continuous followable time while releasing obstacle_waiting_. Unlike
+  /// avoidance_clear_start_, this also covers a still-blocked nominal path
+  /// whose lateral skirt flickers between over-cap and viable.
+  double obstacle_followable_time_s_{0.0};
+  /// When the nominal path first read clear during active avoidance. The
+  /// committed skirt is held until this remains clear continuously.
   std::optional<rclcpp::Time> avoidance_clear_start_;
 
   // ── Oscillation detection ─────────────────────────────────────────────────
