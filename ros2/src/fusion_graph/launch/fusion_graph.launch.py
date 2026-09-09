@@ -137,6 +137,13 @@ def generate_launch_description() -> LaunchDescription:
 
     common_params = [
         params_file,
+        # Runtime map geometry overrides the package defaults. The node
+        # validates the resolution, tile dimensions and range margin.
+        {key: cfg[key] for key in (
+            "lidar_map_resolution_m",
+            "lidar_map_tile_size_m",
+            "lidar_map_radius_tiles",
+        ) if key in cfg},
         {
             "use_sim_time": use_sim_time,
             "datum_lat": datum_lat,
