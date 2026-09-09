@@ -203,13 +203,13 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 
 | Key (L) | Default | Becomes | GUI | Life |
 |---|---|---|---|---|
-| `headland_width` | 0.18 | `coverage_server.default_headland_width` L931 — used ONLY for the AUTO ring count `ceil(headland_width / operation_width)`, i.e. only when `num_headland_passes == 0`; inert at the shipped `2` | Mowing | dynamic (read per plan) |
-| `num_headland_passes` (L374) | 2 | `coverage_server.num_headland_passes` L932 — three-way sentinel: `<0` none, `0` auto, `>0` exact (injected **unclamped**, pinned by `test_launch_injection.py`) | Mowing | dynamic |
+| `headland_width` | 0.18 | `coverage_server.default_headland_width` L931 — used ONLY for the AUTO ring count `ceil(headland_width / operation_width)`, i.e. only when `num_headland_passes == 0`; inert at the shipped `5` | Mowing | dynamic (read per plan) |
+| `num_headland_passes` (L374) | 5 | `coverage_server.num_headland_passes` L932 — three-way sentinel: `<0` none, `0` auto, `>0` exact (injected **unclamped**, pinned by `test_launch_injection.py`) | Mowing | dynamic |
 | `mow_direction` (L379) | 0 | `coverage_server.ring_direction` L934 | no | dynamic |
 | `chassis_safety_inset` (L396) | 0.2 | `coverage_server.chassis_safety_inset` L935; mirrored to `map_server` `full_system.launch.py:396` | Mowing | dynamic |
 | `swath_overlap` (L405) | 0.02 | subtracted: `operation_width = max(0.05, tool_width − swath_overlap)` L924 | no | dynamic |
-| `min_turning_radius` (L416) | 0.15 | clamped to [0.10, 0.50] → `coverage_server.min_turning_radius` L944; also drives the `check_turn_geometry` warning (issue #499: 0.15 is **below** the 0.1625 m half-track) | Mowing | dynamic |
-| `connector_turn_radius` — **not in the template**; launch fallback 0.18 (`navigation.launch.py:403`), node default `coverage_server.cpp:94` | 0.18 | clamped ≥ `min_turning_radius`, ≤ 0.50 → `coverage_server.connector_turn_radius` L948 | no | dynamic |
+| `min_turning_radius` (L416) | 0.20 | clamped to [0.10, 0.50] → `coverage_server.min_turning_radius` L944; matches `speed_slow / max_cmd_vel_ang` at the default 0.16 m/s and 0.8 rad/s | Mowing | dynamic |
+| `connector_turn_radius` — **not in the template**; launch fallback 0.20 (`navigation.launch.py:403`), node default `coverage_server.cpp:94` | 0.20 | clamped ≥ `min_turning_radius`, ≤ 0.50 → `coverage_server.connector_turn_radius` L948 | no | dynamic |
 | `turn_speed_ratio` (L333) | 0.8 | `FollowCoveragePath.speed_slow = clamp(mowing_speed × ratio, min_speed_mps, mowing_speed)` via `derive_turn_speed` (`robot_config_util.py:268`), injected L781 | no | launch |
 
 ### Docking (→ `docking_server` / `simple_charging_dock`, `navigation.launch.py:665–739`)
@@ -305,7 +305,7 @@ These fall back to a literal hardcoded in the launch file. Each is allow-listed 
 | Key | Launch fallback | Consumer |
 |---|---|---|
 | `lidar_enabled` | `DEFAULT_LIDAR_ENABLED = False` (`robot_config_util.py:172`) | install-decided; absence is meaningful → loud startup warning (`warn_lidar_key_absent` L224) |
-| `connector_turn_radius` | 0.18 (`navigation.launch.py:403`) | `coverage_server` |
+| `connector_turn_radius` | 0.20 (`navigation.launch.py:403`) | `coverage_server` |
 | `fusion_graph_node_period_s` | 0.04 (`navigation.launch.py:139`) | `fusion_graph_node.node_period_s` (overrides `fusion_graph.yaml:23`'s 0.02) |
 | `dock_body_length_m` / `dock_body_width_m` | 0.80 / 0.55 (`full_system.launch.py:383–384`) | `map_server` dock polygon |
 | `lethal_outside_areas` | `true` (`full_system.launch.py:416`) | `map_server` (also a static default in `map_server.yaml:96`) |

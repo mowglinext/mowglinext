@@ -142,28 +142,19 @@ std::size_t forwardSkipIndex(const std::vector<geometry_msgs::msg::PoseStamped>&
 }
 
 // ===========================================================================
-// FollowStrip — execute the coverage plan as ONE CONTINUOUS joined path
+// FollowStrip — execute the coverage plan as trackable continuous sub-paths
 // ===========================================================================
 
 BT::NodeStatus FollowStrip::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
 
-  // ONE CONTINUOUS PATH, A→Z. The coverage server's full_path is the rings +
-  // swaths CONNECTED by forward turn-around arcs (coverage_server →
-  // buildContinuousPath): a single CUSP-FREE, in-bounds polyline. We drive it as
-  // ONE FollowCoveragePath goal — no per-segment dispatch, no transit, no cuts.
-  //   * No sharp ~180° reversal anywhere → MPPI doesn't dither/spin; it tracks
-  //     the smooth arcs (helped by the backported arc-length fix, PR #6055) AND
-  //     keeps its dynamic obstacle avoidance (deviate around, return to path).
-  //     enforce_path_inversion is OFF (nothing to crop). Re-mowing on the turn
-  //     loops is accepted.
-  //   * cusp-free + in-bounds are guaranteed by test_coverage_planning
-  //     (CoverageContinuousPath) on the real area; a future area that breaks it
-  //     fails that test first.
-  // TransitToStrip (boundary-aware) already drove the robot to the path start,
-  // so FollowStrip dispatches the full path as one goal. Fall back to joining the
-  // raw segments only if the connected path is somehow missing.
+  // The coverage server joins rings and swaths with forward turn-around arcs.
+  // Each resulting sub-path is safe to follow continuously with FTC. Joins that
+  // cannot be made heading-continuous, or that cross an obstacle, are explicit
+  // sub-path boundaries and are bridged below with blade-off Nav2 transits.
+  // TransitToStrip already positions the robot at the first path start. Fall
+  // back to full_path or raw segments only for compatibility with older servers.
   swaths_.clear();
   swath_base_.clear();
   resume_start_idx_ = 0;
@@ -171,12 +162,9 @@ BT::NodeStatus FollowStrip::onStart()
   total_path_poses_ = 0;
   area_idx_ = (ctx->current_area >= 0) ? static_cast<uint32_t>(ctx->current_area) : 0u;
 
-  // Build the drivable UNITS. Prefer the hole-free continuous sub-paths (#333):
-  // FollowStrip drives each with MPPI and bridges the gap between consecutive
-  // units with a blade-off Nav2 transit that routes around the obstacle. A
-  // hole-free field yields exactly one sub-path (== the single continuous path).
-  // Fall back to the single continuous full_path, or to joining the raw segments
-  // if neither is present.
+  // Build the drivable units. Prefer the hole-free, heading-continuous sub-paths;
+  // bridge every boundary with a blade-off Nav2 transit. Fall back to full_path,
+  // or to joining raw segments, if an older server provides no sub-paths.
   std::vector<nav_msgs::msg::Path> units;
   if (!ctx->current_strip_subpaths.empty())
   {
@@ -342,8 +330,9 @@ BT::NodeStatus FollowStrip::onStart()
   transit_abort_seen_ = false;
   transit_result_.reset();
   swath_goal_sent_ = false;
-  // Swath-completion model (replaces the mow_progress cell grid): record this
-  // area's swath count and resume at the first swath NOT already mowed. F2C is
+  follow_goal_ever_sent_ = false;
+  // Coverage-completion model (replaces the mow_progress cell grid): record this
+  // area's sub-path count and resume at the first unit not already mowed. F2C is
   // deterministic for a fixed area+params, so indices are stable across the
   // re-plan that a recharge/preempt resume triggers.
   ctx->area_swath_count[area_idx_] = swaths_.size();
@@ -584,7 +573,7 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
 
   // Publish the segment on the coverage controller's global_plan topic BEFORE
   // dispatching the goal, so the PathProgressGoalChecker has the plan in hand
-  // by the time the controller starts ticking (MPPI doesn't republish it).
+  // by the time the controller starts ticking (FTC does not republish it).
   if (coverage_plan_pub_)
   {
     coverage_plan_pub_->publish(goal.path);
@@ -593,6 +582,7 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
   follow_handle_.reset();
   follow_future_ = follow_client_->async_send_goal(goal);
   swath_goal_sent_ = true;
+  follow_goal_ever_sent_ = true;
 
   RCLCPP_INFO(ctx->node->get_logger(),
               "FollowStrip: sent segment %zu/%zu (%zu poses) to the coverage controller",
@@ -608,15 +598,13 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
   {
     return false;
   }
-  // When the segment start is far away (resume mid-list, a skipped segment,
-  // or a concave field whose serpentine hops across a notch), it MUST be reached
-  // with a BLADE-OFF Nav2 transit via the boundary-aware global planner — we do
-  // not mow the transit ("navigation area"), and FTC would otherwise cut
-  // cross-country toward the plan, blade-on, potentially through out-of-bounds
-  // area. This gap check is STRUCTURAL for blade safety: past kSegmentTransitGap
-  // there is no code path that may drive to the start with the blade on.
+  // A distant start and every boundary between planner-produced sub-paths must
+  // be reached with a blade-off Nav2 transit. A sub-path boundary can have a
+  // near-zero positional gap while requiring a large heading change; sending it
+  // directly to FTC re-enables the blade before PRE_ROTATE and can dig in place.
   const double gap = distanceToSegmentStart(ctx);
-  if (gap > kSegmentTransitGap)
+  const bool unit_boundary = follow_goal_ever_sent_;
+  if (coverageTransitRequired(gap, unit_boundary))
   {
     // SAFETY: force the blade OFF first, unconditionally, before any dispatch or
     // early return below — nothing may cross this gap blade-on.
@@ -633,11 +621,12 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
         transit_pending_ = true;
         transit_wait_start_ = std::chrono::steady_clock::now();
         RCLCPP_WARN(ctx->node->get_logger(),
-                    "FollowStrip: segment %zu/%zu starts %.2fm away but navigate_to_pose is "
-                    "not ready — blade OFF, holding for the transit server (no blade-on crossing)",
+                    "FollowStrip: segment %zu/%zu requires a blade-off transit (gap %.2fm%s) but "
+                    "navigate_to_pose is not ready — holding for the transit server",
                     swath_idx_ + 1,
                     swaths_.size(),
-                    gap);
+                    gap,
+                    unit_boundary ? ", sub-path boundary" : "");
       }
       return true;
     }
@@ -677,15 +666,15 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
     transit_abort_seen_ = false;
     swath_goal_sent_ = true;
     RCLCPP_INFO(ctx->node->get_logger(),
-                "FollowStrip: segment %zu/%zu starts %.2fm away — blade off, transit first",
+                "FollowStrip: segment %zu/%zu requires transit (gap %.2fm%s) — blade off first",
                 swath_idx_ + 1,
                 swaths_.size(),
-                gap);
+                gap,
+                unit_boundary ? ", sub-path boundary" : "");
     return true;
   }
-  // Segment start is within kSegmentTransitGap (adjacent-swath close, ~one
-  // op_width): FTC closes it blade-on, an accepted small re-mow. Never a large
-  // cross-country crossing.
+  // First/legacy unit already starts nearby; TransitToStrip positioned the robot
+  // there, so it can begin mowing directly.
   transit_pending_ = false;
   return sendFollowGoal(ctx);
 }
@@ -732,8 +721,8 @@ BT::NodeStatus FollowStrip::onRunning()
 
   // Advance to the next swath; finish (SUCCESS/FAILURE) when none remain.
   // A swath is SKIPPED on goal-reject/abort rather than failing the whole
-  // area — robust coverage; gaps are reclaimed on the next pass (and, under
-  // MPPI, in-controller avoidance makes aborts rare). The area only FAILS if
+  // area — robust coverage; gaps are reclaimed on the next pass, while FTC's
+  // in-controller avoidance makes obstacle aborts rare. The area only FAILS if
   // every swath was skipped (nothing got mowed).
   auto advance = [&]() -> BT::NodeStatus
   {

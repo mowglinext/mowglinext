@@ -455,7 +455,7 @@ struct BTContext
   /// Operator-configured drive speeds (m/s), sourced from mowgli_robot.yaml
   /// by behavior_tree_node and applied to the live controllers by SetNavMode:
   /// transit_speed → FollowPath.desired_linear_vel (RPP transit), mowing_speed
-  /// → FollowCoveragePath.vx_max (MPPI coverage). Defaults match the shipped
+  /// → FollowCoveragePath.speed_fast (FTC coverage). Defaults match the shipped
   /// template; SetNavMode halves them in "degraded" mode (floored at the host
   /// min-drive clamp).
   double transit_speed{0.25};
@@ -619,7 +619,7 @@ struct BTContext
   /// rings first, then straight serpentine swaths). Populated by
   /// PlanCoverageArea; FollowStrip dispatches ONE segment per
   /// FollowCoveragePath goal (RotationShim pivots in place at each segment
-  /// start, MPPI tracks the straight swath / smooth ring). Replaces the
+  /// start, FTC tracks the straight swath / smooth ring). Replaces the
   /// heading-jump re-segmentation heuristic, which silently failed on smooth
   /// turn arcs (field 2026-06-12: one 3982-pose "swath").
   std::vector<nav_msgs::msg::Path> current_strip_segments;
@@ -627,7 +627,7 @@ struct BTContext
   /// Hole-free continuous SUB-PATHS from the coverage server (issue #333), in
   /// drive order. A forward turn-around connector can't route around a large
   /// interior obstacle, so the continuous path is split where it would cross a
-  /// hole; FollowStrip drives each sub-path with MPPI and bridges the gap
+  /// hole or heading discontinuity; FollowStrip drives each sub-path with FTC and bridges the gap
   /// between consecutive sub-paths with a blade-off, costmap-aware Nav2 transit
   /// (its existing >kSegmentTransitGap behaviour) that routes around the
   /// obstacle. Exactly ONE entry for a hole-free field (== current_strip_path).

@@ -736,17 +736,16 @@ coverage_server:
     min_swath_length: 0.15               # m — drop sliver swaths; read LIVE per plan
     # Also declared (defaults only, injected at launch, read LIVE per plan):
     #   ring_direction        0 = planner default, 1 = CW, 2 = CCW  (#335)
-    #   min_turning_radius    0.15 m — hard floor on every arc in the continuous path
-    #   connector_turn_radius 0.18 m — nominal turn-around radius; floored at
-    #                         min_turning_radius. Larger values balloon the U-turn
-    #                         into a teardrop that overshoots into the headland.
+    #   min_turning_radius    0.20 m — hard floor matching FTC's controllable radius
+    #   connector_turn_radius 0.20 m — nominal turn-around radius; floored at
+    #                         min_turning_radius
 ```
 
 There are **no** mode-string params (`default_swath_type`, `default_route_type`, `default_path_type`, …) and **no** decomposition step — those belonged to the legacy `opennav_coverage` schema.
 
 **Pipeline:** `f2c::hg::ConstHL.generateHeadlands` (inset) + `generateHeadlandSwaths(op_width, n_rings, dir_out2in=true)` (concentric perimeter rings, outermost first) → per mainland cell `f2c::sg::BruteForce.generateBestSwaths` (each disjoint clip becomes its own swath, so concave boundaries and interior holes need no decomposition) → `f2c::rp::BoustrophedonOrder.genSortedSwaths` (serpentine) → `buildContinuousSubPaths` joins rings + swaths with **custom forward turn-around arcs** of nominal radius `connector_turn_radius`. F2C's own turn planners (Dubins / CC-Dubins / Reeds-Shepp) are **not** used — every variant was field-tested and failed.
 
-The result carries both an ordered list of discrete `segments` + `segment_types` (rings then swaths — kept for the GUI and resume bookkeeping) and one or more **hole-free `drivable_subpaths`**, which is what execution actually drives: `FollowStrip` dispatches each sub-path as ONE continuous `FollowCoveragePath` goal and bridges consecutive sub-paths with a blade-off `NavigateToPose` transit around the obstacle. `full_path` is their concatenation, for visualisation only.
+The result carries both an ordered list of discrete `segments` + `segment_types` (rings then swaths — kept for the GUI and resume bookkeeping) and one or more **hole-free `drivable_subpaths`**, which is what execution actually drives: `FollowStrip` dispatches each sub-path as one continuous `FollowCoveragePath` goal and bridges every sub-path boundary with a blade-off `NavigateToPose` transit. A straight fallback is kept inside a sub-path only when it is aligned with both adjoining segments; sharp fallbacks become explicit reorientations. `full_path` is their concatenation, for visualisation only.
 
 The BT side (`PlanCoverageArea`) feeds it the area outer ring + obstacle holes fetched from `/map_server_node/get_mowing_area`. The upstream `opennav_coverage` submodule is kept for its `_msgs` action definitions only — every server subpackage is `COLCON_IGNORE`'d.
 

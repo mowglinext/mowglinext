@@ -350,11 +350,11 @@ All sensor positions drive both the URDF (TF frames) and the Nav2 footprint poly
 | `mowing_speed` | `0.20` | Speed during coverage paths (m/s) |
 | `transit_speed` | `0.20` | Speed during point-to-point navigation (m/s) → RPP `desired_linear_vel` |
 | `swath_overlap` | `0.02` | F2C swath spacing = `tool_width − swath_overlap`, so adjacent swaths overlap |
-| `num_headland_passes` | `2` | Concentric perimeter passes (`0` = auto) |
+| `num_headland_passes` | `5` | Concentric perimeter passes (`0` = auto); provides room for trackable swath-end turns |
 | `mow_angle_deg` | `-1.0` | Swath angle in degrees; negative = auto (swath-count-minimising) |
-| `min_turning_radius` | `0.15` | Hard floor on every forward turn-around / corner fillet; injected into `coverage_server.min_turning_radius` |
-| `connector_turn_radius` | `0.18` | Nominal radius of the swath-to-swath turn-around arc (floored at `min_turning_radius`) |
-| `headland_width` | `0.18` | Injected as `coverage_server.default_headland_width`. Used for ONE thing: the AUTO ring count `ceil(headland_width / operation_width)`, and **only** when `num_headland_passes` is `0`. With the shipped `num_headland_passes: 2` it has no effect. (`path_spacing` was removed from the template on 2026-09-05 — dead knob, no consumer.) |
+| `min_turning_radius` | `0.20` | Hard floor on every forward turn-around / corner fillet; matches FTC's controllable radius at the default bend speed |
+| `connector_turn_radius` | `0.20` | Nominal radius of the swath-to-swath turn-around arc (floored at `min_turning_radius`) |
+| `headland_width` | `0.18` | Injected as `coverage_server.default_headland_width`. Used for the AUTO ring count `ceil(headland_width / operation_width)` only when `num_headland_passes` is `0`; it has no effect with the shipped forced count of 5. |
 
 #### Docking
 

@@ -52,6 +52,17 @@ namespace mowgli_behavior
 // ---------------------------------------------------------------------------
 inline constexpr double kMowAngleAutoDeg = -1.0;
 
+// Every boundary between planner-produced sub-paths is intentional: it means
+// the planner could not build one continuous blade-on path. A later unit must
+// therefore go through NavigateToPose even when its start is nearby (typically
+// the same swath-end pose with the opposite heading). The distance threshold
+// still protects the first unit and legacy single-path fallback.
+inline bool coverageTransitRequired(double start_gap_m, bool previous_unit_dispatched)
+{
+  return previous_unit_dispatched ||
+         start_gap_m > mowgli_interfaces::coverage_geometry::kSegmentTransitGapM;
+}
+
 // ---------------------------------------------------------------------------
 // Resume-cursor resolution — shared between FollowStrip (which trims the driven
 // prefix and marks fully-driven sub-paths done) and PlanCoverageArea (which aims
@@ -148,14 +159,9 @@ public:
   using Nav2Navigate = nav2_msgs::action::NavigateToPose;
   using NavGoalHandle = rclcpp_action::ClientGoalHandle<Nav2Navigate>;
 
-  // Start an explicit transit when the segment start is farther than this.
-  // Below it, RotationShim+MPPI close the gap themselves (adjacent swaths are
-  // one op_width ≈ 0.16 m apart). Single-sourced from mowgli_interfaces so
-  // this matches mowgli_coverage's planning-side split threshold (the server
-  // decides which gaps become a separate drivable_subpaths entry using the
-  // exact same value) — see coverage_geometry.hpp for why the two sides must
-  // agree. Public (unlike the rest of this class's tuning constants) so the
-  // single-source regression test can assert the equality directly.
+  // Distance gate for the first/legacy unit. Every subsequent planner-produced
+  // sub-path transits regardless of distance; see coverageTransitRequired().
+  // Public so the single-source regression test can assert the value directly.
   static constexpr double kSegmentTransitGap =
       mowgli_interfaces::coverage_geometry::kSegmentTransitGapM;
 
@@ -200,10 +206,9 @@ private:
   // RUNNING); false when it should fall back to the abort-to-next path (no
   // costmap, abort not obstacle-related, no clear resume, or budget exhausted).
   bool tryStartDetour(const std::shared_ptr<BTContext>& ctx);
-  // Dispatch swaths_[swath_idx_]: if the robot is farther than
-  // kSegmentTransitGap from the segment start, first run a NavigateToPose
-  // transit (sets transit_active_); otherwise send the FollowPath goal
-  // directly. Returns false only if a client is missing.
+  // Dispatch swaths_[swath_idx_]. The first unit transits when it is farther
+  // than kSegmentTransitGap; every later sub-path always transits blade-off so
+  // a planned discontinuity is reoriented safely before FollowPath starts.
   bool sendCurrentSwath(const std::shared_ptr<BTContext>& ctx);
   // Send the FollowPath goal for the current segment (no gap check).
   bool sendFollowGoal(const std::shared_ptr<BTContext>& ctx);
@@ -260,7 +265,7 @@ private:
   rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr blade_client_;
   // Mirrors the active segment onto the coverage controller's global_plan
   // topic so the PathProgressGoalChecker (coverage_goal_checker) can track
-  // per-pose progress (MPPI/RotationShim does not republish the plan).
+  // per-pose progress (FTC/RotationShim does not republish the plan).
   // Latched (transient_local) so a late-subscribing goal checker still
   // receives the current segment.
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr coverage_plan_pub_;
@@ -388,6 +393,7 @@ private:
   static constexpr double kBladeSpinupDelaySec = 1.5;
   std::chrono::steady_clock::time_point blade_start_time_;
   bool goal_sent_ = false;
+  bool follow_goal_ever_sent_ = false;
 
   // A FollowCoveragePath goal that ABORTS at or beyond this fraction of the
   // path is treated as COMPLETE rather than skipped. FTC zeroes linear.x once

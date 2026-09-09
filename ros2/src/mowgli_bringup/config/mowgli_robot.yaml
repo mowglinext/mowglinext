@@ -408,10 +408,9 @@ mowgli:
     # uses for exactly one thing (coverage_planning.cpp:810):
     #     n_rings = ceil(headland_width / operation_width), floored at 1
     # and ONLY when num_headland_passes == 0 (AUTO). With the shipped
-    # num_headland_passes: 2 the ring count is FORCED and this key has no
+    # num_headland_passes: 5 the ring count is FORCED and this key has no
     # effect; set num_headland_passes to 0 to hand the count back to it.
-    # 0.18 / op_width 0.16 → ceil(1.125) = 2 rings, i.e. AUTO reproduces the
-    # forced default.
+    # AUTO is therefore intended for custom tuning, not the production default.
     #
     # The previous comment here claimed this key was "currently INERT" because
     # "the coverage BT (PlanCoverageArea) derives the F2C headland from
@@ -445,7 +444,11 @@ mowgli:
     # degrade to straight pivot-through corners instead of smooth arcs.
     # FIELD TEST OWED before trusting NONE on a real lawn (#429).
     # Read once at coverage_server startup — takes effect on the next ROS2 restart.
-    num_headland_passes: 2         # 2026-07-23: field-validated default (was 0=auto)
+    # Five passes provide the ~0.50 m mowed apron required by a forward 0.20 m
+    # radius reversal at the deployed 0.13-0.16 m swath spacing. With two passes,
+    # the 2026-09-09 field bag had 146 straight fallback joins out of 168 and FTC
+    # alternated ±0.8 rad/s at their zero-radius corners.
+    num_headland_passes: 5
     # mow_direction: perimeter/headland travel winding (issue #335). 0 = planner
     # default (F2C natural), 1 = clockwise, 2 = counter-clockwise. Set it so a
     # side-mounted blade stays on the cut side. navigation.launch.py injects this
@@ -484,14 +487,15 @@ mowgli:
     # min_turning_radius: hard floor on every forward turn-around / corner-fillet
     # arc in the CONTINUOUS coverage path (coverage_server → buildContinuousPath),
     # injected into coverage_server.min_turning_radius — so this is LIVE.
-    # Two-sided: too small → the in-bounds shrink picks a loop tighter than MPPI
+    # Two-sided: too small → the in-bounds shrink picks a loop tighter than FTC
     # can track (wz≈vx/r), so the robot loops/hesitates at corners; too large →
     # the Ω-turn bulges OUTSIDE the polygon at the swath ends (R=0.35 left the
-    # area by ~0.8 m, then got clipped into ragged turns). 0.15 m keeps every turn
-    # fully in-bounds (harness: 0 cm bulge) and stays MPPI-trackable. A turn that
-    # cannot be made in-bounds at >= this is left as a sharp pivot, never a
-    # tighter loop. Keep within [0.10, 0.50].
-    min_turning_radius: 0.15
+    # area by ~0.8 m, then got clipped into ragged turns). 0.20 m matches FTC's
+    # tightest controllable bend at speed_slow=0.16 m/s and max_cmd_vel_ang=0.8
+    # rad/s. A turn that cannot be made in-bounds at this radius is split into a
+    # blade-off reorientation, never replaced by a tighter loop. Keep within
+    # [0.10, 0.50].
+    min_turning_radius: 0.20
 
     # -----------------------------------------------------------------
     # Docking

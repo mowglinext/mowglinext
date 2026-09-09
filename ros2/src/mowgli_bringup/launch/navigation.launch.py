@@ -359,16 +359,16 @@ def generate_launch_description() -> LaunchDescription:
     # in-bounds produced loops too tight to track (wz≈vx/r), so the robot
     # looped/hesitated at corners — the bug this knob prevents. Injected into
     # coverage_server.min_turning_radius; operator-tunable via mowgli_robot.yaml.
-    min_turning_radius = 0.15
+    min_turning_radius = 0.20
     # connector_turn_radius: nominal radius of the swath-to-swath turn-around
     # arcs in the continuous coverage path. A forward 180° reversal at op_width
     # spacing always loops (a clean U needs r ≤ op_width/2 ≈ 0.09, below the
     # min_turning_radius floor), but the loop SIZE scales with this radius: 0.30
-    # balloons a big teardrop into the headland (the "turning loops" seen with
-    # >2 headland passes); ~op_width (0.18) collapses it to a compact U-turn.
+    # balloons a big teardrop into the headland. 0.20 m matches FTC's tightest
+    # controllable bend at the deployed bend speed and angular limit.
     # Injected into coverage_server.connector_turn_radius; operator-tunable via
-    # mowgli_robot.yaml (raise toward 0.30 if the tighter turns hesitate).
-    connector_turn_radius = 0.18
+    # mowgli_robot.yaml when a site needs a wider turn.
+    connector_turn_radius = 0.20
     # wheel_track: centre-to-centre wheel distance. NOT injected into anything
     # here — it is read so the turn-geometry check below can compare the planned
     # turn radii against the HALF-track. Must match the firmware WHEEL_BASE that

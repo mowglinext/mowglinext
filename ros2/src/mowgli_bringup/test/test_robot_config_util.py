@@ -273,20 +273,19 @@ class TestDeriveTurnSpeed:
 class TestCheckTurnGeometry:
     """Undrivable planned turn radii — reported, never raised."""
 
-    # The deployed pair as of issue #499: floor below the half-track.
-    LIVE_TRACK = 0.325
-    LIVE_MIN_R = 0.15
-    LIVE_CONN_R = 0.18
-    LIVE_TURN_SPEED = 0.16
-    LIVE_WZ_MAX = 0.8
+    # The legacy pair measured in issue #499: floor below the half-track.
+    TRACK = 0.325
+    LEGACY_MIN_R = 0.15
+    LEGACY_CONN_R = 0.18
+    TURN_SPEED = 0.16
+    WZ_MAX = 0.8
 
-    def test_flags_the_live_config_inner_wheel_reversal(self):
+    def test_flags_the_legacy_config_inner_wheel_reversal(self):
         """min_turning_radius 0.15 <= half-track 0.1625: the inner wheel must
-        REVERSE to trace the arc. This is the shipped state, and it must warn."""
+        reverse to trace the arc, so an installed legacy override must warn."""
         # Act
-        warnings = check_turn_geometry(self.LIVE_MIN_R, self.LIVE_CONN_R,
-                                       self.LIVE_TRACK, self.LIVE_TURN_SPEED,
-                                       self.LIVE_WZ_MAX)
+        warnings = check_turn_geometry(self.LEGACY_MIN_R, self.LEGACY_CONN_R,
+                                       self.TRACK, self.TURN_SPEED, self.WZ_MAX)
 
         # Assert
         assert any("half-track" in w for w in warnings), (
@@ -297,9 +296,8 @@ class TestCheckTurnGeometry:
         """The tightest arc FTC can command is speed_slow/max_cmd_vel_ang =
         0.16/0.8 = 0.20 m, but coverage plans down to 0.15 m."""
         # Act
-        warnings = check_turn_geometry(self.LIVE_MIN_R, self.LIVE_CONN_R,
-                                       self.LIVE_TRACK, self.LIVE_TURN_SPEED,
-                                       self.LIVE_WZ_MAX)
+        warnings = check_turn_geometry(self.LEGACY_MIN_R, self.LEGACY_CONN_R,
+                                       self.TRACK, self.TURN_SPEED, self.WZ_MAX)
 
         # Assert
         assert any("max_cmd_vel_ang" in w for w in warnings)
@@ -309,8 +307,8 @@ class TestCheckTurnGeometry:
         floor — nothing to say."""
         # Arrange — 0.40 m arcs: inner/outer ratio 0.42, needs wz = 0.16/0.40 = 0.4.
         # Act
-        warnings = check_turn_geometry(0.40, 0.45, self.LIVE_TRACK,
-                                       self.LIVE_TURN_SPEED, self.LIVE_WZ_MAX)
+        warnings = check_turn_geometry(0.40, 0.45, self.TRACK,
+                                       self.TURN_SPEED, self.WZ_MAX)
 
         # Assert
         assert warnings == []
@@ -319,9 +317,8 @@ class TestCheckTurnGeometry:
         """The warning has to carry NUMBERS — the whole failure was that the two
         offending values lived in different files and nobody related them."""
         # Act
-        warnings = check_turn_geometry(self.LIVE_MIN_R, self.LIVE_CONN_R,
-                                       self.LIVE_TRACK, self.LIVE_TURN_SPEED,
-                                       self.LIVE_WZ_MAX)
+        warnings = check_turn_geometry(self.LEGACY_MIN_R, self.LEGACY_CONN_R,
+                                       self.TRACK, self.TURN_SPEED, self.WZ_MAX)
 
         # Assert — v_inner = v(1 - b/R) = 0.16 * (1 - 0.1625/0.15) = -0.013 m/s.
         carve = next(w for w in warnings if "half-track" in w)
@@ -336,10 +333,14 @@ class TestCheckTurnGeometry:
         # Assert
         assert any("half-track" in w for w in warnings)
 
+    def test_shipped_geometry_matches_controller_authority(self):
+        """The 0.20 m production radius clears both geometry checks."""
+        warnings = check_turn_geometry(0.20, 0.20, self.TRACK,
+                                       self.TURN_SPEED, self.WZ_MAX)
+        assert warnings == []
+
     def test_never_raises_on_any_input(self):
-        """WARN-only is load-bearing: the shipped defaults trip this, so raising
-        would refuse to start navigation on every existing robot. Firmware stays
-        the sole blade-safety authority either way."""
+        """WARN-only remains load-bearing for installed legacy overrides."""
         # Arrange — including degenerate values the caller's clamps would contain.
         for args in [(0.0, 0.0, 0.325, 0.16, 0.8),
                      (0.15, 0.18, 0.0, 0.16, 0.8),
