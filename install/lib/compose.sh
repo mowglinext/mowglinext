@@ -55,6 +55,11 @@ build_compose_stack() {
   local gnss_stack
   local gnss_service
 
+  if ! is_supported_hardware_backend "${HARDWARE_BACKEND:-mowgli}"; then
+    error "Unknown HARDWARE_BACKEND: ${HARDWARE_BACKEND:-unset} (expected mowgli or mavros)"
+    return 1
+  fi
+
   COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.base.yml")
   COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.gui.yml")
   COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.mqtt.yml")

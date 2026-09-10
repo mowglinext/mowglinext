@@ -210,6 +210,12 @@ write_gnss_env_contract_keys() {
 setup_env() {
   step "Environment (.env)"
 
+  : "${HARDWARE_BACKEND:=mowgli}"
+  if ! is_supported_hardware_backend "$HARDWARE_BACKEND"; then
+    error "Unknown HARDWARE_BACKEND: $HARDWARE_BACKEND (expected mowgli or mavros)"
+    return 1
+  fi
+
   local env_file="$REPO_DIR/docker/.env"
   mkdir -p "$REPO_DIR/docker"
 
@@ -290,7 +296,6 @@ setup_env() {
   fi
 
   # MAVROS / backend
-  : "${HARDWARE_BACKEND:=mowgli}"
   : "${MAVROS_AUTOPILOT:=ardupilot}"
   : "${MAVROS_BY_ID:=}"
   : "${MAVROS_PORT:=/dev/mavros}"
@@ -298,6 +303,13 @@ setup_env() {
   : "${MAVROS_GCS_URL:=udp-b://@255.255.255.255:14550}" # udp-b = broadcast, udp = unicast, empty = disabled
   : "${MAVROS_TGT_SYSTEM:=1}"
   : "${MAVROS_TGT_COMPONENT:=1}"
+
+  # Use the persistent path selected by detection directly. The /dev/mavros
+  # udev alias remains available for compatibility, but is not the runtime
+  # endpoint when a /dev/serial/by-id identity is known.
+  if [[ "$HARDWARE_BACKEND" == "mavros" && "$MAVROS_BY_ID" == /dev/serial/by-id/* ]]; then
+    MAVROS_PORT="$MAVROS_BY_ID"
+  fi
 
   # Si MAVROS → GNSS backend désactivé
   if [[ "$HARDWARE_BACKEND" == "mavros" ]]; then

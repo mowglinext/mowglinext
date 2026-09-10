@@ -186,7 +186,7 @@ harness_set_preset() {
           # HARDWARE_BACKEND=mavros — do NOT pre-set it here, otherwise
           # configure_gps's preset validator rejects "disabled".
           export MAVROS_BY_ID="${MAVROS_BY_ID:-/dev/serial/by-id/usb-Pixhawk-stub}"
-          export MAVROS_PORT="${MAVROS_PORT:-/dev/mavros}"
+          export MAVROS_PORT="${MAVROS_PORT:-$MAVROS_BY_ID}"
           export MAVROS_BAUD="${MAVROS_BAUD:-921600}"
         fi
         ;;

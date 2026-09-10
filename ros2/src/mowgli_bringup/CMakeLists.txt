@@ -85,6 +85,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_launch_injection test/test_launch_injection.py
     TIMEOUT 30
   )
+  ament_add_pytest_test(test_hardware_backend_launch test/test_hardware_backend_launch.py
+    TIMEOUT 30
+  )
 
 endif()
 

@@ -47,8 +47,18 @@ recompute_image_defaults() {
   LIDAR_LDLIDAR_IMAGE_DEFAULT="${prefix}/lidar-ldlidar:${IMAGE_TAG}"
   LIDAR_RPLIDAR_IMAGE_DEFAULT="${prefix}/lidar-rplidar:${IMAGE_TAG}"
   LIDAR_STL27L_IMAGE_DEFAULT="${prefix}/lidar-stl27l:${IMAGE_TAG}"
-  MAVROS_IMAGE_DEFAULT="${prefix}/mavros:${IMAGE_TAG}"
+  # MowgliMAVROS is released independently from the MowgliNext image set.
+  # Keep its official Kilted image pinned by tag and immutable digest instead
+  # of deriving it from this repository's registry namespace or IMAGE_TAG.
+  MAVROS_IMAGE_DEFAULT="ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:kilted@sha256:04e4eb17b0f5ce38f882f68346b1694774fa87e1945b38b57c94f90da34dd560"
   GUI_IMAGE_DEFAULT="${prefix}/mowglinext-gui:${IMAGE_TAG}"
+}
+
+is_supported_hardware_backend() {
+  case "${1:-}" in
+    mowgli|mavros) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 is_release_image_channel() {
@@ -317,6 +327,11 @@ rerun_check_command() {
 compose_restart_services_for_backend() {
   local backend="${1:-${HARDWARE_BACKEND:-mowgli}}"
   local services=()
+
+  if ! is_supported_hardware_backend "$backend"; then
+    error "Unknown hardware backend: $backend (expected mowgli or mavros)"
+    return 1
+  fi
 
   if [[ "$backend" == "mavros" ]]; then
     services+=(mavros ntrip mowgli)

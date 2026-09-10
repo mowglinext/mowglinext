@@ -44,7 +44,11 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import (
+    EnvironmentVariable,
+    LaunchConfiguration,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -114,6 +118,14 @@ def generate_launch_description() -> LaunchDescription:
         description="Serial port for the hardware bridge.",
     )
 
+    hardware_backend_arg = DeclareLaunchArgument(
+        "hardware_backend",
+        default_value=EnvironmentVariable(
+            "HARDWARE_BACKEND", default_value="mowgli"
+        ),
+        description="Hardware backend: mowgli or mavros.",
+    )
+
     enable_mqtt_arg = DeclareLaunchArgument(
         "enable_mqtt",
         default_value="false",
@@ -161,6 +173,7 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     use_sim_time = LaunchConfiguration("use_sim_time")
     serial_port = LaunchConfiguration("serial_port")
+    hardware_backend = LaunchConfiguration("hardware_backend")
     enable_mqtt = LaunchConfiguration("enable_mqtt")
     enable_foxglove = LaunchConfiguration("enable_foxglove")
     foxglove_port = LaunchConfiguration("foxglove_port")
@@ -193,6 +206,7 @@ def generate_launch_description() -> LaunchDescription:
         launch_arguments={
             "use_sim_time": use_sim_time,
             "serial_port": serial_port,
+            "hardware_backend": hardware_backend,
         }.items(),
     )
 
@@ -726,6 +740,7 @@ def generate_launch_description() -> LaunchDescription:
             # Arguments
             use_sim_time_arg,
             serial_port_arg,
+            hardware_backend_arg,
             enable_mqtt_arg,
             enable_foxglove_arg,
             foxglove_port_arg,

@@ -73,6 +73,7 @@ section "HARDWARE_BACKEND=mavros (Pixhawk via MAVROS)"
 mavros_repo="$SANDBOX/repo_mavros"
 sandbox_repo "$mavros_repo"
 harness_init "$mavros_repo"
+IMAGE_TAG="feat-mavros-integration"
 harness_set_preset backend=mavros gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
 if harness_run; then
   pass "mavros backend: harness_run succeeds"
@@ -83,6 +84,11 @@ assert_eq "mavros backend: HARDWARE_BACKEND=mavros" "mavros"   "$(env_value "$ma
 assert_eq "mavros backend: GNSS_BACKEND=disabled"   "disabled" "$(env_value "$mavros_repo" GNSS_BACKEND)"
 assert_eq "mavros backend: GNSS_STACK=disabled"     "disabled" "$(env_value "$mavros_repo" GNSS_STACK)"
 assert_eq "mavros backend: MAVROS_ENABLED=true"     "true"     "$(env_value "$mavros_repo" MAVROS_ENABLED)"
+assert_eq "mavros backend: detected by-id path is the MAVROS port" \
+  "/dev/serial/by-id/usb-Pixhawk-stub" "$(env_value "$mavros_repo" MAVROS_PORT)"
+assert_eq "mavros backend: official Kilted image ignores IMAGE_TAG" \
+  "ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:kilted@sha256:04e4eb17b0f5ce38f882f68346b1694774fa87e1945b38b57c94f90da34dd560" \
+  "$(env_value "$mavros_repo" MAVROS_IMAGE)"
 
 mavros_fragments=$(selected_fragments_in_current_run)
 for required in docker-compose.base.yml docker-compose.gui.yml docker-compose.mavros.yml docker-compose.lidar-ldlidar.yml; do
@@ -99,5 +105,17 @@ case "$mavros_fragments" in
     pass "mavros backend: no direct GNSS fragment"
     ;;
 esac
+
+# ── Invalid backend values fail closed ────────────────────────────────────
+section "invalid HARDWARE_BACKEND"
+
+invalid_repo="$SANDBOX/repo_invalid"
+sandbox_repo "$invalid_repo"
+harness_init "$invalid_repo"
+HARDWARE_BACKEND="unexpected"
+assert_exit_nonzero "invalid backend: setup_env rejects the value" setup_env
+assert_exit_nonzero "invalid backend: compose selection rejects the value" build_compose_stack
+assert_exit_nonzero "invalid backend: restart selection rejects the value" \
+  compose_restart_services_for_backend unexpected
 
 test_summary

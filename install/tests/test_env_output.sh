@@ -83,6 +83,8 @@ REQUIRED_KEYS=(
   GUI_IMAGE
   HARDWARE_BACKEND
   MAVROS_ENABLED
+  MAVROS_BY_ID
+  MAVROS_PORT
   MAVROS_BAUD
   MAVROS_TGT_SYSTEM
   MAVROS_TGT_COMPONENT
@@ -190,6 +192,9 @@ else
   assert_contains "custom IMAGE_TAG written" "IMAGE_TAG=feat-universal-gnss-integration" "$feature_env"
   assert_contains "custom GPS image tag written" "GPS_IMAGE=ghcr.io/mowglinext/mowglinext/gps:feat-universal-gnss-integration" "$feature_env"
   assert_contains "custom mowgli-ros2 image tag written" "MOWGLI_ROS2_IMAGE=ghcr.io/mowglinext/mowglinext/mowgli-ros2:feat-universal-gnss-integration" "$feature_env"
+  assert_contains "MAVROS image remains pinned independently" \
+    "MAVROS_IMAGE=ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:kilted@sha256:04e4eb17b0f5ce38f882f68346b1694774fa87e1945b38b57c94f90da34dd560" \
+    "$feature_env"
 fi
 
 section "NTRIP env is written without leaking secrets to logs"

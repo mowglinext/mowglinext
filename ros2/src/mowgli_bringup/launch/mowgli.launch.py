@@ -22,7 +22,8 @@ Main bringup launch file for the Mowgli robot mower (physical hardware).
 Brings up:
   1. robot_state_publisher  – processes URDF/xacro and publishes /robot_description
                               plus static TF from URDF fixed joints.
-  2. hardware_bridge        – serial bridge to the Mowgli firmware board.
+  2. hardware_bridge        – serial bridge to the Mowgli firmware board when
+                              HARDWARE_BACKEND=mowgli.
   3. twist_mux              – priority-based cmd_vel multiplexer.
 """
 
@@ -31,9 +32,12 @@ import sys
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.conditions import IfCondition
 from launch.substitutions import (
     Command,
+    EnvironmentVariable,
+    EqualsSubstitution,
     FindExecutable,
     LaunchConfiguration,
     PathJoinSubstitution,
@@ -47,6 +51,18 @@ from launch_ros.substitutions import FindPackageShare
 # template defaults, so a missing key falls through to its versioned default.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import load_robot_params  # noqa: E402
+
+SUPPORTED_HARDWARE_BACKENDS = ("mowgli", "mavros")
+
+
+def _validate_hardware_backend(context):
+    hardware_backend = LaunchConfiguration("hardware_backend").perform(context)
+    if hardware_backend not in SUPPORTED_HARDWARE_BACKENDS:
+        supported = ", ".join(SUPPORTED_HARDWARE_BACKENDS)
+        raise RuntimeError(
+            f"Invalid hardware_backend '{hardware_backend}'; expected one of: {supported}"
+        )
+    return []
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -70,11 +86,20 @@ def generate_launch_description() -> LaunchDescription:
         description="Serial port connected to the Mowgli firmware board.",
     )
 
+    hardware_backend_arg = DeclareLaunchArgument(
+        "hardware_backend",
+        default_value=EnvironmentVariable(
+            "HARDWARE_BACKEND", default_value="mowgli"
+        ),
+        description="Hardware backend: mowgli or mavros.",
+    )
+
     # ------------------------------------------------------------------
     # Resolved substitutions
     # ------------------------------------------------------------------
     use_sim_time = LaunchConfiguration("use_sim_time")
     serial_port = LaunchConfiguration("serial_port")
+    hardware_backend = LaunchConfiguration("hardware_backend")
 
     # ------------------------------------------------------------------
     # Robot config (mowgli_robot.yaml)
@@ -196,6 +221,7 @@ def generate_launch_description() -> LaunchDescription:
         executable="hardware_bridge_node",
         name="hardware_bridge",
         output="screen",
+        condition=IfCondition(EqualsSubstitution(hardware_backend, "mowgli")),
         parameters=[
             hardware_bridge_params,
             # Allow command-line override of the serial port.
@@ -299,6 +325,8 @@ def generate_launch_description() -> LaunchDescription:
         [
             use_sim_time_arg,
             serial_port_arg,
+            hardware_backend_arg,
+            OpaqueFunction(function=_validate_hardware_backend),
             robot_state_publisher_node,
             hardware_bridge_node,
             twist_mux_node,
