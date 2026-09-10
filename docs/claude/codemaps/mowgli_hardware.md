@@ -114,8 +114,9 @@ Relative names are remapped in `mowgli.launch.py` (:257–267). QoS is `rclcpp::
 | `~/cmd_vel_applied` → `/hardware_bridge/cmd_vel_applied` | `geometry_msgs/msg/TwistStamped` | pub | exact float32 command encoded into the `LlCmdVel` packet; includes normal, dig-escape and stop packets. Firmware safety may still reject it. Diagnostic rosbag reference for `/cmd_vel` shaping. |
 | `~/cmd_vel` → `/cmd_vel` | `geometry_msgs/msg/TwistStamped` | sub | `SystemDefaultsQoS`; publisher is twist_mux `cmd_vel_out` (`mowgli.launch.py` :284; lanes in `config/twist_mux.yaml`, no `locks:`) |
 | `/gps/status` | `mowgli_interfaces/msg/GnssStatus` | sub | → `gps_quality_` for the firmware LED, and the dig trust gate (`HorizontalAccuracyMeters`, `BehaviorTreeRtkFixed` from `mowgli_interfaces/gnss_status_utils.hpp`) |
+| `/gps/absolute_pose` | `mowgli_interfaces/msg/AbsolutePose` | sub | Fresh RTK-Fixed receiver position used as an independent false-positive veto: a dig is suppressed when raw RTK proves the chassis progressed even though the fused graph lagged. |
 | `/behavior_tree_node/high_level_status` | `mowgli_interfaces/msg/HighLevelStatus` | sub | → `current_mode_` mirrored to firmware via `LlHighLevelState` |
-| `/odometry/filtered_map` | `nav_msgs/msg/Odometry` | sub | `SensorDataQoS` (best-effort; the in-code comment claims it matches fusion_graph, which actually publishes plain reliable `QoS(10)` — compatible either way); dig detector reference pose |
+| `/odometry/filtered_map` | `nav_msgs/msg/Odometry` | sub | `SensorDataQoS` (best-effort; fusion_graph publishes reliable `QoS(10)`, which is compatible); primary dig-detector reference and map-frame event location. |
 
 ### Services & actions
 

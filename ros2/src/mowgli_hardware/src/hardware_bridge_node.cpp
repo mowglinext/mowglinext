@@ -132,6 +132,7 @@ static const char* high_level_mode_name(const uint8_t mode)
 
 #include "mowgli_interfaces/gnss_observation_freshness.hpp"
 #include "mowgli_interfaces/gnss_status_utils.hpp"
+#include "mowgli_interfaces/msg/absolute_pose.hpp"
 #include "mowgli_interfaces/msg/dig_event.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/gnss_status.hpp"
@@ -930,6 +931,31 @@ private:
           dig_gnss_rtk_fixed_ = mowgli_interfaces::gnss_status_utils::BehaviorTreeRtkFixed(*msg);
         });
 
+    // Independent RTK position used only to veto false dig detections. The
+    // fused map pose remains the primary reference, but it can lag when the
+    // graph rejects an otherwise valid fix. A fresh raw RTK displacement then
+    // proves that the chassis moved and prevents a harmful stop + reverse.
+    sub_gps_absolute_pose_ = create_subscription<mowgli_interfaces::msg::AbsolutePose>(
+        "/gps/absolute_pose",
+        rclcpp::QoS(10),
+        [this](mowgli_interfaces::msg::AbsolutePose::ConstSharedPtr msg)
+        {
+          const bool is_fixed =
+              msg->source == mowgli_interfaces::msg::AbsolutePose::SOURCE_GPS &&
+              (msg->flags & mowgli_interfaces::msg::AbsolutePose::FLAG_GPS_RTK_FIXED) != 0u;
+          const double x = msg->pose.pose.position.x;
+          const double y = msg->pose.pose.position.y;
+          if (!is_fixed || !std::isfinite(x) || !std::isfinite(y))
+          {
+            have_dig_gnss_pose_ = false;
+            return;
+          }
+          last_dig_gnss_pose_x_ = x;
+          last_dig_gnss_pose_y_ = y;
+          last_dig_gnss_pose_time_ = now();
+          have_dig_gnss_pose_ = true;
+        });
+
     // Mirror the behavior tree's high-level state to the firmware so it
     // knows when to accept cmd_vel (mode != IDLE).
     sub_hl_status_ = create_subscription<mowgli_interfaces::msg::HighLevelStatus>(
@@ -956,9 +982,9 @@ private:
                        msg->state_name.c_str());
         });
 
-    // GNSS-anchored fused pose — the ONLY signal on this robot independent
-    // of the wheels, and therefore the only one that can witness a dig.
-    // SensorDataQoS to match fusion_graph's publisher.
+    // GNSS-anchored fused pose is the dig detector's primary reference and
+    // the map-frame location used for an event. SensorDataQoS matches the
+    // fusion_graph publisher.
     sub_filtered_map_ = create_subscription<nav_msgs::msg::Odometry>(
         "/odometry/filtered_map",
         rclcpp::SensorDataQoS(),
@@ -3118,7 +3144,10 @@ private:
     // firmware backstop still covers the blocked-wheel case meanwhile.
     const bool pose_fresh =
         have_map_pose_ && (tick_now - last_map_pose_time_).seconds() < dig_pose_timeout_s_;
-    if (!pose_fresh)
+    const bool independent_pose_fresh =
+        have_dig_gnss_pose_ &&
+        (tick_now - last_dig_gnss_pose_time_).seconds() < dig_pose_timeout_s_;
+    if (!pose_fresh || !independent_pose_fresh)
     {
       dig_invalidate_baselines();
       return;
@@ -3154,10 +3183,25 @@ private:
                                          last_map_pose_y_,
                                          trust_sigma,
                                          yaw_rate,
-                                         dt);
+                                         dt,
+                                         last_dig_gnss_pose_x_,
+                                         last_dig_gnss_pose_y_);
 
     if (verdict.action != DigAction::kDig)
     {
+      const double progress_floor = dig_cfg_.progress_fraction * verdict.wheel_dist;
+      if (verdict.wheel_dist >= dig_cfg_.min_wheel_dist && verdict.map_dist < progress_floor &&
+          verdict.independent_dist >= progress_floor)
+      {
+        RCLCPP_WARN_THROTTLE(get_logger(),
+                             *get_clock(),
+                             5000,
+                             "Dig candidate vetoed: encoders %.2f m, fused pose %.2f m, "
+                             "raw RTK %.2f m — chassis progress confirmed.",
+                             verdict.wheel_dist,
+                             verdict.map_dist,
+                             verdict.independent_dist);
+      }
       return;
     }
 
@@ -3168,12 +3212,14 @@ private:
   {
     RCLCPP_WARN(get_logger(),
                 "DIG DETECTED at map (%.2f, %.2f): encoders claimed %.2f m but the fused "
-                "pose moved %.2f m (GNSS sigma %.3f m, graph sigma %.3f m). "
+                "pose moved %.2f m and raw RTK moved %.2f m "
+                "(GNSS sigma %.3f m, graph sigma %.3f m). "
                 "Hard stop + bounded reverse.",
                 last_map_pose_x_,
                 last_map_pose_y_,
                 verdict.wheel_dist,
                 verdict.map_dist,
+                verdict.independent_dist,
                 dig_gnss_acc_m_,
                 last_map_sigma_);
 
@@ -3445,6 +3491,13 @@ private:
   double last_map_sigma_{0.0};
   rclcpp::Time last_map_pose_time_{0, 0, RCL_ROS_TIME};
 
+  /// Fresh RTK-Fixed receiver position. It is an independent false-positive
+  /// veto for the fused-pose dig comparison, never a wheel-derived signal.
+  bool have_dig_gnss_pose_{false};
+  double last_dig_gnss_pose_x_{0.0};
+  double last_dig_gnss_pose_y_{0.0};
+  rclcpp::Time last_dig_gnss_pose_time_{0, 0, RCL_ROS_TIME};
+
   /// Receiver-reported position quality, for the dig detector's trust gate.
   /// The factor graph's own marginal is NOT usable for this — see
   /// dig_detector.hpp.
@@ -3474,6 +3527,7 @@ private:
   bool have_dig_tick_{false};
   rclcpp::Time last_dig_tick_{0, 0, RCL_ROS_TIME};
   rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr sub_gnss_status_;
+  rclcpp::Subscription<mowgli_interfaces::msg::AbsolutePose>::SharedPtr sub_gps_absolute_pose_;
   rclcpp::Subscription<mowgli_interfaces::msg::HighLevelStatus>::SharedPtr sub_hl_status_;
 
   rclcpp::Service<mowgli_interfaces::srv::MowerControl>::SharedPtr srv_mower_control_;

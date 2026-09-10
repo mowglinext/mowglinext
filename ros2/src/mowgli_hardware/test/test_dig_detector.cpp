@@ -552,6 +552,71 @@ TEST(DigTrustSigma, GraphMarginalWouldBlockWhereReceiverAccuracyDoesNot)
       << "receiver accuracy at the same instant";
 }
 
+// Field regression 2026-09-10: during healthy transit the fused graph moved
+// only 0.05 m in the detector window after rejecting a valid RTK fix, while
+// raw RTK moved 0.20 m and the wheels claimed 0.29 m. Fused-only detection
+// hard-stopped and reversed the moving robot, then stamped a keepout under it.
+TEST(DigDetector, RawRtkProgressVetoesLaggingGraphFalsePositive)
+{
+  mh::DigDetectorCfg cfg;
+  mh::DigDetectorState st;
+  mh::DigVerdict verdict;
+  constexpr int kTicks = 13;
+  for (int i = 0; i < kTicks; ++i)
+  {
+    const double fraction = static_cast<double>(i) / static_cast<double>(kTicks - 1);
+    verdict = mh::DigDecide(cfg,
+                            st,
+                            0.20,
+                            0.29 / static_cast<double>(kTicks),
+                            0.05 * fraction,
+                            0.0,
+                            0.014,
+                            0.0,
+                            0.1,
+                            0.20 * fraction,
+                            0.0);
+    if (verdict.wheel_dist > 0.0)
+    {
+      break;
+    }
+  }
+
+  EXPECT_EQ(verdict.action, mh::DigAction::kNone);
+  EXPECT_GT(verdict.wheel_dist, 0.25);
+  EXPECT_LT(verdict.map_dist, 0.06);
+  EXPECT_GT(verdict.independent_dist, 0.18);
+}
+
+TEST(DigDetector, RawRtkConfirmsARealDig)
+{
+  mh::DigDetectorCfg cfg;
+  mh::DigDetectorState st;
+  mh::DigVerdict verdict;
+  constexpr int kTicks = 13;
+  for (int i = 0; i < kTicks; ++i)
+  {
+    const double fraction = static_cast<double>(i) / static_cast<double>(kTicks - 1);
+    verdict = mh::DigDecide(cfg,
+                            st,
+                            0.20,
+                            0.29 / static_cast<double>(kTicks),
+                            0.05 * fraction,
+                            0.0,
+                            0.014,
+                            0.0,
+                            0.1,
+                            0.02 * fraction,
+                            0.0);
+    if (verdict.action == mh::DigAction::kDig)
+    {
+      break;
+    }
+  }
+
+  EXPECT_EQ(verdict.action, mh::DigAction::kDig);
+}
+
 TEST(DigGnssFreshness, GenuineRtkObservationPermitsExistingTrustPolicy)
 {
   freshness::PhysicalObservationTracker tracker;

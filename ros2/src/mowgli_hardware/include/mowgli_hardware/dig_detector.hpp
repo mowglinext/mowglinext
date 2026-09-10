@@ -212,6 +212,9 @@ struct DigVerdict
   DigAction action = DigAction::kNone;
   double wheel_dist = 0.0;  ///< worst wheel's claimed ground travel [m]
   double map_dist = 0.0;  ///< fused-pose NET displacement over the window [m]
+  /// Raw RTK position displacement over the same window [m]. Infinity means
+  /// that no independent confirmation was supplied by the caller.
+  double independent_dist = std::numeric_limits<double>::infinity();
 };
 
 /// Caller-owned window accumulators (mirrors ftc_stall's in-place state).
@@ -225,6 +228,9 @@ struct DigDetectorState
   bool have_anchor = false;
   double anchor_x = 0.0;
   double anchor_y = 0.0;
+  bool have_independent_anchor = false;
+  double independent_anchor_x = 0.0;
+  double independent_anchor_y = 0.0;
 };
 
 inline void DigResetWindow(DigDetectorState& st)
@@ -245,6 +251,10 @@ inline void DigResetWindow(DigDetectorState& st)
 ///                   DigTrustSigma — infinity when it cannot be established
 /// @param yaw_rate   MEASURED (gyro) yaw rate [rad/s] — never wheel-derived
 /// @param dt         tick duration [s]
+/// @param independent_x raw RTK position x [m], used only as a false-positive
+///                      veto when supplied with independent_y
+/// @param independent_y raw RTK position y [m], used only as a false-positive
+///                      veto when supplied with independent_x
 inline DigVerdict DigDecide(const DigDetectorCfg& cfg,
                             DigDetectorState& st,
                             double cmd_speed,
@@ -253,7 +263,9 @@ inline DigVerdict DigDecide(const DigDetectorCfg& cfg,
                             double map_y,
                             double pos_sigma,
                             double yaw_rate,
-                            double dt)
+                            double dt,
+                            double independent_x = std::numeric_limits<double>::quiet_NaN(),
+                            double independent_y = std::numeric_limits<double>::quiet_NaN())
 {
   if (!cfg.enabled || dt <= 0.0)
   {
@@ -287,6 +299,12 @@ inline DigVerdict DigDecide(const DigDetectorCfg& cfg,
     st.anchor_x = map_x;
     st.anchor_y = map_y;
     st.have_anchor = true;
+    if (std::isfinite(independent_x) && std::isfinite(independent_y))
+    {
+      st.independent_anchor_x = independent_x;
+      st.independent_anchor_y = independent_y;
+      st.have_independent_anchor = true;
+    }
   }
 
   st.window_time += dt;
@@ -298,14 +316,27 @@ inline DigVerdict DigDecide(const DigDetectorCfg& cfg,
   }
 
   const double map_dist = std::hypot(map_x - st.anchor_x, map_y - st.anchor_y);
+  const double independent_dist =
+      st.have_independent_anchor && std::isfinite(independent_x) && std::isfinite(independent_y)
+          ? std::hypot(independent_x - st.independent_anchor_x,
+                       independent_y - st.independent_anchor_y)
+          : std::numeric_limits<double>::infinity();
 
   const bool wheels_claim_travel = st.wheel_dist >= cfg.min_wheel_dist;
   const bool map_disagrees = map_dist < cfg.progress_fraction * st.wheel_dist;
+  // The fused pose remains the detector's primary reference. Raw RTK is an
+  // independent veto: if it directly observed enough chassis displacement,
+  // the graph merely lagged or rejected a valid fix and a hard-stop/reverse
+  // would create the very surface damage this detector is meant to prevent.
+  const bool independent_disagrees =
+      !st.have_independent_anchor || independent_dist < cfg.progress_fraction * st.wheel_dist;
 
-  const DigVerdict verdict{(wheels_claim_travel && map_disagrees) ? DigAction::kDig
-                                                                  : DigAction::kNone,
+  const DigVerdict verdict{(wheels_claim_travel && map_disagrees && independent_disagrees)
+                               ? DigAction::kDig
+                               : DigAction::kNone,
                            st.wheel_dist,
-                           map_dist};
+                           map_dist,
+                           independent_dist};
 
   DigResetWindow(st);  // start a fresh window either way
   return verdict;
