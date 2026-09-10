@@ -37,7 +37,9 @@
 #include "mowgli_localization/navsat_to_absolute_pose_node.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <iomanip>
 #include <sstream>
 
@@ -56,6 +58,15 @@ static constexpr double DEG_TO_RAD = M_PI / 180.0;
 
 /// Metres per degree of latitude (approximate, at the equator).
 static constexpr double METERS_PER_DEG = EARTH_RADIUS_M * DEG_TO_RAD;
+
+/// Monotonic delivery clock. Kept strictly separate from the ROS clock used
+/// for receipt provenance — the freshness policy never mixes the two domains.
+static std::int64_t steady_now_ns()
+{
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
 
 // ---------------------------------------------------------------------------
 // Constructor
@@ -194,6 +205,29 @@ void NavSatToAbsolutePoseNode::on_navsat_fix(sensor_msgs::msg::NavSatFix::ConstS
   // Store latest fix for set_datum service.
   last_fix_ = *msg;
   has_fix_ = true;
+
+  // Receiver-observation identity, evaluated before anything is published.
+  // A frozen receiver still produces callbacks: the adapter republishes the
+  // last accepted fix on its own timer with the receipt stamp unchanged, so
+  // arrival time says "live" while the physical observation behind it is
+  // minutes old. Compare provenance, never callback time and never
+  // coordinates (a stationary robot legitimately repeats coordinates).
+  const rclcpp::Time ros_now = now();
+  const rclcpp::Time receipt_stamp(msg->header.stamp, get_clock()->get_clock_type());
+  const auto observation_update = fix_observation_tracker_.Observe(0,
+                                                                   receipt_stamp.nanoseconds(),
+                                                                   ros_now.nanoseconds(),
+                                                                   steady_now_ns());
+  using mowgli_interfaces::gnss_observation_freshness::IsAcceptedObservation;
+  using mowgli_interfaces::gnss_observation_freshness::ObservationUpdate;
+  const bool observation_is_new = IsAcceptedObservation(observation_update);
+  if (!observation_is_new && observation_update == ObservationUpdate::kInvalidProvenance)
+  {
+    RCLCPP_WARN_THROTTLE(get_logger(),
+                         *get_clock(),
+                         5000,
+                         "GNSS receipt stamp is zero/future; /gps/pose_cov withheld");
+  }
 
   using AbsPose = mowgli_interfaces::msg::AbsolutePose;
   using NavSat = sensor_msgs::msg::NavSatFix;
@@ -335,6 +369,21 @@ void NavSatToAbsolutePoseNode::on_navsat_fix(sensor_msgs::msg::NavSatFix::ConstS
   out.pose.pose.position.x = base_x;
   out.pose.pose.position.y = base_y;
   pose_pub_->publish(out);
+
+  // Freshness gate on the localization-fusion twin only. /gps/absolute_pose
+  // above stays a faithful mirror of what the driver delivered (it carries
+  // its own stamp and flags, and the GUI reasons about both), but
+  // /gps/pose_cov is consumed as an ABSOLUTE ANCHOR — map_server averages it
+  // into the dock pose. Re-emitting a frozen observation there manufactures
+  // fresh-looking evidence out of one old measurement: the averaging window
+  // fills with copies of a single sample, so its spread collapses and the
+  // result looks more confident the longer the receiver has been dead.
+  // Arrival-time staleness checks downstream cannot see this, because the
+  // republication makes arrival time current.
+  if (!observation_is_new)
+  {
+    return;
+  }
 
   // RTK-aware gate: skip standalone (no RTK) fixes — those have σ ~ 1-3 m
   // and jump erratically under multipath. RTK Float (σ ~ 20 cm) is fused

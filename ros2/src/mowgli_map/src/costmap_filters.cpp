@@ -126,7 +126,7 @@ void MapServerNode::publish_keepout_mask()
     accumulate_polygon(area.polygon);
     for (const auto& obs : area.obstacles)
     {
-      accumulate_polygon(obs);
+      accumulate_polygon(obs.polygon);
     }
   }
   for (const auto& obs : obstacle_polygons_)
@@ -299,7 +299,7 @@ void MapServerNode::publish_keepout_mask()
       {
         for (const auto& obs : areas_[a].obstacles)
         {
-          if (cell_hits_obstacle(pt, obs))
+          if (cell_hits_obstacle(pt, obs.polygon))
           {
             lethal = true;
             break;

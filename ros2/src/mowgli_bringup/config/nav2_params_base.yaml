@@ -337,13 +337,23 @@ controller_server:
     # F2C route as one continuous goal — FTC tracks it; no per-swath feeding.
     FollowCoveragePath:
       plugin: "mowgli_nav2_plugins/FTCController"
-      # Carrot speed. speed_fast is overridden at launch by mowing_speed.
+      # Carrot speed. BOTH are overridden at launch (navigation.launch.py):
+      #   speed_fast = mowing_speed
+      #   speed_slow = clamp(mowing_speed * turn_speed_ratio,
+      #                      min_speed_mps, mowing_speed)
+      # Editing the literals below therefore does NOT change the running robot —
+      # change mowing_speed / turn_speed_ratio in mowgli_robot.yaml instead.
       speed_fast: 0.20
       speed_fast_threshold: 0.5
       speed_fast_threshold_angle: 10.0
-      # 0.16 kept conservative. The host clamp is now the RUNTIME param
-      # min_linear_vel (hardware_bridge_node.cpp, default 0.05 — not the old
-      # kMinLinVel=0.15), so this MAY be lowered.
+      # speed_slow is FTC's target wherever the path BENDS — every swath-end
+      # turn-around arc and every headland corner fillet. It used to be a STATIC
+      # 0.16 while speed_fast tracked the operator's mowing_speed, so an operator
+      # on mowing_speed=0.15 drove the TURNS 7 % FASTER than the straights —
+      # backwards everywhere, and worst exactly where the robot carves the lawn
+      # (issue #499). It is now derived; this literal is the fallback for a
+      # launch that cannot read the robot config, and 0.16 == 0.8 x the 0.20
+      # above, so the derived value reproduces it for a default robot.
       speed_slow: 0.16
       speed_angular: 45.0
       acceleration: 0.2
@@ -478,6 +488,24 @@ controller_server:
       # OVERRIDDEN AT LAUNCH by mowgli_robot.yaml's obstacle_clearance_margin,
       # clamped [0.0, 0.50] — see navigation.launch.py.
       obstacle_clearance_margin: 0.05
+      # Zone-MASK obstacle detection (issue #517). A lethal cell in the LOCAL
+      # obstacle costmap that is ALSO lethal in the GLOBAL keepout costmap
+      # (outside the mowing area, or inside a keepout hole) is NOT an obstacle
+      # for the deviation logic — the coverage path was planned to pass beside
+      # it and never enters it. 2026-09-02 FIELD (LiDAR mow #2, 73 min): 71
+      # "lateral deviation needed > max_lateral_deviation" strip aborts, in two
+      # clusters — 35 on the diagonal area boundary (the hedge it was recorded
+      # along) and 33 beside a ~1.5 m keepout island (a tree) — with scan_min
+      # 0.80–0.86 m at the abort rows vs 0 beams within 1 m elsewhere: the
+      # object was real, the path ends chassis_safety_inset (0.20 m) short of
+      # the boundary and U-turns there, so the 0.50 m-long lookahead footprints
+      # reached it at every row end. Each abort cost obstacle_wait_timeout_s +
+      # a reverse escape + a re-dispatch and skipped 0.80 m of path (the
+      # resume-cursor step). Reuses the confine_deviation_to_zone boundary
+      # costmap, so it is inert until that costmap arrives (old behaviour);
+      # in-zone obstacles keep the exact current behaviour and collision_monitor
+      # remains the real-time guard for anything the mask drops.
+      ignore_obstacles_outside_zone: true
       enable_obstacle_deviation: true
       # OVERRIDDEN AT LAUNCH: navigation.launch.py injects
       # mowgli_robot.yaml.max_obstacle_avoidance_distance (default 2.0,
@@ -603,14 +631,23 @@ behavior_server:
     # (often map→odom jump artefacts or dock residue). 2.0s refused every
     # undock.
     simulate_ahead_time: 0.5
-    # 2.5 rad/s (was 1.0) — robot can do ~3.14 rad/s on the bench
-    # (360° in ~2 s). Spin recovery should use the real envelope so a
-    # 90° recovery turn finishes in ~0.6 s instead of 1.6 s.
-    max_rotational_vel: 2.5
+    # 1.0 rad/s (was 2.5, 2026-06-15 → 2026-09-02). 2.5 rad/s was set from a
+    # bench figure ("robot can do ~3.14 rad/s"); on grass it is the violent
+    # pivot the operator reported as digging holes at swath ends (#499). The
+    # 2026-09-02 LiDAR mow recorded the chassis gyro at 2.46 rad/s during the
+    # five Spin recoveries of the run (cmd_vel = 2.50 rad/s from a standstill,
+    # rotational_acc_lim 5.0) — the ONLY source of >1 rad/s rotation in the
+    # whole mow; FTC's own pivots are capped at max_cmd_vel_ang 0.8. A 90°
+    # recovery turn now takes ~1.6 s instead of ~0.6 s; that second is cheap
+    # next to a hole. Keep min_rotational_vel below this value.
+    max_rotational_vel: 1.0
     # 0.85 rad/s ≈ wheel vel 0.14 m/s per wheel (PWM 42 > deadband).
     # Lower floor let Spin behavior dither at sub-deadband ω.
     min_rotational_vel: 0.85
-    rotational_acc_lim: 5.0
+    # 2.0 rad/s² (was 5.0): a 5 rad/s² step from rest on turf is exactly the
+    # inner-wheel reversal / tyre carving of #499; 2.0 reaches 1.0 rad/s in
+    # 0.5 s, which the firmware yaw-rate loop tracks without slip.
+    rotational_acc_lim: 2.0
 
 # ---------------------------------------------------------------------------
 # Waypoint follower
@@ -882,6 +919,9 @@ docking_server:
     dock_approach_timeout: 30.0
     undock_linear_tolerance: 0.05
     undock_angular_tolerance: 0.1
+    # Static default; OVERRIDDEN at launch from mowgli_robot.yaml
+    # dock_max_retries (navigation.launch.py _inject_dock_pose_and_speeds).
+    # Editing the value here does NOT stick — see issue #192 / #195.
     max_retries: 3
     base_frame: base_footprint
     fixed_frame: odom
@@ -1038,6 +1078,12 @@ docking_server:
       # in odom. Keep false here so disabling the feature restores the legacy
       # path cleanly.
       use_external_detection_pose: false
+      # Static default; OVERRIDDEN at launch from mowgli_robot.yaml
+      # dock_use_charger_detection (navigation.launch.py
+      # _inject_dock_pose_and_speeds). Editing the value here does NOT stick.
+      # false = dock success falls back to pose proximity alone (with
+      # use_stall_detection also false), so wait_charge_timeout stops gating
+      # contact — see issue #195.
       use_battery_status: true
       battery_topic: "/battery_state"
       use_stall_detection: false
@@ -1119,6 +1165,11 @@ coverage_server:
     # swaths, unless num_headland_passes (>0) forces a count. INJECTED at
     # launch from mowgli_robot.yaml.headland_width.
     default_headland_width: 0.20
+    # num_headland_passes: <0 = NONE (no perimeter rings — the serpentine swaths
+    # mow to the boundary, #429), 0 = auto (ceil(default_headland_width /
+    # operation_width), min 1), >0 = exactly that many rings. The value below is
+    # the node default for isolated runs; OVERWRITTEN at launch from
+    # mowgli_robot.yaml.num_headland_passes.
     num_headland_passes: 0
     # chassis_safety_inset: polygon pull-back applied before all planning so
     # the chassis cannot cross the boundary under tracking error. INJECTED at

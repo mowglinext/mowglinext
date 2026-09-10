@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	types2 "github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/samber/lo"
@@ -136,6 +138,17 @@ func ContainerLogsRoutes(group *gin.RouterGroup, provider types2.IDockerProvider
 			}
 		}(conn)
 
+		// A container created WITHOUT a TTY has its stdout/stderr multiplexed
+		// by the daemon and must be demultiplexed; a TTY stream is raw. No
+		// compose file in this repo sets `tty:`, so the multiplexed path is
+		// the live one, but inspect rather than assume. An inspect failure is
+		// not fatal — fall back to the multiplexed reading, which is what the
+		// daemon produces by default.
+		tty := false
+		if details, inspectErr := provider.ContainerInspect(context.Background(), containerID); inspectErr == nil {
+			tty = details.Tty
+		}
+
 		/*
 		   read the logs from docker using docker SDK. be noticed that the Follow value must set to true.
 		*/
@@ -150,24 +163,72 @@ func ContainerLogsRoutes(group *gin.RouterGroup, provider types2.IDockerProvider
 				fmt.Println("error closing reader: ", err.Error())
 			}
 		}(reader)
-		/*
-		   send log lines to channel
-		*/
-		rd := bufio.NewReader(reader)
-		for {
-			// read lines from the reader
-			str, _, err := rd.ReadLine()
-			if err != nil {
-				log.Println("Read Error:", err.Error())
-				return
-			}
-			// send events to client
-			err = conn.WriteMessage(websocket.TextMessage, []byte(base64.StdEncoding.EncodeToString(str)))
-			if err != nil {
-				log.Println("Write Error:", err.Error())
-				return
-			}
-			// send the lines to channel
+
+		err = StreamContainerLogLines(reader, tty, func(line []byte) error {
+			return conn.WriteMessage(websocket.TextMessage, []byte(base64.StdEncoding.EncodeToString(line)))
+		})
+		if err != nil && !errors.Is(err, io.EOF) {
+			log.Println("Log stream error:", err.Error())
 		}
 	})
+}
+
+// MaxLogLineBytes caps how much of a single over-long log line is reassembled
+// before the rest is dropped. bufio's reader hands back long lines in 4 KiB
+// fragments; emitting those fragments as separate WebSocket messages splits one
+// log line into several, and only the first carries the producer timestamp — so
+// the continuations would render with the browser clock. Reassembling needs a
+// bound, or a container dumping a binary blob on stdout grows it without limit.
+const MaxLogLineBytes = 256 * 1024
+
+// StreamContainerLogLines turns a docker log stream into whole log lines and
+// hands each one to emit. It stops and returns the first error from either the
+// stream or emit (io.EOF when the stream ends normally).
+//
+// When tty is false the stream is multiplexed: the daemon frames every chunk
+// with an 8-byte header ([stream][0,0,0][size big-endian]). Reading that raw
+// leaves the header glued to the front of each line, which defeats every
+// ^-anchored producer pattern in gui/web/src/utils/logTime.ts (the RFC3339
+// stamp added by ContainerLogsOptions.Timestamps would land at byte 8, not byte
+// 0), and the big-endian size field can itself contain 0x0A and split a line
+// mid-frame. stdcopy.StdCopy strips the framing; it must NOT be used on a TTY
+// stream, which carries no framing at all.
+func StreamContainerLogLines(reader io.Reader, tty bool, emit func(line []byte) error) error {
+	src := reader
+	if !tty {
+		pr, pw := io.Pipe()
+		defer func() { _ = pr.Close() }()
+		go func() {
+			_, copyErr := stdcopy.StdCopy(pw, pw, reader)
+			_ = pw.CloseWithError(copyErr)
+		}()
+		src = pr
+	}
+
+	rd := bufio.NewReader(src)
+	var pending []byte
+	for {
+		// ReadLine returns a slice into the reader's own buffer, valid only
+		// until the next read, and sets isPrefix when the line did not fit.
+		chunk, isPrefix, err := rd.ReadLine()
+		if err != nil {
+			return err
+		}
+		if isPrefix || len(pending) > 0 {
+			if remaining := MaxLogLineBytes - len(pending); remaining > 0 {
+				if len(chunk) > remaining {
+					chunk = chunk[:remaining]
+				}
+				pending = append(pending, chunk...)
+			}
+			if isPrefix {
+				continue
+			}
+			chunk = pending
+			pending = nil
+		}
+		if err := emit(chunk); err != nil {
+			return err
+		}
+	}
 }

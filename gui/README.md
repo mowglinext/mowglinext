@@ -8,70 +8,20 @@ A GUI for the MowgliNext project.
 
 ## Installation
 
-### If you are using Mowgli-Docker
+The GUI ships as a container and is installed with the rest of the stack: the interactive installer
+(`install/mowglinext.sh`, or `curl -sSL https://mowgli.garden/install.sh | bash`) enables the
+[`install/compose/docker-compose.gui.yml`](../install/compose/docker-compose.gui.yml) overlay for
+you, so there is nothing to wire up by hand.
 
-If you are using mowgli-docker, you can skip this part as it's now included in the docker-compose file.
+That overlay runs the `mowgli-gui` container from
+`ghcr.io/mowglinext/mowglinext/mowglinext-gui:<main|dev>` with `network_mode: host` (and `pid: host`,
+so the power menu can run the host's `systemctl reboot` / `poweroff`), and mounts the docker socket,
+`/dev`, the bitcask database directory and the robot config directories.
 
-### If your are using MowgliNextOS
-
-MowgliNextOS uses podman and containers are managed by systemd.
-
-First, create the /boot/mowglinext/db directory :
-
-```bash
-mkdir /boot/mowglinext/db
-```
-
-Create a gui.service file in `/etc/systemd/system/` with the following content:
+To build the image yourself:
 
 ```bash
-[Unit]
-Description=Podman container - gui.service
-Documentation=man:podman-generate-systemd(1)
-Wants=network.target
-After=network-online.target NetworkManager.service
-StartLimitInterval=120
-StartLimitBurst=10
-
-[Service]
-Environment=PODMAN_SYSTEMD_UNIT=%n
-Type=forking
-Restart=always
-RestartSec=15s
-TimeoutStartSec=1h
-TimeoutStopSec=120s
-
-ExecStartPre=/bin/rm -f %t/container-gui.pid %t/container-gui.ctr-id
-
-ExecStart=/usr/bin/podman run --conmon-pidfile %t/container-gui.pid --cidfile %t/container-gui.ctr-id --cgroups=no-conmon \
-  --replace --detach --tty --privileged \
-  --name mowglinext-gui \
-  --network=host \
-  --env MOWER_CONFIG_FILE=/config/mower_config.sh \
-  --env DOCKER_HOST=unix:///run/podman/podman.sock \
-  --env ROS_MASTER_URI=http://localhost:11311 \
-  --volume /dev:/dev \
-  --volume /run/podman/podman.sock:/run/podman/podman.sock \
-  --volume /boot/mowglinext/db:/app/db \
-  --volume /boot/mowglinext/mower_config.txt:/config/mower_config.sh \
-  --label io.containers.autoupdate=image \
-  ghcr.io/mowglinext/mowglinext-gui:master
-
-#ExecStartPost=/usr/bin/podman image prune --all --force
-
-ExecStop=/usr/bin/podman stop --ignore --cidfile %t/container-gui.ctr-id -t 10
-ExecStopPost=/usr/bin/podman rm --ignore --force --cidfile %t/container-gui.ctr-id
-PIDFile=%t/container-gui.pid
-
-[Install]
-WantedBy=multi-user.target default.target
-```
-
-Then enable and start the service:
-
-```bash
-sudo systemctl enable gui.service
-sudo systemctl start gui.service
+cd gui && make build      # docker build -t mowglinext .
 ```
 
 ## Usage
@@ -81,46 +31,74 @@ to `http://<ip of the machine running the container>:4006`
 
 ### HomeKit
 
-The password to use MowgliNext in iOS home app is 00102003
+The default password to use MowgliNext in iOS home app is 00102003 (override it with HOMEKIT_PINCODE)
 Do not forget to set env var HOMEKIT_ENABLED to true
 
 ### MQTT
 
-MQTT server is listening on port 1883
+With MQTT_ENABLED set to true the GUI runs its own MQTT broker, listening on MQTT_HOST (default
+port 1883). Every topic and command below is prefixed with MQTT_PREFIX (default `/gui`).
 
-See [ros.ts](web%2Fsrc%2Ftypes%2Fros.ts) for topic types
+Payloads are the JSON form of the ROS2 message — see
+[ros.generated.ts](web/src/types/ros.generated.ts) for the message types.
 
-Available topics :
+Available topics (published retained):
 
-- /gui/mower_logic/current_state
-- /gui/mower/status
-- /gui/xbot_positioning/xb_pose
-- /gui/imu/data_raw
-- /gui/mower/wheel_ticks
-- /gui/xbot_monitoring/map
-- /gui/coverage_planner_node/coverage_path
-- /gui/mowing_path
+- /gui/highLevelStatus — behavior tree state (`/behavior_tree_node/high_level_status`)
+- /gui/status — hardware bridge status (`/hardware_bridge/status`)
+- /gui/pose — fused map pose (`/odometry/filtered_map`)
+- /gui/gps — `/gps/fix`
+- /gui/imu — `/imu/data`
+- /gui/ticks — `/wheel_ticks`
+- /gui/wheelOdom — `/wheel_odom`
+- /gui/map — areas, obstacles and dock pose (assembled from the map_server services)
+- /gui/path — full coverage plan (`/coverage/full_plan`)
+- /gui/plan — current Nav2 plan (`/plan`)
 
-Available commands :
+Available commands — publish the service request as JSON, see
+[services_generated.go](pkg/msgs/mowgli/services_generated.go):
 
-- /gui/call/mower_service/high_level_control [HighLevelControlSrv.go](pkg%2Fmsgs%2Fmower_msgs%2FHighLevelControlSrv.go)
-- /gui/call/mower_service/emergency [EmergencyStopSrv.go](pkg%2Fmsgs%2Fmower_msgs%2FEmergencyStopSrv.go)
-- /gui/call/mower_logic/set_parameters [Reconfigure.go](pkg%2Fmsgs%2Fdynamic_reconfigure%2FReconfigure.go)
-- /gui/call/mower_service/mow_enabled [MowerControlSrv.go](pkg%2Fmsgs%2Fmower_msgs%2FMowerControlSrv.go)
-- /gui/call/mower_service/start_in_area [StartInAreaSrv.go](pkg%2Fmsgs%2Fmower_msgs%2FStartInAreaSrv.go)
+- /gui/call/behavior_tree_node/high_level_control — `{"command": <n>}`
+- /gui/call/hardware_bridge/emergency_stop — `{"emergency": <n>}`
+- /gui/call/hardware_bridge/mower_control — `{"mow_enabled": <n>, "mow_direction": <n>}`
+- /gui/call/behavior_tree_node/start_in_area — `{"area": <n>}`
 
-Do not forget to set env var MQTT_ENABLED to true
+### IrriSense
+
+Optional soil-moisture gate for scheduled mowing, fed by your own
+[IrriSense Cloud](https://irrisense-cloud.fly.dev) irrigation service. Mint a
+**read-only API token** in IrriSense (Settings → API tokens — a login session is
+rejected), then open Settings → IrriSense in the GUI: paste the token, pick the
+garden (and optionally the zones), and leave "Block scheduled mowing when wet"
+on. The GUI polls the garden every 10 minutes; a zone counts as wet when its
+deficit is ≤ 2 mm or it was watered within the last 3 h (both adjustable), and a
+due schedule is skipped while any selected zone is wet — the reason is shown on
+the schedule card. The gate is fail-open: if the service is unreachable, the
+token is wrong, or the data is older than 90 minutes, the state is "unknown" and
+schedules run as usual. The token lives only in the GUI database
+(`irrisense.token`), is never written to `mowgli_robot.yaml` and is never sent
+back to the browser. Endpoints: `GET/PUT /api/irrisense/settings`,
+`GET /api/irrisense/status`, `GET /api/irrisense/gardens`.
 
 ### Env variables
 
-- MOWER_CONFIG_FILE=mower_config.sh : config file location
-- DOCKER_HOST=unix:///var/run/docker.sock : socker socket
-- ROS_MASTER_URI=http://localhost:11311 : ros master uri
-- ROS_NODE_NAME=mowglinext-gui : node name
-- ROS_NODE_HOST=:4006 : listening port
+Every variable below is only a fallback: the value is read from the GUI database first (Settings
+page), then from the environment, then from the built-in default.
+
+- API_ADDR=:4006 : HTTP + WebSocket listening address
+- WEB_DIR=/app/web : directory the built frontend is served from
+- DB_PATH=/db : bitcask database directory (the image sets `/app/db`; the compose overlay overrides it)
+- FOXGLOVE_URL=ws://localhost:8765 : foxglove_bridge WebSocket, the only link to ROS2
+- DOCKER_HOST=unix:///var/run/docker.sock : docker socket
+- MOWER_CONFIG_FILE=/config/mower_config.sh : legacy shell config file location
+- MOWER_YAML_CONFIG_FILE=/config/mowgli_robot.yaml : the robot's ROS2 config the Settings page edits
+- MOWER_RUNTIME_ENV_FILE=/runtime_config/.env : runtime env file (GNSS / LiDAR install choices)
+- ROSBAG_DIR=/ros2_ws/maps/rosbags : where the diagnostics rosbag recorder writes
 - MQTT_ENABLED=true : enable mqtt
 - MQTT_HOST=:1883 : listening port
+- MQTT_PREFIX=/gui : topic prefix
 - HOMEKIT_ENABLED=true : enable homekit
+- HOMEKIT_PINCODE=00102003 : homekit pairing code
 - MAP_TILE_ENABLED=true : enable map tiles
 - MAP_TILE_SERVER=http://localhost:5000 : custom map tile server (see https://github.com/2m/mowglinext-map-tiles for
   usage)
@@ -130,11 +108,23 @@ Do not forget to set env var MQTT_ENABLED to true
 
 PR are welcomed :-)
 
-You can run the gui into VSCode or WebStorm with devcontainer
+You can run the gui into VSCode or WebStorm with devcontainer (`gui/.devcontainer`)
 
 Then use make deps to install dependencies, open a terminal run make run-gui for the frontend and make run-backend for
 the backend
 
-To generate go msgs, just run inside the repository this docker command:
+After changing a `.msg` or `.srv` in `ros2/src/mowgli_interfaces`, regenerate the Go and TypeScript
+bindings from this directory (use `LC_ALL=C`, macOS sort order fabricates phantom drift) — the
+`msg-codegen-drift.yml` CI job fails otherwise:
 
-docker run -v $PWD:/app ghcr.io/mowglinext/mowglinext-gui:generate-msg
+```bash
+LC_ALL=C ./generate_go_msgs.sh      # pkg/msgs/*/types_generated.go + mowgli/services_generated.go
+LC_ALL=C ./generate_ts_types.sh     # web/src/types/ros.generated.ts
+```
+
+Working on this with a coding agent? Start at [`CLAUDE.md`](CLAUDE.md) in this directory — it points
+at the GUI codemaps ([`gui_backend.md`](../docs/claude/codemaps/gui_backend.md),
+[`gui_frontend.md`](../docs/claude/codemaps/gui_frontend.md)) and the repo-wide indexes
+([`ros-interfaces.md`](../docs/claude/ros-interfaces.md),
+[`parameters.md`](../docs/claude/parameters.md), [`testing-ci.md`](../docs/claude/testing-ci.md),
+[`doc-index.md`](../docs/claude/doc-index.md)).

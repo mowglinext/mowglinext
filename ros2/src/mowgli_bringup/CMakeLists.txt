@@ -79,6 +79,13 @@ if(BUILD_TESTING)
     TIMEOUT 30
   )
 
+  # Static guards for the single-line mowgli_robot.yaml -> node-parameter
+  # injections in the launch files (num_headland_passes, mowing_enabled,
+  # dock_max_retries, dock_use_charger_detection). AST-based, no ROS2 runtime.
+  ament_add_pytest_test(test_launch_injection test/test_launch_injection.py
+    TIMEOUT 30
+  )
+
 endif()
 
 ament_package()

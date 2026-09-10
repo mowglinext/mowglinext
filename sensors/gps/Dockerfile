@@ -42,6 +42,7 @@ COPY ros2/src/external/universal-gnss/gnss_protocols /ws/src/gnss_protocols
 COPY ros2/src/external/universal-gnss/gnss_transport /ws/src/gnss_transport
 COPY ros2/src/external/universal-gnss/gnss_driver /ws/src/gnss_driver
 COPY ros2/src/external/universal-gnss/gnss_ntrip /ws/src/gnss_ntrip
+COPY ros2/src/external/universal-gnss/gnss_runtime /ws/src/gnss_runtime
 COPY ros2/src/external/universal-gnss/gnss_tools /ws/src/gnss_tools
 COPY ros2/src/external/universal-gnss/CMakeLists.txt /ws/gnss_tools_root/CMakeLists.txt
 
@@ -55,6 +56,7 @@ RUN . /opt/ros/kilted/setup.sh \
  && ln -s /ws/src/gnss_driver /ws/gnss_tools_root/gnss_driver \
  && ln -s /ws/src/gnss_transport /ws/gnss_tools_root/gnss_transport \
  && ln -s /ws/src/gnss_ntrip /ws/gnss_tools_root/gnss_ntrip \
+ && ln -s /ws/src/gnss_runtime /ws/gnss_tools_root/gnss_runtime \
  && ln -s /ws/src/gnss_tools /ws/gnss_tools_root/gnss_tools \
  && cmake -S /ws/gnss_tools_root -B /ws/gnss_tools_build \
       -DBUILD_TESTING=OFF \

@@ -1019,12 +1019,12 @@ parse_args() {
             LIDAR_CONNECTION="uart"; LIDAR_BAUD="230400"
             ;;
           stl27l-usb)
-            LIDAR_ENABLED="true"; LIDAR_TYPE="stl27l"; LIDAR_MODEL="STL27L"
-            LIDAR_CONNECTION="usb"; LIDAR_BAUD="230400"; LIDAR_UART_DEVICE=""
+            LIDAR_ENABLED="true"; LIDAR_TYPE="stl27l"; LIDAR_MODEL="LDLiDAR_STL27L"
+            LIDAR_CONNECTION="usb"; LIDAR_BAUD="921600"; LIDAR_UART_DEVICE=""
             ;;
           stl27l-uart)
-            LIDAR_ENABLED="true"; LIDAR_TYPE="stl27l"; LIDAR_MODEL="STL27L"
-            LIDAR_CONNECTION="uart"; LIDAR_BAUD="230400"
+            LIDAR_ENABLED="true"; LIDAR_TYPE="stl27l"; LIDAR_MODEL="LDLiDAR_STL27L"
+            LIDAR_CONNECTION="uart"; LIDAR_BAUD="921600"
             ;;
           *)
             error "Unknown lidar spec: $lidar_spec"

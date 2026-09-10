@@ -36,12 +36,43 @@ BT::NodeStatus RecordArea::onStart()
   // Clear any previous recording
   trajectory_.clear();
 
-  // Parse recording rate
-  double rate_hz = 1.0;
+  // Parse position sampling rate.
+  double rate_hz = kDefaultRecordRateHz;
   getInput<double>("record_rate_hz", rate_hz);
   if (rate_hz <= 0.0)
-    rate_hz = 1.0;
+    rate_hz = kDefaultRecordRateHz;
+
+  // onRunning() only executes when the tree ticks, so the BT tick rate is a
+  // hard ceiling on the achievable sampling rate. Warn rather than silently
+  // under-delivering: a rate that quietly does nothing is exactly the failure
+  // mode that made the old 2 Hz default look like a working knob.
+  double tick_rate_hz = 0.0;
+  if (config().blackboard->get("bt_tick_rate", tick_rate_hz) && tick_rate_hz > 0.0 &&
+      rate_hz > tick_rate_hz)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "RecordArea: record_rate_hz=%.1f exceeds the BT tick_rate=%.1f Hz and cannot be "
+                "achieved; sampling will run at %.1f Hz. Raise tick_rate to sample faster.",
+                rate_hz,
+                tick_rate_hz,
+                tick_rate_hz);
+    rate_hz = tick_rate_hz;
+  }
+
   record_interval_ = std::chrono::milliseconds(static_cast<int>(1000.0 / rate_hz));
+
+  // A tolerance below the sampling floor cannot recover detail that was never
+  // sampled — it only preserves GNSS/steering jitter as extra vertices.
+  double tolerance_check = kDefaultSimplificationToleranceM;
+  getInput<double>("simplification_tolerance", tolerance_check);
+  if (tolerance_check < kMinSampleSpacingM)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "RecordArea: simplification_tolerance=%.3f m is below the %.2f m sampling floor; "
+                "it cannot add boundary detail, only retain jitter.",
+                tolerance_check,
+                kMinSampleSpacingM);
+  }
 
   // Create trajectory preview publisher (latched for GUI)
   if (!trajectory_pub_)
@@ -54,11 +85,15 @@ BT::NodeStatus RecordArea::onStart()
   // Record initial position
   record_position();
   last_record_time_ = std::chrono::steady_clock::now();
+  last_preview_time_ = last_record_time_;
 
   RCLCPP_INFO(ctx->node->get_logger(),
-              "RecordArea: started recording (rate=%.1f Hz, interval=%ld ms)",
+              "RecordArea: started recording (rate=%.1f Hz, interval=%ld ms, "
+              "min spacing=%.2f m, DP tolerance=%.3f m)",
               rate_hz,
-              record_interval_.count());
+              record_interval_.count(),
+              kMinSampleSpacingM,
+              tolerance_check);
 
   return BT::NodeStatus::RUNNING;
 }
@@ -77,7 +112,7 @@ BT::NodeStatus RecordArea::onRunning()
                   trajectory_.size());
 
       // Get parameters
-      double tolerance = 0.2;
+      double tolerance = kDefaultSimplificationToleranceM;
       uint32_t min_verts = 3;
       double min_area_val = 1.0;
       bool is_exclusion = false;
@@ -189,33 +224,51 @@ BT::NodeStatus RecordArea::onRunning()
     }
   }
 
-  // Record position at the configured rate
+  // Sample position at the configured rate.
   auto now = std::chrono::steady_clock::now();
   if (now - last_record_time_ >= record_interval_)
   {
     record_position();
     last_record_time_ = now;
 
-    // Publish trajectory preview
-    nav_msgs::msg::Path preview;
-    preview.header.frame_id = "map";
-    preview.header.stamp = ctx->node->get_clock()->now();
-    for (const auto& pt : trajectory_)
-    {
-      geometry_msgs::msg::PoseStamped pose;
-      pose.header = preview.header;
-      pose.pose.position.x = static_cast<double>(pt.x);
-      pose.pose.position.y = static_cast<double>(pt.y);
-      pose.pose.position.z = 0.0;
-      pose.pose.orientation.w = 1.0;
-      preview.poses.push_back(pose);
-    }
-    trajectory_pub_->publish(preview);
-
     RCLCPP_DEBUG(ctx->node->get_logger(), "RecordArea: %zu points recorded", trajectory_.size());
   }
 
+  // Republish the preview on its OWN, slower clock. Each publish rebuilds the
+  // whole trajectory, so tying it to the sampling rate would make a recording
+  // cost O(n^2) allocations for a preview nobody can perceive that fast.
+  if (now - last_preview_time_ >= preview_interval_)
+  {
+    publish_preview();
+    last_preview_time_ = now;
+  }
+
   return BT::NodeStatus::RUNNING;
+}
+
+void RecordArea::publish_preview()
+{
+  if (!trajectory_pub_)
+  {
+    return;
+  }
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  nav_msgs::msg::Path preview;
+  preview.header.frame_id = "map";
+  preview.header.stamp = ctx->node->get_clock()->now();
+  preview.poses.reserve(trajectory_.size());
+  for (const auto& pt : trajectory_)
+  {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.header = preview.header;
+    pose.pose.position.x = static_cast<double>(pt.x);
+    pose.pose.position.y = static_cast<double>(pt.y);
+    pose.pose.position.z = 0.0;
+    pose.pose.orientation.w = 1.0;
+    preview.poses.push_back(pose);
+  }
+  trajectory_pub_->publish(preview);
 }
 
 void RecordArea::onHalted()
@@ -242,16 +295,12 @@ void RecordArea::record_position()
     pt.y = static_cast<float>(tf.transform.translation.y);
     pt.z = 0.0f;
 
-    // Skip if too close to last point (less than 5cm) to avoid duplicates
-    if (!trajectory_.empty())
+    // Drop a sample closer than kMinSampleSpacingM to the last KEPT point.
+    // This is the intended boundary-resolution floor (and the reason the
+    // sampling rate must be fast enough for it — not the rate — to bind).
+    if (!trajectory_.empty() && !is_sample_far_enough(trajectory_.back(), pt))
     {
-      const auto& last = trajectory_.back();
-      double dx = static_cast<double>(pt.x - last.x);
-      double dy = static_cast<double>(pt.y - last.y);
-      if (dx * dx + dy * dy < 0.0025)  // 5cm squared
-      {
-        return;
-      }
+      return;
     }
 
     trajectory_.push_back(pt);
@@ -264,6 +313,14 @@ void RecordArea::record_position()
                          "RecordArea: TF lookup failed: %s",
                          ex.what());
   }
+}
+
+bool RecordArea::is_sample_far_enough(const geometry_msgs::msg::Point32& last,
+                                      const geometry_msgs::msg::Point32& candidate)
+{
+  const double dx = static_cast<double>(candidate.x) - static_cast<double>(last.x);
+  const double dy = static_cast<double>(candidate.y) - static_cast<double>(last.y);
+  return dx * dx + dy * dy >= kMinSampleSpacingM * kMinSampleSpacingM;
 }
 
 // ---------------------------------------------------------------------------

@@ -197,6 +197,50 @@ TEST(CoveragePersistence, AbsentCurrentCommandDefaultsToIdle)
   std::remove(path.c_str());
 }
 
+TEST(CoveragePersistence, RoundTripsSingleAreaTarget)
+{
+  // A targeted run (~/start_in_area) must stay targeted across a restart: the
+  // restored current_command auto-re-enters MowingSequence, so without this the
+  // run would silently widen into a mow-the-whole-lawn run once the requested
+  // area finished.
+  const std::string path = tempPath("coverage_resume_single_area.txt");
+  std::remove(path.c_str());
+
+  BTContext saved;
+  seedContext(saved, path);
+  saved.current_command = 1;
+  saved.single_area_target = 3u;
+  ASSERT_TRUE(saveCoverageResumeState(saved));
+
+  BTContext loaded;
+  loaded.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  ASSERT_TRUE(loaded.single_area_target.has_value());
+  EXPECT_EQ(*loaded.single_area_target, 3u);
+
+  std::remove(path.c_str());
+}
+
+TEST(CoveragePersistence, AbsentSingleAreaTargetMeansAllAreas)
+{
+  // Absent in every non-targeted run (and in files written before targeted runs
+  // became session state) — that must read back as "no clip", not as area 0.
+  const std::string path = tempPath("coverage_resume_no_single_area.txt");
+  std::remove(path.c_str());
+
+  BTContext saved;
+  seedContext(saved, path);
+  saved.current_command = 1;
+  ASSERT_TRUE(saveCoverageResumeState(saved));
+
+  BTContext loaded;
+  loaded.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  EXPECT_FALSE(loaded.single_area_target.has_value());
+
+  std::remove(path.c_str());
+}
+
 int main(int argc, char** argv)
 {
   ::testing::InitGoogleTest(&argc, argv);

@@ -7,10 +7,15 @@ import (
 )
 
 type ContainerDetails struct {
-	ID         string
-	Name       string
-	Image      string
-	State      string
+	ID    string
+	Name  string
+	Image string
+	State string
+	// Tty reports whether the container was created with a TTY. Docker
+	// multiplexes stdout/stderr into 8-byte-framed chunks for every container
+	// WITHOUT one, so the log reader has to demultiplex (stdcopy) in that case
+	// and read raw otherwise.
+	Tty        bool
 	Status     string
 	Running    bool
 	Privileged bool

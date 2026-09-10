@@ -91,7 +91,7 @@ export const MowerStatus = () => {
     // Prefer the smooth coverage_percent; fall back to the coarse swath ratio
     // when it is 0/unset (e.g. at pass start or an older backend).
     const progressPercent = hasCoveragePercent
-        ? Math.round(coveragePercent as number)
+        ? Math.round(coveragePercent)
         : hasSwaths
             ? Math.round((completedSwaths / totalSwaths) * 100)
             : null;

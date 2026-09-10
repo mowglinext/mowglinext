@@ -17,6 +17,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include "fusion_graph/anchor_slew.hpp"
+#include "fusion_graph/covariance_frame.hpp"
 #include "fusion_graph/fusion_graph_node.hpp"
 #include "fusion_graph/fusion_graph_node_util.hpp"
 
@@ -171,18 +172,27 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   odom.pose.pose.position.z = 0.0;
   odom.pose.pose.orientation = QuatFromYaw(extrapolated_map_base.theta());
 
-  // Pose covariance is 6x6 row-major: x, y, z, roll, pitch, yaw.
+  // Pose covariance is 6x6 row-major: x, y, z, roll, pitch, yaw, and — like
+  // every other field in this message — it is expressed in header.frame_id
+  // (map). GTSAM hands back the marginal in the pose's LOCAL tangent frame,
+  // so it must be rotated by the pose's heading before it goes out; the wheel
+  // between-factor is non-holonomic (sigma_x >> sigma_y), which makes the
+  // body-frame matrix strongly anisotropic and the difference material.
+  // See covariance_frame.hpp.
+  const Eigen::Matrix3d cov_map =
+      BodyToMapCovariance(out.covariance, extrapolated_map_base.theta());
+
   for (auto& v : odom.pose.covariance)
     v = 0.0;
-  odom.pose.covariance[0] = out.covariance(0, 0);
-  odom.pose.covariance[1] = out.covariance(0, 1);
-  odom.pose.covariance[5] = out.covariance(0, 2);
-  odom.pose.covariance[6] = out.covariance(1, 0);
-  odom.pose.covariance[7] = out.covariance(1, 1);
-  odom.pose.covariance[11] = out.covariance(1, 2);
-  odom.pose.covariance[30] = out.covariance(2, 0);
-  odom.pose.covariance[31] = out.covariance(2, 1);
-  odom.pose.covariance[35] = out.covariance(2, 2);
+  odom.pose.covariance[0] = cov_map(0, 0);
+  odom.pose.covariance[1] = cov_map(0, 1);
+  odom.pose.covariance[5] = cov_map(0, 2);
+  odom.pose.covariance[6] = cov_map(1, 0);
+  odom.pose.covariance[7] = cov_map(1, 1);
+  odom.pose.covariance[11] = cov_map(1, 2);
+  odom.pose.covariance[30] = cov_map(2, 0);
+  odom.pose.covariance[31] = cov_map(2, 1);
+  odom.pose.covariance[35] = cov_map(2, 2);
   // Z, roll, pitch — clamped, give them tiny variance so consumers
   // don't choke on zero.
   odom.pose.covariance[14] = 1e-9;

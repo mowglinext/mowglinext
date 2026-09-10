@@ -66,6 +66,33 @@ constexpr double kAutoAngleMaxAreaM2 = 400.0;  // ~20 × 20 m
 // argmin is deterministic across re-plans, which the resume cursor relies on.
 constexpr double kAutoAngleStepRad = 5.0 * M_PI / 180.0;
 
+// On-edge tolerance for allInside(). The outermost DRIVEN geometry can lie
+// EXACTLY on the ring it is validated against: with the headland ring stage
+// DISABLED (num_headland_passes < 0 → n_rings == 0, issue #429) the swath ENDS
+// are GEOS intersection points sitting on safe_cells' exterior, which is also
+// the connector clearance ring. pointInRing() is a strict-`>` ray-crossing
+// test, so a pose exactly ON an edge is judged inside on one side of the
+// polygon and outside on the opposite side — roughly half those ends would be
+// rejected, and buildConnector's allInside() check would then split the
+// sub-path at every U-turn (one blade-off Nav2 transit per swath).
+//
+// The fix belongs in the PREDICATE, not in the geometry. 1 mm is ~1e9× the
+// double round-off at map-frame coordinate magnitudes, 1/80th of op_width/2 and
+// 1/50th of the server's kBoundarySlackM (0.05 m) verify slack, so it cannot
+// enable any turn arc and cannot move the chassis measurably. Mirrors the
+// tolerant-containment pattern coverage_server.cpp already uses (!pointInRing
+// && distanceToRing > slack).
+//
+// An earlier revision instead EXPANDED the zero-ring clearance ring outward by
+// 0.03 m. Do not reintroduce that: 0.03 m is ~5× too small to fit any Dubins
+// turn-around (buildConnector's min radius is min_turning_radius = 0.15 m), so
+// it bought no arc it was added for, yet it let a connector centerline ride
+// 3 cm PAST the recorded line — invisible to the server's 0.05 m verify slack —
+// which erodes the keep-inside contract that is the SHIPPED mode at the default
+// chassis_safety_inset (0.20 m == robot_width/2). Companion to
+// kClearanceClampMarginM (see the second anonymous namespace below).
+constexpr double kOnEdgeTolM = 0.001;
+
 // Orientation (radians) of the longest edge of a cell's outer ring. A cheap,
 // deterministic AUTO swath angle for large fields. Falls back to 0 (sweep along
 // +x) for a degenerate ring.
@@ -470,13 +497,17 @@ std::vector<std::pair<double, double>> sampleDubins(
   return pts;
 }
 
-// True iff every sampled point of `pts` is inside `boundary`.
+// True iff every sampled point of `pts` is inside `boundary`. A point lying ON
+// the boundary (within kOnEdgeTolM) counts as inside — pointInRing() alone
+// resolves on-edge poses inconsistently, and the outermost driven geometry sits
+// exactly on this ring when the headland stage is off (see kOnEdgeTolM).
 bool allInside(const std::vector<std::pair<double, double>>& pts,
                const std::vector<std::pair<double, double>>& boundary)
 {
   for (const auto& p : pts)
   {
-    if (!pointInRing(p.first, p.second, boundary))
+    if (!pointInRing(p.first, p.second, boundary) &&
+        distanceToRing(p.first, p.second, boundary) > kOnEdgeTolM)
     {
       return false;
     }
@@ -768,18 +799,59 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   f2c::types::Cells cells;
   cells.addGeometry(field_cell);
 
-  // (1) Boundary offset so the OUTERMOST headland ring's centerline sits
-  // `chassis_safety_inset` inside the recorded line. generateHeadlandSwaths
-  // (below) places ring 0 at op_width/2 inside the planning boundary, so shift
-  // the planning field by (chassis_safety_inset - op_width/2):
+  // (0) Headland ring count — resolved FIRST because the boundary offset (1),
+  // the clearance ring (below) and the mainland (3) all depend on whether there
+  // is a ring 0 at all. Three-way contract on num_headland_passes_override:
+  //   < 0  NONE   — no perimeter rings; the serpentine swaths mow straight to
+  //                 the boundary (issue #429). Every ring-dependent stage below
+  //                 is skipped.
+  //   == 0 AUTO   — ceil(headland_width / op_width), floored at 1 (unchanged).
+  //   > 0  FORCED — exactly that many rings (unchanged).
+  const int n_rings =
+      (num_headland_passes_override < 0)
+          ? 0
+          : ((num_headland_passes_override > 0)
+                 ? num_headland_passes_override
+                 : std::max(1, static_cast<int>(std::ceil(headland_width / op_width - 1e-9))));
+  if (n_rings == 0)
+  {
+    plan.diagnostics.notes.push_back(
+        "headland rings disabled (num_headland_passes < 0): swaths mow to the boundary");
+  }
+
+  // (1) Boundary offset so the OUTERMOST DRIVEN PASS's centerline sits
+  // `chassis_safety_inset` inside the recorded line. Shift the planning field by
+  // (chassis_safety_inset - op_width/2):
   //   > 0  shrink INWARD  — operator asked to keep the chassis further inside
   //                         (chassis_safety_inset > op_width/2);
-  //   < 0  expand OUTWARD — DEFAULT (inset 0): ring 0 rides ON the recorded
+  //   < 0  expand OUTWARD — inset 0: the outermost pass rides ON the recorded
   //                         line, so the blade mows to the edge and the chassis
   //                         straddles the boundary. The half-chassis-width lethal
   //                         band the keepout mask places outside the line is the
   //                         safety stop, replacing the old inset floor.
-  const double field_offset = chassis_safety_inset - 0.5 * op_width;
+  //
+  // The −op_width/2 term is NOT a ring-specific correction: upstream F2C v3
+  // (pinned @884d895) places the outermost pass op_width/2 inside the planning
+  // cell in BOTH generators — ConstHL::generateHeadlandSwaths uses
+  // `field.buffer(-swath_width * (i + 0.5))` (ring 0 at op_width/2) and
+  // SwathGeneratorBase::getSwathsDistribution uses `sx[0] = 0.5 * cov_width`
+  // measured from the rotated cell's bbox edge (outermost swath at op_width/2).
+  // Same convention, two implementations. So the term applies with rings OFF
+  // too; dropping it there does not remove a correction, it inserts an
+  // op_width/2 OUTWARD bias into every swath — at the shipped defaults
+  // (inset 0.20, op_width 0.16) that made "no rings" leave a 0.20 m uncut border
+  // versus 0.12 m for 2 rings, i.e. the feature that promises to mow closer to
+  // the edge mowed 8 cm FURTHER from it.
+  //
+  // The zero-rings branch is floored at 0 (never an outward expansion). With
+  // rings, ring 0 riding ON the recorded line is deliberate and the swath ENDS
+  // still sit n_rings*op_width inside. With no rings the ends ARE the outermost
+  // geometry and the robot meets the boundary head-on there, a direction
+  // chassis_safety_inset has never modelled (the server's footprint check offsets
+  // ±robot_width/2 PERPENDICULAR to heading), so keep them on or inside the
+  // recorded line.
+  const double field_offset = (n_rings > 0) ? (chassis_safety_inset - 0.5 * op_width)
+                                            : std::max(0.0, chassis_safety_inset - 0.5 * op_width);
   f2c::types::Cells safe_cells = cells;
   if (field_offset > 1e-3)
   {
@@ -851,8 +923,25 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // perimeter ring → edge turn-arounds forced below min_turning_radius → straight
   // fallback → sub-path fragmentation. On degeneracy (tiny field) leave it empty;
   // the caller falls back to safe_boundary (the pre-fix, looser bound).
+  //
+  // WITH NO RINGS (n_rings == 0, issue #429) there is no ring 0 to erode to: the
+  // outermost driven geometry is the swath ENDS, which sit exactly ON safe_cells'
+  // exterior. The clearance ring is then safe_cells EXACTLY — no buffer call at
+  // all (which also dodges the GEOS buffer(-0.0) re-noding hazard the mainland
+  // stage documents below). The invariant is the same in both branches: a
+  // connector centerline may go no further out than the OUTERMOST DRIVEN PASS.
+  // On-edge swath ends are handled by allInside()'s kOnEdgeTolM tolerance, NOT
+  // by expanding this ring outward — see the constant.
   {
-    const f2c::types::Cells clearance_cells = hl.generateHeadlands(safe_cells, 0.5 * op_width);
+    f2c::types::Cells clearance_cells;
+    if (n_rings > 0)
+    {
+      clearance_cells = hl.generateHeadlands(safe_cells, 0.5 * op_width);
+    }
+    else
+    {
+      clearance_cells = safe_cells;
+    }
     if (clearance_cells.size() > 0 && clearance_cells.area() > 1e-6)
     {
       std::size_t largest = 0;
@@ -909,130 +998,139 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // (2) Headland rings — n concentric mowed loops spaced op_width, outermost
   // first. Ring i's centerline sits (i + 0.5) * op_width inside the safe
   // boundary, so n rings cut the band [0, n*op_width].
-  const int n_rings =
-      (num_headland_passes_override > 0)
-          ? num_headland_passes_override
-          : std::max(1, static_cast<int>(std::ceil(headland_width / op_width - 1e-9)));
-  const auto t_headland0 = Clock::now();
-  const auto headland_passes =
-      hl.generateHeadlandSwaths(safe_cells, op_width, n_rings, /*dir_out2in=*/true);
-  t_headland_ms = elapsedMs(t_headland0);
   // Drop degenerate micro-loops (a near-consumed tiny field can yield a
   // centimetre-scale innermost ring that isn't worth driving).
   constexpr double kMinRingPerimeter = 1.0;  // m
   double ring_strip_area = 0.0;  // Σ perimeter·op_width of KEPT rings (for the fraction)
-  for (const auto& pass_lines : headland_passes)
+  // Skipped ENTIRELY when the ring stage is disabled (n_rings == 0, issue
+  // #429): generateHeadlandSwaths(…, 0, dir_out2in=true) happens to return {}
+  // at the pinned F2C commit, but entering ringPassToLoops/fillet/ring_strip
+  // accounting with nothing to do is noise, not intent.
+  if (n_rings > 0)
   {
-    auto loops = ringPassToLoops(pass_lines);
-    for (auto& loop : loops)
+    const auto t_headland0 = Clock::now();
+    const auto headland_passes =
+        hl.generateHeadlandSwaths(safe_cells, op_width, n_rings, /*dir_out2in=*/true);
+    t_headland_ms = elapsedMs(t_headland0);
+    for (const auto& pass_lines : headland_passes)
     {
-      double perim = 0.0;
-      for (std::size_t i = 1; i < loop.size(); ++i)
+      auto loops = ringPassToLoops(pass_lines);
+      for (auto& loop : loops)
       {
-        perim += std::hypot(loop[i].first - loop[i - 1].first, loop[i].second - loop[i - 1].second);
-      }
-      if (perim < kMinRingPerimeter)
-      {
-        plan.diagnostics.drops.push_back(fmtDrop("ring perim=", perim, "<", kMinRingPerimeter));
-        continue;
-      }
-      // Perimeter/headland travel winding (#335): flip the loop so a side-mounted
-      // blade stays on the cut side. Shoelace signed area > 0 = CCW, < 0 = CW.
-      // ring_direction: 1 = clockwise, 2 = counter-clockwise, 0 = leave as F2C
-      // emitted it.
-      if (ring_direction != 0)
-      {
-        double area2 = 0.0;
-        for (std::size_t i = 0; i + 1 < loop.size(); ++i)
+        double perim = 0.0;
+        for (std::size_t i = 1; i < loop.size(); ++i)
         {
-          area2 += loop[i].first * loop[i + 1].second - loop[i + 1].first * loop[i].second;
+          perim +=
+              std::hypot(loop[i].first - loop[i - 1].first, loop[i].second - loop[i - 1].second);
         }
-        const bool is_ccw = area2 > 0.0;
-        const bool want_ccw = (ring_direction == 2);
-        if (is_ccw != want_ccw)
+        if (perim < kMinRingPerimeter)
         {
-          std::reverse(loop.begin(), loop.end());
+          plan.diagnostics.drops.push_back(fmtDrop("ring perim=", perim, "<", kMinRingPerimeter));
+          continue;
         }
-      }
-
-      // Ring corner smoothing (field report 2026-07: "the robot stalls after
-      // every headland ring, oscillating, before moving on"). Two fixes here:
-      //
-      // 1. START THE LOOP MID-LONGEST-EDGE. F2C closes every concentric ring at
-      //    the same polygon corner, so the loop closure sat ON a corner: the
-      //    closure vertex is the one corner roundSharpCorners can never fillet
-      //    (it only processes interior vertices), and the ring→ring junction
-      //    then demanded the full corner turn across a ~op_width gap (measured
-      //    112° on the field replica) — a near-cusp FTC fights the drivetrain
-      //    deadband through. Rotating the closure onto the middle of the
-      //    longest straight edge makes the closure a straight-line point and
-      //    stacks the junctions of consecutive rings on parallel edges (a
-      //    tangent ~op_width sideways shift).
-      //
-      // 2. FILLET AT SPARSE (true-edge-length) LEVEL. roundSharpCorners' trim
-      //    budget is 0.49 × the incoming edge length; fed the DENSIFIED loop,
-      //    in_len is one 0.10 m densify step, capping the fillet radius at
-      //    ~0.03 m — below the min_turn_radius floor — so every ring-corner
-      //    fillet silently failed and all polygon corners stayed sharp.
-      //    Collapse the collinear runs first, fillet on real edges, then
-      //    re-densify.
-      {
-        auto sparse = sparsifyCollinear(loop, 0.01 /* rad — straight-run merge */);
-        if (sparse.size() >= 5)
+        // Perimeter/headland travel winding (#335): flip the loop so a side-mounted
+        // blade stays on the cut side. Shoelace signed area > 0 = CCW, < 0 = CW.
+        // ring_direction: 1 = clockwise, 2 = counter-clockwise, 0 = leave as F2C
+        // emitted it.
+        if (ring_direction != 0)
         {
-          sparse.pop_back();  // open the closed loop for rotation
-          std::size_t le = 0;
-          double le_len = -1.0;
-          for (std::size_t j = 0; j < sparse.size(); ++j)
+          double area2 = 0.0;
+          for (std::size_t i = 0; i + 1 < loop.size(); ++i)
           {
-            const auto& a = sparse[j];
-            const auto& b = sparse[(j + 1) % sparse.size()];
-            const double len = std::hypot(b.first - a.first, b.second - a.second);
-            if (len > le_len)
-            {
-              le_len = len;
-              le = j;
-            }
+            area2 += loop[i].first * loop[i + 1].second - loop[i + 1].first * loop[i].second;
           }
-          // New start = the longest edge's midpoint. Rotate so the loop begins
-          // at the vertex AFTER the edge (v_{le+1}) and stitch the midpoint on
-          // both ends: mid → v_{le+1} → … → v_le → mid. (Rotating to v_le
-          // instead would make the path step BACKWARD from mid to v_le — a
-          // 180° reversal baked into the ring.)
-          const std::pair<double, double> mid{
-              (sparse[le].first + sparse[(le + 1) % sparse.size()].first) * 0.5,
-              (sparse[le].second + sparse[(le + 1) % sparse.size()].second) * 0.5};
-          std::rotate(sparse.begin(),
-                      sparse.begin() + static_cast<std::ptrdiff_t>((le + 1) % sparse.size()),
-                      sparse.end());
-          sparse.insert(sparse.begin(), mid);
-          sparse.push_back(mid);
-          // Fillet every corner sharper than ~30° with a forward arc (floored at
-          // min_turn_radius so MPPI/FTC can track it); corners that cannot be
-          // rounded in-bounds are left sharp, as before.
-          const auto& fillet_boundary =
-              plan.safe_boundary.size() >= 3 ? plan.safe_boundary : field_outer_pts;
-          constexpr double kRingCornerThreshold = 30.0 * M_PI / 180.0;
-          auto rounded = roundSharpCorners(sparse,
-                                           fillet_boundary,
-                                           plan.safe_holes,
-                                           kRingCornerThreshold,
-                                           std::max(2.0 * min_turn_radius, min_turn_radius),
-                                           std::max(0.02, min_turn_radius),
-                                           0.03);
-          loop = densifyPolyline(rounded, kDensifyStep);
+          const bool is_ccw = area2 > 0.0;
+          const bool want_ccw = (ring_direction == 2);
+          if (is_ccw != want_ccw)
+          {
+            std::reverse(loop.begin(), loop.end());
+          }
         }
-      }
 
-      ring_strip_area += perim * op_width;
-      plan.rings.push_back(std::move(loop));
+        // Ring corner smoothing (field report 2026-07: "the robot stalls after
+        // every headland ring, oscillating, before moving on"). Two fixes here:
+        //
+        // 1. START THE LOOP MID-LONGEST-EDGE. F2C closes every concentric ring at
+        //    the same polygon corner, so the loop closure sat ON a corner: the
+        //    closure vertex is the one corner roundSharpCorners can never fillet
+        //    (it only processes interior vertices), and the ring→ring junction
+        //    then demanded the full corner turn across a ~op_width gap (measured
+        //    112° on the field replica) — a near-cusp FTC fights the drivetrain
+        //    deadband through. Rotating the closure onto the middle of the
+        //    longest straight edge makes the closure a straight-line point and
+        //    stacks the junctions of consecutive rings on parallel edges (a
+        //    tangent ~op_width sideways shift).
+        //
+        // 2. FILLET AT SPARSE (true-edge-length) LEVEL. roundSharpCorners' trim
+        //    budget is 0.49 × the incoming edge length; fed the DENSIFIED loop,
+        //    in_len is one 0.10 m densify step, capping the fillet radius at
+        //    ~0.03 m — below the min_turn_radius floor — so every ring-corner
+        //    fillet silently failed and all polygon corners stayed sharp.
+        //    Collapse the collinear runs first, fillet on real edges, then
+        //    re-densify.
+        {
+          auto sparse = sparsifyCollinear(loop, 0.01 /* rad — straight-run merge */);
+          if (sparse.size() >= 5)
+          {
+            sparse.pop_back();  // open the closed loop for rotation
+            std::size_t le = 0;
+            double le_len = -1.0;
+            for (std::size_t j = 0; j < sparse.size(); ++j)
+            {
+              const auto& a = sparse[j];
+              const auto& b = sparse[(j + 1) % sparse.size()];
+              const double len = std::hypot(b.first - a.first, b.second - a.second);
+              if (len > le_len)
+              {
+                le_len = len;
+                le = j;
+              }
+            }
+            // New start = the longest edge's midpoint. Rotate so the loop begins
+            // at the vertex AFTER the edge (v_{le+1}) and stitch the midpoint on
+            // both ends: mid → v_{le+1} → … → v_le → mid. (Rotating to v_le
+            // instead would make the path step BACKWARD from mid to v_le — a
+            // 180° reversal baked into the ring.)
+            const std::pair<double, double> mid{
+                (sparse[le].first + sparse[(le + 1) % sparse.size()].first) * 0.5,
+                (sparse[le].second + sparse[(le + 1) % sparse.size()].second) * 0.5};
+            std::rotate(sparse.begin(),
+                        sparse.begin() + static_cast<std::ptrdiff_t>((le + 1) % sparse.size()),
+                        sparse.end());
+            sparse.insert(sparse.begin(), mid);
+            sparse.push_back(mid);
+            // Fillet every corner sharper than ~30° with a forward arc (floored at
+            // min_turn_radius so MPPI/FTC can track it); corners that cannot be
+            // rounded in-bounds are left sharp, as before.
+            const auto& fillet_boundary =
+                plan.safe_boundary.size() >= 3 ? plan.safe_boundary : field_outer_pts;
+            constexpr double kRingCornerThreshold = 30.0 * M_PI / 180.0;
+            auto rounded = roundSharpCorners(sparse,
+                                             fillet_boundary,
+                                             plan.safe_holes,
+                                             kRingCornerThreshold,
+                                             std::max(2.0 * min_turn_radius, min_turn_radius),
+                                             std::max(0.02, min_turn_radius),
+                                             0.03);
+            loop = densifyPolyline(rounded, kDensifyStep);
+          }
+        }
+
+        ring_strip_area += perim * op_width;
+        plan.rings.push_back(std::move(loop));
+      }
     }
   }
 
   // (3) Mainland: what's left inside the rings' cut band. May be empty on a
-  // small field (rings-only plan — still valid coverage).
+  // small field (rings-only plan — still valid coverage). With no rings the
+  // mainland IS the (already inset) planning field — do NOT call
+  // generateHeadlands(safe_cells, 0.0): upstream that is Cells::buffer(-0.0), a
+  // full OGR/GEOS buffer round-trip that re-nodes the polygon and can drop
+  // marginal parts. A needless, non-deterministic no-op (issue #429).
   const auto t_mainland0 = Clock::now();
-  f2c::types::Cells mainland = hl.generateHeadlands(safe_cells, n_rings * op_width);
+  f2c::types::Cells mainland =
+      (n_rings > 0) ? hl.generateHeadlands(safe_cells, n_rings * op_width) : safe_cells;
   t_mainland_ms = elapsedMs(t_mainland0);
   mainland_area_m2 = mainland.area();
   if (mainland.size() == 0 || mainland.area() < 1e-6)
@@ -1185,7 +1283,11 @@ std::pair<double, double> clampInsideRing(double x,
                                           const std::vector<std::pair<double, double>>& ring,
                                           double margin)
 {
-  if (ring.size() < 3 || pointInRing(x, y, ring))
+  // A pose sitting exactly ON the ring is left alone: with the headland stage
+  // off the swath ENDS lie on this ring by construction, and pointInRing()
+  // resolves such poses inconsistently — clamping them would silently deform
+  // half the swath ends inward. Same tolerance allInside() uses (kOnEdgeTolM).
+  if (ring.size() < 3 || pointInRing(x, y, ring) || distanceToRing(x, y, ring) <= kOnEdgeTolM)
   {
     return {x, y};
   }
@@ -1237,7 +1339,8 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     const std::vector<std::pair<double, double>>& boundary,
     double turn_radius,
     double min_turn_radius,
-    double step)
+    double step,
+    ConnectorStats* stats)
 {
   // Flatten the plan into ordered drivable segments (densified polylines),
   // rings first (outermost → inner) then the swaths.
@@ -1508,6 +1611,28 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
         conn_safe =
             !conn.empty() &&
             (!fallback || (allInside(conn, boundary) && clearOfHoles(conn, plan.safe_holes)));
+        // Pure accounting of how this join resolved (issue #499) — see
+        // ConnectorStats. Deliberately AFTER conn_safe so the classification
+        // reflects what is actually driven, not just whether buildConnector
+        // reached its straight-connector last resort: a straight fallback that
+        // verifies in-bounds is driven blade-on, one that does not becomes a
+        // sub-path split. Changes no decision.
+        if (stats != nullptr)
+        {
+          ++stats->attempted;
+          if (!conn_safe)
+          {
+            ++stats->split;
+          }
+          else if (fallback)
+          {
+            ++stats->straight_kept;
+          }
+          else
+          {
+            ++stats->arc;
+          }
+        }
         if (conn_safe)
         {
           // conn is start-inclusive (== path.back()) / goal-exclusive; drop the

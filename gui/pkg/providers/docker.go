@@ -40,7 +40,20 @@ func (i *DockerProvider) ContainerLogs(ctx context.Context, containerID string) 
 	if i.client == nil {
 		return nil, errors.New("docker client is not initialized")
 	}
-	return i.client.ContainerLogs(ctx, containerID, types.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Follow: true, Tail: "100"})
+	// Timestamps prefixes every line with an RFC3339Nano stamp taken from the
+	// docker daemon. It is parsed by DOCKER_PREFIX_PATTERN in
+	// gui/web/src/utils/logTime.ts — without it the replayed Tail backlog is
+	// stamped with the browser's clock instead of when it was actually logged,
+	// and the gin / Go-stdlib producers (which print a bare, zone-less wall
+	// clock) have no reliable zone at all. Do not drop it as noise: the
+	// frontend strips the prefix before display.
+	return i.client.ContainerLogs(ctx, containerID, types.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Follow:     true,
+		Tail:       "100",
+		Timestamps: true,
+	})
 }
 
 func (i *DockerProvider) ContainerStart(ctx context.Context, containerID string) error {
@@ -81,6 +94,11 @@ func (i *DockerProvider) ContainerInspect(ctx context.Context, containerID strin
 	}
 	if inspected.Config != nil {
 		details.Image = inspected.Config.Image
+		// Needed by the logs WebSocket route: a container created WITHOUT a
+		// TTY has its stdout/stderr multiplexed into 8-byte-framed chunks and
+		// must be demultiplexed with stdcopy; a TTY stream is raw and would be
+		// corrupted by stdcopy. Mirrors what the docker CLI does.
+		details.Tty = inspected.Config.Tty
 	}
 	if inspected.ContainerJSONBase != nil && inspected.ContainerJSONBase.State != nil {
 		details.State = inspected.ContainerJSONBase.State.Status

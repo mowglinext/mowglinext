@@ -1,4 +1,7 @@
 # fusion_graph Review — Holding <2 cm Absolute During RTK-Float
+
+> **Historical document (2026-06)** — describes the state at that time. Current reference: [`docs/claude/codemaps/fusion_graph.md`](../../../docs/claude/codemaps/fusion_graph.md).
+
 _2026-06-11 · 46-agent multi-agent review (wobpjur04) · 33 findings → 28 confirmed against code_
 
 ## 1. Verdict

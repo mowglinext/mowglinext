@@ -10,6 +10,7 @@ import {useCoverageResumeAvailable} from "../hooks/useCoverageResumeAvailable.ts
 import {HighLevelStatusConstants} from "../types/ros.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useTranslation} from "react-i18next";
+import {stringifyValue} from "../utils/stringifyValue.ts";
 
 const ActionsCard = styled(Card)`
   .ant-card-body > button {
@@ -86,7 +87,7 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
                             await sendHome();
                             resolve();
                         } catch (e) {
-                            reject(e);
+                            reject(e instanceof Error ? e : new Error(stringifyValue(e)));
                         }
                     },
                     onCancel: () => resolve(),

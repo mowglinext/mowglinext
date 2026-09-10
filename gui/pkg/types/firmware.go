@@ -16,6 +16,13 @@ type FirmwareConfig struct {
 	Version                        string  `json:"version"`
 	BoardType                      string  `json:"boardType"`
 	PanelType                      string  `json:"panelType"`
+	// Firmware selection provenance is written alongside the saved config so
+	// later mower-model changes can update only fields that still follow model
+	// defaults. Empty/unknown values are legacy and are handled conservatively
+	// by the GUI.
+	BoardTypeOrigin                string  `json:"boardTypeOrigin,omitempty"`
+	PanelTypeOrigin                string  `json:"panelTypeOrigin,omitempty"`
+	FirmwareSelectionModel         string  `json:"firmwareSelectionModel,omitempty"`
 	// FirmwareSource is the GUI dropdown selector: "custom" compiles from
 	// source (the expert path), "prebuilt" (or empty, for older payloads)
 	// flashes the tested prebuilt binary.

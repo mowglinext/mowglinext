@@ -163,6 +163,11 @@ void FusionGraphNode::DeclareParameters()
   // factor leak that OOM-killed the node; leave it on unless a site genuinely
   // mows under permanent RTK-Float and needs LC even near the dock.
   lc_skip_when_rtk_fixed_ = declare_parameter<bool>("lc_skip_when_rtk_fixed", true);
+  // Rate/travel gate + GPS σ floor on loop closures (issue #513, see
+  // loop_closure_gate.hpp + the member doc). <= 0 disables each one.
+  lc_min_travel_m_ = declare_parameter<double>("lc_min_travel_m", 1.0);
+  lc_min_interval_s_ = declare_parameter<double>("lc_min_interval_s", 2.0);
+  lc_gps_sigma_ratio_ = declare_parameter<double>("lc_gps_sigma_ratio", 1.0);
 
   graph_save_prefix_ =
       declare_parameter<std::string>("graph_save_prefix", "/ros2_ws/maps/fusion_graph");

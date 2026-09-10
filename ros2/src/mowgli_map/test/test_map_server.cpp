@@ -28,8 +28,11 @@
 #include "mowgli_map/map_types.hpp"
 #include <gtest/gtest.h>
 #include <mowgli_interfaces/msg/dig_event.hpp>
+#include <mowgli_interfaces/msg/map_obstacle_info.hpp>
 #include <mowgli_interfaces/srv/add_mowing_area.hpp>
+#include <mowgli_interfaces/srv/clear_obstacle.hpp>
 #include <mowgli_interfaces/srv/get_mowing_area.hpp>
+#include <mowgli_interfaces/srv/promote_obstacle.hpp>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test fixture — creates a MapServerNode with a small 10×10 m map
@@ -393,12 +396,14 @@ TEST_F(AreaTypeTest, PromoteObstacleIsIdempotent)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Wheel-slip dig reports → automatic permanent keepout.
+// Wheel-slip dig reports → PENDING keepout (proposal, not persistence).
 //
 // hardware_bridge_node detects the robot digging a hole (wheels turning while
 // the GNSS-anchored pose stays put), stops and reverses out, then publishes a
 // DigEvent. map_server turns that location into a keepout so the NEXT coverage
-// pass routes around the churned patch instead of digging it deeper.
+// pass routes around the churned patch instead of digging it deeper — but the
+// keepout is a PROPOSAL: live for this session, never written to areas.dat
+// until the operator accepts it (#502).
 // ─────────────────────────────────────────────────────────────────────────────
 
 namespace
@@ -416,7 +421,7 @@ mowgli_interfaces::msg::DigEvent::SharedPtr make_dig_event(double x, double y)
 }
 }  // namespace
 
-TEST_F(AreaTypeTest, DigInsideMowingAreaBecomesKeepout)
+TEST_F(AreaTypeTest, DigInsideMowingAreaBecomesPendingKeepout)
 {
   ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
   ASSERT_EQ(node_->area_obstacle_count_for_test(0), 0u);
@@ -424,8 +429,15 @@ TEST_F(AreaTypeTest, DigInsideMowingAreaBecomesKeepout)
   node_->on_dig_event_for_test(make_dig_event(1.0, 1.0));
 
   EXPECT_EQ(node_->area_obstacle_count_for_test(0), 1u)
-      << "a dig inside a mowing area must leave a permanent keepout behind";
+      << "a dig inside a mowing area must leave a live keepout behind";
   EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 1u);
+
+  const auto info = node_->obstacle_info_for_test(0, 0);
+  EXPECT_TRUE(info.pending) << "a single inferred dig is a proposal, not a permanent keepout";
+  EXPECT_EQ(info.source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG);
+  EXPECT_NE(info.id, 0u) << "a proposal needs a handle the operator can accept or discard";
+  EXPECT_NE(info.name.find("Dig at"), std::string::npos)
+      << "the proposal must carry its evidence: " << info.name;
 }
 
 TEST_F(AreaTypeTest, DigOutsideEveryMowingAreaIsNotPromoted)
@@ -920,4 +932,294 @@ TEST_F(DatumMigrationTest, NodeWithoutDatumNeverMigrates)
   const std::string content = read_file(areas_path_);
   EXPECT_NEAR(yaml_scalar(content, "datum_lat"), kOldLat, 1e-9);
   EXPECT_NEAR(yaml_scalar(content, "datum_lon"), kOldLon, 1e-9);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dig proposals (#502): a detected dig protects the spot for THIS SESSION but
+// never edits the operator's saved map on its own. Accepting is what persists
+// it; discarding drops it for good (nothing was ever written).
+//
+// Also covers obstacle identity: name + provenance survive save/load, and an
+// areas.dat written before identity existed still loads.
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace
+{
+
+std::string temp_areas_path(const std::string& tag)
+{
+  const char* dir = std::getenv("TEST_TMPDIR");
+  return std::string(dir != nullptr ? dir : "/tmp") + "/mowgli_areas_" + tag + ".dat";
+}
+
+}  // namespace
+
+class DigProposalTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    areas_path_ = temp_areas_path("dig_proposal");
+    std::remove(areas_path_.c_str());
+
+    rclcpp::NodeOptions opts;
+    opts.append_parameter_override("resolution", 0.1);
+    opts.append_parameter_override("map_size_x", 10.0);
+    opts.append_parameter_override("map_size_y", 10.0);
+    opts.append_parameter_override("map_frame", "map");
+    opts.append_parameter_override("tool_width", 0.2);
+    opts.append_parameter_override("map_file_path", "");
+    // A real robot HAS a persistence path — that is the whole point of the
+    // test: even with somewhere to write, a dig must not write.
+    opts.append_parameter_override("areas_file_path", areas_path_);
+    opts.append_parameter_override("publish_rate", 1.0);
+    node_ = std::make_shared<mowgli_map::MapServerNode>(opts);
+  }
+
+  void TearDown() override
+  {
+    node_.reset();
+    std::remove(areas_path_.c_str());
+  }
+
+  static geometry_msgs::msg::Polygon make_rect(double x0, double y0, double x1, double y1)
+  {
+    geometry_msgs::msg::Polygon p;
+    auto add = [&](double x, double y)
+    {
+      geometry_msgs::msg::Point32 pt;
+      pt.x = static_cast<float>(x);
+      pt.y = static_cast<float>(y);
+      pt.z = 0.0F;
+      p.points.push_back(pt);
+    };
+    add(x0, y0);
+    add(x1, y0);
+    add(x1, y1);
+    add(x0, y1);
+    return p;
+  }
+
+  void add_lawn(const geometry_msgs::msg::Polygon* obstacle = nullptr,
+                const std::string& obstacle_name = {})
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+    req->area.name = "lawn";
+    req->area.area = make_rect(-3, -3, 3, 3);
+    if (obstacle != nullptr)
+    {
+      req->area.obstacles.push_back(*obstacle);
+      mowgli_interfaces::msg::MapObstacleInfo info;
+      info.name = obstacle_name;
+      info.source = mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER;
+      req->area.obstacle_info.push_back(info);
+    }
+    req->is_navigation_area = false;
+    auto res = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+    node_->add_area_for_test(req, res);
+    ASSERT_TRUE(res->success);
+  }
+
+  void dig_at(double x, double y)
+  {
+    auto msg = std::make_shared<mowgli_interfaces::msg::DigEvent>();
+    msg->header.frame_id = "map";
+    msg->position.x = x;
+    msg->position.y = y;
+    msg->wheel_distance = 0.45;
+    msg->map_distance = 0.02;
+    msg->position_sigma = 0.004;
+    node_->on_dig_event_for_test(msg);
+  }
+
+  mowgli_interfaces::msg::MapArea fetch_area(uint32_t index)
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
+    req->index = index;
+    auto res = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Response>();
+    node_->get_mowing_area_for_test(req, res);
+    EXPECT_TRUE(res->success);
+    return res->area;
+  }
+
+  std::string areas_path_;
+  std::shared_ptr<mowgli_map::MapServerNode> node_;
+};
+
+TEST_F(DigProposalTest, DigNeverReachesTheAreasFile)
+{
+  add_lawn();
+  dig_at(1.0, 1.0);
+
+  // Even an EXPLICIT save must skip the proposal.
+  node_->save_areas_for_test(areas_path_);
+  const std::string content = read_file(areas_path_);
+
+  EXPECT_NE(content.find("area_0_name: lawn"), std::string::npos) << "the area itself must persist";
+  EXPECT_NE(content.find("area_0_obstacle_count: 0"), std::string::npos)
+      << "a dig proposal must not be counted in areas.dat:\n"
+      << content;
+  EXPECT_EQ(content.find("area_0_obstacle_0:"), std::string::npos)
+      << "a dig proposal must not be written to areas.dat:\n"
+      << content;
+}
+
+TEST_F(DigProposalTest, PendingDigStillProtectsTheSpotThisSession)
+{
+  add_lawn();
+  dig_at(1.0, 1.0);
+
+  // Coverage sees the proposal as a hole in the field...
+  const auto area = fetch_area(0);
+  ASSERT_EQ(area.obstacles.size(), 1U) << "the spot must be protected before the operator acts";
+  ASSERT_EQ(area.obstacle_info.size(), area.obstacles.size())
+      << "obstacle_info must stay index-aligned with obstacles";
+  EXPECT_TRUE(area.obstacle_info[0].pending);
+
+  // ...and Nav2 sees it as lethal, so the escape cannot drive straight back in
+  // (issue #500: 3 dig latches in 18.4 s inside 0.13 m).
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, 1.0, 1.0), 100) << "the dig spot must be lethal for this session";
+}
+
+TEST_F(DigProposalTest, AcceptingAProposalPersistsItWithItsProvenance)
+{
+  add_lawn();
+  dig_at(1.0, 1.0);
+  const auto pending_id = node_->obstacle_info_for_test(0, 0).id;
+  ASSERT_NE(pending_id, 0u);
+
+  auto req = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Request>();
+  req->pending_id = pending_id;
+  req->name = "compost corner";
+  auto res = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Response>();
+  node_->promote_obstacle_for_test(req, res);
+  ASSERT_TRUE(res->success) << res->message;
+
+  const auto info = node_->obstacle_info_for_test(0, 0);
+  EXPECT_FALSE(info.pending);
+  EXPECT_EQ(info.name, "compost corner");
+  EXPECT_EQ(info.source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG)
+      << "accepting must not erase where the keepout came from";
+
+  // on_promote_obstacle persists immediately.
+  const std::string content = read_file(areas_path_);
+  EXPECT_NE(content.find("area_0_obstacle_count: 1"), std::string::npos) << content;
+  EXPECT_NE(content.find("area_0_obstacle_0_name: compost corner"), std::string::npos) << content;
+  EXPECT_NE(content.find("area_0_obstacle_0_source: 2"), std::string::npos) << content;
+
+  // …and it survives a reload with its identity intact.
+  node_->load_areas_for_test(areas_path_);
+  const auto reloaded = node_->obstacle_info_for_test(0, 0);
+  EXPECT_EQ(reloaded.name, "compost corner");
+  EXPECT_EQ(reloaded.source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_DIG);
+  EXPECT_FALSE(reloaded.pending);
+}
+
+TEST_F(DigProposalTest, AcceptingAnUnknownPendingIdFails)
+{
+  add_lawn();
+
+  auto req = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Request>();
+  req->pending_id = 4242;
+  auto res = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Response>();
+  node_->promote_obstacle_for_test(req, res);
+
+  EXPECT_FALSE(res->success);
+  EXPECT_FALSE(res->message.empty());
+  EXPECT_EQ(node_->area_obstacle_count_for_test(0), 0u);
+}
+
+TEST_F(DigProposalTest, DiscardingAProposalRemovesItAndWritesNothing)
+{
+  add_lawn();
+  dig_at(1.0, 1.0);
+  const auto pending_id = node_->obstacle_info_for_test(0, 0).id;
+
+  auto req = std::make_shared<mowgli_interfaces::srv::ClearObstacle::Request>();
+  req->obstacle_id = pending_id;
+  auto res = std::make_shared<mowgli_interfaces::srv::ClearObstacle::Response>();
+  node_->discard_obstacle_for_test(req, res);
+  ASSERT_TRUE(res->success) << res->message;
+
+  EXPECT_EQ(node_->area_obstacle_count_for_test(0), 0u);
+  EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 0u)
+      << "the discarded proposal must leave the flat keepout store too";
+
+  node_->save_areas_for_test(areas_path_);
+  EXPECT_NE(read_file(areas_path_).find("area_0_obstacle_count: 0"), std::string::npos);
+
+  // Discarding twice is an explicit failure, not a silent no-op.
+  auto res2 = std::make_shared<mowgli_interfaces::srv::ClearObstacle::Response>();
+  node_->discard_obstacle_for_test(req, res2);
+  EXPECT_FALSE(res2->success);
+}
+
+TEST_F(DigProposalTest, AcceptedKeepoutCannotBeDiscardedAsAProposal)
+{
+  add_lawn();
+  dig_at(1.0, 1.0);
+  const auto pending_id = node_->obstacle_info_for_test(0, 0).id;
+
+  auto promote_req = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Request>();
+  promote_req->pending_id = pending_id;
+  auto promote_res = std::make_shared<mowgli_interfaces::srv::PromoteObstacle::Response>();
+  node_->promote_obstacle_for_test(promote_req, promote_res);
+  ASSERT_TRUE(promote_res->success);
+
+  auto req = std::make_shared<mowgli_interfaces::srv::ClearObstacle::Request>();
+  req->obstacle_id = pending_id;
+  auto res = std::make_shared<mowgli_interfaces::srv::ClearObstacle::Response>();
+  node_->discard_obstacle_for_test(req, res);
+
+  EXPECT_FALSE(res->success) << "~/discard_obstacle only drops PROPOSALS, not the saved map";
+  EXPECT_EQ(node_->area_obstacle_count_for_test(0), 1u);
+}
+
+TEST_F(DigProposalTest, UserDrawnObstacleNameRoundTripsThroughSaveAndLoad)
+{
+  const auto tree = make_rect(-0.5, -0.5, 0.5, 0.5);
+  add_lawn(&tree, "apple tree");
+
+  node_->save_areas_for_test(areas_path_);
+  node_->load_areas_for_test(areas_path_);
+
+  const auto info = node_->obstacle_info_for_test(0, 0);
+  EXPECT_EQ(info.name, "apple tree");
+  EXPECT_EQ(info.source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER);
+  EXPECT_FALSE(info.pending);
+
+  const auto area = fetch_area(0);
+  ASSERT_EQ(area.obstacle_info.size(), area.obstacles.size());
+  EXPECT_EQ(area.obstacle_info[0].name, "apple tree");
+}
+
+TEST_F(DigProposalTest, LegacyAreasFileWithoutObstacleIdentityStillLoads)
+{
+  // Exactly the pre-#502 on-disk format — no _name / _source lines. Cedric's
+  // robot has a live file in this shape; it must keep loading.
+  {
+    std::ofstream out(areas_path_);
+    out << "# Mowgli ROS2 - Persisted areas and docking point\n\n";
+    out << "area_count: 1\n\n";
+    out << "area_0_name: lawn\n";
+    out << "area_0_polygon: -3,-3;3,-3;3,3;-3,3\n";
+    out << "area_0_is_navigation: 0\n";
+    out << "area_0_obstacle_count: 1\n";
+    out << "area_0_obstacle_0: -0.5,-0.5;0.5,-0.5;0.5,0.5;-0.5,0.5\n\n";
+  }
+
+  node_->load_areas_for_test(areas_path_);
+
+  ASSERT_EQ(node_->area_obstacle_count_for_test(0), 1u) << "legacy obstacle was dropped on load";
+  const auto info = node_->obstacle_info_for_test(0, 0);
+  EXPECT_TRUE(info.name.empty());
+  EXPECT_EQ(info.source, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER)
+      << "an obstacle with no recorded provenance is operator-drawn";
+  EXPECT_FALSE(info.pending) << "nothing loaded from disk may be pending";
+
+  const auto area = fetch_area(0);
+  ASSERT_EQ(area.obstacles.size(), 1U);
+  EXPECT_NEAR(area.obstacles[0].points[0].x, -0.5, 1e-3);
 }

@@ -48,9 +48,11 @@
 #include <grid_map_msgs/msg/grid_map.hpp>
 #include <grid_map_ros/GridMapRosConverter.hpp>
 #include <mowgli_interfaces/msg/dig_event.hpp>
+#include <mowgli_interfaces/msg/map_obstacle_info.hpp>
 #include <mowgli_interfaces/msg/obstacle_array.hpp>
 #include <mowgli_interfaces/msg/status.hpp>
 #include <mowgli_interfaces/srv/add_mowing_area.hpp>
+#include <mowgli_interfaces/srv/clear_obstacle.hpp>
 #include <mowgli_interfaces/srv/get_mowing_area.hpp>
 #include <mowgli_interfaces/srv/get_recovery_point.hpp>
 #include <mowgli_interfaces/srv/promote_obstacle.hpp>
@@ -124,6 +126,15 @@ public:
   /// Test-only: return the mowed-layer value at a map-frame position.
   float mow_progress_value_for_test(double x, double y) const;
 
+  /// Test-only: run the regular publish path without waiting for the timer.
+  void publish_mow_progress_for_test()
+  {
+    on_publish_timer();
+  }
+
+  /// Test-only: report whether a current mow-progress grid is cached.
+  bool mow_progress_cache_valid_for_test() const;
+
   /// Clear all layers to their default values.
   void clear_map_layers();
 
@@ -131,9 +142,42 @@ public:
   /// Lets `test_map_server` exercise obstacle promotion without going
   /// through the ROS service plumbing.
   bool apply_promoted_obstacle_for_test(size_t area_index,
-                                        const geometry_msgs::msg::Polygon& polygon)
+                                        const geometry_msgs::msg::Polygon& polygon,
+                                        const std::string& name = {})
   {
-    return apply_promoted_obstacle(area_index, polygon);
+    return apply_promoted_obstacle(
+        area_index, polygon, name, mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER, false);
+  }
+
+  /// Test-only: directly invoke the promote / discard service handlers.
+  void promote_obstacle_for_test(
+      const mowgli_interfaces::srv::PromoteObstacle::Request::SharedPtr req,
+      mowgli_interfaces::srv::PromoteObstacle::Response::SharedPtr res)
+  {
+    on_promote_obstacle(req, res);
+  }
+  void discard_obstacle_for_test(
+      const mowgli_interfaces::srv::ClearObstacle::Request::SharedPtr req,
+      mowgli_interfaces::srv::ClearObstacle::Response::SharedPtr res)
+  {
+    on_discard_obstacle(req, res);
+  }
+
+  /// Test-only: identity of one obstacle of an area (name / source /
+  /// pending / id), so persistence and proposal tests can assert on it.
+  [[nodiscard]] mowgli_interfaces::msg::MapObstacleInfo obstacle_info_for_test(
+      size_t area_index, size_t obstacle_index) const
+  {
+    mowgli_interfaces::msg::MapObstacleInfo info;
+    if (area_index < areas_.size() && obstacle_index < areas_[area_index].obstacles.size())
+    {
+      const auto& obs = areas_[area_index].obstacles[obstacle_index];
+      info.name = obs.name;
+      info.source = obs.source;
+      info.pending = obs.pending;
+      info.id = obs.id;
+    }
+    return info;
   }
 
   /// Test-only: feed a dig report through the real handler.
@@ -195,6 +239,36 @@ public:
   }
 
 private:
+  // ── Area entry ────────────────────────────────────────────────────────────
+
+  /// One interior keepout of an area, with the identity that makes a
+  /// machine-generated obstacle auditable. Mirrors
+  /// mowgli_interfaces/msg/MapObstacleInfo (same SOURCE_* values).
+  struct ObstacleEntry
+  {
+    geometry_msgs::msg::Polygon polygon;
+    /// Operator-facing label. Empty for legacy / unnamed keepouts.
+    std::string name;
+    /// MapObstacleInfo::SOURCE_USER / _TRACKER / _DIG.
+    uint8_t source{mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER};
+    /// True while this is only a PROPOSAL: live in the keepout mask for this
+    /// session (so coverage cannot drive back into the hole) but deliberately
+    /// NOT written to areas.dat. Cleared by ~/promote_obstacle{pending_id};
+    /// dropped by ~/discard_obstacle.
+    bool pending{false};
+    /// Session-scoped handle for those two services. 0 = loaded from disk.
+    uint32_t id{0};
+  };
+
+  /// A named area (mowing or navigation) with optional interior obstacles.
+  struct AreaEntry
+  {
+    std::string name;
+    geometry_msgs::msg::Polygon polygon;
+    std::vector<ObstacleEntry> obstacles;
+    bool is_navigation_area{false};
+  };
+
   // ── ROS callbacks ────────────────────────────────────────────────────────
 
   /// Convert incoming nav_msgs/OccupancyGrid to the occupancy layer.
@@ -236,9 +310,22 @@ private:
   /// map_'s geometry. Takes map_mutex_ internally — caller must NOT hold it.
   void stamp_mow_progress(double x, double y);
 
-  /// Publish mow_progress_map_ as a nav_msgs/OccupancyGrid on ~/mow_progress.
+  /// Rebuild the cached OccupancyGrid from mow_progress_map_.
   /// Caller MUST hold map_mutex_.
-  void publish_mow_progress();
+  void rebuild_mow_progress_cache();
+
+  /// Publish the cached mow-progress OccupancyGrid on ~/mow_progress.
+  /// Caller MUST hold map_mutex_.
+  void publish_cached_mow_progress();
+
+  /// Clear the progress map and its cached OccupancyGrid after a map reset.
+  /// Caller MUST hold map_mutex_.
+  void reset_mow_progress();
+
+  /// Create an empty progress map matching map_'s current geometry and mark it
+  /// for publication so transient_local history cannot retain stale geometry.
+  /// Caller MUST hold map_mutex_.
+  void initialize_mow_progress_map();
 
   // ── Services ─────────────────────────────────────────────────────────────
 
@@ -270,6 +357,12 @@ private:
   /// permanent keepout. See PromoteObstacle.srv for the contract.
   void on_promote_obstacle(const mowgli_interfaces::srv::PromoteObstacle::Request::SharedPtr req,
                            mowgli_interfaces::srv::PromoteObstacle::Response::SharedPtr res);
+
+  /// Reject a pending proposal (currently: wheel-slip dig keepouts) by its
+  /// MapObstacleInfo.id. Removes it from the live mask; nothing was ever
+  /// persisted, so it cannot come back after a restart either.
+  void on_discard_obstacle(const mowgli_interfaces::srv::ClearObstacle::Request::SharedPtr req,
+                           mowgli_interfaces::srv::ClearObstacle::Response::SharedPtr res);
 
   /// Compute a recovery pose inside the nearest mowing area.
   ///
@@ -303,23 +396,69 @@ private:
   /// Check if the robot is outside all allowed polygons and publish violation.
   void check_boundary_violation(double x, double y);
 
-  /// Append a user-validated polygon as a permanent keepout for an area.
-  /// Called by the ~/promote_obstacle service. Updates obstacle_polygons_,
-  /// re-runs apply_area_classifications so cells become NO_GO_ZONE, marks
-  /// masks_dirty_, and triggers a replan. Manages map_mutex_ internally
-  /// — caller must NOT hold it.
+  /// Append a polygon as a keepout for an area. Called by the
+  /// ~/promote_obstacle service and by the dig-report path. Updates
+  /// obstacle_polygons_, re-runs apply_area_classifications so cells become
+  /// NO_GO_ZONE, marks masks_dirty_, and triggers a replan. Manages
+  /// map_mutex_ internally — caller must NOT hold it.
+  ///
+  /// `pending` decides PERSISTENCE, not liveness: a pending keepout is just
+  /// as lethal for this session, but save_areas_to_file skips it, so it never
+  /// reaches areas.dat until the operator accepts it.
+  ///
   /// @return false if the polygon has fewer than 3 points or area_index
   ///         is out of range / a navigation area.
-  bool apply_promoted_obstacle(size_t area_index, const geometry_msgs::msg::Polygon& polygon);
+  bool apply_promoted_obstacle(
+      size_t area_index,
+      const geometry_msgs::msg::Polygon& polygon,
+      const std::string& name = {},
+      uint8_t source = mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER,
+      bool pending = false);
+
+  /// Accept the pending obstacle carrying `pending_id`: clear its pending
+  /// flag (optionally renaming it) so the next save writes it to areas.dat.
+  /// @return the area index it belongs to, or nullopt when no pending
+  ///         obstacle has that id.
+  [[nodiscard]] std::optional<size_t> accept_pending_obstacle(uint32_t pending_id,
+                                                              const std::string& name);
+
+  /// Drop the pending obstacle carrying `pending_id` from the area list, the
+  /// flat obstacle_polygons_ store and the classification layer.
+  /// @return false when no PENDING obstacle has that id.
+  bool discard_pending_obstacle(uint32_t pending_id);
+
+  /// Remove `polygon` from obstacle_polygons_ by centroid match (the same
+  /// epsilon the dedup guard uses). Caller must hold map_mutex_.
+  void erase_obstacle_polygon_locked(const geometry_msgs::msg::Polygon& polygon);
+
+  /// Save areas.dat if a path is configured, logging (not throwing) on
+  /// failure: the live state is already updated, so the next save retries.
+  void persist_areas_best_effort(const char* context);
+
+  /// Build an ObstacleEntry, handing it the next session-scoped id so the
+  /// operator can address it through ~/promote_obstacle / ~/discard_obstacle.
+  [[nodiscard]] ObstacleEntry make_obstacle_entry(const geometry_msgs::msg::Polygon& polygon,
+                                                  const std::string& name,
+                                                  uint8_t source,
+                                                  bool pending);
+
+  /// has_duplicate_obstacle() (internal_helpers.hpp) over an area's
+  /// ObstacleEntry list — same centroid-epsilon rule, different element type.
+  [[nodiscard]] static bool has_duplicate_obstacle_entry(
+      const std::vector<ObstacleEntry>& existing,
+      const geometry_msgs::msg::Polygon& candidate,
+      double eps);
 
   /// Handle a wheel-slip dig report from hardware_bridge_node.
   ///
   /// The bridge has already hard-stopped and reversed out; our job is to make
   /// sure coverage does not send the robot straight back to the same patch on
   /// the next pass. Resolves which mowing area contains the dig point, builds
-  /// a small square keepout around it, and promotes it through the SAME path
-  /// the GUI uses (apply_promoted_obstacle) so it becomes a NO_GO_ZONE, lands
-  /// in the keepout mask Smac/Nav2 read, and persists to areas.dat.
+  /// a square keepout around it, and applies it through the SAME path the GUI
+  /// uses (apply_promoted_obstacle) so it becomes a NO_GO_ZONE and lands in
+  /// the keepout mask Smac/Nav2 read — but marked PENDING, so it is NOT
+  /// written to areas.dat. One inferred dig protects the spot for this
+  /// session; only the operator makes it permanent.
   void on_dig_event(mowgli_interfaces::msg::DigEvent::ConstSharedPtr msg);
 
   /// Index of the first mowing (non-navigation) area whose polygon contains
@@ -372,17 +511,6 @@ private:
   /// constructor AND on_set_docking_point so the lethal dock body + corridor
   /// carve-out follow a live dock re-placement without a node restart.
   void rebuild_dock_polygons();
-
-  // ── Area entry ────────────────────────────────────────────────────────────
-
-  /// A named area (mowing or navigation) with optional interior obstacles.
-  struct AreaEntry
-  {
-    std::string name;
-    geometry_msgs::msg::Polygon polygon;
-    std::vector<geometry_msgs::msg::Polygon> obstacles;
-    bool is_navigation_area{false};
-  };
 
   // ── Parameters ────────────────────────────────────────────────────────────
   double resolution_;
@@ -549,11 +677,13 @@ private:
   /// occupancy/classification lifecycle. Guarded by map_mutex_.
   grid_map::GridMap mow_progress_map_;
   bool mow_progress_dirty_{false};
-  /// Throttle for the mowed-overlay publish. The overlay is re-serialized (an
-  /// O(cells) full-grid pass that scales with map extent) at most once per this
-  /// period while mowing, instead of on every timer tick — the dominant steady
-  /// cost on a large map. transient_local keeps late subscribers current, and
-  /// mow_progress_dirty_ stays set until an actual publish, so no growth is lost.
+  /// Serialized only when the progress map changes; published unchanged between
+  /// updates so reconnecting WebSocket clients receive the current overlay.
+  nav_msgs::msg::OccupancyGrid mow_progress_cache_;
+  bool mow_progress_cache_valid_{false};
+  /// Throttle for cached mowed-overlay publication. Conversion remains O(cells)
+  /// only when the progress map is dirty; unchanged cached grids are cheap to
+  /// republish at this interval for GUI reconnect reliability.
   double mow_progress_publish_period_s_{2.0};
   rclcpp::Time last_mow_progress_pub_time_{0, 0, RCL_ROS_TIME};
 
@@ -598,6 +728,11 @@ private:
   /// most once per node lifetime. Cleared on `~/clear_obstacles`. Only
   /// populated when auto_promote_persistent_obstacles_ is true.
   std::set<uint32_t> auto_promoted_obstacle_ids_;
+
+  /// Monotonic session-scoped handle handed out to every obstacle entry, so
+  /// ~/promote_obstacle{pending_id} and ~/discard_obstacle can address one
+  /// proposal unambiguously. Starts at 1 — 0 means "no handle".
+  uint32_t next_obstacle_id_{1};
 
   /// When false (default), tracker observations never become permanent
   /// keepouts on their own — only the operator-driven ~/promote_obstacle
@@ -743,6 +878,7 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr load_areas_srv_;
   rclcpp::Service<mowgli_interfaces::srv::GetRecoveryPoint>::SharedPtr get_recovery_point_srv_;
   rclcpp::Service<mowgli_interfaces::srv::PromoteObstacle>::SharedPtr promote_obstacle_srv_;
+  rclcpp::Service<mowgli_interfaces::srv::ClearObstacle>::SharedPtr discard_obstacle_srv_;
 
   // ── TF ────────────────────────────────────────────────────────────────────
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;

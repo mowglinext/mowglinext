@@ -607,11 +607,14 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				return
 			}
 		case "promote_obstacle":
-			// Convert a transient /obstacle_tracker/obstacles observation
-			// (or a free-form polygon) into a persistent keepout for one
-			// of the mowing areas. After the obstacle-tracker decouple
-			// (#6), this is the only path that mutates obstacle_polygons_;
-			// auto-promotion is gone.
+			// Convert a transient /obstacle_tracker/obstacles observation,
+			// a free-form polygon, or a PENDING dig proposal (pending_id,
+			// see MapObstacleInfo) into a persistent keepout for one of the
+			// mowing areas. After the obstacle-tracker decouple (#6), this
+			// is the only path that mutates obstacle_polygons_;
+			// auto-promotion is gone — and since #502 a detected dig is a
+			// proposal that lands here too, instead of writing itself into
+			// areas.dat.
 			var CallReq mowgli.PromoteObstacleReq
 			err = c.BindJSON(&CallReq)
 			if err != nil {
@@ -631,6 +634,29 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			}
 			if err == nil {
 				c.JSON(200, map[string]interface{}{"message": promoteRes.Message})
+				return
+			}
+		case "discard_obstacle":
+			// Reject a PENDING obstacle proposal (currently: wheel-slip dig
+			// keepouts) by its MapObstacleInfo.id. Nothing was persisted, so
+			// this only drops it from the live keepout mask.
+			var CallReq mowgli.ClearObstacleReq
+			err = c.BindJSON(&CallReq)
+			if err != nil {
+				c.JSON(400, ErrorResponse{Error: err.Error()})
+				return
+			}
+			var discardRes mowgli.ClearObstacleRes
+			err = provider.CallService(ctx,
+				"/map_server_node/discard_obstacle",
+				&CallReq,
+				&discardRes,
+				"mowgli_interfaces/srv/ClearObstacle")
+			if err == nil && !discardRes.Success {
+				err = errors.New(discardRes.Message)
+			}
+			if err == nil {
+				c.JSON(200, map[string]interface{}{"message": discardRes.Message})
 				return
 			}
 		case "fusion_graph_save", "fusion_graph_clear":

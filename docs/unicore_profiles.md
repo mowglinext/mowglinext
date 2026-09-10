@@ -1,5 +1,7 @@
 # Archived Receiver Profiles
 
+> **Historical document (2026-07)** — describes the state at that time. Current reference: [`sensors/README.md`](../sensors/README.md).
+
 This page is kept only to catch old links.
 
 Receiver-specific runtime profiles are no longer part of the supported MowgliNext install surface. Active GNSS operator configuration now lives in `mowgli_robot.yaml` and the GUI/backend flow; `docker/.env` keeps fallback-only first-boot defaults such as:

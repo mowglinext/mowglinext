@@ -181,10 +181,10 @@ export function useMapFiles({
                 await guiApi.mowglinext.mapDockingCreate({
                     docking_pose: {
                         orientation: {
-                            x: quaternionFromHeading.x!!,
-                            y: quaternionFromHeading.y!!,
-                            z: quaternionFromHeading.z!!,
-                            w: quaternionFromHeading.w!!,
+                            x: quaternionFromHeading.x!,
+                            y: quaternionFromHeading.y!,
+                            z: quaternionFromHeading.z!,
+                            w: quaternionFromHeading.w!,
                         },
                         position: {
                             x: rosCoords[0],

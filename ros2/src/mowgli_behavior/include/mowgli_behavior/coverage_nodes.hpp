@@ -19,6 +19,7 @@
 #include <future>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -28,6 +29,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/detour_resume.hpp"
+#include "mowgli_behavior/transit_failure.hpp"
 #include "mowgli_interfaces/action/plan_coverage.hpp"
 #include "mowgli_interfaces/coverage_geometry.hpp"
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
@@ -223,6 +225,36 @@ private:
   // so the GUI %-readout climbs smoothly rather than jumping per sub-path.
   float livePercent() const;
 
+  // --- Transit-failure classification (issue #487) ---------------------------
+  /// Result of the blade-off NavigateToPose transit that just finished, plus
+  /// the raw nav2 fields it was derived from (kept for the log line).
+  struct TransitOutcome
+  {
+    TransitFailure kind = TransitFailure::kUnknown;
+    uint16_t error_code = 0;
+    std::string error_msg;
+  };
+  /// Latest NavigateToPose result, filled by the result_callback registered at
+  /// dispatch. Held behind a shared_ptr so the callback never touches a
+  /// destroyed FollowStrip, and behind a mutex so a future Reentrant callback
+  /// group cannot race the BT tick (today they are serialized — see
+  /// bt_context.hpp).
+  struct TransitResultSlot
+  {
+    std::mutex mutex;
+    bool ready = false;
+    uint16_t error_code = 0;
+    std::string error_msg;
+  };
+  /// Arm a fresh result slot for a transit about to be dispatched.
+  void resetTransitResult();
+  /// Classify the transit whose STATUS already reported abort/cancel. The nav2
+  /// result arrives on its own callback, slightly after the status topic, so
+  /// this returns nullopt while still waiting (bounded by
+  /// kTransitResultWaitSec, after which it classifies as UNKNOWN and the caller
+  /// proceeds exactly as it did before this change).
+  std::optional<TransitOutcome> classifyFinishedTransit();
+
   rclcpp_action::Client<Nav2FollowPath>::SharedPtr follow_client_;
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
   rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr blade_client_;
@@ -246,6 +278,15 @@ private:
   // the swath is skipped rather than mowed cross-country.
   bool transit_pending_ = false;
   std::chrono::steady_clock::time_point transit_wait_start_;
+  // Result slot for the in-flight transit + the bounded wait that lets it
+  // arrive after the status topic reports the abort (issue #487).
+  std::shared_ptr<TransitResultSlot> transit_result_;
+  bool transit_abort_seen_ = false;
+  std::chrono::steady_clock::time_point transit_abort_time_;
+  // Max wait for the NavigateToPose RESULT after get_status() says the goal
+  // terminated. Past this the failure is logged as UNKNOWN and the swath is
+  // skipped — i.e. exactly the pre-#487 behaviour, never a hang.
+  static constexpr double kTransitResultWaitSec = 2.0;
 
   // The drivable units being executed: the hole-free continuous SUB-PATHS
   // (ctx->current_strip_subpaths, issue #333), or a single continuous path when
@@ -254,6 +295,15 @@ private:
   std::vector<nav_msgs::msg::Path> swaths_;
   std::size_t swath_idx_ = 0;
   std::size_t swaths_skipped_ = 0;
+  // Of swaths_skipped_, how many were skipped because the blade-off transit was
+  // refused with START_OCCUPIED — i.e. because of where the ROBOT stands, not
+  // anything about the swath. Paired with swaths_mowed_this_pass_ to recognise
+  // the "zero progress and every failure was our own pose" case that must not
+  // retire the area (issue #487).
+  std::size_t swaths_skipped_start_occupied_ = 0;
+  // Sub-paths recorded MOWED during THIS pass. Distinct from
+  // ctx->area_completed_swaths[area].size(), which is cumulative across passes.
+  std::size_t swaths_mowed_this_pass_ = 0;
   bool swath_goal_sent_ = false;
   // Absolute start index of each swaths_ unit within the CONCATENATION of all
   // units (== full_path). swath_base_[k] = sum of the ORIGINAL (untrimmed) pose

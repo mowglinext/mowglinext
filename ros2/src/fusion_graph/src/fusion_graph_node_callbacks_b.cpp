@@ -24,6 +24,18 @@
 namespace fusion_graph
 {
 
+bool FusionGraphNode::RtkFixedReceiptIsFresh(const double maximum_age_s) const
+{
+  if (!last_rtk_fixed_stamp_ || !std::isfinite(maximum_age_s) || maximum_age_s < 0.0)
+  {
+    return false;
+  }
+  const auto maximum_age_ns = static_cast<std::int64_t>(maximum_age_s * 1.0e9);
+  const rclcpp::Time ros_now = this->now();
+  return mowgli_interfaces::gnss_observation_freshness::IsReceiptFresh(
+      last_rtk_fixed_stamp_->nanoseconds(), ros_now.nanoseconds(), maximum_age_ns);
+}
+
 void FusionGraphNode::OnDockingCmd(geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
 {
   // Stamp only NON-ZERO docking commands — the graceful controller emits ~0
@@ -60,8 +72,7 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
   // balloons → lever-arm amplifies jitter into position jumps → robot drives
   // out of bounds). Apply it only when RTK-Fixed AND translating forward; else
   // the gyro carries yaw. Before init the seed always needs it.
-  const bool rtk_fresh = last_rtk_fixed_stamp_ &&
-                         (this->now() - *last_rtk_fixed_stamp_).seconds() < cog_rtk_max_age_s_;
+  const bool rtk_fresh = RtkFixedReceiptIsFresh(cog_rtk_max_age_s_);
   if (!CogShouldApply(
           graph_->IsInitialized(), rtk_fresh, wheel_vx_, cog_require_rtk_, cog_min_speed_mps_))
   {
@@ -88,10 +99,7 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
     // (RTK-Fixed fresh). With cog_to_imu's straight-baseline gate the COGs
     // that arrive are already clean; requiring RTK-Fixed avoids snapping the
     // yaw onto a Float-era COG.
-    const bool rtk_fresh =
-        !cog_flip_require_rtk_ ||
-        (last_rtk_fixed_stamp_ &&
-         (this->now() - *last_rtk_fixed_stamp_).seconds() < scan_yield_timeout_s_);
+    const bool rtk_fresh = !cog_flip_require_rtk_ || RtkFixedReceiptIsFresh(scan_yield_timeout_s_);
     auto snap = graph_->LatestSnapshot();
     if (!rtk_fresh || !snap)
     {

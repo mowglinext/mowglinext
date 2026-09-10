@@ -4,12 +4,12 @@
 	branch = main
 [submodule "ros2/src/external/universal-gnss"]
 	path = ros2/src/external/universal-gnss
-	# Pinned to the mowglinext fork. Two fork fixes are stacked here, both for
-	# issue #395: (1) GLONASS-1230 optional-for-RTK correction health
-	# (Pepeuch/universal-gnss#4) and (2) UM980 MODE ROVER UAV default +
-	# --rover-dynamic-mode override (mowglinext/universal-gnss#1). Points at the
-	# rover-dynamic-mode branch until that fork PR merges into the 1230 branch;
-	# then re-pin the gitlink to the merge commit and restore the branch below.
-	# Revert to https://github.com/pepeuch/universal-gnss.git once upstreamed.
+	# Pinned to the mowglinext fork's main, which tracks Pepeuch/universal-gnss
+	# main. Both fork fixes for issue #395 are now upstream there — the
+	# GLONASS-1230 optional-for-RTK correction health (Pepeuch/universal-gnss#4,
+	# an ancestor of main) and the UM980 MODE ROVER UAV default +
+	# --rover-dynamic-mode override (folded into "fix(unicore): restore rover
+	# mode and correction-age policy") — so the old stacked branch is gone and
+	# this follows main directly.
 	url = https://github.com/mowglinext/universal-gnss.git
-	branch = fix/rover-dynamic-mode-uav
+	branch = main

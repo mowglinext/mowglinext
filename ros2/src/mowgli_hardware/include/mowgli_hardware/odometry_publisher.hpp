@@ -75,8 +75,8 @@ public:
     return wheels_stationary_;
   }
 
-  /// Monotonic sum of |forward distance| the ENCODERS claim the robot has
-  /// travelled [m]. Callers sample the delta between two reads to get
+  /// Monotonic sum of the WORST WHEEL's |ground travel| as claimed by the
+  /// ENCODERS [m]. Callers sample the delta between two reads to get
   /// encoder-claimed travel over an interval; the absolute value is
   /// meaningless on its own (it never decreases, even driving in reverse).
   ///
@@ -84,9 +84,16 @@ public:
   /// hardware_bridge_node (see dig_detector.hpp): the encoders keep
   /// accumulating here while a spinning wheel digs, which is exactly the
   /// discrepancy the detector looks for against the fused map pose.
-  [[nodiscard]] double travelled() const
+  ///
+  /// It is max(|dL|, |dR|) and NOT the chassis-centre distance, because the
+  /// digs are asymmetric (issue #499: a turn radius below the half-track
+  /// reverses the inner wheel) and the centre distance cancels them —
+  /// measured over the 2026-08-24 mow3 log it retained 42 % of the grinding
+  /// tyre's travel, and a symmetric pivot cancels to exactly zero. Driving
+  /// straight, the two measures are the same.
+  [[nodiscard]] double tyre_travelled() const
   {
-    return travelled_m_;
+    return tyre_travelled_m_;
   }
 
 private:
@@ -103,7 +110,7 @@ private:
   int32_t odom_acc_delta_right_{0};
   uint32_t odom_acc_dt_ms_{0};
   bool wheels_stationary_{true};
-  double travelled_m_{0.0};  ///< monotonic |distance| odometer, see travelled()
+  double tyre_travelled_m_{0.0};  ///< worst-wheel odometer, see tyre_travelled()
 
   // Per-wheel cumulative-magnitude tick counters + last direction (for
   // WheelTick). Magnitude is monotonic-up; direction is 1=fwd/0=rev.

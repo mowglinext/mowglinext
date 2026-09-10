@@ -6,7 +6,7 @@
 
 ### Compute Board
 
-Any ARM64 SBC running Linux with Docker support:
+Any 64-bit Linux board with Docker support (the installer supports `arm64` and `amd64`):
 - **Recommended:** Rockchip RK3566, RK3588
 - **Also works:** Raspberry Pi 4, Pi 5
 - **Minimum:** 4-core ARM64, 4 GB RAM, 16 GB storage
@@ -16,16 +16,24 @@ Any ARM64 SBC running Linux with Docker support:
 | Model | Status |
 |-------|--------|
 | YardForce Classic 500 | Primary target |
-| YardForce Classic 500B | Supported |
-| YardForce LUV1000Ri | Supported |
+| YardForce 500B | Supported |
+| YardForce SA650 | Supported |
+| YardForce 900 ECO | Supported |
+| YardForce LUV1000RI | Supported |
+| Sabo MOWiT 500F | Supported |
+| Custom Robot | Every chassis parameter configured by hand |
+
+The model is picked in the GUI (onboarding wizard, or Settings → Hardware) and stored as `mower_model` in `mowgli_robot.yaml`; each preset seeds the chassis dimensions, wheel geometry, `tool_width`, encoder ticks and battery thresholds.
 
 ### Sensors
 
 | Sensor | Model | Connection |
 |--------|-------|------------|
-| RTK GPS | u-blox ZED-F9P (simpleRTK2B) | USB-CDC |
-| LiDAR | LDRobot LD19 | UART 230400 |
-| IMU | WitMotion WT901 (6-axis gyro + accel) | I2C (on STM32) |
+| RTK GPS | u-blox ZED-F9P (simpleRTK2B), or a Unicore UM980/UM981/UM982-class receiver | USB-CDC or UART |
+| LiDAR | LDRobot LD06 / LD14 / LD19 (also STL27L and RPLIDAR) | UART 230400 or USB |
+| IMU | WitMotion WT901 (accel + gyro + magnetometer) | I2C (on STM32) |
+
+The GPS and LiDAR are chosen in the [install composer](https://mowgli.garden/#getting-started) or interactively by the installer. The firmware auto-detects its IMU at boot — LSM6, WT901, MPU6050 or ICM-45686, plus a LIS3MDL magnetometer when the accel/gyro chip has none of its own.
 
 ### Firmware Board
 
@@ -52,35 +60,48 @@ The fastest way to explore and develop MowgliNext — no local setup required:
 
 The devcontainer provides a complete ROS2 Kilted development environment:
 
-- Full Nav2 navigation stack, robot_localization (default dual-EKF localizer), and an opt-in GTSAM iSAM2 factor-graph localizer (`fusion_graph`) with LiDAR scan-matching and loop-closure factors
-- Webots simulation (headless)
-- `mowgli_coverage` (Fields2Cover 2.0.0 at `/opt/fields2cover-200`) per-area path planner + FTCController for both transit and coverage following
+- Full Nav2 navigation stack plus GTSAM 4.3a1, for the `fusion_graph` factor-graph localizer — the stack's sole localizer, with optional LiDAR scan-matching and loop-closure factors
+- Nav2 controller plugins as the stack uses them: `mowgli_nav2_plugins/FTCController` follows the coverage path, RotationShim + Regulated Pure Pursuit handle transit
 - Foxglove Bridge + rosbridge for visualization
 - GUI stack (Go 1.24, Node 22, yarn) so `cd gui && go build` and `cd gui/web && yarn dev` work out of the box
 - Python linting (ruff, pre-commit), C++ linting (cppcheck, clang-format), gdb, htop
 - Claude Code CLI + GitHub CLI for AI-assisted development
 - Auto-sourced ROS2 workspace
 
+Two things the devcontainer deliberately does **not** carry: the Webots simulator (see [Run the simulation](#run-the-simulation) below), and Fields2Cover v3. The image builds Fields2Cover 2.0.0 into `/opt/fields2cover-200`, while `mowgli_coverage` pins Fields2Cover 3.0.0 at `/opt/fields2cover-300` — which only the full `ros2/Dockerfile` build provides. Build the focused development set in the devcontainer rather than the whole workspace.
+
 **Forwarded ports:**
 
 | Port | Service |
 |------|---------|
+| 4006 | Mowgli GUI |
 | 8765 | Foxglove WebSocket |
-| 6080 | noVNC (Gazebo GUI) |
-| 9090 | rosbridge |
+| 6080 | noVNC (simulation GUI) |
+| 9090 | rosbridge (legacy GUI path) |
 
-### Build and run simulation in devcontainer
+### Build in the devcontainer
 
 ```bash
-# Build all packages
-colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+# Build the focused development set (mowgli_interfaces, mowgli_localization,
+# universal_gnss_ros2, mowgli_bringup) into /ros2_ws
+cd ros2 && make build-dev
 
 # Source the workspace
-source install/setup.bash
-
-# Launch simulation
-ros2 launch mowgli_bringup sim_full_system.launch.py headless:=true
+source /ros2_ws/install/setup.bash
 ```
+
+`make build-full` builds every linked package, but needs the Fields2Cover v3 tree noted above. `make help` lists the rest of the targets.
+
+### Run the simulation
+
+The simulation runs on Webots (`mowgli_bringup/sim_full_system.launch.py`), and Webots itself is installed by the `simulation` stage of `ros2/Dockerfile` — not by the devcontainer image. Run it from the simulation compose file instead:
+
+```bash
+docker compose -f docker/docker-compose.simulation.yaml build
+docker compose -f docker/docker-compose.simulation.yaml up dev-sim
+```
+
+Foxglove Studio then connects to `ws://localhost:8765`; the noVNC view of the simulator is on `http://localhost:6080` (`simulation-gui` service). See [Simulation](Simulation) for the full workflow.
 
 ## Quick Start on Hardware (Automated)
 
@@ -121,7 +142,10 @@ Create stable device symlinks:
 
 ```bash
 # /etc/udev/rules.d/50-mowgli.rules
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6018", SYMLINK+="mowgli", MODE="0666"
+# Mowgli STM32 board — matched by product string, because its 0483:5740 VID:PID
+# is the generic STM32 VCP pair and would collide with other adapters.
+SUBSYSTEM=="tty", ATTRS{product}=="Mowgli", SYMLINK+="mowgli", MODE="0666"
+# GPS: simpleRTK2B (u-blox ZED-F9P)
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1546", ATTRS{idProduct}=="01a9", SYMLINK+="gps", MODE="0666"
 ```
 
@@ -129,14 +153,19 @@ Reload: `sudo udevadm control --reload-rules && sudo udevadm trigger`
 
 ### 3. Configure
 
+`docker/config/mowgli/mowgli_robot.yaml` is git-ignored — the installer normally seeds it from the shipped template, so on a manual install copy it yourself first:
+
 ```bash
 cd docker
 cp .env.example .env
+cp ../install/config/mowgli/mowgli_robot.yaml config/mowgli/
 nano config/mowgli/mowgli_robot.yaml
 ```
 
+That file is **sparse**: it holds only your install-time choices and calibration results. Every other parameter falls back to the in-package template `ros2/src/mowgli_bringup/config/mowgli_robot.yaml`, so do not paste defaults into it — delete a line to go back to the default.
+
 Key settings to change:
-- `datum_lat` / `datum_long` — your GPS reference point
+- `datum_lat` / `datum_lon` — your GPS reference point
 - `dock_pose_x` / `dock_pose_y` / `dock_pose_yaw` — dock position. `dock_pose_yaw`
   is a **map-frame ENU heading in radians** (not a phone-compass bearing); it is
   normally captured automatically by "Set Docking Point" / undock calibration
@@ -145,9 +174,13 @@ Key settings to change:
 
 ### 4. Launch
 
+`docker/docker-compose.yaml` does not exist in a fresh clone — it is assembled from the fragments in `install/compose/` according to your `.env`. Use the stack manager, which regenerates it and then brings the stack up:
+
 ```bash
-docker compose up -d
+./stack.sh up
 ```
+
+`./stack.sh down`, `restart`, `pull`, `update`, `logs -f <service>` and `ps` cover the rest; anything else is passed straight through to `docker compose`.
 
 ### 5. Access
 
@@ -155,7 +188,8 @@ docker compose up -d
 |---------|-----|
 | GUI | `http://<mower-ip>:4006` |
 | Foxglove | `ws://<mower-ip>:8765` |
-| Rosbridge | `ws://<mower-ip>:9090` |
+
+Foxglove Bridge is the only ROS websocket the stack starts (`enable_foxglove:=true` on the `mowgli` container); `rosbridge_server` was replaced by it and is no longer launched on the robot.
 
 ## GUI Features
 
@@ -164,21 +198,24 @@ docker compose up -d
 Access the diagnostics dashboard at `http://<mower-ip>:4006/#/diagnostics`.
 
 **Displays:**
-- **Containers:** Status of each Docker service (ros2, slam, nav2, etc.)
-- **System metrics:** CPU usage, memory, disk
-- **Localization:** robot_localization pose (`/odometry/filtered_map`), position covariance, orientation
-- **Sensors:** GPS status, LiDAR freshness, IMU health
-- **Behavior Tree:** Current active node, execution state, mode
-- **Coverage:** Areas remaining, current strip progress, cells mowed
-- **ROS Diagnostics:** Aggregated health status (OK, WARN, ERROR, STALE) for all subsystems
-- **Map Management:** View/edit mowing areas, clear mow progress, manage dock pose calibration.
+- **System:** state, status and uptime of each Docker service (`mowgli`, `gps`, `lidar`, `gui`, …), CPU temperature, and an optional live firmware debug log stream
+- **Localisation:** the fused map-frame pose published by `fusion_graph_node` (`/odometry/filtered_map`) — x/y/z, roll/pitch/yaw — next to the live GNSS diagnostics card
+- **Fusion Graph:** nodes in the graph, loop closures, scan-match success rate, pose sigma, keyframes and rejects, straight from `/fusion_graph/diagnostics`
+- **Heading sources:** the yaw estimates the localizer fuses, side by side
+- **BT State & Coverage:** current behavior-tree state and sub-state, battery / charging / emergency latch, Nav2 recovery activity, and mow progress (current area, sub-paths done and skipped, coverage %)
+- **Configuration Cross-checks:** see below
+- **Calibration status:** the dock, IMU-yaw and magnetometer calibration artefacts, each with a button that runs the calibration
+- **Sensors:** raw IMU rates and accelerations, wheel odometry, per-wheel encoder RPM/ticks/direction
+- **Rosbag Recording:** start/stop a recording and manage the resulting bags
+- **ROS Diagnostics:** aggregated health status (OK, WARN, ERROR, STALE) for all subsystems
+
+Mowing areas, mow progress and the docking point are edited on the Map page (`http://<mower-ip>:4006/#/map`), not here.
 
 **Configuration Cross-Checks:**
-Verifies consistency between:
-- GPS datum origin and robot odometry
-- SLAM resolution vs. coverage cell width
-- Motor power limits and battery voltage
-- Emergency stop state and hardware ready status
+Reads the runtime `mowgli_robot.yaml` and shows the configured dock pose (x, y, yaw) alongside the GPS datum, warning when:
+- the config file is missing or cannot be parsed
+- the GPS datum is still unset (`lat=0, lon=0`)
+- the dock heading is still unset (`yaw=0`)
 
 ### Statistics Page
 
@@ -187,22 +224,22 @@ Access session statistics at `http://<mower-ip>:4006/#/statistics`.
 **Automatic Session Recording:**
 Each mowing session is automatically logged with:
 - Start time, end time, duration
-- Total distance traveled
-- Area mowed (m²), mowing efficiency (%)
-- Blade time active
-- Obstacles detected and avoided
-- Power consumed (Wh)
+- Which area was mowed, and the coverage reached (%)
+- Sub-paths completed and skipped
+- Distance travelled
+- Outcome (completed / aborted / error), how many recharge pauses interrupted it, and any errors
 
 **Session History:**
-- View past sessions with date, duration, area covered
-- Compare efficiency across multiple runs
-- Track seasonal trends in mowing patterns
+- A table of past sessions — date, duration, area, coverage, status
+- Distance mowed per week over the last 12 weeks
+- Per-area coverage (cells mowed out of cells total)
+- Clear the whole history from the same page
 
 **Aggregate Statistics:**
-- Total mowed area across all sessions
-- Average efficiency and speed
-- Maintenance intervals (blade usage hours)
-- Weather exposure (rain detection events)
+- Total distance since install
+- Total hours active, across all recorded sessions
+- Completion rate (%) and number of runs
+- Average coverage per run
 
 ## Next Steps
 
@@ -210,3 +247,5 @@ Each mowing session is automatically logged with:
 - [Configuration](Configuration) — tune parameters for your environment
 - [Deployment](Deployment) — advanced Docker deployment options
 - [Contributing](Contributing) — contribute to MowgliNext
+
+Working on the code (or pointing an AI agent at it)? Start from [`CLAUDE.md`](https://github.com/mowglinext/mowglinext/blob/main/CLAUDE.md) at the repo root, then the indexes under [`docs/claude/`](https://github.com/mowglinext/mowglinext/tree/main/docs/claude): `codemaps/` (where the code for each area lives), `ros-interfaces.md`, `parameters.md`, `testing-ci.md`, and `doc-index.md` — which tells you which document is authoritative and which is a historical record.

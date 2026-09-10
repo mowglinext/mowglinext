@@ -749,6 +749,65 @@
                           <PublishHighLevelStatus state="2" state_name="MOWING"/>
                           <FollowStrip/>
                         </Sequence>
+                        <!-- Start-pose blocked recovery (issue #487).
+                             Every blade-off sub-path transit was refused by
+                             the Nav2 planner with START_OCCUPIED and NOTHING
+                             was mowed: the robot is STANDING on a lethal or
+                             keepout cell (2026-08-24: it undocked into the
+                             inflated keepout of a 0.25 m obstacle circle), so
+                             no plan exists from here regardless of the goal.
+                             That is NOT an unmowable field — a second attempt
+                             13 min later mowed the same area to 100 %.
+
+                             Non-motion recovery only: stop, clear the
+                             costmaps, wait for a fresh update, then bubble up
+                             FAILURE so FollowStripRetry re-ticks FollowStrip.
+                             Be honest about the clear: it only helps when the
+                             lethal cell came from a TRANSIENT obstacle_layer
+                             reading. A keepout zone is a static costmap
+                             FILTER — ClearEntireCostmap does not touch it, so
+                             the retry from an unchanged pose will fail again
+                             and GetNextUnmowedArea's bounded exemption
+                             (kMaxStartBlockedAttempts) eventually retires the
+                             area rather than looping.
+
+                             SAFETY — the escape motion (issue #487
+                             follow-up, option B): EscapeStartBlocked nudges
+                             the robot OPPOSITE the last motion it was actually
+                             commanded to make, bounded to
+                             start_blocked_escape_distance (0.40 m default) AND
+                             start_blocked_escape_timeout_s (6 s default). That
+                             one signal gets both field cases right: after an
+                             undock the robot REVERSED into the spot, so the
+                             escape drives FORWARD; mid-mow it arrived driving
+                             forward, so the escape REVERSES onto ground it
+                             occupied seconds ago. If the direction is unknown,
+                             stale or ~zero it commands NOTHING and this branch
+                             behaves exactly as it did before the motion
+                             existed. The blade is switched off AND verified
+                             off first, and the command is published on
+                             /cmd_vel_nav so it passes through
+                             collision_monitor and the LOWEST-priority
+                             twist_mux lane like every other autonomous
+                             motion — teleop and the emergency lane override it
+                             instantly, and the STM32 remains the sole
+                             emergency-stop authority.
+
+                             Placed FIRST in MowOrRecover because
+                             IsCoverageStartBlocked is an exact, consumed
+                             signal, while IsObstacleStuck below would also
+                             match a robot that has simply not moved. -->
+                        <Sequence name="StartPoseBlockedRetry">
+                          <IsCoverageStartBlocked/>
+                          <PublishHighLevelStatus state="2"
+                                                  state_name="START_POSE_BLOCKED"/>
+                          <SetMowerEnabled enabled="false"/>
+                          <StopMoving/>
+                          <EscapeStartBlocked/>
+                          <ClearCostmap/>
+                          <WaitForDuration duration_sec="2.0"/>
+                          <AlwaysFailure/>
+                        </Sequence>
                         <!-- Obstacle wedge recovery: BackUp + ClearCostmap
                              then bubble up FAILURE so RetryUntilSuccessful
                              re-ticks FollowStrip, which resumes at the
@@ -939,8 +998,8 @@
         <!-- ============================================================
              d. Recording (COMMAND_S1 = 3 = COMMAND_RECORD_AREA)
              User drives robot along boundary. The RecordArea node
-             records positions at 2 Hz and publishes a live trajectory
-             preview. When the user presses "Finish" (command 5) the
+             samples positions at area_record_rate_hz and publishes a
+             live trajectory preview. When the user presses "Finish" (command 5) the
              trajectory is simplified with Douglas-Peucker and saved
              as a mowing area. "Cancel" (command 6) discards it.
              ============================================================ -->
@@ -974,11 +1033,17 @@
             <IsCommand command="6"/>
           </Fallback>
           <PublishHighLevelStatus state="3" state_name="RECORDING"/>
+          <!-- simplification_tolerance / record_rate_hz come from
+               mowgli_robot.yaml via behavior_tree_node's blackboard (they were
+               hardcoded at 0.2 m / 2 Hz, which cost a field recording all but
+               24 vertices of a 38 m perimeter). min_vertices / min_area stay
+               hardcoded: they are degenerate-polygon guards, not resolution
+               knobs, and nothing sane wants them retuned. -->
           <RecordArea
-            simplification_tolerance="0.2"
+            simplification_tolerance="{area_simplification_tolerance}"
             min_vertices="3"
             min_area="1.0"
-            record_rate_hz="2.0"
+            record_rate_hz="{area_record_rate_hz}"
             is_exclusion_zone="false"/>
           <PublishHighLevelStatus state="1" state_name="RECORDING_COMPLETE"/>
           <EndSession/>

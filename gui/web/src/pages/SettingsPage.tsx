@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Alert, App, Badge, Button, Empty, Input, Spin, Typography } from "antd";
+import { Alert, App, Badge, Button, Empty, Input, Space, Spin, Typography } from "antd";
 import {
     ReloadOutlined,
     SaveOutlined,
@@ -27,9 +27,12 @@ import { SafetySection } from "../components/settings/SafetySection.tsx";
 import { ObstaclesSection } from "../components/settings/ObstaclesSection.tsx";
 import { NavigationSection } from "../components/settings/NavigationSection.tsx";
 import { RainSection } from "../components/settings/RainSection.tsx";
+import { LedsSection } from "../components/settings/LedsSection.tsx";
+import { IrriSenseSection } from "../components/settings/IrriSenseSection.tsx";
 import { AdvancedSection } from "../components/settings/AdvancedSection.tsx";
 import { SettingsPreview } from "../components/settings/SettingsPreview.tsx";
 import { DisplayModeSection } from "../components/settings/DisplayModeSection.tsx";
+import { LogTimeZoneSection } from "../components/settings/LogTimeZoneSection.tsx";
 
 const { Text } = Typography;
 
@@ -47,6 +50,9 @@ export const SettingsPage = () => {
         loading,
         saving,
         isDirty,
+        dirtyCount,
+        registerExternalSaver,
+        unregisterExternalSaver,
         dirtyKeys,
         restartRequired,
         searchQuery,
@@ -113,7 +119,12 @@ export const SettingsPage = () => {
     const renderSection = () => {
         switch (activeSection) {
             case "appearance":
-                return <DisplayModeSection />;
+                return (
+                    <Space direction="vertical" size={16} style={{width: "100%"}}>
+                        <DisplayModeSection />
+                        <LogTimeZoneSection />
+                    </Space>
+                );
             case "hardware":
                 return (
                     <HardwareSection
@@ -209,6 +220,23 @@ export const SettingsPage = () => {
                 );
             case "rain":
                 return <RainSection values={values} onChange={handleChange} />;
+            case "leds":
+                return (
+                    <LedsSection
+                        values={values}
+                        onChange={handleChange}
+                        isOverridden={isOverridden}
+                        hasDefault={hasDefault}
+                        onReset={resetToDefault}
+                    />
+                );
+            case "irrisense":
+                return (
+                    <IrriSenseSection
+                        registerSaver={registerExternalSaver}
+                        unregisterSaver={unregisterExternalSaver}
+                    />
+                );
             case "advanced":
                 return <AdvancedSection values={values} advancedKeys={advancedKeys} onChange={handleChange} />;
             default:
@@ -371,7 +399,7 @@ export const SettingsPage = () => {
                     loading={saving}
                     disabled={!isDirty}
                 >
-                    {isDirty ? t("settingsPage.saveWithCount", {count: dirtyKeys.size}) : t("settingsPage.saved")}
+                    {isDirty ? t("settingsPage.saveWithCount", {count: dirtyCount}) : t("settingsPage.saved")}
                 </Button>
                 {isDirty && (
                     <Button

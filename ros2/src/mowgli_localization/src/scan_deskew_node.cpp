@@ -41,9 +41,11 @@
 // to read this instead of /scan.
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <deque>
 #include <limits>
+#include <string>
 
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/qos.hpp"
@@ -60,6 +62,7 @@ public:
   ScanDeskewNode() : Node("scan_deskew")
   {
     const std::string input_topic = declare_parameter<std::string>("input_topic", "/scan");
+    scan_input_topic_ = input_topic;
     const std::string output_topic =
         declare_parameter<std::string>("output_topic", "/scan_deskewed");
     const std::string imu_topic = declare_parameter<std::string>("imu_topic", "/imu/data");
@@ -137,6 +140,28 @@ public:
                                     latest_omega_z_,
                                     imu_buffer_.size());
                       });
+
+    // ── LiDAR-configured-but-silent watchdog ─────────────────────────
+    // This node is launched ONLY when the stack resolved use_lidar=true
+    // (navigation.launch.py gates it on that), so "no scan has ever arrived"
+    // is not a sensor hiccup — it means the ROS2 side is configured for a
+    // LiDAR that nothing is publishing. That is now a reachable mismatch:
+    // mowgli_robot.yaml's lidar_enabled decides the ROS2 stack (the
+    // LIDAR_ENABLED env var is no longer read), while docker/.env's
+    // LIDAR_ENABLED still decides whether the mowgli-lidar CONTAINER starts,
+    // so the two can disagree in this direction. Warn loudly, never fatally:
+    // a missing scan degrades obstacle avoidance and fusion_graph
+    // scan-matching, it is not a reason to refuse to run.
+    scan_watchdog_period_s_ = declare_parameter<double>("scan_watchdog_period_s", 20.0);
+    if (scan_watchdog_period_s_ > 0.0)
+    {
+      scan_watchdog_timer_ =
+          create_wall_timer(std::chrono::duration<double>(scan_watchdog_period_s_),
+                            [this]()
+                            {
+                              on_scan_watchdog();
+                            });
+    }
 
     RCLCPP_INFO(get_logger(),
                 "scan_deskew started — %s -> %s (reference=%s, imu=%s, "
@@ -281,8 +306,43 @@ private:
     return false;
   }
 
+  // Fires every scan_watchdog_period_s_. Silence here means the LiDAR half of
+  // the stack is configured but not delivering — see the constructor comment.
+  void on_scan_watchdog()
+  {
+    const size_t seen = scans_since_check_;
+    scans_since_check_ = 0;
+    if (seen > 0)
+    {
+      return;
+    }
+    if (!ever_received_scan_)
+    {
+      RCLCPP_WARN(get_logger(),
+                  "NO LiDAR SCANS on '%s' after %.0f s. This stack is running with "
+                  "use_lidar=true (mowgli_robot.yaml: lidar_enabled), but nothing is "
+                  "publishing scans. Most likely the LiDAR CONTAINER was never "
+                  "started: check LIDAR_ENABLED in docker/.env and 'docker compose ps "
+                  "mowgli-lidar'. Until scans arrive, Nav2 obstacle avoidance and "
+                  "fusion_graph scan-matching do nothing. If this robot has no LiDAR, "
+                  "set 'lidar_enabled: false' in mowgli_robot.yaml (Settings -> "
+                  "Sensors in the GUI) and restart the stack.",
+                  scan_input_topic_.c_str(),
+                  scan_watchdog_period_s_);
+      return;
+    }
+    RCLCPP_WARN(get_logger(),
+                "LiDAR scans STOPPED on '%s' -- none in the last %.0f s (%zu deskewed "
+                "so far). Check the LiDAR driver/container and its serial link.",
+                scan_input_topic_.c_str(),
+                scan_watchdog_period_s_,
+                pub_count_);
+  }
+
   void on_scan(const sensor_msgs::msg::LaserScan& in)
   {
+    ever_received_scan_ = true;
+    ++scans_since_check_;
     sensor_msgs::msg::LaserScan out = in;
     // Linear deskew is active only when enabled AND we have fresh wheel odom;
     // otherwise fall back to the rotation-only path (and never worse than raw).
@@ -452,6 +512,13 @@ private:
   size_t pub_count_{0};
   size_t skipped_count_{0};
   size_t interp_misses_{0};
+
+  // LiDAR-configured-but-silent watchdog state.
+  std::string scan_input_topic_{"/scan"};
+  rclcpp::TimerBase::SharedPtr scan_watchdog_timer_;
+  double scan_watchdog_period_s_{20.0};
+  size_t scans_since_check_{0};
+  bool ever_received_scan_{false};
 };
 
 }  // namespace mowgli_localization

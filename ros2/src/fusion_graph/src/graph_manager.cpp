@@ -69,7 +69,8 @@ void GraphManager::RefreshEstimateLocked() const
   estimate_dirty_ = false;
 }
 
-GraphManager::GraphManager(const GraphParams& params) : params_(params)
+GraphManager::GraphManager(const GraphParams& params)
+    : params_(params), slip_window_(SlipWindowNodes(params.slip_window_s, params.node_period_s))
 {
   gtsam::ISAM2Params p;
   // Gauss-Newton is faster than Dogleg here — graph is small (sliding

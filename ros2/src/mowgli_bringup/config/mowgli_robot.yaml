@@ -91,6 +91,42 @@ mowgli:
     yaw_gyro_sign: 1
     # Behavior tree tuning (consumed by behavior_tree_node)
     tick_rate: 10.0
+
+    # -----------------------------------------------------------------
+    # Area recording (RecordArea — "drive the boundary" teach-in)
+    # -----------------------------------------------------------------
+    # Both of these were HARDCODED in main_tree.xml until 2026-08-25. A field
+    # recording came back with 24 vertices for a 38.13 m perimeter (~1.6 m
+    # between vertices on a hand-driven garden boundary), because BOTH limiters
+    # were set far coarser than the job needs. RecordArea also applies a fixed
+    # 0.05 m minimum spacing between consecutive kept points; that gate is the
+    # INTENDED resolution floor, and these two values exist to let it bind.
+    #
+    # area_simplification_tolerance: Douglas-Peucker tolerance in metres. DP
+    # guarantees only that the stored polygon stays WITHIN this distance of the
+    # driven path, so this IS the worst-case boundary error. It was 0.2 m —
+    # larger than tool_width (0.18 m), i.e. the saved boundary could be off by
+    # more than a full cutting swath. The useful window is [0.05, tool_width):
+    # below 0.05 m there is nothing to gain (the sampler never produces points
+    # closer than that, so a finer tolerance only preserves GNSS/steering
+    # jitter as extra vertices), and at/above tool_width the error costs a whole
+    # outermost pass. 0.05 m is both ends of that window's sweet spot:
+    # tool_width / 3, and exactly as fine as the sampled data supports.
+    area_simplification_tolerance: 0.05
+    #
+    # area_record_rate_hz: position sampling frequency. It was 2.0, which at any
+    # real driving speed put samples 0.15-0.25 m apart — so the 0.05 m gate
+    # almost never fired and the SAMPLE RATE, not the gate, was the real
+    # limiter. The gate binds when speed / rate <= 0.05; max_mps (0.5 m/s) is a
+    # hard runtime wheel-speed ceiling pushed to the STM32, so the robot cannot
+    # be driven faster than that while recording, giving 0.5 / 0.05 = 10 Hz.
+    # 10 Hz is ALSO the ceiling: RecordArea samples inside the BT tick, so
+    # tick_rate (above) caps it — a larger value here is silently ineffective
+    # and logs a warning at recording start. Raise tick_rate first if you ever
+    # want to sample faster. The per-tick cost is one TF lookup plus a distance
+    # compare; the trajectory preview republishes on its own 2 Hz clock so the
+    # GUI path message does not get rebuilt at the sampling rate.
+    area_record_rate_hz: 10.0
     # Localization-quality gate (LocalizationGuard): pause blade-on mowing
     # while ABSOLUTE POSITION is untrustworthy. Field incident 2026-08-02:
     # >60 s plain-GPS fallback (σ ≈ 1.5 m) drove the robot out of the area
@@ -205,9 +241,13 @@ mowgli:
     # previous graph-node scan. Adds a BetweenFactor with rmse-scaled
     # covariance — bounded drift between consecutive nodes even when
     # GPS drops to RTK-Float. Required for "robot keeps mowing through
-    # multi-minute GPS dropouts" scenarios. No-op when the LiDAR
-    # driver is off (use_lidar=false): no /scan publisher, no
-    # subscription, no factors.
+    # multi-minute GPS dropouts" scenarios. FORCED OFF when the LiDAR is
+    # off (lidar_enabled/use_lidar false): navigation.launch.py ANDs this
+    # flag with use_lidar before it reaches fusion_graph_node, so there is
+    # no subscription and no factors. That AND is not cosmetic — this
+    # template default is `true` and has no relation to lidar_enabled, so
+    # without it a GPS-only robot ran fusion_graph with
+    # use_scan_matching=True subscribed to a topic nothing published.
     use_scan_matching: true
 
     # use_loop_closure: on every new node, search earlier graph nodes
@@ -218,8 +258,9 @@ mowgli:
     # and at session start when re-entering a previously-mapped area.
     # Cost: one ICP per candidate per tick (~5 ms each, capped to
     # lc_max_candidates=3). No-op when use_scan_matching is also
-    # false or when use_lidar=false (the launch file force-OFFs it
-    # on first boot too — see navigation.launch.py).
+    # false; FORCED OFF when use_lidar=false (ANDed with use_lidar in
+    # navigation.launch.py, same as use_scan_matching above) and on the
+    # first boot, when no persisted graph exists to close against.
     use_loop_closure: true
 
     # -----------------------------------------------------------------
@@ -256,9 +297,40 @@ mowgli:
     # -----------------------------------------------------------------
     # Mowing
     # -----------------------------------------------------------------
-    mowing_enabled: true           # enable blade motor during mowing
+    # mowing_enabled: read by hardware_bridge_node, which gates blade ENABLE
+    # requests at /hardware_bridge/mower_control — the merged chokepoint every
+    # caller (BT SetMowerEnabled, FollowStrip, the GUI blade button) goes
+    # through. false = DRY RUN: the robot mows the full path with the blade
+    # never spinning. NOT a safety interlock — the STM32 firmware remains the
+    # sole blade safety authority and a DISABLE always passes through
+    # (mowgli_hardware/blade_gate.hpp). Read at startup: takes effect on the
+    # next ROS2 container restart.
+    mowing_enabled: true
     mowing_speed: 0.2              # m/s during coverage paths (field-validated comfortable cut speed)
     transit_speed: 0.2             # m/s during point-to-point navigation (→ RPP desired_linear_vel)
+    # turn_speed_ratio: the coverage controller's speed THROUGH a bend, as a
+    # fraction of mowing_speed. Injected at launch as
+    # FollowCoveragePath.speed_slow = clamp(mowing_speed * turn_speed_ratio,
+    # min_speed_mps, mowing_speed) — see navigation.launch.py.
+    #
+    # WHY IT EXISTS (issue #499): speed_slow used to be a STATIC 0.16 in
+    # nav2_params_base.yaml while speed_fast tracked the operator's mowing_speed.
+    # An operator who lowered mowing_speed to 0.15 therefore ended up driving the
+    # swath-end TURNS 7 % FASTER than the straights — exactly backwards, and
+    # exactly where the robot carves the lawn. Deriving it from mowing_speed
+    # makes the speed slider apply to turns too, and (with a ratio <= 1) makes a
+    # turn never faster than a straight.
+    #
+    # 0.8 reproduces the historical 0.16 / 0.20 pair, so this is a no-op for a
+    # robot on the default mowing_speed. LOWER it to take heat out of swath-end
+    # turns: wheel speeds in a bend scale linearly with it (v_outer =
+    # v*(1 + track/2R)), so 0.6 removes ~25 % of the peak outer-wheel speed.
+    # It does NOT change the inner/outer wheel RATIO — that is set by the turn
+    # RADIUS against the half-track and is speed-independent (issue #499).
+    # Clamped to (0, 1.0] at launch; the effective speed is additionally floored
+    # at FollowCoveragePath.min_speed_mps, below which FTC's own floor would
+    # override it anyway (and the wheels stall under the firmware deadband).
+    turn_speed_ratio: 0.8
     # mow_angle_deg: swath direction. -1 (or any negative) = AUTO — the coverage
     # server picks the swath-count-minimising angle (F2C NSwath). 0..179 forces a
     # fixed swath angle in degrees. Flows to the BT (behavior_tree_node blackboard)
@@ -279,6 +351,26 @@ mowgli:
     # num_headland_passes: 0 = auto (= ceil(headland_width / tool_width)).
     # >0 forces exactly that many concentric perimeter rings, e.g. 1 for a
     # single perimeter pass, 2 for double, regardless of headland_width.
+    # -1 (or any negative) = NONE — no perimeter rings at all (#429). The
+    # back-and-forth swaths become the outermost driven pass. Three distances,
+    # easy to conflate — at the defaults below (chassis_safety_inset 0.20,
+    # op_width = tool_width − swath_overlap = 0.16):
+    #   * outermost swath CENTERLINE = chassis_safety_inset (0.20 m) inside the
+    #     recorded boundary — exactly the line ring 0 would have driven, because
+    #     F2C insets the outermost swath by op_width/2 the same way it insets
+    #     ring 0 (swath_generator_base.cpp sx[0] = 0.5*cov_width).
+    #   * uncut LATERAL band = 0.20 − 0.08 = ~0.12 m, the same band the rings
+    #     leave. Sideways, NONE does not mow closer to the edge, nor further.
+    #   * swath ENDS also land on that ~0.12 m line, because F2C clips each
+    #     sweep line to the planning cell. With rings on the ends sit far deeper
+    #     (the rings absorb that band), so at a ROW END the robot noses ~8 cm
+    #     closer to the boundary than it ever does with rings on. That is the
+    #     cost of having no apron, and it is head-on rather than parallel, where
+    #     chassis_safety_inset's half-chassis-width reasoning does not apply.
+    # Side effect: with no mowed apron beyond the swath ends, row-end U-turns
+    # degrade to straight pivot-through corners instead of smooth arcs.
+    # FIELD TEST OWED before trusting NONE on a real lawn (#429).
+    # Read once at coverage_server startup — takes effect on the next ROS2 restart.
     num_headland_passes: 2         # 2026-07-23: field-validated default (was 0=auto)
     # mow_direction: perimeter/headland travel winding (issue #335). 0 = planner
     # default (F2C natural), 1 = clockwise, 2 = counter-clockwise. Set it so a
@@ -420,9 +512,50 @@ mowgli:
     # -----------------------------------------------------------------
     # Safety
     # -----------------------------------------------------------------
-    motor_temp_high_c: 80.0        # stop blade if motor exceeds
-    motor_temp_low_c: 40.0         # resume blade below this
+    # NOTE: motor_temp_high_c / motor_temp_low_c were REMOVED — no node ever
+    # read them and NO firmware thermal cutoff exists (adc.c only measures
+    # blade_temperature and cpp_main.cpp only reports it, so the GUI's old
+    # "Stop Above / Resume Below" card promised a cutoff that lives in no layer
+    # of the stack). Temperature is a DIAGNOSTICS surface only: see
+    # motor_temp_warn_c / motor_temp_error_c in
+    # mowgli_monitoring/config/diagnostics.yaml (WARN/ERROR levels, no action).
     # Lift/tilt emergency is handled by firmware (STM32), not ROS2
+
+    # -----------------------------------------------------------------
+    # Start-pose escape (issue #487) — SAFETY-CRITICAL, PHYSICAL MOTION
+    # -----------------------------------------------------------------
+    # When every blade-off sub-path transit of a coverage pass is refused by
+    # the Nav2 planner with START_OCCUPIED and nothing was mowed, the robot is
+    # STANDING on a lethal/keepout cell and no plan exists from there. Clearing
+    # the costmaps does not help — a keepout is a static costmap FILTER — so
+    # the BT nudges the robot off the cell with a short, bounded, open-loop
+    # move in the direction OPPOSITE the last motion it was commanded to make.
+    # That one signal gets both field cases right: after an undock the robot
+    # REVERSED into the spot, so the escape drives forward; mid-mow it arrived
+    # driving forward, so the escape reverses onto known-good ground.
+    #
+    # The blade is switched off AND verified off first, and the command is
+    # published on /cmd_vel_nav, so it passes through collision_monitor and the
+    # LOWEST-priority twist_mux lane exactly like every other autonomous
+    # motion. The STM32 remains the sole emergency-stop authority.
+    #
+    # If the direction is unknown, stale or ~zero, NOTHING is commanded and the
+    # recovery falls back to clear-costmaps-and-retry, then retire + dock.
+    # Set start_blocked_escape_enabled: false to keep that non-motion behaviour
+    # permanently. See mowgli_behavior/start_blocked_escape.hpp.
+    start_blocked_escape_enabled: true
+    start_blocked_escape_speed: 0.10        # m/s — below mowing (0.20) and undock (0.16)
+    start_blocked_escape_distance: 0.40     # m — distance budget (hard ceiling 0.60 in code)
+    start_blocked_escape_timeout_s: 6.0     # s — hard time bound; ends the move even if the
+                                            # wheels are not turning (0.40/0.10 = 4.0 s nominal)
+    start_blocked_escape_min_signal_speed: 0.03   # m/s — below this a command is "not moving"
+    # How old the direction signal may be (s). It must outlast a whole failed
+    # coverage pass (the 2026-08-24 event burned 26 planning calls between the
+    # undock and the recovery), or the escape always stands down and never
+    # fires. Too SHORT is fail-safe (no motion, pre-#487 behaviour); too LONG
+    # risks acting on a direction that no longer describes how the robot
+    # arrived. Tune from a field log rather than by guesswork.
+    start_blocked_escape_signal_max_age_s: 90.0
 
     # -----------------------------------------------------------------
     # Obstacles (GUI: Settings → Obstacles)
@@ -568,3 +701,39 @@ mowgli:
     # obstacle-deviation + reverse-escape, not this timer, so the longer wait is
     # a coverage-completeness gain, not a safety regression.
     progress_timeout_sec: 30.0     # seconds without progress before a strip is aborted+skipped
+
+    # -----------------------------------------------------------------
+    # WS2812 status ring (mowgli_leds)
+    # -----------------------------------------------------------------
+    # Optional addressable LED ring driven from the SBC over SPI MOSI. Read-only
+    # with respect to the robot; NOT part of the blade-safety path (the STM32
+    # keeps its own status LED and remains the sole blade safety authority).
+    #
+    # OFF by default: an existing robot must not suddenly start writing to a
+    # /dev/spidev it may not own. full_system.launch.py reads led_enabled here
+    # for the led_ring_node launch gate, exactly as it does for lidar_enabled.
+    #
+    # On the Orange Pi 5B the ring's DATA line is on 40-pin header pin 19
+    # (GPIO1_C1 = SPI4_MOSI_M0), and the SPI4-M0 device-tree overlay must be
+    # enabled in U-Boot before /dev/spidev exists at all. See
+    # ros2/src/mowgli_leds/README.md for the u-boot-update steps. Until then
+    # the node warns ONCE and stands down; it never crashes or spams.
+    led_enabled: false             # master switch; false = node is not launched
+    led_count: 16                  # LEDs on the ring — SET THIS to the real count
+    led_spi_device: "/dev/spidev4.1"  # confirm with `ls /dev/spidev*` after the overlay is live
+    led_brightness: 0.6            # 0..1 linear scale on every channel. Whole-ring
+                                   # white at 1.0 is ~60 mA per LED; 0.6 keeps a
+                                   # 16-LED ring under ~0.6 A while staying readable
+                                   # in daylight.
+    led_refresh_hz: 20.0           # render tick. Frames are only WRITTEN when they
+                                   # change (plus led_keepalive_s), so static modes
+                                   # cost ~0.5 writes/s of 234 bytes.
+    led_keepalive_s: 2.0           # re-send an unchanged frame at least this often
+    led_status_timeout_s: 5.0      # no HighLevelStatus for this long -> STALE pattern
+    led_device_retry_s: 30.0       # re-open a missing/failed /dev/spidev this often
+    led_low_battery_percent: 20.0  # below this, and not charging, the ring blinks red
+    led_charge_full_percent: 99.0  # at or above this a charging ring goes steady green
+    led_idle_scale: 0.10           # brightness of the dim idle ring, relative to led_brightness
+    led_spi_speed_hz: 2400000      # 3 SPI bits per WS2812 bit = 1.25 us. Do NOT retune
+                                   # without re-reading ws2812_encoder.hpp — the symbol
+                                   # table is derived from this exact clock.

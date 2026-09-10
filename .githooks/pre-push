@@ -23,7 +23,13 @@ if ! "$FORMAT_SCRIPT" --check 2>/dev/null; then
   "$FORMAT_SCRIPT"
 
   # Stage and amend the last commit with formatting fixes
-  git add ros2/src/
+  # Stage only what the formatter can touch. `git add ros2/src/` also staged
+  # ros2/src/external/universal-gnss, so any push that triggered a reformat
+  # froze whatever commit the local submodule happened to sit at. That is how
+  # PR #532 (a docs-only change) silently reverted the #531 re-pin and left
+  # dev's GPS image build red: sensors/gps/Dockerfile referenced gnss_runtime
+  # while the gitlink pointed back at a commit predating it.
+  git add -- 'ros2/src/*.cpp' 'ros2/src/*.hpp' 'ros2/src/*.h' ':!ros2/src/external/*'
   git commit -m "chore: auto-format C++ files"
   echo "==> Created formatting commit. Push will continue."
 fi

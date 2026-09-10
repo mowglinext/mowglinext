@@ -110,6 +110,7 @@ void GraphManager::ResetLocked()
   initialized_ = false;
 
   accum_.Reset();
+  slip_window_.Clear();
   queue_ = UnaryQueue{};
 
   latest_.reset();

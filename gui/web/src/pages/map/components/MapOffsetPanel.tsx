@@ -56,7 +56,7 @@ export const MapOffsetPanel = ({offsetX, offsetY, bearing, onChangeX, onChangeY,
                     max={180}
                     step={1}
                     value={bearing}
-                    onChange={(v) => onChangeBearing(v as number)}
+                    onChange={(v) => onChangeBearing(v)}
                     tooltip={{formatter: (v) => `${v}°`}}
                 />
             </div>

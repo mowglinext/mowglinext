@@ -314,6 +314,8 @@ COPY ros2/src/mowgli_behavior/package.xml      src/mowgli_behavior/package.xml
 COPY ros2/src/mowgli_behavior/CMakeLists.txt   src/mowgli_behavior/CMakeLists.txt
 COPY ros2/src/mowgli_monitoring/package.xml    src/mowgli_monitoring/package.xml
 COPY ros2/src/mowgli_monitoring/CMakeLists.txt src/mowgli_monitoring/CMakeLists.txt
+COPY ros2/src/mowgli_leds/package.xml          src/mowgli_leds/package.xml
+COPY ros2/src/mowgli_leds/CMakeLists.txt      src/mowgli_leds/CMakeLists.txt
 COPY ros2/src/mowgli_simulation/package.xml    src/mowgli_simulation/package.xml
 COPY ros2/src/mowgli_simulation/CMakeLists.txt src/mowgli_simulation/CMakeLists.txt
 COPY ros2/src/mowgli_bringup/package.xml       src/mowgli_bringup/package.xml

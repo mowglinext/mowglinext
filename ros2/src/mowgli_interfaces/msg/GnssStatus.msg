@@ -118,3 +118,14 @@ uint16 msm_summary_satellite_count
 uint16 msm_summary_signal_count
 uint16 msm_summary_cell_count
 float32 msm_summary_age_s
+
+# Identity of the receiver position observation represented by this sample.
+# Copied verbatim from Universal GNSS when the pinned adapter supplies it:
+# - advances only for a genuinely accepted position observation
+# - remains unchanged for timer-driven cached republication
+# - 0 means "not supplied", which selects the receipt-stamp compatibility
+#   mode in mowgli_interfaces/gnss_observation_freshness.hpp
+#
+# Kept at the end of the message to preserve existing field ordering as far as
+# ROS interface evolution permits.
+uint64 position_observation_sequence

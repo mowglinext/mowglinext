@@ -106,6 +106,8 @@ namespace mower_msgs
       _msm_summary_cell_count_type msm_summary_cell_count;
       typedef float _msm_summary_age_s_type;
       _msm_summary_age_s_type msm_summary_age_s;
+      typedef uint64_t _position_observation_sequence_type;
+      _position_observation_sequence_type position_observation_sequence;
       enum { FIX_TYPE_NO_FIX = 0 };
       enum { FIX_TYPE_GPS_FIX = 1 };
       enum { FIX_TYPE_RTK_FLOAT = 2 };
@@ -200,7 +202,8 @@ namespace mower_msgs
       msm_summary_satellite_count(0),
       msm_summary_signal_count(0),
       msm_summary_cell_count(0),
-      msm_summary_age_s(0)
+      msm_summary_age_s(0),
+      position_observation_sequence(0)
     {
     }
 
@@ -542,6 +545,20 @@ namespace mower_msgs
       *(outbuffer + offset + 2) = (u_msm_summary_age_s.base >> (8 * 2)) & 0xFF;
       *(outbuffer + offset + 3) = (u_msm_summary_age_s.base >> (8 * 3)) & 0xFF;
       offset += sizeof(this->msm_summary_age_s);
+      union {
+        uint64_t real;
+        uint64_t base;
+      } u_position_observation_sequence;
+      u_position_observation_sequence.real = this->position_observation_sequence;
+      *(outbuffer + offset + 0) = (u_position_observation_sequence.base >> (8 * 0)) & 0xFF;
+      *(outbuffer + offset + 1) = (u_position_observation_sequence.base >> (8 * 1)) & 0xFF;
+      *(outbuffer + offset + 2) = (u_position_observation_sequence.base >> (8 * 2)) & 0xFF;
+      *(outbuffer + offset + 3) = (u_position_observation_sequence.base >> (8 * 3)) & 0xFF;
+      *(outbuffer + offset + 4) = (u_position_observation_sequence.base >> (8 * 4)) & 0xFF;
+      *(outbuffer + offset + 5) = (u_position_observation_sequence.base >> (8 * 5)) & 0xFF;
+      *(outbuffer + offset + 6) = (u_position_observation_sequence.base >> (8 * 6)) & 0xFF;
+      *(outbuffer + offset + 7) = (u_position_observation_sequence.base >> (8 * 7)) & 0xFF;
+      offset += sizeof(this->position_observation_sequence);
       return offset;
     }
 
@@ -938,11 +955,26 @@ namespace mower_msgs
       u_msm_summary_age_s.base |= ((uint32_t) (*(inbuffer + offset + 3))) << (8 * 3);
       this->msm_summary_age_s = u_msm_summary_age_s.real;
       offset += sizeof(this->msm_summary_age_s);
+      union {
+        uint64_t real;
+        uint64_t base;
+      } u_position_observation_sequence;
+      u_position_observation_sequence.base = 0;
+      u_position_observation_sequence.base |= ((uint64_t) (*(inbuffer + offset + 0))) << (8 * 0);
+      u_position_observation_sequence.base |= ((uint64_t) (*(inbuffer + offset + 1))) << (8 * 1);
+      u_position_observation_sequence.base |= ((uint64_t) (*(inbuffer + offset + 2))) << (8 * 2);
+      u_position_observation_sequence.base |= ((uint64_t) (*(inbuffer + offset + 3))) << (8 * 3);
+      u_position_observation_sequence.base |= ((uint64_t) (*(inbuffer + offset + 4))) << (8 * 4);
+      u_position_observation_sequence.base |= ((uint64_t) (*(inbuffer + offset + 5))) << (8 * 5);
+      u_position_observation_sequence.base |= ((uint64_t) (*(inbuffer + offset + 6))) << (8 * 6);
+      u_position_observation_sequence.base |= ((uint64_t) (*(inbuffer + offset + 7))) << (8 * 7);
+      this->position_observation_sequence = u_position_observation_sequence.real;
+      offset += sizeof(this->position_observation_sequence);
      return offset;
     }
 
     virtual const char * getType() override { return "mower_msgs/GnssStatus"; };
-    virtual const char * getMD5() override { return "71b4eb0e6897be3f7e44ad3f15ca54e5"; };
+    virtual const char * getMD5() override { return "2abb8ee551e47aac5db970d0e1a1740b"; };
 
   };
 

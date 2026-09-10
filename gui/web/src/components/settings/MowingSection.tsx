@@ -13,6 +13,28 @@ const { Text, Paragraph } = Typography;
 const MOW_ANGLE_AUTO = -1;
 const MOW_ANGLE_MAX_DEG = 179;
 
+// Headland (perimeter ring) count sentinel, mirroring coverage_server's
+// num_headland_passes contract: any negative value = NONE (no perimeter rings —
+// the serpentine swaths become the outermost driven pass; their CENTRELINE lands
+// on the same line ring 0 would have driven, chassis_safety_inset inside the
+// recorded boundary, so the uncut lateral band is unchanged, but the swath ENDS
+// reach that band and so nose ~op_width/2 closer to the boundary than any ring
+// pass does), 0 = AUTO (ceil(headland_width / tool_width), floored at 1),
+// >0 = exactly that count.
+const HEADLAND_PASSES_NONE = -1;
+const HEADLAND_PASSES_AUTO = 0;
+const HEADLAND_PASSES_MAX = 5;
+// The installed mowgli_robot.yaml is SPARSE (Invariant 15), so an untouched
+// robot sends no num_headland_passes at all. Fall back to the TEMPLATE default
+// (ros2/src/mowgli_bringup/config/mowgli_robot.yaml) — the value coverage_server
+// actually runs — not to AUTO, which would show a ring count nobody is using.
+const HEADLAND_PASSES_TEMPLATE_DEFAULT = 2;
+const HEADLAND_PASS_OPTIONS = [
+    HEADLAND_PASSES_NONE,
+    HEADLAND_PASSES_AUTO,
+    ...Array.from({ length: HEADLAND_PASSES_MAX }, (_, i) => i + 1),
+];
+
 type Props = {
     values: Record<string, any>;
     onChange: (key: string, value: any) => void;
@@ -175,10 +197,17 @@ export const MowingSection: React.FC<Props> = ({
                 <Space direction="vertical" size={12} style={{ width: "100%" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <div>
-                            <Text strong style={{ fontSize: 14 }}>
-                                <ScissorOutlined style={{ marginRight: 6 }} />
-                                {t("settingsMowing.mowingMotor")}
-                            </Text>
+                            {/* Wired since issue #195: hardware_bridge_node gates
+                                blade ENABLE requests on this key. Wrapped in
+                                fieldLabel() so it gets the overridden dot + reset
+                                affordance every other control has. */}
+                            {fieldLabel(
+                                "mowing_enabled",
+                                <Text strong style={{ fontSize: 14 }}>
+                                    <ScissorOutlined style={{ marginRight: 6 }} />
+                                    {t("settingsMowing.mowingMotor")}
+                                </Text>,
+                            )}
                             <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
                                 {t("settingsMowing.mowingMotorDescription")}
                             </Paragraph>
@@ -233,11 +262,19 @@ export const MowingSection: React.FC<Props> = ({
                                 </Col>
                                 <Col xs={12}>
                                     <Form.Item label={fieldLabel("num_headland_passes", t("settingsMowing.headlandPasses"))} tooltip={t("settingsMowing.headlandPassesTooltip")}>
-                                        <InputNumber
-                                            value={values.num_headland_passes}
+                                        <Select
+                                            value={values.num_headland_passes ?? HEADLAND_PASSES_TEMPLATE_DEFAULT}
                                             onChange={(v) => onChange("num_headland_passes", v)}
-                                            min={0} max={5} step={1} precision={0}
                                             style={{ width: "100%" }}
+                                            options={HEADLAND_PASS_OPTIONS.map((value) => ({
+                                                value,
+                                                label:
+                                                    value === HEADLAND_PASSES_NONE
+                                                        ? t("settingsMowing.headlandPassesNone")
+                                                        : value === HEADLAND_PASSES_AUTO
+                                                          ? t("settingsMowing.headlandPassesAuto")
+                                                          : String(value),
+                                            }))}
                                         />
                                     </Form.Item>
                                 </Col>

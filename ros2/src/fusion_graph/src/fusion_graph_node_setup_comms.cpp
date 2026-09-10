@@ -18,6 +18,7 @@
 
 #include "fusion_graph/fusion_graph_node.hpp"
 #include "fusion_graph/fusion_graph_node_util.hpp"
+#include "fusion_graph/rtk_wrongfix_gate.hpp"
 
 namespace fusion_graph
 {
@@ -243,6 +244,12 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         seed_xy_.reset();
         seed_yaw_.reset();
         seed_xy_rtk_fixed_ = false;
+        gnss_observation_tracker_.Reset();
+        last_rtk_fixed_stamp_.reset();
+        rtk_fixed_streak_ = 0;
+        last_gps_sigma_ = -1.0;
+        last_gps_map_xy_.reset();
+        ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
         // Re-zero the dead-reckoning frame. Without this the odom→base
         // transform keeps whatever offset it had accumulated (observed
         // 74 m), so map→odom = graph_pose ∘ dr⁻¹ still has the huge
@@ -349,6 +356,21 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
                           add("total_nodes", std::to_string(stats.total_nodes));
                           add("scans_attached", std::to_string(stats.scans_attached));
                           add("loop_closures", std::to_string(stats.loop_closures));
+                          // Nodes where the #513 rate/travel gate blocked the LC
+                          // search (cumulative). Diff against loop_closures to
+                          // see the gate working.
+                          add("lc_rate_gated", std::to_string(lc_rate_gated_));
+                          // Dock-prior vs RTK-Fixed GPS consistency (#512):
+                          // latest disagreement while charging (0 when
+                          // not) + nodes the dock prior yielded on.
+                          {
+                            const bool docked = last_is_charging_valid_ && last_is_charging_;
+                            const double d = docked ? dock_gps_disagreement_m_ : 0.0;
+                            char buf[32];
+                            std::snprintf(buf, sizeof(buf), "%.3f", d);
+                            add("dock_gps_disagreement_m", buf);
+                            add("dock_prior_yielded", std::to_string(dock_prior_yielded_));
+                          }
                           add("scans_received", std::to_string(scans_received_));
                           add("scan_matches_ok", std::to_string(scan_matches_ok_));
                           add("scan_matches_fail", std::to_string(scan_matches_fail_));

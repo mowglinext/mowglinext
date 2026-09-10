@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "fusion_graph/graph_params.hpp"
+#include "fusion_graph/slip_window.hpp"
 #include <Eigen/Core>
 #include <gtsam/geometry/Pose2.h>
 #include <gtsam/inference/Symbol.h>
@@ -467,6 +468,9 @@ private:
   std::deque<std::pair<double, uint64_t>> node_time_index_;
 
   Accumulator accum_;
+  // Per-node (dθ_wheel, dθ_gyro) ring the slip veto integrates over
+  // (issue #516) — sized from slip_window_s / node_period_s in the ctor.
+  SlipWindow slip_window_;
   UnaryQueue queue_;
 
   std::optional<TickOutput> latest_;

@@ -2,6 +2,15 @@
 
 Companion to [`compute_nav2_params.py`](compute_nav2_params.py).
 
+> **Coverage-slot caveat.** The script was written while `FollowCoveragePath`
+> was MPPI. Since 2026-06-19 that slot is `mowgli_nav2_plugins/FTCController`
+> again (`nav2_params_base.yaml`), so every `FollowCoveragePath.*` MPPI row
+> below — `vx_max` / `wz_max` / `vx_std` / `time_steps` / the critic
+> thresholds — has **no counterpart in the live config**: `--compare` prints
+> `current = None` and DIVERGES for all of them. The FollowPath (RPP),
+> behavior_server, costmap, collision-monitor, coverage-server and
+> goal-checker rows are still live.
+
 ## Problem
 
 Most values in `nav2_params_base.yaml` are not free constants — they are
@@ -51,21 +60,27 @@ vx_breakaway = pwm_deadband / pwm_per_mps        = 40/300 ≈ 0.133 m/s  (per wh
 wz_breakaway = 2 · vx_breakaway / wheel_track    ≈ 0.82 rad/s          (in-place)
 ```
 
-Derived floors keep every commanded motion decisively above these:
-`VelocityDeadbandCritic` vx = `deadband_margin (1.1) · vx_breakaway` ≈ 0.15;
-RPP `min_approach_linear_velocity` ≈ 0.16; behavior_server
-`min_rotational_vel` ≈ 0.90 (field value 0.85 — same math). The host bridges
-the deadband (hardware_bridge `min_linear_vel` guard + the firmware gyro
-rate loop), but commands that *live* inside the deadband still dither.
+Derived floors keep every commanded motion decisively above these: RPP
+`min_approach_linear_velocity` ≈ 0.16 (live value 0.16); behavior_server
+`min_rotational_vel` ≈ 0.90 (live value 0.85 — same math). A third floor,
+`VelocityDeadbandCritic` vx = `deadband_margin (1.1) · vx_breakaway` ≈ 0.15,
+is MPPI-only and has no counterpart under FTCController. `hardware_bridge`
+zeroes any |vx| below `min_linear_vel` (runtime param, default 0.05) rather
+than boosting it, and the firmware yaw loop bridges the rotational deadband,
+but commands that *live* inside the deadband still dither.
 
 ### The rate loop clamp
 
 2026-07-17 Option C (task #33/#34): the gyro yaw-rate loop moved from the
 host into FIRMWARE and is no longer a host-toggleable `angular_rate_loop_enabled`
-ROS param — it runs unconditionally. It clamps |wz| at
-`HW_ANGULAR_RATE_MAX_CMD = 1.5 rad/s` (carried over from the removed host
-default; update once firmware reports its own clamp value). Anything above
-1.5 in Nav2 (wz_max, pivot rates, Spin max) is **silently clamped**.
+ROS param — it runs unconditionally, and `hardware_bridge`'s `on_cmd_vel`
+forwards wz **unshaped**. The script still models a ceiling of
+`HW_ANGULAR_RATE_MAX_CMD = 1.5 rad/s` and treats anything above it in Nav2
+(wz_max, pivot rates, Spin max) as **silently clamped** — but that number is
+carried over from the removed host default and is *not* a firmware clamp:
+`cpp_main.cpp` limits the yaw loop's differential **trim**
+(`YAW_TRIM_LIMIT_MPS_DEFAULT = 0.15 m/s`), not |wz|. Treat 1.5 as a modelling
+assumption until the firmware reports a real ceiling.
 
 `--compare` flags ceiling violations as **HARD** (vs mere DIVERGES).
 
@@ -73,9 +88,11 @@ default; update once firmware reports its own clamp value). Anything above
 
 Diff-drive: `wheel_speed = |vx| + |wz|·track/2`, firmware-clamped at MAX_MPS.
 So vx and wz are coupled: at mowing speed 0.20, any `wz > 2·(0.5−0.2)/0.325 =
-1.85` clips one wheel — the executed twist deviates from the commanded one,
-MPPI's DiffDrive model mispredicts, and the correction loop oscillates. The
-2026-06-12 `wz_max: 2.0` bump violates this (and the 1.5 rate-loop clamp).
+1.85` clips one wheel — the executed twist deviates from the commanded one and
+the tracking loop oscillates. The 2026-06-12 `wz_max: 2.0` bump violated this
+(and the 1.5 ceiling); it went away with MPPI, and FTCController has no
+`wz_max` at all — its live angular cap is
+`FollowCoveragePath.max_cmd_vel_ang` (0.8), comfortably inside the bound.
 
 ## Profiles
 
@@ -84,9 +101,13 @@ Hard physics applies to both; profiles choose *within* the feasible envelope.
 | | `calm` | `responsive` |
 |---|---|---|
 | wz_max policy | no clipping ever: `min(ceiling, wz_sat @ vx_max)` | accept ≤10% per-wheel over-ask: `min(ceiling, 2·(1.1·MAX_MPS − vx_max)/track)` |
-| vx_std | 0.5·vx_max (clean straights) | 0.75·vx_max (= 0.15 field value; 0.10 lost U-turn recovery, 2026-06-07) |
+| vx_std | 0.5·vx_max (clean straights) | 0.75·vx_max (= 0.15, the MPPI-era value; 0.10 lost U-turn recovery, 2026-06-07) |
 | wz_std | 0.22·wz_max | 0.30·wz_max |
-| pivot wheel fraction | 0.5 (→ ~1.54 rad/s) | 0.65 (→ ~2.0 rad/s — the field value) |
+| pivot wheel fraction | 0.5 (→ ~1.54 rad/s) | 0.65 (→ ~2.0 rad/s) |
+
+Both pivot rates are then capped at the wz ceiling, so today both profiles
+emit 1.5 rad/s — and FTCController has no `rotate_to_heading_angular_vel`, so
+that row too has no live counterpart (only `FollowPath`'s does).
 
 A/B in the field with `mow_session_monitor.py`; `--profile both` prints both
 reports.
@@ -97,29 +118,36 @@ reports.
   around, origin at the rear axle): inscribed/circumscribed radii from the
   ORIGIN, `inflation_radius ≥ circumscribed` for SE2 correctness (the repo
   intentionally runs lower — documented trade, flagged DIVERGES not HARD).
-- **MPPI horizon** — `model_dt = 1/controller_frequency`, `time_steps =
-  horizon/model_dt`; prediction distance `= time_steps·model_dt·vx_max` sets
+- **MPPI horizon** (MPPI-era, no live counterpart — see the caveat at the
+  top) — `model_dt = 1/controller_frequency`, `time_steps = horizon/model_dt`;
+  prediction distance `= time_steps·model_dt·vx_max` sets
   GoalCritic/PathFollowCritic `threshold_to_consider` (0.72 m at 0.20 m/s —
   the ref 1.4 assumes a 0.5 m/s robot).
 - **Collision monitor** — `d_stop = v²/(2·decel) + v·t_reaction` sizes
   PolygonSlow; PolygonStop geometry is derived but stays out of the active
-  set (CLAUDE.md invariant).
+  set — it is `enabled: false` in both overlays since 2026-07-21, replaced by
+  the velocity-projected `FootprintApproach` (plus `PolygonStopNarrow` on the
+  LiDAR variant).
 - **Coverage** — `operation_width = tool_width − swath_overlap` (launch
   injection), F2C headland `= 0.5·chassis_width + margin + 0.5·op_w`,
   `keepout_nav_margin = footprint_half_width + tracking_margin`.
-- **Goal checkers** — coverage xy `= fraction·tool_width` clipped ≤ 0.15;
-  transit tolerances are operator values.
+- **Goal checkers** — coverage xy `= fraction·tool_width` clipped ≤ 0.15,
+  but `navigation.launch.py` instead **floors** the live value at FTC's
+  `max_goal_distance_error` (0.50 m, so a parked FTC can satisfy the goal) —
+  this row therefore always DIVERGES. Transit tolerances are operator values.
 
 MPPI **critic weights** (PathAlign / GoalCritic / CostCritic…) are NOT
 derived — genuine behavioural trade-offs, hand-tuned. Only their geometric
-*thresholds* are derived.
+*thresholds* are derived, and since the FTC restore neither weights nor
+thresholds exist in the config any more.
 
 ## --compare and the base+overlay structure
 
 `--compare` deep-merges `nav2_params_base.yaml` with the chosen overlay
-(`--overlay lidar|no_lidar|none`) using the **same** recursive merge as
-`navigation.launch.py::_deep_merge`, then tabulates derived vs current with
-two flag levels:
+(`--overlay lidar|no_lidar|none`) using the **same** recursive merge as the
+launch path — both import `deep_merge` from
+`mowgli_bringup/launch/robot_config_util.py` — then tabulates derived vs
+current with two flag levels:
 
 - **HARD** — physics violation: the current value is silently clamped
   (rate-loop ceiling), clips a wheel (saturation at mowing speed), or gets
@@ -165,8 +193,11 @@ import `compute_all()` and merge the `emit_yaml()`-shaped tree would make all
 of this live. Invariants the injector MUST preserve:
 
 - `FollowCoveragePath` stays value-for-value identical across the lidar /
-  no_lidar variants (`test_nav2_params.py` pins them in lockstep).
-- `closed_loop: false` on the coverage controller (deadband chassis).
+  no_lidar variants apart from `check_obstacles` /
+  `enable_obstacle_deviation`
+  (`test_nav2_params.py::test_coverage_controller_aligned_across_variants`).
+- `closed_loop: false` on `FollowPath` / RotationShim (deadband chassis) —
+  FTCController has no such knob.
 - `coverage_goal_checker` stays `PathProgressGoalChecker`,
   `progress_threshold` 0.95.
-- Coverage xy tolerance stays clipped ≤ 0.15 m.
+- Coverage xy tolerance stays **≥** FTC's `max_goal_distance_error` (0.50 m).

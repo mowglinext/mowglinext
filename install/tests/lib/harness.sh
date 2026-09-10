@@ -257,12 +257,12 @@ harness_set_preset() {
             LIDAR_CONNECTION=uart; LIDAR_UART_DEVICE=/dev/ttyAMA5; LIDAR_BAUD=230400
             ;;
           stl27l-usb)
-            LIDAR_ENABLED=true; LIDAR_TYPE=stl27l; LIDAR_MODEL=STL27L
-            LIDAR_CONNECTION=usb; LIDAR_UART_DEVICE=""; LIDAR_BAUD=230400
+            LIDAR_ENABLED=true; LIDAR_TYPE=stl27l; LIDAR_MODEL=LDLiDAR_STL27L
+            LIDAR_CONNECTION=usb; LIDAR_UART_DEVICE=""; LIDAR_BAUD=921600
             ;;
           stl27l-uart)
-            LIDAR_ENABLED=true; LIDAR_TYPE=stl27l; LIDAR_MODEL=STL27L
-            LIDAR_CONNECTION=uart; LIDAR_UART_DEVICE=/dev/ttyAMA5; LIDAR_BAUD=230400
+            LIDAR_ENABLED=true; LIDAR_TYPE=stl27l; LIDAR_MODEL=LDLiDAR_STL27L
+            LIDAR_CONNECTION=uart; LIDAR_UART_DEVICE=/dev/ttyAMA5; LIDAR_BAUD=921600
             ;;
         esac
         ;;

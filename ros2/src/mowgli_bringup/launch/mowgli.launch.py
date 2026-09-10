@@ -230,6 +230,12 @@ def generate_launch_description() -> LaunchDescription:
             {"lift_recovery_mode": bool(robot_params.get("lift_recovery_mode", False))},
             {"lift_blade_resume_delay_sec": float(robot_params.get(
                 "lift_blade_resume_delay_sec", 1.0))},
+            # Dry-run inhibit (issue #195): false suppresses every blade ENABLE
+            # that reaches /hardware_bridge/mower_control — the merged chokepoint
+            # every caller (BT, FollowStrip, GUI) goes through. NOT a safety
+            # interlock: the firmware remains the sole blade safety authority and
+            # a DISABLE always passes through (mowgli_hardware/blade_gate.hpp).
+            {"mowing_enabled": bool(robot_params.get("mowing_enabled", True))},
             # 2026-07-17 Option C (task #34): the host-side gyro angular-rate
             # loop (angular_rate_loop_enabled/_kp/_ki/_kff, Option B task #24)
             # is REMOVED — the yaw-rate loop now runs in firmware (task #33),

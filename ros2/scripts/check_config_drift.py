@@ -105,13 +105,21 @@ USER_OVERRIDE = {
     "use_lidar", "lidar_enabled",
     "map_save_on_dock", "map_save_path",
     "min_turning_radius", "headland_width",
-    "outline_offset", "outline_overlap", "outline_passes",
-    "path_spacing", "mow_angle_offset_deg", "mow_angle_increment_deg",
+    # RETIRED (issue #195) — deliberately NOT listed any more:
+    #   outline_offset / outline_overlap / outline_passes,
+    #   mow_angle_offset_deg / mow_angle_increment_deg,
+    #   motor_temp_low_c / motor_temp_high_c.
+    # No node reads them and they are gone from the template + the GUI schema.
+    # Dropping a retired key from USER_OVERRIDE is the POINT: `known` (below)
+    # is STRUCTURAL | USER_OVERRIDE | CALIBRATION_OUTPUT, so listing it here
+    # would keep suppressing the uncategorized-orphan report for a key that no
+    # longer means anything — a stale value on a real robot's installed yaml
+    # must now be surfaced, not silently tolerated.
+    "path_spacing",
     "max_obstacle_avoidance_distance", "coverage_xy_tolerance",
     "obstacle_inflation_radius", "obstacle_margin", "obstacle_slowdown_ratio",
     "xy_goal_tolerance", "yaw_goal_tolerance",
     "progress_timeout_sec",
-    "motor_temp_low_c", "motor_temp_high_c",
     "battery_full_voltage", "battery_low_voltage",
     "dock_approach_distance", "dock_max_retries", "dock_use_charger_detection",
 }

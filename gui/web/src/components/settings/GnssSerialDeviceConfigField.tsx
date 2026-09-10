@@ -4,8 +4,11 @@ import { useTranslation } from "react-i18next";
 import type { GnssStatus } from "../../types/ros.ts";
 import { useGnssRuntimeConfig } from "../../hooks/useGnssRuntimeConfig.ts";
 import { normalizeGnssReceiverModel } from "./gnssConfig.ts";
+import { stringifyValue } from "../../utils/stringifyValue.ts";
 
 const { Text } = Typography;
+
+const DEFAULT_SERIAL_DEVICE = "/dev/ttyAMA4";
 
 type Props = {
     value: unknown;
@@ -15,7 +18,7 @@ type Props = {
     gnssStatus?: GnssStatus;
 };
 
-const normalizeFamily = (value: unknown) => String(value ?? "")
+const normalizeFamily = (value: unknown) => stringifyValue(value)
     .trim()
     .toLowerCase()
     .replace("u-blox", "ublox");
@@ -54,10 +57,10 @@ export const GnssSerialDeviceConfigField: React.FC<Props> = ({
 }) => {
     const { t } = useTranslation();
     const { runtimeConfig, error } = useGnssRuntimeConfig();
-    const activeValue = String(
+    const activeValue = stringifyValue(
         value ??
         runtimeConfig?.serial_device?.active_value ??
-        "/dev/ttyAMA4",
+        DEFAULT_SERIAL_DEVICE,
     );
     const activeBaud = runtimeConfig?.serial_baud?.active_value ?? "921600";
     const currentSource = runtimeConfig?.serial_device?.source ?? "default";

@@ -782,4 +782,49 @@ public:
   BT::NodeStatus tick() override;
 };
 
+// ---------------------------------------------------------------------------
+// IsCoverageStartBlocked
+// ---------------------------------------------------------------------------
+
+/// Returns SUCCESS when the FollowStrip pass that just failed did so because
+/// the ROBOT'S OWN POSE is a cell nav2 refuses to plan from (every blade-off
+/// sub-path transit came back START_OCCUPIED and zero swaths were mowed).
+/// FAILURE otherwise.
+///
+/// Field problem this solves (issue #487, 2026-08-24): the robot undocked into
+/// the inflated keepout around a 0.25 m obstacle circle. SmacPlanner2D has no
+/// start tolerance, so all 26 plan calls answered "Start occupied", FollowStrip
+/// skipped all four sub-paths in a row, and the whole field was declared
+/// unmowable at 0 % coverage. The area was perfectly mowable — a second attempt
+/// 13 minutes later completed it at 100 %.
+///
+/// CONSUMING condition: it clears ctx->coverage_start_blocked on read, so the
+/// recovery branch fires exactly once per blocked pass and a later, unrelated
+/// FollowStrip failure cannot re-trigger it. (ctx->start_blocked_area is a
+/// SEPARATE field with a separate consumer — GetNextUnmowedArea — so this read
+/// does not disturb the retirement-budget exemption.)
+///
+/// SAFETY: this node also ARMS the bounded escape motion
+/// (ctx->start_blocked_escape_armed, consumed by EscapeStartBlocked). It is the
+/// ONLY place that token is set, which is what makes the escape provably unable
+/// to fire on any other failure. See mowgli_behavior/start_blocked_escape.hpp
+/// for the bounds and the stand-down conditions; arming is not itself a
+/// commitment to move — every stand-down there degrades to the non-motion
+/// recovery this node originally shipped with.
+class IsCoverageStartBlocked : public BT::ConditionNode
+{
+public:
+  IsCoverageStartBlocked(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
 }  // namespace mowgli_behavior

@@ -111,17 +111,21 @@ export function useMapStreams({
     const robot = useRobotDescription();
 
     const poseRender = useLatestThrottle<AbsolutePose>((pose) => {
+        // position.x/y are optional on the wire. The old `?.x!` claimed
+        // otherwise and drew the robot at NaN on a malformed pose; drop the
+        // frame instead — the previous good pose stays on screen.
+        const posX = pose.pose?.pose?.position?.x;
+        const posY = pose.pose?.pose?.position?.y;
+        if (posX === undefined || posY === undefined) return;
         const mower_lonlat = transpose(
             offsetX,
             offsetY,
             datum,
-            pose.pose?.pose?.position?.y!!,
-            pose.pose?.pose?.position?.x!!
+            posY,
+            posX
         );
         setFeatures((oldFeatures) => {
-            const orientation = pose.motion_heading!!;
-            const posX = pose.pose?.pose?.position?.x!!;
-            const posY = pose.pose?.pose?.position?.y!!;
+            const orientation = pose.motion_heading ?? 0;
             const line = drawLine(offsetX, offsetY, datum, posY, posX, orientation);
             // URDF-derived robot silhouette (chassis + drive wheels + blade)
             // so the map robot matches the sensors-page model exactly.

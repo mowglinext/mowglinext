@@ -313,6 +313,7 @@ export type GnssStatus = {
   msm_summary_signal_count?: number;
   msm_summary_cell_count?: number;
   msm_summary_age_s?: number;
+  position_observation_sequence?: number;
 };
 
 export const enum HighLevelStatusConstants {
@@ -358,6 +359,20 @@ export type MapArea = {
   area?: Polygon;
   obstacles?: Polygon[];
   is_navigation_area?: boolean;
+  obstacle_info?: MapObstacleInfo[];
+};
+
+export const enum MapObstacleInfoConstants {
+  SOURCE_USER = 0,
+  SOURCE_TRACKER = 1,
+  SOURCE_DIG = 2,
+};
+
+export type MapObstacleInfo = {
+  name?: string;
+  source?: number;
+  pending?: boolean;
+  id?: number;
 };
 
 export type ObstacleArray = {

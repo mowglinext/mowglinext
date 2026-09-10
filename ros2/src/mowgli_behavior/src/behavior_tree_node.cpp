@@ -26,13 +26,18 @@
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "behaviortree_cpp/behavior_tree.h"
 #include "behaviortree_cpp/loggers/bt_cout_logger.h"
+#include "geometry_msgs/msg/twist_stamped.hpp"
 #include "mowgli_behavior/action_nodes.hpp"
+#include "mowgli_behavior/battery_filter.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
 #include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
+#include "mowgli_behavior/escape_nodes.hpp"
 #include "mowgli_behavior/localization_health.hpp"
+#include "mowgli_behavior/recording_nodes.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
+#include "mowgli_interfaces/gnss_observation_freshness.hpp"
 #include "mowgli_interfaces/gnss_status_utils.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
@@ -144,7 +149,47 @@ private:
                                     {
                                       std::lock_guard<std::mutex> lock(context_->context_mutex);
                                       context_->latest_status = *msg;
+                                      // Arrival time, so a consumer can tell a
+                                      // live blade state from a dead stream
+                                      // (issue #487 escape motion).
+                                      context_->last_status_time = std::chrono::steady_clock::now();
                                     });
+
+    // Last commanded MOTION direction, from twist_mux's MERGED output — the
+    // direction source for the #487 start-pose escape.
+    //
+    // /cmd_vel is what actually reached the wheels across EVERY motion lane
+    // (coverage, blade-off transit, docking, the undock BackUp, teleop). A
+    // single controller's lane would miss the undock, which is exactly the case
+    // #487 reported: the robot REVERSED into the blocked cell, so the escape
+    // must drive forward.
+    //
+    // Only the SIGN is used, and only commands above the escape's deadband are
+    // recorded — a zero or near-zero command is not an arrival. Samples inside
+    // last_motion_suppress_until are ignored so the escape's own commands can
+    // never become "the last motion" (that would make a second escape undo the
+    // first).
+    cmd_vel_sub_ = create_subscription<geometry_msgs::msg::TwistStamped>(
+        "/cmd_vel",
+        rclcpp::QoS(10),
+        [this](geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
+        {
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          const auto now = std::chrono::steady_clock::now();
+          if (context_->last_motion_suppress_until.time_since_epoch().count() != 0 &&
+              now < context_->last_motion_suppress_until)
+          {
+            return;
+          }
+          const double vx = msg->twist.linear.x;
+          if (std::abs(vx) < context_->start_blocked_escape_cfg.min_signal_speed)
+          {
+            return;
+          }
+          context_->last_motion_cmd_vx = vx;
+          context_->last_motion_valid = true;
+          context_->last_motion_time = now;
+        });
 
     emergency_sub_ =
         create_subscription<Emergency>("/hardware_bridge/emergency",
@@ -157,24 +202,32 @@ private:
                                              std::chrono::steady_clock::now();
                                        });
 
-    power_sub_ =
-        create_subscription<Power>("/hardware_bridge/power",
-                                   10,
-                                   [this](Power::ConstSharedPtr msg)
-                                   {
-                                     std::lock_guard<std::mutex> lock(context_->context_mutex);
-                                     context_->latest_power = *msg;
+    power_sub_ = create_subscription<Power>(
+        "/hardware_bridge/power",
+        10,
+        [this](Power::ConstSharedPtr msg)
+        {
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          context_->latest_power = *msg;
 
-                                     // Derive battery_percent from voltage using
-                                     // configurable thresholds from ROS parameters.
-                                     const float v_max = battery_full_voltage_;
-                                     const float v_min = battery_empty_voltage_;
-                                     const float clamped = std::clamp(msg->v_battery, v_min, v_max);
-                                     const float range = v_max - v_min;
-                                     context_->battery_percent =
-                                         (range > 0.01f) ? 100.0f * (clamped - v_min) / range
-                                                         : 0.0f;
-                                   });
+          // Smooth the rail voltage before deriving the percent — motor transients
+          // sag it 0.5-1 V and used to trip the docking thresholds at a genuine
+          // 30-40 % SoC. See battery_filter.hpp for the incident, and for why the
+          // time constant rather than a fixed EWMA weight is the tuning knob.
+          const auto v_filtered = battery_filter_.update(msg->v_battery, now().seconds());
+          if (!v_filtered)
+          {
+            // No valid reading yet. Leave battery_percent at its last good value
+            // rather than publishing a 0 % derived from a disconnected pack.
+            return;
+          }
+
+          // Derive battery_percent from voltage using
+          // configurable thresholds from ROS parameters.
+          context_->battery_voltage_filtered = *v_filtered;
+          context_->battery_percent =
+              batteryPercentFromVoltage(*v_filtered, battery_empty_voltage_, battery_full_voltage_);
+        });
 
     // Replan / boundary signals from map_server_node
     replan_needed_sub_ =
@@ -241,6 +294,39 @@ private:
     loc_cfg.sigma_backstop_persist_s =
         declare_parameter<double>("loc_sigma_backstop_persist_s", 10.0);
     loc_monitor_ = LocalizationHealthMonitor(loc_cfg);
+
+    // ------------------------------------------------------------------
+    // Start-pose escape motion (issue #487)
+    // ------------------------------------------------------------------
+    // SAFETY: this configures the ONLY new physical motion in the #487
+    // workstream — a bounded open-loop nudge off a cell Nav2 refuses to plan
+    // from, fired only on a confirmed START_OCCUPIED-with-zero-progress pass.
+    // Read mowgli_behavior/start_blocked_escape.hpp before changing a default.
+    // Defaults live in the IN-PACKAGE template mowgli_bringup/config/
+    // mowgli_robot.yaml (CLAUDE.md invariant 15) and are forwarded here by
+    // full_system.launch.py; the values below are only the compile-time
+    // fallbacks for a node launched without them.
+    StartBlockedEscapeCfg escape_cfg;
+    escape_cfg.enabled = declare_parameter<bool>("start_blocked_escape_enabled", true);
+    escape_cfg.speed = declare_parameter<double>("start_blocked_escape_speed", 0.10);
+    escape_cfg.distance = declare_parameter<double>("start_blocked_escape_distance", 0.40);
+    escape_cfg.timeout_s = declare_parameter<double>("start_blocked_escape_timeout_s", 6.0);
+    escape_cfg.min_signal_speed =
+        declare_parameter<double>("start_blocked_escape_min_signal_speed", 0.03);
+    escape_cfg.signal_max_age_s =
+        declare_parameter<double>("start_blocked_escape_signal_max_age_s", 90.0);
+    // Clamp to the compiled ceilings HERE, so nothing downstream ever sees an
+    // out-of-envelope value even if the YAML is wrong.
+    context_->start_blocked_escape_cfg = SanitizeEscapeCfg(escape_cfg);
+    RCLCPP_INFO(get_logger(),
+                "Start-pose escape (#487): %s, %.2f m/s, bounded to %.2f m / %.1f s; direction "
+                "signal deadband %.3f m/s, max age %.0f s",
+                context_->start_blocked_escape_cfg.enabled ? "ENABLED" : "disabled",
+                context_->start_blocked_escape_cfg.speed,
+                context_->start_blocked_escape_cfg.distance,
+                context_->start_blocked_escape_cfg.timeout_s,
+                context_->start_blocked_escape_cfg.min_signal_speed,
+                context_->start_blocked_escape_cfg.signal_max_age_s);
 
     fused_odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
         "/odometry/filtered_map",
@@ -346,17 +432,37 @@ private:
         {
           std::lock_guard<std::mutex> lock(context_->context_mutex);
           has_authoritative_gnss_status_ = true;
+          loc_obs_.gnss_seen = true;
+
+          const rclcpp::Time ros_now = now();
+          const rclcpp::Time receipt_stamp(msg->header.stamp, get_clock()->get_clock_type());
+          const auto observation_update =
+              gnss_observation_freshness_.Observe(msg->position_observation_sequence,
+                                                  receipt_stamp.nanoseconds(),
+                                                  ros_now.nanoseconds(),
+                                                  steadyNowNs());
+          using mowgli_interfaces::gnss_observation_freshness::IsAcceptedObservation;
+          using mowgli_interfaces::gnss_observation_freshness::ObservationUpdate;
+          if (!IsAcceptedObservation(observation_update))
+          {
+            if (observation_update == ObservationUpdate::kInvalidProvenance)
+            {
+              RCLCPP_WARN_THROTTLE(get_logger(),
+                                   *get_clock(),
+                                   5000,
+                                   "behavior: GNSS receipt stamp is zero/future; authority denied");
+            }
+            updateLocalizationHealthLocked();
+            return;
+          }
 
           // LocalizationGuard feed: the receiver's own view of solution
           // quality. horizontal_accuracy_m is only trusted when the message's
           // value_flags say it carries a live value; otherwise rtk_mode
           // decides (see LocalizationHealthMonitor::Update).
-          loc_obs_.gnss_seen = true;
-          loc_obs_.gnss_stamp_s = get_clock()->now().seconds();
           loc_obs_.rtk_mode = static_cast<mowgli_behavior::RtkMode>(msg->rtk_mode);
           const auto acc = mowgli_interfaces::gnss_status_utils::HorizontalAccuracyMeters(*msg);
           loc_obs_.gnss_accuracy_m = acc ? static_cast<double>(*acc) : -1.0;
-          updateLocalizationHealthLocked();
 
           context_->gps_fix_type = mowgli_interfaces::gnss_status_utils::BehaviorTreeFixType(*msg);
           context_->gps_quality = mowgli_interfaces::gnss_status_utils::NormalizedQuality(*msg);
@@ -366,7 +472,7 @@ private:
           // /gps/status contract rather than /gps/absolute_pose covariance.
           constexpr double kGpsFixDebounceSec = 2.0;
           const bool raw_fixed = mowgli_interfaces::gnss_status_utils::BehaviorTreeRtkFixed(*msg);
-          const rclcpp::Time gps_now = this->now();
+          const rclcpp::Time gps_now = ros_now;
           if (!gps_fix_debounce_init_)
           {
             gps_fix_debounce_init_ = true;
@@ -386,6 +492,7 @@ private:
               context_->gps_is_fixed = gps_fix_candidate_;
             }
           }
+          updateLocalizationHealthLocked();
         });
 
     // collision_monitor state — used by IsObstacleStuck to detect when
@@ -482,6 +589,19 @@ private:
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
             context_->current_command = cmd;
+            // A plain COMMAND_START means "mow the lawn", so it must cancel any
+            // single-area clip still latched from an earlier ~/start_in_area run.
+            // EndSession normally clears it, but a session can legitimately stay
+            // alive without one (low-battery dock + auto-resume, emergency), and
+            // the clip is session state by design — it has to survive
+            // GetNextUnmowedArea re-entering after the targeted area finishes.
+            // Safe to do here: the GUI's "mow this area" button calls
+            // ~/start_in_area, which sets current_command itself and never
+            // reaches this handler, so this cannot cancel a targeted request.
+            if (cmd == HighLevelControl::Request::COMMAND_START)
+            {
+              clearSingleAreaMode(*context_);
+            }
           }
           resp->success = true;
         });
@@ -489,9 +609,12 @@ private:
     RCLCPP_DEBUG(get_logger(), "~/high_level_control service server created");
 
     // ~/start_in_area: GUI hook for "mow this specific area only".
-    // Pre-loads target_area_index for the next GetNextUnmowedArea call,
-    // then issues COMMAND_START so MowingSequence picks it up. The BT
-    // exits after that single area is done (no roll-over to other areas).
+    // Pre-loads target_area_index for the next GetNextUnmowedArea call, then
+    // issues COMMAND_START so MowingSequence picks it up. GetNextUnmowedArea
+    // consumes that request once and latches it into
+    // BTContext::single_area_target, which constrains the run for as long as
+    // the session lasts — so the BT exits after that single area is done (no
+    // roll-over to other areas) even though it re-enters MowingSequence.
     using StartInArea = mowgli_interfaces::srv::StartInArea;
     start_in_area_srv_ = create_service<StartInArea>(
         "~/start_in_area",
@@ -556,7 +679,29 @@ private:
   // loc_obs_, so the monitor sees a consistent snapshot.
   void updateLocalizationHealthLocked()
   {
-    const double now_s = get_clock()->now().seconds();
+    const rclcpp::Time ros_now = now();
+    const auto maximum_age_ns = static_cast<std::int64_t>(loc_monitor_.gnss_stale_s() * 1.0e9);
+    loc_obs_.gnss_fresh = gnss_observation_freshness_.ObservationIsFresh(ros_now.nanoseconds(),
+                                                                         steadyNowNs(),
+                                                                         maximum_age_ns);
+    if (gnss_observation_freshness_.ConsumeEpochReset())
+    {
+      // Force a fresh semantic epoch: old debounce state must not survive a
+      // ROS/steady rewind and become authoritative when the clock catches up.
+      gps_fix_debounce_init_ = false;
+    }
+    if (loc_obs_.gnss_seen && !loc_obs_.gnss_fresh)
+    {
+      // Fixed-only behavior must fail closed at the physical-observation
+      // deadline even though LocalizationHealth keeps its existing latch
+      // persistence before pausing the whole mowing tree.
+      context_->gps_fix_type = 0;
+      context_->gps_quality = 0.0f;
+      context_->gps_is_fixed = false;
+      gps_fix_debounce_init_ = false;
+    }
+
+    const double now_s = ros_now.seconds();
     const bool was_degraded = context_->localization_degraded;
     const bool degraded = loc_monitor_.Update(now_s, loc_obs_);
     if (degraded == was_degraded)
@@ -846,6 +991,26 @@ private:
     const double mow_angle_deg = declare_parameter<double>("mow_angle_deg", kMowAngleAutoDeg);
     blackboard_->set("mow_angle_deg", mow_angle_deg);
 
+    // Area-recording boundary resolution — operator-tunable in
+    // mowgli_robot.yaml, previously HARDCODED in main_tree.xml (a 0.2 m
+    // Douglas-Peucker tolerance and a 2 Hz sample rate, which together gave a
+    // field recording 24 vertices for a 38 m perimeter). Pushed onto the
+    // blackboard so the XML pulls them as {area_simplification_tolerance} /
+    // {area_record_rate_hz}. See RecordArea's class comment for the derivation
+    // of both defaults.
+    const double area_simplification_tolerance =
+        declare_parameter<double>("area_simplification_tolerance",
+                                  RecordArea::kDefaultSimplificationToleranceM);
+    const double area_record_rate_hz =
+        declare_parameter<double>("area_record_rate_hz", RecordArea::kDefaultRecordRateHz);
+    blackboard_->set("area_simplification_tolerance", area_simplification_tolerance);
+    blackboard_->set("area_record_rate_hz", area_record_rate_hz);
+
+    // RecordArea samples once per BT tick at best, so it needs the tick rate to
+    // warn when a configured record rate is unachievable rather than silently
+    // sampling slower than asked.
+    blackboard_->set("bt_tick_rate", get_parameter("tick_rate").as_double());
+
     tree_ = factory_.createTreeFromFile(tree_file, blackboard_);
 
     // Optionally attach a console logger for debugging BT state transitions.
@@ -876,6 +1041,11 @@ private:
 
   void tickTree()
   {
+    {
+      std::lock_guard<std::mutex> lock(context_->context_mutex);
+      updateLocalizationHealthLocked();
+    }
+
     // Apply a pending "Start fresh" clear BEFORE ticking, on the tick thread —
     // every coverage-map mutation stays on this thread (see the service
     // registration comment). Between ticks no BT node holds a reference into
@@ -892,6 +1062,11 @@ private:
       context_->attempted_areas.clear();
       context_->area_attempt_count.clear();
       context_->area_last_coverage.clear();
+      context_->coverage_start_blocked = false;
+      context_->start_blocked_area.reset();
+      context_->area_start_blocked_count.clear();
+      // Disarm the #487 escape motion too — see EndSession for why.
+      context_->start_blocked_escape_armed = false;
       clearCoverageResumeState(*context_);
       RCLCPP_INFO(get_logger(),
                   "Cleared coverage resume state on request — next start begins fresh");
@@ -928,9 +1103,18 @@ private:
   rclcpp::Time gps_fix_candidate_since_;
   bool has_authoritative_gnss_status_{false};
 
+  static std::int64_t steadyNowNs()
+  {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+  }
+
   // Subscribers
   rclcpp::Subscription<mowgli_interfaces::msg::Status>::SharedPtr status_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::Emergency>::SharedPtr emergency_sub_;
+  /// Merged twist_mux output — direction source for the #487 escape.
+  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::Power>::SharedPtr power_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr replan_needed_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr boundary_violation_sub_;
@@ -940,6 +1124,8 @@ private:
   // context_->context_mutex and then call updateLocalizationHealthLocked().
   LocalizationHealthMonitor loc_monitor_{};
   LocalizationObservation loc_obs_{};
+  mowgli_interfaces::gnss_observation_freshness::PhysicalObservationTracker
+      gnss_observation_freshness_;
   rclcpp::Subscription<mowgli_interfaces::msg::AbsolutePose>::SharedPtr gps_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::GnssStatus>::SharedPtr gnss_status_sub_;
   rclcpp::Subscription<nav2_msgs::msg::CollisionMonitorState>::SharedPtr collision_monitor_sub_;
@@ -983,6 +1169,11 @@ private:
   // Battery voltage curve parameters
   float battery_full_voltage_{28.0f};
   float battery_empty_voltage_{24.0f};
+
+  // Low-pass state for v_battery. Rate-independent (time-constant based), so
+  // the robot's 4 Hz status packets and the sim bridge's 10 Hz both behave the
+  // same. See battery_filter.hpp.
+  BatteryVoltageFilter battery_filter_;
 };
 
 }  // namespace mowgli_behavior

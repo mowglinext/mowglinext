@@ -424,6 +424,118 @@ TEST_F(BoundaryGuardTest, ChooseSide_OtherSideOutOfZone_PicksInZoneSide)
   EXPECT_LT(dev, 0.0);  // right side (in-zone), even though left is locally free
 }
 
+// ── Zone mask (ignore_obstacles_outside_zone, issue #517) ─────────────────────
+//
+// The SAME BoundaryGuard, handed to the DETECTION helpers as `zone_mask`: a
+// lethal LOCAL cell that is also lethal in the boundary costmap (out-of-zone /
+// keepout hole) is NOT an obstacle. Field 2026-09-02: 71 strip aborts per mow,
+// every one at a row end against the hedge the boundary was recorded along or
+// the tree inside a keepout island — real LiDAR returns the path never enters.
+
+TEST_F(BoundaryGuardTest, IsObstacleCell_NoMask_IsPlainThreshold)
+{
+  const ObstacleDeviation::BoundaryGuard none{};
+  EXPECT_TRUE(ObstacleDeviation::isObstacleCell(254u, none, 0.0, 0.0));
+  EXPECT_FALSE(ObstacleDeviation::isObstacleCell(253u, none, 0.0, 0.0));  // footprint model
+  EXPECT_TRUE(ObstacleDeviation::isObstacleCell(
+      253u, none, 0.0, 0.0, ObstacleDeviation::kLethalThreshold));  // line model
+  EXPECT_FALSE(ObstacleDeviation::isObstacleCell(0u, none, 0.0, 0.0));
+}
+
+TEST_F(BoundaryGuardTest, IsObstacleCell_LethalAlsoOutOfZone_IsNotAnObstacle)
+{
+  stampBoundaryBlock(2.0, 0.0, 0.3);  // out-of-zone around (2, 0)
+  // Lethal in zone → obstacle. Lethal out of zone → masked. Free → never.
+  EXPECT_TRUE(ObstacleDeviation::isObstacleCell(254u, guard(), 0.0, 0.0));
+  EXPECT_FALSE(ObstacleDeviation::isObstacleCell(254u, guard(), 2.0, 0.0));
+  EXPECT_FALSE(ObstacleDeviation::isObstacleCell(0u, guard(), 2.0, 0.0));
+}
+
+TEST_F(BoundaryGuardTest, ZoneMask_InZoneObstacle_StillDetected)
+{
+  // A rock INSIDE the zone: the mask must not hide it. Boundary is elsewhere.
+  stampBlock(0.5, 0.0, 0.10);
+  stampBoundaryBlock(3.0, 0.0, 0.5);
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  EXPECT_EQ(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.20, {}, guard()),
+            ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.20));
+  EXPECT_GE(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.20, {}, guard()), 0);
+  EXPECT_FALSE(ObstacleDeviation::isPathClearWithDeviation(
+      costmap_, path, 0, 10, 0.0, ObstacleDeviation::BoundaryGuard{}, 0.20, {}, guard()));
+}
+
+TEST_F(BoundaryGuardTest, ZoneMask_OutOfZoneLethal_Ignored_ButDetectedWithoutMask)
+{
+  // The same lethal cells are ALSO out-of-zone (the hedge beyond the recorded
+  // boundary). With the mask they are not an obstacle; without it (guard
+  // absent) the pre-#517 behaviour detects them.
+  stampBlock(0.5, 0.0, 0.10);
+  stampBoundaryBlock(0.5, 0.0, 0.30);
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  const ObstacleDeviation::BoundaryGuard none{};
+  EXPECT_EQ(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.20, {}, guard()),
+            -1);
+  EXPECT_GE(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 10, 0.20, {}, none), 0);
+  EXPECT_TRUE(ObstacleDeviation::isPathClearWithDeviation(
+      costmap_, path, 0, 10, 0.0, none, 0.20, {}, guard()));
+  EXPECT_FALSE(ObstacleDeviation::isPathClearWithDeviation(
+      costmap_, path, 0, 10, 0.0, none, 0.20, {}, none));
+}
+
+TEST_F(BoundaryGuardTest, ZoneMask_WallOutOfZone_HasClearExit)
+{
+  // A wall filling the whole window is a cul-de-sac (no exit) — unless it is
+  // out-of-zone, in which case it is not an obstacle at all and the cul-de-sac
+  // guard must not refuse the (non-existent) skirt.
+  const auto path = makeStraightPath(0.0, 0.0, 12, 0.1);
+  stampBlock(1.2, 0.0, 0.90);
+  stampBoundaryBlock(1.2, 0.0, 0.95);
+  EXPECT_FALSE(ObstacleDeviation::hasClearExit(costmap_, path, 0, 12, 0.20));
+  EXPECT_TRUE(ObstacleDeviation::hasClearExit(costmap_, path, 0, 12, 0.20, {}, guard()));
+}
+
+TEST_F(BoundaryGuardTest, ZoneMask_Footprint_RowEndHedgeIgnored_InZoneRockDetected)
+{
+  // The field case with the FOOTPRINT model: the swath ends at x=0.9, the
+  // recorded boundary is at x≈1.1 and a hedge stands just beyond it. The
+  // 0.50 m-long chassis at the last pose reaches x=1.4 — into the hedge.
+  const auto fp = makeChassisFootprint();
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);  // last pose x=0.9
+  stampBlock(1.3, 0.0, 0.10);  // hedge: x≈1.2..1.4, LOCAL lethal
+  stampBoundaryBlock(2.1, 0.0, 1.0);  // out-of-zone for x ≥ 1.1
+  // Old behaviour: the hedge is "an obstacle" on the nominal path.
+  EXPECT_GE(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 40, 0.0, fp), 0);
+  // Zone-masked: it is not.
+  EXPECT_EQ(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 40, 0.0, fp, guard()), -1);
+  EXPECT_TRUE(ObstacleDeviation::isPathClearWithDeviation(
+      costmap_, path, 0, 40, 0.0, ObstacleDeviation::BoundaryGuard{}, 0.0, fp, guard()));
+  // A rock INSIDE the zone on the same path is still caught with the mask on.
+  stampBlock(0.5, 0.1, 0.05);
+  EXPECT_GE(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 40, 0.0, fp, guard()), 0);
+}
+
+TEST_F(BoundaryGuardTest, ZoneMask_DoesNotRelaxOffsetGuard)
+{
+  // The mask is the opposite direction from the offset guard: with BOTH set,
+  // an offset that would leave the zone is still rejected.
+  stampBoundaryBlock(0.5, 0.5, 0.5);
+  const auto path = makeStraightPath(0.0, 0.0, 10, 0.1);
+  EXPECT_FALSE(ObstacleDeviation::isPathClearWithDeviation(
+      costmap_, path, 0, 10, 0.5, guard(), 0.0, {}, guard()));
+}
+
+TEST_F(ObstacleDeviationTest, FindFirstObstacle_LookaheadLongerThanPath_ClampsAtPlanEnd)
+{
+  // Issue #517 (2): the lookahead window is clamped to the last pose — a
+  // lookahead longer than the remaining path never samples beyond it. A lethal
+  // block past the path end is therefore not seen by the line model.
+  const auto path = makeStraightPath(0.0, 0.0, 5, 0.1);  // last pose x=0.4
+  stampBlock(1.0, 0.0, 0.10);  // beyond the plan end
+  EXPECT_EQ(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 40, 0.20), -1);
+  EXPECT_TRUE(ObstacleDeviation::isPathClearWithDeviation(costmap_, path, 0, 40, 0.0));
+  EXPECT_TRUE(ObstacleDeviation::hasClearExit(costmap_, path, 0, 40, 0.20));
+}
+
 // ── Clearance margin (obstacle_clearance_margin) ──────────────────────────────
 //
 // FTC buys pass-by margin by handing the CLEARANCE checks a widened

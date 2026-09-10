@@ -16,10 +16,10 @@ Drive-wheel PID assistant with:
 - optional RTK-based validation from `/gps/status` + `/gps/absolute_pose`
 - optional undock reverse when the robot starts on the charger
 - YAML export of trial metrics and recommended parameters
-- a dedicated tuning motion path that does not share the IMU / teleop lane:
+- a dedicated tuning motion path that does not share the teleop lane:
   `/cmd_vel_tuning -> twist_mux -> /cmd_vel`
-- live oscillation is treated as a calibration warning by default in
-  feed-forward mode, with an opt-in strict abort flag when needed
+- live oscillation is treated as a calibration warning by default in every
+  mode, with an opt-in strict abort flag when needed
 
 Example, proposal only from the dock:
 
@@ -68,16 +68,31 @@ Notes:
 - By default, pass 1 starts from the current live `hardware_bridge`
   parameters. `--profile` is kept as reference metadata unless
   `--reset-to-profile` or `--force-profile` is passed explicitly.
-- In `ff` mode, suspected live oscillation is recorded in the report as a
+- In every mode, suspected live oscillation is recorded in the report as a
   warning and the trial continues so first-bring-up calibration can still
   finish. Use `--abort-on-live-oscillation` to restore strict abort behavior.
+  A speed runaway (measured peak above 1.8x the commanded speed, or above
+  1.5x `--max-speed`) always aborts the trial, whatever the flag.
 - The `yardforce_8w_1964` preset starts from `1964 / 3 ~= 655 ticks/m` because
   the live bridge only sees one hall channel out of three. The motor being a
   4-pole inrunner is already reflected in the theoretical 1964 value, so it
   does not change that `/ 3` reduction.
-- RTK checks are only used when `/gps/status` reports a valid RTK mode,
-  corrections are active, and horizontal accuracy is within the configured
-  threshold.
+- RTK checks are only used when `/gps/status` reports a valid fix, corrections
+  are active, horizontal accuracy is within the configured threshold, and the
+  RTK mode is `FIXED` — pass `--allow-rtk-float` to accept `FLOAT` as well.
 - `--cmd-topic` can still override the command topic manually, but the default
-  uses `/cmd_vel_tuning`, which flows through `twist_mux` to `/cmd_vel`
-  without sharing `/cmd_vel_teleop` with the WebSocket relay or IMU calibration.
+  uses `/cmd_vel_tuning` (`twist_mux` lane `tuning`, priority 30), which flows
+  through `twist_mux` to `/cmd_vel` without sharing `/cmd_vel_teleop` with the
+  WebSocket teleop relay or the behavior-tree yaw-seed drive.
+- The commands above run inside the `mowgli-ros2` container, which builds
+  `tools/motor/` as the workspace package `src/mowgli_tools/`. Source
+  `/opt/ros/kilted/setup.bash` then `/ros2_ws/install/setup.bash` first.
+
+## Further reference
+
+- [`docs/claude/codemaps/ci_repo_tooling.md`](../../docs/claude/codemaps/ci_repo_tooling.md)
+  — codemap for this sidecar package: runtime surface, CI wiring, change coupling
+- [`docs/claude/ros-interfaces.md`](../../docs/claude/ros-interfaces.md) — the topics,
+  services and `twist_mux` lanes the tuner uses
+- [`docs/claude/parameters.md`](../../docs/claude/parameters.md) — the
+  `hardware_bridge` drive parameters it backs up, sets and recommends

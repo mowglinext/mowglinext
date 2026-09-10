@@ -234,6 +234,12 @@ class UniversalGnssTopicBridge(Node):
         public_msg = PublicGnssStatus()
         public_msg.header.stamp = msg.stamp
         public_msg.header.frame_id = self._frame_id
+        # Receiver observation identity, copied verbatim. It advances only for a
+        # genuinely accepted position observation and stays put for the
+        # timer-driven cached republication, which is what lets consumers tell a
+        # frozen receiver from a live one. Mirrors the C++ bridge exactly; see
+        # mowgli_interfaces/gnss_observation_freshness.hpp.
+        public_msg.position_observation_sequence = msg.position_observation_sequence
         public_msg.backend = self._backend
         public_msg.receiver_vendor = self._receiver_vendor
 

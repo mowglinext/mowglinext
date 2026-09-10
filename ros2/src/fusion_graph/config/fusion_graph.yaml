@@ -38,11 +38,24 @@ fusion_graph_node:
     odom_rebase_dist_m: 6.0
 
     # ── Wheel between-factor noise ─────────────────────────────────────
-    # Per-node sigmas in body frame. wheel_sigma_y << wheel_sigma_x is
-    # the non-holonomic constraint: the robot doesn't slide sideways.
-    wheel_sigma_x: 0.05         # m
-    wheel_sigma_y: 0.005        # m — tight non-holo
-    wheel_sigma_theta: 0.01     # rad — used only when no gyro this tick
+    # Translational noise is a RANDOM WALK scaled by the distance each node
+    # actually covered (issue #491), not a fixed per-node sigma:
+    #
+    #   sigma = k * sqrt(step_m + wheel_creep_speed_mps * dt)
+    #
+    # so variance grows with distance travelled and the accumulated
+    # uncertainty is invariant to node_period_s. Units are m/sqrt(m): at 1 m
+    # of travel per node these reproduce the old per-node 0.05 / 0.005 m.
+    # wheel_sigma_y << wheel_sigma_x remains the non-holonomic constraint
+    # (the robot doesn't slide sideways) — both scale by the same sqrt(d),
+    # so the 10:1 ratio holds at every step size.
+    wheel_sigma_x_per_sqrt_m: 0.05    # m/sqrt(m) — along-track
+    wheel_sigma_y_per_sqrt_m: 0.005   # m/sqrt(m) — tight non-holo
+    # Floor on the noise distance, as a creep SPEED rather than a constant
+    # sigma: motion the encoders may have missed (towed, lifted, both wheels
+    # skating). Stating it as a distance keeps it cadence-invariant.
+    wheel_creep_speed_mps: 0.04
+    wheel_sigma_theta: 0.01     # rad per node — used only when no gyro this tick
 
     # ── Gyro yaw between-factor noise ──────────────────────────────────
     # Used when at least one IMU sample arrived between nodes. Much
@@ -125,6 +138,26 @@ fusion_graph_node:
     slip_residual_thresh_rad: 0.01    # |wheel_dθ − gyro_dθ| limit (≈14°/s @25 Hz)
     slip_gyro_max_rad: 0.005          # gyro must read near-still (≈7°/s @25 Hz)
     slip_wheel_min_rad: 0.005         # wheel must claim non-trivial rotation
+    # The triple gate is evaluated over a sliding WINDOW of nodes, not per
+    # node (issue #516, slip_window.hpp): window_nodes = round(slip_window_s /
+    # node_period_s), the three thresholds above are applied to the window
+    # SUMS scaled by that node count, so they keep their per-node meaning and
+    # the window just integrates. Why: per node the gate cannot tell one
+    # encoder tick of L/R asymmetry (≈ 0.011 rad of wheel dθ in a 40 ms frame,
+    # already above slip_wheel_min_rad; two ticks exceed
+    # slip_residual_thresh_rad) from genuine slip (≈ 0.012 rad/frame). Field
+    # 2026-09-02 (73 min RTK-Fixed mow): it fired 1.33/s on STRAIGHT swaths vs
+    # 0.27/s turning and 0.18/s stopped, with wheel yaw rate p50 0.00 rad/s vs
+    # gyro 0.05 at the increments — ~5 % of nodes had their wheel translation
+    # zeroed on quantization jitter, silently shortening dead reckoning under
+    # RTK-Float / no-fix. The genuine 2026-05-27 signature (wheels ~0.3 rad/s,
+    # gyro < 0.02, sustained for seconds) accumulates ~0.15 rad over 0.5 s
+    # while jitter averages to ~0 — the signal is the persistence. The veto
+    # stays off until the window is full (a cold start never vetoes) and is
+    # still applied per node while the window is flagged. Do NOT raise the
+    # per-frame thresholds instead — that also blinds it to the real case.
+    # 0 = window of one node (the old per-node behaviour, exactly).
+    slip_window_s: 0.5                # 12 nodes @ 25 Hz, 25 @ 50 Hz
 
     # ── Sliding-window cap on the factor graph ───────────────────────
     # RebaseISAM2 keeps only the most-recent max_graph_nodes pose nodes
@@ -178,6 +211,28 @@ fusion_graph_node:
     # stale, so no-fix windows still get global consistency. Default true.
     lc_skip_when_rtk_fixed: true
 
+    # Loop-closure rate/travel gate + GPS σ floor (issue #513). Because
+    # lc_skip_when_rtk_fixed disables LC under Fixed, the search runs exactly
+    # when GPS is Float or absent — and there the scan_yield σ inflation never
+    # applies. Unbounded it fires up to 1/node_period_s × lc_max_candidates =
+    # 25 Hz × 3 = 75 /s; measured live 2026-09-02 (mow #1, 100 % Float): 13.7
+    # accepted LC/s (5194 over 1900 samples at 5 Hz), 3816 in the 286 s MOWING
+    # phase, 0 under Fixed — each a 5 cm/0.02 rad factor to the ADJACENT swath
+    # (ICP on featureless grass converges to something with 10-20 cm RMSE
+    # almost every time), i.e. a lateral snap of one swath spacing ~13× per
+    # second. Fix: at most ONE accepted LC per node, and none until BOTH
+    # lc_min_interval_s has elapsed AND lc_min_travel_m of wheel travel has
+    # accrued since the last ACCEPTED LC (accumulators reset on accept only —
+    # see loop_closure_gate.hpp). <= 0 disables either half.
+    lc_min_travel_m: 1.0
+    lc_min_interval_s: 2.0
+    # lc_sigma_xy = max(lc_sigma_xy, lc_gps_sigma_ratio × σ of the last accepted
+    # GPS sample): an LC can never be tighter than the most recent GNSS fix.
+    # Under Float (σ ≈ 0.3 m) LC becomes advisory; under Fixed (σ ≈ 3 mm) the
+    # floor is below lc_sigma_xy and nothing changes; with no GPS ever seen the
+    # floor is skipped. <= 0 disables.
+    lc_gps_sigma_ratio: 1.0
+
     # ── Online gyro bias estimation (item #3, pragmatic) ─────────────
     # During wheel-only stationary windows, EMA-update an estimate of
     # gyro_z bias and subtract it from raw samples before integration.
@@ -201,7 +256,8 @@ fusion_graph_node:
     gyro_bias_prior_sigma_rad_per_s: 0.05
 
     # ── Adaptive process noise on wheel σ_x ────────────────────────────
-    # Inflates wheel_sigma_x when the |dtheta_wheel - dtheta_gyro|
+    # Inflates the wheel between-factor's sigma_x when the
+    # |dtheta_wheel - dtheta_gyro|
     # residual EMA exceeds the floor. Slip on wet grass / slope causes
     # encoders to over-report distance — without inflation the
     # iSAM2 wheel between-factor pins the trajectory to that bogus
@@ -341,6 +397,21 @@ fusion_graph_node:
     # iSAM2 well-posed with no GPS to drag it. sigma_xy small so it
     # dominates; yaw σ from dock_pose_yaw_sigma_rad.
     dock_reanchor_sigma_xy_m: 0.03
+    # Dock-prior vs RTK-Fixed GPS consistency (issue #512). The prior above
+    # is NOT unconditional: when a FRESH RTK-Fixed sample with σ ≤
+    # dock_prior_max_gps_sigma_m puts the antenna more than
+    # dock_prior_max_gps_disagreement_m from where dock_pose says it is,
+    # the prior yields for that node and the sample is fused instead —
+    # ERROR log (10 s throttle) + diagnostics `dock_gps_disagreement_m` /
+    # `dock_prior_yielded`. Field case 2026-09-02, 12:27-12:50 UTC, docked
+    # after a receiver power cycle: "Fixed 14-20 mm" at 2.45 / 2.33 /
+    # 1.88 m from dock_pose, converged on its own after ~45 min; the prior
+    # pinned the pose silently through all of it. 0.50 m sits far above the
+    # 5-30 cm ambiguity-set shift the dock hold exists for. No fix / Float /
+    # large σ on the dock (a dock under a terrace) is NOT a trigger — the
+    # prior keeps pinning as before. Either value ≤ 0 disables the check.
+    dock_prior_max_gps_disagreement_m: 0.50
+    dock_prior_max_gps_sigma_m: 0.05
 
     # ── RTK-anchored keyframe map (scan-to-keyframe absolute localization) ──
     # The mechanism for holding <2 cm absolute DURING RTK-Float windows. Under

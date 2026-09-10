@@ -53,6 +53,7 @@ import {useWheelTicks} from "../hooks/useWheelTicks.ts";
 import {useWheelRpm} from "../hooks/useWheelRpm.ts";
 import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
 import {useDiagnostics} from "../hooks/useDiagnostics.ts";
+import {useTimeFormat} from "../hooks/useTimeFormat.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {
@@ -154,6 +155,7 @@ function BoolStatusTag({label, ok}: {label: string; ok: boolean}) {
 export const DiagnosticsPage = () => {
     const {colors} = useThemeMode();
     const {t} = useTranslation();
+    const {formatAbsolute, formatLogTime} = useTimeFormat();
     const isMobile = useIsMobile();
 
     const {highLevelStatus} = useHighLevelStatus();
@@ -365,7 +367,7 @@ export const DiagnosticsPage = () => {
             key: "started_at",
             render: (v: string) => (
                 <Typography.Text style={{fontSize: 12}}>
-                    {v ? new Date(v).toLocaleTimeString() : "--"}
+                    {formatAbsolute(v, {timeOnly: true})}
                 </Typography.Text>
             ),
         },
@@ -559,6 +561,14 @@ export const DiagnosticsPage = () => {
                             ) : (
                                 firmwareDebugLines.map((line) => (
                                     <div key={line.id} style={{color: colors.primary, whiteSpace: "pre-wrap"}}>
+                                        <span
+                                            title={line.tsSource === 'received'
+                                                ? t('logTime.approximate')
+                                                : formatLogTime(line.tsMs, {withMillis: true})}
+                                            style={{color: colors.textDim, marginRight: 8}}
+                                        >
+                                            {formatLogTime(line.tsMs, {timeOnly: true})}
+                                        </span>
                                         {line.plain}
                                     </div>
                                 ))
@@ -777,7 +787,7 @@ export const DiagnosticsPage = () => {
                                     title: t('diagnosticsPage.rosbagColDate'),
                                     dataIndex: "modified_at",
                                     key: "modified_at",
-                                    render: (d: string) => (d ? new Date(d).toLocaleString() : "—"),
+                                    render: (d: string) => formatAbsolute(d),
                                 },
                                 {
                                     title: t('diagnosticsPage.rosbagColActions'),
@@ -1442,15 +1452,6 @@ export const DiagnosticsPage = () => {
         });
     };
 
-    const formatTs = (ts?: string): string => {
-        if (!ts) return "—";
-        try {
-            return new Date(ts).toLocaleString();
-        } catch {
-            return ts;
-        }
-    };
-
     const dockCal = calibrationStatus?.dock;
     const imuCal = calibrationStatus?.imu;
     const magCal = calibrationStatus?.mag;
@@ -1532,7 +1533,7 @@ export const DiagnosticsPage = () => {
                     {imuCal?.present && !imuCal?.error ? (
                         <Descriptions size="small" column={1}>
                             <Descriptions.Item label={t('diagnosticsPage.calibratedAt')}>
-                                {formatTs(imuCal.calibrated_at)}
+                                {formatAbsolute(imuCal.calibrated_at)}
                             </Descriptions.Item>
                             <Descriptions.Item label={t('diagnosticsPage.samples')}>
                                 {imuCal.samples_used ?? "—"}
@@ -1580,7 +1581,7 @@ export const DiagnosticsPage = () => {
                     {magCal?.present && !magCal?.error ? (
                         <Descriptions size="small" column={1}>
                             <Descriptions.Item label={t('diagnosticsPage.calibratedAt')}>
-                                {formatTs(magCal.calibrated_at)}
+                                {formatAbsolute(magCal.calibrated_at)}
                             </Descriptions.Item>
                             <Descriptions.Item label="|B| mean">
                                 {magCal.magnitude_mean_uT?.toFixed(2)} µT

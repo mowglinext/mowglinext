@@ -98,8 +98,15 @@ BT::NodeStatus IsBatteryLow::tick()
   // Voltage gate as a redundant trip: a sagging pack can read fine on
   // percent (which is interpolated from full/empty endpoints) and still
   // be below the safe operating voltage. Disabled when threshold is 0.
-  if (voltage_threshold > 0.0f && ctx->latest_power.v_battery > 0.0f &&
-      ctx->latest_power.v_battery < voltage_threshold)
+  //
+  // Reads the FILTERED voltage, not latest_power.v_battery. Both trips in this
+  // node have to see the same signal — gating this one on the raw rail would
+  // re-open, for any operator who sets battery_critical_voltage, exactly the
+  // motor-transient false trip that filtering battery_percent closes. A pack
+  // that is genuinely below the threshold stays below it, so the gate still
+  // fires, just one time constant (~2 s) later. 0 means no reading yet.
+  if (voltage_threshold > 0.0f && ctx->battery_voltage_filtered > 0.0f &&
+      ctx->battery_voltage_filtered < voltage_threshold)
   {
     return BT::NodeStatus::SUCCESS;
   }
@@ -869,6 +876,42 @@ BT::NodeStatus IsCollisionStopSustained::tick()
     return BT::NodeStatus::SUCCESS;
   }
   return BT::NodeStatus::FAILURE;
+}
+
+// ---------------------------------------------------------------------------
+// IsCoverageStartBlocked
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus IsCoverageStartBlocked::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  // Consume: one blocked pass fires the recovery branch exactly once.
+  // Not guarded by context_mutex — coverage_start_blocked is written by
+  // FollowStrip from the BT tick itself, on the same MutuallyExclusive callback
+  // group (see the thread-safety comment in bt_context.hpp).
+  if (!ctx->coverage_start_blocked)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+  ctx->coverage_start_blocked = false;
+
+  // ARM the bounded escape motion (issue #487 follow-up). This is the ONLY
+  // place the token is set, so the escape provably cannot fire on any failure
+  // other than a confirmed START_OCCUPIED-with-zero-progress pass.
+  // EscapeStartBlocked consumes it, and refuses a token older than
+  // kStartBlockedEscapeArmMaxAgeSec.
+  ctx->start_blocked_escape_armed = true;
+  ctx->start_blocked_escape_armed_time = std::chrono::steady_clock::now();
+
+  RCLCPP_WARN(ctx->node->get_logger(),
+              "IsCoverageStartBlocked: the last coverage pass was refused from the robot's own "
+              "pose (START_OCCUPIED on every sub-path, 0 swaths mowed) — running the recovery "
+              "(stop, blade off, bounded escape nudge, clear costmaps, wait) before retrying. "
+              "NOTE: clearing the costmaps only helps if the lethal cell came from a TRANSIENT "
+              "obstacle reading; a keepout zone is a static costmap FILTER and survives the "
+              "clear, which is why the escape motion exists");
+  return BT::NodeStatus::SUCCESS;
 }
 
 }  // namespace mowgli_behavior

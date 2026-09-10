@@ -1,15 +1,24 @@
 import {useEffect, useRef, useState} from "react";
 import {useApi} from "./useApi.ts";
 import {useWS} from "./useWS.ts";
+import {parseLogTimestamp, type LogTimestampSource} from "../utils/logTime.ts";
 
 const MAX_LINES = 400;
+// ESC is a control character by definition -- an ANSI escape matcher cannot
+// be written without it. Silenced at the one site that needs it rather than
+// globally, so a genuine stray control character elsewhere still reports.
+// eslint-disable-next-line no-control-regex
 const ANSI_REGEX = /\x1b\[[0-9;]*m/g;
 
 const isFirmwareDiagnosticLine = (line: string): boolean => line.includes("[FW_DIAG]");
 
 type FirmwareDebugLine = {
     id: number;
+    /** The line with its producer-baked timestamp removed. */
     plain: string;
+    /** Epoch ms, parsed once at ingest. */
+    tsMs: number;
+    tsSource: LogTimestampSource;
 };
 
 const findRos2ContainerId = (containers: Array<{
@@ -44,12 +53,20 @@ export const useFirmwareDebugLogs = (enabled: boolean) => {
             setError(null);
         },
         (line, first) => {
-            const plain = line.replace(ANSI_REGEX, "");
-            if (!isFirmwareDiagnosticLine(plain)) {
+            const stripped = line.replace(ANSI_REGEX, "");
+            // The [FW_DIAG] marker is matched against the whole stripped line,
+            // before the timestamp token is removed.
+            if (!isFirmwareDiagnosticLine(stripped)) {
                 return;
             }
+            const {epochMs, source, body} = parseLogTimestamp(stripped, Date.now());
             setLines((prev) => {
-                const entry: FirmwareDebugLine = {id: nextIdRef.current++, plain};
+                const entry: FirmwareDebugLine = {
+                    id: nextIdRef.current++,
+                    plain: body,
+                    tsMs: epochMs,
+                    tsSource: source,
+                };
                 const base = first ? [] : prev;
                 const next = [...base, entry];
                 return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;

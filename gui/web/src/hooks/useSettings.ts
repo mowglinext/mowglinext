@@ -4,6 +4,7 @@ import {useEffect, useState} from "react";
 import {useTranslation} from "react-i18next";
 import {useConfig} from "./useConfig.tsx";
 import {parseBoolish} from "../utils/settingsValues.ts";
+import {stringifyValue} from "../utils/stringifyValue.ts";
 
 export enum SettingValueType {
     String = "string",
@@ -231,7 +232,7 @@ export const useSettings = () => {
             const dbFiltered = Object.keys(newConfig).reduce((acc, key) => {
                 if (SettingsDesc[key]?.settingType === SettingType.Db) {
                     if (SettingsDesc[key]?.type === SettingValueType.Boolean) {
-                        acc[key] = newConfig[key].toString()
+                        acc[key] = stringifyValue(newConfig[key])
                     } else {
                         acc[key] = newConfig[key]
                     }

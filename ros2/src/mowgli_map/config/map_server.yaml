@@ -13,22 +13,31 @@ map_server_node:
     # coverage_server.operation_width.)
     tool_width: 0.18
 
-    # ── Wheel-slip dig auto-keepout ───────────────────────────────────────
+    # ── Wheel-slip dig keepout ────────────────────────────────────────────
     # hardware_bridge_node detects the robot digging a hole (wheels turning,
     # GNSS-anchored pose not moving), hard-stops and reverses out, then
-    # publishes /hardware_bridge/dig_event. We promote that location to a
-    # permanent keepout through the same path the GUI's "promote obstacle"
+    # publishes /hardware_bridge/dig_event. We stamp that location as a
+    # PENDING keepout through the same path the GUI's "promote obstacle"
     # uses, so the NEXT coverage pass plans around the churned patch instead
     # of driving back in and digging it deeper.
     #
+    # PENDING means: live in the keepout mask + classification layer for this
+    # session, but NOT written to areas.dat. A single inferred dig is weaker
+    # evidence than a repeatedly-observed tracker obstacle, and those already
+    # need operator sign-off (auto_promote_persistent_obstacles: false), so
+    # the operator accepts the proposal (map_server_node/promote_obstacle with
+    # pending_id) or drops it (map_server_node/discard_obstacle).
+    #
     # A dig outside every mowing area (transit / docking) is logged but NOT
-    # promoted — there is no area to attach it to, and coverage never plans
+    # stamped — there is no area to attach it to, and coverage never plans
     # there anyway.
     dig_obstacle_enabled: true
-    # Side of the square keepout stamped at the dig [m]. Defaults to
-    # tool_width when unset: wide enough that the next swath routes around
-    # the patch rather than clipping its edge.
-    dig_obstacle_size: 0.18
+    # Side of the square keepout stamped at the dig [m]. One chassis LENGTH
+    # (the Nav2 footprint is 0.60 × 0.40 m). It used to be one tool width
+    # (0.18 m) — NARROWER THAN THE BODY, so "route around it" still dragged
+    # the chassis over the hole; issue #500 recorded 3 dig latches in 18.4 s
+    # inside 0.13 m.
+    dig_obstacle_size: 0.60
     map_file_path: ""
     areas_file_path: "/ros2_ws/maps/areas.dat"
     publish_rate: 1.0

@@ -221,6 +221,8 @@
     "prebuiltInfoDesc": "Choisissez votre carte et votre panneau ci-dessus, laissez Source du firmware sur « Image précompilée », puis cliquez sur Flasher. Le binaire précompilé correspondant, vérifié par somme de contrôle, est téléchargé et écrit — aucune compilation nécessaire. Ne choisissez « Personnalisé » que si vous avez besoin de compiler depuis les sources.",
     "noPrebuiltTitle": "Pas encore de firmware précompilé pour ce modèle",
     "noPrebuiltDesc": "Aucun binaire précompilé testé n'existe pour la carte sélectionnée. Réglez Source du firmware sur « Personnalisé — compiler depuis les sources » et renseignez la section experte ci-dessous pour le compiler et le flasher.",
+    "selectionRequiredTitle": "Sélectionnez une carte et un panneau avant de flasher",
+    "selectionRequiredDesc": "Le modèle de tondeuse n'identifie pas toujours la carte contrôleur. Choisissez la carte et le panneau exacts de votre matériel ; le flashage reste désactivé tant que les deux ne sont pas sélectionnés.",
     "expertBuildLabel": "Expert : paramètres du build personnalisé",
     "expertBuildAlertMessage": "Utilisé uniquement quand Source du firmware est « Personnalisé »",
     "expertBuildAlertDescription": "Ces réglages compilent le firmware depuis les sources au lieu de flasher le binaire précompilé testé. De mauvaises valeurs peuvent endommager la batterie ou désactiver une sécurité physique. Ils ne prennent effet que lorsque Source du firmware ci-dessus est réglé sur « Personnalisé — compiler depuis les sources ».",
@@ -315,7 +317,7 @@
     "approachDistance": "Distance d'approche",
     "approachDistanceTooltip": "Distance du point de préparation devant la base",
     "chargerDetection": "Détection du chargeur",
-    "chargerDetectionTooltip": "Utiliser la tension de charge pour confirmer l'accostage",
+    "chargerDetectionTooltip": "Confirmer l'accostage par le courant de charge (nav2 simple_charging_dock.use_battery_status). Désactivé = l'accostage est considéré atteint sur la seule proximité de pose, le délai d'attente de charge ne conditionne donc plus le contact. Prend effet au prochain redémarrage de ROS2.",
     "advanced": "Avancé",
     "maxRetries": "Tentatives max",
     "maxRetriesTooltip": "Nombre d'essais d'accostage avant d'abandonner",
@@ -694,7 +696,9 @@
     "coverageProgress": "Couverture de la zone · {{pct}} %",
     "bladesOff": "arrêt",
     "areaN": "Zone {{number}}",
-    "actionFailed": "Échec de la commande"
+    "actionFailed": "Échec de la commande",
+    "soilWetTitle": "Attention : le jardin est humide (IrriSense)",
+    "soilWetBlocking": "tontes planifiées suspendues"
   },
   "onboardingPage": {
     "preview": "Aperçu",
@@ -900,6 +904,12 @@
   },
   "schedulePage": {
     "planning": "Planning",
+    "soilWetBlocking": "Sol humide — tontes planifiées suspendues",
+    "soilWet": "Sol humide",
+    "soilDry": "Sol sec",
+    "soilUnknown": "IrriSense : état inconnu",
+    "soilFetchedAt": "Données IrriSense du {{value}}",
+    "lastSkipped": "Ignorée {{value}} : {{reason}}",
     "scheduledMows": "Tontes programmées",
     "areaLabel": "Zone {{index}}",
     "dayMon": "Lun",
@@ -1635,7 +1645,7 @@
     },
     "num_headland_passes": {
       "label": "Passes de bordure",
-      "description": "Nombre d'anneaux de bordure concentriques tondus avant les bandes en va-et-vient."
+      "description": "Nombre d'anneaux de bordure concentriques tondus avant les bandes en va-et-vient. Une valeur négative (« aucune ») désactive complètement les anneaux de bordure : les bandes deviennent la passe la plus extérieure et leur axe suit exactement la ligne qu'aurait parcourue l'anneau extérieur, la bande non tondue latérale reste donc inchangée (environ 12 cm avec le retrait de sécurité châssis par défaut de 0,20 m). En revanche les EXTRÉMITÉS des bandes atteignent cette limite, soit environ 8 cm plus près de la bordure que n'importe quelle passe d'anneau, et sans tablier tondu les demi-tours en bout de rang deviennent des pivots à angle vif au lieu d'arcs réguliers."
     },
     "headland_width": {
       "label": "Largeur de bordure",
@@ -1900,10 +1910,18 @@
         "tooltip": "Modèle de mouvement que le récepteur suppose pour le RTK. UAV est le moteur cinématique qui fixe rapidement et conserve le verrouillage pendant que la tondeuse se déplace ; Survey Mow est optimisé pour un relevé quasi statique (plus lent à fixer, peut perdre le verrouillage en mouvement) ; Rover est le repli générique.",
         "helpText": "Auto utilise la valeur par défaut selon le modèle (le UM980 utilise UAV par défaut). Choisissez UAV si votre récepteur est lent à atteindre le RTK-Fixe ou perd le fix pendant la tonte.",
         "option": {
-          "auto": { "label": "Auto (défaut selon le modèle)" },
-          "uav": { "label": "UAV (cinématique — recommandé)" },
-          "survey_mow": { "label": "Survey Mow" },
-          "rover": { "label": "Rover (générique)" }
+          "auto": {
+            "label": "Auto (défaut selon le modèle)"
+          },
+          "uav": {
+            "label": "UAV (cinématique — recommandé)"
+          },
+          "survey_mow": {
+            "label": "Survey Mow"
+          },
+          "rover": {
+            "label": "Rover (générique)"
+          }
         }
       },
       "pvtAlgorithm": {
@@ -2337,13 +2355,10 @@
   },
   "settingsSafety": {
     "alertMessage": "Les réglages de sécurité protègent le robot et son environnement",
-    "alertDescription": "Le firmware est la seule autorité de sécurité. Ces réglages configurent le comportement du firmware — les désactiver réduit la protection.",
-    "motorTemperatureLimits": "Limites de température moteur",
-    "motorTemperatureLimitsDescription": "Le moteur de lame s'arrête au-dessus du seuil haut et reprend en dessous du seuil bas (hystérésis).",
-    "stopAbove": "Arrêt au-dessus",
-    "stopAboveTooltip": "Arrêter le moteur de lame au-dessus de cette température",
-    "resumeBelow": "Reprise en dessous",
-    "resumeBelowTooltip": "Reprendre le moteur de lame en dessous de cette température"
+    "alertDescription": "Le firmware STM32 est la seule autorité de sécurité : il coupe la lame en cas de soulèvement, d’inclinaison ou d’arrêt d’urgence, et rien de cela n’est configurable depuis cette page. Il n’y a rien à modifier ici.",
+    "firmwareOwnedTitle": "Géré par le firmware",
+    "firmwareOwnedDescription": "La détection de soulèvement et d’inclinaison, le verrou d’arrêt d’urgence et la coupure de la lame résident tous dans le firmware STM32, qui décide selon ses propres seuils physiques. L’interface ne peut ni les assouplir, ni les retarder, ni les contourner : aucun réglage n’est donc proposé ici.",
+    "temperatureThresholdsNote": "La température du moteur de lame est uniquement mesurée et rapportée — aucune couche de la pile n’arrête la lame en fonction de la température. Les seuils d’alerte et d’erreur utilisés par les diagnostics (motor_temp_warn_c et motor_temp_error_c, dans mowgli_monitoring/config/diagnostics.yaml) se modifient sur la page Paramètres."
   },
   "settingsObstacles": {
     "rootZoneHintTitle": "Arbres avec de grosses racines ?",
@@ -2369,7 +2384,7 @@
   },
   "settingsMowing": {
     "mowingMotor": "Moteur de tonte",
-    "mowingMotorDescription": "Désactivez pour tester sans faire tourner la lame.",
+    "mowingMotorDescription": "Désactivé = essai à vide : le robot parcourt tout le trajet sans jamais faire tourner la lame. Il s’agit d’une inhibition de confort, PAS d’une coupure de sécurité — le firmware reste l’autorité de sécurité de la lame. Prend effet au prochain redémarrage de ROS2.",
     "mowingSpeed": "Vitesse de tonte",
     "mowingSpeedTooltip": "Vitesse pendant les bandes de tonte (m/s)",
     "transitSpeed": "Vitesse de transit",
@@ -2380,7 +2395,9 @@
     "swathOverlap": "Chevauchement des passes",
     "swathOverlapTooltip": "Chevauchement supplémentaire entre passes adjacentes pour éviter les bandes non tondues. Espacement F2C = tool_width − swath_overlap.",
     "headlandPasses": "Passes de tournière",
-    "headlandPassesTooltip": "Nombre d'anneaux périmétriques concentriques avant le champ intérieur. 0 = auto (ceil(headland_width / tool_width)). >0 force exactement ce nombre quelle que soit headland_width. Relié à coverage_server.num_headland_passes.",
+    "headlandPassesTooltip": "Anneaux périmétriques concentriques tondus avant le champ intérieur. Aucune = pas d'anneau périmétrique : les bandes en va-et-vient deviennent la passe la plus extérieure, et leur axe suit exactement la ligne qu'aurait parcourue l'anneau extérieur — latéralement, la bande non tondue reste donc la même qu'avec les anneaux (environ 12 cm avec le retrait de sécurité châssis par défaut de 0,20 m), ni plus près du bord ni plus loin. En revanche les EXTRÉMITÉS des bandes atteignent cette limite, soit environ 8 cm plus près de la bordure que n'importe quelle passe d'anneau, et sans tablier tondu les demi-tours en bout de rang deviennent des pivots à angle vif au lieu d'arcs réguliers. À tester sur votre terrain avant de vous y fier.",
+    "headlandPassesNone": "Aucune",
+    "headlandPassesAuto": "Auto",
     "mowDirection": "Sens de tonte du périmètre",
     "mowDirectionTooltip": "Sens de déplacement autour des anneaux de périmètre/tournière. Réglez-le pour qu'une lame déportée sur le côté reste du côté à tondre. Auto conserve le sens naturel du planificateur. Relié à coverage_server.ring_direction.",
     "mowDirectionAuto": "Auto (défaut du planificateur)",
@@ -2901,7 +2918,9 @@
     "paused": "En pause",
     "clear": "Effacer",
     "waitingForOutput": "En attente de la sortie des logs…",
-    "noLinesMatch": "Aucune ligne ne correspond aux filtres actifs."
+    "noLinesMatch": "Aucune ligne ne correspond aux filtres actifs.",
+    "timeZoneLocal": "Locale",
+    "timeZoneUtc": "UTC"
   },
   "imuYawCalibration": {
     "timedOut": "Délai dépassé après 155 s. Le service tourne peut-être encore — vérifiez le robot et réessayez.",
@@ -2949,10 +2968,114 @@
   "asyncButton": {
     "errorOccurred": "Une erreur est survenue"
   },
+  "settingsIrriSense": {
+    "title": "Humidité du sol IrriSense Cloud",
+    "description": "Lit le déficit hydrique des zones de votre service d'arrosage pour que le planificateur ne lance pas de tonte sur herbe mouillée.",
+    "failOpenTitle": "Sécurité positive par conception",
+    "failOpenBody": "Si IrriSense est injoignable, mal configuré ou si ses données sont plus anciennes que la fenêtre de validité, l'état du sol est « inconnu » et les tontes planifiées se lancent normalement. Une panne du cloud ne garde jamais le robot à la station.",
+    "connection": "Connexion",
+    "baseUrl": "URL du service",
+    "baseUrlTooltip": "URL de base de votre instance IrriSense Cloud ; l'API en lecture seule est sous /api/ha.",
+    "token": "Jeton API en lecture seule",
+    "tokenTooltip": "Créez un jeton API en lecture seule dans IrriSense (Réglages → Jetons API). Une session de connexion est refusée. Le jeton est stocké sur le robot et n'est plus jamais affiché.",
+    "tokenPlaceholder": "Collez un nouveau jeton…",
+    "tokenApply": "Définir",
+    "tokenClear": "Effacer",
+    "tokenSet": "Jeton enregistré ({{masked}})",
+    "tokenNotSet": "Aucun jeton enregistré",
+    "tokenPending": "Le nouveau jeton sera enregistré à la sauvegarde",
+    "tokenCleared": "Le jeton sera supprimé à la sauvegarde",
+    "garden": "Jardin",
+    "gardenTooltip": "Le jardin IrriSense à lire. Utilisez « Tester la connexion » pour remplir la liste.",
+    "gardenPlaceholder": "Choisir un jardin",
+    "zones": "Zones (optionnel)",
+    "zonesTooltip": "Laissez vide pour considérer toutes les zones actives du jardin.",
+    "zonesPlaceholder": "Toutes les zones actives",
+    "zoneDisabled": "{{label}} (désactivée)",
+    "testConnection": "Tester la connexion",
+    "testOk_one": "IrriSense joignable : {{count}} jardin",
+    "testOk_other": "IrriSense joignable : {{count}} jardins",
+    "testFailed": "Échec de la connexion à IrriSense",
+    "rule": "Règle d'humidité",
+    "ruleDescription": "Une zone est humide quand son déficit (mm évaporés depuis le dernier arrosage ou la dernière pluie) est inférieur ou égal au seuil, ou quand elle a été arrosée récemment. Le jardin est humide dès qu'une zone sélectionnée l'est.",
+    "wetDeficit": "Humide si déficit ≤",
+    "wetDeficitTooltip": "Déficit en dessous duquel la surface est considérée humide. Défaut 2 mm.",
+    "dryAfterWatering": "Humide après arrosage pendant",
+    "dryAfterWateringTooltip": "Une zone arrosée depuis moins de ce nombre d'heures compte comme humide quel que soit son déficit. Défaut 3 h.",
+    "maxStale": "Validité des données",
+    "maxStaleTooltip": "Si la dernière lecture réussie est plus ancienne, l'état est inconnu et la tonte n'est pas bloquée. Défaut 90 min.",
+    "gateScheduler": "Bloquer les tontes planifiées si humide",
+    "gateSchedulerDescription": "Désactivé, l'état du sol est seulement affiché et aucune tonte n'est ignorée.",
+    "status": "État en direct",
+    "verdict": {
+      "wet": "Humide",
+      "dry": "Sec",
+      "unknown": "Inconnu"
+    },
+    "fetchedAt": "lu le {{value}}",
+    "neverFetched": "aucune donnée lue pour l'instant",
+    "refresh": "Actualiser",
+    "saved": "Réglages IrriSense enregistrés",
+    "saveFailed": "Échec de l'enregistrement des réglages IrriSense",
+    "loadFailed": "Échec du chargement des réglages IrriSense"
+  },
+  "settingsLeds": {
+    "statusRing": "Anneau d'état WS2812",
+    "statusRingDescription": "Un anneau de LED adressables sur le robot qui montre l'état d'un coup d'œil : arrêt d'urgence, charge, progression de la tonte et santé RTK. En lecture seule — il ne commande jamais le robot et ne fait pas partie de la chaîne de sécurité des lames (le firmware garde sa propre LED d'état).",
+    "prerequisitesTitle": "À faire avant que ça fonctionne",
+    "prerequisiteOverlay": "Activez l'overlay SPI dans U-Boot puis redémarrez — les étapes exactes sont dans ros2/src/mowgli_leds/README.md :",
+    "prerequisiteDevice": "Renseignez ensuite ci-dessous le périphérique réellement rapporté — la numérotation est attribuée par le noyau, la valeur par défaut n'est qu'une supposition :",
+    "prerequisiteLevels": "Si l'anneau s'allume mais que les couleurs sont fausses, suspectez la ligne de données en 3,3 V vers un anneau alimenté en 5 V avant le logiciel : le WS2812B attend 3,5 V et un adaptateur de niveau règle le problème.",
+    "hardware": "Matériel",
+    "ledCount": "Nombre de LED",
+    "ledCountTooltip": "Nombre de LED sur l'anneau. La valeur par défaut de 16 est un simple espace réservé — mettez le nombre réel, sinon l'arc de progression sera faux.",
+    "spiDevice": "Périphérique SPI",
+    "spiDeviceTooltip": "Périphérique spidev de la ligne de données de l'anneau (broche 19 du connecteur 40 points). Confirmez-le avec `ls /dev/spidev*` après avoir activé l'overlay et redémarré.",
+    "spiClock": "Horloge SPI",
+    "spiClockTooltip": "L'encodage WS2812 envoie trois bits SPI par bit de protocole et découle d'exactement 2,4 MHz. Modifier cette valeur casse la temporisation des bits et produit de mauvaises couleurs.",
+    "appearance": "Apparence",
+    "brightness": "Luminosité",
+    "brightnessTooltip": "Échelle linéaire 0-1 sur chaque canal de couleur. Du blanc plein sur un anneau de 16 LED à 1,0 consomme environ 1 A ; 0,6 reste sous environ 0,6 A tout en restant lisible en plein jour.",
+    "idleBrightness": "Luminosité au repos",
+    "idleBrightnessTooltip": "Luminosité de l'anneau atténué au repos, relative à la luminosité ci-dessus.",
+    "refreshRate": "Fréquence de rafraîchissement",
+    "refreshRateTooltip": "Cadence de rendu. Les trames ne sont envoyées à l'anneau que lorsqu'elles changent (plus un keepalive lent), donc un motif fixe ne coûte presque rien quelle que soit cette valeur.",
+    "behavior": "Seuils et temporisations",
+    "lowBattery": "Seuil batterie faible",
+    "lowBatteryTooltip": "En dessous de ce pourcentage, et hors charge, tout l'anneau clignote en rouge.",
+    "chargeFull": "Charge terminée",
+    "chargeFullTooltip": "À partir de ce pourcentage, l'anneau de charge cesse de respirer et passe au vert fixe.",
+    "statusTimeout": "Délai d'état",
+    "statusTimeoutTooltip": "Durée sans message d'état avant que l'anneau n'affiche le motif « aucun état ».",
+    "keepalive": "Keepalive",
+    "keepaliveTooltip": "Réémet une trame inchangée au moins à cette fréquence, pour qu'un anneau ayant perdu son alimentation retrouve son dernier état.",
+    "deviceRetry": "Nouvelle tentative périphérique",
+    "deviceRetryTooltip": "Fréquence des tentatives silencieuses de réouverture d'un périphérique SPI absent ou en échec. Seul le premier échec d'une panne est journalisé, cela n'inonde donc jamais les logs.",
+    "legend": "Ce que l'anneau vous dit",
+    "legendDescription": "La première correspondance gagne — une alarme l'emporte toujours sur une activité. Chaque motif est conçu pour être lisible en plein jour à plusieurs mètres, par la couleur et le mouvement seuls.",
+    "modeEmergency": "Arrêt d'urgence",
+    "modeEmergencyDescription": "Tout l'anneau en rouge fixe, sans mouvement. Le seul rouge fixe.",
+    "modeCharging": "En charge",
+    "modeChargingDescription": "Arc vert qui grandit avec le niveau de batterie, en respiration. Vert plein et fixe quand la charge est terminée.",
+    "modeStale": "Aucun état",
+    "modeStaleDescription": "Point orange tournant sur un anneau éteint. Alimenté et en marche, mais l'arbre de comportement ne répond pas.",
+    "modeLowBattery": "Batterie faible",
+    "modeLowBatteryDescription": "Tout l'anneau clignote en rouge. Même couleur que l'arrêt d'urgence — c'est le clignotement qui les distingue.",
+    "modeMowing": "Tonte",
+    "modeMowingDescription": "Arc vert qui grandit avec la couverture, avec un pixel blanc à sa pointe.",
+    "modeMowingDegraded": "Tonte sans fix RTK",
+    "modeMowingDegradedDescription": "Le même arc en orange, pointe clignotante. La précision de coupe est dégradée tant que le fix RTK n'est pas revenu.",
+    "modeRecording": "Enregistrement d'une limite",
+    "modeRecordingDescription": "Point cyan tournant sur l'anneau pendant que vous parcourez le périmètre.",
+    "modeManual": "Tonte manuelle",
+    "modeManualDescription": "Tout l'anneau respire en violet. Les lames peuvent tourner.",
+    "modeIdle": "Au repos",
+    "modeIdleDescription": "Tout l'anneau en blanc atténué, sans mouvement. Alimenté et éveillé, sans activité."
+  },
   "settingsSections": {
     "appearance": {
       "label": "Apparence",
-      "description": "Richesse visuelle et consommation d'énergie sur cet appareil"
+      "description": "Richesse visuelle, consommation d'énergie et affichage des horodatages sur cet appareil"
     },
     "hardware": {
       "label": "Matériel",
@@ -2992,7 +3115,7 @@
     },
     "safety": {
       "label": "Sécurité",
-      "description": "Arrêts d'urgence et limites de température"
+      "description": "Ce que le firmware gère lui-même"
     },
     "obstacles": {
       "label": "Obstacles",
@@ -3005,6 +3128,14 @@
     "rain": {
       "label": "Pluie",
       "description": "Comportement de détection de pluie et délai"
+    },
+    "irrisense": {
+      "label": "IrriSense",
+      "description": "Humidité du sol depuis votre jardin IrriSense Cloud : suspend les tontes planifiées sur herbe mouillée"
+    },
+    "leds": {
+      "label": "LED d'état",
+      "description": "Anneau d'état WS2812 : ce qu'il affiche et sa luminosité"
     },
     "advanced": {
       "label": "Avancé",
@@ -3085,5 +3216,20 @@
   },
   "settingsSchema": {
     "loadFailed": "Échec du chargement du schéma de réglages"
+  },
+  "logTime": {
+    "title": "Horodatage des journaux",
+    "description": "Les lignes de journal et les dates de calibration sont réaffichées dans le fuseau choisi ici, afin que le robot, les conteneurs et ce navigateur se lisent de la même façon. Enregistré uniquement sur cet appareil.",
+    "zoneBadge": "Heures affichées actuellement en {{zone}}.",
+    "toggleAria": "Basculer entre l'heure locale et UTC",
+    "approximate": "Cette ligne ne contenait pas d'horodatage — affichage de l'heure de réception.",
+    "local": {
+      "label": "Heure locale",
+      "description": "Le fuseau de ce navigateur. Correspond à l'horloge de l'appareil utilisé."
+    },
+    "utc": {
+      "label": "UTC",
+      "description": "Le fuseau des conteneurs du robot. Idéal pour comparer des journaux à plusieurs."
+    }
   }
 }

@@ -26,6 +26,13 @@
  * authoritative RTK/fix state, then publishes /gps/absolute_pose plus the
  * robot_localization-friendly /gps/pose_cov twin.
  *
+ * /gps/pose_cov additionally requires a GENUINELY NEW receiver observation.
+ * The adapter republishes its last accepted fix on a timer with the receipt
+ * stamp unchanged, so callbacks keep arriving after the receiver freezes.
+ * /gps/absolute_pose still mirrors every delivery (it carries its own stamp
+ * and flags), but the pose_cov twin is consumed as an absolute anchor — see
+ * the freshness gate in on_navsat_fix.
+ *
  * Subscribed topics:
  *   /gps/fix     sensor_msgs/msg/NavSatFix
  *   /gps/status  mowgli_interfaces/msg/GnssStatus
@@ -38,10 +45,12 @@
 #pragma once
 
 #include <cmath>
+#include <cstdint>
 #include <memory>
 
 #include "geometry_msgs/msg/pose_with_covariance.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+#include "mowgli_interfaces/gnss_observation_freshness.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
 #include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -106,6 +115,16 @@ private:
   /// source even when /gps/fix covariance is missing or rejected.
   mowgli_interfaces::msg::GnssStatus last_status_;
   bool has_status_{false};
+
+  /// Receiver-receipt identity of the /gps/fix stream. The Universal GNSS
+  /// adapter preserves the receipt stamp across its timer-driven cached
+  /// republications, so the stamp — never callback arrival time — is what
+  /// distinguishes a genuine new observation from a frozen receiver.
+  ///
+  /// sequence=0 selects the tracker's receipt-only compatibility mode:
+  /// NavSatFix has no sequence field, and pairing it against the separately
+  /// delivered /gps/status sequence is deliberately left to a follow-up.
+  mowgli_interfaces::gnss_observation_freshness::ObservationTracker fix_observation_tracker_;
 
   /// TF listener to resolve base_footprint↔gps_link (static from URDF,
   /// gives the lever arm) and map↔base_footprint (dynamic from ekf_map,

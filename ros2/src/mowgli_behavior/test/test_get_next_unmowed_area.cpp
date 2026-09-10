@@ -25,6 +25,11 @@
  * so the skip lives on the BT selection side. These tests stand up a REAL
  * in-process get_mowing_area service (no robot, no mocked interfaces) and tick
  * the StatefulActionNode to verify a nav-only area is never selected.
+ *
+ * It also covers TARGETED runs (~/start_in_area, "mow only this area"): the
+ * single-area constraint is session state, so a run must not roll over into
+ * another area when the BT re-enters MowingSequence after the requested area
+ * completes (field regression, 2026-08-24).
  */
 
 #include <chrono>
@@ -38,10 +43,13 @@
 #include "behaviortree_cpp/bt_factory.h"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/coverage_nodes.hpp"
+#include "mowgli_behavior/status_nodes.hpp"
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include <gtest/gtest.h>
 
 using mowgli_behavior::BTContext;
+using mowgli_behavior::clearSingleAreaMode;
+using mowgli_behavior::EndSession;
 using mowgli_behavior::GetNextUnmowedArea;
 using GetMowingArea = mowgli_interfaces::srv::GetMowingArea;
 
@@ -99,6 +107,7 @@ protected:
     blackboard->set("context", ctx);
 
     factory.registerNodeType<GetNextUnmowedArea>("GetNextUnmowedArea");
+    factory.registerNodeType<EndSession>("EndSession");
 
     server_node = rclcpp::Node::make_shared("fake_map_server");
     service = server_node->create_service<GetMowingArea>(
@@ -168,6 +177,18 @@ protected:
         "</BehaviorTree></root>";
     return factory.createTreeFromText(xml, blackboard);
   }
+
+  /// A bare <EndSession/> tree — the real session-boundary node, so the
+  /// "cleared at session end" assertion exercises production code rather than
+  /// a hand-rolled reset.
+  BT::Tree makeEndSessionTree()
+  {
+    const std::string xml =
+        "<root BTCPP_format=\"4\"><BehaviorTree ID=\"MainTree\">"
+        "<EndSession/>"
+        "</BehaviorTree></root>";
+    return factory.createTreeFromText(xml, blackboard);
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -219,5 +240,220 @@ TEST_F(GetNextUnmowedAreaTest, SelectsMowingAreaAtIndexZero)
   uint32_t selected = 99;
   ASSERT_TRUE(blackboard->get("area_index", selected));
   EXPECT_EQ(selected, 0u);
+  EXPECT_EQ(ctx->current_area, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #487 — a START_OCCUPIED pass must not retire the area.
+//
+// FollowStrip sets ctx->start_blocked_area when a whole pass ended with every
+// blade-off sub-path transit refused because the ROBOT'S OWN pose is a lethal
+// or keepout cell and ZERO swaths were mowed. Such a pass never had a chance to
+// make progress; charging it to the no-progress retirement counter is what
+// forfeited a mowable field at 0 % coverage on 2026-08-24.
+// ---------------------------------------------------------------------------
+
+// Before the fix, kMaxAreaAttempts (5) consecutive zero-progress dispatches
+// retired the area. With the exemption, five start-blocked dispatches all still
+// select the area.
+TEST_F(GetNextUnmowedAreaTest, StartBlockedPassesDoNotBurnTheNoProgressBudget)
+{
+  areas[0] = {"lawn", /*is_navigation_area=*/false};
+  waitForService();
+
+  for (uint32_t attempt = 0; attempt < BTContext::kMaxAreaAttempts; ++attempt)
+  {
+    // Simulate the previous FollowStrip pass ending start-pose-blocked.
+    ctx->start_blocked_area = 0u;
+    auto tree = makeTree(/*max_areas=*/5);
+    EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS)
+        << "dispatch " << attempt << " must still select the area";
+    EXPECT_EQ(ctx->current_area, 0) << "dispatch " << attempt;
+  }
+  EXPECT_EQ(ctx->attempted_areas.count(0u), 0u)
+      << "a run of START_OCCUPIED passes must not retire a mowable area (#487)";
+}
+
+// ...but the exemption is BOUNDED. A robot genuinely parked on a lethal cell
+// forever must still give up and dock rather than loop.
+TEST_F(GetNextUnmowedAreaTest, StartBlockedExemptionIsBoundedSoTheAreaStillRetires)
+{
+  areas[0] = {"lawn", /*is_navigation_area=*/false};
+  waitForService();
+
+  const uint32_t kMaxDispatches =
+      BTContext::kMaxStartBlockedAttempts + BTContext::kMaxAreaAttempts + 2;
+  bool retired = false;
+  for (uint32_t attempt = 0; attempt < kMaxDispatches && !retired; ++attempt)
+  {
+    ctx->start_blocked_area = 0u;
+    auto tree = makeTree(/*max_areas=*/5);
+    tickToCompletion(tree);
+    retired = ctx->attempted_areas.count(0u) > 0;
+  }
+  EXPECT_TRUE(retired) << "the start-blocked exemption must be bounded — an area the robot can "
+                          "never plan from has to retire so the session can dock";
+}
+
+// The flag describes ONE finished pass and is consumed by the dispatch that
+// reads it, so a single blocked pass buys exactly one exemption.
+TEST_F(GetNextUnmowedAreaTest, StartBlockedFlagIsConsumedByOneDispatch)
+{
+  areas[0] = {"lawn", /*is_navigation_area=*/false};
+  waitForService();
+
+  ctx->start_blocked_area = 0u;
+  auto tree = makeTree(/*max_areas=*/5);
+  ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+
+  EXPECT_FALSE(ctx->start_blocked_area.has_value());
+  EXPECT_EQ(ctx->area_start_blocked_count[0u], 1u);
+  EXPECT_EQ(ctx->area_attempt_count[0u], 0u)
+      << "the exempted dispatch must not have advanced the no-progress counter";
+}
+
+// ---------------------------------------------------------------------------
+// Targeted run (~/start_in_area): mow ONE area, then stop — no roll-over.
+//
+// Field log 2026-08-24: "StartInArea: received area=1" → "targeted run — mowing
+// only area 1 (single-area mode)" → ~56 min of mowing → "area 0 selected" with
+// NO targeted-run line. The BT re-enters MowingSequence when the targeted area
+// completes, so GetNextUnmowedArea::onStart() runs again; the clip used to live
+// only in members onStart() resets plus a one-shot optional consumed on the
+// first entry, so the second entry iterated from area 0 and the robot mowed an
+// area the operator never selected.
+// ---------------------------------------------------------------------------
+
+// The regression itself: the dispatch that follows the targeted area's
+// completion must NOT select another area.
+TEST_F(GetNextUnmowedAreaTest, TargetedRunDoesNotRollOverToTheNextArea)
+{
+  areas[0] = {"front_lawn", /*is_navigation_area=*/false};
+  areas[1] = {"back_lawn", /*is_navigation_area=*/false};
+  areas[2] = {"side_strip", /*is_navigation_area=*/false};
+  waitForService();
+
+  // Operator picks area 1 in the GUI (~/start_in_area).
+  ctx->target_area_index = 1;
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+    EXPECT_EQ(ctx->current_area, 1);
+  }
+  // The one-shot request is consumed, but the constraint is now session state.
+  EXPECT_FALSE(ctx->target_area_index.has_value());
+  ASSERT_TRUE(ctx->single_area_target.has_value());
+  EXPECT_EQ(*ctx->single_area_target, 1u);
+
+  // FollowStrip mows area 1 to completion, and the BT re-enters MowingSequence.
+  ctx->completed_areas.insert(1u);
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::FAILURE)
+        << "a targeted run must end after its area, not roll over to another";
+  }
+  EXPECT_EQ(ctx->current_area, 1) << "no other area may be selected for mowing";
+  uint32_t selected = 99;
+  ASSERT_TRUE(blackboard->get("area_index", selected));
+  EXPECT_EQ(selected, 1u);
+  // FAILURE + coverage_all_complete is the CLEAN exit: the tree routes it to
+  // MOWING_COMPLETE + dock (CoverageCompleteDock), not COVERAGE_FAILED_DOCKING.
+  EXPECT_TRUE(ctx->coverage_all_complete)
+      << "a finished targeted run must dock via MOWING_COMPLETE, not report a coverage failure";
+}
+
+// An explicitly targeted area is re-mown even when it is already marked
+// completed/attempted this session (the operator asked for it on purpose).
+TEST_F(GetNextUnmowedAreaTest, TargetedRunReMowsAnAlreadyCompletedArea)
+{
+  areas[0] = {"front_lawn", /*is_navigation_area=*/false};
+  areas[1] = {"back_lawn", /*is_navigation_area=*/false};
+  waitForService();
+
+  ctx->completed_areas.insert(1u);
+  ctx->attempted_areas.insert(1u);
+
+  ctx->target_area_index = 1;
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS)
+      << "an explicit re-mow request must clear the stale completed/attempted flags";
+  EXPECT_EQ(ctx->current_area, 1);
+}
+
+// ...but that erase is tied to the ONE-SHOT request, not to the session flag:
+// repeating it on every onStart() would wipe the completion the targeted area
+// just earned and re-mow it forever.
+TEST_F(GetNextUnmowedAreaTest, TargetedRunDoesNotReMowItsOwnCompletedArea)
+{
+  areas[0] = {"front_lawn", /*is_navigation_area=*/false};
+  areas[1] = {"back_lawn", /*is_navigation_area=*/false};
+  waitForService();
+
+  ctx->target_area_index = 1;
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  }
+  ctx->completed_areas.insert(1u);
+
+  // Two further re-entries: both must end the run, never re-select area 1.
+  for (int i = 0; i < 2; ++i)
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::FAILURE) << "re-entry " << i;
+    EXPECT_GT(ctx->completed_areas.count(1u), 0u)
+        << "the targeted area's completion must survive re-entry " << i;
+  }
+}
+
+// A plain COMMAND_START after a targeted run iterates all areas again. The
+// clear is production code (clearSingleAreaMode), called by the
+// ~/high_level_control handler on COMMAND_START.
+TEST_F(GetNextUnmowedAreaTest, PlainStartAfterATargetedRunIteratesAllAreas)
+{
+  areas[0] = {"front_lawn", /*is_navigation_area=*/false};
+  areas[1] = {"back_lawn", /*is_navigation_area=*/false};
+  waitForService();
+
+  ctx->target_area_index = 1;
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+    ASSERT_EQ(ctx->current_area, 1);
+  }
+  ctx->completed_areas.insert(1u);
+
+  // Operator presses the ordinary "Start" button — same session (no EndSession,
+  // as after a low-battery dock + resume).
+  clearSingleAreaMode(*ctx);
+
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->current_area, 0) << "a plain start must resume normal all-areas iteration";
+}
+
+// EndSession is the session boundary: the single-area clip dies there with the
+// other per-session sets, so the next session starts unconstrained.
+TEST_F(GetNextUnmowedAreaTest, EndSessionClearsSingleAreaMode)
+{
+  areas[0] = {"front_lawn", /*is_navigation_area=*/false};
+  areas[1] = {"back_lawn", /*is_navigation_area=*/false};
+  waitForService();
+
+  ctx->target_area_index = 1;
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+    ASSERT_TRUE(ctx->single_area_target.has_value());
+  }
+
+  auto end_tree = makeEndSessionTree();
+  ASSERT_EQ(end_tree.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_FALSE(ctx->single_area_target.has_value());
+  EXPECT_FALSE(ctx->target_area_index.has_value());
+
+  // Next session: normal iteration from area 0.
+  auto tree = makeTree(/*max_areas=*/5);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
   EXPECT_EQ(ctx->current_area, 0);
 }

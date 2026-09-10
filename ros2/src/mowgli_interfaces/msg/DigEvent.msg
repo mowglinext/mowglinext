@@ -6,9 +6,14 @@
 # already hard-stopped and begun a bounded reverse by the time this is
 # published; consumers act on the LOCATION, not the motion.
 #
-# map_server subscribes and promotes the spot to a permanent keepout
-# (apply_promoted_obstacle) so coverage routes around it on the next pass
-# instead of returning to dig the same hole again.
+# map_server subscribes and stamps a PENDING keepout at the spot: live in
+# the keepout mask for the current session, so coverage routes around it on
+# the next pass instead of returning to dig the same hole again, but NOT
+# written to areas.dat. A single inferred dig is a proposal, not a permanent
+# change to the operator's map - they accept it with
+# map_server_node/promote_obstacle{pending_id} or drop it with
+# map_server_node/discard_obstacle. The evidence below is folded into the
+# proposal's name so the operator can judge it.
 
 std_msgs/Header header
 

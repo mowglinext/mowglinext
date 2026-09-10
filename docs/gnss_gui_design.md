@@ -1,5 +1,7 @@
 # GNSS GUI Design
 
+> **Historical document (2026-06)** — describes the state at that time. Current reference: [`docs/claude/codemaps/gui_backend.md`](claude/codemaps/gui_backend.md).
+
 ## Goal
 
 MowgliNext should expose a stable GNSS configuration layer that stays usable

@@ -53,10 +53,10 @@ RUN chmod +x /ros2_entrypoint.sh
 ENTRYPOINT ["/ros2_entrypoint.sh"]
 CMD ["ros2", "run", "ldlidar_stl_ros2", "ldlidar_stl_ros2_node", \
      "--ros-args", \
-     "-p", "product_name:=STL27L", \
+     "-p", "product_name:=LDLiDAR_STL27L", \
      "-p", "topic_name:=scan", \
      "-p", "frame_id:=lidar_link", \
      "-p", "port_name:=/dev/ttyS1", \
-     "-p", "port_baudrate:=230400", \
+     "-p", "port_baudrate:=921600", \
      "-p", "laser_scan_dir:=true", \
      "-p", "enable_angle_crop_func:=false"]

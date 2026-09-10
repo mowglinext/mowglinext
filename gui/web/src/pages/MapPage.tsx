@@ -309,8 +309,13 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             const navigationAreas = buildFeatures(map.navigation_areas??[], "navigation")
             newFeatures = {...workingAreas, ...navigationAreas}
 
-            const dock_lonlat = transpose(offsetX, offsetY, datum, map?.dock_y!!, map?.dock_x!!)
-            newFeatures["dock"] = new DockFeatureBase(dock_lonlat, map?.dock_heading ?? 0);
+            // dock_x/dock_y are optional on the wire. `map?.dock_y!` claimed
+            // otherwise and pushed `undefined` into transpose(), painting the
+            // dock at NaN; skip the marker instead when the pose is absent.
+            if (map.dock_x !== undefined && map.dock_y !== undefined) {
+                const dock_lonlat = transpose(offsetX, offsetY, datum, map.dock_y, map.dock_x)
+                newFeatures["dock"] = new DockFeatureBase(dock_lonlat, map.dock_heading ?? 0);
+            }
         }
         if (path?.poses) {
             // Coverage plan: the full F2C route (headland rings + every swath)
@@ -338,8 +343,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 segment = [];
             };
             for (const pose of path.poses) {
-                const x = pose.pose?.position?.x!;
-                const y = pose.pose?.position?.y!;
+                const x = pose.pose?.position?.x;
+                const y = pose.pose?.position?.y;
+                // A pose without coordinates cannot be drawn — break the
+                // polyline there rather than feeding NaN into transpose().
+                if (x === undefined || y === undefined) {
+                    flushSegment();
+                    prev = null;
+                    continue;
+                }
                 if (prev && Math.hypot(x - prev.x, y - prev.y) > SUBPATH_GAP_M) {
                     flushSegment();
                 }
@@ -349,8 +361,11 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             flushSegment();
         }
         if (plan?.poses) {
-            const coordinates = plan.poses.map((pose) => {
-                return transpose(offsetX, offsetY, datum, pose.pose?.position?.y!, pose.pose?.position?.x!)
+            const coordinates = plan.poses.flatMap((pose) => {
+                const x = pose.pose?.position?.x;
+                const y = pose.pose?.position?.y;
+                if (x === undefined || y === undefined) return [];
+                return [transpose(offsetX, offsetY, datum, y, x)];
             });
             const feature = new ActivePathFeature("plan", coordinates);
             newFeatures[feature.id] = feature

@@ -63,6 +63,14 @@ bool saveCoverageResumeState(const BTContext& ctx)
   // file (clearCoverageResumeState), so a stale active command is never left on
   // disk.
   out << "current_command " << static_cast<unsigned>(ctx.current_command) << '\n';
+  // Single-area mode (a ~/start_in_area targeted run). Persisted for the same
+  // reason as current_command: a restart mid-run auto-re-enters MowingSequence,
+  // and without this the restored run would silently widen into a mow-the-whole-
+  // lawn run the moment the targeted area finished. Absent line = not targeted.
+  if (ctx.single_area_target.has_value())
+  {
+    out << "single_area_target " << *ctx.single_area_target << '\n';
+  }
   out << "current_area " << ctx.current_area << '\n';
   out << "completed_areas";
   for (uint32_t idx : ctx.completed_areas)
@@ -145,6 +153,15 @@ bool loadCoverageResumeState(BTContext& ctx)
       unsigned v;
       if (ls >> v)
         ctx.current_command = static_cast<uint8_t>(v);
+    }
+    else if (tag == "single_area_target")
+    {
+      // Absent in files written before targeted runs became session state (and
+      // in every non-targeted run) → single_area_target stays empty, i.e. the
+      // normal all-areas iteration.
+      uint32_t v;
+      if (ls >> v)
+        ctx.single_area_target = v;
     }
     else if (tag == "current_area")
     {

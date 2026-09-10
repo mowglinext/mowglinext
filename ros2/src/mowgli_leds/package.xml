@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>mowgli_leds</name>
+  <version>0.1.0</version>
+  <description>
+    WS2812 (NeoPixel) status ring for the Mowgli robot mower. Renders the
+    high-level robot state, mowing progress, charge level and RTK health onto
+    an addressable LED ring driven from the SBC over SPI MOSI.
+
+    Read-only with respect to the robot: it subscribes to status topics and
+    writes to /dev/spidev. It shares nothing with the motion, dig-detection,
+    coverage or localization stacks, and it is NOT part of the blade-safety
+    path (the STM32 firmware remains the sole blade safety authority and owns
+    its own status LED).
+  </description>
+  <maintainer email="cedric@mowgli.dev">Cedric</maintainer>
+  <license>GPL-3.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>mowgli_interfaces</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

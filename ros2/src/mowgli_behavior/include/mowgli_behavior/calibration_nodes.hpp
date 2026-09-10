@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <memory>
 #include <string>
 
 #include "behaviortree_cpp/behavior_tree.h"
@@ -86,6 +87,13 @@ public:
   BT::NodeStatus tick() override;
 
 private:
+  /// Warns when the yaw just measured off the undock disagrees with the
+  /// PERSISTED dock_pose_yaw. Diagnostic only — this never writes the YAML;
+  /// the one-click dock calibration stays the single writer (Invariant 6).
+  static void warn_if_dock_yaw_stale(const std::shared_ptr<BTContext>& ctx,
+                                     double measured_yaw,
+                                     double sigma_yaw);
+
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr set_pose_pub_;
 };
 

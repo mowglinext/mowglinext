@@ -52,6 +52,8 @@
   <exec_depend>mowgli_map</exec_depend>
   <exec_depend>mowgli_localization</exec_depend>
   <exec_depend>mowgli_monitoring</exec_depend>
+  <!-- Optional WS2812 status ring; launched only when led_enabled is true. -->
+  <exec_depend>mowgli_leds</exec_depend>
 
   <!-- GUI bridge (optional at runtime, declared for rosdep resolution) -->
   <exec_depend>foxglove_bridge</exec_depend>

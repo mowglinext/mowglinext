@@ -2,6 +2,16 @@ import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest';
 import {renderHook, act} from '@testing-library/react';
 import {useMapOffset} from './useMapOffset.ts';
 
+// `act` is handed an async callback so React flushes its microtask queue after
+// the fake timers fire; the body itself has nothing of its own to await, hence
+// the explicit `Promise.resolve()`.
+const advanceTimers = async (ms: number) => {
+    await act(async () => {
+        vi.advanceTimersByTime(ms);
+        await Promise.resolve();
+    });
+};
+
 describe('useMapOffset', () => {
     let setConfig: ReturnType<typeof vi.fn>;
     let notification: {error: ReturnType<typeof vi.fn>};
@@ -46,9 +56,7 @@ describe('useMapOffset', () => {
         expect(setConfig).not.toHaveBeenCalled();
 
         // After debounce timeout
-        await act(async () => {
-            vi.advanceTimersByTime(1100);
-        });
+        await advanceTimers(1100);
         expect(setConfig).toHaveBeenCalledWith({'gui.map.offset.x': '5.5'});
     });
 
@@ -63,9 +71,7 @@ describe('useMapOffset', () => {
         });
         expect(result.current.offsetY).toBe(-3.2);
 
-        await act(async () => {
-            vi.advanceTimersByTime(1100);
-        });
+        await advanceTimers(1100);
         expect(setConfig).toHaveBeenCalledWith({'gui.map.offset.y': '-3.2'});
     });
 
@@ -90,9 +96,7 @@ describe('useMapOffset', () => {
             result.current.handleOffsetX(3);
         });
 
-        await act(async () => {
-            vi.advanceTimersByTime(1100);
-        });
+        await advanceTimers(1100);
 
         // Only the last value should be saved
         expect(setConfig).toHaveBeenCalledTimes(1);

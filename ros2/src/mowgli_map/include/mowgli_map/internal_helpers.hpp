@@ -40,6 +40,17 @@ namespace mowgli_map
 /// deduped. See apply_promoted_obstacle() and the area-load paths.
 constexpr double kObstacleDedupEpsilonM = 0.10;
 
+/// Default side of the square keepout stamped at a wheel-slip dig [m].
+/// One chassis LENGTH (the Nav2 robot_footprint is 0.60 m x 0.40 m). The
+/// previous default was one tool width (0.18 m) - narrower than the body,
+/// so "route around the dig" still dragged the chassis across it and issue
+/// #500 saw the robot re-latch a dig 3x in 18.4 s inside 0.13 m.
+constexpr double kDefaultDigKeepoutSizeM = 0.60;
+
+/// Hard floor for the dig keepout, whatever dig_obstacle_size is set to.
+/// Below one costmap cell the keepout cannot be represented at all.
+constexpr double kMinDigKeepoutSizeM = 0.05;
+
 /// Centroid (average vertex) of a polygon, in the polygon's own frame.
 inline geometry_msgs::msg::Point32 polygon_centroid(const geometry_msgs::msg::Polygon& poly)
 {

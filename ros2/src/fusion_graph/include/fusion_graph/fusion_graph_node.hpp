@@ -35,11 +35,13 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 
+#include "fusion_graph/dr_slip_veto.hpp"
 #include "fusion_graph/graph_manager.hpp"
 #include "fusion_graph/pose_extrapolator.hpp"
 #include "fusion_graph/scan_matcher.hpp"
 #include <Eigen/Core>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
+#include <mowgli_interfaces/gnss_observation_freshness.hpp>
 #include <mowgli_interfaces/msg/high_level_status.hpp>
 #include <mowgli_interfaces/msg/status.hpp>
 #include <std_srvs/srv/trigger.hpp>
@@ -97,6 +99,9 @@ private:
 
   // Try to seed X_0. Returns true once initialization succeeded.
   bool TrySeedInitialPose();
+  // RTK freshness is based on receiver-receipt provenance in ROS time.
+  // Negative age (future stamp / clock rewind) is always not fresh.
+  bool RtkFixedReceiptIsFresh(double maximum_age_s) const;
 
   // Publish TF map->odom and /odometry/filtered_map.
   void PublishOutputs(const TickOutput& out);
@@ -185,8 +190,24 @@ private:
   //   dr_slip_wheel_min_rad_per_s: wheel must claim a real yaw rate
   // The disagreement itself is |wheel_wz_ - gz|, gated by the two
   // above so a normal coordinated turn (both agree) is never vetoed.
-  double dr_slip_gyro_max_rad_per_s_ = 0.15;
-  double dr_slip_wheel_min_rad_per_s_ = 0.15;
+  //
+  // dr_slip_wheel_min_rad_per_s MUST stay above the quantization floor of
+  // wheel_wz_ — see dr_slip_veto.hpp for the derivation. /wheel_odom derives
+  // the wheel yaw rate from a tick DIFFERENCE over one 50-67 ms aggregation
+  // window, so one tick of left/right asymmetry already reads 0.166-0.219
+  // rad/s. The original 0.15 sat BELOW that floor: during a slow straight
+  // drive the gyro reads ~0 and a single tick of encoder rounding was
+  // indistinguishable from a skating pivot, so the veto fired on 32-45 % of
+  // windows and zeroed that fraction of the translation. odom→base_footprint
+  // under-reported travel by ~25-30 %, and Nav2's BackUp — which measures
+  // odom-frame displacement — drove 2.1 m for a 1.50 m undock command
+  // (issue #488). 0.44 rad/s clears the 2-LSB floor; the skating pivot this
+  // veto exists for runs 1-3 rad/s, so the margin costs no sensitivity.
+  // Both are ROS parameters (dr_slip_gyro_max_rad_per_s /
+  // dr_slip_wheel_min_rad_per_s) so a robot with a different
+  // ticks_per_meter, wheel_track or aggregation window can re-floor them.
+  double dr_slip_gyro_max_rad_per_s_ = kDrSlipGyroMaxDefaultRadPerS;
+  double dr_slip_wheel_min_rad_per_s_ = kDrSlipWheelMinDefaultRadPerS;
 
   // GPS antenna radial offset from base_link, hypot(lever_arm_x,
   // lever_arm_y). Used by the RTK wrong-fix gate in OnGnss to
@@ -449,6 +470,24 @@ private:
   // re-enables, so it still carries global consistency through no-fix (tree)
   // windows. Default true.
   bool lc_skip_when_rtk_fixed_ = true;
+  // Loop-closure rate/travel gate + GPS σ floor (issue #513, see
+  // loop_closure_gate.hpp). Without it LC ran at 13.7 accepts/s under RTK-Float
+  // (3816 in 286 s of mowing), each a 5 cm factor to the adjacent swath.
+  // At most ONE accepted LC per node, and none until BOTH lc_min_interval_s_
+  // has elapsed AND lc_min_travel_m_ of wheel travel has accrued since the
+  // last ACCEPTED LC. lc_sigma_xy is floored to lc_gps_sigma_ratio_ ×
+  // last_gps_sigma_ so an LC is never tighter than the last GNSS fix.
+  double lc_min_travel_m_ = 1.0;
+  double lc_min_interval_s_ = 2.0;
+  double lc_gps_sigma_ratio_ = 1.0;
+  // Accumulators for the gate — reset on ACCEPT ONLY (a gate rejection must
+  // leave them alone or the gate never opens; loop_closure_gate.hpp explains
+  // why that is the correct polarity here and the wrong one for the RTK
+  // wrong-fix gate). wheel_dist_since_last_lc_m_ is incremented alongside
+  // wheel_dist_since_last_gps_m_ in OnWheel.
+  double wheel_dist_since_last_lc_m_ = 0.0;
+  std::optional<rclcpp::Time> last_lc_accept_stamp_;
+  uint64_t lc_rate_gated_ = 0;  // diagnostic: nodes where the gate blocked the search
 
   // Publishers.
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;
@@ -561,8 +600,9 @@ private:
   // GraphStats.gps_rejects_wrongfix).
   //
   // wheel_dist_since_last_gps_m_ accumulates |wheel translation|
-  // between consecutive OnGnss calls; reset to 0 in OnGnss after
-  // the check.
+  // between consecutive genuine observations; cached republications return
+  // before this state is touched.
+  mowgli_interfaces::gnss_observation_freshness::ObservationTracker gnss_observation_tracker_;
   std::optional<gtsam::Vector2> last_gps_map_xy_;
   double wheel_dist_since_last_gps_m_ = 0.0;
   // GPS jump (m) above which the sample is rejected as a wrong-fix (motion-
@@ -582,6 +622,22 @@ private:
   // and yaw with no live GPS to drag it off.
   double dock_reanchor_sigma_xy_m_ = 0.03;
   uint64_t last_dock_reanchor_node_ = std::numeric_limits<uint64_t>::max();
+  // Dock-prior vs RTK-Fixed GPS consistency (issue #512, dock_gps_consistency.hpp).
+  // The prior above YIELDS for a node — and that GPS sample is fused instead —
+  // only when a FRESH RTK-Fixed sample with σ ≤ dock_prior_max_gps_sigma_m_ puts
+  // the antenna more than dock_prior_max_gps_disagreement_m_ from where
+  // dock_pose says it is. No fix / Float / large σ (the terrace case) → the
+  // prior keeps pinning exactly as before. Either threshold ≤ 0 disables.
+  double dock_prior_max_gps_disagreement_m_ = 0.50;
+  double dock_prior_max_gps_sigma_m_ = 0.05;
+  // GPS antenna offset from base_link (mirrors GraphParams::lever_arm_x/y) so
+  // the docked antenna position can be predicted as dock_pose ⊕ R(yaw)·lever.
+  double lever_arm_x_m_ = 0.0;
+  double lever_arm_y_m_ = 0.0;
+  // Diagnostics: latest antenna-to-antenna disagreement measured while
+  // charging (0 when not charging), and how many nodes the prior yielded on.
+  double dock_gps_disagreement_m_ = 0.0;
+  uint64_t dock_prior_yielded_ = 0;
   // Dock-approach pose stabilisation. While /cmd_vel_docking is active the
   // graceful dock controller is steering the final approach; the slow reverse
   // motion makes the COG travel-direction yaw unreliable and the RTK fixed↔float

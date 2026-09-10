@@ -114,6 +114,9 @@ TEST_F(BridgeTest, StatusIsMappedToPublicContract)
   EXPECT_EQ(received.receiver_vendor, "u-blox");
   EXPECT_EQ(received.header.frame_id, "gps_link");
   EXPECT_FLOAT_EQ(received.horizontal_accuracy_m, 0.014F);
+  // Unset upstream stays 0, which selects the receipt-stamp compatibility mode
+  // in mowgli_interfaces/gnss_observation_freshness.hpp.
+  EXPECT_EQ(received.position_observation_sequence, 0U);
 
   exec.remove_node(helper);
   exec.remove_node(bridge);
@@ -151,6 +154,58 @@ TEST_F(BridgeTest, RtcmFrameIsForwardedByteExact)
 
   ASSERT_TRUE(got);
   EXPECT_EQ(received.message, frame.data);
+
+  exec.remove_node(helper);
+  exec.remove_node(bridge);
+}
+
+// The observation sequence is the strongest identity a consumer can use to tell
+// a genuinely new receiver observation from the timer-driven republication of a
+// cached one. The bridge must forward it verbatim and must never latch it: a
+// stale value here would make a frozen receiver look live to every consumer of
+// the typed contract.
+TEST_F(BridgeTest, PositionObservationSequenceIsForwardedVerbatim)
+{
+  auto bridge = makeBridge();
+  auto helper = std::make_shared<rclcpp::Node>("bridge_test_helper_sequence");
+
+  const rclcpp::QoS qos = rclcpp::QoS(10).reliable().durability_volatile();
+  auto status_pub =
+    helper->create_publisher<UniversalGnssStatus>("/test/universal/status", qos);
+
+  PublicGnssStatus received;
+  bool got = false;
+  auto status_sub = helper->create_subscription<PublicGnssStatus>(
+    "/test/gps/status", qos,
+    [&](const PublicGnssStatus & msg) {
+      received = msg;
+      got = true;
+    });
+
+  rclcpp::executors::SingleThreadedExecutor exec;
+  exec.add_node(bridge);
+  exec.add_node(helper);
+
+  UniversalGnssStatus in;
+  in.fix_type = UniversalGnssStatus::FIX_TYPE_RTK_FIXED;
+  in.fix_valid = true;
+  in.position_observation_sequence = 4242U;
+
+  spinUntil(exec, [&]() {
+    status_pub->publish(in);
+    return got;
+  });
+  ASSERT_TRUE(got);
+  EXPECT_EQ(received.position_observation_sequence, 4242U);
+
+  // A numerically identical observation with a new upstream sequence must come
+  // through as the NEW sequence — the payload is deliberately not the identity.
+  in.position_observation_sequence = 4243U;
+  const bool advanced = spinUntil(exec, [&]() {
+    status_pub->publish(in);
+    return received.position_observation_sequence == 4243U;
+  });
+  EXPECT_TRUE(advanced) << "bridge latched the observation sequence instead of forwarding it";
 
   exec.remove_node(helper);
   exec.remove_node(bridge);

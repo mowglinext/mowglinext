@@ -25,6 +25,7 @@
  */
 
 #include <cmath>
+#include <utility>
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
@@ -92,7 +93,219 @@ protected:
   {
     return mowgli_behavior::RecordArea::douglas_peucker(points, tolerance);
   }
+
+  static bool is_sample_far_enough(const geometry_msgs::msg::Point32& last,
+                                   const geometry_msgs::msg::Point32& candidate)
+  {
+    return mowgli_behavior::RecordArea::is_sample_far_enough(last, candidate);
+  }
+
+  /// Replay a densely-sampled drive through RecordArea's minimum-spacing gate,
+  /// exactly as record_position() does, and return the kept trajectory.
+  static std::vector<geometry_msgs::msg::Point32> apply_spacing_gate(
+      const std::vector<geometry_msgs::msg::Point32>& samples)
+  {
+    std::vector<geometry_msgs::msg::Point32> kept;
+    for (const auto& s : samples)
+    {
+      if (kept.empty() || is_sample_far_enough(kept.back(), s))
+      {
+        kept.push_back(s);
+      }
+    }
+    return kept;
+  }
 };
+
+namespace
+{
+constexpr double kTolerance = mowgli_behavior::RecordArea::kDefaultSimplificationToleranceM;
+constexpr double kOldTolerance = 0.2;  // the pre-fix hardcoded value
+constexpr double kMinSpacing = mowgli_behavior::RecordArea::kMinSampleSpacingM;
+
+/// Sample a closed rectangular boundary at `step` metres, as a recording drive
+/// at `speed` and a given sample rate would. Perimeter = 2 * (w + h).
+std::vector<geometry_msgs::msg::Point32> sample_rectangle(float w, float h, double step)
+{
+  std::vector<geometry_msgs::msg::Point32> pts;
+  const std::vector<std::pair<geometry_msgs::msg::Point32, geometry_msgs::msg::Point32>> edges = {
+      {make_point(0.0f, 0.0f), make_point(w, 0.0f)},
+      {make_point(w, 0.0f), make_point(w, h)},
+      {make_point(w, h), make_point(0.0f, h)},
+      {make_point(0.0f, h), make_point(0.0f, 0.0f)},
+  };
+  for (const auto& e : edges)
+  {
+    const double len = std::hypot(e.second.x - e.first.x, e.second.y - e.first.y);
+    const int n = static_cast<int>(len / step);
+    for (int i = 0; i < n; ++i)
+    {
+      const double t = static_cast<double>(i) / static_cast<double>(n);
+      pts.push_back(make_point(static_cast<float>(e.first.x + t * (e.second.x - e.first.x)),
+                               static_cast<float>(e.first.y + t * (e.second.y - e.first.y))));
+    }
+  }
+  return pts;
+}
+}  // namespace
+
+// ===========================================================================
+// Boundary-resolution regression tests
+//
+// Field report: a recorded 38.13 m perimeter came back with only 24 vertices
+// (~1.6 m apart) because simplification_tolerance was 0.2 m — wider than
+// tool_width — and record_rate_hz was 2 Hz, so the 0.05 m spacing gate never
+// bound and the sample rate was the real limiter.
+// ===========================================================================
+
+TEST_F(RecordAreaAlgorithmTest, DefaultToleranceIsBelowToolWidthAndAtSamplingFloor)
+{
+  // The tolerance IS the worst-case boundary error (DP's guarantee), so it must
+  // stay well under one cutting swath. tool_width defaults to 0.18 m and is
+  // 0.15 m on some builds; the tolerance must clear the smaller of those.
+  constexpr double kNarrowestToolWidth = 0.15;
+  EXPECT_LT(kTolerance, kNarrowestToolWidth)
+      << "boundary error must never exceed a full cutting swath";
+  EXPECT_LE(kTolerance / kNarrowestToolWidth, 0.5)
+      << "tolerance should be comfortably below tool_width, not merely under it";
+
+  // Below the sampling floor DP cannot recover detail that was never sampled.
+  EXPECT_GE(kTolerance, kMinSpacing) << "a tolerance finer than the sample spacing buys nothing";
+}
+
+TEST_F(RecordAreaAlgorithmTest, DefaultRateMakesSpacingGateBindAtMaxSpeed)
+{
+  // max_mps (0.5 m/s) is a hard runtime wheel-speed ceiling pushed to the STM32,
+  // so it bounds how fast the robot can be driven while recording. The gate
+  // binds only when the per-sample travel is at or below the spacing floor.
+  constexpr double kMaxMps = 0.5;
+  const double rate = mowgli_behavior::RecordArea::kDefaultRecordRateHz;
+  EXPECT_LE(kMaxMps / rate, kMinSpacing)
+      << "at max_mps the sample rate, not the 5 cm gate, would be the limiter";
+
+  // And the old 2 Hz default did NOT bind — this is the bug being fixed.
+  EXPECT_GT(kMaxMps / 2.0, kMinSpacing);
+
+  // onRunning() runs inside the BT tick, so tick_rate is the achievable ceiling.
+  // A default above it would be silently unattainable.
+  constexpr double kDefaultTickRate = 10.0;
+  EXPECT_LE(rate, kDefaultTickRate) << "default record rate must be achievable at the BT tick rate";
+}
+
+TEST_F(RecordAreaAlgorithmTest, NewTolerancePreservesFeatureThatOldToleranceDestroyed)
+{
+  // A 0.12 m bump on an otherwise straight 4 m run — smaller than the old 0.2 m
+  // tolerance, larger than the new 0.05 m one. This is exactly the class of
+  // garden-boundary detail (a shrub, a bed corner) that used to vanish.
+  std::vector<geometry_msgs::msg::Point32> path;
+  for (int i = 0; i <= 40; ++i)
+  {
+    const float x = static_cast<float>(i) * 0.1f;
+    const float y = (i == 20) ? 0.12f : 0.0f;
+    path.push_back(make_point(x, y));
+  }
+
+  const auto old_result = douglas_peucker(path, kOldTolerance);
+  EXPECT_EQ(old_result.size(), 2u) << "old tolerance flattened the bump into a straight line";
+
+  const auto new_result = douglas_peucker(path, kTolerance);
+  ASSERT_GT(new_result.size(), 2u) << "new tolerance must retain the bump";
+
+  bool bump_kept = false;
+  for (const auto& p : new_result)
+  {
+    if (std::abs(p.y - 0.12f) < 1e-4f)
+    {
+      bump_kept = true;
+    }
+  }
+  EXPECT_TRUE(bump_kept) << "the apex of the feature must survive simplification";
+}
+
+TEST_F(RecordAreaAlgorithmTest, SpacingGateCollapsesDuplicatesAndSubThresholdSamples)
+{
+  const auto origin = make_point(1.0f, 2.0f);
+
+  // Exact duplicate and near-duplicates below the floor are rejected.
+  EXPECT_FALSE(is_sample_far_enough(origin, origin));
+  EXPECT_FALSE(is_sample_far_enough(origin, make_point(1.02f, 2.0f)));
+  EXPECT_FALSE(is_sample_far_enough(origin, make_point(1.0f, 2.049f)));
+
+  // At/above the floor they are kept — including on a diagonal.
+  EXPECT_TRUE(is_sample_far_enough(origin, make_point(1.06f, 2.0f)));
+  EXPECT_TRUE(is_sample_far_enough(origin, make_point(1.04f, 2.04f)));
+
+  // Replaying a stationary robot (TF jitter only) must not grow the trajectory.
+  std::vector<geometry_msgs::msg::Point32> jitter;
+  for (int i = 0; i < 100; ++i)
+  {
+    jitter.push_back(make_point(1.0f + 0.003f * static_cast<float>(i % 3), 2.0f));
+  }
+  EXPECT_EQ(apply_spacing_gate(jitter).size(), 1u)
+      << "a parked robot must record exactly one point";
+}
+
+TEST_F(RecordAreaAlgorithmTest, RealisticPerimeterYieldsUsefulButBoundedVertexCount)
+{
+  // A 38.13 m perimeter, matching the operator's recorded_area_1. Sampled at
+  // 10 Hz while driving 0.3 m/s => 0.03 m raw steps, which the gate thins.
+  const float w = 11.0f;
+  const float h = 8.065f;  // 2 * (11 + 8.065) = 38.13 m
+  const auto raw = sample_rectangle(w, h, 0.03);
+  const auto kept = apply_spacing_gate(raw);
+
+  // The gate — not the sample rate — is what sets the spacing.
+  for (size_t i = 1; i < kept.size(); ++i)
+  {
+    const double d = std::hypot(kept[i].x - kept[i - 1].x, kept[i].y - kept[i - 1].y);
+    EXPECT_GE(d, kMinSpacing - 1e-6) << "gate must enforce the floor at index " << i;
+    EXPECT_LT(d, kMinSpacing + 0.03 + 1e-6) << "spacing must not exceed floor + one sample step";
+  }
+  EXPECT_GT(kept.size(), 600u) << "38 m at ~6 cm spacing should retain hundreds of raw samples";
+
+  // DP then collapses the straight runs. A boundary this simple must come back
+  // near its true corner count — and must NOT explode into hundreds of vertices
+  // that would bloat areas.dat and slow F2C/costmap polygon work.
+  const auto simplified = douglas_peucker(kept, kTolerance);
+  EXPECT_LE(simplified.size(), 40u) << "straight runs must collapse; no vertex explosion";
+
+  // The old settings are what produced the 24-vertex field result; the new
+  // pipeline must do better than ~1.6 m between vertices on a real boundary.
+  const double perimeter = 2.0 * (static_cast<double>(w) + static_cast<double>(h));
+  EXPECT_LT(perimeter / static_cast<double>(kept.size()), 0.1)
+      << "recorded resolution must be well under a cutting swath";
+}
+
+TEST_F(RecordAreaAlgorithmTest, DegenerateTrajectoryStillTrippedByMinVerticesAndMinArea)
+{
+  // Guard 1: a trajectory that cannot form a polygon. douglas_peucker returns
+  // it untouched (< 3 points), so the min_vertices check in onRunning() sees a
+  // sub-minimum count and bails rather than saving garbage.
+  const std::vector<geometry_msgs::msg::Point32> two_points = {make_point(0.0f, 0.0f),
+                                                               make_point(1.0f, 0.0f)};
+  const auto simplified_pair = douglas_peucker(two_points, kTolerance);
+  EXPECT_EQ(simplified_pair.size(), 2u);
+  EXPECT_LT(simplified_pair.size(), 3u) << "must fail the min_vertices=3 guard";
+  EXPECT_DOUBLE_EQ(polygon_area(simplified_pair), 0.0);
+
+  // Guard 2: a collinear drive (robot pushed in a straight line, never closing
+  // a loop) simplifies to its endpoints and has zero area.
+  std::vector<geometry_msgs::msg::Point32> straight;
+  for (int i = 0; i <= 30; ++i)
+  {
+    straight.push_back(make_point(static_cast<float>(i) * 0.06f, 0.0f));
+  }
+  const auto simplified_straight = douglas_peucker(straight, kTolerance);
+  EXPECT_EQ(simplified_straight.size(), 2u);
+  EXPECT_NEAR(polygon_area(simplified_straight), 0.0, 1e-6) << "must fail the min_area=1.0 guard";
+
+  // Guard 3: a real but tiny loop keeps its vertices yet is still under
+  // min_area, so it is rejected on area rather than slipping through.
+  const auto tiny = sample_rectangle(0.4f, 0.4f, 0.03);
+  const auto simplified_tiny = douglas_peucker(apply_spacing_gate(tiny), kTolerance);
+  EXPECT_GE(simplified_tiny.size(), 3u);
+  EXPECT_LT(polygon_area(simplified_tiny), 1.0) << "~0.15 m^2 must fail the min_area=1.0 guard";
+}
 
 // ===========================================================================
 // perpendicular_distance tests

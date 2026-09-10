@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "geometry_msgs/msg/point32.hpp"
+#include "mowgli_behavior/start_blocked_escape.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
@@ -56,6 +57,13 @@ struct BTContext
   // -----------------------------------------------------------------------
 
   mowgli_interfaces::msg::Status latest_status;
+  /// Arrival time of the most recent /hardware_bridge/status message.
+  /// Default-constructed = none has ever arrived, so latest_status is all
+  /// zeroes and describes nothing. EscapeStartBlocked (issue #487) needs this:
+  /// `mow_enabled == false` on a message that stopped arriving minutes ago is
+  /// NOT a verified blade-off, and the escape must stand down rather than drive
+  /// on an unverified blade state.
+  std::chrono::steady_clock::time_point last_status_time{};
   mowgli_interfaces::msg::Emergency latest_emergency;
   mowgli_interfaces::msg::Power latest_power;
 
@@ -70,8 +78,9 @@ struct BTContext
   /// BT condition/action nodes.  Use std::lock_guard for RAII locking.
   ///
   /// Does NOT cover the coverage-tracking fields below (command state +
-  /// swath-completion model: target_area_index, attempted_areas,
-  /// area_attempt_count, area_last_coverage, area_completed_swaths,
+  /// swath-completion model: target_area_index, single_area_target,
+  /// attempted_areas, area_attempt_count, area_last_coverage,
+  /// area_completed_swaths,
   /// area_swath_count, area_resume_pose_index, area_path_pose_count,
   /// area_plan_fingerprint, completed_areas, coverage_all_complete). Those
   /// are mutated ONLY from this node's own BT action-node callbacks
@@ -103,12 +112,31 @@ struct BTContext
   /// COMMAND_RESET_EMERGENCY=254, …).
   uint8_t current_command{0};
 
-  /// Set by ~/start_in_area service to request mowing a single, specific
-  /// area instead of iterating all areas. Consumed (and reset) by
-  /// GetNextUnmowedArea on its first call within a mowing run; once the
-  /// requested area is complete, the BT exits MowingSequence and docks
-  /// rather than rolling over to other areas.
+  /// Set by the ~/start_in_area service to REQUEST mowing a single, specific
+  /// area instead of iterating all areas. This is the one-shot *request*:
+  /// GetNextUnmowedArea consumes it on the next onStart() and latches the
+  /// index into single_area_target (below), which is what actually constrains
+  /// the run. Consuming it exactly once matters — it is also what triggers
+  /// the completed/attempted erase for an explicit re-mow.
   std::optional<int> target_area_index;
+
+  /// SESSION-scoped "single-area mode": the area index a targeted run
+  /// (~/start_in_area) is clipped to. Every GetNextUnmowedArea::onStart()
+  /// honours it, so the constraint survives the BT re-entering
+  /// MowingSequence after the targeted area finishes.
+  ///
+  /// It exists because the clip used to live ONLY in GetNextUnmowedArea's
+  /// own members (current_area_idx_ / max_areas_), which onStart() resets on
+  /// every entry, while target_area_index was consumed on the FIRST entry —
+  /// so the second entry had no memory of the request and iterated from area
+  /// 0. Field log 2026-08-24: "targeted run — mowing only area 1", ~56 min
+  /// later "area 0 selected" with no targeted-run line, i.e. the robot rolled
+  /// over into an area the operator never asked for.
+  ///
+  /// Cleared at the session boundary by EndSession, and by a plain
+  /// COMMAND_START (see clearSingleAreaMode) so the next full-lawn run
+  /// iterates normally.
+  std::optional<uint32_t> single_area_target;
 
   /// Areas already dispatched to PlanCoverageArea+FollowStrip in the
   /// current session. GetNextUnmowedArea skips any index in this set
@@ -138,6 +166,99 @@ struct BTContext
   /// Minimum coverage_percent gain that counts as progress (resets the
   /// no-progress counter). Below this, a dispatch is treated as stuck.
   static constexpr float kAreaProgressEpsilonPct = 0.5f;
+
+  // -----------------------------------------------------------------------
+  // Start-pose-blocked passes (issue #487)
+  // -----------------------------------------------------------------------
+  /// Set by FollowStrip when a whole pass ended with EVERY sub-path skipped
+  /// because Nav2's planner refused to plan from the ROBOT'S OWN pose
+  /// (ComputePathToPose START_OCCUPIED) and ZERO swaths were mowed. That is a
+  /// property of where the robot is STANDING, not of the field: the area is
+  /// perfectly mowable from one metre away. Observed 2026-08-24 — the robot
+  /// undocked into the inflated keepout of a 0.25 m obstacle circle and
+  /// forfeited a whole field at 0 % coverage.
+  ///
+  /// Two consumers, deliberately split:
+  ///   * IsCoverageStartBlocked (condition node) CONSUMES this bool, so the
+  ///     coverage subtree can run a non-motion recovery (stop, clear costmaps,
+  ///     wait) and re-tick FollowStrip;
+  ///   * GetNextUnmowedArea reads `start_blocked_area` to keep the pass from
+  ///     burning the no-progress retirement budget (see below).
+  /// Cleared by EndSession.
+  bool coverage_start_blocked{false};
+  /// Area index whose most recent FollowStrip pass ended start-pose-blocked.
+  /// Consumed (reset) by the next GetNextUnmowedArea dispatch of that area.
+  std::optional<uint32_t> start_blocked_area;
+  /// Per-area count of dispatches that were EXEMPTED from the no-progress
+  /// retirement counter because the previous pass was start-pose-blocked.
+  /// Bounded by kMaxStartBlockedAttempts so a robot that is genuinely parked on
+  /// a lethal cell forever still retires the area and docks — the exemption buys
+  /// a real second chance, it does not create an infinite loop. Cleared by
+  /// EndSession.
+  std::map<uint32_t, uint32_t> area_start_blocked_count;
+  /// Maximum start-pose-blocked dispatches exempted from area_attempt_count per
+  /// area. Worst case an area gets kMaxStartBlockedAttempts + kMaxAreaAttempts
+  /// dispatches before retirement.
+  static constexpr uint32_t kMaxStartBlockedAttempts = 3;
+
+  // -----------------------------------------------------------------------
+  // Start-pose escape motion (issue #487, follow-up to the above)
+  // -----------------------------------------------------------------------
+  //
+  // SAFETY: these three fields are the entire gate on the only new PHYSICAL
+  // MOTION in the #487 workstream. Read mowgli_behavior/start_blocked_escape.hpp
+  // before touching any of them.
+
+  /// Arming token for EscapeStartBlocked, set by IsCoverageStartBlocked at the
+  /// moment it CONSUMES a confirmed start-pose-blocked pass, and consumed in
+  /// turn by EscapeStartBlocked.
+  ///
+  /// A separate token rather than a second read of coverage_start_blocked
+  /// because that bool is already consumed by the condition node one step
+  /// earlier in the same sequence. Keeping the arming explicit means the escape
+  /// node can refuse to move when it is ticked from anywhere else in the tree,
+  /// so the XML placement is not the only thing standing between a tree edit
+  /// and an unexpected drive command.
+  bool start_blocked_escape_armed{false};
+  /// When the token above was armed. A token older than
+  /// kStartBlockedEscapeArmMaxAgeSec is refused: the escape follows the blocked
+  /// pass immediately in the same branch, so a stale arming means the tree took
+  /// a path nobody modelled.
+  std::chrono::steady_clock::time_point start_blocked_escape_armed_time{};
+  static constexpr double kStartBlockedEscapeArmMaxAgeSec = 30.0;
+
+  /// Escape bounds + stand-down thresholds, loaded from ROS parameters at
+  /// startup and already passed through SanitizeEscapeCfg.
+  StartBlockedEscapeCfg start_blocked_escape_cfg{};
+
+  // -----------------------------------------------------------------------
+  // Last commanded motion (direction source for the escape above)
+  // -----------------------------------------------------------------------
+  //
+  // Updated from twist_mux's MERGED output (/cmd_vel) — i.e. what actually
+  // reached the wheels, across every motion lane (coverage, transit, docking,
+  // undock BackUp, teleop). A single controller's lane would miss the undock
+  // case, which is exactly the case #487 reported.
+
+  /// Last commanded forward velocity whose magnitude exceeded the escape's
+  /// min_signal_speed deadband [m/s]. Sign is what matters: it says which way
+  /// the robot was travelling when it last actually moved, and therefore which
+  /// way it arrived at wherever it is standing now.
+  double last_motion_cmd_vx{0.0};
+  /// False until such a command has been seen at least once. Cleared by
+  /// EndSession so a signal from a previous session can never steer an escape.
+  bool last_motion_valid{false};
+  /// Arrival time of that command.
+  std::chrono::steady_clock::time_point last_motion_time{};
+  /// While now() is before this instant the tracker IGNORES /cmd_vel samples.
+  /// EscapeStartBlocked keeps it bumped for the duration of its own manoeuvre
+  /// plus a short hold-off, because the escape's own commands are not an
+  /// ARRIVAL: letting them become "the last motion" would make a second escape
+  /// on the next blocked pass drive straight back into the cell the first one
+  /// left. The hold-off also covers the round trip through collision_monitor
+  /// and twist_mux, so a command published on the final escape tick cannot be
+  /// recorded after the node has finished.
+  std::chrono::steady_clock::time_point last_motion_suppress_until{};
 
   // -----------------------------------------------------------------------
   // Swath-completion model (replaces the mow_progress cell grid)
@@ -202,6 +323,13 @@ struct BTContext
   // -----------------------------------------------------------------------
 
   float battery_percent{100.0f};
+
+  /// Low-pass-filtered v_battery, in volts, from which battery_percent above is
+  /// derived. 0 means no valid reading has arrived yet — check that before
+  /// comparing against a voltage threshold. Raw latest_power.v_battery swings
+  /// 0.5-1 V on motor transients; see battery_filter.hpp.
+  float battery_voltage_filtered{0.0f};
+
   float gps_quality{0.0f};
 
   /// Latest GPS position in map frame (from /gps/absolute_pose)
@@ -490,5 +618,29 @@ struct BTContext
   // -----------------------------------------------------------------------
   rclcpp::Node::SharedPtr helper_node;
 };
+
+/// Drop any "mow only this area" constraint, so the next GetNextUnmowedArea
+/// run iterates every area normally.
+///
+/// Two callers, two reasons, and BOTH are needed:
+///   * EndSession — the real session boundary, alongside every other
+///     per-session set (attempted_areas, completed_areas, …). This is the
+///     normal path: a targeted run finishes its area, docks, EndSession runs.
+///   * the ~/high_level_control handler on a plain COMMAND_START — a mowing
+///     session does NOT always end with EndSession (a low-battery dock or an
+///     emergency deliberately keeps the session alive so mowing auto-resumes),
+///     so a stale single-area clip could otherwise still be latched when the
+///     operator presses the ordinary "Start" button and expects the whole
+///     lawn. The GUI's "mow this area" button calls ~/start_in_area, which
+///     sets current_command itself and never goes through that handler, so
+///     clearing there cannot cancel a targeted request.
+/// Also drops an unconsumed target_area_index: a request that was never
+/// picked up (e.g. start_in_area during an emergency) must not silently
+/// hijack a later plain start.
+inline void clearSingleAreaMode(BTContext& ctx)
+{
+  ctx.single_area_target.reset();
+  ctx.target_area_index.reset();
+}
 
 }  // namespace mowgli_behavior

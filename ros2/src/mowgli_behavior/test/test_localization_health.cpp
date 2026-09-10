@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "mowgli_behavior/localization_health.hpp"
+#include "mowgli_interfaces/gnss_observation_freshness.hpp"
 #include <gtest/gtest.h>
 
 namespace
@@ -36,13 +37,24 @@ using mowgli_behavior::LocalizationHealthMonitor;
 using mowgli_behavior::LocalizationObservation;
 using mowgli_behavior::PersistentLatch;
 using mowgli_behavior::RtkMode;
+namespace freshness = mowgli_interfaces::gnss_observation_freshness;
+
+constexpr std::int64_t kSecond = 1000000000LL;
+
+LocalizationHealthCfg ImmediateHealthCfg()
+{
+  LocalizationHealthCfg cfg;
+  cfg.gnss_pause_persist_s = 0.0;
+  cfg.gnss_resume_persist_s = 0.0;
+  return cfg;
+}
 
 // A healthy RTK-Fixed epoch, as the live robot reports it.
-LocalizationObservation HealthyFix(double now_s, double sigma_xy = 0.05)
+LocalizationObservation HealthyFix(double sigma_xy = 0.05)
 {
   LocalizationObservation obs;
   obs.gnss_seen = true;
-  obs.gnss_stamp_s = now_s;
+  obs.gnss_fresh = true;
   obs.rtk_mode = RtkMode::kFixed;
   obs.gnss_accuracy_m = 0.014;
   obs.fused_sigma_xy_m = sigma_xy;
@@ -57,7 +69,7 @@ bool RunFor(LocalizationHealthMonitor* mon, double start_s, double duration_s, M
   bool ever = false;
   for (double t = start_s; t <= start_s + duration_s; t += 0.2)
   {
-    if (mon->Update(t, make(t)))
+    if (mon->Update(t, make()))
       ever = true;
   }
   return ever;
@@ -82,9 +94,9 @@ TEST(LocalizationHealthTest, PivotCovarianceSpikeDoesNotDegrade)
     if (RunFor(&mon,
                t,
                15.0,
-               [sigma](double now)
+               [sigma]()
                {
-                 return HealthyFix(now, sigma);
+                 return HealthyFix(sigma);
                }))
       ever_degraded = true;
     t += 15.2;
@@ -105,20 +117,20 @@ TEST(LocalizationHealthTest, PlainGpsFallbackStillDegrades)
   ASSERT_FALSE(RunFor(&mon,
                       0.0,
                       10.0,
-                      [](double now)
+                      []()
                       {
-                        return HealthyFix(now);
+                        return HealthyFix();
                       }));
 
   // 2026-08-02: RTK -> plain GPS, sigma ~1.5 m, for >60 s.
   const bool degraded = RunFor(&mon,
                                20.0,
                                60.0,
-                               [](double now)
+                               []()
                                {
                                  LocalizationObservation obs;
                                  obs.gnss_seen = true;
-                                 obs.gnss_stamp_s = now;
+                                 obs.gnss_fresh = true;
                                  obs.rtk_mode = RtkMode::kNone;
                                  obs.gnss_accuracy_m = 1.5;
                                  obs.fused_sigma_xy_m = 1.5;
@@ -137,11 +149,11 @@ TEST(LocalizationHealthTest, RecoveryReleasesTheLatch)
   ASSERT_TRUE(RunFor(&mon,
                      0.0,
                      30.0,
-                     [](double now)
+                     []()
                      {
                        LocalizationObservation obs;
                        obs.gnss_seen = true;
-                       obs.gnss_stamp_s = now;
+                       obs.gnss_fresh = true;
                        obs.rtk_mode = RtkMode::kNone;
                        obs.gnss_accuracy_m = 1.5;
                        return obs;
@@ -151,9 +163,9 @@ TEST(LocalizationHealthTest, RecoveryReleasesTheLatch)
   RunFor(&mon,
          40.0,
          10.0,
-         [](double now)
+         []()
          {
-           return HealthyFix(now);
+           return HealthyFix();
          });
   EXPECT_FALSE(mon.degraded());
   EXPECT_EQ(mon.fault(), LocalizationFault::kNone);
@@ -169,11 +181,11 @@ TEST(LocalizationHealthTest, BriefAccuracyExcursionDoesNotFlipTheLatch)
   const bool degraded = RunFor(&mon,
                                0.0,
                                2.0,
-                               [](double now)
+                               []()
                                {
                                  LocalizationObservation obs;
                                  obs.gnss_seen = true;
-                                 obs.gnss_stamp_s = now;
+                                 obs.gnss_fresh = true;
                                  obs.rtk_mode = RtkMode::kFloat;
                                  obs.gnss_accuracy_m = 0.9;
                                  return obs;
@@ -189,11 +201,11 @@ TEST(LocalizationHealthTest, DeadBandHoldsTheLatchUntilAccuracyClearsResume)
   ASSERT_TRUE(RunFor(&mon,
                      0.0,
                      30.0,
-                     [](double now)
+                     []()
                      {
                        LocalizationObservation obs;
                        obs.gnss_seen = true;
-                       obs.gnss_stamp_s = now;
+                       obs.gnss_fresh = true;
                        obs.rtk_mode = RtkMode::kFloat;
                        obs.gnss_accuracy_m = 1.2;
                        return obs;
@@ -203,11 +215,11 @@ TEST(LocalizationHealthTest, DeadBandHoldsTheLatchUntilAccuracyClearsResume)
   RunFor(&mon,
          40.0,
          30.0,
-         [](double now)
+         []()
          {
            LocalizationObservation obs;
            obs.gnss_seen = true;
-           obs.gnss_stamp_s = now;
+           obs.gnss_fresh = true;
            obs.rtk_mode = RtkMode::kFloat;
            obs.gnss_accuracy_m = 0.20;
            return obs;
@@ -223,19 +235,84 @@ TEST(LocalizationHealthTest, StaleGnssFeedDegrades)
   ASSERT_FALSE(RunFor(&mon,
                       0.0,
                       10.0,
-                      [](double now)
+                      []()
                       {
-                        return HealthyFix(now);
+                        return HealthyFix();
                       }));
 
   // /gps/status stops at t=10; clock keeps running.
-  LocalizationObservation frozen = HealthyFix(10.0);
+  LocalizationObservation frozen = HealthyFix();
   bool degraded = false;
   for (double t = 10.0; t <= 30.0; t += 0.2)
+  {
+    frozen.gnss_fresh = t <= 15.0;
     degraded = mon.Update(t, frozen);
+  }
 
   EXPECT_TRUE(degraded);
   EXPECT_EQ(mon.fault(), LocalizationFault::kGnssStale);
+}
+
+TEST(LocalizationHealthFreshnessTest, GenuineFixedObservationAuthorizesHealth)
+{
+  freshness::PhysicalObservationTracker tracker;
+  LocalizationHealthMonitor mon{ImmediateHealthCfg()};
+  auto obs = HealthyFix();
+
+  ASSERT_EQ(tracker.Observe(1, 100 * kSecond, 100 * kSecond, 1 * kSecond),
+            freshness::ObservationUpdate::kNewObservation);
+  obs.gnss_fresh = tracker.ObservationIsFresh(100 * kSecond, 1 * kSecond, 5 * kSecond);
+
+  EXPECT_FALSE(mon.Update(100.0, obs));
+  EXPECT_EQ(mon.fault(), LocalizationFault::kNone);
+}
+
+TEST(LocalizationHealthFreshnessTest, CachedFixedCallbacksCannotExtendDeadline)
+{
+  freshness::PhysicalObservationTracker tracker;
+  ASSERT_EQ(tracker.Observe(1, 100 * kSecond, 100 * kSecond, 1 * kSecond),
+            freshness::ObservationUpdate::kNewObservation);
+
+  for (std::int64_t second = 101; second <= 106; ++second)
+  {
+    EXPECT_EQ(tracker.Observe(1, 100 * kSecond, second * kSecond, (second - 99) * kSecond),
+              freshness::ObservationUpdate::kCachedPublication);
+  }
+
+  EXPECT_FALSE(tracker.ObservationIsFresh(106 * kSecond, 7 * kSecond, 5 * kSecond));
+  EXPECT_TRUE(tracker.DeliveryIsLive(7 * kSecond, 1 * kSecond));
+}
+
+TEST(LocalizationHealthFreshnessTest, CachedFixedBecomesGnssStaleAfterTimeout)
+{
+  freshness::PhysicalObservationTracker tracker;
+  LocalizationHealthMonitor mon{LocalizationHealthCfg{}};
+  auto obs = HealthyFix();
+  ASSERT_EQ(tracker.Observe(4, 100 * kSecond, 100 * kSecond, 1 * kSecond),
+            freshness::ObservationUpdate::kNewObservation);
+  ASSERT_EQ(tracker.Observe(4, 100 * kSecond, 106 * kSecond, 7 * kSecond),
+            freshness::ObservationUpdate::kCachedPublication);
+
+  obs.gnss_fresh = tracker.ObservationIsFresh(106 * kSecond, 7 * kSecond, 5 * kSecond);
+  EXPECT_TRUE(mon.Update(106.0, obs));
+  EXPECT_EQ(mon.fault(), LocalizationFault::kGnssStale);
+}
+
+TEST(LocalizationHealthFreshnessTest, GenuineFixedAfterTimeoutRestoresHealth)
+{
+  freshness::PhysicalObservationTracker tracker;
+  LocalizationHealthMonitor mon{ImmediateHealthCfg()};
+  auto obs = HealthyFix();
+  ASSERT_EQ(tracker.Observe(8, 100 * kSecond, 100 * kSecond, 1 * kSecond),
+            freshness::ObservationUpdate::kNewObservation);
+  obs.gnss_fresh = tracker.ObservationIsFresh(106 * kSecond, 7 * kSecond, 5 * kSecond);
+  ASSERT_TRUE(mon.Update(106.0, obs));
+
+  ASSERT_EQ(tracker.Observe(9, 106 * kSecond, 106 * kSecond, 7 * kSecond),
+            freshness::ObservationUpdate::kNewObservation);
+  obs.gnss_fresh = tracker.ObservationIsFresh(106 * kSecond, 7 * kSecond, 5 * kSecond);
+  EXPECT_FALSE(mon.Update(106.0, obs));
+  EXPECT_EQ(mon.fault(), LocalizationFault::kNone);
 }
 
 TEST(LocalizationHealthTest, MonitorIsInertBeforeAnyGnssStatus)
@@ -263,11 +340,11 @@ TEST(LocalizationHealthTest, MissingAccuracyFallsBackToRtkMode)
   ASSERT_FALSE(RunFor(&mon,
                       0.0,
                       20.0,
-                      [](double now)
+                      []()
                       {
                         LocalizationObservation obs;
                         obs.gnss_seen = true;
-                        obs.gnss_stamp_s = now;
+                        obs.gnss_fresh = true;
                         obs.rtk_mode = RtkMode::kFloat;
                         obs.gnss_accuracy_m = -1.0;
                         return obs;
@@ -277,11 +354,11 @@ TEST(LocalizationHealthTest, MissingAccuracyFallsBackToRtkMode)
   const bool degraded = RunFor(&mon,
                                30.0,
                                20.0,
-                               [](double now)
+                               []()
                                {
                                  LocalizationObservation obs;
                                  obs.gnss_seen = true;
-                                 obs.gnss_stamp_s = now;
+                                 obs.gnss_fresh = true;
                                  obs.rtk_mode = RtkMode::kNone;
                                  obs.gnss_accuracy_m = -1.0;
                                  return obs;
@@ -298,11 +375,11 @@ TEST(LocalizationHealthTest, GoodAccuracyOutranksUnknownRtkMode)
   const bool degraded = RunFor(&mon,
                                0.0,
                                60.0,
-                               [](double now)
+                               []()
                                {
                                  LocalizationObservation obs;
                                  obs.gnss_seen = true;
-                                 obs.gnss_stamp_s = now;
+                                 obs.gnss_fresh = true;
                                  obs.rtk_mode = RtkMode::kUnknown;
                                  obs.gnss_accuracy_m = 0.014;
                                  return obs;
@@ -321,9 +398,9 @@ TEST(LocalizationHealthTest, SigmaBackstopCatchesLocalizerDivergence)
   const bool degraded = RunFor(&mon,
                                0.0,
                                30.0,
-                               [](double now)
+                               []()
                                {
-                                 return HealthyFix(now, 8.0);
+                                 return HealthyFix(8.0);
                                });
 
   EXPECT_TRUE(degraded);
@@ -339,9 +416,9 @@ TEST(LocalizationHealthTest, SigmaBackstopSitsAboveThePivotInflationCeiling)
   const bool degraded = RunFor(&mon,
                                0.0,
                                120.0,
-                               [](double now)
+                               []()
                                {
-                                 return HealthyFix(now, 2.35);
+                                 return HealthyFix(2.35);
                                });
 
   EXPECT_FALSE(degraded);
@@ -356,9 +433,9 @@ TEST(LocalizationHealthTest, SigmaBackstopDisabledAtZero)
   const bool degraded = RunFor(&mon,
                                0.0,
                                120.0,
-                               [](double now)
+                               []()
                                {
-                                 return HealthyFix(now, 40.0);
+                                 return HealthyFix(40.0);
                                });
   EXPECT_FALSE(degraded);
 }
@@ -370,9 +447,9 @@ TEST(LocalizationHealthTest, MissingSigmaNeverLatchesTheBackstop)
   const bool degraded = RunFor(&mon,
                                0.0,
                                120.0,
-                               [](double now)
+                               []()
                                {
-                                 return HealthyFix(now, -1.0);
+                                 return HealthyFix(-1.0);
                                });
   EXPECT_FALSE(degraded);
 }

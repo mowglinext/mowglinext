@@ -8,6 +8,7 @@ import {Map as MapType} from "../types/ros.ts";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {DashCard, ActionButton, IconPlus, FONT} from "../components/dashboard";
+import {IrriSenseStatusChip} from "../components/schedule/IrriSenseStatusChip.tsx";
 import dayjs from "dayjs";
 
 interface Schedule {
@@ -18,6 +19,8 @@ interface Schedule {
   enabled: boolean;
   createdAt: string;
   lastRun?: string;
+  lastSkipReason?: string;
+  lastSkippedAt?: string;
 }
 
 const DAY_KEYS = ["dayMon", "dayTue", "dayWed", "dayThu", "dayFri", "daySat", "daySun"] as const;
@@ -275,8 +278,18 @@ export const SchedulePage = () => {
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           borderTop: `1px solid ${colors.borderSubtle}`, paddingTop: 8,
         }}>
-          <span style={{fontSize: 12, color: colors.textSecondary}}>
-            {t('schedulePage.lastRun', {value: sched.lastRun ? dayjs(sched.lastRun).format("YYYY-MM-DD HH:mm") : t('schedulePage.never')})}
+          <span style={{fontSize: 12, color: colors.textSecondary, display: 'flex', flexDirection: 'column', gap: 2}}>
+            <span>
+              {t('schedulePage.lastRun', {value: sched.lastRun ? dayjs(sched.lastRun).format("YYYY-MM-DD HH:mm") : t('schedulePage.never')})}
+            </span>
+            {sched.lastSkipReason && (
+              <span style={{fontSize: 11, color: colors.sky}} data-testid="schedule-last-skip">
+                {t('schedulePage.lastSkipped', {
+                  value: sched.lastSkippedAt ? dayjs(sched.lastSkippedAt).format("YYYY-MM-DD HH:mm") : '',
+                  reason: sched.lastSkipReason,
+                })}
+              </span>
+            )}
           </span>
           <button
             onClick={() => confirmDelete(sched.id)}
@@ -306,6 +319,9 @@ export const SchedulePage = () => {
         lineHeight: 1.05, marginTop: 4, letterSpacing: '-0.02em',
       }}>
         {t('schedulePage.scheduledMows')}
+      </div>
+      <div style={{marginTop: 8}}>
+        <IrriSenseStatusChip/>
       </div>
     </div>
   );

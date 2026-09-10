@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "mowgli_behavior/dock_alignment.hpp"
 #include "mowgli_interfaces/motion_yaw_fit.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 
@@ -235,7 +236,36 @@ BT::NodeStatus CalibrateHeadingFromUndock::tick()
               samples.size(),
               ctx->gps_x,
               ctx->gps_y);
+
+  warn_if_dock_yaw_stale(ctx, yaw, sigma_yaw);
   return BT::NodeStatus::SUCCESS;
+}
+
+void CalibrateHeadingFromUndock::warn_if_dock_yaw_stale(const std::shared_ptr<BTContext>& ctx,
+                                                        double measured_yaw,
+                                                        double sigma_yaw)
+{
+  if (ctx->dock_yaw == 0.0)
+  {
+    return;  // No dock pose configured yet; nothing to compare against.
+  }
+
+  const auto drift = EvaluateDockYawDrift(measured_yaw, ctx->dock_yaw, sigma_yaw);
+  if (!drift.is_stale)
+  {
+    return;
+  }
+
+  RCLCPP_WARN(ctx->node->get_logger(),
+              "CalibrateHeadingFromUndock: persisted dock_pose_yaw=%.2f° disagrees with the "
+              "measured dock axis %.2f° by %+.2f° (band %.2f°) — that places the dock staging "
+              "pose ~%.0f cm off the true centreline, so the contacts may not mate. Re-run the "
+              "one-click dock calibration. (issue #486)",
+              ctx->dock_yaw * 180.0 / M_PI,
+              measured_yaw * 180.0 / M_PI,
+              drift.delta_rad * 180.0 / M_PI,
+              drift.band_rad * 180.0 / M_PI,
+              drift.staging_lateral_m * 100.0);
 }
 
 // ---------------------------------------------------------------------------

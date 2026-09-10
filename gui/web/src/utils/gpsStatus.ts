@@ -206,6 +206,19 @@ function correctionStreamStatusFromMessage(message: string | undefined): number 
     return undefined;
 }
 
+/**
+ * Fix-type codes arrive over the wire as plain numbers, while
+ * `GnssStatusConstants` is a const enum — comparing the two directly is
+ * (correctly) rejected, since nothing proves the number is a member. Funnel
+ * every such comparison through this one documented widening.
+ */
+export function isGnssFixType(
+    value: number | undefined,
+    fixType: GnssStatusConstants,
+): boolean {
+    return value === (fixType as number);
+}
+
 function navSatFixStatusToGnssFixType(fixStatus: number | undefined): number | undefined {
     switch (fixStatus) {
         case 2:
@@ -264,7 +277,7 @@ export function deriveGnssStatusFromDiagnostics(
     const msmSummaryConstellationsSeen = msmSummaryValues.constellations_seen;
     const fixType = navSatFixStatusToGnssFixType(parseDiagnosticInt(gpsValues.fix_status));
     const fixValid = parseDiagnosticBool(summaryValues.fix_valid) ??
-        (fixType !== undefined ? fixType !== GnssStatusConstants.FIX_TYPE_NO_FIX : undefined);
+        (fixType !== undefined ? !isGnssFixType(fixType, GnssStatusConstants.FIX_TYPE_NO_FIX) : undefined);
     const capabilityFlags =
         (correctionStream ? GnssStatusConstants.CAP_CORRECTION_STREAM : 0) |
         (msmSummary ? GnssStatusConstants.CAP_MSM_SUMMARY : 0);

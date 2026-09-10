@@ -58,5 +58,19 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      # ESLint gated NOTHING before this step: no workflow ran it, and
+      # `yarn lint` itself had been failing outright since the ESLint 9 upgrade
+      # (it still looked for the removed .eslintrc.cjs and analysed zero files).
+      # Wired here rather than in its own job so it reuses this job's yarn cache
+      # and node 22 setup — it costs seconds.
+      #
+      # What blocks here is ERRORS: eslint exits non-zero on any error whatever
+      # `--max-warnings` says. The warning ceiling in gui/web/package.json is a
+      # second-order ratchet with deliberate headroom over the current count —
+      # see the "debt ratchet" block in gui/web/eslint.config.js for the number,
+      # when it was measured, and how to lower it as debt is paid.
+      - name: Lint
+        run: yarn lint
+
       - name: Unit tests
         run: yarn test

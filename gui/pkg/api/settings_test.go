@@ -1023,6 +1023,53 @@ func TestPostSettingsYAML_ResetToDefault(t *testing.T) {
 	assert.Contains(t, string(content), "datum_lat: 48.123")
 }
 
+// TestPostSettingsYAMLPrunesRetiredKeys verifies that keys retired in issue #195
+// (removed from BOTH the ROS2 template and the GUI schema, because no node ever
+// read them) are scrubbed from a pre-existing installed YAML on the next save.
+// sparsifyFlat cannot do this on its own: a key with no schema default left is
+// invisible to it, so retiredParamKeys must carry them explicitly. A genuine
+// non-default override must still survive the same write.
+func TestPostSettingsYAMLPrunesRetiredKeys(t *testing.T) {
+	chdirToGuiRoot(t)
+	resetSchemaCache()
+	t.Cleanup(resetSchemaCache)
+
+	yamlFile := createTempYAMLFileAtGuiRoot(t, `mowgli:
+  ros__parameters:
+    outline_passes: 3
+    motor_temp_high_c: 80.0
+    mow_angle_increment_deg: 15.0
+    mowing_speed: 0.55
+`)
+	envFile := createTempConfigFileAtGuiRoot(t, "")
+
+	db := types.NewMockDBProvider()
+	db.Set("system.mower.yamlConfigFile", []byte(yamlFile))
+	db.Set("system.mower.runtimeEnvFile", []byte(envFile))
+
+	router := setupSettingsRouter(db)
+
+	// A save that does not even mention the retired keys must still remove them.
+	payload := map[string]any{"mowing_speed": 0.55}
+	body, _ := json.Marshal(payload)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/yaml", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	content, err := os.ReadFile(yamlFile)
+	require.NoError(t, err)
+	for _, retired := range []string{"outline_passes", "motor_temp_high_c", "mow_angle_increment_deg"} {
+		assert.NotContains(t, string(content), retired,
+			"retired key %s must be scrubbed from the installed YAML", retired)
+	}
+	// A real operator override (0.55 != the 0.2 default) must survive.
+	assert.Contains(t, string(content), "mowing_speed: 0.55")
+}
+
 // TestGetSettingsYAMLDefaults_ReturnsSchemaDefaults verifies the defaults
 // endpoint surfaces the schema default values used as the reset source.
 func TestGetSettingsYAMLDefaults_ReturnsSchemaDefaults(t *testing.T) {

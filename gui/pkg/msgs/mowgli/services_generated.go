@@ -136,6 +136,8 @@ type PromoteObstacleReq struct {
 	AreaIndex                 uint32                         `json:"area_index"`
 	ObstacleId                uint32                         `json:"obstacle_id"`
 	Polygon                   geometry.Polygon               `json:"polygon"`
+	PendingId                 uint32                         `json:"pending_id"`
+	Name                      string                         `json:"name"`
 }
 
 // PromoteObstacleRes for mowgli_interfaces/srv/PromoteObstacle response.

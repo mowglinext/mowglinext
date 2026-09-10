@@ -485,6 +485,43 @@ def test_docking_controller_aligned_across_variants() -> None:
     )
 
 
+def test_docking_max_retries_and_battery_status_present() -> None:
+    """docking_server.max_retries and simple_charging_dock.use_battery_status are
+    INJECTED at launch from mowgli_robot.yaml (dock_max_retries /
+    dock_use_charger_detection, issue #195). navigation.launch.py writes them
+    into the MERGED doc, so both keys must exist in both merged variants — and,
+    per Invariant 8, they must live in the shared BASE with NEITHER overlay
+    redefining them (an overlay copy would win the deep-merge for one variant
+    only, silently splitting the two configs' docking behaviour).
+    """
+    for name, params in (("lidar", _load_params()), ("no_lidar", _load_no_lidar_params())):
+        ds = params["docking_server"]["ros__parameters"]
+        assert "max_retries" in ds, f"{name}: docking_server.max_retries missing"
+        assert isinstance(ds["max_retries"], int) and ds["max_retries"] >= 0, (
+            f"{name}: docking_server.max_retries={ds['max_retries']!r} must be a non-negative int"
+        )
+        scd = ds["simple_charging_dock"]
+        assert "use_battery_status" in scd, (
+            f"{name}: simple_charging_dock.use_battery_status missing"
+        )
+        assert isinstance(scd["use_battery_status"], bool), (
+            f"{name}: simple_charging_dock.use_battery_status must be a bool"
+        )
+
+    base = _load_yaml("nav2_params_base.yaml")["docking_server"]["ros__parameters"]
+    assert "max_retries" in base and "use_battery_status" in base["simple_charging_dock"], (
+        "both keys must be defined in the SHARED base (nav2_params_base.yaml)"
+    )
+    for overlay in ("nav2_params_lidar.yaml", "nav2_params_no_lidar.yaml"):
+        ov = (_load_yaml(overlay).get("docking_server") or {}).get("ros__parameters") or {}
+        assert "max_retries" not in ov, (
+            f"{overlay} redefines docking_server.max_retries — it belongs in the base only"
+        )
+        assert "use_battery_status" not in (ov.get("simple_charging_dock") or {}), (
+            f"{overlay} redefines simple_charging_dock.use_battery_status — base only"
+        )
+
+
 def test_docking_v_linear_min_above_firmware_deadband() -> None:
     """hardware_bridge zeros |vx| < 0.15, so the dock crawl floor must EXCEED it
     or the final approach is zeroed and the robot stops short of the cradle.
@@ -519,6 +556,24 @@ def test_coverage_server_geometry_aligned_across_variants() -> None:
             f"coverage_server.{k} differs across variants: "
             f"lidar={lp.get(k)} vs no_lidar={np_.get(k)}"
         )
+
+
+def test_coverage_server_num_headland_passes_sentinel_range() -> None:
+    """num_headland_passes is a THREE-WAY sentinel (issue #429):
+    <0 = NONE (no perimeter rings — the swaths mow to the boundary),
+    0 = AUTO (ceil(default_headland_width / operation_width), min 1),
+    >0 = exactly that many rings.
+
+    The value must therefore stay an int in [-1, 5]: nothing clamps it on the
+    way through navigation.launch.py, so a stray large/negative value would
+    silently reshape every plan.
+    """
+    for name, params in (("lidar", _load_params()), ("no_lidar", _load_no_lidar_params())):
+        n = params["coverage_server"]["ros__parameters"]["num_headland_passes"]
+        assert isinstance(n, int) and not isinstance(n, bool), (
+            f"{name}: num_headland_passes must be an int, got {type(n).__name__}"
+        )
+        assert -1 <= n <= 5, f"{name}: num_headland_passes={n} outside the [-1, 5] sentinel range"
 
 
 def test_coverage_server_has_no_turn_planning_knobs() -> None:
@@ -774,3 +829,106 @@ def test_transit_lookahead_damps_pursuit_weave() -> None:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ── Turn geometry / turn speed (issue #499) ──────────────────────────────────
+#
+# The violent swath-end turns that dig the lawn were traced to two numbers that
+# must be consistent but live in different files with nothing relating them:
+# coverage_server's turn radii (mowgli_robot.yaml) and FollowCoveragePath's
+# speed/angular clamps (nav2_params_base.yaml). These tests pin the *relations*
+# and the guard that reports them — deliberately NOT any particular radius,
+# which is a field-measured trade against the connector fallback rate.
+
+
+def _template_robot_params() -> dict:
+    """The in-package mowgli_robot.yaml template (Invariant 15: defaults live
+    here, the installed file is sparse)."""
+    with open(_config_path("mowgli_robot.yaml"), "r", encoding="utf-8") as fh:
+        return yaml.safe_load(fh)["mowgli"]["ros__parameters"]
+
+
+def test_default_wheel_track_matches_template() -> None:
+    """DEFAULT_WHEEL_TRACK_M is the last-resort floor beneath the template's
+    wheel_track, not a second source of truth for it. If the two diverge, the
+    half-track the turn-geometry check compares against stops describing the
+    robot. Same contract as DEFAULT_TOOL_WIDTH_M."""
+    from robot_config_util import DEFAULT_WHEEL_TRACK_M
+
+    template = _template_robot_params()
+    assert "wheel_track" in template, (
+        "mowgli_robot.yaml template lost wheel_track — the turn-geometry check "
+        "and the firmware kinematics push would fall back to a constant."
+    )
+    assert float(template["wheel_track"]) == pytest.approx(DEFAULT_WHEEL_TRACK_M), (
+        f"template wheel_track={template['wheel_track']} != "
+        f"DEFAULT_WHEEL_TRACK_M={DEFAULT_WHEEL_TRACK_M} — the fallback has drifted "
+        "from the real default."
+    )
+
+
+def test_template_turn_speed_ratio_is_a_slowdown() -> None:
+    """turn_speed_ratio scales mowing_speed into FollowCoveragePath.speed_slow.
+    A default above 1.0 would ship the exact defect it was added to fix: swath-end
+    turns driven FASTER than the straights."""
+    template = _template_robot_params()
+    assert "turn_speed_ratio" in template, (
+        "mowgli_robot.yaml template is missing turn_speed_ratio — speed_slow would "
+        "fall back to a static value and stop tracking the operator's mowing_speed."
+    )
+    ratio = float(template["turn_speed_ratio"])
+    assert 0.0 < ratio <= 1.0, (
+        f"turn_speed_ratio={ratio} must be in (0, 1.0]: >1 drives turns faster than "
+        "straights (issue #499), <=0 stops the robot in every bend."
+    )
+
+
+def test_navigation_launch_injects_derived_speed_slow() -> None:
+    """One load-bearing line: without this injection speed_slow falls back to the
+    static base.yaml value and the operator's mowing_speed stops applying to
+    swath-end turns — the issue #499 defect where turns ran FASTER than straights.
+
+    The arithmetic itself (ratio clamp, min_speed_mps floor, mowing_speed ceiling)
+    is exercised for real in test_robot_config_util.py::TestDeriveTurnSpeed; this
+    only guards that the launch actually calls it and injects the result."""
+    src = _read_text("launch/navigation.launch.py")
+    assert re.search(r"fcp\[.speed_slow.\]\s*=\s*turn_speed", src), (
+        "navigation.launch.py no longer injects FollowCoveragePath.speed_slow from "
+        "the derived turn speed — mowing_speed stops applying to turns (issue #499)."
+    )
+    assert "derive_turn_speed(" in src and "turn_speed_ratio" in src, (
+        "navigation.launch.py does not derive the turn speed from mowing_speed via "
+        "robot_config_util.derive_turn_speed."
+    )
+
+
+def test_navigation_launch_runs_the_turn_geometry_check() -> None:
+    """The check must run at launch and must be fed the CONFIGURED wheel track,
+    never a literal — the half-track is what makes an arc undrivable forward-only.
+
+    Its behaviour (what it flags, and that it never raises) is exercised for real
+    in test_robot_config_util.py::TestCheckTurnGeometry."""
+    src = _read_text("launch/navigation.launch.py")
+    assert "check_turn_geometry(" in src, (
+        "navigation.launch.py does not run the turn-geometry check — the issue #499 "
+        "geometry defect can be reintroduced silently."
+    )
+    assert re.search(r"wheel_track\s*=\s*float\(rt_rp\.get\(", src), (
+        "wheel_track is not read from the robot config — the turn-geometry check "
+        "must never compare against a hardcoded track."
+    )
+
+
+def test_base_ftc_can_command_its_own_turn_speed() -> None:
+    """Consistency inside the file we control: FTC's own speed_slow and
+    max_cmd_vel_ang imply a tightest commandable arc of speed_slow/max_cmd_vel_ang.
+    That must stay a sane, positive radius — if max_cmd_vel_ang were ever dropped
+    toward zero the controller could not turn at all."""
+    fcp = _controller_section(_load_params())["FollowCoveragePath"]
+    wz_max = float(fcp["max_cmd_vel_ang"])
+    assert wz_max > 0.0, "max_cmd_vel_ang must be positive or FTC cannot turn"
+    tightest = float(fcp["speed_slow"]) / wz_max
+    assert 0.0 < tightest < 1.0, (
+        f"speed_slow/max_cmd_vel_ang = {tightest:.3f} m is not a plausible turn "
+        "radius for this chassis — check the FollowCoveragePath speed/angular pair."
+    )

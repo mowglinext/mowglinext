@@ -19,6 +19,7 @@
 #include <cmath>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nav2_core/controller_exceptions.hpp>
@@ -29,6 +30,7 @@
 #include <tf2_ros/transform_listener.hpp>
 
 #include "mowgli_nav2_plugins/ftc_stall.hpp"
+#include "mowgli_nav2_plugins/ftc_start_index.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 
 namespace mowgli_nav2_plugins
@@ -209,6 +211,9 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
 
   // Options
   config_.forward_only = declare_bool("forward_only", true);
+  // Legacy nearest-point snap in setPlan. OFF by default: on closed headland
+  // rings it could skip the entire ring (see setPlan).
+  config_.snap_to_nearest_on_set_plan = declare_bool("snap_to_nearest_on_set_plan", false);
   config_.debug_pid = declare_bool("debug_pid", false);
   config_.debug_obstacle = declare_bool("debug_obstacle", false);
 
@@ -240,6 +245,7 @@ void FTCController::declareParameters(const rclcpp_lifecycle::LifecycleNode::Sha
   config_.obstacle_wait_timeout_s = declare_double("obstacle_wait_timeout_s", 2.5);
   config_.obstacle_clear_hold_s = declare_double("obstacle_clear_hold_s", 1.5);
   config_.confine_deviation_to_zone = declare_bool("confine_deviation_to_zone", true);
+  config_.ignore_obstacles_outside_zone = declare_bool("ignore_obstacles_outside_zone", true);
 
   // Footprint-polygon clearance + bounded reverse-escape.
   config_.use_footprint_clearance = declare_bool("use_footprint_clearance", false);
@@ -569,6 +575,10 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     {
       config_.confine_deviation_to_zone = p.as_bool();
     }
+    else if (key == "ignore_obstacles_outside_zone")
+    {
+      config_.ignore_obstacles_outside_zone = p.as_bool();
+    }
     else if (key == "use_footprint_clearance")
     {
       config_.use_footprint_clearance = p.as_bool();
@@ -628,44 +638,84 @@ void FTCController::setPlan(const nav_msgs::msg::Path& path)
   current_index_ = 0;
   current_progress_ = 0.0;
 
-  // Find the nearest path point to the robot's current position so we don't
-  // start from index 0 when the robot is far from the path start.
-  try
+  // Start at the BEGINNING of a freshly dispatched plan.
+  //
+  // This used to run an UNBOUNDED nearest-point search over the whole plan and
+  // begin tracking wherever that landed. On coverage headland rings — which are
+  // CLOSED, start == end to the millimetre — index 0 and index N-1 are the SAME
+  // POINT, so the search is genuinely ambiguous and floating-point noise decides
+  // which end wins. When the last index won, FTC drove three poses, reported the
+  // goal reached, and FollowStrip recorded the ring as MOWED. Observed on the
+  // robot on both 2026-08-24 runs:
+  //
+  //     new path with 436 poses, start=(1.95,9.50), end=(1.95,9.50)
+  //     setPlan with 436 points, starting at idx=432   -> 99 % of the ring skipped
+  //     setPlan with 805 points, starting at idx=372   -> 46 % skipped
+  //
+  // and both were then logged "reached 99-100 % of path - treating as MOWED".
+  // Un-mowed ground marked done, with skipped_swaths still reading 0.
+  //
+  // Resume is not this function's job and never was: FollowStrip already owns it
+  // by trimming the path at its resume cursor BEFORE dispatch, and it decides
+  // whether to transit blade-off first by measuring to poses.front() — index 0.
+  // Snapping to a different index here silently disagreed with that decision.
+  // Starting at 0 makes the two consistent again.
+  //
+  // snap_to_nearest_on_set_plan restores the old behaviour if a site needs it.
+  //
+  // NOTE: this block chooses the START INDEX ONLY. Everything after it —
+  // PID/derivative/stall reset, the tail-duplication the state machine's
+  // `size() - 2` arithmetic depends on, the latched plan publish, and the
+  // <3-pose termination guard — is SHARED and must run on BOTH paths. An
+  // earlier revision returned early from the default branch and skipped all of
+  // it, which leaked integrator windup from an aborted strip into the next
+  // strip's first tick and transitioned the state machine one segment early.
+  // Do not reintroduce an early return here.
+  if (!config_.snap_to_nearest_on_set_plan)
   {
-    const auto base_to_map = tf_buffer_->lookupTransform("map",
-                                                         "base_link",
-                                                         tf2::TimePointZero,
-                                                         tf2::durationFromSec(0.5));
-    const double rx = base_to_map.transform.translation.x;
-    const double ry = base_to_map.transform.translation.y;
-    double best_dist = std::numeric_limits<double>::max();
-    for (uint32_t i = 0; i < global_plan_.size(); ++i)
-    {
-      const double dx = global_plan_[i].pose.position.x - rx;
-      const double dy = global_plan_[i].pose.position.y - ry;
-      const double d = dx * dx + dy * dy;
-      if (d < best_dist)
-      {
-        best_dist = d;
-        current_index_ = i;
-      }
-    }
-    best_dist = std::sqrt(best_dist);
+    // current_index_ is already 0 from the reset above.
     RCLCPP_INFO(logger_,
-                "FTCController: setPlan with %zu points, starting at idx=%u (%.2fm from robot at "
-                "%.2f,%.2f).",
-                global_plan_.size(),
-                current_index_,
-                best_dist,
-                rx,
-                ry);
+                "FTCController: setPlan with %zu points, starting at idx=0.",
+                global_plan_.size());
   }
-  catch (const tf2::TransformException& ex)
+  else
   {
-    RCLCPP_WARN(logger_,
-                "FTCController: TF lookup in setPlan failed (%s), starting from idx=0.",
-                ex.what());
-    current_index_ = 0;
+    try
+    {
+      const auto base_to_map = tf_buffer_->lookupTransform("map",
+                                                           "base_link",
+                                                           tf2::TimePointZero,
+                                                           tf2::durationFromSec(0.5));
+      const double rx = base_to_map.transform.translation.x;
+      const double ry = base_to_map.transform.translation.y;
+
+      std::vector<std::pair<double, double>> xy;
+      xy.reserve(global_plan_.size());
+      for (const auto& p : global_plan_)
+      {
+        xy.emplace_back(p.pose.position.x, p.pose.position.y);
+      }
+      current_index_ = static_cast<uint32_t>(ChooseStartIndex(true, xy, rx, ry));
+
+      const double bdx = global_plan_[current_index_].pose.position.x - rx;
+      const double bdy = global_plan_[current_index_].pose.position.y - ry;
+      const double best_dist = std::hypot(bdx, bdy);
+      RCLCPP_INFO(logger_,
+                  "FTCController: setPlan with %zu points, starting at idx=%u (%.2fm from robot "
+                  "at %.2f,%.2f).",
+                  global_plan_.size(),
+                  current_index_,
+                  best_dist,
+                  rx,
+                  ry);
+    }
+    catch (const tf2::TransformException& ex)
+    {
+      RCLCPP_WARN(logger_,
+                  "FTCController: TF lookup in setPlan failed (%s), starting from idx=0.",
+                  ex.what());
+      current_index_ = 0;
+    }
   }
 
   last_time_ = clock_->now();
@@ -1891,6 +1941,18 @@ void FTCController::updateLateralDeviation(double dt)
     }
   }
 
+  // Zone MASK for the obstacle-DETECTION checks (issue #517) — the same guard,
+  // used in the opposite direction: a lethal LOCAL cell that is ALSO lethal in
+  // the boundary costmap (out-of-zone / keepout hole) is NOT an obstacle. The
+  // path ends chassis_safety_inset inside the boundary and U-turns there, so at
+  // every row end the lookahead footprints reach the hedge the boundary was
+  // recorded along — a real LiDAR return the robot was never going to drive
+  // into. guard.costmap is non-null only when confine_deviation_to_zone is on
+  // AND the global costmap has arrived, so the mask is inert otherwise (old
+  // behaviour). In-zone obstacles are unaffected.
+  const ObstacleDeviation::BoundaryGuard zone_mask =
+      config_.ignore_obstacles_outside_zone ? guard : ObstacleDeviation::BoundaryGuard{};
+
   // Robot chassis FOOTPRINT (base frame), fetched once per tick when
   // use_footprint_clearance is on. Passed to the ObstacleDeviation helpers so
   // they sample the true rectangular body (at true-lethal 254) instead of the
@@ -1929,7 +1991,8 @@ void FTCController::updateLateralDeviation(double dt)
   // centerline — otherwise an obstacle in the lateral band the chassis hits but
   // the inscribed-inflation radius misses never flips clear_at_zero false, so
   // avoidance never engages. No zone guard here: this asks "does the body hit an
-  // obstacle on the nominal line", independent of the mowing-zone boundary.
+  // obstacle on the nominal line", independent of the mowing-zone boundary —
+  // but the zone MASK applies, so an out-of-zone lethal is not "an obstacle".
   const bool clear_at_zero =
       ObstacleDeviation::isPathClearWithDeviation(*costmap_map_,
                                                   window,
@@ -1938,7 +2001,8 @@ void FTCController::updateLateralDeviation(double dt)
                                                   0.0,
                                                   ObstacleDeviation::BoundaryGuard{},
                                                   config_.obstacle_body_half_width,
-                                                  detect_footprint);
+                                                  detect_footprint,
+                                                  zone_mask);
 
   if (clear_at_zero)
   {
@@ -2024,7 +2088,8 @@ void FTCController::updateLateralDeviation(double dt)
                                                     0,
                                                     config_.obstacle_lookahead,
                                                     config_.obstacle_body_half_width,
-                                                    detect_footprint);
+                                                    detect_footprint,
+                                                    zone_mask);
       if (obs_idx < 0)
       {
         // Footprint collision but no path-pose hit (e.g. inflated cell next
@@ -2043,7 +2108,8 @@ void FTCController::updateLateralDeviation(double dt)
                                            0,
                                            config_.obstacle_lookahead,
                                            config_.obstacle_body_half_width,
-                                           detect_footprint))
+                                           detect_footprint,
+                                           zone_mask))
       {
         if (reverseEscapeOrWait("no clear exit past obstacle — refusing to skirt into a pocket",
                                 detect_footprint,

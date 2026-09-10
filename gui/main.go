@@ -34,6 +34,7 @@ func main() {
 	if string(mqttEnabled) == "true" {
 		providers.NewMqttProvider(rosProvider, dbProvider)
 	}
-	providers.NewSchedulerProvider(rosProvider, dbProvider)
-	api.NewAPI(dbProvider, dockerProvider, rosProvider, firmwareProvider)
+	irriSenseProvider := providers.NewIrriSenseProvider(dbProvider)
+	providers.NewSchedulerProvider(rosProvider, dbProvider, irriSenseProvider)
+	api.NewAPI(dbProvider, dockerProvider, rosProvider, firmwareProvider, irriSenseProvider)
 }

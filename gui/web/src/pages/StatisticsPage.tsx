@@ -7,6 +7,8 @@ import {useApi} from "../hooks/useApi.ts";
 import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
+import {useTimeFormat} from "../hooks/useTimeFormat.tsx";
+import type {TimeZoneMode} from "../utils/logTime.ts";
 import {DashCard, Bar} from "../components/dashboard";
 import {YearOfLawn} from "../components/YearOfLawn.tsx";
 
@@ -64,15 +66,21 @@ function formatDistanceUnit(meters: number): string {
   return meters >= 1000 ? "km" : "m";
 }
 
-function formatDate(timestamp: string): string {
+// Keeps its friendly locale shape, but takes the zone from the shared
+// preference instead of implicitly using the browser's.
+function formatDate(timestamp: string, timeZoneMode: TimeZoneMode): string {
   if (!timestamp) return "--";
-  return new Date(timestamp).toLocaleString(i18n.language, {
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return timestamp;
+  return parsed.toLocaleString(i18n.language, {
     month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+    ...(timeZoneMode === 'utc' ? {timeZone: 'UTC'} : {}),
   });
 }
 
 export const StatisticsPage = () => {
   const {t} = useTranslation();
+  const {timeZoneMode} = useTimeFormat();
   const guiApi = useApi();
   const {snapshot} = useDiagnosticsSnapshot();
   const {colors} = useThemeMode();
@@ -117,15 +125,21 @@ export const StatisticsPage = () => {
 
   const coverage = snapshot?.coverage ?? [];
 
-  // Generate fake weekly data from sessions for the bar chart
+  // Weekly distance bars. The buckets are ROLLING 7-day windows measured back
+  // from "now" on absolute instants, NOT calendar weeks, so they are unaffected
+  // by the time-zone toggle and carry no date labels to disagree with. Keep it
+  // that way: switching to calendar weeks would need `zonedDayAnchorMs` here
+  // too, or a bar would count a session whose displayed date sits in the
+  // neighbouring column.
+  const nowMs = Date.now();
   const weeklyBars = Array.from({length: 12}, (_, i) => {
     // i=0 is the oldest column (11 weeks ago), i=11 is the current week
     // (diffWeeks === 0). Using 12 - i skipped week 0 and hid the current week.
     const weekAgo = 11 - i;
     const weekSessions = sessions.filter(s => {
-      const d = new Date(s.start_time);
-      const now = new Date();
-      const diffWeeks = Math.floor((now.getTime() - d.getTime()) / (7 * 24 * 60 * 60 * 1000));
+      const startedAtMs = Date.parse(s.start_time);
+      if (!Number.isFinite(startedAtMs)) return false;
+      const diffWeeks = Math.floor((nowMs - startedAtMs) / (7 * 24 * 60 * 60 * 1000));
       return diffWeeks === weekAgo;
     });
     return weekSessions.reduce((acc, s) => acc + (s.distance_meters / 1000), 0);
@@ -138,7 +152,7 @@ export const StatisticsPage = () => {
       sorter: (a: MowingSession, b: MowingSession) =>
         new Date(a.start_time).getTime() - new Date(b.start_time).getTime(),
       defaultSortOrder: "descend" as const,
-      render: (v: string) => <span style={{fontSize: 13}}>{formatDate(v)}</span>,
+      render: (v: string) => <span style={{fontSize: 13}}>{formatDate(v, timeZoneMode)}</span>,
     },
     ...(!isMobile ? [{
       title: t('statisticsPage.colDuration'), dataIndex: "duration_sec", key: "duration",

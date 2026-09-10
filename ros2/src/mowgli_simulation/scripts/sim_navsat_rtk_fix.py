@@ -5,8 +5,9 @@
 """
 sim_navsat_rtk_fix.py — SIMULATION ONLY.
 
-Programmable GPS-quality controller for the simulator. Subscribes to a
-raw Gazebo NavSatFix and republishes on the production topic with
+Programmable GPS-quality controller for the simulator. Subscribes to the
+raw Webots GPS NavSatFix (/gps/fix_raw) and republishes on the
+production topic (/gps/fix) with
 status, covariance, and position noise consistent with one of three
 quality regimes:
 
@@ -14,10 +15,10 @@ quality regimes:
   RTK_FLOAT  status=SBAS_FIX (1), sigma_xy ~30 cm, Gaussian position noise
   NO_FIX     status=NO_FIX (-1), sigma_xy ~2 m, larger Gaussian noise
 
-Gazebo's gz-sim-navsat-system plugin always emits status.status==
-STATUS_FIX (0). Production code (navsat_to_absolute_pose_node,
-slam_pose_anchor_node) gates on STATUS_GBAS_FIX, so without this relay
-the sim's GPS never feeds /gps/pose_cov.
+The Webots GPS device always emits status.status==STATUS_FIX (0).
+Production code (navsat_to_absolute_pose_node, and fusion_graph's own
+RTK gating) keys on STATUS_GBAS_FIX, so without this relay the sim's
+GPS never reaches the localizer as an RTK-quality fix.
 
 Quality cycling
 ---------------
@@ -33,10 +34,10 @@ Pattern examples:
 
 Wiring
 ------
-  gazebo_bridge.yaml: ros_topic_name=/gps/fix_raw  (was /gps/fix)
+  Webots URDF (urdf_webots/mowgli_webots.urdf): GPS -> /gps/fix_raw
   this node:          /gps/fix_raw -> /gps/fix     (with quality regime)
 
-Safety: read-only consumer of one Gazebo-bridged topic, publishes a
+Safety: read-only consumer of one sim sensor topic, publishes a
 single sensor topic. No drive commands, no TF, no safety topic.
 """
 
@@ -134,7 +135,7 @@ class SimNavSatRtkFix(Node):
         self._cycle_total_s = sum(s.duration_s for s in self._segments) or 0.0
         self._start_t: Optional[float] = None  # ros time at first fix
 
-        # Subscribe with BEST_EFFORT (matches Gazebo bridge sensor QoS).
+        # Subscribe with BEST_EFFORT (matches the Webots driver's sensor QoS).
         sub_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,

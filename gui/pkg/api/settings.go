@@ -351,6 +351,34 @@ func valuesEqual(a, b any) bool {
 	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
 }
 
+// retiredParamKeys are parameters that were REMOVED from both the ROS2
+// template and the GUI schema (issue #195) because no node ever read them.
+//
+// They need their own list because of the one-way tail sparsifyFlat has: it can
+// only prune a key that still HAS a schema default (see the note on
+// setGnssStringIfNeeded — "a key with no schema default can never be pruned
+// back out once written"). A robot whose installed mowgli_robot.yaml already
+// carries e.g. outline_passes would therefore keep it forever. Unioning these
+// into the pruned set on every Settings save scrubs them on the next write.
+//
+// Harmless at runtime either way — the launch-time deep-merge just carries an
+// unused key — but a stale key in the installed file also defeats
+// check_config_drift.py's orphan report, which no longer suppresses them.
+var retiredParamKeys = map[string]bool{
+	// Legacy strip-planner knobs: coverage is F2C v3 headland rings + swaths.
+	"outline_passes":  true,
+	"outline_offset":  true,
+	"outline_overlap": true,
+	// Superseded by the single mow_angle_deg (auto/fixed) knob.
+	"mow_angle_offset_deg":    true,
+	"mow_angle_increment_deg": true,
+	// No thermal blade cutoff exists in ANY layer — the firmware only measures
+	// and reports blade temperature. The real surface is mowgli_monitoring's
+	// motor_temp_warn_c / motor_temp_error_c diagnostics thresholds.
+	"motor_temp_high_c": true,
+	"motor_temp_low_c":  true,
+}
+
 // sparsifyFlat prunes flat down to only keys whose value differs from its
 // schema default (Architecture Invariant 15) and returns the set of pruned
 // keys. Callers that go on to nest flat back into ROS2 YAML via
@@ -1372,6 +1400,12 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 		// also how "reset to default" persists — the field is written with
 		// its default value from the form, and pruned here.
 		prunedKeys := sparsifyFlat(existing, defaults)
+		// Retired keys have no schema default left, so sparsifyFlat cannot see
+		// them — scrub them explicitly (issue #195).
+		for key := range retiredParamKeys {
+			delete(existing, key)
+			prunedKeys[key] = true
+		}
 
 		// Nest back into ROS2 YAML structure
 		nested := nestToROS2YAML(existing, nodeMappings, existingYAML)

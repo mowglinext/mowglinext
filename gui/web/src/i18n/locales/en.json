@@ -221,6 +221,8 @@
     "prebuiltInfoDesc": "Pick your board and panel above, keep Firmware source on 'Prebuilt image', then Flash. The matching prebuilt, checksum-verified binary is downloaded and written — no compiling needed. Only choose 'Custom' if you know you need to build from source.",
     "noPrebuiltTitle": "No prebuilt firmware for this model yet",
     "noPrebuiltDesc": "There's no tested prebuilt binary for the selected board. Set Firmware source to 'Custom — compile from source' and fill in the expert section below to compile and flash it instead.",
+    "selectionRequiredTitle": "Select a board and panel before flashing",
+    "selectionRequiredDesc": "The mower model may not identify the controller board. Choose the exact board and panel for your hardware; flashing stays disabled until both are selected.",
     "expertBuildLabel": "Expert: custom build parameters",
     "expertBuildAlertMessage": "Only used when Firmware source is 'Custom'",
     "expertBuildAlertDescription": "These settings compile firmware from source instead of flashing the tested prebuilt binary. Wrong values here can damage the battery or disable physical safety. They only take effect when Firmware source above is set to 'Custom — compile from source'.",
@@ -315,7 +317,7 @@
     "approachDistance": "Approach distance",
     "approachDistanceTooltip": "Staging-point distance in front of the base",
     "chargerDetection": "Charger detection",
-    "chargerDetectionTooltip": "Use the charging voltage to confirm docking",
+    "chargerDetectionTooltip": "Confirm docking from the charging current (nav2 simple_charging_dock.use_battery_status). Off = the dock is considered reached on pose proximity alone, so the charge-wait timeout no longer gates contact. Takes effect after a ROS2 restart.",
     "advanced": "Advanced",
     "maxRetries": "Max retries",
     "maxRetriesTooltip": "Number of docking attempts before giving up",
@@ -694,7 +696,9 @@
     "firmwareVersion": "v{{version}}",
     "firmwareReflash": "v{{version}} — reflash firmware to mow",
     "firmwareFlashCta": "Flash firmware",
-    "coverageToday": "Coverage today · {{pct}} %"
+    "coverageToday": "Coverage today · {{pct}} %",
+    "soilWetTitle": "Careful: the garden is wet (IrriSense)",
+    "soilWetBlocking": "scheduled mows are suspended"
   },
   "onboardingPage": {
     "preview": "Preview",
@@ -900,6 +904,12 @@
   },
   "schedulePage": {
     "planning": "Planning",
+    "soilWetBlocking": "Soil wet — scheduled mows suspended",
+    "soilWet": "Soil wet",
+    "soilDry": "Soil dry",
+    "soilUnknown": "IrriSense: state unknown",
+    "soilFetchedAt": "IrriSense data from {{value}}",
+    "lastSkipped": "Skipped {{value}}: {{reason}}",
     "scheduledMows": "Scheduled mows",
     "dayMon": "Mon",
     "dayTue": "Tue",
@@ -1639,7 +1649,7 @@
     },
     "num_headland_passes": {
       "label": "Headland passes",
-      "description": "Number of concentric border rings mowed before the back-and-forth swaths."
+      "description": "Number of concentric border rings mowed before the back-and-forth swaths. A negative value ('none') disables the perimeter rings entirely: the swaths become the outermost pass and their centreline lands on exactly the line the outermost ring would have driven, so sideways the uncut band is unchanged (about 12 cm at the default 0.20 m chassis safety inset). The swath ENDS do reach that band, roughly 8 cm closer to the boundary than any ring pass gets, and with no mowed apron the row-end U-turns become pivot-through corners instead of smooth arcs."
     },
     "headland_width": {
       "label": "Headland width",
@@ -1904,10 +1914,18 @@
         "tooltip": "Motion model the receiver assumes for RTK. UAV is the kinematic engine that fixes fast and holds lock while the mower moves; Survey Mow is tuned for near-static surveying (slower to fix, can drop lock under motion); Rover is the generic fallback.",
         "helpText": "Auto uses the per-model default (UM980 defaults to UAV). Choose UAV if your receiver is slow to reach RTK-Fixed or loses fix while mowing.",
         "option": {
-          "auto": { "label": "Auto (per-model default)" },
-          "uav": { "label": "UAV (kinematic — recommended)" },
-          "survey_mow": { "label": "Survey Mow" },
-          "rover": { "label": "Rover (generic)" }
+          "auto": {
+            "label": "Auto (per-model default)"
+          },
+          "uav": {
+            "label": "UAV (kinematic — recommended)"
+          },
+          "survey_mow": {
+            "label": "Survey Mow"
+          },
+          "rover": {
+            "label": "Rover (generic)"
+          }
         }
       },
       "pvtAlgorithm": {
@@ -2341,13 +2359,10 @@
   },
   "settingsSafety": {
     "alertMessage": "Safety settings protect the robot and its surroundings",
-    "alertDescription": "Firmware is the sole safety authority. These settings configure firmware behavior — disabling them reduces protection.",
-    "motorTemperatureLimits": "Motor Temperature Limits",
-    "motorTemperatureLimitsDescription": "Blade motor stops above the high threshold and resumes below the low threshold (hysteresis).",
-    "stopAbove": "Stop Above",
-    "stopAboveTooltip": "Stop blade motor above this temperature",
-    "resumeBelow": "Resume Below",
-    "resumeBelowTooltip": "Resume blade motor below this temperature"
+    "alertDescription": "The STM32 firmware is the sole safety authority: it cuts the blade on lift, tilt and emergency stop, and none of that is configurable from this page. There is nothing to edit here.",
+    "firmwareOwnedTitle": "Handled by the firmware",
+    "firmwareOwnedDescription": "Lift and tilt detection, the emergency-stop latch and the blade cut-out all live in the STM32 firmware, which decides on its own physical thresholds. The GUI cannot relax, delay or bypass any of them, so no control is offered here.",
+    "temperatureThresholdsNote": "Blade-motor temperature is measured and reported only — no layer of the stack stops the blade on temperature. The warning and error thresholds used by the diagnostics (motor_temp_warn_c and motor_temp_error_c, in mowgli_monitoring/config/diagnostics.yaml) can be edited on the Parameters page."
   },
   "settingsObstacles": {
     "rootZoneHintTitle": "Trees with large roots?",
@@ -2373,7 +2388,7 @@
   },
   "settingsMowing": {
     "mowingMotor": "Mowing Motor",
-    "mowingMotorDescription": "Disable for testing without the blade spinning.",
+    "mowingMotorDescription": "Off = dry run: the robot mows the full path with the blade never spinning. A convenience inhibit, NOT a safety cut-out — the firmware remains the blade safety authority. Takes effect after a ROS2 restart.",
     "mowingSpeed": "Mowing Speed",
     "mowingSpeedTooltip": "Speed during mowing strips (m/s)",
     "transitSpeed": "Transit Speed",
@@ -2384,7 +2399,9 @@
     "swathOverlap": "Swath Overlap",
     "swathOverlapTooltip": "Extra overlap between adjacent swaths to avoid thin un-mowed strips. F2C swath spacing = tool_width − swath_overlap.",
     "headlandPasses": "Headland Passes",
-    "headlandPassesTooltip": "Number of concentric perimeter rings before the inner field. 0 = auto (ceil(headland_width / tool_width)). >0 forces exactly that count regardless of headland_width. Wired to coverage_server.num_headland_passes.",
+    "headlandPassesTooltip": "Concentric perimeter rings mowed before the inner field. None = no perimeter rings: the back-and-forth swaths become the outermost pass, and their centreline lands on exactly the line the outermost ring would have driven, so sideways they leave the same uncut band as the rings (about 12 cm at the default 0.20 m chassis safety inset) — no closer to the edge, no further. The swath ENDS do reach that band though, roughly 8 cm closer to the boundary than any ring pass gets, and with no mowed apron the row-end U-turns become pivot-through corners instead of smooth arcs. Field-test this on your lawn before relying on it.",
+    "headlandPassesNone": "None",
+    "headlandPassesAuto": "Auto",
     "mowDirection": "Perimeter Direction",
     "mowDirectionTooltip": "Travel direction around the perimeter/headland rings. Set it so a side-mounted blade stays on the cut side. Auto keeps the planner's natural winding. Wired to coverage_server.ring_direction.",
     "mowDirectionAuto": "Auto (planner default)",
@@ -2905,7 +2922,9 @@
     "paused": "Paused",
     "clear": "Clear",
     "waitingForOutput": "Waiting for log output...",
-    "noLinesMatch": "No lines match the active filters."
+    "noLinesMatch": "No lines match the active filters.",
+    "timeZoneLocal": "Local",
+    "timeZoneUtc": "UTC"
   },
   "imuYawCalibration": {
     "timedOut": "Timed out after 155 s. The service may still be running — check the robot and retry.",
@@ -2953,10 +2972,114 @@
   "asyncButton": {
     "errorOccurred": "An error occured"
   },
+  "settingsIrriSense": {
+    "title": "IrriSense Cloud soil moisture",
+    "description": "Read your irrigation service's zone deficits so the scheduler does not start a mow on wet grass.",
+    "failOpenTitle": "Fail-open by design",
+    "failOpenBody": "If IrriSense is unreachable, misconfigured or its data is older than the validity window, the soil state is reported as unknown and scheduled mows run as usual. A cloud outage never keeps the robot in the dock.",
+    "connection": "Connection",
+    "baseUrl": "Service URL",
+    "baseUrlTooltip": "Base URL of your IrriSense Cloud instance; the read-only API lives under /api/ha.",
+    "token": "Read-only API token",
+    "tokenTooltip": "Mint a read-only API token in IrriSense (Settings → API tokens). A login session is rejected. The token is stored on the robot and never shown again.",
+    "tokenPlaceholder": "Paste a new token…",
+    "tokenApply": "Set",
+    "tokenClear": "Clear",
+    "tokenSet": "Token stored ({{masked}})",
+    "tokenNotSet": "No token stored",
+    "tokenPending": "New token will be stored on save",
+    "tokenCleared": "Token will be removed on save",
+    "garden": "Garden",
+    "gardenTooltip": "Which IrriSense garden to read. Use Test connection to fill the list.",
+    "gardenPlaceholder": "Select a garden",
+    "zones": "Zones (optional)",
+    "zonesTooltip": "Leave empty to consider every enabled zone of the garden.",
+    "zonesPlaceholder": "All enabled zones",
+    "zoneDisabled": "{{label}} (disabled)",
+    "testConnection": "Test connection",
+    "testOk_one": "IrriSense reachable: {{count}} garden",
+    "testOk_other": "IrriSense reachable: {{count}} gardens",
+    "testFailed": "IrriSense connection failed",
+    "rule": "Wetness rule",
+    "ruleDescription": "A zone is wet when its deficit (mm evaporated since it was last wetted by irrigation or rain) is at or below the threshold, or when it was watered recently. The garden is wet when any selected zone is wet.",
+    "wetDeficit": "Wet at or below deficit",
+    "wetDeficitTooltip": "Deficit at or below which the surface counts as wet. Default 2 mm.",
+    "dryAfterWatering": "Wet after watering for",
+    "dryAfterWateringTooltip": "A zone watered within this many hours counts as wet whatever its deficit. Default 3 h.",
+    "maxStale": "Data valid for",
+    "maxStaleTooltip": "If the last successful fetch is older than this, the state is unknown and mowing is not blocked. Default 90 min.",
+    "gateScheduler": "Block scheduled mowing when wet",
+    "gateSchedulerDescription": "Off only shows the soil state and never skips a schedule.",
+    "status": "Live status",
+    "verdict": {
+      "wet": "Wet",
+      "dry": "Dry",
+      "unknown": "Unknown"
+    },
+    "fetchedAt": "fetched {{value}}",
+    "neverFetched": "no data fetched yet",
+    "refresh": "Refresh",
+    "saved": "IrriSense settings saved",
+    "saveFailed": "Failed to save IrriSense settings",
+    "loadFailed": "Failed to load IrriSense settings"
+  },
+  "settingsLeds": {
+    "statusRing": "WS2812 status ring",
+    "statusRingDescription": "An addressable LED ring on the robot showing state at a glance: emergency, charging, mowing progress and RTK health. Read-only — it never commands the robot, and it is not part of the blade-safety path (the firmware keeps its own status LED).",
+    "prerequisitesTitle": "Before this can work",
+    "prerequisiteOverlay": "Enable the SPI overlay in U-Boot and reboot — see ros2/src/mowgli_leds/README.md for the exact steps:",
+    "prerequisiteDevice": "Then set the device below to whatever this actually reports — the numbering is assigned by the kernel, so the default is only a guess:",
+    "prerequisiteLevels": "If the ring lights but the colours are wrong, suspect the 3.3 V data line into a 5 V ring before the software: WS2812B wants 3.5 V and a level shifter is the fix.",
+    "hardware": "Hardware",
+    "ledCount": "LED count",
+    "ledCountTooltip": "Number of LEDs on the ring. The default of 16 is a placeholder — set it to what your ring actually has, or the progress arc will be wrong.",
+    "spiDevice": "SPI device",
+    "spiDeviceTooltip": "spidev character device for the ring's data line (40-pin header pin 19). Confirm it with `ls /dev/spidev*` after enabling the overlay and rebooting.",
+    "spiClock": "SPI clock",
+    "spiClockTooltip": "The WS2812 encoding sends three SPI bits per protocol bit and is derived from exactly 2.4 MHz. Changing this breaks the bit timing and produces wrong colours.",
+    "appearance": "Appearance",
+    "brightness": "Brightness",
+    "brightnessTooltip": "Linear 0-1 scale on every colour channel. Full white on a 16-LED ring at 1.0 draws roughly 1 A; 0.6 stays under about 0.6 A and is still readable in daylight.",
+    "idleBrightness": "Idle brightness",
+    "idleBrightnessTooltip": "Brightness of the dim idle ring, relative to the brightness above.",
+    "refreshRate": "Refresh rate",
+    "refreshRateTooltip": "Render tick. Frames are only sent to the ring when they change (plus a slow keepalive), so a static pattern costs almost nothing regardless of this value.",
+    "behavior": "Thresholds and timing",
+    "lowBattery": "Low battery threshold",
+    "lowBatteryTooltip": "Below this percentage, and not charging, the whole ring blinks red.",
+    "chargeFull": "Charge complete",
+    "chargeFullTooltip": "At or above this percentage a charging ring stops breathing and goes steady green.",
+    "statusTimeout": "Status timeout",
+    "statusTimeoutTooltip": "How long without a status message before the ring shows the stale pattern.",
+    "keepalive": "Keepalive",
+    "keepaliveTooltip": "Re-send an unchanged frame at least this often, so a ring that lost power recovers its last state.",
+    "deviceRetry": "Device retry",
+    "deviceRetryTooltip": "How often to silently retry opening a missing or failed SPI device. Only the first failure of an outage is logged, so this never floods the log.",
+    "legend": "What the ring is telling you",
+    "legendDescription": "First match wins — an alarm always beats an activity. Every pattern is meant to be readable in daylight from several metres by colour and movement alone.",
+    "modeEmergency": "Emergency",
+    "modeEmergencyDescription": "Whole ring solid red, not moving. The only solid red.",
+    "modeCharging": "Charging",
+    "modeChargingDescription": "Green arc growing with the battery level, breathing. Steady full green when the charge is complete.",
+    "modeStale": "No status",
+    "modeStaleDescription": "Amber dot circling a dark ring. Powered and running, but the behavior tree is not reporting.",
+    "modeLowBattery": "Low battery",
+    "modeLowBatteryDescription": "Whole ring blinking red. Same colour as emergency — the blinking is what tells them apart.",
+    "modeMowing": "Mowing",
+    "modeMowingDescription": "Green arc growing with coverage, with a white pixel at its tip.",
+    "modeMowingDegraded": "Mowing without RTK fix",
+    "modeMowingDegradedDescription": "The same arc in amber with a blinking tip. Cutting accuracy is degraded until the RTK fix returns.",
+    "modeRecording": "Recording a boundary",
+    "modeRecordingDescription": "Cyan dot circling the ring while you walk the perimeter.",
+    "modeManual": "Manual mowing",
+    "modeManualDescription": "Whole ring breathing purple. Blades may be running.",
+    "modeIdle": "Idle",
+    "modeIdleDescription": "Whole ring dim white, not moving. Powered and awake, doing nothing."
+  },
   "settingsSections": {
     "appearance": {
       "label": "Appearance",
-      "description": "Visual richness and energy use on this device"
+      "description": "Visual richness, energy use and timestamp display on this device"
     },
     "hardware": {
       "label": "Hardware",
@@ -2996,7 +3119,7 @@
     },
     "safety": {
       "label": "Safety",
-      "description": "Emergency stops and temperature limits"
+      "description": "What the firmware handles on its own"
     },
     "obstacles": {
       "label": "Obstacles",
@@ -3009,6 +3132,14 @@
     "rain": {
       "label": "Rain",
       "description": "Rain detection behavior and delay"
+    },
+    "irrisense": {
+      "label": "IrriSense",
+      "description": "Soil moisture from your IrriSense Cloud garden: skip scheduled mows on wet grass"
+    },
+    "leds": {
+      "label": "Status LEDs",
+      "description": "WS2812 status ring: what it shows and how bright"
     },
     "advanced": {
       "label": "Advanced",
@@ -3085,5 +3216,20 @@
   },
   "settingsSchema": {
     "loadFailed": "Failed to load settings schema"
+  },
+  "logTime": {
+    "title": "Log timestamps",
+    "description": "Log lines and calibration dates are re-stamped in the zone you pick here, so the robot, the containers and this browser all read the same way. Stored on this device only.",
+    "zoneBadge": "Currently showing times in {{zone}}.",
+    "toggleAria": "Switch between local time and UTC",
+    "approximate": "This line carried no timestamp — showing when the browser received it.",
+    "local": {
+      "label": "Local time",
+      "description": "This browser's time zone. Matches the clock on the device you are reading from."
+    },
+    "utc": {
+      "label": "UTC",
+      "description": "The zone the robot containers run in. Best for comparing logs with a colleague."
+    }
   }
 }

@@ -40,6 +40,14 @@
 // drops to stationary_node_period_s = 5 s and GPS pins every node, so σ
 // settles at ~0.05 m, below the old 0.08 m resume threshold.
 //
+// UPDATE 2026-08-24 (issue #491): the "plain driving" half of that arithmetic
+// has since been fixed — the wheel between-factor's translational sigma is now
+// a distance-scaled random walk instead of a per-node constant, so the same
+// window contributes centimetres rather than decimetres. The PIVOT half is
+// unchanged and deliberate: pivot_wheel_sigma_x stays a per-node absolute
+// release, so the marginal still balloons on every PRE_ROTATE. This guard must
+// therefore keep off the fused covariance regardless.
+//
 // The guard was therefore ONLY satisfiable while stopped, and FTC opens every
 // strip with a PRE_ROTATE pivot. Field 2026-08-20 (robot on RTK-Fixed at
 // hacc 0.014 m throughout): degrade at σ 0.57/0.74/0.81/0.92/0.99/1.07/1.38/
@@ -167,6 +175,13 @@ public:
     return latched_;
   }
 
+  void ForceLatched()
+  {
+    latched_ = true;
+    bad_since_s_ = -1.0;
+    good_since_s_ = -1.0;
+  }
+
   /// Seconds the pending (not yet flipped) condition has been held, or 0.
   double pending_for_s(double now_s) const
   {
@@ -187,8 +202,10 @@ struct LocalizationObservation
   /// True once ANY /gps/status has been received. While false the monitor
   /// stays inert — see LocalizationHealthMonitor::Update.
   bool gnss_seen = false;
-  /// Clock reading when the most recent /gps/status arrived [s].
-  double gnss_stamp_s = 0.0;
+  /// True only while the last genuinely new receiver observation satisfies
+  /// the shared receipt-provenance and monotonic-age policy. Cached ROS
+  /// republication never changes this value.
+  bool gnss_fresh = false;
   RtkMode rtk_mode = RtkMode::kUnknown;
   /// Receiver-reported horizontal accuracy [m]; negative when unavailable
   /// (capability bit clear, or NaN in the message).
@@ -219,7 +236,7 @@ public:
       return false;
     }
 
-    const bool stale = (now_s - obs.gnss_stamp_s) > cfg_.gnss_stale_s;
+    const bool stale = !obs.gnss_fresh;
     const bool has_acc = obs.gnss_accuracy_m >= 0.0 && std::isfinite(obs.gnss_accuracy_m);
     // Prefer the metric signal. rtk_mode only decides when the receiver does
     // not report an accuracy at all — otherwise a receiver that leaves
@@ -249,8 +266,21 @@ public:
     }
 
     const bool was_gnss = gnss_latch_.latched();
-    const bool gnss_degraded = gnss_latch_.Update(
-        now_s, gnss_bad, gnss_good, cfg_.gnss_pause_persist_s, cfg_.gnss_resume_persist_s);
+    bool gnss_degraded = false;
+    if (stale)
+    {
+      // Observation freshness is an authorization boundary, not receiver
+      // quality flicker. Once the existing provenance timeout has elapsed,
+      // fail closed immediately; retain the configured resume persistence for
+      // a later genuine observation.
+      gnss_latch_.ForceLatched();
+      gnss_degraded = true;
+    }
+    else
+    {
+      gnss_degraded = gnss_latch_.Update(
+          now_s, gnss_bad, gnss_good, cfg_.gnss_pause_persist_s, cfg_.gnss_resume_persist_s);
+    }
 
     // Divergence backstop. Disabled at 0, and skipped when σ is unavailable
     // so a missing covariance never latches on its own.
@@ -289,6 +319,10 @@ public:
   LocalizationFault fault() const
   {
     return fault_;
+  }
+  double gnss_stale_s() const
+  {
+    return cfg_.gnss_stale_s;
   }
 
 private:

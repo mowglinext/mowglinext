@@ -15,6 +15,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -60,9 +62,30 @@ public:
   void onHalted() override;
 
 private:
+  /// Logs where the robot actually came to rest, relative to the dock pose, at
+  /// the moment opennav_docking claims contact (feedback state WAIT_FOR_CHARGE).
+  ///
+  /// Issue #486: the server logs "Made contact with dock" from
+  /// SimpleChargingDock::isDocked(), which is a pure POSITION test against
+  /// docking_threshold and ignores yaw entirely. A seat that is laterally
+  /// offset but geometrically near therefore reports contact identically to a
+  /// good one, and the only downstream evidence is v_charge staying 0.0.
+  /// Reconstructing the 2026-08-24 failure took an encoder-tick reconstruction
+  /// across two log files purely because this delta was never recorded; split
+  /// into along-track / cross-track it distinguishes "stopped short" from
+  /// "seated off to the side" in one line.
+  ///
+  /// Diagnostic only — nothing reads the result.
+  void log_contact_delta(const std::shared_ptr<BTContext>& ctx, uint16_t num_retries) const;
+
   rclcpp_action::Client<DockAction>::SharedPtr action_client_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;
+
+  /// Last docking feedback state seen, so the contact delta is logged once per
+  /// entry into WAIT_FOR_CHARGE rather than at the feedback rate. Written from
+  /// the action feedback callback, read from the BT tick thread.
+  std::atomic<uint16_t> last_feedback_state_{DockAction::Feedback::NONE};
 };
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,7 @@
 # Universal GNSS Sidecar Migration
 
+> **Historical document (2026-06)** — describes the state at that time. Current reference: [`sensors/README.md`](../sensors/README.md) and [`wiki/Sensors.md`](../wiki/Sensors.md).
+
 Archived note.
 
 The detailed migration plan was removed once Universal GNSS became the only supported GNSS runtime in MowgliNext.

@@ -25,6 +25,7 @@ set(msg_files
   "msg/WheelTick.msg"
   "msg/ImuRaw.msg"
   "msg/MapArea.msg"
+  "msg/MapObstacleInfo.msg"
   "msg/ObstacleArray.msg"
   "msg/TrackedObstacle.msg"
   "msg/DockCalibrationStatus.msg"

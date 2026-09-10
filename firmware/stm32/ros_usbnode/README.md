@@ -1,14 +1,21 @@
 # Howto
 
+Flashing, wiring and serial-debugging howto for the `ros_usbnode` firmware.
+For the file map, wire-packet table and pitfalls see
+[`docs/claude/codemaps/firmware.md`](../../../docs/claude/codemaps/firmware.md);
+[`firmware/CLAUDE.md`](../../CLAUDE.md) indexes the rest of the reference material
+(`docs/claude/ros-interfaces.md`, `parameters.md`, `testing-ci.md`, `doc-index.md`).
+
 ## Make sure you have a backup of your stock firmware
 
 [Check here how to do that ...](../mainboard_firmware), only then continue.
 
 ## Platform.IO - compile and upload
 
-- Start VS Code and open the project in platform.io.
-- Make sure you Build and Upload from the "Yardforce 500(STM32F103 VCT6)" folder - the generic STM32F103C8 folder is for a bluepill test board only.
-- Having your ST-Link hooked up to the J9 connector on the mainboard the firmware should now be flashed
+- Start VS Code and open `firmware/stm32/ros_usbnode` in platform.io (or run `pio` from that directory).
+- Make sure you Build and Upload the env that matches your mainboard: `Yardforce500` (STM32F103VC, the `default_envs`) or `Yardforce500B` (STM32F401VC). The `Yardforce500_STLINK_V3` / `Yardforce500B_STLINK_V3` variants upload through OpenOCD instead of PlatformIO's built-in ST-Link protocol. From a shell that is e.g. `pio run -e Yardforce500 -t upload`.
+- The "Yardforce 500 (STM32F103 VCT6)" and generic `genericSTM32F103C8` (bluepill) envs belong to the old bring-up firmware in [`../test_code`](../test_code), not to this project.
+- Having your ST-Link hooked up to the J9 connector on the mainboard (the 4-pin GND / SWCL / SWDA / 3V3 header) the firmware should now be flashed
 - The LED (D3) near the STM32 cpu should flash and you should hear a "double" chirp on bootup
 
 ## Hardware
@@ -17,50 +24,22 @@
 - Either use a A<->A USB cable or solder up an USB A cable + connector to J14 pin on the mainboard. You need to connect your YF500 mainboard with your Raspi via USB.
 - The panel  (J6) must be plugged in as the switches are hardwired to the motor controllers, if they not shorted you will not be able to start the blade motor.
 - Brigde all 4 switch cables coming off the panel board (JP4 connector) by shorting the outer pins, emulating a "ok" condition.
-<img src="../../images/bridged_connectors.jpg" width="200"/>
 
-## ROS serial node
+## Talking to the board from ROS2
 
-- Follow one of the [tutorials on howto install ROS noetic](https://x-tech.online/2022/01/installing-ros-noetic-on-a-headless-raspberry-pi-4-with-ubuntu-20-04/) - i used a Ubuntu 20.04 on a Raspi4 (also works with a Raspi3)
-- After having installed the ROS noetic stack you need to add the following packages that allow you to talk to and drive the bot
-```
-sudo apt-get install ros-noetic-rosserial
-sudo apt-get install ros-noetic-teleop-twist-keyboard
-```
-- Start roscore in your terminal which should look simliar to:
-```
-roscore
-... logging to /home/ubuntu/.ros/log/ac4baa2e-e03d-11ec-a9e3-77e7d5aa8a2a/roslaunch-ubuntu-1914.log
-Checking log directory for disk usage. This may take a while.
-Press Ctrl-C to interrupt
-Done checking log file disk usage. Usage is <1GB.
+There is no rosserial and no ROS1 master here. The board speaks a COBS-framed,
+CRC-16/CCITT-FALSE binary protocol over its USB CDC link - `include/mowgli_protocol.h`
+is the single source of truth for that wire format (pinned by `MOWGLI_PROTOCOL_VERSION`)
+and the only host peer is `hardware_bridge_node`
+([`ros2/src/mowgli_hardware`](../../../ros2/src/mowgli_hardware)), which fans the packets
+out onto the ROS2 topics and services. The packet table lives in
+[`docs/claude/codemaps/firmware.md`](../../../docs/claude/codemaps/firmware.md), the
+resulting topics in [`docs/claude/ros-interfaces.md`](../../../docs/claude/ros-interfaces.md).
 
-started roslaunch server http://127.0.0.1:35301/
-ros_comm version 1.15.14
-
-
-SUMMARY
-========
-
-PARAMETERS
- * /rosdistro: noetic
- * /rosversion: 1.15.14
-
-NODES
-
-auto-starting new master
-process[master]: started with pid [1924]
-ROS_MASTER_URI=http://127.0.0.1:11311/
-
-setting /run_id to ac4baa2e-e03d-11ec-a9e3-77e7d5aa8a2a
-process[rosout-1]: started with pid [1934]
-started core service [/rosout]
-````
-
-- Next plug your USB Cable into the Raspi on end and the GForce mainboard on the other, and turn on the bot.
+- Plug your USB cable into the Raspi on one end and the GForce mainboard on the other, and turn on the bot.
  (note the Raspi will power up the mainbord, but you need the battery on to do drive it actually)
 
-- Open a second terminal to your Raspi and run:
+- Open a terminal to your Raspi and run:
 
 ```
 lsusb
@@ -80,87 +59,48 @@ dmesg | grep -2 STM |tail -5
 [10950.671708] usb 1-1.3: SerialNumber: 5CF8673F3430
 [10950.676549] cdc_acm 1-1.3:1.0: ttyACM0: USB ACM device
 ```
-  In this example it is /dev/ttyACM0, so run:
-  
-``` 
-rosrun rosserial_python serial_node.py _port:=/dev/ttyACM0 _baud:=115200
-[INFO] [1653942964.974184]: ROS Serial Python Node
-[INFO] [1653942964.992384]: Connecting to /dev/ttyACM0 at 115200 baud
-[INFO] [1653942967.104468]: Requesting topics...
-[INFO] [1653942967.211183]: Note: publish buffer size is 1024 bytes
-[INFO] [1653942967.214626]: Setup publisher on /tf [tf/tfMessage]
-[INFO] [1653942967.223794]: Setup publisher on battery_voltage [std_msgs/Float32]
-[INFO] [1653942967.258762]: Setup publisher on charge_voltage [std_msgs/Float32]
-[INFO] [1653942967.269210]: Setup publisher on charge_pwm [std_msgs/Int16]
-[INFO] [1653942967.291421]: Setup publisher on odom [nav_msgs/Odometry]
-[INFO] [1653942967.300485]: Setup publisher on blade_state [std_msgs/Bool]
-[INFO] [1653942967.310584]: Setup publisher on charging_state [std_msgs/Bool]
-[INFO] [1653942967.322699]: Note: subscribe buffer size is 512 bytes
-[INFO] [1653942967.327584]: Setup subscriber on cmd_vel [geometry_msgs/Twist]
-[INFO] [1653942967.340939]: Setup subscriber on cmd_blade_on [std_msgs/Bool]
-[INFO] [1653942967.356801]: Setup subscriber on cmd_blade_off [std_msgs/Bool]
-[INFO] [1653942967.269210]: Setup publisher on charge_pwm [std_msgs/Int16]
+  In this example it is /dev/ttyACM0. The installer's udev rules (`install/lib/udev.sh`)
+  also create a stable `/dev/mowgli` symlink for that board - that is what the
+  `serial_port` parameter of `hardware_bridge` points at by default.
+
+  To see if the stack can talk to the bot, echo one of the topics the bridge feeds
+  from the status packet:
+
 ```
- You should see a list of published topics and subscribers
- 
- To see if you can talk to the bot via rosserial run something like:
- 
+ros2 topic echo /hardware_bridge/power
 ```
-rostopic echo /battery_voltage
-data: 28.841758728027344
----
-data: 28.85787582397461
----
-^C
-````
-You should see a new battery voltage reading appear every second.
+  You should see a new `v_battery` / `v_charge` reading appear 4 times a second
+  (the firmware's status broadcast runs at 250 ms).
 
 ## Note
 
-The raspi USB stack is not happy when you flash a new firmware version onto the mainboard and the CDC stack gets reinitialized - either you unplug and replug the USB cable to settle things, or if you rather stay seated like me use the [usbreset](../../usbreset) tool. i have simply added it to shell script so it gets executed every time before rosserial is started.
+The raspi USB stack is not happy when you flash a new firmware version onto the
+mainboard and the CDC stack gets reinitialized. `hardware_bridge_node` handles that
+itself: a multi-second gap in the incoming stream on a nominally open port makes it
+close and reopen the device (`serial_rx_timeout_s`), so a flash or a board reboot
+self-heals. If you are talking to the port with your own tool instead, unplug and
+replug the USB cable to settle things.
 
 ## Drive the bot
 
-To drive the bot you need yet another console to be able to send the teleop twist messages, which is the package installed above.
-roscore, and rosserial needs to be running as well
+Manual driving goes through twist_mux on `/cmd_vel_teleop` (priority 20, above
+navigation and docking), which the GUI's manual-control page and
+`cmd_vel_ws_relay.py` publish to; the merged output reaches the board as a
+`PKT_ID_CMD_VEL` packet.
 
-Run teleop with:
+Two firmware gates to know about before wondering why nothing moves:
 
-```
-rosrun teleop_twist_keyboard teleop_twist_keyboard.py
-```
+- The board boots into `OPENMOWER_STATUS_IDLE` and simply drops `cmd_vel` (and forces
+  the blade target to 0) until the host sends a high-level state other than IDLE.
+- A `cmd_vel` older than 200 ms is a hard stop, so the source has to keep publishing.
 
-And you should get an interface that looks like
+The twist is not forwarded raw: the board closes BOTH the per-wheel velocity PI loop
+(`USE_WHEEL_PI`) and the gyro-based yaw-rate loop on it, and the anti-dig cutout
+(`ANTIDIG_*`) can zero a wheel that is spinning without making progress -
+all in `src/ros/ros_custom/cpp_main.cpp` `motors_handler()`. The ROS2 side does no
+host-side shaping. Gains are pushed down at every reconnect and never persisted on
+the board, so do not "fix" a tuning problem by editing `board.h`.
 
-```
-Reading from the keyboard  and Publishing to Twist!
----------------------------
-Moving around:
-   u    i    o
-   j    k    l
-   m    ,    .
-
-For Holonomic mode (strafing), hold down the shift key:
----------------------------
-   U    I    O
-   J    K    L
-   M    <    >
-
-t : up (+z)
-b : down (-z)
-
-anything else : stop
-
-q/z : increase/decrease max speeds by 10%
-w/x : increase/decrease only linear speed by 10%
-e/c : increase/decrease only angular speed by 10%
-
-CTRL-C to quit
-
-currently:	speed 0.5	turn 1.0
-
-Press 'i' to start moving the bot, 'k' to stop and so on.
-```
 ## Enable UART5 on raspi for serial debugging
 
 add this to /boot/firmware/usercfg.txt
@@ -175,44 +115,45 @@ then reboot.
 
 <a id="serial_debug">
 
+Note this only applies to the Yardforce 500 ORIG (STM32F103VC) build: `board.h` sets
+`DEBUG_TYPE DEBUG_TYPE_UART` there, and the debug port is UART4 on J18 pins 7/8.
+The 500B (STM32F401VC) build has no master USART and traces over SWO instead -
+selecting `DEBUG_TYPE_UART` on it is a compile-time `#error`. Use `pio run -t swo_viewer`
+for that board.
+
 Wire your serial adapter (or ESP32, or Raspi) to the serial port on the GForce board.
    
 I used the J18 (Red connector on the mainboard) because the connector from J5 (Signal will fit) and i dont need the signal sense board anymore.   
-As the pins are unfortunatly in the wrong place on the original J5 connector i used a sharp pick tool to relocate the pins as in the image below.
-   
-<img src="/images/J18_serial.jpg" width="60%"/>
+As the pins are unfortunatly in the wrong place on the original J5 connector i used a sharp pick tool to relocate the pins.
    
 When you then flash the ros_usbnode firmware or reboot the board you should see output simliar to
    
 ```
  * Master USART (debug) initialized
  * LED initialized
+ * Charging ADC initialized
+ * Timer3 (Beeper) initialized
  * 24V switched on
- * PAC 5223 out of reset
- * PAC 5210 out of reset
- * I2C(Accelerometer) initialized
- * ADC1 initialized
+ * RAIN Sensor enabled
+ * HALL Sensor enabled
+ * Hard I2C initialized
+ * Accelerometer (onboard/tilt safety) initialized
+ * Soft I2C (J18) initialized
+ * Testing supported IMUs:
+ * Panel initialized
+ * Emergency sensors initialized
  * Timer1 (Charge PWM) initialized
  * USB CDC initialized
- * Panel initialized
- * ADC Timers initialized
  * Drive Motors USART initialized
- * Blade Motor USART initialized
- * Master Interrupt enabled
- * Drive Motors Interrupt enabled
- * Panel Interrupt enabled
- * Drive Motors initialized
- * Blade Motor initialized
- * HW Init completed
  * NBT Main timers initialized
  * ROS serial node initialized
 
  >>> entering main loop ...
+```
 
- > Chg Voltage: 3.04V | Bat Voltage 28.79V
- > Chg Voltage: 5.05V | Bat Voltage 28.79V
- > Chg Voltage: 7.54V | Bat Voltage 28.80V
- > Chg Voltage: 9.61V | Bat Voltage 28.82V
- ```
+An ASCII "Mowgli" banner and a decoded reset cause are printed just above that list.
+After the banner the board is quiet unless something happens - the periodic
+charge/battery voltage chatter of the old firmware is gone; battery and charge
+voltage now travel to the host in the status packet instead.
    
    

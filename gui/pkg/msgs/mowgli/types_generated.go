@@ -118,6 +118,7 @@ type GnssStatus struct {
 	MsmSummarySignalCount     uint16                         `json:"msm_summary_signal_count"`
 	MsmSummaryCellCount       uint16                         `json:"msm_summary_cell_count"`
 	MsmSummaryAgeS            float32                        `json:"msm_summary_age_s"`
+	PositionObservationSequence uint64                         `json:"position_observation_sequence"`
 }
 
 // HighLevelStatus matches mowgli_interfaces/msg/HighLevelStatus.
@@ -158,6 +159,15 @@ type MapArea struct {
 	Area                      geometry.Polygon               `json:"area"`
 	Obstacles                 []geometry.Polygon             `json:"obstacles"`
 	IsNavigationArea          bool                           `json:"is_navigation_area"`
+	ObstacleInfo              []MapObstacleInfo              `json:"obstacle_info"`
+}
+
+// MapObstacleInfo matches mowgli_interfaces/msg/MapObstacleInfo.
+type MapObstacleInfo struct {
+	Name                      string                         `json:"name"`
+	Source                    uint8                          `json:"source"`
+	Pending                   bool                           `json:"pending"`
+	Id                        uint32                         `json:"id"`
 }
 
 // ObstacleArray matches mowgli_interfaces/msg/ObstacleArray.

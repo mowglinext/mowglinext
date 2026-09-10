@@ -23,6 +23,12 @@ namespace fusion_graph
 // default is 50 Hz, some setups 10 Hz). At 25 Hz the factor is 1.0 (no change).
 inline constexpr double kTunedNodePeriodS = 0.04;
 
+// Absolute lower bound (m) on the wheel between-factor's translational sigmas.
+// The distance-scaled model below already carries a creep floor, so this only
+// guards the degenerate case where BOTH the step and dt are zero — a zero
+// sigma would make the GTSAM noise model singular.
+inline constexpr double kMinWheelSigmaM = 1.0e-4;
+
 struct GraphParams
 {
   // Node creation cadence — one Pose2 per node_period_s of wall-clock.
@@ -31,10 +37,42 @@ struct GraphParams
   // kTunedNodePeriodS so their rad/s meaning is cadence-invariant.
   double node_period_s = 0.1;
 
-  // Wheel between-factor noise (sigmas, body-frame). Tight vy enforces
-  // non-holonomic motion.
-  double wheel_sigma_x = 0.05;  // m per node @ 10 Hz
-  double wheel_sigma_y = 0.005;  // m per node — non-holo
+  // Wheel between-factor TRANSLATIONAL noise (body-frame), as random-walk
+  // coefficients — NOT per-node sigmas. Changed 2026-08-24 (issue #491); see
+  // the long rationale block in CreateNodeLocked. Summary:
+  //
+  //   σ = k · √(step_m + wheel_creep_speed_mps · dt)      [Var = k² · d]
+  //
+  // Variance (not sigma) is proportional to the distance the step covered, so
+  // N hops of d/N metres sum to exactly the variance of one hop of d metres —
+  // the accumulated uncertainty tracks distance travelled and is invariant to
+  // node_period_s. This is the noise-model counterpart of the kTunedNodePeriodS
+  // tick_scale applied to the per-tick gates.
+  //
+  // Units are m/√m. At 1 m of travel per node these reproduce the old fixed
+  // per-node values (0.05 / 0.005 m), so the numbers are unchanged in
+  // magnitude — only their meaning (and hence their effect at the deployed
+  // 8 mm-per-hop step) changes. wheel_sigma_y ≪ wheel_sigma_x still holds at
+  // every step size: both scale by the same √d, so the 10:1 non-holonomic
+  // asymmetry ("the robot doesn't slide sideways") is preserved.
+  double wheel_sigma_x_per_sqrt_m = 0.05;  // m/√m — along-track random walk
+  double wheel_sigma_y_per_sqrt_m = 0.005;  // m/√m — non-holo, 10x tighter
+
+  // Floor on the noise distance, expressed as a CREEP SPEED rather than a
+  // constant sigma: even when the encoders report a zero step we allow for
+  // wheel_creep_speed_mps · dt metres of motion they may have missed (towed,
+  // lifted, both wheels skating). Stating the floor as a distance keeps it
+  // cadence-invariant — a constant per-node sigma floor would reintroduce the
+  // √N-per-hop accumulation this model exists to remove. 0.04 m/s is well
+  // under the 0.2 m/s mowing speed, so it never dominates while driving; while
+  // parked (node cadence drops to stationary_node_period_s = 5 s) it yields
+  // σ_x = 0.05·√0.2 ≈ 0.022 m per node, loose enough that GNSS still anchors.
+  double wheel_creep_speed_mps = 0.04;
+
+  // Yaw stays a PER-NODE sigma: unlike translation, the wheel-derived yaw
+  // error is dominated by per-tick encoder quantisation and differential slip,
+  // not by a distance-driven random walk, and the gyro (gyro_sigma_theta)
+  // supersedes it on every tick where an IMU sample arrived.
   double wheel_sigma_theta = 0.01;  // rad per node
 
   // Gyro yaw between-factor noise (overrides wheel_sigma_theta when used).
@@ -180,6 +218,17 @@ struct GraphParams
   double slip_residual_thresh_rad = 0.01;
   double slip_gyro_max_rad = 0.005;
   double slip_wheel_min_rad = 0.005;
+  // Sliding window (s) the three thresholds above are evaluated over
+  // (issue #516, slip_window.hpp). window_nodes = round(slip_window_s /
+  // node_period_s), floored at 1; the rule is applied to the window SUMS
+  // with the thresholds scaled by the node count, so the per-node values
+  // keep their meaning and the window just integrates. Per node the gate
+  // cannot separate one encoder tick of L/R asymmetry (≈ 0.011 rad in a
+  // 40 ms frame) from genuine slip (≈ 0.012 rad/frame, sustained) —
+  // field 2026-09-02 it fired 1.33/s on straight swaths and zeroed ~5 %
+  // of nodes' wheel translation on jitter. 0 = window of one node, the
+  // old per-node gate, exactly.
+  double slip_window_s = 0.5;
 
   // Stationary multi-source gate. The wheel-only gate (above) can be
   // tricked by encoders that report no motion while the robot is

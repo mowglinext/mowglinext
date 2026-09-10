@@ -1,5 +1,7 @@
 # Safety Review — 2026-07-23 (architecture + FTC + fusion_graph)
 
+> **Historical document (2026-07)** — describes the state at that time; the whole P0 block has since shipped (`PolygonStopNarrow` + `FootprintApproach.min_points: 3`, `odom_rebase_dist_m: 6.0`, `kf_match_max_divergence_xy_m: 0.10`, twist_mux nav-lane `timeout: 0.6`), P1–P3 only in part. Current reference: [docs/claude/doc-index.md](docs/claude/doc-index.md).
+
 _Triggered by field reports: the robot sometimes HITS physical obstacles while mowing._
 _Three parallel deep reviews: (1) FTC + obstacle-avoidance chain, (2) fusion_graph localizer, (3) end-to-end sensor→actuator safety chain. All findings verified against code on `dev` (76a6862c)._
 
