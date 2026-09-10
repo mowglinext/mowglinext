@@ -189,7 +189,7 @@ ships; the full installer writes many more (`GNSS_*`, `LIDAR_TYPE`,
 | `MOWGLI_ROS2_IMAGE` | `ghcr.io/mowglinext/mowglinext/mowgli-ros2:main` | Full ROS2 stack |
 | `GPS_IMAGE` | `ghcr.io/mowglinext/mowglinext/gps:main` | Universal GNSS sidecar + NTRIP client |
 | `LIDAR_IMAGE` | `ghcr.io/mowglinext/mowglinext/lidar-ldlidar:main` | LD19 LiDAR driver |
-| `MAVROS_IMAGE` | `ghcr.io/mowglinext/mowglinext/mavros:main` | MAVROS bridge |
+| `MAVROS_IMAGE` | `ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:kilted@sha256:04e4eb17b0f5ce38f882f68346b1694774fa87e1945b38b57c94f90da34dd560` | MAVROS bridge |
 | `GUI_IMAGE` | `ghcr.io/mowglinext/mowglinext/mowglinext-gui:main` | Web GUI |
 
 For Universal GNSS, set `GNSS_SERIAL_DEVICE=/dev/serial/by-id/...` — note that
