@@ -15,6 +15,9 @@ services:
     privileged: true
     volumes:
       - /dev:/dev
+      # The external sidecar owns optional NTRIP and reads its existing
+      # ntrip_* settings from this runtime robot configuration.
+      - ./docker/config/mowgli:/ros2_ws/config:ro
       - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
     environment:
       <<: *ros2-env
@@ -27,23 +30,3 @@ services:
       MAVROS_TGT_COMPONENT: ${MAVROS_TGT_COMPONENT:-1}
       MAVROS_AUTOPILOT: ${MAVROS_AUTOPILOT:-ardupilot}
     restart: unless-stopped
-
-  ntrip:
-    container_name: mowgli-ntrip
-    image: ${MOWGLI_ROS2_IMAGE}
-    network_mode: host
-    ipc: host
-    privileged: true
-    environment:
-      <<: *ros2-env
-    command: >
-      ros2 launch mowgli_ntrip_client mowgli_ntrip_client.launch.py
-    volumes:
-      - ./docker/config/mowgli:/ros2_ws/config:ro
-      - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-file: "3"
-        max-size: 5m

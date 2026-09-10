@@ -63,7 +63,7 @@ assert_eq "restart services for universal gps+nmea" "gps mowgli" "$restart_nmea"
 HARDWARE_BACKEND="mavros"
 GNSS_BACKEND="disabled"
 restart_mavros="$(compose_restart_services_for_backend mavros | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
-assert_eq "restart services for mavros" "mavros ntrip mowgli" "$restart_mavros"
+assert_eq "restart services for mavros" "mavros mowgli" "$restart_mavros"
 
 section "--check aligns with runtime backend selection"
 

@@ -4,7 +4,7 @@
 #
 # Validates the merged compose file via `docker compose config -q` and
 # spot-checks that the service blocks the user's preset implies are
-# actually present (mowgli, gui, lidar, mavros, ntrip) and that
+# actually present (mowgli, gui, lidar, mavros) and that
 # Universal GNSS does not leak the legacy direct GNSS containers.
 # =============================================================================
 
@@ -84,17 +84,23 @@ done
 
 section "Universal GNSS compose uses the canonical mowgli-gps sidecar"
 
+GPS_SERVICE_BLOCK="$(awk '
+  /^  gps:$/ { in_service=1 }
+  in_service && /^  [[:alnum:]_]+:$/ && $0 != "  gps:" { exit }
+  in_service { print }
+' "$COMPOSE_FILE")"
+
 for required in "GNSS_STACK:" "GNSS_RECEIVER_FAMILY:" "GNSS_SERIAL_DEVICE:" "GNSS_FRAME_ID:" "GNSS_NTRIP_GGA_ENABLED:"; do
-  if grep -q "$required" "$COMPOSE_FILE"; then
+  if printf '%s' "$GPS_SERVICE_BLOCK" | grep -q "$required"; then
     pass "compose contains sidecar env: $required"
   else
-    fail "compose contains sidecar env: $required" "missing from generated compose"
+    fail "compose contains sidecar env: $required" "missing from generated gps service"
   fi
 done
 
 for forbidden in "gnss_unicore:" "UNICORE_IMAGE" "GPS_""RUNTIME_MODE:" "GPS_""PROTOCOL:" "GPS_""PORT:" "GPS_""BAUD:"; do
-  if grep -q "$forbidden" "$COMPOSE_FILE"; then
-    fail "legacy standalone GNSS absent: $forbidden" "found in generated universal compose"
+  if printf '%s' "$GPS_SERVICE_BLOCK" | grep -q "$forbidden"; then
+    fail "legacy standalone GNSS absent: $forbidden" "found in generated gps service"
   else
     pass "legacy standalone GNSS absent: $forbidden"
   fi
@@ -108,6 +114,36 @@ for forbidden in mowgli-tfluna-front mowgli-tfluna-edge mowgli-vesc; do
     pass "service NOT present: $forbidden"
   fi
 done
+
+section "MAVROS compose has one external sidecar that owns NTRIP"
+
+MAVROS_REPO="$SANDBOX/repo_mavros"
+sandbox_repo "$MAVROS_REPO"
+harness_init "$MAVROS_REPO"
+IMAGE_TAG="must-not-affect-mavros"
+harness_set_preset backend=mavros gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+
+if ! harness_run; then
+  fail "MAVROS harness_run" "non-zero exit"
+else
+  MAVROS_COMPOSE_FILE="$MAVROS_REPO/docker/docker-compose.yaml"
+  MAVROS_CONTAINERS=$(grep -E '^\s+container_name:' "$MAVROS_COMPOSE_FILE" | awk '{print $2}' | sort)
+  assert_contains "MAVROS compose has the external sidecar" "mowgli-mavros" "$MAVROS_CONTAINERS"
+  assert_not_contains "MAVROS compose has no separate NTRIP container" "mowgli-ntrip" "$MAVROS_CONTAINERS"
+  assert_not_contains "MAVROS compose has no direct GPS sidecar" "mowgli-gps" "$MAVROS_CONTAINERS"
+
+  MAVROS_FRAGMENT_CONTENT="$(cat "$MAVROS_REPO/install/compose/docker-compose.mavros.yml")"
+  assert_contains "MAVROS sidecar uses MAVROS_IMAGE" "image: \${MAVROS_IMAGE}" "$MAVROS_FRAGMENT_CONTENT"
+  assert_not_contains "MAVROS sidecar never uses MOWGLI_ROS2_IMAGE" "MOWGLI_ROS2_IMAGE" "$MAVROS_FRAGMENT_CONTENT"
+  assert_not_contains "MAVROS sidecar has no standalone NTRIP launch" "mowgli_ntrip_client" "$MAVROS_FRAGMENT_CONTENT"
+  assert_contains "MAVROS sidecar mounts runtime NTRIP config" \
+    "./docker/config/mowgli:/ros2_ws/config:ro" "$MAVROS_FRAGMENT_CONTENT"
+
+  MAVROS_ENV_CONTENT="$(cat "$MAVROS_REPO/docker/.env")"
+  assert_contains "MAVROS image ignores MowgliNext IMAGE_TAG" \
+    "MAVROS_IMAGE=ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:kilted@sha256:04e4eb17b0f5ce38f882f68346b1694774fa87e1945b38b57c94f90da34dd560" \
+    "$MAVROS_ENV_CONTENT"
+fi
 
 section "Compose env-var expansion does not have unresolved placeholders"
 

@@ -75,7 +75,7 @@
 | `compose/docker-compose.lidar-ldlidar.yml` | 37 | `lidar` (mowgli-lidar), no command override — image CMD |
 | `compose/docker-compose.lidar-rplidar.yml` | 38 | `lidar` with `rplidar_a2m8_launch.py` + `LIDAR_PORT`/`LIDAR_BAUD` |
 | `compose/docker-compose.lidar-stl27l.yml` | 38 | `lidar` with `ldlidar_stl_ros2_node` + `LIDAR_MODEL`/`LIDAR_PORT`/`LIDAR_BAUD` |
-| `compose/docker-compose.mavros.yml` | 49 | `mavros` (mowgli-mavros) + `ntrip` (mowgli-ntrip) |
+| `compose/docker-compose.mavros.yml` | 31 | `mavros` (mowgli-mavros); the external sidecar owns optional NTRIP |
 | `compose/docker-compose.vesc.yml` | 20 | `vesc` — gated off (`vesc_service_available` always returns 1) |
 | `compose/docker-compose.tfluna-front.yml` / `-edge.yml` | 8 / 8 | TF-Luna — gated off (image placeholder `ghcr.io/...`) |
 | `compose/docker-compose.foxglove.yml` | 5 | **Unused** — no code selects it; overrides `mowgli.command` with a non-existent `enable_coverage:=` arg |
@@ -150,7 +150,7 @@
 
 | `.env` key | Selects (file:line) | Container | Reaches the process as | Ends up as |
 |---|---|---|---|---|
-| `HARDWARE_BACKEND` = `mavros` | `compose.sh` L127 → `docker-compose.mavros.yml` | `mowgli-mavros` + `mowgli-ntrip` | container env | forces `GNSS_BACKEND=disabled`, `GNSS_STACK=disabled` (`env.sh` L303–305) |
+| `HARDWARE_BACKEND` = `mavros` | `compose.sh` L127 → `docker-compose.mavros.yml` | `mowgli-mavros` (including optional NTRIP) | container env | forces `GNSS_BACKEND=disabled`, `GNSS_STACK=disabled` (`env.sh` L303–305) |
 | `GNSS_STACK` (`universal`\|`disabled`), `GNSS_BACKEND` | `compose.sh` L72–95 (`compose_gnss_service_name` → service `gps`) | `mowgli-gps` | `GNSS_STACK` env; `start_gps.sh` L389 rejects `disabled` | which sidecar (if any) runs |
 | `GNSS_RECEIVER_FAMILY` / `GNSS_TRANSPORT` / `GNSS_SERIAL_DEVICE` / `GNSS_SERIAL_BAUD` / `GNSS_FRAME_ID` | `docker-compose.gps.yml` L45–49 (no defaults) | `mowgli-gps` | `start_gps.sh` `resolve_*` L66–123, L269 | `receiver_node --ros-args -p receiver_family/transport/serial_device/serial_baud/frame_id` (L515–527) |
 | `GNSS_NTRIP_*` (`ENABLED/HOST/PORT/MOUNTPOINT/USERNAME/PASSWORD/GGA_ENABLED/GGA_INTERVAL_S`) | same | `mowgli-gps` | `resolve_ntrip_*` L125–267 | `ntrip_node -p caster_host/caster_port/mountpoint/username/password/gga_enabled/gga_interval_s` (L553–566) |
@@ -170,7 +170,7 @@
 
 ### Compose services (container names, from `install/lib/checks.sh` L3–19)
 
-`mowgli`→`mowgli-ros2`, `gps`→`mowgli-gps`, `lidar`→`mowgli-lidar`, `gui`→`mowgli-gui`, `mosquitto`→`mowgli-mqtt`, `mavros`→`mowgli-mavros`, `ntrip`→`mowgli-ntrip`, `vesc`→`mowgli-vesc`, `tfluna_front`/`tfluna_edge`→`mowgli-tfluna-front`/`-edge`. Always composed: base + gui + mqtt + watchtower (`compose.sh` L58–60, L97). Named volume `mowgli_maps` → `/ros2_ws/maps` (base L47, L61) and also mounted into `gui` (gui L33).
+`mowgli`→`mowgli-ros2`, `gps`→`mowgli-gps`, `lidar`→`mowgli-lidar`, `gui`→`mowgli-gui`, `mosquitto`→`mowgli-mqtt`, `mavros`→`mowgli-mavros`, `vesc`→`mowgli-vesc`, `tfluna_front`/`tfluna_edge`→`mowgli-tfluna-front`/`-edge`. NTRIP is an optional process inside `mowgli-mavros`, not a separate service. Always composed: base + gui + mqtt + watchtower (`compose.sh` L58–60, L97). Named volume `mowgli_maps` → `/ros2_ws/maps` (base L47, L61) and also mounted into `gui` (gui L33).
 
 ### Bind mounts (host → container)
 
@@ -246,7 +246,7 @@ CI: sensor images build via `.github/workflows/sensors-{gps,lidar-ldlidar,lidar-
 ## Pitfalls
 
 - `install/compose/docker-compose.foxglove.yml` is dead and would break the stack if wired in: it passes `enable_coverage:=true`, an argument no launch file in `ros2/src` declares.
-- `docker-compose.mavros.yml` L39–40 launches `mowgli_ntrip_client mowgli_ntrip_client.launch.py`, but **no `mowgli_ntrip_client` package exists in `ros2/src`** — the `mowgli-ntrip` container cannot start as written.
+- The MAVROS fragment deliberately has no standalone `mowgli-ntrip` service: `mowgli_ntrip_client` is supplied and conditionally launched by the pinned external sidecar.
 - The gps image **must** be built with the monorepo root as context (`sensors/gps/Dockerfile` L5–8); `docker build sensors/gps/` fails because it copies from `ros2/src/`.
 - `install/config/mowgli/{hardware_bridge,twist_mux,foxglove_bridge}.yaml` are never read: `mowgli.launch.py` L185–187, L271 load them from the package share dir. Only `mowgli_robot.yaml` is read from `/ros2_ws/config` (`robot_config_util.py` L31).
 - `LIDAR_ENABLED` in `.env` only decides whether the **container** is composed. Flipping it does NOT change the ROS stack's LiDAR mode — that is `mowgli_robot.yaml:lidar_enabled` (`docker-compose.base.yml` L13–17; guarded by `ros2/src/mowgli_bringup/test/test_robot_config_util.py` L436–453).

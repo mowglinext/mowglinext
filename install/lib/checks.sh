@@ -10,7 +10,6 @@ container_name_for_service() {
     gui)          printf 'mowgli-gui\n' ;;
     mosquitto)    printf 'mowgli-mqtt\n' ;;
     mavros)       printf 'mowgli-mavros\n' ;;
-    ntrip)        printf 'mowgli-ntrip\n' ;;
     vesc)         printf 'mowgli-vesc\n' ;;
     tfluna_front) printf 'mowgli-tfluna-front\n' ;;
     tfluna_edge)  printf 'mowgli-tfluna-edge\n' ;;
@@ -39,7 +38,8 @@ expected_runtime_services() {
   gnss_stack="$(effective_gnss_stack 2>/dev/null || true)"
 
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
-    services+=(mavros ntrip)
+    # NTRIP, when enabled, runs inside the external MAVROS sidecar.
+    services+=(mavros)
   else
     if ! is_supported_gnss_backend "$gnss_backend"; then
       return 1
@@ -383,7 +383,7 @@ check_gps() {
       info "RTCM topic has publisher(s)"
     else
       warn "No RTCM publisher detected on /rtcm"
-      add_issue "No RTCM publisher on /rtcm in MAVROS mode. Check mowgli-ntrip logs and NTRIP configuration."
+      add_issue "No RTCM publisher on /rtcm in MAVROS mode. Check mowgli-mavros logs and NTRIP configuration."
     fi
     return
   fi

@@ -458,7 +458,7 @@ Declared **without** a yaml line (code defaults only, tune via `ros2 param set` 
 | `LIDAR_ENABLED`, `LIDAR_TYPE`, `LIDAR_MODEL`, `LIDAR_CONNECTION`, `LIDAR_PORT`, `LIDAR_UART_DEVICE`, `LIDAR_BAUD` | `compose.sh` L102–117 → one `docker-compose.lidar-*.yml` | `mowgli-lidar` | driver args. **`LIDAR_ENABLED` controls the container only** — the ROS stack's LiDAR mode is `mowgli_robot.yaml:lidar_enabled` (`docker-compose.base.yml:13–17`) |
 | `GNSS_STACK`, `GNSS_BACKEND`, `GNSS_RECEIVER_FAMILY`, `GNSS_TRANSPORT`, `GNSS_SERIAL_DEVICE`, `GNSS_SERIAL_BAUD`, `GNSS_FRAME_ID` | `docker-compose.gps.yml:37–49` (deliberately no compose defaults) | `mowgli-gps` | `start_gps.sh` resolvers (YAML first, env second, built-in last) → `receiver_node --ros-args -p …` |
 | `GNSS_NTRIP_{ENABLED,HOST,PORT,MOUNTPOINT,USERNAME,PASSWORD,GGA_ENABLED,GGA_INTERVAL_S}` | `docker-compose.gps.yml:50–57` | `mowgli-gps` | `ntrip_node -p caster_host/…` |
-| `HARDWARE_BACKEND`, `MAVROS_*` | `compose.sh` L127 → `docker-compose.mavros.yml` | `mowgli-mavros`, `mowgli-ntrip` | MAVLink wiring; `mavros` forces `GNSS_BACKEND=disabled` (`env.sh` L303–305) |
+| `HARDWARE_BACKEND`, `MAVROS_*` | `compose.sh` L127 → `docker-compose.mavros.yml` | `mowgli-mavros` (including optional NTRIP) | MAVLink wiring; `mavros` forces `GNSS_BACKEND=disabled` (`env.sh` L303–305) |
 | `TFLUNA_{FRONT,EDGE}_*` | `docker-compose.tfluna-*.yml` | range sidecars | driver args |
 | `COMPOSE_PROJECT_NAME` | named-volume prefix (`install_mowgli_maps`) | all | **keep stable** — renaming orphans persisted maps |
 | `MOWER_IP`, `DISABLE_BLUETOOTH`, `GPS_PROTOCOL` | host/ser2net helpers | — | `GPS_PROTOCOL` and `GNSS_BACKEND`/`HARDWARE_BACKEND` are passed into `mowgli-ros2` but **nothing there reads them** |

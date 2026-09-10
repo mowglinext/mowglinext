@@ -334,7 +334,9 @@ compose_restart_services_for_backend() {
   fi
 
   if [[ "$backend" == "mavros" ]]; then
-    services+=(mavros ntrip mowgli)
+    # The external MAVROS sidecar launches its optional NTRIP client from the
+    # same pinned image, so restarting mavros also restarts NTRIP when enabled.
+    services+=(mavros mowgli)
   else
     local gnss_backend
     local gnss_stack
