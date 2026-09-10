@@ -151,15 +151,35 @@ map_server_node:
     mow_angle_deg: 90.0
 
     # Inner-boundary margin. Cells INSIDE a mowing area but within this
-    # distance of the nearest edge are marked LETHAL in the keepout mask.
-    # Intended to push Nav2 transit paths away from the polygon edge, but
-    # in practice it creates dead zones the planner can't escape when
-    # pose drift puts the robot near the edge — especially near the
-    # dock, which is often <0.5 m from the polygon boundary.
-    # Set to 0 to disable. Boundary enforcement remains via the outside
-    # keepout (cells outside any polygon → lethal) and the BT
+    # distance of the nearest edge are marked LETHAL in the keepout mask,
+    # pushing Nav2 TRANSIT paths (point-to-point moves between locations,
+    # planned against this GLOBAL costmap) that far away from the recorded
+    # edge. Coverage/mowing itself is untouched: FTC tracks the F2C path
+    # against the LOCAL costmap, which never carries this mask, so the
+    # actual mowed area still reaches the boundary as configured elsewhere
+    # (chassis_safety_inset etc).
+    #
+    # 2026-04-23 (commit 7f4b43d5): a first attempt at 0.15 m was reverted
+    # because dock poses commonly sit <0.5 m from the polygon edge — a few
+    # cm of GNSS drift could land the robot's OWN position in a lethal cell
+    # the planner could not route out of. dock_inner_margin_exempt_radius_m
+    # below (added together with re-enabling this) exempts every cell near
+    # the dock from this shrink, in every direction, specifically to close
+    # that hole — see map_server_node.hpp for the full reasoning.
+    #
+    # Set to 0 to disable outright. Boundary enforcement then remains via
+    # the outside keepout (cells outside any polygon → lethal) and the BT
     # BoundaryGuard tripwire.
-    boundary_inner_margin_m: 0.0
+    boundary_inner_margin_m: 0.20
+
+    # Radius (m) around the dock pose exempted from boundary_inner_margin_m
+    # above, regardless of direction. 2.5 m comfortably covers the dock body
+    # (0.80 m) plus the approach corridor (1.5 m) plus GNSS-settling drift
+    # right after undock. Only takes effect once a dock pose is set (all-zero
+    # dock_pose_* = "no dock" = no exemption). 0 disables the exemption
+    # (restores the pre-2026-09 behaviour, i.e. re-opens the dead-zone risk
+    # above if boundary_inner_margin_m is also non-zero).
+    dock_inner_margin_exempt_radius_m: 2.5
 
     # Pre-defined mowing / navigation areas (OpenMower-style).
     # Parallel arrays indexed by position. Polygon format: "x1,y1;x2,y2;..."

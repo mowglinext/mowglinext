@@ -245,6 +245,16 @@ def generate_launch_description() -> LaunchDescription:
                 "datum_lat": datum_lat,
                 "datum_lon": datum_lon,
             },
+            # Sim overrides the real-robot default (0.20, map_server.yaml) back
+            # to off. The margin exists to absorb GNSS drift near a REAL dock
+            # close to a REAL recorded boundary (see map_server_node.hpp); sim
+            # has neither (no dock_pose_* injected above, near-perfect sim
+            # odom/GPS) and the compact 9x6 m test polygon leaves little room
+            # to spare — an inward shrink here risks "goal occupied" on the
+            # transit into a headland ring that E2E has never had to plan
+            # around. Real-robot behaviour is exercised by
+            # BoundaryInnerMarginTest (mowgli_map), not the sim.
+            {"boundary_inner_margin_m": 0.0},
         ],
     )
 

@@ -558,6 +558,107 @@ TEST_F(AreaTypeTest, KeepoutMaskEmptyWhenNoAreas)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Transit boundary clearance (boundary_inner_margin_m) + the dock exemption
+// that makes it safe to default on (dock_inner_margin_exempt_radius_m). A
+// plain inward shrink was tried and reverted once already (2026-04-23,
+// commit 7f4b43d5) because GNSS drift near a dock that sits close to the
+// recorded edge landed the robot's own position in a lethal cell the planner
+// could not route out of. These tests pin that the exemption actually
+// neutralises that exact shape of failure, not just "some value near the
+// dock happens to be free".
+// ─────────────────────────────────────────────────────────────────────────────
+
+class BoundaryInnerMarginTest : public AreaTypeTest
+{
+protected:
+  // 20x20 m map; dock 0.1 m inside the +X edge of a 16x16 m area (edge at
+  // x=8) — exactly the "dock close to the recorded edge" shape the reverted
+  // commit describes.
+  void SetUp() override
+  {
+    node_ = make_node(0.20, 2.5);
+  }
+
+  static std::shared_ptr<mowgli_map::MapServerNode> make_node(double boundary_inner_margin_m,
+                                                               double dock_exempt_radius_m)
+  {
+    rclcpp::NodeOptions opts;
+    opts.append_parameter_override("resolution", 0.1);
+    opts.append_parameter_override("map_size_x", 20.0);
+    opts.append_parameter_override("map_size_y", 20.0);
+    opts.append_parameter_override("map_frame", "map");
+    opts.append_parameter_override("tool_width", 0.2);
+    opts.append_parameter_override("map_file_path", "");
+    opts.append_parameter_override("areas_file_path", "");
+    opts.append_parameter_override("publish_rate", 1.0);
+    opts.append_parameter_override("boundary_inner_margin_m", boundary_inner_margin_m);
+    opts.append_parameter_override("dock_inner_margin_exempt_radius_m", dock_exempt_radius_m);
+    opts.append_parameter_override("dock_pose_x", 7.5);
+    opts.append_parameter_override("dock_pose_y", 0.0);
+    opts.append_parameter_override("dock_pose_yaw", 0.0);
+    return std::make_shared<mowgli_map::MapServerNode>(opts);
+  }
+};
+
+TEST_F(BoundaryInnerMarginTest, InteriorFarFromEveryEdgeStaysFree)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, 0.0, 0.0), 0) << "far from every edge and far from the dock, must be free";
+}
+
+TEST_F(BoundaryInnerMarginTest, EdgeFarFromTheDockBecomesLethal)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  // 0.1 m inside the -X edge (x=-8), 15.6 m from the dock at (7.5, 0) — well
+  // outside the 2.5 m exemption radius, so the plain shrink applies.
+  EXPECT_EQ(mask_at(mask, -7.9, 0.0), 100)
+      << "within boundary_inner_margin_m of an edge, far from the dock, must be lethal";
+}
+
+TEST_F(BoundaryInnerMarginTest, EdgeNearTheDockStaysFreeDespiteTheMargin)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  // 0.1 m inside the +X edge (x=8) — same distance-to-edge as the lethal
+  // case above — but only 0.4 m from the dock at (7.5, 0): inside the 2.5 m
+  // exemption radius, so it must stay free. This is exactly the shape of
+  // the reverted 2026-04-23 regression: a dock pose close to the edge.
+  EXPECT_EQ(mask_at(mask, 7.9, 0.0), 0)
+      << "within the dock exemption radius, the inner-margin shrink must not apply";
+}
+
+TEST_F(BoundaryInnerMarginTest, ZeroExemptRadiusRestoresThePreviousLethalBehaviour)
+{
+  // Same geometry as the previous test, but with the exemption explicitly
+  // disabled — proves the exemption, not something else, is what frees the
+  // cell there.
+  node_ = make_node(/*boundary_inner_margin_m=*/0.20, /*dock_exempt_radius_m=*/0.0);
+
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, 7.9, 0.0), 100)
+      << "with the exemption radius at 0, even a near-dock cell must be lethal";
+}
+
+TEST_F(BoundaryInnerMarginTest, ZeroBoundaryMarginDisablesTheShrinkEntirely)
+{
+  // The pre-2026-09 default: no shrink at all, anywhere, dock or not.
+  node_ = make_node(/*boundary_inner_margin_m=*/0.0, /*dock_exempt_radius_m=*/2.5);
+
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, -7.9, 0.0), 0)
+      << "boundary_inner_margin_m=0 must restore the legacy edge-tight behaviour";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Drawn-obstacle margin (mowgli_robot.yaml.obstacle_margin) — the keepout
 // twin of coverage_server's F2C hole buffering. A drawn obstacle (a tree)
 // must project a LETHAL band obstacle_margin wide around its polygon so

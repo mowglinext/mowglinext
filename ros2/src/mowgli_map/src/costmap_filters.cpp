@@ -227,14 +227,32 @@ void MapServerNode::publish_keepout_mask()
         }
       }
 
+      // Cells within dock_inner_margin_exempt_radius_m_ of the dock pose are
+      // exempt from the shrink below, in EVERY direction. Unlike
+      // dock_corridor_polygon_ (a fixed rectangle carved out further down in
+      // this function), this isotropic exemption doesn't depend on getting
+      // the corridor's orientation/size right — it directly covers wherever
+      // GNSS drift actually puts the robot's own position near the dock,
+      // which is the exact failure mode boundary_inner_margin_m_ was
+      // reverted for once already (see map_server_node.hpp).
+      bool near_dock = false;
+      if (has_dock_exclusion_ && dock_inner_margin_exempt_radius_m_ > 0.0)
+      {
+        const double ddx = static_cast<double>(pt.x) - docking_pose_.position.x;
+        const double ddy = static_cast<double>(pt.y) - docking_pose_.position.y;
+        near_dock = (ddx * ddx + ddy * ddy) <=
+                    dock_inner_margin_exempt_radius_m_ * dock_inner_margin_exempt_radius_m_;
+      }
+
       // Shrunk-polygon rule: cells inside a mowing area but within
       // boundary_inner_margin_m_ of the nearest edge become LETHAL in the
-      // keepout mask. Effect: the Smac planner never drafts a path that
-      // comes within that margin of the polygon edge, giving the FTC
-      // controller room to track without spilling over. Combined with
-      // inflation_layer, the total soft-wall is ~ margin + inflation_radius.
+      // keepout mask. Effect: the Smac planner never drafts a TRANSIT path
+      // that comes within that margin of the polygon edge (coverage/mowing
+      // itself tracks the LOCAL costmap instead and never sees this mask).
+      // Combined with inflation_layer, the total soft-wall is ~margin +
+      // inflation_radius.
       bool inner_buffer = inside_any && boundary_inner_margin_m_ > 0.0 &&
-                          inside_min_edge_dist < boundary_inner_margin_m_;
+                          inside_min_edge_dist < boundary_inner_margin_m_ && !near_dock;
 
       if (inside_any)
       {

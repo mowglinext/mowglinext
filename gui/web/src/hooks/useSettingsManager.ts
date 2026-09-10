@@ -208,6 +208,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         keys: [
             "xy_goal_tolerance", "yaw_goal_tolerance", "coverage_xy_tolerance",
             "progress_timeout_sec",
+            "boundary_inner_margin_m", "dock_inner_margin_exempt_radius_m",
         ],
     },
     {

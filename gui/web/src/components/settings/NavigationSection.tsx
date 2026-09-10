@@ -97,6 +97,36 @@ export const NavigationSection: React.FC<Props> = ({
                     </Row>
                 </Form>
             </Card>
+
+            <Card size="small" title={t("settingsNavigation.boundaryClearance")} style={{ marginBottom: 16 }}>
+                <Paragraph type="secondary" style={{ margin: "0 0 12px", fontSize: 12 }}>
+                    {t("settingsNavigation.boundaryClearanceDescription")}
+                </Paragraph>
+                <Form layout="vertical" size="small">
+                    <Row gutter={[16, 0]}>
+                        <Col xs={12} sm={8}>
+                            <Form.Item label={fieldLabel("boundary_inner_margin_m", t("settingsNavigation.boundaryInnerMargin"))} tooltip={t("settingsNavigation.boundaryInnerMarginTooltip")}>
+                                <InputNumber
+                                    value={values.boundary_inner_margin_m}
+                                    onChange={(v) => onChange("boundary_inner_margin_m", v)}
+                                    min={0} max={1.0} step={0.05} precision={2}
+                                    style={{ width: "100%" }} addonAfter="m"
+                                />
+                            </Form.Item>
+                        </Col>
+                        <Col xs={12} sm={8}>
+                            <Form.Item label={fieldLabel("dock_inner_margin_exempt_radius_m", t("settingsNavigation.dockExemptRadius"))} tooltip={t("settingsNavigation.dockExemptRadiusTooltip")}>
+                                <InputNumber
+                                    value={values.dock_inner_margin_exempt_radius_m}
+                                    onChange={(v) => onChange("dock_inner_margin_exempt_radius_m", v)}
+                                    min={0} max={10.0} step={0.5} precision={2}
+                                    style={{ width: "100%" }} addonAfter="m"
+                                />
+                            </Form.Item>
+                        </Col>
+                    </Row>
+                </Form>
+            </Card>
         </div>
     );
 };

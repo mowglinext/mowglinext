@@ -154,7 +154,7 @@ All injection is READ ONCE at launch (container restart required); exceptions: `
 | `chassis_length/width/center_x` | Nav2 `footprint` (+0.05 m margin) | `navigation.launch.py` L304–317, L973–974 |
 | `dock_pose_x/y/yaw`, `imu_yaw`, `wheel_track`, `ticks_per_meter`, `wheel_pid_kp/ki/kd/integral_limit/pwm_per_mps`, `imu_cal_*`, `lift_recovery_mode`, `lift_blade_resume_delay_sec`, `mowing_enabled`, `yaw_kp/ki`, `yaw_trim_limit_mps`, `yaw_loop_enabled`, `yaw_gyro_sign` | hardware_bridge params | `mowgli.launch.py` L200–253 |
 | `tick_rate`, `bt_debug_logging`, `undock_speed/distance`, `idle_nav2_suspend`, `transit_speed`, `mowing_speed`, `mow_angle_deg`, `area_simplification_tolerance`, `area_record_rate_hz`, `loc_gnss_*`, `loc_sigma_*`, `start_blocked_escape_*`, `battery_*` | behavior_tree_node params | `full_system.launch.py` L226–352 |
-| `dock_pose_*`, `dock_body_length_m/width_m`, `chassis_width`, `max_obstacle_avoidance_distance`, `obstacle_margin` (clamp 0–1), `lethal_outside_areas`, `enforce_boundary_margin_m`, `tool_width`, `datum_lat/lon` | map_server_node params | `full_system.launch.py` L380–434 |
+| `dock_pose_*`, `dock_body_length_m/width_m`, `chassis_width`, `max_obstacle_avoidance_distance`, `obstacle_margin` (clamp 0–1), `lethal_outside_areas`, `enforce_boundary_margin_m`, `boundary_inner_margin_m`, `dock_inner_margin_exempt_radius_m`, `tool_width`, `datum_lat/lon` | map_server_node params | `full_system.launch.py` L380–434 |
 | `datum_lat/lon` | navsat_to_absolute_pose + cog_to_imu | `full_system.launch.py` L460–463; `navigation.launch.py` L1121–1122 |
 | `undock_*`, `dock_calib_*` (9 keys) | calibrate_imu_yaw_node | `full_system.launch.py` L492–513 |
 | `led_*` (12 keys) | led_ring_node | `full_system.launch.py` L679–704 |

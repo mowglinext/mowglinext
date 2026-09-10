@@ -19,6 +19,7 @@
 | Dock pose set gates (charging / RTK σ / yaw convergence / GPS averaging / yaw_source) | `area_manager.cpp` `on_set_docking_point` (L640-956); write-back via `mowgli_interfaces/robot_yaml_scalar.hpp` `UpdateDockPose` (L122) |
 | Dock body / corridor polygons (lethal body, carved corridor) | `map_server_node.cpp` `rebuild_dock_polygons` (L495); classification in `area_manager.cpp` `apply_area_classifications` (L1758-1797); mask carve `src/costmap_filters.cpp` L334-364 |
 | Keepout mask rasterisation, outside-slack band, obstacle margin, Invariant-14 index mapping | `ros2/src/mowgli_map/src/costmap_filters.cpp` `publish_keepout_mask` (L46-385); `kOutsideSlackMaskCost` (L44) |
+| Transit boundary clearance / dock exemption (`boundary_inner_margin_m`, `dock_inner_margin_exempt_radius_m`) | `costmap_filters.cpp` `near_dock` + `inner_buffer` (in `publish_keepout_mask`, right after the outer polygon loop) |
 | `lethal_outside_areas` vs legacy `keepout_nav_margin` policy | `costmap_filters.cpp` L97-98; defaults `config/map_server.yaml` L76-112 |
 | Promote a tracker observation / free-form polygon to a permanent keepout | `area_manager.cpp` `on_promote_obstacle` (L1014); `src/progress_tracker.cpp` `apply_promoted_obstacle` (L272) |
 | Wheel-slip dig → PENDING keepout; accept / discard proposals | `area_manager.cpp` `on_dig_event` (L1120), `accept_pending_obstacle` (L1207), `discard_pending_obstacle` (L1237), `on_discard_obstacle` (L1281) |
@@ -65,7 +66,7 @@
 | `map_server_small_garden.yaml` | 17 | Alt config: 9×7 m single area (not referenced by any launch file) |
 | `map_server_obstacle_test.yaml` | 18 | Alt config: 6×6 m area with two obstacles, `areas_file_path: ""` (not referenced by any launch file) |
 | **`test/`** | | |
-| `test_map_server.cpp` | ~1.2k | Layers/geometry, area types, promote idempotence, dig proposals, keepout mask policy, obstacle margin, datum migration, areas.dat identity round-trip |
+| `test_map_server.cpp` | ~1.3k | Layers/geometry, area types, promote idempotence, dig proposals, keepout mask policy, transit boundary clearance + dock exemption, obstacle margin, datum migration, areas.dat identity round-trip |
 | `test_mow_progress.cpp` | 107 | Inhibit gate, sweep step count, full sweep stamping, reset semantics, cache invalidation |
 | `test_boundary_classifier.cpp` | 140 | Pure `ClassifyBoundary` cases (no rclcpp) |
 | `test_obstacle_tracker.cpp` | 433 | Hull/DBSCAN/merge/point-in-polygon algorithms + keepout suppression (one shared node per suite) |
@@ -120,7 +121,7 @@ No actions. All `map_server_node` services are declared in `map_server_node.cpp`
 | client → `/map_server_node/get_mowing_area` | | `obstacle_tracker_node.cpp` L193, index 0 only, retried every 5 s |
 
 ### Parameters
-Defaults: `ros2/src/mowgli_map/config/map_server.yaml` (`map_params`, `full_system.launch.py` L173) overlaid by launch-injected values from `mowgli_robot.yaml` (`full_system.launch.py` L366-436: `dock_pose_x/y/yaw`, `dock_body_length_m/width_m`, `chassis_width`, `max_obstacle_avoidance_distance`, `obstacle_margin`, `lethal_outside_areas`, `enforce_boundary_margin_m`, `tool_width`, `datum_lat/lon`). All declared in `map_server_node.cpp` unless noted; read once at construction except the "dynamic" rows.
+Defaults: `ros2/src/mowgli_map/config/map_server.yaml` (`map_params`, `full_system.launch.py` L173) overlaid by launch-injected values from `mowgli_robot.yaml` (`full_system.launch.py` L366-436: `dock_pose_x/y/yaw`, `dock_body_length_m/width_m`, `chassis_width`, `max_obstacle_avoidance_distance`, `obstacle_margin`, `lethal_outside_areas`, `enforce_boundary_margin_m`, `boundary_inner_margin_m`, `dock_inner_margin_exempt_radius_m`, `tool_width`, `datum_lat/lon`). All declared in `map_server_node.cpp` unless noted; read once at construction except the "dynamic" rows.
 
 | Parameter | Default | Declared at | Notes |
 |-----------|---------|-------------|-------|
@@ -135,7 +136,8 @@ Defaults: `ros2/src/mowgli_map/config/map_server.yaml` (`map_params`, `full_syst
 | `keepout_nav_margin` | 0.45 | L93 | only honoured when `lethal_outside_areas=false` |
 | `lethal_outside_areas`, `enforce_boundary_margin_m` | true, 0.40 | L101-102 | outside slack band = mask 50, not 0 |
 | `lethal_boundary_margin_m`, `soft_boundary_margin_m`, `boundary_debounce_samples` | 0.5, 0.30, 3 | L109-134 | yaml has no override; code defaults rule |
-| `boundary_recovery_offset_m`, `boundary_inner_margin_m` | 0.8, 0.0 | L135-136 | |
+| `boundary_recovery_offset_m`, `boundary_inner_margin_m` | 0.8, 0.20 | L135-136 | shrinks the free zone in the GLOBAL costmap only (transit planning); coverage/mowing tracks the LOCAL costmap and is unaffected. Injected from the template since 2026-09 (`full_system.launch.py`); was 0.0/disabled before — see `dock_inner_margin_exempt_radius_m` below for why re-enabling it is safe now |
+| `dock_inner_margin_exempt_radius_m` | 2.5 | `map_server_node.cpp` (declared alongside `boundary_inner_margin_m_`) | radius (m) around `docking_pose_`, in every direction, exempt from the `boundary_inner_margin_m` shrink — unlike `dock_corridor_polygon_` (a fixed rectangle), this doesn't depend on the corridor's orientation. Only active once a dock pose is set. Added together with re-enabling `boundary_inner_margin_m` because a plain shrink was reverted once already (2026-04-23, commit 7f4b43d5) — GNSS drift near a dock close to the recorded edge landed the robot in a lethal cell the planner couldn't route out of |
 | `obstacle_margin` | 0.15 clamped [0,1] | L153 | lethal band around drawn obstacles; template `mowgli_robot.yaml` L665 = 0.2 |
 | `dock_body_length_m/width_m`, `dock_approach_corridor_length_m/half_width_m` | 0.80/0.55, 1.5/0.40 | L159-170 | |
 | `auto_promote_persistent_obstacles` | false | L180-181 | true = tracker PERSISTENT auto-stamped once per id |
@@ -165,7 +167,7 @@ CI: `.github/workflows/ros2-ci.yml` job `build-and-test` runs `colcon build` + `
 
 | Test target | File | Pins |
 |-------------|------|------|
-| `test_map_server` | `test/test_map_server.cpp` | `MapServerTest`: 2 layers + geometry + defaults + `clear_map`; `AreaTypeTest`: navigation vs mowing areas, save/load round-trip, `PromoteObstacleIsIdempotent`, dig inside/outside/nav-only/repeat, `mowing_area_containing`, keepout mask lethal-outside / nav-allowed / empty, drawn obstacle edge-tight; `ObstacleMarginTest` (`obstacle_margin` 0.3 band); `DatumMigrationTest` (stamp on save, same-datum no-op, re-projection of areas+obstacles+dock, unstamped legacy adopt, 0/0 never migrates — uses `robot_yaml_path` temp file); `DigProposalTest` (dig never reaches areas.dat, pending still lethal, accept persists with `_source: 2`, unknown id fails, discard writes nothing, accepted cannot be discarded, name round-trip, legacy file loads) |
+| `test_map_server` | `test/test_map_server.cpp` | `MapServerTest`: 2 layers + geometry + defaults + `clear_map`; `AreaTypeTest`: navigation vs mowing areas, save/load round-trip, `PromoteObstacleIsIdempotent`, dig inside/outside/nav-only/repeat, `mowing_area_containing`, keepout mask lethal-outside / nav-allowed / empty, drawn obstacle edge-tight; `BoundaryInnerMarginTest` (interior stays free, an edge far from the dock goes lethal within `boundary_inner_margin_m`, the SAME edge distance near the dock stays free within `dock_inner_margin_exempt_radius_m`, radius=0 restores the lethal cell, margin=0 disables the shrink entirely); `ObstacleMarginTest` (`obstacle_margin` 0.3 band); `DatumMigrationTest` (stamp on save, same-datum no-op, re-projection of areas+obstacles+dock, unstamped legacy adopt, 0/0 never migrates — uses `robot_yaml_path` temp file); `DigProposalTest` (dig never reaches areas.dat, pending still lethal, accept persists with `_source: 2`, unknown id fails, discard writes nothing, accepted cannot be discarded, name round-trip, legacy file loads) |
 | `test_mow_progress` | `test/test_mow_progress.cpp` | inhibit-reason truth table, `SweepStepCount`, straight-sweep stamping, no sweep across reset, cache invalidation |
 | `test_boundary_classifier` | `test/test_boundary_classifier.cpp` | soft needs N consecutive samples, lethal immediate, reset on inside, exact-margin is inside, counter saturates |
 | `test_obstacle_tracker` | `test/test_obstacle_tracker.cpp` | `boundary_hull` L/circle/small, `convex_hull`, `inflate_hull`, `merge_overlapping`, DBSCAN, point-in-polygon, `ClusterOnKeepoutCellIsDropped`, `NoKeepoutMaskFailsOpen` |
@@ -209,6 +211,8 @@ All node tests call handlers directly through the `*_for_test` accessors (`map_s
 - `test_obstacle_tracker` deliberately builds ONE node per suite (`test_obstacle_tracker.cpp` L33-50) — per-test node teardown deadlocked in CI. Keep new tests stateless or reset in `SetUp`.
 - Do not add `area_names: []` etc. to `map_server.yaml` — ROS2 cannot type an empty YAML list and lifecycle bring-up throws (`map_server.yaml` L171-176); the sim injects its polygon via launch override. See CLAUDE.md "What NOT to Do".
 - `map_server_small_garden.yaml` / `map_server_obstacle_test.yaml` are not loaded by any launch file; edit `map_server.yaml` for real defaults.
+- `dock_corridor_polygon_` (the existing carve-out, `rebuild_dock_polygons`) only covers a fixed rectangle on the `-X` (staging) side of the dock frame — it does NOT by itself make `boundary_inner_margin_m` safe near a dock; `dock_inner_margin_exempt_radius_m` is a separate, isotropic (any-direction) exemption added specifically because the corridor's fixed shape isn't guaranteed to cover wherever GNSS drift actually puts the robot. The two carve-outs are independent and both apply.
+- `boundary_inner_margin_m` only affects the **global** costmap (point-to-point TRANSIT planning). It does NOT change where mowing/coverage actually cuts — FTC tracks the F2C path against the **local** costmap, which never carries this mask (Invariant 5). Don't "fix" a coverage-path-too-close-to-edge complaint here; that's `chassis_safety_inset` / `strip_boundary_margin_m` territory instead.
 
 ## Generated & vendored — do not hand-edit
 - Nothing generated inside `ros2/src/mowgli_map`. Downstream generated artefacts of its interfaces: `gui/pkg/msgs/mowgli/types_generated.go`, `gui/web/src/types/ros.generated.ts` (regen scripts in `gui/`).

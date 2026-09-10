@@ -858,6 +858,22 @@
           "title": "Progress Timeout",
           "default": 30.0,
           "description": "Seconds without progress before recovery."
+        },
+        "boundary_inner_margin_m": {
+          "type": "number",
+          "title": "Transit Boundary Margin",
+          "default": 0.20,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Distance (m) point-to-point TRANSIT moves stay inside the recorded boundary, planned against the global costmap. Coverage/mowing is unaffected -- it tracks the F2C path against the local costmap instead, and still reaches the true edge as configured elsewhere. 0 disables this and lets transit hug or clip the recorded line. A first attempt at this (2026-04-23) was reverted after it stranded the robot near the dock; Dock Exemption Radius below is what makes it safe to default on."
+        },
+        "dock_inner_margin_exempt_radius_m": {
+          "type": "number",
+          "title": "Dock Exemption Radius",
+          "default": 2.5,
+          "minimum": 0.0,
+          "maximum": 10.0,
+          "description": "Radius (m) around the dock pose, in every direction, exempt from Transit Boundary Margin above. Docks commonly sit close to a recorded edge, and GNSS drift right after undocking can otherwise land the robot in a lethal cell the planner can't route out of. Only takes effect once a dock pose is set; widen it if your dock sees a lot of GNSS drift (e.g. under a canopy)."
         }
       }
     }

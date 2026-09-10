@@ -278,6 +278,8 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `yaw_goal_tolerance` (L686) | 0.1 | `stopped_goal_checker.yaw_goal_tolerance` L879 | Navigation | launch |
 | `coverage_xy_tolerance` (L687) | 0.50 | `coverage_goal_checker.xy_goal_tolerance` L905, **floored at FTC's `max_goal_distance_error` (0.50)** with a printed WARN — a tighter gate never completes an area and re-mows it | Navigation | launch |
 | `progress_timeout_sec` (L703) | 30.0 | `progress_checker.movement_time_allowance` L910 | Navigation | launch |
+| `boundary_inner_margin_m` | 0.20 (0 disables) | `map_server.boundary_inner_margin_m` `full_system.launch.py` — shrinks the drivable zone in the **global** costmap only, so **transit** (point-to-point) planning stays that far inside the recorded edge; coverage/mowing tracks the **local** costmap instead and is unaffected. Re-enabling this required `dock_inner_margin_exempt_radius_m` below — see `mowgli_map` codemap Pitfalls | Navigation | launch |
+| `dock_inner_margin_exempt_radius_m` | 2.5 | `map_server.dock_inner_margin_exempt_radius_m` `full_system.launch.py` — radius (m) around the dock pose, any direction, exempt from the margin above. Only active once a dock pose is set | Navigation | launch |
 
 ### Status LED ring (`mowgli_leds`, `full_system.launch.py:668–707`)
 

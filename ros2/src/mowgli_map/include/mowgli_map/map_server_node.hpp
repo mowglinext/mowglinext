@@ -604,11 +604,28 @@ private:
 
   /// Cells inside a mowing area but within this distance of the polygon edge
   /// are marked LETHAL in the keepout mask, so the Smac planner keeps the
-  /// transit/coverage path that much away from the real boundary. This gives
-  /// the FTC controller room to track without overshooting past the edge.
-  /// Default 0.3 m — pairs with inflation_radius 0.4 m for a total soft-wall
-  /// of ~0.7 m inside the polygon.
+  /// TRANSIT path that much away from the real boundary (coverage/mowing
+  /// itself is unaffected — FTC tracks the F2C path against the LOCAL
+  /// costmap, which never carries this mask). Read declare_parameters(),
+  /// not this initialiser — the actual default lives in the
+  /// declare_parameter<double> call plus the template
+  /// (mowgli_robot.yaml.boundary_inner_margin_m), per the usual gotcha.
+  /// See dock_inner_margin_exempt_radius_m_ just below: a plain shrink here
+  /// was tried and reverted once already (2026-04-23, commit 7f4b43d5)
+  /// because dock poses commonly sit close to the polygon edge and a few cm
+  /// of GNSS drift landed the robot's OWN position in a lethal cell the
+  /// planner could not route out of — the exemption radius is what makes it
+  /// safe to re-enable.
   double boundary_inner_margin_m_{0.3};
+
+  /// Cells within this distance of docking_pose_ are exempt from the
+  /// boundary_inner_margin_m_ shrink above, regardless of direction —
+  /// unlike dock_corridor_polygon_ (which only carves out the corridor
+  /// BEHIND the dock body), this also covers the staging/approach side the
+  /// robot actually occupies right after undocking, where GNSS is often
+  /// still settling. 0 disables the exemption. Only applied while
+  /// has_dock_exclusion_ is true (a dock pose has been set).
+  double dock_inner_margin_exempt_radius_m_{2.5};
 
   /// Extra LETHAL margin grown around drawn obstacle polygons in the keepout
   /// mask (mowgli_robot.yaml.obstacle_margin, GUI: Settings → Obstacles).
