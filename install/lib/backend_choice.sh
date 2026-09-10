@@ -21,6 +21,7 @@ configure_mavros_backend_details() {
 
   if [[ "$allow_existing" == "true" && -n "${MAVROS_BY_ID:-}" && -e "${MAVROS_BY_ID}" ]]; then
     info "Using existing MAVROS device: ${MAVROS_BY_ID}"
+    export MAVROS_PORT="$MAVROS_BY_ID"
     return 0
   fi
 
@@ -189,6 +190,7 @@ detect_mavros_by_id() {
   fi
 
   export MAVROS_BY_ID="${candidates[$((choice - 1))]}"
+  export MAVROS_PORT="$MAVROS_BY_ID"
   info "Selected MAVROS device: ${MAVROS_BY_ID}"
 }
 select_mavros_autopilot() {

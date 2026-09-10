@@ -46,7 +46,10 @@ recompute_image_defaults() {
   LIDAR_LDLIDAR_IMAGE_DEFAULT="${prefix}/lidar-ldlidar:${IMAGE_TAG}"
   LIDAR_RPLIDAR_IMAGE_DEFAULT="${prefix}/lidar-rplidar:${IMAGE_TAG}"
   LIDAR_STL27L_IMAGE_DEFAULT="${prefix}/lidar-stl27l:${IMAGE_TAG}"
-  MAVROS_IMAGE_DEFAULT="${prefix}/mavros:${IMAGE_TAG}"
+  # MowgliMAVROS is released independently from the MowgliNext image set.
+  # Keep its official Kilted image pinned by tag and immutable digest instead
+  # of deriving it from this repository's registry namespace or IMAGE_TAG.
+  MAVROS_IMAGE_DEFAULT="ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:kilted@sha256:04e4eb17b0f5ce38f882f68346b1694774fa87e1945b38b57c94f90da34dd560"
   GUI_IMAGE_DEFAULT="${prefix}/mowglinext-gui:${IMAGE_TAG}"
   # Universal GNSS is a separately released runtime. Never derive it from
   # MowgliNext IMAGE_TAG; the integration targets ROS 2 Lyrical.
@@ -54,6 +57,13 @@ recompute_image_defaults() {
   # port and runs privileged-adjacent on every robot, and a tag on a third-party
   # registry can be re-pushed. Must match install/deployment.json (test-gated).
   UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.1-rc3@sha256:4e7960132882f2f83fb2b1e7d1430b4dfd00081d4be15d7d8ab20dacf7f22bc5"
+}
+
+is_supported_hardware_backend() {
+  case "${1:-}" in
+    mowgli|mavros) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 is_release_image_channel() {
@@ -345,6 +355,11 @@ compose_restart_services_for_backend() {
   if [[ "$gnss_stack" != "disabled" ]] && is_supported_gnss_backend "$gnss_backend"; then
     gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
     [ -n "$gnss_service" ] && services+=("$gnss_service")
+  fi
+
+  if ! is_supported_hardware_backend "$backend"; then
+    error "Unknown hardware backend: $backend (expected mowgli or mavros)"
+    return 1
   fi
 
   if [[ "$backend" == "mavros" ]]; then

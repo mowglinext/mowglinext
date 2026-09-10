@@ -73,17 +73,33 @@ section "HARDWARE_BACKEND=mavros (Pixhawk via MAVROS)"
 mavros_repo="$SANDBOX/repo_mavros"
 sandbox_repo "$mavros_repo"
 harness_init "$mavros_repo"
+IMAGE_TAG="feat-mavros-integration"
 harness_set_preset backend=mavros gnss=auto gnss_connection=uart lidar=ldlidar-uart tfluna=none
+
 if harness_run; then
   pass "mavros backend: harness_run succeeds"
 else
   fail "mavros backend: harness_run succeeds"
 fi
-assert_eq "mavros backend: HARDWARE_BACKEND=mavros" "mavros" "$(env_value "$mavros_repo" HARDWARE_BACKEND)"
-assert_eq "mavros backend: GNSS_BACKEND remains universal" "universal" "$(env_value "$mavros_repo" GNSS_BACKEND)"
-assert_eq "mavros backend: GNSS_STACK remains universal" "universal" "$(env_value "$mavros_repo" GNSS_STACK)"
-assert_eq "mavros backend: GNSS_STATUS_SOURCE remains universal" "universal" "$(env_value "$mavros_repo" GNSS_STATUS_SOURCE)"
-assert_eq "mavros backend: MAVROS_ENABLED=true" "true" "$(env_value "$mavros_repo" MAVROS_ENABLED)"
+
+assert_eq "mavros backend: HARDWARE_BACKEND=mavros" \
+  "mavros" "$(env_value "$mavros_repo" HARDWARE_BACKEND)"
+
+assert_eq "mavros backend: GNSS_BACKEND remains universal" \
+  "universal" "$(env_value "$mavros_repo" GNSS_BACKEND)"
+
+assert_eq "mavros backend: GNSS_STACK remains universal" \
+  "universal" "$(env_value "$mavros_repo" GNSS_STACK)"
+
+assert_eq "mavros backend: GNSS_STATUS_SOURCE remains universal" \
+  "universal" "$(env_value "$mavros_repo" GNSS_STATUS_SOURCE)"
+
+assert_eq "mavros backend: MAVROS_ENABLED=true" \
+  "true" "$(env_value "$mavros_repo" MAVROS_ENABLED)"
+
+assert_eq "mavros backend: detected by-id path is the MAVROS port" \
+  "/dev/serial/by-id/usb-Pixhawk-stub" \
+  "$(env_value "$mavros_repo" MAVROS_PORT)"
 
 mavros_fragments=$(selected_fragments_in_current_run)
 for required in docker-compose.base.yml docker-compose.gui.yml docker-compose.gps.yml docker-compose.mavros.yml docker-compose.lidar-ldlidar.yml; do
@@ -121,5 +137,17 @@ case "$mavros_no_gnss_fragments" in
   *docker-compose.gps.yml*) fail "mavros + disabled GNSS: GPS fragment absent" ;;
   *) pass "mavros + disabled GNSS: GPS fragment absent" ;;
 esac
+
+# ── Invalid backend values fail closed ────────────────────────────────────
+section "invalid HARDWARE_BACKEND"
+
+invalid_repo="$SANDBOX/repo_invalid"
+sandbox_repo "$invalid_repo"
+harness_init "$invalid_repo"
+HARDWARE_BACKEND="unexpected"
+assert_exit_nonzero "invalid backend: setup_env rejects the value" setup_env
+assert_exit_nonzero "invalid backend: compose selection rejects the value" build_compose_stack
+assert_exit_nonzero "invalid backend: restart selection rejects the value" \
+  compose_restart_services_for_backend unexpected
 
 test_summary

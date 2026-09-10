@@ -186,7 +186,7 @@ harness_set_preset() {
         if [ "$val" = "mavros" ]; then
           # Hardware backend selection is independent from GNSS ownership.
           export MAVROS_BY_ID="${MAVROS_BY_ID:-/dev/serial/by-id/usb-Pixhawk-stub}"
-          export MAVROS_PORT="${MAVROS_PORT:-/dev/mavros}"
+          export MAVROS_PORT="${MAVROS_PORT:-$MAVROS_BY_ID}"
           export MAVROS_BAUD="${MAVROS_BAUD:-921600}"
         fi
         ;;

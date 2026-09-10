@@ -218,6 +218,12 @@ write_gnss_env_contract_keys() {
 setup_env() {
   step "Environment (.env)"
 
+  : "${HARDWARE_BACKEND:=mowgli}"
+  if ! is_supported_hardware_backend "$HARDWARE_BACKEND"; then
+    error "Unknown HARDWARE_BACKEND: $HARDWARE_BACKEND (expected mowgli or mavros)"
+    return 1
+  fi
+
   local env_file="$REPO_DIR/docker/.env"
   mkdir -p "$REPO_DIR/docker"
 
@@ -299,7 +305,6 @@ setup_env() {
   fi
 
   # MAVROS / backend
-  : "${HARDWARE_BACKEND:=mowgli}"
   : "${MAVROS_AUTOPILOT:=ardupilot}"
   : "${MAVROS_BY_ID:=}"
   : "${MAVROS_PORT:=/dev/mavros}"
@@ -308,7 +313,19 @@ setup_env() {
   : "${MAVROS_TGT_SYSTEM:=1}"
   : "${MAVROS_TGT_COMPONENT:=1}"
 
-  if [[ "${GNSS_BACKEND:-universal}" == "nmea" ]]; then
+  # Use the persistent path selected by detection directly. The /dev/mavros
+  # udev alias remains available for compatibility, but is not the runtime
+  # endpoint when a /dev/serial/by-id identity is known.
+  if [[ "$HARDWARE_BACKEND" == "mavros" && "$MAVROS_BY_ID" == /dev/serial/by-id/* ]]; then
+    MAVROS_PORT="$MAVROS_BY_ID"
+  fi
+
+  # If MAVROS is the selected hardware backend, the standalone GNSS backend
+  # is disabled because positioning is provided through MAVROS/Pixhawk.
+  if [[ "$HARDWARE_BACKEND" == "mavros" ]]; then
+    GNSS_BACKEND="disabled"
+    GNSS_STACK="disabled"
+  elif [[ "${GNSS_BACKEND:-universal}" == "nmea" ]]; then
     warn_legacy_nmea_backend_once
     GNSS_BACKEND="universal"
     GNSS_RECEIVER_FAMILY="nmea"
