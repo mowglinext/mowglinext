@@ -122,7 +122,7 @@ jobs:
           # behaviour-identical, so that test is the only thing enforcing it.
           cp sensors/gps/universal_gnss_topic_bridge.py /ws/src/
           for p in gnss_ros2 gnss_core gnss_protocols gnss_transport \
-                   gnss_driver gnss_ntrip gnss_runtime gnss_tools; do
+                   gnss_driver gnss_ntrip gnss_runtime gnss_tools gnss_mavros; do
             cp -r "ros2/src/external/universal-gnss/$p" "/ws/src/$p"
           done
           ls /ws/src
