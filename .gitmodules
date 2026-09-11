@@ -11,5 +11,5 @@
 	# --rover-dynamic-mode override (folded into "fix(unicore): restore rover
 	# mode and correction-age policy") — so the old stacked branch is gone and
 	# this follows main directly.
-	url = https://github.com/mowglinext/universal-gnss.git
-	branch = main
+	url = https://github.com/Pepeuch/universal-gnss.git
+	branch = dev
