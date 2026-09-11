@@ -29,6 +29,18 @@ FINAL_COMPOSE_FILE="$DOCKER_DIR/docker-compose.yaml"
 FINAL_ENV_FILE="$DOCKER_DIR/.env"
 UDEV_RULES_FILE="/etc/udev/rules.d/50-mowgli.rules"
 
+# MowgliMAVROS is released independently from MowgliNext. Its immutable image
+# pin belongs with the external-sidecar integration contract, not this generic
+# installer configuration file.
+_mavros_image_env="${BASH_SOURCE[0]%/*}/../../sensors/mavros/image.env"
+if [[ ! -r "$_mavros_image_env" ]]; then
+  echo "Missing MAVROS sidecar image contract: $_mavros_image_env" >&2
+  return 1
+fi
+# shellcheck source=/dev/null
+source "$_mavros_image_env"
+unset _mavros_image_env
+
 # Derive the GHCR image prefix from REPO_URL so forks automatically point
 # at their own registry namespace. Strips the trailing .git and extracts
 # the owner/repo path from the GitHub URL.
@@ -47,10 +59,7 @@ recompute_image_defaults() {
   LIDAR_LDLIDAR_IMAGE_DEFAULT="${prefix}/lidar-ldlidar:${IMAGE_TAG}"
   LIDAR_RPLIDAR_IMAGE_DEFAULT="${prefix}/lidar-rplidar:${IMAGE_TAG}"
   LIDAR_STL27L_IMAGE_DEFAULT="${prefix}/lidar-stl27l:${IMAGE_TAG}"
-  # MowgliMAVROS is released independently from the MowgliNext image set.
-  # Keep its official Kilted image pinned by tag and immutable digest instead
-  # of deriving it from this repository's registry namespace or IMAGE_TAG.
-  MAVROS_IMAGE_DEFAULT="ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:kilted@sha256:04e4eb17b0f5ce38f882f68346b1694774fa87e1945b38b57c94f90da34dd560"
+  MAVROS_IMAGE_DEFAULT="${MOWGLI_MAVROS_IMAGE_DEFAULT}"
   GUI_IMAGE_DEFAULT="${prefix}/mowglinext-gui:${IMAGE_TAG}"
 }
 

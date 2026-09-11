@@ -1,6 +1,6 @@
 # sensors/ — working notes for Claude
 
-Four self-contained Docker images that run **beside** `mowgli-ros2` and talk to it only over DDS: the Universal GNSS sidecar (`gps/`) and three LiDAR driver wrappers (`lidar-ldlidar/`, `lidar-rplidar/`, `lidar-stl27l/`). The only ROS node this tree owns is `gps/mowgli_gnss_bridge`; everything else is a vendored upstream driver plus a startup shell script.
+Four self-contained Docker images run **beside** `mowgli-ros2` and talk to it only over DDS: the Universal GNSS sidecar (`gps/`) and three LiDAR driver wrappers (`lidar-ldlidar/`, `lidar-rplidar/`, `lidar-stl27l/`). `mavros/` is deliberately different: it is the source-free MowgliNext integration contract for the independently built MowgliMAVROS sidecar, not an image or a source vendor. The only ROS node this tree owns is `gps/mowgli_gnss_bridge`; everything else is a vendored upstream driver plus a startup shell script.
 It must NOT own: which containers run, device paths, udev symlinks, `docker/.env` or the compose fragments (installer — see `install/CLAUDE.md`); the `GnssStatus.msg` schema (`ros2/src/mowgli_interfaces`); or any consumer of `/gps/*` and `/scan` (see `ros2/CLAUDE.md`). Nothing here publishes TF or a pose — root CLAUDE.md Invariants 1–2.
 
 ## Read next
@@ -17,6 +17,7 @@ It must NOT own: which containers run, device paths, udev symlinks, `docker/.env
 | [`wiki/Sensors.md`](../wiki/Sensors.md) | Operator-facing GNSS contract + the 2026-06 F9P/UM982 field-validation notes. **Partly stale** (see gotchas). |
 | [`wiki/Deployment.md`](../wiki/Deployment.md) | The compose stack these containers sit in, from the operator's side. |
 | [`sensors/README.md`](README.md) | User-facing sensor overview / "how to add a sensor". **Partly stale** (see gotchas). |
+| [`mavros/README.md`](mavros/README.md) | The external sidecar's image pin, MowgliNext orchestration boundary, device/config mounts, and static integration validation. |
 
 ## Build · test · run
 

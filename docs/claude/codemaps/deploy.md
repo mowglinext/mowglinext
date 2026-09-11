@@ -126,6 +126,7 @@
 | `docker/logs/mow_sessions/*.md` | 70 / 135 | Archived 2026-06-11 fusion-graph field reviews |
 | **`sensors/`** | | |
 | `sensors/gps/Dockerfile` | 91 | Universal GNSS sidecar image — **build context = repo root**; builds `mowgli_interfaces`, `universal_gnss_ros2`, `mowgli_gnss_bridge` + the `gnss_tools` CLI into `/opt/gnss_sidecar` |
+| `sensors/mavros/{README.md,image.env,test_integration.py}` | — | Source-free MowgliNext integration contract for the external MowgliMAVROS sidecar: canonical immutable image pin, ownership/device/config documentation, and static validation. It does **not** build or vendor MowgliMAVROS. |
 | `sensors/gps/start_gps.sh` | 599 | Image CMD: resolves config (YAML → env → default), applies the receiver profile, then runs `receiver_node` + topic bridge + optional `ntrip_node` |
 | `sensors/gps/universal_gnss_topic_bridge.py` | 406 | Retained Python bridge (`GNSS_BRIDGE_IMPL=python`) |
 | `sensors/gps/ros2_entrypoint.sh` | 12 | Sources `/opt/ros/kilted` + `/opt/gnss_sidecar` |
@@ -228,7 +229,7 @@ docker build -t mowgli-lidar --target runtime sensors/lidar-ldlidar/
 GNSS_DRY_RUN=true GNSS_CONFIG_PATH=install/config/mowgli/mowgli_robot.yaml bash sensors/gps/start_gps.sh   # prints the commands, launches nothing
 ```
 
-CI: sensor images build via `.github/workflows/sensors-{gps,lidar-ldlidar,lidar-rplidar,lidar-stl27l}.yml`, each calling the reusable `_sensor-docker.yml` (multi-arch amd64+arm64, push-by-digest then manifest merge; `sensors-gps.yml` L37–66 carries the only smoke test). `ros2-docker.yml` builds `mowgli-ros2`, `gui-docker.yml` builds `mowglinext-gui`. `ros2-ci.yml` watches `install/config/mowgli/**` (L9, L76) for the config-drift job. **No workflow runs `install/test_mowglinext.sh` or `install/tests/*` — run them by hand before touching the installer.** No workflow builds a `mavros` image, though `MAVROS_IMAGE` defaults to one.
+CI: sensor images build via `.github/workflows/sensors-{gps,lidar-ldlidar,lidar-rplidar,lidar-stl27l}.yml`, each calling the reusable `_sensor-docker.yml` (multi-arch amd64+arm64, push-by-digest then manifest merge; `sensors-gps.yml` L37–66 carries the only smoke test). `sensors-mavros.yml` instead runs the source-level external-sidecar contract check and never builds or publishes MowgliMAVROS. `ros2-docker.yml` builds `mowgli-ros2`, `gui-docker.yml` builds `mowglinext-gui`. `ros2-ci.yml` watches `install/config/mowgli/**` (L9, L76) for the config-drift job. **No workflow runs `install/test_mowglinext.sh` or `install/tests/*` — run them by hand before touching the installer.**
 
 ## Change coupling — "if you change X, also update Y"
 
