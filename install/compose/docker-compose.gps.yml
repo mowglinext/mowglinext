@@ -1,16 +1,6 @@
-  # -------------------------------------------------------------------------
-  # Canonical direct-GNSS sidecar.
-  #
-  # PR 2 runtime flip:
-  #   GNSS_STACK=universal now means the existing mowgli-gps sidecar owns
-  #   Universal GNSS and publishes the shared external contract:
-  #     /gps/fix
-  #     /gps/status
-  #     /diagnostics
-  #     /rtcm
-  #
-  # Universal GNSS is the only supported direct-GNSS runtime.
-  # -------------------------------------------------------------------------
+  # External Universal GNSS runtime. The stable `gps` service/container names
+  # are retained for operational compatibility; this image is independently
+  # selected through UNIVERSAL_GNSS_IMAGE, never MowgliNext IMAGE_TAG.
 x-ros2-env: &ros2-env
   ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
   RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
@@ -27,39 +17,57 @@ services:
 
   gps:
     container_name: mowgli-gps
-    image: ${GPS_IMAGE}
+    image: ${UNIVERSAL_GNSS_IMAGE}
     network_mode: host
     ipc: host
-    privileged: true
     environment:
       <<: *ros2-env
-      HARDWARE_BACKEND: ${HARDWARE_BACKEND}
-      GNSS_STACK: ${GNSS_STACK:-universal}
-      # Pass these through WITHOUT hard defaults. They are fallback-only:
-      # start_gps.sh resolves runtime GNSS config as YAML explicit value first,
-      # then env fallback, then its own built-in default. An empty env value
-      # therefore means "not set" and must never override the bound
-      # mowgli_robot.yaml. Baking a default here would silently mask an
-      # operator's explicit YAML choice (for example ntrip_enabled:false, a
-      # custom frame_id, or a serial device selected in the GUI).
-      GNSS_RECEIVER_FAMILY: ${GNSS_RECEIVER_FAMILY:-}
-      GNSS_TRANSPORT: ${GNSS_TRANSPORT:-}
-      GNSS_SERIAL_DEVICE: ${GNSS_SERIAL_DEVICE:-}
-      GNSS_SERIAL_BAUD: ${GNSS_SERIAL_BAUD:-}
-      GNSS_FRAME_ID: ${GNSS_FRAME_ID:-}
-      GNSS_NTRIP_ENABLED: ${GNSS_NTRIP_ENABLED:-}
-      GNSS_NTRIP_HOST: ${GNSS_NTRIP_HOST:-}
-      GNSS_NTRIP_PORT: ${GNSS_NTRIP_PORT:-}
-      GNSS_NTRIP_MOUNTPOINT: ${GNSS_NTRIP_MOUNTPOINT:-}
-      GNSS_NTRIP_USERNAME: ${GNSS_NTRIP_USERNAME:-}
-      GNSS_NTRIP_PASSWORD: ${GNSS_NTRIP_PASSWORD:-}
-      GNSS_NTRIP_GGA_ENABLED: ${GNSS_NTRIP_GGA_ENABLED:-}
-      GNSS_NTRIP_GGA_INTERVAL_S: ${GNSS_NTRIP_GGA_INTERVAL_S:-}
+      UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION: "1"
+      UNIVERSAL_GNSS_EXPORT_DIR: /var/lib/universal_gnss/export
+      GNSS_NTRIP_ENABLED: ${GNSS_NTRIP_ENABLED:-true}
+    devices:
+      - "${GNSS_DEVICE}:/dev/gnss-receiver"
+    group_add:
+      - "${GNSS_DEVICE_GID:-20}"
     volumes:
-      - /dev:/dev
-      - ./docker/config/mowgli:/config:ro
+      - ./docker/config/universal_gnss/parameters.yaml:/etc/universal_gnss/parameters.yaml:ro
+      - type: bind
+        source: ${UNIVERSAL_GNSS_LOG_DIR}
+        target: /var/log/universal_gnss
+      - type: bind
+        source: ${UNIVERSAL_GNSS_EXPORT_DIR}
+        target: /var/lib/universal_gnss/export
       - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
-
+    # The receiver-only branch deliberately avoids starting NTRIP when it is
+    # disabled; it does not simulate a caster.
+    command:
+      - /bin/bash
+      - -lc
+      - >-
+        if [ "$${GNSS_NTRIP_ENABLED}" = "true" ]; then
+          exec ros2 launch universal_gnss_ros2 receiver_and_ntrip.launch.py
+          parameters_file:=/etc/universal_gnss/parameters.yaml --ros-args
+          -r /universal_gnss_receiver/fix:=/gps/fix
+          -r /universal_gnss_ntrip/status:=/universal_gnss_receiver/status
+          -r /universal_gnss_ntrip/rtcm:=/universal_gnss_receiver/rtcm;
+        fi;
+        exec ros2 run universal_gnss_ros2 receiver_node --ros-args
+        --params-file /etc/universal_gnss/parameters.yaml
+        -r /universal_gnss_receiver/fix:=/gps/fix
+    # The upstream default requires NTRIP. This remains a bounded service
+    # responsiveness check for each component actually started.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          if [ "$${GNSS_NTRIP_ENABLED}" = "true" ]; then
+          /usr/local/bin/universal-gnss-healthcheck --timeout 2;
+          else timeout 4 ros2 service call /universal_gnss_receiver/get_health
+          std_srvs/srv/Trigger '{}' | grep -q 'success: true'; fi
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     restart: unless-stopped
     logging:
       driver: json-file

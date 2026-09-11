@@ -23,12 +23,22 @@ image pin, device/config mounts, ownership split, and validation command.
 
 ### GNSS receiver selection
 
-Direct GNSS installs use the Universal GNSS sidecar only (`GNSS_STACK` accepts `universal|disabled`; "no GNSS" means not composing the container). Receiver choice is `auto|ublox|unicore|nmea`, resolved by `start_gps.sh` as **YAML → env → default**: `gnss_receiver_family` in `mowgli_robot.yaml` first, then `GNSS_RECEIVER_FAMILY` in `docker/.env`, then `auto`. The public runtime contract stays backend-agnostic:
+Direct GNSS installs use the externally published Universal GNSS sidecar only
+(`GNSS_STACK` accepts `universal|disabled`; "no GNSS" means not composing the
+container). `UNIVERSAL_GNSS_IMAGE` is required and must be pinned separately
+from MowgliNext `IMAGE_TAG`. `GNSS_DEVICE` maps one stable host path (prefer
+`/dev/serial/by-id/...`) to `/dev/gnss-receiver`; the sidecar is the sole
+owner of that device, parsing and NTRIP. `HARDWARE_BACKEND=mavros` does not
+disable this stack. Receiver choice remains **YAML → env → default**:
+`gnss_receiver_family` in `mowgli_robot.yaml`, then `GNSS_RECEIVER_FAMILY` in
+`docker/.env`, then `auto`. MowgliNext generates the image-specific parameter
+file and runs the existing `mowgli_gnss_bridge` in `mowgli-ros2` solely to
+adapt UG types onto the public contract:
 
 - Common runtime topics stay backend-agnostic: `/gps/fix` remains `sensor_msgs/NavSatFix`, `/gps/status` carries typed GNSS/RTK state (`mowgli_interfaces/GnssStatus`), `/rtcm` mirrors the RTCM stream as `rtcm_msgs/Message`, and `/diagnostics` stays human/debug-only.
 - Position covariance is taken from the receiver's own reported horizontal/vertical accuracy and published as `COVARIANCE_TYPE_APPROXIMATED`; if either term is missing it is left `COVARIANCE_TYPE_UNKNOWN` rather than invented. Downstream, `navsat_to_absolute_pose_node` turns it into the `/gps/pose_cov` 1-sigma fed to `fusion_graph`; an unknown covariance type becomes a deliberately large 10 m sigma, which exceeds the node's 0.5 m reject threshold, so no `/gps/pose_cov` is published at all rather than a fabricated one.
 - Generic NMEA receivers are supported through the Universal GNSS parser family selection instead of a separate runtime path.
-- NTRIP/RTCM forwarding is handled in the Universal GNSS sidecar path (`ntrip_node`), on the private `/_gps_internal/universal/rtcm` hop; `/rtcm` is the public mirror.
+- NTRIP/RTCM forwarding is handled only in the Universal GNSS sidecar when `ntrip_enabled=true`. With `false`, it runs receiver-only; `/rtcm` has no producer. UG internal topics remain `/universal_gnss_receiver/*`; the bridge publishes the public `/gps/status` and `/rtcm` types.
 
 ## Adding a New Sensor
 
@@ -48,9 +58,9 @@ Each image has its own CI caller (`.github/workflows/sensors-{gps,lidar-ldlidar,
 To build locally:
 
 ```bash
-# GPS sidecar — build context MUST be the monorepo root (see below)
-git submodule update --init --recursive ros2/src/external/universal-gnss
-docker build -t mowgli-gps -f sensors/gps/Dockerfile .
+# Universal GNSS is built and published by its own repository. MowgliNext does
+# not build or publish a GPS image; set UNIVERSAL_GNSS_IMAGE to its published
+# pinned reference before composing the stack.
 
 # LiDAR images — build context is the sensor directory
 docker build -t mowgli-lidar-ldlidar --target runtime sensors/lidar-ldlidar/
@@ -58,10 +68,9 @@ docker build -t mowgli-lidar-stl27l  --target runtime sensors/lidar-stl27l/
 docker build -t mowgli-lidar-rplidar --target runtime sensors/lidar-rplidar/
 ```
 
-The `gps` image expects the monorepo root as its Docker build context so it can
-bundle `ros2/src/mowgli_interfaces`, the `mowgli_gnss_bridge` package and the
-vendored Universal GNSS packages from the `ros2/src/external/universal-gnss`
-submodule. `docker build sensors/gps/` fails.
+The legacy `sensors/gps/Dockerfile` is not part of the deployment path. The
+bridge is built into `mowgli-ros2`; MowgliNext does not duplicate Universal
+GNSS sources or runtime ownership.
 
 ## For contributors
 

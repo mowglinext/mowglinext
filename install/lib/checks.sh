@@ -37,18 +37,17 @@ expected_runtime_services() {
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
   gnss_stack="$(effective_gnss_stack 2>/dev/null || true)"
 
-  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
-    # NTRIP, when enabled, runs inside the external MAVROS sidecar.
-    services+=(mavros)
-  else
-    if ! is_supported_gnss_backend "$gnss_backend"; then
-      return 1
-    fi
+  if ! is_supported_gnss_backend "$gnss_backend"; then
+    return 1
+  fi
 
-    if [[ "$gnss_stack" != "disabled" ]]; then
-      gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
-      [ -n "$gnss_service" ] && services+=("$gnss_service")
-    fi
+  if [[ "$gnss_stack" != "disabled" ]]; then
+    gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
+    [ -n "$gnss_service" ] && services+=("$gnss_service")
+  fi
+
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
+    services+=(mavros)
   fi
 
   if [[ "${LIDAR_ENABLED}" == "true" && "${LIDAR_TYPE}" != "none" ]]; then
@@ -90,6 +89,9 @@ check_devices() {
     devices+=("${MAVROS_PORT:-/dev/mavros}:Pixhawk MAVROS serial")
   else
     devices+=("/dev/mowgli:Mowgli STM32 board")
+  fi
+
+  if [[ "$(effective_gnss_stack 2>/dev/null || true)" != "disabled" ]]; then
     devices+=("${gnss_device}:GPS receiver")
   fi
 
@@ -325,68 +327,6 @@ check_gps() {
 
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
   gnss_stack="$(effective_gnss_stack 2>/dev/null || true)"
-
-  if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
-    info "MAVROS backend: GPS is handled through Pixhawk/MAVROS"
-
-    local gps_status
-    gps_status="$(docker_cmd inspect -f '{{.State.Status}}' mowgli-gps 2>/dev/null || echo "missing")"
-    if [[ "$gps_status" == "running" ]]; then
-      fail "mowgli-gps is running in MAVROS mode"
-      add_issue "mowgli-gps must not run when HARDWARE_BACKEND=mavros. Re-run $(installer_main_command) and restart the expected services: $(print_restart_command_for_backend mavros)"
-    else
-      info "Direct GPS container disabled (${gps_status})"
-    fi
-
-    local mavros_status
-    mavros_status="$(docker_cmd inspect -f '{{.State.Status}}' mowgli-mavros 2>/dev/null || echo "missing")"
-    if [[ "$mavros_status" != "running" ]]; then
-      fail "mowgli-mavros is ${mavros_status}"
-      add_issue "MAVROS backend selected but mowgli-mavros is not running. Check logs: $(print_logs_command_for_container mowgli-mavros 50)"
-      return
-    fi
-    info "MAVROS container running"
-
-    local mavros_state
-    mavros_state="$(
-      docker_cmd exec mowgli-ros2 bash -lc \
-        "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /mavros/state --once 2>/dev/null" \
-        2>/dev/null || echo ""
-    )"
-    if [[ -z "$mavros_state" ]]; then
-      fail "No MAVROS state on /mavros/state"
-      add_issue "MAVROS is running but /mavros/state has no data. Check Pixhawk serial connection, MAVROS_PORT, MAVROS_BAUD, and logs: $(print_logs_command_for_container mowgli-mavros 50)"
-    else
-      info "MAVROS state available on /mavros/state"
-    fi
-
-    local mavros_global
-    mavros_global="$(
-      docker_cmd exec mowgli-ros2 bash -lc \
-        "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /mavros/global_position/global --once 2>/dev/null" \
-        2>/dev/null || echo ""
-    )"
-    if [[ -z "$mavros_global" ]]; then
-      fail "No MAVROS global position on /mavros/global_position/global"
-      add_issue "MAVROS is not publishing global GPS position. Check Pixhawk GPS lock and MAVROS global_position plugin."
-    else
-      info "MAVROS global position available"
-    fi
-
-    local rtcm_info
-    rtcm_info="$(
-      docker_cmd exec mowgli-ros2 bash -lc \
-        "source /opt/ros/kilted/setup.bash && source /ros2_ws/install/setup.bash && ros2 topic info /rtcm 2>/dev/null" \
-        2>/dev/null || echo ""
-    )"
-    if echo "$rtcm_info" | grep -q "Publisher count: [1-9]"; then
-      info "RTCM topic has publisher(s)"
-    else
-      warn "No RTCM publisher detected on /rtcm"
-      add_issue "No RTCM publisher on /rtcm in MAVROS mode. Check mowgli-mavros logs and NTRIP configuration."
-    fi
-    return
-  fi
 
   if ! is_supported_gnss_backend "$gnss_backend"; then
     fail "Unknown GNSS_BACKEND=${GNSS_BACKEND}"

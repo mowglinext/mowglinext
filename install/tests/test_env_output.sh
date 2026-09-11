@@ -52,6 +52,8 @@ REQUIRED_KEYS=(
   GNSS_SERIAL_DEVICE
   GNSS_SERIAL_BAUD
   GNSS_FRAME_ID
+  GNSS_DEVICE
+  GNSS_DEVICE_GID
   GNSS_NTRIP_ENABLED
   GNSS_NTRIP_HOST
   GNSS_NTRIP_PORT
@@ -77,7 +79,9 @@ REQUIRED_KEYS=(
   TFLUNA_EDGE_UART_DEVICE
   TFLUNA_EDGE_BAUD
   MOWGLI_ROS2_IMAGE
-  GPS_IMAGE
+  UNIVERSAL_GNSS_IMAGE
+  UNIVERSAL_GNSS_LOG_DIR
+  UNIVERSAL_GNSS_EXPORT_DIR
   LIDAR_IMAGE
   MAVROS_IMAGE
   GUI_IMAGE
@@ -190,7 +194,8 @@ if ! harness_run; then
 else
   feature_env="$(cat "$repo_feature/docker/.env")"
   assert_contains "custom IMAGE_TAG written" "IMAGE_TAG=feat-universal-gnss-integration" "$feature_env"
-  assert_contains "custom GPS image tag written" "GPS_IMAGE=ghcr.io/mowglinext/mowglinext/gps:feat-universal-gnss-integration" "$feature_env"
+  assert_contains "Universal GNSS image is independent of IMAGE_TAG" \
+    "UNIVERSAL_GNSS_IMAGE=${UNIVERSAL_GNSS_IMAGE_DEFAULT}" "$feature_env"
   assert_contains "custom mowgli-ros2 image tag written" "MOWGLI_ROS2_IMAGE=ghcr.io/mowglinext/mowglinext/mowgli-ros2:feat-universal-gnss-integration" "$feature_env"
   assert_contains "MAVROS image remains pinned independently" \
     "MAVROS_IMAGE=ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:kilted@sha256:04e4eb17b0f5ce38f882f68346b1694774fa87e1945b38b57c94f90da34dd560" \
@@ -207,22 +212,33 @@ harness_set_preset gnss=ublox gnss_connection=usb lidar=none tfluna=none \
   ntrip_user=operator ntrip_password=super-secret ntrip_mountpoint=FIELD1
 
 ntrip_setup_output="$(setup_env 2>&1)"
+ensure_default_configs >/dev/null
+write_config >/dev/null
 ntrip_env="$(cat "$repo_ntrip/docker/.env")"
 assert_contains "NTRIP host written to env" "GNSS_NTRIP_HOST=rtk.local" "$ntrip_env"
 assert_contains "NTRIP password written to env" "GNSS_NTRIP_PASSWORD=super-secret" "$ntrip_env"
 assert_not_contains "NTRIP password not echoed in setup_env logs" "super-secret" "$ntrip_setup_output"
+assert_contains "UG parameters map only the stable container receiver path" \
+  "serial_device: /dev/gnss-receiver" "$(cat "$repo_ntrip/docker/config/universal_gnss/parameters.yaml")"
+assert_contains "UG parameters preserve NTRIP host" \
+  "caster_host: 'rtk.local'" "$(cat "$repo_ntrip/docker/config/universal_gnss/parameters.yaml")"
+assert_contains "MAVROS config copy disables its NTRIP client" \
+  "ntrip_enabled: false" "$(cat "$repo_ntrip/docker/config/mavros/mowgli_robot.yaml")"
 
 section ".env image references point at ghcr.io"
 
 # Every image var should be a ghcr.io path — guards against accidental
 # Docker Hub or local paths leaking into production .env.
-for img_var in MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE GUI_IMAGE; do
+for img_var in MOWGLI_ROS2_IMAGE LIDAR_IMAGE MAVROS_IMAGE GUI_IMAGE; do
   val="$(grep -E "^${img_var}=" "$ENV_FILE" | head -1 | cut -d= -f2-)"
   case "$val" in
     ghcr.io/*) pass "${img_var} is ghcr.io ($val)" ;;
     *)         fail "${img_var} is ghcr.io" "got '$val'" ;;
   esac
 done
+
+assert_contains "Universal GNSS image is independently configured" \
+  "UNIVERSAL_GNSS_IMAGE=${UNIVERSAL_GNSS_IMAGE_DEFAULT}" "$(cat "$ENV_FILE")"
 
 section ".env permissions are reasonable"
 

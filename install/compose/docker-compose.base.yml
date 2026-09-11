@@ -21,6 +21,7 @@ x-ros2-env: &ros2-env
   # the main container always saw the gps/UBX defaults, so unicore/NMEA installs
   # parsed the wrong backend in navsat_to_absolute_pose / gnss status.
   GNSS_BACKEND: ${GNSS_BACKEND:-gps}
+  GNSS_STACK: ${GNSS_STACK:-universal}
   GPS_PROTOCOL: ${GPS_PROTOCOL:-UBX}
 
 services:

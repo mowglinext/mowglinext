@@ -49,6 +49,14 @@ def test_full_system_no_longer_includes_internal_universal_launch() -> None:
     assert all(not location.endswith("universal_gnss.launch.py") for location in included_locations)
 
 
+def test_mowgli_launch_runs_the_existing_type_adapter_for_universal_stack() -> None:
+    launch_source = _read_launch_source("mowgli.launch.py")
+    assert 'package="mowgli_gnss_bridge"' in launch_source
+    assert 'executable="universal_gnss_topic_bridge"' in launch_source
+    assert '"input_status_topic": "/universal_gnss_receiver/status"' in launch_source
+    assert '"output_status_topic": "/gps/status"' in launch_source
+
+
 def test_full_system_no_longer_passes_legacy_gnss_status_params() -> None:
     launch_source = _read_launch_source("full_system.launch.py")
     assert "publish_" "gnss_status" not in launch_source

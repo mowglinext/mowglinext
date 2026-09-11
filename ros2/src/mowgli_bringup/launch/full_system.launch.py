@@ -207,6 +207,7 @@ def generate_launch_description() -> LaunchDescription:
             "use_sim_time": use_sim_time,
             "serial_port": serial_port,
             "hardware_backend": hardware_backend,
+            "gnss_stack": EnvironmentVariable("GNSS_STACK", default_value="universal"),
         }.items(),
     )
 

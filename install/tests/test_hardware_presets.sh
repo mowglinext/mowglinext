@@ -81,8 +81,8 @@ else
   fail "mavros backend: harness_run succeeds"
 fi
 assert_eq "mavros backend: HARDWARE_BACKEND=mavros" "mavros"   "$(env_value "$mavros_repo" HARDWARE_BACKEND)"
-assert_eq "mavros backend: GNSS_BACKEND=disabled"   "disabled" "$(env_value "$mavros_repo" GNSS_BACKEND)"
-assert_eq "mavros backend: GNSS_STACK=disabled"     "disabled" "$(env_value "$mavros_repo" GNSS_STACK)"
+assert_eq "mavros backend: GNSS_BACKEND remains universal" "universal" "$(env_value "$mavros_repo" GNSS_BACKEND)"
+assert_eq "mavros backend: GNSS_STACK remains universal"   "universal" "$(env_value "$mavros_repo" GNSS_STACK)"
 assert_eq "mavros backend: MAVROS_ENABLED=true"     "true"     "$(env_value "$mavros_repo" MAVROS_ENABLED)"
 assert_eq "mavros backend: detected by-id path is the MAVROS port" \
   "/dev/serial/by-id/usb-Pixhawk-stub" "$(env_value "$mavros_repo" MAVROS_PORT)"
@@ -98,12 +98,8 @@ for required in docker-compose.base.yml docker-compose.gui.yml docker-compose.ma
   esac
 done
 case "$mavros_fragments" in
-  *docker-compose.gps.yml*)
-    fail "mavros backend: no direct GNSS fragment" "direct GNSS fragment leaked into mavros compose selection"
-    ;;
-  *)
-    pass "mavros backend: no direct GNSS fragment"
-    ;;
+  *docker-compose.gps.yml*) pass "mavros backend: independent Universal GNSS fragment present" ;;
+  *) fail "mavros backend: independent Universal GNSS fragment present" ;;
 esac
 
 # ── Invalid backend values fail closed ────────────────────────────────────

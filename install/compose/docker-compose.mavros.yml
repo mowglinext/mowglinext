@@ -15,9 +15,9 @@ services:
     privileged: true
     volumes:
       - /dev:/dev
-      # The external sidecar owns optional NTRIP and reads its existing
-      # ntrip_* settings from this runtime robot configuration.
-      - ./docker/config/mowgli:/ros2_ws/config:ro
+      # This MowgliNext-managed copy preserves MAVROS settings but disables
+      # its optional NTRIP client: Universal GNSS is the sole NTRIP owner.
+      - ./docker/config/mavros:/ros2_ws/config:ro
       - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
     environment:
       <<: *ros2-env

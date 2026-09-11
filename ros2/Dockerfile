@@ -335,6 +335,10 @@ COPY ros2/src/opennav_coverage/opennav_coverage_msgs/CMakeLists.txt src/opennav_
 # plain CMake subdirectories pulled in at build time from the same repo root.
 COPY ros2/src/external/universal-gnss/gnss_ros2/package.xml    src/external/universal-gnss/gnss_ros2/package.xml
 COPY ros2/src/external/universal-gnss/gnss_ros2/CMakeLists.txt src/external/universal-gnss/gnss_ros2/CMakeLists.txt
+# The bridge runs in mowgli-ros2 and only adapts DDS message contracts. It
+# does not belong to the external receiver/NTRIP image.
+COPY sensors/gps/mowgli_gnss_bridge/package.xml    src/mowgli_gnss_bridge/package.xml
+COPY sensors/gps/mowgli_gnss_bridge/CMakeLists.txt src/mowgli_gnss_bridge/CMakeLists.txt
 # operator-side drivetrain tools live outside ros2/src but must still be built
 # into the runtime workspace as the ROS 2 package mowgli_tools.
 COPY tools/motor/package.xml    src/mowgli_tools/package.xml
@@ -378,6 +382,7 @@ ARG BUILD_TYPE=Release
 # Now copy the rest of the source tree plus the sidecar tools package
 COPY ros2/src/ src/
 COPY tools/motor/ src/mowgli_tools/
+COPY sensors/gps/mowgli_gnss_bridge/ src/mowgli_gnss_bridge/
 
 # Skip every opennav_coverage subpackage except _msgs. The upstream server
 # is pinned to F2C 1.2.1 (no TrapezoidalDecomp / generateHeadlandSwaths /

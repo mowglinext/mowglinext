@@ -90,7 +90,7 @@ GPS_SERVICE_BLOCK="$(awk '
   in_service { print }
 ' "$COMPOSE_FILE")"
 
-for required in "GNSS_STACK:" "GNSS_RECEIVER_FAMILY:" "GNSS_SERIAL_DEVICE:" "GNSS_FRAME_ID:" "GNSS_NTRIP_GGA_ENABLED:"; do
+for required in "UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION:" "GNSS_NTRIP_ENABLED:" "/dev/gnss-receiver" "parameters.yaml"; do
   if printf '%s' "$GPS_SERVICE_BLOCK" | grep -q "$required"; then
     pass "compose contains sidecar env: $required"
   else
@@ -130,14 +130,14 @@ else
   MAVROS_CONTAINERS=$(grep -E '^\s+container_name:' "$MAVROS_COMPOSE_FILE" | awk '{print $2}' | sort)
   assert_contains "MAVROS compose has the external sidecar" "mowgli-mavros" "$MAVROS_CONTAINERS"
   assert_not_contains "MAVROS compose has no separate NTRIP container" "mowgli-ntrip" "$MAVROS_CONTAINERS"
-  assert_not_contains "MAVROS compose has no direct GPS sidecar" "mowgli-gps" "$MAVROS_CONTAINERS"
+  assert_contains "MAVROS compose keeps the independent Universal GNSS sidecar" "mowgli-gps" "$MAVROS_CONTAINERS"
 
   MAVROS_FRAGMENT_CONTENT="$(cat "$MAVROS_REPO/install/compose/docker-compose.mavros.yml")"
   assert_contains "MAVROS sidecar uses MAVROS_IMAGE" "image: \${MAVROS_IMAGE}" "$MAVROS_FRAGMENT_CONTENT"
   assert_not_contains "MAVROS sidecar never uses MOWGLI_ROS2_IMAGE" "MOWGLI_ROS2_IMAGE" "$MAVROS_FRAGMENT_CONTENT"
   assert_not_contains "MAVROS sidecar has no standalone NTRIP launch" "mowgli_ntrip_client" "$MAVROS_FRAGMENT_CONTENT"
-  assert_contains "MAVROS sidecar mounts runtime NTRIP config" \
-    "./docker/config/mowgli:/ros2_ws/config:ro" "$MAVROS_FRAGMENT_CONTENT"
+  assert_contains "MAVROS sidecar receives its NTRIP-disabled config copy" \
+    "./docker/config/mavros:/ros2_ws/config:ro" "$MAVROS_FRAGMENT_CONTENT"
 
   MAVROS_ENV_CONTENT="$(cat "$MAVROS_REPO/docker/.env")"
   assert_contains "MAVROS image ignores MowgliNext IMAGE_TAG" \
@@ -158,21 +158,17 @@ if real_docker_compose_available; then
     pass "no unresolved \${VAR} in image:"
   fi
 
-  if printf '%s' "$EXPANDED" | grep -qE 'GNSS_STACK: universal$'; then
-    pass "Universal GNSS sidecar expands to GNSS_STACK=universal"
+  if printf '%s' "$EXPANDED" | grep -qE 'UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION: "?1"?$'; then
+    pass "Universal GNSS sidecar uses schema version 1"
   else
-    fail "Universal GNSS sidecar expands to GNSS_STACK=universal" \
-      "$(printf '%s' "$EXPANDED" | grep -n 'GNSS_STACK:' | head -1)"
+    fail "Universal GNSS sidecar uses schema version 1" \
+      "$(printf '%s' "$EXPANDED" | grep -n 'UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION:' | head -1)"
   fi
 
-  # Privileged volumes contain /dev mount — required for sensor passthrough.
-  # `docker compose config` rewrites `- /dev:/dev` into the long-form
-  # `source: /dev / target: /dev` block, so we look for the long form.
-  if printf '%s' "$EXPANDED" | grep -qE 'source: /dev$' \
-    && printf '%s' "$EXPANDED" | grep -qE 'target: /dev$'; then
-    pass "/dev:/dev volume mount present (sensor passthrough)"
+  if printf '%s' "$EXPANDED" | grep -qE 'target: /dev/gnss-receiver$'; then
+    pass "stable GNSS device mapping present"
   else
-    fail "/dev:/dev volume mount present" "/dev passthrough missing — sensors won't work"
+    fail "stable GNSS device mapping present" "/dev/gnss-receiver mapping missing"
   fi
 
   # Foxglove environment toggle present in expanded mowgli service env
@@ -193,10 +189,10 @@ if real_docker_compose_available; then
   fi
 else
   pass "no unresolved \${VAR} in image: (skipped; docker unavailable)"
-  if grep -q '/dev:/dev' "$COMPOSE_FILE"; then
-    pass "/dev:/dev volume mount present (fallback compose)"
+  if grep -q '/dev/gnss-receiver' "$COMPOSE_FILE"; then
+    pass "stable GNSS device mapping present (fallback compose)"
   else
-    fail "/dev:/dev volume mount present (fallback compose)" "/dev passthrough missing"
+    fail "stable GNSS device mapping present (fallback compose)" "GNSS mapping missing"
   fi
   if grep -q 'ENABLE_FOXGLOVE' "$COMPOSE_FILE"; then
     pass "ENABLE_FOXGLOVE env var wired into mowgli service"

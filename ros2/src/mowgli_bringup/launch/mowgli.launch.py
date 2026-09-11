@@ -94,12 +94,19 @@ def generate_launch_description() -> LaunchDescription:
         description="Hardware backend: mowgli or mavros.",
     )
 
+    gnss_stack_arg = DeclareLaunchArgument(
+        "gnss_stack",
+        default_value=EnvironmentVariable("GNSS_STACK", default_value="universal"),
+        description="GNSS runtime stack: universal or disabled.",
+    )
+
     # ------------------------------------------------------------------
     # Resolved substitutions
     # ------------------------------------------------------------------
     use_sim_time = LaunchConfiguration("use_sim_time")
     serial_port = LaunchConfiguration("serial_port")
     hardware_backend = LaunchConfiguration("hardware_backend")
+    gnss_stack = LaunchConfiguration("gnss_stack")
 
     # ------------------------------------------------------------------
     # Robot config (mowgli_robot.yaml)
@@ -318,6 +325,26 @@ def generate_launch_description() -> LaunchDescription:
         remappings=[("cmd_vel_out", "/cmd_vel")],
     )
 
+    # Universal GNSS owns the receiver, parsing and NTRIP in its external
+    # sidecar. This existing Mowgli-side adapter owns only the public type
+    # projection: UG's GnssStatus is intentionally not the /gps/status type.
+    universal_gnss_bridge_node = Node(
+        package="mowgli_gnss_bridge",
+        executable="universal_gnss_topic_bridge",
+        name="universal_gnss_topic_bridge",
+        output="screen",
+        condition=IfCondition(EqualsSubstitution(gnss_stack, "universal")),
+        parameters=[{
+            "backend": "universal",
+            "receiver_family": str(robot_params.get("gnss_receiver_family", "auto")),
+            "frame_id": str(robot_params.get("gnss_frame_id", "gps_link")),
+            "input_status_topic": "/universal_gnss_receiver/status",
+            "input_rtcm_topic": "/universal_gnss_receiver/rtcm",
+            "output_status_topic": "/gps/status",
+            "output_rtcm_topic": "/rtcm",
+        }],
+    )
+
     # ------------------------------------------------------------------
     # LaunchDescription
     # ------------------------------------------------------------------
@@ -326,9 +353,11 @@ def generate_launch_description() -> LaunchDescription:
             use_sim_time_arg,
             serial_port_arg,
             hardware_backend_arg,
+            gnss_stack_arg,
             OpaqueFunction(function=_validate_hardware_backend),
             robot_state_publisher_node,
             hardware_bridge_node,
             twist_mux_node,
+            universal_gnss_bridge_node,
         ]
     )
