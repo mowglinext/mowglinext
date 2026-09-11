@@ -195,6 +195,11 @@ sandbox_repo() {
   mkdir -p "$target"
   cp -R "$REPO_ROOT/install" "$target/"
   cp -R "$REPO_ROOT/docker" "$target/"
+  # config.sh sources the externally pinned MAVROS image contract from this
+  # integration directory. Keep the sandbox source set as narrow as the
+  # installer itself: it needs this contract, not any sensor implementation.
+  mkdir -p "$target/sensors"
+  cp -R "$REPO_ROOT/sensors/mavros" "$target/sensors/"
   cp -R "$REPO_ROOT/docs" "$target/"
   if [ -f "$REPO_ROOT/CLAUDE.md" ]; then
     cp "$REPO_ROOT/CLAUDE.md" "$target/"
