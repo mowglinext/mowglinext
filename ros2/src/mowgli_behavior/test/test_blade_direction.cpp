@@ -23,10 +23,12 @@
 #include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_behavior/status_nodes.hpp"
 #include "mowgli_behavior/utility_nodes.hpp"
+#include "mowgli_interfaces/srv/blade_control.hpp"
 #include <gtest/gtest.h>
 
 using namespace mowgli_behavior;
 using MowerControl = mowgli_interfaces::srv::MowerControl;
+using BladeControl = mowgli_interfaces::srv::BladeControl;
 
 TEST(BladeDirection, DisabledAlwaysRequestsDefaultAcrossSessions)
 {
@@ -86,11 +88,11 @@ protected:
   rclcpp::executors::SingleThreadedExecutor executor;
   std::vector<MowerControl::Request> requests;
   std::unique_ptr<BladeControlService> operator_service;
-  rclcpp::Client<MowerControl>::SharedPtr operator_client;
+  rclcpp::Client<BladeControl>::SharedPtr operator_client;
 
   void operatorCommand(uint8_t enabled, uint8_t direction, bool accepted = true)
   {
-    auto req = std::make_shared<MowerControl::Request>();
+    auto req = std::make_shared<BladeControl::Request>();
     req->mow_enabled = enabled;
     req->mow_direction = direction;
     auto future = operator_client->async_send_request(req);
@@ -147,7 +149,7 @@ protected:
         },
         [](const auto&) {});
     operator_service = std::make_unique<BladeControlService>(*ctx->node, ctx);
-    operator_client = server->create_client<MowerControl>("/blade_direction_test/mower_control");
+    operator_client = server->create_client<BladeControl>("/blade_direction_test/blade_control");
     ASSERT_TRUE(operator_client->wait_for_service(std::chrono::seconds(5)));
     executor.add_node(server);
     executor.add_node(ctx->node);
