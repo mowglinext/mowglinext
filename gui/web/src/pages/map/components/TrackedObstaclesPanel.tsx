@@ -1,4 +1,4 @@
-import {StopOutlined, CheckCircleOutlined} from "@ant-design/icons";
+import {StopOutlined, CheckCircleOutlined, CloseCircleOutlined} from "@ant-design/icons";
 import {App, Button} from "antd";
 import {useTranslation} from "react-i18next";
 import {useThemeMode} from "../../../theme/ThemeContext.tsx";
@@ -25,6 +25,7 @@ interface TrackedObstaclesPanelProps {
 /// Lists tracked obstacles published by /obstacle_tracker/obstacles. Each row
 /// has a "Promote" action that calls /map_server_node/promote_obstacle so the
 /// transient observation becomes a permanent keepout for the containing area.
+/// "Ignore" clears the current tracker observation; new detections can return.
 /// After the obstacle-tracker decouple (#6), this is the only path that
 /// adds entries to obstacle_polygons_ at runtime — auto-promotion is gone.
 export const TrackedObstaclesPanel = ({obstacles, obstacleAreaIndex, areaNames, selectedObstacleId, onHoverObstacle}: TrackedObstaclesPanelProps) => {
@@ -34,6 +35,32 @@ export const TrackedObstaclesPanel = ({obstacles, obstacleAreaIndex, areaNames, 
     const api = useApi();
 
     if (obstacles.length === 0) return null;
+
+    const handleIgnore = (obs: TrackedObstacle) => {
+        const id = obs.id ?? 0;
+        modal.confirm({
+            title: t('mapTrackedObstacles.ignoreConfirmTitle', {id}),
+            content: t('mapTrackedObstacles.ignoreConfirmBody'),
+            okText: t('mapTrackedObstacles.ignore'),
+            cancelText: t('mapTrackedObstacles.cancel'),
+            onOk: async () => {
+                try {
+                    const res = await api.mowglinext.callCreate("ignore_obstacle", {obstacle_id: id});
+                    if (res.error) throw new Error(res.error.error);
+                    notification.success({message: t('mapTrackedObstacles.ignoredSuccess', {id})});
+                } catch (error: unknown) {
+                    // The generated client rejects HTTP failures with a Response
+                    // carrying the parsed backend error, not an Error instance.
+                    const backendError = (error as {error?: {error?: string}} | null)?.error?.error;
+                    notification.error({
+                        message: t('mapTrackedObstacles.ignoreFailed'),
+                        description: backendError ?? (error instanceof Error ? error.message : t('mapTrackedObstacles.ignoreFailed')),
+                    });
+                    throw error;
+                }
+            },
+        });
+    };
 
     const handlePromote = (obs: TrackedObstacle) => {
         const id = obs.id ?? 0;
@@ -127,16 +154,27 @@ export const TrackedObstaclesPanel = ({obstacles, obstacleAreaIndex, areaNames, 
                                     {obs.polygon?.points ? ` · ${t('mapTrackedObstacles.pointsShort', {count: obs.polygon.points.length})}` : ''}
                                 </div>
                             </div>
-                            <Button
-                                size="small"
-                                type="text"
-                                icon={<CheckCircleOutlined />}
-                                onClick={() => handlePromote(obs)}
-                                disabled={areaIdx == null}
-                                title={areaIdx == null ? t('mapTrackedObstacles.noContainingArea') : t('mapTrackedObstacles.promoteTooltip')}
-                            >
-                                {t('mapTrackedObstacles.promote')}
-                            </Button>
+                            <div style={{display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 4}}>
+                                <Button
+                                    size="small"
+                                    type="text"
+                                    icon={<CheckCircleOutlined aria-hidden="true" />}
+                                    onClick={() => handlePromote(obs)}
+                                    disabled={areaIdx == null}
+                                    title={areaIdx == null ? t('mapTrackedObstacles.noContainingArea') : t('mapTrackedObstacles.promoteTooltip')}
+                                >
+                                    {t('mapTrackedObstacles.promote')}
+                                </Button>
+                                <Button
+                                    size="small"
+                                    type="text"
+                                    icon={<CloseCircleOutlined aria-hidden="true" />}
+                                    onClick={() => handleIgnore(obs)}
+                                    title={t('mapTrackedObstacles.ignoreTooltip')}
+                                >
+                                    {t('mapTrackedObstacles.ignore')}
+                                </Button>
+                            </div>
                         </div>
                     );
                 })}

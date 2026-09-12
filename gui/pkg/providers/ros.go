@@ -440,13 +440,6 @@ func (r *RosProvider) pollMap() {
 		navAreas = []mowgli.MapArea{}
 	}
 
-	// Read cached docking pose (written by initDockPoseSubscription)
-	r.mtx.Lock()
-	dockX := r.dockX
-	dockY := r.dockY
-	dockHeading := r.dockHeading
-	r.mtx.Unlock()
-
 	mapData := mowgli.Map{
 		MapWidth:        20.0,
 		MapHeight:       20.0,
@@ -454,10 +447,8 @@ func (r *RosProvider) pollMap() {
 		MapCenterY:      0.0,
 		NavigationAreas: navAreas,
 		WorkingArea:     workingAreas,
-		DockX:           dockX,
-		DockY:           dockY,
-		DockHeading:     dockHeading,
 	}
+	r.addDockPose(&mapData)
 
 	data, err := json.Marshal(mapData)
 	if err != nil {

@@ -1552,6 +1552,12 @@
     "unnamedArea": "Area {{index}}"
   },
   "mapTrackedObstacles": {
+    "ignore": "Ignore",
+    "ignoreTooltip": "Dismiss this tracked detection",
+    "ignoreConfirmTitle": "Ignore obstacle #{{id}}?",
+    "ignoreConfirmBody": "This dismisses the current tracked detection. It may reappear if detected again. Live collision avoidance and saved keepouts remain active.",
+    "ignoredSuccess": "Obstacle #{{id}} ignored",
+    "ignoreFailed": "Failed to ignore obstacle",
     "outsideAreaMessage": "Obstacle is outside every mowing area",
     "outsideAreaDescription": "Draw a mowing area that covers this obstacle before promoting it.",
     "areaFallback": "area {{index}}",

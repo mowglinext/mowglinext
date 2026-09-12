@@ -158,6 +158,49 @@ func TestSafeToStart_ManualMowing(t *testing.T) {
 	assert.True(t, s.safeToStart())
 }
 
+// The blade-off dock transit after a FINISHED mow reports AUTONOMOUS only so
+// the firmware will drive the wheels (HL_MODE_IDLE is a wheel hard stop). The
+// run itself is over, so a schedule due in that window must still fire — this
+// pins the behaviour that existed before the state was raised from IDLE to
+// AUTONOMOUS, so the motion fix does not silently start skipping schedules.
+func TestSafeToStart_PostMowDockTransitStaysStartable(t *testing.T) {
+	s := buildScheduler(types.NewMockRosProvider(), types.NewMockDBProvider())
+	s.lastHighLevelState = 2 // AUTONOMOUS (wheel gate held open)
+	s.lastHighLevelStateName = "MOWING_COMPLETE"
+	s.lastEmergency = false
+	assert.True(t, s.safeToStart())
+}
+
+// An emergency still wins over the post-mow exemption.
+func TestSafeToStart_PostMowDockTransitBlockedByEmergency(t *testing.T) {
+	s := buildScheduler(types.NewMockRosProvider(), types.NewMockDBProvider())
+	s.lastHighLevelState = 2
+	s.lastHighLevelStateName = "MOWING_COMPLETE"
+	s.lastEmergency = true
+	assert.False(t, s.safeToStart())
+}
+
+// The exemption is MOWING_COMPLETE only. Every other AUTONOMOUS transit stays
+// blocked: RETURNING_HOME is an explicit operator "go home", and the battery /
+// rain docks are the robot protecting itself — starting a mow on a flat battery
+// or in the rain is precisely what those states exist to prevent.
+func TestSafeToStart_OtherDockTransitsStayBlocked(t *testing.T) {
+	for _, name := range []string{
+		"RETURNING_HOME",
+		"LOW_BATTERY_DOCKING",
+		"CRITICAL_BATTERY_DOCKING",
+		"RAIN_DETECTED_DOCKING",
+		"COVERAGE_FAILED_DOCKING",
+		"MOWING",
+	} {
+		s := buildScheduler(types.NewMockRosProvider(), types.NewMockDBProvider())
+		s.lastHighLevelState = 2
+		s.lastHighLevelStateName = name
+		s.lastEmergency = false
+		assert.False(t, s.safeToStart(), "state_name %s must not be startable", name)
+	}
+}
+
 // --------------------------------------------------------------------------
 // checkSchedules — integration-style tests using mocks
 // --------------------------------------------------------------------------

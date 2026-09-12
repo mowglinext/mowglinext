@@ -644,10 +644,16 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(200, map[string]interface{}{"message": promoteRes.Message})
 				return
 			}
-		case "discard_obstacle":
+		case "ignore_obstacle", "discard_obstacle":
 			// Reject a PENDING obstacle proposal (currently: wheel-slip dig
 			// keepouts) by its MapObstacleInfo.id. Nothing was persisted, so
 			// this only drops it from the live keepout mask.
+			// Tracker IDs belong to a separate namespace: Ignore must target
+			// the tracker, never the map server's pending dig proposals.
+			service := "/map_server_node/discard_obstacle"
+			if command == "ignore_obstacle" {
+				service = "/obstacle_tracker/clear_obstacle"
+			}
 			var CallReq mowgli.ClearObstacleReq
 			err = c.BindJSON(&CallReq)
 			if err != nil {
@@ -656,7 +662,7 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			}
 			var discardRes mowgli.ClearObstacleRes
 			err = provider.CallService(ctx,
-				"/map_server_node/discard_obstacle",
+				service,
 				&CallReq,
 				&discardRes,
 				"mowgli_interfaces/srv/ClearObstacle")

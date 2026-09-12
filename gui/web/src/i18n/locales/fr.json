@@ -1548,6 +1548,12 @@
     "unnamedArea": "Zone {{index}}"
   },
   "mapTrackedObstacles": {
+    "ignore": "Ignorer",
+    "ignoreTooltip": "Écarter cette détection suivie",
+    "ignoreConfirmTitle": "Ignorer l’obstacle n°{{id}} ?",
+    "ignoreConfirmBody": "Cette action écarte la détection actuelle. L’obstacle peut réapparaître s’il est détecté à nouveau. L’évitement des collisions en temps réel et les zones interdites enregistrées restent actifs.",
+    "ignoredSuccess": "Obstacle n°{{id}} ignoré",
+    "ignoreFailed": "Impossible d’ignorer l’obstacle",
     "outsideAreaMessage": "L'obstacle est en dehors de toutes les zones de tonte",
     "outsideAreaDescription": "Tracez une zone de tonte qui couvre cet obstacle avant de le promouvoir.",
     "areaFallback": "zone {{index}}",

@@ -851,11 +851,11 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         <div style={{
             // Full-bleed the map across the AppShell's main padding.
             // Desktop main padding is 24px top / 32px horizontal / 48px bottom.
-            // Mobile main padding is 12px top / 14px horizontal / 110px bottom.
+            // Mobile main padding includes the bottom safe area as well.
             position: 'relative',
-            height: isMobile ? 'calc(100% + 122px)' : 'calc(100% + 72px)',
+            height: isMobile ? 'calc(100% + 122px + env(safe-area-inset-bottom, 0px))' : 'calc(100% + 72px)',
             width:  isMobile ? 'calc(100% + 28px)'  : 'calc(100% + 64px)',
-            margin: isMobile ? '-12px -14px -110px' : '-24px -32px -48px',
+            margin: isMobile ? '-12px -14px calc(-110px - env(safe-area-inset-bottom, 0px))' : '-24px -32px -48px',
         }}>
             <NewAreaModal
                 open={modalOpen}

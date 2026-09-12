@@ -39,9 +39,10 @@ type SchedulerProvider struct {
 	dbProvider   types.IDBProvider
 	soilProvider types.ISoilProvider
 
-	mu                 sync.RWMutex
-	lastHighLevelState uint8
-	lastEmergency      bool
+	mu                     sync.RWMutex
+	lastHighLevelState     uint8
+	lastHighLevelStateName string
+	lastEmergency          bool
 }
 
 // NewSchedulerProvider creates and starts the scheduler background goroutine.
@@ -76,9 +77,17 @@ func (s *SchedulerProvider) subscribeToStatus() {
 					break
 				}
 			}
+			// Accept "state_name" or "StateName"
+			for _, k := range []string{"state_name", "StateName"} {
+				if v, ok := raw[k]; ok {
+					_ = json.Unmarshal(v, &hls.StateName)
+					break
+				}
+			}
 		}
 		s.mu.Lock()
 		s.lastHighLevelState = hls.State
+		s.lastHighLevelStateName = hls.StateName
 		s.mu.Unlock()
 	}); err != nil {
 		logrus.Warnf("Scheduler: failed to subscribe to highLevelStatus: %v", err)
@@ -215,7 +224,9 @@ func (s *SchedulerProvider) persistSkip(sched schedule, reason string, now time.
 // safeToStart returns true when it is safe to send COMMAND_START.
 // It blocks mowing when:
 //   - an emergency is active (latched or active), or
-//   - the robot is already in autonomous (2) or recording (3) state.
+//   - the robot is already in autonomous (2) or recording (3) state,
+//     EXCEPT the post-mow dock transit (state 2, state_name MOWING_COMPLETE),
+//     which reports autonomous only to keep the firmware wheel gate open.
 //
 // HIGH_LEVEL_STATE constants:
 //
@@ -227,11 +238,26 @@ func (s *SchedulerProvider) persistSkip(sched schedule, reason string, now time.
 func (s *SchedulerProvider) safeToStart() bool {
 	s.mu.RLock()
 	state := s.lastHighLevelState
+	stateName := s.lastHighLevelStateName
 	emergency := s.lastEmergency
 	s.mu.RUnlock()
 
 	if emergency {
 		return false
+	}
+	// The blade-off dock transit that follows a FINISHED mow stays startable:
+	// the run is over, the robot is only trundling home, and a schedule due in
+	// that window should not be silently skipped. It reports AUTONOMOUS purely
+	// so the firmware will move the wheels (HL_MODE_IDLE is a wheel hard stop),
+	// not because a session is still running.
+	//
+	// Deliberately MOWING_COMPLETE only. The other transits that report
+	// AUTONOMOUS must stay blocked: RETURNING_HOME is an explicit operator
+	// "go home", and LOW_BATTERY_DOCKING / CRITICAL_BATTERY_DOCKING /
+	// RAIN_DETECTED_DOCKING are the robot protecting itself — starting a mow
+	// on a flat battery or in the rain is exactly what they exist to prevent.
+	if state == 2 && stateName == "MOWING_COMPLETE" {
+		return true
 	}
 	// Do not interrupt an already-running autonomous session or an ongoing
 	// area recording. State 0 (NULL/emergency) is also blocked.

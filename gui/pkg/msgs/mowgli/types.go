@@ -12,9 +12,10 @@ type Map struct {
 	MapCenterY      float64   `json:"map_center_y"`
 	NavigationAreas []MapArea `json:"navigation_areas"`
 	WorkingArea     []MapArea `json:"working_area"`
-	DockX           float64   `json:"dock_x"`
-	DockY           float64   `json:"dock_y"`
-	DockHeading     float64   `json:"dock_heading"`
+	// Nil means no pose received; an explicitly received zero is a valid dock.
+	DockX       *float64 `json:"dock_x,omitempty"`
+	DockY       *float64 `json:"dock_y,omitempty"`
+	DockHeading *float64 `json:"dock_heading,omitempty"`
 }
 
 // DockingSensor - placeholder, may not exist in ROS2 mowgli

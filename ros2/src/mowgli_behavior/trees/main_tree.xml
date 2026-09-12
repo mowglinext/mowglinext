@@ -1064,7 +1064,18 @@
               <Sequence name="CoverageCompleteDock">
                 <IsCoverageComplete/>
                 <SetMowerEnabled enabled="false"/>
-                <PublishHighLevelStatus state="1" state_name="MOWING_COMPLETE"/>
+                <!-- state=2 (AUTONOMOUS), NOT 1 (IDLE). The firmware hard-stops the
+                     wheels whenever the forwarded high-level mode is IDLE
+                     (cpp_main.cpp motors_handler: "else if
+                     main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ->
+                     hard_stop"). Publishing IDLE here froze the wheels for
+                     the DockRobot drive that follows, so a completed run
+                     could never reach the dock and DockRobot never returned.
+                     state_name still reads MOWING_COMPLETE for the GUI, and
+                     IDLE_DOCKED below remains the real idle transition. This
+                     matches FailedCoverageDock, which already publishes
+                     state=2 before its own dock. -->
+                <PublishHighLevelStatus state="2" state_name="MOWING_COMPLETE"/>
                 <SaveObstacles/>
                 <ClearCostmap/>
                 <Fallback name="CompleteNavOrStop">
@@ -1123,7 +1134,10 @@
             <IsCommand command="1"/>
             <Sequence name="MowingCompleteAction">
               <SetMowerEnabled enabled="false"/>
-              <PublishHighLevelStatus state="1" state_name="MOWING_COMPLETE"/>
+              <!-- state=2 (AUTONOMOUS), NOT 1 (IDLE) - the firmware hard-stops
+                   the wheels while the forwarded HL mode is IDLE, which would
+                   freeze the DockRobot drive below. See CoverageCompleteDock. -->
+              <PublishHighLevelStatus state="2" state_name="MOWING_COMPLETE"/>
               <SaveObstacles/>
               <ClearCostmap/>
               <ReactiveFallback name="MowingCompleteOrDocked">

@@ -715,6 +715,20 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
+  # ---- test_dock_motion_gate ----
+  # Structural guard over the real main_tree.xml: a DockRobot must never be
+  # entered while the last published high-level state is IDLE. The firmware
+  # turns HL_MODE_IDLE into a per-cycle wheel hard stop (cpp_main.cpp
+  # motors_handler), so a dock transit started in IDLE can never move and
+  # DockRobot never returns. Needs no ROS deps - it only reads the tree.
+  ament_add_gtest(test_dock_motion_gate
+    test/test_dock_motion_gate.cpp
+  )
+
+  target_compile_definitions(test_dock_motion_gate PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
+  )
+
 endif()
 
 ament_package()
