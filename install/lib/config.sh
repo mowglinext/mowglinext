@@ -62,7 +62,7 @@ recompute_image_defaults() {
   GUI_IMAGE_DEFAULT="${prefix}/mowglinext-gui:${IMAGE_TAG}"
   # Universal GNSS is a separately released multi-arch sidecar. Never derive
   # this immutable reference from MowgliNext's IMAGE_TAG.
-  UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-kilted:v0.1.0-rc1@sha256:d597bd6e19057730b6b75e11252888958884c3154e184181930ed8128d1e9f85"
+  UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-kilted:v0.1.1-rc4@sha256:061351843f5f6a1788207ca3448c04634d937e1de748f4ea4a6e351dae097ccb"
 }
 
 is_supported_hardware_backend() {
@@ -1384,6 +1384,45 @@ write_mavros_runtime_config() {
   # NTRIP path must stay off while the independent Universal GNSS sidecar owns
   # them; no MowgliMAVROS source or image contract is changed.
   _yaml_patch_key "$target" ntrip_enabled false
+}
+
+# Regenerate the files consumed by the independent GNSS sidecar and MAVROS
+# from the operator-facing Mowgli config.  `stack.sh regen` intentionally does
+# not run write_config(): that function also updates unrelated robot settings
+# from installer state.  These two files are derived outputs, so rebuilding
+# them from the existing source YAML is safe and keeps regen reproducible.
+runtime_gnss_config_value() {
+  local yaml_file="${1:?runtime_gnss_config_value: missing yaml file}"
+  local key="${2:?runtime_gnss_config_value: missing key}"
+  local default_value="${3:-}"
+  local value
+
+  value="$(existing_yaml_value "$key" "$yaml_file")"
+  printf '%s\n' "${value:-$default_value}"
+}
+
+regenerate_sidecar_runtime_configs() {
+  local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
+
+  if [ ! -f "$yaml_file" ]; then
+    error "Cannot regenerate GNSS runtime config: missing source $yaml_file"
+    return 1
+  fi
+
+  write_universal_gnss_parameters \
+    "$(runtime_gnss_config_value "$yaml_file" gnss_receiver_family auto)" \
+    "$(runtime_gnss_config_value "$yaml_file" gnss_transport serial)" \
+    "$(runtime_gnss_config_value "$yaml_file" gnss_serial_baud 921600)" \
+    "$(runtime_gnss_config_value "$yaml_file" gnss_frame_id gps_link)" \
+    "$(runtime_gnss_config_value "$yaml_file" ntrip_enabled true)" \
+    "$(runtime_gnss_config_value "$yaml_file" ntrip_host crtk.net)" \
+    "$(runtime_gnss_config_value "$yaml_file" ntrip_port 2101)" \
+    "$(runtime_gnss_config_value "$yaml_file" ntrip_user centipede)" \
+    "$(runtime_gnss_config_value "$yaml_file" ntrip_password centipede)" \
+    "$(runtime_gnss_config_value "$yaml_file" ntrip_mountpoint NEAR)" \
+    "$(runtime_gnss_config_value "$yaml_file" gnss_ntrip_gga_enabled true)" \
+    "$(runtime_gnss_config_value "$yaml_file" gnss_ntrip_gga_interval_s 10)"
+  write_mavros_runtime_config
 }
 
 write_config() {

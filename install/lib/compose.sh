@@ -41,6 +41,7 @@ ensure_default_configs() {
   fix_path_type_conflict "$DOCKER_DIR/config/mqtt/mosquitto.conf" "file"
   fix_path_type_conflict "$DOCKER_DIR/config/cyclonedds.xml" "file"
   fix_path_type_conflict "$DOCKER_DIR/config/universal_gnss/parameters.yaml" "file"
+  fix_path_type_conflict "$DOCKER_DIR/config/mavros/mowgli_robot.yaml" "file"
 
   if [ ! -f "$DOCKER_DIR/config/mqtt/mosquitto.conf" ]; then
     cp "$defaults/mqtt/mosquitto.conf" "$DOCKER_DIR/config/mqtt/mosquitto.conf"

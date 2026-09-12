@@ -90,13 +90,26 @@ GPS_SERVICE_BLOCK="$(awk '
   in_service { print }
 ' "$COMPOSE_FILE")"
 
-for required in "UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION:" "GNSS_NTRIP_ENABLED:" "/dev/gnss-receiver" "parameters.yaml"; do
+for required in \
+  "UNIVERSAL_GNSS_CONFIGURATION_SCHEMA_VERSION:" \
+  "GNSS_NTRIP_ENABLED:" \
+  "/dev/gnss-receiver" \
+  "parameters_file:=/etc/universal_gnss/parameters.yaml" \
+  "fix_topic:=/gps/fix" \
+  "status_topic:=/universal_gnss_receiver/status" \
+  "rtcm_topic:=/universal_gnss_receiver/rtcm"; do
   if printf '%s' "$GPS_SERVICE_BLOCK" | grep -q "$required"; then
     pass "compose contains sidecar env: $required"
   else
     fail "compose contains sidecar env: $required" "missing from generated gps service"
   fi
 done
+
+assert_not_contains "Universal GNSS command has no legacy ROS CLI remaps" \
+  "--ros-args" "$GPS_SERVICE_BLOCK"
+
+assert_contains "Universal GNSS uses the combined native launch" \
+  "receiver_and_ntrip.launch.py" "$GPS_SERVICE_BLOCK"
 
 for forbidden in "gnss_unicore:" "UNICORE_IMAGE" "GPS_""RUNTIME_MODE:" "GPS_""PROTOCOL:" "GPS_""PORT:" "GPS_""BAUD:"; do
   if printf '%s' "$GPS_SERVICE_BLOCK" | grep -q "$forbidden"; then

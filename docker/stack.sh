@@ -105,6 +105,7 @@ filter_optional_fragments() {
 regen() {
   step "Regenerating $FINAL_COMPOSE_FILE from docker/.env"
   ensure_default_configs
+  regenerate_sidecar_runtime_configs
   build_compose_stack
   filter_optional_fragments
   write_compose_merged

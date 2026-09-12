@@ -239,6 +239,12 @@ done
 
 assert_contains "Universal GNSS image is independently configured" \
   "UNIVERSAL_GNSS_IMAGE=${UNIVERSAL_GNSS_IMAGE_DEFAULT}" "$(cat "$ENV_FILE")"
+assert_contains "Universal GNSS image is pinned to RC v0.1.1-rc4" \
+  "UNIVERSAL_GNSS_IMAGE=ghcr.io/pepeuch/universal-gnss-ros2-kilted:v0.1.1-rc4@sha256:061351843f5f6a1788207ca3448c04634d937e1de748f4ea4a6e351dae097ccb" \
+  "$(cat "$ENV_FILE")"
+assert_contains "installer replaces a previous Universal GNSS image pin" \
+  "unset MOWGLI_ROS2_IMAGE GPS_IMAGE LIDAR_IMAGE MAVROS_IMAGE UNIVERSAL_GNSS_IMAGE GUI_IMAGE" \
+  "$(cat "$SANDBOX_REPO/install/mowglinext.sh")"
 
 section ".env permissions are reasonable"
 

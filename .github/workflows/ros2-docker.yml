@@ -7,6 +7,7 @@ on:
       - "v*.*.*"
     paths:
       - 'ros2/**'
+      - 'sensors/gps/mowgli_gnss_bridge/**'
       - 'tools/motor/**'
       - '.github/workflows/ros2-docker.yml'
   workflow_dispatch:
@@ -112,6 +113,7 @@ jobs:
             set -euo pipefail
             ros2 pkg prefix mowgli_bringup
             ros2 pkg prefix mowgli_tools
+            ros2 pkg prefix mowgli_gnss_bridge
             ros2 run mowgli_tools tune_drive_pid --help > /tmp/mowgli_tools_help.txt
             grep -q "Controlled drive PID tuning" /tmp/mowgli_tools_help.txt
             ros2 launch mowgli_bringup full_system.launch.py --show-args \

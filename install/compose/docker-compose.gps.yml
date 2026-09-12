@@ -38,22 +38,18 @@ services:
         source: ${UNIVERSAL_GNSS_EXPORT_DIR}
         target: /var/lib/universal_gnss/export
       - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
-    # The receiver-only branch deliberately avoids starting NTRIP when it is
-    # disabled; it does not simulate a caster.
+    # Universal GNSS RC v0.1.1-rc4 owns receiver and NTRIP.  Its combined
+    # launch exposes native topic arguments, so do not append ROS CLI remaps
+    # here: the Mowgli bridge consumes the two internal topics unchanged.
     command:
-      - /bin/bash
-      - -lc
-      - >-
-        if [ "$${GNSS_NTRIP_ENABLED}" = "true" ]; then
-          exec ros2 launch universal_gnss_ros2 receiver_and_ntrip.launch.py
-          parameters_file:=/etc/universal_gnss/parameters.yaml --ros-args
-          -r /universal_gnss_receiver/fix:=/gps/fix
-          -r /universal_gnss_ntrip/status:=/universal_gnss_receiver/status
-          -r /universal_gnss_ntrip/rtcm:=/universal_gnss_receiver/rtcm;
-        fi;
-        exec ros2 run universal_gnss_ros2 receiver_node --ros-args
-        --params-file /etc/universal_gnss/parameters.yaml
-        -r /universal_gnss_receiver/fix:=/gps/fix
+      - ros2
+      - launch
+      - universal_gnss_ros2
+      - receiver_and_ntrip.launch.py
+      - parameters_file:=/etc/universal_gnss/parameters.yaml
+      - fix_topic:=/gps/fix
+      - status_topic:=/universal_gnss_receiver/status
+      - rtcm_topic:=/universal_gnss_receiver/rtcm
     # The upstream default requires NTRIP. This remains a bounded service
     # responsiveness check for each component actually started.
     healthcheck:
