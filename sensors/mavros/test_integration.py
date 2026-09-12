@@ -51,7 +51,7 @@ def main() -> int:
     for value in (
         "image: ${MAVROS_IMAGE}",
         "- /dev:/dev",
-        "./docker/config/mowgli:/ros2_ws/config:ro",
+        "./docker/config/mavros:/ros2_ws/config:ro",
         "./docker/config/cyclonedds.xml:/cyclonedds.xml:ro",
         "MAVROS_PORT: ${MAVROS_PORT:-/dev/mavros}",
         "MAVROS_BAUD: ${MAVROS_BAUD:-921600}",
@@ -59,11 +59,42 @@ def main() -> int:
         require(value in compose, f"MAVROS compose contract missing: {value}")
 
     require(
+        "./docker/config/mowgli:/ros2_ws/config:ro" not in compose,
+        "MAVROS must not mount the operator-facing Mowgli config",
+    )
+    for value in ("UNIVERSAL_GNSS_IMAGE", "GNSS_NTRIP", "/dev/gnss-receiver"):
+        require(
+            value not in compose,
+            f"MAVROS compose must not claim Universal GNSS ownership: {value}",
+        )
+
+    mavros_config_writer = re.search(
+        r"write_mavros_runtime_config\(\) \{(?P<body>.*?)^\}",
+        config,
+        flags=re.DOTALL | re.MULTILINE,
+    )
+    require(mavros_config_writer is not None, "MAVROS derived-config writer missing")
+    mavros_config_body = mavros_config_writer.group("body")
+    require(
+        'source="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"' in mavros_config_body
+        and 'target="$DOCKER_DIR/config/mavros/mowgli_robot.yaml"' in mavros_config_body
+        and 'cp "$source" "$target"' in mavros_config_body,
+        "MAVROS config must be derived from the Mowgli config",
+    )
+    require(
+        '_yaml_patch_key "$target" ntrip_enabled false' in mavros_config_body
+        and mavros_config_body.count("_yaml_patch_key") == 1,
+        "MAVROS derived config must override only ntrip_enabled",
+    )
+
+    require(
         '"$MAVROS_BY_ID" == /dev/serial/by-id/*' in env,
         "stable /dev/serial/by-id MAVROS paths are not promoted to MAVROS_PORT",
     )
-    require('GNSS_BACKEND="disabled"' in env and 'GNSS_STACK="disabled"' in env,
-            "MAVROS mode must exclude the direct GNSS sidecar")
+    require(
+        'GNSS_BACKEND="disabled"' not in env and 'GNSS_STACK="disabled"' not in env,
+        "MAVROS mode must keep Universal GNSS independent",
+    )
 
     require('executable="hardware_bridge_node"' in launch, "native bridge declaration missing")
     require(
@@ -79,6 +110,7 @@ def main() -> int:
         "/mavros/global_position/global",
         "HARDWARE_PENDING",
         "command and blade paths disabled by default",
+        "Universal GNSS sidecar is the sole owner of the receiver and NTRIP",
     ):
         require(expected in readme, f"MAVROS integration documentation missing: {expected}")
 
