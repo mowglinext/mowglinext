@@ -1,4 +1,9 @@
 {
+  "systemPower": {
+    "title": "Hôte",
+    "description": "Redémarrez ou éteignez l’ordinateur qui exécute les services du robot et l’interface web.",
+    "open": "Alimentation de l’hôte…"
+  },
   "language": {
     "label": "Langue",
     "fr": "Français",
@@ -140,14 +145,14 @@
     "restartMowgliConfirm": "Cela redémarre toute la pile Mowgli (ROS2, GPS, LiDAR et cette interface web) — comme la commande mowgli-restart. La page se déconnectera brièvement et se rechargera automatiquement au retour de l'interface.",
     "restartingStackTitle": "Redémarrage de Mowgli…",
     "restartingStackBody": "Redémarrage de toute la pile. Cette page se reconnectera et se rechargera automatiquement au retour de l'interface.",
-    "rebootingPiTitle": "Redémarrage du Raspberry Pi…",
-    "rebootingPiBody": "Le Raspberry Pi redémarre. Cette page se reconnectera et se rechargera automatiquement à son retour (cela peut prendre une à deux minutes).",
+    "rebootingPiTitle": "Redémarrage de l’hôte…",
+    "rebootingPiBody": "L’hôte redémarre. Cette page se reconnectera et se rechargera automatiquement à son retour (cela peut prendre une à deux minutes).",
     "advanced": "Avancé",
     "restartBoard": "Redémarrer la carte (STM32)",
     "restartBoardConfirm": "Réinitialise le firmware STM32 (NVIC_SystemReset). À utiliser pour débloquer une carte figée — par ex. l'IMU renvoyant NaN. Les moteurs/la lame s'arrêtent pendant le reset (~1 s).",
-    "restartPi": "Redémarrer le Raspberry Pi",
+    "restartPi": "Redémarrer l’hôte",
     "restartPiConfirm": "Le système va redémarrer. Vous perdrez la connexion temporairement.",
-    "shutdownPi": "Éteindre le Raspberry Pi",
+    "shutdownPi": "Éteindre l’hôte",
     "shutdownPiConfirm": "Le système va s'éteindre. Un accès physique sera nécessaire pour le rallumer.",
     "rearm": "Réarmer",
     "rearmEmergencyTooltip": "Réarmer l'arrêt d'urgence (le firmware décide si le verrou se libère)",

@@ -83,6 +83,7 @@ import {clampTinyToZero} from "../utils/telemetryFormat.ts";
 import {detectNav2Recovery} from "../utils/nav2Recovery.ts";
 import {groupAlertsByComponent} from "../utils/diagnosticsAlerts.ts";
 import {useValueSince} from "../hooks/useValueSince.ts";
+import {SystemPowerCard} from "../components/SystemPowerCard.tsx";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -608,6 +609,9 @@ export const DiagnosticsPage = () => {
                         </div>
                     )}
                 </Card>
+            </Col>
+            <Col span={24}>
+                <SystemPowerCard/>
             </Col>
             {snapshot?.timestamp && (
                 <Col span={24}>

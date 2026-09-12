@@ -93,6 +93,12 @@ jobs:
       - name: Unit tests
         run: yarn test
 
+      - name: Install Chromium for power-menu regression tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Test shared power menu and Diagnostics shortcut
+        run: npx playwright test system-power.spec.ts --project=chromium
+
   # The Go backend's ~36 test files gated NOTHING — no workflow ran `go test`,
   # exactly the gap this file's header describes for vitest. That is how the
   # imu_y template/model-preset divergence survived: the guards that would have
