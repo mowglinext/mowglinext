@@ -558,6 +558,161 @@ TEST_F(AreaTypeTest, KeepoutMaskEmptyWhenNoAreas)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Transit boundary clearance (boundary_inner_margin_m) + the dock exemption
+// (dock_inner_margin_exempt_radius_m). This is deliberately a SOFT mid-cost
+// band (kSoftPenaltyMaskCost, = 50 here), never lethal (100) — a lethal
+// version was tried during review and rejected on two independent grounds:
+//   1. It collides with chassis_safety_inset (also 0.20 m by default): the
+//      outermost coverage ring sits exactly that far inside the line, so a
+//      lethal band there plus inflation would swallow the ring itself and
+//      reopen the START_OCCUPIED skip cascade (issue #487).
+//   2. It walls off any area-to-area seam narrower than roughly twice the
+//      inflated margin.
+// An even earlier lethal attempt (0.15 m) was also reverted on 2026-04-23
+// (commit 7f4b43d5) because GNSS drift near a dock close to the recorded
+// edge landed the robot's own position in a lethal cell the planner could
+// not route out of. These tests pin the soft-cost design: the penalty band
+// is real (transit is nudged away from the edge) but nothing it touches —
+// an edge cell, a dock-adjacent cell, or a seam between two areas — is ever
+// unplannable.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class BoundaryInnerMarginTest : public AreaTypeTest
+{
+protected:
+  static constexpr int8_t kSoftPenalty = 50;  // mirrors kSoftPenaltyMaskCost
+
+  // 20x20 m map; dock 0.1 m inside the +X edge of a 16x16 m area (edge at
+  // x=8) — a dock placed close to the recorded edge, same shape as the
+  // 2026-04-23 regression.
+  void SetUp() override
+  {
+    node_ = make_node(0.20, 2.5);
+  }
+
+  static std::shared_ptr<mowgli_map::MapServerNode> make_node(double boundary_inner_margin_m,
+                                                              double dock_exempt_radius_m)
+  {
+    rclcpp::NodeOptions opts;
+    opts.append_parameter_override("resolution", 0.1);
+    opts.append_parameter_override("map_size_x", 20.0);
+    opts.append_parameter_override("map_size_y", 20.0);
+    opts.append_parameter_override("map_frame", "map");
+    opts.append_parameter_override("tool_width", 0.2);
+    opts.append_parameter_override("map_file_path", "");
+    opts.append_parameter_override("areas_file_path", "");
+    opts.append_parameter_override("publish_rate", 1.0);
+    opts.append_parameter_override("boundary_inner_margin_m", boundary_inner_margin_m);
+    opts.append_parameter_override("dock_inner_margin_exempt_radius_m", dock_exempt_radius_m);
+    opts.append_parameter_override("dock_pose_x", 7.5);
+    opts.append_parameter_override("dock_pose_y", 0.0);
+    opts.append_parameter_override("dock_pose_yaw", 0.0);
+    return std::make_shared<mowgli_map::MapServerNode>(opts);
+  }
+};
+
+TEST_F(BoundaryInnerMarginTest, InteriorFarFromEveryEdgeStaysFullyFree)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, 0.0, 0.0), 0)
+      << "far from every edge and far from the dock, must be free";
+}
+
+TEST_F(BoundaryInnerMarginTest, EdgeFarFromTheDockGetsTheSoftPenaltyNeverLethal)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  // 0.1 m inside the -X edge (x=-8), 15.6 m from the dock at (7.5, 0) — well
+  // outside the 2.5 m exemption radius, so the margin applies. It must be
+  // the soft mid-cost, NEVER the lethal value (100) — that distinction is
+  // the entire point of this rework.
+  EXPECT_EQ(mask_at(mask, -7.9, 0.0), kSoftPenalty)
+      << "within boundary_inner_margin_m of an edge, far from the dock, must be soft-penalised, "
+         "not lethal — a lethal cell here is exactly the regression under review";
+}
+
+TEST_F(BoundaryInnerMarginTest, OutermostCoverageRingBandIsNeverLethal)
+{
+  // The geometry the maintainer flagged: chassis_safety_inset (0.20 m
+  // default) places the outermost coverage ring's centreline right inside
+  // this same 0.20 m band. A cell just inside that line (-7.85, deliberately
+  // off the exact boundary_inner_margin_m cutoff to avoid a floating-point
+  // edge case in the test itself) must stay plannable — soft-penalised at
+  // worst — or every blade-off transit starting from the outer ring fails
+  // "Start occupied" (issue #487).
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, -7.85, 0.0), kSoftPenalty)
+      << "the band the outer ring's own line sits in must never be lethal";
+}
+
+TEST_F(BoundaryInnerMarginTest, EdgeNearTheDockCarriesNoPenaltyAtAll)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  // 0.1 m inside the +X edge (x=8) — same distance-to-edge as the previous
+  // test — but only 0.4 m from the dock at (7.5, 0): inside the 2.5 m
+  // exemption radius, so it must carry NO penalty at all (0), not merely
+  // "not lethal".
+  EXPECT_EQ(mask_at(mask, 7.9, 0.0), 0)
+      << "within the dock exemption radius, the inner-margin penalty must not apply";
+}
+
+TEST_F(BoundaryInnerMarginTest, NarrowSeamBetweenTwoAreasStaysCrossable)
+{
+  // Two 4x8 m areas separated by a 0.3 m navigation gap (x in [-0.15, 0.15])
+  // — narrower than 2x boundary_inner_margin_m (0.40 m). A lethal design
+  // would wall this off entirely; the soft-cost design must still allow a
+  // straight crossing, just at the penalised cost.
+  ASSERT_TRUE(add_area("west_lawn", make_rect(-4.15, -4, -0.15, 4), /*is_navigation=*/false));
+  ASSERT_TRUE(add_area("east_lawn", make_rect(0.15, -4, 4.15, 4), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+
+  // Both sides of the seam are inside their own area, close to its edge, far
+  // from the dock — soft-penalised, never lethal, so a straight-line
+  // crossing is never blocked.
+  EXPECT_EQ(mask_at(mask, -0.2, 0.0), kSoftPenalty) << "just inside the west area's edge";
+  EXPECT_EQ(mask_at(mask, 0.2, 0.0), kSoftPenalty) << "just inside the east area's edge";
+  // The gap between the two polygons is neither "inside an area" nor within
+  // outside_free_margin of one necessarily being tested here — this asserts
+  // it is at least never the lethal keepout default either.
+  EXPECT_NE(mask_at(mask, 0.0, 0.0), 100) << "the seam between two close areas must stay crossable";
+}
+
+TEST_F(BoundaryInnerMarginTest, ZeroExemptRadiusRemovesTheDockCarveOutButStillNeverLethal)
+{
+  // With the exemption disabled, the near-dock cell falls back to the plain
+  // soft penalty — it must NOT become lethal even then, since the mid-cost
+  // design no longer depends on the dock exemption for safety.
+  node_ = make_node(/*boundary_inner_margin_m=*/0.20, /*dock_exempt_radius_m=*/0.0);
+
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, 7.9, 0.0), kSoftPenalty)
+      << "with the exemption radius at 0, a near-dock cell falls back to the soft penalty, "
+         "never lethal";
+}
+
+TEST_F(BoundaryInnerMarginTest, ZeroBoundaryMarginDisablesThePenaltyEntirely)
+{
+  // The pre-2026-09 default: no penalty at all, anywhere, dock or not.
+  node_ = make_node(/*boundary_inner_margin_m=*/0.0, /*dock_exempt_radius_m=*/2.5);
+
+  ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, -7.9, 0.0), 0)
+      << "boundary_inner_margin_m=0 must restore the legacy edge-tight behaviour";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Drawn-obstacle margin (mowgli_robot.yaml.obstacle_margin) — the keepout
 // twin of coverage_server's F2C hole buffering. A drawn obstacle (a tree)
 // must project a LETHAL band obstacle_margin wide around its polygon so

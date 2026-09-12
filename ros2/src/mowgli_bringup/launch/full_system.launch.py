@@ -428,6 +428,16 @@ def generate_launch_description() -> LaunchDescription:
                 robot_params.get("lethal_outside_areas", True))},
             {"enforce_boundary_margin_m": float(
                 robot_params.get("enforce_boundary_margin_m", 0.40))},
+            # Transit boundary clearance: a SOFT mid-cost nudge (never lethal)
+            # in the GLOBAL costmap that biases point-to-point TRANSIT
+            # planning away from the recorded edge when an alternative
+            # exists — coverage tracks the F2C path against the LOCAL
+            # costmap instead and is unaffected (costmap_filters.cpp). See
+            # mowgli_robot.yaml for why this must stay soft, never lethal.
+            {"boundary_inner_margin_m": float(
+                robot_params.get("boundary_inner_margin_m", 0.20))},
+            {"dock_inner_margin_exempt_radius_m": float(
+                robot_params.get("dock_inner_margin_exempt_radius_m", 2.5))},
             # tool_width is the SINGLE source of truth (mowgli_robot.yaml) for
             # both the mark_cells_mowed stamp radius / sliver detection here AND
             # coverage_server.operation_width (injected by navigation.launch.py).

@@ -2457,7 +2457,13 @@
     "coverageXyToleranceTooltip": "Position tolerance during mowing strips",
     "recovery": "Recovery",
     "progressTimeout": "Progress Timeout",
-    "progressTimeoutTooltip": "Seconds without forward progress before recovery kicks in"
+    "progressTimeoutTooltip": "Seconds without forward progress before recovery kicks in",
+    "boundaryClearance": "Boundary Clearance",
+    "boundaryClearanceDescription": "How far transit moves between locations prefer to stay from the recorded boundary. This is a soft preference, not a hard rule — transit can still cross the margin when that's the only option (e.g. right after undocking). Mowing itself is unaffected — the robot still cuts up to the true edge as configured elsewhere; only point-to-point travel is nudged back.",
+    "boundaryInnerMargin": "Transit Boundary Margin",
+    "boundaryInnerMarginTooltip": "Distance (m) transit paths are nudged to stay inside the recorded boundary. 0 disables this and lets transit hug or clip the recorded line, as before this setting existed.",
+    "dockExemptRadius": "Dock Exemption Radius",
+    "dockExemptRadiusTooltip": "Radius (m) around the dock pose, in every direction, exempt from the transit boundary margin above — so the dock approach carries no bias at all, not just \"never blocked\". Widen this if your dock sees a lot of GNSS drift (e.g. under a canopy). Only takes effect once a dock pose is set."
   },
   "settingsSensors": {
     "lidarSensor": "LiDAR Sensor",
