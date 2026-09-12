@@ -50,6 +50,17 @@ TEST(CoverageTransitGap, EveryLaterSubPathTransitsBladeOff)
   EXPECT_TRUE(mowgli_behavior::coverageTransitRequired(0.0, true));
 }
 
+// 2026-09-10: a first unit that will be reached by a blade-off transit must not
+// have the blade spun up on start — the START_OCCUPIED retry loop cycled the
+// blade on/off on every pass. Only a directly-mowable first unit spins up.
+TEST(CoverageTransitGap, BladeSpinsUpOnStartOnlyForADirectlyMowableFirstUnit)
+{
+  EXPECT_TRUE(mowgli_behavior::bladeSpinupBeforeFirstUnit(0.0));
+  EXPECT_TRUE(mowgli_behavior::bladeSpinupBeforeFirstUnit(0.16));  // adjacent swath
+  EXPECT_FALSE(mowgli_behavior::bladeSpinupBeforeFirstUnit(0.61));
+  EXPECT_FALSE(mowgli_behavior::bladeSpinupBeforeFirstUnit(13.6));
+}
+
 TEST(CoverageTransitGap, DistantFirstUnitStillTransits)
 {
   EXPECT_TRUE(mowgli_behavior::coverageTransitRequired(0.61, false));

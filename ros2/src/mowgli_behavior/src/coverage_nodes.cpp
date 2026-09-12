@@ -406,17 +406,37 @@ BT::NodeStatus FollowStrip::onStart()
     return BT::NodeStatus::FAILURE;
   }
 
-  setBladeEnabled(true);
+  // Spin the blade up now ONLY if the first unit is mowed from where the robot
+  // stands. A unit that must first be reached by a blade-off transit gets its
+  // blade from sendFollowGoal after the transit; spinning it up here just to
+  // cut it again in sendCurrentSwath cycled the blade on every retry of a
+  // START_OCCUPIED pass (2026-09-10).
+  const double first_gap = distanceToSegmentStart(ctx);
+  blade_spinup_pending_ = bladeSpinupBeforeFirstUnit(first_gap);
+  setBladeEnabled(blade_spinup_pending_);
   blade_start_time_ = std::chrono::steady_clock::now();
   goal_sent_ = false;
 
-  RCLCPP_INFO(ctx->node->get_logger(),
-              "FollowStrip: area %u, %zu segments (%zu already done); "
-              "blade enabled, waiting %.1fs for spinup",
-              area_idx_,
-              swaths_.size(),
-              ctx->area_completed_swaths[area_idx_].size(),
-              kBladeSpinupDelaySec);
+  if (blade_spinup_pending_)
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "FollowStrip: area %u, %zu segments (%zu already done); "
+                "blade enabled, waiting %.1fs for spinup",
+                area_idx_,
+                swaths_.size(),
+                ctx->area_completed_swaths[area_idx_].size(),
+                kBladeSpinupDelaySec);
+  }
+  else
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "FollowStrip: area %u, %zu segments (%zu already done); first unit is "
+                "%.2f m away — blade stays OFF until the transit succeeds",
+                area_idx_,
+                swaths_.size(),
+                ctx->area_completed_swaths[area_idx_].size(),
+                first_gap);
+  }
 
   // Seed the smooth GUI percent for THIS area: 0 % for a fresh area, or the
   // resumed fraction if resuming mid-path. Resets the value per area so it does
@@ -822,11 +842,12 @@ BT::NodeStatus FollowStrip::onRunning()
     return BT::NodeStatus::SUCCESS;
   };
 
-  // Wait for blade spin-up, then dispatch the first segment.
+  // Wait for blade spin-up (only if the blade was started), then dispatch the
+  // first segment.
   if (!goal_sent_)
   {
     auto elapsed = std::chrono::steady_clock::now() - blade_start_time_;
-    if (elapsed < std::chrono::duration<double>(kBladeSpinupDelaySec))
+    if (blade_spinup_pending_ && elapsed < std::chrono::duration<double>(kBladeSpinupDelaySec))
       return BT::NodeStatus::RUNNING;
     goal_sent_ = true;
     sendCurrentSwath(ctx);

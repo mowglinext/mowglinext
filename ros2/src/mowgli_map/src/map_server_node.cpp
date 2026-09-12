@@ -667,6 +667,8 @@ void MapServerNode::on_odom(nav_msgs::msg::Odometry::ConstSharedPtr /*msg*/)
   // centroid when the robot is inside the area).
   last_robot_x_ = x;
   last_robot_y_ = y;
+  last_robot_yaw_ = yaw;
+  have_robot_heading_ = true;
 
   const rclcpp::Time now_t = now();
   const bool telemetry_fresh =

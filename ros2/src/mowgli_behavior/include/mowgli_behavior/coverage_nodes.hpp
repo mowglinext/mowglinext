@@ -63,6 +63,18 @@ inline bool coverageTransitRequired(double start_gap_m, bool previous_unit_dispa
          start_gap_m > mowgli_interfaces::coverage_geometry::kSegmentTransitGapM;
 }
 
+/// Whether FollowStrip should spin the blade up on start, BEFORE the first
+/// unit is dispatched. Only when that unit will be mowed directly from where
+/// the robot stands. A first unit that must be reached by a blade-off transit
+/// gets its blade from sendFollowGoal once the transit has succeeded. Field
+/// 2026-09-10: while every transit was refused with START_OCCUPIED, each retry
+/// of the pass spun the blade up for 1.5 s and cut it again — dozens of
+/// on/off cycles on a robot that was not going anywhere.
+inline bool bladeSpinupBeforeFirstUnit(double first_unit_gap_m)
+{
+  return !coverageTransitRequired(first_unit_gap_m, /*previous_unit_dispatched=*/false);
+}
+
 // ---------------------------------------------------------------------------
 // Resume-cursor resolution — shared between FollowStrip (which trims the driven
 // prefix and marks fully-driven sub-paths done) and PlanCoverageArea (which aims
@@ -392,6 +404,9 @@ private:
   // Blade spinup delay — wait before sending the FIRST segment goal
   static constexpr double kBladeSpinupDelaySec = 1.5;
   std::chrono::steady_clock::time_point blade_start_time_;
+  /// False when the first unit needs a blade-off transit: the blade stays off
+  /// on start and the spin-up wait is skipped (bladeSpinupBeforeFirstUnit).
+  bool blade_spinup_pending_{true};
   bool goal_sent_ = false;
   bool follow_goal_ever_sent_ = false;
 
