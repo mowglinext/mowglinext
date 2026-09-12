@@ -616,7 +616,8 @@ TEST_F(BoundaryInnerMarginTest, InteriorFarFromEveryEdgeStaysFullyFree)
   ASSERT_TRUE(add_area("lawn", make_rect(-8, -8, 8, 8), /*is_navigation=*/false));
   const auto mask = node_->build_keepout_mask_for_test();
   ASSERT_FALSE(mask.data.empty());
-  EXPECT_EQ(mask_at(mask, 0.0, 0.0), 0) << "far from every edge and far from the dock, must be free";
+  EXPECT_EQ(mask_at(mask, 0.0, 0.0), 0)
+      << "far from every edge and far from the dock, must be free";
 }
 
 TEST_F(BoundaryInnerMarginTest, EdgeFarFromTheDockGetsTheSoftPenaltyNeverLethal)
