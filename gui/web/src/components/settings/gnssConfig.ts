@@ -5,6 +5,28 @@ export const GNSS_RECEIVER_FAMILY_OPTIONS = [
     { value: "nmea", label: "gnssConfig.receiverFamily.nmea.label" },
 ] as const;
 
+export const GNSS_HARDWARE_PRESET_OPTIONS = [
+    { value: "", label: "gnssConfig.hardwarePreset.manual.label" },
+    { value: "waveshare_lc29h_da", label: "gnssConfig.hardwarePreset.waveshareLc29hDa.label" },
+] as const;
+
+export const gnssHardwarePresetSettings = (preset: string): Record<string, string | number | boolean> => {
+    if (preset === "waveshare_lc29h_da") {
+        return {
+            gnss_hardware_preset: preset,
+            gnss_receiver_family: "nmea",
+            gnss_serial_baud: 115200,
+            gnss_config_baud: 115200,
+            gnss_execution_baud: "115200",
+            gnss_profile: "runtime_only",
+            gnss_profile_rate_hz: 1,
+            gnss_config_apply_enabled: false,
+        };
+    }
+
+    return { gnss_hardware_preset: "" };
+};
+
 export const GNSS_BAUD_OPTIONS = [
     { value: 115200, label: "115200" },
     { value: 230400, label: "230400" },

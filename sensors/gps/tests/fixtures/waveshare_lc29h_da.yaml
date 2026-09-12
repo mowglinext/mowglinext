@@ -1,0 +1,5 @@
+mowgli:
+  ros__parameters:
+    gnss_hardware_preset: waveshare_lc29h_da
+    gnss_serial_device: /dev/null
+    ntrip_enabled: false

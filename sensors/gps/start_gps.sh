@@ -79,6 +79,17 @@ resolve_receiver_family() {
   printf 'auto\n'
 }
 
+resolve_hardware_preset() {
+  local yaml_preset
+  yaml_preset="$(parse_yaml_any gnss_hardware_preset)"
+  if [ -n "$yaml_preset" ]; then
+    printf '%s\n' "$(normalize_lower "$yaml_preset")"
+    return 0
+  fi
+
+  printf '%s\n' "$(normalize_lower "${GNSS_HARDWARE_PRESET:-}")"
+}
+
 resolve_transport() {
   local yaml_transport
   yaml_transport="$(parse_yaml_any gnss_transport)"
@@ -455,6 +466,26 @@ signal_profile="$(resolve_signal_profile)"
 receiver_model="$(resolve_receiver_model)"
 signal_group="$(resolve_signal_group)"
 rover_dynamic_mode="$(resolve_rover_dynamic_mode)"
+hardware_preset="$(resolve_hardware_preset)"
+
+case "$hardware_preset" in
+  "")
+    ;;
+  waveshare_lc29h_da)
+    # Waveshare's LC29H(DA) exposes standard NMEA and is limited to 1 Hz.
+    # Keep it runtime-only: the generic NMEA path deliberately has no
+    # write-side configuration contract.
+    receiver_family="nmea"
+    serial_baud="115200"
+    publish_rate_hz="1.0"
+    config_apply_enabled="false"
+    config_profile="runtime_only"
+    ;;
+  *)
+    echo "[start_gps.sh] ERROR: unknown gnss_hardware_preset=${hardware_preset}"
+    exit 1
+    ;;
+esac
 
 if [ "$transport" = "serial" ] && [ ! -e "$serial_device" ]; then
   echo "[start_gps.sh] ERROR: selected GNSS serial device does not exist: ${serial_device}"
@@ -495,6 +526,10 @@ fi
 # pre-configured receiver still runs. The apply must complete before
 # receiver_node opens the device.
 apply_receiver_profile() {
+  if [ "$receiver_family" = "nmea" ]; then
+    echo "[start_gps.sh] Receiver profile auto-apply skipped for generic NMEA; leaving receiver configuration unchanged."
+    return 0
+  fi
   if [ "$config_apply_enabled" != "true" ]; then
     echo "[start_gps.sh] Receiver profile auto-apply disabled (gnss_config_apply_enabled=false); leaving receiver config unchanged."
     return 0
@@ -565,7 +600,7 @@ ntrip_cmd=(
   -r "rtcm:=${internal_rtcm_topic}"
 )
 
-echo "[start_gps.sh] Runtime=universal receiver_family=${receiver_family} transport=${transport} device=${serial_device} baud=${serial_baud} rate_hz=${publish_rate_hz}"
+echo "[start_gps.sh] Runtime=universal preset=${hardware_preset:-manual} receiver_family=${receiver_family} transport=${transport} device=${serial_device} baud=${serial_baud} rate_hz=${publish_rate_hz}"
 
 if [ "$GNSS_DRY_RUN" = "true" ]; then
   if [ "$config_apply_enabled" = "true" ] && [ "$transport" = "serial" ]; then

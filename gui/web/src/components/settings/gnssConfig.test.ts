@@ -5,6 +5,7 @@ import {
     GNSS_ADVANCED_SETTINGS_BY_FAMILY,
     GNSS_ACTION_SETTINGS_KEYS,
     GNSS_EXECUTION_BAUD_OPTIONS,
+    gnssHardwarePresetSettings,
     gnssProfileLabel,
     gnssSignalProfileDescription,
     gnssSignalProfileLabel,
@@ -15,6 +16,20 @@ import {
 } from "./gnssConfig.ts";
 
 describe("gnssConfig", () => {
+    it("applies the Waveshare LC29H(DA) 1 Hz receiver preset without a write-side profile", () => {
+        expect(gnssHardwarePresetSettings("waveshare_lc29h_da")).toMatchObject({
+            gnss_hardware_preset: "waveshare_lc29h_da",
+            gnss_receiver_family: "nmea",
+            gnss_serial_baud: 115200,
+            gnss_config_baud: 115200,
+            gnss_execution_baud: "115200",
+            gnss_profile: "runtime_only",
+            gnss_profile_rate_hz: 1,
+            gnss_config_apply_enabled: false,
+        });
+        expect(gnssHardwarePresetSettings("")).toEqual({ gnss_hardware_preset: "" });
+    });
+
     it("normalizes Unicore signal-group whitespace", () => {
         expect(normalizeGnssSignalGroup("  3   6  ")).toBe("3 6");
         expect(normalizeGnssSignalGroup("3,6")).toBe("3 6");

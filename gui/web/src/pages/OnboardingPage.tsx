@@ -40,11 +40,13 @@ import {
     GNSS_BAUD_OPTIONS,
     GNSS_ACTION_SETTINGS_KEYS,
     GNSS_EXECUTION_BAUD_OPTIONS,
+    GNSS_HARDWARE_PRESET_OPTIONS,
     GNSS_PROFILE_OPTIONS,
     GNSS_PROFILE_RATE_OPTIONS,
     GNSS_RECEIVER_FAMILY_OPTIONS,
     GNSS_SIGNAL_PROFILE_OPTIONS,
     GNSS_SIGNAL_PROFILE_CUSTOM_HELP_TEXT,
+    gnssHardwarePresetSettings,
     normalizeGnssProfile,
     normalizeGnssString,
     normalizeGnssSignalProfile,
@@ -454,6 +456,28 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
                             {t("onboardingPage.expertGnssSettingsDesc")}
                         </Paragraph>
                         <Form layout="vertical">
+                            <Row gutter={16}>
+                                <Col xs={24}>
+                                    <Form.Item
+                                        label={t("gnssConfig.hardwarePreset.label")}
+                                        tooltip={t("gnssConfig.hardwarePreset.tooltip")}
+                                        extra={t("gnssConfig.hardwarePreset.waveshareLc29hDa.description")}
+                                    >
+                                        <Select
+                                            value={values.gnss_hardware_preset ?? ""}
+                                            onChange={(preset) => {
+                                                for (const [key, value] of Object.entries(gnssHardwarePresetSettings(preset))) {
+                                                    onChange(key, value);
+                                                }
+                                            }}
+                                            options={GNSS_HARDWARE_PRESET_OPTIONS.map((option) => ({
+                                                label: t(option.label),
+                                                value: option.value,
+                                            }))}
+                                        />
+                                    </Form.Item>
+                                </Col>
+                            </Row>
                             <Row gutter={16}>
                                 <Col xs={24} sm={12}>
                                     <Form.Item

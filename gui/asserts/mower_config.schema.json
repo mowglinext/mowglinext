@@ -270,6 +270,13 @@
           "default": "auto",
           "description": "Universal GNSS receiver family. Auto is recommended unless you know you need a specific parser."
         },
+        "gnss_hardware_preset": {
+          "type": "string",
+          "enum": ["", "waveshare_lc29h_da"],
+          "default": "",
+          "title": "GNSS Hardware Preset",
+          "description": "Named hardware preset that applies compatible receiver-family, serial, rate, and receiver-configuration settings."
+        },
         "gnss_receiver_model": {
           "type": "string",
           "title": "Receiver Model",
@@ -323,6 +330,11 @@
           ],
           "default": 5,
           "description": "Requested Universal GNSS receiver update/output rate in Hz."
+        },
+        "gnss_config_apply_enabled": {
+          "type": "boolean",
+          "title": "Apply Receiver Configuration at Startup",
+          "description": "Whether the GNSS sidecar may apply a supported receiver profile before it opens the serial port."
         },
         "gnss_config_baud": {
           "type": "integer",

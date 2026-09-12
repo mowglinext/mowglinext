@@ -1842,6 +1842,17 @@
         "label": "NMEA"
       }
     },
+    "hardwarePreset": {
+      "label": "GNSS hardware preset",
+      "tooltip": "Applies a documented receiver setup. Choose Manual before changing the individual settings for a preset receiver.",
+      "manual": {
+        "label": "Manual / no preset"
+      },
+      "waveshareLc29hDa": {
+        "label": "Waveshare LC29H(DA) GPS/RTK HAT (1 Hz)",
+        "description": "Uses generic NMEA at 115200 baud, 1 Hz, and runtime-only mode. It never writes a receiver configuration."
+      }
+    },
     "profile": {
       "runtime_only": {
         "label": "Runtime only"

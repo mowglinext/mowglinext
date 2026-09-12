@@ -100,6 +100,7 @@ export const restartGps = (api: GuiApi) =>
  * require an immediate mowgli-gps restart.
  */
 export const GPS_RESTART_KEYS = new Set<string>([
+    "gnss_hardware_preset",
     "gnss_receiver_family",
     "gnss_serial_device",
     "gnss_serial_baud",
