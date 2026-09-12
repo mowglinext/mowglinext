@@ -71,8 +71,8 @@ while inhibited. This does not assert global ordering across unrelated clients
 or replace the firmware emergency stop.
 
 The new `BladeControl` service reports policy acceptance, whether forwarding was
-queued, and an explanatory message. The legacy BT `mower_control` endpoint is a
-thin adapter for earlier combined test GUIs; the hardware `MowerControl` schema
+queued, and an explanatory message. It is the only blade endpoint on
+`behavior_tree_node`; the hardware `MowerControl` schema on `hardware_bridge`
 is unchanged. OFF ignores its unused direction field and retains its inhibition
 even during a hardware outage. Direction is selected before discovery/send so
 an undelivered request and its retry retain the same session choice.

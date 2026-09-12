@@ -90,22 +90,9 @@ public:
         },
         rclcpp::ServicesQoS(),
         group);
-    // Compatibility for the earlier combined test GUI. Both endpoints use
-    // exactly the same policy; the hardware MowerControl schema stays stable.
-    legacy_service_ = owner.create_service<Hardware>(
-        "~/mower_control",
-        [handle](const Hardware::Request::SharedPtr req, Hardware::Response::SharedPtr resp)
-        {
-          Control::Response result;
-          handle(req->mow_enabled, req->mow_direction, result);
-          resp->success = result.success;
-        },
-        rclcpp::ServicesQoS(),
-        group);
   }
 
 private:
   rclcpp::Service<Control>::SharedPtr service_;
-  rclcpp::Service<Hardware>::SharedPtr legacy_service_;
 };
 }  // namespace mowgli_behavior
