@@ -26,10 +26,10 @@ async function openSystem(page: Page, mobile = false) {
     });
     await page.goto("/#/diagnostics");
     if (mobile) await page.getByRole("button", {name: /System$/}).click();
-    await expect(page.getByRole("button", {name: "Reboot Host", exact: true})).toBeVisible();
+    await expect(page.getByRole("button", {name: "Host power…", exact: true})).toBeVisible();
     await expect(page.getByText("GPS: RTK Fixed", {exact: true})).toBeVisible();
     await expect(page.getByRole("button", {name: "Battery and power menu"})).toContainText("100%");
-    await page.getByRole("button", {name: "Reboot Host", exact: true}).scrollIntoViewIfNeeded();
+    await page.getByRole("button", {name: "Host power…", exact: true}).scrollIntoViewIfNeeded();
 }
 
 async function screenshot(page: Page, name: string) {
@@ -39,93 +39,78 @@ async function screenshot(page: Page, name: string) {
     await page.screenshot({path: `tests/e2e/.artifacts/${name}.png`, animations: "disabled"});
 }
 
-test("reboot confirms, cancels without a request, and submits only once", async ({page}) => {
+test("desktop shortcut uses the existing confirmation and reboot reconnect flow", async ({page}) => {
     await page.setViewportSize({width: 1440, height: 1000});
     await openSystem(page);
-    const requests: string[] = [];
-    let release: (() => void) | undefined;
-    await page.route("**/api/system/reboot", async route => {
-        requests.push(route.request().method() + " " + new URL(route.request().url()).pathname);
-        await new Promise<void>(resolve => { release = resolve; });
-        await route.fulfill({json: {}});
-    });
+    let requests = 0;
+    await page.route("**/api/system/reboot", route => { requests++; return route.fulfill({json: {}}); });
+    let polls = 0;
+    await page.route("**/api/system/info", route => { polls++; return route.fulfill({status: 503}); });
+    const trigger = page.getByRole("button", {name: "Host power…", exact: true});
+    await trigger.click();
+    const restart = page.getByRole("menuitem", {name: /Restart Host/});
+    await expect(restart).toBeVisible();
     await screenshot(page, "system-power-desktop");
-    await page.getByRole("button", {name: "Reboot Host", exact: true}).click();
+    expect(requests).toBe(0);
+    await restart.click();
     let dialog = page.getByRole("dialog");
-    await expect(dialog.getByText("Reboot the host?")).toBeVisible();
-    expect(requests).toEqual([]);
+    await expect(page.getByRole("dialog", {name: "Restart Host", exact: true})).toBeVisible();
     await dialog.getByRole("button", {name: "Cancel", exact: true}).click();
     await expect(dialog).not.toBeVisible();
-    expect(requests).toEqual([]);
-    await page.getByRole("button", {name: "Reboot Host", exact: true}).click();
+    expect(requests).toBe(0);
+    await trigger.click();
+    await restart.click();
     dialog = page.getByRole("dialog");
     await screenshot(page, "system-power-reboot-confirmation");
-    await dialog.getByRole("button", {name: "Reboot Host", exact: true}).click();
-    await expect.poll(() => requests.length).toBe(1);
-    await expect(dialog.getByRole("button", {name: "Cancel", exact: true})).toBeDisabled();
-    await expect(dialog.getByRole("button", {name: "Reboot Host", exact: true})).toHaveClass(/ant-btn-loading/);
-    release!();
-    await expect(page.getByText("Reboot requested", {exact: true})).toBeVisible();
-    expect(requests).toEqual(["POST /api/system/reboot"]);
-    await expect(page.getByRole("button", {name: "Reload page"})).toBeVisible();
-    await expect(page.getByRole("button", {name: "Shut down Host", exact: true})).not.toBeVisible();
+    await page.clock.install();
+    await dialog.getByRole("button", {name: "Confirm", exact: true}).click();
+    await expect(page.getByText("Rebooting the Host…", {exact: true})).toBeVisible();
+    expect(requests).toBe(1);
+    await page.clock.fastForward(15_000);
+    await expect.poll(() => polls).toBe(1);
+    expect(requests).toBe(1);
 });
 
-test("mobile shutdown confirms the need for physical access and calls the shutdown endpoint", async ({page}) => {
+test("mobile shortcut uses the existing shutdown confirmation", async ({page}) => {
     await page.setViewportSize({width: 390, height: 844});
     await openSystem(page, true);
-    const requests: string[] = [];
-    await page.route("**/api/system/shutdown", async route => {
-        requests.push(route.request().method() + " " + new URL(route.request().url()).pathname);
-        await route.fulfill({json: {}});
-    });
-    await page.getByRole("button", {name: "Shut down Host", exact: true}).scrollIntoViewIfNeeded();
+    let requests = 0;
+    await page.route("**/api/system/shutdown", route => { requests++; return route.fulfill({json: {}}); });
+    await page.getByRole("button", {name: "Host power…", exact: true}).click();
+    await expect(page.getByRole("menuitem", {name: /Shut down Host/})).toBeVisible();
     await screenshot(page, "system-power-mobile");
-    await page.getByRole("button", {name: "Shut down Host", exact: true}).click();
+    await page.getByRole("menuitem", {name: /Shut down Host/}).click();
     const dialog = page.getByRole("dialog");
-    await expect(dialog.getByText(/Physical access is required to power it back on/)).toBeVisible();
-    expect(requests).toEqual([]);
+    await expect(dialog.getByText(/Physical access will be required/)).toBeVisible();
+    expect(requests).toBe(0);
     await screenshot(page, "system-power-shutdown-mobile");
-    await dialog.getByRole("button", {name: "Shut down Host", exact: true}).click();
-    await expect(page.getByText("Shutdown requested", {exact: true})).toBeVisible();
-    expect(requests).toEqual(["POST /api/system/shutdown"]);
-    await expect(page.getByRole("button", {name: "Reload page"})).not.toBeVisible();
-});
-
-test("a lost response is reported as unconfirmed and never retried automatically", async ({page}) => {
-    await openSystem(page);
-    let requests = 0;
-    await page.route("**/api/system/reboot", async route => {
-        requests++;
-        await route.abort("connectionreset");
-    });
-    await page.getByRole("button", {name: "Reboot Host", exact: true}).click();
-    const dialog = page.getByRole("dialog");
-    await dialog.getByRole("button", {name: "Reboot Host", exact: true}).click();
-    await expect(dialog.getByText("Request could not be confirmed", {exact: true})).toBeVisible();
-    await expect(dialog.getByRole("button", {name: "Reboot Host", exact: true})).toBeDisabled();
-    expect(requests).toBe(1);
-    await expect(page.getByText("Reboot requested", {exact: true})).not.toBeVisible();
-    await dialog.getByRole("button", {name: "Cancel", exact: true}).click();
-    expect(requests).toBe(1);
-});
-
-test("an unanswered power request releases the dialog after 30 seconds without retrying", async ({page}) => {
-    await openSystem(page);
-    await page.clock.install();
-    let requests = 0;
-    await page.route("**/api/system/shutdown", () => { requests++; });
-    await page.getByRole("button", {name: "Shut down Host", exact: true}).click();
-    const dialog = page.getByRole("dialog");
-    await dialog.getByRole("button", {name: "Shut down Host", exact: true}).click();
+    await dialog.getByRole("button", {name: "Confirm", exact: true}).click();
     await expect.poll(() => requests).toBe(1);
-    await expect(dialog.getByRole("button", {name: "Cancel", exact: true})).toBeDisabled();
-    await page.clock.fastForward(30_000);
-    await expect(dialog.getByText("Request could not be confirmed", {exact: true})).toBeVisible();
-    await expect(dialog.getByRole("button", {name: "Shut down Host", exact: true})).toBeDisabled();
-    await expect(dialog.getByRole("button", {name: "Cancel", exact: true})).toBeEnabled();
-    await dialog.getByRole("button", {name: "Cancel", exact: true}).click();
     await expect(dialog).not.toBeVisible();
+});
+
+test("battery Advanced menu retains the same host actions", async ({page}) => {
+    await openSystem(page);
+    let requests = 0;
+    await page.route("**/api/system/shutdown", route => { requests++; return route.fulfill({json: {}}); });
+    await page.getByRole("button", {name: "Battery and power menu"}).click();
+    await page.getByRole("menuitem", {name: /Advanced/}).hover();
+    await page.getByRole("menuitem", {name: /Shut down Host/}).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText(/Physical access will be required/)).toBeVisible();
+    expect(requests).toBe(0);
+    await dialog.getByRole("button", {name: "Confirm", exact: true}).click();
+    await expect.poll(() => requests).toBe(1);
+});
+
+test("shortcut retains existing failure notification and clears reconnect overlay", async ({page}) => {
+    await openSystem(page);
+    let requests = 0;
+    await page.route("**/api/system/reboot", route => { requests++; return route.abort("connectionreset"); });
+    await page.getByRole("button", {name: "Host power…", exact: true}).click();
+    await page.getByRole("menuitem", {name: /Restart Host/}).click();
+    await page.getByRole("dialog").getByRole("button", {name: "Confirm", exact: true}).click();
+    await expect(page.getByText("Restart failed", {exact: true})).toBeVisible();
+    await expect(page.getByText("Rebooting the Host…", {exact: true})).not.toBeVisible();
     expect(requests).toBe(1);
-    await expect(page.getByText("Shutdown requested", {exact: true})).not.toBeVisible();
 });

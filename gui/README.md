@@ -31,7 +31,8 @@ to `http://<ip of the machine running the container>:4006`
 
 ### Host reboot and shutdown permissions
 
-**Diagnostics → System** provides confirmed reboot and shutdown actions for the whole host.
+**Diagnostics → System → Host power…** opens the same confirmed host reboot and
+shutdown actions as the battery menu's **Advanced** submenu.
 The existing backend enters the host's namespaces with `nsenter`, then runs the host's
 `systemctl reboot` or `systemctl poweroff`. This requires all of the following:
 
