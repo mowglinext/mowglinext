@@ -27,6 +27,8 @@ services:
 
   gps:
     container_name: mowgli-gps
+    labels:
+      garden.mowgli.update.image: gps
     image: ${GPS_IMAGE}
     network_mode: host
     ipc: host

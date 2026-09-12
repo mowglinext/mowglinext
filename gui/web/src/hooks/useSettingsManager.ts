@@ -19,6 +19,7 @@ export interface ExternalSaver {
 }
 
 export type SettingsSection =
+    | "updates"
     | "appearance"
     | "hardware"
     | "drive_motor"
@@ -46,6 +47,13 @@ export type SectionMeta = {
 };
 
 const SECTION_DEFINITIONS: SectionMeta[] = [
+    {
+        id: "updates",
+        label: "settingsSections.updates.label",
+        icon: "cloud-sync",
+        description: "settingsSections.updates.description",
+        keys: [],
+    },
     {
         id: "appearance",
         label: "settingsSections.appearance.label",

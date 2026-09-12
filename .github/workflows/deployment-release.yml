@@ -1,0 +1,170 @@
+name: Complete deployment
+on:
+  push:
+    branches: [main, dev]
+    tags: ['v*.*.*']
+    paths: ['gui/**', 'ros2/**', 'sensors/**', 'install/**', '.github/workflows/deployment-release.yml', '.github/scripts/publish-stable-deployment.sh']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: deployment-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  quality-ros2:
+    uses: ./.github/workflows/ros2-ci.yml
+  quality-gui:
+    uses: ./.github/workflows/gui-ci.yml
+  identity:
+    runs-on: ubuntu-24.04
+    outputs:
+      id: ${{ steps.identity.outputs.id }}
+      version: ${{ steps.identity.outputs.version }}
+      built_at: ${{ steps.identity.outputs.built_at }}
+      protocol: ${{ steps.identity.outputs.protocol }}
+      release: ${{ steps.identity.outputs.release }}
+      branch: ${{ steps.identity.outputs.branch }}
+      track: ${{ steps.identity.outputs.track }}
+      components: ${{ steps.components.outputs.value }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: components
+        run: |
+          components=$(jq -c '[.components[] | select(.type == null or .type == "" or .type == "built")]' install/deployment.json)
+          echo "value=$components" >> "$GITHUB_OUTPUT"
+      - id: identity
+        env:
+          REF: ${{ github.ref_name }}
+          TYPE: ${{ github.ref_type }}
+          SHA: ${{ github.sha }}
+          RUN: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          id="deployment-${SHA:0:12}-${RUN}-${ATTEMPT}"
+          track=custom; branch="$REF"; release="$id"
+          if [[ "$TYPE" == tag && "$REF" == v* ]]; then track=stable; branch=main; release="$REF";
+          elif [[ "$REF" == dev ]]; then track=dev; fi
+          version="$id"
+          if [[ "$track" == stable ]]; then
+            [[ "$release" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo 'Production requires vMAJOR.MINOR.PATCH'; exit 1; }
+            version="$release"
+          fi
+          printf 'version=%s\nbuilt_at=%s\n' "$version" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          protocol=$(sed -nE 's/^#define MOWGLI_PROTOCOL_VERSION +([0-9]+).*/\1/p' firmware/stm32/ros_usbnode/include/mowgli_protocol.h)
+          [[ "$protocol" =~ ^[0-9]+$ ]] || exit 1
+          printf 'protocol=%s\n' "$protocol" >> "$GITHUB_OUTPUT"
+          printf 'id=%s\nrelease=%s\nbranch=%s\ntrack=%s\n' "$id" "$release" "$branch" "$track" >> "$GITHUB_OUTPUT"
+  build:
+    needs: identity
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        component: ${{ fromJSON(needs.identity.outputs.components) }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: config
+        env:
+          COMPONENT: ${{ matrix.component.name }}
+          REPO: ${{ github.repository }}
+        run: |
+          printf 'image=ghcr.io/%s/%s\n' "${REPO,,}" "$COMPONENT" >> "$GITHUB_OUTPUT"
+      - id: image
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.component.context }}
+          file: ${{ matrix.component.file }}
+          target: ${{ matrix.component.target }}
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            BUILD_REVISION=${{ github.sha }}
+            BUILD_VERSION=${{ needs.identity.outputs.version }}
+            BUILD_TIME=${{ needs.identity.outputs.built_at }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.identity.outputs.version }}
+            org.opencontainers.image.created=${{ needs.identity.outputs.built_at }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            garden.mowgli.image-contract=1
+            garden.mowgli.image-family=${{ matrix.component.name }}
+            garden.mowgli.release=${{ needs.identity.outputs.release }}
+            garden.mowgli.deployment=${{ needs.identity.outputs.id }}
+            garden.mowgli.firmware-protocol=${{ needs.identity.outputs.protocol }}
+          outputs: type=image,name=${{ steps.config.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=registry,ref=${{ steps.config.outputs.image }}:deployment-cache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ steps.config.outputs.image }}:deployment-cache-${{ matrix.arch }},mode=max
+      - env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          COMPONENT: ${{ matrix.component.name }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p digests
+          printf '%s' "$DIGEST" > "digests/$COMPONENT-$ARCH"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deployment-${{ matrix.component.name }}-${{ matrix.arch }}
+          path: digests/*
+  publish:
+    needs: [identity, build, quality-ros2, quality-gui]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: deployment-*
+          merge-multiple: true
+          path: digests
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: gui/go.mod
+          cache-dependency-path: gui/go.sum
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Publish complete image sets and descriptor
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REVISION: ${{ github.sha }}
+          DEPLOYMENT: ${{ needs.identity.outputs.id }}
+          RELEASE: ${{ needs.identity.outputs.release }}
+          BRANCH: ${{ needs.identity.outputs.branch }}
+          TRACK: ${{ needs.identity.outputs.track }}
+        run: |
+          for component in $(jq -r '.components[] | select(.type == null or .type == "" or .type == "built") | .name' install/deployment.json); do
+            image="ghcr.io/${REPO,,}/$component"
+            docker buildx imagetools create -t "$image:$DEPLOYMENT" "$image@$(cat "digests/$component-amd64")" "$image@$(cat "digests/$component-arm64")"
+          done
+          mkdir -p dist
+          protocol=$(sed -nE 's/^#define MOWGLI_PROTOCOL_VERSION +([0-9]+).*/\1/p' firmware/stm32/ros_usbnode/include/mowgli_protocol.h)
+          cd gui
+          go test ./pkg/updater
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w -X github.com/mowglinext/mowglinext/pkg/updater.Version=$DEPLOYMENT -X github.com/mowglinext/mowglinext/pkg/updater.Revision=$REVISION" -o "../dist/mowgli-updater-linux-$arch" ./cmd/mowgli-updater
+          done
+          go run ./cmd/publish-deployment --repository "$REPO" --branch "$BRANCH" --track "$TRACK" --revision "$REVISION" --id "$DEPLOYMENT" --release "$RELEASE" --assets ../dist --compose-dir ../install/compose --protocol "$protocol" --definition ../install/deployment.json --component-contracts "$(jq -c .component_compatibility ../install/deployment.json)" --gui-compatibility "$(jq -r .gui_compatibility ../install/deployment.json)"
+          cd ../dist
+          sha256sum mowgli-updater-linux-* > updater-SHA256SUMS
+          if [[ "$TRACK" == stable ]]; then
+            bash ../.github/scripts/publish-stable-deployment.sh
+          else
+            gh release create "$RELEASE" ./* --repo "$REPO" --target "$REVISION" --prerelease --title "$BRANCH $DEPLOYMENT" --notes 'Complete stack deployment; mowgli-compose.json defines required/optional services and mowgli-deployment.json pins source, compatibility, images and the bundle checksum.'
+          fi

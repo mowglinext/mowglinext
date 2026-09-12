@@ -2,6 +2,7 @@ name: Sensors — GPS
 
 on:
   push:
+    tags: ['v*.*.*']
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'sensors/gps/**'

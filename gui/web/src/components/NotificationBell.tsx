@@ -3,6 +3,7 @@ import {AnimatePresence, motion} from "framer-motion";
 import {useTranslation} from "react-i18next";
 import type {TFunction} from "i18next";
 import {useNotificationCenter, type NotificationItem} from "../hooks/useNotificationCenter.tsx";
+import {useIsMobile} from "../hooks/useIsMobile";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 
 const formatRelative = (ms: number, t: TFunction): string => {
@@ -64,6 +65,7 @@ const levelLabelKey = (lvl: NotificationItem['level']): string => {
 
 export function NotificationBell() {
     const {colors} = useThemeMode();
+    const isMobile = useIsMobile();
     const {t} = useTranslation();
     const {items, unread, markRead, markAllRead, dismiss, clear} = useNotificationCenter();
     const [open, setOpen] = useState(false);
@@ -124,8 +126,10 @@ export function NotificationBell() {
                         exit={{opacity: 0, y: -6}}
                         transition={{duration: 0.15}}
                         style={{
-                            position: 'absolute', top: 'calc(100% + 8px)', right: 0,
-                            width: 'min(340px, calc(100vw - 24px))',
+                            position: isMobile ? 'fixed' : 'absolute',
+                            top: isMobile ? 72 : 'calc(100% + 8px)',
+                            left: isMobile ? 12 : undefined, right: isMobile ? 12 : 0,
+                            width: isMobile ? 'auto' : 'min(340px, calc(100vw - 24px))',
                             maxHeight: 'calc(100vh - 100px)',
                             background: colors.bgCard, border: `1px solid ${colors.border}`,
                             borderRadius: 12, boxShadow: colors.glassShadow,
@@ -190,6 +194,7 @@ export function NotificationBell() {
                                                 fontSize: 13, fontWeight: item.read ? 500 : 700,
                                                 color: colors.text,
                                             }}>{item.title}</div>
+                                            {item.href && <a href={item.href} onClick={() => markRead(item.id)}>{t('hostUpdater.open')}</a>}
                                             {item.body && (
                                                 <div style={{fontSize: 12, color: colors.textDim, marginTop: 2, lineHeight: 1.4}}>
                                                     {item.body}

@@ -5,6 +5,11 @@
 > authoritative and which is a historical record. Excludes `ros2/src/opennav_coverage/**` and
 > `ros2/src/external/**` (vendored submodules) and `node_modules/`.
 
+## Update-system documents added after index generation
+
+- [Software updates and recovery](../UPDATES.md) — **current**, operator/contributor: host updater, installer, publication and platform contract.
+- [Update-system design snapshot](../UPDATE_SYSTEM_PLAN.md) — **historical**, contributor: original design intent; use UPDATES.md for implemented behavior.
+
 ## How to read this index
 
 - **status** — `current` (trust it), `historical` (a dated record of *what was decided/found then*),

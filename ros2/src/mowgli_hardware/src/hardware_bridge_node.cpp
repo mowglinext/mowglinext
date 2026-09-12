@@ -74,6 +74,7 @@
 #include "mowgli_hardware/packet_handler.hpp"
 #include "mowgli_hardware/serial_port.hpp"
 #include "mowgli_hardware/timer_period.hpp"
+#include "mowgli_interfaces/update_maintenance.hpp"
 
 // High-level mode constants — must match HighLevelStatus.msg and the
 // HL_MODE_* defines in firmware/mowgli_protocol.h. Declared locally to
@@ -2370,6 +2371,11 @@ private:
 
   void send_blade_command(uint8_t on, uint8_t dir)
   {
+    if (mowgli_interfaces::updateMaintenanceActive())
+    {
+      on = 0;
+      mow_enabled_ = false;
+    }
     LlCmdBlade pkt{};
     pkt.type = PACKET_ID_LL_CMD_BLADE;
     pkt.blade_on = on;
@@ -3191,6 +3197,11 @@ private:
   /// Single point where a velocity command reaches the firmware.
   void send_cmd_vel_packet(double vx, double wz)
   {
+    if (mowgli_interfaces::updateMaintenanceActive())
+    {
+      vx = 0.0;
+      wz = 0.0;
+    }
     // Keep this final construction boundary defensive as well: callers such
     // as the bounded dig escape pass doubles.  Check float32 representability
     // before narrowing: converting an out-of-range double is not a safe way

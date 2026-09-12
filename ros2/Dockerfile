@@ -423,6 +423,7 @@ RUN /bin/bash -c "\
 # Minimal image containing only what is needed to run the robot.
 # =============================================================================
 FROM base AS runtime
+LABEL garden.mowgli.maintenance-api="1"
 
 WORKDIR /ros2_ws
 

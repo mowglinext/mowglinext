@@ -92,7 +92,7 @@ for required in "GNSS_STACK:" "GNSS_RECEIVER_FAMILY:" "GNSS_SERIAL_DEVICE:" "GNS
   fi
 done
 
-for forbidden in "gnss_unicore:" "UNICORE_IMAGE" "GPS_""RUNTIME_MODE:" "GPS_""PROTOCOL:" "GPS_""PORT:" "GPS_""BAUD:"; do
+for forbidden in "gnss_unicore:" "UNICORE_IMAGE" "GPS_""RUNTIME_MODE:" "GPS_""PORT:" "GPS_""BAUD:"; do
   if grep -q "$forbidden" "$COMPOSE_FILE"; then
     fail "legacy standalone GNSS absent: $forbidden" "found in generated universal compose"
   else
@@ -115,9 +115,9 @@ if real_docker_compose_available; then
   # After `docker compose config` fully expands ${VAR} references, no `${`
   # placeholder should remain. `image:` is the most common breakage point.
   EXPANDED=$(HOME="$ORIG_HOME" docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" config 2>/dev/null)
-  if printf '%s' "$EXPANDED" | grep -qE 'image:.*\${' ; then
+  if printf '%s' "$EXPANDED" | grep -qE 'image:.*\$\{'  ; then
     fail "no unresolved \${VAR} in image:" \
-      "$(printf '%s' "$EXPANDED" | grep -E 'image:.*\${' | head -1)"
+      "$(printf '%s' "$EXPANDED" | grep -E 'image:.*\$\{'  | head -1)"
   else
     pass "no unresolved \${VAR} in image:"
   fi
@@ -174,6 +174,34 @@ else
   else
     fail "named volume mowgli_maps declared" "missing — maps would be lost on restart"
   fi
+fi
+
+section "Managed updater Compose layout"
+if real_docker_compose_available && [[ -x "${MOWGLI_UPDATER_STACK_BINARY:-/usr/local/bin/mowgli-updater}" ]]; then
+  touch "$DOCKER_DIR/.updater-managed"
+  if build_compose_stack && write_compose_merged; then
+    pass "managed Compose generated"
+    if grep -q 'mowgli-watchtower' "$COMPOSE_FILE"; then fail "managed stack excludes Watchtower"; else pass "managed stack excludes Watchtower"; fi
+    MANAGED=$(HOME="$ORIG_HOME" PATH="$ORIG_PATH" docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" config --format json)
+    if printf '%s' "$MANAGED" | python3 -c 'import json,sys; s=json.load(sys.stdin)["services"]; assert s["gui"]["labels"]["com.centurylinklabs.watchtower.enable"]=="false"; assert all(s[k]["environment"]["MOWGLI_UPDATE_MAINTENANCE"]=="/var/lib/mowgli-updater/maintenance" for k in ("gui","mowgli")); assert "GPS_PROTOCOL" in s["mowgli"]["environment"]; assert "GPS_PROTOCOL" not in s["gps"]["environment"]'; then
+      pass "maintenance gates, Watchtower opt-out and GNSS environment scope"
+    else fail "managed Compose contract"; fi
+    cp "$COMPOSE_FILE" "$SANDBOX/applied-compose.json"
+    printf '{"id":"fixture-release"}\n' > "$DOCKER_DIR/stack-release.json"
+    LIDAR_ENABLED=false
+    if write_compose_merged && cmp -s "$COMPOSE_FILE" "$SANDBOX/applied-compose.json"; then
+      pass "published stack survives installer reconfiguration"
+    else fail "published stack survives installer reconfiguration"; fi
+    if python3 - "$DOCKER_DIR" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+wanted = json.loads((root / 'stack-selection.json').read_text())
+applied = json.loads((root / 'stack-applied-selection.json').read_text())
+assert wanted['options']['lidar'] == 'none'
+assert applied['options']['lidar'] == 'ldlidar'
+PY
+    then pass "new installer selection remains pending until reviewed"; else fail "pending installer selection"; fi
+  else fail "managed Compose generated"; fi
 fi
 
 test_summary

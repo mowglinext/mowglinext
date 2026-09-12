@@ -2,6 +2,7 @@ name: Sensors — LiDAR LDLiDAR
 
 on:
   push:
+    tags: ['v*.*.*']
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'sensors/lidar-ldlidar/**'

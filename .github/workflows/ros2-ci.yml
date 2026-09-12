@@ -1,6 +1,7 @@
 name: ROS2 — CI
 
 on:
+  workflow_call:
   push:
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
@@ -26,7 +27,7 @@ on:
     branches: [main, dev]
 
 concurrency:
-  group: ros2-ci-${{ github.ref }}
+  group: ros2-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:

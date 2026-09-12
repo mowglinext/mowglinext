@@ -2,6 +2,7 @@ name: Sensors — LiDAR STL27L
 
 on:
   push:
+    tags: ['v*.*.*']
     branches: [main, dev, 'feat/**', 'fix/**', 'refactor/**', 'chore/**', 'perf/**']
     paths:
       - 'sensors/lidar-stl27l/**'

@@ -705,6 +705,9 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
           </div>
         ))}
       </div>
+      <Button type="link" onClick={() => navigate('/settings?section=updates')} style={{paddingLeft: 0, marginTop: 10}}>
+        {t('updates.title')}
+      </Button>
     </GlassCard>
   );
 }
