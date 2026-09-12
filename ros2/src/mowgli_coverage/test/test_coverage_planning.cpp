@@ -2185,6 +2185,94 @@ mowgli_coverage::ConnectorStats connectorOutcomes(
 }
 }  // namespace
 
+// Fixed ordinary swaths, independent of planBoustrophedon's perpendicular flag.
+// The join leaves (0.1, 0.2) southbound and reaches (0.2, 0.3) eastbound:
+// a straight join has a 135-degree departure turn. At radii 0.18 and 0.16,
+// the shortest Dubins word (RSL) crosses x=0; the longer LSL stays inside.
+// This specifically exercises buildConnector's SECOND search, not its initial
+// shortest-word search. Removing that search changes arc to straight_kept.
+class CoverageAlternateConnector : public ::testing::Test
+{
+protected:
+  BoustrophedonPlan plan;
+  std::vector<std::pair<double, double>> boundary = squareRing(3.0);
+  mowgli_coverage::ConnectorStats stats;
+
+  void SetUp() override
+  {
+    plan.swaths = {{{0.1, 0.8}, {0.1, 0.2}}, {{0.2, 0.3}, {0.8, 0.3}}};
+  }
+
+  std::vector<std::vector<std::pair<double, double>>> build()
+  {
+    auto paths = buildContinuousSubPaths(plan, boundary, 0.18, 0.15, 0.01, &stats);
+    EXPECT_EQ(stats.attempted, 1u);
+    EXPECT_EQ(stats.split, 0u);
+    for (const auto& path : paths)
+    {
+      for (const auto& p : path)
+      {
+        EXPECT_TRUE(pointInRing(p.first, p.second, boundary) ||
+                    distanceToRing(p.first, p.second, boundary) <= 0.001);
+        for (const auto& hole : plan.safe_holes)
+        {
+          EXPECT_FALSE(pointInRing(p.first, p.second, hole));
+        }
+      }
+    }
+    return paths;
+  }
+};
+
+TEST_F(CoverageAlternateConnector, NearReversalUsesLongerInBoundsWord)
+{
+  const auto paths = build();
+  ASSERT_EQ(paths.size(), 1u);
+  EXPECT_EQ(stats.arc, 1u);
+  EXPECT_EQ(stats.straight_kept, 0u);
+  EXPECT_EQ(paths.front().front(), plan.swaths.front().first);
+  EXPECT_EQ(paths.front().back(), plan.swaths.back().second);
+  // Two 0.6 m swaths plus the ~1.705 m nominal-radius LSL connector.
+  // Pin the route as well as its classification: no blind straight or cusp.
+  EXPECT_NEAR(pathLength(paths.front()), 2.905, 0.02);
+  EXPECT_LT(maxTurnDeg(paths.front()), 10.0);
+  EXPECT_EQ(maxTightArcRun(paths.front(), 0.01, 0.15), 0u);
+}
+
+TEST_F(CoverageAlternateConnector, ShrinksAlternateWordWithinTheRadiusFloor)
+{
+  // The 0.18 m LSL reaches y=0.020; the 0.16 m LSL stays above y=0.040.
+  boundary = {{0.0, 0.03}, {3.0, 0.03}, {3.0, 3.0}, {0.0, 3.0}};
+  const auto paths = build();
+  ASSERT_EQ(paths.size(), 1u);
+  EXPECT_EQ(stats.arc, 1u);
+  EXPECT_EQ(stats.straight_kept, 0u);
+  EXPECT_NEAR(pathLength(paths.front()), 2.723, 0.02);
+  EXPECT_LT(maxTurnDeg(paths.front()), 10.0);
+  EXPECT_EQ(maxTightArcRun(paths.front(), 0.01, 0.15), 0u);
+}
+
+TEST_F(CoverageAlternateConnector, BoundaryRejectsAllAlternateWords)
+{
+  // Both swaths and their direct join remain inside, but no permitted arc fits.
+  boundary = {{0.0, 0.19}, {3.0, 0.19}, {3.0, 3.0}, {0.0, 3.0}};
+  const auto paths = build();
+  ASSERT_EQ(paths.size(), 1u);
+  EXPECT_EQ(stats.arc, 0u);
+  EXPECT_EQ(stats.straight_kept, 1u);
+}
+
+TEST_F(CoverageAlternateConnector, HoleRejectsOtherwiseInBoundsAlternateWords)
+{
+  // Block the bottom of both fitting LSL curves, away from either swath and
+  // the direct join. An alternate arc must satisfy the hole check too.
+  plan.safe_holes = {{{0.25, 0.03}, {0.65, 0.03}, {0.65, 0.15}, {0.25, 0.15}}};
+  const auto paths = build();
+  ASSERT_EQ(paths.size(), 1u);
+  EXPECT_EQ(stats.arc, 0u);
+  EXPECT_EQ(stats.straight_kept, 1u);
+}
+
 // The three outcomes partition every attempted join. If this ever fails, the
 // fallback rate derived from them is meaningless.
 TEST(CoverageConnectorStats, OutcomesPartitionAttemptedJoins)

@@ -24,8 +24,10 @@ Connection or persistence failures are displayed rather than reported as saved.
 
 Each area's orientation and any next override are saved with `coverage_resume.txt` in the existing maps volume.
 Pauses, detours, low-battery recharge, replanning and ROS2/host restarts retain it.
-A real `EndSession` advances an area's phase if its coverage started, including a run later
-abandoned and docked. Repeated session-end calls, failed plans, manual mowing and
+A real `EndSession` advances an area's phase if coverage was attempted, including a run later
+abandoned and docked. This is latched before the blade-service availability check;
+it records a coverage attempt, not a confirmed blade start or physical rotation.
+Repeated session-end calls, failed plans, manual mowing and
 sessions with cross-hatch disabled do not consume a phase. Resuming after STOP
 continues the session. Clearing coverage progress alone preserves its orientation.
 The first plan for an area latches the setting for that session, so changing the toggle does
