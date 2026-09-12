@@ -184,6 +184,8 @@ add_executable(costmap_scan_filter_node
   src/costmap_scan_filter_node.cpp
 )
 
+target_include_directories(costmap_scan_filter_node PUBLIC ${INCLUDE_DIR})
+
 ament_target_dependencies(costmap_scan_filter_node
   rclcpp
   sensor_msgs
@@ -377,6 +379,15 @@ if(BUILD_TESTING)
     test/test_delta_gate.cpp
   )
   target_include_directories(test_delta_gate PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
+  # ---- test_gravity_estimator ----
+  # Pure C++ regression test for the costmap IMU gravity gate.
+  ament_add_gtest(test_gravity_estimator
+    test/test_gravity_estimator.cpp
+  )
+  target_include_directories(test_gravity_estimator PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
