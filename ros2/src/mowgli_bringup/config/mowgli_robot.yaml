@@ -380,6 +380,11 @@ mowgli:
     # (mowgli_hardware/blade_gate.hpp). Read at startup: takes effect on the
     # next ROS2 container restart.
     mowing_enabled: true
+    # Random blade direction once per BT mowing session (also manual mowing).
+    # Retained across pauses/transits/recharge; reselected after EndSession or
+    # ROS2 restart. Requires firmware with safe stopped reversal support and
+    # a blade assembly suitable for both directions. Read at ROS2 startup.
+    blade_auto_reverse: false
     mowing_speed: 0.2              # m/s during coverage paths (field-validated comfortable cut speed)
     transit_speed: 0.2             # m/s during point-to-point navigation (→ RPP desired_linear_vel)
     # turn_speed_ratio: the coverage controller's speed THROUGH a bend, as a

@@ -217,6 +217,19 @@ export const MowingSection: React.FC<Props> = ({
                             onChange={(v) => onChange("mowing_enabled", v)}
                         />
                     </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
+                        <div>
+                            {fieldLabel("blade_auto_reverse", <Text strong>{t("settingsMowing.bladeAutoReverse")}</Text>)}
+                            <Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
+                                {t("settingsMowing.bladeAutoReverseDescription")}
+                            </Paragraph>
+                        </div>
+                        <Switch
+                            aria-label={t("settingsMowing.bladeAutoReverse")}
+                            checked={values.blade_auto_reverse ?? false}
+                            onChange={(v) => onChange("blade_auto_reverse", v)}
+                        />
+                    </div>
                     <Form layout="vertical" size="small">
                         <Row gutter={[16, 0]}>
                             <Col xs={12} sm={8}>

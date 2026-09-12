@@ -57,11 +57,13 @@ BT::NodeStatus SetMowerEnabled::tick()
     return BT::NodeStatus::FAILURE;
   }
   const bool enabled = res.value();
+  // Selection records tree intent even if discovery/send is unavailable; a
+  // retry must keep the same direction, and an undelivered OFF still wins.
+  const auto command = ctx->blade_direction.forMowerCommand(enabled, ctx->blade_auto_reverse);
 
   if (!client_)
   {
-    client_ = ctx->node->create_client<mowgli_interfaces::srv::MowerControl>(
-        "/hardware_bridge/mower_control");
+    client_ = ctx->bladeClient();
   }
 
   if (!waitForService(client_, ctx->node))
@@ -73,8 +75,8 @@ BT::NodeStatus SetMowerEnabled::tick()
   }
 
   auto request = std::make_shared<mowgli_interfaces::srv::MowerControl::Request>();
-  request->mow_enabled = enabled ? 1u : 0u;
-  request->mow_direction = 0u;
+  request->mow_enabled = command.enabled;
+  request->mow_direction = command.direction;
 
   // Fire-and-forget: the firmware is the safety authority for the blade.
   // It has its own lift/tilt/emergency checks and will refuse or stop the
@@ -83,8 +85,9 @@ BT::NodeStatus SetMowerEnabled::tick()
   (void)future;
 
   RCLCPP_INFO(ctx->node->get_logger(),
-              "SetMowerEnabled: requested mow_enabled=%s",
-              enabled ? "true" : "false");
+              "SetMowerEnabled: requested mow_enabled=%s, direction=%u",
+              command.enabled ? "true" : "false",
+              request->mow_direction);
 
   return BT::NodeStatus::SUCCESS;
 }

@@ -485,6 +485,12 @@
           "default": true,
           "description": "Enable the mowing blade. false = DRY RUN: the robot mows the full path with the blade never spinning (commissioning, coverage tuning). This is a convenience inhibit, NOT a safety cut-out \u2014 the STM32 firmware remains the blade safety authority. Read by hardware_bridge_node at startup: takes effect after a ROS2 restart."
         },
+        "blade_auto_reverse": {
+          "type": "boolean",
+          "title": "Automatic Blade Direction",
+          "default": false,
+          "description": "Choose a random blade direction per mowing session, including manual mowing. Keep it through pauses, transits and recharge. Consecutive sessions may choose the same direction; restarting ROS2 starts a new selection. Requires bidirectional blades and firmware with safe stopped reversal support. Takes effect after a ROS2 restart."
+        },
         "mowing_speed": {
           "type": "number",
           "title": "Mowing Speed",

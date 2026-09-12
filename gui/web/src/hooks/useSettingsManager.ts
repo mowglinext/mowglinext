@@ -140,7 +140,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
             // coverage_server, and the BT hardcodes mow_angle_deg=-1.0 "auto"),
             // so they were dead controls. swath_overlap (a real coverage_server
             // param) is surfaced here instead.
-            "mowing_enabled", "mowing_speed", "transit_speed",
+            "mowing_enabled", "blade_auto_reverse", "mowing_speed", "transit_speed",
             "headland_width", "num_headland_passes", "swath_overlap",
             "chassis_safety_inset", "min_turning_radius", "mow_direction",
         ],

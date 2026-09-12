@@ -40,6 +40,7 @@ import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
 import {useEmergency} from "../hooks/useEmergency.ts";
 import {usePower} from "../hooks/usePower.ts";
 import {useStatus} from "../hooks/useStatus.ts";
+import {BladeDirectionDisplay} from "../components/BladeDirectionDisplay.tsx";
 import {useGPS} from "../hooks/useGPS.ts";
 import {useGnssStatus} from "../hooks/useGnssStatus.ts";
 import {useFusionOdom} from "../hooks/useFusionOdom.ts";
@@ -1794,6 +1795,9 @@ export const DiagnosticsPage = () => {
                         </Col>
                         <Col xs={12} lg={4}>
                             <Statistic title={t('diagnosticsPage.motorRpm')} value={status.mower_motor_rpm} precision={0}/>
+                        </Col>
+                        <Col xs={24} lg={8}>
+                            <BladeDirectionDisplay/>
                         </Col>
                     </Row>
                     <Flex wrap gap="small" style={{marginTop: 12}}>

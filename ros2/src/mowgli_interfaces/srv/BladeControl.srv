@@ -1,0 +1,9 @@
+# Operator request; cannot override a behavior-tree OFF.
+uint8 mow_enabled
+uint8 mow_direction
+---
+# Accepted by the session policy, not a physical rotation acknowledgment.
+bool success
+# Queued to the hardware service, not acknowledged by firmware.
+bool forwarded
+string message

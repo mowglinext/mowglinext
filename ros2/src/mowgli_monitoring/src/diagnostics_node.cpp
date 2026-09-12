@@ -662,6 +662,9 @@ diagnostic_msgs::msg::DiagnosticStatus DiagnosticsNode::check_motors() const
   status.values.push_back(
       kv("mower_esc_current_a", fmt_float(static_cast<double>(s.mower_esc_current), 2)));
   status.values.push_back(kv("mower_rpm", fmt_float(static_cast<double>(s.mower_motor_rpm), 0)));
+  status.values.push_back(
+      kv("blade_requested_direction",
+         s.blade_requested_direction.empty() ? "unknown" : s.blade_requested_direction));
 
   return status;
 }

@@ -1,4 +1,13 @@
 {
+  "bladeDirection": {
+    "title": "Sens demandé de la lame",
+    "summary": "Sens demandé : {{direction}}",
+    "help": "Commande uniquement ; la rotation physique n’est pas indiquée par le firmware. La marche arrière nécessite un firmware compatible qui attend l’arrêt avant inversion et une lame bidirectionnelle. Un ancien firmware peut continuer en marche avant.",
+    "forward": "Avant",
+    "reverse": "Arrière",
+    "off": "Arrêt",
+    "unknown": "Inconnu"
+  },
   "language": {
     "label": "Langue",
     "fr": "Français",
@@ -2395,6 +2404,8 @@
     "slowdownRatioTooltip": "Facteur de vitesse près des obstacles : 0,3 = ralentir à 30 % de la vitesse commandée"
   },
   "settingsMowing": {
+    "bladeAutoReverse": "Sens de rotation automatique de la lame",
+    "bladeAutoReverseDescription": "Choisir aléatoirement le sens de la lame pour chaque session, y compris en tonte manuelle. Le conserver pendant les pauses et les recharges. Deux sessions successives peuvent utiliser le même sens. Nécessite des lames adaptées aux deux sens et un firmware permettant une inversion sûre. Prend effet après le redémarrage de ROS2, qui entraîne aussi un nouveau choix du sens. Le firmware doit arrêter la lame avant toute inversion.",
     "mowingMotor": "Moteur de tonte",
     "mowingMotorDescription": "Désactivé = essai à vide : le robot parcourt tout le trajet sans jamais faire tourner la lame. Il s’agit d’une inhibition de confort, PAS d’une coupure de sécurité — le firmware reste l’autorité de sécurité de la lame. Prend effet au prochain redémarrage de ROS2.",
     "mowingSpeed": "Vitesse de tonte",
