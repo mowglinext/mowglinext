@@ -3,8 +3,8 @@
 This directory is MowgliNext's integration contract for the externally built
 MowgliMAVROS sidecar. It intentionally contains no Dockerfile and no copy of
 the MowgliMAVROS source: the external image remains the runtime owner of
-MAVROS, the Universal GNSS MAVROS plugin, NTRIP, the MAVROS hardware bridge,
-battery observation, and ESC wheel odometry.
+MAVROS, its hardware bridge, battery observation, and ESC wheel odometry.
+The Universal GNSS sidecar is the sole owner of the receiver and NTRIP.
 
 ## Image and compose boundary
 
@@ -18,8 +18,10 @@ ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:kilted@sha256:04e4eb17b0f5ce3
 generated `docker/.env`. `install/compose/docker-compose.mavros.yml` remains
 the installer-owned compose fragment because the installer merges it into the
 generated stack. It supplies host networking, `/dev:/dev`, the read-only
-`/ros2_ws/config` and Cyclone DDS mounts, and `MAVROS_PORT`, `MAVROS_BAUD`,
-autopilot, GCS, and target-system/component inputs.
+derived `docker/config/mavros` mount at `/ros2_ws/config`, the Cyclone DDS
+mount, and `MAVROS_PORT`, `MAVROS_BAUD`, autopilot, GCS, and
+target-system/component inputs. MowgliNext derives that YAML from the
+operator-facing config and overrides only `ntrip_enabled: false`.
 
 Use `MAVROS_BY_ID=/dev/serial/by-id/<stable-device>` when a stable path is
 available. The installer makes that path the `MAVROS_PORT`; `/dev/mavros` is
@@ -29,8 +31,9 @@ this repository.
 ## Backend ownership and fail-closed behavior
 
 `HARDWARE_BACKEND=mavros` selects exactly one external `mowgli-mavros`
-sidecar and disables the direct GPS sidecar. In the main MowgliNext launch,
-only the legacy `mowgli_hardware/hardware_bridge_node` is excluded;
+sidecar alongside the independent Universal GNSS sidecar when GNSS is enabled.
+MAVROS never receives the receiver or NTRIP configuration as an owner. In the
+main MowgliNext launch, only the legacy `mowgli_hardware/hardware_bridge_node` is excluded;
 `robot_state_publisher` and `twist_mux` remain running. The external sidecar
 is expected to own `mavros_hardware_bridge_node`.
 
