@@ -591,7 +591,7 @@ protected:
   }
 
   static std::shared_ptr<mowgli_map::MapServerNode> make_node(double boundary_inner_margin_m,
-                                                               double dock_exempt_radius_m)
+                                                              double dock_exempt_radius_m)
   {
     rclcpp::NodeOptions opts;
     opts.append_parameter_override("resolution", 0.1);
