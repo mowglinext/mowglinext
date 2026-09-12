@@ -17,6 +17,8 @@ SHIM = r'''
 #include <stdint.h>
 #include <assert.h>
 #include <string.h>
+#include <stdarg.h>
+#include <stdio.h>
 typedef struct { unsigned gState; } UART_HandleTypeDef;
 typedef int DMA_HandleTypeDef;
 #define HAL_UART_STATE_READY 0u
@@ -25,6 +27,8 @@ typedef int DMA_HandleTypeDef;
 static uint32_t test_tick, test_primask;
 static int test_tx_result;
 static unsigned test_tx_count;
+static unsigned test_rx_count, test_wait_count, test_trace_count;
+static char test_debug_line[200];
 static uint8_t test_frame[22];
 static uint32_t HAL_GetTick(void) { return test_tick; }
 static uint32_t __get_PRIMASK(void) { return test_primask; }
@@ -36,9 +40,15 @@ static int HAL_UART_Transmit_DMA(UART_HandleTypeDef *h, uint8_t *p, unsigned n) 
     return test_tx_result;
 }
 static int HAL_UART_Receive_DMA(UART_HandleTypeDef *h, uint8_t *p, unsigned n) {
-    (void)h; (void)p; (void)n; return HAL_OK;
+    (void)h; (void)p; (void)n; ++test_rx_count; return HAL_OK;
 }
-#define debug_printf(...) ((void)0)
+static void debug_printf(const char *fmt, ...) {
+    va_list args; va_start(args, fmt);
+    vsnprintf(test_debug_line, sizeof(test_debug_line), fmt, args);
+    va_end(args);
+    if (strstr(fmt, "Blade reversal waiting")) ++test_wait_count;
+    if (strstr(fmt, "blade coast")) ++test_trace_count;
+}
 '''
 
 TEST = r'''
@@ -48,12 +58,18 @@ TEST = r'''
 static void reset(void) {
     test_tick = 100;
     test_primask = test_tx_count = test_tx_result = 0;
+    test_rx_count = test_wait_count = test_trace_count = 0;
+    test_debug_line[0] = 0;
     BLADEMOTOR_USART_Handler.gState = HAL_UART_STATE_READY;
     blademotor_eState = BLADEMOTOR_RUN;
     blademotor_u8OnOff = blademotor_u8Direction = blademotor_u8RunDirection = 0;
     blademotor_reverse_pending = blademotor_off_sent = blademotor_zero_seen = false;
     blademotor_stop_since = blademotor_zero_since = blademotor_last_feedback_seq = 0;
     blademotor_zero_epoch = 0;
+    blademotor_pending_since = blademotor_pending_report_tick = 0;
+#if BLADEMOTOR_COASTDOWN_VALIDATION
+    blademotor_trace_seq = blademotor_trace_tx_tick = blademotor_trace_command = 0;
+#endif
     blademotor_feedback = (blademotor_feedback_t){0};
     BLADEMOTOR_bActivated = false;
     BLADEMOTOR_u16RPM = BLADEMOTOR_u16Power = BLADEMOTOR_u32Error = 0;
@@ -86,6 +102,29 @@ static void reversing(void) {
     assert(blademotor_off_sent);
 }
 int main(void) {
+#if BLADEMOTOR_COASTDOWN_VALIDATION
+    // No auto-start, no reverse even with qualifying zero feedback for 20 s.
+    reset(); BLADEMOTOR_App(); frame(0);
+    reversing();
+    for (unsigned i=0; i<200; ++i) { zero(100); frame(0); }
+    assert(blademotor_reverse_pending && test_wait_count == 4);
+    assert(test_trace_count == 201);
+    BLADEMOTOR_Set(0, 0); BLADEMOTOR_App(); frame(0);
+    assert(!blademotor_reverse_pending);
+    // Trace only completed samples; preserve IRQ mask and report raw RX values.
+    reset(); BLADEMOTOR_Set(1,0); BLADEMOTOR_App(); frame(0x80);
+    feedback(100,3300,1,0,1); test_primask=1; BLADEMOTOR_App();
+    assert(test_primask==1 && test_trace_count==1);
+    assert(strstr(test_debug_line,"tx=80 tx_t=100 seq=1 rx_t=200 valid=1 active=1 rpm=3300"));
+    BLADEMOTOR_Set(0,0); BLADEMOTOR_App(); frame(0);
+    assert(test_trace_count==1);
+    feedback(100,2200,0,0,1); BLADEMOTOR_App(); frame(0);
+    assert(strstr(test_debug_line,"tx=00 tx_t=200 seq=2 rx_t=300 valid=1 active=0 rpm=2200"));
+    feedback(100,0,0,0,0); BLADEMOTOR_App();
+    assert(strstr(test_debug_line,"valid=0"));
+    puts("PASS: validation image never reverses or auto-starts; timestamped RX/accepted-command trace");
+    return 0;
+#else
     reset(); BLADEMOTOR_App(); frame(0);
     BLADEMOTOR_Set(1, 0); BLADEMOTOR_App(); frame(0x80);
     BLADEMOTOR_Set(0, 1); BLADEMOTOR_App(); frame(0);
@@ -153,6 +192,42 @@ int main(void) {
     BLADEMOTOR_USART_Handler.gState=HAL_UART_STATE_READY;
     BLADEMOTOR_App(); frame(0);
 
+    // TX busy must not skip receive re-arm or a controller-error stop.
+    reset(); BLADEMOTOR_Set(1,0); BLADEMOTOR_App();
+    feedback(100,3300,1,2,1);
+    BLADEMOTOR_USART_Handler.gState=HAL_BUSY;
+    unsigned rx_before=test_rx_count;
+    BLADEMOTOR_App();
+    assert(test_rx_count==rx_before+1 && BLADEMOTOR_u32Error==1);
+    assert(!blademotor_u8OnOff && test_tx_count==1);
+    assert(blademotor_pu8RqstMessage[5]==0x80); // DMA-owned frame unchanged
+    feedback(100,0,0,0,1); // clearing the error cannot revive the cancelled ON
+    BLADEMOTOR_USART_Handler.gState=HAL_UART_STATE_READY;
+    BLADEMOTOR_App(); frame(0);
+
+    // Nonzero noise, active, invalid and missing replies remain OFF and report
+    // every 5 s, including while UART TX is busy. ON retries cannot reset it.
+    for (unsigned failure=0; failure<4; ++failure) {
+        reversing();
+        for (unsigned i=0; i<99; ++i) {
+            BLADEMOTOR_Set(1,1);
+            if (failure==3) test_tick+=100;
+            else feedback(100,failure==0 ? 1:0,failure==1,0,failure==2 ? 0:1);
+            BLADEMOTOR_App(); frame(0);
+            assert(test_wait_count==(i+1)/50);
+        }
+        BLADEMOTOR_USART_Handler.gState=HAL_BUSY;
+        test_tick+=100; BLADEMOTOR_App();
+        assert(test_wait_count==2 && BLADEMOTOR_u32Error==2);
+        BLADEMOTOR_Set(0,0); test_tick+=5000; BLADEMOTOR_App();
+        assert(test_wait_count==2); // OFF cancels warnings as well as reversal
+    }
+    reversing();
+    test_tick=UINT32_MAX-2000;
+    blademotor_pending_since=blademotor_pending_report_tick=test_tick;
+    test_tick+=4999; BLADEMOTOR_App(); assert(test_wait_count==0);
+    test_tick+=1; BLADEMOTOR_App(); assert(test_wait_count==1);
+
     // Repeated ON updates do not restart the dwell; timing survives tick wrap.
     reversing(); test_tick=UINT32_MAX-500;
     blademotor_stop_since=test_tick;
@@ -160,6 +235,7 @@ int main(void) {
     for (unsigned i=0; i<9; ++i) { BLADEMOTOR_Set(1,1); zero(100); frame(0); }
     test_primask=1; zero(100); frame(0xC0); assert(test_primask==1);
     puts("PASS: blade frames/checksums, bidirectional stop guard, stale/invalid feedback, cancellation, TX failure/busy, tick wrap");
+#endif
 }
 '''
 
@@ -196,11 +272,15 @@ def main():
         for name in ['board.h', 'board_defaults.h']:
             (out / name).write_text((FW / 'include' / name).read_text(encoding='utf-8'), encoding='utf-8')
         for name, variant in [('Yardforce500', 'BOARD_YARDFORCE500_VARIANT_ORIG'),
-                              ('Yardforce500B', 'BOARD_YARDFORCE500_VARIANT_B')]:
+                              ('Yardforce500B', 'BOARD_YARDFORCE500_VARIANT_B'),
+                              ('Yardforce500_COASTDOWN_VALIDATION', 'BOARD_YARDFORCE500_VARIANT_ORIG')]:
             if Path(args.cc).stem.lower() == 'cl':
                 cmd = [args.cc, '/nologo', '/std:c11', '/utf-8', '/W3', f'/D{variant}=1', 'test.c', '/Fe:' + str(binary)]
             else:
                 cmd = [args.cc, '-std=c11', '-Wall', '-Wextra', '-Werror', f'-D{variant}=1', 'test.c', '-o', str(binary)]
+            if name.endswith('COASTDOWN_VALIDATION'):
+                cmd.insert(1, ('/D' if Path(args.cc).stem.lower() == 'cl' else '-D') +
+                           'BLADEMOTOR_COASTDOWN_VALIDATION=1')
             print(f'Testing {name} with production board.h', flush=True)
             subprocess.run(cmd, cwd=out, check=True)
             subprocess.run([str(binary)], cwd=out, check=True)

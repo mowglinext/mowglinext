@@ -33,6 +33,13 @@
 #define BLADEMOTOR_REVERSE_OFF_MS 1000u
 #define BLADEMOTOR_ZERO_CONFIRM_MS 300u
 #define BLADEMOTOR_FEEDBACK_MAX_AGE_MS 300u
+#define BLADEMOTOR_REVERSE_REPORT_MS 5000u
+#ifndef BLADEMOTOR_COASTDOWN_VALIDATION
+#define BLADEMOTOR_COASTDOWN_VALIDATION 0
+#endif
+#if BLADEMOTOR_COASTDOWN_VALIDATION && !BOARD_YARDFORCE500_VARIANT_ORIG
+#error "Coast-down validation uses the Yardforce500 UART debug output"
+#endif
 /******************************************************************************
 * Module Preprocessor Macros
 *******************************************************************************/
@@ -72,6 +79,11 @@ static bool blademotor_zero_seen = false;
 static uint32_t blademotor_stop_since, blademotor_zero_since;
 static uint32_t blademotor_last_feedback_seq;
 static uint32_t blademotor_zero_epoch;
+static uint32_t blademotor_pending_since, blademotor_pending_report_tick;
+#if BLADEMOTOR_COASTDOWN_VALIDATION
+static uint32_t blademotor_trace_seq, blademotor_trace_tx_tick;
+static uint8_t blademotor_trace_command;
+#endif
 
 typedef struct {
     uint32_t seq, tick, zero_epoch;
@@ -125,7 +137,9 @@ static bool blademotor_stopped_for_reverse(uint32_t now)
         }
     }
     /* Use the span of received zero-RPM samples, not time since one old zero. */
-    return blademotor_zero_seen &&
+    /* The bench image must never reverse, even when the ESC reports zero.
+     * Its purpose is to compare that report with independent rotor observation. */
+    return !BLADEMOTOR_COASTDOWN_VALIDATION && blademotor_zero_seen &&
         (uint32_t)(feedback.tick - blademotor_zero_since) >= BLADEMOTOR_ZERO_CONFIRM_MS &&
         (uint32_t)(now - blademotor_stop_since) >= BLADEMOTOR_REVERSE_OFF_MS;
 }
@@ -147,6 +161,7 @@ void blademotor_prepareMsg(void)
         {
             blademotor_reverse_pending = true;
             blademotor_off_sent = blademotor_zero_seen = false;
+            blademotor_pending_since = blademotor_pending_report_tick = HAL_GetTick();
         }
         if (!blademotor_reverse_pending || blademotor_stopped_for_reverse(HAL_GetTick()))
             command = blademotor_u8Direction ? 0xC0 : 0x80;
@@ -154,7 +169,7 @@ void blademotor_prepareMsg(void)
     /* Adapted from jeremysalwen/Mowgli dd6c01b6: decide direction here, where
      * every transmitted frame is built, rather than overwrite it after Set().
      * crcCalc is an additive checksum: reverse 0xC0 needs 0x62, NOT 0xE2.
-     * Physical reverse rotation remains hardware-unverified; see BLADE-REVERSE.md. */
+     * Feedback during physical coast-down remains unverified; see BLADE-REVERSE.md. */
     blademotor_pu8RqstMessage[5] = command;
     blademotor_pu8RqstMessage[6] = crcCalc(blademotor_pu8RqstMessage, BLADEMOTOR_LENGTH_RQST_MSG - 1);
 }
@@ -299,20 +314,55 @@ void  BLADEMOTOR_App(void){
     
     case BLADEMOTOR_RUN:
 
-        /* Do not rewrite a request buffer still owned by the UART DMA. */
-        if (BLADEMOTOR_USART_Handler.gState != HAL_UART_STATE_READY) break;
         /*error detected*/
         if(blademotor_pu8ReceivedData[6] != 0){
             blademotor_u8OnOff = 0;
+            blademotor_reverse_pending = false;
+            blademotor_off_sent = blademotor_zero_seen = false;
             BLADEMOTOR_u32Error++;
         }
-        blademotor_prepareMsg();
-        /* prepare to receive the message before to launch the command */        
+        /* RX re-arm and error handling must continue even while TX is busy. */
         HAL_UART_Receive_DMA(&BLADEMOTOR_USART_Handler, blademotor_pu8ReceivedData, BLADEMOTOR_LENGTH_RECEIVED_MSG);
+
+        if (blademotor_reverse_pending &&
+            (uint32_t)(HAL_GetTick() - blademotor_pending_report_tick) >= BLADEMOTOR_REVERSE_REPORT_MS)
+        {
+            blademotor_pending_report_tick = HAL_GetTick();
+            BLADEMOTOR_u32Error++;
+            debug_printf("Blade reversal waiting: OFF retained (%lu ms)\r\n",
+                (unsigned long)(HAL_GetTick() - blademotor_pending_since));
+        }
+#if BLADEMOTOR_COASTDOWN_VALIDATION
+        /* Foreground only; never print in the RX interrupt. Sequence gaps
+         * reveal overwritten samples or dropped best-effort UART debug lines. */
+        uint32_t primask = __get_PRIMASK();
+        __disable_irq();
+        blademotor_feedback_t trace = blademotor_feedback;
+        __set_PRIMASK(primask);
+        if (trace.seq != blademotor_trace_seq)
+        {
+            blademotor_trace_seq = trace.seq;
+            debug_printf("blade coast t=%lu tx=%02x tx_t=%lu seq=%lu rx_t=%lu valid=%u active=%u rpm=%u err=%u\r\n",
+                (unsigned long)HAL_GetTick(), (unsigned)blademotor_trace_command,
+                (unsigned long)blademotor_trace_tx_tick, (unsigned long)trace.seq,
+                (unsigned long)trace.tick, (unsigned)trace.valid, (unsigned)trace.activated,
+                (unsigned)trace.rpm, (unsigned)trace.error);
+        }
+#endif
+        /* Do not rewrite a request buffer still owned by the UART DMA. */
+        if (BLADEMOTOR_USART_Handler.gState != HAL_UART_STATE_READY) break;
+        blademotor_prepareMsg();
                   
         if (HAL_UART_Transmit_DMA(&BLADEMOTOR_USART_Handler, (uint8_t*)blademotor_pu8RqstMessage,
                 BLADEMOTOR_LENGTH_RQST_MSG) == HAL_OK)
         {
+#if BLADEMOTOR_COASTDOWN_VALIDATION
+            if (blademotor_trace_command != blademotor_pu8RqstMessage[5])
+            {
+                blademotor_trace_command = blademotor_pu8RqstMessage[5];
+                blademotor_trace_tx_tick = HAL_GetTick();
+            }
+#endif
             if (blademotor_pu8RqstMessage[5] & 0x80)
             {
                 blademotor_u8RunDirection = blademotor_u8Direction;

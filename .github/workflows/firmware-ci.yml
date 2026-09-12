@@ -23,7 +23,7 @@ jobs:
   # firmware (what CI builds / what prebuilt binaries ship) and the GUI-rendered
   # firmware can never silently drift apart on a safety value.
   defaults-parity:
-    name: board_defaults single-source guard
+    name: Board defaults and blade reversal regressions
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -43,12 +43,9 @@ jobs:
         environment:
           - Yardforce500
           - Yardforce500B
+          - Yardforce500_COASTDOWN_VALIDATION
     steps:
       - uses: actions/checkout@v6
-        with:
-          # git_build_id.py encodes the commit count in the reported version.
-          # A shallow checkout otherwise reports 1.0.1 for every firmware build.
-          fetch-depth: 0
 
       - uses: actions/cache@v4
         with:
