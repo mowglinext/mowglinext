@@ -31,17 +31,26 @@
 namespace mowgli_map
 {
 
-// Mask value for the outside-slack band (cells beyond every area polygon but
-// within enforce_boundary_margin_m of an edge). NON-ZERO so the band is
-// traversable-but-penalised: with CostmapFilterInfo base=0/multiplier=1 the
-// KeepoutFilter turns 50 into cost ~127 — far below Smac's INSCRIBED(253)
-// validity cutoff, so a start/goal pose in the band never fails "Start
-// occupied", while A* only routes THROUGH the band when the inside route is
-// much longer. A free (0) band would invite corner-cutting transits up to
-// enforce_boundary_margin_m (0.40 m) outside the polygon — past the 0.30 m
-// soft_boundary_margin_m deadband — firing spurious /boundary_violation
-// recoveries mid-transit.
-constexpr int8_t kOutsideSlackMaskCost = 50;
+// Mask value for every soft (traversable-but-penalised) band this publisher
+// paints — the outside-slack band (cells beyond every area polygon but
+// within enforce_boundary_margin_m of an edge) AND the inside transit margin
+// (cells inside an area but within boundary_inner_margin_m of its edge, see
+// below). NON-ZERO so both bands stay traversable: with CostmapFilterInfo
+// base=0/multiplier=1 the KeepoutFilter turns 50 into cost ~127 — far below
+// Smac's INSCRIBED(253) validity cutoff, so a start/goal pose in either band
+// never fails "Start occupied" and A* only routes THROUGH the band when the
+// alternative is much longer. This is deliberately NEVER a lethal value for
+// either band: a lethal outside band would invite corner-cutting transits up
+// to enforce_boundary_margin_m (0.40 m) outside the polygon — past the
+// 0.30 m soft_boundary_margin_m deadband — firing spurious
+// /boundary_violation recoveries mid-transit; a lethal inside band very
+// nearly stranded the robot near the dock once already (map_server_node.hpp)
+// and, independently, collides with chassis_safety_inset — the outermost
+// coverage ring is planned exactly chassis_safety_inset inside the line
+// (0.20 m by default, the same default as boundary_inner_margin_m), so a
+// lethal band there plus inflation_radius (0.20 m) would swallow the ring
+// itself and reopen the START_OCCUPIED skip cascade (issue #487).
+constexpr int8_t kSoftPenaltyMaskCost = 50;
 
 void MapServerNode::publish_keepout_mask()
 {
@@ -76,9 +85,10 @@ void MapServerNode::publish_keepout_mask()
   mask.info.origin.orientation.w = 1.0;
   mask.data.resize(static_cast<std::size_t>(nx * ny), 100);  // default: keepout
 
-  // A cell inside ANY area (mowing or navigation) is free (0).
+  // A cell inside ANY area (mowing or navigation) is free (0), unless it
+  // falls in the inside transit margin below (mid-cost, never lethal).
   // A cell outside all areas but within `outside_free_margin` of any area
-  // polygon edge is mid-cost (kOutsideSlackMaskCost) — traversable for a
+  // polygon edge is mid-cost (kSoftPenaltyMaskCost) — traversable for a
   // start/goal pose near the boundary (prevents "Start occupied") but
   // penalised so the planner does not draft corner-cutting routes outside
   // the polygon.
@@ -228,13 +238,12 @@ void MapServerNode::publish_keepout_mask()
       }
 
       // Cells within dock_inner_margin_exempt_radius_m_ of the dock pose are
-      // exempt from the shrink below, in EVERY direction. Unlike
+      // exempt from the penalty below, in EVERY direction, so the dock
+      // approach carries no bias at all — not even the soft cost. Unlike
       // dock_corridor_polygon_ (a fixed rectangle carved out further down in
       // this function), this isotropic exemption doesn't depend on getting
       // the corridor's orientation/size right — it directly covers wherever
-      // GNSS drift actually puts the robot's own position near the dock,
-      // which is the exact failure mode boundary_inner_margin_m_ was
-      // reverted for once already (see map_server_node.hpp).
+      // GNSS drift actually puts the robot's own position near the dock.
       bool near_dock = false;
       if (has_dock_exclusion_ && dock_inner_margin_exempt_radius_m_ > 0.0)
       {
@@ -244,26 +253,26 @@ void MapServerNode::publish_keepout_mask()
                     dock_inner_margin_exempt_radius_m_ * dock_inner_margin_exempt_radius_m_;
       }
 
-      // Shrunk-polygon rule: cells inside a mowing area but within
-      // boundary_inner_margin_m_ of the nearest edge become LETHAL in the
-      // keepout mask. Effect: the Smac planner never drafts a TRANSIT path
-      // that comes within that margin of the polygon edge (coverage/mowing
-      // itself tracks the LOCAL costmap instead and never sees this mask).
-      // Combined with inflation_layer, the total soft-wall is ~margin +
-      // inflation_radius.
-      bool inner_buffer = inside_any && boundary_inner_margin_m_ > 0.0 &&
-                          inside_min_edge_dist < boundary_inner_margin_m_ && !near_dock;
+      // Inside transit margin: cells inside a mowing/navigation area but
+      // within boundary_inner_margin_m_ of the nearest edge get the SAME
+      // soft mid-cost as the outside-slack band above — deliberately NEVER
+      // lethal (see kSoftPenaltyMaskCost). Effect: the global planner (Smac,
+      // used for point-to-point TRANSIT) prefers a route that stays that far
+      // inside the recorded edge when one exists, but is never blocked from
+      // starting, ending, or passing through this band — coverage/mowing
+      // itself never sees this mask (FTC tracks the F2C path against the
+      // LOCAL costmap instead), and neither does a narrow seam between two
+      // adjacent areas, which stays fully crossable, just costed.
+      bool inner_penalty = inside_any && boundary_inner_margin_m_ > 0.0 &&
+                           inside_min_edge_dist < boundary_inner_margin_m_ && !near_dock;
 
       if (inside_any)
       {
-        if (!inner_buffer)
-        {
-          mask.data[flat_idx] = 0;
-        }
+        mask.data[flat_idx] = inner_penalty ? kSoftPenaltyMaskCost : 0;
       }
       else if (within_outside_margin)
       {
-        mask.data[flat_idx] = kOutsideSlackMaskCost;
+        mask.data[flat_idx] = kSoftPenaltyMaskCost;
       }
     }
   }

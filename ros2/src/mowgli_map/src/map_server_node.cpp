@@ -136,17 +136,19 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   // NOTE: kept at 0.0 here deliberately, NOT 0.20 — every C++ unit test in
   // this package constructs the node directly via NodeOptions (bypassing
   // map_server.yaml / the mowgli_robot.yaml template / launch injection
-  // entirely), so raising this default would silently shrink the drivable
-  // zone in EVERY pre-existing keepout-mask test that doesn't explicitly
-  // override it, with no dock configured to exempt anything. The 0.20 m
-  // fleet default lives in map_server.yaml + the template instead (the
-  // normal launch path layers both on top of this compiled-in default) —
-  // see BoundaryInnerMarginTest for the tests that exercise 0.20 on purpose.
+  // entirely), so raising this default would silently add the mid-cost
+  // penalty band to EVERY pre-existing keepout-mask test that doesn't
+  // explicitly override it, changing their expected mask values with no
+  // dock configured to exempt anything. The 0.20 m fleet default lives in
+  // map_server.yaml + the template instead (the normal launch path layers
+  // both on top of this compiled-in default) — see BoundaryInnerMarginTest
+  // for the tests that exercise 0.20 on purpose.
   boundary_inner_margin_m_ = declare_parameter<double>("boundary_inner_margin_m", 0.0);
-  // See map_server_node.hpp: this is what makes it safe to run
-  // boundary_inner_margin_m_ > 0 near a dock that sits close to the polygon
-  // edge — a plain inward shrink was tried and reverted for exactly that
-  // reason before the dock corridor carve-out existed (commit 7f4b43d5).
+  // See map_server_node.hpp: the dock exemption isn't load-bearing for
+  // safety with the mid-cost design (a soft-cost cell never fails "Start
+  // occupied", so it can no longer strand the robot near the dock the way
+  // a lethal band once did), but it keeps the dock approach bias-free
+  // rather than merely non-blocking.
   dock_inner_margin_exempt_radius_m_ =
       std::max(declare_parameter<double>("dock_inner_margin_exempt_radius_m", 2.5), 0.0);
   strip_boundary_margin_m_ = declare_parameter<double>("strip_boundary_margin_m", 1.20);

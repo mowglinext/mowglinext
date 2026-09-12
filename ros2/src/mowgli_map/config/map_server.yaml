@@ -150,35 +150,50 @@ map_server_node:
     # turns. Restore .nan once auto-compute is debugged.
     mow_angle_deg: 90.0
 
-    # Inner-boundary margin. Cells INSIDE a mowing area but within this
-    # distance of the nearest edge are marked LETHAL in the keepout mask,
-    # pushing Nav2 TRANSIT paths (point-to-point moves between locations,
-    # planned against this GLOBAL costmap) that far away from the recorded
-    # edge. Coverage/mowing itself is untouched: FTC tracks the F2C path
-    # against the LOCAL costmap, which never carries this mask, so the
-    # actual mowed area still reaches the boundary as configured elsewhere
-    # (chassis_safety_inset etc).
+    # Inner transit margin. Cells INSIDE a mowing/navigation area but within
+    # this distance of the nearest edge get a SOFT mid-cost penalty in the
+    # keepout mask (same cost tier as the outside-slack band above,
+    # kSoftPenaltyMaskCost in costmap_filters.cpp) — NEVER lethal. This
+    # nudges Nav2 TRANSIT paths (point-to-point moves between locations,
+    # planned against this GLOBAL costmap) to prefer staying that far
+    # inside the recorded edge when an alternative exists, without ever
+    # refusing to start, end, or pass through the band. Coverage/mowing
+    # itself is untouched: FTC tracks the F2C path against the LOCAL
+    # costmap, which never carries this mask, so the actual mowed area
+    # still reaches the boundary as configured elsewhere (chassis_safety_inset
+    # etc).
     #
-    # 2026-04-23 (commit 7f4b43d5): a first attempt at 0.15 m was reverted
-    # because dock poses commonly sit <0.5 m from the polygon edge — a few
-    # cm of GNSS drift could land the robot's OWN position in a lethal cell
-    # the planner could not route out of. dock_inner_margin_exempt_radius_m
-    # below (added together with re-enabling this) exempts every cell near
-    # the dock from this shrink, in every direction, specifically to close
-    # that hole — see map_server_node.hpp for the full reasoning.
+    # This MUST stay a soft cost, never a lethal value:
+    #   * chassis_safety_inset defaults to the SAME 0.20 m. The outermost
+    #     coverage ring is planned exactly chassis_safety_inset inside the
+    #     line, so a lethal band here plus inflation_radius (0.20 m) would
+    #     swallow the ring itself and reopen the START_OCCUPIED skip cascade
+    #     (issue #487) -- a regression already paid for once (2026-07-23,
+    #     the commit that introduced chassis_safety_inset in the first
+    #     place to un-wedge that same ring).
+    #   * A lethal band also walls off any area-to-area seam (including
+    #     between two navigation/mowing areas) narrower than roughly twice
+    #     the inflated margin.
+    #   * 2026-04-23 (commit 7f4b43d5): an even earlier lethal attempt at
+    #     0.15 m was reverted because dock poses commonly sit <0.5 m from
+    #     the polygon edge -- a few cm of GNSS drift could land the robot's
+    #     OWN position in a lethal cell the planner could not route out of.
+    #     The mid-cost design means that failure mode cannot recur even
+    #     without dock_inner_margin_exempt_radius_m below, since a soft-cost
+    #     start/goal pose never fails "Start occupied".
     #
     # Set to 0 to disable outright. Boundary enforcement then remains via
     # the outside keepout (cells outside any polygon → lethal) and the BT
     # BoundaryGuard tripwire.
     boundary_inner_margin_m: 0.20
 
-    # Radius (m) around the dock pose exempted from boundary_inner_margin_m
-    # above, regardless of direction. 2.5 m comfortably covers the dock body
-    # (0.80 m) plus the approach corridor (1.5 m) plus GNSS-settling drift
-    # right after undock. Only takes effect once a dock pose is set (all-zero
-    # dock_pose_* = "no dock" = no exemption). 0 disables the exemption
-    # (restores the pre-2026-09 behaviour, i.e. re-opens the dead-zone risk
-    # above if boundary_inner_margin_m is also non-zero).
+    # Radius (m) around the dock pose exempted from the penalty above,
+    # regardless of direction -- so the dock approach carries no bias at
+    # all rather than merely "never blocked" (see boundary_inner_margin_m).
+    # 2.5 m comfortably covers the dock body (0.80 m) plus the approach
+    # corridor (1.5 m) plus GNSS-settling drift right after undock. Only
+    # takes effect once a dock pose is set (all-zero dock_pose_* = "no
+    # dock" = no exemption). 0 disables the exemption.
     dock_inner_margin_exempt_radius_m: 2.5
 
     # Pre-defined mowing / navigation areas (OpenMower-style).

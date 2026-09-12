@@ -2455,11 +2455,11 @@
     "progressTimeout": "Délai de progression",
     "progressTimeoutTooltip": "Secondes sans progression vers l'avant avant que la récupération ne se déclenche",
     "boundaryClearance": "Distance à la limite",
-    "boundaryClearanceDescription": "À quelle distance les trajets de transit entre deux emplacements restent de la limite enregistrée. La tonte elle-même n'est pas affectée — le robot coupe toujours jusqu'au bord réel comme configuré ailleurs ; seuls les déplacements point à point sont tenus à distance.",
+    "boundaryClearanceDescription": "À quelle distance les trajets de transit entre deux emplacements préfèrent rester de la limite enregistrée. C'est une préférence souple, pas une règle stricte — le transit peut toujours franchir la marge si c'est la seule option (par ex. juste après le débranchement). La tonte elle-même n'est pas affectée — le robot coupe toujours jusqu'au bord réel comme configuré ailleurs ; seuls les déplacements point à point sont légèrement rappelés vers l'intérieur.",
     "boundaryInnerMargin": "Marge de transit à la limite",
-    "boundaryInnerMarginTooltip": "Distance (m) à laquelle les trajets de transit restent à l'intérieur de la limite enregistrée. 0 désactive ce réglage et laisse le transit longer ou couper la ligne enregistrée, comme avant l'existence de ce réglage.",
+    "boundaryInnerMarginTooltip": "Distance (m) à laquelle les trajets de transit sont incités à rester à l'intérieur de la limite enregistrée. 0 désactive ce réglage et laisse le transit longer ou couper la ligne enregistrée, comme avant l'existence de ce réglage.",
     "dockExemptRadius": "Rayon d'exemption autour du socle",
-    "dockExemptRadiusTooltip": "Rayon (m) autour de la position du socle, dans toutes les directions, exempté de la marge de transit ci-dessus. Les socles se trouvent souvent près d'une limite enregistrée, et la dérive GNSS juste après le débranchement peut sinon placer le robot dans une cellule dont le planificateur ne peut plus le sortir — élargissez ce rayon si votre socle subit beaucoup de dérive (par ex. sous un auvent). Ne prend effet qu'une fois une position de socle définie."
+    "dockExemptRadiusTooltip": "Rayon (m) autour de la position du socle, dans toutes les directions, exempté de la marge de transit ci-dessus — pour que l'approche du socle ne subisse aucun biais, pas seulement « jamais bloquée ». Élargissez ce rayon si votre socle subit beaucoup de dérive GNSS (par ex. sous un auvent). Ne prend effet qu'une fois une position de socle définie."
   },
   "settingsSensors": {
     "lidarSensor": "Capteur LiDAR",
