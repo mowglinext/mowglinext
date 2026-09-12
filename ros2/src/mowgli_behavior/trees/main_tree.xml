@@ -96,7 +96,17 @@
         <IsCommand command="6"/>
         <Inverter>
           <Fallback name="SensorFault">
-            <IsScanStale max_age_sec="1.0"/>
+            <!-- 20 s (was 1.0 — field 2026-09-12): a 1–2 s LiDAR dropout every
+                 15–20 s halted the Root each time (replan + transit + spin-up)
+                 and the robot never mowed. Short dropouts are now handled
+                 INSIDE FollowStrip (scan_pause.hpp: blade OFF at 1.0 s, goal
+                 kept, blade back after 0.5 s of fresh scans; collision_monitor's
+                 source_timeout 1.5 s already holds the wheels). This Root halt
+                 is the second stage, for a scanner that is really gone. Must
+                 stay UNDER controller_server's movement_time_allowance (30 s)
+                 so a long outage ends in this clean cursor resume, not in FTC's
+                 "Failed to make progress" abort. -->
+            <IsScanStale max_age_sec="20.0"/>
             <!-- 60 s (was 15 — field 2026-07-23): must exceed IsObstacleStuck's
                  full backoff sequence (~45-50 s) or this guard preempts the
                  recovery machinery. Freshness-gated (max_state_age_sec) so a

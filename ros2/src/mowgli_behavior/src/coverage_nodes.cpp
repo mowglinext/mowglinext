@@ -413,6 +413,8 @@ BT::NodeStatus FollowStrip::onStart()
   // START_OCCUPIED pass (2026-09-10).
   const double first_gap = distanceToSegmentStart(ctx);
   blade_spinup_pending_ = bladeSpinupBeforeFirstUnit(first_gap);
+  scan_pause_ = ScanPauseState{};
+  last_scan_pause_tick_ = std::chrono::steady_clock::time_point{};
   setBladeEnabled(blade_spinup_pending_);
   blade_start_time_ = std::chrono::steady_clock::now();
   goal_sent_ = false;
@@ -583,8 +585,13 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
     return false;
   }
   // Mowing resumes on this segment — make sure the blade is on (it may have
-  // been switched off for a preceding inter-segment transit).
-  setBladeEnabled(true);
+  // been switched off for a preceding inter-segment transit) — unless the
+  // scan stream is currently down: the scan pause owns the blade until the
+  // LiDAR is back (stepScanPause re-enables it).
+  if (!scan_pause_.paused)
+  {
+    setBladeEnabled(true);
+  }
 
   Nav2FollowPath::Goal goal;
   goal.path = swaths_[swath_idx_];
@@ -852,6 +859,15 @@ BT::NodeStatus FollowStrip::onRunning()
     goal_sent_ = true;
     sendCurrentSwath(ctx);
     return BT::NodeStatus::RUNNING;
+  }
+
+  // Short LiDAR dropout while a coverage goal is active: cut the blade, keep
+  // the goal (collision_monitor already holds the wheels), restore the blade
+  // when the stream is back. A LONG outage is still the Root guard's job
+  // (IsScanStale max_age_sec in main_tree.xml). See scan_pause.hpp.
+  if (swath_goal_sent_ && !transit_active_ && !transit_pending_)
+  {
+    stepScanPause(ctx);
   }
 
   // A required blade-off transit could not be dispatched because navigate_to_pose
@@ -1140,7 +1156,51 @@ void FollowStrip::onHalted()
   transit_pending_ = false;
   transit_abort_seen_ = false;
   transit_result_.reset();
+  scan_pause_ = ScanPauseState{};
   setBladeEnabled(false);
+}
+
+bool FollowStrip::stepScanPause(const std::shared_ptr<BTContext>& ctx)
+{
+  const auto now = std::chrono::steady_clock::now();
+  const double dt = last_scan_pause_tick_.time_since_epoch().count() == 0
+                        ? 0.0
+                        : std::chrono::duration<double>(now - last_scan_pause_tick_).count();
+  last_scan_pause_tick_ = now;
+
+  bool have_scan = false;
+  double age_s = 0.0;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    have_scan = ctx->last_scan_time.time_since_epoch().count() != 0;
+    if (have_scan)
+    {
+      age_s = std::chrono::duration<double>(now - ctx->last_scan_time).count();
+    }
+  }
+
+  switch (ScanPauseStep(scan_pause_, have_scan, age_s, dt))
+  {
+    case ScanPauseAction::kPause:
+      setBladeEnabled(false);
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "FollowStrip: /scan_collision silent for %.1fs — blade OFF, holding the "
+                  "coverage goal until the LiDAR stream is back (collision_monitor holds the "
+                  "wheels; Root halt only after %.0fs)",
+                  age_s,
+                  20.0);
+      break;
+    case ScanPauseAction::kResume:
+      setBladeEnabled(true);
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "FollowStrip: LiDAR stream back (fresh for %.1fs) — blade ON, resuming "
+                  "coverage in place",
+                  kScanResumeFreshSec);
+      break;
+    case ScanPauseAction::kNone:
+      break;
+  }
+  return scan_pause_.paused;
 }
 
 void FollowStrip::setBladeEnabled(bool enabled)

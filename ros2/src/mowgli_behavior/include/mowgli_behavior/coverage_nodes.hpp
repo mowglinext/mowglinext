@@ -29,6 +29,7 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/detour_resume.hpp"
+#include "mowgli_behavior/scan_pause.hpp"
 #include "mowgli_behavior/transit_failure.hpp"
 #include "mowgli_interfaces/action/plan_coverage.hpp"
 #include "mowgli_interfaces/coverage_geometry.hpp"
@@ -407,6 +408,12 @@ private:
   /// False when the first unit needs a blade-off transit: the blade stays off
   /// on start and the spin-up wait is skipped (bladeSpinupBeforeFirstUnit).
   bool blade_spinup_pending_{true};
+  /// Blade pause across a short LiDAR dropout (scan_pause.hpp): the coverage
+  /// goal stays alive, only the blade is cut and later restored.
+  ScanPauseState scan_pause_;
+  std::chrono::steady_clock::time_point last_scan_pause_tick_{};
+  /// Per-tick scan-pause step; returns true while the blade is paused.
+  bool stepScanPause(const std::shared_ptr<BTContext>& ctx);
   bool goal_sent_ = false;
   bool follow_goal_ever_sent_ = false;
 

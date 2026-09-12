@@ -368,6 +368,16 @@ if(BUILD_TESTING)
   # test_coverage_transit_gap.cpp. Header-only on both sides (constexpr class
   # member + constexpr free constant), so no coverage_nodes.cpp / .cpp source
   # needs linking here.
+  # Blade pause/resume across a short LiDAR dropout (scan_pause.hpp) — pure
+  # header, no ROS.
+  ament_add_gtest(test_scan_pause
+    test/test_scan_pause.cpp
+  )
+  target_include_directories(test_scan_pause PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   ament_add_gtest(test_coverage_transit_gap
     test/test_coverage_transit_gap.cpp
   )
