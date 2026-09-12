@@ -403,12 +403,24 @@ func (r *RosProvider) initMapPolling() {
 	}()
 }
 
+// Preserve ROS area IDs when the UI separates mowing and navigation areas.
+func splitMapAreas(areas []mowgli.MapArea) (working, navigation []mowgli.MapArea, indices []uint32) {
+	for index, area := range areas {
+		if area.IsNavigationArea {
+			navigation = append(navigation, area)
+		} else {
+			working = append(working, area)
+			indices = append(indices, uint32(index))
+		}
+	}
+	return
+}
+
 func (r *RosProvider) pollMap() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	var workingAreas []mowgli.MapArea
-	var navAreas []mowgli.MapArea
+	var allAreas []mowgli.MapArea
 
 	// Fetch all areas (index 0..N until success=false)
 	for i := uint32(0); i < 100; i++ {
@@ -426,13 +438,10 @@ func (r *RosProvider) pollMap() {
 		if !res.Success {
 			break
 		}
-		if res.Area.IsNavigationArea {
-			navAreas = append(navAreas, res.Area)
-		} else {
-			workingAreas = append(workingAreas, res.Area)
-		}
+		allAreas = append(allAreas, res.Area)
 	}
 
+	workingAreas, navAreas, workingIndices := splitMapAreas(allAreas)
 	if workingAreas == nil {
 		workingAreas = []mowgli.MapArea{}
 	}
@@ -441,12 +450,13 @@ func (r *RosProvider) pollMap() {
 	}
 
 	mapData := mowgli.Map{
-		MapWidth:        20.0,
-		MapHeight:       20.0,
-		MapCenterX:      0.0,
-		MapCenterY:      0.0,
-		NavigationAreas: navAreas,
-		WorkingArea:     workingAreas,
+		MapWidth:           20.0,
+		MapHeight:          20.0,
+		MapCenterX:         0.0,
+		MapCenterY:         0.0,
+		NavigationAreas:    navAreas,
+		WorkingArea:        workingAreas,
+		WorkingAreaIndices: workingIndices,
 	}
 	r.addDockPose(&mapData)
 

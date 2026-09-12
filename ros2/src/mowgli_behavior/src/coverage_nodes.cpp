@@ -1117,6 +1117,8 @@ void FollowStrip::onHalted()
 void FollowStrip::setBladeEnabled(bool enabled)
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  if (enabled)
+    markCoverageStarted(*ctx, area_idx_);
   if (!blade_client_)
   {
     blade_client_ = ctx->node->create_client<mowgli_interfaces::srv::MowerControl>(
@@ -1879,6 +1881,10 @@ PlanCoverageArea::PlanCoverage::Goal PlanCoverageArea::buildGoal(
   double mow_angle_deg = kMowAngleAutoDeg;
   config().blackboard->get<double>("mow_angle_deg", mow_angle_deg);
   goal.mow_angle_deg = mow_angle_deg;
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  uint32_t area_index = 0;
+  getInput<uint32_t>("area_index", area_index);
+  goal.perpendicular = beginCoverageOrientation(*ctx, area_index);
   return goal;
 }
 
@@ -2107,11 +2113,22 @@ BT::NodeStatus PlanCoverageArea::onRunning()
     // could in principle hand back a degenerate single-pose sub-path,
     // and FollowStrip's own "sp.poses.size() >= 2" filter documents that
     // this is a real possibility, not a hypothetical one.
-    const bool has_drivable_path = !wrapped.result->drivable_subpaths.empty() &&
+    const bool has_drivable_path = wrapped.result && !wrapped.result->drivable_subpaths.empty() &&
                                    wrapped.result->drivable_subpaths.front().poses.size() >= 2;
-    if (wrapped.code != rclcpp_action::ResultCode::SUCCEEDED || !wrapped.result->success ||
-        !has_drivable_path)
+    if (wrapped.code != rclcpp_action::ResultCode::SUCCEEDED || !wrapped.result ||
+        !wrapped.result->success || !has_drivable_path)
     {
+      uint32_t area_index = 0;
+      getInput<uint32_t>("area_index", area_index);
+      if (auto it = ctx->cross_hatch.find(area_index); it != ctx->cross_hatch.end())
+      {
+        it->second.planning_failed = true;
+        RCLCPP_WARN(ctx->node->get_logger(),
+                    "Cross-hatch area %u: %s plan failed; next orientation retained. "
+                    "Use Next stripe direction by area to select another orientation.",
+                    area_index,
+                    it->second.session_perpendicular.value_or(false) ? "perpendicular" : "base");
+      }
       RCLCPP_WARN(ctx->node->get_logger(),
                   "PlanCoverageArea: plan_coverage failed (code=%d, drivable_subpaths=%zu): %s",
                   static_cast<int>(wrapped.code),

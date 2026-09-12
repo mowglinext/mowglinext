@@ -249,10 +249,30 @@ BT::NodeStatus EndSession::tick()
   // survive GetNextUnmowedArea re-entering after the targeted area finishes, or
   // the run rolls over into the next area), so THIS is where it dies.
   clearSingleAreaMode(*ctx);
-  // Remove the on-disk resume snapshot too: this is a real session boundary, so
+  // Clear the on-disk command/cursors too, retaining only the next cross-hatch
+  // phase. This is a real session boundary, so
   // the next COMMAND_START must start fresh rather than resume a finished (or
   // aborted-and-docked) session from the persisted cursor.
-  clearCoverageResumeState(*ctx);
+  ctx->base_orientation_areas.clear();
+  for (auto& [area, orientation] : ctx->cross_hatch)
+  {
+    const auto previous_failures = orientation.failed_sessions;
+    orientation.finish();
+    if (orientation.failed_sessions >= 3 && orientation.failed_sessions != previous_failures)
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "Cross-hatch area %u: orientation has failed in %u sessions; "
+                  "review the plan or override Next stripe direction by area.",
+                  area,
+                  orientation.failed_sessions);
+  }
+  if (!clearCoverageResumeState(*ctx))
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "EndSession: could not clear resume file or save cross-hatch history at '%s'. "
+                 "Check storage before restarting; persisted state may be stale or missing.",
+                 ctx->coverage_resume_path.c_str());
+  }
+  // Always let the following ClearCommand run, even on a storage failure.
   return BT::NodeStatus::SUCCESS;
 }
 

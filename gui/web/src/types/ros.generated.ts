@@ -506,6 +506,7 @@ export type Map = {
   map_center_y?: number;
   navigation_areas?: MapArea[];
   working_area?: MapArea[];
+  working_area_indices?: number[];
   dock_x?: number;
   dock_y?: number;
   dock_heading?: number;

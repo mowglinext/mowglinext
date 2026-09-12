@@ -528,6 +528,12 @@
           "default": 0.15,
           "description": "Minimum turning radius for coverage path (metres). Skid-steer pivots in place; large values force wide F2C U-turns."
         },
+        "mow_cross_hatch": {
+          "title": "Cross-hatch mowing",
+          "type": "boolean",
+          "default": false,
+          "description": "Alternate each area's stripe direction by 90 degrees between mowing sessions. Next-direction overrides apply to the next session; interrupted sessions keep their direction after restart."
+        },
         "mow_angle_deg": {
           "type": "number",
           "title": "Mow Angle",

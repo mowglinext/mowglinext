@@ -582,6 +582,21 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				return
 			}
 			err = provider.CallService(ctx, "/hardware_bridge/mower_control", &CallReq, &mowgli.MowerControlRes{}, "mowgli_interfaces/srv/MowerControl")
+		case "coverage_orientation":
+			var req mowgli.CoverageOrientationReq
+			if err = c.BindJSON(&req); err != nil {
+				c.JSON(400, ErrorResponse{Error: err.Error()})
+				return
+			}
+			var res mowgli.CoverageOrientationRes
+			err = provider.CallService(ctx, "/behavior_tree_node/coverage_orientation", &req, &res, "mowgli_interfaces/srv/CoverageOrientation")
+			if err == nil && !res.Success {
+				err = errors.New(res.Message)
+			}
+			if err == nil {
+				c.JSON(200, res)
+				return
+			}
 		case "start_in_area":
 			var CallReq mowgli.StartInAreaReq
 			err = c.BindJSON(&CallReq)

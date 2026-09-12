@@ -1,3 +1,4 @@
+import {mowingAreaIndex} from "../utils/mapAreaIndex.ts";
 import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
 import {useApi} from "../hooks/useApi.ts";
 import {App} from "antd";
@@ -293,7 +294,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
 
         let newFeatures: Record<string, MowingFeature> = {}
         if (map) {
-            const workingAreas = buildFeatures(map.working_area??[], "area")
+            const workingAreas = buildFeatures(map.working_area??[], "area", true)
             const navigationAreas = buildFeatures(map.navigation_areas??[], "navigation")
             newFeatures = {...workingAreas, ...navigationAreas}
 
@@ -393,9 +394,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // observation), figure out which mowing area's polygon contains its
     // centroid. The result is the area_index map_server expects when we
     // promote the obstacle — the position of the matching area in
-    // map_server's areas_ vector. Workareas are written first (per
-    // useMapFiles.ts), then navigation areas; obstacles only attach to
-    // workareas, so the index is the workarea's own ordinal in mowing_order.
+    // map_server's areas_ vector. Mowing order and the filtered working-area
+    // position are not ROS IDs; resolve the original ID from map metadata.
     // Returns null when no workarea contains the centroid → promote button
     // is disabled because we'd have nowhere to attach it.
     const obstacleAreaIndex = useMemo(() => {
@@ -440,14 +440,14 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     if (intersect) inside = !inside;
                 }
                 if (inside) {
-                    matchedIdx = i;
+                    matchedIdx = mowingAreaIndex(map, workareas[i].properties.source_working_area_index) ?? null;
                     break;
                 }
             }
             result[id] = matchedIdx;
         }
         return result;
-    }, [dynamicObstacles, features, offsetX, offsetY, datum]);
+    }, [dynamicObstacles, features, offsetX, offsetY, datum, map]);
 
     const obstacleAreaNames = useMemo(() => {
         const names: Record<number, string> = {};
@@ -455,12 +455,14 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             .filter((f): f is MowingAreaFeature => f instanceof MowingAreaFeature)
             .sort((a, b) => (a.getMowingOrder() ?? 9999) - (b.getMowingOrder() ?? 9999));
         for (let i = 0; i < workareas.length; ++i) {
-            names[i] = workareas[i].getLabel(
+            const areaIndex = mowingAreaIndex(map, workareas[i].properties.source_working_area_index);
+            if (areaIndex === undefined) continue;
+            names[areaIndex] = workareas[i].getLabel(
                 t('mapAreasList.unnamedArea', {order: workareas[i].getMowingOrder()})
             );
         }
         return names;
-    }, [features, t]);
+    }, [features, t, map]);
 
     // Build the areas list for the sidebar panel
     const areasList = useMemo(() => {
@@ -516,7 +518,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         });
     }, []);
 
-    function buildFeatures(areas: MapArea[], type: string) : Record<string, MowingFeatureBase> {
+    function buildFeatures(areas: MapArea[], type: string, fromLiveMap = false) : Record<string, MowingFeatureBase> {
 
 
         return areas?.flatMap((area, index) : MowingFeatureBase[] => {
@@ -527,6 +529,9 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             const nfeat = type=="area" ? new MowingAreaFeature(type + "-" + index.toString() + "-area-0", index+1)
                 : new NavigationFeature(type + "-" + index.toString() + "-area-0");//, offsetX, offsetY, datum.
             nfeat.setArea(area, offsetX, offsetY, datum);
+            // Preserve source identity separately from editable mowing order.
+            // Restored/imported maps cannot target live ROS areas until saved.
+            if (fromLiveMap) nfeat.properties.source_working_area_index = index;
 
             let obstacles:  ObstacleFeature[] = [];
 
@@ -652,6 +657,13 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     }, [dockDirty, setHasUnsavedChanges]);
 
     // Mower action callbacks shared between desktop and mobile toolbars
+    const startSelectedArea = (key: string) => {
+        const item = mowingAreas.find(item => item.key == key);
+        const index = mowingAreaIndex(map, item?.feat?.properties?.index);
+        if (index === undefined) return Promise.reject(new Error(t("crossHatch.areaUnavailable")));
+        return mowerAction("start_in_area", {area: index})();
+    };
+
     const mowerActions = useMemo(() => ({
         onStart: mowerAction("high_level_control", {Command: 1}),
         onHome: mowerAction("high_level_control", {Command: 2}),
@@ -1064,12 +1076,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onDownloadGeoJSON={handleDownloadGeoJSON}
                         onUploadGeoJSON={handleUploadGeoJSON}
                         onImportOpenMower={() => handleImportOpenMower(setImportPreview, setImportFileText)}
-                        onMowArea={(key) => {
-                            const item = mowingAreas.find(item => item.key == key)
-                            return mowerAction("start_in_area", {
-                                area: item?.feat?.properties?.index,
-                            })()
-                        }}
+                        onMowArea={startSelectedArea}
                         stateName={highLevelStatus.highLevelStatus.state_name}
                         highLevelState={highLevelStatus.highLevelStatus.state}
                         emergency={highLevelStatus.highLevelStatus.emergency}
@@ -1121,12 +1128,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             onRestoreMap={handleRestoreMap}
                             onDownloadGeoJSON={handleDownloadGeoJSON}
                             onImportOpenMower={() => handleImportOpenMower(setImportPreview, setImportFileText)}
-                            onMowArea={(key) => {
-                                const item = mowingAreas.find(item => item.key == key)
-                                return mowerAction("start_in_area", {
-                                    area: item?.feat?.properties?.index,
-                                })()
-                            }}
+                            onMowArea={startSelectedArea}
                             {...mowerActions}
                         />
                     </div>

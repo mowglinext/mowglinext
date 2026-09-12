@@ -336,3 +336,17 @@ def test_mowgli_launch_passes_charge_limits_to_hardware_bridge(
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_cross_hatch_setting_reaches_behavior_tree() -> None:
+    call = _find_node_call(_parse("full_system.launch.py"), "behavior_tree_node")
+    assert call is not None
+    parameters = next(kw.value for kw in call.keywords if kw.arg == "parameters")
+    values = [value for entry in parameters.elts if isinstance(entry, ast.Dict)
+              for key, value in zip(entry.keys, entry.values)
+              if isinstance(key, ast.Constant) and key.value == "mow_cross_hatch"]
+    assert len(values) == 1
+    expression = compile(ast.Expression(values[0]), "full_system.launch.py", "eval")
+    for config, expected in [({}, False), ({"mow_cross_hatch": True}, True)]:
+        assert eval(expression, {"__builtins__": {}, "bool": bool},
+                    {"robot_params": config}) is expected

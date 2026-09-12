@@ -12,9 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -352,4 +353,24 @@ func TestMapWriteBudget(t *testing.T) {
 	assert.Equal(t, 6*time.Minute, mapWriteBudget(1000))
 	// The old fixed 30 s is always exceeded now, even for zero areas.
 	assert.Greater(t, mapWriteBudget(0), 30*time.Second)
+}
+
+func TestServiceRoute_CoverageOrientation(t *testing.T) {
+	for _, setNext := range []bool{false, true} {
+		mock := types.NewMockRosProvider()
+		mock.ServiceResponder = func(service string, req any, res any) {
+			assert.Equal(t, "/behavior_tree_node/coverage_orientation", service)
+			input := req.(*mowgli.CoverageOrientationReq)
+			assert.Equal(t, uint32(2), input.AreaIndex)
+			assert.Equal(t, setNext, input.SetNext)
+			*res.(*mowgli.CoverageOrientationRes) = mowgli.CoverageOrientationRes{Success: true, NextPerpendicular: true, CurrentActive: true}
+		}
+		body, _ := json.Marshal(map[string]any{"area_index": 2, "set_next": setNext, "perpendicular": true})
+		req := httptest.NewRequest("POST", "/api/mowglinext/call/coverage_orientation", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		setupMowgliNextRouter(mock).ServeHTTP(w, req)
+		assert.Equal(t, 200, w.Code)
+		assert.Contains(t, w.Body.String(), `"next_perpendicular":true`)
+	}
 }

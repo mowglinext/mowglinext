@@ -156,6 +156,7 @@ export class MowingFeatureBase extends MowingFeature implements Feature<Polygon>
         color: string
         , name? :string
         , index: number
+        , source_working_area_index?: number
         , mowing_order: number
         , feature_type: string
     }

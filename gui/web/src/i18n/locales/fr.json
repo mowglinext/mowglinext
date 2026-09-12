@@ -1,4 +1,20 @@
 {
+  "crossHatch": {
+    "areaUnavailable": "Les identifiants des zones sont indisponibles. Actualisez la carte après la mise à jour du serveur GUI.",
+    "title": "Prochaine direction par zone",
+    "help": "Chaque zone alterne indépendamment lorsqu’elle est tondue. Les changements sont enregistrés immédiatement pour la prochaine session ; une session active ou en pause conserve sa direction.",
+    "autoBase": "Auto",
+    "autoCross": "Auto + 90°",
+    "current": "Actuelle : {{angle}}",
+    "noActive": "Aucune session active",
+    "next": "Prochaine tonte",
+    "nextFor": "Prochaine direction pour {{area}}",
+    "refresh": "Actualiser {{area}}",
+    "unavailable": "Impossible de lire ou enregistrer la direction. Vérifiez la connexion ROS2 et réessayez.",
+    "restart": "La tonte croisée n’est pas active dans ROS2. Enregistrez le réglage puis redémarrez ROS2.",
+    "area": "Zone {{index}}",
+    "noAreas": "Aucune zone de tonte disponible."
+},
   "language": {
     "label": "Langue",
     "fr": "Français",
@@ -2425,6 +2441,8 @@
     "chassisSafetyInsetTooltip": "Réduit au préalable le polygone d'opération de ce nombre de mètres avant que F2C ne planifie. Par défaut chassis_width / 2 afin que le bord du châssis reste à l'intérieur du polygone en suivi parfait. Relié à coverage_server.chassis_safety_inset.",
     "minTurningRadius": "Rayon de braquage minimal",
     "minTurningRadiusTooltip": "F2C Robot::setMinTurningRadius — borne le rayon des arcs CC-Dubins entre les bandes. La couverture utilise des arcs CONTINUS, donc il doit être assez large pour que le MPPI SUIVE le demi-tour : trop petit (~0,05 m) crée un quasi-rebroussement sur lequel le contrôleur accroche ; ~0,12 m donne un demi-tour en Ω doux qui tient dans la bande de tournière. Relié à coverage_server.min_turning_radius.",
+    "crossHatch": "Tonte croisée",
+    "crossHatchTooltip": "Alterner les bandes de chaque zone de 90° lorsque cette zone est à nouveau tondue, par rapport à Auto ou à l’angle fixe. Les pauses, recharges et redémarrages conservent l’orientation. Les passages de bordure restent inchangés. Redémarrer ROS2 après modification.",
     "mowAngleDeg": "Angle de tonte",
     "mowAngleDegTooltip": "Direction des bandes de tonte. Activez Auto pour laisser le planificateur choisir l'angle qui minimise le nombre de bandes, ou fixez un angle de 0 à 179°.",
     "mowAngleAuto": "Auto",

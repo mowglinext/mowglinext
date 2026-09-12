@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { ThemeProvider } from "../../theme/ThemeContext.tsx";
+vi.mock("./CrossHatchSettings.tsx", () => ({CrossHatchSettings: () => null}));
 import { MowingSection } from "./MowingSection.tsx";
 
 // Regression guard for issue #429: num_headland_passes is a THREE-WAY sentinel
@@ -45,5 +46,23 @@ describe("MowingSection — headland passes", () => {
         fireEvent.click(auto);
 
         expect(onChange).toHaveBeenCalledWith("num_headland_passes", 0);
+    });
+});
+
+
+describe("MowingSection — cross-hatch", () => {
+    it.each([-1, 25])("allows cross-hatch with base angle %s", (angle) => {
+        const onChange = vi.fn();
+        const {rerender} = render(<ThemeProvider><MowingSection
+            values={{mow_angle_deg: angle}} onChange={onChange}/></ThemeProvider>);
+        const toggle = screen.getByRole("switch", {name: "Cross-hatch mowing"});
+        expect(toggle).not.toBeChecked();
+        fireEvent.click(toggle);
+        expect(onChange).toHaveBeenCalledWith("mow_cross_hatch", true);
+        rerender(<ThemeProvider><MowingSection
+            values={{mow_angle_deg: angle, mow_cross_hatch: true}} onChange={onChange}/></ThemeProvider>);
+        expect(toggle).toBeChecked();
+        fireEvent.click(toggle);
+        expect(onChange).toHaveBeenLastCalledWith("mow_cross_hatch", false);
     });
 });

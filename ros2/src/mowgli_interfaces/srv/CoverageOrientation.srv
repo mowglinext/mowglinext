@@ -1,0 +1,13 @@
+# Read or persist the next stripe orientation for one map area.
+# A write affects only the next session; an active plan is never rotated.
+uint32 area_index
+bool set_next
+bool perpendicular
+---
+bool success
+string message
+bool enabled
+bool current_active
+bool current_perpendicular
+bool next_perpendicular
+float64 base_angle_deg

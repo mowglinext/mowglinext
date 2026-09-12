@@ -78,6 +78,24 @@ type ClearObstacleRes struct {
 	Message                   string                         `json:"message"`
 }
 
+// CoverageOrientationReq for mowgli_interfaces/srv/CoverageOrientation request.
+type CoverageOrientationReq struct {
+	AreaIndex                 uint32                         `json:"area_index"`
+	SetNext                   bool                           `json:"set_next"`
+	Perpendicular             bool                           `json:"perpendicular"`
+}
+
+// CoverageOrientationRes for mowgli_interfaces/srv/CoverageOrientation response.
+type CoverageOrientationRes struct {
+	Success                   bool                           `json:"success"`
+	Message                   string                         `json:"message"`
+	Enabled                   bool                           `json:"enabled"`
+	CurrentActive             bool                           `json:"current_active"`
+	CurrentPerpendicular      bool                           `json:"current_perpendicular"`
+	NextPerpendicular         bool                           `json:"next_perpendicular"`
+	BaseAngleDeg              float64                        `json:"base_angle_deg"`
+}
+
 // EmergencyStopReq for mowgli_interfaces/srv/EmergencyStop request.
 type EmergencyStopReq struct {
 	Emergency                 uint8                          `json:"emergency"`

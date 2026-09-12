@@ -316,6 +316,7 @@ parse_ts_constants() {
     echo "  map_center_y?: number;"
     echo "  navigation_areas?: MapArea[];"
     echo "  working_area?: MapArea[];"
+    echo "  working_area_indices?: number[];"
     echo "  dock_x?: number;"
     echo "  dock_y?: number;"
     echo "  dock_heading?: number;"

@@ -489,7 +489,8 @@ void CoverageServer::planCoverage()
                                                mow_angle_rad,
                                                min_swath_length,
                                                ring_direction,
-                                               min_turning_radius);
+                                               min_turning_radius,
+                                               goal->perpendicular);
     const double plan_ms = 1e3 * (now() - t_plan0).seconds();
 
     // Instrumentation (no behaviour change): surface every piece the planner
