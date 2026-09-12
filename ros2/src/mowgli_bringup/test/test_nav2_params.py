@@ -96,6 +96,21 @@ def test_coverage_goal_checker_progress_threshold_is_high() -> None:
     )
 
 
+def test_transit_goal_checker_ignores_final_heading() -> None:
+    """Coverage transits (navigate_to_pose_transit.xml) must not demand a final
+    heading: RPP cannot pivot at the end of a path and the 1 Hz replan loop made
+    a 0.40 m transit spin for 164 s on 2026-09-12. Docking keeps
+    stopped_goal_checker (yaw 0.10) untouched."""
+    for params in (_load_params(), _load_no_lidar_params()):
+        cfg = _controller_section(params)
+        assert "transit_goal_checker" in cfg["goal_checker_plugins"]
+        gc = cfg["transit_goal_checker"]
+        assert gc["plugin"] == "nav2_controller::SimpleGoalChecker"
+        assert gc["xy_goal_tolerance"] <= 0.5
+        assert gc["yaw_goal_tolerance"] >= 3.1
+        assert cfg["stopped_goal_checker"]["yaw_goal_tolerance"] <= 0.2
+
+
 def test_stopped_goal_checker_velocity_threshold_is_set() -> None:
     """StoppedGoalChecker without trans_stopped_velocity defaults to
     a permissive threshold; pin a value so the check is deterministic.

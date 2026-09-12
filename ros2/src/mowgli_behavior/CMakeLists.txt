@@ -368,6 +368,16 @@ if(BUILD_TESTING)
   # test_coverage_transit_gap.cpp. Header-only on both sides (constexpr class
   # member + constexpr free constant), so no coverage_nodes.cpp / .cpp source
   # needs linking here.
+  # Structural pin: navigate_to_pose_transit.xml selects transit_goal_checker
+  # and otherwise matches navigate_to_pose.xml (field 2026-09-12).
+  ament_add_gtest(test_transit_tree
+    test/test_transit_tree.cpp
+  )
+  target_compile_definitions(test_transit_tree PRIVATE
+    MOWGLI_TRANSIT_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/navigate_to_pose_transit.xml"
+    MOWGLI_NAV_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/navigate_to_pose.xml"
+  )
+
   # Blade pause/resume across a short LiDAR dropout (scan_pause.hpp) — pure
   # header, no ROS.
   ament_add_gtest(test_scan_pause

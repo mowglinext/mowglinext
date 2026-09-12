@@ -64,6 +64,22 @@ inline bool coverageTransitRequired(double start_gap_m, bool previous_unit_dispa
          start_gap_m > mowgli_interfaces::coverage_geometry::kSegmentTransitGapM;
 }
 
+/// Hard time bound on ONE blade-off coverage transit [s], from the straight-line
+/// gap to its goal. Field 2026-09-12: a 0.40 m transit with no time bound turned
+/// on the spot for 164 s (RPP could not meet the ±0.10 rad yaw goal, the tree
+/// replanned at 1 Hz) until the operator intervened. Generous on purpose —
+/// Smac detours around obstacles are much longer than the gap — this only has
+/// to end a transit that is clearly not going anywhere.
+constexpr double kTransitTimeoutMinSec = 20.0;
+constexpr double kTransitTimeoutSlackSec = 15.0;
+constexpr double kTransitTimeoutSpeedMps = 0.10;  // half the transit speed
+inline double transitDeadlineSec(double gap_m)
+{
+  const double g = gap_m > 0.0 ? gap_m : 0.0;
+  const double t = g / kTransitTimeoutSpeedMps + kTransitTimeoutSlackSec;
+  return t > kTransitTimeoutMinSec ? t : kTransitTimeoutMinSec;
+}
+
 /// Whether FollowStrip should spin the blade up on start, BEFORE the first
 /// unit is dispatched. Only when that unit will be mowed directly from where
 /// the robot stands. A first unit that must be reached by a blade-off transit
@@ -408,6 +424,14 @@ private:
   /// False when the first unit needs a blade-off transit: the blade stays off
   /// on start and the spin-up wait is skipped (bladeSpinupBeforeFirstUnit).
   bool blade_spinup_pending_{true};
+  /// Transit watchdog (transitDeadlineSec): started when a blade-off transit
+  /// goal is sent; on expiry the goal is cancelled ONCE and the existing
+  /// aborted/cancelled path skips the unit.
+  std::chrono::steady_clock::time_point transit_start_time_{};
+  double transit_deadline_s_{0.0};
+  bool transit_timeout_requested_{false};
+  void armTransitWatchdog(double gap_m);
+
   /// Blade pause across a short LiDAR dropout (scan_pause.hpp): the coverage
   /// goal stays alive, only the blade is cut and later restored.
   ScanPauseState scan_pause_;

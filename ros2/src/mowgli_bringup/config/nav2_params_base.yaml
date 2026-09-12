@@ -109,7 +109,7 @@ controller_server:
     min_theta_velocity_threshold: 0.0
     failure_tolerance: 1.0
     progress_checker_plugins: ["progress_checker"]
-    goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker"]
+    goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker", "transit_goal_checker"]
     controller_plugins: ["FollowPath", "FollowCoveragePath"]
 
     progress_checker:
@@ -144,6 +144,20 @@ controller_server:
       # drive straight into the dock. Slightly longer arrivals on
       # ordinary transit are an acceptable trade.
       yaw_goal_tolerance: 0.10
+
+    # Coverage TRANSITS (FollowStrip sub-path boundaries / detours,
+    # TransitToStrip) — selected per goal through the
+    # navigate_to_pose_transit.xml behaviour tree, so opennav_docking keeps
+    # stopped_goal_checker above. Final heading is IGNORED: FTC does its own
+    # PRE_ROTATE at the start of the next sub-path, while RPP cannot pivot at
+    # the end of a path (use_rotate_to_heading: false) and the 1 Hz
+    # replan-if-invalid loop made a 0.40 m transit with a ±0.10 rad yaw goal
+    # spin on the spot for 164 s (field 2026-09-12).
+    transit_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.30
+      yaw_goal_tolerance: 3.14
+      stateful: true
 
     # Coverage strip endpoint validation.
     #

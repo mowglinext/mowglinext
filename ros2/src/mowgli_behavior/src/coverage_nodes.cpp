@@ -19,6 +19,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <exception>
+#include <filesystem>
 #include <limits>
 
 #include "action_msgs/msg/goal_status.hpp"
@@ -688,10 +689,12 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
         slot->error_msg = r.result->error_msg;
       }
     };
+    nav_goal.behavior_tree = ctx->transit_tree_xml;
     nav_future_ = nav_client_->async_send_goal(nav_goal, send_opts);
     transit_active_ = true;
     transit_abort_seen_ = false;
     swath_goal_sent_ = true;
+    armTransitWatchdog(gap);
     RCLCPP_INFO(ctx->node->get_logger(),
                 "FollowStrip: segment %zu/%zu requires transit (gap %.2fm%s) — blade off first",
                 swath_idx_ + 1,
@@ -925,6 +928,37 @@ BT::NodeStatus FollowStrip::onRunning()
       nav_handle_.reset();
       sendFollowGoal(ctx);
       return BT::NodeStatus::RUNNING;
+    }
+    // Watchdog: a transit that is still "running" past its deadline is not
+    // going anywhere (2026-09-12: 164 s on the spot for a 0.40 m gap). Cancel
+    // it once; the CANCELED branch below then skips the unit like any other
+    // failed transit (no error code → plain skip, never START_OCCUPIED).
+    if (!transit_timeout_requested_ && transit_deadline_s_ > 0.0 &&
+        nav_status != action_msgs::msg::GoalStatus::STATUS_ABORTED &&
+        nav_status != action_msgs::msg::GoalStatus::STATUS_CANCELED)
+    {
+      const double elapsed =
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - transit_start_time_)
+              .count();
+      if (elapsed > transit_deadline_s_)
+      {
+        transit_timeout_requested_ = true;
+        RCLCPP_WARN(ctx->node->get_logger(),
+                    "FollowStrip: segment %zu/%zu transit still running after %.0fs (bound "
+                    "%.0fs) — cancelling it and skipping the unit",
+                    swath_idx_ + 1,
+                    swaths_.size(),
+                    elapsed,
+                    transit_deadline_s_);
+        try
+        {
+          nav_client_->async_cancel_goal(nav_handle_);
+        }
+        catch (const std::exception& ex)
+        {
+          RCLCPP_WARN(ctx->node->get_logger(), "FollowStrip: transit cancel failed: %s", ex.what());
+        }
+      }
     }
     if (nav_status == action_msgs::msg::GoalStatus::STATUS_ABORTED ||
         nav_status == action_msgs::msg::GoalStatus::STATUS_CANCELED)
@@ -1203,6 +1237,13 @@ bool FollowStrip::stepScanPause(const std::shared_ptr<BTContext>& ctx)
   return scan_pause_.paused;
 }
 
+void FollowStrip::armTransitWatchdog(double gap_m)
+{
+  transit_start_time_ = std::chrono::steady_clock::now();
+  transit_deadline_s_ = transitDeadlineSec(gap_m);
+  transit_timeout_requested_ = false;
+}
+
 void FollowStrip::setBladeEnabled(bool enabled)
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
@@ -1364,6 +1405,7 @@ BT::NodeStatus TransitToStrip::onStart()
 
   Nav2Navigate::Goal goal;
   goal.pose = ctx->current_transit_goal;
+  goal.behavior_tree = ctx->transit_tree_xml;
 
   nav_handle_.reset();
   nav_future_ = nav_client_->async_send_goal(goal);
@@ -1494,6 +1536,7 @@ BT::NodeStatus DetourAroundObstacle::onStart()
 
   Nav2Navigate::Goal nav_goal;
   nav_goal.pose = goal;
+  nav_goal.behavior_tree = ctx->transit_tree_xml;
 
   nav_handle_.reset();
   nav_future_ = nav_client_->async_send_goal(nav_goal);

@@ -61,6 +61,17 @@ TEST(CoverageTransitGap, BladeSpinsUpOnStartOnlyForADirectlyMowableFirstUnit)
   EXPECT_FALSE(mowgli_behavior::bladeSpinupBeforeFirstUnit(13.6));
 }
 
+// 2026-09-12: a 0.40 m sub-path-boundary transit spun on the spot for 164 s
+// because nothing bounded it. The bound must be generous (Smac detours are
+// much longer than the gap) but finite.
+TEST(CoverageTransitGap, TransitDeadlineIsFiniteAndGenerous)
+{
+  EXPECT_DOUBLE_EQ(mowgli_behavior::transitDeadlineSec(0.40), 20.0);  // floor
+  EXPECT_DOUBLE_EQ(mowgli_behavior::transitDeadlineSec(-1.0), 20.0);
+  EXPECT_NEAR(mowgli_behavior::transitDeadlineSec(13.6), 151.0, 1e-9);
+  EXPECT_LT(mowgli_behavior::transitDeadlineSec(0.40), 164.0);
+}
+
 TEST(CoverageTransitGap, DistantFirstUnitStillTransits)
 {
   EXPECT_TRUE(mowgli_behavior::coverageTransitRequired(0.61, false));

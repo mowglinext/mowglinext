@@ -544,6 +544,13 @@ struct BTContext
   /// existed and then died (LiDAR container crash, filter-chain death).
   std::chrono::steady_clock::time_point last_scan_time{};
 
+  /// Nav2 behaviour tree handed to NavigateToPose for COVERAGE transits
+  /// (trees/navigate_to_pose_transit.xml next to the main tree: selects
+  /// transit_goal_checker, final heading ignored). Empty = Nav2 default tree
+  /// (stopped_goal_checker, which opennav_docking still needs). Set once by
+  /// behavior_tree_node from the main tree's directory.
+  std::string transit_tree_xml;
+
   // -----------------------------------------------------------------------
   // Per-session flags reset by ClearCommand at session end
   // -----------------------------------------------------------------------
