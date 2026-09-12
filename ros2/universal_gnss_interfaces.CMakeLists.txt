@@ -1,0 +1,50 @@
+cmake_minimum_required(VERSION 3.16)
+
+# This file intentionally replaces universal-gnss/gnss_ros2/CMakeLists.txt
+# only in the foxglove schema overlay. Keep package.xml and the .msg/.srv
+# sources copied verbatim from the pinned submodule; do not build its driver
+# libraries or executables here.
+project(universal_gnss_ros2)
+
+find_package(ament_cmake REQUIRED)
+find_package(builtin_interfaces REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+
+set(
+  UNIVERSAL_GNSS_INTERFACES
+  "msg/GnssStatus.msg"
+  "msg/RtcmFrame.msg"
+  "srv/GetReceiverSnapshot.srv"
+)
+
+file(
+  GLOB _discovered_interface_files
+  RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+  CONFIGURE_DEPENDS
+  "msg/*.msg"
+  "srv/*.srv"
+)
+set(_expected_interface_files ${UNIVERSAL_GNSS_INTERFACES})
+list(SORT _discovered_interface_files)
+list(SORT _expected_interface_files)
+
+if(NOT "${_discovered_interface_files}" STREQUAL "${_expected_interface_files}")
+  message(
+    FATAL_ERROR
+    "Universal GNSS interface drift detected.\n"
+    "Submodule interfaces: ${_discovered_interface_files}\n"
+    "Schema overlay interfaces: ${_expected_interface_files}\n"
+    "Update ros2/universal_gnss_interfaces.CMakeLists.txt to match the pinned "
+    "universal-gnss submodule."
+  )
+endif()
+
+rosidl_generate_interfaces(
+  ${PROJECT_NAME}
+  ${UNIVERSAL_GNSS_INTERFACES}
+  DEPENDENCIES builtin_interfaces diagnostic_msgs
+)
+
+ament_export_dependencies(rosidl_default_runtime)
+ament_package()

@@ -350,6 +350,14 @@ def generate_launch_description() -> LaunchDescription:
                     robot_params.get("battery_critical_recovery_percent", 30.0)
                 )
             },
+            # Floor for an operator-forced resume out of a mid-session charge
+            # hold (Play pressed while CHARGING / CRITICAL_BATTERY_CHARGING).
+            # Must exceed battery_low_percent (the node clamps it if not).
+            {
+                "battery_manual_resume_percent": float(
+                    robot_params.get("battery_manual_resume_percent", 30.0)
+                )
+            },
         ],
     )
 

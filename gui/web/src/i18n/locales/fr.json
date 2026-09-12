@@ -188,6 +188,7 @@
     "bladeOff": "Lame arrêtée",
     "start": "Démarrer",
     "resume": "Reprendre",
+    "resumeNow": "Reprendre maintenant (sans attendre la charge)",
     "startFresh": "Redémarrer à zéro",
     "emergencyStop": "Arrêt d'urgence",
     "rearm": "Réarmer",
@@ -1560,6 +1561,12 @@
     "unnamedArea": "Zone {{index}}"
   },
   "mapTrackedObstacles": {
+    "ignore": "Ignorer",
+    "ignoreTooltip": "Écarter cette détection suivie",
+    "ignoreConfirmTitle": "Ignorer l’obstacle n°{{id}} ?",
+    "ignoreConfirmBody": "Cette action écarte la détection actuelle. L’obstacle peut réapparaître s’il est détecté à nouveau. L’évitement des collisions en temps réel et les zones interdites enregistrées restent actifs.",
+    "ignoredSuccess": "Obstacle n°{{id}} ignoré",
+    "ignoreFailed": "Impossible d’ignorer l’obstacle",
     "outsideAreaMessage": "L'obstacle est en dehors de toutes les zones de tonte",
     "outsideAreaDescription": "Tracez une zone de tonte qui couvre cet obstacle avant de le promouvoir.",
     "areaFallback": "zone {{index}}",
@@ -2376,7 +2383,9 @@
     "critical": "Critique",
     "criticalTooltip": "Niveau de batterie critique",
     "criticalRecovery": "Récupération critique",
-    "criticalRecoveryTooltip": "Quitter l'état batterie critique une fois rechargée au-dessus de ce %. Borne supérieure d'hystérésis, doit être supérieure à Critique."
+    "criticalRecoveryTooltip": "Quitter l'état batterie critique une fois rechargée au-dessus de ce %. Borne supérieure d'hystérésis, doit être supérieure à Critique.",
+    "manualResume": "Reprise manuelle",
+    "manualResumeTooltip": "Appuyer sur Lecture pendant une recharge en cours de session ne reprend la tonte qu'au-dessus de ce %. Doit être supérieur à Faible (accostage), sinon le robot retourne à la base en quelques minutes."
   },
   "settingsSafety": {
     "alertMessage": "Les réglages de sécurité protègent le robot et son environnement",

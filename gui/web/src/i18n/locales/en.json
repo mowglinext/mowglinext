@@ -188,6 +188,7 @@
     "bladeOff": "Blade stopped",
     "start": "Start",
     "resume": "Resume",
+    "resumeNow": "Resume now (skip charge)",
     "startFresh": "Start fresh",
     "emergencyStop": "Emergency stop",
     "rearm": "Re-arm",
@@ -1564,6 +1565,12 @@
     "unnamedArea": "Area {{index}}"
   },
   "mapTrackedObstacles": {
+    "ignore": "Ignore",
+    "ignoreTooltip": "Dismiss this tracked detection",
+    "ignoreConfirmTitle": "Ignore obstacle #{{id}}?",
+    "ignoreConfirmBody": "This dismisses the current tracked detection. It may reappear if detected again. Live collision avoidance and saved keepouts remain active.",
+    "ignoredSuccess": "Obstacle #{{id}} ignored",
+    "ignoreFailed": "Failed to ignore obstacle",
     "outsideAreaMessage": "Obstacle is outside every mowing area",
     "outsideAreaDescription": "Draw a mowing area that covers this obstacle before promoting it.",
     "areaFallback": "area {{index}}",
@@ -2380,7 +2387,9 @@
     "critical": "Critical",
     "criticalTooltip": "Critical battery level",
     "criticalRecovery": "Critical Recovery",
-    "criticalRecoveryTooltip": "Leave the critical-battery state once recharged above this %. Hysteresis upper bound, must be greater than Critical."
+    "criticalRecoveryTooltip": "Leave the critical-battery state once recharged above this %. Hysteresis upper bound, must be greater than Critical.",
+    "manualResume": "Manual Resume",
+    "manualResumeTooltip": "Pressing Play while the robot is charging mid-session resumes mowing only above this %. Must be greater than Low (Dock) or the robot re-docks within minutes."
   },
   "settingsSafety": {
     "alertMessage": "Safety settings protect the robot and its surroundings",

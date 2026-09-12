@@ -125,3 +125,32 @@ TEST(GnssObservationFreshness, LaterReceiptWithResetSequenceStartsNewSourceEpoch
 }
 
 }  // namespace
+
+// The receiver stamps its status with the publication time and carries the
+// observation count as the sequence: a status published twice between two
+// receiver observations repeats the sequence under a NEWER stamp. That is a
+// cached publication — it must neither refresh the deadline nor invalidate
+// authority (field 2026-09-08: it paused mowing every few minutes).
+TEST(GnssObservationFreshness, RepeatedSequenceUnderNewerStampIsCachedNotInvalid)
+{
+  gnss::PhysicalObservationTracker tracker;
+  ASSERT_TRUE(IsAcceptedEvidence(tracker.Observe(41, 10 * kSecond, 10 * kSecond, 10 * kSecond)));
+  EXPECT_TRUE(tracker.ObservationIsFresh(10 * kSecond, 10 * kSecond, 5 * kSecond));
+
+  // Same sequence, stamp 200 ms newer: cached, authority intact.
+  EXPECT_EQ(tracker.Observe(
+                41, 10 * kSecond + 200000000, 10 * kSecond + 200000000, 10 * kSecond + 200000000),
+            gnss::ObservationUpdate::kCachedPublication);
+  EXPECT_TRUE(
+      tracker.ObservationIsFresh(10 * kSecond + 200000000, 10 * kSecond + 200000000, 5 * kSecond));
+
+  // ... but it did not refresh the deadline: with no new sequence the feed
+  // still goes stale at maximum_age after the last ACCEPTED observation.
+  EXPECT_EQ(tracker.Observe(41, 16 * kSecond, 16 * kSecond, 16 * kSecond),
+            gnss::ObservationUpdate::kCachedPublication);
+  EXPECT_FALSE(tracker.ObservationIsFresh(16 * kSecond, 16 * kSecond, 5 * kSecond));
+
+  // A genuinely new observation restores authority.
+  EXPECT_TRUE(IsAcceptedEvidence(tracker.Observe(42, 16 * kSecond, 16 * kSecond, 16 * kSecond)));
+  EXPECT_TRUE(tracker.ObservationIsFresh(16 * kSecond, 16 * kSecond, 5 * kSecond));
+}

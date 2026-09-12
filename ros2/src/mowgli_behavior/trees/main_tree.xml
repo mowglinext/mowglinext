@@ -79,6 +79,13 @@
            the operator is the safety in manual modes. Firmware remains the
            sole hard e-stop authority (invariant 9); this guard is the
            software-side blade-off that was missing.
+           The halt is a PAUSE, not a failure: MarkGuardHalt flags the
+           interrupted pass so GetNextUnmowedArea does not charge the
+           re-dispatch to the per-area no-progress budget. Field 2026-09-07/08:
+           a flaky LiDAR serial link tripped IsScanStale every few seconds and
+           three halts in 25 s exhausted the five attempts — the mow
+           "completed" with 0 swaths. A permanently dead scanner is still held
+           here, blade off, for as long as the fault lasts.
            ================================================================ -->
       <ReactiveFallback name="SensorSafetyGuard">
         <IsCharging/>
@@ -98,6 +105,13 @@
           </Fallback>
         </Inverter>
         <Sequence name="SensorFaultHandler">
+          <!-- FIRST child on purpose: the Root is already halted the tick
+               this handler starts, but the ReactiveFallback halts this
+               Sequence the moment the fault clears — a sub-1.5 s blip would
+               never get past StopMoving (0.5 s) + WaitForDuration (1 s) to a
+               marker placed at the end, and the pass would be charged after
+               all. Pure context write, no motion; idempotent across re-ticks. -->
+          <MarkGuardHalt reason="scan_stale"/>
           <SetMowerEnabled enabled="false"/>
           <StopMoving/>
           <WaitForDuration duration_sec="1.0"/>
@@ -256,6 +270,11 @@
            operator-supervised; HOME + the blade-off dock transit must not
            be stranded mid-return by a GPS outage (docking itself is
            charger-detection based).
+           Like SensorSafetyGuard, this pause must never FAIL the mow:
+           MarkGuardHalt flags the interrupted pass so GetNextUnmowedArea
+           re-dispatches the area without charging its no-progress budget
+           (field 2026-09-07/08 — repeated "Localization degraded … pausing"
+           halts retired the area at 0 swaths).
            ================================================================ -->
       <ReactiveFallback name="LocalizationGuard">
         <IsCharging/>
@@ -275,6 +294,11 @@
              tick, so the guard releases within one tick of the hysteresis
              clearing and the resume-cursor machinery continues the strip. -->
         <Sequence name="LocalizationDegradedHandler">
+          <!-- FIRST child, same reasoning as SensorFaultHandler: the
+               ReactiveFallback halts this Sequence as soon as σ recovers, so
+               a marker after the 2 s WaitForDuration would miss every short
+               pause. Pure context write, no motion; idempotent. -->
+          <MarkGuardHalt reason="localization_degraded"/>
           <SetMowerEnabled enabled="false"/>
           <StopMoving/>
           <PublishHighLevelStatus state="2" state_name="WAITING_FOR_RTK"/>
@@ -434,20 +458,33 @@
             </Sequence>
           </Fallback>
           <!-- Hold on the charger until the pack charges to the resume level
-               (battery_full_pct, 95 %). Each 30 s wait re-ticks the loop so a
+               (battery_full_pct, 95 %). Each 5 s wait re-ticks the loop so a
                fresh battery sample is sampled; IsBatteryAbove exits the loop
                the moment we clear battery_full_pct. A stalled charger trips
                IsChargingProgressing → CriticalChargerFailed, which ends the
-               session and aborts the branch so we don't sit here forever. -->
+               session and aborts the branch so we don't sit here forever.
+
+               MANUAL RESUME: the operator can press Play (COMMAND_START)
+               during this hold to resume the mow before the pack is full.
+               The handler flags it and IsManualResumeRequested consumes it —
+               but it is honoured ONLY above battery_manual_resume_pct
+               (battery_manual_resume_percent, default 30 %); below the floor
+               the request is refused (WARN) and the hold continues, so a
+               critical pack can never be forced back onto the lawn. The
+               5 s tick keeps a Play press from waiting up to a full 30 s.
+
+               BOUND: 5760 attempts x 5.0 s = 8 h (unchanged from the former
+               960 x 30 s). -->
           <PublishHighLevelStatus state="1" state_name="CRITICAL_BATTERY_CHARGING"/>
           <Fallback name="CriticalChargeOrAbort">
-            <RetryUntilSuccessful num_attempts="960">
+            <RetryUntilSuccessful num_attempts="5760">
               <Sequence>
                 <IsChargingProgressing/>
                 <Fallback>
                   <IsBatteryAbove threshold="{battery_full_pct}"/>
+                  <IsManualResumeRequested min_battery_pct="{battery_manual_resume_pct}"/>
                   <Sequence>
-                    <WaitForDuration duration_sec="30.0"/>
+                    <WaitForDuration duration_sec="5.0"/>
                     <AlwaysFailure/>
                   </Sequence>
                 </Fallback>
@@ -697,14 +734,25 @@
                   <ClearCostmap/>
                   <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
                   <PublishHighLevelStatus state="1" state_name="CHARGING"/>
+                  <!-- Charge hold until battery_full_pct. MANUAL RESUME: a Play
+                       press (COMMAND_START) during this hold is flagged by the
+                       handler and consumed by IsManualResumeRequested, which
+                       honours it only above battery_manual_resume_pct
+                       (battery_manual_resume_percent, default 30 %) — below the
+                       floor it is refused (WARN) and the hold continues. The
+                       5 s tick keeps a Play press from waiting up to 30 s.
+
+                       BOUND: 5760 attempts x 5.0 s = 8 h (unchanged from the
+                       former 960 x 30 s). -->
                   <Fallback name="ChargeOrAbort">
-                    <RetryUntilSuccessful num_attempts="960">
+                    <RetryUntilSuccessful num_attempts="5760">
                       <Sequence>
                         <IsChargingProgressing/>
                         <Fallback>
                           <IsBatteryAbove threshold="{battery_full_pct}"/>
+                          <IsManualResumeRequested min_battery_pct="{battery_manual_resume_pct}"/>
                           <Sequence>
-                            <WaitForDuration duration_sec="30.0"/>
+                            <WaitForDuration duration_sec="5.0"/>
                             <AlwaysFailure/>
                           </Sequence>
                         </Fallback>
@@ -1013,7 +1061,18 @@
               <Sequence name="CoverageCompleteDock">
                 <IsCoverageComplete/>
                 <SetMowerEnabled enabled="false"/>
-                <PublishHighLevelStatus state="1" state_name="MOWING_COMPLETE"/>
+                <!-- state=2 (AUTONOMOUS), NOT 1 (IDLE). The firmware hard-stops the
+                     wheels whenever the forwarded high-level mode is IDLE
+                     (cpp_main.cpp motors_handler: "else if
+                     main_eOpenmowerStatus == OPENMOWER_STATUS_IDLE ->
+                     hard_stop"). Publishing IDLE here froze the wheels for
+                     the DockRobot drive that follows, so a completed run
+                     could never reach the dock and DockRobot never returned.
+                     state_name still reads MOWING_COMPLETE for the GUI, and
+                     IDLE_DOCKED below remains the real idle transition. This
+                     matches FailedCoverageDock, which already publishes
+                     state=2 before its own dock. -->
+                <PublishHighLevelStatus state="2" state_name="MOWING_COMPLETE"/>
                 <SaveObstacles/>
                 <ClearCostmap/>
                 <Fallback name="CompleteNavOrStop">
@@ -1072,7 +1131,10 @@
             <IsCommand command="1"/>
             <Sequence name="MowingCompleteAction">
               <SetMowerEnabled enabled="false"/>
-              <PublishHighLevelStatus state="1" state_name="MOWING_COMPLETE"/>
+              <!-- state=2 (AUTONOMOUS), NOT 1 (IDLE) - the firmware hard-stops
+                   the wheels while the forwarded HL mode is IDLE, which would
+                   freeze the DockRobot drive below. See CoverageCompleteDock. -->
+              <PublishHighLevelStatus state="2" state_name="MOWING_COMPLETE"/>
               <SaveObstacles/>
               <ClearCostmap/>
               <ReactiveFallback name="MowingCompleteOrDocked">

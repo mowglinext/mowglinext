@@ -154,7 +154,7 @@
 | `GET /swagger/*any` (root) | `gui/pkg/api/api.go:62` | from `gui/docs` |
 | `GET /`, `/assets/*`, SPA fallback (root) | `gui/pkg/api/web_static.go:19-25` | |
 
-`/mowglinext/call/:command` → ROS service (`mowglinext.go:554-717`): `high_level_control`→`/behavior_tree_node/high_level_control`; `emergency`→`/hardware_bridge/emergency_stop`; `mow_enabled`→`/hardware_bridge/mower_control`; `start_in_area`→`/behavior_tree_node/start_in_area`; `set_datum`→`/navsat_to_absolute_pose/set_datum`; `promote_obstacle`→`/map_server_node/promote_obstacle`; `discard_obstacle`→`/map_server_node/discard_obstacle`; `fusion_graph_save|clear`→`/fusion_graph_node/{save_graph,clear_graph}`; `coverage_clear_resume`→`/behavior_tree_node/clear_coverage_resume`; `reboot_board`→`/hardware_bridge/reboot_board`. All 10 s timeout.
+`/mowglinext/call/:command` → ROS service (`mowglinext.go:554-717`): `high_level_control`→`/behavior_tree_node/high_level_control`; `emergency`→`/hardware_bridge/emergency_stop`; `mow_enabled`→`/hardware_bridge/mower_control`; `start_in_area`→`/behavior_tree_node/start_in_area`; `set_datum`→`/navsat_to_absolute_pose/set_datum`; `promote_obstacle`→`/map_server_node/promote_obstacle`; `ignore_obstacle`→`/obstacle_tracker/clear_obstacle` (dismisses the current detection; redetection can return); `discard_obstacle`→`/map_server_node/discard_obstacle`; `fusion_graph_save|clear`→`/fusion_graph_node/{save_graph,clear_graph}`; `coverage_clear_resume`→`/behavior_tree_node/clear_coverage_resume`; `reboot_board`→`/hardware_bridge/reboot_board`. All 10 s timeout.
 
 ### foxglove_bridge consumption (`gui/pkg/providers/ros.go`)
 | Logical key (browser) | ROS2 topic | Type | Adapter / decimation / throttle |

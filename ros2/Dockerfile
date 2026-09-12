@@ -164,6 +164,43 @@ RUN . /opt/ros/kilted/setup.sh \
  && rm -rf /ws/build /ws/log /ws/src
 
 # =============================================================================
+# Stage 0d: universal-gnss-interfaces-builder
+# Builds ONLY universal_gnss_ros2's msg/srv typesupport from the pinned
+# universal-gnss submodule. foxglove_bridge needs these schemas to introspect
+# the receiver topics and services published by the separate GNSS runtime, but
+# must not inherit the driver's core libraries, tools, or executables.
+#
+# package.xml plus msg/srv inputs are copied verbatim from the submodule. This
+# local CMakeLists is deliberately interface-only: the upstream package's
+# CMakeLists also builds the complete Universal GNSS driver stack.
+# =============================================================================
+FROM ros:kilted-ros-base AS universal-gnss-interfaces-builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake \
+      python3-colcon-common-extensions \
+      ros-kilted-ament-cmake \
+      ros-kilted-diagnostic-msgs \
+      ros-kilted-rosidl-default-generators \
+      ros-kilted-rosidl-default-runtime \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /ws/src/universal_gnss_ros2
+COPY ros2/src/external/universal-gnss/gnss_ros2/package.xml package.xml
+COPY ros2/src/external/universal-gnss/gnss_ros2/msg/ msg/
+COPY ros2/src/external/universal-gnss/gnss_ros2/srv/ srv/
+COPY ros2/universal_gnss_interfaces.CMakeLists.txt CMakeLists.txt
+
+WORKDIR /ws
+RUN . /opt/ros/kilted/setup.sh \
+ && colcon build --merge-install \
+      --packages-select universal_gnss_ros2 \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -Wno-dev \
+ && rm -rf /ws/build /ws/log /ws/src
+
+# =============================================================================
 # Stage 1: base
 # Installs all runtime ROS2 dependencies. Both runtime and simulation stages
 # inherit from here, keeping the image lean.
@@ -331,10 +368,7 @@ COPY ros2/src/mowgli_coverage/CMakeLists.txt   src/mowgli_coverage/CMakeLists.tx
 COPY ros2/src/opennav_coverage/opennav_coverage_msgs/package.xml    src/opennav_coverage/opennav_coverage_msgs/package.xml
 COPY ros2/src/opennav_coverage/opennav_coverage_msgs/CMakeLists.txt src/opennav_coverage/opennav_coverage_msgs/CMakeLists.txt
 # universal-gnss is vendored as a git submodule under ros2/src/external.
-# gnss_ros2 is the only colcon package; its sibling gnss_* libraries are
-# plain CMake subdirectories pulled in at build time from the same repo root.
-COPY ros2/src/external/universal-gnss/gnss_ros2/package.xml    src/external/universal-gnss/gnss_ros2/package.xml
-COPY ros2/src/external/universal-gnss/gnss_ros2/CMakeLists.txt src/external/universal-gnss/gnss_ros2/CMakeLists.txt
+# It is built separately as an interface-only overlay for foxglove_bridge.
 # operator-side drivetrain tools live outside ros2/src but must still be built
 # into the runtime workspace as the ROS 2 package mowgli_tools.
 COPY tools/motor/package.xml    src/mowgli_tools/package.xml
@@ -378,6 +412,11 @@ ARG BUILD_TYPE=Release
 # Now copy the rest of the source tree plus the sidecar tools package
 COPY ros2/src/ src/
 COPY tools/motor/ src/mowgli_tools/
+
+# The vendored root is a generic CMake project named universal_gnss, not a ROS
+# package. Letting colcon discover it shadows its nested ROS package and builds
+# unwanted driver tools; the schema-only overlay is built in Stage 0d instead.
+RUN touch src/external/universal-gnss/COLCON_IGNORE
 
 # Skip every opennav_coverage subpackage except _msgs. The upstream server
 # is pinned to F2C 1.2.1 (no TrapezoidalDecomp / generateHeadlandSwaths /
@@ -445,6 +484,11 @@ COPY --from=build /ros2_ws/install/ install/
 # "package not found" schema error per /ubx_* topic + ublox_dgnss service on
 # every client reconnect. Sourced by ros2_entrypoint.sh as a ROS overlay.
 COPY --from=ublox-msgs-builder /ws/install /opt/ublox_msgs
+
+# Pull the schema-only universal_gnss_ros2 overlay (see
+# universal-gnss-interfaces-builder stage). The full Universal GNSS runtime
+# remains outside this image; foxglove_bridge only needs generated typesupport.
+COPY --from=universal-gnss-interfaces-builder /ws/install /opt/universal_gnss_interfaces
 
 # Copy all launch files and config from every package
 COPY ros2/src/mowgli_bringup/launch/    /ros2_ws/install/mowgli_bringup/share/mowgli_bringup/launch/

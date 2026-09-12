@@ -364,6 +364,9 @@ mowgli:
     battery_critical_percent: 10.0 # emergency dock
     battery_critical_recovery_percent: 30.0 # leave critical-battery state once charged above this %
                                             # (hysteresis upper bound; must be > battery_critical_percent)
+    battery_manual_resume_percent: 30.0     # floor for an operator-forced resume from the charger (Play
+                                            # pressed while CHARGING / CRITICAL_BATTERY_CHARGING); must be
+                                            # > battery_low_percent or the robot re-docks within minutes
 
     # -----------------------------------------------------------------
     # Mowing

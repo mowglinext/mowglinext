@@ -583,6 +583,12 @@
           "title": "Critical Recovery Percent",
           "default": 30.0,
           "description": "Leave the critical-battery state once recharged above this percentage. Hysteresis upper bound, must be greater than Critical Percent."
+        },
+        "battery_manual_resume_percent": {
+          "type": "number",
+          "title": "Manual Resume Percent",
+          "default": 30.0,
+          "description": "Floor for an operator-forced resume from the charger: pressing Play while the robot is charging mid-session resumes mowing only above this percentage. Must be greater than Low Percent or the robot re-docks within minutes."
         }
       }
     },

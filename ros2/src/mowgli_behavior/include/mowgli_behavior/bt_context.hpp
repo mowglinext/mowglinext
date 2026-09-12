@@ -112,6 +112,25 @@ struct BTContext
   /// COMMAND_RESET_EMERGENCY=254, …).
   uint8_t current_command{0};
 
+  /// Operator-forced resume from a mid-session charge hold. Set by the
+  /// ~/high_level_control handler when a COMMAND_START arrives while the tree
+  /// is parked in a charge hold (last published state_name CHARGING or
+  /// CRITICAL_BATTERY_CHARGING — see isChargeHoldState()), where
+  /// current_command is ALREADY 1 and a plain START would otherwise be a
+  /// no-op. Consumed (cleared) by IsManualResumeRequested inside both charge
+  /// wait loops of main_tree.xml, which honours it only above
+  /// {battery_manual_resume_pct}. Protected by context_mutex.
+  ///
+  /// Stamped so a request the wait loop never consumed (e.g. Play pressed
+  /// during ManualChargeGuard's CHARGING, whose exit is the operator lifting
+  /// the mower off, not this flag) cannot survive to a LATER low-battery dock
+  /// and cut that charge short: IsManualResumeRequested refuses a request
+  /// older than kManualResumeMaxAgeSec. The loops poll every 5 s, so the
+  /// window is generous for the intended path and tight for the stale one.
+  bool manual_resume_requested{false};
+  std::chrono::steady_clock::time_point manual_resume_requested_time{};
+  static constexpr double kManualResumeMaxAgeSec = 30.0;
+
   /// Set by the ~/start_in_area service to REQUEST mowing a single, specific
   /// area instead of iterating all areas. This is the one-shot *request*:
   /// GetNextUnmowedArea consumes it on the next onStart() and latches the
@@ -200,6 +219,38 @@ struct BTContext
   /// area. Worst case an area gets kMaxStartBlockedAttempts + kMaxAreaAttempts
   /// dispatches before retirement.
   static constexpr uint32_t kMaxStartBlockedAttempts = 3;
+
+  // -----------------------------------------------------------------------
+  // Guard-halted passes (field 2026-09-07 / 2026-09-08)
+  // -----------------------------------------------------------------------
+  /// Set by MarkGuardHalt from a Root guard handler (SensorFaultHandler,
+  /// LocalizationDegradedHandler) while that guard is halting the tree.
+  /// Halting the Root interrupts FollowStrip ("area N interrupted at pose K —
+  /// resume cursor saved"), and the next GetNextUnmowedArea dispatch of that
+  /// area used to charge the re-dispatch to the no-progress budget exactly as
+  /// if the pass had aborted at an obstacle. With an intermittent LiDAR serial
+  /// link IsScanStale halted the Root every few seconds: three scan-stale
+  /// halts in 25 s burnt the five kMaxAreaAttempts, the mow "completed" with
+  /// ZERO swaths and the robot sat on the lawn. LocalizationGuard pauses did
+  /// the same. A transient sensor / localization fault must PAUSE a mow,
+  /// never fail it — the pass never had a chance to make progress.
+  ///
+  /// Carries the guard's reason string ("scan_stale", "localization_degraded")
+  /// for the log line. Consumed (reset) by the next GetNextUnmowedArea
+  /// dispatch: it describes ONE finished pass. Cleared by EndSession.
+  std::optional<std::string> guard_halted_reason;
+  /// Per-area count of dispatches that were EXEMPTED from the no-progress
+  /// retirement counter because the previous pass was interrupted by a guard.
+  /// Cleared by EndSession.
+  std::map<uint32_t, uint32_t> area_guard_halt_count;
+  /// Maximum guard-halted dispatches exempted from area_attempt_count per
+  /// area. Deliberately GENEROUS: a permanently dead sensor is not this cap's
+  /// problem — the guard itself holds the whole tree (blade off, stopped) for
+  /// as long as the fault lasts, so nothing dispatches at all. The cap only
+  /// bounds the FLAPPING case (a fault that clears and re-trips every few
+  /// seconds) so a pathological flap cannot re-dispatch the same area forever;
+  /// past it the normal no-progress budget takes over and the area retires.
+  static constexpr uint32_t kMaxGuardHaltedPasses = 200;
 
   // -----------------------------------------------------------------------
   // Start-pose escape motion (issue #487, follow-up to the above)
@@ -651,6 +702,17 @@ inline void clearSingleAreaMode(BTContext& ctx)
 {
   ctx.single_area_target.reset();
   ctx.target_area_index.reset();
+}
+
+/// True for the HighLevelStatus state_name values published while the tree
+/// is parked in a battery charge hold: BatteryDockAndResume's "CHARGING" and
+/// CriticalBatteryDock's "CRITICAL_BATTERY_CHARGING" (main_tree.xml). A
+/// COMMAND_START received in one of these states is an operator asking to
+/// resume the mow before the pack reaches battery_full_pct — see
+/// BTContext::manual_resume_requested.
+inline bool isChargeHoldState(const std::string& state_name)
+{
+  return state_name == "CHARGING" || state_name == "CRITICAL_BATTERY_CHARGING";
 }
 
 }  // namespace mowgli_behavior
