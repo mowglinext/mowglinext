@@ -24,24 +24,26 @@ type Toggle = {
     title: string;
     summary: string;
     detail: string;
+    /** Key of another toggle that must be ON for this one to be editable. */
+    dependsOn?: string;
 };
 
-// Optional LiDAR factors that live in the same fusion_graph_node now
-// that ekf_map_node is gone. Both default off; turning them on costs a
-// few ms/tick but lets the map-frame estimate ride through multi-minute
-// RTK-Float windows.
+// Scan-to-map localization supplies XY factors when GPS becomes stale.
 const LIDAR_FACTOR_TOGGLES: Toggle[] = [
     {
-        key: "use_scan_matching",
-        title: "settingsLocalization.scanMatchingTitle",
-        summary: "settingsLocalization.scanMatchingSummary",
-        detail: "settingsLocalization.scanMatchingDetail",
+        key: "use_lidar_map_anchor",
+        title: "settingsLocalization.lidarMapAnchorTitle",
+        summary: "settingsLocalization.lidarMapAnchorSummary",
+        detail: "settingsLocalization.lidarMapAnchorDetail",
     },
+    // Shadow mode only means something with the anchor on: it runs and
+    // scores the filter under RTK Fixed without ever applying a factor.
     {
-        key: "use_loop_closure",
-        title: "settingsLocalization.loopClosureTitle",
-        summary: "settingsLocalization.loopClosureSummary",
-        detail: "settingsLocalization.loopClosureDetail",
+        key: "lidar_anchor_shadow_mode",
+        title: "settingsLocalization.anchorShadowTitle",
+        summary: "settingsLocalization.anchorShadowSummary",
+        detail: "settingsLocalization.anchorShadowDetail",
+        dependsOn: "use_lidar_map_anchor",
     },
 ];
 
@@ -160,11 +162,12 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                 </Paragraph>
                 {LIDAR_FACTOR_TOGGLES.map((toggle) => {
                     const enabled = asBool(values[toggle.key]);
+                    const isLocked = toggle.dependsOn !== undefined && !asBool(values[toggle.dependsOn]);
                     return (
                         <Card
                             key={toggle.key}
                             size="small"
-                            style={{marginBottom: 8}}
+                            style={{marginBottom: 8, opacity: isLocked ? 0.55 : 1}}
                             styles={{body: {padding: "10px 12px"}}}
                         >
                             <Row align="middle" gutter={[16, 8]} wrap={false}>
@@ -185,6 +188,7 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                                 <Col flex="none">
                                     <Switch
                                         checked={enabled}
+                                        disabled={isLocked}
                                         onChange={(v) => onChange(toggle.key, v)}
                                     />
                                 </Col>

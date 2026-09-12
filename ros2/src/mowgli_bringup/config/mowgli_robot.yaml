@@ -294,12 +294,12 @@ mowgli:
     # -----------------------------------------------------------------
     # Map-frame localization is provided by fusion_graph_node (GTSAM
     # iSAM2 factor graph). It runs WITHOUT LiDAR when
-    # use_scan_matching=false AND use_loop_closure=false — the graph
+    # use_lidar_map_anchor=false — the graph
     # is just a Pose2 backbone with wheel between-factors, gyro
     # between-factors (or preintegrated factors when use_imu_preint=
     # true), and GNSS lever-arm + COG / mag unaries. Equivalent
-    # functionality to the legacy ekf_map_node, with the option to
-    # enable scan-matching + loop closure on LiDAR-equipped robots.
+    # functionality to the legacy ekf_map_node, with an optional
+    # persistent LiDAR map anchor for complete GNSS outages.
 
     # use_magnetometer (default false): subscribe to /imu/mag_yaw and
     # let it influence the map-frame yaw. The chassis motor field
@@ -308,31 +308,18 @@ mowgli:
     # mag setup.
     use_magnetometer: false
 
-    # use_scan_matching: per-tick ICP between the latest /scan and the
-    # previous graph-node scan. Adds a BetweenFactor with rmse-scaled
-    # covariance — bounded drift between consecutive nodes even when
-    # GPS drops to RTK-Float. Required for "robot keeps mowing through
-    # multi-minute GPS dropouts" scenarios. FORCED OFF when the LiDAR is
-    # off (lidar_enabled/use_lidar false): navigation.launch.py ANDs this
-    # flag with use_lidar before it reaches fusion_graph_node, so there is
-    # no subscription and no factors. That AND is not cosmetic — this
-    # template default is `true` and has no relation to lidar_enabled, so
-    # without it a GPS-only robot ran fusion_graph with
-    # use_scan_matching=True subscribed to a topic nothing published.
-    use_scan_matching: true
-
-    # use_loop_closure: on every new node, search earlier graph nodes
-    # within ~5 m / >30 s ago for an ICP match against the current
-    # scan. Accepted matches add a BetweenFactor that snaps the
-    # trajectory back to consistency with previously-seen places.
-    # Resets accumulated drift across multi-minute GPS-less stretches
-    # and at session start when re-entering a previously-mapped area.
-    # Cost: one ICP per candidate per tick (~5 ms each, capped to
-    # lc_max_candidates=3). No-op when use_scan_matching is also
-    # false; FORCED OFF when use_lidar=false (ANDed with use_lidar in
-    # navigation.launch.py, same as use_scan_matching above) and on the
-    # first boot, when no persisted graph exists to close against.
-    use_loop_closure: true
+    # Scan-to-map XY corrections during extended GPS loss, subject to map
+    # support/spread/DR validation. Requires lidar_enabled. Persistent tiles
+    # cover large gardens; only the local window is loaded and published on
+    # /fusion_graph/lidar_map. Sparse scenery contributes no reliable anchor.
+    use_lidar_map_anchor: true
+    # lidar_anchor_shadow_mode: with the anchor enabled, ALSO run, score and
+    # publish the particle filter under RTK-Fixed, never applying a factor —
+    # /fusion_graph/lidar_anchor_candidate + diagnostics counters give the
+    # anchor-vs-RTK comparison in the field. Continuous shadow computation is
+    # bounded by lidar_anchor_max_rate_hz; default calibration uses periodic
+    # bursts instead. OFF by default.
+    lidar_anchor_shadow_mode: false
 
     # -----------------------------------------------------------------
     # GPS / Positioning
@@ -421,10 +408,9 @@ mowgli:
     # uses for exactly one thing (coverage_planning.cpp:810):
     #     n_rings = ceil(headland_width / operation_width), floored at 1
     # and ONLY when num_headland_passes == 0 (AUTO). With the shipped
-    # num_headland_passes: 2 the ring count is FORCED and this key has no
+    # num_headland_passes: 5 the ring count is FORCED and this key has no
     # effect; set num_headland_passes to 0 to hand the count back to it.
-    # 0.18 / op_width 0.16 → ceil(1.125) = 2 rings, i.e. AUTO reproduces the
-    # forced default.
+    # AUTO is therefore intended for custom tuning, not the production default.
     #
     # The previous comment here claimed this key was "currently INERT" because
     # "the coverage BT (PlanCoverageArea) derives the F2C headland from
@@ -458,7 +444,11 @@ mowgli:
     # degrade to straight pivot-through corners instead of smooth arcs.
     # FIELD TEST OWED before trusting NONE on a real lawn (#429).
     # Read once at coverage_server startup — takes effect on the next ROS2 restart.
-    num_headland_passes: 2         # 2026-07-23: field-validated default (was 0=auto)
+    # Five passes provide the ~0.50 m mowed apron required by a forward 0.20 m
+    # radius reversal at the deployed 0.13-0.16 m swath spacing. With two passes,
+    # the 2026-09-09 field bag had 146 straight fallback joins out of 168 and FTC
+    # alternated ±0.8 rad/s at their zero-radius corners.
+    num_headland_passes: 5
     # mow_direction: perimeter/headland travel winding (issue #335). 0 = planner
     # default (F2C natural), 1 = clockwise, 2 = counter-clockwise. Set it so a
     # side-mounted blade stays on the cut side. navigation.launch.py injects this
@@ -497,14 +487,15 @@ mowgli:
     # min_turning_radius: hard floor on every forward turn-around / corner-fillet
     # arc in the CONTINUOUS coverage path (coverage_server → buildContinuousPath),
     # injected into coverage_server.min_turning_radius — so this is LIVE.
-    # Two-sided: too small → the in-bounds shrink picks a loop tighter than MPPI
+    # Two-sided: too small → the in-bounds shrink picks a loop tighter than FTC
     # can track (wz≈vx/r), so the robot loops/hesitates at corners; too large →
     # the Ω-turn bulges OUTSIDE the polygon at the swath ends (R=0.35 left the
-    # area by ~0.8 m, then got clipped into ragged turns). 0.15 m keeps every turn
-    # fully in-bounds (harness: 0 cm bulge) and stays MPPI-trackable. A turn that
-    # cannot be made in-bounds at >= this is left as a sharp pivot, never a
-    # tighter loop. Keep within [0.10, 0.50].
-    min_turning_radius: 0.15
+    # area by ~0.8 m, then got clipped into ragged turns). 0.20 m matches FTC's
+    # tightest controllable bend at speed_slow=0.16 m/s and max_cmd_vel_ang=0.8
+    # rad/s. A turn that cannot be made in-bounds at this radius is split into a
+    # blade-off reorientation, never replaced by a tighter loop. Keep within
+    # [0.10, 0.50].
+    min_turning_radius: 0.20
 
     # -----------------------------------------------------------------
     # Docking
@@ -653,9 +644,12 @@ mowgli:
     #
     # If the direction is unknown, stale or ~zero, NOTHING is commanded and the
     # recovery falls back to clear-costmaps-and-retry, then retire + dock.
-    # Set start_blocked_escape_enabled: false to keep that non-motion behaviour
-    # permanently. See mowgli_behavior/start_blocked_escape.hpp.
-    start_blocked_escape_enabled: true
+    # Disabled by default after the 2026-09-09 field bag showed repeated
+    # direction guesses moving the robot from the headland into a boundary
+    # violation. The bounded clear-and-retry path remains active without it.
+    # Enable only for a supervised site where the escape direction has been
+    # validated. See mowgli_behavior/start_blocked_escape.hpp.
+    start_blocked_escape_enabled: false
     start_blocked_escape_speed: 0.10        # m/s — below mowing (0.20) and undock (0.16)
     start_blocked_escape_distance: 0.40     # m — distance budget (hard ceiling 0.60 in code)
     start_blocked_escape_timeout_s: 6.0     # s — hard time bound; ends the move even if the

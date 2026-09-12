@@ -186,6 +186,14 @@ public:
     on_dig_event(std::move(msg));
   }
 
+  /// Test-only: stand in for on_odom's TF-derived heading latch (tests have no
+  /// TF tree), so the dig keepout orientation can be asserted.
+  void set_robot_heading_for_test(double yaw)
+  {
+    last_robot_yaw_ = yaw;
+    have_robot_heading_ = true;
+  }
+
   /// Test-only: forward to the private mowing_area_containing.
   [[nodiscard]] std::optional<size_t> mowing_area_containing_for_test(double x, double y) const
   {
@@ -701,6 +709,11 @@ private:
   /// Most recent map-frame robot position (latched in on_odom).
   double last_robot_x_{0.0};
   double last_robot_y_{0.0};
+  /// Most recent map-frame robot heading (latched in on_odom); orients the
+  /// dig keepout ahead of the robot (dig_keepout_polygon). False until the
+  /// first TF lookup succeeds, in which case the dig falls back to a square.
+  double last_robot_yaw_{0.0};
+  bool have_robot_heading_{false};
 
   /// Pre-defined areas (mowing zones + navigation corridors).
   /// Any cell inside ANY area polygon is free in the keepout mask;

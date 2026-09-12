@@ -6,7 +6,7 @@
 > requests to the board, pushes runtime tuning (drive PID, yaw loop, kinematics, safety limits) on
 > every (re)connect, runs the at-rest IMU bias calibration, and hosts the wheel-slip dig detector
 > (CLAUDE.md Invariant 16). The firmware stays the sole blade/e-stop authority (CLAUDE.md Safety).
-> Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
+> Index updated 2026-09-10; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
 ## Where to look
@@ -29,8 +29,8 @@
 | Dead-IMU (hung WT901 bus) detection | `include/mowgli_hardware/imu_liveness.hpp` (pure); `track_imu_liveness()` (:1709); gates in `handle_imu()` + `load_persisted_imu_calibration()` |
 | Wheel odometry (`/wheel_odom`, `/wheel_ticks`) | `src/odometry_publisher.cpp` `handle_packet()` (:54): 16-bit unwrap (:80), spike limit (:96), 50 ms aggregation (:156), dock force-zero (:228), covariances (:241–251) |
 | Timestamp smoothing (firmware `dt_millis` → host stamp) | `include/mowgli_hardware/clock_fit.hpp` `HostFirmwareClockFit`, `src/clock_fit.cpp` (`Ingest`, reset gap :16, window :29) |
-| Dig detector (wheel-slip) | `include/mowgli_hardware/dig_detector.hpp` (`DigDecide`, `DigTrustSigma`, `DigEscapeStep`); node glue `dig_monitor_tick()` (:2786), `on_dig_detected()` (:2896), `publish_dig_event()` (:2928), `on_filtered_map_odom()` (:2744) |
-| `cmd_vel` path to the wire | `on_cmd_vel()` (:2622) → `send_cmd_vel_packet()` (:2944); `min_linear_vel` clamp; NULL→AUTONOMOUS fallback |
+| Dig detector (wheel-slip) | `include/mowgli_hardware/dig_detector.hpp` (`WorstCommandedTyreSpeed`, `DigDecide`, `DigTrustSigma`, `DigEscapeStep`); node glue `dig_monitor_tick()`, `on_dig_detected()`, `publish_dig_event()`, `on_filtered_map_odom()` |
+| `cmd_vel` path to the wire | `on_cmd_vel()` (:2828) → `include/mowgli_hardware/cmd_vel_slew.hpp` → `send_cmd_vel_packet()` (:3265); merged-command slew cap, `min_linear_vel` clamp, NULL→AUTONOMOUS fallback; exact encoded command published on `~/cmd_vel_applied` |
 | Blade enable / dry-run inhibit | `on_mower_control()` (:2958) + `include/mowgli_hardware/blade_gate.hpp` (`blade_enable_allowed`) → `send_blade_command()` (:2192) |
 | Emergency stop service / heartbeat bits | `on_emergency_stop()` (:2987), `send_heartbeat()` (:2154) (`emergency_requested` / `emergency_release_requested`) |
 | Runtime tuning pushed to firmware | `send_drive_pid()` (:2214), `send_yaw_pid()` (:2260), `send_kinematics()` (:2300), `send_safety_limits()` (:2326); resend burst in the heartbeat timer (`create_timers()` :890, `pid_resend_count_`) |
@@ -45,7 +45,7 @@
 | File | Lines | Purpose |
 |------|-------|---------|
 | **`ros2/src/mowgli_hardware/`** | | |
-| `ros2/src/mowgli_hardware/CMakeLists.txt` | 203 | Static lib `mowgli_hardware_core` (cobs, crc16, serial_port, packet_handler, clock_fit) + exe `hardware_bridge_node`; 8 gtests |
+| `ros2/src/mowgli_hardware/CMakeLists.txt` | 286 | Static lib `mowgli_hardware_core` (cobs, crc16, serial_port, packet_handler, clock_fit) + exe `hardware_bridge_node`; 15 gtests |
 | `ros2/src/mowgli_hardware/package.xml` | 27 | Deps: rclcpp, std_msgs, std_srvs, sensor_msgs, geometry_msgs, nav_msgs, mowgli_interfaces |
 | **`src/`** | | |
 | `ros2/src/mowgli_hardware/src/hardware_bridge_node.cpp` | ~3.3k | `HardwareBridgeNode` (plain `rclcpp::Node`, name `hardware_bridge`): params, pub/sub/services, serial loop, packet handlers, IMU cal, dig detector glue, `main()` |
@@ -57,9 +57,10 @@
 | `ros2/src/mowgli_hardware/src/crc16.cpp` | 47 | `crc16_ccitt` (CCITT-FALSE, poly 0x1021, init 0xFFFF) |
 | **`include/mowgli_hardware/`** | | |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/ll_datatypes.hpp` | 536 | Wire format: `kMowgliProtocolVersion`, `PacketId`, `STATUS_BIT_*`, `EMERGENCY_BIT_*`, `RESET_CAUSE_*`, `WATCHDOG_STAGE_*`, `CONFIG_FLAG_*`, packed `Ll*` structs + size asserts |
-| `ros2/src/mowgli_hardware/include/mowgli_hardware/dig_detector.hpp` | 346 | Pure dig logic: `DigDetectorCfg/State`, `DigDecide`, `DigTrustSigma`, `DigEscapeCfg/State/Step/Done` (+ the field-measured rationale) |
+| `ros2/src/mowgli_hardware/include/mowgli_hardware/dig_detector.hpp` | 360 | Pure dig logic: differential-drive command-to-tyre speed, `DigDetectorCfg/State`, `DigDecide`, `DigTrustSigma`, `DigEscapeCfg/State/Step/Done` (+ the field-measured rationale) |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/imu_liveness.hpp` | 127 | Pure: `IsImuSampleDead`, `UpdateImuLiveness`, `IsCalibrationPlausible`, `IsDeadSensorCovariance`; `kMinPlausibleAccelMps2`=3, `kImuDeadSampleThreshold`=45 |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/blade_gate.hpp` | 49 | Pure: `blade_enable_allowed(requested, mowing_enabled)` — suppresses ENABLE only |
+| `ros2/src/mowgli_hardware/include/mowgli_hardware/cmd_vel_slew.hpp` | 42 | Pure final-command slew limiter: immediate exact stop, bounded deceleration through zero before reversal, separate acceleration/deceleration rates |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/odometry_publisher.hpp` | 126 | `OdometryPublisher` API (`handle_packet`, `reset`, `wheels_stationary`, `tyre_travelled`) |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/clock_fit.hpp` | 121 | `HostFirmwareClockFit` (window 100 samples, reset gap 5000 ms defaults) |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/packet_handler.hpp` | 172 | `PacketHandler` API + counters (`rx_ok`, `rx_crc_errors`, `rx_overflow`, `rx_cobs_errors`) |
@@ -68,13 +69,14 @@
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/crc16.hpp` | 43 | CRC API |
 | **`test/`** (all `ament_add_gtest`) | | |
 | `ros2/src/mowgli_hardware/test/test_protocol.cpp` | 499 | Pins the `Ll*` struct sizes (all but `LlCmdBlade` / `LlBladeStatus`, which only the header's `static_assert`s cover), field offsets (odometry, SetDrivePid), `PacketId` values, bitmask positions, COBS+CRC round-trips |
-| `ros2/src/mowgli_hardware/test/test_dig_detector.cpp` | 498 | `DigDecide` gates (sigma, turn, cmd, window), field-recorded one-wheel slip, worst-wheel vs centre, net-displacement vs summed steps, `DigTrustSigma`, escape budget |
+| `ros2/src/mowgli_hardware/test/test_dig_detector.cpp` | 636 | `DigDecide` gates (sigma, turn, cmd, window), field-recorded one-wheel and pure-pivot slips, worst-wheel vs centre, net-displacement vs summed steps, `DigTrustSigma`, escape budget |
 | `ros2/src/mowgli_hardware/test/test_packet_handler.cpp` | 317 | CRC append/verify, round-trips, chunked feeds, corrupt/oversize/empty frames, counters |
 | `ros2/src/mowgli_hardware/test/test_cobs.cpp` | 232 | COBS edge cases (zero runs, 254/255-byte runs, known vectors, decode rejects) |
 | `ros2/src/mowgli_hardware/test/test_imu_liveness.cpp` | 213 | Dead-sample threshold, debounce/revive, calibration plausibility, dead-covariance file gate, no input mutation |
 | `ros2/src/mowgli_hardware/test/test_clock_fit.cpp` | 180 | First-packet passthrough, jitter averaging, window cap, reset on gap, slope drift |
 | `ros2/src/mowgli_hardware/test/test_serial_port.cpp` | 67 | `write_all` over a pty (links `util`), closed-port failure |
 | `ros2/src/mowgli_hardware/test/test_blade_gate.cpp` | 43 | ENABLE suppressed only when `mowing_enabled=false`; DISABLE always passes; constexpr |
+| `ros2/src/mowgli_hardware/test/test_cmd_vel_slew.cpp` | 44 | Ramp/deceleration limits, immediate stop, bounded reversal using the measured field sample, no overshoot |
 | **`firmware/`** (C reference copy for the STM32 side — not built by colcon) | | |
 | `ros2/src/mowgli_hardware/firmware/mowgli_protocol.h` | 535 | `PKT_ID_*`, `HL_MODE_*`, `pkt_*_t` structs — **at `MOWGLI_PROTOCOL_VERSION 3`, stale vs v6** |
 | `ros2/src/mowgli_hardware/firmware/mowgli_comms.c` / `.h` | 312 / 249 | `mowgli_comms_init/process_rx/register_handler/send_*`, 512 B rx buf, 8 handlers |
@@ -109,10 +111,12 @@ Relative names are remapped in `mowgli.launch.py` (:257–267). QoS is `rclcpp::
 | `~/wheel_ticks` → `/wheel_ticks` | `mowgli_interfaces/msg/WheelTick` | pub | per firmware packet; RL/RR only. Sub: GUI (`gui/pkg/providers/ros.go` :45) |
 | `~/dock_heading` → `/gnss/heading` | `sensor_msgs/msg/Imu` | pub | 1 Hz while charging, `dock_pose_yaw` as ENU quaternion, frame `base_footprint`, σ=π for `kChargingAnchorWindowSec` (5 s) after dock. **No subscriber in the tree** (see Pitfalls) |
 | `~/dig_event` (**not remapped** → `/hardware_bridge/dig_event`) | `mowgli_interfaces/msg/DigEvent` | pub | `QoS(10).transient_local()`; frame `map`; `position_sigma` = GNSS accuracy. Sub: `map_server_node.cpp` :399 (also transient_local) |
+| `~/cmd_vel_applied` → `/hardware_bridge/cmd_vel_applied` | `geometry_msgs/msg/TwistStamped` | pub | exact float32 command encoded into the `LlCmdVel` packet; includes normal, dig-escape and stop packets. Firmware safety may still reject it. Diagnostic rosbag reference for `/cmd_vel` shaping. |
 | `~/cmd_vel` → `/cmd_vel` | `geometry_msgs/msg/TwistStamped` | sub | `SystemDefaultsQoS`; publisher is twist_mux `cmd_vel_out` (`mowgli.launch.py` :284; lanes in `config/twist_mux.yaml`, no `locks:`) |
 | `/gps/status` | `mowgli_interfaces/msg/GnssStatus` | sub | → `gps_quality_` for the firmware LED, and the dig trust gate (`HorizontalAccuracyMeters`, `BehaviorTreeRtkFixed` from `mowgli_interfaces/gnss_status_utils.hpp`) |
+| `/gps/absolute_pose` | `mowgli_interfaces/msg/AbsolutePose` | sub | Fresh RTK-Fixed receiver position used as an independent false-positive veto: a dig is suppressed when raw RTK proves the chassis progressed even though the fused graph lagged. |
 | `/behavior_tree_node/high_level_status` | `mowgli_interfaces/msg/HighLevelStatus` | sub | → `current_mode_` mirrored to firmware via `LlHighLevelState` |
-| `/odometry/filtered_map` | `nav_msgs/msg/Odometry` | sub | `SensorDataQoS` (best-effort; the in-code comment claims it matches fusion_graph, which actually publishes plain reliable `QoS(10)` — compatible either way); dig detector reference pose |
+| `/odometry/filtered_map` | `nav_msgs/msg/Odometry` | sub | `SensorDataQoS` (best-effort; fusion_graph publishes reliable `QoS(10)`, which is compatible); primary dig-detector reference and map-frame event location. |
 
 ### Services & actions
 
@@ -164,6 +168,7 @@ Layering at launch (`mowgli.launch.py` :194–254, later entries override earlie
 | `wheel_pid_kp/ki/kd/integral_limit/pwm_per_mps` | :401–408 | template :72–76 via launch | bounds `kMin/MaxRuntimeWheel*` / `*PwmPerMps` (:82–91) mirror firmware clamps |
 | `yaw_kp`, `yaw_ki`, `yaw_trim_limit_mps`, `yaw_loop_enabled`, `yaw_gyro_sign` | :422–429 | template :84–91 via launch | `LlSetYawPid`; `gyro_bias_radps` comes from the IMU cal, not a param |
 | `min_linear_vel` | :433 | code (0.05) | sub-deadband |vx| → 0 in `on_cmd_vel` |
+| `cmd_vel_linear_accel_limit`, `cmd_vel_linear_decel_limit`, `cmd_vel_angular_accel_limit`, `cmd_vel_angular_decel_limit` | :480–497 | `hardware_bridge.yaml` | startup-only 0.30 / 0.60 m/s² and 1.0 / 2.0 rad/s²; zero stops immediately, reversals decelerate through zero |
 | `lift_recovery_mode`, `lift_blade_resume_delay_sec` | :613–614 | launch dict (`mowgli.launch.py` :230–232) — **no template entry**, so the launch fallbacks false / 1.0 apply unless the installed file sets them (GUI schema exposes both) | blade-off-on-lift instead of emergency |
 | `mowing_enabled` | :621 | template :308 via launch | dry-run inhibit (`blade_gate.hpp`), restart to change |
 | `imu_cal_samples` | :623 | **launch dict from template :172 (200)** overrides `hardware_bridge.yaml` :21 (1000) | see Pitfalls |
@@ -187,7 +192,7 @@ colcon test  --packages-select mowgli_hardware && colcon test-result --verbose
 ros2 launch mowgli_bringup mowgli.launch.py serial_port:=/dev/mowgli
 ```
 
-Unit tests (all gtest, registered in `CMakeLists.txt` :114–186): `test_cobs`, `test_packet_handler`, `test_serial_port` (links `util` for `openpty`), `test_protocol`, `test_clock_fit` (link `mowgli_hardware_core`); `test_dig_detector`, `test_imu_liveness`, `test_blade_gate` (header-only, include path only). What each pins: see the Files table. No launch_testing / integration test in this package; hardware integration is exercised by `ros2/src/e2e_test.py` (calls `/hardware_bridge/emergency_stop`, watches `/wheel_odom`) against the sim's `fake_hardware_bridge_node`.
+Unit tests (15 gtests, registered in `CMakeLists.txt`): protocol/serial primitives, clock fit, dig detection/escalation, IMU liveness, blade and heartbeat safety, command validation/slew, battery semantics, timer bounds, and real node parameter descriptors. What each pins: see the Files table. No launch_testing / integration test in this package; hardware integration is exercised by `ros2/src/e2e_test.py` (calls `/hardware_bridge/emergency_stop`, watches `/wheel_odom`) against the sim's `fake_hardware_bridge_node`.
 
 CI: `.github/workflows/ros2-ci.yml` (`colcon build` + `colcon test --return-code-on-test-failure` over the whole workspace, :338–350); `.github/workflows/protocol-version-drift.yml` runs `firmware/scripts/protocol_version_guard.py --check`, which fingerprints the wire tokens of `firmware/stm32/ros_usbnode/include/mowgli_protocol.h` (guard :31) and reads only the version constant out of `ll_datatypes.hpp` (:35), failing if the wire changed without a version bump or the two versions differ.
 
@@ -210,11 +215,11 @@ CI: `.github/workflows/ros2-ci.yml` (`colcon build` + `colcon test --return-code
 - `publish_rate` only sets the serial read timer; every topic is published per received packet (`handle_status` :1210, `handle_imu` :1752) or per 50 ms odom window.
 - `~/imu/data_raw` is RELIABLE by design (:708 comment) and `/odometry/filtered_map` is subscribed `SensorDataQoS`; mixing them up starves fusion_graph or the dig detector.
 - `~/dig_event` is **not** in the launch remaps; it resolves to `/hardware_bridge/dig_event` via the node name. Renaming the node breaks `map_server`.
-- `on_cmd_vel` (:2622) promotes firmware mode NULL→AUTONOMOUS on ANY non-zero merged `cmd_vel` (documented authority leak, gated only by `fw_latched_emergency_`); while `dig_escaping_` it drops incoming commands entirely — the escape is driven from `dig_monitor_tick` (:2786) on purpose (an aborted Nav2 goal stops publishing).
+- `on_cmd_vel` promotes firmware mode NULL→AUTONOMOUS on ANY non-zero merged `cmd_vel` (documented authority leak, gated only by `fw_latched_emergency_`); while `dig_escaping_` it drops incoming commands entirely — the escape is driven from `dig_monitor_tick` on purpose (an aborted Nav2 goal stops publishing). Its final slew limiter covers every mux lane, but exact zero bypasses the ramp and a stale stream resets from rest.
 - Dig trust gate = GNSS receiver accuracy under RTK-Fixed (`DigTrustSigma`); `last_map_sigma_` (major axis of the graph covariance, `on_filtered_map_odom` :2744) is log-only. Do not re-point the gate at it (Invariant 16, CLAUDE.md "What NOT to Do").
 - IMU cal aborts if the wheels move or the charger drops mid-window (`handle_imu`); a window whose |accel| is not gravity or whose gyro variance is exactly 0 on all three axes is discarded and never persisted (:1615); a persisted file with all-zero covariances or |gyro offset| > 0.2 rad/s is rejected at load (:1468). `apply_imu_calibration` (:1637) also re-sends `LlSetYawPid` with the new `gyro_bias_radps`.
 - Member initializers are NOT the defaults: `double yaw_kp_{0.30}` vs declared 0.12 (:422); read `declare_parameters()`.
-- The file-header comment of `hardware_bridge_node.cpp` (:17–47) is stale (says `Twist`, 2 services, 5 params); `~/dock_heading` comments reference `dock_yaw_to_set_pose` (inlined into fusion_graph, `navigation.launch.py` :1094) — `/gnss/heading` has no subscriber, and `/tmp/dock_start_pose.txt` (:1919) has no reader since SLAM was removed.
+- `~/dock_heading` comments reference `dock_yaw_to_set_pose` (inlined into fusion_graph, `navigation.launch.py` :1094) — `/gnss/heading` has no subscriber, and `/tmp/dock_start_pose.txt` (:1919) has no reader since SLAM was removed.
 - `mowgli.launch.py` :203 passes `imu_yaw`, which the node never declares (:622 comment) — it is silently ignored.
 - `blade_gate.hpp` suppresses ENABLE only. Never add a path that swallows a DISABLE, and never present `mowing_enabled` as a safety interlock (CLAUDE.md Safety, Invariant 9).
 - Serial: `write_all` retries EAGAIN briefly (`serial_port.cpp` :170–205); a short write or read error closes the port and the next read tick reopens it (`read_serial_tick` :990); reconnect re-arms `pid_resend_count_ = 5` and the version handshake, and resets firmware debug to OFF.

@@ -84,6 +84,56 @@ TEST(DigDetector, SpinningWheelsWithNoMapProgressTrips)
   EXPECT_EQ(RunDigging(cfg, st, 10.0), mh::DigAction::kDig);
 }
 
+TEST(DigDetector, PurePivotCommandCountsAsTyreMotion)
+{
+  constexpr double kWheelTrack = 0.325;
+  EXPECT_NEAR(mh::WorstCommandedTyreSpeed(0.0, 0.75, kWheelTrack), 0.121875, 1e-12);
+  EXPECT_NEAR(mh::WorstCommandedTyreSpeed(0.3, 0.0, kWheelTrack), 0.3, 1e-12);
+}
+
+TEST(DigDetector, FieldRecordedStalledPurePivotTrips)
+{
+  mh::DigDetectorCfg cfg;
+  mh::DigDetectorState st;
+  constexpr double kCommandedTyreSpeed = 0.121875;  // wz=0.75, track=0.325
+
+  mh::DigAction last = mh::DigAction::kNone;
+  for (int i = 0; i < 20; ++i)
+  {
+    // First field window: 0.189 m of tyre, 0.015 m of map progress and a
+    // near-zero gyro because the chassis did not execute the commanded pivot.
+    last = mh::DigDecide(cfg,
+                         st,
+                         kCommandedTyreSpeed,
+                         0.189 / 12.0,
+                         0.015 * static_cast<double>(i) / 12.0,
+                         0.0,
+                         0.014,
+                         -0.086,
+                         0.1)
+               .action;
+    if (last == mh::DigAction::kDig)
+    {
+      break;
+    }
+  }
+  EXPECT_EQ(last, mh::DigAction::kDig);
+}
+
+TEST(DigDetector, HealthyPurePivotRemainsExcludedByGyro)
+{
+  mh::DigDetectorCfg cfg;
+  mh::DigDetectorState st;
+  constexpr double kCommandedTyreSpeed = 0.121875;
+
+  mh::DigAction last = mh::DigAction::kNone;
+  for (int i = 0; i < 100; ++i)
+  {
+    last = mh::DigDecide(cfg, st, kCommandedTyreSpeed, 0.02, 0.0, 0.0, 0.014, 0.75, 0.1).action;
+  }
+  EXPECT_EQ(last, mh::DigAction::kNone);
+}
+
 TEST(DigDetector, DoesNotTripBeforeTheWindowElapses)
 {
   mh::DigDetectorCfg cfg;  // window_s = 1.2
@@ -500,6 +550,71 @@ TEST(DigTrustSigma, GraphMarginalWouldBlockWhereReceiverAccuracyDoesNot)
   mh::DigDetectorState st_gnss;
   EXPECT_EQ(RunDigging(cfg, st_gnss, 9.0, 0.014, 0.1, 0.01), mh::DigAction::kDig)
       << "receiver accuracy at the same instant";
+}
+
+// Field regression 2026-09-10: during healthy transit the fused graph moved
+// only 0.05 m in the detector window after rejecting a valid RTK fix, while
+// raw RTK moved 0.20 m and the wheels claimed 0.29 m. Fused-only detection
+// hard-stopped and reversed the moving robot, then stamped a keepout under it.
+TEST(DigDetector, RawRtkProgressVetoesLaggingGraphFalsePositive)
+{
+  mh::DigDetectorCfg cfg;
+  mh::DigDetectorState st;
+  mh::DigVerdict verdict;
+  constexpr int kTicks = 13;
+  for (int i = 0; i < kTicks; ++i)
+  {
+    const double fraction = static_cast<double>(i) / static_cast<double>(kTicks - 1);
+    verdict = mh::DigDecide(cfg,
+                            st,
+                            0.20,
+                            0.29 / static_cast<double>(kTicks),
+                            0.05 * fraction,
+                            0.0,
+                            0.014,
+                            0.0,
+                            0.1,
+                            0.20 * fraction,
+                            0.0);
+    if (verdict.wheel_dist > 0.0)
+    {
+      break;
+    }
+  }
+
+  EXPECT_EQ(verdict.action, mh::DigAction::kNone);
+  EXPECT_GT(verdict.wheel_dist, 0.25);
+  EXPECT_LT(verdict.map_dist, 0.06);
+  EXPECT_GT(verdict.independent_dist, 0.18);
+}
+
+TEST(DigDetector, RawRtkConfirmsARealDig)
+{
+  mh::DigDetectorCfg cfg;
+  mh::DigDetectorState st;
+  mh::DigVerdict verdict;
+  constexpr int kTicks = 13;
+  for (int i = 0; i < kTicks; ++i)
+  {
+    const double fraction = static_cast<double>(i) / static_cast<double>(kTicks - 1);
+    verdict = mh::DigDecide(cfg,
+                            st,
+                            0.20,
+                            0.29 / static_cast<double>(kTicks),
+                            0.05 * fraction,
+                            0.0,
+                            0.014,
+                            0.0,
+                            0.1,
+                            0.02 * fraction,
+                            0.0);
+    if (verdict.action == mh::DigAction::kDig)
+    {
+      break;
+    }
+  }
+
+  EXPECT_EQ(verdict.action, mh::DigAction::kDig);
 }
 
 TEST(DigGnssFreshness, GenuineRtkObservationPermitsExistingTrustPolicy)

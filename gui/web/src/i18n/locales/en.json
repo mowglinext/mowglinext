@@ -430,28 +430,34 @@
     "clearGraphConfirmTitle": "Clear the fusion graph?",
     "clearGraphConfirmBody": "This discards all accumulated nodes, loop closures, and covariance — the localizer restarts from scratch. This cannot be undone.",
     "clearGraphConfirmOk": "Clear graph",
+    "clearLidarMap": "Clear LiDAR map",
+    "lidarMapCleared": "LiDAR map cleared",
+    "clearLidarMapConfirmTitle": "Clear the LiDAR anchor map?",
+    "clearLidarMapConfirmBody": "This discards the georeferenced occupancy grid the LiDAR anchor ray-casts scans into. The anchor goes back to mapping and cannot hold the position through an RTK-Float window until the map is rebuilt under RTK Fixed. The fusion graph itself is untouched.",
+    "clearLidarMapConfirmOk": "Clear LiDAR map",
+    "lidarAnchorGroupTitle": "LiDAR anchor",
+    "lidarAnchorState": "Anchor state",
+    "lidarAnchorStateOff": "Off",
+    "lidarAnchorStateWaitingForMap": "Waiting for map",
+    "lidarAnchorStateMapping": "Mapping",
+    "lidarAnchorStateAnchoring": "Anchoring",
+    "lidarAnchorShadowSuffix": "(shadow)",
+    "lidarAnchorSigma": "σ {{value}} m",
+    "lidarAnchorMapCells": "Map cells",
+    "lidarAnchorSeeds": "seeds {{seeds}} · skipped {{skipped}}",
+    "lidarAnchorVerdict": "Last verdict",
+    "lidarAnchorVerdictAccepted": "Accepted",
+    "lidarAnchorVerdictRejectedScore": "Rejected (score)",
+    "lidarAnchorVerdictRejectedSpread": "Rejected (spread)",
+    "lidarAnchorVerdictRejectedDeadReckoning": "Rejected (dead reckoning)",
+    "lidarAnchorHitRatio": "hit ratio {{pct}}%",
+    "lidarAnchorFactors": "Anchor factors",
+    "lidarAnchorFactorsHint": "applied to the graph",
+    "lidarAnchorAccepted": "Accepted estimates",
+    "lidarAnchorRejectBreakdown": "{{rejected}} rejected · score {{score}} · spread {{spread}} · DR {{dr}}",
+    "lidarAnchorReseeds": "Reseeds",
+    "lidarAnchorOdomRebases": "Odom rebases",
     "nodesInGraph": "Nodes in graph",
-    "withScans": "{{count}} with scans",
-    "loopClosures": "Loop closures",
-    "icpSuccessRate": "ICP success rate",
-    "matches": "{{ok}}/{{total}} matches",
-    "scansReceived": "{{count}} scans received",
-    "icpMonitorTitle": "ICP / Scan Matching",
-    "icpMonitorShort": "ICP Monitor",
-    "icpScanMatchRate": "Scan-match rate",
-    "icpRejects": "ICP rejects",
-    "icpRejectBreakdown": "rmse {{rmse}} · inliers {{inliers}} · sanity {{sanity}} · diverge {{diverge}}",
-    "icpKeyframes": "Keyframes",
-    "icpKfMatches": "{{rate}}% · {{ok}}/{{total}} kf matches",
-    "icpNoKeyframes": "no keyframes — no absolute heading",
-    "icpAttachRate": "{{rate}}% of scans attached",
-    "icpGpsWrongfix": "GPS wrong-fix rejects: {{count}}",
-    "icpStationaryPush": "stationary hand-push: {{count}}",
-    "icpMonitorHint": "frame-to-frame ICP gives relative yaw only; absolute heading needs keyframes/loop closures",
-    "icpHeading": "ICP heading",
-    "fusedHeading": "Fused heading",
-    "icpHeadingDiff": "Δ heading (ICP−fused)",
-    "icpPosDiff": "Δ position (ICP−fused)",
     "poseSigma": "Pose σ",
     "yawSigma": "yaw ±{{value}}°",
     "fusionGraphDescPart1": "GTSAM iSAM2 factor graph. Save persists nodes + scans to",
@@ -505,7 +511,6 @@
     "subPathsLabel": "Sub-paths",
     "subPathsSkipped": "{{count}} skipped",
     "handPushTitle": "Stationary pushes",
-    "attachRateTitle": "Scans attached",
     "coverage": "Coverage",
     "configurationCrossChecks": "Configuration Cross-checks",
     "noWarnings": "No warnings.",
@@ -633,7 +638,8 @@
     "rosbagDeleted": "Recording deleted",
     "rosbagDeleteFailed": "Could not delete recording",
     "rosbagDeleteConfirmTitle": "Delete recording?",
-    "rosbagDeleteConfirmBody": "This permanently deletes the recording {{name}} from the robot. This cannot be undone."
+    "rosbagDeleteConfirmBody": "This permanently deletes the recording {{name}} from the robot. This cannot be undone.",
+    "gpsWrongfix": "GPS wrong-fix rejects: {{count}}"
   },
   "mowgliNextPage": {
     "headlineUntilHomePrefix": "Just ",
@@ -1728,25 +1734,13 @@
       "label": "Graph node period",
       "description": "Cadence at which the factor graph adds a new Pose2 node."
     },
-    "use_scan_matching": {
-      "label": "LiDAR scan matching",
-      "description": "Add LiDAR scan-match between-factors to ride through RTK-Float windows."
+    "use_lidar_map_anchor": {
+      "label": "LiDAR map anchor",
+      "description": "Scan-to-map particle filter that holds the XY position when RTK Fixed drops."
     },
-    "use_loop_closure": {
-      "label": "LiDAR loop closure",
-      "description": "Add loop-closure factors from revisited LiDAR scans."
-    },
-    "icp_max_iter": {
-      "label": "ICP max iterations",
-      "description": "Maximum iterations for the scan-match ICP solve."
-    },
-    "icp_max_corresp_dist": {
-      "label": "ICP correspondence dist",
-      "description": "Maximum point-pair distance considered a correspondence."
-    },
-    "icp_max_rmse_m": {
-      "label": "ICP max RMSE",
-      "description": "Reject a scan match whose RMSE exceeds this."
+    "lidar_anchor_shadow_mode": {
+      "label": "Anchor shadow mode",
+      "description": "Run and score the LiDAR anchor under RTK Fixed without applying it."
     },
     "dock_blank_range": {
       "label": "Dock blank range",
@@ -2461,9 +2455,6 @@
   },
   "settingsSensors": {
     "lidarSensor": "LiDAR Sensor",
-    "lidarDescriptionPart1": "Enable if your robot has a LiDAR. Also flips",
-    "lidarDescriptionAnd": " and ",
-    "lidarDescriptionPart2": " so the factor graph fuses LiDAR scans. Fine-tune those in the Localization tab.",
     "imuBiasCalibration": "IMU bias calibration",
     "imuBiasCalibrationDescription": "The hardware bridge re-estimates IMU gyro/accel bias automatically while the robot is parked and stationary on the dock. These tune how it samples.",
     "calibrationSamples": "Calibration samples",
@@ -2471,7 +2462,8 @@
     "restWindowBeforeCal": "Rest window before cal",
     "restWindowBeforeCalTooltip": "How long the robot must be detected stationary before a calibration starts.",
     "periodicRecalInterval": "Periodic recal interval",
-    "periodicRecalIntervalTooltip": "Re-estimate the IMU bias every N seconds while docked. 0 disables periodic recal."
+    "periodicRecalIntervalTooltip": "Re-estimate the IMU bias every N seconds while docked. 0 disables periodic recal.",
+    "lidarDescription": "Enable if your robot has a LiDAR. Enables obstacle detection and allows scan-to-map localization, configured in the Localization tab."
   },
   "settingsRain": {
     "rainBehavior": "Rain Behavior",
@@ -2540,12 +2532,12 @@
     "expertScopeDescription": "Raw signal-group values, PVT algorithm, RTK reliability, RTK timeout, and DGPS timeout are stored here for future backend translation. Raw command textarea, dry-run plan, and reset/apply tooling still need a dedicated API."
   },
   "settingsLocalization": {
-    "scanMatchingTitle": "LiDAR scan matching",
-    "scanMatchingSummary": "Add ICP between-factors from /scan to the graph.",
-    "scanMatchingDetail": "Each new graph node runs ICP against the previous scan and adds a BetweenFactor with the relative motion. Fights GPS dropouts but costs ~5 ms/tick at 10 Hz.",
-    "loopClosureTitle": "Loop closure",
-    "loopClosureSummary": "Search past scans for revisits and add LC factors.",
-    "loopClosureDetail": "Triggers a candidate search around each new node (5 m radius, 10 min minimum age). Successful loop closures pull drift back to the originally-mapped pose, even mid-session.",
+    "lidarMapAnchorTitle": "LiDAR map anchor",
+    "lidarMapAnchorSummary": "Scan-to-map particle filter that holds the position when RTK Fixed drops (XY only).",
+    "lidarMapAnchorDetail": "Under RTK Fixed, selected scans update persistent georeferenced tiles. A local map window supports scan-to-map localization when GPS becomes stale; only validated XY corrections enter the graph. Diagnostics → Fusion Graph shows its state.",
+    "anchorShadowTitle": "Anchor shadow mode",
+    "anchorShadowSummary": "Run and measure the anchor under RTK Fixed without applying it.",
+    "anchorShadowDetail": "Keeps calibration active under trusted RTK Fixed at the configured filter rate, instead of periodic calibration bursts. Publishes candidates and counters for comparison; applies no factors while Fixed remains trusted.",
     "magYawTitle": "Magnetometer yaw",
     "magYawSummary": "Fuse tilt-compensated mag yaw as a yaw unary factor.",
     "magYawDetail": "Off by default — motor-induced bias makes the magnetometer unreliable on most chassis. Enable only after running mag calibration with motors-off and validating a stable |B|.",
@@ -2570,7 +2562,7 @@
     "lidarLocalizationTitle": "LiDAR — localization (factor graph)",
     "lidarLocalizationIntro": "Optional. When enabled,",
     "lidarLocalizationConsumes": "consumes",
-    "lidarLocalizationOutro": "as scan-matching between-factors and loop-closure factors so the map-frame pose can ride through multi-minute RTK-Float windows.",
+    "lidarLocalizationOutro": "to localize against georeferenced submaps and add XY corrections when GPS becomes stale. Areas without usable landmarks cannot provide LiDAR corrections.",
     "yawSourcesTitle": "Yaw sources",
     "magCalibrationTitle": "Magnetometer calibration & tuning",
     "magCalibrationIntroPrefix": "Only used when",

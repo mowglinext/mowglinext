@@ -377,33 +377,30 @@ void NavigateToPose::onHalted()
 void NavigateInsideBoundary::ResetState()
 {
   service_future_ = {};
-  set_param_future_ = {};
+  toggle_filter_future_ = {};
   clear_future_ = {};
   goal_handle_future_ = {};
   goal_handle_.reset();
-  backup_goal_handle_future_ = {};
-  backup_goal_handle_.reset();
-  backup_result_future_ = {};
-  backup_result_requested_ = false;
+  goal_result_future_ = {};
   recovery_pose_ = geometry_msgs::msg::Pose{};
   distance_outside_ = 0.0;
   pending_nav_result_ = BT::NodeStatus::FAILURE;
   keepout_disabled_ = false;
-  fallback_attempted_ = false;
   phase_ = Phase::WaitingForService;
 }
 
 void NavigateInsideBoundary::RequestKeepoutEnable(bool enabled)
 {
-  // Fire-and-forget: drop the returned future on the floor. AsyncParametersClient
-  // posts the request to the executor, so the parameter change goes out even
-  // when this BT node is being halted / destroyed shortly after.
-  if (!keepout_params_client_)
+  // Fire-and-forget: drop the returned future on the floor. The client posts
+  // the request to the executor, so it goes out even when this BT node is
+  // being halted / destroyed shortly after.
+  if (!keepout_toggle_client_)
     return;
-  if (!keepout_params_client_->service_is_ready())
+  if (!keepout_toggle_client_->service_is_ready())
     return;
-  (void)keepout_params_client_->set_parameters(
-      {rclcpp::Parameter("keepout_filter.enabled", enabled)});
+  auto request = std::make_shared<ToggleFilterSrv::Request>();
+  request->data = enabled;
+  (void)keepout_toggle_client_->async_send_request(request);
 }
 
 BT::NodeStatus NavigateInsideBoundary::onStart()
@@ -419,21 +416,15 @@ BT::NodeStatus NavigateInsideBoundary::onStart()
     clear_client_ =
         ctx->node->create_client<ClearSrv>("/global_costmap/clear_entirely_global_costmap");
   }
-  if (!keepout_params_client_)
+  if (!keepout_toggle_client_)
   {
-    keepout_params_client_ =
-        std::make_shared<rclcpp::AsyncParametersClient>(ctx->node,
-                                                        "/global_costmap/global_costmap");
+    keepout_toggle_client_ =
+        ctx->node->create_client<ToggleFilterSrv>("/global_costmap/keepout_filter/toggle_filter");
   }
   if (!action_client_)
   {
     action_client_ = rclcpp_action::create_client<Nav2Goal>(ctx->node, "/navigate_to_pose");
   }
-  if (!backup_action_client_)
-  {
-    backup_action_client_ = rclcpp_action::create_client<BackUpAction>(ctx->node, "/backup");
-  }
-
   if (!service_client_->wait_for_service(std::chrono::seconds(2)))
   {
     RCLCPP_ERROR(ctx->node->get_logger(),
@@ -475,48 +466,49 @@ BT::NodeStatus NavigateInsideBoundary::onRunning()
 
     // Disable the global_costmap's keepout filter so Smac can plan from
     // the robot's current cell (which is in the keepout-lethal zone —
-    // that's why we triggered recovery in the first place). If the
-    // parameter service isn't ready, skip and try the Nav2 leg anyway;
-    // worst case Smac aborts with "Start occupied" and the outer
-    // RetryUntilSuccessful escalates to the lethal handler.
-    if (!keepout_params_client_->service_is_ready())
+    // that's why we triggered recovery in the first place). CostmapFilter
+    // exposes a SetBool service; changing a similarly named ROS parameter is
+    // accepted but does not toggle the filter.
+    if (!keepout_toggle_client_->service_is_ready())
     {
-      RCLCPP_WARN(ctx->node->get_logger(),
-                  "NavigateInsideBoundary: global_costmap params service not ready — "
-                  "proceeding without disabling keepout filter");
-      phase_ = Phase::WaitingForGoalHandle;
-      return SendNav2Goal();
+      RCLCPP_ERROR(ctx->node->get_logger(),
+                   "NavigateInsideBoundary: keepout toggle service unavailable — "
+                   "refusing recovery motion");
+      return BT::NodeStatus::FAILURE;
     }
-    set_param_future_ = keepout_params_client_->set_parameters(
-        {rclcpp::Parameter("keepout_filter.enabled", false)});
+    auto request = std::make_shared<ToggleFilterSrv::Request>();
+    request->data = false;
+    // Treat the filter as potentially disabled as soon as the request is in
+    // flight. If the BT is halted before the response arrives, onHalted must
+    // still enqueue the matching enable request.
     keepout_disabled_ = true;
+    toggle_filter_future_ = keepout_toggle_client_->async_send_request(request).share();
     phase_ = Phase::DisablingKeepout;
     RCLCPP_INFO(ctx->node->get_logger(),
                 "NavigateInsideBoundary: disabling global_costmap keepout_filter "
-                "(recovery target=(%.2f, %.2f), %.2fm outside)",
+                "(recovery target=(%.2f, %.2f), robot %.2fm outside)",
                 recovery_pose_.position.x,
                 recovery_pose_.position.y,
                 distance_outside_);
     return BT::NodeStatus::RUNNING;
   }
 
-  // Phase 2: set_parameters acknowledged → kick off costmap clear.
+  // Phase 2: filter disable acknowledged → kick off costmap clear.
   if (phase_ == Phase::DisablingKeepout)
   {
-    if (set_param_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+    if (toggle_filter_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
     {
       return BT::NodeStatus::RUNNING;
     }
-    auto results = set_param_future_.get();
-    if (results.empty() || !results.front().successful)
+    auto response = toggle_filter_future_.get();
+    if (!response || !response->success)
     {
-      RCLCPP_WARN(ctx->node->get_logger(),
-                  "NavigateInsideBoundary: set_parameters(keepout_filter.enabled=false) failed: %s",
-                  results.empty() ? "empty response" : results.front().reason.c_str());
-      // Continue anyway — Smac may still fail, but we tried.
       keepout_disabled_ = false;
+      RCLCPP_ERROR(ctx->node->get_logger(),
+                   "NavigateInsideBoundary: keepout disable failed: %s — refusing recovery motion",
+                   response ? response->message.c_str() : "empty response");
+      return BT::NodeStatus::FAILURE;
     }
-
     // Clear the existing lethals stamped by the (now-disabled) keepout
     // filter. Without this, the master costmap still carries the old
     // lethal cells until the next costmap update sweeps them out.
@@ -554,129 +546,62 @@ BT::NodeStatus NavigateInsideBoundary::onRunning()
     goal_handle_ = goal_handle_future_.get();
     if (!goal_handle_)
     {
-      RCLCPP_ERROR(ctx->node->get_logger(),
-                   "NavigateInsideBoundary: nav2 rejected recovery goal — trying open-loop backup");
+      RCLCPP_ERROR(ctx->node->get_logger(), "NavigateInsideBoundary: nav2 rejected recovery goal");
       pending_nav_result_ = BT::NodeStatus::FAILURE;
-      if (!fallback_attempted_)
-      {
-        return BeginFallbackBackup();
-      }
       return BeginReEnableKeepout();
     }
+    goal_result_future_ = action_client_->async_get_result(goal_handle_);
     phase_ = Phase::WaitingForResult;
   }
 
   // Phase 5: poll the Nav2 result.
   if (phase_ == Phase::WaitingForResult)
   {
-    const auto status = goal_handle_->get_status();
-    switch (status)
+    if (goal_result_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
     {
-      case action_msgs::msg::GoalStatus::STATUS_SUCCEEDED:
+      return BT::NodeStatus::RUNNING;
+    }
+    const auto result = goal_result_future_.get();
+    switch (result.code)
+    {
+      case rclcpp_action::ResultCode::SUCCEEDED:
         RCLCPP_INFO(ctx->node->get_logger(), "NavigateInsideBoundary: recovery complete");
         pending_nav_result_ = BT::NodeStatus::SUCCESS;
         return BeginReEnableKeepout();
-      case action_msgs::msg::GoalStatus::STATUS_ABORTED:
-        // Planner aborted (e.g. "Start occupied" because the robot's
-        // current cell is still lethal after our clear). Fall back to an
-        // open-loop reverse to physically pull the chassis off the
-        // boundary edge — that breaks the deadlock for the outer
-        // RetryUntilSuccessful, which will tick onStart() again from a
-        // fresh (post-backup) pose. Only do this ONCE per onStart()
-        // cycle so we don't spin in place.
-        RCLCPP_WARN(ctx->node->get_logger(),
-                    "NavigateInsideBoundary: nav2 aborted%s",
-                    fallback_attempted_ ? "" : " — trying open-loop backup");
+      case rclcpp_action::ResultCode::ABORTED:
+        RCLCPP_WARN(ctx->node->get_logger(), "NavigateInsideBoundary: nav2 aborted");
         pending_nav_result_ = BT::NodeStatus::FAILURE;
-        if (!fallback_attempted_)
-        {
-          return BeginFallbackBackup();
-        }
         return BeginReEnableKeepout();
-      case action_msgs::msg::GoalStatus::STATUS_CANCELED:
+      case rclcpp_action::ResultCode::CANCELED:
         RCLCPP_WARN(ctx->node->get_logger(), "NavigateInsideBoundary: nav2 canceled");
         pending_nav_result_ = BT::NodeStatus::FAILURE;
         return BeginReEnableKeepout();
       default:
-        return BT::NodeStatus::RUNNING;
-    }
-  }
-
-  // Phase 5b: open-loop reverse fallback when the planner can't escape the
-  // boundary lethal cell. Returns SUCCESS on completion so the outer
-  // IsBoundaryViolation check can decide whether we're back inside.
-  if (phase_ == Phase::FallbackBackingUp)
-  {
-    // Wait for goal acceptance.
-    if (!backup_goal_handle_)
-    {
-      if (backup_goal_handle_future_.wait_for(std::chrono::milliseconds(0)) !=
-          std::future_status::ready)
-      {
-        return BT::NodeStatus::RUNNING;
-      }
-      backup_goal_handle_ = backup_goal_handle_future_.get();
-      if (!backup_goal_handle_)
-      {
-        RCLCPP_ERROR(ctx->node->get_logger(),
-                     "NavigateInsideBoundary: /backup rejected fallback goal");
+        RCLCPP_ERROR(ctx->node->get_logger(), "NavigateInsideBoundary: unknown nav2 result");
         pending_nav_result_ = BT::NodeStatus::FAILURE;
         return BeginReEnableKeepout();
-      }
     }
-
-    if (!backup_result_requested_)
-    {
-      backup_result_future_ = backup_action_client_->async_get_result(backup_goal_handle_);
-      backup_result_requested_ = true;
-    }
-
-    if (backup_result_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
-    {
-      return BT::NodeStatus::RUNNING;
-    }
-
-    auto result = backup_result_future_.get();
-    if (result.code == rclcpp_action::ResultCode::SUCCEEDED)
-    {
-      RCLCPP_INFO(ctx->node->get_logger(),
-                  "NavigateInsideBoundary: fallback backup complete — succeeding so "
-                  "outer IsBoundaryViolation can re-check from new pose");
-      // We have NOT reached the recovery target, but we have moved. The
-      // wrapping <Inverter><IsBoundaryViolation/></Inverter> in the BT
-      // will fail this iteration if we're still outside, which lets the
-      // outer RetryUntilSuccessful give us a fresh planner attempt from
-      // the new pose. Returning SUCCESS here (rather than FAILURE) is
-      // what gates that re-evaluation.
-      pending_nav_result_ = BT::NodeStatus::SUCCESS;
-    }
-    else
-    {
-      RCLCPP_WARN(ctx->node->get_logger(),
-                  "NavigateInsideBoundary: fallback backup did not succeed (code=%d)",
-                  static_cast<int>(result.code));
-      pending_nav_result_ = BT::NodeStatus::FAILURE;
-    }
-    return BeginReEnableKeepout();
   }
 
   // Phase 6: re-enable keepout before returning the latched Nav2 result.
   if (phase_ == Phase::ReEnablingKeepout)
   {
-    if (set_param_future_.valid() &&
-        set_param_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+    if (toggle_filter_future_.valid() &&
+        toggle_filter_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
     {
       return BT::NodeStatus::RUNNING;
     }
-    if (set_param_future_.valid())
+    if (toggle_filter_future_.valid())
     {
-      auto results = set_param_future_.get();
-      if (results.empty() || !results.front().successful)
+      auto response = toggle_filter_future_.get();
+      if (!response || !response->success)
       {
-        RCLCPP_WARN(ctx->node->get_logger(),
-                    "NavigateInsideBoundary: re-enable keepout failed: %s — "
-                    "next costmap update with keepout disabled leaves the polygon unprotected",
-                    results.empty() ? "empty response" : results.front().reason.c_str());
+        RCLCPP_ERROR(ctx->node->get_logger(),
+                     "NavigateInsideBoundary: re-enable keepout failed: %s — retrying once and "
+                     "escalating to a stopped recovery failure",
+                     response ? response->message.c_str() : "empty response");
+        RequestKeepoutEnable(true);
+        pending_nav_result_ = BT::NodeStatus::FAILURE;
       }
     }
     keepout_disabled_ = false;
@@ -705,7 +630,7 @@ BT::NodeStatus NavigateInsideBoundary::SendNav2Goal()
   goal_handle_future_ = action_client_->async_send_goal(goal_msg);
 
   RCLCPP_INFO(ctx->node->get_logger(),
-              "NavigateInsideBoundary: nav2 goal sent (x=%.2f y=%.2f, %.2fm outside)",
+              "NavigateInsideBoundary: nav2 goal sent (x=%.2f y=%.2f, robot %.2fm outside)",
               recovery_pose_.position.x,
               recovery_pose_.position.y,
               distance_outside_);
@@ -719,62 +644,23 @@ BT::NodeStatus NavigateInsideBoundary::BeginReEnableKeepout()
 
   if (!keepout_disabled_)
   {
-    // We never disabled (e.g. params service unavailable on entry), so
+    // We never disabled (e.g. toggle service unavailable on entry), so
     // nothing to re-enable. Return the latched Nav2 outcome directly.
     return pending_nav_result_;
   }
-  if (!keepout_params_client_ || !keepout_params_client_->service_is_ready())
+  if (!keepout_toggle_client_ || !keepout_toggle_client_->service_is_ready())
   {
     RCLCPP_WARN(ctx->node->get_logger(),
-                "NavigateInsideBoundary: cannot re-enable keepout — params service unavailable; "
-                "boundary protection will return on the next manual enable");
+                "NavigateInsideBoundary: cannot re-enable keepout — toggle service unavailable; "
+                "boundary protection requires operator intervention");
+    pending_nav_result_ = BT::NodeStatus::FAILURE;
     keepout_disabled_ = false;
     return pending_nav_result_;
   }
-  set_param_future_ =
-      keepout_params_client_->set_parameters({rclcpp::Parameter("keepout_filter.enabled", true)});
+  auto request = std::make_shared<ToggleFilterSrv::Request>();
+  request->data = true;
+  toggle_filter_future_ = keepout_toggle_client_->async_send_request(request).share();
   phase_ = Phase::ReEnablingKeepout;
-  return BT::NodeStatus::RUNNING;
-}
-
-BT::NodeStatus NavigateInsideBoundary::BeginFallbackBackup()
-{
-  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
-
-  // Mark the slot consumed before any short-circuit return so we never
-  // attempt this twice in the same onStart() cycle.
-  fallback_attempted_ = true;
-
-  if (!backup_action_client_ || !backup_action_client_->action_server_is_ready())
-  {
-    RCLCPP_WARN(ctx->node->get_logger(),
-                "NavigateInsideBoundary: /backup action server unavailable for fallback");
-    return BeginReEnableKeepout();
-  }
-
-  // Fixed conservative reverse: 0.5 m at 0.16 m/s (matches v_linear_min so
-  // the wheel-PI envelope can actually drive it through the static-friction
-  // deadband). Generous time_allowance so slow motors don't trip the
-  // behavior's own watchdog.
-  constexpr double kBackupDist = 0.5;
-  constexpr double kBackupSpeed = 0.16;
-
-  BackUpAction::Goal goal_msg;
-  goal_msg.target.x = -kBackupDist;
-  goal_msg.target.y = 0.0;
-  goal_msg.target.z = 0.0;
-  goal_msg.speed = kBackupSpeed;
-  goal_msg.time_allowance = rclcpp::Duration::from_seconds(kBackupDist / kBackupSpeed * 3.0);
-
-  backup_goal_handle_future_ = backup_action_client_->async_send_goal(goal_msg);
-  backup_goal_handle_.reset();
-  backup_result_requested_ = false;
-  phase_ = Phase::FallbackBackingUp;
-
-  RCLCPP_INFO(ctx->node->get_logger(),
-              "NavigateInsideBoundary: fallback backup goal sent (%.2f m @ %.2f m/s)",
-              kBackupDist,
-              kBackupSpeed);
   return BT::NodeStatus::RUNNING;
 }
 
@@ -787,12 +673,6 @@ void NavigateInsideBoundary::onHalted()
     RCLCPP_INFO(ctx->node->get_logger(), "NavigateInsideBoundary: canceling goal");
     action_client_->async_cancel_goal(goal_handle_);
     goal_handle_.reset();
-  }
-  if (backup_goal_handle_)
-  {
-    RCLCPP_INFO(ctx->node->get_logger(), "NavigateInsideBoundary: canceling fallback backup");
-    backup_action_client_->async_cancel_goal(backup_goal_handle_);
-    backup_goal_handle_.reset();
   }
   if (keepout_disabled_)
   {

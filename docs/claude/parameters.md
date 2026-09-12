@@ -1,7 +1,7 @@
 # Configuration & Parameter Index
 
 > Every knob on this robot, where its default lives, which node consumes it, and whether the GUI can edit it.
-> Index generated 2026-09-03 at f21729e9; regenerate when config files or launch injections change.
+> Index updated 2026-09-10; regenerate when config files or launch injections change.
 > Read this with CLAUDE.md **Invariant 15** (sparse installed config over an in-package template) open — it is the rule this whole file describes.
 
 **The one-sentence model:** defaults live in the in-package template `ros2/src/mowgli_bringup/config/mowgli_robot.yaml`; the *installed* `/ros2_ws/config/mowgli_robot.yaml` is SPARSE and holds only install choices + calibration outputs + genuine overrides; `robot_config_util.load_robot_params()` deep-merges installed OVER template at launch; each launch file then **injects** individual keys into node parameters. **A key that no launch file injects is inert** — the node silently runs its compiled `declare_parameter` default no matter what the yaml says. Those are marked `INERT` below.
@@ -17,7 +17,7 @@
 | `ros2/src/mowgli_bringup/config/nav2_params_base.yaml` (1193 L) | shared Nav2 params for BOTH LiDAR and no-LiDAR variants | `navigation.launch.py:659` (deep-merge) | maintainer |
 | `ros2/src/mowgli_bringup/config/nav2_params_lidar.yaml` (284 L) | LiDAR-only overlay (scan obstacle layers, scan collision_monitor) | `navigation.launch.py:270`, merged L663 | maintainer |
 | `ros2/src/mowgli_bringup/config/nav2_params_no_lidar.yaml` (80 L) | GPS-only overlay (static layers, pass-through monitor) | `navigation.launch.py:271`, merged L663 | maintainer |
-| `ros2/src/mowgli_bringup/config/hardware_bridge.yaml` (146 L) | serial port/baud/rates, IMU cal count, **dig detector** `dig_*` + repeat-dig escalation `dig_escalate_*` (Invariant 16) | `mowgli.launch.py:185` | maintainer |
+| `ros2/src/mowgli_bringup/config/hardware_bridge.yaml` (158 L) | serial port/baud/rates, final merged-command slew `cmd_vel_*_{accel,decel}_limit`, IMU cal count, **dig detector** `dig_*` + repeat-dig escalation `dig_escalate_*` (Invariant 16) | `mowgli.launch.py:185` | maintainer |
 | `ros2/src/mowgli_bringup/config/twist_mux.yaml` (53 L) | 5 cmd_vel lanes + priorities; deliberately **no `locks:`** | `mowgli.launch.py:271` | maintainer |
 | `ros2/src/mowgli_bringup/config/foxglove_bridge.yaml` (11 L) | Foxglove params + GNSS-internal topic whitelist — **not referenced by any launch file** | nothing | maintainer |
 | `ros2/src/fusion_graph/config/fusion_graph.yaml` (480 L) | 76 of the localizer's 133 declared params | `fusion_graph/launch/fusion_graph.launch.py:137` | maintainer |
@@ -157,8 +157,8 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | Key (L) | Default | Consumer · where read | GUI | Life |
 |---|---|---|---|---|
 | `use_magnetometer` (L238) | `false` | launch-arg default `navigation.launch.py:133` → `fusion_graph.launch.py:148` | no | launch |
-| `use_scan_matching` (L251) | `true` | `navigation.launch.py:135`; **ANDed with `use_lidar`** by `lidar_gated()` L237 | no | launch |
-| `use_loop_closure` (L264) | `true` | `navigation.launch.py:137`; ANDed with `use_lidar` **and** force-off on first boot when `/ros2_ws/maps/fusion_graph.graph` is absent (L150–154) | no | launch |
+| `use_lidar_map_anchor` | `true` | `navigation.launch.py` → `fusion_graph.launch.py` → node; ANDed with `use_lidar`. RTK-built persistent scan-to-map fallback for complete GNSS outages; fresh usable Fix or Float keeps it asleep | no | launch |
+| `lidar_anchor_shadow_mode` | `false` | same path; with the anchor on, ALSO run/score/publish the filter under RTK-Fixed, never apply — the field measurement of anchor vs RTK (`/fusion_graph/lidar_anchor_candidate`, diagnostics `lidar_anchor_*`) | no | launch |
 | `use_gps_dock_detection` (L467) | `true` | `navigation.launch.py:141` → launches `gps_dock_detection_node` + `simple_charging_dock.use_external_detection_pose` | no | launch |
 
 ### GNSS / NTRIP — consumed by the **GPS sidecar and the GUI**, not by ROS2
@@ -203,13 +203,13 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 
 | Key (L) | Default | Becomes | GUI | Life |
 |---|---|---|---|---|
-| `headland_width` | 0.18 | `coverage_server.default_headland_width` L931 — used ONLY for the AUTO ring count `ceil(headland_width / operation_width)`, i.e. only when `num_headland_passes == 0`; inert at the shipped `2` | Mowing | dynamic (read per plan) |
-| `num_headland_passes` (L374) | 2 | `coverage_server.num_headland_passes` L932 — three-way sentinel: `<0` none, `0` auto, `>0` exact (injected **unclamped**, pinned by `test_launch_injection.py`) | Mowing | dynamic |
+| `headland_width` | 0.18 | `coverage_server.default_headland_width` L931 — used ONLY for the AUTO ring count `ceil(headland_width / operation_width)`, i.e. only when `num_headland_passes == 0`; inert at the shipped `5` | Mowing | dynamic (read per plan) |
+| `num_headland_passes` (L374) | 5 | `coverage_server.num_headland_passes` L932 — three-way sentinel: `<0` none, `0` auto, `>0` exact (injected **unclamped**, pinned by `test_launch_injection.py`) | Mowing | dynamic |
 | `mow_direction` (L379) | 0 | `coverage_server.ring_direction` L934 | no | dynamic |
 | `chassis_safety_inset` (L396) | 0.2 | `coverage_server.chassis_safety_inset` L935; mirrored to `map_server` `full_system.launch.py:396` | Mowing | dynamic |
 | `swath_overlap` (L405) | 0.02 | subtracted: `operation_width = max(0.05, tool_width − swath_overlap)` L924 | no | dynamic |
-| `min_turning_radius` (L416) | 0.15 | clamped to [0.10, 0.50] → `coverage_server.min_turning_radius` L944; also drives the `check_turn_geometry` warning (issue #499: 0.15 is **below** the 0.1625 m half-track) | Mowing | dynamic |
-| `connector_turn_radius` — **not in the template**; launch fallback 0.18 (`navigation.launch.py:403`), node default `coverage_server.cpp:94` | 0.18 | clamped ≥ `min_turning_radius`, ≤ 0.50 → `coverage_server.connector_turn_radius` L948 | no | dynamic |
+| `min_turning_radius` (L416) | 0.20 | clamped to [0.10, 0.50] → `coverage_server.min_turning_radius` L944; matches `speed_slow / max_cmd_vel_ang` at the default 0.16 m/s and 0.8 rad/s | Mowing | dynamic |
+| `connector_turn_radius` — **not in the template**; launch fallback 0.20 (`navigation.launch.py:403`), node default `coverage_server.cpp:94` | 0.20 | clamped ≥ `min_turning_radius`, ≤ 0.50 → `coverage_server.connector_turn_radius` L948 | no | dynamic |
 | `turn_speed_ratio` (L333) | 0.8 | `FollowCoveragePath.speed_slow = clamp(mowing_speed × ratio, min_speed_mps, mowing_speed)` via `derive_turn_speed` (`robot_config_util.py:268`), injected L781 | no | launch |
 
 ### Docking (→ `docking_server` / `simple_charging_dock`, `navigation.launch.py:665–739`)
@@ -248,7 +248,7 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 
 | Key (L) | Default | GUI | Life |
 |---|---|---|---|
-| `start_blocked_escape_enabled` (L546) | `true` | no | launch |
+| `start_blocked_escape_enabled` (L546) | `false` | no | launch |
 | `start_blocked_escape_speed` (L547) | 0.10 | no | launch |
 | `start_blocked_escape_distance` (L548) | 0.40 (hard ceiling 0.60 in code) | no | launch |
 | `start_blocked_escape_timeout_s` (L549) | 6.0 | no | launch |
@@ -307,7 +307,7 @@ These fall back to a literal hardcoded in the launch file. Each is allow-listed 
 | Key | Launch fallback | Consumer |
 |---|---|---|
 | `lidar_enabled` | `DEFAULT_LIDAR_ENABLED = False` (`robot_config_util.py:172`) | install-decided; absence is meaningful → loud startup warning (`warn_lidar_key_absent` L224) |
-| `connector_turn_radius` | 0.18 (`navigation.launch.py:403`) | `coverage_server` |
+| `connector_turn_radius` | 0.20 (`navigation.launch.py:403`) | `coverage_server` |
 | `fusion_graph_node_period_s` | 0.04 (`navigation.launch.py:139`) | `fusion_graph_node.node_period_s` (overrides `fusion_graph.yaml:23`'s 0.02) |
 | `dock_body_length_m` / `dock_body_width_m` | 0.80 / 0.55 (`full_system.launch.py:383–384`) | `map_server` dock polygon |
 | `lethal_outside_areas` | `true` (`full_system.launch.py:416`) | `map_server` (also a static default in `map_server.yaml:96`) |
@@ -328,7 +328,7 @@ These fall back to a literal hardcoded in the launch file. Each is allow-listed 
 
 **Bucket B — per-robot calibration outputs**, written back by nodes/GUI, meaningless as a shared default: `dock_pose_x/y/yaw` (L64–66), `ticks_per_meter` (L70), `imu_yaw` (L74), `enable_mag_cal` + `declination_deg` (L78–79).
 
-The installer additionally patches keys that appear in **neither** the template nor the seed: `gnss_transport`, `gnss_frame_id`, `gnss_ntrip_gga_enabled`, `gnss_ntrip_gga_interval_s`, plus `use_scan_matching`/`use_loop_closure` slaved to the LiDAR choice (`install/lib/config.sh:1400–1441`).
+The installer also removes retired localization keys such as `use_scan_matching`, `use_loop_closure`, `icp_*`, `lc_*`, and the old dense-map extent when upgrading an installed sparse config (`install/lib/config.sh`). This is migration cleanup, not an exposed setting.
 
 **Why sparse matters.** Deleting a key from the installed file is exactly the GUI's "reset to default" — the deep-merge then falls through to the template. `PostSettingsYAML` also prunes any saved key whose value equals its schema default (`settings.go` `sparsifyFlat` L388), so the file stays sparse on its own. Padding it with defaults breaks both that and the propagate-a-new-default-to-every-robot property. `ros2/scripts/check_config_drift.py` is the CI guard: it fails on a structural field present in both files with different values, on an installed key with no template default, and on any installed key whose value merely *equals* the template default (issue #381).
 
@@ -345,7 +345,7 @@ The installer additionally patches keys that appear in **neither** the template 
 | `enable_mqtt` | `false` | launch the MQTT bridge |
 | `enable_foxglove` | `true` | launch `foxglove_bridge` |
 | `foxglove_port` | `8765` | Foxglove WebSocket port |
-| `use_lidar` (L135) | `mowgli_robot.yaml:lidar_enabled`, else `false` + warning | gates LiDAR nodes, the Nav2 overlay choice, and the fusion_graph scan factors. **`LIDAR_ENABLED` in `.env` is NOT consulted** (removed 2026-08-31) |
+| `use_lidar` (L135) | `mowgli_robot.yaml:lidar_enabled`, else `false` + warning | gates LiDAR nodes, the Nav2 overlay choice, and the fusion_graph LiDAR map anchor. **`LIDAR_ENABLED` in `.env` is NOT consulted** (removed 2026-08-31) |
 | `use_obstacle_tracker` (L141) | `true` | persistent `/scan` cluster → `mow_progress` obstacle promotion; also gated on `use_lidar` |
 | `led_enabled` (L147) | `mowgli_robot.yaml:led_enabled` (`false`) | spawn the WS2812 ring node |
 
@@ -356,16 +356,16 @@ There is **no `use_fusion_graph` arg** — it was removed with the dual EKF (Inv
 | Arg | Default | Effect |
 |---|---|---|
 | `use_sim_time` | `false` | — |
-| `use_lidar` (L166) | as above | picks `nav2_params_lidar.yaml` vs `nav2_params_no_lidar.yaml` (L956–962) and force-ANDs the two scan flags |
+| `use_lidar` (L166) | as above | picks `nav2_params_lidar.yaml` vs `nav2_params_no_lidar.yaml` (L956–962) and gates the LiDAR map anchor |
 | `use_magnetometer` (L172) | yaml `use_magnetometer` (`false`) | mag yaw unary factor |
-| `use_scan_matching` (L178) | yaml (`true`) **AND** `use_lidar` | scan between-factors |
-| `use_loop_closure` (L184) | yaml (`true`) AND `use_lidar` AND a persisted `/ros2_ws/maps/fusion_graph.graph` exists (L150–154) | loop-closure search |
+| `use_lidar_map_anchor` | yaml (`true`) AND `use_lidar` | persistent RTK-built tiles; validated XY-only factors only after a complete GNSS outage |
+| `lidar_anchor_shadow_mode` | yaml (`false`) AND `use_lidar` | bounded calibration under RTK-Fixed; publishes candidates but never factors |
 | `use_gps_dock_detection` (L190) | yaml (`true`) | `gps_dock_detection_node` + external detection pose |
 | `cog_stationary_seed_rate_hz` (L196) | `2.0` | `cog_to_imu` stationary anchor. The code comment at `navigation.launch.py:1111–1112` claims sim overrides it to `0.0` — **stale**: no launch file in the repo passes this arg |
 | `fusion_graph_tf_lead_s` (L214) | `0.05` | forward-stamp on BOTH `map→odom` and `odom→base_footprint`; sim passes `0.1` (`sim_full_system.launch.py:182`) |
 | `fusion_graph_node_period_s` (L219) | yaml `fusion_graph_node_period_s`, else `0.04` (25 Hz) | factor-graph cadence; sim passes `0.02` (`sim_full_system.launch.py:183`) |
 
-`mowgli.launch.py` takes `use_sim_time` (L62) and `serial_port` (L68). `fusion_graph.launch.py` takes `use_sim_time`, `use_magnetometer`, `use_scan_matching`, `use_loop_closure` (all default `false`), `primary_mode` (`true`), `tf_publish_lead_s` (`0.0`), `node_period_s` (`0.04`) — L87–118.
+`mowgli.launch.py` takes `use_sim_time` and `serial_port`. `fusion_graph.launch.py` takes `use_sim_time`, `use_magnetometer`, `use_lidar_map_anchor`, `lidar_anchor_shadow_mode`, `primary_mode`, `tf_publish_lead_s`, and `node_period_s`.
 
 ### The remaining launch files in `mowgli_bringup/launch/`
 
@@ -406,7 +406,7 @@ There is **no `use_fusion_graph` arg** — it was removed with the dual EKF (Inv
 | `stopped_goal_checker` | 131–149 | transit goal gate |
 | `coverage_goal_checker` | 170–189 | `mowgli_nav2_plugins/PathProgressGoalChecker` L171, `plan_topic: /controller_server/FollowCoveragePath/global_plan` L189 — **never `StoppedGoalChecker`** |
 | `FollowPath` (transit) | 226–320 | RotationShim L227 wrapping RPP L228; `desired_linear_vel: 0.30` L276 (overwritten by `transit_speed`) |
-| `FollowCoveragePath` (coverage) | 338–546 | `mowgli_nav2_plugins/FTCController` L339; `speed_fast` L346 / `speed_slow` L357 / `min_speed_mps` L360 (all launch-overwritten); `max_cmd_vel_ang: 0.8` L404; `max_goal_distance_error: 0.50` L410; `forward_only: true` L420; `check_obstacles` L425, `obstacle_lookahead` L431, `obstacle_body_half_width` L477, `ignore_obstacles_outside_zone` L508, `enable_obstacle_deviation` L509, `max_lateral_deviation` L515, reverse-escape trio L544–546 |
+| `FollowCoveragePath` (coverage) | 338–550 | `mowgli_nav2_plugins/FTCController` L339; `speed_fast` L346 / `speed_slow` L357 / `min_speed_mps` L364 (speed fast/slow launch-overwritten); obstacle restart angular acceleration `1.0 rad/s²` L363; `max_cmd_vel_ang: 0.8` L408; `max_goal_distance_error: 0.50` L414; `forward_only: true` L424; `check_obstacles` L429, `obstacle_lookahead` L435, `obstacle_body_half_width` L481, `ignore_obstacles_outside_zone` L512, `enable_obstacle_deviation` L513, `max_lateral_deviation` L519, reverse-escape trio L548–550 |
 | `planner_server` | 551–590 | Smac |
 | `smoother_server` / `behavior_server` / `waypoint_follower` | 591 / 604 / 655 | BackUp lives in `behavior_server` (undock, Invariant 10) |
 | `global_costmap` | 674–789 | 70×70 m rolling L741–742, `resolution: 0.08` L715, `inflation_radius: 0.20` L780, **`keepout_filter` enabled** L782–785 |
@@ -433,19 +433,16 @@ There is **no `use_fusion_graph` arg** — it was removed with the dual EKF (Inv
 | Stationary gate | 118–126 (its `stationary_thresh_xy_m` / `stationary_thresh_theta` / `stationary_sigma_theta` sit at L79–97, inside the gyro block) | `stationary_gyro_thresh_rad_per_s` |
 | **Slip veto** (rotational only — see Invariant 16) | 127–161 | `slip_residual_thresh_rad`, `slip_gyro_max_rad`, `slip_wheel_min_rad`, `slip_window_s` 0.5 (issue #516; `0` = old per-node gate) |
 | Graph size | 162–184 | `max_graph_nodes` 6000 |
-| Loop closure | 185–235 | `lc_min_age_s` 30, `lc_skip_when_rtk_fixed` true, `lc_min_travel_m` 1.0, `lc_min_interval_s` 2.0, `lc_gps_sigma_ratio` 1.0 (issue #513) |
 | Gyro bias | 236–257 | `gyro_bias_estimation_enabled`, `gyro_bias_ema_tau_s` 30, `use_imu_preint` false |
 | Adaptive process noise | 258–269 | `adaptive_noise_enabled_gain` 10.0 |
 | **RTK wrong-fix gate** | 270–295 | `rtk_wrongfix_max_jump_m` 0.05 — bounded per-interval comparison; do NOT replace with an unbounded accumulator (CLAUDE.md *What NOT to Do*) |
-| ICP guard rails | 296–307 | `icp_max_rmse_m`, `icp_max_delta_xy_m`, `icp_max_divergence_*` |
 | GPS noise floor / prior | 308–318 | `gps_sigma_floor` 0.003, `prior_sigma_xy` 0.05 |
 | Lever arm + datum | 319–328 | `lever_arm_x/y`, `datum_lat/lon` — **all four injected from `mowgli_robot.yaml` by `fusion_graph.launch.py:144–147`** |
 | Frames | 329–333 | `map_frame` / `odom_frame` / `base_frame` (Invariant 2) |
 | TF publish | 334–373 | `fast_pose_publish_rate_hz`, `tf_publish_lead_s` 0.05 (launch-overridden), `tf_broadcast_rate_hz` 20 |
 | Docking | 374–415 | `docking_active_timeout_s`, `gate_cog_during_docking`, `dock_reanchor_sigma_xy_m` 0.03, `dock_prior_max_gps_disagreement_m` 0.50, `dock_prior_max_gps_sigma_m` 0.05 (issue #512) |
-| Keyframe map | 416–480 | `use_keyframe_map`, `kf_capture_sigma_max_m` 0.04, `kf_spacing_m` 0.5, `max_keyframes` 2000, `kf_min_inliers` 16, `kf_apply_*`, `kf_match_*` |
 
-Declared **without** a yaml line (code defaults only, tune via `ros2 param set` or add a line): `anchor_*` (5), `auto_save_enabled`, `autoload_graph`, `cog_*` (10), `cov_update_every_n`, `dr_slip_*`, `gps_max_sigma_reject_m`, `graph_save_prefix`, `icp_max_iter`/`icp_max_corresp_dist`/`icp_sigma_*`/`icp_source_subsample`, `isam2_*`, `lc_max_candidates`/`lc_max_dist_m`/`lc_max_rmse`/`lc_min_delta_*`/`lc_sigma_*`, `periodic_save_period_s`, `rtk_autoload_override_threshold_m`, `scan_min_inliers`, `scan_retention_nodes`, `scan_topic`, `scan_yaw_sigma_floor_rad`, `scan_yield_*`, `stationary_motion_thresh_*`, `stationary_node_period_s`. Eight more come only from launch arguments: `primary_mode`, `use_scan_matching`, `use_loop_closure`, `use_magnetometer`, `dock_pose_x`/`_y`/`_yaw`, `dock_pose_yaw_sigma_rad`.
+Declared **without** a yaml line (code defaults only, tune via `ros2 param set` or add a line): `anchor_*`, `auto_save_enabled`, `autoload_graph`, `cog_*`, `cov_update_every_n`, `dr_slip_*`, `gps_max_sigma_reject_m`, `graph_save_prefix`, `isam2_*`, `periodic_save_period_s`, `rtk_autoload_override_threshold_m`, `scan_topic`, `stationary_motion_thresh_*`, and `stationary_node_period_s`. Launch-only parameters include `primary_mode`, `use_magnetometer`, `dock_pose_x`/`_y`/`_yaw`, and `dock_pose_yaw_sigma_rad`; the two LiDAR switches are launch-injected and also present in the template.
 
 ## Environment variables
 

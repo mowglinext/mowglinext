@@ -82,6 +82,7 @@ import {GnssLiveDiagnosticsCard} from "../components/gnss/GnssLiveDiagnosticsCar
 import {clampTinyToZero} from "../utils/telemetryFormat.ts";
 import {detectNav2Recovery} from "../utils/nav2Recovery.ts";
 import {groupAlertsByComponent} from "../utils/diagnosticsAlerts.ts";
+import {deriveLidarAnchor} from "../utils/lidarAnchor.ts";
 import {useValueSince} from "../hooks/useValueSince.ts";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -860,14 +861,20 @@ export const DiagnosticsPage = () => {
 
     const mowerAction = useMowerAction();
     const resetEmergencyAction = mowerAction("emergency", {Emergency: 0});
-    const [fusionBusy, setFusionBusy] = useState<"save" | "clear" | null>(null);
-    const callFusionService = async (command: "fusion_graph_save" | "fusion_graph_clear") => {
-        setFusionBusy(command === "fusion_graph_save" ? "save" : "clear");
+    type FusionCommand = "fusion_graph_save" | "fusion_graph_clear" | "fusion_graph_clear_lidar_map";
+    const FUSION_SUCCESS_KEY: Record<FusionCommand, string> = {
+        fusion_graph_save: "diagnosticsPage.graphSaved",
+        fusion_graph_clear: "diagnosticsPage.graphCleared",
+        fusion_graph_clear_lidar_map: "diagnosticsPage.lidarMapCleared",
+    };
+    const [fusionBusy, setFusionBusy] = useState<FusionCommand | null>(null);
+    const callFusionService = async (command: FusionCommand) => {
+        setFusionBusy(command);
         try {
             const res = await guiApi.mowglinext.callCreate(command, {});
             if (res.error) throw new Error((res.error as any)?.error ?? "service call failed");
             notification.success({
-                message: command === "fusion_graph_save" ? t('diagnosticsPage.graphSaved') : t('diagnosticsPage.graphCleared'),
+                message: t(FUSION_SUCCESS_KEY[command]),
                 description: (res.data as any)?.message,
             });
         } catch (e: any) {
@@ -888,6 +895,17 @@ export const DiagnosticsPage = () => {
         });
     };
 
+    const confirmClearLidarMap = () => {
+        modal.confirm({
+            title: t('diagnosticsPage.clearLidarMapConfirmTitle'),
+            content: t('diagnosticsPage.clearLidarMapConfirmBody'),
+            okText: t('diagnosticsPage.clearLidarMapConfirmOk'),
+            cancelText: t('diagnosticsPage.calibrationCancel'),
+            okButtonProps: {danger: true},
+            onOk: () => callFusionService("fusion_graph_clear_lidar_map"),
+        });
+    };
+
     const fusionAgeS = fusionStats ? Math.floor((nowMs - fusionStats.receivedAt) / 1000) : null;
     const fusionStale = fusionAgeS === null || fusionAgeS > 5;
     const fv = fusionStats?.values ?? {};
@@ -898,11 +916,6 @@ export const DiagnosticsPage = () => {
         return Number.isFinite(n) ? n : null;
     };
     const totalNodes = num("total_nodes");
-    const scansAttached = num("scans_attached");
-    const loopClosures = num("loop_closures");
-    const scansReceived = num("scans_received");
-    const scanOk = num("scan_matches_ok");
-    const scanFail = num("scan_matches_fail");
     const covXX = num("cov_xx");
     const covYY = num("cov_yy");
     const covYaw = num("cov_yawyaw");
@@ -912,27 +925,27 @@ export const DiagnosticsPage = () => {
     const sigmaYawDeg = (covYaw !== null && covYaw >= 0)
         ? Math.sqrt(covYaw) * (180 / Math.PI)
         : null;
-    const scanTotal = (scanOk ?? 0) + (scanFail ?? 0);
-    const scanRate = scanTotal > 0 ? Math.round(((scanOk ?? 0) / scanTotal) * 100) : null;
-
-    // ICP / scan-matching detail (live LiDAR monitor).
-    const keyframesTotal = num("keyframes_total");
-    const kfOk = num("kf_matches_ok");
-    const kfFail = num("kf_matches_fail");
-    const kfTotal = (kfOk ?? 0) + (kfFail ?? 0);
-    const kfRate = kfTotal > 0 ? Math.round(((kfOk ?? 0) / kfTotal) * 100) : null;
-    const rejRmse = num("icp_rejects_rmse");
-    const rejInliers = num("icp_rejects_inliers");
-    const rejSanity = num("icp_rejects_sanity");
-    const rejDiverge = num("icp_rejects_divergence");
-    const rejTotal = (rejRmse ?? 0) + (rejInliers ?? 0) + (rejSanity ?? 0) + (rejDiverge ?? 0);
     const gpsRejWrongfix = num("gps_rejects_wrongfix");
     const stationaryHandPush = num("stationary_hand_push");
-    // Fraction of received scans that actually became graph factors. The two
-    // counters have slightly different lifecycles (attached counts nodes,
-    // received counts messages), so cap at 100% to avoid nonsense like 108%.
-    const attachRate = (scansReceived !== null && scansReceived > 0 && scansAttached !== null)
-        ? Math.min(100, Math.round((scansAttached / scansReceived) * 100))
+
+    // LiDAR map anchor (optional scan-to-map particle filter). null when the
+    // running node predates it, in which case the tile group is not rendered.
+    const lidarAnchor = deriveLidarAnchor(fv);
+    const LIDAR_ANCHOR_STATE_LABEL = {
+        off: "diagnosticsPage.lidarAnchorStateOff",
+        waitingForMap: "diagnosticsPage.lidarAnchorStateWaitingForMap",
+        mapping: "diagnosticsPage.lidarAnchorStateMapping",
+        anchoring: "diagnosticsPage.lidarAnchorStateAnchoring",
+    } as const;
+    const LIDAR_ANCHOR_STATE_TONE = {off: "default", waitingForMap: "warn", mapping: "default", anchoring: "ok"} as const;
+    const LIDAR_ANCHOR_VERDICT_LABEL = {
+        accepted: "diagnosticsPage.lidarAnchorVerdictAccepted",
+        rejectedScore: "diagnosticsPage.lidarAnchorVerdictRejectedScore",
+        rejectedSpread: "diagnosticsPage.lidarAnchorVerdictRejectedSpread",
+        rejectedDeadReckoning: "diagnosticsPage.lidarAnchorVerdictRejectedDeadReckoning",
+    } as const;
+    const lidarAnchorStateText = lidarAnchor
+        ? `${t(LIDAR_ANCHOR_STATE_LABEL[lidarAnchor.stateKey])}${lidarAnchor.isShadow ? ` ${t('diagnosticsPage.lidarAnchorShadowSuffix')}` : ""}`
         : null;
 
     const sectionFusionGraph = (
@@ -954,7 +967,7 @@ export const DiagnosticsPage = () => {
                             <Button
                                 size="small"
                                 onClick={() => callFusionService("fusion_graph_save")}
-                                loading={fusionBusy === "save"}
+                                loading={fusionBusy === "fusion_graph_save"}
                                 disabled={fusionBusy !== null}
                             >
                                 {t('diagnosticsPage.saveGraph')}
@@ -963,11 +976,22 @@ export const DiagnosticsPage = () => {
                                 size="small"
                                 danger
                                 onClick={confirmClearGraph}
-                                loading={fusionBusy === "clear"}
+                                loading={fusionBusy === "fusion_graph_clear"}
                                 disabled={fusionBusy !== null}
                             >
                                 {t('diagnosticsPage.clearGraph')}
                             </Button>
+                            {lidarAnchor !== null && (
+                                <Button
+                                    size="small"
+                                    danger
+                                    onClick={confirmClearLidarMap}
+                                    loading={fusionBusy === "fusion_graph_clear_lidar_map"}
+                                    disabled={fusionBusy !== null}
+                                >
+                                    {t('diagnosticsPage.clearLidarMap')}
+                                </Button>
+                            )}
                         </Space>
                     }
                 >
@@ -976,21 +1000,6 @@ export const DiagnosticsPage = () => {
                             xs={12} md={6} large
                             title={t('diagnosticsPage.nodesInGraph')}
                             value={totalNodes}
-                            hint={scansAttached !== null ? t('diagnosticsPage.withScans', {count: scansAttached}) : ""}
-                        />
-                        <TelemetryStat
-                            xs={12} md={6} large
-                            title={t('diagnosticsPage.loopClosures')}
-                            value={loopClosures}
-                            tone={(loopClosures ?? 0) > 0 ? "ok" : "default"}
-                        />
-                        <TelemetryStat
-                            xs={12} md={6} large
-                            title={t('diagnosticsPage.icpSuccessRate')}
-                            value={scanRate}
-                            suffix="%"
-                            precision={0}
-                            hint={scanTotal > 0 ? t('diagnosticsPage.matches', {ok: scanOk ?? 0, total: scanTotal}) : t('diagnosticsPage.scansReceived', {count: scansReceived ?? 0})}
                         />
                         <TelemetryStat
                             xs={12} md={6} large
@@ -1005,41 +1014,73 @@ export const DiagnosticsPage = () => {
                     <Row gutter={[12, 12]} style={{marginTop: 4}}>
                         <TelemetryStat
                             xs={12} md={6} large
-                            title={t('diagnosticsPage.icpKeyframes')}
-                            value={keyframesTotal}
-                            tone={(keyframesTotal ?? 0) > 0 ? "ok" : "warn"}
-                            hint={kfTotal > 0
-                                ? t('diagnosticsPage.icpKfMatches', {rate: kfRate ?? 0, ok: kfOk ?? 0, total: kfTotal})
-                                : t('diagnosticsPage.icpNoKeyframes')}
-                        />
-                        <TelemetryStat
-                            xs={12} md={6} large
-                            title={t('diagnosticsPage.icpRejects')}
-                            value={rejTotal}
-                            tone={rejTotal > 0 ? "warn" : "ok"}
-                            hint={t('diagnosticsPage.icpRejectBreakdown', {
-                                rmse: rejRmse ?? 0,
-                                inliers: rejInliers ?? 0,
-                                sanity: rejSanity ?? 0,
-                                diverge: rejDiverge ?? 0,
-                            })}
-                        />
-                        <TelemetryStat
-                            xs={12} md={6} large
-                            title={t('diagnosticsPage.attachRateTitle')}
-                            value={attachRate}
-                            suffix="%"
-                            precision={0}
-                            hint={t('diagnosticsPage.scansReceived', {count: scansReceived ?? 0})}
-                        />
-                        <TelemetryStat
-                            xs={12} md={6} large
                             title={t('diagnosticsPage.handPushTitle')}
                             value={stationaryHandPush}
                             tone={(stationaryHandPush ?? 0) > 0 ? "warn" : "default"}
-                            hint={t('diagnosticsPage.icpGpsWrongfix', {count: gpsRejWrongfix ?? 0})}
+                            hint={t('diagnosticsPage.gpsWrongfix', {count: gpsRejWrongfix ?? 0})}
                         />
                     </Row>
+                    {lidarAnchor !== null && (
+                        <>
+                            <Typography.Text strong style={{display: "block", marginTop: 12, marginBottom: 4}}>
+                                {t('diagnosticsPage.lidarAnchorGroupTitle')}
+                            </Typography.Text>
+                            <Row gutter={[12, 12]}>
+                                <TelemetryStat
+                                    xs={12} md={6} large
+                                    title={t('diagnosticsPage.lidarAnchorState')}
+                                    value={lidarAnchorStateText}
+                                    tone={LIDAR_ANCHOR_STATE_TONE[lidarAnchor.stateKey]}
+                                    hint={lidarAnchor.sigmaM !== null ? t('diagnosticsPage.lidarAnchorSigma', {value: lidarAnchor.sigmaM.toFixed(2)}) : ""}
+                                />
+                                <TelemetryStat
+                                    xs={12} md={6} large
+                                    title={t('diagnosticsPage.lidarAnchorMapCells')}
+                                    value={lidarAnchor.mapCells}
+                                    hint={t('diagnosticsPage.lidarAnchorSeeds', {seeds: lidarAnchor.seeds ?? 0, skipped: lidarAnchor.skipped ?? 0})}
+                                />
+                                <TelemetryStat
+                                    xs={12} md={6} large
+                                    title={t('diagnosticsPage.lidarAnchorVerdict')}
+                                    value={lidarAnchor.verdictKey !== null ? t(LIDAR_ANCHOR_VERDICT_LABEL[lidarAnchor.verdictKey]) : null}
+                                    tone={lidarAnchor.verdictKey === null ? "default" : lidarAnchor.verdictKey === "accepted" ? "ok" : "warn"}
+                                    hint={lidarAnchor.hitRatioPct !== null ? t('diagnosticsPage.lidarAnchorHitRatio', {pct: lidarAnchor.hitRatioPct}) : ""}
+                                />
+                                <TelemetryStat
+                                    xs={12} md={6} large
+                                    title={t('diagnosticsPage.lidarAnchorFactors')}
+                                    value={lidarAnchor.factors}
+                                    tone={(lidarAnchor.factors ?? 0) > 0 ? "ok" : "default"}
+                                    hint={t('diagnosticsPage.lidarAnchorFactorsHint')}
+                                />
+                            </Row>
+                            <Row gutter={[12, 12]} style={{marginTop: 4}}>
+                                <TelemetryStat
+                                    xs={12} md={6} large
+                                    title={t('diagnosticsPage.lidarAnchorAccepted')}
+                                    value={lidarAnchor.accepted}
+                                    tone={lidarAnchor.rejected > 0 ? "warn" : "default"}
+                                    hint={t('diagnosticsPage.lidarAnchorRejectBreakdown', {
+                                        rejected: lidarAnchor.rejected,
+                                        score: lidarAnchor.rejScore,
+                                        spread: lidarAnchor.rejSpread,
+                                        dr: lidarAnchor.rejDr,
+                                    })}
+                                />
+                                <TelemetryStat
+                                    xs={12} md={6} large
+                                    title={t('diagnosticsPage.lidarAnchorReseeds')}
+                                    value={lidarAnchor.reseeds}
+                                    tone={(lidarAnchor.reseeds ?? 0) > 0 ? "warn" : "default"}
+                                />
+                                <TelemetryStat
+                                    xs={12} md={6} large
+                                    title={t('diagnosticsPage.lidarAnchorOdomRebases')}
+                                    value={lidarAnchor.odomRebases}
+                                />
+                            </Row>
+                        </>
+                    )}
                     <Typography.Paragraph type="secondary" style={{fontSize: 11, marginTop: 8, marginBottom: 0}}>
                         {t('diagnosticsPage.fusionGraphDescPart1')}{" "}
                         <Typography.Text code>/ros2_ws/maps/fusion_graph.*</Typography.Text>;

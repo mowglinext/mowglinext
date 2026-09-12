@@ -109,7 +109,7 @@ controller_server:
     min_theta_velocity_threshold: 0.0
     failure_tolerance: 1.0
     progress_checker_plugins: ["progress_checker"]
-    goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker"]
+    goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker", "transit_goal_checker"]
     controller_plugins: ["FollowPath", "FollowCoveragePath"]
 
     progress_checker:
@@ -144,6 +144,20 @@ controller_server:
       # drive straight into the dock. Slightly longer arrivals on
       # ordinary transit are an acceptable trade.
       yaw_goal_tolerance: 0.10
+
+    # Coverage TRANSITS (FollowStrip sub-path boundaries / detours,
+    # TransitToStrip) — selected per goal through the
+    # navigate_to_pose_transit.xml behaviour tree, so opennav_docking keeps
+    # stopped_goal_checker above. Final heading is IGNORED: FTC does its own
+    # PRE_ROTATE at the start of the next sub-path, while RPP cannot pivot at
+    # the end of a path (use_rotate_to_heading: false) and the 1 Hz
+    # replan-if-invalid loop made a 0.40 m transit with a ±0.10 rad yaw goal
+    # spin on the spot for 164 s (field 2026-09-12).
+    transit_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.30
+      yaw_goal_tolerance: 3.14
+      stateful: true
 
     # Coverage strip endpoint validation.
     #
@@ -357,6 +371,10 @@ controller_server:
       speed_slow: 0.16
       speed_angular: 45.0
       acceleration: 0.2
+      # After a hard obstacle hold, cap steering recovery acceleration so the
+      # freshly recomputed PID cannot jump directly from 0 to ±max_cmd_vel_ang.
+      # At the 10 Hz controller rate, 1.0 rad/s² changes omega by ~0.1 per tick.
+      obstacle_restart_angular_acceleration: 1.0
       min_speed_mps: 0.15
       # Anti-wheelspin / traction control. When the carrot commands forward speed
       # but the ACTUAL forward speed (odom) stays below stall_speed_ratio × the
@@ -664,9 +682,10 @@ waypoint_follower:
       waypoint_pause_duration: 200
 
 # velocity_smoother removed 2026-04-26 — caps live in the controllers
-# (RPP desired_linear_vel, MPPI vx_max/wz_max) and the firmware
-# deadband; an extra ramp layer here only added latency and confused
-# tuning. cmd_vel pipeline now skips this hop.
+# (RPP desired_linear_vel, FTC max_cmd_vel_*) and the final common slew
+# limiter lives in hardware_bridge, after twist_mux. Keeping the limiter at
+# that existing chokepoint covers every motion lane without another node;
+# exact-zero safety stops bypass its ramp. cmd_vel skips this Nav2 hop.
 
 # ---------------------------------------------------------------------------
 # Global costmap

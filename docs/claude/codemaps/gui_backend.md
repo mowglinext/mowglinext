@@ -154,7 +154,7 @@
 | `GET /swagger/*any` (root) | `gui/pkg/api/api.go:62` | from `gui/docs` |
 | `GET /`, `/assets/*`, SPA fallback (root) | `gui/pkg/api/web_static.go:19-25` | |
 
-`/mowglinext/call/:command` → ROS service (`mowglinext.go:554-717`): `high_level_control`→`/behavior_tree_node/high_level_control`; `emergency`→`/hardware_bridge/emergency_stop`; `mow_enabled`→`/hardware_bridge/mower_control`; `start_in_area`→`/behavior_tree_node/start_in_area`; `set_datum`→`/navsat_to_absolute_pose/set_datum`; `promote_obstacle`→`/map_server_node/promote_obstacle`; `ignore_obstacle`→`/obstacle_tracker/clear_obstacle` (dismisses the current detection; redetection can return); `discard_obstacle`→`/map_server_node/discard_obstacle`; `fusion_graph_save|clear`→`/fusion_graph_node/{save_graph,clear_graph}`; `coverage_clear_resume`→`/behavior_tree_node/clear_coverage_resume`; `reboot_board`→`/hardware_bridge/reboot_board`. All 10 s timeout.
+`/mowglinext/call/:command` → ROS service (`mowglinext.go:554-717`): `high_level_control`→`/behavior_tree_node/high_level_control`; `emergency`→`/hardware_bridge/emergency_stop`; `mow_enabled`→`/hardware_bridge/mower_control`; `start_in_area`→`/behavior_tree_node/start_in_area`; `set_datum`→`/navsat_to_absolute_pose/set_datum`; `promote_obstacle`→`/map_server_node/promote_obstacle`; `discard_obstacle`→`/map_server_node/discard_obstacle`; `ignore_obstacle`→`/obstacle_tracker/clear_obstacle` (dismisses the current detection; redetection can return); `fusion_graph_save|clear|clear_lidar_map`→`/fusion_graph_node/{save_graph,clear_graph,clear_lidar_map}` (`fusionGraphTriggerServices` map; `clear_lidar_map` drops only the LiDAR map-anchor occupancy grid, tested in `mowglinext_test.go` `TestServiceRoute_FusionGraphTriggers`); `coverage_clear_resume`→`/behavior_tree_node/clear_coverage_resume`; `reboot_board`→`/hardware_bridge/reboot_board`. All 10 s timeout.
 
 ### foxglove_bridge consumption (`gui/pkg/providers/ros.go`)
 | Logical key (browser) | ROS2 topic | Type | Adapter / decimation / throttle |
@@ -173,8 +173,8 @@
 | `path` / `plan` | `/coverage/full_plan` / `/plan` | `nav_msgs/msg/Path` | unthrottled |
 | `power`, `emergency` | `/hardware_bridge/power`, `/hardware_bridge/emergency` | `mowgli_interfaces/msg/{Power,Emergency}` | unthrottled |
 | `mowProgress` | `/map_server_node/mow_progress` | `nav_msgs/msg/OccupancyGrid` | 500 ms |
+| `lidarMap` | `/fusion_graph/lidar_map` | `nav_msgs/msg/OccupancyGrid` | 500 ms — fusion_graph's LiDAR anchor map; the map page draws it INSTEAD of the raw `/scan` points once it exists |
 | `diagnostics`, `fusionDiag` | `/diagnostics`, `/fusion_graph/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | unthrottled |
-| `icpOdom` | `/fusion_graph/icp_odometry` | `nav_msgs/msg/Odometry` | 200 ms |
 | `obstacles` | `/obstacle_tracker/obstacles` | `mowgli_interfaces/msg/ObstacleArray` | 200 ms |
 | `btLog`, `robotDescription`, `recordingTrajectory`, `coverageResumeAvailable` | `/behavior_tree_log`, `/robot_description`, `/behavior_tree_node/recording_trajectory`, `/behavior_tree_node/coverage_resume_available` | `nav2_msgs/msg/BehaviorTreeLog`, `std_msgs/msg/String`, `nav_msgs/msg/Path`, `std_msgs/msg/Bool` | unthrottled |
 | `cogHeading`, `magYaw` | `/imu/cog_heading`, `/imu/mag_yaw` | `sensor_msgs/msg/Imu` | 150 / 200 ms |
@@ -229,7 +229,7 @@ Tests (what each pins):
 
 ## Pitfalls
 - `getSchema` opens `asserts/mower_config.schema.json` **relative to the process CWD** (`settings.go:1043`); run the binary from `gui/` (Dockerfile sets `WORKDIR /app`) or every settings route 500s. Tests call `chdirToGuiRoot`.
-- Keys with **no schema default are never pruned** once written (`sparsifyFlat` only sees `defaults`; `settings.go:382-397`) — the reason `retiredParamKeys` and `setGnssStringIfNeeded` exist. `use_scan_matching` / `use_loop_closure` / `use_magnetometer` are not schema properties; the frontend writes them straight through `POST /settings/yaml` and they persist verbatim.
+- Keys with **no schema default are never pruned** once written (`sparsifyFlat` only sees `defaults`; `settings.go:382-397`) — the reason `retiredParamKeys` and `setGnssStringIfNeeded` exist. `use_lidar_map_anchor` / `lidar_anchor_shadow_mode` / `use_magnetometer` are not schema properties; the frontend writes them straight through `POST /settings/yaml` and they persist verbatim.
 - The schema has **no `x-yaml-node`** entries, so `extractNodeMappings` maps every key to the `mowgli` node; a param under another `ros__parameters` block in the existing file is cloned by `nestToROS2YAML` — and then duplicated under `mowgli` if it is also in `flat`.
 - `flattenROS2YAML` last-writer-wins on key collisions across nodes, in Go map order (`settings.go:253-275`).
 - `writePreservingPerms` keeps the file's uid/gid/mode; a freshly created yaml is `0664`, so ROS-side line-splice writers (dock pose, calibration, drive rollback — Invariant 6) need the same gid (`settings.go:48-57`).

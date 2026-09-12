@@ -430,28 +430,34 @@
     "clearGraphConfirmTitle": "Effacer le graphe de fusion ?",
     "clearGraphConfirmBody": "Cette action supprime tous les nœuds accumulés, les fermetures de boucle et la covariance — le localisateur repart de zéro. Cette action est irréversible.",
     "clearGraphConfirmOk": "Effacer le graphe",
+    "clearLidarMap": "Effacer la carte LiDAR",
+    "lidarMapCleared": "Carte LiDAR effacée",
+    "clearLidarMapConfirmTitle": "Effacer la carte de l'ancre LiDAR ?",
+    "clearLidarMapConfirmBody": "Cette action supprime la grille d'occupation géoréférencée dans laquelle l'ancre LiDAR projette les scans. L'ancre repasse en cartographie et ne peut plus tenir la position pendant une fenêtre RTK-Float tant que la carte n'a pas été reconstruite en RTK Fixe. Le graphe de fusion lui-même n'est pas touché.",
+    "clearLidarMapConfirmOk": "Effacer la carte LiDAR",
+    "lidarAnchorGroupTitle": "Ancre LiDAR",
+    "lidarAnchorState": "État de l'ancre",
+    "lidarAnchorStateOff": "Désactivée",
+    "lidarAnchorStateWaitingForMap": "En attente de carte",
+    "lidarAnchorStateMapping": "Cartographie",
+    "lidarAnchorStateAnchoring": "Ancrage",
+    "lidarAnchorShadowSuffix": "(ombre)",
+    "lidarAnchorSigma": "σ {{value}} m",
+    "lidarAnchorMapCells": "Cellules de carte",
+    "lidarAnchorSeeds": "amorces {{seeds}} · ignorées {{skipped}}",
+    "lidarAnchorVerdict": "Dernier verdict",
+    "lidarAnchorVerdictAccepted": "Accepté",
+    "lidarAnchorVerdictRejectedScore": "Rejeté (score)",
+    "lidarAnchorVerdictRejectedSpread": "Rejeté (dispersion)",
+    "lidarAnchorVerdictRejectedDeadReckoning": "Rejeté (navigation à l'estime)",
+    "lidarAnchorHitRatio": "taux de concordance {{pct}} %",
+    "lidarAnchorFactors": "Facteurs d'ancre",
+    "lidarAnchorFactorsHint": "appliqués au graphe",
+    "lidarAnchorAccepted": "Estimations acceptées",
+    "lidarAnchorRejectBreakdown": "{{rejected}} rejetées · score {{score}} · dispersion {{spread}} · estime {{dr}}",
+    "lidarAnchorReseeds": "Réamorçages",
+    "lidarAnchorOdomRebases": "Rebasages odom",
     "nodesInGraph": "Nœuds dans le graphe",
-    "withScans": "{{count}} avec scans",
-    "loopClosures": "Fermetures de boucle",
-    "icpSuccessRate": "Taux de réussite ICP",
-    "matches": "{{ok}}/{{total}} correspondances",
-    "scansReceived": "{{count}} scans reçus",
-    "icpMonitorTitle": "ICP / Recalage de scans",
-    "icpMonitorShort": "Moniteur ICP",
-    "icpScanMatchRate": "Taux de recalage",
-    "icpRejects": "Rejets ICP",
-    "icpRejectBreakdown": "rmse {{rmse}} · inliers {{inliers}} · cohérence {{sanity}} · divergence {{diverge}}",
-    "icpKeyframes": "Images-clés",
-    "icpKfMatches": "{{rate}} % · {{ok}}/{{total}} recalages clés",
-    "icpNoKeyframes": "aucune image-clé — pas de cap absolu",
-    "icpAttachRate": "{{rate}} % des scans intégrés",
-    "icpGpsWrongfix": "Rejets GPS mauvais-fix : {{count}}",
-    "icpStationaryPush": "poussée à l'arrêt : {{count}}",
-    "icpMonitorHint": "l'ICP image-à-image ne donne qu'un cap relatif ; le cap absolu nécessite images-clés / fermetures de boucle",
-    "icpHeading": "Cap ICP",
-    "fusedHeading": "Cap fusionné",
-    "icpHeadingDiff": "Δ cap (ICP−fusionné)",
-    "icpPosDiff": "Δ position (ICP−fusionné)",
     "poseSigma": "σ de pose",
     "yawSigma": "lacet ±{{value}}°",
     "fusionGraphDescPart1": "Graphe de facteurs GTSAM iSAM2. Enregistrer conserve les nœuds + scans dans",
@@ -505,7 +511,6 @@
     "subPathsLabel": "Sous-trajets",
     "subPathsSkipped": "{{count}} ignoré(s)",
     "handPushTitle": "Poussées à l'arrêt",
-    "attachRateTitle": "Scans intégrés",
     "coverage": "Couverture",
     "configurationCrossChecks": "Vérifications croisées de configuration",
     "noWarnings": "Aucun avertissement.",
@@ -633,7 +638,8 @@
     "rosbagDeleted": "Enregistrement supprimé",
     "rosbagDeleteFailed": "Impossible de supprimer l'enregistrement",
     "rosbagDeleteConfirmTitle": "Supprimer l'enregistrement ?",
-    "rosbagDeleteConfirmBody": "Ceci supprime définitivement l'enregistrement {{name}} du robot. Action irréversible."
+    "rosbagDeleteConfirmBody": "Ceci supprime définitivement l'enregistrement {{name}} du robot. Action irréversible.",
+    "gpsWrongfix": "Rejets GPS mauvais-fix : {{count}}"
   },
   "mowgliNextPage": {
     "headlineUntilHomePrefix": "Encore ",
@@ -1724,25 +1730,13 @@
       "label": "Période des nœuds du graphe",
       "description": "Cadence à laquelle le graphe de facteurs ajoute un nouveau nœud Pose2."
     },
-    "use_scan_matching": {
-      "label": "Recalage de scans LiDAR",
-      "description": "Ajouter des facteurs intermédiaires de recalage de scans LiDAR pour traverser les fenêtres RTK-Float."
+    "use_lidar_map_anchor": {
+      "label": "Ancre carte LiDAR",
+      "description": "Filtre particulaire scan-vers-carte qui tient la position XY quand le RTK Fixe est perdu."
     },
-    "use_loop_closure": {
-      "label": "Fermeture de boucle LiDAR",
-      "description": "Ajouter des facteurs de fermeture de boucle à partir de scans LiDAR revisités."
-    },
-    "icp_max_iter": {
-      "label": "Itérations max ICP",
-      "description": "Nombre maximal d'itérations pour la résolution ICP du recalage de scans."
-    },
-    "icp_max_corresp_dist": {
-      "label": "Distance de correspondance ICP",
-      "description": "Distance maximale entre paires de points considérée comme une correspondance."
-    },
-    "icp_max_rmse_m": {
-      "label": "RMSE max ICP",
-      "description": "Rejeter un recalage de scan dont le RMSE dépasse cette valeur."
+    "lidar_anchor_shadow_mode": {
+      "label": "Mode ombre de l'ancre",
+      "description": "Exécute et évalue l'ancre LiDAR en RTK Fixe sans l'appliquer."
     },
     "dock_blank_range": {
       "label": "Portée d'occultation de la base",
@@ -2457,9 +2451,6 @@
   },
   "settingsSensors": {
     "lidarSensor": "Capteur LiDAR",
-    "lidarDescriptionPart1": "Activez si votre robot dispose d'un LiDAR. Bascule aussi",
-    "lidarDescriptionAnd": " et ",
-    "lidarDescriptionPart2": " afin que le graphe de facteurs fusionne les scans LiDAR. Affinez-les dans l'onglet Localisation.",
     "imuBiasCalibration": "Calibration du biais IMU",
     "imuBiasCalibrationDescription": "Le pont matériel réestime automatiquement le biais gyro/accel de l'IMU pendant que le robot est garé et immobile sur la base. Ceci règle la façon dont il échantillonne.",
     "calibrationSamples": "Échantillons de calibration",
@@ -2467,7 +2458,8 @@
     "restWindowBeforeCal": "Fenêtre de repos avant calibration",
     "restWindowBeforeCalTooltip": "Durée pendant laquelle le robot doit être détecté immobile avant qu'une calibration ne démarre.",
     "periodicRecalInterval": "Intervalle de recalibration périodique",
-    "periodicRecalIntervalTooltip": "Réestime le biais IMU toutes les N secondes lorsque le robot est sur la base. 0 désactive la recalibration périodique."
+    "periodicRecalIntervalTooltip": "Réestime le biais IMU toutes les N secondes lorsque le robot est sur la base. 0 désactive la recalibration périodique.",
+    "lidarDescription": "À activer si le robot possède un LiDAR. Active la détection des obstacles et autorise la localisation sur carte, configurée dans l’onglet Localisation."
   },
   "settingsRain": {
     "rainBehavior": "Comportement en cas de pluie",
@@ -2536,12 +2528,12 @@
     "expertScopeDescription": "Les valeurs brutes de groupe de signaux, l'algorithme PVT, la fiabilité RTK, le délai RTK et le délai DGPS sont stockés ici pour une future traduction backend. La zone de texte de commande brute, le plan de simulation et les outils de réinitialisation/application nécessitent encore une API dédiée."
   },
   "settingsLocalization": {
-    "scanMatchingTitle": "Recalage de scan LiDAR",
-    "scanMatchingSummary": "Ajoute des facteurs intermédiaires ICP de /scan au graphe.",
-    "scanMatchingDetail": "Chaque nouveau nœud du graphe exécute un ICP sur le scan précédent et ajoute un BetweenFactor avec le mouvement relatif. Combat les pertes GPS mais coûte ~5 ms/tick à 10 Hz.",
-    "loopClosureTitle": "Fermeture de boucle",
-    "loopClosureSummary": "Cherche des revisites dans les scans passés et ajoute des facteurs LC.",
-    "loopClosureDetail": "Déclenche une recherche de candidats autour de chaque nouveau nœud (rayon de 5 m, âge minimum de 10 min). Les fermetures de boucle réussies ramènent la dérive vers la pose initialement cartographiée, même en cours de session.",
+    "lidarMapAnchorTitle": "Ancre carte LiDAR",
+    "lidarMapAnchorSummary": "Filtre particulaire scan-vers-carte qui tient la position quand le RTK Fixe est perdu (XY seulement).",
+    "lidarMapAnchorDetail": "Sous RTK Fixed, une sélection de scans alimente des tuiles géoréférencées persistantes. Une portion locale de la carte permet la localisation lorsque le GPS devient périmé ; seules les corrections XY validées entrent dans le graphe. Diagnostics → Fusion Graph indique son état.",
+    "anchorShadowTitle": "Mode ombre de l'ancre",
+    "anchorShadowSummary": "Exécute et mesure l'ancre en RTK Fixe sans l'appliquer.",
+    "anchorShadowDetail": "Maintient la calibration sous RTK Fixed fiable à la fréquence configurée du filtre, au lieu de séquences périodiques. Publie les candidats et compteurs pour comparaison ; aucun facteur n’est appliqué tant que Fixed reste fiable.",
     "magYawTitle": "Lacet magnétomètre",
     "magYawSummary": "Fusionne le lacet mag compensé en inclinaison comme facteur unaire de lacet.",
     "magYawDetail": "Désactivé par défaut — le biais induit par les moteurs rend le magnétomètre peu fiable sur la plupart des châssis. À n'activer qu'après une calibration mag moteurs coupés et la validation d'un |B| stable.",
@@ -2566,7 +2558,7 @@
     "lidarLocalizationTitle": "LiDAR — localisation (graphe de facteurs)",
     "lidarLocalizationIntro": "Optionnel. Quand activé,",
     "lidarLocalizationConsumes": "consomme",
-    "lidarLocalizationOutro": "comme facteurs intermédiaires de recalage de scan et facteurs de fermeture de boucle, afin que la pose en repère carte puisse tenir pendant des fenêtres RTK-Float de plusieurs minutes.",
+    "lidarLocalizationOutro": "pour se localiser dans les sous-cartes géoréférencées et corriger la position XY lorsque le GPS devient périmé. Sans repères exploitables, le LiDAR ne peut pas corriger la pose.",
     "yawSourcesTitle": "Sources de lacet",
     "magCalibrationTitle": "Calibration et réglage du magnétomètre",
     "magCalibrationIntroPrefix": "Utilisé uniquement quand",

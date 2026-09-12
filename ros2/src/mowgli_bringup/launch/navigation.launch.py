@@ -22,7 +22,8 @@ Navigation stack launch file for the Mowgli robot mower.
 Brings up:
   1. Localization — fusion_graph_node (GTSAM iSAM2 factor graph) owns
      both map→odom AND odom→base_footprint. Map-frame inputs: wheel +
-     IMU + GPS + COG (+ optional LiDAR scan-matching and loop-closure).
+     IMU + GPS + COG (+ an optional RTK-built LiDAR map anchor for
+     complete GNSS outages).
      Local-frame: wheel vx + gyro_z integrated at IMU rate (replaces
      the standalone robot_localization ekf_odom_node).
   2. Two helper nodes — cog_to_imu (GPS COG as a continuous absolute-
@@ -35,8 +36,7 @@ Brings up:
 Architecture (REP-105):
   map → odom → base_footprint → base_link → sensors
   fusion_graph_node owns both map→odom AND odom→base_footprint.
-  It runs WITHOUT LiDAR when use_scan_matching=false AND
-  use_loop_closure=false — the graph is then just a Pose2 backbone
+  It runs WITHOUT LiDAR when use_lidar_map_anchor=false — the graph is then just a Pose2 backbone
   with wheel between-factors, gyro between-factors, and GNSS
   lever-arm + COG / mag unaries; local-frame DR is still produced
   from the same wheel + gyro stream.
@@ -103,8 +103,6 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     _runtime_cfg_path = "/ros2_ws/config/mowgli_robot.yaml"
     _early_use_magnetometer = "false"
-    _early_use_scan_matching = "false"
-    _early_use_loop_closure = "false"
     _early_fusion_graph_period = "0.04"
     # GPS-derived dock detection: approach the cradle off RTK-Fixed
     # /gps/absolute_pose instead of the corruptible map→odom factor-graph TF
@@ -117,9 +115,8 @@ def generate_launch_description() -> LaunchDescription:
     # config layered on top (robot_config_util.load_robot_params). INSTALL-
     # DECIDED keys (e.g. lidar_enabled) live ONLY in the installed config and
     # are absent from the template, so their PRESENCE in _rp signals an
-    # explicit operator choice; DEFAULT toggles (use_magnetometer /
-    # use_scan_matching / …) fall through to the template value when the
-    # installed config omits them.
+    # explicit operator choice; default toggles such as use_magnetometer
+    # fall through to the template when the installed config omits them.
     #
     # LiDAR presence comes from the CONFIG ONLY — the LIDAR_ENABLED env var is
     # no longer read (see robot_config_util's "LiDAR presence" block). The yaml
@@ -133,27 +130,15 @@ def generate_launch_description() -> LaunchDescription:
         warn_lidar_key_absent(_runtime_cfg_path)
     _early_use_magnetometer = "true" if bool(
         _rp.get("use_magnetometer", False)) else "false"
-    _early_use_scan_matching = "true" if bool(
-        _rp.get("use_scan_matching", False)) else "false"
-    _early_use_loop_closure = "true" if bool(
-        _rp.get("use_loop_closure", False)) else "false"
+    _early_use_lidar_map_anchor = "true" if bool(
+        _rp.get("use_lidar_map_anchor", True)) else "false"
+    _early_lidar_anchor_shadow_mode = "true" if bool(
+        _rp.get("lidar_anchor_shadow_mode", False)) else "false"
     _early_fusion_graph_period = str(
         float(_rp.get("fusion_graph_node_period_s", 0.04)))
     _early_use_gps_dock_detection = "true" if bool(
         _rp.get("use_gps_dock_detection", True)) else "false"
 
-    # ------------------------------------------------------------------
-    # Loop-closure gating
-    # ------------------------------------------------------------------
-    # Loop closure (when use_loop_closure=true) is force-OFF on the
-    # very first boot — there is no persisted graph for the iSAM2
-    # backend to close against. fusion_graph_node auto-saves on dock
-    # arrival, so the next boot honours the operator yaml flag.
-    _graph_file = "/ros2_ws/maps/fusion_graph.graph"
-    _graph_exists = os.path.isfile(_graph_file)
-    _effective_use_loop_closure = (
-        _early_use_loop_closure if _graph_exists else "false"
-    )
 
     # ------------------------------------------------------------------
     # Declared arguments
@@ -168,7 +153,7 @@ def generate_launch_description() -> LaunchDescription:
     use_lidar_arg = DeclareLaunchArgument(
         "use_lidar",
         default_value=_early_use_lidar,
-        description="When false, use nav2_params_no_lidar.yaml (no obstacle layer, collision monitor pass-through) and force fusion_graph scan-matching / loop-closure off. Default read from mowgli_robot.yaml.lidar_enabled ONLY (the LIDAR_ENABLED env var is not consulted); CLI/compose override wins.",
+        description="When false, use nav2_params_no_lidar.yaml (no obstacle layer, collision monitor pass-through) and disable the fusion_graph LiDAR map anchor. Default read from mowgli_robot.yaml.lidar_enabled ONLY (the LIDAR_ENABLED env var is not consulted); CLI/compose override wins.",
     )
 
     use_magnetometer_arg = DeclareLaunchArgument(
@@ -177,18 +162,18 @@ def generate_launch_description() -> LaunchDescription:
         description="Enable magnetometer yaw fusion. Default read from mowgli_robot.yaml.use_magnetometer; CLI override wins. OFF on chassis without motor-isolated mag.",
     )
 
-    use_scan_matching_arg = DeclareLaunchArgument(
-        "use_scan_matching",
-        default_value=_early_use_scan_matching,
-        description="LiDAR scan-matching between consecutive nodes (fusion_graph). Default read from mowgli_robot.yaml. ANDed with use_lidar before it reaches fusion_graph_node: with no LiDAR there is no /scan publisher, so the factors cannot exist.",
-    )
 
-    use_loop_closure_arg = DeclareLaunchArgument(
-        "use_loop_closure",
-        default_value=_effective_use_loop_closure,
-        description="Loop-closure search against earlier graph nodes (fusion_graph). Default read from mowgli_robot.yaml AND gated on a persisted graph file existing on disk — first session can't loop-close against itself. Also ANDed with use_lidar before it reaches fusion_graph_node.",
-    )
 
+    use_lidar_map_anchor_arg = DeclareLaunchArgument(
+        "use_lidar_map_anchor",
+        default_value=_early_use_lidar_map_anchor,
+        description="LiDAR map anchor (fusion_graph): persistent tiles built under RTK-Fixed, with a Beluga particle filter enabled only after a complete GNSS outage; XY-only factor. Default read from mowgli_robot.yaml. ANDed with use_lidar; no scan subscription without LiDAR.",
+    )
+    lidar_anchor_shadow_mode_arg = DeclareLaunchArgument(
+        "lidar_anchor_shadow_mode",
+        default_value=_early_lidar_anchor_shadow_mode,
+        description="LiDAR map anchor SHADOW mode (fusion_graph): run, score and publish the particle filter under RTK-Fixed as well, never apply a factor — the field measurement of the anchor against RTK. Default read from mowgli_robot.yaml. LiDAR-gated.",
+    )
     use_gps_dock_detection_arg = DeclareLaunchArgument(
         "use_gps_dock_detection",
         default_value=_early_use_gps_dock_detection,
@@ -230,29 +215,15 @@ def generate_launch_description() -> LaunchDescription:
     use_sim_time = LaunchConfiguration("use_sim_time")
     use_lidar = LaunchConfiguration("use_lidar")
     use_magnetometer = LaunchConfiguration("use_magnetometer")
-    use_scan_matching = LaunchConfiguration("use_scan_matching")
-    use_loop_closure = LaunchConfiguration("use_loop_closure")
+    use_lidar_map_anchor = LaunchConfiguration("use_lidar_map_anchor")
+    lidar_anchor_shadow_mode = LaunchConfiguration("lidar_anchor_shadow_mode")
     use_gps_dock_detection = LaunchConfiguration("use_gps_dock_detection")
     fusion_graph_tf_lead_s = LaunchConfiguration("fusion_graph_tf_lead_s")
     fusion_graph_node_period_s = LaunchConfiguration("fusion_graph_node_period_s")
 
     def lidar_gated(flag):
-        """AND a fusion_graph scan flag with ``use_lidar``.
-
-        Without this, the two gates leaked: use_scan_matching / use_loop_closure
-        default from the TEMPLATE (both `true`), which has no relation to
-        `lidar_enabled`, so a GPS-only stack still handed fusion_graph
-        use_scan_matching=True — it subscribed to /scan_deskewed with no
-        publisher (scan_deskew_node is itself use_lidar-gated), matched nothing,
-        and published success-shaped diagnostics forever. Observed live on
-        2026-08-31: use_lidar=false, use_scan_matching=True,
-        /scan_deskewed publisher count 0, scans_received 0.
-
-        The AND is evaluated at SUBSTITUTION time, not here, so it also covers a
-        CLI/compose `use_lidar:=` override (full_system.launch.py always passes
-        use_lidar in explicitly, so the declared default is not the live value).
-        The declared args stay pure operator INTENT — `use_lidar:=true` plus a
-        yaml `use_scan_matching: true` still turns matching on.
+        """Gate the scan-to-map anchor on hardware availability at substitution
+        time, including CLI/compose overrides of ``use_lidar``.
         """
         tokens = str(TRUE_TOKENS)
         return PythonExpression([
@@ -388,16 +359,16 @@ def generate_launch_description() -> LaunchDescription:
     # in-bounds produced loops too tight to track (wz≈vx/r), so the robot
     # looped/hesitated at corners — the bug this knob prevents. Injected into
     # coverage_server.min_turning_radius; operator-tunable via mowgli_robot.yaml.
-    min_turning_radius = 0.15
+    min_turning_radius = 0.20
     # connector_turn_radius: nominal radius of the swath-to-swath turn-around
     # arcs in the continuous coverage path. A forward 180° reversal at op_width
     # spacing always loops (a clean U needs r ≤ op_width/2 ≈ 0.09, below the
     # min_turning_radius floor), but the loop SIZE scales with this radius: 0.30
-    # balloons a big teardrop into the headland (the "turning loops" seen with
-    # >2 headland passes); ~op_width (0.18) collapses it to a compact U-turn.
+    # balloons a big teardrop into the headland. 0.20 m matches FTC's tightest
+    # controllable bend at the deployed bend speed and angular limit.
     # Injected into coverage_server.connector_turn_radius; operator-tunable via
-    # mowgli_robot.yaml (raise toward 0.30 if the tighter turns hesitate).
-    connector_turn_radius = 0.18
+    # mowgli_robot.yaml when a site needs a wider turn.
+    connector_turn_radius = 0.20
     # wheel_track: centre-to-centre wheel distance. NOT injected into anything
     # here — it is read so the turn-geometry check below can compare the planned
     # turn radii against the HALF-track. Must match the firmware WHEEL_BASE that
@@ -1097,7 +1068,7 @@ def generate_launch_description() -> LaunchDescription:
     # fusion_graph_node — GTSAM iSAM2 factor-graph localizer. Always
     # primary (no fallback to ekf_map_node, which was removed alongside
     # the use_fusion_graph flag in this refactor). Works WITHOUT LiDAR
-    # when use_scan_matching=false AND use_loop_closure=false (default).
+    # when use_lidar_map_anchor=false (forced when use_lidar=false).
     # Reads datum + lever-arm from mowgli_robot.yaml inside the include.
     fusion_graph_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -1111,8 +1082,8 @@ def generate_launch_description() -> LaunchDescription:
             "use_magnetometer": use_magnetometer,
             # LiDAR-gated: no scanner -> no scan factors, and no subscription to
             # a topic nothing publishes. See lidar_gated() above.
-            "use_scan_matching": lidar_gated(use_scan_matching),
-            "use_loop_closure": lidar_gated(use_loop_closure),
+            "use_lidar_map_anchor": lidar_gated(use_lidar_map_anchor),
+            "lidar_anchor_shadow_mode": lidar_gated(lidar_anchor_shadow_mode),
             "primary_mode": "true",
             "tf_publish_lead_s": fusion_graph_tf_lead_s,
             "node_period_s": fusion_graph_node_period_s,
@@ -1323,8 +1294,8 @@ def generate_launch_description() -> LaunchDescription:
             use_sim_time_arg,
             use_lidar_arg,
             use_magnetometer_arg,
-            use_scan_matching_arg,
-            use_loop_closure_arg,
+            use_lidar_map_anchor_arg,
+            lidar_anchor_shadow_mode_arg,
             use_gps_dock_detection_arg,
             cog_stationary_seed_rate_hz_arg,
             fusion_graph_tf_lead_arg,

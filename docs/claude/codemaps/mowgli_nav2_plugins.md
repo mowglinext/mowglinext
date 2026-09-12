@@ -1,7 +1,7 @@
 # Codemap: mowgli_nav2_plugins
 
-> Nav2 plugin library (`libmowgli_nav2_plugins.so`) for the COVERAGE lane of `controller_server`. It owns `mowgli_nav2_plugins/FTCController` (Follow-the-Carrot: 5-state FSM, decoupled lon/lat/ang PID, anti-wheelspin stall crawl, lateral obstacle deviation with zone guard/mask, cul-de-sac guard, bounded reverse-escape, oscillation override) in the `FollowCoveragePath` slot, and `mowgli_nav2_plugins/PathProgressGoalChecker` in the `coverage_goal_checker` slot. Transit (`FollowPath`) is upstream RotationShim+RPP and is NOT in this package (CLAUDE.md Invariant 8). No node of its own — everything runs inside `controller_server`.
-> Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
+> Nav2 plugin library (`libmowgli_nav2_plugins.so`) for the COVERAGE lane of `controller_server`. It owns `mowgli_nav2_plugins/FTCController` (Follow-the-Carrot: 5-state FSM, decoupled lon/lat/ang PID, anti-wheelspin stall crawl, lateral obstacle deviation with zone guard/mask, debounced obstacle recovery, cul-de-sac guard, bounded reverse-escape, oscillation override) in the `FollowCoveragePath` slot, and `mowgli_nav2_plugins/PathProgressGoalChecker` in the `coverage_goal_checker` slot. Transit (`FollowPath`) is upstream RotationShim+RPP and is NOT in this package (CLAUDE.md Invariant 8). No node of its own — everything runs inside `controller_server`.
+> Index updated 2026-09-09 for FTC obstacle-hold steering recovery; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
 ## Where to look
@@ -19,6 +19,7 @@
 | Cul-de-sac guard (refuse to skirt a wall) | `obstacle_deviation.cpp` `hasClearExit` + `require_clear_exit` branch in `updateLateralDeviation()` |
 | Bounded straight reverse-escape (SAFETY-CRITICAL, only place FTC reverses) | `include/mowgli_nav2_plugins/ftc_reverse_escape.hpp` + `ftc_controller.cpp` `reverseEscapeOrWait()` (L1730); emitted at L921 |
 | Wait-before-abort window (`obstacle_wait_timeout_s`) | `ftc_controller.cpp` `waitOrThrowForObstacle()` (L1703) — the ControllerException throw is L1717 |
+| Smooth recovery after obstacle hold (continuous-clear debounce, one episode deadline, PID/carrot reset, linear + angular ramps) | `include/mowgli_nav2_plugins/ftc_obstacle_wait.hpp`, `ftc_stall.hpp` `ClampForwardToMovementRamp()`, and `ftc_controller.cpp` `holdObstacleMotion()` |
 | Body-in-lethal check at the ACTUAL robot pose (SAFETY_REVIEW F-C1) | `ftc_controller.cpp` `currentBodyInLethal()` (L1663), gated at L907 |
 | Legacy collision throw (deviation OFF, e.g. no-LiDAR) | `ftc_controller.cpp` `checkCollision()` (L1577) — frame caveat at L1621 |
 | Oscillation detector (ring buffer, zero-crossings) | `src/oscillation_detector.cpp` `FailureDetector::detect`; wrapper `checkOscillation()` (L2296) |
@@ -38,13 +39,14 @@
 | File | Lines | Purpose |
 |------|-------|---------|
 | **`ros2/src/mowgli_nav2_plugins/`** | | |
-| `CMakeLists.txt` | 192 | One shared lib from 5 .cpp; exports both plugin XMLs to `nav2_core`; 5 gtests |
+| `CMakeLists.txt` | 201 | One shared lib from 5 .cpp; exports both plugin XMLs to `nav2_core`; 6 gtests |
 | `package.xml` | 40 | ament_cmake; deps nav2_core/nav2_costmap_2d/nav2_util/pluginlib/tf2*/Eigen; `<nav2_core plugin=...>` exports |
 | `ftc_controller_plugin.xml` | 12 | pluginlib: `mowgli_nav2_plugins/FTCController` → `nav2_core::Controller`, `<library path="mowgli_nav2_plugins">` |
 | `goal_checker_plugin.xml` | 16 | pluginlib: `mowgli_nav2_plugins/PathProgressGoalChecker` → `nav2_core::GoalChecker` |
 | **`include/mowgli_nav2_plugins/`** | | |
-| `ftc_controller.hpp` | 581 | `FTCController` class: FSM enum, carrot/PID/deviation/reverse/oscillation state, `struct Config` (all params + C++ defaults) |
-| `ftc_stall.hpp` | 74 | Pure `StallDecision()` — stall_time debounce, crawl easing, `in_stall` flag |
+| `ftc_controller.hpp` | 594 | `FTCController` class: FSM enum, carrot/PID/deviation/reverse/oscillation state, `struct Config` (all params + C++ defaults) |
+| `ftc_stall.hpp` | 95 | Pure `StallDecision()` plus acceleration-ramp clamp used after obstacle holds |
+| `ftc_obstacle_wait.hpp` | 47 | Pure continuous-followable debounce and command slew clamp for obstacle-hold recovery |
 | `ftc_reverse_escape.hpp` | 83 | Pure `ReverseEscapeDecide()` / `ReverseEscapeAdvance()` — opt-in, budget cap, rear-clear gate |
 | `ftc_start_index.hpp` | 80 | Pure `ChooseStartIndex()` — idx 0 by default; legacy nearest snap breaks ties to the earlier index |
 | `obstacle_deviation.hpp` | 236 | `BoundaryGuard` (zone guard + zone mask) and `ObstacleDeviation` static helpers; thresholds `kLethalThreshold=253`, `kLethalOnlyThreshold=254` |
@@ -57,7 +59,8 @@
 | `oscillation_detector.cpp` | 153 | `FailureDetector` impl (normalise by v_max/ω_max, half-full buffer before deciding) |
 | `path_progress_goal_checker.cpp` | 317 | `initialize` (params + plan sub), `onPath` fingerprint, `isGoalReached`, `getTolerances`; `PLUGINLIB_EXPORT_CLASS` at bottom |
 | **`test/`** | | |
-| `test_ftc_stall.cpp` | 160 | 10 cases on `StallDecision` (disable, grace, crawl, reset, cap-not-floor) |
+| `test_ftc_stall.cpp` | 182 | 13 cases on stall behavior and acceleration-limited obstacle restart |
+| `test_ftc_obstacle_wait.cpp` | 61 | 6 cases: continuous-clear hold, blocked-scan reset, alternating scans never resume, angular restart slew |
 | `test_ftc_reverse_escape.cpp` | 108 | 10 cases: opt-in default, rear-blocked never reverses, budget cap, advance arithmetic |
 | `test_ftc_start_index.cpp` | 77 | 4 cases: fresh plan → 0, closed ring never resolves to its end, legacy snap, empty plan |
 | `test_obstacle_deviation.cpp` | 823 | ~50 cases on a 400×400 @0.05 m synthetic costmap: detection, side choice (left bias), grow, boundary guard, zone mask (#517), footprint model, clip/expand, `hasClearExit`, lookahead clamp |
@@ -89,6 +92,7 @@ FTC: all `FollowCoveragePath.*` keys are declared in `declareParameters()`; all 
 | `speed_slow` | L357 = 0.16 | 0.2 | L781 = `derive_turn_speed(mowing_speed, turn_speed_ratio, min_speed_mps)` (`robot_config_util.py:268`) |
 | `max_cmd_vel_speed` / `max_cmd_vel_ang` | L403 = 0.30 / L404 = 0.8 | 2.0 / 2.0 | L764 raised to `mowing_speed` if larger |
 | `min_speed_mps` | L360 = 0.15 | 0.15 | — (read back at L778 as `derive_turn_speed`'s floor) |
+| `obstacle_restart_angular_acceleration` | L363 = 1.0 rad/s² | 1.0 | — (active only from an obstacle hard hold through its moving probation) |
 | `stall_speed_ratio` / `stall_grace_s` / `stall_crawl_speed` | L366–368 = 0.35 / 0.6 / 0.08 | same | — (pinned by `test_ftc_stall_trio_present_in_both_variants`) |
 | `kp_lat` / `kd_lat` / `kp_ang` / `kp_ang_following` / `derivative_filter_tau` | L388 0.8 / L390 0.5 / L391 1.5 / L392 1.0 / L402 0.2 | 1.0 / 0 / 1.0 / =kp_ang / 0 | — |
 | `max_goal_distance_error` | L410 = 0.50 | 1.0 | — but FLOORS `coverage_goal_checker.xy_goal_tolerance` (L890–905) |
@@ -101,7 +105,7 @@ FTC: all `FollowCoveragePath.*` keys are declared in `declareParameters()`; all 
 | `obstacle_body_half_width` / `obstacle_clearance_margin` | L477 = 0.12 / L490 = 0.05 | 0.20 / 0.0 | margin: L831 = clamp(`obstacle_clearance_margin`, 0, 0.5) |
 | `require_clear_exit` / `confine_deviation_to_zone` / `ignore_obstacles_outside_zone` | L468 true / (absent) / L508 true | true / true / true | — |
 | `max_lateral_deviation` / `deviation_step` / `deviation_blend_rate` | L515 1.5 / L516 0.05 / L517 0.5 | same | L811 = clamp(`max_obstacle_avoidance_distance`, 0.5, 10.0) |
-| `obstacle_wait_timeout_s` / `obstacle_clear_hold_s` | L525 2.5 / L526 1.5 | 2.5 / 1.5 | L838 = clamp(`obstacle_wait_timeout_s`, 0.5, 60) |
+| `obstacle_wait_timeout_s` / `obstacle_clear_hold_s` | L529 2.5 / L530 1.5 | 2.5 / 1.5 | L838 = clamp(`obstacle_wait_timeout_s`, 0.5, 60) |
 | `obstacle_reverse_enabled` / `_max_dist_m` / `_speed_mps` | L544 true / L545 0.30 / L546 0.10 | **false** / 0.30 / 0.10 | L844–847 from `mowgli_robot.yaml` (template: true / 0.30 / 0.15), clamps dist [0,1], speed [0,0.3] |
 | `oscillation_recovery` / `_v_eps` / `_omega_eps` / `_recovery_min_duration` | not in yaml | true / 0.05 / 0.05 / 5.0 | buffer len = round(duration × 10) samples |
 | `coverage_goal_checker.progress_threshold` | L172 = 0.95 | 0.95 | — |
@@ -130,6 +134,7 @@ colcon test --packages-select mowgli_bringup       # runs test/test_nav2_params.
 
 Unit tests (all ROS-free gtests, registered in `CMakeLists.txt`):
 - `test/test_ftc_stall.cpp` — `StallDecision` disable/grace/crawl/reset; stall flag caps output instead of flooring.
+- `test/test_ftc_obstacle_wait.cpp` — an obstacle wait resumes only after a continuous followable window; any blocked scan resets the evidence; obstacle restart steering respects its slew rate without overshoot.
 - `test/test_ftc_reverse_escape.cpp` — default is opt-in OFF; rear-blocked never reverses; budget hard cap; negative dt ignored.
 - `test/test_ftc_start_index.cpp` — fresh plan starts at 0; closed ring never resolves to its last index.
 - `test/test_obstacle_deviation.cpp` — detection reach vs clearance reach are separate; left bias on ties; boundary guard rejects out-of-zone offsets; zone mask ignores out-of-zone lethal but keeps in-zone; footprint model thresholds 254 while line model 253; `hasClearExit` false when obstacle fills the window.

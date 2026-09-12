@@ -57,20 +57,16 @@ There is only one, and you don't choose it: `fusion_graph_node`, a GTSAM iSAM2 f
 
 Until 2026-05 the stack ran a robot_localization dual EKF (`ekf_map_node` + `ekf_odom_node`) with the factor graph as an opt-in alternative behind a `use_fusion_graph` launch argument. The EKFs, that launch argument, and the earlier slam_toolbox / Kinematic-ICP / FusionCore experiments were all removed; nothing else may publish those two transforms.
 
-What you *can* still toggle, in the GUI's *Settings → Localization* section (then *Restart ROS2*), are the optional factors the graph adds on top of wheels + IMU + GPS + GPS-COG yaw:
+The localization settings expose `use_lidar_map_anchor`, `lidar_anchor_shadow_mode`, and `use_magnetometer`. The map anchor learns persistent tiles under RTK-Fixed and is reserved for complete GNSS outages; fresh RTK Float remains GNSS-owned. Shadow mode measures anchor error under Fixed without adding factors. Both LiDAR switches are ANDed with `lidar_enabled`.
 
-- **`use_scan_matching`** — LiDAR scan-matching between consecutive graph nodes.
-- **`use_loop_closure`** — loop-closure search against earlier nodes (also needs a persisted graph on disk, so it does nothing on the very first session).
-- **`use_magnetometer`** — magnetometer yaw factor, once the compass is calibrated.
-
-Both LiDAR toggles are ANDed with `lidar_enabled`: with no LiDAR there is no `/scan`, so the factors cannot exist. They are worth enabling if your garden has multi-minute RTK-Float windows or GPS-denied corners. See [Architecture](Architecture#optional-factor-graph-localizer-fusion_graph) for the full picture.
+Scan-to-scan ICP, loop closure, and their settings were removed. See [Architecture](Architecture#optional-factor-graph-localizer-fusion_graph) for the full picture.
 
 ### What do the *Save graph* / *Clear graph* buttons in Diagnostics do?
 
 They call the `~/save_graph` / `~/clear_graph` services on `fusion_graph_node`.
 
 - **Save graph** — persists `<graph_save_prefix>.{graph,scans,meta}` to disk (`/ros2_ws/maps/fusion_graph.*` by default). The node also auto-saves on dock arrival, whenever it leaves the RECORDING state, and every 5 min while AUTONOMOUS, so the button is mostly a "checkpoint before I shut down ROS2 manually" affordance.
-- **Clear graph** — wipes iSAM2 + accumulated factors + per-node scans. The node stays alive; the next valid pose seed (GPS, set_pose, or scan-match relocalization) re-initializes. Use after relocating the robot to a new garden.
+- **Clear graph** — wipes iSAM2 and accumulated factors. The node stays alive; the next valid GPS or set-pose seed re-initializes it. Use after relocating the robot to a new garden.
 
 ## Development
 

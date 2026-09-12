@@ -221,6 +221,36 @@ if(BUILD_TESTING)
     action_msgs
   )
 
+  # ---- test_boundary_recovery ----
+  # Verifies the safety-critical keepout filter service sequence used to
+  # recover a robot whose current global-costmap cell is outside the area.
+  ament_add_gtest(test_boundary_recovery
+    test/test_boundary_recovery.cpp
+    src/navigation_nodes.cpp
+  )
+
+  target_include_directories(test_boundary_recovery PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  ament_target_dependencies(test_boundary_recovery
+    rclcpp
+    rclcpp_action
+    behaviortree_cpp
+    mowgli_interfaces
+    nav2_msgs
+    nav_msgs
+    geometry_msgs
+    std_msgs
+    std_srvs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+    rcl_interfaces
+    action_msgs
+  )
+
   # ---- test_get_next_unmowed_area ----
   # Regression: the mow-selection path SKIPS navigation-only areas. Stands up a
   # real in-process get_mowing_area service returning a nav-only area + a mowing
@@ -338,6 +368,26 @@ if(BUILD_TESTING)
   # test_coverage_transit_gap.cpp. Header-only on both sides (constexpr class
   # member + constexpr free constant), so no coverage_nodes.cpp / .cpp source
   # needs linking here.
+  # Structural pin: navigate_to_pose_transit.xml selects transit_goal_checker
+  # and otherwise matches navigate_to_pose.xml (field 2026-09-12).
+  ament_add_gtest(test_transit_tree
+    test/test_transit_tree.cpp
+  )
+  target_compile_definitions(test_transit_tree PRIVATE
+    MOWGLI_TRANSIT_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/navigate_to_pose_transit.xml"
+    MOWGLI_NAV_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/navigate_to_pose.xml"
+  )
+
+  # Blade pause/resume across a short LiDAR dropout (scan_pause.hpp) — pure
+  # header, no ROS.
+  ament_add_gtest(test_scan_pause
+    test/test_scan_pause.cpp
+  )
+  target_include_directories(test_scan_pause PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   ament_add_gtest(test_coverage_transit_gap
     test/test_coverage_transit_gap.cpp
   )

@@ -94,12 +94,12 @@ Declared in `on_configure` (`coverage_server.cpp:53-105`). "Injected" = overwrit
 | `robot_width` | 0.40 | `chassis_width` → `navigation.launch.py:930` (semantic only + footprint check `coverage_server.cpp:635-636`) | configure |
 | `operation_width` | 0.18 (yaml 0.16) | `max(0.05, tool_width − swath_overlap)` → `:924`; template `tool_width` `:195`, `swath_overlap` `:405` | configure |
 | `default_headland_width` | 0.20 | `headland_width` (template `:344`) → `:931`; only used when `num_headland_passes == 0` (AUTO) | configure |
-| `num_headland_passes` | 0 | `num_headland_passes` (template `:374`, default 2) → `:932` **unclamped** (`<0` NONE / `0` AUTO / `>0` FORCED) | configure (restart to change) |
+| `num_headland_passes` | 0 | `num_headland_passes` (template `:374`, default 5) → `:932` **unclamped** (`<0` NONE / `0` AUTO / `>0` FORCED) | configure (restart to change) |
 | `chassis_safety_inset` | 0.0 | `chassis_safety_inset` (template `:396`, 0.2) → `:935`; launch fallback 0.0 `:615-623`; server clamps ≥0 `:468` | LIVE per plan |
 | `min_swath_length` | 0.15 | not injected (`nav2_params_base.yaml:1180`) | LIVE |
 | `ring_direction` | 0 | `mow_direction` (template `:379`) → `:934` (0 F2C natural, 1 CW, 2 CCW) | LIVE |
-| `min_turning_radius` | 0.15 | `min_turning_radius` (template `:416`) clamped [0.10, 0.50] `:790` → `:944` | LIVE |
-| `connector_turn_radius` | 0.18 | `connector_turn_radius` — **no template key**; launch default `:403`, override read `:591-592`, clamped [floor, 0.50] `:791-792` → `:948` | LIVE |
+| `min_turning_radius` | 0.20 | `min_turning_radius` (template `:416`) clamped [0.10, 0.50] `:790` → `:944` | LIVE |
+| `connector_turn_radius` | 0.20 | `connector_turn_radius` — **no template key**; launch default `:403`, override read `:591-592`, clamped [floor, 0.50] `:791-792` → `:948` | LIVE |
 | `obstacle_margin` | 0.0 | `obstacle_margin` (template `:665`, 0.2) clamped [0, 1] `:940`; server re-clamps `coverage_server.cpp:473-474` | LIVE |
 | `action_server_result_timeout` | 15.0 | not injected | configure |
 | `use_sim_time` | false | `nav2_params_base.yaml:1152` | configure |
@@ -149,7 +149,7 @@ cd ros2 && PACKAGES=mowgli_coverage ./scripts/test.sh
 # single suite: ./build/mowgli_coverage/test_coverage_planning --gtest_filter='CoverageConnectorStats.*'
 
 # Run the node alone and plan by hand
-ros2 run mowgli_coverage mowgli_coverage --ros-args -p operation_width:=0.16 -p num_headland_passes:=2
+ros2 run mowgli_coverage mowgli_coverage --ros-args -p operation_width:=0.16 -p num_headland_passes:=5
 ros2 lifecycle set /coverage_server configure && ros2 lifecycle set /coverage_server activate
 ros2 action send_goal /plan_coverage mowgli_interfaces/action/PlanCoverage \
   "{outer_boundary: {points: [{x: 0.0, y: 0.0}, {x: 6.0, y: 0.0}, {x: 6.0, y: 6.0}, {x: 0.0, y: 6.0}]}, obstacles: [], mow_angle_deg: -1.0}"
@@ -226,7 +226,7 @@ CI: `.github/workflows/ros2-ci.yml` — F2C v3 built from source at SHA `884d895
   (`coverage_server.cpp:34-51`) — a bare `declare_parameter` throws and bricks Nav2 bringup.
 - `num_headland_passes` is read once at configure (`:70`); `<0` must reach the node unclamped
   (`navigation.launch.py:418-422`, guarded by `test_launch_injection.py:134`). `headland_width` only
-  matters when it is 0 (AUTO) — the template forces 2.
+  matters when it is 0 (AUTO) — the template forces 5.
 - `chassis_safety_inset` is "how far inside the recorded line the outermost DRIVEN pass sits":
   `field_offset = inset − op_width/2` (`coverage_planning.cpp:853`), negative → outward expansion so
   ring 0 rides ON the line at inset 0; floored at 0 when rings are off. The chassis-footprint check
@@ -235,11 +235,10 @@ CI: `.github/workflows/ros2-ci.yml` — F2C v3 built from source at SHA `884d895
   NOT `safe_boundary` (`coverage_server.cpp:583-596`, rationale `coverage_planning.hpp:85-113`).
   With rings off it is `safe_boundary` exactly; on-edge swath ends pass via `kOnEdgeTolM` 1 mm
   (`coverage_planning.cpp:69-94`) — do NOT re-add the 0.03 m outward expansion (`:86-93`).
-- Expect the `PlanCoverage connectors … fallback rate` WARN on every plan at shipped defaults
-  (~97 % straight joins, 1 arc in 32): the headland apron (`num_headland_passes × operation_width`
-  = 0.32 m) is narrower than an omega turn's forward extent, so no radius in the shrink range fits
-  (`coverage_planning.hpp:200-218`, `coverage_server.cpp:161-176`). Raising `min_turning_radius`
-  is not the lever (#499).
+- The old two-pass geometry produced a `PlanCoverage connectors … fallback rate` WARN on every
+  plan (~97 % fallback, 1 arc in 32). The five-pass default provides enough headland apron for
+  0.20 m turns; a high fallback rate now indicates restrictive site geometry. Heading-discontinuous
+  fallbacks are split into blade-off transits and never driven as zero-radius corners (#499).
 - `clampInsideRing` (#388, `coverage_planning.cpp:1275-1335`) silently nudges out-of-bounds poses
   2 cm inside the clearance ring; only residuals beyond `kBoundarySlackM` 0.05 reach the ERROR log
   (`coverage_server.cpp:673-677`).

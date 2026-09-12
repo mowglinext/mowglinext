@@ -370,9 +370,9 @@ def check_turn_geometry(min_turn_radius, connector_turn_radius, wheel_track,
 
     WARNINGS ONLY — never an exception — and that is load-bearing:
 
-      1. the CURRENTLY SHIPPED defaults trip check A (min_turning_radius 0.15 <=
-         half-track 0.1625), so raising would refuse to start navigation on every
-         existing robot, turning a lawn-quality defect into a total outage;
+      1. installed robots may still carry the old min_turning_radius 0.15 value,
+         which trips check A against the 0.1625 m half-track; rejecting it would
+         turn a lawn-quality warning into a total outage during an upgrade;
       2. neither condition is a safety hazard at launch. The firmware remains the
          sole blade-safety authority and still owns the e-stop; what these degrade
          is mowing QUALITY, and a robot that refuses to mow is strictly worse than
@@ -403,9 +403,9 @@ def check_turn_geometry(min_turn_radius, connector_turn_radius, wheel_track,
             "{:+.3f} m/s while the outer runs {:.3f} m/s — a reversing inner wheel "
             "carves the lawn at swath ends (issue #499). Raise "
             "mowgli_robot.yaml.min_turning_radius above {:.4f} m — but note that "
-            "at the shipped headland apron the coverage server fits an arc at only "
-            "~1 join in 32 anyway ('PlanCoverage connectors:'), so this alone will "
-            "not change the swath-end turns.".format(
+            "with the old two-pass headland apron the coverage server fitted an "
+            "arc at only ~1 join in 32 ('PlanCoverage connectors:'), so update the "
+            "headland pass count together with this radius.".format(
                 r_floor, wheel_track, half_track, v_in, v_out, half_track))
     # Planner/controller consistency: the tightest arc FTC can COMMAND at the turn
     # speed is turn_speed / max_cmd_vel_ang. An arc tighter than that saturates the

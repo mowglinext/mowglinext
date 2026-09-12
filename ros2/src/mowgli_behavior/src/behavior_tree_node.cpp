@@ -331,7 +331,7 @@ private:
     // full_system.launch.py; the values below are only the compile-time
     // fallbacks for a node launched without them.
     StartBlockedEscapeCfg escape_cfg;
-    escape_cfg.enabled = declare_parameter<bool>("start_blocked_escape_enabled", true);
+    escape_cfg.enabled = declare_parameter<bool>("start_blocked_escape_enabled", false);
     escape_cfg.speed = declare_parameter<double>("start_blocked_escape_speed", 0.10);
     escape_cfg.distance = declare_parameter<double>("start_blocked_escape_distance", 0.40);
     escape_cfg.timeout_s = declare_parameter<double>("start_blocked_escape_timeout_s", 6.0);
@@ -918,6 +918,25 @@ private:
     }
 
     RCLCPP_INFO(get_logger(), "Loading behavior tree from: %s", tree_file.c_str());
+
+    // Coverage transits use a sibling tree with the transit goal checker
+    // (field 2026-09-12: a 0.40 m transit spun 164 s on a ±0.10 rad yaw goal).
+    {
+      const auto transit_xml =
+          std::filesystem::path(tree_file).parent_path() / "navigate_to_pose_transit.xml";
+      if (std::filesystem::exists(transit_xml))
+      {
+        context_->transit_tree_xml = transit_xml.string();
+      }
+      else
+      {
+        RCLCPP_WARN(get_logger(),
+                    "navigate_to_pose_transit.xml not found next to %s — coverage transits "
+                    "fall back to the default tree (stopped_goal_checker, final heading "
+                    "required)",
+                    tree_file.c_str());
+      }
+    }
 
     // Build blackboard and store shared context
     blackboard_ = BT::Blackboard::create();

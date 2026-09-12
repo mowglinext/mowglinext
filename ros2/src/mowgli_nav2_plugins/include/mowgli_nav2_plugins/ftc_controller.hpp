@@ -219,6 +219,11 @@ private:
   /// unwinds the stack instead).
   bool waitOrThrowForObstacle(const std::string& reason);
 
+  /// Freeze the virtual carrot and reset PID history while an obstacle hold
+  /// owns the output. This prevents the controller from accumulating a large
+  /// catch-up error and derivative kick behind a zero-velocity command.
+  void holdObstacleMotion();
+
   /// Bounded reverse-escape gate for the WEDGED case. Called from
   /// updateLateralDeviation instead of waitOrThrowForObstacle when the skirt
   /// search runs out of headroom. If reverse-escape is enabled, a footprint is
@@ -265,23 +270,27 @@ private:
   // obstacle_wait_timeout_s seconds; if the costmap clears in that
   // window the controller resumes, otherwise it throws as before.
   // IMPORTANT: only clear obstacle_wait_start_/obstacle_waiting_ once a
-  // candidate has been CONFIRMED workable (post max_lateral_deviation
-  // check) or the debounced clear-hold below has elapsed — clearing it the
-  // moment a candidate side is merely *found* let the two wait call-sites
-  // hand each other fresh 5s windows on every chooseDeviationSide flip-flop
-  // near a marginal gap, deferring the abort indefinitely (field: observed
-  // ~40s stall with cmd_vel pinned at zero, vs. the intended 5s cap).
+  // candidate has remained workable continuously for obstacle_clear_hold_s.
+  // Clearing it on one good scan creates a stop/go loop; clearing it when a
+  // side is merely found lets the two wait call-sites hand each other fresh
+  // timeout windows near a marginal gap.
   std::optional<rclcpp::Time> obstacle_wait_start_;
   bool obstacle_waiting_{false};
-  /// When the nominal path first read CLEAR — during an active AVOIDANCE
-  /// episode (is_avoiding_) OR during a not-yet-avoiding WAIT
-  /// (obstacle_waiting_). Shared by both: the skirt / the wait is held
-  /// until the path has stayed clear CONTINUOUSLY for
-  /// config_.obstacle_clear_hold_s (debounces the window-edge flicker —
-  /// observation_persistence:0 costmap re-marking a cell — that caused the
-  /// ±step left-right flap in the avoidance case and the same-symptom
-  /// indefinite-wait stall in the waiting case). Reset whenever the
-  /// obstacle re-appears or on a new plan.
+  /// Continuous time for which a valid skirt has existed while
+  /// obstacle_waiting_ is active. A blocked tick resets it to zero.
+  double obstacle_followable_time_{0.0};
+  /// True from the first hard hold until the path has remained followable
+  /// while moving for obstacle_clear_hold_s. During this probation the angular
+  /// command is slew-limited and a reappearing obstacle keeps the original
+  /// wait timeout instead of opening a fresh stop/restart episode.
+  bool obstacle_recovery_active_{false};
+  /// Last angular command emitted while recovering, used by ClampCommandSlew.
+  double last_recovery_angular_cmd_{0.0};
+  /// When the nominal path first read CLEAR during an active AVOIDANCE
+  /// episode. The skirt is held until the nominal path has stayed clear
+  /// continuously for obstacle_clear_hold_s. Obstacle-wait recovery has its
+  /// own followable-duration counter because a valid offset path may exist
+  /// while the nominal path remains blocked.
   std::optional<rclcpp::Time> avoidance_clear_start_;
 
   // ── Oscillation detection ─────────────────────────────────────────────────
@@ -351,6 +360,10 @@ private:
     double speed_slow{0.2};
     double speed_angular{20.0};
     double acceleration{1.0};
+    /// Angular acceleration limit (rad/s^2) after an obstacle hard hold. This
+    /// applies until the resumed path has remained stable for
+    /// obstacle_clear_hold_s. 0 disables the limiter.
+    double obstacle_restart_angular_acceleration{1.0};
     double min_speed_mps{0.15};
 
     // Anti-wheelspin / traction control. When the carrot commands a forward

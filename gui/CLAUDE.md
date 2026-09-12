@@ -61,7 +61,7 @@ cd web && yarn generate:api     # src/api/Api.ts from ../docs/swagger.json
 ## Component-specific gotchas
 
 - `getSchema` opens `asserts/mower_config.schema.json` **relative to the process CWD** (`pkg/api/settings.go`) — run the binary from `gui/` or every settings route 500s. Tests call `chdirToGuiRoot`.
-- A yaml key with **no schema default is never pruned** once written (`sparsifyFlat`, `pkg/api/settings.go`) — that is why `retiredParamKeys` exists. `use_scan_matching` / `use_loop_closure` / `use_magnetometer` are written straight through and persist verbatim.
+- A yaml key with **no schema default is never pruned** once written (`sparsifyFlat`, `pkg/api/settings.go`) — that is why `retiredParamKeys` exists. Retired ICP parameters are scrubbed on save; `use_magnetometer` is written straight through.
 - `writePreservingPerms` keeps the yaml's uid/gid/mode so the ROS-side line-splice writers (root Invariant 6: dock pose, calibration, drive-tuning rollback) can still write it. Do not replace it with a plain `os.WriteFile`.
 - A new browser topic needs **three** edits: `topicMap` (`pkg/providers/ros.go`), `topicSubscribeInterval` (`pkg/api/mowglinext.go`), and a `useTopic` wrapper. `dockingSensor` and MQTT's `mowingPath` are listed downstream but missing from `topicMap` — they silently never deliver.
 - `useTopic`'s first argument is the backend **topic key** (`fusionRaw`, `mowProgress`), not a ROS topic name; an invented key yields no error and no data (`web/src/hooks/useTopic.ts`).

@@ -227,7 +227,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
 
     const [mowingAreas, setMowingAreas] = useState<{ key: string, label: string, feat: Feature }[]>([])
 
-    const {map, setMap, path, plan, lidarCollection, mowProgressImage, highLevelStatus, joyStream, dynamicObstacles} = useMapStreams({
+    const {map, setMap, path, plan, lidarCollection, mowProgressImage, lidarMapImage, highLevelStatus, joyStream, dynamicObstacles} = useMapStreams({
         editMap,
         settings,
         offsetX,
@@ -1001,6 +1001,16 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         {/* Persistent tracked-obstacle polygons + id labels + hover/select highlight */}
                         {renderDynObstacleLayers(true)}
                     </Source>
+                    {/* fusion_graph's LiDAR anchor map (walls as ink, scanned ground as a faint wash). */}
+                    {lidarMapImage && (
+                        <Source type={"image"} id={"lidar-map"} url={lidarMapImage.url} coordinates={lidarMapImage.coordinates}>
+                            <Layer type={"raster"} id={"lidar-map-layer"} paint={{
+                                "raster-opacity": 0.85,
+                                "raster-fade-duration": 0,
+                                "raster-resampling": "nearest",
+                            }}/>
+                        </Source>
+                    )}
                     {mowProgressImage && (
                         <Source type={"image"} id={"mow-progress"} url={mowProgressImage.url} coordinates={mowProgressImage.coordinates}>
                             <Layer type={"raster"} id={"mow-progress-layer"} paint={{
@@ -1009,18 +1019,21 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                             }}/>
                         </Source>
                     )}
-                    <Source type={"geojson"} id={"lidar"} data={lidarCollection}>
-                        <Layer type={"circle"} id={"lidar-points"} paint={{
-                            "circle-radius": 3,
-                            "circle-color": [
-                                "case",
-                                ["==", ["get", "intensity"], "hit"],
-                                LAYER_COLORS.lidarHit,
-                                LAYER_COLORS.lidarMiss
-                            ],
-                            "circle-stroke-width": 0,
-                        }}/>
-                    </Source>
+                    {/* Raw scan points only until the LiDAR map exists — then the map replaces them. */}
+                    {!lidarMapImage && (
+                        <Source type={"geojson"} id={"lidar"} data={lidarCollection}>
+                            <Layer type={"circle"} id={"lidar-points"} paint={{
+                                "circle-radius": 3,
+                                "circle-color": [
+                                    "case",
+                                    ["==", ["get", "intensity"], "hit"],
+                                    LAYER_COLORS.lidarHit,
+                                    LAYER_COLORS.lidarMiss
+                                ],
+                                "circle-stroke-width": 0,
+                            }}/>
+                        </Source>
+                    )}
                 </Map> : <Spinner/>}
                 <JoystickOverlay
                     visible={highLevelStatus.highLevelStatus.state_name === "RECORDING" || highLevelStatus.highLevelStatus.state_name === "MANUAL_MOWING" || manualMode}

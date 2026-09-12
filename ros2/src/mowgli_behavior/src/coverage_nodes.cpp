@@ -18,6 +18,8 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
+#include <exception>
+#include <filesystem>
 #include <limits>
 
 #include "action_msgs/msg/goal_status.hpp"
@@ -141,28 +143,19 @@ std::size_t forwardSkipIndex(const std::vector<geometry_msgs::msg::PoseStamped>&
 }
 
 // ===========================================================================
-// FollowStrip — execute the coverage plan as ONE CONTINUOUS joined path
+// FollowStrip — execute the coverage plan as trackable continuous sub-paths
 // ===========================================================================
 
 BT::NodeStatus FollowStrip::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
 
-  // ONE CONTINUOUS PATH, A→Z. The coverage server's full_path is the rings +
-  // swaths CONNECTED by forward turn-around arcs (coverage_server →
-  // buildContinuousPath): a single CUSP-FREE, in-bounds polyline. We drive it as
-  // ONE FollowCoveragePath goal — no per-segment dispatch, no transit, no cuts.
-  //   * No sharp ~180° reversal anywhere → MPPI doesn't dither/spin; it tracks
-  //     the smooth arcs (helped by the backported arc-length fix, PR #6055) AND
-  //     keeps its dynamic obstacle avoidance (deviate around, return to path).
-  //     enforce_path_inversion is OFF (nothing to crop). Re-mowing on the turn
-  //     loops is accepted.
-  //   * cusp-free + in-bounds are guaranteed by test_coverage_planning
-  //     (CoverageContinuousPath) on the real area; a future area that breaks it
-  //     fails that test first.
-  // TransitToStrip (boundary-aware) already drove the robot to the path start,
-  // so FollowStrip dispatches the full path as one goal. Fall back to joining the
-  // raw segments only if the connected path is somehow missing.
+  // The coverage server joins rings and swaths with forward turn-around arcs.
+  // Each resulting sub-path is safe to follow continuously with FTC. Joins that
+  // cannot be made heading-continuous, or that cross an obstacle, are explicit
+  // sub-path boundaries and are bridged below with blade-off Nav2 transits.
+  // TransitToStrip already positions the robot at the first path start. Fall
+  // back to full_path or raw segments only for compatibility with older servers.
   swaths_.clear();
   swath_base_.clear();
   resume_start_idx_ = 0;
@@ -170,12 +163,9 @@ BT::NodeStatus FollowStrip::onStart()
   total_path_poses_ = 0;
   area_idx_ = (ctx->current_area >= 0) ? static_cast<uint32_t>(ctx->current_area) : 0u;
 
-  // Build the drivable UNITS. Prefer the hole-free continuous sub-paths (#333):
-  // FollowStrip drives each with MPPI and bridges the gap between consecutive
-  // units with a blade-off Nav2 transit that routes around the obstacle. A
-  // hole-free field yields exactly one sub-path (== the single continuous path).
-  // Fall back to the single continuous full_path, or to joining the raw segments
-  // if neither is present.
+  // Build the drivable units. Prefer the hole-free, heading-continuous sub-paths;
+  // bridge every boundary with a blade-off Nav2 transit. Fall back to full_path,
+  // or to joining raw segments, if an older server provides no sub-paths.
   std::vector<nav_msgs::msg::Path> units;
   if (!ctx->current_strip_subpaths.empty())
   {
@@ -341,8 +331,9 @@ BT::NodeStatus FollowStrip::onStart()
   transit_abort_seen_ = false;
   transit_result_.reset();
   swath_goal_sent_ = false;
-  // Swath-completion model (replaces the mow_progress cell grid): record this
-  // area's swath count and resume at the first swath NOT already mowed. F2C is
+  follow_goal_ever_sent_ = false;
+  // Coverage-completion model (replaces the mow_progress cell grid): record this
+  // area's sub-path count and resume at the first unit not already mowed. F2C is
   // deterministic for a fixed area+params, so indices are stable across the
   // re-plan that a recharge/preempt resume triggers.
   ctx->area_swath_count[area_idx_] = swaths_.size();
@@ -416,17 +407,39 @@ BT::NodeStatus FollowStrip::onStart()
     return BT::NodeStatus::FAILURE;
   }
 
-  setBladeEnabled(true);
+  // Spin the blade up now ONLY if the first unit is mowed from where the robot
+  // stands. A unit that must first be reached by a blade-off transit gets its
+  // blade from sendFollowGoal after the transit; spinning it up here just to
+  // cut it again in sendCurrentSwath cycled the blade on every retry of a
+  // START_OCCUPIED pass (2026-09-10).
+  const double first_gap = distanceToSegmentStart(ctx);
+  blade_spinup_pending_ = bladeSpinupBeforeFirstUnit(first_gap);
+  scan_pause_ = ScanPauseState{};
+  last_scan_pause_tick_ = std::chrono::steady_clock::time_point{};
+  setBladeEnabled(blade_spinup_pending_);
   blade_start_time_ = std::chrono::steady_clock::now();
   goal_sent_ = false;
 
-  RCLCPP_INFO(ctx->node->get_logger(),
-              "FollowStrip: area %u, %zu segments (%zu already done); "
-              "blade enabled, waiting %.1fs for spinup",
-              area_idx_,
-              swaths_.size(),
-              ctx->area_completed_swaths[area_idx_].size(),
-              kBladeSpinupDelaySec);
+  if (blade_spinup_pending_)
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "FollowStrip: area %u, %zu segments (%zu already done); "
+                "blade enabled, waiting %.1fs for spinup",
+                area_idx_,
+                swaths_.size(),
+                ctx->area_completed_swaths[area_idx_].size(),
+                kBladeSpinupDelaySec);
+  }
+  else
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "FollowStrip: area %u, %zu segments (%zu already done); first unit is "
+                "%.2f m away — blade stays OFF until the transit succeeds",
+                area_idx_,
+                swaths_.size(),
+                ctx->area_completed_swaths[area_idx_].size(),
+                first_gap);
+  }
 
   // Seed the smooth GUI percent for THIS area: 0 % for a fresh area, or the
   // resumed fraction if resuming mid-path. Resets the value per area so it does
@@ -573,8 +586,13 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
     return false;
   }
   // Mowing resumes on this segment — make sure the blade is on (it may have
-  // been switched off for a preceding inter-segment transit).
-  setBladeEnabled(true);
+  // been switched off for a preceding inter-segment transit) — unless the
+  // scan stream is currently down: the scan pause owns the blade until the
+  // LiDAR is back (stepScanPause re-enables it).
+  if (!scan_pause_.paused)
+  {
+    setBladeEnabled(true);
+  }
 
   Nav2FollowPath::Goal goal;
   goal.path = swaths_[swath_idx_];
@@ -583,7 +601,7 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
 
   // Publish the segment on the coverage controller's global_plan topic BEFORE
   // dispatching the goal, so the PathProgressGoalChecker has the plan in hand
-  // by the time the controller starts ticking (MPPI doesn't republish it).
+  // by the time the controller starts ticking (FTC does not republish it).
   if (coverage_plan_pub_)
   {
     coverage_plan_pub_->publish(goal.path);
@@ -592,6 +610,7 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
   follow_handle_.reset();
   follow_future_ = follow_client_->async_send_goal(goal);
   swath_goal_sent_ = true;
+  follow_goal_ever_sent_ = true;
 
   RCLCPP_INFO(ctx->node->get_logger(),
               "FollowStrip: sent segment %zu/%zu (%zu poses) to the coverage controller",
@@ -607,15 +626,13 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
   {
     return false;
   }
-  // When the segment start is far away (resume mid-list, a skipped segment,
-  // or a concave field whose serpentine hops across a notch), it MUST be reached
-  // with a BLADE-OFF Nav2 transit via the boundary-aware global planner — we do
-  // not mow the transit ("navigation area"), and FTC would otherwise cut
-  // cross-country toward the plan, blade-on, potentially through out-of-bounds
-  // area. This gap check is STRUCTURAL for blade safety: past kSegmentTransitGap
-  // there is no code path that may drive to the start with the blade on.
+  // A distant start and every boundary between planner-produced sub-paths must
+  // be reached with a blade-off Nav2 transit. A sub-path boundary can have a
+  // near-zero positional gap while requiring a large heading change; sending it
+  // directly to FTC re-enables the blade before PRE_ROTATE and can dig in place.
   const double gap = distanceToSegmentStart(ctx);
-  if (gap > kSegmentTransitGap)
+  const bool unit_boundary = follow_goal_ever_sent_;
+  if (coverageTransitRequired(gap, unit_boundary))
   {
     // SAFETY: force the blade OFF first, unconditionally, before any dispatch or
     // early return below — nothing may cross this gap blade-on.
@@ -632,11 +649,12 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
         transit_pending_ = true;
         transit_wait_start_ = std::chrono::steady_clock::now();
         RCLCPP_WARN(ctx->node->get_logger(),
-                    "FollowStrip: segment %zu/%zu starts %.2fm away but navigate_to_pose is "
-                    "not ready — blade OFF, holding for the transit server (no blade-on crossing)",
+                    "FollowStrip: segment %zu/%zu requires a blade-off transit (gap %.2fm%s) but "
+                    "navigate_to_pose is not ready — holding for the transit server",
                     swath_idx_ + 1,
                     swaths_.size(),
-                    gap);
+                    gap,
+                    unit_boundary ? ", sub-path boundary" : "");
       }
       return true;
     }
@@ -671,20 +689,22 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
         slot->error_msg = r.result->error_msg;
       }
     };
+    nav_goal.behavior_tree = ctx->transit_tree_xml;
     nav_future_ = nav_client_->async_send_goal(nav_goal, send_opts);
     transit_active_ = true;
     transit_abort_seen_ = false;
     swath_goal_sent_ = true;
+    armTransitWatchdog(gap);
     RCLCPP_INFO(ctx->node->get_logger(),
-                "FollowStrip: segment %zu/%zu starts %.2fm away — blade off, transit first",
+                "FollowStrip: segment %zu/%zu requires transit (gap %.2fm%s) — blade off first",
                 swath_idx_ + 1,
                 swaths_.size(),
-                gap);
+                gap,
+                unit_boundary ? ", sub-path boundary" : "");
     return true;
   }
-  // Segment start is within kSegmentTransitGap (adjacent-swath close, ~one
-  // op_width): FTC closes it blade-on, an accepted small re-mow. Never a large
-  // cross-country crossing.
+  // First/legacy unit already starts nearby; TransitToStrip positioned the robot
+  // there, so it can begin mowing directly.
   transit_pending_ = false;
   return sendFollowGoal(ctx);
 }
@@ -731,8 +751,8 @@ BT::NodeStatus FollowStrip::onRunning()
 
   // Advance to the next swath; finish (SUCCESS/FAILURE) when none remain.
   // A swath is SKIPPED on goal-reject/abort rather than failing the whole
-  // area — robust coverage; gaps are reclaimed on the next pass (and, under
-  // MPPI, in-controller avoidance makes aborts rare). The area only FAILS if
+  // area — robust coverage; gaps are reclaimed on the next pass, while FTC's
+  // in-controller avoidance makes obstacle aborts rare. The area only FAILS if
   // every swath was skipped (nothing got mowed).
   auto advance = [&]() -> BT::NodeStatus
   {
@@ -832,15 +852,25 @@ BT::NodeStatus FollowStrip::onRunning()
     return BT::NodeStatus::SUCCESS;
   };
 
-  // Wait for blade spin-up, then dispatch the first segment.
+  // Wait for blade spin-up (only if the blade was started), then dispatch the
+  // first segment.
   if (!goal_sent_)
   {
     auto elapsed = std::chrono::steady_clock::now() - blade_start_time_;
-    if (elapsed < std::chrono::duration<double>(kBladeSpinupDelaySec))
+    if (blade_spinup_pending_ && elapsed < std::chrono::duration<double>(kBladeSpinupDelaySec))
       return BT::NodeStatus::RUNNING;
     goal_sent_ = true;
     sendCurrentSwath(ctx);
     return BT::NodeStatus::RUNNING;
+  }
+
+  // Short LiDAR dropout while a coverage goal is active: cut the blade, keep
+  // the goal (collision_monitor already holds the wheels), restore the blade
+  // when the stream is back. A LONG outage is still the Root guard's job
+  // (IsScanStale max_age_sec in main_tree.xml). See scan_pause.hpp.
+  if (swath_goal_sent_ && !transit_active_ && !transit_pending_)
+  {
+    stepScanPause(ctx);
   }
 
   // A required blade-off transit could not be dispatched because navigate_to_pose
@@ -898,6 +928,37 @@ BT::NodeStatus FollowStrip::onRunning()
       nav_handle_.reset();
       sendFollowGoal(ctx);
       return BT::NodeStatus::RUNNING;
+    }
+    // Watchdog: a transit that is still "running" past its deadline is not
+    // going anywhere (2026-09-12: 164 s on the spot for a 0.40 m gap). Cancel
+    // it once; the CANCELED branch below then skips the unit like any other
+    // failed transit (no error code → plain skip, never START_OCCUPIED).
+    if (!transit_timeout_requested_ && transit_deadline_s_ > 0.0 &&
+        nav_status != action_msgs::msg::GoalStatus::STATUS_ABORTED &&
+        nav_status != action_msgs::msg::GoalStatus::STATUS_CANCELED)
+    {
+      const double elapsed =
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - transit_start_time_)
+              .count();
+      if (elapsed > transit_deadline_s_)
+      {
+        transit_timeout_requested_ = true;
+        RCLCPP_WARN(ctx->node->get_logger(),
+                    "FollowStrip: segment %zu/%zu transit still running after %.0fs (bound "
+                    "%.0fs) — cancelling it and skipping the unit",
+                    swath_idx_ + 1,
+                    swaths_.size(),
+                    elapsed,
+                    transit_deadline_s_);
+        try
+        {
+          nav_client_->async_cancel_goal(nav_handle_);
+        }
+        catch (const std::exception& ex)
+        {
+          RCLCPP_WARN(ctx->node->get_logger(), "FollowStrip: transit cancel failed: %s", ex.what());
+        }
+      }
     }
     if (nav_status == action_msgs::msg::GoalStatus::STATUS_ABORTED ||
         nav_status == action_msgs::msg::GoalStatus::STATUS_CANCELED)
@@ -1088,30 +1149,99 @@ BT::NodeStatus FollowStrip::onRunning()
 
 void FollowStrip::onHalted()
 {
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   // Preempt (recharge, e-stop, command change) mid-path: capture how far we got
   // and persist the resume cursor so the next dispatch continues from here
   // rather than re-mowing the whole area from the start.
   if (follow_handle_ && total_path_poses_ > 0)
   {
-    auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
     updateProgress(ctx);
     persistResumeCursor(ctx);
   }
   if (follow_handle_)
   {
-    follow_client_->async_cancel_goal(follow_handle_);
+    try
+    {
+      follow_client_->async_cancel_goal(follow_handle_);
+    }
+    catch (const std::exception& ex)
+    {
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "FollowStrip: follow goal was already gone while halting: %s",
+                  ex.what());
+    }
   }
   follow_handle_.reset();
   if (nav_handle_ && nav_client_)
   {
-    nav_client_->async_cancel_goal(nav_handle_);
+    try
+    {
+      nav_client_->async_cancel_goal(nav_handle_);
+    }
+    catch (const std::exception& ex)
+    {
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "FollowStrip: transit goal was already gone while halting: %s",
+                  ex.what());
+    }
   }
   nav_handle_.reset();
   transit_active_ = false;
   transit_pending_ = false;
   transit_abort_seen_ = false;
   transit_result_.reset();
+  scan_pause_ = ScanPauseState{};
   setBladeEnabled(false);
+}
+
+bool FollowStrip::stepScanPause(const std::shared_ptr<BTContext>& ctx)
+{
+  const auto now = std::chrono::steady_clock::now();
+  const double dt = last_scan_pause_tick_.time_since_epoch().count() == 0
+                        ? 0.0
+                        : std::chrono::duration<double>(now - last_scan_pause_tick_).count();
+  last_scan_pause_tick_ = now;
+
+  bool have_scan = false;
+  double age_s = 0.0;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    have_scan = ctx->last_scan_time.time_since_epoch().count() != 0;
+    if (have_scan)
+    {
+      age_s = std::chrono::duration<double>(now - ctx->last_scan_time).count();
+    }
+  }
+
+  switch (ScanPauseStep(scan_pause_, have_scan, age_s, dt))
+  {
+    case ScanPauseAction::kPause:
+      setBladeEnabled(false);
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "FollowStrip: /scan_collision silent for %.1fs — blade OFF, holding the "
+                  "coverage goal until the LiDAR stream is back (collision_monitor holds the "
+                  "wheels; Root halt only after %.0fs)",
+                  age_s,
+                  20.0);
+      break;
+    case ScanPauseAction::kResume:
+      setBladeEnabled(true);
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "FollowStrip: LiDAR stream back (fresh for %.1fs) — blade ON, resuming "
+                  "coverage in place",
+                  kScanResumeFreshSec);
+      break;
+    case ScanPauseAction::kNone:
+      break;
+  }
+  return scan_pause_.paused;
+}
+
+void FollowStrip::armTransitWatchdog(double gap_m)
+{
+  transit_start_time_ = std::chrono::steady_clock::now();
+  transit_deadline_s_ = transitDeadlineSec(gap_m);
+  transit_timeout_requested_ = false;
 }
 
 void FollowStrip::setBladeEnabled(bool enabled)
@@ -1275,6 +1405,7 @@ BT::NodeStatus TransitToStrip::onStart()
 
   Nav2Navigate::Goal goal;
   goal.pose = ctx->current_transit_goal;
+  goal.behavior_tree = ctx->transit_tree_xml;
 
   nav_handle_.reset();
   nav_future_ = nav_client_->async_send_goal(goal);
@@ -1405,6 +1536,7 @@ BT::NodeStatus DetourAroundObstacle::onStart()
 
   Nav2Navigate::Goal nav_goal;
   nav_goal.pose = goal;
+  nav_goal.behavior_tree = ctx->transit_tree_xml;
 
   nav_handle_.reset();
   nav_future_ = nav_client_->async_send_goal(nav_goal);

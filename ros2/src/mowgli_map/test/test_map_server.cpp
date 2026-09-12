@@ -477,6 +477,59 @@ TEST_F(AreaTypeTest, RepeatedDigsAtTheSameSpotDoNotStack)
   EXPECT_EQ(node_->obstacle_polygon_count_for_test(), 1u) << "repeated digs stacked keepouts";
 }
 
+// Field regression 2026-09-10 (twice in one day): the dig keepout was a
+// 0.60 m square CENTRED on the dig point (0.45 m behind it once the mask's
+// 0.15 m obstacle_margin is painted), but the bridge only reverses the robot
+// ~0.2-0.3 m out of the hole, so the robot ended up standing INSIDE the
+// keepout it had just proposed. Smac refused every transit from there
+// (START_OCCUPIED) and the mission looped, blade cycling, until an operator
+// stopped it. The keepout must cover the hole and the ground ahead of it, and
+// must NOT reach back over the spot the reversed robot now occupies.
+TEST_F(AreaTypeTest, DigKeepoutIsBiasedAheadOfTheHeadingSoTheReversedRobotIsFree)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
+  const double yaw = 125.0 * M_PI / 180.0;  // heading at the 11:18 dig
+  const double cx = 0.0, cy = 0.0;
+  node_->set_robot_heading_for_test(yaw);
+
+  node_->on_dig_event_for_test(make_dig_event(cx, cy));
+  ASSERT_EQ(node_->area_obstacle_count_for_test(0), 1u);
+
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  auto along = [&](double d, double lateral, double& x, double& y)
+  {
+    x = cx + d * std::cos(yaw) - lateral * std::sin(yaw);
+    y = cy + d * std::sin(yaw) + lateral * std::cos(yaw);
+  };
+  double x, y;
+  along(0.0, 0.0, x, y);
+  EXPECT_EQ(mask_at(mask, x, y), 100) << "the hole itself must be lethal";
+  along(0.45, 0.0, x, y);
+  EXPECT_EQ(mask_at(mask, x, y), 100) << "ground ahead of the dig must be lethal";
+  along(0.2, 0.2, x, y);
+  EXPECT_EQ(mask_at(mask, x, y), 100) << "lateral tyre track must be lethal";
+  along(-0.25, 0.0, x, y);
+  EXPECT_EQ(mask_at(mask, x, y), 0)
+      << "the reversed robot (0.2-0.3 m behind the dig) must NOT stand on its own keepout";
+  along(0.95, 0.0, x, y);
+  EXPECT_EQ(mask_at(mask, x, y), 0) << "the keepout must stay bounded ahead (0.60 + 0.15 margin)";
+}
+
+// Without a heading (no TF yet) the only orientation-free keepout is the
+// centred square: still lethal at the dig, still bounded.
+TEST_F(AreaTypeTest, DigKeepoutWithoutHeadingIsTheCentredSquare)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-3, -3, 3, 3), /*is_navigation=*/false));
+  node_->on_dig_event_for_test(make_dig_event(0.0, 0.0));
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, 0.0, 0.0), 100);
+  EXPECT_EQ(mask_at(mask, 0.30, 0.0), 100);
+  EXPECT_EQ(mask_at(mask, -0.30, 0.0), 100) << "centred square reaches behind (legacy)";
+  EXPECT_EQ(mask_at(mask, 0.70, 0.0), 0) << "bounded: 0.30 half-side + 0.15 margin";
+}
+
 TEST_F(AreaTypeTest, MowingAreaContainingResolvesTheRightArea)
 {
   ASSERT_TRUE(add_area("north", make_rect(0, 0, 2, 2), /*is_navigation=*/false));
