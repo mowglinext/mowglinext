@@ -9,13 +9,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
 	dockertypes "github.com/docker/docker/api/types"
 	"github.com/gin-gonic/gin"
+	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -191,6 +192,61 @@ func defaultMockDocker() *mockDockerProvider {
 	}
 }
 
+func TestGNSSCommandsUseUniversalGNSSRC4CLIContract(t *testing.T) {
+	cfg := gnssSavedConfig{
+		ReceiverFamily: "unicore",
+		SerialDevice:   "/dev/gnss-receiver",
+		ExecutionBaud:  gnssBaudAuto,
+		ConfigBaud:     "460800",
+		Profile:        "rover_high_precision",
+		ProfileRateHz:  "5",
+	}
+
+	planCommand := buildGNSSPlanCommand(cfg)
+	applyCommand := buildGNSSApplyCommand(cfg, cfg.Profile)
+	resetCommand := buildGNSSApplyCommand(cfg, "factory_reset")
+
+	assert.Equal(t, "gnss_config_plan", planCommand[0])
+	assert.Equal(t, "gnss_config_apply", applyCommand[0])
+	assert.Equal(t, "gnss_config_apply", resetCommand[0])
+	for _, command := range [][]string{planCommand, applyCommand, resetCommand} {
+		assert.NotContains(t, command[0], "/", "Universal GNSS tools must use the PATH contract exposed by the image entrypoint")
+	}
+}
+
+func TestGNSSGUISourcesDoNotReferenceLegacySidecarLayout(t *testing.T) {
+	guiRoot := filepath.Clean(filepath.Join("..", ".."))
+	forbiddenPath := "/opt/" + "gnss_sidecar/"
+	sourceExtensions := map[string]bool{
+		".go": true, ".json": true, ".md": true, ".sh": true,
+		".ts": true, ".tsx": true, ".yaml": true, ".yml": true,
+	}
+
+	err := filepath.WalkDir(guiRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "dist", "node_modules":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !sourceExtensions[filepath.Ext(path)] {
+			return nil
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		assert.NotContains(t, string(content), forbiddenPath, "legacy Universal GNSS sidecar path in %s", path)
+		return nil
+	})
+	require.NoError(t, err)
+}
+
 func TestGNSSPlan_DoesNotRequireConfirmAndAvoidsSerialAccess(t *testing.T) {
 	db, _ := newGNSSTestDB(t, defaultGNSSYAML("/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0", "unicore", "rover_high_precision"))
 	docker := defaultMockDocker()
@@ -210,7 +266,7 @@ func TestGNSSPlan_DoesNotRequireConfirmAndAvoidsSerialAccess(t *testing.T) {
 	require.Len(t, docker.runSpecs, 1)
 	assert.Empty(t, docker.runSpecs[0].Binds)
 	assert.False(t, docker.runSpecs[0].Privileged)
-	assert.Equal(t, gnssConfigPlanBinary, docker.runSpecs[0].Cmd[0])
+	assert.Equal(t, gnssConfigPlanCommand, docker.runSpecs[0].Cmd[0])
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--config-baud")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "460800")
 	assert.NotContains(t, docker.runSpecs[0].Cmd, "--persistent")
@@ -278,7 +334,7 @@ func TestGNSSApply_PassesConfigBaudAndRestartsAfterSuccess(t *testing.T) {
 	assert.Equal(t, []string{"stop", "run", "start"}, docker.events)
 	assert.Equal(t, []string{"/dev:/dev"}, docker.runSpecs[0].Binds)
 	assert.True(t, docker.runSpecs[0].Privileged)
-	assert.Equal(t, gnssConfigApplyBinary, docker.runSpecs[0].Cmd[0])
+	assert.Equal(t, gnssConfigApplyCommand, docker.runSpecs[0].Cmd[0])
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--config-baud")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "460800")
 	assert.Contains(t, docker.runSpecs[0].Cmd, "--device")
@@ -347,7 +403,7 @@ func TestBuildGNSSPlanCommand_UsesRuntimeOnlyPlanByDefault(t *testing.T) {
 		ReceiverModel:  "UM982",
 	})
 
-	assert.Equal(t, gnssConfigPlanBinary, command[0])
+	assert.Equal(t, gnssConfigPlanCommand, command[0])
 	assert.NotContains(t, command, "--persistent")
 	assert.Contains(t, command, "--model")
 	assert.Contains(t, command, "UM982")
@@ -442,7 +498,7 @@ func TestGNSSFactoryResetApply_UsesDedicatedResetModeThenRuntimeProfileApply(t *
 	assert.Equal(t, []string{"stop", "run", "run", "start"}, docker.events)
 
 	resetCommand := docker.runSpecs[0].Cmd
-	assert.Equal(t, gnssConfigApplyBinary, resetCommand[0])
+	assert.Equal(t, gnssConfigApplyCommand, resetCommand[0])
 	assert.Contains(t, resetCommand, "--profile")
 	assert.Contains(t, resetCommand, "factory_reset")
 	assert.Contains(t, resetCommand, "--apply-mode")
@@ -452,7 +508,7 @@ func TestGNSSFactoryResetApply_UsesDedicatedResetModeThenRuntimeProfileApply(t *
 	assert.Contains(t, resetCommand, "UM982")
 
 	applyCommand := docker.runSpecs[1].Cmd
-	assert.Equal(t, gnssConfigApplyBinary, applyCommand[0])
+	assert.Equal(t, gnssConfigApplyCommand, applyCommand[0])
 	assert.Contains(t, applyCommand, "--profile")
 	assert.Contains(t, applyCommand, "rover_high_precision")
 	assert.Contains(t, applyCommand, "--apply-mode")

@@ -53,7 +53,7 @@ describe("GnssReceiverActionsCard", () => {
                 executions: [
                     {
                         tool: "gnss_config_plan",
-                        command: ["/opt/gnss_sidecar/bin/gnss_config_plan", "--json", "unicore", "rover_high_precision"],
+                        command: ["gnss_config_plan", "--json", "unicore", "rover_high_precision"],
                         exit_code: 0,
                         stdout: "preview output",
                         success: true,
@@ -93,7 +93,7 @@ describe("GnssReceiverActionsCard", () => {
                 executions: [
                     {
                         tool: "gnss_config_apply",
-                        command: ["/opt/gnss_sidecar/bin/gnss_config_apply", "--confirm"],
+                        command: ["gnss_config_apply", "--confirm"],
                         exit_code: 2,
                         stderr: "device rejected command",
                         success: false,
@@ -134,7 +134,7 @@ describe("GnssReceiverActionsCard", () => {
                 executions: [
                     {
                         tool: "gnss_config_apply",
-                        command: ["/opt/gnss_sidecar/bin/gnss_config_apply", "--baud", "auto"],
+                        command: ["gnss_config_apply", "--baud", "auto"],
                         exit_code: 0,
                         success: true,
                     },

@@ -15,10 +15,13 @@ import (
 	pkgtypes "github.com/mowglinext/mowglinext/pkg/types"
 )
 
+// The Universal GNSS image entrypoint sources its install setup before it
+// executes an override command. These PATH-resolved CLI names are the RC4
+// image contract; the install prefix is deliberately not a MowgliNext API.
 const (
 	gnssContainerName       = "mowgli-gps"
-	gnssConfigPlanBinary    = "/opt/gnss_sidecar/bin/gnss_config_plan"
-	gnssConfigApplyBinary   = "/opt/gnss_sidecar/bin/gnss_config_apply"
+	gnssConfigPlanCommand   = "gnss_config_plan"
+	gnssConfigApplyCommand  = "gnss_config_apply"
 	gnssApplyModeRuntime    = "runtime-only"
 	gnssApplyModeFactory    = "factory-reset"
 	gnssBaudAuto            = "auto"
@@ -38,18 +41,18 @@ var allowedGNSSBauds = map[string]bool{
 }
 
 type gnssSavedConfig struct {
-	ConfigPath     string
-	RuntimeEnvPath string
-	ExistingYAML   map[string]any
-	NodeMappings   map[string]string
-	Flat           map[string]any
-	ReceiverFamily string
-	SerialDevice   string
-	RuntimeBaud    string
-	ConfigBaud     string
-	ExecutionBaud  string
-	Profile        string
-	SignalProfile  string
+	ConfigPath       string
+	RuntimeEnvPath   string
+	ExistingYAML     map[string]any
+	NodeMappings     map[string]string
+	Flat             map[string]any
+	ReceiverFamily   string
+	SerialDevice     string
+	RuntimeBaud      string
+	ConfigBaud       string
+	ExecutionBaud    string
+	Profile          string
+	SignalProfile    string
 	SignalGroup      string
 	ReceiverModel    string
 	RoverDynamicMode string
@@ -494,7 +497,7 @@ func validateGNSSFactoryResetRecoveryPolicy(cfg gnssSavedConfig) error {
 
 func buildGNSSPlanCommand(cfg gnssSavedConfig) []string {
 	command := []string{
-		gnssConfigPlanBinary,
+		gnssConfigPlanCommand,
 		"--json",
 		"--config-baud", cfg.ConfigBaud,
 		"--rate-hz", cfg.ProfileRateHz,
@@ -523,7 +526,7 @@ func buildGNSSApplyCommand(cfg gnssSavedConfig, profile string) []string {
 	executionBaud := normalizeGNSSExecutionBaudDisplay(cfg.ExecutionBaud)
 
 	command := []string{
-		gnssConfigApplyBinary,
+		gnssConfigApplyCommand,
 		"--json",
 		"--family", cfg.ReceiverFamily,
 		"--device", cfg.SerialDevice,
@@ -669,18 +672,18 @@ func loadSavedGNSSConfig(dbProvider pkgtypes.IDBProvider) (gnssSavedConfig, erro
 	}
 
 	return gnssSavedConfig{
-		ConfigPath:     doc.ConfigPath,
-		RuntimeEnvPath: doc.RuntimeEnvPath,
-		ExistingYAML:   doc.ExistingYAML,
-		NodeMappings:   doc.NodeMappings,
-		Flat:           doc.Flat,
-		ReceiverFamily: receiverFamily,
-		SerialDevice:   serialDevice,
-		RuntimeBaud:    runtimeBaud,
-		ConfigBaud:     configBaud,
-		ExecutionBaud:  executionBaud,
-		Profile:        profile,
-		SignalProfile:  normalizeGnssSignalProfile(doc.Flat["gnss_signal_profile"], "balanced"),
+		ConfigPath:       doc.ConfigPath,
+		RuntimeEnvPath:   doc.RuntimeEnvPath,
+		ExistingYAML:     doc.ExistingYAML,
+		NodeMappings:     doc.NodeMappings,
+		Flat:             doc.Flat,
+		ReceiverFamily:   receiverFamily,
+		SerialDevice:     serialDevice,
+		RuntimeBaud:      runtimeBaud,
+		ConfigBaud:       configBaud,
+		ExecutionBaud:    executionBaud,
+		Profile:          profile,
+		SignalProfile:    normalizeGnssSignalProfile(doc.Flat["gnss_signal_profile"], "balanced"),
 		SignalGroup:      signalGroup,
 		ReceiverModel:    normalizeGnssReceiverModel(doc.Flat["gnss_receiver_model"]),
 		RoverDynamicMode: normalizeGnssRoverDynamicMode(doc.Flat["gnss_rover_dynamic_mode"]),

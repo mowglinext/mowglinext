@@ -124,7 +124,7 @@
 | `GET /settings/schema` | `settings.go:1248` | schema + Mowgli overlay, 1 h cache |
 | `GET /settings/yaml`, `GET /settings/yaml/defaults`, `POST /settings/yaml` | `settings.go:1273,1319,1345` | flat map ↔ `mowgli_robot.yaml`; POST also writes `GNSS_*` into `system.mower.runtimeEnvFile`; `null` value = delete key |
 | `GET /settings/gnss/runtime-config` | `gui/pkg/api/gnss.go:105` → `gnss_runtime_config.go:74` | yaml vs `.env` source per field + serial device list |
-| `POST /settings/gnss/{plan,apply,factory-reset-apply,restart}` | `gnss.go:106-109` (`:112,149,180,211`) | apply needs `confirm`; factory-reset needs `confirm_factory_reset`; runs `/opt/gnss_sidecar/bin/gnss_config_{plan,apply}` in the `mowgli-gps` image |
+| `POST /settings/gnss/{plan,apply,factory-reset-apply,restart}` | `gnss.go:109-112` (`:115,152,183,214`) | apply needs `confirm`; factory-reset needs `confirm_factory_reset`; runs the PATH-resolved `gnss_config_plan` / `gnss_config_apply` CLI exposed by the `mowgli-gps` image |
 | `GET /containers/` | `gui/pkg/api/containers.go:39` | |
 | `POST /containers/:containerId/:command` | `containers.go:75` | `start|stop|restart` |
 | `GET /containers/:containerId/logs` (WS) | `containers.go:128` | base64 text frames, `--tail 100 --timestamps` |
